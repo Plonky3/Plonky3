@@ -619,37 +619,47 @@ impl<F: QuinticTrinomialExtendable + HasTwoAdicQuinticExtension> TwoAdicField
 /// Multiply two elements in the quintic extension field.
 #[inline]
 pub(super) fn quintic_mul<R: PrimeCharacteristicRing>(a: &[R; 5], b: &[R; 5], res: &mut [R; 5]) {
-    // TODO: This is unoptimized. See `binomial_extension.rs` for optimization ideas.
-
-    // Compute raw product coefficients c_0 through c_8
+    // Compute convolution coefficients c_k = Σ_{i+j=k} a_i * b_j using dot products
     let c0 = a[0].clone() * b[0].clone();
-    let c1 = a[0].clone() * b[1].clone() + a[1].clone() * b[0].clone();
-    let c2 =
-        a[0].clone() * b[2].clone() + a[1].clone() * b[1].clone() + a[2].clone() * b[0].clone();
-    let c3 = a[0].clone() * b[3].clone()
-        + a[1].clone() * b[2].clone()
-        + a[2].clone() * b[1].clone()
-        + a[3].clone() * b[0].clone();
-    let c4 = a[0].clone() * b[4].clone()
-        + a[1].clone() * b[3].clone()
-        + a[2].clone() * b[2].clone()
-        + a[3].clone() * b[1].clone()
-        + a[4].clone() * b[0].clone();
+    let c1 = R::dot_product::<2>(&[a[0].clone(), a[1].clone()], &[b[1].clone(), b[0].clone()]);
+    let c2 = R::dot_product::<3>(
+        &[a[0].clone(), a[1].clone(), a[2].clone()],
+        &[b[2].clone(), b[1].clone(), b[0].clone()],
+    );
+    let c3 = R::dot_product::<4>(
+        &[a[0].clone(), a[1].clone(), a[2].clone(), a[3].clone()],
+        &[b[3].clone(), b[2].clone(), b[1].clone(), b[0].clone()],
+    );
+    let c4 = R::dot_product::<5>(
+        a,
+        &[
+            b[4].clone(),
+            b[3].clone(),
+            b[2].clone(),
+            b[1].clone(),
+            b[0].clone(),
+        ],
+    );
 
     // High-degree coefficients
-    let c5 = a[1].clone() * b[4].clone()
-        + a[2].clone() * b[3].clone()
-        + a[3].clone() * b[2].clone()
-        + a[4].clone() * b[1].clone();
-    let c6 =
-        a[2].clone() * b[4].clone() + a[3].clone() * b[3].clone() + a[4].clone() * b[2].clone();
-    let c7 = a[3].clone() * b[4].clone() + a[4].clone() * b[3].clone();
+    let c5 = R::dot_product::<4>(
+        &[a[1].clone(), a[2].clone(), a[3].clone(), a[4].clone()],
+        &[b[4].clone(), b[3].clone(), b[2].clone(), b[1].clone()],
+    );
+    let c6 = R::dot_product::<3>(
+        &[a[2].clone(), a[3].clone(), a[4].clone()],
+        &[b[4].clone(), b[3].clone(), b[2].clone()],
+    );
+    let c7 = R::dot_product::<2>(&[a[3].clone(), a[4].clone()], &[b[4].clone(), b[3].clone()]);
     let c8 = a[4].clone() * b[4].clone();
 
+    // Pre-compute c5 - c8 to save an operation
+    let c5_minus_c8 = c5 - c8.clone();
+
     // Apply reduction: X^5 = 1 - X^2, X^6 = X - X^3, X^7 = X^2 - X^4, X^8 = X^3 + X^2 - 1
-    res[0] = c0 + c5.clone() - c8.clone();
+    res[0] = c0 + c5_minus_c8.clone();
     res[1] = c1 + c6.clone();
-    res[2] = c2 - c5 + c7.clone() + c8.clone();
+    res[2] = c2 - c5_minus_c8 + c7.clone();
     res[3] = c3 - c6 + c8;
     res[4] = c4 - c7;
 }
@@ -657,42 +667,42 @@ pub(super) fn quintic_mul<R: PrimeCharacteristicRing>(a: &[R; 5], b: &[R; 5], re
 /// Square an element in the quintic extension field.
 #[inline]
 pub(super) fn quintic_square<R: PrimeCharacteristicRing>(a: &[R; 5], res: &mut [R; 5]) {
-    // TODO: This is unoptimized. See `binomial_extension.rs` for optimization ideas.
+    // Precompute doubled coefficients for cross terms
+    let a0_2 = a[0].double();
+    let a1_2 = a[1].double();
+    let a2_2 = a[2].double();
+    let a3_2 = a[3].double();
 
-    // Diagonal squares
-    let a0_sq = a[0].square();
-    let a1_sq = a[1].square();
-    let a2_sq = a[2].square();
-    let a3_sq = a[3].square();
-    let a4_sq = a[4].square();
+    // Compute convolution coefficients using dot products
+    // c0 = a0^2
+    let c0 = a[0].square();
+    // c1 = 2*a0*a1
+    let c1 = a0_2.clone() * a[1].clone();
+    // c2 = 2*a0*a2 + a1^2
+    let c2 = R::dot_product::<2>(&[a0_2.clone(), a[1].clone()], &[a[2].clone(), a[1].clone()]);
+    // c3 = 2*a0*a3 + 2*a1*a2
+    let c3 = R::dot_product::<2>(&[a0_2.clone(), a1_2.clone()], &[a[3].clone(), a[2].clone()]);
+    // c4 = 2*a0*a4 + 2*a1*a3 + a2^2
+    let c4 = R::dot_product::<3>(
+        &[a0_2, a1_2.clone(), a[2].clone()],
+        &[a[4].clone(), a[3].clone(), a[2].clone()],
+    );
+    // c5 = 2*a1*a4 + 2*a2*a3
+    let c5 = R::dot_product::<2>(&[a1_2, a2_2.clone()], &[a[4].clone(), a[3].clone()]);
+    // c6 = 2*a2*a4 + a3^2
+    let c6 = R::dot_product::<2>(&[a2_2, a[3].clone()], &[a[4].clone(), a[3].clone()]);
+    // c7 = 2*a3*a4
+    let c7 = a3_2 * a[4].clone();
+    // c8 = a4^2
+    let c8 = a[4].square();
 
-    // Cross products (doubled using efficient addition)
-    let a0a1_2 = (a[0].clone() * a[1].clone()).double();
-    let a0a2_2 = (a[0].clone() * a[2].clone()).double();
-    let a0a3_2 = (a[0].clone() * a[3].clone()).double();
-    let a0a4_2 = (a[0].clone() * a[4].clone()).double();
-    let a1a2_2 = (a[1].clone() * a[2].clone()).double();
-    let a1a3_2 = (a[1].clone() * a[3].clone()).double();
-    let a1a4_2 = (a[1].clone() * a[4].clone()).double();
-    let a2a3_2 = (a[2].clone() * a[3].clone()).double();
-    let a2a4_2 = (a[2].clone() * a[4].clone()).double();
-    let a3a4_2 = (a[3].clone() * a[4].clone()).double();
+    // Pre-compute c5 - c8 to save an operation
+    let c5_minus_c8 = c5 - c8.clone();
 
-    // Raw coefficients c_k = Σ_{i+j=k} a_i * a_j
-    let c0 = a0_sq;
-    let c1 = a0a1_2;
-    let c2 = a0a2_2 + a1_sq;
-    let c3 = a0a3_2 + a1a2_2;
-    let c4 = a0a4_2 + a1a3_2 + a2_sq;
-    let c5 = a1a4_2 + a2a3_2;
-    let c6 = a2a4_2 + a3_sq;
-    let c7 = a3a4_2;
-    let c8 = a4_sq;
-
-    // Apply reduction
-    res[0] = c0 + c5.clone() - c8.clone();
+    // Apply reduction: X^5 = 1 - X^2, X^6 = X - X^3, X^7 = X^2 - X^4, X^8 = X^3 + X^2 - 1
+    res[0] = c0 + c5_minus_c8.clone();
     res[1] = c1 + c6.clone();
-    res[2] = c2 - c5 + c7.clone() + c8.clone();
+    res[2] = c2 - c5_minus_c8 + c7.clone();
     res[3] = c3 - c6 + c8;
     res[4] = c4 - c7;
 }

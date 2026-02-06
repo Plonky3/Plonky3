@@ -1,5 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use p3_field::extension::BinomialExtensionField;
+use p3_field::extension::{BinomialExtensionField, QuinticTrinomialExtensionField};
 use p3_field_testing::bench_func::{
     benchmark_add_latency, benchmark_add_slices, benchmark_add_throughput, benchmark_inv,
     benchmark_mul_latency, benchmark_mul_throughput, benchmark_square,
@@ -7,6 +7,7 @@ use p3_field_testing::bench_func::{
 use p3_koala_bear::KoalaBear;
 
 type EF4 = BinomialExtensionField<KoalaBear, 4>;
+type EF5 = QuinticTrinomialExtensionField<KoalaBear>;
 type EF8 = BinomialExtensionField<KoalaBear, 8>;
 
 // Note that each round of throughput has 10 operations
@@ -26,6 +27,13 @@ fn bench_quartic_extension(c: &mut Criterion) {
     benchmark_mul_latency::<EF4, L_REPS>(c, name);
 }
 
+fn bench_quintic_extension(c: &mut Criterion) {
+    let name = "QuinticTrinomialExtensionField<KoalaBear>";
+    benchmark_square::<EF5>(c, name);
+    benchmark_mul_throughput::<EF5, REPS>(c, name);
+    benchmark_mul_latency::<EF5, L_REPS>(c, name);
+}
+
 fn bench_octic_extension(c: &mut Criterion) {
     let name = "BinomialExtensionField<KoalaBear, 8>";
     benchmark_add_throughput::<EF8, REPS>(c, name);
@@ -41,6 +49,7 @@ fn bench_octic_extension(c: &mut Criterion) {
 criterion_group!(
     bench_koalabear_ef,
     bench_quartic_extension,
+    bench_quintic_extension,
     bench_octic_extension
 );
 criterion_main!(bench_koalabear_ef);
