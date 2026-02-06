@@ -461,7 +461,10 @@ where
 {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
-        self.value = A::binomial_add(&self.value, &rhs.value);
+        self.value
+            .iter_mut()
+            .zip(rhs.value)
+            .for_each(|(lhs, rhs)| *lhs += rhs);
     }
 }
 
@@ -523,7 +526,10 @@ where
 {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
-        self.value = A::binomial_sub(&self.value, &rhs.value);
+        self.value
+            .iter_mut()
+            .zip(rhs.value)
+            .for_each(|(lhs, rhs)| *lhs -= rhs);
     }
 }
 
