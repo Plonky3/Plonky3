@@ -92,18 +92,31 @@ where
         return Err(FriError::InvalidProofShape);
     }
 
-    // With variable arity, we compute log_global_max_height by summing all log_arities.
-    // Each round reduces the domain size by its log_arity.
-    let total_log_reduction: usize = proof
+    // Extract the per-round folding arities from the proof and ensure they are consistent.
+    let log_arities: Vec<usize> = proof
         .query_proofs
         .first()
         .map(|qp| {
             qp.commit_phase_openings
                 .iter()
                 .map(|o| o.log_arity as usize)
-                .sum()
+                .collect()
         })
-        .unwrap_or(0);
+        .unwrap_or_default();
+
+    if proof.query_proofs.iter().any(|qp| {
+        qp.commit_phase_openings
+            .iter()
+            .map(|o| o.log_arity as usize)
+            .collect::<Vec<_>>()
+            != log_arities
+    }) {
+        return Err(FriError::InvalidProofShape);
+    }
+
+    // With variable arity, we compute log_global_max_height by summing all log_arities.
+    // Each round reduces the domain size by its log_arity.
+    let total_log_reduction: usize = log_arities.iter().sum();
     let log_global_max_height = total_log_reduction + params.log_blowup + params.log_final_poly_len;
 
     if proof.commit_pow_witnesses.len() != proof.commit_phase_commits.len() {
@@ -137,6 +150,11 @@ where
     // Ensure that we have the expected number of FRI query proofs.
     if proof.query_proofs.len() != params.num_queries {
         return Err(FriError::InvalidProofShape);
+    }
+
+    // Bind the variable-arity schedule into the transcript before query grinding.
+    for &log_arity in &log_arities {
+        challenger.observe(Val::from_usize(log_arity));
     }
 
     // Check PoW.

@@ -84,6 +84,11 @@ where
     // need to observe the output of this function here.
     let commit_phase_result = commit_phase(folding, params, inputs, challenger);
 
+    // Bind the chosen folding arities into the transcript.
+    for &log_arity in &commit_phase_result.log_arities {
+        challenger.observe(Val::from_usize(log_arity));
+    }
+
     // Produce a proof of work witness before receiving any query challenges.
     // This helps to prevent grinding attacks.
     let pow_witness = challenger.grind(params.query_proof_of_work_bits);
