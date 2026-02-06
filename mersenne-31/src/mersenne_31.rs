@@ -299,8 +299,8 @@ impl PrimeCharacteristicRing for Mersenne31 {
                         + (lhs[i + 1].value as u64) * (rhs[i + 1].value as u64)
                         + (lhs[i + 2].value as u64) * (rhs[i + 2].value as u64)
                         + (lhs[i + 3].value as u64) * (rhs[i + 3].value as u64);
-                    // Reduce chunk_sum to ~32 bits and add to accumulator
-                    acc += reduce_64(chunk_sum) as u64;
+                    // Reduce chunk_sum to ~34 bits and add to accumulator
+                    acc += partial_reduce(chunk_sum);
                     i += 4;
                 }
                 // Handle remainder
@@ -583,6 +583,16 @@ impl Sum for Mersenne31 {
         // sum is < 2^62 provided iter.len() < 2^31.
         from_u62(sum)
     }
+}
+
+/// Perform a partial reduction of a u64 value modulo P = 2^31 - 1.
+/// The result will be contained in [0, 2^34 - 1].
+#[inline(always)]
+pub(crate) fn partial_reduce(val: u64) -> u64 {
+    // Refer to the full reduction process in `reduce_64`.
+    let lo = (val & (P as u64)) as u32;
+    let hi = val >> 31;
+    lo as u64 + hi
 }
 
 /// Reduce a u64 value modulo P = 2^31 - 1.
