@@ -340,7 +340,7 @@ where
 /// - `commitments_with_opening_points`: A vector of joint commitments to collections of matrices
 ///   and openings of those matrices at a collection of points.
 #[inline]
-fn open_input<Val, Challenge, InputMmcs, FriMmcs>(
+pub fn open_input<Val, Challenge, InputMmcs, FriMmcs>(
     params: &FriParameters<FriMmcs>,
     log_global_max_height: usize,
     index: usize,
