@@ -583,6 +583,7 @@ impl LookupGadget for LogUpGadget {
 
         // Check that we have updated all `lookup_data` entries.
         debug_assert_eq!(permutation_counter, lookup_data.len());
+        #[cfg(debug_assertions)] // Compiler complains about inv_cursor despite being under a `debug_assert`
         debug_assert_eq!(inv_cursor, all_inverses.len());
         RowMajorMatrix::new(aux_trace, width)
     }
