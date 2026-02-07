@@ -1457,7 +1457,6 @@ pub(crate) fn quintic_mul_packed_trinomial<FP: FieldParameters>(
     b: &[MontyField31<FP>; 5],
     res: &mut [MontyField31<FP>; 5],
 ) {
-    use p3_field::PrimeCharacteristicRing;
 
     let zero = MontyField31::<FP>::ZERO;
     let b0_minus_b3 = b[0] - b[3];
