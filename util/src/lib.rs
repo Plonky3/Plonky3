@@ -407,6 +407,12 @@ pub fn iter_array_chunks_padded<T: Copy, const N: usize>(
     iter::from_fn(move || iter_next_chunk_padded(&mut iter, default))
 }
 
+#[inline(always)]
+const fn assert_base_array_layout<Base, BaseArray>() {
+    assert!(mem::align_of::<Base>() == mem::align_of::<BaseArray>());
+    assert!(mem::size_of::<BaseArray>().is_multiple_of(mem::size_of::<Base>()));
+}
+
 /// Reinterpret a slice of `BaseArray` elements as a slice of `Base` elements
 ///
 /// This is useful to convert `&[F; N]` to `&[F]` or `&[A]` to `&[F]` where
@@ -425,8 +431,7 @@ pub fn iter_array_chunks_padded<T: Copy, const N: usize>(
 #[inline]
 pub const unsafe fn as_base_slice<Base, BaseArray>(buf: &[BaseArray]) -> &[Base] {
     const {
-        assert!(align_of::<Base>() == align_of::<BaseArray>());
-        assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
+        assert_base_array_layout::<Base, BaseArray>();
     }
 
     let d = size_of::<BaseArray>() / size_of::<Base>();
@@ -454,8 +459,7 @@ pub const unsafe fn as_base_slice<Base, BaseArray>(buf: &[BaseArray]) -> &[Base]
 #[inline]
 pub const unsafe fn as_base_slice_mut<Base, BaseArray>(buf: &mut [BaseArray]) -> &mut [Base] {
     const {
-        assert!(align_of::<Base>() == align_of::<BaseArray>());
-        assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
+        assert_base_array_layout::<Base, BaseArray>();
     }
 
     let d = size_of::<BaseArray>() / size_of::<Base>();
@@ -486,8 +490,7 @@ pub const unsafe fn as_base_slice_mut<Base, BaseArray>(buf: &mut [BaseArray]) ->
 #[inline]
 pub unsafe fn flatten_to_base<Base, BaseArray>(vec: Vec<BaseArray>) -> Vec<Base> {
     const {
-        assert!(align_of::<Base>() == align_of::<BaseArray>());
-        assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
+        assert_base_array_layout::<Base, BaseArray>();
     }
 
     let d = size_of::<BaseArray>() / size_of::<Base>();
@@ -535,8 +538,7 @@ pub unsafe fn flatten_to_base<Base, BaseArray>(vec: Vec<BaseArray>) -> Vec<Base>
 #[inline]
 pub unsafe fn reconstitute_from_base<Base, BaseArray: Clone>(mut vec: Vec<Base>) -> Vec<BaseArray> {
     const {
-        assert!(align_of::<Base>() == align_of::<BaseArray>());
-        assert!(size_of::<BaseArray>().is_multiple_of(size_of::<Base>()));
+        assert_base_array_layout::<Base, BaseArray>();
     }
 
     let d = size_of::<BaseArray>() / size_of::<Base>();
