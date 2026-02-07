@@ -1182,7 +1182,6 @@ pub(crate) fn quintic_mul_packed_trinomial<FP: FieldParameters>(
     b: &[MontyField31<FP>; 5],
     res: &mut [MontyField31<FP>; 5],
 ) {
-    use p3_field::PrimeCharacteristicRing;
 
     // Constant term = a0*b0 + a1*b4 + a2*b3 + a3*b2 + a4*b1 - a4*b4
     // Linear term = a0*b1 + a1*b0 + a2*b4 + a3*b3 + a4*b2
