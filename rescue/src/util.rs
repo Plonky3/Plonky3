@@ -1,7 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_util::log2_ceil_u64;
 use sha3::Shake256;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 
@@ -59,11 +58,15 @@ const fn pow2_no_std(x: f32, tol: f32) -> f32 {
 /// passed to pow2_no_std) before being used more widely.
 #[must_use]
 const fn log2_no_std(x: u64) -> f32 {
+    if x == 0 {
+        // Match the behavior of `f64::log2(0.0)` without relying on libm.
+        return f32::NEG_INFINITY;
+    }
     const LOG2_E: f32 = core::f32::consts::LOG2_E;
     const POW2_TOL: f32 = 0.0001;
     // Initial estimate x0 = floor(log2(x))
-    let x0 = log2_ceil_u64(x + 1) - 1;
-    let p0 = (1 << x0) as f32; // 2^x0
+    let x0 = x.ilog2();
+    let p0 = (1_u64 << x0) as f32; // 2^x0
     let x1 = x0 as f32 - LOG2_E * (1.0 - x as f32 / p0);
     // precision 20 determined by experiment
     let p1 = pow2_no_std(x1, POW2_TOL);
@@ -84,6 +87,11 @@ const fn log2_no_std(x: u64) -> f32 {
 ///
 /// coming from Stirling's approximation for n!.
 pub(crate) const fn log2_binom(n: u64, k: u64) -> f32 {
+    // Handle edge cases exactly. The Stirling-based approximation below is not well-behaved for
+    // k=0 or k=n (it involves terms like 0 * log2(0)).
+    if k == 0 || k == n {
+        return 0.0;
+    }
     const LOG2_2PI: f32 = 2.6514961;
     let log2_n = log2_no_std(n);
     let log2_k = log2_no_std(k);
@@ -95,7 +103,7 @@ pub(crate) const fn log2_binom(n: u64, k: u64) -> f32 {
 
 #[cfg(test)]
 mod test {
-    use super::log2_no_std;
+    use super::{log2_binom, log2_no_std};
 
     const TOLERANCE: f32 = 0.001;
 
@@ -113,5 +121,17 @@ mod test {
         for (&x, y) in inputs.iter().zip(expected) {
             assert!((log2_no_std(x) - y) < TOLERANCE);
         }
+    }
+
+    #[test]
+    fn test_log2_no_std_zero() {
+        assert!(log2_no_std(0).is_infinite());
+        assert!(log2_no_std(0).is_sign_negative());
+    }
+
+    #[test]
+    fn test_log2_binom_edge_cases() {
+        assert_eq!(log2_binom(123, 0), 0.0);
+        assert_eq!(log2_binom(123, 123), 0.0);
     }
 }
