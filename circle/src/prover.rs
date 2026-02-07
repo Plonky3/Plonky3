@@ -6,7 +6,7 @@ use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
-use p3_fri::{FriFoldingStrategy, FriParameters};
+use p3_fri::{FriFoldingStrategy, FriParameters, compute_log_arity_for_round};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::log2_strict_usize;
 use tracing::{info_span, instrument};
@@ -45,12 +45,12 @@ where
     let query_proofs = info_span!("query phase").in_scope(|| {
         iter::repeat_with(|| {
             let index = challenger.sample_bits(log_max_height + folding.extra_query_index_bits());
-            // For each index, create a proof that the folding operations along the chain:
-            // round 0: index, round 1: index >> 1, round 2: index >> 2, ... are correct.
+            // For each index, create a proof that the folding operations along the chain are correct.
             CircleQueryProof {
                 input_proof: open_input(index),
                 commit_phase_openings: answer_query(
                     params,
+                    &commit_phase_result.log_arities,
                     &commit_phase_result.data,
                     index >> folding.extra_query_index_bits(),
                 ),
@@ -71,6 +71,7 @@ where
 struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
     commits: Vec<M::Commitment>,
     data: Vec<M::ProverData<RowMajorMatrix<F>>>,
+    log_arities: Vec<usize>,
     final_poly: F,
 }
 
@@ -92,16 +93,33 @@ where
     let mut folded = inputs_iter.next().unwrap();
     let mut commits = vec![];
     let mut data = vec![];
+    let mut log_arities = vec![];
+
+    // For Circle, we fold down to blowup elements (no separate final_poly_len)
+    let log_final_height = params.log_blowup;
 
     while folded.len() > params.blowup() {
-        let leaves = RowMajorMatrix::new(folded, 2);
+        let log_current_height = log2_strict_usize(folded.len());
+        let next_input_log_height = inputs_iter.peek().map(|v| log2_strict_usize(v.len()));
+
+        // Compute the arity for this round
+        let log_arity = compute_log_arity_for_round(
+            log_current_height,
+            next_input_log_height,
+            log_final_height,
+            params.max_log_arity,
+        );
+        let arity = 1 << log_arity;
+        log_arities.push(log_arity);
+
+        let leaves = RowMajorMatrix::new(folded, arity);
         let (commit, prover_data) = params.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
 
         let beta: Challenge = challenger.sample_algebra_element();
         // We passed ownership of `current` to the MMCS, so get a reference to it
         let leaves = params.mmcs.get_matrices(&prover_data).pop().unwrap();
-        folded = folding.fold_matrix(beta, leaves.as_view());
+        folded = folding.fold_matrix(beta, log_arity, leaves.as_view());
 
         commits.push(commit);
         data.push(prover_data);
@@ -122,36 +140,60 @@ where
     CommitPhaseResult {
         commits,
         data,
+        log_arities,
         final_poly,
     }
 }
 
 fn answer_query<F, M>(
     params: &FriParameters<M>,
+    log_arities: &[usize],
     commit_phase_commits: &[M::ProverData<RowMajorMatrix<F>>],
-    index: usize,
+    start_index: usize,
 ) -> Vec<CircleCommitPhaseProofStep<F, M>>
 where
     F: Field,
     M: Mmcs<F>,
 {
+    let mut current_index = start_index;
+
     commit_phase_commits
         .iter()
         .enumerate()
         .map(|(i, commit)| {
-            let index_i = index >> i;
-            let index_i_sibling = index_i ^ 1;
-            let index_pair = index_i >> 1;
+            let log_arity = log_arities[i];
+            let arity = 1 << log_arity;
+
+            // Index of this element within its group
+            let index_in_group = current_index % arity;
+            // Index of the group (row in the committed matrix)
+            let group_index = current_index >> log_arity;
 
             let (mut opened_rows, opening_proof) =
-                params.mmcs.open_batch(index_pair, commit).unpack();
+                params.mmcs.open_batch(group_index, commit).unpack();
             assert_eq!(opened_rows.len(), 1);
             let opened_row = opened_rows.pop().unwrap();
-            assert_eq!(opened_row.len(), 2, "Committed data should be in pairs");
-            let sibling_value = opened_row[index_i_sibling % 2];
+            assert_eq!(
+                opened_row.len(),
+                arity,
+                "Committed data should have arity {} elements",
+                arity
+            );
+
+            // Get all siblings (exclude self)
+            let sibling_values: Vec<_> = opened_row
+                .into_iter()
+                .enumerate()
+                .filter(|(j, _)| *j != index_in_group)
+                .map(|(_, v)| v)
+                .collect();
+
+            // Update current_index for the next round
+            current_index = group_index;
 
             CircleCommitPhaseProofStep {
-                sibling_value,
+                log_arity: log_arity as u8,
+                sibling_values,
                 opening_proof,
             }
         })

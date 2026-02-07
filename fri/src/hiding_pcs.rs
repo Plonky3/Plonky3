@@ -52,7 +52,7 @@ where
     Val: TwoAdicField,
     StandardUniform: Distribution<Val>,
     Dft: TwoAdicSubgroupDft<Val>,
-    InputMmcs: Mmcs<Val>,
+    InputMmcs: Mmcs<Val, Proof: Sync, Error: Sync>,
     FriMmcs: Mmcs<Challenge>,
     Challenge: TwoAdicField + ExtensionField<Val>,
     Challenger:

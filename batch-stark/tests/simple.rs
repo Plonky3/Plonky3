@@ -545,6 +545,7 @@ fn make_two_adic_compat_config(seed: u64) -> MyConfig {
     let fri_params = FriParameters {
         log_blowup: 2,
         log_final_poly_len: 2,
+        max_log_arity: 1,
         num_queries: 2,
         commit_proof_of_work_bits: 1,
         query_proof_of_work_bits: 1,
@@ -590,6 +591,7 @@ fn make_circle_config() -> CircleConfig {
     let fri_params = FriParameters {
         log_blowup: 1,
         log_final_poly_len: 0,
+        max_log_arity: 1,
         num_queries: 40,
         commit_proof_of_work_bits: 8,
         query_proof_of_work_bits: 8,
