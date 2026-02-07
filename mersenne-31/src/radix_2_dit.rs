@@ -63,34 +63,38 @@ fn dit_layer(mat: &mut RowMajorMatrixViewMut<'_, C>, layer: usize, twiddles: &[C
 
 #[inline]
 fn twiddle_free_butterfly(mat: &mut RowMajorMatrixViewMut<'_, C>, row_1: usize, row_2: usize) {
-    let ((shorts_1, suffix_1), (shorts_2, suffix_2)) = mat.packed_row_pair_mut(row_1, row_2);
-
-    // TODO: There's no special packing for Mersenne31Complex at the
-    // time of writing; when there is we'll want to expand this out
-    // into three separate loops.
-    let row_1 = shorts_1.iter_mut().chain(suffix_1);
-    let row_2 = shorts_2.iter_mut().chain(suffix_2);
-
-    for (x, y) in row_1.zip(row_2) {
+    for_each_packed_row_pair(mat, row_1, row_2, |x, y| {
         let sum = *x + *y;
         let diff = *x - *y;
         *x = sum;
         *y = diff;
-    }
+    });
 }
 
 #[inline]
 fn dit_butterfly(mat: &mut RowMajorMatrixViewMut<'_, C>, row_1: usize, row_2: usize, twiddle: C) {
+    for_each_packed_row_pair(mat, row_1, row_2, |x, y| {
+        dit_butterfly_inner(x, y, twiddle);
+    });
+}
+
+#[inline]
+fn for_each_packed_row_pair(
+    mat: &mut RowMajorMatrixViewMut<'_, C>,
+    row_1: usize,
+    row_2: usize,
+    mut f: impl FnMut(&mut C, &mut C),
+) {
     let ((shorts_1, suffix_1), (shorts_2, suffix_2)) = mat.packed_row_pair_mut(row_1, row_2);
 
     // TODO: There's no special packing for Mersenne31Complex at the
     // time of writing; when there is we'll want to expand this out
     // into three separate loops.
-    let row_1 = shorts_1.iter_mut().chain(suffix_1);
-    let row_2 = shorts_2.iter_mut().chain(suffix_2);
+    let row_1_iter = shorts_1.iter_mut().chain(suffix_1);
+    let row_2_iter = shorts_2.iter_mut().chain(suffix_2);
 
-    for (x, y) in row_1.zip(row_2) {
-        dit_butterfly_inner(x, y, twiddle);
+    for (x, y) in row_1_iter.zip(row_2_iter) {
+        f(x, y);
     }
 }
 
@@ -153,3 +157,4 @@ fn dit_butterfly_inner(x: &mut C, y: &mut C, twiddle: C) {
     *x = C::new_complex(a1, a2);
     *y = C::new_complex(b1, b2);
 }
+
