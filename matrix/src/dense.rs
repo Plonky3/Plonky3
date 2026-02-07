@@ -2,7 +2,6 @@ use alloc::borrow::Cow;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::{Borrow, BorrowMut};
-use core::iter;
 use core::marker::PhantomData;
 use core::ops::Deref;
 
@@ -514,9 +513,9 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     {
         let buf = &self.values.borrow()[r * self.width..(r + 1) * self.width];
         let (packed, sfx) = P::pack_slice_with_suffix(buf);
-        packed.iter().copied().chain(iter::once(P::from_fn(|i| {
-            sfx.get(i).cloned().unwrap_or_default()
-        })))
+        packed.iter().copied().chain(
+            (!sfx.is_empty()).then(|| P::from_fn(|i| sfx.get(i).cloned().unwrap_or_default())),
+        )
     }
 }
 
@@ -910,6 +909,39 @@ mod tests {
             vec![
                 Packed::from([BabyBear::new(4), BabyBear::new(5)]),
                 Packed::from([BabyBear::new(6), BabyBear::new(0)])
+            ]
+        );
+    }
+
+    #[test]
+    fn test_padded_horizontally_packed_row_exact_width() {
+        type Packed = FieldArray<BabyBear, 2>;
+
+        // Width = 4 is exactly divisible by P::WIDTH = 2.
+        // The iterator must return exactly div_ceil(4, 2) = 2 packed elements,
+        // with no extra zero-filled element appended.
+        let matrix = RowMajorMatrix::new(
+            vec![
+                BabyBear::new(1),
+                BabyBear::new(2),
+                BabyBear::new(3),
+                BabyBear::new(4),
+                BabyBear::new(5),
+                BabyBear::new(6),
+                BabyBear::new(7),
+                BabyBear::new(8),
+            ],
+            4,
+        );
+
+        let packed: Vec<_> = matrix.padded_horizontally_packed_row::<Packed>(1).collect();
+
+        assert_eq!(packed.len(), 2);
+        assert_eq!(
+            packed,
+            vec![
+                Packed::from([BabyBear::new(5), BabyBear::new(6)]),
+                Packed::from([BabyBear::new(7), BabyBear::new(8)]),
             ]
         );
     }
