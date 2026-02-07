@@ -129,7 +129,7 @@ impl<MP: FieldParameters + TwoAdicData> RecursiveDft<MontyField31<MP>> {
             if (current_len + 1) < need {
                 let mut v = w.to_vec();
                 // Append only the portion needed in case another thread did a partial update.
-                let extend_from = current_len.saturating_sub(current_len);
+                let extend_from = current_len.saturating_sub(have - 1);
                 v.extend_from_slice(&missing[extend_from..]);
                 *w = v.into();
             }

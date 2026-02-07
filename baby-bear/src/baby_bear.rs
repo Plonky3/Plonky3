@@ -256,4 +256,51 @@ mod tests {
     test_prime_field!(crate::BabyBear);
     test_prime_field_64!(crate::BabyBear, &super::ZEROS, &super::ONES);
     test_prime_field_32!(crate::BabyBear, &super::ZEROS, &super::ONES);
+
+    /// Regression test for the twiddle table extension bug where
+    /// `current_len.saturating_sub(current_len)` (always 0) caused
+    /// duplicate entries when multiple threads concurrently grew the
+    /// twiddle table. Verifies that concurrent DFTs of increasing
+    /// sizes all produce correct results.
+    #[test]
+    fn test_concurrent_twiddle_growth_correctness() {
+        extern crate std;
+
+        use alloc::vec::Vec;
+
+        use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
+        use p3_matrix::Matrix;
+        use p3_matrix::dense::RowMajorMatrix;
+        use rand::SeedableRng;
+        use rand::rngs::SmallRng;
+
+        // Shared DFT instance with empty twiddles — forces concurrent growth.
+        let shared_dft: std::sync::Arc<p3_monty_31::dft::RecursiveDft<BabyBear>> =
+            std::sync::Arc::new(Default::default());
+
+        let handles: Vec<_> = (3..=8u32)
+            .map(|log_size| {
+                let dft = std::sync::Arc::clone(&shared_dft);
+                std::thread::spawn(move || {
+                    #[allow(unused_imports)]
+                    use alloc::vec;
+                    let mut rng = SmallRng::seed_from_u64(log_size as u64);
+                    let h = 1usize << log_size;
+                    let ncols = 3;
+                    let mat = RowMajorMatrix::<BabyBear>::rand(&mut rng, h, ncols);
+
+                    let result = dft.dft_batch(mat.clone()).to_row_major_matrix();
+                    let expected = NaiveDft.dft_batch(mat).to_row_major_matrix();
+                    assert_eq!(
+                        result, expected,
+                        "DFT mismatch at log_size={log_size} after concurrent twiddle growth"
+                    );
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().expect("thread panicked");
+        }
+    }
 }
