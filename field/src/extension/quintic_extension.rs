@@ -618,7 +618,7 @@ impl<F: QuinticTrinomialExtendable + HasTwoAdicQuinticExtension> TwoAdicField
 
 /// Multiply two elements in the quintic extension field.
 #[inline]
-pub(super) fn quintic_mul<R: PrimeCharacteristicRing>(a: &[R; 5], b: &[R; 5], res: &mut [R; 5]) {
+pub fn quintic_mul<R: PrimeCharacteristicRing>(a: &[R; 5], b: &[R; 5], res: &mut [R; 5]) {
     // Compute convolution coefficients c_k = Σ_{i+j=k} a_i * b_j using dot products
     let c0 = a[0].clone() * b[0].clone();
     let c1 = R::dot_product::<2>(&[a[0].clone(), a[1].clone()], &[b[1].clone(), b[0].clone()]);

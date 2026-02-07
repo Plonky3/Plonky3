@@ -1450,6 +1450,89 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     res.copy_from_slice(&sum.0[..5]);
 }
 
+/// Multiplication in the quintic trinomial extension field (X^5 + X^2 - 1).
+#[inline]
+pub(crate) fn quintic_mul_packed_trinomial<FP: FieldParameters>(
+    a: &[MontyField31<FP>; 5],
+    b: &[MontyField31<FP>; 5],
+    res: &mut [MontyField31<FP>; 5],
+) {
+    use p3_field::PrimeCharacteristicRing;
+
+    let zero = MontyField31::<FP>::ZERO;
+    let b0_minus_b3 = b[0] - b[3];
+    let b1_minus_b4 = b[1] - b[4];
+    let b4_minus_b2 = b[4] - b[2];
+    let b3_plus_b4_minus_b_1 = b[3] - b1_minus_b4;
+
+    // Constant term = a0*b0 + a1*b4 + a2*b3 + a3*b2 + a4*b1 - a4*b4
+    // Linear term = a0*b1 + a1*b0 + a2*b4 + a3*b3 + a4*b2
+    // Square term = a0*b2 + a1*b1 - a1*b4 + a2*b0 - a2*b3 + a3*b4 - a3*b2 + a4*b3 - a4*b1 + a4*b4
+    // Cubic term = a0*b3 + a1*b2 + a2*b1 - a2*b4 + a3*b0 - a3*b3 + a4*b4 - a4*b2
+    // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 - a3*b4 + a4*b0 - a4*b3
+
+    let lhs = [
+        PackedMontyField31AVX512([
+            a[0], a[2], a[0], a[2], a[0], a[2], a[0], a[2], a[0], a[2], a[4], a[4], a[4], a[4],
+            a[4], zero,
+        ]),
+        PackedMontyField31AVX512([
+            a[1], a[3], a[1], a[3], a[1], a[3], a[1], a[3], a[1], a[3], zero, zero, zero, zero,
+            zero, zero,
+        ]),
+    ];
+    let rhs = [
+        PackedMontyField31AVX512([
+            b[0],
+            b[3],
+            b[1],
+            b[4],
+            b[2],
+            b0_minus_b3,
+            b[3],
+            b1_minus_b4,
+            b[4],
+            b[2],
+            b1_minus_b4,
+            b[2],
+            b3_plus_b4_minus_b_1,
+            b4_minus_b2,
+            b0_minus_b3,
+            zero,
+        ]),
+        PackedMontyField31AVX512([
+            b[4],
+            b[2],
+            b[0],
+            b[3],
+            b1_minus_b4,
+            b4_minus_b2,
+            b[2],
+            b0_minus_b3,
+            b[3],
+            b1_minus_b4,
+            zero,
+            zero,
+            zero,
+            zero,
+            zero,
+            zero,
+        ]),
+    ];
+
+    let dot = unsafe { PackedMontyField31AVX512::from_vector(dot_product_2(lhs, rhs)).0 };
+
+    let sumand1 =
+        PackedMontyField31AVX512::from_monty_array([dot[0], dot[2], dot[4], dot[6], dot[8]]);
+    let sumand2 =
+        PackedMontyField31AVX512::from_monty_array([dot[1], dot[3], dot[5], dot[7], dot[9]]);
+    let sumand3 =
+        PackedMontyField31AVX512::from_monty_array([dot[10], dot[11], dot[12], dot[13], dot[14]]);
+    let sum = sumand1 + sumand2 + sumand3;
+
+    res.copy_from_slice(&sum.0[..5]);
+}
+
 /// Multiplication in an octic binomial extension field.
 #[inline]
 pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
