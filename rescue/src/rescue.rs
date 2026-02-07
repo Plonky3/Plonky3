@@ -101,10 +101,8 @@ where
             .into_iter()
             .map(|chunk| {
                 let integer = chunk
-                    .collect_vec()
-                    .iter()
                     .rev()
-                    .fold(0, |acc, &byte| (acc << 8) + *byte as u64);
+                    .fold(0u64, |acc, byte| (acc << 8) | (*byte as u64));
                 F::from_u64(integer)
             })
             .collect()
