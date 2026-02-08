@@ -10,6 +10,7 @@ use crate::utils::{add, sub};
 use crate::{
     BinomialExtensionData, FieldParameters, MontyField31, TrinomialQuinticData, TwoAdicData,
     base_mul_packed, octic_mul_packed, quartic_mul_packed, quintic_mul_packed,
+    quintic_mul_packed_trinomial,
 };
 
 // If a field implements BinomialExtensionData<WIDTH> then there is a natural
@@ -94,9 +95,14 @@ where
     }
 }
 
-impl<FP> QuinticExtendableAlgebra<Self> for MontyField31<FP> where
-    FP: TrinomialQuinticData + FieldParameters
+impl<FP> QuinticExtendableAlgebra<Self> for MontyField31<FP>
+where
+    FP: TrinomialQuinticData + FieldParameters,
 {
+    #[inline(always)]
+    fn quintic_mul(a: &[Self; 5], b: &[Self; 5], res: &mut [Self; 5]) {
+        quintic_mul_packed_trinomial(a, b, res);
+    }
 }
 
 impl<FP> QuinticTrinomialExtendable for MontyField31<FP>

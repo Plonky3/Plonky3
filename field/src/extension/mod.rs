@@ -15,7 +15,7 @@ pub use binomial_extension::*;
 pub use complex::*;
 pub use packed_binomial_extension::*;
 pub use packed_quintic_extension::PackedQuinticTrinomialExtensionField;
-pub use quintic_extension::QuinticTrinomialExtensionField;
+pub use quintic_extension::{QuinticTrinomialExtensionField, quintic_mul as trinomial_quintic_mul};
 
 /// Trait for fields that support binomial extension of the form `F[X]/(X^D - W)`.
 ///
