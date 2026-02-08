@@ -34,6 +34,7 @@ fn get_ldt_for_testing<R: Rng>(rng: &mut R, log_final_poly_len: usize) -> (Perm,
     let fri_params = FriParameters {
         log_blowup: 1,
         log_final_poly_len,
+        max_log_arity: 1,
         num_queries: 10,
         commit_proof_of_work_bits: 0,
         query_proof_of_work_bits: 8,

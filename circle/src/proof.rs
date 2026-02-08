@@ -33,10 +33,11 @@ pub struct CircleQueryProof<F: Field, M: Mmcs<F>, InputProof> {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(bound = "")]
 pub struct CircleCommitPhaseProofStep<F: Field, M: Mmcs<F>> {
-    /// The opening of the commit phase codeword at the sibling location.
-    // This may change to Vec<FC::Challenge> if the library is generalized to support other FRI
-    // folding arities besides 2, meaning that there can be multiple siblings.
-    pub sibling_value: F,
+    /// The log2 of the folding arity used for this step.
+    pub log_arity: u8,
+    /// The openings of the commit phase codeword at the sibling locations.
+    /// For arity k, this contains k-1 sibling values.
+    pub sibling_values: Vec<F>,
 
     pub opening_proof: M::Proof,
 }

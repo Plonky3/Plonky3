@@ -93,7 +93,7 @@ pub struct TwoAdicFriFolding<InputProof, InputError>(pub PhantomData<(InputProof
 pub type TwoAdicFriFoldingForMmcs<F, M> =
     TwoAdicFriFolding<Vec<BatchOpening<F, M>>, <M as Mmcs<F>>::Error>;
 
-impl<F: TwoAdicField, InputProof, InputError: Debug, EF: ExtensionField<F>>
+impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionField<F>>
     FriFoldingStrategy<F, EF> for TwoAdicFriFolding<InputProof, InputError>
 {
     type InputProof = InputProof;
@@ -107,59 +107,109 @@ impl<F: TwoAdicField, InputProof, InputError: Debug, EF: ExtensionField<F>>
         &self,
         index: usize,
         log_height: usize,
+        log_arity: usize,
         beta: EF,
         evals: impl Iterator<Item = EF>,
     ) -> EF {
-        let arity = 2;
-        let log_arity = 1;
-        let (e0, e1) = evals
-            .collect_tuple()
-            .expect("TwoAdicFriFolder only supports arity=2");
-        // If performance critical, make this API stateful to avoid this
-        // This is a bit more math than is necessary, but leaving it here
-        // in case we want higher arity in the future.
+        let arity = 1 << log_arity;
+        let evals: Vec<_> = evals.collect();
+        assert_eq!(evals.len(), arity, "Expected {} evaluations", arity);
+
+        // Compute the evaluation points in the subgroup
         let subgroup_start = F::two_adic_generator(log_height + log_arity)
             .exp_u64(reverse_bits_len(index, log_height) as u64);
-        let mut xs = F::two_adic_generator(log_arity)
+        let mut xs: Vec<F> = F::two_adic_generator(log_arity)
             .shifted_powers(subgroup_start)
-            .collect_n(arity);
+            .take(arity)
+            .collect();
         reverse_slice_index_bits(&mut xs);
-        assert_eq!(log_arity, 1, "can only interpolate two points for now");
-        // interpolate and evaluate at beta
-        e0 + (beta - xs[0]) * (e1 - e0) * (xs[1] - xs[0]).inverse()
-        // Currently Algebra<F> does not include division so we do it manually.
-        // Note we do not want to do an EF division as that is far more expensive.
+
+        // Lagrange interpolation at beta
+        lagrange_interpolate_at(&xs, &evals, beta)
     }
 
-    fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, m: M) -> Vec<EF> {
-        // We use the fact that
-        //     p_e(x^2) = (p(x) + p(-x)) / 2
-        //     p_o(x^2) = (p(x) - p(-x)) / (2 x)
-        // that is,
-        //     p_e(g^(2i)) = (p(g^i) + p(g^(n/2 + i))) / 2
-        //     p_o(g^(2i)) = (p(g^i) - p(g^(n/2 + i))) / (2 g^i)
-        // so
-        //     result(g^(2i)) = p_e(g^(2i)) + beta p_o(g^(2i))
-        //
-        // As p_e, p_o will be in the extension field we want to find ways to avoid extension multiplications.
-        // We should only need a single one (namely multiplication by beta).
-        let g_inv = F::two_adic_generator(log2_strict_usize(m.height()) + 1).inverse();
+    fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, log_arity: usize, m: M) -> Vec<EF> {
+        if log_arity == 1 {
+            // Optimized path for arity 2
+            // We use the fact that
+            //     p_e(x^2) = (p(x) + p(-x)) / 2
+            //     p_o(x^2) = (p(x) - p(-x)) / (2 x)
+            // that is,
+            //     p_e(g^(2i)) = (p(g^i) + p(g^(n/2 + i))) / 2
+            //     p_o(g^(2i)) = (p(g^i) - p(g^(n/2 + i))) / (2 g^i)
+            // so
+            //     result(g^(2i)) = p_e(g^(2i)) + beta p_o(g^(2i))
+            //
+            // As p_e, p_o will be in the extension field we want to find ways to avoid extension multiplications.
+            // We should only need a single one (namely multiplication by beta).
+            let g_inv = F::two_adic_generator(log2_strict_usize(m.height()) + 1).inverse();
 
-        // TODO: vectorize this (after we have packed extension fields)
+            // As beta is in the extension field, we want to avoid multiplying by it
+            // for as long as possible. Here we precompute the powers  `g_inv^i / 2` in the base field.
+            let mut halve_inv_powers = g_inv.shifted_powers(F::ONE.halve()).collect_n(m.height());
+            reverse_slice_index_bits(&mut halve_inv_powers);
 
-        // As beta is in the extension field, we want to avoid multiplying by it
-        // for as long as possible. Here we precompute the powers  `g_inv^i / 2` in the base field.
-        let mut halve_inv_powers = g_inv.shifted_powers(F::ONE.halve()).collect_n(m.height());
-        reverse_slice_index_bits(&mut halve_inv_powers);
-
-        m.par_rows()
-            .zip(halve_inv_powers)
-            .map(|(mut row, halve_inv_power)| {
-                let (lo, hi) = row.next_tuple().unwrap();
-                (lo + hi).halve() + (lo - hi) * beta * halve_inv_power
-            })
-            .collect()
+            m.par_rows()
+                .zip(halve_inv_powers)
+                .map(|(mut row, halve_inv_power)| {
+                    let (lo, hi) = row.next_tuple().unwrap();
+                    (lo + hi).halve() + (lo - hi) * beta * halve_inv_power
+                })
+                .collect()
+        } else {
+            // General path for higher arity: use Lagrange interpolation
+            let log_height = log2_strict_usize(m.height());
+            m.par_rows()
+                .enumerate()
+                .map(|(i, row)| self.fold_row(i, log_height, log_arity, beta, row))
+                .collect()
+        }
     }
+}
+
+/// Lagrange interpolation: given points (xs[i], ys[i]), evaluate at z.
+///
+/// Uses the barycentric formula for efficiency when xs are roots of unity.
+fn lagrange_interpolate_at<F: TwoAdicField, EF: ExtensionField<F>>(
+    xs: &[F],
+    ys: &[EF],
+    z: EF,
+) -> EF {
+    debug_assert_eq!(xs.len(), ys.len());
+    let n = xs.len();
+
+    if n == 0 {
+        return EF::ZERO;
+    }
+
+    // If z equals one of the interpolation points, return early.
+    for i in 0..n {
+        if (z - xs[i]).is_zero() {
+            return ys[i];
+        }
+    }
+
+    let log_n = log2_strict_usize(n);
+
+    // All xs lie in a coset of the 2^log_n roots of unity.
+    let coset_power = xs[0].exp_power_of_2(log_n);
+    let weight_scale = (F::from_usize(n) * coset_power).inverse();
+
+    // Compute (z - x_i)^{-1} as a batch inversion
+    let diffs: Vec<_> = xs.iter().map(|&x| z - x).collect();
+    let diff_invs = batch_multiplicative_inverse(&diffs);
+
+    // Compute L(z) = prod_i (z - x_i)
+    let l_z = diffs.iter().copied().product::<EF>();
+
+    // Barycentric formula: sum_i (w_i * y_i / (z - x_i))
+    // where w_i = 1 / prod_{j != i} (x_i - x_j) = x_i * weight_scale.
+    let mut result = EF::ZERO;
+    for ((&x, &y), &diff_inv) in xs.iter().zip(ys).zip(diff_invs.iter()) {
+        let weight = x * weight_scale;
+        result += y * weight * diff_inv;
+    }
+    result * l_z
 }
 
 impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challenger>
@@ -167,7 +217,7 @@ impl<Val, Dft, InputMmcs, FriMmcs, Challenge, Challenger> Pcs<Challenge, Challen
 where
     Val: TwoAdicField,
     Dft: TwoAdicSubgroupDft<Val>,
-    InputMmcs: Mmcs<Val>,
+    InputMmcs: Mmcs<Val, Proof: Sync, Error: Sync>,
     FriMmcs: Mmcs<Challenge>,
     Challenge: ExtensionField<Val>,
     Challenger:

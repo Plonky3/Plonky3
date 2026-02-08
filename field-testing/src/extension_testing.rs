@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 
+use p3_field::extension::HasFrobenius;
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue};
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
@@ -121,4 +122,63 @@ where
     let unpacked_powers: Vec<EF> =
         EF::ExtensionPacking::to_ext_iter(packed_powers_capped).collect();
     assert_eq!(base_powers, unpacked_powers);
+}
+
+/// Test that Frobenius fixes base field elements: φ(a) = a for a ∈ F.
+pub fn test_frobenius_fixes_base_field<F, EF>()
+where
+    F: Field,
+    EF: ExtensionField<F> + HasFrobenius<F>,
+    StandardUniform: Distribution<F>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let base_elem: F = rng.random();
+    let base_elem_in_ext: EF = base_elem.into();
+    assert_eq!(
+        base_elem_in_ext.frobenius(),
+        base_elem_in_ext,
+        "Frobenius should fix base field elements"
+    );
+
+    // Test with special base field elements
+    assert_eq!(EF::ZERO.frobenius(), EF::ZERO);
+    assert_eq!(EF::ONE.frobenius(), EF::ONE);
+    assert_eq!(EF::TWO.frobenius(), EF::TWO);
+}
+
+/// Test that Frobenius is multiplicative: φ(a·b) = φ(a)·φ(b).
+pub fn test_frobenius_multiplicative<F, EF>()
+where
+    F: Field,
+    EF: ExtensionField<F> + HasFrobenius<F>,
+    StandardUniform: Distribution<EF>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let a: EF = rng.random();
+    let b: EF = rng.random();
+
+    let ab = a * b;
+    assert_eq!(
+        ab.frobenius(),
+        a.frobenius() * b.frobenius(),
+        "Frobenius should be multiplicative"
+    );
+}
+
+/// Test that Frobenius is additive: φ(a+b) = φ(a)+φ(b).
+pub fn test_frobenius_additive<F, EF>()
+where
+    F: Field,
+    EF: ExtensionField<F> + HasFrobenius<F>,
+    StandardUniform: Distribution<EF>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let a: EF = rng.random();
+    let b: EF = rng.random();
+
+    assert_eq!(
+        (a + b).frobenius(),
+        a.frobenius() + b.frobenius(),
+        "Frobenius should be additive"
+    );
 }

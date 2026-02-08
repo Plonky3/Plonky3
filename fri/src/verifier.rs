@@ -83,11 +83,41 @@ where
     // (i.e counting the number (point, claimed_evaluation) pairs).
     let alpha: Challenge = challenger.sample_algebra_element();
 
-    // `commit_phase_commits.len()` is the number of folding steps, so the maximum polynomial degree will be
-    // `commit_phase_commits.len() + self.fri.log_final_poly_len` and so, as the same blow-up is used for all
-    // polynomials, the maximum matrix height over all commit batches is:
-    let log_global_max_height =
-        proof.commit_phase_commits.len() + params.log_blowup + params.log_final_poly_len;
+    // Validate that all query proofs have the same number of commit phase openings
+    if !proof
+        .query_proofs
+        .iter()
+        .all(|qp| qp.commit_phase_openings.len() == proof.commit_phase_commits.len())
+    {
+        return Err(FriError::InvalidProofShape);
+    }
+
+    // Extract the per-round folding arities from the proof and ensure they are consistent.
+    let log_arities: Vec<usize> = proof
+        .query_proofs
+        .first()
+        .map(|qp| {
+            qp.commit_phase_openings
+                .iter()
+                .map(|o| o.log_arity as usize)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if proof.query_proofs.iter().any(|qp| {
+        qp.commit_phase_openings
+            .iter()
+            .map(|o| o.log_arity as usize)
+            .collect::<Vec<_>>()
+            != log_arities
+    }) {
+        return Err(FriError::InvalidProofShape);
+    }
+
+    // With variable arity, we compute log_global_max_height by summing all log_arities.
+    // Each round reduces the domain size by its log_arity.
+    let total_log_reduction: usize = log_arities.iter().sum();
+    let log_global_max_height = total_log_reduction + params.log_blowup + params.log_final_poly_len;
 
     if proof.commit_pow_witnesses.len() != proof.commit_phase_commits.len() {
         return Err(FriError::InvalidProofShape);
@@ -120,6 +150,11 @@ where
     // Ensure that we have the expected number of FRI query proofs.
     if proof.query_proofs.len() != params.num_queries {
         return Err(FriError::InvalidProofShape);
+    }
+
+    // Bind the variable-arity schedule into the transcript before query grinding.
+    for &log_arity in &log_arities {
+        challenger.observe(Val::from_usize(log_arity));
     }
 
     // Check PoW.
@@ -217,14 +252,16 @@ type CommitStep<'a, F, M> = (
 /// Given an initial `index` corresponding to a point in the initial domain
 /// and a series of `reduced_openings` corresponding to evaluations of
 /// polynomials to be added in at specific domain sizes, perform the standard
-/// sequence of FRI folds, checking at each step that the pair of sibling evaluations
+/// sequence of FRI folds, checking at each step that the group of sibling evaluations
 /// matches the commitment.
+///
+/// With variable arity, each round may fold by a different factor determined by the
+/// `log_arity` field in the opening.
 ///
 /// Arguments:
 /// - `folding`: The FRI folding scheme used by the prover.
 /// - `params`: The parameters for the specific FRI protocol instance.
-/// - `start_index`: The opening index for the unfolded polynomial. For folded polynomials
-///   we use this this index right shifted by the number of folds.
+/// - `start_index`: The opening index for the unfolded polynomial.
 /// - `fold_data_iter`: An iterator containing, for each fold, the beta challenge, polynomial commitment
 ///   and commitment opening at the appropriate index.
 /// - `reduced_openings`: A vector of pairs of a size and an opening. The opening is a linear combination
@@ -259,27 +296,44 @@ where
     }
     let mut folded_eval = ro_iter.next().unwrap().1;
 
+    // Track the current log_height as we fold down
+    let mut log_current_height = log_global_max_height;
+
     // We start with evaluations over a domain of size (1 << log_global_max_height). We fold
     // using FRI until the domain size reaches (1 << log_final_height).
-    for (log_folded_height, ((&beta, comm), opening)) in zip_eq(
-        // zip_eq ensures that we have the right number of steps.
-        (log_final_height..log_global_max_height).rev(),
-        fold_data_iter,
-        FriError::InvalidProofShape,
-    )? {
-        // Get the index of the other sibling of the current FRI node.
-        let index_sibling = *start_index ^ 1;
+    for ((&beta, comm), opening) in fold_data_iter {
+        let log_arity = opening.log_arity as usize;
+        let arity = 1 << log_arity;
 
-        let mut evals = vec![folded_eval; 2];
-        evals[index_sibling % 2] = opening.sibling_value;
+        // Validate that sibling_values has the expected length (arity - 1)
+        if opening.sibling_values.len() != arity - 1 {
+            return Err(FriError::InvalidProofShape);
+        }
+
+        // Reconstruct the full evaluation row from self + siblings
+        let index_in_group = *start_index % arity;
+        let mut evals = vec![EF::ZERO; arity];
+        evals[index_in_group] = folded_eval;
+
+        let mut sibling_idx = 0;
+        #[allow(clippy::needless_range_loop)]
+        for j in 0..arity {
+            if j != index_in_group {
+                evals[j] = opening.sibling_values[sibling_idx];
+                sibling_idx += 1;
+            }
+        }
+
+        // Compute the new height after folding
+        let log_folded_height = log_current_height - log_arity;
 
         let dims = &[Dimensions {
-            width: 2,
+            width: arity,
             height: 1 << log_folded_height,
         }];
 
         // Replace index with the index of the parent FRI node.
-        *start_index >>= 1;
+        *start_index >>= log_arity;
 
         // Verify the commitment to the evaluations of the sibling nodes.
         params
@@ -292,8 +346,17 @@ where
             )
             .map_err(FriError::CommitPhaseMmcsError)?;
 
-        // Fold the pair of sibling nodes to get the evaluation of the parent FRI node.
-        folded_eval = folding.fold_row(*start_index, log_folded_height, beta, evals.into_iter());
+        // Fold the group of sibling nodes to get the evaluation of the parent FRI node.
+        folded_eval = folding.fold_row(
+            *start_index,
+            log_folded_height,
+            log_arity,
+            beta,
+            evals.into_iter(),
+        );
+
+        // Update current height
+        log_current_height = log_folded_height;
 
         // If there are new polynomials to roll in at the folded height, do so.
         //
@@ -302,12 +365,16 @@ where
         // to the current folded polynomial evaluation claim, we need to multiply by a new random factor
         // since `f_{i, 0}` has no leading coefficient.
         //
-        // We use `beta^2` as the random factor since `beta` is already used in the folding.
-        // This increases the query phase error probability by a negligible amount, and does not change
-        // the required number of FRI queries.
+        // We use `beta^arity` as the random factor to maintain independence.
         if let Some((_, ro)) = ro_iter.next_if(|(lh, _)| *lh == log_folded_height) {
-            folded_eval += beta.square() * ro;
+            let beta_pow = beta.exp_power_of_2(log_arity);
+            folded_eval += beta_pow * ro;
         }
+    }
+
+    // Verify we reached the expected final height
+    if log_current_height != log_final_height {
+        return Err(FriError::InvalidProofShape);
     }
 
     // If ro_iter is not empty, we failed to fold in some polynomial evaluations.

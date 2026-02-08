@@ -6,12 +6,16 @@ use crate::{Algebra, ExtensionField};
 mod binomial_extension;
 mod complex;
 mod packed_binomial_extension;
+mod packed_quintic_extension;
+mod quintic_extension;
 
 use alloc::vec::Vec;
 
 pub use binomial_extension::*;
 pub use complex::*;
 pub use packed_binomial_extension::*;
+pub use packed_quintic_extension::PackedQuinticTrinomialExtensionField;
+pub use quintic_extension::QuinticTrinomialExtensionField;
 
 /// Trait for fields that support binomial extension of the form `F[X]/(X^D - W)`.
 ///
@@ -129,4 +133,83 @@ pub trait HasTwoAdicBinomialExtension<const D: usize>: BinomiallyExtendable<D> {
     /// Behavior is undefined if `bits > EXT_TWO_ADICITY`.
     #[must_use]
     fn ext_two_adic_generator(bits: usize) -> [Self; D];
+}
+
+/// Trait for fields that support a degree-5 extension using the trinomial `X^5 + X^2 - 1`.
+///
+/// This trait should only be implemented for fields where `X^5 + X^2 - 1` is irreducible.
+/// The implementor must verify irreducibility for their specific field.
+pub trait QuinticTrinomialExtendable: Field + QuinticExtendableAlgebra<Self> {
+    /// Frobenius coefficients for the quintic extension.
+    ///
+    /// `FROBENIUS_COEFFS[k]` represents `X^{(k+1)*p} mod (X^5 + X^2 - 1)` as a polynomial
+    /// with coefficients `[c_0, c_1, c_2, c_3, c_4]` where `X^{(k+1)*p} = Σ c_i * X^i`.
+    ///
+    /// These precomputed values enable efficient Frobenius automorphism computation.
+    const FROBENIUS_COEFFS: [[Self; 5]; 4];
+
+    /// A generator for the multiplicative group of the extension field `F_{p^5}*`.
+    ///
+    /// Represented as polynomial coefficients `[g_0, g_1, g_2, g_3, g_4]`.
+    const EXT_GENERATOR: [Self; 5];
+}
+
+/// Trait for algebras supporting quintic extension arithmetic over `A[X]/(X^5 + X^2 - 1)`.
+///
+/// Implementors may override the default methods with optimized versions
+/// (e.g., SIMD implementations for packed fields).
+pub trait QuinticExtendableAlgebra<F: Field>: Algebra<F> {
+    /// Multiply two elements in the quintic extension ring.
+    ///
+    /// Computes `a * b mod (X^5 + X^2 - 1)` and stores the result in `res`.
+    #[inline]
+    fn quintic_mul(a: &[Self; 5], b: &[Self; 5], res: &mut [Self; 5]) {
+        quintic_extension::quintic_mul(a, b, res);
+    }
+
+    /// Square an element in the quintic extension ring.
+    ///
+    /// Computes `a^2 mod (X^5 + X^2 - 1)` and stores the result in `res`.
+    /// Uses optimized formulas exploiting the symmetry `a_i * a_j = a_j * a_i`.
+    #[inline]
+    fn quintic_square(a: &[Self; 5], res: &mut [Self; 5]) {
+        quintic_extension::quintic_square(a, res);
+    }
+
+    /// Add two elements in the quintic extension ring.
+    ///
+    /// Addition is coefficient-wise and independent of the modulus polynomial.
+    #[inline]
+    #[must_use]
+    fn quintic_add(a: &[Self; 5], b: &[Self; 5]) -> [Self; 5] {
+        vector_add(a, b)
+    }
+
+    /// Subtract two elements in the quintic extension ring.
+    ///
+    /// Subtraction is coefficient-wise and independent of the modulus polynomial.
+    #[inline]
+    #[must_use]
+    fn quintic_sub(a: &[Self; 5], b: &[Self; 5]) -> [Self; 5] {
+        vector_sub(a, b)
+    }
+
+    /// Multiply a quintic extension element by a base field scalar.
+    #[inline]
+    fn quintic_base_mul(lhs: [Self; 5], rhs: Self) -> [Self; 5] {
+        lhs.map(|x| x * rhs.clone())
+    }
+}
+
+/// Trait for quintic extensions that support two-adic subgroup generators.
+pub trait HasTwoAdicQuinticExtension: QuinticTrinomialExtendable {
+    /// Two-adicity of the multiplicative group order `p^5 - 1`.
+    const EXT_TWO_ADICITY: usize;
+
+    /// Returns a two-adic generator for the specified bit count.
+    ///
+    /// # Panics
+    /// Panics if `bits > EXT_TWO_ADICITY`.
+    #[must_use]
+    fn ext_two_adic_generator(bits: usize) -> [Self; 5];
 }

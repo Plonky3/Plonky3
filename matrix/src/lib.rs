@@ -10,8 +10,8 @@ use core::ops::Deref;
 
 use itertools::Itertools;
 use p3_field::{
-    ExtensionField, Field, FieldArray, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
-    dot_product,
+    BasedVectorSpace, ExtensionField, Field, FieldArray, PackedFieldExtension, PackedValue,
+    PrimeCharacteristicRing,
 };
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
@@ -523,14 +523,30 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         // The length of a `padded_horizontally_packed_row` is `self.width().div_ceil(T::Packing::WIDTH)`.
         assert!(vec.len() >= self.width().div_ceil(T::Packing::WIDTH));
 
-        // TODO: This is a base - extension dot product and so it should
-        // be possible to speed this up using ideas in `packed_linear_combination`.
-        // TODO: Perhaps we should be packing rows vertically not horizontally.
+        // Instead of creating N intermediate ExtPacking products and summing them,
+        // we track D separate BasePacking accumulators (one per extension coefficient).
         self.par_padded_horizontally_packed_rows::<T::Packing>()
             .map(move |row_packed| {
-                let packed_sum_of_packed: EF::ExtensionPacking =
-                    dot_product(vec.iter().copied(), row_packed);
-                EF::ExtensionPacking::to_ext_iter([packed_sum_of_packed]).sum()
+                // Get the extension dimension from the first vec element's coefficients
+                let d = <EF::ExtensionPacking as BasedVectorSpace<T::Packing>>::DIMENSION;
+
+                // Initialize D accumulators for each coefficient of the extension
+                // In practice, we set D to 8, which is the maximum degree of the extension field supported.
+                let mut coeff_accs: [T::Packing; 8] = [T::Packing::ZERO; 8];
+                debug_assert!(d <= 8, "Extension degree > 8 not supported");
+
+                // Accumulate coefficient-wise: for each (v, r) pair, acc[i] += v.coefficient(i) * r
+                for (v, r) in vec.iter().zip(row_packed) {
+                    let v_coeffs = v.as_basis_coefficients_slice();
+                    for (acc, &v_coeff) in coeff_accs[..d].iter_mut().zip(v_coeffs) {
+                        *acc += v_coeff * r;
+                    }
+                }
+
+                // Construct the result ExtPacking from the accumulators and sum the coefficients.
+                let packed_result =
+                    EF::ExtensionPacking::from_basis_coefficients_fn(|i| coeff_accs[i]);
+                EF::ExtensionPacking::to_ext_iter([packed_result]).sum()
             })
     }
 }
@@ -786,5 +802,49 @@ mod tests {
 
         let all_rows: Vec<Vec<u32>> = matrix.rows().map(|row| row.collect()).collect();
         assert_eq!(all_rows, vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8, 9]]);
+    }
+
+    #[test]
+    fn test_rowwise_packed_dot_product() {
+        use p3_field::PackedFieldExtension;
+
+        type F = BabyBear;
+        type EF = BinomialExtensionField<BabyBear, 4>;
+        type PF = <F as p3_field::Field>::Packing;
+        type EFPacked = <EF as p3_field::ExtensionField<F>>::ExtensionPacking;
+
+        let mut rng = SmallRng::seed_from_u64(42);
+
+        // Test with various matrix dimensions to cover edge cases.
+        for (height, width) in [(32, 16), (64, 128), (128, 17), (256, 255)] {
+            let m = RowMajorMatrix::<F>::rand(&mut rng, height, width);
+            let v = RowMajorMatrix::<EF>::rand(&mut rng, width, 1).values;
+
+            // Compute expected result naively: for each row, compute dot product with v.
+            let expected: Vec<EF> = m
+                .rows()
+                .map(|row| {
+                    row.into_iter()
+                        .zip(v.iter())
+                        .map(|(r, &ve)| ve * r)
+                        .sum::<EF>()
+                })
+                .collect();
+
+            // Pack the vector for the optimized function.
+            let packed_v: Vec<EFPacked> = v
+                .chunks(<PF as PackedValue>::WIDTH)
+                .map(|chunk| {
+                    let mut padded = vec![EF::ZERO; <PF as PackedValue>::WIDTH];
+                    padded[..chunk.len()].copy_from_slice(chunk);
+                    EFPacked::from_ext_slice(&padded)
+                })
+                .collect();
+
+            // Compute using the optimized function.
+            let result: Vec<EF> = m.rowwise_packed_dot_product::<EF>(&packed_v).collect();
+
+            assert_eq!(result, expected, "Mismatch for matrix {}x{}", height, width);
+        }
     }
 }

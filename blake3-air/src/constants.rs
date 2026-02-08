@@ -28,9 +28,5 @@ const MSG_PERMUTATION: [usize; 16] = [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9,
 
 /// Apply the MSG_PERMUTATION to an array.
 pub(crate) fn permute<T: Clone>(m: &mut [T; 16]) {
-    let mut permuted = m.clone();
-    for i in 0..16 {
-        permuted[i] = m[MSG_PERMUTATION[i]].clone();
-    }
-    *m = permuted;
+    *m = core::array::from_fn(|i| m[MSG_PERMUTATION[i]].clone());
 }

@@ -32,7 +32,7 @@ type LookupConstraintsInputs<'a, F, EF, LG> = (&'a [Lookup<F>], &'a [LookupData<
 ///     - the [`LookupData`] for global lookups,
 ///     - the [`LookupGadget`] implementation.
 #[instrument(name = "check constraints", skip_all)]
-#[allow(unused)]
+#[allow(unused)] // Do not remove, or this will trigger warnings in release mode.
 pub(crate) fn check_constraints<'b, F, EF, A, LG>(
     air: &A,
     main: &RowMajorMatrix<F>,

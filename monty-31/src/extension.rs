@@ -1,5 +1,6 @@
 use p3_field::extension::{
     BinomiallyExtendable, BinomiallyExtendableAlgebra, HasTwoAdicBinomialExtension,
+    HasTwoAdicQuinticExtension, QuinticExtendableAlgebra, QuinticTrinomialExtendable,
 };
 use p3_field::{
     PrimeCharacteristicRing, TwoAdicField, field_to_array, packed_mod_add, packed_mod_sub,
@@ -7,8 +8,8 @@ use p3_field::{
 
 use crate::utils::{add, sub};
 use crate::{
-    BinomialExtensionData, FieldParameters, MontyField31, TwoAdicData, base_mul_packed,
-    octic_mul_packed, quartic_mul_packed, quintic_mul_packed,
+    BinomialExtensionData, FieldParameters, MontyField31, TrinomialQuinticData, TwoAdicData,
+    base_mul_packed, octic_mul_packed, quartic_mul_packed, quintic_mul_packed,
 };
 
 // If a field implements BinomialExtensionData<WIDTH> then there is a natural
@@ -84,6 +85,36 @@ where
     const EXT_TWO_ADICITY: usize = FP::EXT_TWO_ADICITY;
 
     fn ext_two_adic_generator(bits: usize) -> [Self; WIDTH] {
+        assert!(bits <= Self::EXT_TWO_ADICITY);
+        if bits <= FP::TWO_ADICITY {
+            field_to_array(Self::two_adic_generator(bits))
+        } else {
+            FP::TWO_ADIC_EXTENSION_GENERATORS.as_ref()[bits - FP::TWO_ADICITY - 1]
+        }
+    }
+}
+
+impl<FP> QuinticExtendableAlgebra<Self> for MontyField31<FP> where
+    FP: TrinomialQuinticData + FieldParameters
+{
+}
+
+impl<FP> QuinticTrinomialExtendable for MontyField31<FP>
+where
+    FP: TrinomialQuinticData + FieldParameters,
+{
+    const FROBENIUS_COEFFS: [[Self; 5]; 4] = FP::FROBENIUS_COEFFS;
+
+    const EXT_GENERATOR: [Self; 5] = FP::EXT_GENERATOR;
+}
+
+impl<FP> HasTwoAdicQuinticExtension for MontyField31<FP>
+where
+    FP: TrinomialQuinticData + TwoAdicData + FieldParameters,
+{
+    const EXT_TWO_ADICITY: usize = FP::EXT_TWO_ADICITY;
+
+    fn ext_two_adic_generator(bits: usize) -> [Self; 5] {
         assert!(bits <= Self::EXT_TWO_ADICITY);
         if bits <= FP::TWO_ADICITY {
             field_to_array(Self::two_adic_generator(bits))
