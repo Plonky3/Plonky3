@@ -194,7 +194,6 @@ fn accumulate_lookup<F: Field>(
     }
 }
 
-/// Minimal builder used only to evaluate symbolic lookup expressions.
 struct MiniLookupBuilder<'a, F: Field> {
     main: VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>,
     preprocessed: Option<VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>>,
