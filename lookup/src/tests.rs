@@ -659,6 +659,43 @@ fn test_range_check_end_to_end_valid() {
 }
 
 #[test]
+#[should_panic(expected = "Lookup mismatch")]
+fn test_debug_util_detects_malformed_lookup() {
+    // A deliberately unbalanced lookup: every row only "receives" a value,
+    // so the multiset never cancels out and the debug checker must panic.
+
+    use crate::debug_util::*;
+
+    // Two-row, single-column trace: values 3 and 4.
+    let main_values = vec![F::from_u32(3), F::from_u32(4)];
+    let main_trace = RowMajorMatrix::new(main_values, 1);
+
+    // Symbolic expression for the lone column of the local row.
+    let builder = SymbolicAirBuilder::<F>::new(0, 1, 0, 0, 0);
+    let expr = builder.main().row_slice(0).unwrap()[0].clone();
+
+    // One local lookup with a single tuple; multiplicity is always +1,
+    // so the total multiset count is non-zero.
+    let lookup = Lookup {
+        kind: Kind::Local,
+        element_exprs: vec![vec![SymbolicExpression::Variable(expr)]],
+        multiplicities_exprs: vec![SymbolicExpression::Constant(F::ONE)],
+        columns: vec![0],
+    };
+
+    let instance: LookupDebugInstance<'_, F> = LookupDebugInstance {
+        main_trace: &main_trace,
+        preprocessed_trace: &None,
+        public_values: &[],
+        lookups: &vec![lookup],
+        permutation_challenges: &[],
+    };
+
+    // Should panic because the multiset is unbalanced.
+    check_lookups(&[instance]);
+}
+
+#[test]
 #[should_panic(expected = "Extension constraint failed")]
 fn test_range_check_end_to_end_invalid() {
     // SCENARIO: One value (256) is outside the 8-bit range [0, 255].
