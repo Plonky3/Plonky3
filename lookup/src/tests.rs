@@ -669,7 +669,7 @@ fn test_debug_util_detects_malformed_lookup() {
     let main_trace = RowMajorMatrix::new(main_values, 1);
 
     let builder = SymbolicAirBuilder::<F>::new(0, 1, 0, 0, 0);
-    let expr = builder.main().row_slice(0).unwrap()[0].clone();
+    let expr = builder.main().row_slice(0).unwrap()[0];
 
     // One local lookup with a single tuple; multiplicity is always +1,
     // so the total multiset count is non-zero.
@@ -684,7 +684,7 @@ fn test_debug_util_detects_malformed_lookup() {
         main_trace: &main_trace,
         preprocessed_trace: &None,
         public_values: &[],
-        lookups: &vec![lookup],
+        lookups: &[lookup],
         permutation_challenges: &[],
     };
 
