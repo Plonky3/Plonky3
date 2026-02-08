@@ -955,7 +955,6 @@ pub(crate) fn quintic_mul_packed_trinomial<FP: FieldParameters>(
     b: &[MontyField31<FP>; 5],
     res: &mut [MontyField31<FP>; 5],
 ) {
-
     let b0_minus_b3 = b[0] - b[3];
     let b1_minus_b4 = b[1] - b[4];
     let b4_minus_b2 = b[4] - b[2];
