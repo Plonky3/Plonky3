@@ -175,9 +175,6 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
             .map(|((reduced_ps_at_x, vp_num), vp_denom_inv)| {
                 // reduced_ps_at_x = sum_j(alpha^j * p_j[x_i])
                 // So (reduced_ps_at_x - alpha_reduced_ps_at_zeta) = sum_j(alpha^j * (p_j[x_i] - p_j[zeta]))
-                // This works correctly for both:
-                // - Trace matrices: where p_j are trace columns
-                // - Quotient polynomials: where p_j are base field components of the extension field quotient
                 vp_num * vp_denom_inv * (reduced_ps_at_x - alpha_reduced_ps_at_zeta)
             })
             .collect()
