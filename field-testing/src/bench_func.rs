@@ -7,7 +7,7 @@ use p3_field::{Algebra, Field, PrimeCharacteristicRing};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 /// Not useful for benchmarking prime fields as multiplication is too fast but
 /// handy for extension fields.

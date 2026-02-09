@@ -198,7 +198,7 @@ impl Mersenne31Dft {
 mod tests {
     use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
     use crate::Mersenne31ComplexRadix2Dit;

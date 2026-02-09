@@ -8,7 +8,7 @@ use p3_field::{PrimeCharacteristicRing, PrimeField64};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 use crate::columns::{Blake3Cols, NUM_BLAKE3_COLS};
 use crate::constants::{BITS_PER_LIMB, IV, permute};

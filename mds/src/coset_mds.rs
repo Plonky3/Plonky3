@@ -89,7 +89,7 @@ mod tests {
     use p3_field::{Field, PrimeCharacteristicRing};
     use p3_symmetric::Permutation;
     use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     use crate::coset_mds::CosetMds;
 

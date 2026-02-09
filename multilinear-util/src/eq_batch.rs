@@ -1016,7 +1016,7 @@ mod tests {
     use p3_field::{PrimeCharacteristicRing, PrimeField64};
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 

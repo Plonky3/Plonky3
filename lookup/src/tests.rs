@@ -14,7 +14,7 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression};
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 use crate::logup::LogUpGadget;
 use crate::lookup_traits::{Direction, Kind, Lookup, LookupGadget, symbolic_to_expr};

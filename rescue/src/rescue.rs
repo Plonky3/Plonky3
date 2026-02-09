@@ -5,9 +5,9 @@ use itertools::Itertools;
 use p3_field::{Algebra, PermutationMonomial, PrimeField, PrimeField64};
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
-use rand::Rng;
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
+use rand::{Rng, RngExt};
 
 use crate::util::{log2_binom, shake256_hash};
 

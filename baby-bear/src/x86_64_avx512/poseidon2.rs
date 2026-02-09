@@ -129,7 +129,7 @@ impl InternalLayerParametersAVX512<BabyBearParameters, 24> for BabyBearInternalL
 mod tests {
     use p3_symmetric::Permutation;
     use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     use crate::{BabyBear, PackedBabyBearAVX512, Poseidon2BabyBear};
 

@@ -8,7 +8,7 @@ use p3_poseidon2::GenericPoseidon2LinearLayers;
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 use crate::air::eval;
 use crate::constants::RoundConstants;

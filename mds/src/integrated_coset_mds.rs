@@ -74,7 +74,7 @@ mod tests {
     use p3_symmetric::Permutation;
     use p3_util::reverse_slice_index_bits;
     use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     use crate::integrated_coset_mds::IntegratedCosetMds;
 

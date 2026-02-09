@@ -9,7 +9,7 @@ use p3_field_testing::benchmark_sum_array;
 use p3_koala_bear::KoalaBear;
 use p3_util::pretty_name;
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 type F = KoalaBear;
 type PF = <KoalaBear as Field>::Packing;

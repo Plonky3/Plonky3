@@ -199,7 +199,7 @@ impl InternalLayerParametersAVX2<KoalaBearParameters, 24> for KoalaBearInternalL
 mod tests {
     use p3_symmetric::Permutation;
     use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     use crate::{KoalaBear, PackedKoalaBearAVX2, Poseidon2KoalaBear};
 

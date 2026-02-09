@@ -6,7 +6,7 @@ use p3_field_testing::bench_func::{
 };
 use p3_mersenne_31::Mersenne31;
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 type F = Mersenne31;
 

@@ -3,7 +3,7 @@ use core::hint::black_box;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_util::reverse_slice_index_bits;
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 fn bench_reverse_slice_index_bits(c: &mut Criterion) {
     let mut group = c.benchmark_group("reverse_slice_index_bits");

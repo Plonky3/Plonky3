@@ -23,8 +23,8 @@ use p3_field::{
     mm512_mod_sub,
 };
 use p3_util::reconstitute_from_base;
-use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
+use rand::{Rng, RngExt};
 
 use crate::{
     BinomialExtensionData, FieldParameters, MontyField31, PackedMontyParameters,

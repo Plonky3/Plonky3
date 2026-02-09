@@ -282,7 +282,7 @@ mod tests {
     use p3_field::extension::BinomialExtensionField;
     use p3_mersenne_31::Mersenne31;
     use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 

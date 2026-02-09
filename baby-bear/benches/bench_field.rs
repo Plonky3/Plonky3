@@ -9,7 +9,7 @@ use p3_field_testing::bench_func::{
 use p3_field_testing::{benchmark_dot_array, benchmark_exp_const};
 use p3_util::pretty_name;
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 type F = BabyBear;
 

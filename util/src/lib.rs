@@ -769,7 +769,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 

@@ -4,7 +4,7 @@ use p3_field::extension::HasFrobenius;
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue};
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 use crate::exp_biguint;
 

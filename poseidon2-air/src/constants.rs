@@ -1,6 +1,6 @@
 use p3_field::PrimeCharacteristicRing;
-use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
+use rand::{Rng, RngExt};
 
 /// Round constants for Poseidon2, in a format that's convenient for the AIR.
 #[derive(Debug, Clone)]
