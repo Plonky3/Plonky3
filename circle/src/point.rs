@@ -112,13 +112,7 @@ impl<F: Field> Point<F> {
     /// Used for optimized treatment of transitional constraints in Circle STARK.
     /// See Circle STARKs paper, Remark 17 and Remark 22.
     pub fn tangent_selector<EF: ExtensionField<F>>(self, at: Point<EF>) -> EF {
-        let x_p = <EF as p3_field::BasedVectorSpace<F>>::from_basis_coefficients_fn(|i| {
-            if i == 0 { self.x } else { F::ZERO }
-        });
-        let y_p = <EF as p3_field::BasedVectorSpace<F>>::from_basis_coefficients_fn(|i| {
-            if i == 0 { self.y } else { F::ZERO }
-        });
-        x_p * at.x + y_p * at.y - EF::ONE
+        at.x * self.x + at.y * self.y - EF::ONE
     }
 }
 
