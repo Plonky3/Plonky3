@@ -136,9 +136,6 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         ps_at_zeta: &[EF],
     ) -> Vec<EF> {
         // Precompute alpha^width for the vanishing part computation.
-        // Note: width here is the number of columns in the matrix, which could be:
-        // - The number of trace columns (for trace matrices)
-        // - The extension degree (for quotient polynomials split into base field components)
         let alpha_pow_width = alpha.exp_u64(self.values.width() as u64);
 
         // Get all domain points in CFFT order for efficient processing
