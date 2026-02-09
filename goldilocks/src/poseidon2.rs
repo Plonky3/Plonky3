@@ -27,8 +27,19 @@ const GOLDILOCKS_S_BOX_DEGREE: u64 = 7;
 /// An implementation of the Poseidon2 hash function for the Goldilocks field.
 ///
 /// It acts on arrays of the form `[Goldilocks; WIDTH]`.
-/// Currently the internal layers are unoptimized. These could be sped up in a similar way to
-/// how it was done for Monty31 fields.
+#[cfg(target_arch = "aarch64")]
+pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
+    Goldilocks,
+    crate::Poseidon2ExternalLayerGoldilocksAsm<WIDTH>,
+    crate::Poseidon2InternalLayerGoldilocksAsm,
+    WIDTH,
+    GOLDILOCKS_S_BOX_DEGREE,
+>;
+
+/// An implementation of the Poseidon2 hash function for the Goldilocks field.
+///
+/// It acts on arrays of the form `[Goldilocks; WIDTH]`.
+#[cfg(not(target_arch = "aarch64"))]
 pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
     Goldilocks,
     Poseidon2ExternalLayerGoldilocks<WIDTH>,
