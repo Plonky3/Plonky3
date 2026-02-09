@@ -308,7 +308,7 @@ mod tests {
     use p3_poseidon2::{ExternalLayerConstants, InternalLayer, Poseidon2};
     use p3_symmetric::Permutation;
     use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
     use crate::{Poseidon2ExternalLayerGoldilocks, Poseidon2InternalLayerGoldilocks};
