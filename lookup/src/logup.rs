@@ -418,10 +418,22 @@ impl LookupGadget for LogUpGadget {
         // We flatten all denominators from all rows/lookups into one giant vector.
         // Order: Row -> Lookup -> Element Tuple
         let denoms_per_row: usize = lookups.iter().map(|l| l.element_exprs.len()).sum();
+        let mut lookup_denom_offsets = Vec::with_capacity(lookups.len() + 1);
+        lookup_denom_offsets.push(0);
+        for l in lookups.iter() {
+            lookup_denom_offsets
+                .push(lookup_denom_offsets.last().copied().unwrap() + l.element_exprs.len());
+        }
+        let num_lookups = lookups.len();
 
-        let all_denominators: Vec<SC::Challenge> = (0..height)
-            .into_par_iter()
-            .flat_map(|i| {
+        let mut all_denominators = vec![SC::Challenge::ZERO; height * denoms_per_row];
+        let mut all_multiplicities = vec![Val::<SC>::ZERO; height * denoms_per_row];
+
+        all_denominators
+            .par_chunks_mut(denoms_per_row)
+            .zip(all_multiplicities.par_chunks_mut(denoms_per_row))
+            .enumerate()
+            .for_each(|(i, (denom_row, mult_row))| {
                 let local_main_row = main.row_slice(i).unwrap();
                 let next_main_row = main.row_slice((i + 1) % height).unwrap();
                 let main_rows = VerticalPair::new(
@@ -452,30 +464,33 @@ impl LookupGadget for LogUpGadget {
                     i,
                 );
 
-                lookups
-                    .iter()
-                    .flat_map(|context| {
-                        let aux_idx = context.columns[0];
-                        let alpha = &permutation_challenges[self.num_challenges() * aux_idx];
-                        let beta = &permutation_challenges[self.num_challenges() * aux_idx + 1];
+                let mut offset = 0;
+                for context in lookups.iter() {
+                    let alpha = &permutation_challenges[self.num_challenges() * context.columns[0]];
+                    let beta =
+                        &permutation_challenges[self.num_challenges() * context.columns[0] + 1];
 
-                        let elements: Vec<Vec<Val<SC>>> = context
-                            .element_exprs
-                            .iter()
-                            .map(|elts| {
-                                elts.iter()
-                                    .map(|e| symbolic_to_expr(&row_builder, e))
-                                    .collect()
-                            })
-                            .collect();
+                    let elements: Vec<Vec<Val<SC>>> = context
+                        .element_exprs
+                        .iter()
+                        .map(|elts| {
+                            elts.iter()
+                                .map(|e| symbolic_to_expr(&row_builder, e))
+                                .collect()
+                        })
+                        .collect();
 
-                        self.combine_elements::<LookupTraceBuilder<'_, SC>, Val<SC>>(
-                            &elements, alpha, beta,
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect();
+                    let combined = self.combine_elements::<LookupTraceBuilder<'_, SC>, Val<SC>>(
+                        &elements, alpha, beta,
+                    );
+                    for (j, d) in combined.into_iter().enumerate() {
+                        denom_row[offset] = d;
+                        mult_row[offset] =
+                            symbolic_to_expr(&row_builder, &context.multiplicities_exprs[j]);
+                        offset += 1;
+                    }
+                }
+            });
 
         debug_assert_eq!(all_denominators.len(), height * denoms_per_row);
 
@@ -485,8 +500,6 @@ impl LookupGadget for LogUpGadget {
         // or storing them beforehand (as they could possibly constitute quite a large amount of data).
         let all_inverses = p3_field::batch_multiplicative_inverse(&all_denominators);
 
-        // The following chunk is simply used to ensure that we consumed all inverses,
-        // meaning that `elements` and `multiplicities` lengths matched
         #[cfg(debug_assertions)]
         let mut inv_cursor = 0;
         #[cfg(debug_assertions)]
@@ -499,65 +512,24 @@ impl LookupGadget for LogUpGadget {
             .collect();
 
         // 3. BUILD TRACE
-        let row_sums: Vec<Vec<SC::Challenge>> = (0..height)
-            .into_par_iter()
-            .map(|i| {
-                let local_main_row = main.row_slice(i).unwrap();
-                let next_main_row = main.row_slice((i + 1) % height).unwrap();
-                let main_rows = VerticalPair::new(
-                    RowMajorMatrixView::new_row(&local_main_row),
-                    RowMajorMatrixView::new_row(&next_main_row),
-                );
-                let preprocessed_rows_data = preprocessed.as_ref().map(|prep| {
-                    (
-                        prep.row_slice(i).unwrap(),
-                        prep.row_slice((i + 1) % height).unwrap(),
-                    )
-                });
-                let preprocessed_rows = preprocessed_rows_data.as_ref().map(
-                    |(local_preprocessed_row, next_preprocessed_row)| {
-                        VerticalPair::new(
-                            RowMajorMatrixView::new_row(local_preprocessed_row),
-                            RowMajorMatrixView::new_row(next_preprocessed_row),
-                        )
-                    },
-                );
-
-                let row_builder: LookupTraceBuilder<'_, SC> = LookupTraceBuilder::new(
-                    main_rows,
-                    preprocessed_rows,
-                    public_values,
-                    permutation_challenges,
-                    height,
-                    i,
-                );
-
+        let mut row_sums = vec![SC::Challenge::ZERO; height * num_lookups];
+        row_sums
+            .par_chunks_mut(num_lookups)
+            .enumerate()
+            .for_each(|(i, row_sums_i)| {
                 let inv_base = i * denoms_per_row;
-                let mut inv_offset = 0;
-
-                lookups
-                    .iter()
-                    .map(|context| {
-                        let multiplicities: Vec<Val<SC>> = context
-                            .multiplicities_exprs
-                            .iter()
-                            .map(|e| symbolic_to_expr(&row_builder, e))
-                            .collect();
-
-                        let sum: SC::Challenge = multiplicities
-                            .iter()
-                            .map(|m| {
-                                let inv = all_inverses[inv_base + inv_offset];
-                                inv_offset += 1;
-                                inv * SC::Challenge::from(*m)
-                            })
-                            .sum();
-
-                        sum
-                    })
-                    .collect()
-            })
-            .collect();
+                for (lookup_idx, _context) in lookups.iter().enumerate() {
+                    let start = lookup_denom_offsets[lookup_idx];
+                    let end = lookup_denom_offsets[lookup_idx + 1];
+                    let sum = (start..end)
+                        .map(|k| {
+                            all_inverses[inv_base + k]
+                                * SC::Challenge::from(all_multiplicities[inv_base + k])
+                        })
+                        .sum();
+                    row_sums_i[lookup_idx] = sum;
+                }
+            });
 
         let mut aux_trace = vec![SC::Challenge::ZERO; height * width];
         let mut permutation_counter = 0;
@@ -565,7 +537,7 @@ impl LookupGadget for LogUpGadget {
         for i in 0..height {
             for (lookup_idx, context) in lookups.iter().enumerate() {
                 let aux_idx = context.columns[0];
-                let sum = row_sums[i][lookup_idx];
+                let sum = row_sums[i * num_lookups + lookup_idx];
 
                 // Update running sum
                 if i < height - 1 {
