@@ -297,7 +297,7 @@ impl InternalLayerParameters<BabyBearParameters, 24> for BabyBearInternalLayerPa
 #[cfg(test)]
 mod tests {
     use p3_symmetric::Permutation;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
     use rand_xoshiro::Xoroshiro128Plus;
 
     use super::*;

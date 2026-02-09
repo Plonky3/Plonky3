@@ -27,7 +27,7 @@ use p3_util::iter_array_chunks_padded;
 pub use packedfield_testing::*;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -930,7 +930,7 @@ macro_rules! test_prime_field_64 {
             use p3_field::integers::QuotientMap;
             use p3_field::{Field, PrimeCharacteristicRing, PrimeField64, RawDataSerializable};
             use rand::rngs::SmallRng;
-            use rand::{Rng, SeedableRng};
+            use rand::{RngExt, SeedableRng};
 
             #[test]
             fn test_as_canonical_u64() {
@@ -1002,7 +1002,7 @@ macro_rules! test_prime_field_32 {
             use p3_field::integers::QuotientMap;
             use p3_field::{Field, PrimeCharacteristicRing, PrimeField32, PrimeField64};
             use rand::rngs::SmallRng;
-            use rand::{Rng, SeedableRng};
+            use rand::{RngExt, SeedableRng};
 
             #[test]
             fn test_as_canonical_u32() {

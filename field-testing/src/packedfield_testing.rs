@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use p3_field::{Field, PackedField, PackedFieldPow2, PackedValue, PrimeCharacteristicRing};
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 fn packed_from_random<PV>(seed: u64) -> PV
 where

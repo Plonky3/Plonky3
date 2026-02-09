@@ -4,7 +4,7 @@ mod coset {
     use p3_field::{PrimeCharacteristicRing, TwoAdicField};
     use p3_goldilocks::Goldilocks;
     use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     type BB = BabyBear;
     type GL = Goldilocks;

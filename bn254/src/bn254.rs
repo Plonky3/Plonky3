@@ -15,8 +15,8 @@ use p3_field::{
     Field, InjectiveMonomial, Packable, PrimeCharacteristicRing, PrimeField, RawDataSerializable,
     TwoAdicField, quotient_map_small_int,
 };
-use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
+use rand::{Rng, RngExt};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::helpers::{

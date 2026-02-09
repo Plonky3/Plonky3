@@ -330,7 +330,7 @@ impl<const WIDTH: usize> ExternalLayer<PackedMersenne31Neon, WIDTH, 5>
 mod tests {
     use p3_symmetric::Permutation;
     use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
     use crate::Poseidon2Mersenne31;

@@ -385,7 +385,7 @@ where
 mod tests {
     use p3_symmetric::PseudoCompressionFunction;
     use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 

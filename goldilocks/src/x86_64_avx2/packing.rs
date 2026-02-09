@@ -17,8 +17,8 @@ use p3_field::{
     PermutationMonomial, PrimeCharacteristicRing, PrimeField64, impl_packed_field_pow_2,
 };
 use p3_util::reconstitute_from_base;
-use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
+use rand::{Rng, RngExt};
 
 use crate::{Goldilocks, P};
 

@@ -11,7 +11,7 @@ use p3_field_testing::{
 };
 use p3_goldilocks::Goldilocks;
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 type F = Goldilocks;
 

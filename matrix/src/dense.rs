@@ -10,8 +10,8 @@ use p3_field::{
     ExtensionField, Field, PackedValue, par_scale_slice_in_place, scale_slice_in_place_single_core,
 };
 use p3_maybe_rayon::prelude::*;
-use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
+use rand::{Rng, RngExt};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 

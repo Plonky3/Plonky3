@@ -12,7 +12,7 @@ use p3_rescue::Rescue;
 use p3_symmetric::Permutation;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 
 fn bench_rescue(c: &mut Criterion) {
     rescue::<BabyBear, BabyBear, IntegratedCosetMds<_, 16>, 16, 7>(c);

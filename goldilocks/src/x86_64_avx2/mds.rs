@@ -57,7 +57,7 @@ mod tests {
     use p3_poseidon::Poseidon;
     use p3_symmetric::Permutation;
     use rand::rngs::SmallRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     use crate::{Goldilocks, MdsMatrixGoldilocks, PackedGoldilocksAVX2};
 
