@@ -137,7 +137,7 @@ impl ValueEnum for DftOptions {
                 1,
                 Some(vec![("smallbatchdft", 6), ("sb", 2)]),
             ),
-            Self::None => PossibleValue::new(""),
+            Self::None => PossibleValue::new("none"),
         })
     }
 }
