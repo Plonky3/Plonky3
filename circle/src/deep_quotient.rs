@@ -158,11 +158,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         let alpha_powers =
             EF::ExtensionPacking::to_ext_iter(packed_alpha_powers.iter().copied()).collect_vec();
 
-        // Precompute the constraint part for the challenge point.
-        // This computes sum_j(alpha^j * p_j[zeta]) where p_j are the polynomials (columns).
-        // For quotient polynomials, this represents the extension field value of the quotient
-        // at zeta, decomposed into base field components.
-        // This is the same for all rows.
+        // Precompute sum_j(alpha^j * p_j[zeta]) - this is the same for all rows.
         let alpha_reduced_ps_at_zeta: EF =
             dot_product(alpha_powers.iter().copied(), ps_at_zeta.iter().copied());
 
@@ -258,11 +254,7 @@ mod tests {
 
     #[test]
     fn reduce_row_same_as_reduce_matrix() {
-        // This test verifies that DEEP quotient reduction works correctly for matrices
-        // representing either trace columns or quotient polynomial components.
-        // The quotient polynomial structure (including new is_transition selector terms)
-        // doesn't affect the correctness of DEEP quotient reduction, as it operates
-        // at the level of polynomial evaluations regardless of how they were computed.
+        // This test verifies that reducing a row and reducing the matrix work identically.
         let mut rng = SmallRng::seed_from_u64(1);
         let domain = CircleDomain::standard(5);
         let evals = CircleEvaluations::from_cfft_order(
