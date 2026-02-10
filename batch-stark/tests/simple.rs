@@ -461,6 +461,10 @@ impl<F: Field> BaseAir<F> for PreprocessedMulAir {
         }
         Some(m)
     }
+
+    fn preprocessed_uses_next_row(&self) -> bool {
+        false
+    }
 }
 
 impl<AB> Air<AB> for PreprocessedMulAir

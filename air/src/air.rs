@@ -16,6 +16,18 @@ pub trait BaseAir<F>: Sync {
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         None
     }
+
+    /// Whether this AIR's constraints use the "next" row of preprocessed columns.
+    ///
+    /// By default this returns `true`, which will require opening preprocessed columns
+    /// at both `zeta` and `zeta_next`.
+    ///
+    /// AIRs that only ever read the current preprocessed row (and never access an
+    /// offset-1 preprocessed entry) can override this to return `false` to allow
+    /// the prover and verifier to open only at `zeta`.
+    fn preprocessed_uses_next_row(&self) -> bool {
+        true
+    }
 }
 
 /// An extension of `BaseAir` that includes support for public values.

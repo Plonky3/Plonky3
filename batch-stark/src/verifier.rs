@@ -163,7 +163,15 @@ where
             .preprocessed_next
             .as_ref()
             .map_or(0, |v| v.len());
-        if pre_w != pre_local_len || pre_w != pre_next_len {
+        if pre_w == 0 {
+            if pre_local_len != 0 || pre_next_len != 0 {
+                return Err(VerificationError::InvalidProofShape);
+            }
+        } else if airs[i].preprocessed_uses_next_row() {
+            if pre_local_len != pre_w || pre_next_len != pre_w {
+                return Err(VerificationError::InvalidProofShape);
+            }
+        } else if pre_local_len != pre_w || pre_next_len != 0 {
             return Err(VerificationError::InvalidProofShape);
         }
 
@@ -340,11 +348,6 @@ where
                 .preprocessed_local
                 .as_ref()
                 .ok_or(VerificationError::InvalidProofShape)?;
-            let next = inst
-                .base_opened_values
-                .preprocessed_next
-                .as_ref()
-                .ok_or(VerificationError::InvalidProofShape)?;
 
             // Validate that the preprocessed data's base degree matches what we expect.
             let ext_db = degree_bits[inst_idx];
@@ -358,14 +361,23 @@ where
 
             let meta_db = meta.degree_bits;
             let pre_domain = pcs.natural_domain_for_degree(1 << meta_db);
-            let zeta_next_i = trace_domains[inst_idx]
-                .next_point(zeta)
-                .ok_or(VerificationError::NextPointUnavailable)?;
+            if airs[inst_idx].preprocessed_uses_next_row() {
+                let next = inst
+                    .base_opened_values
+                    .preprocessed_next
+                    .as_ref()
+                    .ok_or(VerificationError::InvalidProofShape)?;
+                let zeta_next_i = trace_domains[inst_idx]
+                    .next_point(zeta)
+                    .ok_or(VerificationError::NextPointUnavailable)?;
 
-            pre_round.push((
-                pre_domain,
-                vec![(zeta, local.clone()), (zeta_next_i, next.clone())],
-            ));
+                pre_round.push((
+                    pre_domain,
+                    vec![(zeta, local.clone()), (zeta_next_i, next.clone())],
+                ));
+            } else {
+                pre_round.push((pre_domain, vec![(zeta, local.clone())]));
+            }
         }
 
         coms_to_verify.push((global.commitment.clone(), pre_round));
