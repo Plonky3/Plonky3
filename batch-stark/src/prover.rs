@@ -238,6 +238,29 @@ where
             }
         });
 
+    // Check that all lookups are balanced.
+    #[cfg(debug_assertions)]
+    {
+        use p3_lookup::debug_util::{LookupDebugInstance, check_lookups};
+
+        let preprocessed_traces: Vec<Option<RowMajorMatrix<Val<SC>>>> = instances
+            .iter()
+            .map(|inst| inst.air.preprocessed_trace())
+            .collect();
+        let debug_instances: Vec<LookupDebugInstance<'_, Val<SC>>> = instances
+            .iter()
+            .zip(preprocessed_traces.iter())
+            .map(|(inst, prep)| LookupDebugInstance {
+                main_trace: &inst.trace,
+                preprocessed_trace: prep,
+                public_values: &inst.public_values,
+                lookups: &inst.lookups,
+                permutation_challenges: &[],
+            })
+            .collect();
+        check_lookups(&debug_instances);
+    }
+
     // Commit to all traces in one multi-matrix commitment, preserving input order.
     let permutation_commit_and_data = if !permutation_commit_inputs.is_empty() {
         let commitment = pcs.commit(permutation_commit_inputs);
