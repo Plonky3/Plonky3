@@ -628,6 +628,37 @@ mod tests {
         assert_eq!(degree, 3); // is_first_row (1) * permutation^2 (2) = degree 3
     }
 
+    // ==================== Symbolic Constraint Capture Tests ====================
+
+    #[test]
+    fn test_periodic_constraint_captured() {
+        // Verify that a constraint using periodic values is actually recorded
+        // in the symbolic output (not just degree computation).
+        let air = MockAir {
+            variable: VariableKind::Periodic,
+            exponent: 1,
+            condition: Condition::None,
+            ..Default::default()
+        };
+        let (base_constraints, _) = get_all_symbolic_constraints::<BabyBear, EF, _>(
+            &air,
+            1,
+            1,
+            1,
+            1,
+            air.num_periodic_columns(),
+        );
+        assert_eq!(
+            base_constraints.len(),
+            1,
+            "periodic constraint should be captured"
+        );
+        assert!(
+            matches!(&base_constraints[0], SymbolicExpression::Variable(v) if v.entry == Entry::Periodic),
+            "constraint should reference a periodic variable"
+        );
+    }
+
     // ==================== AirWithPeriodicColumns Trait Tests ====================
 
     #[test]
