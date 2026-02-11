@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use core::arch::aarch64::{
     uint64x2_t, vaddq_u64, vandq_u64, vbicq_u64, vcgtq_s64, vdupq_n_u64, veorq_u64, vgetq_lane_u64,
-    vreinterpretq_s64_u64, vsetq_lane_u64, vshrq_n_u64, vsubq_u64,
+    vreinterpretq_s64_u64, vshrq_n_u64, vsubq_u64, vtrn1q_u64, vtrn2q_u64,
 };
 use core::fmt::Debug;
 use core::iter::{Product, Sum};
@@ -152,18 +152,10 @@ unsafe impl PackedField for PackedGoldilocksNeon {
 /// For block_len=1: [a0, a1] x [b0, b1] -> [a0, b0], [a1, b1]
 #[inline]
 pub fn interleave_u64(v0: uint64x2_t, v1: uint64x2_t) -> (uint64x2_t, uint64x2_t) {
-    unsafe {
-        let a0 = vgetq_lane_u64::<0>(v0);
-        let a1 = vgetq_lane_u64::<1>(v0);
-        let b0 = vgetq_lane_u64::<0>(v1);
-        let b1 = vgetq_lane_u64::<1>(v1);
-
-        // r0 = [a0, b0], r1 = [a1, b1]
-        let r0 = vsetq_lane_u64::<1>(b0, vsetq_lane_u64::<0>(a0, vdupq_n_u64(0)));
-        let r1 = vsetq_lane_u64::<1>(b1, vsetq_lane_u64::<0>(a1, vdupq_n_u64(0)));
-
-        (r0, r1)
-    }
+    // We want this to compile to:
+    //      trn1  res0.2d, v0.2d, v1.2d
+    //      trn2  res1.2d, v0.2d, v1.2d
+    unsafe { (vtrn1q_u64(v0, v1), vtrn2q_u64(v0, v1)) }
 }
 
 unsafe impl PackedFieldPow2 for PackedGoldilocksNeon {
