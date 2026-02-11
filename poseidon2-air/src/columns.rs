@@ -70,33 +70,6 @@ pub const fn num_cols<
     )
 }
 
-pub const fn make_col_map<
-    const WIDTH: usize,
-    const SBOX_DEGREE: u64,
-    const SBOX_REGISTERS: usize,
-    const HALF_FULL_ROUNDS: usize,
-    const PARTIAL_ROUNDS: usize,
->() -> Poseidon2Cols<usize, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS> {
-    todo!()
-    // let indices_arr = indices_arr::<
-    //     { num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>() },
-    // >();
-    // unsafe {
-    //     transmute::<
-    //         [usize;
-    //             num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>()],
-    //         Poseidon2Cols<
-    //             usize,
-    //             WIDTH,
-    //             SBOX_DEGREE,
-    //             SBOX_REGISTERS,
-    //             HALF_FULL_ROUNDS,
-    //             PARTIAL_ROUNDS,
-    //         >,
-    //     >(indices_arr)
-    // }
-}
-
 impl<
     T,
     const WIDTH: usize,
