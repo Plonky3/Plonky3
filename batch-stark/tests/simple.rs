@@ -1862,9 +1862,23 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
     verify_batch(&config, &airs, &proof, &pvs, common)
 }
 
+#[cfg(not(debug_assertions))]
 #[test]
 #[should_panic(expected = "LookupError(GlobalCumulativeMismatch(Some(\"MulFib2\"))")]
 fn test_batch_stark_failed_global_lookup() {
+    test_batch_stark_failed_global_lookup_inner();
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(
+    expected = "Lookup mismatch (global lookup 'MulFib2'): tuple [\"0\", \"1\"] has net multiplicity 2013265920. Locations: [Location { instance: 0, lookup: 1, row: 0 }]"
+)]
+fn test_batch_stark_failed_global_lookup() {
+    test_batch_stark_failed_global_lookup_inner();
+}
+
+fn test_batch_stark_failed_global_lookup_inner() {
     let config = make_config(2025);
 
     let reps = 2;
