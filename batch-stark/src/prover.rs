@@ -407,7 +407,9 @@ where
         rounds.push((&quotient_data, round2_points));
 
         // Optional global preprocessed round: one matrix per instance that
-        // has preprocessed columns.
+        // has preprocessed columns. For AIRs that only use the local
+        // preprocessed row, we open only at `zeta`; otherwise we open at
+        // both `zeta` and `zeta_next`.
         if let Some(global) = &common.preprocessed {
             let preprocessed_prover_data = prover_data
                 .prover_only
@@ -418,10 +420,14 @@ where
                 .matrix_to_instance
                 .iter()
                 .map(|&inst_idx| {
-                    let zeta_next_i = trace_domains[inst_idx]
-                        .next_point(zeta)
-                        .expect("domain should support next_point operation");
-                    vec![zeta, zeta_next_i]
+                    if airs[inst_idx].preprocessed_uses_next_row() {
+                        let zeta_next_i = trace_domains[inst_idx]
+                            .next_point(zeta)
+                            .expect("domain should support next_point operation");
+                        vec![zeta, zeta_next_i]
+                    } else {
+                        vec![zeta]
+                    }
                 })
                 .collect::<Vec<_>>();
             rounds.push((preprocessed_prover_data, pre_points));
