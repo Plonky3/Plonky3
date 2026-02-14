@@ -157,12 +157,40 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
                 })
                 .collect()
         } else {
-            // General path for higher arity: use Lagrange interpolation
-            let log_height = log2_strict_usize(m.height());
-            m.par_rows()
-                .enumerate()
-                .map(|(i, row)| self.fold_row(i, log_height, log_arity, beta, row))
-                .collect()
+            // Decompose arity-2^k fold into k sequential arity-2 folds.
+            // This way, an arity-2^k fold with a single challenge beta is equivalent to
+            // k arity-2 folds with challenges beta, beta^2, beta^4, ..., beta^{2^{k-1}}.
+            //
+            // For arity 4 with evaluation points {s, -s, si, -si}:
+            //   Step 1 (beta):   fold pairs → g(s^2), g(-s^2) where g = f_e + beta*f_o
+            //   Step 2 (beta^2): fold pair  → g(beta^2) = f(beta)
+
+            let mut data: Vec<EF> = Vec::with_capacity(m.width() * m.height());
+            for row in m.rows() {
+                data.extend(row);
+            }
+
+            let mut current_beta = beta;
+            for _ in 0..log_arity {
+                let height = data.len() / 2;
+                let g_inv = F::two_adic_generator(log2_strict_usize(height) + 1).inverse();
+                let mut halve_inv_powers: Vec<F> =
+                    g_inv.shifted_powers(F::ONE.halve()).collect_n(height);
+                reverse_slice_index_bits(&mut halve_inv_powers);
+
+                let mat = RowMajorMatrix::new(data, 2);
+                data = mat
+                    .par_rows()
+                    .zip(halve_inv_powers)
+                    .map(|(mut row, halve_inv_power)| {
+                        let (lo, hi) = row.next_tuple().unwrap();
+                        (lo + hi).halve() + (lo - hi) * current_beta * halve_inv_power
+                    })
+                    .collect();
+                current_beta = current_beta.square();
+            }
+
+            data
         }
     }
 }
