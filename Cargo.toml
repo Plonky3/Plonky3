@@ -2,6 +2,7 @@
 version = "0.3.2-succinct"
 license = "MIT OR Apache-2.0"
 edition = "2021"
+rust-version = "1.89"
 repository = "https://github.com/Plonky3/Plonky3"
 homepage = "https://github.com/Plonky3/Plonky3"
 keywords = ["cryptography", "SNARK", "PLONK", "FRI", "plonky3"]

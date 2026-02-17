@@ -2,7 +2,9 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{reduce_31, split_32, ExtensionField, Field, PrimeField, PrimeField32, PrimeField31};
+use p3_field::{
+    reduce_31, split_32, ExtensionField, Field, PrimeField, PrimeField31, PrimeField32,
+};
 use p3_symmetric::{CryptographicPermutation, Hash};
 use serde::{Deserialize, Serialize};
 

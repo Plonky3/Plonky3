@@ -5,7 +5,7 @@ use core::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use num_bigint::BigUint;
 use p3_field::{
     exp_1420470955, exp_u64_by_squaring, halve_u32, AbstractField, Field, Packable, PrimeField,
-    PrimeField32, PrimeField64, TwoAdicField, PrimeField31
+    PrimeField31, PrimeField32, PrimeField64, TwoAdicField,
 };
 use rand::distributions::{Distribution, Standard};
 use rand::Rng;
@@ -183,27 +183,19 @@ impl Field for KoalaBear {
     #[cfg(all(
         target_arch = "x86_64",
         target_feature = "avx2",
-        not(all(feature = "nightly-features", target_feature = "avx512f"))
+        not(target_feature = "avx512f")
     ))]
     type Packing = crate::PackedKoalaBearAVX2;
-    #[cfg(all(
-        feature = "nightly-features",
-        target_arch = "x86_64",
-        target_feature = "avx512f"
-    ))]
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
     type Packing = crate::PackedKoalaBearAVX512;
     #[cfg(not(any(
         all(target_arch = "aarch64", target_feature = "neon"),
         all(
             target_arch = "x86_64",
             target_feature = "avx2",
-            not(all(feature = "nightly-features", target_feature = "avx512f"))
+            not(target_feature = "avx512f")
         ),
-        all(
-            feature = "nightly-features",
-            target_arch = "x86_64",
-            target_feature = "avx512f"
-        ),
+        all(target_arch = "x86_64", target_feature = "avx512f"),
     )))]
     type Packing = Self;
 

@@ -5,7 +5,7 @@ use core::array;
 use num_bigint::BigUint;
 
 use crate::field::Field;
-use crate::{AbstractField, PrimeField, PrimeField32, TwoAdicField, PrimeField31};
+use crate::{AbstractField, PrimeField, PrimeField31, PrimeField32, TwoAdicField};
 
 /// Computes `Z_H(x)`, where `Z_H` is the zerofier of a multiplicative subgroup of order `2^log_n`.
 pub fn two_adic_subgroup_zerofier<F: TwoAdicField>(log_n: usize, x: F) -> F {

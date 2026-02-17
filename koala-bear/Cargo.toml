@@ -3,14 +3,12 @@ name = "p3-koala-bear"
 description = "An implementation of the Koalabear prime field F_p, where p = 2^31 - 2^24 + 1."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
-
-[features]
-nightly-features = []
 
 [dependencies]
 p3-field = { workspace = true }
