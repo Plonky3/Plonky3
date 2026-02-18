@@ -578,19 +578,19 @@ fn eval_eq_batch_common<F, IF, EF, E, const INITIALIZED: bool>(
 
     // For small problems, use the basic recursive approach
     let packing_width = F::Packing::WIDTH;
+    let log_packing_width = log2_strict_usize(packing_width);
     let num_threads = current_num_threads().next_power_of_two();
     let log_num_threads = log2_strict_usize(num_threads);
 
     // If the number of variables is small, there is no need to use
     // parallelization or packings.
-    if num_vars <= packing_width + 1 + log_num_threads {
+    if num_vars <= log_packing_width + 1 + log_num_threads {
         // Allocate workspace once for all recursive calls
         //
         // The max function ensures we allocate at least 1 element to avoid empty slice issues
         let mut workspace = EF::zero_vec((2 * evals.width() * num_vars).max(1));
         eval_eq_batch_basic::<F, IF, EF, INITIALIZED>(evals, scalars, out, &mut workspace);
     } else {
-        let log_packing_width = log2_strict_usize(packing_width);
         let eval_len_min_packing = num_vars - log_packing_width;
 
         // Split the variables into three parts:
