@@ -38,6 +38,82 @@ pub trait BaseAirWithPublicValues<F>: BaseAir<F> {
     }
 }
 
+/// An extension of `BaseAir` that includes support for periodic columns.
+///
+/// Periodic columns are columns whose values repeat with a fixed period that divides the
+/// trace length. They are derived from public parameters and are never committed as part
+/// of the trace - instead, both prover and verifier compute them from the data provided here.
+///
+/// # Mathematical Model
+///
+/// For a trace of length n evaluated over a multiplicative subgroup H = {g⁰, g¹, ..., gⁿ⁻¹},
+/// a periodic column with period p (where p divides n, both powers of 2) is defined as follows:
+///
+/// - Let r = n/p be the number of repetitions.
+/// - The p values are interpreted as evaluations of a polynomial f(x) of degree < p
+///   over the subgroup Hʳ = {g⁰, gʳ, g²ʳ, ..., g⁽ᵖ⁻¹⁾ʳ} of order p.
+/// - The periodic extension f'(X) = f(Xʳ) has degree < p·r = n and satisfies
+///   f'(gⁱ) = f(gⁱʳ), which cycles through the p values as i increases.
+///
+/// # Commitment
+///
+/// Periodic columns are public parameters and must be committed during initialization of
+/// the Fiat-Shamir transcript. The values returned are evaluations over a subgroup;
+/// callers may convert to coefficient form for efficient evaluation if needed.
+pub trait AirWithPeriodicColumns<F>: BaseAir<F> {
+    /// Return the periodic table data: a list of columns, each a `Vec<F>` of evaluations.
+    ///
+    /// Each inner `Vec<F>` represents one periodic column. Its length is the period of
+    /// that column, and the entries are the evaluations over a subgroup of that order.
+    fn periodic_columns(&self) -> &[Vec<F>];
+
+    /// Return the number of periodic columns.
+    fn num_periodic_columns(&self) -> usize {
+        self.periodic_columns().len()
+    }
+
+    /// Return the period of the column at index `col_idx`, if it exists.
+    fn get_column_period(&self, col_idx: usize) -> Option<usize> {
+        self.periodic_columns().get(col_idx).map(|col| col.len())
+    }
+
+    /// Return the maximum period among all periodic columns, or `None` if there are none.
+    fn get_max_column_period(&self) -> Option<usize> {
+        self.periodic_columns().iter().map(|col| col.len()).max()
+    }
+
+    /// Return a matrix with all periodic columns extended to a common height.
+    ///
+    /// The result is a row-major matrix where each row corresponds to a row index in the
+    /// common extended domain (of size equal to the maximum period), and each column
+    /// corresponds to one periodic column. Columns with smaller periods are repeated
+    /// cyclically to fill the extended domain.
+    ///
+    /// Returns `None` if there are no periodic columns.
+    fn periodic_columns_matrix(&self) -> Option<RowMajorMatrix<F>>
+    where
+        F: Clone + Send + Sync,
+    {
+        let cols = self.periodic_columns();
+        if cols.is_empty() {
+            return None;
+        }
+
+        let max_period = self.get_max_column_period()?;
+        let num_cols = cols.len();
+
+        let mut values = Vec::with_capacity(max_period * num_cols);
+        for row in 0..max_period {
+            for col in cols {
+                let period = col.len();
+                values.push(col[row % period].clone());
+            }
+        }
+
+        Some(RowMajorMatrix::new(values, num_cols))
+    }
+}
+
 /// An algebraic intermediate representation (AIR) definition.
 ///
 /// Contains an evaluation function for computing the constraints of the AIR.
@@ -323,6 +399,22 @@ pub trait PermutationAirBuilder: ExtensionBuilder {
     fn permutation_randomness(&self) -> &[Self::RandomVar];
 }
 
+/// Trait for builders supporting periodic columns.
+///
+/// Periodic columns are columns whose values repeat with a period p dividing the trace
+/// length. At row i, the value of periodic column j equals `periodic_table[j][i mod p]`.
+///
+/// These columns are never committed to the proof - both prover and verifier compute them
+/// from the periodic table data provided by [`AirWithPeriodicColumns`].
+pub trait PeriodicAirBuilder: AirBuilder {
+    /// Variable type for periodic column values.
+    /// For the prover, this is base field; for the verifier, this is extension field.
+    type PeriodicVar: Into<Self::Expr> + Copy;
+
+    /// Return the evaluations of periodic columns at the current row.
+    fn periodic_values(&self) -> &[Self::PeriodicVar];
+}
+
 /// A wrapper around an [`AirBuilder`] that enforces constraints only when a specified condition is met.
 ///
 /// This struct allows selectively applying constraints to certain rows or under certain conditions in the AIR,
@@ -374,6 +466,20 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         self.inner.assert_zero(self.condition() * x.into());
     }
+
+    fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
+        let condition = self.condition();
+        self.inner
+            .assert_zeros(array.map(|x| condition.clone() * x.into()));
+    }
+}
+
+impl<AB: AirBuilderWithPublicValues> AirBuilderWithPublicValues for FilteredAirBuilder<'_, AB> {
+    type PublicVar = AB::PublicVar;
+
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.inner.public_values()
+    }
 }
 
 impl<AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'_, AB> {
@@ -403,5 +509,13 @@ impl<AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'_,
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         self.inner.permutation_randomness()
+    }
+}
+
+impl<AB: PeriodicAirBuilder> PeriodicAirBuilder for FilteredAirBuilder<'_, AB> {
+    type PeriodicVar = AB::PeriodicVar;
+
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.inner.periodic_values()
     }
 }

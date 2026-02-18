@@ -4,14 +4,14 @@ use p3_air::lookup::LookupEvaluator;
 /// Public re-exports of lookup types.
 pub use p3_air::lookup::{Direction, Kind, Lookup, LookupData, LookupError, LookupInput};
 use p3_air::{
-    AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PermutationAirBuilder,
+    AirBuilder, AirBuilderWithPublicValues, Entry, ExtensionBuilder, PermutationAirBuilder,
     SymbolicExpression,
 };
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::ViewPair;
-use p3_uni_stark::{Entry, StarkGenericConfig, Val};
+use p3_uni_stark::{StarkGenericConfig, Val};
 use tracing::warn;
 
 /// Converts `LookupData<F>` to `LookupData<SymbolicExpression<F>>`.

@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use core::fmt::Debug;
 
 use hashbrown::HashMap;
-use p3_air::Air;
+use p3_air::{Air, SymbolicAirBuilder, SymbolicExpression};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
@@ -15,10 +15,7 @@ use p3_lookup::lookup_traits::{
 };
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
-use p3_uni_stark::{
-    SymbolicAirBuilder, SymbolicExpression, VerificationError, VerifierConstraintFolder,
-    recompose_quotient_from_chunks,
-};
+use p3_uni_stark::{VerificationError, VerifierConstraintFolder, recompose_quotient_from_chunks};
 use p3_util::zip_eq::zip_eq;
 use tracing::{info_span, instrument};
 
