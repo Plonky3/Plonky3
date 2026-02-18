@@ -15,7 +15,7 @@ pub use binomial_extension::*;
 pub use complex::*;
 pub use packed_binomial_extension::*;
 pub use packed_quintic_extension::PackedQuinticTrinomialExtensionField;
-pub use quintic_extension::{QuinticTrinomialExtensionField, quintic_mul as trinomial_quintic_mul};
+pub use quintic_extension::{QuinticTrinomialExtensionField, trinomial_quintic_mul};
 
 /// Trait for fields that support binomial extension of the form `F[X]/(X^D - W)`.
 ///
@@ -164,7 +164,7 @@ pub trait QuinticExtendableAlgebra<F: Field>: Algebra<F> {
     /// Computes `a * b mod (X^5 + X^2 - 1)` and stores the result in `res`.
     #[inline]
     fn quintic_mul(a: &[Self; 5], b: &[Self; 5], res: &mut [Self; 5]) {
-        quintic_extension::quintic_mul(a, b, res);
+        quintic_extension::trinomial_quintic_mul(a, b, res);
     }
 
     /// Square an element in the quintic extension ring.
