@@ -111,11 +111,19 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
     /// For each row `i` in the matrix, this computes:
     /// `DEEP_quotient[i] = (f(x[i]) - f(zeta)) / (x[i] - zeta)`
     ///
+    /// The matrix can represent either:
+    /// 1. Multiple polynomials (e.g., trace columns), where each column is a separate polynomial
+    /// 2. A single extension field polynomial split into base field components (e.g., quotient polynomial),
+    ///    where each column represents one component of the extension field decomposition
+    ///
+    /// In both cases, the function computes the DEEP quotient reduction by treating each column
+    /// as a separate polynomial and combining them with powers of alpha.
+    ///
     /// # Parameters
     ///
     /// - `alpha`: The random challenge scalar
     /// - `zeta`: The random challenge point (outside the original domain)
-    /// - `ps_at_zeta`: Polynomial evaluations at challenge point `zeta`
+    /// - `ps_at_zeta`: Polynomial evaluations at challenge point `zeta` (one per column)
     ///
     /// # Returns
     ///
@@ -127,7 +135,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         zeta: Point<EF>,
         ps_at_zeta: &[EF],
     ) -> Vec<EF> {
-        // Precompute alpha^width for the vanishing part computation
+        // Precompute alpha^width for the vanishing part computation.
         let alpha_pow_width = alpha.exp_u64(self.values.width() as u64);
 
         // Get all domain points in CFFT order for efficient processing
@@ -150,8 +158,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         let alpha_powers =
             EF::ExtensionPacking::to_ext_iter(packed_alpha_powers.iter().copied()).collect_vec();
 
-        // Precompute the constraint part for the challenge point
-        // This is sum_j(alpha^j * p_j[zeta]) and is the same for all rows
+        // Precompute sum_j(alpha^j * p_j[zeta]) - this is the same for all rows.
         let alpha_reduced_ps_at_zeta: EF =
             dot_product(alpha_powers.iter().copied(), ps_at_zeta.iter().copied());
 
@@ -247,6 +254,7 @@ mod tests {
 
     #[test]
     fn reduce_row_same_as_reduce_matrix() {
+        // This test verifies that reducing a row and reducing the matrix work identically.
         let mut rng = SmallRng::seed_from_u64(1);
         let domain = CircleDomain::standard(5);
         let evals = CircleEvaluations::from_cfft_order(
