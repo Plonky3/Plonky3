@@ -157,4 +157,3 @@ fn dit_butterfly_inner(x: &mut C, y: &mut C, twiddle: C) {
     *x = C::new_complex(a1, a2);
     *y = C::new_complex(b1, b2);
 }
-
