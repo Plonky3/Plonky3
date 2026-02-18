@@ -1,8 +1,8 @@
 use core::ops::{Add, Mul, Sub};
 
 use p3_field::{AbstractExtensionField, AbstractField, ExtensionField, Field};
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
 
 /// An AIR (algebraic intermediate representation).
 pub trait BaseAir<F>: Sync {
