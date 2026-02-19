@@ -61,7 +61,9 @@ pub trait AirWithPeriodicColumns<F>: BaseAir<F> {
     ///
     /// Each inner `Vec<F>` represents one periodic column. Its length is the period of
     /// that column, and the entries are the evaluations over a subgroup of that order.
-    fn periodic_columns(&self) -> &[Vec<F>];
+    fn periodic_columns(&self) -> &[Vec<F>] {
+        BaseAir::periodic_columns(self)
+    }
 
     /// Return the period of the column at index `col_idx`, if it exists.
     fn get_column_period(&self, col_idx: usize) -> Option<usize> {
