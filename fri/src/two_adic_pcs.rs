@@ -170,24 +170,37 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
                 data.extend(row);
             }
 
+            let initial_height = data.len() / 2;
+            let g_inv = F::two_adic_generator(log2_strict_usize(initial_height) + 1).inverse();
+            let mut halve_inv_powers: Vec<F> = g_inv
+                .shifted_powers(F::ONE.halve())
+                .collect_n(initial_height);
+            reverse_slice_index_bits(&mut halve_inv_powers);
+
+            let two = F::ONE + F::ONE;
             let mut current_beta = beta;
-            for _ in 0..log_arity {
+            for step in 0..log_arity {
                 let height = data.len() / 2;
-                let g_inv = F::two_adic_generator(log2_strict_usize(height) + 1).inverse();
-                let mut halve_inv_powers: Vec<F> =
-                    g_inv.shifted_powers(F::ONE.halve()).collect_n(height);
-                reverse_slice_index_bits(&mut halve_inv_powers);
+                let step_halve_inv_powers = if step == 0 {
+                    halve_inv_powers[..height].to_vec()
+                } else {
+                    (0..height)
+                        .map(|j| two * halve_inv_powers[j << 1].square())
+                        .collect()
+                };
 
                 let mat = RowMajorMatrix::new(data, 2);
                 data = mat
                     .par_rows()
-                    .zip(halve_inv_powers)
+                    .zip(&step_halve_inv_powers)
                     .map(|(mut row, halve_inv_power)| {
                         let (lo, hi) = row.next_tuple().unwrap();
-                        (lo + hi).halve() + (lo - hi) * current_beta * halve_inv_power
+                        (lo + hi).halve() + (lo - hi) * current_beta * *halve_inv_power
                     })
                     .collect();
                 current_beta = current_beta.square();
+
+                halve_inv_powers[..height].copy_from_slice(&step_halve_inv_powers);
             }
 
             data
