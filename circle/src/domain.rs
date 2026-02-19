@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::{Itertools, iterate};
-use p3_commit::{LagrangeSelectors, PolynomialSpace};
+use p3_commit::{EvaluatePolynomialAtPoint, LagrangeSelectors, PolynomialSpace};
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, batch_multiplicative_inverse};
 use p3_matrix::Matrix;
@@ -239,6 +239,43 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             is_transition,
             inv_vanishing,
         }
+    }
+}
+
+impl<F: ComplexExtendable> EvaluatePolynomialAtPoint for CircleDomain<F> {
+    fn evaluate_polynomial_at<Ext: ExtensionField<F>>(&self, evals: &[F], point: Ext) -> Ext {
+        assert!(
+            self.is_standard(),
+            "evaluate_polynomial_at requires standard position"
+        );
+        assert_eq!(evals.len(), self.size());
+        let points: Vec<F> = self
+            .points()
+            .map(|p| p.to_projective_line().unwrap())
+            .collect();
+        let diffs: Vec<Ext> = points.iter().map(|&x| point - Ext::from(x)).collect();
+        let diff_invs = batch_multiplicative_inverse(&diffs);
+        let weights: Vec<F> = (0..self.size())
+            .map(|i| {
+                (0..self.size())
+                    .filter(|&j| j != i)
+                    .map(|j| points[i] - points[j])
+                    .product::<F>()
+                    .inverse()
+            })
+            .collect();
+        let numer: Ext = evals
+            .iter()
+            .zip(&diff_invs)
+            .zip(&weights)
+            .map(|((e, di), w)| Ext::from(*e) * *di * Ext::from(*w))
+            .sum();
+        let denom: Ext = diff_invs
+            .iter()
+            .zip(&weights)
+            .map(|(di, w)| *di * Ext::from(*w))
+            .sum();
+        numer * denom.inverse()
     }
 }
 

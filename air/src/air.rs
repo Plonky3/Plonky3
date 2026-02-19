@@ -20,6 +20,10 @@ pub trait BaseAir<F>: Sync {
     fn num_periodic_columns(&self) -> usize {
         0
     }
+    /// Return the periodic table data. Override when implementing [`AirWithPeriodicColumns`].
+    fn periodic_columns(&self) -> &[Vec<F>] {
+        &[]
+    }
 }
 
 /// An extension of `BaseAir` that includes support for public values.
@@ -61,12 +65,17 @@ pub trait AirWithPeriodicColumns<F>: BaseAir<F> {
 
     /// Return the period of the column at index `col_idx`, if it exists.
     fn get_column_period(&self, col_idx: usize) -> Option<usize> {
-        self.periodic_columns().get(col_idx).map(|col| col.len())
+        <Self as AirWithPeriodicColumns<F>>::periodic_columns(self)
+            .get(col_idx)
+            .map(|col: &Vec<F>| col.len())
     }
 
     /// Return the maximum period among all periodic columns, or `None` if there are none.
     fn get_max_column_period(&self) -> Option<usize> {
-        self.periodic_columns().iter().map(|col| col.len()).max()
+        <Self as AirWithPeriodicColumns<F>>::periodic_columns(self)
+            .iter()
+            .map(|col: &Vec<F>| col.len())
+            .max()
     }
 
     /// Return a matrix with all periodic columns extended to a common height.
@@ -81,7 +90,7 @@ pub trait AirWithPeriodicColumns<F>: BaseAir<F> {
     where
         F: Clone + Send + Sync,
     {
-        let cols = self.periodic_columns();
+        let cols = <Self as AirWithPeriodicColumns<F>>::periodic_columns(self);
         if cols.is_empty() {
             return None;
         }

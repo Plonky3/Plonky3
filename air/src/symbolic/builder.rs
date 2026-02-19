@@ -441,7 +441,7 @@ mod tests {
             1
         }
         fn num_periodic_columns(&self) -> usize {
-            self.periodic_columns().len()
+            self.periodic_columns.len()
         }
     }
 

@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_air::{AirBuilder, AirBuilderWithPublicValues};
+use p3_air::{AirBuilder, AirBuilderWithPublicValues, PeriodicAirBuilder};
 use p3_field::{BasedVectorSpace, PackedField};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
@@ -18,6 +18,8 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     pub main: RowMajorMatrixView<'a, PackedVal<SC>>,
     /// The preprocessed columns (if any) as a [`RowMajorMatrixView`].
     pub preprocessed: Option<RowMajorMatrixView<'a, PackedVal<SC>>>,
+    /// Periodic column values at the current row(s), one packed value per column.
+    pub periodic_values: &'a [PackedVal<SC>],
     /// Public inputs to the [AIR](`p3_air::Air`) implementation.
     pub public_values: &'a [Val<SC>],
     /// Evaluations of the Selector polynomial for the first row of the trace
@@ -47,6 +49,8 @@ pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
     pub main: ViewPair<'a, SC::Challenge>,
     /// The preprocessed columns (if any) as a [`ViewPair`].
     pub preprocessed: Option<ViewPair<'a, SC::Challenge>>,
+    /// Periodic column values at the opened point.
+    pub periodic_values: &'a [SC::Challenge],
     /// Public values that are inputs to the computation
     pub public_values: &'a [Val<SC>],
     /// Evaluations of the Selector polynomial for the first row of the trace
@@ -127,6 +131,15 @@ impl<SC: StarkGenericConfig> AirBuilderWithPublicValues for ProverConstraintFold
     }
 }
 
+impl<SC: StarkGenericConfig> PeriodicAirBuilder for ProverConstraintFolder<'_, SC> {
+    type PeriodicVar = PackedVal<SC>;
+
+    #[inline]
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.periodic_values
+    }
+}
+
 impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC> {
     type F = Val<SC>;
     type Expr = SC::Challenge;
@@ -172,5 +185,14 @@ impl<SC: StarkGenericConfig> AirBuilderWithPublicValues for VerifierConstraintFo
 
     fn public_values(&self) -> &[Self::F] {
         self.public_values
+    }
+}
+
+impl<SC: StarkGenericConfig> PeriodicAirBuilder for VerifierConstraintFolder<'_, SC> {
+    type PeriodicVar = SC::Challenge;
+
+    #[inline]
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.periodic_values
     }
 }

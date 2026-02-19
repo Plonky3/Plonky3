@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse};
+use p3_interpolation::interpolate_coset;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
@@ -127,6 +128,17 @@ pub trait PolynomialSpace: Copy {
     ///
     /// Note that these may not be normalized.
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>>;
+}
+
+/// Extension of [`PolynomialSpace`] for domains that support evaluating a polynomial
+/// (given by its evaluations over the domain) at an arbitrary point.
+pub trait EvaluatePolynomialAtPoint: PolynomialSpace {
+    /// Evaluate the polynomial defined by `evals` (evaluations over `self`) at `point`.
+    fn evaluate_polynomial_at<Ext: ExtensionField<Self::Val>>(
+        &self,
+        evals: &[Self::Val],
+        point: Ext,
+    ) -> Ext;
 }
 
 impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
@@ -289,5 +301,12 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
                 .take(coset.size())
                 .collect(),
         }
+    }
+}
+
+impl<Val: TwoAdicField> EvaluatePolynomialAtPoint for TwoAdicMultiplicativeCoset<Val> {
+    fn evaluate_polynomial_at<Ext: ExtensionField<Val>>(&self, evals: &[Val], point: Ext) -> Ext {
+        let evals_mat = RowMajorMatrix::new(evals.to_vec(), 1);
+        interpolate_coset(&evals_mat, self.shift(), point)[0]
     }
 }
