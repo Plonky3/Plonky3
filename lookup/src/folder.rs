@@ -1,4 +1,4 @@
-use p3_air::{AirBuilder, ExtensionBuilder, PermutationAirBuilder, RowWindow};
+use p3_air::{AirBuilder, ExtensionBuilder, PeriodicAirBuilder, PermutationAirBuilder, RowWindow};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{
@@ -58,6 +58,15 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
     #[inline]
     fn public_values(&self) -> &[Self::PublicVar] {
         self.inner.public_values
+    }
+}
+
+impl<SC: StarkGenericConfig> PeriodicAirBuilder for ProverConstraintFolderWithLookups<'_, SC> {
+    type PeriodicVar = PackedVal<SC>;
+
+    #[inline]
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.inner.periodic_values
     }
 }
 
@@ -147,6 +156,15 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
     #[inline]
     fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
         self.inner.assert_zeros(array);
+    }
+}
+
+impl<SC: StarkGenericConfig> PeriodicAirBuilder for VerifierConstraintFolderWithLookups<'_, SC> {
+    type PeriodicVar = SC::Challenge;
+
+    #[inline]
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.inner.periodic_values
     }
 }
 
