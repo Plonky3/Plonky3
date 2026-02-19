@@ -12,7 +12,7 @@ use p3_util::{flatten_to_base, reconstitute_from_base};
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
 
-use super::quintic_extension::{quintic_mul, quintic_square};
+use super::quintic_extension::{quintic_square, trinomial_quintic_mul};
 use super::{QuinticTrinomialExtensionField, vector_add, vector_sub};
 use crate::extension::QuinticTrinomialExtendable;
 use crate::{
@@ -472,7 +472,7 @@ where
     #[inline]
     fn mul(self, rhs: Self) -> Self {
         let mut res = Self::default();
-        quintic_mul(&self.value, &rhs.value, &mut res.value);
+        trinomial_quintic_mul(&self.value, &rhs.value, &mut res.value);
         res
     }
 }

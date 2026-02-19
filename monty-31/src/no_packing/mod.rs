@@ -2,7 +2,7 @@
 
 mod poseidon2;
 
-use p3_field::extension::{octic_mul, quartic_mul, quintic_mul};
+use p3_field::extension::{octic_mul, quartic_mul, quintic_mul, trinomial_quintic_mul};
 pub use poseidon2::*;
 
 use crate::{BinomialExtensionData, FieldParameters, MontyField31};
@@ -41,6 +41,16 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
     FP: FieldParameters + BinomialExtensionData<WIDTH>,
 {
     octic_mul(a, b, res, FP::W);
+}
+
+/// If no packings are available, we use the generic trinomial extension multiplication function.
+#[inline]
+pub(crate) fn quintic_mul_packed_trinomial<FP: FieldParameters>(
+    a: &[MontyField31<FP>; 5],
+    b: &[MontyField31<FP>; 5],
+    res: &mut [MontyField31<FP>; 5],
+) {
+    trinomial_quintic_mul(a, b, res);
 }
 
 /// Multiplication by a base field element in a binomial extension field.
