@@ -1,5 +1,6 @@
 use p3_air::{
-    Air, AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PermutationAirBuilder,
+    Air, AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PeriodicAirBuilder,
+    PermutationAirBuilder,
 };
 use p3_field::{ExtensionField, Field};
 use p3_lookup::lookup_traits::{Lookup, LookupData, LookupGadget};
@@ -89,6 +90,12 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
             RowMajorMatrixView::new_row(&*perm_next),
         );
 
+        let periodic_values: alloc::vec::Vec<F> = air
+            .periodic_columns()
+            .iter()
+            .map(|col| col[row_index % col.len()])
+            .collect();
+
         let mut builder = DebugConstraintBuilderWithLookups {
             row_index,
             main,
@@ -96,6 +103,7 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
             permutation,
             permutation_challenges,
             public_values,
+            periodic_values: &periodic_values,
             is_first_row: F::from_bool(row_index == 0),
             is_last_row: F::from_bool(row_index == height - 1),
             is_transition: F::from_bool(row_index != height - 1),
@@ -126,6 +134,8 @@ pub struct DebugConstraintBuilderWithLookups<'a, F: Field, EF: ExtensionField<F>
     preprocessed: Option<ViewPair<'a, F>>,
     /// The public values provided for constraint validation (e.g. inputs or outputs).
     public_values: &'a [F],
+    /// Periodic column values at the current row.
+    periodic_values: &'a [F],
     /// A flag indicating whether this is the first row.
     is_first_row: F,
     /// A flag indicating whether this is the last row.
@@ -201,6 +211,16 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilderWithPublicValues
 
     fn public_values(&self) -> &[Self::F] {
         self.public_values
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> PeriodicAirBuilder
+    for DebugConstraintBuilderWithLookups<'_, F, EF>
+{
+    type PeriodicVar = F;
+
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.periodic_values
     }
 }
 

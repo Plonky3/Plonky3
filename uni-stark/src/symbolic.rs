@@ -45,9 +45,7 @@ where
         num_public_values,
         permutation_width,
         num_permutation_challenges,
-        // TODO(periodic-columns): pass actual num_periodic_columns once the prover
-        // evaluates periodic column polynomials during constraint checking.
-        0,
+        air.num_periodic_columns(),
     ) + is_zk)
         .max(2);
 

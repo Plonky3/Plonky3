@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::{Itertools, iterate};
-use p3_commit::{LagrangeSelectors, PolynomialSpace};
+use p3_commit::{EvaluatePolynomialAtPoint, LagrangeSelectors, PolynomialSpace};
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, batch_multiplicative_inverse};
 use p3_matrix::Matrix;
@@ -10,6 +10,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::instrument;
 
+use crate::cfft::CircleEvaluations;
 use crate::point::Point;
 
 /// A twin-coset of the circle group on F. It has a power-of-two size and an arbitrary shift.
@@ -239,6 +240,20 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             is_transition,
             inv_vanishing,
         }
+    }
+}
+
+impl<F: ComplexExtendable> EvaluatePolynomialAtPoint for CircleDomain<F> {
+    fn evaluate_polynomial_at<Ext: ExtensionField<F>>(&self, evals: &[F], point: Ext) -> Ext {
+        assert!(
+            self.is_standard(),
+            "evaluate_polynomial_at requires standard position"
+        );
+        assert_eq!(evals.len(), self.size());
+        let values = RowMajorMatrix::new(evals.to_vec(), 1);
+        let circle_evals = CircleEvaluations::from_natural_order(*self, values);
+        let circle_point = Point::from_projective_line(point);
+        circle_evals.evaluate_at_point(circle_point)[0]
     }
 }
 

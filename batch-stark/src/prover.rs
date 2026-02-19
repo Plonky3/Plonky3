@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use p3_air::{Air, SymbolicAirBuilder, SymbolicExpression};
 use p3_challenger::{CanObserve, FieldChallenger};
-use p3_commit::{Pcs, PolynomialSpace};
+use p3_commit::{EvaluatePolynomialAtPoint, Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 use p3_lookup::folder::ProverConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
@@ -69,6 +69,7 @@ pub fn prove_batch<
 where
     SC: SGC,
     SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
+    Domain<SC>: EvaluatePolynomialAtPoint,
 {
     let common = &prover_data.common;
     // TODO: Extend if additional lookup gadgets are added.
@@ -584,6 +585,7 @@ where
     A: for<'a> Air<ProverConstraintFolderWithLookups<'a, SC>>,
     Mat: Matrix<Val<SC>> + Sync,
     LG: LookupGadget + Sync,
+    Domain<SC>: EvaluatePolynomialAtPoint,
 {
     let quotient_size = quotient_domain.size();
     let main_width = trace_on_quotient_domain.width();
@@ -623,6 +625,34 @@ where
                 .collect()
         })
         .collect();
+
+    let periodic_cols = air.periodic_columns();
+    let periodic_on_quotient: Vec<Vec<Val<SC>>> = if periodic_cols.is_empty() {
+        vec![]
+    } else {
+        let quotient_points: Vec<Val<SC>> = {
+            let mut pt = quotient_domain.first_point();
+            (0..quotient_size)
+                .map(|_| {
+                    let out = pt;
+                    pt = quotient_domain
+                        .next_point(pt)
+                        .expect("quotient domain must support next_point");
+                    out
+                })
+                .collect()
+        };
+        periodic_cols
+            .iter()
+            .map(|col| {
+                quotient_points
+                    .iter()
+                    .map(|&pt| trace_domain.evaluate_periodic_column_at(col, pt))
+                    .collect()
+            })
+            .collect()
+    };
+
     (0..quotient_size)
         .into_par_iter()
         .step_by(PackedVal::<SC>::WIDTH)
@@ -677,10 +707,21 @@ where
                 },
             );
 
+            let periodic_vals: Vec<PackedVal<SC>> = periodic_on_quotient
+                .iter()
+                .map(|col_evals| {
+                    let slice: Vec<Val<SC>> = (i_start..i_start + PackedVal::<SC>::WIDTH)
+                        .map(|i| col_evals.get(i).copied().unwrap_or_else(Val::<SC>::default))
+                        .collect();
+                    *PackedVal::<SC>::from_slice(&slice)
+                })
+                .collect();
+
             let accumulator = PackedChallenge::<SC>::ZERO;
             let inner_folder = ProverConstraintFolder {
                 main: main.as_view(),
                 preprocessed: preprocessed.as_ref().map(|m| m.as_view()),
+                periodic_values: &periodic_vals,
                 public_values,
                 is_first_row,
                 is_last_row,

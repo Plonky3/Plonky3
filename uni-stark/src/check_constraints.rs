@@ -1,4 +1,4 @@
-use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues};
+use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, PeriodicAirBuilder};
 use p3_field::Field;
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -50,11 +50,18 @@ where
             None
         };
 
+        let periodic_values: alloc::vec::Vec<F> = air
+            .periodic_columns()
+            .iter()
+            .map(|col| col[row_index % col.len()])
+            .collect();
+
         let mut builder = DebugConstraintBuilder {
             row_index,
             main,
             preprocessed: preprocessed_pair,
             public_values,
+            periodic_values: &periodic_values,
             is_first_row: F::from_bool(row_index == 0),
             is_last_row: F::from_bool(row_index == height - 1),
             is_transition: F::from_bool(row_index != height - 1),
@@ -78,6 +85,8 @@ pub struct DebugConstraintBuilder<'a, F: Field> {
     preprocessed: Option<ViewPair<'a, F>>,
     /// The public values provided for constraint validation (e.g. inputs or outputs).
     public_values: &'a [F],
+    /// Periodic column values at the current row.
+    periodic_values: &'a [F],
     /// A flag indicating whether this is the first row.
     is_first_row: F,
     /// A flag indicating whether this is the last row.
@@ -146,6 +155,14 @@ impl<F: Field> AirBuilderWithPublicValues for DebugConstraintBuilder<'_, F> {
 
     fn public_values(&self) -> &[Self::F] {
         self.public_values
+    }
+}
+
+impl<F: Field> PeriodicAirBuilder for DebugConstraintBuilder<'_, F> {
+    type PeriodicVar = F;
+
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.periodic_values
     }
 }
 

@@ -4,8 +4,8 @@ use core::marker::PhantomData;
 use core::slice::from_ref;
 
 use p3_air::{
-    Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, PermutationAirBuilder,
-    SymbolicAirBuilder, SymbolicExpression,
+    Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, PeriodicAirBuilder,
+    PermutationAirBuilder, SymbolicAirBuilder, SymbolicExpression,
 };
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
@@ -181,6 +181,74 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
                 .when_transition()
                 .assert_eq(a + b, next[s + 1].clone());
         }
+    }
+}
+
+#[derive(Clone)]
+struct PeriodicAir<F> {
+    periodic: Vec<Vec<F>>,
+}
+
+impl<F: Field + PrimeCharacteristicRing> Default for PeriodicAir<F> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<F: Field> PeriodicAir<F> {
+    fn new() -> Self
+    where
+        F: PrimeCharacteristicRing,
+    {
+        Self {
+            periodic: vec![
+                vec![
+                    F::from_u64(1),
+                    F::from_u64(2),
+                    F::from_u64(3),
+                    F::from_u64(4),
+                ],
+                vec![F::from_u64(10), F::from_u64(20)],
+            ],
+        }
+    }
+
+    fn valid_trace(&self, rows: usize) -> RowMajorMatrix<F> {
+        let periodic = self.periodic_columns();
+        let mut values = F::zero_vec(rows * 2);
+        for (i, row) in values.chunks_exact_mut(2).enumerate() {
+            row[0] = periodic[0][i % periodic[0].len()];
+            row[1] = periodic[1][i % periodic[1].len()];
+        }
+        RowMajorMatrix::new(values, 2)
+    }
+}
+
+impl<F: Field> BaseAir<F> for PeriodicAir<F> {
+    fn width(&self) -> usize {
+        2
+    }
+
+    fn num_periodic_columns(&self) -> usize {
+        self.periodic.len()
+    }
+
+    fn periodic_columns(&self) -> &[Vec<F>] {
+        &self.periodic
+    }
+}
+
+impl<AB: AirBuilder + PeriodicAirBuilder> Air<AB> for PeriodicAir<AB::F>
+where
+    AB::F: Field,
+{
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let local = main.row_slice(0).expect("matrix has rows");
+        let p0 = builder.periodic_values()[0].into();
+        let p1 = builder.periodic_values()[1].into();
+        builder.assert_eq(local[0].clone(), p0);
+        builder.assert_eq(local[1].clone(), p1);
     }
 }
 
@@ -766,6 +834,23 @@ fn test_two_instances() -> Result<(), impl Debug> {
     let airs = vec![air_fib, air_mul];
     let pvs = vec![fib_pis, mul_pis];
     verify_batch(&config, &airs, &proof, &pvs, common)
+}
+
+#[test]
+fn test_periodic_air() -> Result<(), impl Debug> {
+    let config = make_config(42);
+    let air = PeriodicAir::<Val>::new();
+    let trace = air.valid_trace(1 << 6);
+    let instances = vec![StarkInstance {
+        air: &air,
+        trace,
+        public_values: vec![],
+        lookups: vec![],
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data);
+    verify_batch(&config, &[air], &proof, &[vec![]], common)
 }
 
 #[test]

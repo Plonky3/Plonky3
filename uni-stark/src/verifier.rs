@@ -7,7 +7,7 @@ use itertools::Itertools;
 use p3_air::lookup::LookupError;
 use p3_air::{Air, SymbolicAirBuilder};
 use p3_challenger::{CanObserve, FieldChallenger};
-use p3_commit::{Pcs, PolynomialSpace};
+use p3_commit::{EvaluatePolynomialAtPoint, Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
@@ -88,6 +88,7 @@ where
     SC: StarkGenericConfig,
     A: for<'a> Air<VerifierConstraintFolder<'a, SC>>,
     PcsErr: core::fmt::Debug,
+    Domain<SC>: EvaluatePolynomialAtPoint,
 {
     let sels = trace_domain.selectors_at_point(zeta);
 
@@ -104,9 +105,16 @@ where
         _ => None,
     };
 
+    let periodic_cols = air.periodic_columns();
+    let periodic_values: Vec<SC::Challenge> = periodic_cols
+        .iter()
+        .map(|col| trace_domain.evaluate_periodic_column_at(col, zeta))
+        .collect();
+
     let mut folder = VerifierConstraintFolder {
         main,
         preprocessed,
+        periodic_values: &periodic_values,
         public_values,
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,
@@ -195,6 +203,7 @@ pub fn verify<SC, A>(
 where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
+    Domain<SC>: EvaluatePolynomialAtPoint,
 {
     verify_with_preprocessed(config, air, proof, public_values, None)
 }
@@ -210,6 +219,7 @@ pub fn verify_with_preprocessed<SC, A>(
 where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
+    Domain<SC>: EvaluatePolynomialAtPoint,
 {
     let Proof {
         commitments,
