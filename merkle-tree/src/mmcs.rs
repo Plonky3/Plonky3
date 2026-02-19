@@ -159,7 +159,7 @@ where
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
 {
     type ProverData<M> = MerkleTree<P::Value, PW::Value, M, DIGEST_ELEMS>;
-    type Commitment = MerkleCap<P::Value, PW::Value, DIGEST_ELEMS>;
+    type Commitment = MerkleCap<P::Value, [PW::Value; DIGEST_ELEMS]>;
     type Proof = Vec<[PW::Value; DIGEST_ELEMS]>;
     type Error = MerkleTreeError;
 
@@ -383,7 +383,7 @@ where
         // After processing the proof, `index` has been shifted by the proof length.
         // This index now points into the cap layer.
         let cap_index = index;
-        if cap_index < commit.len() && commit[cap_index] == digest {
+        if cap_index < commit.num_roots() && commit[cap_index] == digest {
             Ok(())
         } else {
             Err(CapMismatch)
@@ -788,7 +788,7 @@ mod tests {
             let (commit, data) = mmcs.commit(vec![mat.clone()]);
 
             // Cap should have 2^cap_height elements
-            assert_eq!(commit.len(), 1 << cap_height);
+            assert_eq!(commit.num_roots(), 1 << cap_height);
 
             // Proof should have (log2(32) - cap_height) = 5 - cap_height elements
             let opening = mmcs.open_batch(17, &data);
@@ -818,7 +818,7 @@ mod tests {
 
         let (commit, data) = mmcs.commit(vec![mat]);
 
-        assert_eq!(commit.len(), 4);
+        assert_eq!(commit.num_roots(), 4);
 
         // Test various indices that map to different cap entries
         for index in [0, 15, 16, 31, 32, 47, 48, 63] {
@@ -878,7 +878,7 @@ mod tests {
         ];
 
         let (commit, data) = mmcs.commit(vec![mat_large, mat_small]);
-        assert_eq!(commit.len(), 4);
+        assert_eq!(commit.num_roots(), 4);
 
         // Verify various indices
         for index in [0, 7, 8, 15, 32, 63] {
@@ -903,7 +903,7 @@ mod tests {
         let (cap, prover_data) = mmcs.commit(vec![mat]);
 
         // Cap should have 4 entries (shortened to height 2)
-        assert_eq!(cap.len(), 4);
+        assert_eq!(cap.num_roots(), 4);
         assert_eq!(cap.height(), 2);
 
         // Verify that opening and verification still work
@@ -930,7 +930,7 @@ mod tests {
         let (cap, prover_data) = mmcs.commit(vec![mat]);
 
         // Cap should have 1 entry (shortened to height 0 = root)
-        assert_eq!(cap.len(), 1);
+        assert_eq!(cap.num_roots(), 1);
         assert_eq!(cap.height(), 0);
 
         // Proof length should be 0 (we're already at the cap)
@@ -963,7 +963,7 @@ mod tests {
         let (cap, prover_data) = mmcs.commit(vec![mat]);
 
         // Cap should have 8 entries (all leaf hashes)
-        assert_eq!(cap.len(), 8);
+        assert_eq!(cap.num_roots(), 8);
         assert_eq!(cap.height(), 3);
 
         // Proof length should be 0 since cap is at leaf level
@@ -998,7 +998,7 @@ mod tests {
         let (cap, prover_data) = mmcs.commit(vec![mat]);
 
         // Cap should have 16 entries
-        assert_eq!(cap.len(), 16);
+        assert_eq!(cap.num_roots(), 16);
         assert_eq!(cap.height(), 4);
 
         // Proof length should be 0
@@ -1021,7 +1021,7 @@ mod tests {
         let mat2 = RowMajorMatrix::<F>::rand(&mut rng, 16, 4);
         let (cap2, prover_data2) = mmcs2.commit(vec![mat2]);
 
-        assert_eq!(cap2.len(), 8);
+        assert_eq!(cap2.num_roots(), 8);
         assert_eq!(cap2.height(), 3);
 
         let (opening2, proof2) = mmcs2.open_batch(0, &prover_data2).unpack();

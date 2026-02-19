@@ -87,11 +87,11 @@ impl<F: PrimeField32, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<F, 
     }
 }
 
-impl<F: PrimeField32, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleCap<F, u8, N>>
+impl<F: PrimeField32, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleCap<F, [u8; N]>>
     for SerializingChallenger32<F, Inner>
 {
-    fn observe(&mut self, cap: &MerkleCap<F, u8, N>) {
-        for digest in cap.as_slice() {
+    fn observe(&mut self, cap: &MerkleCap<F, [u8; N]>) {
+        for digest in cap.roots() {
             for value in digest {
                 self.inner.observe(*value);
             }
@@ -99,19 +99,19 @@ impl<F: PrimeField32, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleC
     }
 }
 
-impl<F: PrimeField32, const N: usize, Inner: CanObserve<u8>> CanObserve<MerkleCap<F, u8, N>>
+impl<F: PrimeField32, const N: usize, Inner: CanObserve<u8>> CanObserve<MerkleCap<F, [u8; N]>>
     for SerializingChallenger32<F, Inner>
 {
-    fn observe(&mut self, cap: MerkleCap<F, u8, N>) {
+    fn observe(&mut self, cap: MerkleCap<F, [u8; N]>) {
         self.observe(&cap);
     }
 }
 
-impl<F: PrimeField32, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleCap<F, u64, N>>
+impl<F: PrimeField32, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleCap<F, [u64; N]>>
     for SerializingChallenger32<F, Inner>
 {
-    fn observe(&mut self, cap: &MerkleCap<F, u64, N>) {
-        for digest in cap.as_slice() {
+    fn observe(&mut self, cap: &MerkleCap<F, [u64; N]>) {
+        for digest in cap.roots() {
             for value in digest {
                 self.inner.observe_slice(&value.to_le_bytes());
             }
@@ -119,10 +119,10 @@ impl<F: PrimeField32, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleC
     }
 }
 
-impl<F: PrimeField32, const N: usize, Inner: CanObserve<u8>> CanObserve<MerkleCap<F, u64, N>>
+impl<F: PrimeField32, const N: usize, Inner: CanObserve<u8>> CanObserve<MerkleCap<F, [u64; N]>>
     for SerializingChallenger32<F, Inner>
 {
-    fn observe(&mut self, cap: MerkleCap<F, u64, N>) {
+    fn observe(&mut self, cap: MerkleCap<F, [u64; N]>) {
         self.observe(&cap);
     }
 }
@@ -244,11 +244,11 @@ impl<F: PrimeField64, const N: usize, Inner: CanObserve<u8>> CanObserve<Hash<F, 
     }
 }
 
-impl<F: PrimeField64, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleCap<F, u8, N>>
+impl<F: PrimeField64, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleCap<F, [u8; N]>>
     for SerializingChallenger64<F, Inner>
 {
-    fn observe(&mut self, cap: &MerkleCap<F, u8, N>) {
-        for digest in cap.as_slice() {
+    fn observe(&mut self, cap: &MerkleCap<F, [u8; N]>) {
+        for digest in cap.roots() {
             for value in digest {
                 self.inner.observe(*value);
             }
@@ -256,19 +256,19 @@ impl<F: PrimeField64, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleC
     }
 }
 
-impl<F: PrimeField64, const N: usize, Inner: CanObserve<u8>> CanObserve<MerkleCap<F, u8, N>>
+impl<F: PrimeField64, const N: usize, Inner: CanObserve<u8>> CanObserve<MerkleCap<F, [u8; N]>>
     for SerializingChallenger64<F, Inner>
 {
-    fn observe(&mut self, cap: MerkleCap<F, u8, N>) {
+    fn observe(&mut self, cap: MerkleCap<F, [u8; N]>) {
         self.observe(&cap);
     }
 }
 
-impl<F: PrimeField64, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleCap<F, u64, N>>
+impl<F: PrimeField64, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleCap<F, [u64; N]>>
     for SerializingChallenger64<F, Inner>
 {
-    fn observe(&mut self, cap: &MerkleCap<F, u64, N>) {
-        for digest in cap.as_slice() {
+    fn observe(&mut self, cap: &MerkleCap<F, [u64; N]>) {
+        for digest in cap.roots() {
             for value in digest {
                 self.inner.observe_slice(&value.to_le_bytes());
             }
@@ -276,10 +276,10 @@ impl<F: PrimeField64, const N: usize, Inner: CanObserve<u8>> CanObserve<&MerkleC
     }
 }
 
-impl<F: PrimeField64, const N: usize, Inner: CanObserve<u8>> CanObserve<MerkleCap<F, u64, N>>
+impl<F: PrimeField64, const N: usize, Inner: CanObserve<u8>> CanObserve<MerkleCap<F, [u64; N]>>
     for SerializingChallenger64<F, Inner>
 {
-    fn observe(&mut self, cap: MerkleCap<F, u64, N>) {
+    fn observe(&mut self, cap: MerkleCap<F, [u64; N]>) {
         self.observe(&cap);
     }
 }

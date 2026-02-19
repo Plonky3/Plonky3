@@ -133,14 +133,14 @@ where
 }
 
 impl<F, PF, const N: usize, P, const WIDTH: usize, const RATE: usize>
-    CanObserve<&MerkleCap<F, PF, N>> for MultiField32Challenger<F, PF, P, WIDTH, RATE>
+    CanObserve<&MerkleCap<F, [PF; N]>> for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
     F: PrimeField32,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
-    fn observe(&mut self, cap: &MerkleCap<F, PF, N>) {
-        for digest in cap.as_slice() {
+    fn observe(&mut self, cap: &MerkleCap<F, [PF; N]>) {
+        for digest in cap.roots() {
             for pf_val in digest {
                 let f_vals: Vec<F> = split_32(*pf_val, self.num_f_elms);
                 for f_val in f_vals {
@@ -152,13 +152,13 @@ where
 }
 
 impl<F, PF, const N: usize, P, const WIDTH: usize, const RATE: usize>
-    CanObserve<MerkleCap<F, PF, N>> for MultiField32Challenger<F, PF, P, WIDTH, RATE>
+    CanObserve<MerkleCap<F, [PF; N]>> for MultiField32Challenger<F, PF, P, WIDTH, RATE>
 where
     F: PrimeField32,
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
-    fn observe(&mut self, cap: MerkleCap<F, PF, N>) {
+    fn observe(&mut self, cap: MerkleCap<F, [PF; N]>) {
         self.observe(&cap);
     }
 }

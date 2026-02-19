@@ -168,7 +168,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
     /// # Panics
     /// Panics if `cap_height` exceeds the tree depth.
     #[must_use]
-    pub fn cap(&self, cap_height: usize) -> MerkleCap<F, W, DIGEST_ELEMS>
+    pub fn cap(&self, cap_height: usize) -> MerkleCap<F, [W; DIGEST_ELEMS]>
     where
         W: Clone,
     {

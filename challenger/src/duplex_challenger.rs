@@ -146,14 +146,14 @@ where
     }
 }
 
-impl<F, P, const N: usize, const WIDTH: usize, const RATE: usize> CanObserve<&MerkleCap<F, F, N>>
+impl<F, P, const N: usize, const WIDTH: usize, const RATE: usize> CanObserve<&MerkleCap<F, [F; N]>>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
     F: Copy,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
-    fn observe(&mut self, cap: &MerkleCap<F, F, N>) {
-        for digest in cap.as_slice() {
+    fn observe(&mut self, cap: &MerkleCap<F, [F; N]>) {
+        for digest in cap.roots() {
             for value in digest {
                 self.observe(*value);
             }
@@ -161,13 +161,13 @@ where
     }
 }
 
-impl<F, P, const N: usize, const WIDTH: usize, const RATE: usize> CanObserve<MerkleCap<F, F, N>>
+impl<F, P, const N: usize, const WIDTH: usize, const RATE: usize> CanObserve<MerkleCap<F, [F; N]>>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
     F: Copy,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
-    fn observe(&mut self, cap: MerkleCap<F, F, N>) {
+    fn observe(&mut self, cap: MerkleCap<F, [F; N]>) {
         self.observe(&cap);
     }
 }

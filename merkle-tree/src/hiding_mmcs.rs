@@ -85,7 +85,7 @@ where
 {
     type ProverData<M> =
         MerkleTree<P::Value, PW::Value, HorizontalPair<M, RowMajorMatrix<P::Value>>, DIGEST_ELEMS>;
-    type Commitment = MerkleCap<P::Value, PW::Value, DIGEST_ELEMS>;
+    type Commitment = MerkleCap<P::Value, [PW::Value; DIGEST_ELEMS]>;
     /// The first item is salts; the second is the usual Merkle proof (sibling digests).
     type Proof = (Vec<Vec<P::Value>>, Vec<[PW::Value; DIGEST_ELEMS]>);
     type Error = MerkleTreeError;
