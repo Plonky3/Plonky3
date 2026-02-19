@@ -16,6 +16,10 @@ pub trait BaseAir<F>: Sync {
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         None
     }
+    /// Return the number of periodic columns. Override when implementing [`AirWithPeriodicColumns`].
+    fn num_periodic_columns(&self) -> usize {
+        0
+    }
 }
 
 /// An extension of `BaseAir` that includes support for public values.
@@ -54,11 +58,6 @@ pub trait AirWithPeriodicColumns<F>: BaseAir<F> {
     /// Each inner `Vec<F>` represents one periodic column. Its length is the period of
     /// that column, and the entries are the evaluations over a subgroup of that order.
     fn periodic_columns(&self) -> &[Vec<F>];
-
-    /// Return the number of periodic columns.
-    fn num_periodic_columns(&self) -> usize {
-        self.periodic_columns().len()
-    }
 
     /// Return the period of the column at index `col_idx`, if it exists.
     fn get_column_period(&self, col_idx: usize) -> Option<usize> {

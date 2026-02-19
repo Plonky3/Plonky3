@@ -72,11 +72,12 @@ where
         },
     );
 
-    // Compute the constraint polynomials as vectors of symbolic expressions.
-    // TODO(periodic-columns): pass air.num_periodic_columns() once the prover
-    // evaluates periodic column polynomials during constraint checking.
-    let symbolic_constraints =
-        get_symbolic_constraints(air, preprocessed_width, public_values.len(), 0);
+    let symbolic_constraints = get_symbolic_constraints(
+        air,
+        preprocessed_width,
+        public_values.len(),
+        air.num_periodic_columns(),
+    );
 
     // Count the number of constraints that we have.
     let constraint_count = symbolic_constraints.len();

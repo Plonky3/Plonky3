@@ -98,9 +98,7 @@ where
         num_public_values,
         num_aux_cols,
         num_challenges,
-        // TODO(periodic-columns): pass actual num_periodic_columns once the prover
-        // evaluates periodic column polynomials during constraint checking.
-        0,
+        air.num_periodic_columns(),
     );
 
     // Evaluate AIR and lookup constraints.
