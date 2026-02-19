@@ -517,6 +517,60 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
             (!sfx.is_empty()).then(|| P::from_fn(|i| sfx.get(i).cloned().unwrap_or_default())),
         )
     }
+
+    #[inline]
+    fn vertically_packed_row<P>(&self, r: usize) -> impl Iterator<Item = P>
+    where
+        T: Copy,
+        P: PackedValue<Value = T>,
+    {
+        let h = self.height();
+        let w = self.width;
+        let values = self.values.borrow();
+        (0..w).map(move |c| P::from_fn(|i| values[((r + i) % h) * w + c]))
+    }
+
+    #[inline]
+    fn vertically_packed_row_pair<P>(&self, r: usize, step: usize) -> Vec<P>
+    where
+        T: Copy,
+        P: PackedValue<Value = T>,
+    {
+        let h = self.height();
+        let w = self.width;
+        let values = self.values.borrow();
+
+        // Safety: All indices are valid because:
+        // - (r + i) % h < h for any i, so row index is always valid
+        // - c < w, so column index is always valid
+        // - Therefore ((r + i) % h) * w + c < h * w = values.len()
+        debug_assert!(values.len() >= h * w);
+
+        let mut out = Vec::with_capacity(w * 2);
+        if P::WIDTH == 1 {
+            // WIDTH=1 optimization: directly slice into the contiguous buffer
+            let r0 = r % h;
+            let row0 = &values[r0 * w..(r0 + 1) * w];
+            out.extend(row0.iter().copied().map(P::broadcast));
+
+            let r1 = (r + step) % h;
+            let row1 = &values[r1 * w..(r1 + 1) * w];
+            out.extend(row1.iter().copied().map(P::broadcast));
+        } else {
+            // WIDTH > 1: push loop is faster than extend.
+            for c in 0..w {
+                out.push(P::from_fn(|i| unsafe {
+                    *values.get_unchecked(((r + i) % h) * w + c)
+                }));
+            }
+            for c in 0..w {
+                out.push(P::from_fn(|i| unsafe {
+                    *values.get_unchecked(((r + step + i) % h) * w + c)
+                }));
+            }
+        }
+        out
+    }
 }
 
 impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {

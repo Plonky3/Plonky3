@@ -57,3 +57,6 @@ pub mod iter {
     #[cfg(feature = "parallel")]
     pub use rayon::iter::{repeat, repeat_n};
 }
+
+pub mod either;
+pub use either::Either;
