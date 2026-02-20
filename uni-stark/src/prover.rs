@@ -202,8 +202,21 @@ where
     // This only works if the trace domain is `gH'` and the quotient domain is `gK` for some subgroup `K` contained in `H'`.
     // TODO: Make this explicit in `get_evaluations_on_domain` or otherwise fix this.
     let trace_on_quotient_domain = pcs.get_evaluations_on_domain(&trace_data, 0, quotient_domain);
-    let preprocessed_on_quotient_domain = preprocessed_data_ref
-        .map(|data| pcs.get_evaluations_on_domain_no_random(data, 0, quotient_domain));
+
+    // Use cached preprocessed evaluations from setup if available, falling back to
+    // live PCS extraction only when no PreprocessedProverData was provided.
+    let preprocessed_quotient_ref = preprocessed.map(|pp| {
+        assert_eq!(
+            pp.quotient_domain_evals.height(),
+            quotient_domain.size(),
+            "Cached preprocessed quotient domain size ({}) does not match the current \
+             quotient domain size ({}). Ensure setup_preprocessed was called with matching \
+             num_public_values.",
+            pp.quotient_domain_evals.height(),
+            quotient_domain.size(),
+        );
+        &pp.quotient_domain_evals
+    });
 
     // Compute the quotient polynomial `Q(x)` by evaluating
     //          `C(T_1(x), ..., T_w(x), T_1(hx), ..., T_w(hx), selectors(x)) / Z_H(x)`
@@ -215,7 +228,7 @@ where
         trace_domain,
         quotient_domain,
         &trace_on_quotient_domain,
-        preprocessed_on_quotient_domain.as_ref(),
+        preprocessed_quotient_ref,
         alpha,
         constraint_count,
     );
@@ -370,13 +383,13 @@ where
 #[instrument(skip_all, level = "debug")]
 // TODO: Group some arguments to remove the `allow`?
 #[allow(clippy::too_many_arguments)]
-pub fn quotient_values<SC, A, Mat>(
+pub fn quotient_values<SC, A, Mat, PreMat>(
     air: &A,
     public_values: &[Val<SC>],
     trace_domain: Domain<SC>,
     quotient_domain: Domain<SC>,
     trace_on_quotient_domain: &Mat,
-    preprocessed_on_quotient_domain: Option<&Mat>,
+    preprocessed_on_quotient_domain: Option<&PreMat>,
     alpha: SC::Challenge,
     constraint_count: usize,
 ) -> Vec<SC::Challenge>
@@ -384,6 +397,7 @@ where
     SC: StarkGenericConfig,
     A: for<'a> Air<ProverConstraintFolder<'a, SC>>,
     Mat: Matrix<Val<SC>> + Sync,
+    PreMat: Matrix<Val<SC>> + Sync,
 {
     let quotient_size = quotient_domain.size();
     let width = trace_on_quotient_domain.width();

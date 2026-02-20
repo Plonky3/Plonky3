@@ -1,10 +1,14 @@
 use p3_air::Air;
-use p3_commit::Pcs;
+use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::Field;
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use tracing::debug_span;
 
-use crate::{ProverConstraintFolder, StarkGenericConfig, SymbolicAirBuilder, Val};
+use crate::{
+    ProverConstraintFolder, StarkGenericConfig, SymbolicAirBuilder, Val,
+    get_log_num_quotient_chunks,
+};
 
 /// Prover-side reusable data for preprocessed columns.
 ///
@@ -22,6 +26,9 @@ pub struct PreprocessedProverData<SC: StarkGenericConfig> {
     pub commitment: <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Commitment,
     /// [`Pcs`] prover data for the preprocessed trace.
     pub prover_data: <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::ProverData,
+    /// Preprocessed evaluations on the quotient domain, materialized at setup time
+    /// to avoid recomputing the PCS view on every proof.
+    pub quotient_domain_evals: RowMajorMatrix<Val<SC>>,
 }
 
 /// Verifier-side reusable data for preprocessed columns.
@@ -45,10 +52,14 @@ pub struct PreprocessedVerifierKey<SC: StarkGenericConfig> {
 /// This can be called once per [`Air`]/degree configuration to obtain reusable
 /// prover data for preprocessed columns. Returns `None` if the [`Air`] does not
 /// define any preprocessed columns.
+///
+/// `num_public_values` is needed to compute the constraint degree, which determines
+/// the quotient domain on which preprocessed evaluations are precomputed and cached.
 pub fn setup_preprocessed<SC, A>(
     config: &SC,
     air: &A,
     degree_bits: usize,
+    num_public_values: usize,
 ) -> Option<(PreprocessedProverData<SC>, PreprocessedVerifierKey<SC>)>
 where
     SC: StarkGenericConfig,
@@ -79,11 +90,24 @@ where
         .in_scope(|| pcs.commit_preprocessing([(trace_domain, preprocessed)]));
 
     let degree_bits = degree_bits + is_zk;
+
+    let log_num_quotient_chunks =
+        get_log_num_quotient_chunks::<Val<SC>, A>(air, width, num_public_values, is_zk);
+    let quotient_domain =
+        trace_domain.create_disjoint_domain(1 << (degree_bits + log_num_quotient_chunks));
+
+    let quotient_domain_evals = debug_span!("materialize preprocessed on quotient domain")
+        .in_scope(|| {
+            pcs.get_evaluations_on_domain_no_random(&prover_data, 0, quotient_domain)
+                .to_row_major_matrix()
+        });
+
     let prover_data = PreprocessedProverData {
         width,
         degree_bits,
         commitment: commitment.clone(),
         prover_data,
+        quotient_domain_evals,
     };
     let vk = PreprocessedVerifierKey {
         width,

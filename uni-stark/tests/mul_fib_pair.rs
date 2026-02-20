@@ -228,7 +228,7 @@ fn test_mul_fib_pair() {
     let air = MulFibPAir::new(num_rows);
     let degree_bits = 10; // log2(1024)
     let (preprocessed_prover_data, preprocessed_vk) =
-        setup_preprocessed::<MyConfig, _>(&config, &air, degree_bits).unwrap();
+        setup_preprocessed::<MyConfig, _>(&config, &air, degree_bits, 0).unwrap();
 
     let proof = prove_with_preprocessed(&config, &air, trace, &[], Some(&preprocessed_prover_data));
 
@@ -245,7 +245,7 @@ fn test_mul_fib_pair_zk() {
     let air = MulFibPAir::new(num_rows);
     let degree_bits = 10; // log2(1024)
     let (preprocessed_prover_data, preprocessed_vk) =
-        setup_preprocessed::<MyHidingConfig, _>(&config, &air, degree_bits).unwrap();
+        setup_preprocessed::<MyHidingConfig, _>(&config, &air, degree_bits, 0).unwrap();
 
     let proof = prove_with_preprocessed(&config, &air, trace, &[], Some(&preprocessed_prover_data));
 
@@ -263,14 +263,14 @@ fn test_tampered_preprocessed_fails() {
 
     // Prover uses the correct AIR for preprocessed setup.
     let (preprocessed_prover_data, _) =
-        setup_preprocessed::<MyConfig, _>(&config, &air, degree_bits).unwrap();
+        setup_preprocessed::<MyConfig, _>(&config, &air, degree_bits, 0).unwrap();
     let proof = prove_with_preprocessed(&config, &air, trace, &[], Some(&preprocessed_prover_data));
 
     // Verifier uses a *tampered* AIR to derive the preprocessed commitment, which should
     // not match the one used in the proof.
     let tampered_air = MulFibPAir::with_tampered_preprocessed(num_rows, 3);
     let (_, tampered_preprocessed_vk) =
-        setup_preprocessed::<MyConfig, _>(&config, &tampered_air, degree_bits).unwrap();
+        setup_preprocessed::<MyConfig, _>(&config, &tampered_air, degree_bits, 0).unwrap();
 
     let result = verify_with_preprocessed(
         &config,
