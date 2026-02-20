@@ -128,6 +128,7 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
         lagrange_interpolate_at(&xs, &evals, beta)
     }
 
+    #[instrument(skip_all)]
     fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, log_arity: usize, m: M) -> Vec<EF> {
         if log_arity == 1 {
             // Optimized path for arity 2
@@ -157,12 +158,55 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
                 })
                 .collect()
         } else {
-            // General path for higher arity: use Lagrange interpolation
-            let log_height = log2_strict_usize(m.height());
-            m.par_rows()
-                .enumerate()
-                .map(|(i, row)| self.fold_row(i, log_height, log_arity, beta, row))
-                .collect()
+            // Decompose arity-2^k fold into k sequential arity-2 folds.
+            // This way, an arity-2^k fold with a single challenge beta is equivalent to
+            // k arity-2 folds with challenges beta, beta^2, beta^4, ..., beta^{2^{k-1}}.
+            //
+            // For arity 4 with evaluation points {s, -s, si, -si}:
+            //   Step 1 (beta):   fold pairs → g(s^2), g(-s^2) where g = f_e + beta*f_o
+            //   Step 2 (beta^2): fold pair  → g(beta^2) = f(beta)
+
+            let mut data = m.to_row_major_matrix().values;
+
+            let initial_height = data.len() / 2;
+            let g_inv = F::two_adic_generator(log2_strict_usize(initial_height) + 1).inverse();
+            let mut halve_inv_powers = g_inv
+                .shifted_powers(F::ONE.halve())
+                .collect_n(initial_height);
+            reverse_slice_index_bits(&mut halve_inv_powers);
+
+            let two = F::ONE + F::ONE;
+            let mut current_beta = beta;
+            let mut next_data = EF::zero_vec(initial_height);
+
+            for step in 0..log_arity {
+                let current_len = data.len();
+                let height = current_len / 2;
+                // Since j << 1 is always >= j, we never overwrite data we haven't read yet.
+                if step > 0 {
+                    for j in 0..height {
+                        halve_inv_powers[j] = two * halve_inv_powers[j << 1].square();
+                    }
+                }
+                next_data[..height]
+                    .par_iter_mut()
+                    .zip(data.par_chunks_exact(2))
+                    .zip(&halve_inv_powers[..height])
+                    .for_each(|((out, chunk), &halve_inv_power)| {
+                        // chunk is guaranteed to be size 2 by par_chunks_exact
+                        let lo = chunk[0];
+                        let hi = chunk[1];
+
+                        *out = (lo + hi).halve() + (lo - hi) * current_beta * halve_inv_power;
+                    });
+                current_beta = current_beta.square();
+
+                // Swap buffers conceptually (just truncate data and copy back, or ping-pong).
+                data.truncate(height);
+                data.copy_from_slice(&next_data[..height]);
+            }
+
+            data
         }
     }
 }
