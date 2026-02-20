@@ -24,7 +24,8 @@ use p3_commit::{BatchOpening, Mmcs, OpenedValues, Pcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    ExtensionField, PackedFieldExtension, TwoAdicField, batch_multiplicative_inverse, dot_product,
+    ExtensionField, PackedFieldExtension, TwoAdicField, batch_multiplicative_inverse,
+    batch_multiplicative_inverse_scaled, dot_product,
 };
 use p3_interpolation::interpolate_coset_with_precomputation;
 use p3_matrix::Matrix;
@@ -424,9 +425,14 @@ where
             coset_points
         };
 
-        // For each unique opening point z, we will find the largest degree bound
-        // for that point, and precompute 1/(z - X) for the largest subgroup (in bitrev order).
-        let inv_denoms = compute_inverse_denominators(&mats_and_points, &coset);
+        // Precompute inverse denominators: raw 1/(z-x) for the quotient step, and
+        // scaling_factor/(z-x) for interpolation so we can skip the final scale.
+        let (inv_denoms_raw, inv_denoms_scaled) = compute_inverse_denominators(
+            &mats_and_points,
+            &coset,
+            Val::GENERATOR,
+            self.fri.log_blowup,
+        );
 
         // Evaluate coset representations and write openings to the challenger
         let all_opened_values = mats_and_points
@@ -461,16 +467,16 @@ where
                                     "compute opened values with Lagrange interpolation"
                                 )
                                 .in_scope(|| {
-                                    // Get the relevant inverse denominators for this point and use these to
-                                    // interpolate to get the evaluation of each polynomial in the matrix
-                                    // at the desired point.
-                                    let inv_denoms = &inv_denoms.get(&point).unwrap()[..h];
+                                    let log_h = log2_strict_usize(h);
+                                    let inv_denoms =
+                                        inv_denoms_scaled.get(&(point, log_h)).unwrap();
                                     interpolate_coset_with_precomputation(
                                         &low_coset,
                                         Val::GENERATOR,
                                         point,
                                         coset_h,
                                         inv_denoms,
+                                        true,
                                     )
                                 });
 
@@ -572,7 +578,7 @@ where
                         // As inv_denoms is bit reversed, the evaluations over `gH` are exactly
                         // the evaluations over `gK` at the indices `0..mat.height()`.
                         // So zip will truncate to the desired smaller length.
-                        .zip(inv_denoms.get(&point).unwrap().par_iter())
+                        .zip(inv_denoms_raw.get(&(point, log_height)).unwrap().par_iter())
                         // Map the function `Mred(x) -> (Mred(z) - Mred(x))/(z - x)`
                         // across the evaluation vector of `Mred(x)`. Adjust by alpha_pow_offset
                         // as needed.
@@ -638,57 +644,75 @@ where
     }
 }
 
-/// Compute vectors of inverse denominators for each unique opening point.
+/// Compute raw and scaled inverse denominators for each (point, log_height).
 ///
-/// Arguments:
-/// - `mats_and_points` is a list of matrices and for each matrix a list of points. We assume that
-///    the total number of distinct points is very small as several methods contained herein are `O(n^2)`
-///    in the number of points.
-/// - `coset` is the set of points `gH` where `H` a two-adic subgroup such that `|H|` is greater
-///     than or equal to the largest height of any matrix in `mats_and_points`. The values
-///     in `coset` must be in bit-reversed order.
-///
-/// For each point `z`, let `M` be the matrix of largest height which opens at `z`.
-/// let `H_z` be the unique subgroup of order `M.height()`. Compute the vector of
-/// `1/(z - x)` for `x` in `gH_z`.
-///
-/// Return a LinearMap which allows us to recover the computed vectors for each `z`.
+/// Returns two maps:
+/// - **Raw**: `1/(z - x)` for the quotient step (keyed by `(z, log2(mat.height()))`).
+/// - **Scaled**: `scaling_factor/(z - x)` for interpolation with `diff_invs_include_scaling: true`
+///   (keyed by `(z, log2(mat.height() >> log_blowup))`).
 #[instrument(skip_all)]
 fn compute_inverse_denominators<F: TwoAdicField, EF: ExtensionField<F>, M: Matrix<F>>(
     mats_and_points: &[(Vec<M>, &Vec<Vec<EF>>)],
     coset: &[F],
-) -> LinearMap<EF, Vec<EF>> {
-    // For each `z`, find the maximal height of any matrix which we need to
-    // open at `z`.
-    let mut max_log_height_for_point: LinearMap<EF, usize> = LinearMap::new();
+    shift: F,
+    log_blowup: usize,
+) -> (
+    LinearMap<(EF, usize), Vec<EF>>,
+    LinearMap<(EF, usize), Vec<EF>>,
+) {
+    let mut keys_raw = Vec::new();
+    let mut keys_scaled = Vec::new();
+    let mut seen_raw = LinearMap::<(EF, usize), ()>::new();
+    let mut seen_scaled = LinearMap::<(EF, usize), ()>::new();
+
     for (mats, points) in mats_and_points {
         for (mat, points_for_mat) in izip!(mats, *points) {
-            let log_height = log2_strict_usize(mat.height());
+            let log_height_full = log2_strict_usize(mat.height());
+            let h = mat.height() >> log_blowup;
+            let log_height_low = log2_strict_usize(h);
+
             for &z in points_for_mat {
-                if let Some(lh) = max_log_height_for_point.get_mut(&z) {
-                    *lh = core::cmp::max(*lh, log_height);
-                } else {
-                    max_log_height_for_point.insert(z, log_height);
+                let key_full = (z, log_height_full);
+                if seen_raw.get(&key_full).is_none() {
+                    seen_raw.insert(key_full, ());
+                    keys_raw.push(key_full);
+                }
+                let key_low = (z, log_height_low);
+                if seen_scaled.get(&key_low).is_none() {
+                    seen_scaled.insert(key_low, ());
+                    keys_scaled.push(key_low);
                 }
             }
         }
     }
 
-    // Compute the inverse denominators for each point `z`.
-    max_log_height_for_point
+    let raw = keys_raw
         .into_iter()
         .map(|(z, log_height)| {
+            let coset_prefix = &coset[..(1 << log_height)];
+            let diffs: Vec<EF> = coset_prefix.iter().map(|&x| z - x).collect();
+            ((z, log_height), batch_multiplicative_inverse(&diffs))
+        })
+        .collect();
+
+    let scaled = keys_scaled
+        .into_iter()
+        .map(|(z, log_height)| {
+            let coset_prefix = &coset[..(1 << log_height)];
+            let diffs: Vec<EF> = coset_prefix.iter().map(|&x| z - x).collect();
+
+            let point_pow_height = z.exp_power_of_2(log_height);
+            let shift_pow_height = shift.exp_power_of_2(log_height);
+            let vanishing_polynomial = point_pow_height - EF::from(shift_pow_height);
+            let denominator = shift_pow_height.mul_2exp_u64(log_height as u64);
+            let scaling_factor = vanishing_polynomial * EF::from(denominator.inverse());
+
             (
-                z,
-                batch_multiplicative_inverse(
-                    // As coset is stored in bit-reversed order,
-                    // we can just take the first `2^log_height` elements.
-                    &coset[..(1 << log_height)]
-                        .iter()
-                        .map(|&x| z - x)
-                        .collect_vec(),
-                ),
+                (z, log_height),
+                batch_multiplicative_inverse_scaled(&diffs, scaling_factor),
             )
         })
-        .collect()
+        .collect();
+
+    (raw, scaled)
 }

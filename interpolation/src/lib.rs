@@ -8,7 +8,8 @@ use alloc::vec::Vec;
 
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    ExtensionField, TwoAdicField, batch_multiplicative_inverse, scale_slice_in_place_single_core,
+    ExtensionField, TwoAdicField, batch_multiplicative_inverse_scaled,
+    scale_slice_in_place_single_core,
 };
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
@@ -47,11 +48,23 @@ where
         .iter()
         .collect();
 
-    // Compute `1/(z - gh^i)` for each element of the coset.
     let diffs: Vec<_> = coset.par_iter().map(|&g| point - g).collect();
-    let diff_invs = batch_multiplicative_inverse(&diffs);
 
-    interpolate_coset_with_precomputation(coset_evals, shift, point, &coset, &diff_invs)
+    let point_pow_height = point.exp_power_of_2(log_height);
+    let shift_pow_height = shift.exp_power_of_2(log_height);
+    let vanishing_polynomial = point_pow_height - EF::from(shift_pow_height);
+    let denominator = shift_pow_height.mul_2exp_u64(log_height as u64);
+    let scaling_factor = vanishing_polynomial * EF::from(denominator.inverse());
+
+    let scaled_diff_invs = batch_multiplicative_inverse_scaled(&diffs, scaling_factor);
+    interpolate_coset_with_precomputation(
+        coset_evals,
+        shift,
+        point,
+        &coset,
+        &scaled_diff_invs,
+        true,
+    )
 }
 
 /// Given evaluations of a batch of polynomials over the given coset of the
@@ -72,6 +85,7 @@ pub fn interpolate_coset_with_precomputation<F, EF, Mat>(
     point: EF,
     coset: &[F],
     diff_invs: &[EF],
+    diff_invs_scaled: bool,
 ) -> Vec<EF>
 where
     F: TwoAdicField,
@@ -98,31 +112,23 @@ where
     // extension field). We could also remove the .inverse() in scale_vec.
 
     let height = coset_evals.height();
-    let log_height = log2_strict_usize(height);
+    let _log_height = log2_strict_usize(height);
 
-    // Compute `gh^i/(z - gh^i)` for each i.
     let col_scale: Vec<_> = coset
         .par_iter()
         .zip(diff_invs)
         .map(|(&sg, &diff_inv)| diff_inv * sg)
         .collect();
 
-    let point_pow_height = point.exp_power_of_2(log_height);
-    let shift_pow_height = shift.exp_power_of_2(log_height);
-
-    // Compute the vanishing polynomial of the coset: `Z_{sH}(z) = z^N - g^N`.
-    let vanishing_polynomial = point_pow_height - shift_pow_height;
-
-    // Compute N * g^N
-    let denominator = shift_pow_height.mul_2exp_u64(log_height as u64);
-
-    // Scaling factor s = Z_{sH}(z)/(N * g^N)
-    let scaling_factor = vanishing_polynomial * denominator.inverse();
-
-    // For each column polynomial `f_j`, compute `\sum_i h^i/(gh^i - z) * f_j(gh^i)`,
-    // then scale by s.
     let mut evals = coset_evals.columnwise_dot_product(&col_scale);
-    scale_slice_in_place_single_core(&mut evals, scaling_factor);
+    if !diff_invs_scaled {
+        let point_pow_height = point.exp_power_of_2(_log_height);
+        let shift_pow_height = shift.exp_power_of_2(_log_height);
+        let vanishing_polynomial = point_pow_height - EF::from(shift_pow_height);
+        let denominator = shift_pow_height.mul_2exp_u64(_log_height as u64);
+        let scaling_factor = vanishing_polynomial * EF::from(denominator.inverse());
+        scale_slice_in_place_single_core(&mut evals, scaling_factor);
+    }
     evals
 }
 
@@ -176,7 +182,7 @@ mod tests {
 
         let denom = batch_multiplicative_inverse(&denom);
         let result =
-            interpolate_coset_with_precomputation(&evals_mat, shift, point, &coset, &denom);
+            interpolate_coset_with_precomputation(&evals_mat, shift, point, &coset, &denom, false);
         assert_eq!(result, vec![F::from_u16(10203)]);
     }
 
