@@ -596,15 +596,10 @@ where
         RowMajorMatrixView::new_row(preprocessed_next),
     );
 
-    let trace_size = trace_domain.size();
     let periodic_cols = air.periodic_columns();
     let periodic_values: Vec<SC::Challenge> = periodic_cols
         .iter()
-        .map(|col| {
-            let period = col.len();
-            let evals: Vec<Val<SC>> = (0..trace_size).map(|i| col[i % period]).collect();
-            trace_domain.evaluate_polynomial_at(&evals, *zeta)
-        })
+        .map(|col| trace_domain.evaluate_periodic_column_at(col, *zeta))
         .collect();
 
     let inner_folder = VerifierConstraintFolder {

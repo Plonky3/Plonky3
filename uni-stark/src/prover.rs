@@ -420,7 +420,6 @@ where
         })
         .collect();
 
-    let trace_size = trace_domain.size();
     let periodic_cols = air.periodic_columns();
     let periodic_on_quotient: Vec<Vec<Val<SC>>> = if periodic_cols.is_empty() {
         vec![]
@@ -440,11 +439,9 @@ where
         periodic_cols
             .iter()
             .map(|col| {
-                let period = col.len();
-                let evals: Vec<Val<SC>> = (0..trace_size).map(|i| col[i % period]).collect();
                 quotient_points
                     .iter()
-                    .map(|&pt| trace_domain.evaluate_polynomial_at(&evals, pt))
+                    .map(|&pt| trace_domain.evaluate_periodic_column_at(col, pt))
                     .collect()
             })
             .collect()

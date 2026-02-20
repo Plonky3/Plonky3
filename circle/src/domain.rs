@@ -10,6 +10,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::instrument;
 
+use crate::cfft::CircleEvaluations;
 use crate::point::Point;
 
 /// A twin-coset of the circle group on F. It has a power-of-two size and an arbitrary shift.
@@ -249,33 +250,10 @@ impl<F: ComplexExtendable> EvaluatePolynomialAtPoint for CircleDomain<F> {
             "evaluate_polynomial_at requires standard position"
         );
         assert_eq!(evals.len(), self.size());
-        let points: Vec<F> = self
-            .points()
-            .map(|p| p.to_projective_line().unwrap())
-            .collect();
-        let diffs: Vec<Ext> = points.iter().map(|&x| point - Ext::from(x)).collect();
-        let diff_invs = batch_multiplicative_inverse(&diffs);
-        let weights: Vec<F> = (0..self.size())
-            .map(|i| {
-                (0..self.size())
-                    .filter(|&j| j != i)
-                    .map(|j| points[i] - points[j])
-                    .product::<F>()
-                    .inverse()
-            })
-            .collect();
-        let numer: Ext = evals
-            .iter()
-            .zip(&diff_invs)
-            .zip(&weights)
-            .map(|((e, di), w)| Ext::from(*e) * *di * Ext::from(*w))
-            .sum();
-        let denom: Ext = diff_invs
-            .iter()
-            .zip(&weights)
-            .map(|(di, w)| *di * Ext::from(*w))
-            .sum();
-        numer * denom.inverse()
+        let values = RowMajorMatrix::new(evals.to_vec(), 1);
+        let circle_evals = CircleEvaluations::from_natural_order(*self, values);
+        let circle_point = Point::from_projective_line(point);
+        circle_evals.evaluate_at_point(circle_point)[0]
     }
 }
 
