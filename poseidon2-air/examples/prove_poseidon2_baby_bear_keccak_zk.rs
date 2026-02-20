@@ -73,7 +73,7 @@ fn main() -> Result<(), impl Debug> {
     >;
     let mut rng = SmallRng::seed_from_u64(1);
     let constants = RoundConstants::from_rng(&mut rng);
-    let val_mmcs = ValMmcs::new(field_hash, compress, rng);
+    let val_mmcs = ValMmcs::new(field_hash, compress, 0, rng);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());

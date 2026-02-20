@@ -173,7 +173,7 @@ mod babybear_fri_pcs {
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm.clone());
 
-        let val_mmcs = ValMmcs::new(hash, compress);
+        let val_mmcs = ValMmcs::new(hash, compress, 0);
         let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
         let fri_params = FriParameters {
@@ -195,7 +195,7 @@ mod babybear_fri_pcs {
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm.clone());
 
-        let val_mmcs = ValMmcs::new(hash, compress);
+        let val_mmcs = ValMmcs::new(hash, compress, 0);
         let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
 
         let fri_params = FriParameters {
@@ -254,7 +254,7 @@ mod m31_fri_pcs {
         let byte_hash = ByteHash {};
         let field_hash = FieldHash::new(byte_hash);
         let compress = MyCompress::new(byte_hash);
-        let val_mmcs = ValMmcs::new(field_hash, compress);
+        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
         let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
         let fri_params = FriParameters {
             log_blowup,

@@ -3,7 +3,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::{BasedVectorSpace, Field, PrimeField, PrimeField32, reduce_32, split_32};
-use p3_symmetric::{CryptographicPermutation, Hash};
+use p3_symmetric::{CryptographicPermutation, Hash, MerkleCap};
 
 use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
@@ -129,6 +129,37 @@ where
                 self.observe(f_val);
             }
         }
+    }
+}
+
+impl<F, PF, const N: usize, P, const WIDTH: usize, const RATE: usize>
+    CanObserve<&MerkleCap<F, [PF; N]>> for MultiField32Challenger<F, PF, P, WIDTH, RATE>
+where
+    F: PrimeField32,
+    PF: PrimeField,
+    P: CryptographicPermutation<[PF; WIDTH]>,
+{
+    fn observe(&mut self, cap: &MerkleCap<F, [PF; N]>) {
+        for digest in cap.roots() {
+            for pf_val in digest {
+                let f_vals: Vec<F> = split_32(*pf_val, self.num_f_elms);
+                for f_val in f_vals {
+                    self.observe(f_val);
+                }
+            }
+        }
+    }
+}
+
+impl<F, PF, const N: usize, P, const WIDTH: usize, const RATE: usize>
+    CanObserve<MerkleCap<F, [PF; N]>> for MultiField32Challenger<F, PF, P, WIDTH, RATE>
+where
+    F: PrimeField32,
+    PF: PrimeField,
+    P: CryptographicPermutation<[PF; WIDTH]>,
+{
+    fn observe(&mut self, cap: MerkleCap<F, [PF; N]>) {
+        self.observe(&cap);
     }
 }
 

@@ -7,14 +7,14 @@ use p3_field::PackedValue;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::stack::HorizontalPair;
 use p3_matrix::{Dimensions, Matrix};
-use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
+use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
 use p3_util::zip_eq::zip_eq;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::{MerkleTree, MerkleTreeError, MerkleTreeMmcs};
+use crate::{MerkleCap, MerkleTree, MerkleTreeError, MerkleTreeMmcs};
 
 /// A vector commitment scheme backed by a `MerkleTree`.
 ///
@@ -45,12 +45,24 @@ pub struct MerkleTreeHidingMmcs<P, PW, H, C, R, const DIGEST_ELEMS: usize, const
 impl<P, PW, H, C, R, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize>
     MerkleTreeHidingMmcs<P, PW, H, C, R, DIGEST_ELEMS, SALT_ELEMS>
 {
-    pub const fn new(hash: H, compress: C, rng: R) -> Self {
-        let inner = MerkleTreeMmcs::new(hash, compress);
+    /// Create a new `MerkleTreeHidingMmcs` with the given hash and compression functions.
+    ///
+    /// # Arguments
+    /// * `hash` - The hash function used to hash individual matrix rows (leaf level).
+    /// * `compress` - The compression function used to hash internal tree nodes.
+    /// * `cap_height` - The height of the Merkle cap. A cap_height of 0 uses only the root,
+    ///   while a cap_height of h uses 2^h hashes from h levels below the root.
+    /// * `rng` - A random number generator for generating salts.
+    pub const fn new(hash: H, compress: C, cap_height: usize, rng: R) -> Self {
+        let inner = MerkleTreeMmcs::new(hash, compress, cap_height);
         Self {
             inner,
             rng: RefCell::new(rng),
         }
+    }
+
+    pub const fn cap_height(&self) -> usize {
+        self.inner.cap_height()
     }
 }
 
@@ -67,13 +79,13 @@ where
         + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
         + Sync,
     R: Rng + Clone,
-    PW::Value: Eq,
+    PW::Value: Eq + Clone,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
     StandardUniform: Distribution<P::Value>,
 {
     type ProverData<M> =
         MerkleTree<P::Value, PW::Value, HorizontalPair<M, RowMajorMatrix<P::Value>>, DIGEST_ELEMS>;
-    type Commitment = Hash<P::Value, PW::Value, DIGEST_ELEMS>;
+    type Commitment = MerkleCap<P::Value, [PW::Value; DIGEST_ELEMS]>;
     /// The first item is salts; the second is the usual Merkle proof (sibling digests).
     type Proof = (Vec<Vec<P::Value>>, Vec<[PW::Value; DIGEST_ELEMS]>);
     type Error = MerkleTreeError;
@@ -178,7 +190,7 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash, compress, rng);
+        let mmcs = MyMmcs::new(hash, compress, 0, rng);
 
         // attempt to commit to a mat with 8 rows and a mat with 7 rows. this should panic.
         let large_mat = RowMajorMatrix::new([1, 2, 3, 4, 5, 6, 7, 8].map(F::from_u8).to_vec(), 1);
@@ -196,7 +208,7 @@ mod tests {
         let perm = Perm::new_from_rng_128(&mut rng);
         let hash = MyHash::new(perm.clone());
         let compress = MyCompress::new(perm);
-        let mmcs = MyMmcs::new(hash, compress, rng);
+        let mmcs = MyMmcs::new(hash, compress, 0, rng);
 
         let dims = mats.iter().map(|m| m.dimensions()).collect_vec();
 

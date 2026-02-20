@@ -11,6 +11,7 @@ categories.workspace = true
 
 [dependencies]
 p3-field.workspace = true
+p3-util.workspace = true
 
 itertools.workspace = true
 serde = { workspace = true, features = ["alloc"] }

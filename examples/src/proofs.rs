@@ -42,14 +42,14 @@ type Poseidon2CircleResult<F, EF, Perm16, Perm24> =
     Result<(), VerificationError<PcsError<Poseidon2CircleStarkConfig<F, EF, Perm16, Perm24>>>>;
 
 /// Produce a MerkleTreeMmcs which uses the KeccakF permutation.
-const fn get_keccak_mmcs<F: Field>() -> KeccakMerkleMmcs<F> {
+const fn get_keccak_mmcs<F: Field>(cap_height: usize) -> KeccakMerkleMmcs<F> {
     let u64_hash = PaddingFreeSponge::<KeccakF, 25, 17, 4>::new(KeccakF {});
 
     let field_hash = SerializingHasher::new(u64_hash);
 
     let compress = KeccakCompressionFunction::new(u64_hash);
 
-    KeccakMerkleMmcs::new(field_hash, compress)
+    KeccakMerkleMmcs::new(field_hash, compress, cap_height)
 }
 
 /// Produce a MerkleTreeMmcs from a pair of cryptographic field permutations.
@@ -64,12 +64,13 @@ const fn get_poseidon2_mmcs<
 >(
     perm16: Perm16,
     perm24: Perm24,
+    cap_height: usize,
 ) -> Poseidon2MerkleMmcs<F, Perm16, Perm24> {
     let hash = Poseidon2Sponge::new(perm24);
 
     let compress = Poseidon2Compression::new(perm16);
 
-    Poseidon2MerkleMmcs::<F, _, _>::new(hash, compress)
+    Poseidon2MerkleMmcs::<F, _, _>::new(hash, compress, cap_height)
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
@@ -92,7 +93,7 @@ pub fn prove_monty31_keccak<
 where
     StandardUniform: Distribution<F>,
 {
-    let val_mmcs = get_keccak_mmcs();
+    let val_mmcs = get_keccak_mmcs(3);
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_params = create_benchmark_fri_params_high_arity(challenge_mmcs);
@@ -134,7 +135,7 @@ pub fn prove_monty31_poseidon2<
 where
     StandardUniform: Distribution<F>,
 {
-    let val_mmcs = get_poseidon2_mmcs::<F, _, _>(perm16, perm24.clone());
+    let val_mmcs = get_poseidon2_mmcs::<F, _, _>(perm16, perm24.clone(), 3);
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_params = create_benchmark_fri_params_high_arity(challenge_mmcs);
@@ -171,7 +172,7 @@ pub fn prove_m31_keccak<
     type F = Mersenne31;
     type EF = BinomialExtensionField<Mersenne31, 3>;
 
-    let val_mmcs = get_keccak_mmcs();
+    let val_mmcs = get_keccak_mmcs(0);
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
     let fri_params = create_benchmark_fri_params(challenge_mmcs);
@@ -211,7 +212,7 @@ pub fn prove_m31_poseidon2<
 where
     StandardUniform: Distribution<F>,
 {
-    let val_mmcs = get_poseidon2_mmcs::<F, _, _>(perm16, perm24.clone());
+    let val_mmcs = get_poseidon2_mmcs::<F, _, _>(perm16, perm24.clone(), 0);
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)

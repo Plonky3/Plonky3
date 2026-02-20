@@ -529,7 +529,7 @@ fn make_config(seed: u64) -> MyConfig {
     let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
-    let val_mmcs = ValMmcs::new(hash, compress);
+    let val_mmcs = ValMmcs::new(hash, compress, 0);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
     let fri_params = create_test_fri_params(challenge_mmcs, 2);
@@ -543,7 +543,7 @@ fn make_two_adic_compat_config(seed: u64) -> MyConfig {
     let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
-    let val_mmcs = ValMmcs::new(hash, compress);
+    let val_mmcs = ValMmcs::new(hash, compress, 1);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
     let fri_params = FriParameters {
@@ -565,7 +565,7 @@ fn make_config_zk(seed: u64) -> MyHidingConfig {
     let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
     let compress = MyCompress::new(perm.clone());
-    let val_mmcs = HidingValMmcs::new(hash, compress, rng.clone());
+    let val_mmcs = HidingValMmcs::new(hash, compress, 2, rng.clone());
     let challenge_mmcs = HidingChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
     let fri_params = create_test_fri_params(challenge_mmcs, 2);
@@ -589,7 +589,7 @@ fn make_circle_config() -> CircleConfig {
     let byte_hash = CircleByteHash {};
     let field_hash = CircleFieldHash::new(byte_hash);
     let compress = CircleCompress::new(byte_hash);
-    let val_mmcs = CircleValMmcs::new(field_hash, compress);
+    let val_mmcs = CircleValMmcs::new(field_hash, compress, 3);
     let challenge_mmcs = CircleChallengeMmcs::new(val_mmcs.clone());
 
     let fri_params = FriParameters {

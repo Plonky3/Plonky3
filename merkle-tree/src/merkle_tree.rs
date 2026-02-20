@@ -8,7 +8,7 @@ use itertools::Itertools;
 use p3_field::PackedValue;
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
-use p3_symmetric::{CryptographicHasher, Hash, PseudoCompressionFunction};
+use p3_symmetric::{CryptographicHasher, Hash, MerkleCap, PseudoCompressionFunction};
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
@@ -157,6 +157,47 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
         W: Copy,
     {
         self.digest_layers.last().unwrap()[0].into()
+    }
+
+    /// Return the Merkle cap at the specified height from the root.
+    ///
+    /// A cap height of 0 returns just the root (1 element).
+    /// A cap height of 1 returns 2 elements (children of root).
+    /// A cap height of h returns 2^h elements.
+    ///
+    /// # Panics
+    /// Panics if `cap_height` exceeds the tree depth.
+    #[must_use]
+    pub fn cap(&self, cap_height: usize) -> MerkleCap<F, [W; DIGEST_ELEMS]>
+    where
+        W: Clone,
+    {
+        let num_layers = self.digest_layers.len();
+        assert!(
+            cap_height < num_layers,
+            "cap_height {} exceeds tree depth {}",
+            cap_height,
+            num_layers
+        );
+
+        // For cap_height = h, we have `layer_idx = num_layers - 1 - h`.
+        let layer_idx = num_layers - 1 - cap_height;
+        let layer = &self.digest_layers[layer_idx];
+
+        let cap_len = 1 << cap_height;
+        debug_assert!(
+            layer.len() >= cap_len,
+            "layer has {} elements but cap needs {}",
+            layer.len(),
+            cap_len
+        );
+
+        MerkleCap::new(layer[..cap_len].to_vec())
+    }
+
+    #[must_use]
+    pub const fn num_layers(&self) -> usize {
+        self.digest_layers.len()
     }
 }
 
