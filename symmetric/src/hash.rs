@@ -63,12 +63,6 @@ impl<F, Digest> MerkleCap<F, Digest> {
 
     /// Returns a reference to the underlying slice of digests.
     #[must_use]
-    pub fn as_slice(&self) -> &[Digest] {
-        &self.cap
-    }
-
-    /// Returns a reference to the underlying slice of digests.
-    #[must_use]
     pub fn roots(&self) -> &[Digest] {
         &self.cap
     }
