@@ -13,6 +13,32 @@ const BASE_CASE_ELEMENT_THRESHOLD: usize = 1 << (2 * BASE_CASE_LOG);
 /// Threshold (in number of elements) beyond which we enable parallel recursion
 const PARALLEL_RECURSION_THRESHOLD: usize = 1 << 10;
 
+#[cfg(feature = "parallel")]
+#[inline]
+fn maybe_join<A, B, RA, RB>(parallel: bool, oper_a: A, oper_b: B) -> (RA, RB)
+where
+    A: FnOnce() -> RA + Send,
+    B: FnOnce() -> RB + Send,
+    RA: Send,
+    RB: Send,
+{
+    if parallel {
+        rayon::join(oper_a, oper_b)
+    } else {
+        (oper_a(), oper_b())
+    }
+}
+
+#[cfg(not(feature = "parallel"))]
+#[inline]
+fn maybe_join<A, B, RA, RB>(_parallel: bool, oper_a: A, oper_b: B) -> (RA, RB)
+where
+    A: FnOnce() -> RA,
+    B: FnOnce() -> RB,
+{
+    (oper_a(), oper_b())
+}
+
 /// Transpose a small square matrix in-place using element-wise swaps.
 ///
 /// # Parameters
@@ -223,74 +249,81 @@ pub(crate) unsafe fn transpose_in_place_square<T>(
     let half = 1 << log_half_size;
     let stride = 1 << log_stride;
 
+    // Parallelism decision (compiled out when the `parallel` feature is off).
+    let do_parallel = {
+        #[cfg(feature = "parallel")]
+        {
+            // Total number of elements in the full square matrix.
+            let elements = 1 << (2 * log_size);
+            elements >= PARALLEL_RECURSION_THRESHOLD
+        }
+        #[cfg(not(feature = "parallel"))]
+        {
+            false
+        }
+    };
+
+    // The TL and BR quadrants are independent; TR/BL swapping is also independent from TL,
+    // so we can express the logic once and choose between `rayon::join` and sequential execution.
+    //
+    // In `parallel` builds, `rayon::join` requires closures to be `Send`, and raw pointers are not.
+    // We therefore wrap the base pointer in `AtomicPtr`, matching the pattern used elsewhere
+    // in this module.
     #[cfg(feature = "parallel")]
-    {
-        // Total number of elements in the full square matrix
-        let elements = 1 << (2 * log_size);
+    let base = AtomicPtr::new(arr.as_mut_ptr());
+    // Capture a shared reference so we can use it in multiple `move` closures.
+    #[cfg(feature = "parallel")]
+    let base = &base;
+    #[cfg(not(feature = "parallel"))]
+    let base = arr.as_mut_ptr();
+    let len = arr.len();
 
-        if elements >= PARALLEL_RECURSION_THRESHOLD {
-            // Shared base pointer for parallel recursion
-            let base = AtomicPtr::new(arr.as_mut_ptr());
-            // Total length of the backing array
-            let len = arr.len();
-
-            // Coordinate each quadrant via `rayon::join`:
-            // - TL and BR are recursive calls
-            // - TR and BL are swapped directly
-            rayon::join(
-                || unsafe {
-                    transpose_in_place_square(
-                        core::slice::from_raw_parts_mut(base.load(Ordering::Relaxed), len),
-                        log_stride,
-                        log_half_size,
-                        x,
+    maybe_join(
+        do_parallel,
+        move || unsafe {
+            #[cfg(feature = "parallel")]
+            let ptr = base.load(Ordering::Relaxed);
+            #[cfg(not(feature = "parallel"))]
+            let ptr = base;
+            transpose_in_place_square(
+                core::slice::from_raw_parts_mut(ptr, len),
+                log_stride,
+                log_half_size,
+                x,
+            );
+        },
+        move || {
+            maybe_join(
+                do_parallel,
+                move || unsafe {
+                    #[cfg(feature = "parallel")]
+                    let ptr = base.load(Ordering::Relaxed);
+                    #[cfg(not(feature = "parallel"))]
+                    let ptr = base;
+                    // TR: starts at (x, x + half)
+                    // BL: starts at (x + half, x)
+                    transpose_swap(
+                        ptr.add((x << log_stride) + (x + half)),
+                        ptr.add(((x + half) << log_stride) + x),
+                        stride,
+                        (half, half),
                     );
                 },
-                || {
-                    rayon::join(
-                        // TR: starts at (x, x + half)
-                        // BL: starts at (x + half, x)
-                        || unsafe {
-                            let ptr = base.load(Ordering::Relaxed);
-                            transpose_swap(
-                                ptr.add((x << log_stride) + (x + half)),
-                                ptr.add(((x + half) << log_stride) + x),
-                                stride,
-                                (half, half),
-                            );
-                        },
-                        || unsafe {
-                            transpose_in_place_square(
-                                core::slice::from_raw_parts_mut(base.load(Ordering::Relaxed), len),
-                                log_stride,
-                                log_half_size,
-                                x + half,
-                            );
-                        },
-                    )
+                move || unsafe {
+                    #[cfg(feature = "parallel")]
+                    let ptr = base.load(Ordering::Relaxed);
+                    #[cfg(not(feature = "parallel"))]
+                    let ptr = base;
+                    transpose_in_place_square(
+                        core::slice::from_raw_parts_mut(ptr, len),
+                        log_stride,
+                        log_half_size,
+                        x + half,
+                    );
                 },
-            );
-            return;
-        }
-    }
-
-    // Sequential version of above logic
-    // Raw pointer to the base of the array for manual offset calculations
-    let ptr = arr.as_mut_ptr();
-
-    unsafe {
-        // Transpose TL quadrant (top-left)
-        transpose_in_place_square(arr, log_stride, log_half_size, x);
-        // Swap TR (top-right) with BL (bottom-left)
-        transpose_swap(
-            ptr.add((x << log_stride) + (x + half)),
-            ptr.add(((x + half) << log_stride) + x),
-            stride,
-            (half, half),
-        );
-        // Transpose BR quadrant (bottom-right)
-        transpose_in_place_square(arr, log_stride, log_half_size, x + half);
-    }
+            )
+        },
+    );
 }
 
 #[cfg(test)]
