@@ -73,12 +73,11 @@ where
         },
     );
 
-    // Compute the constraint polynomials as vectors of symbolic expressions.
-    let symbolic_constraints =
-        get_symbolic_constraints(air, preprocessed_width, public_values.len());
-
-    // Count the number of constraints that we have.
-    let constraint_count = symbolic_constraints.len();
+    // Count the number of constraints. If the AIR provides a static count via
+    // `num_constraints()`, use it to avoid a full symbolic evaluation pass.
+    let constraint_count = air.num_constraints().unwrap_or_else(|| {
+        get_symbolic_constraints(air, preprocessed_width, public_values.len()).len()
+    });
 
     // Each constraint polynomial looks like `C_j(X_1, ..., X_w, Y_1, ..., Y_w, Z_1, ..., Z_j)`.
     // When evaluated on a given row, the X_i's will be the `i`'th element of the that row, the
@@ -452,6 +451,14 @@ where
                 constraint_index: 0,
             };
             air.eval(&mut folder);
+
+            debug_assert!(
+                air.num_constraints()
+                    .is_none_or(|n| n == folder.constraint_index),
+                "BaseAir::num_constraints() returned {} but eval() asserted {} constraints",
+                air.num_constraints().unwrap_or(0),
+                folder.constraint_index,
+            );
 
             // quotient(x) = constraints(x) / Z_H(x)
             let quotient = folder.accumulator * inv_vanishing;
