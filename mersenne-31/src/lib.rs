@@ -4,6 +4,9 @@
 
 extern crate alloc;
 
+#[cfg(feature = "asic")]
+pub mod asic_backend;
+
 mod complex;
 mod dft;
 mod extension;

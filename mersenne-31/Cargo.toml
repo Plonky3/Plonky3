@@ -25,6 +25,13 @@ paste.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 
+[features]
+asic = ["dep:m31-accel-driver"]
+
+[dependencies.m31-accel-driver]
+path = "../../driver"
+optional = true
+
 [dev-dependencies]
 p3-field-testing = { path = "../field-testing" }
 
