@@ -1588,7 +1588,7 @@ fn test_batch_stark_one_instance_local_only() -> Result<(), impl Debug> {
 /// The failure occurs in `check_constraints` during proof generation, since it fails the last local constraint (the final local sum is not zero).
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic(expected = "constraints had nonzero value on row 7")]
+#[should_panic(expected = "constraints not satisfied on row 7")]
 fn test_batch_stark_one_instance_local_fails() {
     let config = make_config(2024);
 

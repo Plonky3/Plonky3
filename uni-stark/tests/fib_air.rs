@@ -330,7 +330,7 @@ fn generate_circle_fixture() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic(expected = "assertion `left == right` failed: constraints had nonzero value")]
+#[should_panic(expected = "constraints not satisfied on row")]
 fn test_incorrect_public_value() {
     let mut rng = SmallRng::seed_from_u64(1);
     let perm = Perm::new_from_rng_128(&mut rng);
