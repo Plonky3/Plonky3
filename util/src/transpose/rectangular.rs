@@ -69,8 +69,28 @@
 
 #[cfg(target_arch = "aarch64")]
 use core::arch::aarch64::*;
+#[cfg(target_arch = "aarch64")]
+use core::mem::MaybeUninit;
 #[cfg(all(target_arch = "aarch64", feature = "parallel"))]
 use core::sync::atomic::{AtomicUsize, Ordering};
+
+/// Software prefetch for write (PRFM PSTL1KEEP).
+///
+/// Brings the cache line containing `ptr` into the L1 data cache in exclusive
+/// state, preparing for a subsequent store. This avoids Read-For-Ownership
+/// (RFO) stalls when writing to memory not already in L1.
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+unsafe fn prefetch_write(ptr: *const u8) {
+    // PRFM PSTL1KEEP: Prefetch for Store, L1 cache, temporal (keep in cache).
+    unsafe {
+        core::arch::asm!(
+            "prfm pstl1keep, [{ptr}]",
+            ptr = in(reg) ptr,
+            options(readonly, nostack, preserves_flags),
+        );
+    }
+}
 
 /// Maximum number of elements for the simple scalar transpose.
 ///
@@ -104,14 +124,6 @@ const MEDIUM_LEN: usize = 1024 * 1024;
 /// - Good balance between tile overhead and cache utilization
 #[cfg(any(target_arch = "aarch64", test))]
 const TILE_SIZE: usize = 16;
-
-/// Side length of the NEON-vectorized block in elements.
-///
-/// The fundamental unit of SIMD transpose is a 4×4 block because:
-/// - 4 elements × 4 bytes = 16 bytes = one NEON 128-bit register
-/// - 4×4 block = 4 registers, enabling in-register transpose
-#[cfg(any(target_arch = "aarch64", test))]
-const BLOCK_SIZE: usize = 4;
 
 /// Maximum dimension for recursive base case.
 ///
@@ -759,8 +771,13 @@ unsafe fn transpose_region_tiled_4b(
             let row = row_start + y_tile * TILE_SIZE;
 
             // SAFETY: Tile coordinates are within the region bounds.
+            // Uses the buffered tile function: for large matrices the output
+            // is likely in L3/RAM, so L1 buffering + write prefetching avoids
+            // RFO stalls on scattered output writes.
             unsafe {
-                transpose_tile_16x16_region_neon(input, output, total_cols, total_rows, col, row);
+                transpose_tile_16x16_neon_buffered(
+                    input, output, total_cols, total_rows, col, row,
+                );
             }
         }
 
@@ -819,33 +836,13 @@ unsafe fn transpose_region_tiled_4b(
     }
 }
 
-/// Transpose a complete 16×16 tile using NEON SIMD.
+/// Transpose a complete 16×16 tile using NEON SIMD (direct-to-output).
 ///
 /// A 16×16 tile is processed as a 4×4 grid of 4×4 NEON blocks.
 /// This function is fully unrolled for maximum performance.
 ///
-/// # Tile Structure
-///
-/// ```text
-///     16×16 Tile (256 elements):
-///     ┌────────────────────────┬────────────────────────┬────────────────────────┬────────────────────────┐
-///     │        Block           │        Block           │        Block           │        Block           │
-///     │        (0,0)           │        (1,0)           │        (2,0)           │        (3,0)           │
-///     │         4×4            │         4×4            │         4×4            │         4×4            │
-///     ├────────────────────────┼────────────────────────┼────────────────────────┼────────────────────────┤
-///     │        Block           │        Block           │        Block           │        Block           │
-///     │        (0,1)           │        (1,1)           │        (2,1)           │        (3,1)           │
-///     │         4×4            │         4×4            │         4×4            │         4×4            │
-///     ├────────────────────────┼────────────────────────┼────────────────────────┼────────────────────────┤
-///     │        Block           │        Block           │        Block           │        Block           │
-///     │        (0,2)           │        (1,2)           │        (2,2)           │        (3,2)           │
-///     │         4×4            │         4×4            │         4×4            │         4×4            │
-///     ├────────────────────────┼────────────────────────┼────────────────────────┼────────────────────────┤
-///     │        Block           │        Block           │        Block           │        Block           │
-///     │        (0,3)           │        (1,3)           │        (2,3)           │        (3,3)           │
-///     │         4×4            │         4×4            │         4×4            │         4×4            │
-///     └────────────────────────┴────────────────────────┴────────────────────────┴────────────────────────┘
-/// ```
+/// Used by the **medium tiled path** where the output likely fits in L2 cache
+/// and the overhead of L1 buffering isn't justified.
 ///
 /// # Safety
 ///
@@ -863,193 +860,121 @@ unsafe fn transpose_tile_16x16_neon(
     x_start: usize,
     y_start: usize,
 ) {
-    // Block Row 0: Blocks at y_offset = 0
     unsafe {
-        let col = x_start;
-        let row = y_start;
+        // Block Row 0 (input rows y_start..y_start+4)
+        let inp = input.add(y_start * width + x_start);
+        let out = output.add(x_start * height + y_start);
+        transpose_4x4_neon(inp, out, width, height);
+        transpose_4x4_neon(inp.add(4), out.add(4 * height), width, height);
+        transpose_4x4_neon(inp.add(8), out.add(8 * height), width, height);
+        transpose_4x4_neon(inp.add(12), out.add(12 * height), width, height);
 
-        // Block (0,0): columns [col, col+4), rows [row, row+4)
-        transpose_4x4_neon(
-            input.add(row * width + col),   // Input: row-major position
-            output.add(col * height + row), // Output: transposed position
-            width,                          // Input stride (elements per row)
-            height,                         // Output stride (elements per row in transposed)
-        );
+        // Block Row 1 (input rows y_start+4..y_start+8)
+        let inp = input.add((y_start + 4) * width + x_start);
+        let out = output.add(x_start * height + y_start + 4);
+        transpose_4x4_neon(inp, out, width, height);
+        transpose_4x4_neon(inp.add(4), out.add(4 * height), width, height);
+        transpose_4x4_neon(inp.add(8), out.add(8 * height), width, height);
+        transpose_4x4_neon(inp.add(12), out.add(12 * height), width, height);
 
-        // Block (1,0): columns [col+4, col+8), rows [row, row+4)
-        transpose_4x4_neon(
-            input.add(row * width + col + 4),
-            output.add((col + 4) * height + row),
-            width,
-            height,
-        );
+        // Block Row 2 (input rows y_start+8..y_start+12)
+        let inp = input.add((y_start + 8) * width + x_start);
+        let out = output.add(x_start * height + y_start + 8);
+        transpose_4x4_neon(inp, out, width, height);
+        transpose_4x4_neon(inp.add(4), out.add(4 * height), width, height);
+        transpose_4x4_neon(inp.add(8), out.add(8 * height), width, height);
+        transpose_4x4_neon(inp.add(12), out.add(12 * height), width, height);
 
-        // Block (2,0): columns [col+8, col+12), rows [row, row+4)
-        transpose_4x4_neon(
-            input.add(row * width + col + 8),
-            output.add((col + 8) * height + row),
-            width,
-            height,
-        );
-
-        // Block (3,0): columns [col+12, col+16), rows [row, row+4)
-        transpose_4x4_neon(
-            input.add(row * width + col + 12),
-            output.add((col + 12) * height + row),
-            width,
-            height,
-        );
-    }
-
-    // Block Row 1: Blocks at y_offset = 4
-    unsafe {
-        let col = x_start;
-        let row = y_start + 4;
-
-        // Block (0,1)
-        transpose_4x4_neon(
-            input.add(row * width + col),
-            output.add(col * height + row),
-            width,
-            height,
-        );
-
-        // Block (1,1)
-        transpose_4x4_neon(
-            input.add(row * width + col + 4),
-            output.add((col + 4) * height + row),
-            width,
-            height,
-        );
-
-        // Block (2,1)
-        transpose_4x4_neon(
-            input.add(row * width + col + 8),
-            output.add((col + 8) * height + row),
-            width,
-            height,
-        );
-
-        // Block (3,1)
-        transpose_4x4_neon(
-            input.add(row * width + col + 12),
-            output.add((col + 12) * height + row),
-            width,
-            height,
-        );
-    }
-
-    // Block Row 2: Blocks at y_offset = 8
-    unsafe {
-        let col = x_start;
-        let row = y_start + 8;
-
-        // Block (0,2)
-        transpose_4x4_neon(
-            input.add(row * width + col),
-            output.add(col * height + row),
-            width,
-            height,
-        );
-
-        // Block (1,2)
-        transpose_4x4_neon(
-            input.add(row * width + col + 4),
-            output.add((col + 4) * height + row),
-            width,
-            height,
-        );
-
-        // Block (2,2)
-        transpose_4x4_neon(
-            input.add(row * width + col + 8),
-            output.add((col + 8) * height + row),
-            width,
-            height,
-        );
-
-        // Block (3,2)
-        transpose_4x4_neon(
-            input.add(row * width + col + 12),
-            output.add((col + 12) * height + row),
-            width,
-            height,
-        );
-    }
-
-    // Block Row 3: Blocks at y_offset = 12
-    unsafe {
-        let col = x_start;
-        let row = y_start + 12;
-
-        // Block (0,3)
-        transpose_4x4_neon(
-            input.add(row * width + col),
-            output.add(col * height + row),
-            width,
-            height,
-        );
-
-        // Block (1,3)
-        transpose_4x4_neon(
-            input.add(row * width + col + 4),
-            output.add((col + 4) * height + row),
-            width,
-            height,
-        );
-
-        // Block (2,3)
-        transpose_4x4_neon(
-            input.add(row * width + col + 8),
-            output.add((col + 8) * height + row),
-            width,
-            height,
-        );
-
-        // Block (3,3)
-        transpose_4x4_neon(
-            input.add(row * width + col + 12),
-            output.add((col + 12) * height + row),
-            width,
-            height,
-        );
+        // Block Row 3 (input rows y_start+12..y_start+16)
+        let inp = input.add((y_start + 12) * width + x_start);
+        let out = output.add(x_start * height + y_start + 12);
+        transpose_4x4_neon(inp, out, width, height);
+        transpose_4x4_neon(inp.add(4), out.add(4 * height), width, height);
+        transpose_4x4_neon(inp.add(8), out.add(8 * height), width, height);
+        transpose_4x4_neon(inp.add(12), out.add(12 * height), width, height);
     }
 }
 
-/// Transpose a 16×16 tile within a region (loop-based version).
+/// Transpose a complete 16×16 tile using NEON SIMD with L1 buffering.
 ///
-/// This version is used in the recursive algorithm where the slight overhead
-/// is negligible compared to the larger operation.
+/// Same grid of 4×4 NEON blocks, but transposed into a stack-allocated buffer
+/// first, then flushed to the output with write prefetching (`PRFM PSTL1KEEP`).
+///
+/// Used by the **recursive/parallel path** for large matrices (≥ `MEDIUM_LEN`)
+/// where the output is in L3/RAM and direct scattered writes would stall on
+/// Read-For-Ownership (RFO) cache line fetches.
 ///
 /// # Safety
 ///
-/// Caller must ensure valid pointers and that tile coordinates are within bounds.
+/// Caller must ensure:
+/// - Valid pointers for the full matrix
+/// - `x_start + 16 <= width`
+/// - `y_start + 16 <= height`
 #[cfg(target_arch = "aarch64")]
 #[inline]
-unsafe fn transpose_tile_16x16_region_neon(
+unsafe fn transpose_tile_16x16_neon_buffered(
     input: *const u32,
     output: *mut u32,
-    total_cols: usize,
-    total_rows: usize,
+    width: usize,
+    height: usize,
     x_start: usize,
     y_start: usize,
 ) {
-    // Iterate over the 4×4 grid of 4×4 blocks (16/4 = 4 blocks per dimension).
-    for by in 0..4 {
-        for bx in 0..4 {
-            // Compute block's top-left corner in the original matrix.
-            let col = x_start + bx * BLOCK_SIZE;
-            let row = y_start + by * BLOCK_SIZE;
+    // Stack buffer for L1-hot transpose (1 KB for u32).
+    // MaybeUninit avoids unnecessary zero-initialization; every element
+    // is written by the NEON blocks before the copy reads it.
+    let mut buffer = MaybeUninit::<[u32; TILE_SIZE * TILE_SIZE]>::uninit();
+    let buf = buffer.as_mut_ptr().cast::<u32>();
 
-            // SAFETY: Block coordinates are within tile, tile is within region.
-            unsafe {
-                transpose_4x4_neon(
-                    input.add(row * total_cols + col),  // Input position
-                    output.add(col * total_rows + row), // Output position (transposed)
-                    total_cols,                         // Input stride
-                    total_rows,                         // Output stride
+    unsafe {
+        // Transpose 4×4 grid of NEON blocks into the buffer.
+        // Buffer layout: buf[col * TILE_SIZE + row] = transposed element.
+        // Buffer write stride is TILE_SIZE (contiguous in L1) vs. `height` (scattered).
+
+        // Block Row 0 (input rows y_start..y_start+4)
+        let inp = input.add(y_start * width + x_start);
+        transpose_4x4_neon(inp, buf, width, TILE_SIZE);
+        transpose_4x4_neon(inp.add(4), buf.add(4 * TILE_SIZE), width, TILE_SIZE);
+        transpose_4x4_neon(inp.add(8), buf.add(8 * TILE_SIZE), width, TILE_SIZE);
+        transpose_4x4_neon(inp.add(12), buf.add(12 * TILE_SIZE), width, TILE_SIZE);
+
+        // Block Row 1 (input rows y_start+4..y_start+8)
+        let inp = input.add((y_start + 4) * width + x_start);
+        transpose_4x4_neon(inp, buf.add(4), width, TILE_SIZE);
+        transpose_4x4_neon(inp.add(4), buf.add(4 * TILE_SIZE + 4), width, TILE_SIZE);
+        transpose_4x4_neon(inp.add(8), buf.add(8 * TILE_SIZE + 4), width, TILE_SIZE);
+        transpose_4x4_neon(inp.add(12), buf.add(12 * TILE_SIZE + 4), width, TILE_SIZE);
+
+        // Block Row 2 (input rows y_start+8..y_start+12)
+        let inp = input.add((y_start + 8) * width + x_start);
+        transpose_4x4_neon(inp, buf.add(8), width, TILE_SIZE);
+        transpose_4x4_neon(inp.add(4), buf.add(4 * TILE_SIZE + 8), width, TILE_SIZE);
+        transpose_4x4_neon(inp.add(8), buf.add(8 * TILE_SIZE + 8), width, TILE_SIZE);
+        transpose_4x4_neon(inp.add(12), buf.add(12 * TILE_SIZE + 8), width, TILE_SIZE);
+
+        // Block Row 3 (input rows y_start+12..y_start+16)
+        let inp = input.add((y_start + 12) * width + x_start);
+        transpose_4x4_neon(inp, buf.add(12), width, TILE_SIZE);
+        transpose_4x4_neon(inp.add(4), buf.add(4 * TILE_SIZE + 12), width, TILE_SIZE);
+        transpose_4x4_neon(inp.add(8), buf.add(8 * TILE_SIZE + 12), width, TILE_SIZE);
+        transpose_4x4_neon(inp.add(12), buf.add(12 * TILE_SIZE + 12), width, TILE_SIZE);
+
+        // Flush buffer to output with write prefetching.
+        // Each iteration copies TILE_SIZE u32s (64 bytes = 1 cache line) from the
+        // L1-hot buffer to one output row. Prefetch brings the next output cache
+        // line into exclusive state, avoiding RFO stalls.
+        prefetch_write(output.add(x_start * height + y_start) as *const u8);
+        for c in 0..TILE_SIZE {
+            if c + 1 < TILE_SIZE {
+                prefetch_write(
+                    output.add((x_start + c + 1) * height + y_start) as *const u8,
                 );
             }
+            core::ptr::copy_nonoverlapping(
+                buf.add(c * TILE_SIZE),
+                output.add((x_start + c) * height + y_start),
+                TILE_SIZE,
+            );
         }
     }
 }
@@ -1542,8 +1467,11 @@ unsafe fn transpose_region_tiled_8b(
             let col = col_start + x_tile * TILE_SIZE;
             let row = row_start + y_tile * TILE_SIZE;
 
+            // Uses the buffered tile function: for large matrices the output
+            // is likely in L3/RAM, so L1 buffering + write prefetching avoids
+            // RFO stalls on scattered output writes.
             unsafe {
-                transpose_tile_16x16_region_neon_8b(
+                transpose_tile_16x16_neon_8b_buffered(
                     input, output, total_cols, total_rows, col, row,
                 );
             }
@@ -1601,10 +1529,9 @@ unsafe fn transpose_region_tiled_8b(
     }
 }
 
-/// Transpose a complete 16×16 tile of 8-byte elements using NEON SIMD.
+/// Transpose a complete 16×16 tile of 8-byte elements using NEON SIMD (direct-to-output).
 ///
-/// A 16×16 tile is processed as a 4×4 grid of 4×4 NEON blocks.
-/// This function is fully unrolled for maximum performance.
+/// Used by the **medium tiled path** where the output likely fits in L2 cache.
 ///
 /// # Safety
 ///
@@ -1622,171 +1549,110 @@ unsafe fn transpose_tile_16x16_neon_8b(
     x_start: usize,
     y_start: usize,
 ) {
-    // Block Row 0: Blocks at y_offset = 0
     unsafe {
-        let col = x_start;
-        let row = y_start;
+        // Block Row 0 (input rows y_start..y_start+4)
+        let inp = input.add(y_start * width + x_start);
+        let out = output.add(x_start * height + y_start);
+        transpose_4x4_neon_8b(inp, out, width, height);
+        transpose_4x4_neon_8b(inp.add(4), out.add(4 * height), width, height);
+        transpose_4x4_neon_8b(inp.add(8), out.add(8 * height), width, height);
+        transpose_4x4_neon_8b(inp.add(12), out.add(12 * height), width, height);
 
-        transpose_4x4_neon_8b(
-            input.add(row * width + col),
-            output.add(col * height + row),
-            width,
-            height,
-        );
+        // Block Row 1 (input rows y_start+4..y_start+8)
+        let inp = input.add((y_start + 4) * width + x_start);
+        let out = output.add(x_start * height + y_start + 4);
+        transpose_4x4_neon_8b(inp, out, width, height);
+        transpose_4x4_neon_8b(inp.add(4), out.add(4 * height), width, height);
+        transpose_4x4_neon_8b(inp.add(8), out.add(8 * height), width, height);
+        transpose_4x4_neon_8b(inp.add(12), out.add(12 * height), width, height);
 
-        transpose_4x4_neon_8b(
-            input.add(row * width + col + 4),
-            output.add((col + 4) * height + row),
-            width,
-            height,
-        );
+        // Block Row 2 (input rows y_start+8..y_start+12)
+        let inp = input.add((y_start + 8) * width + x_start);
+        let out = output.add(x_start * height + y_start + 8);
+        transpose_4x4_neon_8b(inp, out, width, height);
+        transpose_4x4_neon_8b(inp.add(4), out.add(4 * height), width, height);
+        transpose_4x4_neon_8b(inp.add(8), out.add(8 * height), width, height);
+        transpose_4x4_neon_8b(inp.add(12), out.add(12 * height), width, height);
 
-        transpose_4x4_neon_8b(
-            input.add(row * width + col + 8),
-            output.add((col + 8) * height + row),
-            width,
-            height,
-        );
-
-        transpose_4x4_neon_8b(
-            input.add(row * width + col + 12),
-            output.add((col + 12) * height + row),
-            width,
-            height,
-        );
-    }
-
-    // Block Row 1: Blocks at y_offset = 4
-    unsafe {
-        let col = x_start;
-        let row = y_start + 4;
-
-        transpose_4x4_neon_8b(
-            input.add(row * width + col),
-            output.add(col * height + row),
-            width,
-            height,
-        );
-
-        transpose_4x4_neon_8b(
-            input.add(row * width + col + 4),
-            output.add((col + 4) * height + row),
-            width,
-            height,
-        );
-
-        transpose_4x4_neon_8b(
-            input.add(row * width + col + 8),
-            output.add((col + 8) * height + row),
-            width,
-            height,
-        );
-
-        transpose_4x4_neon_8b(
-            input.add(row * width + col + 12),
-            output.add((col + 12) * height + row),
-            width,
-            height,
-        );
-    }
-
-    // Block Row 2: Blocks at y_offset = 8
-    unsafe {
-        let col = x_start;
-        let row = y_start + 8;
-
-        transpose_4x4_neon_8b(
-            input.add(row * width + col),
-            output.add(col * height + row),
-            width,
-            height,
-        );
-
-        transpose_4x4_neon_8b(
-            input.add(row * width + col + 4),
-            output.add((col + 4) * height + row),
-            width,
-            height,
-        );
-
-        transpose_4x4_neon_8b(
-            input.add(row * width + col + 8),
-            output.add((col + 8) * height + row),
-            width,
-            height,
-        );
-
-        transpose_4x4_neon_8b(
-            input.add(row * width + col + 12),
-            output.add((col + 12) * height + row),
-            width,
-            height,
-        );
-    }
-
-    // Block Row 3: Blocks at y_offset = 12
-    unsafe {
-        let col = x_start;
-        let row = y_start + 12;
-
-        transpose_4x4_neon_8b(
-            input.add(row * width + col),
-            output.add(col * height + row),
-            width,
-            height,
-        );
-
-        transpose_4x4_neon_8b(
-            input.add(row * width + col + 4),
-            output.add((col + 4) * height + row),
-            width,
-            height,
-        );
-
-        transpose_4x4_neon_8b(
-            input.add(row * width + col + 8),
-            output.add((col + 8) * height + row),
-            width,
-            height,
-        );
-
-        transpose_4x4_neon_8b(
-            input.add(row * width + col + 12),
-            output.add((col + 12) * height + row),
-            width,
-            height,
-        );
+        // Block Row 3 (input rows y_start+12..y_start+16)
+        let inp = input.add((y_start + 12) * width + x_start);
+        let out = output.add(x_start * height + y_start + 12);
+        transpose_4x4_neon_8b(inp, out, width, height);
+        transpose_4x4_neon_8b(inp.add(4), out.add(4 * height), width, height);
+        transpose_4x4_neon_8b(inp.add(8), out.add(8 * height), width, height);
+        transpose_4x4_neon_8b(inp.add(12), out.add(12 * height), width, height);
     }
 }
 
-/// Transpose a 16×16 tile within a region of 8-byte elements (loop-based version).
+/// Transpose a complete 16×16 tile of 8-byte elements with L1 buffering.
+///
+/// Used by the **recursive/parallel path** for large matrices where the output
+/// is in L3/RAM. L1 buffering + write prefetching avoids RFO stalls.
 ///
 /// # Safety
 ///
-/// Caller must ensure valid pointers and that tile coordinates are within bounds.
+/// Caller must ensure:
+/// - Valid pointers for the full matrix
+/// - `x_start + 16 <= width`
+/// - `y_start + 16 <= height`
 #[cfg(target_arch = "aarch64")]
 #[inline]
-unsafe fn transpose_tile_16x16_region_neon_8b(
+unsafe fn transpose_tile_16x16_neon_8b_buffered(
     input: *const u64,
     output: *mut u64,
-    total_cols: usize,
-    total_rows: usize,
+    width: usize,
+    height: usize,
     x_start: usize,
     y_start: usize,
 ) {
-    for by in 0..4 {
-        for bx in 0..4 {
-            let col = x_start + bx * BLOCK_SIZE;
-            let row = y_start + by * BLOCK_SIZE;
+    // Stack buffer for L1-hot transpose (2 KB for u64).
+    let mut buffer = MaybeUninit::<[u64; TILE_SIZE * TILE_SIZE]>::uninit();
+    let buf = buffer.as_mut_ptr().cast::<u64>();
 
-            unsafe {
-                transpose_4x4_neon_8b(
-                    input.add(row * total_cols + col),
-                    output.add(col * total_rows + row),
-                    total_cols,
-                    total_rows,
+    unsafe {
+        // Transpose 4×4 grid of NEON blocks into the buffer.
+
+        // Block Row 0 (input rows y_start..y_start+4)
+        let inp = input.add(y_start * width + x_start);
+        transpose_4x4_neon_8b(inp, buf, width, TILE_SIZE);
+        transpose_4x4_neon_8b(inp.add(4), buf.add(4 * TILE_SIZE), width, TILE_SIZE);
+        transpose_4x4_neon_8b(inp.add(8), buf.add(8 * TILE_SIZE), width, TILE_SIZE);
+        transpose_4x4_neon_8b(inp.add(12), buf.add(12 * TILE_SIZE), width, TILE_SIZE);
+
+        // Block Row 1 (input rows y_start+4..y_start+8)
+        let inp = input.add((y_start + 4) * width + x_start);
+        transpose_4x4_neon_8b(inp, buf.add(4), width, TILE_SIZE);
+        transpose_4x4_neon_8b(inp.add(4), buf.add(4 * TILE_SIZE + 4), width, TILE_SIZE);
+        transpose_4x4_neon_8b(inp.add(8), buf.add(8 * TILE_SIZE + 4), width, TILE_SIZE);
+        transpose_4x4_neon_8b(inp.add(12), buf.add(12 * TILE_SIZE + 4), width, TILE_SIZE);
+
+        // Block Row 2 (input rows y_start+8..y_start+12)
+        let inp = input.add((y_start + 8) * width + x_start);
+        transpose_4x4_neon_8b(inp, buf.add(8), width, TILE_SIZE);
+        transpose_4x4_neon_8b(inp.add(4), buf.add(4 * TILE_SIZE + 8), width, TILE_SIZE);
+        transpose_4x4_neon_8b(inp.add(8), buf.add(8 * TILE_SIZE + 8), width, TILE_SIZE);
+        transpose_4x4_neon_8b(inp.add(12), buf.add(12 * TILE_SIZE + 8), width, TILE_SIZE);
+
+        // Block Row 3 (input rows y_start+12..y_start+16)
+        let inp = input.add((y_start + 12) * width + x_start);
+        transpose_4x4_neon_8b(inp, buf.add(12), width, TILE_SIZE);
+        transpose_4x4_neon_8b(inp.add(4), buf.add(4 * TILE_SIZE + 12), width, TILE_SIZE);
+        transpose_4x4_neon_8b(inp.add(8), buf.add(8 * TILE_SIZE + 12), width, TILE_SIZE);
+        transpose_4x4_neon_8b(inp.add(12), buf.add(12 * TILE_SIZE + 12), width, TILE_SIZE);
+
+        // Flush buffer to output with write prefetching.
+        prefetch_write(output.add(x_start * height + y_start) as *const u8);
+        for c in 0..TILE_SIZE {
+            if c + 1 < TILE_SIZE {
+                prefetch_write(
+                    output.add((x_start + c + 1) * height + y_start) as *const u8,
                 );
             }
+            core::ptr::copy_nonoverlapping(
+                buf.add(c * TILE_SIZE),
+                output.add((x_start + c) * height + y_start),
+                TILE_SIZE,
+            );
         }
     }
 }
@@ -1978,8 +1844,8 @@ mod tests {
             //
             // These dimensions exercise the tiled TILE_SIZE×TILE_SIZE path.
 
-            // Exactly BLOCK_SIZE×BLOCK_SIZE (single NEON block)
-            Just((BLOCK_SIZE, BLOCK_SIZE)),
+            // Exactly 4×4 (single NEON block)
+            Just((4, 4)),
             // Exactly TILE_SIZE×TILE_SIZE (single tile)
             Just((TILE_SIZE, TILE_SIZE)),
             // Multiple complete tiles (2× and 4× TILE_SIZE)
