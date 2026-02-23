@@ -775,9 +775,7 @@ unsafe fn transpose_region_tiled_4b(
             // is likely in L3/RAM, so L1 buffering + write prefetching avoids
             // RFO stalls on scattered output writes.
             unsafe {
-                transpose_tile_16x16_neon_buffered(
-                    input, output, total_cols, total_rows, col, row,
-                );
+                transpose_tile_16x16_neon_buffered(input, output, total_cols, total_rows, col, row);
             }
         }
 
@@ -966,9 +964,7 @@ unsafe fn transpose_tile_16x16_neon_buffered(
         prefetch_write(output.add(x_start * height + y_start) as *const u8);
         for c in 0..TILE_SIZE {
             if c + 1 < TILE_SIZE {
-                prefetch_write(
-                    output.add((x_start + c + 1) * height + y_start) as *const u8,
-                );
+                prefetch_write(output.add((x_start + c + 1) * height + y_start) as *const u8);
             }
             core::ptr::copy_nonoverlapping(
                 buf.add(c * TILE_SIZE),
@@ -1644,9 +1640,7 @@ unsafe fn transpose_tile_16x16_neon_8b_buffered(
         prefetch_write(output.add(x_start * height + y_start) as *const u8);
         for c in 0..TILE_SIZE {
             if c + 1 < TILE_SIZE {
-                prefetch_write(
-                    output.add((x_start + c + 1) * height + y_start) as *const u8,
-                );
+                prefetch_write(output.add((x_start + c + 1) * height + y_start) as *const u8);
             }
             core::ptr::copy_nonoverlapping(
                 buf.add(c * TILE_SIZE),
