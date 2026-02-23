@@ -28,6 +28,17 @@ pub trait BaseAir<F>: Sync {
     fn periodic_columns(&self) -> &[Vec<F>] {
         &[]
     }
+
+    /// Return the periodic values for the given row index.
+    fn periodic_values(&self, row_index: usize) -> Vec<F>
+    where
+        F: Clone,
+    {
+        self.periodic_columns()
+            .iter()
+            .map(|col| col[row_index % col.len()].clone())
+            .collect()
+    }
 }
 
 /// An extension of `BaseAir` that includes support for public values.

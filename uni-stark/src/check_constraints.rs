@@ -50,18 +50,14 @@ where
             None
         };
 
-        let periodic_values: alloc::vec::Vec<F> = air
-            .periodic_columns()
-            .iter()
-            .map(|col| col[row_index % col.len()])
-            .collect();
+        let periodic_values = &air.periodic_values(row_index);
 
         let mut builder = DebugConstraintBuilder {
             row_index,
             main,
             preprocessed: preprocessed_pair,
             public_values,
-            periodic_values: &periodic_values,
+            periodic_values,
             is_first_row: F::from_bool(row_index == 0),
             is_last_row: F::from_bool(row_index == height - 1),
             is_transition: F::from_bool(row_index != height - 1),
