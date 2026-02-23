@@ -1,11 +1,11 @@
-use p3_air::{
-    Air, AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PermutationAirBuilder,
-};
+use alloc::vec::Vec;
+
+use p3_air::{Air, DebugConstraintBuilder};
 use p3_field::{ExtensionField, Field};
 use p3_lookup::lookup_traits::{Lookup, LookupData, LookupGadget};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
-use p3_matrix::stack::{VerticalPair, ViewPair};
+use p3_matrix::stack::VerticalPair;
 use tracing::instrument;
 
 /// Type alias for the inputs to lookup constraint checking.
@@ -20,6 +20,9 @@ type LookupConstraintsInputs<'a, F, EF, LG> = (&'a [Lookup<F>], &'a [LookupData<
 /// Iterates over every row in `main`, providing both the current and next row
 /// (with wraparound) to the [AIR](`p3_air::Air`) logic. Also injects public values into the builder
 /// for first/last row assertions.
+///
+/// Collects all constraint failures for the first failing row, then panics with
+/// a summary listing every violated constraint index.
 ///
 /// # Arguments
 /// - `air`: The [AIR](`p3_air::Air`) logic to run.
@@ -44,14 +47,14 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
 ) where
     F: Field,
     EF: ExtensionField<F>,
-    A: for<'a> Air<DebugConstraintBuilderWithLookups<'a, F, EF>>,
+    A: for<'a> Air<DebugConstraintBuilder<'a, F, EF>>,
     LG: LookupGadget,
 {
     let height = main.height();
 
     let (lookups, lookup_data, lookup_gadget) = lookup_constraints_inputs;
 
-    (0..height).for_each(|row_index| {
+    for row_index in 0..height {
         let row_index_next = (row_index + 1) % height;
 
         // Safety:
@@ -89,155 +92,27 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
             RowMajorMatrixView::new_row(&*perm_next),
         );
 
-        let mut builder = DebugConstraintBuilderWithLookups {
+        let mut builder = DebugConstraintBuilder::new_with_permutation(
             row_index,
             main,
             preprocessed,
+            public_values,
+            F::from_bool(row_index == 0),
+            F::from_bool(row_index == height - 1),
+            F::from_bool(row_index != height - 1),
             permutation,
             permutation_challenges,
-            public_values,
-            is_first_row: F::from_bool(row_index == 0),
-            is_last_row: F::from_bool(row_index == height - 1),
-            is_transition: F::from_bool(row_index != height - 1),
-        };
-
-        <A as Air<DebugConstraintBuilderWithLookups<'_, F, EF>>>::eval_with_lookups(
-            air,
-            &mut builder,
-            lookups,
-            lookup_data,
-            lookup_gadget,
         );
-    });
-}
 
-/// A builder that runs constraint assertions during testing.
-///
-/// Used in conjunction with [`check_constraints`] to simulate
-/// an execution trace and verify that the [AIR](`p3_air::Air`) logic enforces all constraints.
-#[derive(Debug)]
-#[allow(unused)]
-pub struct DebugConstraintBuilderWithLookups<'a, F: Field, EF: ExtensionField<F>> {
-    /// The index of the row currently being evaluated.
-    row_index: usize,
-    /// A view of the current and next row as a vertical pair.
-    main: ViewPair<'a, F>,
-    /// A view of the current and next preprocessed row as a vertical pair.
-    preprocessed: Option<ViewPair<'a, F>>,
-    /// The public values provided for constraint validation (e.g. inputs or outputs).
-    public_values: &'a [F],
-    /// A flag indicating whether this is the first row.
-    is_first_row: F,
-    /// A flag indicating whether this is the last row.
-    is_last_row: F,
-    /// A flag indicating whether this is a transition row (not the last row).
-    is_transition: F,
-    /// A view of the current and next permutation rows as a vertical pair.
-    permutation: ViewPair<'a, EF>,
-    /// The challenges used for the permutation argument.
-    permutation_challenges: &'a [EF],
-}
+        air.eval_with_lookups(&mut builder, lookups, lookup_data, lookup_gadget);
 
-impl<'a, F, EF> AirBuilder for DebugConstraintBuilderWithLookups<'a, F, EF>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-{
-    type F = F;
-    type Expr = F;
-    type Var = F;
-    type M = ViewPair<'a, F>;
-
-    fn main(&self) -> Self::M {
-        self.main
-    }
-
-    fn preprocessed(&self) -> Option<Self::M> {
-        self.preprocessed
-    }
-
-    fn is_first_row(&self) -> Self::Expr {
-        self.is_first_row
-    }
-
-    fn is_last_row(&self) -> Self::Expr {
-        self.is_last_row
-    }
-
-    /// # Panics
-    /// This function panics if `size` is not `2`.
-    fn is_transition_window(&self, size: usize) -> Self::Expr {
-        if size == 2 {
-            self.is_transition
-        } else {
-            panic!("only supports a window size of 2")
+        // Stop at the first failing row and report all violations at once.
+        if builder.has_failures() {
+            let indices: Vec<usize> = builder.failures().iter().map(|f| f.constraint).collect();
+            panic!(
+                "constraints not satisfied on row {row_index}: \
+                 failed constraint indices = {indices:?}"
+            );
         }
-    }
-
-    fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
-        assert_eq!(
-            x.into(),
-            F::ZERO,
-            "constraints had nonzero value on row {}",
-            self.row_index
-        );
-    }
-
-    fn assert_eq<I1: Into<Self::Expr>, I2: Into<Self::Expr>>(&mut self, x: I1, y: I2) {
-        let x = x.into();
-        let y = y.into();
-        assert_eq!(
-            x, y,
-            "values didn't match on row {}: {} != {}",
-            self.row_index, x, y
-        );
-    }
-}
-
-impl<F: Field, EF: ExtensionField<F>> AirBuilderWithPublicValues
-    for DebugConstraintBuilderWithLookups<'_, F, EF>
-{
-    type PublicVar = Self::F;
-
-    fn public_values(&self) -> &[Self::F] {
-        self.public_values
-    }
-}
-
-impl<'a, F: Field, EF: ExtensionField<F>> ExtensionBuilder
-    for DebugConstraintBuilderWithLookups<'a, F, EF>
-{
-    type EF = EF;
-
-    type ExprEF = EF;
-
-    type VarEF = EF;
-
-    fn assert_zero_ext<I>(&mut self, x: I)
-    where
-        I: Into<Self::ExprEF>,
-    {
-        assert_eq!(
-            x.into(),
-            EF::ZERO,
-            "constraints had nonzero value on row {}",
-            self.row_index
-        );
-    }
-}
-
-impl<'a, F: Field, EF: ExtensionField<F>> PermutationAirBuilder
-    for DebugConstraintBuilderWithLookups<'a, F, EF>
-{
-    type MP = VerticalPair<RowMajorMatrixView<'a, EF>, RowMajorMatrixView<'a, EF>>;
-
-    type RandomVar = EF;
-
-    fn permutation(&self) -> Self::MP {
-        self.permutation
-    }
-
-    fn permutation_randomness(&self) -> &[Self::RandomVar] {
-        self.permutation_challenges
     }
 }
