@@ -10,11 +10,13 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+libm.workspace = true
 p3-air.workspace = true
 p3-challenger.workspace = true
 p3-commit.workspace = true
 p3-dft.workspace = true
 p3-field.workspace = true
+p3-fri.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-util.workspace = true
@@ -30,7 +32,6 @@ p3-challenger = { path = "../challenger" }
 p3-circle = { path = "../circle" }
 p3-commit = { path = "../commit", features = ["test-utils"] }
 p3-dft = { path = "../dft" }
-p3-fri = { path = "../fri" }
 p3-keccak = { path = "../keccak" }
 p3-matrix = { path = "../matrix" }
 p3-merkle-tree = { path = "../merkle-tree" }
