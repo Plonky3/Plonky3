@@ -1,6 +1,5 @@
 use p3_air::Air;
 use p3_commit::Pcs;
-use p3_field::Field;
 use p3_matrix::Matrix;
 use tracing::debug_span;
 
@@ -52,7 +51,6 @@ pub fn setup_preprocessed<SC, A>(
 ) -> Option<(PreprocessedProverData<SC>, PreprocessedVerifierKey<SC>)>
 where
     SC: StarkGenericConfig,
-    Val<SC>: Field,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
     let pcs = config.pcs();

@@ -1,7 +1,6 @@
 use alloc::format;
 use alloc::vec::Vec;
 
-use itertools::Itertools;
 use p3_field::{Algebra, PermutationMonomial, PrimeField, PrimeField64};
 use p3_mds::MdsPermutation;
 use p3_symmetric::{CryptographicPermutation, Permutation};
@@ -96,15 +95,12 @@ where
         let byte_string = shake256_hash(seed_string.as_bytes(), num_bytes);
 
         byte_string
-            .iter()
             .chunks(bytes_per_constant)
-            .into_iter()
             .map(|chunk| {
                 let integer = chunk
-                    .collect_vec()
                     .iter()
                     .rev()
-                    .fold(0, |acc, &byte| (acc << 8) + *byte as u64);
+                    .fold(0, |acc, &byte| (acc << 8) + byte as u64);
                 F::from_u64(integer)
             })
             .collect()
