@@ -22,7 +22,7 @@ use crate::{FriParameters, FriProof, TwoAdicFriPcs};
 
 /// A hiding FRI PCS. Both MMCSs must also be hiding; this is not enforced at compile time so it's
 /// the user's responsibility to configure.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R> {
     inner: TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs>,
     num_random_codewords: usize,
