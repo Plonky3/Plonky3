@@ -73,12 +73,21 @@ where
         },
     );
 
-    // Compute the constraint polynomials as vectors of symbolic expressions.
-    let symbolic_constraints =
-        get_symbolic_constraints(air, preprocessed_width, public_values.len());
+    // Count the number of constraints. If the AIR provides a static count via
+    // `num_constraints()`, use it to avoid a full symbolic evaluation pass.
+    let constraint_count = air.num_constraints().unwrap_or_else(|| {
+        get_symbolic_constraints(air, preprocessed_width, public_values.len()).len()
+    });
 
-    // Count the number of constraints that we have.
-    let constraint_count = symbolic_constraints.len();
+    // In debug builds, cross-check the static hint against symbolic evaluation.
+    debug_assert!(
+        air.num_constraints().is_none_or(|n| {
+            n == get_symbolic_constraints(air, preprocessed_width, public_values.len()).len()
+        }),
+        "num_constraints() = {} but symbolic evaluation found {} constraints",
+        air.num_constraints().unwrap(),
+        get_symbolic_constraints(air, preprocessed_width, public_values.len()).len(),
+    );
 
     // Each constraint polynomial looks like `C_j(X_1, ..., X_w, Y_1, ..., Y_w, Z_1, ..., Z_j)`.
     // When evaluated on a given row, the X_i's will be the `i`'th element of the that row, the

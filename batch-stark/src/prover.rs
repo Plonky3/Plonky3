@@ -295,15 +295,60 @@ where
             ext_trace_domains[i].create_disjoint_domain(1 << (log_ext_degrees[i] + log_chunks));
 
         // Count constraints to size alpha powers packing.
-        let (base_constraints, extension_constraints) = get_symbolic_constraints(
-            airs[i],
-            preprocessed_widths[i],
-            pub_vals[i].len(),
-            &all_lookups[i],
-            &lookup_data_to_expr(&lookup_data[i]),
-            &lookup_gadget,
+        // When the AIR provides a static count via `num_constraints()` and there
+        // are no lookups (no extension constraints), skip the symbolic evaluation.
+        let constraint_len = if all_lookups[i].is_empty() {
+            airs[i].num_constraints().unwrap_or_else(|| {
+                get_symbolic_constraints(
+                    airs[i],
+                    preprocessed_widths[i],
+                    pub_vals[i].len(),
+                    &all_lookups[i],
+                    &lookup_data_to_expr(&lookup_data[i]),
+                    &lookup_gadget,
+                )
+                .0
+                .len()
+            })
+        } else {
+            let (base_constraints, extension_constraints) = get_symbolic_constraints(
+                airs[i],
+                preprocessed_widths[i],
+                pub_vals[i].len(),
+                &all_lookups[i],
+                &lookup_data_to_expr(&lookup_data[i]),
+                &lookup_gadget,
+            );
+            base_constraints.len() + extension_constraints.len()
+        };
+
+        // In debug builds, cross-check the static hint against symbolic evaluation.
+        debug_assert!(
+            airs[i].num_constraints().is_none_or(|n| {
+                n == get_symbolic_constraints(
+                    airs[i],
+                    preprocessed_widths[i],
+                    pub_vals[i].len(),
+                    &all_lookups[i],
+                    &lookup_data_to_expr(&lookup_data[i]),
+                    &lookup_gadget,
+                )
+                .0
+                .len()
+            }),
+            "num_constraints() = {} but symbolic evaluation found {} base constraints",
+            airs[i].num_constraints().unwrap(),
+            get_symbolic_constraints(
+                airs[i],
+                preprocessed_widths[i],
+                pub_vals[i].len(),
+                &all_lookups[i],
+                &lookup_data_to_expr(&lookup_data[i]),
+                &lookup_gadget,
+            )
+            .0
+            .len(),
         );
-        let constraint_len = base_constraints.len() + extension_constraints.len();
 
         // Get evaluations on quotient domain from the main commitment.
         let trace_on_quotient_domain =

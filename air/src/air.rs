@@ -28,6 +28,27 @@ pub trait BaseAir<F>: Sync {
     fn preprocessed_uses_next_row(&self) -> bool {
         true
     }
+
+    /// Optional hint for the number of constraints in this AIR.
+    ///
+    /// Normally the prover runs a full symbolic evaluation just to count
+    /// constraints. Overriding this method lets the prover skip that pass.
+    ///
+    /// The count must cover every constraint asserted during evaluation,
+    /// including both transition and boundary constraints. It must **not**
+    /// include lookup or permutation constraints, which are counted
+    /// separately.
+    ///
+    /// # Correctness
+    ///
+    /// The returned value **must** exactly match the actual number of
+    /// constraints. A wrong count will cause the prover to panic or
+    /// produce an invalid proof.
+    ///
+    /// Returns `None` by default, which falls back to symbolic evaluation.
+    fn num_constraints(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// An extension of `BaseAir` that includes support for public values.
@@ -274,6 +295,23 @@ pub trait AirBuilderWithPublicValues: AirBuilder {
     fn public_values(&self) -> &[Self::PublicVar];
 }
 
+/// Extension trait for builders that carry additional runtime context.
+///
+/// Some AIRs need access to data that is only available at proving time,
+/// such as bus randomness, challenge values, or witness hints. This trait
+/// lets the builder carry that data so the AIR can read it during
+/// constraint evaluation.
+///
+/// Existing AIRs that do not need extra context are unaffected. Only AIRs
+/// that explicitly bound on this trait will use it.
+pub trait AirBuilderWithContext: AirBuilder {
+    /// The type of additional runtime context available during evaluation.
+    type EvalContext;
+
+    /// Returns a reference to the runtime evaluation context.
+    fn eval_context(&self) -> &Self::EvalContext;
+}
+
 /// Extension of `AirBuilder` for working over extension fields.
 pub trait ExtensionBuilder: AirBuilder<F: Field> {
     /// Extension field type.
@@ -403,5 +441,13 @@ impl<AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'_,
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         self.inner.permutation_randomness()
+    }
+}
+
+impl<AB: AirBuilderWithContext> AirBuilderWithContext for FilteredAirBuilder<'_, AB> {
+    type EvalContext = AB::EvalContext;
+
+    fn eval_context(&self) -> &Self::EvalContext {
+        self.inner.eval_context()
     }
 }
