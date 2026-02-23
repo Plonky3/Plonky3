@@ -2,6 +2,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::Air;
+#[cfg(debug_assertions)]
+use p3_air::DebugConstraintBuilder;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
@@ -18,8 +20,6 @@ use p3_uni_stark::{
 use p3_util::log2_strict_usize;
 use tracing::{debug_span, info_span, instrument};
 
-#[cfg(debug_assertions)]
-use p3_air::DebugConstraintBuilder;
 use crate::common::{CommonData, ProverData, get_perm_challenges};
 use crate::config::{Challenge, Domain, StarkGenericConfig as SGC, Val, observe_instance_binding};
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
