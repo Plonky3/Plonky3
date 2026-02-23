@@ -28,7 +28,7 @@ use crate::prover::prove;
 use crate::verifier::verify;
 use crate::{CfftPerm, CfftPermutable, CircleEvaluations, CircleFriProof, cfft_permute_index};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
     pub mmcs: InputMmcs,
     pub fri_params: FriParameters<FriMmcs>,

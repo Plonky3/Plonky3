@@ -21,7 +21,7 @@ pub type PackedVal<SC> = <Val<SC> as Field>::Packing;
 pub type PackedChallenge<SC> =
     <<SC as StarkGenericConfig>::Challenge as ExtensionField<Val<SC>>>::ExtensionPacking;
 
-pub trait StarkGenericConfig {
+pub trait StarkGenericConfig: Clone {
     /// The [`Pcs`] implementation used to commit to trace polynomials.
     type Pcs: Pcs<Self::Challenge, Self::Challenger>;
 
@@ -45,7 +45,7 @@ pub trait StarkGenericConfig {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct StarkConfig<Pcs, Challenge, Challenger> {
     /// The [`Pcs`] used to commit polynomials and produce opening proofs.
     pcs: Pcs,
@@ -54,7 +54,7 @@ pub struct StarkConfig<Pcs, Challenge, Challenger> {
     _phantom: PhantomData<Challenge>,
 }
 
-impl<Pcs, Challenge, Challenger> StarkConfig<Pcs, Challenge, Challenger> {
+impl<Pcs: Clone, Challenge: Clone, Challenger: Clone> StarkConfig<Pcs, Challenge, Challenger> {
     pub const fn new(pcs: Pcs, challenger: Challenger) -> Self {
         Self {
             pcs,
@@ -66,8 +66,8 @@ impl<Pcs, Challenge, Challenger> StarkConfig<Pcs, Challenge, Challenger> {
 
 impl<Pcs, Challenge, Challenger> StarkGenericConfig for StarkConfig<Pcs, Challenge, Challenger>
 where
-    Challenge: ExtensionField<<Pcs::Domain as PolynomialSpace>::Val>,
-    Pcs: p3_commit::Pcs<Challenge, Challenger>,
+    Challenge: ExtensionField<<Pcs::Domain as PolynomialSpace>::Val> + Clone,
+    Pcs: p3_commit::Pcs<Challenge, Challenger> + Clone,
     Challenger: FieldChallenger<<Pcs::Domain as PolynomialSpace>::Val>
         + CanObserve<Pcs::Commitment>
         + CanSample<Challenge>
