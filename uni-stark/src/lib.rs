@@ -11,17 +11,15 @@ mod preprocessed;
 mod proof;
 mod prover;
 mod sub_builder;
-mod symbolic_builder;
+mod symbolic;
 mod verifier;
 
 pub use check_constraints::*;
 pub use config::*;
 pub use folder::*;
-// Public re-exports from p3-air.
-pub use p3_air::symbolic::*;
 pub use preprocessed::*;
 pub use proof::*;
 pub use prover::*;
 pub use sub_builder::*;
-pub use symbolic_builder::*;
+pub use symbolic::*;
 pub use verifier::*;

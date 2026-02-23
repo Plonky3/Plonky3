@@ -1,9 +1,8 @@
 use alloc::vec::Vec;
 
-use p3_air::Air;
+use p3_air::{Air, SymbolicAirBuilder, SymbolicExpression};
 use p3_field::{ExtensionField, Field};
 use p3_lookup::lookup_traits::{Lookup, LookupData, LookupGadget};
-use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression};
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
@@ -99,6 +98,9 @@ where
         num_public_values,
         num_aux_cols,
         num_challenges,
+        // TODO(periodic-columns): pass actual num_periodic_columns once the prover
+        // evaluates periodic column polynomials during constraint checking.
+        0,
     );
 
     // Evaluate AIR and lookup constraints.

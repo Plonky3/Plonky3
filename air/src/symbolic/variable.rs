@@ -10,6 +10,7 @@ pub enum Entry {
     Preprocessed { offset: usize },
     Main { offset: usize },
     Permutation { offset: usize },
+    Periodic,
     Public,
     Challenge,
 }
@@ -33,7 +34,13 @@ impl<F> SymbolicVariable<F> {
 
     pub const fn degree_multiple(&self) -> usize {
         match self.entry {
-            Entry::Preprocessed { .. } | Entry::Main { .. } | Entry::Permutation { .. } => 1,
+            Entry::Preprocessed { .. }
+            | Entry::Main { .. }
+            | Entry::Permutation { .. }
+            // TODO: Periodic columns use degree 1 as an approximation. In Winterfell's model,
+            // a periodic column with period `p` over trace length `n` contributes degree `n/p - 1`.
+            // See: https://github.com/facebook/winterfell/blob/main/air/src/air/transition/degree.rs
+            | Entry::Periodic => 1,
             Entry::Public | Entry::Challenge => 0,
         }
     }

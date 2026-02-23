@@ -1,7 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_air::Air;
+use p3_air::{Air, SymbolicAirBuilder, SymbolicExpression};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
@@ -11,10 +11,7 @@ use p3_lookup::lookup_traits::{Kind, Lookup, LookupData, LookupGadget, lookup_da
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
-use p3_uni_stark::{
-    OpenedValues, PackedChallenge, PackedVal, ProverConstraintFolder, SymbolicAirBuilder,
-    SymbolicExpression,
-};
+use p3_uni_stark::{OpenedValues, PackedChallenge, PackedVal, ProverConstraintFolder};
 use p3_util::log2_strict_usize;
 use tracing::{debug_span, info_span, instrument};
 

@@ -3,7 +3,10 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use core::slice::from_ref;
 
-use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, PermutationAirBuilder};
+use p3_air::{
+    Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, PermutationAirBuilder,
+    SymbolicAirBuilder, SymbolicExpression,
+};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::{ProverData, StarkInstance, VerificationError, prove_batch, verify_batch};
@@ -23,7 +26,7 @@ use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
-use p3_uni_stark::{StarkConfig, StarkGenericConfig, SymbolicAirBuilder, SymbolicExpression};
+use p3_uni_stark::{StarkConfig, StarkGenericConfig};
 use p3_util::log2_strict_usize;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -241,7 +244,7 @@ where
 
         // Create symbolic air builder to access symbolic variables
         let symbolic_air_builder =
-            SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
+            SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0, 0);
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
@@ -404,7 +407,7 @@ impl<AB: PermutationAirBuilder + AirBuilderWithPublicValues> Air<AB> for FibAirL
         if self.is_global {
             // Create symbolic air builder to access symbolic variables
             let symbolic_air_builder =
-                SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 3, 0, 0);
+                SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 3, 0, 0, 0);
             let symbolic_main = symbolic_air_builder.main();
             let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
@@ -2083,7 +2086,7 @@ where
 
         // Create symbolic air builder to access symbolic variables
         let symbolic_air_builder =
-            SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
+            SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0, 0);
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 

@@ -6,13 +6,13 @@ use alloc::vec::Vec;
 use p3_air::lookup::LookupEvaluator;
 use p3_air::{
     Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, ExtensionBuilder, PermutationAirBuilder,
+    SymbolicAirBuilder, SymbolicExpression,
 };
 use p3_baby_bear::BabyBear;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -283,7 +283,7 @@ where
 
     fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
         let symbolic_air_builder =
-            SymbolicAirBuilder::<F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
+            SymbolicAirBuilder::<F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0, 0);
 
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
@@ -514,11 +514,10 @@ impl LookupTraceBuilder {
 
 #[test]
 fn test_symbolic_to_expr() {
-    use p3_air::AirBuilder;
+    use p3_air::{AirBuilder, SymbolicAirBuilder};
     use p3_field::PrimeCharacteristicRing;
-    use p3_uni_stark::SymbolicAirBuilder;
 
-    let mut builder = SymbolicAirBuilder::<F>::new(0, 2, 0, 0, 0);
+    let mut builder = SymbolicAirBuilder::<F>::new(0, 2, 0, 0, 0, 0);
 
     let main = builder.main();
 
@@ -1170,7 +1169,7 @@ where
 
     fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
         let symbolic_air_builder =
-            SymbolicAirBuilder::<F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
+            SymbolicAirBuilder::<F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0, 0);
 
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
