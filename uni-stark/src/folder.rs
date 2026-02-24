@@ -1,10 +1,11 @@
 use alloc::vec::Vec;
 
 use p3_air::{AirBuilder, AirBuilderWithPublicValues};
-use p3_field::{BasedVectorSpace, PackedField};
+use p3_field::BasedVectorSpace;
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
 
+use crate::constraint_batch::batched_base_linear_combination;
 use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
 
 /// Handles constraint accumulation for the prover in a STARK system.
@@ -112,7 +113,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
         self.accumulator += PackedChallenge::<SC>::from_basis_coefficients_fn(|i| {
             let alpha_powers = &self.decomposed_alpha_powers[i]
                 [self.constraint_index..(self.constraint_index + N)];
-            PackedVal::<SC>::packed_linear_combination::<N>(alpha_powers, &expr_array)
+            batched_base_linear_combination(alpha_powers, &expr_array)
         });
         self.constraint_index += N;
     }

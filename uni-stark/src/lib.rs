@@ -6,6 +6,7 @@ extern crate alloc;
 
 mod check_constraints;
 mod config;
+mod constraint_batch;
 mod folder;
 mod preprocessed;
 mod proof;
