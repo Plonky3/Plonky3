@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use p3_air::{Air, SymbolicAirBuilder, SymbolicExpression};
 use p3_challenger::{CanObserve, FieldChallenger};
-use p3_commit::{EvaluatePolynomialAtPoint, Pcs, PolynomialSpace};
+use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 use p3_lookup::folder::ProverConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
@@ -69,7 +69,6 @@ pub fn prove_batch<
 where
     SC: SGC,
     SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
-    Domain<SC>: EvaluatePolynomialAtPoint,
 {
     let common = &prover_data.common;
     // TODO: Extend if additional lookup gadgets are added.
@@ -587,7 +586,6 @@ where
     A: for<'a> Air<ProverConstraintFolderWithLookups<'a, SC>>,
     Mat: Matrix<Val<SC>> + Sync,
     LG: LookupGadget + Sync,
-    Domain<SC>: EvaluatePolynomialAtPoint,
 {
     let quotient_size = quotient_domain.size();
     let main_width = trace_on_quotient_domain.width();

@@ -128,11 +128,7 @@ pub trait PolynomialSpace: Copy {
     ///
     /// Note that these may not be normalized.
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>>;
-}
 
-/// Extension of [`PolynomialSpace`] for domains that support evaluating a polynomial
-/// (given by its evaluations over the domain) at an arbitrary point.
-pub trait EvaluatePolynomialAtPoint: PolynomialSpace {
     /// Evaluate the polynomial defined by `evals` (evaluations over `self`) at `point`.
     fn evaluate_polynomial_at<Ext: ExtensionField<Self::Val>>(
         &self,
@@ -319,9 +315,7 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
                 .collect(),
         }
     }
-}
 
-impl<Val: TwoAdicField> EvaluatePolynomialAtPoint for TwoAdicMultiplicativeCoset<Val> {
     fn evaluate_polynomial_at<Ext: ExtensionField<Val>>(&self, evals: &[Val], point: Ext) -> Ext {
         let evals_mat = RowMajorMatrix::new(evals.to_vec(), 1);
         interpolate_coset(&evals_mat, self.shift(), point)[0]

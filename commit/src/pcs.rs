@@ -9,7 +9,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::{EvaluatePolynomialAtPoint, PeriodicLdeTable, PolynomialSpace};
+use crate::{PeriodicLdeTable, PolynomialSpace};
 
 pub type Val<D> = <D as PolynomialSpace>::Val;
 
@@ -25,7 +25,6 @@ pub trait BuildPeriodicLdeTableFast {
         _quotient_domain: Self::PeriodicDomain,
     ) -> Option<PeriodicLdeTable<Val<Self::PeriodicDomain>>>
     where
-        Self::PeriodicDomain: EvaluatePolynomialAtPoint,
         Val<Self::PeriodicDomain>: Clone,
     {
         None
@@ -300,7 +299,7 @@ where
         quotient_domain: Self::Domain,
     ) -> PeriodicLdeTable<Val<Self::Domain>>
     where
-        Self::Domain: EvaluatePolynomialAtPoint + Clone,
+        Self::Domain: Clone,
         Val<Self::Domain>: Clone,
     {
         if let Some(table) =

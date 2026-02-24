@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_air::{Air, SymbolicAirBuilder, get_symbolic_constraints};
 use p3_challenger::{CanObserve, FieldChallenger};
-use p3_commit::{EvaluatePolynomialAtPoint, Pcs, PolynomialSpace};
+use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
@@ -33,7 +33,6 @@ pub fn prove_with_preprocessed<
 where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
-    Domain<SC>: EvaluatePolynomialAtPoint,
 {
     #[cfg(debug_assertions)]
     crate::check_constraints::check_constraints(air, &trace, public_values);
@@ -367,7 +366,6 @@ pub fn prove<
 where
     SC: StarkGenericConfig,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
-    Domain<SC>: EvaluatePolynomialAtPoint,
 {
     prove_with_preprocessed::<SC, A>(config, air, trace, public_values, None)
 }
@@ -390,7 +388,6 @@ where
     SC: StarkGenericConfig,
     A: for<'a> Air<ProverConstraintFolder<'a, SC>>,
     Mat: Matrix<Val<SC>> + Sync,
-    Domain<SC>: EvaluatePolynomialAtPoint,
 {
     let quotient_size = quotient_domain.size();
     let width = trace_on_quotient_domain.width();

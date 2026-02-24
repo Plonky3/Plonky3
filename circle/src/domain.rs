@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::{Itertools, iterate};
-use p3_commit::{EvaluatePolynomialAtPoint, LagrangeSelectors, PolynomialSpace};
+use p3_commit::{LagrangeSelectors, PolynomialSpace};
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, batch_multiplicative_inverse};
 use p3_matrix::Matrix;
@@ -241,9 +241,7 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             inv_vanishing,
         }
     }
-}
 
-impl<F: ComplexExtendable> EvaluatePolynomialAtPoint for CircleDomain<F> {
     fn evaluate_polynomial_at<Ext: ExtensionField<F>>(&self, evals: &[F], point: Ext) -> Ext {
         assert!(
             self.is_standard(),

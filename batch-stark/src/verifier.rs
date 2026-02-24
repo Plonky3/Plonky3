@@ -6,7 +6,7 @@ use core::fmt::Debug;
 use hashbrown::HashMap;
 use p3_air::{Air, SymbolicAirBuilder, SymbolicExpression};
 use p3_challenger::{CanObserve, FieldChallenger};
-use p3_commit::{EvaluatePolynomialAtPoint, Pcs, PolynomialSpace};
+use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
@@ -40,7 +40,6 @@ where
     A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<VerifierConstraintFolderWithLookups<'a, SC>>,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
-    Domain<SC>: EvaluatePolynomialAtPoint,
 {
     // TODO: Extend if additional lookup gadgets are added.
     let lookup_gadget = LogUpGadget::new();
@@ -565,7 +564,6 @@ pub fn verify_constraints_with_lookups<'a, SC, A, LG: LookupGadget, PcsErr: Debu
 where
     SC: SGC,
     A: for<'b> Air<VerifierConstraintFolderWithLookups<'b, SC>>,
-    Domain<SC>: EvaluatePolynomialAtPoint,
 {
     let VerifierData {
         trace_local,

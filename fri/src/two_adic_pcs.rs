@@ -656,7 +656,6 @@ where
         quotient_domain: Self::PeriodicDomain,
     ) -> Option<PeriodicLdeTable<p3_commit::Val<Self::PeriodicDomain>>>
     where
-        Self::PeriodicDomain: p3_commit::EvaluatePolynomialAtPoint,
         p3_commit::Val<Self::PeriodicDomain>: Clone,
     {
         let periodic_cols_val: &[Vec<Val>] = unsafe { core::mem::transmute(periodic_cols) };
@@ -665,12 +664,7 @@ where
             &trace_domain,
             &quotient_domain,
         );
-        Some(unsafe {
-            core::mem::transmute::<
-                PeriodicLdeTable<Val>,
-                PeriodicLdeTable<p3_commit::Val<Self::PeriodicDomain>>,
-            >(table)
-        })
+        Some(table)
     }
 }
 

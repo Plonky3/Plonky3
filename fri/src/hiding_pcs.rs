@@ -417,7 +417,6 @@ where
         quotient_domain: Self::PeriodicDomain,
     ) -> Option<p3_commit::PeriodicLdeTable<p3_commit::Val<Self::PeriodicDomain>>>
     where
-        Self::PeriodicDomain: p3_commit::EvaluatePolynomialAtPoint,
         p3_commit::Val<Self::PeriodicDomain>: Clone,
     {
         self.inner

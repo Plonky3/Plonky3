@@ -5,8 +5,8 @@ use p3_air::{Air, AirBuilder, AirWithPeriodicColumns, BaseAir, PeriodicAirBuilde
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
+use p3_commit::ExtensionMmcs;
 use p3_commit::testing::TrivialPcs;
-use p3_commit::{EvaluatePolynomialAtPoint, ExtensionMmcs};
 use p3_dft::Radix2DitParallel;
 use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
@@ -19,7 +19,7 @@ use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
-use p3_uni_stark::{Domain, StarkConfig, StarkGenericConfig, Val, prove, verify};
+use p3_uni_stark::{StarkConfig, StarkGenericConfig, Val, prove, verify};
 use rand::SeedableRng;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
@@ -97,7 +97,6 @@ fn do_test<SC: StarkGenericConfig>(
 where
     SC::Challenger: Clone,
     StandardUniform: Distribution<Val<SC>>,
-    Domain<SC>: EvaluatePolynomialAtPoint,
 {
     let trace = air.valid_trace(rows);
 
