@@ -28,6 +28,13 @@ impl<F> BaseAir<F> for FibonacciAir {
     fn width(&self) -> usize {
         NUM_FIBONACCI_COLS
     }
+
+    fn max_constraint_degree(&self) -> Option<usize> {
+        // All constraints are guarded by is_first_row / is_transition / is_last_row
+        // (degree 1) applied to degree-1 expressions (trace vars minus public values),
+        // giving a max constraint degree of 2.
+        Some(2)
+    }
 }
 
 impl<AB: AirBuilderWithPublicValues> Air<AB> for FibonacciAir {

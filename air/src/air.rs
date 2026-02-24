@@ -49,6 +49,33 @@ pub trait BaseAir<F>: Sync {
     fn num_constraints(&self) -> Option<usize> {
         None
     }
+
+    /// Optional hint for the maximum constraint degree in this AIR.
+    ///
+    /// The constraint degree is the factor by which trace length N
+    /// scales the constraint polynomial degree.
+    ///
+    /// For example, a constraint `x * y * z` where x, y, z are trace
+    /// variables has degree multiple 3.
+    ///
+    /// Normally the prover runs a full symbolic evaluation to compute this.
+    /// Overriding this method lets both the prover and verifier skip that
+    /// pass when only the degree (not the full constraint list) is needed.
+    ///
+    /// The value must be an upper bound on the degree multiple of every
+    /// constraint (base and extension). It does not need to be tight, but
+    /// overestimating wastes prover work (larger quotient domain).
+    ///
+    /// # Correctness
+    ///
+    /// The returned value **must** be >= the actual max constraint degree.
+    /// A value that is too small will cause the prover to produce an
+    /// invalid proof.
+    ///
+    /// Returns `None` by default, which falls back to symbolic evaluation.
+    fn max_constraint_degree(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// An extension of `BaseAir` that includes support for public values.

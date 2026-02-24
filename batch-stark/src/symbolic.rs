@@ -24,6 +24,34 @@ where
     LG: LookupGadget,
 {
     assert!(is_zk <= 1, "is_zk must be either 0 or 1");
+
+    // Only use the hint when there are no lookups, since the hint
+    // doesn't account for lookup constraint degrees.
+    if contexts.is_empty()
+        && let Some(degree_hint) = air.max_constraint_degree()
+    {
+        let constraint_degree = (degree_hint + is_zk).max(2);
+        let result = log2_ceil_usize(constraint_degree - 1);
+
+        debug_assert!(
+            {
+                let actual = get_max_constraint_degree(
+                    air,
+                    preprocessed_width,
+                    num_public_values,
+                    contexts,
+                    lookup_data,
+                    lookup_gadget,
+                );
+                degree_hint >= actual
+            },
+            "max_constraint_degree() hint {} is too small; symbolic evaluation found a larger degree",
+            degree_hint
+        );
+
+        return result;
+    }
+
     // We pad to at least degree 2, since a quotient argument doesn't make sense with smaller degrees.
     let constraint_degree = (get_max_constraint_degree(
         air,
