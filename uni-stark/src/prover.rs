@@ -213,6 +213,7 @@ where
     // at every point in the quotient domain. The degree of `Q(x)` is `<= deg(C(x)) - N = 2N - 2` in the case
     // where `deg(C) = 3`. (See the discussion above constraint_degree for more details.)
     let quotient_values = quotient_values(
+        pcs,
         air,
         public_values,
         trace_domain,
@@ -375,6 +376,7 @@ where
 // TODO: Group some arguments to remove the `allow`?
 #[allow(clippy::too_many_arguments)]
 pub fn quotient_values<SC, A, Mat>(
+    pcs: &SC::Pcs,
     air: &A,
     public_values: &[Val<SC>],
     trace_domain: Domain<SC>,
@@ -421,31 +423,7 @@ where
         .collect();
 
     let periodic_cols = air.periodic_columns();
-    let periodic_on_quotient: Vec<Vec<Val<SC>>> = if periodic_cols.is_empty() {
-        vec![]
-    } else {
-        let quotient_points: Vec<Val<SC>> = {
-            let mut pt = quotient_domain.first_point();
-            (0..quotient_size)
-                .map(|_| {
-                    let out = pt;
-                    pt = quotient_domain
-                        .next_point(pt)
-                        .expect("quotient domain must support next_point");
-                    out
-                })
-                .collect()
-        };
-        periodic_cols
-            .iter()
-            .map(|col| {
-                quotient_points
-                    .iter()
-                    .map(|&pt| trace_domain.evaluate_periodic_column_at(col, pt))
-                    .collect()
-            })
-            .collect()
-    };
+    let periodic_table = pcs.build_periodic_lde_table(periodic_cols, trace_domain, quotient_domain);
 
     (0..quotient_size)
         .into_par_iter()
@@ -471,15 +449,18 @@ where
                 )
             });
 
-            let periodic_vals: Vec<PackedVal<SC>> = periodic_on_quotient
-                .iter()
-                .map(|col_evals| {
-                    let slice: Vec<Val<SC>> = (i_start..i_start + PackedVal::<SC>::WIDTH)
-                        .map(|i| col_evals.get(i).copied().unwrap_or_else(Val::<SC>::default))
-                        .collect();
-                    *PackedVal::<SC>::from_slice(&slice)
-                })
-                .collect();
+            let periodic_vals: Vec<PackedVal<SC>> = if periodic_table.is_empty() {
+                vec![]
+            } else {
+                (0..periodic_table.width())
+                    .map(|col_idx| {
+                        let slice: Vec<Val<SC>> = (0..PackedVal::<SC>::WIDTH)
+                            .map(|offset| *periodic_table.get(i_start + offset, col_idx))
+                            .collect();
+                        *PackedVal::<SC>::from_slice(&slice)
+                    })
+                    .collect()
+            };
 
             let accumulator = PackedChallenge::<SC>::ZERO;
             let mut folder = ProverConstraintFolder {

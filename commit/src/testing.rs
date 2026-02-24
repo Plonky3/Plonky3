@@ -12,7 +12,7 @@ use p3_util::log2_strict_usize;
 use p3_util::zip_eq::zip_eq;
 use serde::{Deserialize, Serialize};
 
-use crate::{OpenedValues, Pcs, PolynomialSpace};
+use crate::{BuildPeriodicLdeTableFast, OpenedValues, Pcs, PolynomialSpace};
 
 /// A trivial PCS: its commitment is simply the coefficients of each poly.
 #[derive(Debug)]
@@ -204,4 +204,12 @@ where
         }
         Ok(())
     }
+}
+
+impl<Val, Dft> BuildPeriodicLdeTableFast for TrivialPcs<Val, Dft>
+where
+    Val: TwoAdicField,
+    Dft: TwoAdicSubgroupDft<Val>,
+{
+    type PeriodicDomain = TwoAdicMultiplicativeCoset<Val>;
 }

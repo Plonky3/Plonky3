@@ -59,6 +59,14 @@ impl<F: Field> Point<F> {
         Self::new(self.x.square().double() - F::ONE, self.x.double() * self.y)
     }
 
+    /// Apply the doubling map `n` times: π^n(x,y)
+    pub fn repeated_double(mut self, n: usize) -> Self {
+        for _ in 0..n {
+            self = self.double();
+        }
+        self
+    }
+
     /// Evaluate the vanishing polynomial for the standard position coset of size 2^log_n
     /// at this point
     /// Circle STARKs, Section 3.3, Equation 8 (page 10 of the first revision PDF)

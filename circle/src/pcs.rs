@@ -5,7 +5,10 @@ use core::marker::PhantomData;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, OpenedValues, Pcs, PolynomialSpace};
+use p3_commit::{
+    BatchOpening, BatchOpeningRef, BuildPeriodicLdeTableFast, Mmcs, OpenedValues, Pcs,
+    PeriodicLdeTable, PolynomialSpace,
+};
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field};
 use p3_fri::FriParameters;
@@ -26,7 +29,10 @@ use crate::folding::{CircleFriFolding, CircleFriFoldingForMmcs, fold_y, fold_y_r
 use crate::point::Point;
 use crate::prover::prove;
 use crate::verifier::verify;
-use crate::{CfftPerm, CfftPermutable, CircleEvaluations, CircleFriProof, cfft_permute_index};
+use crate::{
+    CfftPerm, CfftPermutable, CircleEvaluations, CircleFriProof, build_periodic_lde_table_circle,
+    cfft_permute_index,
+};
 
 #[derive(Debug)]
 pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
@@ -556,6 +562,35 @@ where
                 Ok(fri_input)
             },
         )
+    }
+}
+
+impl<Val, InputMmcs, FriMmcs> BuildPeriodicLdeTableFast for CirclePcs<Val, InputMmcs, FriMmcs>
+where
+    Val: ComplexExtendable,
+    InputMmcs: Mmcs<Val>,
+{
+    type PeriodicDomain = CircleDomain<Val>;
+
+    fn maybe_build_periodic_lde_table_fast(
+        &self,
+        periodic_cols: &[Vec<p3_commit::Val<Self::PeriodicDomain>>],
+        trace_domain: Self::PeriodicDomain,
+        quotient_domain: Self::PeriodicDomain,
+    ) -> Option<PeriodicLdeTable<p3_commit::Val<Self::PeriodicDomain>>>
+    where
+        Self::PeriodicDomain: p3_commit::EvaluatePolynomialAtPoint,
+        p3_commit::Val<Self::PeriodicDomain>: Clone,
+    {
+        let periodic_cols_val: &[Vec<Val>] = unsafe { core::mem::transmute(periodic_cols) };
+        let table =
+            build_periodic_lde_table_circle(periodic_cols_val, &trace_domain, &quotient_domain);
+        Some(unsafe {
+            core::mem::transmute::<
+                PeriodicLdeTable<Val>,
+                PeriodicLdeTable<p3_commit::Val<Self::PeriodicDomain>>,
+            >(table)
+        })
     }
 }
 

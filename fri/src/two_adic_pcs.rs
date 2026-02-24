@@ -20,7 +20,9 @@ use core::marker::PhantomData;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpening, Mmcs, OpenedValues, Pcs};
+use p3_commit::{
+    BatchOpening, BuildPeriodicLdeTableFast, Mmcs, OpenedValues, Pcs, PeriodicLdeTable,
+};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
@@ -35,6 +37,7 @@ use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
 use tracing::{debug_span, instrument};
 
+use crate::periodic::build_periodic_lde_table_two_adic;
 use crate::verifier::{self, FriError};
 use crate::{FriFoldingStrategy, FriParameters, FriProof, prover};
 
@@ -635,6 +638,39 @@ where
         )?;
 
         Ok(())
+    }
+}
+
+impl<Val, Dft, InputMmcs, FriMmcs> BuildPeriodicLdeTableFast
+    for TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs>
+where
+    Val: TwoAdicField,
+    Dft: TwoAdicSubgroupDft<Val> + Default,
+{
+    type PeriodicDomain = TwoAdicMultiplicativeCoset<Val>;
+
+    fn maybe_build_periodic_lde_table_fast(
+        &self,
+        periodic_cols: &[Vec<p3_commit::Val<Self::PeriodicDomain>>],
+        trace_domain: Self::PeriodicDomain,
+        quotient_domain: Self::PeriodicDomain,
+    ) -> Option<PeriodicLdeTable<p3_commit::Val<Self::PeriodicDomain>>>
+    where
+        Self::PeriodicDomain: p3_commit::EvaluatePolynomialAtPoint,
+        p3_commit::Val<Self::PeriodicDomain>: Clone,
+    {
+        let periodic_cols_val: &[Vec<Val>] = unsafe { core::mem::transmute(periodic_cols) };
+        let table = build_periodic_lde_table_two_adic::<Val, Dft>(
+            periodic_cols_val,
+            &trace_domain,
+            &quotient_domain,
+        );
+        Some(unsafe {
+            core::mem::transmute::<
+                PeriodicLdeTable<Val>,
+                PeriodicLdeTable<p3_commit::Val<Self::PeriodicDomain>>,
+            >(table)
+        })
     }
 }
 

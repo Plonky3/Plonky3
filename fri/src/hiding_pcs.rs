@@ -3,7 +3,9 @@ use core::cell::RefCell;
 
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpening, Mmcs, OpenedValues, Pcs, PolynomialSpace};
+use p3_commit::{
+    BatchOpening, BuildPeriodicLdeTableFast, Mmcs, OpenedValues, Pcs, PolynomialSpace,
+};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse};
@@ -396,6 +398,30 @@ where
         let r_commit_and_data =
             Pcs::<Challenge, Challenger>::commit(&self.inner, random_input_vals);
         Some(r_commit_and_data)
+    }
+}
+
+impl<Val, Dft, InputMmcs, FriMmcs, R> BuildPeriodicLdeTableFast
+    for HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R>
+where
+    Val: TwoAdicField,
+    Dft: TwoAdicSubgroupDft<Val>,
+    InputMmcs: Mmcs<Val>,
+{
+    type PeriodicDomain = TwoAdicMultiplicativeCoset<Val>;
+
+    fn maybe_build_periodic_lde_table_fast(
+        &self,
+        periodic_cols: &[Vec<p3_commit::Val<Self::PeriodicDomain>>],
+        trace_domain: Self::PeriodicDomain,
+        quotient_domain: Self::PeriodicDomain,
+    ) -> Option<p3_commit::PeriodicLdeTable<p3_commit::Val<Self::PeriodicDomain>>>
+    where
+        Self::PeriodicDomain: p3_commit::EvaluatePolynomialAtPoint,
+        p3_commit::Val<Self::PeriodicDomain>: Clone,
+    {
+        self.inner
+            .maybe_build_periodic_lde_table_fast(periodic_cols, trace_domain, quotient_domain)
     }
 }
 
