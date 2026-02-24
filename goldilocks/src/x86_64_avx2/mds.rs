@@ -60,38 +60,27 @@ mod tests {
 
     use crate::{Goldilocks, MdsMatrixGoldilocks, PackedGoldilocksAVX2};
 
-    fn test_avx2_mds_width<const WIDTH: usize>() {
-        let mut rng = SmallRng::seed_from_u64(1);
-        let mds = MdsMatrixGoldilocks;
+    macro_rules! test_avx2_mds {
+        ($name:ident, $width:literal) => {
+            #[test]
+            fn $name() {
+                let mut rng = SmallRng::seed_from_u64(1);
+                let mds = MdsMatrixGoldilocks;
 
-        let input: [Goldilocks; WIDTH] = rng.random();
+                let input: [Goldilocks; $width] = rng.random();
+                let expected = mds.permute(input);
 
-        let expected = mds.permute(input);
+                let packed_input = input.map(Into::<PackedGoldilocksAVX2>::into);
+                let packed_output = mds.permute(packed_input);
 
-        let packed_input = input.map(Into::<PackedGoldilocksAVX2>::into);
-        let packed_output = mds.permute(packed_input);
-
-        let avx2_output = packed_output.map(|x| x.0[0]);
-        assert_eq!(avx2_output, expected);
+                let avx2_output = packed_output.map(|x| x.0[0]);
+                assert_eq!(avx2_output, expected);
+            }
+        };
     }
 
-    #[test]
-    fn test_avx2_mds_width_8() {
-        test_avx2_mds_width::<8>();
-    }
-
-    #[test]
-    fn test_avx2_mds_width_12() {
-        test_avx2_mds_width::<12>();
-    }
-
-    #[test]
-    fn test_avx2_mds_width_16() {
-        test_avx2_mds_width::<16>();
-    }
-
-    #[test]
-    fn test_avx2_mds_width_24() {
-        test_avx2_mds_width::<24>();
-    }
+    test_avx2_mds!(test_avx2_mds_width_8, 8);
+    test_avx2_mds!(test_avx2_mds_width_12, 12);
+    test_avx2_mds!(test_avx2_mds_width_16, 16);
+    test_avx2_mds!(test_avx2_mds_width_24, 24);
 }
