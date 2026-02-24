@@ -2,7 +2,6 @@
 //!
 //! Used when no SIMD architecture (AVX2/AVX512/NEON) is available.
 
-use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_poseidon::external::{FullRoundConstants, FullRoundLayerConstructor};
