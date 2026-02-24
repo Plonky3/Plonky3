@@ -127,10 +127,10 @@ where
             return Err(VerificationError::InvalidProofShape);
         }
         if airs[i].main_uses_next_row() {
-            if !inst_base_opened_vals
+            if inst_base_opened_vals
                 .trace_next
                 .as_ref()
-                .is_some_and(|v| v.len() == air_width)
+                .is_none_or(|v| v.len() != air_width)
             {
                 return Err(VerificationError::InvalidProofShape);
             }
