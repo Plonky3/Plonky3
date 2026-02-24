@@ -780,7 +780,6 @@ where
                 },
             );
 
-            let accumulator = PackedChallenge::<SC>::ZERO;
             let inner_folder = ProverConstraintFolder {
                 main: main.as_view(),
                 preprocessed: preprocessed.as_ref().map(|m| m.as_view()),
@@ -790,7 +789,9 @@ where
                 is_transition,
                 alpha_powers: &alpha_powers,
                 decomposed_alpha_powers: &decomposed_alpha_powers,
-                accumulator,
+                constraint_count,
+                base_constraints: Vec::with_capacity(constraint_count),
+                ext_constraints: Vec::new(),
                 constraint_index: 0,
             };
 
@@ -808,7 +809,7 @@ where
             );
 
             // quotient(x) = constraints(x) / Z_H(x)
-            let quotient = folder.inner.accumulator * inv_vanishing;
+            let quotient = folder.inner.finalize_constraints() * inv_vanishing;
 
             // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
             (0..core::cmp::min(quotient_size, PackedVal::<SC>::WIDTH))

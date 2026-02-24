@@ -5,14 +5,15 @@ use p3_field::BasedVectorSpace;
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
 
-use crate::constraint_batch::batched_base_linear_combination;
+use crate::constraint_batch::{batched_base_linear_combination, batched_ext_linear_combination};
 use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
 
 /// Handles constraint accumulation for the prover in a STARK system.
 ///
-/// This struct is responsible for evaluating constraints corresponding to a given row in the trace matrix.
-/// It accumulates them into a single value using a randomized challenge.
-/// `C_0 + alpha C_1 + alpha^2 C_2 + ...`
+/// Constraints are **collected** into separate base and extension buckets
+/// during [`AirBuilder::assert_zero`] / [`AirBuilder::assert_zeros`] /
+/// [`p3_air::ExtensionBuilder::assert_zero_ext`], then combined in a single
+/// batched fold via [`ProverConstraintFolder::finalize_constraints`].
 #[derive(Debug)]
 pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     /// The [`RowMajorMatrixView`] containing rows on which the constraint polynomial is evaluated.
@@ -31,9 +32,12 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     pub alpha_powers: &'a [SC::Challenge],
     /// Challenge powers decomposed into their base field component.
     pub decomposed_alpha_powers: &'a [Vec<Val<SC>>],
-    /// Running accumulator for all constraints multiplied by challenge powers
-    /// `C_0 + alpha C_1 + alpha^2 C_2 + ...`
-    pub accumulator: PackedChallenge<SC>,
+    /// Total number of constraints expected (used for debug assertions).
+    pub constraint_count: usize,
+    /// Collected base-field (packed) constraint expressions for this packed row.
+    pub base_constraints: Vec<PackedVal<SC>>,
+    /// Collected extension-field (packed) constraint expressions for this packed row.
+    pub ext_constraints: Vec<PackedChallenge<SC>>,
     /// Current constraint index being processed
     pub constraint_index: usize,
 }
@@ -60,6 +64,43 @@ pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
     pub alpha: SC::Challenge,
     /// Running accumulator for all constraints
     pub accumulator: SC::Challenge,
+}
+
+impl<'a, SC: StarkGenericConfig> ProverConstraintFolder<'a, SC> {
+    /// Fold all collected constraints into a single packed extension field value.
+    ///
+    /// Base constraints are folded per extension basis dimension using
+    /// [`batched_base_linear_combination`], and extension constraints are folded
+    /// using [`batched_ext_linear_combination`].
+    #[inline]
+    pub fn finalize_constraints(self) -> PackedChallenge<SC> {
+        debug_assert_eq!(
+            self.constraint_index, self.constraint_count,
+            "expected {} constraints, got {}",
+            self.constraint_count, self.constraint_index,
+        );
+
+        let base_count = self.base_constraints.len();
+        let ext_count = self.ext_constraints.len();
+
+        // Base constraints: D independent base-field dot products, one per
+        // extension basis coefficient. Each produces one packed base coefficient
+        // of the folded packed challenge.
+        let base_acc = PackedChallenge::<SC>::from_basis_coefficients_fn(|d| {
+            batched_base_linear_combination(
+                &self.decomposed_alpha_powers[d][..base_count],
+                &self.base_constraints,
+            )
+        });
+
+        // Extension constraints: single EF-coefficient dot product.
+        let ext_acc = batched_ext_linear_combination(
+            &self.alpha_powers[base_count..base_count + ext_count],
+            &self.ext_constraints,
+        );
+
+        base_acc + ext_acc
+    }
 }
 
 impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
@@ -102,19 +143,13 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
 
     #[inline]
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
-        let alpha_power = self.alpha_powers[self.constraint_index];
-        self.accumulator += Into::<PackedChallenge<SC>>::into(alpha_power) * x.into();
+        self.base_constraints.push(x.into());
         self.constraint_index += 1;
     }
 
     #[inline]
     fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
-        let expr_array = array.map(Into::into);
-        self.accumulator += PackedChallenge::<SC>::from_basis_coefficients_fn(|i| {
-            let alpha_powers = &self.decomposed_alpha_powers[i]
-                [self.constraint_index..(self.constraint_index + N)];
-            batched_base_linear_combination(alpha_powers, &expr_array)
-        });
+        self.base_constraints.extend(array.map(Into::into));
         self.constraint_index += N;
     }
 }
@@ -125,6 +160,14 @@ impl<SC: StarkGenericConfig> AirBuilderWithPublicValues for ProverConstraintFold
     #[inline]
     fn public_values(&self) -> &[Self::F] {
         self.public_values
+    }
+}
+
+impl<SC: StarkGenericConfig> VerifierConstraintFolder<'_, SC> {
+    /// Returns the accumulated constraint value.
+    #[inline]
+    pub const fn finalize_constraints(self) -> SC::Challenge {
+        self.accumulator
     }
 }
 
