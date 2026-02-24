@@ -7,7 +7,7 @@ use core::ops::Neg;
 use p3_field::Field;
 use serde::{Deserialize, Serialize};
 
-use crate::{AirBuilderWithPublicValues, PermutationAirBuilder, SymbolicExpression};
+use crate::{PermutationAirBuilder, SymbolicExpression};
 
 /// Defines errors that can occur during lookup verification.
 #[derive(Debug)]
@@ -139,7 +139,7 @@ pub trait LookupEvaluator {
     /// - it checks that the final value of the running sum is 0.
     fn eval_local_lookup<AB>(&self, builder: &mut AB, context: &Lookup<AB::F>)
     where
-        AB: PermutationAirBuilder + AirBuilderWithPublicValues;
+        AB: PermutationAirBuilder;
 
     /// Evaluates a global lookup update based on the provided context, and the expected cumulated value.
     /// This evaluation is carried out at the AIR level. We still need to check that the permutation argument holds
@@ -154,7 +154,7 @@ pub trait LookupEvaluator {
         context: &Lookup<AB::F>,
         expected_cumulated: AB::ExprEF,
     ) where
-        AB: PermutationAirBuilder + AirBuilderWithPublicValues;
+        AB: PermutationAirBuilder;
 
     /// Evalutes the lookup constraints for all provided contexts.
     ///
@@ -168,7 +168,7 @@ pub trait LookupEvaluator {
         // Assumed to be sorted by auxiliary_index.
         lookup_data: &[LookupData<AB::ExprEF>],
     ) where
-        AB: PermutationAirBuilder + AirBuilderWithPublicValues,
+        AB: PermutationAirBuilder,
     {
         let mut lookup_data_iter = lookup_data.iter();
         for context in contexts.iter() {

@@ -3,10 +3,7 @@ use alloc::vec::Vec;
 use p3_air::lookup::LookupEvaluator;
 /// Public re-exports of lookup types.
 pub use p3_air::lookup::{Direction, Kind, Lookup, LookupData, LookupError, LookupInput};
-use p3_air::{
-    AirBuilder, AirBuilderWithPublicValues, Entry, ExtensionBuilder, PermutationAirBuilder,
-    SymbolicExpression,
-};
+use p3_air::{AirBuilder, Entry, ExtensionBuilder, PermutationAirBuilder, SymbolicExpression};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -94,6 +91,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
     type Expr = Val<SC>;
     type Var = Val<SC>;
     type M = ViewPair<'a, Val<SC>>;
+    type PublicVar = Val<SC>;
 
     #[inline]
     fn main(&self) -> Self::M {
@@ -102,6 +100,11 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.preprocessed
+    }
+
+    #[inline]
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.public_values
     }
 
     #[inline]
@@ -136,15 +139,6 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
     }
 }
 
-impl<SC: StarkGenericConfig> AirBuilderWithPublicValues for LookupTraceBuilder<'_, SC> {
-    type PublicVar = Val<SC>;
-
-    #[inline]
-    fn public_values(&self) -> &[Self::F] {
-        self.public_values
-    }
-}
-
 impl<SC: StarkGenericConfig> ExtensionBuilder for LookupTraceBuilder<'_, SC> {
     type EF = SC::Challenge;
     type ExprEF = SC::Challenge;
@@ -173,7 +167,7 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder for LookupTraceBuilder<'a
 /// Converts `SymbolicExpression<F>` to the builder's expression type `AB::Expr`.
 pub fn symbolic_to_expr<AB>(builder: &AB, expr: &SymbolicExpression<AB::F>) -> AB::Expr
 where
-    AB: AirBuilderWithPublicValues + PermutationAirBuilder,
+    AB: AirBuilder + PermutationAirBuilder,
 {
     match expr {
         SymbolicExpression::Variable(v) => match v.entry {

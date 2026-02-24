@@ -6,8 +6,8 @@ use p3_matrix::dense::RowMajorMatrix;
 use tracing::instrument;
 
 use crate::{
-    Air, AirBuilder, AirBuilderWithPublicValues, Entry, ExtensionBuilder, PermutationAirBuilder,
-    SymbolicExpression, SymbolicVariable,
+    Air, AirBuilder, Entry, ExtensionBuilder, PermutationAirBuilder, SymbolicExpression,
+    SymbolicVariable,
 };
 
 #[instrument(skip_all, level = "debug")]
@@ -210,6 +210,7 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
     type Expr = SymbolicExpression<F>;
     type Var = SymbolicVariable<F>;
     type M = RowMajorMatrix<Self::Var>;
+    type PublicVar = SymbolicVariable<F>;
 
     fn main(&self) -> Self::M {
         self.main.clone()
@@ -217,6 +218,10 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
 
     fn preprocessed(&self) -> Option<Self::M> {
         Some(self.preprocessed.clone())
+    }
+
+    fn public_values(&self) -> &[Self::PublicVar] {
+        &self.public_values
     }
 
     fn is_first_row(&self) -> Self::Expr {
@@ -239,13 +244,6 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         self.base_constraints.push(x.into());
-    }
-}
-
-impl<F: Field, EF: ExtensionField<F>> AirBuilderWithPublicValues for SymbolicAirBuilder<F, EF> {
-    type PublicVar = SymbolicVariable<F>;
-    fn public_values(&self) -> &[Self::PublicVar] {
-        &self.public_values
     }
 }
 

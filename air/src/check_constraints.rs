@@ -5,10 +5,7 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::{VerticalPair, ViewPair};
 
-use crate::{
-    Air, AirBuilder, AirBuilderWithContext, AirBuilderWithPublicValues, ExtensionBuilder,
-    PermutationAirBuilder,
-};
+use crate::{Air, AirBuilder, AirBuilderWithContext, ExtensionBuilder, PermutationAirBuilder};
 
 /// A single constraint violation captured during debug evaluation.
 ///
@@ -160,6 +157,7 @@ where
     type Expr = F;
     type Var = F;
     type M = ViewPair<'a, F>;
+    type PublicVar = F;
 
     fn main(&self) -> Self::M {
         self.main
@@ -167,6 +165,10 @@ where
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.preprocessed
+    }
+
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.public_values
     }
 
     fn is_first_row(&self) -> Self::Expr {
@@ -202,16 +204,6 @@ where
             });
         }
         self.constraint_index += 1;
-    }
-}
-
-impl<F: Field, EF: ExtensionField<F>> AirBuilderWithPublicValues
-    for DebugConstraintBuilder<'_, F, EF>
-{
-    type PublicVar = F;
-
-    fn public_values(&self) -> &[Self::F] {
-        self.public_values
     }
 }
 
@@ -352,7 +344,7 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
 
     use super::*;
-    use crate::{BaseAir, BaseAirWithPublicValues};
+    use crate::BaseAir;
 
     /// Minimal AIR for testing transition and boundary constraints.
     ///
@@ -367,8 +359,6 @@ mod tests {
             W
         }
     }
-
-    impl<F: Field, const W: usize> BaseAirWithPublicValues<F> for RowLogicAir<W> {}
 
     impl<F: Field, const W: usize> Air<DebugConstraintBuilder<'_, F>> for RowLogicAir<W> {
         fn eval(&self, builder: &mut DebugConstraintBuilder<'_, F>) {

@@ -5,9 +5,7 @@ use alloc::vec::Vec;
 
 use p3_air::lookup::LookupEvaluator;
 use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
-use p3_air::{
-    Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, ExtensionBuilder, PermutationAirBuilder,
-};
+use p3_air::{Air, AirBuilder, BaseAir, ExtensionBuilder, PermutationAirBuilder};
 use p3_baby_bear::BabyBear;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
@@ -168,6 +166,7 @@ impl AirBuilder for MockAirBuilder {
     type Expr = F;
     type Var = F;
     type M = RowMajorMatrix<F>;
+    type PublicVar = F;
 
     fn main(&self) -> Self::M {
         self.window(&self.main)
@@ -230,13 +229,6 @@ impl PermutationAirBuilder for MockAirBuilder {
     }
 }
 
-impl AirBuilderWithPublicValues for MockAirBuilder {
-    type PublicVar = Self::F;
-
-    fn public_values(&self) -> &[Self::PublicVar] {
-        &[]
-    }
-}
 /// An AIR designed to perform range checks using the `LogUpGadget`.
 ///
 /// This AIR demonstrates how to use LogUp for range checking. It supports multiple
@@ -269,7 +261,7 @@ impl RangeCheckAir {
 
 impl<AB> Air<AB> for RangeCheckAir
 where
-    AB: PermutationAirBuilder<F = F, EF = EF, RandomVar = EF> + AirBuilderWithPublicValues,
+    AB: PermutationAirBuilder<F = F, EF = EF, RandomVar = EF>,
     AB::Var: Copy + Into<AB::ExprEF>,
     AB::ExprEF: From<AB::Var> + From<F>,
     F: Copy + Into<AB::ExprEF>,
@@ -1156,7 +1148,7 @@ impl<F: Field> BaseAir<F> for AddAir {
 
 impl<AB> Air<AB> for AddAir
 where
-    AB: PermutationAirBuilder<F = F, EF = EF, RandomVar = EF> + AirBuilderWithPublicValues,
+    AB: PermutationAirBuilder<F = F, EF = EF, RandomVar = EF>,
     AB::Var: Copy + Into<AB::ExprEF>,
     AB::ExprEF: From<AB::Var> + From<F>,
     F: Copy + Into<AB::ExprEF>,
