@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::iter::{Product, Sum};
 use core::mem::MaybeUninit;
 use core::ops::{Div, DivAssign};
@@ -379,6 +380,45 @@ pub trait PackedFieldExtension<
     fn packed_ext_powers_capped(base: ExtField, unpacked_len: usize) -> impl Iterator<Item = Self> {
         Self::packed_ext_powers(base).take(unpacked_len.div_ceil(BaseField::Packing::WIDTH))
     }
+}
+
+/// Extension trait adding `pack_ext_columns` and `to_ext_slice` methods.
+///
+/// These methods enable efficient SIMD operations on arrays of extension field elements
+/// by providing column-wise packing and unpacking utilities.
+pub trait PackedFieldExtensionExt<
+    BaseField: Field,
+    ExtField: ExtensionField<BaseField, ExtensionPacking = Self>,
+>: PackedFieldExtension<BaseField, ExtField>
+{
+    /// Pack N columns from WIDTH rows into N packed extension field elements.
+    ///
+    /// Input: `rows[lane][col]` - WIDTH rows, each with N extension field elements.
+    /// Output: `result[col]` - N packed values, where each packs WIDTH lanes.
+    fn pack_ext_columns<const N: usize>(rows: &[[ExtField; N]]) -> [Self; N] {
+        let width = BaseField::Packing::WIDTH;
+        debug_assert_eq!(rows.len(), width);
+        array::from_fn(|col| {
+            let col_elems: Vec<ExtField> = (0..width).map(|lane| rows[lane][col]).collect();
+            Self::from_ext_slice(&col_elems)
+        })
+    }
+
+    /// Extract all lanes to an output slice.
+    fn to_ext_slice(&self, out: &mut [ExtField]) {
+        let width = BaseField::Packing::WIDTH;
+        for (lane, slot) in out.iter_mut().enumerate().take(width) {
+            *slot = self.extract(lane);
+        }
+    }
+}
+
+impl<
+    BaseField: Field,
+    ExtField: ExtensionField<BaseField, ExtensionPacking = P>,
+    P: PackedFieldExtension<BaseField, ExtField>,
+> PackedFieldExtensionExt<BaseField, ExtField> for P
+{
 }
 
 unsafe impl<T: Packable> PackedValue for T {
