@@ -12,12 +12,13 @@ use alloc::vec::Vec;
 
 use hashbrown::HashMap;
 use p3_air::Air;
+use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
 use p3_challenger::FieldChallenger;
 use p3_commit::Pcs;
 use p3_field::BasedVectorSpace;
 use p3_lookup::lookup_traits::{Kind, Lookup, LookupGadget};
 use p3_matrix::Matrix;
-use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression, Val};
+use p3_uni_stark::Val;
 use p3_util::log2_strict_usize;
 
 use crate::config::{Challenge, Commitment, Domain, StarkGenericConfig as SGC};
