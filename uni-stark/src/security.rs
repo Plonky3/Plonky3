@@ -288,6 +288,7 @@ impl ProvenSecurity {
                     lde_domain_size_f,
                     max_deg,
                     num_openings,
+                    folding_factor,
                     m,
                 )
             })
@@ -303,6 +304,7 @@ impl ProvenSecurity {
                 lde_domain_size_f,
                 max_deg,
                 num_openings,
+                folding_factor,
                 m_optimal,
             ),
             collision_resistance as u64,
@@ -415,6 +417,7 @@ fn proven_security_list_decoding_m(
     lde_domain_size: f64,
     max_deg: f64,
     num_openings: f64,
+    folding_factor: f64,
     m: usize,
 ) -> u64 {
     let rho = 1.0 / blowup_factor as f64;
@@ -429,38 +432,45 @@ fn proven_security_list_decoding_m(
         return 0;
     }
 
-    // we apply Theorem 2 in https://eprint.iacr.org/2024/1553, which is based on Theorem 8 in
-    // https://eprint.iacr.org/2022/1216.pdf and Theorem 5 in https://eprint.iacr.org/2021/582
-    // Note that the range of m needs to be restricted in order to ensure that eta, the slackness
-    // factor to the distance bound, is greater than 0.
-    // Determining the range of m is the responsibility of the calling function.
+    // We apply Theorem 2 in https://eprint.iacr.org/2024/1553, with the improved
+    // LDR FRI commit phase bounds from https://eprint.iacr.org/2025/2055.
     let mut epsilons_bits_neg = Vec::new();
+
     // ALI related soundness error.
     epsilons_bits_neg.push(-log2(l) - log2(constraint_batching) + extension_field_bits);
 
     // DEEP related soundness error.
     epsilons_bits_neg.push(
-        -log2(
-            l * l
-                * (max_deg * (trace_domain_size + num_openings - 1.0) + (trace_domain_size - 1.0)),
-        ) + extension_field_bits,
+        -log2(l * (max_deg * (trace_domain_size + num_openings - 1.0) + (trace_domain_size - 1.0)))
+            + extension_field_bits,
     );
 
-    // FRI commit-phase (i.e., pre-query) soundness error.
-    // This considers only the first term given in eq. 7 in https://eprint.iacr.org/2022/1216.pdf,
-    // i.e. (m + 0.5)^7 * n^2 * (N - 1) / (3 * q * rho^1.5) as all other terms are negligible in
-    // comparison. N is the number of batched polynomials.
-    epsilons_bits_neg.push(
-        extension_field_bits
-            - log2(
-                (pow(m_f + 0.5, 7.0) / (3.0 * pow(rho, 1.5)))
-                    * lde_domain_size
-                    * lde_domain_size
-                    * deep_batching,
-            ),
-    );
+    // FRI commit-phase (i.e., pre-query) soundness error, using the improved
+    // proximity-gap bounds from 2025/2055.
+    //
+    // Base (without batching constant):
+    //   -log2(ε₃') = extension_field_bits
+    //                - log2( 2 * (m + 0.5)^5 / (3 * ρ^{3/2}) * n ),
+    // where n is the LDE domain size and ρ is the FRI rate.
+    let epsilon_3_no_batching = extension_field_bits
+        - log2((2.0 * pow(m_f + 0.5, 5.0) / (3.0 * pow(rho, 1.5))) * lde_domain_size);
 
-    // epsilon_i for i in [3..(k-1)], where k is number of rounds, are also negligible
+    // Include batching constant only in ε₃.
+    let epsilon_3_bits_neg = epsilon_3_no_batching - log2(deep_batching);
+    epsilons_bits_neg.push(epsilon_3_bits_neg);
+
+    // Intermediate FRI layers ε_i, i ∈ [4..k−1].
+    // We bound them by the minimum of:
+    // - the commit-phase base term ε₃', and
+    // - an n/q-style term with folding factor and Johnson-gap dependent constant.
+    let term_from_e3 = epsilon_3_no_batching;
+    let term_from_n_over_q = extension_field_bits
+        - log2(folding_factor)
+        - log2(lde_domain_size + 1.0)
+        - log2(2.0 * m_f + 1.0)
+        + 0.5 * log2(rho);
+    let epsilon_i_min_bits_neg = term_from_e3.min(term_from_n_over_q);
+    epsilons_bits_neg.push(epsilon_i_min_bits_neg);
 
     // FRI query-phase soundness error.
     let epsilon_k = grinding_factor - log2(pow(alpha, num_fri_queries));
