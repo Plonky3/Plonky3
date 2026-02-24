@@ -53,8 +53,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::{
-    Algebra, ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
-    dot_product,
+    Algebra, ExtensionField, Field, PackedFieldExtension, PackedFieldExtensionExt, PackedValue,
+    PrimeCharacteristicRing, dot_product,
 };
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -449,18 +449,16 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for ExtFieldEvaluator<F,
         // Sum all packed field elements first.
         let packed_sum: Self::PackedField = final_packed_evals.iter().copied().sum();
 
-        // Now unpack the single sum result.
-        let unpacked_iter = Self::PackedField::to_ext_iter([packed_sum]);
-
-        // Write or add the unpacked result to the output buffer.
         if INITIALIZED {
+            // Unpack into a temporary slice and add into `out`.
+            let mut unpacked = Self::OutputField::zero_vec(out.len());
+            packed_sum.to_ext_slice(&mut unpacked);
             out.iter_mut()
-                .zip(unpacked_iter)
+                .zip(unpacked)
                 .for_each(|(out_val, unpacked_val)| *out_val += unpacked_val);
         } else {
-            out.iter_mut()
-                .zip(unpacked_iter)
-                .for_each(|(out_val, unpacked_val)| *out_val = unpacked_val);
+            // Directly unpack into the output buffer.
+            packed_sum.to_ext_slice(out);
         }
     }
 }
