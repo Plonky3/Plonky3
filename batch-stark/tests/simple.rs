@@ -1142,11 +1142,13 @@ fn test_invalid_trace_width_rejected() {
         .clone();
     tampered_proof.opened_values.instances[0]
         .base_opened_values
-        .trace_next = vec![
+        .trace_next = Some(vec![
         valid_proof.opened_values.instances[0]
             .base_opened_values
-            .trace_next[0],
-    ]; // Wrong width
+            .trace_next
+            .as_ref()
+            .unwrap()[0],
+    ]); // Wrong width
 
     let res = verify_batch(&config, &airs, &tampered_proof, from_ref(&fib_pis), common);
     assert!(
