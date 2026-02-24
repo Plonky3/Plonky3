@@ -4,15 +4,15 @@ use p3_field::Field;
 use p3_poseidon::external::{
     FullRoundLayer, full_round_initial_permute_state, full_round_terminal_permute_state,
 };
-use p3_poseidon::generic::GenericPoseidon1LinearLayers;
+use p3_poseidon::generic::GenericPoseidonLinearLayers;
 use p3_poseidon::internal::{PartialRoundLayer, partial_permute_state};
 
 use crate::{
-    FieldParameters, MontyField31, MontyParameters, Poseidon1ExternalLayerMonty31,
-    Poseidon1InternalLayerMonty31, RelativelyPrimePower,
+    FieldParameters, MontyField31, MontyParameters, PoseidonExternalLayerMonty31,
+    PoseidonInternalLayerMonty31, RelativelyPrimePower,
 };
 
-/// Trait for Poseidon1 partial round scalar operations.
+/// Trait for Poseidon partial round scalar operations.
 pub trait PartialRoundBaseParameters<MP: MontyParameters, const WIDTH: usize>:
     Clone + Sync
 {
@@ -52,7 +52,7 @@ pub trait PartialRoundParameters<FP: FieldParameters, const WIDTH: usize>:
 }
 
 impl<FP, const WIDTH: usize, P1P, const D: u64> PartialRoundLayer<MontyField31<FP>, WIDTH, D>
-    for Poseidon1InternalLayerMonty31<FP, WIDTH, P1P>
+    for PoseidonInternalLayerMonty31<FP, WIDTH, P1P>
 where
     FP: FieldParameters + RelativelyPrimePower<D>,
     P1P: PartialRoundParameters<FP, WIDTH>,
@@ -66,7 +66,7 @@ where
 }
 
 impl<FP, const WIDTH: usize, const D: u64> FullRoundLayer<MontyField31<FP>, WIDTH, D>
-    for Poseidon1ExternalLayerMonty31<FP, WIDTH>
+    for PoseidonExternalLayerMonty31<FP, WIDTH>
 where
     FP: FieldParameters + RelativelyPrimePower<D>,
 {
@@ -85,14 +85,14 @@ where
     }
 }
 
-/// Generic Poseidon1 linear layers for MontyField31.
-pub struct GenericPoseidon1LinearLayersMonty31<FP, PRBP> {
+/// Generic Poseidon linear layers for MontyField31.
+pub struct GenericPoseidonLinearLayersMonty31<FP, PRBP> {
     _phantom1: PhantomData<FP>,
     _phantom2: PhantomData<PRBP>,
 }
 
-impl<FP, PRBP, F, const WIDTH: usize> GenericPoseidon1LinearLayers<F, WIDTH>
-    for GenericPoseidon1LinearLayersMonty31<FP, PRBP>
+impl<FP, PRBP, F, const WIDTH: usize> GenericPoseidonLinearLayers<F, WIDTH>
+    for GenericPoseidonLinearLayersMonty31<FP, PRBP>
 where
     FP: FieldParameters,
     PRBP: PartialRoundBaseParameters<FP, WIDTH>,

@@ -1,5 +1,5 @@
 mod packing;
-mod poseidon1;
+mod poseidon;
 mod poseidon2;
 
 pub use packing::*;

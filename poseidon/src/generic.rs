@@ -19,7 +19,7 @@ pub fn add_rc_and_sbox_generic<F: Field, A: Algebra<F> + InjectiveMonomial<D>, c
 ///
 /// Provides default dense MDS multiplication and sparse matrix multiplication
 /// for use when no field-specific optimized implementation is available.
-pub trait GenericPoseidon1LinearLayers<F: Field, const WIDTH: usize>: Sync {
+pub trait GenericPoseidonLinearLayers<F: Field, const WIDTH: usize>: Sync {
     /// Dense MDS matrix-vector multiplication (O(t^2)).
     fn mds_multiply<R: Algebra<F>>(state: &mut [R; WIDTH], mds: &[[F; WIDTH]; WIDTH]) {
         mds_multiply(state, mds);

@@ -1,59 +1,59 @@
-//! Poseidon1 implementation for BabyBear.
+//! Poseidon implementation for BabyBear.
 //!
 //! Constants sourced from HorizenLabs:
 //! <https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon/poseidon_instance_babybear.rs>
 
 use p3_monty_31::{
-    GenericPoseidon1LinearLayersMonty31, PartialRoundBaseParameters, PartialRoundParameters,
-    Poseidon1ExternalLayerMonty31, Poseidon1InternalLayerMonty31,
+    GenericPoseidonLinearLayersMonty31, PartialRoundBaseParameters, PartialRoundParameters,
+    PoseidonExternalLayerMonty31, PoseidonInternalLayerMonty31,
 };
 use p3_poseidon::{Poseidon, PoseidonConstants};
 
 use crate::{BabyBear, BabyBearParameters};
 
-/// Internal (partial round) layer for BabyBear Poseidon1.
-pub type Poseidon1InternalLayerBabyBear<const WIDTH: usize> =
-    Poseidon1InternalLayerMonty31<BabyBearParameters, WIDTH, BabyBearPoseidon1Parameters>;
+/// Internal (partial round) layer for BabyBear Poseidon.
+pub type PoseidonInternalLayerBabyBear<const WIDTH: usize> =
+    PoseidonInternalLayerMonty31<BabyBearParameters, WIDTH, BabyBearPoseidonParameters>;
 
-/// External (full round) layer for BabyBear Poseidon1.
-pub type Poseidon1ExternalLayerBabyBear<const WIDTH: usize> =
-    Poseidon1ExternalLayerMonty31<BabyBearParameters, WIDTH>;
+/// External (full round) layer for BabyBear Poseidon.
+pub type PoseidonExternalLayerBabyBear<const WIDTH: usize> =
+    PoseidonExternalLayerMonty31<BabyBearParameters, WIDTH>;
 
-/// Degree of the chosen permutation polynomial for BabyBear, used as the Poseidon1 S-Box.
+/// Degree of the chosen permutation polynomial for BabyBear, used as the Poseidon S-Box.
 ///
 /// As p - 1 = 15 * 2^{27} neither 3 nor 5 satisfy gcd(p - 1, D) = 1.
 /// Instead we use the next smallest available value, namely 7.
 const BABYBEAR_S_BOX_DEGREE: u64 = 7;
 
-/// The Poseidon1 permutation for BabyBear.
+/// The Poseidon permutation for BabyBear.
 ///
 /// Acts on arrays of the form `[BabyBear; WIDTH]` or `[BabyBear::Packing; WIDTH]`.
-pub type Poseidon1BabyBear<const WIDTH: usize> = Poseidon<
+pub type PoseidonBabyBear<const WIDTH: usize> = Poseidon<
     BabyBear,
-    Poseidon1ExternalLayerBabyBear<WIDTH>,
-    Poseidon1InternalLayerBabyBear<WIDTH>,
+    PoseidonExternalLayerBabyBear<WIDTH>,
+    PoseidonInternalLayerBabyBear<WIDTH>,
     WIDTH,
     BABYBEAR_S_BOX_DEGREE,
 >;
 
-/// Generic Poseidon1 linear layers for BabyBear.
+/// Generic Poseidon linear layers for BabyBear.
 ///
 /// Can act on `[A; WIDTH]` for any ring implementing `Algebra<BabyBear>`.
-pub type GenericPoseidon1LinearLayersBabyBear =
-    GenericPoseidon1LinearLayersMonty31<BabyBearParameters, BabyBearPoseidon1Parameters>;
+pub type GenericPoseidonLinearLayersBabyBear =
+    GenericPoseidonLinearLayersMonty31<BabyBearParameters, BabyBearPoseidonParameters>;
 
-/// Parameters for the Poseidon1 internal layer on BabyBear.
+/// Parameters for the Poseidon internal layer on BabyBear.
 #[derive(Debug, Clone, Default)]
-pub struct BabyBearPoseidon1Parameters;
+pub struct BabyBearPoseidonParameters;
 
-impl PartialRoundBaseParameters<BabyBearParameters, 16> for BabyBearPoseidon1Parameters {}
-impl PartialRoundBaseParameters<BabyBearParameters, 24> for BabyBearPoseidon1Parameters {}
-impl PartialRoundParameters<BabyBearParameters, 16> for BabyBearPoseidon1Parameters {}
-impl PartialRoundParameters<BabyBearParameters, 24> for BabyBearPoseidon1Parameters {}
+impl PartialRoundBaseParameters<BabyBearParameters, 16> for BabyBearPoseidonParameters {}
+impl PartialRoundBaseParameters<BabyBearParameters, 24> for BabyBearPoseidonParameters {}
+impl PartialRoundParameters<BabyBearParameters, 16> for BabyBearPoseidonParameters {}
+impl PartialRoundParameters<BabyBearParameters, 24> for BabyBearPoseidonParameters {}
 
-/// MDS matrix for width-16 Poseidon1 on BabyBear.
+/// MDS matrix for width-16 Poseidon on BabyBear.
 #[rustfmt::skip]
-pub const BABYBEAR_POSEIDON1_MDS_16: [[BabyBear; 16]; 16] = BabyBear::new_2d_array([
+pub const BABYBEAR_POSEIDON_MDS_16: [[BabyBear; 16]; 16] = BabyBear::new_2d_array([
     [
         0x6ed88b54, 0x365c29f9, 0x029047ae, 0x0340f575, 0x68418255, 0x315e4e40, 0x51596faa, 0x71183465,
         0x2d036fca, 0x09e4fa24, 0x38e00966, 0x13e81974, 0x60f6dafc, 0x3c664116, 0x2e2b9d4b, 0x6c5f6689,
@@ -120,11 +120,11 @@ pub const BABYBEAR_POSEIDON1_MDS_16: [[BabyBear; 16]; 16] = BabyBear::new_2d_arr
     ],
 ]);
 
-/// Round constants for width-16 Poseidon1 on BabyBear.
+/// Round constants for width-16 Poseidon on BabyBear.
 ///
 /// Layout: [initial_full (4 rounds), partial (13 rounds), terminal_full (4 rounds)].
 #[rustfmt::skip]
-pub const BABYBEAR_POSEIDON1_RC_16: [[BabyBear; 16]; 21] = BabyBear::new_2d_array([
+pub const BABYBEAR_POSEIDON_RC_16: [[BabyBear; 16]; 21] = BabyBear::new_2d_array([
     // Initial full rounds (4)
     [
         0x22d14fc7, 0x47743d29, 0x677f35c3, 0x3ae46df5, 0x24f86039, 0x4eb76fe3, 0x463c658a, 0x06ee674e,
@@ -214,9 +214,9 @@ pub const BABYBEAR_POSEIDON1_RC_16: [[BabyBear; 16]; 21] = BabyBear::new_2d_arra
     ],
 ]);
 
-/// MDS matrix for width-24 Poseidon1 on BabyBear.
+/// MDS matrix for width-24 Poseidon on BabyBear.
 #[rustfmt::skip]
-pub const BABYBEAR_POSEIDON1_MDS_24: [[BabyBear; 24]; 24] = BabyBear::new_2d_array([
+pub const BABYBEAR_POSEIDON_MDS_24: [[BabyBear; 24]; 24] = BabyBear::new_2d_array([
     [
         0x19191a7d, 0x6cbe083c, 0x0b589971, 0x3be4046a, 0x2c837497, 0x61c4fa1e, 0x3d45f6db, 0x679624bc,
         0x5f59f3da, 0x62cda2fe, 0x567b01b2, 0x389daccb, 0x5522ba84, 0x71e3475e, 0x5f147d86, 0x1d7e0433,
@@ -339,11 +339,11 @@ pub const BABYBEAR_POSEIDON1_MDS_24: [[BabyBear; 24]; 24] = BabyBear::new_2d_arr
     ],
 ]);
 
-/// Round constants for width-24 Poseidon1 on BabyBear.
+/// Round constants for width-24 Poseidon on BabyBear.
 ///
 /// Layout: [initial_full (4 rounds), partial (21 rounds), terminal_full (4 rounds)].
 #[rustfmt::skip]
-pub const BABYBEAR_POSEIDON1_RC_24: [[BabyBear; 24]; 29] = BabyBear::new_2d_array([
+pub const BABYBEAR_POSEIDON_RC_24: [[BabyBear; 24]; 29] = BabyBear::new_2d_array([
     // Initial full rounds (4)
     [
         0x75c89df8, 0x0af90431, 0x39e877bf, 0x18a5a8cd, 0x588e9a95, 0x16760b26, 0x026ff4a4, 0x2326df32,
@@ -494,23 +494,23 @@ pub const BABYBEAR_POSEIDON1_RC_24: [[BabyBear; 24]; 29] = BabyBear::new_2d_arra
     ],
 ]);
 
-/// Create a default width-16 Poseidon1 for BabyBear using HorizenLabs constants.
-pub fn default_babybear_poseidon1_16() -> Poseidon1BabyBear<16> {
+/// Create a default width-16 Poseidon for BabyBear using HorizenLabs constants.
+pub fn default_babybear_poseidon_16() -> PoseidonBabyBear<16> {
     Poseidon::new(&PoseidonConstants {
         rounds_f: 8,
         rounds_p: 13,
-        mds: BABYBEAR_POSEIDON1_MDS_16,
-        round_constants: BABYBEAR_POSEIDON1_RC_16.to_vec(),
+        mds: BABYBEAR_POSEIDON_MDS_16,
+        round_constants: BABYBEAR_POSEIDON_RC_16.to_vec(),
     })
 }
 
-/// Create a default width-24 Poseidon1 for BabyBear using HorizenLabs constants.
-pub fn default_babybear_poseidon1_24() -> Poseidon1BabyBear<24> {
+/// Create a default width-24 Poseidon for BabyBear using HorizenLabs constants.
+pub fn default_babybear_poseidon_24() -> PoseidonBabyBear<24> {
     Poseidon::new(&PoseidonConstants {
         rounds_f: 8,
         rounds_p: 21,
-        mds: BABYBEAR_POSEIDON1_MDS_24,
-        round_constants: BABYBEAR_POSEIDON1_RC_24.to_vec(),
+        mds: BABYBEAR_POSEIDON_MDS_24,
+        round_constants: BABYBEAR_POSEIDON_RC_24.to_vec(),
     })
 }
 
@@ -526,8 +526,8 @@ mod tests {
     /// KAT: width-16, input = [0, 1, 2, ..., 15].
     /// Expected values from HorizenLabs reference implementation.
     #[test]
-    fn test_poseidon1_width_16_sequential() {
-        let perm = default_babybear_poseidon1_16();
+    fn test_poseidon_width_16_sequential() {
+        let perm = default_babybear_poseidon_16();
         let mut input: [F; 16] =
             F::new_array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
         let expected: [F; 16] = F::new_array([
@@ -541,8 +541,8 @@ mod tests {
 
     /// KAT: width-16, input = all zeros.
     #[test]
-    fn test_poseidon1_width_16_zeros() {
-        let perm = default_babybear_poseidon1_16();
+    fn test_poseidon_width_16_zeros() {
+        let perm = default_babybear_poseidon_16();
         let mut input = [F::ZERO; 16];
         let expected: [F; 16] = F::new_array([
             1492940447, 3933408, 2001701560, 379683329, 67896664, 1204605896, 205471985, 883149083,
@@ -555,8 +555,8 @@ mod tests {
 
     /// KAT: width-16, input = all ones.
     #[test]
-    fn test_poseidon1_width_16_ones() {
-        let perm = default_babybear_poseidon1_16();
+    fn test_poseidon_width_16_ones() {
+        let perm = default_babybear_poseidon_16();
         let mut input = [F::ONE; 16];
         let expected: [F; 16] = F::new_array([
             586998783, 161593044, 1930584191, 543842513, 1758528910, 1489291812, 637155264,
@@ -569,8 +569,8 @@ mod tests {
 
     /// KAT: width-24, input = [0, 1, 2, ..., 23].
     #[test]
-    fn test_poseidon1_width_24_sequential() {
-        let perm = default_babybear_poseidon1_24();
+    fn test_poseidon_width_24_sequential() {
+        let perm = default_babybear_poseidon_24();
         let mut input: [F; 24] = F::new_array([
             0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
         ]);
@@ -586,8 +586,8 @@ mod tests {
 
     /// KAT: width-24, input = all zeros.
     #[test]
-    fn test_poseidon1_width_24_zeros() {
-        let perm = default_babybear_poseidon1_24();
+    fn test_poseidon_width_24_zeros() {
+        let perm = default_babybear_poseidon_24();
         let mut input = [F::ZERO; 24];
         let expected: [F; 24] = F::new_array([
             1732814966, 1348956806, 1497259487, 1150858972, 1944109610, 599955066, 1259867441,
@@ -601,8 +601,8 @@ mod tests {
 
     /// KAT: width-24, input = all ones.
     #[test]
-    fn test_poseidon1_width_24_ones() {
-        let perm = default_babybear_poseidon1_24();
+    fn test_poseidon_width_24_ones() {
+        let perm = default_babybear_poseidon_24();
         let mut input = [F::ONE; 24];
         let expected: [F; 24] = F::new_array([
             102990370, 712382576, 533631375, 1021240238, 1898683445, 1133193200, 1294760435,
@@ -616,8 +616,8 @@ mod tests {
 
     /// Test determinism: same input always gives same output.
     #[test]
-    fn test_poseidon1_width_16_deterministic() {
-        let perm = default_babybear_poseidon1_16();
+    fn test_poseidon_width_16_deterministic() {
+        let perm = default_babybear_poseidon_16();
         let input: [F; 16] = core::array::from_fn(|i| F::from_u32(i as u32 + 42));
 
         let mut output1 = input;
@@ -631,8 +631,8 @@ mod tests {
 
     /// Test determinism: same input always gives same output (width 24).
     #[test]
-    fn test_poseidon1_width_24_deterministic() {
-        let perm = default_babybear_poseidon1_24();
+    fn test_poseidon_width_24_deterministic() {
+        let perm = default_babybear_poseidon_24();
         let input: [F; 24] = core::array::from_fn(|i| F::from_u32(i as u32 + 42));
 
         let mut output1 = input;
