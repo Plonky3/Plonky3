@@ -4,6 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::lookup::LookupEvaluator;
+use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
 use p3_air::{
     Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, ExtensionBuilder, PermutationAirBuilder,
 };
@@ -12,7 +13,6 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -515,8 +515,8 @@ impl LookupTraceBuilder {
 #[test]
 fn test_symbolic_to_expr() {
     use p3_air::AirBuilder;
+    use p3_air::symbolic::SymbolicAirBuilder;
     use p3_field::PrimeCharacteristicRing;
-    use p3_uni_stark::SymbolicAirBuilder;
 
     let mut builder = SymbolicAirBuilder::<F>::new(0, 2, 0, 0, 0);
 

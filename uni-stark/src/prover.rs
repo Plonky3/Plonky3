@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_air::Air;
+use p3_air::symbolic::{SymbolicAirBuilder, get_symbolic_constraints};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
@@ -14,8 +15,7 @@ use tracing::{debug_span, info_span, instrument};
 
 use crate::{
     Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, PreprocessedProverData, Proof,
-    ProverConstraintFolder, StarkGenericConfig, SymbolicAirBuilder, Val,
-    get_log_num_quotient_chunks, get_symbolic_constraints,
+    ProverConstraintFolder, StarkGenericConfig, Val, get_log_num_quotient_chunks,
 };
 
 #[instrument(skip_all)]

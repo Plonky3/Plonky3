@@ -1,9 +1,9 @@
 use alloc::vec::Vec;
 
 use p3_air::Air;
+use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
 use p3_field::{ExtensionField, Field};
 use p3_lookup::lookup_traits::{Lookup, LookupData, LookupGadget};
-use p3_uni_stark::{SymbolicAirBuilder, SymbolicExpression};
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
