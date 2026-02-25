@@ -90,7 +90,7 @@ impl LogUpGadget {
                 // Compute (α - combined_elt)
                 alpha.clone() - combined_elt
             })
-            .collect::<Vec<_>>()
+            .collect()
     }
 
     /// Computes the numerator and denominator of the fraction:
@@ -466,25 +466,24 @@ impl LookupGadget for LogUpGadget {
 
                 let mut offset = 0;
                 for context in lookups.iter() {
-                    let alpha = &permutation_challenges[self.num_challenges() * context.columns[0]];
+                    let alpha = permutation_challenges[self.num_challenges() * context.columns[0]];
                     let beta =
-                        &permutation_challenges[self.num_challenges() * context.columns[0] + 1];
+                        permutation_challenges[self.num_challenges() * context.columns[0] + 1];
 
-                    let elements: Vec<Vec<Val<SC>>> = context
-                        .element_exprs
-                        .iter()
-                        .map(|elts| {
-                            elts.iter()
-                                .map(|e| symbolic_to_expr(&row_builder, e))
-                                .collect()
-                        })
-                        .collect();
-
-                    let combined = self.combine_elements::<LookupTraceBuilder<'_, SC>, Val<SC>>(
-                        &elements, alpha, beta,
-                    );
-                    for (j, d) in combined.into_iter().enumerate() {
-                        denom_row[offset] = d;
+                    // Evaluate each tuple's elements and combine them via Horner's method
+                    // in a single pass. This avoids allocating a temporary vector of
+                    // evaluated elements per tuple, then another vector of combined results.
+                    //
+                    // For a tuple (e_0, e_1, …, e_{k-1}), computes:
+                    //
+                    //   combined = e_0 + e_1·β + e_2·β^2 + … + e_{k-1}·β^{k-1}
+                    //
+                    // Then stores (α − combined) as the denominator.
+                    for (j, elts) in context.element_exprs.iter().enumerate() {
+                        let combined_elt = elts.iter().fold(SC::Challenge::ZERO, |acc, e| {
+                            acc * beta + symbolic_to_expr(&row_builder, e)
+                        });
+                        denom_row[offset] = alpha - combined_elt;
                         mult_row[offset] =
                             symbolic_to_expr(&row_builder, &context.multiplicities_exprs[j]);
                         offset += 1;
@@ -512,7 +511,7 @@ impl LookupGadget for LogUpGadget {
             .collect();
 
         // 3. BUILD TRACE
-        let mut row_sums = vec![SC::Challenge::ZERO; height * num_lookups];
+        let mut row_sums = SC::Challenge::zero_vec(height * num_lookups);
         row_sums
             .par_chunks_mut(num_lookups)
             .enumerate()
@@ -522,34 +521,92 @@ impl LookupGadget for LogUpGadget {
                     let start = lookup_denom_offsets[lookup_idx];
                     let end = lookup_denom_offsets[lookup_idx + 1];
                     let sum = (start..end)
-                        .map(|k| {
-                            all_inverses[inv_base + k]
-                                * SC::Challenge::from(all_multiplicities[inv_base + k])
-                        })
+                        .map(|k| all_inverses[inv_base + k] * all_multiplicities[inv_base + k])
                         .sum();
                     row_sums_i[lookup_idx] = sum;
                 }
             });
 
-        let mut aux_trace = vec![SC::Challenge::ZERO; height * width];
+        let mut aux_trace = SC::Challenge::zero_vec(height * width);
         let mut permutation_counter = 0;
 
-        for i in 0..height {
-            for (lookup_idx, context) in lookups.iter().enumerate() {
-                let aux_idx = context.columns[0];
-                let sum = row_sums[i * num_lookups + lookup_idx];
+        // Each lookup column gets its own running sum.
+        // Since these columns are independent, we build them one at a time.
+        //
+        // The running sum is an *exclusive* prefix sum of the per-row contributions:
+        //
+        //   s[0] = 0
+        //   s[i] = row_sum[0] + row_sum[1] + … + row_sum[i-1]
+        //
+        // A naive serial loop would be O(height). Instead we use a three-phase
+        // parallel prefix sum, splitting the work across threads:
+        //
+        //   Phase A — Each thread computes a local prefix sum on its chunk.
+        //   Phase B — A tiny sequential pass (one entry per thread) combines
+        //             the chunk totals into global offsets.
+        //   Phase C — Each thread adds its global offset back into its chunk.
+        //
+        // After the three phases, we have an *inclusive* prefix sum.
+        // Shifting by one position turns it into the exclusive sum we need.
+        let num_threads = current_num_threads();
+        let chunk_size = height.div_ceil(num_threads);
 
-                // Update running sum
-                if i < height - 1 {
-                    aux_trace[(i + 1) * width + aux_idx] = aux_trace[i * width + aux_idx] + sum;
-                }
+        // Reuse a single buffer across all lookup columns to avoid re-allocating on every iteration.
+        let mut prefix = SC::Challenge::zero_vec(height);
 
-                // Update the expected cumulative for global lookups, at the last row.
-                if i == height - 1 && matches!(context.kind, Kind::Global(_)) {
-                    lookup_data[permutation_counter].expected_cumulated =
-                        aux_trace[i * width + aux_idx] + sum;
-                    permutation_counter += 1;
+        for (lookup_idx, context) in lookups.iter().enumerate() {
+            let aux_idx = context.columns[0];
+
+            // Fill the buffer with this column's per-row contributions.
+            for (i, val) in prefix.iter_mut().enumerate() {
+                *val = row_sums[i * num_lookups + lookup_idx];
+            }
+
+            // Phase A — Local inclusive prefix sums, one chunk per thread.
+            prefix.par_chunks_mut(chunk_size).for_each(|chunk| {
+                for i in 1..chunk.len() {
+                    chunk[i] += chunk[i - 1];
                 }
+            });
+
+            // Phase B — Combine chunk totals into cumulative offsets.
+            // Only as many entries as there are chunks (one per thread), so this is tiny.
+            let mut offsets = SC::Challenge::zero_vec(height.div_ceil(chunk_size));
+            for i in 1..offsets.len() {
+                offsets[i] = offsets[i - 1] + prefix[i * chunk_size - 1];
+            }
+
+            // Phase C — Fold global offsets back into each chunk.
+            prefix
+                .par_chunks_mut(chunk_size)
+                .enumerate()
+                .for_each(|(chunk_idx, chunk)| {
+                    let offset = offsets[chunk_idx];
+                    if !offset.is_zero() {
+                        for val in chunk.iter_mut() {
+                            *val += offset;
+                        }
+                    }
+                });
+
+            // At this point we hold an *inclusive* prefix sum.
+            //
+            // The auxiliary trace needs the *exclusive* version (shifted right by one, starting at zero).
+            //
+            // - Row 0 is already zero from initialization;
+            // - Each subsequent row gets the inclusive sum of all *previous* rows.
+            aux_trace
+                .par_chunks_mut(width)
+                .skip(1)
+                .enumerate()
+                .for_each(|(i, row)| {
+                    row[aux_idx] = prefix[i];
+                });
+
+            // For global lookups, record the total sum across all rows.
+            if matches!(context.kind, Kind::Global(_)) {
+                lookup_data[permutation_counter].expected_cumulated = prefix[height - 1];
+                permutation_counter += 1;
             }
         }
 
