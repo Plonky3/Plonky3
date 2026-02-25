@@ -209,6 +209,9 @@ pub trait AirBuilder: Sized {
     /// Matrix type holding variables.
     type M: Matrix<Self::Var>;
 
+    /// Variable type for public values.
+    type PublicVar: Into<Self::Expr> + Copy;
+
     /// Return the matrix representing the main (primary) trace registers.
     fn main(&self) -> Self::M;
 
@@ -300,9 +303,6 @@ pub trait AirBuilder: Sized {
     fn assert_eq<I1: Into<Self::Expr>, I2: Into<Self::Expr>>(&mut self, x: I1, y: I2) {
         self.assert_zero(x.into() - y.into());
     }
-
-    /// Variable type for public values.
-    type PublicVar: Into<Self::Expr> + Copy;
 
     /// Public input values available during constraint evaluation.
     ///
