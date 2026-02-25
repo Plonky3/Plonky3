@@ -7,12 +7,7 @@ use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
 #[instrument(skip_all, level = "debug")]
-pub fn get_log_num_quotient_chunks<F, A>(
-    air: &A,
-    preprocessed_width: usize,
-    num_public_values: usize,
-    is_zk: usize,
-) -> usize
+pub fn get_log_num_quotient_chunks<F, A>(air: &A, preprocessed_width: usize, is_zk: usize) -> usize
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
@@ -28,7 +23,6 @@ where
                 let symbolic = get_log_quotient_degree_extension::<F, F, A>(
                     air,
                     preprocessed_width,
-                    num_public_values,
                     0,
                     0,
                     is_zk,
@@ -42,7 +36,7 @@ where
         return result;
     }
 
-    get_log_quotient_degree_extension(air, preprocessed_width, num_public_values, 0, 0, is_zk)
+    get_log_quotient_degree_extension(air, preprocessed_width, 0, 0, is_zk)
 }
 
 #[instrument(
@@ -53,7 +47,6 @@ where
 pub fn get_log_quotient_degree_extension<F, EF, A>(
     air: &A,
     preprocessed_width: usize,
-    num_public_values: usize,
     permutation_width: usize,
     num_permutation_challenges: usize,
     is_zk: usize,
@@ -74,7 +67,6 @@ where
                 let actual = p3_air::symbolic::get_max_constraint_degree_extension::<F, EF, A>(
                     air,
                     preprocessed_width,
-                    num_public_values,
                     permutation_width,
                     num_permutation_challenges,
                 );
@@ -91,7 +83,6 @@ where
     let constraint_degree = (p3_air::symbolic::get_max_constraint_degree_extension::<F, EF, A>(
         air,
         preprocessed_width,
-        num_public_values,
         permutation_width,
         num_permutation_challenges,
     ) + is_zk)
@@ -140,7 +131,7 @@ mod tests {
             constraints: vec![],
             width: 4,
         };
-        let log_degree = get_log_num_quotient_chunks(&air, 3, 2, 0);
+        let log_degree = get_log_num_quotient_chunks(&air, 3, 0);
         assert_eq!(log_degree, 0);
     }
 
@@ -150,7 +141,7 @@ mod tests {
             constraints: vec![SymbolicVariable::new(Entry::Main { offset: 0 }, 0)],
             width: 4,
         };
-        let log_degree = get_log_num_quotient_chunks(&air, 3, 2, 0);
+        let log_degree = get_log_num_quotient_chunks(&air, 3, 0);
         assert_eq!(log_degree, log2_ceil_usize(1));
     }
 
@@ -164,7 +155,7 @@ mod tests {
             ],
             width: 4,
         };
-        let log_degree = get_log_num_quotient_chunks(&air, 3, 2, 0);
+        let log_degree = get_log_num_quotient_chunks(&air, 3, 0);
         assert_eq!(log_degree, log2_ceil_usize(1));
     }
 
@@ -203,7 +194,7 @@ mod tests {
             width: 4,
             degree_hint: Some(3),
         };
-        let log_chunks = get_log_num_quotient_chunks(&air, 0, 0, 0);
+        let log_chunks = get_log_num_quotient_chunks(&air, 0, 0);
         assert_eq!(log_chunks, log2_ceil_usize(2));
     }
 
@@ -216,7 +207,7 @@ mod tests {
             width: 4,
             degree_hint: None,
         };
-        let log_chunks = get_log_num_quotient_chunks(&air, 0, 0, 0);
+        let log_chunks = get_log_num_quotient_chunks(&air, 0, 0);
         assert_eq!(log_chunks, 0);
     }
 
@@ -228,14 +219,14 @@ mod tests {
             width: 4,
             degree_hint: Some(1),
         };
-        let with_hint = get_log_num_quotient_chunks(&air, 0, 0, 0);
+        let with_hint = get_log_num_quotient_chunks(&air, 0, 0);
 
         let air_no_hint = HintedMockAir {
             constraints: vec![SymbolicVariable::new(Entry::Main { offset: 0 }, 0)],
             width: 4,
             degree_hint: None,
         };
-        let without_hint = get_log_num_quotient_chunks(&air_no_hint, 0, 0, 0);
+        let without_hint = get_log_num_quotient_chunks(&air_no_hint, 0, 0);
 
         assert_eq!(with_hint, without_hint);
     }
@@ -250,6 +241,6 @@ mod tests {
             width: 4,
             degree_hint: Some(0),
         };
-        let _ = get_log_num_quotient_chunks(&air, 0, 0, 0);
+        let _ = get_log_num_quotient_chunks(&air, 0, 0);
     }
 }

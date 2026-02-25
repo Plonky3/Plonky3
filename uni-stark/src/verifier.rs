@@ -234,12 +234,8 @@ where
         return Err(VerificationError::InvalidProofShape);
     }
 
-    let log_num_quotient_chunks = get_log_num_quotient_chunks::<Val<SC>, A>(
-        air,
-        preprocessed_width,
-        public_values.len(),
-        config.is_zk(),
-    );
+    let log_num_quotient_chunks =
+        get_log_num_quotient_chunks::<Val<SC>, A>(air, preprocessed_width, config.is_zk());
     let num_quotient_chunks = 1 << (log_num_quotient_chunks + config.is_zk());
     let mut challenger = config.initialise_challenger();
     let init_trace_domain = pcs.natural_domain_for_degree(degree >> (config.is_zk()));

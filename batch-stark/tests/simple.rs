@@ -47,6 +47,10 @@ impl<F: Field> BaseAir<F> for FibonacciAir {
         2
     }
 
+    fn num_public_values(&self) -> usize {
+        3
+    }
+
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         let n = 1 << self.log_height;
         let mut m = RowMajorMatrix::new(F::zero_vec(n), 1);
@@ -386,6 +390,10 @@ impl<F: Field> BaseAir<F> for FibAirLookups {
         <FibonacciAir as BaseAir<F>>::width(&self.air)
     }
 
+    fn num_public_values(&self) -> usize {
+        <FibonacciAir as BaseAir<F>>::num_public_values(&self.air)
+    }
+
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         self.air.preprocessed_trace()
     }
@@ -628,6 +636,14 @@ impl<F: PrimeField64> BaseAir<F> for DemoAir {
         }
     }
 
+    fn num_public_values(&self) -> usize {
+        match self {
+            Self::Fib(a) => <FibonacciAir as BaseAir<F>>::num_public_values(a),
+            Self::Mul(a) => <MulAir as BaseAir<F>>::num_public_values(a),
+            Self::PreprocessedMul(a) => <PreprocessedMulAir as BaseAir<F>>::num_public_values(a),
+        }
+    }
+
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         match self {
             Self::Fib(a) => <FibonacciAir as BaseAir<F>>::preprocessed_trace(a),
@@ -651,6 +667,13 @@ impl<F: Field> BaseAir<F> for DemoAirWithLookups {
         match self {
             Self::FibLookups(a) => <FibAirLookups as BaseAir<F>>::width(a),
             Self::MulLookups(a) => <MulAirLookups as BaseAir<F>>::width(a),
+        }
+    }
+
+    fn num_public_values(&self) -> usize {
+        match self {
+            Self::FibLookups(a) => <FibAirLookups as BaseAir<F>>::num_public_values(a),
+            Self::MulLookups(a) => <MulAirLookups as BaseAir<F>>::num_public_values(a),
         }
     }
 

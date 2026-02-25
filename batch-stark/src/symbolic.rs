@@ -10,7 +10,6 @@ use tracing::instrument;
 pub fn get_log_num_quotient_chunks<F, EF, A, LG>(
     air: &A,
     preprocessed_width: usize,
-    num_public_values: usize,
     contexts: &[Lookup<F>],
     lookup_data: &[LookupData<SymbolicExpression<EF>>],
     is_zk: usize,
@@ -40,7 +39,6 @@ where
                 let actual = get_max_constraint_degree(
                     air,
                     preprocessed_width,
-                    num_public_values,
                     contexts,
                     lookup_data,
                     lookup_gadget,
@@ -60,7 +58,6 @@ where
     let constraint_degree = (get_max_constraint_degree(
         air,
         preprocessed_width,
-        num_public_values,
         contexts,
         lookup_data,
         lookup_gadget,
@@ -77,7 +74,6 @@ where
 pub fn get_max_constraint_degree<F, EF, A, LG>(
     air: &A,
     preprocessed_width: usize,
-    num_public_values: usize,
     contexts: &[Lookup<F>],
     lookup_data: &[LookupData<SymbolicExpression<EF>>],
     lookup_gadget: &LG,
@@ -92,7 +88,6 @@ where
     let (base, extension) = get_symbolic_constraints(
         air,
         preprocessed_width,
-        num_public_values,
         contexts,
         lookup_data,
         lookup_gadget,
@@ -110,7 +105,6 @@ where
 pub fn get_symbolic_constraints<F, EF, A, LG>(
     air: &A,
     preprocessed_width: usize,
-    num_public_values: usize,
     contexts: &[Lookup<F>],
     lookup_data: &[LookupData<SymbolicExpression<EF>>],
     lookup_gadget: &LG,
@@ -128,7 +122,7 @@ where
     let mut builder = SymbolicAirBuilder::new(
         preprocessed_width,
         air.width(),
-        num_public_values,
+        air.num_public_values(),
         num_aux_cols,
         num_challenges,
     );
