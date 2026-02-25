@@ -398,8 +398,8 @@ where
 
         let evals = chunk_domains
             .iter()
-            .zip(chunk_mats.iter())
-            .map(|(d, m)| (*d, m.clone()));
+            .zip(chunk_mats)
+            .map(|(d, m)| (*d, m));
         let ldes = pcs.get_quotient_ldes(evals, n_chunks);
 
         let start = quotient_chunk_domains.len();
