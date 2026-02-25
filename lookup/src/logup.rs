@@ -551,13 +551,16 @@ impl LookupGadget for LogUpGadget {
         let num_threads = current_num_threads();
         let chunk_size = height.div_ceil(num_threads);
 
+        // Reuse a single buffer across all lookup columns to avoid re-allocating on every iteration.
+        let mut prefix = SC::Challenge::zero_vec(height);
+
         for (lookup_idx, context) in lookups.iter().enumerate() {
             let aux_idx = context.columns[0];
 
-            // Extract this column's per-row contributions into a contiguous buffer.
-            let mut prefix: Vec<SC::Challenge> = (0..height)
-                .map(|i| row_sums[i * num_lookups + lookup_idx])
-                .collect();
+            // Fill the buffer with this column's per-row contributions.
+            for (i, val) in prefix.iter_mut().enumerate() {
+                *val = row_sums[i * num_lookups + lookup_idx];
+            }
 
             // Phase A — Local inclusive prefix sums, one chunk per thread.
             prefix.par_chunks_mut(chunk_size).for_each(|chunk| {
