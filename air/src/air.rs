@@ -17,20 +17,43 @@ pub trait BaseAir<F>: Sync {
         None
     }
 
-    /// Indices of main trace columns that access the next row.
+    /// Which main trace columns have their next row accessed by this AIR's
+    /// constraints.
     ///
-    /// Defaults to all columns. Return an empty vector for single-row AIRs.
+    /// By default this returns every column index, which will require
+    /// opening all main columns at both `zeta` and `zeta_next`.
     ///
-    /// Must match what [`Air::eval`] actually reads; incorrect results cause
-    /// verification failures or soundness gaps.
+    /// AIRs that only ever read the current main row (and never access an
+    /// offset-1 main entry) can override this to return an empty vector to
+    /// allow the prover and verifier to open only at `zeta`.
+    ///
+    /// # When to override
+    ///
+    /// - **Return empty**: single-row AIRs where all constraints are
+    ///   evaluated within one row.
+    /// - **Keep default** (all columns): AIRs with transition constraints
+    ///   that reference `main.row_slice(1)`.
+    /// - **Return a subset**: AIRs where only a few columns need next-row
+    ///   access, enabling future per-column opening optimizations.
+    ///
+    /// # Correctness
+    ///
+    /// Must be consistent with [`Air::eval`]. Omitting a column index when
+    /// the AIR actually reads its next row will cause verification failures
+    /// or, in the worst case, a soundness gap.
     fn main_next_row_columns(&self) -> Vec<usize> {
         (0..self.width()).collect()
     }
 
-    /// Indices of preprocessed trace columns that access the next row.
+    /// Which preprocessed trace columns have their next row accessed by this
+    /// AIR's constraints.
     ///
-    /// Defaults to all preprocessed columns. Return an empty vector when
-    /// only the current preprocessed row is read.
+    /// By default this returns every preprocessed column index, which will
+    /// require opening preprocessed columns at both `zeta` and `zeta_next`.
+    ///
+    /// AIRs that only ever read the current preprocessed row (and never
+    /// access an offset-1 preprocessed entry) can override this to return an
+    /// empty vector to allow the prover and verifier to open only at `zeta`.
     fn preprocessed_next_row_columns(&self) -> Vec<usize> {
         self.preprocessed_trace()
             .map(|t| (0..t.width).collect())
