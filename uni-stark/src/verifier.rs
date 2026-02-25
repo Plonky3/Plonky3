@@ -262,8 +262,17 @@ where
     }
 
     let air_width = A::width(air);
+    let main_next = air.main_uses_next_row();
+    let trace_next_ok = if main_next {
+        opened_values
+            .trace_next
+            .as_ref()
+            .is_some_and(|v| v.len() == air_width)
+    } else {
+        opened_values.trace_next.is_none()
+    };
     let valid_shape = opened_values.trace_local.len() == air_width
-        && opened_values.trace_next.len() == air_width
+        && trace_next_ok
         && opened_values.quotient_chunks.len() == num_quotient_chunks
         && opened_values
             .quotient_chunks
@@ -324,17 +333,24 @@ where
     } else {
         vec![]
     };
-    coms_to_verify.extend(vec![
+    let trace_round = {
+        let mut trace_points = vec![(zeta, opened_values.trace_local.clone())];
+        if main_next {
+            trace_points.push((
+                zeta_next,
+                opened_values
+                    .trace_next
+                    .clone()
+                    .expect("checked in shape validation"),
+            ));
+        }
         (
             commitments.trace.clone(),
-            vec![(
-                trace_domain,
-                vec![
-                    (zeta, opened_values.trace_local.clone()),
-                    (zeta_next, opened_values.trace_next.clone()),
-                ],
-            )],
-        ),
+            vec![(trace_domain, trace_points)],
+        )
+    };
+    coms_to_verify.extend(vec![
+        trace_round,
         (
             commitments.quotient_chunks.clone(),
             // Check the commitment on the randomized domains.
@@ -371,10 +387,18 @@ where
         zeta,
     );
 
+    let zeros;
+    let trace_next_slice = match &opened_values.trace_next {
+        Some(v) => v.as_slice(),
+        None => {
+            zeros = vec![SC::Challenge::ZERO; air_width];
+            &zeros
+        }
+    };
     verify_constraints::<SC, A, PcsError<SC>>(
         air,
         &opened_values.trace_local,
-        &opened_values.trace_next,
+        trace_next_slice,
         opened_values.preprocessed_local.as_deref(),
         opened_values.preprocessed_next.as_deref(),
         public_values,

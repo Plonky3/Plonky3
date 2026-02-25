@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use alloc::{format, vec};
 
 use hashbrown::HashMap;
-use p3_air::{AirBuilder, AirBuilderWithPublicValues, PermutationAirBuilder};
+use p3_air::{AirBuilder, PermutationAirBuilder};
 use p3_field::Field;
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -214,6 +214,7 @@ impl<'a, F: Field> AirBuilder for MiniLookupBuilder<'a, F> {
     type Expr = F;
     type Var = F;
     type M = VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>;
+    type PublicVar = F;
 
     fn main(&self) -> Self::M {
         self.main
@@ -221,6 +222,10 @@ impl<'a, F: Field> AirBuilder for MiniLookupBuilder<'a, F> {
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.preprocessed
+    }
+
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.public_values
     }
 
     fn is_first_row(&self) -> Self::Expr {
@@ -240,14 +245,6 @@ impl<'a, F: Field> AirBuilder for MiniLookupBuilder<'a, F> {
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, _x: I) {}
-}
-
-impl<'a, F: Field> AirBuilderWithPublicValues for MiniLookupBuilder<'a, F> {
-    type PublicVar = F;
-
-    fn public_values(&self) -> &[Self::F] {
-        self.public_values
-    }
 }
 
 impl<'a, F: Field> p3_air::ExtensionBuilder for MiniLookupBuilder<'a, F> {

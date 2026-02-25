@@ -33,7 +33,10 @@ pub struct Commitments<Com> {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OpenedValues<Challenge> {
     pub trace_local: Vec<Challenge>,
-    pub trace_next: Vec<Challenge>,
+    /// Main trace evaluated at `g * zeta`.
+    ///
+    /// `None` when the AIR has no transition constraints and does not access the next row.
+    pub trace_next: Option<Vec<Challenge>>,
     pub preprocessed_local: Option<Vec<Challenge>>,
     pub preprocessed_next: Option<Vec<Challenge>>, // may not always be necessary
     pub quotient_chunks: Vec<Vec<Challenge>>,

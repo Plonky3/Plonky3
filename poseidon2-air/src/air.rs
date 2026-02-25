@@ -130,6 +130,14 @@ impl<
     fn width(&self) -> usize {
         num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>()
     }
+
+    fn main_uses_next_row(&self) -> bool {
+        false
+    }
+
+    fn max_constraint_degree(&self) -> Option<usize> {
+        Some(SBOX_DEGREE as usize)
+    }
 }
 
 pub(crate) fn eval<

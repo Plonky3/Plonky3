@@ -123,9 +123,18 @@ where
         let inst_base_opened_vals = &inst_opened_vals.base_opened_values;
 
         // Validate trace widths match the AIR
-        if inst_base_opened_vals.trace_local.len() != air_width
-            || inst_base_opened_vals.trace_next.len() != air_width
-        {
+        if inst_base_opened_vals.trace_local.len() != air_width {
+            return Err(VerificationError::InvalidProofShape);
+        }
+        if airs[i].main_uses_next_row() {
+            if inst_base_opened_vals
+                .trace_next
+                .as_ref()
+                .is_none_or(|v| v.len() != air_width)
+            {
+                return Err(VerificationError::InvalidProofShape);
+            }
+        } else if inst_base_opened_vals.trace_next.is_some() {
             return Err(VerificationError::InvalidProofShape);
         }
 
@@ -266,23 +275,24 @@ where
         .zip(opened_values.instances.iter())
         .enumerate()
         .map(|(i, (ext_dom, inst_opened_vals))| {
-            let zeta_next = trace_domains[i]
-                .next_point(zeta)
-                .ok_or(VerificationError::NextPointUnavailable)?;
-
-            Ok((
-                *ext_dom,
-                vec![
-                    (
-                        zeta,
-                        inst_opened_vals.base_opened_values.trace_local.clone(),
-                    ),
-                    (
-                        zeta_next,
-                        inst_opened_vals.base_opened_values.trace_next.clone(),
-                    ),
-                ],
-            ))
+            let mut points = vec![(
+                zeta,
+                inst_opened_vals.base_opened_values.trace_local.clone(),
+            )];
+            if airs[i].main_uses_next_row() {
+                let zeta_next = trace_domains[i]
+                    .next_point(zeta)
+                    .ok_or(VerificationError::NextPointUnavailable)?;
+                points.push((
+                    zeta_next,
+                    inst_opened_vals
+                        .base_opened_values
+                        .trace_next
+                        .clone()
+                        .expect("checked in shape validation"),
+                ));
+            }
+            Ok((*ext_dom, points))
         })
         .collect::<Result<Vec<_>, VerificationError<PcsError<SC>>>>()?;
     coms_to_verify.push((commitments.main.clone(), trace_round));
@@ -473,9 +483,17 @@ where
 
         // Verify constraints at zeta using utility function.
         let init_trace_domain = trace_domains[i];
+        let trace_next_zeros;
+        let trace_next_ref = match &opened_values.instances[i].base_opened_values.trace_next {
+            Some(v) => v.as_slice(),
+            None => {
+                trace_next_zeros = vec![SC::Challenge::ZERO; A::width(air)];
+                &trace_next_zeros
+            }
+        };
         let verifier_data = VerifierData {
             trace_local: &opened_values.instances[i].base_opened_values.trace_local,
-            trace_next: &opened_values.instances[i].base_opened_values.trace_next,
+            trace_next: trace_next_ref,
             preprocessed_local: opened_values.instances[i]
                 .base_opened_values
                 .preprocessed_local

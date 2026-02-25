@@ -451,15 +451,20 @@ where
             (r_data, round0_points)
         });
         rounds.extend(round0);
-        // Main trace round: per instance, open at zeta and its next point.
+        // Main trace round: per instance, open at zeta and (conditionally) its next point.
         let round1_points = trace_domains
             .iter()
-            .map(|dom| {
-                vec![
-                    zeta,
-                    dom.next_point(zeta)
-                        .expect("domain should support next_point operation"),
-                ]
+            .enumerate()
+            .map(|(i, dom)| {
+                if airs[i].main_uses_next_row() {
+                    vec![
+                        zeta,
+                        dom.next_point(zeta)
+                            .expect("domain should support next_point operation"),
+                    ]
+                } else {
+                    vec![zeta]
+                }
             })
             .collect::<Vec<_>>();
         rounds.push((&main_data, round1_points));
@@ -562,7 +567,11 @@ where
         // Trace locals
         let tv = &trace_values_for_mats[i];
         let trace_local = tv[0].clone();
-        let trace_next = tv[1].clone();
+        let trace_next = if airs[i].main_uses_next_row() {
+            Some(tv[1].clone())
+        } else {
+            None
+        };
 
         // Quotient chunks: for each chunk matrix, take the first point (zeta) values.
         let mut qcs = Vec::with_capacity(e - s);
@@ -698,6 +707,25 @@ where
                 .collect()
         })
         .collect();
+
+    // Precompute per-instance data used by the hot inner loop to avoid repeated allocations.
+    let packed_perm_challenges: Vec<PackedChallenge<SC>> = permutation_challenges
+        .iter()
+        .map(|&p_c| PackedChallenge::<SC>::from(p_c))
+        .collect();
+    let lookup_data_packed: Vec<LookupData<PackedChallenge<SC>>> = if lookups.is_empty() {
+        Vec::new()
+    } else {
+        lookup_data
+            .iter()
+            .map(|ld| LookupData {
+                name: ld.name.clone(),
+                aux_idx: ld.aux_idx,
+                expected_cumulated: ld.expected_cumulated.into(),
+            })
+            .collect()
+    };
+
     (0..quotient_size)
         .into_par_iter()
         .step_by(PackedVal::<SC>::WIDTH)
@@ -765,10 +793,6 @@ where
                 accumulator,
                 constraint_index: 0,
             };
-            let packed_perm_challenges = permutation_challenges
-                .iter()
-                .map(|p_c| PackedChallenge::<SC>::from(*p_c))
-                .collect::<Vec<_>>();
 
             let mut folder = ProverConstraintFolderWithLookups {
                 inner: inner_folder,
@@ -779,15 +803,7 @@ where
                 air,
                 &mut folder,
                 lookups,
-                lookup_data
-                    .iter()
-                    .map(|ld| LookupData {
-                        name: ld.name.clone(),
-                        aux_idx: ld.aux_idx,
-                        expected_cumulated: ld.expected_cumulated.into(),
-                    })
-                    .collect::<Vec<_>>()
-                    .as_slice(),
+                &lookup_data_packed,
                 lookup_gadget,
             );
 

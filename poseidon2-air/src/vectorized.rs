@@ -232,6 +232,10 @@ impl<
     fn width(&self) -> usize {
         self.air.width() * VECTOR_LEN
     }
+
+    fn main_uses_next_row(&self) -> bool {
+        false
+    }
 }
 
 impl<

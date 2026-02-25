@@ -21,7 +21,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::lookup::{LookupError, LookupEvaluator};
-use p3_air::{AirBuilderWithPublicValues, ExtensionBuilder, PermutationAirBuilder};
+use p3_air::{ExtensionBuilder, PermutationAirBuilder};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -159,7 +159,7 @@ impl LogUpGadget {
         context: &Lookup<AB::F>,
         opt_expected_cumulated: Option<AB::ExprEF>,
     ) where
-        AB: PermutationAirBuilder + AirBuilderWithPublicValues,
+        AB: PermutationAirBuilder,
     {
         let Lookup {
             kind,
@@ -286,7 +286,7 @@ impl LookupEvaluator for LogUpGadget {
     /// This is implemented using a running sum column that should sum to zero.
     fn eval_local_lookup<AB>(&self, builder: &mut AB, context: &Lookup<AB::F>)
     where
-        AB: PermutationAirBuilder + AirBuilderWithPublicValues,
+        AB: PermutationAirBuilder,
     {
         if let Kind::Global(_) = context.kind {
             panic!("Global lookups are not supported in local evaluation")
@@ -314,7 +314,7 @@ impl LookupEvaluator for LogUpGadget {
         context: &Lookup<AB::F>,
         expected_cumulated: AB::ExprEF,
     ) where
-        AB: PermutationAirBuilder + AirBuilderWithPublicValues,
+        AB: PermutationAirBuilder,
     {
         self.eval_update(builder, context, Some(expected_cumulated));
     }

@@ -306,9 +306,15 @@ where
         .expect("domain should support next_point operation");
 
     let is_random = opt_r_data.is_some();
+    let main_next = air.main_uses_next_row();
     let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
         let round0 = opt_r_data.as_ref().map(|r_data| (r_data, vec![vec![zeta]]));
-        let round1 = (&trace_data, vec![vec![zeta, zeta_next]]);
+        let round1_points = if main_next {
+            vec![zeta, zeta_next]
+        } else {
+            vec![zeta]
+        };
+        let round1 = (&trace_data, vec![round1_points]);
         let round2 = (&quotient_data, vec![vec![zeta]; num_quotient_chunks]); // open every chunk at zeta
         let round3 = preprocessed_data_ref.map(|data| (data, vec![vec![zeta, zeta_next]]));
 
@@ -323,7 +329,11 @@ where
     let trace_idx = SC::Pcs::TRACE_IDX;
     let quotient_idx = SC::Pcs::QUOTIENT_IDX;
     let trace_local = opened_values[trace_idx][0][0].clone();
-    let trace_next = opened_values[trace_idx][0][1].clone();
+    let trace_next = if main_next {
+        Some(opened_values[trace_idx][0][1].clone())
+    } else {
+        None
+    };
     let quotient_chunks = opened_values[quotient_idx]
         .iter()
         .map(|v| v[0].clone())

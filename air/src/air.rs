@@ -29,6 +29,31 @@ pub trait BaseAir<F>: Sync {
         true
     }
 
+    /// Whether this AIR's constraints access the next row of the main trace.
+    ///
+    /// By default this returns `true`, which will require opening main columns
+    /// at both `zeta` and `zeta_next`.
+    ///
+    /// AIRs that only ever read the current main row (and never access an
+    /// offset-1 main entry) can override this to return `false` to allow
+    /// the prover and verifier to open only at `zeta`.
+    ///
+    /// # When to override
+    ///
+    /// - **Return `false`**: single-row AIRs where all constraints are
+    ///   evaluated within one row.
+    /// - **Keep `true`** (default): AIRs with transition constraints
+    ///   that reference `main.row_slice(1)`.
+    ///
+    /// # Correctness
+    ///
+    /// Must be consistent with [`Air::eval`]. Returning `false` when the AIR
+    /// actually reads the next row will cause verification failures or, in
+    /// the worst case, a soundness gap.
+    fn main_uses_next_row(&self) -> bool {
+        true
+    }
+
     /// Optional hint for the number of constraints in this AIR.
     ///
     /// Normally the prover runs a full symbolic evaluation just to count
@@ -49,10 +74,34 @@ pub trait BaseAir<F>: Sync {
     fn num_constraints(&self) -> Option<usize> {
         None
     }
-}
 
-/// An extension of `BaseAir` that includes support for public values.
-pub trait BaseAirWithPublicValues<F>: BaseAir<F> {
+    /// Optional hint for the maximum constraint degree in this AIR.
+    ///
+    /// The constraint degree is the factor by which trace length N
+    /// scales the constraint polynomial degree.
+    ///
+    /// For example, a constraint `x * y * z` where x, y, z are trace
+    /// variables has degree multiple 3.
+    ///
+    /// Normally the prover runs a full symbolic evaluation to compute this.
+    /// Overriding this method lets both the prover and verifier skip that
+    /// pass when only the degree (not the full constraint list) is needed.
+    ///
+    /// The value must be an upper bound on the degree multiple of every
+    /// constraint (base and extension). It does not need to be tight, but
+    /// overestimating wastes prover work (larger quotient domain).
+    ///
+    /// # Correctness
+    ///
+    /// The returned value **must** be >= the actual max constraint degree.
+    /// A value that is too small will cause the prover to produce an
+    /// invalid proof.
+    ///
+    /// Returns `None` by default, which falls back to symbolic evaluation.
+    fn max_constraint_degree(&self) -> Option<usize> {
+        None
+    }
+
     /// Return the number of expected public values.
     fn num_public_values(&self) -> usize {
         0
@@ -81,7 +130,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
     /// Override this method for AIRs that use lookups.
     fn get_lookups(&mut self) -> Vec<Lookup<AB::F>>
     where
-        AB: PermutationAirBuilder + AirBuilderWithPublicValues,
+        AB: PermutationAirBuilder,
     {
         vec![]
     }
@@ -91,7 +140,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
     /// data is shared between the prover and the verifier.
     fn register_lookup(&mut self, kind: Kind, lookup_inputs: &[LookupInput<AB::F>]) -> Lookup<AB::F>
     where
-        AB: PermutationAirBuilder + AirBuilderWithPublicValues,
+        AB: PermutationAirBuilder,
     {
         let (element_exprs, multiplicities_exprs) = lookup_inputs
             .iter()
@@ -141,7 +190,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
         lookup_data: &[LookupData<AB::ExprEF>],
         lookup_evaluator: &LE,
     ) where
-        AB: PermutationAirBuilder + AirBuilderWithPublicValues,
+        AB: PermutationAirBuilder,
     {
         self.eval(builder);
 
@@ -184,6 +233,9 @@ pub trait AirBuilder: Sized {
 
     /// Matrix type holding variables.
     type M: Matrix<Self::Var>;
+
+    /// Variable type for public values.
+    type PublicVar: Into<Self::Expr> + Copy;
 
     /// Return the matrix representing the main (primary) trace registers.
     fn main(&self) -> Self::M;
@@ -277,6 +329,13 @@ pub trait AirBuilder: Sized {
         self.assert_zero(x.into() - y.into());
     }
 
+    /// Public input values available during constraint evaluation.
+    ///
+    /// Returns an empty slice by default.
+    fn public_values(&self) -> &[Self::PublicVar] {
+        &[]
+    }
+
     /// Assert that `x` is a boolean, i.e. either `0` or `1`.
     ///
     /// Where possible, batching multiple assert_bool calls
@@ -284,15 +343,6 @@ pub trait AirBuilder: Sized {
     fn assert_bool<I: Into<Self::Expr>>(&mut self, x: I) {
         self.assert_zero(x.into().bool_check());
     }
-}
-
-/// Extension trait for `AirBuilder` providing access to public values.
-pub trait AirBuilderWithPublicValues: AirBuilder {
-    /// Type representing a public variable.
-    type PublicVar: Into<Self::Expr> + Copy;
-
-    /// Return the list of public variables.
-    fn public_values(&self) -> &[Self::PublicVar];
 }
 
 /// Extension trait for builders that carry additional runtime context.
@@ -388,6 +438,7 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
     type Expr = AB::Expr;
     type Var = AB::Var;
     type M = AB::M;
+    type PublicVar = AB::PublicVar;
 
     fn main(&self) -> Self::M {
         self.inner.main()
@@ -395,6 +446,10 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.inner.preprocessed()
+    }
+
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.inner.public_values()
     }
 
     fn is_first_row(&self) -> Self::Expr {
