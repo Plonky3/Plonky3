@@ -4,7 +4,7 @@ use core::marker::PhantomData;
 use core::slice::from_ref;
 
 use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
-use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir, PermutationAirBuilder};
+use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::{ProverData, StarkInstance, VerificationError, prove_batch, verify_batch};
@@ -62,7 +62,7 @@ impl<F: Field> BaseAir<F> for FibonacciAir {
     }
 }
 
-impl<AB: AirBuilderWithPublicValues> Air<AB> for FibonacciAir
+impl<AB: AirBuilder> Air<AB> for FibonacciAir
 where
     AB::F: Field,
 {
@@ -228,7 +228,7 @@ impl<F> BaseAir<F> for MulAirLookups {
 impl<AB> Air<AB> for MulAirLookups
 where
     AB::Var: Debug,
-    AB: AirBuilder + PermutationAirBuilder + AirBuilderWithPublicValues,
+    AB: AirBuilder + PermutationAirBuilder,
 {
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         let new_idx = self.num_lookups;
@@ -391,7 +391,7 @@ impl<F: Field> BaseAir<F> for FibAirLookups {
     }
 }
 
-impl<AB: PermutationAirBuilder + AirBuilderWithPublicValues> Air<AB> for FibAirLookups {
+impl<AB: PermutationAirBuilder> Air<AB> for FibAirLookups {
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         let new_idx = self.num_lookups;
         self.num_lookups += 1;
@@ -662,7 +662,7 @@ impl<F: Field> BaseAir<F> for DemoAirWithLookups {
     }
 }
 
-impl<AB: PermutationAirBuilder + AirBuilderWithPublicValues> Air<AB> for DemoAirWithLookups
+impl<AB: PermutationAirBuilder> Air<AB> for DemoAirWithLookups
 where
     AB::Var: Debug,
 {
@@ -688,7 +688,7 @@ where
     }
 }
 
-impl<AB: PermutationAirBuilder + AirBuilderWithPublicValues> Air<AB> for DemoAir
+impl<AB: PermutationAirBuilder> Air<AB> for DemoAir
 where
     AB::Var: Debug,
     AB::F: PrimeField64,
@@ -2072,7 +2072,7 @@ impl<F> BaseAir<F> for SingleTableLocalLookupAir {
 impl<AB> Air<AB> for SingleTableLocalLookupAir
 where
     AB::Var: Debug,
-    AB: AirBuilder + PermutationAirBuilder + AirBuilderWithPublicValues,
+    AB: AirBuilder + PermutationAirBuilder,
 {
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         let new_idx = self.num_lookups;

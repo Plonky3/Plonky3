@@ -1,6 +1,6 @@
 use core::borrow::Borrow;
 
-use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
@@ -52,7 +52,7 @@ impl<F: PrimeField64> BaseAir<F> for MulFibPAir {
     }
 }
 
-impl<AB: AirBuilderWithPublicValues> Air<AB> for MulFibPAir
+impl<AB: AirBuilder> Air<AB> for MulFibPAir
 where
     AB::F: PrimeField64,
 {

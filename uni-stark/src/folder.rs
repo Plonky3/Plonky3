@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_air::{AirBuilder, AirBuilderWithPublicValues};
+use p3_air::AirBuilder;
 use p3_field::{BasedVectorSpace, PackedField};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
@@ -66,6 +66,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     type Expr = PackedVal<SC>;
     type Var = PackedVal<SC>;
     type M = RowMajorMatrixView<'a, PackedVal<SC>>;
+    type PublicVar = Val<SC>;
 
     #[inline]
     fn main(&self) -> Self::M {
@@ -74,6 +75,11 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.preprocessed
+    }
+
+    #[inline]
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.public_values
     }
 
     #[inline]
@@ -118,20 +124,12 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     }
 }
 
-impl<SC: StarkGenericConfig> AirBuilderWithPublicValues for ProverConstraintFolder<'_, SC> {
-    type PublicVar = Self::F;
-
-    #[inline]
-    fn public_values(&self) -> &[Self::F] {
-        self.public_values
-    }
-}
-
 impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC> {
     type F = Val<SC>;
     type Expr = SC::Challenge;
     type Var = SC::Challenge;
     type M = ViewPair<'a, SC::Challenge>;
+    type PublicVar = Val<SC>;
 
     fn main(&self) -> Self::M {
         self.main
@@ -139,6 +137,10 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.preprocessed
+    }
+
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.public_values
     }
 
     fn is_first_row(&self) -> Self::Expr {
@@ -164,13 +166,5 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         self.accumulator *= self.alpha;
         self.accumulator += x.into();
-    }
-}
-
-impl<SC: StarkGenericConfig> AirBuilderWithPublicValues for VerifierConstraintFolder<'_, SC> {
-    type PublicVar = Self::F;
-
-    fn public_values(&self) -> &[Self::F] {
-        self.public_values
     }
 }

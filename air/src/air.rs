@@ -101,10 +101,7 @@ pub trait BaseAir<F>: Sync {
     fn max_constraint_degree(&self) -> Option<usize> {
         None
     }
-}
 
-/// An extension of `BaseAir` that includes support for public values.
-pub trait BaseAirWithPublicValues<F>: BaseAir<F> {
     /// Return the number of expected public values.
     fn num_public_values(&self) -> usize {
         0
@@ -133,7 +130,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
     /// Override this method for AIRs that use lookups.
     fn get_lookups(&mut self) -> Vec<Lookup<AB::F>>
     where
-        AB: PermutationAirBuilder + AirBuilderWithPublicValues,
+        AB: PermutationAirBuilder,
     {
         vec![]
     }
@@ -143,7 +140,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
     /// data is shared between the prover and the verifier.
     fn register_lookup(&mut self, kind: Kind, lookup_inputs: &[LookupInput<AB::F>]) -> Lookup<AB::F>
     where
-        AB: PermutationAirBuilder + AirBuilderWithPublicValues,
+        AB: PermutationAirBuilder,
     {
         let (element_exprs, multiplicities_exprs) = lookup_inputs
             .iter()
@@ -193,7 +190,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
         lookup_data: &[LookupData<AB::ExprEF>],
         lookup_evaluator: &LE,
     ) where
-        AB: PermutationAirBuilder + AirBuilderWithPublicValues,
+        AB: PermutationAirBuilder,
     {
         self.eval(builder);
 
@@ -236,6 +233,9 @@ pub trait AirBuilder: Sized {
 
     /// Matrix type holding variables.
     type M: Matrix<Self::Var>;
+
+    /// Variable type for public values.
+    type PublicVar: Into<Self::Expr> + Copy;
 
     /// Return the matrix representing the main (primary) trace registers.
     fn main(&self) -> Self::M;
@@ -329,6 +329,13 @@ pub trait AirBuilder: Sized {
         self.assert_zero(x.into() - y.into());
     }
 
+    /// Public input values available during constraint evaluation.
+    ///
+    /// Returns an empty slice by default.
+    fn public_values(&self) -> &[Self::PublicVar] {
+        &[]
+    }
+
     /// Assert that `x` is a boolean, i.e. either `0` or `1`.
     ///
     /// Where possible, batching multiple assert_bool calls
@@ -336,15 +343,6 @@ pub trait AirBuilder: Sized {
     fn assert_bool<I: Into<Self::Expr>>(&mut self, x: I) {
         self.assert_zero(x.into().bool_check());
     }
-}
-
-/// Extension trait for `AirBuilder` providing access to public values.
-pub trait AirBuilderWithPublicValues: AirBuilder {
-    /// Type representing a public variable.
-    type PublicVar: Into<Self::Expr> + Copy;
-
-    /// Return the list of public variables.
-    fn public_values(&self) -> &[Self::PublicVar];
 }
 
 /// Extension trait for builders that carry additional runtime context.
@@ -440,6 +438,7 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
     type Expr = AB::Expr;
     type Var = AB::Var;
     type M = AB::M;
+    type PublicVar = AB::PublicVar;
 
     fn main(&self) -> Self::M {
         self.inner.main()
@@ -447,6 +446,10 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.inner.preprocessed()
+    }
+
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.inner.public_values()
     }
 
     fn is_first_row(&self) -> Self::Expr {

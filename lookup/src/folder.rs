@@ -1,4 +1,4 @@
-use p3_air::{AirBuilder, AirBuilderWithPublicValues, ExtensionBuilder, PermutationAirBuilder};
+use p3_air::{AirBuilder, ExtensionBuilder, PermutationAirBuilder};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{
@@ -17,6 +17,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
     type Expr = PackedVal<SC>;
     type Var = PackedVal<SC>;
     type M = RowMajorMatrixView<'a, PackedVal<SC>>;
+    type PublicVar = Val<SC>;
 
     fn main(&self) -> Self::M {
         self.inner.main
@@ -24,6 +25,11 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.inner.preprocessed
+    }
+
+    #[inline]
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.inner.public_values
     }
 
     #[inline]
@@ -57,17 +63,6 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
     #[inline]
     fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
         self.inner.assert_zeros(array);
-    }
-}
-
-impl<SC: StarkGenericConfig> AirBuilderWithPublicValues
-    for ProverConstraintFolderWithLookups<'_, SC>
-{
-    type PublicVar = Self::F;
-
-    #[inline]
-    fn public_values(&self) -> &[Self::F] {
-        self.inner.public_values
     }
 }
 
@@ -112,6 +107,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
     type Expr = SC::Challenge;
     type Var = SC::Challenge;
     type M = ViewPair<'a, SC::Challenge>;
+    type PublicVar = Val<SC>;
 
     fn main(&self) -> Self::M {
         self.inner.main
@@ -119,6 +115,11 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.inner.preprocessed
+    }
+
+    #[inline]
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.inner.public_values
     }
 
     #[inline]
@@ -152,17 +153,6 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
     #[inline]
     fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
         self.inner.assert_zeros(array);
-    }
-}
-
-impl<SC: StarkGenericConfig> AirBuilderWithPublicValues
-    for VerifierConstraintFolderWithLookups<'_, SC>
-{
-    type PublicVar = Self::F;
-
-    #[inline]
-    fn public_values(&self) -> &[Self::F] {
-        self.inner.public_values
     }
 }
 
