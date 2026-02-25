@@ -104,7 +104,6 @@ where
                 get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
                     air,
                     pre_w,
-                    public_values[i].len(),
                     &all_lookups[i],
                     &lookup_data_to_expr(&global_lookup_data[i]),
                     config.is_zk(),

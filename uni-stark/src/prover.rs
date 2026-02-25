@@ -75,18 +75,17 @@ where
 
     // Count the number of constraints. If the AIR provides a static count via
     // `num_constraints()`, use it to avoid a full symbolic evaluation pass.
-    let constraint_count = air.num_constraints().unwrap_or_else(|| {
-        get_symbolic_constraints(air, preprocessed_width, public_values.len()).len()
-    });
+    let constraint_count = air
+        .num_constraints()
+        .unwrap_or_else(|| get_symbolic_constraints(air, preprocessed_width).len());
 
     // In debug builds, cross-check the static hint against symbolic evaluation.
     debug_assert!(
-        air.num_constraints().is_none_or(|n| {
-            n == get_symbolic_constraints(air, preprocessed_width, public_values.len()).len()
-        }),
+        air.num_constraints()
+            .is_none_or(|n| { n == get_symbolic_constraints(air, preprocessed_width).len() }),
         "num_constraints() = {} but symbolic evaluation found {} constraints",
         air.num_constraints().unwrap(),
-        get_symbolic_constraints(air, preprocessed_width, public_values.len()).len(),
+        get_symbolic_constraints(air, preprocessed_width).len(),
     );
 
     // Each constraint polynomial looks like `C_j(X_1, ..., X_w, Y_1, ..., Y_w, Z_1, ..., Z_j)`.
@@ -122,12 +121,8 @@ where
     // From the degree of the constraint polynomial, compute the number
     // of quotient polynomials we will split Q(x) into. This is chosen to
     // always be a power of 2.
-    let log_num_quotient_chunks = get_log_num_quotient_chunks::<Val<SC>, A>(
-        air,
-        preprocessed_width,
-        public_values.len(),
-        config.is_zk(),
-    );
+    let log_num_quotient_chunks =
+        get_log_num_quotient_chunks::<Val<SC>, A>(air, preprocessed_width, config.is_zk());
 
     let num_quotient_chunks = 1 << (log_num_quotient_chunks + config.is_zk());
 

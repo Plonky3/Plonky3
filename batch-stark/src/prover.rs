@@ -125,7 +125,7 @@ where
         .iter()
         .zip(pub_vals.iter())
         .enumerate()
-        .map(|(i, (air, pv))| {
+        .map(|(i, (air, _pv))| {
             let pre_w = common
                 .preprocessed
                 .as_ref()
@@ -137,7 +137,6 @@ where
                     get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
                         air,
                         pre_w,
-                        pv.len(),
                         &all_lookups[i],
                         &lookup_data_to_expr(&lookup_data[i]),
                         config.is_zk(),
@@ -300,7 +299,6 @@ where
                 get_symbolic_constraints(
                     airs[i],
                     preprocessed_widths[i],
-                    pub_vals[i].len(),
                     &all_lookups[i],
                     &lookup_data_to_expr(&lookup_data[i]),
                     &lookup_gadget,
@@ -312,7 +310,6 @@ where
             let (base_constraints, extension_constraints) = get_symbolic_constraints(
                 airs[i],
                 preprocessed_widths[i],
-                pub_vals[i].len(),
                 &all_lookups[i],
                 &lookup_data_to_expr(&lookup_data[i]),
                 &lookup_gadget,
@@ -326,7 +323,6 @@ where
                 n == get_symbolic_constraints(
                     airs[i],
                     preprocessed_widths[i],
-                    pub_vals[i].len(),
                     &all_lookups[i],
                     &lookup_data_to_expr(&lookup_data[i]),
                     &lookup_gadget,
@@ -339,7 +335,6 @@ where
             get_symbolic_constraints(
                 airs[i],
                 preprocessed_widths[i],
-                pub_vals[i].len(),
                 &all_lookups[i],
                 &lookup_data_to_expr(&lookup_data[i]),
                 &lookup_gadget,

@@ -11,16 +11,12 @@ use crate::{
 };
 
 #[instrument(skip_all, level = "debug")]
-pub fn get_max_constraint_degree<F, A>(
-    air: &A,
-    preprocessed_width: usize,
-    num_public_values: usize,
-) -> usize
+pub fn get_max_constraint_degree<F, A>(air: &A, preprocessed_width: usize) -> usize
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
-    get_max_constraint_degree_extension(air, preprocessed_width, num_public_values, 0, 0)
+    get_max_constraint_degree_extension(air, preprocessed_width, 0, 0)
 }
 
 #[instrument(
@@ -31,7 +27,6 @@ where
 pub fn get_max_constraint_degree_extension<F, EF, A>(
     air: &A,
     preprocessed_width: usize,
-    num_public_values: usize,
     permutation_width: usize,
     num_permutation_challenges: usize,
 ) -> usize
@@ -43,7 +38,6 @@ where
     let (base_constraints, extension_constraints) = get_all_symbolic_constraints(
         air,
         preprocessed_width,
-        num_public_values,
         permutation_width,
         num_permutation_challenges,
     );
@@ -70,14 +64,18 @@ where
 pub fn get_symbolic_constraints<F, A>(
     air: &A,
     preprocessed_width: usize,
-    num_public_values: usize,
 ) -> Vec<SymbolicExpression<F>>
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
-    let mut builder =
-        SymbolicAirBuilder::new(preprocessed_width, air.width(), num_public_values, 0, 0);
+    let mut builder = SymbolicAirBuilder::new(
+        preprocessed_width,
+        air.width(),
+        air.num_public_values(),
+        0,
+        0,
+    );
     air.eval(&mut builder);
     builder.base_constraints()
 }
@@ -90,7 +88,6 @@ where
 pub fn get_symbolic_constraints_extension<F, EF, A>(
     air: &A,
     preprocessed_width: usize,
-    num_public_values: usize,
     permutation_width: usize,
     num_permutation_challenges: usize,
 ) -> Vec<SymbolicExpression<EF>>
@@ -102,7 +99,7 @@ where
     let mut builder = SymbolicAirBuilder::new(
         preprocessed_width,
         air.width(),
-        num_public_values,
+        air.num_public_values(),
         permutation_width,
         num_permutation_challenges,
     );
@@ -118,7 +115,6 @@ where
 pub fn get_all_symbolic_constraints<F, EF, A>(
     air: &A,
     preprocessed_width: usize,
-    num_public_values: usize,
     permutation_width: usize,
     num_permutation_challenges: usize,
 ) -> (Vec<SymbolicExpression<F>>, Vec<SymbolicExpression<EF>>)
@@ -130,7 +126,7 @@ where
     let mut builder = SymbolicAirBuilder::new(
         preprocessed_width,
         air.width(),
-        num_public_values,
+        air.num_public_values(),
         permutation_width,
         num_permutation_challenges,
     );
@@ -313,7 +309,7 @@ mod tests {
             constraints: vec![],
             width: 4,
         };
-        let max_degree = get_max_constraint_degree(&air, 3, 2);
+        let max_degree = get_max_constraint_degree(&air, 3);
         assert_eq!(
             max_degree, 0,
             "No constraints should result in a degree of 0"
@@ -330,7 +326,7 @@ mod tests {
             ],
             width: 4,
         };
-        let max_degree = get_max_constraint_degree(&air, 3, 2);
+        let max_degree = get_max_constraint_degree(&air, 3);
         assert_eq!(max_degree, 1, "Max constraint degree should be 1");
     }
 
@@ -344,7 +340,7 @@ mod tests {
             width: 4,
         };
 
-        let constraints = get_symbolic_constraints(&air, 3, 2);
+        let constraints = get_symbolic_constraints(&air, 3);
 
         assert_eq!(constraints.len(), 2, "Should return exactly 2 constraints");
 
