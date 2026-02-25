@@ -53,7 +53,7 @@ pub trait LookupGadget: LookupEvaluator {
     ) -> Result<(), LookupError>;
 
     /// Computes the polynomial degree of a lookup transition constraint.
-    fn constraint_degree<F: Field>(&self, context: Lookup<F>) -> usize;
+    fn constraint_degree<F: Field>(&self, context: &Lookup<F>) -> usize;
 }
 
 /// A builder to generate the lookup traces, given the main trace, public values and permutation challenges.

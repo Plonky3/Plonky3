@@ -74,14 +74,14 @@ fn test_constraint_degree_calculation() {
     // - each multiplicity has degree 1
     // - so the total degree should be 3 (1 + (1 + 1)).
     let lookup_deg_3 = create_dummy_lookup(&[1, 1], &[vec![1], vec![1]], &[1, 1]);
-    assert_eq!(gadget.constraint_degree(lookup_deg_3), 3);
+    assert_eq!(gadget.constraint_degree(&lookup_deg_3), 3);
 
     // We have two lookup elements (each element is a single column):
     // - each element has degree 1
     // - each multiplicity has degree 3
     // - so the total degree should be 4 (3 + 1).
     let lookup_degree_4 = create_dummy_lookup(&[1, 1], &[vec![1], vec![1]], &[3, 3]);
-    assert_eq!(gadget.constraint_degree(lookup_degree_4), 4);
+    assert_eq!(gadget.constraint_degree(&lookup_degree_4), 4);
 
     // We have two lookup elements (each element is a single column):
     // - one element has degree 2
@@ -89,7 +89,7 @@ fn test_constraint_degree_calculation() {
     // - each multiplicity has degree 1
     // - so the total degree should be 6 (3 + 3).
     let lookup_degree_6 = create_dummy_lookup(&[1, 1], &[vec![2], vec![3]], &[1, 1]);
-    assert_eq!(gadget.constraint_degree(lookup_degree_6), 6);
+    assert_eq!(gadget.constraint_degree(&lookup_degree_6), 6);
 
     // We have two lookup elements:
     // - first element is a tuple of 5 columns
@@ -102,7 +102,7 @@ fn test_constraint_degree_calculation() {
     let degrees1 = vec![1, 3, 0, 0, 0]; // First element of degree 3.
     let degrees2 = vec![0, 1, 0, 2, 0, 1]; // Second element of degree 2.
     let lookup_degree_7 = create_dummy_lookup(&[5, 6], &[degrees1, degrees2], &[5, 2]);
-    assert_eq!(gadget.constraint_degree(lookup_degree_7), 7);
+    assert_eq!(gadget.constraint_degree(&lookup_degree_7), 7);
 }
 
 /// A mock `AirBuilder` for testing purposes that simulates constraint evaluation.
