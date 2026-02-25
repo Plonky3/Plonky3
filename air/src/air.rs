@@ -29,6 +29,31 @@ pub trait BaseAir<F>: Sync {
         true
     }
 
+    /// Whether this AIR's constraints access the next row of the main trace.
+    ///
+    /// By default this returns `true`, which will require opening main columns
+    /// at both `zeta` and `zeta_next`.
+    ///
+    /// AIRs that only ever read the current main row (and never access an
+    /// offset-1 main entry) can override this to return `false` to allow
+    /// the prover and verifier to open only at `zeta`.
+    ///
+    /// # When to override
+    ///
+    /// - **Return `false`**: single-row AIRs where all constraints are
+    ///   evaluated within one row.
+    /// - **Keep `true`** (default): AIRs with transition constraints
+    ///   that reference `main.row_slice(1)`.
+    ///
+    /// # Correctness
+    ///
+    /// Must be consistent with [`Air::eval`]. Returning `false` when the AIR
+    /// actually reads the next row will cause verification failures or, in
+    /// the worst case, a soundness gap.
+    fn main_uses_next_row(&self) -> bool {
+        true
+    }
+
     /// Optional hint for the number of constraints in this AIR.
     ///
     /// Normally the prover runs a full symbolic evaluation just to count

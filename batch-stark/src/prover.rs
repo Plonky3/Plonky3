@@ -451,15 +451,20 @@ where
             (r_data, round0_points)
         });
         rounds.extend(round0);
-        // Main trace round: per instance, open at zeta and its next point.
+        // Main trace round: per instance, open at zeta and (conditionally) its next point.
         let round1_points = trace_domains
             .iter()
-            .map(|dom| {
-                vec![
-                    zeta,
-                    dom.next_point(zeta)
-                        .expect("domain should support next_point operation"),
-                ]
+            .enumerate()
+            .map(|(i, dom)| {
+                if airs[i].main_uses_next_row() {
+                    vec![
+                        zeta,
+                        dom.next_point(zeta)
+                            .expect("domain should support next_point operation"),
+                    ]
+                } else {
+                    vec![zeta]
+                }
             })
             .collect::<Vec<_>>();
         rounds.push((&main_data, round1_points));
@@ -562,7 +567,11 @@ where
         // Trace locals
         let tv = &trace_values_for_mats[i];
         let trace_local = tv[0].clone();
-        let trace_next = tv[1].clone();
+        let trace_next = if airs[i].main_uses_next_row() {
+            Some(tv[1].clone())
+        } else {
+            None
+        };
 
         // Quotient chunks: for each chunk matrix, take the first point (zeta) values.
         let mut qcs = Vec::with_capacity(e - s);

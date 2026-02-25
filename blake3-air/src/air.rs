@@ -228,6 +228,10 @@ impl<F> BaseAir<F> for Blake3Air {
     fn width(&self) -> usize {
         NUM_BLAKE3_COLS
     }
+
+    fn main_uses_next_row(&self) -> bool {
+        false
+    }
 }
 
 impl<AB: AirBuilder> Air<AB> for Blake3Air {
