@@ -8,6 +8,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::{format, vec};
 
+use hashbrown::HashMap;
 use p3_air::{AirBuilder, AirBuilderWithPublicValues, PermutationAirBuilder};
 use p3_field::Field;
 use p3_matrix::Matrix;
@@ -39,43 +40,48 @@ struct Location {
     row: usize,
 }
 
-#[derive(Clone, Debug)]
-struct Entry<F: Field> {
-    key: Vec<F>,
-    total: F,
-    locations: Vec<Location>,
-}
-
+/// Accumulates tuples and their multiplicities, tracking where each was seen.
 #[derive(Default)]
 struct MultiSet<F: Field> {
-    entries: Vec<Entry<F>>,
+    /// Key: field-element tuple. Value: (net multiplicity, source locations).
+    entries: HashMap<Vec<F>, (F, Vec<Location>)>,
 }
 
 impl<F: Field> MultiSet<F> {
+    /// Record one occurrence of a tuple with the given multiplicity.
+    /// Zero-multiplicity entries are silently skipped.
     fn add(&mut self, key: Vec<F>, multiplicity: F, location: Location) {
         if multiplicity.is_zero() {
             return;
         }
 
-        if let Some(entry) = self.entries.iter_mut().find(|e| e.key == key) {
-            entry.total += multiplicity;
-            entry.locations.push(location);
-        } else {
-            self.entries.push(Entry {
-                key,
-                total: multiplicity,
-                locations: vec![location],
-            });
-        }
+        self.entries
+            .entry(key)
+            .and_modify(|(total, locations)| {
+                *total += multiplicity;
+                locations.push(location.clone());
+            })
+            .or_insert_with(|| (multiplicity, vec![location]));
     }
 
+    /// Panic if any tuple has a non-zero net multiplicity.
+    ///
+    /// Entries are sorted lexicographically before checking so that the
+    /// *first* reported mismatch is deterministic (hash-map iteration
+    /// order is not).
     fn assert_empty(&self, label: &str) {
-        for entry in &self.entries {
-            if !entry.total.is_zero() {
-                let rendered_key: Vec<String> = entry.key.iter().map(|v| v.to_string()).collect();
+        let mut entries: Vec<_> = self.entries.iter().collect();
+        entries.sort_by(|(a, _), (b, _)| {
+            let a_str: Vec<String> = a.iter().map(|v| v.to_string()).collect();
+            let b_str: Vec<String> = b.iter().map(|v| v.to_string()).collect();
+            a_str.cmp(&b_str)
+        });
+        for (key, (total, locations)) in entries {
+            if !total.is_zero() {
+                let rendered_key: Vec<String> = key.iter().map(|v| v.to_string()).collect();
                 panic!(
                     "Lookup mismatch ({label}): tuple {:?} has net multiplicity {:?}. Locations: {:?}",
-                    rendered_key, entry.total, entry.locations
+                    rendered_key, total, locations
                 );
             }
         }
@@ -102,19 +108,19 @@ pub fn check_lookups<F: Field>(instances: &[LookupDebugInstance<'_, F>]) {
         }
     }
 
-    // 2) Aggregate and check all global lookups by interaction name.
+    // 2) Aggregate all global lookups that share the same interaction name,
+    //    then verify each group sums to zero.
+    //    A name-to-index map gives O(1) group lookups instead of a linear scan.
     let mut global_sets: Vec<(String, MultiSet<F>)> = Vec::new();
+    let mut global_index: HashMap<String, usize> = HashMap::new();
 
     for (instance_idx, instance) in instances.iter().enumerate() {
         for (lookup_idx, lookup) in instance.lookups.iter().enumerate() {
             if let Kind::Global(name) = &lookup.kind {
-                let idx = global_sets
-                    .iter()
-                    .position(|(n, _)| n == name)
-                    .unwrap_or_else(|| {
-                        global_sets.push((name.clone(), MultiSet::default()));
-                        global_sets.len() - 1
-                    });
+                let idx = *global_index.entry(name.clone()).or_insert_with(|| {
+                    global_sets.push((name.clone(), MultiSet::default()));
+                    global_sets.len() - 1
+                });
 
                 accumulate_lookup(
                     instance_idx,
