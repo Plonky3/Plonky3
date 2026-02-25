@@ -125,7 +125,7 @@ where
         if inst_base_opened_vals.trace_local.len() != air_width {
             return Err(VerificationError::InvalidProofShape);
         }
-        if airs[i].main_uses_next_row() {
+        if !airs[i].main_next_row_columns().is_empty() {
             if inst_base_opened_vals
                 .trace_next
                 .as_ref()
@@ -173,7 +173,7 @@ where
             if pre_local_len != 0 || pre_next_len != 0 {
                 return Err(VerificationError::InvalidProofShape);
             }
-        } else if airs[i].preprocessed_uses_next_row() {
+        } else if !airs[i].preprocessed_next_row_columns().is_empty() {
             if pre_local_len != pre_w || pre_next_len != pre_w {
                 return Err(VerificationError::InvalidProofShape);
             }
@@ -278,7 +278,7 @@ where
                 zeta,
                 inst_opened_vals.base_opened_values.trace_local.clone(),
             )];
-            if airs[i].main_uses_next_row() {
+            if !airs[i].main_next_row_columns().is_empty() {
                 let zeta_next = trace_domains[i]
                     .next_point(zeta)
                     .ok_or(VerificationError::NextPointUnavailable)?;
@@ -368,7 +368,7 @@ where
 
             let meta_db = meta.degree_bits;
             let pre_domain = pcs.natural_domain_for_degree(1 << meta_db);
-            if airs[inst_idx].preprocessed_uses_next_row() {
+            if !airs[inst_idx].preprocessed_next_row_columns().is_empty() {
                 let next = inst
                     .base_opened_values
                     .preprocessed_next

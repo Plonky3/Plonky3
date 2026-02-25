@@ -451,7 +451,7 @@ where
             .iter()
             .enumerate()
             .map(|(i, dom)| {
-                if airs[i].main_uses_next_row() {
+                if !airs[i].main_next_row_columns().is_empty() {
                     vec![
                         zeta,
                         dom.next_point(zeta)
@@ -486,7 +486,7 @@ where
                 .matrix_to_instance
                 .iter()
                 .map(|&inst_idx| {
-                    if airs[inst_idx].preprocessed_uses_next_row() {
+                    if !airs[inst_idx].preprocessed_next_row_columns().is_empty() {
                         let zeta_next_i = trace_domains[inst_idx]
                             .next_point(zeta)
                             .expect("domain should support next_point operation");
@@ -562,7 +562,7 @@ where
         // Trace locals
         let tv = &trace_values_for_mats[i];
         let trace_local = tv[0].clone();
-        let trace_next = if airs[i].main_uses_next_row() {
+        let trace_next = if !airs[i].main_next_row_columns().is_empty() {
             Some(tv[1].clone())
         } else {
             None

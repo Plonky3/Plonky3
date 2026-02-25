@@ -17,41 +17,24 @@ pub trait BaseAir<F>: Sync {
         None
     }
 
-    /// Whether this AIR's constraints use the "next" row of preprocessed columns.
+    /// Indices of main trace columns that access the next row.
     ///
-    /// By default this returns `true`, which will require opening preprocessed columns
-    /// at both `zeta` and `zeta_next`.
+    /// Defaults to all columns. Return an empty vector for single-row AIRs.
     ///
-    /// AIRs that only ever read the current preprocessed row (and never access an
-    /// offset-1 preprocessed entry) can override this to return `false` to allow
-    /// the prover and verifier to open only at `zeta`.
-    fn preprocessed_uses_next_row(&self) -> bool {
-        true
+    /// Must match what [`Air::eval`] actually reads; incorrect results cause
+    /// verification failures or soundness gaps.
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        (0..self.width()).collect()
     }
 
-    /// Whether this AIR's constraints access the next row of the main trace.
+    /// Indices of preprocessed trace columns that access the next row.
     ///
-    /// By default this returns `true`, which will require opening main columns
-    /// at both `zeta` and `zeta_next`.
-    ///
-    /// AIRs that only ever read the current main row (and never access an
-    /// offset-1 main entry) can override this to return `false` to allow
-    /// the prover and verifier to open only at `zeta`.
-    ///
-    /// # When to override
-    ///
-    /// - **Return `false`**: single-row AIRs where all constraints are
-    ///   evaluated within one row.
-    /// - **Keep `true`** (default): AIRs with transition constraints
-    ///   that reference `main.row_slice(1)`.
-    ///
-    /// # Correctness
-    ///
-    /// Must be consistent with [`Air::eval`]. Returning `false` when the AIR
-    /// actually reads the next row will cause verification failures or, in
-    /// the worst case, a soundness gap.
-    fn main_uses_next_row(&self) -> bool {
-        true
+    /// Defaults to all preprocessed columns. Return an empty vector when
+    /// only the current preprocessed row is read.
+    fn preprocessed_next_row_columns(&self) -> Vec<usize> {
+        self.preprocessed_trace()
+            .map(|t| (0..t.width).collect())
+            .unwrap_or_default()
     }
 
     /// Optional hint for the number of constraints in this AIR.
