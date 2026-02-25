@@ -349,7 +349,7 @@ impl LookupGadget for LogUpGadget {
     ///
     /// The constraint degree is then:
     /// `1 + max(deg(numerator), deg(common_denominator))`
-    fn constraint_degree<F: Field>(&self, context: Lookup<F>) -> usize {
+    fn constraint_degree<F: Field>(&self, context: &Lookup<F>) -> usize {
         assert!(context.multiplicities_exprs.len() == context.element_exprs.len());
 
         let n = context.multiplicities_exprs.len();
