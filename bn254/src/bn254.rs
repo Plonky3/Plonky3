@@ -279,7 +279,7 @@ fn exp_u256(base: Bn254, exp: [u64; 4]) -> Bn254 {
 
         if started {
             result = result.exp_power_of_2(4);
-            result = result * table[nibble];
+            result *= table[nibble]
         } else if nibble != 0 {
             result = table[nibble];
             started = true;
