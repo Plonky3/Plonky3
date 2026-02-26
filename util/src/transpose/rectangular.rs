@@ -119,11 +119,11 @@ const MEDIUM_LEN: usize = 1024 * 1024;
 /// Side length of a tile in elements.
 ///
 /// We use `TILE_SIZE`×`TILE_SIZE` tiles because:
-/// - `TILE_SIZE`×`TILE_SIZE` × 4 bytes = 1KB per tile, fitting in L1 cache
+/// - `TILE_SIZE`×`TILE_SIZE` × 4 bytes = 4KB per tile (8KB for 8-byte elements), still cache-friendly.
 /// - `TILE_SIZE` is divisible by `BLOCK_SIZE`, allowing exactly (`TILE_SIZE`/`BLOCK_SIZE`)^2 NEON blocks per tile
 /// - Good balance between tile overhead and cache utilization
 #[cfg(any(target_arch = "aarch64", test))]
-const TILE_SIZE: usize = 16;
+const TILE_SIZE: usize = 32;
 
 /// Maximum dimension for recursive base case.
 ///
