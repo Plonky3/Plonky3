@@ -9,12 +9,12 @@
 //! Long term we will use more optimised internal and external linear layers.
 use alloc::vec::Vec;
 
-use p3_field::{Algebra, InjectiveMonomial};
+use p3_field::{Algebra, InjectiveMonomial, PrimeCharacteristicRing};
 use p3_poseidon2::{
-    ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, HLMDSMat4, InternalLayer,
-    InternalLayerConstructor, MDSMat4, Poseidon2, add_rc_and_sbox_generic,
-    external_initial_permute_state, external_terminal_permute_state, internal_permute_state,
-    matmul_internal,
+    ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, GenericPoseidon2LinearLayers,
+    HLMDSMat4, InternalLayer, InternalLayerConstructor, MDSMat4, Poseidon2,
+    add_rc_and_sbox_generic, external_initial_permute_state, external_terminal_permute_state,
+    internal_permute_state, matmul_internal,
 };
 
 use crate::Goldilocks;
@@ -229,6 +229,58 @@ impl<A: Algebra<Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>, const 
             add_rc_and_sbox_generic,
             &MDSMat4,
         );
+    }
+}
+
+/// An implementation of the matrix multiplications in the internal and external layers of Poseidon2.
+///
+/// This can act on `[A; WIDTH]` for any ring implementing `Algebra<Goldilocks>`.
+/// If you have either `[Goldilocks::Packing; WIDTH]` or `[Goldilocks; WIDTH]` it will be much faster
+/// to use `Poseidon2Goldilocks<WIDTH>` instead of building a Poseidon2 permutation using this.
+#[derive(Clone, Debug, Default)]
+pub struct GenericPoseidon2LinearLayersGoldilocks;
+
+impl GenericPoseidon2LinearLayers<8> for GenericPoseidon2LinearLayersGoldilocks {
+    fn internal_linear_layer<R: PrimeCharacteristicRing>(state: &mut [R; 8]) {
+        let sum: R = state.iter().cloned().sum();
+        for i in 0..8 {
+            let d = R::from_u64(MATRIX_DIAG_8_GOLDILOCKS[i].value);
+            state[i] *= d;
+            state[i] += sum.clone();
+        }
+    }
+}
+
+impl GenericPoseidon2LinearLayers<12> for GenericPoseidon2LinearLayersGoldilocks {
+    fn internal_linear_layer<R: PrimeCharacteristicRing>(state: &mut [R; 12]) {
+        let sum: R = state.iter().cloned().sum();
+        for i in 0..12 {
+            let d = R::from_u64(MATRIX_DIAG_12_GOLDILOCKS[i].value);
+            state[i] *= d;
+            state[i] += sum.clone();
+        }
+    }
+}
+
+impl GenericPoseidon2LinearLayers<16> for GenericPoseidon2LinearLayersGoldilocks {
+    fn internal_linear_layer<R: PrimeCharacteristicRing>(state: &mut [R; 16]) {
+        let sum: R = state.iter().cloned().sum();
+        for i in 0..16 {
+            let d = R::from_u64(MATRIX_DIAG_16_GOLDILOCKS[i].value);
+            state[i] *= d;
+            state[i] += sum.clone();
+        }
+    }
+}
+
+impl GenericPoseidon2LinearLayers<20> for GenericPoseidon2LinearLayersGoldilocks {
+    fn internal_linear_layer<R: PrimeCharacteristicRing>(state: &mut [R; 20]) {
+        let sum: R = state.iter().cloned().sum();
+        for i in 0..20 {
+            let d = R::from_u64(MATRIX_DIAG_20_GOLDILOCKS[i].value);
+            state[i] *= d;
+            state[i] += sum.clone();
+        }
     }
 }
 
@@ -478,5 +530,109 @@ mod tests {
 
         hl_poseidon2_goldilocks_width_8(&mut input);
         assert_eq!(input, expected);
+    }
+
+    #[test]
+    fn test_generic_internal_linear_layer_8_matches_matmul_internal() {
+        let mut state_generic = [
+            F::from_u64(1),
+            F::from_u64(2),
+            F::from_u64(3),
+            F::from_u64(4),
+            F::from_u64(5),
+            F::from_u64(6),
+            F::from_u64(7),
+            F::from_u64(8),
+        ];
+        let mut state_existing = state_generic;
+
+        GenericPoseidon2LinearLayersGoldilocks::internal_linear_layer(&mut state_generic);
+        matmul_internal(&mut state_existing, MATRIX_DIAG_8_GOLDILOCKS);
+
+        assert_eq!(state_generic, state_existing);
+    }
+
+    #[test]
+    fn test_generic_internal_linear_layer_12_matches_matmul_internal() {
+        let mut state_generic = [
+            F::from_u64(1),
+            F::from_u64(2),
+            F::from_u64(3),
+            F::from_u64(4),
+            F::from_u64(5),
+            F::from_u64(6),
+            F::from_u64(7),
+            F::from_u64(8),
+            F::from_u64(9),
+            F::from_u64(10),
+            F::from_u64(11),
+            F::from_u64(12),
+        ];
+        let mut state_existing = state_generic;
+
+        GenericPoseidon2LinearLayersGoldilocks::internal_linear_layer(&mut state_generic);
+        matmul_internal(&mut state_existing, MATRIX_DIAG_12_GOLDILOCKS);
+
+        assert_eq!(state_generic, state_existing);
+    }
+
+    #[test]
+    fn test_generic_internal_linear_layer_16_matches_matmul_internal() {
+        let mut state_generic = [
+            F::from_u64(1),
+            F::from_u64(2),
+            F::from_u64(3),
+            F::from_u64(4),
+            F::from_u64(5),
+            F::from_u64(6),
+            F::from_u64(7),
+            F::from_u64(8),
+            F::from_u64(9),
+            F::from_u64(10),
+            F::from_u64(11),
+            F::from_u64(12),
+            F::from_u64(13),
+            F::from_u64(14),
+            F::from_u64(15),
+            F::from_u64(16),
+        ];
+        let mut state_existing = state_generic;
+
+        GenericPoseidon2LinearLayersGoldilocks::internal_linear_layer(&mut state_generic);
+        matmul_internal(&mut state_existing, MATRIX_DIAG_16_GOLDILOCKS);
+
+        assert_eq!(state_generic, state_existing);
+    }
+
+    #[test]
+    fn test_generic_internal_linear_layer_20_matches_matmul_internal() {
+        let mut state_generic = [
+            F::from_u64(1),
+            F::from_u64(2),
+            F::from_u64(3),
+            F::from_u64(4),
+            F::from_u64(5),
+            F::from_u64(6),
+            F::from_u64(7),
+            F::from_u64(8),
+            F::from_u64(9),
+            F::from_u64(10),
+            F::from_u64(11),
+            F::from_u64(12),
+            F::from_u64(13),
+            F::from_u64(14),
+            F::from_u64(15),
+            F::from_u64(16),
+            F::from_u64(17),
+            F::from_u64(18),
+            F::from_u64(19),
+            F::from_u64(20),
+        ];
+        let mut state_existing = state_generic;
+
+        GenericPoseidon2LinearLayersGoldilocks::internal_linear_layer(&mut state_generic);
+        matmul_internal(&mut state_existing, MATRIX_DIAG_20_GOLDILOCKS);
+
+        assert_eq!(state_generic, state_existing);
     }
 }
