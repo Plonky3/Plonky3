@@ -426,8 +426,7 @@ where
 
         // Contained in each `Self::ProverData` is a list of matrices which have been committed to.
         // We extract those matrices to be able to refer to them directly.
-        let commitment_data_with_opening_pts = commitment_data_with_opening_points;
-        let mats_and_points = commitment_data_with_opening_pts
+        let mats_and_points = commitment_data_with_opening_points
             .iter()
             .map(|(data, points)| {
                 let mats = self
@@ -638,7 +637,7 @@ where
             fri_input,
             challenger,
             log_global_max_height,
-            &commitment_data_with_opening_pts,
+            &commitment_data_with_opening_points,
             &self.mmcs,
         );
 
