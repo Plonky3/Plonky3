@@ -1658,9 +1658,10 @@ unsafe fn transpose_tile_16x16_neon_8b_buffered(
     }
 }
 
-/// Scalar transpose for an arbitrary rectangular block of 8-byte elements.
+/// Transpose an arbitrary rectangular block of 8-byte elements.
 ///
-/// Used for handling edge cases where dimensions don't align to tile boundaries.
+/// Uses NEON for full 4×4 blocks and scalar for the remainder (0–3 elements
+/// in each dimension), so edge tiles still get most of the benefit of SIMD.
 ///
 /// # Safety
 ///
@@ -1681,16 +1682,43 @@ unsafe fn transpose_block_scalar_8b(
     block_width: usize,
     block_height: usize,
 ) {
-    for inner_x in 0..block_width {
+    const BLOCK: usize = 4;
+    let neon_cols = block_width / BLOCK;
+    let neon_rows = block_height / BLOCK;
+
+    for by in 0..neon_rows {
+        for bx in 0..neon_cols {
+            let x = x_start + bx * BLOCK;
+            let y = y_start + by * BLOCK;
+            unsafe {
+                transpose_4x4_neon_8b(
+                    input.add(y * width + x),
+                    output.add(x * height + y),
+                    width,
+                    height,
+                );
+            }
+        }
+    }
+
+    let rem_x = neon_cols * BLOCK;
+    let rem_y = neon_rows * BLOCK;
+
+    for inner_x in rem_x..block_width {
         for inner_y in 0..block_height {
             let x = x_start + inner_x;
             let y = y_start + inner_y;
-
-            let input_index = x + y * width;
-            let output_index = y + x * height;
-
             unsafe {
-                *output.add(output_index) = *input.add(input_index);
+                *output.add(y + x * height) = *input.add(x + y * width);
+            }
+        }
+    }
+    for inner_x in 0..rem_x {
+        for inner_y in rem_y..block_height {
+            let x = x_start + inner_x;
+            let y = y_start + inner_y;
+            unsafe {
+                *output.add(y + x * height) = *input.add(x + y * width);
             }
         }
     }
