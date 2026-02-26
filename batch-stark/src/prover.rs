@@ -7,7 +7,9 @@ use p3_air::DebugConstraintBuilder;
 use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
+use p3_field::{
+    Algebra, BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+};
 use p3_lookup::folder::ProverConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::lookup_traits::{Kind, Lookup, LookupData, LookupGadget, lookup_data_to_expr};
@@ -69,7 +71,7 @@ pub fn prove_batch<
 ) -> BatchProof<SC>
 where
     SC: SGC,
-    SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
+    SymbolicExpression<SC::Challenge>: Algebra<SymbolicExpression<Val<SC>>>,
 {
     let common = &prover_data.common;
     // TODO: Extend if additional lookup gadgets are added.
