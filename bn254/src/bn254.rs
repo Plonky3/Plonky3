@@ -12,8 +12,8 @@ use p3_field::op_assign_macros::{
     impl_add_assign, impl_div_methods, impl_mul_methods, impl_sub_assign, ring_sum,
 };
 use p3_field::{
-    Field, InjectiveMonomial, Packable, PrimeCharacteristicRing, PrimeField, RawDataSerializable,
-    TwoAdicField, quotient_map_small_int,
+    Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
+    RawDataSerializable, TwoAdicField, quotient_map_small_int,
 };
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
@@ -251,8 +251,51 @@ impl PrimeCharacteristicRing for Bn254 {
 /// As p - 1 is divisible by 2 and 3 the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
 impl InjectiveMonomial<5> for Bn254 {}
 
-// TODO: Implement PermutationMonomial<5> for Bn254Fr.
-// Not a priority given how slow (and unused) this will be.
+/// The value 5^{-1} mod (P - 1) where P is the BN254 prime.
+///
+/// Equal to: `17510594297471420177797124596205820070838691520332827474958563349260646796493`
+const BN254_FIFTH_ROOT_EXP: [u64; 4] = [
+    0xcfe7f7a98ccccccd,
+    0x535cb9d394945a0d,
+    0x93736af8679aad17,
+    0x26b6a528b427b354,
+];
+
+/// Compute `x -> x^exp` using 4-bit windowed square-and-multiply.
+fn exp_u256(base: Bn254, exp: [u64; 4]) -> Bn254 {
+    let mut table = [Bn254::ONE; 16];
+    table[1] = base;
+    for i in 2..16 {
+        table[i] = table[i - 1] * base;
+    }
+
+    let mut started = false;
+    let mut result = Bn254::ONE;
+
+    for nibble_idx in (0..64).rev() {
+        let limb_idx = nibble_idx / 16;
+        let shift = (nibble_idx % 16) * 4;
+        let nibble = ((exp[limb_idx] >> shift) & 0xF) as usize;
+
+        if started {
+            result = result.exp_power_of_2(4);
+            result = result * table[nibble];
+        } else if nibble != 0 {
+            result = table[nibble];
+            started = true;
+        }
+    }
+    result
+}
+
+impl PermutationMonomial<5> for Bn254 {
+    /// In the field `Bn254`, `a^{1/5}` is equal to a^{BN254_FIFTH_ROOT_EXP}.
+    ///
+    /// This follows from the calculation `5 * BN254_FIFTH_ROOT_EXP = 1 mod (P - 1)`.
+    fn injective_exp_root_n(&self) -> Self {
+        exp_u256(*self, BN254_FIFTH_ROOT_EXP)
+    }
+}
 
 impl RawDataSerializable for Bn254 {
     const NUM_BYTES: usize = 32;
@@ -609,4 +652,28 @@ mod tests {
     );
 
     test_prime_field!(crate::Bn254);
+
+    #[test]
+    fn test_permutation_monomial_5() {
+        let test_vals = [
+            F::ZERO,
+            F::ONE,
+            F::TWO,
+            F::NEG_ONE,
+            F::GENERATOR,
+            F::from_u8(42),
+            F::from_u16(12345),
+        ];
+        for x in test_vals {
+            let x5 = x.injective_exp_n();
+            let root = x5.injective_exp_root_n();
+            assert_eq!(root, x, "fifth_root(x^5) != x for x = {x}");
+        }
+
+        for x in test_vals {
+            let root = x.injective_exp_root_n();
+            let root5 = root.injective_exp_n();
+            assert_eq!(root5, x, "(x^{{1/5}})^5 != x for x = {x}");
+        }
+    }
 }
