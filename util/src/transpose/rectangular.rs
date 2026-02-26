@@ -1637,10 +1637,17 @@ unsafe fn transpose_tile_16x16_neon_8b_buffered(
         transpose_4x4_neon_8b(inp.add(12), buf.add(12 * TILE_SIZE + 12), width, TILE_SIZE);
 
         // Flush buffer to output with write prefetching.
-        prefetch_write(output.add(x_start * height + y_start) as *const u8);
+        // 16 u64 elements = 128 bytes = 2 cache lines (64 bytes each on ARM64),
+        // so we prefetch both cache lines for each output column.
+        let out_base = output.add(x_start * height + y_start);
+        prefetch_write(out_base as *const u8);
+        prefetch_write(out_base.add(8) as *const u8);
+
         for c in 0..TILE_SIZE {
             if c + 1 < TILE_SIZE {
-                prefetch_write(output.add((x_start + c + 1) * height + y_start) as *const u8);
+                let next = output.add((x_start + c + 1) * height + y_start);
+                prefetch_write(next as *const u8);
+                prefetch_write(next.add(8) as *const u8);
             }
             core::ptr::copy_nonoverlapping(
                 buf.add(c * TILE_SIZE),
