@@ -95,12 +95,18 @@ where
                         // To generate it, we add `w + 2 * num_random_codewords` columns to the original matrix, then reshape it by setting the width to `w + num_random_codewords`.
                         // All columns are added on the right hand side so, after reshaping, this has the net effect of adding `num_random_codewords` random columns on the right and interleaving the original trace with random rows.
 
-                        let mut random_evaluation = add_random_cols(
+                        let random_evaluation = add_random_cols(
                             &mat,
                             mat_width + 2 * self.num_random_codewords,
                             &mut *self.rng.borrow_mut(),
                         );
-                        random_evaluation.width = mat_width + self.num_random_codewords;
+                        let new_width = mat_width + self.num_random_codewords;
+                        let new_height = random_evaluation.values.len() / new_width;
+                        let random_evaluation = RowMajorMatrix::new_with_height(
+                            random_evaluation.values,
+                            new_width,
+                            new_height,
+                        );
 
                         (domain, random_evaluation)
                     })
@@ -122,8 +128,13 @@ where
                 // Let `w` and `h` be the width and height of the original matrix. The padded matrix should have height `2h` and width `w`.
                 // To generate it, we add `w` zero columns to the original matrix, then reshape it by setting the width to `w`.
                 // All columns are added on the right hand side so, after reshaping, this has the net effect of adding interleaving the original trace with zero rows.
-                let mut padded_evaluation = add_zero_cols(&mat, mat_width);
-                padded_evaluation.width = mat_width;
+                let padded_evaluation = add_zero_cols(&mat, mat_width);
+                let new_height = padded_evaluation.values.len() / mat_width;
+                let padded_evaluation = RowMajorMatrix::new_with_height(
+                    padded_evaluation.values,
+                    mat_width,
+                    new_height,
+                );
                 (domain, padded_evaluation)
             })
             .collect::<Vec<_>>();

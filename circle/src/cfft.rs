@@ -146,12 +146,18 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
             // with the lower order values. (In `DitButterfly`, `x_2` is 0, so
             // both `x_1` and `x_2` are set to `x_1`).
             // So instead we directly repeat the coeffs and skip the initial layers.
+            let width = coeffs.width();
             debug_span!("extend coeffs").in_scope(|| {
-                coeffs.values.reserve(domain.size() * coeffs.width());
+                coeffs.values.reserve(domain.size() * width);
                 for _ in log_n..domain.log_n {
                     coeffs.values.extend_from_within(..);
                 }
             });
+            coeffs = RowMajorMatrix::new_with_height(
+                coeffs.values,
+                width,
+                1 << domain.log_n,
+            );
         }
         assert_eq!(coeffs.height(), 1 << domain.log_n);
 
