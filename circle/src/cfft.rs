@@ -153,11 +153,7 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
                     coeffs.values.extend_from_within(..);
                 }
             });
-            coeffs = RowMajorMatrix::new_with_height(
-                coeffs.values,
-                width,
-                1 << domain.log_n,
-            );
+            coeffs = RowMajorMatrix::new_with_height(coeffs.values, width, 1 << domain.log_n);
         }
         assert_eq!(coeffs.height(), 1 << domain.log_n);
 
