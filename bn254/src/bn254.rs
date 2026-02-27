@@ -279,7 +279,9 @@ fn exp_u256(base: Bn254, exp: [u64; 4]) -> Bn254 {
 
         if started {
             result = result.exp_power_of_2(4);
-            result *= table[nibble];
+            if nibble != 0 {
+                result *= table[nibble];
+            }
         } else if nibble != 0 {
             result = table[nibble];
             started = true;
@@ -574,6 +576,7 @@ impl TwoAdicField for Bn254 {
 #[cfg(test)]
 mod tests {
     use p3_field_testing::{test_field, test_field_json_serialization, test_prime_field};
+    use proptest::prelude::*;
 
     use super::*;
 
@@ -653,27 +656,15 @@ mod tests {
 
     test_prime_field!(crate::Bn254);
 
-    #[test]
-    fn test_permutation_monomial_5() {
-        let test_vals = [
-            F::ZERO,
-            F::ONE,
-            F::TWO,
-            F::NEG_ONE,
-            F::GENERATOR,
-            F::from_u8(42),
-            F::from_u16(12345),
-        ];
-        for x in test_vals {
-            let x5 = x.injective_exp_n();
-            let root = x5.injective_exp_root_n();
-            assert_eq!(root, x, "fifth_root(x^5) != x for x = {x}");
-        }
+    fn arb_bn254() -> impl Strategy<Value = F> {
+        prop::array::uniform4(prop::num::u64::ANY).prop_map(F::new)
+    }
 
-        for x in test_vals {
-            let root = x.injective_exp_root_n();
-            let root5 = root.injective_exp_n();
-            assert_eq!(root5, x, "(x^{{1/5}})^5 != x for x = {x}");
+    proptest! {
+        #[test]
+        fn test_permutation_monomial_5(x in arb_bn254()) {
+            assert_eq!(x.injective_exp_n().injective_exp_root_n(), x);
+            assert_eq!(x.injective_exp_root_n().injective_exp_n(), x);
         }
     }
 }
