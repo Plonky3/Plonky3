@@ -68,23 +68,27 @@ impl<F: Field, A: Algebra<F>, const N: usize> MdsPermutation<A, N> for Integrate
 
 #[cfg(test)]
 mod tests {
+    use core::array;
+
     use p3_baby_bear::BabyBear;
     use p3_dft::{NaiveDft, TwoAdicSubgroupDft};
-    use p3_field::{Field, PrimeCharacteristicRing};
+    use p3_field::TwoAdicField;
+    use p3_goldilocks::Goldilocks;
     use p3_symmetric::Permutation;
     use p3_util::reverse_slice_index_bits;
+    use rand::distr::{Distribution, StandardUniform};
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use crate::integrated_coset_mds::IntegratedCosetMds;
 
-    type F = BabyBear;
-    const N: usize = 16;
-
-    #[test]
-    fn matches_naive() {
+    fn matches_naive_for<F, const N: usize>()
+    where
+        F: TwoAdicField,
+        StandardUniform: Distribution<F>,
+    {
         let mut rng = SmallRng::seed_from_u64(1);
-        let mut arr: [F; N] = rng.random();
+        let mut arr: [F; N] = array::from_fn(|_| rng.random());
 
         let mut arr_rev = arr.to_vec();
         reverse_slice_index_bits(&mut arr_rev);
@@ -92,10 +96,34 @@ mod tests {
         let shift = F::GENERATOR;
         let mut coset_lde_naive = NaiveDft.coset_lde(arr_rev, 0, shift);
         reverse_slice_index_bits(&mut coset_lde_naive);
-        coset_lde_naive
-            .iter_mut()
-            .for_each(|x| *x *= F::from_u8(N as u8));
-        IntegratedCosetMds::default().permute_mut(&mut arr);
+
+        let scale = F::from_usize(N);
+        coset_lde_naive.iter_mut().for_each(|x| *x *= scale);
+
+        IntegratedCosetMds::<F, N>::default().permute_mut(&mut arr);
         assert_eq!(coset_lde_naive, arr);
     }
+
+    macro_rules! matches_naive_test {
+        ($name:ident, $field:ty, $n:expr) => {
+            #[test]
+            fn $name() {
+                matches_naive_for::<$field, $n>();
+            }
+        };
+    }
+
+    matches_naive_test!(matches_naive_baby_bear_1, BabyBear, 1);
+    matches_naive_test!(matches_naive_baby_bear_2, BabyBear, 2);
+    matches_naive_test!(matches_naive_baby_bear_4, BabyBear, 4);
+    matches_naive_test!(matches_naive_baby_bear_8, BabyBear, 8);
+    matches_naive_test!(matches_naive_baby_bear_16, BabyBear, 16);
+    matches_naive_test!(matches_naive_baby_bear_32, BabyBear, 32);
+
+    matches_naive_test!(matches_naive_goldilocks_1, Goldilocks, 1);
+    matches_naive_test!(matches_naive_goldilocks_2, Goldilocks, 2);
+    matches_naive_test!(matches_naive_goldilocks_4, Goldilocks, 4);
+    matches_naive_test!(matches_naive_goldilocks_8, Goldilocks, 8);
+    matches_naive_test!(matches_naive_goldilocks_16, Goldilocks, 16);
+    matches_naive_test!(matches_naive_goldilocks_32, Goldilocks, 32);
 }
