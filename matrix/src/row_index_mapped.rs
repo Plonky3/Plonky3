@@ -29,14 +29,17 @@ pub trait RowIndexMap: Send + Sync {
         &self,
         inner: Inner,
     ) -> RowMajorMatrix<T> {
-        RowMajorMatrix::new(
+        let width = inner.width();
+        let height = self.height();
+        RowMajorMatrix::new_with_height(
             unsafe {
                 // Safety: The output of `map_row_index` is less than `inner.height()` for all inputs in the range `0..self.height()`.
-                (0..self.height())
+                (0..height)
                     .flat_map(|r| inner.row_unchecked(self.map_row_index(r)))
                     .collect()
             },
-            inner.width(),
+            width,
+            height,
         )
     }
 }

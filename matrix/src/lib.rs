@@ -269,7 +269,9 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         Self: Sized,
         T: Clone,
     {
-        RowMajorMatrix::new(self.rows().flatten().collect(), self.width())
+        let width = self.width();
+        let height = self.height();
+        RowMajorMatrix::new_with_height(self.rows().flatten().collect(), width, height)
     }
 
     /// Get a packed iterator over the `r`-th row.
