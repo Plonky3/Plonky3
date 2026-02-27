@@ -24,6 +24,7 @@ serde = { workspace = true, features = ["derive"] }
 p3-field-testing = { path = "../field-testing" }
 
 criterion.workspace = true
+proptest.workspace = true
 serde_json.workspace = true
 zkhash = { git = "https://github.com/HorizenLabs/poseidon2" }
 
