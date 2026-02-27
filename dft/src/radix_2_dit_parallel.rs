@@ -224,6 +224,8 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         unsafe {
             mat.values.set_len(lde_elems);
         }
+        let new_height = h << added_bits;
+        mat = RowMajorMatrix::new_with_height(mat.values, w, new_height);
         BitReversalPerm::new_view(mat)
     }
 }

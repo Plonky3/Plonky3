@@ -128,10 +128,8 @@ where
     ) -> Self::EvaluationsOnDomain<'a> {
         let mut coeffs = prover_data[idx].clone();
         assert!(domain.log_size() >= self.log_n);
-        coeffs.values.resize(
-            coeffs.values.len() << (domain.log_size() - self.log_n),
-            Val::ZERO,
-        );
+        let new_height = coeffs.height() << (domain.log_size() - self.log_n);
+        coeffs.pad_to_height(new_height, Val::ZERO);
         self.dft.coset_dft_batch(coeffs, domain.shift())
     }
 
