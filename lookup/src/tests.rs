@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 
 use p3_air::lookup::LookupEvaluator;
 use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
-use p3_air::{Air, AirBuilder, BaseAir, ExtensionBuilder, PermutationAirBuilder};
+use p3_air::{Air, AirBuilder, BaseAir, BaseLeaf, ExtensionBuilder, PermutationAirBuilder};
 use p3_baby_bear::BabyBear;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
@@ -23,8 +23,8 @@ type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
 
 fn create_symbolic_with_degree(degree: usize) -> SymbolicExpression<F> {
-    let x = Arc::new(SymbolicExpression::Constant(F::ONE));
-    let y = Arc::new(SymbolicExpression::Constant(F::TWO));
+    let x = Arc::new(SymbolicExpression::Leaf(BaseLeaf::Constant(F::ONE)));
+    let y = Arc::new(SymbolicExpression::Leaf(BaseLeaf::Constant(F::TWO)));
     SymbolicExpression::Mul {
         x,
         y,
@@ -292,7 +292,7 @@ where
 
                 // Create arrays with longer lifetime for the context
                 let a_elements = vec![val.into()];
-                let a_multiplicities = SymbolicExpression::Constant(F::ONE);
+                let a_multiplicities = SymbolicExpression::Leaf(BaseLeaf::Constant(F::ONE));
 
                 let b_elements = vec![table_val.into()];
                 let b_multiplicities = mult.into();
@@ -667,8 +667,8 @@ fn test_debug_util_detects_malformed_lookup() {
     // so the total multiset count is non-zero.
     let lookup = Lookup {
         kind: Kind::Local,
-        element_exprs: vec![vec![SymbolicExpression::Variable(expr)]],
-        multiplicities_exprs: vec![SymbolicExpression::Constant(F::ONE)],
+        element_exprs: vec![vec![SymbolicExpression::Leaf(BaseLeaf::Variable(expr))]],
+        multiplicities_exprs: vec![SymbolicExpression::Leaf(BaseLeaf::Constant(F::ONE))],
         columns: vec![0],
     };
 
@@ -1174,7 +1174,7 @@ where
 
         // Form the lookup inputs.
         let a_elements = vec![inp1.into(), inp2.into(), sum.into()];
-        let a_multiplicities = SymbolicExpression::Constant(F::ONE);
+        let a_multiplicities = SymbolicExpression::Leaf(BaseLeaf::Constant(F::ONE));
 
         // Extract columns for the LUT entries: [table_inp1, table_inp2, table_sum]
         let table_inp1 = symbolic_main_local[3];
@@ -1194,7 +1194,11 @@ where
         // also need is_send
         let (is_global, direction) = self.with_global;
         if is_global {
-            let lookup_inputs = vec![(b_elements, SymbolicExpression::Constant(F::ONE), direction)];
+            let lookup_inputs = vec![(
+                b_elements,
+                SymbolicExpression::Leaf(BaseLeaf::Constant(F::ONE)),
+                direction,
+            )];
             let global_lookup =
                 Air::<AB>::register_lookup(self, Kind::Global("LUT".to_string()), &lookup_inputs);
             // Return the local and global lookups.

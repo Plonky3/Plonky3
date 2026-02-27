@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use p3_air::Air;
 #[cfg(debug_assertions)]
 use p3_air::DebugConstraintBuilder;
-use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
+use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpressionExt};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{
@@ -12,7 +12,7 @@ use p3_field::{
 };
 use p3_lookup::folder::ProverConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::lookup_traits::{Kind, Lookup, LookupData, LookupGadget, lookup_data_to_expr};
+use p3_lookup::lookup_traits::{Kind, Lookup, LookupData, LookupGadget};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -23,7 +23,9 @@ use tracing::{debug_span, info_span, instrument};
 use crate::common::{CommonData, ProverData, get_perm_challenges};
 use crate::config::{Challenge, Domain, StarkGenericConfig as SGC, Val, observe_instance_binding};
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
-use crate::symbolic::{get_log_num_quotient_chunks, get_symbolic_constraints};
+use crate::symbolic::{
+    get_log_num_quotient_chunks, get_symbolic_constraints, lookup_data_to_ext_expr,
+};
 
 #[derive(Debug)]
 pub struct StarkInstance<'a, SC: SGC, A> {
@@ -71,7 +73,7 @@ pub fn prove_batch<
 ) -> BatchProof<SC>
 where
     SC: SGC,
-    SymbolicExpression<SC::Challenge>: Algebra<SymbolicExpression<Val<SC>>>,
+    SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
 {
     let common = &prover_data.common;
     // TODO: Extend if additional lookup gadgets are added.
@@ -140,7 +142,7 @@ where
                         air,
                         pre_w,
                         &all_lookups[i],
-                        &lookup_data_to_expr(&lookup_data[i]),
+                        &lookup_data_to_ext_expr(&lookup_data[i]),
                         config.is_zk(),
                         &lookup_gadget,
                     )
@@ -302,7 +304,7 @@ where
                     airs[i],
                     preprocessed_widths[i],
                     &all_lookups[i],
-                    &lookup_data_to_expr(&lookup_data[i]),
+                    &lookup_data_to_ext_expr(&lookup_data[i]),
                     &lookup_gadget,
                 )
                 .0
@@ -313,7 +315,7 @@ where
                 airs[i],
                 preprocessed_widths[i],
                 &all_lookups[i],
-                &lookup_data_to_expr(&lookup_data[i]),
+                &lookup_data_to_ext_expr(&lookup_data[i]),
                 &lookup_gadget,
             );
             base_constraints.len() + extension_constraints.len()
@@ -326,7 +328,7 @@ where
                     airs[i],
                     preprocessed_widths[i],
                     &all_lookups[i],
-                    &lookup_data_to_expr(&lookup_data[i]),
+                    &lookup_data_to_ext_expr(&lookup_data[i]),
                     &lookup_gadget,
                 )
                 .0
@@ -338,7 +340,7 @@ where
                 airs[i],
                 preprocessed_widths[i],
                 &all_lookups[i],
-                &lookup_data_to_expr(&lookup_data[i]),
+                &lookup_data_to_ext_expr(&lookup_data[i]),
                 &lookup_gadget,
             )
             .0
