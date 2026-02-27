@@ -62,10 +62,8 @@ where
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = InputMmcs::Commitment;
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
-    type EvaluationsOnDomain<'a> = HorizontallyTruncated<
-        Val,
-        RowIndexMappedView<BitReversalPerm, RowMajorMatrixCow<'a, Val>>,
-    >;
+    type EvaluationsOnDomain<'a> = 
+        HorizontallyTruncated<Val, RowIndexMappedView<BitReversalPerm, RowMajorMatrixCow<'a, Val>>>;
     /// The first item contains the openings of the random polynomials added by this wrapper.
     /// The second item is the usual FRI proof.
     type Proof = (
