@@ -245,7 +245,7 @@ mod babybear_fri_pcs {
             &data,
             0,
             disjoint_domain,
-            );
+        );
         let evals = evals.to_row_major_matrix();
 
         let dft = Dft::default();
