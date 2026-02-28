@@ -45,6 +45,16 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     where
         F: FnMut(usize) -> Self::Value;
 
+    /// Create a packed value where all lanes contain the same scalar value.
+    ///
+    /// This is equivalent to `Self::from_fn(|_| value)` but more explicit and
+    /// potentially more efficient for SIMD implementations.
+    #[inline]
+    #[must_use]
+    fn broadcast(value: Self::Value) -> Self {
+        Self::from_fn(|_| value)
+    }
+
     /// Returns the underlying scalar values as an immutable slice.
     #[must_use]
     fn as_slice(&self) -> &[Self::Value];
