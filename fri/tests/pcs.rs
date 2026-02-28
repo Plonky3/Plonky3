@@ -235,15 +235,16 @@ mod babybear_fri_pcs {
         let width = 3;
         let trace = RowMajorMatrix::<Val>::rand(&mut rng, degree, width);
 
-        let domain =
-            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, degree);
+        let domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, degree);
         let (_, data) =
             <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(domain, trace.clone())]);
 
         let disjoint_domain = domain.create_disjoint_domain(degree);
-        let evals =
-            <MyPcs as Pcs<Challenge, Challenger>>::get_evaluations_on_domain(
-                &pcs, &data, 0, disjoint_domain,
+        let evals = <MyPcs as Pcs<Challenge, Challenger>>::get_evaluations_on_domain(
+            &pcs,
+            &data,
+            0,
+            disjoint_domain,
             );
         let evals = evals.to_row_major_matrix();
 
