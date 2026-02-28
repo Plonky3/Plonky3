@@ -195,6 +195,52 @@ impl InternalLayerParametersAVX2<KoalaBearParameters, 24> for KoalaBearInternalL
     }
 }
 
+/// Multiply a vector of KoalaBear field elements in canonical form by 2^{-16}.
+///
+/// The generic `mul_2exp_neg_n_avx2` cannot be used with N=16 because `_mm256_madd_epi16`
+/// interprets inputs as signed 16-bit integers, and the low 16 bits of the input can exceed
+/// the signed i16 range (max 32767). We use `_mm256_mullo_epi32` (32-bit multiply) instead.
+///
+/// # Safety
+///
+/// Input must be given in canonical form.
+/// Output is not in canonical form, outputs are only guaranteed to lie in (-P, P).
+#[inline(always)]
+unsafe fn mul_2exp_neg_16(input: __m256i) -> __m256i {
+    unsafe {
+        const ODD_FACTOR: __m256i = unsafe { transmute([127_i32; 8]) };
+        const MASK: __m256i = unsafe { transmute([0xFFFF_i32; 8]) };
+
+        let hi = x86_64::_mm256_srli_epi32::<16>(input);
+        let lo = x86_64::_mm256_and_si256(input, MASK);
+        let lo_x_r = x86_64::_mm256_mullo_epi32(lo, ODD_FACTOR);
+        let lo_shft = x86_64::_mm256_slli_epi32::<8>(lo_x_r); // N_PRIME = 24 - 16 = 8
+        x86_64::_mm256_sub_epi32(hi, lo_shft)
+    }
+}
+
+/// Multiply a vector of KoalaBear field elements in canonical form by -2^{-16}.
+///
+/// See `mul_2exp_neg_16` for why this specialized version is needed.
+///
+/// # Safety
+///
+/// Input must be given in canonical form.
+/// Output is not in canonical form, outputs are only guaranteed to lie in (-P, P).
+#[inline(always)]
+unsafe fn mul_neg_2exp_neg_16(input: __m256i) -> __m256i {
+    unsafe {
+        const ODD_FACTOR: __m256i = unsafe { transmute([127_i32; 8]) };
+        const MASK: __m256i = unsafe { transmute([0xFFFF_i32; 8]) };
+
+        let hi = x86_64::_mm256_srli_epi32::<16>(input);
+        let lo = x86_64::_mm256_and_si256(input, MASK);
+        let lo_x_r = x86_64::_mm256_mullo_epi32(lo, ODD_FACTOR);
+        let lo_shft = x86_64::_mm256_slli_epi32::<8>(lo_x_r);
+        x86_64::_mm256_sub_epi32(lo_shft, hi)
+    }
+}
+
 impl InternalLayerParametersAVX2<KoalaBearParameters, 32> for KoalaBearInternalLayerParameters {
     type ArrayLike = [__m256i; 31];
 
@@ -230,7 +276,7 @@ impl InternalLayerParametersAVX2<KoalaBearParameters, 32> for KoalaBearInternalL
             // input[16] -> input[16] / 2^14
             input[16] = mul_2exp_neg_n_avx2::<KoalaBearParameters, 14, 10>(input[16]);
             // input[17] -> input[17] / 2^16
-            input[17] = mul_2exp_neg_n_avx2::<KoalaBearParameters, 16, 8>(input[17]);
+            input[17] = mul_2exp_neg_16(input[17]);
             // input[18] -> input[18] / 2^24
             input[18] = mul_2exp_neg_two_adicity_avx2::<KoalaBearParameters, 24, 7>(input[18]);
 
@@ -256,7 +302,7 @@ impl InternalLayerParametersAVX2<KoalaBearParameters, 32> for KoalaBearInternalL
             // input[28] -> -input[28] / 2^14
             input[28] = mul_neg_2exp_neg_n_avx2::<KoalaBearParameters, 14, 10>(input[28]);
             // input[29] -> -input[29] / 2^16
-            input[29] = mul_neg_2exp_neg_n_avx2::<KoalaBearParameters, 16, 8>(input[29]);
+            input[29] = mul_neg_2exp_neg_16(input[29]);
             // input[30] -> -input[30] / 2^24
             input[30] = mul_neg_2exp_neg_two_adicity_avx2::<KoalaBearParameters, 24, 7>(input[30]);
         }
