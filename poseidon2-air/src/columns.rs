@@ -17,8 +17,6 @@ pub struct Poseidon2Cols<
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
 > {
-    pub export: T,
-
     pub inputs: [T; WIDTH],
 
     /// Beginning Full Rounds
