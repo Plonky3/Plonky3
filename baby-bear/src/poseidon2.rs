@@ -11,6 +11,8 @@
 //! [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/2^27, -1/2^8, -1/16, -1/2^27].
 //! Optimized Diagonal for BabyBear24:
 //! [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/2^7, 1/2^9, 1/2^27, -1/2^8, -1/4, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^27]
+//! Optimized Diagonal for BabyBear32:
+//! [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^7, 1/2^9, 1/2^10, 1/2^12, 1/2^27, -1/2^8, -1/4, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^10, -1/2^12, -1/2^14, -1/2^27]
 //! See poseidon2\src\diffusion.rs for information on how to double check these matrices in Sage.
 
 use p3_field::PrimeCharacteristicRing;
@@ -291,8 +293,74 @@ impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLay
     }
 }
 
+impl InternalLayerBaseParameters<BabyBearParameters, 32> for BabyBearInternalLayerParameters {
+    /// Perform the internal matrix multiplication: s -> (1 + Diag(V))s.
+    /// We ignore `state[0]` as it is handled separately.
+    fn internal_layer_mat_mul<R: PrimeCharacteristicRing>(state: &mut [R; 32], sum: R) {
+        // The diagonal matrix is defined by the vector:
+        // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4,
+        //      1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^7, 1/2^9, 1/2^10, 1/2^12, 1/2^27,
+        //      -1/2^8, -1/4, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^10, -1/2^12, -1/2^14, -1/2^27]
+        state[1] += sum.clone();
+        state[2] = state[2].double() + sum.clone();
+        state[3] = state[3].halve() + sum.clone();
+        state[4] = sum.clone() + state[4].double() + state[4].clone();
+        state[5] = sum.clone() + state[5].double().double();
+        state[6] = sum.clone() - state[6].halve();
+        state[7] = sum.clone() - (state[7].double() + state[7].clone());
+        state[8] = sum.clone() - state[8].double().double();
+        state[9] = state[9].div_2exp_u64(8);
+        state[9] += sum.clone();
+        state[10] = state[10].div_2exp_u64(2);
+        state[10] += sum.clone();
+        state[11] = state[11].div_2exp_u64(3);
+        state[11] += sum.clone();
+        state[12] = state[12].div_2exp_u64(4);
+        state[12] += sum.clone();
+        state[13] = state[13].div_2exp_u64(5);
+        state[13] += sum.clone();
+        state[14] = state[14].div_2exp_u64(6);
+        state[14] += sum.clone();
+        state[15] = state[15].div_2exp_u64(7);
+        state[15] += sum.clone();
+        state[16] = state[16].div_2exp_u64(9);
+        state[16] += sum.clone();
+        state[17] = state[17].div_2exp_u64(10);
+        state[17] += sum.clone();
+        state[18] = state[18].div_2exp_u64(12);
+        state[18] += sum.clone();
+        state[19] = state[19].div_2exp_u64(27);
+        state[19] += sum.clone();
+        state[20] = state[20].div_2exp_u64(8);
+        state[20] = sum.clone() - state[20].clone();
+        state[21] = state[21].div_2exp_u64(2);
+        state[21] = sum.clone() - state[21].clone();
+        state[22] = state[22].div_2exp_u64(3);
+        state[22] = sum.clone() - state[22].clone();
+        state[23] = state[23].div_2exp_u64(4);
+        state[23] = sum.clone() - state[23].clone();
+        state[24] = state[24].div_2exp_u64(5);
+        state[24] = sum.clone() - state[24].clone();
+        state[25] = state[25].div_2exp_u64(6);
+        state[25] = sum.clone() - state[25].clone();
+        state[26] = state[26].div_2exp_u64(7);
+        state[26] = sum.clone() - state[26].clone();
+        state[27] = state[27].div_2exp_u64(9);
+        state[27] = sum.clone() - state[27].clone();
+        state[28] = state[28].div_2exp_u64(10);
+        state[28] = sum.clone() - state[28].clone();
+        state[29] = state[29].div_2exp_u64(12);
+        state[29] = sum.clone() - state[29].clone();
+        state[30] = state[30].div_2exp_u64(14);
+        state[30] = sum.clone() - state[30].clone();
+        state[31] = state[31].div_2exp_u64(27);
+        state[31] = sum - state[31].clone();
+    }
+}
+
 impl InternalLayerParameters<BabyBearParameters, 16> for BabyBearInternalLayerParameters {}
 impl InternalLayerParameters<BabyBearParameters, 24> for BabyBearInternalLayerParameters {}
+impl InternalLayerParameters<BabyBearParameters, 32> for BabyBearInternalLayerParameters {}
 
 #[cfg(test)]
 mod tests {
@@ -385,6 +453,38 @@ mod tests {
     fn test_generic_internal_linear_layer_24() {
         let mut rng = Xoroshiro128Plus::seed_from_u64(1);
         let mut input1: [F; 24] = rng.random();
+        let mut input2 = input1;
+
+        let part_sum: F = input1[1..].iter().copied().sum();
+        let full_sum = part_sum + input1[0];
+
+        input1[0] = part_sum - input1[0];
+
+        BabyBearInternalLayerParameters::internal_layer_mat_mul(&mut input1, full_sum);
+        BabyBearInternalLayerParameters::generic_internal_linear_layer(&mut input2);
+
+        assert_eq!(input1, input2);
+    }
+
+    /// Test on a roughly random input for width 32.
+    #[test]
+    fn test_poseidon2_width_32_random() {
+        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
+        let perm = Poseidon2BabyBear::<32>::new_from_rng_128(&mut rng);
+
+        let mut input: [F; 32] = rng.random();
+        let original = input;
+
+        perm.permute_mut(&mut input);
+        assert_ne!(input, original);
+    }
+
+    /// Test the generic internal layer against the optimized internal layer
+    /// for a random input of width 32.
+    #[test]
+    fn test_generic_internal_linear_layer_32() {
+        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
+        let mut input1: [F; 32] = rng.random();
         let mut input2 = input1;
 
         let part_sum: F = input1[1..].iter().copied().sum();

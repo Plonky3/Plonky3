@@ -129,6 +129,80 @@ impl InternalLayerParametersAVX512<KoalaBearParameters, 24> for KoalaBearInterna
     const NUM_POS: usize = 7;
 }
 
+impl InternalLayerParametersAVX512<KoalaBearParameters, 32> for KoalaBearInternalLayerParameters {
+    type ArrayLike = [__m512i; 31];
+
+    /// For the KoalaBear field and width 32 we multiply by the diagonal matrix:
+    /// D = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4,
+    ///      1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^10, 1/2^12, 1/2^14, 1/2^16, 1/2^24,
+    ///      -1/2^8, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^10, -1/2^12, -1/2^14, -1/2^16, -1/2^24]
+    /// The inputs must be in canonical form, otherwise the result is undefined.
+    /// Even when the inputs are in canonical form, we make no guarantees on the output except that, provided
+    /// the output is piped directly into add_sum, the vector will be modified such that x[i] = D[i]*x[i] + sum.
+    #[inline(always)]
+    unsafe fn diagonal_mul_remainder(input: &mut [__m512i; 31]) {
+        unsafe {
+            // The following 11 muls (input[8] to input[18]) output the negative of what we want.
+            // This will be handled in add_sum.
+
+            // input[8] -> input[8] / 2^8
+            input[8] = mul_neg_2exp_neg_8_avx512::<KoalaBearParameters, 16>(input[8]);
+            // input[9] -> input[9] / 2^2
+            input[9] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 2, 22>(input[9]);
+            // input[10] -> input[10] / 2^3
+            input[10] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 3, 21>(input[10]);
+            // input[11] -> input[11] / 2^4
+            input[11] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 4, 20>(input[11]);
+            // input[12] -> input[12] / 2^5
+            input[12] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 5, 19>(input[12]);
+            // input[13] -> input[13] / 2^6
+            input[13] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 6, 18>(input[13]);
+            // input[14] -> input[14] / 2^10
+            input[14] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 10, 14>(input[14]);
+            // input[15] -> input[15] / 2^12
+            input[15] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 12, 12>(input[15]);
+            // input[16] -> input[16] / 2^14
+            input[16] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 14, 10>(input[16]);
+            // input[17] -> input[17] / 2^16
+            input[17] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 16, 8>(input[17]);
+            // input[18] -> input[18] / 2^24
+            input[18] =
+                mul_neg_2exp_neg_two_adicity_avx512::<KoalaBearParameters, 24, 7>(input[18]);
+
+            // The remaining muls output the correct value again.
+
+            // input[19] -> -input[19] / 2^8
+            input[19] = mul_neg_2exp_neg_8_avx512::<KoalaBearParameters, 16>(input[19]);
+            // input[20] -> -input[20] / 2^3
+            input[20] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 3, 21>(input[20]);
+            // input[21] -> -input[21] / 2^4
+            input[21] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 4, 20>(input[21]);
+            // input[22] -> -input[22] / 2^5
+            input[22] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 5, 19>(input[22]);
+            // input[23] -> -input[23] / 2^6
+            input[23] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 6, 18>(input[23]);
+            // input[24] -> -input[24] / 2^7
+            input[24] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 7, 17>(input[24]);
+            // input[25] -> -input[25] / 2^9
+            input[25] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 9, 15>(input[25]);
+            // input[26] -> -input[26] / 2^10
+            input[26] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 10, 14>(input[26]);
+            // input[27] -> -input[27] / 2^12
+            input[27] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 12, 12>(input[27]);
+            // input[28] -> -input[28] / 2^14
+            input[28] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 14, 10>(input[28]);
+            // input[29] -> -input[29] / 2^16
+            input[29] = mul_neg_2exp_neg_n_avx512::<KoalaBearParameters, 16, 8>(input[29]);
+            // input[30] -> -input[30] / 2^24
+            input[30] =
+                mul_neg_2exp_neg_two_adicity_avx512::<KoalaBearParameters, 24, 7>(input[30]);
+        }
+    }
+
+    /// There are 11 positive inverse powers of two after the -4.
+    const NUM_POS: usize = 11;
+}
+
 #[cfg(test)]
 mod tests {
     use p3_symmetric::Permutation;
@@ -171,6 +245,27 @@ mod tests {
         let poseidon2 = Perm24::new_from_rng_128(&mut rng);
 
         let input: [F; 24] = rng.random();
+
+        let mut expected = input;
+        poseidon2.permute_mut(&mut expected);
+
+        let mut avx512_input = input.map(Into::<PackedKoalaBearAVX512>::into);
+        poseidon2.permute_mut(&mut avx512_input);
+
+        let avx512_output = avx512_input.map(|x| x.0[0]);
+
+        assert_eq!(avx512_output, expected);
+    }
+
+    /// Test that the output is the same as the scalar version on a random input.
+    #[test]
+    fn test_avx512_poseidon2_width_32() {
+        let mut rng = SmallRng::seed_from_u64(1);
+
+        // Our Poseidon2 implementation.
+        let poseidon2 = Poseidon2KoalaBear::<32>::new_from_rng_128(&mut rng);
+
+        let input: [F; 32] = rng.random();
 
         let mut expected = input;
         poseidon2.permute_mut(&mut expected);

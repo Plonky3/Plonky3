@@ -123,6 +123,46 @@ impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
     }
 }
 
+/// A specialized representation of the Poseidon2 state for a width of 32.
+///
+/// The primary purpose of this struct is to optimize the internal rounds by separating the state
+/// into two distinct parts:
+///
+/// 1. `s0`: The first element, which is the only one to undergo the S-box operation.
+/// 2. `s_hi`: The remaining 31 elements, which only undergo the linear layer transformation.
+///
+/// By splitting the state in this way, we provide a strong hint to the compiler that the S-box
+/// on `s0` and the linear operations on `s_hi` are independent data paths. This allows the CPU's
+/// out-of-order execution engine to run these operations in parallel, effectively hiding the S-box latency
+/// and significantly improving performance.
+#[derive(Clone, Copy)]
+#[repr(C)] // This is needed to make `transmute`s safe.
+pub struct InternalLayer32<PMP: PackedMontyParameters> {
+    /// The first element of the state, which undergoes the S-box transformation.
+    s0: PackedMontyField31Neon<PMP>,
+    /// The remaining 31 elements of the state, which undergo the linear layer transformation.
+    s_hi: [uint32x4_t; 31],
+}
+
+impl<PMP: PackedMontyParameters> InternalLayer32<PMP> {
+    /// Converts the specialized `InternalLayer32` representation into a standard array `[PackedMontyField31Neon<PMP>; 32]`.
+    ///
+    /// # Safety
+    /// The caller *must* ensure that every raw `uint32x4_t` vector within `self.s_hi` contains
+    /// valid `MontyField31` elements in canonical form `[0, P)`.
+    #[inline]
+    unsafe fn to_packed_field_array(self) -> [PackedMontyField31Neon<PMP>; 32] {
+        unsafe { transmute(self) }
+    }
+
+    /// Converts a standard array `[PackedMontyField31Neon<PMP>; 32]` into the specialized `InternalLayer32` representation.
+    #[inline]
+    #[must_use]
+    fn from_packed_field_array(vector: [PackedMontyField31Neon<PMP>; 32]) -> Self {
+        unsafe { transmute(vector) }
+    }
+}
+
 /// Represents the internal layers of the Poseidon2 permutation for NEON-accelerated operations.
 #[derive(Debug, Clone)]
 pub struct Poseidon2InternalLayerMonty31<
@@ -292,6 +332,47 @@ where
 
             // Convert the specialized state representation back to a standard array before returning.
             *state = InternalLayer24::to_packed_field_array(internal_state);
+        }
+    }
+}
+
+impl<FP, ILP, const D: u64> InternalLayer<PackedMontyField31Neon<FP>, 32, D>
+    for Poseidon2InternalLayerMonty31<FP, 32, ILP>
+where
+    FP: FieldParameters + RelativelyPrimePower<D>,
+    ILP: InternalLayerParametersNeon<FP, 32, ArrayLike = [uint32x4_t; 31]>,
+{
+    fn permute_state(&self, state: &mut [PackedMontyField31Neon<FP>; 32]) {
+        unsafe {
+            // Safety: This returns values in canonical form when given values in canonical form.
+            let mut internal_state = InternalLayer32::from_packed_field_array(*state);
+
+            self.packed_internal_constants.iter().for_each(|&rc| {
+                // Apply AddRoundConstant and the S-Box to the first state element (`s0`).
+                add_rc_and_sbox::<FP, D>(&mut internal_state.s0, rc);
+
+                // Compute the sum of all other state elements (`s_hi`).
+                let s_hi_transmuted: &[PackedMontyField31Neon<FP>; 31] =
+                    transmute(&internal_state.s_hi);
+                let sum_tail = PackedMontyField31Neon::<FP>::sum_array::<31>(s_hi_transmuted);
+
+                // Perform the diagonal multiplication on `s_hi`.
+                ILP::diagonal_mul(&mut internal_state.s_hi);
+
+                // Compute the total sum of the entire state.
+                let sum = sum_tail + internal_state.s0;
+
+                // Update `s0`: s0_new = sum_tail - s0 (because v_0 = -2).
+                internal_state.s0 = sum_tail - internal_state.s0;
+
+                // Update the rest of the state.
+                ILP::add_sum(
+                    &mut internal_state.s_hi,
+                    transmute::<PackedMontyField31Neon<FP>, uint32x4_t>(sum),
+                );
+            });
+
+            *state = InternalLayer32::to_packed_field_array(internal_state);
         }
     }
 }
