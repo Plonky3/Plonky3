@@ -317,14 +317,14 @@ macro_rules! impl_packed_value {
     };
 }
 
-pub use impl_add_assign, 
-pub use impl_add_base_field,
-pub use impl_div_methods, 
-pub use impl_mul_base_field,
-pub use impl_mul_methods,
-pub use impl_packed_value, 
-pub use impl_rng, 
-pub use impl_sub_assign, 
-pub use impl_sub_base_field, 
-pub use impl_sum_prod_base_field,
-pub use ring_sum,
+pub use impl_add_assign;
+pub use impl_add_base_field;
+pub use impl_div_methods;
+pub use impl_mul_base_field;
+pub use impl_mul_methods;
+pub use impl_packed_value;
+pub use impl_rng;
+pub use impl_sub_assign;
+pub use impl_sub_base_field;
+pub use impl_sum_prod_base_field;
+pub use ring_sum;
