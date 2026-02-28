@@ -3,9 +3,11 @@ use alloc::vec::Vec;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
-use p3_matrix::stack::{VerticalPair, ViewPair};
+use p3_matrix::stack::ViewPair;
 
-use crate::{Air, AirBuilder, AirBuilderWithContext, ExtensionBuilder, PermutationAirBuilder};
+use crate::{
+    Air, AirBuilder, AirBuilderWithContext, ExtensionBuilder, PermutationAirBuilder, RowWindow,
+};
 
 /// A single constraint violation captured during debug evaluation.
 ///
@@ -156,15 +158,16 @@ where
     type F = F;
     type Expr = F;
     type Var = F;
-    type M = ViewPair<'a, F>;
+    type M = RowWindow<'a, F>;
     type PublicVar = F;
 
     fn main(&self) -> Self::M {
-        self.main
+        RowWindow::new(self.main.top.values, self.main.bottom.values)
     }
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.preprocessed
+            .map(|p| RowWindow::new(p.top.values, p.bottom.values))
     }
 
     fn public_values(&self) -> &[Self::PublicVar] {
@@ -179,16 +182,8 @@ where
         self.is_last_row
     }
 
-    /// # Panics
-    ///
-    /// Panics when `size` is not `2`, since this builder only supports
-    /// two-row transition windows.
-    fn is_transition_window(&self, size: usize) -> Self::Expr {
-        if size == 2 {
-            self.is_transition
-        } else {
-            panic!("only supports a window size of 2")
-        }
+    fn is_transition(&self) -> Self::Expr {
+        self.is_transition
     }
 
     /// Check that the expression evaluates to zero.
@@ -216,7 +211,7 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilderWithContext for DebugConstraintB
     }
 }
 
-impl<'a, F: Field, EF: ExtensionField<F>> ExtensionBuilder for DebugConstraintBuilder<'a, F, EF> {
+impl<F: Field, EF: ExtensionField<F>> ExtensionBuilder for DebugConstraintBuilder<'_, F, EF> {
     type EF = EF;
     type ExprEF = EF;
     type VarEF = EF;
@@ -241,15 +236,16 @@ impl<'a, F: Field, EF: ExtensionField<F>> ExtensionBuilder for DebugConstraintBu
 impl<'a, F: Field, EF: ExtensionField<F>> PermutationAirBuilder
     for DebugConstraintBuilder<'a, F, EF>
 {
-    type MP = VerticalPair<RowMajorMatrixView<'a, EF>, RowMajorMatrixView<'a, EF>>;
+    type MP = RowWindow<'a, EF>;
     type RandomVar = EF;
 
     /// # Panics
     ///
     /// Panics when the builder was created without permutation data.
     fn permutation(&self) -> Self::MP {
-        self.permutation
-            .expect("permutation() called on a builder created without permutation data; use new_with_permutation()")
+        let p = self.permutation
+            .expect("permutation() called on a builder created without permutation data; use new_with_permutation()");
+        RowWindow::new(p.top.values, p.bottom.values)
     }
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
@@ -344,7 +340,7 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
 
     use super::*;
-    use crate::BaseAir;
+    use crate::{BaseAir, WindowAccess};
 
     /// Minimal AIR for testing transition and boundary constraints.
     ///
@@ -366,8 +362,8 @@ mod tests {
 
             // Transition constraint: next == current + 1 for every column.
             for col in 0..W {
-                let current = main.top.get(0, col).unwrap();
-                let next = main.bottom.get(0, col).unwrap();
+                let current = main.local()[col];
+                let next = main.next()[col];
                 builder.when_transition().assert_eq(next, current + F::ONE);
             }
 
@@ -375,7 +371,7 @@ mod tests {
             let public_values = builder.public_values;
             let mut when_last = builder.when(builder.is_last_row);
             for (i, &pv) in public_values.iter().enumerate().take(W) {
-                when_last.assert_eq(main.top.get(0, i).unwrap(), pv);
+                when_last.assert_eq(main.local()[i], pv);
             }
         }
     }
@@ -486,7 +482,7 @@ mod tests {
         fn eval(&self, builder: &mut DebugConstraintBuilder<'_, F>) {
             let main = builder.main();
             for col in 0..W {
-                builder.assert_zero(main.top.get(0, col).unwrap());
+                builder.assert_zero(main.local()[col]);
             }
         }
     }

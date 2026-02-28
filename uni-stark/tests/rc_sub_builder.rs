@@ -11,14 +11,13 @@
 use core::marker::PhantomData;
 
 use p3_air::symbolic::SymbolicAirBuilder;
-use p3_air::{Air, AirBuilder, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::testing::TrivialPcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::BinomialExtensionField;
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_uni_stark::{StarkConfig, SubAirBuilder, prove, verify};
 use rand::SeedableRng;
@@ -43,10 +42,9 @@ where
 {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let local = main.row_slice(0).expect("matrix should have a local row");
 
-        let value = local[0].clone();
-        let bits = &local[1..];
+        let value = main.local()[0].clone();
+        let bits = &main.local()[1..];
 
         let mut recomposed = AB::Expr::ZERO;
         for (i, bit) in bits.iter().enumerate() {
@@ -84,12 +82,10 @@ where
 
         // Evaluate the parent AIR
         let main = builder.main();
-        let local = main.row_slice(0).expect("matrix should have a local row");
-        let next = main.row_slice(1).expect("matrix only has 1 row?");
 
-        let accumulator = local[0].clone();
-        let range_value = local[1].clone();
-        let next_accumulator = next[0].clone();
+        let accumulator = main.local()[0].clone();
+        let range_value = main.local()[1].clone();
+        let next_accumulator = main.next()[0].clone();
 
         builder.when_first_row().assert_zero(accumulator.clone());
         builder

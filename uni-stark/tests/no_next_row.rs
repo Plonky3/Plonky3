@@ -1,4 +1,4 @@
-use p3_air::{Air, AirBuilder, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
@@ -6,7 +6,6 @@ use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
 use p3_fri::TwoAdicFriPcs;
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -30,9 +29,8 @@ impl<F> BaseAir<F> for SquareAir {
 impl<AB: AirBuilder> Air<AB> for SquareAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let local = main.row_slice(0).expect("Matrix is empty?");
-        let a = local[0].clone();
-        let b = local[1].clone();
+        let a = main.local()[0].clone();
+        let b = main.local()[1].clone();
         builder.assert_eq(a.clone() * a, b);
     }
 }

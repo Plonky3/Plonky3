@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::borrow::Borrow;
 
 use p3_field::{ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
@@ -7,7 +8,7 @@ use tracing::instrument;
 
 use crate::{
     Air, AirBuilder, Entry, ExtensionBuilder, PermutationAirBuilder, SymbolicExpression,
-    SymbolicVariable,
+    SymbolicVariable, WindowAccess,
 };
 
 #[instrument(skip_all, level = "debug")]
@@ -201,6 +202,20 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
     }
 }
 
+/// Implement `WindowAccess` for `RowMajorMatrix` treating it as a two-row window
+/// (first half = local row, second half = next row).
+impl<T: Clone + Send + Sync> WindowAccess<T> for RowMajorMatrix<T> {
+    fn local(&self) -> &[T] {
+        let values: &[T] = self.values.borrow();
+        &values[..self.width]
+    }
+
+    fn next(&self) -> &[T] {
+        let values: &[T] = self.values.borrow();
+        &values[self.width..]
+    }
+}
+
 impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
     type F = F;
     type Expr = SymbolicExpression<F>;
@@ -228,14 +243,8 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
         SymbolicExpression::IsLastRow
     }
 
-    /// # Panics
-    /// This function panics if `size` is not `2`.
-    fn is_transition_window(&self, size: usize) -> Self::Expr {
-        if size == 2 {
-            SymbolicExpression::IsTransition
-        } else {
-            panic!("uni-stark only supports a window size of 2")
-        }
+    fn is_transition(&self) -> Self::Expr {
+        SymbolicExpression::IsTransition
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {

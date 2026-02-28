@@ -1,8 +1,7 @@
 use core::array;
 use core::borrow::Borrow;
 
-use p3_air::AirBuilder;
-use p3_matrix::Matrix;
+use p3_air::{AirBuilder, WindowAccess};
 
 use crate::columns::KeccakCols;
 use crate::{NUM_ROUNDS, NUM_ROUNDS_MIN_1};
@@ -23,15 +22,9 @@ pub(crate) fn eval_round_flags<AB: AirBuilder>(builder: &mut AB) {
     // Access the main trace matrix.
     let main = builder.main();
 
-    // Get the local (current) row and the next row slices.
-    let (local, next) = (
-        main.row_slice(0).expect("The matrix is empty?"),
-        main.row_slice(1).expect("The matrix only has 1 row?"),
-    );
-
     // Cast slices into typed Keccak column references.
-    let local: &KeccakCols<AB::Var> = (*local).borrow();
-    let next: &KeccakCols<AB::Var> = (*next).borrow();
+    let local: &KeccakCols<AB::Var> = main.local().borrow();
+    let next: &KeccakCols<AB::Var> = main.next().borrow();
 
     // Initially, the first step flag should be 1 while the others should be 0.
     //

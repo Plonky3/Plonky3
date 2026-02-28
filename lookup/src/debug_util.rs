@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use alloc::{format, vec};
 
 use hashbrown::HashMap;
-use p3_air::{AirBuilder, PermutationAirBuilder};
+use p3_air::{AirBuilder, PermutationAirBuilder, RowWindow};
 use p3_field::Field;
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -213,15 +213,16 @@ impl<'a, F: Field> AirBuilder for MiniLookupBuilder<'a, F> {
     type F = F;
     type Expr = F;
     type Var = F;
-    type M = VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>;
     type PublicVar = F;
+    type M = RowWindow<'a, F>;
 
     fn main(&self) -> Self::M {
-        self.main
+        RowWindow::new(self.main.top.values, self.main.bottom.values)
     }
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.preprocessed
+            .map(|p| RowWindow::new(p.top.values, p.bottom.values))
     }
 
     fn public_values(&self) -> &[Self::PublicVar] {
@@ -236,12 +237,8 @@ impl<'a, F: Field> AirBuilder for MiniLookupBuilder<'a, F> {
         F::from_bool(self.row + 1 == self.height)
     }
 
-    fn is_transition_window(&self, size: usize) -> Self::Expr {
-        if size == 2 {
-            F::from_bool(self.row + 1 < self.height)
-        } else {
-            panic!("MiniLookupBuilder only supports window size 2");
-        }
+    fn is_transition(&self) -> Self::Expr {
+        F::from_bool(self.row + 1 < self.height)
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, _x: I) {}
@@ -256,16 +253,12 @@ impl<'a, F: Field> p3_air::ExtensionBuilder for MiniLookupBuilder<'a, F> {
 }
 
 impl<'a, F: Field> PermutationAirBuilder for MiniLookupBuilder<'a, F> {
-    type MP = VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>;
-
+    type MP = RowWindow<'a, F>;
     type RandomVar = F;
 
     fn permutation(&self) -> Self::MP {
-        // Empty 0-width view; permutation columns are not needed for debug evals.
-        VerticalPair::new(
-            RowMajorMatrixView::new_row(&[]),
-            RowMajorMatrixView::new_row(&[]),
-        )
+        // Empty slices; permutation columns are not needed for debug evals.
+        RowWindow::new(&[], &[])
     }
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {

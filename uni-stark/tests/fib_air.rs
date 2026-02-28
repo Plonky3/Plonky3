@@ -1,6 +1,6 @@
 use core::borrow::Borrow;
 
-use p3_air::{Air, AirBuilder, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
@@ -10,7 +10,6 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
 use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs, create_test_fri_params};
 use p3_keccak::{Keccak256Hash, KeccakF};
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
 use p3_mersenne_31::Mersenne31;
@@ -51,12 +50,8 @@ impl<AB: AirBuilder> Air<AB> for FibonacciAir {
         let b = pis[1];
         let x = pis[2];
 
-        let (local, next) = (
-            main.row_slice(0).expect("Matrix is empty?"),
-            main.row_slice(1).expect("Matrix only has 1 row?"),
-        );
-        let local: &FibonacciRow<AB::Var> = (*local).borrow();
-        let next: &FibonacciRow<AB::Var> = (*next).borrow();
+        let local: &FibonacciRow<AB::Var> = main.local().borrow();
+        let next: &FibonacciRow<AB::Var> = main.next().borrow();
 
         let mut when_first_row = builder.when_first_row();
 

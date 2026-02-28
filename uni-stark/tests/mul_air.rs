@@ -2,7 +2,7 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
-use p3_air::{Air, AirBuilder, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
@@ -13,7 +13,6 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs, create_test_fri_params_zk};
 use p3_keccak::Keccak256Hash;
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
 use p3_mersenne_31::Mersenne31;
@@ -91,8 +90,8 @@ impl<F> BaseAir<F> for MulAir {
 impl<AB: AirBuilder> Air<AB> for MulAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let main_local = main.row_slice(0).expect("Matrix is empty?");
-        let main_next = main.row_slice(1).expect("Matrix only has 1 row?");
+        let main_local = main.local();
+        let main_next = main.next();
 
         for i in 0..REPETITIONS {
             let start = i * 3;
