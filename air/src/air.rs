@@ -3,10 +3,50 @@ use alloc::vec::Vec;
 use core::ops::{Add, Mul, Sub};
 
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 
 use crate::lookup::{Kind, Lookup, LookupData, LookupEvaluator, LookupInput};
+
+/// A two-row window into a trace matrix.
+///
+/// Holds references to the current row and the row that follows it.
+/// Constraint evaluation reads from these slices to express algebraic
+/// relations between consecutive trace rows.
+#[derive(Debug, Clone, Copy)]
+pub struct RowWindow<'a, T> {
+    /// The current row.
+    pub local: &'a [T],
+    /// The row immediately after the current one.
+    pub next: &'a [T],
+}
+
+impl<'a, T> RowWindow<'a, T> {
+    /// Create a window from two consecutive row slices.
+    #[inline]
+    pub const fn new(local: &'a [T], next: &'a [T]) -> Self {
+        Self { local, next }
+    }
+}
+
+impl<T> WindowAccess<T> for RowWindow<'_, T> {
+    #[inline]
+    fn local(&self) -> &[T] {
+        self.local
+    }
+
+    #[inline]
+    fn next(&self) -> &[T] {
+        self.next
+    }
+}
+
+/// Read access to two consecutive trace rows.
+pub trait WindowAccess<T> {
+    /// The current (local) row.
+    fn local(&self) -> &[T];
+    /// The row immediately after the current one.
+    fn next(&self) -> &[T];
+}
 
 /// The underlying structure of an AIR.
 pub trait BaseAir<F>: Sync {
@@ -43,7 +83,7 @@ pub trait BaseAir<F>: Sync {
     /// - **Return `false`**: single-row AIRs where all constraints are
     ///   evaluated within one row.
     /// - **Keep `true`** (default): AIRs with transition constraints
-    ///   that reference `main.row_slice(1)`.
+    ///   that reference `main.next()`.
     ///
     /// # Correctness
     ///
@@ -231,16 +271,16 @@ pub trait AirBuilder: Sized {
         + Mul<Self::Var, Output = Self::Expr>
         + Mul<Self::Expr, Output = Self::Expr>;
 
-    /// Matrix type holding variables.
-    type M: Matrix<Self::Var>;
+    /// Two-row window over the main trace columns.
+    type M: WindowAccess<Self::Var>;
 
     /// Variable type for public values.
     type PublicVar: Into<Self::Expr> + Copy;
 
-    /// Return the matrix representing the main (primary) trace registers.
+    /// Return the local and next row slices of the main (primary) trace.
     fn main(&self) -> Self::M;
 
-    /// Return an optional matrix of preprocessed registers.
+    /// Return the local and next row slices of preprocessed registers.
     /// The default implementation returns `None`.
     /// Override this for builders that provide preprocessed columns.
     fn preprocessed(&self) -> Option<Self::M> {
@@ -254,12 +294,7 @@ pub trait AirBuilder: Sized {
     fn is_last_row(&self) -> Self::Expr;
 
     /// Expression evaluating to 1 on all transition rows (not last row), 0 on last row.
-    fn is_transition(&self) -> Self::Expr {
-        self.is_transition_window(2)
-    }
-
-    /// Expression evaluating to 1 on rows except the last `size - 1` rows, 0 otherwise.
-    fn is_transition_window(&self, size: usize) -> Self::Expr;
+    fn is_transition(&self) -> Self::Expr;
 
     /// Returns a sub-builder whose constraints are enforced only when `condition` is nonzero.
     fn when<I: Into<Self::Expr>>(&mut self, condition: I) -> FilteredAirBuilder<'_, Self> {
@@ -291,11 +326,6 @@ pub trait AirBuilder: Sized {
     /// Returns a sub-builder whose constraints are enforced on all rows except the last.
     fn when_transition(&mut self) -> FilteredAirBuilder<'_, Self> {
         self.when(self.is_transition())
-    }
-
-    /// Returns a sub-builder whose constraints are enforced on all rows except the last `size - 1`.
-    fn when_transition_window(&mut self, size: usize) -> FilteredAirBuilder<'_, Self> {
-        self.when(self.is_transition_window(size))
     }
 
     /// Assert that the given element is zero.
@@ -398,13 +428,13 @@ pub trait ExtensionBuilder: AirBuilder<F: Field> {
 
 /// Trait for builders supporting permutation arguments (e.g., for lookup constraints).
 pub trait PermutationAirBuilder: ExtensionBuilder {
-    /// Matrix type over extension field variables representing a permutation.
-    type MP: Matrix<Self::VarEF>;
+    /// Two-row window over the permutation trace columns.
+    type MP: WindowAccess<Self::VarEF>;
 
     /// Randomness variable type used in permutation commitments.
     type RandomVar: Into<Self::ExprEF> + Copy;
 
-    /// Return the matrix representing permutation registers.
+    /// Return the local and next row slices of the permutation trace.
     fn permutation(&self) -> Self::MP;
 
     /// Return the list of randomness values for permutation argument.
@@ -460,8 +490,8 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
         self.inner.is_last_row()
     }
 
-    fn is_transition_window(&self, size: usize) -> Self::Expr {
-        self.inner.is_transition_window(size)
+    fn is_transition(&self) -> Self::Expr {
+        self.inner.is_transition()
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {

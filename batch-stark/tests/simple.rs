@@ -4,7 +4,7 @@ use core::marker::PhantomData;
 use core::slice::from_ref;
 
 use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
-use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder};
+use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::{ProverData, StarkInstance, VerificationError, prove_batch, verify_batch};
@@ -77,12 +77,8 @@ where
         let b0 = pis[1];
         let x = pis[2];
 
-        let (local, next) = (
-            main.row_slice(0).expect("Matrix is empty?"),
-            main.row_slice(1).expect("Matrix only has 1 row?"),
-        );
-        let local: &FibRow<AB::Var> = (*local).borrow();
-        let next: &FibRow<AB::Var> = (*next).borrow();
+        let local: &FibRow<AB::Var> = main.local().borrow();
+        let next: &FibRow<AB::Var> = main.next().borrow();
 
         let mut wf = builder.when_first_row();
         wf.assert_eq(local.left.clone(), a0);
@@ -167,8 +163,8 @@ impl<F> BaseAir<F> for MulAir {
 impl<AB: AirBuilder> Air<AB> for MulAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let local = main.row_slice(0).unwrap();
-        let next = main.row_slice(1).unwrap();
+        let local = main.local();
+        let next = main.next();
         for i in 0..self.reps {
             let s = i * 3;
             let a = local[s].clone();
@@ -248,7 +244,7 @@ where
         let symbolic_air_builder =
             SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
         let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
+        let symbolic_main_local = symbolic_main.local();
 
         let last_idx = symbolic_air_builder.main().width() - 1;
         let lut = symbolic_main_local[last_idx]; //  Extra column that corresponds to a permutation of 'a'
@@ -485,8 +481,8 @@ where
         let main = builder.main();
         let preprocessed = builder.preprocessed().expect("Preprocessed is empty?");
 
-        let local_main = main.row_slice(0).expect("Matrix is empty?");
-        let local_prep = preprocessed.row_slice(0).expect("Preprocessed is empty?");
+        let local_main = main.local();
+        let local_prep = preprocessed.local();
 
         // Enforce: main[0] = multiplier * preprocessed[0]
         builder.assert_eq(
@@ -2111,7 +2107,7 @@ where
         let symbolic_air_builder =
             SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
         let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
+        let symbolic_main_local = symbolic_main.local();
 
         let sender_col1 = symbolic_main_local[0]; // Column that sends values
         let sender_col2 = symbolic_main_local[1]; // Column that sends values

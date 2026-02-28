@@ -1,9 +1,8 @@
 use core::borrow::Borrow;
 use core::marker::PhantomData;
 
-use p3_air::{Air, AirBuilder, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{PrimeCharacteristicRing, PrimeField};
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
 use rand::distr::{Distribution, StandardUniform};
@@ -222,8 +221,7 @@ impl<
     #[inline]
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let local = main.row_slice(0).expect("The matrix is empty?");
-        let local = (*local).borrow();
+        let local = main.local().borrow();
 
         eval::<_, _, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>(
             self, builder, local,

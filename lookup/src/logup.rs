@@ -21,7 +21,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::lookup::{LookupError, LookupEvaluator};
-use p3_air::{ExtensionBuilder, PermutationAirBuilder};
+use p3_air::{ExtensionBuilder, PermutationAirBuilder, WindowAccess};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -210,13 +210,15 @@ impl LogUpGadget {
         // Challenge for combining the lookup tuples.
         let beta = permutation_challenges[self.num_challenges() * column + 1];
 
-        let s = permutation.row_slice(0).unwrap();
-        assert!(s.len() > column, "Permutation trace has insufficient width");
+        assert!(
+            permutation.local().len() > column,
+            "Permutation trace has insufficient width"
+        );
 
         // Read s[i] from the local row at the specified column.
-        let s_local = s[column].into();
+        let s_local = permutation.local()[column].into();
         // Read s[i+1] from the next row (or a zero-padded view on the last row).
-        let s_next = permutation.row_slice(1).unwrap()[column].into();
+        let s_next = permutation.next()[column].into();
 
         // Anchor s[0] = 0 at the start.
         //
