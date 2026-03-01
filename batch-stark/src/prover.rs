@@ -580,12 +580,21 @@ where
         {
             global.instances[i].as_ref().map_or((None, None), |meta| {
                 let vals = &pre_round[meta.matrix_index];
-                assert_eq!(
-                    vals.len(),
-                    2,
-                    "expected two opening points (zeta, zeta_next) for preprocessed trace"
-                );
-                (Some(vals[0].clone()), Some(vals[1].clone()))
+                if airs[i].preprocessed_uses_next_row() {
+                    assert_eq!(
+                        vals.len(),
+                        2,
+                        "expected two opening points (zeta, zeta_next) for preprocessed trace"
+                    );
+                    (Some(vals[0].clone()), Some(vals[1].clone()))
+                } else {
+                    assert_eq!(
+                        vals.len(),
+                        1,
+                        "expected one opening point (zeta) for preprocessed trace"
+                    );
+                    (Some(vals[0].clone()), None)
+                }
             })
         } else {
             (None, None)

@@ -490,6 +490,14 @@ where
                 &trace_next_zeros
             }
         };
+        let pre_next_zeros;
+        let pre_next_ref = match &opened_values.instances[i].base_opened_values.preprocessed_next {
+            Some(v) => v.as_slice(),
+            None => {
+                pre_next_zeros = vec![SC::Challenge::ZERO; preprocessed_widths[i]];
+                &pre_next_zeros
+            }
+        };
         let verifier_data = VerifierData {
             trace_local: &opened_values.instances[i].base_opened_values.trace_local,
             trace_next: trace_next_ref,
@@ -498,11 +506,7 @@ where
                 .preprocessed_local
                 .as_ref()
                 .map_or(&[], |v| v),
-            preprocessed_next: opened_values.instances[i]
-                .base_opened_values
-                .preprocessed_next
-                .as_ref()
-                .map_or(&[], |v| v),
+            preprocessed_next: pre_next_ref,
             permutation_local: &perm_local_ext,
             permutation_next: &perm_next_ext,
             permutation_challenges: &challenges_per_instance[i],
