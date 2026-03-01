@@ -57,11 +57,7 @@ pub trait GenericPoseidonLinearLayers<F: Field, const WIDTH: usize>: Sync {
     }
 
     /// Sparse matrix-vector multiplication for partial rounds in O(t).
-    fn cheap_matmul<R: Algebra<F>>(
-        state: &mut [R; WIDTH],
-        first_row: &[F; WIDTH],
-        v: &[F; WIDTH],
-    ) {
+    fn cheap_matmul<R: Algebra<F>>(state: &mut [R; WIDTH], first_row: &[F; WIDTH], v: &[F; WIDTH]) {
         cheap_matmul(state, first_row, v);
     }
 }

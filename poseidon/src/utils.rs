@@ -287,7 +287,11 @@ fn compute_equivalent_matrices<F: Field, const N: usize>(
         // Stored in a flat [F; N] array, padded with zero at index N-1.
         let w_hat_arr: [F; N] = core::array::from_fn(|i| {
             if i < N - 1 {
-                m_hat_inv[i].iter().zip(w.iter()).map(|(&a, &b)| a * b).sum()
+                m_hat_inv[i]
+                    .iter()
+                    .zip(w.iter())
+                    .map(|(&a, &b)| a * b)
+                    .sum()
             } else {
                 F::ZERO
             }
