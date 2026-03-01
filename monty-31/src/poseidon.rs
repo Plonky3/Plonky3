@@ -6,10 +6,11 @@ use p3_poseidon::external::{
 };
 use p3_poseidon::generic::GenericPoseidonLinearLayers;
 use p3_poseidon::internal::{PartialRoundLayer, partial_permute_state};
+use p3_symmetric::Permutation;
 
 use crate::{
-    FieldParameters, MontyField31, MontyParameters, PoseidonExternalLayerMonty31,
-    PoseidonInternalLayerMonty31, RelativelyPrimePower,
+    FieldParameters, MDSUtils, MdsMatrixMontyField31, MontyField31, MontyParameters,
+    PoseidonExternalLayerMonty31, PoseidonInternalLayerMonty31, RelativelyPrimePower,
 };
 
 /// Trait for Poseidon partial round scalar operations.
@@ -65,22 +66,28 @@ where
     }
 }
 
-impl<FP, const WIDTH: usize, const D: u64> FullRoundLayer<MontyField31<FP>, WIDTH, D>
-    for PoseidonExternalLayerMonty31<FP, WIDTH>
+impl<FP, MU, const WIDTH: usize, const D: u64> FullRoundLayer<MontyField31<FP>, WIDTH, D>
+    for PoseidonExternalLayerMonty31<FP, MU, WIDTH>
 where
     FP: FieldParameters + RelativelyPrimePower<D>,
+    MU: MDSUtils + Default,
+    MdsMatrixMontyField31<MU>: Permutation<[MontyField31<FP>; WIDTH]>,
 {
     fn permute_state_initial(&self, state: &mut [MontyField31<FP>; WIDTH]) {
-        full_round_initial_permute_state::<MontyField31<FP>, MontyField31<FP>, WIDTH, D>(
+        let mds = MdsMatrixMontyField31::<MU>::default();
+        full_round_initial_permute_state::<MontyField31<FP>, MontyField31<FP>, _, WIDTH, D>(
             state,
             &self.external_constants,
+            &mds,
         );
     }
 
     fn permute_state_terminal(&self, state: &mut [MontyField31<FP>; WIDTH]) {
-        full_round_terminal_permute_state::<MontyField31<FP>, MontyField31<FP>, WIDTH, D>(
+        let mds = MdsMatrixMontyField31::<MU>::default();
+        full_round_terminal_permute_state::<MontyField31<FP>, MontyField31<FP>, _, WIDTH, D>(
             state,
             &self.external_constants,
+            &mds,
         );
     }
 }

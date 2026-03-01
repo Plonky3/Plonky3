@@ -5,7 +5,9 @@ use core::marker::PhantomData;
 use p3_poseidon::external::{FullRoundConstants, FullRoundLayerConstructor};
 use p3_poseidon::internal::{PartialRoundConstants, PartialRoundLayerConstructor};
 
-use crate::{FieldParameters, MontyField31, PackedMontyParameters, PartialRoundBaseParameters};
+use crate::{
+    FieldParameters, MDSUtils, MontyField31, PackedMontyParameters, PartialRoundBaseParameters,
+};
 
 /// AVX512-specific trait for Poseidon partial round parameters.
 pub trait PartialRoundParametersAVX512<PMP: PackedMontyParameters, const WIDTH: usize>:
@@ -26,8 +28,13 @@ pub struct PoseidonInternalLayerMonty31<
 
 /// The external (full round) layer of Poseidon for AVX512-packed MontyField31.
 #[derive(Debug, Clone)]
-pub struct PoseidonExternalLayerMonty31<PMP: PackedMontyParameters, const WIDTH: usize> {
+pub struct PoseidonExternalLayerMonty31<
+    PMP: PackedMontyParameters,
+    MU: MDSUtils,
+    const WIDTH: usize,
+> {
     pub(crate) external_constants: FullRoundConstants<MontyField31<PMP>, WIDTH>,
+    _mds: PhantomData<MU>,
 }
 
 impl<FP: FieldParameters, const WIDTH: usize, ILP: PartialRoundBaseParameters<FP, WIDTH>>
@@ -44,10 +51,14 @@ impl<FP: FieldParameters, const WIDTH: usize, ILP: PartialRoundBaseParameters<FP
     }
 }
 
-impl<FP: FieldParameters, const WIDTH: usize> FullRoundLayerConstructor<MontyField31<FP>, WIDTH>
-    for PoseidonExternalLayerMonty31<FP, WIDTH>
+impl<FP: FieldParameters, MU: MDSUtils, const WIDTH: usize>
+    FullRoundLayerConstructor<MontyField31<FP>, WIDTH>
+    for PoseidonExternalLayerMonty31<FP, MU, WIDTH>
 {
     fn new_from_constants(external_constants: FullRoundConstants<MontyField31<FP>, WIDTH>) -> Self {
-        Self { external_constants }
+        Self {
+            external_constants,
+            _mds: PhantomData,
+        }
     }
 }

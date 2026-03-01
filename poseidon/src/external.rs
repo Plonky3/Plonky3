@@ -15,7 +15,9 @@
 //!   state → AddRoundConstants → S-box(all elements) → MDS multiply → state'
 //! ```
 //!
-//! The dense MDS matrix is the same for every round. Only the round constants change.
+//! The MDS multiply is dispatched via the [`Permutation`] trait, allowing concrete fields
+//! to use fast convolution (e.g., Karatsuba) while generic `Algebra<F>` types fall back
+//! to O(t^2) dense multiplication.
 //!
 //! # Cost
 //!
@@ -26,34 +28,29 @@
 use alloc::vec::Vec;
 
 use p3_field::{Algebra, Field, InjectiveMonomial, PrimeCharacteristicRing};
+use p3_symmetric::Permutation;
 
 /// Pre-computed constants for the full (external) rounds.
 ///
-/// The RF full rounds are split equally: RF/2 initial rounds before the partial rounds,
-/// and RF/2 terminal rounds after.
+/// The full rounds are split equally: half before the partial rounds (initial),
+/// and half after (terminal).
+///
+/// The MDS matrix is **not** stored here. It is dispatched through a permutation
+/// trait at the call site. This allows concrete fields to use optimized
+/// implementations (e.g., Karatsuba convolution) while generic algebra types
+/// fall back to dense O(t^2) multiplication.
 #[derive(Debug, Clone)]
 pub struct FullRoundConstants<F, const WIDTH: usize> {
-    /// Round constants for the RF/2 initial full rounds.
-    ///
-    /// Each entry is a WIDTH-vector added to the state at the start of one round.
+    /// Round constants for the initial full rounds.
     pub initial: Vec<[F; WIDTH]>,
 
-    /// Round constants for the RF/2 terminal full rounds.
-    ///
-    /// Same structure as `initial`, but for the rounds after the partial rounds.
+    /// Round constants for the terminal full rounds.
     pub terminal: Vec<[F; WIDTH]>,
-
-    /// The dense t x t MDS matrix, shared by all full rounds.
-    ///
-    /// This matrix has branch number t+1, guaranteeing that any non-zero input
-    /// difference activates at least t+1 S-boxes across two consecutive rounds
-    /// (wide-trail argument).
-    pub mds: [[F; WIDTH]; WIDTH],
 }
 
 /// Construct a full round layer from pre-computed constants.
 pub trait FullRoundLayerConstructor<F: Field, const WIDTH: usize> {
-    /// Build the layer from the full-round constants and the dense MDS matrix.
+    /// Build the layer from the full-round constants.
     fn new_from_constants(constants: FullRoundConstants<F, WIDTH>) -> Self;
 }
 
@@ -73,10 +70,11 @@ where
     fn permute_state_terminal(&self, state: &mut [R; WIDTH]);
 }
 
-/// Dense MDS matrix-vector multiplication: `state <- MDS * state`.
+/// Dense MDS matrix-vector multiplication.
 ///
-/// This is the standard O(t^2) matrix-vector product used in every full round.
-/// Partial rounds use a sparse variant instead (see the internal module).
+/// Standard O(t^2) matrix-vector product. Used for the dense transition matrix
+/// in partial rounds. Full rounds should prefer the trait-dispatched MDS multiply
+/// for sub-O(t^2) performance on concrete fields.
 #[inline]
 pub fn mds_multiply<F: Field, A: Algebra<F>, const WIDTH: usize>(
     state: &mut [A; WIDTH],
@@ -87,26 +85,25 @@ pub fn mds_multiply<F: Field, A: Algebra<F>, const WIDTH: usize>(
 
     // Compute each output element as a dot product of one MDS row with the input.
     for (out, row) in state.iter_mut().zip(mds.iter()) {
-        *out = input
-            .iter()
-            .zip(row.iter())
-            .map(|(x, &m)| x.clone() * m)
-            .sum();
+        *out = A::mixed_dot_product(&input, row);
     }
 }
 
-/// Apply the RF/2 initial full rounds (generic implementation).
+/// Apply the initial full rounds (generic implementation).
 ///
-/// Each round: add round constants → S-box on all elements → dense MDS multiply.
+/// Each round: add round constants, S-box on all elements, MDS multiply.
+/// The MDS multiply is dispatched via the permutation trait parameter.
 #[inline]
 pub fn full_round_initial_permute_state<
     F: Field,
     A: Algebra<F> + InjectiveMonomial<D>,
+    Mds: Permutation<[A; WIDTH]>,
     const WIDTH: usize,
     const D: u64,
 >(
     state: &mut [A; WIDTH],
     constants: &FullRoundConstants<F, WIDTH>,
+    mds: &Mds,
 ) {
     for round_constants in &constants.initial {
         // AddRoundConstants: state[i] += rc[i].
@@ -117,23 +114,25 @@ pub fn full_round_initial_permute_state<
         for s in state.iter_mut() {
             *s = s.injective_exp_n();
         }
-        // MixLayer: state = MDS * state.
-        mds_multiply(state, &constants.mds);
+        // MixLayer: dispatched via Permutation trait.
+        mds.permute_mut(state);
     }
 }
 
-/// Apply the RF/2 terminal full rounds (generic implementation).
+/// Apply the terminal full rounds (generic implementation).
 ///
-/// Same structure as the initial full rounds, but uses the terminal round constants.
+/// Same structure as the initial full rounds, but uses the terminal constants.
 #[inline]
 pub fn full_round_terminal_permute_state<
     F: Field,
     A: Algebra<F> + InjectiveMonomial<D>,
+    Mds: Permutation<[A; WIDTH]>,
     const WIDTH: usize,
     const D: u64,
 >(
     state: &mut [A; WIDTH],
     constants: &FullRoundConstants<F, WIDTH>,
+    mds: &Mds,
 ) {
     for round_constants in &constants.terminal {
         // AddRoundConstants: state[i] += rc[i].
@@ -144,7 +143,7 @@ pub fn full_round_terminal_permute_state<
         for s in state.iter_mut() {
             *s = s.injective_exp_n();
         }
-        // MixLayer: state = MDS * state.
-        mds_multiply(state, &constants.mds);
+        // MixLayer: dispatched via Permutation trait.
+        mds.permute_mut(state);
     }
 }

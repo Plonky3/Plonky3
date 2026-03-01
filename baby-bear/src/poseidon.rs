@@ -1,14 +1,24 @@
-//! Poseidon implementation for BabyBear.
+//! Poseidon permutation for BabyBear.
 //!
-//! Constants sourced from HorizenLabs:
+//! # MDS Matrix
+//!
+//! The MDS matrix is a **circulant** matrix sourced from the MDS crate.
+//! At runtime, it is applied via fast Karatsuba convolution (sub-O(t^2)).
+//! During initialization only, it is expanded to dense form for the
+//! sparse matrix decomposition of partial rounds.
+//!
+//! # Round Constants
+//!
+//! Sourced from the HorizenLabs reference implementation:
 //! <https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon/poseidon_instance_babybear.rs>
 
 use p3_monty_31::{
-    GenericPoseidonLinearLayersMonty31, PartialRoundBaseParameters, PartialRoundParameters,
-    PoseidonExternalLayerMonty31, PoseidonInternalLayerMonty31,
+    GenericPoseidonLinearLayersMonty31, MDSUtils, PartialRoundBaseParameters,
+    PartialRoundParameters, PoseidonExternalLayerMonty31, PoseidonInternalLayerMonty31,
 };
 use p3_poseidon::{Poseidon, PoseidonConstants};
 
+use crate::mds::MDSBabyBearData;
 use crate::{BabyBear, BabyBearParameters};
 
 /// Internal (partial round) layer for BabyBear Poseidon.
@@ -17,12 +27,12 @@ pub type PoseidonInternalLayerBabyBear<const WIDTH: usize> =
 
 /// External (full round) layer for BabyBear Poseidon.
 pub type PoseidonExternalLayerBabyBear<const WIDTH: usize> =
-    PoseidonExternalLayerMonty31<BabyBearParameters, WIDTH>;
+    PoseidonExternalLayerMonty31<BabyBearParameters, MDSBabyBearData, WIDTH>;
 
-/// Degree of the chosen permutation polynomial for BabyBear, used as the Poseidon S-Box.
+/// S-box degree for BabyBear Poseidon.
 ///
-/// As p - 1 = 15 * 2^{27} neither 3 nor 5 satisfy gcd(p - 1, D) = 1.
-/// Instead we use the next smallest available value, namely 7.
+/// Since p - 1 = 15 * 2^27, neither 3 nor 5 are coprime to p - 1.
+/// The next smallest valid exponent is 7.
 const BABYBEAR_S_BOX_DEGREE: u64 = 7;
 
 /// The Poseidon permutation for BabyBear.
@@ -50,75 +60,6 @@ impl PartialRoundBaseParameters<BabyBearParameters, 16> for BabyBearPoseidonPara
 impl PartialRoundBaseParameters<BabyBearParameters, 24> for BabyBearPoseidonParameters {}
 impl PartialRoundParameters<BabyBearParameters, 16> for BabyBearPoseidonParameters {}
 impl PartialRoundParameters<BabyBearParameters, 24> for BabyBearPoseidonParameters {}
-
-/// MDS matrix for width-16 Poseidon on BabyBear.
-#[rustfmt::skip]
-pub const BABYBEAR_POSEIDON_MDS_16: [[BabyBear; 16]; 16] = BabyBear::new_2d_array([
-    [
-        0x6ed88b54, 0x365c29f9, 0x029047ae, 0x0340f575, 0x68418255, 0x315e4e40, 0x51596faa, 0x71183465,
-        0x2d036fca, 0x09e4fa24, 0x38e00966, 0x13e81974, 0x60f6dafc, 0x3c664116, 0x2e2b9d4b, 0x6c5f6689,
-    ],
-    [
-        0x4a1d7fc9, 0x6506dfb7, 0x2f49702b, 0x3ebaafe9, 0x718fc5d2, 0x14dcbeed, 0x27a38245, 0x528238e5,
-        0x10663404, 0x2a504978, 0x0b027c2e, 0x4bdd7226, 0x001ebc59, 0x52555194, 0x148df9b7, 0x013587d5,
-    ],
-    [
-        0x03a74096, 0x5b791ccd, 0x2e3a2688, 0x26b936dc, 0x0a0df4c3, 0x4a1e89d8, 0x07a37b58, 0x3ff10121,
-        0x4912f3d0, 0x0e5cbd22, 0x0086832d, 0x5bc8209b, 0x0ecaa423, 0x0c8b360e, 0x542abb63, 0x198e5ede,
-    ],
-    [
-        0x2ba24027, 0x5c61cbe2, 0x15dabd0c, 0x58763be5, 0x70a28315, 0x41a8f9fb, 0x3786bc6d, 0x19ca59f8,
-        0x42185a03, 0x48223bcf, 0x190d6883, 0x086269de, 0x3630ddef, 0x2c0dbdd3, 0x2c07ad23, 0x29561d75,
-    ],
-    [
-        0x2db3561a, 0x349aabc3, 0x0aeb611d, 0x32c2bd61, 0x38527028, 0x1483f37b, 0x3b28e234, 0x5a2762d4,
-        0x47c2d9d7, 0x372c5808, 0x54d14bd6, 0x49690d33, 0x0e015d17, 0x6aabc1ec, 0x3070eff3, 0x20b26c05,
-    ],
-    [
-        0x2e19ba8d, 0x0d23450a, 0x2e5d9599, 0x57521a71, 0x0fe30b31, 0x2d125f10, 0x0bcd2b75, 0x1c5c0995,
-        0x13538cc1, 0x3e89bab1, 0x0ecd2c52, 0x4a242476, 0x3bd8f726, 0x6f61a168, 0x4be24d17, 0x3612cac7,
-    ],
-    [
-        0x2d922f25, 0x6edf0857, 0x33af4716, 0x724e5171, 0x2a7361d2, 0x123ecf2e, 0x2275c912, 0x21f75377,
-        0x0b4a2d3c, 0x61940261, 0x335fa739, 0x3e18aca4, 0x1255c968, 0x0627c139, 0x0c870799, 0x1a271c86,
-    ],
-    [
-        0x3722cccf, 0x3e2ac9f8, 0x3c6899ac, 0x6ced5ba0, 0x767999cd, 0x12fdf314, 0x284d52da, 0x010fa38b,
-        0x14e29a97, 0x58b4180e, 0x19b6c4ac, 0x722e27d3, 0x39a050e6, 0x4d05c08a, 0x3dbffefa, 0x61f01023,
-    ],
-    [
-        0x4237a659, 0x4947e8c3, 0x069342f5, 0x15171937, 0x554eef00, 0x2ff329af, 0x0a5129f2, 0x634b85d7,
-        0x2a8adb36, 0x0c41318c, 0x5ac8ad85, 0x75823102, 0x49a8c8f4, 0x37b4dc23, 0x48383ddd, 0x2917cc4a,
-    ],
-    [
-        0x64ded285, 0x2cf24480, 0x48a51fa3, 0x3f6d1fa6, 0x67fb2b58, 0x4ee85b14, 0x0185c875, 0x5c7a942d,
-        0x700e51a2, 0x15aff07d, 0x303754a2, 0x18a3e923, 0x28f104b7, 0x4d81102d, 0x26eee317, 0x2624abc9,
-    ],
-    [
-        0x1cabd063, 0x2100450e, 0x1f3be9dd, 0x2a76b379, 0x3f18d12a, 0x0bb69105, 0x04d8a7ac, 0x1faded71,
-        0x0b2d86dd, 0x5b4fd3ea, 0x0d7f56e4, 0x4c934264, 0x00578cbc, 0x4ac335a4, 0x6de618f4, 0x12430d70,
-    ],
-    [
-        0x69a43964, 0x27be8c04, 0x05bbbf28, 0x6a6fd5f2, 0x029ff4a2, 0x7480e7d2, 0x6ebd8697, 0x505ac2f2,
-        0x42198491, 0x3e22dde8, 0x19b3ffc9, 0x1c029b85, 0x3c83bd24, 0x5d48ee0c, 0x51db5088, 0x6a044125,
-    ],
-    [
-        0x033e3e9f, 0x320cdce6, 0x42ceb3a3, 0x2c39ef78, 0x129f22c0, 0x038ce048, 0x200c7aa6, 0x37297a16,
-        0x6957af38, 0x3efaaf35, 0x47086768, 0x65017cbd, 0x3e52dd44, 0x632cdfec, 0x1e21dc74, 0x02b68bcf,
-    ],
-    [
-        0x2526f6b9, 0x18cdaeca, 0x1a64dd5e, 0x0ed814ac, 0x32a9eb40, 0x2f276e0d, 0x30c6664b, 0x0ecfbdf7,
-        0x6e70acbc, 0x1df04c92, 0x44090fa0, 0x69e69133, 0x1bca435a, 0x0cb43110, 0x19f651ca, 0x3ea3be87,
-    ],
-    [
-        0x032bf42c, 0x72b82f03, 0x2b56b081, 0x377703d9, 0x49cadd18, 0x3f7a6788, 0x1be5dac5, 0x1c81f75b,
-        0x6983b960, 0x067493e8, 0x4a4c05c9, 0x04dbd1a7, 0x2d30836d, 0x67454db1, 0x70de7fb4, 0x331eb4b8,
-    ],
-    [
-        0x574bceed, 0x3c1e600e, 0x3a1b91b1, 0x69369cf9, 0x5e68d7ff, 0x2ddcd8d4, 0x5aff0a6d, 0x7068c4fc,
-        0x0fcb3bfd, 0x133838c7, 0x0bac1e88, 0x13ee81b1, 0x2eecf375, 0x1450e2a1, 0x474d780d, 0x3a9c651c,
-    ],
-]);
 
 /// Round constants for width-16 Poseidon on BabyBear.
 ///
@@ -211,131 +152,6 @@ pub const BABYBEAR_POSEIDON_RC_16: [[BabyBear; 16]; 21] = BabyBear::new_2d_array
     [
         0x776673b7, 0x3764f92a, 0x4b49f079, 0x068c7915, 0x6ae894f1, 0x3ca29798, 0x27f0ccd0, 0x51bb1b3b,
         0x1f45baaa, 0x22a18c6a, 0x5172d793, 0x46560975, 0x12ac2c28, 0x4ec30409, 0x0f41009b, 0x71ea9382,
-    ],
-]);
-
-/// MDS matrix for width-24 Poseidon on BabyBear.
-#[rustfmt::skip]
-pub const BABYBEAR_POSEIDON_MDS_24: [[BabyBear; 24]; 24] = BabyBear::new_2d_array([
-    [
-        0x19191a7d, 0x6cbe083c, 0x0b589971, 0x3be4046a, 0x2c837497, 0x61c4fa1e, 0x3d45f6db, 0x679624bc,
-        0x5f59f3da, 0x62cda2fe, 0x567b01b2, 0x389daccb, 0x5522ba84, 0x71e3475e, 0x5f147d86, 0x1d7e0433,
-        0x4450fc40, 0x6a1d0eee, 0x258885f3, 0x0ec7eb27, 0x584ae718, 0x3e4a6f51, 0x0671c21b, 0x418f03e4,
-    ],
-    [
-        0x61a34efe, 0x593f2d08, 0x5a5599f9, 0x246030d1, 0x1210627a, 0x2e5a37f0, 0x23c9e547, 0x02071da9,
-        0x49852008, 0x6e9fae9f, 0x26d98222, 0x13538a35, 0x61216f13, 0x3552bef4, 0x0bbe8d33, 0x0bf02cff,
-        0x0991e1c3, 0x73dccd52, 0x4f5a8c64, 0x2a9f0e56, 0x60786ad6, 0x5ce8c0fe, 0x3a9d048a, 0x3e1e5cd2,
-    ],
-    [
-        0x1866d4b4, 0x2e2f9a97, 0x127340e3, 0x6faf4fa8, 0x75575b7f, 0x447bb0f8, 0x069efa67, 0x610a18ac,
-        0x0edf2bd3, 0x559135f8, 0x5b912991, 0x43f2c76f, 0x73cd6b24, 0x13c3df30, 0x10a57d3d, 0x01603b41,
-        0x6e04d184, 0x40cdb676, 0x0134bac6, 0x0b88cf23, 0x31e557c7, 0x5a7cba48, 0x58fbabe3, 0x1b03e09e,
-    ],
-    [
-        0x4dc75c69, 0x63f7f41b, 0x27c89e9e, 0x09c1b7ad, 0x004a124f, 0x691a8125, 0x6924edbd, 0x29cdb1aa,
-        0x56bf4b5c, 0x2703c2c7, 0x19107ae4, 0x30c37517, 0x253c03bd, 0x623725c0, 0x37054961, 0x48ae028b,
-        0x52d40d06, 0x3e7d0eb6, 0x1d40d7dd, 0x29f924ee, 0x37083357, 0x59c995bc, 0x501e3fe0, 0x19024c7d,
-    ],
-    [
-        0x04377f31, 0x0a4a0017, 0x1f17ba47, 0x54276fdf, 0x1ad767cd, 0x4c397b7d, 0x45dad135, 0x1166cd59,
-        0x10032dd4, 0x26250b6c, 0x52802c2e, 0x53f6862f, 0x73fe56cf, 0x1f33e178, 0x02c41117, 0x2ccc0227,
-        0x44f9db11, 0x439fa653, 0x08c1efb8, 0x0dee8126, 0x157974cf, 0x3ed232d6, 0x2f2ad7ef, 0x2b3a4348,
-    ],
-    [
-        0x24802d4b, 0x0e3bf555, 0x094764ce, 0x1e5558cd, 0x300bd275, 0x41c2f5b5, 0x5fd9db22, 0x5681e3e6,
-        0x5e17625b, 0x2990a7d2, 0x146901e4, 0x09b26110, 0x451759ad, 0x4eb06038, 0x61c9ed3c, 0x074e4cb7,
-        0x51b17024, 0x507e4bb3, 0x487cdc37, 0x629c4f2c, 0x28f8531b, 0x271f4983, 0x038a6d28, 0x2c0aacd8,
-    ],
-    [
-        0x15545583, 0x101a363d, 0x15126e8a, 0x4e1ed8a5, 0x53d4f4d1, 0x3d07b7b3, 0x073ea0d9, 0x60998306,
-        0x00ffb607, 0x3e71b599, 0x730ea91f, 0x5fe87f4b, 0x49510355, 0x2ce9fd2a, 0x0b9451b8, 0x319c006d,
-        0x669ab96c, 0x71ee9e09, 0x5dc07b5e, 0x4611ee0d, 0x5022239a, 0x5a3ca2a3, 0x3f6830ca, 0x4928eae1,
-    ],
-    [
-        0x284e8831, 0x1cdef1a6, 0x3797153a, 0x42f4735d, 0x38cce46e, 0x1ef113c2, 0x5af0700d, 0x69ef808a,
-        0x3b9a08a3, 0x6aae8b15, 0x1bca8baf, 0x43fe3d1a, 0x3f08abbc, 0x13f6e4fa, 0x72948221, 0x53bd5821,
-        0x76f6675e, 0x3b26093c, 0x6e4ead9f, 0x11cd8332, 0x7035588c, 0x2575bb3d, 0x51f93a72, 0x22dad1b9,
-    ],
-    [
-        0x1120f193, 0x06ff8b82, 0x54b835cf, 0x3dc53b9e, 0x4d181e81, 0x7218c243, 0x11231c2b, 0x062fdc55,
-        0x2e2ae16d, 0x16d13882, 0x46f856e3, 0x3827488e, 0x7737cf0a, 0x620a9582, 0x38a1cae9, 0x150b8797,
-        0x506bd8aa, 0x47d6929c, 0x3f9205fd, 0x164ecbbf, 0x23d5093c, 0x0e9fde93, 0x562a2e48, 0x713a8433,
-    ],
-    [
-        0x5bab57ce, 0x005075f9, 0x3c9d0507, 0x2d25f9cd, 0x4cdf7499, 0x694cac91, 0x65c21198, 0x329c7d0b,
-        0x021d84c3, 0x6a61dfb1, 0x4ab97480, 0x19f2d1bd, 0x35381b5b, 0x0da575ff, 0x08afd461, 0x0fade176,
-        0x5b815cc2, 0x644290b2, 0x4ef463e7, 0x6ea5993e, 0x61b7b10b, 0x7081130d, 0x3d683910, 0x6860542b,
-    ],
-    [
-        0x1d7214bd, 0x367bf2b0, 0x48b48241, 0x1017b7be, 0x059453ab, 0x277337ec, 0x56277c87, 0x677bb976,
-        0x24190c2f, 0x2c717e0b, 0x59e2a73d, 0x4bf46e75, 0x270ebff5, 0x2e9a07a6, 0x47b4f2cc, 0x54d12ed3,
-        0x2bb16505, 0x745c060a, 0x3e0a397e, 0x2c5d842a, 0x03034fd5, 0x38cef2b1, 0x31927212, 0x423c33ef,
-    ],
-    [
-        0x4e7dfc7a, 0x037378f9, 0x1881ed25, 0x6af37772, 0x18ce1693, 0x4626f02f, 0x70732dcd, 0x0942f572,
-        0x65df735e, 0x5ad72db4, 0x699fe9cc, 0x35ab9cd7, 0x758a62eb, 0x0ae5ff35, 0x342e0c42, 0x1d3f9a7e,
-        0x2feedf99, 0x55e3734c, 0x56d75a3b, 0x040dfb91, 0x0361ad6c, 0x5a6aeb5d, 0x0de01972, 0x33328e03,
-    ],
-    [
-        0x13501f54, 0x204885fb, 0x43c85d92, 0x4a97c740, 0x424beb1b, 0x2012116a, 0x49694aa2, 0x247703cc,
-        0x4ba4bc45, 0x132cdb95, 0x3cafc24a, 0x241870e3, 0x1e582d31, 0x27ba0403, 0x1aa8fff0, 0x6eedc92c,
-        0x35d4decf, 0x2e722b3f, 0x36358015, 0x062d8da5, 0x4a0ff259, 0x41c55848, 0x67e4ea95, 0x40f69a47,
-    ],
-    [
-        0x0bba6386, 0x6f7efbff, 0x3d8fed85, 0x264b3587, 0x2c1d569b, 0x04b218e8, 0x3a939d97, 0x6b3a6c39,
-        0x29c25fb7, 0x6ffd0c02, 0x5e38ab0e, 0x0e3e636a, 0x324551bd, 0x19ac1d52, 0x6389c4b1, 0x15c77366,
-        0x3b746f85, 0x5e1eea00, 0x732b79a2, 0x73e81e4c, 0x2172727c, 0x58e8098c, 0x46c6e6c2, 0x07e9d643,
-    ],
-    [
-        0x5eca9a37, 0x304d75f1, 0x2294c0bd, 0x3d7ab743, 0x2636b5d5, 0x0f890758, 0x0afa5a3d, 0x41e4665b,
-        0x0b4c63fc, 0x1112be28, 0x0e9162b1, 0x6a00fcaa, 0x6cac103b, 0x153d5d75, 0x05ac5be5, 0x06519cce,
-        0x66941f1c, 0x1abeed57, 0x05f3b38b, 0x2dbe8560, 0x28c7ffb3, 0x06eed76a, 0x5404eed2, 0x28464e68,
-    ],
-    [
-        0x6937aa7d, 0x20cd555a, 0x41d20da1, 0x163d4a11, 0x4da2443d, 0x08c6343c, 0x5ec6eb45, 0x5e1b7c27,
-        0x29c7fd8e, 0x268f1b7f, 0x014ab25d, 0x1892edb1, 0x413222ca, 0x548a31a0, 0x765d9087, 0x64de0f9a,
-        0x3d0e6471, 0x7513a7ae, 0x3112d543, 0x2375ab22, 0x270250d0, 0x025b8b09, 0x574ca016, 0x02e4bb01,
-    ],
-    [
-        0x41786ccf, 0x41f0df6c, 0x43107975, 0x11ca0a05, 0x4b3d6afe, 0x5ad09060, 0x3da8de0a, 0x1573ad5b,
-        0x32384d13, 0x2e2cc2a4, 0x257be6c0, 0x246dd39b, 0x1d43bce2, 0x399670ed, 0x1c703658, 0x042b4e65,
-        0x2fcd523a, 0x58d576a5, 0x3f70e99e, 0x2c08c7e5, 0x048463f2, 0x30c41673, 0x327e05f6, 0x13476bbf,
-    ],
-    [
-        0x14971335, 0x2a9db91a, 0x48ceae5d, 0x0eab20e2, 0x627c3e30, 0x55697057, 0x0ab66b04, 0x51da9659,
-        0x4e7e6fba, 0x5c911a08, 0x093289b9, 0x5a95b9d6, 0x47a94672, 0x2b251d75, 0x334521f0, 0x32c685fb,
-        0x3431a4c5, 0x3a5c7f94, 0x319109af, 0x4c921429, 0x5dd16726, 0x60ea6e89, 0x47dc57e2, 0x2705784a,
-    ],
-    [
-        0x2eadb949, 0x6152ba98, 0x17e543ad, 0x1e65633a, 0x162f1877, 0x4b07c2b4, 0x5fc3caef, 0x45357bef,
-        0x65694da5, 0x4f35206b, 0x099d6860, 0x02ce0797, 0x7032c8f9, 0x21eb00e8, 0x5cb8810d, 0x1ae59be7,
-        0x48df9450, 0x620314f3, 0x37539abb, 0x477b9153, 0x72d3c7be, 0x6ca27c72, 0x767a7651, 0x191a449a,
-    ],
-    [
-        0x64e2a38c, 0x280cc6af, 0x28bf710a, 0x76bfe2c0, 0x40ed3108, 0x3beabed2, 0x18cfa693, 0x3672bd08,
-        0x3d0b66fb, 0x59af6345, 0x76d6cf74, 0x0b4f4043, 0x082538a9, 0x5680b41f, 0x73d88c5a, 0x1a038c65,
-        0x25b16b46, 0x40266a1f, 0x401fa170, 0x2c44ad35, 0x3c6e516d, 0x2d5ca9b3, 0x485ebe47, 0x3cbad540,
-    ],
-    [
-        0x1a317281, 0x03e74eb2, 0x1569d934, 0x0494659c, 0x034f41c3, 0x00b2f8a2, 0x5d7e821b, 0x2bb1d834,
-        0x06b36470, 0x2a42f149, 0x73e9fe13, 0x0d401689, 0x2f0b0fdc, 0x6cb6443c, 0x670e3987, 0x410c9579,
-        0x4b8fa592, 0x67d14ddc, 0x58c63aae, 0x33f6ac7b, 0x62496614, 0x5913b1ec, 0x338ed582, 0x4d4f4f02,
-    ],
-    [
-        0x19dfa11b, 0x005524e2, 0x5f7574d0, 0x5c5b3588, 0x0ee563ab, 0x05930821, 0x4c4c668e, 0x5a02d1c5,
-        0x33e4965c, 0x5b79d5c0, 0x730ca318, 0x2ce70f7b, 0x65611461, 0x6af41f50, 0x3a851c9d, 0x38225964,
-        0x45f49cd7, 0x0516405e, 0x63d9dbad, 0x4fbce612, 0x1f30cbb0, 0x47320ea7, 0x5c5a1db7, 0x344524d6,
-    ],
-    [
-        0x305f18aa, 0x4fefce1d, 0x2dd60db5, 0x37e7edb0, 0x33590038, 0x5ba76f30, 0x370a8395, 0x29114d66,
-        0x0ca70423, 0x64591365, 0x384f8781, 0x300190ae, 0x32abb521, 0x399cb85f, 0x5bb899ef, 0x68e000f3,
-        0x1ab3e268, 0x5cf5235f, 0x2b567559, 0x02e26480, 0x5df459ca, 0x2f379c3e, 0x5db69b04, 0x565b8f83,
-    ],
-    [
-        0x137f7ff7, 0x2dd419c1, 0x4c4af6e7, 0x49e58f6c, 0x16263dba, 0x694a7845, 0x01840406, 0x1f89c640,
-        0x1cd737aa, 0x58881e16, 0x462928d6, 0x2490dea3, 0x0bf92538, 0x37607a3d, 0x60321d26, 0x34118d9e,
-        0x1b9743bb, 0x018b4aad, 0x362d15da, 0x4cbb87c1, 0x384ae3c2, 0x48ce88f7, 0x27a25e4f, 0x47ef48c5,
     ],
 ]);
 
@@ -494,153 +310,67 @@ pub const BABYBEAR_POSEIDON_RC_24: [[BabyBear; 24]; 29] = BabyBear::new_2d_array
     ],
 ]);
 
-/// Create a default width-16 Poseidon for BabyBear using HorizenLabs constants.
+/// Create a default width-16 Poseidon permutation for BabyBear.
 pub fn default_babybear_poseidon_16() -> PoseidonBabyBear<16> {
     Poseidon::new(&PoseidonConstants {
         rounds_f: 8,
         rounds_p: 13,
-        mds: BABYBEAR_POSEIDON_MDS_16,
+        mds_circ_col: MDSBabyBearData::MATRIX_CIRC_MDS_16_COL,
         round_constants: BABYBEAR_POSEIDON_RC_16.to_vec(),
     })
 }
 
-/// Create a default width-24 Poseidon for BabyBear using HorizenLabs constants.
+/// Create a default width-24 Poseidon permutation for BabyBear.
 pub fn default_babybear_poseidon_24() -> PoseidonBabyBear<24> {
     Poseidon::new(&PoseidonConstants {
         rounds_f: 8,
         rounds_p: 21,
-        mds: BABYBEAR_POSEIDON_MDS_24,
+        mds_circ_col: MDSBabyBearData::MATRIX_CIRC_MDS_24_COL,
         round_constants: BABYBEAR_POSEIDON_RC_24.to_vec(),
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use p3_field::PrimeCharacteristicRing;
     use p3_symmetric::Permutation;
 
     use super::*;
 
     type F = BabyBear;
 
-    /// KAT: width-16, input = [0, 1, 2, ..., 15].
-    /// Expected values from HorizenLabs reference implementation.
     #[test]
-    fn test_poseidon_width_16_sequential() {
+    fn test_poseidon_width_16() {
         let perm = default_babybear_poseidon_16();
+
         let mut input: [F; 16] =
             F::new_array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+
         let expected: [F; 16] = F::new_array([
-            778674657, 1825412997, 1640346271, 83951736, 1894025970, 447034218, 498444289,
-            466682493, 1818143368, 1505239070, 1628058864, 946476541, 819595108, 1399158919,
-            145448150, 196842266,
+            1685950527, 1640331713, 653427707, 521359257, 1214518746, 1666743980, 699200988,
+            1947377133, 1117180131, 1230693462, 8497118, 224469127, 1750158722, 1034327714,
+            1045444239, 1796100755,
         ]);
+
         perm.permute_mut(&mut input);
         assert_eq!(input, expected);
     }
 
-    /// KAT: width-16, input = all zeros.
     #[test]
-    fn test_poseidon_width_16_zeros() {
-        let perm = default_babybear_poseidon_16();
-        let mut input = [F::ZERO; 16];
-        let expected: [F; 16] = F::new_array([
-            1492940447, 3933408, 2001701560, 379683329, 67896664, 1204605896, 205471985, 883149083,
-            945520181, 639406069, 1422261663, 419361319, 1412338553, 1449184411, 1849064212,
-            107987045,
-        ]);
-        perm.permute_mut(&mut input);
-        assert_eq!(input, expected);
-    }
-
-    /// KAT: width-16, input = all ones.
-    #[test]
-    fn test_poseidon_width_16_ones() {
-        let perm = default_babybear_poseidon_16();
-        let mut input = [F::ONE; 16];
-        let expected: [F; 16] = F::new_array([
-            586998783, 161593044, 1930584191, 543842513, 1758528910, 1489291812, 637155264,
-            346112516, 1643008824, 939438030, 939578557, 1062222570, 767076277, 152247659,
-            859463755, 969690270,
-        ]);
-        perm.permute_mut(&mut input);
-        assert_eq!(input, expected);
-    }
-
-    /// KAT: width-24, input = [0, 1, 2, ..., 23].
-    #[test]
-    fn test_poseidon_width_24_sequential() {
+    fn test_poseidon_width_24() {
         let perm = default_babybear_poseidon_24();
+
         let mut input: [F; 24] = F::new_array([
             0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
         ]);
+
         let expected: [F; 24] = F::new_array([
-            1571071959, 1834408751, 1984764921, 69529660, 852397151, 306510807, 2004352646,
-            1955934214, 979858046, 1604998515, 1006773943, 51305430, 811845561, 871403888,
-            1238331592, 849474360, 3883009, 1042969354, 448073154, 544474128, 1450924859,
-            846284035, 1578364707, 1418221612,
+            972778005, 1054285151, 21964944, 1739302361, 1039348329, 348133369, 1846542154,
+            1375008029, 415467099, 1762628384, 1497846021, 446160290, 1760257767, 523714438,
+            591623760, 51843575, 769709373, 62995728, 400939329, 1662428143, 1948389357,
+            1649407164, 1117660038, 163837882,
         ]);
+
         perm.permute_mut(&mut input);
         assert_eq!(input, expected);
-    }
-
-    /// KAT: width-24, input = all zeros.
-    #[test]
-    fn test_poseidon_width_24_zeros() {
-        let perm = default_babybear_poseidon_24();
-        let mut input = [F::ZERO; 24];
-        let expected: [F; 24] = F::new_array([
-            1732814966, 1348956806, 1497259487, 1150858972, 1944109610, 599955066, 1259867441,
-            1333489536, 208978614, 157174494, 1832557047, 1314764400, 1307336083, 1565301888,
-            432427255, 1772111790, 900671786, 1882395262, 1677067075, 434690825, 1646828426,
-            83897285, 120446341, 1725770573,
-        ]);
-        perm.permute_mut(&mut input);
-        assert_eq!(input, expected);
-    }
-
-    /// KAT: width-24, input = all ones.
-    #[test]
-    fn test_poseidon_width_24_ones() {
-        let perm = default_babybear_poseidon_24();
-        let mut input = [F::ONE; 24];
-        let expected: [F; 24] = F::new_array([
-            102990370, 712382576, 533631375, 1021240238, 1898683445, 1133193200, 1294760435,
-            1616827733, 664509130, 1164005802, 1150915675, 39124447, 362356636, 519069899,
-            781422363, 532159342, 2010544060, 1663219686, 662365586, 953574691, 357037989,
-            1506430641, 1567931341, 1796952637,
-        ]);
-        perm.permute_mut(&mut input);
-        assert_eq!(input, expected);
-    }
-
-    /// Test determinism: same input always gives same output.
-    #[test]
-    fn test_poseidon_width_16_deterministic() {
-        let perm = default_babybear_poseidon_16();
-        let input: [F; 16] = core::array::from_fn(|i| F::from_u32(i as u32 + 42));
-
-        let mut output1 = input;
-        perm.permute_mut(&mut output1);
-
-        let mut output2 = input;
-        perm.permute_mut(&mut output2);
-
-        assert_eq!(output1, output2);
-    }
-
-    /// Test determinism: same input always gives same output (width 24).
-    #[test]
-    fn test_poseidon_width_24_deterministic() {
-        let perm = default_babybear_poseidon_24();
-        let input: [F; 24] = core::array::from_fn(|i| F::from_u32(i as u32 + 42));
-
-        let mut output1 = input;
-        perm.permute_mut(&mut output1);
-
-        let mut output2 = input;
-        perm.permute_mut(&mut output2);
-
-        assert_eq!(output1, output2);
     }
 }

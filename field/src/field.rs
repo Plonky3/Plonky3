@@ -639,6 +639,25 @@ pub trait Algebra<F>:
     + Mul<F, Output = Self>
     + MulAssign<F>
 {
+    /// Dot product between algebra elements and base field scalars.
+    ///
+    /// Given arrays `a` (algebra) and `f` (scalars), computes:
+    ///
+    /// ```text
+    ///   result = a[0]*f[0] + a[1]*f[1] + ... + a[N-1]*f[N-1]
+    /// ```
+    ///
+    /// Uses a tree-structured summation to minimize dependency chains and
+    /// maximize throughput on pipelined architectures.
+    #[must_use]
+    #[inline]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[F; N]) -> Self
+    where
+        F: Copy,
+    {
+        let products: [Self; N] = core::array::from_fn(|i| a[i].clone() * f[i]);
+        Self::sum_array::<N>(&products)
+    }
 }
 
 // Every ring is an algebra over itself.

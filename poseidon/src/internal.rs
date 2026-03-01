@@ -138,11 +138,17 @@ pub fn cheap_matmul<F: Field, A: Algebra<F>, const WIDTH: usize>(
     // Save state[0] before it is overwritten.
     let old_s0 = state[0].clone();
 
-    // Compute new state[0] = mds_0_0 * old_s0 + dot(ŵ, state[1..]).
-    state[0] = old_s0.clone() * mds_0_0;
-    for j in 0..(WIDTH - 1) {
-        state[0] += state[j + 1].clone() * w_hat[j];
-    }
+    // Compute the new first element as a dot product of the full state
+    // with the sparse matrix's first row coefficients.
+    let values: [A; WIDTH] = core::array::from_fn(|i| {
+        if i == 0 {
+            old_s0.clone()
+        } else {
+            state[i].clone()
+        }
+    });
+    let coeffs: [F; WIDTH] = core::array::from_fn(|i| if i == 0 { mds_0_0 } else { w_hat[i - 1] });
+    state[0] = A::mixed_dot_product(&values, &coeffs);
 
     // Update state[i] = state[i] + v[i-1] * old_s0, for i = 1..WIDTH.
     for i in 1..WIDTH {
