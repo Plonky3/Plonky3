@@ -98,6 +98,78 @@ impl InternalLayerParametersNeon<KoalaBearParameters, 24> for KoalaBearInternalL
     const NUM_POS: usize = 7;
 }
 
+impl InternalLayerParametersNeon<KoalaBearParameters, 32> for KoalaBearInternalLayerParameters {
+    type ArrayLike = [uint32x4_t; 31];
+
+    /// For the KoalaBear field and width 32 we multiply by the diagonal matrix:
+    /// D = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4,
+    ///      1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^10, 1/2^12, 1/2^14, 1/2^16, 1/2^24,
+    ///      -1/2^8, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^10, -1/2^12, -1/2^14, -1/2^16, -1/2^24]
+    ///
+    /// The inputs must be in canonical form, otherwise the result is undefined.
+    ///
+    /// Even when the inputs are in canonical form, we make no guarantees on the output except that, provided
+    /// the output is piped directly into add_sum, the vector will be modified such that x[i] = D[i]*x[i] + sum.
+    #[inline(always)]
+    unsafe fn diagonal_mul_remainder(input: &mut [uint32x4_t; 31]) {
+        unsafe {
+            // Positive coefficients
+            // input[8] -> input[8] / 2^8
+            input[8] = mul_2exp_neg_n_neon::<KoalaBearParameters, 8>(input[8]);
+            // input[9] -> input[9] / 2^2
+            input[9] = mul_2exp_neg_n_neon::<KoalaBearParameters, 2>(input[9]);
+            // input[10] -> input[10] / 2^3
+            input[10] = mul_2exp_neg_n_neon::<KoalaBearParameters, 3>(input[10]);
+            // input[11] -> input[11] / 2^4
+            input[11] = mul_2exp_neg_n_neon::<KoalaBearParameters, 4>(input[11]);
+            // input[12] -> input[12] / 2^5
+            input[12] = mul_2exp_neg_n_neon::<KoalaBearParameters, 5>(input[12]);
+            // input[13] -> input[13] / 2^6
+            input[13] = mul_2exp_neg_n_neon::<KoalaBearParameters, 6>(input[13]);
+            // input[14] -> input[14] / 2^10
+            input[14] = mul_2exp_neg_n_neon::<KoalaBearParameters, 10>(input[14]);
+            // input[15] -> input[15] / 2^12
+            input[15] = mul_2exp_neg_n_neon::<KoalaBearParameters, 12>(input[15]);
+            // input[16] -> input[16] / 2^14
+            input[16] = mul_2exp_neg_n_neon::<KoalaBearParameters, 14>(input[16]);
+            // input[17] -> input[17] / 2^16
+            input[17] = mul_2exp_neg_n_neon::<KoalaBearParameters, 16>(input[17]);
+            // input[18] -> input[18] / 2^24
+            input[18] = mul_2exp_neg_two_adicity_neon::<KoalaBearParameters, 24, 7>(input[18]);
+
+            // Negative coefficients
+            // input[19] -> input[19] / 2^8
+            input[19] = mul_2exp_neg_n_neon::<KoalaBearParameters, 8>(input[19]);
+            // input[20] -> input[20] / 2^3
+            input[20] = mul_2exp_neg_n_neon::<KoalaBearParameters, 3>(input[20]);
+            // input[21] -> input[21] / 2^4
+            input[21] = mul_2exp_neg_n_neon::<KoalaBearParameters, 4>(input[21]);
+            // input[22] -> input[22] / 2^5
+            input[22] = mul_2exp_neg_n_neon::<KoalaBearParameters, 5>(input[22]);
+            // input[23] -> input[23] / 2^6
+            input[23] = mul_2exp_neg_n_neon::<KoalaBearParameters, 6>(input[23]);
+            // input[24] -> input[24] / 2^7
+            input[24] = mul_2exp_neg_n_neon::<KoalaBearParameters, 7>(input[24]);
+            // input[25] -> input[25] / 2^9
+            input[25] = mul_2exp_neg_n_neon::<KoalaBearParameters, 9>(input[25]);
+            // input[26] -> input[26] / 2^10
+            input[26] = mul_2exp_neg_n_neon::<KoalaBearParameters, 10>(input[26]);
+            // input[27] -> input[27] / 2^12
+            input[27] = mul_2exp_neg_n_neon::<KoalaBearParameters, 12>(input[27]);
+            // input[28] -> input[28] / 2^14
+            input[28] = mul_2exp_neg_n_neon::<KoalaBearParameters, 14>(input[28]);
+            // input[29] -> input[29] / 2^16
+            input[29] = mul_2exp_neg_n_neon::<KoalaBearParameters, 16>(input[29]);
+            // input[30] -> input[30] / 2^24
+            input[30] = mul_2exp_neg_two_adicity_neon::<KoalaBearParameters, 24, 7>(input[30]);
+        }
+    }
+
+    /// There are 11 positive inverse powers of two after the -4:
+    /// 1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^10, 1/2^12, 1/2^14, 1/2^16, 1/2^24
+    const NUM_POS: usize = 11;
+}
+
 #[cfg(test)]
 mod tests {
     use p3_field::PrimeCharacteristicRing;
@@ -111,6 +183,7 @@ mod tests {
     type F = KoalaBear;
     type Perm16 = Poseidon2KoalaBear<16>;
     type Perm24 = Poseidon2KoalaBear<24>;
+    type Perm32 = Poseidon2KoalaBear<32>;
 
     /// A proptest strategy to generate an arbitrary field element.
     fn arb_f() -> impl Strategy<Value = F> {
@@ -149,6 +222,26 @@ mod tests {
         ) {
             let mut rng = SmallRng::seed_from_u64(1);
             let poseidon2 = Perm24::new_from_rng_128(&mut rng);
+
+            // Calculate expected (scalar) result.
+            let mut expected = input;
+            poseidon2.permute_mut(&mut expected);
+
+            // Calculate actual (NEON) result.
+            let mut neon_input = input.map(Into::<PackedKoalaBearNeon>::into);
+            poseidon2.permute_mut(&mut neon_input);
+            let neon_output = neon_input.map(|x| x.0[0]);
+
+            // Assert equality.
+            prop_assert_eq!(neon_output, expected, "NEON implementation did not match scalar reference");
+        }
+
+        #[test]
+        fn vectorized_permutation_matches_scalar_for_width_32(
+            input in prop::array::uniform32(arb_f())
+        ) {
+            let mut rng = SmallRng::seed_from_u64(1);
+            let poseidon2 = Perm32::new_from_rng_128(&mut rng);
 
             // Calculate expected (scalar) result.
             let mut expected = input;

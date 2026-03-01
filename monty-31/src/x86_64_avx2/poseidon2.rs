@@ -106,6 +106,47 @@ impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
     }
 }
 
+#[derive(Clone, Copy)]
+#[repr(C)] // This is needed to make `transmute`s safe.
+pub struct InternalLayer32<PMP: PackedMontyParameters> {
+    s0: PackedMontyField31AVX2<PMP>,
+    s_hi: [__m256i; 31],
+}
+
+impl<PMP: PackedMontyParameters> InternalLayer32<PMP> {
+    #[inline]
+    /// Convert from `InternalLayer32<PMP>` to `[PackedMontyField31AVX2<PMP>; 32]`
+    ///
+    /// SAFETY: The caller must ensure that each element of `s_hi` represents a valid `MontyField31<PMP>`.
+    /// In particular, each element of each vector must be in `[0, P)` (canonical form).
+    unsafe fn to_packed_field_array(self) -> [PackedMontyField31AVX2<PMP>; 32] {
+        unsafe {
+            // Safety: As described in packing.rs, PackedMontyField31AVX2<PMP> can be transmuted to and from `__m256i`.
+
+            // `InternalLayer32` is `repr(C)` so its memory layout looks like:
+            // `[PackedMontyField31AVX2<PMP>, __m256i, ..., __m256i]`
+            // Thus as `__m256i` can be can be transmuted to `PackedMontyField31AVX2<FP>`,
+            // `InternalLayer32` can be transmuted to `[PackedMontyField31AVX2<FP>; 32]`.
+            transmute(self)
+        }
+    }
+
+    #[inline]
+    #[must_use]
+    /// Convert from `[PackedMontyField31AVX2<PMP>; 32]` to `InternalLayer32<PMP>`
+    fn from_packed_field_array(vector: [PackedMontyField31AVX2<PMP>; 32]) -> Self {
+        unsafe {
+            // Safety: As described in packing.rs, PackedMontyField31AVX2<PMP> can be transmuted to and from `__m256i`.
+
+            // `InternalLayer32` is `repr(C)` so its memory layout looks like:
+            // `[PackedMontyField31AVX2<PMP>, __m256i, ..., __m256i]`
+            // Thus as `PackedMontyField31AVX2<FP>` can be can be transmuted to `__m256i`,
+            // `[PackedMontyField31AVX2<FP>; 32]` can be transmuted to `InternalLayer32`.
+            transmute(vector)
+        }
+    }
+}
+
 /// The internal layers of the Poseidon2 permutation for Monty31 fields.
 ///
 /// The packed constants are stored in negative form as this allows some optimizations.
@@ -444,6 +485,58 @@ where
             // This transformation is safe as the above function returns elements
             // in canonical form when given elements in canonical form.
             *state = InternalLayer24::to_packed_field_array(internal_state);
+        }
+    }
+}
+
+impl<FP, ILP, const D: u64> InternalLayer<PackedMontyField31AVX2<FP>, 32, D>
+    for Poseidon2InternalLayerMonty31<FP, 32, ILP>
+where
+    FP: FieldParameters + RelativelyPrimePower<D>,
+    ILP: InternalLayerParametersAVX2<FP, 32, ArrayLike = [__m256i; 31]>
+        + InternalLayerBaseParameters<FP, 32>,
+{
+    /// Perform the internal layers of the Poseidon2 permutation on the given state.
+    fn permute_state(&self, state: &mut [PackedMontyField31AVX2<FP>; 32]) {
+        unsafe {
+            // Safety: This return values in canonical form when given values in canonical form.
+
+            /*
+                Fix a vector v and let Diag(v) denote the diagonal matrix with diagonal given by v.
+                Additionally, let 1 denote the matrix with all elements equal to 1.
+                The internal layer consists of an sbox operation then a matrix multiplication by 1 + Diag(v).
+                Explicitly the internal layer consists of the following 2 operations:
+
+                s0 -> (s0 + rc)^d
+                s -> (1 + Diag(v))s
+
+                Note that this matrix multiplication is implemented as:
+                sum = sum_i s_i
+                s_i -> sum + s_iv_i.
+            */
+
+            let mut internal_state = InternalLayer32::from_packed_field_array(*state);
+
+            self.packed_internal_constants.iter().for_each(|&rc| {
+                add_rc_and_sbox::<FP, D>(&mut internal_state.s0, rc); // s0 -> (s0 + rc)^D
+                let sum_tail = PackedMontyField31AVX2::<FP>::sum_array::<31>(&transmute::<
+                    [__m256i; 31],
+                    [PackedMontyField31AVX2<FP>; 31],
+                >(
+                    internal_state.s_hi,
+                )); // Get the sum of all elements other than s0.
+                ILP::diagonal_mul(&mut internal_state.s_hi); // si -> vi * si for all i > 0.
+                let sum = sum_tail + internal_state.s0; // Get the full sum.
+                internal_state.s0 = sum_tail - internal_state.s0; // s0 -> sum - 2*s0 = sum_tail - s0.
+                ILP::add_sum(
+                    &mut internal_state.s_hi,
+                    transmute::<PackedMontyField31AVX2<FP>, __m256i>(sum),
+                ); // si -> si + sum for all i > 0.
+            });
+
+            // This transformation is safe as the above function returns elements
+            // in canonical form when given elements in canonical form.
+            *state = InternalLayer32::to_packed_field_array(internal_state);
         }
     }
 }

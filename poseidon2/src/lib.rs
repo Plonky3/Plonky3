@@ -24,7 +24,7 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 pub use round_numbers::poseidon2_round_numbers_128;
 
-const SUPPORTED_WIDTHS: [usize; 8] = [2, 3, 4, 8, 12, 16, 20, 24];
+const SUPPORTED_WIDTHS: [usize; 9] = [2, 3, 4, 8, 12, 16, 20, 24, 32];
 
 /// The Poseidon2 permutation.
 #[derive(Clone, Debug)]
