@@ -221,6 +221,41 @@ mod babybear_fri_pcs {
     mod high_arity_blowup_1 {
         make_tests_for_pcs!(super::get_pcs_high_arity(1));
     }
+
+    #[test]
+    fn extrapolation() {
+        use p3_dft::TwoAdicSubgroupDft;
+        use p3_matrix::Matrix;
+
+        let (pcs, _) = get_pcs(1);
+        let mut rng = seeded_rng();
+
+        let log_degree = 4;
+        let degree = 1 << log_degree;
+        let width = 3;
+        let trace = RowMajorMatrix::<Val>::rand(&mut rng, degree, width);
+
+        let domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, degree);
+        let (_, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(domain, trace.clone())]);
+
+        let disjoint_domain = domain.create_disjoint_domain(degree);
+        let evals = <MyPcs as Pcs<Challenge, Challenger>>::get_evaluations_on_domain(
+            &pcs,
+            &data,
+            0,
+            disjoint_domain,
+        );
+        let evals = evals.to_row_major_matrix();
+
+        let dft = Dft::default();
+        let coeffs = dft.idft_batch(trace);
+        let expected = dft
+            .coset_dft_batch(coeffs, disjoint_domain.shift())
+            .to_row_major_matrix();
+
+        assert_eq!(evals, expected);
+    }
 }
 
 mod m31_fri_pcs {
