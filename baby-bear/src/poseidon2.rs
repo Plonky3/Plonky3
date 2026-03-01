@@ -227,20 +227,13 @@ impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLay
         state[6] = sum.clone() - state[6].halve();
         state[7] = sum.clone() - (state[7].double() + state[7].clone());
         state[8] = sum.clone() - state[8].double().double();
-        state[9] = state[9].div_2exp_u64(8);
-        state[9] += sum.clone();
-        state[10] = state[10].div_2exp_u64(2);
-        state[10] += sum.clone();
-        state[11] = state[11].div_2exp_u64(3);
-        state[11] += sum.clone();
-        state[12] = state[12].div_2exp_u64(27);
-        state[12] += sum.clone();
-        state[13] = state[13].div_2exp_u64(8);
-        state[13] = sum.clone() - state[13].clone();
-        state[14] = state[14].div_2exp_u64(4);
-        state[14] = sum.clone() - state[14].clone();
-        state[15] = state[15].div_2exp_u64(27);
-        state[15] = sum - state[15].clone();
+        state[9] = state[9].div_2exp_u64(8) + sum.clone();
+        state[10] = state[10].div_2exp_u64(2) + sum.clone();
+        state[11] = state[11].div_2exp_u64(3) + sum.clone();
+        state[12] = state[12].div_2exp_u64(27) + sum.clone();
+        state[13] = sum.clone() - state[13].div_2exp_u64(8);
+        state[14] = sum.clone() - state[14].div_2exp_u64(4);
+        state[15] = sum - state[15].div_2exp_u64(27);
     }
 }
 
@@ -258,36 +251,21 @@ impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLay
         state[6] = sum.clone() - state[6].halve();
         state[7] = sum.clone() - (state[7].double() + state[7].clone());
         state[8] = sum.clone() - state[8].double().double();
-        state[9] = state[9].div_2exp_u64(8);
-        state[9] += sum.clone();
-        state[10] = state[10].div_2exp_u64(2);
-        state[10] += sum.clone();
-        state[11] = state[11].div_2exp_u64(3);
-        state[11] += sum.clone();
-        state[12] = state[12].div_2exp_u64(4);
-        state[12] += sum.clone();
-        state[13] = state[13].div_2exp_u64(7);
-        state[13] += sum.clone();
-        state[14] = state[14].div_2exp_u64(9);
-        state[14] += sum.clone();
-        state[15] = state[15].div_2exp_u64(27);
-        state[15] += sum.clone();
-        state[16] = state[16].div_2exp_u64(8);
-        state[16] = sum.clone() - state[16].clone();
-        state[17] = state[17].div_2exp_u64(2);
-        state[17] = sum.clone() - state[17].clone();
-        state[18] = state[18].div_2exp_u64(3);
-        state[18] = sum.clone() - state[18].clone();
-        state[19] = state[19].div_2exp_u64(4);
-        state[19] = sum.clone() - state[19].clone();
-        state[20] = state[20].div_2exp_u64(5);
-        state[20] = sum.clone() - state[20].clone();
-        state[21] = state[21].div_2exp_u64(6);
-        state[21] = sum.clone() - state[21].clone();
-        state[22] = state[22].div_2exp_u64(7);
-        state[22] = sum.clone() - state[22].clone();
-        state[23] = state[23].div_2exp_u64(27);
-        state[23] = sum - state[23].clone();
+        state[9] = state[9].div_2exp_u64(8) + sum.clone();
+        state[10] = state[10].div_2exp_u64(2) + sum.clone();
+        state[11] = state[11].div_2exp_u64(3) + sum.clone();
+        state[12] = state[12].div_2exp_u64(4) + sum.clone();
+        state[13] = state[13].div_2exp_u64(7) + sum.clone();
+        state[14] = state[14].div_2exp_u64(9) + sum.clone();
+        state[15] = state[15].div_2exp_u64(27) + sum.clone();
+        state[16] = sum.clone() - state[16].div_2exp_u64(8);
+        state[17] = sum.clone() - state[17].div_2exp_u64(2);
+        state[18] = sum.clone() - state[18].div_2exp_u64(3);
+        state[19] = sum.clone() - state[19].div_2exp_u64(4);
+        state[20] = sum.clone() - state[20].div_2exp_u64(5);
+        state[21] = sum.clone() - state[21].div_2exp_u64(6);
+        state[22] = sum.clone() - state[22].div_2exp_u64(7);
+        state[23] = sum - state[23].div_2exp_u64(27);
     }
 }
 
