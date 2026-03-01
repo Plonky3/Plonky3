@@ -408,11 +408,12 @@ pub(crate) fn compute_optimized_constants<F: Field, const N: usize>(
 #[cfg(test)]
 mod tests {
     use p3_baby_bear::BabyBear;
-    use p3_field::PrimeCharacteristicRing;
-    use rand::SeedableRng;
+    use p3_field::{InjectiveMonomial, PrimeCharacteristicRing};
     use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::cheap_matmul;
 
     type F = BabyBear;
 
@@ -420,12 +421,7 @@ mod tests {
     #[test]
     fn test_matrix_inverse_roundtrip() {
         let mut rng = SmallRng::seed_from_u64(42);
-        let m: [[F; 4]; 4] = core::array::from_fn(|_| {
-            core::array::from_fn(|_| {
-                use rand::RngExt;
-                rng.random()
-            })
-        });
+        let m: [[F; 4]; 4] = rng.random();
 
         let m_inv = matrix_inverse(&m);
         let product = matrix_mul(&m, &m_inv);
@@ -451,32 +447,18 @@ mod tests {
     /// a scalar constant, and the sparse matrix multiply.
     #[test]
     fn test_partial_rounds_equivalence_4x4() {
-        use p3_field::InjectiveMonomial;
-
         let mut rng = SmallRng::seed_from_u64(42);
-        let mds: [[F; 4]; 4] = core::array::from_fn(|_| {
-            core::array::from_fn(|_| {
-                use rand::RngExt;
-                rng.random()
-            })
-        });
+        let mds: [[F; 4]; 4] = rng.random();
         let rounds_p = 3;
 
-        let partial_rc: Vec<[F; 4]> = (0..rounds_p)
-            .map(|_| {
-                core::array::from_fn(|_| {
-                    use rand::RngExt;
-                    rng.random()
-                })
-            })
-            .collect();
+        let partial_rc: Vec<[F; 4]> = (0..rounds_p).map(|_| rng.random()).collect();
 
         let mds_inv = matrix_inverse(&mds);
 
         let (first_rc, opt_rc) = equivalent_round_constants::<F, 4>(&partial_rc, &mds_inv);
         let (m_i, v_coll, w_hat_coll) = compute_equivalent_matrices::<F, 4>(&mds, rounds_p);
 
-        let input: [F; 4] = core::array::from_fn(|i| F::from_u32(i as u32 + 1));
+        let input: [F; 4] = rng.random();
 
         // Textbook partial rounds: add full constant vector, S-box on first element,
         // then dense MDS multiply.
@@ -501,7 +483,7 @@ mod tests {
             if r < rounds_p - 1 {
                 opt_state[0] += opt_rc[r];
             }
-            crate::internal::cheap_matmul(&mut opt_state, mds[0][0], &v_coll[r], &w_hat_coll[r]);
+            cheap_matmul(&mut opt_state, mds[0][0], &v_coll[r], &w_hat_coll[r]);
         }
 
         assert_eq!(
