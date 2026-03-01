@@ -131,7 +131,7 @@ impl<F: PrimeField, const WIDTH: usize> PoseidonConstants<F, WIDTH> {
         let mds: [[F; WIDTH]; WIDTH] = utils::circulant_to_dense(&self.mds_circ_col);
 
         // Compress round constants and factor MDS into sparse matrices.
-        let (first_round_constants, opt_partial_rc, m_i, sparse_v, sparse_w_hat) =
+        let (first_round_constants, opt_partial_rc, m_i, sparse_v, sparse_first_row) =
             utils::compute_optimized_constants::<F, WIDTH>(&mds, rounds_p, &partial_rc);
 
         let full_constants = FullRoundConstants {
@@ -142,9 +142,8 @@ impl<F: PrimeField, const WIDTH: usize> PoseidonConstants<F, WIDTH> {
         let partial_constants = PartialRoundConstants {
             first_round_constants,
             m_i,
-            mds_0_0: mds[0][0],
+            sparse_first_row,
             v: sparse_v,
-            w_hat: sparse_w_hat,
             round_constants: opt_partial_rc,
         };
 
@@ -245,7 +244,7 @@ where
         let terminal_rc = round_constants[half_f + num_partial_rounds..].to_vec();
 
         // Compute optimized sparse constants.
-        let (first_round_constants, opt_partial_rc, m_i, sparse_v, sparse_w_hat) =
+        let (first_round_constants, opt_partial_rc, m_i, sparse_v, sparse_first_row) =
             utils::compute_optimized_constants::<F, WIDTH>(
                 &dense_mds,
                 num_partial_rounds,
@@ -260,9 +259,8 @@ where
         let partial_constants = PartialRoundConstants {
             first_round_constants,
             m_i,
-            mds_0_0: dense_mds[0][0],
+            sparse_first_row,
             v: sparse_v,
-            w_hat: sparse_w_hat,
             round_constants: opt_partial_rc,
         };
 

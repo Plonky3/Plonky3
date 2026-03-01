@@ -70,22 +70,26 @@ pub struct PartialRoundConstants<F, const WIDTH: usize> {
     /// sparse matrix decomposition, transposed to match the HorizenLabs convention.
     pub m_i: [[F; WIDTH]; WIDTH],
 
-    /// Top-left element of the original MDS matrix: `MDS[0][0]`.
+    /// Per-round full first row of the sparse matrix, pre-assembled for
+    /// branch-free dot product computation.
     ///
-    /// Used as the scalar coefficient for `state[0]` in each sparse matrix multiply.
-    pub mds_0_0: F,
+    /// `sparse_first_row[r] = [mds_0_0, ŵ_r[0], ŵ_r[1], ..., ŵ_r[WIDTH-2]]`
+    ///
+    /// where `mds_0_0` is the top-left entry of the original MDS matrix (same for
+    /// all rounds) and `ŵ_r` is the per-round first-row vector from the sparse
+    /// factorization.
+    ///
+    /// Length = RP. Stored in forward application order.
+    pub sparse_first_row: Vec<[F; WIDTH]>,
 
     /// Per-round first-column vectors for the sparse matrix multiply
     /// (excluding the `[0,0]` entry).
     ///
-    /// Length = RP. Stored in forward application order.
-    pub v: Vec<Vec<F>>,
-
-    /// Per-round first-row vectors for the sparse matrix multiply
-    /// (excluding the `[0,0]` entry).
+    /// `v[r]` has WIDTH elements: `[v_r[0], v_r[1], ..., v_r[WIDTH-2], 0]`.
+    /// Only the first WIDTH-1 entries are meaningful; the last is padding.
     ///
     /// Length = RP. Stored in forward application order.
-    pub w_hat: Vec<Vec<F>>,
+    pub v: Vec<[F; WIDTH]>,
 
     /// Optimized scalar round constants for partial rounds 0 through RP-2.
     ///
@@ -126,31 +130,26 @@ where
 ///       └─────────┴──────┘
 /// ```
 ///
+/// `first_row` contains the pre-assembled full first row `[mds_0_0, ŵ[0], ..., ŵ[WIDTH-2]]`,
+/// enabling a branch-free dot product for the new `state[0]`.
+///
+/// `v` contains the first-column vector (excluding `[0,0]`): `[v[0], ..., v[WIDTH-2], 0]`.
+///
 /// The identity block means `state[1..]` is updated by a simple rank-1 correction
 /// (add a multiple of the old `state[0]`), and `state[0]` is a dot product.
-#[inline]
+#[inline(always)]
 pub fn cheap_matmul<F: Field, A: Algebra<F>, const WIDTH: usize>(
     state: &mut [A; WIDTH],
-    mds_0_0: F,
-    v: &[F],
-    w_hat: &[F],
+    first_row: &[F; WIDTH],
+    v: &[F; WIDTH],
 ) {
     // Save state[0] before it is overwritten.
     let old_s0 = state[0].clone();
 
-    // Compute the new first element as a dot product of the full state
-    // with the sparse matrix's first row coefficients.
-    let values: [A; WIDTH] = core::array::from_fn(|i| {
-        if i == 0 {
-            old_s0.clone()
-        } else {
-            state[i].clone()
-        }
-    });
-    let coeffs: [F; WIDTH] = core::array::from_fn(|i| if i == 0 { mds_0_0 } else { w_hat[i - 1] });
-    state[0] = A::mixed_dot_product(&values, &coeffs);
+    // Compute new state[0] = dot(first_row, state).
+    state[0] = A::mixed_dot_product(state, first_row);
 
-    // Update state[i] = state[i] + v[i-1] * old_s0, for i = 1..WIDTH.
+    // Rank-1 update: state[i] += v[i-1] * old_s0, for i = 1..WIDTH.
     for i in 1..WIDTH {
         state[i] += old_s0.clone() * v[i - 1];
     }
@@ -177,23 +176,26 @@ pub fn partial_permute_state<
     // Apply the dense transition matrix m_i (once).
     mds_multiply(state, &constants.m_i);
 
-    // Partial round loop (RP iterations).
-    let rounds_p = constants.v.len();
-    for r in 0..rounds_p {
+    let rounds_p = constants.sparse_first_row.len();
+
+    // Partial rounds 0..RP-2: S-box + scalar RC + sparse matmul.
+    // The last round is handled separately to avoid a branch per iteration.
+    for r in 0..rounds_p - 1 {
         // S-box on state[0] only.
         state[0] = state[0].injective_exp_n();
 
-        // Add scalar round constant (all rounds except the last).
-        if r < rounds_p - 1 {
-            state[0] += constants.round_constants[r];
-        }
+        // Add scalar round constant.
+        state[0] += constants.round_constants[r];
 
         // Sparse matrix multiply.
-        cheap_matmul(
-            state,
-            constants.mds_0_0,
-            &constants.v[r],
-            &constants.w_hat[r],
-        );
+        cheap_matmul(state, &constants.sparse_first_row[r], &constants.v[r]);
     }
+
+    // Last partial round: S-box + sparse matmul (no round constant).
+    state[0] = state[0].injective_exp_n();
+    cheap_matmul(
+        state,
+        &constants.sparse_first_row[rounds_p - 1],
+        &constants.v[rounds_p - 1],
+    );
 }

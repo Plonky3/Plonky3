@@ -261,9 +261,9 @@ fn submatrix_inverse<F: Field, const N: usize>(m: &[[F; N]; N]) -> Vec<Vec<F>> {
 fn compute_equivalent_matrices<F: Field, const N: usize>(
     mds: &[[F; N]; N],
     rounds_p: usize,
-) -> ([[F; N]; N], Vec<Vec<F>>, Vec<Vec<F>>) {
-    let mut w_hat_collection = Vec::with_capacity(rounds_p);
-    let mut v_collection = Vec::with_capacity(rounds_p);
+) -> ([[F; N]; N], Vec<[F; N]>, Vec<[F; N]>) {
+    let mut w_hat_collection: Vec<[F; N]> = Vec::with_capacity(rounds_p);
+    let mut v_collection: Vec<[F; N]> = Vec::with_capacity(rounds_p);
 
     // Work on M^T (HorizenLabs convention).
     let mds_t = matrix_transpose(mds);
@@ -273,7 +273,11 @@ fn compute_equivalent_matrices<F: Field, const N: usize>(
     for _ in 0..rounds_p {
         // Extract v = first row of m_mul (excluding [0,0]).
         // In the transposed domain, this corresponds to the first column of M''.
-        let v: Vec<F> = (1..N).map(|j| m_mul[0][j]).collect();
+        // Stored in a flat [F; N] array, padded with zero at index N-1.
+        let mut v_arr = [F::ZERO; N];
+        for j in 0..N - 1 {
+            v_arr[j] = m_mul[0][j + 1];
+        }
 
         // Extract w = first column of m_mul (excluding [0,0]).
         let w: Vec<F> = (1..N).map(|i| m_mul[i][0]).collect();
@@ -282,18 +286,18 @@ fn compute_equivalent_matrices<F: Field, const N: usize>(
         let m_hat_inv = submatrix_inverse::<F, N>(&m_mul);
 
         // Compute ŵ = M̂^{-1} * w (Eq. 5 in the paper).
-        let w_hat: Vec<F> = (0..N - 1)
-            .map(|i| {
-                let mut sum = F::ZERO;
-                for j in 0..N - 1 {
-                    sum += m_hat_inv[i][j] * w[j];
-                }
-                sum
-            })
-            .collect();
+        // Stored in a flat [F; N] array, padded with zero at index N-1.
+        let mut w_hat_arr = [F::ZERO; N];
+        for i in 0..N - 1 {
+            let mut sum = F::ZERO;
+            for j in 0..N - 1 {
+                sum += m_hat_inv[i][j] * w[j];
+            }
+            w_hat_arr[i] = sum;
+        }
 
-        v_collection.push(v);
-        w_hat_collection.push(w_hat);
+        v_collection.push(v_arr);
+        w_hat_collection.push(w_hat_arr);
 
         // Build m_i: identity-like matrix (zero out first row/column, set [0,0] = 1).
         // This is the M' factor that gets absorbed into the next iteration.
