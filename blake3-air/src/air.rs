@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 
@@ -229,8 +230,8 @@ impl<F> BaseAir<F> for Blake3Air {
         NUM_BLAKE3_COLS
     }
 
-    fn main_uses_next_row(&self) -> bool {
-        false
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        vec![]
     }
 }
 

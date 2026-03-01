@@ -301,7 +301,7 @@ where
         .expect("domain should support next_point operation");
 
     let is_random = opt_r_data.is_some();
-    let main_next = air.main_uses_next_row();
+    let main_next = !air.main_next_row_columns().is_empty();
     let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
         let round0 = opt_r_data.as_ref().map(|r_data| (r_data, vec![vec![zeta]]));
         let round1_points = if main_next {
