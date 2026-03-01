@@ -161,7 +161,12 @@ where
         .preprocessed_next
         .as_ref()
         .map_or(0, |v| v.len());
-    if preprocessed_width != preprocessed_local_len || preprocessed_width != preprocessed_next_len {
+    let expected_next_len = if air.preprocessed_uses_next_row() {
+        preprocessed_width
+    } else {
+        0
+    };
+    if preprocessed_width != preprocessed_local_len || expected_next_len != preprocessed_next_len {
         // Verifier expects preprocessed trace while proof does not have it, or vice versa
         return Err(VerificationError::InvalidProofShape);
     }
@@ -259,6 +264,7 @@ where
 
     let air_width = A::width(air);
     let main_next = air.main_uses_next_row();
+    let pre_next = air.preprocessed_uses_next_row();
     let trace_next_ok = if main_next {
         opened_values
             .trace_next
@@ -362,15 +368,18 @@ where
 
     // Add preprocessed commitment verification if present
     if preprocessed_width > 0 {
+        let mut pre_points = vec![
+            (zeta, opened_values.preprocessed_local.clone().unwrap()),
+        ];
+        if pre_next {
+            pre_points.push((
+                zeta_next,
+                opened_values.preprocessed_next.clone().unwrap(),
+            ));
+        }
         coms_to_verify.push((
             preprocessed_commit.unwrap(),
-            vec![(
-                trace_domain,
-                vec![
-                    (zeta, opened_values.preprocessed_local.clone().unwrap()),
-                    (zeta_next, opened_values.preprocessed_next.clone().unwrap()),
-                ],
-            )],
+            vec![(trace_domain, pre_points)],
         ));
     }
 
@@ -391,12 +400,21 @@ where
             &zeros
         }
     };
+    let pre_next_zeros;
+    let preprocessed_next_for_verify = match &opened_values.preprocessed_next {
+        Some(v) => Some(v.as_slice()),
+        None if preprocessed_width > 0 => {
+            pre_next_zeros = vec![SC::Challenge::ZERO; preprocessed_width];
+            Some(pre_next_zeros.as_slice())
+        }
+        None => None,
+    };
     verify_constraints::<SC, A, PcsError<SC>>(
         air,
         &opened_values.trace_local,
         trace_next_slice,
         opened_values.preprocessed_local.as_deref(),
-        opened_values.preprocessed_next.as_deref(),
+        preprocessed_next_for_verify,
         public_values,
         init_trace_domain,
         zeta,

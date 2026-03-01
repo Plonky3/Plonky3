@@ -302,6 +302,7 @@ where
 
     let is_random = opt_r_data.is_some();
     let main_next = air.main_uses_next_row();
+    let pre_next = air.preprocessed_uses_next_row();
     let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
         let round0 = opt_r_data.as_ref().map(|r_data| (r_data, vec![vec![zeta]]));
         let round1_points = if main_next {
@@ -311,7 +312,14 @@ where
         };
         let round1 = (&trace_data, vec![round1_points]);
         let round2 = (&quotient_data, vec![vec![zeta]; num_quotient_chunks]); // open every chunk at zeta
-        let round3 = preprocessed_data_ref.map(|data| (data, vec![vec![zeta, zeta_next]]));
+        let round3 = preprocessed_data_ref.map(|data| {
+            let pre_points = if pre_next {
+                vec![zeta, zeta_next]
+            } else {
+                vec![zeta]
+            };
+            (data, vec![pre_points])
+        });
 
         let rounds = round0
             .into_iter()
@@ -339,10 +347,13 @@ where
         None
     };
     let (preprocessed_local, preprocessed_next) = if preprocessed_width > 0 {
-        (
-            Some(opened_values[SC::Pcs::PREPROCESSED_TRACE_IDX][0][0].clone()),
-            Some(opened_values[SC::Pcs::PREPROCESSED_TRACE_IDX][0][1].clone()),
-        )
+        let local = Some(opened_values[SC::Pcs::PREPROCESSED_TRACE_IDX][0][0].clone());
+        let next = if pre_next {
+            Some(opened_values[SC::Pcs::PREPROCESSED_TRACE_IDX][0][1].clone())
+        } else {
+            None
+        };
+        (local, next)
     } else {
         (None, None)
     };
