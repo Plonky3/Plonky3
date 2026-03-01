@@ -1,9 +1,7 @@
 use core::array;
-use core::borrow::Borrow;
 
-use p3_air::{Air, AirBuilder, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -41,12 +39,8 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         eval_round_flags(builder);
 
         let main = builder.main();
-        let (local, next) = (
-            main.row_slice(0).expect("The matrix is empty?"),
-            main.row_slice(1).expect("The matrix only has 1 row?"),
-        );
-        let local: &KeccakCols<AB::Var> = (*local).borrow();
-        let next: &KeccakCols<AB::Var> = (*next).borrow();
+        let local: &KeccakCols<AB::Var> = main.local_as();
+        let next: &KeccakCols<AB::Var> = main.next_as();
 
         let first_step = local.step_flags[0].clone();
         let final_step = local.step_flags[NUM_ROUNDS_MIN_1].clone();

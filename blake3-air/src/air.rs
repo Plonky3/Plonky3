@@ -1,11 +1,9 @@
 use alloc::vec::Vec;
-use core::borrow::Borrow;
 
 use itertools::izip;
 use p3_air::utils::{add2, add3, pack_bits_le, xor_32_shift};
-use p3_air::{Air, AirBuilder, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -238,8 +236,7 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
     #[inline]
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let local = main.row_slice(0).expect("The matrix is empty?");
-        let local: &Blake3Cols<AB::Var> = (*local).borrow();
+        let local: &Blake3Cols<AB::Var> = main.local_as();
 
         let initial_row_3 = [
             local.counter_low.clone(),

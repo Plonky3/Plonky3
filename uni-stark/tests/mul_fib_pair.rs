@@ -1,6 +1,6 @@
 use core::borrow::Borrow;
 
-use p3_air::{Air, AirBuilder, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
@@ -8,7 +8,6 @@ use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeField64};
 use p3_fri::{HidingFriPcs, TwoAdicFriPcs, create_test_fri_params};
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -60,13 +59,9 @@ where
         let main = builder.main();
         let preprocessed = builder.preprocessed().expect("Preprocessed is empty?");
 
-        let local_slice = main.row_slice(0).expect("Matrix is empty?");
-        let next_slice = main.row_slice(1).expect("Matrix only has 1 row?");
-        let prep_slice = preprocessed.row_slice(0).expect("Preprocessed is empty?");
-
-        let local: &MulFibPairRow<AB::Var> = (*local_slice).borrow();
-        let next: &MulFibPairRow<AB::Var> = (*next_slice).borrow();
-        let prep: &PreprocessedRow<AB::Var> = (*prep_slice).borrow();
+        let local: &MulFibPairRow<AB::Var> = main.local_as();
+        let next: &MulFibPairRow<AB::Var> = main.next_as();
+        let prep: &PreprocessedRow<AB::Var> = preprocessed.local_as();
 
         let mut when_transition = builder.when_transition();
 

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use p3_air::AirBuilder;
 use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
+use p3_air::{AirBuilder, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
@@ -12,7 +12,6 @@ use p3_field::{Field, PrimeCharacteristicRing};
 use p3_fri::TwoAdicFriPcs;
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::lookup_traits::{Direction, Kind, Lookup, LookupData, LookupGadget};
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -44,7 +43,7 @@ fn random_main_trace(height: usize, width: usize, rng: &mut SmallRng) -> RowMajo
 fn build_lookups(num_lookups: usize, tuple_size: usize, trace_width: usize) -> Vec<Lookup<F>> {
     let symbolic_builder = SymbolicAirBuilder::<F>::new(0, trace_width, 0, 0, 0);
     let symbolic_main = symbolic_builder.main();
-    let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
+    let symbolic_main_local = symbolic_main.local_slice();
 
     let cols_per_lookup = 2 * tuple_size + 1;
 

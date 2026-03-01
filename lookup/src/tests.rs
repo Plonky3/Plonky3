@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 
 use p3_air::lookup::LookupEvaluator;
 use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
-use p3_air::{Air, AirBuilder, BaseAir, ExtensionBuilder, PermutationAirBuilder};
+use p3_air::{Air, AirBuilder, BaseAir, ExtensionBuilder, PermutationAirBuilder, WindowAccess};
 use p3_baby_bear::BabyBear;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
@@ -180,9 +180,8 @@ impl AirBuilder for MockAirBuilder {
         F::from_bool(self.current_row == self.height - 1)
     }
 
-    fn is_transition_window(&self, size: usize) -> Self::Expr {
-        assert!(size > 0);
-        F::from_bool(self.current_row < self.height - (size - 1))
+    fn is_transition(&self) -> Self::Expr {
+        F::from_bool(self.current_row < self.height - 1)
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
@@ -278,7 +277,7 @@ where
             SymbolicAirBuilder::<F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
 
         let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
+        let symbolic_main_local = symbolic_main.local_slice();
 
         // Perform each lookup independently using LookupContext
         (0..self.num_lookups)
@@ -514,7 +513,7 @@ fn test_symbolic_to_expr() {
 
     let main = builder.main();
 
-    let (local, next) = (main.row_slice(0).unwrap(), main.row_slice(1).unwrap());
+    let (local, next) = (main.local_slice(), main.next_slice());
 
     let mul = local[0] * next[1];
     let add = local[0] + next[1];
@@ -661,7 +660,7 @@ fn test_debug_util_detects_malformed_lookup() {
     let main_trace = RowMajorMatrix::new(main_values, 1);
 
     let builder = SymbolicAirBuilder::<F>::new(0, 1, 0, 0, 0);
-    let expr = builder.main().row_slice(0).unwrap()[0];
+    let expr = builder.main().local(0);
 
     // One local lookup with a single tuple; multiplicity is always +1,
     // so the total multiset count is non-zero.
@@ -1165,7 +1164,7 @@ where
             SymbolicAirBuilder::<F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
 
         let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
+        let symbolic_main_local = symbolic_main.local_slice();
 
         // Extract columns for thelookup entries: [inp1, inp2, sum]
         let inp1 = symbolic_main_local[0];

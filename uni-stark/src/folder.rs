@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_air::AirBuilder;
+use p3_air::{AirBuilder, RowWindow};
 use p3_field::{BasedVectorSpace, PackedField};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
@@ -65,16 +65,20 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     type F = Val<SC>;
     type Expr = PackedVal<SC>;
     type Var = PackedVal<SC>;
-    type M = RowMajorMatrixView<'a, PackedVal<SC>>;
     type PublicVar = Val<SC>;
+    type M = RowWindow<'a, PackedVal<SC>>;
 
     #[inline]
     fn main(&self) -> Self::M {
-        self.main
+        let w = self.main.width;
+        RowWindow::new(&self.main.values[..w], &self.main.values[w..])
     }
 
     fn preprocessed(&self) -> Option<Self::M> {
-        self.preprocessed
+        self.preprocessed.map(|p| {
+            let w = p.width;
+            RowWindow::new(&p.values[..w], &p.values[w..])
+        })
     }
 
     #[inline]
@@ -92,17 +96,9 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
         self.is_last_row
     }
 
-    /// Returns an expression indicating rows where transition constraints should be checked.
-    ///
-    /// # Panics
-    /// This function panics if `size` is not `2`.
     #[inline]
-    fn is_transition_window(&self, size: usize) -> Self::Expr {
-        if size == 2 {
-            self.is_transition
-        } else {
-            panic!("uni-stark only supports a window size of 2")
-        }
+    fn is_transition(&self) -> Self::Expr {
+        self.is_transition
     }
 
     #[inline]
@@ -128,15 +124,16 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
     type F = Val<SC>;
     type Expr = SC::Challenge;
     type Var = SC::Challenge;
-    type M = ViewPair<'a, SC::Challenge>;
     type PublicVar = Val<SC>;
+    type M = RowWindow<'a, SC::Challenge>;
 
     fn main(&self) -> Self::M {
-        self.main
+        RowWindow::new(self.main.top.values, self.main.bottom.values)
     }
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.preprocessed
+            .map(|p| RowWindow::new(p.top.values, p.bottom.values))
     }
 
     fn public_values(&self) -> &[Self::PublicVar] {
@@ -151,16 +148,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
         self.is_last_row
     }
 
-    /// Returns an expression indicating rows where transition constraints should be checked.
-    ///
-    /// # Panics
-    /// This function panics if `size` is not `2`.
-    fn is_transition_window(&self, size: usize) -> Self::Expr {
-        if size == 2 {
-            self.is_transition
-        } else {
-            panic!("uni-stark only supports a window size of 2")
-        }
+    fn is_transition(&self) -> Self::Expr {
+        self.is_transition
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
