@@ -362,8 +362,8 @@ mod tests {
 
             // Transition constraint: next == current + 1 for every column.
             for col in 0..W {
-                let current = main.local()[col];
-                let next = main.next()[col];
+                let current = main.local(col);
+                let next = main.next(col);
                 builder.when_transition().assert_eq(next, current + F::ONE);
             }
 
@@ -371,7 +371,7 @@ mod tests {
             let public_values = builder.public_values;
             let mut when_last = builder.when(builder.is_last_row);
             for (i, &pv) in public_values.iter().enumerate().take(W) {
-                when_last.assert_eq(main.local()[i], pv);
+                when_last.assert_eq(main.local(i), pv);
             }
         }
     }
@@ -482,7 +482,7 @@ mod tests {
         fn eval(&self, builder: &mut DebugConstraintBuilder<'_, F>) {
             let main = builder.main();
             for col in 0..W {
-                builder.assert_zero(main.local()[col]);
+                builder.assert_zero(main.local(col));
             }
         }
     }

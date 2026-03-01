@@ -173,8 +173,8 @@ where
             Entry::Main { offset } => {
                 let main = builder.main();
                 match offset {
-                    0 => main.local()[v.index].clone().into(),
-                    1 => main.next()[v.index].clone().into(),
+                    0 => main.local(v.index).into(),
+                    1 => main.next(v.index).into(),
                     _ => panic!("Cannot have expressions involving more than two rows."),
                 }
             }
@@ -184,8 +184,8 @@ where
                     .preprocessed()
                     .expect("Missing preprocessed columns");
                 match offset {
-                    0 => prep.local()[v.index].clone().into(),
-                    1 => prep.next()[v.index].clone().into(),
+                    0 => prep.local(v.index).into(),
+                    1 => prep.next(v.index).into(),
                     _ => panic!("Cannot have expressions involving more than two rows."),
                 }
             }

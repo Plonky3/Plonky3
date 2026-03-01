@@ -1,5 +1,4 @@
 use core::array;
-use core::borrow::Borrow;
 
 use p3_air::{AirBuilder, WindowAccess};
 
@@ -23,8 +22,8 @@ pub(crate) fn eval_round_flags<AB: AirBuilder>(builder: &mut AB) {
     let main = builder.main();
 
     // Cast slices into typed Keccak column references.
-    let local: &KeccakCols<AB::Var> = main.local().borrow();
-    let next: &KeccakCols<AB::Var> = main.next().borrow();
+    let local: &KeccakCols<AB::Var> = main.local_as();
+    let next: &KeccakCols<AB::Var> = main.next_as();
 
     // Initially, the first step flag should be 1 while the others should be 0.
     //

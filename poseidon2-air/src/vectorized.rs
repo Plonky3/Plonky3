@@ -269,7 +269,7 @@ impl<
             HALF_FULL_ROUNDS,
             PARTIAL_ROUNDS,
             VECTOR_LEN,
-        > = main.local().borrow();
+        > = main.local_as();
         for perm in &local.cols {
             eval(&self.air, builder, perm);
         }

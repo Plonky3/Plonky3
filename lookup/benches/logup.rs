@@ -43,7 +43,7 @@ fn random_main_trace(height: usize, width: usize, rng: &mut SmallRng) -> RowMajo
 fn build_lookups(num_lookups: usize, tuple_size: usize, trace_width: usize) -> Vec<Lookup<F>> {
     let symbolic_builder = SymbolicAirBuilder::<F>::new(0, trace_width, 0, 0, 0);
     let symbolic_main = symbolic_builder.main();
-    let symbolic_main_local = symbolic_main.local();
+    let symbolic_main_local = symbolic_main.local_slice();
 
     let cols_per_lookup = 2 * tuple_size + 1;
 
