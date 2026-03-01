@@ -274,10 +274,8 @@ fn compute_equivalent_matrices<F: Field, const N: usize>(
         // Extract v = first row of m_mul (excluding [0,0]).
         // In the transposed domain, this corresponds to the first column of M''.
         // Stored in a flat [F; N] array, padded with zero at index N-1.
-        let mut v_arr = [F::ZERO; N];
-        for j in 0..N - 1 {
-            v_arr[j] = m_mul[0][j + 1];
-        }
+        let v_arr: [F; N] =
+            core::array::from_fn(|j| if j < N - 1 { m_mul[0][j + 1] } else { F::ZERO });
 
         // Extract w = first column of m_mul (excluding [0,0]).
         let w: Vec<F> = (1..N).map(|i| m_mul[i][0]).collect();
@@ -287,14 +285,13 @@ fn compute_equivalent_matrices<F: Field, const N: usize>(
 
         // Compute ŵ = M̂^{-1} * w (Eq. 5 in the paper).
         // Stored in a flat [F; N] array, padded with zero at index N-1.
-        let mut w_hat_arr = [F::ZERO; N];
-        for i in 0..N - 1 {
-            let mut sum = F::ZERO;
-            for j in 0..N - 1 {
-                sum += m_hat_inv[i][j] * w[j];
+        let w_hat_arr: [F; N] = core::array::from_fn(|i| {
+            if i < N - 1 {
+                m_hat_inv[i].iter().zip(w.iter()).map(|(&a, &b)| a * b).sum()
+            } else {
+                F::ZERO
             }
-            w_hat_arr[i] = sum;
-        }
+        });
 
         v_collection.push(v_arr);
         w_hat_collection.push(w_hat_arr);
@@ -396,16 +393,25 @@ pub(crate) fn compute_optimized_constants<F: Field, const N: usize>(
     mds: &[[F; N]; N],
     rounds_p: usize,
     partial_rc: &[[F; N]],
-) -> ([F; N], Vec<F>, [[F; N]; N], Vec<Vec<F>>, Vec<Vec<F>>) {
+) -> ([F; N], Vec<F>, [[F; N]; N], Vec<[F; N]>, Vec<[F; N]>) {
     let mds_inv = matrix_inverse(mds);
     let (first_round_constants, opt_partial_rc) = equivalent_round_constants(partial_rc, &mds_inv);
     let (m_i, sparse_v, sparse_w_hat) = compute_equivalent_matrices(mds, rounds_p);
+
+    // Pre-assemble full first rows: [mds_0_0, ŵ[0], ŵ[1], ..., ŵ[N-2]].
+    // This enables branch-free dot product computation in cheap_matmul.
+    let mds_0_0 = mds[0][0];
+    let sparse_first_row: Vec<[F; N]> = sparse_w_hat
+        .iter()
+        .map(|w| core::array::from_fn(|i| if i == 0 { mds_0_0 } else { w[i - 1] }))
+        .collect();
+
     (
         first_round_constants,
         opt_partial_rc,
         m_i,
         sparse_v,
-        sparse_w_hat,
+        sparse_first_row,
     )
 }
 
@@ -482,12 +488,20 @@ mod tests {
             opt_state[i] += first_rc[i];
         }
         opt_state = matrix_vec_mul(&m_i, &opt_state);
+
+        // Pre-assemble full first rows (as done in compute_optimized_constants).
+        let mds_0_0 = mds[0][0];
+        let sparse_first_rows: Vec<[F; 4]> = w_hat_coll
+            .iter()
+            .map(|w| core::array::from_fn(|i| if i == 0 { mds_0_0 } else { w[i - 1] }))
+            .collect();
+
         for r in 0..rounds_p {
             opt_state[0] = InjectiveMonomial::<7>::injective_exp_n(&opt_state[0]);
             if r < rounds_p - 1 {
                 opt_state[0] += opt_rc[r];
             }
-            cheap_matmul(&mut opt_state, mds[0][0], &v_coll[r], &w_hat_coll[r]);
+            cheap_matmul(&mut opt_state, &sparse_first_rows[r], &v_coll[r]);
         }
 
         assert_eq!(
