@@ -70,11 +70,11 @@ where
     fn permute_state_terminal(&self, state: &mut [R; WIDTH]);
 }
 
-/// Dense MDS matrix-vector multiplication.
+/// Dense matrix-vector multiplication in O(t^2).
 ///
-/// Standard O(t^2) matrix-vector product. Used for the dense transition matrix
-/// in partial rounds. Full rounds should prefer the trait-dispatched MDS multiply
-/// for sub-O(t^2) performance on concrete fields.
+/// Only used for the non-circulant transition matrix in partial rounds, which
+/// is applied once per permutation call. The circulant MDS multiply in full
+/// rounds uses the MDS crate via the permutation trait instead.
 #[inline]
 pub fn mds_multiply<F: Field, A: Algebra<F>, const WIDTH: usize>(
     state: &mut [A; WIDTH],
