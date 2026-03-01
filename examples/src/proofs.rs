@@ -10,7 +10,9 @@ use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_params, create_benchmark_fri_pa
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher};
-use p3_uni_stark::{PcsError, Proof, StarkGenericConfig, VerificationError, prove, verify};
+use p3_uni_stark::{
+    PcsError, Proof, StarkGenericConfig, StarkSecurityParams, VerificationError, prove, verify,
+};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 
@@ -98,6 +100,8 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_params = create_benchmark_fri_params_high_arity(challenge_mmcs);
 
+    let security_params = StarkSecurityParams::new(false /* is_zk */, &fri_params, proof_goal);
+
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_params);
@@ -107,6 +111,7 @@ where
 
     let proof = prove(&config, proof_goal, trace, &[]);
     report_proof_size(&proof);
+    report_security(&proof, &security_params);
 
     verify(&config, proof_goal, &proof, &[])
 }
@@ -139,6 +144,7 @@ where
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_params = create_benchmark_fri_params_high_arity(challenge_mmcs);
+    let security_params = StarkSecurityParams::new(false /* is_zk */, &fri_params, proof_goal);
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
@@ -149,6 +155,7 @@ where
 
     let proof = prove(&config, proof_goal, trace, &[]);
     report_proof_size(&proof);
+    report_security(&proof, &security_params);
 
     verify(&config, proof_goal, &proof, &[])
 }
@@ -176,6 +183,7 @@ pub fn prove_m31_keccak<
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
     let fri_params = create_benchmark_fri_params(challenge_mmcs);
+    let security_params = StarkSecurityParams::new(false /* is_zk */, &fri_params, proof_goal);
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
@@ -186,6 +194,7 @@ pub fn prove_m31_keccak<
 
     let proof = prove(&config, proof_goal, trace, &[]);
     report_proof_size(&proof);
+    report_security(&proof, &security_params);
 
     verify(&config, proof_goal, &proof, &[])
 }
@@ -217,6 +226,7 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
     let fri_params = create_benchmark_fri_params(challenge_mmcs);
+    let security_params = StarkSecurityParams::new(false /* is_zk */, &fri_params, proof_goal);
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
@@ -227,6 +237,7 @@ where
 
     let proof = prove(&config, proof_goal, trace, &[]);
     report_proof_size(&proof);
+    report_security(&proof, &security_params);
 
     verify(&config, proof_goal, &proof, &[])
 }
@@ -254,4 +265,25 @@ where
 {
     let proof_bytes = postcard::to_allocvec(proof).expect("Failed to serialize proof");
     println!("Proof size: {} bytes", proof_bytes.len());
+}
+
+/// Report the security of the proof.
+///
+/// Prints the conjectured and proven security levels.
+#[inline]
+pub fn report_security<SC>(proof: &Proof<SC>, security_params: &StarkSecurityParams)
+where
+    SC: StarkGenericConfig,
+{
+    println!(
+        "Conjectured security: {} bits",
+        proof.conjectured_security(security_params).security_bits
+    );
+    let proven = proof.proven_security(security_params);
+    println!(
+        "Proven security: {} bits (UDR: {}, LDR: {})",
+        proven.security_bits(),
+        proven.unique_decoding_bits,
+        proven.list_decoding_bits
+    );
 }

@@ -70,6 +70,7 @@ hex-literal = "1.0.0"
 itertools = { version = "0.14.0", default-features = false, features = [
     "use_alloc",
 ] }
+libm = "0.2"
 num-bigint = { version = "0.4.3", default-features = false }
 paste = "1.0.15"
 postcard = { version = "1.0.0", default-features = false }
