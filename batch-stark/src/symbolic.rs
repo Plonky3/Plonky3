@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use p3_air::Air;
 use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
-use p3_field::{ExtensionField, Field};
+use p3_field::{Algebra, ExtensionField, Field};
 use p3_lookup::lookup_traits::{Lookup, LookupData, LookupGadget};
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
@@ -19,7 +19,7 @@ where
     F: Field,
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
-    SymbolicExpression<EF>: From<SymbolicExpression<F>>,
+    SymbolicExpression<EF>: Algebra<SymbolicExpression<F>>,
     LG: LookupGadget,
 {
     assert!(is_zk <= 1, "is_zk must be either 0 or 1");
@@ -82,7 +82,7 @@ where
     F: Field,
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
-    SymbolicExpression<EF>: From<SymbolicExpression<F>>,
+    SymbolicExpression<EF>: Algebra<SymbolicExpression<F>>,
     LG: LookupGadget,
 {
     let (base, extension) = get_symbolic_constraints(
@@ -113,7 +113,7 @@ where
     F: Field,
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
-    SymbolicExpression<EF>: From<SymbolicExpression<F>>,
+    SymbolicExpression<EF>: Algebra<SymbolicExpression<F>>,
     LG: LookupGadget,
 {
     let num_lookups = contexts.len();
