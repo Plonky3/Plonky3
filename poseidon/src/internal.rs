@@ -3,14 +3,14 @@
 //! # Overview
 //!
 //! Partial rounds apply the S-box only to `state[0]`, leaving the other t-1 elements
-//! unchanged through the nonlinear layer. This is the key insight of the HADES design
-//! strategy: partial rounds are much cheaper than full rounds, yet they efficiently
+//! unchanged through the nonlinear layer. This is the key efficiency insight of the Poseidon
+//! design: partial rounds are much cheaper than full rounds, yet they efficiently
 //! increase the algebraic degree to resist interpolation and Gröbner basis attacks.
 //!
-//! # The Appendix B Optimization
+//! # Sparse Matrix Optimization
 //!
 //! In the textbook formulation, each partial round still multiplies by the full dense
-//! MDS matrix M (cost O(t^2)). Appendix B of the Poseidon paper factors M into a product
+//! MDS matrix M (cost O(t^2)). The Poseidon paper (Appendix B) factors M into a product
 //! of sparse matrices, one per round. Each sparse matrix S_r has the structure:
 //!
 //! ```text
@@ -29,7 +29,7 @@
 //!
 //! # Optimized Partial Round Structure
 //!
-//! After the Appendix B transformation, the RP partial rounds become:
+//! After this transformation, the RP partial rounds become:
 //!
 //! ```text
 //!   1. Add first_round_constants (full WIDTH-vector)
@@ -54,7 +54,7 @@ use crate::external::mds_multiply;
 
 /// Pre-computed constants for the RP partial (internal) rounds.
 ///
-/// These are produced by the Appendix B decomposition in [`crate::utils`].
+/// These are produced by the sparse matrix decomposition in [`crate::utils`].
 #[derive(Debug, Clone)]
 pub struct PartialRoundConstants<F, const WIDTH: usize> {
     /// Full WIDTH-vector of optimized round constants, added once before the
@@ -67,7 +67,7 @@ pub struct PartialRoundConstants<F, const WIDTH: usize> {
     /// Dense transition matrix m_i, applied once before the partial round loop.
     ///
     /// This is the accumulated product of sparse matrix factors from the
-    /// Appendix B decomposition (Eq. 5), transposed to match the HorizenLabs convention.
+    /// sparse matrix decomposition, transposed to match the HorizenLabs convention.
     pub m_i: [[F; WIDTH]; WIDTH],
 
     /// Top-left element of the original MDS matrix: `MDS[0][0]`.
@@ -96,7 +96,7 @@ pub struct PartialRoundConstants<F, const WIDTH: usize> {
 
 /// Construct a partial round layer from pre-computed constants.
 pub trait PartialRoundLayerConstructor<F: Field, const WIDTH: usize> {
-    /// Build the layer from the Appendix B optimized constants.
+    /// Build the layer from the sparse-form optimized constants.
     fn new_from_constants(constants: PartialRoundConstants<F, WIDTH>) -> Self;
 }
 

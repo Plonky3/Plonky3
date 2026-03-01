@@ -2,7 +2,7 @@
 //!
 //! # Overview
 //!
-//! This module implements the optimization described in **Appendix B** of the Poseidon
+//! This module implements the sparse matrix optimization described in **Appendix B** of the Poseidon
 //! paper (Grassi et al., USENIX Security 2021). It transforms the RP partial rounds
 //! from their textbook form (dense MDS multiply per round, O(t^2) each) into an
 //! equivalent form using sparse matrices (O(t) each).
@@ -88,15 +88,7 @@ fn matrix_mul<F: Field, const N: usize>(a: &[[F; N]; N], b: &[[F; N]; N]) -> [[F
 
 /// Matrix-vector multiplication: `result = M * v`.
 fn matrix_vec_mul<F: Field, const N: usize>(m: &[[F; N]; N], v: &[F; N]) -> [F; N] {
-    let mut result = [F::ZERO; N];
-    for i in 0..N {
-        let mut sum = F::ZERO;
-        for j in 0..N {
-            sum += m[i][j] * v[j];
-        }
-        result[i] = sum;
-    }
-    result
+    core::array::from_fn(|i| F::dot_product(&m[i], v))
 }
 
 /// Matrix transpose: `result[i][j] = m[j][i]`.
@@ -115,7 +107,7 @@ fn matrix_transpose<F: Field, const N: usize>(m: &[[F; N]; N]) -> [[F; N]; N] {
 /// # Panics
 ///
 /// Panics if the matrix is singular (i.e., not invertible over the field).
-pub(crate) fn matrix_inverse<F: Field, const N: usize>(m: &[[F; N]; N]) -> [[F; N]; N] {
+fn matrix_inverse<F: Field, const N: usize>(m: &[[F; N]; N]) -> [[F; N]; N] {
     // We work on [M | I] and reduce M to I, yielding [I | M^{-1}].
     let mut aug = vec![[F::ZERO; N]; N];
     let mut inv = [[F::ZERO; N]; N];
@@ -169,7 +161,7 @@ pub(crate) fn matrix_inverse<F: Field, const N: usize>(m: &[[F; N]; N]) -> [[F; 
 
 /// Inverse of the (N-1)x(N-1) bottom-right submatrix: `m[1..N, 1..N]`.
 ///
-/// This is M̂^{-1} from the Appendix B factorization (Eq. 5 in the paper).
+/// This is M̂^{-1} from the sparse matrix factorization (Appendix B, Eq. 5 in the paper).
 ///
 /// # Panics
 ///
@@ -247,7 +239,7 @@ fn submatrix_inverse<F: Field, const N: usize>(m: &[[F; N]; N]) -> Vec<Vec<F>> {
 /// - `v_collection[r]` has WIDTH-1 elements: the first column of sparse factor S_r.
 /// - `ŵ_collection[r]` has WIDTH-1 elements: the first row of sparse factor S_r.
 #[allow(clippy::type_complexity)]
-pub(crate) fn compute_equivalent_matrices<F: Field, const N: usize>(
+fn compute_equivalent_matrices<F: Field, const N: usize>(
     mds: &[[F; N]; N],
     rounds_p: usize,
 ) -> ([[F; N]; N], Vec<Vec<F>>, Vec<Vec<F>>) {
@@ -329,7 +321,7 @@ pub(crate) fn compute_equivalent_matrices<F: Field, const N: usize>(
 /// A tuple of (full_vector, scalar_constants) where:
 /// - The full vector has WIDTH elements, used for the first partial round.
 /// - The scalar constants have RP-1 entries, one per remaining partial round.
-pub(crate) fn equivalent_round_constants<F: Field, const N: usize>(
+fn equivalent_round_constants<F: Field, const N: usize>(
     partial_rc: &[[F; N]],
     mds_inv: &[[F; N]; N],
 ) -> ([F; N], Vec<F>) {
@@ -361,6 +353,37 @@ pub(crate) fn equivalent_round_constants<F: Field, const N: usize>(
     let opt_partial_rc = opt_partial_rc[1..].to_vec();
 
     (first_round_constants, opt_partial_rc)
+}
+
+/// Compute all optimized partial round constants from raw parameters.
+///
+/// Combines the round constant compression and sparse matrix factorization
+/// into a single entry point, keeping the individual helpers private.
+///
+/// # Returns
+///
+/// A tuple of:
+/// - The compressed first-round constant vector (WIDTH elements).
+/// - The optimized scalar round constants (RP-1 entries).
+/// - The dense transition matrix m_i.
+/// - The per-round sparse v vectors.
+/// - The per-round sparse ŵ vectors.
+#[allow(clippy::type_complexity)]
+pub(crate) fn compute_optimized_constants<F: Field, const N: usize>(
+    mds: &[[F; N]; N],
+    rounds_p: usize,
+    partial_rc: &[[F; N]],
+) -> ([F; N], Vec<F>, [[F; N]; N], Vec<Vec<F>>, Vec<Vec<F>>) {
+    let mds_inv = matrix_inverse(mds);
+    let (first_round_constants, opt_partial_rc) = equivalent_round_constants(partial_rc, &mds_inv);
+    let (m_i, sparse_v, sparse_w_hat) = compute_equivalent_matrices(mds, rounds_p);
+    (
+        first_round_constants,
+        opt_partial_rc,
+        m_i,
+        sparse_v,
+        sparse_w_hat,
+    )
 }
 
 #[cfg(test)]
