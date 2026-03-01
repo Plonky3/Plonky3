@@ -56,6 +56,8 @@ pub use generic::*;
 pub use internal::*;
 use p3_field::{Algebra, InjectiveMonomial, PrimeField};
 use p3_symmetric::{CryptographicPermutation, Permutation};
+use rand::distr::{Distribution, StandardUniform};
+use rand::{Rng, RngExt};
 
 /// Raw Poseidon parameters before the sparse matrix optimization.
 ///
@@ -201,6 +203,70 @@ where
             partial_round_layer: PartialRoundPerm::new_from_constants(partial_constants),
             _phantom: PhantomData,
         }
+    }
+
+    /// Create a new Poseidon with random round constants and a given MDS permutation.
+    ///
+    /// Builds the dense MDS matrix by applying the permutation to unit vectors,
+    /// generates random round constants, and computes the sparse matrix decomposition.
+    ///
+    /// Primarily useful for testing.
+    pub fn new_from_rng(
+        half_num_full_rounds: usize,
+        num_partial_rounds: usize,
+        mds: &impl Permutation<[F; WIDTH]>,
+        rng: &mut impl Rng,
+    ) -> Self
+    where
+        StandardUniform: Distribution<F>,
+    {
+        let rounds_f = 2 * half_num_full_rounds;
+        let num_rounds = rounds_f + num_partial_rounds;
+
+        // Generate random round constants.
+        let round_constants: Vec<[F; WIDTH]> = (0..num_rounds)
+            .map(|_| core::array::from_fn(|_| rng.sample(StandardUniform)))
+            .collect();
+
+        // Build dense MDS by applying the permutation to unit vectors.
+        let columns: [[F; WIDTH]; WIDTH] = core::array::from_fn(|j| {
+            let mut e = [F::ZERO; WIDTH];
+            e[j] = F::ONE;
+            mds.permute(e)
+        });
+        // Transpose to row-major format.
+        let dense_mds: [[F; WIDTH]; WIDTH] =
+            core::array::from_fn(|i| core::array::from_fn(|j| columns[j][i]));
+
+        // Split round constants into three sections.
+        let half_f = half_num_full_rounds;
+        let initial_rc = round_constants[..half_f].to_vec();
+        let partial_rc = round_constants[half_f..half_f + num_partial_rounds].to_vec();
+        let terminal_rc = round_constants[half_f + num_partial_rounds..].to_vec();
+
+        // Compute optimized sparse constants.
+        let (first_round_constants, opt_partial_rc, m_i, sparse_v, sparse_w_hat) =
+            utils::compute_optimized_constants::<F, WIDTH>(
+                &dense_mds,
+                num_partial_rounds,
+                &partial_rc,
+            );
+
+        let full_constants = FullRoundConstants {
+            initial: initial_rc,
+            terminal: terminal_rc,
+        };
+
+        let partial_constants = PartialRoundConstants {
+            first_round_constants,
+            m_i,
+            mds_0_0: dense_mds[0][0],
+            v: sparse_v,
+            w_hat: sparse_w_hat,
+            round_constants: opt_partial_rc,
+        };
+
+        Self::new_from_precomputed(full_constants, partial_constants)
     }
 }
 

@@ -25,6 +25,7 @@ serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 p3-field-testing = { path = "../field-testing" }
+p3-poseidon = { path = "../poseidon" }
 
 criterion.workspace = true
 rand.workspace = true
