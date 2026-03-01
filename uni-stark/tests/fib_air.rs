@@ -50,8 +50,8 @@ impl<AB: AirBuilder> Air<AB> for FibonacciAir {
         let b = pis[1];
         let x = pis[2];
 
-        let local: &FibonacciRow<AB::Var> = main.local().borrow();
-        let next: &FibonacciRow<AB::Var> = main.next().borrow();
+        let local: &FibonacciRow<AB::Var> = main.local_as();
+        let next: &FibonacciRow<AB::Var> = main.next_as();
 
         let mut when_first_row = builder.when_first_row();
 

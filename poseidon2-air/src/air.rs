@@ -1,6 +1,5 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::borrow::Borrow;
 use core::marker::PhantomData;
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
@@ -223,7 +222,7 @@ impl<
     #[inline]
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let local = main.local().borrow();
+        let local = main.local_as();
 
         eval::<_, _, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>(
             self, builder, local,

@@ -205,12 +205,12 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
 /// Implement `WindowAccess` for `RowMajorMatrix` treating it as a two-row window
 /// (first half = local row, second half = next row).
 impl<T: Clone + Send + Sync> WindowAccess<T> for RowMajorMatrix<T> {
-    fn local(&self) -> &[T] {
+    fn local_slice(&self) -> &[T] {
         let values: &[T] = self.values.borrow();
         &values[..self.width]
     }
 
-    fn next(&self) -> &[T] {
+    fn next_slice(&self) -> &[T] {
         let values: &[T] = self.values.borrow();
         &values[self.width..]
     }

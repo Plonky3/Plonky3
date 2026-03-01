@@ -277,7 +277,7 @@ where
             SymbolicAirBuilder::<F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
 
         let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.local();
+        let symbolic_main_local = symbolic_main.local_slice();
 
         // Perform each lookup independently using LookupContext
         (0..self.num_lookups)
@@ -513,7 +513,7 @@ fn test_symbolic_to_expr() {
 
     let main = builder.main();
 
-    let (local, next) = (main.local(), main.next());
+    let (local, next) = (main.local_slice(), main.next_slice());
 
     let mul = local[0] * next[1];
     let add = local[0] + next[1];
@@ -660,7 +660,7 @@ fn test_debug_util_detects_malformed_lookup() {
     let main_trace = RowMajorMatrix::new(main_values, 1);
 
     let builder = SymbolicAirBuilder::<F>::new(0, 1, 0, 0, 0);
-    let expr = builder.main().local()[0];
+    let expr = builder.main().local(0);
 
     // One local lookup with a single tuple; multiplicity is always +1,
     // so the total multiset count is non-zero.
@@ -1164,7 +1164,7 @@ where
             SymbolicAirBuilder::<F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
 
         let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.local();
+        let symbolic_main_local = symbolic_main.local_slice();
 
         // Extract columns for thelookup entries: [inp1, inp2, sum]
         let inp1 = symbolic_main_local[0];

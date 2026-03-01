@@ -1,5 +1,4 @@
 use core::array;
-use core::borrow::Borrow;
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
@@ -40,8 +39,8 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         eval_round_flags(builder);
 
         let main = builder.main();
-        let local: &KeccakCols<AB::Var> = main.local().borrow();
-        let next: &KeccakCols<AB::Var> = main.next().borrow();
+        let local: &KeccakCols<AB::Var> = main.local_as();
+        let next: &KeccakCols<AB::Var> = main.next_as();
 
         let first_step = local.step_flags[0].clone();
         let final_step = local.step_flags[NUM_ROUNDS_MIN_1].clone();

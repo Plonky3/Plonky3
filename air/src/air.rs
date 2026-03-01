@@ -1,11 +1,59 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::borrow::Borrow;
 use core::ops::{Add, Mul, Sub};
 
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
 
 use crate::lookup::{Kind, Lookup, LookupData, LookupEvaluator, LookupInput};
+
+/// Read access to two consecutive trace rows.
+pub trait WindowAccess<T> {
+    /// Full slice of the current (local) row.
+    fn local_slice(&self) -> &[T];
+
+    /// Full slice of the row immediately after the current one.
+    fn next_slice(&self) -> &[T];
+
+    /// Single element from the current row, cloned.
+    #[inline]
+    fn local(&self, i: usize) -> T
+    where
+        T: Clone,
+    {
+        self.local_slice()[i].clone()
+    }
+
+    /// Single element from the next row, cloned.
+    #[inline]
+    fn next(&self, i: usize) -> T
+    where
+        T: Clone,
+    {
+        self.next_slice()[i].clone()
+    }
+
+    /// Borrow-cast the current row into a typed column struct.
+    #[inline]
+    fn local_as<'a, U: ?Sized>(&'a self) -> &'a U
+    where
+        [T]: Borrow<U>,
+        T: 'a,
+    {
+        self.local_slice().borrow()
+    }
+
+    /// Borrow-cast the next row into a typed column struct.
+    #[inline]
+    fn next_as<'a, U: ?Sized>(&'a self) -> &'a U
+    where
+        [T]: Borrow<U>,
+        T: 'a,
+    {
+        self.next_slice().borrow()
+    }
+}
 
 /// A two-row window into a trace matrix.
 ///
@@ -30,22 +78,14 @@ impl<'a, T> RowWindow<'a, T> {
 
 impl<T> WindowAccess<T> for RowWindow<'_, T> {
     #[inline]
-    fn local(&self) -> &[T] {
+    fn local_slice(&self) -> &[T] {
         self.local
     }
 
     #[inline]
-    fn next(&self) -> &[T] {
+    fn next_slice(&self) -> &[T] {
         self.next
     }
-}
-
-/// Read access to two consecutive trace rows.
-pub trait WindowAccess<T> {
-    /// The current (local) row.
-    fn local(&self) -> &[T];
-    /// The row immediately after the current one.
-    fn next(&self) -> &[T];
 }
 
 /// The underlying structure of an AIR.

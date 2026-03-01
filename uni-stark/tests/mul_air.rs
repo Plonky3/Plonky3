@@ -90,8 +90,8 @@ impl<F> BaseAir<F> for MulAir {
 impl<AB: AirBuilder> Air<AB> for MulAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let main_local = main.local();
-        let main_next = main.next();
+        let main_local = main.local_slice();
+        let main_next = main.next_slice();
 
         for i in 0..REPETITIONS {
             let start = i * 3;
