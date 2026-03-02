@@ -1705,8 +1705,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        Goldilocks, MATRIX_DIAG_8_GOLDILOCKS, MATRIX_DIAG_12_GOLDILOCKS,
-        MATRIX_DIAG_16_GOLDILOCKS, MATRIX_DIAG_20_GOLDILOCKS,
+        Goldilocks, MATRIX_DIAG_8_GOLDILOCKS, MATRIX_DIAG_12_GOLDILOCKS, MATRIX_DIAG_16_GOLDILOCKS,
+        MATRIX_DIAG_20_GOLDILOCKS,
     };
 
     type F = Goldilocks;
@@ -2119,26 +2119,17 @@ mod tests {
 
     #[test]
     fn test_specialized_w8_matches_generic() {
-        test_specialized_matches_generic(
-            MATRIX_DIAG_8_GOLDILOCKS,
-            internal_permute_state_asm_w8,
-        );
+        test_specialized_matches_generic(MATRIX_DIAG_8_GOLDILOCKS, internal_permute_state_asm_w8);
     }
 
     #[test]
     fn test_specialized_w12_matches_generic() {
-        test_specialized_matches_generic(
-            MATRIX_DIAG_12_GOLDILOCKS,
-            internal_permute_state_asm_w12,
-        );
+        test_specialized_matches_generic(MATRIX_DIAG_12_GOLDILOCKS, internal_permute_state_asm_w12);
     }
 
     #[test]
     fn test_specialized_w16_matches_generic() {
-        test_specialized_matches_generic(
-            MATRIX_DIAG_16_GOLDILOCKS,
-            internal_permute_state_asm_w16,
-        );
+        test_specialized_matches_generic(MATRIX_DIAG_16_GOLDILOCKS, internal_permute_state_asm_w16);
     }
 
     #[allow(clippy::type_complexity)]
