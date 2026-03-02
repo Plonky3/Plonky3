@@ -38,28 +38,15 @@ impl InternalLayerConstructor<Goldilocks> for Poseidon2InternalLayerGoldilocksAs
     }
 }
 
-const DIAG_RAW_20: [u64; 20] = [
-    MATRIX_DIAG_20_GOLDILOCKS[0].value,
-    MATRIX_DIAG_20_GOLDILOCKS[1].value,
-    MATRIX_DIAG_20_GOLDILOCKS[2].value,
-    MATRIX_DIAG_20_GOLDILOCKS[3].value,
-    MATRIX_DIAG_20_GOLDILOCKS[4].value,
-    MATRIX_DIAG_20_GOLDILOCKS[5].value,
-    MATRIX_DIAG_20_GOLDILOCKS[6].value,
-    MATRIX_DIAG_20_GOLDILOCKS[7].value,
-    MATRIX_DIAG_20_GOLDILOCKS[8].value,
-    MATRIX_DIAG_20_GOLDILOCKS[9].value,
-    MATRIX_DIAG_20_GOLDILOCKS[10].value,
-    MATRIX_DIAG_20_GOLDILOCKS[11].value,
-    MATRIX_DIAG_20_GOLDILOCKS[12].value,
-    MATRIX_DIAG_20_GOLDILOCKS[13].value,
-    MATRIX_DIAG_20_GOLDILOCKS[14].value,
-    MATRIX_DIAG_20_GOLDILOCKS[15].value,
-    MATRIX_DIAG_20_GOLDILOCKS[16].value,
-    MATRIX_DIAG_20_GOLDILOCKS[17].value,
-    MATRIX_DIAG_20_GOLDILOCKS[18].value,
-    MATRIX_DIAG_20_GOLDILOCKS[19].value,
-];
+const DIAG_RAW_20: [u64; 20] = {
+      let mut arr = [0u64; 20];
+      let mut i = 0;
+      while i < 20 {
+          arr[i] = MATRIX_DIAG_20_GOLDILOCKS[i].value;
+          i += 1;
+      }
+      arr
+  };
 
 impl InternalLayer<Goldilocks, 8, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2InternalLayerGoldilocksAsm {
     fn permute_state(&self, state: &mut [Goldilocks; 8]) {
@@ -569,7 +556,7 @@ mod tests {
         let external_constants =
             ExternalLayerConstants::<Goldilocks, WIDTH>::new_from_rng(4, &mut rng);
         let internal_constants: Vec<Goldilocks> =
-            (0..22).map(|_| F::from_u64(rng.random())).collect();
+            (0..22).map(|_| rng.random()).collect();
 
         let generic_poseidon2: Poseidon2<
             Goldilocks,
@@ -595,7 +582,7 @@ mod tests {
             );
         }
 
-        let mut generic_input: [F; WIDTH] = core::array::from_fn(|_| F::from_u64(rng.random()));
+        let mut generic_input: [F; WIDTH] = rng.random();
         let mut fused_input = generic_input;
         generic_poseidon2.permute_mut(&mut generic_input);
         fused.permute_mut(&mut fused_input);
@@ -608,8 +595,8 @@ mod tests {
         }
 
         // Packed: fused packed vs scalar (each packed lane should match scalar)
-        let scalar_a: [F; WIDTH] = core::array::from_fn(|_| F::from_u64(rng.random()));
-        let scalar_b: [F; WIDTH] = core::array::from_fn(|_| F::from_u64(rng.random()));
+        let scalar_a: [F; WIDTH] = rng.random();
+        let scalar_b: [F; WIDTH] = rng.random();
 
         let mut packed_input: [PackedGoldilocksNeon; WIDTH] =
             core::array::from_fn(|i| PackedGoldilocksNeon([scalar_a[i], scalar_b[i]]));
