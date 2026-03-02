@@ -172,8 +172,8 @@ where
     match expr {
         SymbolicExpression::Variable(v) => match v.entry {
             Entry::Main { offset } => match offset {
-                0 => builder.main().row_slice(0).unwrap()[v.index].clone().into(),
-                1 => builder.main().row_slice(1).unwrap()[v.index].clone().into(),
+                0 => builder.main().row_slice(0).unwrap()[v.index].into(),
+                1 => builder.main().row_slice(1).unwrap()[v.index].into(),
                 _ => panic!("Cannot have expressions involving more than two rows."),
             },
             Entry::Public => builder.public_values()[v.index].into(),
@@ -183,14 +183,12 @@ where
                     .expect("Missing preprocessed columns")
                     .row_slice(0)
                     .unwrap()[v.index]
-                    .clone()
                     .into(),
                 1 => builder
                     .preprocessed()
                     .expect("Missing preprocessed columns")
                     .row_slice(1)
                     .unwrap()[v.index]
-                    .clone()
                     .into(),
                 _ => panic!("Cannot have expressions involving more than two rows."),
             },

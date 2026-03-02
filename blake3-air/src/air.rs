@@ -43,8 +43,8 @@ impl Blake3Air {
     ) {
         // We need to pack some bits together to verify the additions.
         // First we verify a' = a + b + m_{2i} mod 2^32
-        let b_0_16 = pack_bits_le(trace.b[..BITS_PER_LIMB].iter().cloned());
-        let b_16_32 = pack_bits_le(trace.b[BITS_PER_LIMB..].iter().cloned());
+        let b_0_16 = pack_bits_le(trace.b[..BITS_PER_LIMB].iter().copied());
+        let b_16_32 = pack_bits_le(trace.b[BITS_PER_LIMB..].iter().copied());
 
         add3(
             builder,
@@ -59,8 +59,8 @@ impl Blake3Air {
         xor_32_shift(builder, trace.a_prime, trace.d, trace.d_prime, 16);
 
         // Next we verify c' = c + d' mod 2^32
-        let d_prime_0_16 = pack_bits_le(trace.d_prime[..BITS_PER_LIMB].iter().cloned());
-        let d_prime_16_32 = pack_bits_le(trace.d_prime[BITS_PER_LIMB..].iter().cloned());
+        let d_prime_0_16 = pack_bits_le(trace.d_prime[..BITS_PER_LIMB].iter().copied());
+        let d_prime_16_32 = pack_bits_le(trace.d_prime[BITS_PER_LIMB..].iter().copied());
         add2(
             builder,
             trace.c_prime,
@@ -73,8 +73,8 @@ impl Blake3Air {
         xor_32_shift(builder, trace.c_prime, trace.b, trace.b_prime, 12);
 
         // Next we verify a'' = a' + b' + m_{2i + 1} mod 2^32
-        let b_prime_0_16 = pack_bits_le(trace.b_prime[..BITS_PER_LIMB].iter().cloned());
-        let b_prime_16_32 = pack_bits_le(trace.b_prime[BITS_PER_LIMB..].iter().cloned());
+        let b_prime_0_16 = pack_bits_le(trace.b_prime[..BITS_PER_LIMB].iter().copied());
+        let b_prime_16_32 = pack_bits_le(trace.b_prime[BITS_PER_LIMB..].iter().copied());
 
         add3(
             builder,
@@ -90,8 +90,8 @@ impl Blake3Air {
         xor_32_shift(builder, trace.a_output, trace.d_prime, trace.d_output, 8);
 
         // Next we verify c'' = c' + d'' mod 2^32
-        let d_output_0_16 = pack_bits_le(trace.d_output[..BITS_PER_LIMB].iter().cloned());
-        let d_output_16_32 = pack_bits_le(trace.d_output[BITS_PER_LIMB..].iter().cloned());
+        let d_output_0_16 = pack_bits_le(trace.d_output[..BITS_PER_LIMB].iter().copied());
+        let d_output_16_32 = pack_bits_le(trace.d_output[BITS_PER_LIMB..].iter().copied());
         add2(
             builder,
             trace.c_output,
@@ -108,7 +108,7 @@ impl Blake3Air {
 
     /// Given data for a full round, produce the data corresponding to a
     /// single application of the quarter round function on a column.
-    const fn full_round_to_column_quarter_round<'a, T: Clone, U>(
+    const fn full_round_to_column_quarter_round<'a, T: Copy, U>(
         &self,
         input: &'a Blake3State<T>,
         round_data: &'a FullRound<T>,
@@ -139,7 +139,7 @@ impl Blake3Air {
 
     /// Given data for a full round, produce the data corresponding to a
     /// single application of the quarter round function on a diagonal.
-    const fn full_round_to_diagonal_quarter_round<'a, T: Clone, U>(
+    const fn full_round_to_diagonal_quarter_round<'a, T: Copy, U>(
         &self,
         round_data: &'a FullRound<T>,
         m_vector: &'a [[U; 2]; 16],
@@ -243,10 +243,10 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
         let local: &Blake3Cols<AB::Var> = (*local).borrow();
 
         let initial_row_3 = [
-            local.counter_low.clone(),
-            local.counter_hi.clone(),
-            local.block_len.clone(),
-            local.flags.clone(),
+            local.counter_low,
+            local.counter_hi,
+            local.block_len,
+            local.flags,
         ];
 
         // We start by checking that all the initialization inputs are boolean values.
@@ -257,8 +257,7 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
             .chain(local.chaining_values[1].iter())
             .chain(initial_row_3.iter())
             .for_each(|elem| {
-                elem.iter()
-                    .for_each(|bool| builder.assert_bool(bool.clone()));
+                elem.iter().for_each(|&bool| builder.assert_bool(bool));
             });
 
         // Next we ensure that the row0 and row2 for our initial state have been initialized correctly.
@@ -266,12 +265,12 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
         // row0 should contain the packing of the first 4 chaining_values.
         local.chaining_values[0]
             .iter()
-            .zip(local.initial_row0.clone())
+            .zip(local.initial_row0)
             .for_each(|(bits, word)| {
-                let low_16 = pack_bits_le(bits[..BITS_PER_LIMB].iter().cloned());
-                let hi_16 = pack_bits_le(bits[BITS_PER_LIMB..].iter().cloned());
-                builder.assert_eq(low_16, word[0].clone());
-                builder.assert_eq(hi_16, word[1].clone());
+                let low_16 = pack_bits_le(bits[..BITS_PER_LIMB].iter().copied());
+                let hi_16 = pack_bits_le(bits[BITS_PER_LIMB..].iter().copied());
+                builder.assert_eq(low_16, word[0]);
+                builder.assert_eq(hi_16, word[1]);
             });
 
         // row2 should contain the first four constants in IV.
@@ -280,21 +279,21 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
             .iter()
             .zip(IV)
             .for_each(|(row_elem, constant)| {
-                builder.assert_eq(row_elem[0].clone(), AB::Expr::from_u16(constant[0]));
-                builder.assert_eq(row_elem[1].clone(), AB::Expr::from_u16(constant[1]));
+                builder.assert_eq(row_elem[0], AB::Expr::from_u16(constant[0]));
+                builder.assert_eq(row_elem[1], AB::Expr::from_u16(constant[1]));
             });
 
-        let mut m_values: [[AB::Expr; 2]; 16] = local.inputs.clone().map(|bits| {
+        let mut m_values: [[AB::Expr; 2]; 16] = local.inputs.map(|bits| {
             [
-                pack_bits_le(bits[..BITS_PER_LIMB].iter().cloned()),
-                pack_bits_le(bits[BITS_PER_LIMB..].iter().cloned()),
+                pack_bits_le(bits[..BITS_PER_LIMB].iter().copied()),
+                pack_bits_le(bits[BITS_PER_LIMB..].iter().copied()),
             ]
         });
 
         let initial_state = Blake3State {
-            row0: local.initial_row0.clone(),
-            row1: local.chaining_values[1].clone(),
-            row2: local.initial_row2.clone(),
+            row0: local.initial_row0,
+            row1: local.chaining_values[1],
+            row2: local.initial_row2,
             row3: initial_row_3,
         };
 
@@ -378,12 +377,12 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
         local
             .final_round_helpers
             .iter()
-            .zip(local.full_rounds[6].state_output.row2.clone())
+            .zip(local.full_rounds[6].state_output.row2)
             .for_each(|(bits, word)| {
-                let low_16 = pack_bits_le(bits[..BITS_PER_LIMB].iter().cloned());
-                let hi_16 = pack_bits_le(bits[BITS_PER_LIMB..].iter().cloned());
-                builder.assert_eq(low_16, word[0].clone());
-                builder.assert_eq(hi_16, word[1].clone());
+                let low_16 = pack_bits_le(bits[..BITS_PER_LIMB].iter().copied());
+                let hi_16 = pack_bits_le(bits[BITS_PER_LIMB..].iter().copied());
+                builder.assert_eq(low_16, word[0]);
+                builder.assert_eq(hi_16, word[1]);
             });
         // Additionally, we need to ensure that both local.final_round_helpers and local.outputs[0] are boolean.
 
@@ -391,15 +390,15 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
             .final_round_helpers
             .iter()
             .chain(local.outputs[0].iter())
-            .for_each(|bits| bits.iter().for_each(|bit| builder.assert_bool(bit.clone())));
+            .for_each(|bits| bits.iter().for_each(|&bit| builder.assert_bool(bit)));
 
         // Finally we check the xor by xor'ing the output with final_round_helpers, packing the bits
         // and comparing with the words in local.full_rounds[6].state_output.row0.
 
         for (out_bits, left_words, right_bits) in izip!(
-            local.outputs[0].clone(),
-            local.full_rounds[6].state_output.row0.clone(),
-            local.final_round_helpers.clone()
+            local.outputs[0],
+            local.full_rounds[6].state_output.row0,
+            local.final_round_helpers
         ) {
             // We can reuse xor_32_shift with a shift of 0.
             // As a = b ^ c if and only if b = a ^ c we can perform our xor on the
@@ -411,9 +410,9 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
         // This check also ensures that local.outputs[1] contains only boolean values.
 
         for (out_bits, left_bits, right_bits) in izip!(
-            local.outputs[1].clone(),
-            local.full_rounds[6].state_output.row1.clone(),
-            local.full_rounds[6].state_output.row3.clone()
+            local.outputs[1],
+            local.full_rounds[6].state_output.row1,
+            local.full_rounds[6].state_output.row3
         ) {
             for (out_bit, left_bit, right_bit) in izip!(out_bits, left_bits, right_bits) {
                 builder.assert_eq(out_bit, left_bit.into().xor(&right_bit.into()));
@@ -427,9 +426,9 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
         // Hence we can directly check that the output is correct.
 
         for (out_bits, left_bits, right_bits) in izip!(
-            local.outputs[2].clone(),
-            local.chaining_values[0].clone(),
-            local.final_round_helpers.clone()
+            local.outputs[2],
+            local.chaining_values[0],
+            local.final_round_helpers
         ) {
             for (out_bit, left_bit, right_bit) in izip!(out_bits, left_bits, right_bits) {
                 builder.assert_eq(out_bit, left_bit.into().xor(&right_bit.into()));
@@ -440,9 +439,9 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
         // This check also ensures that local.outputs[3] contains only boolean values.
 
         for (out_bits, left_bits, right_bits) in izip!(
-            local.outputs[3].clone(),
-            local.chaining_values[1].clone(),
-            local.full_rounds[6].state_output.row3.clone()
+            local.outputs[3],
+            local.chaining_values[1],
+            local.full_rounds[6].state_output.row3
         ) {
             for (out_bit, left_bit, right_bit) in izip!(out_bits, left_bits, right_bits) {
                 builder.assert_eq(out_bit, left_bit.into().xor(&right_bit.into()));
