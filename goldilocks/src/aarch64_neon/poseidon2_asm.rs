@@ -1711,14 +1711,17 @@ mod tests {
 
     type F = Goldilocks;
 
+    /// Reduce a raw u64 to its canonical Goldilocks representative.
     fn canon(x: u64) -> u64 {
         F::new(x).as_canonical_u64()
     }
 
+    /// Pack two u64 lanes into a single NEON vector.
     unsafe fn make_neon(a: u64, b: u64) -> uint64x2_t {
         unsafe { vcombine_u64(vcreate_u64(a), vcreate_u64(b)) }
     }
 
+    /// Extract both u64 lanes from a NEON vector.
     unsafe fn read_neon(v: uint64x2_t) -> (u64, u64) {
         unsafe { (vgetq_lane_u64::<0>(v), vgetq_lane_u64::<1>(v)) }
     }
