@@ -28,13 +28,12 @@ use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
 use p3_field::PackedValue;
 use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
-use p3_util::{log2_ceil_usize, log2_strict_usize};
+use p3_util::log2_ceil_usize;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::MerkleTreeError::{
-    CapMismatch, EmptyBatch, IncompatibleHeights, IndexOutOfBounds, WrongBatchSize, WrongCapHeight,
-    WrongHeight,
+    CapMismatch, EmptyBatch, IncompatibleHeights, IndexOutOfBounds, WrongBatchSize, WrongHeight,
 };
 use crate::{MerkleCap, MerkleTree};
 
@@ -169,8 +168,6 @@ where
         &self,
         inputs: Vec<M>,
     ) -> (Self::Commitment, Self::ProverData<M>) {
-        let log_arity = log2_strict_usize(N);
-
         if let Some(max_height) = inputs.iter().map(|m| m.height()).max()
             && max_height > 0
         {
@@ -187,9 +184,8 @@ where
                 assert!(
                     height == expected_height,
                     "matrix height {height} incompatible with tallest height {max_height}; \
-                         expected ceil_div({max_height}, {N}^{}) = {expected_height} \
-                         so every global index maps to a row at depth {bits_reduced}",
-                    bits_reduced / log_arity
+                         expected ceil_div({max_height}, 2^{bits_reduced}) = {expected_height} \
+                         so every global index maps to a row at depth {bits_reduced}"
                 );
             }
         } else {
@@ -198,6 +194,7 @@ where
 
         let tree = MerkleTree::new::<P, PW, H, C>(&self.hash, &self.compress, inputs);
 
+        // Make cap_height fit this tree (small trees during FRI folding may have fewer layers)
         let num_layers = tree.num_layers();
         let effective_cap_height = self.cap_height.min(num_layers.saturating_sub(1));
 
@@ -209,8 +206,11 @@ where
     ///
     /// Returns `(openings, proof)` where `openings` is a vector whose `i`th element is
     /// the `j`th row of the ith matrix `M[i]`, and `proof` is the vector of sibling
-    /// Merkle tree nodes (N-1 per tree level) allowing the verifier to reconstruct
-    /// the committed cap entry.
+    /// Merkle tree nodes allowing the verifier to reconstruct the committed cap entry.
+    ///
+    /// At each tree level the number of siblings is `step - 1`, where `step` is either
+    /// `N` (full N-ary compression) or `2` (binary) at levels that sit between N-ary layers).
+    /// For binary levels the remaining `N - 2` inputs are padded with the default digest.
     fn open_batch<M: Matrix<P::Value>>(
         &self,
         index: usize,
@@ -223,6 +223,7 @@ where
         );
         let log_max_height = log2_ceil_usize(max_height);
 
+        // Get the matrix rows encountered along the path from the cap to the given leaf index.
         let openings = prover_data
             .leaves
             .iter()
@@ -234,23 +235,25 @@ where
             })
             .collect_vec();
 
+        // Only include siblings up to (but not including) the cap layer.
         let num_layers = prover_data.digest_layers.len();
         let effective_cap_height = self.cap_height.min(num_layers.saturating_sub(1));
-        let log_arity = log2_strict_usize(N);
-        let tree_depth = log_max_height.div_ceil(log_arity);
-        let proof_levels = tree_depth - effective_cap_height;
+        let proof_levels = num_layers
+            .saturating_sub(1)
+            .saturating_sub(effective_cap_height);
 
-        let mut proof = Vec::with_capacity(proof_levels * (N - 1));
+        let mut proof = Vec::new();
         let mut idx = index;
         for layer_idx in 0..proof_levels {
-            let group_start = (idx / N) * N;
-            let pos_in_group = idx % N;
-            for k in 0..N {
+            let step = prover_data.arity_schedule[layer_idx];
+            let group_start = (idx / step) * step;
+            let pos_in_group = idx % step;
+            for k in 0..step {
                 if k != pos_in_group {
                     proof.push(prover_data.digest_layers[layer_idx][group_start + k]);
                 }
             }
-            idx /= N;
+            idx /= step;
         }
 
         BatchOpening::new(openings, proof)
@@ -265,9 +268,25 @@ where
 
     /// Verifies an opened batch of rows with respect to a given commitment (Merkle cap).
     ///
-    /// The proof contains `(N-1)` sibling digests per tree level. At each level the
-    /// verifier reconstructs the full N-ary group, compresses, and optionally
-    /// mixes in smaller-matrix rows via an extra compression step.
+    /// At each tree level, the verifier determines whether this level used a full
+    /// N-ary step or a binary step (when a matrix injection sits between N-ary
+    /// layers). Binary steps carry `1` sibling in the proof; N-ary steps carry
+    /// `N-1` siblings. Both cases use the same N-to-1 compression function —
+    /// binary steps pad the remaining `N-2` slots with the default digest.
+    ///
+    /// # Arguments
+    /// - `commit`: The Merkle cap of the tree.
+    /// - `dimensions`: A vector of the dimensions of the matrices committed to.
+    /// - `index`: The index of a leaf in the tree.
+    /// - `batch_proof`: A reference to a batched opening proof, containing:
+    ///   - `opened_values`: A vector of matrix rows. Assume that the tallest matrix committed
+    ///     to has height `2^n >= M_tall.height() > 2^{n - 1}` and the `j`th matrix has height
+    ///     `2^m >= Mj.height() > 2^{m - 1}`. Then `j`'th value of opened values must be the row `Mj[index >> (m - n)]`.
+    ///   - `opening_proof`: A vector of sibling nodes. The `i`th element should be the node at level `i`
+    ///     with index `(index << i) ^ 1`.
+    ///
+    /// # Returns
+    /// `Ok(())` if the verification is successful; otherwise returns a verification error.
     fn verify_batch(
         &self,
         commit: &Self::Commitment,
@@ -276,6 +295,7 @@ where
         batch_proof: BatchOpeningRef<'_, P::Value, Self>,
     ) -> Result<(), Self::Error> {
         let (opened_values, opening_proof) = batch_proof.unpack();
+        // Check that the openings have the correct shape.
         if dimensions.len() != opened_values.len() {
             return Err(WrongBatchSize);
         }
@@ -286,6 +306,7 @@ where
             .sorted_by_key(|(_, dims)| Reverse(dims.height))
             .peekable();
 
+        // Matrix heights that round up to the same power of two must be equal
         if !heights_tallest_first
             .clone()
             .map(|(_, dims)| dims.height)
@@ -297,35 +318,12 @@ where
             return Err(IncompatibleHeights);
         }
 
-        let log_arity = log2_strict_usize(N);
-
-        // Derive effective cap height from the commitment size.
-        // commit.num_roots() == N^effective_cap_height.
-        let effective_cap_height = log2_strict_usize(commit.num_roots()) / log_arity;
-
+        // Get the initial height padded to a power of two. As heights_tallest_first is sorted,
+        // the initial height will be the maximum height.
         let (max_height, mut curr_height_padded) = match heights_tallest_first.peek() {
             Some((_, dims)) => {
                 let max_height = dims.height;
                 let curr_height_padded = max_height.next_power_of_two();
-                let log_max_height = log2_strict_usize(curr_height_padded);
-                let tree_depth = log_max_height.div_ceil(log_arity);
-                let expected_num_levels = tree_depth.saturating_sub(effective_cap_height);
-                let expected_proof_len = expected_num_levels * (N - 1);
-
-                if opening_proof.len() != expected_proof_len {
-                    return Err(WrongHeight {
-                        expected_proof_len,
-                        num_siblings: opening_proof.len(),
-                    });
-                }
-
-                if effective_cap_height > tree_depth {
-                    return Err(WrongCapHeight {
-                        cap_height: effective_cap_height,
-                        tree_depth,
-                    });
-                }
-
                 (max_height, curr_height_padded)
             }
             None => return Err(EmptyBatch),
@@ -346,23 +344,53 @@ where
 
         let default_digest = [PW::Value::default(); DIGEST_ELEMS];
 
-        for siblings in opening_proof.chunks_exact(N - 1) {
-            let pos_in_group = index % N;
+        // Replay the arity schedule that the prover computed during tree
+        // construction. We use the remaining matrix heights to decide at
+        // each level whether this was an N-ary or a binary step.
+        let mut proof_pos: usize = 0;
+
+        while proof_pos < opening_proof.len() {
+            let step = if curr_height_padded < N {
+                2
+            } else {
+                let n_ary_target = curr_height_padded / N;
+                let has_intermediate = heights_tallest_first
+                    .clone()
+                    .any(|(_, dims)| dims.height.next_power_of_two() > n_ary_target);
+                if has_intermediate { 2 } else { N }
+            };
+
+            let num_siblings = step - 1;
+            if proof_pos + num_siblings > opening_proof.len() {
+                return Err(WrongHeight {
+                    expected_proof_len: proof_pos + num_siblings,
+                    num_siblings: opening_proof.len(),
+                });
+            }
+            let siblings = &opening_proof[proof_pos..proof_pos + num_siblings];
+            proof_pos += num_siblings;
+
+            let pos_in_group = index % step;
             let mut sibling_idx = 0;
             let inputs: [_; N] = core::array::from_fn(|k| {
-                if k == pos_in_group {
-                    digest
+                if k < step {
+                    if k == pos_in_group {
+                        digest
+                    } else {
+                        let s = siblings[sibling_idx];
+                        sibling_idx += 1;
+                        s
+                    }
                 } else {
-                    let s = siblings[sibling_idx];
-                    sibling_idx += 1;
-                    s
+                    default_digest
                 }
             });
 
             digest = self.compress.compress(inputs);
-            index /= N;
-            curr_height_padded /= N;
+            index /= step;
+            curr_height_padded /= step;
 
+            // Check if there are any new matrix rows to inject at the next height.
             let next_height = heights_tallest_first
                 .peek()
                 .map(|(_, dims)| dims.height)
@@ -387,6 +415,8 @@ where
             }
         }
 
+        // After processing the proof, `index` has been shifted by the proof length.
+        // This index now points into the cap layer.
         let cap_index = index;
         if cap_index < commit.num_roots() && commit[cap_index] == digest {
             Ok(())
