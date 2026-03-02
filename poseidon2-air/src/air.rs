@@ -168,7 +168,7 @@ pub(crate) fn eval<
         PARTIAL_ROUNDS,
     >,
 ) {
-    let mut state: [_; WIDTH] = local.inputs.clone().map(|x| x.into());
+    let mut state: [_; WIDTH] = local.inputs.map(|x| x.into());
 
     LinearLayers::external_linear_layer(&mut state);
 
@@ -248,9 +248,9 @@ fn eval_full_round<
         eval_sbox(&full_round.sbox[i], s, builder);
     }
     LinearLayers::external_linear_layer(state);
-    for (state_i, post_i) in state.iter_mut().zip(&full_round.post) {
-        builder.assert_eq(state_i.clone(), post_i.clone());
-        *state_i = post_i.clone().into();
+    for (state_i, post_i) in state.iter_mut().zip(full_round.post) {
+        builder.assert_eq(state_i.clone(), post_i);
+        *state_i = post_i.into();
     }
 }
 
@@ -270,8 +270,8 @@ fn eval_partial_round<
     state[0] += round_constant.clone();
     eval_sbox(&partial_round.sbox, &mut state[0], builder);
 
-    builder.assert_eq(state[0].clone(), partial_round.post_sbox.clone());
-    state[0] = partial_round.post_sbox.clone().into();
+    builder.assert_eq(state[0].clone(), partial_round.post_sbox);
+    state[0] = partial_round.post_sbox.into();
 
     LinearLayers::internal_linear_layer(state);
 }
@@ -296,19 +296,19 @@ fn eval_sbox<AB, const DEGREE: u64, const REGISTERS: usize>(
         (5, 0) => x.exp_const_u64::<5>(),
         (7, 0) => x.exp_const_u64::<7>(),
         (5, 1) => {
-            let committed_x3 = sbox.0[0].clone().into();
+            let committed_x3 = sbox.0[0].into();
             let x2 = x.square();
             builder.assert_eq(committed_x3.clone(), x2.clone() * x.clone());
             committed_x3 * x2
         }
         (7, 1) => {
-            let committed_x3 = sbox.0[0].clone().into();
+            let committed_x3 = sbox.0[0].into();
             builder.assert_eq(committed_x3.clone(), x.cube());
             committed_x3.square() * x.clone()
         }
         (11, 2) => {
-            let committed_x3 = sbox.0[0].clone().into();
-            let committed_x9 = sbox.0[1].clone().into();
+            let committed_x3 = sbox.0[0].into();
+            let committed_x9 = sbox.0[1].into();
             let x2 = x.square();
             builder.assert_eq(committed_x3.clone(), x2.clone() * x.clone());
             builder.assert_eq(committed_x9.clone(), committed_x3.cube());

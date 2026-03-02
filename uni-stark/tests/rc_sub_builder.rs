@@ -49,8 +49,8 @@ where
         let mut recomposed = AB::Expr::ZERO;
         for (i, bit) in bits.iter().enumerate() {
             let weight = BabyBear::from_u32(1 << i);
-            recomposed += bit.clone() * weight;
-            builder.assert_zero(bit.clone() * (bit.clone() - AB::Expr::ONE));
+            recomposed += *bit * weight;
+            builder.assert_zero(*bit * (*bit - AB::F::ONE));
         }
 
         builder.assert_zero(value - recomposed);
@@ -87,7 +87,7 @@ where
         let range_value = main.local(1);
         let next_accumulator = main.next(0);
 
-        builder.when_first_row().assert_zero(accumulator.clone());
+        builder.when_first_row().assert_zero(accumulator);
         builder
             .when_transition()
             .assert_eq(next_accumulator, accumulator + range_value);

@@ -81,14 +81,14 @@ where
         let next: &FibRow<AB::Var> = main.next_as();
 
         let mut wf = builder.when_first_row();
-        wf.assert_eq(local.left.clone(), a0);
-        wf.assert_eq(local.right.clone(), b0);
+        wf.assert_eq(local.left, a0);
+        wf.assert_eq(local.right, b0);
 
         let mut wt = builder.when_transition();
-        wt.assert_eq(local.right.clone(), next.left.clone());
-        wt.assert_eq(local.left.clone() + local.right.clone(), next.right.clone());
+        wt.assert_eq(local.right, next.left);
+        wt.assert_eq(local.left + local.right, next.right);
 
-        builder.when_last_row().assert_eq(local.right.clone(), x);
+        builder.when_last_row().assert_eq(local.right, x);
     }
 }
 
@@ -167,17 +167,13 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
         let next = main.next_slice();
         for i in 0..self.reps {
             let s = i * 3;
-            let a = local[s].clone();
-            let b = local[s + 1].clone();
-            let c = local[s + 2].clone();
-            builder.assert_eq(a.clone() * b.clone(), c);
+            let a = local[s];
+            let b = local[s + 1];
+            let c = local[s + 2];
+            builder.assert_eq(a * b, c);
 
-            builder
-                .when_transition()
-                .assert_eq(b.clone(), next[s].clone());
-            builder
-                .when_transition()
-                .assert_eq(a + b, next[s + 1].clone());
+            builder.when_transition().assert_eq(b, next[s]);
+            builder.when_transition().assert_eq(a + b, next[s + 1]);
         }
     }
 }
@@ -486,8 +482,8 @@ where
 
         // Enforce: main[0] = multiplier * preprocessed[0]
         builder.assert_eq(
-            local_main[0].clone(),
-            local_prep[0].clone() * AB::Expr::from_u64(self.multiplier),
+            local_main[0],
+            local_prep[0] * AB::Expr::from_u64(self.multiplier),
         );
     }
 }

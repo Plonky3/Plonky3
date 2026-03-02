@@ -60,7 +60,7 @@ pub struct KeccakCols<T> {
     pub a_prime_prime_prime_0_0_limbs: [T; U64_LIMBS],
 }
 
-impl<T: Clone> KeccakCols<T> {
+impl<T: Copy> KeccakCols<T> {
     pub fn b(&self, x: usize, y: usize, z: usize) -> T {
         debug_assert!(x < 5);
         debug_assert!(y < 5);
@@ -75,7 +75,7 @@ impl<T: Clone> KeccakCols<T> {
         let a = (x + 3 * y) % 5;
         let b = x;
         let rot = R[a][b] as usize;
-        self.a_prime[b][a][(z + 64 - rot) % 64].clone()
+        self.a_prime[b][a][(z + 64 - rot) % 64]
     }
 
     pub fn a_prime_prime_prime(&self, y: usize, x: usize, limb: usize) -> T {
@@ -84,9 +84,9 @@ impl<T: Clone> KeccakCols<T> {
         debug_assert!(limb < U64_LIMBS);
 
         if y == 0 && x == 0 {
-            self.a_prime_prime_prime_0_0_limbs[limb].clone()
+            self.a_prime_prime_prime_0_0_limbs[limb]
         } else {
-            self.a_prime_prime[y][x][limb].clone()
+            self.a_prime_prime[y][x][limb]
         }
     }
 }

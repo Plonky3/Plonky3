@@ -304,7 +304,7 @@ pub trait AirBuilder: Sized {
     ///
     /// Serves as the input type for an AIR constraint evaluation.
     type Var: Into<Self::Expr>
-        + Clone
+        + Copy
         + Send
         + Sync
         + Add<Self::F, Output = Self::Expr>

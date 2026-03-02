@@ -66,12 +66,12 @@ where
         let mut when_transition = builder.when_transition();
 
         // a' <- b
-        when_transition.assert_eq(local.b.clone(), next.a.clone());
+        when_transition.assert_eq(local.b, next.a);
 
         // b' <- prod_coeff * a * b + sum_coeff * (a + b)
-        let prod_term = prep.prod_coeff.clone() * local.a.clone() * local.b.clone();
-        let sum_term = prep.sum_coeff.clone() * (local.a.clone() + local.b.clone());
-        when_transition.assert_eq(prod_term + sum_term, next.b.clone());
+        let prod_term = prep.prod_coeff * local.a * local.b;
+        let sum_term = prep.sum_coeff * (local.a + local.b);
+        when_transition.assert_eq(prod_term + sum_term, next.b);
     }
 }
 
