@@ -292,12 +292,13 @@ where
 #[cfg(test)]
 mod tests {
     use p3_baby_bear::BabyBear;
+    use p3_field::extension::BinomialExtensionField;
 
     use super::*;
     use crate::BaseAir;
 
     type F = BabyBear;
-    type EF = p3_field::extension::BinomialExtensionField<F, 4>;
+    type EF = BinomialExtensionField<F, 4>;
 
     #[derive(Debug)]
     struct MockAir {
