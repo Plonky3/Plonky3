@@ -265,7 +265,7 @@ fn compute_equivalent_matrices<F: Field, const N: usize>(
     let mut w_hat_collection: Vec<[F; N]> = Vec::with_capacity(rounds_p);
     let mut v_collection: Vec<[F; N]> = Vec::with_capacity(rounds_p);
 
-    // Work on M^T (HorizenLabs convention).
+    // Work on M^T.
     let mds_t = matrix_transpose(mds);
     let mut m_mul = mds_t;
     let mut m_i = [[F::ZERO; N]; N];
