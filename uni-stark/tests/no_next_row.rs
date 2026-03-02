@@ -53,7 +53,7 @@ type Perm = Poseidon2BabyBear<16>;
 type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 type ValMmcs =
-    MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
+    MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 2, 8>;
 type Challenge = BinomialExtensionField<Val, 4>;
 type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16, 8>;

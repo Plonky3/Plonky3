@@ -124,7 +124,7 @@ type Perm = Poseidon2BabyBear<16>;
 type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 type ValMmcs =
-    MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
+    MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 2, 8>;
 type Challenge = BinomialExtensionField<Val, 4>;
 type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
@@ -169,7 +169,7 @@ type CircleChallenge = BinomialExtensionField<CircleVal, 3>;
 type CircleByteHash = Keccak256Hash;
 type CircleFieldHash = SerializingHasher<CircleByteHash>;
 type CircleCompress = CompressionFunctionFromHasher<CircleByteHash, 2, 32>;
-type CircleValMmcs = MerkleTreeMmcs<CircleVal, u8, CircleFieldHash, CircleCompress, 32>;
+type CircleValMmcs = MerkleTreeMmcs<CircleVal, u8, CircleFieldHash, CircleCompress, 2, 32>;
 type CircleChallengeMmcs = ExtensionMmcs<CircleVal, CircleChallenge, CircleValMmcs>;
 type CircleChallenger = SerializingChallenger32<CircleVal, HashChallenger<u8, CircleByteHash, 32>>;
 type CirclePcsType = CirclePcs<CircleVal, CircleValMmcs, CircleChallengeMmcs>;
@@ -258,6 +258,7 @@ fn test_zk() {
         FieldHash,
         MyCompress,
         SmallRng,
+        2,
         4,
         4,
     >;

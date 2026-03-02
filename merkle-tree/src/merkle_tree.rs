@@ -12,7 +12,7 @@ use p3_symmetric::{CryptographicHasher, Hash, MerkleCap, PseudoCompressionFuncti
 use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
-/// A binary Merkle tree whose leaves are vectors of matrix rows.
+/// An N-ary Merkle tree whose leaves are vectors of matrix rows.
 ///
 /// * `F` – scalar element type inside each matrix row.
 /// * `W` – scalar element type of every digest word.
@@ -28,7 +28,7 @@ use tracing::instrument;
 /// This generally shouldn't be used directly. If you're using a Merkle tree as an MMCS,
 /// see `MerkleTreeMmcs`.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct MerkleTree<F, W, M, const DIGEST_ELEMS: usize> {
+pub struct MerkleTree<F, W, M, const N: usize, const DIGEST_ELEMS: usize> {
     /// All leaf matrices in insertion order.
     ///
     /// Each matrix contributes rows to one or more digest layers, depending on its height.
@@ -58,8 +58,8 @@ pub struct MerkleTree<F, W, M, const DIGEST_ELEMS: usize> {
     _phantom: PhantomData<F>,
 }
 
-impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
-    MerkleTree<F, W, M, DIGEST_ELEMS>
+impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGEST_ELEMS: usize>
+    MerkleTree<F, W, M, N, DIGEST_ELEMS>
 {
     /// Build a tree from **one or more matrices**.
     ///
@@ -88,12 +88,13 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
         H: CryptographicHasher<F, [W; DIGEST_ELEMS]>
             + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
             + Sync,
-        C: PseudoCompressionFunction<[W; DIGEST_ELEMS], 2>
-            + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
+        C: PseudoCompressionFunction<[W; DIGEST_ELEMS], N>
+            + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>
             + Sync,
     {
         assert!(!leaves.is_empty(), "No matrices given?");
         const {
+            assert!(N >= 2, "Arity N must be at least 2");
             assert!(P::WIDTH == PW::WIDTH, "Packing widths must match");
         }
 
@@ -118,7 +119,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
             .peeking_take_while(|m| m.height() == max_height)
             .collect_vec();
 
-        let mut digest_layers = vec![first_digest_layer::<P, _, _, _, DIGEST_ELEMS>(
+        let mut digest_layers = vec![first_digest_layer::<P, _, _, _, N, DIGEST_ELEMS>(
             h,
             &tallest_matrices,
         )];
@@ -127,14 +128,14 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
             if prev_layer.len() == 1 {
                 break;
             }
-            let next_layer_len = (prev_layer.len() / 2).next_power_of_two();
+            let next_layer_len = (prev_layer.len() / N).next_power_of_two();
 
             // The matrices that get injected at this layer.
             let matrices_to_inject = leaves_largest_first
                 .peeking_take_while(|m| m.height().next_power_of_two() == next_layer_len)
                 .collect_vec();
 
-            let next_digests = compress_and_inject::<P, _, _, _, _, DIGEST_ELEMS>(
+            let next_digests = compress_and_inject::<P, _, _, _, _, N, DIGEST_ELEMS>(
                 prev_layer,
                 &matrices_to_inject,
                 h,
@@ -162,8 +163,8 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
     /// Return the Merkle cap at the specified height from the root.
     ///
     /// A cap height of 0 returns just the root (1 element).
-    /// A cap height of 1 returns 2 elements (children of root).
-    /// A cap height of h returns 2^h elements.
+    /// A cap height of 1 returns N elements (children of root).
+    /// A cap height of h returns N^h elements.
     ///
     /// # Panics
     /// Panics if `cap_height` exceeds the tree depth.
@@ -180,11 +181,10 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
             num_layers
         );
 
-        // For cap_height = h, we have `layer_idx = num_layers - 1 - h`.
         let layer_idx = num_layers - 1 - cap_height;
         let layer = &self.digest_layers[layer_idx];
 
-        let cap_len = 1 << cap_height;
+        let cap_len = N.pow(cap_height as u32);
         debug_assert!(
             layer.len() >= cap_len,
             "layer has {} elements but cap needs {}",
@@ -223,7 +223,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const DIGEST_ELEMS: usize>
 /// # Returns
 /// A vector of `[PW::Value; DIGEST_ELEMS]`, containing the digests of each row.
 #[instrument(name = "first digest layer", level = "debug", skip_all)]
-fn first_digest_layer<P, PW, H, M, const DIGEST_ELEMS: usize>(
+fn first_digest_layer<P, PW, H, M, const N: usize, const DIGEST_ELEMS: usize>(
     h: &H,
     tallest_matrices: &[&M],
 ) -> Vec<[PW::Value; DIGEST_ELEMS]>
@@ -241,12 +241,13 @@ where
     // Get the height of the tallest matrices (they are guaranteed to be equal).
     let max_height = tallest_matrices[0].height();
 
-    // Compute the padded height to ensure we end up with an even number of digests.
+    // Pad to the next multiple of N so the first compression layer has
+    // complete groups.
     // **Exception:** if there's only 1 row, we keep it as 1.
     let max_height_padded = if max_height == 1 {
         1
     } else {
-        max_height + max_height % 2
+        max_height.div_ceil(N) * N
     };
 
     // Prepare a default digest value to fill unused slots or padding.
@@ -289,11 +290,12 @@ where
     digests
 }
 
-/// Fold one digest layer into the next and, when present, mix in rows
-/// taken from smaller matrices whose padded height equals `prev_layer.len()/2`.
+/// Fold one digest layer into the next (N-to-1) and, when present, mix in
+/// rows taken from smaller matrices whose padded height equals
+/// `prev_layer.len() / N`.
 ///
-/// Pads the output so its length is even unless it becomes the root.
-fn compress_and_inject<P, PW, H, C, M, const DIGEST_ELEMS: usize>(
+/// Pads the output so its length is a multiple of N unless it becomes the root.
+fn compress_and_inject<P, PW, H, C, M, const N: usize, const DIGEST_ELEMS: usize>(
     prev_layer: &[[PW::Value; DIGEST_ELEMS]],
     matrices_to_inject: &[&M],
     h: &H,
@@ -305,23 +307,22 @@ where
     H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
         + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
         + Sync,
-    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>
-        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>
+        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>
         + Sync,
     M: Matrix<P::Value>,
 {
     if matrices_to_inject.is_empty() {
-        return compress::<PW, _, DIGEST_ELEMS>(prev_layer, c);
+        return compress::<PW, _, N, DIGEST_ELEMS>(prev_layer, c);
     }
 
     let width = PW::WIDTH;
     let next_len = matrices_to_inject[0].height();
-    // We always want to return an even number of digests, except when it's the root.
-    let next_len_padded = if prev_layer.len() == 2 {
+    let next_len_padded = if prev_layer.len() == N {
         1
     } else {
-        // Round prev_layer.len() / 2 up to the next even integer.
-        (prev_layer.len() / 2 + 1) & !1
+        let raw = prev_layer.len() / N;
+        raw.div_ceil(N) * N
     };
 
     let default_digest = [PW::Value::default(); DIGEST_ELEMS];
@@ -331,70 +332,84 @@ where
         .enumerate()
         .for_each(|(i, digests_chunk)| {
             let first_row = i * width;
-            let left = array::from_fn(|j| PW::from_fn(|k| prev_layer[2 * (first_row + k)][j]));
-            let right = array::from_fn(|j| PW::from_fn(|k| prev_layer[2 * (first_row + k) + 1][j]));
-            let mut packed_digest = c.compress([left, right]);
+            let children: [[PW; DIGEST_ELEMS]; N] = array::from_fn(|n| {
+                array::from_fn(|j| PW::from_fn(|k| prev_layer[N * (first_row + k) + n][j]))
+            });
+            let mut packed_digest = c.compress(children);
             let tallest_digest = h.hash_iter(
                 matrices_to_inject
                     .iter()
                     .flat_map(|m| m.vertically_packed_row(first_row)),
             );
-            packed_digest = c.compress([packed_digest, tallest_digest]);
+            let default_packed: [PW; DIGEST_ELEMS] =
+                array::from_fn(|_| PW::from_fn(|_| PW::Value::default()));
+            let inject_inputs: [[PW; DIGEST_ELEMS]; N] = array::from_fn(|n| {
+                if n == 0 {
+                    packed_digest
+                } else if n == 1 {
+                    tallest_digest
+                } else {
+                    default_packed
+                }
+            });
+            packed_digest = c.compress(inject_inputs);
             PW::unpack_into(&packed_digest, digests_chunk);
         });
 
-    // If our packing width did not divide next_len, fall back to single-threaded scalar code
-    // for the last bit.
     for i in (next_len / width * width)..next_len {
-        let left = prev_layer[2 * i];
-        let right = prev_layer[2 * i + 1];
-        let digest = c.compress([left, right]);
-        let rows_digest = unsafe {
-            // Safety: Clearly i < next_len = m.height().
-            h.hash_iter(matrices_to_inject.iter().flat_map(|m| m.row_unchecked(i)))
-        };
-        next_digests[i] = c.compress([digest, rows_digest]);
+        let children: [_; N] = array::from_fn(|n| prev_layer[N * i + n]);
+        let digest = c.compress(children);
+        let rows_digest =
+            unsafe { h.hash_iter(matrices_to_inject.iter().flat_map(|m| m.row_unchecked(i))) };
+        let inject_inputs: [_; N] = array::from_fn(|n| {
+            if n == 0 {
+                digest
+            } else if n == 1 {
+                rows_digest
+            } else {
+                default_digest
+            }
+        });
+        next_digests[i] = c.compress(inject_inputs);
     }
 
-    // At this point, we've exceeded the height of the matrices to inject, so we continue the
-    // process above except with default_digest in place of an input digest.
-    // We only need go as far as half the length of the previous layer.
-    for i in next_len..(prev_layer.len() / 2) {
-        let left = prev_layer[2 * i];
-        let right = prev_layer[2 * i + 1];
-        let digest = c.compress([left, right]);
-        next_digests[i] = c.compress([digest, default_digest]);
+    // Beyond the injected matrix height, compress children with a
+    // default-padded injection (no real matrix rows).
+    for i in next_len..(prev_layer.len() / N) {
+        let children: [_; N] = array::from_fn(|n| prev_layer[N * i + n]);
+        let digest = c.compress(children);
+        let inject_inputs: [_; N] =
+            array::from_fn(|n| if n == 0 { digest } else { default_digest });
+        next_digests[i] = c.compress(inject_inputs);
     }
 
     next_digests
 }
 
-/// Pure compression step used when no extra rows are injected.
+/// Pure N-to-1 compression step used when no extra rows are injected.
 ///
-/// Takes pairs of digests from `prev_layer`, feeds them to `c`,
+/// Groups N consecutive digests from `prev_layer`, feeds each group to `c`,
 /// and writes the results in order.
 ///
-/// Pads with the zero digest so the caller always receives an even-sized
-/// slice, except when the tree has shrunk to its single root.
-fn compress<P, C, const DIGEST_ELEMS: usize>(
+/// Pads with the zero digest so the caller always receives a multiple-of-N
+/// sized slice, except when the tree has shrunk to its single root.
+fn compress<P, C, const N: usize, const DIGEST_ELEMS: usize>(
     prev_layer: &[[P::Value; DIGEST_ELEMS]],
     c: &C,
 ) -> Vec<[P::Value; DIGEST_ELEMS]>
 where
     P: PackedValue,
-    C: PseudoCompressionFunction<[P::Value; DIGEST_ELEMS], 2>
-        + PseudoCompressionFunction<[P; DIGEST_ELEMS], 2>
+    C: PseudoCompressionFunction<[P::Value; DIGEST_ELEMS], N>
+        + PseudoCompressionFunction<[P; DIGEST_ELEMS], N>
         + Sync,
 {
     let width = P::WIDTH;
-    // Always return an even number of digests, except when it's the root.
-    let next_len_padded = if prev_layer.len() == 2 {
+    let next_len = prev_layer.len() / N;
+    let next_len_padded = if prev_layer.len() == N {
         1
     } else {
-        // Round prev_layer.len() / 2 up to the next even integer.
-        (prev_layer.len() / 2 + 1) & !1
+        next_len.div_ceil(N) * N
     };
-    let next_len = prev_layer.len() / 2;
 
     let default_digest = [P::Value::default(); DIGEST_ELEMS];
     let mut next_digests = vec![default_digest; next_len_padded];
@@ -404,21 +419,18 @@ where
         .enumerate()
         .for_each(|(i, digests_chunk)| {
             let first_row = i * width;
-            let left = array::from_fn(|j| P::from_fn(|k| prev_layer[2 * (first_row + k)][j]));
-            let right = array::from_fn(|j| P::from_fn(|k| prev_layer[2 * (first_row + k) + 1][j]));
-            let packed_digest = c.compress([left, right]);
+            let children: [[P; DIGEST_ELEMS]; N] = array::from_fn(|n| {
+                array::from_fn(|j| P::from_fn(|k| prev_layer[N * (first_row + k) + n][j]))
+            });
+            let packed_digest = c.compress(children);
             P::unpack_into(&packed_digest, digests_chunk);
         });
 
-    // If our packing width did not divide next_len, fall back to single-threaded scalar code
-    // for the last bit.
     for i in (next_len / width * width)..next_len {
-        let left = prev_layer[2 * i];
-        let right = prev_layer[2 * i + 1];
-        next_digests[i] = c.compress([left, right]);
+        let children: [_; N] = array::from_fn(|n| prev_layer[N * i + n]);
+        next_digests[i] = c.compress(children);
     }
 
-    // Everything has been initialized so we can safely cast.
     next_digests
 }
 
@@ -452,7 +464,7 @@ mod tests {
             [0x03; 32], // 0x01 ^ 0x02
             [0x07; 32], // 0x03 ^ 0x04
         ];
-        let result = compress::<u8, DummyCompressionFunction, 32>(&prev_layer, &compressor);
+        let result = compress::<u8, DummyCompressionFunction, 2, 32>(&prev_layer, &compressor);
         assert_eq!(result, expected);
     }
 
@@ -464,7 +476,7 @@ mod tests {
             [0x03; 32], // 0x05 ^ 0x06
             [0x00; 32],
         ];
-        let result = compress::<u8, DummyCompressionFunction, 32>(&prev_layer, &compressor);
+        let result = compress::<u8, DummyCompressionFunction, 2, 32>(&prev_layer, &compressor);
         assert_eq!(result, expected);
     }
 
@@ -483,7 +495,7 @@ mod tests {
                 result
             })
             .collect();
-        let result = compress::<u8, DummyCompressionFunction, 32>(&prev_layer, &compressor);
+        let result = compress::<u8, DummyCompressionFunction, 2, 32>(&prev_layer, &compressor);
         assert_eq!(result, expected);
     }
 
@@ -496,7 +508,7 @@ mod tests {
         let prev_layer = [[0xAA; 32], [0x55; 32]];
         let compressor = DummyCompressionFunction;
         let expected = vec![[0xFF; 32]];
-        let result = compress::<u8, DummyCompressionFunction, 32>(&prev_layer, &compressor);
+        let result = compress::<u8, DummyCompressionFunction, 2, 32>(&prev_layer, &compressor);
         assert_eq!(result, expected);
     }
 
@@ -519,7 +531,7 @@ mod tests {
         // extra padded digest filled with 0
         expected.push([0x00; 32]);
 
-        let result = compress::<u8, DummyCompressionFunction, 32>(&prev_layer, &compressor);
+        let result = compress::<u8, DummyCompressionFunction, 2, 32>(&prev_layer, &compressor);
         assert_eq!(result, expected);
         // also validate the padding branch explicitly
         assert_eq!(result.len(), 4);
