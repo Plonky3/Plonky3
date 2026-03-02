@@ -49,6 +49,7 @@
 use alloc::vec::Vec;
 
 use p3_field::{Algebra, Field, InjectiveMonomial, PrimeCharacteristicRing};
+use p3_symmetric::Permutation;
 
 use crate::external::mds_multiply;
 
@@ -96,6 +97,18 @@ pub struct PartialRoundConstants<F, const WIDTH: usize> {
     /// The last partial round has no additive constant (it was absorbed by the
     /// backward substitution). Length = RP - 1.
     pub round_constants: Vec<F>,
+
+    /// Scalar constants for the textbook partial round path.
+    ///
+    /// Length = RP. Each entry is the optimized scalar to add to `state[0]` before
+    /// the S-box, computed via forward constant substitution.
+    pub textbook_scalar_constants: Vec<F>,
+
+    /// Residual accumulator for the textbook path.
+    ///
+    /// Added to the state after all partial rounds complete.
+    /// Accounts for the folded-forward `state[1..WIDTH]` constants.
+    pub textbook_residual: [F; WIDTH],
 }
 
 /// Construct a partial round layer from pre-computed constants.
@@ -198,4 +211,35 @@ pub fn partial_permute_state<
         &constants.sparse_first_row[rounds_p - 1],
         &constants.v[rounds_p - 1],
     );
+}
+
+/// Textbook partial round permutation with forward-substituted scalar constants.
+///
+/// Instead of the sparse matrix decomposition, this applies the full MDS permutation
+/// per round but with only a scalar constant addition to `state[0]`. After all rounds,
+/// a residual vector is added to the state.
+///
+/// This is beneficial when the MDS permutation is very fast (e.g., Karatsuba
+/// convolution for power-of-2 circulant matrices), making the per-round MDS cost
+/// competitive with the sparse approach.
+#[inline]
+pub fn textbook_partial_permute_state<
+    F: Field,
+    A: Algebra<F> + InjectiveMonomial<D>,
+    Mds: Permutation<[A; WIDTH]>,
+    const WIDTH: usize,
+    const D: u64,
+>(
+    state: &mut [A; WIDTH],
+    constants: &PartialRoundConstants<F, WIDTH>,
+    mds: &Mds,
+) {
+    for &c in &constants.textbook_scalar_constants {
+        state[0] += c;
+        state[0] = state[0].injective_exp_n();
+        mds.permute_mut(state);
+    }
+    for (s, &r) in state.iter_mut().zip(constants.textbook_residual.iter()) {
+        *s += r;
+    }
 }

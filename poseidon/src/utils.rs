@@ -356,6 +356,52 @@ fn equivalent_round_constants<F: Field, const N: usize>(
     (first_round_constants, opt_partial_rc)
 }
 
+/// Forward constant substitution for the textbook partial round path.
+///
+/// In a partial round, only `state[0]` goes through the S-box. The constants for
+/// `state[1..WIDTH]` can be folded forward through the MDS matrix, reducing each
+/// partial round to a single scalar addition to `state[0]` plus one MDS multiply.
+///
+/// # Algorithm
+///
+/// Starting from round 0, for each partial round:
+/// 1. The scalar constant for that round is `rc[0] + acc[0]` (original constant
+///    plus accumulated offset from previous rounds).
+/// 2. The remaining offsets `[0, rc[1]+acc[1], ..., rc[W-1]+acc[W-1]]` are
+///    propagated through the MDS matrix to produce the accumulator for the next round.
+///
+/// After all rounds, the final accumulator is a residual vector that must be added
+/// to the state.
+///
+/// # Returns
+///
+/// A tuple of (scalar_constants, residual) where:
+/// - `scalar_constants` has RP entries, one per partial round (added to `state[0]`
+///   before the S-box).
+/// - `residual` is a WIDTH-vector added to the state after all partial rounds complete.
+pub(crate) fn forward_constant_substitution<F: Field, const N: usize>(
+    mds: &[[F; N]; N],
+    partial_rc: &[[F; N]],
+) -> (Vec<F>, [F; N]) {
+    let rounds_p = partial_rc.len();
+    let mut acc = [F::ZERO; N];
+    let mut scalar_constants = Vec::with_capacity(rounds_p);
+
+    for rc in partial_rc {
+        // Scalar constant = rc[0] + accumulated offset.
+        scalar_constants.push(rc[0] + acc[0]);
+
+        // Build remainder: [0, rc[1]+acc[1], ..., rc[W-1]+acc[W-1]].
+        let remainder: [F; N] =
+            core::array::from_fn(|i| if i == 0 { F::ZERO } else { rc[i] + acc[i] });
+
+        // Propagate through MDS.
+        acc = matrix_vec_mul(mds, &remainder);
+    }
+
+    (scalar_constants, acc)
+}
+
 /// Compute all optimized partial round constants from raw parameters.
 ///
 /// Combines the round constant compression and sparse matrix factorization
@@ -488,6 +534,49 @@ mod tests {
         assert_eq!(
             textbook_state, opt_state,
             "Textbook and optimized partial rounds should match"
+        );
+    }
+
+    /// Verify equivalence between textbook (full MDS per round) and textbook+scalar
+    /// (forward constant substitution) partial rounds on a 4x4 state.
+    #[test]
+    fn test_forward_constant_substitution_equivalence_4x4() {
+        let mut rng = SmallRng::seed_from_u64(123);
+        let mds: [[F; 4]; 4] = rng.random();
+        let rounds_p = 5;
+
+        let partial_rc: Vec<[F; 4]> = (0..rounds_p).map(|_| rng.random()).collect();
+
+        let (scalar_constants, residual) =
+            forward_constant_substitution::<F, 4>(&mds, &partial_rc);
+
+        let input: [F; 4] = rng.random();
+
+        // Textbook: add full constant vector, S-box on first element, dense MDS.
+        let mut textbook_state = input;
+        for rc in &partial_rc {
+            for (s, &c) in textbook_state.iter_mut().zip(rc.iter()) {
+                *s += c;
+            }
+            textbook_state[0] = InjectiveMonomial::<7>::injective_exp_n(&textbook_state[0]);
+            textbook_state = matrix_vec_mul(&mds, &textbook_state);
+        }
+
+        // Textbook+scalar: only scalar constant to state[0], same S-box + MDS,
+        // then add residual at the end.
+        let mut scalar_state = input;
+        for &c in &scalar_constants {
+            scalar_state[0] += c;
+            scalar_state[0] = InjectiveMonomial::<7>::injective_exp_n(&scalar_state[0]);
+            scalar_state = matrix_vec_mul(&mds, &scalar_state);
+        }
+        for (s, &r) in scalar_state.iter_mut().zip(residual.iter()) {
+            *s += r;
+        }
+
+        assert_eq!(
+            textbook_state, scalar_state,
+            "Textbook and textbook+scalar partial rounds should match"
         );
     }
 }

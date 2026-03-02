@@ -134,6 +134,10 @@ impl<F: PrimeField, const WIDTH: usize> PoseidonConstants<F, WIDTH> {
         let (first_round_constants, opt_partial_rc, m_i, sparse_v, sparse_first_row) =
             utils::compute_optimized_constants::<F, WIDTH>(&mds, rounds_p, &partial_rc);
 
+        // Compute textbook path constants (forward constant substitution).
+        let (textbook_scalar_constants, textbook_residual) =
+            utils::forward_constant_substitution::<F, WIDTH>(&mds, &partial_rc);
+
         let full_constants = FullRoundConstants {
             initial: initial_rc,
             terminal: terminal_rc,
@@ -145,6 +149,8 @@ impl<F: PrimeField, const WIDTH: usize> PoseidonConstants<F, WIDTH> {
             sparse_first_row,
             v: sparse_v,
             round_constants: opt_partial_rc,
+            textbook_scalar_constants,
+            textbook_residual,
         };
 
         (full_constants, partial_constants)
@@ -251,6 +257,10 @@ where
                 &partial_rc,
             );
 
+        // Compute textbook path constants (forward constant substitution).
+        let (textbook_scalar_constants, textbook_residual) =
+            utils::forward_constant_substitution::<F, WIDTH>(&dense_mds, &partial_rc);
+
         let full_constants = FullRoundConstants {
             initial: initial_rc,
             terminal: terminal_rc,
@@ -262,6 +272,8 @@ where
             sparse_first_row,
             v: sparse_v,
             round_constants: opt_partial_rc,
+            textbook_scalar_constants,
+            textbook_residual,
         };
 
         Self::new_from_precomputed(full_constants, partial_constants)
