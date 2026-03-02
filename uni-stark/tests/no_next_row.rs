@@ -31,9 +31,9 @@ impl<AB: AirBuilder> Air<AB> for SquareAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
         let local = main.row_slice(0).expect("Matrix is empty?");
-        let a = local[0].clone();
-        let b = local[1].clone();
-        builder.assert_eq(a.clone() * a, b);
+        let a = local[0];
+        let b = local[1];
+        builder.assert_eq(a * a, b);
     }
 }
 

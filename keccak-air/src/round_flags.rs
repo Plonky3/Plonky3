@@ -36,13 +36,11 @@ pub(crate) fn eval_round_flags<AB: AirBuilder>(builder: &mut AB) {
     // Initially, the first step flag should be 1 while the others should be 0.
     //
     // Constraint: In the first row, the first flag is 1.
-    builder
-        .when_first_row()
-        .assert_one(local.step_flags[0].clone());
+    builder.when_first_row().assert_one(local.step_flags[0]);
     // Constraint: In the first row, all other flags are 0.
     builder
         .when_first_row()
-        .assert_zeros::<NUM_ROUNDS_MIN_1, _>(try_clone_array(&local.step_flags[1..]));
+        .assert_zeros::<NUM_ROUNDS_MIN_1, _>(try_copy_array(&local.step_flags[1..]));
 
     // Constraint: In all transitions, flags rotate forward.
     //
@@ -52,27 +50,16 @@ pub(crate) fn eval_round_flags<AB: AirBuilder>(builder: &mut AB) {
     builder
         .when_transition()
         .assert_zeros::<NUM_ROUNDS, _>(array::from_fn(|i| {
-            local.step_flags[i].clone() - next.step_flags[(i + 1) % NUM_ROUNDS].clone()
+            local.step_flags[i] - next.step_flags[(i + 1) % NUM_ROUNDS]
         }));
 }
 
-/// Clone a slice into an array of fixed length N by element-wise cloning.
+/// Copy a slice into an array of fixed length N.
 ///
 /// # Panics
 ///
 /// Panics if the input slice length does not match N.
-///
-/// # Arguments
-///
-/// - `slice`: The input slice to copy.
-///
-/// # Returns
-///
-/// - `[T; N]`: The cloned array.
-fn try_clone_array<T: Clone, const N: usize>(slice: &[T]) -> [T; N] {
-    // Check at runtime that the length is correct (should always hold).
+fn try_copy_array<T: Copy, const N: usize>(slice: &[T]) -> [T; N] {
     assert!(slice.len() == N, "Incorrect length");
-
-    // Clone each element into a new array.
-    array::from_fn(|i| slice[i].clone())
+    array::from_fn(|i| slice[i])
 }

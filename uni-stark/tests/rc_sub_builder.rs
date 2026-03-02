@@ -45,14 +45,14 @@ where
         let main = builder.main();
         let local = main.row_slice(0).expect("matrix should have a local row");
 
-        let value = local[0].clone();
+        let value = local[0];
         let bits = &local[1..];
 
         let mut recomposed = AB::Expr::ZERO;
         for (i, bit) in bits.iter().enumerate() {
             let weight = BabyBear::from_u32(1 << i);
-            recomposed += bit.clone() * weight;
-            builder.assert_zero(bit.clone() * (bit.clone() - AB::Expr::ONE));
+            recomposed += *bit * weight;
+            builder.assert_zero(*bit * (*bit - AB::Expr::ONE));
         }
 
         builder.assert_zero(value - recomposed);
@@ -87,11 +87,11 @@ where
         let local = main.row_slice(0).expect("matrix should have a local row");
         let next = main.row_slice(1).expect("matrix only has 1 row?");
 
-        let accumulator = local[0].clone();
-        let range_value = local[1].clone();
-        let next_accumulator = next[0].clone();
+        let accumulator = local[0];
+        let range_value = local[1];
+        let next_accumulator = next[0];
 
-        builder.when_first_row().assert_zero(accumulator.clone());
+        builder.when_first_row().assert_zero(accumulator);
         builder
             .when_transition()
             .assert_eq(next_accumulator, accumulator + range_value);
