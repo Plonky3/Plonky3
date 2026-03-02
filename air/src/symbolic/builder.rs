@@ -292,20 +292,23 @@ mod tests {
     use super::*;
     use crate::BaseAir;
 
+    type F = BabyBear;
+    type EF = p3_field::extension::BinomialExtensionField<F, 4>;
+
     #[derive(Debug)]
     struct MockAir {
-        constraints: Vec<SymbolicVariable<BabyBear>>,
+        constraints: Vec<SymbolicVariable<F>>,
         width: usize,
     }
 
-    impl BaseAir<BabyBear> for MockAir {
+    impl BaseAir<F> for MockAir {
         fn width(&self) -> usize {
             self.width
         }
     }
 
-    impl Air<SymbolicAirBuilder<BabyBear>> for MockAir {
-        fn eval(&self, builder: &mut SymbolicAirBuilder<BabyBear>) {
+    impl Air<SymbolicAirBuilder<F>> for MockAir {
+        fn eval(&self, builder: &mut SymbolicAirBuilder<F>) {
             for constraint in &self.constraints {
                 builder.assert_zero(*constraint);
             }
@@ -366,17 +369,17 @@ mod tests {
 
     #[test]
     fn test_symbolic_air_builder_initialization() {
-        let builder = SymbolicAirBuilder::<BabyBear>::new(2, 4, 3, 0, 0);
+        let builder = SymbolicAirBuilder::<F>::new(2, 4, 3, 0, 0);
 
         let expected_main = [
-            SymbolicVariable::<BabyBear>::new(BaseEntry::Main { offset: 0 }, 0),
-            SymbolicVariable::<BabyBear>::new(BaseEntry::Main { offset: 0 }, 1),
-            SymbolicVariable::<BabyBear>::new(BaseEntry::Main { offset: 0 }, 2),
-            SymbolicVariable::<BabyBear>::new(BaseEntry::Main { offset: 0 }, 3),
-            SymbolicVariable::<BabyBear>::new(BaseEntry::Main { offset: 1 }, 0),
-            SymbolicVariable::<BabyBear>::new(BaseEntry::Main { offset: 1 }, 1),
-            SymbolicVariable::<BabyBear>::new(BaseEntry::Main { offset: 1 }, 2),
-            SymbolicVariable::<BabyBear>::new(BaseEntry::Main { offset: 1 }, 3),
+            SymbolicVariable::<F>::new(BaseEntry::Main { offset: 0 }, 0),
+            SymbolicVariable::<F>::new(BaseEntry::Main { offset: 0 }, 1),
+            SymbolicVariable::<F>::new(BaseEntry::Main { offset: 0 }, 2),
+            SymbolicVariable::<F>::new(BaseEntry::Main { offset: 0 }, 3),
+            SymbolicVariable::<F>::new(BaseEntry::Main { offset: 1 }, 0),
+            SymbolicVariable::<F>::new(BaseEntry::Main { offset: 1 }, 1),
+            SymbolicVariable::<F>::new(BaseEntry::Main { offset: 1 }, 2),
+            SymbolicVariable::<F>::new(BaseEntry::Main { offset: 1 }, 3),
         ];
 
         let builder_main = builder.main.values;
@@ -395,7 +398,7 @@ mod tests {
 
     #[test]
     fn test_symbolic_air_builder_is_first_last_row() {
-        let builder = SymbolicAirBuilder::<BabyBear>::new(2, 4, 3, 0, 0);
+        let builder = SymbolicAirBuilder::<F>::new(2, 4, 3, 0, 0);
 
         assert!(
             matches!(
@@ -416,8 +419,8 @@ mod tests {
 
     #[test]
     fn test_symbolic_air_builder_assert_zero() {
-        let mut builder = SymbolicAirBuilder::<BabyBear>::new(2, 4, 3, 0, 0);
-        let expr = SymbolicExpression::Leaf(BaseLeaf::Constant(BabyBear::new(5)));
+        let mut builder = SymbolicAirBuilder::<F>::new(2, 4, 3, 0, 0);
+        let expr = SymbolicExpression::Leaf(BaseLeaf::Constant(F::new(5)));
         builder.assert_zero(expr);
 
         let constraints = builder.base_constraints();
@@ -425,9 +428,165 @@ mod tests {
 
         assert!(
             constraints.iter().any(
-                |x| matches!(x, SymbolicExpression::Leaf(BaseLeaf::Constant(val)) if *val == BabyBear::new(5))
+                |x| matches!(x, SymbolicExpression::Leaf(BaseLeaf::Constant(val)) if *val == F::new(5))
             ),
             "Constraint should match the asserted one"
         );
+    }
+
+    #[test]
+    fn test_is_transition_window_size_2() {
+        // Window size 2 returns the transition selector.
+        let builder = SymbolicAirBuilder::<F>::new(0, 2, 0, 0, 0);
+        let expr = builder.is_transition_window(2);
+        assert!(matches!(
+            expr,
+            SymbolicExpression::Leaf(BaseLeaf::IsTransition)
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "uni-stark only supports a window size of 2")]
+    fn test_is_transition_window_size_3_panics() {
+        // Window size 3 is not supported and should panic.
+        let builder = SymbolicAirBuilder::<F>::new(0, 2, 0, 0, 0);
+        let _ = builder.is_transition_window(3);
+    }
+
+    #[test]
+    fn test_main_returns_correct_dimensions() {
+        // The main matrix has 2 rows (one per offset) and the given width.
+        let builder = SymbolicAirBuilder::<F>::new(0, 3, 0, 0, 0);
+        let main = builder.main();
+
+        // 2 rows times 3 columns gives 6 entries.
+        assert_eq!(main.values.len(), 6);
+
+        // First row has offset 0.
+        assert_eq!(main.values[0].entry, BaseEntry::Main { offset: 0 });
+        assert_eq!(main.values[0].index, 0);
+        assert_eq!(main.values[2].index, 2);
+
+        // Second row has offset 1.
+        assert_eq!(main.values[3].entry, BaseEntry::Main { offset: 1 });
+        assert_eq!(main.values[3].index, 0);
+    }
+
+    #[test]
+    fn test_preprocessed_returns_correct_dimensions() {
+        // The preprocessed matrix has 2 rows and the given preprocessed width.
+        let builder = SymbolicAirBuilder::<F>::new(2, 3, 0, 0, 0);
+        let prep = builder.preprocessed().expect("should be Some");
+
+        // 2 rows times 2 columns gives 4 entries.
+        assert_eq!(prep.values.len(), 4);
+        assert_eq!(prep.values[0].entry, BaseEntry::Preprocessed { offset: 0 });
+        assert_eq!(prep.values[0].index, 0);
+        assert_eq!(prep.values[1].index, 1);
+        assert_eq!(prep.values[2].entry, BaseEntry::Preprocessed { offset: 1 });
+    }
+
+    #[test]
+    fn test_public_values_correct_count_and_entries() {
+        // All public value variables have the public entry kind.
+        let builder = SymbolicAirBuilder::<F>::new(0, 2, 5, 0, 0);
+        let pv = builder.public_values();
+        assert_eq!(pv.len(), 5);
+        for (i, var) in pv.iter().enumerate() {
+            assert_eq!(var.entry, BaseEntry::Public);
+            assert_eq!(var.index, i);
+        }
+    }
+
+    #[test]
+    fn test_assert_zero_ext_records_constraint() {
+        // Asserting an extension constraint records it in the builder.
+        let mut builder = SymbolicAirBuilder::<F, EF>::new(0, 2, 0, 2, 1);
+        let expr = SymbolicExpressionExt::<F, EF>::from(F::new(7));
+        builder.assert_zero_ext(expr);
+        let ext_constraints = builder.extension_constraints();
+        assert_eq!(ext_constraints.len(), 1);
+    }
+
+    #[test]
+    fn test_extension_constraints_initially_empty() {
+        // A fresh builder starts with no extension constraints.
+        let builder = SymbolicAirBuilder::<F, EF>::new(0, 2, 0, 0, 0);
+        assert!(builder.extension_constraints().is_empty());
+    }
+
+    #[test]
+    fn test_permutation_returns_correct_dimensions() {
+        // The permutation matrix has 2 rows and the given permutation width.
+        let builder = SymbolicAirBuilder::<F, EF>::new(0, 2, 0, 3, 0);
+        let perm = builder.permutation();
+
+        // 2 rows times 3 columns gives 6 entries.
+        assert_eq!(perm.values.len(), 6);
+        assert_eq!(perm.values[0].entry, ExtEntry::Permutation { offset: 0 });
+        assert_eq!(perm.values[0].index, 0);
+        assert_eq!(perm.values[3].entry, ExtEntry::Permutation { offset: 1 });
+    }
+
+    #[test]
+    fn test_permutation_randomness_correct_count() {
+        // All challenge variables have the challenge entry kind.
+        let builder = SymbolicAirBuilder::<F, EF>::new(0, 2, 0, 2, 4);
+        let challenges = builder.permutation_randomness();
+        assert_eq!(challenges.len(), 4);
+        for (i, var) in challenges.iter().enumerate() {
+            assert_eq!(var.entry, ExtEntry::Challenge);
+            assert_eq!(var.index, i);
+        }
+    }
+
+    #[derive(Debug)]
+    struct ExtMockAir {
+        width: usize,
+    }
+
+    impl BaseAir<F> for ExtMockAir {
+        fn width(&self) -> usize {
+            self.width
+        }
+    }
+
+    impl Air<SymbolicAirBuilder<F, EF>> for ExtMockAir {
+        fn eval(&self, builder: &mut SymbolicAirBuilder<F, EF>) {
+            // Record one base constraint from the main trace.
+            let main = builder.main();
+            builder.assert_zero(main.values[0]);
+
+            // Record one extension constraint from the permutation trace.
+            let perm = builder.permutation();
+            builder.assert_zero_ext(perm.values[0]);
+        }
+    }
+
+    #[test]
+    fn test_get_symbolic_constraints_extension() {
+        // Only the extension constraint is returned.
+        let air = ExtMockAir { width: 2 };
+        let ext_constraints = get_symbolic_constraints_extension::<F, EF, _>(&air, 0, 3, 1);
+        assert_eq!(ext_constraints.len(), 1);
+    }
+
+    #[test]
+    fn test_get_all_symbolic_constraints() {
+        // Both the base and extension constraint are returned.
+        let air = ExtMockAir { width: 2 };
+        let (base, ext) = get_all_symbolic_constraints::<F, EF, _>(&air, 0, 3, 1);
+        assert_eq!(base.len(), 1);
+        assert_eq!(ext.len(), 1);
+    }
+
+    #[test]
+    fn test_get_max_constraint_degree_extension() {
+        // The max degree covers both base and extension constraints.
+        let air = ExtMockAir { width: 2 };
+        let max_deg = get_max_constraint_degree_extension::<F, EF, _>(&air, 0, 3, 1);
+
+        // Both constraints are single variables with degree 1.
+        assert_eq!(max_deg, 1);
     }
 }

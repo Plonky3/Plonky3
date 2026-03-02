@@ -311,3 +311,196 @@ impl<F: Field, EF: ExtensionField<F>, T: Into<SymbolicExpressionExt<F, EF>>> ops
         Self::Output::from(self) * rhs.into()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_field::extension::BinomialExtensionField;
+
+    use super::*;
+    use crate::symbolic::expression::BaseLeaf;
+    use crate::symbolic::expression_ext::ExtLeaf;
+    use crate::symbolic::variable::{BaseEntry, ExtEntry};
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<BabyBear, 4>;
+
+    #[test]
+    fn symbolic_variable_add_produces_add_node() {
+        // Adding a variable and a non-zero constant creates an addition node.
+        let var = SymbolicVariable::<F>::new(BaseEntry::Main { offset: 0 }, 0);
+        let expr = SymbolicExpression::from(F::new(5));
+        let result = var + expr;
+        match result {
+            SymbolicExpr::Add {
+                x,
+                y,
+                degree_multiple,
+            } => {
+                assert_eq!(degree_multiple, 1);
+                assert!(matches!(
+                    x.as_ref(),
+                    SymbolicExpr::Leaf(BaseLeaf::Variable(v))
+                        if v.index == 0 && v.entry == BaseEntry::Main { offset: 0 }
+                ));
+                assert!(matches!(
+                    y.as_ref(),
+                    SymbolicExpr::Leaf(BaseLeaf::Constant(c)) if *c == F::new(5)
+                ));
+            }
+            _ => panic!("Expected an Add node"),
+        }
+    }
+
+    #[test]
+    fn symbolic_variable_sub_produces_sub_node() {
+        // Subtracting two variables creates a subtraction node.
+        let var = SymbolicVariable::<F>::new(BaseEntry::Main { offset: 0 }, 0);
+        let other = SymbolicExpression::Leaf(BaseLeaf::Variable(SymbolicVariable::new(
+            BaseEntry::Main { offset: 0 },
+            1,
+        )));
+        let result = var - other;
+        match result {
+            SymbolicExpr::Sub {
+                x,
+                y,
+                degree_multiple,
+            } => {
+                assert_eq!(degree_multiple, 1);
+                assert!(matches!(
+                    x.as_ref(),
+                    SymbolicExpr::Leaf(BaseLeaf::Variable(v))
+                        if v.index == 0 && v.entry == BaseEntry::Main { offset: 0 }
+                ));
+                assert!(matches!(
+                    y.as_ref(),
+                    SymbolicExpr::Leaf(BaseLeaf::Variable(v))
+                        if v.index == 1 && v.entry == BaseEntry::Main { offset: 0 }
+                ));
+            }
+            _ => panic!("Expected a Sub node"),
+        }
+    }
+
+    #[test]
+    fn symbolic_variable_mul_produces_mul_node() {
+        // Multiplying two variables creates a multiplication node with summed degree.
+        let var = SymbolicVariable::<F>::new(BaseEntry::Main { offset: 0 }, 0);
+        let other = SymbolicExpression::Leaf(BaseLeaf::Variable(SymbolicVariable::new(
+            BaseEntry::Main { offset: 0 },
+            1,
+        )));
+        let result = var * other;
+        match result {
+            SymbolicExpr::Mul {
+                x,
+                y,
+                degree_multiple,
+            } => {
+                assert_eq!(degree_multiple, 2);
+                assert!(matches!(
+                    x.as_ref(),
+                    SymbolicExpr::Leaf(BaseLeaf::Variable(v))
+                        if v.index == 0 && v.entry == BaseEntry::Main { offset: 0 }
+                ));
+                assert!(matches!(
+                    y.as_ref(),
+                    SymbolicExpr::Leaf(BaseLeaf::Variable(v))
+                        if v.index == 1 && v.entry == BaseEntry::Main { offset: 0 }
+                ));
+            }
+            _ => panic!("Expected a Mul node"),
+        }
+    }
+
+    #[test]
+    fn symbolic_variable_ext_add_produces_add_node() {
+        // Adding an extension variable and a non-zero constant creates an addition node.
+        let var = SymbolicVariableExt::<F, EF>::new(ExtEntry::Permutation { offset: 0 }, 0);
+        let expr = SymbolicExpressionExt::<F, EF>::from(F::new(3));
+        let result = var + expr;
+        match result {
+            SymbolicExpr::Add {
+                x,
+                y,
+                degree_multiple,
+            } => {
+                assert_eq!(degree_multiple, 1);
+                assert!(matches!(
+                    x.as_ref(),
+                    SymbolicExpr::Leaf(ExtLeaf::ExtVariable(v))
+                        if v.index == 0 && v.entry == ExtEntry::Permutation { offset: 0 }
+                ));
+                assert!(matches!(
+                    y.as_ref(),
+                    SymbolicExpr::Leaf(ExtLeaf::Base(SymbolicExpr::Leaf(BaseLeaf::Constant(c))))
+                        if *c == F::new(3)
+                ));
+            }
+            _ => panic!("Expected an Add node"),
+        }
+    }
+
+    #[test]
+    fn symbolic_variable_ext_sub_produces_sub_node() {
+        // Subtracting two extension variables creates a subtraction node.
+        let var = SymbolicVariableExt::<F, EF>::new(ExtEntry::Permutation { offset: 0 }, 0);
+        let other = SymbolicExpressionExt::<F, EF>::from(SymbolicVariableExt::<F, EF>::new(
+            ExtEntry::Permutation { offset: 0 },
+            1,
+        ));
+        let result = var - other;
+        match result {
+            SymbolicExpr::Sub {
+                x,
+                y,
+                degree_multiple,
+            } => {
+                assert_eq!(degree_multiple, 1);
+                assert!(matches!(
+                    x.as_ref(),
+                    SymbolicExpr::Leaf(ExtLeaf::ExtVariable(v))
+                        if v.index == 0 && v.entry == ExtEntry::Permutation { offset: 0 }
+                ));
+                assert!(matches!(
+                    y.as_ref(),
+                    SymbolicExpr::Leaf(ExtLeaf::ExtVariable(v))
+                        if v.index == 1 && v.entry == ExtEntry::Permutation { offset: 0 }
+                ));
+            }
+            _ => panic!("Expected a Sub node"),
+        }
+    }
+
+    #[test]
+    fn symbolic_variable_ext_mul_produces_mul_node() {
+        // Multiplying two extension variables creates a multiplication node with summed degree.
+        let var = SymbolicVariableExt::<F, EF>::new(ExtEntry::Permutation { offset: 0 }, 0);
+        let other = SymbolicExpressionExt::<F, EF>::from(SymbolicVariableExt::<F, EF>::new(
+            ExtEntry::Permutation { offset: 0 },
+            1,
+        ));
+        let result = var * other;
+        match result {
+            SymbolicExpr::Mul {
+                x,
+                y,
+                degree_multiple,
+            } => {
+                assert_eq!(degree_multiple, 2);
+                assert!(matches!(
+                    x.as_ref(),
+                    SymbolicExpr::Leaf(ExtLeaf::ExtVariable(v))
+                        if v.index == 0 && v.entry == ExtEntry::Permutation { offset: 0 }
+                ));
+                assert!(matches!(
+                    y.as_ref(),
+                    SymbolicExpr::Leaf(ExtLeaf::ExtVariable(v))
+                        if v.index == 1 && v.entry == ExtEntry::Permutation { offset: 0 }
+                ));
+            }
+            _ => panic!("Expected a Mul node"),
+        }
+    }
+}

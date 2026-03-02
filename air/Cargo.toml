@@ -17,6 +17,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
+p3-field = { path = "../field" }
 
 [lints]
 workspace = true

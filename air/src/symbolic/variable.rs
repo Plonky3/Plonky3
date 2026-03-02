@@ -64,3 +64,89 @@ impl<F, EF> SymbolicVariableExt<F, EF> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_field::extension::BinomialExtensionField;
+
+    use super::*;
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+
+    #[test]
+    fn symbolic_variable_new_main() {
+        // A main trace variable preserves its offset and column index.
+        let var = SymbolicVariable::<F>::new(BaseEntry::Main { offset: 1 }, 3);
+        assert_eq!(var.entry, BaseEntry::Main { offset: 1 });
+        assert_eq!(var.index, 3);
+    }
+
+    #[test]
+    fn symbolic_variable_new_preprocessed() {
+        // A preprocessed trace variable preserves its offset and column index.
+        let var = SymbolicVariable::<F>::new(BaseEntry::Preprocessed { offset: 0 }, 5);
+        assert_eq!(var.entry, BaseEntry::Preprocessed { offset: 0 });
+        assert_eq!(var.index, 5);
+    }
+
+    #[test]
+    fn symbolic_variable_new_public() {
+        // A public input variable has no offset, only a column index.
+        let var = SymbolicVariable::<F>::new(BaseEntry::Public, 2);
+        assert_eq!(var.entry, BaseEntry::Public);
+        assert_eq!(var.index, 2);
+    }
+
+    #[test]
+    fn symbolic_variable_degree_multiple_main() {
+        // Main trace columns contribute degree 1.
+        let var = SymbolicVariable::<F>::new(BaseEntry::Main { offset: 0 }, 0);
+        assert_eq!(var.degree_multiple(), 1);
+    }
+
+    #[test]
+    fn symbolic_variable_degree_multiple_preprocessed() {
+        // Preprocessed trace columns contribute degree 1.
+        let var = SymbolicVariable::<F>::new(BaseEntry::Preprocessed { offset: 0 }, 0);
+        assert_eq!(var.degree_multiple(), 1);
+    }
+
+    #[test]
+    fn symbolic_variable_degree_multiple_public() {
+        // Public inputs are constant so they contribute degree 0.
+        let var = SymbolicVariable::<F>::new(BaseEntry::Public, 0);
+        assert_eq!(var.degree_multiple(), 0);
+    }
+
+    #[test]
+    fn symbolic_variable_ext_new_permutation() {
+        // A permutation variable preserves its offset and column index.
+        let var = SymbolicVariableExt::<F, EF>::new(ExtEntry::Permutation { offset: 1 }, 7);
+        assert_eq!(var.entry, ExtEntry::Permutation { offset: 1 });
+        assert_eq!(var.index, 7);
+    }
+
+    #[test]
+    fn symbolic_variable_ext_new_challenge() {
+        // A challenge variable has no offset, only an index.
+        let var = SymbolicVariableExt::<F, EF>::new(ExtEntry::Challenge, 4);
+        assert_eq!(var.entry, ExtEntry::Challenge);
+        assert_eq!(var.index, 4);
+    }
+
+    #[test]
+    fn symbolic_variable_ext_degree_multiple_permutation() {
+        // Permutation columns contribute degree 1.
+        let var = SymbolicVariableExt::<F, EF>::new(ExtEntry::Permutation { offset: 0 }, 0);
+        assert_eq!(var.degree_multiple(), 1);
+    }
+
+    #[test]
+    fn symbolic_variable_ext_degree_multiple_challenge() {
+        // Challenges are random constants so they contribute degree 0.
+        let var = SymbolicVariableExt::<F, EF>::new(ExtEntry::Challenge, 0);
+        assert_eq!(var.degree_multiple(), 0);
+    }
+}
