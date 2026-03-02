@@ -54,86 +54,33 @@ impl MdsPermutation<PackedGoldilocksAVX512, 24> for MdsMatrixGoldilocks {}
 
 #[cfg(test)]
 mod tests {
-    use p3_poseidon::Poseidon;
     use p3_symmetric::Permutation;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use crate::{Goldilocks, MdsMatrixGoldilocks, PackedGoldilocksAVX512};
 
-    #[test]
-    fn test_avx512_poseidon_width_8() {
-        let mut rng = SmallRng::seed_from_u64(1);
-        type F = Goldilocks;
-        type Perm = Poseidon<F, MdsMatrixGoldilocks, 8, 7>;
-        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rng);
+    macro_rules! test_avx512_mds {
+        ($name:ident, $width:literal) => {
+            #[test]
+            fn $name() {
+                let mut rng = SmallRng::seed_from_u64(1);
+                let mds = MdsMatrixGoldilocks;
 
-        let input: [F; 8] = rng.random();
+                let input: [Goldilocks; $width] = rng.random();
+                let expected = mds.permute(input);
 
-        let mut expected = input;
-        poseidon.permute_mut(&mut expected);
+                let packed_input = input.map(Into::<PackedGoldilocksAVX512>::into);
+                let packed_output = mds.permute(packed_input);
 
-        let mut avx2_input = input.map(Into::<PackedGoldilocksAVX512>::into);
-        poseidon.permute_mut(&mut avx2_input);
-
-        let avx2_output = avx2_input.map(|x| x.0[0]);
-        assert_eq!(avx2_output, expected);
+                let avx512_output = packed_output.map(|x| x.0[0]);
+                assert_eq!(avx512_output, expected);
+            }
+        };
     }
 
-    #[test]
-    fn test_avx512_poseidon_width_12() {
-        let mut rng = SmallRng::seed_from_u64(1);
-        type F = Goldilocks;
-        type Perm = Poseidon<F, MdsMatrixGoldilocks, 12, 7>;
-        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rng);
-
-        let input: [F; 12] = rng.random();
-
-        let mut expected = input;
-        poseidon.permute_mut(&mut expected);
-
-        let mut avx2_input = input.map(Into::<PackedGoldilocksAVX512>::into);
-        poseidon.permute_mut(&mut avx2_input);
-
-        let avx2_output = avx2_input.map(|x| x.0[0]);
-        assert_eq!(avx2_output, expected);
-    }
-
-    #[test]
-    fn test_avx512_poseidon_width_16() {
-        let mut rng = SmallRng::seed_from_u64(1);
-        type F = Goldilocks;
-        type Perm = Poseidon<F, MdsMatrixGoldilocks, 16, 7>;
-        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rng);
-
-        let input: [F; 16] = rng.random();
-
-        let mut expected = input;
-        poseidon.permute_mut(&mut expected);
-
-        let mut avx2_input = input.map(Into::<PackedGoldilocksAVX512>::into);
-        poseidon.permute_mut(&mut avx2_input);
-
-        let avx2_output = avx2_input.map(|x| x.0[0]);
-        assert_eq!(avx2_output, expected);
-    }
-
-    #[test]
-    fn test_avx512_poseidon_width_24() {
-        let mut rng = SmallRng::seed_from_u64(1);
-        type F = Goldilocks;
-        type Perm = Poseidon<F, MdsMatrixGoldilocks, 24, 7>;
-        let poseidon = Perm::new_from_rng(4, 22, MdsMatrixGoldilocks, &mut rng);
-
-        let input: [F; 24] = rng.random();
-
-        let mut expected = input;
-        poseidon.permute_mut(&mut expected);
-
-        let mut avx2_input = input.map(Into::<PackedGoldilocksAVX512>::into);
-        poseidon.permute_mut(&mut avx2_input);
-
-        let avx2_output = avx2_input.map(|x| x.0[0]);
-        assert_eq!(avx2_output, expected);
-    }
+    test_avx512_mds!(test_avx512_mds_width_8, 8);
+    test_avx512_mds!(test_avx512_mds_width_12, 12);
+    test_avx512_mds!(test_avx512_mds_width_16, 16);
+    test_avx512_mds!(test_avx512_mds_width_24, 24);
 }

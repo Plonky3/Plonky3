@@ -7,10 +7,12 @@ mod baby_bear;
 #[cfg(test)]
 mod extension_test;
 mod mds;
+mod poseidon;
 mod poseidon2;
 
 pub use baby_bear::*;
 pub use mds::*;
+pub use poseidon::*;
 pub use poseidon2::*;
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
