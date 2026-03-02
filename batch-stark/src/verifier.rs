@@ -8,7 +8,7 @@ use p3_air::Air;
 use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
+use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::lookup_traits::{
@@ -37,7 +37,7 @@ pub fn verify_batch<SC, A>(
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
     SC: SGC,
-    SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
+    SymbolicExpression<SC::Challenge>: Algebra<SymbolicExpression<Val<SC>>>,
     A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<VerifierConstraintFolderWithLookups<'a, SC>>,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
