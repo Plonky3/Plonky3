@@ -452,6 +452,14 @@ mod tests {
     type MyMmcs =
         MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress, 2, 8>;
 
+    // 4-ary Poseidon2-based MMCS:
+    //   - width-16 permutation for leaves
+    //   - width-32 (4-to-1) permutation for internal compression
+    type PermWide = Poseidon2BabyBear<32>;
+    type MyCompress4 = TruncatedPermutation<PermWide, 4, 8, 32>;
+    type MyMmcs4 =
+        MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress4, 4, 8>;
+
     #[test]
     fn commit_single_1x8() {
         let mut rng = SmallRng::seed_from_u64(1);
@@ -484,6 +492,31 @@ mod tests {
             ]),
         ]);
         assert_eq!(commit[0], expected_result);
+    }
+
+    #[test]
+    fn poseidon2_4ary_single_matrix_roundtrip() {
+        let mut rng = SmallRng::seed_from_u64(42);
+
+        // Leaf hasher: width-16
+        let perm16 = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm16);
+
+        // Internal compression: width-32, 4-to-1.
+        let perm32 = PermWide::new_from_rng_128(&mut rng);
+        let compress4 = MyCompress4::new(perm32);
+
+        let mmcs4 = MyMmcs4::new(hash, compress4, 0);
+
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 64, 8);
+        let dims = vec![mat.dimensions()];
+        let (commit, prover_data) = mmcs4.commit(vec![mat]);
+
+        let index = 17;
+        let opening = mmcs4.open_batch(index, &prover_data);
+        mmcs4
+            .verify_batch(&commit, &dims, index, (&opening).into())
+            .expect("4-ary Poseidon2 MMCS roundtrip should verify");
     }
 
     #[test]
