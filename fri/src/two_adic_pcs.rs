@@ -24,7 +24,7 @@ use p3_commit::{BatchOpening, Mmcs, OpenedValues, Pcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    ExtensionField, PackedFieldExtension, TwoAdicField, batch_multiplicative_inverse, dot_product,
+    ExtensionField, PackedFieldExtension, PrimeCharacteristicRing, batch_multiplicative_inverse, dot_product,
 };
 use p3_interpolation::interpolate_coset_with_precomputation;
 use p3_matrix::Matrix;
@@ -534,15 +534,9 @@ where
         // In our setup, k is two times the trace width plus the number of quotient polynomials.
         let alpha: Challenge = challenger.sample_algebra_element();
 
-        // We precompute powers of alpha as we need the same powers for each matrix.
-        // We compute both a vector of unpacked powers and a vector of packed powers.
-        // TODO: It should be possible to refactor this to only use the packed powers but
-        // this is not a bottleneck so is not a priority.
+        // We precompute packed powers of alpha as we need the same powers for each matrix.
         let packed_alpha_powers =
             Challenge::ExtensionPacking::packed_ext_powers_capped(alpha, global_max_width)
-                .collect_vec();
-        let alpha_powers =
-            Challenge::ExtensionPacking::to_ext_iter(packed_alpha_powers.iter().copied())
                 .collect_vec();
 
         // Now that we have sent the openings to the verifier, it remains to prove
@@ -600,8 +594,24 @@ where
 
                     // As we have all the openings `f_i(z)`, we can combine them using `alpha`
                     // in an identical way to before to compute `Mred(z)`.
-                    let reduced_openings: Challenge =
-                        dot_product(alpha_powers.iter().copied(), openings.iter().copied());
+                    // We pack the openings and use packed extension multiplication.
+                    let reduced_openings: Challenge = {
+                        let width = <Val::Packing as PackedValue>::WIDTH;
+                        let mut packed_sum = Challenge::ExtensionPacking::ZERO;
+                        for (&packed_pow, chunk) in
+                            packed_alpha_powers.iter().zip(openings.chunks(width))
+                        {
+                            let packed_opening = if chunk.len() == width {
+                                Challenge::ExtensionPacking::from_ext_slice(chunk)
+                            } else {
+                                let mut padded = vec![Challenge::ZERO; width];
+                                padded[..chunk.len()].copy_from_slice(chunk);
+                                Challenge::ExtensionPacking::from_ext_slice(&padded)
+                            };
+                            packed_sum += packed_pow * packed_opening;
+                        }
+                        Challenge::ExtensionPacking::to_ext_iter([packed_sum]).sum()
+                    };
 
                     mat_compressed
                         .par_iter()
