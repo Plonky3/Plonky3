@@ -474,8 +474,8 @@ mod tests {
     fn test_default_koalabear_poseidon2_width_16() {
         let mut input: [F; 16] = KoalaBear::new_array([
             894848333, 1437655012, 1200606629, 1690012884, 71131202, 1749206695, 1717947831,
-            120589055, 19776022, 42382981, 1831865506, 724844064, 171220207, 1299207443,
-            227047920, 1783754913,
+            120589055, 19776022, 42382981, 1831865506, 724844064, 171220207, 1299207443, 227047920,
+            1783754913,
         ]);
 
         let expected: [F; 16] = KoalaBear::new_array([
@@ -510,6 +510,7 @@ mod tests {
         perm.permute_mut(&mut input);
 
         assert_eq!(input, expected);
+    }
     /// Test on a roughly random input for width 32.
     #[test]
     fn test_poseidon2_width_32_random() {
