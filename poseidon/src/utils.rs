@@ -71,22 +71,11 @@ use alloc::vec::Vec;
 
 use p3_field::{Field, dot_product};
 
-/// Convert a signed integer to a field element.
-///
-/// Handles negative values by computing the additive inverse in the field.
-fn field_from_i64<F: Field>(v: i64) -> F {
-    if v >= 0 {
-        F::from_u64(v as u64)
-    } else {
-        F::ZERO - F::from_u64((-v) as u64)
-    }
-}
-
 /// Expand a circulant matrix from its first column into a dense NxN matrix.
 ///
 /// Each column is a cyclic downward-shift of the previous one.
 pub(crate) fn circulant_to_dense<F: Field, const N: usize>(first_col: &[i64; N]) -> [[F; N]; N] {
-    let col: [F; N] = first_col.map(field_from_i64);
+    let col: [F; N] = first_col.map(F::from_i64);
     core::array::from_fn(|i| core::array::from_fn(|j| col[(N + i - j) % N]))
 }
 
