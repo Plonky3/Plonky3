@@ -100,7 +100,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_air::symbolic::{SymbolicAirBuilder, SymbolicVariable};
-    use p3_air::{AirBuilder, BaseAir, Entry};
+    use p3_air::{AirBuilder, BaseAir, BaseEntry};
     use p3_baby_bear::BabyBear;
 
     use super::*;
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn test_get_log_num_quotient_chunks_single_constraint() {
         let air = MockAir {
-            constraints: vec![SymbolicVariable::new(Entry::Main { offset: 0 }, 0)],
+            constraints: vec![SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0)],
             width: 4,
         };
         let log_degree = get_log_num_quotient_chunks(&air, 3, 0);
@@ -149,9 +149,9 @@ mod tests {
     fn test_get_log_num_quotient_chunks_multiple_constraints() {
         let air = MockAir {
             constraints: vec![
-                SymbolicVariable::new(Entry::Main { offset: 0 }, 0),
-                SymbolicVariable::new(Entry::Main { offset: 1 }, 1),
-                SymbolicVariable::new(Entry::Main { offset: 2 }, 2),
+                SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0),
+                SymbolicVariable::new(BaseEntry::Main { offset: 1 }, 1),
+                SymbolicVariable::new(BaseEntry::Main { offset: 2 }, 2),
             ],
             width: 4,
         };
@@ -190,7 +190,7 @@ mod tests {
         // Actual degree is 1 (single variable), hint says 3.
         // The hint should be used, giving log2_ceil(max(3, 2) - 1) = log2_ceil(2) = 1.
         let air = HintedMockAir {
-            constraints: vec![SymbolicVariable::new(Entry::Main { offset: 0 }, 0)],
+            constraints: vec![SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0)],
             width: 4,
             degree_hint: Some(3),
         };
@@ -203,7 +203,7 @@ mod tests {
         // No hint provided — should fall back to symbolic evaluation.
         // Actual degree is 1, so log2_ceil(max(1, 2) - 1) = log2_ceil(1) = 0.
         let air = HintedMockAir {
-            constraints: vec![SymbolicVariable::new(Entry::Main { offset: 0 }, 0)],
+            constraints: vec![SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0)],
             width: 4,
             degree_hint: None,
         };
@@ -215,14 +215,14 @@ mod tests {
     fn test_max_constraint_degree_hint_exact_match() {
         // Hint matches actual degree exactly.
         let air = HintedMockAir {
-            constraints: vec![SymbolicVariable::new(Entry::Main { offset: 0 }, 0)],
+            constraints: vec![SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0)],
             width: 4,
             degree_hint: Some(1),
         };
         let with_hint = get_log_num_quotient_chunks(&air, 0, 0);
 
         let air_no_hint = HintedMockAir {
-            constraints: vec![SymbolicVariable::new(Entry::Main { offset: 0 }, 0)],
+            constraints: vec![SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0)],
             width: 4,
             degree_hint: None,
         };
@@ -237,7 +237,7 @@ mod tests {
     fn test_max_constraint_degree_hint_too_small_panics() {
         // Actual degree is 1, hint says 0 — debug_assert should fire.
         let air = HintedMockAir {
-            constraints: vec![SymbolicVariable::new(Entry::Main { offset: 0 }, 0)],
+            constraints: vec![SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0)],
             width: 4,
             degree_hint: Some(0),
         };

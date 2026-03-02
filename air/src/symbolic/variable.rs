@@ -1,29 +1,30 @@
 use core::marker::PhantomData;
-use core::ops::{Add, Mul, Sub};
 
-use p3_field::Field;
-
-use crate::SymbolicExpression;
-
+/// Entry kinds for base-field trace columns and public inputs.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Entry {
+pub enum BaseEntry {
     Preprocessed { offset: usize },
     Main { offset: usize },
-    Permutation { offset: usize },
     Public,
+}
+
+/// Entry kinds for extension-field columns (permutation trace and challenges).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ExtEntry {
+    Permutation { offset: usize },
     Challenge,
 }
 
-/// A variable within the evaluation window, i.e. a column in either the local or next row.
+/// A variable within the evaluation window for base-field columns.
 #[derive(Copy, Clone, Debug)]
 pub struct SymbolicVariable<F> {
-    pub entry: Entry,
+    pub entry: BaseEntry,
     pub index: usize,
     pub(crate) _phantom: PhantomData<F>,
 }
 
 impl<F> SymbolicVariable<F> {
-    pub const fn new(entry: Entry, index: usize) -> Self {
+    pub const fn new(entry: BaseEntry, index: usize) -> Self {
         Self {
             entry,
             index,
@@ -33,41 +34,33 @@ impl<F> SymbolicVariable<F> {
 
     pub const fn degree_multiple(&self) -> usize {
         match self.entry {
-            Entry::Preprocessed { .. } | Entry::Main { .. } | Entry::Permutation { .. } => 1,
-            Entry::Public | Entry::Challenge => 0,
+            BaseEntry::Preprocessed { .. } | BaseEntry::Main { .. } => 1,
+            BaseEntry::Public => 0,
         }
     }
 }
 
-impl<F: Field, T> Add<T> for SymbolicVariable<F>
-where
-    T: Into<SymbolicExpression<F>>,
-{
-    type Output = SymbolicExpression<F>;
-
-    fn add(self, rhs: T) -> Self::Output {
-        SymbolicExpression::from(self) + rhs.into()
-    }
+/// A variable within the evaluation window for extension-field columns.
+#[derive(Copy, Clone, Debug)]
+pub struct SymbolicVariableExt<F, EF> {
+    pub entry: ExtEntry,
+    pub index: usize,
+    pub(crate) _phantom: PhantomData<(F, EF)>,
 }
 
-impl<F: Field, T> Sub<T> for SymbolicVariable<F>
-where
-    T: Into<SymbolicExpression<F>>,
-{
-    type Output = SymbolicExpression<F>;
-
-    fn sub(self, rhs: T) -> Self::Output {
-        SymbolicExpression::from(self) - rhs.into()
+impl<F, EF> SymbolicVariableExt<F, EF> {
+    pub const fn new(entry: ExtEntry, index: usize) -> Self {
+        Self {
+            entry,
+            index,
+            _phantom: PhantomData,
+        }
     }
-}
 
-impl<F: Field, T> Mul<T> for SymbolicVariable<F>
-where
-    T: Into<SymbolicExpression<F>>,
-{
-    type Output = SymbolicExpression<F>;
-
-    fn mul(self, rhs: T) -> Self::Output {
-        SymbolicExpression::from(self) * rhs.into()
+    pub const fn degree_multiple(&self) -> usize {
+        match self.entry {
+            ExtEntry::Permutation { .. } => 1,
+            ExtEntry::Challenge => 0,
+        }
     }
 }

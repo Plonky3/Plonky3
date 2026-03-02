@@ -5,15 +5,13 @@ use core::fmt::Debug;
 
 use hashbrown::HashMap;
 use p3_air::Air;
-use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
+use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpressionExt};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::lookup_traits::{
-    Lookup, LookupData, LookupError, LookupGadget, lookup_data_to_expr,
-};
+use p3_lookup::lookup_traits::{Lookup, LookupData, LookupError, LookupGadget};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_uni_stark::{VerificationError, VerifierConstraintFolder, recompose_quotient_from_chunks};
@@ -25,7 +23,7 @@ use crate::config::{
     Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_instance_binding,
 };
 use crate::proof::BatchProof;
-use crate::symbolic::get_log_num_quotient_chunks;
+use crate::symbolic::{get_log_num_quotient_chunks, lookup_data_to_ext_expr};
 
 #[instrument(skip_all)]
 pub fn verify_batch<SC, A>(
@@ -37,7 +35,7 @@ pub fn verify_batch<SC, A>(
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
     SC: SGC,
-    SymbolicExpression<SC::Challenge>: Algebra<SymbolicExpression<Val<SC>>>,
+    SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
     A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<VerifierConstraintFolderWithLookups<'a, SC>>,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
@@ -105,7 +103,7 @@ where
                     air,
                     pre_w,
                     &all_lookups[i],
-                    &lookup_data_to_expr(&global_lookup_data[i]),
+                    &lookup_data_to_ext_expr(&global_lookup_data[i]),
                     config.is_zk(),
                     &lookup_gadget,
                 )

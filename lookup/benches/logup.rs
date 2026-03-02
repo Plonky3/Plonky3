@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use p3_air::AirBuilder;
 use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
+use p3_air::{AirBuilder, BaseLeaf};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
@@ -55,7 +55,7 @@ fn build_lookups(num_lookups: usize, tuple_size: usize, trace_width: usize) -> V
             let read_elements: Vec<SymbolicExpression<F>> = (0..tuple_size)
                 .map(|j| symbolic_main_local[base_col + j].into())
                 .collect();
-            let read_mult = SymbolicExpression::Constant(F::ONE);
+            let read_mult = SymbolicExpression::Leaf(BaseLeaf::Constant(F::ONE));
 
             let provide_elements: Vec<SymbolicExpression<F>> = (0..tuple_size)
                 .map(|j| symbolic_main_local[base_col + tuple_size + j].into())

@@ -5,9 +5,12 @@ use p3_field::{Algebra, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 use tracing::instrument;
 
+use crate::symbolic::SymbolicExpr;
+use crate::symbolic::expression::BaseLeaf;
+use crate::symbolic::expression_ext::SymbolicExpressionExt;
+use crate::symbolic::variable::{BaseEntry, ExtEntry, SymbolicVariableExt};
 use crate::{
-    Air, AirBuilder, Entry, ExtensionBuilder, PermutationAirBuilder, SymbolicExpression,
-    SymbolicVariable,
+    Air, AirBuilder, ExtensionBuilder, PermutationAirBuilder, SymbolicExpression, SymbolicVariable,
 };
 
 #[instrument(skip_all, level = "debug")]
@@ -90,7 +93,7 @@ pub fn get_symbolic_constraints_extension<F, EF, A>(
     preprocessed_width: usize,
     permutation_width: usize,
     num_permutation_challenges: usize,
-) -> Vec<SymbolicExpression<EF>>
+) -> Vec<SymbolicExpressionExt<F, EF>>
 where
     F: Field,
     EF: ExtensionField<F>,
@@ -117,7 +120,10 @@ pub fn get_all_symbolic_constraints<F, EF, A>(
     preprocessed_width: usize,
     permutation_width: usize,
     num_permutation_challenges: usize,
-) -> (Vec<SymbolicExpression<F>>, Vec<SymbolicExpression<EF>>)
+) -> (
+    Vec<SymbolicExpression<F>>,
+    Vec<SymbolicExpressionExt<F, EF>>,
+)
 where
     F: Field,
     EF: ExtensionField<F>,
@@ -141,9 +147,9 @@ pub struct SymbolicAirBuilder<F: Field, EF: ExtensionField<F> = F> {
     main: RowMajorMatrix<SymbolicVariable<F>>,
     public_values: Vec<SymbolicVariable<F>>,
     base_constraints: Vec<SymbolicExpression<F>>,
-    permutation: RowMajorMatrix<SymbolicVariable<EF>>,
-    permutation_challenges: Vec<SymbolicVariable<EF>>,
-    extension_constraints: Vec<SymbolicExpression<EF>>,
+    permutation: RowMajorMatrix<SymbolicVariableExt<F, EF>>,
+    permutation_challenges: Vec<SymbolicVariableExt<F, EF>>,
+    extension_constraints: Vec<SymbolicExpressionExt<F, EF>>,
 }
 
 impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
@@ -157,29 +163,32 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
         let prep_values = [0, 1]
             .into_iter()
             .flat_map(|offset| {
-                (0..preprocessed_width)
-                    .map(move |index| SymbolicVariable::new(Entry::Preprocessed { offset }, index))
+                (0..preprocessed_width).map(move |index| {
+                    SymbolicVariable::new(BaseEntry::Preprocessed { offset }, index)
+                })
             })
             .collect();
         let main_values = [0, 1]
             .into_iter()
             .flat_map(|offset| {
-                (0..width).map(move |index| SymbolicVariable::new(Entry::Main { offset }, index))
+                (0..width)
+                    .map(move |index| SymbolicVariable::new(BaseEntry::Main { offset }, index))
             })
             .collect();
         let public_values = (0..num_public_values)
-            .map(move |index| SymbolicVariable::new(Entry::Public, index))
+            .map(move |index| SymbolicVariable::new(BaseEntry::Public, index))
             .collect();
         let perm_values = [0, 1]
             .into_iter()
             .flat_map(|offset| {
-                (0..permutation_width)
-                    .map(move |index| SymbolicVariable::new(Entry::Permutation { offset }, index))
+                (0..permutation_width).map(move |index| {
+                    SymbolicVariableExt::new(ExtEntry::Permutation { offset }, index)
+                })
             })
             .collect();
         let permutation = RowMajorMatrix::new(perm_values, permutation_width);
         let permutation_challenges = (0..num_permutation_challenges)
-            .map(|index| SymbolicVariable::new(Entry::Challenge, index))
+            .map(|index| SymbolicVariableExt::new(ExtEntry::Challenge, index))
             .collect();
         Self {
             preprocessed: RowMajorMatrix::new(prep_values, preprocessed_width),
@@ -192,7 +201,7 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
         }
     }
 
-    pub fn extension_constraints(&self) -> Vec<SymbolicExpression<EF>> {
+    pub fn extension_constraints(&self) -> Vec<SymbolicExpressionExt<F, EF>> {
         self.extension_constraints.clone()
     }
 
@@ -221,18 +230,18 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
     }
 
     fn is_first_row(&self) -> Self::Expr {
-        SymbolicExpression::IsFirstRow
+        SymbolicExpr::Leaf(BaseLeaf::IsFirstRow)
     }
 
     fn is_last_row(&self) -> Self::Expr {
-        SymbolicExpression::IsLastRow
+        SymbolicExpr::Leaf(BaseLeaf::IsLastRow)
     }
 
     /// # Panics
     /// This function panics if `size` is not `2`.
     fn is_transition_window(&self, size: usize) -> Self::Expr {
         if size == 2 {
-            SymbolicExpression::IsTransition
+            SymbolicExpr::Leaf(BaseLeaf::IsTransition)
         } else {
             panic!("uni-stark only supports a window size of 2")
         }
@@ -245,11 +254,11 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
 
 impl<F: Field, EF: ExtensionField<F>> ExtensionBuilder for SymbolicAirBuilder<F, EF>
 where
-    SymbolicExpression<EF>: Algebra<SymbolicExpression<F>>,
+    SymbolicExpressionExt<F, EF>: Algebra<EF>,
 {
     type EF = EF;
-    type ExprEF = SymbolicExpression<EF>;
-    type VarEF = SymbolicVariable<EF>;
+    type ExprEF = SymbolicExpressionExt<F, EF>;
+    type VarEF = SymbolicVariableExt<F, EF>;
 
     fn assert_zero_ext<I>(&mut self, x: I)
     where
@@ -261,11 +270,11 @@ where
 
 impl<F: Field, EF: ExtensionField<F>> PermutationAirBuilder for SymbolicAirBuilder<F, EF>
 where
-    SymbolicExpression<EF>: Algebra<SymbolicExpression<F>>,
+    SymbolicExpressionExt<F, EF>: Algebra<EF>,
 {
     type MP = RowMajorMatrix<Self::VarEF>;
 
-    type RandomVar = SymbolicVariable<EF>;
+    type RandomVar = SymbolicVariableExt<F, EF>;
 
     fn permutation(&self) -> Self::MP {
         self.permutation.clone()
@@ -320,9 +329,9 @@ mod tests {
     fn test_get_max_constraint_degree_multiple_constraints() {
         let air = MockAir {
             constraints: vec![
-                SymbolicVariable::new(Entry::Main { offset: 0 }, 0),
-                SymbolicVariable::new(Entry::Main { offset: 1 }, 1),
-                SymbolicVariable::new(Entry::Main { offset: 2 }, 2),
+                SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0),
+                SymbolicVariable::new(BaseEntry::Main { offset: 1 }, 1),
+                SymbolicVariable::new(BaseEntry::Main { offset: 2 }, 2),
             ],
             width: 4,
         };
@@ -332,8 +341,8 @@ mod tests {
 
     #[test]
     fn test_get_symbolic_constraints() {
-        let c1 = SymbolicVariable::new(Entry::Main { offset: 0 }, 0);
-        let c2 = SymbolicVariable::new(Entry::Main { offset: 1 }, 1);
+        let c1 = SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0);
+        let c2 = SymbolicVariable::new(BaseEntry::Main { offset: 1 }, 1);
 
         let air = MockAir {
             constraints: vec![c1, c2],
@@ -345,12 +354,12 @@ mod tests {
         assert_eq!(constraints.len(), 2, "Should return exactly 2 constraints");
 
         assert!(
-            constraints.iter().any(|x| matches!(x, SymbolicExpression::Variable(v) if v.index == c1.index && v.entry == c1.entry)),
+            constraints.iter().any(|x| matches!(x, SymbolicExpression::Leaf(BaseLeaf::Variable(v)) if v.index == c1.index && v.entry == c1.entry)),
             "Expected constraint {c1:?} was not found"
         );
 
         assert!(
-            constraints.iter().any(|x| matches!(x, SymbolicExpression::Variable(v) if v.index == c2.index && v.entry == c2.entry)),
+            constraints.iter().any(|x| matches!(x, SymbolicExpression::Leaf(BaseLeaf::Variable(v)) if v.index == c2.index && v.entry == c2.entry)),
             "Expected constraint {c2:?} was not found"
         );
     }
@@ -360,14 +369,14 @@ mod tests {
         let builder = SymbolicAirBuilder::<BabyBear>::new(2, 4, 3, 0, 0);
 
         let expected_main = [
-            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 0 }, 0),
-            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 0 }, 1),
-            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 0 }, 2),
-            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 0 }, 3),
-            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 1 }, 0),
-            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 1 }, 1),
-            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 1 }, 2),
-            SymbolicVariable::<BabyBear>::new(Entry::Main { offset: 1 }, 3),
+            SymbolicVariable::<BabyBear>::new(BaseEntry::Main { offset: 0 }, 0),
+            SymbolicVariable::<BabyBear>::new(BaseEntry::Main { offset: 0 }, 1),
+            SymbolicVariable::<BabyBear>::new(BaseEntry::Main { offset: 0 }, 2),
+            SymbolicVariable::<BabyBear>::new(BaseEntry::Main { offset: 0 }, 3),
+            SymbolicVariable::<BabyBear>::new(BaseEntry::Main { offset: 1 }, 0),
+            SymbolicVariable::<BabyBear>::new(BaseEntry::Main { offset: 1 }, 1),
+            SymbolicVariable::<BabyBear>::new(BaseEntry::Main { offset: 1 }, 2),
+            SymbolicVariable::<BabyBear>::new(BaseEntry::Main { offset: 1 }, 3),
         ];
 
         let builder_main = builder.main.values;
@@ -389,12 +398,18 @@ mod tests {
         let builder = SymbolicAirBuilder::<BabyBear>::new(2, 4, 3, 0, 0);
 
         assert!(
-            matches!(builder.is_first_row(), SymbolicExpression::IsFirstRow),
+            matches!(
+                builder.is_first_row(),
+                SymbolicExpression::Leaf(BaseLeaf::IsFirstRow)
+            ),
             "First row condition did not match"
         );
 
         assert!(
-            matches!(builder.is_last_row(), SymbolicExpression::IsLastRow),
+            matches!(
+                builder.is_last_row(),
+                SymbolicExpression::Leaf(BaseLeaf::IsLastRow)
+            ),
             "Last row condition did not match"
         );
     }
@@ -402,7 +417,7 @@ mod tests {
     #[test]
     fn test_symbolic_air_builder_assert_zero() {
         let mut builder = SymbolicAirBuilder::<BabyBear>::new(2, 4, 3, 0, 0);
-        let expr = SymbolicExpression::Constant(BabyBear::new(5));
+        let expr = SymbolicExpression::Leaf(BaseLeaf::Constant(BabyBear::new(5)));
         builder.assert_zero(expr);
 
         let constraints = builder.base_constraints();
@@ -410,7 +425,7 @@ mod tests {
 
         assert!(
             constraints.iter().any(
-                |x| matches!(x, SymbolicExpression::Constant(val) if *val == BabyBear::new(5))
+                |x| matches!(x, SymbolicExpression::Leaf(BaseLeaf::Constant(val)) if *val == BabyBear::new(5))
             ),
             "Constraint should match the asserted one"
         );
