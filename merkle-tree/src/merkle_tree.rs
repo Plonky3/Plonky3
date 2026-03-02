@@ -104,6 +104,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGES
         assert!(!leaves.is_empty(), "No matrices given?");
         const {
             assert!(N >= 2, "Arity N must be at least 2");
+            assert!(N.is_power_of_two(), "Arity N must be a power of two");
             assert!(P::WIDTH == PW::WIDTH, "Packing widths must match");
         }
 

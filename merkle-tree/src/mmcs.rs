@@ -133,6 +133,10 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
     /// * `cap_height` - The height of the Merkle cap. A cap_height of 0 uses only the root,
     ///   while a cap_height of h uses 2^h hashes from h levels below the root.
     pub const fn new(hash: H, compress: C, cap_height: usize) -> Self {
+        const {
+            assert!(N >= 2, "Arity N must be at least 2");
+            assert!(N.is_power_of_two(), "Arity N must be a power of two");
+        }
         Self {
             hash,
             compress,
