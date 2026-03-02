@@ -13,6 +13,7 @@
 //!
 //! If we changed our domain construction (e.g., using multiple cosets), we would need to carefully reconsider these assumptions.
 
+use alloc::borrow::Cow;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
@@ -29,7 +30,7 @@ use p3_field::{
 use p3_interpolation::interpolate_coset_with_precomputation;
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
-use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
@@ -270,7 +271,7 @@ where
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = InputMmcs::Commitment;
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
-    type EvaluationsOnDomain<'a> = BitReversedMatrixView<RowMajorMatrixView<'a, Val>>;
+    type EvaluationsOnDomain<'a> = BitReversedMatrixView<RowMajorMatrixCow<'a, Val>>;
     type Proof = FriProof<Challenge, FriMmcs, Val, Vec<BatchOpening<Val, InputMmcs>>>;
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
     const ZK: bool = false;
@@ -351,19 +352,38 @@ where
     /// - `prover_data`: The prover data containing all committed evaluation matrices.
     /// - `idx`: The index of the matrix containing the evaluations we want. These evaluations
     ///   are assumed to be over the coset `gH` where `g = Val::GENERATOR`.
-    /// - `domain`: The domain `g'K` on which to get evaluations on. Currently, this assumes that
-    ///   `g' = g` and `K` is a subgroup of `H` and panics if this is not the case.
+    /// - `domain`: The domain `g'K` on which to get evaluations on.
+    ///
+    /// When `g' = g` (i.e. `Val::GENERATOR`) and `K` is a subgroup of `H`, this is a simple
+    /// truncation of the bit-reversed LDE. Otherwise, we recover the polynomial coefficients
+    /// from the committed LDE and re-evaluate on the requested domain.
     fn get_evaluations_on_domain<'a>(
         &self,
         prover_data: &'a Self::ProverData,
         idx: usize,
         domain: Self::Domain,
     ) -> Self::EvaluationsOnDomain<'a> {
-        // todo: handle extrapolation for LDEs we don't have
-        assert_eq!(domain.shift(), Val::GENERATOR);
         let lde = self.mmcs.get_matrices(prover_data)[idx];
-        assert!(lde.height() >= domain.size());
-        lde.split_rows(domain.size()).0.bit_reverse_rows()
+        if domain.shift() == Val::GENERATOR && lde.height() >= domain.size() {
+            return lde.split_rows(domain.size()).0.as_cow().bit_reverse_rows();
+        }
+
+        // The committed LDE contains bit-reversed evaluations over `gH`.
+        // Un-bit-reverse, coset iDFT to recover coefficients, truncate to
+        // the original polynomial degree, then coset DFT onto the target domain.
+        let poly_height = lde.height() >> self.fri.log_blowup;
+        let lde_mat = lde.as_view().bit_reverse_rows().to_row_major_matrix();
+        let mut coeffs = self.dft.coset_idft_batch(lde_mat, Val::GENERATOR);
+        let width = coeffs.width();
+        coeffs.values.truncate(poly_height * width);
+        coeffs.values.resize(domain.size() * width, Val::ZERO);
+        let result = self
+            .dft
+            .coset_dft_batch(coeffs, domain.shift())
+            .to_row_major_matrix();
+        let result_width = result.width();
+
+        RowMajorMatrixCow::new(Cow::Owned(result.values), result_width).bit_reverse_rows()
     }
 
     /// Open a batch of matrices at a collection of points.
