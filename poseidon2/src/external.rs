@@ -108,7 +108,7 @@ impl<R: PrimeCharacteristicRing> MdsPermutation<R, 4> for MDSMat4 {}
 ///
 /// # Panics
 /// This will panic if `WIDTH` is not supported. Currently, the
-/// supported `WIDTH` values are 2, 3, 4, 8, 12, 16, 20, 24.`
+/// supported `WIDTH` values are 2, 3, 4, 8, 12, 16, 20, 24, 32.`
 #[inline(always)]
 pub fn mds_light_permutation<
     R: PrimeCharacteristicRing,
@@ -132,7 +132,7 @@ pub fn mds_light_permutation<
             state[2] += sum;
         }
 
-        4 | 8 | 12 | 16 | 20 | 24 => {
+        4 | 8 | 12 | 16 | 20 | 24 | 32 => {
             // First, we apply M_4 to each consecutive four elements of the state.
             // In Appendix B's terminology, this replaces each x_i with x_i'.
             for chunk in state.chunks_exact_mut(4) {

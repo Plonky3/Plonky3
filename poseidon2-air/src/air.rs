@@ -1,3 +1,5 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use core::borrow::Borrow;
 use core::marker::PhantomData;
 
@@ -131,8 +133,8 @@ impl<
         num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>()
     }
 
-    fn main_uses_next_row(&self) -> bool {
-        false
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        vec![]
     }
 
     fn max_constraint_degree(&self) -> Option<usize> {

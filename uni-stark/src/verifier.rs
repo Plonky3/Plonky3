@@ -258,7 +258,7 @@ where
     }
 
     let air_width = A::width(air);
-    let main_next = air.main_uses_next_row();
+    let main_next = !air.main_next_row_columns().is_empty();
     let trace_next_ok = if main_next {
         opened_values
             .trace_next

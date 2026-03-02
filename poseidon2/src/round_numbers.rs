@@ -55,6 +55,11 @@ pub const fn poseidon2_round_numbers_128<F: PrimeField64>(
             (24, 7) => Ok((8, 21)),
             (24, 9) => Ok((8, 21)),
             (24, 11) => Ok((8, 21)),
+            (32, 3) => Ok((8, 31)),
+            (32, 5) => Ok((8, 30)),
+            (32, 7) => Ok((8, 30)),
+            (32, 9) => Ok((8, 30)),
+            (32, 11) => Ok((8, 30)),
             _ => Err("The given pair of width and D has not been checked for these fields"),
         },
         64 => match (width, d) {

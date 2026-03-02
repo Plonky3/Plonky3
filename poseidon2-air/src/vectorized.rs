@@ -1,3 +1,5 @@
+use alloc::vec;
+use alloc::vec::Vec;
 use core::borrow::{Borrow, BorrowMut};
 
 use p3_air::{Air, AirBuilder, BaseAir};
@@ -233,8 +235,8 @@ impl<
         self.air.width() * VECTOR_LEN
     }
 
-    fn main_uses_next_row(&self) -> bool {
-        false
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        vec![]
     }
 }
 

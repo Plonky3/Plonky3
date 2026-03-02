@@ -10,14 +10,11 @@ categories.workspace = true
 
 [dependencies]
 hashbrown = { workspace = true }
-itertools.workspace = true
 p3-air = { workspace = true }
 p3-field = { workspace = true }
 p3-matrix = { workspace = true }
 p3-maybe-rayon = { workspace = true }
 p3-uni-stark = { workspace = true }
-serde = { workspace = true }
-thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

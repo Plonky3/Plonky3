@@ -57,6 +57,11 @@ const POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS: [u8; 23] = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
 ];
 
+const POSEIDON2_INTERNAL_MATRIX_DIAG_32_SHIFTS: [u8; 31] = [
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27, 28, 29, 30,
+];
+
 /// Multiply state by the matrix (1 + Diag(V))
 ///
 /// Here V is the vector [-2] + 1 << shifts. This used delayed reduction to be slightly faster.
@@ -89,6 +94,17 @@ impl InternalLayer<Mersenne31, 24, MERSENNE31_S_BOX_DEGREE> for Poseidon2Interna
         internal_permute_state(
             state,
             |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS),
+            &self.internal_constants,
+        );
+    }
+}
+
+impl InternalLayer<Mersenne31, 32, MERSENNE31_S_BOX_DEGREE> for Poseidon2InternalLayerMersenne31 {
+    /// Perform the internal layers of the Poseidon2 permutation on the given state.
+    fn permute_state(&self, state: &mut [Mersenne31; 32]) {
+        internal_permute_state(
+            state,
+            |x| permute_mut(x, &POSEIDON2_INTERNAL_MATRIX_DIAG_32_SHIFTS),
             &self.internal_constants,
         );
     }
@@ -164,6 +180,27 @@ impl GenericPoseidon2LinearLayers<24> for GenericPoseidon2LinearLayersMersenne31
     }
 }
 
+impl GenericPoseidon2LinearLayers<32> for GenericPoseidon2LinearLayersMersenne31 {
+    fn internal_linear_layer<R: PrimeCharacteristicRing>(state: &mut [R; 32]) {
+        let part_sum: R = state[1..].iter().cloned().sum();
+        let full_sum = part_sum.clone() + state[0].clone();
+
+        // The first three diagonal elements are -2, 1, 2 so we do something custom.
+        state[0] = part_sum - state[0].clone();
+        state[1] = full_sum.clone() + state[1].clone();
+        state[2] = full_sum.clone() + state[2].double();
+
+        // For the remaining elements we use the mul_2exp_u64 method.
+        state[1..]
+            .iter_mut()
+            .zip(POSEIDON2_INTERNAL_MATRIX_DIAG_32_SHIFTS)
+            .skip(2)
+            .for_each(|(val, diag_shift)| {
+                *val = full_sum.clone() + val.clone().mul_2exp_u64(diag_shift as u64);
+            });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use p3_symmetric::Permutation;
@@ -227,5 +264,25 @@ mod tests {
 
         perm.permute_mut(&mut input);
         assert_eq!(input, expected);
+    }
+
+    /// Test on a roughly random input for width 32.
+    #[test]
+    fn test_poseidon2_width_32_random() {
+        let mut input: [F; 32] = Mersenne31::new_array([
+            886409618, 1327899896, 1902407911, 591953491, 648428576, 1844789031, 1198336108,
+            355597330, 1799586834, 59617783, 790334801, 1968791836, 559272107, 31054313,
+            1042221543, 474748436, 135686258, 263665994, 1962340735, 1741539604, 2026927696,
+            449439011, 1131357108, 50869465, 894848333, 1437655012, 1200606629, 1690012884,
+            71131202, 1749206695, 1717947831, 120589055,
+        ]);
+
+        let original = input;
+
+        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
+        let perm = Poseidon2Mersenne31::new_from_rng_128(&mut rng);
+
+        perm.permute_mut(&mut input);
+        assert_ne!(input, original);
     }
 }

@@ -22,8 +22,8 @@ impl<F> BaseAir<F> for SquareAir {
         2
     }
 
-    fn main_uses_next_row(&self) -> bool {
-        false
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        vec![]
     }
 }
 
