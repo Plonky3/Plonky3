@@ -171,7 +171,7 @@ fn submatrix_inverse<F: Field, const N: usize>(m: &[[F; N]; N]) -> Vec<Vec<F>> {
     let n = N - 1;
 
     // Extract the (N-1)x(N-1) bottom-right submatrix.
-    let mut sub = vec![vec![F::ZERO; n]; n];
+    let mut sub: Vec<Vec<F>> = (0..n).map(|_| F::zero_vec(n)).collect();
     for i in 0..n {
         for j in 0..n {
             sub[i][j] = m[i + 1][j + 1];
@@ -179,7 +179,7 @@ fn submatrix_inverse<F: Field, const N: usize>(m: &[[F; N]; N]) -> Vec<Vec<F>> {
     }
 
     // Standard Gauss-Jordan on the submatrix.
-    let mut inv = vec![vec![F::ZERO; n]; n];
+    let mut inv: Vec<Vec<F>> = (0..n).map(|_| F::zero_vec(n)).collect();
     for (i, row) in inv.iter_mut().enumerate() {
         row[i] = F::ONE;
     }
@@ -327,7 +327,7 @@ fn equivalent_round_constants<F: Field, const N: usize>(
     mds_inv: &[[F; N]; N],
 ) -> ([F; N], Vec<F>) {
     let rounds_p = partial_rc.len();
-    let mut opt_partial_rc = vec![F::ZERO; rounds_p];
+    let mut opt_partial_rc = F::zero_vec(rounds_p);
 
     // Start with the last partial round's full constant vector.
     let mut tmp = partial_rc[rounds_p - 1];
