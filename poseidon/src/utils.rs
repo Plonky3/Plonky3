@@ -92,17 +92,9 @@ pub(crate) fn circulant_to_dense<F: Field, const N: usize>(first_col: &[i64; N])
 
 /// Dense NxN matrix multiplication: `C = A * B`.
 fn matrix_mul<F: Field, const N: usize>(a: &[[F; N]; N], b: &[[F; N]; N]) -> [[F; N]; N] {
-    let mut result = [[F::ZERO; N]; N];
-    for i in 0..N {
-        for j in 0..N {
-            let mut sum = F::ZERO;
-            for k in 0..N {
-                sum += a[i][k] * b[k][j];
-            }
-            result[i][j] = sum;
-        }
-    }
-    result
+    core::array::from_fn(|i| {
+        core::array::from_fn(|j| dot_product(a[i].iter().copied(), (0..N).map(|k| b[k][j])))
+    })
 }
 
 /// Matrix-vector multiplication: `result = M * v`.
@@ -401,7 +393,7 @@ pub(crate) fn compute_optimized_constants<F: Field, const N: usize>(
     // Pre-assemble full first rows: [mds_0_0, ŵ[0], ŵ[1], ..., ŵ[N-2]].
     // This enables branch-free dot product computation in cheap_matmul.
     let mds_0_0 = mds[0][0];
-    let sparse_first_row: Vec<[F; N]> = sparse_w_hat
+    let sparse_first_row = sparse_w_hat
         .iter()
         .map(|w| core::array::from_fn(|i| if i == 0 { mds_0_0 } else { w[i - 1] }))
         .collect();
