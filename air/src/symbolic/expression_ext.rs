@@ -48,6 +48,9 @@ impl<F: Field, EF: ExtensionField<F>> SymLeaf for ExtLeaf<F, EF> {
     fn as_const(&self) -> Option<&F> {
         match self {
             Self::Base(SymbolicExpression::Leaf(BaseLeaf::Constant(c))) => Some(c),
+            Self::ExtConstant(ef) if ef.is_in_basefield() => {
+                Some(&ef.as_basis_coefficients_slice()[0])
+            }
             _ => None,
         }
     }
@@ -168,8 +171,8 @@ where
 #[cfg(test)]
 mod tests {
     use p3_baby_bear::BabyBear;
-    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 
     use super::*;
     use crate::symbolic::SymbolicExpr;
@@ -240,9 +243,24 @@ mod tests {
     }
 
     #[test]
-    fn ext_leaf_as_const_ext_constant() {
-        // An extension constant is not a base-field constant.
+    fn ext_leaf_as_const_ext_constant_in_basefield() {
+        // An extension constant that lies in the base field is recognized as a constant.
         let leaf = ExtLeaf::<F, EF>::ExtConstant(EF::ONE);
+        assert_eq!(leaf.as_const(), Some(&F::ONE));
+    }
+
+    #[test]
+    fn ext_leaf_as_const_ext_constant_zero() {
+        // The extension zero element is recognized as the base zero.
+        let leaf = ExtLeaf::<F, EF>::ExtConstant(EF::ZERO);
+        assert_eq!(leaf.as_const(), Some(&F::ZERO));
+    }
+
+    #[test]
+    fn ext_leaf_as_const_ext_constant_not_in_basefield() {
+        // An extension constant with non-zero higher coefficients is not a base constant.
+        let ef_val = EF::from_basis_coefficients_fn(|i| if i == 1 { F::ONE } else { F::ZERO });
+        let leaf = ExtLeaf::<F, EF>::ExtConstant(ef_val);
         assert!(leaf.as_const().is_none());
     }
 
@@ -607,6 +625,107 @@ mod tests {
                 ));
             }
             _ => panic!("Expected a Mul node"),
+        }
+    }
+
+    #[test]
+    fn ext_constant_zero_mul_folds_to_zero() {
+        // Multiplying by the extension zero folds to the zero constant.
+        let var = SymbolicExpressionExt::<F, EF>::from(SymbolicVariableExt::<F, EF>::new(
+            ExtEntry::Permutation { offset: 0 },
+            0,
+        ));
+        let zero = SymbolicExpressionExt::<F, EF>::from(EF::ZERO);
+        let result = var * zero;
+        assert!(matches!(
+            result,
+            SymbolicExpr::Leaf(ExtLeaf::Base(SymbolicExpr::Leaf(BaseLeaf::Constant(c)))) if c == F::ZERO
+        ));
+    }
+
+    #[test]
+    fn ext_constant_one_mul_folds_to_identity() {
+        // Multiplying by the extension one folds to the other operand.
+        let var = SymbolicExpressionExt::<F, EF>::from(SymbolicVariableExt::<F, EF>::new(
+            ExtEntry::Permutation { offset: 0 },
+            0,
+        ));
+        let one = SymbolicExpressionExt::<F, EF>::from(EF::ONE);
+        let result = var * one;
+        assert!(matches!(
+            result,
+            SymbolicExpr::Leaf(ExtLeaf::ExtVariable(v))
+                if v.index == 0 && v.entry == ExtEntry::Permutation { offset: 0 }
+        ));
+    }
+
+    #[test]
+    fn ext_constant_zero_add_folds_to_identity() {
+        // Adding the extension zero folds to the other operand.
+        let var = SymbolicExpressionExt::<F, EF>::from(SymbolicVariableExt::<F, EF>::new(
+            ExtEntry::Permutation { offset: 0 },
+            0,
+        ));
+        let zero = SymbolicExpressionExt::<F, EF>::from(EF::ZERO);
+        let result = zero + var;
+        assert!(matches!(
+            result,
+            SymbolicExpr::Leaf(ExtLeaf::ExtVariable(v))
+                if v.index == 0 && v.entry == ExtEntry::Permutation { offset: 0 }
+        ));
+    }
+
+    #[test]
+    fn ext_constant_zero_sub_folds_to_neg() {
+        // Subtracting from the extension zero folds to negation.
+        let var = SymbolicExpressionExt::<F, EF>::from(SymbolicVariableExt::<F, EF>::new(
+            ExtEntry::Permutation { offset: 0 },
+            0,
+        ));
+        let zero = SymbolicExpressionExt::<F, EF>::from(EF::ZERO);
+        let result = zero - var;
+        match result {
+            SymbolicExpr::Neg { x, degree_multiple } => {
+                assert_eq!(degree_multiple, 1);
+                assert!(matches!(
+                    x.as_ref(),
+                    SymbolicExpr::Leaf(ExtLeaf::ExtVariable(v))
+                        if v.index == 0 && v.entry == ExtEntry::Permutation { offset: 0 }
+                ));
+            }
+            _ => panic!("Expected a Neg node"),
+        }
+    }
+
+    #[test]
+    fn ext_constant_not_in_basefield_no_folding() {
+        // A non-base-field extension constant does not fold with multiplication.
+        let var = SymbolicExpressionExt::<F, EF>::from(SymbolicVariableExt::<F, EF>::new(
+            ExtEntry::Permutation { offset: 0 },
+            0,
+        ));
+        let non_base = SymbolicExpressionExt::<F, EF>::from(EF::from_basis_coefficients_fn(|i| {
+            if i == 1 { F::ONE } else { F::ZERO }
+        }));
+        let result = var * non_base;
+        match result {
+            SymbolicExpr::Mul {
+                x,
+                y,
+                degree_multiple,
+            } => {
+                assert_eq!(degree_multiple, 1);
+                assert!(matches!(
+                    x.as_ref(),
+                    SymbolicExpr::Leaf(ExtLeaf::ExtVariable(v))
+                        if v.index == 0 && v.entry == ExtEntry::Permutation { offset: 0 }
+                ));
+                assert!(matches!(
+                    y.as_ref(),
+                    SymbolicExpr::Leaf(ExtLeaf::ExtConstant(_))
+                ));
+            }
+            _ => panic!("Expected a Mul node since the constant is not in the base field"),
         }
     }
 

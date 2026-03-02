@@ -134,6 +134,9 @@ impl<A: SymLeaf> SymbolicExpr<A> {
         if let (Some(&a), Some(&b)) = (self.as_const(), rhs.as_const()) {
             return Self::Leaf(A::from_const(a - b));
         }
+        if self.as_const().is_some_and(|c| c.is_zero()) {
+            return rhs.sym_neg();
+        }
         if rhs.as_const().is_some_and(|c| c.is_zero()) {
             return self;
         }

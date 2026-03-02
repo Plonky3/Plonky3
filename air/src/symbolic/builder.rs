@@ -222,7 +222,11 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
     }
 
     fn preprocessed(&self) -> Option<Self::M> {
-        Some(self.preprocessed.clone())
+        if self.preprocessed.values.is_empty() {
+            None
+        } else {
+            Some(self.preprocessed.clone())
+        }
     }
 
     fn public_values(&self) -> &[Self::PublicVar] {
@@ -484,6 +488,13 @@ mod tests {
         assert_eq!(prep.values[0].index, 0);
         assert_eq!(prep.values[1].index, 1);
         assert_eq!(prep.values[2].entry, BaseEntry::Preprocessed { offset: 1 });
+    }
+
+    #[test]
+    fn test_preprocessed_returns_none_when_width_is_zero() {
+        // A builder with zero preprocessed columns should report no preprocessed trace.
+        let builder = SymbolicAirBuilder::<F>::new(0, 3, 0, 0, 0);
+        assert!(builder.preprocessed().is_none());
     }
 
     #[test]
