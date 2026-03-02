@@ -39,14 +39,14 @@ impl InternalLayerConstructor<Goldilocks> for Poseidon2InternalLayerGoldilocksAs
 }
 
 const DIAG_RAW_20: [u64; 20] = {
-      let mut arr = [0u64; 20];
-      let mut i = 0;
-      while i < 20 {
-          arr[i] = MATRIX_DIAG_20_GOLDILOCKS[i].value;
-          i += 1;
-      }
-      arr
-  };
+    let mut arr = [0u64; 20];
+    let mut i = 0;
+    while i < 20 {
+        arr[i] = MATRIX_DIAG_20_GOLDILOCKS[i].value;
+        i += 1;
+    }
+    arr
+};
 
 impl InternalLayer<Goldilocks, 8, GOLDILOCKS_S_BOX_DEGREE> for Poseidon2InternalLayerGoldilocksAsm {
     fn permute_state(&self, state: &mut [Goldilocks; 8]) {
@@ -555,8 +555,7 @@ mod tests {
 
         let external_constants =
             ExternalLayerConstants::<Goldilocks, WIDTH>::new_from_rng(4, &mut rng);
-        let internal_constants: Vec<Goldilocks> =
-            (0..22).map(|_| rng.random()).collect();
+        let internal_constants: Vec<Goldilocks> = (0..22).map(|_| rng.random()).collect();
 
         let generic_poseidon2: Poseidon2<
             Goldilocks,

@@ -1697,8 +1697,10 @@ pub fn external_terminal_neon<const WIDTH: usize>(
 mod tests {
     use alloc::vec::Vec;
 
-    use p3_field::PrimeField64;
-    use p3_poseidon2::matmul_internal;
+    use p3_field::{PrimeCharacteristicRing, PrimeField64};
+    use p3_poseidon2::{MDSMat4, matmul_internal, mds_light_permutation};
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
     use crate::{
@@ -1774,10 +1776,6 @@ mod tests {
 
     #[test]
     fn test_div2_asm_vs_field_halve() {
-        use p3_field::PrimeCharacteristicRing;
-        use rand::rngs::SmallRng;
-        use rand::{RngExt, SeedableRng};
-
         let mut rng = SmallRng::seed_from_u64(999);
 
         for _ in 0..256 {
@@ -1790,9 +1788,6 @@ mod tests {
 
     #[test]
     fn test_div2_asm_matches_mul_by_inv2() {
-        use rand::rngs::SmallRng;
-        use rand::{RngExt, SeedableRng};
-
         let mut rng = SmallRng::seed_from_u64(777);
         // MATRIX_DIAG_16_GOLDILOCKS[3] is 1/2 in the Goldilocks field.
         let inv2 = MATRIX_DIAG_16_GOLDILOCKS[3].value;
@@ -1913,8 +1908,6 @@ mod tests {
 
     #[test]
     fn test_mds_light_permutation() {
-        use p3_poseidon2::{MDSMat4, mds_light_permutation};
-
         let mut rng_state = 54321u64;
         let mut next_rand = || {
             rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
@@ -1999,8 +1992,6 @@ mod tests {
 
     #[test]
     fn test_sbox_mds_boundary_values() {
-        use p3_poseidon2::{MDSMat4, mds_light_permutation};
-
         // Test S-box with boundary values
         for &val in &BOUNDARY_VALS {
             let g = Goldilocks::new(val);
@@ -2105,10 +2096,6 @@ mod tests {
 
     #[test]
     fn test_div16_asm_correctness() {
-        use p3_field::PrimeCharacteristicRing;
-        use rand::rngs::SmallRng;
-        use rand::{RngExt, SeedableRng};
-
         let mut rng = SmallRng::seed_from_u64(1616);
         let inv_16 = MATRIX_DIAG_16_GOLDILOCKS[10]; // 1/2^4
 
@@ -2132,10 +2119,6 @@ mod tests {
 
     #[test]
     fn test_div32_asm_correctness() {
-        use p3_field::PrimeCharacteristicRing;
-        use rand::rngs::SmallRng;
-        use rand::{RngExt, SeedableRng};
-
         let mut rng = SmallRng::seed_from_u64(3232);
         let inv_32 = MATRIX_DIAG_16_GOLDILOCKS[11]; // 1/2^5
 
@@ -2160,9 +2143,6 @@ mod tests {
 
     #[test]
     fn test_div_2_32_asm_correctness() {
-        use rand::rngs::SmallRng;
-        use rand::{RngExt, SeedableRng};
-
         let mut rng = SmallRng::seed_from_u64(2320);
         let inv_2_32 = MATRIX_DIAG_16_GOLDILOCKS[15]; // 1/2^32
 
@@ -2190,9 +2170,6 @@ mod tests {
 
     #[test]
     fn test_div_2_32_neon_correctness() {
-        use rand::rngs::SmallRng;
-        use rand::{RngExt, SeedableRng};
-
         let mut rng = SmallRng::seed_from_u64(2321);
         let inv_2_32 = MATRIX_DIAG_16_GOLDILOCKS[15];
 
