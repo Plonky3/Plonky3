@@ -29,10 +29,6 @@ pub enum ExtLeaf<F, EF> {
 /// extension-field [`ExtLeaf`] nodes.
 pub type SymbolicExpressionExt<F, EF> = SymbolicExpr<ExtLeaf<F, EF>>;
 
-// ---------------------------------------------------------------------------
-// SymLeaf impl
-// ---------------------------------------------------------------------------
-
 impl<F: Field, EF: ExtensionField<F>> SymLeaf for ExtLeaf<F, EF> {
     type F = F;
 
@@ -60,10 +56,6 @@ impl<F: Field, EF: ExtensionField<F>> SymLeaf for ExtLeaf<F, EF> {
         Self::Base(SymbolicExpression::from(c))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Inherent methods
-// ---------------------------------------------------------------------------
 
 impl<F: Field, EF> SymbolicExpressionExt<F, EF> {
     /// Try to lower this extension expression to a base-field expression.
@@ -109,10 +101,6 @@ impl<F: Field, EF> SymbolicExpressionExt<F, EF> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// From impls
-// ---------------------------------------------------------------------------
-
 impl<F: Field, EF> From<SymbolicExpression<F>> for SymbolicExpressionExt<F, EF> {
     fn from(expr: SymbolicExpression<F>) -> Self {
         Self::Leaf(ExtLeaf::Base(expr))
@@ -151,10 +139,6 @@ where
         Self::Leaf(ExtLeaf::ExtConstant(ef))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Algebra impls
-// ---------------------------------------------------------------------------
 
 impl<F: Field, EF: ExtensionField<F>> Algebra<F> for SymbolicExpressionExt<F, EF> {}
 

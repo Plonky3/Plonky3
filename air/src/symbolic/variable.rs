@@ -1,8 +1,5 @@
 use core::marker::PhantomData;
 
-use crate::SymbolicExpression;
-use crate::symbolic::expression_ext::SymbolicExpressionExt;
-
 /// Entry kinds for base-field trace columns and public inputs.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum BaseEntry {
@@ -43,8 +40,6 @@ impl<F> SymbolicVariable<F> {
     }
 }
 
-impl_var_ops!(SymbolicVariable<F> => SymbolicExpression);
-
 /// A variable within the evaluation window for extension-field columns.
 #[derive(Copy, Clone, Debug)]
 pub struct SymbolicVariableExt<F, EF> {
@@ -69,5 +64,3 @@ impl<F, EF> SymbolicVariableExt<F, EF> {
         }
     }
 }
-
-impl_var_ops!(SymbolicVariableExt<F, EF> => SymbolicExpressionExt);

@@ -31,10 +31,6 @@ pub enum BaseLeaf<F> {
 /// base-field [`BaseLeaf`] nodes.
 pub type SymbolicExpression<F> = SymbolicExpr<BaseLeaf<F>>;
 
-// ---------------------------------------------------------------------------
-// SymLeaf impl
-// ---------------------------------------------------------------------------
-
 impl<F: Field> SymLeaf for BaseLeaf<F> {
     type F = F;
 
@@ -63,10 +59,6 @@ impl<F: Field> SymLeaf for BaseLeaf<F> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// From impls
-// ---------------------------------------------------------------------------
-
 impl<F: Field, EF: ExtensionField<F>> From<SymbolicVariable<F>> for SymbolicExpression<EF> {
     fn from(var: SymbolicVariable<F>) -> Self {
         Self::Leaf(BaseLeaf::Variable(SymbolicVariable::new(
@@ -80,10 +72,6 @@ impl<F: Field, EF: ExtensionField<F>> From<F> for SymbolicExpression<EF> {
         Self::Leaf(BaseLeaf::Constant(f.into()))
     }
 }
-
-// ---------------------------------------------------------------------------
-// Algebra impls
-// ---------------------------------------------------------------------------
 
 impl<F: Field> Algebra<F> for SymbolicExpression<F> {}
 

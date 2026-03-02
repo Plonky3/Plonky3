@@ -1,10 +1,19 @@
 //! Symbolic expression types for AIR constraint representation.
 
+mod builder;
+mod expression;
+pub(crate) mod expression_ext;
+mod variable;
+
 use alloc::sync::Arc;
 use core::iter::{Product, Sum};
 use core::ops;
 
-use p3_field::{Field, PrimeCharacteristicRing};
+pub use builder::*;
+pub use expression::{BaseLeaf, SymbolicExpression};
+pub use expression_ext::{ExtLeaf, SymbolicExpressionExt};
+use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
+pub use variable::{BaseEntry, ExtEntry, SymbolicVariable, SymbolicVariableExt};
 
 /// Properties that leaf nodes must provide for the generic expression tree.
 ///
@@ -72,10 +81,6 @@ pub enum SymbolicExpr<A> {
         degree_multiple: usize,
     },
 }
-
-// ---------------------------------------------------------------------------
-// Inherent methods
-// ---------------------------------------------------------------------------
 
 impl<A: SymLeaf> SymbolicExpr<A> {
     /// Returns the degree multiple of this expression.
@@ -177,10 +182,6 @@ impl<A: SymLeaf> SymbolicExpr<A> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// PrimeCharacteristicRing + Default
-// ---------------------------------------------------------------------------
-
 impl<A: SymLeaf> PrimeCharacteristicRing for SymbolicExpr<A> {
     type PrimeSubfield = <A::F as PrimeCharacteristicRing>::PrimeSubfield;
 
@@ -200,10 +201,6 @@ impl<A: SymLeaf> Default for SymbolicExpr<A> {
         Self::ZERO
     }
 }
-
-// ---------------------------------------------------------------------------
-// Arithmetic operators (written once, generic over leaf type)
-// ---------------------------------------------------------------------------
 
 impl<A: SymLeaf, T: Into<Self>> ops::Add<T> for SymbolicExpr<A> {
     type Output = Self;
@@ -267,44 +264,50 @@ impl<A: SymLeaf, T: Into<Self>> Product<T> for SymbolicExpr<A> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Variable operator macro (kept for the 2 variable types)
-// ---------------------------------------------------------------------------
-
-/// Implements `Add<T>`, `Sub<T>`, `Mul<T>` for a symbolic variable type,
-/// delegating to the corresponding expression type's operators.
-macro_rules! impl_var_ops {
-    ($Var:ident < $($gen:ident),+ > => $Expr:ident) => {
-        impl<$($gen,)+ T: Into<$Expr<$($gen),+>>> core::ops::Add<T> for $Var<$($gen),+>
-        where $Expr<$($gen),+>: From<$Var<$($gen),+>> + core::ops::Add<Output = $Expr<$($gen),+>> {
-            type Output = $Expr<$($gen),+>;
-            fn add(self, rhs: T) -> $Expr<$($gen),+> { $Expr::from(self) + rhs.into() }
-        }
-
-        impl<$($gen,)+ T: Into<$Expr<$($gen),+>>> core::ops::Sub<T> for $Var<$($gen),+>
-        where $Expr<$($gen),+>: From<$Var<$($gen),+>> + core::ops::Sub<Output = $Expr<$($gen),+>> {
-            type Output = $Expr<$($gen),+>;
-            fn sub(self, rhs: T) -> $Expr<$($gen),+> { $Expr::from(self) - rhs.into() }
-        }
-
-        impl<$($gen,)+ T: Into<$Expr<$($gen),+>>> core::ops::Mul<T> for $Var<$($gen),+>
-        where $Expr<$($gen),+>: From<$Var<$($gen),+>> + core::ops::Mul<Output = $Expr<$($gen),+>> {
-            type Output = $Expr<$($gen),+>;
-            fn mul(self, rhs: T) -> $Expr<$($gen),+> { $Expr::from(self) * rhs.into() }
-        }
-    };
+impl<F: Field, T: Into<SymbolicExpression<F>>> ops::Add<T> for SymbolicVariable<F> {
+    type Output = SymbolicExpression<F>;
+    fn add(self, rhs: T) -> Self::Output {
+        Self::Output::from(self) + rhs.into()
+    }
 }
 
-// ---------------------------------------------------------------------------
-// Modules and exports
-// ---------------------------------------------------------------------------
+impl<F: Field, T: Into<SymbolicExpression<F>>> ops::Sub<T> for SymbolicVariable<F> {
+    type Output = SymbolicExpression<F>;
+    fn sub(self, rhs: T) -> Self::Output {
+        Self::Output::from(self) - rhs.into()
+    }
+}
 
-mod builder;
-mod expression;
-pub(crate) mod expression_ext;
-mod variable;
+impl<F: Field, T: Into<SymbolicExpression<F>>> ops::Mul<T> for SymbolicVariable<F> {
+    type Output = SymbolicExpression<F>;
+    fn mul(self, rhs: T) -> Self::Output {
+        Self::Output::from(self) * rhs.into()
+    }
+}
 
-pub use builder::*;
-pub use expression::{BaseLeaf, SymbolicExpression};
-pub use expression_ext::{ExtLeaf, SymbolicExpressionExt};
-pub use variable::{BaseEntry, ExtEntry, SymbolicVariable, SymbolicVariableExt};
+impl<F: Field, EF: ExtensionField<F>, T: Into<SymbolicExpressionExt<F, EF>>> ops::Add<T>
+    for SymbolicVariableExt<F, EF>
+{
+    type Output = SymbolicExpressionExt<F, EF>;
+    fn add(self, rhs: T) -> Self::Output {
+        Self::Output::from(self) + rhs.into()
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>, T: Into<SymbolicExpressionExt<F, EF>>> ops::Sub<T>
+    for SymbolicVariableExt<F, EF>
+{
+    type Output = SymbolicExpressionExt<F, EF>;
+    fn sub(self, rhs: T) -> Self::Output {
+        Self::Output::from(self) - rhs.into()
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>, T: Into<SymbolicExpressionExt<F, EF>>> ops::Mul<T>
+    for SymbolicVariableExt<F, EF>
+{
+    type Output = SymbolicExpressionExt<F, EF>;
+    fn mul(self, rhs: T) -> Self::Output {
+        Self::Output::from(self) * rhs.into()
+    }
+}
