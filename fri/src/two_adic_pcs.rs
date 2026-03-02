@@ -24,7 +24,8 @@ use p3_commit::{BatchOpening, Mmcs, OpenedValues, Pcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    ExtensionField, PackedFieldExtension, PrimeCharacteristicRing, batch_multiplicative_inverse, dot_product,
+    ExtensionField, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, TwoAdicField, batch_multiplicative_inverse,
+    dot_product,
 };
 use p3_interpolation::interpolate_coset_with_precomputation;
 use p3_matrix::Matrix;
