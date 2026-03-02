@@ -70,15 +70,20 @@ impl<F: Field> MultiSet<F> {
     /// *first* reported mismatch is deterministic (hash-map iteration
     /// order is not).
     fn assert_empty(&self, label: &str) {
-        let mut entries: Vec<_> = self.entries.iter().collect();
-        entries.sort_by(|(a, _), (b, _)| {
-            let a_str: Vec<String> = a.iter().map(|v| v.to_string()).collect();
-            let b_str: Vec<String> = b.iter().map(|v| v.to_string()).collect();
-            a_str.cmp(&b_str)
-        });
-        for (key, (total, locations)) in entries {
+        let mut entries: Vec<(Vec<String>, &F, &Vec<Location>)> = self
+            .entries
+            .iter()
+            .map(|(key, (total, locations))| {
+                (
+                    key.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
+                    total,
+                    locations,
+                )
+            })
+            .collect();
+        entries.sort_by(|(a_rendered, ..), (b_rendered, ..)| a_rendered.cmp(b_rendered));
+        for (rendered_key, total, locations) in entries {
             if !total.is_zero() {
-                let rendered_key: Vec<String> = key.iter().map(|v| v.to_string()).collect();
                 panic!(
                     "Lookup mismatch ({label}): tuple {:?} has net multiplicity {:?}. Locations: {:?}",
                     rendered_key, total, locations
