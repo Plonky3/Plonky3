@@ -547,8 +547,7 @@ mod tests {
 
         let partial_rc: Vec<[F; 4]> = (0..rounds_p).map(|_| rng.random()).collect();
 
-        let (scalar_constants, residual) =
-            forward_constant_substitution::<F, 4>(&mds, &partial_rc);
+        let (scalar_constants, residual) = forward_constant_substitution::<F, 4>(&mds, &partial_rc);
 
         let input: [F; 4] = rng.random();
 
