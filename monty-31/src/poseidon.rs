@@ -1,6 +1,6 @@
 use core::marker::PhantomData;
 
-use p3_field::Field;
+use p3_field::{Field, InjectiveMonomial};
 use p3_poseidon::external::{
     FullRoundLayer, full_round_initial_permute_state, full_round_terminal_permute_state,
 };
@@ -14,9 +14,27 @@ use crate::{
 };
 
 /// Trait for Poseidon partial round scalar operations.
+///
+/// Provides compile-time dispatch between two partial round strategies:
+///
+/// - **Sparse decomposition** (`USE_TEXTBOOK = false`, default): Uses the sparse matrix
+///   factorization from Appendix B of the Poseidon paper. Best for most field/width combos.
+///
+/// - **Textbook with scalar constants** (`USE_TEXTBOOK = true`): Keeps the fast MDS
+///   permutation (e.g., Karatsuba convolution) per round, but folds `state[1..WIDTH]`
+///   constants forward so only a scalar is added to `state[0]` each round. Best when
+///   the MDS is very fast (e.g., BabyBear width-16 with power-of-2 Karatsuba).
 pub trait PartialRoundBaseParameters<MP: MontyParameters, const WIDTH: usize>:
     Clone + Sync
 {
+    /// Whether to use the textbook (MDS-per-round) path for partial rounds.
+    ///
+    /// - When `true`, the Karatsuba MDS is applied per round with scalar constants.
+    /// - When `false` (default), the sparse matrix decomposition is used.
+    const USE_TEXTBOOK: bool = false;
+
+    /// Apply the MDS permutation. Only called when `USE_TEXTBOOK` is `true`.
+    fn mds_permute(_state: &mut [MontyField31<MP>; WIDTH]) {}
 }
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
@@ -59,10 +77,27 @@ where
     P1P: PartialRoundParameters<FP, WIDTH>,
 {
     fn permute_state(&self, state: &mut [MontyField31<FP>; WIDTH]) {
-        partial_permute_state::<MontyField31<FP>, MontyField31<FP>, WIDTH, D>(
-            state,
-            &self.internal_constants,
-        );
+        if P1P::USE_TEXTBOOK {
+            // Textbook: scalar constant + S-box + Karatsuba MDS per round.
+            for &c in &self.internal_constants.textbook_scalar_constants {
+                state[0] += c;
+                state[0] = InjectiveMonomial::<D>::injective_exp_n(&state[0]);
+                P1P::mds_permute(state);
+            }
+            // Add residual after all partial rounds.
+            for (s, &r) in state
+                .iter_mut()
+                .zip(self.internal_constants.textbook_residual.iter())
+            {
+                *s += r;
+            }
+        } else {
+            // Sparse decomposition (default).
+            partial_permute_state::<MontyField31<FP>, MontyField31<FP>, WIDTH, D>(
+                state,
+                &self.internal_constants,
+            );
+        }
     }
 }
 

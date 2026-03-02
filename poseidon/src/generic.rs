@@ -23,7 +23,7 @@ use crate::external::{
 };
 use crate::internal::{
     PartialRoundConstants, PartialRoundLayer, PartialRoundLayerConstructor, cheap_matmul,
-    partial_permute_state,
+    partial_permute_state, textbook_partial_permute_state,
 };
 
 /// Generic round-constant addition followed by S-box evaluation: `val <- (val + rc)^D`.
@@ -131,5 +131,43 @@ where
 {
     fn permute_state(&self, state: &mut [A; WIDTH]) {
         partial_permute_state::<F, A, WIDTH, D>(state, &self.constants);
+    }
+}
+
+/// Textbook internal (partial round) layer for the Poseidon permutation.
+///
+/// Uses the MDS permutation per round with forward-substituted scalar constants.
+/// Each partial round adds a single scalar to `state[0]`, applies the S-box, and
+/// multiplies by the MDS. After all rounds, a residual vector is added.
+///
+/// Use this instead of [`PoseidonInternalLayerGeneric`] when the MDS permutation
+/// is very fast (e.g., Karatsuba convolution for power-of-2 circulant matrices).
+#[derive(Debug, Clone)]
+pub struct PoseidonInternalLayerTextbook<F, Mds, const WIDTH: usize> {
+    constants: PartialRoundConstants<F, WIDTH>,
+    _mds: PhantomData<Mds>,
+}
+
+impl<F: Field, Mds, const WIDTH: usize> PartialRoundLayerConstructor<F, WIDTH>
+    for PoseidonInternalLayerTextbook<F, Mds, WIDTH>
+{
+    fn new_from_constants(constants: PartialRoundConstants<F, WIDTH>) -> Self {
+        Self {
+            constants,
+            _mds: PhantomData,
+        }
+    }
+}
+
+impl<F, A, Mds, const WIDTH: usize, const D: u64> PartialRoundLayer<A, WIDTH, D>
+    for PoseidonInternalLayerTextbook<F, Mds, WIDTH>
+where
+    F: Field + InjectiveMonomial<D>,
+    A: Algebra<F> + InjectiveMonomial<D>,
+    Mds: Permutation<[A; WIDTH]> + Default + Sync + Clone,
+{
+    fn permute_state(&self, state: &mut [A; WIDTH]) {
+        let mds = Mds::default();
+        textbook_partial_permute_state::<F, A, _, WIDTH, D>(state, &self.constants, &mds);
     }
 }

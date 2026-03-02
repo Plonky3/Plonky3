@@ -13,10 +13,12 @@
 //! <https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon/poseidon_instance_babybear.rs>
 
 use p3_monty_31::{
-    GenericPoseidonLinearLayersMonty31, MDSUtils, PartialRoundBaseParameters,
-    PartialRoundParameters, PoseidonExternalLayerMonty31, PoseidonInternalLayerMonty31,
+    GenericPoseidonLinearLayersMonty31, MDSUtils, MdsMatrixMontyField31,
+    PartialRoundBaseParameters, PartialRoundParameters, PoseidonExternalLayerMonty31,
+    PoseidonInternalLayerMonty31,
 };
 use p3_poseidon::{Poseidon, PoseidonConstants};
+use p3_symmetric::Permutation;
 
 use crate::mds::MDSBabyBearData;
 use crate::{BabyBear, BabyBearParameters};
@@ -56,7 +58,13 @@ pub type GenericPoseidonLinearLayersBabyBear =
 #[derive(Debug, Clone, Default)]
 pub struct BabyBearPoseidonParameters;
 
-impl PartialRoundBaseParameters<BabyBearParameters, 16> for BabyBearPoseidonParameters {}
+impl PartialRoundBaseParameters<BabyBearParameters, 16> for BabyBearPoseidonParameters {
+    const USE_TEXTBOOK: bool = true;
+
+    fn mds_permute(state: &mut [BabyBear; 16]) {
+        MdsMatrixMontyField31::<MDSBabyBearData>::default().permute_mut(state);
+    }
+}
 impl PartialRoundBaseParameters<BabyBearParameters, 24> for BabyBearPoseidonParameters {}
 impl PartialRoundParameters<BabyBearParameters, 16> for BabyBearPoseidonParameters {}
 impl PartialRoundParameters<BabyBearParameters, 24> for BabyBearPoseidonParameters {}
