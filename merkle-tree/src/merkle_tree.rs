@@ -16,7 +16,8 @@ use tracing::instrument;
 ///
 /// * `F` – scalar element type inside each matrix row.
 /// * `W` – scalar element type of every digest word.
-/// * `M` – matrix type. Must implement [`Matrix<F>`].
+/// * `M` – matrix type. Must implement [`Matrix<F>`].\
+/// * `N` – arity of the compression function.
 /// * `DIGEST_ELEMS` – number of `W` words in one digest.
 ///
 /// The tree is **balanced only at the digest layer**.
@@ -55,9 +56,11 @@ pub struct MerkleTree<F, W, M, const N: usize, const DIGEST_ELEMS: usize> {
     pub(crate) digest_layers: Vec<Vec<[W; DIGEST_ELEMS]>>,
 
     /// The compression arity used at each tree level (transition from
-    /// `digest_layers[i]` to `digest_layers[i+1]`). Each entry is either
-    /// `N` (full N-ary step) or `2` (binary step used when a matrix injection
-    /// falls between N-ary tiers).
+    /// `digest_layers[i]` to `digest_layers[i+1]`).
+    ///
+    /// Each entry is either `N` (full N-ary step) as specified by the `N`
+    /// parameter associated to the compression function, or `2` (binary step)
+    /// when a matrix injection falls between N-ary levels.
     pub(crate) arity_schedule: Vec<usize>,
 
     /// Zero-sized marker that binds the generic `F` but occupies no space.
@@ -70,7 +73,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGES
     /// Build a tree from **one or more matrices**.
     ///
     /// * `h` – hashing function used on raw rows.
-    /// * `c` – 2-to-1 compression function used on digests.
+    /// * `c` – N-to-1 compression function used on digests.
     /// * `leaves` – matrices to commit to. Must be non-empty.
     ///
     /// Matrices do **not** need to have power-of-two heights. However, any two matrices

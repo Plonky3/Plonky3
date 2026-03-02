@@ -52,6 +52,7 @@ use crate::{MerkleCap, MerkleTree};
 /// - `PW`: Packed digest element (used in the hash and compression output)
 /// - `H`: Cryptographic hash function (leaf hash)
 /// - `C`: Pseudo-compression function (internal node compression)
+/// - `N`: Arity of the compression function
 /// - `DIGEST_ELEMS`: Number of elements in a single digest
 #[derive(Copy, Clone, Debug)]
 pub struct MerkleTreeMmcs<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize> {
