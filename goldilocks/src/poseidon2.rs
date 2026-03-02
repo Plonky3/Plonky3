@@ -28,13 +28,7 @@ const GOLDILOCKS_S_BOX_DEGREE: u64 = 7;
 ///
 /// It acts on arrays of the form `[Goldilocks; WIDTH]`.
 #[cfg(target_arch = "aarch64")]
-pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
-    Goldilocks,
-    crate::Poseidon2ExternalLayerGoldilocksAsm<WIDTH>,
-    crate::Poseidon2InternalLayerGoldilocksAsm,
-    WIDTH,
-    GOLDILOCKS_S_BOX_DEGREE,
->;
+pub type Poseidon2Goldilocks<const WIDTH: usize> = crate::Poseidon2GoldilocksFused<WIDTH>;
 
 /// An implementation of the Poseidon2 hash function for the Goldilocks field.
 ///
@@ -63,48 +57,48 @@ pub type Poseidon2GoldilocksHL<const WIDTH: usize> = Poseidon2<
 >;
 
 pub const MATRIX_DIAG_8_GOLDILOCKS: [Goldilocks; 8] = Goldilocks::new_array([
-    0xa98811a1fed4e3a5,
-    0x1cc48b54f377e2a0,
-    0xe40cd4f6c5609a26,
-    0x11de79ebca97a4a3,
-    0x9177c73d8b7e929c,
-    0x2a6fe8085797e791,
-    0x3de6e93329f8d5ad,
-    0x3f7af9125da962fe,
+    0xfffffffeffffffff, // -2
+    0x0000000000000001, // 1
+    0x0000000000000002, // 2
+    0x7fffffff80000001, // 1/2
+    0x0000000000000003, // 3
+    0x7fffffff80000000, // -1/2
+    0xfffffffefffffffe, // -3
+    0xfffffffefffffffd, // -4
 ]);
 
 pub const MATRIX_DIAG_12_GOLDILOCKS: [Goldilocks; 12] = Goldilocks::new_array([
-    0xc3b6c08e23ba9300,
-    0xd84b5de94a324fb6,
-    0x0d0c371c5b35b84f,
-    0x7964f570e7188037,
-    0x5daf18bbd996604b,
-    0x6743bc47b9595257,
-    0x5528b9362c59bb70,
-    0xac45e25b7127b68b,
-    0xa2077d7dfbb606b5,
-    0xf3faac6faee378ae,
-    0x0c6388b51545e883,
-    0xd27dbb6944917b60,
+    0xfffffffeffffffff, // -2
+    0x0000000000000001, // 1
+    0x0000000000000002, // 2
+    0x7fffffff80000001, // 1/2
+    0x0000000000000003, // 3
+    0x0000000000000004, // 4
+    0x7fffffff80000000, // -1/2
+    0xfffffffefffffffe, // -3
+    0xfffffffefffffffd, // -4
+    0xbfffffff40000001, // 1/2^2
+    0x3fffffffc0000000, // -1/2^2
+    0xdfffffff20000001, // 1/2^3
 ]);
 
 pub const MATRIX_DIAG_16_GOLDILOCKS: [Goldilocks; 16] = Goldilocks::new_array([
-    0xde9b91a467d6afc0,
-    0xc5f16b9c76a9be17,
-    0x0ab0fef2d540ac55,
-    0x3001d27009d05773,
-    0xed23b1f906d3d9eb,
-    0x5ce73743cba97054,
-    0x1c3bab944af4ba24,
-    0x2faa105854dbafae,
-    0x53ffb3ae6d421a10,
-    0xbcda9df8884ba396,
-    0xfc1273e4a31807bb,
-    0xc77952573d5142c0,
-    0x56683339a819b85e,
-    0x328fcbd8f0ddc8eb,
-    0xb5101e303fce9cb7,
-    0x774487b8c40089bb,
+    0xfffffffeffffffff, // -2
+    0x0000000000000001, // 1
+    0x0000000000000002, // 2
+    0x7fffffff80000001, // 1/2
+    0x0000000000000003, // 3
+    0x0000000000000004, // 4
+    0x7fffffff80000000, // -1/2
+    0xfffffffefffffffe, // -3
+    0xfffffffefffffffd, // -4
+    0xdfffffff20000001, // 1/2^3
+    0xefffffff10000001, // 1/2^4
+    0xf7ffffff08000001, // 1/2^5
+    0x1fffffffe0000000, // -1/2^3
+    0x0ffffffff0000000, // -1/2^4
+    0x07fffffff8000000, // -1/2^5
+    0xfffffffe00000002, // 1/2^32
 ]);
 
 pub const MATRIX_DIAG_20_GOLDILOCKS: [Goldilocks; 20] = Goldilocks::new_array([
@@ -130,6 +124,261 @@ pub const MATRIX_DIAG_20_GOLDILOCKS: [Goldilocks; 20] = Goldilocks::new_array([
     0x0b3694a940bd2394,
 ]);
 
+fn internal_layer_mat_mul_goldilocks_8<A: Algebra<Goldilocks>>(state: &mut [A; 8]) {
+    let sum: A = state.iter().cloned().sum();
+
+    let s0 = state[0].clone();
+    let s1 = state[1].clone();
+    let s2 = state[2].clone();
+    let s3 = state[3].clone();
+    let s4 = state[4].clone();
+    let s5 = state[5].clone();
+    let s6 = state[6].clone();
+    let s7 = state[7].clone();
+
+    // V[0] = -2
+    let mut two_s0 = s0.clone();
+    two_s0 += s0;
+    state[0] = sum.clone() - two_s0;
+
+    // V[1] = 1
+    state[1] = sum.clone() + s1;
+
+    // V[2] = 2
+    let mut two_s2 = s2.clone();
+    two_s2 += s2;
+    state[2] = sum.clone() + two_s2;
+
+    // V[3] = 1/2
+    let half = MATRIX_DIAG_8_GOLDILOCKS[3];
+    let mut half_s3 = s3;
+    half_s3 *= half;
+    state[3] = sum.clone() + half_s3;
+
+    // V[4] = 3
+    let mut two_s4 = s4.clone();
+    two_s4 += s4.clone();
+    let three_s4 = two_s4 + s4;
+    state[4] = sum.clone() + three_s4;
+
+    // V[5] = -1/2
+    let mut half_s5 = s5;
+    half_s5 *= half;
+    state[5] = sum.clone() - half_s5;
+
+    // V[6] = -3
+    let mut two_s6 = s6.clone();
+    two_s6 += s6.clone();
+    let three_s6 = two_s6 + s6;
+    state[6] = sum.clone() - three_s6;
+
+    // V[7] = -4
+    let mut two_s7 = s7.clone();
+    two_s7 += s7;
+    let mut four_s7 = two_s7.clone();
+    four_s7 += two_s7;
+    state[7] = sum - four_s7;
+}
+
+fn internal_layer_mat_mul_goldilocks_12<A: Algebra<Goldilocks>>(state: &mut [A; 12]) {
+    let sum: A = state.iter().cloned().sum();
+
+    let s0 = state[0].clone();
+    let s1 = state[1].clone();
+    let s2 = state[2].clone();
+    let s3 = state[3].clone();
+    let s4 = state[4].clone();
+    let s5 = state[5].clone();
+    let s6 = state[6].clone();
+    let s7 = state[7].clone();
+    let s8 = state[8].clone();
+    let s9 = state[9].clone();
+    let s10 = state[10].clone();
+    let s11 = state[11].clone();
+
+    // V[0] = -2
+    let mut two_s0 = s0.clone();
+    two_s0 += s0;
+    state[0] = sum.clone() - two_s0;
+
+    // V[1] = 1
+    state[1] = sum.clone() + s1;
+
+    // V[2] = 2
+    let mut two_s2 = s2.clone();
+    two_s2 += s2;
+    state[2] = sum.clone() + two_s2;
+
+    // V[3] = 1/2
+    let half = MATRIX_DIAG_12_GOLDILOCKS[3];
+    let mut half_s3 = s3;
+    half_s3 *= half;
+    state[3] = sum.clone() + half_s3;
+
+    // V[4] = 3
+    let mut two_s4 = s4.clone();
+    two_s4 += s4.clone();
+    let three_s4 = two_s4 + s4;
+    state[4] = sum.clone() + three_s4;
+
+    // V[5] = 4
+    let mut two_s5 = s5.clone();
+    two_s5 += s5;
+    let mut four_s5 = two_s5.clone();
+    four_s5 += two_s5;
+    state[5] = sum.clone() + four_s5;
+
+    // V[6] = -1/2
+    let mut half_s6 = s6;
+    half_s6 *= half;
+    state[6] = sum.clone() - half_s6;
+
+    // V[7] = -3
+    let mut two_s7 = s7.clone();
+    two_s7 += s7.clone();
+    let three_s7 = two_s7 + s7;
+    state[7] = sum.clone() - three_s7;
+
+    // V[8] = -4
+    let mut two_s8 = s8.clone();
+    two_s8 += s8;
+    let mut four_s8 = two_s8.clone();
+    four_s8 += two_s8;
+    state[8] = sum.clone() - four_s8;
+
+    // V[9] = 1/2^2
+    let inv_4 = MATRIX_DIAG_12_GOLDILOCKS[9]; // 1/2^2
+    let mut inv4_s9 = s9;
+    inv4_s9 *= inv_4;
+    state[9] = sum.clone() + inv4_s9;
+
+    // V[10] = -1/2^2
+    let mut inv4_s10 = s10;
+    inv4_s10 *= inv_4;
+    state[10] = sum.clone() - inv4_s10;
+
+    // V[11] = 1/2^3
+    let inv_8 = MATRIX_DIAG_12_GOLDILOCKS[11];
+    let mut inv8_s11 = s11;
+    inv8_s11 *= inv_8;
+    state[11] = sum + inv8_s11;
+}
+
+fn internal_layer_mat_mul_goldilocks_16<A: Algebra<Goldilocks>>(state: &mut [A; 16]) {
+    let sum: A = state.iter().cloned().sum();
+
+    let s0 = state[0].clone();
+    let s1 = state[1].clone();
+    let s2 = state[2].clone();
+    let s3 = state[3].clone();
+    let s4 = state[4].clone();
+    let s5 = state[5].clone();
+    let s6 = state[6].clone();
+    let s7 = state[7].clone();
+    let s8 = state[8].clone();
+    let s9 = state[9].clone();
+    let s10 = state[10].clone();
+    let s11 = state[11].clone();
+    let s12 = state[12].clone();
+    let s13 = state[13].clone();
+    let s14 = state[14].clone();
+    let s15 = state[15].clone();
+
+    // V[0] = -2
+    let mut two_s0 = s0.clone();
+    two_s0 += s0;
+    state[0] = sum.clone() - two_s0;
+
+    // V[1] = 1
+    state[1] = sum.clone() + s1;
+
+    // V[2] = 2
+    let mut two_s2 = s2.clone();
+    two_s2 += s2;
+    state[2] = sum.clone() + two_s2;
+
+    // V[3] = 1/2
+    let half = MATRIX_DIAG_16_GOLDILOCKS[3];
+    let mut half_s3 = s3;
+    half_s3 *= half;
+    state[3] = sum.clone() + half_s3;
+
+    // V[4] = 3
+    let mut two_s4 = s4.clone();
+    two_s4 += s4.clone();
+    let three_s4 = two_s4 + s4;
+    state[4] = sum.clone() + three_s4;
+
+    // V[5] = 4
+    let mut two_s5 = s5.clone();
+    two_s5 += s5;
+    let mut four_s5 = two_s5.clone();
+    four_s5 += two_s5;
+    state[5] = sum.clone() + four_s5;
+
+    // V[6] = -1/2
+    let mut half_s6 = s6;
+    half_s6 *= half;
+    state[6] = sum.clone() - half_s6;
+
+    // V[7] = -3
+    let mut two_s7 = s7.clone();
+    two_s7 += s7.clone();
+    let three_s7 = two_s7 + s7;
+    state[7] = sum.clone() - three_s7;
+
+    // V[8] = -4
+    let mut two_s8 = s8.clone();
+    two_s8 += s8;
+    let mut four_s8 = two_s8.clone();
+    four_s8 += two_s8;
+    state[8] = sum.clone() - four_s8;
+
+    // Inverse power-of-two coefficients use precomputed diagonal entries.
+    let inv_8 = MATRIX_DIAG_16_GOLDILOCKS[9]; // 1/2^3
+    let inv_16 = MATRIX_DIAG_16_GOLDILOCKS[10]; // 1/2^4
+    let inv_32 = MATRIX_DIAG_16_GOLDILOCKS[11]; // 1/2^5
+    let neg_inv_8 = MATRIX_DIAG_16_GOLDILOCKS[12]; // -1/2^3
+    let neg_inv_16 = MATRIX_DIAG_16_GOLDILOCKS[13]; // -1/2^4
+    let neg_inv_32 = MATRIX_DIAG_16_GOLDILOCKS[14]; // -1/2^5
+    let inv_2_32 = MATRIX_DIAG_16_GOLDILOCKS[15]; // 1/2^32
+
+    // V[9] = 1/2^3
+    let mut v9 = s9;
+    v9 *= inv_8;
+    state[9] = sum.clone() + v9;
+
+    // V[10] = 1/2^4
+    let mut v10 = s10;
+    v10 *= inv_16;
+    state[10] = sum.clone() + v10;
+
+    // V[11] = 1/2^5
+    let mut v11 = s11;
+    v11 *= inv_32;
+    state[11] = sum.clone() + v11;
+
+    // V[12] = -1/2^3
+    let mut v12 = s12;
+    v12 *= neg_inv_8;
+    state[12] = sum.clone() + v12;
+
+    // V[13] = -1/2^4
+    let mut v13 = s13;
+    v13 *= neg_inv_16;
+    state[13] = sum.clone() + v13;
+
+    // V[14] = -1/2^5
+    let mut v14 = s14;
+    v14 *= neg_inv_32;
+    state[14] = sum.clone() + v14;
+
+    // V[15] = 1/2^32
+    let mut v15 = s15;
+    v15 *= inv_2_32;
+    state[15] = sum + v15;
+}
+
 /// The internal layers of the Poseidon2 permutation.
 #[derive(Debug, Clone, Default)]
 pub struct Poseidon2InternalLayerGoldilocks {
@@ -149,7 +398,7 @@ impl<A: Algebra<Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>>
     fn permute_state(&self, state: &mut [A; 8]) {
         internal_permute_state(
             state,
-            |x| matmul_internal(x, MATRIX_DIAG_8_GOLDILOCKS),
+            internal_layer_mat_mul_goldilocks_8,
             &self.internal_constants,
         );
     }
@@ -162,7 +411,7 @@ impl<A: Algebra<Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>>
     fn permute_state(&self, state: &mut [A; 12]) {
         internal_permute_state(
             state,
-            |x| matmul_internal(x, MATRIX_DIAG_12_GOLDILOCKS),
+            internal_layer_mat_mul_goldilocks_12,
             &self.internal_constants,
         );
     }
@@ -175,7 +424,7 @@ impl<A: Algebra<Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>>
     fn permute_state(&self, state: &mut [A; 16]) {
         internal_permute_state(
             state,
-            |x| matmul_internal(x, MATRIX_DIAG_16_GOLDILOCKS),
+            internal_layer_mat_mul_goldilocks_16,
             &self.internal_constants,
         );
     }
@@ -468,14 +717,14 @@ mod tests {
         let mut input: [F; 8] = [Goldilocks::ZERO; 8];
 
         let expected: [F; 8] = Goldilocks::new_array([
-            4214787979728720400,
-            12324939279576102560,
-            10353596058419792404,
-            15456793487362310586,
-            10065219879212154722,
-            16227496357546636742,
-            2959271128466640042,
-            14285409611125725709,
+            18411014882916974180,
+            11853243659833051879,
+            2553980965289355629,
+            5435536888074291950,
+            11414233414141119281,
+            15612551474745760831,
+            15745650375519692590,
+            4546169000627739578,
         ]);
         hl_poseidon2_goldilocks_width_8(&mut input);
         assert_eq!(input, expected);
@@ -487,14 +736,14 @@ mod tests {
         let mut input: [F; 8] = array::from_fn(|i| F::from_u64(i as u64));
 
         let expected: [F; 8] = Goldilocks::new_array([
-            14266028122062624699,
-            5353147180106052723,
-            15203350112844181434,
-            17630919042639565165,
-            16601551015858213987,
-            10184091939013874068,
-            16774100645754596496,
-            12047415603622314780,
+            14758079437403499858,
+            4768220715988658038,
+            9988209636190012306,
+            8808631253505580005,
+            17526572370116009359,
+            1590367810676479047,
+            13027328087430412699,
+            13357513690486523336,
         ]);
         hl_poseidon2_goldilocks_width_8(&mut input);
         assert_eq!(input, expected);
@@ -518,14 +767,14 @@ mod tests {
         ]);
 
         let expected: [F; 8] = Goldilocks::new_array([
-            1831346684315917658,
-            13497752062035433374,
-            12149460647271516589,
-            15656333994315312197,
-            4671534937670455565,
-            3140092508031220630,
-            4251208148861706881,
-            6973971209430822232,
+            9817406215841052104,
+            16787690088272864961,
+            16566820001699848722,
+            7208405131694630795,
+            16315106302112132474,
+            15663526335160302273,
+            8171740919697725040,
+            7324539319521186184,
         ]);
 
         hl_poseidon2_goldilocks_width_8(&mut input);
