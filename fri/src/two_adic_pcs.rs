@@ -605,7 +605,7 @@ where
                             let packed_opening = if chunk.len() == width {
                                 Challenge::ExtensionPacking::from_ext_slice(chunk)
                             } else {
-                                let mut padded = vec![Challenge::ZERO; width];
+                                let mut padded = Challenge::ZERO::zero_vec(width);
                                 padded[..chunk.len()].copy_from_slice(chunk);
                                 Challenge::ExtensionPacking::from_ext_slice(&padded)
                             };
