@@ -484,6 +484,14 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
     }
 }
 
+impl<AB: PeriodicAirBuilder> PeriodicAirBuilder for FilteredAirBuilder<'_, AB> {
+    type PeriodicVar = AB::PeriodicVar;
+
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.inner.periodic_values()
+    }
+}
+
 impl<AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'_, AB> {
     type EF = AB::EF;
     type ExprEF = AB::ExprEF;
