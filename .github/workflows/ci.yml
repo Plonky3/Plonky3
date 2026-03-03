@@ -21,6 +21,8 @@ jobs:
           - os: ubuntu-latest
             features: "+avx2"
           - os: macos-latest
+          - os: macos-latest
+            features: "+neon"
           - os: windows-latest
     runs-on: ${{ matrix.os }}
     if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
@@ -37,7 +39,7 @@ jobs:
       - name: Set flags
         if: ${{ matrix.features }}
         run: |
-          # Append AVX2 to existing flags so we keep -C debuginfo=0.
+          # Append AVX2 / NEON to existing flags.
           echo "RUSTFLAGS=$RUSTFLAGS -C target-feature=${{ matrix.features }}" >> "$GITHUB_ENV"
 
 
