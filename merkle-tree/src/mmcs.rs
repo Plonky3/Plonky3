@@ -35,6 +35,7 @@ use thiserror::Error;
 use crate::MerkleTreeError::{
     CapMismatch, EmptyBatch, IncompatibleHeights, IndexOutOfBounds, WrongBatchSize, WrongHeight,
 };
+use crate::merkle_tree::padded_len;
 use crate::{MerkleCap, MerkleTree};
 
 /// A Merkle Tree-based commitment scheme for multiple matrices of potentially differing heights.
@@ -323,12 +324,12 @@ where
             return Err(IncompatibleHeights);
         }
 
-        // Get the initial height padded to a power of two. As heights_tallest_first is sorted,
+        // Get the initial height padded to a multiple of N. As heights_tallest_first is sorted,
         // the initial height will be the maximum height.
         let (max_height, mut curr_height_padded) = match heights_tallest_first.peek() {
             Some((_, dims)) => {
                 let max_height = dims.height;
-                let curr_height_padded = max_height.next_power_of_two();
+                let curr_height_padded = padded_len(max_height, N);
                 (max_height, curr_height_padded)
             }
             None => return Err(EmptyBatch),
@@ -339,11 +340,10 @@ where
         }
 
         // Hash all matrix openings at the current height.
+        let leaf_height_npt = max_height.next_power_of_two();
         let mut digest: [PW::Value; DIGEST_ELEMS] = self.hash.hash_iter_slices(
             heights_tallest_first
-                .peeking_take_while(|(_, dims)| {
-                    dims.height.next_power_of_two() == curr_height_padded
-                })
+                .peeking_take_while(|(_, dims)| dims.height.next_power_of_two() == leaf_height_npt)
                 .map(|(i, _)| opened_values[i].as_slice()),
         );
 
@@ -359,8 +359,10 @@ where
                 2
             } else {
                 let n_ary_target = curr_height_padded / N;
+                // Exclude matrices already at the current layer (consumed in initial hash).
                 let has_intermediate = heights_tallest_first
                     .clone()
+                    .filter(|(_, dims)| dims.height.next_power_of_two() != leaf_height_npt)
                     .any(|(_, dims)| dims.height.next_power_of_two() > n_ary_target);
                 if has_intermediate { 2 } else { N }
             };
@@ -393,13 +395,15 @@ where
 
             digest = self.compress.compress(inputs);
             index /= step;
-            curr_height_padded /= step;
+            let logical_next = curr_height_padded / step;
+            curr_height_padded = padded_len(logical_next, N);
 
             // Check if there are any new matrix rows to inject at the next height.
+            let logical_next_npt = logical_next.next_power_of_two();
             let next_height = heights_tallest_first
                 .peek()
                 .map(|(_, dims)| dims.height)
-                .filter(|h| h.next_power_of_two() == curr_height_padded);
+                .filter(|h| h.next_power_of_two() == logical_next_npt);
             if let Some(next_height) = next_height {
                 let next_height_openings_digest = self.hash.hash_iter_slices(
                     heights_tallest_first

@@ -419,13 +419,23 @@ where
 }
 
 /// Compute the padded output length for a compression step.
-const fn padded_len(raw_len: usize, n: usize) -> usize {
+///
+/// The output layer must be large enough for the *next* compression step
+/// to form complete groups. There are three cases:
+///
+/// - `raw_len <= 1`: this is the root, no padding needed.
+/// - `raw_len >= n`: pad up to the next multiple of `n`.
+/// - `1 < raw_len < n`: pad to exactly `n` so that the next step can do a
+///   single full N-to-1 compression to produce the root. This is safe
+///   because the extra slots are filled with the default digest — the same
+///   value that `compress` would use as padding internally.
+pub(crate) const fn padded_len(raw_len: usize, n: usize) -> usize {
     if raw_len <= 1 {
         raw_len
     } else if raw_len >= n {
         raw_len.div_ceil(n) * n
     } else {
-        raw_len + (raw_len % 2)
+        n
     }
 }
 
@@ -585,5 +595,67 @@ mod tests {
         let result = compress::<u8, DummyCompressionFunction, 2, 32>(&prev_layer, 2, &compressor);
         assert_eq!(result, expected);
         assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn test_padded_len_n2() {
+        assert_eq!(padded_len(0, 2), 0);
+        assert_eq!(padded_len(1, 2), 1);
+        assert_eq!(padded_len(2, 2), 2);
+        assert_eq!(padded_len(3, 2), 4);
+        assert_eq!(padded_len(4, 2), 4);
+        assert_eq!(padded_len(5, 2), 6);
+        assert_eq!(padded_len(7, 2), 8);
+        assert_eq!(padded_len(8, 2), 8);
+        assert_eq!(padded_len(9, 2), 10);
+        assert_eq!(padded_len(15, 2), 16);
+        assert_eq!(padded_len(16, 2), 16);
+    }
+
+    #[test]
+    fn test_padded_len_n4() {
+        assert_eq!(padded_len(0, 4), 0);
+        assert_eq!(padded_len(1, 4), 1);
+        // Below-arity case: pad to exactly N
+        assert_eq!(padded_len(2, 4), 4);
+        assert_eq!(padded_len(3, 4), 4);
+        // At or above arity: pad to next multiple of N
+        assert_eq!(padded_len(4, 4), 4);
+        assert_eq!(padded_len(5, 4), 8);
+        assert_eq!(padded_len(7, 4), 8);
+        assert_eq!(padded_len(8, 4), 8);
+        assert_eq!(padded_len(9, 4), 12);
+    }
+
+    #[test]
+    fn test_padded_len_n8() {
+        assert_eq!(padded_len(0, 8), 0);
+        assert_eq!(padded_len(1, 8), 1);
+        // Below-arity: all pad to exactly N=8
+        assert_eq!(padded_len(2, 8), 8);
+        assert_eq!(padded_len(3, 8), 8);
+        assert_eq!(padded_len(5, 8), 8);
+        assert_eq!(padded_len(7, 8), 8);
+        // At or above arity: next multiple of 8
+        assert_eq!(padded_len(8, 8), 8);
+        assert_eq!(padded_len(9, 8), 16);
+        assert_eq!(padded_len(15, 8), 16);
+        assert_eq!(padded_len(16, 8), 16);
+    }
+
+    #[test]
+    fn test_padded_len_always_admits_full_groups() {
+        // For any N in {2, 4, 8} and any raw_len > 1,
+        // padded_len must be >= N and divisible by N (so a full compression
+        // group is always possible), OR padded_len == raw_len <= 1 (root).
+        for n in [2, 4, 8] {
+            for raw_len in 2..=128 {
+                let pl = padded_len(raw_len, n);
+                assert!(
+                    pl >= n && pl.is_multiple_of(n),
+                    "padded_len({raw_len}, {n}) = {pl} is not a valid multiple of {n}",
+                );
+            }
+        }
     }
 }
