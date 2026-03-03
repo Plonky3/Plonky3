@@ -1817,7 +1817,8 @@ mod tests {
     #[test]
     fn test_ext_eval_packed_consistency() {
         let mut rng = SmallRng::seed_from_u64(1);
-        for k in 4..=18 {
+        let min_k = 2 * log2_strict_usize(<F as Field>::Packing::WIDTH);
+        for k in min_k..=18 {
             let poly: Vec<EF4> = (0..1 << k).map(|_| rng.random()).collect();
             let point = MultilinearPoint::<EF4>::rand(&mut rng, k);
             let e0 = eval_multilinear_recursive(&poly, point.as_slice());
