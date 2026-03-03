@@ -52,7 +52,7 @@ impl<F: TwoAdicField> Radix2Dit<F> {
             .or_insert_with(|| {
                 let n = 1 << log_h;
                 let root = F::two_adic_generator(log_h);
-                Arc::from(root.powers().take(n).collect())
+                Arc::from(root.powers().take(n / 2).collect())
             })
             .clone()
     }
