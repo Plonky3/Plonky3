@@ -351,6 +351,15 @@ pub trait AirBuilder: Sized {
     }
 }
 
+/// Extension of [`AirBuilder`] for builders that supply periodic column values.
+pub trait PeriodicAirBuilder: AirBuilder {
+    /// Variable type for periodic column values.
+    type PeriodicVar: Into<Self::Expr> + Copy;
+
+    /// Periodic column values at the current row.
+    fn periodic_values(&self) -> &[Self::PeriodicVar];
+}
+
 /// Extension trait for builders that carry additional runtime context.
 ///
 /// Some AIRs need access to data that is only available at proving time,

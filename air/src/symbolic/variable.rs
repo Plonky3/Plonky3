@@ -5,6 +5,7 @@ use core::marker::PhantomData;
 pub enum BaseEntry {
     Preprocessed { offset: usize },
     Main { offset: usize },
+    Periodic,
     Public,
 }
 
@@ -34,7 +35,12 @@ impl<F> SymbolicVariable<F> {
 
     pub const fn degree_multiple(&self) -> usize {
         match self.entry {
-            BaseEntry::Preprocessed { .. } | BaseEntry::Main { .. } => 1,
+            BaseEntry::Preprocessed { .. }
+            | BaseEntry::Main { .. }
+            // TODO: Periodic columns use degree 1 as an approximation. In Winterfell's model,
+            // a periodic column with period `p` over trace length `n` contributes degree `n/p - 1`.
+            // See: https://github.com/facebook/winterfell/blob/main/air/src/air/transition/degree.rs
+            | BaseEntry::Periodic => 1,
             BaseEntry::Public => 0,
         }
     }

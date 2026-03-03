@@ -144,6 +144,7 @@ where
         air.num_public_values(),
         num_aux_cols,
         num_challenges,
+        0,
     );
 
     // Evaluate AIR and lookup constraints.

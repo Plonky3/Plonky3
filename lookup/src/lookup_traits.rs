@@ -180,6 +180,9 @@ where
                     1 => builder.main().row_slice(1).unwrap()[v.index].into(),
                     _ => panic!("Cannot have expressions involving more than two rows."),
                 },
+                BaseEntry::Periodic => {
+                    panic!("Periodic columns are not supported in lookup resolution")
+                }
                 BaseEntry::Public => builder.public_values()[v.index].into(),
                 BaseEntry::Preprocessed { offset } => match offset {
                     0 => builder

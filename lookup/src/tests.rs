@@ -275,7 +275,7 @@ where
 
     fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
         let symbolic_air_builder =
-            SymbolicAirBuilder::<F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
+            SymbolicAirBuilder::<F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0, 0);
 
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
@@ -510,7 +510,7 @@ fn test_symbolic_to_expr() {
     use p3_air::symbolic::SymbolicAirBuilder;
     use p3_field::PrimeCharacteristicRing;
 
-    let mut builder = SymbolicAirBuilder::<F>::new(0, 2, 0, 0, 0);
+    let mut builder = SymbolicAirBuilder::<F>::new(0, 2, 0, 0, 0, 0);
 
     let main = builder.main();
 
@@ -660,7 +660,7 @@ fn test_debug_util_detects_malformed_lookup() {
     let main_values = vec![F::from_u32(3), F::from_u32(4)];
     let main_trace = RowMajorMatrix::new(main_values, 1);
 
-    let builder = SymbolicAirBuilder::<F>::new(0, 1, 0, 0, 0);
+    let builder = SymbolicAirBuilder::<F>::new(0, 1, 0, 0, 0, 0);
     let expr = builder.main().row_slice(0).unwrap()[0];
 
     // One local lookup with a single tuple; multiplicity is always +1,
@@ -1162,7 +1162,7 @@ where
 
     fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
         let symbolic_air_builder =
-            SymbolicAirBuilder::<F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
+            SymbolicAirBuilder::<F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0, 0);
 
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
