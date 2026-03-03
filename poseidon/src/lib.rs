@@ -141,6 +141,7 @@ impl<F: PrimeField, const WIDTH: usize> PoseidonConstants<F, WIDTH> {
         let full_constants = FullRoundConstants {
             initial: initial_rc,
             terminal: terminal_rc,
+            dense_mds: mds,
         };
 
         let partial_constants = PartialRoundConstants {
@@ -264,6 +265,7 @@ where
         let full_constants = FullRoundConstants {
             initial: initial_rc,
             terminal: terminal_rc,
+            dense_mds,
         };
 
         let partial_constants = PartialRoundConstants {

@@ -8,6 +8,7 @@ use p3_symmetric::Permutation;
 
 mod butterflies;
 pub mod coset_mds;
+pub mod field_karatsuba_convolution;
 pub mod integrated_coset_mds;
 pub mod karatsuba_convolution;
 pub mod util;
