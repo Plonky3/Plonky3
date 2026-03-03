@@ -242,7 +242,7 @@ where
 
         // Create symbolic air builder to access symbolic variables
         let symbolic_air_builder =
-            SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
+            SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0, 0);
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
@@ -409,7 +409,7 @@ impl<AB: PermutationAirBuilder> Air<AB> for FibAirLookups {
         if self.is_global {
             // Create symbolic air builder to access symbolic variables
             let symbolic_air_builder =
-                SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 3, 0, 0);
+                SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 3, 0, 0, 0);
             let symbolic_main = symbolic_air_builder.main();
             let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
@@ -2105,7 +2105,7 @@ where
 
         // Create symbolic air builder to access symbolic variables
         let symbolic_air_builder =
-            SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
+            SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0, 0);
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
