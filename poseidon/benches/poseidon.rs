@@ -20,38 +20,38 @@ type PoseidonGeneric<F, Mds, const WIDTH: usize, const ALPHA: u64> = Poseidon<
 fn bench_poseidon(c: &mut Criterion) {
     let mut rng = SmallRng::seed_from_u64(1);
 
+    let mds_bb: MdsMatrixBabyBear = Default::default();
+
     // BabyBear width 16.
-    let poseidon_bb_16 =
-        PoseidonBabyBear::<16>::new_from_rng(4, 13, &MdsMatrixBabyBear::default(), &mut rng);
+    let poseidon_bb_16 = PoseidonBabyBear::<16>::new_from_rng(4, 13, &mds_bb, &mut rng);
     poseidon_scalar::<BabyBear, _, 16>(c, &poseidon_bb_16);
     poseidon_packed::<BabyBear, _, 16>(c, &poseidon_bb_16);
 
     // BabyBear width 24.
-    let poseidon_bb_24 =
-        PoseidonBabyBear::<24>::new_from_rng(4, 21, &MdsMatrixBabyBear::default(), &mut rng);
+    let poseidon_bb_24 = PoseidonBabyBear::<24>::new_from_rng(4, 21, &mds_bb, &mut rng);
     poseidon_scalar::<BabyBear, _, 24>(c, &poseidon_bb_24);
     poseidon_packed::<BabyBear, _, 24>(c, &poseidon_bb_24);
 
     // Goldilocks: generic implementation with random constants.
     let gl_8: PoseidonGeneric<Goldilocks, MdsMatrixGoldilocks, 8, 7> =
-        Poseidon::new_from_rng(4, 22, &MdsMatrixGoldilocks::default(), &mut rng);
+        Poseidon::new_from_rng(4, 22, &MdsMatrixGoldilocks, &mut rng);
     poseidon_scalar::<Goldilocks, _, 8>(c, &gl_8);
 
     let gl_12: PoseidonGeneric<Goldilocks, MdsMatrixGoldilocks, 12, 7> =
-        Poseidon::new_from_rng(4, 22, &MdsMatrixGoldilocks::default(), &mut rng);
+        Poseidon::new_from_rng(4, 22, &MdsMatrixGoldilocks, &mut rng);
     poseidon_scalar::<Goldilocks, _, 12>(c, &gl_12);
 
     let gl_16: PoseidonGeneric<Goldilocks, MdsMatrixGoldilocks, 16, 7> =
-        Poseidon::new_from_rng(4, 22, &MdsMatrixGoldilocks::default(), &mut rng);
+        Poseidon::new_from_rng(4, 22, &MdsMatrixGoldilocks, &mut rng);
     poseidon_scalar::<Goldilocks, _, 16>(c, &gl_16);
 
     // Mersenne31: generic implementation with random constants.
     let m31_16: PoseidonGeneric<Mersenne31, MdsMatrixMersenne31, 16, 5> =
-        Poseidon::new_from_rng(4, 22, &MdsMatrixMersenne31::default(), &mut rng);
+        Poseidon::new_from_rng(4, 22, &MdsMatrixMersenne31, &mut rng);
     poseidon_scalar::<Mersenne31, _, 16>(c, &m31_16);
 
     let m31_32: PoseidonGeneric<Mersenne31, MdsMatrixMersenne31, 32, 5> =
-        Poseidon::new_from_rng(4, 22, &MdsMatrixMersenne31::default(), &mut rng);
+        Poseidon::new_from_rng(4, 22, &MdsMatrixMersenne31, &mut rng);
     poseidon_scalar::<Mersenne31, _, 32>(c, &m31_32);
 }
 
