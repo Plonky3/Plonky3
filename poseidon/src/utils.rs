@@ -74,7 +74,7 @@ use p3_field::{Field, dot_product};
 /// Expand a circulant matrix from its first column into a dense NxN matrix.
 ///
 /// Each column is a cyclic downward-shift of the previous one.
-pub(crate) fn circulant_to_dense<F: Field, const N: usize>(first_col: &[i64; N]) -> [[F; N]; N] {
+pub fn circulant_to_dense<F: Field, const N: usize>(first_col: &[i64; N]) -> [[F; N]; N] {
     let col: [F; N] = first_col.map(F::from_i64);
     core::array::from_fn(|i| core::array::from_fn(|j| col[(N + i - j) % N]))
 }
@@ -379,7 +379,7 @@ fn equivalent_round_constants<F: Field, const N: usize>(
 /// - `scalar_constants` has RP entries, one per partial round (added to `state[0]`
 ///   before the S-box).
 /// - `residual` is a WIDTH-vector added to the state after all partial rounds complete.
-pub(crate) fn forward_constant_substitution<F: Field, const N: usize>(
+pub fn forward_constant_substitution<F: Field, const N: usize>(
     mds: &[[F; N]; N],
     partial_rc: &[[F; N]],
 ) -> (Vec<F>, [F; N]) {

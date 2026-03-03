@@ -76,7 +76,7 @@ where
 /// is applied once per permutation call. The circulant MDS multiply in full
 /// rounds uses the MDS crate via the permutation trait instead.
 #[inline]
-pub fn mds_multiply<F: Field, A: Algebra<F>, const WIDTH: usize>(
+pub fn mds_multiply<F: PrimeCharacteristicRing, A: Algebra<F>, const WIDTH: usize>(
     state: &mut [A; WIDTH],
     mds: &[[F; WIDTH]; WIDTH],
 ) {

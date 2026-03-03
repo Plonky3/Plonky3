@@ -1,15 +1,18 @@
 use core::borrow::{Borrow, BorrowMut};
 use core::mem::size_of;
 
-/// Columns for a Poseidon2 AIR which computes one permutation per row.
+/// Columns for a Poseidon AIR which computes one permutation per row.
 ///
-/// The columns of the STARK are divided into the three different round sections of the Poseidon2
-/// Permutation: beginning full rounds, partial rounds, and ending full rounds. For the full
+/// The columns of the STARK are divided into the three different round sections of the Poseidon
+/// permutation: beginning full rounds, partial rounds, and ending full rounds. For the full
 /// rounds we store an [`SBox`] columnset for each state variable, and for the partial rounds we
-/// store only for the first state variable. Because the matrix multiplications are linear
-/// functions, we need only keep auxiliary columns for the S-box computations.
+/// store only for the first state variable.
+///
+/// Unlike Poseidon2, partial rounds store a full `post: [T; WIDTH]` because the dense MDS matrix
+/// fully mixes all elements each round. Carrying expressions forward without committing
+/// intermediates would cause expression blowup.
 #[repr(C)]
-pub struct Poseidon2Cols<
+pub struct PoseidonCols<
     T,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
@@ -39,20 +42,24 @@ pub struct FullRound<T, const WIDTH: usize, const SBOX_DEGREE: u64, const SBOX_R
 }
 
 /// Partial round columns.
+///
+/// Unlike Poseidon2, this stores a full `post: [T; WIDTH]` instead of just `post_sbox: T`.
+/// The dense MDS matrix fully mixes all elements each round, so without committing the
+/// full post-state, expression degrees would blow up.
 #[repr(C)]
 pub struct PartialRound<T, const WIDTH: usize, const SBOX_DEGREE: u64, const SBOX_REGISTERS: usize>
 {
-    /// Possible intermediate results within the S-box.
+    /// Possible intermediate results within the S-box (applied to state[0] only).
     pub sbox: SBox<T, SBOX_DEGREE, SBOX_REGISTERS>,
-    /// The output of the S-box.
-    pub post_sbox: T,
+    /// The full post-state after the MDS layer.
+    pub post: [T; WIDTH],
 }
 
 /// Possible intermediate results within an S-box.
 ///
 /// Use this column-set for an S-box that can be computed with `REGISTERS`-many intermediate results
 /// (not counting the final output). The S-box is checked to ensure that `REGISTERS` is the optimal
-/// number of registers for the given `DEGREE` for the degrees given in the Poseidon2 paper:
+/// number of registers for the given `DEGREE` for the degrees given in the Poseidon paper:
 /// `3`, `5`, `7`, and `11`. See `eval_sbox` for more information.
 #[repr(C)]
 pub struct SBox<T, const DEGREE: u64, const REGISTERS: usize>(pub [T; REGISTERS]);
@@ -64,7 +71,7 @@ pub const fn num_cols<
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
 >() -> usize {
-    size_of::<Poseidon2Cols<u8, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>>(
+    size_of::<PoseidonCols<u8, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>>(
     )
 }
 
@@ -75,15 +82,15 @@ impl<
     const SBOX_REGISTERS: usize,
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
-> Borrow<Poseidon2Cols<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>>
+> Borrow<PoseidonCols<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>>
     for [T]
 {
     fn borrow(
         &self,
-    ) -> &Poseidon2Cols<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>
+    ) -> &PoseidonCols<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>
     {
         let (prefix, shorts, suffix) = unsafe {
-            self.align_to::<Poseidon2Cols<
+            self.align_to::<PoseidonCols<
                 T,
                 WIDTH,
                 SBOX_DEGREE,
@@ -106,15 +113,15 @@ impl<
     const SBOX_REGISTERS: usize,
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
-> BorrowMut<Poseidon2Cols<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>>
+> BorrowMut<PoseidonCols<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>>
     for [T]
 {
     fn borrow_mut(
         &mut self,
-    ) -> &mut Poseidon2Cols<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>
+    ) -> &mut PoseidonCols<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>
     {
         let (prefix, shorts, suffix) = unsafe {
-            self.align_to_mut::<Poseidon2Cols<
+            self.align_to_mut::<PoseidonCols<
                 T,
                 WIDTH,
                 SBOX_DEGREE,

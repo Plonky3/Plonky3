@@ -653,9 +653,9 @@ pub trait Algebra<F>:
     #[inline]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[F; N]) -> Self
     where
-        F: Copy,
+        F: Clone,
     {
-        let products: [Self; N] = core::array::from_fn(|i| a[i].clone() * f[i]);
+        let products: [Self; N] = core::array::from_fn(|i| a[i].clone() * f[i].clone());
         Self::sum_array::<N>(&products)
     }
 }
