@@ -1,4 +1,5 @@
-use alloc::{vec, vec::Vec};
+use alloc::vec;
+use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_field::{
@@ -760,11 +761,11 @@ mod tests {
     use alloc::vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::{
-        PrimeCharacteristicRing, PrimeField64, dot_product, extension::BinomialExtensionField,
-    };
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{PrimeCharacteristicRing, PrimeField64, dot_product};
     use proptest::prelude::*;
-    use rand::{RngExt, SeedableRng, rngs::SmallRng};
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 
