@@ -23,7 +23,15 @@ pub struct MdsMatrixMersenne31;
 /// Here "small" means N = len(rhs) <= 16 and sum(r for r in rhs) <
 /// 2^24 (roughly), though in practice the sum will be less than 2^9.
 struct SmallConvolveMersenne31;
-impl Convolve<Mersenne31, i64, i64, i64> for SmallConvolveMersenne31 {
+impl Convolve<Mersenne31, i64, i64> for SmallConvolveMersenne31 {
+    const T_ZERO: i64 = 0;
+    const U_ZERO: i64 = 0;
+
+    #[inline(always)]
+    fn halve(val: i64) -> i64 {
+        val >> 1
+    }
+
     /// Return the lift of an (almost) reduced Mersenne31 element.
     /// The Mersenne31 implementation guarantees that
     /// 0 <= input.value <= P < 2^31.
@@ -59,7 +67,15 @@ impl Convolve<Mersenne31, i64, i64, i64> for SmallConvolveMersenne31 {
 /// Here "large" means the elements can be as big as the field
 /// characteristic, and the size N of the RHS is <= 64.
 struct LargeConvolveMersenne31;
-impl Convolve<Mersenne31, i64, i64, i64> for LargeConvolveMersenne31 {
+impl Convolve<Mersenne31, i64, i64> for LargeConvolveMersenne31 {
+    const T_ZERO: i64 = 0;
+    const U_ZERO: i64 = 0;
+
+    #[inline(always)]
+    fn halve(val: i64) -> i64 {
+        val >> 1
+    }
+
     /// Return the lift of an (almost) reduced Mersenne31 element.
     /// The Mersenne31 implementation guarantees that
     /// 0 <= input.value <= P < 2^31.

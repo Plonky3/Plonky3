@@ -23,7 +23,15 @@ pub struct MdsMatrixGoldilocks;
 /// 2^51, though in practice the sum will be less than 2^9.
 #[derive(Debug)]
 pub struct SmallConvolveGoldilocks;
-impl Convolve<Goldilocks, i128, i64, i128> for SmallConvolveGoldilocks {
+impl Convolve<Goldilocks, i128, i64> for SmallConvolveGoldilocks {
+    const T_ZERO: i128 = 0;
+    const U_ZERO: i64 = 0;
+
+    #[inline(always)]
+    fn halve(val: i128) -> i128 {
+        val >> 1
+    }
+
     /// Return the lift of a Goldilocks element, 0 <= input.value <= P
     /// < 2^64. We widen immediately, since some valid Goldilocks elements
     /// don't fit in an i64, and since in any case overflow can occur

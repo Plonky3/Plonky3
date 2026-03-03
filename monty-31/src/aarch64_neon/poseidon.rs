@@ -5,7 +5,7 @@ use core::arch::aarch64::int32x4_t;
 use core::marker::PhantomData;
 use core::mem::transmute;
 
-use p3_mds::field_karatsuba_convolution::{mds_circulant_karatsuba_16, mds_circulant_karatsuba_24};
+use p3_mds::karatsuba_convolution::{mds_circulant_karatsuba_16, mds_circulant_karatsuba_24};
 use p3_poseidon::external::{
     FullRoundConstants, FullRoundLayer, FullRoundLayerConstructor, mds_multiply,
 };

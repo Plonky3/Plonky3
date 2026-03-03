@@ -44,32 +44,36 @@
 //! Of course, for small sizes we just explicitly write out the O(n^2)
 //! approach.
 
-use core::ops::{Add, AddAssign, Neg, ShrAssign, Sub, SubAssign};
+use core::marker::PhantomData;
+use core::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 
-/// This trait collects the operations needed by `Convolve` below.
-///
-/// TODO: Think of a better name for this.
-pub trait RngElt:
-    Add<Output = Self>
-    + AddAssign
-    + Copy
-    + Default
-    + Neg<Output = Self>
-    + ShrAssign<u32>
-    + Sub<Output = Self>
-    + SubAssign
+use p3_field::{Algebra, Field};
+
+/// Bound alias for the "wide" operand type (lhs + output) in a Karatsuba convolution.
+pub trait ConvolutionElt:
+    Add<Output = Self> + AddAssign + Copy + Neg<Output = Self> + Sub<Output = Self> + SubAssign
 {
 }
 
-impl RngElt for i64 {}
-impl RngElt for i128 {}
+impl<T> ConvolutionElt for T where
+    T: Add<Output = T> + AddAssign + Copy + Neg<Output = T> + Sub<Output = T> + SubAssign
+{
+}
+
+/// Bound alias for the "narrow" operand type (rhs) in a Karatsuba convolution.
+pub trait ConvolutionRhs:
+    Add<Output = Self> + Copy + Neg<Output = Self> + Sub<Output = Self>
+{
+}
+
+impl<T> ConvolutionRhs for T where T: Add<Output = T> + Copy + Neg<Output = T> + Sub<Output = T> {}
 
 /// Template function to perform convolution of vectors.
 ///
 /// Roughly speaking, for a convolution of size `N`, it should be
 /// possible to add `N` elements of type `T` without overflowing, and
 /// similarly for `U`. Then multiplication via `Self::mul` should
-/// produce an element of type `V` which will not overflow after about
+/// produce an element of type `T` which will not overflow after about
 /// `N` additions (this is an over-estimate).
 ///
 /// For example usage, see `{mersenne-31,baby-bear,goldilocks}/src/mds.rs`.
@@ -90,7 +94,25 @@ impl RngElt for i128 {}
 /// with a shift, which on most architectures has better throughput
 /// and latency, and is issued on different ports (1*p06) to
 /// multiplication (1*p1).
-pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
+pub trait Convolve<F, T: ConvolutionElt, U: ConvolutionRhs> {
+    /// Additive identity for the wide operand type `T`.
+    ///
+    /// Used to initialize output and scratch arrays before the convolution
+    /// fills them with computed values.
+    const T_ZERO: T;
+
+    /// Additive identity for the narrow operand type `U`.
+    ///
+    /// Used to initialize temporary arrays for the RHS decomposition
+    /// in the recursive CRT / Karatsuba steps.
+    const U_ZERO: U;
+
+    /// Divide an element of `T` by 2.
+    ///
+    /// - For integers (`i64`, `i128`): arithmetic right shift by 1.
+    /// - For field elements: multiplication by the multiplicative inverse of 2.
+    fn halve(val: T) -> T;
+
     /// Given an input element, retrieve the corresponding internal
     /// element that will be used in calculations.
     fn read(input: F) -> T;
@@ -101,44 +123,44 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
     /// product if all inputs are considered integers. See
     /// `monty-31/src/mds.rs::barrett_red_monty31()` for an example
     /// of how this can be implemented in practice.
-    fn parity_dot<const N: usize>(lhs: [T; N], rhs: [U; N]) -> V;
+    fn parity_dot<const N: usize>(lhs: [T; N], rhs: [U; N]) -> T;
 
-    /// Convert an internal element of type `V` back into an external
+    /// Convert an internal element of type `T` back into an external
     /// element.
-    fn reduce(z: V) -> F;
+    fn reduce(z: T) -> F;
 
     /// Convolve `lhs` and `rhs`.
     ///
     /// The parameter `conv` should be the function in this trait that
     /// corresponds to length `N`.
     #[inline(always)]
-    fn apply<const N: usize, C: Fn([T; N], [U; N], &mut [V])>(
+    fn apply<const N: usize, C: Fn([T; N], [U; N], &mut [T])>(
         lhs: [F; N],
         rhs: [U; N],
         conv: C,
     ) -> [F; N] {
         let lhs = lhs.map(Self::read);
-        let mut output = [V::default(); N];
+        let mut output = [Self::T_ZERO; N];
         conv(lhs, rhs, &mut output);
         output.map(Self::reduce)
     }
 
     #[inline(always)]
-    fn conv3(lhs: [T; 3], rhs: [U; 3], output: &mut [V]) {
+    fn conv3(lhs: [T; 3], rhs: [U; 3], output: &mut [T]) {
         output[0] = Self::parity_dot(lhs, [rhs[0], rhs[2], rhs[1]]);
         output[1] = Self::parity_dot(lhs, [rhs[1], rhs[0], rhs[2]]);
         output[2] = Self::parity_dot(lhs, [rhs[2], rhs[1], rhs[0]]);
     }
 
     #[inline(always)]
-    fn negacyclic_conv3(lhs: [T; 3], rhs: [U; 3], output: &mut [V]) {
+    fn negacyclic_conv3(lhs: [T; 3], rhs: [U; 3], output: &mut [T]) {
         output[0] = Self::parity_dot(lhs, [rhs[0], -rhs[2], -rhs[1]]);
         output[1] = Self::parity_dot(lhs, [rhs[1], rhs[0], -rhs[2]]);
         output[2] = Self::parity_dot(lhs, [rhs[2], rhs[1], rhs[0]]);
     }
 
     #[inline(always)]
-    fn conv4(lhs: [T; 4], rhs: [U; 4], output: &mut [V]) {
+    fn conv4(lhs: [T; 4], rhs: [U; 4], output: &mut [T]) {
         // NB: This is just explicitly implementing
         // conv_n_recursive::<4, 2, _, _>(lhs, rhs, output, Self::conv2, Self::negacyclic_conv2)
         let u_p = [lhs[0] + lhs[2], lhs[1] + lhs[3]];
@@ -154,193 +176,346 @@ pub trait Convolve<F, T: RngElt, U: RngElt, V: RngElt> {
         output[0] += output[2];
         output[1] += output[3];
 
-        output[0] >>= 1;
-        output[1] >>= 1;
+        output[0] = Self::halve(output[0]);
+        output[1] = Self::halve(output[1]);
 
         output[2] -= output[0];
         output[3] -= output[1];
     }
 
     #[inline(always)]
-    fn negacyclic_conv4(lhs: [T; 4], rhs: [U; 4], output: &mut [V]) {
+    fn negacyclic_conv4(lhs: [T; 4], rhs: [U; 4], output: &mut [T]) {
         output[0] = Self::parity_dot(lhs, [rhs[0], -rhs[3], -rhs[2], -rhs[1]]);
         output[1] = Self::parity_dot(lhs, [rhs[1], rhs[0], -rhs[3], -rhs[2]]);
         output[2] = Self::parity_dot(lhs, [rhs[2], rhs[1], rhs[0], -rhs[3]]);
         output[3] = Self::parity_dot(lhs, [rhs[3], rhs[2], rhs[1], rhs[0]]);
     }
 
+    /// Compute output(x) = lhs(x)rhs(x) mod x^N - 1.
+    /// Do this recursively using a convolution and negacyclic convolution of size HALF_N = N/2.
     #[inline(always)]
-    fn conv6(lhs: [T; 6], rhs: [U; 6], output: &mut [V]) {
-        conv_n_recursive(lhs, rhs, output, Self::conv3, Self::negacyclic_conv3);
+    fn conv_n_recursive<const N: usize, const HALF_N: usize, C, NC>(
+        lhs: [T; N],
+        rhs: [U; N],
+        output: &mut [T],
+        inner_conv: C,
+        inner_negacyclic_conv: NC,
+    ) where
+        C: Fn([T; HALF_N], [U; HALF_N], &mut [T]),
+        NC: Fn([T; HALF_N], [U; HALF_N], &mut [T]),
+    {
+        debug_assert_eq!(2 * HALF_N, N);
+        // NB: The compiler is smart enough not to initialise these arrays.
+        let mut lhs_pos = [Self::T_ZERO; HALF_N]; // lhs_pos = lhs(x) mod x^{N/2} - 1
+        let mut lhs_neg = [Self::T_ZERO; HALF_N]; // lhs_neg = lhs(x) mod x^{N/2} + 1
+        let mut rhs_pos = [Self::U_ZERO; HALF_N]; // rhs_pos = rhs(x) mod x^{N/2} - 1
+        let mut rhs_neg = [Self::U_ZERO; HALF_N]; // rhs_neg = rhs(x) mod x^{N/2} + 1
+
+        for i in 0..HALF_N {
+            let s = lhs[i];
+            let t = lhs[i + HALF_N];
+
+            lhs_pos[i] = s + t;
+            lhs_neg[i] = s - t;
+
+            let s = rhs[i];
+            let t = rhs[i + HALF_N];
+
+            rhs_pos[i] = s + t;
+            rhs_neg[i] = s - t;
+        }
+
+        let (left, right) = output.split_at_mut(HALF_N);
+
+        // left = w1 = lhs(x)rhs(x) mod x^{N/2} + 1
+        inner_negacyclic_conv(lhs_neg, rhs_neg, left);
+
+        // right = w0 = lhs(x)rhs(x) mod x^{N/2} - 1
+        inner_conv(lhs_pos, rhs_pos, right);
+
+        for i in 0..HALF_N {
+            left[i] += right[i]; // w_0 + w_1
+            left[i] = Self::halve(left[i]); // (w_0 + w_1)/2
+            right[i] -= left[i]; // (w_0 - w_1)/2
+        }
+    }
+
+    /// Compute output(x) = lhs(x)rhs(x) mod x^N + 1.
+    /// Do this recursively using three negacyclic convolutions of size HALF_N = N/2.
+    #[inline(always)]
+    fn negacyclic_conv_n_recursive<const N: usize, const HALF_N: usize, NC>(
+        lhs: [T; N],
+        rhs: [U; N],
+        output: &mut [T],
+        inner_negacyclic_conv: NC,
+    ) where
+        NC: Fn([T; HALF_N], [U; HALF_N], &mut [T]),
+    {
+        debug_assert_eq!(2 * HALF_N, N);
+        // NB: The compiler is smart enough not to initialise these arrays.
+        let mut lhs_even = [Self::T_ZERO; HALF_N];
+        let mut lhs_odd = [Self::T_ZERO; HALF_N];
+        let mut lhs_sum = [Self::T_ZERO; HALF_N];
+        let mut rhs_even = [Self::U_ZERO; HALF_N];
+        let mut rhs_odd = [Self::U_ZERO; HALF_N];
+        let mut rhs_sum = [Self::U_ZERO; HALF_N];
+
+        for i in 0..HALF_N {
+            let s = lhs[2 * i];
+            let t = lhs[2 * i + 1];
+            lhs_even[i] = s;
+            lhs_odd[i] = t;
+            lhs_sum[i] = s + t;
+
+            let s = rhs[2 * i];
+            let t = rhs[2 * i + 1];
+            rhs_even[i] = s;
+            rhs_odd[i] = t;
+            rhs_sum[i] = s + t;
+        }
+
+        let mut even_s_conv = [Self::T_ZERO; HALF_N];
+        let (left, right) = output.split_at_mut(HALF_N);
+
+        // Recursively compute the size N/2 negacyclic convolutions of
+        // the even parts, odd parts, and sums.
+        inner_negacyclic_conv(lhs_even, rhs_even, &mut even_s_conv);
+        inner_negacyclic_conv(lhs_odd, rhs_odd, left);
+        inner_negacyclic_conv(lhs_sum, rhs_sum, right);
+
+        // Adjust so that the correct values are in right and
+        // even_s_conv respectively:
+        right[0] -= even_s_conv[0] + left[0];
+        even_s_conv[0] -= left[HALF_N - 1];
+
+        for i in 1..HALF_N {
+            right[i] -= even_s_conv[i] + left[i];
+            even_s_conv[i] += left[i - 1];
+        }
+
+        // Interleave even_s_conv and right in the output:
+        for i in 0..HALF_N {
+            output[2 * i] = even_s_conv[i];
+            output[2 * i + 1] = output[i + HALF_N];
+        }
     }
 
     #[inline(always)]
-    fn negacyclic_conv6(lhs: [T; 6], rhs: [U; 6], output: &mut [V]) {
-        negacyclic_conv_n_recursive(lhs, rhs, output, Self::negacyclic_conv3);
+    fn conv6(lhs: [T; 6], rhs: [U; 6], output: &mut [T]) {
+        Self::conv_n_recursive(lhs, rhs, output, Self::conv3, Self::negacyclic_conv3);
     }
 
     #[inline(always)]
-    fn conv8(lhs: [T; 8], rhs: [U; 8], output: &mut [V]) {
-        conv_n_recursive(lhs, rhs, output, Self::conv4, Self::negacyclic_conv4);
+    fn negacyclic_conv6(lhs: [T; 6], rhs: [U; 6], output: &mut [T]) {
+        Self::negacyclic_conv_n_recursive(lhs, rhs, output, Self::negacyclic_conv3);
     }
 
     #[inline(always)]
-    fn negacyclic_conv8(lhs: [T; 8], rhs: [U; 8], output: &mut [V]) {
-        negacyclic_conv_n_recursive(lhs, rhs, output, Self::negacyclic_conv4);
+    fn conv8(lhs: [T; 8], rhs: [U; 8], output: &mut [T]) {
+        Self::conv_n_recursive(lhs, rhs, output, Self::conv4, Self::negacyclic_conv4);
     }
 
     #[inline(always)]
-    fn conv12(lhs: [T; 12], rhs: [U; 12], output: &mut [V]) {
-        conv_n_recursive(lhs, rhs, output, Self::conv6, Self::negacyclic_conv6);
+    fn negacyclic_conv8(lhs: [T; 8], rhs: [U; 8], output: &mut [T]) {
+        Self::negacyclic_conv_n_recursive(lhs, rhs, output, Self::negacyclic_conv4);
     }
 
     #[inline(always)]
-    fn negacyclic_conv12(lhs: [T; 12], rhs: [U; 12], output: &mut [V]) {
-        negacyclic_conv_n_recursive(lhs, rhs, output, Self::negacyclic_conv6);
+    fn conv12(lhs: [T; 12], rhs: [U; 12], output: &mut [T]) {
+        Self::conv_n_recursive(lhs, rhs, output, Self::conv6, Self::negacyclic_conv6);
     }
 
     #[inline(always)]
-    fn conv16(lhs: [T; 16], rhs: [U; 16], output: &mut [V]) {
-        conv_n_recursive(lhs, rhs, output, Self::conv8, Self::negacyclic_conv8);
+    fn negacyclic_conv12(lhs: [T; 12], rhs: [U; 12], output: &mut [T]) {
+        Self::negacyclic_conv_n_recursive(lhs, rhs, output, Self::negacyclic_conv6);
     }
 
     #[inline(always)]
-    fn negacyclic_conv16(lhs: [T; 16], rhs: [U; 16], output: &mut [V]) {
-        negacyclic_conv_n_recursive(lhs, rhs, output, Self::negacyclic_conv8);
+    fn conv16(lhs: [T; 16], rhs: [U; 16], output: &mut [T]) {
+        Self::conv_n_recursive(lhs, rhs, output, Self::conv8, Self::negacyclic_conv8);
     }
 
     #[inline(always)]
-    fn conv24(lhs: [T; 24], rhs: [U; 24], output: &mut [V]) {
-        conv_n_recursive(lhs, rhs, output, Self::conv12, Self::negacyclic_conv12);
+    fn negacyclic_conv16(lhs: [T; 16], rhs: [U; 16], output: &mut [T]) {
+        Self::negacyclic_conv_n_recursive(lhs, rhs, output, Self::negacyclic_conv8);
     }
 
     #[inline(always)]
-    fn conv32(lhs: [T; 32], rhs: [U; 32], output: &mut [V]) {
-        conv_n_recursive(lhs, rhs, output, Self::conv16, Self::negacyclic_conv16);
+    fn conv24(lhs: [T; 24], rhs: [U; 24], output: &mut [T]) {
+        Self::conv_n_recursive(lhs, rhs, output, Self::conv12, Self::negacyclic_conv12);
     }
 
     #[inline(always)]
-    fn negacyclic_conv32(lhs: [T; 32], rhs: [U; 32], output: &mut [V]) {
-        negacyclic_conv_n_recursive(lhs, rhs, output, Self::negacyclic_conv16);
+    fn conv32(lhs: [T; 32], rhs: [U; 32], output: &mut [T]) {
+        Self::conv_n_recursive(lhs, rhs, output, Self::conv16, Self::negacyclic_conv16);
     }
 
     #[inline(always)]
-    fn conv64(lhs: [T; 64], rhs: [U; 64], output: &mut [V]) {
-        conv_n_recursive(lhs, rhs, output, Self::conv32, Self::negacyclic_conv32);
+    fn negacyclic_conv32(lhs: [T; 32], rhs: [U; 32], output: &mut [T]) {
+        Self::negacyclic_conv_n_recursive(lhs, rhs, output, Self::negacyclic_conv16);
+    }
+
+    #[inline(always)]
+    fn conv64(lhs: [T; 64], rhs: [U; 64], output: &mut [T]) {
+        Self::conv_n_recursive(lhs, rhs, output, Self::conv32, Self::negacyclic_conv32);
     }
 }
 
-/// Compute output(x) = lhs(x)rhs(x) mod x^N - 1.
-/// Do this recursively using a convolution and negacyclic convolution of size HALF_N = N/2.
-#[inline(always)]
-fn conv_n_recursive<const N: usize, const HALF_N: usize, T, U, V, C, NC>(
-    lhs: [T; N],
-    rhs: [U; N],
-    output: &mut [V],
-    inner_conv: C,
-    inner_negacyclic_conv: NC,
-) where
-    T: RngElt,
-    U: RngElt,
-    V: RngElt,
-    C: Fn([T; HALF_N], [U; HALF_N], &mut [V]),
-    NC: Fn([T; HALF_N], [U; HALF_N], &mut [V]),
-{
-    debug_assert_eq!(2 * HALF_N, N);
-    // NB: The compiler is smart enough not to initialise these arrays.
-    let mut lhs_pos = [T::default(); HALF_N]; // lhs_pos = lhs(x) mod x^{N/2} - 1
-    let mut lhs_neg = [T::default(); HALF_N]; // lhs_neg = lhs(x) mod x^{N/2} + 1
-    let mut rhs_pos = [U::default(); HALF_N]; // rhs_pos = rhs(x) mod x^{N/2} - 1
-    let mut rhs_neg = [U::default(); HALF_N]; // rhs_neg = rhs(x) mod x^{N/2} + 1
+/// Convolve implementor for field elements.
+///
+/// All arithmetic stays in the field — no integer lifting.
+struct FieldConvolve<F, A>(PhantomData<(F, A)>);
 
-    for i in 0..HALF_N {
-        let s = lhs[i];
-        let t = lhs[i + HALF_N];
+impl<F: Field, A: Algebra<F> + Copy> Convolve<A, A, F> for FieldConvolve<F, A> {
+    const T_ZERO: A = A::ZERO;
+    const U_ZERO: F = F::ZERO;
 
-        lhs_pos[i] = s + t;
-        lhs_neg[i] = s - t;
-
-        let s = rhs[i];
-        let t = rhs[i + HALF_N];
-
-        rhs_pos[i] = s + t;
-        rhs_neg[i] = s - t;
+    #[inline(always)]
+    fn halve(val: A) -> A {
+        val.halve()
     }
 
-    let (left, right) = output.split_at_mut(HALF_N);
+    #[inline(always)]
+    fn read(input: A) -> A {
+        input
+    }
 
-    // left = w1 = lhs(x)rhs(x) mod x^{N/2} + 1
-    inner_negacyclic_conv(lhs_neg, rhs_neg, left);
+    #[inline(always)]
+    fn parity_dot<const N: usize>(lhs: [A; N], rhs: [F; N]) -> A {
+        A::mixed_dot_product(&lhs, &rhs)
+    }
 
-    // right = w0 = lhs(x)rhs(x) mod x^{N/2} - 1
-    inner_conv(lhs_pos, rhs_pos, right);
-
-    for i in 0..HALF_N {
-        left[i] += right[i]; // w_0 + w_1
-        left[i] >>= 1; // (w_0 + w_1)/2
-        right[i] -= left[i]; // (w_0 - w_1)/2
+    #[inline(always)]
+    fn reduce(z: A) -> A {
+        z
     }
 }
 
-/// Compute output(x) = lhs(x)rhs(x) mod x^N + 1.
-/// Do this recursively using three negacyclic convolutions of size HALF_N = N/2.
-#[inline(always)]
-fn negacyclic_conv_n_recursive<const N: usize, const HALF_N: usize, T, U, V, NC>(
-    lhs: [T; N],
-    rhs: [U; N],
-    output: &mut [V],
-    inner_negacyclic_conv: NC,
-) where
-    T: RngElt,
-    U: RngElt,
-    V: RngElt,
-    NC: Fn([T; HALF_N], [U; HALF_N], &mut [V]),
-{
-    debug_assert_eq!(2 * HALF_N, N);
-    // NB: The compiler is smart enough not to initialise these arrays.
-    let mut lhs_even = [T::default(); HALF_N];
-    let mut lhs_odd = [T::default(); HALF_N];
-    let mut lhs_sum = [T::default(); HALF_N];
-    let mut rhs_even = [U::default(); HALF_N];
-    let mut rhs_odd = [U::default(); HALF_N];
-    let mut rhs_sum = [U::default(); HALF_N];
+/// Circulant matrix-vector multiply for width 16 via Karatsuba convolution.
+#[inline]
+pub fn mds_circulant_karatsuba_16<F: Field, A: Algebra<F> + Copy>(
+    state: &mut [A; 16],
+    col: &[F; 16],
+) {
+    let input = *state;
+    FieldConvolve::<F, A>::conv16(input, *col, state.as_mut_slice());
+}
 
-    for i in 0..HALF_N {
-        let s = lhs[2 * i];
-        let t = lhs[2 * i + 1];
-        lhs_even[i] = s;
-        lhs_odd[i] = t;
-        lhs_sum[i] = s + t;
+/// Circulant matrix-vector multiply for width 24 via Karatsuba convolution.
+#[inline]
+pub fn mds_circulant_karatsuba_24<F: Field, A: Algebra<F> + Copy>(
+    state: &mut [A; 24],
+    col: &[F; 24],
+) {
+    let input = *state;
+    FieldConvolve::<F, A>::conv24(input, *col, state.as_mut_slice());
+}
 
-        let s = rhs[2 * i];
-        let t = rhs[2 * i + 1];
-        rhs_even[i] = s;
-        rhs_odd[i] = t;
-        rhs_sum[i] = s + t;
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+    use proptest::prelude::*;
+
+    use super::*;
+
+    type F = BabyBear;
+
+    /// Map an arbitrary `u32` into a field element.
+    fn arb_f() -> impl Strategy<Value = F> {
+        prop::num::u32::ANY.prop_map(F::from_u32)
     }
 
-    let mut even_s_conv = [V::default(); HALF_N];
-    let (left, right) = output.split_at_mut(HALF_N);
-
-    // Recursively compute the size N/2 negacyclic convolutions of
-    // the even parts, odd parts, and sums.
-    inner_negacyclic_conv(lhs_even, rhs_even, &mut even_s_conv);
-    inner_negacyclic_conv(lhs_odd, rhs_odd, left);
-    inner_negacyclic_conv(lhs_sum, rhs_sum, right);
-
-    // Adjust so that the correct values are in right and
-    // even_s_conv respectively:
-    right[0] -= even_s_conv[0] + left[0];
-    even_s_conv[0] -= left[HALF_N - 1];
-
-    for i in 1..HALF_N {
-        right[i] -= even_s_conv[i] + left[i];
-        even_s_conv[i] += left[i - 1];
+    /// Naive O(N^2) circulant multiply used as the reference oracle.
+    ///
+    /// For each output index `i`, computes the dot product of the
+    /// cyclically shifted column with the state vector:
+    ///   r[i] = sum_j col[(i - j) mod N] * state[j]
+    fn naive_circulant<const N: usize>(col: [F; N], state: [F; N]) -> [F; N] {
+        core::array::from_fn(|i| {
+            let mut acc = F::ZERO;
+            for j in 0..N {
+                acc += col[(N + i - j) % N] * state[j];
+            }
+            acc
+        })
     }
 
-    // Interleave even_s_conv and right in the output:
-    for i in 0..HALF_N {
-        output[2 * i] = even_s_conv[i];
-        output[2 * i + 1] = output[i + HALF_N];
+    /// Fixed circulant column for width-16 tests.
+    /// Uses small distinct integers so the MDS property is easy to verify by inspection.
+    fn col_16() -> [F; 16] {
+        [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].map(F::from_i64)
+    }
+
+    /// Fixed circulant column for width-24 tests.
+    fn col_24() -> [F; 24] {
+        [
+            2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+        ]
+        .map(F::from_i64)
+    }
+
+    proptest! {
+        /// Karatsuba width-16 must match the naive circulant multiply
+        /// for every random state vector.
+        #[test]
+        fn karatsuba_16_matches_naive(state in prop::array::uniform16(arb_f())) {
+            let col = col_16();
+
+            // Compute the expected result via naive O(N^2) circulant multiply.
+            let expected = naive_circulant(col, state);
+
+            // Compute the actual result via Karatsuba convolution.
+            let mut actual = state;
+            mds_circulant_karatsuba_16(&mut actual, &col);
+
+            prop_assert_eq!(actual, expected);
+        }
+
+        /// Karatsuba width-24 must match the naive circulant multiply
+        /// for every random state vector.
+        #[test]
+        fn karatsuba_24_matches_naive(state in prop::array::uniform24(arb_f())) {
+            let col = col_24();
+
+            // Compute the expected result via naive O(N^2) circulant multiply.
+            let expected = naive_circulant(col, state);
+
+            // Compute the actual result via Karatsuba convolution.
+            let mut actual = state;
+            mds_circulant_karatsuba_24(&mut actual, &col);
+
+            prop_assert_eq!(actual, expected);
+        }
+
+        /// Karatsuba width-16 with a random circulant column.
+        /// Tests that the algorithm is correct beyond a single fixed matrix.
+        #[test]
+        fn karatsuba_16_random_col(
+            col in prop::array::uniform16(arb_f()),
+            state in prop::array::uniform16(arb_f()),
+        ) {
+            let expected = naive_circulant(col, state);
+
+            let mut actual = state;
+            mds_circulant_karatsuba_16(&mut actual, &col);
+
+            prop_assert_eq!(actual, expected);
+        }
+
+        /// Karatsuba width-24 with a random circulant column.
+        /// Tests that the algorithm is correct beyond a single fixed matrix.
+        #[test]
+        fn karatsuba_24_random_col(
+            col in prop::array::uniform24(arb_f()),
+            state in prop::array::uniform24(arb_f()),
+        ) {
+            let expected = naive_circulant(col, state);
+
+            let mut actual = state;
+            mds_circulant_karatsuba_24(&mut actual, &col);
+
+            prop_assert_eq!(actual, expected);
+        }
     }
 }
