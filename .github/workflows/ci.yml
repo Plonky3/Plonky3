@@ -49,6 +49,27 @@ jobs:
       - name: Test with parallel
         run: cargo test --features parallel
 
+  build_and_test_macos_aarch64:
+    name: Build and Test (macOS aarch64)
+    runs-on: macos-latest
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+        id: rs-stable-aarch64
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test (aarch64)
+        run: cargo test --target aarch64-apple-darwin
+
+      - name: Test with parallel (aarch64)
+        run: cargo test --target aarch64-apple-darwin --features parallel
+
   check_embedded:
     name: Build embedded
     runs-on: ubuntu-latest
