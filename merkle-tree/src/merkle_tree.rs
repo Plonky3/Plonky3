@@ -263,14 +263,7 @@ where
     // Get the height of the tallest matrices (they are guaranteed to be equal).
     let max_height = tallest_matrices[0].height();
 
-    // Pad to the next multiple of N so the first compression layer has
-    // complete groups.
-    // **Exception:** if there's only 1 row, we keep it as 1.
-    let max_height_padded = if max_height == 1 {
-        1
-    } else {
-        max_height.div_ceil(N) * N
-    };
+    let max_height_padded = padded_len(max_height, N);
 
     // Prepare a default digest value to fill unused slots or padding.
     let default_digest = [PW::Value::default(); DIGEST_ELEMS];

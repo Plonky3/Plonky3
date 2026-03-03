@@ -525,6 +525,28 @@ mod tests {
     }
 
     #[test]
+    fn small_height_4ary_roundtrip() {
+        let mut rng = SmallRng::seed_from_u64(99);
+        let perm16 = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm16);
+        let perm32 = PermWide::new_from_rng_128(&mut rng);
+        let compress4 = MyCompress4::new(perm32);
+        let mmcs4 = MyMmcs4::new(hash, compress4, 0);
+
+        // max_height=2 with N=4: edge case where max_height < N.
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 2, 8);
+        let dims = vec![mat.dimensions()];
+        let (commit, prover_data) = mmcs4.commit(vec![mat]);
+
+        for index in 0..2 {
+            let opening = mmcs4.open_batch(index, &prover_data);
+            mmcs4
+                .verify_batch(&commit, &dims, index, (&opening).into())
+                .expect("small-height 4-ary roundtrip should verify");
+        }
+    }
+
+    #[test]
     fn commit_single_8x1() {
         let mut rng = SmallRng::seed_from_u64(1);
         let perm = Perm::new_from_rng_128(&mut rng);
