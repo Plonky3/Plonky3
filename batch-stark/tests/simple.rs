@@ -654,6 +654,16 @@ impl<F: PrimeField64> BaseAir<F> for DemoAir {
             Self::PreprocessedMul(a) => <PreprocessedMulAir as BaseAir<F>>::preprocessed_trace(a),
         }
     }
+
+    fn preprocessed_next_row_columns(&self) -> Vec<usize> {
+        match self {
+            Self::Fib(a) => <FibonacciAir as BaseAir<F>>::preprocessed_next_row_columns(a),
+            Self::Mul(a) => <MulAir as BaseAir<F>>::preprocessed_next_row_columns(a),
+            Self::PreprocessedMul(a) => {
+                <PreprocessedMulAir as BaseAir<F>>::preprocessed_next_row_columns(a)
+            }
+        }
+    }
 }
 
 // Heterogeneous enum wrapper for lookup-enabled AIRs
