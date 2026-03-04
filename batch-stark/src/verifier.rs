@@ -220,6 +220,9 @@ where
                 .clone()
                 .expect("We checked that the commitment exists"),
         );
+        for data in global_lookup_data.iter().flatten() {
+            challenger.observe_algebra_element(data.expected_cumulated);
+        }
     }
 
     // Sample alpha for constraint folding

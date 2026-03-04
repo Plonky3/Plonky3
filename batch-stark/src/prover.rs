@@ -266,6 +266,9 @@ where
     let permutation_commit_and_data = if !permutation_commit_inputs.is_empty() {
         let commitment = pcs.commit(permutation_commit_inputs);
         challenger.observe(commitment.0.clone());
+        for data in lookup_data.iter().flatten() {
+            challenger.observe_algebra_element(data.expected_cumulated);
+        }
         Some(commitment)
     } else {
         None
