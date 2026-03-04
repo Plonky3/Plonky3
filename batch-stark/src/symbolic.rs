@@ -38,7 +38,7 @@ where
         num_challenges,
         0,
     );
-    <A as Air<_>>::eval_with_lookups(air, &mut builder, contexts, lookup_data, lookup_gadget);
+    air.eval_with_lookups(&mut builder, contexts, lookup_data, lookup_gadget);
     builder.constraint_layout()
 }
 

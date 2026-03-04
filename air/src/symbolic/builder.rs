@@ -323,14 +323,12 @@ impl<F: Field, EF: ExtensionField<F>> PeriodicAirBuilder for SymbolicAirBuilder<
     }
 }
 
-// ============================================================================
-// Constraint Layout
-// ============================================================================
-
 /// Tracks whether a constraint was emitted via `assert_zero` (base) or `assert_zero_ext` (ext).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ConstraintType {
+    /// Emitted via `assert_zero` from the base trace.
     Base,
+    /// Emitted via `assert_zero_ext` from the extension trace.
     Ext,
 }
 
@@ -379,26 +377,30 @@ impl ConstraintLayout {
     ) -> (Vec<Vec<F>>, Vec<EF>) {
         let total = self.total_constraints();
 
-        // alpha_powers[i] = α^{total − 1 − i}, so constraint i gets
-        // weight α^{total − 1 − i} in the linear combination.
-        let mut alpha_powers: Vec<EF> = alpha.powers().take(total).collect();
-        alpha_powers.reverse();
+        // Build ascending powers: alpha_powers[k] = alpha^k.
+        //
+        // Constraint i needs weight alpha^{total - 1 - i}.
+        // We index with `total - 1 - idx` below instead of reversing the vector.
+        let alpha_powers: Vec<EF> = alpha.powers().collect_n(total);
 
-        // Base: transpose EF -> [F; D] and reorder by base_indices in one pass
-        let base_alpha_powers: Vec<Vec<F>> = (0..EF::DIMENSION)
-            .map(|d| {
-                self.base_indices
-                    .iter()
-                    .map(|&idx| alpha_powers[idx].as_basis_coefficients_slice()[d])
-                    .collect()
-            })
-            .collect();
+        // Prepare one output column per basis dimension.
+        let mut base_alpha_powers =
+            vec![Vec::with_capacity(self.base_indices.len()); EF::DIMENSION];
 
-        // Ext: pick full EF powers by ext_indices
-        let ext_alpha_powers: Vec<EF> = self
+        // Single pass over base indices.
+        // Read each EF element once and scatter its D base-field coefficients.
+        for &idx in &self.base_indices {
+            let coeffs = alpha_powers[total - 1 - idx].as_basis_coefficients_slice();
+            for (d, col) in base_alpha_powers.iter_mut().enumerate() {
+                col.push(coeffs[d]);
+            }
+        }
+
+        // Extension constraints keep the full EF power.
+        let ext_alpha_powers = self
             .ext_indices
             .iter()
-            .map(|&idx| alpha_powers[idx])
+            .map(|&idx| alpha_powers[total - 1 - idx])
             .collect();
 
         (base_alpha_powers, ext_alpha_powers)
@@ -438,6 +440,7 @@ where
 mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
 
     use super::*;
     use crate::BaseAir;
@@ -745,5 +748,250 @@ mod tests {
 
         // Both constraints are single variables with degree 1.
         assert_eq!(max_deg, 1);
+    }
+
+    #[test]
+    fn test_total_constraints_empty_layout() {
+        // An empty layout has zero base and zero extension constraints.
+        let layout = ConstraintLayout::default();
+
+        // Total should be 0.
+        assert_eq!(layout.total_constraints(), 0);
+    }
+
+    #[test]
+    fn test_total_constraints_base_only() {
+        // Layout with 3 base constraints and no extension constraints.
+        let layout = ConstraintLayout {
+            base_indices: vec![0, 1, 2],
+            ext_indices: vec![],
+        };
+
+        // Only base constraints contribute: 3 + 0 = 3.
+        assert_eq!(layout.total_constraints(), 3);
+    }
+
+    #[test]
+    fn test_total_constraints_ext_only() {
+        // Layout with no base constraints and 2 extension constraints.
+        let layout = ConstraintLayout {
+            base_indices: vec![],
+            ext_indices: vec![0, 1],
+        };
+
+        // Only extension constraints contribute: 0 + 2 = 2.
+        assert_eq!(layout.total_constraints(), 2);
+    }
+
+    #[test]
+    fn test_total_constraints_mixed() {
+        // Layout with both types interleaved.
+        // Global order: base(0), ext(1), base(2), ext(3), base(4).
+        let layout = ConstraintLayout {
+            base_indices: vec![0, 2, 4],
+            ext_indices: vec![1, 3],
+        };
+
+        // Total is the sum of both vectors: 3 + 2 = 5.
+        assert_eq!(layout.total_constraints(), 5);
+    }
+
+    #[test]
+    fn test_decompose_alpha_empty_layout() {
+        // No constraints at all.
+        let layout = ConstraintLayout::default();
+        let alpha = EF::TWO;
+
+        // Decompose with zero constraints.
+        let (base, ext) = layout.decompose_alpha::<F, EF>(alpha);
+
+        // Base output has D columns (one per basis dimension), all empty.
+        assert_eq!(base.len(), <EF as BasedVectorSpace<F>>::DIMENSION);
+        for col in &base {
+            assert!(col.is_empty());
+        }
+
+        // Extension output is empty too.
+        assert!(ext.is_empty());
+    }
+
+    #[test]
+    fn test_decompose_alpha_single_base_constraint() {
+        // One base constraint at global index 0.
+        let layout = ConstraintLayout {
+            base_indices: vec![0],
+            ext_indices: vec![],
+        };
+        let alpha = EF::TWO;
+
+        // Only 1 constraint total.
+        // Constraint 0 gets alpha^{1 - 1 - 0} = alpha^0 = 1.
+        let (base, ext) = layout.decompose_alpha::<F, EF>(alpha);
+
+        // The expected power is EF::ONE (the identity element).
+        let expected_coeffs = EF::ONE.as_basis_coefficients_slice();
+
+        // Each basis dimension column has exactly one entry matching 1.
+        for (d, col) in base.iter().enumerate() {
+            assert_eq!(col.len(), 1);
+            assert_eq!(col[0], expected_coeffs[d]);
+        }
+
+        // No extension constraints.
+        assert!(ext.is_empty());
+    }
+
+    #[test]
+    fn test_decompose_alpha_single_ext_constraint() {
+        // One extension constraint at global index 0.
+        let layout = ConstraintLayout {
+            base_indices: vec![],
+            ext_indices: vec![0],
+        };
+        let alpha = EF::TWO;
+
+        // Only 1 constraint total.
+        // Constraint 0 gets alpha^{1 - 1 - 0} = alpha^0 = 1.
+        let (base, ext) = layout.decompose_alpha::<F, EF>(alpha);
+
+        // Base columns exist but are empty (no base constraints).
+        for col in &base {
+            assert!(col.is_empty());
+        }
+
+        // The single extension power should be 1.
+        assert_eq!(ext, vec![EF::ONE]);
+    }
+
+    #[test]
+    fn test_decompose_alpha_two_base_constraints() {
+        // Two base constraints at global indices 0 and 1.
+        let layout = ConstraintLayout {
+            base_indices: vec![0, 1],
+            ext_indices: vec![],
+        };
+        let alpha = EF::TWO;
+
+        // 2 constraints total. Descending powers:
+        //   constraint 0 -> alpha^{2 - 1 - 0} = alpha^1 = alpha
+        //   constraint 1 -> alpha^{2 - 1 - 1} = alpha^0 = 1
+        let (base, ext) = layout.decompose_alpha::<F, EF>(alpha);
+
+        // Expected power for each base constraint.
+        let power_0 = alpha;
+        let power_1 = EF::ONE;
+
+        // Decompose each power into D base-field coefficients.
+        let coeffs_0 = power_0.as_basis_coefficients_slice();
+        let coeffs_1 = power_1.as_basis_coefficients_slice();
+
+        // Each column has 2 entries in emission order (constraint 0 first, then 1).
+        for (d, col) in base.iter().enumerate() {
+            assert_eq!(col.len(), 2);
+            assert_eq!(col[0], coeffs_0[d], "mismatch at d={d} for constraint 0");
+            assert_eq!(col[1], coeffs_1[d], "mismatch at d={d} for constraint 1");
+        }
+
+        // No extension constraints.
+        assert!(ext.is_empty());
+    }
+
+    #[test]
+    fn test_decompose_alpha_interleaved_base_and_ext() {
+        // Three constraints in global order: base(0), ext(1), base(2).
+        let layout = ConstraintLayout {
+            base_indices: vec![0, 2],
+            ext_indices: vec![1],
+        };
+        let alpha = EF::TWO;
+
+        // 3 constraints total. Descending powers:
+        //   constraint 0 -> alpha^{3 - 1 - 0} = alpha^2
+        //   constraint 1 -> alpha^{3 - 1 - 1} = alpha^1
+        //   constraint 2 -> alpha^{3 - 1 - 2} = alpha^0
+        let (base, ext) = layout.decompose_alpha::<F, EF>(alpha);
+
+        // Compute the expected powers.
+        let alpha_sq = alpha * alpha;
+        let power_base_0 = alpha_sq; // constraint 0 -> alpha^2
+        let power_base_2 = EF::ONE; // constraint 2 -> alpha^0
+        let power_ext_1 = alpha; // constraint 1 -> alpha^1
+
+        // Base columns: constraint 0 first, then constraint 2.
+        let coeffs_0 = power_base_0.as_basis_coefficients_slice();
+        let coeffs_2 = power_base_2.as_basis_coefficients_slice();
+        for (d, col) in base.iter().enumerate() {
+            assert_eq!(col.len(), 2);
+            assert_eq!(col[0], coeffs_0[d]);
+            assert_eq!(col[1], coeffs_2[d]);
+        }
+
+        // Extension vector: only constraint 1.
+        assert_eq!(ext, vec![power_ext_1]);
+    }
+
+    #[test]
+    fn test_decompose_alpha_all_ext_constraints() {
+        // Four extension constraints and no base constraints.
+        let layout = ConstraintLayout {
+            base_indices: vec![],
+            ext_indices: vec![0, 1, 2, 3],
+        };
+        let alpha = EF::TWO;
+
+        // 4 constraints total. Descending powers:
+        //   constraint 0 -> alpha^3
+        //   constraint 1 -> alpha^2
+        //   constraint 2 -> alpha^1
+        //   constraint 3 -> alpha^0
+        let (base, ext) = layout.decompose_alpha::<F, EF>(alpha);
+
+        // Base columns exist but are all empty.
+        for col in &base {
+            assert!(col.is_empty());
+        }
+
+        // Extension powers in emission order (descending).
+        let a2 = alpha * alpha;
+        let a3 = a2 * alpha;
+        assert_eq!(ext, vec![a3, a2, alpha, EF::ONE]);
+    }
+
+    #[test]
+    fn test_decompose_alpha_dimension_count() {
+        // Even with a single constraint, the base output has D columns.
+        let layout = ConstraintLayout {
+            base_indices: vec![0],
+            ext_indices: vec![],
+        };
+
+        let (base, _) = layout.decompose_alpha::<F, EF>(EF::TWO);
+
+        // D = 4 for BinomialExtensionField<BabyBear, 4>.
+        assert_eq!(base.len(), <EF as BasedVectorSpace<F>>::DIMENSION);
+    }
+
+    #[test]
+    fn test_decompose_alpha_identity_element() {
+        // When alpha = 1, every power of alpha is 1.
+        let layout = ConstraintLayout {
+            base_indices: vec![0, 2],
+            ext_indices: vec![1],
+        };
+
+        let (base, ext) = layout.decompose_alpha::<F, EF>(EF::ONE);
+
+        // All base powers decompose to the coefficients of 1.
+        let one_coeffs = EF::ONE.as_basis_coefficients_slice();
+        for (d, col) in base.iter().enumerate() {
+            for &val in col {
+                assert_eq!(val, one_coeffs[d]);
+            }
+        }
+
+        // All extension powers are 1.
+        for &val in &ext {
+            assert_eq!(val, EF::ONE);
+        }
     }
 }
