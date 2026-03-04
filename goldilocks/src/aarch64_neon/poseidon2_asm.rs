@@ -1699,6 +1699,7 @@ mod tests {
 
     use p3_field::{PrimeCharacteristicRing, PrimeField64};
     use p3_poseidon2::{MDSMat4, matmul_internal, mds_light_permutation};
+    use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
@@ -1708,48 +1709,367 @@ mod tests {
         MATRIX_DIAG_20_GOLDILOCKS,
     };
 
-    fn test_internal_round_matches<const WIDTH: usize>(diag: [Goldilocks; WIDTH]) {
-        let mut rng_state = 12345u64;
-        let mut next_rand = || {
-            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
-            rng_state
-        };
+    type F = Goldilocks;
 
-        // Generate random state
-        let mut state_asm: [Goldilocks; WIDTH] =
-            core::array::from_fn(|_| Goldilocks::new(next_rand()));
+    /// Reduce a raw u64 to its canonical Goldilocks representative.
+    fn canon(x: u64) -> u64 {
+        F::new(x).as_canonical_u64()
+    }
+
+    /// Pack two u64 lanes into a single NEON vector.
+    unsafe fn make_neon(a: u64, b: u64) -> uint64x2_t {
+        unsafe { vcombine_u64(vcreate_u64(a), vcreate_u64(b)) }
+    }
+
+    /// Extract both u64 lanes from a NEON vector.
+    unsafe fn read_neon(v: uint64x2_t) -> (u64, u64) {
+        unsafe { (vgetq_lane_u64::<0>(v), vgetq_lane_u64::<1>(v)) }
+    }
+
+    proptest! {
+        #[test]
+        fn test_add_asm(a: u64, b: u64) {
+            // Compute a + b using the standard field implementation.
+            let expected = (F::new(a) + F::new(b)).as_canonical_u64();
+
+            // The ASM version should give the same canonical result.
+            let got = canon(unsafe { add_asm(a, b) });
+            prop_assert_eq!(got, expected);
+        }
+
+        #[test]
+        fn test_sub_asm(a: u64, b: u64) {
+            // Compute a - b using the standard field implementation.
+            let expected = (F::new(a) - F::new(b)).as_canonical_u64();
+
+            // The ASM version should give the same canonical result.
+            let got = canon(unsafe { sub_asm(a, b) });
+            prop_assert_eq!(got, expected);
+        }
+
+        #[test]
+        fn test_mul_asm(a: u64, b: u64) {
+            // Compute a * b using the standard field implementation.
+            let expected = (F::new(a) * F::new(b)).as_canonical_u64();
+
+            // The ASM version should give the same canonical result.
+            let got = canon(unsafe { mul_asm(a, b) });
+            prop_assert_eq!(got, expected);
+        }
+
+        #[test]
+        fn test_mul_add_asm(a: u64, b: u64, c: u64) {
+            // Compute a * b + c using the standard field implementation.
+            let expected = (F::new(a) * F::new(b) + F::new(c)).as_canonical_u64();
+
+            // The fused multiply-add ASM should give the same result.
+            let got = canon(unsafe { mul_add_asm(a, b, c) });
+            prop_assert_eq!(got, expected);
+        }
+
+        #[test]
+        fn test_double_asm(a: u64) {
+            // Doubling is just a + a in the field.
+            let expected = (F::new(a) + F::new(a)).as_canonical_u64();
+
+            // The ASM shortcut should match.
+            let got = canon(unsafe { double_asm(a) });
+            prop_assert_eq!(got, expected);
+        }
+
+        #[test]
+        fn test_div2_asm(x: u64) {
+            // Dividing by 2 is one halving in the field.
+            let expected = F::new(x).halve().as_canonical_u64();
+
+            let got = canon(unsafe { div2_asm(x) });
+            prop_assert_eq!(got, expected);
+        }
+
+        #[test]
+        fn test_div4_asm(x: u64) {
+            // Dividing by 4 is two halvings.
+            let expected = F::new(x).halve().halve().as_canonical_u64();
+
+            let got = canon(unsafe { div4_asm(x) });
+            prop_assert_eq!(got, expected);
+        }
+
+        #[test]
+        fn test_div8_asm(x: u64) {
+            // Dividing by 8 is three halvings.
+            let expected = F::new(x).halve().halve().halve().as_canonical_u64();
+
+            let got = canon(unsafe { div8_asm(x) });
+            prop_assert_eq!(got, expected);
+        }
+
+        #[test]
+        fn test_div16_asm(x: u64) {
+            // Dividing by 16 is four halvings.
+            let expected = F::new(x).halve().halve().halve().halve().as_canonical_u64();
+
+            let got = canon(unsafe { div16_asm(x) });
+            prop_assert_eq!(got, expected);
+        }
+
+        #[test]
+        fn test_div32_asm(x: u64) {
+            // Dividing by 32 is five halvings.
+            let expected = F::new(x)
+                .halve().halve().halve().halve().halve()
+                .as_canonical_u64();
+
+            let got = canon(unsafe { div32_asm(x) });
+            prop_assert_eq!(got, expected);
+        }
+
+        #[test]
+        fn test_div_2_32_asm(x: u64) {
+            // Dividing by 2^32: apply halve 32 times as reference.
+            let mut v = F::new(x);
+            for _ in 0..32 {
+                v = v.halve();
+            }
+            let expected = v.as_canonical_u64();
+
+            let got = canon(unsafe { div_2_32_asm(x) });
+            prop_assert_eq!(got, expected);
+        }
+
+        #[test]
+        fn test_apply_mat4_asm(x0: u64, x1: u64, x2: u64, x3: u64) {
+            // Build field elements from the raw inputs.
+            let f = [F::new(x0), F::new(x1), F::new(x2), F::new(x3)];
+
+            // The [2,3,1,1] circulant matrix rows.
+            let two = F::TWO;
+            let three = two + F::ONE;
+            let e0 = two * f[0] + three * f[1] + f[2] + f[3];
+            let e1 = f[0] + two * f[1] + three * f[2] + f[3];
+            let e2 = f[0] + f[1] + two * f[2] + three * f[3];
+            let e3 = three * f[0] + f[1] + f[2] + two * f[3];
+
+            // Run the ASM version on raw u64s.
+            let mut state = [x0, x1, x2, x3];
+            unsafe { apply_mat4_asm(&mut state); }
+
+            // Each slot must match the field-level reference.
+            prop_assert_eq!(canon(state[0]), e0.as_canonical_u64());
+            prop_assert_eq!(canon(state[1]), e1.as_canonical_u64());
+            prop_assert_eq!(canon(state[2]), e2.as_canonical_u64());
+            prop_assert_eq!(canon(state[3]), e3.as_canonical_u64());
+        }
+
+        #[test]
+        fn test_mds_light_permutation_asm_w8(vals in prop::array::uniform8(any::<u64>())) {
+            // Build field-level state and apply the generic MDS.
+            let mut state_generic: [F; 8] = vals.map(F::new);
+            mds_light_permutation(&mut state_generic, &MDSMat4);
+
+            // Run the ASM version on the same raw values.
+            let mut state_asm = vals;
+            unsafe { mds_light_permutation_asm(&mut state_asm); }
+
+            // Every element must agree.
+            for i in 0..8 {
+                prop_assert_eq!(canon(state_asm[i]), state_generic[i].as_canonical_u64());
+            }
+        }
+
+        #[test]
+        fn test_mds_light_permutation_asm_w12(vals in prop::array::uniform12(any::<u64>())) {
+            let mut state_generic: [F; 12] = vals.map(F::new);
+            mds_light_permutation(&mut state_generic, &MDSMat4);
+
+            let mut state_asm = vals;
+            unsafe { mds_light_permutation_asm(&mut state_asm); }
+
+            for i in 0..12 {
+                prop_assert_eq!(canon(state_asm[i]), state_generic[i].as_canonical_u64());
+            }
+        }
+
+        #[test]
+        fn test_mds_light_permutation_asm_w16(vals in prop::array::uniform16(any::<u64>())) {
+            let mut state_generic: [F; 16] = vals.map(F::new);
+            mds_light_permutation(&mut state_generic, &MDSMat4);
+
+            let mut state_asm = vals;
+            unsafe { mds_light_permutation_asm(&mut state_asm); }
+
+            for i in 0..16 {
+                prop_assert_eq!(canon(state_asm[i]), state_generic[i].as_canonical_u64());
+            }
+        }
+
+        #[test]
+        fn test_sbox_layer_asm(vals in prop::array::uniform8(any::<u64>())) {
+            // Apply the ASM S-box to a copy of the input.
+            let mut state = vals;
+            unsafe { sbox_layer_asm(&mut state); }
+
+            // Verify each element is x^7 = x^3 * x^4.
+            for i in 0..8 {
+                let x = F::new(vals[i]);
+                let x2 = x * x;
+                let x3 = x2 * x;
+                let x4 = x2 * x2;
+                let x7 = x3 * x4;
+                prop_assert_eq!(canon(state[i]), x7.as_canonical_u64());
+            }
+        }
+
+        #[test]
+        fn test_external_round_asm(
+            vals in prop::array::uniform8(any::<u64>()),
+            rc in prop::array::uniform8(any::<u64>()),
+        ) {
+            // Build reference: add round constants, apply x^7, then MDS.
+            let mut expected: [F; 8] = core::array::from_fn(|i| F::new(vals[i]) + F::new(rc[i]));
+            for x in expected.iter_mut() {
+                let x2 = *x * *x;
+                let x3 = x2 * *x;
+                let x4 = x2 * x2;
+                *x = x3 * x4;
+            }
+            mds_light_permutation(&mut expected, &MDSMat4);
+
+            // Run the ASM external round.
+            let mut state = vals;
+            unsafe { external_round_asm(&mut state, &rc); }
+
+            for i in 0..8 {
+                prop_assert_eq!(canon(state[i]), expected[i].as_canonical_u64());
+            }
+        }
+
+        #[test]
+        fn test_sbox_layer_dual_asm(
+            vals0 in prop::array::uniform8(any::<u64>()),
+            vals1 in prop::array::uniform8(any::<u64>()),
+        ) {
+            // Run sbox on each lane independently as reference.
+            let mut ref0 = vals0;
+            let mut ref1 = vals1;
+            unsafe {
+                sbox_layer_asm(&mut ref0);
+                sbox_layer_asm(&mut ref1);
+            }
+
+            // The dual-lane version processes both at once.
+            let mut s0 = vals0;
+            let mut s1 = vals1;
+            unsafe { sbox_layer_dual_asm(&mut s0, &mut s1); }
+
+            // Both lanes must match their single-lane reference.
+            for i in 0..8 {
+                prop_assert_eq!(canon(s0[i]), canon(ref0[i]));
+                prop_assert_eq!(canon(s1[i]), canon(ref1[i]));
+            }
+        }
+
+        #[test]
+        fn test_external_round_dual_asm(
+            vals0 in prop::array::uniform8(any::<u64>()),
+            vals1 in prop::array::uniform8(any::<u64>()),
+            rc in prop::array::uniform8(any::<u64>()),
+        ) {
+            // Run external round on each lane independently as reference.
+            let mut ref0 = vals0;
+            let mut ref1 = vals1;
+            unsafe {
+                external_round_asm(&mut ref0, &rc);
+                external_round_asm(&mut ref1, &rc);
+            }
+
+            // The dual-lane version processes both at once.
+            let mut s0 = vals0;
+            let mut s1 = vals1;
+            unsafe { external_round_dual_asm(&mut s0, &mut s1, &rc); }
+
+            for i in 0..8 {
+                prop_assert_eq!(canon(s0[i]), canon(ref0[i]));
+                prop_assert_eq!(canon(s1[i]), canon(ref1[i]));
+            }
+        }
+
+        #[test]
+        fn test_external_round_fused_w8(
+            vals in prop::array::uniform8(any::<u64>()),
+            rc in prop::array::uniform8(any::<u64>()),
+        ) {
+            // The generic external round is the reference.
+            let mut ref_state = vals;
+            unsafe { external_round_asm(&mut ref_state, &rc); }
+
+            // The fused W8 version should produce the same output.
+            let mut fused_state = vals;
+            unsafe { external_round_fused_w8(&mut fused_state, &rc); }
+
+            for i in 0..8 {
+                prop_assert_eq!(canon(fused_state[i]), canon(ref_state[i]));
+            }
+        }
+
+        #[test]
+        fn test_external_round_fused_dual_w8(
+            vals0 in prop::array::uniform8(any::<u64>()),
+            vals1 in prop::array::uniform8(any::<u64>()),
+            rc in prop::array::uniform8(any::<u64>()),
+        ) {
+            // Run the fused round on each lane independently as reference.
+            let mut ref0 = vals0;
+            let mut ref1 = vals1;
+            unsafe {
+                external_round_fused_w8(&mut ref0, &rc);
+                external_round_fused_w8(&mut ref1, &rc);
+            }
+
+            // The dual version processes both at once.
+            let mut s0 = vals0;
+            let mut s1 = vals1;
+            unsafe { external_round_fused_dual_w8(&mut s0, &mut s1, &rc); }
+
+            for i in 0..8 {
+                prop_assert_eq!(canon(s0[i]), canon(ref0[i]));
+                prop_assert_eq!(canon(s1[i]), canon(ref1[i]));
+            }
+        }
+    }
+
+    fn test_internal_round_matches<const WIDTH: usize>(diag: [F; WIDTH]) {
+        let mut rng = SmallRng::seed_from_u64(12345);
+
+        // Build random state and constants.
+        let mut state_asm: [F; WIDTH] = rng.random();
         let mut state_generic = state_asm;
 
-        // Generate random internal constants
-        let internal_constants: [Goldilocks; 22] =
-            core::array::from_fn(|_| Goldilocks::new(next_rand()));
-
+        let internal_constants: [F; 22] = rng.random();
         let constants_raw: Vec<u64> = internal_constants.iter().map(|c| c.value).collect();
         let diag_raw: [u64; WIDTH] = core::array::from_fn(|i| diag[i].value);
 
+        // Run the ASM internal permute on raw u64 representation.
         let state_raw: &mut [u64; WIDTH] =
-            unsafe { &mut *(&mut state_asm as *mut [Goldilocks; WIDTH] as *mut [u64; WIDTH]) };
+            unsafe { &mut *(&mut state_asm as *mut [F; WIDTH] as *mut [u64; WIDTH]) };
         internal_permute_state_asm(state_raw, &diag_raw, &constants_raw);
 
+        // Build the same result via field-level ops: add RC, S-box on s0, matmul.
         for &rc in internal_constants.iter() {
-            // Add round constant and apply S-box to state[0]
             state_generic[0] += rc;
             let s = state_generic[0];
             let s2 = s * s;
             let s3 = s2 * s;
             let s4 = s2 * s2;
-            state_generic[0] = s3 * s4; // s^7
-
-            // Apply internal MDS: sum + diagonal multiply
+            state_generic[0] = s3 * s4;
             matmul_internal(&mut state_generic, diag);
         }
 
-        // Compare results
         for i in 0..WIDTH {
             assert_eq!(
                 state_asm[i].as_canonical_u64(),
                 state_generic[i].as_canonical_u64(),
-                "Mismatch at index {i}"
+                "mismatch at index {i}"
             );
         }
     }
@@ -1774,427 +2094,690 @@ mod tests {
         test_internal_round_matches(MATRIX_DIAG_20_GOLDILOCKS);
     }
 
-    #[test]
-    fn test_div2_asm_vs_field_halve() {
-        let mut rng = SmallRng::seed_from_u64(999);
-
-        for _ in 0..256 {
-            let x: u64 = rng.random();
-            let via_asm = Goldilocks::new(unsafe { div2_asm(x) }).as_canonical_u64();
-            let via_field = Goldilocks::new(x).halve().as_canonical_u64();
-            assert_eq!(via_asm, via_field, "div2 vs halve mismatch for x={x:#x}");
-        }
-    }
-
-    #[test]
-    fn test_div2_asm_matches_mul_by_inv2() {
-        let mut rng = SmallRng::seed_from_u64(777);
-        // MATRIX_DIAG_16_GOLDILOCKS[3] is 1/2 in the Goldilocks field.
-        let inv2 = MATRIX_DIAG_16_GOLDILOCKS[3].value;
-
-        for _ in 0..128 {
-            let x: u64 = rng.random();
-            let via_div2 = unsafe { div2_asm(x) };
-            let via_mul = unsafe { mul_asm(x, inv2) };
-            assert_eq!(via_div2, via_mul, "div2_asm(x) != x * (1/2) for x={x}");
-        }
-    }
-
-    #[test]
-    fn test_add_asm() {
-        // Test addition against the standard implementation
-        let test_cases: [(u64, u64); 8] = [
-            (0, 0),
-            (1, 1),
-            (P - 1, 1),         // Should wrap to 0
-            (P - 1, P - 1),     // Should wrap
-            (P / 2, P / 2),     // No wrap
-            (P / 2, P / 2 + 1), // Just wraps
-            (0xFFFFFFFF00000000, 0xFFFFFFFF00000000),
-            (0x123456789ABCDEF0, 0xFEDCBA9876543210),
-        ];
-
-        for (a, b) in test_cases {
-            let expected = (Goldilocks::new(a) + Goldilocks::new(b)).as_canonical_u64();
-            let result = unsafe { add_asm(a, b) };
-            let result_canonical = Goldilocks::new(result).as_canonical_u64();
-            assert_eq!(
-                result_canonical, expected,
-                "add_asm({a:#x}, {b:#x}) = {result:#x}, expected {expected:#x}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_mul_asm() {
-        // Test multiplication against the standard implementation
-        let test_cases: [(u64, u64); 8] = [
-            (0, 0),
-            (1, 1),
-            (P - 1, P - 1),
-            (P - 1, 2), // Near-max times small
-            (2, P - 1), // Commutative check
-            (0x123456789ABCDEF0, 0xFEDCBA9876543210),
-            (0xFFFFFFFF00000000, 0xFFFFFFFF00000000),
-            (EPSILON, EPSILON), // Edge case with epsilon
-        ];
-
-        for (a, b) in test_cases {
-            let expected = (Goldilocks::new(a) * Goldilocks::new(b)).as_canonical_u64();
-            let result = unsafe { mul_asm(a, b) };
-            let result_canonical = Goldilocks::new(result).as_canonical_u64();
-            assert_eq!(
-                result_canonical, expected,
-                "mul_asm({a:#x}, {b:#x}) = {result:#x}, expected {expected:#x}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_mul_asm_random() {
-        // Test with many random values
-        let mut rng_state = 0xDEADBEEFCAFEBABEu64;
-        let mut next_rand = || {
-            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
-            rng_state
-        };
-
-        for _ in 0..1000 {
-            let a = next_rand();
-            let b = next_rand();
-            let expected = (Goldilocks::new(a) * Goldilocks::new(b)).as_canonical_u64();
-            let result = unsafe { mul_asm(a, b) };
-            let result_canonical = Goldilocks::new(result).as_canonical_u64();
-            assert_eq!(
-                result_canonical, expected,
-                "mul_asm({a:#x}, {b:#x}) = {result:#x}, expected {expected:#x}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_sbox_layer() {
-        let mut rng_state = 98765u64;
-        let mut next_rand = || {
-            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
-            rng_state
-        };
-
-        // Test S-box layer against generic implementation
-        let mut state_asm: [Goldilocks; 8] = core::array::from_fn(|_| Goldilocks::new(next_rand()));
-        let state_generic = state_asm;
-
-        // Convert to raw and apply ASM S-box
-        let state_raw: &mut [u64; 8] =
-            unsafe { &mut *(&mut state_asm as *mut [Goldilocks; 8] as *mut [u64; 8]) };
-        unsafe {
-            sbox_layer_asm(state_raw);
-        }
-
-        // Compute expected results
-        for i in 0..8 {
-            let x = state_generic[i];
-            let x2 = x * x;
-            let x3 = x2 * x;
-            let x4 = x2 * x2;
-            let x7 = x3 * x4;
-            assert_eq!(
-                state_asm[i].as_canonical_u64(),
-                x7.as_canonical_u64(),
-                "S-box mismatch at index {i}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_mds_light_permutation() {
-        let mut rng_state = 54321u64;
-        let mut next_rand = || {
-            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
-            rng_state
-        };
-
-        // Test MDS against generic implementation
-        let mut state_asm: [Goldilocks; 12] =
-            core::array::from_fn(|_| Goldilocks::new(next_rand()));
-        let mut state_generic = state_asm;
-
-        // Apply ASM MDS
-        let state_raw: &mut [u64; 12] =
-            unsafe { &mut *(&mut state_asm as *mut [Goldilocks; 12] as *mut [u64; 12]) };
-        unsafe {
-            mds_light_permutation_asm(state_raw);
-        }
-
-        // Apply generic MDS
-        mds_light_permutation(&mut state_generic, &MDSMat4);
-
-        // Compare results
-        for i in 0..12 {
-            assert_eq!(
-                state_asm[i].as_canonical_u64(),
-                state_generic[i].as_canonical_u64(),
-                "MDS mismatch at index {i}"
-            );
-        }
-    }
-
-    // ===================== Boundary Value Tests =====================
-    // Test edge cases that stress reduction logic and overflow handling
-
-    const P_MINUS_1: u64 = P - 1;
-    const TWO_POW_32: u64 = 0x1_0000_0000;
-
-    /// Boundary values for arithmetic tests
-    const BOUNDARY_VALS: [u64; 8] = [
-        0,
-        1,
-        P_MINUS_1,
-        EPSILON,
-        TWO_POW_32,
-        TWO_POW_32 - 1,
-        0x8000_0000_0000_0000,
-        0x123456789ABCDEF0,
-    ];
-
-    fn check_binary_op<F>(op_name: &str, asm_op: F)
-    where
-        F: Fn(u64, u64) -> u64,
-    {
-        for &a in &BOUNDARY_VALS {
-            for &b in &BOUNDARY_VALS {
-                let expected = match op_name {
-                    "add" => (Goldilocks::new(a) + Goldilocks::new(b)).as_canonical_u64(),
-                    "sub" => (Goldilocks::new(a) - Goldilocks::new(b)).as_canonical_u64(),
-                    "mul" => (Goldilocks::new(a) * Goldilocks::new(b)).as_canonical_u64(),
-                    _ => panic!("unknown op"),
-                };
-                let result = Goldilocks::new(asm_op(a, b)).as_canonical_u64();
-                assert_eq!(result, expected, "{op_name}({a:#x}, {b:#x}) mismatch");
-            }
-        }
-    }
-
-    #[test]
-    fn test_arithmetic_boundary_values() {
-        // Test add_asm and mul_asm with all boundary value combinations
-        check_binary_op("add", |a, b| unsafe { add_asm(a, b) });
-        check_binary_op("sub", |a, b| unsafe { sub_asm(a, b) });
-        check_binary_op("mul", |a, b| unsafe { mul_asm(a, b) });
-
-        // Verify key identities
-        assert_eq!(
-            Goldilocks::new(unsafe { mul_asm(P_MINUS_1, P_MINUS_1) }).as_canonical_u64(),
-            1,
-            "(-1)^2 should equal 1"
-        );
-    }
-
-    #[test]
-    fn test_sbox_mds_boundary_values() {
-        // Test S-box with boundary values
-        for &val in &BOUNDARY_VALS {
-            let g = Goldilocks::new(val);
-            let expected = {
-                let x2 = g * g;
-                let x4 = x2 * x2;
-                x2 * x4 * g
-            };
-
-            let mut state: [u64; 8] = [val, 1, 1, 1, 1, 1, 1, 1];
-            unsafe {
-                sbox_layer_asm(&mut state);
-            }
-
-            assert_eq!(
-                Goldilocks::new(state[0]).as_canonical_u64(),
-                expected.as_canonical_u64(),
-                "sbox({val:#x}) mismatch"
-            );
-        }
-
-        // Test MDS with mixed boundary patterns
-        let mds_vals: [u64; 4] = [0, 1, EPSILON, TWO_POW_32];
-        for &v0 in &mds_vals {
-            for &v1 in &mds_vals {
-                let mut state_generic: [Goldilocks; 8] =
-                    core::array::from_fn(|i| Goldilocks::new(if i % 2 == 0 { v0 } else { v1 }));
-                let mut state_raw: [u64; 8] =
-                    core::array::from_fn(|i| state_generic[i].as_canonical_u64());
-
-                unsafe {
-                    mds_light_permutation_asm(&mut state_raw);
-                }
-                mds_light_permutation(&mut state_generic, &MDSMat4);
-
-                for i in 0..8 {
-                    assert_eq!(
-                        Goldilocks::new(state_raw[i]).as_canonical_u64(),
-                        state_generic[i].as_canonical_u64(),
-                        "MDS v0={v0:#x} v1={v1:#x} mismatch at {i}"
-                    );
-                }
-            }
-        }
-    }
-
-    // ===================== Specialized W{8,12,16} Tests =====================
-    // Verify the unrolled width-specific functions match the generic reference.
-
     fn test_specialized_matches_generic<const WIDTH: usize>(
-        diag: [Goldilocks; WIDTH],
+        diag: [F; WIDTH],
         specialized_fn: fn(&mut [u64; WIDTH], &[u64]),
     ) {
-        let mut rng_state = 42_u64;
-        let mut next_rand = || {
-            rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
-            rng_state
-        };
+        let mut rng = SmallRng::seed_from_u64(42);
 
-        let internal_constants: Vec<u64> = (0..22).map(|_| next_rand()).collect();
+        let internal_constants: Vec<u64> = (0..22).map(|_| rng.random()).collect();
         let diag_raw: [u64; WIDTH] = core::array::from_fn(|i| diag[i].value);
 
+        // Run both the specialized and generic versions on several random states.
         for _ in 0..8 {
-            let mut state_specialized: [u64; WIDTH] = core::array::from_fn(|_| next_rand());
+            let mut state_specialized: [u64; WIDTH] = rng.random();
             let mut state_generic = state_specialized;
 
             specialized_fn(&mut state_specialized, &internal_constants);
             internal_permute_state_asm(&mut state_generic, &diag_raw, &internal_constants);
 
             for i in 0..WIDTH {
-                assert_eq!(
-                    Goldilocks::new(state_specialized[i]).as_canonical_u64(),
-                    Goldilocks::new(state_generic[i]).as_canonical_u64(),
-                    "Specialized W{WIDTH} mismatch at index {i}"
-                );
+                assert_eq!(canon(state_specialized[i]), canon(state_generic[i]));
             }
         }
     }
 
     #[test]
     fn test_specialized_w8_matches_generic() {
-        test_specialized_matches_generic(MATRIX_DIAG_8_GOLDILOCKS, |state, constants| {
-            internal_permute_state_asm_w8(state, constants);
-        });
+        test_specialized_matches_generic(MATRIX_DIAG_8_GOLDILOCKS, internal_permute_state_asm_w8);
     }
 
     #[test]
     fn test_specialized_w12_matches_generic() {
-        test_specialized_matches_generic(MATRIX_DIAG_12_GOLDILOCKS, |state, constants| {
-            internal_permute_state_asm_w12(state, constants);
-        });
+        test_specialized_matches_generic(MATRIX_DIAG_12_GOLDILOCKS, internal_permute_state_asm_w12);
     }
 
     #[test]
     fn test_specialized_w16_matches_generic() {
-        test_specialized_matches_generic(MATRIX_DIAG_16_GOLDILOCKS, |state, constants| {
-            internal_permute_state_asm_w16(state, constants);
-        });
+        test_specialized_matches_generic(MATRIX_DIAG_16_GOLDILOCKS, internal_permute_state_asm_w16);
     }
 
-    // ===================== Division Primitive Tests =====================
+    #[allow(clippy::type_complexity)]
+    fn test_dual_matches_single<const WIDTH: usize>(
+        diag: [F; WIDTH],
+        single_fn: fn(&mut [u64; WIDTH], &[u64; WIDTH], &[u64]),
+        dual_fn: fn(&mut [u64; WIDTH], &mut [u64; WIDTH], &[u64; WIDTH], &[u64]),
+    ) {
+        let mut rng = SmallRng::seed_from_u64(77);
 
-    #[test]
-    fn test_div16_asm_correctness() {
-        let mut rng = SmallRng::seed_from_u64(1616);
-        let inv_16 = MATRIX_DIAG_16_GOLDILOCKS[10]; // 1/2^4
+        let diag_raw: [u64; WIDTH] = core::array::from_fn(|i| diag[i].value);
+        let constants: Vec<u64> = (0..22).map(|_| rng.random()).collect();
 
-        for _ in 0..256 {
-            let x: u64 = rng.random();
-            let via_asm = Goldilocks::new(unsafe { div16_asm(x) }).as_canonical_u64();
-            let via_halve = Goldilocks::new(x)
-                .halve()
-                .halve()
-                .halve()
-                .halve()
-                .as_canonical_u64();
-            let via_mul = (Goldilocks::new(x) * inv_16).as_canonical_u64();
-            assert_eq!(
-                via_asm, via_halve,
-                "div16_asm vs halve mismatch for x={x:#x}"
-            );
-            assert_eq!(via_asm, via_mul, "div16_asm vs mul mismatch for x={x:#x}");
-        }
-    }
+        // Run single-lane on each lane independently.
+        let mut lane0: [u64; WIDTH] = rng.random();
+        let mut lane1: [u64; WIDTH] = rng.random();
+        let mut ref0 = lane0;
+        let mut ref1 = lane1;
 
-    #[test]
-    fn test_div32_asm_correctness() {
-        let mut rng = SmallRng::seed_from_u64(3232);
-        let inv_32 = MATRIX_DIAG_16_GOLDILOCKS[11]; // 1/2^5
+        single_fn(&mut ref0, &diag_raw, &constants);
+        single_fn(&mut ref1, &diag_raw, &constants);
 
-        for _ in 0..256 {
-            let x: u64 = rng.random();
-            let via_asm = Goldilocks::new(unsafe { div32_asm(x) }).as_canonical_u64();
-            let via_halve = Goldilocks::new(x)
-                .halve()
-                .halve()
-                .halve()
-                .halve()
-                .halve()
-                .as_canonical_u64();
-            let via_mul = (Goldilocks::new(x) * inv_32).as_canonical_u64();
-            assert_eq!(
-                via_asm, via_halve,
-                "div32_asm vs halve mismatch for x={x:#x}"
-            );
-            assert_eq!(via_asm, via_mul, "div32_asm vs mul mismatch for x={x:#x}");
+        // Run dual-lane on both at once. Must match.
+        dual_fn(&mut lane0, &mut lane1, &diag_raw, &constants);
+
+        for i in 0..WIDTH {
+            assert_eq!(canon(lane0[i]), canon(ref0[i]), "lane0 mismatch at {i}");
+            assert_eq!(canon(lane1[i]), canon(ref1[i]), "lane1 mismatch at {i}");
         }
     }
 
     #[test]
-    fn test_div_2_32_asm_correctness() {
-        let mut rng = SmallRng::seed_from_u64(2320);
-        let inv_2_32 = MATRIX_DIAG_16_GOLDILOCKS[15]; // 1/2^32
+    fn test_internal_permute_split_dual_w8() {
+        test_dual_matches_single(
+            MATRIX_DIAG_8_GOLDILOCKS,
+            internal_permute_state_asm,
+            internal_permute_split_dual,
+        );
+    }
 
-        for _ in 0..256 {
-            let x: u64 = rng.random();
-            let via_asm = Goldilocks::new(unsafe { div_2_32_asm(x) }).as_canonical_u64();
-            let via_mul = (Goldilocks::new(x) * inv_2_32).as_canonical_u64();
-            assert_eq!(
-                via_asm, via_mul,
-                "div_2_32_asm vs mul mismatch for x={x:#x}"
-            );
-        }
+    #[test]
+    fn test_internal_permute_split_dual_w12() {
+        test_dual_matches_single(
+            MATRIX_DIAG_12_GOLDILOCKS,
+            internal_permute_state_asm,
+            internal_permute_split_dual,
+        );
+    }
 
-        // Boundary cases
-        let boundary_cases: [u64; 6] = [0, 1, P - 1, TWO_POW_32, TWO_POW_32 - 1, EPSILON];
-        for &x in &boundary_cases {
-            let via_asm = Goldilocks::new(unsafe { div_2_32_asm(x) }).as_canonical_u64();
-            let via_mul = (Goldilocks::new(x) * inv_2_32).as_canonical_u64();
-            assert_eq!(
-                via_asm, via_mul,
-                "div_2_32_asm boundary mismatch for x={x:#x}"
-            );
+    #[test]
+    fn test_internal_permute_split_dual_w16() {
+        test_dual_matches_single(
+            MATRIX_DIAG_16_GOLDILOCKS,
+            internal_permute_state_asm,
+            internal_permute_split_dual,
+        );
+    }
+
+    fn test_specialized_dual_matches_generic_dual<const WIDTH: usize>(
+        diag: [F; WIDTH],
+        specialized_dual_fn: fn(&mut [u64; WIDTH], &mut [u64; WIDTH], &[u64]),
+    ) {
+        let mut rng = SmallRng::seed_from_u64(99);
+
+        let diag_raw: [u64; WIDTH] = core::array::from_fn(|i| diag[i].value);
+        let constants: Vec<u64> = (0..22).map(|_| rng.random()).collect();
+
+        // The generic dual-lane version is the reference.
+        let mut lane0: [u64; WIDTH] = rng.random();
+        let mut lane1: [u64; WIDTH] = rng.random();
+        let mut ref0 = lane0;
+        let mut ref1 = lane1;
+
+        internal_permute_split_dual(&mut ref0, &mut ref1, &diag_raw, &constants);
+
+        // The specialized version must match.
+        specialized_dual_fn(&mut lane0, &mut lane1, &constants);
+
+        for i in 0..WIDTH {
+            assert_eq!(canon(lane0[i]), canon(ref0[i]), "lane0 mismatch at {i}");
+            assert_eq!(canon(lane1[i]), canon(ref1[i]), "lane1 mismatch at {i}");
         }
     }
 
     #[test]
-    fn test_div_2_32_neon_correctness() {
-        let mut rng = SmallRng::seed_from_u64(2321);
-        let inv_2_32 = MATRIX_DIAG_16_GOLDILOCKS[15];
+    fn test_specialized_dual_w8_matches_generic() {
+        test_specialized_dual_matches_generic_dual(
+            MATRIX_DIAG_8_GOLDILOCKS,
+            internal_permute_split_dual_w8,
+        );
+    }
 
-        for _ in 0..128 {
-            let x0: u64 = rng.random();
-            let x1: u64 = rng.random();
+    #[test]
+    fn test_specialized_dual_w12_matches_generic() {
+        test_specialized_dual_matches_generic_dual(
+            MATRIX_DIAG_12_GOLDILOCKS,
+            internal_permute_split_dual_w12,
+        );
+    }
 
-            let input = unsafe { vcombine_u64(vcreate_u64(x0), vcreate_u64(x1)) };
-            let result = unsafe { div_2_32_neon(input) };
-            let r0 = unsafe { vgetq_lane_u64::<0>(result) };
-            let r1 = unsafe { vgetq_lane_u64::<1>(result) };
+    #[test]
+    fn test_specialized_dual_w16_matches_generic() {
+        test_specialized_dual_matches_generic_dual(
+            MATRIX_DIAG_16_GOLDILOCKS,
+            internal_permute_split_dual_w16,
+        );
+    }
 
-            let expected0 = (Goldilocks::new(x0) * inv_2_32).as_canonical_u64();
-            let expected1 = (Goldilocks::new(x1) * inv_2_32).as_canonical_u64();
+    fn make_round_constants<const WIDTH: usize>(seed: u64, num_rounds: usize) -> Vec<[u64; WIDTH]> {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        (0..num_rounds).map(|_| rng.random()).collect()
+    }
 
-            assert_eq!(
-                Goldilocks::new(r0).as_canonical_u64(),
-                expected0,
-                "div_2_32_neon lane0 mismatch for x={x0:#x}"
-            );
-            assert_eq!(
-                Goldilocks::new(r1).as_canonical_u64(),
-                expected1,
-                "div_2_32_neon lane1 mismatch for x={x1:#x}"
-            );
+    proptest! {
+        #[test]
+        fn test_external_initial_permute_state_asm(
+            vals in prop::array::uniform8(any::<u64>()),
+        ) {
+            let constants = make_round_constants::<8>(42, 4);
+
+            // Reference: apply MDS once, then each external round manually.
+            let mut expected = vals;
+            unsafe { mds_light_permutation_asm(&mut expected); }
+            for rc in &constants {
+                unsafe { external_round_asm(&mut expected, rc); }
+            }
+
+            // The composed function should give the same result.
+            let mut got = vals;
+            external_initial_permute_state_asm(&mut got, &constants);
+
+            for i in 0..8 {
+                prop_assert_eq!(canon(got[i]), canon(expected[i]));
+            }
         }
+
+        #[test]
+        fn test_external_terminal_permute_state_asm(
+            vals in prop::array::uniform8(any::<u64>()),
+        ) {
+            let constants = make_round_constants::<8>(43, 4);
+
+            // Reference: just the external rounds, no initial MDS.
+            let mut expected = vals;
+            for rc in &constants {
+                unsafe { external_round_asm(&mut expected, rc); }
+            }
+
+            let mut got = vals;
+            external_terminal_permute_state_asm(&mut got, &constants);
+
+            for i in 0..8 {
+                prop_assert_eq!(canon(got[i]), canon(expected[i]));
+            }
+        }
+
+        #[test]
+        fn test_external_initial_permute_w8(
+            vals in prop::array::uniform8(any::<u64>()),
+        ) {
+            let constants = make_round_constants::<8>(44, 4);
+
+            // The generic version is the reference.
+            let mut expected = vals;
+            external_initial_permute_state_asm(&mut expected, &constants);
+
+            // The W8-specialized version must match.
+            let mut got = vals;
+            external_initial_permute_w8(&mut got, &constants);
+
+            for i in 0..8 {
+                prop_assert_eq!(canon(got[i]), canon(expected[i]));
+            }
+        }
+
+        #[test]
+        fn test_external_terminal_permute_w8(
+            vals in prop::array::uniform8(any::<u64>()),
+        ) {
+            let constants = make_round_constants::<8>(45, 4);
+
+            let mut expected = vals;
+            external_terminal_permute_state_asm(&mut expected, &constants);
+
+            let mut got = vals;
+            external_terminal_permute_w8(&mut got, &constants);
+
+            for i in 0..8 {
+                prop_assert_eq!(canon(got[i]), canon(expected[i]));
+            }
+        }
+
+        #[test]
+        fn test_external_initial_permute_dual(
+            vals0 in prop::array::uniform8(any::<u64>()),
+            vals1 in prop::array::uniform8(any::<u64>()),
+        ) {
+            let constants = make_round_constants::<8>(46, 4);
+
+            // Run single-lane on each independently as reference.
+            let mut ref0 = vals0;
+            let mut ref1 = vals1;
+            external_initial_permute_state_asm(&mut ref0, &constants);
+            external_initial_permute_state_asm(&mut ref1, &constants);
+
+            // The dual version processes both at once.
+            let mut l0 = vals0;
+            let mut l1 = vals1;
+            external_initial_permute_dual(&mut l0, &mut l1, &constants);
+
+            for i in 0..8 {
+                prop_assert_eq!(canon(l0[i]), canon(ref0[i]));
+                prop_assert_eq!(canon(l1[i]), canon(ref1[i]));
+            }
+        }
+
+        #[test]
+        fn test_external_terminal_permute_dual(
+            vals0 in prop::array::uniform8(any::<u64>()),
+            vals1 in prop::array::uniform8(any::<u64>()),
+        ) {
+            let constants = make_round_constants::<8>(47, 4);
+
+            let mut ref0 = vals0;
+            let mut ref1 = vals1;
+            external_terminal_permute_state_asm(&mut ref0, &constants);
+            external_terminal_permute_state_asm(&mut ref1, &constants);
+
+            let mut l0 = vals0;
+            let mut l1 = vals1;
+            external_terminal_permute_dual(&mut l0, &mut l1, &constants);
+
+            for i in 0..8 {
+                prop_assert_eq!(canon(l0[i]), canon(ref0[i]));
+                prop_assert_eq!(canon(l1[i]), canon(ref1[i]));
+            }
+        }
+
+        #[test]
+        fn test_external_initial_permute_dual_w8(
+            vals0 in prop::array::uniform8(any::<u64>()),
+            vals1 in prop::array::uniform8(any::<u64>()),
+        ) {
+            let constants = make_round_constants::<8>(48, 4);
+
+            // The generic dual version is the reference.
+            let mut ref0 = vals0;
+            let mut ref1 = vals1;
+            external_initial_permute_dual(&mut ref0, &mut ref1, &constants);
+
+            // The W8-specialized dual must match.
+            let mut l0 = vals0;
+            let mut l1 = vals1;
+            external_initial_permute_dual_w8(&mut l0, &mut l1, &constants);
+
+            for i in 0..8 {
+                prop_assert_eq!(canon(l0[i]), canon(ref0[i]));
+                prop_assert_eq!(canon(l1[i]), canon(ref1[i]));
+            }
+        }
+
+        #[test]
+        fn test_external_terminal_permute_dual_w8(
+            vals0 in prop::array::uniform8(any::<u64>()),
+            vals1 in prop::array::uniform8(any::<u64>()),
+        ) {
+            let constants = make_round_constants::<8>(49, 4);
+
+            let mut ref0 = vals0;
+            let mut ref1 = vals1;
+            external_terminal_permute_dual(&mut ref0, &mut ref1, &constants);
+
+            let mut l0 = vals0;
+            let mut l1 = vals1;
+            external_terminal_permute_dual_w8(&mut l0, &mut l1, &constants);
+
+            for i in 0..8 {
+                prop_assert_eq!(canon(l0[i]), canon(ref0[i]));
+                prop_assert_eq!(canon(l1[i]), canon(ref1[i]));
+            }
+        }
+
+        #[test]
+        fn test_add_neon(a0: u64, a1: u64, b0: u64, b1: u64) {
+            unsafe {
+                // Pack two lanes into NEON vectors, add, then read back.
+                let (r0, r1) = read_neon(add_neon(make_neon(a0, a1), make_neon(b0, b1)));
+
+                // Each lane must match its scalar add_asm equivalent.
+                prop_assert_eq!(canon(r0), canon(add_asm(a0, b0)));
+                prop_assert_eq!(canon(r1), canon(add_asm(a1, b1)));
+            }
+        }
+
+        #[test]
+        fn test_sub_neon(a0: u64, a1: u64, b0: u64, b1: u64) {
+            unsafe {
+                let (r0, r1) = read_neon(sub_neon(make_neon(a0, a1), make_neon(b0, b1)));
+
+                prop_assert_eq!(canon(r0), canon(sub_asm(a0, b0)));
+                prop_assert_eq!(canon(r1), canon(sub_asm(a1, b1)));
+            }
+        }
+
+        #[test]
+        fn test_double_neon(a0: u64, a1: u64) {
+            unsafe {
+                let (r0, r1) = read_neon(double_neon(make_neon(a0, a1)));
+
+                prop_assert_eq!(canon(r0), canon(double_asm(a0)));
+                prop_assert_eq!(canon(r1), canon(double_asm(a1)));
+            }
+        }
+
+        #[test]
+        fn test_div2_neon(a0: u64, a1: u64) {
+            unsafe {
+                let (r0, r1) = read_neon(div2_neon(make_neon(a0, a1)));
+
+                prop_assert_eq!(canon(r0), canon(div2_asm(a0)));
+                prop_assert_eq!(canon(r1), canon(div2_asm(a1)));
+            }
+        }
+
+        #[test]
+        fn test_div4_neon(a0: u64, a1: u64) {
+            unsafe {
+                let (r0, r1) = read_neon(div4_neon(make_neon(a0, a1)));
+
+                prop_assert_eq!(canon(r0), canon(div4_asm(a0)));
+                prop_assert_eq!(canon(r1), canon(div4_asm(a1)));
+            }
+        }
+
+        #[test]
+        fn test_div8_neon(a0: u64, a1: u64) {
+            unsafe {
+                let (r0, r1) = read_neon(div8_neon(make_neon(a0, a1)));
+
+                prop_assert_eq!(canon(r0), canon(div8_asm(a0)));
+                prop_assert_eq!(canon(r1), canon(div8_asm(a1)));
+            }
+        }
+
+        #[test]
+        fn test_div16_neon(a0: u64, a1: u64) {
+            unsafe {
+                let (r0, r1) = read_neon(div16_neon(make_neon(a0, a1)));
+
+                prop_assert_eq!(canon(r0), canon(div16_asm(a0)));
+                prop_assert_eq!(canon(r1), canon(div16_asm(a1)));
+            }
+        }
+
+        #[test]
+        fn test_div32_neon(a0: u64, a1: u64) {
+            unsafe {
+                let (r0, r1) = read_neon(div32_neon(make_neon(a0, a1)));
+
+                prop_assert_eq!(canon(r0), canon(div32_asm(a0)));
+                prop_assert_eq!(canon(r1), canon(div32_asm(a1)));
+            }
+        }
+
+        #[test]
+        fn test_div_2_32_neon(a0: u64, a1: u64) {
+            unsafe {
+                let (r0, r1) = read_neon(div_2_32_neon(make_neon(a0, a1)));
+
+                prop_assert_eq!(canon(r0), canon(div_2_32_asm(a0)));
+                prop_assert_eq!(canon(r1), canon(div_2_32_asm(a1)));
+            }
+        }
+
+        #[test]
+        fn test_apply_mat4_neon(
+            a0: u64, a1: u64, a2: u64, a3: u64,
+            b0: u64, b1: u64, b2: u64, b3: u64,
+        ) {
+            unsafe {
+                // Scalar reference: run apply_mat4_asm on each lane separately.
+                let mut lane_a = [a0, a1, a2, a3];
+                let mut lane_b = [b0, b1, b2, b3];
+                apply_mat4_asm(&mut lane_a);
+                apply_mat4_asm(&mut lane_b);
+
+                // NEON version: pack both lanes into vectors, apply, read back.
+                let mut neon_state = [
+                    make_neon(a0, b0),
+                    make_neon(a1, b1),
+                    make_neon(a2, b2),
+                    make_neon(a3, b3),
+                ];
+                apply_mat4_neon(&mut neon_state);
+
+                for i in 0..4 {
+                    let (r0, r1) = read_neon(neon_state[i]);
+                    prop_assert_eq!(canon(r0), canon(lane_a[i]));
+                    prop_assert_eq!(canon(r1), canon(lane_b[i]));
+                }
+            }
+        }
+
+        #[test]
+        fn test_mds_light_neon_w8(
+            lane_a in prop::array::uniform8(any::<u64>()),
+            lane_b in prop::array::uniform8(any::<u64>()),
+        ) {
+            unsafe {
+                // Run scalar MDS on each lane independently.
+                let mut ref_a = lane_a;
+                let mut ref_b = lane_b;
+                mds_light_permutation_asm(&mut ref_a);
+                mds_light_permutation_asm(&mut ref_b);
+
+                // Pack both lanes into NEON vectors and run the NEON MDS.
+                let mut neon_state: [uint64x2_t; 8] =
+                    core::array::from_fn(|i| make_neon(lane_a[i], lane_b[i]));
+                mds_light_neon(&mut neon_state);
+
+                // Each lane of each vector must match the scalar reference.
+                for i in 0..8 {
+                    let (r0, r1) = read_neon(neon_state[i]);
+                    prop_assert_eq!(canon(r0), canon(ref_a[i]));
+                    prop_assert_eq!(canon(r1), canon(ref_b[i]));
+                }
+            }
+        }
+
+        #[test]
+        fn test_sbox_neon(
+            lane_a in prop::array::uniform8(any::<u64>()),
+            lane_b in prop::array::uniform8(any::<u64>()),
+        ) {
+            unsafe {
+                // Scalar reference on each lane.
+                let mut ref_a = lane_a;
+                let mut ref_b = lane_b;
+                sbox_layer_asm(&mut ref_a);
+                sbox_layer_asm(&mut ref_b);
+
+                // NEON version on packed lanes.
+                let mut neon_state: [uint64x2_t; 8] =
+                    core::array::from_fn(|i| make_neon(lane_a[i], lane_b[i]));
+                sbox_neon(&mut neon_state);
+
+                for i in 0..8 {
+                    let (r0, r1) = read_neon(neon_state[i]);
+                    prop_assert_eq!(canon(r0), canon(ref_a[i]));
+                    prop_assert_eq!(canon(r1), canon(ref_b[i]));
+                }
+            }
+        }
+
+        #[test]
+        fn test_external_round_neon(
+            lane_a in prop::array::uniform8(any::<u64>()),
+            lane_b in prop::array::uniform8(any::<u64>()),
+            rc in prop::array::uniform8(any::<u64>()),
+        ) {
+            unsafe {
+                // Scalar reference on each lane.
+                let mut ref_a = lane_a;
+                let mut ref_b = lane_b;
+                external_round_asm(&mut ref_a, &rc);
+                external_round_asm(&mut ref_b, &rc);
+
+                // NEON version on packed lanes.
+                let mut neon_state: [uint64x2_t; 8] =
+                    core::array::from_fn(|i| make_neon(lane_a[i], lane_b[i]));
+                external_round_neon(&mut neon_state, &rc);
+
+                for i in 0..8 {
+                    let (r0, r1) = read_neon(neon_state[i]);
+                    prop_assert_eq!(canon(r0), canon(ref_a[i]));
+                    prop_assert_eq!(canon(r1), canon(ref_b[i]));
+                }
+            }
+        }
+
+        #[test]
+        fn test_lanes_roundtrip(
+            lane0 in prop::array::uniform8(any::<u64>()),
+            lane1 in prop::array::uniform8(any::<u64>()),
+        ) {
+            // Pack two lane arrays into NEON vectors.
+            let packed = lanes_to_neon(&lane0, &lane1);
+
+            // Unpack back into separate arrays.
+            let mut out0 = [0u64; 8];
+            let mut out1 = [0u64; 8];
+            neon_to_lanes(&packed, &mut out0, &mut out1);
+
+            // Must recover the original values.
+            prop_assert_eq!(out0, lane0);
+            prop_assert_eq!(out1, lane1);
+        }
+
+        #[test]
+        fn test_external_initial_neon(
+            lane_a in prop::array::uniform8(any::<u64>()),
+            lane_b in prop::array::uniform8(any::<u64>()),
+        ) {
+            let constants = make_round_constants::<8>(50, 4);
+
+            // Scalar reference on each lane.
+            let mut ref_a = lane_a;
+            let mut ref_b = lane_b;
+            external_initial_permute_state_asm(&mut ref_a, &constants);
+            external_initial_permute_state_asm(&mut ref_b, &constants);
+
+            // NEON version on packed lanes.
+            let mut neon_state = lanes_to_neon(&lane_a, &lane_b);
+            external_initial_neon(&mut neon_state, &constants);
+
+            let mut out_a = [0u64; 8];
+            let mut out_b = [0u64; 8];
+            neon_to_lanes(&neon_state, &mut out_a, &mut out_b);
+
+            for i in 0..8 {
+                prop_assert_eq!(canon(out_a[i]), canon(ref_a[i]));
+                prop_assert_eq!(canon(out_b[i]), canon(ref_b[i]));
+            }
+        }
+
+        #[test]
+        fn test_external_terminal_neon(
+            lane_a in prop::array::uniform8(any::<u64>()),
+            lane_b in prop::array::uniform8(any::<u64>()),
+        ) {
+            let constants = make_round_constants::<8>(51, 4);
+
+            let mut ref_a = lane_a;
+            let mut ref_b = lane_b;
+            external_terminal_permute_state_asm(&mut ref_a, &constants);
+            external_terminal_permute_state_asm(&mut ref_b, &constants);
+
+            let mut neon_state = lanes_to_neon(&lane_a, &lane_b);
+            external_terminal_neon(&mut neon_state, &constants);
+
+            let mut out_a = [0u64; 8];
+            let mut out_b = [0u64; 8];
+            neon_to_lanes(&neon_state, &mut out_a, &mut out_b);
+
+            for i in 0..8 {
+                prop_assert_eq!(canon(out_a[i]), canon(ref_a[i]));
+                prop_assert_eq!(canon(out_b[i]), canon(ref_b[i]));
+            }
+        }
+    }
+
+    fn test_internal_neon_matches_scalar<const WIDTH: usize>(
+        diag: [F; WIDTH],
+        neon_fn: fn(&mut [uint64x2_t; WIDTH], &[u64]),
+        scalar_fn: fn(&mut [u64; WIDTH], &[u64; WIDTH], &[u64]),
+    ) {
+        let mut rng = SmallRng::seed_from_u64(55);
+
+        let diag_raw: [u64; WIDTH] = core::array::from_fn(|i| diag[i].value);
+        let constants: Vec<u64> = (0..22).map(|_| rng.random()).collect();
+
+        let lane_a: [u64; WIDTH] = rng.random();
+        let lane_b: [u64; WIDTH] = rng.random();
+
+        // Scalar reference on each lane independently.
+        let mut ref_a = lane_a;
+        let mut ref_b = lane_b;
+        scalar_fn(&mut ref_a, &diag_raw, &constants);
+        scalar_fn(&mut ref_b, &diag_raw, &constants);
+
+        // NEON version packs both lanes and processes them together.
+        let mut neon_state = lanes_to_neon(&lane_a, &lane_b);
+        neon_fn(&mut neon_state, &constants);
+
+        let mut out_a = [0u64; WIDTH];
+        let mut out_b = [0u64; WIDTH];
+        neon_to_lanes(&neon_state, &mut out_a, &mut out_b);
+
+        for i in 0..WIDTH {
+            assert_eq!(canon(out_a[i]), canon(ref_a[i]), "lane0 mismatch at {i}");
+            assert_eq!(canon(out_b[i]), canon(ref_b[i]), "lane1 mismatch at {i}");
+        }
+    }
+
+    #[test]
+    fn test_internal_permute_neon_w12() {
+        test_internal_neon_matches_scalar(
+            MATRIX_DIAG_12_GOLDILOCKS,
+            internal_permute_neon_w12,
+            internal_permute_state_asm,
+        );
+    }
+
+    #[test]
+    fn test_internal_permute_neon_w16() {
+        test_internal_neon_matches_scalar(
+            MATRIX_DIAG_16_GOLDILOCKS,
+            internal_permute_neon_w16,
+            internal_permute_state_asm,
+        );
+    }
+
+    fn test_internal_neon_generic_matches_scalar<const WIDTH: usize>(diag: [F; WIDTH]) {
+        let mut rng = SmallRng::seed_from_u64(66);
+
+        let diag_raw: [u64; WIDTH] = core::array::from_fn(|i| diag[i].value);
+        let constants: Vec<u64> = (0..22).map(|_| rng.random()).collect();
+
+        let lane_a: [u64; WIDTH] = rng.random();
+        let lane_b: [u64; WIDTH] = rng.random();
+
+        // Scalar reference.
+        let mut ref_a = lane_a;
+        let mut ref_b = lane_b;
+        internal_permute_state_asm(&mut ref_a, &diag_raw, &constants);
+        internal_permute_state_asm(&mut ref_b, &diag_raw, &constants);
+
+        // Generic NEON version.
+        let mut neon_state = lanes_to_neon(&lane_a, &lane_b);
+        internal_permute_neon(&mut neon_state, &diag_raw, &constants);
+
+        let mut out_a = [0u64; WIDTH];
+        let mut out_b = [0u64; WIDTH];
+        neon_to_lanes(&neon_state, &mut out_a, &mut out_b);
+
+        for i in 0..WIDTH {
+            assert_eq!(canon(out_a[i]), canon(ref_a[i]), "lane0 mismatch at {i}");
+            assert_eq!(canon(out_b[i]), canon(ref_b[i]), "lane1 mismatch at {i}");
+        }
+    }
+
+    #[test]
+    fn test_internal_permute_neon_generic_w8() {
+        test_internal_neon_generic_matches_scalar(MATRIX_DIAG_8_GOLDILOCKS);
+    }
+
+    #[test]
+    fn test_internal_permute_neon_generic_w12() {
+        test_internal_neon_generic_matches_scalar(MATRIX_DIAG_12_GOLDILOCKS);
+    }
+
+    #[test]
+    fn test_internal_permute_neon_generic_w16() {
+        test_internal_neon_generic_matches_scalar(MATRIX_DIAG_16_GOLDILOCKS);
+    }
+
+    #[test]
+    fn test_internal_permute_neon_generic_w20() {
+        test_internal_neon_generic_matches_scalar(MATRIX_DIAG_20_GOLDILOCKS);
     }
 }

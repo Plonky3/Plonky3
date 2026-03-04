@@ -12,10 +12,10 @@ use alloc::vec::Vec;
 
 use hashbrown::HashMap;
 use p3_air::Air;
-use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
+use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpressionExt};
 use p3_challenger::FieldChallenger;
 use p3_commit::Pcs;
-use p3_field::BasedVectorSpace;
+use p3_field::{Algebra, BasedVectorSpace};
 use p3_lookup::lookup_traits::{Kind, Lookup, LookupGadget};
 use p3_matrix::Matrix;
 use p3_uni_stark::Val;
@@ -160,7 +160,7 @@ where
     /// This is a convenience function mainly used for tests.
     pub fn from_instances<A>(config: &SC, instances: &[StarkInstance<'_, SC, A>]) -> Self
     where
-        SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
+        SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
         A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>> + Clone,
     {
         let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
@@ -188,7 +188,7 @@ where
         trace_ext_degree_bits: &[usize],
     ) -> Self
     where
-        SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
+        SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
         A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>,
     {
         assert_eq!(

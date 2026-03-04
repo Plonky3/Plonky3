@@ -352,7 +352,13 @@ pub trait AirBuilder: Sized {
     fn is_last_row(&self) -> Self::Expr;
 
     /// Expression evaluating to 1 on all transition rows (not last row), 0 on last row.
-    fn is_transition(&self) -> Self::Expr;
+    fn is_transition(&self) -> Self::Expr {
+        self.is_transition_window(2)
+    }
+
+    /// Expression evaluating to 1 on all rows where a window of `size` consecutive
+    /// rows is available, 0 elsewhere.
+    fn is_transition_window(&self, size: usize) -> Self::Expr;
 
     /// Returns a sub-builder whose constraints are enforced only when `condition` is nonzero.
     fn when<I: Into<Self::Expr>>(&mut self, condition: I) -> FilteredAirBuilder<'_, Self> {
@@ -384,6 +390,11 @@ pub trait AirBuilder: Sized {
     /// Returns a sub-builder whose constraints are enforced on all rows except the last.
     fn when_transition(&mut self) -> FilteredAirBuilder<'_, Self> {
         self.when(self.is_transition())
+    }
+
+    /// Like [`when_transition`](Self::when_transition), but requires a window of `size` rows.
+    fn when_transition_window(&mut self, size: usize) -> FilteredAirBuilder<'_, Self> {
+        self.when(self.is_transition_window(size))
     }
 
     /// Assert that the given element is zero.
@@ -433,6 +444,15 @@ pub trait AirBuilder: Sized {
     }
 }
 
+/// Extension of [`AirBuilder`] for builders that supply periodic column values.
+pub trait PeriodicAirBuilder: AirBuilder {
+    /// Variable type for periodic column values.
+    type PeriodicVar: Into<Self::Expr> + Copy;
+
+    /// Periodic column values at the current row.
+    fn periodic_values(&self) -> &[Self::PeriodicVar];
+}
+
 /// Extension trait for builders that carry additional runtime context.
 ///
 /// Some AIRs need access to data that is only available at proving time,
@@ -456,7 +476,7 @@ pub trait ExtensionBuilder: AirBuilder<F: Field> {
     type EF: ExtensionField<Self::F>;
 
     /// Expression type over extension field elements.
-    type ExprEF: From<Self::Expr> + Algebra<Self::EF>;
+    type ExprEF: Algebra<Self::Expr> + Algebra<Self::EF>;
 
     /// Variable type over extension field elements.
     type VarEF: Into<Self::ExprEF> + Copy + Send + Sync;
@@ -552,8 +572,20 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
         self.inner.is_transition()
     }
 
+    fn is_transition_window(&self, size: usize) -> Self::Expr {
+        self.inner.is_transition_window(size)
+    }
+
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         self.inner.assert_zero(self.condition() * x.into());
+    }
+}
+
+impl<AB: PeriodicAirBuilder> PeriodicAirBuilder for FilteredAirBuilder<'_, AB> {
+    type PeriodicVar = AB::PeriodicVar;
+
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.inner.periodic_values()
     }
 }
 
@@ -566,8 +598,8 @@ impl<AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'_, AB> {
     where
         I: Into<Self::ExprEF>,
     {
-        let ext_x = x.into();
-        let condition: Self::ExprEF = self.condition().into();
+        let ext_x: Self::ExprEF = x.into();
+        let condition: AB::Expr = self.condition();
 
         self.inner.assert_zero_ext(ext_x * condition);
     }

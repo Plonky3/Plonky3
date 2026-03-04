@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
-use p3_air::{AirBuilder, WindowAccess};
+use p3_air::{AirBuilder, BaseLeaf, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
@@ -41,7 +41,7 @@ fn random_main_trace(height: usize, width: usize, rng: &mut SmallRng) -> RowMajo
 
 /// Build symbolic lookup contexts similar to RangeCheckAir pattern.
 fn build_lookups(num_lookups: usize, tuple_size: usize, trace_width: usize) -> Vec<Lookup<F>> {
-    let symbolic_builder = SymbolicAirBuilder::<F>::new(0, trace_width, 0, 0, 0);
+    let symbolic_builder = SymbolicAirBuilder::<F>::new(0, trace_width, 0, 0, 0, 0);
     let symbolic_main = symbolic_builder.main();
     let symbolic_main_local = symbolic_main.current_slice();
 
@@ -54,7 +54,7 @@ fn build_lookups(num_lookups: usize, tuple_size: usize, trace_width: usize) -> V
             let read_elements: Vec<SymbolicExpression<F>> = (0..tuple_size)
                 .map(|j| symbolic_main_local[base_col + j].into())
                 .collect();
-            let read_mult = SymbolicExpression::Constant(F::ONE);
+            let read_mult = SymbolicExpression::Leaf(BaseLeaf::Constant(F::ONE));
 
             let provide_elements: Vec<SymbolicExpression<F>> = (0..tuple_size)
                 .map(|j| symbolic_main_local[base_col + tuple_size + j].into())

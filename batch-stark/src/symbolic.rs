@@ -1,17 +1,33 @@
 use alloc::vec::Vec;
 
-use p3_air::Air;
-use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
-use p3_field::{ExtensionField, Field};
+use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt};
+use p3_air::{Air, ExtLeaf, SymbolicExpr};
+use p3_field::{Algebra, ExtensionField, Field};
 use p3_lookup::lookup_traits::{Lookup, LookupData, LookupGadget};
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
+
+/// Converts `LookupData<EF>` to `LookupData<SymbolicExpressionExt<F, EF>>`.
+pub fn lookup_data_to_ext_expr<F, EF: Clone>(
+    lookup_data: &[LookupData<EF>],
+) -> Vec<LookupData<SymbolicExpressionExt<F, EF>>> {
+    lookup_data
+        .iter()
+        .map(|data| LookupData {
+            name: data.name.clone(),
+            aux_idx: data.aux_idx,
+            expected_cumulated: SymbolicExpr::Leaf(ExtLeaf::ExtConstant(
+                data.expected_cumulated.clone(),
+            )),
+        })
+        .collect()
+}
 
 pub fn get_log_num_quotient_chunks<F, EF, A, LG>(
     air: &A,
     preprocessed_width: usize,
     contexts: &[Lookup<F>],
-    lookup_data: &[LookupData<SymbolicExpression<EF>>],
+    lookup_data: &[LookupData<SymbolicExpressionExt<F, EF>>],
     is_zk: usize,
     lookup_gadget: &LG,
 ) -> usize
@@ -19,7 +35,7 @@ where
     F: Field,
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
-    SymbolicExpression<EF>: From<SymbolicExpression<F>>,
+    SymbolicExpressionExt<F, EF>: Algebra<EF>,
     LG: LookupGadget,
 {
     assert!(is_zk <= 1, "is_zk must be either 0 or 1");
@@ -75,14 +91,14 @@ pub fn get_max_constraint_degree<F, EF, A, LG>(
     air: &A,
     preprocessed_width: usize,
     contexts: &[Lookup<F>],
-    lookup_data: &[LookupData<SymbolicExpression<EF>>],
+    lookup_data: &[LookupData<SymbolicExpressionExt<F, EF>>],
     lookup_gadget: &LG,
 ) -> usize
 where
     F: Field,
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
-    SymbolicExpression<EF>: From<SymbolicExpression<F>>,
+    SymbolicExpressionExt<F, EF>: Algebra<EF>,
     LG: LookupGadget,
 {
     let (base, extension) = get_symbolic_constraints(
@@ -106,14 +122,17 @@ pub fn get_symbolic_constraints<F, EF, A, LG>(
     air: &A,
     preprocessed_width: usize,
     contexts: &[Lookup<F>],
-    lookup_data: &[LookupData<SymbolicExpression<EF>>],
+    lookup_data: &[LookupData<SymbolicExpressionExt<F, EF>>],
     lookup_gadget: &LG,
-) -> (Vec<SymbolicExpression<F>>, Vec<SymbolicExpression<EF>>)
+) -> (
+    Vec<SymbolicExpression<F>>,
+    Vec<SymbolicExpressionExt<F, EF>>,
+)
 where
     F: Field,
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
-    SymbolicExpression<EF>: From<SymbolicExpression<F>>,
+    SymbolicExpressionExt<F, EF>: Algebra<EF>,
     LG: LookupGadget,
 {
     let num_lookups = contexts.len();
@@ -125,6 +144,7 @@ where
         air.num_public_values(),
         num_aux_cols,
         num_challenges,
+        0,
     );
 
     // Evaluate AIR and lookup constraints.

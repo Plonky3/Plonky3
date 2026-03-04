@@ -4,8 +4,8 @@ use p3_air::lookup::LookupEvaluator;
 /// Public re-exports of lookup types.
 pub use p3_air::lookup::{Direction, Kind, Lookup, LookupData, LookupError, LookupInput};
 use p3_air::{
-    AirBuilder, Entry, ExtensionBuilder, PermutationAirBuilder, RowWindow, SymbolicExpression,
-    WindowAccess,
+    AirBuilder, BaseEntry, BaseLeaf, ExtensionBuilder, PermutationAirBuilder, RowWindow,
+    SymbolicExpression, WindowAccess,
 };
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
@@ -20,7 +20,8 @@ pub fn lookup_data_to_expr<F: Clone>(
     lookup_data
         .iter()
         .map(|data| {
-            let expected = SymbolicExpression::Constant(data.expected_cumulated.clone());
+            let expected =
+                SymbolicExpression::Leaf(BaseLeaf::Constant(data.expected_cumulated.clone()));
             LookupData {
                 name: data.name.clone(),
                 aux_idx: data.aux_idx,
@@ -121,7 +122,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
     }
 
     #[inline]
-    fn is_transition(&self) -> Self::Expr {
+    fn is_transition_window(&self, _size: usize) -> Self::Expr {
         Self::F::from_bool(self.row + 1 < self.height)
     }
 
@@ -169,41 +170,45 @@ where
     AB: AirBuilder + PermutationAirBuilder,
 {
     match expr {
-        SymbolicExpression::Variable(v) => match v.entry {
-            Entry::Main { offset } => {
-                let main = builder.main();
-                match offset {
-                    0 => main.current(v.index).unwrap().into(),
-                    1 => main.next(v.index).unwrap().into(),
-                    _ => panic!("Cannot have expressions involving more than two rows."),
+        SymbolicExpression::Leaf(leaf) => match leaf {
+            BaseLeaf::Variable(v) => match v.entry {
+                BaseEntry::Main { offset } => {
+                    let main = builder.main();
+                    match offset {
+                        0 => main.current(v.index).unwrap().into(),
+                        1 => main.next(v.index).unwrap().into(),
+                        _ => panic!("Cannot have expressions involving more than two rows."),
+                    }
                 }
-            }
-            Entry::Public => builder.public_values()[v.index].into(),
-            Entry::Preprocessed { offset } => {
-                let prep = builder
-                    .preprocessed()
-                    .expect("Missing preprocessed columns");
-                match offset {
-                    0 => prep.current(v.index).unwrap().into(),
-                    1 => prep.next(v.index).unwrap().into(),
-                    _ => panic!("Cannot have expressions involving more than two rows."),
+                BaseEntry::Periodic => {
+                    panic!("Periodic columns are not supported in lookup resolution")
                 }
+                BaseEntry::Public => builder.public_values()[v.index].into(),
+                BaseEntry::Preprocessed { offset } => {
+                    let prep = builder
+                        .preprocessed()
+                        .expect("Missing preprocessed columns");
+                    match offset {
+                        0 => prep.current(v.index).unwrap().into(),
+                        1 => prep.next(v.index).unwrap().into(),
+                        _ => panic!("Cannot have expressions involving more than two rows."),
+                    }
+                }
+            },
+            BaseLeaf::IsFirstRow => {
+                warn!("IsFirstRow is not normalized");
+                builder.is_first_row()
             }
-            _ => unimplemented!("Entry type {:?} not supported in interactions", v.entry),
+            BaseLeaf::IsLastRow => {
+                warn!("IsLastRow is not normalized");
+                builder.is_last_row()
+            }
+            BaseLeaf::IsTransition => {
+                warn!("IsTransition is not normalized");
+                builder.is_transition_window(2)
+            }
+            BaseLeaf::Constant(c) => AB::Expr::from(*c),
         },
-        SymbolicExpression::IsFirstRow => {
-            warn!("IsFirstRow is not normalized");
-            builder.is_first_row()
-        }
-        SymbolicExpression::IsLastRow => {
-            warn!("IsLastRow is not normalized");
-            builder.is_last_row()
-        }
-        SymbolicExpression::IsTransition => {
-            warn!("IsTransition is not normalized");
-            builder.is_transition()
-        }
-        SymbolicExpression::Constant(c) => AB::Expr::from(*c),
         SymbolicExpression::Add { x, y, .. } => {
             symbolic_to_expr(builder, x) + symbolic_to_expr(builder, y)
         }

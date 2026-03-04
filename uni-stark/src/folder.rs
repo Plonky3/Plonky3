@@ -97,7 +97,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     }
 
     #[inline]
-    fn is_transition(&self) -> Self::Expr {
+    fn is_transition_window(&self, _size: usize) -> Self::Expr {
         self.is_transition
     }
 
@@ -148,7 +148,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
         self.is_last_row
     }
 
-    fn is_transition(&self) -> Self::Expr {
+    fn is_transition_window(&self, _size: usize) -> Self::Expr {
         self.is_transition
     }
 

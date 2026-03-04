@@ -4,7 +4,7 @@ use core::marker::PhantomData;
 use core::slice::from_ref;
 
 use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
-use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir, BaseLeaf, PermutationAirBuilder, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::{ProverData, StarkInstance, VerificationError, prove_batch, verify_batch};
@@ -238,7 +238,7 @@ where
 
         // Create symbolic air builder to access symbolic variables
         let symbolic_air_builder =
-            SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
+            SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0, 0);
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.current_slice();
 
@@ -259,13 +259,13 @@ where
                     // Lookup for 'a' against a permuted column.
                     (
                         vec![a.into()],
-                        SymbolicExpression::Constant(AB::F::ONE),
+                        SymbolicExpression::Leaf(BaseLeaf::Constant(AB::F::ONE)),
                         Direction::Receive,
                     ),
                     // Provide the range values (this would be done in the trace generation)
                     (
                         vec![lut.into()], // This represents the range values
-                        SymbolicExpression::Constant(AB::F::ONE),
+                        SymbolicExpression::Leaf(BaseLeaf::Constant(AB::F::ONE)),
                         Direction::Send,
                     ),
                 ];
@@ -283,7 +283,7 @@ where
                 // Global lookup between MulAir inputs and FibAir inputs
                 let lookup_inputs = vec![(
                     vec![a.into(), b.into()],
-                    SymbolicExpression::Constant(AB::F::ONE),
+                    SymbolicExpression::Leaf(BaseLeaf::Constant(AB::F::ONE)),
                     Direction::Send, // MulAir sends data to the global lookup
                 )];
 
@@ -405,7 +405,7 @@ impl<AB: PermutationAirBuilder> Air<AB> for FibAirLookups {
         if self.is_global {
             // Create symbolic air builder to access symbolic variables
             let symbolic_air_builder =
-                SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 3, 0, 0);
+                SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 3, 0, 0, 0);
             let symbolic_main = symbolic_air_builder.main();
             let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
@@ -422,7 +422,7 @@ impl<AB: PermutationAirBuilder> Air<AB> for FibAirLookups {
             // Global lookup between FibAir inputs and MulAir inputs
             let lookup_inputs = vec![(
                 vec![left.into(), right.into()],
-                SymbolicExpression::Constant(AB::F::from_u64(multiplicity)),
+                SymbolicExpression::Leaf(BaseLeaf::Constant(AB::F::from_u64(multiplicity))),
                 Direction::Receive, // FibAir receives data from the global lookup
             )];
 
@@ -2101,7 +2101,7 @@ where
 
         // Create symbolic air builder to access symbolic variables
         let symbolic_air_builder =
-            SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
+            SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0, 0);
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.current_slice();
 

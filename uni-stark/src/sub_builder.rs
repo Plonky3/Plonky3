@@ -94,7 +94,7 @@ impl<AB: AirBuilder, SubAir: BaseAir<AB::F>, F> AirBuilder for SubAirBuilder<'_,
         self.inner.is_last_row()
     }
 
-    fn is_transition(&self) -> Self::Expr {
+    fn is_transition_window(&self, _size: usize) -> Self::Expr {
         self.inner.is_transition()
     }
 

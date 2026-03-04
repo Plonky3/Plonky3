@@ -182,7 +182,7 @@ where
         self.is_last_row
     }
 
-    fn is_transition(&self) -> Self::Expr {
+    fn is_transition_window(&self, _size: usize) -> Self::Expr {
         self.is_transition
     }
 

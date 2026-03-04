@@ -122,7 +122,7 @@ impl RangeCheckAir {
 #[test]
 fn range_checked_sub_builder() {
     let air = RangeCheckAir;
-    let mut builder = SymbolicAirBuilder::<BabyBear>::new(0, TRACE_WIDTH, 0, 0, 0);
+    let mut builder = SymbolicAirBuilder::<BabyBear>::new(0, TRACE_WIDTH, 0, 0, 0, 0);
     air.eval(&mut builder);
 
     let constraints = builder.base_constraints();

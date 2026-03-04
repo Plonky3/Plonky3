@@ -47,7 +47,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
     }
 
     #[inline]
-    fn is_transition(&self) -> Self::Expr {
+    fn is_transition_window(&self, _size: usize) -> Self::Expr {
         self.inner.is_transition
     }
 
@@ -132,7 +132,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
     }
 
     #[inline]
-    fn is_transition(&self) -> Self::Expr {
+    fn is_transition_window(&self, _size: usize) -> Self::Expr {
         self.inner.is_transition
     }
 
