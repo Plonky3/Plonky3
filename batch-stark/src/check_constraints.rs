@@ -79,13 +79,16 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
             RowMajorMatrixView::new_row(&*next),
         );
 
-        let preprocessed_rows_data = prep_local.as_ref().zip(prep_next.as_ref());
-        let preprocessed = preprocessed_rows_data.map(|(prep_local, prep_next)| {
-            VerticalPair::new(
-                RowMajorMatrixView::new_row(&**prep_local),
-                RowMajorMatrixView::new_row(&**prep_next),
-            )
-        });
+        let preprocessed = match (prep_local.as_ref(), prep_next.as_ref()) {
+            (Some(l), Some(n)) => VerticalPair::new(
+                RowMajorMatrixView::new_row(&**l),
+                RowMajorMatrixView::new_row(&**n),
+            ),
+            _ => VerticalPair::new(
+                RowMajorMatrixView::new(&[], 0),
+                RowMajorMatrixView::new(&[], 0),
+            ),
+        };
 
         let permutation = VerticalPair::new(
             RowMajorMatrixView::new_row(&*perm_local),

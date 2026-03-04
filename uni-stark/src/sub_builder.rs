@@ -25,26 +25,39 @@ pub struct SubAirBuilder<'a, AB: AirBuilder, SubAir: BaseAir<AB::F>, T> {
     /// Column range (in the parent trace) that the sub-AIR is allowed to see.
     column_range: Range<usize>,
 
+    /// Cached zero-width preprocessed matrix returned by reference.
+    preprocessed: HorizontallyTruncated<AB::Var, AB::M>,
+
     /// Marker for the sub-AIR and witness type.
     _phantom: core::marker::PhantomData<(SubAir, T)>,
 }
 
-impl<'a, AB: AirBuilder, SubAir: BaseAir<AB::F>, T> SubAirBuilder<'a, AB, SubAir, T> {
+impl<'a, AB: AirBuilder, SubAir: BaseAir<AB::F>, T> SubAirBuilder<'a, AB, SubAir, T>
+where
+    AB::M: Clone,
+{
     /// Create a new [`SubAirBuilder`] exposing only `column_range` to the sub-AIR.
     ///
     /// The range must lie entirely inside the parent trace width.
     #[must_use]
-    pub const fn new(inner: &'a mut AB, column_range: Range<usize>) -> Self {
+    pub fn new(inner: &'a mut AB, column_range: Range<usize>) -> Self {
+        let preprocessed =
+            HorizontallyTruncated::new_with_range(inner.preprocessed().clone(), 0..0)
+                .expect("empty range on preprocessed should always succeed");
         Self {
             inner,
             column_range,
+            preprocessed,
             _phantom: core::marker::PhantomData,
         }
     }
 }
 
 /// Implements `AirBuilder` for `SubAirBuilder`.
-impl<AB: AirBuilder, SubAir: BaseAir<AB::F>, F> AirBuilder for SubAirBuilder<'_, AB, SubAir, F> {
+impl<AB: AirBuilder, SubAir: BaseAir<AB::F>, F> AirBuilder for SubAirBuilder<'_, AB, SubAir, F>
+where
+    AB::M: Clone,
+{
     type F = AB::F;
     type Expr = AB::Expr;
     type Var = AB::Var;
@@ -56,6 +69,10 @@ impl<AB: AirBuilder, SubAir: BaseAir<AB::F>, F> AirBuilder for SubAirBuilder<'_,
 
         HorizontallyTruncated::new_with_range(matrix, self.column_range.clone())
             .expect("sub-air column range exceeds parent width")
+    }
+
+    fn preprocessed(&self) -> &Self::M {
+        &self.preprocessed
     }
 
     fn public_values(&self) -> &[Self::PublicVar] {

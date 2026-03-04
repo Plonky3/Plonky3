@@ -62,7 +62,7 @@ pub trait LookupGadget: LookupEvaluator {
 /// A builder to generate the lookup traces, given the main trace, public values and permutation challenges.
 pub struct LookupTraceBuilder<'a, SC: StarkGenericConfig> {
     main: ViewPair<'a, Val<SC>>,
-    preprocessed: Option<ViewPair<'a, Val<SC>>>,
+    preprocessed: ViewPair<'a, Val<SC>>,
     public_values: &'a [Val<SC>],
     permutation_challenges: &'a [SC::Challenge],
     height: usize,
@@ -72,7 +72,7 @@ pub struct LookupTraceBuilder<'a, SC: StarkGenericConfig> {
 impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
     pub const fn new(
         main: ViewPair<'a, Val<SC>>,
-        preprocessed: Option<ViewPair<'a, Val<SC>>>,
+        preprocessed: ViewPair<'a, Val<SC>>,
         public_values: &'a [Val<SC>],
         permutation_challenges: &'a [SC::Challenge],
         height: usize,
@@ -101,8 +101,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
         self.main
     }
 
-    fn preprocessed(&self) -> Option<Self::M> {
-        self.preprocessed
+    fn preprocessed(&self) -> &Self::M {
+        &self.preprocessed
     }
 
     #[inline]
@@ -185,18 +185,8 @@ where
                 }
                 BaseEntry::Public => builder.public_values()[v.index].into(),
                 BaseEntry::Preprocessed { offset } => match offset {
-                    0 => builder
-                        .preprocessed()
-                        .expect("Missing preprocessed columns")
-                        .row_slice(0)
-                        .unwrap()[v.index]
-                        .into(),
-                    1 => builder
-                        .preprocessed()
-                        .expect("Missing preprocessed columns")
-                        .row_slice(1)
-                        .unwrap()[v.index]
-                        .into(),
+                    0 => builder.preprocessed().row_slice(0).unwrap()[v.index].into(),
+                    1 => builder.preprocessed().row_slice(1).unwrap()[v.index].into(),
                     _ => panic!("Cannot have expressions involving more than two rows."),
                 },
             },

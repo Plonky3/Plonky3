@@ -14,7 +14,7 @@ use p3_lookup::folder::ProverConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::lookup_traits::{Kind, Lookup, LookupData, LookupGadget};
 use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
 use p3_uni_stark::{OpenedValues, PackedChallenge, PackedVal, ProverConstraintFolder};
 use p3_util::log2_strict_usize;
@@ -782,7 +782,9 @@ where
             let accumulator = PackedChallenge::<SC>::ZERO;
             let inner_folder = ProverConstraintFolder {
                 main: main.as_view(),
-                preprocessed: preprocessed.as_ref().map(|m| m.as_view()),
+                preprocessed: preprocessed
+                    .as_ref()
+                    .map_or_else(|| RowMajorMatrixView::new(&[], 0), |m| m.as_view()),
                 public_values,
                 is_first_row,
                 is_last_row,

@@ -16,8 +16,9 @@ use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
 pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     /// The [`RowMajorMatrixView`] containing rows on which the constraint polynomial is evaluated.
     pub main: RowMajorMatrixView<'a, PackedVal<SC>>,
-    /// The preprocessed columns (if any) as a [`RowMajorMatrixView`].
-    pub preprocessed: Option<RowMajorMatrixView<'a, PackedVal<SC>>>,
+    /// The preprocessed columns as a [`RowMajorMatrixView`].
+    /// Zero-width when the AIR has no preprocessed trace.
+    pub preprocessed: RowMajorMatrixView<'a, PackedVal<SC>>,
     /// Public inputs to the [AIR](`p3_air::Air`) implementation.
     pub public_values: &'a [Val<SC>],
     /// Evaluations of the Selector polynomial for the first row of the trace
@@ -45,8 +46,9 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
 pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
     /// Pair of consecutive rows from the committed polynomial evaluations as a [`ViewPair`].
     pub main: ViewPair<'a, SC::Challenge>,
-    /// The preprocessed columns (if any) as a [`ViewPair`].
-    pub preprocessed: Option<ViewPair<'a, SC::Challenge>>,
+    /// The preprocessed columns as a [`ViewPair`].
+    /// Zero-width when the AIR has no preprocessed trace.
+    pub preprocessed: ViewPair<'a, SC::Challenge>,
     /// Public values that are inputs to the computation
     pub public_values: &'a [Val<SC>],
     /// Evaluations of the Selector polynomial for the first row of the trace
@@ -73,8 +75,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
         self.main
     }
 
-    fn preprocessed(&self) -> Option<Self::M> {
-        self.preprocessed
+    fn preprocessed(&self) -> &Self::M {
+        &self.preprocessed
     }
 
     #[inline]
@@ -135,8 +137,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
         self.main
     }
 
-    fn preprocessed(&self) -> Option<Self::M> {
-        self.preprocessed
+    fn preprocessed(&self) -> &Self::M {
+        &self.preprocessed
     }
 
     fn public_values(&self) -> &[Self::PublicVar] {
