@@ -182,7 +182,8 @@ impl AirBuilder for MockAirBuilder {
         F::from_bool(self.current_row == self.height - 1)
     }
 
-    fn is_transition_window(&self, _size: usize) -> Self::Expr {
+    fn is_transition_window(&self, size: usize) -> Self::Expr {
+        assert!(size <= 2, "only two-row windows are supported, got {size}");
         F::from_bool(self.current_row < self.height - 1)
     }
 

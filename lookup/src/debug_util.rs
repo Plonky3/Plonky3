@@ -237,7 +237,8 @@ impl<'a, F: Field> AirBuilder for MiniLookupBuilder<'a, F> {
         F::from_bool(self.row + 1 == self.height)
     }
 
-    fn is_transition_window(&self, _size: usize) -> Self::Expr {
+    fn is_transition_window(&self, size: usize) -> Self::Expr {
+        assert!(size <= 2, "only two-row windows are supported, got {size}");
         F::from_bool(self.row + 1 < self.height)
     }
 

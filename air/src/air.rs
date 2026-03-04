@@ -3,16 +3,19 @@ use alloc::vec::Vec;
 use core::ops::{Add, Mul, Sub};
 
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 
 use crate::lookup::{Kind, Lookup, LookupData, LookupEvaluator, LookupInput};
 
-/// Read access to two consecutive trace rows.
+/// Read access to a pair of trace rows (typically current and next).
+///
+/// Implementors expose two flat slices that constraint evaluators use
+/// to express algebraic relations between rows.
 pub trait WindowAccess<T> {
     /// Full slice of the current row.
     fn current_slice(&self) -> &[T];
 
-    /// Full slice of the row immediately after the current one.
+    /// Full slice of the next row.
     fn next_slice(&self) -> &[T];
 
     /// Single element from the current row by index.
@@ -38,39 +41,44 @@ pub trait WindowAccess<T> {
     }
 }
 
-/// A two-row window into a trace matrix.
+/// A lightweight two-row window into a trace matrix.
 ///
-/// Holds references to the current row and the row that follows it.
-/// Constraint evaluation reads from these slices to express algebraic
-/// relations between consecutive trace rows.
+/// Stores two `&[T]` slices — one for the current row and one for
+/// the next — without carrying any matrix metadata.  This is cheaper
+/// than a full `ViewPair` and is the concrete type used by most
+/// [`AirBuilder`] implementations for `type M`.
 #[derive(Debug, Clone, Copy)]
 pub struct RowWindow<'a, T> {
     /// The current row.
     current: &'a [T],
-    /// The row immediately after the current one.
+    /// The next row.
     next: &'a [T],
 }
 
 impl<'a, T> RowWindow<'a, T> {
-    /// Create a window by splitting a flat slice of `2 * width` elements
-    /// into a current row and a next row.
+    /// Create a window from a [`RowMajorMatrixView`] that has exactly
+    /// two rows. The first row becomes `current`, the second `next`.
     ///
     /// # Panics
     ///
-    /// Panics if `slice.len()` is not exactly `2 * width`.
+    /// Panics if the view does not contain exactly `2 * width` elements.
     #[inline]
-    pub fn from_flat(slice: &'a [T], width: usize) -> Self {
+    pub fn from_view(view: RowMajorMatrixView<'a, T>) -> Self {
+        let width = view.width;
         assert_eq!(
-            slice.len(),
+            view.values.len(),
             2 * width,
-            "RowWindow::from_flat: expected slice of length 2*{width}, got {}",
-            slice.len()
+            "RowWindow::from_view: expected 2 rows (2*{width} elements), got {}",
+            view.values.len()
         );
-        let (current, next) = slice.split_at(width);
+        let (current, next) = view.values.split_at(width);
         Self { current, next }
     }
 
     /// Create a window from two separate row slices.
+    ///
+    /// The caller is responsible for providing slices that represent
+    /// the intended (current, next) pair.
     ///
     /// # Panics
     ///
@@ -358,6 +366,11 @@ pub trait AirBuilder: Sized {
 
     /// Expression evaluating to 1 on all rows where a window of `size` consecutive
     /// rows is available, 0 elsewhere.
+    ///
+    /// # Panics
+    ///
+    /// Implementations should panic if `size > 2`, since only two-row
+    /// windows are currently supported.
     fn is_transition_window(&self, size: usize) -> Self::Expr;
 
     /// Returns a sub-builder whose constraints are enforced only when `condition` is nonzero.

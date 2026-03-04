@@ -70,15 +70,11 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
 
     #[inline]
     fn main(&self) -> Self::M {
-        let w = self.main.width;
-        RowWindow::from_flat(self.main.values, w)
+        RowWindow::from_view(self.main)
     }
 
     fn preprocessed(&self) -> Option<Self::M> {
-        self.preprocessed.map(|p| {
-            let w = p.width;
-            RowWindow::from_flat(p.values, w)
-        })
+        self.preprocessed.map(RowWindow::from_view)
     }
 
     #[inline]
@@ -97,7 +93,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     }
 
     #[inline]
-    fn is_transition_window(&self, _size: usize) -> Self::Expr {
+    fn is_transition_window(&self, size: usize) -> Self::Expr {
+        assert!(size <= 2, "only two-row windows are supported, got {size}");
         self.is_transition
     }
 
@@ -148,7 +145,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
         self.is_last_row
     }
 
-    fn is_transition_window(&self, _size: usize) -> Self::Expr {
+    fn is_transition_window(&self, size: usize) -> Self::Expr {
+        assert!(size <= 2, "only two-row windows are supported, got {size}");
         self.is_transition
     }
 

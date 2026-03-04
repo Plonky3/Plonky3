@@ -20,15 +20,11 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
     type M = RowWindow<'a, PackedVal<SC>>;
 
     fn main(&self) -> Self::M {
-        let w = self.inner.main.width;
-        RowWindow::from_flat(self.inner.main.values, w)
+        RowWindow::from_view(self.inner.main)
     }
 
     fn preprocessed(&self) -> Option<Self::M> {
-        self.inner.preprocessed.map(|p| {
-            let w = p.width;
-            RowWindow::from_flat(p.values, w)
-        })
+        self.inner.preprocessed.map(RowWindow::from_view)
     }
 
     #[inline]
@@ -47,7 +43,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
     }
 
     #[inline]
-    fn is_transition_window(&self, _size: usize) -> Self::Expr {
+    fn is_transition_window(&self, size: usize) -> Self::Expr {
+        assert!(size <= 2, "only two-row windows are supported, got {size}");
         self.inner.is_transition
     }
 
@@ -84,8 +81,7 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder
     type MP = RowWindow<'a, PackedChallenge<SC>>;
 
     fn permutation(&self) -> Self::MP {
-        let w = self.permutation.width;
-        RowWindow::from_flat(self.permutation.values, w)
+        RowWindow::from_view(self.permutation)
     }
 
     fn permutation_randomness(&self) -> &[PackedChallenge<SC>] {
@@ -132,7 +128,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
     }
 
     #[inline]
-    fn is_transition_window(&self, _size: usize) -> Self::Expr {
+    fn is_transition_window(&self, size: usize) -> Self::Expr {
+        assert!(size <= 2, "only two-row windows are supported, got {size}");
         self.inner.is_transition
     }
 
