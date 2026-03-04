@@ -155,6 +155,7 @@ pub struct SymbolicAirBuilder<F: Field, EF: ExtensionField<F> = F> {
     permutation: RowMajorMatrix<SymbolicVariableExt<F, EF>>,
     permutation_challenges: Vec<SymbolicVariableExt<F, EF>>,
     extension_constraints: Vec<SymbolicExpressionExt<F, EF>>,
+    constraint_types: Vec<ConstraintType>,
 }
 
 impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
@@ -208,6 +209,23 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
             permutation,
             permutation_challenges,
             extension_constraints: vec![],
+            constraint_types: vec![],
+        }
+    }
+
+    /// Return the constraint layout mapping global indices to base/ext streams.
+    pub fn constraint_layout(&self) -> ConstraintLayout {
+        let mut base_indices = Vec::new();
+        let mut ext_indices = Vec::new();
+        for (idx, kind) in self.constraint_types.iter().enumerate() {
+            match kind {
+                ConstraintType::Base => base_indices.push(idx),
+                ConstraintType::Ext => ext_indices.push(idx),
+            }
+        }
+        ConstraintLayout {
+            base_indices,
+            ext_indices,
         }
     }
 
@@ -259,6 +277,7 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         self.base_constraints.push(x.into());
+        self.constraint_types.push(ConstraintType::Base);
     }
 }
 
@@ -275,6 +294,7 @@ where
         I: Into<Self::ExprEF>,
     {
         self.extension_constraints.push(x.into());
+        self.constraint_types.push(ConstraintType::Ext);
     }
 }
 
@@ -301,6 +321,117 @@ impl<F: Field, EF: ExtensionField<F>> PeriodicAirBuilder for SymbolicAirBuilder<
     fn periodic_values(&self) -> &[Self::PeriodicVar] {
         &self.periodic
     }
+}
+
+// ============================================================================
+// Constraint Layout
+// ============================================================================
+
+/// Tracks whether a constraint was emitted via `assert_zero` (base) or `assert_zero_ext` (ext).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConstraintType {
+    Base,
+    Ext,
+}
+
+/// Maps between global constraint indices and the separated base/ext streams.
+///
+/// When alpha powers are pre-computed in global order `[α^{N−1}, …, α⁰]`,
+/// the layout tells us which powers correspond to base-field constraints (for
+/// `packed_linear_combination`) and which to extension-field constraints.
+#[derive(Debug, Default)]
+pub struct ConstraintLayout {
+    /// Global indices of base-field constraints, in emission order.
+    pub base_indices: Vec<usize>,
+    /// Global indices of extension-field constraints, in emission order.
+    pub ext_indices: Vec<usize>,
+}
+
+impl ConstraintLayout {
+    /// Total number of constraints (base + extension).
+    pub const fn total_constraints(&self) -> usize {
+        self.base_indices.len() + self.ext_indices.len()
+    }
+
+    /// Decompose `α` into reordered powers for base and extension constraints.
+    ///
+    /// Returns `(base_alpha_powers, ext_alpha_powers)` where:
+    /// - `base_alpha_powers[d][j]` = d-th basis coefficient of the alpha power for
+    ///   the j-th base constraint (transposed + reordered for `packed_linear_combination`)
+    /// - `ext_alpha_powers[j]` = full EF alpha power for the j-th extension constraint
+    ///
+    /// Constraints are emitted in one global order and folded into a single random
+    /// linear combination using powers of `α`:
+    ///
+    /// `C_fold(X) = Σ_{i=0..K−1} α^{K−1−i} · Cᵢ(X)`.
+    ///
+    /// We use descending powers because the verifier evaluates the fold at a single
+    /// point via Horner (streaming): `acc = acc·α + Cᵢ`.
+    ///
+    /// The prover accumulates base-field constraints with packed (SIMD) arithmetic for
+    /// throughput, while extension constraints must stay in the extension field. This
+    /// method splits the precomputed powers accordingly, and also transposes EF powers
+    /// into their base-field coordinates so the base-field path can use
+    /// `packed_linear_combination` without repeated cross-field conversions.
+    pub fn decompose_alpha<F: Field, EF: ExtensionField<F>>(
+        &self,
+        alpha: EF,
+    ) -> (Vec<Vec<F>>, Vec<EF>) {
+        let total = self.total_constraints();
+
+        // alpha_powers[i] = α^{total − 1 − i}, so constraint i gets
+        // weight α^{total − 1 − i} in the linear combination.
+        let mut alpha_powers: Vec<EF> = alpha.powers().take(total).collect();
+        alpha_powers.reverse();
+
+        // Base: transpose EF -> [F; D] and reorder by base_indices in one pass
+        let base_alpha_powers: Vec<Vec<F>> = (0..EF::DIMENSION)
+            .map(|d| {
+                self.base_indices
+                    .iter()
+                    .map(|&idx| alpha_powers[idx].as_basis_coefficients_slice()[d])
+                    .collect()
+            })
+            .collect();
+
+        // Ext: pick full EF powers by ext_indices
+        let ext_alpha_powers: Vec<EF> = self
+            .ext_indices
+            .iter()
+            .map(|&idx| alpha_powers[idx])
+            .collect();
+
+        (base_alpha_powers, ext_alpha_powers)
+    }
+}
+
+/// Evaluate the AIR symbolically and return the constraint layout.
+///
+/// This runs `air.eval()` on a [`SymbolicAirBuilder`] to discover which constraints
+/// are base-field vs extension-field, and their global ordering. The layout is used
+/// by the prover to reorder decomposed alpha powers for efficient accumulation.
+///
+/// Most builder dimensions are derived from the AIR trait methods. `num_public_values`
+/// is passed explicitly because `BaseAirWithPublicValues::num_public_values` defaults
+/// to 0 and many AIRs do not override it.
+#[instrument(name = "compute constraint layout", skip_all, level = "debug")]
+pub fn get_constraint_layout<F, EF, A>(air: &A, preprocessed_width: usize) -> ConstraintLayout
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: Air<SymbolicAirBuilder<F, EF>>,
+    SymbolicExpression<EF>: Algebra<SymbolicExpression<F>>,
+{
+    let mut builder = SymbolicAirBuilder::new(
+        preprocessed_width,
+        air.width(),
+        air.num_public_values(),
+        0,
+        0,
+        0,
+    );
+    air.eval(&mut builder);
+    builder.constraint_layout()
 }
 
 #[cfg(test)]
