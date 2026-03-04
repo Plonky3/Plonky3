@@ -14,13 +14,28 @@ use crate::{
     SymbolicExpression, SymbolicVariable,
 };
 
+/// Describes the shape of an AIR for symbolic constraint evaluation.
+///
+/// Bundles the various width/count parameters needed to construct a
+/// [`SymbolicAirBuilder`], replacing the 6-parameter signatures with a
+/// single value.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AirLayout {
+    pub preprocessed_width: usize,
+    pub main_width: usize,
+    pub num_public_values: usize,
+    pub permutation_width: usize,
+    pub num_permutation_challenges: usize,
+    pub num_periodic_columns: usize,
+}
+
 #[instrument(skip_all, level = "debug")]
-pub fn get_max_constraint_degree<F, A>(air: &A, preprocessed_width: usize) -> usize
+pub fn get_max_constraint_degree<F, A>(air: &A, layout: AirLayout) -> usize
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
-    get_max_constraint_degree_extension(air, preprocessed_width, 0, 0)
+    get_max_constraint_degree_extension(air, layout)
 }
 
 #[instrument(
@@ -28,23 +43,13 @@ where
     skip_all,
     level = "debug"
 )]
-pub fn get_max_constraint_degree_extension<F, EF, A>(
-    air: &A,
-    preprocessed_width: usize,
-    permutation_width: usize,
-    num_permutation_challenges: usize,
-) -> usize
+pub fn get_max_constraint_degree_extension<F, EF, A>(air: &A, layout: AirLayout) -> usize
 where
     F: Field,
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
 {
-    let (base_constraints, extension_constraints) = get_all_symbolic_constraints(
-        air,
-        preprocessed_width,
-        permutation_width,
-        num_permutation_challenges,
-    );
+    let (base_constraints, extension_constraints) = get_all_symbolic_constraints(air, layout);
 
     let base_degree = base_constraints
         .iter()
@@ -65,22 +70,12 @@ where
     skip_all,
     level = "debug"
 )]
-pub fn get_symbolic_constraints<F, A>(
-    air: &A,
-    preprocessed_width: usize,
-) -> Vec<SymbolicExpression<F>>
+pub fn get_symbolic_constraints<F, A>(air: &A, layout: AirLayout) -> Vec<SymbolicExpression<F>>
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
-    let mut builder = SymbolicAirBuilder::new(
-        preprocessed_width,
-        air.width(),
-        air.num_public_values(),
-        0,
-        0,
-        0,
-    );
+    let mut builder = SymbolicAirBuilder::new(layout);
     air.eval(&mut builder);
     builder.base_constraints()
 }
@@ -92,23 +87,14 @@ where
 )]
 pub fn get_symbolic_constraints_extension<F, EF, A>(
     air: &A,
-    preprocessed_width: usize,
-    permutation_width: usize,
-    num_permutation_challenges: usize,
+    layout: AirLayout,
 ) -> Vec<SymbolicExpressionExt<F, EF>>
 where
     F: Field,
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
 {
-    let mut builder = SymbolicAirBuilder::new(
-        preprocessed_width,
-        air.width(),
-        air.num_public_values(),
-        permutation_width,
-        num_permutation_challenges,
-        0,
-    );
+    let mut builder = SymbolicAirBuilder::new(layout);
     air.eval(&mut builder);
     builder.extension_constraints()
 }
@@ -120,9 +106,7 @@ where
 )]
 pub fn get_all_symbolic_constraints<F, EF, A>(
     air: &A,
-    preprocessed_width: usize,
-    permutation_width: usize,
-    num_permutation_challenges: usize,
+    layout: AirLayout,
 ) -> (
     Vec<SymbolicExpression<F>>,
     Vec<SymbolicExpressionExt<F, EF>>,
@@ -132,14 +116,7 @@ where
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
 {
-    let mut builder = SymbolicAirBuilder::new(
-        preprocessed_width,
-        air.width(),
-        air.num_public_values(),
-        permutation_width,
-        num_permutation_challenges,
-        0,
-    );
+    let mut builder = SymbolicAirBuilder::new(layout);
     air.eval(&mut builder);
     (builder.base_constraints(), builder.extension_constraints())
 }
@@ -159,14 +136,15 @@ pub struct SymbolicAirBuilder<F: Field, EF: ExtensionField<F> = F> {
 }
 
 impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
-    pub fn new(
-        preprocessed_width: usize,
-        width: usize,
-        num_public_values: usize,
-        permutation_width: usize,
-        num_permutation_challenges: usize,
-        num_periodic_columns: usize,
-    ) -> Self {
+    pub fn new(layout: AirLayout) -> Self {
+        let AirLayout {
+            preprocessed_width,
+            main_width,
+            num_public_values,
+            permutation_width,
+            num_permutation_challenges,
+            num_periodic_columns,
+        } = layout;
         let prep_values = [0, 1]
             .into_iter()
             .flat_map(|offset| {
@@ -178,7 +156,7 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
         let main_values = [0, 1]
             .into_iter()
             .flat_map(|offset| {
-                (0..width)
+                (0..main_width)
                     .map(move |index| SymbolicVariable::new(BaseEntry::Main { offset }, index))
             })
             .collect();
@@ -202,7 +180,7 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
             .collect();
         Self {
             preprocessed: RowMajorMatrix::new(prep_values, preprocessed_width),
-            main: RowMajorMatrix::new(main_values, width),
+            main: RowMajorMatrix::new(main_values, main_width),
             public_values,
             periodic,
             base_constraints: vec![],
@@ -415,21 +393,14 @@ impl ConstraintLayout {
 /// is passed explicitly because `BaseAirWithPublicValues::num_public_values` defaults
 /// to 0 and many AIRs do not override it.
 #[instrument(name = "compute constraint layout", skip_all, level = "debug")]
-pub fn get_constraint_layout<F, EF, A>(air: &A, preprocessed_width: usize) -> ConstraintLayout
+pub fn get_constraint_layout<F, EF, A>(air: &A, layout: AirLayout) -> ConstraintLayout
 where
     F: Field,
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
     SymbolicExpression<EF>: Algebra<SymbolicExpression<F>>,
 {
-    let mut builder = SymbolicAirBuilder::new(
-        preprocessed_width,
-        air.width(),
-        air.num_public_values(),
-        0,
-        0,
-        0,
-    );
+    let mut builder = SymbolicAirBuilder::new(layout);
     air.eval(&mut builder);
     builder.constraint_layout()
 }
@@ -465,13 +436,40 @@ mod tests {
         }
     }
 
+    fn layout(preprocessed_width: usize, main_width: usize, num_public_values: usize) -> AirLayout {
+        AirLayout {
+            preprocessed_width,
+            main_width,
+            num_public_values,
+            ..Default::default()
+        }
+    }
+
+    fn layout_with_perm(
+        preprocessed_width: usize,
+        main_width: usize,
+        num_public_values: usize,
+        permutation_width: usize,
+        num_permutation_challenges: usize,
+    ) -> AirLayout {
+        AirLayout {
+            preprocessed_width,
+            main_width,
+            num_public_values,
+            permutation_width,
+            num_permutation_challenges,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn test_get_max_constraint_degree_no_constraints() {
         let air = MockAir {
             constraints: vec![],
             width: 4,
         };
-        let max_degree = get_max_constraint_degree(&air, 3);
+        let l = layout(3, air.width, air.num_public_values());
+        let max_degree = get_max_constraint_degree(&air, l);
         assert_eq!(
             max_degree, 0,
             "No constraints should result in a degree of 0"
@@ -488,7 +486,8 @@ mod tests {
             ],
             width: 4,
         };
-        let max_degree = get_max_constraint_degree(&air, 3);
+        let l = layout(3, air.width, air.num_public_values());
+        let max_degree = get_max_constraint_degree(&air, l);
         assert_eq!(max_degree, 1, "Max constraint degree should be 1");
     }
 
@@ -502,7 +501,8 @@ mod tests {
             width: 4,
         };
 
-        let constraints = get_symbolic_constraints(&air, 3);
+        let l = layout(3, air.width, air.num_public_values());
+        let constraints = get_symbolic_constraints(&air, l);
 
         assert_eq!(constraints.len(), 2, "Should return exactly 2 constraints");
 
@@ -519,7 +519,7 @@ mod tests {
 
     #[test]
     fn test_symbolic_air_builder_initialization() {
-        let builder = SymbolicAirBuilder::<F>::new(2, 4, 3, 0, 0, 0);
+        let builder = SymbolicAirBuilder::<F>::new(layout(2, 4, 3));
 
         let expected_main = [
             SymbolicVariable::<F>::new(BaseEntry::Main { offset: 0 }, 0),
@@ -548,7 +548,7 @@ mod tests {
 
     #[test]
     fn test_symbolic_air_builder_is_first_last_row() {
-        let builder = SymbolicAirBuilder::<F>::new(2, 4, 3, 0, 0, 0);
+        let builder = SymbolicAirBuilder::<F>::new(layout(2, 4, 3));
 
         assert!(
             matches!(
@@ -569,7 +569,7 @@ mod tests {
 
     #[test]
     fn test_symbolic_air_builder_assert_zero() {
-        let mut builder = SymbolicAirBuilder::<F>::new(2, 4, 3, 0, 0, 0);
+        let mut builder = SymbolicAirBuilder::<F>::new(layout(2, 4, 3));
         let expr = SymbolicExpression::Leaf(BaseLeaf::Constant(F::new(5)));
         builder.assert_zero(expr);
 
@@ -587,7 +587,7 @@ mod tests {
     #[test]
     fn test_is_transition_window_size_2() {
         // Window size 2 returns the transition selector.
-        let builder = SymbolicAirBuilder::<F>::new(0, 2, 0, 0, 0, 0);
+        let builder = SymbolicAirBuilder::<F>::new(layout(0, 2, 0));
         let expr = builder.is_transition_window(2);
         assert!(matches!(
             expr,
@@ -599,14 +599,14 @@ mod tests {
     #[should_panic(expected = "uni-stark only supports a window size of 2")]
     fn test_is_transition_window_size_3_panics() {
         // Window size 3 is not supported and should panic.
-        let builder = SymbolicAirBuilder::<F>::new(0, 2, 0, 0, 0, 0);
+        let builder = SymbolicAirBuilder::<F>::new(layout(0, 2, 0));
         let _ = builder.is_transition_window(3);
     }
 
     #[test]
     fn test_main_returns_correct_dimensions() {
         // The main matrix has 2 rows (one per offset) and the given width.
-        let builder = SymbolicAirBuilder::<F>::new(0, 3, 0, 0, 0, 0);
+        let builder = SymbolicAirBuilder::<F>::new(layout(0, 3, 0));
         let main = builder.main();
 
         // 2 rows times 3 columns gives 6 entries.
@@ -625,7 +625,7 @@ mod tests {
     #[test]
     fn test_preprocessed_returns_correct_dimensions() {
         // The preprocessed matrix has 2 rows and the given preprocessed width.
-        let builder = SymbolicAirBuilder::<F>::new(2, 3, 0, 0, 0, 0);
+        let builder = SymbolicAirBuilder::<F>::new(layout(2, 3, 0));
         let prep = builder.preprocessed();
 
         // 2 rows times 2 columns gives 4 entries.
@@ -639,14 +639,14 @@ mod tests {
     #[test]
     fn test_preprocessed_returns_none_when_width_is_zero() {
         // A builder with zero preprocessed columns should report no preprocessed trace.
-        let builder = SymbolicAirBuilder::<F>::new(0, 3, 0, 0, 0, 0);
+        let builder = SymbolicAirBuilder::<F>::new(layout(0, 3, 0));
         assert_eq!(builder.preprocessed().width, 0);
     }
 
     #[test]
     fn test_public_values_correct_count_and_entries() {
         // All public value variables have the public entry kind.
-        let builder = SymbolicAirBuilder::<F>::new(0, 2, 5, 0, 0, 0);
+        let builder = SymbolicAirBuilder::<F>::new(layout(0, 2, 5));
         let pv = builder.public_values();
         assert_eq!(pv.len(), 5);
         for (i, var) in pv.iter().enumerate() {
@@ -658,7 +658,7 @@ mod tests {
     #[test]
     fn test_assert_zero_ext_records_constraint() {
         // Asserting an extension constraint records it in the builder.
-        let mut builder = SymbolicAirBuilder::<F, EF>::new(0, 2, 0, 2, 1, 0);
+        let mut builder = SymbolicAirBuilder::<F, EF>::new(layout_with_perm(0, 2, 0, 2, 1));
         let expr = SymbolicExpressionExt::<F, EF>::from(F::new(7));
         builder.assert_zero_ext(expr);
         let ext_constraints = builder.extension_constraints();
@@ -668,14 +668,14 @@ mod tests {
     #[test]
     fn test_extension_constraints_initially_empty() {
         // A fresh builder starts with no extension constraints.
-        let builder = SymbolicAirBuilder::<F, EF>::new(0, 2, 0, 0, 0, 0);
+        let builder = SymbolicAirBuilder::<F, EF>::new(layout(0, 2, 0));
         assert!(builder.extension_constraints().is_empty());
     }
 
     #[test]
     fn test_permutation_returns_correct_dimensions() {
         // The permutation matrix has 2 rows and the given permutation width.
-        let builder = SymbolicAirBuilder::<F, EF>::new(0, 2, 0, 3, 0, 0);
+        let builder = SymbolicAirBuilder::<F, EF>::new(layout_with_perm(0, 2, 0, 3, 0));
         let perm = builder.permutation();
 
         // 2 rows times 3 columns gives 6 entries.
@@ -688,7 +688,7 @@ mod tests {
     #[test]
     fn test_permutation_randomness_correct_count() {
         // All challenge variables have the challenge entry kind.
-        let builder = SymbolicAirBuilder::<F, EF>::new(0, 2, 0, 2, 4, 0);
+        let builder = SymbolicAirBuilder::<F, EF>::new(layout_with_perm(0, 2, 0, 2, 4));
         let challenges = builder.permutation_randomness();
         assert_eq!(challenges.len(), 4);
         for (i, var) in challenges.iter().enumerate() {
@@ -724,7 +724,8 @@ mod tests {
     fn test_get_symbolic_constraints_extension() {
         // Only the extension constraint is returned.
         let air = ExtMockAir { width: 2 };
-        let ext_constraints = get_symbolic_constraints_extension::<F, EF, _>(&air, 0, 3, 1);
+        let l = layout_with_perm(0, air.width, air.num_public_values(), 3, 1);
+        let ext_constraints = get_symbolic_constraints_extension::<F, EF, _>(&air, l);
         assert_eq!(ext_constraints.len(), 1);
     }
 
@@ -732,7 +733,8 @@ mod tests {
     fn test_get_all_symbolic_constraints() {
         // Both the base and extension constraint are returned.
         let air = ExtMockAir { width: 2 };
-        let (base, ext) = get_all_symbolic_constraints::<F, EF, _>(&air, 0, 3, 1);
+        let l = layout_with_perm(0, air.width, air.num_public_values(), 3, 1);
+        let (base, ext) = get_all_symbolic_constraints::<F, EF, _>(&air, l);
         assert_eq!(base.len(), 1);
         assert_eq!(ext.len(), 1);
     }
@@ -741,7 +743,8 @@ mod tests {
     fn test_get_max_constraint_degree_extension() {
         // The max degree covers both base and extension constraints.
         let air = ExtMockAir { width: 2 };
-        let max_deg = get_max_constraint_degree_extension::<F, EF, _>(&air, 0, 3, 1);
+        let l = layout_with_perm(0, air.width, air.num_public_values(), 3, 1);
+        let max_deg = get_max_constraint_degree_extension::<F, EF, _>(&air, l);
 
         // Both constraints are single variables with degree 1.
         assert_eq!(max_deg, 1);

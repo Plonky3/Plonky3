@@ -3,7 +3,7 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use core::slice::from_ref;
 
-use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
+use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpression};
 use p3_air::{Air, AirBuilder, BaseAir, BaseLeaf, PermutationAirBuilder};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
@@ -241,8 +241,10 @@ where
         self.num_lookups = 0;
 
         // Create symbolic air builder to access symbolic variables
-        let symbolic_air_builder =
-            SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0, 0);
+        let symbolic_air_builder = SymbolicAirBuilder::<AB::F>::new(AirLayout {
+            main_width: BaseAir::<AB::F>::width(self),
+            ..Default::default()
+        });
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
@@ -408,8 +410,11 @@ impl<AB: PermutationAirBuilder> Air<AB> for FibAirLookups {
 
         if self.is_global {
             // Create symbolic air builder to access symbolic variables
-            let symbolic_air_builder =
-                SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 3, 0, 0, 0);
+            let symbolic_air_builder = SymbolicAirBuilder::<AB::F>::new(AirLayout {
+                main_width: BaseAir::<AB::F>::width(self),
+                num_public_values: 3,
+                ..Default::default()
+            });
             let symbolic_main = symbolic_air_builder.main();
             let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
@@ -2121,8 +2126,10 @@ where
         self.num_lookups = 0;
 
         // Create symbolic air builder to access symbolic variables
-        let symbolic_air_builder =
-            SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0, 0);
+        let symbolic_air_builder = SymbolicAirBuilder::<AB::F>::new(AirLayout {
+            main_width: BaseAir::<AB::F>::width(self),
+            ..Default::default()
+        });
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
