@@ -23,9 +23,7 @@ use tracing::{debug_span, info_span, instrument};
 use crate::common::{CommonData, ProverData, get_perm_challenges};
 use crate::config::{Challenge, Domain, StarkGenericConfig as SGC, Val, observe_instance_binding};
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
-use crate::symbolic::{
-    get_log_num_quotient_chunks, get_symbolic_constraints, lookup_data_to_ext_expr,
-};
+use crate::symbolic::{get_log_num_quotient_chunks, get_symbolic_constraints};
 
 #[derive(Debug)]
 pub struct StarkInstance<'a, SC: SGC, A> {
@@ -142,7 +140,7 @@ where
                         air,
                         pre_w,
                         &all_lookups[i],
-                        &lookup_data_to_ext_expr(&lookup_data[i]),
+                        &lookup_data[i],
                         config.is_zk(),
                         &lookup_gadget,
                     )
@@ -307,7 +305,7 @@ where
                     airs[i],
                     preprocessed_widths[i],
                     &all_lookups[i],
-                    &lookup_data_to_ext_expr(&lookup_data[i]),
+                    &lookup_data[i],
                     &lookup_gadget,
                 )
                 .0
@@ -318,7 +316,7 @@ where
                 airs[i],
                 preprocessed_widths[i],
                 &all_lookups[i],
-                &lookup_data_to_ext_expr(&lookup_data[i]),
+                &lookup_data[i],
                 &lookup_gadget,
             );
             base_constraints.len() + extension_constraints.len()
@@ -331,7 +329,7 @@ where
                     airs[i],
                     preprocessed_widths[i],
                     &all_lookups[i],
-                    &lookup_data_to_ext_expr(&lookup_data[i]),
+                    &lookup_data[i],
                     &lookup_gadget,
                 )
                 .0
@@ -343,7 +341,7 @@ where
                 airs[i],
                 preprocessed_widths[i],
                 &all_lookups[i],
-                &lookup_data_to_ext_expr(&lookup_data[i]),
+                &lookup_data[i],
                 &lookup_gadget,
             )
             .0
@@ -712,18 +710,10 @@ where
         .iter()
         .map(|&p_c| PackedChallenge::<SC>::from(p_c))
         .collect();
-    let lookup_data_packed: Vec<LookupData<PackedChallenge<SC>>> = if lookups.is_empty() {
-        Vec::new()
-    } else {
-        lookup_data
-            .iter()
-            .map(|ld| LookupData {
-                name: ld.name.clone(),
-                aux_idx: ld.aux_idx,
-                expected_cumulated: ld.expected_cumulated.into(),
-            })
-            .collect()
-    };
+    let packed_perm_values: Vec<PackedChallenge<SC>> = lookup_data
+        .iter()
+        .map(|ld| PackedChallenge::<SC>::from(ld.expected_cumulated))
+        .collect();
 
     (0..quotient_size)
         .into_par_iter()
@@ -797,14 +787,9 @@ where
                 inner: inner_folder,
                 permutation: permutation.as_view(),
                 permutation_challenges: &packed_perm_challenges,
+                permutation_values: &packed_perm_values,
             };
-            A::eval_with_lookups(
-                air,
-                &mut folder,
-                lookups,
-                &lookup_data_packed,
-                lookup_gadget,
-            );
+            A::eval_with_lookups(air, &mut folder, lookups, lookup_gadget);
 
             // quotient(x) = constraints(x) / Z_H(x)
             let quotient = folder.inner.accumulator * inv_vanishing;

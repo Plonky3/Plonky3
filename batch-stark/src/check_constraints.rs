@@ -53,6 +53,7 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
     let height = main.height();
 
     let (lookups, lookup_data, lookup_gadget) = lookup_constraints_inputs;
+    let perm_values: Vec<EF> = lookup_data.iter().map(|ld| ld.expected_cumulated).collect();
 
     for row_index in 0..height {
         let row_index_next = (row_index + 1) % height;
@@ -102,9 +103,10 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
             F::from_bool(row_index != height - 1),
             permutation,
             permutation_challenges,
+            &perm_values,
         );
 
-        air.eval_with_lookups(&mut builder, lookups, lookup_data, lookup_gadget);
+        air.eval_with_lookups(&mut builder, lookups, lookup_gadget);
 
         // Stop at the first failing row and report all violations at once.
         if builder.has_failures() {

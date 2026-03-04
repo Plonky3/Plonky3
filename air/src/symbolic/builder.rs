@@ -154,6 +154,7 @@ pub struct SymbolicAirBuilder<F: Field, EF: ExtensionField<F> = F> {
     base_constraints: Vec<SymbolicExpression<F>>,
     permutation: RowMajorMatrix<SymbolicVariableExt<F, EF>>,
     permutation_challenges: Vec<SymbolicVariableExt<F, EF>>,
+    permutation_values: Vec<EF>,
     extension_constraints: Vec<SymbolicExpressionExt<F, EF>>,
 }
 
@@ -207,8 +208,14 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
             base_constraints: vec![],
             permutation,
             permutation_challenges,
+            permutation_values: vec![],
             extension_constraints: vec![],
         }
+    }
+
+    /// Set the permutation values (expected cumulated sums for global lookups).
+    pub fn set_permutation_values(&mut self, values: Vec<EF>) {
+        self.permutation_values = values;
     }
 
     pub fn extension_constraints(&self) -> Vec<SymbolicExpressionExt<F, EF>> {
@@ -287,8 +294,8 @@ where
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
 {
     type MP = RowMajorMatrix<Self::VarEF>;
-
     type RandomVar = SymbolicVariableExt<F, EF>;
+    type PermutationVar = EF;
 
     fn permutation(&self) -> Self::MP {
         self.permutation.clone()
@@ -296,6 +303,10 @@ where
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         &self.permutation_challenges
+    }
+
+    fn permutation_values(&self) -> &[Self::PermutationVar] {
+        &self.permutation_values
     }
 }
 

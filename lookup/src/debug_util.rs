@@ -257,8 +257,8 @@ impl<'a, F: Field> p3_air::ExtensionBuilder for MiniLookupBuilder<'a, F> {
 
 impl<'a, F: Field> PermutationAirBuilder for MiniLookupBuilder<'a, F> {
     type MP = VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>;
-
     type RandomVar = F;
+    type PermutationVar = F;
 
     fn permutation(&self) -> Self::MP {
         // Empty 0-width view; permutation columns are not needed for debug evals.

@@ -1,33 +1,17 @@
 use alloc::vec::Vec;
 
+use p3_air::Air;
 use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt};
-use p3_air::{Air, ExtLeaf, SymbolicExpr};
 use p3_field::{Algebra, ExtensionField, Field};
 use p3_lookup::lookup_traits::{Lookup, LookupData, LookupGadget};
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
-/// Converts `LookupData<EF>` to `LookupData<SymbolicExpressionExt<F, EF>>`.
-pub fn lookup_data_to_ext_expr<F, EF: Clone>(
-    lookup_data: &[LookupData<EF>],
-) -> Vec<LookupData<SymbolicExpressionExt<F, EF>>> {
-    lookup_data
-        .iter()
-        .map(|data| LookupData {
-            name: data.name.clone(),
-            aux_idx: data.aux_idx,
-            expected_cumulated: SymbolicExpr::Leaf(ExtLeaf::ExtConstant(
-                data.expected_cumulated.clone(),
-            )),
-        })
-        .collect()
-}
-
 pub fn get_log_num_quotient_chunks<F, EF, A, LG>(
     air: &A,
     preprocessed_width: usize,
     contexts: &[Lookup<F>],
-    lookup_data: &[LookupData<SymbolicExpressionExt<F, EF>>],
+    lookup_data: &[LookupData<EF>],
     is_zk: usize,
     lookup_gadget: &LG,
 ) -> usize
@@ -91,7 +75,7 @@ pub fn get_max_constraint_degree<F, EF, A, LG>(
     air: &A,
     preprocessed_width: usize,
     contexts: &[Lookup<F>],
-    lookup_data: &[LookupData<SymbolicExpressionExt<F, EF>>],
+    lookup_data: &[LookupData<EF>],
     lookup_gadget: &LG,
 ) -> usize
 where
@@ -122,7 +106,7 @@ pub fn get_symbolic_constraints<F, EF, A, LG>(
     air: &A,
     preprocessed_width: usize,
     contexts: &[Lookup<F>],
-    lookup_data: &[LookupData<SymbolicExpressionExt<F, EF>>],
+    lookup_data: &[LookupData<EF>],
     lookup_gadget: &LG,
 ) -> (
     Vec<SymbolicExpression<F>>,
@@ -146,9 +130,12 @@ where
         num_challenges,
         0,
     );
+    // Populate the builder with expected cumulated values from lookup data.
+    let perm_values: Vec<EF> = lookup_data.iter().map(|ld| ld.expected_cumulated).collect();
+    builder.set_permutation_values(perm_values);
 
     // Evaluate AIR and lookup constraints.
-    <A as Air<_>>::eval_with_lookups(air, &mut builder, contexts, lookup_data, lookup_gadget);
+    air.eval_with_lookups(&mut builder, contexts, lookup_gadget);
     let base_constraints = builder.base_constraints();
     let extension_constraints = builder.extension_constraints();
     (base_constraints, extension_constraints)

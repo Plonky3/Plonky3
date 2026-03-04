@@ -6,7 +6,7 @@ use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 
-use crate::lookup::{Kind, Lookup, LookupData, LookupEvaluator, LookupInput};
+use crate::lookup::{Kind, Lookup, LookupEvaluator, LookupInput};
 
 /// The underlying structure of an AIR.
 pub trait BaseAir<F>: Sync {
@@ -181,19 +181,19 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
     /// Evaluate all AIR and lookup constraints using the provided builder.
     ///
     /// The default implementation calls `eval` and then evaluates lookups if any are provided,
-    /// using the provided lookup evaluator.
+    /// using the provided lookup evaluator. The expected cumulated values for global lookups
+    /// are read from [`PermutationAirBuilder::permutation_values`].
+    ///
     /// Users typically don't need to override this method unless they need a custom behavior.
     ///
     /// # Arguments
     /// - `builder`: Mutable reference to an `AirBuilder` for defining constraints.
     /// - `lookups`: References to the lookups to be evaluated.
-    /// - `lookup_data`: References to the lookup data to be used for evaluation.
     /// - `lookup_evaluator`: Reference to the lookup evaluator to be used for evaluation.
     fn eval_with_lookups<LE: LookupEvaluator>(
         &self,
         builder: &mut AB,
         lookups: &[Lookup<AB::F>],
-        lookup_data: &[LookupData<AB::ExprEF>],
         lookup_evaluator: &LE,
     ) where
         AB: PermutationAirBuilder,
@@ -201,7 +201,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
         self.eval(builder);
 
         if !lookups.is_empty() {
-            lookup_evaluator.eval_lookups(builder, lookups, lookup_data);
+            lookup_evaluator.eval_lookups(builder, lookups);
         }
     }
 }
@@ -419,11 +419,24 @@ pub trait PermutationAirBuilder: ExtensionBuilder {
     /// Randomness variable type used in permutation commitments.
     type RandomVar: Into<Self::ExprEF> + Copy;
 
+    /// Variable type for permutation values.
+    type PermutationVar: Into<Self::ExprEF> + Copy;
+
     /// Return the matrix representing permutation registers.
     fn permutation(&self) -> Self::MP;
 
     /// Return the list of randomness values for permutation argument.
     fn permutation_randomness(&self) -> &[Self::RandomVar];
+
+    /// Return the permutation values (e.g. expected cumulated sums for global lookups).
+    ///
+    /// These values are provided by the prover and made available during
+    /// constraint evaluation so that the AIR can access them directly.
+    ///
+    /// Returns an empty slice by default.
+    fn permutation_values(&self) -> &[Self::PermutationVar] {
+        &[]
+    }
 }
 
 /// A wrapper around an [`AirBuilder`] that enforces constraints only when a specified condition is met.
@@ -510,8 +523,8 @@ impl<AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'_, AB> {
 
 impl<AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'_, AB> {
     type MP = AB::MP;
-
     type RandomVar = AB::RandomVar;
+    type PermutationVar = AB::PermutationVar;
 
     fn permutation(&self) -> Self::MP {
         self.inner.permutation()
@@ -519,6 +532,10 @@ impl<AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'_,
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         self.inner.permutation_randomness()
+    }
+
+    fn permutation_values(&self) -> &[Self::PermutationVar] {
+        self.inner.permutation_values()
     }
 }
 

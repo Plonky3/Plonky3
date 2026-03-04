@@ -1,5 +1,3 @@
-use alloc::vec::Vec;
-
 use p3_air::lookup::LookupEvaluator;
 /// Public re-exports of lookup types.
 pub use p3_air::lookup::{Direction, Kind, Lookup, LookupData, LookupError, LookupInput};
@@ -12,24 +10,6 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{StarkGenericConfig, Val};
 use tracing::warn;
-
-/// Converts `LookupData<F>` to `LookupData<SymbolicExpression<F>>`.
-pub fn lookup_data_to_expr<F: Clone>(
-    lookup_data: &[LookupData<F>],
-) -> Vec<LookupData<SymbolicExpression<F>>> {
-    lookup_data
-        .iter()
-        .map(|data| {
-            let expected =
-                SymbolicExpression::Leaf(BaseLeaf::Constant(data.expected_cumulated.clone()));
-            LookupData {
-                name: data.name.clone(),
-                aux_idx: data.aux_idx,
-                expected_cumulated: expected,
-            }
-        })
-        .collect()
-}
 
 /// A trait for lookup argument.
 pub trait LookupGadget: LookupEvaluator {
@@ -154,8 +134,8 @@ impl<SC: StarkGenericConfig> ExtensionBuilder for LookupTraceBuilder<'_, SC> {
 
 impl<'a, SC: StarkGenericConfig> PermutationAirBuilder for LookupTraceBuilder<'a, SC> {
     type MP = RowMajorMatrixView<'a, SC::Challenge>;
-
     type RandomVar = SC::Challenge;
+    type PermutationVar = SC::Challenge;
     fn permutation(&self) -> RowMajorMatrixView<'a, SC::Challenge> {
         panic!("we should not be accessing the permutation matrix while building it");
     }

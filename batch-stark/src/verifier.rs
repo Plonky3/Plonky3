@@ -23,7 +23,7 @@ use crate::config::{
     Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_instance_binding,
 };
 use crate::proof::BatchProof;
-use crate::symbolic::{get_log_num_quotient_chunks, lookup_data_to_ext_expr};
+use crate::symbolic::get_log_num_quotient_chunks;
 
 #[instrument(skip_all)]
 pub fn verify_batch<SC, A>(
@@ -103,7 +103,7 @@ where
                     air,
                     pre_w,
                     &all_lookups[i],
-                    &lookup_data_to_ext_expr(&global_lookup_data[i]),
+                    &global_lookup_data[i],
                     config.is_zk(),
                     &lookup_gadget,
                 )
@@ -639,6 +639,8 @@ where
         alpha: *alpha,
         accumulator: SC::Challenge::ZERO,
     };
+    let perm_values: Vec<SC::Challenge> =
+        lookup_data.iter().map(|ld| ld.expected_cumulated).collect();
     let mut folder = VerifierConstraintFolderWithLookups {
         inner: inner_folder,
         permutation: VerticalPair::new(
@@ -646,9 +648,10 @@ where
             RowMajorMatrixView::new_row(permutation_next),
         ),
         permutation_challenges,
+        permutation_values: &perm_values,
     };
     // Evaluate AIR and lookup constraints.
-    A::eval_with_lookups(air, &mut folder, lookups, lookup_data, lookup_gadget);
+    A::eval_with_lookups(air, &mut folder, lookups, lookup_gadget);
     let folded_constraints = folder.inner.accumulator;
 
     // Check that constraints(zeta) / Z_H(zeta) = quotient(zeta)
