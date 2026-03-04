@@ -1130,4 +1130,98 @@ mod tests {
             .verify_batch(&cap2, &dims, 0, BatchOpeningRef::new(&opening2, &proof2))
             .unwrap();
     }
+
+    mod proptests {
+        use alloc::vec::Vec;
+
+        use proptest::prelude::*;
+
+        use super::*;
+
+        type PermWide = Poseidon2BabyBear<32>;
+        type MyCompress4 = TruncatedPermutation<PermWide, 4, 8, 32>;
+        type MyMmcs4 =
+            MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress4, 4, 8>;
+
+        fn make_binary_mmcs(seed: u64) -> MyMmcs {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let perm = Perm::new_from_rng_128(&mut rng);
+            let hash = MyHash::new(perm.clone());
+            let compress = MyCompress::new(perm);
+            MyMmcs::new(hash, compress, 0)
+        }
+
+        fn make_4ary_mmcs(seed: u64) -> MyMmcs4 {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let perm16 = Perm::new_from_rng_128(&mut rng);
+            let perm32 = PermWide::new_from_rng_128(&mut rng);
+            let hash = MyHash::new(perm16);
+            let compress = MyCompress4::new(perm32);
+            MyMmcs4::new(hash, compress, 0)
+        }
+
+        fn matrix_strategy() -> impl Strategy<Value = (usize, usize, u64)> {
+            (1..=256_usize, 1..=32_usize, 0u64..=u64::MAX)
+        }
+
+        proptest! {
+            #[test]
+            fn proptest_binary_merkle_roundtrip((height, width, seed) in matrix_strategy()) {
+                let mut rng = SmallRng::seed_from_u64(seed);
+                let mat = RowMajorMatrix::<F>::rand(&mut rng, height, width);
+                let dims = vec![mat.dimensions()];
+                let mmcs = make_binary_mmcs(seed.wrapping_add(1));
+
+                let (commit, prover_data) = mmcs.commit(vec![mat.clone()]);
+
+                let index = (seed as usize) % height;
+                let opening = mmcs.open_batch(index, &prover_data);
+
+                let (opened_values, proof) = opening.unpack();
+                mmcs.verify_batch(&commit, &dims, index, BatchOpeningRef::new(&opened_values, &proof))
+                    .expect("binary MerkleTreeMmcs verify should succeed");
+
+                let expected_row: Vec<F> = mat.row(index).unwrap().into_iter().collect();
+                prop_assert_eq!(&opened_values[0], &expected_row, "opened row should match");
+            }
+
+            #[test]
+            fn proptest_4ary_merkle_roundtrip((height, width, seed) in matrix_strategy()) {
+                let mut rng = SmallRng::seed_from_u64(seed);
+                let mat = RowMajorMatrix::<F>::rand(&mut rng, height, width);
+                let dims = vec![mat.dimensions()];
+                let mmcs = make_4ary_mmcs(seed.wrapping_add(1));
+
+                let (commit, prover_data) = mmcs.commit(vec![mat.clone()]);
+
+                let index = (seed as usize) % height;
+                let opening = mmcs.open_batch(index, &prover_data);
+
+                let (opened_values, proof) = opening.unpack();
+                mmcs.verify_batch(&commit, &dims, index, BatchOpeningRef::new(&opened_values, &proof))
+                    .expect("4-ary MerkleTreeMmcs verify should succeed");
+
+                let expected_row: Vec<F> = mat.row(index).unwrap().into_iter().collect();
+                prop_assert_eq!(&opened_values[0], &expected_row, "opened row should match");
+            }
+
+            #[test]
+            fn proptest_4ary_all_indices((height, seed) in (1..=64_usize, 0u64..=u64::MAX)) {
+                let mut rng = SmallRng::seed_from_u64(seed);
+                let mat = RowMajorMatrix::<F>::rand(&mut rng, height, 8);
+                let dims = vec![mat.dimensions()];
+                let mmcs = make_4ary_mmcs(seed.wrapping_add(1));
+                let (commit, prover_data) = mmcs.commit(vec![mat.clone()]);
+
+                for index in 0..height {
+                    let opening = mmcs.open_batch(index, &prover_data);
+                    let (opened_values, proof) = opening.unpack();
+                    mmcs.verify_batch(&commit, &dims, index, BatchOpeningRef::new(&opened_values, &proof))
+                        .expect("4-ary verify at each index should succeed");
+                    let expected: Vec<F> = mat.row(index).unwrap().into_iter().collect();
+                    prop_assert_eq!(&opened_values[0], &expected);
+                }
+            }
+        }
+    }
 }
