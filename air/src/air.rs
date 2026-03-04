@@ -248,8 +248,7 @@ pub trait AirBuilder: Sized {
 
     /// Return the matrix of preprocessed registers.
     ///
-    /// When no preprocessed columns exist, this returns an empty (zero-width)
-    /// matrix.
+    /// When no preprocessed columns exist, this returns an empty (zero-width) matrix.
     fn preprocessed(&self) -> &Self::M;
 
     /// Expression evaluating to 1 on the first row, 0 elsewhere.
