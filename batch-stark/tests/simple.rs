@@ -648,12 +648,12 @@ impl<F: PrimeField64> BaseAir<F> for DemoAir {
         }
     }
 
-    fn preprocessed_uses_next_row(&self) -> bool {
+    fn preprocessed_next_row_columns(&self) -> Vec<usize> {
         match self {
-            Self::Fib(a) => <FibonacciAir as BaseAir<F>>::preprocessed_uses_next_row(a),
-            Self::Mul(a) => <MulAir as BaseAir<F>>::preprocessed_uses_next_row(a),
+            Self::Fib(a) => <FibonacciAir as BaseAir<F>>::preprocessed_next_row_columns(a),
+            Self::Mul(a) => <MulAir as BaseAir<F>>::preprocessed_next_row_columns(a),
             Self::PreprocessedMul(a) => {
-                <PreprocessedMulAir as BaseAir<F>>::preprocessed_uses_next_row(a)
+                <PreprocessedMulAir as BaseAir<F>>::preprocessed_next_row_columns(a)
             }
         }
     }

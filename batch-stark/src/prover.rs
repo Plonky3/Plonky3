@@ -587,7 +587,7 @@ where
         {
             global.instances[i].as_ref().map_or((None, None), |meta| {
                 let vals = &pre_round[meta.matrix_index];
-                if airs[i].preprocessed_uses_next_row() {
+                if !airs[i].preprocessed_next_row_columns().is_empty() {
                     assert_eq!(
                         vals.len(),
                         2,
