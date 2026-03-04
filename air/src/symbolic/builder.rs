@@ -231,12 +231,8 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
         self.main.clone()
     }
 
-    fn preprocessed(&self) -> Option<Self::M> {
-        if self.preprocessed.values.is_empty() {
-            None
-        } else {
-            Some(self.preprocessed.clone())
-        }
+    fn preprocessed(&self) -> &Self::M {
+        &self.preprocessed
     }
 
     fn public_values(&self) -> &[Self::PublicVar] {
@@ -499,7 +495,7 @@ mod tests {
     fn test_preprocessed_returns_correct_dimensions() {
         // The preprocessed matrix has 2 rows and the given preprocessed width.
         let builder = SymbolicAirBuilder::<F>::new(2, 3, 0, 0, 0, 0);
-        let prep = builder.preprocessed().expect("should be Some");
+        let prep = builder.preprocessed();
 
         // 2 rows times 2 columns gives 4 entries.
         assert_eq!(prep.values.len(), 4);
@@ -513,7 +509,7 @@ mod tests {
     fn test_preprocessed_returns_none_when_width_is_zero() {
         // A builder with zero preprocessed columns should report no preprocessed trace.
         let builder = SymbolicAirBuilder::<F>::new(0, 3, 0, 0, 0, 0);
-        assert!(builder.preprocessed().is_none());
+        assert_eq!(builder.preprocessed().width, 0);
     }
 
     #[test]

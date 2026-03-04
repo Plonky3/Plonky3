@@ -627,11 +627,7 @@ where
 
     let inner_folder = VerifierConstraintFolder {
         main,
-        preprocessed: if preprocessed_local.is_empty() {
-            None
-        } else {
-            Some(preprocessed)
-        },
+        preprocessed,
         public_values,
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,

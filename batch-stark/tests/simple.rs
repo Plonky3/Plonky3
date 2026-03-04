@@ -479,15 +479,22 @@ where
 {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let preprocessed = builder.preprocessed().expect("Preprocessed is empty?");
-
         let local_main = main.row_slice(0).expect("Matrix is empty?");
-        let local_prep = preprocessed.row_slice(0).expect("Preprocessed is empty?");
+
+        // Copy the preprocessed value so the immutable borrow on `builder`
+        // is released before the mutable `assert_eq` call.
+        let prep_val = {
+            let local_prep = builder
+                .preprocessed()
+                .row_slice(0)
+                .expect("Preprocessed is empty?");
+            local_prep[0]
+        };
 
         // Enforce: main[0] = multiplier * preprocessed[0]
         builder.assert_eq(
             local_main[0],
-            local_prep[0] * AB::Expr::from_u64(self.multiplier),
+            prep_val * AB::Expr::from_u64(self.multiplier),
         );
     }
 }

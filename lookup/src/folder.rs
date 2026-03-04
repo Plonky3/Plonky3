@@ -23,8 +23,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
         self.inner.main
     }
 
-    fn preprocessed(&self) -> Option<Self::M> {
-        self.inner.preprocessed
+    fn preprocessed(&self) -> &Self::M {
+        self.inner.preprocessed()
     }
 
     #[inline]
@@ -113,8 +113,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
         self.inner.main
     }
 
-    fn preprocessed(&self) -> Option<Self::M> {
-        self.inner.preprocessed
+    fn preprocessed(&self) -> &Self::M {
+        self.inner.preprocessed()
     }
 
     #[inline]

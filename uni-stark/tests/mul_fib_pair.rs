@@ -58,15 +58,21 @@ where
 {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let preprocessed = builder.preprocessed().expect("Preprocessed is empty?");
-
         let local_slice = main.row_slice(0).expect("Matrix is empty?");
         let next_slice = main.row_slice(1).expect("Matrix only has 1 row?");
-        let prep_slice = preprocessed.row_slice(0).expect("Preprocessed is empty?");
-
         let local: &MulFibPairRow<AB::Var> = (*local_slice).borrow();
         let next: &MulFibPairRow<AB::Var> = (*next_slice).borrow();
-        let prep: &PreprocessedRow<AB::Var> = (*prep_slice).borrow();
+
+        // Copy the preprocessed values we need so the immutable borrow on
+        // `builder` is released before the mutable `when_transition` call.
+        let (prod_coeff, sum_coeff) = {
+            let prep_slice = builder
+                .preprocessed()
+                .row_slice(0)
+                .expect("Preprocessed is empty?");
+            let prep: &PreprocessedRow<AB::Var> = (*prep_slice).borrow();
+            (prep.prod_coeff, prep.sum_coeff)
+        };
 
         let mut when_transition = builder.when_transition();
 
@@ -74,8 +80,8 @@ where
         when_transition.assert_eq(local.b, next.a);
 
         // b' <- prod_coeff * a * b + sum_coeff * (a + b)
-        let prod_term = prep.prod_coeff * local.a * local.b;
-        let sum_term = prep.sum_coeff * (local.a + local.b);
+        let prod_term = prod_coeff * local.a * local.b;
+        let sum_term = sum_coeff * (local.a + local.b);
         when_transition.assert_eq(prod_term + sum_term, next.b);
     }
 }
