@@ -17,15 +17,22 @@ use crate::{
 /// Describes the shape of an AIR for symbolic constraint evaluation.
 ///
 /// Bundles the various width/count parameters needed to construct a
-/// [`SymbolicAirBuilder`], replacing the 6-parameter signatures with a
-/// single value.
+/// [`SymbolicAirBuilder`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AirLayout {
+    /// Width of [`AirBuilder::preprocessed`].
     pub preprocessed_width: usize,
+    /// Width of [`AirBuilder::main`].
     pub main_width: usize,
+    /// Length of [`AirBuilder::public_values`].
     pub num_public_values: usize,
+    /// Width of [`PermutationAirBuilder::permutation`].
     pub permutation_width: usize,
+    /// Length of [`PermutationAirBuilder::permutation_randomness`].
     pub num_permutation_challenges: usize,
+    /// Length of [`PermutationAirBuilder::permutation_values`].
+    pub num_permutation_values: usize,
+    /// Length of [`PeriodicAirBuilder::periodic_values`].
     pub num_periodic_columns: usize,
 }
 
@@ -131,6 +138,7 @@ pub struct SymbolicAirBuilder<F: Field, EF: ExtensionField<F> = F> {
     base_constraints: Vec<SymbolicExpression<F>>,
     permutation: RowMajorMatrix<SymbolicVariableExt<F, EF>>,
     permutation_challenges: Vec<SymbolicVariableExt<F, EF>>,
+    permutation_values: Vec<SymbolicVariableExt<F, EF>>,
     extension_constraints: Vec<SymbolicExpressionExt<F, EF>>,
     constraint_types: Vec<ConstraintType>,
 }
@@ -143,6 +151,7 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
             num_public_values,
             permutation_width,
             num_permutation_challenges,
+            num_permutation_values,
             num_periodic_columns,
         } = layout;
         let prep_values = [0, 1]
@@ -178,6 +187,9 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
         let permutation_challenges = (0..num_permutation_challenges)
             .map(|index| SymbolicVariableExt::new(ExtEntry::Challenge, index))
             .collect();
+        let permutation_values = (0..num_permutation_values)
+            .map(|index| SymbolicVariableExt::new(ExtEntry::PermutationValue, index))
+            .collect();
         Self {
             preprocessed: RowMajorMatrix::new(prep_values, preprocessed_width),
             main: RowMajorMatrix::new(main_values, main_width),
@@ -186,6 +198,7 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
             base_constraints: vec![],
             permutation,
             permutation_challenges,
+            permutation_values,
             extension_constraints: vec![],
             constraint_types: vec![],
         }
@@ -284,12 +297,18 @@ where
 
     type RandomVar = SymbolicVariableExt<F, EF>;
 
+    type PermutationVar = SymbolicVariableExt<F, EF>;
+
     fn permutation(&self) -> Self::MP {
         self.permutation.clone()
     }
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         &self.permutation_challenges
+    }
+
+    fn permutation_values(&self) -> &[Self::PermutationVar] {
+        &self.permutation_values
     }
 }
 
@@ -448,6 +467,7 @@ mod tests {
             num_public_values,
             permutation_width: 0,
             num_permutation_challenges: 0,
+            num_permutation_values: 0,
             num_periodic_columns,
         }
     }
@@ -466,6 +486,7 @@ mod tests {
             num_public_values,
             permutation_width,
             num_permutation_challenges,
+            num_permutation_values: 0,
             num_periodic_columns,
         }
     }

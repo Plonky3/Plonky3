@@ -262,6 +262,8 @@ impl<'a, F: Field> PermutationAirBuilder for MiniLookupBuilder<'a, F> {
 
     type RandomVar = F;
 
+    type PermutationVar = F;
+
     fn permutation(&self) -> Self::MP {
         // Empty 0-width view; permutation columns are not needed for debug evals.
         VerticalPair::new(
@@ -272,5 +274,9 @@ impl<'a, F: Field> PermutationAirBuilder for MiniLookupBuilder<'a, F> {
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         self.permutation_challenges
+    }
+
+    fn permutation_values(&self) -> &[Self::PermutationVar] {
+        &[]
     }
 }

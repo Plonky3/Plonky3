@@ -226,6 +226,7 @@ impl ExtensionBuilder for MockAirBuilder {
 impl PermutationAirBuilder for MockAirBuilder {
     type MP = RowMajorMatrix<EF>;
     type RandomVar = EF;
+    type PermutationVar = EF;
 
     fn permutation(&self) -> Self::MP {
         self.window(&self.permutation)
@@ -233,6 +234,10 @@ impl PermutationAirBuilder for MockAirBuilder {
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         &self.challenges
+    }
+
+    fn permutation_values(&self) -> &[Self::PermutationVar] {
+        &[]
     }
 }
 

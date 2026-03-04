@@ -11,7 +11,7 @@ use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::lookup_traits::{Lookup, LookupData, LookupError, LookupGadget};
+use p3_lookup::lookup_traits::{Lookup, LookupError, LookupGadget};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_uni_stark::{VerificationError, VerifierConstraintFolder, recompose_quotient_from_chunks};
@@ -23,7 +23,7 @@ use crate::config::{
     Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_instance_binding,
 };
 use crate::proof::BatchProof;
-use crate::symbolic::{get_log_num_quotient_chunks, lookup_data_to_ext_expr};
+use crate::symbolic::get_log_num_quotient_chunks;
 
 #[instrument(skip_all)]
 pub fn verify_batch<SC, A>(
@@ -109,7 +109,6 @@ where
                     air,
                     layout,
                     &all_lookups[i],
-                    &lookup_data_to_ext_expr(&global_lookup_data[i]),
                     config.is_zk(),
                     &lookup_gadget,
                 )
@@ -508,6 +507,10 @@ where
                 &pre_next_zeros
             }
         };
+        let perm_vals: Vec<SC::Challenge> = global_lookup_data[i]
+            .iter()
+            .map(|ld| ld.expected_cumulated)
+            .collect();
         let verifier_data = VerifierData {
             trace_local: &opened_values.instances[i].base_opened_values.trace_local,
             trace_next: trace_next_ref,
@@ -520,7 +523,7 @@ where
             permutation_local: &perm_local_ext,
             permutation_next: &perm_next_ext,
             permutation_challenges: &challenges_per_instance[i],
-            lookup_data: &proof.global_lookup_data[i],
+            permutation_values: &perm_vals,
             lookups: &all_lookups[i],
             public_values: &public_values[i],
             trace_domain: init_trace_domain,
@@ -583,8 +586,8 @@ pub struct VerifierData<'a, SC: SGC> {
     permutation_next: &'a [SC::Challenge],
     // Challenges used for the lookup argument
     permutation_challenges: &'a [SC::Challenge],
-    // Lookup data needed for global lookup verification
-    lookup_data: &'a [LookupData<SC::Challenge>],
+    // Expected cumulated values for global lookup arguments
+    permutation_values: &'a [SC::Challenge],
     // Lookup contexts for this instance
     lookups: &'a [Lookup<Val<SC>>],
     // Public values for this instance
@@ -617,7 +620,7 @@ where
         permutation_local,
         permutation_next,
         permutation_challenges,
-        lookup_data,
+        permutation_values,
         lookups,
         public_values,
         trace_domain,
@@ -655,9 +658,10 @@ where
             RowMajorMatrixView::new_row(permutation_next),
         ),
         permutation_challenges,
+        permutation_values,
     };
     // Evaluate AIR and lookup constraints.
-    A::eval_with_lookups(air, &mut folder, lookups, lookup_data, lookup_gadget);
+    A::eval_with_lookups(air, &mut folder, lookups, lookup_gadget);
     let folded_constraints = folder.inner.accumulator;
 
     // Check that constraints(zeta) / Z_H(zeta) = quotient(zeta)
