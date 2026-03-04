@@ -1,6 +1,5 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::borrow::Borrow;
 use core::ops::{Add, Mul, Sub};
 
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
@@ -10,48 +9,32 @@ use crate::lookup::{Kind, Lookup, LookupData, LookupEvaluator, LookupInput};
 
 /// Read access to two consecutive trace rows.
 pub trait WindowAccess<T> {
-    /// Full slice of the current (local) row.
-    fn local_slice(&self) -> &[T];
+    /// Full slice of the current row.
+    fn current_slice(&self) -> &[T];
 
     /// Full slice of the row immediately after the current one.
     fn next_slice(&self) -> &[T];
 
-    /// Single element from the current row, cloned.
+    /// Single element from the current row by index.
+    ///
+    /// Returns `None` if `i` is out of bounds.
     #[inline]
-    fn local(&self, i: usize) -> T
+    fn current(&self, i: usize) -> Option<T>
     where
         T: Clone,
     {
-        self.local_slice()[i].clone()
+        self.current_slice().get(i).cloned()
     }
 
-    /// Single element from the next row, cloned.
+    /// Single element from the next row by index.
+    ///
+    /// Returns `None` if `i` is out of bounds.
     #[inline]
-    fn next(&self, i: usize) -> T
+    fn next(&self, i: usize) -> Option<T>
     where
         T: Clone,
     {
-        self.next_slice()[i].clone()
-    }
-
-    /// Borrow-cast the current row into a typed column struct.
-    #[inline]
-    fn local_as<'a, U: ?Sized>(&'a self) -> &'a U
-    where
-        [T]: Borrow<U>,
-        T: 'a,
-    {
-        self.local_slice().borrow()
-    }
-
-    /// Borrow-cast the next row into a typed column struct.
-    #[inline]
-    fn next_as<'a, U: ?Sized>(&'a self) -> &'a U
-    where
-        [T]: Borrow<U>,
-        T: 'a,
-    {
-        self.next_slice().borrow()
+        self.next_slice().get(i).cloned()
     }
 }
 
@@ -63,23 +46,52 @@ pub trait WindowAccess<T> {
 #[derive(Debug, Clone, Copy)]
 pub struct RowWindow<'a, T> {
     /// The current row.
-    pub local: &'a [T],
+    current: &'a [T],
     /// The row immediately after the current one.
-    pub next: &'a [T],
+    next: &'a [T],
 }
 
 impl<'a, T> RowWindow<'a, T> {
-    /// Create a window from two consecutive row slices.
+    /// Create a window by splitting a flat slice of `2 * width` elements
+    /// into a current row and a next row.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `slice.len()` is not exactly `2 * width`.
     #[inline]
-    pub const fn new(local: &'a [T], next: &'a [T]) -> Self {
-        Self { local, next }
+    pub fn from_flat(slice: &'a [T], width: usize) -> Self {
+        assert_eq!(
+            slice.len(),
+            2 * width,
+            "RowWindow::from_flat: expected slice of length 2*{width}, got {}",
+            slice.len()
+        );
+        let (current, next) = slice.split_at(width);
+        Self { current, next }
+    }
+
+    /// Create a window from two separate row slices.
+    ///
+    /// # Panics
+    ///
+    /// Panics (in debug builds) if the slices have different lengths.
+    #[inline]
+    pub fn from_two_rows(current: &'a [T], next: &'a [T]) -> Self {
+        debug_assert_eq!(
+            current.len(),
+            next.len(),
+            "RowWindow::from_two_rows: row lengths differ ({} vs {})",
+            current.len(),
+            next.len()
+        );
+        Self { current, next }
     }
 }
 
 impl<T> WindowAccess<T> for RowWindow<'_, T> {
     #[inline]
-    fn local_slice(&self) -> &[T] {
-        self.local
+    fn current_slice(&self) -> &[T] {
+        self.current
     }
 
     #[inline]
@@ -323,10 +335,10 @@ pub trait AirBuilder: Sized {
     /// Variable type for public values.
     type PublicVar: Into<Self::Expr> + Copy;
 
-    /// Return the local and next row slices of the main (primary) trace.
+    /// Return the current and next row slices of the main (primary) trace.
     fn main(&self) -> Self::M;
 
-    /// Return the local and next row slices of preprocessed registers.
+    /// Return the current and next row slices of preprocessed registers.
     /// The default implementation returns `None`.
     /// Override this for builders that provide preprocessed columns.
     fn preprocessed(&self) -> Option<Self::M> {
@@ -480,7 +492,7 @@ pub trait PermutationAirBuilder: ExtensionBuilder {
     /// Randomness variable type used in permutation commitments.
     type RandomVar: Into<Self::ExprEF> + Copy;
 
-    /// Return the local and next row slices of the permutation trace.
+    /// Return the current and next row slices of the permutation trace.
     fn permutation(&self) -> Self::MP;
 
     /// Return the list of randomness values for permutation argument.

@@ -21,13 +21,13 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
 
     fn main(&self) -> Self::M {
         let w = self.inner.main.width;
-        RowWindow::new(&self.inner.main.values[..w], &self.inner.main.values[w..])
+        RowWindow::from_flat(self.inner.main.values, w)
     }
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.inner.preprocessed.map(|p| {
             let w = p.width;
-            RowWindow::new(&p.values[..w], &p.values[w..])
+            RowWindow::from_flat(p.values, w)
         })
     }
 
@@ -85,7 +85,7 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder
 
     fn permutation(&self) -> Self::MP {
         let w = self.permutation.width;
-        RowWindow::new(&self.permutation.values[..w], &self.permutation.values[w..])
+        RowWindow::from_flat(self.permutation.values, w)
     }
 
     fn permutation_randomness(&self) -> &[PackedChallenge<SC>] {
@@ -107,13 +107,13 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
     type M = RowWindow<'a, SC::Challenge>;
 
     fn main(&self) -> Self::M {
-        RowWindow::new(self.inner.main.top.values, self.inner.main.bottom.values)
+        RowWindow::from_two_rows(self.inner.main.top.values, self.inner.main.bottom.values)
     }
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.inner
             .preprocessed
-            .map(|p| RowWindow::new(p.top.values, p.bottom.values))
+            .map(|p| RowWindow::from_two_rows(p.top.values, p.bottom.values))
     }
 
     #[inline]
@@ -168,7 +168,7 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder
     type MP = RowWindow<'a, SC::Challenge>;
 
     fn permutation(&self) -> Self::MP {
-        RowWindow::new(self.permutation.top.values, self.permutation.bottom.values)
+        RowWindow::from_two_rows(self.permutation.top.values, self.permutation.bottom.values)
     }
 
     fn permutation_randomness(&self) -> &[SC::Challenge] {

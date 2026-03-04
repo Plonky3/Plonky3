@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::borrow::Borrow;
 
 use itertools::izip;
 use p3_air::utils::{add2, add3, pack_bits_le, xor_32_shift};
@@ -237,7 +238,7 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
     #[inline]
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let local: &Blake3Cols<AB::Var> = main.local_as();
+        let local: &Blake3Cols<AB::Var> = main.current_slice().borrow();
 
         let initial_row_3 = [
             local.counter_low,

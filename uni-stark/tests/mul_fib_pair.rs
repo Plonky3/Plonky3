@@ -59,9 +59,9 @@ where
         let main = builder.main();
         let preprocessed = builder.preprocessed().expect("Preprocessed is empty?");
 
-        let local: &MulFibPairRow<AB::Var> = main.local_as();
-        let next: &MulFibPairRow<AB::Var> = main.next_as();
-        let prep: &PreprocessedRow<AB::Var> = preprocessed.local_as();
+        let local: &MulFibPairRow<AB::Var> = main.current_slice().borrow();
+        let next: &MulFibPairRow<AB::Var> = main.next_slice().borrow();
+        let prep: &PreprocessedRow<AB::Var> = preprocessed.current_slice().borrow();
 
         let mut when_transition = builder.when_transition();
 

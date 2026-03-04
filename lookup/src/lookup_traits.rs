@@ -97,12 +97,12 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
 
     #[inline]
     fn main(&self) -> Self::M {
-        RowWindow::new(self.main.top.values, self.main.bottom.values)
+        RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
     }
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.preprocessed
-            .map(|p| RowWindow::new(p.top.values, p.bottom.values))
+            .map(|p| RowWindow::from_two_rows(p.top.values, p.bottom.values))
     }
 
     #[inline]
@@ -173,8 +173,8 @@ where
             Entry::Main { offset } => {
                 let main = builder.main();
                 match offset {
-                    0 => main.local(v.index).into(),
-                    1 => main.next(v.index).into(),
+                    0 => main.current(v.index).unwrap().into(),
+                    1 => main.next(v.index).unwrap().into(),
                     _ => panic!("Cannot have expressions involving more than two rows."),
                 }
             }
@@ -184,8 +184,8 @@ where
                     .preprocessed()
                     .expect("Missing preprocessed columns");
                 match offset {
-                    0 => prep.local(v.index).into(),
-                    1 => prep.next(v.index).into(),
+                    0 => prep.current(v.index).unwrap().into(),
+                    1 => prep.next(v.index).unwrap().into(),
                     _ => panic!("Cannot have expressions involving more than two rows."),
                 }
             }

@@ -77,8 +77,8 @@ where
         let b0 = pis[1];
         let x = pis[2];
 
-        let local: &FibRow<AB::Var> = main.local_as();
-        let next: &FibRow<AB::Var> = main.next_as();
+        let local: &FibRow<AB::Var> = main.current_slice().borrow();
+        let next: &FibRow<AB::Var> = main.next_slice().borrow();
 
         let mut wf = builder.when_first_row();
         wf.assert_eq(local.left, a0);
@@ -163,7 +163,7 @@ impl<F> BaseAir<F> for MulAir {
 impl<AB: AirBuilder> Air<AB> for MulAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let local = main.local_slice();
+        let local = main.current_slice();
         let next = main.next_slice();
         for i in 0..self.reps {
             let s = i * 3;
@@ -240,7 +240,7 @@ where
         let symbolic_air_builder =
             SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
         let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.local_slice();
+        let symbolic_main_local = symbolic_main.current_slice();
 
         let last_idx = symbolic_air_builder.main().width() - 1;
         let lut = symbolic_main_local[last_idx]; //  Extra column that corresponds to a permutation of 'a'
@@ -477,8 +477,8 @@ where
         let main = builder.main();
         let preprocessed = builder.preprocessed().expect("Preprocessed is empty?");
 
-        let local_main = main.local_slice();
-        let local_prep = preprocessed.local_slice();
+        let local_main = main.current_slice();
+        let local_prep = preprocessed.current_slice();
 
         // Enforce: main[0] = multiplier * preprocessed[0]
         builder.assert_eq(
@@ -2103,7 +2103,7 @@ where
         let symbolic_air_builder =
             SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
         let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.local_slice();
+        let symbolic_main_local = symbolic_main.current_slice();
 
         let sender_col1 = symbolic_main_local[0]; // Column that sends values
         let sender_col2 = symbolic_main_local[1]; // Column that sends values

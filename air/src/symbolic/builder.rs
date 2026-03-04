@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 use core::borrow::Borrow;
 
 use p3_field::{ExtensionField, Field};
+use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use tracing::instrument;
 
@@ -203,14 +204,30 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
 }
 
 /// Implement `WindowAccess` for `RowMajorMatrix` treating it as a two-row window
-/// (first half = local row, second half = next row).
+/// (first row = current, second row = next).
+///
+/// # Panics
+///
+/// Panics if the matrix does not have exactly 2 rows.
 impl<T: Clone + Send + Sync> WindowAccess<T> for RowMajorMatrix<T> {
-    fn local_slice(&self) -> &[T] {
+    fn current_slice(&self) -> &[T] {
+        assert_eq!(
+            self.height(),
+            2,
+            "WindowAccess for RowMajorMatrix requires exactly 2 rows, got {}",
+            self.height()
+        );
         let values: &[T] = self.values.borrow();
         &values[..self.width]
     }
 
     fn next_slice(&self) -> &[T] {
+        assert_eq!(
+            self.height(),
+            2,
+            "WindowAccess for RowMajorMatrix requires exactly 2 rows, got {}",
+            self.height()
+        );
         let values: &[T] = self.values.borrow();
         &values[self.width..]
     }

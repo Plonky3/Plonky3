@@ -29,8 +29,8 @@ impl<F> BaseAir<F> for SquareAir {
 impl<AB: AirBuilder> Air<AB> for SquareAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let a = main.local(0);
-        let b = main.local(1);
+        let a = main.current(0).unwrap();
+        let b = main.current(1).unwrap();
         builder.assert_eq(a.clone() * a, b);
     }
 }

@@ -211,14 +211,14 @@ impl LogUpGadget {
         let beta = permutation_challenges[self.num_challenges() * column + 1];
 
         assert!(
-            permutation.local_slice().len() > column,
+            permutation.current_slice().len() > column,
             "Permutation trace has insufficient width"
         );
 
         // Read s[i] from the local row at the specified column.
-        let s_local = permutation.local(column).into();
+        let s_local = permutation.current(column).unwrap().into();
         // Read s[i+1] from the next row (or a zero-padded view on the last row).
-        let s_next = permutation.next(column).into();
+        let s_next = permutation.next(column).unwrap().into();
 
         // Anchor s[0] = 0 at the start.
         //

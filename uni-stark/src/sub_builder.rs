@@ -26,8 +26,8 @@ pub struct SubSliced<W, T> {
 
 impl<W: WindowAccess<T>, T> WindowAccess<T> for SubSliced<W, T> {
     #[inline]
-    fn local_slice(&self) -> &[T] {
-        &self.window.local_slice()[self.range.clone()]
+    fn current_slice(&self) -> &[T] {
+        &self.window.current_slice()[self.range.clone()]
     }
 
     #[inline]

@@ -217,12 +217,12 @@ impl<'a, F: Field> AirBuilder for MiniLookupBuilder<'a, F> {
     type M = RowWindow<'a, F>;
 
     fn main(&self) -> Self::M {
-        RowWindow::new(self.main.top.values, self.main.bottom.values)
+        RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
     }
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.preprocessed
-            .map(|p| RowWindow::new(p.top.values, p.bottom.values))
+            .map(|p| RowWindow::from_two_rows(p.top.values, p.bottom.values))
     }
 
     fn public_values(&self) -> &[Self::PublicVar] {
@@ -258,7 +258,7 @@ impl<'a, F: Field> PermutationAirBuilder for MiniLookupBuilder<'a, F> {
 
     fn permutation(&self) -> Self::MP {
         // Empty slices; permutation columns are not needed for debug evals.
-        RowWindow::new(&[], &[])
+        RowWindow::from_two_rows(&[], &[])
     }
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {

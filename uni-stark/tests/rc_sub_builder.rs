@@ -43,8 +43,8 @@ where
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
 
-        let value = main.local(0);
-        let bits = &main.local_slice()[1..];
+        let value = main.current(0).unwrap();
+        let bits = &main.current_slice()[1..];
 
         let mut recomposed = AB::Expr::ZERO;
         for (i, bit) in bits.iter().enumerate() {
@@ -83,9 +83,9 @@ where
         // Evaluate the parent AIR
         let main = builder.main();
 
-        let accumulator = main.local(0);
-        let range_value = main.local(1);
-        let next_accumulator = main.next(0);
+        let accumulator = main.current(0).unwrap();
+        let range_value = main.current(1).unwrap();
+        let next_accumulator = main.next(0).unwrap();
 
         builder.when_first_row().assert_zero(accumulator);
         builder

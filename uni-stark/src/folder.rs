@@ -71,13 +71,13 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     #[inline]
     fn main(&self) -> Self::M {
         let w = self.main.width;
-        RowWindow::new(&self.main.values[..w], &self.main.values[w..])
+        RowWindow::from_flat(self.main.values, w)
     }
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.preprocessed.map(|p| {
             let w = p.width;
-            RowWindow::new(&p.values[..w], &p.values[w..])
+            RowWindow::from_flat(p.values, w)
         })
     }
 
@@ -128,12 +128,12 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
     type M = RowWindow<'a, SC::Challenge>;
 
     fn main(&self) -> Self::M {
-        RowWindow::new(self.main.top.values, self.main.bottom.values)
+        RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
     }
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.preprocessed
-            .map(|p| RowWindow::new(p.top.values, p.bottom.values))
+            .map(|p| RowWindow::from_two_rows(p.top.values, p.bottom.values))
     }
 
     fn public_values(&self) -> &[Self::PublicVar] {

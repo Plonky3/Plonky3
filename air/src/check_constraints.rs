@@ -162,12 +162,12 @@ where
     type PublicVar = F;
 
     fn main(&self) -> Self::M {
-        RowWindow::new(self.main.top.values, self.main.bottom.values)
+        RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
     }
 
     fn preprocessed(&self) -> Option<Self::M> {
         self.preprocessed
-            .map(|p| RowWindow::new(p.top.values, p.bottom.values))
+            .map(|p| RowWindow::from_two_rows(p.top.values, p.bottom.values))
     }
 
     fn public_values(&self) -> &[Self::PublicVar] {
@@ -245,7 +245,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> PermutationAirBuilder
     fn permutation(&self) -> Self::MP {
         let p = self.permutation
             .expect("permutation() called on a builder created without permutation data; use new_with_permutation()");
-        RowWindow::new(p.top.values, p.bottom.values)
+        RowWindow::from_two_rows(p.top.values, p.bottom.values)
     }
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
@@ -362,8 +362,8 @@ mod tests {
 
             // Transition constraint: next == current + 1 for every column.
             for col in 0..W {
-                let current = main.local(col);
-                let next = main.next(col);
+                let current = main.current(col).unwrap();
+                let next = main.next(col).unwrap();
                 builder.when_transition().assert_eq(next, current + F::ONE);
             }
 
@@ -371,7 +371,7 @@ mod tests {
             let public_values = builder.public_values;
             let mut when_last = builder.when(builder.is_last_row);
             for (i, &pv) in public_values.iter().enumerate().take(W) {
-                when_last.assert_eq(main.local(i), pv);
+                when_last.assert_eq(main.current(i).unwrap(), pv);
             }
         }
     }
@@ -482,7 +482,7 @@ mod tests {
         fn eval(&self, builder: &mut DebugConstraintBuilder<'_, F>) {
             let main = builder.main();
             for col in 0..W {
-                builder.assert_zero(main.local(col));
+                builder.assert_zero(main.current(col).unwrap());
             }
         }
     }
