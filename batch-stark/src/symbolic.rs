@@ -1,11 +1,48 @@
 use alloc::vec::Vec;
 
 use p3_air::Air;
-use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt};
+use p3_air::symbolic::{
+    ConstraintLayout, SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt,
+};
 use p3_field::{Algebra, ExtensionField, Field};
 use p3_lookup::lookup_traits::{Lookup, LookupData, LookupGadget};
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
+
+#[instrument(
+    name = "compute constraint layout with lookups",
+    skip_all,
+    level = "debug"
+)]
+pub fn get_constraint_layout<F, EF, A, LG>(
+    air: &A,
+    preprocessed_width: usize,
+    contexts: &[Lookup<F>],
+    lookup_data: &[LookupData<EF>],
+    lookup_gadget: &LG,
+) -> ConstraintLayout
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: Air<SymbolicAirBuilder<F, EF>>,
+    SymbolicExpressionExt<F, EF>: Algebra<EF>,
+    LG: LookupGadget,
+{
+    let num_aux_cols = contexts.len() * lookup_gadget.num_aux_cols();
+    let num_challenges = contexts.len() * lookup_gadget.num_challenges();
+    let mut builder = SymbolicAirBuilder::new(
+        preprocessed_width,
+        air.width(),
+        air.num_public_values(),
+        num_aux_cols,
+        num_challenges,
+        0,
+    );
+    let perm_values: Vec<EF> = lookup_data.iter().map(|ld| ld.expected_cumulated).collect();
+    builder.set_permutation_values(perm_values);
+    air.eval_with_lookups(&mut builder, contexts, lookup_gadget);
+    builder.constraint_layout()
+}
 
 pub fn get_log_num_quotient_chunks<F, EF, A, LG>(
     air: &A,

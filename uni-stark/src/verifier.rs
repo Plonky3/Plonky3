@@ -98,11 +98,14 @@ where
     );
 
     let preprocessed = match (preprocessed_local, preprocessed_next) {
-        (Some(local), Some(next)) => Some(VerticalPair::new(
+        (Some(local), Some(next)) => VerticalPair::new(
             RowMajorMatrixView::new_row(local),
             RowMajorMatrixView::new_row(next),
-        )),
-        _ => None,
+        ),
+        _ => VerticalPair::new(
+            RowMajorMatrixView::new(&[], 0),
+            RowMajorMatrixView::new(&[], 0),
+        ),
     };
 
     let mut folder = VerifierConstraintFolder {

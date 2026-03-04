@@ -238,7 +238,7 @@ pub trait AirBuilder: Sized {
         + Mul<Self::Expr, Output = Self::Expr>;
 
     /// Matrix type holding variables.
-    type M: Matrix<Self::Var>;
+    type M: Matrix<Self::Var> + Clone;
 
     /// Variable type for public values.
     type PublicVar: Into<Self::Expr> + Copy;
@@ -246,12 +246,10 @@ pub trait AirBuilder: Sized {
     /// Return the matrix representing the main (primary) trace registers.
     fn main(&self) -> Self::M;
 
-    /// Return an optional matrix of preprocessed registers.
-    /// The default implementation returns `None`.
-    /// Override this for builders that provide preprocessed columns.
-    fn preprocessed(&self) -> Option<Self::M> {
-        None
-    }
+    /// Return the matrix of preprocessed registers.
+    ///
+    /// When no preprocessed columns exist, this returns an empty (zero-width) matrix.
+    fn preprocessed(&self) -> &Self::M;
 
     /// Expression evaluating to 1 on the first row, 0 elsewhere.
     fn is_first_row(&self) -> Self::Expr;
@@ -472,7 +470,7 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
         self.inner.main()
     }
 
-    fn preprocessed(&self) -> Option<Self::M> {
+    fn preprocessed(&self) -> &Self::M {
         self.inner.preprocessed()
     }
 
