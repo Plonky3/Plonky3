@@ -492,7 +492,10 @@ where
             }
         };
         let pre_next_zeros;
-        let pre_next_ref = match &opened_values.instances[i].base_opened_values.preprocessed_next {
+        let pre_next_ref = match &opened_values.instances[i]
+            .base_opened_values
+            .preprocessed_next
+        {
             Some(v) => v.as_slice(),
             None => {
                 pre_next_zeros = vec![SC::Challenge::ZERO; preprocessed_widths[i]];
