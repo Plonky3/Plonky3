@@ -72,7 +72,6 @@ impl BaseAir<BabyBear> for RangeCheckAir {
 impl<AB> Air<AB> for RangeCheckAir
 where
     AB: AirBuilder<F = BabyBear>,
-    AB::M: Clone,
 {
     fn eval(&self, builder: &mut AB) {
         // Declare the sub-AIR and evaluate it via `SubAirBuilder`

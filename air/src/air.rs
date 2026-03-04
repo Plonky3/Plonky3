@@ -238,7 +238,7 @@ pub trait AirBuilder: Sized {
         + Mul<Self::Expr, Output = Self::Expr>;
 
     /// Matrix type holding variables.
-    type M: Matrix<Self::Var>;
+    type M: Matrix<Self::Var> + Clone;
 
     /// Variable type for public values.
     type PublicVar: Into<Self::Expr> + Copy;

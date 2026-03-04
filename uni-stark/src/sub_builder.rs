@@ -32,10 +32,7 @@ pub struct SubAirBuilder<'a, AB: AirBuilder, SubAir: BaseAir<AB::F>, T> {
     _phantom: core::marker::PhantomData<(SubAir, T)>,
 }
 
-impl<'a, AB: AirBuilder, SubAir: BaseAir<AB::F>, T> SubAirBuilder<'a, AB, SubAir, T>
-where
-    AB::M: Clone,
-{
+impl<'a, AB: AirBuilder, SubAir: BaseAir<AB::F>, T> SubAirBuilder<'a, AB, SubAir, T> {
     /// Create a new [`SubAirBuilder`] exposing only `column_range` to the sub-AIR.
     ///
     /// The range must lie entirely inside the parent trace width.
@@ -54,10 +51,7 @@ where
 }
 
 /// Implements `AirBuilder` for `SubAirBuilder`.
-impl<AB: AirBuilder, SubAir: BaseAir<AB::F>, F> AirBuilder for SubAirBuilder<'_, AB, SubAir, F>
-where
-    AB::M: Clone,
-{
+impl<AB: AirBuilder, SubAir: BaseAir<AB::F>, F> AirBuilder for SubAirBuilder<'_, AB, SubAir, F> {
     type F = AB::F;
     type Expr = AB::Expr;
     type Var = AB::Var;
