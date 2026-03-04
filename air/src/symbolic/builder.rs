@@ -10,7 +10,8 @@ use crate::symbolic::expression::BaseLeaf;
 use crate::symbolic::expression_ext::SymbolicExpressionExt;
 use crate::symbolic::variable::{BaseEntry, ExtEntry, SymbolicVariableExt};
 use crate::{
-    Air, AirBuilder, ExtensionBuilder, PermutationAirBuilder, SymbolicExpression, SymbolicVariable,
+    Air, AirBuilder, ExtensionBuilder, PeriodicAirBuilder, PermutationAirBuilder,
+    SymbolicExpression, SymbolicVariable,
 };
 
 #[instrument(skip_all, level = "debug")]
@@ -78,6 +79,7 @@ where
         air.num_public_values(),
         0,
         0,
+        0,
     );
     air.eval(&mut builder);
     builder.base_constraints()
@@ -105,6 +107,7 @@ where
         air.num_public_values(),
         permutation_width,
         num_permutation_challenges,
+        0,
     );
     air.eval(&mut builder);
     builder.extension_constraints()
@@ -135,6 +138,7 @@ where
         air.num_public_values(),
         permutation_width,
         num_permutation_challenges,
+        0,
     );
     air.eval(&mut builder);
     (builder.base_constraints(), builder.extension_constraints())
@@ -146,6 +150,7 @@ pub struct SymbolicAirBuilder<F: Field, EF: ExtensionField<F> = F> {
     preprocessed: RowMajorMatrix<SymbolicVariable<F>>,
     main: RowMajorMatrix<SymbolicVariable<F>>,
     public_values: Vec<SymbolicVariable<F>>,
+    periodic: Vec<SymbolicVariable<F>>,
     base_constraints: Vec<SymbolicExpression<F>>,
     permutation: RowMajorMatrix<SymbolicVariableExt<F, EF>>,
     permutation_challenges: Vec<SymbolicVariableExt<F, EF>>,
@@ -159,6 +164,7 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
         num_public_values: usize,
         permutation_width: usize,
         num_permutation_challenges: usize,
+        num_periodic_columns: usize,
     ) -> Self {
         let prep_values = [0, 1]
             .into_iter()
@@ -178,6 +184,9 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
         let public_values = (0..num_public_values)
             .map(move |index| SymbolicVariable::new(BaseEntry::Public, index))
             .collect();
+        let periodic = (0..num_periodic_columns)
+            .map(|index| SymbolicVariable::new(BaseEntry::Periodic, index))
+            .collect();
         let perm_values = [0, 1]
             .into_iter()
             .flat_map(|offset| {
@@ -194,6 +203,7 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
             preprocessed: RowMajorMatrix::new(prep_values, preprocessed_width),
             main: RowMajorMatrix::new(main_values, width),
             public_values,
+            periodic,
             base_constraints: vec![],
             permutation,
             permutation_challenges,
@@ -289,6 +299,14 @@ where
     }
 }
 
+impl<F: Field, EF: ExtensionField<F>> PeriodicAirBuilder for SymbolicAirBuilder<F, EF> {
+    type PeriodicVar = SymbolicVariable<F>;
+
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        &self.periodic
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use p3_baby_bear::BabyBear;
@@ -374,7 +392,7 @@ mod tests {
 
     #[test]
     fn test_symbolic_air_builder_initialization() {
-        let builder = SymbolicAirBuilder::<F>::new(2, 4, 3, 0, 0);
+        let builder = SymbolicAirBuilder::<F>::new(2, 4, 3, 0, 0, 0);
 
         let expected_main = [
             SymbolicVariable::<F>::new(BaseEntry::Main { offset: 0 }, 0),
@@ -403,7 +421,7 @@ mod tests {
 
     #[test]
     fn test_symbolic_air_builder_is_first_last_row() {
-        let builder = SymbolicAirBuilder::<F>::new(2, 4, 3, 0, 0);
+        let builder = SymbolicAirBuilder::<F>::new(2, 4, 3, 0, 0, 0);
 
         assert!(
             matches!(
@@ -424,7 +442,7 @@ mod tests {
 
     #[test]
     fn test_symbolic_air_builder_assert_zero() {
-        let mut builder = SymbolicAirBuilder::<F>::new(2, 4, 3, 0, 0);
+        let mut builder = SymbolicAirBuilder::<F>::new(2, 4, 3, 0, 0, 0);
         let expr = SymbolicExpression::Leaf(BaseLeaf::Constant(F::new(5)));
         builder.assert_zero(expr);
 
@@ -442,7 +460,7 @@ mod tests {
     #[test]
     fn test_is_transition_window_size_2() {
         // Window size 2 returns the transition selector.
-        let builder = SymbolicAirBuilder::<F>::new(0, 2, 0, 0, 0);
+        let builder = SymbolicAirBuilder::<F>::new(0, 2, 0, 0, 0, 0);
         let expr = builder.is_transition_window(2);
         assert!(matches!(
             expr,
@@ -454,14 +472,14 @@ mod tests {
     #[should_panic(expected = "uni-stark only supports a window size of 2")]
     fn test_is_transition_window_size_3_panics() {
         // Window size 3 is not supported and should panic.
-        let builder = SymbolicAirBuilder::<F>::new(0, 2, 0, 0, 0);
+        let builder = SymbolicAirBuilder::<F>::new(0, 2, 0, 0, 0, 0);
         let _ = builder.is_transition_window(3);
     }
 
     #[test]
     fn test_main_returns_correct_dimensions() {
         // The main matrix has 2 rows (one per offset) and the given width.
-        let builder = SymbolicAirBuilder::<F>::new(0, 3, 0, 0, 0);
+        let builder = SymbolicAirBuilder::<F>::new(0, 3, 0, 0, 0, 0);
         let main = builder.main();
 
         // 2 rows times 3 columns gives 6 entries.
@@ -480,7 +498,7 @@ mod tests {
     #[test]
     fn test_preprocessed_returns_correct_dimensions() {
         // The preprocessed matrix has 2 rows and the given preprocessed width.
-        let builder = SymbolicAirBuilder::<F>::new(2, 3, 0, 0, 0);
+        let builder = SymbolicAirBuilder::<F>::new(2, 3, 0, 0, 0, 0);
         let prep = builder.preprocessed().expect("should be Some");
 
         // 2 rows times 2 columns gives 4 entries.
@@ -494,14 +512,14 @@ mod tests {
     #[test]
     fn test_preprocessed_returns_none_when_width_is_zero() {
         // A builder with zero preprocessed columns should report no preprocessed trace.
-        let builder = SymbolicAirBuilder::<F>::new(0, 3, 0, 0, 0);
+        let builder = SymbolicAirBuilder::<F>::new(0, 3, 0, 0, 0, 0);
         assert!(builder.preprocessed().is_none());
     }
 
     #[test]
     fn test_public_values_correct_count_and_entries() {
         // All public value variables have the public entry kind.
-        let builder = SymbolicAirBuilder::<F>::new(0, 2, 5, 0, 0);
+        let builder = SymbolicAirBuilder::<F>::new(0, 2, 5, 0, 0, 0);
         let pv = builder.public_values();
         assert_eq!(pv.len(), 5);
         for (i, var) in pv.iter().enumerate() {
@@ -513,7 +531,7 @@ mod tests {
     #[test]
     fn test_assert_zero_ext_records_constraint() {
         // Asserting an extension constraint records it in the builder.
-        let mut builder = SymbolicAirBuilder::<F, EF>::new(0, 2, 0, 2, 1);
+        let mut builder = SymbolicAirBuilder::<F, EF>::new(0, 2, 0, 2, 1, 0);
         let expr = SymbolicExpressionExt::<F, EF>::from(F::new(7));
         builder.assert_zero_ext(expr);
         let ext_constraints = builder.extension_constraints();
@@ -523,14 +541,14 @@ mod tests {
     #[test]
     fn test_extension_constraints_initially_empty() {
         // A fresh builder starts with no extension constraints.
-        let builder = SymbolicAirBuilder::<F, EF>::new(0, 2, 0, 0, 0);
+        let builder = SymbolicAirBuilder::<F, EF>::new(0, 2, 0, 0, 0, 0);
         assert!(builder.extension_constraints().is_empty());
     }
 
     #[test]
     fn test_permutation_returns_correct_dimensions() {
         // The permutation matrix has 2 rows and the given permutation width.
-        let builder = SymbolicAirBuilder::<F, EF>::new(0, 2, 0, 3, 0);
+        let builder = SymbolicAirBuilder::<F, EF>::new(0, 2, 0, 3, 0, 0);
         let perm = builder.permutation();
 
         // 2 rows times 3 columns gives 6 entries.
@@ -543,7 +561,7 @@ mod tests {
     #[test]
     fn test_permutation_randomness_correct_count() {
         // All challenge variables have the challenge entry kind.
-        let builder = SymbolicAirBuilder::<F, EF>::new(0, 2, 0, 2, 4);
+        let builder = SymbolicAirBuilder::<F, EF>::new(0, 2, 0, 2, 4, 0);
         let challenges = builder.permutation_randomness();
         assert_eq!(challenges.len(), 4);
         for (i, var) in challenges.iter().enumerate() {

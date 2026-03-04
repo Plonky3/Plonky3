@@ -1,8 +1,10 @@
 //! A couple of simple functions needed in the case that this is compiled without architecture optimizations available.
 
+mod poseidon;
 mod poseidon2;
 
 use p3_field::extension::{octic_mul, quartic_mul, quintic_mul, trinomial_quintic_mul};
+pub use poseidon::*;
 pub use poseidon2::*;
 
 use crate::{BinomialExtensionData, FieldParameters, MontyField31};

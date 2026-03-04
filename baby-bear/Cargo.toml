@@ -14,6 +14,7 @@ p3-challenger.workspace = true
 p3-field.workspace = true
 p3-mds.workspace = true
 p3-monty-31.workspace = true
+p3-poseidon.workspace = true
 p3-poseidon2.workspace = true
 p3-symmetric.workspace = true
 
