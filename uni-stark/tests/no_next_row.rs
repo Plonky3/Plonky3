@@ -31,7 +31,7 @@ impl<AB: AirBuilder> Air<AB> for SquareAir {
         let main = builder.main();
         let a = main.current(0).unwrap();
         let b = main.current(1).unwrap();
-        builder.assert_eq(a.clone() * a, b);
+        builder.assert_eq(a * a, b);
     }
 }
 
