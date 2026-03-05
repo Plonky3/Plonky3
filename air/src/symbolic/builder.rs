@@ -374,30 +374,26 @@ impl ConstraintLayout {
     ) -> (Vec<Vec<F>>, Vec<EF>) {
         let total = self.total_constraints();
 
-        // Build ascending powers: alpha_powers[k] = alpha^k.
-        //
-        // Constraint i needs weight alpha^{total - 1 - i}.
-        // We index with `total - 1 - idx` below instead of reversing the vector.
-        let alpha_powers: Vec<EF> = alpha.powers().collect_n(total);
+        // alpha_powers[i] = α^{total − 1 − i}, so constraint i gets
+        // weight α^{total − 1 − i} in the linear combination.
+        let mut alpha_powers = alpha.powers().collect_n(total);
+        alpha_powers.reverse();
 
-        // Prepare one output column per basis dimension.
-        let mut base_alpha_powers =
-            vec![Vec::with_capacity(self.base_indices.len()); EF::DIMENSION];
+        // Base: transpose EF -> [F; D] and reorder by base_indices in one pass
+        let base_alpha_powers = (0..EF::DIMENSION)
+            .map(|d| {
+                self.base_indices
+                    .iter()
+                    .map(|&idx| alpha_powers[idx].as_basis_coefficients_slice()[d])
+                    .collect()
+            })
+            .collect();
 
-        // Single pass over base indices.
-        // Read each EF element once and scatter its D base-field coefficients.
-        for &idx in &self.base_indices {
-            let coeffs = alpha_powers[total - 1 - idx].as_basis_coefficients_slice();
-            for (d, col) in base_alpha_powers.iter_mut().enumerate() {
-                col.push(coeffs[d]);
-            }
-        }
-
-        // Extension constraints keep the full EF power.
+        // Ext: pick full EF powers by ext_indices
         let ext_alpha_powers = self
             .ext_indices
             .iter()
-            .map(|&idx| alpha_powers[total - 1 - idx])
+            .map(|&idx| alpha_powers[idx])
             .collect();
 
         (base_alpha_powers, ext_alpha_powers)
