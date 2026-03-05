@@ -107,7 +107,6 @@ fn prove_and_verify() -> Result<(), impl Debug> {
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
     let challenger = Challenger::from_hasher(vec![], byte_hash);
 
-    // AIR setup
 
     // WARNING: SmallRng is NOT cryptographically secure. Use a real PRNG in production.
     let mut rng = SmallRng::seed_from_u64(1);
