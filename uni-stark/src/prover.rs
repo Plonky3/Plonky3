@@ -81,7 +81,6 @@ where
         ..Default::default()
     };
 
-
     // In debug builds, cross-check the static hint against symbolic evaluation.
     debug_assert!(
         air.num_constraints()
