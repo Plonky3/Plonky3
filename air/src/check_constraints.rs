@@ -67,6 +67,9 @@ pub struct DebugConstraintBuilder<'a, F: Field, EF: ExtensionField<F> = F> {
 
     /// Challenge values for the permutation argument, empty when unused.
     permutation_challenges: &'a [EF],
+
+    /// Expected cumulated values for global lookup arguments.
+    permutation_values: &'a [EF],
 }
 
 impl<'a, F: Field> DebugConstraintBuilder<'a, F> {
@@ -96,6 +99,7 @@ impl<'a, F: Field> DebugConstraintBuilder<'a, F> {
             is_transition,
             permutation: None,
             permutation_challenges: &[],
+            permutation_values: &[],
         }
     }
 }
@@ -116,6 +120,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> DebugConstraintBuilder<'a, F, EF> {
         is_transition: F,
         permutation: ViewPair<'a, EF>,
         permutation_challenges: &'a [EF],
+        permutation_values: &'a [EF],
     ) -> Self {
         Self {
             row_index,
@@ -129,6 +134,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> DebugConstraintBuilder<'a, F, EF> {
             is_transition,
             permutation: Some(permutation),
             permutation_challenges,
+            permutation_values,
         }
     }
 
@@ -243,6 +249,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> PermutationAirBuilder
 {
     type MP = VerticalPair<RowMajorMatrixView<'a, EF>, RowMajorMatrixView<'a, EF>>;
     type RandomVar = EF;
+    type PermutationVar = EF;
 
     /// # Panics
     ///
@@ -254,6 +261,10 @@ impl<'a, F: Field, EF: ExtensionField<F>> PermutationAirBuilder
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         self.permutation_challenges
+    }
+
+    fn permutation_values(&self) -> &[Self::PermutationVar] {
+        self.permutation_values
     }
 }
 

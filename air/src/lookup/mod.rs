@@ -156,46 +156,33 @@ pub trait LookupEvaluator {
     ) where
         AB: PermutationAirBuilder;
 
-    /// Evalutes the lookup constraints for all provided contexts.
+    /// Evaluates the lookup constraints for all provided contexts.
     ///
     /// For each context:
     /// - if it is a local lookup, evaluates it with `eval_local_lookup`.
-    /// - if it is a global lookup, evaluates it with `eval_global_update`, using the expected cumulated value from `lookup_data`.
-    fn eval_lookups<AB>(
-        &self,
-        builder: &mut AB,
-        contexts: &[Lookup<AB::F>],
-        // Assumed to be sorted by auxiliary_index.
-        lookup_data: &[LookupData<AB::ExprEF>],
-    ) where
+    /// - if it is a global lookup, evaluates it with `eval_global_update`, reading the expected
+    ///   cumulated value from the builder's `permutation_values()`.
+    fn eval_lookups<AB>(&self, builder: &mut AB, contexts: &[Lookup<AB::F>])
+    where
         AB: PermutationAirBuilder,
     {
-        let mut lookup_data_iter = lookup_data.iter();
+        let mut pv_idx = 0;
         for context in contexts.iter() {
             match &context.kind {
                 Kind::Local => {
                     self.eval_local_lookup(builder, context);
                 }
                 Kind::Global(_) => {
-                    // Find the expected cumulated value for this context.
-                    let LookupData {
-                        name: _,
-                        aux_idx,
-                        expected_cumulated,
-                    } = lookup_data_iter
-                        .next()
-                        .expect("Expected cumulated value missing");
-
-                    if *aux_idx != context.columns[0] {
-                        panic!("Expected cumulated values not sorted by auxiliary index");
-                    }
-                    self.eval_global_update(builder, context, expected_cumulated.clone());
+                    let expected = builder.permutation_values()[pv_idx].clone();
+                    pv_idx += 1;
+                    self.eval_global_update(builder, context, expected.into());
                 }
             }
         }
-        assert!(
-            lookup_data_iter.next().is_none(),
-            "Too many expected cumulated values provided"
+        assert_eq!(
+            pv_idx,
+            builder.permutation_values().len(),
+            "permutation values count mismatch"
         );
     }
 }

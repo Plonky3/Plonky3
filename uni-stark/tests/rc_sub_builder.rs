@@ -10,7 +10,7 @@
 
 use core::marker::PhantomData;
 
-use p3_air::symbolic::SymbolicAirBuilder;
+use p3_air::symbolic::{AirLayout, SymbolicAirBuilder};
 use p3_air::{Air, AirBuilder, BaseAir};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
@@ -126,7 +126,10 @@ impl RangeCheckAir {
 #[test]
 fn range_checked_sub_builder() {
     let air = RangeCheckAir;
-    let mut builder = SymbolicAirBuilder::<BabyBear>::new(0, TRACE_WIDTH, 0, 0, 0, 0);
+    let mut builder = SymbolicAirBuilder::<BabyBear>::new(AirLayout {
+        main_width: TRACE_WIDTH,
+        ..Default::default()
+    });
     air.eval(&mut builder);
 
     let constraints = builder.base_constraints();
