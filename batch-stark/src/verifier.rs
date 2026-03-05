@@ -5,7 +5,7 @@ use core::fmt::Debug;
 
 use hashbrown::HashMap;
 use p3_air::Air;
-use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpressionExt};
+use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
@@ -97,11 +97,17 @@ where
             .unwrap_or(0);
         preprocessed_widths.push(pre_w);
 
+        let layout = AirLayout {
+            preprocessed_width: pre_w,
+            main_width: air.width(),
+            num_public_values: air.num_public_values(),
+            ..Default::default()
+        };
         let log_num_chunks =
             info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
                 get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
                     air,
-                    pre_w,
+                    layout,
                     &all_lookups[i],
                     &lookup_data_to_ext_expr(&global_lookup_data[i]),
                     config.is_zk(),

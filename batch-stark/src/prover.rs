@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use p3_air::Air;
 #[cfg(debug_assertions)]
 use p3_air::DebugConstraintBuilder;
-use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpressionExt};
+use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{
@@ -137,11 +137,17 @@ where
                 .and_then(|g| g.instances[i].as_ref().map(|m| m.width))
                 .unwrap_or(0);
             preprocessed_widths.push(pre_w);
+            let layout = AirLayout {
+                preprocessed_width: pre_w,
+                main_width: air.width(),
+                num_public_values: air.num_public_values(),
+                ..Default::default()
+            };
             let lq_chunks =
                 info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
                     get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
                         air,
-                        pre_w,
+                        layout,
                         &all_lookups[i],
                         &lookup_data_to_ext_expr(&lookup_data[i]),
                         config.is_zk(),
@@ -299,12 +305,19 @@ where
         let quotient_domain =
             ext_trace_domains[i].create_disjoint_domain(1 << (log_ext_degrees[i] + log_chunks));
 
+        let sym_layout = AirLayout {
+            preprocessed_width: preprocessed_widths[i],
+            main_width: airs[i].width(),
+            num_public_values: airs[i].num_public_values(),
+            ..Default::default()
+        };
+
         // In debug builds, cross-check the static hint against symbolic evaluation.
         debug_assert!(
             airs[i].num_constraints().is_none_or(|n| {
                 n == get_symbolic_constraints(
                     airs[i],
-                    preprocessed_widths[i],
+                    sym_layout,
                     &all_lookups[i],
                     &lookup_data_to_ext_expr(&lookup_data[i]),
                     &lookup_gadget,
@@ -316,7 +329,7 @@ where
             airs[i].num_constraints().unwrap(),
             get_symbolic_constraints(
                 airs[i],
-                preprocessed_widths[i],
+                sym_layout,
                 &all_lookups[i],
                 &lookup_data_to_ext_expr(&lookup_data[i]),
                 &lookup_gadget,
@@ -360,7 +373,7 @@ where
         let q_values = quotient_values::<SC, A, _, LogUpGadget>(
             airs[i],
             &pub_vals[i],
-            preprocessed_widths[i],
+            sym_layout,
             *trace_domain,
             quotient_domain,
             &trace_on_quotient_domain,
@@ -634,7 +647,7 @@ where
 pub fn quotient_values<SC, A, Mat, LG>(
     air: &A,
     public_values: &[Val<SC>],
-    preprocessed_width: usize,
+    layout: AirLayout,
     trace_domain: Domain<SC>,
     quotient_domain: Domain<SC>,
     trace_on_quotient_domain: &Mat,
@@ -680,14 +693,14 @@ where
         pad(&mut sels.inv_vanishing);
     }
 
-    let layout = get_constraint_layout(
+    let constraint_layout = get_constraint_layout(
         air,
-        preprocessed_width,
+        layout,
         lookups,
         &lookup_data_to_ext_expr(lookup_data),
         lookup_gadget,
     );
-    let (base_alpha_powers, ext_alpha_powers) = layout.decompose_alpha(alpha);
+    let (base_alpha_powers, ext_alpha_powers) = constraint_layout.decompose_alpha(alpha);
 
     // Precompute per-instance data used by the hot inner loop to avoid repeated allocations.
     let packed_perm_challenges: Vec<PackedChallenge<SC>> = permutation_challenges
@@ -772,10 +785,10 @@ where
                 is_transition,
                 base_alpha_powers: &base_alpha_powers,
                 ext_alpha_powers: &ext_alpha_powers,
-                base_constraints: Vec::with_capacity(layout.base_indices.len()),
-                ext_constraints: Vec::with_capacity(layout.ext_indices.len()),
+                base_constraints: Vec::with_capacity(constraint_layout.base_indices.len()),
+                ext_constraints: Vec::with_capacity(constraint_layout.ext_indices.len()),
                 constraint_index: 0,
-                constraint_count: layout.total_constraints(),
+                constraint_count: constraint_layout.total_constraints(),
             };
 
             let mut folder = ProverConstraintFolderWithLookups {

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
+use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpression};
 use p3_air::{AirBuilder, BaseLeaf};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
@@ -42,7 +42,10 @@ fn random_main_trace(height: usize, width: usize, rng: &mut SmallRng) -> RowMajo
 
 /// Build symbolic lookup contexts similar to RangeCheckAir pattern.
 fn build_lookups(num_lookups: usize, tuple_size: usize, trace_width: usize) -> Vec<Lookup<F>> {
-    let symbolic_builder = SymbolicAirBuilder::<F>::new(0, trace_width, 0, 0, 0, 0);
+    let symbolic_builder = SymbolicAirBuilder::<F>::new(AirLayout {
+        main_width: trace_width,
+        ..Default::default()
+    });
     let symbolic_main = symbolic_builder.main();
     let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
