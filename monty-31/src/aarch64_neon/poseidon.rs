@@ -37,7 +37,7 @@ pub struct PoseidonInternalLayerMonty31<
     pub(crate) internal_constants: PartialRoundConstants<MontyField31<PMP>, WIDTH>,
     /// Pre-packed first round constants (broadcast to all NEON lanes).
     packed_first_round_constants: [PackedMontyField31Neon<PMP>; WIDTH],
-    /// Pre-packed scalar round constants for partial rounds (RP-1 entries).
+    /// Pre-packed round constants for partial rounds (RP-1 entries).
     packed_round_constants: Vec<PackedMontyField31Neon<PMP>>,
     /// Pre-packed sparse first-row vectors for each partial round (RP entries).
     packed_sparse_first_row: Vec<[PackedMontyField31Neon<PMP>; WIDTH]>,
