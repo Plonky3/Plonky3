@@ -75,7 +75,9 @@ mod tests {
     use core::mem::size_of;
 
     use p3_baby_bear::{
-        BABYBEAR_POSEIDON_RC_16, BabyBear, MDSBabyBearData, default_babybear_poseidon_16,
+        BABYBEAR_POSEIDON_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON_PARTIAL_ROUNDS_16,
+        BABYBEAR_POSEIDON_RC_16, BABYBEAR_S_BOX_DEGREE, BabyBear, MDSBabyBearData,
+        default_babybear_poseidon_16,
     };
     use p3_challenger::{HashChallenger, SerializingChallenger32};
     use p3_commit::ExtensionMmcs;
@@ -99,25 +101,18 @@ mod tests {
 
     type F = BabyBear;
 
-    // BabyBear Poseidon1 parameters (width 16).
-    //
-    // These mirror the private constants in `p3-baby-bear`. For BabyBear:
-    //   p - 1 = 15 * 2^27
-    // Both 3 and 5 divide p - 1, so the smallest valid S-box exponent is 7.
-    //
-    // Round counts (RF = 8, RP = 13) come from the Poseidon paper's security
-    // analysis (Section 5.4) with a +2 RF and +7.5% RP security margin.
+    // BabyBear Poseidon1 parameters (width 16), imported from `p3-baby-bear`.
     const WIDTH: usize = 16;
-    const SBOX_DEGREE: u64 = 7;
+    const SBOX_DEGREE: u64 = BABYBEAR_S_BOX_DEGREE;
     const SBOX_REGISTERS: usize = 1;
-    const HALF_FULL_ROUNDS: usize = 4;
-    const PARTIAL_ROUNDS: usize = 13;
+    const HALF_FULL_ROUNDS: usize = BABYBEAR_POSEIDON_HALF_FULL_ROUNDS;
+    const PARTIAL_ROUNDS: usize = BABYBEAR_POSEIDON_PARTIAL_ROUNDS_16;
 
     /// Build the raw Poseidon1 constants for BabyBear width 16.
     fn babybear_poseidon_constants_16() -> PoseidonConstants<F, 16> {
         PoseidonConstants {
-            rounds_f: 8,
-            rounds_p: 13,
+            rounds_f: 2 * BABYBEAR_POSEIDON_HALF_FULL_ROUNDS,
+            rounds_p: BABYBEAR_POSEIDON_PARTIAL_ROUNDS_16,
             mds_circ_col: MDSBabyBearData::MATRIX_CIRC_MDS_16_COL,
             round_constants: BABYBEAR_POSEIDON_RC_16.to_vec(),
         }
@@ -222,7 +217,6 @@ mod tests {
             PARTIAL_ROUNDS,
         > = PoseidonAir::new(air_constants);
 
-
         // Hash function for Merkle tree leaves and Fiat-Shamir challenger.
         let byte_hash = Keccak256Hash {};
 
@@ -255,7 +249,6 @@ mod tests {
 
         // FRI parameters (log_blowup determines the LDE blowup factor).
         let fri_params = create_benchmark_fri_params(challenge_mmcs);
-
 
         // Generate the trace with extra capacity for the LDE blowup.
         let trace = air.generate_trace_rows(16, fri_params.log_blowup);

@@ -2,7 +2,10 @@
 
 use core::fmt::Debug;
 
-use p3_baby_bear::BabyBear;
+use p3_baby_bear::{
+    BABYBEAR_POSEIDON_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON_PARTIAL_ROUNDS_16, BABYBEAR_S_BOX_DEGREE,
+    BabyBear,
+};
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
@@ -26,12 +29,12 @@ use tracing_subscriber::{EnvFilter, Registry};
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
-// Poseidon1 parameters for BabyBear width 16 (same as in tests).
+// Poseidon1 parameters for BabyBear width 16.
 const WIDTH: usize = 16;
-const SBOX_DEGREE: u64 = 7;
+const SBOX_DEGREE: u64 = BABYBEAR_S_BOX_DEGREE;
 const SBOX_REGISTERS: usize = 1;
-const HALF_FULL_ROUNDS: usize = 4;
-const PARTIAL_ROUNDS: usize = 13;
+const HALF_FULL_ROUNDS: usize = BABYBEAR_POSEIDON_HALF_FULL_ROUNDS;
+const PARTIAL_ROUNDS: usize = BABYBEAR_POSEIDON_PARTIAL_ROUNDS_16;
 
 /// Number of trace rows (must be a power of two).
 const NUM_ROWS: usize = 1 << 16;
@@ -72,7 +75,6 @@ fn prove_and_verify() -> Result<(), impl Debug> {
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-
     type ByteHash = Keccak256Hash;
     let byte_hash = ByteHash {};
 
@@ -87,7 +89,6 @@ fn prove_and_verify() -> Result<(), impl Debug> {
     // Merkle tree compression: hash two 4-u64 digests into one.
     type MyCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;
     let compress = MyCompress::new(u64_hash);
-
 
     // Merkle tree MMCS for committing to the trace polynomial evaluations.
     type ValMmcs = MerkleTreeMmcs<
@@ -107,7 +108,6 @@ fn prove_and_verify() -> Result<(), impl Debug> {
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
     let challenger = Challenger::from_hasher(vec![], byte_hash);
 
-
     // WARNING: SmallRng is NOT cryptographically secure. Use a real PRNG in production.
     let mut rng = SmallRng::seed_from_u64(1);
     let constants = RoundConstants::from_rng(&mut rng);
@@ -120,7 +120,6 @@ fn prove_and_verify() -> Result<(), impl Debug> {
         PARTIAL_ROUNDS,
         VECTOR_LEN,
     > = VectorizedPoseidonAir::new(constants);
-
 
     let fri_params = create_benchmark_fri_params(challenge_mmcs);
 

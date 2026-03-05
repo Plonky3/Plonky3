@@ -417,6 +417,16 @@ fn eval_sbox<AB, const DEGREE: u64, const REGISTERS: usize>(
             committed_x3.square() * x.clone()
         }
 
+        // x^11 via committed x^3:
+        //   Constrain: committed_x3 = x^3
+        //   Output:    (committed_x3)^3 * x^2 = x^11
+        //   Max constraint degree: 5.
+        (11, 1) => {
+            let committed_x3 = sbox.0[0].into();
+            builder.assert_eq(committed_x3.clone(), x.cube());
+            committed_x3.cube() * x.square()
+        }
+
         // x^11 via committed x^3 and x^9:
         //   Constrain: committed_x3 = x^2 * x
         //   Constrain: committed_x9 = (committed_x3)^3

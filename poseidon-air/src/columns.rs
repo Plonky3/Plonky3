@@ -158,6 +158,7 @@ pub struct PartialRound<T, const WIDTH: usize, const SBOX_DEGREE: u64, const SBO
 /// | 7        | 0           | (none)        | `x^7` directly            |
 /// | 5        | 1           | `x^3`         | `x^3 * x^2`               |
 /// | 7        | 1           | `x^3`         | `(x^3)^2 * x`             |
+/// | 11       | 1           | `x^3`         | `(x^3)^3 * x^2`           |
 /// | 11       | 2           | `x^3`, `x^9`  | `x^9 * x^2`               |
 ///
 /// When `REGISTERS = 0`, the S-box output is computed directly without

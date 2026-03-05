@@ -82,6 +82,10 @@ impl<
         &self,
     ) -> &Poseidon2Cols<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>
     {
+        debug_assert_eq!(
+            self.len(),
+            num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>()
+        );
         let (prefix, shorts, suffix) = unsafe {
             self.align_to::<Poseidon2Cols<
                 T,
@@ -113,6 +117,10 @@ impl<
         &mut self,
     ) -> &mut Poseidon2Cols<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>
     {
+        debug_assert_eq!(
+            self.len(),
+            num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>()
+        );
         let (prefix, shorts, suffix) = unsafe {
             self.align_to_mut::<Poseidon2Cols<
                 T,

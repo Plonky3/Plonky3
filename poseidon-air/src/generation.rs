@@ -392,6 +392,7 @@ fn generate_partial_round<
 /// | 7      | 0         | (none)                | `x^7`                  |
 /// | 5      | 1         | `x^3`                 | `x^3 * x^2 = x^5`      |
 /// | 7      | 1         | `x^3`                 | `x^3 * x^3 * x = x^7`  |
+/// | 11     | 1         | `x^3`                 | `(x^3)^3 * x^2 = x^11` |
 /// | 11     | 2         | `x^3`, `x^9`          | `x^9 * x^2 = x^11`     |
 ///
 /// # Panics
@@ -421,6 +422,15 @@ fn generate_sbox<F: PrimeField, const DEGREE: u64, const REGISTERS: usize>(
             let x3 = x.cube();
             sbox.0[0].write(x3);
             x3 * x3 * *x
+        }
+
+        // x^11 with one intermediate (x^3).
+        // Output: (x^3)^3 * x^2 = x^11.
+        // Constraint degree: max(3, 5) = 5.
+        (11, 1) => {
+            let x3 = x.cube();
+            sbox.0[0].write(x3);
+            x3.cube() * x.square()
         }
 
         // x^11 with two intermediates (x^3, x^9).
