@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 
 use p3_air::{Air, DebugConstraintBuilder};
 use p3_field::{ExtensionField, Field};
+use p3_lookup::AirWithLookups;
 use p3_lookup::lookup_traits::{Lookup, LookupGadget};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};

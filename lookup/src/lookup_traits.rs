@@ -1,6 +1,3 @@
-use p3_air::lookup::LookupEvaluator;
-/// Public re-exports of lookup types.
-pub use p3_air::lookup::{Direction, Kind, Lookup, LookupData, LookupError, LookupInput};
 use p3_air::{
     AirBuilder, BaseEntry, BaseLeaf, ExtensionBuilder, PermutationAirBuilder, RowWindow,
     SymbolicExpression, WindowAccess,
@@ -10,6 +7,10 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{StarkGenericConfig, Val};
 use tracing::warn;
+
+pub use crate::types::{
+    Direction, Kind, Lookup, LookupData, LookupError, LookupEvaluator, LookupInput,
+};
 
 /// A trait for lookup argument.
 pub trait LookupGadget: LookupEvaluator {

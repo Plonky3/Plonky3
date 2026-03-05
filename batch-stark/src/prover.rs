@@ -10,6 +10,7 @@ use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{
     Algebra, BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
 };
+use p3_lookup::AirWithLookups;
 use p3_lookup::folder::ProverConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::lookup_traits::{Kind, Lookup, LookupData, LookupGadget};
@@ -776,7 +777,7 @@ where
                 permutation_challenges: &packed_perm_challenges,
                 permutation_values: &permutation_vals_packed,
             };
-            A::eval_with_lookups(air, &mut folder, lookups, lookup_gadget);
+            air.eval_with_lookups(&mut folder, lookups, lookup_gadget);
 
             // quotient(x) = constraints(x) / Z_H(x)
             let quotient = folder.inner.finalize_constraints() * inv_vanishing;

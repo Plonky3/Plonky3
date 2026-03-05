@@ -1,10 +1,10 @@
 //! See [`crate::prover`] for an overview of the protocol and a more detailed soundness analysis.
 
+use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 
 use itertools::Itertools;
-use p3_air::lookup::LookupError;
 use p3_air::symbolic::SymbolicAirBuilder;
 use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
@@ -455,6 +455,6 @@ where
     )]
     NextPointUnavailable,
     /// Lookup related error
-    #[error("lookup error: {0:?}")]
-    LookupError(LookupError),
+    #[error("lookup error: {0}")]
+    LookupError(String),
 }

@@ -20,7 +20,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_air::lookup::{LookupError, LookupEvaluator};
 use p3_air::{ExtensionBuilder, PermutationAirBuilder, WindowAccess};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
@@ -33,6 +32,7 @@ use tracing::instrument;
 use crate::lookup_traits::{
     Kind, Lookup, LookupData, LookupGadget, LookupTraceBuilder, symbolic_to_expr,
 };
+use crate::types::{LookupError, LookupEvaluator};
 
 /// Core LogUp gadget implementing lookup arguments via logarithmic derivatives.
 ///

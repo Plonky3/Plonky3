@@ -16,6 +16,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
 use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs, create_test_fri_params};
 use p3_keccak::Keccak256Hash;
+use p3_lookup::LookupAir;
 use p3_lookup::lookup_traits::{Direction, Kind, Lookup};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
@@ -177,6 +178,7 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
         }
     }
 }
+impl<F: Field> LookupAir<F> for MulAir {}
 
 // --- MulAirLookups structure for local and global lookups ---
 // This AIR is a `MulAir` that can register global lookups with `FibAirLookups`, as well as local lookups with a lookup column. Its inputs are the Fibonacci values.
@@ -226,19 +228,25 @@ where
     AB::Var: Debug,
     AB: AirBuilder + PermutationAirBuilder,
 {
+    fn eval(&self, builder: &mut AB) {
+        self.air.eval(builder);
+    }
+}
+
+impl<F: Field> LookupAir<F> for MulAirLookups {
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         let new_idx = self.num_lookups;
         self.num_lookups += 1;
         vec![new_idx]
     }
 
-    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
+    fn get_lookups(&mut self) -> Vec<Lookup<F>> {
         let mut lookups = Vec::new();
         self.num_lookups = 0;
 
         // Create symbolic air builder to access symbolic variables
-        let symbolic_air_builder = SymbolicAirBuilder::<AB::F>::new(AirLayout {
-            main_width: BaseAir::<AB::F>::width(self),
+        let symbolic_air_builder = SymbolicAirBuilder::<F>::new(AirLayout {
+            main_width: BaseAir::<F>::width(self),
             ..Default::default()
         });
         let symbolic_main = symbolic_air_builder.main();
@@ -261,18 +269,18 @@ where
                     // Lookup for 'a' against a permuted column.
                     (
                         vec![a.into()],
-                        SymbolicExpression::Leaf(BaseLeaf::Constant(AB::F::ONE)),
+                        SymbolicExpression::Leaf(BaseLeaf::Constant(F::ONE)),
                         Direction::Receive,
                     ),
                     // Provide the range values (this would be done in the trace generation)
                     (
                         vec![lut.into()], // This represents the range values
-                        SymbolicExpression::Leaf(BaseLeaf::Constant(AB::F::ONE)),
+                        SymbolicExpression::Leaf(BaseLeaf::Constant(F::ONE)),
                         Direction::Send,
                     ),
                 ];
 
-                let local_lookup = Air::<AB>::register_lookup(self, Kind::Local, &lookup_inputs);
+                let local_lookup = LookupAir::register_lookup(self, Kind::Local, &lookup_inputs);
                 lookups.push(local_lookup);
             }
 
@@ -285,11 +293,11 @@ where
                 // Global lookup between MulAir inputs and FibAir inputs
                 let lookup_inputs = vec![(
                     vec![a.into(), b.into()],
-                    SymbolicExpression::Leaf(BaseLeaf::Constant(AB::F::ONE)),
+                    SymbolicExpression::Leaf(BaseLeaf::Constant(F::ONE)),
                     Direction::Send, // MulAir sends data to the global lookup
                 )];
 
-                let global_lookup = Air::<AB>::register_lookup(
+                let global_lookup = LookupAir::register_lookup(
                     self,
                     Kind::Global(self.global_names[rep].clone()),
                     &lookup_inputs,
@@ -299,10 +307,6 @@ where
         }
 
         lookups
-    }
-
-    fn eval(&self, builder: &mut AB) {
-        self.air.eval(builder);
     }
 }
 
@@ -394,20 +398,26 @@ impl<F: Field> BaseAir<F> for FibAirLookups {
 }
 
 impl<AB: PermutationAirBuilder> Air<AB> for FibAirLookups {
+    fn eval(&self, builder: &mut AB) {
+        self.air.eval(builder);
+    }
+}
+
+impl<F: Field> LookupAir<F> for FibAirLookups {
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         let new_idx = self.num_lookups;
         self.num_lookups += 1;
         vec![new_idx]
     }
 
-    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
+    fn get_lookups(&mut self) -> Vec<Lookup<F>> {
         let mut lookups = Vec::new();
         self.num_lookups = 0;
 
         if self.is_global {
             // Create symbolic air builder to access symbolic variables
-            let symbolic_air_builder = SymbolicAirBuilder::<AB::F>::new(AirLayout {
-                main_width: BaseAir::<AB::F>::width(self),
+            let symbolic_air_builder = SymbolicAirBuilder::<F>::new(AirLayout {
+                main_width: BaseAir::<F>::width(self),
                 num_public_values: 3,
                 ..Default::default()
             });
@@ -427,20 +437,16 @@ impl<AB: PermutationAirBuilder> Air<AB> for FibAirLookups {
             // Global lookup between FibAir inputs and MulAir inputs
             let lookup_inputs = vec![(
                 vec![left.into(), right.into()],
-                SymbolicExpression::Leaf(BaseLeaf::Constant(AB::F::from_u64(multiplicity))),
+                SymbolicExpression::Leaf(BaseLeaf::Constant(F::from_u64(multiplicity))),
                 Direction::Receive, // FibAir receives data from the global lookup
             )];
 
             let global_lookup =
-                Air::<AB>::register_lookup(self, Kind::Global(name), &lookup_inputs);
+                LookupAir::register_lookup(self, Kind::Global(name), &lookup_inputs);
             lookups.push(global_lookup);
         }
 
         lookups
-    }
-
-    fn eval(&self, builder: &mut AB) {
-        self.air.eval(builder);
     }
 }
 
@@ -493,6 +499,7 @@ where
         );
     }
 }
+impl<F: Field> LookupAir<F> for PreprocessedMulAir {}
 
 fn preprocessed_mul_trace<F: Field>(rows: usize, multiplier: u64) -> RowMajorMatrix<F> {
     assert!(rows.is_power_of_two());
@@ -697,24 +704,26 @@ impl<AB: PermutationAirBuilder> Air<AB> for DemoAirWithLookups
 where
     AB::Var: Debug,
 {
-    fn add_lookup_columns(&mut self) -> Vec<usize> {
-        match self {
-            Self::FibLookups(a) => <FibAirLookups as Air<AB>>::add_lookup_columns(a),
-            Self::MulLookups(a) => <MulAirLookups as Air<AB>>::add_lookup_columns(a),
-        }
-    }
-
-    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
-        match self {
-            Self::FibLookups(a) => <FibAirLookups as Air<AB>>::get_lookups(a),
-            Self::MulLookups(a) => <MulAirLookups as Air<AB>>::get_lookups(a),
-        }
-    }
-
     fn eval(&self, builder: &mut AB) {
         match self {
             Self::FibLookups(a) => <FibAirLookups as Air<AB>>::eval(a, builder),
             Self::MulLookups(a) => <MulAirLookups as Air<AB>>::eval(a, builder),
+        }
+    }
+}
+
+impl<F: Field> LookupAir<F> for DemoAirWithLookups {
+    fn add_lookup_columns(&mut self) -> Vec<usize> {
+        match self {
+            Self::FibLookups(a) => LookupAir::<F>::add_lookup_columns(a),
+            Self::MulLookups(a) => LookupAir::<F>::add_lookup_columns(a),
+        }
+    }
+
+    fn get_lookups(&mut self) -> Vec<Lookup<F>> {
+        match self {
+            Self::FibLookups(a) => LookupAir::<F>::get_lookups(a),
+            Self::MulLookups(a) => LookupAir::<F>::get_lookups(a),
         }
     }
 }
@@ -732,6 +741,7 @@ where
         }
     }
 }
+impl<F: PrimeField64> LookupAir<F> for DemoAir {}
 
 /// Creates a Fibonacci instance with specified log height.
 fn create_fib_instance(log_height: usize) -> (DemoAir, RowMajorMatrix<Val>, Vec<Val>) {
@@ -2105,19 +2115,25 @@ where
     AB::Var: Debug,
     AB: AirBuilder + PermutationAirBuilder,
 {
+    fn eval(&self, _builder: &mut AB) {
+        // No additional constraints needed for this simple table
+    }
+}
+
+impl<F: Field> LookupAir<F> for SingleTableLocalLookupAir {
     fn add_lookup_columns(&mut self) -> Vec<usize> {
         let new_idx = self.num_lookups;
         self.num_lookups += 1;
         vec![new_idx]
     }
 
-    fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
+    fn get_lookups(&mut self) -> Vec<Lookup<F>> {
         let mut lookups = Vec::new();
         self.num_lookups = 0;
 
         // Create symbolic air builder to access symbolic variables
-        let symbolic_air_builder = SymbolicAirBuilder::<AB::F>::new(AirLayout {
-            main_width: BaseAir::<AB::F>::width(self),
+        let symbolic_air_builder = SymbolicAirBuilder::<F>::new(AirLayout {
+            main_width: BaseAir::<F>::width(self),
             ..Default::default()
         });
         let symbolic_main = symbolic_air_builder.main();
@@ -2185,15 +2201,11 @@ where
         let all_lookup_inputs = vec![lookup_inputs1, lookup_inputs2, lookup_inputs3];
 
         for lookup_inputs in all_lookup_inputs {
-            let local_lookup = Air::<AB>::register_lookup(self, Kind::Local, &lookup_inputs);
+            let local_lookup = LookupAir::register_lookup(self, Kind::Local, &lookup_inputs);
             lookups.push(local_lookup);
         }
 
         lookups
-    }
-
-    fn eval(&self, _builder: &mut AB) {
-        // No additional constraints needed for this simple table
     }
 }
 

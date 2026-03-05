@@ -5,6 +5,7 @@ use p3_air::symbolic::{
     AirLayout, ConstraintLayout, SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt,
 };
 use p3_field::{Algebra, ExtensionField, Field};
+use p3_lookup::AirWithLookups;
 use p3_lookup::lookup_traits::{Kind, Lookup, LookupGadget};
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
@@ -40,7 +41,7 @@ where
         ..layout
     };
     let mut builder = SymbolicAirBuilder::new(layout);
-    <A as Air<_>>::eval_with_lookups(air, &mut builder, contexts, lookup_gadget);
+    air.eval_with_lookups(&mut builder, contexts, lookup_gadget);
     builder.constraint_layout()
 }
 
@@ -151,7 +152,7 @@ where
     let mut builder = SymbolicAirBuilder::new(layout);
 
     // Evaluate AIR and lookup constraints.
-    <A as Air<_>>::eval_with_lookups(air, &mut builder, contexts, lookup_gadget);
+    air.eval_with_lookups(&mut builder, contexts, lookup_gadget);
     let base_constraints = builder.base_constraints();
     let extension_constraints = builder.extension_constraints();
     (base_constraints, extension_constraints)
