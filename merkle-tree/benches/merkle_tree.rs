@@ -5,6 +5,7 @@ use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_blake3::Blake3;
 use p3_commit::Mmcs;
 use p3_field::{Field, PackedField, PackedValue};
+use p3_goldilocks::Goldilocks;
 use p3_keccak::Keccak256Hash;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
@@ -26,6 +27,7 @@ fn bench_merkle_trees(criterion: &mut Criterion) {
     bench_bb_rescue(criterion);
     bench_bb_blake3(criterion);
     bench_bb_keccak(criterion);
+    bench_gl_keccak(criterion);
 }
 
 fn bench_bb_poseidon2(criterion: &mut Criterion) {
@@ -90,6 +92,20 @@ fn bench_bb_blake3(criterion: &mut Criterion) {
 
 fn bench_bb_keccak(criterion: &mut Criterion) {
     type F = BabyBear;
+
+    type H = SerializingHasher<Keccak256Hash>;
+    let k = Keccak256Hash {};
+    let h = H::new(k);
+
+    type C = CompressionFunctionFromHasher<Keccak256Hash, 2, 32>;
+    let c = C::new(k);
+
+    bench_mmcs::<F, u8, H, C, 32>(criterion, h, c.clone());
+    bench_merkle_tree::<F, u8, H, C, 32>(criterion, h, c);
+}
+
+fn bench_gl_keccak(criterion: &mut Criterion) {
+    type F = Goldilocks;
 
     type H = SerializingHasher<Keccak256Hash>;
     let k = Keccak256Hash {};

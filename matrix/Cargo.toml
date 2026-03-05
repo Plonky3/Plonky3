@@ -36,5 +36,10 @@ name = "columnwise_dot_product"
 path = "benches/columnwise_dot_product.rs"
 harness = false
 
+[[bench]]
+name = "packing"
+path = "benches/packing.rs"
+harness = false
+
 [lints]
 workspace = true

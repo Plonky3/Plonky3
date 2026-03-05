@@ -13,6 +13,7 @@ use p3_field::{
     BasedVectorSpace, ExtensionField, Field, FieldArray, PackedFieldExtension, PackedValue,
     PrimeCharacteristicRing,
 };
+use p3_maybe_rayon::Either;
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
 use tracing::instrument;
@@ -229,9 +230,10 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
 
     /// Collect the elements of the rows `r` through `r + c`. If anything is larger than `self.height()`
     /// simply wrap around to the beginning of the matrix.
+    #[inline]
     fn wrapping_row_slices(&self, r: usize, c: usize) -> Vec<impl Deref<Target = [T]>> {
         unsafe {
-            // Safety: Thank to the `%`, the rows index is always less than `self.height()`.
+            // Safety: Thanks to the `%`, the rows index is always less than `self.height()`.
             (0..c)
                 .map(|i| self.row_slice_unchecked((r + i) % self.height()))
                 .collect_vec()
@@ -370,17 +372,27 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
     /// Returns an iterator whose i'th element is packing of the i'th element of the
     /// rows r through r + P::WIDTH - 1. If we exceed the height of the matrix,
     /// wrap around and include initial rows.
-    #[inline]
+    #[inline(always)]
     fn vertically_packed_row<P>(&self, r: usize) -> impl Iterator<Item = P>
     where
         T: Copy,
         P: PackedValue<Value = T>,
     {
-        // Precompute row slices once to minimize redundant calls and improve performance.
-        let rows = self.wrapping_row_slices(r, P::WIDTH);
+        if P::WIDTH == 1 {
+            // WIDTH=1 optimization: iterate directly over the row without allocating
+            // intermediate Vec via wrapping_row_slices.
+            Either::Left(unsafe {
+                self.row_unchecked(r % self.height())
+                    .into_iter()
+                    .map(P::broadcast)
+            })
+        } else {
+            // Precompute row slices once to minimize redundant calls and improve performance.
+            let rows = self.wrapping_row_slices(r, P::WIDTH);
 
-        // Using precomputed rows avoids repeatedly calling `row_slice`, which is costly.
-        (0..self.width()).map(move |c| P::from_fn(|i| rows[i][c]))
+            // Using precomputed rows avoids repeatedly calling `row_slice`, which is costly.
+            Either::Right((0..self.width()).map(move |c| P::from_fn(|i| rows[i][c])))
+        }
     }
 
     /// Pack together a collection of rows and "next" rows from the matrix.
@@ -396,17 +408,25 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         T: Copy,
         P: PackedValue<Value = T>,
     {
-        // Whilst it would appear that this can be replaced by two calls to vertically_packed_row
-        // tests seem to indicate that combining them in the same function is slightly faster.
-        // It's probably allowing the compiler to make some optimizations on the fly.
+        if P::WIDTH == 1 {
+            // WIDTH=1 optimization: use the optimized vertically_packed_row instead
+            // of allocating intermediate Vec via wrapping_row_slices.
+            let mut out = Vec::with_capacity(self.width() * 2);
+            out.extend(self.vertically_packed_row::<P>(r));
+            out.extend(self.vertically_packed_row::<P>(r + step));
+            out
+        } else {
+            // Whilst it would appear that this can be replaced by two calls to vertically_packed_row
+            // tests seem to indicate that combining them in the same function is slightly faster.
+            // It's probably allowing the compiler to make some optimizations on the fly.
+            let rows = self.wrapping_row_slices(r, P::WIDTH);
+            let next_rows = self.wrapping_row_slices(r + step, P::WIDTH);
 
-        let rows = self.wrapping_row_slices(r, P::WIDTH);
-        let next_rows = self.wrapping_row_slices(r + step, P::WIDTH);
-
-        (0..self.width())
-            .map(|c| P::from_fn(|i| rows[i][c]))
-            .chain((0..self.width()).map(|c| P::from_fn(|i| next_rows[i][c])))
-            .collect_vec()
+            (0..self.width())
+                .map(|c| P::from_fn(|i| rows[i][c]))
+                .chain((0..self.width()).map(|c| P::from_fn(|i| next_rows[i][c])))
+                .collect_vec()
+        }
     }
 
     /// Returns a view over a vertically strided submatrix.
