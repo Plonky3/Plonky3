@@ -68,6 +68,7 @@ fn main() -> Result<(), impl Debug> {
         FieldHash,
         MyCompress,
         SmallRng,
+        2,
         4,
         4,
     >;

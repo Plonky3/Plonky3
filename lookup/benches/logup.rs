@@ -24,7 +24,8 @@ type EF = BinomialExtensionField<F, 4>;
 type Perm = Poseidon2BabyBear<16>;
 type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
-type ValMmcs = MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress, 8>;
+type ValMmcs =
+    MerkleTreeMmcs<<F as Field>::Packing, <F as Field>::Packing, MyHash, MyCompress, 2, 8>;
 type ChallengeMmcs = ExtensionMmcs<F, EF, ValMmcs>;
 type Challenger = DuplexChallenger<F, Perm, 16, 8>;
 type Dft = Radix2DitParallel<F>;

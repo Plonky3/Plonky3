@@ -46,7 +46,7 @@ fn main() -> Result<(), impl Debug> {
     type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
     let compress = MyCompress::new(byte_hash);
 
-    type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
+    type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 2, 32>;
     let val_mmcs = ValMmcs::new(field_hash, compress, 3);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
