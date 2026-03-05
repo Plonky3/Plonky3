@@ -10,6 +10,7 @@ pub struct ProverConstraintFolderWithLookups<'a, SC: StarkGenericConfig> {
     pub inner: ProverConstraintFolder<'a, SC>,
     pub permutation: RowMajorMatrixView<'a, PackedChallenge<SC>>,
     pub permutation_challenges: &'a [PackedChallenge<SC>],
+    pub permutation_values: &'a [PackedChallenge<SC>],
 }
 
 impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookups<'a, SC> {
@@ -78,6 +79,8 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder
     type RandomVar = PackedChallenge<SC>;
     type MP = RowWindow<'a, PackedChallenge<SC>>;
 
+    type PermutationVar = PackedChallenge<SC>;
+
     fn permutation(&self) -> Self::MP {
         RowWindow::from_view(self.permutation)
     }
@@ -85,12 +88,17 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder
     fn permutation_randomness(&self) -> &[PackedChallenge<SC>] {
         self.permutation_challenges
     }
+
+    fn permutation_values(&self) -> &[PackedChallenge<SC>] {
+        self.permutation_values
+    }
 }
 
 pub struct VerifierConstraintFolderWithLookups<'a, SC: StarkGenericConfig> {
     pub inner: VerifierConstraintFolder<'a, SC>,
     pub permutation: ViewPair<'a, SC::Challenge>,
     pub permutation_challenges: &'a [SC::Challenge],
+    pub permutation_values: &'a [SC::Challenge],
 }
 
 impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLookups<'a, SC> {
@@ -160,11 +168,17 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder
     type RandomVar = SC::Challenge;
     type MP = RowWindow<'a, SC::Challenge>;
 
+    type PermutationVar = SC::Challenge;
+
     fn permutation(&self) -> Self::MP {
         RowWindow::from_two_rows(self.permutation.top.values, self.permutation.bottom.values)
     }
 
     fn permutation_randomness(&self) -> &[SC::Challenge] {
         self.permutation_challenges
+    }
+
+    fn permutation_values(&self) -> &[SC::Challenge] {
+        self.permutation_values
     }
 }

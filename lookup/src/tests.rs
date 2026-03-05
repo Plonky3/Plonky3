@@ -4,7 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::lookup::LookupEvaluator;
-use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
+use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpression};
 use p3_air::{
     Air, AirBuilder, BaseAir, BaseLeaf, ExtensionBuilder, PermutationAirBuilder, WindowAccess,
 };
@@ -228,6 +228,7 @@ impl ExtensionBuilder for MockAirBuilder {
 impl PermutationAirBuilder for MockAirBuilder {
     type MP = RowMajorMatrix<EF>;
     type RandomVar = EF;
+    type PermutationVar = EF;
 
     fn permutation(&self) -> Self::MP {
         self.window(&self.permutation)
@@ -235,6 +236,10 @@ impl PermutationAirBuilder for MockAirBuilder {
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         &self.challenges
+    }
+
+    fn permutation_values(&self) -> &[Self::PermutationVar] {
+        &[]
     }
 }
 
@@ -283,8 +288,10 @@ where
     }
 
     fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
-        let symbolic_air_builder =
-            SymbolicAirBuilder::<F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0, 0);
+        let symbolic_air_builder = SymbolicAirBuilder::<F>::new(AirLayout {
+            main_width: BaseAir::<AB::F>::width(self),
+            ..Default::default()
+        });
 
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.current_slice();
@@ -516,10 +523,13 @@ impl LookupTraceBuilder {
 #[test]
 fn test_symbolic_to_expr() {
     use p3_air::AirBuilder;
-    use p3_air::symbolic::SymbolicAirBuilder;
+    use p3_air::symbolic::{AirLayout, SymbolicAirBuilder};
     use p3_field::PrimeCharacteristicRing;
 
-    let mut builder = SymbolicAirBuilder::<F>::new(0, 2, 0, 0, 0, 0);
+    let mut builder = SymbolicAirBuilder::<F>::new(AirLayout {
+        main_width: 2,
+        ..Default::default()
+    });
 
     let main = builder.main();
 
@@ -669,7 +679,10 @@ fn test_debug_util_detects_malformed_lookup() {
     let main_values = vec![F::from_u32(3), F::from_u32(4)];
     let main_trace = RowMajorMatrix::new(main_values, 1);
 
-    let builder = SymbolicAirBuilder::<F>::new(0, 1, 0, 0, 0, 0);
+    let builder = SymbolicAirBuilder::<F>::new(AirLayout {
+        main_width: 1,
+        ..Default::default()
+    });
     let expr = builder.main().current(0).unwrap();
 
     // One local lookup with a single tuple; multiplicity is always +1,
@@ -1170,8 +1183,10 @@ where
     }
 
     fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
-        let symbolic_air_builder =
-            SymbolicAirBuilder::<F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0, 0);
+        let symbolic_air_builder = SymbolicAirBuilder::<F>::new(AirLayout {
+            main_width: BaseAir::<AB::F>::width(self),
+            ..Default::default()
+        });
 
         let symbolic_main = symbolic_air_builder.main();
         let symbolic_main_local = symbolic_main.current_slice();

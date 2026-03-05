@@ -5,7 +5,7 @@ use core::ops::{Add, Mul, Sub};
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 
-use crate::lookup::{Kind, Lookup, LookupData, LookupEvaluator, LookupInput};
+use crate::lookup::{Kind, Lookup, LookupEvaluator, LookupInput};
 
 /// Read access to a pair of trace rows (typically current and next).
 ///
@@ -287,13 +287,11 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
     /// # Arguments
     /// - `builder`: Mutable reference to an `AirBuilder` for defining constraints.
     /// - `lookups`: References to the lookups to be evaluated.
-    /// - `lookup_data`: References to the lookup data to be used for evaluation.
     /// - `lookup_evaluator`: Reference to the lookup evaluator to be used for evaluation.
     fn eval_with_lookups<LE: LookupEvaluator>(
         &self,
         builder: &mut AB,
         lookups: &[Lookup<AB::F>],
-        lookup_data: &[LookupData<AB::ExprEF>],
         lookup_evaluator: &LE,
     ) where
         AB: PermutationAirBuilder,
@@ -301,7 +299,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
         self.eval(builder);
 
         if !lookups.is_empty() {
-            lookup_evaluator.eval_lookups(builder, lookups, lookup_data);
+            lookup_evaluator.eval_lookups(builder, lookups);
         }
     }
 }
@@ -523,11 +521,17 @@ pub trait PermutationAirBuilder: ExtensionBuilder {
     /// Randomness variable type used in permutation commitments.
     type RandomVar: Into<Self::ExprEF> + Copy;
 
+    /// Value type for expected cumulated values used in global lookup arguments.
+    type PermutationVar: Into<Self::ExprEF> + Clone;
+
     /// Return the current and next row slices of the permutation trace.
     fn permutation(&self) -> Self::MP;
 
     /// Return the list of randomness values for permutation argument.
     fn permutation_randomness(&self) -> &[Self::RandomVar];
+
+    /// Return the expected cumulated values for global lookup arguments.
+    fn permutation_values(&self) -> &[Self::PermutationVar];
 }
 
 /// A wrapper around an [`AirBuilder`] that enforces constraints only when a specified condition is met.
@@ -621,12 +625,18 @@ impl<AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'_,
 
     type RandomVar = AB::RandomVar;
 
+    type PermutationVar = AB::PermutationVar;
+
     fn permutation(&self) -> Self::MP {
         self.inner.permutation()
     }
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         self.inner.permutation_randomness()
+    }
+
+    fn permutation_values(&self) -> &[Self::PermutationVar] {
+        self.inner.permutation_values()
     }
 }
 

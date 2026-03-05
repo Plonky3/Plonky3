@@ -18,7 +18,7 @@ use tracing::instrument;
 
 use crate::symbolic::get_log_num_quotient_chunks;
 use crate::{
-    Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
+    AirLayout, Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
     VerifierConstraintFolder,
 };
 
@@ -245,8 +245,14 @@ where
         return Err(VerificationError::InvalidProofShape);
     }
 
+    let layout = AirLayout {
+        preprocessed_width,
+        main_width: air.width(),
+        num_public_values: air.num_public_values(),
+        ..Default::default()
+    };
     let log_num_quotient_chunks =
-        get_log_num_quotient_chunks::<Val<SC>, A>(air, preprocessed_width, config.is_zk());
+        get_log_num_quotient_chunks::<Val<SC>, A>(air, layout, config.is_zk());
     let num_quotient_chunks = 1 << (log_num_quotient_chunks + config.is_zk());
     let mut challenger = config.initialise_challenger();
     let init_trace_domain = pcs.natural_domain_for_degree(degree >> (config.is_zk()));

@@ -261,6 +261,8 @@ impl<'a, F: Field> PermutationAirBuilder for MiniLookupBuilder<'a, F> {
     type MP = RowWindow<'a, F>;
     type RandomVar = F;
 
+    type PermutationVar = F;
+
     fn permutation(&self) -> Self::MP {
         // Empty slices; permutation columns are not needed for debug evals.
         RowWindow::from_two_rows(&[], &[])
@@ -268,5 +270,9 @@ impl<'a, F: Field> PermutationAirBuilder for MiniLookupBuilder<'a, F> {
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         self.permutation_challenges
+    }
+
+    fn permutation_values(&self) -> &[Self::PermutationVar] {
+        &[]
     }
 }
