@@ -88,7 +88,6 @@ fn prove_and_verify() -> Result<(), impl Debug> {
     type MyCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;
     let compress = MyCompress::new(u64_hash);
 
-    // Polynomial commitment scheme
 
     // Merkle tree MMCS for committing to the trace polynomial evaluations.
     type ValMmcs = MerkleTreeMmcs<
