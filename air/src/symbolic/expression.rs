@@ -630,11 +630,25 @@ mod tests {
         let zero = SymbolicExpression::<BabyBear>::Leaf(BaseLeaf::Constant(BabyBear::ZERO));
 
         // x - 0 should return x, not create a Sub node.
-        let result = var - zero;
+        let result = var.clone() - zero.clone();
         assert!(
             matches!(result, SymbolicExpr::Leaf(BaseLeaf::Variable(_))),
             "x - 0 should fold to x"
         );
+
+        // 0 - x should return -x, not create a Sub node.
+        let result = zero - var;
+        match result {
+            SymbolicExpr::Neg { x, degree_multiple } => {
+                assert_eq!(degree_multiple, 1);
+                assert!(matches!(
+                    x.as_ref(),
+                    SymbolicExpr::Leaf(BaseLeaf::Variable(v))
+                        if v.index == 0 && v.entry == BaseEntry::Main { offset: 0 }
+                ));
+            }
+            _ => panic!("0 - x should fold to Neg(x)"),
+        }
     }
 
     #[test]
@@ -698,6 +712,10 @@ mod tests {
 
         // x - 0 should preserve degree of x.
         let result = var.clone() - zero.clone();
+        assert_eq!(result.degree_multiple(), 1);
+
+        // 0 - x should preserve degree of x.
+        let result = zero.clone() - var.clone();
         assert_eq!(result.degree_multiple(), 1);
 
         // x * 1 should preserve degree of x.

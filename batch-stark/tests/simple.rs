@@ -3,8 +3,8 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use core::slice::from_ref;
 
-use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
-use p3_air::{Air, AirBuilder, BaseAir, BaseLeaf, PermutationAirBuilder};
+use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpression};
+use p3_air::{Air, AirBuilder, BaseAir, BaseLeaf, PermutationAirBuilder, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::{ProverData, StarkInstance, VerificationError, prove_batch, verify_batch};
@@ -77,12 +77,8 @@ where
         let b0 = pis[1];
         let x = pis[2];
 
-        let (local, next) = (
-            main.row_slice(0).expect("Matrix is empty?"),
-            main.row_slice(1).expect("Matrix only has 1 row?"),
-        );
-        let local: &FibRow<AB::Var> = (*local).borrow();
-        let next: &FibRow<AB::Var> = (*next).borrow();
+        let local: &FibRow<AB::Var> = main.current_slice().borrow();
+        let next: &FibRow<AB::Var> = main.next_slice().borrow();
 
         let mut wf = builder.when_first_row();
         wf.assert_eq(local.left, a0);
@@ -167,8 +163,8 @@ impl<F> BaseAir<F> for MulAir {
 impl<AB: AirBuilder> Air<AB> for MulAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let local = main.row_slice(0).unwrap();
-        let next = main.row_slice(1).unwrap();
+        let local = main.current_slice();
+        let next = main.next_slice();
         for i in 0..self.reps {
             let s = i * 3;
             let a = local[s];
@@ -241,10 +237,12 @@ where
         self.num_lookups = 0;
 
         // Create symbolic air builder to access symbolic variables
-        let symbolic_air_builder =
-            SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
+        let symbolic_air_builder = SymbolicAirBuilder::<AB::F>::new(AirLayout {
+            main_width: BaseAir::<AB::F>::width(self),
+            ..Default::default()
+        });
         let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
+        let symbolic_main_local = symbolic_main.current_slice();
 
         let last_idx = symbolic_air_builder.main().width() - 1;
         let lut = symbolic_main_local[last_idx]; //  Extra column that corresponds to a permutation of 'a'
@@ -408,8 +406,11 @@ impl<AB: PermutationAirBuilder> Air<AB> for FibAirLookups {
 
         if self.is_global {
             // Create symbolic air builder to access symbolic variables
-            let symbolic_air_builder =
-                SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 3, 0, 0);
+            let symbolic_air_builder = SymbolicAirBuilder::<AB::F>::new(AirLayout {
+                main_width: BaseAir::<AB::F>::width(self),
+                num_public_values: 3,
+                ..Default::default()
+            });
             let symbolic_main = symbolic_air_builder.main();
             let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
@@ -479,15 +480,16 @@ where
 {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let preprocessed = builder.preprocessed().expect("Preprocessed is empty?");
+        let local_main = main.current_slice();
 
-        let local_main = main.row_slice(0).expect("Matrix is empty?");
-        let local_prep = preprocessed.row_slice(0).expect("Preprocessed is empty?");
+        // Copy the preprocessed value so the immutable borrow on `builder`
+        // is released before the mutable `assert_eq` call.
+        let prep_val = builder.preprocessed().current(0).unwrap();
 
         // Enforce: main[0] = multiplier * preprocessed[0]
         builder.assert_eq(
             local_main[0],
-            local_prep[0] * AB::Expr::from_u64(self.multiplier),
+            prep_val * AB::Expr::from_u64(self.multiplier),
         );
     }
 }
@@ -645,6 +647,16 @@ impl<F: PrimeField64> BaseAir<F> for DemoAir {
             Self::Fib(a) => <FibonacciAir as BaseAir<F>>::preprocessed_trace(a),
             Self::Mul(_) => None,
             Self::PreprocessedMul(a) => <PreprocessedMulAir as BaseAir<F>>::preprocessed_trace(a),
+        }
+    }
+
+    fn preprocessed_next_row_columns(&self) -> Vec<usize> {
+        match self {
+            Self::Fib(a) => <FibonacciAir as BaseAir<F>>::preprocessed_next_row_columns(a),
+            Self::Mul(a) => <MulAir as BaseAir<F>>::preprocessed_next_row_columns(a),
+            Self::PreprocessedMul(a) => {
+                <PreprocessedMulAir as BaseAir<F>>::preprocessed_next_row_columns(a)
+            }
         }
     }
 }
@@ -2104,10 +2116,12 @@ where
         self.num_lookups = 0;
 
         // Create symbolic air builder to access symbolic variables
-        let symbolic_air_builder =
-            SymbolicAirBuilder::<AB::F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
+        let symbolic_air_builder = SymbolicAirBuilder::<AB::F>::new(AirLayout {
+            main_width: BaseAir::<AB::F>::width(self),
+            ..Default::default()
+        });
         let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
+        let symbolic_main_local = symbolic_main.current_slice();
 
         let sender_col1 = symbolic_main_local[0]; // Column that sends values
         let sender_col2 = symbolic_main_local[1]; // Column that sends values

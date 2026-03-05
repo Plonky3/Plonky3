@@ -41,7 +41,7 @@ where
 
     // TODO: Should be calculated for the particular field, width and ALPHA.
     let half_num_full_rounds = 4;
-    let num_partial_rounds = 22;
+    let num_partial_rounds = 20;
 
     type External<F, Mds, const W: usize> = PoseidonExternalLayerGeneric<F, Mds, W>;
     type Internal<F, const W: usize> = PoseidonInternalLayerGeneric<F, W>;
@@ -73,7 +73,7 @@ where
     let mut rng = SmallRng::seed_from_u64(1);
 
     let half_num_full_rounds = 4;
-    let num_partial_rounds = 22;
+    let num_partial_rounds = 20;
 
     type External<F, Mds, const W: usize> = PoseidonExternalLayerGeneric<F, Mds, W>;
     type Internal<F, Mds, const W: usize> = PoseidonInternalLayerTextbook<F, Mds, W>;

@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use p3_air::{Air, DebugConstraintBuilder};
 use p3_field::{ExtensionField, Field};
-use p3_lookup::lookup_traits::{Lookup, LookupData, LookupGadget};
+use p3_lookup::lookup_traits::{Lookup, LookupGadget};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::VerticalPair;
@@ -10,10 +10,9 @@ use tracing::instrument;
 
 /// Type alias for the inputs to lookup constraint checking.
 /// - The first element is a slice of [`Lookup`] values (generic over a field `F`) representing the symbolic lookups to be performed.
-/// - The second element is a slice of [`LookupData`] values (generic over an extension field `EF`) representing the lookup data for global lookups.
-/// - The third element is a reference to the [`LookupGadget`] implementation.
+/// - The second element is a reference to the [`LookupGadget`] implementation.
 #[allow(unused)]
-type LookupConstraintsInputs<'a, F, EF, LG> = (&'a [Lookup<F>], &'a [LookupData<EF>], &'a LG);
+type LookupConstraintsInputs<'a, F, LG> = (&'a [Lookup<F>], &'a LG);
 
 /// Runs constraint checks using a given [AIR](`p3_air::Air`) implementation and trace matrix.
 ///
@@ -36,14 +35,16 @@ type LookupConstraintsInputs<'a, F, EF, LG> = (&'a [Lookup<F>], &'a [LookupData<
 ///     - the [`LookupGadget`] implementation.
 #[instrument(name = "check constraints", skip_all)]
 #[allow(unused)] // Do not remove, or this will trigger warnings in release mode.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn check_constraints<'b, F, EF, A, LG>(
     air: &A,
     main: &RowMajorMatrix<F>,
     preprocessed: &Option<RowMajorMatrix<F>>,
     permutation: &RowMajorMatrix<EF>,
     permutation_challenges: &[EF],
+    permutation_values: &[EF],
     public_values: &[F],
-    lookup_constraints_inputs: LookupConstraintsInputs<'b, F, EF, LG>,
+    lookup_constraints_inputs: LookupConstraintsInputs<'b, F, LG>,
 ) where
     F: Field,
     EF: ExtensionField<F>,
@@ -52,7 +53,7 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
 {
     let height = main.height();
 
-    let (lookups, lookup_data, lookup_gadget) = lookup_constraints_inputs;
+    let (lookups, lookup_gadget) = lookup_constraints_inputs;
 
     for row_index in 0..height {
         let row_index_next = (row_index + 1) % height;
@@ -79,13 +80,16 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
             RowMajorMatrixView::new_row(&*next),
         );
 
-        let preprocessed_rows_data = prep_local.as_ref().zip(prep_next.as_ref());
-        let preprocessed = preprocessed_rows_data.map(|(prep_local, prep_next)| {
-            VerticalPair::new(
-                RowMajorMatrixView::new_row(&**prep_local),
-                RowMajorMatrixView::new_row(&**prep_next),
-            )
-        });
+        let preprocessed = match (prep_local.as_ref(), prep_next.as_ref()) {
+            (Some(l), Some(n)) => VerticalPair::new(
+                RowMajorMatrixView::new_row(&**l),
+                RowMajorMatrixView::new_row(&**n),
+            ),
+            _ => VerticalPair::new(
+                RowMajorMatrixView::new(&[], 0),
+                RowMajorMatrixView::new(&[], 0),
+            ),
+        };
 
         let permutation = VerticalPair::new(
             RowMajorMatrixView::new_row(&*perm_local),
@@ -102,9 +106,10 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
             F::from_bool(row_index != height - 1),
             permutation,
             permutation_challenges,
+            permutation_values,
         );
 
-        air.eval_with_lookups(&mut builder, lookups, lookup_data, lookup_gadget);
+        air.eval_with_lookups(&mut builder, lookups, lookup_gadget);
 
         // Stop at the first failing row and report all violations at once.
         if builder.has_failures() {

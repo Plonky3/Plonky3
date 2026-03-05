@@ -3,10 +3,110 @@ use alloc::vec::Vec;
 use core::ops::{Add, Mul, Sub};
 
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
-use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 
-use crate::lookup::{Kind, Lookup, LookupData, LookupEvaluator, LookupInput};
+use crate::lookup::{Kind, Lookup, LookupEvaluator, LookupInput};
+
+/// Read access to a pair of trace rows (typically current and next).
+///
+/// Implementors expose two flat slices that constraint evaluators use
+/// to express algebraic relations between rows.
+pub trait WindowAccess<T> {
+    /// Full slice of the current row.
+    fn current_slice(&self) -> &[T];
+
+    /// Full slice of the next row.
+    fn next_slice(&self) -> &[T];
+
+    /// Single element from the current row by index.
+    ///
+    /// Returns `None` if `i` is out of bounds.
+    #[inline]
+    fn current(&self, i: usize) -> Option<T>
+    where
+        T: Clone,
+    {
+        self.current_slice().get(i).cloned()
+    }
+
+    /// Single element from the next row by index.
+    ///
+    /// Returns `None` if `i` is out of bounds.
+    #[inline]
+    fn next(&self, i: usize) -> Option<T>
+    where
+        T: Clone,
+    {
+        self.next_slice().get(i).cloned()
+    }
+}
+
+/// A lightweight two-row window into a trace matrix.
+///
+/// Stores two `&[T]` slices — one for the current row and one for
+/// the next — without carrying any matrix metadata.  This is cheaper
+/// than a full `ViewPair` and is the concrete type used by most
+/// [`AirBuilder`] implementations for `type M`.
+#[derive(Debug, Clone, Copy)]
+pub struct RowWindow<'a, T> {
+    /// The current row.
+    current: &'a [T],
+    /// The next row.
+    next: &'a [T],
+}
+
+impl<'a, T> RowWindow<'a, T> {
+    /// Create a window from a [`RowMajorMatrixView`] that has exactly
+    /// two rows. The first row becomes `current`, the second `next`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the view does not contain exactly `2 * width` elements.
+    #[inline]
+    pub fn from_view(view: &RowMajorMatrixView<'a, T>) -> Self {
+        let width = view.width;
+        assert_eq!(
+            view.values.len(),
+            2 * width,
+            "RowWindow::from_view: expected 2 rows (2*{width} elements), got {}",
+            view.values.len()
+        );
+        let (current, next) = view.values.split_at(width);
+        Self { current, next }
+    }
+
+    /// Create a window from two separate row slices.
+    ///
+    /// The caller is responsible for providing slices that represent
+    /// the intended (current, next) pair.
+    ///
+    /// # Panics
+    ///
+    /// Panics (in debug builds) if the slices have different lengths.
+    #[inline]
+    pub fn from_two_rows(current: &'a [T], next: &'a [T]) -> Self {
+        debug_assert_eq!(
+            current.len(),
+            next.len(),
+            "RowWindow::from_two_rows: row lengths differ ({} vs {})",
+            current.len(),
+            next.len()
+        );
+        Self { current, next }
+    }
+}
+
+impl<T> WindowAccess<T> for RowWindow<'_, T> {
+    #[inline]
+    fn current_slice(&self) -> &[T] {
+        self.current
+    }
+
+    #[inline]
+    fn next_slice(&self) -> &[T] {
+        self.next
+    }
+}
 
 /// The underlying structure of an AIR.
 pub trait BaseAir<F>: Sync {
@@ -32,7 +132,7 @@ pub trait BaseAir<F>: Sync {
     /// - **Return empty**: single-row AIRs where all constraints are
     ///   evaluated within one row.
     /// - **Keep default** (all columns): AIRs with transition constraints
-    ///   that reference `main.row_slice(1)`.
+    ///   that reference `main.next_slice()`.
     /// - **Return a subset**: AIRs where only a few columns need next-row
     ///   access, enabling future per-column opening optimizations.
     ///
@@ -187,13 +287,11 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
     /// # Arguments
     /// - `builder`: Mutable reference to an `AirBuilder` for defining constraints.
     /// - `lookups`: References to the lookups to be evaluated.
-    /// - `lookup_data`: References to the lookup data to be used for evaluation.
     /// - `lookup_evaluator`: Reference to the lookup evaluator to be used for evaluation.
     fn eval_with_lookups<LE: LookupEvaluator>(
         &self,
         builder: &mut AB,
         lookups: &[Lookup<AB::F>],
-        lookup_data: &[LookupData<AB::ExprEF>],
         lookup_evaluator: &LE,
     ) where
         AB: PermutationAirBuilder,
@@ -201,7 +299,7 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
         self.eval(builder);
 
         if !lookups.is_empty() {
-            lookup_evaluator.eval_lookups(builder, lookups, lookup_data);
+            lookup_evaluator.eval_lookups(builder, lookups);
         }
     }
 }
@@ -237,21 +335,19 @@ pub trait AirBuilder: Sized {
         + Mul<Self::Var, Output = Self::Expr>
         + Mul<Self::Expr, Output = Self::Expr>;
 
-    /// Matrix type holding variables.
-    type M: Matrix<Self::Var>;
+    /// Two-row window over the main trace columns.
+    type M: WindowAccess<Self::Var> + Clone;
 
     /// Variable type for public values.
     type PublicVar: Into<Self::Expr> + Copy;
 
-    /// Return the matrix representing the main (primary) trace registers.
+    /// Return the current and next row slices of the main (primary) trace.
     fn main(&self) -> Self::M;
 
-    /// Return an optional matrix of preprocessed registers.
-    /// The default implementation returns `None`.
-    /// Override this for builders that provide preprocessed columns.
-    fn preprocessed(&self) -> Option<Self::M> {
-        None
-    }
+    /// Return the preprocessed registers as a two-row window.
+    ///
+    /// When no preprocessed columns exist, this returns a zero-width window.
+    fn preprocessed(&self) -> &Self::M;
 
     /// Expression evaluating to 1 on the first row, 0 elsewhere.
     fn is_first_row(&self) -> Self::Expr;
@@ -264,7 +360,13 @@ pub trait AirBuilder: Sized {
         self.is_transition_window(2)
     }
 
-    /// Expression evaluating to 1 on rows except the last `size - 1` rows, 0 otherwise.
+    /// Expression evaluating to 1 on all rows where a window of `size` consecutive
+    /// rows is available, 0 elsewhere.
+    ///
+    /// # Panics
+    ///
+    /// Implementations should panic if `size > 2`, since only two-row
+    /// windows are currently supported.
     fn is_transition_window(&self, size: usize) -> Self::Expr;
 
     /// Returns a sub-builder whose constraints are enforced only when `condition` is nonzero.
@@ -299,7 +401,7 @@ pub trait AirBuilder: Sized {
         self.when(self.is_transition())
     }
 
-    /// Returns a sub-builder whose constraints are enforced on all rows except the last `size - 1`.
+    /// Like [`when_transition`](Self::when_transition), but requires a window of `size` rows.
     fn when_transition_window(&mut self, size: usize) -> FilteredAirBuilder<'_, Self> {
         self.when(self.is_transition_window(size))
     }
@@ -349,6 +451,15 @@ pub trait AirBuilder: Sized {
     fn assert_bool<I: Into<Self::Expr>>(&mut self, x: I) {
         self.assert_zero(x.into().bool_check());
     }
+}
+
+/// Extension of [`AirBuilder`] for builders that supply periodic column values.
+pub trait PeriodicAirBuilder: AirBuilder {
+    /// Variable type for periodic column values.
+    type PeriodicVar: Into<Self::Expr> + Copy;
+
+    /// Periodic column values at the current row.
+    fn periodic_values(&self) -> &[Self::PeriodicVar];
 }
 
 /// Extension trait for builders that carry additional runtime context.
@@ -404,17 +515,23 @@ pub trait ExtensionBuilder: AirBuilder<F: Field> {
 
 /// Trait for builders supporting permutation arguments (e.g., for lookup constraints).
 pub trait PermutationAirBuilder: ExtensionBuilder {
-    /// Matrix type over extension field variables representing a permutation.
-    type MP: Matrix<Self::VarEF>;
+    /// Two-row window over the permutation trace columns.
+    type MP: WindowAccess<Self::VarEF>;
 
     /// Randomness variable type used in permutation commitments.
     type RandomVar: Into<Self::ExprEF> + Copy;
 
-    /// Return the matrix representing permutation registers.
+    /// Value type for expected cumulated values used in global lookup arguments.
+    type PermutationVar: Into<Self::ExprEF> + Clone;
+
+    /// Return the current and next row slices of the permutation trace.
     fn permutation(&self) -> Self::MP;
 
     /// Return the list of randomness values for permutation argument.
     fn permutation_randomness(&self) -> &[Self::RandomVar];
+
+    /// Return the expected cumulated values for global lookup arguments.
+    fn permutation_values(&self) -> &[Self::PermutationVar];
 }
 
 /// A wrapper around an [`AirBuilder`] that enforces constraints only when a specified condition is met.
@@ -450,7 +567,7 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
         self.inner.main()
     }
 
-    fn preprocessed(&self) -> Option<Self::M> {
+    fn preprocessed(&self) -> &Self::M {
         self.inner.preprocessed()
     }
 
@@ -466,12 +583,24 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
         self.inner.is_last_row()
     }
 
+    fn is_transition(&self) -> Self::Expr {
+        self.inner.is_transition()
+    }
+
     fn is_transition_window(&self, size: usize) -> Self::Expr {
         self.inner.is_transition_window(size)
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         self.inner.assert_zero(self.condition() * x.into());
+    }
+}
+
+impl<AB: PeriodicAirBuilder> PeriodicAirBuilder for FilteredAirBuilder<'_, AB> {
+    type PeriodicVar = AB::PeriodicVar;
+
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.inner.periodic_values()
     }
 }
 
@@ -496,12 +625,18 @@ impl<AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'_,
 
     type RandomVar = AB::RandomVar;
 
+    type PermutationVar = AB::PermutationVar;
+
     fn permutation(&self) -> Self::MP {
         self.inner.permutation()
     }
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         self.inner.permutation_randomness()
+    }
+
+    fn permutation_values(&self) -> &[Self::PermutationVar] {
+        self.inner.permutation_values()
     }
 }
 

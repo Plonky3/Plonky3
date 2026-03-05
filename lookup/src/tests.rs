@@ -4,8 +4,10 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::lookup::LookupEvaluator;
-use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpression};
-use p3_air::{Air, AirBuilder, BaseAir, BaseLeaf, ExtensionBuilder, PermutationAirBuilder};
+use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpression};
+use p3_air::{
+    Air, AirBuilder, BaseAir, BaseLeaf, ExtensionBuilder, PermutationAirBuilder, WindowAccess,
+};
 use p3_baby_bear::BabyBear;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
@@ -109,6 +111,8 @@ fn test_constraint_degree_calculation() {
 struct MockAirBuilder {
     /// Main trace matrix containing the execution trace data
     main: RowMajorMatrix<F>,
+    /// Empty preprocessed matrix (no preprocessed columns in this mock).
+    preprocessed: RowMajorMatrix<F>,
     /// Auxiliary trace matrix containing the LogUp running sum column
     permutation: RowMajorMatrix<EF>,
     /// Random challenges used in the LogUp argument
@@ -124,6 +128,7 @@ impl MockAirBuilder {
         let height = main.height();
         Self {
             main,
+            preprocessed: RowMajorMatrix::new(vec![], 0),
             permutation,
             challenges,
             current_row: 0,
@@ -172,6 +177,10 @@ impl AirBuilder for MockAirBuilder {
         self.window(&self.main)
     }
 
+    fn preprocessed(&self) -> &Self::M {
+        &self.preprocessed
+    }
+
     fn is_first_row(&self) -> Self::Expr {
         F::from_bool(self.current_row == 0)
     }
@@ -181,8 +190,8 @@ impl AirBuilder for MockAirBuilder {
     }
 
     fn is_transition_window(&self, size: usize) -> Self::Expr {
-        assert!(size > 0);
-        F::from_bool(self.current_row < self.height - (size - 1))
+        assert!(size <= 2, "only two-row windows are supported, got {size}");
+        F::from_bool(self.current_row < self.height - 1)
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
@@ -219,6 +228,7 @@ impl ExtensionBuilder for MockAirBuilder {
 impl PermutationAirBuilder for MockAirBuilder {
     type MP = RowMajorMatrix<EF>;
     type RandomVar = EF;
+    type PermutationVar = EF;
 
     fn permutation(&self) -> Self::MP {
         self.window(&self.permutation)
@@ -226,6 +236,10 @@ impl PermutationAirBuilder for MockAirBuilder {
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         &self.challenges
+    }
+
+    fn permutation_values(&self) -> &[Self::PermutationVar] {
+        &[]
     }
 }
 
@@ -274,11 +288,13 @@ where
     }
 
     fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
-        let symbolic_air_builder =
-            SymbolicAirBuilder::<F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
+        let symbolic_air_builder = SymbolicAirBuilder::<F>::new(AirLayout {
+            main_width: BaseAir::<AB::F>::width(self),
+            ..Default::default()
+        });
 
         let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
+        let symbolic_main_local = symbolic_main.current_slice();
 
         // Perform each lookup independently using LookupContext
         (0..self.num_lookups)
@@ -507,14 +523,17 @@ impl LookupTraceBuilder {
 #[test]
 fn test_symbolic_to_expr() {
     use p3_air::AirBuilder;
-    use p3_air::symbolic::SymbolicAirBuilder;
+    use p3_air::symbolic::{AirLayout, SymbolicAirBuilder};
     use p3_field::PrimeCharacteristicRing;
 
-    let mut builder = SymbolicAirBuilder::<F>::new(0, 2, 0, 0, 0);
+    let mut builder = SymbolicAirBuilder::<F>::new(AirLayout {
+        main_width: 2,
+        ..Default::default()
+    });
 
     let main = builder.main();
 
-    let (local, next) = (main.row_slice(0).unwrap(), main.row_slice(1).unwrap());
+    let (local, next) = (main.current_slice(), main.next_slice());
 
     let mul = local[0] * next[1];
     let add = local[0] + next[1];
@@ -660,8 +679,11 @@ fn test_debug_util_detects_malformed_lookup() {
     let main_values = vec![F::from_u32(3), F::from_u32(4)];
     let main_trace = RowMajorMatrix::new(main_values, 1);
 
-    let builder = SymbolicAirBuilder::<F>::new(0, 1, 0, 0, 0);
-    let expr = builder.main().row_slice(0).unwrap()[0];
+    let builder = SymbolicAirBuilder::<F>::new(AirLayout {
+        main_width: 1,
+        ..Default::default()
+    });
+    let expr = builder.main().current(0).unwrap();
 
     // One local lookup with a single tuple; multiplicity is always +1,
     // so the total multiset count is non-zero.
@@ -1161,11 +1183,13 @@ where
     }
 
     fn get_lookups(&mut self) -> Vec<Lookup<AB::F>> {
-        let symbolic_air_builder =
-            SymbolicAirBuilder::<F>::new(0, BaseAir::<AB::F>::width(self), 0, 0, 0);
+        let symbolic_air_builder = SymbolicAirBuilder::<F>::new(AirLayout {
+            main_width: BaseAir::<AB::F>::width(self),
+            ..Default::default()
+        });
 
         let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
+        let symbolic_main_local = symbolic_main.current_slice();
 
         // Extract columns for thelookup entries: [inp1, inp2, sum]
         let inp1 = symbolic_main_local[0];

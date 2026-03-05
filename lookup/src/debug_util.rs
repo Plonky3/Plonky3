@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use alloc::{format, vec};
 
 use hashbrown::HashMap;
-use p3_air::{AirBuilder, PermutationAirBuilder};
+use p3_air::{AirBuilder, PermutationAirBuilder, RowWindow};
 use p3_field::Field;
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -161,18 +161,23 @@ fn accumulate_lookup<F: Field>(
                 prep.row_slice((row + 1) % height).unwrap(),
             )
         });
-        let preprocessed_rows = preprocessed_rows_data
-            .as_ref()
-            .map(|(prep_local, prep_next)| {
-                VerticalPair::new(
-                    RowMajorMatrixView::new_row(&**prep_local),
-                    RowMajorMatrixView::new_row(&**prep_next),
-                )
-            });
+        let preprocessed_rows = match preprocessed_rows_data.as_ref() {
+            Some((prep_local, prep_next)) => VerticalPair::new(
+                RowMajorMatrixView::new_row(&**prep_local),
+                RowMajorMatrixView::new_row(&**prep_next),
+            ),
+            None => VerticalPair::new(
+                RowMajorMatrixView::new(&[], 0),
+                RowMajorMatrixView::new(&[], 0),
+            ),
+        };
 
         let builder = MiniLookupBuilder {
             main: main_rows,
-            preprocessed: preprocessed_rows,
+            preprocessed: RowWindow::from_two_rows(
+                preprocessed_rows.top.values,
+                preprocessed_rows.bottom.values,
+            ),
             public_values: instance.public_values,
             permutation_challenges: instance.permutation_challenges,
             row,
@@ -202,7 +207,7 @@ fn accumulate_lookup<F: Field>(
 
 struct MiniLookupBuilder<'a, F: Field> {
     main: VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>,
-    preprocessed: Option<VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>>,
+    preprocessed: RowWindow<'a, F>,
     public_values: &'a [F],
     permutation_challenges: &'a [F],
     row: usize,
@@ -213,15 +218,15 @@ impl<'a, F: Field> AirBuilder for MiniLookupBuilder<'a, F> {
     type F = F;
     type Expr = F;
     type Var = F;
-    type M = VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>;
     type PublicVar = F;
+    type M = RowWindow<'a, F>;
 
     fn main(&self) -> Self::M {
-        self.main
+        RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
     }
 
-    fn preprocessed(&self) -> Option<Self::M> {
-        self.preprocessed
+    fn preprocessed(&self) -> &Self::M {
+        &self.preprocessed
     }
 
     fn public_values(&self) -> &[Self::PublicVar] {
@@ -237,11 +242,8 @@ impl<'a, F: Field> AirBuilder for MiniLookupBuilder<'a, F> {
     }
 
     fn is_transition_window(&self, size: usize) -> Self::Expr {
-        if size == 2 {
-            F::from_bool(self.row + 1 < self.height)
-        } else {
-            panic!("MiniLookupBuilder only supports window size 2");
-        }
+        assert!(size <= 2, "only two-row windows are supported, got {size}");
+        F::from_bool(self.row + 1 < self.height)
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, _x: I) {}
@@ -256,19 +258,21 @@ impl<'a, F: Field> p3_air::ExtensionBuilder for MiniLookupBuilder<'a, F> {
 }
 
 impl<'a, F: Field> PermutationAirBuilder for MiniLookupBuilder<'a, F> {
-    type MP = VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>;
-
+    type MP = RowWindow<'a, F>;
     type RandomVar = F;
 
+    type PermutationVar = F;
+
     fn permutation(&self) -> Self::MP {
-        // Empty 0-width view; permutation columns are not needed for debug evals.
-        VerticalPair::new(
-            RowMajorMatrixView::new_row(&[]),
-            RowMajorMatrixView::new_row(&[]),
-        )
+        // Empty slices; permutation columns are not needed for debug evals.
+        RowWindow::from_two_rows(&[], &[])
     }
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         self.permutation_challenges
+    }
+
+    fn permutation_values(&self) -> &[Self::PermutationVar] {
+        &[]
     }
 }
