@@ -240,8 +240,8 @@ pub trait Convolve<F, T: ConvolutionElt, U: ConvolutionRhs> {
         }
     }
 
-    /// Compute output(x) = lhs(x)rhs(x) mod x^N + 1.
-    /// Do this recursively using three negacyclic convolutions of size HALF_N = N/2.
+    /// Compute output(x) = lhs(x)rhs(x) mod x^N + 1 recursively using
+    /// three negacyclic convolutions of size HALF_N = N/2.
     #[inline(always)]
     fn negacyclic_conv_n_recursive<const N: usize, const HALF_N: usize, NC>(
         lhs: [T; N],
