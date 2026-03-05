@@ -205,7 +205,6 @@ pub trait Convolve<F, T: ConvolutionElt, U: ConvolutionRhs> {
         NC: Fn([T; HALF_N], [U; HALF_N], &mut [T]),
     {
         debug_assert_eq!(2 * HALF_N, N);
-        // NB: The compiler is smart enough not to initialise these arrays.
         let mut lhs_pos = [Self::T_ZERO; HALF_N]; // lhs_pos = lhs(x) mod x^{N/2} - 1
         let mut lhs_neg = [Self::T_ZERO; HALF_N]; // lhs_neg = lhs(x) mod x^{N/2} + 1
         let mut rhs_pos = [Self::U_ZERO; HALF_N]; // rhs_pos = rhs(x) mod x^{N/2} - 1
@@ -252,7 +251,6 @@ pub trait Convolve<F, T: ConvolutionElt, U: ConvolutionRhs> {
         NC: Fn([T; HALF_N], [U; HALF_N], &mut [T]),
     {
         debug_assert_eq!(2 * HALF_N, N);
-        // NB: The compiler is smart enough not to initialise these arrays.
         let mut lhs_even = [Self::T_ZERO; HALF_N];
         let mut lhs_odd = [Self::T_ZERO; HALF_N];
         let mut lhs_sum = [Self::T_ZERO; HALF_N];
@@ -442,7 +440,7 @@ mod tests {
     }
 
     /// Fixed circulant column for width-16 tests.
-    /// Uses small distinct integers so the MDS property is easy to verify by inspection.
+    /// Uses small distinct integers for a reproducible test vector.
     fn col_16() -> [F; 16] {
         [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].map(F::from_i64)
     }
