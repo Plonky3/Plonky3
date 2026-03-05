@@ -2,6 +2,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, MdsMatrixBabyBear, PoseidonBabyBear};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_goldilocks::{Goldilocks, MdsMatrixGoldilocks};
+use p3_koala_bear::{KoalaBear, MdsMatrixKoalaBear, PoseidonKoalaBear};
 use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
 use p3_poseidon::{Poseidon, PoseidonExternalLayerGeneric, PoseidonInternalLayerGeneric};
 use p3_symmetric::Permutation;
@@ -31,6 +32,18 @@ fn bench_poseidon(c: &mut Criterion) {
     let poseidon_bb_24 = PoseidonBabyBear::<24>::new_from_rng(4, 21, &mds_bb, &mut rng);
     poseidon_scalar::<BabyBear, _, 24>(c, &poseidon_bb_24);
     poseidon_packed::<BabyBear, _, 24>(c, &poseidon_bb_24);
+
+    let mds_kb: MdsMatrixKoalaBear = Default::default();
+
+    // KoalaBear width 16.
+    let poseidon_kb_16 = PoseidonKoalaBear::<16>::new_from_rng(4, 20, &mds_kb, &mut rng);
+    poseidon_scalar::<KoalaBear, _, 16>(c, &poseidon_kb_16);
+    poseidon_packed::<KoalaBear, _, 16>(c, &poseidon_kb_16);
+
+    // KoalaBear width 24.
+    let poseidon_kb_24 = PoseidonKoalaBear::<24>::new_from_rng(4, 23, &mds_kb, &mut rng);
+    poseidon_scalar::<KoalaBear, _, 24>(c, &poseidon_kb_24);
+    poseidon_packed::<KoalaBear, _, 24>(c, &poseidon_kb_24);
 
     // Goldilocks: generic implementation with random constants.
     let gl_8: PoseidonGeneric<Goldilocks, MdsMatrixGoldilocks, 8, 7> =
