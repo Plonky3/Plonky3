@@ -30,9 +30,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::{Borrow, BorrowMut};
 
-use p3_air::{Air, AirBuilder, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{PrimeCharacteristicRing, PrimeField};
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
@@ -291,7 +290,6 @@ impl<
     fn eval(&self, builder: &mut AB) {
         // Read the current row as a flat slice.
         let main = builder.main();
-        let local = main.row_slice(0).expect("The matrix is empty?");
 
         // Reinterpret as the vectorized column struct.
         let local: &VectorizedPoseidonCols<
@@ -302,7 +300,7 @@ impl<
             HALF_FULL_ROUNDS,
             PARTIAL_ROUNDS,
             VECTOR_LEN,
-        > = (*local).borrow();
+        > = main.current_slice().borrow();
 
         // Evaluate constraints independently for each permutation in the row.
         for perm in &local.cols {

@@ -33,8 +33,9 @@ pub type PoseidonExternalLayerBabyBear<const WIDTH: usize> =
 
 /// S-box degree for BabyBear Poseidon.
 ///
-/// Since `p - 1 = 15 * 2^27`, both 3 and 5 divide `p - 1`, so
-/// `gcd(α, p - 1) ≠ 1` for `α ∈ {3, 5}`. The next smallest valid exponent is 7.
+/// Since `p - 1 = 15 * 2^27`, both 3 and 5 divide `p - 1`.
+///
+/// So `gcd(α, p - 1) ≠ 1` for `α ∈ {3, 5}`. The next smallest valid exponent is 7.
 pub const BABYBEAR_S_BOX_DEGREE: u64 = 7;
 
 /// Number of full rounds per half for BabyBear Poseidon (`RF / 2`).
