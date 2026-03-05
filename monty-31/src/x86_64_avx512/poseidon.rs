@@ -50,8 +50,11 @@ pub struct PoseidonExternalLayerMonty31<
     const WIDTH: usize,
 > {
     pub(crate) external_constants: FullRoundConstants<MontyField31<PMP>, WIDTH>,
+    /// Pre-packed initial round constants in negative form for fused AddRC+S-box.
     packed_initial_constants: Vec<[__m512i; WIDTH]>,
+    /// Pre-packed terminal round constants in negative form for fused AddRC+S-box.
     packed_terminal_constants: Vec<[__m512i; WIDTH]>,
+    /// First column of the circulant MDS matrix (for Karatsuba convolution).
     circulant_col: [MontyField31<PMP>; WIDTH],
     _mds: PhantomData<MU>,
 }
