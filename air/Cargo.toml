@@ -12,7 +12,6 @@ categories.workspace = true
 [dependencies]
 p3-field.workspace = true
 p3-matrix.workspace = true
-serde = { workspace = true, features = ["derive", "alloc"] }
 tracing.workspace = true
 
 [dev-dependencies]

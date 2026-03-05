@@ -1,6 +1,6 @@
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 use core::fmt::Debug;
 
 use hashbrown::HashMap;
@@ -9,9 +9,10 @@ use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
+use p3_lookup::AirWithLookups;
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::lookup_traits::{Lookup, LookupError, LookupGadget};
+use p3_lookup::lookup_traits::{Lookup, LookupGadget};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_uni_stark::{VerificationError, VerifierConstraintFolder, recompose_quotient_from_chunks};
@@ -556,11 +557,7 @@ where
     for (name, all_expected_cumulative) in global_cumulative {
         lookup_gadget
             .verify_global_final_value(&all_expected_cumulative)
-            .map_err(|_| {
-                VerificationError::LookupError(LookupError::GlobalCumulativeMismatch(Some(
-                    name.clone(),
-                )))
-            })?;
+            .map_err(|e| VerificationError::LookupError(format!("{e:?}: {name}")))?;
     }
 
     Ok(())
@@ -664,7 +661,7 @@ where
         permutation_values,
     };
     // Evaluate AIR and lookup constraints.
-    A::eval_with_lookups(air, &mut folder, lookups, lookup_gadget);
+    air.eval_with_lookups(&mut folder, lookups, lookup_gadget);
     let folded_constraints = folder.inner.accumulator;
 
     // Check that constraints(zeta) / Z_H(zeta) = quotient(zeta)

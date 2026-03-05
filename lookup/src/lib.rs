@@ -10,3 +10,6 @@ pub mod logup;
 pub mod lookup_traits;
 #[cfg(test)]
 mod tests;
+mod types;
+
+pub use types::*;
