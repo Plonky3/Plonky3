@@ -72,7 +72,6 @@ fn prove_and_verify() -> Result<(), impl Debug> {
     type Val = BabyBear;
     type Challenge = BinomialExtensionField<Val, 4>;
 
-    // Hash infrastructure
 
     type ByteHash = Keccak256Hash;
     let byte_hash = ByteHash {};
