@@ -63,7 +63,7 @@ impl<'a, T> RowWindow<'a, T> {
     ///
     /// Panics if the view does not contain exactly `2 * width` elements.
     #[inline]
-    pub fn from_view(view: RowMajorMatrixView<'a, T>) -> Self {
+    pub fn from_view(view: &RowMajorMatrixView<'a, T>) -> Self {
         let width = view.width;
         assert_eq!(
             view.values.len(),

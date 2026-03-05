@@ -161,7 +161,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
 
     #[inline]
     fn main(&self) -> Self::M {
-        RowWindow::from_view(self.main)
+        RowWindow::from_view(&self.main)
     }
 
     fn preprocessed(&self) -> &Self::M {

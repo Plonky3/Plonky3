@@ -21,7 +21,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
     type M = RowWindow<'a, PackedVal<SC>>;
 
     fn main(&self) -> Self::M {
-        RowWindow::from_view(self.inner.main)
+        RowWindow::from_view(&self.inner.main)
     }
 
     fn preprocessed(&self) -> &Self::M {
@@ -82,7 +82,7 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder
     type PermutationVar = PackedChallenge<SC>;
 
     fn permutation(&self) -> Self::MP {
-        RowWindow::from_view(self.permutation)
+        RowWindow::from_view(&self.permutation)
     }
 
     fn permutation_randomness(&self) -> &[PackedChallenge<SC>] {

@@ -463,7 +463,7 @@ where
             let mut folder = ProverConstraintFolder {
                 main: main.as_view(),
                 preprocessed: preprocessed_view,
-                preprocessed_window: RowWindow::from_view(preprocessed_view),
+                preprocessed_window: RowWindow::from_view(&preprocessed_view),
                 public_values,
                 is_first_row,
                 is_last_row,
