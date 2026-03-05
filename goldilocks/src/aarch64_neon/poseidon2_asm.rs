@@ -13,7 +13,7 @@ const EPSILON: u64 = P.wrapping_neg(); // 2^32 - 1
 /// Multiply two Goldilocks elements using inline assembly.
 /// Returns the product reduced modulo P.
 #[inline(always)]
-unsafe fn mul_asm(a: u64, b: u64) -> u64 {
+pub(super) unsafe fn mul_asm(a: u64, b: u64) -> u64 {
     let _lo: u64;
     let _hi: u64;
     let _t0: u64;
@@ -65,7 +65,7 @@ unsafe fn mul_asm(a: u64, b: u64) -> u64 {
 /// Compute a * b + c in the Goldilocks field using inline assembly.
 /// All inputs must be valid field elements; the final result is reduced modulo P.
 #[inline(always)]
-unsafe fn mul_add_asm(a: u64, b: u64, c: u64) -> u64 {
+pub(super) unsafe fn mul_add_asm(a: u64, b: u64, c: u64) -> u64 {
     let _lo: u64;
     let _hi: u64;
     let _t0: u64;
@@ -206,7 +206,7 @@ unsafe fn div_2_32_asm(x: u64) -> u64 {
 
 /// Add two Goldilocks elements with overflow handling using inline assembly.
 #[inline(always)]
-unsafe fn add_asm(a: u64, b: u64) -> u64 {
+pub(super) unsafe fn add_asm(a: u64, b: u64) -> u64 {
     let result: u64;
     let _adj: u64;
 
