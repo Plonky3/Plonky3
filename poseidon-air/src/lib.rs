@@ -222,7 +222,6 @@ mod tests {
             PARTIAL_ROUNDS,
         > = PoseidonAir::new(air_constants);
 
-        // Assemble the STARK infrastructure
 
         // Hash function for Merkle tree leaves and Fiat-Shamir challenger.
         let byte_hash = Keccak256Hash {};
