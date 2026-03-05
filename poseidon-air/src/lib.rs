@@ -256,7 +256,6 @@ mod tests {
         // FRI parameters (log_blowup determines the LDE blowup factor).
         let fri_params = create_benchmark_fri_params(challenge_mmcs);
 
-        // Generate trace, prove, and verify
 
         // Generate the trace with extra capacity for the LDE blowup.
         let trace = air.generate_trace_rows(16, fri_params.log_blowup);
