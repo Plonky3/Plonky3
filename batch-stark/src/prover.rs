@@ -1,10 +1,10 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_air::Air;
 #[cfg(debug_assertions)]
 use p3_air::DebugConstraintBuilder;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
+use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{
@@ -751,11 +751,13 @@ where
                 },
             );
 
+            let preprocessed_view = preprocessed
+                .as_ref()
+                .map_or_else(|| RowMajorMatrixView::new(&[], 0), |m| m.as_view());
             let inner_folder = ProverConstraintFolder {
                 main: main.as_view(),
-                preprocessed: preprocessed
-                    .as_ref()
-                    .map_or_else(|| RowMajorMatrixView::new(&[], 0), |m| m.as_view()),
+                preprocessed: preprocessed_view,
+                preprocessed_window: RowWindow::from_view(&preprocessed_view),
                 public_values,
                 is_first_row,
                 is_last_row,

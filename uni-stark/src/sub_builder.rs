@@ -1,17 +1,41 @@
-//! Helpers for reusing an [`AirBuilder`] on a restricted set of trace columns.
+//! Helpers for restricting a builder to a subset of trace columns.
 //!
 //! The uni-STARK builders often need to enforce constraints that refer to only a slice of the main
-//! trace. [`HorizontallyTruncated`] offers a cheap view over a subset of columns, and
-//! [`SubAirBuilder`] wires that view into any [`AirBuilder`] implementation so a sub-air can be
-//! evaluated independently without cloning trace data.
+//! trace. [`SubSliced`] offers a cheap view over a subset of columns, and [`SubAirBuilder`] wires
+//! that view into any [`AirBuilder`] implementation so a sub-air can be evaluated independently
+//! without copying trace data.
 
 // Code inpsired from SP1 with additional modifications:
 // https://github.com/succinctlabs/sp1/blob/main/crates/stark/src/air/sub_builder.rs
 
+use core::marker::PhantomData;
 use core::ops::Range;
 
-use p3_air::{AirBuilder, BaseAir};
-use p3_matrix::horizontally_truncated::HorizontallyTruncated;
+use p3_air::{AirBuilder, BaseAir, WindowAccess};
+
+/// A column-restricted view over a trace window.
+///
+/// Wraps an inner window and exposes only the columns within
+/// the given range. Lets a sub-AIR see a contiguous subset
+/// of the parent trace without copying data.
+#[derive(Clone)]
+pub struct SubSliced<W, T> {
+    window: W,
+    range: Range<usize>,
+    _marker: PhantomData<T>,
+}
+
+impl<W: WindowAccess<T>, T> WindowAccess<T> for SubSliced<W, T> {
+    #[inline]
+    fn current_slice(&self) -> &[T] {
+        &self.window.current_slice()[self.range.clone()]
+    }
+
+    #[inline]
+    fn next_slice(&self) -> &[T] {
+        &self.window.next_slice()[self.range.clone()]
+    }
+}
 
 /// Evaluates a sub-AIR against a restricted slice of the parent trace.
 ///
@@ -25,8 +49,8 @@ pub struct SubAirBuilder<'a, AB: AirBuilder, SubAir: BaseAir<AB::F>, T> {
     /// Column range (in the parent trace) that the sub-AIR is allowed to see.
     column_range: Range<usize>,
 
-    /// Cached zero-width preprocessed matrix returned by reference.
-    preprocessed: HorizontallyTruncated<AB::Var, AB::M>,
+    /// Cached zero-width preprocessed window returned by reference.
+    preprocessed: SubSliced<AB::M, AB::Var>,
 
     /// Marker for the sub-AIR and witness type.
     _phantom: core::marker::PhantomData<(SubAir, T)>,
@@ -38,9 +62,11 @@ impl<'a, AB: AirBuilder, SubAir: BaseAir<AB::F>, T> SubAirBuilder<'a, AB, SubAir
     /// The range must lie entirely inside the parent trace width.
     #[must_use]
     pub fn new(inner: &'a mut AB, column_range: Range<usize>) -> Self {
-        let preprocessed =
-            HorizontallyTruncated::new_with_range(inner.preprocessed().clone(), 0..0)
-                .expect("empty range on preprocessed should always succeed");
+        let preprocessed = SubSliced {
+            window: inner.preprocessed().clone(),
+            range: 0..0,
+            _marker: PhantomData,
+        };
         Self {
             inner,
             column_range,
@@ -55,14 +81,15 @@ impl<AB: AirBuilder, SubAir: BaseAir<AB::F>, F> AirBuilder for SubAirBuilder<'_,
     type F = AB::F;
     type Expr = AB::Expr;
     type Var = AB::Var;
-    type M = HorizontallyTruncated<Self::Var, AB::M>;
+    type M = SubSliced<AB::M, AB::Var>;
     type PublicVar = AB::PublicVar;
 
     fn main(&self) -> Self::M {
-        let matrix = self.inner.main();
-
-        HorizontallyTruncated::new_with_range(matrix, self.column_range.clone())
-            .expect("sub-air column range exceeds parent width")
+        SubSliced {
+            window: self.inner.main(),
+            range: self.column_range.clone(),
+            _marker: PhantomData,
+        }
     }
 
     fn preprocessed(&self) -> &Self::M {
@@ -82,7 +109,8 @@ impl<AB: AirBuilder, SubAir: BaseAir<AB::F>, F> AirBuilder for SubAirBuilder<'_,
     }
 
     fn is_transition_window(&self, size: usize) -> Self::Expr {
-        self.inner.is_transition_window(size)
+        assert!(size <= 2, "only two-row windows are supported, got {size}");
+        self.inner.is_transition()
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {

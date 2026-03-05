@@ -5,7 +5,9 @@ use alloc::vec::Vec;
 
 use p3_air::lookup::LookupEvaluator;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpression};
-use p3_air::{Air, AirBuilder, BaseAir, BaseLeaf, ExtensionBuilder, PermutationAirBuilder};
+use p3_air::{
+    Air, AirBuilder, BaseAir, BaseLeaf, ExtensionBuilder, PermutationAirBuilder, WindowAccess,
+};
 use p3_baby_bear::BabyBear;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
@@ -188,8 +190,8 @@ impl AirBuilder for MockAirBuilder {
     }
 
     fn is_transition_window(&self, size: usize) -> Self::Expr {
-        assert!(size > 0);
-        F::from_bool(self.current_row < self.height - (size - 1))
+        assert!(size <= 2, "only two-row windows are supported, got {size}");
+        F::from_bool(self.current_row < self.height - 1)
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
@@ -292,7 +294,7 @@ where
         });
 
         let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
+        let symbolic_main_local = symbolic_main.current_slice();
 
         // Perform each lookup independently using LookupContext
         (0..self.num_lookups)
@@ -531,7 +533,7 @@ fn test_symbolic_to_expr() {
 
     let main = builder.main();
 
-    let (local, next) = (main.row_slice(0).unwrap(), main.row_slice(1).unwrap());
+    let (local, next) = (main.current_slice(), main.next_slice());
 
     let mul = local[0] * next[1];
     let add = local[0] + next[1];
@@ -681,7 +683,7 @@ fn test_debug_util_detects_malformed_lookup() {
         main_width: 1,
         ..Default::default()
     });
-    let expr = builder.main().row_slice(0).unwrap()[0];
+    let expr = builder.main().current(0).unwrap();
 
     // One local lookup with a single tuple; multiplicity is always +1,
     // so the total multiset count is non-zero.
@@ -1187,7 +1189,7 @@ where
         });
 
         let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
+        let symbolic_main_local = symbolic_main.current_slice();
 
         // Extract columns for thelookup entries: [inp1, inp2, sum]
         let inp1 = symbolic_main_local[0];

@@ -2,11 +2,11 @@ use p3_air::lookup::LookupEvaluator;
 /// Public re-exports of lookup types.
 pub use p3_air::lookup::{Direction, Kind, Lookup, LookupData, LookupError, LookupInput};
 use p3_air::{
-    AirBuilder, BaseEntry, BaseLeaf, ExtensionBuilder, PermutationAirBuilder, SymbolicExpression,
+    AirBuilder, BaseEntry, BaseLeaf, ExtensionBuilder, PermutationAirBuilder, RowWindow,
+    SymbolicExpression, WindowAccess,
 };
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_matrix::Matrix;
-use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{StarkGenericConfig, Val};
 use tracing::warn;
@@ -42,7 +42,7 @@ pub trait LookupGadget: LookupEvaluator {
 /// A builder to generate the lookup traces, given the main trace, public values and permutation challenges.
 pub struct LookupTraceBuilder<'a, SC: StarkGenericConfig> {
     main: ViewPair<'a, Val<SC>>,
-    preprocessed: ViewPair<'a, Val<SC>>,
+    preprocessed: RowWindow<'a, Val<SC>>,
     public_values: &'a [Val<SC>],
     permutation_challenges: &'a [SC::Challenge],
     height: usize,
@@ -50,7 +50,7 @@ pub struct LookupTraceBuilder<'a, SC: StarkGenericConfig> {
 }
 
 impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
-    pub const fn new(
+    pub fn new(
         main: ViewPair<'a, Val<SC>>,
         preprocessed: ViewPair<'a, Val<SC>>,
         public_values: &'a [Val<SC>],
@@ -60,7 +60,10 @@ impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
     ) -> Self {
         Self {
             main,
-            preprocessed,
+            preprocessed: RowWindow::from_two_rows(
+                preprocessed.top.values,
+                preprocessed.bottom.values,
+            ),
             public_values,
             permutation_challenges,
             height,
@@ -73,12 +76,12 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
     type F = Val<SC>;
     type Expr = Val<SC>;
     type Var = Val<SC>;
-    type M = ViewPair<'a, Val<SC>>;
     type PublicVar = Val<SC>;
+    type M = RowWindow<'a, Val<SC>>;
 
     #[inline]
     fn main(&self) -> Self::M {
-        self.main
+        RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
     }
 
     fn preprocessed(&self) -> &Self::M {
@@ -102,11 +105,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
 
     #[inline]
     fn is_transition_window(&self, size: usize) -> Self::Expr {
-        if size == 2 {
-            Self::F::from_bool(self.row + 1 < self.height)
-        } else {
-            panic!("uni-stark only supports a window size of 2")
-        }
+        assert!(size <= 2, "only two-row windows are supported, got {size}");
+        Self::F::from_bool(self.row + 1 < self.height)
     }
 
     #[inline]
@@ -133,13 +133,12 @@ impl<SC: StarkGenericConfig> ExtensionBuilder for LookupTraceBuilder<'_, SC> {
 }
 
 impl<'a, SC: StarkGenericConfig> PermutationAirBuilder for LookupTraceBuilder<'a, SC> {
-    type MP = RowMajorMatrixView<'a, SC::Challenge>;
-
+    type MP = RowWindow<'a, SC::Challenge>;
     type RandomVar = SC::Challenge;
 
     type PermutationVar = SC::Challenge;
 
-    fn permutation(&self) -> RowMajorMatrixView<'a, SC::Challenge> {
+    fn permutation(&self) -> Self::MP {
         panic!("we should not be accessing the permutation matrix while building it");
     }
 
@@ -162,20 +161,26 @@ where
     match expr {
         SymbolicExpression::Leaf(leaf) => match leaf {
             BaseLeaf::Variable(v) => match v.entry {
-                BaseEntry::Main { offset } => match offset {
-                    0 => builder.main().row_slice(0).unwrap()[v.index].into(),
-                    1 => builder.main().row_slice(1).unwrap()[v.index].into(),
-                    _ => panic!("Cannot have expressions involving more than two rows."),
-                },
+                BaseEntry::Main { offset } => {
+                    let main = builder.main();
+                    match offset {
+                        0 => main.current(v.index).unwrap().into(),
+                        1 => main.next(v.index).unwrap().into(),
+                        _ => panic!("Cannot have expressions involving more than two rows."),
+                    }
+                }
                 BaseEntry::Periodic => {
                     panic!("Periodic columns are not supported in lookup resolution")
                 }
                 BaseEntry::Public => builder.public_values()[v.index].into(),
-                BaseEntry::Preprocessed { offset } => match offset {
-                    0 => builder.preprocessed().row_slice(0).unwrap()[v.index].into(),
-                    1 => builder.preprocessed().row_slice(1).unwrap()[v.index].into(),
-                    _ => panic!("Cannot have expressions involving more than two rows."),
-                },
+                BaseEntry::Preprocessed { offset } => {
+                    let prep = builder.preprocessed();
+                    match offset {
+                        0 => prep.current(v.index).unwrap().into(),
+                        1 => prep.next(v.index).unwrap().into(),
+                        _ => panic!("Cannot have expressions involving more than two rows."),
+                    }
+                }
             },
             BaseLeaf::IsFirstRow => {
                 warn!("IsFirstRow is not normalized");

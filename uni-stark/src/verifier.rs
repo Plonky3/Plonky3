@@ -4,9 +4,9 @@ use alloc::vec::Vec;
 use alloc::{format, vec};
 
 use itertools::Itertools;
-use p3_air::Air;
 use p3_air::lookup::LookupError;
 use p3_air::symbolic::SymbolicAirBuilder;
+use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
@@ -108,9 +108,12 @@ where
         ),
     };
 
+    let preprocessed_window =
+        RowWindow::from_two_rows(preprocessed.top.values, preprocessed.bottom.values);
     let mut folder = VerifierConstraintFolder {
         main,
         preprocessed,
+        preprocessed_window,
         public_values,
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,

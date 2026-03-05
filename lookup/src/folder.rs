@@ -1,4 +1,4 @@
-use p3_air::{AirBuilder, ExtensionBuilder, PermutationAirBuilder};
+use p3_air::{AirBuilder, ExtensionBuilder, PermutationAirBuilder, RowWindow};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{
@@ -17,11 +17,11 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
     type F = Val<SC>;
     type Expr = PackedVal<SC>;
     type Var = PackedVal<SC>;
-    type M = RowMajorMatrixView<'a, PackedVal<SC>>;
     type PublicVar = Val<SC>;
+    type M = RowWindow<'a, PackedVal<SC>>;
 
     fn main(&self) -> Self::M {
-        self.inner.main
+        RowWindow::from_view(&self.inner.main)
     }
 
     fn preprocessed(&self) -> &Self::M {
@@ -43,17 +43,10 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
         self.inner.is_last_row
     }
 
-    /// Returns an expression indicating rows where transition constraints should be checked.
-    ///
-    /// # Panics
-    /// This function panics if `size` is not `2`.
     #[inline]
     fn is_transition_window(&self, size: usize) -> Self::Expr {
-        if size == 2 {
-            self.inner.is_transition
-        } else {
-            panic!("uni-stark only supports a window size of 2")
-        }
+        assert!(size <= 2, "only two-row windows are supported, got {size}");
+        self.inner.is_transition
     }
 
     #[inline]
@@ -83,14 +76,13 @@ impl<SC: StarkGenericConfig> ExtensionBuilder for ProverConstraintFolderWithLook
 impl<'a, SC: StarkGenericConfig> PermutationAirBuilder
     for ProverConstraintFolderWithLookups<'a, SC>
 {
-    type MP = RowMajorMatrixView<'a, PackedChallenge<SC>>;
-
     type RandomVar = PackedChallenge<SC>;
+    type MP = RowWindow<'a, PackedChallenge<SC>>;
 
     type PermutationVar = PackedChallenge<SC>;
 
-    fn permutation(&self) -> RowMajorMatrixView<'a, PackedChallenge<SC>> {
-        self.permutation
+    fn permutation(&self) -> Self::MP {
+        RowWindow::from_view(&self.permutation)
     }
 
     fn permutation_randomness(&self) -> &[PackedChallenge<SC>] {
@@ -113,11 +105,11 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
     type F = Val<SC>;
     type Expr = SC::Challenge;
     type Var = SC::Challenge;
-    type M = ViewPair<'a, SC::Challenge>;
     type PublicVar = Val<SC>;
+    type M = RowWindow<'a, SC::Challenge>;
 
     fn main(&self) -> Self::M {
-        self.inner.main
+        RowWindow::from_two_rows(self.inner.main.top.values, self.inner.main.bottom.values)
     }
 
     fn preprocessed(&self) -> &Self::M {
@@ -139,17 +131,10 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
         self.inner.is_last_row
     }
 
-    /// Returns an expression indicating rows where transition constraints should be checked.
-    ///
-    /// # Panics
-    /// This function panics if `size` is not `2`.
     #[inline]
     fn is_transition_window(&self, size: usize) -> Self::Expr {
-        if size == 2 {
-            self.inner.is_transition
-        } else {
-            panic!("uni-stark only supports a window size of 2")
-        }
+        assert!(size <= 2, "only two-row windows are supported, got {size}");
+        self.inner.is_transition
     }
 
     #[inline]
@@ -180,14 +165,13 @@ impl<SC: StarkGenericConfig> ExtensionBuilder for VerifierConstraintFolderWithLo
 impl<'a, SC: StarkGenericConfig> PermutationAirBuilder
     for VerifierConstraintFolderWithLookups<'a, SC>
 {
-    type MP = ViewPair<'a, SC::Challenge>;
-
     type RandomVar = SC::Challenge;
+    type MP = RowWindow<'a, SC::Challenge>;
 
     type PermutationVar = SC::Challenge;
 
-    fn permutation(&self) -> ViewPair<'a, SC::Challenge> {
-        self.permutation
+    fn permutation(&self) -> Self::MP {
+        RowWindow::from_two_rows(self.permutation.top.values, self.permutation.bottom.values)
     }
 
     fn permutation_randomness(&self) -> &[SC::Challenge] {
