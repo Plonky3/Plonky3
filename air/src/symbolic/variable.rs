@@ -9,11 +9,12 @@ pub enum BaseEntry {
     Public,
 }
 
-/// Entry kinds for extension-field columns (permutation trace and challenges).
+/// Entry kinds for extension-field columns (permutation trace, challenges, and permutation values).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ExtEntry {
     Permutation { offset: usize },
     Challenge,
+    PermutationValue,
 }
 
 /// A variable within the evaluation window for base-field columns.
@@ -66,7 +67,7 @@ impl<F, EF> SymbolicVariableExt<F, EF> {
     pub const fn degree_multiple(&self) -> usize {
         match self.entry {
             ExtEntry::Permutation { .. } => 1,
-            ExtEntry::Challenge => 0,
+            ExtEntry::Challenge | ExtEntry::PermutationValue => 0,
         }
     }
 }
