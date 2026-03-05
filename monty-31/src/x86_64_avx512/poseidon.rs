@@ -35,9 +35,13 @@ pub struct PoseidonInternalLayerMonty31<
     ILP: PartialRoundBaseParameters<PMP, WIDTH>,
 > {
     pub(crate) internal_constants: PartialRoundConstants<MontyField31<PMP>, WIDTH>,
+    /// Pre-packed first round constants (broadcast to all AVX2 lanes).
     packed_first_round_constants: [PackedMontyField31AVX512<PMP>; WIDTH],
+    /// Pre-packed round constants for partial rounds (RP-1 entries). 
     packed_round_constants: Vec<PackedMontyField31AVX512<PMP>>,
+    /// Pre-packed sparse first-row vectors for each partial round (RP entries).
     packed_sparse_first_row: Vec<[PackedMontyField31AVX512<PMP>; WIDTH]>,
+    /// Pre-packed rank-1 update vectors for each partial round (RP entries).
     packed_v: Vec<[PackedMontyField31AVX512<PMP>; WIDTH]>,
     _phantom: PhantomData<ILP>,
 }
