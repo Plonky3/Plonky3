@@ -23,8 +23,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
         RowWindow::from_view(self.inner.main)
     }
 
-    fn preprocessed(&self) -> Option<Self::M> {
-        self.inner.preprocessed.map(RowWindow::from_view)
+    fn preprocessed(&self) -> &Self::M {
+        self.inner.preprocessed()
     }
 
     #[inline]
@@ -68,9 +68,7 @@ impl<SC: StarkGenericConfig> ExtensionBuilder for ProverConstraintFolderWithLook
     where
         I: Into<Self::ExprEF>,
     {
-        let alpha_power = self.inner.alpha_powers[self.inner.constraint_index];
-        self.inner.accumulator += <PackedChallenge<SC>>::from(alpha_power) * x.into();
-        self.inner.constraint_index += 1;
+        self.inner.assert_zero_ext(x);
     }
 }
 
@@ -106,10 +104,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
         RowWindow::from_two_rows(self.inner.main.top.values, self.inner.main.bottom.values)
     }
 
-    fn preprocessed(&self) -> Option<Self::M> {
-        self.inner
-            .preprocessed
-            .map(|p| RowWindow::from_two_rows(p.top.values, p.bottom.values))
+    fn preprocessed(&self) -> &Self::M {
+        self.inner.preprocessed()
     }
 
     #[inline]

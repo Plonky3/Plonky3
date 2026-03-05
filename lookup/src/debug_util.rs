@@ -161,18 +161,23 @@ fn accumulate_lookup<F: Field>(
                 prep.row_slice((row + 1) % height).unwrap(),
             )
         });
-        let preprocessed_rows = preprocessed_rows_data
-            .as_ref()
-            .map(|(prep_local, prep_next)| {
-                VerticalPair::new(
-                    RowMajorMatrixView::new_row(&**prep_local),
-                    RowMajorMatrixView::new_row(&**prep_next),
-                )
-            });
+        let preprocessed_rows = match preprocessed_rows_data.as_ref() {
+            Some((prep_local, prep_next)) => VerticalPair::new(
+                RowMajorMatrixView::new_row(&**prep_local),
+                RowMajorMatrixView::new_row(&**prep_next),
+            ),
+            None => VerticalPair::new(
+                RowMajorMatrixView::new(&[], 0),
+                RowMajorMatrixView::new(&[], 0),
+            ),
+        };
 
         let builder = MiniLookupBuilder {
             main: main_rows,
-            preprocessed: preprocessed_rows,
+            preprocessed: RowWindow::from_two_rows(
+                preprocessed_rows.top.values,
+                preprocessed_rows.bottom.values,
+            ),
             public_values: instance.public_values,
             permutation_challenges: instance.permutation_challenges,
             row,
@@ -202,7 +207,7 @@ fn accumulate_lookup<F: Field>(
 
 struct MiniLookupBuilder<'a, F: Field> {
     main: VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>,
-    preprocessed: Option<VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>>,
+    preprocessed: RowWindow<'a, F>,
     public_values: &'a [F],
     permutation_challenges: &'a [F],
     row: usize,
@@ -220,9 +225,8 @@ impl<'a, F: Field> AirBuilder for MiniLookupBuilder<'a, F> {
         RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
     }
 
-    fn preprocessed(&self) -> Option<Self::M> {
-        self.preprocessed
-            .map(|p| RowWindow::from_two_rows(p.top.values, p.bottom.values))
+    fn preprocessed(&self) -> &Self::M {
+        &self.preprocessed
     }
 
     fn public_values(&self) -> &[Self::PublicVar] {

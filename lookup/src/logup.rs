@@ -448,14 +448,16 @@ impl LookupGadget for LogUpGadget {
                         prep.row_slice((i + 1) % height).unwrap(),
                     )
                 });
-                let preprocessed_rows = preprocessed_rows_data.as_ref().map(
-                    |(local_preprocessed_row, next_preprocessed_row)| {
-                        VerticalPair::new(
-                            RowMajorMatrixView::new_row(local_preprocessed_row),
-                            RowMajorMatrixView::new_row(next_preprocessed_row),
-                        )
-                    },
-                );
+                let preprocessed_rows = match preprocessed_rows_data.as_ref() {
+                    Some((local_preprocessed_row, next_preprocessed_row)) => VerticalPair::new(
+                        RowMajorMatrixView::new_row(local_preprocessed_row),
+                        RowMajorMatrixView::new_row(next_preprocessed_row),
+                    ),
+                    None => VerticalPair::new(
+                        RowMajorMatrixView::new(&[], 0),
+                        RowMajorMatrixView::new(&[], 0),
+                    ),
+                };
 
                 let row_builder: LookupTraceBuilder<'_, SC> = LookupTraceBuilder::new(
                     main_rows,

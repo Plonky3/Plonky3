@@ -62,7 +62,7 @@ pub trait LookupGadget: LookupEvaluator {
 /// A builder to generate the lookup traces, given the main trace, public values and permutation challenges.
 pub struct LookupTraceBuilder<'a, SC: StarkGenericConfig> {
     main: ViewPair<'a, Val<SC>>,
-    preprocessed: Option<ViewPair<'a, Val<SC>>>,
+    preprocessed: RowWindow<'a, Val<SC>>,
     public_values: &'a [Val<SC>],
     permutation_challenges: &'a [SC::Challenge],
     height: usize,
@@ -70,9 +70,9 @@ pub struct LookupTraceBuilder<'a, SC: StarkGenericConfig> {
 }
 
 impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
-    pub const fn new(
+    pub fn new(
         main: ViewPair<'a, Val<SC>>,
-        preprocessed: Option<ViewPair<'a, Val<SC>>>,
+        preprocessed: ViewPair<'a, Val<SC>>,
         public_values: &'a [Val<SC>],
         permutation_challenges: &'a [SC::Challenge],
         height: usize,
@@ -80,7 +80,10 @@ impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
     ) -> Self {
         Self {
             main,
-            preprocessed,
+            preprocessed: RowWindow::from_two_rows(
+                preprocessed.top.values,
+                preprocessed.bottom.values,
+            ),
             public_values,
             permutation_challenges,
             height,
@@ -101,9 +104,8 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
         RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
     }
 
-    fn preprocessed(&self) -> Option<Self::M> {
-        self.preprocessed
-            .map(|p| RowWindow::from_two_rows(p.top.values, p.bottom.values))
+    fn preprocessed(&self) -> &Self::M {
+        &self.preprocessed
     }
 
     #[inline]
@@ -186,9 +188,7 @@ where
                 }
                 BaseEntry::Public => builder.public_values()[v.index].into(),
                 BaseEntry::Preprocessed { offset } => {
-                    let prep = builder
-                        .preprocessed()
-                        .expect("Missing preprocessed columns");
+                    let prep = builder.preprocessed();
                     match offset {
                         0 => prep.current(v.index).unwrap().into(),
                         1 => prep.next(v.index).unwrap().into(),

@@ -18,6 +18,7 @@ use p3_air::{AirBuilder, BaseAir, WindowAccess};
 /// Wraps an inner window and exposes only the columns within
 /// the given range. Lets a sub-AIR see a contiguous subset
 /// of the parent trace without copying data.
+#[derive(Clone)]
 pub struct SubSliced<W, T> {
     window: W,
     range: Range<usize>,
@@ -48,6 +49,9 @@ pub struct SubAirBuilder<'a, AB: AirBuilder, SubAir: BaseAir<AB::F>, T> {
     /// Column range (in the parent trace) that the sub-AIR is allowed to see.
     column_range: Range<usize>,
 
+    /// Cached zero-width preprocessed window returned by reference.
+    preprocessed: SubSliced<AB::M, AB::Var>,
+
     /// Marker for the sub-AIR and witness type.
     _phantom: core::marker::PhantomData<(SubAir, T)>,
 }
@@ -57,10 +61,16 @@ impl<'a, AB: AirBuilder, SubAir: BaseAir<AB::F>, T> SubAirBuilder<'a, AB, SubAir
     ///
     /// The range must lie entirely inside the parent trace width.
     #[must_use]
-    pub const fn new(inner: &'a mut AB, column_range: Range<usize>) -> Self {
+    pub fn new(inner: &'a mut AB, column_range: Range<usize>) -> Self {
+        let preprocessed = SubSliced {
+            window: inner.preprocessed().clone(),
+            range: 0..0,
+            _marker: PhantomData,
+        };
         Self {
             inner,
             column_range,
+            preprocessed,
             _phantom: core::marker::PhantomData,
         }
     }
@@ -80,6 +90,10 @@ impl<AB: AirBuilder, SubAir: BaseAir<AB::F>, F> AirBuilder for SubAirBuilder<'_,
             range: self.column_range.clone(),
             _marker: PhantomData,
         }
+    }
+
+    fn preprocessed(&self) -> &Self::M {
+        &self.preprocessed
     }
 
     fn public_values(&self) -> &[Self::PublicVar] {

@@ -111,6 +111,8 @@ fn test_constraint_degree_calculation() {
 struct MockAirBuilder {
     /// Main trace matrix containing the execution trace data
     main: RowMajorMatrix<F>,
+    /// Empty preprocessed matrix (no preprocessed columns in this mock).
+    preprocessed: RowMajorMatrix<F>,
     /// Auxiliary trace matrix containing the LogUp running sum column
     permutation: RowMajorMatrix<EF>,
     /// Random challenges used in the LogUp argument
@@ -126,6 +128,7 @@ impl MockAirBuilder {
         let height = main.height();
         Self {
             main,
+            preprocessed: RowMajorMatrix::new(vec![], 0),
             permutation,
             challenges,
             current_row: 0,
@@ -172,6 +175,10 @@ impl AirBuilder for MockAirBuilder {
 
     fn main(&self) -> Self::M {
         self.window(&self.main)
+    }
+
+    fn preprocessed(&self) -> &Self::M {
+        &self.preprocessed
     }
 
     fn is_first_row(&self) -> Self::Expr {

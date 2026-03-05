@@ -57,11 +57,13 @@ where
 {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let preprocessed = builder.preprocessed().expect("Preprocessed is empty?");
-
         let local: &MulFibPairRow<AB::Var> = main.current_slice().borrow();
         let next: &MulFibPairRow<AB::Var> = main.next_slice().borrow();
-        let prep: &PreprocessedRow<AB::Var> = preprocessed.current_slice().borrow();
+
+        // Copy the preprocessed values we need so the immutable borrow on
+        // `builder` is released before the mutable `when_transition` call.
+        let prep: &PreprocessedRow<AB::Var> = builder.preprocessed().current_slice().borrow();
+        let (prod_coeff, sum_coeff) = (prep.prod_coeff, prep.sum_coeff);
 
         let mut when_transition = builder.when_transition();
 
@@ -69,8 +71,8 @@ where
         when_transition.assert_eq(local.b, next.a);
 
         // b' <- prod_coeff * a * b + sum_coeff * (a + b)
-        let prod_term = prep.prod_coeff * local.a * local.b;
-        let sum_term = prep.sum_coeff * (local.a + local.b);
+        let prod_term = prod_coeff * local.a * local.b;
+        let sum_term = sum_coeff * (local.a + local.b);
         when_transition.assert_eq(prod_term + sum_term, next.b);
     }
 }

@@ -338,7 +338,7 @@ pub trait AirBuilder: Sized {
         + Mul<Self::Expr, Output = Self::Expr>;
 
     /// Two-row window over the main trace columns.
-    type M: WindowAccess<Self::Var>;
+    type M: WindowAccess<Self::Var> + Clone;
 
     /// Variable type for public values.
     type PublicVar: Into<Self::Expr> + Copy;
@@ -346,12 +346,10 @@ pub trait AirBuilder: Sized {
     /// Return the current and next row slices of the main (primary) trace.
     fn main(&self) -> Self::M;
 
-    /// Return the current and next row slices of preprocessed registers.
-    /// The default implementation returns `None`.
-    /// Override this for builders that provide preprocessed columns.
-    fn preprocessed(&self) -> Option<Self::M> {
-        None
-    }
+    /// Return the preprocessed registers as a two-row window.
+    ///
+    /// When no preprocessed columns exist, this returns a zero-width window.
+    fn preprocessed(&self) -> &Self::M;
 
     /// Expression evaluating to 1 on the first row, 0 elsewhere.
     fn is_first_row(&self) -> Self::Expr;
@@ -565,7 +563,7 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
         self.inner.main()
     }
 
-    fn preprocessed(&self) -> Option<Self::M> {
+    fn preprocessed(&self) -> &Self::M {
         self.inner.preprocessed()
     }
 
