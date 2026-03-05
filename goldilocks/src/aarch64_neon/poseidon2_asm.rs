@@ -6,117 +6,8 @@
 use core::arch::aarch64::*;
 use core::arch::asm;
 
+use super::utils::{add_asm, mul_add_asm, mul_asm};
 use crate::P;
-
-const EPSILON: u64 = P.wrapping_neg(); // 2^32 - 1
-
-/// Multiply two Goldilocks elements using inline assembly.
-/// Returns the product reduced modulo P.
-#[inline(always)]
-pub(super) unsafe fn mul_asm(a: u64, b: u64) -> u64 {
-    let _lo: u64;
-    let _hi: u64;
-    let _t0: u64;
-    let _t1: u64;
-    let _t2: u64;
-    let result: u64;
-
-    // SAFETY: Inline assembly performs Goldilocks multiplication with proper reduction
-    unsafe {
-        asm!(
-            // Compute 128-bit product: hi:lo = a * b
-            "mul   {lo}, {a}, {b}",
-            "umulh {hi}, {a}, {b}",
-
-            // Reduce: result = lo - hi_hi + hi_lo * EPSILON
-            // where hi = hi_hi * 2^32 + hi_lo
-
-            // t0 = lo - (hi >> 32), with borrow detection
-            "lsr   {t0}, {hi}, #32",          // t0 = hi >> 32
-            "subs  {t1}, {lo}, {t0}",         // t1 = lo - t0, set flags
-            "csetm {t2:w}, cc",               // t2 = -1 if borrow, 0 otherwise
-            "sub   {t1}, {t1}, {t2}",         // Adjust for borrow (subtract EPSILON)
-
-            // t0 = (hi & EPSILON) * EPSILON
-            "and   {t0}, {hi}, {epsilon}",    // t0 = hi & EPSILON
-            "mul   {t0}, {t0}, {epsilon}",    // t0 = t0 * EPSILON
-
-            // result = t1 + t0, with overflow detection
-            "adds  {result}, {t1}, {t0}",     // result = t1 + t0, set flags
-            "csetm {t2:w}, cs",               // t2 = -1 if carry, 0 otherwise
-            "add   {result}, {result}, {t2}", // Add EPSILON on overflow
-
-            a = in(reg) a,
-            b = in(reg) b,
-            epsilon = in(reg) EPSILON,
-            lo = out(reg) _lo,
-            hi = out(reg) _hi,
-            t0 = out(reg) _t0,
-            t1 = out(reg) _t1,
-            t2 = out(reg) _t2,
-            result = out(reg) result,
-            options(pure, nomem, nostack),
-        );
-    }
-
-    result
-}
-
-/// Compute a * b + c in the Goldilocks field using inline assembly.
-/// All inputs must be valid field elements; the final result is reduced modulo P.
-#[inline(always)]
-pub(super) unsafe fn mul_add_asm(a: u64, b: u64, c: u64) -> u64 {
-    let _lo: u64;
-    let _hi: u64;
-    let _t0: u64;
-    let _t1: u64;
-    let _t2: u64;
-    let result: u64;
-
-    unsafe {
-        asm!(
-            // Compute 128-bit product: hi:lo = a * b
-            "mul   {lo}, {a}, {b}",
-            "umulh {hi}, {a}, {b}",
-
-            // Accumulate c into the 128-bit product: hi:lo = hi:lo + c
-            "adds  {lo}, {lo}, {c}",
-            "adc   {hi}, {hi}, xzr",
-
-            // Reduce: result = lo - hi_hi + hi_lo * EPSILON
-            // where hi = hi_hi * 2^32 + hi_lo
-
-            // t0 = lo - (hi >> 32), with borrow detection
-            "lsr   {t0}, {hi}, #32",          // t0 = hi >> 32
-            "subs  {t1}, {lo}, {t0}",         // t1 = lo - t0, set flags
-            "csetm {t2:w}, cc",               // t2 = -1 if borrow, 0 otherwise
-            "sub   {t1}, {t1}, {t2}",         // Adjust for borrow (subtract EPSILON)
-
-            // t0 = (hi & EPSILON) * EPSILON
-            "and   {t0}, {hi}, {epsilon}",    // t0 = hi & EPSILON
-            "mul   {t0}, {t0}, {epsilon}",    // t0 = t0 * EPSILON
-
-            // result = t1 + t0, with overflow detection
-            "adds  {result}, {t1}, {t0}",     // result = t1 + t0, set flags
-            "csetm {t2:w}, cs",               // t2 = -1 if carry, 0 otherwise
-            "add   {result}, {result}, {t2}", // Add EPSILON on overflow
-
-            a = in(reg) a,
-            b = in(reg) b,
-            c = in(reg) c,
-            epsilon = in(reg) EPSILON,
-            lo = out(reg) _lo,
-            hi = out(reg) _hi,
-            t0 = out(reg) _t0,
-            t1 = out(reg) _t1,
-            t2 = out(reg) _t2,
-            result = out(reg) result,
-            options(pure, nomem, nostack),
-        );
-    }
-
-    result
-}
 
 /// Compute x / 2 in the Goldilocks field, matching `halve_u64::<P>`.
 #[inline(always)]
@@ -197,29 +88,6 @@ unsafe fn div_2_32_asm(x: u64) -> u64 {
             sum    = out(reg) _sum,
             result = out(reg) result,
             adj    = lateout(reg) _adj,
-            options(pure, nomem, nostack),
-        );
-    }
-
-    result
-}
-
-/// Add two Goldilocks elements with overflow handling using inline assembly.
-#[inline(always)]
-pub(super) unsafe fn add_asm(a: u64, b: u64) -> u64 {
-    let result: u64;
-    let _adj: u64;
-
-    // SAFETY: Inline assembly performs Goldilocks addition with overflow handling
-    unsafe {
-        asm!(
-            "adds  {result}, {a}, {b}",
-            "csetm {adj:w}, cs",
-            "add   {result}, {result}, {adj}",
-            a = in(reg) a,
-            b = in(reg) b,
-            result = out(reg) result,
-            adj = out(reg) _adj,
             options(pure, nomem, nostack),
         );
     }
@@ -1728,42 +1596,12 @@ mod tests {
 
     proptest! {
         #[test]
-        fn test_add_asm(a: u64, b: u64) {
-            // Compute a + b using the standard field implementation.
-            let expected = (F::new(a) + F::new(b)).as_canonical_u64();
-
-            // The ASM version should give the same canonical result.
-            let got = canon(unsafe { add_asm(a, b) });
-            prop_assert_eq!(got, expected);
-        }
-
-        #[test]
         fn test_sub_asm(a: u64, b: u64) {
             // Compute a - b using the standard field implementation.
             let expected = (F::new(a) - F::new(b)).as_canonical_u64();
 
             // The ASM version should give the same canonical result.
             let got = canon(unsafe { sub_asm(a, b) });
-            prop_assert_eq!(got, expected);
-        }
-
-        #[test]
-        fn test_mul_asm(a: u64, b: u64) {
-            // Compute a * b using the standard field implementation.
-            let expected = (F::new(a) * F::new(b)).as_canonical_u64();
-
-            // The ASM version should give the same canonical result.
-            let got = canon(unsafe { mul_asm(a, b) });
-            prop_assert_eq!(got, expected);
-        }
-
-        #[test]
-        fn test_mul_add_asm(a: u64, b: u64, c: u64) {
-            // Compute a * b + c using the standard field implementation.
-            let expected = (F::new(a) * F::new(b) + F::new(c)).as_canonical_u64();
-
-            // The fused multiply-add ASM should give the same result.
-            let got = canon(unsafe { mul_add_asm(a, b, c) });
             prop_assert_eq!(got, expected);
         }
 

@@ -1,6 +1,6 @@
 //! ARM assembly primitives for the Poseidon1 permutation over Goldilocks.
 
-use super::poseidon2_asm::{add_asm, mul_add_asm, mul_asm};
+use super::utils::{add_asm, mul_add_asm, mul_asm};
 
 // ---------------------------------------------------------------------------
 // S-box: x -> x^7 (applied to the first element only)
