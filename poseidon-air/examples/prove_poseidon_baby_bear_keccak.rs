@@ -124,7 +124,6 @@ fn prove_and_verify() -> Result<(), impl Debug> {
         VECTOR_LEN,
     > = VectorizedPoseidonAir::new(constants);
 
-    // Prove and verify
 
     let fri_params = create_benchmark_fri_params(challenge_mmcs);
 
