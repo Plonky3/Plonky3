@@ -23,6 +23,7 @@ p3-goldilocks = { path = "../goldilocks" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 
 criterion.workspace = true
+proptest.workspace = true
 
 [[bench]]
 name = "mds"

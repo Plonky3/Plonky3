@@ -427,11 +427,11 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
 
     #[inline]
     fn height(&self) -> usize {
-        if self.width == 0 {
-            0
-        } else {
-            self.values.borrow().len() / self.width
-        }
+        self.values
+            .borrow()
+            .len()
+            .checked_div(self.width)
+            .unwrap_or(0)
     }
 
     #[inline]

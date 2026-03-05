@@ -25,8 +25,8 @@ use crate::{
 #[derive(Clone, Copy)]
 #[repr(C)] // This is needed to make `transmute`s safe.
 pub struct InternalLayer16<PMP: PackedMontyParameters> {
-    s0: PackedMontyField31AVX2<PMP>,
-    s_hi: [__m256i; 15],
+    pub(crate) s0: PackedMontyField31AVX2<PMP>,
+    pub(crate) s_hi: [__m256i; 15],
 }
 
 impl<PMP: PackedMontyParameters> InternalLayer16<PMP> {
@@ -35,7 +35,7 @@ impl<PMP: PackedMontyParameters> InternalLayer16<PMP> {
     ///
     /// SAFETY: The caller must ensure that each element of `s_hi` represents a valid `MontyField31<PMP>`.
     /// In particular, each element of each vector must be in `[0, P)` (canonical form).
-    unsafe fn to_packed_field_array(self) -> [PackedMontyField31AVX2<PMP>; 16] {
+    pub(crate) unsafe fn to_packed_field_array(self) -> [PackedMontyField31AVX2<PMP>; 16] {
         unsafe {
             // Safety: It is up to the user to ensure that elements of `s_hi` represent valid
             // `MontyField31<PMP>` values. We must only reason about memory representations.
@@ -52,7 +52,7 @@ impl<PMP: PackedMontyParameters> InternalLayer16<PMP> {
     #[inline]
     #[must_use]
     /// Convert from `[PackedMontyField31AVX2<PMP>; 16]` to `InternalLayer16<PMP>`
-    fn from_packed_field_array(vector: [PackedMontyField31AVX2<PMP>; 16]) -> Self {
+    pub(crate) fn from_packed_field_array(vector: [PackedMontyField31AVX2<PMP>; 16]) -> Self {
         unsafe {
             // Safety: As described in packing.rs, PackedMontyField31AVX2<PMP> can be transmuted to and from `__m256i`.
 
@@ -68,8 +68,8 @@ impl<PMP: PackedMontyParameters> InternalLayer16<PMP> {
 #[derive(Clone, Copy)]
 #[repr(C)] // This is needed to make `transmute`s safe.
 pub struct InternalLayer24<PMP: PackedMontyParameters> {
-    s0: PackedMontyField31AVX2<PMP>,
-    s_hi: [__m256i; 23],
+    pub(crate) s0: PackedMontyField31AVX2<PMP>,
+    pub(crate) s_hi: [__m256i; 23],
 }
 
 impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
@@ -78,7 +78,7 @@ impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
     ///
     /// SAFETY: The caller must ensure that each element of `s_hi` represents a valid `MontyField31<PMP>`.
     /// In particular, each element of each vector must be in `[0, P)` (canonical form).
-    unsafe fn to_packed_field_array(self) -> [PackedMontyField31AVX2<PMP>; 24] {
+    pub(crate) unsafe fn to_packed_field_array(self) -> [PackedMontyField31AVX2<PMP>; 24] {
         unsafe {
             // Safety: As described in packing.rs, PackedMontyField31AVX2<PMP> can be transmuted to and from `__m256i`.
 
@@ -93,7 +93,7 @@ impl<PMP: PackedMontyParameters> InternalLayer24<PMP> {
     #[inline]
     #[must_use]
     /// Convert from `[PackedMontyField31AVX2<PMP>; 24]` to `InternalLayer24<PMP>`
-    fn from_packed_field_array(vector: [PackedMontyField31AVX2<PMP>; 24]) -> Self {
+    pub(crate) fn from_packed_field_array(vector: [PackedMontyField31AVX2<PMP>; 24]) -> Self {
         unsafe {
             // Safety: As described in packing.rs, PackedMontyField31AVX2<PMP> can be transmuted to and from `__m256i`.
 
@@ -229,7 +229,7 @@ impl<FP: FieldParameters, const WIDTH: usize> ExternalLayerConstructor<MontyFiel
 /// This function will panic if `D` is not `3, 5` or `7`.
 #[inline(always)]
 #[must_use]
-fn exp_small<PMP: PackedMontyParameters, const D: u64>(val: __m256i) -> __m256i {
+pub(crate) fn exp_small<PMP: PackedMontyParameters, const D: u64>(val: __m256i) -> __m256i {
     match D {
         3 => packed_exp_3::<PMP>(val),
         5 => packed_exp_5::<PMP>(val),
@@ -243,7 +243,7 @@ fn exp_small<PMP: PackedMontyParameters, const D: u64>(val: __m256i) -> __m256i 
 /// Each entry of the output will be represented by an element in canonical form.
 /// If the inputs do not conform to this representation, the result is undefined.
 #[inline(always)]
-fn add_rc_and_sbox<PMP: PackedMontyParameters, const D: u64>(
+pub(crate) fn add_rc_and_sbox<PMP: PackedMontyParameters, const D: u64>(
     val: &mut PackedMontyField31AVX2<PMP>,
     rc: __m256i,
 ) {
@@ -377,7 +377,7 @@ pub trait InternalLayerParametersAVX2<PMP: PackedMontyParameters, const WIDTH: u
 
 /// Convert elements from canonical form [0, P) to a negative form in [-P, ..., 0) and copy into a vector.
 #[inline(always)]
-fn convert_to_vec_neg_form<MP: MontyParameters>(input: i32) -> __m256i {
+pub(crate) fn convert_to_vec_neg_form<MP: MontyParameters>(input: i32) -> __m256i {
     let input_sub_p = input - (MP::PRIME as i32);
     unsafe {
         // Safety: If this code got compiled then AVX2 intrinsics are available.

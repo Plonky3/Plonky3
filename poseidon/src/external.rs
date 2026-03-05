@@ -46,6 +46,21 @@ pub struct FullRoundConstants<F, const WIDTH: usize> {
 
     /// Round constants for the terminal full rounds.
     pub terminal: Vec<[F; WIDTH]>,
+
+    /// Dense N x N MDS matrix expanded from the circulant first column.
+    ///
+    /// The scalar MDS path uses a Karatsuba convolution with `i64` intermediates.
+    /// That approach relies on bit-shifts for halving.
+    ///
+    /// Packed SIMD types cannot perform bit-shifts. They only support field
+    /// arithmetic.
+    ///
+    /// Storing the fully expanded matrix lets SIMD implementations either:
+    ///
+    /// - Fall back to dense O(t^2) multiplication over `Algebra<F>`.
+    /// - Extract the first column for a field-level Karatsuba that uses
+    ///   `halve()` instead of bit-shifts.
+    pub dense_mds: [[F; WIDTH]; WIDTH],
 }
 
 /// Construct a full round layer from pre-computed constants.

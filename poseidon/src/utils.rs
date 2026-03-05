@@ -74,7 +74,7 @@ use p3_field::{Field, dot_product};
 /// Expand a circulant matrix from its first column into a dense NxN matrix.
 ///
 /// Each column is a cyclic downward-shift of the previous one.
-pub(crate) fn circulant_to_dense<F: Field, const N: usize>(first_col: &[i64; N]) -> [[F; N]; N] {
+pub fn circulant_to_dense<F: Field, const N: usize>(first_col: &[i64; N]) -> [[F; N]; N] {
     let col: [F; N] = first_col.map(F::from_i64);
     core::array::from_fn(|i| core::array::from_fn(|j| col[(N + i - j) % N]))
 }
