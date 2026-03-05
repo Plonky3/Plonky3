@@ -191,8 +191,8 @@ pub trait Convolve<F, T: ConvolutionElt, U: ConvolutionRhs> {
         output[3] = Self::parity_dot(lhs, [rhs[3], rhs[2], rhs[1], rhs[0]]);
     }
 
-    /// Compute output(x) = lhs(x)rhs(x) mod x^N - 1.
-    /// Do this recursively using a convolution and negacyclic convolution of size HALF_N = N/2.
+    /// Compute output(x) = lhs(x)rhs(x) mod x^N - 1 recursively using
+    /// a convolution and negacyclic convolution of size HALF_N = N/2.
     #[inline(always)]
     fn conv_n_recursive<const N: usize, const HALF_N: usize, C, NC>(
         lhs: [T; N],
