@@ -127,6 +127,7 @@ impl UniformSamplingField for BabyBearParameters {
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::ToString;
     use core::array;
 
     use num_bigint::BigUint;
@@ -256,4 +257,28 @@ mod tests {
     test_prime_field!(crate::BabyBear);
     test_prime_field_64!(crate::BabyBear, &super::ZEROS, &super::ONES);
     test_prime_field_32!(crate::BabyBear, &super::ZEROS, &super::ONES);
+
+    #[test]
+    fn test_deserialize_valid_monty_value() {
+        // A valid monty form value (0) should deserialize successfully.
+        let result: Result<BabyBear, _> = serde_json::from_str("0");
+        assert!(result.is_ok());
+
+        // PRIME - 1 is the largest valid monty form value.
+        let max_valid = BabyBearParameters::PRIME - 1;
+        let result: Result<BabyBear, _> = serde_json::from_str(&max_valid.to_string());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_deserialize_out_of_range_monty_value() {
+        // PRIME itself is out of range for monty form.
+        let result: Result<BabyBear, _> =
+            serde_json::from_str(&BabyBearParameters::PRIME.to_string());
+        assert!(result.is_err());
+
+        // u32::MAX is also out of range.
+        let result: Result<BabyBear, _> = serde_json::from_str(&u32::MAX.to_string());
+        assert!(result.is_err());
+    }
 }
