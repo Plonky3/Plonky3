@@ -22,6 +22,7 @@ use p3_field::{
 use p3_util::{flatten_to_base, gcd_inversion_prime_field_32};
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
+use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::utils::{
