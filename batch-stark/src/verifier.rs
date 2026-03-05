@@ -4,9 +4,8 @@ use alloc::vec::Vec;
 use core::fmt::Debug;
 
 use hashbrown::HashMap;
-use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
-use p3_air::RowWindow;
+use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
