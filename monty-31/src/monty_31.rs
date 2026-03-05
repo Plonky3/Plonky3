@@ -165,7 +165,11 @@ impl<'de, FP: FieldParameters> Deserialize<'de> for MontyField31<FP> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         // It's faster to Serialize and Deserialize in monty form.
         let val = u32::deserialize(d)?;
-        Ok(Self::new_monty(val))
+        if val < FP::PRIME {
+            Ok(Self::new_monty(val))
+        } else {
+            Err(D::Error::custom("Value is out of range"))
+        }
     }
 }
 
