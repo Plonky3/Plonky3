@@ -31,7 +31,7 @@ use crate::symbolic::{
 #[derive(Debug)]
 pub struct StarkInstance<'a, SC: SGC, A> {
     pub air: &'a A,
-    pub trace: RowMajorMatrix<Val<SC>>,
+    pub trace: &'a RowMajorMatrix<Val<SC>>,
     pub public_values: Vec<Val<SC>>,
     pub lookups: Vec<Lookup<Val<SC>>>,
 }
@@ -39,7 +39,7 @@ pub struct StarkInstance<'a, SC: SGC, A> {
 impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
     pub fn new_multiple(
         airs: &'a [A],
-        traces: &[RowMajorMatrix<Val<SC>>],
+        traces: &'a [&'a RowMajorMatrix<Val<SC>>],
         public_values: &[Vec<Val<SC>>],
         common_data: &CommonData<SC>,
     ) -> Vec<Self> {
@@ -49,7 +49,7 @@ impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
             .zip(common_data.lookups.iter())
             .map(|(((air, trace), public_values), lookups)| Self {
                 air,
-                trace: trace.clone(),
+                trace,
                 public_values: public_values.clone(),
                 lookups: lookups.clone(),
             })
@@ -211,7 +211,7 @@ where
         .for_each(|((i, inst), ext_domain)| {
             if !all_lookups[i].is_empty() {
                 let generated_perm = lookup_gadget.generate_permutation::<SC>(
-                    &inst.trace,
+                    inst.trace,
                     &inst.air.preprocessed_trace(),
                     &inst.public_values,
                     &all_lookups[i],
@@ -234,7 +234,7 @@ where
                     let lookup_constraints_inputs = (all_lookups[i].as_slice(), &lookup_gadget);
                     check_constraints(
                         inst.air,
-                        &inst.trace,
+                        inst.trace,
                         &preprocessed_trace,
                         &generated_perm,
                         &challenges_per_instance[i],
@@ -259,7 +259,7 @@ where
             .iter()
             .zip(preprocessed_traces.iter())
             .map(|(inst, prep)| LookupDebugInstance {
-                main_trace: &inst.trace,
+                main_trace: inst.trace,
                 preprocessed_trace: prep,
                 public_values: &inst.public_values,
                 lookups: &inst.lookups,
