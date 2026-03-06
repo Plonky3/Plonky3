@@ -1,7 +1,9 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{Algebra, Field, PackedField, PackedFieldPow2, PackedValue, PrimeCharacteristicRing};
+use p3_field::{
+    Algebra, Field, PackedField, PackedFieldPow2, PackedValue, PrimeCharacteristicRing,
+};
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -147,43 +149,88 @@ where
     let mut dot = PF::ZERO;
     assert_eq!(
         dot,
-        PF::mixed_dot_product::<0>(
-            a[..0].try_into().unwrap(),
-            f[..0].try_into().unwrap()
-        )
+        PF::mixed_dot_product::<0>(a[..0].try_into().unwrap(), f[..0].try_into().unwrap())
     );
     dot += a[0] * f[0];
-    assert_eq!(dot, PF::mixed_dot_product::<1>(a[..1].try_into().unwrap(), f[..1].try_into().unwrap()));
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<1>(a[..1].try_into().unwrap(), f[..1].try_into().unwrap())
+    );
     dot += a[1] * f[1];
-    assert_eq!(dot, PF::mixed_dot_product::<2>(a[..2].try_into().unwrap(), f[..2].try_into().unwrap()));
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<2>(a[..2].try_into().unwrap(), f[..2].try_into().unwrap())
+    );
     dot += a[2] * f[2];
-    assert_eq!(dot, PF::mixed_dot_product::<3>(a[..3].try_into().unwrap(), f[..3].try_into().unwrap()));
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<3>(a[..3].try_into().unwrap(), f[..3].try_into().unwrap())
+    );
     dot += a[3] * f[3];
-    assert_eq!(dot, PF::mixed_dot_product::<4>(a[..4].try_into().unwrap(), f[..4].try_into().unwrap()));
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<4>(a[..4].try_into().unwrap(), f[..4].try_into().unwrap())
+    );
     dot += a[4] * f[4];
-    assert_eq!(dot, PF::mixed_dot_product::<5>(a[..5].try_into().unwrap(), f[..5].try_into().unwrap()));
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<5>(a[..5].try_into().unwrap(), f[..5].try_into().unwrap())
+    );
     dot += a[5] * f[5];
-    assert_eq!(dot, PF::mixed_dot_product::<6>(a[..6].try_into().unwrap(), f[..6].try_into().unwrap()));
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<6>(a[..6].try_into().unwrap(), f[..6].try_into().unwrap())
+    );
     dot += a[6] * f[6];
-    assert_eq!(dot, PF::mixed_dot_product::<7>(a[..7].try_into().unwrap(), f[..7].try_into().unwrap()));
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<7>(a[..7].try_into().unwrap(), f[..7].try_into().unwrap())
+    );
     dot += a[7] * f[7];
-    assert_eq!(dot, PF::mixed_dot_product::<8>(a[..8].try_into().unwrap(), f[..8].try_into().unwrap()));
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<8>(a[..8].try_into().unwrap(), f[..8].try_into().unwrap())
+    );
     dot += a[8] * f[8];
-    assert_eq!(dot, PF::mixed_dot_product::<9>(a[..9].try_into().unwrap(), f[..9].try_into().unwrap()));
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<9>(a[..9].try_into().unwrap(), f[..9].try_into().unwrap())
+    );
     dot += a[9] * f[9];
-    assert_eq!(dot, PF::mixed_dot_product::<10>(a[..10].try_into().unwrap(), f[..10].try_into().unwrap()));
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<10>(a[..10].try_into().unwrap(), f[..10].try_into().unwrap())
+    );
     dot += a[10] * f[10];
-    assert_eq!(dot, PF::mixed_dot_product::<11>(a[..11].try_into().unwrap(), f[..11].try_into().unwrap()));
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<11>(a[..11].try_into().unwrap(), f[..11].try_into().unwrap())
+    );
     dot += a[11] * f[11];
-    assert_eq!(dot, PF::mixed_dot_product::<12>(a[..12].try_into().unwrap(), f[..12].try_into().unwrap()));
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<12>(a[..12].try_into().unwrap(), f[..12].try_into().unwrap())
+    );
     dot += a[12] * f[12];
-    assert_eq!(dot, PF::mixed_dot_product::<13>(a[..13].try_into().unwrap(), f[..13].try_into().unwrap()));
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<13>(a[..13].try_into().unwrap(), f[..13].try_into().unwrap())
+    );
     dot += a[13] * f[13];
-    assert_eq!(dot, PF::mixed_dot_product::<14>(a[..14].try_into().unwrap(), f[..14].try_into().unwrap()));
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<14>(a[..14].try_into().unwrap(), f[..14].try_into().unwrap())
+    );
     dot += a[14] * f[14];
-    assert_eq!(dot, PF::mixed_dot_product::<15>(a[..15].try_into().unwrap(), f[..15].try_into().unwrap()));
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<15>(a[..15].try_into().unwrap(), f[..15].try_into().unwrap())
+    );
     dot += a[15] * f[15];
-    assert_eq!(dot, PF::mixed_dot_product::<16>(a[..16].try_into().unwrap(), f[..16].try_into().unwrap()));
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<16>(a[..16].try_into().unwrap(), f[..16].try_into().unwrap())
+    );
 
     let dot_64: PF = a
         .iter()
