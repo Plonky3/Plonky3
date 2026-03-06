@@ -22,6 +22,7 @@ use p3_field::{
 use p3_util::{flatten_to_base, gcd_inversion_prime_field_32};
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
+use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::utils::{
@@ -165,7 +166,11 @@ impl<'de, FP: FieldParameters> Deserialize<'de> for MontyField31<FP> {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         // It's faster to Serialize and Deserialize in monty form.
         let val = u32::deserialize(d)?;
-        Ok(Self::new_monty(val))
+        if val < FP::PRIME {
+            Ok(Self::new_monty(val))
+        } else {
+            Err(D::Error::custom("Value is out of range"))
+        }
     }
 }
 
