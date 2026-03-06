@@ -274,19 +274,18 @@ pub trait AirBuilder: Sized {
     /// When no preprocessed columns exist, this returns a zero-width window.
     fn preprocessed(&self) -> &Self::M;
 
-    /// Expression evaluating to 1 on the first row, 0 elsewhere.
+    /// Expression evaluating to a non-zero value only on the first row.
     fn is_first_row(&self) -> Self::Expr;
 
-    /// Expression evaluating to 1 on the last row, 0 elsewhere.
+    /// Expression evaluating to a non-zero value only on the last row.
     fn is_last_row(&self) -> Self::Expr;
 
-    /// Expression evaluating to 1 on all transition rows (not last row), 0 on last row.
+    /// Expression evaluating to zero only on the last row.
     fn is_transition(&self) -> Self::Expr {
         self.is_transition_window(2)
     }
 
-    /// Expression evaluating to 1 on all rows where a window of `size` consecutive
-    /// rows is available, 0 elsewhere.
+    /// Expression evaluating to zero only on the last `size - 1` rows.
     ///
     /// # Panics
     ///
