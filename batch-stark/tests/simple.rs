@@ -816,13 +816,13 @@ fn test_two_instances() -> Result<(), impl Debug> {
     let instances = vec![
         StarkInstance {
             air: &air_fib,
-            trace: fib_trace,
+            trace: &fib_trace,
             public_values: fib_pis.clone(),
             lookups: vec![],
         },
         StarkInstance {
             air: &air_mul,
-            trace: mul_trace,
+            trace: &mul_trace,
             public_values: mul_pis.clone(),
             lookups: vec![],
         },
@@ -847,13 +847,13 @@ fn test_two_instances_zk() -> Result<(), impl Debug> {
     let instances = vec![
         StarkInstance {
             air: &air_fib,
-            trace: fib_trace,
+            trace: &fib_trace,
             public_values: fib_pis.clone(),
             lookups: vec![],
         },
         StarkInstance {
             air: &air_mul,
-            trace: mul_trace,
+            trace: &mul_trace,
             public_values: mul_pis.clone(),
             lookups: vec![],
         },
@@ -878,19 +878,19 @@ fn test_three_instances_mixed_sizes() -> Result<(), impl Debug> {
     let instances = vec![
         StarkInstance {
             air: &air_fib16,
-            trace: fib16_trace,
+            trace: &fib16_trace,
             public_values: fib16_pis.clone(),
             lookups: vec![],
         },
         StarkInstance {
             air: &air_mul8,
-            trace: mul8_trace,
+            trace: &mul8_trace,
             public_values: mul8_pis.clone(),
             lookups: vec![],
         },
         StarkInstance {
             air: &air_fib8,
-            trace: fib8_trace,
+            trace: &fib8_trace,
             public_values: fib8_pis.clone(),
             lookups: vec![],
         },
@@ -913,7 +913,7 @@ fn test_invalid_public_values_rejected() -> Result<(), Box<dyn std::error::Error
 
     let instances = vec![StarkInstance {
         air: &air_fib,
-        trace,
+        trace: &trace,
         public_values: fib_pis,
         lookups: vec![],
     }];
@@ -945,19 +945,19 @@ fn test_different_widths() -> Result<(), impl Debug> {
     let instances = vec![
         StarkInstance {
             air: &air_mul2,
-            trace: mul2_trace,
+            trace: &mul2_trace,
             public_values: mul2_pis.clone(),
             lookups: vec![],
         },
         StarkInstance {
             air: &air_fib,
-            trace: fib_trace,
+            trace: &fib_trace,
             public_values: fib_pis.clone(),
             lookups: vec![],
         },
         StarkInstance {
             air: &air_mul3,
-            trace: mul3_trace,
+            trace: &mul3_trace,
             public_values: mul3_pis.clone(),
             lookups: vec![],
         },
@@ -979,7 +979,7 @@ fn test_preprocessed_tampered_fails() -> Result<(), Box<dyn std::error::Error>> 
     let (air, trace, fib_pis) = create_fib_instance(3);
     let instances = vec![StarkInstance {
         air: &air,
-        trace,
+        trace: &trace,
         public_values: fib_pis.clone(),
         lookups: vec![],
     }];
@@ -1037,7 +1037,7 @@ fn test_preprocessed_reuse_common_multi_proofs() -> Result<(), Box<dyn std::erro
     let fib_pis1 = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
     let instances1 = vec![StarkInstance {
         air: &air,
-        trace: trace1,
+        trace: &trace1,
         public_values: fib_pis1.clone(),
         lookups: vec![],
     }];
@@ -1060,7 +1060,7 @@ fn test_preprocessed_reuse_common_multi_proofs() -> Result<(), Box<dyn std::erro
     ];
     let instances2 = vec![StarkInstance {
         air: &airs[0],
-        trace: trace2,
+        trace: &trace2,
         public_values: fib_pis2.clone(),
         lookups: vec![],
     }];
@@ -1084,7 +1084,7 @@ fn test_single_instance() -> Result<(), impl Debug> {
 
     let instances = vec![StarkInstance {
         air: &air_fib,
-        trace: fib_trace,
+        trace: &fib_trace,
         public_values: fib_pis.clone(),
         lookups: vec![],
     }];
@@ -1106,13 +1106,13 @@ fn test_mixed_preprocessed() -> Result<(), impl Debug> {
     let instances = vec![
         StarkInstance {
             air: &air_fib,
-            trace: fib_trace,
+            trace: &fib_trace,
             public_values: fib_pis.clone(),
             lookups: vec![],
         },
         StarkInstance {
             air: &air_mul,
-            trace: mul_trace,
+            trace: &mul_trace,
             public_values: mul_pis.clone(),
             lookups: vec![],
         },
@@ -1141,7 +1141,7 @@ fn test_invalid_trace_width_rejected() {
 
     let instances = vec![StarkInstance {
         air: &air_fib,
-        trace: fib_trace,
+        trace: &fib_trace,
         public_values: fib_pis.clone(),
         lookups: vec![],
     }];
@@ -1235,13 +1235,13 @@ fn test_reorder_instances_rejected() {
     let instances = vec![
         StarkInstance {
             air: &air_a,
-            trace: tr_a,
+            trace: &tr_a,
             public_values: pv_a.clone(),
             lookups: vec![],
         },
         StarkInstance {
             air: &air_b,
-            trace: tr_b,
+            trace: &tr_b,
             public_values: pv_b.clone(),
             lookups: vec![],
         },
@@ -1279,7 +1279,7 @@ fn test_quotient_chunk_element_len_rejected() {
 
     let instances = vec![StarkInstance {
         air: &air,
-        trace: tr,
+        trace: &tr,
         public_values: pv.clone(),
         lookups: vec![],
     }];
@@ -1336,13 +1336,13 @@ fn test_circle_stark_batch() -> Result<(), impl Debug> {
     let instances = vec![
         StarkInstance {
             air: &airs[0],
-            trace: trace1,
+            trace: &trace1,
             public_values: fib_pis1.clone(),
             lookups: vec![],
         },
         StarkInstance {
             air: &airs[1],
-            trace: trace2,
+            trace: &trace2,
             public_values: fib_pis2.clone(),
             lookups: vec![],
         },
@@ -1500,6 +1500,7 @@ fn generate_two_adic_fixture() -> Result<(), Box<dyn std::error::Error>> {
     let (config, mut airs, traces, pvs, log_degrees) = two_adic_compat_case();
     let prover_data = ProverData::from_airs_and_degrees(&config, &mut airs, &log_degrees);
     let common = &prover_data.common;
+    let traces = [&traces[0], &traces[1]];
     let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, common);
     let proof = prove_batch(&config, &instances, &prover_data);
     let bytes = postcard::to_allocvec(&proof)?;
@@ -1514,6 +1515,7 @@ fn generate_circle_fixture() -> Result<(), Box<dyn std::error::Error>> {
     let (config, mut airs, traces, pvs, log_degrees) = circle_compat_case();
     let prover_data = ProverData::from_airs_and_degrees(&config, &mut airs, &log_degrees);
     let common = &prover_data.common;
+    let traces = [&traces[0], &traces[1]];
     let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, common);
     let proof = prove_batch(&config, &instances, &prover_data);
     let bytes = postcard::to_allocvec(&proof)?;
@@ -1531,7 +1533,7 @@ fn test_preprocessed_constraint_positive() -> Result<(), impl Debug> {
 
     let instances = vec![StarkInstance {
         air: &air,
-        trace,
+        trace: &trace,
         public_values: pis.clone(),
         lookups: vec![],
     }];
@@ -1554,7 +1556,7 @@ fn test_preprocessed_constraint_negative() -> Result<(), Box<dyn std::error::Err
 
     let instances = vec![StarkInstance {
         air: &air_prove,
-        trace,
+        trace: &trace,
         public_values: pis.clone(),
         lookups: vec![],
     }];
@@ -1597,19 +1599,19 @@ fn test_mixed_preprocessed_constraints() -> Result<(), impl Debug> {
     let instances = vec![
         StarkInstance {
             air: &air_fib,
-            trace: fib_trace,
+            trace: &fib_trace,
             public_values: fib_pis.clone(),
             lookups: vec![],
         },
         StarkInstance {
             air: &air_mul,
-            trace: mul_trace,
+            trace: &mul_trace,
             public_values: mul_pis.clone(),
             lookups: vec![],
         },
         StarkInstance {
             air: &air_pp_mul,
-            trace: pp_mul_trace,
+            trace: &pp_mul_trace,
             public_values: pp_mul_pis.clone(),
             lookups: vec![],
         },
@@ -1645,8 +1647,9 @@ fn test_batch_stark_one_instance_local_only() -> Result<(), impl Debug> {
     let prover_data =
         ProverData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_height]);
     let common = &prover_data.common;
+    let traces = [&mul_trace];
 
-    let instances = StarkInstance::new_multiple(&airs, &[mul_trace], &[vec![]], common);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![]], common);
 
     let proof = prove_batch(&config, &instances, &prover_data);
 
@@ -1679,8 +1682,9 @@ fn test_batch_stark_one_instance_local_fails() {
     let prover_data =
         ProverData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_height]);
     let common = &prover_data.common;
+    let traces = [&mul_trace];
 
-    let instances = StarkInstance::new_multiple(&airs, &[mul_trace], &[vec![]], common);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![]], common);
 
     prove_batch(&config, &instances, &prover_data);
 }
@@ -1710,8 +1714,9 @@ fn test_batch_stark_one_instance_local_fails() {
     let prover_data =
         ProverData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_height]);
     let common = &prover_data.common;
+    let traces = [&mul_trace];
 
-    let instances = StarkInstance::new_multiple(&airs, &[mul_trace], &[vec![]], common);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![]], common);
 
     let proof = prove_batch(&config, &instances, &prover_data);
 
@@ -1755,13 +1760,9 @@ fn test_batch_stark_local_lookups_only() -> Result<(), impl Debug> {
         &[log_height, log_height],
     );
     let common = &prover_data.common;
+    let traces = [&mul_trace, &fib_trace];
 
-    let instances = StarkInstance::new_multiple(
-        &airs,
-        &[mul_trace, fib_trace],
-        &[vec![], fib_pis.clone()],
-        common,
-    );
+    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()], common);
 
     let proof = prove_batch(&config, &instances, &prover_data);
 
@@ -1808,13 +1809,9 @@ fn test_batch_stark_global_lookups_only() -> Result<(), impl Debug> {
     let prover_data =
         ProverData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_n, log_n]);
     let common = &prover_data.common;
+    let traces = [&mul_trace, &fib_trace];
 
-    let instances = StarkInstance::new_multiple(
-        &airs,
-        &[mul_trace, fib_trace],
-        &[vec![], fib_pis.clone()],
-        common,
-    );
+    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()], common);
 
     let proof = prove_batch(&config, &instances, &prover_data);
 
@@ -1863,13 +1860,9 @@ fn test_batch_stark_both_lookups() -> Result<(), impl Debug> {
         &[log_height, log_height],
     );
     let common = &prover_data.common;
+    let traces = [&mul_trace, &fib_trace];
 
-    let instances = StarkInstance::new_multiple(
-        &airs,
-        &[mul_trace, fib_trace],
-        &[vec![], fib_pis.clone()],
-        common,
-    );
+    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()], common);
 
     let proof = prove_batch(&config, &instances, &prover_data);
 
@@ -1918,13 +1911,9 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
         &[log_height + config.is_zk(), log_height + config.is_zk()],
     );
     let common = &prover_data.common;
+    let traces = [&mul_trace, &fib_trace];
 
-    let instances = StarkInstance::new_multiple(
-        &airs,
-        &[mul_trace, fib_trace],
-        &[vec![], fib_pis.clone()],
-        common,
-    );
+    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()], common);
 
     let proof = prove_batch(&config, &instances, &prover_data);
 
@@ -1934,7 +1923,7 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
 
 #[cfg(not(debug_assertions))]
 #[test]
-#[should_panic(expected = "LookupError(GlobalCumulativeMismatch(Some(\"MulFib2\"))")]
+#[should_panic(expected = "LookupError(\"GlobalCumulativeMismatch(None): MulFib2\")")]
 fn test_batch_stark_failed_global_lookup() {
     test_batch_stark_failed_global_lookup_inner();
 }
@@ -1977,7 +1966,7 @@ fn test_batch_stark_failed_global_lookup_inner() {
     let fib_trace = fib_trace::<Val>(0, 1, n);
 
     let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
-    let traces = vec![mul_trace, fib_trace];
+    let traces = [&mul_trace, &fib_trace];
     let pvs = vec![vec![], fib_pis];
     // Use the enum wrapper for heterogeneous types
     let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
@@ -2104,14 +2093,7 @@ macro_rules! run_batch_stark_mixed_lookups {
         );
         let common = &prover_data.common;
 
-        let traces = vec![
-            mul_with_lookups_trace.clone(),
-            fib_no_lookups_trace,
-            fib_with_lookups_trace.clone(),
-            mul_no_lookups_trace,
-            fib_with_lookups_trace,
-            mul_with_lookups_trace,
-        ];
+        let traces = [&mul_with_lookups_trace, &fib_no_lookups_trace, &fib_with_lookups_trace, &mul_no_lookups_trace, &fib_with_lookups_trace, &mul_with_lookups_trace];
 
         // Get all public values
         let all_pvs = vec![
@@ -2322,7 +2304,7 @@ fn test_single_table_local_lookup() -> Result<(), impl Debug> {
     // Generate trace
     let trace = single_table_local_lookup_trace::<Val>(height);
 
-    let traces = vec![trace];
+    let traces = [&trace];
     let pvs = vec![vec![]]; // No public values
 
     let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, common);
