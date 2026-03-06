@@ -265,7 +265,12 @@ impl_mul_base_field!(
 impl_div_methods!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
 impl_sum_prod_base_field!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
 
-impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31AVX2<FP> {}
+impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+    #[inline(always)]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[MontyField31<FP>; N]) -> Self {
+        general_dot_product::<_, _, _, N>(a, f)
+    }
+}
 
 // MONTGOMERY MULTIPLICATION
 //   This implementation is based on [1] but with minor changes. The reduction is as follows:
