@@ -17,20 +17,16 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
     type F = Val<SC>;
     type Expr = PackedVal<SC>;
     type Var = PackedVal<SC>;
+    type PreprocessedWindow = RowWindow<'a, PackedVal<SC>>;
+    type MainWindow = RowWindow<'a, PackedVal<SC>>;
     type PublicVar = Val<SC>;
-    type M = RowWindow<'a, PackedVal<SC>>;
 
-    fn main(&self) -> Self::M {
+    fn main(&self) -> Self::MainWindow {
         RowWindow::from_view(&self.inner.main)
     }
 
-    fn preprocessed(&self) -> &Self::M {
+    fn preprocessed(&self) -> &Self::PreprocessedWindow {
         self.inner.preprocessed()
-    }
-
-    #[inline]
-    fn public_values(&self) -> &[Self::PublicVar] {
-        self.inner.public_values
     }
 
     #[inline]
@@ -57,6 +53,11 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
     #[inline]
     fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
         self.inner.assert_zeros(array);
+    }
+
+    #[inline]
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.inner.public_values
     }
 }
 
@@ -106,13 +107,14 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
     type Expr = SC::Challenge;
     type Var = SC::Challenge;
     type PublicVar = Val<SC>;
-    type M = RowWindow<'a, SC::Challenge>;
+    type PreprocessedWindow = RowWindow<'a, SC::Challenge>;
+    type MainWindow = RowWindow<'a, SC::Challenge>;
 
-    fn main(&self) -> Self::M {
+    fn main(&self) -> Self::MainWindow {
         RowWindow::from_two_rows(self.inner.main.top.values, self.inner.main.bottom.values)
     }
 
-    fn preprocessed(&self) -> &Self::M {
+    fn preprocessed(&self) -> &Self::PreprocessedWindow {
         self.inner.preprocessed()
     }
 
