@@ -2,14 +2,19 @@
 
 use alloc::vec::Vec;
 
-use p3_poseidon::{FullRoundConstants, PartialRoundConstants};
+use p3_poseidon::{
+    FullRoundConstants, PartialRoundConstants, full_round_initial_permute_state,
+    full_round_terminal_permute_state, partial_permute_state,
+};
 use p3_symmetric::{CryptographicPermutation, Permutation};
 
+use super::mds::{MdsNeonGoldilocks, mds_neon_w8, mds_neon_w12};
 use super::packing::PackedGoldilocksNeon;
 use super::poseidon1_asm::*;
 use super::poseidon2_asm::{sbox_layer_asm, sbox_layer_dual_asm};
 use super::utils::{pack_lanes, unpack_lanes};
-use crate::{Goldilocks, MdsMatrixGoldilocks};
+use crate::Goldilocks;
+use crate::poseidon::PoseidonGoldilocksGeneric;
 
 /// Fused Poseidon1 permutation for Goldilocks.
 ///
@@ -91,25 +96,31 @@ impl<const WIDTH: usize> Poseidon1GoldilocksFused<WIDTH> {
     }
 }
 
-/// Run the initial or terminal full rounds on a raw `u64` state.
+/// Run the initial or terminal full rounds on a raw width-8 state.
 ///
-/// Each full round applies: add constants, S-box on all elements, MDS.
-/// The MDS is applied via Karatsuba convolution through a zero-cost
-/// transmute (Goldilocks is `repr(transparent)` over `u64`).
+/// Each full round applies: add constants, S-box on all elements, NEON MDS.
 #[inline]
-fn full_rounds_scalar<const WIDTH: usize>(
-    raw: *mut [u64; WIDTH],
-    constants: &[[u64; WIDTH]],
-    mds: &MdsMatrixGoldilocks,
-) where
-    MdsMatrixGoldilocks: Permutation<[Goldilocks; WIDTH]>,
-{
+fn full_rounds_scalar_w8(raw: &mut [u64; 8], constants: &[[u64; 8]]) {
     for rc in constants {
         unsafe {
-            add_rc_asm(&mut *raw, rc);
-            sbox_layer_asm(&mut *raw);
-            mds.permute_mut(&mut *(raw as *mut [Goldilocks; WIDTH]));
+            add_rc_asm(raw, rc);
+            sbox_layer_asm(raw);
         }
+        *raw = unsafe { mds_neon_w8(raw) };
+    }
+}
+
+/// Run the initial or terminal full rounds on a raw width-12 state.
+///
+/// Each full round applies: add constants, S-box on all elements, NEON MDS.
+#[inline]
+fn full_rounds_scalar_w12(raw: &mut [u64; 12], constants: &[[u64; 12]]) {
+    for rc in constants {
+        unsafe {
+            add_rc_asm(raw, rc);
+            sbox_layer_asm(raw);
+        }
+        *raw = unsafe { mds_neon_w12(raw) };
     }
 }
 
@@ -123,7 +134,7 @@ fn full_rounds_scalar<const WIDTH: usize>(
 /// 4. Last partial round: S-box on first element, sparse matmul (no constant).
 #[inline]
 fn partial_rounds_scalar_w8(
-    raw: *mut [u64; 8],
+    raw: &mut [u64; 8],
     first_rc: &[u64; 8],
     m_i: &[[u64; 8]; 8],
     sparse_first_row: &[[u64; 8]],
@@ -132,26 +143,26 @@ fn partial_rounds_scalar_w8(
 ) {
     // Add the first-round full-width constant vector.
     unsafe {
-        add_rc_asm(&mut *raw, first_rc);
+        add_rc_asm(raw, first_rc);
     }
 
     // Apply the dense transition matrix once.
-    dense_matmul_asm_w8(unsafe { &mut *raw }, m_i);
+    dense_matmul_asm_w8(raw, m_i);
 
     // Main partial-round loop: S-box + scalar constant + sparse matmul.
     let rounds_p = sparse_first_row.len();
     for r in 0..rounds_p - 1 {
         unsafe {
-            sbox_s0_asm(&mut *raw);
-            add_scalar_s0_asm(&mut *raw, round_constants[r]);
-            cheap_matmul_asm_w8(&mut *raw, &sparse_first_row[r], &v[r]);
+            sbox_s0_asm(raw);
+            add_scalar_s0_asm(raw, round_constants[r]);
+            cheap_matmul_asm_w8(raw, &sparse_first_row[r], &v[r]);
         }
     }
 
     // Last partial round: no scalar constant.
     unsafe {
-        sbox_s0_asm(&mut *raw);
-        cheap_matmul_asm_w8(&mut *raw, &sparse_first_row[rounds_p - 1], &v[rounds_p - 1]);
+        sbox_s0_asm(raw);
+        cheap_matmul_asm_w8(raw, &sparse_first_row[rounds_p - 1], &v[rounds_p - 1]);
     }
 }
 
@@ -160,7 +171,7 @@ fn partial_rounds_scalar_w8(
 /// Same structure as the width-8 variant.
 #[inline]
 fn partial_rounds_scalar_w12(
-    raw: *mut [u64; 12],
+    raw: &mut [u64; 12],
     first_rc: &[u64; 12],
     m_i: &[[u64; 12]; 12],
     sparse_first_row: &[[u64; 12]],
@@ -168,45 +179,51 @@ fn partial_rounds_scalar_w12(
     round_constants: &[u64],
 ) {
     unsafe {
-        add_rc_asm(&mut *raw, first_rc);
+        add_rc_asm(raw, first_rc);
     }
-    dense_matmul_asm_w12(unsafe { &mut *raw }, m_i);
+    dense_matmul_asm_w12(raw, m_i);
 
     let rounds_p = sparse_first_row.len();
     for r in 0..rounds_p - 1 {
         unsafe {
-            sbox_s0_asm(&mut *raw);
-            add_scalar_s0_asm(&mut *raw, round_constants[r]);
-            cheap_matmul_asm_w12(&mut *raw, &sparse_first_row[r], &v[r]);
+            sbox_s0_asm(raw);
+            add_scalar_s0_asm(raw, round_constants[r]);
+            cheap_matmul_asm_w12(raw, &sparse_first_row[r], &v[r]);
         }
     }
     unsafe {
-        sbox_s0_asm(&mut *raw);
-        cheap_matmul_asm_w12(&mut *raw, &sparse_first_row[rounds_p - 1], &v[rounds_p - 1]);
+        sbox_s0_asm(raw);
+        cheap_matmul_asm_w12(raw, &sparse_first_row[rounds_p - 1], &v[rounds_p - 1]);
     }
 }
 
-/// Run the initial or terminal full rounds on two raw `u64` lanes.
+/// Run the initial or terminal full rounds on two raw width-8 lanes.
 ///
-/// Same as the scalar version but processes both lanes simultaneously
-/// using dual-lane ASM primitives. The MDS is still applied per-lane
-/// via Karatsuba (no dual-lane MDS kernel exists).
+/// Uses dual-lane ASM primitives for add_rc and S-box, then NEON MDS per lane.
 #[inline]
-fn full_rounds_dual<const WIDTH: usize>(
-    lane0: &mut [u64; WIDTH],
-    lane1: &mut [u64; WIDTH],
-    constants: &[[u64; WIDTH]],
-    mds: &MdsMatrixGoldilocks,
-) where
-    MdsMatrixGoldilocks: Permutation<[Goldilocks; WIDTH]>,
-{
+fn full_rounds_dual_w8(lane0: &mut [u64; 8], lane1: &mut [u64; 8], constants: &[[u64; 8]]) {
     for rc in constants {
         unsafe {
             add_rc_dual_asm(lane0, lane1, rc);
             sbox_layer_dual_asm(lane0, lane1);
-            mds.permute_mut(&mut *(lane0 as *mut [u64; WIDTH] as *mut [Goldilocks; WIDTH]));
-            mds.permute_mut(&mut *(lane1 as *mut [u64; WIDTH] as *mut [Goldilocks; WIDTH]));
         }
+        *lane0 = unsafe { mds_neon_w8(lane0) };
+        *lane1 = unsafe { mds_neon_w8(lane1) };
+    }
+}
+
+/// Run the initial or terminal full rounds on two raw width-12 lanes.
+///
+/// Uses dual-lane ASM primitives for add_rc and S-box, then NEON MDS per lane.
+#[inline]
+fn full_rounds_dual_w12(lane0: &mut [u64; 12], lane1: &mut [u64; 12], constants: &[[u64; 12]]) {
+    for rc in constants {
+        unsafe {
+            add_rc_dual_asm(lane0, lane1, rc);
+            sbox_layer_dual_asm(lane0, lane1);
+        }
+        *lane0 = unsafe { mds_neon_w12(lane0) };
+        *lane1 = unsafe { mds_neon_w12(lane1) };
     }
 }
 
@@ -296,13 +313,11 @@ fn partial_rounds_dual_w12(
 
 impl Permutation<[Goldilocks; 8]> for Poseidon1GoldilocksFused<8> {
     fn permute_mut(&self, state: &mut [Goldilocks; 8]) {
-        let mds = MdsMatrixGoldilocks;
-
         // Zero-cost transmute: Goldilocks is repr(transparent) over u64.
-        let raw = state as *mut [Goldilocks; 8] as *mut [u64; 8];
+        let raw = unsafe { &mut *(state as *mut [Goldilocks; 8] as *mut [u64; 8]) };
 
         // Initial full rounds, then partial rounds, then terminal full rounds.
-        full_rounds_scalar(raw, &self.initial_constants_raw, &mds);
+        full_rounds_scalar_w8(raw, &self.initial_constants_raw);
         partial_rounds_scalar_w8(
             raw,
             &self.first_round_constants_raw,
@@ -311,7 +326,7 @@ impl Permutation<[Goldilocks; 8]> for Poseidon1GoldilocksFused<8> {
             &self.v_raw,
             &self.round_constants_raw,
         );
-        full_rounds_scalar(raw, &self.terminal_constants_raw, &mds);
+        full_rounds_scalar_w8(raw, &self.terminal_constants_raw);
     }
 }
 
@@ -321,10 +336,9 @@ impl Permutation<[PackedGoldilocksNeon; 8]> for Poseidon1GoldilocksFused<8> {
     fn permute_mut(&self, state: &mut [PackedGoldilocksNeon; 8]) {
         // Unpack the two lanes from the packed representation.
         let (mut lane0, mut lane1) = unpack_lanes(state);
-        let mds = MdsMatrixGoldilocks;
 
         // Run the full permutation on both lanes simultaneously.
-        full_rounds_dual(&mut lane0, &mut lane1, &self.initial_constants_raw, &mds);
+        full_rounds_dual_w8(&mut lane0, &mut lane1, &self.initial_constants_raw);
         partial_rounds_dual_w8(
             &mut lane0,
             &mut lane1,
@@ -334,7 +348,7 @@ impl Permutation<[PackedGoldilocksNeon; 8]> for Poseidon1GoldilocksFused<8> {
             &self.v_raw,
             &self.round_constants_raw,
         );
-        full_rounds_dual(&mut lane0, &mut lane1, &self.terminal_constants_raw, &mds);
+        full_rounds_dual_w8(&mut lane0, &mut lane1, &self.terminal_constants_raw);
 
         // Repack both lanes into the packed representation.
         pack_lanes(state, &lane0, &lane1);
@@ -345,10 +359,9 @@ impl CryptographicPermutation<[PackedGoldilocksNeon; 8]> for Poseidon1Goldilocks
 
 impl Permutation<[Goldilocks; 12]> for Poseidon1GoldilocksFused<12> {
     fn permute_mut(&self, state: &mut [Goldilocks; 12]) {
-        let mds = MdsMatrixGoldilocks;
-        let raw = state as *mut [Goldilocks; 12] as *mut [u64; 12];
+        let raw = unsafe { &mut *(state as *mut [Goldilocks; 12] as *mut [u64; 12]) };
 
-        full_rounds_scalar(raw, &self.initial_constants_raw, &mds);
+        full_rounds_scalar_w12(raw, &self.initial_constants_raw);
         partial_rounds_scalar_w12(
             raw,
             &self.first_round_constants_raw,
@@ -357,7 +370,7 @@ impl Permutation<[Goldilocks; 12]> for Poseidon1GoldilocksFused<12> {
             &self.v_raw,
             &self.round_constants_raw,
         );
-        full_rounds_scalar(raw, &self.terminal_constants_raw, &mds);
+        full_rounds_scalar_w12(raw, &self.terminal_constants_raw);
     }
 }
 
@@ -366,9 +379,8 @@ impl CryptographicPermutation<[Goldilocks; 12]> for Poseidon1GoldilocksFused<12>
 impl Permutation<[PackedGoldilocksNeon; 12]> for Poseidon1GoldilocksFused<12> {
     fn permute_mut(&self, state: &mut [PackedGoldilocksNeon; 12]) {
         let (mut lane0, mut lane1) = unpack_lanes(state);
-        let mds = MdsMatrixGoldilocks;
 
-        full_rounds_dual(&mut lane0, &mut lane1, &self.initial_constants_raw, &mds);
+        full_rounds_dual_w12(&mut lane0, &mut lane1, &self.initial_constants_raw);
         partial_rounds_dual_w12(
             &mut lane0,
             &mut lane1,
@@ -378,13 +390,108 @@ impl Permutation<[PackedGoldilocksNeon; 12]> for Poseidon1GoldilocksFused<12> {
             &self.v_raw,
             &self.round_constants_raw,
         );
-        full_rounds_dual(&mut lane0, &mut lane1, &self.terminal_constants_raw, &mds);
+        full_rounds_dual_w12(&mut lane0, &mut lane1, &self.terminal_constants_raw);
 
         pack_lanes(state, &lane0, &lane1);
     }
 }
 
 impl CryptographicPermutation<[PackedGoldilocksNeon; 12]> for Poseidon1GoldilocksFused<12> {}
+
+/// Dual-dispatch wrapper for Goldilocks Poseidon1.
+///
+/// **Scalar** permutations delegate to the generic LLVM-optimized path
+/// with Karatsuba MDS (avoiding the regression from sequential inline ASM).
+///
+/// **Packed width-8** permutations delegate to the fused dual-lane ASM path
+/// with NEON-accelerated MDS for full rounds, achieving ~15% speedup per-perm.
+///
+/// **Packed width-12** permutations run two sequential permutations using
+/// the NEON MDS for full rounds and LLVM-optimized partial rounds, called
+/// via the public free functions from `p3_poseidon`.
+#[derive(Clone, Debug)]
+pub struct Poseidon1GoldilocksDispatch<const WIDTH: usize> {
+    /// Karatsuba MDS scalar path — used for scalar permutations.
+    generic: PoseidonGoldilocksGeneric<WIDTH>,
+    /// Fused dual-lane path — used for w8 packed.
+    fused: Poseidon1GoldilocksFused<WIDTH>,
+    /// Pre-computed full round constants for NEON MDS packed path.
+    full_constants: FullRoundConstants<Goldilocks, WIDTH>,
+    /// Pre-computed partial round constants for LLVM-optimized packed path.
+    partial_constants: PartialRoundConstants<Goldilocks, WIDTH>,
+}
+
+impl<const WIDTH: usize> Poseidon1GoldilocksDispatch<WIDTH> {
+    /// Create from generic (Karatsuba), fused, and pre-computed constants.
+    pub fn new(
+        generic: PoseidonGoldilocksGeneric<WIDTH>,
+        fused: Poseidon1GoldilocksFused<WIDTH>,
+        full_constants: FullRoundConstants<Goldilocks, WIDTH>,
+        partial_constants: PartialRoundConstants<Goldilocks, WIDTH>,
+    ) -> Self {
+        Self {
+            generic,
+            fused,
+            full_constants,
+            partial_constants,
+        }
+    }
+}
+
+// --- Width 8 ---
+
+impl Permutation<[Goldilocks; 8]> for Poseidon1GoldilocksDispatch<8> {
+    fn permute_mut(&self, state: &mut [Goldilocks; 8]) {
+        self.generic.permute_mut(state);
+    }
+}
+
+impl CryptographicPermutation<[Goldilocks; 8]> for Poseidon1GoldilocksDispatch<8> {}
+
+impl Permutation<[PackedGoldilocksNeon; 8]> for Poseidon1GoldilocksDispatch<8> {
+    fn permute_mut(&self, state: &mut [PackedGoldilocksNeon; 8]) {
+        self.fused.permute_mut(state);
+    }
+}
+
+impl CryptographicPermutation<[PackedGoldilocksNeon; 8]> for Poseidon1GoldilocksDispatch<8> {}
+
+// --- Width 12 ---
+
+impl Permutation<[Goldilocks; 12]> for Poseidon1GoldilocksDispatch<12> {
+    fn permute_mut(&self, state: &mut [Goldilocks; 12]) {
+        self.generic.permute_mut(state);
+    }
+}
+
+impl CryptographicPermutation<[Goldilocks; 12]> for Poseidon1GoldilocksDispatch<12> {}
+
+impl Permutation<[PackedGoldilocksNeon; 12]> for Poseidon1GoldilocksDispatch<12> {
+    fn permute_mut(&self, state: &mut [PackedGoldilocksNeon; 12]) {
+        // Two sequential NEON-MDS permutations per lane, with phases
+        // interleaved so that constants stay cache-hot across both lanes.
+        let (mut lane0, mut lane1) = unpack_lanes(state);
+        let gl0 = unsafe { &mut *(&mut lane0 as *mut [u64; 12] as *mut [Goldilocks; 12]) };
+        let gl1 = unsafe { &mut *(&mut lane1 as *mut [u64; 12] as *mut [Goldilocks; 12]) };
+        let mds = MdsNeonGoldilocks;
+
+        // Initial full rounds for both lanes (initial constants stay hot).
+        full_round_initial_permute_state::<_, _, _, 12, 7>(gl0, &self.full_constants, &mds);
+        full_round_initial_permute_state::<_, _, _, 12, 7>(gl1, &self.full_constants, &mds);
+
+        // Partial rounds for both lanes (partial constants stay hot).
+        partial_permute_state::<_, _, 12, 7>(gl0, &self.partial_constants);
+        partial_permute_state::<_, _, 12, 7>(gl1, &self.partial_constants);
+
+        // Terminal full rounds for both lanes (terminal constants stay hot).
+        full_round_terminal_permute_state::<_, _, _, 12, 7>(gl0, &self.full_constants, &mds);
+        full_round_terminal_permute_state::<_, _, _, 12, 7>(gl1, &self.full_constants, &mds);
+
+        pack_lanes(state, &lane0, &lane1);
+    }
+}
+
+impl CryptographicPermutation<[PackedGoldilocksNeon; 12]> for Poseidon1GoldilocksDispatch<12> {}
 
 #[cfg(test)]
 mod tests {

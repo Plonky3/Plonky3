@@ -8,9 +8,10 @@
 //!
 //! # Platform Dispatch
 //!
-//! On **aarch64**, the type alias resolves to a fused ASM-optimized
-//! implementation that uses inline assembly for modular arithmetic and
-//! dual-lane processing for packed NEON state.
+//! On **aarch64**, the type alias resolves to a dual-dispatch wrapper:
+//! scalar permutations delegate to the generic LLVM-optimized path
+//! (avoiding regression from sequential inline ASM), while packed NEON
+//! permutations delegate to the fused dual-lane ASM path.
 //!
 //! On **all other platforms**, it resolves to the generic Poseidon
 //! implementation with Karatsuba MDS convolution.
@@ -58,15 +59,16 @@ pub type PoseidonGoldilocksGeneric<const WIDTH: usize> = Poseidon<
 
 /// Unified Poseidon permutation for Goldilocks.
 ///
-/// On aarch64, resolves to the fused ASM-optimized implementation that
-/// uses inline assembly and dual-lane NEON processing.
+/// On aarch64, resolves to a dual-dispatch wrapper: scalar permutations
+/// use the generic LLVM-optimized path, packed NEON permutations use the
+/// fused dual-lane ASM path.
 ///
 /// On all other platforms, resolves to the generic implementation with
 /// Karatsuba MDS convolution.
 ///
 /// Supports both scalar and packed state representations transparently.
 #[cfg(target_arch = "aarch64")]
-pub type PoseidonGoldilocks<const WIDTH: usize> = crate::Poseidon1GoldilocksFused<WIDTH>;
+pub type PoseidonGoldilocks<const WIDTH: usize> = crate::Poseidon1GoldilocksDispatch<WIDTH>;
 
 /// Unified Poseidon permutation for Goldilocks.
 ///
@@ -168,18 +170,21 @@ pub const GOLDILOCKS_POSEIDON_RC_12: [[Goldilocks; 12]; 30] = Goldilocks::new_2d
 
 /// Create the default width-8 Poseidon permutation for Goldilocks.
 ///
-/// Returns the platform-optimal implementation: fused ASM on aarch64,
-/// generic Karatsuba on all other platforms.
+/// Returns the platform-optimal implementation: dual-dispatch on aarch64
+/// (generic for scalar, fused ASM for packed), generic Karatsuba on all
+/// other platforms.
 #[cfg(target_arch = "aarch64")]
 pub fn default_goldilocks_poseidon_8() -> PoseidonGoldilocks<8> {
-    let raw = PoseidonConstants {
+    let constants = PoseidonConstants {
         rounds_f: 8,
         rounds_p: 22,
         mds_circ_col: MATRIX_CIRC_MDS_8_COL,
         round_constants: GOLDILOCKS_POSEIDON_RC_8.to_vec(),
     };
-    let (full, partial) = raw.to_optimized();
-    crate::Poseidon1GoldilocksFused::new(full, partial)
+    let generic = Poseidon::new(&constants);
+    let (full, partial) = constants.to_optimized();
+    let fused = crate::Poseidon1GoldilocksFused::new(full.clone(), partial.clone());
+    crate::Poseidon1GoldilocksDispatch::new(generic, fused, full, partial)
 }
 
 /// Create the default width-8 Poseidon permutation for Goldilocks.
@@ -198,18 +203,21 @@ pub fn default_goldilocks_poseidon_8() -> PoseidonGoldilocks<8> {
 
 /// Create the default width-12 Poseidon permutation for Goldilocks.
 ///
-/// Returns the platform-optimal implementation: fused ASM on aarch64,
-/// generic Karatsuba on all other platforms.
+/// Returns the platform-optimal implementation: dual-dispatch on aarch64
+/// (generic for scalar, fused ASM for packed), generic Karatsuba on all
+/// other platforms.
 #[cfg(target_arch = "aarch64")]
 pub fn default_goldilocks_poseidon_12() -> PoseidonGoldilocks<12> {
-    let raw = PoseidonConstants {
+    let constants = PoseidonConstants {
         rounds_f: 8,
         rounds_p: 22,
         mds_circ_col: MATRIX_CIRC_MDS_12_COL,
         round_constants: GOLDILOCKS_POSEIDON_RC_12.to_vec(),
     };
-    let (full, partial) = raw.to_optimized();
-    crate::Poseidon1GoldilocksFused::new(full, partial)
+    let generic = Poseidon::new(&constants);
+    let (full, partial) = constants.to_optimized();
+    let fused = crate::Poseidon1GoldilocksFused::new(full.clone(), partial.clone());
+    crate::Poseidon1GoldilocksDispatch::new(generic, fused, full, partial)
 }
 
 /// Create the default width-12 Poseidon permutation for Goldilocks.
