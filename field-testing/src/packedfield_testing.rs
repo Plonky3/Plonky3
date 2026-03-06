@@ -1,9 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{
-    Algebra, Field, PackedField, PackedFieldPow2, PackedValue, PrimeCharacteristicRing,
-};
+use p3_field::{Field, PackedField, PackedFieldPow2, PackedValue, PrimeCharacteristicRing};
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
