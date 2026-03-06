@@ -1,40 +1,4 @@
 //! Fused Poseidon1 permutation for Goldilocks on aarch64.
-//!
-//! # Overview
-//!
-//! This module implements the full Poseidon1 permutation by composing the
-//! low-level ASM primitives from the companion assembly module. It supports
-//! both scalar (`[Goldilocks; WIDTH]`) and packed (`[PackedGoldilocksNeon; WIDTH]`)
-//! state representations.
-//!
-//! # Optimized Round Constants
-//!
-//! The standard Poseidon1 specification stores one dense MDS matrix per
-//! partial round. The "optimized" form pre-computes a sparse decomposition:
-//!
-//! ```text
-//!     Full-round constants      Partial-round constants
-//!     +--------------------+    +---------------------------------+
-//!     | initial (RF/2)     |    | first_round_constants           |
-//!     | terminal (RF/2)    |    | m_i (dense transition matrix)   |
-//!     +--------------------+    | sparse_first_row (per round)    |
-//!                               | v (sub-diagonal, per round)     |
-//!                               | round_constants (scalar, RP-1)  |
-//!                               +---------------------------------+
-//! ```
-//!
-//! All constants are stored as raw `u64` values (the internal representation
-//! of Goldilocks field elements) to avoid field-element overhead in the hot path.
-//!
-//! # Scalar vs Packed Execution
-//!
-//! **Scalar path**: transmutes the `[Goldilocks; WIDTH]` state to `[u64; WIDTH]`
-//! (zero-cost, since Goldilocks is `repr(transparent)` over `u64`) and runs the
-//! ASM primitives directly.
-//!
-//! **Packed path**: unpacks the NEON state into two independent `[u64; WIDTH]`
-//! lanes, runs the dual-lane ASM primitives on both lanes simultaneously, and
-//! repacks at the end. This processes two permutations per call.
 
 use alloc::vec::Vec;
 
