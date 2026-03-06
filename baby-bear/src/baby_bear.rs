@@ -260,9 +260,15 @@ mod tests {
 
     #[test]
     fn test_deserialize_valid_monty_value() {
-        // A valid monty form value (0) should deserialize successfully.
-        let result: Result<BabyBear, _> = serde_json::from_str("0");
-        assert!(result.is_ok());
+        // Zero in monty form should deserialize to BabyBear::ZERO.
+        let result: BabyBear = serde_json::from_str("0").unwrap();
+        assert_eq!(result, BabyBear::ZERO);
+
+        // Roundtrip: serialize a known element, then deserialize it back.
+        let original = BabyBear::from_u32(42);
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: BabyBear = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, original);
 
         // PRIME - 1 is the largest valid monty form value.
         let max_valid = BabyBearParameters::PRIME - 1;
