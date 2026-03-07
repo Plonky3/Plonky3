@@ -33,9 +33,36 @@ pub type PoseidonExternalLayerBabyBear<const WIDTH: usize> =
 
 /// S-box degree for BabyBear Poseidon.
 ///
-/// Since p - 1 = 15 * 2^27, neither 3 nor 5 are coprime to p - 1.
-/// The next smallest valid exponent is 7.
-const BABYBEAR_S_BOX_DEGREE: u64 = 7;
+/// Since `p - 1 = 15 * 2^27`, both 3 and 5 divide `p - 1`.
+///
+/// So `gcd(α, p - 1) ≠ 1` for `α ∈ {3, 5}`. The next smallest valid exponent is 7.
+pub const BABYBEAR_S_BOX_DEGREE: u64 = 7;
+
+/// Number of full rounds per half for BabyBear Poseidon (`RF / 2`).
+///
+/// The total number of full rounds is `RF = 8` (4 beginning + 4 ending).
+/// Follows the Poseidon paper's security analysis (Section 5.4) with a +2 RF margin.
+pub const BABYBEAR_POSEIDON_HALF_FULL_ROUNDS: usize = 4;
+
+/// Number of partial rounds for BabyBear Poseidon (width 16).
+///
+/// Derived from the Gröbner basis bound in the Poseidon paper (Eq. 4, line 2)
+/// and the Poseidon2 paper (Eq. 1, R_GB term 3):
+///
+///   R_GB ≥ t − 7 + log_α(2) · min{κ/(t+1), log_2(p)/2}
+///        = 9 + 0.3562 · min{7.53, 15.5} = 11.682
+///
+/// With the +7.5% security margin (Section 5.4): ⌈1.075 × 11.682⌉ = 13.
+pub const BABYBEAR_POSEIDON_PARTIAL_ROUNDS_16: usize = 13;
+
+/// Number of partial rounds for BabyBear Poseidon (width 24).
+///
+/// Same Gröbner basis bound as width 16:
+///
+///   R_GB ≥ 17 + 0.3562 · min{5.12, 15.5} = 18.824
+///
+/// With the +7.5% security margin: ⌈1.075 × 18.824⌉ = 21.
+pub const BABYBEAR_POSEIDON_PARTIAL_ROUNDS_24: usize = 21;
 
 /// The Poseidon permutation for BabyBear.
 ///
@@ -321,8 +348,8 @@ pub const BABYBEAR_POSEIDON_RC_24: [[BabyBear; 24]; 29] = BabyBear::new_2d_array
 /// Create a default width-16 Poseidon permutation for BabyBear.
 pub fn default_babybear_poseidon_16() -> PoseidonBabyBear<16> {
     Poseidon::new(&PoseidonConstants {
-        rounds_f: 8,
-        rounds_p: 13,
+        rounds_f: 2 * BABYBEAR_POSEIDON_HALF_FULL_ROUNDS,
+        rounds_p: BABYBEAR_POSEIDON_PARTIAL_ROUNDS_16,
         mds_circ_col: MDSBabyBearData::MATRIX_CIRC_MDS_16_COL,
         round_constants: BABYBEAR_POSEIDON_RC_16.to_vec(),
     })
@@ -331,8 +358,8 @@ pub fn default_babybear_poseidon_16() -> PoseidonBabyBear<16> {
 /// Create a default width-24 Poseidon permutation for BabyBear.
 pub fn default_babybear_poseidon_24() -> PoseidonBabyBear<24> {
     Poseidon::new(&PoseidonConstants {
-        rounds_f: 8,
-        rounds_p: 21,
+        rounds_f: 2 * BABYBEAR_POSEIDON_HALF_FULL_ROUNDS,
+        rounds_p: BABYBEAR_POSEIDON_PARTIAL_ROUNDS_24,
         mds_circ_col: MDSBabyBearData::MATRIX_CIRC_MDS_24_COL,
         round_constants: BABYBEAR_POSEIDON_RC_24.to_vec(),
     })
