@@ -20,6 +20,7 @@ use rand::{Rng, RngExt};
 
 use super::packing::PackedGoldilocksNeon;
 use super::poseidon2_asm::*;
+use super::utils::{pack_lanes, unpack_lanes};
 use crate::{Goldilocks, MATRIX_DIAG_20_GOLDILOCKS};
 
 /// Degree of the chosen permutation polynomial for Goldilocks.
@@ -185,28 +186,6 @@ pub type Poseidon2GoldilocksAsm<const WIDTH: usize> = p3_poseidon2::Poseidon2<
     WIDTH,
     GOLDILOCKS_S_BOX_DEGREE,
 >;
-
-/// Extract packed state into two raw u64 lane arrays.
-#[inline]
-fn unpack_lanes<const WIDTH: usize>(
-    state: &[PackedGoldilocksNeon; WIDTH],
-) -> ([u64; WIDTH], [u64; WIDTH]) {
-    let lane0: [u64; WIDTH] = core::array::from_fn(|i| state[i].0[0].value);
-    let lane1: [u64; WIDTH] = core::array::from_fn(|i| state[i].0[1].value);
-    (lane0, lane1)
-}
-
-/// Pack two raw u64 lane arrays back into packed state.
-#[inline]
-fn pack_lanes<const WIDTH: usize>(
-    state: &mut [PackedGoldilocksNeon; WIDTH],
-    lane0: &[u64; WIDTH],
-    lane1: &[u64; WIDTH],
-) {
-    for i in 0..WIDTH {
-        state[i] = PackedGoldilocksNeon([Goldilocks::new(lane0[i]), Goldilocks::new(lane1[i])]);
-    }
-}
 
 impl InternalLayer<PackedGoldilocksNeon, 8, GOLDILOCKS_S_BOX_DEGREE>
     for Poseidon2InternalLayerGoldilocksAsm
