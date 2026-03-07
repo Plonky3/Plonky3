@@ -170,14 +170,15 @@ impl AirBuilder for MockAirBuilder {
     type F = F;
     type Expr = F;
     type Var = F;
-    type M = RowMajorMatrix<F>;
+    type PreprocessedWindow = RowMajorMatrix<F>;
+    type MainWindow = RowMajorMatrix<F>;
     type PublicVar = F;
 
-    fn main(&self) -> Self::M {
+    fn main(&self) -> Self::MainWindow {
         self.window(&self.main)
     }
 
-    fn preprocessed(&self) -> &Self::M {
+    fn preprocessed(&self) -> &Self::PreprocessedWindow {
         &self.preprocessed
     }
 
