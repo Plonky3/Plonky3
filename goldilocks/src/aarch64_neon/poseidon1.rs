@@ -14,7 +14,6 @@ use super::poseidon1_asm::*;
 use super::poseidon2_asm::{sbox_layer_asm, sbox_layer_dual_asm};
 use super::utils::{pack_lanes, unpack_lanes};
 use crate::Goldilocks;
-use crate::poseidon::PoseidonGoldilocksGeneric;
 
 /// Fused Poseidon1 permutation for Goldilocks.
 ///
@@ -400,37 +399,32 @@ impl CryptographicPermutation<[PackedGoldilocksNeon; 12]> for Poseidon1Goldilock
 
 /// Dual-dispatch wrapper for Goldilocks Poseidon1.
 ///
-/// **Scalar** permutations delegate to the generic LLVM-optimized path
-/// with Karatsuba MDS (avoiding the regression from sequential inline ASM).
+/// **Scalar** permutations use the NEON-accelerated MDS for full rounds
+/// and LLVM-optimized sparse matrix decomposition for partial rounds.
+/// This avoids sequential inline ASM that would prevent LLVM's
+/// instruction scheduling optimizations on wide out-of-order cores.
 ///
-/// **Packed width-8** permutations delegate to the fused dual-lane ASM path
-/// with NEON-accelerated MDS for full rounds, achieving ~15% speedup per-perm.
-///
-/// **Packed width-12** permutations run two sequential permutations using
-/// the NEON MDS for full rounds and LLVM-optimized partial rounds, called
-/// via the public free functions from `p3_poseidon`.
+/// **Packed** permutations delegate to the fused dual-lane ASM path
+/// with NEON MDS for full rounds and sparse matrix for partial rounds
+/// (dual-lane interleaving hides multiply latency).
 #[derive(Clone, Debug)]
 pub struct Poseidon1GoldilocksDispatch<const WIDTH: usize> {
-    /// Karatsuba MDS scalar path — used for scalar permutations.
-    generic: PoseidonGoldilocksGeneric<WIDTH>,
-    /// Fused dual-lane path — used for w8 packed.
+    /// Fused dual-lane path — used for packed permutations.
     fused: Poseidon1GoldilocksFused<WIDTH>,
-    /// Pre-computed full round constants for NEON MDS packed path.
+    /// Pre-computed full round constants for NEON MDS.
     full_constants: FullRoundConstants<Goldilocks, WIDTH>,
-    /// Pre-computed partial round constants for LLVM-optimized packed path.
+    /// Pre-computed partial round constants (textbook path for scalar, sparse for packed).
     partial_constants: PartialRoundConstants<Goldilocks, WIDTH>,
 }
 
 impl<const WIDTH: usize> Poseidon1GoldilocksDispatch<WIDTH> {
-    /// Create from generic (Karatsuba), fused, and pre-computed constants.
+    /// Create from fused and pre-computed constants.
     pub fn new(
-        generic: PoseidonGoldilocksGeneric<WIDTH>,
         fused: Poseidon1GoldilocksFused<WIDTH>,
         full_constants: FullRoundConstants<Goldilocks, WIDTH>,
         partial_constants: PartialRoundConstants<Goldilocks, WIDTH>,
     ) -> Self {
         Self {
-            generic,
             fused,
             full_constants,
             partial_constants,
@@ -442,7 +436,10 @@ impl<const WIDTH: usize> Poseidon1GoldilocksDispatch<WIDTH> {
 
 impl Permutation<[Goldilocks; 8]> for Poseidon1GoldilocksDispatch<8> {
     fn permute_mut(&self, state: &mut [Goldilocks; 8]) {
-        self.generic.permute_mut(state);
+        let mds = MdsNeonGoldilocks;
+        full_round_initial_permute_state::<_, _, _, 8, 7>(state, &self.full_constants, &mds);
+        partial_permute_state::<_, _, 8, 7>(state, &self.partial_constants);
+        full_round_terminal_permute_state::<_, _, _, 8, 7>(state, &self.full_constants, &mds);
     }
 }
 
@@ -460,7 +457,10 @@ impl CryptographicPermutation<[PackedGoldilocksNeon; 8]> for Poseidon1Goldilocks
 
 impl Permutation<[Goldilocks; 12]> for Poseidon1GoldilocksDispatch<12> {
     fn permute_mut(&self, state: &mut [Goldilocks; 12]) {
-        self.generic.permute_mut(state);
+        let mds = MdsNeonGoldilocks;
+        full_round_initial_permute_state::<_, _, _, 12, 7>(state, &self.full_constants, &mds);
+        partial_permute_state::<_, _, 12, 7>(state, &self.partial_constants);
+        full_round_terminal_permute_state::<_, _, _, 12, 7>(state, &self.full_constants, &mds);
     }
 }
 
@@ -468,26 +468,24 @@ impl CryptographicPermutation<[Goldilocks; 12]> for Poseidon1GoldilocksDispatch<
 
 impl Permutation<[PackedGoldilocksNeon; 12]> for Poseidon1GoldilocksDispatch<12> {
     fn permute_mut(&self, state: &mut [PackedGoldilocksNeon; 12]) {
-        // Two sequential NEON-MDS permutations per lane, with phases
-        // interleaved so that constants stay cache-hot across both lanes.
-        let (mut lane0, mut lane1) = unpack_lanes(state);
-        let gl0 = unsafe { &mut *(&mut lane0 as *mut [u64; 12] as *mut [Goldilocks; 12]) };
-        let gl1 = unsafe { &mut *(&mut lane1 as *mut [u64; 12] as *mut [Goldilocks; 12]) };
+        // Extract both lanes, run the optimized scalar path on each, repack.
+        // Directly inline the scalar logic (NEON MDS full rounds + sparse partial
+        // rounds) to avoid trait-dispatch overhead and enable cross-call inlining.
+        let mut lane0: [Goldilocks; 12] = core::array::from_fn(|i| state[i].0[0]);
+        let mut lane1: [Goldilocks; 12] = core::array::from_fn(|i| state[i].0[1]);
+
         let mds = MdsNeonGoldilocks;
+        full_round_initial_permute_state::<_, _, _, 12, 7>(&mut lane0, &self.full_constants, &mds);
+        partial_permute_state::<_, _, 12, 7>(&mut lane0, &self.partial_constants);
+        full_round_terminal_permute_state::<_, _, _, 12, 7>(&mut lane0, &self.full_constants, &mds);
 
-        // Initial full rounds for both lanes (initial constants stay hot).
-        full_round_initial_permute_state::<_, _, _, 12, 7>(gl0, &self.full_constants, &mds);
-        full_round_initial_permute_state::<_, _, _, 12, 7>(gl1, &self.full_constants, &mds);
+        full_round_initial_permute_state::<_, _, _, 12, 7>(&mut lane1, &self.full_constants, &mds);
+        partial_permute_state::<_, _, 12, 7>(&mut lane1, &self.partial_constants);
+        full_round_terminal_permute_state::<_, _, _, 12, 7>(&mut lane1, &self.full_constants, &mds);
 
-        // Partial rounds for both lanes (partial constants stay hot).
-        partial_permute_state::<_, _, 12, 7>(gl0, &self.partial_constants);
-        partial_permute_state::<_, _, 12, 7>(gl1, &self.partial_constants);
-
-        // Terminal full rounds for both lanes (terminal constants stay hot).
-        full_round_terminal_permute_state::<_, _, _, 12, 7>(gl0, &self.full_constants, &mds);
-        full_round_terminal_permute_state::<_, _, _, 12, 7>(gl1, &self.full_constants, &mds);
-
-        pack_lanes(state, &lane0, &lane1);
+        for i in 0..12 {
+            state[i] = PackedGoldilocksNeon([lane0[i], lane1[i]]);
+        }
     }
 }
 

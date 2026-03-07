@@ -9,9 +9,9 @@
 //! # Platform Dispatch
 //!
 //! On **aarch64**, the type alias resolves to a dual-dispatch wrapper:
-//! scalar permutations delegate to the generic LLVM-optimized path
-//! (avoiding regression from sequential inline ASM), while packed NEON
-//! permutations delegate to the fused dual-lane ASM path.
+//! scalar permutations use NEON-accelerated MDS for full rounds with
+//! LLVM-optimized sparse partial rounds, while packed NEON permutations
+//! use the fused dual-lane ASM path (w8) or per-lane scalar path (w12).
 //!
 //! On **all other platforms**, it resolves to the generic Poseidon
 //! implementation with Karatsuba MDS convolution.
@@ -59,8 +59,8 @@ pub type PoseidonGoldilocksGeneric<const WIDTH: usize> = Poseidon<
 /// Unified Poseidon permutation for Goldilocks.
 ///
 /// On aarch64, resolves to a dual-dispatch wrapper: scalar permutations
-/// use the generic LLVM-optimized path, packed NEON permutations use the
-/// fused dual-lane ASM path.
+/// use NEON MDS for full rounds with sparse partial rounds, packed NEON
+/// permutations use fused dual-lane ASM (w8) or per-lane scalar (w12).
 ///
 /// On all other platforms, resolves to the generic implementation with
 /// Karatsuba MDS convolution.
@@ -838,10 +838,9 @@ pub fn default_goldilocks_poseidon_8() -> PoseidonGoldilocks<8> {
         mds_circ_col: MATRIX_CIRC_MDS_8_COL,
         round_constants: GOLDILOCKS_POSEIDON_RC_8.to_vec(),
     };
-    let generic = Poseidon::new(&constants);
     let (full, partial) = constants.to_optimized();
     let fused = crate::Poseidon1GoldilocksFused::new(full.clone(), partial.clone());
-    crate::Poseidon1GoldilocksDispatch::new(generic, fused, full, partial)
+    crate::Poseidon1GoldilocksDispatch::new(fused, full, partial)
 }
 
 /// Create the default width-8 Poseidon permutation for Goldilocks.
@@ -871,10 +870,9 @@ pub fn default_goldilocks_poseidon_12() -> PoseidonGoldilocks<12> {
         mds_circ_col: MATRIX_CIRC_MDS_12_COL,
         round_constants: GOLDILOCKS_POSEIDON_RC_12.to_vec(),
     };
-    let generic = Poseidon::new(&constants);
     let (full, partial) = constants.to_optimized();
     let fused = crate::Poseidon1GoldilocksFused::new(full.clone(), partial.clone());
-    crate::Poseidon1GoldilocksDispatch::new(generic, fused, full, partial)
+    crate::Poseidon1GoldilocksDispatch::new(fused, full, partial)
 }
 
 /// Create the default width-12 Poseidon permutation for Goldilocks.
