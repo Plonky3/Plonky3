@@ -12,13 +12,13 @@ pub enum BaseLeaf<F> {
     /// A reference to a trace column or public input.
     Variable(SymbolicVariable<F>),
 
-    /// Selector: 1 on the first row, 0 elsewhere.
+    /// Selector evaluating to a non-zero value only on the first row.
     IsFirstRow,
 
-    /// Selector: 1 on the last row, 0 elsewhere.
+    /// Selector evaluating to a non-zero value only on the last row.
     IsLastRow,
 
-    /// Selector: 1 on all rows except the last, 0 on the last row.
+    /// Selector evaluating to zero only on the last row.
     IsTransition,
 
     /// A constant field element.
