@@ -208,3 +208,22 @@ where
         (*self).sample_uniform_bits::<RESAMPLE>(bits)
     }
 }
+
+/// Extract a binding commitment to the full transcript state.
+///
+/// Consumes the challenger, producing a digest that commits to all
+/// previously observed values.
+///
+/// ## Contract
+///
+/// Implementations must satisfy the following properties:
+///
+/// - **Determinism**: identical sequences of observations and samples produce identical digests.
+/// - **Observation sensitivity**: different observed values produce different digests.
+pub trait CanFinalizeDigest {
+    /// The type of digest produced by finalization.
+    type Digest;
+
+    /// Finalize the transcript and produce a binding digest.
+    fn finalize(self) -> Self::Digest;
+}
