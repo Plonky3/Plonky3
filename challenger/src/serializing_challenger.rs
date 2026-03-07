@@ -8,7 +8,8 @@ use p3_util::log2_ceil_u64;
 use tracing::instrument;
 
 use crate::{
-    CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger, HashChallenger,
+    CanFinalizeDigest, CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger,
+    HashChallenger,
 };
 
 /// Given a challenger that can observe and sample bytes, produces a challenger that is able to
@@ -354,4 +355,26 @@ where
     F: PrimeField64,
     Inner: CanSample<u8> + CanObserve<u8> + Clone + Send + Sync,
 {
+}
+
+impl<F, Inner> CanFinalizeDigest for SerializingChallenger32<F, Inner>
+where
+    Inner: CanFinalizeDigest,
+{
+    type Digest = Inner::Digest;
+
+    fn finalize(self) -> Self::Digest {
+        self.inner.finalize()
+    }
+}
+
+impl<F, Inner> CanFinalizeDigest for SerializingChallenger64<F, Inner>
+where
+    Inner: CanFinalizeDigest,
+{
+    type Digest = Inner::Digest;
+
+    fn finalize(self) -> Self::Digest {
+        self.inner.finalize()
+    }
 }
