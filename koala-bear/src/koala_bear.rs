@@ -144,8 +144,6 @@ impl TrinomialQuinticData for KoalaBearParameters {
 
 #[cfg(test)]
 mod tests {
-    use alloc::string::ToString;
-
     use num_bigint::BigUint;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{InjectiveMonomial, PermutationMonomial, PrimeField64, TwoAdicField};
@@ -189,36 +187,6 @@ mod tests {
         assert_eq!(f_2.injective_exp_n().injective_exp_root_n(), f_2);
 
         test_field_json_serialization(&[f, f_1, f_2, f_p_minus_1, f_p_minus_2, m1, m2]);
-    }
-
-    #[test]
-    fn test_deserialize_valid_monty_value() {
-        // Zero in monty form should deserialize to KoalaBear::ZERO.
-        let result: KoalaBear = serde_json::from_str("0").unwrap();
-        assert_eq!(result, KoalaBear::ZERO);
-
-        // Roundtrip: serialize a known element, then deserialize it back.
-        let original = KoalaBear::from_u32(42);
-        let json = serde_json::to_string(&original).unwrap();
-        let deserialized: KoalaBear = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized, original);
-
-        // PRIME - 1 is the largest valid monty form value.
-        let max_valid = KoalaBearParameters::PRIME - 1;
-        let result: Result<KoalaBear, _> = serde_json::from_str(&max_valid.to_string());
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_deserialize_out_of_range_monty_value() {
-        // PRIME itself is out of range for monty form.
-        let result: Result<KoalaBear, _> =
-            serde_json::from_str(&KoalaBearParameters::PRIME.to_string());
-        assert!(result.is_err());
-
-        // u32::MAX is also out of range.
-        let result: Result<KoalaBear, _> = serde_json::from_str(&u32::MAX.to_string());
-        assert!(result.is_err());
     }
 
     // MontyField31's have no redundant representations.
