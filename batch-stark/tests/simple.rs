@@ -2313,3 +2313,58 @@ fn test_single_table_local_lookup() -> Result<(), impl Debug> {
 
     verify_batch(&config, &airs, &proof, &pvs, common)
 }
+
+#[test]
+fn test_invalid_permutation_opening_len_rejected() {
+    // Tampering with permutation_local length should return Err, not panic.
+    let config = make_config(9999);
+
+    let log_height = 4;
+    let height = 1 << log_height;
+    let mul_air = MulAir { reps: 2 };
+    let mul_air_lookups = MulAirLookups::new(mul_air, true, false, 0, vec![]);
+    let fib_air_lookups = FibAirLookups::new(
+        FibonacciAir {
+            log_height,
+            tamper_index: None,
+        },
+        false,
+        0,
+        None,
+    );
+
+    let mul_trace = mul_trace::<Val>(height, 2);
+    let fib_trace = fib_trace::<Val>(0, 1, 16);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(16))];
+
+    let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
+    let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups);
+    let mut airs = [air1, air2];
+
+    let prover_data = ProverData::<MyConfig>::from_airs_and_degrees(
+        &config,
+        &mut airs,
+        &[log_height, log_height],
+    );
+    let common = &prover_data.common;
+    let traces = [&mul_trace, &fib_trace];
+
+    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()], common);
+    let mut proof = prove_batch(&config, &instances, &prover_data);
+
+    // Find the instance with non-empty permutation openings and truncate it.
+    let inst = proof
+        .opened_values
+        .instances
+        .iter_mut()
+        .find(|i| !i.permutation_local.is_empty())
+        .expect("should have an instance with permutation openings");
+    inst.permutation_local.pop();
+
+    let pvs = vec![vec![], fib_pis];
+    let res = verify_batch(&config, &airs, &proof, &pvs, common);
+    assert!(
+        res.is_err(),
+        "Verifier should reject permutation opening with wrong length"
+    );
+}

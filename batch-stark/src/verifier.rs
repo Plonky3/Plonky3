@@ -454,18 +454,18 @@ where
             .map(|m| m + 1)
             .unwrap_or(0);
 
+        let ext_degree = Challenge::<SC>::DIMENSION;
+        let expected_perm_len = aux_width * ext_degree;
+        if opened_values.instances[i].permutation_local.len() != expected_perm_len
+            || opened_values.instances[i].permutation_next.len() != expected_perm_len
+        {
+            return Err(VerificationError::InvalidProofShape);
+        }
+
         let recompose = |flat: &[Challenge<SC>]| -> Vec<Challenge<SC>> {
             if aux_width == 0 {
                 return vec![];
             }
-            let ext_degree = Challenge::<SC>::DIMENSION;
-            assert!(
-                flat.len() == aux_width * ext_degree,
-                "flattened permutation opening length ({}) must equal aux_width ({}) * DIMENSION ({})",
-                flat.len(),
-                aux_width,
-                ext_degree
-            );
             // Chunk the flattened coefficients into groups of size `dim`.
             // Each chunk represents the coefficients of one extension field element.
             flat.chunks_exact(ext_degree)
