@@ -370,6 +370,58 @@ where
     }
 }
 
+/// Test JSON deserialization boundary behavior for 32-bit prime fields.
+///
+/// Most fields only accept values in `[0, ORDER_U32)`, while some fields (e.g. Mersenne31)
+/// have a redundant representation of zero and also accept `ORDER_U32`.
+pub fn test_prime_field_32_json_deserialization_boundaries<F>(accepts_order_repr: bool)
+where
+    F: PrimeField32 + Serialize + DeserializeOwned + Eq,
+{
+    let zero: F = serde_json::from_str("0").expect("Failed to deserialize zero");
+    assert_eq!(zero, F::ZERO, "Deserializing 0 should produce ZERO");
+
+    let original: F = serde_json::from_str("42").expect("Failed to deserialize test value");
+    let serialized = serde_json::to_string(&original).expect("Failed to serialize test value");
+    let deserialized: F =
+        serde_json::from_str(&serialized).expect("Failed to deserialize serialized test value");
+    assert_eq!(
+        deserialized, original,
+        "Round-trip serialization should preserve the value"
+    );
+
+    let max_valid = if accepts_order_repr {
+        F::ORDER_U32
+    } else {
+        F::ORDER_U32 - 1
+    };
+    let max_valid_json = serde_json::to_string(&max_valid).expect("Failed to encode max valid u32");
+    let max_valid_result: Result<F, _> = serde_json::from_str(&max_valid_json);
+    assert!(
+        max_valid_result.is_ok(),
+        "Expected max valid representation to deserialize successfully"
+    );
+
+    if let Some(first_invalid) = max_valid.checked_add(1) {
+        let first_invalid_json =
+            serde_json::to_string(&first_invalid).expect("Failed to encode first invalid value");
+        let first_invalid_result: Result<F, _> = serde_json::from_str(&first_invalid_json);
+        assert!(
+            first_invalid_result.is_err(),
+            "Expected first out-of-range representation to fail deserialization"
+        );
+    }
+
+    if max_valid != u32::MAX {
+        let max_u32_json = serde_json::to_string(&u32::MAX).expect("Failed to encode u32::MAX");
+        let max_u32_result: Result<F, _> = serde_json::from_str(&max_u32_json);
+        assert!(
+            max_u32_result.is_err(),
+            "Expected u32::MAX to fail deserialization"
+        );
+    }
+}
+
 pub fn test_dot_product<R: PrimeCharacteristicRing + Eq + Copy>(u: &[R; 64], v: &[R; 64]) {
     let mut dot = R::ZERO;
     assert_eq!(
@@ -1075,6 +1127,14 @@ macro_rules! test_prime_field_32 {
             #[test]
             fn test_raw_data_serializable() {
                 $crate::test_into_bytes_32::<$field>($zeros, $ones);
+            }
+
+            #[test]
+            fn test_json_deserialization_boundaries() {
+                let accepts_order_repr = $zeros.len() > 1;
+                $crate::test_prime_field_32_json_deserialization_boundaries::<$field>(
+                    accepts_order_repr,
+                );
             }
         }
     };
