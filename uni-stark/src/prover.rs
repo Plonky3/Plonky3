@@ -97,15 +97,15 @@ where
     //
     // When we convert to working with polynomials, the `X_i`'s and `Y_i`'s will be replaced by the
     // degree `N - 1` polynomials `T_i(x)` and `T_i(hx)` respectively. The selector polynomials are
-    //  a little more complicated however.
+    // a little more complicated, however.
     //
-    // In our our case, the selector polynomials are `S_1(x) = is_first_row`, `S_2(x) = is_last_row`
+    // In our case, the selector polynomials are `S_1(x) = is_first_row`, `S_2(x) = is_last_row`
     // and `S_3(x) = is_transition`. Both `S_1(x)` and `S_2(x)` are polynomials of degree `N - 1`
-    // as they must be non zero only at a single location in the initial domain. However, `is_transition`
-    // is a polynomial of degree `1` as it simply need to be `0` on the last row.
+    // as they must be non-zero only at a single location in the initial domain. However,
+    // `is_transition` is a polynomial of degree `1` as it simply needs to be `0` on the last row.
     //
     // The constraint degree (`deg(C)`) is the linear factor of `N` in the constraint polynomial. In other
-    // words, it is roughly the total degree of `C` however, we treat `Z_3` as a constant term which does
+    // words, it is roughly the total degree of `C`; however, we treat `Z_3` as a constant term which does
     // not contribute to the degree.
     //
     // E.g. `C_j = Z_1 * (X_1^3 - X_2 * X_3 * X_4)` would have degree `4`.
