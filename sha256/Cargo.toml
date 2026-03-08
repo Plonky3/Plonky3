@@ -20,9 +20,7 @@ hex-literal.workspace = true
 
 [features]
 default = []
-# Enable either x86 or aarch assembly implementation based on target.
 asm = ["sha2/asm"]
-# Force software implementation (default if "asm" feature is not enabled).
 force-soft = ["sha2/force-soft"]
 
 [lints]
