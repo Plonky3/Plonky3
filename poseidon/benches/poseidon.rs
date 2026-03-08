@@ -1,7 +1,8 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, MdsMatrixBabyBear, PoseidonBabyBear};
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_goldilocks::{Goldilocks, MdsMatrixGoldilocks};
+use p3_goldilocks::Goldilocks;
+use p3_goldilocks::poseidon::{default_goldilocks_poseidon_8, default_goldilocks_poseidon_12};
 use p3_koala_bear::{KoalaBear, MdsMatrixKoalaBear, PoseidonKoalaBear};
 use p3_mersenne_31::{MdsMatrixMersenne31, Mersenne31};
 use p3_poseidon::{Poseidon, PoseidonExternalLayerGeneric, PoseidonInternalLayerGeneric};
@@ -45,18 +46,15 @@ fn bench_poseidon(c: &mut Criterion) {
     poseidon_scalar::<KoalaBear, _, 24>(c, &poseidon_kb_24);
     poseidon_packed::<KoalaBear, _, 24>(c, &poseidon_kb_24);
 
-    // Goldilocks: generic implementation with random constants.
-    let gl_8: PoseidonGeneric<Goldilocks, MdsMatrixGoldilocks, 8, 7> =
-        Poseidon::new_from_rng(4, 22, &MdsMatrixGoldilocks, &mut rng);
+    // Goldilocks width 8.
+    let gl_8 = default_goldilocks_poseidon_8();
     poseidon_scalar::<Goldilocks, _, 8>(c, &gl_8);
+    poseidon_packed::<Goldilocks, _, 8>(c, &gl_8);
 
-    let gl_12: PoseidonGeneric<Goldilocks, MdsMatrixGoldilocks, 12, 7> =
-        Poseidon::new_from_rng(4, 22, &MdsMatrixGoldilocks, &mut rng);
+    // Goldilocks width 12.
+    let gl_12 = default_goldilocks_poseidon_12();
     poseidon_scalar::<Goldilocks, _, 12>(c, &gl_12);
-
-    let gl_16: PoseidonGeneric<Goldilocks, MdsMatrixGoldilocks, 16, 7> =
-        Poseidon::new_from_rng(4, 22, &MdsMatrixGoldilocks, &mut rng);
-    poseidon_scalar::<Goldilocks, _, 16>(c, &gl_16);
+    poseidon_packed::<Goldilocks, _, 12>(c, &gl_12);
 
     // Mersenne31: generic implementation with random constants.
     let m31_16: PoseidonGeneric<Mersenne31, MdsMatrixMersenne31, 16, 5> =
