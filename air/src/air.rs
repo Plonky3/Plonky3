@@ -43,7 +43,7 @@ pub trait WindowAccess<T> {
 /// Stores two `&[T]` slices — one for the current row and one for
 /// the next — without carrying any matrix metadata.  This is cheaper
 /// than a full `ViewPair` and is the concrete type used by most
-/// [`AirBuilder`] implementations for `type M`.
+/// [`AirBuilder`] implementations for `type MainWindow` / `type PreprocessedWindow`.
 #[derive(Debug, Clone, Copy)]
 pub struct RowWindow<'a, T> {
     /// The current row.
@@ -260,33 +260,35 @@ pub trait AirBuilder: Sized {
         + Mul<Self::Var, Output = Self::Expr>
         + Mul<Self::Expr, Output = Self::Expr>;
 
+    /// Two-row window over the preprocessed trace columns.
+    type PreprocessedWindow: WindowAccess<Self::Var> + Clone;
+
     /// Two-row window over the main trace columns.
-    type M: WindowAccess<Self::Var> + Clone;
+    type MainWindow: WindowAccess<Self::Var> + Clone;
 
     /// Variable type for public values.
     type PublicVar: Into<Self::Expr> + Copy;
 
     /// Return the current and next row slices of the main (primary) trace.
-    fn main(&self) -> Self::M;
+    fn main(&self) -> Self::MainWindow;
 
     /// Return the preprocessed registers as a two-row window.
     ///
     /// When no preprocessed columns exist, this returns a zero-width window.
-    fn preprocessed(&self) -> &Self::M;
+    fn preprocessed(&self) -> &Self::PreprocessedWindow;
 
-    /// Expression evaluating to 1 on the first row, 0 elsewhere.
+    /// Expression evaluating to a non-zero value only on the first row.
     fn is_first_row(&self) -> Self::Expr;
 
-    /// Expression evaluating to 1 on the last row, 0 elsewhere.
+    /// Expression evaluating to a non-zero value only on the last row.
     fn is_last_row(&self) -> Self::Expr;
 
-    /// Expression evaluating to 1 on all transition rows (not last row), 0 on last row.
+    /// Expression evaluating to zero only on the last row.
     fn is_transition(&self) -> Self::Expr {
         self.is_transition_window(2)
     }
 
-    /// Expression evaluating to 1 on all rows where a window of `size` consecutive
-    /// rows is available, 0 elsewhere.
+    /// Expression evaluating to zero only on the last `size - 1` rows.
     ///
     /// # Panics
     ///
@@ -485,19 +487,16 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
     type F = AB::F;
     type Expr = AB::Expr;
     type Var = AB::Var;
-    type M = AB::M;
+    type PreprocessedWindow = AB::PreprocessedWindow;
+    type MainWindow = AB::MainWindow;
     type PublicVar = AB::PublicVar;
 
-    fn main(&self) -> Self::M {
+    fn main(&self) -> Self::MainWindow {
         self.inner.main()
     }
 
-    fn preprocessed(&self) -> &Self::M {
+    fn preprocessed(&self) -> &Self::PreprocessedWindow {
         self.inner.preprocessed()
-    }
-
-    fn public_values(&self) -> &[Self::PublicVar] {
-        self.inner.public_values()
     }
 
     fn is_first_row(&self) -> Self::Expr {
@@ -518,6 +517,10 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         self.inner.assert_zero(self.condition() * x.into());
+    }
+
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.inner.public_values()
     }
 }
 

@@ -278,7 +278,12 @@ impl_mul_base_field!(
 impl_div_methods!(PackedMontyField31Neon, MontyField31, (FieldParameters, FP));
 impl_sum_prod_base_field!(PackedMontyField31Neon, MontyField31, (FieldParameters, FP));
 
-impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31Neon<FP> {}
+impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31Neon<FP> {
+    #[inline(always)]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[MontyField31<FP>; N]) -> Self {
+        general_dot_product::<_, _, _, N>(a, f)
+    }
+}
 
 impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> InjectiveMonomial<D>
     for PackedMontyField31Neon<FP>

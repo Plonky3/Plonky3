@@ -171,19 +171,16 @@ where
     type F = F;
     type Expr = F;
     type Var = F;
-    type M = RowWindow<'a, F>;
+    type PreprocessedWindow = RowWindow<'a, F>;
+    type MainWindow = RowWindow<'a, F>;
     type PublicVar = F;
 
-    fn main(&self) -> Self::M {
+    fn main(&self) -> Self::MainWindow {
         RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
     }
 
-    fn preprocessed(&self) -> &Self::M {
+    fn preprocessed(&self) -> &Self::PreprocessedWindow {
         &self.preprocessed
-    }
-
-    fn public_values(&self) -> &[Self::PublicVar] {
-        self.public_values
     }
 
     fn is_first_row(&self) -> Self::Expr {
@@ -212,6 +209,10 @@ where
             });
         }
         self.constraint_index += 1;
+    }
+
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.public_values
     }
 }
 
