@@ -114,6 +114,16 @@ pub trait BaseAir<F>: Sync {
         None
     }
 
+    /// Return the number of periodic columns.
+    fn num_periodic_columns(&self) -> usize {
+        self.periodic_columns().len()
+    }
+
+    /// Return the periodic table data.
+    fn periodic_columns(&self) -> &[Vec<F>] {
+        &[]
+    }
+
     /// Which main trace columns have their next row accessed by this AIR's
     /// constraints.
     ///

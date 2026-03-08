@@ -644,6 +644,7 @@ where
         main,
         preprocessed,
         preprocessed_window,
+        periodic_values: &[],
         public_values,
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,
