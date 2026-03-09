@@ -1,0 +1,44 @@
+[package]
+name = "p3-poseidon1-air"
+description = "An AIR implementation of the Poseidon1 cryptographic hash function for use in zero-knowledge proof systems."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+p3-air.workspace = true
+p3-field.workspace = true
+p3-matrix.workspace = true
+p3-maybe-rayon.workspace = true
+p3-poseidon1.workspace = true
+
+rand.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+p3-baby-bear = { path = "../baby-bear" }
+p3-challenger = { path = "../challenger" }
+p3-commit = { path = "../commit" }
+p3-dft = { path = "../dft" }
+p3-fri = { path = "../fri" }
+p3-keccak = { path = "../keccak" }
+p3-merkle-tree = { path = "../merkle-tree" }
+p3-monty-31 = { path = "../monty-31" }
+p3-symmetric = { path = "../symmetric" }
+p3-uni-stark = { path = "../uni-stark" }
+
+tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
+tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
+
+[target.'cfg(target_family = "unix")'.dev-dependencies]
+tikv-jemallocator = "0.6"
+
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
+[lints]
+workspace = true
