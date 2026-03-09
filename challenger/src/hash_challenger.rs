@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 
 use p3_symmetric::CryptographicHasher;
 
-use crate::{CanObserve, CanSample};
+use crate::{CanFinalizeDigest, CanObserve, CanSample};
 
 /// A generic challenger that uses a cryptographic hash function to generate challenges.
 #[derive(Clone, Debug)]
@@ -84,6 +84,25 @@ where
         self.output_buffer
             .pop()
             .expect("Output buffer should be non-empty")
+    }
+}
+
+impl<T, H, const OUT_LEN: usize> CanFinalizeDigest for HashChallenger<T, H, OUT_LEN>
+where
+    T: Clone,
+    H: CryptographicHasher<T, [T; OUT_LEN]>,
+{
+    type Digest = [T; OUT_LEN];
+
+    fn finalize(mut self) -> [T; OUT_LEN] {
+        // Unconditionally flush: hash the input buffer and produce the
+        // digest from the resulting output.
+        //
+        // Note: unlike sponge-based challengers, observe never auto-flushes
+        // here, so the first sample always changes the chaining values and
+        // thus the digest.
+        self.flush();
+        core::array::from_fn(|i| self.output_buffer[i].clone())
     }
 }
 
@@ -318,6 +337,61 @@ mod tests {
 
         // Check that the output buffer is now one element shorter
         assert_eq!(hash_challenger.output_buffer, vec![F::from_u8(42)]);
+    }
+
+    #[test]
+    fn test_finalize() {
+        let new_chal = || HashChallenger::new(vec![F::from_u8(1), F::from_u8(2)], TestHasher {});
+
+        // Deterministic: same observations produce same digest.
+        let mut h1 = new_chal();
+        let mut h2 = new_chal();
+        h1.observe(F::from_u8(42));
+        h2.observe(F::from_u8(42));
+        assert_eq!(h1.finalize(), h2.finalize());
+
+        // Different observations produce different digests.
+        let mut h1 = new_chal();
+        let mut h2 = new_chal();
+        h1.observe(F::from_u8(1));
+        h2.observe(F::from_u8(2));
+        assert_ne!(h1.finalize(), h2.finalize());
+    }
+
+    /// Document how sampling interacts with finalize.
+    ///
+    /// Sampling pops from the output buffer. When the buffer is exhausted,
+    /// the next sample triggers a flush (hash), which changes the chaining
+    /// values in the input buffer. Finalize always flushes, so the digest
+    /// changes whenever a sample triggered a flush — i.e. every OUT_LEN
+    /// samples.
+    #[test]
+    fn test_finalize_sample_interaction() {
+        let digest = |n_samples: usize| {
+            let mut c = HashChallenger::new(vec![F::from_u8(1), F::from_u8(2)], TestHasher {});
+            c.observe(F::from_u8(42));
+            for _ in 0..n_samples {
+                let _: F = c.sample();
+            }
+            c.finalize()
+        };
+
+        // The first sample triggers a flush (output buffer was empty after
+        // observe), changing the chaining values. Finalize's flush then
+        // hashes different input than the 0-sample case.
+        assert_ne!(digest(0), digest(1));
+
+        // Samples 1 through OUT_LEN come from the same flush output.
+        // They don't trigger another flush, so the chaining values
+        // (and thus the digest) are identical.
+        assert_eq!(digest(1), digest(OUT_LEN));
+
+        // The (OUT_LEN+1)-th sample exhausts the output buffer and
+        // triggers a fresh flush, changing the chaining values again.
+        assert_ne!(digest(OUT_LEN), digest(OUT_LEN + 1));
+
+        // Within the second batch, the digest is again stable.
+        assert_eq!(digest(OUT_LEN + 1), digest(2 * OUT_LEN));
     }
 
     #[test]
