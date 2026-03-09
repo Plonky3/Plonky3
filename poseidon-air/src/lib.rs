@@ -235,6 +235,7 @@ mod tests {
             [u64; p3_keccak::VECTOR_LEN],
             _,
             _,
+            2,
             4,
         >::new(field_hash, compress, 3);
 
