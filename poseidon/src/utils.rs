@@ -379,7 +379,7 @@ fn equivalent_round_constants<F: Field, const N: usize>(
 /// - `scalar_constants` has RP entries, one per partial round (added to `state[0]`
 ///   before the S-box).
 /// - `residual` is a WIDTH-vector added to the state after all partial rounds complete.
-pub(crate) fn forward_constant_substitution<F: Field, const N: usize>(
+pub fn forward_constant_substitution<F: Field, const N: usize>(
     mds: &[[F; N]; N],
     partial_rc: &[[F; N]],
 ) -> (Vec<F>, [F; N]) {
