@@ -35,11 +35,10 @@ pub type Poseidon2Goldilocks<const WIDTH: usize> = Poseidon2<
     GOLDILOCKS_S_BOX_DEGREE,
 >;
 
-/// A recreating of the Poseidon2 implementation by Horizen Labs for the Goldilocks field.
+/// An alternative Poseidon2 implementation for the Goldilocks field using the HL external matrix.
 ///
-/// It acts on arrays of the form `[Goldilocks; WIDTH]`
-/// The original implementation can be found here: https://github.com/HorizenLabs/poseidon2.
-/// This implementation is slightly slower than `Poseidon2Goldilocks` as is uses a slower matrix
+/// It acts on arrays of the form `[Goldilocks; WIDTH]`.
+/// This implementation is slightly slower than `Poseidon2Goldilocks` as it uses a slower matrix
 /// for the external rounds.
 pub type Poseidon2GoldilocksHL<const WIDTH: usize> = Poseidon2<
     Goldilocks,
@@ -460,7 +459,7 @@ impl GenericPoseidon2LinearLayers<20> for GenericPoseidon2LinearLayersGoldilocks
     }
 }
 
-/// The external layers of the Poseidon2 permutation used by Horizen Labs.
+/// The external layers of the Poseidon2 permutation using the HL external matrix.
 #[derive(Clone)]
 pub struct Poseidon2ExternalLayerGoldilocksHL<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Goldilocks, WIDTH>,
@@ -621,8 +620,7 @@ mod tests {
 
     type F = Goldilocks;
 
-    // A function which recreates the poseidon2 implementation in
-    // https://github.com/HorizenLabs/poseidon2
+    // A function which recreates the HL Poseidon2 implementation for Goldilocks width 8.
     fn hl_poseidon2_goldilocks_width_8(input: &mut [F; 8]) {
         const WIDTH: usize = 8;
 
