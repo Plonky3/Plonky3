@@ -839,7 +839,7 @@ pub fn default_goldilocks_poseidon_8() -> PoseidonGoldilocks<8> {
         round_constants: GOLDILOCKS_POSEIDON_RC_8.to_vec(),
     };
     let (full, partial) = constants.to_optimized();
-    let fused = crate::Poseidon1GoldilocksFused::new(full.clone(), partial.clone());
+    let fused = crate::Poseidon1GoldilocksFused::new(&full, &partial);
     crate::Poseidon1GoldilocksDispatch::new(fused, full, partial)
 }
 
@@ -871,7 +871,7 @@ pub fn default_goldilocks_poseidon_12() -> PoseidonGoldilocks<12> {
         round_constants: GOLDILOCKS_POSEIDON_RC_12.to_vec(),
     };
     let (full, partial) = constants.to_optimized();
-    let fused = crate::Poseidon1GoldilocksFused::new(full.clone(), partial.clone());
+    let fused = crate::Poseidon1GoldilocksFused::new(&full, &partial);
     crate::Poseidon1GoldilocksDispatch::new(fused, full, partial)
 }
 

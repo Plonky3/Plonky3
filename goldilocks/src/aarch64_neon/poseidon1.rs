@@ -46,8 +46,8 @@ impl<const WIDTH: usize> Poseidon1GoldilocksFused<WIDTH> {
     /// Extracts the raw `u64` representation from each Goldilocks field
     /// element, building the flat arrays that the ASM kernels consume.
     pub fn new(
-        full: FullRoundConstants<Goldilocks, WIDTH>,
-        partial: PartialRoundConstants<Goldilocks, WIDTH>,
+        full: &FullRoundConstants<Goldilocks, WIDTH>,
+        partial: &PartialRoundConstants<Goldilocks, WIDTH>,
     ) -> Self {
         // Extract raw u64 values from full-round constant matrices.
         let initial_constants_raw = full
@@ -419,7 +419,7 @@ pub struct Poseidon1GoldilocksDispatch<const WIDTH: usize> {
 
 impl<const WIDTH: usize> Poseidon1GoldilocksDispatch<WIDTH> {
     /// Create from fused and pre-computed constants.
-    pub fn new(
+    pub const fn new(
         fused: Poseidon1GoldilocksFused<WIDTH>,
         full_constants: FullRoundConstants<Goldilocks, WIDTH>,
         partial_constants: PartialRoundConstants<Goldilocks, WIDTH>,
@@ -517,7 +517,7 @@ mod tests {
             round_constants: GOLDILOCKS_POSEIDON_RC_8.to_vec(),
         };
         let (full, partial) = raw.to_optimized();
-        Poseidon1GoldilocksFused::new(full, partial)
+        Poseidon1GoldilocksFused::new(&full, &partial)
     }
 
     /// Build a width-12 fused permutation from the fixed round constants.
@@ -529,7 +529,7 @@ mod tests {
             round_constants: GOLDILOCKS_POSEIDON_RC_12.to_vec(),
         };
         let (full, partial) = raw.to_optimized();
-        Poseidon1GoldilocksFused::new(full, partial)
+        Poseidon1GoldilocksFused::new(&full, &partial)
     }
 
     /// Verify that the fused width-8 implementation matches the generic one
