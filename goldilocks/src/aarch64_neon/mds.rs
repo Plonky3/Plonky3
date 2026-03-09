@@ -191,12 +191,12 @@ pub unsafe fn mds_neon_w12(state: &[u64; 12]) -> [u64; 12] {
     }
 }
 
-/// NEON-accelerated MDS wrapper for use with the generic Poseidon.
+/// NEON-accelerated MDS wrapper for use with the generic Poseidon1.
 ///
 /// Zero-sized type that implements `Permutation<[Goldilocks; 8]>` and
 /// `Permutation<[Goldilocks; 12]>` using the NEON chunk technique. Plugs
-/// into `PoseidonExternalLayerGeneric` to accelerate full-round MDS while
-/// keeping LLVM-optimized partial rounds from the generic Poseidon.
+/// into `Poseidon1ExternalLayerGeneric` to accelerate full-round MDS while
+/// keeping LLVM-optimized partial rounds from the generic Poseidon1.
 #[derive(Clone, Debug, Default)]
 pub struct MdsNeonGoldilocks;
 

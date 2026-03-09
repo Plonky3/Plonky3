@@ -109,7 +109,11 @@ name = "p3-multilinear-util"
 version_group = "plonky3"
 
 [[package]]
-name = "p3-poseidon"
+name = "p3-poseidon1"
+version_group = "plonky3"
+
+[[package]]
+name = "p3-poseidon1-air"
 version_group = "plonky3"
 
 [[package]]

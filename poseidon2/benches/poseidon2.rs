@@ -10,7 +10,7 @@ use p3_util::pretty_name;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
-fn bench_poseidon2(c: &mut Criterion) {
+fn bench_poseidon12(c: &mut Criterion) {
     let mut rng = SmallRng::seed_from_u64(1);
 
     let poseidon2_bb_16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
@@ -51,5 +51,5 @@ where
     c.bench_with_input(id, &input, |b, &input| b.iter(|| poseidon2.permute(input)));
 }
 
-criterion_group!(benches, bench_poseidon2);
+criterion_group!(benches, bench_poseidon12);
 criterion_main!(benches);

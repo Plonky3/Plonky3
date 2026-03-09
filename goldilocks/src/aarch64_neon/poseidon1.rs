@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use p3_poseidon::{
+use p3_poseidon1::{
     FullRoundConstants, PartialRoundConstants, full_round_initial_permute_state,
     full_round_terminal_permute_state, partial_permute_state,
 };
@@ -494,27 +494,27 @@ impl CryptographicPermutation<[PackedGoldilocksNeon; 12]> for Poseidon1Goldilock
 #[cfg(test)]
 mod tests {
     use p3_field::{PrimeCharacteristicRing, PrimeField64};
-    use p3_poseidon::PoseidonConstants;
+    use p3_poseidon1::Poseidon1Constants;
     use p3_symmetric::Permutation;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use super::*;
     use crate::mds::{MATRIX_CIRC_MDS_8_COL, MATRIX_CIRC_MDS_12_COL};
-    use crate::poseidon::{
-        GOLDILOCKS_POSEIDON_RC_8, GOLDILOCKS_POSEIDON_RC_12, default_goldilocks_poseidon_8,
-        default_goldilocks_poseidon_12,
+    use crate::poseidon1::{
+        GOLDILOCKS_POSEIDON1_RC_8, GOLDILOCKS_POSEIDON1_RC_12, default_goldilocks_poseidon1_8,
+        default_goldilocks_poseidon1_12,
     };
 
     type F = Goldilocks;
 
     /// Build a width-8 fused permutation from the fixed round constants.
     fn make_fused_w8() -> Poseidon1GoldilocksFused<8> {
-        let raw = PoseidonConstants {
+        let raw = Poseidon1Constants {
             rounds_f: 8,
             rounds_p: 22,
             mds_circ_col: MATRIX_CIRC_MDS_8_COL,
-            round_constants: GOLDILOCKS_POSEIDON_RC_8.to_vec(),
+            round_constants: GOLDILOCKS_POSEIDON1_RC_8.to_vec(),
         };
         let (full, partial) = raw.to_optimized();
         Poseidon1GoldilocksFused::new(&full, &partial)
@@ -522,11 +522,11 @@ mod tests {
 
     /// Build a width-12 fused permutation from the fixed round constants.
     fn make_fused_w12() -> Poseidon1GoldilocksFused<12> {
-        let raw = PoseidonConstants {
+        let raw = Poseidon1Constants {
             rounds_f: 8,
             rounds_p: 22,
             mds_circ_col: MATRIX_CIRC_MDS_12_COL,
-            round_constants: GOLDILOCKS_POSEIDON_RC_12.to_vec(),
+            round_constants: GOLDILOCKS_POSEIDON1_RC_12.to_vec(),
         };
         let (full, partial) = raw.to_optimized();
         Poseidon1GoldilocksFused::new(&full, &partial)
@@ -536,7 +536,7 @@ mod tests {
     /// on both zero and random inputs.
     #[test]
     fn test_fused_matches_generic_w8() {
-        let generic = default_goldilocks_poseidon_8();
+        let generic = default_goldilocks_poseidon1_8();
         let fused = make_fused_w8();
         let mut rng = SmallRng::seed_from_u64(42);
 
@@ -570,7 +570,7 @@ mod tests {
     /// Same fused-vs-generic verification for width 12.
     #[test]
     fn test_fused_matches_generic_w12() {
-        let generic = default_goldilocks_poseidon_12();
+        let generic = default_goldilocks_poseidon1_12();
         let fused = make_fused_w12();
         let mut rng = SmallRng::seed_from_u64(42);
 

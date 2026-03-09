@@ -75,7 +75,7 @@ fn main() {
             trace_height
         }
         ProofOptions::Poseidon2Permutations => {
-            println!("Proving 2^{} native Poseidon-2 permutations", {
+            println!("Proving 2^{} native Poseidon2 permutations", {
                 args.log_trace_length + P2_LOG_VECTOR_LEN
             });
             trace_height << P2_LOG_VECTOR_LEN
