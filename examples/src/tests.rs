@@ -2,10 +2,7 @@
 
 use std::fmt::Debug;
 
-use p3_baby_bear::{
-    BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16,
-    BABYBEAR_S_BOX_DEGREE, BabyBear, GenericPoseidon2LinearLayersBabyBear, Poseidon2BabyBear,
-};
+use p3_baby_bear::{BabyBear, GenericPoseidon2LinearLayersBabyBear, Poseidon2BabyBear};
 use p3_blake3_air::Blake3Air;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
@@ -123,9 +120,12 @@ fn test_end_to_end_babybear_vectorized_poseidon2_hashes_recursive_dft_poseidon2_
     type EF = BinomialExtensionField<BabyBear, 4>;
 
     let constants = RoundConstants::from_rng(&mut rng);
-    const SBOX_DEGREE: u64 = BABYBEAR_S_BOX_DEGREE;
-    const SBOX_REGISTERS: usize = 1;
-    const PARTIAL_ROUNDS: usize = BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16;
+    // The AIR uses KoalaBear's S-box degree (3) for simpler constraint testing,
+    // not BabyBear's cryptographic degree (7). This is intentional: the AIR test
+    // validates the proof system, not the hash function's security parameters.
+    const SBOX_DEGREE: u64 = KOALABEAR_S_BOX_DEGREE;
+    const SBOX_REGISTERS: usize = 0;
+    const PARTIAL_ROUNDS: usize = KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16;
 
     let proof_goal: Poseidon2Air<
         BabyBear,
@@ -133,7 +133,7 @@ fn test_end_to_end_babybear_vectorized_poseidon2_hashes_recursive_dft_poseidon2_
         P2_WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
-        { BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS },
+        { KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS },
         PARTIAL_ROUNDS,
     > = Poseidon2Air::new(constants);
 
@@ -154,9 +154,10 @@ fn test_end_to_end_babybear_poseidon2_hashes_parallel_dft_poseidon2_merkle_tree(
     type EF = BinomialExtensionField<BabyBear, 4>;
 
     let constants = RoundConstants::from_rng(&mut rng);
-    const SBOX_DEGREE: u64 = BABYBEAR_S_BOX_DEGREE;
-    const SBOX_REGISTERS: usize = 1;
-    const PARTIAL_ROUNDS: usize = BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16;
+    // See comment in the test above: uses KoalaBear's S-box parameters for AIR testing.
+    const SBOX_DEGREE: u64 = KOALABEAR_S_BOX_DEGREE;
+    const SBOX_REGISTERS: usize = 0;
+    const PARTIAL_ROUNDS: usize = KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16;
 
     let proof_goal: Poseidon2Air<
         BabyBear,
@@ -164,7 +165,7 @@ fn test_end_to_end_babybear_poseidon2_hashes_parallel_dft_poseidon2_merkle_tree(
         P2_WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
-        { BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS },
+        { KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS },
         PARTIAL_ROUNDS,
     > = Poseidon2Air::new(constants);
 

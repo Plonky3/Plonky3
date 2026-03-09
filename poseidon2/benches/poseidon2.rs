@@ -1,8 +1,6 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_bn254::{
-    BN254_POSEIDON2_HALF_FULL_ROUNDS, BN254_POSEIDON2_PARTIAL_ROUNDS_3, Bn254, Poseidon2Bn254,
-};
+use p3_bn254::{Bn254, Poseidon2Bn254};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_goldilocks::{Goldilocks, Poseidon2Goldilocks};
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
@@ -37,11 +35,7 @@ fn bench_poseidon2(c: &mut Criterion) {
     let poseidon2_gold_16 = Poseidon2Goldilocks::<16>::new_from_rng_128(&mut rng);
     poseidon2::<Goldilocks, Poseidon2Goldilocks<16>, 16>(c, &poseidon2_gold_16);
 
-    let poseidon2_bn254 = Poseidon2Bn254::<3>::new_from_rng(
-        BN254_POSEIDON2_HALF_FULL_ROUNDS,
-        BN254_POSEIDON2_PARTIAL_ROUNDS_3,
-        &mut rng,
-    );
+    let poseidon2_bn254 = Poseidon2Bn254::<3>::new_from_rng(8, 22, &mut rng);
     poseidon2::<Bn254, Poseidon2Bn254<3>, 3>(c, &poseidon2_bn254);
 }
 

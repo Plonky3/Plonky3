@@ -19,17 +19,6 @@ use crate::Bn254;
 /// satisfying `gcd(α, p - 1) = 1` is 5.
 pub const BN254_S_BOX_DEGREE: u64 = 5;
 
-/// Number of full rounds per half for BN254 Poseidon2 (`RF / 2`).
-///
-/// The total number of full rounds is `RF = 16` (8 beginning + 8 ending).
-/// This follows the Horizen Labs reference implementation for BN254.
-pub const BN254_POSEIDON2_HALF_FULL_ROUNDS: usize = 8;
-
-/// Number of partial rounds for BN254 Poseidon2 (width 3).
-///
-/// Follows the Horizen Labs reference implementation for BN254.
-pub const BN254_POSEIDON2_PARTIAL_ROUNDS_3: usize = 22;
-
 /// An implementation of the Poseidon2 hash function for the Bn254Fr field.
 ///
 /// It acts on arrays of the form `[Bn254Fr; WIDTH]`.
