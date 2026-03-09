@@ -13,10 +13,22 @@ use p3_poseidon2::{
 
 use crate::Bn254;
 
-/// Degree of the chosen permutation polynomial for BN254, used as the Poseidon2 S-Box.
+/// S-box degree for BN254 Poseidon2.
 ///
-/// As p - 1 is divisible by 2 and 3 the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
-const BN254_S_BOX_DEGREE: u64 = 5;
+/// Since `p - 1` is divisible by 2 and 3, the smallest valid exponent
+/// satisfying `gcd(α, p - 1) = 1` is 5.
+pub const BN254_S_BOX_DEGREE: u64 = 5;
+
+/// Number of full rounds per half for BN254 Poseidon2 (`RF / 2`).
+///
+/// The total number of full rounds is `RF = 16` (8 beginning + 8 ending).
+/// This follows the Horizen Labs reference implementation for BN254.
+pub const BN254_POSEIDON2_HALF_FULL_ROUNDS: usize = 8;
+
+/// Number of partial rounds for BN254 Poseidon2 (width 3).
+///
+/// Follows the Horizen Labs reference implementation for BN254.
+pub const BN254_POSEIDON2_PARTIAL_ROUNDS_3: usize = 22;
 
 /// An implementation of the Poseidon2 hash function for the Bn254Fr field.
 ///

@@ -24,12 +24,39 @@ use crate::{
     Mersenne31, Poseidon2ExternalLayerMersenne31, Poseidon2InternalLayerMersenne31, from_u62,
 };
 
-/// Degree of the chosen permutation polynomial for Mersenne31, used as the Poseidon2 S-Box.
+/// S-box degree for Mersenne31 Poseidon2.
 ///
-/// As p - 1 = 2×3^2×7×11×... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
-/// Currently pub(crate) as it is used in the default neon implementation. Once that is optimized
-/// this should no longer be public.
-pub(crate) const MERSENNE31_S_BOX_DEGREE: u64 = 5;
+/// Since `p - 1 = 2 × 3^2 × 7 × 11 × 31 × 151 × 331`, both 3 and 4 share factors
+/// with `p - 1`. The smallest valid exponent satisfying `gcd(α, p - 1) = 1` is 5.
+pub const MERSENNE31_S_BOX_DEGREE: u64 = 5;
+
+/// Number of full rounds per half for Mersenne31 Poseidon2 (`RF / 2`).
+///
+/// The total number of full rounds is `RF = 8` (4 beginning + 4 ending).
+/// Follows the Poseidon2 paper's security analysis with a +2 RF margin.
+pub const MERSENNE31_POSEIDON2_HALF_FULL_ROUNDS: usize = 4;
+
+/// Number of partial rounds for Mersenne31 Poseidon2 (width 16).
+///
+/// Derived from the Gröbner basis bound in the Poseidon2 paper (Eq. 1, R_GB term 3):
+///
+///   R_GB ≥ t − 7 + log_α(2) · min{κ/(t+1), log_2(p)/2}
+///        = 9 + 0.4307 · min{7.53, 15.5} = 12.243
+///
+/// With the +7.5% security margin: ⌈1.075 × 12.243⌉ = 14.
+pub const MERSENNE31_POSEIDON2_PARTIAL_ROUNDS_16: usize = 14;
+
+/// Number of partial rounds for Mersenne31 Poseidon2 (width 24).
+///
+/// Same Gröbner basis bound as width 16:
+///
+///   R_GB ≥ 17 + 0.4307 · min{5.12, 15.5} = 19.205
+///
+/// With the +7.5% security margin: ⌈1.075 × 19.205⌉ = 21.
+///
+/// The official round number script yields R_P = 22 for this configuration
+/// (matching the Grain LFSR parameters used to generate the round constants).
+pub const MERSENNE31_POSEIDON2_PARTIAL_ROUNDS_24: usize = 22;
 
 /// An implementation of the Poseidon2 hash function specialised to run on the current architecture.
 ///

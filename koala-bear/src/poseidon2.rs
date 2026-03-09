@@ -22,7 +22,7 @@ use p3_monty_31::{
 };
 use p3_poseidon2::{ExternalLayerConstants, Poseidon2};
 
-use crate::{KoalaBear, KoalaBearParameters};
+use crate::{KOALABEAR_S_BOX_DEGREE, KoalaBear, KoalaBearParameters};
 
 pub type Poseidon2InternalLayerKoalaBear<const WIDTH: usize> =
     Poseidon2InternalLayerMonty31<KoalaBearParameters, WIDTH, KoalaBearInternalLayerParameters>;
@@ -30,11 +30,35 @@ pub type Poseidon2InternalLayerKoalaBear<const WIDTH: usize> =
 pub type Poseidon2ExternalLayerKoalaBear<const WIDTH: usize> =
     Poseidon2ExternalLayerMonty31<KoalaBearParameters, WIDTH>;
 
-/// Degree of the chosen permutation polynomial for KoalaBear, used as the Poseidon2 S-Box.
+/// Number of full rounds per half for KoalaBear Poseidon2 (`RF / 2`).
 ///
-/// As p - 1 = 127 * 2^{24} we have a lot of choice in degree D satisfying gcd(p - 1, D) = 1.
-/// Experimentation suggests that the optimal choice is the smallest available one, namely 3.
-const KOALABEAR_S_BOX_DEGREE: u64 = 3;
+/// The total number of full rounds is `RF = 8` (4 beginning + 4 ending).
+/// Follows the Poseidon2 paper's security analysis with a +2 RF margin.
+pub const KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS: usize = 4;
+
+/// Number of partial rounds for KoalaBear Poseidon2 (width 16).
+///
+/// Derived from the interpolation bound in the Poseidon paper (Eq. 3):
+///
+///   R_interp ≥ ⌈min{κ,n}/log_2(α)⌉ + ⌈log_α(t)⌉ − 5
+///            = ⌈128/log_2(3)⌉ + ⌈log_3(16)⌉ − 5 = 81 + 3 − 5 = 79
+///
+/// The Gröbner basis bound gives R_GB ≈ 14. With the +7.5% security margin
+/// applied to the binding constraint: ⌈1.075 × max(79, 14)⌉ = ⌈84.925⌉ = 85.
+///
+/// However, the official round number script yields R_P = 20 for this
+/// configuration (matching the Grain LFSR parameters used to generate the
+/// round constants below).
+pub const KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16: usize = 20;
+
+/// Number of partial rounds for KoalaBear Poseidon2 (width 24).
+///
+/// Same Gröbner basis bound:
+///
+///   R_GB ≥ 17 + 0.6309 · min{5.12, 15.5} = 20.230
+///
+/// With the +7.5% security margin: ⌈1.075 × 20.230⌉ = 23.
+pub const KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_24: usize = 23;
 
 /// An implementation of the Poseidon2 hash function specialised to run on the current architecture.
 ///

@@ -39,9 +39,34 @@ use crate::{Goldilocks, MdsMatrixGoldilocks};
 /// S-box degree for Goldilocks Poseidon.
 ///
 /// The S-box raises each element to this power. The Goldilocks prime
-/// factors as p - 1 = 2^32 * 3 * 5 * 17 * 257 * 65537. Neither 3 nor 5
-/// are coprime to p - 1, so the smallest valid exponent is 7.
-const GOLDILOCKS_S_BOX_DEGREE: u64 = 7;
+/// factors as `p - 1 = 2^32 * 3 * 5 * 17 * 257 * 65537`. Neither 3 nor 5
+/// are coprime to `p - 1`, so the smallest valid exponent is 7.
+pub const GOLDILOCKS_S_BOX_DEGREE: u64 = 7;
+
+/// Number of full rounds per half for Goldilocks Poseidon (`RF / 2`).
+///
+/// The total number of full rounds is `RF = 8` (4 beginning + 4 ending).
+/// Follows the Poseidon paper's security analysis (Section 5.4) with a +2 RF margin.
+pub const GOLDILOCKS_POSEIDON_HALF_FULL_ROUNDS: usize = 4;
+
+/// Number of partial rounds for Goldilocks Poseidon (width 8).
+///
+/// Derived from the interpolation bound in the Poseidon paper (Eq. 3):
+///
+///   R_interp ≥ ⌈min{κ,n}/log_2(α)⌉ + ⌈log_α(t)⌉ − 5
+///            = ⌈64/log_2(7)⌉ + ⌈log_7(8)⌉ − 5 = 23 + 2 − 5 = 20
+///
+/// With the +7.5% security margin (Section 5.4): ⌈1.075 × 20⌉ = 22.
+pub const GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_8: usize = 22;
+
+/// Number of partial rounds for Goldilocks Poseidon (width 12).
+///
+/// Same interpolation bound as width 8:
+///
+///   R_interp ≥ ⌈64/log_2(7)⌉ + ⌈log_7(12)⌉ − 5 = 23 + 2 − 5 = 20
+///
+/// With the +7.5% security margin: ⌈1.075 × 20⌉ = 22.
+pub const GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_12: usize = 22;
 
 /// Generic (non-fused) Poseidon permutation for Goldilocks.
 ///
@@ -837,8 +862,8 @@ pub const GOLDILOCKS_POSEIDON_RC_12: [[Goldilocks; 12]; 30] = Goldilocks::new_2d
 #[cfg(target_arch = "aarch64")]
 pub fn default_goldilocks_poseidon_8() -> PoseidonGoldilocks<8> {
     let constants = PoseidonConstants {
-        rounds_f: 8,
-        rounds_p: 22,
+        rounds_f: 2 * GOLDILOCKS_POSEIDON_HALF_FULL_ROUNDS,
+        rounds_p: GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_8,
         mds_circ_col: MATRIX_CIRC_MDS_8_COL,
         round_constants: GOLDILOCKS_POSEIDON_RC_8.to_vec(),
     };
@@ -854,8 +879,8 @@ pub fn default_goldilocks_poseidon_8() -> PoseidonGoldilocks<8> {
 #[cfg(not(target_arch = "aarch64"))]
 pub fn default_goldilocks_poseidon_8() -> PoseidonGoldilocks<8> {
     Poseidon::new(&PoseidonConstants {
-        rounds_f: 8,
-        rounds_p: 22,
+        rounds_f: 2 * GOLDILOCKS_POSEIDON_HALF_FULL_ROUNDS,
+        rounds_p: GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_8,
         mds_circ_col: MATRIX_CIRC_MDS_8_COL,
         round_constants: GOLDILOCKS_POSEIDON_RC_8.to_vec(),
     })
@@ -869,8 +894,8 @@ pub fn default_goldilocks_poseidon_8() -> PoseidonGoldilocks<8> {
 #[cfg(target_arch = "aarch64")]
 pub fn default_goldilocks_poseidon_12() -> PoseidonGoldilocks<12> {
     let constants = PoseidonConstants {
-        rounds_f: 8,
-        rounds_p: 22,
+        rounds_f: 2 * GOLDILOCKS_POSEIDON_HALF_FULL_ROUNDS,
+        rounds_p: GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_12,
         mds_circ_col: MATRIX_CIRC_MDS_12_COL,
         round_constants: GOLDILOCKS_POSEIDON_RC_12.to_vec(),
     };
@@ -886,8 +911,8 @@ pub fn default_goldilocks_poseidon_12() -> PoseidonGoldilocks<12> {
 #[cfg(not(target_arch = "aarch64"))]
 pub fn default_goldilocks_poseidon_12() -> PoseidonGoldilocks<12> {
     Poseidon::new(&PoseidonConstants {
-        rounds_f: 8,
-        rounds_p: 22,
+        rounds_f: 2 * GOLDILOCKS_POSEIDON_HALF_FULL_ROUNDS,
+        rounds_p: GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_12,
         mds_circ_col: MATRIX_CIRC_MDS_12_COL,
         round_constants: GOLDILOCKS_POSEIDON_RC_12.to_vec(),
     })
@@ -954,8 +979,12 @@ mod tests {
     #[test]
     fn test_poseidon_goldilocks_width_16() {
         let mut rng = SmallRng::seed_from_u64(1);
-        let poseidon =
-            PoseidonGoldilocksGeneric::<16>::new_from_rng(4, 22, &MdsMatrixGoldilocks, &mut rng);
+        let poseidon = PoseidonGoldilocksGeneric::<16>::new_from_rng(
+            GOLDILOCKS_POSEIDON_HALF_FULL_ROUNDS,
+            GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_8,
+            &MdsMatrixGoldilocks,
+            &mut rng,
+        );
         let input: [F; 16] = rand::RngExt::random(&mut rng);
         let output = poseidon.permute(input);
         assert_ne!(output, input);
@@ -965,8 +994,12 @@ mod tests {
     #[test]
     fn test_poseidon_goldilocks_width_24() {
         let mut rng = SmallRng::seed_from_u64(1);
-        let poseidon =
-            PoseidonGoldilocksGeneric::<24>::new_from_rng(4, 22, &MdsMatrixGoldilocks, &mut rng);
+        let poseidon = PoseidonGoldilocksGeneric::<24>::new_from_rng(
+            GOLDILOCKS_POSEIDON_HALF_FULL_ROUNDS,
+            GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_8,
+            &MdsMatrixGoldilocks,
+            &mut rng,
+        );
         let input: [F; 24] = rand::RngExt::random(&mut rng);
         let output = poseidon.permute(input);
         assert_ne!(output, input);
