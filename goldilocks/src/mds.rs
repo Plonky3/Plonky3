@@ -71,6 +71,9 @@ const FFT_ALGO: Radix2Bowers = Radix2Bowers;
 
 pub(crate) const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [7, 1, 3, 8, 8, 3, 4, 9];
 
+/// First column of the circulant MDS matrix for width 8, derived from the first row.
+pub const MATRIX_CIRC_MDS_8_COL: [i64; 8] = first_row_to_first_col(&MATRIX_CIRC_MDS_8_SML_ROW);
+
 impl Permutation<[Goldilocks; 8]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 8]) -> [Goldilocks; 8] {
         const MATRIX_CIRC_MDS_8_SML_COL: [i64; 8] =
@@ -85,6 +88,9 @@ impl Permutation<[Goldilocks; 8]> for MdsMatrixGoldilocks {
 impl MdsPermutation<Goldilocks, 8> for MdsMatrixGoldilocks {}
 
 pub(crate) const MATRIX_CIRC_MDS_12_SML_ROW: [i64; 12] = [1, 1, 2, 1, 8, 9, 10, 7, 5, 9, 4, 10];
+
+/// First column of the circulant MDS matrix for width 12, derived from the first row.
+pub const MATRIX_CIRC_MDS_12_COL: [i64; 12] = first_row_to_first_col(&MATRIX_CIRC_MDS_12_SML_ROW);
 
 impl Permutation<[Goldilocks; 12]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 12]) -> [Goldilocks; 12] {

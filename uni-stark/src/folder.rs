@@ -156,21 +156,17 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     type F = Val<SC>;
     type Expr = PackedVal<SC>;
     type Var = PackedVal<SC>;
+    type PreprocessedWindow = RowWindow<'a, PackedVal<SC>>;
+    type MainWindow = RowWindow<'a, PackedVal<SC>>;
     type PublicVar = Val<SC>;
-    type M = RowWindow<'a, PackedVal<SC>>;
 
     #[inline]
-    fn main(&self) -> Self::M {
+    fn main(&self) -> Self::MainWindow {
         RowWindow::from_view(&self.main)
     }
 
-    fn preprocessed(&self) -> &Self::M {
+    fn preprocessed(&self) -> &Self::PreprocessedWindow {
         &self.preprocessed_window
-    }
-
-    #[inline]
-    fn public_values(&self) -> &[Self::PublicVar] {
-        self.public_values
     }
 
     #[inline]
@@ -201,6 +197,11 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
         self.base_constraints.extend(expr_array);
         self.constraint_index += N;
     }
+
+    #[inline]
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.public_values
+    }
 }
 
 impl<SC: StarkGenericConfig> ExtensionBuilder for ProverConstraintFolder<'_, SC> {
@@ -221,19 +222,16 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
     type F = Val<SC>;
     type Expr = SC::Challenge;
     type Var = SC::Challenge;
+    type PreprocessedWindow = RowWindow<'a, SC::Challenge>;
+    type MainWindow = RowWindow<'a, SC::Challenge>;
     type PublicVar = Val<SC>;
-    type M = RowWindow<'a, SC::Challenge>;
 
-    fn main(&self) -> Self::M {
+    fn main(&self) -> Self::MainWindow {
         RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
     }
 
-    fn preprocessed(&self) -> &Self::M {
+    fn preprocessed(&self) -> &Self::PreprocessedWindow {
         &self.preprocessed_window
-    }
-
-    fn public_values(&self) -> &[Self::PublicVar] {
-        self.public_values
     }
 
     fn is_first_row(&self) -> Self::Expr {
@@ -252,5 +250,9 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         self.accumulator *= self.alpha;
         self.accumulator += x.into();
+    }
+
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.public_values
     }
 }

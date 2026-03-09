@@ -265,19 +265,16 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
     type F = F;
     type Expr = SymbolicExpression<F>;
     type Var = SymbolicVariable<F>;
-    type M = RowMajorMatrix<Self::Var>;
+    type PreprocessedWindow = RowMajorMatrix<Self::Var>;
+    type MainWindow = RowMajorMatrix<Self::Var>;
     type PublicVar = SymbolicVariable<F>;
 
-    fn main(&self) -> Self::M {
+    fn main(&self) -> Self::MainWindow {
         self.main.clone()
     }
 
-    fn preprocessed(&self) -> &Self::M {
+    fn preprocessed(&self) -> &Self::PreprocessedWindow {
         &self.preprocessed
-    }
-
-    fn public_values(&self) -> &[Self::PublicVar] {
-        &self.public_values
     }
 
     fn is_first_row(&self) -> Self::Expr {
@@ -301,6 +298,10 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         self.base_constraints.push(x.into());
         self.constraint_types.push(ConstraintType::Base);
+    }
+
+    fn public_values(&self) -> &[Self::PublicVar] {
+        &self.public_values
     }
 }
 

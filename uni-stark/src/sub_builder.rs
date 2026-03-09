@@ -49,9 +49,6 @@ pub struct SubAirBuilder<'a, AB: AirBuilder, SubAir: BaseAir<AB::F>, T> {
     /// Column range (in the parent trace) that the sub-AIR is allowed to see.
     column_range: Range<usize>,
 
-    /// Cached zero-width preprocessed window returned by reference.
-    preprocessed: SubSliced<AB::M, AB::Var>,
-
     /// Marker for the sub-AIR and witness type.
     _phantom: core::marker::PhantomData<(SubAir, T)>,
 }
@@ -61,16 +58,10 @@ impl<'a, AB: AirBuilder, SubAir: BaseAir<AB::F>, T> SubAirBuilder<'a, AB, SubAir
     ///
     /// The range must lie entirely inside the parent trace width.
     #[must_use]
-    pub fn new(inner: &'a mut AB, column_range: Range<usize>) -> Self {
-        let preprocessed = SubSliced {
-            window: inner.preprocessed().clone(),
-            range: 0..0,
-            _marker: PhantomData,
-        };
+    pub const fn new(inner: &'a mut AB, column_range: Range<usize>) -> Self {
         Self {
             inner,
             column_range,
-            preprocessed,
             _phantom: core::marker::PhantomData,
         }
     }
@@ -81,10 +72,11 @@ impl<AB: AirBuilder, SubAir: BaseAir<AB::F>, F> AirBuilder for SubAirBuilder<'_,
     type F = AB::F;
     type Expr = AB::Expr;
     type Var = AB::Var;
-    type M = SubSliced<AB::M, AB::Var>;
+    type PreprocessedWindow = AB::PreprocessedWindow;
+    type MainWindow = SubSliced<AB::MainWindow, AB::Var>;
     type PublicVar = AB::PublicVar;
 
-    fn main(&self) -> Self::M {
+    fn main(&self) -> Self::MainWindow {
         SubSliced {
             window: self.inner.main(),
             range: self.column_range.clone(),
@@ -92,12 +84,8 @@ impl<AB: AirBuilder, SubAir: BaseAir<AB::F>, F> AirBuilder for SubAirBuilder<'_,
         }
     }
 
-    fn preprocessed(&self) -> &Self::M {
-        &self.preprocessed
-    }
-
-    fn public_values(&self) -> &[Self::PublicVar] {
-        self.inner.public_values()
+    fn preprocessed(&self) -> &Self::PreprocessedWindow {
+        self.inner.preprocessed()
     }
 
     fn is_first_row(&self) -> Self::Expr {
@@ -115,5 +103,9 @@ impl<AB: AirBuilder, SubAir: BaseAir<AB::F>, F> AirBuilder for SubAirBuilder<'_,
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         self.inner.assert_zero(x.into());
+    }
+
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.inner.public_values()
     }
 }

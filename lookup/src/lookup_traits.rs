@@ -77,21 +77,17 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
     type F = Val<SC>;
     type Expr = Val<SC>;
     type Var = Val<SC>;
+    type PreprocessedWindow = RowWindow<'a, Val<SC>>;
+    type MainWindow = RowWindow<'a, Val<SC>>;
     type PublicVar = Val<SC>;
-    type M = RowWindow<'a, Val<SC>>;
 
     #[inline]
-    fn main(&self) -> Self::M {
+    fn main(&self) -> Self::MainWindow {
         RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
     }
 
-    fn preprocessed(&self) -> &Self::M {
+    fn preprocessed(&self) -> &Self::PreprocessedWindow {
         &self.preprocessed
-    }
-
-    #[inline]
-    fn public_values(&self) -> &[Self::PublicVar] {
-        self.public_values
     }
 
     #[inline]
@@ -120,6 +116,11 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
         for item in array {
             assert!(item.into() == Self::F::ZERO);
         }
+    }
+
+    #[inline]
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.public_values
     }
 }
 
