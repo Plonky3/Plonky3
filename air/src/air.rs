@@ -209,6 +209,31 @@ pub trait BaseAir<F>: Sync {
     fn num_public_values(&self) -> usize {
         0
     }
+
+    /// Whether this AIR has no constraints and requires no evaluation at the out-of-domain point.
+    ///
+    /// A *dummy* AIR carries trace data that is accessed exclusively via lookups; it imposes no
+    /// algebraic constraints of its own.  Because there is nothing to check at the out-of-domain
+    /// point, the prover can skip quotient polynomial computation entirely, and neither prover nor
+    /// verifier need to open the trace at `zeta` (or `zeta_next`).  The commitment to the trace
+    /// matrix is still produced — that is what binds the lookup table data.
+    ///
+    /// # When to override
+    ///
+    /// Return `true` only when **all** of the following hold:
+    /// - `Air::eval` asserts no constraints (the body is empty or a no-op).
+    /// - The AIR has no lookups of its own (it is only a lookup *target*, not a lookup *source*).
+    /// - `main_next_row_columns` and `preprocessed_next_row_columns` would both return empty
+    ///   vectors (which is implied by having no constraints).
+    ///
+    /// # Correctness
+    ///
+    /// Returning `true` for an AIR that actually contains constraints or performs lookups will
+    /// cause the prover to silently omit the quotient argument, producing a proof that the
+    /// verifier rejects or — worse — accepts without checking those constraints.
+    fn is_dummy(&self) -> bool {
+        false
+    }
 }
 
 /// An algebraic intermediate representation (AIR) definition.

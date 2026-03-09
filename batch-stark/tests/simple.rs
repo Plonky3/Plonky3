@@ -513,6 +513,44 @@ fn preprocessed_mul_trace<F: Field>(rows: usize, multiplier: u64) -> RowMajorMat
     RowMajorMatrix::new(v, 1)
 }
 
+// --- Dummy AIR (no constraints, only used as a lookup table target) ---
+
+#[derive(Debug, Clone, Copy)]
+struct DummyTableAir {
+    width: usize,
+}
+
+impl<F> BaseAir<F> for DummyTableAir {
+    fn width(&self) -> usize {
+        self.width
+    }
+
+    fn is_dummy(&self) -> bool {
+        true
+    }
+
+    fn main_next_row_columns(&self) -> Vec<usize> {
+        vec![]
+    }
+}
+
+impl<AB: AirBuilder> Air<AB> for DummyTableAir {
+    fn eval(&self, _builder: &mut AB) {}
+}
+
+impl<F: Field> LookupAir<F> for DummyTableAir {}
+
+fn dummy_table_trace<F: Field>(rows: usize, width: usize) -> RowMajorMatrix<F> {
+    assert!(rows.is_power_of_two());
+    let mut values = F::zero_vec(rows * width);
+    for i in 0..rows {
+        for j in 0..width {
+            values[i * width + j] = F::from_u64((i * width + j) as u64);
+        }
+    }
+    RowMajorMatrix::new(values, width)
+}
+
 // --- Config types ---
 
 type Val = BabyBear;
@@ -657,6 +695,7 @@ enum DemoAir {
     Fib(FibonacciAir),
     Mul(MulAir),
     PreprocessedMul(PreprocessedMulAir),
+    Dummy(DummyTableAir),
 }
 impl<F: PrimeField64> BaseAir<F> for DemoAir {
     fn width(&self) -> usize {
@@ -664,6 +703,7 @@ impl<F: PrimeField64> BaseAir<F> for DemoAir {
             Self::Fib(a) => <FibonacciAir as BaseAir<F>>::width(a),
             Self::Mul(a) => <MulAir as BaseAir<F>>::width(a),
             Self::PreprocessedMul(a) => <PreprocessedMulAir as BaseAir<F>>::width(a),
+            Self::Dummy(a) => <DummyTableAir as BaseAir<F>>::width(a),
         }
     }
 
@@ -672,6 +712,7 @@ impl<F: PrimeField64> BaseAir<F> for DemoAir {
             Self::Fib(a) => <FibonacciAir as BaseAir<F>>::num_public_values(a),
             Self::Mul(a) => <MulAir as BaseAir<F>>::num_public_values(a),
             Self::PreprocessedMul(a) => <PreprocessedMulAir as BaseAir<F>>::num_public_values(a),
+            Self::Dummy(a) => <DummyTableAir as BaseAir<F>>::num_public_values(a),
         }
     }
 
@@ -680,6 +721,7 @@ impl<F: PrimeField64> BaseAir<F> for DemoAir {
             Self::Fib(a) => <FibonacciAir as BaseAir<F>>::preprocessed_trace(a),
             Self::Mul(_) => None,
             Self::PreprocessedMul(a) => <PreprocessedMulAir as BaseAir<F>>::preprocessed_trace(a),
+            Self::Dummy(a) => <DummyTableAir as BaseAir<F>>::preprocessed_trace(a),
         }
     }
 
@@ -690,7 +732,12 @@ impl<F: PrimeField64> BaseAir<F> for DemoAir {
             Self::PreprocessedMul(a) => {
                 <PreprocessedMulAir as BaseAir<F>>::preprocessed_next_row_columns(a)
             }
+            Self::Dummy(a) => <DummyTableAir as BaseAir<F>>::preprocessed_next_row_columns(a),
         }
+    }
+
+    fn is_dummy(&self) -> bool {
+        matches!(self, Self::Dummy(_))
     }
 }
 
@@ -764,6 +811,7 @@ where
             Self::Fib(a) => a.eval(b),
             Self::Mul(a) => a.eval(b),
             Self::PreprocessedMul(a) => a.eval(b),
+            Self::Dummy(a) => a.eval(b),
         }
     }
 }
@@ -2280,6 +2328,40 @@ fn single_table_local_lookup_trace<F: Field>(height: usize) -> RowMajorMatrix<F>
     }
 
     RowMajorMatrix::new(v, width)
+}
+
+/// Test that a dummy AIR batched with a non-dummy AIR works correctly.
+#[test]
+fn test_dummy_air_mixed_with_normal() -> Result<(), impl Debug> {
+    let config = make_config(6666);
+
+    let dummy_air = DemoAir::Dummy(DummyTableAir { width: 3 });
+    let (fib_air, fib_trace, fib_pis) = create_fib_instance(4); // 16 rows
+
+    let dummy_trace = dummy_table_trace::<Val>(16, 3);
+
+    let instances = vec![
+        StarkInstance {
+            air: &dummy_air,
+            trace: &dummy_trace,
+            public_values: vec![],
+            lookups: vec![],
+        },
+        StarkInstance {
+            air: &fib_air,
+            trace: &fib_trace,
+            public_values: fib_pis.clone(),
+            lookups: vec![],
+        },
+    ];
+
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data);
+
+    let airs = vec![dummy_air, fib_air];
+    let pvs = vec![vec![], fib_pis];
+    verify_batch(&config, &airs, &proof, &pvs, common)
 }
 
 /// Test with a single table doing local lookup between its two columns.

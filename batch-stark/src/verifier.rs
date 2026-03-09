@@ -98,6 +98,12 @@ where
             .unwrap_or(0);
         preprocessed_widths.push(pre_w);
 
+        if air.is_dummy() {
+            log_num_quotient_chunks.push(0);
+            num_quotient_chunks.push(0);
+            continue;
+        }
+
         let layout = AirLayout {
             preprocessed_width: pre_w,
             main_width: air.width(),
@@ -125,31 +131,41 @@ where
         let inst_opened_vals = &opened_values.instances[i];
         let inst_base_opened_vals = &inst_opened_vals.base_opened_values;
 
-        // Validate trace widths match the AIR
-        if inst_base_opened_vals.trace_local.len() != air_width {
-            return Err(VerificationError::InvalidProofShape);
-        }
-        if !airs[i].main_next_row_columns().is_empty() {
-            if inst_base_opened_vals
-                .trace_next
-                .as_ref()
-                .is_none_or(|v| v.len() != air_width)
+        if airs[i].is_dummy() {
+            // Dummy AIRs have no constraints: no trace openings and no quotient chunks.
+            if !inst_base_opened_vals.trace_local.is_empty()
+                || inst_base_opened_vals.trace_next.is_some()
+                || !inst_base_opened_vals.quotient_chunks.is_empty()
             {
                 return Err(VerificationError::InvalidProofShape);
             }
-        } else if inst_base_opened_vals.trace_next.is_some() {
-            return Err(VerificationError::InvalidProofShape);
-        }
-
-        // Validate quotient chunks structure
-        let n_chunks = num_quotient_chunks[i];
-        if inst_base_opened_vals.quotient_chunks.len() != n_chunks {
-            return Err(VerificationError::InvalidProofShape);
-        }
-
-        for chunk in &inst_base_opened_vals.quotient_chunks {
-            if chunk.len() != Challenge::<SC>::DIMENSION {
+        } else {
+            // Validate trace widths match the AIR
+            if inst_base_opened_vals.trace_local.len() != air_width {
                 return Err(VerificationError::InvalidProofShape);
+            }
+            if !airs[i].main_next_row_columns().is_empty() {
+                if inst_base_opened_vals
+                    .trace_next
+                    .as_ref()
+                    .is_none_or(|v| v.len() != air_width)
+                {
+                    return Err(VerificationError::InvalidProofShape);
+                }
+            } else if inst_base_opened_vals.trace_next.is_some() {
+                return Err(VerificationError::InvalidProofShape);
+            }
+
+            // Validate quotient chunks structure
+            let n_chunks = num_quotient_chunks[i];
+            if inst_base_opened_vals.quotient_chunks.len() != n_chunks {
+                return Err(VerificationError::InvalidProofShape);
+            }
+
+            for chunk in &inst_base_opened_vals.quotient_chunks {
+                if chunk.len() != Challenge::<SC>::DIMENSION {
+                    return Err(VerificationError::InvalidProofShape);
+                }
             }
         }
 
@@ -189,7 +205,13 @@ where
         let ext_db = degree_bits[i];
         let base_db = ext_db - config.is_zk();
         let width = A::width(air);
-        observe_instance_binding::<SC>(&mut challenger, ext_db, base_db, width, n_chunks);
+        observe_instance_binding::<SC>(
+            &mut challenger,
+            ext_db,
+            base_db,
+            width,
+            num_quotient_chunks[i],
+        );
     }
 
     // Observe main commitment and public values (in instance order).
@@ -281,6 +303,10 @@ where
         .zip(opened_values.instances.iter())
         .enumerate()
         .map(|(i, (ext_dom, inst_opened_vals))| {
+            // Dummy AIRs have no constraints: no openings are needed at all.
+            if airs[i].is_dummy() {
+                return Ok((*ext_dom, vec![]));
+            }
             let mut points = vec![(
                 zeta,
                 inst_opened_vals.base_opened_values.trace_local.clone(),
@@ -305,8 +331,12 @@ where
 
     // Quotient chunks round: flatten per-instance chunks to match commit order.
     // Use extended domains for the outer commit domain, with size = base_degree * num_quotient_chunks.
+    // Dummy AIRs have no quotient chunks, so their entry is an empty vec.
     let quotient_domains: Vec<Vec<Domain<SC>>> = (0..degree_bits.len())
         .map(|i| {
+            if airs[i].is_dummy() {
+                return vec![];
+            }
             let ext_db = degree_bits[i];
             let log_num_chunks = log_num_quotient_chunks[i];
             let n_chunks = num_quotient_chunks[i];
@@ -432,6 +462,11 @@ where
     // For each instance, recombine quotient from chunks at zeta and compare to folded constraints.
     for (i, air) in airs.iter().enumerate() {
         let _air_span = info_span!("verify constraints", air_idx = i).entered();
+
+        // Dummy AIRs have no constraints to verify.
+        if airs[i].is_dummy() {
+            continue;
+        }
 
         let qc_domains = &quotient_domains[i];
 

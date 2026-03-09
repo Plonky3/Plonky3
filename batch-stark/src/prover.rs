@@ -137,6 +137,9 @@ where
                 .and_then(|g| g.instances[i].as_ref().map(|m| m.width))
                 .unwrap_or(0);
             preprocessed_widths.push(pre_w);
+            if air.is_dummy() {
+                return (0, 0);
+            }
             let layout = AirLayout {
                 preprocessed_width: pre_w,
                 main_width: air.width(),
@@ -298,6 +301,13 @@ where
     for (i, trace_domain) in trace_domains.iter().enumerate() {
         let _air_span = info_span!("compute quotient", air_idx = i).entered();
 
+        // Dummy AIRs have no constraints and contribute no quotient chunks.
+        if airs[i].is_dummy() {
+            let pos = quotient_chunk_domains.len();
+            quotient_chunk_ranges.push((pos, pos));
+            continue;
+        }
+
         let log_chunks = log_num_quotient_chunks[i];
         let n_chunks = num_quotient_chunks[i];
         // Disjoint domain of size ext_degree * num_quotient_chunks
@@ -431,11 +441,14 @@ where
         });
         rounds.extend(round0);
         // Main trace round: per instance, open at zeta and (conditionally) its next point.
+        // Dummy AIRs have no constraints to evaluate, so they need no openings.
         let round1_points = trace_domains
             .iter()
             .enumerate()
             .map(|(i, dom)| {
-                if !airs[i].main_next_row_columns().is_empty() {
+                if airs[i].is_dummy() {
+                    vec![]
+                } else if !airs[i].main_next_row_columns().is_empty() {
                     vec![
                         zeta,
                         dom.next_point(zeta)
@@ -543,13 +556,19 @@ where
         } else {
             None
         };
-        // Trace locals
-        let tv = &trace_values_for_mats[i];
-        let trace_local = tv[0].clone();
-        let trace_next = if !airs[i].main_next_row_columns().is_empty() {
-            Some(tv[1].clone())
+
+        // Dummy AIRs have no trace openings and no quotient chunks.
+        let (trace_local, trace_next) = if airs[i].is_dummy() {
+            (vec![], None)
         } else {
-            None
+            let tv = &trace_values_for_mats[i];
+            let local = tv[0].clone();
+            let next = if !airs[i].main_next_row_columns().is_empty() {
+                Some(tv[1].clone())
+            } else {
+                None
+            };
+            (local, next)
         };
 
         // Quotient chunks: for each chunk matrix, take the first point (zeta) values.
