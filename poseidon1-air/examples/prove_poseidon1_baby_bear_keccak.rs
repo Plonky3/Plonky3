@@ -3,8 +3,8 @@
 use core::fmt::Debug;
 
 use p3_baby_bear::{
-    BABYBEAR_POSEIDON1_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_16, BABYBEAR_S_BOX_DEGREE,
-    BabyBear,
+    BABYBEAR_POSEIDON1_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_16,
+    BABYBEAR_S_BOX_DEGREE, BabyBear,
 };
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
