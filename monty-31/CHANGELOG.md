@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-## [0.4.2] - 2026-01-05
+## [0.5.0] - 2026-03-10### Merged PRs- Transpose: use p3-util rectangular transposition everywhere (#1256)- Fix: reduce logging noise in batch-stark with multiple AIRs (#1258)- Field: implement quintic extension for KoalaBear (#1293)- Deps: update rand and rand_xoshiro (#1314)- SIMD for koala-bear extension 5 (#1305)- Fix: dead code removal and twiddle table race condition (#1318)- Feat: support for 4-to-1 Poseidon2 instantiations for 32-bit fields (#1359)- Poseidon1: implementation based on HorizenLab (#1333)- Poseidon1: packed form for monty31 (#1378)- Fix: add range check in MontyField31 deserialization (#1399)- Field: add packing strategy for `mixed_dot_product` (#1404)- Poseidon1: speedup monty-31 packed version (#1414)- Naming: agree on convention for original Poseidon permutation (#1417)- Monty 31: faster forward dft (#1418)## [0.4.2] - 2026-01-05
 ### Merged PRs
 - Refactor: add public const `new` and `new_array` for all fields (#1222) (Adrian Hamelink)
 

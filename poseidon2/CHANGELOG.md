@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-## [0.4.2] - 2026-01-05
+## [0.5.0] - 2026-03-10### Merged PRs- Deps: update rand and rand_xoshiro (#1314)- Feat: support for 4-to-1 Poseidon2 instantiations for 32-bit fields (#1359)- Update external.rs (#1371)- Poseidon1: fix round constants for KoalaBear and BabyBear (#1398)- Naming: agree on convention for original Poseidon permutation (#1417)- Poseidon: add Rust constants for rounds (#1416)## [0.4.2] - 2026-01-05
 ### Authors
 
 ## [0.4.1] - 2025-12-18

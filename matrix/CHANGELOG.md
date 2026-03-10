@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-## [0.4.2] - 2026-01-05
+## [0.5.0] - 2026-03-10### Merged PRs- Feat(matrix): add `columnwise_dot_product_batched` for multi-point evaluation (#1225)- Transpose: use p3-util rectangular transposition everywhere (#1256)- Perf: optimize rowwise dot-product for `Matrix` (#1284)- Fix(matrix): correct idx initialization in FlatMatrixView::row_subseq_unchecked (#1286)- Deps: update rand and rand_xoshiro (#1314)- Matrix: remove spurious extra element from `padded_horizontally_packed_row` (#1309)- Air: change return type of preprocessed in air builder (#1387)- Poseidon1: packed form for monty31 (#1378)## [0.4.2] - 2026-01-05
 ### Merged PRs
 - Refactor(field): Add packed field extraction helpers and FieldArray utilities (#1211) (Adrian Hamelink)
 
