@@ -13,7 +13,7 @@ use p3_poseidon2::{
 };
 
 use crate::Goldilocks;
-use crate::poseidon::GOLDILOCKS_S_BOX_DEGREE;
+use crate::poseidon1::GOLDILOCKS_S_BOX_DEGREE;
 
 /// Number of full rounds per half for Goldilocks Poseidon2 (`RF / 2`).
 ///

@@ -461,7 +461,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::poseidon::GOLDILOCKS_S_BOX_DEGREE;
+    use crate::poseidon1::GOLDILOCKS_S_BOX_DEGREE;
     use crate::{
         GOLDILOCKS_POSEIDON2_HALF_FULL_ROUNDS, GOLDILOCKS_POSEIDON2_PARTIAL_ROUNDS_8,
         Poseidon2ExternalLayerGoldilocks, Poseidon2InternalLayerGoldilocks,
