@@ -115,33 +115,11 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
         Self([value; WIDTH])
     }
 
-    /// Fused DIF (decimation-in-frequency) butterfly for forward FFT.
+    /// Fused DIF butterfly for forward FFT: computes `(x + y, (x - y) * roots)`.
     ///
-    /// Computes `(x + y, (x - y) * roots)` with one fewer modular reduction
-    /// than the naive `Sub` + `Mul` approach.
-    ///
-    /// # Why this is faster
-    ///
-    /// The naive butterfly computes `x - y` via `mod_sub`, which produces a
-    /// canonical result in `[0, P)` using 3 NEON ops:
-    ///
-    /// ```text
-    ///     sub   diff, x, y          // diff in (-P, P) as signed
-    ///     add   tmp, diff, P        // tmp  in (0, 2P)
-    ///     umin  diff, diff, tmp     // diff in [0, P)   ← canonical
-    /// ```
-    ///
-    /// But Montgomery multiplication (`mul`) accepts signed inputs in `(-P, P)`.
-    /// The raw `vsubq_u32(x, y)` already lies in that range when reinterpreted
-    /// as `i32`, so the `add` + `umin` reduction is unnecessary.
-    ///
-    /// ```text
-    ///     Standard path:  mod_sub (3 ops) + mul (7 ops) = 10 ops
-    ///     Fused path:     raw sub (1 op)  + mul (7 ops) =  8 ops   ← 2 fewer
-    /// ```
-    ///
-    /// The `x + y` half still needs full `mod_add` (3 ops) since its result
-    /// feeds into subsequent butterflies that expect canonical `[0, P)` inputs.
+    /// Saves 2 NEON ops per butterfly by skipping the modular reduction on
+    /// `x - y`. The raw `vsubq_u32(x, y)` lies in `(-P, P)` as signed,
+    /// which is already a valid input for Montgomery multiplication.
     #[inline(always)]
     pub(crate) fn forward_butterfly(self, y: Self, roots: Self) -> (Self, Self) {
         unsafe {

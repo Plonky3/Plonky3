@@ -69,23 +69,15 @@ fn forward_butterfly<T: PrimeCharacteristicRing + Copy>(x: T, y: T, roots: T) ->
 
 /// Architecture-dispatched DIF butterfly for packed `MontyField31` vectors.
 ///
-/// # DIF Butterfly
-///
-/// The decimation-in-frequency (DIF) butterfly computes:
-///
-/// ```text
-///     (x, y)  →  (x + y,  (x - y) · ω)
-/// ```
-///
-/// where `ω` is a twiddle factor (root of unity).
-///
-/// # aarch64 Optimization
+/// The DIF butterfly computes `(x + y, (x - y) · ω)` where `ω` is a twiddle factor.
 ///
 /// On aarch64, this delegates to `PackedMontyField31Neon::forward_butterfly`,
-/// which fuses the subtraction and multiplication to skip an unnecessary
-/// modular reduction. See that method's documentation for the full rationale.
+/// which fuses the subtraction and multiplication to skip the modular reduction
+/// on `x - y`. See that method's documentation for the full rationale.
 ///
 /// On other architectures, this falls back to the generic `forward_butterfly`.
+///
+/// TODO: apply the same fused sub+mul optimization for AVX2/AVX-512 backends.
 #[inline(always)]
 fn monty_forward_butterfly<MP: FieldParameters + TwoAdicData>(
     x: <MontyField31<MP> as Field>::Packing,
