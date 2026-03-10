@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-## [0.4.2] - 2026-01-05
+## [0.4.3] - 2026-03-10### Merged PRs- Feat: implement neon vectorization for Poseidon2-Goldilocks (#1303)- Deps: update rand and rand_xoshiro (#1314)- Rand: small import fix (#1316)- Feat: impl `GenericPoseidon2LinearLayers<WIDTH>` for `Goldilocks` field (#1343)- Perf: optimize Poseidon2 instances for Goldilocks (#1367)- Goldilocks: complete proptest coverage for Poseidon2 asm (#1372)- Poseidon1: implementation based on HorizenLab (#1333)- Poseidon1: packed form for monty31 (#1378)- Poseidon1: add aarch64 neon packing strategy for Goldilocks (#1401)- Chore: pacify clippy for Neon (#1413)- Poseidon1: fix round constants for KoalaBear and BabyBear (#1398)- Naming: agree on convention for original Poseidon permutation (#1417)- Poseidon: add Rust constants for rounds (#1416)## [0.4.2] - 2026-01-05
 ### Merged PRs
 - Refactor: add public const `new` and `new_array` for all fields (#1222) (Adrian Hamelink)
 

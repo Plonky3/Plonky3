@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-## [0.4.2] - 2026-01-05
+## [0.4.3] - 2026-03-10### Merged PRs- Deps: update rand and rand_xoshiro (#1314)- Fix: dead code removal and twiddle table race condition (#1318)## [0.4.2] - 2026-01-05
 ### Merged PRs
 - Refactor: add public const `new` and `new_array` for all fields (#1222) (Adrian Hamelink)
 

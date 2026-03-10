@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-## [0.4.2] - 2026-01-05
+## [0.4.3] - 2026-03-10### Merged PRs- Chore: minor fixes (#1246)- Fix: reduce logging noise in batch-stark with multiple AIRs (#1258)- [BREAKING] feat: Implement high-arity folding (#1277)- Deps: update rand and rand_xoshiro (#1314)- Feat: add Merkle Caps (#1321)- Perf: reduce number of batch inversions in general FRI arity case (#1325)- Feat: add Clone to StarkConfig and StarkGenericConfig (#1328)- Fix: remove unnecessary clone of opening points (#1344)- Feat(fri): handle extrapolation for LDEs (#1352)- Feat: make HidingFriPcs Sync (#1395)- Feat: add high-arity support in `MerkleTree` and `MMCS`  (#1373)## [0.4.2] - 2026-01-05
 ### Merged PRs
 - Enable ZK for preprocessing and in batch-stark (#1178) (Linda Guiga)
 - Avoid change of Pcs's `open` method signature (#1230) (Linda Guiga)
