@@ -114,6 +114,59 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
     const fn broadcast(value: MontyField31<PMP>) -> Self {
         Self([value; WIDTH])
     }
+
+    /// Fused DIF (decimation-in-frequency) butterfly for forward FFT.
+    ///
+    /// Computes `(x + y, (x - y) * roots)` with one fewer modular reduction
+    /// than the naive `Sub` + `Mul` approach.
+    ///
+    /// # Why this is faster
+    ///
+    /// The naive butterfly computes `x - y` via `mod_sub`, which produces a
+    /// canonical result in `[0, P)` using 3 NEON ops:
+    ///
+    /// ```text
+    ///     sub   diff, x, y          // diff in (-P, P) as signed
+    ///     add   tmp, diff, P        // tmp  in (0, 2P)
+    ///     umin  diff, diff, tmp     // diff in [0, P)   ← canonical
+    /// ```
+    ///
+    /// But Montgomery multiplication (`mul`) accepts signed inputs in `(-P, P)`.
+    /// The raw `vsubq_u32(x, y)` already lies in that range when reinterpreted
+    /// as `i32`, so the `add` + `umin` reduction is unnecessary.
+    ///
+    /// ```text
+    ///     Standard path:  mod_sub (3 ops) + mul (7 ops) = 10 ops
+    ///     Fused path:     raw sub (1 op)  + mul (7 ops) =  8 ops   ← 2 fewer
+    /// ```
+    ///
+    /// The `x + y` half still needs full `mod_add` (3 ops) since its result
+    /// feeds into subsequent butterflies that expect canonical `[0, P)` inputs.
+    #[inline(always)]
+    pub(crate) fn forward_butterfly(self, y: Self, roots: Self) -> (Self, Self) {
+        unsafe {
+            let x_vec = self.to_vector();
+            let y_vec = y.to_vector();
+
+            // Canonical modular addition: result in [0, P).
+            let sum = uint32x4_mod_add(x_vec, y_vec, PMP::PACKED_P);
+
+            // Raw subtraction without reduction.
+            //
+            // Since x, y are in [0, P), the u32 result wraps to a value that,
+            // when reinterpreted as i32, lies in (-P, P). This is exactly the
+            // signed input range that Montgomery multiplication accepts.
+            let diff = aarch64::vreinterpretq_s32_u32(aarch64::vsubq_u32(x_vec, y_vec));
+
+            // Montgomery multiply:
+            // - accepts signed inputs in (-P, P),
+            // - produces canonical output in [0, P).
+            let roots_s = roots.to_signed_vector();
+            let product = mul::<PMP>(diff, roots_s);
+
+            (Self::from_vector(sum), Self::from_vector(product))
+        }
+    }
 }
 
 impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
