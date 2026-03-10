@@ -5,6 +5,7 @@ use core::arch::x86_64::__m256i;
 use core::marker::PhantomData;
 use core::mem::transmute;
 
+use p3_field::PrimeCharacteristicRing;
 use p3_mds::karatsuba_convolution::{mds_circulant_karatsuba_16, mds_circulant_karatsuba_24};
 use p3_poseidon1::external::{
     FullRoundConstants, FullRoundLayer, FullRoundLayerConstructor, mds_multiply,
@@ -163,10 +164,9 @@ where
             // PATH B (can overlap with S-box): partial dot product on s_hi.
             let s_hi: &[PackedMontyField31AVX2<FP>; 15] = unsafe { transmute(&split.s_hi) };
             let first_row = &self.packed_sparse_first_row[r];
-            let mut partial_dot = s_hi[0] * first_row[1];
-            for j in 1..15 {
-                partial_dot += s_hi[j] * first_row[j + 1];
-            }
+            let first_row_hi: [PackedMontyField31AVX2<FP>; 15] =
+                core::array::from_fn(|i| first_row[i + 1]);
+            let partial_dot = PackedMontyField31AVX2::<FP>::dot_product(s_hi, &first_row_hi);
 
             // SERIAL: complete s0 and rank-1 update.
             let s0_val = split.s0;
@@ -223,10 +223,9 @@ where
             // PATH B (can overlap with S-box): partial dot product on s_hi.
             let s_hi: &[PackedMontyField31AVX2<FP>; 23] = unsafe { transmute(&split.s_hi) };
             let first_row = &self.packed_sparse_first_row[r];
-            let mut partial_dot = s_hi[0] * first_row[1];
-            for j in 1..23 {
-                partial_dot += s_hi[j] * first_row[j + 1];
-            }
+            let first_row_hi: [PackedMontyField31AVX2<FP>; 23] =
+                core::array::from_fn(|i| first_row[i + 1]);
+            let partial_dot = PackedMontyField31AVX2::<FP>::dot_product(s_hi, &first_row_hi);
 
             // SERIAL: complete s0 and rank-1 update.
             let s0_val = split.s0;
