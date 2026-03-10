@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.5.0] - 2026-03-10
+### Merged PRs
+- Field: relax redundant bounds in From<[A; D]> for BinomialExtensionField (#1231)
+- Chore(field): Remove deprecated scale_slice_in_place wrapper (#1264)
+- Fix(field): return ONE for empty Product iterator (#1272)
+- Field: small touchup for binomial extension (#1300)
+- Field: implement quintic extension for KoalaBear (#1293)
+- Field: faster `quintic_mul` and `quintic_square` (#1301)
+- Deps: update rand and rand_xoshiro (#1314)
+- SIMD for koala-bear extension 5 (#1305)
+- Fix(poseidon2-air): remove unused export column (#1358)
+- Poseidon1: implementation based on HorizenLab (#1333)
+- Poseidon1: add arithmetization crate (#1384)
+
 ## [0.4.2] - 2026-01-05
 ### Merged PRs
 - Chore(field): Make `BinomialExtensionField::new` public (#1209) (Adrian Hamelink)
