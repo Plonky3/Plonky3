@@ -5,7 +5,10 @@ use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
 use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_params};
 use p3_keccak::{Keccak256Hash, KeccakF};
-use p3_koala_bear::{GenericPoseidon2LinearLayersKoalaBear, KoalaBear};
+use p3_koala_bear::{
+    GenericPoseidon2LinearLayersKoalaBear, KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS,
+    KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16, KOALABEAR_S_BOX_DEGREE, KoalaBear,
+};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
@@ -25,10 +28,10 @@ use tracing_subscriber::{EnvFilter, Registry};
 static GLOBAL: Jemalloc = Jemalloc;
 
 const WIDTH: usize = 16;
-const SBOX_DEGREE: u64 = 3;
+const SBOX_DEGREE: u64 = KOALABEAR_S_BOX_DEGREE;
 const SBOX_REGISTERS: usize = 0;
-const HALF_FULL_ROUNDS: usize = 4;
-const PARTIAL_ROUNDS: usize = 20;
+const HALF_FULL_ROUNDS: usize = KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS;
+const PARTIAL_ROUNDS: usize = KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16;
 
 const NUM_ROWS: usize = 1 << 16;
 const VECTOR_LEN: usize = 1 << 3;

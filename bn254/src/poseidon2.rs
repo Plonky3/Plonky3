@@ -13,10 +13,11 @@ use p3_poseidon2::{
 
 use crate::Bn254;
 
-/// Degree of the chosen permutation polynomial for BN254, used as the Poseidon2 S-Box.
+/// S-box degree for BN254 Poseidon2.
 ///
-/// As p - 1 is divisible by 2 and 3 the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 5.
-const BN254_S_BOX_DEGREE: u64 = 5;
+/// Since `p - 1` is divisible by 2 and 3, the smallest valid exponent
+/// satisfying `gcd(α, p - 1) = 1` is 5.
+pub const BN254_S_BOX_DEGREE: u64 = 5;
 
 /// An implementation of the Poseidon2 hash function for the Bn254Fr field.
 ///

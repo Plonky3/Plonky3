@@ -13,11 +13,32 @@ use p3_poseidon2::{
 };
 
 use crate::Goldilocks;
+use crate::poseidon1::GOLDILOCKS_S_BOX_DEGREE;
 
-/// Degree of the chosen permutation polynomial for Goldilocks, used as the Poseidon2 S-Box.
+/// Number of full rounds per half for Goldilocks Poseidon2 (`RF / 2`).
 ///
-/// As p - 1 = 2^32 * 3 * 5 * 17 * ... the smallest choice for a degree D satisfying gcd(p - 1, D) = 1 is 7.
-const GOLDILOCKS_S_BOX_DEGREE: u64 = 7;
+/// The total number of full rounds is `RF = 8` (4 beginning + 4 ending).
+/// Follows the Poseidon2 paper's security analysis with a +2 RF margin.
+pub const GOLDILOCKS_POSEIDON2_HALF_FULL_ROUNDS: usize = 4;
+
+/// Number of partial rounds for Goldilocks Poseidon2 (width 8).
+///
+/// Derived from the interpolation bound in the Poseidon paper (Eq. 3):
+///
+///   R_interp ≥ ⌈min{κ,n}/log_2(α)⌉ + ⌈log_α(t)⌉ − 5
+///            = ⌈64/log_2(7)⌉ + ⌈log_7(8)⌉ − 5 = 23 + 2 − 5 = 20
+///
+/// With the +7.5% security margin: ⌈1.075 × 20⌉ = 22.
+pub const GOLDILOCKS_POSEIDON2_PARTIAL_ROUNDS_8: usize = 22;
+
+/// Number of partial rounds for Goldilocks Poseidon2 (width 12).
+///
+/// Same interpolation bound as width 8:
+///
+///   R_interp ≥ ⌈64/log_2(7)⌉ + ⌈log_7(12)⌉ − 5 = 23 + 2 − 5 = 20
+///
+/// With the +7.5% security margin: ⌈1.075 × 20⌉ = 22.
+pub const GOLDILOCKS_POSEIDON2_PARTIAL_ROUNDS_12: usize = 22;
 
 /// An implementation of the Poseidon2 hash function for the Goldilocks field.
 ///

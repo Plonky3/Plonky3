@@ -502,7 +502,9 @@ mod tests {
     use super::*;
     use crate::mds::{MATRIX_CIRC_MDS_8_COL, MATRIX_CIRC_MDS_12_COL};
     use crate::poseidon1::{
-        GOLDILOCKS_POSEIDON1_RC_8, GOLDILOCKS_POSEIDON1_RC_12, default_goldilocks_poseidon1_8,
+        GOLDILOCKS_POSEIDON_HALF_FULL_ROUNDS, GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_8,
+        GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_12, GOLDILOCKS_POSEIDON1_RC_8,
+        GOLDILOCKS_POSEIDON1_RC_12, default_goldilocks_poseidon1_8,
         default_goldilocks_poseidon1_12,
     };
 
@@ -511,8 +513,8 @@ mod tests {
     /// Build a width-8 fused permutation from the fixed round constants.
     fn make_fused_w8() -> Poseidon1GoldilocksFused<8> {
         let raw = Poseidon1Constants {
-            rounds_f: 8,
-            rounds_p: 22,
+            rounds_f: 2 * GOLDILOCKS_POSEIDON_HALF_FULL_ROUNDS,
+            rounds_p: GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_8,
             mds_circ_col: MATRIX_CIRC_MDS_8_COL,
             round_constants: GOLDILOCKS_POSEIDON1_RC_8.to_vec(),
         };
@@ -523,8 +525,8 @@ mod tests {
     /// Build a width-12 fused permutation from the fixed round constants.
     fn make_fused_w12() -> Poseidon1GoldilocksFused<12> {
         let raw = Poseidon1Constants {
-            rounds_f: 8,
-            rounds_p: 22,
+            rounds_f: 2 * GOLDILOCKS_POSEIDON_HALF_FULL_ROUNDS,
+            rounds_p: GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_12,
             mds_circ_col: MATRIX_CIRC_MDS_12_COL,
             round_constants: GOLDILOCKS_POSEIDON1_RC_12.to_vec(),
         };

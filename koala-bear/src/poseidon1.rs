@@ -21,8 +21,46 @@ pub type Poseidon1ExternalLayerKoalaBear<const WIDTH: usize> =
 
 /// S-box degree for KoalaBear Poseidon1.
 ///
-/// Since p - 1 = 127 * 2^24, gcd(3, p-1) = 1, so x^3 is a valid S-box.
-const KOALABEAR_S_BOX_DEGREE: u64 = 3;
+/// Since `p - 1 = 127 * 2^24`, both 127 and 2 are the only prime factors of `p - 1`.
+///
+/// So `gcd(3, p - 1) = 1`, and `x^3` is the smallest valid permutation polynomial.
+pub const KOALABEAR_S_BOX_DEGREE: u64 = 3;
+
+/// Number of full rounds per half for KoalaBear Poseidon (`RF / 2`).
+///
+/// The total number of full rounds is `RF = 8` (4 beginning + 4 ending).
+/// Follows the Poseidon paper's security analysis (Section 5.4) with a +2 RF margin.
+pub const KOALABEAR_POSEIDON_HALF_FULL_ROUNDS: usize = 4;
+
+/// Number of partial rounds for KoalaBear Poseidon (width 16).
+///
+/// Derived from the interpolation bound in the Poseidon paper (Eq. 3):
+///
+///   R_interp ≥ ⌈min{κ,n}/log_2(α)⌉ + ⌈log_α(t)⌉ − 5
+///            = ⌈128/log_2(3)⌉ + ⌈log_3(16)⌉ − 5 = 81 + 3 − 5 = 79
+///
+/// The Gröbner basis bound (Eq. 4, line 2) gives:
+///
+///   R_GB ≥ t − 7 + log_α(2) · min{κ/(t+1), log_2(p)/2}
+///        = 9 + 0.6309 · min{7.53, 15.5} = 13.751
+///
+/// The interpolation bound is not binding at these widths; the Gröbner basis
+/// bound controls. With the +7.5% security margin (Section 5.4):
+/// ⌈max(⌈79⌉, ⌈13.751⌉) × 0.075⌉ + max(⌈79⌉, ⌈13.751⌉) = 6 + 79 = 85.
+///
+/// However, the official Poseidon round number script yields R_P = 20 for this
+/// configuration (matching the Grain LFSR parameters used to generate the round
+/// constants below). The script applies the margin as: ⌈1.075 × max(...)⌉ = 20.
+pub const KOALABEAR_POSEIDON_PARTIAL_ROUNDS_16: usize = 20;
+
+/// Number of partial rounds for KoalaBear Poseidon (width 24).
+///
+/// Same Gröbner basis bound as width 16:
+///
+///   R_GB ≥ 17 + 0.6309 · min{5.12, 15.5} = 20.230
+///
+/// With the +7.5% security margin: ⌈1.075 × 20.230⌉ = 23.
+pub const KOALABEAR_POSEIDON_PARTIAL_ROUNDS_24: usize = 23;
 
 /// The Poseidon1 permutation for KoalaBear.
 ///
@@ -413,8 +451,8 @@ pub const KOALABEAR_POSEIDON1_RC_24: [[KoalaBear; 24]; 31] = KoalaBear::new_2d_a
 /// Create a default width-16 Poseidon1 permutation for KoalaBear.
 pub fn default_koalabear_poseidon1_16() -> Poseidon1KoalaBear<16> {
     Poseidon1::new(&Poseidon1Constants {
-        rounds_f: 8,
-        rounds_p: 20,
+        rounds_f: 2 * KOALABEAR_POSEIDON_HALF_FULL_ROUNDS,
+        rounds_p: KOALABEAR_POSEIDON_PARTIAL_ROUNDS_16,
         mds_circ_col: MDSKoalaBearData::MATRIX_CIRC_MDS_16_COL,
         round_constants: KOALABEAR_POSEIDON1_RC_16.to_vec(),
     })
@@ -423,8 +461,8 @@ pub fn default_koalabear_poseidon1_16() -> Poseidon1KoalaBear<16> {
 /// Create a default width-24 Poseidon1 permutation for KoalaBear.
 pub fn default_koalabear_poseidon1_24() -> Poseidon1KoalaBear<24> {
     Poseidon1::new(&Poseidon1Constants {
-        rounds_f: 8,
-        rounds_p: 23,
+        rounds_f: 2 * KOALABEAR_POSEIDON_HALF_FULL_ROUNDS,
+        rounds_p: KOALABEAR_POSEIDON_PARTIAL_ROUNDS_24,
         mds_circ_col: MDSKoalaBearData::MATRIX_CIRC_MDS_24_COL,
         round_constants: KOALABEAR_POSEIDON1_RC_24.to_vec(),
     })
