@@ -7,7 +7,9 @@ use p3_field::{BasedVectorSpace, Field, PrimeField64};
 use p3_monty_31::{MontyField31, MontyParameters};
 use p3_symmetric::{CryptographicPermutation, Hash, MerkleCap};
 
-use crate::{CanObserve, CanSample, CanSampleBits, CanSampleUniformBits, FieldChallenger};
+use crate::{
+    CanFinalizeDigest, CanObserve, CanSample, CanSampleBits, CanSampleUniformBits, FieldChallenger,
+};
 
 /// A generic duplex sponge challenger over a finite field, used for generating deterministic
 /// challenges from absorbed inputs.
@@ -400,6 +402,25 @@ where
         } else {
             self.sample_uniform_bits_with_strategy::<ErrorOnRejection>(bits)
         }
+    }
+}
+
+impl<F, P, const WIDTH: usize, const RATE: usize> CanFinalizeDigest
+    for DuplexChallenger<F, P, WIDTH, RATE>
+where
+    F: Copy,
+    P: CryptographicPermutation<[F; WIDTH]>,
+{
+    type Digest = [F; RATE];
+
+    fn finalize(mut self) -> [F; RATE] {
+        // Unconditionally duplex: absorb any pending input and permute.
+        //
+        // Note: sampling only pops from the output buffer without modifying
+        // sponge state, so it does not necessarily affect the digest (e.g.
+        // when the last observe already triggered auto-duplexing).
+        self.duplexing();
+        self.sponge_state[..RATE].try_into().unwrap()
     }
 }
 
@@ -807,5 +828,67 @@ mod tests {
         // After observing 8 EF2G elements (16 base field elements), duplexing should occur
         assert!(chal.input_buffer.is_empty());
         assert!(!chal.output_buffer.is_empty());
+    }
+
+    #[test]
+    fn test_finalize() {
+        let new_chal = || DuplexChallenger::<G, _, WIDTH, RATE>::new(TestPermutation {});
+
+        // Deterministic: same observations produce same digest.
+        let mut c1 = new_chal();
+        let mut c2 = new_chal();
+        for i in 0..5u8 {
+            c1.observe(G::from_u8(i));
+            c2.observe(G::from_u8(i));
+        }
+        assert_eq!(c1.finalize(), c2.finalize());
+
+        // Different observations produce different digests.
+        let mut c1 = new_chal();
+        let mut c2 = new_chal();
+        for i in 0..10u8 {
+            c1.observe(G::from_u8(i));
+            c2.observe(G::from_u8(i + 1));
+        }
+        assert_ne!(c1.finalize(), c2.finalize());
+    }
+
+    /// Document how sampling interacts with finalize.
+    ///
+    /// Sampling does not modify the sponge state — it only pops from the
+    /// output buffer. This means the digest only changes when a sample
+    /// triggers a new duplexing (because the output buffer was empty or
+    /// there was pending input). Within one "batch" of RATE outputs, all
+    /// sample counts produce the same digest.
+    #[test]
+    fn test_finalize_sample_interaction() {
+        let digest = |n_samples: usize| {
+            let mut c = DuplexChallenger::<G, _, WIDTH, RATE>::new(TestPermutation {});
+            for i in 0..5u8 {
+                c.observe(G::from_u8(i));
+            }
+            for _ in 0..n_samples {
+                let _: G = c.sample();
+            }
+            c.finalize()
+        };
+
+        // The first sample triggers duplexing (absorbs pending input),
+        // so finalize's duplexing is now an extra permutation on an
+        // already-duplexed state — different from the 0-sample case.
+        assert_ne!(digest(0), digest(1));
+
+        // Samples 1 through RATE all come from the same output batch.
+        // They don't trigger another duplexing, so the sponge state
+        // (and thus the digest) is identical.
+        assert_eq!(digest(1), digest(2));
+        assert_eq!(digest(1), digest(RATE));
+
+        // The (RATE+1)-th sample exhausts the output buffer and triggers
+        // a fresh duplexing, changing the sponge state again.
+        assert_ne!(digest(RATE), digest(RATE + 1));
+
+        // Within the second batch, the digest is again stable.
+        assert_eq!(digest(RATE + 1), digest(RATE + 2));
     }
 }
