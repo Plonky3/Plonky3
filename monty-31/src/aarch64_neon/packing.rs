@@ -1009,8 +1009,7 @@ where
         let q = aarch64::vmulq_u32(c_lo, aarch64::vreinterpretq_u32_s32(P::PACKED_MU));
 
         // Compute (q⋅P)_hi = high 32 bits of q⋅P per lane (exact unsigned widening multiply).
-        let qp_l =
-            aarch64::vmull_u32(aarch64::vget_low_u32(q), aarch64::vget_low_u32(P::PACKED_P));
+        let qp_l = aarch64::vmull_u32(aarch64::vget_low_u32(q), aarch64::vget_low_u32(P::PACKED_P));
         let qp_h = aarch64::vmull_high_u32(q, P::PACKED_P);
         let qp_hi = aarch64::vuzp2q_u32(
             aarch64::vreinterpretq_u32_u64(qp_l),
