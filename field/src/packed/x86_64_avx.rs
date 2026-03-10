@@ -674,13 +674,10 @@ mod tests {
     fn test_add_sub_inverse_w4() {
         let mut runner = TestRunner::default();
         runner
-            .run(
-                &(array_strategy::<4>(), array_strategy::<4>()),
-                |(a, b)| {
-                    check_add_sub_inverse(a, b);
-                    Ok(())
-                },
-            )
+            .run(&(array_strategy::<4>(), array_strategy::<4>()), |(a, b)| {
+                check_add_sub_inverse(a, b);
+                Ok(())
+            })
             .unwrap();
     }
 
@@ -688,13 +685,10 @@ mod tests {
     fn test_add_sub_inverse_w8() {
         let mut runner = TestRunner::default();
         runner
-            .run(
-                &(array_strategy::<8>(), array_strategy::<8>()),
-                |(a, b)| {
-                    check_add_sub_inverse(a, b);
-                    Ok(())
-                },
-            )
+            .run(&(array_strategy::<8>(), array_strategy::<8>()), |(a, b)| {
+                check_add_sub_inverse(a, b);
+                Ok(())
+            })
             .unwrap();
     }
 }
