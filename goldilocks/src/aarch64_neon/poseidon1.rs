@@ -502,9 +502,9 @@ mod tests {
     use super::*;
     use crate::mds::{MATRIX_CIRC_MDS_8_COL, MATRIX_CIRC_MDS_12_COL};
     use crate::poseidon1::{
-        GOLDILOCKS_POSEIDON1_RC_8, GOLDILOCKS_POSEIDON1_RC_12,
         GOLDILOCKS_POSEIDON_HALF_FULL_ROUNDS, GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_8,
-        GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_12, default_goldilocks_poseidon1_8,
+        GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_12, GOLDILOCKS_POSEIDON1_RC_8,
+        GOLDILOCKS_POSEIDON1_RC_12, default_goldilocks_poseidon1_8,
         default_goldilocks_poseidon1_12,
     };
 
