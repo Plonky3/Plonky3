@@ -1,6 +1,5 @@
 use alloc::vec::Vec;
 
-use p3_air::AirClaims;
 use p3_commit::Pcs;
 use serde::{Deserialize, Serialize};
 
@@ -42,15 +41,4 @@ pub struct OpenedValues<Challenge> {
     pub preprocessed_next: Option<Vec<Challenge>>, // may not always be necessary
     pub quotient_chunks: Vec<Vec<Challenge>>,
     pub random: Option<Vec<Challenge>>,
-}
-
-impl<F: Clone> From<&OpenedValues<F>> for AirClaims<F> {
-    fn from(ov: &OpenedValues<F>) -> Self {
-        Self {
-            main_evals: ov.trace_local.clone(),
-            main_next_evals: ov.trace_next.clone(),
-            preprocessed_evals: ov.preprocessed_local.clone(),
-            preprocessed_next_evals: ov.preprocessed_next.clone(),
-        }
-    }
 }

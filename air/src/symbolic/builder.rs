@@ -13,7 +13,7 @@ use crate::symbolic::expression_ext::SymbolicExpressionExt;
 use crate::symbolic::variable::{BaseEntry, ExtEntry, SymbolicVariableExt};
 use crate::{
     Air, AirBuilder, ExtensionBuilder, PeriodicAirBuilder, PermutationAirBuilder,
-    SymbolicExpression, SymbolicVariable, VirtualColumnBuilder, WindowAccess,
+    SymbolicExpression, SymbolicVariable, WindowAccess,
 };
 
 /// Describes the shape of an AIR for symbolic constraint evaluation.
@@ -343,10 +343,6 @@ where
     fn permutation_values(&self) -> &[Self::PermutationVar] {
         &self.permutation_values
     }
-}
-
-impl<F: Field, EF: ExtensionField<F>> VirtualColumnBuilder for SymbolicAirBuilder<F, EF> {
-    fn eval_virtual_column<I: Into<Self::Expr>>(&mut self, _x: I) {}
 }
 
 impl<F: Field, EF: ExtensionField<F>> PeriodicAirBuilder for SymbolicAirBuilder<F, EF> {

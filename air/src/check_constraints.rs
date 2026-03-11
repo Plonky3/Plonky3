@@ -7,7 +7,6 @@ use p3_matrix::stack::ViewPair;
 
 use crate::{
     Air, AirBuilder, AirBuilderWithContext, ExtensionBuilder, PermutationAirBuilder, RowWindow,
-    VirtualColumnBuilder,
 };
 
 /// A single constraint violation captured during debug evaluation.
@@ -330,6 +329,20 @@ impl<F: Field, EF: ExtensionField<F>> ExtensionBuilder for DebugConstraintBuilde
         }
         self.constraint_index += 1;
     }
+
+    fn assert_zero_ext_named<I>(&mut self, x: I, label: &'static str)
+    where
+        I: Into<Self::ExprEF>,
+    {
+        if x.into() != EF::ZERO {
+            self.failures.push(ConstraintFailure {
+                row: self.row_index,
+                constraint: self.constraint_index,
+                label: Some(label),
+            });
+        }
+        self.constraint_index += 1;
+    }
 }
 
 impl<'a, F: Field, EF: ExtensionField<F>> PermutationAirBuilder
@@ -355,10 +368,6 @@ impl<'a, F: Field, EF: ExtensionField<F>> PermutationAirBuilder
     fn permutation_values(&self) -> &[Self::PermutationVar] {
         self.permutation_values
     }
-}
-
-impl<F: Field, EF: ExtensionField<F>> VirtualColumnBuilder for DebugConstraintBuilder<'_, F, EF> {
-    fn eval_virtual_column<I: Into<Self::Expr>>(&mut self, _x: I) {}
 }
 
 /// Evaluate every AIR constraint against a concrete trace and panic on failure.

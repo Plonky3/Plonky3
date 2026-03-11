@@ -364,10 +364,31 @@ pub trait AirBuilder: Sized {
         }
     }
 
+    /// Labeled variant of [`assert_zeros`](Self::assert_zeros).
+    fn assert_zeros_named<const N: usize, I: Into<Self::Expr>>(
+        &mut self,
+        array: [I; N],
+        label: &'static str,
+    ) {
+        for elem in array {
+            self.assert_zero_named(elem, label);
+        }
+    }
+
     /// Assert that a given array consists of only boolean values.
     fn assert_bools<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
         let zero_array = array.map(|x| x.into().bool_check());
         self.assert_zeros(zero_array);
+    }
+
+    /// Labeled variant of [`assert_bools`](Self::assert_bools).
+    fn assert_bools_named<const N: usize, I: Into<Self::Expr>>(
+        &mut self,
+        array: [I; N],
+        label: &'static str,
+    ) {
+        let zero_array = array.map(|x| x.into().bool_check());
+        self.assert_zeros_named(zero_array, label);
     }
 
     /// Assert that `x` element is equal to `1`.
@@ -375,9 +396,24 @@ pub trait AirBuilder: Sized {
         self.assert_zero(x.into() - Self::Expr::ONE);
     }
 
+    /// Labeled variant of [`assert_one`](Self::assert_one).
+    fn assert_one_named<I: Into<Self::Expr>>(&mut self, x: I, label: &'static str) {
+        self.assert_zero_named(x.into() - Self::Expr::ONE, label);
+    }
+
     /// Assert that the given elements are equal.
     fn assert_eq<I1: Into<Self::Expr>, I2: Into<Self::Expr>>(&mut self, x: I1, y: I2) {
         self.assert_zero(x.into() - y.into());
+    }
+
+    /// Labeled variant of [`assert_eq`](Self::assert_eq).
+    fn assert_eq_named<I1: Into<Self::Expr>, I2: Into<Self::Expr>>(
+        &mut self,
+        x: I1,
+        y: I2,
+        label: &'static str,
+    ) {
+        self.assert_zero_named(x.into() - y.into(), label);
     }
 
     /// Public input values available during constraint evaluation.
@@ -393,6 +429,11 @@ pub trait AirBuilder: Sized {
     /// into a single assert_bools call will improve performance.
     fn assert_bool<I: Into<Self::Expr>>(&mut self, x: I) {
         self.assert_zero(x.into().bool_check());
+    }
+
+    /// Labeled variant of [`assert_bool`](Self::assert_bool).
+    fn assert_bool_named<I: Into<Self::Expr>>(&mut self, x: I, label: &'static str) {
+        self.assert_zero_named(x.into().bool_check(), label);
     }
 }
 
@@ -438,6 +479,17 @@ pub trait ExtensionBuilder: AirBuilder<F: Field> {
     where
         I: Into<Self::ExprEF>;
 
+    /// Labeled variant of [`assert_zero_ext`](Self::assert_zero_ext).
+    ///
+    /// Discards the label by default. Only the debug builder overrides
+    /// this to capture labels for diagnostic output.
+    fn assert_zero_ext_named<I>(&mut self, x: I, _label: &'static str)
+    where
+        I: Into<Self::ExprEF>,
+    {
+        self.assert_zero_ext(x);
+    }
+
     /// Assert that two extension field expressions are equal.
     fn assert_eq_ext<I1, I2>(&mut self, x: I1, y: I2)
     where
@@ -447,12 +499,29 @@ pub trait ExtensionBuilder: AirBuilder<F: Field> {
         self.assert_zero_ext(x.into() - y.into());
     }
 
+    /// Labeled variant of [`assert_eq_ext`](Self::assert_eq_ext).
+    fn assert_eq_ext_named<I1, I2>(&mut self, x: I1, y: I2, label: &'static str)
+    where
+        I1: Into<Self::ExprEF>,
+        I2: Into<Self::ExprEF>,
+    {
+        self.assert_zero_ext_named(x.into() - y.into(), label);
+    }
+
     /// Assert that an extension field expression is equal to one.
     fn assert_one_ext<I>(&mut self, x: I)
     where
         I: Into<Self::ExprEF>,
     {
         self.assert_eq_ext(x, Self::ExprEF::ONE);
+    }
+
+    /// Labeled variant of [`assert_one_ext`](Self::assert_one_ext).
+    fn assert_one_ext_named<I>(&mut self, x: I, label: &'static str)
+    where
+        I: Into<Self::ExprEF>,
+    {
+        self.assert_eq_ext_named(x, Self::ExprEF::ONE, label);
     }
 }
 
@@ -475,40 +544,6 @@ pub trait PermutationAirBuilder: ExtensionBuilder {
 
     /// Return the expected cumulated values for global lookup arguments.
     fn permutation_values(&self) -> &[Self::PermutationVar];
-}
-
-/// Extension trait for builders that support virtual (uncommitted) bus columns.
-///
-/// In multi-table zkVM designs, tables communicate through **bus** interactions.
-///
-/// A bus column is a value that is:
-/// - **Computed** from the trace during evaluation
-/// - **Never committed** to a polynomial
-/// - Only its **aggregated contribution** enters the proof
-///   (e.g. a multiset hash or LogUp sum)
-///
-/// # Opt-in design
-///
-/// This is an extension trait, fully opt-in.
-/// Existing AIRs and builders are entirely unaffected.
-///
-/// Downstream projects can:
-/// 1. Implement this trait for their builders
-/// 2. Require it as a bound in their AIR definitions
-///
-/// # Relationship to permutation arguments
-///
-/// - **Permutation arguments** prove two columns are a reordering
-///   of each other
-/// - **Virtual bus columns** prove that computed values across
-///   different tables satisfy cross-table consistency constraints
-pub trait VirtualColumnBuilder: AirBuilder {
-    /// Register a virtual column value for bus interaction.
-    ///
-    /// The value is computed from trace data but never committed to a polynomial.
-    ///
-    /// Implementations may collect the expression for later aggregation or simply discard it.
-    fn eval_virtual_column<I: Into<Self::Expr>>(&mut self, x: I);
 }
 
 /// A wrapper around an [`AirBuilder`] that enforces constraints only when a specified condition is met.
@@ -605,6 +640,16 @@ impl<AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'_, AB> {
 
         self.inner.assert_zero_ext(ext_x * condition);
     }
+
+    fn assert_zero_ext_named<I>(&mut self, x: I, label: &'static str)
+    where
+        I: Into<Self::ExprEF>,
+    {
+        let ext_x: Self::ExprEF = x.into();
+        let condition: AB::Expr = self.condition();
+
+        self.inner.assert_zero_ext_named(ext_x * condition, label);
+    }
 }
 
 impl<AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'_, AB> {
@@ -632,11 +677,5 @@ impl<AB: AirBuilderWithContext> AirBuilderWithContext for FilteredAirBuilder<'_,
 
     fn eval_context(&self) -> &Self::EvalContext {
         self.inner.eval_context()
-    }
-}
-
-impl<AB: VirtualColumnBuilder> VirtualColumnBuilder for FilteredAirBuilder<'_, AB> {
-    fn eval_virtual_column<I: Into<Self::Expr>>(&mut self, x: I) {
-        self.inner.eval_virtual_column(self.condition() * x.into());
     }
 }
