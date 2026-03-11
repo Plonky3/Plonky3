@@ -25,6 +25,7 @@ pub(crate) type KeccakMerkleMmcs<F> = MerkleTreeMmcs<
     [u64; KECCAK_VECTOR_LEN],
     SerializingHasher<PaddingFreeSponge<KeccakF, 25, 17, 4>>,
     KeccakCompressionFunction,
+    2,
     4,
 >;
 
@@ -47,6 +48,7 @@ pub(crate) type Poseidon2MerkleMmcs<F, Perm16, Perm24> = MerkleTreeMmcs<
     <F as Field>::Packing,
     Poseidon2Sponge<Perm24>,
     Poseidon2Compression<Perm16>,
+    2,
     8,
 >;
 pub(crate) type Poseidon2StarkConfig<F, EF, DFT, Perm16, Perm24> = StarkConfig<

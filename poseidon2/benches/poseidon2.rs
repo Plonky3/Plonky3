@@ -10,7 +10,7 @@ use p3_util::pretty_name;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
-fn bench_poseidon2(c: &mut Criterion) {
+fn bench_poseidon12(c: &mut Criterion) {
     let mut rng = SmallRng::seed_from_u64(1);
 
     let poseidon2_bb_16 = Poseidon2BabyBear::<16>::new_from_rng_128(&mut rng);
@@ -35,7 +35,6 @@ fn bench_poseidon2(c: &mut Criterion) {
     let poseidon2_gold_16 = Poseidon2Goldilocks::<16>::new_from_rng_128(&mut rng);
     poseidon2::<Goldilocks, Poseidon2Goldilocks<16>, 16>(c, &poseidon2_gold_16);
 
-    // We hard code the round numbers for Bn254Fr.
     let poseidon2_bn254 = Poseidon2Bn254::<3>::new_from_rng(8, 22, &mut rng);
     poseidon2::<Bn254, Poseidon2Bn254<3>, 3>(c, &poseidon2_bn254);
 }
@@ -51,5 +50,5 @@ where
     c.bench_with_input(id, &input, |b, &input| b.iter(|| poseidon2.permute(input)));
 }
 
-criterion_group!(benches, bench_poseidon2);
+criterion_group!(benches, bench_poseidon12);
 criterion_main!(benches);

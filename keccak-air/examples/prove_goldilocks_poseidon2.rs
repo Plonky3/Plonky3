@@ -45,7 +45,7 @@ fn main() -> Result<(), impl Debug> {
     let compress = MyCompress::new(perm.clone());
 
     type ValMmcs =
-        MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 4>;
+        MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 2, 4>;
     let val_mmcs = ValMmcs::new(hash, compress, 0);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;

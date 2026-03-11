@@ -1,13 +1,16 @@
-//! Lookup Arguments for STARKs
+//! Core lookup types and traits.
+//!
+//! These types define the data structures for lookup arguments in STARKs.
+//! They were previously in `p3-air` but live here to keep the `Air` trait
+//! free of lookup concerns.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::Neg;
 
+use p3_air::{Air, PermutationAirBuilder, SymbolicExpression};
 use p3_field::Field;
 use serde::{Deserialize, Serialize};
-
-use crate::{AirBuilderWithPublicValues, PermutationAirBuilder, SymbolicExpression};
 
 /// Defines errors that can occur during lookup verification.
 #[derive(Debug)]
@@ -66,7 +69,7 @@ pub struct LookupData<F> {
 ///
 /// # Example
 /// ```ignored
-/// use p3_air::lookup::{LookupInput, Direction};
+/// use p3_lookup::{LookupInput, Direction};
 /// use p3_air::SymbolicExpression;
 ///
 /// let lookup_input: LookupInput<SymbolicExpression<F>> = (
@@ -77,8 +80,8 @@ pub struct LookupData<F> {
 /// ```
 pub type LookupInput<F> = (Vec<SymbolicExpression<F>>, SymbolicExpression<F>, Direction);
 
-/// A structure that holds the lookup data necessary to generate lookup contexts
-/// via [`LookupTraceBuilder`]. It is shared between the prover and the verifier.
+/// A structure that holds the lookup data necessary to generate lookup contexts.
+/// It is shared between the prover and the verifier.
 #[derive(Clone, Debug)]
 pub struct Lookup<F: Field> {
     /// Type of lookup: local or global
@@ -117,7 +120,6 @@ impl<F: Field> Lookup<F> {
 }
 
 /// Trait for evaluating lookup constraints.
-/// This is the core interface needed by [`Air::eval_with_lookups`](crate::Air::eval_with_lookups).
 pub trait LookupEvaluator {
     /// Returns the number of auxiliary columns needed by this lookup protocol.
     ///
@@ -139,7 +141,7 @@ pub trait LookupEvaluator {
     /// - it checks that the final value of the running sum is 0.
     fn eval_local_lookup<AB>(&self, builder: &mut AB, context: &Lookup<AB::F>)
     where
-        AB: PermutationAirBuilder + AirBuilderWithPublicValues;
+        AB: PermutationAirBuilder;
 
     /// Evaluates a global lookup update based on the provided context, and the expected cumulated value.
     /// This evaluation is carried out at the AIR level. We still need to check that the permutation argument holds
@@ -154,48 +156,106 @@ pub trait LookupEvaluator {
         context: &Lookup<AB::F>,
         expected_cumulated: AB::ExprEF,
     ) where
-        AB: PermutationAirBuilder + AirBuilderWithPublicValues;
+        AB: PermutationAirBuilder;
 
-    /// Evalutes the lookup constraints for all provided contexts.
+    /// Evaluates the lookup constraints for all provided contexts.
     ///
     /// For each context:
     /// - if it is a local lookup, evaluates it with `eval_local_lookup`.
-    /// - if it is a global lookup, evaluates it with `eval_global_update`, using the expected cumulated value from `lookup_data`.
-    fn eval_lookups<AB>(
-        &self,
-        builder: &mut AB,
-        contexts: &[Lookup<AB::F>],
-        // Assumed to be sorted by auxiliary_index.
-        lookup_data: &[LookupData<AB::ExprEF>],
-    ) where
-        AB: PermutationAirBuilder + AirBuilderWithPublicValues,
+    /// - if it is a global lookup, evaluates it with `eval_global_update`, reading the expected
+    ///   cumulated value from the builder's `permutation_values()`.
+    fn eval_lookups<AB>(&self, builder: &mut AB, contexts: &[Lookup<AB::F>])
+    where
+        AB: PermutationAirBuilder,
     {
-        let mut lookup_data_iter = lookup_data.iter();
+        let mut pv_idx = 0;
         for context in contexts.iter() {
             match &context.kind {
                 Kind::Local => {
                     self.eval_local_lookup(builder, context);
                 }
                 Kind::Global(_) => {
-                    // Find the expected cumulated value for this context.
-                    let LookupData {
-                        name: _,
-                        aux_idx,
-                        expected_cumulated,
-                    } = lookup_data_iter
-                        .next()
-                        .expect("Expected cumulated value missing");
-
-                    if *aux_idx != context.columns[0] {
-                        panic!("Expected cumulated values not sorted by auxiliary index");
-                    }
-                    self.eval_global_update(builder, context, expected_cumulated.clone());
+                    let expected = builder.permutation_values()[pv_idx].clone();
+                    pv_idx += 1;
+                    self.eval_global_update(builder, context, expected.into());
                 }
             }
         }
-        assert!(
-            lookup_data_iter.next().is_none(),
-            "Too many expected cumulated values provided"
+        assert_eq!(
+            pv_idx,
+            builder.permutation_values().len(),
+            "permutation values count mismatch"
         );
     }
 }
+
+/// Extension trait for AIRs that use lookups.
+///
+/// This decouples lookup definition from the core [`Air`] trait, so AIRs
+/// that don't use lookups don't need to know about lookup types at all.
+pub trait LookupAir<F: Field> {
+    /// Allocate auxiliary columns for a new lookup and return their indices.
+    ///
+    /// Default implementation returns an empty vector, indicating no lookup columns.
+    fn add_lookup_columns(&mut self) -> Vec<usize> {
+        Vec::new()
+    }
+
+    /// Return all lookups registered by this AIR.
+    ///
+    /// Default implementation returns an empty vector, indicating no lookups.
+    fn get_lookups(&mut self) -> Vec<Lookup<F>> {
+        Vec::new()
+    }
+
+    /// Register a lookup to be used in this AIR.
+    ///
+    /// This is a convenience method that constructs a [`Lookup`] from inputs
+    /// and allocates auxiliary columns via [`add_lookup_columns`](Self::add_lookup_columns).
+    fn register_lookup(&mut self, kind: Kind, lookup_inputs: &[LookupInput<F>]) -> Lookup<F> {
+        let (element_exprs, multiplicities_exprs) = lookup_inputs
+            .iter()
+            .map(|(elems, mult, dir)| {
+                let multiplicity = dir.multiplicity(mult.clone());
+                (elems.clone(), multiplicity)
+            })
+            .unzip();
+
+        Lookup {
+            kind,
+            element_exprs,
+            multiplicities_exprs,
+            columns: self.add_lookup_columns(),
+        }
+    }
+}
+
+/// Extension of [`Air`] that adds lookup constraint evaluation.
+///
+/// This trait is blanket-implemented for every type that implements [`Air`],
+/// so any AIR automatically supports `eval_with_lookups`. It lives in
+/// `p3-lookup` (rather than `p3-air`) to keep the core `Air` trait free of
+/// lookup concerns.
+pub trait AirWithLookups<AB: PermutationAirBuilder>: Air<AB> {
+    /// Evaluate both AIR constraints and lookup constraints.
+    ///
+    /// First evaluates the core AIR constraints via [`Air::eval`], then
+    /// evaluates any lookup constraints via the provided [`LookupEvaluator`].
+    ///
+    /// For AIRs without lookups, pass an empty `lookups` slice and the
+    /// evaluator will be skipped entirely.
+    fn eval_with_lookups(
+        &self,
+        builder: &mut AB,
+        lookups: &[Lookup<AB::F>],
+        lookup_evaluator: &impl LookupEvaluator,
+    ) {
+        self.eval(builder);
+
+        if !lookups.is_empty() {
+            lookup_evaluator.eval_lookups(builder, lookups);
+        }
+    }
+}
+
+impl<AB: PermutationAirBuilder, A: Air<AB>> AirWithLookups<AB> for A {}

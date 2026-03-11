@@ -182,6 +182,65 @@ mod helpers {
     }
 
     #[test]
+    fn test_algebra_dot_product_matches_same_type() {
+        use p3_field::Algebra;
+        // Self-algebra case: Algebra::dot_product should match PrimeCharacteristicRing::dot_product
+        let a = [BabyBear::TWO, BabyBear::from_u8(4), BabyBear::from_u8(6)];
+        let b = [
+            BabyBear::from_u8(3),
+            BabyBear::from_u8(5),
+            BabyBear::from_u8(7),
+        ];
+
+        let pcr_result = BabyBear::dot_product(&a, &b);
+        let alg_result = <BabyBear as Algebra<BabyBear>>::mixed_dot_product(&a, &b);
+        assert_eq!(pcr_result, alg_result);
+    }
+
+    #[test]
+    fn test_algebra_dot_product_zeros() {
+        use p3_field::Algebra;
+        let a = [BabyBear::ZERO; 4];
+        let f = [BabyBear::ZERO; 4];
+        assert_eq!(
+            <BabyBear as Algebra<BabyBear>>::mixed_dot_product(&a, &f),
+            BabyBear::ZERO
+        );
+    }
+
+    #[test]
+    fn test_algebra_dot_product_unit_vector() {
+        use p3_field::Algebra;
+        // Unit vector: only one nonzero element in f.
+        let a = [
+            BabyBear::from_u8(10),
+            BabyBear::from_u8(20),
+            BabyBear::from_u8(30),
+        ];
+        let f = [BabyBear::ZERO, BabyBear::ONE, BabyBear::ZERO];
+        assert_eq!(
+            <BabyBear as Algebra<BabyBear>>::mixed_dot_product(&a, &f),
+            BabyBear::from_u8(20)
+        );
+    }
+
+    #[test]
+    fn test_algebra_dot_product_known_values() {
+        use p3_field::Algebra;
+        // a = [2, 3, 5], f = [7, 11, 13] → 2*7 + 3*11 + 5*13 = 14 + 33 + 65 = 112
+        let a = [BabyBear::TWO, BabyBear::from_u8(3), BabyBear::from_u8(5)];
+        let f = [
+            BabyBear::from_u8(7),
+            BabyBear::from_u8(11),
+            BabyBear::from_u8(13),
+        ];
+        assert_eq!(
+            <BabyBear as Algebra<BabyBear>>::mixed_dot_product(&a, &f),
+            BabyBear::from_u8(112)
+        );
+    }
+
+    #[test]
     fn test_field_to_array_complex() {
         use p3_baby_bear::BabyBear;
         use p3_field::field_to_array;

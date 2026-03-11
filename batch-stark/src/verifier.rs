@@ -1,24 +1,21 @@
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 use core::fmt::Debug;
 
 use hashbrown::HashMap;
-use p3_air::Air;
+use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
+use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
+use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
+use p3_lookup::AirWithLookups;
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::lookup_traits::{
-    Lookup, LookupData, LookupError, LookupGadget, lookup_data_to_expr,
-};
+use p3_lookup::lookup_traits::{Lookup, LookupGadget};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
-use p3_uni_stark::{
-    SymbolicAirBuilder, SymbolicExpression, VerificationError, VerifierConstraintFolder,
-    recompose_quotient_from_chunks,
-};
+use p3_uni_stark::{VerificationError, VerifierConstraintFolder, recompose_quotient_from_chunks};
 use p3_util::zip_eq::zip_eq;
 use tracing::{info_span, instrument};
 
@@ -39,7 +36,7 @@ pub fn verify_batch<SC, A>(
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
     SC: SGC,
-    SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
+    SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
     A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<VerifierConstraintFolderWithLookups<'a, SC>>,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
@@ -101,14 +98,18 @@ where
             .unwrap_or(0);
         preprocessed_widths.push(pre_w);
 
+        let layout = AirLayout {
+            preprocessed_width: pre_w,
+            main_width: air.width(),
+            num_public_values: air.num_public_values(),
+            ..Default::default()
+        };
         let log_num_chunks =
             info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
                 get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
                     air,
-                    pre_w,
-                    public_values[i].len(),
+                    layout,
                     &all_lookups[i],
-                    &lookup_data_to_expr(&global_lookup_data[i]),
                     config.is_zk(),
                     &lookup_gadget,
                 )
@@ -125,9 +126,18 @@ where
         let inst_base_opened_vals = &inst_opened_vals.base_opened_values;
 
         // Validate trace widths match the AIR
-        if inst_base_opened_vals.trace_local.len() != air_width
-            || inst_base_opened_vals.trace_next.len() != air_width
-        {
+        if inst_base_opened_vals.trace_local.len() != air_width {
+            return Err(VerificationError::InvalidProofShape);
+        }
+        if !airs[i].main_next_row_columns().is_empty() {
+            if inst_base_opened_vals
+                .trace_next
+                .as_ref()
+                .is_none_or(|v| v.len() != air_width)
+            {
+                return Err(VerificationError::InvalidProofShape);
+            }
+        } else if inst_base_opened_vals.trace_next.is_some() {
             return Err(VerificationError::InvalidProofShape);
         }
 
@@ -167,7 +177,7 @@ where
             if pre_local_len != 0 || pre_next_len != 0 {
                 return Err(VerificationError::InvalidProofShape);
             }
-        } else if airs[i].preprocessed_uses_next_row() {
+        } else if !airs[i].preprocessed_next_row_columns().is_empty() {
             if pre_local_len != pre_w || pre_next_len != pre_w {
                 return Err(VerificationError::InvalidProofShape);
             }
@@ -216,6 +226,9 @@ where
                 .clone()
                 .expect("We checked that the commitment exists"),
         );
+        for data in global_lookup_data.iter().flatten() {
+            challenger.observe_algebra_element(data.expected_cumulated);
+        }
     }
 
     // Sample alpha for constraint folding
@@ -268,23 +281,24 @@ where
         .zip(opened_values.instances.iter())
         .enumerate()
         .map(|(i, (ext_dom, inst_opened_vals))| {
-            let zeta_next = trace_domains[i]
-                .next_point(zeta)
-                .ok_or(VerificationError::NextPointUnavailable)?;
-
-            Ok((
-                *ext_dom,
-                vec![
-                    (
-                        zeta,
-                        inst_opened_vals.base_opened_values.trace_local.clone(),
-                    ),
-                    (
-                        zeta_next,
-                        inst_opened_vals.base_opened_values.trace_next.clone(),
-                    ),
-                ],
-            ))
+            let mut points = vec![(
+                zeta,
+                inst_opened_vals.base_opened_values.trace_local.clone(),
+            )];
+            if !airs[i].main_next_row_columns().is_empty() {
+                let zeta_next = trace_domains[i]
+                    .next_point(zeta)
+                    .ok_or(VerificationError::NextPointUnavailable)?;
+                points.push((
+                    zeta_next,
+                    inst_opened_vals
+                        .base_opened_values
+                        .trace_next
+                        .clone()
+                        .expect("checked in shape validation"),
+                ));
+            }
+            Ok((*ext_dom, points))
         })
         .collect::<Result<Vec<_>, VerificationError<PcsError<SC>>>>()?;
     coms_to_verify.push((commitments.main.clone(), trace_round));
@@ -361,7 +375,7 @@ where
 
             let meta_db = meta.degree_bits;
             let pre_domain = pcs.natural_domain_for_degree(1 << meta_db);
-            if airs[inst_idx].preprocessed_uses_next_row() {
+            if !airs[inst_idx].preprocessed_next_row_columns().is_empty() {
                 let next = inst
                     .base_opened_values
                     .preprocessed_next
@@ -475,23 +489,42 @@ where
 
         // Verify constraints at zeta using utility function.
         let init_trace_domain = trace_domains[i];
+        let trace_next_zeros;
+        let trace_next_ref = match &opened_values.instances[i].base_opened_values.trace_next {
+            Some(v) => v.as_slice(),
+            None => {
+                trace_next_zeros = vec![SC::Challenge::ZERO; A::width(air)];
+                &trace_next_zeros
+            }
+        };
+        let pre_next_zeros;
+        let pre_next_ref = match &opened_values.instances[i]
+            .base_opened_values
+            .preprocessed_next
+        {
+            Some(v) => v.as_slice(),
+            None => {
+                pre_next_zeros = vec![SC::Challenge::ZERO; preprocessed_widths[i]];
+                &pre_next_zeros
+            }
+        };
+        let perm_vals: Vec<SC::Challenge> = global_lookup_data[i]
+            .iter()
+            .map(|ld| ld.expected_cumulated)
+            .collect();
         let verifier_data = VerifierData {
             trace_local: &opened_values.instances[i].base_opened_values.trace_local,
-            trace_next: &opened_values.instances[i].base_opened_values.trace_next,
+            trace_next: trace_next_ref,
             preprocessed_local: opened_values.instances[i]
                 .base_opened_values
                 .preprocessed_local
                 .as_ref()
                 .map_or(&[], |v| v),
-            preprocessed_next: opened_values.instances[i]
-                .base_opened_values
-                .preprocessed_next
-                .as_ref()
-                .map_or(&[], |v| v),
+            preprocessed_next: pre_next_ref,
             permutation_local: &perm_local_ext,
             permutation_next: &perm_next_ext,
             permutation_challenges: &challenges_per_instance[i],
-            lookup_data: &proof.global_lookup_data[i],
+            permutation_values: &perm_vals,
             lookups: &all_lookups[i],
             public_values: &public_values[i],
             trace_domain: init_trace_domain,
@@ -524,11 +557,7 @@ where
     for (name, all_expected_cumulative) in global_cumulative {
         lookup_gadget
             .verify_global_final_value(&all_expected_cumulative)
-            .map_err(|_| {
-                VerificationError::LookupError(LookupError::GlobalCumulativeMismatch(Some(
-                    name.clone(),
-                )))
-            })?;
+            .map_err(|e| VerificationError::LookupError(format!("{e:?}: {name}")))?;
     }
 
     Ok(())
@@ -554,8 +583,8 @@ pub struct VerifierData<'a, SC: SGC> {
     permutation_next: &'a [SC::Challenge],
     // Challenges used for the lookup argument
     permutation_challenges: &'a [SC::Challenge],
-    // Lookup data needed for global lookup verification
-    lookup_data: &'a [LookupData<SC::Challenge>],
+    // Expected cumulated values for global lookup arguments
+    permutation_values: &'a [SC::Challenge],
     // Lookup contexts for this instance
     lookups: &'a [Lookup<Val<SC>>],
     // Public values for this instance
@@ -588,7 +617,7 @@ where
         permutation_local,
         permutation_next,
         permutation_challenges,
-        lookup_data,
+        permutation_values,
         lookups,
         public_values,
         trace_domain,
@@ -609,13 +638,12 @@ where
         RowMajorMatrixView::new_row(preprocessed_next),
     );
 
+    let preprocessed_window =
+        RowWindow::from_two_rows(preprocessed.top.values, preprocessed.bottom.values);
     let inner_folder = VerifierConstraintFolder {
         main,
-        preprocessed: if preprocessed_local.is_empty() {
-            None
-        } else {
-            Some(preprocessed)
-        },
+        preprocessed,
+        preprocessed_window,
         public_values,
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,
@@ -630,9 +658,10 @@ where
             RowMajorMatrixView::new_row(permutation_next),
         ),
         permutation_challenges,
+        permutation_values,
     };
     // Evaluate AIR and lookup constraints.
-    A::eval_with_lookups(air, &mut folder, lookups, lookup_data, lookup_gadget);
+    air.eval_with_lookups(&mut folder, lookups, lookup_gadget);
     let folded_constraints = folder.inner.accumulator;
 
     // Check that constraints(zeta) / Z_H(zeta) = quotient(zeta)

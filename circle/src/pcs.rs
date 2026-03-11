@@ -28,7 +28,7 @@ use crate::prover::prove;
 use crate::verifier::verify;
 use crate::{CfftPerm, CfftPermutable, CircleEvaluations, CircleFriProof, cfft_permute_index};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
     pub mmcs: InputMmcs,
     pub fri_params: FriParameters<FriMmcs>,
@@ -591,7 +591,7 @@ mod tests {
         type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
         let compress = MyCompress::new(byte_hash);
 
-        type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
+        type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 2, 32>;
         let val_mmcs = ValMmcs::new(field_hash, compress, 0);
 
         type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;

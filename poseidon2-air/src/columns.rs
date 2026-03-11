@@ -17,8 +17,6 @@ pub struct Poseidon2Cols<
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
 > {
-    pub export: T,
-
     pub inputs: [T; WIDTH],
 
     /// Beginning Full Rounds
@@ -70,33 +68,6 @@ pub const fn num_cols<
     )
 }
 
-pub const fn make_col_map<
-    const WIDTH: usize,
-    const SBOX_DEGREE: u64,
-    const SBOX_REGISTERS: usize,
-    const HALF_FULL_ROUNDS: usize,
-    const PARTIAL_ROUNDS: usize,
->() -> Poseidon2Cols<usize, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS> {
-    todo!()
-    // let indices_arr = indices_arr::<
-    //     { num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>() },
-    // >();
-    // unsafe {
-    //     transmute::<
-    //         [usize;
-    //             num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>()],
-    //         Poseidon2Cols<
-    //             usize,
-    //             WIDTH,
-    //             SBOX_DEGREE,
-    //             SBOX_REGISTERS,
-    //             HALF_FULL_ROUNDS,
-    //             PARTIAL_ROUNDS,
-    //         >,
-    //     >(indices_arr)
-    // }
-}
-
 impl<
     T,
     const WIDTH: usize,
@@ -111,7 +82,10 @@ impl<
         &self,
     ) -> &Poseidon2Cols<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>
     {
-        // debug_assert_eq!(self.len(), NUM_COLS);
+        debug_assert_eq!(
+            self.len(),
+            num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>()
+        );
         let (prefix, shorts, suffix) = unsafe {
             self.align_to::<Poseidon2Cols<
                 T,
@@ -143,7 +117,10 @@ impl<
         &mut self,
     ) -> &mut Poseidon2Cols<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>
     {
-        // debug_assert_eq!(self.len(), NUM_COLS);
+        debug_assert_eq!(
+            self.len(),
+            num_cols::<WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>()
+        );
         let (prefix, shorts, suffix) = unsafe {
             self.align_to_mut::<Poseidon2Cols<
                 T,

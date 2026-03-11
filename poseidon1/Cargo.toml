@@ -1,6 +1,6 @@
 [package]
-name = "p3-poseidon"
-description = "A generic implementation of the Poseidon permutation for cryptographic hash constructions."
+name = "p3-poseidon1"
+description = "A generic implementation of the Poseidon1 permutation for cryptographic hash constructions."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,7 +11,6 @@ categories.workspace = true
 
 [dependencies]
 p3-field.workspace = true
-p3-mds.workspace = true
 p3-symmetric.workspace = true
 
 rand.workspace = true
@@ -19,12 +18,14 @@ rand.workspace = true
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
 p3-goldilocks = { path = "../goldilocks" }
+p3-koala-bear = { path = "../koala-bear" }
 p3-mersenne-31 = { path = "../mersenne-31" }
+p3-util = { path = "../util" }
 
 criterion.workspace = true
 
 [[bench]]
-name = "poseidon"
+name = "poseidon1"
 harness = false
 
 [lints]

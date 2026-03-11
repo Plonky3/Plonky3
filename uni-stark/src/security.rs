@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 use core::cmp::min;
 
 use libm::{ceil, log2, pow, sqrt};
-use p3_air::{Air, BaseAir};
+use p3_air::{Air, AirLayout, BaseAir};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
 use p3_fri::FriParameters;
@@ -57,8 +57,14 @@ impl StarkSecurityParams {
     {
         let is_zk_usize = is_zk as usize;
         let trace_width = air.width();
-        let num_constraints = get_symbolic_constraints(air, 0, 0).len();
-        let log_num_quotient_chunks = get_log_num_quotient_chunks(air, 0, 0, is_zk_usize);
+        let layout = AirLayout {
+            preprocessed_width: 3,
+            main_width: trace_width,
+            num_public_values: air.num_public_values(),
+            ..Default::default()
+        };
+        let num_constraints = get_symbolic_constraints(air, layout).len();
+        let log_num_quotient_chunks = get_log_num_quotient_chunks(air, layout, is_zk_usize);
         let num_quotient_chunks = 1 << (log_num_quotient_chunks + is_zk_usize);
 
         Self {
@@ -98,10 +104,14 @@ impl StarkSecurityParams {
         A: Air<SymbolicAirBuilder<F>> + BaseAir<F>,
     {
         let trace_width = air.width();
-        let num_constraints =
-            get_symbolic_constraints(air, preprocessed_width, num_public_values).len();
-        let log_num_quotient_chunks =
-            get_log_num_quotient_chunks(air, preprocessed_width, num_public_values, is_zk);
+        let layout = AirLayout {
+            preprocessed_width,
+            main_width: trace_width,
+            num_public_values,
+            ..Default::default()
+        };
+        let num_constraints = get_symbolic_constraints(air, layout).len();
+        let log_num_quotient_chunks = get_log_num_quotient_chunks(air, layout, is_zk);
         let num_quotient_chunks = 1 << (log_num_quotient_chunks + is_zk);
 
         Self {

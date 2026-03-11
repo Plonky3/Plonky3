@@ -1,5 +1,4 @@
 use alloc::vec::Vec;
-use core::cell::RefCell;
 
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
@@ -9,12 +8,13 @@ use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse};
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversalPerm, BitReversibleMatrix};
-use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView};
+use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixCow};
 use p3_matrix::horizontally_truncated::HorizontallyTruncated;
 use p3_matrix::row_index_mapped::RowIndexMappedView;
 use p3_util::zip_eq::zip_eq;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
+use spin::Mutex;
 use tracing::{info_span, instrument};
 
 use crate::verifier::FriError;
@@ -26,11 +26,28 @@ use crate::{FriParameters, FriProof, TwoAdicFriPcs};
 pub struct HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R> {
     inner: TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs>,
     num_random_codewords: usize,
-    rng: RefCell<R>,
+    rng: Mutex<R>,
+}
+
+impl<Val, Dft, InputMmcs, FriMmcs, R> Clone for HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R>
+where
+    Val: Clone,
+    Dft: Clone,
+    InputMmcs: Clone,
+    FriMmcs: Clone,
+    R: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            num_random_codewords: self.num_random_codewords,
+            rng: Mutex::new(self.rng.lock().clone()),
+        }
+    }
 }
 
 impl<Val, Dft, InputMmcs, FriMmcs, R> HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R> {
-    pub fn new(
+    pub const fn new(
         dft: Dft,
         mmcs: InputMmcs,
         params: FriParameters<FriMmcs>,
@@ -41,7 +58,7 @@ impl<Val, Dft, InputMmcs, FriMmcs, R> HidingFriPcs<Val, Dft, InputMmcs, FriMmcs,
         Self {
             inner,
             num_random_codewords,
-            rng: rng.into(),
+            rng: Mutex::new(rng),
         }
     }
 }
@@ -62,10 +79,8 @@ where
     type Domain = TwoAdicMultiplicativeCoset<Val>;
     type Commitment = InputMmcs::Commitment;
     type ProverData = InputMmcs::ProverData<RowMajorMatrix<Val>>;
-    type EvaluationsOnDomain<'a> = HorizontallyTruncated<
-        Val,
-        RowIndexMappedView<BitReversalPerm, RowMajorMatrixView<'a, Val>>,
-    >;
+    type EvaluationsOnDomain<'a> =
+        HorizontallyTruncated<Val, RowIndexMappedView<BitReversalPerm, RowMajorMatrixCow<'a, Val>>>;
     /// The first item contains the openings of the random polynomials added by this wrapper.
     /// The second item is the usual FRI proof.
     type Proof = (
@@ -98,7 +113,7 @@ where
                         let mut random_evaluation = add_random_cols(
                             &mat,
                             mat_width + 2 * self.num_random_codewords,
-                            &mut *self.rng.borrow_mut(),
+                            &mut *self.rng.lock(),
                         );
                         random_evaluation.width = mat_width + self.num_random_codewords;
 
@@ -158,7 +173,7 @@ where
             .map(|i| cis[i] * last_chunk_ci_inv)
             .collect_vec();
 
-        let mut rng = self.rng.borrow_mut();
+        let mut rng = self.rng.lock();
         let randomized_evaluations: Vec<RowMajorMatrix<Val>> = evaluations
             .into_iter()
             .map(|mat| add_random_cols(&mat, self.num_random_codewords, &mut *rng))
@@ -384,7 +399,7 @@ where
             .into_iter()
             .map(|domain| {
                 let m = DenseMatrix::rand(
-                    &mut *self.rng.borrow_mut(),
+                    &mut *self.rng.lock(),
                     domain.size(),
                     self.num_random_codewords + Challenge::DIMENSION,
                 );

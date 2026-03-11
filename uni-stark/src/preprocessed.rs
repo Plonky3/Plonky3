@@ -1,10 +1,10 @@
 use p3_air::Air;
+use p3_air::symbolic::SymbolicAirBuilder;
 use p3_commit::Pcs;
-use p3_field::Field;
 use p3_matrix::Matrix;
 use tracing::debug_span;
 
-use crate::{ProverConstraintFolder, StarkGenericConfig, SymbolicAirBuilder, Val};
+use crate::{ProverConstraintFolder, StarkGenericConfig, Val};
 
 /// Prover-side reusable data for preprocessed columns.
 ///
@@ -52,7 +52,6 @@ pub fn setup_preprocessed<SC, A>(
 ) -> Option<(PreprocessedProverData<SC>, PreprocessedVerifierKey<SC>)>
 where
     SC: StarkGenericConfig,
-    Val<SC>: Field,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
     let pcs = config.pcs();

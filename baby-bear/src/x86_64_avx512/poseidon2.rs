@@ -125,6 +125,71 @@ impl InternalLayerParametersAVX512<BabyBearParameters, 24> for BabyBearInternalL
     const NUM_POS: usize = 7;
 }
 
+impl InternalLayerParametersAVX512<BabyBearParameters, 32> for BabyBearInternalLayerParameters {
+    type ArrayLike = [__m512i; 31];
+
+    #[inline(always)]
+    unsafe fn diagonal_mul_remainder(input: &mut [__m512i; 31]) {
+        unsafe {
+            // The following 11 muls (input[8] to input[18]) output the negative of what we want.
+            // This will be handled in add_sum.
+
+            // input[8] -> input[8] / 2^8
+            input[8] = mul_neg_2exp_neg_8_avx512::<BabyBearParameters, 19>(input[8]);
+            // input[9] -> input[9] / 2^2
+            input[9] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 2, 25>(input[9]);
+            // input[10] -> input[10] / 2^3
+            input[10] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 3, 24>(input[10]);
+            // input[11] -> input[11] / 2^4
+            input[11] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 4, 23>(input[11]);
+            // input[12] -> input[12] / 2^5
+            input[12] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 5, 22>(input[12]);
+            // input[13] -> input[13] / 2^6
+            input[13] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 6, 21>(input[13]);
+            // input[14] -> input[14] / 2^7
+            input[14] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 7, 20>(input[14]);
+            // input[15] -> input[15] / 2^9
+            input[15] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 9, 18>(input[15]);
+            // input[16] -> input[16] / 2^10
+            input[16] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 10, 17>(input[16]);
+            // input[17] -> input[17] / 2^12
+            input[17] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 12, 15>(input[17]);
+            // input[18] -> input[18] / 2^27
+            input[18] = mul_neg_2exp_neg_two_adicity_avx512::<BabyBearParameters, 27, 4>(input[18]);
+
+            // The remaining muls output the correct value again.
+
+            // input[19] -> -input[19] / 2^8
+            input[19] = mul_neg_2exp_neg_8_avx512::<BabyBearParameters, 19>(input[19]);
+            // input[20] -> -input[20] / 2^2
+            input[20] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 2, 25>(input[20]);
+            // input[21] -> -input[21] / 2^3
+            input[21] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 3, 24>(input[21]);
+            // input[22] -> -input[22] / 2^4
+            input[22] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 4, 23>(input[22]);
+            // input[23] -> -input[23] / 2^5
+            input[23] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 5, 22>(input[23]);
+            // input[24] -> -input[24] / 2^6
+            input[24] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 6, 21>(input[24]);
+            // input[25] -> -input[25] / 2^7
+            input[25] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 7, 20>(input[25]);
+            // input[26] -> -input[26] / 2^9
+            input[26] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 9, 18>(input[26]);
+            // input[27] -> -input[27] / 2^10
+            input[27] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 10, 17>(input[27]);
+            // input[28] -> -input[28] / 2^12
+            input[28] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 12, 15>(input[28]);
+            // input[29] -> -input[29] / 2^14
+            input[29] = mul_neg_2exp_neg_n_avx512::<BabyBearParameters, 14, 13>(input[29]);
+            // input[30] -> -input[30] / 2^27
+            input[30] = mul_neg_2exp_neg_two_adicity_avx512::<BabyBearParameters, 27, 4>(input[30]);
+        }
+    }
+
+    /// There are 11 positive inverse powers of two after the -4.
+    const NUM_POS: usize = 11;
+}
+
 #[cfg(test)]
 mod tests {
     use p3_symmetric::Permutation;
@@ -176,6 +241,19 @@ mod tests {
 
         let avx512_output = avx512_input.map(|x| x.0[0]);
 
+        assert_eq!(avx512_output, expected);
+    }
+
+    #[test]
+    fn test_avx512_poseidon2_width_32() {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let poseidon2 = Poseidon2BabyBear::<32>::new_from_rng_128(&mut rng);
+        let input: [F; 32] = rng.random();
+        let mut expected = input;
+        poseidon2.permute_mut(&mut expected);
+        let mut avx512_input = input.map(Into::<PackedBabyBearAVX512>::into);
+        poseidon2.permute_mut(&mut avx512_input);
+        let avx512_output = avx512_input.map(|x| x.0[0]);
         assert_eq!(avx512_output, expected);
     }
 }

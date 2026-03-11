@@ -1,11 +1,12 @@
 //! See [`crate::prover`] for an overview of the protocol and a more detailed soundness analysis.
 
+use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 
 use itertools::Itertools;
-use p3_air::Air;
-use p3_air::lookup::LookupError;
+use p3_air::symbolic::SymbolicAirBuilder;
+use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
@@ -15,9 +16,9 @@ use p3_util::zip_eq::zip_eq;
 use thiserror::Error;
 use tracing::instrument;
 
-use crate::symbolic_builder::{SymbolicAirBuilder, get_log_num_quotient_chunks};
+use crate::symbolic::get_log_num_quotient_chunks;
 use crate::{
-    Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
+    AirLayout, Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
     VerifierConstraintFolder,
 };
 
@@ -97,16 +98,22 @@ where
     );
 
     let preprocessed = match (preprocessed_local, preprocessed_next) {
-        (Some(local), Some(next)) => Some(VerticalPair::new(
+        (Some(local), Some(next)) => VerticalPair::new(
             RowMajorMatrixView::new_row(local),
             RowMajorMatrixView::new_row(next),
-        )),
-        _ => None,
+        ),
+        _ => VerticalPair::new(
+            RowMajorMatrixView::new(&[], 0),
+            RowMajorMatrixView::new(&[], 0),
+        ),
     };
 
+    let preprocessed_window =
+        RowWindow::from_two_rows(preprocessed.top.values, preprocessed.bottom.values);
     let mut folder = VerifierConstraintFolder {
         main,
         preprocessed,
+        preprocessed_window,
         public_values,
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,
@@ -160,7 +167,12 @@ where
         .preprocessed_next
         .as_ref()
         .map_or(0, |v| v.len());
-    if preprocessed_width != preprocessed_local_len || preprocessed_width != preprocessed_next_len {
+    let expected_next_len = if !air.preprocessed_next_row_columns().is_empty() {
+        preprocessed_width
+    } else {
+        0
+    };
+    if preprocessed_width != preprocessed_local_len || expected_next_len != preprocessed_next_len {
         // Verifier expects preprocessed trace while proof does not have it, or vice versa
         return Err(VerificationError::InvalidProofShape);
     }
@@ -233,12 +245,14 @@ where
         return Err(VerificationError::InvalidProofShape);
     }
 
-    let log_num_quotient_chunks = get_log_num_quotient_chunks::<Val<SC>, A>(
-        air,
+    let layout = AirLayout {
         preprocessed_width,
-        public_values.len(),
-        config.is_zk(),
-    );
+        main_width: air.width(),
+        num_public_values: air.num_public_values(),
+        ..Default::default()
+    };
+    let log_num_quotient_chunks =
+        get_log_num_quotient_chunks::<Val<SC>, A>(air, layout, config.is_zk());
     let num_quotient_chunks = 1 << (log_num_quotient_chunks + config.is_zk());
     let mut challenger = config.initialise_challenger();
     let init_trace_domain = pcs.natural_domain_for_degree(degree >> (config.is_zk()));
@@ -261,8 +275,18 @@ where
     }
 
     let air_width = A::width(air);
+    let main_next = !air.main_next_row_columns().is_empty();
+    let pre_next = !air.preprocessed_next_row_columns().is_empty();
+    let trace_next_ok = if main_next {
+        opened_values
+            .trace_next
+            .as_ref()
+            .is_some_and(|v| v.len() == air_width)
+    } else {
+        opened_values.trace_next.is_none()
+    };
     let valid_shape = opened_values.trace_local.len() == air_width
-        && opened_values.trace_next.len() == air_width
+        && trace_next_ok
         && opened_values.quotient_chunks.len() == num_quotient_chunks
         && opened_values
             .quotient_chunks
@@ -323,17 +347,24 @@ where
     } else {
         vec![]
     };
-    coms_to_verify.extend(vec![
+    let trace_round = {
+        let mut trace_points = vec![(zeta, opened_values.trace_local.clone())];
+        if main_next {
+            trace_points.push((
+                zeta_next,
+                opened_values
+                    .trace_next
+                    .clone()
+                    .expect("checked in shape validation"),
+            ));
+        }
         (
             commitments.trace.clone(),
-            vec![(
-                trace_domain,
-                vec![
-                    (zeta, opened_values.trace_local.clone()),
-                    (zeta_next, opened_values.trace_next.clone()),
-                ],
-            )],
-        ),
+            vec![(trace_domain, trace_points)],
+        )
+    };
+    coms_to_verify.extend(vec![
+        trace_round,
         (
             commitments.quotient_chunks.clone(),
             // Check the commitment on the randomized domains.
@@ -349,15 +380,13 @@ where
 
     // Add preprocessed commitment verification if present
     if preprocessed_width > 0 {
+        let mut pre_points = vec![(zeta, opened_values.preprocessed_local.clone().unwrap())];
+        if pre_next {
+            pre_points.push((zeta_next, opened_values.preprocessed_next.clone().unwrap()));
+        }
         coms_to_verify.push((
             preprocessed_commit.unwrap(),
-            vec![(
-                trace_domain,
-                vec![
-                    (zeta, opened_values.preprocessed_local.clone().unwrap()),
-                    (zeta_next, opened_values.preprocessed_next.clone().unwrap()),
-                ],
-            )],
+            vec![(trace_domain, pre_points)],
         ));
     }
 
@@ -370,12 +399,29 @@ where
         zeta,
     );
 
+    let zeros;
+    let trace_next_slice = match &opened_values.trace_next {
+        Some(v) => v.as_slice(),
+        None => {
+            zeros = vec![SC::Challenge::ZERO; air_width];
+            &zeros
+        }
+    };
+    let pre_next_zeros;
+    let preprocessed_next_for_verify = match &opened_values.preprocessed_next {
+        Some(v) => Some(v.as_slice()),
+        None if preprocessed_width > 0 => {
+            pre_next_zeros = vec![SC::Challenge::ZERO; preprocessed_width];
+            Some(pre_next_zeros.as_slice())
+        }
+        None => None,
+    };
     verify_constraints::<SC, A, PcsError<SC>>(
         air,
         &opened_values.trace_local,
-        &opened_values.trace_next,
+        trace_next_slice,
         opened_values.preprocessed_local.as_deref(),
-        opened_values.preprocessed_next.as_deref(),
+        preprocessed_next_for_verify,
         public_values,
         init_trace_domain,
         zeta,
@@ -409,6 +455,6 @@ where
     )]
     NextPointUnavailable,
     /// Lookup related error
-    #[error("lookup error: {0:?}")]
-    LookupError(LookupError),
+    #[error("lookup error: {0}")]
+    LookupError(String),
 }

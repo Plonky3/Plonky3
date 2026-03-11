@@ -151,7 +151,6 @@ pub fn generate_trace_rows_for_perm<
     mut state: [F; WIDTH],
     constants: &RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
 ) {
-    perm.export.write(F::ONE);
     perm.inputs
         .iter_mut()
         .zip(state.iter())

@@ -1,34 +1,37 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_air::Air;
+#[cfg(debug_assertions)]
+use p3_air::DebugConstraintBuilder;
+use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
+use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
+use p3_field::{
+    Algebra, BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+};
+use p3_lookup::AirWithLookups;
 use p3_lookup::folder::ProverConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::lookup_traits::{Kind, Lookup, LookupData, LookupGadget, lookup_data_to_expr};
+use p3_lookup::lookup_traits::{Kind, Lookup, LookupData, LookupGadget};
 use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
-use p3_uni_stark::{
-    OpenedValues, PackedChallenge, PackedVal, ProverConstraintFolder, SymbolicAirBuilder,
-    SymbolicExpression,
-};
+use p3_uni_stark::{OpenedValues, PackedChallenge, PackedVal, ProverConstraintFolder};
 use p3_util::log2_strict_usize;
 use tracing::{debug_span, info_span, instrument};
 
-#[cfg(debug_assertions)]
-use crate::check_constraints::DebugConstraintBuilderWithLookups;
 use crate::common::{CommonData, ProverData, get_perm_challenges};
 use crate::config::{Challenge, Domain, StarkGenericConfig as SGC, Val, observe_instance_binding};
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
-use crate::symbolic::{get_log_num_quotient_chunks, get_symbolic_constraints};
+use crate::symbolic::{
+    get_constraint_layout, get_log_num_quotient_chunks, get_symbolic_constraints,
+};
 
 #[derive(Debug)]
 pub struct StarkInstance<'a, SC: SGC, A> {
     pub air: &'a A,
-    pub trace: RowMajorMatrix<Val<SC>>,
+    pub trace: &'a RowMajorMatrix<Val<SC>>,
     pub public_values: Vec<Val<SC>>,
     pub lookups: Vec<Lookup<Val<SC>>>,
 }
@@ -36,7 +39,7 @@ pub struct StarkInstance<'a, SC: SGC, A> {
 impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
     pub fn new_multiple(
         airs: &'a [A],
-        traces: &[RowMajorMatrix<Val<SC>>],
+        traces: &'a [&'a RowMajorMatrix<Val<SC>>],
         public_values: &[Vec<Val<SC>>],
         common_data: &CommonData<SC>,
     ) -> Vec<Self> {
@@ -46,7 +49,7 @@ impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
             .zip(common_data.lookups.iter())
             .map(|(((air, trace), public_values), lookups)| Self {
                 air,
-                trace: trace.clone(),
+                trace,
                 public_values: public_values.clone(),
                 lookups: lookups.clone(),
             })
@@ -57,7 +60,7 @@ impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
 #[instrument(skip_all)]
 pub fn prove_batch<
     SC,
-    #[cfg(debug_assertions)] A: for<'a> Air<DebugConstraintBuilderWithLookups<'a, Val<SC>, SC::Challenge>>
+    #[cfg(debug_assertions)] A: for<'a> Air<DebugConstraintBuilder<'a, Val<SC>, SC::Challenge>>
         + Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<ProverConstraintFolderWithLookups<'a, SC>>
         + Clone,
@@ -71,7 +74,7 @@ pub fn prove_batch<
 ) -> BatchProof<SC>
 where
     SC: SGC,
-    SymbolicExpression<SC::Challenge>: From<SymbolicExpression<Val<SC>>>,
+    SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
 {
     let common = &prover_data.common;
     // TODO: Extend if additional lookup gadgets are added.
@@ -127,21 +130,25 @@ where
         .iter()
         .zip(pub_vals.iter())
         .enumerate()
-        .map(|(i, (air, pv))| {
+        .map(|(i, (air, _pv))| {
             let pre_w = common
                 .preprocessed
                 .as_ref()
                 .and_then(|g| g.instances[i].as_ref().map(|m| m.width))
                 .unwrap_or(0);
             preprocessed_widths.push(pre_w);
+            let layout = AirLayout {
+                preprocessed_width: pre_w,
+                main_width: air.width(),
+                num_public_values: air.num_public_values(),
+                ..Default::default()
+            };
             let lq_chunks =
                 info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
                     get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
                         air,
-                        pre_w,
-                        pv.len(),
+                        layout,
                         &all_lookups[i],
-                        &lookup_data_to_expr(&lookup_data[i]),
                         config.is_zk(),
                         &lookup_gadget,
                     )
@@ -204,7 +211,7 @@ where
         .for_each(|((i, inst), ext_domain)| {
             if !all_lookups[i].is_empty() {
                 let generated_perm = lookup_gadget.generate_permutation::<SC>(
-                    &inst.trace,
+                    inst.trace,
                     &inst.air.preprocessed_trace(),
                     &inst.public_values,
                     &all_lookups[i],
@@ -220,17 +227,18 @@ where
 
                     let preprocessed_trace = inst.air.preprocessed_trace();
 
-                    let lookup_constraints_inputs = (
-                        all_lookups[i].as_slice(),
-                        lookup_data[i].as_slice(),
-                        &lookup_gadget,
-                    );
+                    let perm_vals: Vec<SC::Challenge> = lookup_data[i]
+                        .iter()
+                        .map(|ld| ld.expected_cumulated)
+                        .collect();
+                    let lookup_constraints_inputs = (all_lookups[i].as_slice(), &lookup_gadget);
                     check_constraints(
                         inst.air,
-                        &inst.trace,
+                        inst.trace,
                         &preprocessed_trace,
                         &generated_perm,
                         &challenges_per_instance[i],
+                        &perm_vals,
                         &inst.public_values,
                         lookup_constraints_inputs,
                     );
@@ -251,7 +259,7 @@ where
             .iter()
             .zip(preprocessed_traces.iter())
             .map(|(inst, prep)| LookupDebugInstance {
-                main_trace: &inst.trace,
+                main_trace: inst.trace,
                 preprocessed_trace: prep,
                 public_values: &inst.public_values,
                 lookups: &inst.lookups,
@@ -265,6 +273,9 @@ where
     let permutation_commit_and_data = if !permutation_commit_inputs.is_empty() {
         let commitment = pcs.commit(permutation_commit_inputs);
         challenger.observe(commitment.0.clone());
+        for data in lookup_data.iter().flatten() {
+            challenger.observe_algebra_element(data.expected_cumulated);
+        }
         Some(commitment)
     } else {
         None
@@ -294,16 +305,26 @@ where
         let quotient_domain =
             ext_trace_domains[i].create_disjoint_domain(1 << (log_ext_degrees[i] + log_chunks));
 
-        // Count constraints to size alpha powers packing.
-        let (base_constraints, extension_constraints) = get_symbolic_constraints(
-            airs[i],
-            preprocessed_widths[i],
-            pub_vals[i].len(),
-            &all_lookups[i],
-            &lookup_data_to_expr(&lookup_data[i]),
-            &lookup_gadget,
+        let sym_layout = AirLayout {
+            preprocessed_width: preprocessed_widths[i],
+            main_width: airs[i].width(),
+            num_public_values: airs[i].num_public_values(),
+            ..Default::default()
+        };
+
+        // In debug builds, cross-check the static hint against symbolic evaluation.
+        debug_assert!(
+            airs[i].num_constraints().is_none_or(|n| {
+                n == get_symbolic_constraints(airs[i], sym_layout, &all_lookups[i], &lookup_gadget)
+                    .0
+                    .len()
+            }),
+            "num_constraints() = {} but symbolic evaluation found {} base constraints",
+            airs[i].num_constraints().unwrap(),
+            get_symbolic_constraints(airs[i], sym_layout, &all_lookups[i], &lookup_gadget,)
+                .0
+                .len(),
         );
-        let constraint_len = base_constraints.len() + extension_constraints.len();
 
         // Get evaluations on quotient domain from the main commitment.
         let trace_on_quotient_domain =
@@ -337,20 +358,24 @@ where
             });
 
         // Compute quotient(x) = constraints(x)/Z_H(x) over quotient_domain, as extension values.
+        let perm_vals: Vec<SC::Challenge> = lookup_data[i]
+            .iter()
+            .map(|ld| ld.expected_cumulated)
+            .collect();
         let q_values = quotient_values::<SC, A, _, LogUpGadget>(
             airs[i],
             &pub_vals[i],
+            sym_layout,
             *trace_domain,
             quotient_domain,
             &trace_on_quotient_domain,
             permutation_on_quotient_domain.as_ref(),
             &all_lookups[i],
-            &lookup_data[i],
+            &perm_vals,
             &lookup_gadget,
             &challenges_per_instance[i],
             preprocessed_on_quotient_domain.as_ref(),
             alpha,
-            constraint_len,
         );
 
         // Flatten to base field and split into chunks.
@@ -358,10 +383,7 @@ where
         let chunk_mats = quotient_domain.split_evals(n_chunks, q_flat);
         let chunk_domains = quotient_domain.split_domains(n_chunks);
 
-        let evals = chunk_domains
-            .iter()
-            .zip(chunk_mats.iter())
-            .map(|(d, m)| (*d, m.clone()));
+        let evals = chunk_domains.iter().zip(chunk_mats).map(|(d, m)| (*d, m));
         let ldes = pcs.get_quotient_ldes(evals, n_chunks);
 
         let start = quotient_chunk_domains.len();
@@ -408,15 +430,20 @@ where
             (r_data, round0_points)
         });
         rounds.extend(round0);
-        // Main trace round: per instance, open at zeta and its next point.
+        // Main trace round: per instance, open at zeta and (conditionally) its next point.
         let round1_points = trace_domains
             .iter()
-            .map(|dom| {
-                vec![
-                    zeta,
-                    dom.next_point(zeta)
-                        .expect("domain should support next_point operation"),
-                ]
+            .enumerate()
+            .map(|(i, dom)| {
+                if !airs[i].main_next_row_columns().is_empty() {
+                    vec![
+                        zeta,
+                        dom.next_point(zeta)
+                            .expect("domain should support next_point operation"),
+                    ]
+                } else {
+                    vec![zeta]
+                }
             })
             .collect::<Vec<_>>();
         rounds.push((&main_data, round1_points));
@@ -443,7 +470,7 @@ where
                 .matrix_to_instance
                 .iter()
                 .map(|&inst_idx| {
-                    if airs[inst_idx].preprocessed_uses_next_row() {
+                    if !airs[inst_idx].preprocessed_next_row_columns().is_empty() {
                         let zeta_next_i = trace_domains[inst_idx]
                             .next_point(zeta)
                             .expect("domain should support next_point operation");
@@ -519,7 +546,11 @@ where
         // Trace locals
         let tv = &trace_values_for_mats[i];
         let trace_local = tv[0].clone();
-        let trace_next = tv[1].clone();
+        let trace_next = if !airs[i].main_next_row_columns().is_empty() {
+            Some(tv[1].clone())
+        } else {
+            None
+        };
 
         // Quotient chunks: for each chunk matrix, take the first point (zeta) values.
         let mut qcs = Vec::with_capacity(e - s);
@@ -536,12 +567,21 @@ where
         {
             global.instances[i].as_ref().map_or((None, None), |meta| {
                 let vals = &pre_round[meta.matrix_index];
-                assert_eq!(
-                    vals.len(),
-                    2,
-                    "expected two opening points (zeta, zeta_next) for preprocessed trace"
-                );
-                (Some(vals[0].clone()), Some(vals[1].clone()))
+                if !airs[i].preprocessed_next_row_columns().is_empty() {
+                    assert_eq!(
+                        vals.len(),
+                        2,
+                        "expected two opening points (zeta, zeta_next) for preprocessed trace"
+                    );
+                    (Some(vals[0].clone()), Some(vals[1].clone()))
+                } else {
+                    assert_eq!(
+                        vals.len(),
+                        1,
+                        "expected one opening point (zeta) for preprocessed trace"
+                    );
+                    (Some(vals[0].clone()), None)
+                }
             })
         } else {
             (None, None)
@@ -599,23 +639,25 @@ where
 pub fn quotient_values<SC, A, Mat, LG>(
     air: &A,
     public_values: &[Val<SC>],
+    layout: AirLayout,
     trace_domain: Domain<SC>,
     quotient_domain: Domain<SC>,
     trace_on_quotient_domain: &Mat,
     opt_permutation_on_quotient_domain: Option<&Mat>,
     lookups: &[Lookup<Val<SC>>],
-    lookup_data: &[LookupData<SC::Challenge>],
+    permutation_vals: &[SC::Challenge],
     lookup_gadget: &LG,
     permutation_challenges: &[SC::Challenge],
     preprocessed_on_quotient_domain: Option<&Mat>,
     alpha: SC::Challenge,
-    constraint_count: usize,
 ) -> Vec<SC::Challenge>
 where
     SC: SGC,
-    A: for<'a> Air<ProverConstraintFolderWithLookups<'a, SC>>,
+    A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
+        + for<'a> Air<ProverConstraintFolderWithLookups<'a, SC>>,
     Mat: Matrix<Val<SC>> + Sync,
     LG: LookupGadget + Sync,
+    SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
 {
     let quotient_size = quotient_domain.size();
     let main_width = trace_on_quotient_domain.width();
@@ -643,18 +685,19 @@ where
         pad(&mut sels.inv_vanishing);
     }
 
-    let mut alpha_powers = alpha.powers().collect_n(constraint_count);
-    alpha_powers.reverse();
-    // alpha powers looks like Vec<EF> ~ Vec<[F; D]>
-    // It's useful to also have access to the transpose of this of form [Vec<F>; D].
-    let decomposed_alpha_powers: Vec<_> = (0..SC::Challenge::DIMENSION)
-        .map(|i| {
-            alpha_powers
-                .iter()
-                .map(|x| x.as_basis_coefficients_slice()[i])
-                .collect()
-        })
+    let constraint_layout = get_constraint_layout(air, layout, lookups, lookup_gadget);
+    let (base_alpha_powers, ext_alpha_powers) = constraint_layout.decompose_alpha(alpha);
+
+    // Precompute per-instance data used by the hot inner loop to avoid repeated allocations.
+    let packed_perm_challenges: Vec<PackedChallenge<SC>> = permutation_challenges
+        .iter()
+        .map(|&p_c| PackedChallenge::<SC>::from(p_c))
         .collect();
+    let permutation_vals_packed: Vec<PackedChallenge<SC>> = permutation_vals
+        .iter()
+        .map(|&v| PackedChallenge::<SC>::from(v))
+        .collect();
+
     (0..quotient_size)
         .into_par_iter()
         .step_by(PackedVal::<SC>::WIDTH)
@@ -709,47 +752,35 @@ where
                 },
             );
 
-            let accumulator = PackedChallenge::<SC>::ZERO;
+            let preprocessed_view = preprocessed
+                .as_ref()
+                .map_or_else(|| RowMajorMatrixView::new(&[], 0), |m| m.as_view());
             let inner_folder = ProverConstraintFolder {
                 main: main.as_view(),
-                preprocessed: preprocessed.as_ref().map(|m| m.as_view()),
+                preprocessed: preprocessed_view,
+                preprocessed_window: RowWindow::from_view(&preprocessed_view),
                 public_values,
                 is_first_row,
                 is_last_row,
                 is_transition,
-                alpha_powers: &alpha_powers,
-                decomposed_alpha_powers: &decomposed_alpha_powers,
-                accumulator,
+                base_alpha_powers: &base_alpha_powers,
+                ext_alpha_powers: &ext_alpha_powers,
+                base_constraints: Vec::with_capacity(constraint_layout.base_indices.len()),
+                ext_constraints: Vec::with_capacity(constraint_layout.ext_indices.len()),
                 constraint_index: 0,
+                constraint_count: constraint_layout.total_constraints(),
             };
-            let packed_perm_challenges = permutation_challenges
-                .iter()
-                .map(|p_c| PackedChallenge::<SC>::from(*p_c))
-                .collect::<Vec<_>>();
 
             let mut folder = ProverConstraintFolderWithLookups {
                 inner: inner_folder,
                 permutation: permutation.as_view(),
                 permutation_challenges: &packed_perm_challenges,
+                permutation_values: &permutation_vals_packed,
             };
-            A::eval_with_lookups(
-                air,
-                &mut folder,
-                lookups,
-                lookup_data
-                    .iter()
-                    .map(|ld| LookupData {
-                        name: ld.name.clone(),
-                        aux_idx: ld.aux_idx,
-                        expected_cumulated: ld.expected_cumulated.into(),
-                    })
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-                lookup_gadget,
-            );
+            air.eval_with_lookups(&mut folder, lookups, lookup_gadget);
 
             // quotient(x) = constraints(x) / Z_H(x)
-            let quotient = folder.inner.accumulator * inv_vanishing;
+            let quotient = folder.inner.finalize_constraints() * inv_vanishing;
 
             // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
             (0..core::cmp::min(quotient_size, PackedVal::<SC>::WIDTH))

@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use p3_field::{BasedVectorSpace, Field, PrimeField, PrimeField32, reduce_32, split_32};
 use p3_symmetric::{CryptographicPermutation, Hash, MerkleCap};
 
-use crate::{CanObserve, CanSample, CanSampleBits, FieldChallenger};
+use crate::{CanFinalizeDigest, CanObserve, CanSample, CanSampleBits, FieldChallenger};
 
 /// A challenger that operates natively on PF but produces challenges of F: PrimeField32.
 ///
@@ -66,7 +66,7 @@ where
         self.permutation.permute_mut(&mut self.sponge_state);
 
         self.output_buffer.clear();
-        for &pf_val in &self.sponge_state {
+        for &pf_val in &self.sponge_state[..RATE] {
             self.output_buffer
                 .extend(split_32::<PF, F>(pf_val, self.num_f_elms));
         }
@@ -224,5 +224,185 @@ where
         let rand_f: F = self.sample();
         let rand_usize = rand_f.as_canonical_u32() as usize;
         rand_usize & ((1 << bits) - 1)
+    }
+}
+
+impl<F, PF, P, const WIDTH: usize, const RATE: usize> CanFinalizeDigest
+    for MultiField32Challenger<F, PF, P, WIDTH, RATE>
+where
+    F: PrimeField32,
+    PF: PrimeField,
+    P: CryptographicPermutation<[PF; WIDTH]>,
+{
+    type Digest = [PF; RATE];
+
+    fn finalize(mut self) -> [PF; RATE] {
+        // Unconditionally duplex: absorb any pending input and permute.
+        //
+        // Note: sampling only pops from the output buffer without modifying
+        // sponge state, so it does not necessarily affect the digest (e.g.
+        // when the last observe already triggered auto-duplexing).
+        self.duplexing();
+        self.sponge_state[..RATE].try_into().unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_goldilocks::Goldilocks;
+    use p3_symmetric::Permutation;
+
+    use super::*;
+
+    const WIDTH: usize = 8;
+    const RATE: usize = 4;
+
+    type F = BabyBear;
+    type PF = Goldilocks;
+
+    #[derive(Clone)]
+    struct TestPermutation;
+
+    impl Permutation<[PF; WIDTH]> for TestPermutation {
+        fn permute_mut(&self, input: &mut [PF; WIDTH]) {
+            for (i, val) in input.iter_mut().enumerate() {
+                *val = PF::from_u8((i + 1) as u8);
+            }
+        }
+    }
+
+    impl CryptographicPermutation<[PF; WIDTH]> for TestPermutation {}
+
+    /// A permutation where each output depends on all inputs, suitable for
+    /// tests that need to detect state changes (e.g. finalize).
+    #[derive(Clone)]
+    struct MixingPermutation;
+
+    impl Permutation<[PF; WIDTH]> for MixingPermutation {
+        fn permute_mut(&self, input: &mut [PF; WIDTH]) {
+            let sum: PF = input.iter().copied().sum();
+            for (i, val) in input.iter_mut().enumerate() {
+                *val = sum + PF::from_u8((i + 1) as u8);
+            }
+        }
+    }
+
+    impl CryptographicPermutation<[PF; WIDTH]> for MixingPermutation {}
+
+    #[test]
+    fn test_output_buffer_excludes_capacity() {
+        let permutation = TestPermutation;
+        let mut challenger =
+            MultiField32Challenger::<F, PF, _, WIDTH, RATE>::new(permutation).unwrap();
+
+        // num_f_elms = PF::bits() / 64 = 64 / 64 = 1 for Goldilocks
+        let num_f_elms = challenger.num_f_elms;
+
+        // Trigger duplexing by sampling
+        let _: F = challenger.sample();
+
+        // Output buffer should contain RATE * num_f_elms elements, NOT WIDTH * num_f_elms
+        // This verifies we only output the rate portion, not the capacity
+        let expected_output_size = RATE * num_f_elms;
+        let incorrect_output_size = WIDTH * num_f_elms;
+
+        assert_eq!(
+            challenger.output_buffer.len(),
+            expected_output_size - 1, // -1 because we sampled one element
+            "Output buffer should be based on RATE ({}), not WIDTH ({})",
+            expected_output_size,
+            incorrect_output_size
+        );
+    }
+
+    #[test]
+    fn test_finalize() {
+        let new_chal =
+            || MultiField32Challenger::<F, PF, _, WIDTH, RATE>::new(MixingPermutation).unwrap();
+
+        // Deterministic: same observations produce same digest.
+        let mut c1 = new_chal();
+        let mut c2 = new_chal();
+        for i in 0..5u8 {
+            c1.observe(F::from_u8(i));
+            c2.observe(F::from_u8(i));
+        }
+        assert_eq!(c1.finalize(), c2.finalize());
+
+        // Different observations produce different digests.
+        let mut c1 = new_chal();
+        let mut c2 = new_chal();
+        for i in 0..5u8 {
+            c1.observe(F::from_u8(i));
+            c2.observe(F::from_u8(i + 1));
+        }
+        assert_ne!(c1.finalize(), c2.finalize());
+    }
+
+    /// Document how sampling interacts with finalize.
+    ///
+    /// Same principle as DuplexChallenger: sampling only pops from the
+    /// output buffer without modifying sponge state. The digest changes
+    /// when a sample triggers a new duplexing. Each duplexing produces
+    /// `num_f_elms * RATE` output elements (here 1 * 4 = 4 BabyBear
+    /// elements for Goldilocks/BabyBear), so the digest is stable within
+    /// each batch of that many samples.
+    #[test]
+    fn test_finalize_sample_interaction() {
+        let batch_size = {
+            let c =
+                MultiField32Challenger::<F, PF, _, WIDTH, RATE>::new(MixingPermutation).unwrap();
+            c.num_f_elms * RATE
+        };
+
+        let digest = |n_samples: usize| {
+            let mut c =
+                MultiField32Challenger::<F, PF, _, WIDTH, RATE>::new(MixingPermutation).unwrap();
+            for i in 0..3u8 {
+                c.observe(F::from_u8(i));
+            }
+            for _ in 0..n_samples {
+                let _: F = c.sample();
+            }
+            c.finalize()
+        };
+
+        // The first sample triggers duplexing (absorbs pending input),
+        // so finalize's duplexing is an extra permutation — different digest.
+        assert_ne!(digest(0), digest(1));
+
+        // Samples within the same batch don't trigger another duplexing.
+        assert_eq!(digest(1), digest(2));
+        assert_eq!(digest(1), digest(batch_size));
+
+        // Exhausting the output buffer triggers a fresh duplexing.
+        assert_ne!(digest(batch_size), digest(batch_size + 1));
+
+        // Stable within the second batch.
+        assert_eq!(digest(batch_size + 1), digest(batch_size + 2));
+    }
+
+    #[test]
+    fn test_duplexing_respects_rate() {
+        let permutation = TestPermutation;
+        let mut challenger =
+            MultiField32Challenger::<F, PF, _, WIDTH, RATE>::new(permutation).unwrap();
+
+        let num_f_elms = challenger.num_f_elms;
+
+        // Fill input buffer to trigger duplexing
+        for i in 0..(num_f_elms * RATE) {
+            challenger.observe(F::from_u8(i as u8));
+        }
+
+        // After observing exactly num_f_elms * RATE elements, duplexing occurs
+        // Output buffer should have exactly RATE * num_f_elms elements
+        assert_eq!(
+            challenger.output_buffer.len(),
+            RATE * num_f_elms,
+            "After duplexing, output buffer should contain RATE * num_f_elms elements"
+        );
     }
 }

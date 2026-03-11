@@ -1,9 +1,8 @@
 use core::array;
 use core::borrow::Borrow;
 
-use p3_air::{Air, AirBuilder, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -41,24 +40,20 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         eval_round_flags(builder);
 
         let main = builder.main();
-        let (local, next) = (
-            main.row_slice(0).expect("The matrix is empty?"),
-            main.row_slice(1).expect("The matrix only has 1 row?"),
-        );
-        let local: &KeccakCols<AB::Var> = (*local).borrow();
-        let next: &KeccakCols<AB::Var> = (*next).borrow();
+        let local: &KeccakCols<AB::Var> = main.current_slice().borrow();
+        let next: &KeccakCols<AB::Var> = main.next_slice().borrow();
 
-        let first_step = local.step_flags[0].clone();
-        let final_step = local.step_flags[NUM_ROUNDS_MIN_1].clone();
+        let first_step = local.step_flags[0];
+        let final_step = local.step_flags[NUM_ROUNDS_MIN_1];
         let not_final_step = AB::Expr::ONE - final_step;
 
         // If this is the first step, the input A must match the preimage.
         for y in 0..5 {
             for x in 0..5 {
                 builder
-                    .when(first_step.clone())
+                    .when(first_step)
                     .assert_zeros::<U64_LIMBS, _>(array::from_fn(|limb| {
-                        local.preimage[y][x][limb].clone() - local.a[y][x][limb].clone()
+                        local.preimage[y][x][limb] - local.a[y][x][limb]
                     }));
             }
         }
@@ -70,31 +65,31 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                     .when(not_final_step.clone())
                     .when_transition()
                     .assert_zeros::<U64_LIMBS, _>(array::from_fn(|limb| {
-                        local.preimage[y][x][limb].clone() - next.preimage[y][x][limb].clone()
+                        local.preimage[y][x][limb] - next.preimage[y][x][limb]
                     }));
             }
         }
 
         // The export flag must be 0 or 1.
-        builder.assert_bool(local.export.clone());
+        builder.assert_bool(local.export);
 
         // If this is not the final step, the export flag must be off.
         builder
             .when(not_final_step.clone())
-            .assert_zero(local.export.clone());
+            .assert_zero(local.export);
 
         // C'[x, z] = xor(C[x, z], C[x - 1, z], C[x + 1, z - 1]).
         // Note that if all entries of C are boolean, the arithmetic generalization
         // xor3 function only outputs 0, 1 and so this check also ensures that all
         // entries of C'[x, z] are boolean.
         for x in 0..5 {
-            builder.assert_bools(local.c[x].clone());
+            builder.assert_bools(local.c[x]);
             builder.assert_zeros::<64, _>(array::from_fn(|z| {
-                let xor = local.c[x][z].clone().into().xor3(
-                    &local.c[(x + 4) % 5][z].clone().into(),
-                    &local.c[(x + 1) % 5][(z + 63) % 64].clone().into(),
+                let xor = local.c[x][z].into().xor3(
+                    &local.c[(x + 4) % 5][z].into(),
+                    &local.c[(x + 1) % 5][(z + 63) % 64].into(),
                 );
-                local.c_prime[x][z].clone() - xor
+                local.c_prime[x][z] - xor
             }));
         }
 
@@ -109,14 +104,13 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         for y in 0..5 {
             for x in 0..5 {
                 let get_bit = |z: usize| {
-                    local.a_prime[y][x][z].clone().into().xor3(
-                        &local.c[x][z].clone().into(),
-                        &local.c_prime[x][z].clone().into(),
-                    )
+                    local.a_prime[y][x][z]
+                        .into()
+                        .xor3(&local.c[x][z].into(), &local.c_prime[x][z].into())
                 };
 
                 // Check that all entries of A'[y][x] are boolean.
-                builder.assert_bools(local.a_prime[y][x].clone());
+                builder.assert_bools(local.a_prime[y][x]);
 
                 builder.assert_zeros::<U64_LIMBS, _>(array::from_fn(|limb| {
                     let computed_limb = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
@@ -125,7 +119,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                             // Check to ensure all entries of A' are bools.
                             acc.double() + get_bit(z)
                         });
-                    computed_limb - local.a[y][x][limb].clone()
+                    computed_limb - local.a[y][x][limb]
                 }));
             }
         }
@@ -136,8 +130,8 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         for x in 0..5 {
             let four = AB::Expr::TWO.double();
             builder.assert_zeros::<64, _>(array::from_fn(|z| {
-                let sum: AB::Expr = (0..5).map(|y| local.a_prime[y][x][z].clone().into()).sum();
-                let diff = sum - local.c_prime[x][z].clone();
+                let sum: AB::Expr = (0..5).map(|y| local.a_prime[y][x][z].into()).sum();
+                let diff = sum - local.c_prime[x][z];
                 diff.clone() * (diff.clone() - AB::Expr::TWO) * (diff - four.clone())
             }));
         }
@@ -158,33 +152,33 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                     let computed_limb = (limb * BITS_PER_LIMB..(limb + 1) * BITS_PER_LIMB)
                         .rev()
                         .fold(AB::Expr::ZERO, |acc, z| acc.double() + get_bit(z));
-                    computed_limb - local.a_prime_prime[y][x][limb].clone()
+                    computed_limb - local.a_prime_prime[y][x][limb]
                 }));
             }
         }
 
         // A'''[0, 0] = A''[0, 0] XOR RC
         // Check to ensure the bits of A''[0, 0] are boolean.
-        builder.assert_bools(local.a_prime_prime_0_0_bits.clone());
+        builder.assert_bools(local.a_prime_prime_0_0_bits);
         builder.assert_zeros::<U64_LIMBS, _>(array::from_fn(|limb| {
             let computed_a_prime_prime_0_0_limb = (limb * BITS_PER_LIMB
                 ..(limb + 1) * BITS_PER_LIMB)
                 .rev()
                 .fold(AB::Expr::ZERO, |acc, z| {
-                    acc.double() + local.a_prime_prime_0_0_bits[z].clone()
+                    acc.double() + local.a_prime_prime_0_0_bits[z]
                 });
-            computed_a_prime_prime_0_0_limb - local.a_prime_prime[0][0][limb].clone()
+            computed_a_prime_prime_0_0_limb - local.a_prime_prime[0][0][limb]
         }));
 
         let get_xored_bit = |i| {
             let mut rc_bit_i = AB::Expr::ZERO;
             for r in 0..NUM_ROUNDS {
-                let this_round = local.step_flags[r].clone();
+                let this_round = local.step_flags[r];
                 let this_round_constant = AB::Expr::from_bool(rc_value_bit(r, i) != 0);
                 rc_bit_i += this_round * this_round_constant;
             }
 
-            rc_bit_i.xor(&local.a_prime_prime_0_0_bits[i].clone().into())
+            rc_bit_i.xor(&local.a_prime_prime_0_0_bits[i].into())
         };
 
         builder.assert_zeros::<U64_LIMBS, _>(array::from_fn(|limb| {
@@ -192,8 +186,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                 ..(limb + 1) * BITS_PER_LIMB)
                 .rev()
                 .fold(AB::Expr::ZERO, |acc, z| acc.double() + get_xored_bit(z));
-            computed_a_prime_prime_prime_0_0_limb
-                - local.a_prime_prime_prime_0_0_limbs[limb].clone()
+            computed_a_prime_prime_prime_0_0_limb - local.a_prime_prime_prime_0_0_limbs[limb]
         }));
 
         // Enforce that this round's output equals the next round's input.
@@ -203,7 +196,7 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
                     .when_transition()
                     .when(not_final_step.clone())
                     .assert_zeros::<U64_LIMBS, _>(array::from_fn(|limb| {
-                        local.a_prime_prime_prime(y, x, limb) - next.a[y][x][limb].clone()
+                        local.a_prime_prime_prime(y, x, limb) - next.a[y][x][limb]
                     }));
             }
         }

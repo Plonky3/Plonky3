@@ -1,8 +1,7 @@
 use core::array;
 use core::borrow::Borrow;
 
-use p3_air::AirBuilder;
-use p3_matrix::Matrix;
+use p3_air::{AirBuilder, WindowAccess};
 
 use crate::columns::KeccakCols;
 use crate::{NUM_ROUNDS, NUM_ROUNDS_MIN_1};
@@ -23,26 +22,18 @@ pub(crate) fn eval_round_flags<AB: AirBuilder>(builder: &mut AB) {
     // Access the main trace matrix.
     let main = builder.main();
 
-    // Get the local (current) row and the next row slices.
-    let (local, next) = (
-        main.row_slice(0).expect("The matrix is empty?"),
-        main.row_slice(1).expect("The matrix only has 1 row?"),
-    );
-
     // Cast slices into typed Keccak column references.
-    let local: &KeccakCols<AB::Var> = (*local).borrow();
-    let next: &KeccakCols<AB::Var> = (*next).borrow();
+    let local: &KeccakCols<AB::Var> = main.current_slice().borrow();
+    let next: &KeccakCols<AB::Var> = main.next_slice().borrow();
 
     // Initially, the first step flag should be 1 while the others should be 0.
     //
     // Constraint: In the first row, the first flag is 1.
-    builder
-        .when_first_row()
-        .assert_one(local.step_flags[0].clone());
+    builder.when_first_row().assert_one(local.step_flags[0]);
     // Constraint: In the first row, all other flags are 0.
     builder
         .when_first_row()
-        .assert_zeros::<NUM_ROUNDS_MIN_1, _>(try_clone_array(&local.step_flags[1..]));
+        .assert_zeros::<NUM_ROUNDS_MIN_1, _>(local.step_flags[1..].try_into().unwrap());
 
     // Constraint: In all transitions, flags rotate forward.
     //
@@ -52,27 +43,6 @@ pub(crate) fn eval_round_flags<AB: AirBuilder>(builder: &mut AB) {
     builder
         .when_transition()
         .assert_zeros::<NUM_ROUNDS, _>(array::from_fn(|i| {
-            local.step_flags[i].clone() - next.step_flags[(i + 1) % NUM_ROUNDS].clone()
+            local.step_flags[i] - next.step_flags[(i + 1) % NUM_ROUNDS]
         }));
-}
-
-/// Clone a slice into an array of fixed length N by element-wise cloning.
-///
-/// # Panics
-///
-/// Panics if the input slice length does not match N.
-///
-/// # Arguments
-///
-/// - `slice`: The input slice to copy.
-///
-/// # Returns
-///
-/// - `[T; N]`: The cloned array.
-fn try_clone_array<T: Clone, const N: usize>(slice: &[T]) -> [T; N] {
-    // Check at runtime that the length is correct (should always hold).
-    assert!(slice.len() == N, "Incorrect length");
-
-    // Clone each element into a new array.
-    array::from_fn(|i| slice[i].clone())
 }

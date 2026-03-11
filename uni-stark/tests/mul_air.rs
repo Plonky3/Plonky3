@@ -2,7 +2,7 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
-use p3_air::{Air, AirBuilder, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
@@ -13,7 +13,6 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs, create_test_fri_params_zk};
 use p3_keccak::Keccak256Hash;
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
 use p3_mersenne_31::Mersenne31;
@@ -91,22 +90,20 @@ impl<F> BaseAir<F> for MulAir {
 impl<AB: AirBuilder> Air<AB> for MulAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let main_local = main.row_slice(0).expect("Matrix is empty?");
-        let main_next = main.row_slice(1).expect("Matrix only has 1 row?");
+        let main_local = main.current_slice();
+        let main_next = main.next_slice();
 
         for i in 0..REPETITIONS {
             let start = i * 3;
-            let a = main_local[start].clone();
-            let b = main_local[start + 1].clone();
-            let c = main_local[start + 2].clone();
-            builder.assert_zero(a.clone().into().exp_u64(self.degree - 1) * b.clone() - c);
+            let a = main_local[start];
+            let b = main_local[start + 1];
+            let c = main_local[start + 2];
+            builder.assert_zero(a.into().exp_u64(self.degree - 1) * b - c);
             if self.uses_boundary_constraints {
-                builder
-                    .when_first_row()
-                    .assert_eq(a.clone() * a.clone() + AB::Expr::ONE, b);
+                builder.when_first_row().assert_eq(a * a + AB::Expr::ONE, b);
             }
             if self.uses_transition_constraints {
-                let next_a = main_next[start].clone();
+                let next_a = main_next[start];
                 builder
                     .when_transition()
                     .assert_eq(a + AB::Expr::from_u8(REPETITIONS as u8), next_a);
@@ -200,7 +197,7 @@ fn do_test_bb_twoadic(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     let compress = MyCompress::new(perm.clone());
 
     type ValMmcs =
-        MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
+        MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 2, 8>;
     let val_mmcs = ValMmcs::new(hash, compress, 0);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
@@ -261,6 +258,7 @@ fn prove_bb_twoadic_deg2_zk() -> Result<(), impl Debug> {
         MyHash,
         MyCompress,
         SmallRng,
+        2,
         8,
         4,
     >;
@@ -316,7 +314,7 @@ fn do_test_m31_circle(log_blowup: usize, degree: u64, log_n: usize) -> Result<()
     type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
     let compress = MyCompress::new(byte_hash);
 
-    type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 32>;
+    type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 2, 32>;
     let val_mmcs = ValMmcs::new(field_hash, compress, 0);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;

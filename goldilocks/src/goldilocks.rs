@@ -61,6 +61,22 @@ impl Goldilocks {
         output
     }
 
+    /// Convert a `[[u64; N]; M]` array to a 2D array of field elements.
+    ///
+    /// Const version of `input.map(Goldilocks::new_array)`.
+    #[inline]
+    pub const fn new_2d_array<const N: usize, const M: usize>(
+        input: [[u64; N]; M],
+    ) -> [[Self; N]; M] {
+        let mut output = [[Self::ZERO; N]; M];
+        let mut i = 0;
+        while i < M {
+            output[i] = Self::new_array(input[i]);
+            i += 1;
+        }
+        output
+    }
+
     /// Two's complement of `ORDER`, i.e. `2^64 - ORDER = 2^32 - 1`.
     const NEG_ORDER: u64 = Self::ORDER_U64.wrapping_neg();
 

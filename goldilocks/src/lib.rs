@@ -13,6 +13,8 @@ pub use goldilocks::*;
 pub use mds::*;
 pub use poseidon2::*;
 
+pub mod poseidon1;
+
 #[cfg(target_arch = "aarch64")]
 mod aarch64_neon;
 

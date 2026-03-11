@@ -1,6 +1,9 @@
 use core::fmt::Debug;
 
-use p3_baby_bear::{BabyBear, GenericPoseidon2LinearLayersBabyBear};
+use p3_baby_bear::{
+    BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16,
+    BABYBEAR_S_BOX_DEGREE, BabyBear, GenericPoseidon2LinearLayersBabyBear,
+};
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
@@ -25,10 +28,10 @@ use tracing_subscriber::{EnvFilter, Registry};
 static GLOBAL: Jemalloc = Jemalloc;
 
 const WIDTH: usize = 16;
-const SBOX_DEGREE: u64 = 7;
+const SBOX_DEGREE: u64 = BABYBEAR_S_BOX_DEGREE;
 const SBOX_REGISTERS: usize = 1;
-const HALF_FULL_ROUNDS: usize = 4;
-const PARTIAL_ROUNDS: usize = 20;
+const HALF_FULL_ROUNDS: usize = BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS;
+const PARTIAL_ROUNDS: usize = BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16;
 
 const NUM_ROWS: usize = 1 << 16;
 const VECTOR_LEN: usize = 1 << 3;
@@ -68,6 +71,7 @@ fn main() -> Result<(), impl Debug> {
         FieldHash,
         MyCompress,
         SmallRng,
+        2,
         4,
         4,
     >;

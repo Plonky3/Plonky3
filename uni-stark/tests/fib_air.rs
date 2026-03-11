@@ -1,6 +1,6 @@
 use core::borrow::Borrow;
 
-use p3_air::{Air, AirBuilder, AirBuilderWithPublicValues, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
@@ -10,7 +10,6 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
 use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs, create_test_fri_params};
 use p3_keccak::{Keccak256Hash, KeccakF};
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
 use p3_mersenne_31::Mersenne31;
@@ -28,9 +27,20 @@ impl<F> BaseAir<F> for FibonacciAir {
     fn width(&self) -> usize {
         NUM_FIBONACCI_COLS
     }
+
+    fn num_public_values(&self) -> usize {
+        3
+    }
+
+    fn max_constraint_degree(&self) -> Option<usize> {
+        // All constraints are guarded by is_first_row / is_transition / is_last_row
+        // (degree 1) applied to degree-1 expressions (trace vars minus public values),
+        // giving a max constraint degree of 2.
+        Some(2)
+    }
 }
 
-impl<AB: AirBuilderWithPublicValues> Air<AB> for FibonacciAir {
+impl<AB: AirBuilder> Air<AB> for FibonacciAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
 
@@ -40,27 +50,23 @@ impl<AB: AirBuilderWithPublicValues> Air<AB> for FibonacciAir {
         let b = pis[1];
         let x = pis[2];
 
-        let (local, next) = (
-            main.row_slice(0).expect("Matrix is empty?"),
-            main.row_slice(1).expect("Matrix only has 1 row?"),
-        );
-        let local: &FibonacciRow<AB::Var> = (*local).borrow();
-        let next: &FibonacciRow<AB::Var> = (*next).borrow();
+        let local: &FibonacciRow<AB::Var> = main.current_slice().borrow();
+        let next: &FibonacciRow<AB::Var> = main.next_slice().borrow();
 
         let mut when_first_row = builder.when_first_row();
 
-        when_first_row.assert_eq(local.left.clone(), a);
-        when_first_row.assert_eq(local.right.clone(), b);
+        when_first_row.assert_eq(local.left, a);
+        when_first_row.assert_eq(local.right, b);
 
         let mut when_transition = builder.when_transition();
 
         // a' <- b
-        when_transition.assert_eq(local.right.clone(), next.left.clone());
+        when_transition.assert_eq(local.right, next.left);
 
         // b' <- a + b
-        when_transition.assert_eq(local.left.clone() + local.right.clone(), next.right.clone());
+        when_transition.assert_eq(local.left + local.right, next.right);
 
-        builder.when_last_row().assert_eq(local.right.clone(), x);
+        builder.when_last_row().assert_eq(local.right, x);
     }
 }
 
@@ -113,7 +119,7 @@ type Perm = Poseidon2BabyBear<16>;
 type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 type ValMmcs =
-    MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
+    MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 2, 8>;
 type Challenge = BinomialExtensionField<Val, 4>;
 type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
@@ -158,7 +164,7 @@ type CircleChallenge = BinomialExtensionField<CircleVal, 3>;
 type CircleByteHash = Keccak256Hash;
 type CircleFieldHash = SerializingHasher<CircleByteHash>;
 type CircleCompress = CompressionFunctionFromHasher<CircleByteHash, 2, 32>;
-type CircleValMmcs = MerkleTreeMmcs<CircleVal, u8, CircleFieldHash, CircleCompress, 32>;
+type CircleValMmcs = MerkleTreeMmcs<CircleVal, u8, CircleFieldHash, CircleCompress, 2, 32>;
 type CircleChallengeMmcs = ExtensionMmcs<CircleVal, CircleChallenge, CircleValMmcs>;
 type CircleChallenger = SerializingChallenger32<CircleVal, HashChallenger<u8, CircleByteHash, 32>>;
 type CirclePcsType = CirclePcs<CircleVal, CircleValMmcs, CircleChallengeMmcs>;
@@ -247,6 +253,7 @@ fn test_zk() {
         FieldHash,
         MyCompress,
         SmallRng,
+        2,
         4,
         4,
     >;
@@ -330,7 +337,7 @@ fn generate_circle_fixture() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(debug_assertions)]
 #[test]
-#[should_panic(expected = "assertion `left == right` failed: constraints had nonzero value")]
+#[should_panic(expected = "constraints not satisfied on row")]
 fn test_incorrect_public_value() {
     let mut rng = SmallRng::seed_from_u64(1);
     let perm = Perm::new_from_rng_128(&mut rng);

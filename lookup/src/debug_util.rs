@@ -8,7 +8,8 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use alloc::{format, vec};
 
-use p3_air::{AirBuilder, AirBuilderWithPublicValues, PermutationAirBuilder};
+use hashbrown::HashMap;
+use p3_air::{AirBuilder, PermutationAirBuilder, RowWindow};
 use p3_field::Field;
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -39,43 +40,48 @@ struct Location {
     row: usize,
 }
 
-#[derive(Clone, Debug)]
-struct Entry<F: Field> {
-    key: Vec<F>,
-    total: F,
-    locations: Vec<Location>,
-}
-
+/// Accumulates tuples and their multiplicities, tracking where each was seen.
 #[derive(Default)]
 struct MultiSet<F: Field> {
-    entries: Vec<Entry<F>>,
+    /// Key: field-element tuple. Value: (net multiplicity, source locations).
+    entries: HashMap<Vec<F>, (F, Vec<Location>)>,
 }
 
 impl<F: Field> MultiSet<F> {
+    /// Record one occurrence of a tuple with the given multiplicity.
+    /// Zero-multiplicity entries are silently skipped.
     fn add(&mut self, key: Vec<F>, multiplicity: F, location: Location) {
         if multiplicity.is_zero() {
             return;
         }
 
-        if let Some(entry) = self.entries.iter_mut().find(|e| e.key == key) {
-            entry.total += multiplicity;
-            entry.locations.push(location);
-        } else {
-            self.entries.push(Entry {
-                key,
-                total: multiplicity,
-                locations: vec![location],
-            });
-        }
+        self.entries
+            .entry(key)
+            .and_modify(|(total, locations)| {
+                *total += multiplicity;
+                locations.push(location.clone());
+            })
+            .or_insert_with(|| (multiplicity, vec![location]));
     }
 
+    /// Panic if any tuple has a non-zero net multiplicity.
+    ///
+    /// Entries are sorted lexicographically before checking so that the
+    /// *first* reported mismatch is deterministic (hash-map iteration
+    /// order is not).
     fn assert_empty(&self, label: &str) {
-        for entry in &self.entries {
-            if !entry.total.is_zero() {
-                let rendered_key: Vec<String> = entry.key.iter().map(|v| v.to_string()).collect();
+        let mut entries: Vec<_> = self.entries.iter().collect();
+        entries.sort_by(|(a, _), (b, _)| {
+            let a_str: Vec<String> = a.iter().map(|v| v.to_string()).collect();
+            let b_str: Vec<String> = b.iter().map(|v| v.to_string()).collect();
+            a_str.cmp(&b_str)
+        });
+        for (key, (total, locations)) in entries {
+            if !total.is_zero() {
+                let rendered_key: Vec<String> = key.iter().map(|v| v.to_string()).collect();
                 panic!(
                     "Lookup mismatch ({label}): tuple {:?} has net multiplicity {:?}. Locations: {:?}",
-                    rendered_key, entry.total, entry.locations
+                    rendered_key, total, locations
                 );
             }
         }
@@ -102,19 +108,19 @@ pub fn check_lookups<F: Field>(instances: &[LookupDebugInstance<'_, F>]) {
         }
     }
 
-    // 2) Aggregate and check all global lookups by interaction name.
+    // 2) Aggregate all global lookups that share the same interaction name,
+    //    then verify each group sums to zero.
+    //    A name-to-index map gives O(1) group lookups instead of a linear scan.
     let mut global_sets: Vec<(String, MultiSet<F>)> = Vec::new();
+    let mut global_index: HashMap<String, usize> = HashMap::new();
 
     for (instance_idx, instance) in instances.iter().enumerate() {
         for (lookup_idx, lookup) in instance.lookups.iter().enumerate() {
             if let Kind::Global(name) = &lookup.kind {
-                let idx = global_sets
-                    .iter()
-                    .position(|(n, _)| n == name)
-                    .unwrap_or_else(|| {
-                        global_sets.push((name.clone(), MultiSet::default()));
-                        global_sets.len() - 1
-                    });
+                let idx = *global_index.entry(name.clone()).or_insert_with(|| {
+                    global_sets.push((name.clone(), MultiSet::default()));
+                    global_sets.len() - 1
+                });
 
                 accumulate_lookup(
                     instance_idx,
@@ -155,18 +161,23 @@ fn accumulate_lookup<F: Field>(
                 prep.row_slice((row + 1) % height).unwrap(),
             )
         });
-        let preprocessed_rows = preprocessed_rows_data
-            .as_ref()
-            .map(|(prep_local, prep_next)| {
-                VerticalPair::new(
-                    RowMajorMatrixView::new_row(&**prep_local),
-                    RowMajorMatrixView::new_row(&**prep_next),
-                )
-            });
+        let preprocessed_rows = match preprocessed_rows_data.as_ref() {
+            Some((prep_local, prep_next)) => VerticalPair::new(
+                RowMajorMatrixView::new_row(&**prep_local),
+                RowMajorMatrixView::new_row(&**prep_next),
+            ),
+            None => VerticalPair::new(
+                RowMajorMatrixView::new(&[], 0),
+                RowMajorMatrixView::new(&[], 0),
+            ),
+        };
 
         let builder = MiniLookupBuilder {
             main: main_rows,
-            preprocessed: preprocessed_rows,
+            preprocessed: RowWindow::from_two_rows(
+                preprocessed_rows.top.values,
+                preprocessed_rows.bottom.values,
+            ),
             public_values: instance.public_values,
             permutation_challenges: instance.permutation_challenges,
             row,
@@ -196,7 +207,7 @@ fn accumulate_lookup<F: Field>(
 
 struct MiniLookupBuilder<'a, F: Field> {
     main: VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>,
-    preprocessed: Option<VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>>,
+    preprocessed: RowWindow<'a, F>,
     public_values: &'a [F],
     permutation_challenges: &'a [F],
     row: usize,
@@ -207,14 +218,16 @@ impl<'a, F: Field> AirBuilder for MiniLookupBuilder<'a, F> {
     type F = F;
     type Expr = F;
     type Var = F;
-    type M = VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>;
+    type PreprocessedWindow = RowWindow<'a, F>;
+    type MainWindow = RowWindow<'a, F>;
+    type PublicVar = F;
 
-    fn main(&self) -> Self::M {
-        self.main
+    fn main(&self) -> Self::MainWindow {
+        RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
     }
 
-    fn preprocessed(&self) -> Option<Self::M> {
-        self.preprocessed
+    fn preprocessed(&self) -> &Self::PreprocessedWindow {
+        &self.preprocessed
     }
 
     fn is_first_row(&self) -> Self::Expr {
@@ -226,20 +239,13 @@ impl<'a, F: Field> AirBuilder for MiniLookupBuilder<'a, F> {
     }
 
     fn is_transition_window(&self, size: usize) -> Self::Expr {
-        if size == 2 {
-            F::from_bool(self.row + 1 < self.height)
-        } else {
-            panic!("MiniLookupBuilder only supports window size 2");
-        }
+        assert!(size <= 2, "only two-row windows are supported, got {size}");
+        F::from_bool(self.row + 1 < self.height)
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, _x: I) {}
-}
 
-impl<'a, F: Field> AirBuilderWithPublicValues for MiniLookupBuilder<'a, F> {
-    type PublicVar = F;
-
-    fn public_values(&self) -> &[Self::F] {
+    fn public_values(&self) -> &[Self::PublicVar] {
         self.public_values
     }
 }
@@ -253,19 +259,21 @@ impl<'a, F: Field> p3_air::ExtensionBuilder for MiniLookupBuilder<'a, F> {
 }
 
 impl<'a, F: Field> PermutationAirBuilder for MiniLookupBuilder<'a, F> {
-    type MP = VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>;
-
+    type MP = RowWindow<'a, F>;
     type RandomVar = F;
 
+    type PermutationVar = F;
+
     fn permutation(&self) -> Self::MP {
-        // Empty 0-width view; permutation columns are not needed for debug evals.
-        VerticalPair::new(
-            RowMajorMatrixView::new_row(&[]),
-            RowMajorMatrixView::new_row(&[]),
-        )
+        // Empty slices; permutation columns are not needed for debug evals.
+        RowWindow::from_two_rows(&[], &[])
     }
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         self.permutation_challenges
+    }
+
+    fn permutation_values(&self) -> &[Self::PermutationVar] {
+        &[]
     }
 }

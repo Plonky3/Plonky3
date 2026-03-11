@@ -114,6 +114,37 @@ impl<PMP: PackedMontyParameters> PackedMontyField31Neon<PMP> {
     const fn broadcast(value: MontyField31<PMP>) -> Self {
         Self([value; WIDTH])
     }
+
+    /// Fused DIF butterfly for forward FFT: computes `(x + y, (x - y) * roots)`.
+    ///
+    /// Saves 2 NEON ops per butterfly by skipping the modular reduction on
+    /// `x - y`. The raw `vsubq_u32(x, y)` lies in `(-P, P)` as signed,
+    /// which is already a valid input for Montgomery multiplication.
+    #[inline(always)]
+    pub(crate) fn forward_butterfly(self, y: Self, roots: Self) -> (Self, Self) {
+        unsafe {
+            let x_vec = self.to_vector();
+            let y_vec = y.to_vector();
+
+            // Canonical modular addition: result in [0, P).
+            let sum = uint32x4_mod_add(x_vec, y_vec, PMP::PACKED_P);
+
+            // Raw subtraction without reduction.
+            //
+            // Since x, y are in [0, P), the u32 result wraps to a value that,
+            // when reinterpreted as i32, lies in (-P, P). This is exactly the
+            // signed input range that Montgomery multiplication accepts.
+            let diff = aarch64::vreinterpretq_s32_u32(aarch64::vsubq_u32(x_vec, y_vec));
+
+            // Montgomery multiply:
+            // - accepts signed inputs in (-P, P),
+            // - produces canonical output in [0, P).
+            let roots_s = roots.to_signed_vector();
+            let product = mul::<PMP>(diff, roots_s);
+
+            (Self::from_vector(sum), Self::from_vector(product))
+        }
+    }
 }
 
 impl<PMP: PackedMontyParameters> From<MontyField31<PMP>> for PackedMontyField31Neon<PMP> {
@@ -278,7 +309,12 @@ impl_mul_base_field!(
 impl_div_methods!(PackedMontyField31Neon, MontyField31, (FieldParameters, FP));
 impl_sum_prod_base_field!(PackedMontyField31Neon, MontyField31, (FieldParameters, FP));
 
-impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31Neon<FP> {}
+impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31Neon<FP> {
+    #[inline(always)]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[MontyField31<FP>; N]) -> Self {
+        general_dot_product::<_, _, _, N>(a, f)
+    }
+}
 
 impl<FP: FieldParameters + RelativelyPrimePower<D>, const D: u64> InjectiveMonomial<D>
     for PackedMontyField31Neon<FP>
