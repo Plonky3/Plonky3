@@ -30,7 +30,7 @@ pub enum Kind {
     Global(String),
 }
 
-/// Indicates the direction of data flow in a global lookup.
+/// Indicates the direction of data flow in a lookup interaction.
 #[derive(Clone, Copy)]
 pub enum Direction {
     /// Indicates that elements are being sent (contributed) to the lookup.
@@ -72,7 +72,7 @@ pub struct LookupData<F> {
 /// use p3_lookup::{LookupInput, Direction};
 /// use p3_air::SymbolicExpression;
 ///
-/// let lookup_input: LookupInput<SymbolicExpression<F>> = (
+/// let lookup_input: LookupInput<F> = (
 ///     vec![SymbolicExpression::Constant(F::ONE)],
 ///     SymbolicExpression::Constant(F::ONE),
 ///     Direction::Send
@@ -90,8 +90,8 @@ pub struct Lookup<F: Field> {
     /// actually represents a tuple of elements that are bundled together to make one lookup.
     pub element_exprs: Vec<Vec<SymbolicExpression<F>>>,
     /// Multiplicities for the elements.
-    /// Note that Lagrange selectors may not be normalized, and so cannot be used as proper
-    /// filters in the multiplicities.
+    /// Note that Lagrange selectors may not be normalized, so they cannot be used as proper
+    /// boolean filters in the multiplicities.
     pub multiplicities_exprs: Vec<SymbolicExpression<F>>,
     /// The column index in the permutation trace for this lookup's running sum
     pub columns: Vec<usize>,

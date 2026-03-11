@@ -2140,7 +2140,7 @@ impl SingleTableLocalLookupAir {
 
 impl<F> BaseAir<F> for SingleTableLocalLookupAir {
     fn width(&self) -> usize {
-        7 // 7 columns: 3 sender columns (1 for each selector type), lookup table, 3 multiplicty columns (1 for each selector type)
+        7 // 7 columns: 3 sender columns (1 for each selector type), lookup table, 3 multiplicity columns (1 for each selector type)
     }
 }
 
@@ -2181,17 +2181,15 @@ impl<F: Field> LookupAir<F> for SingleTableLocalLookupAir {
         let mul2 = symbolic_main_local[5]; // Multiplicity column for second selector
         let mul3 = symbolic_main_local[6]; // Multiplicity column for third selector
 
-        // Local lookup: sender column looks up into lookup table column
-        // Sender: send is_transition * sender_col
-        // Receiver: receive lookup_table_col with multiplicity 1
+        // Local lookup: sender column looks up into lookup table column.
         let lookup_inputs1 = vec![
-            // Sender: send values from sender column with `is_first_row` multiplicity
+            // Read values from the sender column with `is_first_row` multiplicity.
             (
                 vec![sender_col1.into()],
                 symbolic_air_builder.is_first_row(),
                 Direction::Receive,
             ),
-            // Receiver: receive values in lookup table column with multiplicity 1 * `is_first_row` multiplicity.
+            // Provide values from the lookup table with `is_first_row * mul1` multiplicity.
             // Note that we need to multiply by `is_first_row` here because the Lagrange selectors are not normalized.
             (
                 vec![lookup_table_col.into()],
@@ -2201,13 +2199,13 @@ impl<F: Field> LookupAir<F> for SingleTableLocalLookupAir {
         ];
 
         let lookup_inputs2 = vec![
-            // Sender: send values from sender column with `is_last_row` multiplicity
+            // Read values from the sender column with `is_transition` multiplicity.
             (
                 vec![sender_col2.into()],
                 symbolic_air_builder.is_transition(),
                 Direction::Receive,
             ),
-            // Receiver: receive values in lookup table column with multiplicity 1 * `is_transition` multiplicity.
+            // Provide values from the lookup table with `is_transition * mul2` multiplicity.
             // Note that we need to multiply by `is_transition` here because the Lagrange selectors are not normalized.
             (
                 vec![lookup_table_col.into()],
@@ -2217,13 +2215,13 @@ impl<F: Field> LookupAir<F> for SingleTableLocalLookupAir {
         ];
 
         let lookup_inputs3 = vec![
-            // Sender: send values from sender column with `is_transition` multiplicity
+            // Read values from the sender column with `is_last_row` multiplicity.
             (
                 vec![sender_col3.into()],
                 symbolic_air_builder.is_last_row(),
                 Direction::Receive,
             ),
-            // Receiver: receive values in lookup table column with multiplicity 1 * `is_last_row` multiplicity.
+            // Provide values from the lookup table with `is_last_row * mul3` multiplicity.
             // Note that we need to multiply by `is_last_row` here because the Lagrange selectors are not normalized.
             (
                 vec![lookup_table_col.into()],
@@ -2255,8 +2253,8 @@ fn single_table_local_lookup_trace<F: Field>(height: usize) -> RowMajorMatrix<F>
     // Column 2: all rows are 11 except last row which is 0
     // Column 3: Lookup table column: values 7 to 0
     // Column 4: (mult1) 1 at row 0, 0 elsewhere
-    // Column 5: (mult1): 1 everywhere except last row, which is 0
-    // Column 6: (mult2): 1 at last row, 0 elsewhere
+    // Column 5: (mult2) 1 everywhere except last row, which is 0
+    // Column 6: (mult3) 1 at last row, 0 elsewhere
     for i in 0..height {
         // Sender columns:
         // Column 0
@@ -2283,7 +2281,7 @@ fn single_table_local_lookup_trace<F: Field>(height: usize) -> RowMajorMatrix<F>
 }
 
 /// Test with a single table doing local lookup between its two columns.
-/// The goal of this test is to check that the use of (non-normalized) Lagrange selectors does not cause isssues.
+/// The goal of this test is to check that the use of (non-normalized) Lagrange selectors does not cause issues.
 #[test]
 fn test_single_table_local_lookup() -> Result<(), impl Debug> {
     let config = make_config(2029);

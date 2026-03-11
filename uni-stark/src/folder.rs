@@ -79,11 +79,14 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     pub preprocessed_window: RowWindow<'a, PackedVal<SC>>,
     /// Public inputs to the [AIR](`p3_air::Air`) implementation.
     pub public_values: &'a [Val<SC>],
-    /// Evaluations of the Selector polynomial for the first row of the trace
+    /// Evaluations of the first-row selector polynomial.
+    /// Non-zero only on the first trace row.
     pub is_first_row: PackedVal<SC>,
-    /// Evaluations of the Selector polynomial for the last row of the trace
+    /// Evaluations of the last-row selector polynomial.
+    /// Non-zero only on the last trace row.
     pub is_last_row: PackedVal<SC>,
-    /// Evaluations of the Selector polynomial for rows where transition constraints should be applied
+    /// Evaluations of the transition selector polynomial.
+    /// Zero only on the last trace row.
     pub is_transition: PackedVal<SC>,
     /// Base-field alpha powers, reordered to match base constraint emission order.
     /// `base_alpha_powers[d][j]` = d-th basis coefficient of alpha power for j-th base constraint.
@@ -115,11 +118,14 @@ pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
     pub preprocessed_window: RowWindow<'a, SC::Challenge>,
     /// Public values that are inputs to the computation
     pub public_values: &'a [Val<SC>],
-    /// Evaluations of the Selector polynomial for the first row of the trace
+    /// Evaluations of the first-row selector polynomial.
+    /// Non-zero only on the first trace row.
     pub is_first_row: SC::Challenge,
-    /// Evaluations of the Selector polynomial for the last row of the trace
+    /// Evaluations of the last-row selector polynomial.
+    /// Non-zero only on the last trace row.
     pub is_last_row: SC::Challenge,
-    /// Evaluations of the Selector polynomial for rows where transition constraints should be applied
+    /// Evaluations of the transition selector polynomial.
+    /// Zero only on the last trace row.
     pub is_transition: SC::Challenge,
     /// Single challenge value used for constraint combination
     pub alpha: SC::Challenge,
