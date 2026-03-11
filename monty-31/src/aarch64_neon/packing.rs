@@ -953,38 +953,48 @@ where
     unsafe {
         // Accumulate the full 64-bit sum C = Σ lhs_i ⋅ rhs_i (5 terms).
 
+        // Materialize all vectors once.
+        let lhs0 = lhs[0].into_vec();
+        let rhs0 = rhs[0].into_vec();
+        let lhs1 = lhs[1].into_vec();
+        let rhs1 = rhs[1].into_vec();
+        let lhs2 = lhs[2].into_vec();
+        let rhs2 = rhs[2].into_vec();
+        let lhs3 = lhs[3].into_vec();
+        let rhs3 = rhs[3].into_vec();
+        let lhs4 = lhs[4].into_vec();
+        let rhs4 = rhs[4].into_vec();
+
         // Low half (Lanes 0 & 1)
-        let mut sum_l = aarch64::vmull_u32(
-            aarch64::vget_low_u32(lhs[0].into_vec()),
-            aarch64::vget_low_u32(rhs[0].into_vec()),
+        let mut sum_l =
+            aarch64::vmull_u32(aarch64::vget_low_u32(lhs0), aarch64::vget_low_u32(rhs0));
+        sum_l = aarch64::vmlal_u32(
+            sum_l,
+            aarch64::vget_low_u32(lhs1),
+            aarch64::vget_low_u32(rhs1),
         );
         sum_l = aarch64::vmlal_u32(
             sum_l,
-            aarch64::vget_low_u32(lhs[1].into_vec()),
-            aarch64::vget_low_u32(rhs[1].into_vec()),
+            aarch64::vget_low_u32(lhs2),
+            aarch64::vget_low_u32(rhs2),
         );
         sum_l = aarch64::vmlal_u32(
             sum_l,
-            aarch64::vget_low_u32(lhs[2].into_vec()),
-            aarch64::vget_low_u32(rhs[2].into_vec()),
+            aarch64::vget_low_u32(lhs3),
+            aarch64::vget_low_u32(rhs3),
         );
         sum_l = aarch64::vmlal_u32(
             sum_l,
-            aarch64::vget_low_u32(lhs[3].into_vec()),
-            aarch64::vget_low_u32(rhs[3].into_vec()),
-        );
-        sum_l = aarch64::vmlal_u32(
-            sum_l,
-            aarch64::vget_low_u32(lhs[4].into_vec()),
-            aarch64::vget_low_u32(rhs[4].into_vec()),
+            aarch64::vget_low_u32(lhs4),
+            aarch64::vget_low_u32(rhs4),
         );
 
         // High half (Lanes 2 & 3)
-        let mut sum_h = aarch64::vmull_high_u32(lhs[0].into_vec(), rhs[0].into_vec());
-        sum_h = aarch64::vmlal_high_u32(sum_h, lhs[1].into_vec(), rhs[1].into_vec());
-        sum_h = aarch64::vmlal_high_u32(sum_h, lhs[2].into_vec(), rhs[2].into_vec());
-        sum_h = aarch64::vmlal_high_u32(sum_h, lhs[3].into_vec(), rhs[3].into_vec());
-        sum_h = aarch64::vmlal_high_u32(sum_h, lhs[4].into_vec(), rhs[4].into_vec());
+        let mut sum_h = aarch64::vmull_high_u32(lhs0, rhs0);
+        sum_h = aarch64::vmlal_high_u32(sum_h, lhs1, rhs1);
+        sum_h = aarch64::vmlal_high_u32(sum_h, lhs2, rhs2);
+        sum_h = aarch64::vmlal_high_u32(sum_h, lhs3, rhs3);
+        sum_h = aarch64::vmlal_high_u32(sum_h, lhs4, rhs4);
 
         // Split C into 32-bit halves per lane:
         // - c_lo = C mod 2^{32},
