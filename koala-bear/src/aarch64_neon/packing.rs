@@ -32,5 +32,4 @@ mod tests {
         &[crate::PackedKoalaBearNeon::ONE],
         p3_monty_31::PackedMontyField31Neon::<crate::KoalaBearParameters>(super::SPECIAL_VALS)
     );
-
 }

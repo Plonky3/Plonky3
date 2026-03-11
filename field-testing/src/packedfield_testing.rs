@@ -412,8 +412,7 @@ where
     macro_rules! test_dot_n {
         ($n:literal) => {
             let packed_result = PF::dot_product::<$n>(&[big; $n], &[big; $n]);
-            let scalar_result =
-                PF::Scalar::dot_product::<$n>(&[scalar_big; $n], &[scalar_big; $n]);
+            let scalar_result = PF::Scalar::dot_product::<$n>(&[scalar_big; $n], &[scalar_big; $n]);
             for lane in 0..PF::WIDTH {
                 assert_eq!(
                     packed_result.as_slice()[lane],
