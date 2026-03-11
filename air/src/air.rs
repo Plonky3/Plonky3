@@ -1,3 +1,4 @@
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::ops::{Add, Mul, Sub};
 
@@ -339,22 +340,6 @@ pub trait AirBuilder: Sized {
     /// into a single assert_zeros call will improve performance.
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I);
 
-    /// Assert that the given element is zero, with a human-readable label.
-    ///
-    /// # Default behavior
-    ///
-    /// Discards the label and delegates to the unlabeled variant.
-    /// This means **zero overhead** in production builders.
-    ///
-    /// # Debug builder override
-    ///
-    /// Only the debug builder overrides this to capture labels.
-    /// When a constraint fails, the label appears in the diagnostic
-    /// report, making failures immediately identifiable.
-    fn assert_zero_named<I: Into<Self::Expr>>(&mut self, x: I, _label: &'static str) {
-        self.assert_zero(x);
-    }
-
     /// Assert that every element of a given array is 0.
     ///
     /// This should be preferred over calling `assert_zero` multiple times.
@@ -364,31 +349,10 @@ pub trait AirBuilder: Sized {
         }
     }
 
-    /// Labeled variant of [`assert_zeros`](Self::assert_zeros).
-    fn assert_zeros_named<const N: usize, I: Into<Self::Expr>>(
-        &mut self,
-        array: [I; N],
-        label: &'static str,
-    ) {
-        for elem in array {
-            self.assert_zero_named(elem, label);
-        }
-    }
-
     /// Assert that a given array consists of only boolean values.
     fn assert_bools<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
         let zero_array = array.map(|x| x.into().bool_check());
         self.assert_zeros(zero_array);
-    }
-
-    /// Labeled variant of [`assert_bools`](Self::assert_bools).
-    fn assert_bools_named<const N: usize, I: Into<Self::Expr>>(
-        &mut self,
-        array: [I; N],
-        label: &'static str,
-    ) {
-        let zero_array = array.map(|x| x.into().bool_check());
-        self.assert_zeros_named(zero_array, label);
     }
 
     /// Assert that `x` element is equal to `1`.
@@ -396,24 +360,9 @@ pub trait AirBuilder: Sized {
         self.assert_zero(x.into() - Self::Expr::ONE);
     }
 
-    /// Labeled variant of [`assert_one`](Self::assert_one).
-    fn assert_one_named<I: Into<Self::Expr>>(&mut self, x: I, label: &'static str) {
-        self.assert_zero_named(x.into() - Self::Expr::ONE, label);
-    }
-
     /// Assert that the given elements are equal.
     fn assert_eq<I1: Into<Self::Expr>, I2: Into<Self::Expr>>(&mut self, x: I1, y: I2) {
         self.assert_zero(x.into() - y.into());
-    }
-
-    /// Labeled variant of [`assert_eq`](Self::assert_eq).
-    fn assert_eq_named<I1: Into<Self::Expr>, I2: Into<Self::Expr>>(
-        &mut self,
-        x: I1,
-        y: I2,
-        label: &'static str,
-    ) {
-        self.assert_zero_named(x.into() - y.into(), label);
     }
 
     /// Public input values available during constraint evaluation.
@@ -429,11 +378,6 @@ pub trait AirBuilder: Sized {
     /// into a single assert_bools call will improve performance.
     fn assert_bool<I: Into<Self::Expr>>(&mut self, x: I) {
         self.assert_zero(x.into().bool_check());
-    }
-
-    /// Labeled variant of [`assert_bool`](Self::assert_bool).
-    fn assert_bool_named<I: Into<Self::Expr>>(&mut self, x: I, label: &'static str) {
-        self.assert_zero_named(x.into().bool_check(), label);
     }
 }
 
@@ -479,17 +423,6 @@ pub trait ExtensionBuilder: AirBuilder<F: Field> {
     where
         I: Into<Self::ExprEF>;
 
-    /// Labeled variant of [`assert_zero_ext`](Self::assert_zero_ext).
-    ///
-    /// Discards the label by default. Only the debug builder overrides
-    /// this to capture labels for diagnostic output.
-    fn assert_zero_ext_named<I>(&mut self, x: I, _label: &'static str)
-    where
-        I: Into<Self::ExprEF>,
-    {
-        self.assert_zero_ext(x);
-    }
-
     /// Assert that two extension field expressions are equal.
     fn assert_eq_ext<I1, I2>(&mut self, x: I1, y: I2)
     where
@@ -499,29 +432,12 @@ pub trait ExtensionBuilder: AirBuilder<F: Field> {
         self.assert_zero_ext(x.into() - y.into());
     }
 
-    /// Labeled variant of [`assert_eq_ext`](Self::assert_eq_ext).
-    fn assert_eq_ext_named<I1, I2>(&mut self, x: I1, y: I2, label: &'static str)
-    where
-        I1: Into<Self::ExprEF>,
-        I2: Into<Self::ExprEF>,
-    {
-        self.assert_zero_ext_named(x.into() - y.into(), label);
-    }
-
     /// Assert that an extension field expression is equal to one.
     fn assert_one_ext<I>(&mut self, x: I)
     where
         I: Into<Self::ExprEF>,
     {
         self.assert_eq_ext(x, Self::ExprEF::ONE);
-    }
-
-    /// Labeled variant of [`assert_one_ext`](Self::assert_one_ext).
-    fn assert_one_ext_named<I>(&mut self, x: I, label: &'static str)
-    where
-        I: Into<Self::ExprEF>,
-    {
-        self.assert_eq_ext_named(x, Self::ExprEF::ONE, label);
     }
 }
 
@@ -604,15 +520,6 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
         self.inner.assert_zero(self.condition() * x.into());
     }
 
-    /// Forward the labeled assertion, multiplied by the condition.
-    ///
-    /// The label passes through unchanged so that diagnostic output
-    /// correctly identifies the constraint, even when conditionally applied.
-    fn assert_zero_named<I: Into<Self::Expr>>(&mut self, x: I, label: &'static str) {
-        self.inner
-            .assert_zero_named(self.condition() * x.into(), label);
-    }
-
     fn public_values(&self) -> &[Self::PublicVar] {
         self.inner.public_values()
     }
@@ -639,16 +546,6 @@ impl<AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'_, AB> {
         let condition: AB::Expr = self.condition();
 
         self.inner.assert_zero_ext(ext_x * condition);
-    }
-
-    fn assert_zero_ext_named<I>(&mut self, x: I, label: &'static str)
-    where
-        I: Into<Self::ExprEF>,
-    {
-        let ext_x: Self::ExprEF = x.into();
-        let condition: AB::Expr = self.condition();
-
-        self.inner.assert_zero_ext_named(ext_x * condition, label);
     }
 }
 
@@ -677,5 +574,126 @@ impl<AB: AirBuilderWithContext> AirBuilderWithContext for FilteredAirBuilder<'_,
 
     fn eval_context(&self) -> &Self::EvalContext {
         self.inner.eval_context()
+    }
+}
+
+/// Extension trait that adds labeled variants of every assertion method.
+///
+/// Labels use a closure (`FnOnce() -> String`) so the string is only
+/// constructed when the builder actually needs it. In production builders
+/// the default implementations discard the closure without calling it,
+/// giving **zero overhead**. The debug builder overrides the base method
+/// to invoke the closure and attach the resulting label to failures.
+///
+/// # Design
+///
+/// Kept separate from [`AirBuilder`] to avoid bloating the core trait.
+/// Builders opt in by implementing this trait. Most can use an empty impl
+/// block to get the default no-op behavior:
+///
+/// ```ignore
+/// impl NamedAirBuilder for MyBuilder {}
+/// ```
+///
+/// Only the debug constraint builder overrides the base method to capture
+/// labels for diagnostic output.
+pub trait NamedAirBuilder: AirBuilder {
+    /// Assert that the given element is zero, with a lazily-evaluated label.
+    ///
+    /// The default discards the label and delegates to the unlabeled variant.
+    fn assert_zero_named<I: Into<Self::Expr>>(&mut self, x: I, _label: impl FnOnce() -> String) {
+        self.assert_zero(x);
+    }
+
+    /// Labeled variant of [`AirBuilder::assert_zeros`].
+    fn assert_zeros_named<const N: usize, I: Into<Self::Expr>>(
+        &mut self,
+        array: [I; N],
+        _label: impl FnOnce() -> String,
+    ) {
+        self.assert_zeros(array);
+    }
+
+    /// Labeled variant of [`AirBuilder::assert_one`].
+    fn assert_one_named<I: Into<Self::Expr>>(&mut self, x: I, label: impl FnOnce() -> String) {
+        self.assert_zero_named(x.into() - Self::Expr::ONE, label);
+    }
+
+    /// Labeled variant of [`AirBuilder::assert_eq`].
+    fn assert_eq_named<I1: Into<Self::Expr>, I2: Into<Self::Expr>>(
+        &mut self,
+        x: I1,
+        y: I2,
+        label: impl FnOnce() -> String,
+    ) {
+        self.assert_zero_named(x.into() - y.into(), label);
+    }
+
+    /// Labeled variant of [`AirBuilder::assert_bool`].
+    fn assert_bool_named<I: Into<Self::Expr>>(&mut self, x: I, label: impl FnOnce() -> String) {
+        self.assert_zero_named(x.into().bool_check(), label);
+    }
+
+    /// Labeled variant of [`AirBuilder::assert_bools`].
+    fn assert_bools_named<const N: usize, I: Into<Self::Expr>>(
+        &mut self,
+        array: [I; N],
+        _label: impl FnOnce() -> String,
+    ) {
+        let zero_array = array.map(|x| x.into().bool_check());
+        self.assert_zeros(zero_array);
+    }
+}
+
+impl<AB: NamedAirBuilder> NamedAirBuilder for FilteredAirBuilder<'_, AB> {
+    fn assert_zero_named<I: Into<Self::Expr>>(&mut self, x: I, label: impl FnOnce() -> String) {
+        self.inner
+            .assert_zero_named(self.condition() * x.into(), label);
+    }
+}
+
+/// Extension trait that adds labeled variants of extension-field assertions.
+///
+/// Same lazy-closure design as [`NamedAirBuilder`], applied to the
+/// extension-field methods of [`ExtensionBuilder`].
+pub trait NamedExtensionBuilder: ExtensionBuilder + NamedAirBuilder {
+    /// Labeled variant of [`ExtensionBuilder::assert_zero_ext`].
+    fn assert_zero_ext_named<I: Into<Self::ExprEF>>(
+        &mut self,
+        x: I,
+        _label: impl FnOnce() -> String,
+    ) {
+        self.assert_zero_ext(x);
+    }
+
+    /// Labeled variant of [`ExtensionBuilder::assert_eq_ext`].
+    fn assert_eq_ext_named<I1: Into<Self::ExprEF>, I2: Into<Self::ExprEF>>(
+        &mut self,
+        x: I1,
+        y: I2,
+        label: impl FnOnce() -> String,
+    ) {
+        self.assert_zero_ext_named(x.into() - y.into(), label);
+    }
+
+    /// Labeled variant of [`ExtensionBuilder::assert_one_ext`].
+    fn assert_one_ext_named<I: Into<Self::ExprEF>>(
+        &mut self,
+        x: I,
+        label: impl FnOnce() -> String,
+    ) {
+        self.assert_eq_ext_named(x, Self::ExprEF::ONE, label);
+    }
+}
+
+impl<AB: NamedExtensionBuilder> NamedExtensionBuilder for FilteredAirBuilder<'_, AB> {
+    fn assert_zero_ext_named<I: Into<Self::ExprEF>>(
+        &mut self,
+        x: I,
+        label: impl FnOnce() -> String,
+    ) {
+        let ext_x: Self::ExprEF = x.into();
+        let condition: AB::Expr = self.condition();
+        self.inner.assert_zero_ext_named(ext_x * condition, label);
     }
 }

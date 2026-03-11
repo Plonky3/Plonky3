@@ -1,3 +1,4 @@
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use p3_field::{ExtensionField, Field};
@@ -6,7 +7,8 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::ViewPair;
 
 use crate::{
-    Air, AirBuilder, AirBuilderWithContext, ExtensionBuilder, PermutationAirBuilder, RowWindow,
+    Air, AirBuilder, AirBuilderWithContext, ExtensionBuilder, NamedAirBuilder,
+    NamedExtensionBuilder, PermutationAirBuilder, RowWindow,
 };
 
 /// A single constraint violation captured during debug evaluation.
@@ -42,9 +44,9 @@ pub struct ConstraintFailure {
 
     /// Human-readable label for this constraint.
     ///
-    /// - Set when the constraint was asserted with the labeled variant.
+    /// - Set when the constraint was asserted via [`NamedAirBuilder`].
     /// - `None` when the standard unlabeled assertion was used.
-    pub label: Option<&'static str>,
+    pub label: Option<String>,
 }
 
 /// Summary of all constraint violations across a full trace evaluation.
@@ -281,19 +283,6 @@ where
         self.constraint_index += 1;
     }
 
-    fn assert_zero_named<I: Into<Self::Expr>>(&mut self, x: I, label: &'static str) {
-        // Check for a non-zero value.
-        if x.into() != F::ZERO {
-            self.failures.push(ConstraintFailure {
-                row: self.row_index,
-                constraint: self.constraint_index,
-                label: Some(label),
-            });
-        }
-        // Always advance the counter to keep constraint indices stable.
-        self.constraint_index += 1;
-    }
-
     fn public_values(&self) -> &[Self::PublicVar] {
         self.public_values
     }
@@ -329,20 +318,6 @@ impl<F: Field, EF: ExtensionField<F>> ExtensionBuilder for DebugConstraintBuilde
         }
         self.constraint_index += 1;
     }
-
-    fn assert_zero_ext_named<I>(&mut self, x: I, label: &'static str)
-    where
-        I: Into<Self::ExprEF>,
-    {
-        if x.into() != EF::ZERO {
-            self.failures.push(ConstraintFailure {
-                row: self.row_index,
-                constraint: self.constraint_index,
-                label: Some(label),
-            });
-        }
-        self.constraint_index += 1;
-    }
 }
 
 impl<'a, F: Field, EF: ExtensionField<F>> PermutationAirBuilder
@@ -367,6 +342,38 @@ impl<'a, F: Field, EF: ExtensionField<F>> PermutationAirBuilder
 
     fn permutation_values(&self) -> &[Self::PermutationVar] {
         self.permutation_values
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> NamedAirBuilder for DebugConstraintBuilder<'_, F, EF> {
+    /// Labeled variant: invokes the closure to capture the label on failure.
+    fn assert_zero_named<I: Into<Self::Expr>>(&mut self, x: I, label: impl FnOnce() -> String) {
+        if x.into() != F::ZERO {
+            self.failures.push(ConstraintFailure {
+                row: self.row_index,
+                constraint: self.constraint_index,
+                label: Some(label()),
+            });
+        }
+        self.constraint_index += 1;
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> NamedExtensionBuilder for DebugConstraintBuilder<'_, F, EF> {
+    /// Labeled variant for extension-field assertions.
+    fn assert_zero_ext_named<I: Into<Self::ExprEF>>(
+        &mut self,
+        x: I,
+        label: impl FnOnce() -> String,
+    ) {
+        if x.into() != EF::ZERO {
+            self.failures.push(ConstraintFailure {
+                row: self.row_index,
+                constraint: self.constraint_index,
+                label: Some(label()),
+            });
+        }
+        self.constraint_index += 1;
     }
 }
 
@@ -565,6 +572,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::ToString;
     use alloc::vec;
 
     use p3_baby_bear::BabyBear;
@@ -826,8 +834,10 @@ mod tests {
             let main = builder.main();
             // Constraint 0: unlabeled
             builder.assert_zero(main.current(0).unwrap());
-            // Constraint 1: labeled
-            builder.assert_zero_named(main.current(1).unwrap(), "col_1_must_be_zero");
+            // Constraint 1: labeled via NamedAirBuilder
+            builder.assert_zero_named(main.current(1).unwrap(), || {
+                "col_1_must_be_zero".to_string()
+            });
         }
     }
 
@@ -846,7 +856,7 @@ mod tests {
 
         // Second failure: labeled.
         assert_eq!(failures[1].constraint, 1);
-        assert_eq!(failures[1].label, Some("col_1_must_be_zero"));
+        assert_eq!(failures[1].label.as_deref(), Some("col_1_must_be_zero"));
     }
 
     #[test]
@@ -877,7 +887,7 @@ mod tests {
         assert!(
             labeled
                 .iter()
-                .all(|f| f.label == Some("col_1_must_be_zero"))
+                .all(|f| f.label.as_deref() == Some("col_1_must_be_zero"))
         );
     }
 }
