@@ -7,19 +7,90 @@ use p3_matrix::stack::ViewPair;
 
 use crate::{
     Air, AirBuilder, AirBuilderWithContext, ExtensionBuilder, PermutationAirBuilder, RowWindow,
+    VirtualColumnBuilder,
 };
 
 /// A single constraint violation captured during debug evaluation.
 ///
-/// Instead of panicking on the first failure, the builder records every
-/// violation it encounters so the caller can report them all at once.
+/// During constraint checking the builder evaluates every AIR constraint
+/// on every trace row.
+///
+/// When a constraint evaluates to a non-zero value, the violation is
+/// recorded here **instead of panicking**.
+/// This allows the caller to inspect all failures at once and produce
+/// comprehensive diagnostic output.
+///
+/// # Label support
+///
+/// Constraints asserted with the labeled variant carry a human-readable
+/// string identifying them by purpose (e.g. `"range_check"`).
+///
+/// Labels are zero-cost in production builders because:
+/// - The default trait implementation discards them
+/// - Only the debug builder overrides it to capture them
+/// - `&'static str` avoids any heap allocation
 #[derive(Debug, Clone)]
 pub struct ConstraintFailure {
     /// Zero-based index of the trace row where the violation occurred.
     pub row: usize,
 
-    /// Zero-based index of the constraint (in evaluation order) that was violated.
+    /// Zero-based position of the constraint within one evaluation pass.
+    ///
+    /// The counter increments after every assertion, **pass or fail**.
+    /// This gives each constraint a stable index regardless of which
+    /// other constraints fail.
     pub constraint: usize,
+
+    /// Human-readable label for this constraint.
+    ///
+    /// - Set when the constraint was asserted with the labeled variant.
+    /// - `None` when the standard unlabeled assertion was used.
+    pub label: Option<&'static str>,
+}
+
+/// Summary of all constraint violations across a full trace evaluation.
+///
+/// Collects **every** violation in a single pass, giving the developer
+/// a complete picture of what went wrong.
+///
+/// # Why
+///
+/// Wide AIRs can have 50+ constraints per row.
+/// Without a full report, debugging becomes a tedious loop:
+///
+/// 1. Run the checker
+/// 2. Fix the one reported failure
+/// 3. Re-run, discover the next failure
+/// 4. Repeat
+///
+/// With a full report, **all** failures are visible at once.
+///
+/// # Memory safety
+///
+/// Use the `max_failures` parameter in [`check_all_constraints`] to cap
+/// the number of recorded violations.
+/// Without a cap, a fully-broken trace could allocate unbounded memory.
+#[derive(Debug, Clone)]
+pub struct ConstraintReport {
+    /// Every constraint violation found during the evaluation pass.
+    pub failures: Vec<ConstraintFailure>,
+
+    /// Total number of rows in the evaluated trace.
+    pub total_rows: usize,
+
+    /// Number of constraints evaluated per row.
+    ///
+    /// Captured from the first row's evaluation.
+    /// If the AIR dynamically varies its constraint count per row,
+    /// this reflects only the first.
+    pub total_constraints_per_row: usize,
+}
+
+impl ConstraintReport {
+    /// Returns `true` when no constraint violations were found.
+    pub const fn is_ok(&self) -> bool {
+        self.failures.is_empty()
+    }
 }
 
 /// Debug-mode constraint builder that evaluates an AIR over concrete field
@@ -115,7 +186,6 @@ impl<'a, F: Field, EF: ExtensionField<F>> DebugConstraintBuilder<'a, F, EF> {
     /// Use this when the AIR declares lookup or permutation arguments
     /// that require access to the permutation trace and challenges.
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     pub fn new_with_permutation(
         row_index: usize,
         main: ViewPair<'a, F>,
@@ -206,8 +276,22 @@ where
             self.failures.push(ConstraintFailure {
                 row: self.row_index,
                 constraint: self.constraint_index,
+                label: None,
             });
         }
+        self.constraint_index += 1;
+    }
+
+    fn assert_zero_named<I: Into<Self::Expr>>(&mut self, x: I, label: &'static str) {
+        // Check for a non-zero value.
+        if x.into() != F::ZERO {
+            self.failures.push(ConstraintFailure {
+                row: self.row_index,
+                constraint: self.constraint_index,
+                label: Some(label),
+            });
+        }
+        // Always advance the counter to keep constraint indices stable.
         self.constraint_index += 1;
     }
 
@@ -241,6 +325,7 @@ impl<F: Field, EF: ExtensionField<F>> ExtensionBuilder for DebugConstraintBuilde
             self.failures.push(ConstraintFailure {
                 row: self.row_index,
                 constraint: self.constraint_index,
+                label: None,
             });
         }
         self.constraint_index += 1;
@@ -270,6 +355,10 @@ impl<'a, F: Field, EF: ExtensionField<F>> PermutationAirBuilder
     fn permutation_values(&self) -> &[Self::PermutationVar] {
         self.permutation_values
     }
+}
+
+impl<F: Field, EF: ExtensionField<F>> VirtualColumnBuilder for DebugConstraintBuilder<'_, F, EF> {
+    fn eval_virtual_column<I: Into<Self::Expr>>(&mut self, _x: I) {}
 }
 
 /// Evaluate every AIR constraint against a concrete trace and panic on failure.
@@ -351,6 +440,117 @@ where
                  failed constraint indices = {indices:?}"
             );
         }
+    }
+}
+
+/// Evaluate every AIR constraint against a concrete trace and collect
+/// **all** violations, returning a [`ConstraintReport`].
+///
+/// Unlike [`check_constraints`] which panics at the first failing row,
+/// this function continues through the **entire** trace.
+/// Invaluable for debugging wide AIRs where multiple rows fail
+/// independently.
+///
+/// # Failure cap
+///
+/// The optional `max_failures` parameter prevents unbounded memory on
+/// large traces with many violations.
+///
+/// The cap is checked **between** rows, so the final count may slightly
+/// exceed it (by up to one row's worth of failures).
+///
+/// # Permutation arguments
+///
+/// This is the simple variant — no permutation or lookup arguments.
+/// Batch-stark provides its own wrapper for those.
+#[allow(unused)] // Suppresses warnings in release mode where this is dead code.
+pub fn check_all_constraints<F, A>(
+    air: &A,
+    main: &RowMajorMatrix<F>,
+    public_values: &[F],
+    max_failures: Option<usize>,
+) -> ConstraintReport
+where
+    F: Field,
+    A: for<'a> Air<DebugConstraintBuilder<'a, F>>,
+{
+    let height = main.height();
+    let preprocessed = air.preprocessed_trace();
+
+    // Accumulate violations across all rows.
+    let mut all_failures = Vec::new();
+
+    // Capture how many constraints the AIR asserts per row.
+    let mut total_constraints_per_row = 0;
+
+    for row_index in 0..height {
+        // Early exit when the failure cap is reached.
+        if let Some(cap) = max_failures {
+            if all_failures.len() >= cap {
+                break;
+            }
+        }
+
+        // Wrap around to row 0 after the last row.
+        let row_index_next = (row_index + 1) % height;
+
+        // SAFETY: both indices are strictly less than `height`.
+        let local = unsafe { main.row_slice_unchecked(row_index) };
+        let next = unsafe { main.row_slice_unchecked(row_index_next) };
+
+        // Pair the current and next witness rows into a vertical view.
+        let main_pair = ViewPair::new(
+            RowMajorMatrixView::new_row(&*local),
+            RowMajorMatrixView::new_row(&*next),
+        );
+
+        // Build the preprocessed pair, falling back to zero-width when
+        // the AIR has no preprocessed trace.
+        let (prep_local, prep_next) = preprocessed.as_ref().map_or((None, None), |prep| unsafe {
+            // SAFETY: same index range as the main trace.
+            (
+                Some(prep.row_slice_unchecked(row_index)),
+                Some(prep.row_slice_unchecked(row_index_next)),
+            )
+        });
+        let preprocessed_pair = match (prep_local.as_ref(), prep_next.as_ref()) {
+            (Some(l), Some(n)) => ViewPair::new(
+                RowMajorMatrixView::new_row(&**l),
+                RowMajorMatrixView::new_row(&**n),
+            ),
+            _ => ViewPair::new(
+                RowMajorMatrixView::new(&[], 0),
+                RowMajorMatrixView::new(&[], 0),
+            ),
+        };
+
+        // Derive the row selectors from the current position.
+        let mut builder = DebugConstraintBuilder::new(
+            row_index,
+            main_pair,
+            preprocessed_pair,
+            public_values,
+            F::from_bool(row_index == 0),
+            F::from_bool(row_index == height - 1),
+            F::from_bool(row_index != height - 1),
+        );
+
+        // Run every AIR constraint on this row.
+        air.eval(&mut builder);
+
+        // Record the constraint count from the first row only.
+        if row_index == 0 {
+            total_constraints_per_row = builder.constraint_index;
+        }
+
+        // Collect any violations from this row.
+        all_failures.extend(builder.into_failures());
+    }
+
+    ConstraintReport {
+        failures: all_failures,
+        total_rows: height,
+        total_constraints_per_row,
     }
 }
 
@@ -557,5 +757,120 @@ mod tests {
         let values = vec![BabyBear::ONE, BabyBear::ZERO, BabyBear::new(7)];
         let main = RowMajorMatrix::new(values, 3);
         check_constraints(&air, &main, &[]);
+    }
+
+    // ── check_all_constraints tests ──────────────────────────────────
+
+    #[test]
+    fn test_check_all_constraints_no_failures() {
+        let air = AllZeroAir::<2>;
+        let values = vec![BabyBear::ZERO; 4]; // 2 rows × 2 cols, all zero
+        let main = RowMajorMatrix::new(values, 2);
+        let report = check_all_constraints(&air, &main, &[], None);
+        assert!(report.is_ok());
+        assert_eq!(report.total_rows, 2);
+        assert_eq!(report.total_constraints_per_row, 2);
+    }
+
+    #[test]
+    fn test_check_all_constraints_multiple_rows_fail() {
+        let air = AllZeroAir::<2>;
+        // Row 0: [1, 0] → constraint 0 fails
+        // Row 1: [0, 1] → constraint 1 fails
+        let values = vec![BabyBear::ONE, BabyBear::ZERO, BabyBear::ZERO, BabyBear::ONE];
+        let main = RowMajorMatrix::new(values, 2);
+        let report = check_all_constraints(&air, &main, &[], None);
+        assert!(!report.is_ok());
+        assert_eq!(report.failures.len(), 2);
+
+        assert_eq!(report.failures[0].row, 0);
+        assert_eq!(report.failures[0].constraint, 0);
+
+        assert_eq!(report.failures[1].row, 1);
+        assert_eq!(report.failures[1].constraint, 1);
+    }
+
+    #[test]
+    fn test_check_all_constraints_max_failures_cap() {
+        let air = AllZeroAir::<2>;
+        // 4 rows, all non-zero → 8 failures total, but cap at 3.
+        let values = vec![BabyBear::ONE; 8];
+        let main = RowMajorMatrix::new(values, 2);
+        let report = check_all_constraints(&air, &main, &[], Some(3));
+        // With cap=3, we stop after collecting at least 3 failures.
+        // Row 0 produces 2 failures, row 1 produces 2 more → we get 4
+        // because the cap is checked *between* rows.
+        assert!(report.failures.len() >= 3);
+        assert!(report.failures.len() <= 4);
+    }
+
+    /// AIR that uses `assert_zero_named` for labeled constraints.
+    #[derive(Debug)]
+    struct NamedConstraintAir;
+
+    impl<F: Field> BaseAir<F> for NamedConstraintAir {
+        fn width(&self) -> usize {
+            2
+        }
+    }
+
+    impl<F: Field> Air<DebugConstraintBuilder<'_, F>> for NamedConstraintAir {
+        fn eval(&self, builder: &mut DebugConstraintBuilder<'_, F>) {
+            let main = builder.main();
+            // Constraint 0: unlabeled
+            builder.assert_zero(main.current(0).unwrap());
+            // Constraint 1: labeled
+            builder.assert_zero_named(main.current(1).unwrap(), "col_1_must_be_zero");
+        }
+    }
+
+    #[test]
+    fn test_named_constraint_label_captured() {
+        let builder = eval_single_row(
+            &NamedConstraintAir,
+            [BabyBear::ONE, BabyBear::ONE], // both fail
+        );
+        let failures = builder.failures();
+        assert_eq!(failures.len(), 2);
+
+        // First failure: unlabeled.
+        assert_eq!(failures[0].constraint, 0);
+        assert!(failures[0].label.is_none());
+
+        // Second failure: labeled.
+        assert_eq!(failures[1].constraint, 1);
+        assert_eq!(failures[1].label, Some("col_1_must_be_zero"));
+    }
+
+    #[test]
+    fn test_named_constraint_no_label_when_passing() {
+        let builder = eval_single_row(
+            &NamedConstraintAir,
+            [BabyBear::ZERO, BabyBear::ZERO], // both pass
+        );
+        assert!(!builder.has_failures());
+    }
+
+    #[test]
+    fn test_named_constraint_in_full_report() {
+        let air = NamedConstraintAir;
+        // Two rows, both fail on both columns.
+        let values = vec![BabyBear::ONE; 4];
+        let main = RowMajorMatrix::new(values, 2);
+        let report = check_all_constraints(&air, &main, &[], None);
+        assert_eq!(report.failures.len(), 4);
+
+        // Row 0, constraint 1 should have the label.
+        let labeled: Vec<_> = report
+            .failures
+            .iter()
+            .filter(|f| f.label.is_some())
+            .collect();
+        assert_eq!(labeled.len(), 2); // one per row
+        assert!(
+            labeled
+                .iter()
+                .all(|f| f.label == Some("col_1_must_be_zero"))
+        );
     }
 }

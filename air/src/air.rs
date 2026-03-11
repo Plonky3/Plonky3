@@ -339,6 +339,22 @@ pub trait AirBuilder: Sized {
     /// into a single assert_zeros call will improve performance.
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I);
 
+    /// Assert that the given element is zero, with a human-readable label.
+    ///
+    /// # Default behavior
+    ///
+    /// Discards the label and delegates to the unlabeled variant.
+    /// This means **zero overhead** in production builders.
+    ///
+    /// # Debug builder override
+    ///
+    /// Only the debug builder overrides this to capture labels.
+    /// When a constraint fails, the label appears in the diagnostic
+    /// report, making failures immediately identifiable.
+    fn assert_zero_named<I: Into<Self::Expr>>(&mut self, x: I, _label: &'static str) {
+        self.assert_zero(x);
+    }
+
     /// Assert that every element of a given array is 0.
     ///
     /// This should be preferred over calling `assert_zero` multiple times.
@@ -461,6 +477,40 @@ pub trait PermutationAirBuilder: ExtensionBuilder {
     fn permutation_values(&self) -> &[Self::PermutationVar];
 }
 
+/// Extension trait for builders that support virtual (uncommitted) bus columns.
+///
+/// In multi-table zkVM designs, tables communicate through **bus** interactions.
+///
+/// A bus column is a value that is:
+/// - **Computed** from the trace during evaluation
+/// - **Never committed** to a polynomial
+/// - Only its **aggregated contribution** enters the proof
+///   (e.g. a multiset hash or LogUp sum)
+///
+/// # Opt-in design
+///
+/// This is an extension trait, fully opt-in.
+/// Existing AIRs and builders are entirely unaffected.
+///
+/// Downstream projects can:
+/// 1. Implement this trait for their builders
+/// 2. Require it as a bound in their AIR definitions
+///
+/// # Relationship to permutation arguments
+///
+/// - **Permutation arguments** prove two columns are a reordering
+///   of each other
+/// - **Virtual bus columns** prove that computed values across
+///   different tables satisfy cross-table consistency constraints
+pub trait VirtualColumnBuilder: AirBuilder {
+    /// Register a virtual column value for bus interaction.
+    ///
+    /// The value is computed from trace data but never committed to a polynomial.
+    ///
+    /// Implementations may collect the expression for later aggregation or simply discard it.
+    fn eval_virtual_column<I: Into<Self::Expr>>(&mut self, x: I);
+}
+
 /// A wrapper around an [`AirBuilder`] that enforces constraints only when a specified condition is met.
 ///
 /// This struct allows selectively applying constraints to certain rows or under certain conditions in the AIR,
@@ -519,6 +569,15 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
         self.inner.assert_zero(self.condition() * x.into());
     }
 
+    /// Forward the labeled assertion, multiplied by the condition.
+    ///
+    /// The label passes through unchanged so that diagnostic output
+    /// correctly identifies the constraint, even when conditionally applied.
+    fn assert_zero_named<I: Into<Self::Expr>>(&mut self, x: I, label: &'static str) {
+        self.inner
+            .assert_zero_named(self.condition() * x.into(), label);
+    }
+
     fn public_values(&self) -> &[Self::PublicVar] {
         self.inner.public_values()
     }
@@ -573,5 +632,11 @@ impl<AB: AirBuilderWithContext> AirBuilderWithContext for FilteredAirBuilder<'_,
 
     fn eval_context(&self) -> &Self::EvalContext {
         self.inner.eval_context()
+    }
+}
+
+impl<AB: VirtualColumnBuilder> VirtualColumnBuilder for FilteredAirBuilder<'_, AB> {
+    fn eval_virtual_column<I: Into<Self::Expr>>(&mut self, x: I) {
+        self.inner.eval_virtual_column(self.condition() * x.into());
     }
 }
