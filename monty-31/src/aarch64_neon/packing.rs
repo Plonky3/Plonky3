@@ -997,8 +997,7 @@ where
         sum_ah = aarch64::vmlal_high_u32(sum_ah, lhs3, rhs3);
 
         // Group B: term 4 alone.
-        let sum_bl =
-            aarch64::vmull_u32(aarch64::vget_low_u32(lhs4), aarch64::vget_low_u32(rhs4));
+        let sum_bl = aarch64::vmull_u32(aarch64::vget_low_u32(lhs4), aarch64::vget_low_u32(rhs4));
         let sum_bh = aarch64::vmull_high_u32(lhs4, rhs4);
 
         // Split each group into 32-bit c_lo, c_hi.
