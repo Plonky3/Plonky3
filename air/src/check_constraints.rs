@@ -485,10 +485,10 @@ where
 
     for row_index in 0..height {
         // Early exit when the failure cap is reached.
-        if let Some(cap) = max_failures {
-            if all_failures.len() >= cap {
-                break;
-            }
+        if let Some(cap) = max_failures
+            && all_failures.len() >= cap
+        {
+            break;
         }
 
         // Wrap around to row 0 after the last row.

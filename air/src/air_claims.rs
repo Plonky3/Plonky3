@@ -40,6 +40,7 @@ pub struct AirClaims<F> {
     /// `None` when:
     /// - the AIR has no transition constraints and
     /// - never accesses the next row.
+    ///
     /// This avoids unnecessary polynomial openings in single-row AIRs.
     pub main_next_evals: Option<Vec<F>>,
 
