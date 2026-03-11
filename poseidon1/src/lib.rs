@@ -72,8 +72,8 @@ use rand::{Rng, RngExt};
 /// ```text
 ///   full_round_constants:
 ///   ┌──────────────┬──────────────────┐
-///   │ initial full  │  terminal full   │
-///   │ (RF/2 items)  │  (RF/2 items)    │
+///   │ initial full │  terminal full   │
+///   │ (RF/2 items) │  (RF/2 items)    │
 ///   └──────────────┴──────────────────┘
 /// ```
 ///
