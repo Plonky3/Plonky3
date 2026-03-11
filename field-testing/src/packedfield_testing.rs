@@ -397,6 +397,52 @@ where
     );
 }
 
+/// Test dot products with maximum field values (P-1) to catch overflow bugs.
+///
+/// This verifies that SIMD dot product implementations handle the edge case where
+/// `N*(P-1)^2` can overflow `u64` (which happens for N >= 5 with 31-bit primes).
+pub fn test_dot_product_boundary<PF>()
+where
+    PF: PackedField + Eq,
+{
+    let big = PF::from(PF::Scalar::NEG_ONE);
+    let scalar_big = PF::Scalar::NEG_ONE;
+
+    // Test dot_product for N = 1..=16 with all-maximum inputs.
+    macro_rules! test_dot_n {
+        ($n:literal) => {
+            let packed_result = PF::dot_product::<$n>(&[big; $n], &[big; $n]);
+            let scalar_result =
+                PF::Scalar::dot_product::<$n>(&[scalar_big; $n], &[scalar_big; $n]);
+            for lane in 0..PF::WIDTH {
+                assert_eq!(
+                    packed_result.as_slice()[lane],
+                    scalar_result,
+                    "dot_product::<{}> overflow mismatch at lane {}",
+                    $n,
+                    lane,
+                );
+            }
+        };
+    }
+    test_dot_n!(1);
+    test_dot_n!(2);
+    test_dot_n!(3);
+    test_dot_n!(4);
+    test_dot_n!(5);
+    test_dot_n!(6);
+    test_dot_n!(7);
+    test_dot_n!(8);
+    test_dot_n!(9);
+    test_dot_n!(10);
+    test_dot_n!(11);
+    test_dot_n!(12);
+    test_dot_n!(13);
+    test_dot_n!(14);
+    test_dot_n!(15);
+    test_dot_n!(16);
+}
+
 #[macro_export]
 macro_rules! test_packed_field {
     ($packedfield:ty, $zeros:expr, $ones:expr, $specials:expr) => {
@@ -424,6 +470,10 @@ macro_rules! test_packed_field {
             #[test]
             fn test_multiplicative_inverse() {
                 $crate::test_multiplicative_inverse::<$packedfield>();
+            }
+            #[test]
+            fn test_dot_product_boundary() {
+                $crate::test_dot_product_boundary::<$packedfield>();
             }
         }
     };

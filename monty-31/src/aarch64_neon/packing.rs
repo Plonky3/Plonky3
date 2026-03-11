@@ -767,6 +767,16 @@ where
                 &[rhs[0], rhs[1], rhs[2], rhs[3], rhs[4]],
             )
         },
+        8 => unsafe {
+            dot_product_8(
+                &[
+                    lhs[0], lhs[1], lhs[2], lhs[3], lhs[4], lhs[5], lhs[6], lhs[7],
+                ],
+                &[
+                    rhs[0], rhs[1], rhs[2], rhs[3], rhs[4], rhs[5], rhs[6], rhs[7],
+                ],
+            )
+        },
         64 => {
             let sum_4s: [PackedMontyField31Neon<P>; 16] = core::array::from_fn(|i| {
                 let start = i * 4;
@@ -947,8 +957,6 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
 
 /// Compute the elementary function `l0*r0 + l1*r1 + l2*r2 + l3*r3 + l4*r4` given ten inputs
 /// in canonical form.
-///
-/// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 unsafe fn dot_product_5<P, LHS, RHS>(lhs: &[LHS; 5], rhs: &[RHS; 5]) -> PackedMontyField31Neon<P>
 where
@@ -969,7 +977,7 @@ where
         let lhs4 = lhs[4].into_vec();
         let rhs4 = rhs[4].into_vec();
 
-        // Group A: accumulate terms 0-3 in wide form. Safe: 4*(P-1)^2 < 2^64.
+        // Group A: accumulate terms 0-2 in wide form. Safe: 3*(P-1)^2 < 2^64.
 
         // Low half (Lanes 0 & 1)
         let mut sum_al =
@@ -984,21 +992,26 @@ where
             aarch64::vget_low_u32(lhs2),
             aarch64::vget_low_u32(rhs2),
         );
-        sum_al = aarch64::vmlal_u32(
-            sum_al,
-            aarch64::vget_low_u32(lhs3),
-            aarch64::vget_low_u32(rhs3),
-        );
 
         // High half (Lanes 2 & 3)
         let mut sum_ah = aarch64::vmull_high_u32(lhs0, rhs0);
         sum_ah = aarch64::vmlal_high_u32(sum_ah, lhs1, rhs1);
         sum_ah = aarch64::vmlal_high_u32(sum_ah, lhs2, rhs2);
-        sum_ah = aarch64::vmlal_high_u32(sum_ah, lhs3, rhs3);
 
-        // Group B: term 4 alone.
-        let sum_bl = aarch64::vmull_u32(aarch64::vget_low_u32(lhs4), aarch64::vget_low_u32(rhs4));
-        let sum_bh = aarch64::vmull_high_u32(lhs4, rhs4);
+        // Group B: accumulate terms 3-4 in wide form. Safe: 2*(P-1)^2 < 2^64.
+
+        // Low half (Lanes 0 & 1)
+        let mut sum_bl =
+            aarch64::vmull_u32(aarch64::vget_low_u32(lhs3), aarch64::vget_low_u32(rhs3));
+        sum_bl = aarch64::vmlal_u32(
+            sum_bl,
+            aarch64::vget_low_u32(lhs4),
+            aarch64::vget_low_u32(rhs4),
+        );
+
+        // High half (Lanes 2 & 3)
+        let mut sum_bh = aarch64::vmull_high_u32(lhs3, rhs3);
+        sum_bh = aarch64::vmlal_high_u32(sum_bh, lhs4, rhs4);
 
         // Split each group into 32-bit c_lo, c_hi.
         let c_lo_a = aarch64::vuzp1q_u32(
@@ -1018,30 +1031,34 @@ where
             aarch64::vreinterpretq_u32_u64(sum_bh),
         );
 
-        // Reduce c_hi_a from [0, 2P) to [0, P).
-        // c_hi_b < P already: a single product < P^2, so its high 32 bits < P^2/2^32 < P (since P < 2^31).
+        // Reduce group A's c_hi from [0, 2P) to [0, P). Group B's c_hi < P needs no reduction.
         let c_hi_a_sub = aarch64::vsubq_u32(c_hi_a, P::PACKED_P);
         let c_hi_a_red = aarch64::vminq_u32(c_hi_a, c_hi_a_sub);
 
-        // Merge the two groups: c_lo = c_lo_a + c_lo_b (wrapping),
-        // c_hi = c_hi_a' + c_hi_b + carry.
+        // Merge the two groups with carry propagation.
+        //
+        // c_lo = c_lo_a + c_lo_b (wrapping u32 add).
         let c_lo = aarch64::vaddq_u32(c_lo_a, c_lo_b);
         // carry = -1 (all 1s) if c_lo wrapped, 0 otherwise.
         let carry = aarch64::vcltq_u32(c_lo, c_lo_a);
-        let c_hi_sum = aarch64::vaddq_u32(c_hi_a_red, c_hi_b);
-        // Subtracting -1 adds 1; subtracting 0 is a no-op.
-        let c_hi = aarch64::vsubq_u32(c_hi_sum, carry);
 
-        // c_hi ∈ [0, 2P): c_hi_a' < P, c_hi_b < P, carry adds at most 1.
-        // Reduce to [0, P) with a single conditional subtraction.
-        let c_hi_sub = aarch64::vsubq_u32(c_hi, P::PACKED_P);
-        let c_hi_prime = aarch64::vminq_u32(c_hi, c_hi_sub);
+        // Reduce c_hi_sum BEFORE incorporating carry for better ILP.
+        // c_hi_sum = c_hi_a' + c_hi_b ∈ [0, 2P-2] (both < P).
+        let c_hi_sum = aarch64::vaddq_u32(c_hi_a_red, c_hi_b);
+        let c_hi_sub = aarch64::vsubq_u32(c_hi_sum, P::PACKED_P);
+        let c_hi_red = aarch64::vminq_u32(c_hi_sum, c_hi_sub);
+
+        // Now incorporate carry: c_hi_red ∈ [0, P-2] (max is 2P-2 reduced to P-2).
+        // Adding carry (0 or 1) gives at most P-1, so no further reduction needed.
+        // Subtracting -1 adds 1; subtracting 0 is a no-op.
+        let c_hi_prime = aarch64::vsubq_u32(c_hi_red, carry);
 
         // Montgomery reduction (identical to dot_product_4).
+        //
         // q ≡ c_lo ⋅ μ (mod 2^{32}).
         let q = aarch64::vmulq_u32(c_lo, aarch64::vreinterpretq_u32_s32(P::PACKED_MU));
 
-        // Compute (q⋅P)_hi = high 32 bits of q⋅P per lane (exact unsigned widening multiply).
+        // (q⋅P)_hi = high 32 bits of q⋅P.
         let qp_l = aarch64::vmull_u32(aarch64::vget_low_u32(q), aarch64::vget_low_u32(P::PACKED_P));
         let qp_h = aarch64::vmull_high_u32(q, P::PACKED_P);
         let qp_hi = aarch64::vuzp2q_u32(
