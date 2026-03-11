@@ -759,8 +759,6 @@ mod tests {
         check_constraints(&air, &main, &[]);
     }
 
-    // ── check_all_constraints tests ──────────────────────────────────
-
     #[test]
     fn test_check_all_constraints_no_failures() {
         let air = AllZeroAir::<2>;

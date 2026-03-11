@@ -45,10 +45,6 @@ pub struct OpenedValues<Challenge> {
 }
 
 impl<F: Clone> From<&OpenedValues<F>> for AirClaims<F> {
-    /// Extract AIR-level claims from proof-level opened values.
-    ///
-    /// Copies trace and preprocessed evaluations into a structured type.
-    /// Proof-system internals (quotient chunks, random columns) are left behind.
     fn from(ov: &OpenedValues<F>) -> Self {
         Self {
             main_evals: ov.trace_local.clone(),
