@@ -123,9 +123,118 @@ pub enum MerkleTreeError {
     },
 }
 
+type AritySchedule = Vec<usize>;
+type QueryPositions = Vec<usize>;
+
 impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
     MerkleTreeMmcs<P, PW, H, C, N, DIGEST_ELEMS>
 {
+    /// Replay the arity schedule for a given Merkle path and recover, for each
+    /// tree level, both:
+    ///
+    /// - the compression arity `step` used at that level (either `N` or `2`), and
+    /// - the position of the queried child within its group, `pos_in_group`, in
+    ///   the range `0..step`.
+    ///
+    /// This helper mirrors the arity logic used in [`Mmcs::verify_batch`] but
+    /// omits all hashing.
+    pub fn replay_arity_and_positions(
+        &self,
+        dimensions: &[Dimensions],
+        mut index: usize,
+        num_opening_proofs: usize,
+    ) -> Result<(AritySchedule, QueryPositions), MerkleTreeError>
+    where
+        P: PackedValue,
+        PW: PackedValue,
+    {
+        if dimensions.is_empty() {
+            return Err(EmptyBatch);
+        }
+
+        let mut heights_tallest_first = dimensions
+            .iter()
+            .enumerate()
+            .sorted_by_key(|(_, dims)| Reverse(dims.height))
+            .peekable();
+
+        // Matrix heights that round up to the same power of two must be equal.
+        if !heights_tallest_first
+            .clone()
+            .map(|(_, dims)| dims.height)
+            .tuple_windows()
+            .all(|(curr, next)| {
+                curr == next || curr.next_power_of_two() != next.next_power_of_two()
+            })
+        {
+            return Err(IncompatibleHeights);
+        }
+
+        // Initial padded height and bounds check, identical to verify_batch.
+        let (max_height, mut curr_height_padded) = match heights_tallest_first.peek() {
+            Some((_, dims)) => {
+                let max_height = dims.height;
+                let curr_height_padded = padded_len(max_height, N);
+                (max_height, curr_height_padded)
+            }
+            None => return Err(EmptyBatch),
+        };
+
+        if index >= max_height {
+            return Err(IndexOutOfBounds { max_height, index });
+        }
+
+        let leaf_height_npt = max_height.next_power_of_two();
+
+        let mut proof_pos: usize = 0;
+        let mut steps = Vec::new();
+        let mut positions = Vec::new();
+
+        while proof_pos < num_opening_proofs {
+            let step = if curr_height_padded < N {
+                2
+            } else {
+                let n_ary_target = curr_height_padded / N;
+                let has_intermediate = heights_tallest_first
+                    .clone()
+                    .filter(|(_, dims)| dims.height.next_power_of_two() != leaf_height_npt)
+                    .any(|(_, dims)| dims.height.next_power_of_two() > n_ary_target);
+                if has_intermediate { 2 } else { N }
+            };
+
+            let num_siblings = step - 1;
+            if proof_pos + num_siblings > num_opening_proofs {
+                return Err(WrongHeight {
+                    expected_proof_len: proof_pos + num_siblings,
+                    num_siblings: num_opening_proofs,
+                });
+            }
+            proof_pos += num_siblings;
+
+            let pos_in_group = index % step;
+            steps.push(step);
+            positions.push(pos_in_group);
+
+            index /= step;
+            let logical_next = curr_height_padded / step;
+            curr_height_padded = padded_len(logical_next, N);
+
+            // Mimic `verify_batch` but skip hashing values
+            let logical_next_npt = logical_next.next_power_of_two();
+            let next_height = heights_tallest_first
+                .peek()
+                .map(|(_, dims)| dims.height)
+                .filter(|h| h.next_power_of_two() == logical_next_npt);
+            if let Some(next_height) = next_height {
+                heights_tallest_first
+                    .peeking_take_while(|(_, dims)| dims.height == next_height)
+                    .for_each(|_| {});
+            }
+        }
+
+        Ok((steps, positions))
+    }
+
     /// Create a new `MerkleTreeMmcs` with the given hash and compression functions.
     ///
     /// # Arguments
