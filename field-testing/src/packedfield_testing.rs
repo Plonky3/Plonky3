@@ -398,6 +398,27 @@ where
     );
 }
 
+/// Test that [`PackedField::broadcast`] sets all lanes to the same scalar.
+pub fn test_broadcast<PF>()
+where
+    PF: PackedField + Eq,
+    StandardUniform: Distribution<PF::Scalar>,
+{
+    let mut rng = SmallRng::seed_from_u64(0xdeadbeef);
+    let x: PF::Scalar = rng.random();
+    let packed = PF::broadcast(x);
+    for lane in 0..PF::WIDTH {
+        assert_eq!(
+            packed.as_slice()[lane],
+            x,
+            "broadcast mismatch at lane {lane}"
+        );
+    }
+
+    let zero = PF::broadcast(PF::Scalar::default());
+    assert_eq!(zero, PF::ZERO, "broadcast(default) should equal ZERO");
+}
+
 /// Test dot products with maximum field values (P-1) to catch overflow bugs.
 ///
 /// This verifies that SIMD dot product implementations handle the edge case where
@@ -514,6 +535,10 @@ macro_rules! test_packed_field {
             #[test]
             fn test_dot_product_boundary() {
                 $crate::test_dot_product_boundary::<$packedfield>();
+            }
+            #[test]
+            fn test_broadcast() {
+                $crate::test_broadcast::<$packedfield>();
             }
             #[test]
             fn test_packed_vs_scalar_proptest() {

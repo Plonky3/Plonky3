@@ -349,7 +349,7 @@ where
         .for_each(|(i, digests_chunk)| {
             let first_row = i * width;
             let default_packed: [PW; DIGEST_ELEMS] =
-                array::from_fn(|_| PW::from_fn(|_| PW::Value::default()));
+                array::from_fn(|_| PW::broadcast(PW::Value::default()));
 
             let children: [[PW; DIGEST_ELEMS]; N] = array::from_fn(|n| {
                 if n < step {
@@ -470,7 +470,7 @@ where
         .for_each(|(i, digests_chunk)| {
             let first_row = i * width;
             let default_packed: [P; DIGEST_ELEMS] =
-                array::from_fn(|_| P::from_fn(|_| P::Value::default()));
+                array::from_fn(|_| P::broadcast(P::Value::default()));
             let children: [[P; DIGEST_ELEMS]; N] = array::from_fn(|n| {
                 if n < step {
                     array::from_fn(|j| P::from_fn(|k| prev_layer[step * (first_row + k) + n][j]))
