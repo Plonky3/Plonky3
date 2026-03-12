@@ -1,5 +1,7 @@
 //! Utilities for testing field implementations.
 
+#![no_std]
+
 extern crate alloc;
 
 pub mod bench_func;
