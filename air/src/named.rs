@@ -1,5 +1,6 @@
 //! Labeled constraint infrastructure.
 
+use alloc::format;
 use core::fmt;
 use core::fmt::Display;
 
@@ -118,16 +119,11 @@ impl<T> NamespaceExt for T where T: Namespace {}
 
 /// Labeled variants of every assertion method.
 ///
-/// No default implementations are provided. This forces each builder to
-/// make a deliberate choice about how labels are handled, preventing
-/// labels from being silently lost through inherited defaults.
-///
 /// Builders that discard labels should implement [`PassthroughNamedAirBuilder`] instead.
-/// The blanket impl will delegate every named method to the corresponding unlabeled one.
+/// Its blanket impl overrides **every** method to delegate directly to the unlabeled counterpart.
 ///
-/// Debug builders should implement this trait directly and make the
-/// named method the primary implementation. Their unlabeled methods
-/// can then delegate here with an empty label.
+/// Debug builders should implement this trait directly and make the named method the primary implementation.
+/// Their unlabeled methods can then delegate here with an empty label.
 pub trait NamedAirBuilder: AirBuilder {
     /// Assert zero with a label.
     fn assert_zero_named<I, N>(&mut self, x: I, name: N)
@@ -136,15 +132,14 @@ pub trait NamedAirBuilder: AirBuilder {
         N: Name;
 
     /// Assert all elements are zero, with a label.
-    fn assert_zeros_named<const M: usize, I, N>(&mut self, array: [I; M], name: N)
+    fn assert_zeros_named<const M: usize, I, Ns>(&mut self, array: [I; M], name: Ns)
     where
         I: Into<Self::Expr>,
-        N: Name,
+        Ns: Namespace,
     {
-        for elem in array {
-            self.assert_zero_named(elem, "");
+        for (i, elem) in array.into_iter().enumerate() {
+            self.assert_zero_named(elem, name.name(|| format!("[{i}]")));
         }
-        let _ = name;
     }
 
     /// Assert one with a label.
@@ -176,10 +171,10 @@ pub trait NamedAirBuilder: AirBuilder {
     }
 
     /// Assert all elements are boolean, with a label.
-    fn assert_bools_named<const M: usize, I, N>(&mut self, array: [I; M], name: N)
+    fn assert_bools_named<const M: usize, I, Ns>(&mut self, array: [I; M], name: Ns)
     where
         I: Into<Self::Expr>,
-        N: Name,
+        Ns: Namespace,
     {
         let zero_array = array.map(|x| x.into().bool_check());
         self.assert_zeros_named(zero_array, name);
@@ -202,6 +197,47 @@ impl<T: PassthroughNamedAirBuilder> NamedAirBuilder for T {
         N: Name,
     {
         self.assert_zero(x);
+    }
+
+    fn assert_zeros_named<const M: usize, I, Ns>(&mut self, array: [I; M], _name: Ns)
+    where
+        I: Into<Self::Expr>,
+        Ns: Namespace,
+    {
+        self.assert_zeros(array);
+    }
+
+    fn assert_one_named<I, N>(&mut self, x: I, _name: N)
+    where
+        I: Into<Self::Expr>,
+        N: Name,
+    {
+        self.assert_one(x);
+    }
+
+    fn assert_eq_named<I1, I2, N>(&mut self, x: I1, y: I2, _name: N)
+    where
+        I1: Into<Self::Expr>,
+        I2: Into<Self::Expr>,
+        N: Name,
+    {
+        self.assert_eq(x, y);
+    }
+
+    fn assert_bool_named<I, N>(&mut self, x: I, _name: N)
+    where
+        I: Into<Self::Expr>,
+        N: Name,
+    {
+        self.assert_bool(x);
+    }
+
+    fn assert_bools_named<const M: usize, I, Ns>(&mut self, array: [I; M], _name: Ns)
+    where
+        I: Into<Self::Expr>,
+        Ns: Namespace,
+    {
+        self.assert_bools(array);
     }
 }
 
@@ -251,7 +287,8 @@ pub trait NamedExtensionBuilder: ExtensionBuilder + NamedAirBuilder {
 
 /// Marker for builders that discard extension-field constraint labels.
 ///
-/// Provides a blanket implementation of [`NamedExtensionBuilder`] that delegates to the unlabeled counterpart.
+/// Provides a blanket implementation of [`NamedExtensionBuilder`] where
+/// every method delegates directly to its unlabeled counterpart.
 pub trait PassthroughNamedExtensionBuilder: ExtensionBuilder + PassthroughNamedAirBuilder {}
 
 impl<T: PassthroughNamedExtensionBuilder> NamedExtensionBuilder for T {
@@ -261,6 +298,23 @@ impl<T: PassthroughNamedExtensionBuilder> NamedExtensionBuilder for T {
         N: Name,
     {
         self.assert_zero_ext(x);
+    }
+
+    fn assert_eq_ext_named<I1, I2, N>(&mut self, x: I1, y: I2, _name: N)
+    where
+        I1: Into<Self::ExprEF>,
+        I2: Into<Self::ExprEF>,
+        N: Name,
+    {
+        self.assert_eq_ext(x, y);
+    }
+
+    fn assert_one_ext_named<I, N>(&mut self, x: I, _name: N)
+    where
+        I: Into<Self::ExprEF>,
+        N: Name,
+    {
+        self.assert_one_ext(x);
     }
 }
 
