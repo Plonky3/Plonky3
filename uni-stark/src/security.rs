@@ -18,12 +18,14 @@ use alloc::vec::Vec;
 use core::cmp::min;
 
 use libm::{ceil, log2, pow, sqrt};
-use p3_air::{Air, AirLayout, BaseAir};
+use p3_air::{Air, AirLayout, BaseAir, get_all_symbolic_constraints};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
 use p3_fri::FriParameters;
+use p3_matrix::Matrix;
+use p3_util::{log2_ceil_usize, log2_floor_usize};
 
-use crate::{SymbolicAirBuilder, get_log_num_quotient_chunks, get_symbolic_constraints};
+use crate::SymbolicAirBuilder;
 
 /// Parameters required to compute STARK proof security level.
 ///
@@ -55,17 +57,17 @@ impl StarkSecurityParams {
         A: Air<SymbolicAirBuilder<F>> + BaseAir<F>,
         M: Mmcs<EF>,
     {
-        let is_zk_usize = is_zk as usize;
+        let is_zk = is_zk as usize;
         let trace_width = air.width();
         let layout = AirLayout {
-            preprocessed_width: 3,
+            preprocessed_width: air.preprocessed_trace().map(|m| m.width()).unwrap_or(0),
             main_width: trace_width,
             num_public_values: air.num_public_values(),
             ..Default::default()
         };
-        let num_constraints = get_symbolic_constraints(air, layout).len();
-        let log_num_quotient_chunks = get_log_num_quotient_chunks(air, layout, is_zk_usize);
-        let num_quotient_chunks = 1 << (log_num_quotient_chunks + is_zk_usize);
+        let (num_constraints, log_num_quotient_chunks) =
+            compute_security_params_from_symbolic(air, layout, is_zk);
+        let num_quotient_chunks = 1 << (log_num_quotient_chunks + is_zk);
 
         Self {
             fri_log_blowup: fri_params.log_blowup,
@@ -75,7 +77,7 @@ impl StarkSecurityParams {
             fri_query_proof_of_work_bits: fri_params.query_proof_of_work_bits,
             num_modulus_bits: EF::bits(),
             collision_resistance: 128,
-            is_zk: is_zk_usize,
+            is_zk,
             trace_width,
             num_constraints,
             num_quotient_chunks,
@@ -86,23 +88,22 @@ impl StarkSecurityParams {
     ///
     /// This is the preferred way to build [`StarkSecurityParams`] if
     /// the AIR has preprocessed columns or public values.
-    pub fn from_air<F, A>(
-        fri_log_blowup: usize,
-        fri_log_final_poly_len: usize,
-        fri_max_log_arity: usize,
-        fri_num_queries: usize,
-        fri_query_proof_of_work_bits: usize,
+    pub fn from_air<F, EF, A, M>(
+        is_zk: bool,
+        fri_params: &FriParameters<M>,
         num_modulus_bits: usize,
         collision_resistance: usize,
-        is_zk: usize,
         air: &A,
         preprocessed_width: usize,
         num_public_values: usize,
     ) -> Self
     where
         F: Field,
+        EF: ExtensionField<F>,
         A: Air<SymbolicAirBuilder<F>> + BaseAir<F>,
+        M: Mmcs<EF>,
     {
+        let is_zk = is_zk as usize;
         let trace_width = air.width();
         let layout = AirLayout {
             preprocessed_width,
@@ -110,16 +111,16 @@ impl StarkSecurityParams {
             num_public_values,
             ..Default::default()
         };
-        let num_constraints = get_symbolic_constraints(air, layout).len();
-        let log_num_quotient_chunks = get_log_num_quotient_chunks(air, layout, is_zk);
+        let (num_constraints, log_num_quotient_chunks) =
+            compute_security_params_from_symbolic(air, layout, is_zk);
         let num_quotient_chunks = 1 << (log_num_quotient_chunks + is_zk);
 
         Self {
-            fri_log_blowup,
-            fri_log_final_poly_len,
-            fri_max_log_arity,
-            fri_num_queries,
-            fri_query_proof_of_work_bits,
+            fri_log_blowup: fri_params.log_blowup,
+            fri_log_final_poly_len: fri_params.log_final_poly_len,
+            fri_max_log_arity: fri_params.max_log_arity,
+            fri_num_queries: fri_params.num_queries,
+            fri_query_proof_of_work_bits: fri_params.query_proof_of_work_bits,
             num_modulus_bits,
             collision_resistance,
             is_zk,
@@ -130,9 +131,36 @@ impl StarkSecurityParams {
     }
 }
 
-fn log2_usize(n: usize) -> usize {
-    assert!(n > 0, "log2(0) undefined");
-    (usize::BITS - 1 - n.leading_zeros()) as usize
+fn compute_security_params_from_symbolic<F, EF, A>(
+    air: &A,
+    layout: AirLayout,
+    is_zk: usize,
+) -> (usize, usize)
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: Air<SymbolicAirBuilder<F, EF>> + BaseAir<F>,
+{
+    let (base_constraints, ext_constraints) = get_all_symbolic_constraints::<F, EF, A>(air, layout);
+
+    let num_constraints = base_constraints.len();
+
+    let base_deg = base_constraints
+        .iter()
+        .map(|c| c.degree_multiple())
+        .max()
+        .unwrap_or(0);
+    let ext_deg = ext_constraints
+        .iter()
+        .map(|c| c.degree_multiple())
+        .max()
+        .unwrap_or(0);
+    let max_deg = core::cmp::max(base_deg, ext_deg);
+
+    let constraint_degree = (max_deg + is_zk).max(2);
+    let log_num_quotient_chunks = log2_ceil_usize(constraint_degree - 1);
+
+    (num_constraints, log_num_quotient_chunks)
 }
 
 /// Computes conjectured FRI security bits from the random-words formula in
@@ -400,7 +428,7 @@ fn proven_security_unique_decoding(
     // FRI commit-phase (i.e., pre-query) soundness error.
     epsilons_bits_neg.push(extension_field_bits - log2(lde_domain_size * deep_batching));
 
-    let num_fri_layers = log2_usize(trace_length).saturating_sub(log_final_poly_len);
+    let num_fri_layers = log2_floor_usize(trace_length).saturating_sub(log_final_poly_len);
     // epsilon_i for i in [3..(k-1)], where k is number of rounds
     let epsilon_i_min = (0..num_fri_layers)
         .map(|_| extension_field_bits - log2((folding_factor - 1.0) * (lde_domain_size + 1.0)))

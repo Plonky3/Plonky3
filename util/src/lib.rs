@@ -26,6 +26,12 @@ pub const fn log2_ceil_usize(n: usize) -> usize {
 }
 
 #[must_use]
+pub const fn log2_floor_usize(n: usize) -> usize {
+    assert!(n > 0, "log2(0) undefined");
+    (usize::BITS - 1 - n.leading_zeros()) as usize
+}
+
+#[must_use]
 pub const fn log2_ceil_u64(n: u64) -> u64 {
     (u64::BITS - n.saturating_sub(1).leading_zeros()) as u64
 }
