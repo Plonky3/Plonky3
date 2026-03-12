@@ -1,4 +1,4 @@
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use p3_field::{ExtensionField, Field};
@@ -7,7 +7,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::ViewPair;
 
 use crate::{
-    Air, AirBuilder, AirBuilderWithContext, ExtensionBuilder, NamedAirBuilder,
+    Air, AirBuilder, AirBuilderWithContext, ExtensionBuilder, Name, NamedAirBuilder,
     NamedExtensionBuilder, PermutationAirBuilder, RowWindow,
 };
 
@@ -346,13 +346,17 @@ impl<'a, F: Field, EF: ExtensionField<F>> PermutationAirBuilder
 }
 
 impl<F: Field, EF: ExtensionField<F>> NamedAirBuilder for DebugConstraintBuilder<'_, F, EF> {
-    /// Labeled variant: invokes the closure to capture the label on failure.
-    fn assert_zero_named<I: Into<Self::Expr>>(&mut self, x: I, label: impl FnOnce() -> String) {
+    /// Evaluates the name and captures the label on failure.
+    fn assert_zero_named<I, N>(&mut self, x: I, name: N)
+    where
+        I: Into<Self::Expr>,
+        N: Name,
+    {
         if x.into() != F::ZERO {
             self.failures.push(ConstraintFailure {
                 row: self.row_index,
                 constraint: self.constraint_index,
-                label: Some(label()),
+                label: Some(name.evaluate().to_string()),
             });
         }
         self.constraint_index += 1;
@@ -360,17 +364,17 @@ impl<F: Field, EF: ExtensionField<F>> NamedAirBuilder for DebugConstraintBuilder
 }
 
 impl<F: Field, EF: ExtensionField<F>> NamedExtensionBuilder for DebugConstraintBuilder<'_, F, EF> {
-    /// Labeled variant for extension-field assertions.
-    fn assert_zero_ext_named<I: Into<Self::ExprEF>>(
-        &mut self,
-        x: I,
-        label: impl FnOnce() -> String,
-    ) {
+    /// Evaluates the name and captures the label on failure.
+    fn assert_zero_ext_named<I, N>(&mut self, x: I, name: N)
+    where
+        I: Into<Self::ExprEF>,
+        N: Name,
+    {
         if x.into() != EF::ZERO {
             self.failures.push(ConstraintFailure {
                 row: self.row_index,
                 constraint: self.constraint_index,
-                label: Some(label()),
+                label: Some(name.evaluate().to_string()),
             });
         }
         self.constraint_index += 1;
@@ -572,8 +576,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use alloc::string::ToString;
-    use alloc::vec;
+    use alloc::{format, vec};
 
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
@@ -835,9 +838,7 @@ mod tests {
             // Constraint 0: unlabeled
             builder.assert_zero(main.current(0).unwrap());
             // Constraint 1: labeled via NamedAirBuilder
-            builder.assert_zero_named(main.current(1).unwrap(), || {
-                "col_1_must_be_zero".to_string()
-            });
+            builder.assert_zero_named(main.current(1).unwrap(), "col_1_must_be_zero");
         }
     }
 
@@ -889,5 +890,48 @@ mod tests {
                 .iter()
                 .all(|f| f.label.as_deref() == Some("col_1_must_be_zero"))
         );
+    }
+
+    /// AIR that exercises closure-based names and namespace composition.
+    #[derive(Debug)]
+    struct NamespacedAir;
+
+    impl<F: Field> BaseAir<F> for NamespacedAir {
+        fn width(&self) -> usize {
+            3
+        }
+    }
+
+    impl<F: Field> Air<DebugConstraintBuilder<'_, F>> for NamespacedAir {
+        fn eval(&self, builder: &mut DebugConstraintBuilder<'_, F>) {
+            use crate::NamespaceExt;
+
+            let main = builder.main();
+            let ns = "range_check";
+
+            // Static namespace joined with static name.
+            builder.assert_zero_named(main.current(0).unwrap(), ns.join("limb_0"));
+
+            // Namespace joined with a closure name.
+            let i = 1;
+            builder.assert_zero_named(main.current(1).unwrap(), ns.name(|| format!("limb_{i}")));
+
+            // Plain closure name (not a namespace).
+            builder.assert_zero_named(main.current(2).unwrap(), || format!("col_{}", 2));
+        }
+    }
+
+    #[test]
+    fn test_namespace_join_labels() {
+        let builder = eval_single_row(
+            &NamespacedAir,
+            [BabyBear::ONE, BabyBear::ONE, BabyBear::ONE],
+        );
+        let failures = builder.into_failures();
+        assert_eq!(failures.len(), 3);
+
+        assert_eq!(failures[0].label.as_deref(), Some("range_check::limb_0"));
+        assert_eq!(failures[1].label.as_deref(), Some("range_check::limb_1"));
+        assert_eq!(failures[2].label.as_deref(), Some("col_2"));
     }
 }

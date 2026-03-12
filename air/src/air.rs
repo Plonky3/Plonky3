@@ -1,5 +1,6 @@
-use alloc::string::String;
 use alloc::vec::Vec;
+use core::fmt;
+use core::fmt::Display;
 use core::ops::{Add, Mul, Sub};
 
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
@@ -577,123 +578,236 @@ impl<AB: AirBuilderWithContext> AirBuilderWithContext for FilteredAirBuilder<'_,
     }
 }
 
-/// Extension trait that adds labeled variants of every assertion method.
+/// A lazily evaluated constraint label.
 ///
-/// Labels use a closure (`FnOnce() -> String`) so the string is only
-/// constructed when the builder actually needs it. In production builders
-/// the default implementations discard the closure without calling it,
-/// giving **zero overhead**. The debug builder overrides the base method
-/// to invoke the closure and attach the resulting label to failures.
+/// Two kinds of labels are supported out of the box:
 ///
-/// # Design
+/// - **Static strings** — cheapest option, also usable as namespaces.
+/// - **Closures** — evaluated only when the constraint actually fails.
 ///
-/// Kept separate from [`AirBuilder`] to avoid bloating the core trait.
-/// Builders opt in by implementing this trait. Most can use an empty impl
-/// block to get the default no-op behavior:
+/// Production builders never evaluate the label.
+/// Only the debug builder does, so naming constraints is free at proving time.
+pub trait Name {
+    /// The concrete type produced after evaluation.
+    type Output: Display;
+
+    /// Produce the displayable label.
+    fn evaluate(self) -> Self::Output;
+}
+
+impl Name for &'static str {
+    type Output = &'static str;
+
+    #[inline]
+    fn evaluate(self) -> Self::Output {
+        self
+    }
+}
+
+impl<F, T> Name for F
+where
+    F: FnOnce() -> T,
+    T: Display,
+{
+    type Output = T;
+
+    #[inline]
+    fn evaluate(self) -> Self::Output {
+        self()
+    }
+}
+
+/// A name that can be cheaply duplicated.
 ///
-/// ```ignore
-/// impl NamedAirBuilder for MyBuilder {}
-/// ```
+/// Required for hierarchical composition.
+/// Static strings satisfy this automatically.
+/// Closures generally do not.
+pub trait Namespace: Name + Copy {}
+
+impl<T> Namespace for T where T: Name + Copy {}
+
+/// Two names composed into a hierarchical label.
 ///
-/// Only the debug constraint builder overrides the base method to capture
-/// labels for diagnostic output.
-pub trait NamedAirBuilder: AirBuilder {
-    /// Assert that the given element is zero, with a lazily-evaluated label.
+/// Produces a display string like `"outer::inner"` when evaluated.
+/// Also implements [`Namespace`] when both halves are copyable.
+#[derive(Copy, Clone)]
+pub struct Joined<A, B> {
+    left: A,
+    right: B,
+}
+
+/// The evaluated form of a [`Joined`] label, ready for display.
+pub struct EvaluatedJoined<A, B> {
+    left: A,
+    right: B,
+}
+
+impl<A: Display, B: Display> Display for EvaluatedJoined<A, B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}::{}", self.left, self.right)
+    }
+}
+
+impl<A: Name, B: Name> Name for Joined<A, B> {
+    type Output = EvaluatedJoined<A::Output, B::Output>;
+
+    #[inline]
+    fn evaluate(self) -> Self::Output {
+        EvaluatedJoined {
+            left: self.left.evaluate(),
+            right: self.right.evaluate(),
+        }
+    }
+}
+
+/// Composition methods for building hierarchical labels.
+pub trait NamespaceExt: Namespace + Sized {
+    /// Nest a sub-namespace under this one.
     ///
-    /// The default discards the label and delegates to the unlabeled variant.
-    fn assert_zero_named<I: Into<Self::Expr>>(&mut self, x: I, _label: impl FnOnce() -> String) {
+    /// Both sides must be copyable.
+    /// Produces `"outer::inner"` when displayed.
+    fn join<Ns: Namespace>(self, sub_ns: Ns) -> Joined<Self, Ns> {
+        Joined {
+            left: self,
+            right: sub_ns,
+        }
+    }
+
+    /// Attach a terminal label under this namespace.
+    ///
+    /// The label does not need to be copyable, so closures work here.
+    /// Produces `"namespace::label"` when displayed.
+    fn name<N: Name>(self, name: N) -> Joined<Self, N> {
+        Joined {
+            left: self,
+            right: name,
+        }
+    }
+}
+
+impl<T> NamespaceExt for T where T: Namespace {}
+
+/// Labeled variants of every assertion method.
+///
+/// Each default discards the label and delegates to the unlabeled
+/// counterpart. This keeps production builders zero-cost.
+///
+/// Only the debug builder overrides the base method to capture labels
+/// when a constraint fails.
+///
+/// Separated from [`AirBuilder`] so the core trait stays lean.
+/// Most builders opt in with an empty impl block.
+pub trait NamedAirBuilder: AirBuilder {
+    /// Assert zero with a label.
+    fn assert_zero_named<I, N>(&mut self, x: I, _name: N)
+    where
+        I: Into<Self::Expr>,
+        N: Name,
+    {
         self.assert_zero(x);
     }
 
-    /// Labeled variant of [`AirBuilder::assert_zeros`].
-    fn assert_zeros_named<const N: usize, I: Into<Self::Expr>>(
-        &mut self,
-        array: [I; N],
-        _label: impl FnOnce() -> String,
-    ) {
+    /// Assert all elements are zero, with a label.
+    fn assert_zeros_named<const M: usize, I, N>(&mut self, array: [I; M], _name: N)
+    where
+        I: Into<Self::Expr>,
+        N: Name,
+    {
         self.assert_zeros(array);
     }
 
-    /// Labeled variant of [`AirBuilder::assert_one`].
-    fn assert_one_named<I: Into<Self::Expr>>(&mut self, x: I, label: impl FnOnce() -> String) {
-        self.assert_zero_named(x.into() - Self::Expr::ONE, label);
+    /// Assert one with a label.
+    fn assert_one_named<I, N>(&mut self, x: I, _name: N)
+    where
+        I: Into<Self::Expr>,
+        N: Name,
+    {
+        self.assert_one(x);
     }
 
-    /// Labeled variant of [`AirBuilder::assert_eq`].
-    fn assert_eq_named<I1: Into<Self::Expr>, I2: Into<Self::Expr>>(
-        &mut self,
-        x: I1,
-        y: I2,
-        label: impl FnOnce() -> String,
-    ) {
-        self.assert_zero_named(x.into() - y.into(), label);
+    /// Assert equality with a label.
+    fn assert_eq_named<I1, I2, N>(&mut self, x: I1, y: I2, _name: N)
+    where
+        I1: Into<Self::Expr>,
+        I2: Into<Self::Expr>,
+        N: Name,
+    {
+        self.assert_eq(x, y);
     }
 
-    /// Labeled variant of [`AirBuilder::assert_bool`].
-    fn assert_bool_named<I: Into<Self::Expr>>(&mut self, x: I, label: impl FnOnce() -> String) {
-        self.assert_zero_named(x.into().bool_check(), label);
+    /// Assert boolean with a label.
+    fn assert_bool_named<I, N>(&mut self, x: I, _name: N)
+    where
+        I: Into<Self::Expr>,
+        N: Name,
+    {
+        self.assert_bool(x);
     }
 
-    /// Labeled variant of [`AirBuilder::assert_bools`].
-    fn assert_bools_named<const N: usize, I: Into<Self::Expr>>(
-        &mut self,
-        array: [I; N],
-        _label: impl FnOnce() -> String,
-    ) {
-        let zero_array = array.map(|x| x.into().bool_check());
-        self.assert_zeros(zero_array);
+    /// Assert all elements are boolean, with a label.
+    fn assert_bools_named<const M: usize, I, N>(&mut self, array: [I; M], _name: N)
+    where
+        I: Into<Self::Expr>,
+        N: Name,
+    {
+        self.assert_bools(array);
     }
 }
 
 impl<AB: NamedAirBuilder> NamedAirBuilder for FilteredAirBuilder<'_, AB> {
-    fn assert_zero_named<I: Into<Self::Expr>>(&mut self, x: I, label: impl FnOnce() -> String) {
+    fn assert_zero_named<I, N>(&mut self, x: I, name: N)
+    where
+        I: Into<Self::Expr>,
+        N: Name,
+    {
         self.inner
-            .assert_zero_named(self.condition() * x.into(), label);
+            .assert_zero_named(self.condition() * x.into(), name);
     }
 }
 
-/// Extension trait that adds labeled variants of extension-field assertions.
+/// Labeled variants of extension-field assertions.
 ///
-/// Same lazy-closure design as [`NamedAirBuilder`], applied to the
-/// extension-field methods of [`ExtensionBuilder`].
+/// Same design as [`NamedAirBuilder`].
+///
+/// Every default discards the label and delegates to the unlabeled counterpart.
 pub trait NamedExtensionBuilder: ExtensionBuilder + NamedAirBuilder {
-    /// Labeled variant of [`ExtensionBuilder::assert_zero_ext`].
-    fn assert_zero_ext_named<I: Into<Self::ExprEF>>(
-        &mut self,
-        x: I,
-        _label: impl FnOnce() -> String,
-    ) {
+    /// Assert zero over the extension field, with a label.
+    fn assert_zero_ext_named<I, N>(&mut self, x: I, _name: N)
+    where
+        I: Into<Self::ExprEF>,
+        N: Name,
+    {
         self.assert_zero_ext(x);
     }
 
-    /// Labeled variant of [`ExtensionBuilder::assert_eq_ext`].
-    fn assert_eq_ext_named<I1: Into<Self::ExprEF>, I2: Into<Self::ExprEF>>(
-        &mut self,
-        x: I1,
-        y: I2,
-        label: impl FnOnce() -> String,
-    ) {
-        self.assert_zero_ext_named(x.into() - y.into(), label);
+    /// Assert equality over the extension field, with a label.
+    fn assert_eq_ext_named<I1, I2, N>(&mut self, x: I1, y: I2, _name: N)
+    where
+        I1: Into<Self::ExprEF>,
+        I2: Into<Self::ExprEF>,
+        N: Name,
+    {
+        self.assert_eq_ext(x, y);
     }
 
-    /// Labeled variant of [`ExtensionBuilder::assert_one_ext`].
-    fn assert_one_ext_named<I: Into<Self::ExprEF>>(
-        &mut self,
-        x: I,
-        label: impl FnOnce() -> String,
-    ) {
-        self.assert_eq_ext_named(x, Self::ExprEF::ONE, label);
+    /// Assert one over the extension field, with a label.
+    fn assert_one_ext_named<I, N>(&mut self, x: I, _name: N)
+    where
+        I: Into<Self::ExprEF>,
+        N: Name,
+    {
+        self.assert_one_ext(x);
     }
 }
 
 impl<AB: NamedExtensionBuilder> NamedExtensionBuilder for FilteredAirBuilder<'_, AB> {
-    fn assert_zero_ext_named<I: Into<Self::ExprEF>>(
-        &mut self,
-        x: I,
-        label: impl FnOnce() -> String,
-    ) {
+    fn assert_zero_ext_named<I, N>(&mut self, x: I, name: N)
+    where
+        I: Into<Self::ExprEF>,
+        N: Name,
+    {
         let ext_x: Self::ExprEF = x.into();
         let condition: AB::Expr = self.condition();
-        self.inner.assert_zero_ext_named(ext_x * condition, label);
+        self.inner.assert_zero_ext_named(ext_x * condition, name);
     }
 }
