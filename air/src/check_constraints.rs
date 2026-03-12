@@ -267,20 +267,9 @@ where
         self.is_transition
     }
 
-    /// Check that the expression evaluates to zero.
-    ///
-    /// If the value is non-zero a failure is recorded; in either case
-    /// the constraint counter advances so that every constraint keeps
-    /// a stable index.
+    /// Delegates to the named variant with an empty label.
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
-        if x.into() != F::ZERO {
-            self.failures.push(ConstraintFailure {
-                row: self.row_index,
-                constraint: self.constraint_index,
-                label: None,
-            });
-        }
-        self.constraint_index += 1;
+        self.assert_zero_named(x, "");
     }
 
     fn public_values(&self) -> &[Self::PublicVar] {
@@ -302,21 +291,12 @@ impl<F: Field, EF: ExtensionField<F>> ExtensionBuilder for DebugConstraintBuilde
     type ExprEF = EF;
     type VarEF = EF;
 
-    /// Same semantics as the base-field version: record a failure when
-    /// the extension-field expression is non-zero, then advance the
-    /// constraint counter.
+    /// Delegates to the named variant with an empty label.
     fn assert_zero_ext<I>(&mut self, x: I)
     where
         I: Into<Self::ExprEF>,
     {
-        if x.into() != EF::ZERO {
-            self.failures.push(ConstraintFailure {
-                row: self.row_index,
-                constraint: self.constraint_index,
-                label: None,
-            });
-        }
-        self.constraint_index += 1;
+        self.assert_zero_ext_named(x, "");
     }
 }
 
@@ -346,17 +326,21 @@ impl<'a, F: Field, EF: ExtensionField<F>> PermutationAirBuilder
 }
 
 impl<F: Field, EF: ExtensionField<F>> NamedAirBuilder for DebugConstraintBuilder<'_, F, EF> {
+    /// Primary constraint implementation for the debug builder.
+    ///
     /// Evaluates the name and captures the label on failure.
+    /// The unlabeled path delegates here with an empty string.
     fn assert_zero_named<I, N>(&mut self, x: I, name: N)
     where
         I: Into<Self::Expr>,
         N: Name,
     {
         if x.into() != F::ZERO {
+            let label = name.evaluate().to_string();
             self.failures.push(ConstraintFailure {
                 row: self.row_index,
                 constraint: self.constraint_index,
-                label: Some(name.evaluate().to_string()),
+                label: if label.is_empty() { None } else { Some(label) },
             });
         }
         self.constraint_index += 1;
@@ -364,17 +348,21 @@ impl<F: Field, EF: ExtensionField<F>> NamedAirBuilder for DebugConstraintBuilder
 }
 
 impl<F: Field, EF: ExtensionField<F>> NamedExtensionBuilder for DebugConstraintBuilder<'_, F, EF> {
-    /// Evaluates the name and captures the label on failure.
+    /// Primary extension-field constraint implementation for the debug
+    /// builder.
+    ///
+    /// Same pattern: unlabeled path delegates here with an empty string.
     fn assert_zero_ext_named<I, N>(&mut self, x: I, name: N)
     where
         I: Into<Self::ExprEF>,
         N: Name,
     {
         if x.into() != EF::ZERO {
+            let label = name.evaluate().to_string();
             self.failures.push(ConstraintFailure {
                 row: self.row_index,
                 constraint: self.constraint_index,
-                label: Some(name.evaluate().to_string()),
+                label: if label.is_empty() { None } else { Some(label) },
             });
         }
         self.constraint_index += 1;

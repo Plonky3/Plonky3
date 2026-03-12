@@ -116,68 +116,40 @@ impl<T> NamespaceExt for T where T: Namespace {}
 
 /// Labeled variants of every assertion method.
 ///
-/// Each default discards the label and delegates to the unlabeled
-/// counterpart. This keeps production builders zero-cost.
+/// No default implementations are provided. This forces each builder to
+/// make a deliberate choice about how labels are handled, preventing
+/// labels from being silently lost through inherited defaults.
 ///
-/// Only the debug builder overrides the base method to capture labels
-/// when a constraint fails.
+/// Builders that discard labels should implement [`PassthroughNamedAirBuilder`] instead.
+/// The blanket impl will delegate every named method to the corresponding unlabeled one.
 ///
-/// Separated from [`AirBuilder`] so the core trait stays lean.
-/// Most builders opt in with an empty impl block.
+/// Debug builders should implement this trait directly and make the
+/// named method the primary implementation. Their unlabeled methods
+/// can then delegate here with an empty label.
 pub trait NamedAirBuilder: AirBuilder {
     /// Assert zero with a label.
+    fn assert_zero_named<I, N>(&mut self, x: I, name: N)
+    where
+        I: Into<Self::Expr>,
+        N: Name;
+}
+
+/// Marker for builders that discard constraint labels.
+///
+/// Provides a blanket implementation of [`NamedAirBuilder`] that
+/// delegates every named method to its unlabeled counterpart.
+///
+/// Production builders (prover, verifier, symbolic) should implement
+/// this trait with an empty impl block.
+pub trait PassthroughNamedAirBuilder: AirBuilder {}
+
+impl<T: PassthroughNamedAirBuilder> NamedAirBuilder for T {
     fn assert_zero_named<I, N>(&mut self, x: I, _name: N)
     where
         I: Into<Self::Expr>,
         N: Name,
     {
         self.assert_zero(x);
-    }
-
-    /// Assert all elements are zero, with a label.
-    fn assert_zeros_named<const M: usize, I, N>(&mut self, array: [I; M], _name: N)
-    where
-        I: Into<Self::Expr>,
-        N: Name,
-    {
-        self.assert_zeros(array);
-    }
-
-    /// Assert one with a label.
-    fn assert_one_named<I, N>(&mut self, x: I, _name: N)
-    where
-        I: Into<Self::Expr>,
-        N: Name,
-    {
-        self.assert_one(x);
-    }
-
-    /// Assert equality with a label.
-    fn assert_eq_named<I1, I2, N>(&mut self, x: I1, y: I2, _name: N)
-    where
-        I1: Into<Self::Expr>,
-        I2: Into<Self::Expr>,
-        N: Name,
-    {
-        self.assert_eq(x, y);
-    }
-
-    /// Assert boolean with a label.
-    fn assert_bool_named<I, N>(&mut self, x: I, _name: N)
-    where
-        I: Into<Self::Expr>,
-        N: Name,
-    {
-        self.assert_bool(x);
-    }
-
-    /// Assert all elements are boolean, with a label.
-    fn assert_bools_named<const M: usize, I, N>(&mut self, array: [I; M], _name: N)
-    where
-        I: Into<Self::Expr>,
-        N: Name,
-    {
-        self.assert_bools(array);
     }
 }
 
@@ -194,36 +166,30 @@ impl<AB: NamedAirBuilder> NamedAirBuilder for FilteredAirBuilder<'_, AB> {
 
 /// Labeled variants of extension-field assertions.
 ///
-/// Same design as [`NamedAirBuilder`].
+/// Same two-tier design as [`NamedAirBuilder`] / [`PassthroughNamedAirBuilder`].
 ///
-/// Every default discards the label and delegates to the unlabeled counterpart.
+/// Debug builders implement this directly.
+/// Production builders implement [`PassthroughNamedExtensionBuilder`].
 pub trait NamedExtensionBuilder: ExtensionBuilder + NamedAirBuilder {
     /// Assert zero over the extension field, with a label.
+    fn assert_zero_ext_named<I, N>(&mut self, x: I, name: N)
+    where
+        I: Into<Self::ExprEF>,
+        N: Name;
+}
+
+/// Marker for builders that discard extension-field constraint labels.
+///
+/// Provides a blanket implementation of [`NamedExtensionBuilder`] that delegates to the unlabeled counterpart.
+pub trait PassthroughNamedExtensionBuilder: ExtensionBuilder + PassthroughNamedAirBuilder {}
+
+impl<T: PassthroughNamedExtensionBuilder> NamedExtensionBuilder for T {
     fn assert_zero_ext_named<I, N>(&mut self, x: I, _name: N)
     where
         I: Into<Self::ExprEF>,
         N: Name,
     {
         self.assert_zero_ext(x);
-    }
-
-    /// Assert equality over the extension field, with a label.
-    fn assert_eq_ext_named<I1, I2, N>(&mut self, x: I1, y: I2, _name: N)
-    where
-        I1: Into<Self::ExprEF>,
-        I2: Into<Self::ExprEF>,
-        N: Name,
-    {
-        self.assert_eq_ext(x, y);
-    }
-
-    /// Assert one over the extension field, with a label.
-    fn assert_one_ext_named<I, N>(&mut self, x: I, _name: N)
-    where
-        I: Into<Self::ExprEF>,
-        N: Name,
-    {
-        self.assert_one_ext(x);
     }
 }
 
