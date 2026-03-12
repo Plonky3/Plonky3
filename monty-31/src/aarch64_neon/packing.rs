@@ -957,6 +957,8 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
 
 /// Compute the elementary function `l0*r0 + l1*r1 + l2*r2 + l3*r3 + l4*r4` given ten inputs
 /// in canonical form.
+///
+/// If the inputs are not in canonical form, the result is undefined.
 #[inline]
 unsafe fn dot_product_5<P, LHS, RHS>(lhs: &[LHS; 5], rhs: &[RHS; 5]) -> PackedMontyField31Neon<P>
 where
