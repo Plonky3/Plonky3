@@ -29,7 +29,7 @@ unsafe fn div2_asm(x: u64) -> u64 {
             "add   {result}, {result}, {tmp}",
             x      = in(reg) x,
             shift  = in(reg) shift,
-            tmp    = lateout(reg) _tmp,
+            tmp    = out(reg) _tmp,
             result = out(reg) result,
             options(pure, nomem, nostack),
         );
