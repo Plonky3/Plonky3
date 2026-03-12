@@ -1240,6 +1240,107 @@ mod tests {
             .unwrap();
     }
 
+    #[test]
+    fn replay_arity_and_positions_binary() {
+        let mut rng = SmallRng::seed_from_u64(123);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress, 0);
+
+        // Use a moderately sized tree to ensure multiple levels.
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 32, 4);
+        let dims = vec![mat.dimensions()];
+        let (_commit, prover_data) = mmcs.commit(vec![mat]);
+
+        // For a range of indices, the helper's schedule should match the tree's
+        // actual arity_schedule and the naive index-based positions.
+        for index in [0usize, 1, 5, 16, 31] {
+            let opening = mmcs.open_batch(index, &prover_data);
+            let (_opened_values, proof) = opening.unpack();
+
+            let (steps, positions) = mmcs
+                .replay_arity_and_positions(&dims, index, proof.len())
+                .expect("schedule replay should succeed");
+
+            // With cap_height = 0, we expect one step per non-root layer.
+            let expected_levels = prover_data.digest_layers.len().saturating_sub(1);
+            assert_eq!(steps.len(), expected_levels);
+            assert_eq!(positions.len(), expected_levels);
+
+            // Steps must match the concrete arity_schedule stored in the tree.
+            for (i, &step) in steps.iter().enumerate() {
+                assert_eq!(
+                    step, prover_data.arity_schedule[i],
+                    "step mismatch at level {i} for index {index}"
+                );
+            }
+
+            // Positions must agree with repeatedly dividing the index by the step.
+            let mut idx = index;
+            for (level, (&step, &pos_in_group)) in steps.iter().zip(&positions).enumerate() {
+                let expected_pos = idx % step;
+                assert_eq!(
+                    pos_in_group, expected_pos,
+                    "pos_in_group mismatch at level {level} for index {index}"
+                );
+                idx /= step;
+            }
+        }
+    }
+
+    #[test]
+    fn replay_arity_and_positions_4ary() {
+        let mut rng = SmallRng::seed_from_u64(456);
+        let perm16 = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm16);
+        let perm32 = PermWide::new_from_rng_128(&mut rng);
+        let compress4 = MyCompress4::new(perm32);
+        let mmcs4 = MyMmcs4::new(hash, compress4, 0);
+
+        // Height chosen so that both N-ary and possible binary bridge steps can appear.
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 64, 8);
+        let dims = vec![mat.dimensions()];
+        let (_commit, prover_data) = mmcs4.commit(vec![mat]);
+
+        for index in [0usize, 3, 7, 17, 42, 63] {
+            let opening = mmcs4.open_batch(index, &prover_data);
+            let (_opened_values, proof) = opening.unpack();
+
+            let (steps, positions) = mmcs4
+                .replay_arity_and_positions(&dims, index, proof.len())
+                .expect("schedule replay should succeed");
+
+            let expected_levels = prover_data.digest_layers.len().saturating_sub(1);
+            assert_eq!(steps.len(), expected_levels);
+            assert_eq!(positions.len(), expected_levels);
+
+            // Each step must be either 2 (binary) or 4 (full 4-ary) and match the
+            // concrete arity_schedule stored in the Merkle tree.
+            for (i, &step) in steps.iter().enumerate() {
+                assert!(
+                    step == 2 || step == 4,
+                    "unexpected step {step} at level {i} for index {index}"
+                );
+                assert_eq!(
+                    step, prover_data.arity_schedule[i],
+                    "step mismatch at level {i} for index {index}"
+                );
+            }
+
+            // Positions must be consistent with index reduction at each level.
+            let mut idx = index;
+            for (level, (&step, &pos_in_group)) in steps.iter().zip(&positions).enumerate() {
+                let expected_pos = idx % step;
+                assert_eq!(
+                    pos_in_group, expected_pos,
+                    "pos_in_group mismatch at level {level} for index {index}"
+                );
+                idx /= step;
+            }
+        }
+    }
+
     mod proptests {
         use alloc::vec::Vec;
 
