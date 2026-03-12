@@ -8,7 +8,7 @@ use itertools::Itertools;
 use p3_air::symbolic::SymbolicAirBuilder;
 use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
-use p3_commit::{Pcs, PolynomialSpace};
+use p3_commit::{EvaluatePolynomialAtPoint, Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
@@ -87,6 +87,7 @@ pub fn verify_constraints<SC, A, PcsErr>(
 ) -> Result<(), VerificationError<PcsErr>>
 where
     SC: StarkGenericConfig,
+    Domain<SC>: EvaluatePolynomialAtPoint,
     A: for<'a> Air<VerifierConstraintFolder<'a, SC>>,
     PcsErr: core::fmt::Debug,
 {
@@ -110,10 +111,16 @@ where
 
     let preprocessed_window =
         RowWindow::from_two_rows(preprocessed.top.values, preprocessed.bottom.values);
+    let periodic_values: Vec<SC::Challenge> = air
+        .periodic_columns()
+        .iter()
+        .map(|col| trace_domain.evaluate_periodic_column_at(col, zeta))
+        .collect();
     let mut folder = VerifierConstraintFolder {
         main,
         preprocessed,
         preprocessed_window,
+        periodic_values: &periodic_values,
         public_values,
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,
@@ -206,6 +213,7 @@ pub fn verify<SC, A>(
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
     SC: StarkGenericConfig,
+    Domain<SC>: EvaluatePolynomialAtPoint,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
 {
     verify_with_preprocessed(config, air, proof, public_values, None)
@@ -221,6 +229,7 @@ pub fn verify_with_preprocessed<SC, A>(
 ) -> Result<(), VerificationError<PcsError<SC>>>
 where
     SC: StarkGenericConfig,
+    Domain<SC>: EvaluatePolynomialAtPoint,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<VerifierConstraintFolder<'a, SC>>,
 {
     let Proof {
@@ -249,6 +258,7 @@ where
         preprocessed_width,
         main_width: air.width(),
         num_public_values: air.num_public_values(),
+        num_periodic_columns: air.num_periodic_columns(),
         ..Default::default()
     };
     let log_num_quotient_chunks =

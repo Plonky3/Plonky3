@@ -5,7 +5,7 @@ use itertools::Itertools;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, get_symbolic_constraints};
 use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
-use p3_commit::{Pcs, PolynomialSpace};
+use p3_commit::{EvaluatePolynomialAtPoint, Pcs, PolynomialSpace};
 use p3_field::{PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -34,6 +34,7 @@ pub fn prove_with_preprocessed<
 ) -> Proof<SC>
 where
     SC: StarkGenericConfig,
+    Domain<SC>: EvaluatePolynomialAtPoint,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
     #[cfg(debug_assertions)]
@@ -78,6 +79,7 @@ where
         preprocessed_width,
         main_width: air.width(),
         num_public_values: air.num_public_values(),
+        num_periodic_columns: air.num_periodic_columns(),
         ..Default::default()
     };
 
@@ -389,6 +391,7 @@ pub fn prove<
 ) -> Proof<SC>
 where
     SC: StarkGenericConfig,
+    Domain<SC>: EvaluatePolynomialAtPoint,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
     prove_with_preprocessed::<SC, A>(config, air, trace, public_values, None)
@@ -409,6 +412,7 @@ pub fn quotient_values<SC, A, Mat>(
 ) -> Vec<SC::Challenge>
 where
     SC: StarkGenericConfig,
+    Domain<SC>: EvaluatePolynomialAtPoint,
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
     Mat: Matrix<Val<SC>> + Sync,
 {
@@ -431,6 +435,32 @@ where
 
     let constraint_layout = get_constraint_layout(air, layout);
     let (base_alpha_powers, ext_alpha_powers) = constraint_layout.decompose_alpha(alpha);
+    let periodic_cols = air.periodic_columns();
+    let periodic_on_quotient: Vec<Vec<Val<SC>>> = if periodic_cols.is_empty() {
+        vec![]
+    } else {
+        let quotient_points: Vec<Val<SC>> = {
+            let mut point = quotient_domain.first_point();
+            (0..quotient_size)
+                .map(|_| {
+                    let out = point;
+                    point = quotient_domain
+                        .next_point(point)
+                        .expect("quotient domain must support next_point");
+                    out
+                })
+                .collect()
+        };
+        periodic_cols
+            .iter()
+            .map(|col| {
+                quotient_points
+                    .iter()
+                    .map(|&point| trace_domain.evaluate_periodic_column_at(col, point))
+                    .collect()
+            })
+            .collect()
+    };
 
     (0..quotient_size)
         .into_par_iter()
@@ -459,10 +489,20 @@ where
             let preprocessed_view = preprocessed
                 .as_ref()
                 .map_or_else(|| RowMajorMatrixView::new(&[], 0), |m| m.as_view());
+            let periodic_values: Vec<PackedVal<SC>> = periodic_on_quotient
+                .iter()
+                .map(|col_evals| {
+                    let slice: Vec<Val<SC>> = (i_start..i_start + PackedVal::<SC>::WIDTH)
+                        .map(|i| col_evals.get(i).cloned().unwrap_or_default())
+                        .collect();
+                    *PackedVal::<SC>::from_slice(&slice)
+                })
+                .collect();
             let mut folder = ProverConstraintFolder {
                 main: main.as_view(),
                 preprocessed: preprocessed_view,
                 preprocessed_window: RowWindow::from_view(&preprocessed_view),
+                periodic_values: &periodic_values,
                 public_values,
                 is_first_row,
                 is_last_row,

@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::{Air, DebugConstraintBuilder};
@@ -102,6 +103,7 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
             main,
             preprocessed,
             public_values,
+            vec![],
             F::from_bool(row_index == 0),
             F::from_bool(row_index == height - 1),
             F::from_bool(row_index != height - 1),

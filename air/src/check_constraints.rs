@@ -6,7 +6,8 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::ViewPair;
 
 use crate::{
-    Air, AirBuilder, AirBuilderWithContext, ExtensionBuilder, PermutationAirBuilder, RowWindow,
+    Air, AirBuilder, AirBuilderWithContext, ExtensionBuilder, PeriodicAirBuilder,
+    PermutationAirBuilder, RowWindow,
 };
 
 /// A single constraint violation captured during debug evaluation.
@@ -54,6 +55,9 @@ pub struct DebugConstraintBuilder<'a, F: Field, EF: ExtensionField<F> = F> {
     /// Slice of public values made available to the AIR during evaluation.
     public_values: &'a [F],
 
+    /// Current-row periodic column values.
+    periodic_values: Vec<F>,
+
     /// Selector that equals one on the first row and zero elsewhere.
     is_first_row: F,
 
@@ -80,11 +84,13 @@ impl<'a, F: Field> DebugConstraintBuilder<'a, F> {
     /// Permutation-related fields are set to `None` / empty so that the
     /// builder can still satisfy trait bounds that require extension-field
     /// support, but calling permutation accessors will panic.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         row_index: usize,
         main: ViewPair<'a, F>,
         preprocessed: ViewPair<'a, F>,
         public_values: &'a [F],
+        periodic_values: Vec<F>,
         is_first_row: F,
         is_last_row: F,
         is_transition: F,
@@ -99,6 +105,7 @@ impl<'a, F: Field> DebugConstraintBuilder<'a, F> {
                 preprocessed.bottom.values,
             ),
             public_values,
+            periodic_values,
             is_first_row,
             is_last_row,
             is_transition,
@@ -121,6 +128,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> DebugConstraintBuilder<'a, F, EF> {
         main: ViewPair<'a, F>,
         preprocessed: ViewPair<'a, F>,
         public_values: &'a [F],
+        periodic_values: Vec<F>,
         is_first_row: F,
         is_last_row: F,
         is_transition: F,
@@ -138,6 +146,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> DebugConstraintBuilder<'a, F, EF> {
                 preprocessed.bottom.values,
             ),
             public_values,
+            periodic_values,
             is_first_row,
             is_last_row,
             is_transition,
@@ -225,6 +234,14 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilderWithContext for DebugConstraintB
     }
 }
 
+impl<F: Field, EF: ExtensionField<F>> PeriodicAirBuilder for DebugConstraintBuilder<'_, F, EF> {
+    type PeriodicVar = F;
+
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        &self.periodic_values
+    }
+}
+
 impl<F: Field, EF: ExtensionField<F>> ExtensionBuilder for DebugConstraintBuilder<'_, F, EF> {
     type EF = EF;
     type ExprEF = EF;
@@ -297,6 +314,11 @@ where
 
     for row_index in 0..height {
         let row_index_next = (row_index + 1) % height;
+        let periodic_values = air
+            .periodic_columns()
+            .iter()
+            .map(|col| col[row_index % col.len()])
+            .collect();
 
         // SAFETY: both indices are strictly less than `height`.
         let local = unsafe { main.row_slice_unchecked(row_index) };
@@ -335,6 +357,7 @@ where
             main_pair,
             preprocessed_pair,
             public_values,
+            periodic_values,
             F::from_bool(row_index == 0),
             F::from_bool(row_index == height - 1),
             F::from_bool(row_index != height - 1),
@@ -482,6 +505,7 @@ mod tests {
             main,
             ViewPair::new(empty_view, empty_view),
             &[],
+            vec![],
             BabyBear::ONE,  // is_first_row
             BabyBear::ONE,  // is_last_row (single row)
             BabyBear::ZERO, // is_transition
