@@ -198,6 +198,20 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
             rows[lane] = array::from_fn(|col| packed[col].extract(lane));
         }
     }
+
+    /// Pack columns from `WIDTH` rows of scalar values into `N` packed values.
+    ///
+    /// Given `WIDTH` rows of `N` scalar values, extract each column and pack it
+    /// into a single packed value. This is the inverse of `unpack_into`.
+    ///
+    /// ## Panics
+    /// Panics if `rows.len() != WIDTH`.
+    #[inline]
+    #[must_use]
+    fn pack_columns<const N: usize>(rows: &[[Self::Value; N]]) -> [Self; N] {
+        assert_eq!(rows.len(), Self::WIDTH);
+        array::from_fn(|col| Self::from_fn(|lane| rows[lane][col]))
+    }
 }
 
 unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {

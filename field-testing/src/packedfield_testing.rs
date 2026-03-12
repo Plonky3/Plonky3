@@ -420,6 +420,38 @@ where
     assert_eq!(zero, PF::ZERO, "broadcast(default) should equal ZERO");
 }
 
+pub fn test_pack_columns<PF>()
+where
+    PF: PackedField + Eq,
+    StandardUniform: Distribution<PF::Scalar>,
+{
+    let mut rng = SmallRng::seed_from_u64(0xc0ffee42);
+
+    // Test round-trip: pack_columns then unpack_into
+    let rows: Vec<[PF::Scalar; 4]> = (0..PF::WIDTH)
+        .map(|_| [rng.random(), rng.random(), rng.random(), rng.random()])
+        .collect();
+    let packed = PF::pack_columns::<4>(&rows);
+    let mut unpacked = vec![[PF::Scalar::default(); 4]; PF::WIDTH];
+    PF::unpack_into(&packed, &mut unpacked);
+    assert_eq!(rows, unpacked, "pack_columns -> unpack_into round-trip failed");
+
+    // Test round-trip: unpack_into then pack_columns
+    let original: [PF; 4] = [
+        packed_from_random(0x1111),
+        packed_from_random(0x2222),
+        packed_from_random(0x3333),
+        packed_from_random(0x4444),
+    ];
+    let mut rows2 = vec![[PF::Scalar::default(); 4]; PF::WIDTH];
+    PF::unpack_into(&original, &mut rows2);
+    let repacked = PF::pack_columns::<4>(&rows2);
+    assert_eq!(
+        original, repacked,
+        "unpack_into -> pack_columns round-trip failed"
+    );
+}
+
 pub fn test_dot_product_boundary<PF>()
 where
     PF: PackedField + Eq,
@@ -496,6 +528,10 @@ macro_rules! test_packed_field {
             #[test]
             fn test_broadcast() {
                 $crate::test_broadcast::<$packedfield>();
+            }
+            #[test]
+            fn test_pack_columns() {
+                $crate::test_pack_columns::<$packedfield>();
             }
         }
     };
