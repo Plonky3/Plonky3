@@ -3,6 +3,8 @@
 use core::fmt;
 use core::fmt::Display;
 
+use p3_field::PrimeCharacteristicRing;
+
 use crate::{AirBuilder, ExtensionBuilder, FilteredAirBuilder};
 
 /// A lazily evaluated constraint label.
@@ -132,6 +134,56 @@ pub trait NamedAirBuilder: AirBuilder {
     where
         I: Into<Self::Expr>,
         N: Name;
+
+    /// Assert all elements are zero, with a label.
+    fn assert_zeros_named<const M: usize, I, N>(&mut self, array: [I; M], name: N)
+    where
+        I: Into<Self::Expr>,
+        N: Name,
+    {
+        for elem in array {
+            self.assert_zero_named(elem, "");
+        }
+        let _ = name;
+    }
+
+    /// Assert one with a label.
+    fn assert_one_named<I, N>(&mut self, x: I, name: N)
+    where
+        I: Into<Self::Expr>,
+        N: Name,
+    {
+        self.assert_zero_named(x.into() - Self::Expr::ONE, name);
+    }
+
+    /// Assert equality with a label.
+    fn assert_eq_named<I1, I2, N>(&mut self, x: I1, y: I2, name: N)
+    where
+        I1: Into<Self::Expr>,
+        I2: Into<Self::Expr>,
+        N: Name,
+    {
+        self.assert_zero_named(x.into() - y.into(), name);
+    }
+
+    /// Assert boolean with a label.
+    fn assert_bool_named<I, N>(&mut self, x: I, name: N)
+    where
+        I: Into<Self::Expr>,
+        N: Name,
+    {
+        self.assert_zero_named(x.into().bool_check(), name);
+    }
+
+    /// Assert all elements are boolean, with a label.
+    fn assert_bools_named<const M: usize, I, N>(&mut self, array: [I; M], name: N)
+    where
+        I: Into<Self::Expr>,
+        N: Name,
+    {
+        let zero_array = array.map(|x| x.into().bool_check());
+        self.assert_zeros_named(zero_array, name);
+    }
 }
 
 /// Marker for builders that discard constraint labels.
@@ -176,6 +228,25 @@ pub trait NamedExtensionBuilder: ExtensionBuilder + NamedAirBuilder {
     where
         I: Into<Self::ExprEF>,
         N: Name;
+
+    /// Assert equality over the extension field, with a label.
+    fn assert_eq_ext_named<I1, I2, N>(&mut self, x: I1, y: I2, name: N)
+    where
+        I1: Into<Self::ExprEF>,
+        I2: Into<Self::ExprEF>,
+        N: Name,
+    {
+        self.assert_zero_ext_named(x.into() - y.into(), name);
+    }
+
+    /// Assert one over the extension field, with a label.
+    fn assert_one_ext_named<I, N>(&mut self, x: I, name: N)
+    where
+        I: Into<Self::ExprEF>,
+        N: Name,
+    {
+        self.assert_zero_ext_named(x.into() - Self::ExprEF::ONE, name);
+    }
 }
 
 /// Marker for builders that discard extension-field constraint labels.
