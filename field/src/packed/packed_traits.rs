@@ -165,6 +165,13 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         unsafe { slice::from_raw_parts(buf_ptr, n) }
     }
 
+    /// Create a packed value with all lanes set to the same scalar value.
+    #[inline]
+    #[must_use]
+    fn broadcast(value: Self::Value) -> Self {
+        Self::from_fn(|_| value)
+    }
+
     /// Extract the scalar value at the given SIMD lane.
     ///
     /// This is equivalent to `self.as_slice()[lane]` but more explicit about the
