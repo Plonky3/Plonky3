@@ -114,10 +114,6 @@ pub trait NamespaceExt: Namespace + Sized {
 
 impl<T> NamespaceExt for T where T: Namespace {}
 
-// ---------------------------------------------------------------------------
-// Named builder traits
-// ---------------------------------------------------------------------------
-
 /// Labeled variants of every assertion method.
 ///
 /// Each default discards the label and delegates to the unlabeled
