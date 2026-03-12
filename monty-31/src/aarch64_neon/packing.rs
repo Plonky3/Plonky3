@@ -761,6 +761,22 @@ where
                 &[rhs[0], rhs[1], rhs[2], rhs[3]],
             )
         },
+        5 => unsafe {
+            dot_product_5(
+                &[lhs[0], lhs[1], lhs[2], lhs[3], lhs[4]],
+                &[rhs[0], rhs[1], rhs[2], rhs[3], rhs[4]],
+            )
+        },
+        8 => unsafe {
+            dot_product_8(
+                &[
+                    lhs[0], lhs[1], lhs[2], lhs[3], lhs[4], lhs[5], lhs[6], lhs[7],
+                ],
+                &[
+                    rhs[0], rhs[1], rhs[2], rhs[3], rhs[4], rhs[5], rhs[6], rhs[7],
+                ],
+            )
+        },
         64 => {
             let sum_4s: [PackedMontyField31Neon<P>; 16] = core::array::from_fn(|i| {
                 let start = i * 4;
@@ -951,8 +967,6 @@ where
     RHS: IntoVec<P>,
 {
     unsafe {
-        // Accumulate the full 64-bit sum C = Σ lhs_i ⋅ rhs_i (5 terms).
-
         // Materialize all vectors once.
         let lhs0 = lhs[0].into_vec();
         let rhs0 = rhs[0].into_vec();
@@ -965,60 +979,88 @@ where
         let lhs4 = lhs[4].into_vec();
         let rhs4 = rhs[4].into_vec();
 
+        // Group A: accumulate terms 0-2 in wide form. Safe: 3*(P-1)^2 < 2^64.
+
         // Low half (Lanes 0 & 1)
-        let mut sum_l =
+        let mut sum_al =
             aarch64::vmull_u32(aarch64::vget_low_u32(lhs0), aarch64::vget_low_u32(rhs0));
-        sum_l = aarch64::vmlal_u32(
-            sum_l,
+        sum_al = aarch64::vmlal_u32(
+            sum_al,
             aarch64::vget_low_u32(lhs1),
             aarch64::vget_low_u32(rhs1),
         );
-        sum_l = aarch64::vmlal_u32(
-            sum_l,
+        sum_al = aarch64::vmlal_u32(
+            sum_al,
             aarch64::vget_low_u32(lhs2),
             aarch64::vget_low_u32(rhs2),
         );
-        sum_l = aarch64::vmlal_u32(
-            sum_l,
-            aarch64::vget_low_u32(lhs3),
-            aarch64::vget_low_u32(rhs3),
-        );
-        sum_l = aarch64::vmlal_u32(
-            sum_l,
+
+        // High half (Lanes 2 & 3)
+        let mut sum_ah = aarch64::vmull_high_u32(lhs0, rhs0);
+        sum_ah = aarch64::vmlal_high_u32(sum_ah, lhs1, rhs1);
+        sum_ah = aarch64::vmlal_high_u32(sum_ah, lhs2, rhs2);
+
+        // Group B: accumulate terms 3-4 in wide form. Safe: 2*(P-1)^2 < 2^64.
+
+        // Low half (Lanes 0 & 1)
+        let mut sum_bl =
+            aarch64::vmull_u32(aarch64::vget_low_u32(lhs3), aarch64::vget_low_u32(rhs3));
+        sum_bl = aarch64::vmlal_u32(
+            sum_bl,
             aarch64::vget_low_u32(lhs4),
             aarch64::vget_low_u32(rhs4),
         );
 
         // High half (Lanes 2 & 3)
-        let mut sum_h = aarch64::vmull_high_u32(lhs0, rhs0);
-        sum_h = aarch64::vmlal_high_u32(sum_h, lhs1, rhs1);
-        sum_h = aarch64::vmlal_high_u32(sum_h, lhs2, rhs2);
-        sum_h = aarch64::vmlal_high_u32(sum_h, lhs3, rhs3);
-        sum_h = aarch64::vmlal_high_u32(sum_h, lhs4, rhs4);
+        let mut sum_bh = aarch64::vmull_high_u32(lhs3, rhs3);
+        sum_bh = aarch64::vmlal_high_u32(sum_bh, lhs4, rhs4);
 
-        // Split C into 32-bit halves per lane:
-        // - c_lo = C mod 2^{32},
-        // - c_hi = C >> 32.
-        let c_lo = aarch64::vuzp1q_u32(
-            aarch64::vreinterpretq_u32_u64(sum_l),
-            aarch64::vreinterpretq_u32_u64(sum_h),
+        // Split each group into 32-bit c_lo, c_hi.
+        let c_lo_a = aarch64::vuzp1q_u32(
+            aarch64::vreinterpretq_u32_u64(sum_al),
+            aarch64::vreinterpretq_u32_u64(sum_ah),
         );
-        let c_hi = aarch64::vuzp2q_u32(
-            aarch64::vreinterpretq_u32_u64(sum_l),
-            aarch64::vreinterpretq_u32_u64(sum_h),
+        let c_hi_a = aarch64::vuzp2q_u32(
+            aarch64::vreinterpretq_u32_u64(sum_al),
+            aarch64::vreinterpretq_u32_u64(sum_ah),
+        );
+        let c_lo_b = aarch64::vuzp1q_u32(
+            aarch64::vreinterpretq_u32_u64(sum_bl),
+            aarch64::vreinterpretq_u32_u64(sum_bh),
+        );
+        let c_hi_b = aarch64::vuzp2q_u32(
+            aarch64::vreinterpretq_u32_u64(sum_bl),
+            aarch64::vreinterpretq_u32_u64(sum_bh),
         );
 
-        // Since C < 5P^2 and P < 2^{31}, we have c_hi < 3P.
-        // Reduce c_hi from [0, 3P) to [0, P) in two steps via conditional subtraction.
-        let c_hi_sub1 = aarch64::vsubq_u32(c_hi, P::PACKED_P);
-        let c_hi_1 = aarch64::vminq_u32(c_hi, c_hi_sub1);
-        let c_hi_sub2 = aarch64::vsubq_u32(c_hi_1, P::PACKED_P);
-        let c_hi_prime = aarch64::vminq_u32(c_hi_1, c_hi_sub2);
+        // Reduce group A's c_hi from [0, 2P) to [0, P). Group B's c_hi < P needs no reduction.
+        let c_hi_a_sub = aarch64::vsubq_u32(c_hi_a, P::PACKED_P);
+        let c_hi_a_red = aarch64::vminq_u32(c_hi_a, c_hi_a_sub);
 
-        // q ≡ c_lo ⋅ μ (mod 2^{32}), with μ = −P^{-1} (mod 2^{32}).
+        // Merge the two groups with carry propagation.
+        //
+        // c_lo = c_lo_a + c_lo_b (wrapping u32 add).
+        let c_lo = aarch64::vaddq_u32(c_lo_a, c_lo_b);
+        // carry = -1 (all 1s) if c_lo wrapped, 0 otherwise.
+        let carry = aarch64::vcltq_u32(c_lo, c_lo_a);
+
+        // Reduce c_hi_sum BEFORE incorporating carry for better ILP.
+        // c_hi_sum = c_hi_a' + c_hi_b ∈ [0, 2P-2] (both < P).
+        let c_hi_sum = aarch64::vaddq_u32(c_hi_a_red, c_hi_b);
+        let c_hi_sub = aarch64::vsubq_u32(c_hi_sum, P::PACKED_P);
+        let c_hi_red = aarch64::vminq_u32(c_hi_sum, c_hi_sub);
+
+        // Now incorporate carry: c_hi_red ∈ [0, P-2] (max is 2P-2 reduced to P-2).
+        // Adding carry (0 or 1) gives at most P-1, so no further reduction needed.
+        // Subtracting -1 adds 1; subtracting 0 is a no-op.
+        let c_hi_prime = aarch64::vsubq_u32(c_hi_red, carry);
+
+        // Montgomery reduction (identical to dot_product_4).
+        //
+        // q ≡ c_lo ⋅ μ (mod 2^{32}).
         let q = aarch64::vmulq_u32(c_lo, aarch64::vreinterpretq_u32_s32(P::PACKED_MU));
 
-        // Compute (q⋅P)_hi = high 32 bits of q⋅P per lane (exact unsigned widening multiply).
+        // (q⋅P)_hi = high 32 bits of q⋅P.
         let qp_l = aarch64::vmull_u32(aarch64::vget_low_u32(q), aarch64::vget_low_u32(P::PACKED_P));
         let qp_h = aarch64::vmull_high_u32(q, P::PACKED_P);
         let qp_hi = aarch64::vuzp2q_u32(
