@@ -5,6 +5,7 @@ use core::arch::x86_64::__m512i;
 use core::marker::PhantomData;
 use core::mem::transmute;
 
+use p3_field::PrimeCharacteristicRing;
 use p3_mds::karatsuba_convolution::{mds_circulant_karatsuba_16, mds_circulant_karatsuba_24};
 use p3_poseidon1::external::{
     FullRoundConstants, FullRoundLayer, FullRoundLayerConstructor, mds_multiply,
@@ -157,10 +158,9 @@ where
 
             let s_hi: &[PackedMontyField31AVX512<FP>; 15] = unsafe { transmute(&split.s_hi) };
             let first_row = &self.packed_sparse_first_row[r];
-            let mut partial_dot = s_hi[0] * first_row[1];
-            for j in 1..15 {
-                partial_dot += s_hi[j] * first_row[j + 1];
-            }
+            let first_row_hi: [PackedMontyField31AVX512<FP>; 15] =
+                core::array::from_fn(|i| first_row[i + 1]);
+            let partial_dot = PackedMontyField31AVX512::<FP>::dot_product(s_hi, &first_row_hi);
 
             let s0_val = split.s0;
             split.s0 = s0_val * first_row[0] + partial_dot;
@@ -209,10 +209,9 @@ where
 
             let s_hi: &[PackedMontyField31AVX512<FP>; 23] = unsafe { transmute(&split.s_hi) };
             let first_row = &self.packed_sparse_first_row[r];
-            let mut partial_dot = s_hi[0] * first_row[1];
-            for j in 1..23 {
-                partial_dot += s_hi[j] * first_row[j + 1];
-            }
+            let first_row_hi: [PackedMontyField31AVX512<FP>; 23] =
+                core::array::from_fn(|i| first_row[i + 1]);
+            let partial_dot = PackedMontyField31AVX512::<FP>::dot_product(s_hi, &first_row_hi);
 
             let s0_val = split.s0;
             split.s0 = s0_val * first_row[0] + partial_dot;
