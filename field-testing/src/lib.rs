@@ -240,10 +240,10 @@ where
         for &b in &[R::ZERO, R::ONE, R::TWO, R::NEG_ONE] {
             assert_eq!(a + b, b + a, "commutativity with special values");
             assert_eq!(a * b, b * a, "commutativity with special values");
-            assert_eq!(a * a, a.square(), "square with special value");
-            assert_eq!(a * a * a, a.cube(), "cube with special value");
-            assert_eq!(a.halve().double(), a, "halve/double with special value");
         }
+        assert_eq!(a * a, a.square(), "square with special value");
+        assert_eq!(a * a * a, a.cube(), "cube with special value");
+        assert_eq!(a.halve().double(), a, "halve/double with special value");
     }
 
     // Test that Product of empty iterator returns ONE (the multiplicative identity)
@@ -332,7 +332,9 @@ where
     assert_eq!(None, F::ZERO.try_inverse());
     assert_eq!(Some(F::ONE), F::ONE.try_inverse());
     assert_eq!(F::NEG_ONE.inverse(), F::NEG_ONE, "-1 is its own inverse");
-    let two_inv = F::TWO.try_inverse().unwrap();
+    let two_inv = F::TWO
+        .try_inverse()
+        .expect("2 must be invertible in this field (test_inverse assumes characteristic != 2)");
     assert_eq!(two_inv, F::ONE.halve(), "inverse of 2 == halve(1)");
     let mut rng = SmallRng::seed_from_u64(1);
     for _ in 0..1000 {
