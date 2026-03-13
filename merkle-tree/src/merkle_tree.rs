@@ -353,7 +353,7 @@ where
 
             let children: [[PW; DIGEST_ELEMS]; N] = array::from_fn(|n| {
                 if n < step {
-                    array::from_fn(|j| PW::from_fn(|k| prev_layer[step * (first_row + k) + n][j]))
+                    PW::pack_columns_fn(|lane| prev_layer[step * (first_row + lane) + n])
                 } else {
                     default_packed
                 }
@@ -473,7 +473,7 @@ where
                 array::from_fn(|_| P::broadcast(P::Value::default()));
             let children: [[P; DIGEST_ELEMS]; N] = array::from_fn(|n| {
                 if n < step {
-                    array::from_fn(|j| P::from_fn(|k| prev_layer[step * (first_row + k) + n][j]))
+                    P::pack_columns_fn(|lane| prev_layer[step * (first_row + lane) + n])
                 } else {
                     default_packed
                 }

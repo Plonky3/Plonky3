@@ -452,6 +452,24 @@ where
     );
 }
 
+pub fn test_pack_columns_fn<PF>()
+where
+    PF: PackedField + Eq,
+    StandardUniform: Distribution<PF::Scalar>,
+{
+    let mut rng = SmallRng::seed_from_u64(0xbaadf00d);
+    let rows: Vec<[PF::Scalar; 4]> = (0..PF::WIDTH)
+        .map(|_| [rng.random(), rng.random(), rng.random(), rng.random()])
+        .collect();
+
+    let from_slice = PF::pack_columns::<4>(&rows);
+    let from_fn = PF::pack_columns_fn(|lane| rows[lane]);
+    assert_eq!(
+        from_slice, from_fn,
+        "pack_columns_fn should match pack_columns"
+    );
+}
+
 pub fn test_dot_product_boundary<PF>()
 where
     PF: PackedField + Eq,
@@ -532,6 +550,10 @@ macro_rules! test_packed_field {
             #[test]
             fn test_pack_columns() {
                 $crate::test_pack_columns::<$packedfield>();
+            }
+            #[test]
+            fn test_pack_columns_fn() {
+                $crate::test_pack_columns_fn::<$packedfield>();
             }
         }
     };
