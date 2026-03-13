@@ -363,7 +363,7 @@ where
                 .as_ref()
                 .ok_or(VerificationError::InvalidProofShape)?;
 
-            // Validate that the preprocessed data's base degree matches what we expect.
+            // Validate that the preprocessed data's extended degree matches what we expect.
             let ext_db = degree_bits[inst_idx];
 
             let meta = global.instances[inst_idx]
