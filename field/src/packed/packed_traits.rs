@@ -223,6 +223,15 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     fn pack_columns_fn<const N: usize>(row_fn: impl Fn(usize) -> [Self::Value; N]) -> [Self; N] {
         array::from_fn(|col| Self::from_fn(|lane| row_fn(lane)[col]))
     }
+
+    /// Unpack `N` packed values into an iterator of `WIDTH` rows.
+    ///
+    /// This is the iterator equivalent of `unpack_into`, yielding each row
+    /// without requiring a pre-allocated buffer.
+    #[inline]
+    fn unpack_iter<const N: usize>(packed: [Self; N]) -> impl Iterator<Item = [Self::Value; N]> {
+        (0..Self::WIDTH).map(move |lane| array::from_fn(|col| packed[col].extract(lane)))
+    }
 }
 
 unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
