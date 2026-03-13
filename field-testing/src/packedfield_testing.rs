@@ -463,14 +463,21 @@ where
         let prod = a * b;
         let neg_a = -a;
 
+        let sum = sum.as_slice();
+        let diff = diff.as_slice();
+        let prod = prod.as_slice();
+        let neg_a = neg_a.as_slice();
+        let a = a.as_slice();
+        let b = b.as_slice();
+
         for i in 0..PF::WIDTH {
-            prop_assert_eq!(sum.as_slice()[i], a.as_slice()[i] + b.as_slice()[i],
+            prop_assert_eq!(sum[i], a[i] + b[i],
                 "add mismatch at lane {}", i);
-            prop_assert_eq!(diff.as_slice()[i], a.as_slice()[i] - b.as_slice()[i],
+            prop_assert_eq!(diff[i], a[i] - b[i],
                 "sub mismatch at lane {}", i);
-            prop_assert_eq!(prod.as_slice()[i], a.as_slice()[i] * b.as_slice()[i],
+            prop_assert_eq!(prod[i], a[i] * b[i],
                 "mul mismatch at lane {}", i);
-            prop_assert_eq!(neg_a.as_slice()[i], -a.as_slice()[i],
+            prop_assert_eq!(neg_a[i], -a[i],
                 "neg mismatch at lane {}", i);
         }
     });
