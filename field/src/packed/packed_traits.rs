@@ -212,6 +212,17 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         assert_eq!(rows.len(), Self::WIDTH);
         array::from_fn(|col| Self::from_fn(|lane| rows[lane][col]))
     }
+
+    /// Pack columns using a closure that provides each row's data.
+    ///
+    /// Calls `row_fn(lane)` for each lane `0..WIDTH` to get `[Self::Value; N]`,
+    /// then transposes columns into packed values. Useful when rows aren't
+    /// contiguous in memory (e.g., strided access).
+    #[inline]
+    #[must_use]
+    fn pack_columns_fn<const N: usize>(row_fn: impl Fn(usize) -> [Self::Value; N]) -> [Self; N] {
+        array::from_fn(|col| Self::from_fn(|lane| row_fn(lane)[col]))
+    }
 }
 
 unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
