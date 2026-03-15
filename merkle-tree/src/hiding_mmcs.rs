@@ -36,14 +36,22 @@ use crate::{MerkleCap, MerkleTree, MerkleTreeError, MerkleTreeMmcs};
 /// - `C`: the digest compression function
 /// - `R`: a random number generator for blinding leaves
 #[derive(Clone, Debug)]
-pub struct MerkleTreeHidingMmcs<P, PW, H, C, R, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize>
-{
-    inner: MerkleTreeMmcs<P, PW, H, C, DIGEST_ELEMS>,
+pub struct MerkleTreeHidingMmcs<
+    P,
+    PW,
+    H,
+    C,
+    R,
+    const N: usize,
+    const DIGEST_ELEMS: usize,
+    const SALT_ELEMS: usize,
+> {
+    inner: MerkleTreeMmcs<P, PW, H, C, N, DIGEST_ELEMS>,
     rng: RefCell<R>,
 }
 
-impl<P, PW, H, C, R, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize>
-    MerkleTreeHidingMmcs<P, PW, H, C, R, DIGEST_ELEMS, SALT_ELEMS>
+impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize>
+    MerkleTreeHidingMmcs<P, PW, H, C, R, N, DIGEST_ELEMS, SALT_ELEMS>
 {
     /// Create a new `MerkleTreeHidingMmcs` with the given hash and compression functions.
     ///
@@ -51,7 +59,8 @@ impl<P, PW, H, C, R, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize>
     /// * `hash` - The hash function used to hash individual matrix rows (leaf level).
     /// * `compress` - The compression function used to hash internal tree nodes.
     /// * `cap_height` - The height of the Merkle cap. A cap_height of 0 uses only the root,
-    ///   while a cap_height of h uses 2^h hashes from h levels below the root.
+    ///   while a cap_height of h uses all hashes from the h-th level below the root (2^h
+    ///   in the case of a binary tree)
     /// * `rng` - A random number generator for generating salts.
     pub const fn new(hash: H, compress: C, cap_height: usize, rng: R) -> Self {
         let inner = MerkleTreeMmcs::new(hash, compress, cap_height);
@@ -66,8 +75,8 @@ impl<P, PW, H, C, R, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize>
     }
 }
 
-impl<P, PW, H, C, R, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize> Mmcs<P::Value>
-    for MerkleTreeHidingMmcs<P, PW, H, C, R, DIGEST_ELEMS, SALT_ELEMS>
+impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize>
+    Mmcs<P::Value> for MerkleTreeHidingMmcs<P, PW, H, C, R, N, DIGEST_ELEMS, SALT_ELEMS>
 where
     P: PackedValue,
     P::Value: Serialize + DeserializeOwned,
@@ -75,16 +84,21 @@ where
     H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
         + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
         + Sync,
-    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], 2>
-        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], 2>
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>
+        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>
         + Sync,
     R: Rng + Clone,
     PW::Value: Eq + Clone,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
     StandardUniform: Distribution<P::Value>,
 {
-    type ProverData<M> =
-        MerkleTree<P::Value, PW::Value, HorizontalPair<M, RowMajorMatrix<P::Value>>, DIGEST_ELEMS>;
+    type ProverData<M> = MerkleTree<
+        P::Value,
+        PW::Value,
+        HorizontalPair<M, RowMajorMatrix<P::Value>>,
+        N,
+        DIGEST_ELEMS,
+    >;
     type Commitment = MerkleCap<P::Value, [PW::Value; DIGEST_ELEMS]>;
     /// The first item is salts; the second is the usual Merkle proof (sibling digests).
     type Proof = (Vec<Vec<P::Value>>, Vec<[PW::Value; DIGEST_ELEMS]>);
@@ -179,6 +193,7 @@ mod tests {
         MyHash,
         MyCompress,
         SmallRng,
+        2,
         8,
         SALT_ELEMS,
     >;

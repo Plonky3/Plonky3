@@ -23,7 +23,15 @@ pub struct MdsMatrixGoldilocks;
 /// 2^51, though in practice the sum will be less than 2^9.
 #[derive(Debug)]
 pub struct SmallConvolveGoldilocks;
-impl Convolve<Goldilocks, i128, i64, i128> for SmallConvolveGoldilocks {
+impl Convolve<Goldilocks, i128, i64> for SmallConvolveGoldilocks {
+    const T_ZERO: i128 = 0;
+    const U_ZERO: i64 = 0;
+
+    #[inline(always)]
+    fn halve(val: i128) -> i128 {
+        val >> 1
+    }
+
     /// Return the lift of a Goldilocks element, 0 <= input.value <= P
     /// < 2^64. We widen immediately, since some valid Goldilocks elements
     /// don't fit in an i64, and since in any case overflow can occur
@@ -63,6 +71,9 @@ const FFT_ALGO: Radix2Bowers = Radix2Bowers;
 
 pub(crate) const MATRIX_CIRC_MDS_8_SML_ROW: [i64; 8] = [7, 1, 3, 8, 8, 3, 4, 9];
 
+/// First column of the circulant MDS matrix for width 8, derived from the first row.
+pub const MATRIX_CIRC_MDS_8_COL: [i64; 8] = first_row_to_first_col(&MATRIX_CIRC_MDS_8_SML_ROW);
+
 impl Permutation<[Goldilocks; 8]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 8]) -> [Goldilocks; 8] {
         const MATRIX_CIRC_MDS_8_SML_COL: [i64; 8] =
@@ -77,6 +88,9 @@ impl Permutation<[Goldilocks; 8]> for MdsMatrixGoldilocks {
 impl MdsPermutation<Goldilocks, 8> for MdsMatrixGoldilocks {}
 
 pub(crate) const MATRIX_CIRC_MDS_12_SML_ROW: [i64; 12] = [1, 1, 2, 1, 8, 9, 10, 7, 5, 9, 4, 10];
+
+/// First column of the circulant MDS matrix for width 12, derived from the first row.
+pub const MATRIX_CIRC_MDS_12_COL: [i64; 12] = first_row_to_first_col(&MATRIX_CIRC_MDS_12_SML_ROW);
 
 impl Permutation<[Goldilocks; 12]> for MdsMatrixGoldilocks {
     fn permute(&self, input: [Goldilocks; 12]) -> [Goldilocks; 12] {

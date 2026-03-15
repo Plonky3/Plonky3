@@ -1,5 +1,8 @@
 use clap::Parser;
-use p3_baby_bear::{BabyBear, GenericPoseidon2LinearLayersBabyBear, Poseidon2BabyBear};
+use p3_baby_bear::{
+    BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16,
+    BABYBEAR_S_BOX_DEGREE, BabyBear, GenericPoseidon2LinearLayersBabyBear, Poseidon2BabyBear,
+};
 use p3_blake3_air::Blake3Air;
 use p3_dft::Radix2DitParallel;
 use p3_examples::airs::ProofObjective;
@@ -11,8 +14,15 @@ use p3_examples::proofs::{
 };
 use p3_field::extension::BinomialExtensionField;
 use p3_keccak_air::KeccakAir;
-use p3_koala_bear::{GenericPoseidon2LinearLayersKoalaBear, KoalaBear, Poseidon2KoalaBear};
-use p3_mersenne_31::{GenericPoseidon2LinearLayersMersenne31, Mersenne31, Poseidon2Mersenne31};
+use p3_koala_bear::{
+    GenericPoseidon2LinearLayersKoalaBear, KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS,
+    KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16, KOALABEAR_S_BOX_DEGREE, KoalaBear, Poseidon2KoalaBear,
+};
+use p3_mersenne_31::{
+    GenericPoseidon2LinearLayersMersenne31, MERSENNE31_POSEIDON2_HALF_FULL_ROUNDS,
+    MERSENNE31_POSEIDON2_PARTIAL_ROUNDS_16, MERSENNE31_S_BOX_DEGREE, Mersenne31,
+    Poseidon2Mersenne31,
+};
 use p3_monty_31::dft::RecursiveDft;
 use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
 use rand::SeedableRng;
@@ -25,7 +35,6 @@ use tracing_subscriber::{EnvFilter, Registry};
 
 // General constants for constructing the Poseidon2 AIR.
 const P2_WIDTH: usize = 16;
-const P2_HALF_FULL_ROUNDS: usize = 4;
 const P2_LOG_VECTOR_LEN: u8 = 3;
 const P2_VECTOR_LEN: usize = 1 << P2_LOG_VECTOR_LEN;
 
@@ -75,7 +84,7 @@ fn main() {
             trace_height
         }
         ProofOptions::Poseidon2Permutations => {
-            println!("Proving 2^{} native Poseidon-2 permutations", {
+            println!("Proving 2^{} native Poseidon2 permutations", {
                 args.log_trace_length + P2_LOG_VECTOR_LEN
             });
             trace_height << P2_LOG_VECTOR_LEN
@@ -101,9 +110,9 @@ fn main() {
                     let constants = RoundConstants::from_rng(&mut rng);
 
                     // Field specific constants for constructing the Poseidon2 AIR.
-                    const SBOX_DEGREE: u64 = 3;
+                    const SBOX_DEGREE: u64 = KOALABEAR_S_BOX_DEGREE;
                     const SBOX_REGISTERS: usize = 0;
-                    const PARTIAL_ROUNDS: usize = 20;
+                    const PARTIAL_ROUNDS: usize = KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16;
 
                     let p2_air: VectorizedPoseidon2Air<
                         KoalaBear,
@@ -111,7 +120,7 @@ fn main() {
                         P2_WIDTH,
                         SBOX_DEGREE,
                         SBOX_REGISTERS,
-                        P2_HALF_FULL_ROUNDS,
+                        { KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS },
                         PARTIAL_ROUNDS,
                         P2_VECTOR_LEN,
                     > = VectorizedPoseidon2Air::new(constants);
@@ -161,9 +170,9 @@ fn main() {
                     let constants = RoundConstants::from_rng(&mut rng);
 
                     // Field specific constants for constructing the Poseidon2 AIR.
-                    const SBOX_DEGREE: u64 = 7;
+                    const SBOX_DEGREE: u64 = BABYBEAR_S_BOX_DEGREE;
                     const SBOX_REGISTERS: usize = 1;
-                    const PARTIAL_ROUNDS: usize = 13;
+                    const PARTIAL_ROUNDS: usize = BABYBEAR_POSEIDON2_PARTIAL_ROUNDS_16;
 
                     let p2_air: VectorizedPoseidon2Air<
                         BabyBear,
@@ -171,7 +180,7 @@ fn main() {
                         P2_WIDTH,
                         SBOX_DEGREE,
                         SBOX_REGISTERS,
-                        P2_HALF_FULL_ROUNDS,
+                        { BABYBEAR_POSEIDON2_HALF_FULL_ROUNDS },
                         PARTIAL_ROUNDS,
                         P2_VECTOR_LEN,
                     > = VectorizedPoseidon2Air::new(constants);
@@ -221,9 +230,9 @@ fn main() {
                     let constants = RoundConstants::from_rng(&mut rng);
 
                     // Field specific constants for constructing the Poseidon2 AIR.
-                    const SBOX_DEGREE: u64 = 5;
+                    const SBOX_DEGREE: u64 = MERSENNE31_S_BOX_DEGREE;
                     const SBOX_REGISTERS: usize = 1;
-                    const PARTIAL_ROUNDS: usize = 14;
+                    const PARTIAL_ROUNDS: usize = MERSENNE31_POSEIDON2_PARTIAL_ROUNDS_16;
 
                     let p2_air: VectorizedPoseidon2Air<
                         Mersenne31,
@@ -231,7 +240,7 @@ fn main() {
                         P2_WIDTH,
                         SBOX_DEGREE,
                         SBOX_REGISTERS,
-                        P2_HALF_FULL_ROUNDS,
+                        { MERSENNE31_POSEIDON2_HALF_FULL_ROUNDS },
                         PARTIAL_ROUNDS,
                         P2_VECTOR_LEN,
                     > = VectorizedPoseidon2Air::new(constants);

@@ -8,6 +8,7 @@ use crate::Matrix;
 /// This struct:
 /// - wraps another matrix,
 /// - restricts access to only the columns within the specified `column_range`.
+#[derive(Clone)]
 pub struct HorizontallyTruncated<T, Inner> {
     /// The underlying full matrix being wrapped.
     inner: Inner,

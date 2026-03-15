@@ -6,9 +6,13 @@ extern crate alloc;
 #[cfg(test)]
 mod extension_test;
 mod koala_bear;
+mod mds;
+mod poseidon1;
 mod poseidon2;
 
 pub use koala_bear::*;
+pub use mds::*;
+pub use poseidon1::*;
 pub use poseidon2::*;
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]

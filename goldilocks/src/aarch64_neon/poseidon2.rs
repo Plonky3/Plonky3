@@ -20,6 +20,7 @@ use rand::{Rng, RngExt};
 
 use super::packing::PackedGoldilocksNeon;
 use super::poseidon2_asm::*;
+use super::utils::{pack_lanes, unpack_lanes};
 use crate::{Goldilocks, MATRIX_DIAG_20_GOLDILOCKS};
 
 /// Degree of the chosen permutation polynomial for Goldilocks.
@@ -185,28 +186,6 @@ pub type Poseidon2GoldilocksAsm<const WIDTH: usize> = p3_poseidon2::Poseidon2<
     WIDTH,
     GOLDILOCKS_S_BOX_DEGREE,
 >;
-
-/// Extract packed state into two raw u64 lane arrays.
-#[inline]
-fn unpack_lanes<const WIDTH: usize>(
-    state: &[PackedGoldilocksNeon; WIDTH],
-) -> ([u64; WIDTH], [u64; WIDTH]) {
-    let lane0: [u64; WIDTH] = core::array::from_fn(|i| state[i].0[0].value);
-    let lane1: [u64; WIDTH] = core::array::from_fn(|i| state[i].0[1].value);
-    (lane0, lane1)
-}
-
-/// Pack two raw u64 lane arrays back into packed state.
-#[inline]
-fn pack_lanes<const WIDTH: usize>(
-    state: &mut [PackedGoldilocksNeon; WIDTH],
-    lane0: &[u64; WIDTH],
-    lane1: &[u64; WIDTH],
-) {
-    for i in 0..WIDTH {
-        state[i] = PackedGoldilocksNeon([Goldilocks::new(lane0[i]), Goldilocks::new(lane1[i])]);
-    }
-}
 
 impl InternalLayer<PackedGoldilocksNeon, 8, GOLDILOCKS_S_BOX_DEGREE>
     for Poseidon2InternalLayerGoldilocksAsm
@@ -482,7 +461,11 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::{Poseidon2ExternalLayerGoldilocks, Poseidon2InternalLayerGoldilocks};
+    use crate::poseidon1::GOLDILOCKS_S_BOX_DEGREE;
+    use crate::{
+        GOLDILOCKS_POSEIDON2_HALF_FULL_ROUNDS, GOLDILOCKS_POSEIDON2_PARTIAL_ROUNDS_8,
+        Poseidon2ExternalLayerGoldilocks, Poseidon2InternalLayerGoldilocks,
+    };
 
     type F = Goldilocks;
 
@@ -496,10 +479,13 @@ mod tests {
     {
         let mut rng = SmallRng::seed_from_u64(42);
 
-        let external_constants =
-            ExternalLayerConstants::<Goldilocks, WIDTH>::new_from_rng(4, &mut rng);
-        let internal_constants: Vec<Goldilocks> =
-            (0..22).map(|_| F::from_u64(rng.random())).collect();
+        let external_constants = ExternalLayerConstants::<Goldilocks, WIDTH>::new_from_rng(
+            2 * GOLDILOCKS_POSEIDON2_HALF_FULL_ROUNDS,
+            &mut rng,
+        );
+        let internal_constants: Vec<Goldilocks> = (0..GOLDILOCKS_POSEIDON2_PARTIAL_ROUNDS_8)
+            .map(|_| F::from_u64(rng.random()))
+            .collect();
 
         // Generic scalar implementation
         let generic_poseidon2: Poseidon2<
@@ -553,9 +539,13 @@ mod tests {
     {
         let mut rng = SmallRng::seed_from_u64(42);
 
-        let external_constants =
-            ExternalLayerConstants::<Goldilocks, WIDTH>::new_from_rng(4, &mut rng);
-        let internal_constants: Vec<Goldilocks> = (0..22).map(|_| rng.random()).collect();
+        let external_constants = ExternalLayerConstants::<Goldilocks, WIDTH>::new_from_rng(
+            2 * GOLDILOCKS_POSEIDON2_HALF_FULL_ROUNDS,
+            &mut rng,
+        );
+        let internal_constants: Vec<Goldilocks> = (0..GOLDILOCKS_POSEIDON2_PARTIAL_ROUNDS_8)
+            .map(|_| rng.random())
+            .collect();
 
         let generic_poseidon2: Poseidon2<
             Goldilocks,

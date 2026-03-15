@@ -3,9 +3,11 @@ use alloc::vec::Vec;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
-use p3_matrix::stack::{VerticalPair, ViewPair};
+use p3_matrix::stack::ViewPair;
 
-use crate::{Air, AirBuilder, AirBuilderWithContext, ExtensionBuilder, PermutationAirBuilder};
+use crate::{
+    Air, AirBuilder, AirBuilderWithContext, ExtensionBuilder, PermutationAirBuilder, RowWindow,
+};
 
 /// A single constraint violation captured during debug evaluation.
 ///
@@ -45,9 +47,9 @@ pub struct DebugConstraintBuilder<'a, F: Field, EF: ExtensionField<F> = F> {
     /// Vertical pair giving access to the current and next witness rows.
     main: ViewPair<'a, F>,
 
-    /// Vertical pair for the current and next preprocessed rows, if the
-    /// AIR declares a preprocessed trace.
-    preprocessed: Option<ViewPair<'a, F>>,
+    /// Window over the current and next preprocessed rows.
+    /// When the AIR has no preprocessed trace this is a zero-width window.
+    preprocessed: RowWindow<'a, F>,
 
     /// Slice of public values made available to the AIR during evaluation.
     public_values: &'a [F],
@@ -67,6 +69,9 @@ pub struct DebugConstraintBuilder<'a, F: Field, EF: ExtensionField<F> = F> {
 
     /// Challenge values for the permutation argument, empty when unused.
     permutation_challenges: &'a [EF],
+
+    /// Expected cumulated values for global lookup arguments.
+    permutation_values: &'a [EF],
 }
 
 impl<'a, F: Field> DebugConstraintBuilder<'a, F> {
@@ -75,10 +80,10 @@ impl<'a, F: Field> DebugConstraintBuilder<'a, F> {
     /// Permutation-related fields are set to `None` / empty so that the
     /// builder can still satisfy trait bounds that require extension-field
     /// support, but calling permutation accessors will panic.
-    pub const fn new(
+    pub fn new(
         row_index: usize,
         main: ViewPair<'a, F>,
-        preprocessed: Option<ViewPair<'a, F>>,
+        preprocessed: ViewPair<'a, F>,
         public_values: &'a [F],
         is_first_row: F,
         is_last_row: F,
@@ -89,13 +94,17 @@ impl<'a, F: Field> DebugConstraintBuilder<'a, F> {
             constraint_index: 0,
             failures: Vec::new(),
             main,
-            preprocessed,
+            preprocessed: RowWindow::from_two_rows(
+                preprocessed.top.values,
+                preprocessed.bottom.values,
+            ),
             public_values,
             is_first_row,
             is_last_row,
             is_transition,
             permutation: None,
             permutation_challenges: &[],
+            permutation_values: &[],
         }
     }
 }
@@ -106,29 +115,35 @@ impl<'a, F: Field, EF: ExtensionField<F>> DebugConstraintBuilder<'a, F, EF> {
     /// Use this when the AIR declares lookup or permutation arguments
     /// that require access to the permutation trace and challenges.
     #[allow(clippy::too_many_arguments)]
-    pub const fn new_with_permutation(
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_permutation(
         row_index: usize,
         main: ViewPair<'a, F>,
-        preprocessed: Option<ViewPair<'a, F>>,
+        preprocessed: ViewPair<'a, F>,
         public_values: &'a [F],
         is_first_row: F,
         is_last_row: F,
         is_transition: F,
         permutation: ViewPair<'a, EF>,
         permutation_challenges: &'a [EF],
+        permutation_values: &'a [EF],
     ) -> Self {
         Self {
             row_index,
             constraint_index: 0,
             failures: Vec::new(),
             main,
-            preprocessed,
+            preprocessed: RowWindow::from_two_rows(
+                preprocessed.top.values,
+                preprocessed.bottom.values,
+            ),
             public_values,
             is_first_row,
             is_last_row,
             is_transition,
             permutation: Some(permutation),
             permutation_challenges,
+            permutation_values,
         }
     }
 
@@ -156,19 +171,16 @@ where
     type F = F;
     type Expr = F;
     type Var = F;
-    type M = ViewPair<'a, F>;
+    type PreprocessedWindow = RowWindow<'a, F>;
+    type MainWindow = RowWindow<'a, F>;
     type PublicVar = F;
 
-    fn main(&self) -> Self::M {
-        self.main
+    fn main(&self) -> Self::MainWindow {
+        RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
     }
 
-    fn preprocessed(&self) -> Option<Self::M> {
-        self.preprocessed
-    }
-
-    fn public_values(&self) -> &[Self::PublicVar] {
-        self.public_values
+    fn preprocessed(&self) -> &Self::PreprocessedWindow {
+        &self.preprocessed
     }
 
     fn is_first_row(&self) -> Self::Expr {
@@ -179,16 +191,9 @@ where
         self.is_last_row
     }
 
-    /// # Panics
-    ///
-    /// Panics when `size` is not `2`, since this builder only supports
-    /// two-row transition windows.
     fn is_transition_window(&self, size: usize) -> Self::Expr {
-        if size == 2 {
-            self.is_transition
-        } else {
-            panic!("only supports a window size of 2")
-        }
+        assert!(size <= 2, "only two-row windows are supported, got {size}");
+        self.is_transition
     }
 
     /// Check that the expression evaluates to zero.
@@ -205,6 +210,10 @@ where
         }
         self.constraint_index += 1;
     }
+
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.public_values
+    }
 }
 
 impl<F: Field, EF: ExtensionField<F>> AirBuilderWithContext for DebugConstraintBuilder<'_, F, EF> {
@@ -216,7 +225,7 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilderWithContext for DebugConstraintB
     }
 }
 
-impl<'a, F: Field, EF: ExtensionField<F>> ExtensionBuilder for DebugConstraintBuilder<'a, F, EF> {
+impl<F: Field, EF: ExtensionField<F>> ExtensionBuilder for DebugConstraintBuilder<'_, F, EF> {
     type EF = EF;
     type ExprEF = EF;
     type VarEF = EF;
@@ -241,19 +250,25 @@ impl<'a, F: Field, EF: ExtensionField<F>> ExtensionBuilder for DebugConstraintBu
 impl<'a, F: Field, EF: ExtensionField<F>> PermutationAirBuilder
     for DebugConstraintBuilder<'a, F, EF>
 {
-    type MP = VerticalPair<RowMajorMatrixView<'a, EF>, RowMajorMatrixView<'a, EF>>;
+    type MP = RowWindow<'a, EF>;
     type RandomVar = EF;
+    type PermutationVar = EF;
 
     /// # Panics
     ///
     /// Panics when the builder was created without permutation data.
     fn permutation(&self) -> Self::MP {
-        self.permutation
-            .expect("permutation() called on a builder created without permutation data; use new_with_permutation()")
+        let p = self.permutation
+            .expect("permutation() called on a builder created without permutation data; use new_with_permutation()");
+        RowWindow::from_two_rows(p.top.values, p.bottom.values)
     }
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         self.permutation_challenges
+    }
+
+    fn permutation_values(&self) -> &[Self::PermutationVar] {
+        self.permutation_values
     }
 }
 
@@ -293,10 +308,9 @@ where
             RowMajorMatrixView::new_row(&*next),
         );
 
-        // Pair the preprocessed rows if the AIR provides a preprocessed trace.
-        //
-        // The slices must be bound outside the closure so the borrows
-        // outlive the `ViewPair` that references them.
+        // Pair the preprocessed rows. When the AIR has no preprocessed
+        // trace we build a zero-width pair so the builder always has a
+        // valid (possibly empty) preprocessed matrix.
         let (prep_local, prep_next) = preprocessed.as_ref().map_or((None, None), |prep| unsafe {
             // SAFETY: same index range as the main trace.
             (
@@ -304,12 +318,16 @@ where
                 Some(prep.row_slice_unchecked(row_index_next)),
             )
         });
-        let preprocessed_pair = prep_local.as_ref().zip(prep_next.as_ref()).map(|(l, n)| {
-            ViewPair::new(
+        let preprocessed_pair = match (prep_local.as_ref(), prep_next.as_ref()) {
+            (Some(l), Some(n)) => ViewPair::new(
                 RowMajorMatrixView::new_row(&**l),
                 RowMajorMatrixView::new_row(&**n),
-            )
-        });
+            ),
+            _ => ViewPair::new(
+                RowMajorMatrixView::new(&[], 0),
+                RowMajorMatrixView::new(&[], 0),
+            ),
+        };
 
         // Construct the builder with row selectors derived from the position.
         let mut builder = DebugConstraintBuilder::new(
@@ -344,7 +362,7 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
 
     use super::*;
-    use crate::BaseAir;
+    use crate::{BaseAir, WindowAccess};
 
     /// Minimal AIR for testing transition and boundary constraints.
     ///
@@ -366,8 +384,8 @@ mod tests {
 
             // Transition constraint: next == current + 1 for every column.
             for col in 0..W {
-                let current = main.top.get(0, col).unwrap();
-                let next = main.bottom.get(0, col).unwrap();
+                let current = main.current(col).unwrap();
+                let next = main.next(col).unwrap();
                 builder.when_transition().assert_eq(next, current + F::ONE);
             }
 
@@ -375,7 +393,7 @@ mod tests {
             let public_values = builder.public_values;
             let mut when_last = builder.when(builder.is_last_row);
             for (i, &pv) in public_values.iter().enumerate().take(W) {
-                when_last.assert_eq(main.top.get(0, i).unwrap(), pv);
+                when_last.assert_eq(main.current(i).unwrap(), pv);
             }
         }
     }
@@ -458,10 +476,11 @@ mod tests {
         let view = RowMajorMatrixView::new_row(row);
         let main = ViewPair::new(view, view);
 
+        let empty_view = RowMajorMatrixView::new(&[], 0);
         let mut builder = DebugConstraintBuilder::new(
             0,
             main,
-            None,
+            ViewPair::new(empty_view, empty_view),
             &[],
             BabyBear::ONE,  // is_first_row
             BabyBear::ONE,  // is_last_row (single row)
@@ -486,7 +505,7 @@ mod tests {
         fn eval(&self, builder: &mut DebugConstraintBuilder<'_, F>) {
             let main = builder.main();
             for col in 0..W {
-                builder.assert_zero(main.top.get(0, col).unwrap());
+                builder.assert_zero(main.current(col).unwrap());
             }
         }
     }

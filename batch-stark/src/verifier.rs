@@ -1,17 +1,18 @@
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
+use alloc::{format, vec};
 use core::fmt::Debug;
 
 use hashbrown::HashMap;
-use p3_air::Air;
-use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpressionExt};
+use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
+use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
+use p3_lookup::AirWithLookups;
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::lookup_traits::{Lookup, LookupData, LookupError, LookupGadget};
+use p3_lookup::lookup_traits::{Lookup, LookupGadget};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_uni_stark::{VerificationError, VerifierConstraintFolder, recompose_quotient_from_chunks};
@@ -23,7 +24,7 @@ use crate::config::{
     Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_instance_binding,
 };
 use crate::proof::BatchProof;
-use crate::symbolic::{get_log_num_quotient_chunks, lookup_data_to_ext_expr};
+use crate::symbolic::get_log_num_quotient_chunks;
 
 #[instrument(skip_all)]
 pub fn verify_batch<SC, A>(
@@ -97,13 +98,18 @@ where
             .unwrap_or(0);
         preprocessed_widths.push(pre_w);
 
+        let layout = AirLayout {
+            preprocessed_width: pre_w,
+            main_width: air.width(),
+            num_public_values: air.num_public_values(),
+            ..Default::default()
+        };
         let log_num_chunks =
             info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
                 get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
                     air,
-                    pre_w,
+                    layout,
                     &all_lookups[i],
-                    &lookup_data_to_ext_expr(&global_lookup_data[i]),
                     config.is_zk(),
                     &lookup_gadget,
                 )
@@ -220,6 +226,9 @@ where
                 .clone()
                 .expect("We checked that the commitment exists"),
         );
+        for data in global_lookup_data.iter().flatten() {
+            challenger.observe_algebra_element(data.expected_cumulated);
+        }
     }
 
     // Sample alpha for constraint folding
@@ -445,18 +454,18 @@ where
             .map(|m| m + 1)
             .unwrap_or(0);
 
+        let ext_degree = Challenge::<SC>::DIMENSION;
+        let expected_perm_len = aux_width * ext_degree;
+        if opened_values.instances[i].permutation_local.len() != expected_perm_len
+            || opened_values.instances[i].permutation_next.len() != expected_perm_len
+        {
+            return Err(VerificationError::InvalidProofShape);
+        }
+
         let recompose = |flat: &[Challenge<SC>]| -> Vec<Challenge<SC>> {
             if aux_width == 0 {
                 return vec![];
             }
-            let ext_degree = Challenge::<SC>::DIMENSION;
-            assert!(
-                flat.len() == aux_width * ext_degree,
-                "flattened permutation opening length ({}) must equal aux_width ({}) * DIMENSION ({})",
-                flat.len(),
-                aux_width,
-                ext_degree
-            );
             // Chunk the flattened coefficients into groups of size `dim`.
             // Each chunk represents the coefficients of one extension field element.
             flat.chunks_exact(ext_degree)
@@ -488,6 +497,21 @@ where
                 &trace_next_zeros
             }
         };
+        let pre_next_zeros;
+        let pre_next_ref = match &opened_values.instances[i]
+            .base_opened_values
+            .preprocessed_next
+        {
+            Some(v) => v.as_slice(),
+            None => {
+                pre_next_zeros = vec![SC::Challenge::ZERO; preprocessed_widths[i]];
+                &pre_next_zeros
+            }
+        };
+        let perm_vals: Vec<SC::Challenge> = global_lookup_data[i]
+            .iter()
+            .map(|ld| ld.expected_cumulated)
+            .collect();
         let verifier_data = VerifierData {
             trace_local: &opened_values.instances[i].base_opened_values.trace_local,
             trace_next: trace_next_ref,
@@ -496,15 +520,11 @@ where
                 .preprocessed_local
                 .as_ref()
                 .map_or(&[], |v| v),
-            preprocessed_next: opened_values.instances[i]
-                .base_opened_values
-                .preprocessed_next
-                .as_ref()
-                .map_or(&[], |v| v),
+            preprocessed_next: pre_next_ref,
             permutation_local: &perm_local_ext,
             permutation_next: &perm_next_ext,
             permutation_challenges: &challenges_per_instance[i],
-            lookup_data: &proof.global_lookup_data[i],
+            permutation_values: &perm_vals,
             lookups: &all_lookups[i],
             public_values: &public_values[i],
             trace_domain: init_trace_domain,
@@ -537,11 +557,7 @@ where
     for (name, all_expected_cumulative) in global_cumulative {
         lookup_gadget
             .verify_global_final_value(&all_expected_cumulative)
-            .map_err(|_| {
-                VerificationError::LookupError(LookupError::GlobalCumulativeMismatch(Some(
-                    name.clone(),
-                )))
-            })?;
+            .map_err(|e| VerificationError::LookupError(format!("{e:?}: {name}")))?;
     }
 
     Ok(())
@@ -567,8 +583,8 @@ pub struct VerifierData<'a, SC: SGC> {
     permutation_next: &'a [SC::Challenge],
     // Challenges used for the lookup argument
     permutation_challenges: &'a [SC::Challenge],
-    // Lookup data needed for global lookup verification
-    lookup_data: &'a [LookupData<SC::Challenge>],
+    // Expected cumulated values for global lookup arguments
+    permutation_values: &'a [SC::Challenge],
     // Lookup contexts for this instance
     lookups: &'a [Lookup<Val<SC>>],
     // Public values for this instance
@@ -601,7 +617,7 @@ where
         permutation_local,
         permutation_next,
         permutation_challenges,
-        lookup_data,
+        permutation_values,
         lookups,
         public_values,
         trace_domain,
@@ -622,13 +638,12 @@ where
         RowMajorMatrixView::new_row(preprocessed_next),
     );
 
+    let preprocessed_window =
+        RowWindow::from_two_rows(preprocessed.top.values, preprocessed.bottom.values);
     let inner_folder = VerifierConstraintFolder {
         main,
-        preprocessed: if preprocessed_local.is_empty() {
-            None
-        } else {
-            Some(preprocessed)
-        },
+        preprocessed,
+        preprocessed_window,
         public_values,
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,
@@ -643,9 +658,10 @@ where
             RowMajorMatrixView::new_row(permutation_next),
         ),
         permutation_challenges,
+        permutation_values,
     };
     // Evaluate AIR and lookup constraints.
-    A::eval_with_lookups(air, &mut folder, lookups, lookup_data, lookup_gadget);
+    air.eval_with_lookups(&mut folder, lookups, lookup_gadget);
     let folded_constraints = folder.inner.accumulator;
 
     // Check that constraints(zeta) / Z_H(zeta) = quotient(zeta)

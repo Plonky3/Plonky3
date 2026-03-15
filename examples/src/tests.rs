@@ -7,8 +7,15 @@ use p3_blake3_air::Blake3Air;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_keccak_air::KeccakAir;
-use p3_koala_bear::{GenericPoseidon2LinearLayersKoalaBear, KoalaBear, Poseidon2KoalaBear};
-use p3_mersenne_31::{GenericPoseidon2LinearLayersMersenne31, Mersenne31, Poseidon2Mersenne31};
+use p3_koala_bear::{
+    GenericPoseidon2LinearLayersKoalaBear, KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS,
+    KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16, KOALABEAR_S_BOX_DEGREE, KoalaBear, Poseidon2KoalaBear,
+};
+use p3_mersenne_31::{
+    GenericPoseidon2LinearLayersMersenne31, MERSENNE31_POSEIDON2_HALF_FULL_ROUNDS,
+    MERSENNE31_POSEIDON2_PARTIAL_ROUNDS_16, MERSENNE31_S_BOX_DEGREE, Mersenne31,
+    Poseidon2Mersenne31,
+};
 use p3_monty_31::dft::RecursiveDft;
 use p3_poseidon2_air::{Poseidon2Air, RoundConstants, VectorizedPoseidon2Air};
 use rand::SeedableRng;
@@ -25,7 +32,6 @@ const TRACE_SIZE: usize = 1 << 7;
 
 // General constants for constructing the Poseidon2 AIR.
 const P2_WIDTH: usize = 16;
-const P2_HALF_FULL_ROUNDS: usize = 4;
 const P2_LOG_VECTOR_LEN: u8 = 3;
 const P2_VECTOR_LEN: usize = 1 << P2_LOG_VECTOR_LEN;
 
@@ -38,9 +44,9 @@ fn test_end_to_end_koalabear_vectorized_poseidon2_hashes_recursive_dft_poseidon2
     type EF = BinomialExtensionField<KoalaBear, 4>;
 
     let constants = RoundConstants::from_rng(&mut rng);
-    const SBOX_DEGREE: u64 = 3;
+    const SBOX_DEGREE: u64 = KOALABEAR_S_BOX_DEGREE;
     const SBOX_REGISTERS: usize = 0;
-    const PARTIAL_ROUNDS: usize = 20;
+    const PARTIAL_ROUNDS: usize = KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16;
 
     let proof_goal: VectorizedPoseidon2Air<
         KoalaBear,
@@ -48,7 +54,7 @@ fn test_end_to_end_koalabear_vectorized_poseidon2_hashes_recursive_dft_poseidon2
         P2_WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
-        P2_HALF_FULL_ROUNDS,
+        { KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS },
         PARTIAL_ROUNDS,
         P2_VECTOR_LEN,
     > = VectorizedPoseidon2Air::new(constants);
@@ -72,9 +78,9 @@ fn test_end_to_end_koalabear_poseidon2_hashes_recursive_dft_keccak_merkle_tree()
     type EF = BinomialExtensionField<KoalaBear, 4>;
 
     let constants = RoundConstants::from_rng(&mut rng);
-    const SBOX_DEGREE: u64 = 3;
+    const SBOX_DEGREE: u64 = KOALABEAR_S_BOX_DEGREE;
     const SBOX_REGISTERS: usize = 0;
-    const PARTIAL_ROUNDS: usize = 20;
+    const PARTIAL_ROUNDS: usize = KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16;
 
     let proof_goal: Poseidon2Air<
         KoalaBear,
@@ -82,7 +88,7 @@ fn test_end_to_end_koalabear_poseidon2_hashes_recursive_dft_keccak_merkle_tree()
         P2_WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
-        P2_HALF_FULL_ROUNDS,
+        { KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS },
         PARTIAL_ROUNDS,
     > = Poseidon2Air::new(constants);
 
@@ -114,9 +120,12 @@ fn test_end_to_end_babybear_vectorized_poseidon2_hashes_recursive_dft_poseidon2_
     type EF = BinomialExtensionField<BabyBear, 4>;
 
     let constants = RoundConstants::from_rng(&mut rng);
-    const SBOX_DEGREE: u64 = 3;
+    // The AIR uses KoalaBear's S-box degree (3) for simpler constraint testing,
+    // not BabyBear's cryptographic degree (7). This is intentional: the AIR test
+    // validates the proof system, not the hash function's security parameters.
+    const SBOX_DEGREE: u64 = KOALABEAR_S_BOX_DEGREE;
     const SBOX_REGISTERS: usize = 0;
-    const PARTIAL_ROUNDS: usize = 20;
+    const PARTIAL_ROUNDS: usize = KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16;
 
     let proof_goal: Poseidon2Air<
         BabyBear,
@@ -124,7 +133,7 @@ fn test_end_to_end_babybear_vectorized_poseidon2_hashes_recursive_dft_poseidon2_
         P2_WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
-        P2_HALF_FULL_ROUNDS,
+        { KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS },
         PARTIAL_ROUNDS,
     > = Poseidon2Air::new(constants);
 
@@ -145,9 +154,10 @@ fn test_end_to_end_babybear_poseidon2_hashes_parallel_dft_poseidon2_merkle_tree(
     type EF = BinomialExtensionField<BabyBear, 4>;
 
     let constants = RoundConstants::from_rng(&mut rng);
-    const SBOX_DEGREE: u64 = 3;
+    // See comment in the test above: uses KoalaBear's S-box parameters for AIR testing.
+    const SBOX_DEGREE: u64 = KOALABEAR_S_BOX_DEGREE;
     const SBOX_REGISTERS: usize = 0;
-    const PARTIAL_ROUNDS: usize = 20;
+    const PARTIAL_ROUNDS: usize = KOALABEAR_POSEIDON2_PARTIAL_ROUNDS_16;
 
     let proof_goal: Poseidon2Air<
         BabyBear,
@@ -155,7 +165,7 @@ fn test_end_to_end_babybear_poseidon2_hashes_parallel_dft_poseidon2_merkle_tree(
         P2_WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
-        P2_HALF_FULL_ROUNDS,
+        { KOALABEAR_POSEIDON2_HALF_FULL_ROUNDS },
         PARTIAL_ROUNDS,
     > = Poseidon2Air::new(constants);
 
@@ -214,9 +224,9 @@ fn test_end_to_end_mersenne31_vectorized_poseidon2_hashes_poseidon2_merkle_tree(
     let constants = RoundConstants::from_rng(&mut rng);
 
     // Field specific constants for constructing the Poseidon2 AIR.
-    const SBOX_DEGREE: u64 = 5;
+    const SBOX_DEGREE: u64 = MERSENNE31_S_BOX_DEGREE;
     const SBOX_REGISTERS: usize = 1;
-    const PARTIAL_ROUNDS: usize = 14;
+    const PARTIAL_ROUNDS: usize = MERSENNE31_POSEIDON2_PARTIAL_ROUNDS_16;
 
     let proof_goal: VectorizedPoseidon2Air<
         Mersenne31,
@@ -224,7 +234,7 @@ fn test_end_to_end_mersenne31_vectorized_poseidon2_hashes_poseidon2_merkle_tree(
         P2_WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
-        P2_HALF_FULL_ROUNDS,
+        { MERSENNE31_POSEIDON2_HALF_FULL_ROUNDS },
         PARTIAL_ROUNDS,
         P2_VECTOR_LEN,
     > = VectorizedPoseidon2Air::new(constants);
@@ -243,9 +253,9 @@ fn test_end_to_end_mersenne31_poseidon2_hashes_keccak_merkle_tree() -> Result<()
     let constants = RoundConstants::from_rng(&mut rng);
 
     // Field specific constants for constructing the Poseidon2 AIR.
-    const SBOX_DEGREE: u64 = 5;
+    const SBOX_DEGREE: u64 = MERSENNE31_S_BOX_DEGREE;
     const SBOX_REGISTERS: usize = 1;
-    const PARTIAL_ROUNDS: usize = 14;
+    const PARTIAL_ROUNDS: usize = MERSENNE31_POSEIDON2_PARTIAL_ROUNDS_16;
 
     let proof_goal: Poseidon2Air<
         Mersenne31,
@@ -253,7 +263,7 @@ fn test_end_to_end_mersenne31_poseidon2_hashes_keccak_merkle_tree() -> Result<()
         P2_WIDTH,
         SBOX_DEGREE,
         SBOX_REGISTERS,
-        P2_HALF_FULL_ROUNDS,
+        { MERSENNE31_POSEIDON2_HALF_FULL_ROUNDS },
         PARTIAL_ROUNDS,
     > = Poseidon2Air::new(constants);
 

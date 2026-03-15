@@ -2,20 +2,21 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_air::Air;
-use p3_air::symbolic::{SymbolicAirBuilder, get_symbolic_constraints};
+use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, get_symbolic_constraints};
+use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
+use p3_field::{PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use tracing::{debug_span, info_span, instrument};
 
 use crate::{
-    Commitments, Domain, OpenedValues, PackedChallenge, PackedVal, PreprocessedProverData, Proof,
-    ProverConstraintFolder, StarkGenericConfig, Val, get_log_num_quotient_chunks,
+    Commitments, Domain, OpenedValues, PackedVal, PreprocessedProverData, Proof,
+    ProverConstraintFolder, StarkGenericConfig, Val, get_constraint_layout,
+    get_log_num_quotient_chunks,
 };
 
 #[instrument(skip_all)]
@@ -73,19 +74,20 @@ where
         },
     );
 
-    // Count the number of constraints. If the AIR provides a static count via
-    // `num_constraints()`, use it to avoid a full symbolic evaluation pass.
-    let constraint_count = air
-        .num_constraints()
-        .unwrap_or_else(|| get_symbolic_constraints(air, preprocessed_width).len());
+    let layout = AirLayout {
+        preprocessed_width,
+        main_width: air.width(),
+        num_public_values: air.num_public_values(),
+        ..Default::default()
+    };
 
     // In debug builds, cross-check the static hint against symbolic evaluation.
     debug_assert!(
         air.num_constraints()
-            .is_none_or(|n| { n == get_symbolic_constraints(air, preprocessed_width).len() }),
+            .is_none_or(|n| { n == get_symbolic_constraints(air, layout).len() }),
         "num_constraints() = {} but symbolic evaluation found {} constraints",
         air.num_constraints().unwrap(),
-        get_symbolic_constraints(air, preprocessed_width).len(),
+        get_symbolic_constraints(air, layout).len(),
     );
 
     // Each constraint polynomial looks like `C_j(X_1, ..., X_w, Y_1, ..., Y_w, Z_1, ..., Z_j)`.
@@ -95,15 +97,15 @@ where
     //
     // When we convert to working with polynomials, the `X_i`'s and `Y_i`'s will be replaced by the
     // degree `N - 1` polynomials `T_i(x)` and `T_i(hx)` respectively. The selector polynomials are
-    //  a little more complicated however.
+    // a little more complicated, however.
     //
-    // In our our case, the selector polynomials are `S_1(x) = is_first_row`, `S_2(x) = is_last_row`
+    // In our case, the selector polynomials are `S_1(x) = is_first_row`, `S_2(x) = is_last_row`
     // and `S_3(x) = is_transition`. Both `S_1(x)` and `S_2(x)` are polynomials of degree `N - 1`
-    // as they must be non zero only at a single location in the initial domain. However, `is_transition`
-    // is a polynomial of degree `1` as it simply need to be `0` on the last row.
+    // as they must be non-zero only at a single location in the initial domain. However,
+    // `is_transition` is a polynomial of degree `1` as it simply needs to be `0` on the last row.
     //
     // The constraint degree (`deg(C)`) is the linear factor of `N` in the constraint polynomial. In other
-    // words, it is roughly the total degree of `C` however, we treat `Z_3` as a constant term which does
+    // words, it is roughly the total degree of `C`; however, we treat `Z_3` as a constant term which does
     // not contribute to the degree.
     //
     // E.g. `C_j = Z_1 * (X_1^3 - X_2 * X_3 * X_4)` would have degree `4`.
@@ -122,7 +124,7 @@ where
     // of quotient polynomials we will split Q(x) into. This is chosen to
     // always be a power of 2.
     let log_num_quotient_chunks =
-        get_log_num_quotient_chunks::<Val<SC>, A>(air, preprocessed_width, config.is_zk());
+        get_log_num_quotient_chunks::<Val<SC>, A>(air, layout, config.is_zk());
 
     let num_quotient_chunks = 1 << (log_num_quotient_chunks + config.is_zk());
 
@@ -216,12 +218,12 @@ where
     let quotient_values = quotient_values(
         air,
         public_values,
+        layout,
         trace_domain,
         quotient_domain,
         &trace_on_quotient_domain,
         preprocessed_on_quotient_domain.as_ref(),
         alpha,
-        constraint_count,
     );
 
     // Due to `alpha`, evaluations of `Q` all lie in the extension field `E`.
@@ -398,16 +400,16 @@ where
 pub fn quotient_values<SC, A, Mat>(
     air: &A,
     public_values: &[Val<SC>],
+    layout: AirLayout,
     trace_domain: Domain<SC>,
     quotient_domain: Domain<SC>,
     trace_on_quotient_domain: &Mat,
     preprocessed_on_quotient_domain: Option<&Mat>,
     alpha: SC::Challenge,
-    constraint_count: usize,
 ) -> Vec<SC::Challenge>
 where
     SC: StarkGenericConfig,
-    A: for<'a> Air<ProverConstraintFolder<'a, SC>>,
+    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
     Mat: Matrix<Val<SC>> + Sync,
 {
     let quotient_size = quotient_domain.size();
@@ -427,18 +429,9 @@ where
         sels.inv_vanishing.push(Val::<SC>::default());
     }
 
-    let mut alpha_powers = alpha.powers().collect_n(constraint_count);
-    alpha_powers.reverse();
-    // alpha powers looks like Vec<EF> ~ Vec<[F; D]>
-    // It's useful to also have access to the transpose of this of form [Vec<F>; D].
-    let decomposed_alpha_powers: Vec<_> = (0..SC::Challenge::DIMENSION)
-        .map(|i| {
-            alpha_powers
-                .iter()
-                .map(|x| x.as_basis_coefficients_slice()[i])
-                .collect()
-        })
-        .collect();
+    let constraint_layout = get_constraint_layout(air, layout);
+    let (base_alpha_powers, ext_alpha_powers) = constraint_layout.decompose_alpha(alpha);
+
     (0..quotient_size)
         .into_par_iter()
         .step_by(PackedVal::<SC>::WIDTH)
@@ -463,23 +456,28 @@ where
                 )
             });
 
-            let accumulator = PackedChallenge::<SC>::ZERO;
+            let preprocessed_view = preprocessed
+                .as_ref()
+                .map_or_else(|| RowMajorMatrixView::new(&[], 0), |m| m.as_view());
             let mut folder = ProverConstraintFolder {
                 main: main.as_view(),
-                preprocessed: preprocessed.as_ref().map(|m| m.as_view()),
+                preprocessed: preprocessed_view,
+                preprocessed_window: RowWindow::from_view(&preprocessed_view),
                 public_values,
                 is_first_row,
                 is_last_row,
                 is_transition,
-                alpha_powers: &alpha_powers,
-                decomposed_alpha_powers: &decomposed_alpha_powers,
-                accumulator,
+                base_alpha_powers: &base_alpha_powers,
+                ext_alpha_powers: &ext_alpha_powers,
+                base_constraints: Vec::with_capacity(constraint_layout.base_indices.len()),
+                ext_constraints: Vec::with_capacity(constraint_layout.ext_indices.len()),
                 constraint_index: 0,
+                constraint_count: constraint_layout.total_constraints(),
             };
             air.eval(&mut folder);
 
             // quotient(x) = constraints(x) / Z_H(x)
-            let quotient = folder.accumulator * inv_vanishing;
+            let quotient = folder.finalize_constraints() * inv_vanishing;
 
             // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
             (0..core::cmp::min(quotient_size, PackedVal::<SC>::WIDTH))

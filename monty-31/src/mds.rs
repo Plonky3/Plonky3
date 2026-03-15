@@ -28,7 +28,15 @@ pub struct MdsMatrixMontyField31<MU: MDSUtils> {
 /// 2^24 (roughly), though in practice the sum will be less than 2^9.
 struct SmallConvolveMontyField31;
 
-impl<FP: MontyParameters> Convolve<MontyField31<FP>, i64, i64, i64> for SmallConvolveMontyField31 {
+impl<FP: MontyParameters> Convolve<MontyField31<FP>, i64, i64> for SmallConvolveMontyField31 {
+    const T_ZERO: i64 = 0;
+    const U_ZERO: i64 = 0;
+
+    #[inline(always)]
+    fn halve(val: i64) -> i64 {
+        val >> 1
+    }
+
     /// Return the lift of a Monty31 element, satisfying 0 <=
     /// input.value < P < 2^31. Note that Monty31 elements are
     /// represented in Monty form.
@@ -201,10 +209,18 @@ const fn barrett_red_monty31<BP: BarrettParameters>(input: i128) -> i64 {
 #[derive(Debug, Clone, Default)]
 struct LargeConvolveMontyField31;
 
-impl<FP> Convolve<MontyField31<FP>, i64, i64, i64> for LargeConvolveMontyField31
+impl<FP> Convolve<MontyField31<FP>, i64, i64> for LargeConvolveMontyField31
 where
     FP: BarrettParameters,
 {
+    const T_ZERO: i64 = 0;
+    const U_ZERO: i64 = 0;
+
+    #[inline(always)]
+    fn halve(val: i64) -> i64 {
+        val >> 1
+    }
+
     /// Return the lift of a MontyField31 element, satisfying
     /// 0 <= input.value < P < 2^31.
     /// Note that MontyField31 elements are represented in Monty form.
@@ -271,7 +287,7 @@ impl<FP: MontyParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 8]>
         SmallConvolveMontyField31::apply(
             input,
             MU::MATRIX_CIRC_MDS_8_COL,
-            <SmallConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64, i64>>::conv8,
+            <SmallConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64>>::conv8,
         )
     }
 }
@@ -287,7 +303,7 @@ impl<FP: MontyParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 12]>
         SmallConvolveMontyField31::apply(
             input,
             MU::MATRIX_CIRC_MDS_12_COL,
-            <SmallConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64, i64>>::conv12,
+            <SmallConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64>>::conv12,
         )
     }
 }
@@ -303,7 +319,7 @@ impl<FP: MontyParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 16]>
         SmallConvolveMontyField31::apply(
             input,
             MU::MATRIX_CIRC_MDS_16_COL,
-            <SmallConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64, i64>>::conv16,
+            <SmallConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64>>::conv16,
         )
     }
 }
@@ -320,7 +336,7 @@ where
         LargeConvolveMontyField31::apply(
             input,
             MU::MATRIX_CIRC_MDS_24_COL,
-            <LargeConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64, i64>>::conv24,
+            <LargeConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64>>::conv24,
         )
     }
 }
@@ -336,7 +352,7 @@ impl<FP: BarrettParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 32]>
         LargeConvolveMontyField31::apply(
             input,
             MU::MATRIX_CIRC_MDS_32_COL,
-            <LargeConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64, i64>>::conv32,
+            <LargeConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64>>::conv32,
         )
     }
 }
@@ -352,7 +368,7 @@ impl<FP: BarrettParameters, MU: MDSUtils> Permutation<[MontyField31<FP>; 64]>
         LargeConvolveMontyField31::apply(
             input,
             MU::MATRIX_CIRC_MDS_64_COL,
-            <LargeConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64, i64>>::conv64,
+            <LargeConvolveMontyField31 as Convolve<MontyField31<FP>, i64, i64>>::conv64,
         )
     }
 }

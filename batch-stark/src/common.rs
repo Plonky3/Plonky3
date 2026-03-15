@@ -16,6 +16,7 @@ use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpressionExt};
 use p3_challenger::FieldChallenger;
 use p3_commit::Pcs;
 use p3_field::{Algebra, BasedVectorSpace};
+use p3_lookup::LookupAir;
 use p3_lookup::lookup_traits::{Kind, Lookup, LookupGadget};
 use p3_matrix::Matrix;
 use p3_uni_stark::Val;
@@ -161,7 +162,7 @@ where
     pub fn from_instances<A>(config: &SC, instances: &[StarkInstance<'_, SC, A>]) -> Self
     where
         SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
-        A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>> + Clone,
+        A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>> + LookupAir<Val<SC>> + Clone,
     {
         let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
         let log_ext_degrees: Vec<usize> = degrees
@@ -189,7 +190,7 @@ where
     ) -> Self
     where
         SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
-        A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>,
+        A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>> + LookupAir<Val<SC>>,
     {
         assert_eq!(
             airs.len(),

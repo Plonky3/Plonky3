@@ -1,12 +1,12 @@
 //! See [`crate::prover`] for an overview of the protocol and a more detailed soundness analysis.
 
+use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 
 use itertools::Itertools;
-use p3_air::Air;
-use p3_air::lookup::LookupError;
 use p3_air::symbolic::SymbolicAirBuilder;
+use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
@@ -18,7 +18,7 @@ use tracing::instrument;
 
 use crate::symbolic::get_log_num_quotient_chunks;
 use crate::{
-    Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
+    AirLayout, Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
     VerifierConstraintFolder,
 };
 
@@ -98,16 +98,22 @@ where
     );
 
     let preprocessed = match (preprocessed_local, preprocessed_next) {
-        (Some(local), Some(next)) => Some(VerticalPair::new(
+        (Some(local), Some(next)) => VerticalPair::new(
             RowMajorMatrixView::new_row(local),
             RowMajorMatrixView::new_row(next),
-        )),
-        _ => None,
+        ),
+        _ => VerticalPair::new(
+            RowMajorMatrixView::new(&[], 0),
+            RowMajorMatrixView::new(&[], 0),
+        ),
     };
 
+    let preprocessed_window =
+        RowWindow::from_two_rows(preprocessed.top.values, preprocessed.bottom.values);
     let mut folder = VerifierConstraintFolder {
         main,
         preprocessed,
+        preprocessed_window,
         public_values,
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,
@@ -239,8 +245,14 @@ where
         return Err(VerificationError::InvalidProofShape);
     }
 
+    let layout = AirLayout {
+        preprocessed_width,
+        main_width: air.width(),
+        num_public_values: air.num_public_values(),
+        ..Default::default()
+    };
     let log_num_quotient_chunks =
-        get_log_num_quotient_chunks::<Val<SC>, A>(air, preprocessed_width, config.is_zk());
+        get_log_num_quotient_chunks::<Val<SC>, A>(air, layout, config.is_zk());
     let num_quotient_chunks = 1 << (log_num_quotient_chunks + config.is_zk());
     let mut challenger = config.initialise_challenger();
     let init_trace_domain = pcs.natural_domain_for_degree(degree >> (config.is_zk()));
@@ -443,6 +455,6 @@ where
     )]
     NextPointUnavailable,
     /// Lookup related error
-    #[error("lookup error: {0:?}")]
-    LookupError(LookupError),
+    #[error("lookup error: {0}")]
+    LookupError(String),
 }

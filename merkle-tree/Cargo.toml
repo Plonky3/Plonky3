@@ -29,6 +29,7 @@ p3-blake3 = { path = "../blake3" }
 p3-keccak = { path = "../keccak" }
 p3-mds = { path = "../mds" }
 p3-rescue = { path = "../rescue" }
+proptest.workspace = true
 
 criterion.workspace = true
 

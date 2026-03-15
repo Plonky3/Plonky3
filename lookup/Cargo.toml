@@ -15,6 +15,7 @@ p3-field = { workspace = true }
 p3-matrix = { workspace = true }
 p3-maybe-rayon = { workspace = true }
 p3-uni-stark = { workspace = true }
+serde = { workspace = true, features = ["derive", "alloc"] }
 tracing = { workspace = true }
 
 [dev-dependencies]

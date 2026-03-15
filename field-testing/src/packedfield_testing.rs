@@ -136,6 +136,107 @@ where
     assert_eq!(dot_64, PF::packed_linear_combination::<64>(&u, &v));
 }
 
+pub fn test_packed_mixed_dot_product<PF: PackedField + Eq>()
+where
+    StandardUniform: Distribution<PF> + Distribution<PF::Scalar>,
+{
+    let mut rng = SmallRng::seed_from_u64(42);
+    let a: [PF; 64] = rng.random();
+    let f: [PF::Scalar; 64] = rng.random();
+
+    let mut dot = PF::ZERO;
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<0>(a[..0].try_into().unwrap(), f[..0].try_into().unwrap())
+    );
+    dot += a[0] * f[0];
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<1>(a[..1].try_into().unwrap(), f[..1].try_into().unwrap())
+    );
+    dot += a[1] * f[1];
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<2>(a[..2].try_into().unwrap(), f[..2].try_into().unwrap())
+    );
+    dot += a[2] * f[2];
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<3>(a[..3].try_into().unwrap(), f[..3].try_into().unwrap())
+    );
+    dot += a[3] * f[3];
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<4>(a[..4].try_into().unwrap(), f[..4].try_into().unwrap())
+    );
+    dot += a[4] * f[4];
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<5>(a[..5].try_into().unwrap(), f[..5].try_into().unwrap())
+    );
+    dot += a[5] * f[5];
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<6>(a[..6].try_into().unwrap(), f[..6].try_into().unwrap())
+    );
+    dot += a[6] * f[6];
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<7>(a[..7].try_into().unwrap(), f[..7].try_into().unwrap())
+    );
+    dot += a[7] * f[7];
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<8>(a[..8].try_into().unwrap(), f[..8].try_into().unwrap())
+    );
+    dot += a[8] * f[8];
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<9>(a[..9].try_into().unwrap(), f[..9].try_into().unwrap())
+    );
+    dot += a[9] * f[9];
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<10>(a[..10].try_into().unwrap(), f[..10].try_into().unwrap())
+    );
+    dot += a[10] * f[10];
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<11>(a[..11].try_into().unwrap(), f[..11].try_into().unwrap())
+    );
+    dot += a[11] * f[11];
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<12>(a[..12].try_into().unwrap(), f[..12].try_into().unwrap())
+    );
+    dot += a[12] * f[12];
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<13>(a[..13].try_into().unwrap(), f[..13].try_into().unwrap())
+    );
+    dot += a[13] * f[13];
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<14>(a[..14].try_into().unwrap(), f[..14].try_into().unwrap())
+    );
+    dot += a[14] * f[14];
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<15>(a[..15].try_into().unwrap(), f[..15].try_into().unwrap())
+    );
+    dot += a[15] * f[15];
+    assert_eq!(
+        dot,
+        PF::mixed_dot_product::<16>(a[..16].try_into().unwrap(), f[..16].try_into().unwrap())
+    );
+
+    let dot_64: PF = a
+        .iter()
+        .zip(f.iter())
+        .fold(PF::ZERO, |acc, (&ai, &fi)| acc + (ai * fi));
+    assert_eq!(dot_64, PF::mixed_dot_product::<64>(&a, &f));
+}
+
 pub fn test_vs_scalar<PF>(special_vals: PF)
 where
     PF: PackedField + Eq,
@@ -296,6 +397,51 @@ where
     );
 }
 
+/// Test dot products with maximum field values (P-1) to catch overflow bugs.
+///
+/// This verifies that SIMD dot product implementations handle the edge case where
+/// `N*(P-1)^2` can overflow `u64` (which happens for N >= 5 with 31-bit primes).
+pub fn test_dot_product_boundary<PF>()
+where
+    PF: PackedField + Eq,
+{
+    let big = PF::from(PF::Scalar::NEG_ONE);
+    let scalar_big = PF::Scalar::NEG_ONE;
+
+    // Test dot_product for N = 1..=16 with all-maximum inputs.
+    macro_rules! test_dot_n {
+        ($n:literal) => {
+            let packed_result = PF::dot_product::<$n>(&[big; $n], &[big; $n]);
+            let scalar_result = PF::Scalar::dot_product::<$n>(&[scalar_big; $n], &[scalar_big; $n]);
+            for lane in 0..PF::WIDTH {
+                assert_eq!(
+                    packed_result.as_slice()[lane],
+                    scalar_result,
+                    "dot_product::<{}> overflow mismatch at lane {}",
+                    $n,
+                    lane,
+                );
+            }
+        };
+    }
+    test_dot_n!(1);
+    test_dot_n!(2);
+    test_dot_n!(3);
+    test_dot_n!(4);
+    test_dot_n!(5);
+    test_dot_n!(6);
+    test_dot_n!(7);
+    test_dot_n!(8);
+    test_dot_n!(9);
+    test_dot_n!(10);
+    test_dot_n!(11);
+    test_dot_n!(12);
+    test_dot_n!(13);
+    test_dot_n!(14);
+    test_dot_n!(15);
+    test_dot_n!(16);
+}
+
 #[macro_export]
 macro_rules! test_packed_field {
     ($packedfield:ty, $zeros:expr, $ones:expr, $specials:expr) => {
@@ -313,12 +459,20 @@ macro_rules! test_packed_field {
                 $crate::test_packed_linear_combination::<$packedfield>();
             }
             #[test]
+            fn test_packed_mixed_dot_product() {
+                $crate::test_packed_mixed_dot_product::<$packedfield>();
+            }
+            #[test]
             fn test_vs_scalar() {
                 $crate::test_vs_scalar::<$packedfield>($specials);
             }
             #[test]
             fn test_multiplicative_inverse() {
                 $crate::test_multiplicative_inverse::<$packedfield>();
+            }
+            #[test]
+            fn test_dot_product_boundary() {
+                $crate::test_dot_product_boundary::<$packedfield>();
             }
         }
     };

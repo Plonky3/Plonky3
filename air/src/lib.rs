@@ -6,7 +6,6 @@ extern crate alloc;
 
 mod air;
 mod check_constraints;
-pub mod lookup;
 pub mod symbolic;
 pub mod utils;
 mod virtual_column;

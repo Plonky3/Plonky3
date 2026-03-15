@@ -1,6 +1,6 @@
 use core::borrow::Borrow;
 
-use p3_air::{Air, AirBuilder, BaseAir};
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
@@ -8,7 +8,6 @@ use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeField64};
 use p3_fri::{HidingFriPcs, TwoAdicFriPcs, create_test_fri_params};
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -58,15 +57,13 @@ where
 {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let preprocessed = builder.preprocessed().expect("Preprocessed is empty?");
+        let local: &MulFibPairRow<AB::Var> = main.current_slice().borrow();
+        let next: &MulFibPairRow<AB::Var> = main.next_slice().borrow();
 
-        let local_slice = main.row_slice(0).expect("Matrix is empty?");
-        let next_slice = main.row_slice(1).expect("Matrix only has 1 row?");
-        let prep_slice = preprocessed.row_slice(0).expect("Preprocessed is empty?");
-
-        let local: &MulFibPairRow<AB::Var> = (*local_slice).borrow();
-        let next: &MulFibPairRow<AB::Var> = (*next_slice).borrow();
-        let prep: &PreprocessedRow<AB::Var> = (*prep_slice).borrow();
+        // Copy the preprocessed values we need so the immutable borrow on
+        // `builder` is released before the mutable `when_transition` call.
+        let prep: &PreprocessedRow<AB::Var> = builder.preprocessed().current_slice().borrow();
+        let (prod_coeff, sum_coeff) = (prep.prod_coeff, prep.sum_coeff);
 
         let mut when_transition = builder.when_transition();
 
@@ -74,8 +71,8 @@ where
         when_transition.assert_eq(local.b, next.a);
 
         // b' <- prod_coeff * a * b + sum_coeff * (a + b)
-        let prod_term = prep.prod_coeff * local.a * local.b;
-        let sum_term = prep.sum_coeff * (local.a + local.b);
+        let prod_term = prod_coeff * local.a * local.b;
+        let sum_term = sum_coeff * (local.a + local.b);
         when_transition.assert_eq(prod_term + sum_term, next.b);
     }
 }
@@ -173,13 +170,14 @@ type Perm = Poseidon2BabyBear<16>;
 type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 type ValMmcs =
-    MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
+    MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 2, 8>;
 type HidingValMmcs = MerkleTreeHidingMmcs<
     <Val as Field>::Packing,
     <Val as Field>::Packing,
     MyHash,
     MyCompress,
     SmallRng,
+    2,
     8,
     4,
 >;

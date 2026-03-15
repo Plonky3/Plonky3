@@ -92,7 +92,7 @@ jobs:
           cargo build --verbose --target ${{ env.target }} -p p3-mersenne-31
           cargo build --verbose --target ${{ env.target }} -p p3-monolith
           cargo build --verbose --target ${{ env.target }} -p p3-monty-31
-          cargo build --verbose --target ${{ env.target }} -p p3-poseidon
+          cargo build --verbose --target ${{ env.target }} -p p3-poseidon1
           cargo build --verbose --target ${{ env.target }} -p p3-poseidon2
           cargo build --verbose --target ${{ env.target }} -p p3-poseidon2-air
           cargo build --verbose --target ${{ env.target }} -p p3-rescue

@@ -49,6 +49,7 @@ fn main() -> Result<(), impl Debug> {
         [u64; p3_keccak::VECTOR_LEN],
         FieldHash,
         MyCompress,
+        2,
         4,
     >;
     let val_mmcs = ValMmcs::new(field_hash, compress, 3);
