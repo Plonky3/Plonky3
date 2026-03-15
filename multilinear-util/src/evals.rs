@@ -218,6 +218,12 @@ impl<Packed: Copy + Send + Sync> EvaluationsList<Packed> {
         EF: ExtensionField<F, ExtensionPacking = Packed>,
         Packed: PackedFieldExtension<F, EF>,
     {
+        /// Computes eq(point, X) * scale for all X in {0,1}^n, writing results into `out`.
+        ///
+        /// # Safety invariant
+        ///
+        /// This function initializes **every** entry of `out`.
+        /// Callers rely on this guarantee when passing uninitialized memory.
         fn eq_serial<F: Field, A: Algebra<F> + Copy>(out: &mut [A], point: &[F], scale: A) {
             assert_eq!(out.len(), 1 << point.len());
             out[0] = scale;
@@ -332,7 +338,14 @@ where
         if n == 0 {
             return Self(vec![scale]);
         }
-        let mut evals = F::zero_vec(1 << n);
+        let len: usize = 1_usize
+            .checked_shl(n as u32)
+            .expect("Point length too large: 2^n overflows usize.");
+        debug_assert!(
+            len.is_power_of_two(),
+            "Evaluation list length must be a power of two."
+        );
+        let mut evals = F::zero_vec(len);
         eval_eq_batch::<_, _, false>(RowMajorMatrixView::new_col(point), &mut evals, &[scale]);
         Self(evals)
     }
@@ -396,7 +409,7 @@ where
     ///     p'(X_2, ..., X_n) = (p(1, X_2, ..., X_n) - p(0, X_2, ..., X_n)) \cdot r + p(0, X_2, ..., X_n)
     /// ```
     #[inline]
-    #[instrument(skip_all)]
+    #[instrument(skip_all, level = "debug")]
     pub fn compress_ext<EF: ExtensionField<F>>(&self, r: EF) -> EvaluationsList<EF> {
         assert_ne!(self.num_variables(), 0);
         let num_evals = self.num_evals();
