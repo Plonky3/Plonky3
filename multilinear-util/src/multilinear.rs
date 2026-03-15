@@ -144,7 +144,7 @@ where
         Self(self.0.iter().rev().copied().collect())
     }
 
-    /// Helper to extend a `MultilinearPoint` by creating a new one.
+    /// Helper to extend a `MultilinearPoint` in-place.
     #[cfg(test)]
     pub fn extend(&mut self, other: &Self) {
         self.0.extend_from_slice(&other.0);
