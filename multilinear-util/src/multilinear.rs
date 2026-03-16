@@ -144,8 +144,7 @@ where
         Self(self.0.iter().rev().copied().collect())
     }
 
-    /// Helper to extend a `MultilinearPoint` in-place.
-    #[cfg(test)]
+    /// Extends this `MultilinearPoint` in-place by appending the coordinates of `other`.
     pub fn extend(&mut self, other: &Self) {
         self.0.extend_from_slice(&other.0);
     }
@@ -172,7 +171,7 @@ where
     }
 
     /// Given a position splits the point into two sub-points.
-    pub(crate) fn split_at(&self, pos: usize) -> (Self, Self) {
+    pub fn split_at(&self, pos: usize) -> (Self, Self) {
         let (left, right) = self.0.split_at(pos);
         (Self::new(left.to_vec()), Self::new(right.to_vec()))
     }

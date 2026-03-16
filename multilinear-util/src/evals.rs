@@ -212,7 +212,7 @@ impl<Packed: Copy + Send + Sync> EvaluationsList<Packed> {
     /// ## Returns
     /// An packed `EvaluationsList` containing `value * eq(point, X)` for all `X` in `{0,1}^n`.
     #[inline]
-    pub(crate) fn new_packed_from_point<F, EF>(point: &[EF], scale: EF) -> Self
+    pub fn new_packed_from_point<F, EF>(point: &[EF], scale: EF) -> Self
     where
         F: Field,
         EF: ExtensionField<F, ExtensionPacking = Packed>,
