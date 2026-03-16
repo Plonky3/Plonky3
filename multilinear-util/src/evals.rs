@@ -483,6 +483,33 @@ where
             });
         EvaluationsList(out)
     }
+
+    /// Evaluates the polynomial as a constant.
+    ///
+    /// This is only valid for constant polynomials (i.e., when `num_variables` is 0).
+    ///
+    /// Returns `None` in other cases.
+    #[must_use]
+    #[inline]
+    pub fn as_constant(&self) -> Option<F> {
+        (self.num_evals() == 1).then_some(self.0[0])
+    }
+
+    /// Folds the polynomial by substituting the last `k` variables with the given point.
+    pub fn compress_multi<EF: ExtensionField<F>>(&self, point: &[EF]) -> EvaluationsList<EF> {
+        assert!(point.len() <= self.num_variables());
+        let eq = EvaluationsList::new_from_point(point, EF::ONE);
+        let mut out = EF::zero_vec(1 << (self.num_variables() - point.len()));
+        self.0
+            .chunks(self.num_evals() / eq.num_evals())
+            .zip_eq(eq.iter())
+            .for_each(|(chunk, &r)| {
+                out.par_iter_mut()
+                    .zip_eq(chunk.par_iter())
+                    .for_each(|(acc, &poly)| *acc += r * poly);
+            });
+        EvaluationsList(out)
+    }
 }
 
 impl<A: Copy + Send + Sync + PrimeCharacteristicRing> EvaluationsList<A> {
@@ -561,38 +588,6 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> EvaluationsList<A> {
                 |(a0, a2), (b0, b2)| (a0 + b0, a2 + b2),
                 |(a0, a2), (b0, b2)| (a0 + b0, a2 + b2),
             )
-    }
-}
-
-impl<F> EvaluationsList<F>
-where
-    F: Field,
-{
-    /// Evaluates the polynomial as a constant.
-    ///
-    /// This is only valid for constant polynomials (i.e., when `num_variables` is 0).
-    ///
-    /// Returns `None` in other cases.
-    #[must_use]
-    #[inline]
-    pub fn as_constant(&self) -> Option<F> {
-        (self.num_evals() == 1).then_some(self.0[0])
-    }
-
-    /// Folds the polynomial by substituting the last `k` variables with the given point.
-    pub fn compress_multi<EF: ExtensionField<F>>(&self, point: &[EF]) -> EvaluationsList<EF> {
-        assert!(point.len() <= self.num_variables());
-        let eq = EvaluationsList::new_from_point(point, EF::ONE);
-        let mut out = EF::zero_vec(1 << (self.num_variables() - point.len()));
-        self.0
-            .chunks(self.num_evals() / eq.num_evals())
-            .zip_eq(eq.iter())
-            .for_each(|(chunk, &r)| {
-                out.par_iter_mut()
-                    .zip_eq(chunk.par_iter())
-                    .for_each(|(acc, &poly)| *acc += r * poly);
-            });
-        EvaluationsList(out)
     }
 }
 
