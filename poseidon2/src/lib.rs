@@ -51,7 +51,17 @@ where
         external_constants: ExternalLayerConstants<F, WIDTH>,
         internal_constants: Vec<F>,
     ) -> Self {
-        assert!(SUPPORTED_WIDTHS.contains(&WIDTH));
+        const {
+            let mut i = 0;
+            let mut found = false;
+            while i < SUPPORTED_WIDTHS.len() {
+                if SUPPORTED_WIDTHS[i] == WIDTH {
+                    found = true;
+                }
+                i += 1;
+            }
+            assert!(found, "WIDTH must be one of the supported widths");
+        }
         let external_layer = ExternalPerm::new_from_constants(external_constants);
         let internal_layer = InternalPerm::new_from_constants(internal_constants);
 

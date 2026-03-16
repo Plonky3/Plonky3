@@ -277,7 +277,9 @@ impl PrimeCharacteristicRing for Goldilocks {
         // 1. It is a multiple of P.
         // 2. It is greater than the maximum possible value of the sum of the products of two u64s.
         const OFFSET: u128 = ((P as u128) << 64) - (P as u128) + ((P as u128) << 32);
-        assert!((N as u32) <= (1 << 31));
+        const {
+            assert!((N as u32) <= (1 << 31));
+        }
         match N {
             0 => Self::ZERO,
             1 => lhs[0] * rhs[0],
