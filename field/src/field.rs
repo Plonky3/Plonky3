@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display};
 use core::hash::Hash;
-use core::iter::{Product, Sum};
+use core::iter::{Product, Sum, zip};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, slice};
 
@@ -658,6 +658,68 @@ pub trait Algebra<F>:
         let products: [Self; N] = core::array::from_fn(|i| a[i].clone() * f[i].clone());
         Self::sum_array::<N>(&products)
     }
+
+    /// Optimal chunk size for [`batched_linear_combination`](Self::batched_linear_combination).
+    ///
+    /// Override in implementations where a different chunk size is faster.
+    /// Must be one of 1, 2, 4, 8, 16, 32, or 64; other values fall back to 8.
+    const BATCHED_LC_CHUNK: usize = 8;
+
+    /// Runtime-length linear combination: `Σ values[i] * coeffs[i]`.
+    ///
+    /// Like [`mixed_dot_product`](Self::mixed_dot_product) but for slices whose
+    /// length is not known at compile time. Processes in chunks of
+    /// [`BATCHED_LC_CHUNK`](Self::BATCHED_LC_CHUNK), delegating each chunk to
+    /// `mixed_dot_product` to leverage SIMD-specialized overrides.
+    #[must_use]
+    #[inline]
+    fn batched_linear_combination(values: &[Self], coeffs: &[F]) -> Self
+    where
+        F: Clone,
+    {
+        match Self::BATCHED_LC_CHUNK {
+            1 => chunked_linear_combination::<1, Self, F>(values, coeffs),
+            2 => chunked_linear_combination::<2, Self, F>(values, coeffs),
+            4 => chunked_linear_combination::<4, Self, F>(values, coeffs),
+            8 => chunked_linear_combination::<8, Self, F>(values, coeffs),
+            16 => chunked_linear_combination::<16, Self, F>(values, coeffs),
+            32 => chunked_linear_combination::<32, Self, F>(values, coeffs),
+            64 => chunked_linear_combination::<64, Self, F>(values, coeffs),
+            _ => chunked_linear_combination::<8, Self, F>(values, coeffs),
+        }
+    }
+}
+
+/// Linear combination over runtime-length slices, processing in chunks of `CHUNK`.
+///
+/// Computes `Σ values[i] * coeffs[i]` by batching into fixed-size chunks and
+/// delegating each to [`Algebra::mixed_dot_product`], which SIMD implementations
+/// override with fused multiply-accumulate intrinsics.
+///
+/// This is the implementation backing [`Algebra::batched_linear_combination`].
+/// Use it directly when overriding that method with a different chunk size.
+#[must_use]
+#[inline]
+pub fn chunked_linear_combination<const CHUNK: usize, A: Algebra<F> + Clone, F: Clone>(
+    values: &[A],
+    coeffs: &[F],
+) -> A {
+    debug_assert_eq!(values.len(), coeffs.len());
+
+    let (val_chunks, val_rem) = values.as_chunks::<CHUNK>();
+    let (coeff_chunks, coeff_rem) = coeffs.as_chunks::<CHUNK>();
+
+    assert_eq!(val_chunks.len(), coeff_chunks.len());
+    let mut acc = A::ZERO;
+    for (vc, cc) in zip(val_chunks, coeff_chunks) {
+        acc += A::mixed_dot_product::<CHUNK>(vc, cc);
+    }
+
+    assert_eq!(val_rem.len(), coeff_rem.len());
+    for (v, c) in zip(val_rem, coeff_rem) {
+        acc += v.clone() * c.clone();
+    }
+    acc
 }
 
 // Every ring is an algebra over itself.

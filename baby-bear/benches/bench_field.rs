@@ -2,9 +2,9 @@ use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_field_testing::bench_func::{
-    benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_iter_sum,
-    benchmark_mul_latency, benchmark_mul_throughput, benchmark_sub_latency,
-    benchmark_sub_throughput,
+    benchmark_add_latency, benchmark_add_throughput, benchmark_chunked_linear_combination,
+    benchmark_inv, benchmark_iter_sum, benchmark_mul_latency, benchmark_mul_throughput,
+    benchmark_sub_latency, benchmark_sub_throughput,
 };
 use p3_field_testing::{benchmark_dot_array, benchmark_exp_const};
 use p3_util::pretty_name;
@@ -42,6 +42,8 @@ fn bench_field(c: &mut Criterion) {
     benchmark_mul_latency::<F, L_REPS>(c, name);
     benchmark_mul_throughput::<F, REPS>(c, name);
 
+    benchmark_chunked_linear_combination::<F, F, 100>(c, name);
+
     let mut rng = SmallRng::seed_from_u64(1);
     c.bench_function("7th_root", |b| {
         b.iter_batched(
@@ -70,6 +72,9 @@ fn bench_packedfield(c: &mut Criterion) {
     benchmark_exp_const::<<F as Field>::Packing, 3, EXP_REPS>(c, &name);
     benchmark_exp_const::<<F as Field>::Packing, 5, EXP_REPS>(c, &name);
     benchmark_exp_const::<<F as Field>::Packing, 7, EXP_REPS>(c, &name);
+
+    type PF = <F as Field>::Packing;
+    benchmark_chunked_linear_combination::<F, PF, 100>(c, &name);
 }
 
 criterion_group!(baby_bear_arithmetic, bench_field, bench_packedfield);

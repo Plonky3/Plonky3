@@ -295,6 +295,11 @@ impl_sum_prod_base_field!(
 );
 
 impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
+    // TODO: Tune BATCHED_LC_CHUNK. Run on an AVX-512 machine:
+    //   RUSTFLAGS="-Ctarget-cpu=native" cargo bench --bench bench_field -p p3-baby-bear -- "batched_lc"
+    // and pick the chunk size with the lowest time.
+    // const BATCHED_LC_CHUNK: usize = ;
+
     #[inline(always)]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[MontyField31<FP>; N]) -> Self {
         general_dot_product::<_, _, _, N>(a, f)
