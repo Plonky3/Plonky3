@@ -1,3 +1,4 @@
+use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -8,7 +9,7 @@ use p3_matrix::stack::ViewPair;
 
 use crate::{
     Air, AirBuilder, AirBuilderWithContext, ExtensionBuilder, Name, NamedAirBuilder,
-    NamedExtensionBuilder, PermutationAirBuilder, RowWindow,
+    NamedExtensionBuilder, NamespaceExt, PermutationAirBuilder, RowWindow,
 };
 
 /// A single constraint violation captured during debug evaluation.
@@ -345,6 +346,50 @@ impl<F: Field, EF: ExtensionField<F>> NamedAirBuilder for DebugConstraintBuilder
         }
         self.constraint_index += 1;
     }
+
+    fn assert_zeros_named<const M: usize, I, Ns>(&mut self, array: [I; M], name: Ns)
+    where
+        I: Into<Self::Expr>,
+        Ns: crate::Namespace,
+    {
+        for (i, elem) in array.into_iter().enumerate() {
+            self.assert_zero_named(elem, name.name(|| format!("[{i}]")));
+        }
+    }
+
+    fn assert_one_named<I, N>(&mut self, x: I, name: N)
+    where
+        I: Into<Self::Expr>,
+        N: Name,
+    {
+        self.assert_zero_named(x.into() - Self::Expr::ONE, name);
+    }
+
+    fn assert_eq_named<I1, I2, N>(&mut self, x: I1, y: I2, name: N)
+    where
+        I1: Into<Self::Expr>,
+        I2: Into<Self::Expr>,
+        N: Name,
+    {
+        self.assert_zero_named(x.into() - y.into(), name);
+    }
+
+    fn assert_bool_named<I, N>(&mut self, x: I, name: N)
+    where
+        I: Into<Self::Expr>,
+        N: Name,
+    {
+        self.assert_zero_named(x.into().bool_check(), name);
+    }
+
+    fn assert_bools_named<const M: usize, I, Ns>(&mut self, array: [I; M], name: Ns)
+    where
+        I: Into<Self::Expr>,
+        Ns: crate::Namespace,
+    {
+        let zero_array = array.map(|x| x.into().bool_check());
+        self.assert_zeros_named(zero_array, name);
+    }
 }
 
 impl<F: Field, EF: ExtensionField<F>> NamedExtensionBuilder for DebugConstraintBuilder<'_, F, EF> {
@@ -366,6 +411,23 @@ impl<F: Field, EF: ExtensionField<F>> NamedExtensionBuilder for DebugConstraintB
             });
         }
         self.constraint_index += 1;
+    }
+
+    fn assert_eq_ext_named<I1, I2, N>(&mut self, x: I1, y: I2, name: N)
+    where
+        I1: Into<Self::ExprEF>,
+        I2: Into<Self::ExprEF>,
+        N: Name,
+    {
+        self.assert_zero_ext_named(x.into() - y.into(), name);
+    }
+
+    fn assert_one_ext_named<I, N>(&mut self, x: I, name: N)
+    where
+        I: Into<Self::ExprEF>,
+        N: Name,
+    {
+        self.assert_zero_ext_named(x.into() - Self::ExprEF::ONE, name);
     }
 }
 

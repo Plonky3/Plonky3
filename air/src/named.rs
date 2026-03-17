@@ -135,50 +135,32 @@ pub trait NamedAirBuilder: AirBuilder {
     fn assert_zeros_named<const M: usize, I, Ns>(&mut self, array: [I; M], name: Ns)
     where
         I: Into<Self::Expr>,
-        Ns: Namespace,
-    {
-        for (i, elem) in array.into_iter().enumerate() {
-            self.assert_zero_named(elem, name.name(|| format!("[{i}]")));
-        }
-    }
+        Ns: Namespace;
 
     /// Assert one with a label.
     fn assert_one_named<I, N>(&mut self, x: I, name: N)
     where
         I: Into<Self::Expr>,
-        N: Name,
-    {
-        self.assert_zero_named(x.into() - Self::Expr::ONE, name);
-    }
+        N: Name;
 
     /// Assert equality with a label.
     fn assert_eq_named<I1, I2, N>(&mut self, x: I1, y: I2, name: N)
     where
         I1: Into<Self::Expr>,
         I2: Into<Self::Expr>,
-        N: Name,
-    {
-        self.assert_zero_named(x.into() - y.into(), name);
-    }
+        N: Name;
 
     /// Assert boolean with a label.
     fn assert_bool_named<I, N>(&mut self, x: I, name: N)
     where
         I: Into<Self::Expr>,
-        N: Name,
-    {
-        self.assert_zero_named(x.into().bool_check(), name);
-    }
+        N: Name;
 
     /// Assert all elements are boolean, with a label.
     fn assert_bools_named<const M: usize, I, Ns>(&mut self, array: [I; M], name: Ns)
     where
         I: Into<Self::Expr>,
-        Ns: Namespace,
-    {
-        let zero_array = array.map(|x| x.into().bool_check());
-        self.assert_zeros_named(zero_array, name);
-    }
+        Ns: Namespace;
 }
 
 /// Marker for builders that discard constraint labels.
@@ -250,6 +232,60 @@ impl<AB: NamedAirBuilder> NamedAirBuilder for FilteredAirBuilder<'_, AB> {
         self.inner
             .assert_zero_named(self.condition() * x.into(), name);
     }
+
+    fn assert_zeros_named<const M: usize, I, Ns>(&mut self, array: [I; M], name: Ns)
+    where
+        I: Into<Self::Expr>,
+        Ns: Namespace,
+    {
+        for (i, elem) in array.into_iter().enumerate() {
+            self.inner.assert_zero_named(
+                self.condition() * elem.into(),
+                name.name(|| format!("[{i}]")),
+            );
+        }
+    }
+
+    fn assert_one_named<I, N>(&mut self, x: I, name: N)
+    where
+        I: Into<Self::Expr>,
+        N: Name,
+    {
+        self.inner
+            .assert_zero_named(self.condition() * (x.into() - Self::Expr::ONE), name);
+    }
+
+    fn assert_eq_named<I1, I2, N>(&mut self, x: I1, y: I2, name: N)
+    where
+        I1: Into<Self::Expr>,
+        I2: Into<Self::Expr>,
+        N: Name,
+    {
+        self.inner
+            .assert_zero_named(self.condition() * (x.into() - y.into()), name);
+    }
+
+    fn assert_bool_named<I, N>(&mut self, x: I, name: N)
+    where
+        I: Into<Self::Expr>,
+        N: Name,
+    {
+        self.inner
+            .assert_zero_named(self.condition() * x.into().bool_check(), name);
+    }
+
+    fn assert_bools_named<const M: usize, I, Ns>(&mut self, array: [I; M], name: Ns)
+    where
+        I: Into<Self::Expr>,
+        Ns: Namespace,
+    {
+        for (i, elem) in array.into_iter().enumerate() {
+            self.inner.assert_zero_named(
+                self.condition() * elem.into().bool_check(),
+                name.name(|| format!("[{i}]")),
+            );
+        }
+    }
 }
 
 /// Labeled variants of extension-field assertions.
@@ -257,7 +293,7 @@ impl<AB: NamedAirBuilder> NamedAirBuilder for FilteredAirBuilder<'_, AB> {
 /// Same two-tier design as [`NamedAirBuilder`] / [`PassthroughNamedAirBuilder`].
 ///
 /// Debug builders implement this directly.
-/// Production builders implement [`PassthroughNamedExtensionBuilder`].
+/// Production builders implement [`PassthroughNamedAirBuilder`].
 pub trait NamedExtensionBuilder: ExtensionBuilder + NamedAirBuilder {
     /// Assert zero over the extension field, with a label.
     fn assert_zero_ext_named<I, N>(&mut self, x: I, name: N)
@@ -270,28 +306,16 @@ pub trait NamedExtensionBuilder: ExtensionBuilder + NamedAirBuilder {
     where
         I1: Into<Self::ExprEF>,
         I2: Into<Self::ExprEF>,
-        N: Name,
-    {
-        self.assert_zero_ext_named(x.into() - y.into(), name);
-    }
+        N: Name;
 
     /// Assert one over the extension field, with a label.
     fn assert_one_ext_named<I, N>(&mut self, x: I, name: N)
     where
         I: Into<Self::ExprEF>,
-        N: Name,
-    {
-        self.assert_zero_ext_named(x.into() - Self::ExprEF::ONE, name);
-    }
+        N: Name;
 }
 
-/// Marker for builders that discard extension-field constraint labels.
-///
-/// Provides a blanket implementation of [`NamedExtensionBuilder`] where
-/// every method delegates directly to its unlabeled counterpart.
-pub trait PassthroughNamedExtensionBuilder: ExtensionBuilder + PassthroughNamedAirBuilder {}
-
-impl<T: PassthroughNamedExtensionBuilder> NamedExtensionBuilder for T {
+impl<T: PassthroughNamedAirBuilder + ExtensionBuilder> NamedExtensionBuilder for T {
     fn assert_zero_ext_named<I, N>(&mut self, x: I, _name: N)
     where
         I: Into<Self::ExprEF>,
@@ -327,5 +351,26 @@ impl<AB: NamedExtensionBuilder> NamedExtensionBuilder for FilteredAirBuilder<'_,
         let ext_x: Self::ExprEF = x.into();
         let condition: AB::Expr = self.condition();
         self.inner.assert_zero_ext_named(ext_x * condition, name);
+    }
+
+    fn assert_eq_ext_named<I1, I2, N>(&mut self, x: I1, y: I2, name: N)
+    where
+        I1: Into<Self::ExprEF>,
+        I2: Into<Self::ExprEF>,
+        N: Name,
+    {
+        let diff: Self::ExprEF = x.into() - y.into();
+        let condition: AB::Expr = self.condition();
+        self.inner.assert_zero_ext_named(diff * condition, name);
+    }
+
+    fn assert_one_ext_named<I, N>(&mut self, x: I, name: N)
+    where
+        I: Into<Self::ExprEF>,
+        N: Name,
+    {
+        let diff: Self::ExprEF = x.into() - Self::ExprEF::ONE;
+        let condition: AB::Expr = self.condition();
+        self.inner.assert_zero_ext_named(diff * condition, name);
     }
 }
