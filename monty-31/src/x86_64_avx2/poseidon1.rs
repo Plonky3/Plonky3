@@ -162,15 +162,16 @@ where
             }
 
             // PATH B (can overlap with S-box): partial dot product on s_hi.
-            let s_hi: &[PackedMontyField31AVX2<FP>; 15] = unsafe { transmute(&split.s_hi) };
-            let first_row = &self.packed_sparse_first_row[r];
-            let first_row_hi: &[PackedMontyField31AVX2<FP>; 15] =
-                &first_row[1..].try_into().unwrap();
-            let partial_dot = PackedMontyField31AVX2::<FP>::dot_product(s_hi, first_row_hi);
+            let s_hi: [PackedMontyField31AVX2<FP>; 15] = unsafe { transmute(split.s_hi) };
+            let first_row =
+                InternalLayer16::from_packed_field_array(self.packed_sparse_first_row[r]);
+            let first_row_hi: [PackedMontyField31AVX2<FP>; 15] =
+                unsafe { transmute(first_row.s_hi) };
+            let partial_dot = PackedMontyField31AVX2::<FP>::dot_product(&s_hi, &first_row_hi);
 
             // SERIAL: complete s0 and rank-1 update.
             let s0_val = split.s0;
-            split.s0 = s0_val * first_row[0] + partial_dot;
+            split.s0 = s0_val * first_row.s0 + partial_dot;
 
             let v = &self.packed_v[r];
             let s_hi_mut: &mut [PackedMontyField31AVX2<FP>; 15] =
@@ -221,15 +222,16 @@ where
             }
 
             // PATH B (can overlap with S-box): partial dot product on s_hi.
-            let s_hi: &[PackedMontyField31AVX2<FP>; 23] = unsafe { transmute(&split.s_hi) };
-            let first_row = &self.packed_sparse_first_row[r];
-            let first_row_hi: &[PackedMontyField31AVX2<FP>; 23] =
-                &first_row[1..].try_into().unwrap();
-            let partial_dot = PackedMontyField31AVX2::<FP>::dot_product(s_hi, first_row_hi);
+            let s_hi: [PackedMontyField31AVX2<FP>; 23] = unsafe { transmute(split.s_hi) };
+            let first_row =
+                InternalLayer24::from_packed_field_array(self.packed_sparse_first_row[r]);
+            let first_row_hi: [PackedMontyField31AVX2<FP>; 23] =
+                unsafe { transmute(first_row.s_hi) };
+            let partial_dot = PackedMontyField31AVX2::<FP>::dot_product(&s_hi, &first_row_hi);
 
             // SERIAL: complete s0 and rank-1 update.
             let s0_val = split.s0;
-            split.s0 = s0_val * first_row[0] + partial_dot;
+            split.s0 = s0_val * first_row.s0 + partial_dot;
 
             let v = &self.packed_v[r];
             let s_hi_mut: &mut [PackedMontyField31AVX2<FP>; 23] =
