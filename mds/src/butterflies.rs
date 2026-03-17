@@ -9,9 +9,11 @@ pub(crate) fn dit_butterfly<F: Field, A: Algebra<F>, const N: usize>(
     twiddle: F,
 ) {
     let val_1 = values[idx_1].clone();
-    let val_2 = values[idx_2].clone() * twiddle;
-    values[idx_1] = val_1.clone() + val_2.clone();
-    values[idx_2] = val_1 - val_2;
+    let val_2 = values[idx_2].clone();
+    let t = val_2.clone() * twiddle;
+    
+    values[idx_1] = val_1.clone() + t.clone();
+    values[idx_2] = val_1 - t;
 }
 
 /// DIF butterfly.
