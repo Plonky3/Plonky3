@@ -1,6 +1,5 @@
 //! Labeled constraint infrastructure.
 
-use alloc::format;
 use core::fmt;
 use core::fmt::Display;
 
@@ -238,12 +237,9 @@ impl<AB: NamedAirBuilder> NamedAirBuilder for FilteredAirBuilder<'_, AB> {
         I: Into<Self::Expr>,
         Ns: Namespace,
     {
-        for (i, elem) in array.into_iter().enumerate() {
-            self.inner.assert_zero_named(
-                self.condition() * elem.into(),
-                name.name(|| format!("[{i}]")),
-            );
-        }
+        let condition = self.condition();
+        self.inner
+            .assert_zeros_named(array.map(|elem| condition.clone() * elem.into()), name);
     }
 
     fn assert_one_named<I, N>(&mut self, x: I, name: N)
@@ -279,12 +275,7 @@ impl<AB: NamedAirBuilder> NamedAirBuilder for FilteredAirBuilder<'_, AB> {
         I: Into<Self::Expr>,
         Ns: Namespace,
     {
-        for (i, elem) in array.into_iter().enumerate() {
-            self.inner.assert_zero_named(
-                self.condition() * elem.into().bool_check(),
-                name.name(|| format!("[{i}]")),
-            );
-        }
+        self.assert_zeros_named(array.map(|elem| elem.into().bool_check()), name);
     }
 }
 
