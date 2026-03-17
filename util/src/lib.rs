@@ -47,6 +47,50 @@ pub const fn log2_strict_usize(n: usize) -> usize {
     res as usize
 }
 
+/// Precomputed table of all powers of 3 that fit in a `u64`.
+///
+/// The maximum power is `3^40 = 12_157_665_459_056_928_801`.
+///
+/// We use `u64` instead of `usize` so the table compiles safely on 32-bit targets,
+/// where `3^40` would overflow a 32-bit `usize`.
+const POWERS_OF_3: [u64; 41] = {
+    // Start with 3^0 = 1.
+    let mut table = [0u64; 41];
+    table[0] = 1;
+
+    // Fill iteratively: each entry is 3 times the previous one.
+    let mut i = 1;
+    while i < 41 {
+        table[i] = table[i - 1] * 3;
+        i += 1;
+    }
+    table
+};
+
+/// Maps a bit-position (i.e. `floor(log2(n))`) to the corresponding base-3 exponent.
+///
+/// Because `3^k` grows faster than `2^k`, every power of 3 has a unique highest set
+/// bit position. This lets us use `leading_zeros()` to jump straight to the answer
+/// in O(1) without any loop or binary search.
+///
+/// Entries that don't correspond to any power of 3 are unused (left as 0).
+const LOG2_TO_EXP: [u8; 64] = {
+    // Initialize every slot to 0.
+    let mut table = [0u8; 64];
+
+    // For each power of 3, record which log2 bucket it falls into.
+    let mut i = 0;
+    while i < 41 {
+        // Compute floor(log2(3^i)) via the highest set bit.
+        let log2 = (u64::BITS - 1 - POWERS_OF_3[i].leading_zeros()) as usize;
+
+        // Store the exponent i at the corresponding bit-position.
+        table[log2] = i as u8;
+        i += 1;
+    }
+    table
+};
+
 /// Computes the strict base-3 logarithm of `n`.
 ///
 /// Returns `k` such that `3^k == n`. Panics if `n` is not a power of 3.
@@ -67,38 +111,22 @@ pub const fn log2_strict_usize(n: usize) -> usize {
 /// - `n` is zero
 /// - `n` is not a power of 3
 #[must_use]
-pub fn log3_strict_usize(n: usize) -> usize {
+#[inline]
+pub const fn log3_strict_usize(n: usize) -> usize {
     // Zero has no logarithm - check explicitly for a clear error message.
-    assert_ne!(n, 0, "log3_strict_usize: input must be non-zero");
+    assert!(n != 0, "log3_strict_usize: input must be non-zero");
 
-    // Exponent counter: tracks how many times we've divided by 3.
-    let mut res = 0usize;
-
-    // Working value: we repeatedly divide by 3 until we reach 0.
-    let mut t = n;
-
-    // Main loop: divide by 3 and count iterations.
-    // This is the fast path - no validation inside the loop.
-    loop {
-        // Integer division by 3. When t < 3, this yields 0.
-        t /= 3;
-
-        // Exit when we've exhausted all factors of 3.
-        if t == 0 {
-            break;
-        }
-
-        // Increment the exponent for each successful division.
-        res += 1;
-    }
-
-    // Verify the result: 3^res must equal n.
+    // Instantly find the candidate exponent via the highest set bit.
     //
-    // This catches non-powers of 3 with a single O(log log n) check at the end.
-    assert_eq!(
-        3usize.pow(res as u32),
-        n,
-        "log3_strict_usize: {n} is not a power of 3"
+    // Because every power of 3 occupies a unique log2 bucket, this single
+    // lookup gives us the answer in O(1) with zero branches.
+    let log2 = (usize::BITS - 1 - n.leading_zeros()) as usize;
+    let res = LOG2_TO_EXP[log2] as usize;
+
+    // Verify the result: catches non-powers of 3 in a single O(1) check.
+    assert!(
+        POWERS_OF_3[res] as usize == n,
+        "log3_strict_usize: input is not a power of 3"
     );
 
     res
