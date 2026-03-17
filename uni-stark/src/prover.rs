@@ -14,7 +14,7 @@ use p3_util::log2_strict_usize;
 use tracing::{debug_span, info_span, instrument};
 
 use crate::{
-    Commitments, Domain, OpenedValues, PackedVal, PreprocessedProverData, Proof,
+    Commitments, ConstraintBuf, Domain, OpenedValues, PackedVal, PreprocessedProverData, Proof,
     ProverConstraintFolder, StarkGenericConfig, Val, get_constraint_layout,
     get_log_num_quotient_chunks,
 };
@@ -430,7 +430,8 @@ where
     }
 
     let constraint_layout = get_constraint_layout(air, layout);
-    let (base_alpha_powers, ext_alpha_powers) = constraint_layout.decompose_alpha(alpha);
+    let (base_alpha_powers, ext_alpha_powers_flat) = constraint_layout.decompose_alpha(alpha);
+    let ext_alpha_powers = vec![ext_alpha_powers_flat];
 
     (0..quotient_size)
         .into_par_iter()
@@ -467,10 +468,8 @@ where
                 is_first_row,
                 is_last_row,
                 is_transition,
-                base_alpha_powers: &base_alpha_powers,
-                ext_alpha_powers: &ext_alpha_powers,
-                base_constraints: Vec::with_capacity(constraint_layout.base_indices.len()),
-                ext_constraints: Vec::with_capacity(constraint_layout.ext_indices.len()),
+                base: ConstraintBuf::new(&base_alpha_powers),
+                ext: ConstraintBuf::new(&ext_alpha_powers),
                 constraint_index: 0,
                 constraint_count: constraint_layout.total_constraints(),
             };
