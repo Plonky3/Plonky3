@@ -162,12 +162,12 @@ where
             }
 
             // PATH B (can overlap with S-box): partial dot product on s_hi.
-            let s_hi: &[PackedMontyField31AVX2<FP>; 15] = unsafe { transmute(&split.s_hi) };
-            let first_row: &InternalLayer16<FP> =
-                unsafe { transmute(&self.packed_sparse_first_row[r]) };
-            let first_row_hi: &[PackedMontyField31AVX2<FP>; 15] =
-                unsafe { transmute(&first_row.s_hi) };
-            let partial_dot = PackedMontyField31AVX2::<FP>::dot_product(s_hi, first_row_hi);
+            let s_hi: [PackedMontyField31AVX2<FP>; 15] = unsafe { transmute(split.s_hi) };
+            let first_row =
+                InternalLayer16::from_packed_field_array(self.packed_sparse_first_row[r]);
+            let first_row_hi: [PackedMontyField31AVX2<FP>; 15] =
+                unsafe { transmute(first_row.s_hi) };
+            let partial_dot = PackedMontyField31AVX2::<FP>::dot_product(&s_hi, &first_row_hi);
 
             // SERIAL: complete s0 and rank-1 update.
             let s0_val = split.s0;
@@ -222,12 +222,12 @@ where
             }
 
             // PATH B (can overlap with S-box): partial dot product on s_hi.
-            let s_hi: &[PackedMontyField31AVX2<FP>; 23] = unsafe { transmute(&split.s_hi) };
-            let first_row: &InternalLayer24<FP> =
-                unsafe { transmute(&self.packed_sparse_first_row[r]) };
-            let first_row_hi: &[PackedMontyField31AVX2<FP>; 23] =
-                unsafe { transmute(&first_row.s_hi) };
-            let partial_dot = PackedMontyField31AVX2::<FP>::dot_product(s_hi, first_row_hi);
+            let s_hi: [PackedMontyField31AVX2<FP>; 23] = unsafe { transmute(split.s_hi) };
+            let first_row =
+                InternalLayer24::from_packed_field_array(self.packed_sparse_first_row[r]);
+            let first_row_hi: [PackedMontyField31AVX2<FP>; 23] =
+                unsafe { transmute(first_row.s_hi) };
+            let partial_dot = PackedMontyField31AVX2::<FP>::dot_product(&s_hi, &first_row_hi);
 
             // SERIAL: complete s0 and rank-1 update.
             let s0_val = split.s0;
