@@ -567,6 +567,34 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
         // Otherwise we pad the matrix to a power of two height by filling with the supplied value.
         self.values.resize(self.width * target_height, fill);
     }
+
+    /// Pad the matrix height to at least a given minimum, rounded up to the next power of two.
+    ///
+    /// Appends rows filled with the provided fill value.
+    /// Useful in batch proving where multiple trace matrices must share a minimum height
+    /// while still satisfying the power-of-two requirement.
+    ///
+    /// # Logic
+    ///
+    /// - Round both the current height and the minimum up to the next power of two.
+    /// - Take the maximum of those two values as the target.
+    /// - Append fill rows until the target is reached.
+    ///
+    /// # Behavior
+    ///
+    /// - If the matrix already meets or exceeds the target, it is unchanged.
+    /// - If the minimum is 0, this reduces to padding to the next power of two.
+    /// - If the matrix is empty (height = 0), it is padded entirely with fill values.
+    pub fn pad_to_min_power_of_two_height(&mut self, min_height: usize, fill: T) {
+        // Compute the target as the larger of the two power-of-two ceilings.
+        let target_height = self
+            .height()
+            .next_power_of_two()
+            .max(min_height.next_power_of_two());
+
+        // Extend with fill values to reach the target height. No-op if already there.
+        self.values.resize(self.width * target_height, fill);
+    }
 }
 
 impl<T: Copy + Default + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
@@ -1023,6 +1051,75 @@ mod tests {
         // After padding: 1 row with 3 columns, all filled with 7.
         assert_eq!(matrix.height(), 1);
         assert_eq!(matrix.values, vec![7, 7, 7]);
+    }
+
+    #[test]
+    fn test_pad_to_min_power_of_two_height() {
+        // Test 1: min_height dominates (3 rows, min_height = 5 -> 8 rows).
+        //
+        // - Current height 3 rounds to 4.
+        // - min_height 5 rounds to 8.
+        // - Target is max(4, 8) = 8.
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
+        assert_eq!(matrix.height(), 3);
+        matrix.pad_to_min_power_of_two_height(5, 0);
+        assert_eq!(matrix.height(), 8);
+        assert_eq!(matrix.values[..6], [1, 2, 3, 4, 5, 6]);
+        assert!(matrix.values[6..].iter().all(|&v| v == 0));
+
+        // Test 2: Current height dominates (5 rows, min_height = 2 -> 8 rows).
+        //
+        // - Current height 5 rounds to 8.
+        // - min_height 2 rounds to 2.
+        // - Target is max(8, 2) = 8.
+        let mut matrix = RowMajorMatrix::new(vec![1; 10], 2);
+        assert_eq!(matrix.height(), 5);
+        matrix.pad_to_min_power_of_two_height(2, -1);
+        assert_eq!(matrix.height(), 8);
+        assert!(matrix.values[..10].iter().all(|&v| v == 1));
+        assert!(matrix.values[10..].iter().all(|&v| v == -1));
+
+        // Test 3: Already at target (4 rows, min_height = 3 -> 4 rows, unchanged).
+        //
+        // - Current height 4 is already a power of two.
+        // - min_height 3 rounds to 4.
+        // - Target is max(4, 4) = 4, no padding needed.
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6, 7, 8], 2);
+        assert_eq!(matrix.height(), 4);
+        matrix.pad_to_min_power_of_two_height(3, 99);
+        assert_eq!(matrix.height(), 4);
+        assert_eq!(matrix.values, vec![1, 2, 3, 4, 5, 6, 7, 8]);
+
+        // Test 4: min_height = 0 behaves like pad_to_power_of_two_height.
+        //
+        // - min_height 0 rounds to 1.
+        // - Current height 3 rounds to 4.
+        // - Target is max(4, 1) = 4.
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 2);
+        assert_eq!(matrix.height(), 3);
+        matrix.pad_to_min_power_of_two_height(0, 0);
+        assert_eq!(matrix.height(), 4);
+        assert_eq!(matrix.values, vec![1, 2, 3, 4, 5, 6, 0, 0]);
+
+        // Test 5: min_height is already a power of two (2 rows, min_height = 8 -> 8 rows).
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 3);
+        assert_eq!(matrix.height(), 2);
+        matrix.pad_to_min_power_of_two_height(8, 7);
+        assert_eq!(matrix.height(), 8);
+        assert_eq!(matrix.values[..6], [1, 2, 3, 4, 5, 6]);
+        assert!(matrix.values[6..].iter().all(|&v| v == 7));
+        assert_eq!(matrix.values.len(), 24); // 8 rows * 3 width
+    }
+
+    #[test]
+    fn test_pad_to_min_power_of_two_height_empty_matrix() {
+        // Empty matrix (0 rows) with min_height = 5 should pad to 8 rows.
+        let mut matrix: RowMajorMatrix<i32> = RowMajorMatrix::new(vec![], 3);
+        assert_eq!(matrix.height(), 0);
+        matrix.pad_to_min_power_of_two_height(5, 7);
+        assert_eq!(matrix.height(), 8);
+        assert_eq!(matrix.values.len(), 24);
+        assert!(matrix.values.iter().all(|&v| v == 7));
     }
 
     #[test]
