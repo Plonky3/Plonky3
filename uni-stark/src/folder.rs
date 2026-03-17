@@ -7,13 +7,20 @@ use p3_matrix::stack::ViewPair;
 
 use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
 
+/// Buffer size for stack-allocated constraint collection in [`ProverConstraintFolder`].
+///
+/// Constraints are flushed via [`Algebra::batched_linear_combination`] whenever the buffer
+/// fills. 64 keeps the buffer small enough for L1 cache (~1 KB per buffer for 4-lane
+/// packed fields) while being large enough that most AIRs never flush mid-evaluation.
+pub const FOLDER_BUF_SIZE: usize = 64;
+
 /// Packed constraint folder for SIMD-optimized prover evaluation.
 ///
 /// Uses packed types to evaluate constraints on multiple domain points simultaneously.
 ///
-/// Collects constraints during `air.eval()` into separate base/ext vectors, then
-/// combines them in [`Self::finalize_constraints`] using decomposed alpha powers and
-/// `packed_linear_combination` for efficient SIMD accumulation.
+/// Collects constraints during `air.eval()` into fixed-size stack buffers, flushing
+/// via [`Algebra::batched_linear_combination`] when full. This avoids heap allocation
+/// per row-batch and keeps constraint data in cache.
 #[derive(Debug)]
 pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     /// The [`RowMajorMatrixView`] containing rows on which the constraint polynomial is evaluated.
@@ -34,15 +41,10 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     /// Evaluations of the transition selector polynomial.
     /// Zero only on the last trace row.
     pub is_transition: PackedVal<SC>,
-    /// Base-field alpha powers, reordered to match base constraint emission order.
-    /// `base_alpha_powers[d][j]` = d-th basis coefficient of alpha power for j-th base constraint.
-    pub base_alpha_powers: &'a [Vec<Val<SC>>],
-    /// Extension-field alpha powers, reordered to match ext constraint emission order.
-    pub ext_alpha_powers: &'a [SC::Challenge],
-    /// Collected base-field constraints for this row
-    pub base_constraints: Vec<PackedVal<SC>>,
-    /// Collected extension-field constraints for this row
-    pub ext_constraints: Vec<PackedChallenge<SC>>,
+    /// Stack buffer and accumulator for base-field constraints.
+    pub base: ConstraintBuf<'a, PackedVal<SC>, Val<SC>, PackedChallenge<SC>>,
+    /// Stack buffer and accumulator for extension-field constraints.
+    pub ext: ConstraintBuf<'a, PackedChallenge<SC>, SC::Challenge>,
     /// Current constraint index being processed (debug-only bookkeeping)
     pub constraint_index: usize,
     /// Total number of constraints in the AIR (debug-only bookkeeping)
@@ -80,29 +82,13 @@ pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
 }
 
 impl<SC: StarkGenericConfig> ProverConstraintFolder<'_, SC> {
-    /// Combine all collected constraints with their pre-computed alpha powers.
-    ///
-    /// Base constraints use [`Algebra::batched_linear_combination`] per basis dimension,
-    /// decomposing the extension-field multiply into D base-field SIMD dot products.
-    /// Extension constraints use the same method with scalar EF coefficients.
-    ///
-    /// We keep base and extension constraints separate because the base constraints can
-    /// stay in the base field and use packed SIMD arithmetic. Decomposing EF powers of
-    /// `alpha` into base-field coordinates turns the base-field fold into a small number
-    /// of packed dot-products, avoiding repeated cross-field promotions.
+    /// Flush remaining constraints and return the combined result.
     #[inline]
-    pub fn finalize_constraints(&self) -> PackedChallenge<SC> {
+    pub fn finalize_constraints(&mut self) -> PackedChallenge<SC> {
         debug_assert_eq!(self.constraint_index, self.constraint_count);
-
-        let base = &self.base_constraints;
-        let base_powers = self.base_alpha_powers;
-        let acc = PackedChallenge::<SC>::from_basis_coefficients_fn(|d| {
-            PackedVal::<SC>::batched_linear_combination(base, &base_powers[d])
-        });
-        acc + PackedChallenge::<SC>::batched_linear_combination(
-            &self.ext_constraints,
-            self.ext_alpha_powers,
-        )
+        self.base.flush();
+        self.ext.flush();
+        self.base.acc + self.ext.acc
     }
 }
 
@@ -141,14 +127,13 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
 
     #[inline]
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
-        self.base_constraints.push(x.into());
+        self.base.push(x.into());
         self.constraint_index += 1;
     }
 
     #[inline]
     fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
-        let expr_array = array.map(Into::into);
-        self.base_constraints.extend(expr_array);
+        self.base.push_array(array.map(Into::into));
         self.constraint_index += N;
     }
 
@@ -167,7 +152,7 @@ impl<SC: StarkGenericConfig> ExtensionBuilder for ProverConstraintFolder<'_, SC>
     where
         I: Into<Self::ExprEF>,
     {
-        self.ext_constraints.push(x.into());
+        self.ext.push(x.into());
         self.constraint_index += 1;
     }
 }
@@ -208,5 +193,85 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
 
     fn public_values(&self) -> &[Self::PublicVar] {
         self.public_values
+    }
+}
+
+/// Fixed-size stack buffer for collecting and combining constraints.
+///
+/// Stores up to `N` elements, auto-flushing via [`Algebra::batched_linear_combination`]
+/// into the running accumulator `acc` when the buffer is full. Holds a reference to
+/// the per-dimension coefficient arrays so that [`push`](Self::push) is self-contained.
+///
+/// `Acc` may differ from `T` (e.g. extension-field accumulator over base-field buffer).
+/// When `Acc = T` (the default), [`BasedVectorSpace`] dimension is 1 and flush
+/// reduces to a single `batched_linear_combination` call.
+#[derive(Debug)]
+pub struct ConstraintBuf<'a, T, F, Acc = T, const N: usize = FOLDER_BUF_SIZE> {
+    buf: [T; N],
+    len: usize,
+    start: usize,
+    pub acc: Acc,
+    coeffs: &'a [Vec<F>],
+}
+
+impl<'a, T, F, Acc, const N: usize> ConstraintBuf<'a, T, F, Acc, N>
+where
+    T: Algebra<F> + Copy,
+    F: Clone,
+    Acc: Algebra<T> + BasedVectorSpace<T> + Copy,
+{
+    pub const fn new(coeffs: &'a [Vec<F>]) -> Self {
+        Self {
+            buf: [T::ZERO; N],
+            len: 0,
+            start: 0,
+            acc: Acc::ZERO,
+            coeffs,
+        }
+    }
+
+    /// Push a constraint value, auto-flushing when the buffer is full.
+    #[inline]
+    pub fn push(&mut self, val: T) {
+        if self.len == N {
+            self.flush();
+        }
+        self.buf[self.len] = val;
+        self.len += 1;
+    }
+
+    /// Push a compile-time-sized batch, flushing as needed.
+    #[inline]
+    pub fn push_array<const M: usize>(&mut self, vals: [T; M]) {
+        let mut offset = 0;
+        while offset < M {
+            if self.len == N {
+                self.flush();
+            }
+            let space = N - self.len;
+            let chunk = if M - offset < space {
+                M - offset
+            } else {
+                space
+            };
+            self.buf[self.len..self.len + chunk].copy_from_slice(&vals[offset..offset + chunk]);
+            self.len += chunk;
+            offset += chunk;
+        }
+    }
+
+    /// Combine buffered elements with their coefficients and accumulate.
+    #[inline]
+    pub fn flush(&mut self) {
+        if self.len == 0 {
+            return;
+        }
+        let buf = &self.buf[..self.len];
+        let start = self.start;
+        self.start += self.len;
+        self.len = 0;
+        self.acc += Acc::from_basis_coefficients_fn(|d| {
+            T::batched_linear_combination(buf, &self.coeffs[d][start..start + buf.len()])
+        });
     }
 }

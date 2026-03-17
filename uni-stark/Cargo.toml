@@ -31,16 +31,23 @@ p3-commit = { path = "../commit", features = ["test-utils"] }
 p3-dft = { path = "../dft" }
 p3-fri = { path = "../fri" }
 p3-keccak = { path = "../keccak" }
+p3-keccak-air = { path = "../keccak-air" }
 p3-matrix = { path = "../matrix" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-mersenne-31 = { path = "../mersenne-31" }
 p3-symmetric = { path = "../symmetric" }
+p3-util = { path = "../util" }
 
+criterion.workspace = true
 postcard = { workspace = true, features = ["alloc"] }
 rand.workspace = true
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
+
+[[bench]]
+name = "bench_quotient"
+harness = false
 
 [lints]
 workspace = true
