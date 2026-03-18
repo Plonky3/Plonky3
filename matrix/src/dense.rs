@@ -595,6 +595,127 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
         // Extend with fill values to reach the target height. No-op if already there.
         self.values.resize(self.width * target_height, fill);
     }
+
+    /// Build a matrix from a flat buffer whose length may not be a multiple of the
+    /// requested width.
+    ///
+    /// Useful when constructing trace matrices from a stream of values where the
+    /// final row may be incomplete.
+    ///
+    /// # Arguments
+    ///
+    /// - `values`: flat row-major data, ownership transferred to avoid a copy.
+    /// - `width`: number of columns (must be > 0).
+    /// - `fill`: value used to complete the last row or to create an empty row.
+    ///
+    /// # Returns
+    ///
+    /// A dense matrix with `ceil(values.len() / width)` rows (at least 1).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `width` is zero.
+    #[must_use]
+    pub fn from_flat_padded(mut values: Vec<T>, width: usize, fill: T) -> Self {
+        // Zero width would cause a division-by-zero when computing height.
+        assert!(width > 0, "width must be positive");
+
+        // How many elements the last row is missing.
+        let len = values.len();
+        let rem = len % width;
+
+        // Complete the partial trailing row.
+        //
+        // `resize` is a single capacity check + contiguous fill,
+        // faster than `extend(repeat_n(..))` which uses iterator machinery.
+        if rem != 0 {
+            values.resize(len + (width - rem), fill.clone());
+        }
+
+        // Guarantee at least one row so callers never get a zero-height matrix.
+        if values.is_empty() {
+            values.resize(width, fill);
+        }
+
+        Self::new(values, width)
+    }
+
+    /// Return a new matrix with additional columns appended to the right of
+    /// every row, filled with a constant value.
+    ///
+    /// Useful when a trace matrix needs extra selector or flag columns that are
+    /// initialised to a default.
+    ///
+    /// # Memory Layout
+    ///
+    /// ```text
+    ///  Before (width = W):          After (width = W + extra):
+    ///  [ d0  d1 ... d_{W-1} ]       [ d0  d1 ... d_{W-1}  fill ... fill ]
+    ///  [ ..                 ]       [ ..                                ]
+    /// ```
+    ///
+    /// # Algorithm
+    ///
+    /// Rows are relocated back-to-front so that earlier (lower-address) source
+    /// data is never overwritten before it is read.
+    ///
+    /// - Grow the backing buffer to `height * new_width`.
+    /// - Walk rows from the last to the first.
+    /// - For each row, move its elements to the new position and fill the
+    ///   trailing gap with the provided value.
+    ///
+    /// # Arguments
+    ///
+    /// - `extra_cols`: number of columns to append (0 is a no-op).
+    /// - `fill`: value written into every new column.
+    pub fn widen_right(&mut self, extra_cols: usize, fill: T)
+    where
+        T: Copy,
+    {
+        // No columns to add.
+        if extra_cols == 0 {
+            return;
+        }
+
+        let old_w = self.width;
+        let new_w = old_w + extra_cols;
+        let h = self.height();
+
+        // Grow the buffer to the widened size.
+        //
+        // The last row's trailing columns are filled for free by `resize`.
+        // Interior gaps still contain stale data — fixed up below.
+        self.values.resize(h * new_w, fill);
+
+        // Reverse iteration prevents clobbering: each row moves to a
+        // higher offset than its source.
+        //
+        // After relocating row r, fill the trailing columns of row r-1.
+        for r in (1..h).rev() {
+            // Source offset in the old (compact) layout.
+            let src_start = r * old_w;
+
+            // Destination offset in the new (widened) layout.
+            let dst_start = r * new_w;
+
+            // Move the row data. Compiles to a single `memmove`.
+            self.values
+                .copy_within(src_start..src_start + old_w, dst_start);
+
+            // Fill row (r-1)'s trailing columns, right before this row.
+            self.values[dst_start - extra_cols..dst_start].fill(fill);
+        }
+
+        // - h >= 2: the r == 1 iteration already filled row 0's gap.
+        // - h == 1: the loop never ran, so row 0's trailing columns are stale.
+        // - h == 0: the buffer is empty — nothing to do.
+        if h == 1 {
+            self.values[old_w..new_w].fill(fill);
+        }
+
+        // Commit the new width so subsequent accesses use the widened stride.
+        self.width = new_w;
+    }
 }
 
 impl<T: Copy + Default + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
@@ -1120,6 +1241,107 @@ mod tests {
         assert_eq!(matrix.height(), 8);
         assert_eq!(matrix.values.len(), 24);
         assert!(matrix.values.iter().all(|&v| v == 7));
+    }
+
+    #[test]
+    fn test_from_flat_padded() {
+        // Test 1: Buffer length is an exact multiple of width (no padding needed).
+        //
+        // 6 values with width 3 -> 2 complete rows, no fill appended.
+        let matrix = RowMajorMatrix::from_flat_padded(vec![1, 2, 3, 4, 5, 6], 3, 0);
+        assert_eq!(matrix.height(), 2);
+        assert_eq!(matrix.width, 3);
+        assert_eq!(matrix.values, vec![1, 2, 3, 4, 5, 6]);
+
+        // Test 2: Partial last row is padded with fill.
+        //
+        // 5 values with width 3 -> 1 complete row + 1 partial row (2 values + 1 fill).
+        let matrix = RowMajorMatrix::from_flat_padded(vec![1, 2, 3, 4, 5], 3, 99);
+        assert_eq!(matrix.height(), 2);
+        assert_eq!(matrix.width, 3);
+        assert_eq!(matrix.values, vec![1, 2, 3, 4, 5, 99]);
+
+        // Test 3: Single value with width 3 -> padded to one full row.
+        let matrix = RowMajorMatrix::from_flat_padded(vec![42], 3, 0);
+        assert_eq!(matrix.height(), 1);
+        assert_eq!(matrix.values, vec![42, 0, 0]);
+
+        // Test 4: Empty buffer -> one row filled entirely with fill.
+        let matrix = RowMajorMatrix::from_flat_padded(vec![], 4, 7);
+        assert_eq!(matrix.height(), 1);
+        assert_eq!(matrix.width, 4);
+        assert_eq!(matrix.values, vec![7, 7, 7, 7]);
+
+        // Test 5: Width of 1 never needs padding.
+        let matrix = RowMajorMatrix::from_flat_padded(vec![10, 20, 30], 1, 0);
+        assert_eq!(matrix.height(), 3);
+        assert_eq!(matrix.values, vec![10, 20, 30]);
+    }
+
+    #[test]
+    #[should_panic(expected = "width must be positive")]
+    fn test_from_flat_padded_zero_width_panics() {
+        let _ = RowMajorMatrix::from_flat_padded(vec![1, 2, 3], 0, 0);
+    }
+
+    #[test]
+    fn test_widen_right() {
+        // Test 1: Widen a 2x2 matrix by 1 column.
+        //
+        // Original:        Widened:
+        // [ 1  2 ]    ->   [ 1  2  0 ]
+        // [ 3  4 ]         [ 3  4  0 ]
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4], 2);
+        matrix.widen_right(1, 0);
+        assert_eq!(matrix.width, 3);
+        assert_eq!(matrix.height(), 2);
+        assert_eq!(matrix.values, vec![1, 2, 0, 3, 4, 0]);
+
+        // Test 2: Widen by 3 columns with a non-zero fill.
+        //
+        // Original:             Widened:
+        // [ 1  2 ]    ->       [ 1  2  -1  -1  -1 ]
+        // [ 3  4 ]             [ 3  4  -1  -1  -1 ]
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4], 2);
+        matrix.widen_right(3, -1);
+        assert_eq!(matrix.width, 5);
+        assert_eq!(matrix.height(), 2);
+        assert_eq!(matrix.values, vec![1, 2, -1, -1, -1, 3, 4, -1, -1, -1]);
+
+        // Test 3: extra_cols = 0 leaves the matrix unchanged.
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3, 4], 2);
+        matrix.widen_right(0, 99);
+        assert_eq!(matrix.width, 2);
+        assert_eq!(matrix.values, vec![1, 2, 3, 4]);
+
+        // Test 4: Single-row matrix.
+        let mut matrix = RowMajorMatrix::new(vec![10, 20, 30], 3);
+        matrix.widen_right(2, 0);
+        assert_eq!(matrix.width, 5);
+        assert_eq!(matrix.height(), 1);
+        assert_eq!(matrix.values, vec![10, 20, 30, 0, 0]);
+
+        // Test 5: Single-column matrix widened to 3 columns.
+        //
+        // Original:    Widened:
+        // [ 1 ]   ->   [ 1  0  0 ]
+        // [ 2 ]        [ 2  0  0 ]
+        // [ 3 ]        [ 3  0  0 ]
+        let mut matrix = RowMajorMatrix::new(vec![1, 2, 3], 1);
+        matrix.widen_right(2, 0);
+        assert_eq!(matrix.width, 3);
+        assert_eq!(matrix.height(), 3);
+        assert_eq!(matrix.values, vec![1, 0, 0, 2, 0, 0, 3, 0, 0]);
+    }
+
+    #[test]
+    fn test_widen_right_empty_matrix() {
+        // Empty matrix (0 rows) widened should remain empty with updated width.
+        let mut matrix: RowMajorMatrix<i32> = RowMajorMatrix::new(vec![], 3);
+        matrix.widen_right(2, 0);
+        assert_eq!(matrix.width, 5);
+        assert_eq!(matrix.height(), 0);
+        assert!(matrix.values.is_empty());
     }
 
     #[test]
