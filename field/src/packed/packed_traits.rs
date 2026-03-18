@@ -23,8 +23,6 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     /// Number of scalar values packed together.
     const WIDTH: usize;
 
-    // ── Construction (scalar → packed) ──────────────────────────────────
-
     /// Constructs a packed value using a function to generate each element.
     ///
     /// Similar to [`core::array::from_fn`].
@@ -54,8 +52,6 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     #[must_use]
     fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self;
 
-    // ── Access (packed → scalar) ────────────────────────────────────────
-
     /// Returns the underlying scalar values as an immutable slice.
     #[must_use]
     fn as_slice(&self) -> &[Self::Value];
@@ -73,8 +69,6 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     fn extract(&self, lane: usize) -> Self::Value {
         self.as_slice()[lane]
     }
-
-    // ── Flat slice reinterpret (no transpose, just cast) ────────────────
 
     /// Packs a slice of scalar values into a slice of packed values.
     ///
@@ -187,8 +181,6 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         let n = buf.len() * Self::WIDTH;
         unsafe { slice::from_raw_parts(buf_ptr, n) }
     }
-
-    // ── Column transpose (WIDTH rows ↔ N packed) ───────────────────────
 
     /// Pack columns from `WIDTH` rows of scalar values into `N` packed values.
     ///
