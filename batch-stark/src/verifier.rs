@@ -376,20 +376,26 @@ where
             }
 
             let inst = &opened_values.instances[inst_idx];
-            let local = inst.base_opened_values.preprocessed_local.as_ref().ok_or(
-                VerificationError::from(InvalidProofShapeError::MissingPreprocessedValues {
-                    air: inst_idx,
-                }),
-            )?;
+            let local = inst
+                .base_opened_values
+                .preprocessed_local
+                .as_ref()
+                .ok_or_else(|| {
+                    VerificationError::from(InvalidProofShapeError::MissingPreprocessedValues {
+                        air: inst_idx,
+                    })
+                })?;
 
             // Validate that the preprocessed data's base degree matches what we expect.
             let ext_db = degree_bits[inst_idx];
 
             let meta = global.instances[inst_idx]
                 .as_ref()
-                .ok_or(VerificationError::from(
-                    InvalidProofShapeError::PreprocessedMetadataMismatch { air: inst_idx },
-                ))?;
+                .ok_or_else(|| {
+                    VerificationError::from(
+                        InvalidProofShapeError::PreprocessedMetadataMismatch { air: inst_idx },
+                    )
+                })?;
             if meta.matrix_index != matrix_index || meta.degree_bits != ext_db {
                 return Err(
                     InvalidProofShapeError::PreprocessedMetadataMismatch { air: inst_idx }.into(),
@@ -399,11 +405,15 @@ where
             let meta_db = meta.degree_bits;
             let pre_domain = pcs.natural_domain_for_degree(1 << meta_db);
             if !airs[inst_idx].preprocessed_next_row_columns().is_empty() {
-                let next = inst.base_opened_values.preprocessed_next.as_ref().ok_or(
-                    VerificationError::from(InvalidProofShapeError::MissingPreprocessedValues {
-                        air: inst_idx,
-                    }),
-                )?;
+                let next = inst
+                    .base_opened_values
+                    .preprocessed_next
+                    .as_ref()
+                    .ok_or_else(|| {
+                        VerificationError::from(
+                            InvalidProofShapeError::MissingPreprocessedValues { air: inst_idx },
+                        )
+                    })?;
                 let zeta_next_i = trace_domains[inst_idx]
                     .next_point(zeta)
                     .ok_or(VerificationError::NextPointUnavailable)?;
