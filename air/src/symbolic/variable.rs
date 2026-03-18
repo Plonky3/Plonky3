@@ -18,7 +18,7 @@ pub enum ExtEntry {
 }
 
 /// A variable within the evaluation window for base-field columns.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct SymbolicVariable<F> {
     pub entry: BaseEntry,
     pub index: usize,

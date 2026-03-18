@@ -1,17 +1,21 @@
 //! Symbolic expression types for AIR constraint representation.
 
 mod builder;
+mod dag;
 mod expression;
 pub(crate) mod expression_ext;
 mod variable;
 
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::iter::{Product, Sum};
 use core::ops;
 
 pub use builder::*;
+pub use dag::{SymbolicExprDag, SymbolicExprNode};
 pub use expression::{BaseLeaf, SymbolicExpression};
 pub use expression_ext::{ExtLeaf, SymbolicExpressionExt};
+use hashbrown::HashMap;
 use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
 pub use variable::{BaseEntry, ExtEntry, SymbolicVariable, SymbolicVariableExt};
 
@@ -182,6 +186,107 @@ impl<A: SymLeaf> SymbolicExpr<A> {
             y: Arc::new(rhs),
             degree_multiple: dm,
         }
+    }
+}
+
+impl<A: Clone> SymbolicExpr<A> {
+    /// Flatten a slice of expression trees into a single DAG.
+    ///
+    /// Subexpressions shared across constraints via pointer identity are deduplicated into a single node.
+    ///
+    /// The returned DAG maps each input constraint to its root node index.
+    #[must_use]
+    pub fn flatten_to_dag(constraints: &[Self]) -> SymbolicExprDag<A> {
+        // Map from raw pointer to node index for deduplication.
+        let mut cache: HashMap<*const Self, usize> = HashMap::new();
+        // Accumulator for topologically-sorted DAG nodes.
+        let mut nodes = Vec::new();
+
+        // Flatten each constraint tree, collecting the root index of each.
+        let constraint_idx = constraints
+            .iter()
+            .map(|expr| expr.flatten_recursive(&mut cache, &mut nodes))
+            .collect();
+
+        SymbolicExprDag {
+            nodes,
+            constraint_idx,
+        }
+    }
+
+    /// Recursively flatten this expression into topologically-sorted nodes,
+    /// deduplicating shared subexpressions by pointer identity.
+    ///
+    /// Returns the index of this expression's node in the output vector.
+    fn flatten_recursive(
+        &self,
+        cache: &mut HashMap<*const Self, usize>,
+        nodes: &mut Vec<SymbolicExprNode<A>>,
+    ) -> usize {
+        // Use the raw pointer as identity key for deduplication.
+        let ptr = self as *const Self;
+        // If this exact allocation was already flattened, return its index.
+        if let Some(&idx) = cache.get(&ptr) {
+            return idx;
+        }
+
+        // Recursively flatten children first (post-order), then build this node.
+        let node = match self {
+            Self::Leaf(a) => SymbolicExprNode::Leaf(a.clone()),
+            Self::Add {
+                x,
+                y,
+                degree_multiple,
+            } => {
+                // Flatten left and right operands, obtaining their DAG indices.
+                let left = x.flatten_recursive(cache, nodes);
+                let right = y.flatten_recursive(cache, nodes);
+                SymbolicExprNode::Add {
+                    left,
+                    right,
+                    degree_multiple: *degree_multiple,
+                }
+            }
+            Self::Sub {
+                x,
+                y,
+                degree_multiple,
+            } => {
+                let left = x.flatten_recursive(cache, nodes);
+                let right = y.flatten_recursive(cache, nodes);
+                SymbolicExprNode::Sub {
+                    left,
+                    right,
+                    degree_multiple: *degree_multiple,
+                }
+            }
+            Self::Neg { x, degree_multiple } => {
+                let idx = x.flatten_recursive(cache, nodes);
+                SymbolicExprNode::Neg {
+                    idx,
+                    degree_multiple: *degree_multiple,
+                }
+            }
+            Self::Mul {
+                x,
+                y,
+                degree_multiple,
+            } => {
+                let left = x.flatten_recursive(cache, nodes);
+                let right = y.flatten_recursive(cache, nodes);
+                SymbolicExprNode::Mul {
+                    left,
+                    right,
+                    degree_multiple: *degree_multiple,
+                }
+            }
+        };
+
+        // Append the new node and record its position in the cache.
+        let idx = nodes.len();
+        nodes.push(node);
+        cache.insert(ptr, idx);
+        idx
     }
 }
 
