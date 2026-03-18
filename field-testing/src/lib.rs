@@ -896,7 +896,8 @@ where
 /// Test ring axioms with 256 random (x, y, z) triplets via proptest.
 ///
 /// Tests commutativity, associativity, distributivity, negation,
-/// subtraction identities, square/cube, and double/halve.
+/// subtraction identities, square/cube, double/halve, and
+/// multiplication by zero and negative one.
 pub fn test_ring_axioms_proptest<R>()
 where
     R: PrimeCharacteristicRing + Copy + Eq + core::fmt::Debug + 'static,
@@ -931,11 +932,15 @@ where
         // Double and halve
         prop_assert_eq!(x.double(), x + x, "double");
         prop_assert_eq!(x.halve().double(), x, "halve roundtrip");
+
+        // Multiplication by zero and negative one
+        prop_assert_eq!(x * R::ZERO, R::ZERO, "x * 0 == 0");
+        prop_assert_eq!(R::NEG_ONE * x, -x, "-1 * x == -x");
     });
 }
 
 /// Test field axioms (inverse, division) with deterministic edge cases
-/// and 256 random (x, y) pairs via proptest.
+/// and 256 random non-zero (x, y, z) triplets via proptest.
 pub fn test_field_axioms_proptest<F>()
 where
     F: Field + core::fmt::Debug + 'static,
@@ -950,21 +955,25 @@ where
         "generator inverse roundtrip"
     );
 
-    // Proptest: 256 random pairs
+    // Proptest: 256 random triplets, all non-zero
     let config = ProptestConfig::with_cases(256);
-    proptest!(config, |(x in arb_field::<F>(), y in arb_field::<F>())| {
-        if !x.is_zero() {
-            prop_assert_eq!(x * x.inverse(), F::ONE, "x * x^-1 == 1");
-            prop_assert_eq!(x.inverse().inverse(), x, "double inverse");
-            prop_assert_eq!(x.square().inverse(), x.inverse().square(), "square-inverse commutativity");
+    proptest!(config, |(x in arb_field::<F>(), y in arb_field::<F>(), z in arb_field::<F>())| {
+        // Skip if any element is zero
+        if x.is_zero() || y.is_zero() || z.is_zero() {
+            return Ok(());
         }
-        if !y.is_zero() {
-            prop_assert_eq!((x / y) * y, x, "division roundtrip");
-        }
-        if !x.is_zero() && !y.is_zero() {
-            let z = x / y;
-            prop_assert_eq!(z * y, x, "division roundtrip 2");
-        }
+
+        // Inverse properties
+        prop_assert_eq!(x * x.inverse(), F::ONE, "x * x^-1 == 1");
+        prop_assert_eq!(x.inverse().inverse(), x, "double inverse");
+        prop_assert_eq!(x.square().inverse(), x.inverse().square(), "square-inverse commutativity");
+
+        // Division roundtrip
+        prop_assert_eq!((x / y) * y, x, "division roundtrip");
+
+        // Division associativity
+        prop_assert_eq!(x / (y * z), (x / y) / z, "division-multiplication associativity");
+        prop_assert_eq!((x * y) / z, x * (y / z), "multiplication-division associativity");
     });
 }
 
