@@ -617,11 +617,17 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
     /// Panics if `width` is zero.
     #[must_use]
     pub fn from_flat_padded(mut values: Vec<T>, width: usize, fill: T) -> Self {
+        // Zero width would cause a division-by-zero when computing height.
         assert!(width > 0, "width must be positive");
 
-        // Round the buffer length up to the next multiple of `width`.
+        // How many elements the last row is missing.
         let len = values.len();
         let rem = len % width;
+
+        // Complete the partial trailing row.
+        //
+        // `resize` is a single capacity check + contiguous fill,
+        // faster than `extend(repeat_n(..))` which uses iterator machinery.
         if rem != 0 {
             values.resize(len + (width - rem), fill.clone());
         }
@@ -666,7 +672,7 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
     where
         T: Copy,
     {
-        // Fast path: nothing to do.
+        // No columns to add.
         if extra_cols == 0 {
             return;
         }
@@ -675,33 +681,39 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
         let new_w = old_w + extra_cols;
         let h = self.height();
 
-        // Grow the buffer to hold the wider rows.
+        // Grow the buffer to the widened size.
         //
-        // The new tail is filled with `fill`, but interior gaps still need to be fixed up below.
+        // The last row's trailing columns are filled for free by `resize`.
+        // Interior gaps still contain stale data — fixed up below.
         self.values.resize(h * new_w, fill);
 
-        // Relocate rows back-to-front so source data is never clobbered before it is read.
+        // Reverse iteration prevents clobbering: each row moves to a
+        // higher offset than its source.
         //
-        // Row 0 is already at offset 0, so only its trailing gap needs filling.
+        // After relocating row r, fill the trailing columns of row r-1.
         for r in (1..h).rev() {
+            // Source offset in the old (compact) layout.
             let src_start = r * old_w;
+
+            // Destination offset in the new (widened) layout.
             let dst_start = r * new_w;
 
-            // Shift the original row data to its new position.
+            // Move the row data. Compiles to a single `memmove`.
             self.values
                 .copy_within(src_start..src_start + old_w, dst_start);
 
-            // Fill the gap left between the previous row's new end and this
-            // row's new start with the fill value.
-            self.values[r * new_w - extra_cols..r * new_w].fill(fill);
+            // Fill row (r-1)'s trailing columns, right before this row.
+            self.values[dst_start - extra_cols..dst_start].fill(fill);
         }
 
-        // Fill the trailing columns of the first row (row 0 data starts at
-        // index 0, only the new columns need the fill value).
-        if h > 0 {
+        // - h >= 2: the r == 1 iteration already filled row 0's gap.
+        // - h == 1: the loop never ran, so row 0's trailing columns are stale.
+        // - h == 0: the buffer is empty — nothing to do.
+        if h == 1 {
             self.values[old_w..new_w].fill(fill);
         }
 
+        // Commit the new width so subsequent accesses use the widened stride.
         self.width = new_w;
     }
 }
