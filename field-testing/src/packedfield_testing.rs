@@ -397,10 +397,7 @@ where
     );
 }
 
-/// Test dot products with maximum field values (P-1) to catch overflow bugs.
-///
-/// This verifies that SIMD dot product implementations handle the edge case where
-/// `N*(P-1)^2` can overflow `u64` (which happens for N >= 5 with 31-bit primes).
+/// Test that [`PackedField::broadcast`] sets all lanes to the same scalar.
 pub fn test_broadcast<PF>()
 where
     PF: PackedField + Eq,
@@ -503,6 +500,10 @@ where
     );
 }
 
+/// Test dot products with maximum field values (P-1) to catch overflow bugs.
+///
+/// This verifies that SIMD dot product implementations handle the edge case where
+/// `N*(P-1)^2` can overflow `u64` (which happens for N >= 5 with 31-bit primes).
 pub fn test_dot_product_boundary<PF>()
 where
     PF: PackedField + Eq,

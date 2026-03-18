@@ -27,7 +27,7 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
 
     /// Constructs a packed value using a function to generate each element.
     ///
-    /// Similar to `core:array::from_fn`.
+    /// Similar to [`core::array::from_fn`].
     #[must_use]
     fn from_fn<F>(f: F) -> Self
     where
