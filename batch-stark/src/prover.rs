@@ -689,7 +689,7 @@ where
 
     let constraint_layout = get_constraint_layout(air, layout, lookups, lookup_gadget);
     let (base_alpha_powers, ext_alpha_powers_flat) = constraint_layout.decompose_alpha(alpha);
-    let ext_alpha_powers = vec![ext_alpha_powers_flat];
+    let ext_alpha_powers = [ext_alpha_powers_flat];
 
     // Precompute per-instance data used by the hot inner loop to avoid repeated allocations.
     let packed_perm_challenges: Vec<PackedChallenge<SC>> = permutation_challenges

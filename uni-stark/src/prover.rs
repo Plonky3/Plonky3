@@ -431,7 +431,7 @@ where
 
     let constraint_layout = get_constraint_layout(air, layout);
     let (base_alpha_powers, ext_alpha_powers_flat) = constraint_layout.decompose_alpha(alpha);
-    let ext_alpha_powers = vec![ext_alpha_powers_flat];
+    let ext_alpha_powers = [ext_alpha_powers_flat];
 
     (0..quotient_size)
         .into_par_iter()
