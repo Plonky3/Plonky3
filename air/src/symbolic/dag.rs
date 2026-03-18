@@ -448,11 +448,12 @@ mod tests {
             (var_values, is_first, is_last, is_trans) in arb_eval_context(),
         ) {
             // Flatten the expression tree into a DAG and reconstruct it.
-            let dag = SymbolicExpr::flatten_to_dag(&[expr.clone()]);
-            let reconstructed = dag.to_expressions();
-
-            // Evaluate both the original and reconstructed trees on the same inputs.
+            // Evaluate the original tree before flattening consumes it.
             let original_val = eval_expr(&expr, &var_values, is_first, is_last, is_trans);
+
+            // Flatten the expression tree into a DAG and reconstruct it.
+            let dag = SymbolicExpr::flatten_to_dag(core::slice::from_ref(&expr));
+            let reconstructed = dag.to_expressions();
             let reconstructed_val = eval_expr(&reconstructed[0], &var_values, is_first, is_last, is_trans);
 
             // The round trip must preserve the evaluation result.
@@ -493,7 +494,7 @@ mod tests {
             (var_values, is_first, is_last, is_trans) in arb_eval_context(),
         ) {
             // Flatten three constraints together into a single DAG.
-            let constraints = vec![e1.clone(), e2.clone(), e3.clone()];
+            let constraints = vec![e1, e2, e3];
             let dag = SymbolicExpr::flatten_to_dag(&constraints);
             let reconstructed = dag.to_expressions();
 
