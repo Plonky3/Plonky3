@@ -778,7 +778,7 @@ where
     // Decompose alpha into per-constraint powers, split by base vs extension constraints.
     let constraint_layout = get_constraint_layout(air, layout, lookups, lookup_gadget);
     let (base_alpha_powers, ext_alpha_powers_flat) = constraint_layout.decompose_alpha(alpha);
-    let ext_alpha_powers = vec![ext_alpha_powers_flat];
+    let ext_alpha_powers = [ext_alpha_powers_flat];
 
     // Broadcast scalar challenges to packed representations for SIMD evaluation.
     let packed_perm_challenges: Vec<PackedChallenge<SC>> = permutation_challenges
