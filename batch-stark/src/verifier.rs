@@ -389,13 +389,11 @@ where
             // Validate that the preprocessed data's base degree matches what we expect.
             let ext_db = degree_bits[inst_idx];
 
-            let meta = global.instances[inst_idx]
-                .as_ref()
-                .ok_or_else(|| {
-                    VerificationError::from(
-                        InvalidProofShapeError::PreprocessedMetadataMismatch { air: inst_idx },
-                    )
-                })?;
+            let meta = global.instances[inst_idx].as_ref().ok_or_else(|| {
+                VerificationError::from(InvalidProofShapeError::PreprocessedMetadataMismatch {
+                    air: inst_idx,
+                })
+            })?;
             if meta.matrix_index != matrix_index || meta.degree_bits != ext_db {
                 return Err(
                     InvalidProofShapeError::PreprocessedMetadataMismatch { air: inst_idx }.into(),
@@ -410,9 +408,9 @@ where
                     .preprocessed_next
                     .as_ref()
                     .ok_or_else(|| {
-                        VerificationError::from(
-                            InvalidProofShapeError::MissingPreprocessedValues { air: inst_idx },
-                        )
+                        VerificationError::from(InvalidProofShapeError::MissingPreprocessedValues {
+                            air: inst_idx,
+                        })
                     })?;
                 let zeta_next_i = trace_domains[inst_idx]
                     .next_point(zeta)
