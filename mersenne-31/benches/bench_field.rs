@@ -52,12 +52,12 @@ fn bench_field(c: &mut Criterion) {
 }
 
 fn bench_packedfield(c: &mut Criterion) {
-    let name = type_name::<<F as Field>::Packing>().to_string();
-
-    benchmark_chunked_linear_combination::<F, F, 100>(c, &name);
+    let scalar_name = type_name::<F>().to_string();
+    benchmark_chunked_linear_combination::<F, F, 100>(c, &scalar_name);
 
     type PF = <F as Field>::Packing;
-    benchmark_chunked_linear_combination::<F, PF, 100>(c, &name);
+    let packed_name = type_name::<PF>().to_string();
+    benchmark_chunked_linear_combination::<F, PF, 100>(c, &packed_name);
 }
 
 criterion_group!(mersenne31_arithmetics, bench_field, bench_packedfield);
