@@ -633,6 +633,7 @@ macro_rules! test_packed_field {
             #[test]
             fn test_unpack_iter() {
                 $crate::test_unpack_iter::<$packedfield>();
+            }
             #[test]
             fn test_packed_vs_scalar_proptest() {
                 $crate::test_packed_vs_scalar_proptest::<$packedfield>();
