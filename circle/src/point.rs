@@ -219,4 +219,25 @@ mod tests {
         let vn_prod_gen = (1..log_n).map(|i| generator.v_n(i)).product();
         assert_eq!(generator.v_n_prod(log_n), vn_prod_gen);
     }
+
+    #[test]
+    #[should_panic(expected = "v_n requires log_n >= 1")]
+    fn test_v_n_underflow_log_n_0() {
+        let p = Pt::generator(3);
+        let _ = p.v_n(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "v_n_prod requires log_n >= 2")]
+    fn test_v_n_prod_underflow_log_n_1() {
+        let p = Pt::generator(3);
+        let _ = p.v_n_prod(1);
+    }
+
+    #[test]
+    #[should_panic(expected = "s_p_at_p requires log_n >= 2")]
+    fn test_s_p_at_p_underflow_log_n_0() {
+        let p = Pt::generator(3);
+        let _ = p.s_p_at_p(0);
+    }
 }
