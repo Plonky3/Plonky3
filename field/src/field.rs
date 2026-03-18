@@ -705,18 +705,18 @@ pub fn chunked_linear_combination<const CHUNK: usize, A: Algebra<F> + Clone, F: 
     coeffs: &[F],
 ) -> A {
     const { assert!(CHUNK != 0, "chunked_linear_combination requires CHUNK > 0") }
-    debug_assert_eq!(values.len(), coeffs.len());
+    assert_eq!(values.len(), coeffs.len());
 
     let (val_chunks, val_rem) = values.as_chunks::<CHUNK>();
     let (coeff_chunks, coeff_rem) = coeffs.as_chunks::<CHUNK>();
 
-    assert_eq!(val_chunks.len(), coeff_chunks.len());
+    debug_assert_eq!(val_chunks.len(), coeff_chunks.len());
     let mut acc = A::ZERO;
     for (vc, cc) in zip(val_chunks, coeff_chunks) {
         acc += A::mixed_dot_product::<CHUNK>(vc, cc);
     }
 
-    assert_eq!(val_rem.len(), coeff_rem.len());
+    debug_assert_eq!(val_rem.len(), coeff_rem.len());
     for (v, c) in zip(val_rem, coeff_rem) {
         acc += v.clone() * c.clone();
     }
