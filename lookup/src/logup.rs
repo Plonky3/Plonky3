@@ -21,7 +21,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::{ExtensionBuilder, PermutationAirBuilder, WindowAccess};
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Field, PrimeCharacteristicRing, dot_product};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::VerticalPair;
@@ -428,106 +428,143 @@ impl LookupGadget for LogUpGadget {
         }
         let num_lookups = lookups.len();
 
-        let mut all_denominators = vec![SC::Challenge::ZERO; height * denoms_per_row];
-        let mut all_multiplicities = vec![Val::<SC>::ZERO; height * denoms_per_row];
-
-        all_denominators
-            .par_chunks_mut(denoms_per_row)
-            .zip(all_multiplicities.par_chunks_mut(denoms_per_row))
-            .enumerate()
-            .for_each(|(i, (denom_row, mult_row))| {
-                let local_main_row = main.row_slice(i).unwrap();
-                let next_main_row = main.row_slice((i + 1) % height).unwrap();
-                let main_rows = VerticalPair::new(
-                    RowMajorMatrixView::new_row(&local_main_row),
-                    RowMajorMatrixView::new_row(&next_main_row),
-                );
-                let preprocessed_rows_data = preprocessed.as_ref().map(|prep| {
-                    (
-                        prep.row_slice(i).unwrap(),
-                        prep.row_slice((i + 1) % height).unwrap(),
-                    )
-                });
-                let preprocessed_rows = match preprocessed_rows_data.as_ref() {
-                    Some((local_preprocessed_row, next_preprocessed_row)) => VerticalPair::new(
-                        RowMajorMatrixView::new_row(local_preprocessed_row),
-                        RowMajorMatrixView::new_row(next_preprocessed_row),
-                    ),
-                    None => VerticalPair::new(
-                        RowMajorMatrixView::new(&[], 0),
-                        RowMajorMatrixView::new(&[], 0),
-                    ),
-                };
-
-                let row_builder: LookupTraceBuilder<'_, SC> = LookupTraceBuilder::new(
-                    main_rows,
-                    preprocessed_rows,
-                    public_values,
-                    permutation_challenges,
-                    height,
-                    i,
-                );
-
-                let mut offset = 0;
-                for context in lookups.iter() {
-                    let alpha = permutation_challenges[self.num_challenges() * context.columns[0]];
-                    let beta =
-                        permutation_challenges[self.num_challenges() * context.columns[0] + 1];
-
-                    // Evaluate each tuple's elements and combine them via Horner's method
-                    // in a single pass. This avoids allocating a temporary vector of
-                    // evaluated elements per tuple, then another vector of combined results.
-                    //
-                    // For a tuple (e_0, e_1, …, e_{k-1}), computes:
-                    //
-                    //   combined = e_0 + e_1·β + e_2·β^2 + … + e_{k-1}·β^{k-1}
-                    //
-                    // Then stores (α − combined) as the denominator.
-                    for (j, elts) in context.element_exprs.iter().enumerate() {
-                        let combined_elt = elts.iter().fold(SC::Challenge::ZERO, |acc, e| {
-                            acc * beta + symbolic_to_expr(&row_builder, e)
-                        });
-                        denom_row[offset] = alpha - combined_elt;
-                        mult_row[offset] =
-                            symbolic_to_expr(&row_builder, &context.multiplicities_exprs[j]);
-                        offset += 1;
-                    }
-                }
-            });
-
-        debug_assert_eq!(all_denominators.len(), height * denoms_per_row);
-
-        // 2. BATCH INVERSION
-        // This turns O(N) inversions into O(1) inversion + O(N) multiplications.
-        // Recomputing multiplicities during trace building is cheaper than recomputing inversions,
-        // or storing them beforehand (as they could possibly constitute quite a large amount of data).
-        let all_inverses = p3_field::batch_multiplicative_inverse(&all_denominators);
-
-        #[cfg(debug_assertions)]
-        let mut inv_cursor = 0;
-        #[cfg(debug_assertions)]
-        let _debug_check: Vec<_> = (0..height)
-            .map(|_| {
-                lookups.iter().for_each(|context| {
-                    inv_cursor += context.multiplicities_exprs.len();
-                });
+        // Hoist the per-lookup random challenges out of the hot per-row loop.
+        // Each lookup uses a pair (alpha, beta) that is constant across all rows.
+        // alpha is the running-sum challenge, beta combines tuple elements.
+        let lookup_challenges: Vec<(SC::Challenge, SC::Challenge)> = lookups
+            .iter()
+            .map(|context| {
+                // Index into the flat challenge array by the lookup's auxiliary column index.
+                let base = self.num_challenges() * context.columns[0];
+                (
+                    permutation_challenges[base],
+                    permutation_challenges[base + 1],
+                )
             })
             .collect();
 
-        // 3. BUILD TRACE
+        // Fused chunk-local batch inversion.
+        //
+        // Instead of three global passes (fill denoms -> batch invert -> build row sums)
+        // with three full-height intermediate arrays alive at once, we process
+        // fixed-size chunks end-to-end inside each thread.
+        //
+        // Per-thread working set: CHUNK_SIZE * denoms_per_row * (16 + 4) bytes,
+        // which fits comfortably in L2 cache for typical parameters.
+        //
+        // Memory layout (flat, row-major within each chunk):
+        //
+        // ```text
+        //   local_denoms:  [ row_0_denom_0 .. row_0_denom_D | row_1_denom_0 .. | ... ]
+        //   local_mults:   [ row_0_mult_0  .. row_0_mult_D  | row_1_mult_0  .. | ... ]
+        // ```
+        //
+        // where D = denoms_per_row (total element tuples across all lookups).
+
+        // Matches the internal chunk size of the batch inversion routine.
+        const CHUNK_SIZE: usize = 1024;
+
+        // Output buffer: one row-sum per (row, lookup) pair, row-major order.
         let mut row_sums = SC::Challenge::zero_vec(height * num_lookups);
+
         row_sums
-            .par_chunks_mut(num_lookups)
+            .par_chunks_mut(CHUNK_SIZE * num_lookups)
             .enumerate()
-            .for_each(|(i, row_sums_i)| {
-                let inv_base = i * denoms_per_row;
-                for (lookup_idx, _context) in lookups.iter().enumerate() {
-                    let start = lookup_denom_offsets[lookup_idx];
-                    let end = lookup_denom_offsets[lookup_idx + 1];
-                    let sum = (start..end)
-                        .map(|k| all_inverses[inv_base + k] * all_multiplicities[inv_base + k])
-                        .sum();
-                    row_sums_i[lookup_idx] = sum;
+            .for_each(|(chunk_idx, chunk_row_sums)| {
+                // Derive the absolute row range for this chunk.
+                let start_row = chunk_idx * CHUNK_SIZE;
+                // The last chunk may be shorter than CHUNK_SIZE.
+                let num_rows = chunk_row_sums.len() / num_lookups;
+
+                // Thread-local denominator and multiplicity buffers.
+                let mut local_denoms = SC::Challenge::zero_vec(num_rows * denoms_per_row);
+                let mut local_mults = Val::<SC>::zero_vec(num_rows * denoms_per_row);
+
+                // Phase 1: Fill denominators and multiplicities for every row in this chunk.
+                for local_i in 0..num_rows {
+                    let i = start_row + local_i;
+
+                    // Build the two-row window (current, next) for the main trace.
+                    // Wraps around at the trace boundary.
+                    let local_main_row = main.row_slice(i).unwrap();
+                    let next_main_row = main.row_slice((i + 1) % height).unwrap();
+                    let main_rows = VerticalPair::new(
+                        RowMajorMatrixView::new_row(&local_main_row),
+                        RowMajorMatrixView::new_row(&next_main_row),
+                    );
+
+                    // Same two-row window for the preprocessed trace, if present.
+                    let preprocessed_rows_data = preprocessed.as_ref().map(|prep| {
+                        (
+                            prep.row_slice(i).unwrap(),
+                            prep.row_slice((i + 1) % height).unwrap(),
+                        )
+                    });
+                    let preprocessed_rows = match preprocessed_rows_data.as_ref() {
+                        Some((local_preprocessed_row, next_preprocessed_row)) => VerticalPair::new(
+                            RowMajorMatrixView::new_row(local_preprocessed_row),
+                            RowMajorMatrixView::new_row(next_preprocessed_row),
+                        ),
+                        // Empty views when there is no preprocessed trace.
+                        None => VerticalPair::new(
+                            RowMajorMatrixView::new(&[], 0),
+                            RowMajorMatrixView::new(&[], 0),
+                        ),
+                    };
+
+                    // Concrete evaluator: resolves symbolic expressions to field values
+                    // using the current row's data.
+                    let row_builder: LookupTraceBuilder<'_, SC> = LookupTraceBuilder::new(
+                        main_rows,
+                        preprocessed_rows,
+                        public_values,
+                        permutation_challenges,
+                        height,
+                        i,
+                    );
+
+                    // Walk through each lookup's element tuples and fill the flat buffers.
+                    let mut offset = local_i * denoms_per_row;
+                    for (context, &(alpha, beta)) in lookups.iter().zip(lookup_challenges.iter()) {
+                        for (j, elts) in context.element_exprs.iter().enumerate() {
+                            // Combine tuple elements via Horner's method:
+                            //   combined = e_0 * beta^{k-1} + e_1 * beta^{k-2} + ... + e_{k-1}
+                            // Then store (alpha - combined) as the denominator.
+                            let combined_elt = elts.iter().fold(SC::Challenge::ZERO, |acc, e| {
+                                acc * beta + symbolic_to_expr(&row_builder, e)
+                            });
+                            local_denoms[offset] = alpha - combined_elt;
+
+                            // Store the multiplicity as a base-field element (4 bytes vs 16 for
+                            // extension) to keep the buffer small and the later dot product cheap.
+                            local_mults[offset] =
+                                symbolic_to_expr(&row_builder, &context.multiplicities_exprs[j]);
+                            offset += 1;
+                        }
+                    }
+                }
+
+                // Phase 2: Batch-invert all denominators in this chunk.
+                // Montgomery's trick: 1 inversion + O(N) multiplications.
+                let local_inverses = p3_field::batch_multiplicative_inverse(&local_denoms);
+                // Free the denominator buffer immediately to reduce peak memory.
+                drop(local_denoms);
+
+                // Phase 3: Accumulate per-row sums: sum_j( inverse_j * multiplicity_j ) grouped by lookup.
+                //
+                // The multiplication is extension * base (cheaper than extension * extension).
+                for local_i in 0..num_rows {
+                    let inv_base = local_i * denoms_per_row;
+                    for (lookup_idx, _context) in lookups.iter().enumerate() {
+                        // Slice out the range of denominators belonging to this lookup.
+                        let start = lookup_denom_offsets[lookup_idx];
+                        let end = lookup_denom_offsets[lookup_idx + 1];
+                        let inv_slice = &local_inverses[inv_base + start..inv_base + end];
+                        let mult_slice = &local_mults[inv_base + start..inv_base + end];
+                        // Dot product: sum of (1 / denominator) * multiplicity for each tuple.
+                        chunk_row_sums[local_i * num_lookups + lookup_idx] =
+                            dot_product(inv_slice.iter().copied(), mult_slice.iter().copied());
+                    }
                 }
             });
 
@@ -616,8 +653,6 @@ impl LookupGadget for LogUpGadget {
 
         // Check that we have updated all `lookup_data` entries.
         debug_assert_eq!(permutation_counter, lookup_data.len());
-        #[cfg(debug_assertions)] // Compiler complains about inv_cursor despite being under a `debug_assert`
-        debug_assert_eq!(inv_cursor, all_inverses.len());
         RowMajorMatrix::new(aux_trace, width)
     }
 }
