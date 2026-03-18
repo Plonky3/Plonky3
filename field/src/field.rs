@@ -704,6 +704,7 @@ pub fn chunked_linear_combination<const CHUNK: usize, A: Algebra<F> + Clone, F: 
     values: &[A],
     coeffs: &[F],
 ) -> A {
+    const { assert!(CHUNK != 0, "chunked_linear_combination requires CHUNK > 0") }
     debug_assert_eq!(values.len(), coeffs.len());
 
     let (val_chunks, val_rem) = values.as_chunks::<CHUNK>();
