@@ -210,12 +210,16 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
             .map(|slice| RowMajorMatrixViewMut::new(slice, w))
             .collect_vec();
 
-        for coset_idx in 1..(1 << added_bits) {
-            let total_shift = g_big.exp_u64(coset_idx as u64) * shift;
-            let coset_idx = reverse_bits_len(coset_idx, added_bits);
-            let dest = &mut rest_cosets_mat[coset_idx - 1]; // - 1 because we removed the first matrix.
-            coset_dft_oop(self, &first_coset_mat.as_view(), dest, total_shift);
-        }
+        rest_cosets_mat
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(dest_idx, dest)| {
+                // Destination cosets are arranged in bit-reversed order. Recover the
+                // logical coset index in natural order from the destination slot.
+                let coset_idx = reverse_bits_len(dest_idx + 1, added_bits);
+                let total_shift = g_big.exp_u64(coset_idx as u64) * shift;
+                coset_dft_oop(self, &first_coset_mat.as_view(), dest, total_shift);
+            });
 
         // Now run a forward DFT on the very first coset, this time in-place.
         coset_dft(self, &mut first_coset_mat.as_view_mut(), shift);
