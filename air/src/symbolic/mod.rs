@@ -192,101 +192,107 @@ impl<A: SymLeaf> SymbolicExpr<A> {
 impl<A: Clone> SymbolicExpr<A> {
     /// Flatten a slice of expression trees into a single DAG.
     ///
-    /// Subexpressions shared across constraints via pointer identity are deduplicated into a single node.
+    /// Subexpressions shared across constraints via pointer identity
+    /// are deduplicated into a single node.
     ///
-    /// The returned DAG maps each input constraint to its root node index.
+    /// Uses an iterative work stack to avoid stack overflow on deep
+    /// expression trees (e.g. from constraint folding).
     #[must_use]
     pub fn flatten_to_dag(constraints: &[Self]) -> SymbolicExprDag<A> {
-        // Map from raw pointer to node index for deduplication.
-        let mut cache: HashMap<*const Self, usize> = HashMap::new();
-        // Accumulator for topologically-sorted DAG nodes.
-        let mut nodes = Vec::new();
+        /// Work items for the iterative post-order traversal.
+        enum Task<'a, A> {
+            /// First visit: check cache, push children if not yet processed.
+            Enter(&'a SymbolicExpr<A>),
+            /// All children are done: look up their indices and emit this node.
+            Build(&'a SymbolicExpr<A>),
+        }
 
-        // Flatten each constraint tree, collecting the root index of each.
+        let mut cache: HashMap<*const Self, usize> = HashMap::new();
+        let mut nodes = Vec::new();
+        let mut stack: Vec<Task<'_, A>> = Vec::new();
+
         let constraint_idx = constraints
             .iter()
-            .map(|expr| expr.flatten_recursive(&mut cache, &mut nodes))
+            .map(|expr| {
+                stack.push(Task::Enter(expr));
+
+                while let Some(task) = stack.pop() {
+                    match task {
+                        Task::Enter(e) => {
+                            let ptr = e as *const Self;
+                            if cache.contains_key(&ptr) {
+                                continue;
+                            }
+                            match e {
+                                // Leaves have no children — emit immediately.
+                                Self::Leaf(a) => {
+                                    let idx = nodes.len();
+                                    nodes.push(SymbolicExprNode::Leaf(a.clone()));
+                                    cache.insert(ptr, idx);
+                                }
+                                // Binary ops: schedule Build after both children.
+                                Self::Add { x, y, .. }
+                                | Self::Sub { x, y, .. }
+                                | Self::Mul { x, y, .. } => {
+                                    stack.push(Task::Build(e));
+                                    stack.push(Task::Enter(y));
+                                    stack.push(Task::Enter(x));
+                                }
+                                // Unary op: schedule Build after the single child.
+                                Self::Neg { x, .. } => {
+                                    stack.push(Task::Build(e));
+                                    stack.push(Task::Enter(x));
+                                }
+                            }
+                        }
+                        Task::Build(e) => {
+                            let ptr = e as *const Self;
+                            let node = match e {
+                                Self::Leaf(_) => unreachable!(),
+                                Self::Add {
+                                    x,
+                                    y,
+                                    degree_multiple,
+                                } => SymbolicExprNode::Add {
+                                    left: cache[&(x.as_ref() as *const Self)],
+                                    right: cache[&(y.as_ref() as *const Self)],
+                                    degree_multiple: *degree_multiple,
+                                },
+                                Self::Sub {
+                                    x,
+                                    y,
+                                    degree_multiple,
+                                } => SymbolicExprNode::Sub {
+                                    left: cache[&(x.as_ref() as *const Self)],
+                                    right: cache[&(y.as_ref() as *const Self)],
+                                    degree_multiple: *degree_multiple,
+                                },
+                                Self::Neg { x, degree_multiple } => SymbolicExprNode::Neg {
+                                    idx: cache[&(x.as_ref() as *const Self)],
+                                    degree_multiple: *degree_multiple,
+                                },
+                                Self::Mul {
+                                    x,
+                                    y,
+                                    degree_multiple,
+                                } => SymbolicExprNode::Mul {
+                                    left: cache[&(x.as_ref() as *const Self)],
+                                    right: cache[&(y.as_ref() as *const Self)],
+                                    degree_multiple: *degree_multiple,
+                                },
+                            };
+                            let idx = nodes.len();
+                            nodes.push(node);
+                            cache.insert(ptr, idx);
+                        }
+                    }
+                }
+
+                cache[&(expr as *const Self)]
+            })
             .collect();
 
-        SymbolicExprDag {
-            nodes,
-            constraint_idx,
-        }
-    }
-
-    /// Recursively flatten this expression into topologically-sorted nodes,
-    /// deduplicating shared subexpressions by pointer identity.
-    ///
-    /// Returns the index of this expression's node in the output vector.
-    fn flatten_recursive(
-        &self,
-        cache: &mut HashMap<*const Self, usize>,
-        nodes: &mut Vec<SymbolicExprNode<A>>,
-    ) -> usize {
-        // Use the raw pointer as identity key for deduplication.
-        let ptr = self as *const Self;
-        // If this exact allocation was already flattened, return its index.
-        if let Some(&idx) = cache.get(&ptr) {
-            return idx;
-        }
-
-        // Recursively flatten children first (post-order), then build this node.
-        let node = match self {
-            Self::Leaf(a) => SymbolicExprNode::Leaf(a.clone()),
-            Self::Add {
-                x,
-                y,
-                degree_multiple,
-            } => {
-                // Flatten left and right operands, obtaining their DAG indices.
-                let left = x.flatten_recursive(cache, nodes);
-                let right = y.flatten_recursive(cache, nodes);
-                SymbolicExprNode::Add {
-                    left,
-                    right,
-                    degree_multiple: *degree_multiple,
-                }
-            }
-            Self::Sub {
-                x,
-                y,
-                degree_multiple,
-            } => {
-                let left = x.flatten_recursive(cache, nodes);
-                let right = y.flatten_recursive(cache, nodes);
-                SymbolicExprNode::Sub {
-                    left,
-                    right,
-                    degree_multiple: *degree_multiple,
-                }
-            }
-            Self::Neg { x, degree_multiple } => {
-                let idx = x.flatten_recursive(cache, nodes);
-                SymbolicExprNode::Neg {
-                    idx,
-                    degree_multiple: *degree_multiple,
-                }
-            }
-            Self::Mul {
-                x,
-                y,
-                degree_multiple,
-            } => {
-                let left = x.flatten_recursive(cache, nodes);
-                let right = y.flatten_recursive(cache, nodes);
-                SymbolicExprNode::Mul {
-                    left,
-                    right,
-                    degree_multiple: *degree_multiple,
-                }
-            }
-        };
-
-        // Append the new node and record its position in the cache.
-        let idx = nodes.len();
-        nodes.push(node);
-        cache.insert(ptr, idx);
-        idx
+        SymbolicExprDag::new(nodes, constraint_idx)
     }
 }
 

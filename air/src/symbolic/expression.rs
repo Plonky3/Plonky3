@@ -1,4 +1,5 @@
 use p3_field::{Algebra, ExtensionField, Field, InjectiveMonomial};
+use serde::{Deserialize, Serialize};
 
 use crate::symbolic::variable::SymbolicVariable;
 use crate::symbolic::{SymLeaf, SymbolicExpr};
@@ -7,7 +8,7 @@ use crate::symbolic::{SymLeaf, SymbolicExpr};
 ///
 /// These represent the atomic building blocks of AIR constraint expressions:
 /// trace column references, selectors, and field constants.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BaseLeaf<F> {
     /// A reference to a trace column or public input.
     Variable(SymbolicVariable<F>),

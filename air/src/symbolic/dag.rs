@@ -3,6 +3,8 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use serde::{Deserialize, Serialize};
+
 use super::SymbolicExpr;
 
 /// A single node in a flattened expression DAG.
@@ -14,7 +16,7 @@ use super::SymbolicExpr;
 ///
 /// All child indices must be strictly less than this node's
 /// own position in the containing vector.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SymbolicExprNode<A> {
     /// An atomic value: variable reference, field constant, or selector flag.
     Leaf(A),
@@ -69,18 +71,46 @@ pub enum SymbolicExprNode<A> {
 ///
 /// Every node at position `i` only references positions `< i`.
 /// A single forward pass is sufficient to evaluate or reconstruct the entire graph.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SymbolicExprDag<A> {
-    /// Nodes in dependency order (children always precede parents).
-    pub nodes: Vec<SymbolicExprNode<A>>,
-
-    /// Position of each constraint's root node inside the node vector.
-    ///
-    /// Preserves the input ordering from the slice passed to the constructor.
-    pub constraint_idx: Vec<usize>,
+    /// Topologically-sorted nodes (children always precede parents).
+    nodes: Vec<SymbolicExprNode<A>>,
+    /// Index of each constraint's root node in the node vector.
+    constraint_idx: Vec<usize>,
 }
 
 impl<A: Clone> SymbolicExprDag<A> {
+    /// Create a DAG from pre-built topologically-sorted nodes and constraint root indices.
+    pub(crate) const fn new(nodes: Vec<SymbolicExprNode<A>>, constraint_idx: Vec<usize>) -> Self {
+        Self {
+            nodes,
+            constraint_idx,
+        }
+    }
+
+    /// The topologically-sorted node slice.
+    #[inline]
+    #[must_use]
+    pub fn nodes(&self) -> &[SymbolicExprNode<A>] {
+        &self.nodes
+    }
+
+    /// Indices into the node slice for each constraint root.
+    ///
+    /// Preserves the input ordering from the slice passed to the constructor.
+    #[inline]
+    #[must_use]
+    pub fn constraint_idx(&self) -> &[usize] {
+        &self.constraint_idx
+    }
+
+    /// Total number of unique nodes in the DAG.
+    #[inline]
+    #[must_use]
+    pub const fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
     /// Rebuild expression trees from this DAG.
     ///
     /// Returns one tree per constraint root, in the same order as the original input slice.
@@ -95,13 +125,6 @@ impl<A: Clone> SymbolicExprDag<A> {
             .iter()
             .map(|&idx| all[idx].as_ref().clone())
             .collect()
-    }
-
-    /// Total number of unique nodes in the DAG.
-    #[inline]
-    #[must_use]
-    pub const fn node_count(&self) -> usize {
-        self.nodes.len()
     }
 
     /// Rebuild every node into a shared tree node.
@@ -199,9 +222,8 @@ mod tests {
     }
 
     /// Assert that every node at index `i` only references indices `< i`.
-    fn assert_topological_order<A>(dag: &SymbolicExprDag<A>) {
-        for (i, node) in dag.nodes.iter().enumerate() {
-            // Check that all child indices precede this node's position.
+    fn assert_topological_order<A: Clone>(dag: &SymbolicExprDag<A>) {
+        for (i, node) in dag.nodes().iter().enumerate() {
             let valid = match node {
                 SymbolicExprNode::Leaf(_) => true,
                 SymbolicExprNode::Add { left, right, .. }
@@ -318,7 +340,7 @@ mod tests {
 
         // The DAG should contain no nodes and no constraint roots.
         assert_eq!(dag.node_count(), 0);
-        assert!(dag.constraint_idx.is_empty());
+        assert!(dag.constraint_idx().is_empty());
         // Round-trip should also produce an empty list.
         assert!(dag.to_expressions().is_empty());
     }
@@ -337,8 +359,8 @@ mod tests {
         // The product node references the same index for both operands.
         assert_eq!(
             SymbolicExpr::flatten_to_dag(&[sq]),
-            SymbolicExprDag {
-                nodes: vec![
+            SymbolicExprDag::new(
+                vec![
                     SymbolicExprNode::Leaf(BaseLeaf::Variable(SymbolicVariable::new(
                         BaseEntry::Main { offset: 0 },
                         0,
@@ -356,8 +378,8 @@ mod tests {
                         degree_multiple: 2,
                     },
                 ],
-                constraint_idx: vec![3],
-            }
+                vec![3]
+            )
         );
     }
 
@@ -381,8 +403,8 @@ mod tests {
         // The shared product node at index 2 is referenced by both constraint roots.
         assert_eq!(
             dag,
-            SymbolicExprDag {
-                nodes: vec![
+            SymbolicExprDag::new(
+                vec![
                     SymbolicExprNode::Leaf(BaseLeaf::Variable(SymbolicVariable::new(
                         BaseEntry::Main { offset: 0 },
                         0,
@@ -412,8 +434,8 @@ mod tests {
                         degree_multiple: 2,
                     },
                 ],
-                constraint_idx: vec![4, 6],
-            }
+                vec![4, 6]
+            )
         );
     }
 
@@ -427,7 +449,8 @@ mod tests {
 
         // Different allocations must produce separate root nodes.
         assert_ne!(
-            dag.constraint_idx[0], dag.constraint_idx[1],
+            dag.constraint_idx()[0],
+            dag.constraint_idx()[1],
             "independent allocations must produce separate nodes"
         );
     }
@@ -516,9 +539,9 @@ mod tests {
             let dag = SymbolicExpr::flatten_to_dag(&[expr]);
 
             prop_assert_eq!(dag.node_count(), 1);
-            prop_assert_eq!(dag.constraint_idx.len(), 1);
+            prop_assert_eq!(dag.constraint_idx().len(), 1);
             // The sole constraint root must be node 0.
-            prop_assert_eq!(dag.constraint_idx[0], 0);
+            prop_assert_eq!(dag.constraint_idx()[0], 0);
         }
 
         #[test]
@@ -527,7 +550,7 @@ mod tests {
         ) {
             let dag = SymbolicExpr::flatten_to_dag(&exprs);
             // Number of root indices must equal the number of input expressions.
-            prop_assert_eq!(dag.constraint_idx.len(), exprs.len());
+            prop_assert_eq!(dag.constraint_idx().len(), exprs.len());
             // Round-trip must also produce the same count.
             prop_assert_eq!(dag.to_expressions().len(), exprs.len());
         }
@@ -536,7 +559,7 @@ mod tests {
         fn constraint_indices_in_bounds(expr in arb_expr(4)) {
             let dag = SymbolicExpr::flatten_to_dag(&[expr]);
             // Every root index must point to a valid node.
-            for &idx in &dag.constraint_idx {
+            for &idx in dag.constraint_idx() {
                 prop_assert!(idx < dag.node_count());
             }
         }
