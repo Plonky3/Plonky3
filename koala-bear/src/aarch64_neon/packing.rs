@@ -17,7 +17,6 @@ pub type PackedKoalaBearNeon = PackedMontyField31Neon<KoalaBearParameters>;
 
 #[cfg(test)]
 mod tests {
-    use p3_field::{PackedValue, PrimeCharacteristicRing};
     use p3_field_testing::test_packed_field;
 
     use super::WIDTH;

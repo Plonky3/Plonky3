@@ -261,8 +261,7 @@ impl<F: QuinticTrinomialExtendable> PackedFieldExtension<F, QuinticTrinomialExte
         let width = F::Packing::WIDTH;
         assert_eq!(ext_slice.len(), width);
 
-        let res = array::from_fn(|i| F::Packing::from_fn(|j| ext_slice[j].value[i]));
-        Self::new(res)
+        Self::new(F::Packing::pack_columns_fn(|lane| ext_slice[lane].value))
     }
 
     #[inline]

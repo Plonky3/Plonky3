@@ -398,6 +398,109 @@ where
     );
 }
 
+/// Test that [`PackedField::broadcast`] sets all lanes to the same scalar.
+pub fn test_broadcast<PF>()
+where
+    PF: PackedField + Eq,
+    StandardUniform: Distribution<PF::Scalar>,
+{
+    let mut rng = SmallRng::seed_from_u64(0xdeadbeef);
+    let x: PF::Scalar = rng.random();
+    let packed = PF::broadcast(x);
+    for lane in 0..PF::WIDTH {
+        assert_eq!(
+            packed.as_slice()[lane],
+            x,
+            "broadcast mismatch at lane {lane}"
+        );
+    }
+
+    let zero = PF::broadcast(PF::Scalar::default());
+    assert_eq!(zero, PF::ZERO, "broadcast(default) should equal ZERO");
+}
+
+pub fn test_pack_columns<PF>()
+where
+    PF: PackedField + Eq,
+    StandardUniform: Distribution<PF::Scalar>,
+{
+    let mut rng = SmallRng::seed_from_u64(0xc0ffee42);
+
+    // Test round-trip: pack_columns then unpack_into
+    let rows: Vec<[PF::Scalar; 4]> = (0..PF::WIDTH)
+        .map(|_| [rng.random(), rng.random(), rng.random(), rng.random()])
+        .collect();
+    let packed = PF::pack_columns::<4>(&rows);
+    let mut unpacked = vec![[PF::Scalar::default(); 4]; PF::WIDTH];
+    PF::unpack_into(&packed, &mut unpacked);
+    assert_eq!(
+        rows, unpacked,
+        "pack_columns -> unpack_into round-trip failed"
+    );
+
+    // Test round-trip: unpack_into then pack_columns
+    let original: [PF; 4] = [
+        packed_from_random(0x1111),
+        packed_from_random(0x2222),
+        packed_from_random(0x3333),
+        packed_from_random(0x4444),
+    ];
+    let mut rows2 = vec![[PF::Scalar::default(); 4]; PF::WIDTH];
+    PF::unpack_into(&original, &mut rows2);
+    let repacked = PF::pack_columns::<4>(&rows2);
+    assert_eq!(
+        original, repacked,
+        "unpack_into -> pack_columns round-trip failed"
+    );
+}
+
+pub fn test_pack_columns_fn<PF>()
+where
+    PF: PackedField + Eq,
+    StandardUniform: Distribution<PF::Scalar>,
+{
+    let mut rng = SmallRng::seed_from_u64(0xbaadf00d);
+    let rows: Vec<[PF::Scalar; 4]> = (0..PF::WIDTH)
+        .map(|_| [rng.random(), rng.random(), rng.random(), rng.random()])
+        .collect();
+
+    let from_slice = PF::pack_columns::<4>(&rows);
+    let from_fn = PF::pack_columns_fn(|lane| rows[lane]);
+    assert_eq!(
+        from_slice, from_fn,
+        "pack_columns_fn should match pack_columns"
+    );
+}
+
+pub fn test_unpack_iter<PF>()
+where
+    PF: PackedField + Eq,
+    StandardUniform: Distribution<PF::Scalar>,
+{
+    let packed: [PF; 4] = [
+        packed_from_random(0xaaaa),
+        packed_from_random(0xbbbb),
+        packed_from_random(0xcccc),
+        packed_from_random(0xdddd),
+    ];
+
+    // Compare with unpack_into
+    let mut rows_via_into = vec![[PF::Scalar::default(); 4]; PF::WIDTH];
+    PF::unpack_into(&packed, &mut rows_via_into);
+    let rows_via_iter: Vec<[PF::Scalar; 4]> = PF::unpack_iter(packed).collect();
+    assert_eq!(
+        rows_via_into, rows_via_iter,
+        "unpack_iter should match unpack_into"
+    );
+
+    // Round-trip with pack_columns
+    let repacked = PF::pack_columns::<4>(&rows_via_iter);
+    assert_eq!(
+        packed, repacked,
+        "unpack_iter -> pack_columns round-trip failed"
+    );
+}
+
 /// Test dot products with maximum field values (P-1) to catch overflow bugs.
 ///
 /// This verifies that SIMD dot product implementations handle the edge case where
@@ -514,6 +617,22 @@ macro_rules! test_packed_field {
             #[test]
             fn test_dot_product_boundary() {
                 $crate::test_dot_product_boundary::<$packedfield>();
+            }
+            #[test]
+            fn test_broadcast() {
+                $crate::test_broadcast::<$packedfield>();
+            }
+            #[test]
+            fn test_pack_columns() {
+                $crate::test_pack_columns::<$packedfield>();
+            }
+            #[test]
+            fn test_pack_columns_fn() {
+                $crate::test_pack_columns_fn::<$packedfield>();
+            }
+            #[test]
+            fn test_unpack_iter() {
+                $crate::test_unpack_iter::<$packedfield>();
             }
             #[test]
             fn test_packed_vs_scalar_proptest() {
