@@ -437,13 +437,13 @@ mod tests {
         // O(N^2) reference: w(x) = lhs(x) * rhs(x) mod (x^N + 1).
         // Coefficients that wrap past degree N-1 are subtracted (negacyclic).
         let mut out = [F::ZERO; N];
-        for i in 0..N {
-            for j in 0..N {
+        for (i, &l) in lhs.iter().enumerate() {
+            for (j, &r) in rhs.iter().enumerate() {
                 let k = i + j;
                 if k < N {
-                    out[k] += lhs[i] * rhs[j];
+                    out[k] += l * r;
                 } else {
-                    out[k - N] -= lhs[i] * rhs[j];
+                    out[k - N] -= l * r;
                 }
             }
         }
