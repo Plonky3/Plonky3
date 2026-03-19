@@ -9,10 +9,10 @@ use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
-use p3_lookup::AirWithLookups;
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::lookup_traits::{Lookup, LookupGadget};
+use p3_lookup::lookup_traits::LookupGadget;
+use p3_lookup::{AirWithLookups, Lookup};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_uni_stark::{
@@ -198,6 +198,17 @@ where
             }
         } else if pre_local_len != pre_w || pre_next_len != 0 {
             return Err(InvalidProofShapeError::PreprocessedWidthMismatch { air: i }.into());
+        }
+
+        let expected_global_lookup_data_len = Lookup::global_count(&all_lookups[i]);
+        let got_global_lookup_data_len = global_lookup_data[i].len();
+        if got_global_lookup_data_len != expected_global_lookup_data_len {
+            return Err(InvalidProofShapeError::GlobalLookupDataCountMismatch {
+                air: i,
+                expected: expected_global_lookup_data_len,
+                got: got_global_lookup_data_len,
+            }
+            .into());
         }
 
         // Observe per-instance binding data: (log_ext_degree, log_degree), width, num quotient chunks.

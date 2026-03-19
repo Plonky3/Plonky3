@@ -27,7 +27,7 @@ use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
-use p3_uni_stark::StarkConfig;
+use p3_uni_stark::{InvalidProofShapeError, StarkConfig};
 use p3_util::log2_strict_usize;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -1987,6 +1987,61 @@ fn test_batch_stark_failed_global_lookup_inner() {
     // - FibAir only receives from "MulFib" lookup
     // - The global cumulative sums won't match
     verify_batch(&config, &airs, &proof, &pvs, common).unwrap();
+}
+
+#[test]
+fn test_batch_stark_rejects_truncated_global_lookup_data() {
+    let config = make_config(2025);
+
+    let reps = 2;
+    let mul_air = MulAir { reps };
+    let mul_air_lookups = MulAirLookups::new(
+        mul_air,
+        false,
+        true,
+        0,
+        vec!["MulFib".to_string(), "MulFib".to_string()],
+    );
+
+    let log_n = 3;
+    let n = 1 << log_n;
+    let fibonacci_air = FibonacciAir {
+        log_height: log_n,
+        tamper_index: None,
+    };
+    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, 0, None);
+
+    let mul_trace = mul_trace::<Val>(n, 2);
+    let fib_trace = fib_trace::<Val>(0, 1, n);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
+
+    let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
+    let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups);
+
+    let mut airs = [air1, air2];
+    let prover_data =
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_n, log_n]);
+    let common = &prover_data.common;
+    let traces = [&mul_trace, &fib_trace];
+    let pvs = vec![vec![], fib_pis];
+
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, common);
+    let mut proof = prove_batch(&config, &instances, &prover_data);
+
+    proof.global_lookup_data[0].pop();
+
+    let err = verify_batch(&config, &airs, &proof, &pvs, common)
+        .expect_err("Verifier should reject truncated global lookup data");
+    match err {
+        VerificationError::InvalidProofShape(
+            InvalidProofShapeError::GlobalLookupDataCountMismatch { air, expected, got },
+        ) => {
+            assert_eq!(air, 0);
+            assert_eq!(expected, 2);
+            assert_eq!(got, 1);
+        }
+        _ => panic!("unexpected error: {err:?}"),
+    }
 }
 
 /// Test mixing instances with lookups and instances without lookups.
