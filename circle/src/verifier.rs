@@ -29,6 +29,33 @@ where
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     Folding: FriFoldingStrategy<Val, Challenge>,
 {
+    // Validate that all query proofs use the same commit-phase arity schedule.
+    let arity_schedule: Vec<u8> = proof
+        .query_proofs
+        .first()
+        .map(|qp| {
+            qp.commit_phase_openings
+                .iter()
+                .map(|o| o.log_arity)
+                .collect()
+        })
+        .unwrap_or_default();
+    if proof.query_proofs.iter().any(|qp| {
+        qp.commit_phase_openings
+            .iter()
+            .map(|o| o.log_arity)
+            .collect::<Vec<_>>()
+            != arity_schedule
+    }) {
+        return Err(FriError::InvalidProofShape);
+    }
+
+    // Circle folding only supports arity 2 (log_arity = 1). Enforce this before any
+    // arithmetic/challenge-sampling that could panic on malformed proof metadata.
+    if arity_schedule.iter().any(|&la| la != 1) {
+        return Err(FriError::InvalidProofShape);
+    }
+
     let betas: Vec<Challenge> = proof
         .commit_phase_commits
         .iter()
@@ -60,20 +87,19 @@ where
     }
 
     // With variable arity, compute log_max_height by summing all log_arities
-    let total_log_reduction: usize = proof
-        .query_proofs
-        .first()
-        .map(|qp| {
-            qp.commit_phase_openings
-                .iter()
-                .map(|o| o.log_arity as usize)
-                .sum()
-        })
-        .unwrap_or(0);
-    let log_max_height = total_log_reduction + params.log_blowup;
+    let total_log_reduction: usize = arity_schedule.iter().map(|&o| o as usize).sum();
+    let log_max_height = total_log_reduction
+        .checked_add(params.log_blowup)
+        .ok_or(FriError::InvalidProofShape)?;
+    let query_bits = log_max_height
+        .checked_add(folding.extra_query_index_bits())
+        .ok_or(FriError::InvalidProofShape)?;
+    if query_bits >= usize::BITS as usize {
+        return Err(FriError::InvalidProofShape);
+    }
 
     for qp in &proof.query_proofs {
-        let index = challenger.sample_bits(log_max_height + folding.extra_query_index_bits());
+        let index = challenger.sample_bits(query_bits);
         let ro = open_input(index, &qp.input_proof).map_err(FriError::InputError)?;
 
         debug_assert!(
@@ -154,6 +180,9 @@ where
     // using FRI until the domain size reaches (1 << log_blowup).
     for ((&beta, comm), opening) in steps {
         let log_arity = opening.log_arity as usize;
+        if log_arity != 1 || log_arity > log_current_height {
+            return Err(FriError::InvalidProofShape);
+        }
         let arity = 1 << log_arity;
 
         // Validate that sibling_values has the expected length (arity - 1)

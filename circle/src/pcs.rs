@@ -561,6 +561,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use p3_challenger::{HashChallenger, SerializingChallenger32};
     use p3_commit::ExtensionMmcs;
     use p3_field::extension::BinomialExtensionField;
@@ -571,6 +573,7 @@ mod tests {
     use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     use super::*;
 
@@ -632,5 +635,120 @@ mod tests {
             &mut chal,
         )
         .expect("verify err");
+    }
+
+    #[test]
+    fn circle_pcs_rejects_small_invalid_log_arity_cleanly() {
+        let mut rng = SmallRng::seed_from_u64(0);
+
+        type Val = Mersenne31;
+        type Challenge = BinomialExtensionField<Mersenne31, 3>;
+        type ByteHash = Keccak256Hash;
+        type FieldHash = SerializingHasher<ByteHash>;
+        type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
+        type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 2, 32>;
+        type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+        type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+        type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
+
+        let byte_hash = ByteHash {};
+        let field_hash = FieldHash::new(byte_hash);
+        let compress = MyCompress::new(byte_hash);
+        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+        let fri_params = create_test_fri_params(challenge_mmcs, 0);
+        let pcs = Pcs {
+            mmcs: val_mmcs,
+            fri_params,
+            _phantom: PhantomData,
+        };
+
+        let d = <Pcs as p3_commit::Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+            &pcs,
+            1 << 10,
+        );
+        let evals = RowMajorMatrix::rand(&mut rng, 1 << 10, 1);
+        let (comm, data) =
+            <Pcs as p3_commit::Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
+        let zeta: Challenge = rng.random();
+        let mut prover_chal = Challenger::from_hasher(vec![], byte_hash);
+        let (values, proof) = pcs.open(vec![(&data, vec![vec![zeta]])], &mut prover_chal);
+
+        let mut mutated_proof = proof.clone();
+        for qp in &mut mutated_proof.fri_proof.query_proofs {
+            if let Some(step) = qp.commit_phase_openings.first_mut() {
+                step.log_arity = 2;
+            }
+        }
+
+        let rounds = vec![(comm, vec![(d, vec![(zeta, values[0][0][0].clone())])])];
+        let mut verifier_chal = Challenger::from_hasher(vec![], byte_hash);
+        let result = pcs.verify(rounds, &mutated_proof, &mut verifier_chal);
+        assert!(
+            result.is_err(),
+            "expected clean verifier rejection for mutated log_arity=2"
+        );
+    }
+
+    #[test]
+    fn circle_pcs_rejects_oversized_log_arity_without_panic() {
+        let mut rng = SmallRng::seed_from_u64(0);
+
+        type Val = Mersenne31;
+        type Challenge = BinomialExtensionField<Mersenne31, 3>;
+        type ByteHash = Keccak256Hash;
+        type FieldHash = SerializingHasher<ByteHash>;
+        type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
+        type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 2, 32>;
+        type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+        type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+        type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
+
+        let byte_hash = ByteHash {};
+        let field_hash = FieldHash::new(byte_hash);
+        let compress = MyCompress::new(byte_hash);
+        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+        let fri_params = create_test_fri_params(challenge_mmcs, 0);
+        let pcs = Pcs {
+            mmcs: val_mmcs,
+            fri_params,
+            _phantom: PhantomData,
+        };
+
+        let d = <Pcs as p3_commit::Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+            &pcs,
+            1 << 10,
+        );
+        let evals = RowMajorMatrix::rand(&mut rng, 1 << 10, 1);
+        let (comm, data) =
+            <Pcs as p3_commit::Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
+        let zeta: Challenge = rng.random();
+        let mut prover_chal = Challenger::from_hasher(vec![], byte_hash);
+        let (values, proof) = pcs.open(vec![(&data, vec![vec![zeta]])], &mut prover_chal);
+
+        for mutated in [64u8, 255u8] {
+            let mut mutated_proof = proof.clone();
+            for qp in &mut mutated_proof.fri_proof.query_proofs {
+                if let Some(step) = qp.commit_phase_openings.first_mut() {
+                    step.log_arity = mutated;
+                }
+            }
+
+            let rounds = vec![(
+                comm.clone(),
+                vec![(d, vec![(zeta, values[0][0][0].clone())])],
+            )];
+            let mut verifier_chal = Challenger::from_hasher(vec![], byte_hash);
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                pcs.verify(rounds, &mutated_proof, &mut verifier_chal)
+            }));
+
+            match result {
+                Ok(Ok(())) => panic!("expected verifier failure for oversized log_arity={mutated}"),
+                Ok(Err(_)) => {}
+                Err(_) => panic!("unexpected panic for oversized log_arity={mutated}"),
+            }
+        }
     }
 }
