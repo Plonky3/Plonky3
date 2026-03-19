@@ -273,7 +273,8 @@ unsafe impl<T: Packable, const WIDTH: usize> PackedValue for [T; WIDTH] {
 ///
 /// # Safety
 /// - See `PackedValue` above.
-pub unsafe trait PackedField: Algebra<Self::Scalar>
+pub unsafe trait PackedField:
+    Algebra<Self::Scalar>
     + PackedValue<Value = Self::Scalar>
     + Div<Self, Output = Self>
     + Div<Self::Scalar, Output = Self>
