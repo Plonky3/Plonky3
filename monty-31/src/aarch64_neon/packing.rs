@@ -640,11 +640,6 @@ impl_packed_value!(
 
 unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31Neon<FP> {
     type Scalar = MontyField31<FP>;
-
-    #[inline]
-    fn packed_linear_combination<const N: usize>(coeffs: &[Self::Scalar], vecs: &[Self]) -> Self {
-        general_dot_product::<_, _, _, N>(coeffs, vecs)
-    }
 }
 
 impl_packed_field_pow_2!(

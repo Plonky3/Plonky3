@@ -13,7 +13,7 @@ use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
 ///
 /// Collects constraints during `air.eval()` into separate base/ext vectors, then
 /// combines them in [`Self::finalize_constraints`] using decomposed alpha powers and
-/// `packed_linear_combination` for efficient SIMD accumulation.
+/// `batched_linear_combination` for efficient SIMD accumulation.
 #[derive(Debug)]
 pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     /// The [`RowMajorMatrixView`] containing rows on which the constraint polynomial is evaluated.
