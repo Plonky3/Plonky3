@@ -15,7 +15,10 @@ use p3_lookup::logup::LogUpGadget;
 use p3_lookup::lookup_traits::{Lookup, LookupGadget};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
-use p3_uni_stark::{VerificationError, VerifierConstraintFolder, recompose_quotient_from_chunks};
+use p3_uni_stark::{
+    InvalidProofShapeError, VerificationError, VerifierConstraintFolder,
+    recompose_quotient_from_chunks,
+};
 use p3_util::zip_eq::zip_eq;
 use tracing::{info_span, instrument};
 
@@ -63,7 +66,7 @@ where
         || airs.len() != degree_bits.len()
         || airs.len() != global_lookup_data.len()
     {
-        return Err(VerificationError::InvalidProofShape);
+        return Err(InvalidProofShapeError::InstanceCountMismatch.into());
     }
 
     // Check that the random commitments are/are not present depending on the ZK setting.
@@ -127,7 +130,12 @@ where
 
         // Validate trace widths match the AIR
         if inst_base_opened_vals.trace_local.len() != air_width {
-            return Err(VerificationError::InvalidProofShape);
+            return Err(InvalidProofShapeError::TraceLocalWidthMismatch {
+                air: i,
+                expected: air_width,
+                got: inst_base_opened_vals.trace_local.len(),
+            }
+            .into());
         }
         if !airs[i].main_next_row_columns().is_empty() {
             if inst_base_opened_vals
@@ -135,21 +143,28 @@ where
                 .as_ref()
                 .is_none_or(|v| v.len() != air_width)
             {
-                return Err(VerificationError::InvalidProofShape);
+                return Err(InvalidProofShapeError::TraceNextMismatch { air: i }.into());
             }
         } else if inst_base_opened_vals.trace_next.is_some() {
-            return Err(VerificationError::InvalidProofShape);
+            return Err(InvalidProofShapeError::UnexpectedTraceNext { air: i }.into());
         }
 
         // Validate quotient chunks structure
         let n_chunks = num_quotient_chunks[i];
         if inst_base_opened_vals.quotient_chunks.len() != n_chunks {
-            return Err(VerificationError::InvalidProofShape);
+            return Err(InvalidProofShapeError::QuotientChunksCountMismatch {
+                air: i,
+                expected: n_chunks,
+                got: inst_base_opened_vals.quotient_chunks.len(),
+            }
+            .into());
         }
 
         for chunk in &inst_base_opened_vals.quotient_chunks {
             if chunk.len() != Challenge::<SC>::DIMENSION {
-                return Err(VerificationError::InvalidProofShape);
+                return Err(
+                    InvalidProofShapeError::QuotientChunkDimensionMismatch { air: i }.into(),
+                );
             }
         }
 
@@ -175,14 +190,14 @@ where
             .map_or(0, |v| v.len());
         if pre_w == 0 {
             if pre_local_len != 0 || pre_next_len != 0 {
-                return Err(VerificationError::InvalidProofShape);
+                return Err(InvalidProofShapeError::UnexpectedPreprocessedValues { air: i }.into());
             }
         } else if !airs[i].preprocessed_next_row_columns().is_empty() {
             if pre_local_len != pre_w || pre_next_len != pre_w {
-                return Err(VerificationError::InvalidProofShape);
+                return Err(InvalidProofShapeError::PreprocessedWidthMismatch { air: i }.into());
             }
         } else if pre_local_len != pre_w || pre_next_len != 0 {
-            return Err(VerificationError::InvalidProofShape);
+            return Err(InvalidProofShapeError::PreprocessedWidthMismatch { air: i }.into());
         }
 
         // Observe per-instance binding data: (log_ext_degree, log_degree), width, num quotient chunks.
@@ -211,7 +226,7 @@ where
     let is_lookup = commitments.permutation.is_some();
 
     if is_lookup != all_lookups.iter().any(|c| !c.is_empty()) {
-        return Err(VerificationError::InvalidProofShape);
+        return Err(InvalidProofShapeError::LookupCommitmentMismatch.into());
     }
 
     // Fetch lookups and sample their challenges.
@@ -333,12 +348,14 @@ where
             .base_opened_values
             .quotient_chunks;
         if inst_qcs.len() != domains.len() {
-            return Err(VerificationError::InvalidProofShape);
+            return Err(InvalidProofShapeError::QuotientDomainsCountMismatch { air: i }.into());
         }
         for (d, vals) in zip_eq(
             domains.iter(),
             inst_qcs,
-            VerificationError::InvalidProofShape,
+            VerificationError::from(InvalidProofShapeError::QuotientDomainsCountMismatch {
+                air: i,
+            }),
         )? {
             qc_round.push((*d, vec![(zeta, vals.clone())]));
         }
@@ -353,7 +370,9 @@ where
         for (matrix_index, &inst_idx) in global.matrix_to_instance.iter().enumerate() {
             let pre_w = preprocessed_widths[inst_idx];
             if pre_w == 0 {
-                return Err(VerificationError::InvalidProofShape);
+                return Err(
+                    InvalidProofShapeError::PreprocessedMetadataMismatch { air: inst_idx }.into(),
+                );
             }
 
             let inst = &opened_values.instances[inst_idx];
@@ -361,16 +380,24 @@ where
                 .base_opened_values
                 .preprocessed_local
                 .as_ref()
-                .ok_or(VerificationError::InvalidProofShape)?;
+                .ok_or_else(|| {
+                    VerificationError::from(InvalidProofShapeError::MissingPreprocessedValues {
+                        air: inst_idx,
+                    })
+                })?;
 
             // Validate that the preprocessed data's base degree matches what we expect.
             let ext_db = degree_bits[inst_idx];
 
-            let meta = global.instances[inst_idx]
-                .as_ref()
-                .ok_or(VerificationError::InvalidProofShape)?;
+            let meta = global.instances[inst_idx].as_ref().ok_or_else(|| {
+                VerificationError::from(InvalidProofShapeError::PreprocessedMetadataMismatch {
+                    air: inst_idx,
+                })
+            })?;
             if meta.matrix_index != matrix_index || meta.degree_bits != ext_db {
-                return Err(VerificationError::InvalidProofShape);
+                return Err(
+                    InvalidProofShapeError::PreprocessedMetadataMismatch { air: inst_idx }.into(),
+                );
             }
 
             let meta_db = meta.degree_bits;
@@ -380,7 +407,11 @@ where
                     .base_opened_values
                     .preprocessed_next
                     .as_ref()
-                    .ok_or(VerificationError::InvalidProofShape)?;
+                    .ok_or_else(|| {
+                        VerificationError::from(InvalidProofShapeError::MissingPreprocessedValues {
+                            air: inst_idx,
+                        })
+                    })?;
                 let zeta_next_i = trace_domains[inst_idx]
                     .next_point(zeta)
                     .ok_or(VerificationError::NextPointUnavailable)?;
@@ -406,7 +437,7 @@ where
             .enumerate()
         {
             if inst_opened_vals.permutation_local.len() != inst_opened_vals.permutation_next.len() {
-                return Err(VerificationError::InvalidProofShape);
+                return Err(InvalidProofShapeError::PermutationLengthMismatch { air: i }.into());
             }
             if !inst_opened_vals.permutation_local.is_empty() {
                 let zeta_next = trace_domains[i]
@@ -459,7 +490,11 @@ where
         if opened_values.instances[i].permutation_local.len() != expected_perm_len
             || opened_values.instances[i].permutation_next.len() != expected_perm_len
         {
-            return Err(VerificationError::InvalidProofShape);
+            return Err(InvalidProofShapeError::PermutationWidthMismatch {
+                air: i,
+                expected: expected_perm_len,
+            }
+            .into());
         }
 
         let recompose = |flat: &[Challenge<SC>]| -> Vec<Challenge<SC>> {

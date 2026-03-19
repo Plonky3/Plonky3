@@ -6,6 +6,7 @@ extern crate alloc;
 
 mod check_constraints;
 mod config;
+mod error;
 mod folder;
 mod preprocessed;
 mod proof;
@@ -16,6 +17,7 @@ mod verifier;
 
 pub use check_constraints::*;
 pub use config::*;
+pub use error::*;
 pub use folder::*;
 pub use p3_air::symbolic::*;
 pub use preprocessed::*;
