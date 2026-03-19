@@ -462,6 +462,9 @@ impl LookupGadget for LogUpGadget {
         // where D = denoms_per_row (total element tuples across all lookups).
 
         // Matches the internal chunk size of the batch inversion routine.
+        //
+        // TODO: benchmark this value across different fields and architectures
+        // to determine if a more general or adaptive constant is warranted.
         const CHUNK_SIZE: usize = 1024;
 
         // Output buffer: one row-sum per (row, lookup) pair, row-major order.
@@ -530,9 +533,16 @@ impl LookupGadget for LogUpGadget {
                             // Combine tuple elements via Horner's method:
                             //   combined = e_0 * beta^{k-1} + e_1 * beta^{k-2} + ... + e_{k-1}
                             // Then store (alpha - combined) as the denominator.
-                            let combined_elt = elts.iter().fold(SC::Challenge::ZERO, |acc, e| {
-                                acc * beta + symbolic_to_expr(&row_builder, e)
-                            });
+                            let mut iter = elts.iter();
+                            let combined_elt = match iter.next() {
+                                Some(first) => iter.fold(
+                                    symbolic_to_expr(&row_builder, first).into(),
+                                    |acc: SC::Challenge, e| {
+                                        acc * beta + symbolic_to_expr(&row_builder, e)
+                                    },
+                                ),
+                                None => SC::Challenge::ZERO,
+                            };
                             local_denoms[offset] = alpha - combined_elt;
 
                             // Store the multiplicity as a base-field element (4 bytes vs 16 for
@@ -553,6 +563,8 @@ impl LookupGadget for LogUpGadget {
                 // Phase 3: Accumulate per-row sums: sum_j( inverse_j * multiplicity_j ) grouped by lookup.
                 //
                 // The multiplication is extension * base (cheaper than extension * extension).
+                //
+                // TODO: investigate fusing batch inversion with multiplicity multiplication.
                 for local_i in 0..num_rows {
                     let inv_base = local_i * denoms_per_row;
                     for (lookup_idx, _context) in lookups.iter().enumerate() {
