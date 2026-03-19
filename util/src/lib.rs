@@ -47,6 +47,91 @@ pub const fn log2_strict_usize(n: usize) -> usize {
     res as usize
 }
 
+/// Precomputed table of all powers of 3 that fit in a `u64`.
+///
+/// The maximum power is `3^40 = 12_157_665_459_056_928_801`.
+///
+/// We use `u64` instead of `usize` so the table compiles safely on 32-bit targets,
+/// where `3^40` would overflow a 32-bit `usize`.
+const POWERS_OF_3: [u64; 41] = {
+    // Start with 3^0 = 1.
+    let mut table = [0u64; 41];
+    table[0] = 1;
+
+    // Fill iteratively: each entry is 3 times the previous one.
+    let mut i = 1;
+    while i < 41 {
+        table[i] = table[i - 1] * 3;
+        i += 1;
+    }
+    table
+};
+
+/// Maps a bit-position (i.e. `floor(log2(n))`) to the corresponding base-3 exponent.
+///
+/// Because `3^k` grows faster than `2^k`, every power of 3 has a unique highest set
+/// bit position. This lets us use `leading_zeros()` to jump straight to the answer
+/// in O(1) without any loop or binary search.
+///
+/// Entries that don't correspond to any power of 3 are unused (left as 0).
+const LOG2_TO_EXP: [u8; 64] = {
+    // Initialize every slot to 0.
+    let mut table = [0u8; 64];
+
+    // For each power of 3, record which log2 bucket it falls into.
+    let mut i = 0;
+    while i < 41 {
+        // Compute floor(log2(3^i)) via the highest set bit.
+        let log2 = (u64::BITS - 1 - POWERS_OF_3[i].leading_zeros()) as usize;
+
+        // Store the exponent i at the corresponding bit-position.
+        table[log2] = i as u8;
+        i += 1;
+    }
+    table
+};
+
+/// Computes the strict base-3 logarithm of `n`.
+///
+/// Returns `k` such that `3^k == n`. Panics if `n` is not a power of 3.
+///
+/// This is the base-3 analogue of [`log2_strict_usize`].
+///
+/// # Arguments
+///
+/// * `n` - A positive integer that must be a power of 3 (i.e., 1, 3, 9, 27, 81, ...).
+///
+/// # Returns
+///
+/// The exponent `k` where `3^k == n`.
+///
+/// # Panics
+///
+/// Panics if:
+/// - `n` is zero
+/// - `n` is not a power of 3
+#[must_use]
+#[inline]
+pub const fn log3_strict_usize(n: usize) -> usize {
+    // Zero has no logarithm - check explicitly for a clear error message.
+    assert!(n != 0, "log3_strict_usize: input must be non-zero");
+
+    // Instantly find the candidate exponent via the highest set bit.
+    //
+    // Because every power of 3 occupies a unique log2 bucket, this single
+    // lookup gives us the answer in O(1) with zero branches.
+    let log2 = (usize::BITS - 1 - n.leading_zeros()) as usize;
+    let res = LOG2_TO_EXP[log2] as usize;
+
+    // Verify the result: catches non-powers of 3 in a single O(1) check.
+    assert!(
+        POWERS_OF_3[res] as usize == n,
+        "log3_strict_usize: input is not a power of 3"
+    );
+
+    res
+}
+
 /// Returns `[0, ..., N - 1]`.
 #[must_use]
 pub const fn indices_arr<const N: usize>() -> [usize; N] {
@@ -768,6 +853,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
+    use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
@@ -944,6 +1030,60 @@ mod tests {
     #[should_panic]
     fn test_log2_strict_usize_max() {
         let _ = log2_strict_usize(usize::MAX);
+    }
+
+    #[test]
+    fn test_log3_strict_powers_of_3() {
+        // Test all powers of 3 up to 3^12 = 531441.
+        assert_eq!(log3_strict_usize(1), 0);
+        assert_eq!(log3_strict_usize(3), 1);
+        assert_eq!(log3_strict_usize(9), 2);
+        assert_eq!(log3_strict_usize(27), 3);
+        assert_eq!(log3_strict_usize(81), 4);
+        assert_eq!(log3_strict_usize(243), 5);
+        assert_eq!(log3_strict_usize(729), 6);
+        assert_eq!(log3_strict_usize(2187), 7);
+        assert_eq!(log3_strict_usize(6561), 8);
+        assert_eq!(log3_strict_usize(19683), 9);
+        assert_eq!(log3_strict_usize(59049), 10);
+        assert_eq!(log3_strict_usize(177_147), 11);
+        assert_eq!(log3_strict_usize(531_441), 12);
+    }
+
+    #[test]
+    #[should_panic(expected = "input must be non-zero")]
+    fn test_log3_strict_panics_on_zero() {
+        let _ = log3_strict_usize(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "is not a power of 3")]
+    fn test_log3_strict_panics_on_non_power_of_3() {
+        // 2 is not a power of 3.
+        let _ = log3_strict_usize(2);
+    }
+
+    #[test]
+    #[should_panic(expected = "is not a power of 3")]
+    fn test_log3_strict_panics_on_power_of_2() {
+        // 8 = 2^3 is not a power of 3.
+        let _ = log3_strict_usize(8);
+    }
+
+    #[test]
+    #[should_panic(expected = "is not a power of 3")]
+    fn test_log3_strict_panics_on_product_with_other_primes() {
+        // 6 = 2 * 3 is not a power of 3.
+        let _ = log3_strict_usize(6);
+    }
+
+    proptest! {
+        #[test]
+        fn test_log3_strict_roundtrip(k in 0u32..25u32) {
+            // Roundtrip: 3^k -> log3_strict_usize -> k
+            let n = 3usize.pow(k);
+            assert_eq!(log3_strict_usize(n), k as usize);
+        }
     }
 
     #[test]

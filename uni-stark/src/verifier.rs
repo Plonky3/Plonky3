@@ -1,8 +1,7 @@
 //! See [`crate::prover`] for an overview of the protocol and a more detailed soundness analysis.
 
-use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
-use alloc::{format, vec};
 
 use itertools::Itertools;
 use p3_air::symbolic::SymbolicAirBuilder;
@@ -13,9 +12,9 @@ use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_util::zip_eq::zip_eq;
-use thiserror::Error;
 use tracing::instrument;
 
+use crate::error::{InvalidProofShapeError, VerificationError};
 use crate::symbolic::get_log_num_quotient_chunks;
 use crate::{
     AirLayout, Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
@@ -173,8 +172,13 @@ where
         0
     };
     if preprocessed_width != preprocessed_local_len || expected_next_len != preprocessed_next_len {
-        // Verifier expects preprocessed trace while proof does not have it, or vice versa
-        return Err(VerificationError::InvalidProofShape);
+        return Err(InvalidProofShapeError::PreprocessedTraceWidthMismatch {
+            expected_local: preprocessed_width,
+            expected_next: expected_next_len,
+            got_local: preprocessed_local_len,
+            got_next: preprocessed_next_len,
+        }
+        .into());
     }
 
     // Validate consistency between width, verifier key, and zk settings.
@@ -193,7 +197,7 @@ where
         // - Width is 0 but VK is provided.
         // - Width > 0 but VK is missing.
         // - Width > 0 but VK width mismatches the expected width.
-        _ => Err(VerificationError::InvalidProofShape),
+        _ => Err(InvalidProofShapeError::PreprocessedVerifierKeyInconsistency.into()),
     }
 }
 
@@ -242,7 +246,11 @@ where
         && preprocessed_width > 0
         && vk.degree_bits != *degree_bits
     {
-        return Err(VerificationError::InvalidProofShape);
+        return Err(InvalidProofShapeError::PreprocessedDegreeMismatch {
+            vk_degree_bits: vk.degree_bits,
+            proof_degree_bits: *degree_bits,
+        }
+        .into());
     }
 
     let layout = AirLayout {
@@ -295,7 +303,7 @@ where
         // We've already checked that opened_values.random is present if and only if ZK is enabled.
         && opened_values.random.as_ref().is_none_or(|r_comm| r_comm.len() == SC::Challenge::DIMENSION);
     if !valid_shape {
-        return Err(VerificationError::InvalidProofShape);
+        return Err(InvalidProofShapeError::OpenedValuesDimensionMismatch.into());
     }
 
     // Observe the instance.
@@ -371,7 +379,9 @@ where
             zip_eq(
                 randomized_quotient_chunks_domains.iter(),
                 &opened_values.quotient_chunks,
-                VerificationError::InvalidProofShape,
+                VerificationError::from(InvalidProofShapeError::QuotientDomainsCountMismatch {
+                    air: 0,
+                }),
             )?
             .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
             .collect_vec(),
@@ -430,31 +440,4 @@ where
     )?;
 
     Ok(())
-}
-
-#[derive(Debug, Error)]
-pub enum VerificationError<PcsErr>
-where
-    PcsErr: core::fmt::Debug,
-{
-    #[error("invalid proof shape")]
-    InvalidProofShape,
-    /// An error occurred while verifying the claimed openings.
-    #[error("invalid opening argument: {0:?}")]
-    InvalidOpeningArgument(PcsErr),
-    /// Out-of-domain evaluation mismatch, i.e. `constraints(zeta)` did not match
-    /// `quotient(zeta) Z_H(zeta)`.
-    #[error("out-of-domain evaluation mismatch{}", .index.map(|i| format!(" at index {}", i)).unwrap_or_default())]
-    OodEvaluationMismatch { index: Option<usize> },
-    /// The FRI batch randomization does not correspond to the ZK setting.
-    #[error("randomization error: FRI batch randomization does not match ZK setting")]
-    RandomizationError,
-    /// The domain does not support computing the next point algebraically.
-    #[error(
-        "next point unavailable: domain does not support computing the next point algebraically"
-    )]
-    NextPointUnavailable,
-    /// Lookup related error
-    #[error("lookup error: {0}")]
-    LookupError(String),
 }

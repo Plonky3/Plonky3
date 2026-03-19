@@ -2,6 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::{Field, PackedField, PackedFieldPow2, PackedValue, PrimeCharacteristicRing};
+use proptest::prelude::*;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -397,6 +398,91 @@ where
     );
 }
 
+/// Test dot products with maximum field values (P-1) to catch overflow bugs.
+///
+/// This verifies that SIMD dot product implementations handle the edge case where
+/// `N*(P-1)^2` can overflow `u64` (which happens for N >= 5 with 31-bit primes).
+pub fn test_dot_product_boundary<PF>()
+where
+    PF: PackedField + Eq,
+{
+    let big = PF::from(PF::Scalar::NEG_ONE);
+    let scalar_big = PF::Scalar::NEG_ONE;
+
+    // Test dot_product for N = 1..=16 with all-maximum inputs.
+    macro_rules! test_dot_n {
+        ($n:literal) => {
+            let packed_result = PF::dot_product::<$n>(&[big; $n], &[big; $n]);
+            let scalar_result = PF::Scalar::dot_product::<$n>(&[scalar_big; $n], &[scalar_big; $n]);
+            for lane in 0..PF::WIDTH {
+                assert_eq!(
+                    packed_result.as_slice()[lane],
+                    scalar_result,
+                    "dot_product::<{}> overflow mismatch at lane {}",
+                    $n,
+                    lane,
+                );
+            }
+        };
+    }
+    test_dot_n!(1);
+    test_dot_n!(2);
+    test_dot_n!(3);
+    test_dot_n!(4);
+    test_dot_n!(5);
+    test_dot_n!(6);
+    test_dot_n!(7);
+    test_dot_n!(8);
+    test_dot_n!(9);
+    test_dot_n!(10);
+    test_dot_n!(11);
+    test_dot_n!(12);
+    test_dot_n!(13);
+    test_dot_n!(14);
+    test_dot_n!(15);
+    test_dot_n!(16);
+}
+
+/// Test packed field operations vs scalar with 256 random packed vectors via proptest.
+///
+/// Verifies add, sub, mul, neg match lane-by-lane scalar results.
+pub fn test_packed_vs_scalar_proptest<PF>()
+where
+    PF: PackedField + Eq + 'static,
+    StandardUniform: Distribution<PF::Scalar>,
+{
+    let config = ProptestConfig::with_cases(256);
+    proptest!(config, |(seed_a in any::<u64>(), seed_b in any::<u64>())| {
+        let mut rng_a = SmallRng::seed_from_u64(seed_a);
+        let mut rng_b = SmallRng::seed_from_u64(seed_b);
+        let a = PF::from_fn(|_| rng_a.random());
+        let b = PF::from_fn(|_| rng_b.random());
+
+        let sum = a + b;
+        let diff = a - b;
+        let prod = a * b;
+        let neg_a = -a;
+
+        let sum = sum.as_slice();
+        let diff = diff.as_slice();
+        let prod = prod.as_slice();
+        let neg_a = neg_a.as_slice();
+        let a = a.as_slice();
+        let b = b.as_slice();
+
+        for i in 0..PF::WIDTH {
+            prop_assert_eq!(sum[i], a[i] + b[i],
+                "add mismatch at lane {}", i);
+            prop_assert_eq!(diff[i], a[i] - b[i],
+                "sub mismatch at lane {}", i);
+            prop_assert_eq!(prod[i], a[i] * b[i],
+                "mul mismatch at lane {}", i);
+            prop_assert_eq!(neg_a[i], -a[i],
+                "neg mismatch at lane {}", i);
+        }
+    });
+}
+
 #[macro_export]
 macro_rules! test_packed_field {
     ($packedfield:ty, $zeros:expr, $ones:expr, $specials:expr) => {
@@ -425,6 +511,14 @@ macro_rules! test_packed_field {
             fn test_multiplicative_inverse() {
                 $crate::test_multiplicative_inverse::<$packedfield>();
             }
+            #[test]
+            fn test_dot_product_boundary() {
+                $crate::test_dot_product_boundary::<$packedfield>();
+            }
+            #[test]
+            fn test_packed_vs_scalar_proptest() {
+                $crate::test_packed_vs_scalar_proptest::<$packedfield>();
+            }
         }
     };
 }
@@ -435,10 +529,21 @@ macro_rules! test_packed_extension_field {
         mod packed_field_tests {
             use p3_field::PrimeCharacteristicRing;
 
-            // TODO: Add more tests for packed extension fields.
             #[test]
             fn test_ring_with_eq() {
                 $crate::test_ring_with_eq::<$packedextfield>($zeros, $ones);
+            }
+            #[test]
+            fn test_mul_2exp_u64() {
+                $crate::test_mul_2exp_u64::<$packedextfield>();
+            }
+            #[test]
+            fn test_div_2exp_u64() {
+                $crate::test_div_2exp_u64::<$packedextfield>();
+            }
+            #[test]
+            fn test_ring_axioms_proptest() {
+                $crate::test_ring_axioms_proptest::<$packedextfield>();
             }
         }
     };
