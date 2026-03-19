@@ -89,6 +89,9 @@ pub enum InvalidProofShapeError {
     /// Opened values (trace, quotient, random) don't match expected dimensions.
     #[error("opened values do not match expected dimensions")]
     OpenedValuesDimensionMismatch,
+    /// Proof degree metadata is malformed or unsupported for safe verification.
+    #[error("invalid degree_bits in proof metadata: {degree_bits}")]
+    InvalidDegreeBits { degree_bits: usize },
 }
 
 /// Top-level verification error.

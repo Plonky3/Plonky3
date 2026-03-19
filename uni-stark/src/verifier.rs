@@ -234,8 +234,36 @@ where
         degree_bits,
     } = proof;
 
+    let is_zk = config.is_zk();
+    let invalid_degree_bits = || {
+        VerificationError::from(InvalidProofShapeError::InvalidDegreeBits {
+            degree_bits: *degree_bits,
+        })
+    };
+
+    // Reject malformed `degree_bits` before any shift/domain arithmetic.
+    //
+    // We require:
+    // - `degree_bits >= is_zk` so `degree_bits - is_zk` is safe.
+    // - one spare top bit so derived domain-size arithmetic remains representable.
+    if *degree_bits < is_zk || *degree_bits >= (usize::BITS as usize).saturating_sub(1) {
+        return Err(invalid_degree_bits());
+    }
+
+    let degree = 1usize
+        .checked_shl(*degree_bits as u32)
+        .ok_or_else(invalid_degree_bits)?;
+    let base_degree_bits = degree_bits
+        .checked_sub(is_zk)
+        .ok_or_else(invalid_degree_bits)?;
+    let base_degree = degree
+        .checked_shr(is_zk as u32)
+        .ok_or_else(invalid_degree_bits)?;
+    if base_degree == 0 {
+        return Err(invalid_degree_bits());
+    }
+
     let pcs = config.pcs();
-    let degree = 1 << degree_bits;
     let trace_domain = pcs.natural_domain_for_degree(degree);
     // TODO: allow moving preprocessed commitment to preprocess time, if known in advance
     let (preprocessed_width, preprocessed_commit) =
@@ -263,16 +291,26 @@ where
         get_log_num_quotient_chunks::<Val<SC>, A>(air, layout, config.is_zk());
     let num_quotient_chunks = 1 << (log_num_quotient_chunks + config.is_zk());
     let mut challenger = config.initialise_challenger();
-    let init_trace_domain = pcs.natural_domain_for_degree(degree >> (config.is_zk()));
+    let init_trace_domain = pcs.natural_domain_for_degree(base_degree);
 
-    let quotient_domain =
-        trace_domain.create_disjoint_domain(1 << (degree_bits + log_num_quotient_chunks));
+    let quotient_degree_bits = degree_bits
+        .checked_add(log_num_quotient_chunks)
+        .ok_or_else(invalid_degree_bits)?;
+    let quotient_degree = 1usize
+        .checked_shl(quotient_degree_bits as u32)
+        .ok_or_else(invalid_degree_bits)?;
+
+    let quotient_domain = trace_domain.create_disjoint_domain(quotient_degree);
     let quotient_chunks_domains = quotient_domain.split_domains(num_quotient_chunks);
 
-    let randomized_quotient_chunks_domains = quotient_chunks_domains
-        .iter()
-        .map(|domain| pcs.natural_domain_for_degree(domain.size() << (config.is_zk())))
-        .collect_vec();
+    let mut randomized_quotient_chunks_domains = Vec::with_capacity(quotient_chunks_domains.len());
+    for domain in &quotient_chunks_domains {
+        let randomized_degree = domain
+            .size()
+            .checked_shl(is_zk as u32)
+            .ok_or_else(invalid_degree_bits)?;
+        randomized_quotient_chunks_domains.push(pcs.natural_domain_for_degree(randomized_degree));
+    }
     // Check that the random commitments are/are not present depending on the ZK setting.
     // - If ZK is enabled, the prover should have random commitments.
     // - If ZK is not enabled, the prover should not have random commitments.
@@ -308,7 +346,7 @@ where
 
     // Observe the instance.
     challenger.observe(Val::<SC>::from_usize(proof.degree_bits));
-    challenger.observe(Val::<SC>::from_usize(proof.degree_bits - config.is_zk()));
+    challenger.observe(Val::<SC>::from_usize(base_degree_bits));
     challenger.observe(Val::<SC>::from_usize(preprocessed_width));
     // TODO: Might be best practice to include other instance data here in the transcript, like some
     // encoding of the AIR. This protects against transcript collisions between distinct instances.
