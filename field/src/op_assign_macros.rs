@@ -219,6 +219,38 @@ macro_rules! impl_div_methods {
     };
 }
 
+/// Given a packed field type, implement `Div<Self>` and `DivAssign<Self>` using
+/// lane-wise inverse and multiply.
+///
+/// This requires the type to implement `PackedValue` (for `from_fn` and `as_slice`)
+/// and `Mul<Self>` (for the multiplication step). Each lane's divisor is inverted
+/// individually and the result is multiplied lane-wise.
+#[macro_export]
+macro_rules! impl_packed_field_div {
+    ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
+        paste::paste! {
+            impl$(<$param_name: $type_param>)? Div for $type$(<$param_name>)? {
+                type Output = Self;
+
+                #[inline]
+                #[allow(clippy::suspicious_arithmetic_impl)]
+                fn div(self, rhs: Self) -> Self {
+                    use p3_field::PackedValue;
+                    let rhs_inv = Self::from_fn(|i| rhs.as_slice()[i].inverse());
+                    self * rhs_inv
+                }
+            }
+
+            impl$(<$param_name: $type_param>)? DivAssign for $type$(<$param_name>)? {
+                #[inline]
+                fn div_assign(&mut self, rhs: Self) {
+                    *self = *self / rhs;
+                }
+            }
+        }
+    };
+}
+
 /// Given two structs `Alg` and `Field` where `Alg` implements `From<Field>`, implement
 /// `Sum<Field> and Product<Field>` for `Alg`.
 ///
@@ -322,6 +354,7 @@ pub use impl_add_base_field;
 pub use impl_div_methods;
 pub use impl_mul_base_field;
 pub use impl_mul_methods;
+pub use impl_packed_field_div;
 pub use impl_packed_value;
 pub use impl_rng;
 pub use impl_sub_assign;

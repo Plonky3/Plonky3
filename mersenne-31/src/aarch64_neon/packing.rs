@@ -8,8 +8,8 @@ use p3_field::exponentiation::exp_1717986917;
 use p3_field::interleave::{interleave_u32, interleave_u64};
 use p3_field::op_assign_macros::{
     impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
-    impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field,
-    ring_sum,
+    impl_packed_field_div, impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field,
+    impl_sum_prod_base_field, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
@@ -220,6 +220,7 @@ impl_add_base_field!(PackedMersenne31Neon, Mersenne31);
 impl_sub_base_field!(PackedMersenne31Neon, Mersenne31);
 impl_mul_base_field!(PackedMersenne31Neon, Mersenne31);
 impl_div_methods!(PackedMersenne31Neon, Mersenne31);
+impl_packed_field_div!(PackedMersenne31Neon);
 impl_sum_prod_base_field!(PackedMersenne31Neon, Mersenne31);
 
 impl Algebra<Mersenne31> for PackedMersenne31Neon {}
