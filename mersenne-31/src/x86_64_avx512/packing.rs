@@ -214,10 +214,8 @@ impl_div_methods!(PackedMersenne31AVX512, Mersenne31);
 impl_sum_prod_base_field!(PackedMersenne31AVX512, Mersenne31);
 
 impl Algebra<Mersenne31> for PackedMersenne31AVX512 {
-    // TODO: Tune BATCHED_LC_CHUNK. Run on an AVX-512 machine:
-    //   RUSTFLAGS="-Ctarget-cpu=native" cargo bench --bench bench_field -p p3-mersenne-31 -- "batched_lc"
-    // and pick the chunk size with the lowest time.
-    // const BATCHED_LC_CHUNK: usize = ;
+    // Benchmarked on AVX-512: chunk=8 ≈ 77ns, chunk=2 ≈ 77ns, chunk=4 ≈ 78ns.
+    const BATCHED_LC_CHUNK: usize = 8;
 }
 
 #[inline]

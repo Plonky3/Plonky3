@@ -149,10 +149,8 @@ impl_div_methods!(PackedGoldilocksAVX512, Goldilocks);
 impl_sum_prod_base_field!(PackedGoldilocksAVX512, Goldilocks);
 
 impl Algebra<Goldilocks> for PackedGoldilocksAVX512 {
-    // TODO: Tune BATCHED_LC_CHUNK. Run on an AVX-512 machine:
-    //   RUSTFLAGS="-Ctarget-cpu=native" cargo bench --bench bench_field -p p3-goldilocks -- "batched_lc"
-    // and pick the chunk size with the lowest time.
-    // const BATCHED_LC_CHUNK: usize = ;
+    // Benchmarked on AVX-512: chunk=4 ≈ 198ns, chunk=2 ≈ 198ns, chunk=32 ≈ 199ns.
+    const BATCHED_LC_CHUNK: usize = 4;
 }
 
 // Degree of the smallest permutation polynomial for Goldilocks.
