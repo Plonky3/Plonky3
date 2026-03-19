@@ -236,7 +236,8 @@ macro_rules! impl_packed_field_div {
                 #[allow(clippy::suspicious_arithmetic_impl)]
                 fn div(self, rhs: Self) -> Self {
                     use p3_field::PackedValue;
-                    let rhs_inv = Self::from_fn(|i| rhs.as_slice()[i].inverse());
+                    let inv = p3_field::batch_multiplicative_inverse(rhs.as_slice());
+                    let rhs_inv = Self::from_fn(|i| inv[i]);
                     self * rhs_inv
                 }
             }
