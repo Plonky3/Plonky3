@@ -162,7 +162,10 @@ impl_mul_base_field!(PackedGoldilocksAVX2, Goldilocks);
 impl_div_methods!(PackedGoldilocksAVX2, Goldilocks);
 impl_sum_prod_base_field!(PackedGoldilocksAVX2, Goldilocks);
 
-impl Algebra<Goldilocks> for PackedGoldilocksAVX2 {}
+impl Algebra<Goldilocks> for PackedGoldilocksAVX2 {
+    // Benchmarked on AVX2: chunk=32 ≈ 226ns, chunk=2 ≈ 228ns, chunk=16 ≈ 229ns.
+    const BATCHED_LC_CHUNK: usize = 32;
+}
 
 impl_packed_value!(PackedGoldilocksAVX2, Goldilocks, WIDTH);
 

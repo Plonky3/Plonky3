@@ -211,7 +211,10 @@ impl_mul_base_field!(PackedMersenne31AVX2, Mersenne31);
 impl_div_methods!(PackedMersenne31AVX2, Mersenne31);
 impl_sum_prod_base_field!(PackedMersenne31AVX2, Mersenne31);
 
-impl Algebra<Mersenne31> for PackedMersenne31AVX2 {}
+impl Algebra<Mersenne31> for PackedMersenne31AVX2 {
+    // Benchmarked on AVX2: chunk=32 ≈ 73ns, chunk=4 ≈ 74ns, chunk=8 ≈ 74ns.
+    const BATCHED_LC_CHUNK: usize = 32;
+}
 
 #[inline]
 #[must_use]

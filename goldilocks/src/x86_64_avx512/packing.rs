@@ -148,7 +148,10 @@ impl_mul_base_field!(PackedGoldilocksAVX512, Goldilocks);
 impl_div_methods!(PackedGoldilocksAVX512, Goldilocks);
 impl_sum_prod_base_field!(PackedGoldilocksAVX512, Goldilocks);
 
-impl Algebra<Goldilocks> for PackedGoldilocksAVX512 {}
+impl Algebra<Goldilocks> for PackedGoldilocksAVX512 {
+    // Benchmarked on AVX-512: chunk=4 ≈ 198ns, chunk=2 ≈ 198ns, chunk=32 ≈ 199ns.
+    const BATCHED_LC_CHUNK: usize = 4;
+}
 
 // Degree of the smallest permutation polynomial for Goldilocks.
 //
