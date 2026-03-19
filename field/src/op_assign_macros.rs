@@ -220,11 +220,11 @@ macro_rules! impl_div_methods {
 }
 
 /// Given a packed field type, implement `Div<Self>` and `DivAssign<Self>` using
-/// lane-wise inverse and multiply.
+/// Montgomery's trick on a stack-allocated buffer.
 ///
 /// This requires the type to implement `PackedValue` (for `from_fn` and `as_slice`)
-/// and `Mul<Self>` (for the multiplication step). Each lane's divisor is inverted
-/// individually and the result is multiplied lane-wise.
+/// and `Mul<Self>` (for the multiplication step). Only a single field inversion
+/// is performed regardless of the packing width, and no heap allocation is needed.
 #[macro_export]
 macro_rules! impl_packed_field_div {
     ($type:ty $(, ($type_param:ty, $param_name:ty))?) => {
@@ -235,10 +235,15 @@ macro_rules! impl_packed_field_div {
                 #[inline]
                 #[allow(clippy::suspicious_arithmetic_impl)]
                 fn div(self, rhs: Self) -> Self {
-                    use p3_field::PackedValue;
-                    let inv = p3_field::batch_multiplicative_inverse(rhs.as_slice());
-                    let rhs_inv = Self::from_fn(|i| inv[i]);
-                    self * rhs_inv
+                    use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
+
+                    let mut result = Self::broadcast(<Self as PackedValue>::Value::ZERO);
+                    p3_field::batch_multiplicative_inverse_general(
+                        rhs.as_slice(),
+                        result.as_slice_mut(),
+                        |x| x.inverse(),
+                    );
+                    self * result
                 }
             }
 
