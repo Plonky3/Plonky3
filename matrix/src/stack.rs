@@ -1,6 +1,7 @@
 use core::ops::Deref;
 
 use crate::Matrix;
+use crate::bitrev::BitReversibleMatrix;
 use crate::dense::RowMajorMatrixView;
 
 /// A type alias representing a vertical composition of two row-major matrix views.
@@ -242,6 +243,19 @@ where
         match self {
             Self::Left(l) => l,
             Self::Right(r) => r,
+        }
+    }
+}
+
+impl<T: Clone + Send + Sync, Left: BitReversibleMatrix<T>, Right: BitReversibleMatrix<T>>
+    BitReversibleMatrix<T> for HorizontalPair<Left, Right>
+{
+    type BitRev = HorizontalPair<Left::BitRev, Right::BitRev>;
+
+    fn bit_reverse_rows(self) -> Self::BitRev {
+        HorizontalPair {
+            left: self.left.bit_reverse_rows(),
+            right: self.right.bit_reverse_rows(),
         }
     }
 }
