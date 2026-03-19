@@ -534,15 +534,14 @@ impl LookupGadget for LogUpGadget {
                             //   combined = e_0 * beta^{k-1} + e_1 * beta^{k-2} + ... + e_{k-1}
                             // Then store (alpha - combined) as the denominator.
                             let mut iter = elts.iter();
-                            let combined_elt =
-                                iter.next().map_or(SC::Challenge::ZERO, |first| {
-                                    iter.fold(
-                                        symbolic_to_expr(&row_builder, first).into(),
-                                        |acc: SC::Challenge, e| {
-                                            acc * beta + symbolic_to_expr(&row_builder, e)
-                                        },
-                                    )
-                                });
+                            let combined_elt = iter.next().map_or(SC::Challenge::ZERO, |first| {
+                                iter.fold(
+                                    symbolic_to_expr(&row_builder, first).into(),
+                                    |acc: SC::Challenge, e| {
+                                        acc * beta + symbolic_to_expr(&row_builder, e)
+                                    },
+                                )
+                            });
                             local_denoms[offset] = alpha - combined_elt;
 
                             // Store the multiplicity as a base-field element (4 bytes vs 16 for
