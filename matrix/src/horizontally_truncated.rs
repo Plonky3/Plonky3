@@ -2,6 +2,7 @@ use core::marker::PhantomData;
 use core::ops::Range;
 
 use crate::Matrix;
+use crate::bitrev::BitReversibleMatrix;
 
 /// A matrix wrapper that exposes a contiguous range of columns from an inner matrix.
 ///
@@ -122,6 +123,20 @@ where
                 self.column_range.start + start,
                 self.column_range.start + end,
             )
+        }
+    }
+}
+
+impl<T: Clone + Send + Sync, Inner: BitReversibleMatrix<T>> BitReversibleMatrix<T>
+    for HorizontallyTruncated<T, Inner>
+{
+    type BitRev = HorizontallyTruncated<T, Inner::BitRev>;
+
+    fn bit_reverse_rows(self) -> Self::BitRev {
+        HorizontallyTruncated {
+            inner: self.inner.bit_reverse_rows(),
+            column_range: self.column_range,
+            _phantom: PhantomData,
         }
     }
 }
