@@ -366,7 +366,7 @@ enum ConstraintType {
 ///
 /// When alpha powers are pre-computed in global order `[α^{N−1}, …, α⁰]`,
 /// the layout tells us which powers correspond to base-field constraints (for
-/// `packed_linear_combination`) and which to extension-field constraints.
+/// `batched_linear_combination`) and which to extension-field constraints.
 #[derive(Debug, Default)]
 pub struct ConstraintLayout {
     /// Global indices of base-field constraints, in emission order.
@@ -385,7 +385,7 @@ impl ConstraintLayout {
     ///
     /// Returns `(base_alpha_powers, ext_alpha_powers)` where:
     /// - `base_alpha_powers[d][j]` = d-th basis coefficient of the alpha power for
-    ///   the j-th base constraint (transposed + reordered for `packed_linear_combination`)
+    ///   the j-th base constraint (transposed + reordered for `batched_linear_combination`)
     /// - `ext_alpha_powers[j]` = full EF alpha power for the j-th extension constraint
     ///
     /// Constraints are emitted in one global order and folded into a single random
@@ -400,7 +400,7 @@ impl ConstraintLayout {
     /// throughput, while extension constraints must stay in the extension field. This
     /// method splits the precomputed powers accordingly, and also transposes EF powers
     /// into their base-field coordinates so the base-field path can use
-    /// `packed_linear_combination` without repeated cross-field conversions.
+    /// `batched_linear_combination` without repeated cross-field conversions.
     pub fn decompose_alpha<F: Field, EF: ExtensionField<F>>(
         &self,
         alpha: EF,
