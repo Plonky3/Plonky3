@@ -23,6 +23,21 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     /// Number of scalar values packed together.
     const WIDTH: usize;
 
+    /// Constructs a packed value using a function to generate each element.
+    ///
+    /// Similar to [`core::array::from_fn`].
+    #[must_use]
+    fn from_fn<F>(f: F) -> Self
+    where
+        F: FnMut(usize) -> Self::Value;
+
+    /// Create a packed value with all lanes set to the same scalar value.
+    #[inline]
+    #[must_use]
+    fn broadcast(value: Self::Value) -> Self {
+        Self::from_fn(|_| value)
+    }
+
     /// Interprets a slice of scalar values as a packed value reference.
     ///
     /// # Panics:
@@ -37,14 +52,6 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     #[must_use]
     fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self;
 
-    /// Constructs a packed value using a function to generate each element.
-    ///
-    /// Similar to `core:array::from_fn`.
-    #[must_use]
-    fn from_fn<F>(f: F) -> Self
-    where
-        F: FnMut(usize) -> Self::Value;
-
     /// Returns the underlying scalar values as an immutable slice.
     #[must_use]
     fn as_slice(&self) -> &[Self::Value];
@@ -52,6 +59,16 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     /// Returns the underlying scalar values as a mutable slice.
     #[must_use]
     fn as_slice_mut(&mut self) -> &mut [Self::Value];
+
+    /// Extract the scalar value at the given SIMD lane.
+    ///
+    /// This is equivalent to `self.as_slice()[lane]` but more explicit about the
+    /// SIMD extraction semantics.
+    #[inline]
+    #[must_use]
+    fn extract(&self, lane: usize) -> Self::Value {
+        self.as_slice()[lane]
+    }
 
     /// Packs a slice of scalar values into a slice of packed values.
     ///
@@ -73,14 +90,6 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         let buf_ptr = buf.as_ptr().cast::<Self>();
         let n = buf.len() / Self::WIDTH;
         unsafe { slice::from_raw_parts(buf_ptr, n) }
-    }
-
-    /// Packs a slice into packed values and returns the packed portion and any remaining suffix.
-    #[inline]
-    #[must_use]
-    fn pack_slice_with_suffix(buf: &[Self::Value]) -> (&[Self], &[Self::Value]) {
-        let (packed, suffix) = buf.split_at(buf.len() - buf.len() % Self::WIDTH);
-        (Self::pack_slice(packed), suffix)
     }
 
     /// Converts a mutable slice of scalar values into a mutable slice of packed values.
@@ -128,6 +137,14 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         unsafe { slice::from_raw_parts_mut(buf_ptr, n) }
     }
 
+    /// Packs a slice into packed values and returns the packed portion and any remaining suffix.
+    #[inline]
+    #[must_use]
+    fn pack_slice_with_suffix(buf: &[Self::Value]) -> (&[Self], &[Self::Value]) {
+        let (packed, suffix) = buf.split_at(buf.len() - buf.len() % Self::WIDTH);
+        (Self::pack_slice(packed), suffix)
+    }
+
     /// Converts a mutable slice of scalar values into a pair:
     /// - a slice of packed values covering the largest aligned portion,
     /// - and a remainder slice of scalar values that couldn't be packed.
@@ -165,14 +182,29 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         unsafe { slice::from_raw_parts(buf_ptr, n) }
     }
 
-    /// Extract the scalar value at the given SIMD lane.
+    /// Pack columns from `WIDTH` rows of scalar values into `N` packed values.
     ///
-    /// This is equivalent to `self.as_slice()[lane]` but more explicit about the
-    /// SIMD extraction semantics.
+    /// Given `WIDTH` rows of `N` scalar values, extract each column and pack it
+    /// into a single packed value. This is the inverse of `unpack_into`.
+    ///
+    /// ## Panics
+    /// Panics if `rows.len() != WIDTH`.
     #[inline]
     #[must_use]
-    fn extract(&self, lane: usize) -> Self::Value {
-        self.as_slice()[lane]
+    fn pack_columns<const N: usize>(rows: &[[Self::Value; N]]) -> [Self; N] {
+        assert_eq!(rows.len(), Self::WIDTH);
+        array::from_fn(|col| Self::from_fn(|lane| rows[lane][col]))
+    }
+
+    /// Pack columns using a closure that provides each row's data.
+    ///
+    /// Calls `row_fn(lane)` for each lane `0..WIDTH` to get `[Self::Value; N]`,
+    /// then transposes columns into packed values. Useful when rows aren't
+    /// contiguous in memory (e.g., strided access).
+    #[inline]
+    #[must_use]
+    fn pack_columns_fn<const N: usize>(row_fn: impl Fn(usize) -> [Self::Value; N]) -> [Self; N] {
+        array::from_fn(|col| Self::from_fn(|lane| row_fn(lane)[col]))
     }
 
     /// Unpack `N` packed values into `WIDTH` rows of `N` scalars.
@@ -190,6 +222,15 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
         for lane in 0..Self::WIDTH {
             rows[lane] = array::from_fn(|col| packed[col].extract(lane));
         }
+    }
+
+    /// Unpack `N` packed values into an iterator of `WIDTH` rows.
+    ///
+    /// This is the iterator equivalent of `unpack_into`, yielding each row
+    /// without requiring a pre-allocated buffer.
+    #[inline]
+    fn unpack_iter<const N: usize>(packed: [Self; N]) -> impl Iterator<Item = [Self::Value; N]> {
+        (0..Self::WIDTH).map(move |lane| array::from_fn(|col| packed[col].extract(lane)))
     }
 }
 
@@ -362,7 +403,7 @@ pub trait PackedFieldExtension<
     #[must_use]
     fn to_ext_iter(iter: impl IntoIterator<Item = Self>) -> impl Iterator<Item = ExtField> {
         iter.into_iter()
-            .flat_map(|x| (0..BaseField::Packing::WIDTH).map(move |i| x.extract(i)))
+            .flat_map(|x| (0..BaseField::Packing::WIDTH).map(move |lane| x.extract(lane)))
     }
 
     /// Similar to `packed_powers`, construct an iterator which returns
