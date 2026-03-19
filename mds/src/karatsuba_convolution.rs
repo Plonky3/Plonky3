@@ -49,7 +49,9 @@ use core::ops::{Add, AddAssign, Neg, Sub, SubAssign};
 
 use p3_field::{Algebra, Field};
 
-/// Bound alias for the "wide" operand type (lhs + output) in a Karatsuba convolution.
+/// Bound alias for the wide operand type (used for both lhs and output).
+///
+/// Must support addition, subtraction, negation, and in-place variants.
 pub trait ConvolutionElt:
     Add<Output = Self> + AddAssign + Copy + Neg<Output = Self> + Sub<Output = Self> + SubAssign
 {
@@ -60,7 +62,9 @@ impl<T> ConvolutionElt for T where
 {
 }
 
-/// Bound alias for the "narrow" operand type (rhs) in a Karatsuba convolution.
+/// Bound alias for the narrow operand type (rhs only).
+///
+/// Requires addition, subtraction, negation, and copy.
 pub trait ConvolutionRhs:
     Add<Output = Self> + Copy + Neg<Output = Self> + Sub<Output = Self>
 {
@@ -68,32 +72,26 @@ pub trait ConvolutionRhs:
 
 impl<T> ConvolutionRhs for T where T: Add<Output = T> + Copy + Neg<Output = T> + Sub<Output = T> {}
 
-/// Template function to perform convolution of vectors.
+/// Trait for computing cyclic and negacyclic convolutions.
 ///
-/// Roughly speaking, for a convolution of size `N`, it should be
-/// possible to add `N` elements of type `T` without overflowing, and
-/// similarly for `U`. Then multiplication via `Self::mul` should
-/// produce an element of type `T` which will not overflow after about
-/// `N` additions (this is an over-estimate).
+/// Implementors choose how to lift field elements into a wider type,
+/// compute dot products, and reduce back.
+/// This allows integer-lifted arithmetic (e.g. i64) to avoid modular
+/// reductions inside the inner loops.
 ///
-/// For example usage, see `{mersenne-31,baby-bear,goldilocks}/src/mds.rs`.
+/// # Overflow contract
 ///
-/// NB: In practice, one of the parameters to the convolution will be
-/// constant (the MDS matrix). After inspecting Godbolt output, it
-/// seems that the compiler does indeed generate single constants as
-/// inputs to the multiplication, rather than doing all that
-/// arithmetic on the constant values every time. Note however that,
-/// for MDS matrices with large entries (N >= 24), these compile-time
-/// generated constants will be about N times bigger than they need to
-/// be in principle, which could be a potential avenue for some minor
-/// improvements.
+/// For a convolution of size N, it must be possible to add N elements
+/// of type T without overflow, and similarly for U.
+/// The product of one T and one U element must not overflow T after
+/// about N further additions.
 ///
-/// NB: If primitive multiplications are still the bottleneck, a
-/// further possibility would be to find an MDS matrix some of whose
-/// entries are powers of 2. Then the multiplication can be replaced
-/// with a shift, which on most architectures has better throughput
-/// and latency, and is issued on different ports (1*p06) to
-/// multiplication (1*p1).
+/// # Performance notes
+///
+/// In practice one operand is a compile-time constant (the MDS matrix).
+/// The compiler folds the constant arithmetic at compile time.
+/// For large matrices (N >= 24), the compile-time-generated constants
+/// are about N times bigger than strictly necessary.
 pub trait Convolve<F, T: ConvolutionElt, U: ConvolutionRhs> {
     /// Additive identity for the wide operand type `T`.
     ///
@@ -359,9 +357,10 @@ pub trait Convolve<F, T: ConvolutionElt, U: ConvolutionRhs> {
     }
 }
 
-/// Convolve implementor for field elements.
+/// Convolution implementor that stays entirely within the field.
 ///
-/// All arithmetic stays in the field — no integer lifting.
+/// No integer lifting — all operations are native field arithmetic.
+/// Used by the public Karatsuba entry points for generic field/algebra pairs.
 struct FieldConvolve<F, A>(PhantomData<(F, A)>);
 
 impl<F: Field, A: Algebra<F> + Copy> Convolve<A, A, F> for FieldConvolve<F, A> {
@@ -419,101 +418,256 @@ mod tests {
 
     type F = BabyBear;
 
-    /// Map an arbitrary `u32` into a field element.
     fn arb_f() -> impl Strategy<Value = F> {
         prop::num::u32::ANY.prop_map(F::from_u32)
     }
 
-    /// Naive O(N^2) circulant multiply used as the reference oracle.
-    ///
-    /// For each output index `i`, computes the dot product of the
-    /// cyclically shifted column with the state vector:
-    ///   r[i] = sum_j col[(i - j) mod N] * state[j]
-    fn naive_circulant<const N: usize>(col: [F; N], state: [F; N]) -> [F; N] {
+    fn naive_cyclic_conv<const N: usize>(lhs: [F; N], rhs: [F; N]) -> [F; N] {
+        // O(N^2) reference: w[i] = sum_j lhs[j] * rhs[(i - j) mod N].
         core::array::from_fn(|i| {
             let mut acc = F::ZERO;
             for j in 0..N {
-                acc += col[(N + i - j) % N] * state[j];
+                acc += lhs[j] * rhs[(N + i - j) % N];
             }
             acc
         })
     }
 
-    /// Fixed circulant column for width-16 tests.
-    /// Uses small distinct integers for a reproducible test vector.
-    fn col_16() -> [F; 16] {
-        [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17].map(F::from_i64)
+    fn naive_negacyclic_conv<const N: usize>(lhs: [F; N], rhs: [F; N]) -> [F; N] {
+        // O(N^2) reference: w(x) = lhs(x) * rhs(x) mod (x^N + 1).
+        // Coefficients that wrap past degree N-1 are subtracted (negacyclic).
+        let mut out = [F::ZERO; N];
+        for i in 0..N {
+            for j in 0..N {
+                let k = i + j;
+                if k < N {
+                    out[k] += lhs[i] * rhs[j];
+                } else {
+                    out[k - N] -= lhs[i] * rhs[j];
+                }
+            }
+        }
+        out
     }
 
-    /// Fixed circulant column for width-24 tests.
-    fn col_24() -> [F; 24] {
-        [
-            2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-        ]
-        .map(F::from_i64)
+    fn check_conv<const N: usize>(
+        lhs: [F; N],
+        rhs: [F; N],
+        conv_fn: fn([F; N], [F; N], &mut [F]),
+        naive_fn: fn([F; N], [F; N]) -> [F; N],
+    ) {
+        let expected = naive_fn(lhs, rhs);
+        let mut output = [F::ZERO; N];
+        conv_fn(lhs, rhs, &mut output);
+        assert_eq!(output, expected, "convolution mismatch");
+    }
+
+    macro_rules! conv_test {
+        ($name:ident, $n:expr, $conv:expr, $naive:expr, $arr:ident) => {
+            proptest! {
+                #[test]
+                fn $name(
+                    lhs in prop::array::$arr(arb_f()),
+                    rhs in prop::array::$arr(arb_f()),
+                ) {
+                    check_conv::<$n>(lhs, rhs, $conv, $naive);
+                }
+            }
+        };
+    }
+
+    // Width 3
+    conv_test!(
+        conv3_matches_naive,
+        3,
+        FieldConvolve::<F, F>::conv3,
+        naive_cyclic_conv,
+        uniform3
+    );
+    conv_test!(
+        negacyclic_conv3_matches_naive,
+        3,
+        FieldConvolve::<F, F>::negacyclic_conv3,
+        naive_negacyclic_conv,
+        uniform3
+    );
+
+    // Width 4
+    conv_test!(
+        conv4_matches_naive,
+        4,
+        FieldConvolve::<F, F>::conv4,
+        naive_cyclic_conv,
+        uniform4
+    );
+    conv_test!(
+        negacyclic_conv4_matches_naive,
+        4,
+        FieldConvolve::<F, F>::negacyclic_conv4,
+        naive_negacyclic_conv,
+        uniform4
+    );
+
+    // Width 6
+    conv_test!(
+        conv6_matches_naive,
+        6,
+        FieldConvolve::<F, F>::conv6,
+        naive_cyclic_conv,
+        uniform6
+    );
+    conv_test!(
+        negacyclic_conv6_matches_naive,
+        6,
+        FieldConvolve::<F, F>::negacyclic_conv6,
+        naive_negacyclic_conv,
+        uniform6
+    );
+
+    // Width 8
+    conv_test!(
+        conv8_matches_naive,
+        8,
+        FieldConvolve::<F, F>::conv8,
+        naive_cyclic_conv,
+        uniform8
+    );
+    conv_test!(
+        negacyclic_conv8_matches_naive,
+        8,
+        FieldConvolve::<F, F>::negacyclic_conv8,
+        naive_negacyclic_conv,
+        uniform8
+    );
+
+    // Width 12
+    conv_test!(
+        conv12_matches_naive,
+        12,
+        FieldConvolve::<F, F>::conv12,
+        naive_cyclic_conv,
+        uniform12
+    );
+    conv_test!(
+        negacyclic_conv12_matches_naive,
+        12,
+        FieldConvolve::<F, F>::negacyclic_conv12,
+        naive_negacyclic_conv,
+        uniform12
+    );
+
+    // Width 16
+    conv_test!(
+        conv16_matches_naive,
+        16,
+        FieldConvolve::<F, F>::conv16,
+        naive_cyclic_conv,
+        uniform16
+    );
+    conv_test!(
+        negacyclic_conv16_matches_naive,
+        16,
+        FieldConvolve::<F, F>::negacyclic_conv16,
+        naive_negacyclic_conv,
+        uniform16
+    );
+
+    // Width 24
+    conv_test!(
+        conv24_matches_naive,
+        24,
+        FieldConvolve::<F, F>::conv24,
+        naive_cyclic_conv,
+        uniform24
+    );
+
+    // Width 32
+    conv_test!(
+        conv32_matches_naive,
+        32,
+        FieldConvolve::<F, F>::conv32,
+        naive_cyclic_conv,
+        uniform32
+    );
+    conv_test!(
+        negacyclic_conv32_matches_naive,
+        32,
+        FieldConvolve::<F, F>::negacyclic_conv32,
+        naive_negacyclic_conv,
+        uniform32
+    );
+
+    #[test]
+    fn conv64_matches_naive_fixed() {
+        let lhs: [F; 64] = core::array::from_fn(|i| F::from_u32(i as u32 + 1));
+        let rhs: [F; 64] = core::array::from_fn(|i| F::from_u32(64 - i as u32));
+        check_conv::<64>(lhs, rhs, FieldConvolve::<F, F>::conv64, naive_cyclic_conv);
+    }
+
+    #[test]
+    fn conv64_all_ones() {
+        let ones = [F::ONE; 64];
+        let expected = naive_cyclic_conv(ones, ones);
+        let mut output = [F::ZERO; 64];
+        FieldConvolve::<F, F>::conv64(ones, ones, &mut output);
+        assert_eq!(output, expected);
     }
 
     proptest! {
-        /// Karatsuba width-16 must match the naive circulant multiply
-        /// for every random state vector.
         #[test]
-        fn karatsuba_16_matches_naive(state in prop::array::uniform16(arb_f())) {
-            let col = col_16();
-
-            // Compute the expected result via naive O(N^2) circulant multiply.
-            let expected = naive_circulant(col, state);
-
-            // Compute the actual result via Karatsuba convolution.
-            let mut actual = state;
-            mds_circulant_karatsuba_16(&mut actual, &col);
-
-            prop_assert_eq!(actual, expected);
-        }
-
-        /// Karatsuba width-24 must match the naive circulant multiply
-        /// for every random state vector.
-        #[test]
-        fn karatsuba_24_matches_naive(state in prop::array::uniform24(arb_f())) {
-            let col = col_24();
-
-            // Compute the expected result via naive O(N^2) circulant multiply.
-            let expected = naive_circulant(col, state);
-
-            // Compute the actual result via Karatsuba convolution.
-            let mut actual = state;
-            mds_circulant_karatsuba_24(&mut actual, &col);
-
-            prop_assert_eq!(actual, expected);
-        }
-
-        /// Karatsuba width-16 with a random circulant column.
-        /// Tests that the algorithm is correct beyond a single fixed matrix.
-        #[test]
-        fn karatsuba_16_random_col(
+        fn karatsuba_16_matches_naive(
             col in prop::array::uniform16(arb_f()),
             state in prop::array::uniform16(arb_f()),
         ) {
-            let expected = naive_circulant(col, state);
-
+            let expected = naive_cyclic_conv(state, col);
             let mut actual = state;
             mds_circulant_karatsuba_16(&mut actual, &col);
-
             prop_assert_eq!(actual, expected);
         }
 
-        /// Karatsuba width-24 with a random circulant column.
-        /// Tests that the algorithm is correct beyond a single fixed matrix.
         #[test]
-        fn karatsuba_24_random_col(
+        fn karatsuba_24_matches_naive(
             col in prop::array::uniform24(arb_f()),
             state in prop::array::uniform24(arb_f()),
         ) {
-            let expected = naive_circulant(col, state);
-
+            let expected = naive_cyclic_conv(state, col);
             let mut actual = state;
             mds_circulant_karatsuba_24(&mut actual, &col);
-
             prop_assert_eq!(actual, expected);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn conv8_commutative(
+            a in prop::array::uniform8(arb_f()),
+            b in prop::array::uniform8(arb_f()),
+        ) {
+            // Cyclic convolution is commutative: a * b = b * a.
+            let mut ab = [F::ZERO; 8];
+            let mut ba = [F::ZERO; 8];
+            FieldConvolve::<F, F>::conv8(a, b, &mut ab);
+            FieldConvolve::<F, F>::conv8(b, a, &mut ba);
+            prop_assert_eq!(ab, ba);
+        }
+
+        #[test]
+        fn conv8_identity(a in prop::array::uniform8(arb_f())) {
+            // The delta impulse [1, 0, 0, ...] is the convolution identity.
+            let mut id = [F::ZERO; 8];
+            id[0] = F::ONE;
+            let mut out = [F::ZERO; 8];
+            FieldConvolve::<F, F>::conv8(a, id, &mut out);
+            prop_assert_eq!(out, a);
+        }
+
+        #[test]
+        fn conv8_zero(a in prop::array::uniform8(arb_f())) {
+            // Convolving with the zero vector must produce all zeros.
+            let zeros = [F::ZERO; 8];
+            let mut out = [F::ZERO; 8];
+            FieldConvolve::<F, F>::conv8(a, zeros, &mut out);
+            prop_assert_eq!(out, zeros);
         }
     }
 }

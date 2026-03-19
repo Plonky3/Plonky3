@@ -2,7 +2,6 @@ use core::marker::PhantomData;
 
 use p3_mds::MdsPermutation;
 use p3_mds::karatsuba_convolution::Convolve;
-use p3_mds::util::dot_product;
 use p3_symmetric::Permutation;
 
 use crate::{BarrettParameters, MontyField31, MontyParameters};
@@ -54,7 +53,11 @@ impl<FP: MontyParameters> Convolve<MontyField31<FP>, i64, i64> for SmallConvolve
     /// of `reduce()` below.
     #[inline(always)]
     fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i64 {
-        dot_product(u, v)
+        let mut dp = u[0] * v[0];
+        for i in 1..N {
+            dp += u[i] * v[i];
+        }
+        dp
     }
 
     /// The assumptions above mean z < N^2 * 2^55, which is at most
