@@ -222,7 +222,10 @@ impl_mul_base_field!(PackedMersenne31Neon, Mersenne31);
 impl_div_methods!(PackedMersenne31Neon, Mersenne31);
 impl_sum_prod_base_field!(PackedMersenne31Neon, Mersenne31);
 
-impl Algebra<Mersenne31> for PackedMersenne31Neon {}
+impl Algebra<Mersenne31> for PackedMersenne31Neon {
+    // Benchmarked on AArch64 NEON: chunk=16 ≈ 51ns, chunk=8 ≈ 54ns, chunk=4 ≈ 59ns.
+    const BATCHED_LC_CHUNK: usize = 16;
+}
 
 /// Given a `val` in `0, ..., 2 P`, return a `res` in `0, ..., P` such that `res = val (mod P)`
 #[inline]

@@ -17,7 +17,9 @@ use p3_lookup::lookup_traits::{Kind, Lookup, LookupData, LookupGadget};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
-use p3_uni_stark::{OpenedValues, PackedChallenge, PackedVal, ProverConstraintFolder};
+use p3_uni_stark::{
+    ConstraintBuf, OpenedValues, PackedChallenge, PackedVal, ProverConstraintFolder,
+};
 use p3_util::log2_strict_usize;
 use tracing::{debug_span, info_span, instrument};
 
@@ -686,7 +688,8 @@ where
     }
 
     let constraint_layout = get_constraint_layout(air, layout, lookups, lookup_gadget);
-    let (base_alpha_powers, ext_alpha_powers) = constraint_layout.decompose_alpha(alpha);
+    let (base_alpha_powers, ext_alpha_powers_flat) = constraint_layout.decompose_alpha(alpha);
+    let ext_alpha_powers = [ext_alpha_powers_flat];
 
     // Precompute per-instance data used by the hot inner loop to avoid repeated allocations.
     let packed_perm_challenges: Vec<PackedChallenge<SC>> = permutation_challenges
@@ -763,10 +766,8 @@ where
                 is_first_row,
                 is_last_row,
                 is_transition,
-                base_alpha_powers: &base_alpha_powers,
-                ext_alpha_powers: &ext_alpha_powers,
-                base_constraints: Vec::with_capacity(constraint_layout.base_indices.len()),
-                ext_constraints: Vec::with_capacity(constraint_layout.ext_indices.len()),
+                base: ConstraintBuf::new(&base_alpha_powers),
+                ext: ConstraintBuf::new(&ext_alpha_powers),
                 constraint_index: 0,
                 constraint_count: constraint_layout.total_constraints(),
             };

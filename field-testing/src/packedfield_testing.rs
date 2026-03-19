@@ -238,6 +238,24 @@ where
     assert_eq!(dot_64, PF::mixed_dot_product::<64>(&a, &f));
 }
 
+pub fn test_batched_linear_combination<PF: PackedField + Eq>()
+where
+    StandardUniform: Distribution<PF> + Distribution<PF::Scalar>,
+{
+    let mut rng = SmallRng::seed_from_u64(99);
+    let values: [PF; 64] = rng.random();
+    let coeffs: [PF::Scalar; 64] = rng.random();
+
+    for len in [0, 1, 3, 7, 8, 9, 15, 16, 17, 32, 64] {
+        let expected: PF = values[..len]
+            .iter()
+            .zip(&coeffs[..len])
+            .fold(PF::ZERO, |acc, (&v, &c)| acc + v * c);
+        let got = PF::batched_linear_combination(&values[..len], &coeffs[..len]);
+        assert_eq!(expected, got, "failed for len={len}");
+    }
+}
+
 pub fn test_vs_scalar<PF>(special_vals: PF)
 where
     PF: PackedField + Eq,
@@ -502,6 +520,10 @@ macro_rules! test_packed_field {
             #[test]
             fn test_packed_mixed_dot_product() {
                 $crate::test_packed_mixed_dot_product::<$packedfield>();
+            }
+            #[test]
+            fn test_batched_linear_combination() {
+                $crate::test_batched_linear_combination::<$packedfield>();
             }
             #[test]
             fn test_vs_scalar() {

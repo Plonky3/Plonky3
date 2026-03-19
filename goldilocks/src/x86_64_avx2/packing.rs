@@ -162,7 +162,12 @@ impl_mul_base_field!(PackedGoldilocksAVX2, Goldilocks);
 impl_div_methods!(PackedGoldilocksAVX2, Goldilocks);
 impl_sum_prod_base_field!(PackedGoldilocksAVX2, Goldilocks);
 
-impl Algebra<Goldilocks> for PackedGoldilocksAVX2 {}
+impl Algebra<Goldilocks> for PackedGoldilocksAVX2 {
+    // TODO: Tune BATCHED_LC_CHUNK. Run on an AVX2 machine:
+    //   RUSTFLAGS="-Ctarget-cpu=native" cargo bench --bench bench_field -p p3-goldilocks -- "batched_lc"
+    // and pick the chunk size with the lowest time.
+    // const BATCHED_LC_CHUNK: usize = ;
+}
 
 impl_packed_value!(PackedGoldilocksAVX2, Goldilocks, WIDTH);
 
