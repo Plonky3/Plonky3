@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use core::hint::black_box;
 
 use criterion::{BatchSize, Criterion};
-use p3_field::{Algebra, Field, PrimeCharacteristicRing};
+use p3_field::{Algebra, Field, PrimeCharacteristicRing, chunked_linear_combination};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use rand::rngs::SmallRng;
@@ -493,4 +493,34 @@ pub fn benchmark_exp_const<R: PrimeCharacteristicRing + Copy, const POWER: u64, 
             BatchSize::SmallInput,
         );
     });
+}
+
+/// Benchmark [`chunked_linear_combination`] across all candidate chunk sizes
+/// (1, 2, 4, 8, 16, 32, 64) on `LEN` elements.
+pub fn benchmark_chunked_linear_combination<F: Field, A: Algebra<F> + Copy, const LEN: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<F> + Distribution<A>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let values: Vec<A> = (0..LEN).map(|_| rng.random()).collect();
+    let coeffs: Vec<F> = (0..LEN).map(|_| rng.random()).collect();
+
+    macro_rules! bench_chunk {
+        ($($chunk:literal),*) => {$(
+            c.bench_function(
+                &format!("{name} batched_lc/chunk={}, len={LEN}", $chunk),
+                |b| {
+                    b.iter(|| {
+                        chunked_linear_combination::<$chunk, A, F>(
+                            black_box(values.as_slice()),
+                            black_box(coeffs.as_slice()),
+                        )
+                    });
+                },
+            );
+        )*};
+    }
+    bench_chunk!(1, 2, 4, 8, 16, 32, 64);
 }
