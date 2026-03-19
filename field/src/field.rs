@@ -662,7 +662,7 @@ pub trait Algebra<F>:
     /// Optimal chunk size for [`batched_linear_combination`](Self::batched_linear_combination).
     ///
     /// Override in implementations where a different chunk size is faster.
-    /// Must be one of 1, 2, 4, 8, 16, 32, or 64; other values fall back to 8.
+    /// Must be one of 1, 2, 4, 8, 16, 32, or 64; other values cause a compile error.
     const BATCHED_LC_CHUNK: usize = 8;
 
     /// Runtime-length linear combination: `Σ values[i] * coeffs[i]`.
@@ -677,6 +677,12 @@ pub trait Algebra<F>:
     where
         F: Clone,
     {
+        const {
+            assert!(
+                matches!(Self::BATCHED_LC_CHUNK, 1 | 2 | 4 | 8 | 16 | 32 | 64),
+                "BATCHED_LC_CHUNK must be one of 1, 2, 4, 8, 16, 32, or 64"
+            );
+        }
         match Self::BATCHED_LC_CHUNK {
             1 => chunked_linear_combination::<1, Self, F>(values, coeffs),
             2 => chunked_linear_combination::<2, Self, F>(values, coeffs),
@@ -685,7 +691,7 @@ pub trait Algebra<F>:
             16 => chunked_linear_combination::<16, Self, F>(values, coeffs),
             32 => chunked_linear_combination::<32, Self, F>(values, coeffs),
             64 => chunked_linear_combination::<64, Self, F>(values, coeffs),
-            _ => chunked_linear_combination::<8, Self, F>(values, coeffs),
+            _ => unreachable!(),
         }
     }
 }

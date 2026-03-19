@@ -1,7 +1,10 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{Field, PackedField, PackedFieldPow2, PackedValue, PrimeCharacteristicRing};
+use p3_field::{
+    Algebra, ExtensionField, Field, PackedField, PackedFieldExtension, PackedFieldPow2,
+    PackedValue, PrimeCharacteristicRing,
+};
 use proptest::prelude::*;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
@@ -252,6 +255,27 @@ where
             .zip(&coeffs[..len])
             .fold(PF::ZERO, |acc, (&v, &c)| acc + v * c);
         let got = PF::batched_linear_combination(&values[..len], &coeffs[..len]);
+        assert_eq!(expected, got, "failed for len={len}");
+    }
+}
+
+pub fn test_batched_linear_combination_ext<BF, EF, PE>()
+where
+    BF: Field,
+    EF: ExtensionField<BF, ExtensionPacking = PE>,
+    PE: PackedFieldExtension<BF, EF> + Algebra<EF> + Copy + Eq,
+    StandardUniform: Distribution<PE> + Distribution<EF>,
+{
+    let mut rng = SmallRng::seed_from_u64(99);
+    let values: [PE; 64] = rng.random();
+    let coeffs: [EF; 64] = rng.random();
+
+    for len in [0, 1, 3, 7, 8, 9, 15, 16, 17, 32, 64] {
+        let expected: PE = values[..len]
+            .iter()
+            .zip(&coeffs[..len])
+            .fold(PE::ZERO, |acc, (&v, &c)| acc + v * c);
+        let got = PE::batched_linear_combination(&values[..len], &coeffs[..len]);
         assert_eq!(expected, got, "failed for len={len}");
     }
 }
@@ -666,7 +690,7 @@ macro_rules! test_packed_field {
 
 #[macro_export]
 macro_rules! test_packed_extension_field {
-    ($packedextfield:ty, $zeros:expr, $ones:expr) => {
+    ($basefield:ty, $extfield:ty, $packedextfield:ty, $zeros:expr, $ones:expr) => {
         mod packed_field_tests {
             use p3_field::PrimeCharacteristicRing;
 
@@ -685,6 +709,14 @@ macro_rules! test_packed_extension_field {
             #[test]
             fn test_ring_axioms_proptest() {
                 $crate::test_ring_axioms_proptest::<$packedextfield>();
+            }
+            #[test]
+            fn test_batched_linear_combination_ext() {
+                $crate::test_batched_linear_combination_ext::<
+                    $basefield,
+                    $extfield,
+                    $packedextfield,
+                >();
             }
         }
     };
