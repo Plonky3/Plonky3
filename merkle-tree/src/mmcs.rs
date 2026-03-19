@@ -123,13 +123,13 @@ pub enum MerkleTreeError {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
 /// The arity schedule and query positions for a given Merkle path.
 /// This is used to replay the arity schedule for a given Merkle path and recover, for each
 /// tree level, both:
 /// - the compression arity `step` used at that level (either `N` or `2`), and
 /// - the position of the queried child within its group, `pos_in_group`, in
 ///   the range `0..step`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArityAndPositions {
     /// The arity schedule for the Merkle path.
     pub arity_schedule: Vec<usize>,
