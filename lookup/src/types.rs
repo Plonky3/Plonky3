@@ -117,6 +117,14 @@ impl<F: Field> Lookup<F> {
             columns,
         }
     }
+
+    /// Counts how many global lookup interactions are present in `lookups`.
+    pub fn global_count(lookups: &[Self]) -> usize {
+        lookups
+            .iter()
+            .filter(|lookup| matches!(lookup.kind, Kind::Global(_)))
+            .count()
+    }
 }
 
 /// Trait for evaluating lookup constraints.
