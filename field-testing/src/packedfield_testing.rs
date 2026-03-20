@@ -263,6 +263,9 @@ where
     let vec_special_mul_right = vec1 * vec_special;
     let arr_special_mul_right = vec_special_mul_right.as_slice();
 
+    let vec_div = vec0 / vec1;
+    let arr_div = vec_div.as_slice();
+
     let vec_neg = -vec0;
     let arr_neg = vec_neg.as_slice();
     let vec_special_neg = -vec_special;
@@ -331,6 +334,12 @@ where
             arr_special_mul_right[i],
             arr1[i] * special_vals[i],
             "Error when testing consistency of right mul for special values for packed and scalar at location {i}.",
+        );
+
+        assert_eq!(
+            arr_div[i],
+            arr0[i] / arr1[i],
+            "Error when testing div consistency of packed and scalar at location {i}.",
         );
 
         assert_eq!(
@@ -556,11 +565,13 @@ where
         let sum = a + b;
         let diff = a - b;
         let prod = a * b;
+        let quot = a / b;
         let neg_a = -a;
 
         let sum = sum.as_slice();
         let diff = diff.as_slice();
         let prod = prod.as_slice();
+        let quot = quot.as_slice();
         let neg_a = neg_a.as_slice();
         let a = a.as_slice();
         let b = b.as_slice();
@@ -572,6 +583,8 @@ where
                 "sub mismatch at lane {}", i);
             prop_assert_eq!(prod[i], a[i] * b[i],
                 "mul mismatch at lane {}", i);
+            prop_assert_eq!(quot[i], a[i] / b[i],
+                "div mismatch at lane {}", i);
             prop_assert_eq!(neg_a[i], -a[i],
                 "neg mismatch at lane {}", i);
         }

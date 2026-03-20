@@ -57,7 +57,11 @@ fn batch_multiplicative_inverse_helper<F: Field>(x: &[F], result: &mut [F]) {
 
 /// A simple single-threaded implementation of Montgomery's trick. Since not all `PrimeCharacteristicRing`s
 /// support inversion, this takes a custom inversion function.
-pub(crate) fn batch_multiplicative_inverse_general<F, Inv>(x: &[F], result: &mut [F], inv: Inv)
+///
+/// Unlike [`batch_multiplicative_inverse`], this writes into a caller-provided buffer,
+/// avoiding heap allocation. This makes it suitable for small, fixed-size inputs
+/// such as packed field lanes.
+pub fn batch_multiplicative_inverse_general<F, Inv>(x: &[F], result: &mut [F], inv: Inv)
 where
     F: PrimeCharacteristicRing + Copy,
     Inv: Fn(F) -> F,
