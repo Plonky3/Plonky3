@@ -1,5 +1,21 @@
+use core::ops::{AddAssign, Mul};
+
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{PrimeCharacteristicRing, TwoAdicField};
+
+/// This will throw an error if N = 0 but it's hard to imagine this case coming up.
+#[inline(always)]
+pub fn dot_product<T, const N: usize>(u: [T; N], v: [T; N]) -> T
+where
+    T: Copy + AddAssign + Mul<Output = T>,
+{
+    debug_assert_ne!(N, 0);
+    let mut dp = u[0] * v[0];
+    for i in 1..N {
+        dp += u[i] * v[i];
+    }
+    dp
+}
 
 /// Given the first row `circ_matrix` of an NxN circulant matrix, say
 /// C, return the product `C*input`.

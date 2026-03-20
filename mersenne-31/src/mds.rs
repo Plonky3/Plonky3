@@ -10,7 +10,7 @@ use p3_field::PrimeCharacteristicRing;
 use p3_field::integers::QuotientMap;
 use p3_mds::MdsPermutation;
 use p3_mds::karatsuba_convolution::Convolve;
-use p3_mds::util::first_row_to_first_col;
+use p3_mds::util::{dot_product, first_row_to_first_col};
 use p3_symmetric::Permutation;
 
 use crate::Mersenne31;
@@ -45,11 +45,7 @@ impl Convolve<Mersenne31, i64, i64> for SmallConvolveMersenne31 {
     /// which will not overflow for N <= 16.
     #[inline(always)]
     fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i64 {
-        let mut dp = u[0] * v[0];
-        for i in 1..N {
-            dp += u[i] * v[i];
-        }
-        dp
+        dot_product(u, v)
     }
 
     /// The assumptions above mean z < N^2 * 2^55, which is at most
