@@ -327,7 +327,7 @@ impl LookupGadget for LogUpGadget {
         &self,
         all_expected_cumulative: &[EF],
     ) -> Result<(), LookupError> {
-        let total = all_expected_cumulative.iter().cloned().sum::<EF>();
+        let total = all_expected_cumulative.iter().copied().sum::<EF>();
 
         if !total.is_zero() {
             // We set the name associated to the lookup to None because we don't have access to the actual name here.

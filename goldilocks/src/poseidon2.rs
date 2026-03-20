@@ -477,7 +477,7 @@ pub const MATRIX_DIAG_20_GOLDILOCKS: [Goldilocks; 20] = Goldilocks::new_array([
 ]);
 
 fn internal_layer_mat_mul_goldilocks_8<A: Algebra<Goldilocks>>(state: &mut [A; 8]) {
-    let sum: A = state.iter().cloned().sum();
+    let sum: A = state.iter().map(|r| r.dup()).sum();
 
     let s0 = state[0].dup();
     let s1 = state[1].dup();
@@ -522,7 +522,7 @@ fn internal_layer_mat_mul_goldilocks_8<A: Algebra<Goldilocks>>(state: &mut [A; 8
 }
 
 fn internal_layer_mat_mul_goldilocks_12<A: Algebra<Goldilocks>>(state: &mut [A; 12]) {
-    let sum: A = state.iter().cloned().sum();
+    let sum: A = state.iter().map(|r| r.dup()).sum();
 
     let s0 = state[0].dup();
     let s1 = state[1].dup();
@@ -585,7 +585,7 @@ fn internal_layer_mat_mul_goldilocks_12<A: Algebra<Goldilocks>>(state: &mut [A; 
 }
 
 fn internal_layer_mat_mul_goldilocks_16<A: Algebra<Goldilocks>>(state: &mut [A; 16]) {
-    let sum: A = state.iter().cloned().sum();
+    let sum: A = state.iter().map(|r| r.dup()).sum();
 
     let s0 = state[0].dup();
     let s1 = state[1].dup();
@@ -777,7 +777,7 @@ pub struct GenericPoseidon2LinearLayersGoldilocks;
 
 impl GenericPoseidon2LinearLayers<8> for GenericPoseidon2LinearLayersGoldilocks {
     fn internal_linear_layer<R: PrimeCharacteristicRing>(state: &mut [R; 8]) {
-        let sum: R = state.iter().cloned().sum();
+        let sum: R = state.iter().map(|r| r.dup()).sum();
         for i in 0..8 {
             let d = R::from_u64(MATRIX_DIAG_8_GOLDILOCKS[i].value);
             state[i] *= d;
@@ -788,7 +788,7 @@ impl GenericPoseidon2LinearLayers<8> for GenericPoseidon2LinearLayersGoldilocks 
 
 impl GenericPoseidon2LinearLayers<12> for GenericPoseidon2LinearLayersGoldilocks {
     fn internal_linear_layer<R: PrimeCharacteristicRing>(state: &mut [R; 12]) {
-        let sum: R = state.iter().cloned().sum();
+        let sum: R = state.iter().map(|r| r.dup()).sum();
         for i in 0..12 {
             let d = R::from_u64(MATRIX_DIAG_12_GOLDILOCKS[i].value);
             state[i] *= d;
@@ -799,7 +799,7 @@ impl GenericPoseidon2LinearLayers<12> for GenericPoseidon2LinearLayersGoldilocks
 
 impl GenericPoseidon2LinearLayers<16> for GenericPoseidon2LinearLayersGoldilocks {
     fn internal_linear_layer<R: PrimeCharacteristicRing>(state: &mut [R; 16]) {
-        let sum: R = state.iter().cloned().sum();
+        let sum: R = state.iter().map(|r| r.dup()).sum();
         for i in 0..16 {
             let d = R::from_u64(MATRIX_DIAG_16_GOLDILOCKS[i].value);
             state[i] *= d;
@@ -810,7 +810,7 @@ impl GenericPoseidon2LinearLayers<16> for GenericPoseidon2LinearLayersGoldilocks
 
 impl GenericPoseidon2LinearLayers<20> for GenericPoseidon2LinearLayersGoldilocks {
     fn internal_linear_layer<R: PrimeCharacteristicRing>(state: &mut [R; 20]) {
-        let sum: R = state.iter().cloned().sum();
+        let sum: R = state.iter().map(|r| r.dup()).sum();
         for i in 0..20 {
             let d = R::from_u64(MATRIX_DIAG_20_GOLDILOCKS[i].value);
             state[i] *= d;
