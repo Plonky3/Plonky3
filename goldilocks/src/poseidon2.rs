@@ -479,106 +479,106 @@ pub const MATRIX_DIAG_20_GOLDILOCKS: [Goldilocks; 20] = Goldilocks::new_array([
 fn internal_layer_mat_mul_goldilocks_8<A: Algebra<Goldilocks>>(state: &mut [A; 8]) {
     let sum: A = state.iter().cloned().sum();
 
-    let s0 = state[0].clone();
-    let s1 = state[1].clone();
-    let s2 = state[2].clone();
-    let s3 = state[3].clone();
-    let s4 = state[4].clone();
-    let s5 = state[5].clone();
-    let s6 = state[6].clone();
-    let s7 = state[7].clone();
+    let s0 = state[0].dup();
+    let s1 = state[1].dup();
+    let s2 = state[2].dup();
+    let s3 = state[3].dup();
+    let s4 = state[4].dup();
+    let s5 = state[5].dup();
+    let s6 = state[6].dup();
+    let s7 = state[7].dup();
 
     // V[0] = -2
-    let two_s0 = s0.clone() + s0;
-    state[0] = sum.clone() - two_s0;
+    let two_s0 = s0.dup() + s0;
+    state[0] = sum.dup() - two_s0;
 
     // V[1] = 1
-    state[1] = sum.clone() + s1;
+    state[1] = sum.dup() + s1;
 
     // V[2] = 2
-    let two_s2 = s2.clone() + s2;
-    state[2] = sum.clone() + two_s2;
+    let two_s2 = s2.dup() + s2;
+    state[2] = sum.dup() + two_s2;
 
     // V[3] = 1/2
-    state[3] = sum.clone() + s3.halve();
+    state[3] = sum.dup() + s3.halve();
 
     // V[4] = 3
-    let two_s4 = s4.clone() + s4.clone();
+    let two_s4 = s4.dup() + s4.dup();
     let three_s4 = two_s4 + s4;
-    state[4] = sum.clone() + three_s4;
+    state[4] = sum.dup() + three_s4;
 
     // V[5] = -1/2
-    state[5] = sum.clone() - s5.halve();
+    state[5] = sum.dup() - s5.halve();
 
     // V[6] = -3
-    let two_s6 = s6.clone() + s6.clone();
+    let two_s6 = s6.dup() + s6.dup();
     let three_s6 = two_s6 + s6;
-    state[6] = sum.clone() - three_s6;
+    state[6] = sum.dup() - three_s6;
 
     // V[7] = -4
-    let two_s7 = s7.clone() + s7;
-    let four_s7 = two_s7.clone() + two_s7;
+    let two_s7 = s7.dup() + s7;
+    let four_s7 = two_s7.dup() + two_s7;
     state[7] = sum - four_s7;
 }
 
 fn internal_layer_mat_mul_goldilocks_12<A: Algebra<Goldilocks>>(state: &mut [A; 12]) {
     let sum: A = state.iter().cloned().sum();
 
-    let s0 = state[0].clone();
-    let s1 = state[1].clone();
-    let s2 = state[2].clone();
-    let s3 = state[3].clone();
-    let s4 = state[4].clone();
-    let s5 = state[5].clone();
-    let s6 = state[6].clone();
-    let s7 = state[7].clone();
-    let s8 = state[8].clone();
-    let s9 = state[9].clone();
-    let s10 = state[10].clone();
-    let s11 = state[11].clone();
+    let s0 = state[0].dup();
+    let s1 = state[1].dup();
+    let s2 = state[2].dup();
+    let s3 = state[3].dup();
+    let s4 = state[4].dup();
+    let s5 = state[5].dup();
+    let s6 = state[6].dup();
+    let s7 = state[7].dup();
+    let s8 = state[8].dup();
+    let s9 = state[9].dup();
+    let s10 = state[10].dup();
+    let s11 = state[11].dup();
 
     // V[0] = -2
-    let two_s0 = s0.clone() + s0;
-    state[0] = sum.clone() - two_s0;
+    let two_s0 = s0.dup() + s0;
+    state[0] = sum.dup() - two_s0;
 
     // V[1] = 1
-    state[1] = sum.clone() + s1;
+    state[1] = sum.dup() + s1;
 
     // V[2] = 2
-    let two_s2 = s2.clone() + s2;
-    state[2] = sum.clone() + two_s2;
+    let two_s2 = s2.dup() + s2;
+    state[2] = sum.dup() + two_s2;
 
     // V[3] = 1/2
-    state[3] = sum.clone() + s3.halve();
+    state[3] = sum.dup() + s3.halve();
 
     // V[4] = 3
-    let two_s4 = s4.clone() + s4.clone();
+    let two_s4 = s4.dup() + s4.dup();
     let three_s4 = two_s4 + s4;
-    state[4] = sum.clone() + three_s4;
+    state[4] = sum.dup() + three_s4;
 
     // V[5] = 4
-    let two_s5 = s5.clone() + s5;
-    let four_s5 = two_s5.clone() + two_s5;
-    state[5] = sum.clone() + four_s5;
+    let two_s5 = s5.dup() + s5;
+    let four_s5 = two_s5.dup() + two_s5;
+    state[5] = sum.dup() + four_s5;
 
     // V[6] = -1/2
-    state[6] = sum.clone() - s6.halve();
+    state[6] = sum.dup() - s6.halve();
 
     // V[7] = -3
-    let two_s7 = s7.clone() + s7.clone();
+    let two_s7 = s7.dup() + s7.dup();
     let three_s7 = two_s7 + s7;
-    state[7] = sum.clone() - three_s7;
+    state[7] = sum.dup() - three_s7;
 
     // V[8] = -4
-    let two_s8 = s8.clone() + s8;
-    let four_s8 = two_s8.clone() + two_s8;
-    state[8] = sum.clone() - four_s8;
+    let two_s8 = s8.dup() + s8;
+    let four_s8 = two_s8.dup() + two_s8;
+    state[8] = sum.dup() - four_s8;
 
     // V[9] = 1/2^2
-    state[9] = sum.clone() + s9.halve().halve();
+    state[9] = sum.dup() + s9.halve().halve();
 
     // V[10] = -1/2^2
-    state[10] = sum.clone() - s10.halve().halve();
+    state[10] = sum.dup() - s10.halve().halve();
 
     // V[11] = 1/2^3
     state[11] = sum + s11.halve().halve().halve();
@@ -587,77 +587,77 @@ fn internal_layer_mat_mul_goldilocks_12<A: Algebra<Goldilocks>>(state: &mut [A; 
 fn internal_layer_mat_mul_goldilocks_16<A: Algebra<Goldilocks>>(state: &mut [A; 16]) {
     let sum: A = state.iter().cloned().sum();
 
-    let s0 = state[0].clone();
-    let s1 = state[1].clone();
-    let s2 = state[2].clone();
-    let s3 = state[3].clone();
-    let s4 = state[4].clone();
-    let s5 = state[5].clone();
-    let s6 = state[6].clone();
-    let s7 = state[7].clone();
-    let s8 = state[8].clone();
-    let s9 = state[9].clone();
-    let s10 = state[10].clone();
-    let s11 = state[11].clone();
-    let s12 = state[12].clone();
-    let s13 = state[13].clone();
-    let s14 = state[14].clone();
-    let s15 = state[15].clone();
+    let s0 = state[0].dup();
+    let s1 = state[1].dup();
+    let s2 = state[2].dup();
+    let s3 = state[3].dup();
+    let s4 = state[4].dup();
+    let s5 = state[5].dup();
+    let s6 = state[6].dup();
+    let s7 = state[7].dup();
+    let s8 = state[8].dup();
+    let s9 = state[9].dup();
+    let s10 = state[10].dup();
+    let s11 = state[11].dup();
+    let s12 = state[12].dup();
+    let s13 = state[13].dup();
+    let s14 = state[14].dup();
+    let s15 = state[15].dup();
 
     // V[0] = -2
-    let two_s0 = s0.clone() + s0;
-    state[0] = sum.clone() - two_s0;
+    let two_s0 = s0.dup() + s0;
+    state[0] = sum.dup() - two_s0;
 
     // V[1] = 1
-    state[1] = sum.clone() + s1;
+    state[1] = sum.dup() + s1;
 
     // V[2] = 2
-    let two_s2 = s2.clone() + s2;
-    state[2] = sum.clone() + two_s2;
+    let two_s2 = s2.dup() + s2;
+    state[2] = sum.dup() + two_s2;
 
     // V[3] = 1/2
-    state[3] = sum.clone() + s3.halve();
+    state[3] = sum.dup() + s3.halve();
 
     // V[4] = 3
-    let two_s4 = s4.clone() + s4.clone();
+    let two_s4 = s4.dup() + s4.dup();
     let three_s4 = two_s4 + s4;
-    state[4] = sum.clone() + three_s4;
+    state[4] = sum.dup() + three_s4;
 
     // V[5] = 4
-    let two_s5 = s5.clone() + s5;
-    let four_s5 = two_s5.clone() + two_s5;
-    state[5] = sum.clone() + four_s5;
+    let two_s5 = s5.dup() + s5;
+    let four_s5 = two_s5.dup() + two_s5;
+    state[5] = sum.dup() + four_s5;
 
     // V[6] = -1/2
-    state[6] = sum.clone() - s6.halve();
+    state[6] = sum.dup() - s6.halve();
 
     // V[7] = -3
-    let two_s7 = s7.clone() + s7.clone();
+    let two_s7 = s7.dup() + s7.dup();
     let three_s7 = two_s7 + s7;
-    state[7] = sum.clone() - three_s7;
+    state[7] = sum.dup() - three_s7;
 
     // V[8] = -4
-    let two_s8 = s8.clone() + s8;
-    let four_s8 = two_s8.clone() + two_s8;
-    state[8] = sum.clone() - four_s8;
+    let two_s8 = s8.dup() + s8;
+    let four_s8 = two_s8.dup() + two_s8;
+    state[8] = sum.dup() - four_s8;
 
     // V[9] = 1/2^3
-    state[9] = sum.clone() + s9.halve().halve().halve();
+    state[9] = sum.dup() + s9.halve().halve().halve();
 
     // V[10] = 1/2^4
-    state[10] = sum.clone() + s10.halve().halve().halve().halve();
+    state[10] = sum.dup() + s10.halve().halve().halve().halve();
 
     // V[11] = 1/2^5
-    state[11] = sum.clone() + s11.halve().halve().halve().halve().halve();
+    state[11] = sum.dup() + s11.halve().halve().halve().halve().halve();
 
     // V[12] = -1/2^3
-    state[12] = sum.clone() - s12.halve().halve().halve();
+    state[12] = sum.dup() - s12.halve().halve().halve();
 
     // V[13] = -1/2^4
-    state[13] = sum.clone() - s13.halve().halve().halve().halve();
+    state[13] = sum.dup() - s13.halve().halve().halve().halve();
 
     // V[14] = -1/2^5
-    state[14] = sum.clone() - s14.halve().halve().halve().halve().halve();
+    state[14] = sum.dup() - s14.halve().halve().halve().halve().halve();
 
     // V[15] = 1/2^32
     let inv_2_32 = MATRIX_DIAG_16_GOLDILOCKS[15];
@@ -781,7 +781,7 @@ impl GenericPoseidon2LinearLayers<8> for GenericPoseidon2LinearLayersGoldilocks 
         for i in 0..8 {
             let d = R::from_u64(MATRIX_DIAG_8_GOLDILOCKS[i].value);
             state[i] *= d;
-            state[i] += sum.clone();
+            state[i] += sum.dup();
         }
     }
 }
@@ -792,7 +792,7 @@ impl GenericPoseidon2LinearLayers<12> for GenericPoseidon2LinearLayersGoldilocks
         for i in 0..12 {
             let d = R::from_u64(MATRIX_DIAG_12_GOLDILOCKS[i].value);
             state[i] *= d;
-            state[i] += sum.clone();
+            state[i] += sum.dup();
         }
     }
 }
@@ -803,7 +803,7 @@ impl GenericPoseidon2LinearLayers<16> for GenericPoseidon2LinearLayersGoldilocks
         for i in 0..16 {
             let d = R::from_u64(MATRIX_DIAG_16_GOLDILOCKS[i].value);
             state[i] *= d;
-            state[i] += sum.clone();
+            state[i] += sum.dup();
         }
     }
 }
@@ -814,7 +814,7 @@ impl GenericPoseidon2LinearLayers<20> for GenericPoseidon2LinearLayersGoldilocks
         for i in 0..20 {
             let d = R::from_u64(MATRIX_DIAG_20_GOLDILOCKS[i].value);
             state[i] *= d;
-            state[i] += sum.clone();
+            state[i] += sum.dup();
         }
     }
 }

@@ -345,12 +345,12 @@ impl<const WIDTH: usize> ExternalLayer<Mersenne31, WIDTH, MERSENNE31_S_BOX_DEGRE
 impl GenericPoseidon2LinearLayers<16> for GenericPoseidon2LinearLayersMersenne31 {
     fn internal_linear_layer<R: PrimeCharacteristicRing>(state: &mut [R; 16]) {
         let part_sum: R = state[1..].iter().cloned().sum();
-        let full_sum = part_sum.clone() + state[0].clone();
+        let full_sum = part_sum.dup() + state[0].dup();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.
-        state[0] = part_sum - state[0].clone();
-        state[1] = full_sum.clone() + state[1].clone();
-        state[2] = full_sum.clone() + state[2].double();
+        state[0] = part_sum - state[0].dup();
+        state[1] = full_sum.dup() + state[1].dup();
+        state[2] = full_sum.dup() + state[2].double();
 
         // For the remaining elements we use the mul_2exp_u64 method.
         // We need state[1..] as POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS
@@ -360,7 +360,7 @@ impl GenericPoseidon2LinearLayers<16> for GenericPoseidon2LinearLayersMersenne31
             .zip(POSEIDON2_INTERNAL_MATRIX_DIAG_16_SHIFTS)
             .skip(2)
             .for_each(|(val, diag_shift)| {
-                *val = full_sum.clone() + val.clone().mul_2exp_u64(diag_shift as u64);
+                *val = full_sum.dup() + val.dup().mul_2exp_u64(diag_shift as u64);
             });
     }
 }
@@ -368,12 +368,12 @@ impl GenericPoseidon2LinearLayers<16> for GenericPoseidon2LinearLayersMersenne31
 impl GenericPoseidon2LinearLayers<24> for GenericPoseidon2LinearLayersMersenne31 {
     fn internal_linear_layer<R: PrimeCharacteristicRing>(state: &mut [R; 24]) {
         let part_sum: R = state[1..].iter().cloned().sum();
-        let full_sum = part_sum.clone() + state[0].clone();
+        let full_sum = part_sum.dup() + state[0].dup();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.
-        state[0] = part_sum - state[0].clone();
-        state[1] = full_sum.clone() + state[1].clone();
-        state[2] = full_sum.clone() + state[2].double();
+        state[0] = part_sum - state[0].dup();
+        state[1] = full_sum.dup() + state[1].dup();
+        state[2] = full_sum.dup() + state[2].double();
 
         // For the remaining elements we use the mul_2exp_u64 method.
         // We need state[1..] as POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS
@@ -383,7 +383,7 @@ impl GenericPoseidon2LinearLayers<24> for GenericPoseidon2LinearLayersMersenne31
             .zip(POSEIDON2_INTERNAL_MATRIX_DIAG_24_SHIFTS)
             .skip(2)
             .for_each(|(val, diag_shift)| {
-                *val = full_sum.clone() + val.clone().mul_2exp_u64(diag_shift as u64);
+                *val = full_sum.dup() + val.dup().mul_2exp_u64(diag_shift as u64);
             });
     }
 }
@@ -391,12 +391,12 @@ impl GenericPoseidon2LinearLayers<24> for GenericPoseidon2LinearLayersMersenne31
 impl GenericPoseidon2LinearLayers<32> for GenericPoseidon2LinearLayersMersenne31 {
     fn internal_linear_layer<R: PrimeCharacteristicRing>(state: &mut [R; 32]) {
         let part_sum: R = state[1..].iter().cloned().sum();
-        let full_sum = part_sum.clone() + state[0].clone();
+        let full_sum = part_sum.dup() + state[0].dup();
 
         // The first three diagonal elements are -2, 1, 2 so we do something custom.
-        state[0] = part_sum - state[0].clone();
-        state[1] = full_sum.clone() + state[1].clone();
-        state[2] = full_sum.clone() + state[2].double();
+        state[0] = part_sum - state[0].dup();
+        state[1] = full_sum.dup() + state[1].dup();
+        state[2] = full_sum.dup() + state[2].double();
 
         // For the remaining elements we use the mul_2exp_u64 method.
         state[1..]
@@ -404,7 +404,7 @@ impl GenericPoseidon2LinearLayers<32> for GenericPoseidon2LinearLayersMersenne31
             .zip(POSEIDON2_INTERNAL_MATRIX_DIAG_32_SHIFTS)
             .skip(2)
             .for_each(|(val, diag_shift)| {
-                *val = full_sum.clone() + val.clone().mul_2exp_u64(diag_shift as u64);
+                *val = full_sum.dup() + val.dup().mul_2exp_u64(diag_shift as u64);
             });
     }
 }
