@@ -3,7 +3,7 @@
 use core::array;
 
 use p3_field::integers::QuotientMap;
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Dup, Field, PrimeCharacteristicRing};
 
 use crate::AirBuilder;
 
@@ -119,16 +119,16 @@ pub fn add3<AB: AirBuilder>(
             .unwrap();
     let two_32 = two_16.square();
 
-    let acc_16 = a[0] - b[0] - c[0].clone() - d[0].clone();
-    let acc_32 = a[1] - b[1] - c[1].clone() - d[1].clone();
-    let acc = acc_16.clone() + acc_32.mul_2exp_u64(16);
+    let acc_16 = a[0] - b[0] - c[0].dup() - d[0].dup();
+    let acc_32 = a[1] - b[1] - c[1].dup() - d[1].dup();
+    let acc = acc_16.dup() + acc_32.mul_2exp_u64(16);
 
     builder.assert_zeros([
-        acc.clone()
-            * (acc.clone() + AB::Expr::from_prime_subfield(two_32))
+        acc.dup()
+            * (acc.dup() + AB::Expr::from_prime_subfield(two_32))
             * (acc + AB::Expr::from_prime_subfield(two_32.double())),
-        acc_16.clone()
-            * (acc_16.clone() + AB::Expr::from_prime_subfield(two_16))
+        acc_16.dup()
+            * (acc_16.dup() + AB::Expr::from_prime_subfield(two_16))
             * (acc_16 + AB::Expr::from_prime_subfield(two_16.double())),
     ]);
 }
@@ -183,13 +183,13 @@ pub fn add2<AB: AirBuilder>(
             .unwrap();
     let two_32 = two_16.square();
 
-    let acc_16 = a[0] - b[0] - c[0].clone();
-    let acc_32 = a[1] - b[1] - c[1].clone();
-    let acc = acc_16.clone() + acc_32.mul_2exp_u64(16);
+    let acc_16 = a[0] - b[0] - c[0].dup();
+    let acc_32 = a[1] - b[1] - c[1].dup();
+    let acc = acc_16.dup() + acc_32.mul_2exp_u64(16);
 
     builder.assert_zeros([
-        acc.clone() * (acc + AB::Expr::from_prime_subfield(two_32)),
-        acc_16.clone() * (acc_16 + AB::Expr::from_prime_subfield(two_16)),
+        acc.dup() * (acc + AB::Expr::from_prime_subfield(two_32)),
+        acc_16.dup() * (acc_16 + AB::Expr::from_prime_subfield(two_16)),
     ]);
 }
 
