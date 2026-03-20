@@ -67,16 +67,23 @@ use rand::{Rng, RngExt};
 ///
 /// # Round Constant Layout
 ///
-/// Constants are stored in a flat array with three consecutive sections:
+/// Full round constants are stored in a flat array with two consecutive sections:
 ///
 /// ```text
-///   ┌──────────────┬──────────────────┬──────────────────┐
-///   │ initial full  │  partial rounds  │  terminal full   │
-///   │ (RF/2 items)  │  (RP items)      │  (RF/2 items)    │
-///   └──────────────┴──────────────────┴──────────────────┘
+///   full_round_constants:
+///   ┌──────────────┬──────────────────┐
+///   │ initial full │  terminal full   │
+///   │ (RF/2 items) │  (RF/2 items)    │
+///   └──────────────┴──────────────────┘
 /// ```
 ///
-/// Each entry is a WIDTH-sized vector (one constant per state element per round).
+/// Each full round entry is a WIDTH-sized vector (one constant per state element).
+///
+/// Partial round constants are stored as a flat vector of scalars (one per round).
+/// In partial rounds, only `state[0]` passes through the S-box. Constants for
+/// `state[1..WIDTH]` are purely linear and get absorbed by the MDS layer with
+/// zero security contribution (confirmed by Poseidon paper authors). These are
+/// omitted, and only the scalar for `state[0]` is stored.
 #[derive(Clone, Debug)]
 pub struct Poseidon1Constants<F, const WIDTH: usize> {
     /// Total number of full rounds (split equally between initial and terminal).
@@ -93,10 +100,15 @@ pub struct Poseidon1Constants<F, const WIDTH: usize> {
     /// decomposition, then discarded.
     pub mds_circ_col: [i64; WIDTH],
 
-    /// Round constants, one WIDTH-sized vector per round.
+    /// Round constants for the RF full rounds (RF/2 initial + RF/2 terminal).
     ///
-    /// Total length = rounds_f + rounds_p.
-    pub round_constants: Vec<[F; WIDTH]>,
+    /// Total length = rounds_f.
+    pub full_round_constants: Vec<[F; WIDTH]>,
+
+    /// Scalar round constants for the RP partial rounds.
+    ///
+    /// Total length = rounds_p. Each scalar is added to `state[0]` only.
+    pub partial_round_constants: Vec<F>,
 }
 
 impl<F: PrimeField, const WIDTH: usize> Poseidon1Constants<F, WIDTH> {
@@ -120,12 +132,21 @@ impl<F: PrimeField, const WIDTH: usize> Poseidon1Constants<F, WIDTH> {
         let half_f = self.rounds_f / 2;
         let rounds_p = self.rounds_p;
 
-        // Split the flat round-constant array into three sections.
-        //
-        // Layout: [initial_full (RF/2) | partial (RP) | terminal_full (RF/2)]
-        let initial_rc: Vec<[F; WIDTH]> = self.round_constants[..half_f].to_vec();
-        let partial_rc: Vec<[F; WIDTH]> = self.round_constants[half_f..half_f + rounds_p].to_vec();
-        let terminal_rc: Vec<[F; WIDTH]> = self.round_constants[half_f + rounds_p..].to_vec();
+        // Split the full round constants into initial and terminal halves.
+        let initial_rc: Vec<[F; WIDTH]> = self.full_round_constants[..half_f].to_vec();
+        let terminal_rc: Vec<[F; WIDTH]> = self.full_round_constants[half_f..].to_vec();
+
+        // Build synthetic zero-padded vectors for the optimization functions.
+        // Partial round constants only have a scalar at index 0; indices 1..WIDTH are zero.
+        let partial_rc: Vec<[F; WIDTH]> = self
+            .partial_round_constants
+            .iter()
+            .map(|&scalar| {
+                let mut v = [F::ZERO; WIDTH];
+                v[0] = scalar;
+                v
+            })
+            .collect();
 
         // Expand circulant first column into dense MDS matrix for the sparse decomposition.
         let mds: [[F; WIDTH]; WIDTH] = utils::circulant_to_dense(&self.mds_circ_col);
@@ -134,9 +155,11 @@ impl<F: PrimeField, const WIDTH: usize> Poseidon1Constants<F, WIDTH> {
         let (first_round_constants, opt_partial_rc, m_i, sparse_v, sparse_first_row) =
             utils::compute_optimized_constants::<F, WIDTH>(&mds, rounds_p, &partial_rc);
 
-        // Compute textbook path constants (forward constant substitution).
-        let (textbook_scalar_constants, textbook_residual) =
-            utils::forward_constant_substitution::<F, WIDTH>(&mds, &partial_rc);
+        // Forward constant substitution is trivial since partial constants have
+        // zeros at indices 1..WIDTH: scalar_constants equal the raw scalars and
+        // the residual is zero.
+        let textbook_scalar_constants = self.partial_round_constants.to_vec();
+        let textbook_residual = [F::ZERO; WIDTH];
 
         let full_constants = FullRoundConstants {
             initial: initial_rc,
@@ -227,11 +250,15 @@ where
         StandardUniform: Distribution<F>,
     {
         let rounds_f = 2 * half_num_full_rounds;
-        let num_rounds = rounds_f + num_partial_rounds;
 
-        // Generate random round constants.
-        let round_constants: Vec<[F; WIDTH]> = (0..num_rounds)
+        // Generate random full round constants.
+        let full_round_constants: Vec<[F; WIDTH]> = (0..rounds_f)
             .map(|_| core::array::from_fn(|_| rng.sample(StandardUniform)))
+            .collect();
+
+        // Generate random partial round scalar constants.
+        let partial_round_constants: Vec<F> = (0..num_partial_rounds)
+            .map(|_| rng.sample(StandardUniform))
             .collect();
 
         // Build dense MDS by applying the permutation to unit vectors.
@@ -244,11 +271,20 @@ where
         let dense_mds: [[F; WIDTH]; WIDTH] =
             core::array::from_fn(|i| core::array::from_fn(|j| columns[j][i]));
 
-        // Split round constants into three sections.
+        // Split full round constants into initial and terminal halves.
         let half_f = half_num_full_rounds;
-        let initial_rc = round_constants[..half_f].to_vec();
-        let partial_rc = round_constants[half_f..half_f + num_partial_rounds].to_vec();
-        let terminal_rc = round_constants[half_f + num_partial_rounds..].to_vec();
+        let initial_rc = full_round_constants[..half_f].to_vec();
+        let terminal_rc = full_round_constants[half_f..].to_vec();
+
+        // Build synthetic zero-padded vectors for the optimization functions.
+        let partial_rc: Vec<[F; WIDTH]> = partial_round_constants
+            .iter()
+            .map(|&scalar| {
+                let mut v = [F::ZERO; WIDTH];
+                v[0] = scalar;
+                v
+            })
+            .collect();
 
         // Compute optimized sparse constants.
         let (first_round_constants, opt_partial_rc, m_i, sparse_v, sparse_first_row) =
@@ -258,9 +294,9 @@ where
                 &partial_rc,
             );
 
-        // Compute textbook path constants (forward constant substitution).
-        let (textbook_scalar_constants, textbook_residual) =
-            utils::forward_constant_substitution::<F, WIDTH>(&dense_mds, &partial_rc);
+        // Forward constant substitution is trivial with zero-padded partial constants.
+        let textbook_scalar_constants = partial_round_constants;
+        let textbook_residual = [F::ZERO; WIDTH];
 
         let full_constants = FullRoundConstants {
             initial: initial_rc,

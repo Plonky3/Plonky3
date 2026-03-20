@@ -20,7 +20,7 @@
 
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_poseidon1::Poseidon1Constants;
-use p3_poseidon1::utils::{circulant_to_dense, forward_constant_substitution};
+use p3_poseidon1::utils::circulant_to_dense;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
@@ -133,24 +133,20 @@ impl<F: Field, const WIDTH: usize, const HALF_FULL_ROUNDS: usize, const PARTIAL_
         assert_eq!(half_f, HALF_FULL_ROUNDS);
         assert_eq!(raw.rounds_p, PARTIAL_ROUNDS);
 
-        // Split the flat round constant list into three sections:
-        //   [0..half_f)                  → initial full rounds
-        //   [half_f..half_f + RP)        → partial rounds
-        //   [half_f + RP..)              → terminal full rounds
-        let initial_rc = &raw.round_constants[..half_f];
-        let partial_rc = &raw.round_constants[half_f..half_f + raw.rounds_p];
-        let terminal_rc = &raw.round_constants[half_f + raw.rounds_p..];
+        // Split the full round constants into initial and terminal halves.
+        let initial_rc = &raw.full_round_constants[..half_f];
+        let terminal_rc = &raw.full_round_constants[half_f..];
 
         // Expand the circulant MDS column to a dense matrix.
         let mds = circulant_to_dense(&raw.mds_circ_col);
 
-        // Apply forward constant substitution to compress partial round constants.
-        let (scalar_constants, residual) = forward_constant_substitution(&mds, partial_rc);
-
+        // Forward constant substitution is trivial since partial constants have
+        // zeros at indices 1..WIDTH: scalar_constants equal the raw scalars
+        // and the residual is zero.
         Self {
             beginning_full_round_constants: core::array::from_fn(|i| initial_rc[i]),
-            partial_round_constants: core::array::from_fn(|i| scalar_constants[i]),
-            partial_round_residual: residual,
+            partial_round_constants: core::array::from_fn(|i| raw.partial_round_constants[i]),
+            partial_round_residual: [F::ZERO; WIDTH],
             ending_full_round_constants: core::array::from_fn(|i| terminal_rc[i]),
             mds_matrix: mds,
         }

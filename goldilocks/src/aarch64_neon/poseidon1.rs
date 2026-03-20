@@ -503,8 +503,9 @@ mod tests {
     use crate::mds::{MATRIX_CIRC_MDS_8_COL, MATRIX_CIRC_MDS_12_COL};
     use crate::poseidon1::{
         GOLDILOCKS_POSEIDON_HALF_FULL_ROUNDS, GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_8,
-        GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_12, GOLDILOCKS_POSEIDON1_RC_8,
-        GOLDILOCKS_POSEIDON1_RC_12, default_goldilocks_poseidon1_8,
+        GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_12, GOLDILOCKS_POSEIDON1_FULL_RC_8,
+        GOLDILOCKS_POSEIDON1_FULL_RC_12, GOLDILOCKS_POSEIDON1_PARTIAL_RC_8,
+        GOLDILOCKS_POSEIDON1_PARTIAL_RC_12, default_goldilocks_poseidon1_8,
         default_goldilocks_poseidon1_12,
     };
 
@@ -516,7 +517,8 @@ mod tests {
             rounds_f: 2 * GOLDILOCKS_POSEIDON_HALF_FULL_ROUNDS,
             rounds_p: GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_8,
             mds_circ_col: MATRIX_CIRC_MDS_8_COL,
-            round_constants: GOLDILOCKS_POSEIDON1_RC_8.to_vec(),
+            full_round_constants: GOLDILOCKS_POSEIDON1_FULL_RC_8.to_vec(),
+            partial_round_constants: GOLDILOCKS_POSEIDON1_PARTIAL_RC_8.to_vec(),
         };
         let (full, partial) = raw.to_optimized();
         Poseidon1GoldilocksFused::new(&full, &partial)
@@ -528,7 +530,8 @@ mod tests {
             rounds_f: 2 * GOLDILOCKS_POSEIDON_HALF_FULL_ROUNDS,
             rounds_p: GOLDILOCKS_POSEIDON_PARTIAL_ROUNDS_12,
             mds_circ_col: MATRIX_CIRC_MDS_12_COL,
-            round_constants: GOLDILOCKS_POSEIDON1_RC_12.to_vec(),
+            full_round_constants: GOLDILOCKS_POSEIDON1_FULL_RC_12.to_vec(),
+            partial_round_constants: GOLDILOCKS_POSEIDON1_PARTIAL_RC_12.to_vec(),
         };
         let (full, partial) = raw.to_optimized();
         Poseidon1GoldilocksFused::new(&full, &partial)
@@ -678,14 +681,14 @@ mod tests {
         fused.permute_mut(&mut input);
 
         let expected: [F; 8] = F::new_array([
-            2431226948502761687,
-            9427563026145807618,
-            6827549936272051660,
-            16907684411084503785,
-            10131745626715172913,
-            17448305483431576765,
-            9066501914269485014,
-            12095238468458521303,
+            11153126117091188739,
+            9367876523242180035,
+            10970566198510919280,
+            4291932464886515809,
+            10330648916900980499,
+            7611656059729716795,
+            9509258266284818997,
+            17474426264752121404,
         ]);
         assert_eq!(input, expected);
     }
@@ -698,18 +701,18 @@ mod tests {
         fused.permute_mut(&mut input);
 
         let expected: [F; 12] = F::new_array([
-            15595088881848875364,
-            9564850329150784619,
-            13607005230761744521,
-            12117102595842533385,
-            2814257411756993122,
-            11640647689983397089,
-            14363867760831937423,
-            13323891071259596526,
-            11219803511311150468,
-            9221595262780869902,
-            5898229059046891887,
-            18181291031484020550,
+            11894453562976632264,
+            9749618787830132519,
+            17643080672090171906,
+            13293432833738253032,
+            14894677614750348197,
+            5957644520194505682,
+            17550962642794707178,
+            12882156943614641772,
+            11315149834689508762,
+            9430992202911445529,
+            6269945992693421732,
+            2269139987008180363,
         ]);
         assert_eq!(input, expected);
     }
