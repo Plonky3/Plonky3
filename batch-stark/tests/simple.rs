@@ -235,10 +235,10 @@ where
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
         let local = main.current_slice();
-        // Batch-STARK currently doesn't thread periodic values into its lookup folder,
-        // so this test only checks that periodic metadata coexists with proof generation.
-        builder.assert_eq(local[0], local[0]);
-        builder.assert_eq(local[1], local[1]);
+        let p0 = builder.periodic_values()[0].into();
+        let p1 = builder.periodic_values()[1].into();
+        builder.assert_eq(local[0], p0);
+        builder.assert_eq(local[1], p1);
     }
 }
 
