@@ -141,6 +141,7 @@ where
                 preprocessed_width: pre_w,
                 main_width: air.width(),
                 num_public_values: air.num_public_values(),
+                num_periodic_columns: air.num_periodic_columns(),
                 ..Default::default()
             };
             let lq_chunks =
@@ -309,6 +310,7 @@ where
             preprocessed_width: preprocessed_widths[i],
             main_width: airs[i].width(),
             num_public_values: airs[i].num_public_values(),
+            num_periodic_columns: airs[i].num_periodic_columns(),
             ..Default::default()
         };
 
@@ -363,6 +365,7 @@ where
             .map(|ld| ld.expected_cumulated)
             .collect();
         let q_values = quotient_values::<SC, A, _, LogUpGadget>(
+            pcs,
             airs[i],
             &pub_vals[i],
             sym_layout,
@@ -637,6 +640,7 @@ where
 // TODO: Group some arguments to remove the `allow`?
 #[allow(clippy::too_many_arguments)]
 pub fn quotient_values<SC, A, Mat, LG>(
+    pcs: &SC::Pcs,
     air: &A,
     public_values: &[Val<SC>],
     layout: AirLayout,
@@ -687,6 +691,9 @@ where
 
     let constraint_layout = get_constraint_layout(air, layout, lookups, lookup_gadget);
     let (base_alpha_powers, ext_alpha_powers) = constraint_layout.decompose_alpha(alpha);
+
+    let periodic_cols = air.periodic_columns();
+    let periodic_table = pcs.build_periodic_lde_table(periodic_cols, trace_domain, quotient_domain);
 
     // Precompute per-instance data used by the hot inner loop to avoid repeated allocations.
     let packed_perm_challenges: Vec<PackedChallenge<SC>> = permutation_challenges
@@ -755,11 +762,23 @@ where
             let preprocessed_view = preprocessed
                 .as_ref()
                 .map_or_else(|| RowMajorMatrixView::new(&[], 0), |m| m.as_view());
+            let periodic_vals: Vec<PackedVal<SC>> = if periodic_table.is_empty() {
+                vec![]
+            } else {
+                (0..periodic_table.width())
+                    .map(|col_idx| {
+                        let slice: Vec<Val<SC>> = (0..PackedVal::<SC>::WIDTH)
+                            .map(|offset| *periodic_table.get(i_start + offset, col_idx))
+                            .collect();
+                        *PackedVal::<SC>::from_slice(&slice)
+                    })
+                    .collect()
+            };
             let inner_folder = ProverConstraintFolder {
                 main: main.as_view(),
                 preprocessed: preprocessed_view,
                 preprocessed_window: RowWindow::from_view(&preprocessed_view),
-                periodic_values: &[],
+                periodic_values: &periodic_vals,
                 public_values,
                 is_first_row,
                 is_last_row,
