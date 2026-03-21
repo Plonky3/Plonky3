@@ -71,7 +71,7 @@ impl<F: Field> Point<F> {
     /// at this point
     /// Circle STARKs, Section 3.3, Equation 8 (page 10 of the first revision PDF)
     pub fn v_n(mut self, log_n: usize) -> F {
-        for _ in 0..(log_n - 1) {
+        for _ in 0..log_n.saturating_sub(1) {
             self.x = self.x.square().double() - F::ONE; // TODO: replace this by a custom field impl.
         }
         self.x
@@ -82,6 +82,9 @@ impl<F: Field> Point<F> {
     /// More explicitly this computes `(1..log_n).map(|i| self.v_n(i)).product()`
     /// but uses far fewer `self.x.square().double() - F::ONE` steps compared to the naive implementation.
     pub fn v_n_prod(mut self, log_n: usize) -> F {
+        if log_n <= 1 {
+            return F::ONE;
+        }
         let mut output = self.x;
         for _ in 0..(log_n - 2) {
             self.x = self.x.square().double() - F::ONE; // TODO: replace this by a custom field impl.

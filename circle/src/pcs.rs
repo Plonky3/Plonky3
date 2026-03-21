@@ -581,9 +581,7 @@ where
     where
         p3_commit::Val<Self::PeriodicDomain>: Clone,
     {
-        let periodic_cols_val: &[Vec<Val>] = unsafe { core::mem::transmute(periodic_cols) };
-        let table =
-            build_periodic_lde_table_circle(periodic_cols_val, &trace_domain, &quotient_domain);
+        let table = build_periodic_lde_table_circle(periodic_cols, &trace_domain, &quotient_domain);
         Some(table)
     }
 }

@@ -326,12 +326,15 @@ where
                 .expect("quotient domain must support next_point");
         }
 
+        let padded_cols: Vec<Vec<Val<Self::Domain>>> = periodic_cols
+            .iter()
+            .map(|col| (0..max_period).map(|i| col[i % col.len()]).collect())
+            .collect();
+
         let mut row_major = Vec::with_capacity(extended_height * num_cols);
         for point in quotient_pts.iter().take(extended_height) {
-            for col in periodic_cols {
-                let padded: Vec<Val<Self::Domain>> =
-                    (0..max_period).map(|i| col[i % col.len()]).collect();
-                row_major.push(trace_domain.evaluate_periodic_column_at(&padded, *point));
+            for padded in &padded_cols {
+                row_major.push(trace_domain.evaluate_periodic_column_at(padded, *point));
             }
         }
         PeriodicLdeTable::new(RowMajorMatrix::new(row_major, num_cols))

@@ -38,7 +38,6 @@ use p3_util::log2_strict_usize;
 
 use crate::CircleEvaluations;
 use crate::domain::CircleDomain;
-use crate::point::Point;
 
 /// Build the compact periodic LDE table using the circle evaluator.
 ///
@@ -66,19 +65,6 @@ impl CirclePeriodicEvaluator {
     pub const fn new() -> Self {
         Self
     }
-}
-
-/// Compute parameters for periodic polynomial evaluation.
-/// Returns (log_period, log_repetitions).
-fn periodic_params(period: usize, trace_len: usize) -> (usize, usize) {
-    debug_assert!(
-        period.is_power_of_two(),
-        "periodic column length must be a power of 2"
-    );
-
-    let log_period = log2_strict_usize(period);
-    let log_repetitions = log2_strict_usize(trace_len / period);
-    (log_period, log_repetitions)
 }
 
 impl<F: ComplexExtendable> PeriodicEvaluator<F, CircleDomain<F>> for CirclePeriodicEvaluator {
@@ -163,24 +149,9 @@ impl<F: ComplexExtendable> PeriodicEvaluator<F, CircleDomain<F>> for CirclePerio
         trace_domain: &CircleDomain<F>,
         point: EF,
     ) -> Vec<EF> {
-        let trace_len = trace_domain.size();
-
         periodic_table
             .iter()
-            .map(|col| {
-                let (log_period, log_repetitions) = periodic_params(col.len(), trace_len);
-                let periodic_domain = CircleDomain::standard(log_period);
-
-                let evals = CircleEvaluations::from_natural_order(
-                    periodic_domain,
-                    RowMajorMatrix::new_col(col.clone()),
-                );
-
-                // Project query point to periodic subdomain via repeated doubling
-                let query_point = Point::<EF>::from_projective_line(point);
-                let periodic_point = query_point.repeated_double(log_repetitions);
-                evals.evaluate_at_point(periodic_point)[0]
-            })
+            .map(|col| PolynomialSpace::evaluate_periodic_column_at(trace_domain, col, point))
             .collect()
     }
 }
@@ -197,6 +168,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::point::Point;
 
     type F = Mersenne31;
     type EF = BinomialExtensionField<F, 3>;

@@ -4,7 +4,9 @@ use core::marker::PhantomData;
 use core::slice::from_ref;
 
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpression};
-use p3_air::{Air, AirBuilder, BaseAir, BaseLeaf, PermutationAirBuilder, WindowAccess};
+use p3_air::{
+    Air, AirBuilder, BaseAir, BaseLeaf, PeriodicAirBuilder, PermutationAirBuilder, WindowAccess,
+};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::{
@@ -182,13 +184,11 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
 }
 impl<F: Field> LookupAir<F> for MulAir {}
 
-#[cfg(not(debug_assertions))]
 #[derive(Clone)]
 struct PeriodicAir<F> {
     periodic: Vec<Vec<F>>,
 }
 
-#[cfg(not(debug_assertions))]
 impl<F: Field + PrimeCharacteristicRing> PeriodicAir<F> {
     fn new() -> Self {
         Self {
@@ -214,7 +214,6 @@ impl<F: Field + PrimeCharacteristicRing> PeriodicAir<F> {
     }
 }
 
-#[cfg(not(debug_assertions))]
 impl<F: Field> BaseAir<F> for PeriodicAir<F> {
     fn width(&self) -> usize {
         2
@@ -229,8 +228,7 @@ impl<F: Field> BaseAir<F> for PeriodicAir<F> {
     }
 }
 
-#[cfg(not(debug_assertions))]
-impl<AB: AirBuilder + p3_air::PeriodicAirBuilder> Air<AB> for PeriodicAir<AB::F>
+impl<AB: AirBuilder + PeriodicAirBuilder> Air<AB> for PeriodicAir<AB::F>
 where
     AB::F: Field,
 {
@@ -244,7 +242,6 @@ where
     }
 }
 
-#[cfg(not(debug_assertions))]
 impl<F: Field> LookupAir<F> for PeriodicAir<F> {}
 
 // --- MulAirLookups structure for local and global lookups ---
@@ -902,7 +899,6 @@ fn test_two_instances() -> Result<(), impl Debug> {
     verify_batch(&config, &airs, &proof, &pvs, common)
 }
 
-#[cfg(not(debug_assertions))]
 #[test]
 fn test_periodic_air() -> Result<(), impl Debug> {
     let config = make_config(42);

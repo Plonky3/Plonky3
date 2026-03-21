@@ -260,24 +260,16 @@ pub trait BaseAir<F>: Sync {
 /// the Fiat-Shamir transcript. The values returned are evaluations over a subgroup;
 /// callers may convert to coefficient form for efficient evaluation if needed.
 pub trait AirWithPeriodicColumns<F>: BaseAir<F> {
-    /// Return the periodic table data: a list of columns, each a `Vec<F>` of evaluations.
-    ///
-    /// Each inner `Vec<F>` represents one periodic column. Its length is the period of
-    /// that column, and the entries are the evaluations over a subgroup of that order.
-    fn periodic_columns(&self) -> &[Vec<F>] {
-        BaseAir::periodic_columns(self)
-    }
-
     /// Return the period of the column at index `col_idx`, if it exists.
     fn get_column_period(&self, col_idx: usize) -> Option<usize> {
-        <Self as AirWithPeriodicColumns<F>>::periodic_columns(self)
+        self.periodic_columns()
             .get(col_idx)
             .map(|col: &Vec<F>| col.len())
     }
 
     /// Return the maximum period among all periodic columns, or `None` if there are none.
     fn get_max_column_period(&self) -> Option<usize> {
-        <Self as AirWithPeriodicColumns<F>>::periodic_columns(self)
+        self.periodic_columns()
             .iter()
             .map(|col: &Vec<F>| col.len())
             .max()
@@ -295,23 +287,21 @@ pub trait AirWithPeriodicColumns<F>: BaseAir<F> {
     where
         F: Clone + Send + Sync,
     {
-        let cols = <Self as AirWithPeriodicColumns<F>>::periodic_columns(self);
+        let cols = self.periodic_columns();
         if cols.is_empty() {
             return None;
         }
 
+        // Get the max period.
         let max_period = self.get_max_column_period()?;
-        let num_cols = cols.len();
+        let cols = self.periodic_columns();
 
-        let mut values = Vec::with_capacity(max_period * num_cols);
-        for row in 0..max_period {
-            for col in cols {
-                let period = col.len();
-                values.push(col[row % period].clone());
-            }
-        }
+        // Build the flattened row-major values
+        let values: Vec<F> = (0..max_period)
+            .flat_map(|row| cols.iter().map(move |col| col[row % col.len()].clone()))
+            .collect();
 
-        Some(RowMajorMatrix::new(values, num_cols))
+        Some(RowMajorMatrix::new(values, cols.len()))
     }
 }
 /// An algebraic intermediate representation (AIR) definition.

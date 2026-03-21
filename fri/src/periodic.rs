@@ -195,7 +195,7 @@ fn eval_periodic_poly<F: TwoAdicField, EF: ExtensionField<F>>(values: &[F], poin
     // p(x) = (x^n - 1) / n * Σ_i (v_i / (x - ω^i))
     // where n = period, ω is the primitive n-th root of unity
 
-    let n = EF::from(F::from_usize(period));
+    let n = EF::from_usize(period);
     let x_n_minus_1 = point.exp_u64(period as u64) - EF::ONE;
 
     // Handle case where point is on the subgroup (x^n - 1 = 0)
@@ -219,9 +219,9 @@ fn eval_periodic_poly<F: TwoAdicField, EF: ExtensionField<F>>(values: &[F], poin
     let mut sum = EF::ZERO;
     let mut omega_i = F::ONE;
     for &val in values.iter() {
-        let denom = point - EF::from(omega_i);
+        let denom = point - omega_i;
         // denom should be non-zero since x^n - 1 ≠ 0
-        sum += EF::from(val * omega_i) * denom.inverse();
+        sum += denom.inverse() * val * omega_i;
         omega_i *= omega;
     }
 
