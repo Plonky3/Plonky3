@@ -78,6 +78,7 @@ where
         preprocessed_width,
         main_width: air.width(),
         num_public_values: air.num_public_values(),
+        num_periodic_columns: air.num_periodic_columns(),
         ..Default::default()
     };
 
@@ -216,6 +217,7 @@ where
     // at every point in the quotient domain. The degree of `Q(x)` is `<= deg(C(x)) - N = 2N - 2` in the case
     // where `deg(C) = 3`. (See the discussion above constraint_degree for more details.)
     let quotient_values = quotient_values(
+        pcs,
         air,
         public_values,
         layout,
@@ -398,6 +400,7 @@ where
 // TODO: Group some arguments to remove the `allow`?
 #[allow(clippy::too_many_arguments)]
 pub fn quotient_values<SC, A, Mat>(
+    pcs: &SC::Pcs,
     air: &A,
     public_values: &[Val<SC>],
     layout: AirLayout,
@@ -431,6 +434,8 @@ where
 
     let constraint_layout = get_constraint_layout(air, layout);
     let (base_alpha_powers, ext_alpha_powers) = constraint_layout.decompose_alpha(alpha);
+    let periodic_cols = air.periodic_columns();
+    let periodic_table = pcs.build_periodic_lde_table(periodic_cols, trace_domain, quotient_domain);
 
     (0..quotient_size)
         .into_par_iter()
@@ -459,10 +464,23 @@ where
             let preprocessed_view = preprocessed
                 .as_ref()
                 .map_or_else(|| RowMajorMatrixView::new(&[], 0), |m| m.as_view());
+            let periodic_vals: Vec<PackedVal<SC>> = if periodic_table.is_empty() {
+                vec![]
+            } else {
+                (0..periodic_table.width())
+                    .map(|col_idx| {
+                        let slice: Vec<Val<SC>> = (0..PackedVal::<SC>::WIDTH)
+                            .map(|offset| *periodic_table.get(i_start + offset, col_idx))
+                            .collect();
+                        *PackedVal::<SC>::from_slice(&slice)
+                    })
+                    .collect()
+            };
             let mut folder = ProverConstraintFolder {
                 main: main.as_view(),
                 preprocessed: preprocessed_view,
                 preprocessed_window: RowWindow::from_view(&preprocessed_view),
+                periodic_values: &periodic_vals,
                 public_values,
                 is_first_row,
                 is_last_row,

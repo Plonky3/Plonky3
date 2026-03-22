@@ -9,16 +9,35 @@ use p3_matrix::dense::RowMajorMatrix;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::PolynomialSpace;
+use crate::{PeriodicLdeTable, PolynomialSpace};
 
 pub type Val<D> = <D as PolynomialSpace>::Val;
+
+/// Optional fast path for building the periodic LDE table (e.g. via coset LDE).
+/// Implement for PCS backends that can avoid evaluating at every quotient point.
+pub trait BuildPeriodicLdeTableFast {
+    type PeriodicDomain: PolynomialSpace;
+
+    fn maybe_build_periodic_lde_table_fast(
+        &self,
+        _periodic_cols: &[Vec<Val<Self::PeriodicDomain>>],
+        _trace_domain: Self::PeriodicDomain,
+        _quotient_domain: Self::PeriodicDomain,
+    ) -> Option<PeriodicLdeTable<Val<Self::PeriodicDomain>>>
+    where
+        Val<Self::PeriodicDomain>: Clone,
+    {
+        None
+    }
+}
 
 /// A polynomial commitment scheme, for committing to batches of polynomials defined by their evaluations
 /// over some domain.
 ///
 /// In general this does not have to be a hiding commitment scheme but it might be for some implementations.
 // TODO: Should we have a super-trait for weakly-binding PCSs, like FRI outside unique decoding radius?
-pub trait Pcs<Challenge, Challenger>
+pub trait Pcs<Challenge, Challenger>:
+    BuildPeriodicLdeTableFast<PeriodicDomain = Self::Domain>
 where
     Challenge: ExtensionField<Val<Self::Domain>>,
 {
@@ -268,6 +287,57 @@ where
         _domain: impl IntoIterator<Item = Self::Domain>,
     ) -> Option<(Self::Commitment, Self::ProverData)> {
         None
+    }
+
+    /// Build the compact periodic LDE table (height = max_period × blowup, width = num periodic columns).
+    ///
+    /// Default: try fast path (e.g. coset LDE), else evaluate each column at the first `extended_height` quotient points.
+    fn build_periodic_lde_table(
+        &self,
+        periodic_cols: &[Vec<Val<Self::Domain>>],
+        trace_domain: Self::Domain,
+        quotient_domain: Self::Domain,
+    ) -> PeriodicLdeTable<Val<Self::Domain>>
+    where
+        Self::Domain: Clone,
+        Val<Self::Domain>: Clone,
+    {
+        if let Some(table) =
+            self.maybe_build_periodic_lde_table_fast(periodic_cols, trace_domain, quotient_domain)
+        {
+            return table;
+        }
+        if periodic_cols.is_empty() {
+            return PeriodicLdeTable::empty();
+        }
+        let trace_size = trace_domain.size();
+        let quotient_size = quotient_domain.size();
+        let blowup = quotient_size / trace_size;
+        let max_period = periodic_cols.iter().map(|c| c.len()).max().unwrap();
+        let extended_height = max_period * blowup;
+        let num_cols = periodic_cols.len();
+
+        let mut quotient_pts = Vec::with_capacity(extended_height);
+        let mut pt = quotient_domain.first_point();
+        for _ in 0..extended_height {
+            quotient_pts.push(pt);
+            pt = quotient_domain
+                .next_point(pt)
+                .expect("quotient domain must support next_point");
+        }
+
+        let padded_cols: Vec<Vec<Val<Self::Domain>>> = periodic_cols
+            .iter()
+            .map(|col| (0..max_period).map(|i| col[i % col.len()]).collect())
+            .collect();
+
+        let mut row_major = Vec::with_capacity(extended_height * num_cols);
+        for point in quotient_pts.iter().take(extended_height) {
+            for padded in &padded_cols {
+                row_major.push(trace_domain.evaluate_periodic_column_at(padded, *point));
+            }
+        }
+        PeriodicLdeTable::new(RowMajorMatrix::new(row_major, num_cols))
     }
 }
 

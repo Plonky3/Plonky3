@@ -477,6 +477,9 @@ mod tests {
         fn width(&self) -> usize {
             self.width
         }
+        fn num_periodic_columns(&self) -> usize {
+            self.periodic_columns().len()
+        }
     }
 
     impl Air<SymbolicAirBuilder<F>> for MockAir {

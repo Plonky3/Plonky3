@@ -97,6 +97,7 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
             RowMajorMatrixView::new_row(&*perm_next),
         );
 
+        let periodic_row = air.periodic_values(row_index);
         let mut builder = DebugConstraintBuilder::new_with_permutation(
             row_index,
             main,
@@ -108,6 +109,7 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
             permutation,
             permutation_challenges,
             permutation_values,
+            &periodic_row,
         );
 
         air.eval_with_lookups(&mut builder, lookups, lookup_gadget);
