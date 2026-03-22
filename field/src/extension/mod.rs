@@ -78,7 +78,7 @@ pub trait BinomiallyExtendableAlgebra<F: Field, const D: usize>: Algebra<F> {
 
     #[inline]
     fn binomial_base_mul(lhs: [Self; D], rhs: Self) -> [Self; D] {
-        lhs.map(|x| x * rhs.clone())
+        lhs.map(|x| x * rhs.dup())
     }
 }
 
@@ -197,7 +197,7 @@ pub trait QuinticExtendableAlgebra<F: Field>: Algebra<F> {
     /// Multiply a quintic extension element by a base field scalar.
     #[inline]
     fn quintic_base_mul(lhs: [Self; 5], rhs: Self) -> [Self; 5] {
-        lhs.map(|x| x * rhs.clone())
+        lhs.map(|x| x * rhs.dup())
     }
 }
 
