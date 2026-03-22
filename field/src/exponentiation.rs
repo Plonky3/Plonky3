@@ -15,12 +15,12 @@ pub fn exp_1717986917<R: PrimeCharacteristicRing>(val: R) -> R {
     // Suspect it's possible to improve this with enough effort. For example 1717986918 takes only 4 Multiplications.
     let p1 = val;
     let p10 = p1.square();
-    let p11 = p10.clone() * p1;
-    let p101 = p10 * p11.clone();
+    let p11 = p10.dup() * p1;
+    let p101 = p10 * p11.dup();
     let p110000 = p11.exp_power_of_2(4);
-    let p110011 = p110000 * p11.clone();
+    let p110011 = p110000 * p11.dup();
     let p11001100000000 = p110011.exp_power_of_2(8);
-    let p11001100110011 = p11001100000000.clone() * p110011;
+    let p11001100110011 = p11001100000000.dup() * p110011;
     let p1100110000000000000000 = p11001100000000.exp_power_of_2(8);
     let p1100110011001100110011 = p1100110000000000000000 * p11001100110011;
     let p11001100110011001100110000 = p1100110011001100110011.exp_power_of_2(4);
@@ -40,12 +40,12 @@ pub fn exp_1420470955<R: PrimeCharacteristicRing>(val: R) -> R {
     // Suspect it's possible to improve this with enough effort.
     let p1 = val;
     let p100 = p1.exp_power_of_2(2);
-    let p101 = p100.clone() * p1.clone();
+    let p101 = p100.dup() * p1.dup();
     let p10000 = p100.exp_power_of_2(2);
     let p10101 = p10000 * p101;
     let p10101000000 = p10101.exp_power_of_2(6);
-    let p10101010101 = p10101000000.clone() * p10101.clone();
-    let p101010010101 = p10101000000 * p10101010101.clone();
+    let p10101010101 = p10101000000.dup() * p10101.dup();
+    let p101010010101 = p10101000000 * p10101010101.dup();
     let p101010010101000000000000 = p101010010101.exp_power_of_2(12);
     let p101010010101010101010101 = p101010010101000000000000 * p10101010101;
     let p101010010101010101010101000000 = p101010010101010101010101.exp_power_of_2(6);
@@ -65,16 +65,16 @@ pub fn exp_1725656503<R: PrimeCharacteristicRing>(val: R) -> R {
     // Suspect it's possible to improve this with enough effort.
     let p1 = val;
     let p10 = p1.square();
-    let p11 = p10 * p1.clone();
+    let p11 = p10 * p1.dup();
     let p110 = p11.square();
-    let p111 = p110.clone() * p1;
+    let p111 = p110.dup() * p1;
     let p11000 = p110.exp_power_of_2(2);
-    let p11011 = p11000.clone() * p11;
+    let p11011 = p11000.dup() * p11;
     let p11000000 = p11000.exp_power_of_2(3);
-    let p11011011 = p11000000.clone() * p11011;
-    let p110011011 = p11011011.clone() * p11000000;
+    let p11011011 = p11000000.dup() * p11011;
+    let p110011011 = p11011011.dup() * p11000000;
     let p110011011000000000 = p110011011.exp_power_of_2(9);
-    let p110011011011011011 = p110011011000000000 * p11011011.clone();
+    let p110011011011011011 = p110011011000000000 * p11011011.dup();
     let p110011011011011011000000000 = p110011011011011011.exp_power_of_2(9);
     let p110011011011011011011011011 = p110011011011011011000000000 * p11011011;
     let p1100110110110110110110110110000 = p110011011011011011011011011.exp_power_of_2(4);
@@ -92,9 +92,9 @@ pub fn exp_10540996611094048183<R: PrimeCharacteristicRing>(val: R) -> R {
     // Suspect it's possible to improve this a little with enough effort.
     let p1 = val;
     let p10 = p1.square();
-    let p11 = p10.clone() * p1;
+    let p11 = p10.dup() * p1;
     let p100 = p10.square();
-    let p111 = p100.clone() * p11.clone();
+    let p111 = p100.dup() * p11.dup();
     let p100000000000000000000000000000000 = p100.exp_power_of_2(30);
     let p100000000000000000000000000000011 = p100000000000000000000000000000000 * p11;
     let p100000000000000000000000000000011000 =
@@ -104,7 +104,7 @@ pub fn exp_10540996611094048183<R: PrimeCharacteristicRing>(val: R) -> R {
     let p100100000000000000000000000000011011000000 =
         p100100000000000000000000000000011011.exp_power_of_2(6);
     let p100100100100000000000000000000011011011011 =
-        p100100000000000000000000000000011011000000 * p100100000000000000000000000000011011.clone();
+        p100100000000000000000000000000011011000000 * p100100000000000000000000000000011011.dup();
     let p100100100100000000000000000000011011011011000000000000 =
         p100100100100000000000000000000011011011011.exp_power_of_2(12);
     let p100100100100100100100100000000011011011011011011011011 =

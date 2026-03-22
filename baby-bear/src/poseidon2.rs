@@ -268,20 +268,20 @@ impl InternalLayerBaseParameters<BabyBearParameters, 16> for BabyBearInternalLay
     fn internal_layer_mat_mul<R: PrimeCharacteristicRing>(state: &mut [R; 16], sum: R) {
         // The diagonal matrix is defined by the vector:
         // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/2^27, -1/2^8, -1/16, -1/2^27]
-        state[1] += sum.clone();
-        state[2] = state[2].double() + sum.clone();
-        state[3] = state[3].halve() + sum.clone();
-        state[4] = sum.clone() + state[4].double() + state[4].clone();
-        state[5] = sum.clone() + state[5].double().double();
-        state[6] = sum.clone() - state[6].halve();
-        state[7] = sum.clone() - (state[7].double() + state[7].clone());
-        state[8] = sum.clone() - state[8].double().double();
-        state[9] = state[9].div_2exp_u64(8) + sum.clone();
-        state[10] = state[10].div_2exp_u64(2) + sum.clone();
-        state[11] = state[11].div_2exp_u64(3) + sum.clone();
-        state[12] = state[12].div_2exp_u64(27) + sum.clone();
-        state[13] = sum.clone() - state[13].div_2exp_u64(8);
-        state[14] = sum.clone() - state[14].div_2exp_u64(4);
+        state[1] += sum.dup();
+        state[2] = state[2].double() + sum.dup();
+        state[3] = state[3].halve() + sum.dup();
+        state[4] = sum.dup() + state[4].double() + state[4].dup();
+        state[5] = sum.dup() + state[5].double().double();
+        state[6] = sum.dup() - state[6].halve();
+        state[7] = sum.dup() - (state[7].double() + state[7].dup());
+        state[8] = sum.dup() - state[8].double().double();
+        state[9] = state[9].div_2exp_u64(8) + sum.dup();
+        state[10] = state[10].div_2exp_u64(2) + sum.dup();
+        state[11] = state[11].div_2exp_u64(3) + sum.dup();
+        state[12] = state[12].div_2exp_u64(27) + sum.dup();
+        state[13] = sum.dup() - state[13].div_2exp_u64(8);
+        state[14] = sum.dup() - state[14].div_2exp_u64(4);
         state[15] = sum - state[15].div_2exp_u64(27);
     }
 }
@@ -292,28 +292,28 @@ impl InternalLayerBaseParameters<BabyBearParameters, 24> for BabyBearInternalLay
     fn internal_layer_mat_mul<R: PrimeCharacteristicRing>(state: &mut [R; 24], sum: R) {
         // The diagonal matrix is defined by the vector:
         // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/4, 1/8, 1/16, 1/2^7, 1/2^9, 1/2^27, -1/2^8, -1/4, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^27]
-        state[1] += sum.clone();
-        state[2] = state[2].double() + sum.clone();
-        state[3] = state[3].halve() + sum.clone();
-        state[4] = sum.clone() + state[4].double() + state[4].clone();
-        state[5] = sum.clone() + state[5].double().double();
-        state[6] = sum.clone() - state[6].halve();
-        state[7] = sum.clone() - (state[7].double() + state[7].clone());
-        state[8] = sum.clone() - state[8].double().double();
-        state[9] = state[9].div_2exp_u64(8) + sum.clone();
-        state[10] = state[10].div_2exp_u64(2) + sum.clone();
-        state[11] = state[11].div_2exp_u64(3) + sum.clone();
-        state[12] = state[12].div_2exp_u64(4) + sum.clone();
-        state[13] = state[13].div_2exp_u64(7) + sum.clone();
-        state[14] = state[14].div_2exp_u64(9) + sum.clone();
-        state[15] = state[15].div_2exp_u64(27) + sum.clone();
-        state[16] = sum.clone() - state[16].div_2exp_u64(8);
-        state[17] = sum.clone() - state[17].div_2exp_u64(2);
-        state[18] = sum.clone() - state[18].div_2exp_u64(3);
-        state[19] = sum.clone() - state[19].div_2exp_u64(4);
-        state[20] = sum.clone() - state[20].div_2exp_u64(5);
-        state[21] = sum.clone() - state[21].div_2exp_u64(6);
-        state[22] = sum.clone() - state[22].div_2exp_u64(7);
+        state[1] += sum.dup();
+        state[2] = state[2].double() + sum.dup();
+        state[3] = state[3].halve() + sum.dup();
+        state[4] = sum.dup() + state[4].double() + state[4].dup();
+        state[5] = sum.dup() + state[5].double().double();
+        state[6] = sum.dup() - state[6].halve();
+        state[7] = sum.dup() - (state[7].double() + state[7].dup());
+        state[8] = sum.dup() - state[8].double().double();
+        state[9] = state[9].div_2exp_u64(8) + sum.dup();
+        state[10] = state[10].div_2exp_u64(2) + sum.dup();
+        state[11] = state[11].div_2exp_u64(3) + sum.dup();
+        state[12] = state[12].div_2exp_u64(4) + sum.dup();
+        state[13] = state[13].div_2exp_u64(7) + sum.dup();
+        state[14] = state[14].div_2exp_u64(9) + sum.dup();
+        state[15] = state[15].div_2exp_u64(27) + sum.dup();
+        state[16] = sum.dup() - state[16].div_2exp_u64(8);
+        state[17] = sum.dup() - state[17].div_2exp_u64(2);
+        state[18] = sum.dup() - state[18].div_2exp_u64(3);
+        state[19] = sum.dup() - state[19].div_2exp_u64(4);
+        state[20] = sum.dup() - state[20].div_2exp_u64(5);
+        state[21] = sum.dup() - state[21].div_2exp_u64(6);
+        state[22] = sum.dup() - state[22].div_2exp_u64(7);
         state[23] = sum - state[23].div_2exp_u64(27);
     }
 }
@@ -326,36 +326,36 @@ impl InternalLayerBaseParameters<BabyBearParameters, 32> for BabyBearInternalLay
         // V = [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4,
         //      1/2^8, 1/4, 1/8, 1/16, 1/32, 1/64, 1/2^7, 1/2^9, 1/2^10, 1/2^12, 1/2^27,
         //      -1/2^8, -1/4, -1/8, -1/16, -1/32, -1/64, -1/2^7, -1/2^9, -1/2^10, -1/2^12, -1/2^14, -1/2^27]
-        state[1] += sum.clone();
-        state[2] = state[2].double() + sum.clone();
-        state[3] = state[3].halve() + sum.clone();
-        state[4] = sum.clone() + state[4].double() + state[4].clone();
-        state[5] = sum.clone() + state[5].double().double();
-        state[6] = sum.clone() - state[6].halve();
-        state[7] = sum.clone() - (state[7].double() + state[7].clone());
-        state[8] = sum.clone() - state[8].double().double();
-        state[9] = state[9].div_2exp_u64(8) + sum.clone();
-        state[10] = state[10].div_2exp_u64(2) + sum.clone();
-        state[11] = state[11].div_2exp_u64(3) + sum.clone();
-        state[12] = state[12].div_2exp_u64(4) + sum.clone();
-        state[13] = state[13].div_2exp_u64(5) + sum.clone();
-        state[14] = state[14].div_2exp_u64(6) + sum.clone();
-        state[15] = state[15].div_2exp_u64(7) + sum.clone();
-        state[16] = state[16].div_2exp_u64(9) + sum.clone();
-        state[17] = state[17].div_2exp_u64(10) + sum.clone();
-        state[18] = state[18].div_2exp_u64(12) + sum.clone();
-        state[19] = state[19].div_2exp_u64(27) + sum.clone();
-        state[20] = sum.clone() - state[20].div_2exp_u64(8);
-        state[21] = sum.clone() - state[21].div_2exp_u64(2);
-        state[22] = sum.clone() - state[22].div_2exp_u64(3);
-        state[23] = sum.clone() - state[23].div_2exp_u64(4);
-        state[24] = sum.clone() - state[24].div_2exp_u64(5);
-        state[25] = sum.clone() - state[25].div_2exp_u64(6);
-        state[26] = sum.clone() - state[26].div_2exp_u64(7);
-        state[27] = sum.clone() - state[27].div_2exp_u64(9);
-        state[28] = sum.clone() - state[28].div_2exp_u64(10);
-        state[29] = sum.clone() - state[29].div_2exp_u64(12);
-        state[30] = sum.clone() - state[30].div_2exp_u64(14);
+        state[1] += sum.dup();
+        state[2] = state[2].double() + sum.dup();
+        state[3] = state[3].halve() + sum.dup();
+        state[4] = sum.dup() + state[4].double() + state[4].dup();
+        state[5] = sum.dup() + state[5].double().double();
+        state[6] = sum.dup() - state[6].halve();
+        state[7] = sum.dup() - (state[7].double() + state[7].dup());
+        state[8] = sum.dup() - state[8].double().double();
+        state[9] = state[9].div_2exp_u64(8) + sum.dup();
+        state[10] = state[10].div_2exp_u64(2) + sum.dup();
+        state[11] = state[11].div_2exp_u64(3) + sum.dup();
+        state[12] = state[12].div_2exp_u64(4) + sum.dup();
+        state[13] = state[13].div_2exp_u64(5) + sum.dup();
+        state[14] = state[14].div_2exp_u64(6) + sum.dup();
+        state[15] = state[15].div_2exp_u64(7) + sum.dup();
+        state[16] = state[16].div_2exp_u64(9) + sum.dup();
+        state[17] = state[17].div_2exp_u64(10) + sum.dup();
+        state[18] = state[18].div_2exp_u64(12) + sum.dup();
+        state[19] = state[19].div_2exp_u64(27) + sum.dup();
+        state[20] = sum.dup() - state[20].div_2exp_u64(8);
+        state[21] = sum.dup() - state[21].div_2exp_u64(2);
+        state[22] = sum.dup() - state[22].div_2exp_u64(3);
+        state[23] = sum.dup() - state[23].div_2exp_u64(4);
+        state[24] = sum.dup() - state[24].div_2exp_u64(5);
+        state[25] = sum.dup() - state[25].div_2exp_u64(6);
+        state[26] = sum.dup() - state[26].div_2exp_u64(7);
+        state[27] = sum.dup() - state[27].div_2exp_u64(9);
+        state[28] = sum.dup() - state[28].div_2exp_u64(10);
+        state[29] = sum.dup() - state[29].div_2exp_u64(12);
+        state[30] = sum.dup() - state[30].div_2exp_u64(14);
         state[31] = sum - state[31].div_2exp_u64(27);
     }
 }

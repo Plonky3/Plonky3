@@ -3,7 +3,7 @@
 use core::fmt;
 use core::fmt::Display;
 
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{Dup, PrimeCharacteristicRing};
 
 use crate::{AirBuilder, ExtensionBuilder, FilteredAirBuilder};
 
@@ -239,7 +239,7 @@ impl<AB: NamedAirBuilder> NamedAirBuilder for FilteredAirBuilder<'_, AB> {
     {
         let condition = self.condition();
         self.inner
-            .assert_zeros_named(array.map(|elem| condition.clone() * elem.into()), name);
+            .assert_zeros_named(array.map(|elem| condition.dup() * elem.into()), name);
     }
 
     fn assert_one_named<I, N>(&mut self, x: I, name: N)
