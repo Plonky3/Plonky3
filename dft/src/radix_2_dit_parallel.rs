@@ -165,6 +165,25 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         mat.bit_reverse_rows()
     }
 
+    fn coset_dft_batch(&self, mut mat: RowMajorMatrix<F>, shift: F) -> Self::Evaluations {
+        reverse_matrix_index_bits(&mut mat);
+        coset_dft(self, &mut mat.as_view_mut(), shift);
+        BitReversalPerm::new_view(mat)
+    }
+
+    fn coset_idft_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
+        let mut coeffs = self.idft_batch(mat);
+        let shift_inv = shift.inverse();
+        if shift_inv != F::ONE {
+            let weights: Vec<F> = shift_inv.powers().take(coeffs.height()).collect();
+            coeffs
+                .par_rows_mut()
+                .zip(weights.into_par_iter())
+                .for_each(|(row, weight)| p3_field::scale_slice_in_place_single_core(row, weight));
+        }
+        coeffs
+    }
+
     #[instrument(skip_all, level = "debug", fields(dims = %mat.dimensions(), added_bits = added_bits))]
     fn coset_lde_batch(
         &self,
@@ -549,5 +568,50 @@ fn dit_layer_rev<F: Field>(
             let (lo, hi) = block.split_at_mut(half_block_size * width);
             DitButterfly(twiddle).apply_to_rows(lo, hi);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_field::TwoAdicField;
+    use p3_matrix::Matrix;
+    use p3_matrix::dense::RowMajorMatrix;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use super::*;
+
+    type F = BabyBear;
+
+    #[test]
+    fn coset_dft_idft_roundtrip() {
+        let dft = Radix2DitParallel::<F>::default();
+        let shift = F::GENERATOR;
+        let mut rng = SmallRng::seed_from_u64(42);
+        let original = RowMajorMatrix::<F>::rand(&mut rng, 16, 3);
+
+        let evals = dft.coset_dft_batch(original.clone(), shift);
+        let recovered = dft.coset_idft_batch(evals.to_row_major_matrix(), shift);
+
+        assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn coset_dft_matches_default_trait() {
+        let dft = Radix2DitParallel::<F>::default();
+        let shift = F::two_adic_generator(4) * F::GENERATOR;
+        let mut rng = SmallRng::seed_from_u64(7);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 16, 4);
+
+        let override_result = dft
+            .coset_dft_batch(mat.clone(), shift)
+            .to_row_major_matrix();
+
+        let mut shifted = mat;
+        crate::util::coset_shift_cols(&mut shifted, shift);
+        let default_result = dft.dft_batch(shifted).to_row_major_matrix();
+
+        assert_eq!(override_result, default_result);
     }
 }
