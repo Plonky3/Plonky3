@@ -215,13 +215,9 @@ where
             return Err(InvalidProofShapeError::PreprocessedWidthMismatch { air: i }.into());
         }
 
-<<<<<<< Updated upstream
-        let expected_global_lookup_data_len = Lookup::global_count(&all_lookups[i]);
-=======
         let expected_global_lookup_entries =
             Lookup::global_entries(&all_lookups[i]).collect::<Vec<_>>();
         let expected_global_lookup_data_len = expected_global_lookup_entries.len();
->>>>>>> Stashed changes
         let got_global_lookup_data_len = global_lookup_data[i].len();
         if got_global_lookup_data_len != expected_global_lookup_data_len {
             return Err(InvalidProofShapeError::GlobalLookupDataCountMismatch {
@@ -231,8 +227,6 @@ where
             }
             .into());
         }
-<<<<<<< Updated upstream
-=======
         for (lookup_idx, ((expected_name, expected_aux_idx), data)) in
             expected_global_lookup_entries
                 .into_iter()
@@ -251,7 +245,6 @@ where
                 .into());
             }
         }
->>>>>>> Stashed changes
 
         // Observe per-instance binding data: (log_ext_degree, log_degree), width, num quotient chunks.
         let ext_db = degree_bits[i];

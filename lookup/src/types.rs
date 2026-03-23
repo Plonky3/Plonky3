@@ -118,14 +118,6 @@ impl<F: Field> Lookup<F> {
         }
     }
 
-<<<<<<< Updated upstream
-    /// Counts how many global lookup interactions are present in `lookups`.
-    pub fn global_count(lookups: &[Self]) -> usize {
-        lookups
-            .iter()
-            .filter(|lookup| matches!(lookup.kind, Kind::Global(_)))
-            .count()
-=======
     /// Iterates over the global lookup interactions in declaration order.
     pub fn global_entries(lookups: &[Self]) -> impl Iterator<Item = (&String, usize)> + '_ {
         lookups.iter().filter_map(|lookup| match &lookup.kind {
@@ -137,7 +129,6 @@ impl<F: Field> Lookup<F> {
     /// Counts how many global lookup interactions are present in `lookups`.
     pub fn global_count(lookups: &[Self]) -> usize {
         Self::global_entries(lookups).count()
->>>>>>> Stashed changes
     }
 }
 

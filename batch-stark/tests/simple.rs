@@ -2075,8 +2075,6 @@ fn test_batch_stark_rejects_truncated_global_lookup_data() {
     }
 }
 
-<<<<<<< Updated upstream
-=======
 #[test]
 fn test_batch_stark_rejects_tampered_global_lookup_metadata() {
     let config = make_config(2025);
@@ -2135,8 +2133,6 @@ fn test_batch_stark_rejects_tampered_global_lookup_metadata() {
         _ => panic!("unexpected error: {err:?}"),
     }
 }
-
->>>>>>> Stashed changes
 /// Test mixing instances with lookups and instances without lookups.
 /// We have the following instances:
 /// - MulAir with both local and global lookups (looking into two different FibAir instances for each rep)
