@@ -125,6 +125,7 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGES
         );
 
         let max_height = leaves_largest_first.peek().unwrap().height();
+        let leaf_height_npt = max_height.next_power_of_two();
         let tallest_matrices = leaves_largest_first
             .peeking_take_while(|m| m.height() == max_height)
             .collect_vec();
@@ -142,15 +143,11 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGES
             }
 
             // Decide whether this level is a full N-ary step or a binary step.
-            let step = if prev_layer.len() < N {
-                2
-            } else {
-                let n_ary_target = (prev_layer.len() / N).next_power_of_two();
-                let has_intermediate = leaves_largest_first
-                    .clone()
-                    .any(|m| m.height().next_power_of_two() > n_ary_target);
-                if has_intermediate { 2 } else { N }
-            };
+            let step = select_arity_step::<N>(
+                prev_layer.len(),
+                leaf_height_npt,
+                leaves_largest_first.clone().map(|m| m.height()),
+            );
 
             let next_layer_len = (prev_layer.len() / step).next_power_of_two();
 
@@ -221,6 +218,27 @@ impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGES
     pub const fn num_layers(&self) -> usize {
         self.digest_layers.len()
     }
+}
+
+/// Select the compression arity for the current layer.
+///
+/// Returns `N` for a full N-ary step, or `2` for a binary bridge step when a
+/// matrix injection must happen before the next N-ary target level.
+pub(crate) fn select_arity_step<const N: usize>(
+    curr_height_padded: usize,
+    leaf_height_npt: usize,
+    remaining_heights_tallest_first: impl Iterator<Item = usize>,
+) -> usize {
+    if curr_height_padded < N {
+        return 2;
+    }
+
+    let n_ary_target = (curr_height_padded / N).next_power_of_two();
+    let has_intermediate = remaining_heights_tallest_first
+        .filter(|height| height.next_power_of_two() != leaf_height_npt)
+        .any(|height| height.next_power_of_two() > n_ary_target);
+
+    if has_intermediate { 2 } else { N }
 }
 
 /// Hash every row of the tallest matrices and build the first digest layer.
