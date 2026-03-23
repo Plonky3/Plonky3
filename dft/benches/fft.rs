@@ -45,6 +45,14 @@ fn bench_fft(c: &mut Criterion) {
     coset_lde::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
     coset_lde::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
     coset_lde::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
+    coset_dft::<BabyBear, Radix2Dit<_>>(c, log_sizes, &[1, 8, 64, 256]);
+    coset_dft::<BabyBear, Radix2DitParallel<_>>(c, log_sizes, &[1, 8, 64, 256]);
+    coset_dft::<BabyBear, Radix2Bowers>(c, log_sizes, &[1, 8, 64, 256]);
+    coset_dft::<Goldilocks, Radix2Bowers>(c, log_sizes, &[1, 8, 64, 256]);
+    coset_idft::<BabyBear, Radix2Dit<_>>(c, log_sizes, &[1, 8, 64, 256]);
+    coset_idft::<BabyBear, Radix2DitParallel<_>>(c, log_sizes, &[1, 8, 64, 256]);
+    coset_idft::<BabyBear, Radix2Bowers>(c, log_sizes, &[1, 8, 64, 256]);
+    coset_idft::<Goldilocks, Radix2Bowers>(c, log_sizes, &[1, 8, 64, 256]);
 
     // The FFT is much slower when handling extension fields so we use smaller sizes:
     let ext_log_sizes = &[10, 12, 14];
@@ -207,6 +215,80 @@ where
             );
         });
     }
+}
+
+fn coset_dft<F, Dft>(c: &mut Criterion, log_sizes: &[usize], widths: &[usize])
+where
+    F: TwoAdicField,
+    Dft: TwoAdicSubgroupDft<F>,
+    StandardUniform: Distribution<F>,
+{
+    let mut group = c.benchmark_group(format!(
+        "coset_dft/{}/{}",
+        pretty_name::<F>(),
+        pretty_name::<Dft>(),
+    ));
+    group.sample_size(10);
+
+    let mut rng = SmallRng::seed_from_u64(7);
+    let shift = F::GENERATOR;
+
+    for &width in widths {
+        for &n_log in log_sizes {
+            let n = 1 << n_log;
+            let messages = RowMajorMatrix::rand(&mut rng, n, width);
+
+            let dft = Dft::default();
+            group.bench_with_input(
+                BenchmarkId::new(format!("ncols={width}"), n),
+                &dft,
+                |b, dft| {
+                    b.iter(|| {
+                        dft.coset_dft_batch(messages.clone(), shift);
+                    });
+                },
+            );
+        }
+    }
+
+    group.finish();
+}
+
+fn coset_idft<F, Dft>(c: &mut Criterion, log_sizes: &[usize], widths: &[usize])
+where
+    F: TwoAdicField,
+    Dft: TwoAdicSubgroupDft<F>,
+    StandardUniform: Distribution<F>,
+{
+    let mut group = c.benchmark_group(format!(
+        "coset_idft/{}/{}",
+        pretty_name::<F>(),
+        pretty_name::<Dft>(),
+    ));
+    group.sample_size(10);
+
+    let mut rng = SmallRng::seed_from_u64(9);
+    let shift = F::GENERATOR;
+
+    for &width in widths {
+        for &n_log in log_sizes {
+            let n = 1 << n_log;
+            let messages = RowMajorMatrix::rand(&mut rng, n, width);
+
+            let dft = Dft::default();
+            group.bench_with_input(
+                BenchmarkId::new(format!("ncols={width}"), n),
+                &dft,
+                |b, dft| {
+                    b.iter(|| {
+                        dft.coset_idft_batch(messages.clone(), shift);
+                    });
+                },
+            );
+        }
+    }
+
+    group.finish();
 }
 
 criterion_group!(benches, bench_fft);
