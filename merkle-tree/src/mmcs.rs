@@ -35,7 +35,7 @@ use thiserror::Error;
 use crate::MerkleTreeError::{
     CapMismatch, EmptyBatch, IncompatibleHeights, IndexOutOfBounds, WrongBatchSize, WrongHeight,
 };
-use crate::merkle_tree::padded_len;
+use crate::merkle_tree::{padded_len, select_arity_step};
 use crate::{MerkleCap, MerkleTree};
 
 /// A Merkle Tree-based commitment scheme for multiple matrices of potentially differing heights.
@@ -207,16 +207,11 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         let mut positions = Vec::new();
 
         while proof_pos < num_opening_proofs {
-            let step = if curr_height_padded < N {
-                2
-            } else {
-                let n_ary_target = curr_height_padded / N;
-                let has_intermediate = heights_tallest_first
-                    .clone()
-                    .filter(|(_, dims)| dims.height.next_power_of_two() != leaf_height_npt)
-                    .any(|(_, dims)| dims.height.next_power_of_two() > n_ary_target);
-                if has_intermediate { 2 } else { N }
-            };
+            let step = select_arity_step::<N>(
+                curr_height_padded,
+                leaf_height_npt,
+                heights_tallest_first.clone().map(|(_, dims)| dims.height),
+            );
 
             let num_siblings = step - 1;
             if proof_pos + num_siblings > num_opening_proofs {
@@ -483,17 +478,11 @@ where
         let mut proof_pos: usize = 0;
 
         while proof_pos < opening_proof.len() {
-            let step = if curr_height_padded < N {
-                2
-            } else {
-                let n_ary_target = curr_height_padded / N;
-                // Exclude matrices already at the current layer (consumed in initial hash).
-                let has_intermediate = heights_tallest_first
-                    .clone()
-                    .filter(|(_, dims)| dims.height.next_power_of_two() != leaf_height_npt)
-                    .any(|(_, dims)| dims.height.next_power_of_two() > n_ary_target);
-                if has_intermediate { 2 } else { N }
-            };
+            let step = select_arity_step::<N>(
+                curr_height_padded,
+                leaf_height_npt,
+                heights_tallest_first.clone().map(|(_, dims)| dims.height),
+            );
 
             let num_siblings = step - 1;
             if proof_pos + num_siblings > opening_proof.len() {
@@ -1409,6 +1398,51 @@ mod tests {
                 );
                 idx /= step;
             }
+        }
+    }
+
+    #[test]
+    fn replay_arity_and_positions_4ary_non_power_of_two_target() {
+        let mut rng = SmallRng::seed_from_u64(790);
+        let perm16 = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm16);
+        let perm32 = PermWide::new_from_rng_128(&mut rng);
+        let compress4 = MyCompress4::new(perm32);
+        let mmcs4 = MyMmcs4::new(hash, compress4, 0);
+
+        // This shape forces an intermediate padded height of 12, where 12 / 4 = 3
+        // is not a power of two. The prover and verifier must still pick the same
+        // step schedule.
+        let mat33 = RowMajorMatrix::<F>::rand(&mut rng, 33, 8);
+        let mat3 = RowMajorMatrix::<F>::rand(&mut rng, 3, 5);
+        let dims = vec![mat33.dimensions(), mat3.dimensions()];
+        let (commit, prover_data) = mmcs4.commit(vec![mat33, mat3]);
+
+        assert!(
+            prover_data.arity_schedule.iter().all(|&step| step == 4),
+            "expected full 4-ary schedule for this shape"
+        );
+
+        for index in [0usize, 1, 16, 32] {
+            let opening = mmcs4.open_batch(index, &prover_data);
+            let (opened_values, proof) = opening.unpack();
+
+            mmcs4
+                .verify_batch(
+                    &commit,
+                    &dims,
+                    index,
+                    BatchOpeningRef::new(&opened_values, &proof),
+                )
+                .expect("verification should succeed for non-power-of-two target case");
+
+            let arity_and_positions = mmcs4
+                .replay_arity_and_positions(&dims, index, proof.len())
+                .expect("schedule replay should succeed");
+            assert_eq!(
+                arity_and_positions.arity_schedule, prover_data.arity_schedule,
+                "replayed schedule must match prover schedule at index {index}"
+            );
         }
     }
 
