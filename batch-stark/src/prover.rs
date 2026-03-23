@@ -83,10 +83,18 @@ where
     let pcs = config.pcs();
     let mut challenger = config.initialise_challenger();
 
-    // Use instances in provided order.
-    let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
-    let log_degrees: Vec<usize> = degrees.iter().copied().map(log2_strict_usize).collect();
-    let log_ext_degrees: Vec<usize> = log_degrees.iter().map(|&d| d + config.is_zk()).collect();
+    // Use instances in provided order (single pass for degree-derived vectors).
+    let n_inst = instances.len();
+    let mut degrees = Vec::with_capacity(n_inst);
+    let mut log_degrees = Vec::with_capacity(n_inst);
+    let mut log_ext_degrees = Vec::with_capacity(n_inst);
+    for inst in instances {
+        let deg = inst.trace.height();
+        let ld = log2_strict_usize(deg);
+        degrees.push(deg);
+        log_degrees.push(ld);
+        log_ext_degrees.push(ld + config.is_zk());
+    }
 
     // Extract lookups and create lookup data in one pass.
     let (all_lookups, mut lookup_data): (Vec<Vec<_>>, Vec<Vec<_>>) = instances
@@ -125,38 +133,46 @@ where
     let airs: Vec<&A> = instances.iter().map(|i| i.air).collect();
     let pub_vals: Vec<Vec<Val<SC>>> = instances.iter().map(|i| i.public_values.clone()).collect();
 
-    let mut preprocessed_widths = Vec::with_capacity(airs.len());
-    let (log_num_quotient_chunks, num_quotient_chunks): (Vec<usize>, Vec<usize>) = airs
+    let main_next_needed: Vec<bool> = airs
         .iter()
-        .zip(pub_vals.iter())
-        .enumerate()
-        .map(|(i, (air, _pv))| {
-            let pre_w = common
-                .preprocessed
-                .as_ref()
-                .and_then(|g| g.instances[i].as_ref().map(|m| m.width))
-                .unwrap_or(0);
-            preprocessed_widths.push(pre_w);
-            let layout = AirLayout {
-                preprocessed_width: pre_w,
-                main_width: air.width(),
-                num_public_values: air.num_public_values(),
-                ..Default::default()
-            };
-            let lq_chunks =
-                info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
-                    get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
-                        air,
-                        layout,
-                        &all_lookups[i],
-                        config.is_zk(),
-                        &lookup_gadget,
-                    )
-                });
-            let n_chunks = 1 << (lq_chunks + config.is_zk());
-            (lq_chunks, n_chunks)
-        })
-        .unzip();
+        .map(|a| !a.main_next_row_columns().is_empty())
+        .collect();
+    let preprocessed_next_needed: Vec<bool> = airs
+        .iter()
+        .map(|a| !a.preprocessed_next_row_columns().is_empty())
+        .collect();
+
+    let mut preprocessed_widths = Vec::with_capacity(airs.len());
+    let mut sym_layouts = Vec::with_capacity(airs.len());
+    let mut log_num_quotient_chunks = Vec::with_capacity(airs.len());
+    let mut num_quotient_chunks = Vec::with_capacity(airs.len());
+    for i in 0..airs.len() {
+        let air = airs[i];
+        let pre_w = common
+            .preprocessed
+            .as_ref()
+            .and_then(|g| g.instances[i].as_ref().map(|m| m.width))
+            .unwrap_or(0);
+        preprocessed_widths.push(pre_w);
+        let layout = AirLayout {
+            preprocessed_width: pre_w,
+            main_width: air.width(),
+            num_public_values: air.num_public_values(),
+            ..Default::default()
+        };
+        sym_layouts.push(layout);
+        let lq_chunks = info_span!("infer log of constraint degree", air_idx = i).in_scope(|| {
+            get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
+                air,
+                layout,
+                &all_lookups[i],
+                config.is_zk(),
+                &lookup_gadget,
+            )
+        });
+        log_num_quotient_chunks.push(lq_chunks);
+        num_quotient_chunks.push(1 << (lq_chunks + config.is_zk()));
+    }
 
     // Observe the number of instances up front so the transcript can't be reinterpreted
     // with a different partitioning.
@@ -218,9 +234,6 @@ where
                     &mut lookup_data[i],
                     &challenges_per_instance[i],
                 );
-                permutation_commit_inputs
-                    .push((ext_domain, generated_perm.clone().flatten_to_base()));
-
                 #[cfg(debug_assertions)]
                 {
                     use crate::check_constraints::check_constraints;
@@ -243,6 +256,7 @@ where
                         lookup_constraints_inputs,
                     );
                 }
+                permutation_commit_inputs.push((ext_domain, generated_perm.flatten_to_base()));
             }
         });
 
@@ -281,38 +295,46 @@ where
         None
     };
 
-    // Compute quotient chunk counts and domains per instance inline in the loop below.
+    let perm_data_matrix_idx: Vec<Option<usize>> = {
+        let mut j = 0usize;
+        all_lookups
+            .iter()
+            .map(|lookups| {
+                if lookups.is_empty() {
+                    None
+                } else {
+                    let idx = j;
+                    j += 1;
+                    Some(idx)
+                }
+            })
+            .collect()
+    };
+
+    let lookup_perm_expected: Vec<Vec<Challenge<SC>>> = lookup_data
+        .iter()
+        .map(|row| row.iter().map(|ld| ld.expected_cumulated).collect())
+        .collect();
 
     // Get the random alpha to fold constraints.
     let alpha: Challenge<SC> = challenger.sample_algebra_element();
 
-    // Build per-instance quotient domains and values, and split into chunks.
     let mut quotient_chunk_domains: Vec<Domain<SC>> = Vec::new();
     let mut quotient_chunk_mats: Vec<RowMajorMatrix<Val<SC>>> = Vec::new();
-    // Track ranges so we can map openings back to instances.
     let mut quotient_chunk_ranges: Vec<(usize, usize)> = Vec::with_capacity(n_instances);
 
-    let mut perm_counter = 0;
-
-    // TODO: Parallelize this loop for better performance with many instances.
-    for (i, trace_domain) in trace_domains.iter().enumerate() {
+    // Per-instance quotients are not run in parallel here: sharing `pcs` across threads would
+    // require `SC::Pcs: Sync`, which fails for some ZK PCS backends (e.g. hiding MMCS with RNG state).
+    for i in 0..n_instances {
         let _air_span = info_span!("compute quotient", air_idx = i).entered();
 
         let log_chunks = log_num_quotient_chunks[i];
         let n_chunks = num_quotient_chunks[i];
-        // Disjoint domain of size ext_degree * num_quotient_chunks
-        // (log size = log_ext_degrees[i] + log_num_quotient_chunks[i]); use ext domain for shift.
         let quotient_domain =
             ext_trace_domains[i].create_disjoint_domain(1 << (log_ext_degrees[i] + log_chunks));
 
-        let sym_layout = AirLayout {
-            preprocessed_width: preprocessed_widths[i],
-            main_width: airs[i].width(),
-            num_public_values: airs[i].num_public_values(),
-            ..Default::default()
-        };
+        let sym_layout = sym_layouts[i];
 
-        // In debug builds, cross-check the static hint against symbolic evaluation.
         debug_assert!(
             airs[i].num_constraints().is_none_or(|n| {
                 n == get_symbolic_constraints(airs[i], sym_layout, &all_lookups[i], &lookup_gadget)
@@ -326,20 +348,19 @@ where
                 .len(),
         );
 
-        // Get evaluations on quotient domain from the main commitment.
         let trace_on_quotient_domain =
             pcs.get_evaluations_on_domain(&main_data, i, quotient_domain);
 
-        let permutation_on_quotient_domain = permutation_commit_and_data
-            .as_ref()
-            .filter(|_| !all_lookups[i].is_empty())
-            .map(|(_, perm_data)| {
-                let evals = pcs.get_evaluations_on_domain(perm_data, perm_counter, quotient_domain);
-                perm_counter += 1;
-                evals
-            });
+        let permutation_on_quotient_domain = match (
+            permutation_commit_and_data.as_ref(),
+            perm_data_matrix_idx[i],
+        ) {
+            (Some((_, perm_data)), Some(p)) => {
+                Some(pcs.get_evaluations_on_domain(perm_data, p, quotient_domain))
+            }
+            _ => None,
+        };
 
-        // Get preprocessed evaluations if this instance has preprocessed columns.
         let preprocessed_on_quotient_domain = common
             .preprocessed
             .as_ref()
@@ -357,28 +378,22 @@ where
                 )
             });
 
-        // Compute quotient(x) = constraints(x)/Z_H(x) over quotient_domain, as extension values.
-        let perm_vals: Vec<SC::Challenge> = lookup_data[i]
-            .iter()
-            .map(|ld| ld.expected_cumulated)
-            .collect();
         let q_values = quotient_values::<SC, A, _, LogUpGadget>(
             airs[i],
             &pub_vals[i],
             sym_layout,
-            *trace_domain,
+            trace_domains[i],
             quotient_domain,
             &trace_on_quotient_domain,
             permutation_on_quotient_domain.as_ref(),
             &all_lookups[i],
-            &perm_vals,
+            &lookup_perm_expected[i],
             &lookup_gadget,
             &challenges_per_instance[i],
             preprocessed_on_quotient_domain.as_ref(),
             alpha,
         );
 
-        // Flatten to base field and split into chunks.
         let q_flat = RowMajorMatrix::new_col(q_values).flatten_to_base();
         let chunk_mats = quotient_domain.split_evals(n_chunks, q_flat);
         let chunk_domains = quotient_domain.split_domains(n_chunks);
@@ -389,8 +404,7 @@ where
         let start = quotient_chunk_domains.len();
         quotient_chunk_domains.extend(chunk_domains);
         quotient_chunk_mats.extend(ldes);
-        let end = quotient_chunk_domains.len();
-        quotient_chunk_ranges.push((start, end));
+        quotient_chunk_ranges.push((start, quotient_chunk_domains.len()));
     }
 
     // Commit to all quotient chunks together.
@@ -435,7 +449,7 @@ where
             .iter()
             .enumerate()
             .map(|(i, dom)| {
-                if !airs[i].main_next_row_columns().is_empty() {
+                if main_next_needed[i] {
                     vec![
                         zeta,
                         dom.next_point(zeta)
@@ -470,7 +484,7 @@ where
                 .matrix_to_instance
                 .iter()
                 .map(|&inst_idx| {
-                    if !airs[inst_idx].preprocessed_next_row_columns().is_empty() {
+                    if preprocessed_next_needed[inst_idx] {
                         let zeta_next_i = trace_domains[inst_idx]
                             .next_point(zeta)
                             .expect("domain should support next_point operation");
@@ -529,10 +543,11 @@ where
         .map(|_| &opened_values[SC::Pcs::PREPROCESSED_TRACE_IDX]);
 
     let is_lookup = permutation_commit_and_data.is_some();
-    let permutation_values_for_mats = if is_lookup {
+    let empty_perm_openings: &[Vec<Vec<Challenge<SC>>>] = &[];
+    let permutation_values_for_mats: &[Vec<Vec<Challenge<SC>>>] = if is_lookup {
         &opened_values[permutation_idx]
     } else {
-        &vec![]
+        empty_perm_openings
     };
     let mut permutation_values_for_mats = permutation_values_for_mats.iter();
 
@@ -546,7 +561,7 @@ where
         // Trace locals
         let tv = &trace_values_for_mats[i];
         let trace_local = tv[0].clone();
-        let trace_next = if !airs[i].main_next_row_columns().is_empty() {
+        let trace_next = if main_next_needed[i] {
             Some(tv[1].clone())
         } else {
             None
@@ -567,7 +582,7 @@ where
         {
             global.instances[i].as_ref().map_or((None, None), |meta| {
                 let vals = &pre_round[meta.matrix_index];
-                if !airs[i].preprocessed_next_row_columns().is_empty() {
+                if preprocessed_next_needed[i] {
                     assert_eq!(
                         vals.len(),
                         2,
@@ -702,12 +717,12 @@ where
         .into_par_iter()
         .step_by(PackedVal::<SC>::WIDTH)
         .flat_map_iter(|i_start| {
-            let i_range = i_start..i_start + PackedVal::<SC>::WIDTH;
-
-            let is_first_row = *PackedVal::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
-            let is_last_row = *PackedVal::<SC>::from_slice(&sels.is_last_row[i_range.clone()]);
-            let is_transition = *PackedVal::<SC>::from_slice(&sels.is_transition[i_range.clone()]);
-            let inv_vanishing = *PackedVal::<SC>::from_slice(&sels.inv_vanishing[i_range]);
+            let w = PackedVal::<SC>::WIDTH;
+            let i_end = i_start + w;
+            let is_first_row = *PackedVal::<SC>::from_slice(&sels.is_first_row[i_start..i_end]);
+            let is_last_row = *PackedVal::<SC>::from_slice(&sels.is_last_row[i_start..i_end]);
+            let is_transition = *PackedVal::<SC>::from_slice(&sels.is_transition[i_start..i_end]);
+            let inv_vanishing = *PackedVal::<SC>::from_slice(&sels.inv_vanishing[i_start..i_end]);
 
             // Retrieve main trace as a matrix evaluated on the quotient domain.
             let main = RowMajorMatrix::new(
