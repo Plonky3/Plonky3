@@ -1233,7 +1233,7 @@ impl LookupAir<F> for AddAir {
                 direction,
             )];
             let global_lookup =
-                LookupAir::register_lookup(self, Kind::Global("LUT".to_string()), &lookup_inputs);
+                LookupAir::register_lookup(self, Kind::global(0, "LUT"), &lookup_inputs);
             // Return the local and global lookups.
             return vec![local_lookup, global_lookup];
         }
@@ -1439,8 +1439,9 @@ fn test_global_lookup() {
         lookups1.iter().for_each(|lookup| {
             match &lookup.kind {
                 Kind::Local => lookup_gadget.eval_local_lookup(&mut builder1, lookup),
-                Kind::Global(name) => {
-                    assert_eq!(*name, "LUT".to_string(), "Global lookup name should match");
+                Kind::Global { bus_index, name } => {
+                    assert_eq!(*bus_index, 0, "Global lookup bus_index should match");
+                    assert_eq!(*name, "LUT", "Global lookup name should match");
                     lookup_gadget.eval_global_update(&mut builder1, lookup, s_global_final1);
                 }
             };
@@ -1450,8 +1451,9 @@ fn test_global_lookup() {
         lookups2.iter().for_each(|lookup| {
             match &lookup.kind {
                 Kind::Local => lookup_gadget.eval_local_lookup(&mut builder2, lookup),
-                Kind::Global(name) => {
-                    assert_eq!(*name, "LUT".to_string(), "Global lookup name should match");
+                Kind::Global { bus_index, name } => {
+                    assert_eq!(*bus_index, 0, "Global lookup bus_index should match");
+                    assert_eq!(*name, "LUT", "Global lookup name should match");
                     lookup_gadget.eval_global_update(&mut builder2, lookup, s_global_final2);
                 }
             };

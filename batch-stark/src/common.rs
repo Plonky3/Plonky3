@@ -17,7 +17,7 @@ use p3_challenger::FieldChallenger;
 use p3_commit::Pcs;
 use p3_field::{Algebra, BasedVectorSpace};
 use p3_lookup::LookupAir;
-use p3_lookup::lookup_traits::{Kind, Lookup, LookupGadget};
+use p3_lookup::lookup_traits::{BusIndex, Kind, Lookup, LookupGadget};
 use p3_matrix::Matrix;
 use p3_uni_stark::Val;
 use p3_util::log2_strict_usize;
@@ -278,7 +278,7 @@ pub fn get_perm_challenges<SC: SGC, LG: LookupGadget>(
     lookup_gadget: &LG,
 ) -> Vec<Vec<SC::Challenge>> {
     let num_challenges_per_lookup = lookup_gadget.num_challenges();
-    let mut global_perm_challenges = HashMap::new();
+    let mut global_perm_challenges: HashMap<BusIndex, Vec<SC::Challenge>> = HashMap::new();
 
     all_lookups
         .iter()
@@ -289,10 +289,10 @@ pub fn get_perm_challenges<SC: SGC, LG: LookupGadget>(
 
             for context in contexts {
                 match &context.kind {
-                    Kind::Global(name) => {
-                        // Get or create the global challenges.
+                    Kind::Global { bus_index, .. } => {
+                        // Get or create the global challenges keyed by bus_index.
                         let challenges: &mut Vec<SC::Challenge> =
-                            global_perm_challenges.entry(name).or_insert_with(|| {
+                            global_perm_challenges.entry(*bus_index).or_insert_with(|| {
                                 (0..num_challenges_per_lookup)
                                     .map(|_| challenger.sample_algebra_element())
                                     .collect()

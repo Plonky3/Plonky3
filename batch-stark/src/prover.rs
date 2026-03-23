@@ -98,7 +98,8 @@ where
                 inst.lookups
                     .iter()
                     .filter_map(|lookup| match &lookup.kind {
-                        Kind::Global(name) => Some(LookupData {
+                        Kind::Global { bus_index, name } => Some(LookupData {
+                            bus_index: *bus_index,
                             name: name.clone(),
                             aux_idx: lookup.columns[0],
                             expected_cumulated: SC::Challenge::ZERO,

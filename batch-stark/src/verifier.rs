@@ -11,7 +11,7 @@ use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::lookup_traits::LookupGadget;
+use p3_lookup::lookup_traits::{BusIndex, LookupGadget};
 use p3_lookup::{AirWithLookups, Lookup};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
@@ -607,18 +607,26 @@ where
         })?;
     }
 
-    let mut global_cumulative = HashMap::<&String, Vec<_>>::new();
+    let mut global_cumulative = HashMap::<BusIndex, (Vec<_>, Option<String>)>::new();
     for data in global_lookup_data.iter().flatten() {
-        global_cumulative
-            .entry(&data.name)
-            .or_default()
-            .push(data.expected_cumulated);
+        let entry = global_cumulative
+            .entry(data.bus_index)
+            .or_insert_with(|| (Vec::new(), None));
+        entry.0.push(data.expected_cumulated);
+        if entry.1.is_none() {
+            entry.1 = Some(data.name.clone());
+        }
     }
 
-    for (name, all_expected_cumulative) in global_cumulative {
+    for (bus_index, (all_expected_cumulative, name)) in global_cumulative {
         lookup_gadget
             .verify_global_final_value(&all_expected_cumulative)
-            .map_err(|e| VerificationError::LookupError(format!("{e:?}: {name}")))?;
+            .map_err(|e| {
+                VerificationError::LookupError(format!(
+                    "{e:?}: bus {bus_index} ('{}')",
+                    name.as_deref().unwrap_or("unknown")
+                ))
+            })?;
     }
 
     Ok(())

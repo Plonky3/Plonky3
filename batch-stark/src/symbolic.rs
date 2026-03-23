@@ -32,7 +32,7 @@ where
     let num_challenges = contexts.len() * lookup_gadget.num_challenges();
     let num_permutation_values = contexts
         .iter()
-        .filter(|c| matches!(&c.kind, Kind::Global(_)))
+        .filter(|c| matches!(&c.kind, Kind::Global { .. }))
         .count();
     let layout = AirLayout {
         permutation_width: num_aux_cols,
@@ -141,7 +141,7 @@ where
     let num_challenges = num_lookups * lookup_gadget.num_challenges();
     let num_permutation_values = contexts
         .iter()
-        .filter(|c| matches!(&c.kind, Kind::Global(_)))
+        .filter(|c| matches!(&c.kind, Kind::Global { .. }))
         .count();
     let layout = AirLayout {
         permutation_width: num_aux_cols,

@@ -9,7 +9,7 @@ use p3_uni_stark::{StarkGenericConfig, Val};
 use tracing::warn;
 
 pub use crate::types::{
-    Direction, Kind, Lookup, LookupData, LookupError, LookupEvaluator, LookupInput,
+    BusIndex, Direction, Kind, Lookup, LookupData, LookupError, LookupEvaluator, LookupInput,
 };
 
 /// A trait for lookup argument.

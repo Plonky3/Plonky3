@@ -16,6 +16,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::VerticalPair;
 
 use crate::lookup_traits::{Kind, Lookup, symbolic_to_expr};
+use crate::types::BusIndex;
 
 /// All inputs required to replay lookup evaluations for one AIR instance.
 pub struct LookupDebugInstance<'a, F: Field> {
@@ -108,17 +109,17 @@ pub fn check_lookups<F: Field>(instances: &[LookupDebugInstance<'_, F>]) {
         }
     }
 
-    // 2) Aggregate all global lookups that share the same interaction name,
+    // 2) Aggregate all global lookups that share the same bus index,
     //    then verify each group sums to zero.
-    //    A name-to-index map gives O(1) group lookups instead of a linear scan.
-    let mut global_sets: Vec<(String, MultiSet<F>)> = Vec::new();
-    let mut global_index: HashMap<String, usize> = HashMap::new();
+    //    A bus_index-to-index map gives O(1) group lookups instead of a linear scan.
+    let mut global_sets: Vec<(BusIndex, String, MultiSet<F>)> = Vec::new();
+    let mut global_index: HashMap<BusIndex, usize> = HashMap::new();
 
     for (instance_idx, instance) in instances.iter().enumerate() {
         for (lookup_idx, lookup) in instance.lookups.iter().enumerate() {
-            if let Kind::Global(name) = &lookup.kind {
-                let idx = *global_index.entry(name.clone()).or_insert_with(|| {
-                    global_sets.push((name.clone(), MultiSet::default()));
+            if let Kind::Global { bus_index, name } = &lookup.kind {
+                let idx = *global_index.entry(*bus_index).or_insert_with(|| {
+                    global_sets.push((*bus_index, name.clone(), MultiSet::default()));
                     global_sets.len() - 1
                 });
 
@@ -127,14 +128,14 @@ pub fn check_lookups<F: Field>(instances: &[LookupDebugInstance<'_, F>]) {
                     lookup_idx,
                     instance,
                     lookup,
-                    &mut global_sets[idx].1,
+                    &mut global_sets[idx].2,
                 );
             }
         }
     }
 
-    for (name, multiset) in global_sets {
-        multiset.assert_empty(&format!("global lookup '{name}'"));
+    for (bus_index, name, multiset) in global_sets {
+        multiset.assert_empty(&format!("global lookup bus {bus_index} ('{name}')"));
     }
 }
 

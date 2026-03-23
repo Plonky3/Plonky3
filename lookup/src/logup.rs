@@ -239,7 +239,7 @@ impl LogUpGadget {
         if let Some(expected_cumulated) = opt_expected_cumulated {
             // If there is an `expected_cumulated`, we are in a global lookup update.
             assert!(
-                matches!(kind, Kind::Global(_)),
+                matches!(kind, Kind::Global { .. }),
                 "Expected cumulated value provided for a non-global lookup"
             );
 
@@ -290,7 +290,7 @@ impl LookupEvaluator for LogUpGadget {
     where
         AB: PermutationAirBuilder,
     {
-        if let Kind::Global(_) = context.kind {
+        if let Kind::Global { .. } = context.kind {
             panic!("Global lookups are not supported in local evaluation")
         }
 
@@ -332,7 +332,12 @@ impl LookupGadget for LogUpGadget {
         if !total.is_zero() {
             // We set the name associated to the lookup to None because we don't have access to the actual name here.
             // The actual name will be set in the verifier directly.
-            return Err(LookupError::GlobalCumulativeMismatch(None));
+            // We don't have the bus_index or name here; the caller (verifier) will
+            // enrich the error with context from the LookupData.
+            return Err(LookupError::GlobalCumulativeMismatch {
+                bus_index: 0,
+                name: None,
+            });
         }
 
         Ok(())
@@ -656,7 +661,7 @@ impl LookupGadget for LogUpGadget {
                 });
 
             // For global lookups, record the total sum across all rows.
-            if matches!(context.kind, Kind::Global(_)) {
+            if matches!(context.kind, Kind::Global { .. }) {
                 lookup_data[permutation_counter].expected_cumulated = prefix[height - 1];
                 permutation_counter += 1;
             }

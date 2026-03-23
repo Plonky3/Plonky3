@@ -12,11 +12,22 @@ use p3_air::{Air, PermutationAirBuilder, SymbolicExpression};
 use p3_field::Field;
 use serde::{Deserialize, Serialize};
 
+/// Numeric identifier for a global bus.
+///
+/// All lookups sharing the same `BusIndex` participate in the same
+/// permutation argument and share the same (alpha, beta) challenges.
+pub type BusIndex = u16;
+
 /// Defines errors that can occur during lookup verification.
 #[derive(Debug)]
 pub enum LookupError {
     /// Error indicating that the global cumulative sum is incorrect.
-    GlobalCumulativeMismatch(Option<String>),
+    GlobalCumulativeMismatch {
+        /// The bus index of the failing global lookup.
+        bus_index: BusIndex,
+        /// Optional human-readable name for diagnostics.
+        name: Option<String>,
+    },
 }
 
 /// Specifies whether a lookup is local to an AIR or part of a global interaction.
@@ -24,10 +35,26 @@ pub enum LookupError {
 pub enum Kind {
     /// A lookup where all entries are contained within a single AIR.
     Local,
-    /// A lookup that spans multiple AIRs, identified by a unique interaction name.
+    /// A lookup that spans multiple AIRs, identified by a numeric bus index.
     ///
-    /// The interaction name is used to identify all elements that are part of the same interaction.
-    Global(String),
+    /// The `bus_index` determines challenge sharing and cumulative-sum grouping.
+    /// The `name` is retained for diagnostics only.
+    Global {
+        /// Numeric bus identifier.
+        bus_index: BusIndex,
+        /// Human-readable name (for error messages / debugging).
+        name: String,
+    },
+}
+
+impl Kind {
+    /// Convenience constructor for a global lookup.
+    pub fn global(bus_index: BusIndex, name: impl Into<String>) -> Self {
+        Self::Global {
+            bus_index,
+            name: name.into(),
+        }
+    }
 }
 
 /// Indicates the direction of data flow in a lookup interaction.
@@ -52,7 +79,9 @@ impl Direction {
 /// Data required for global lookup arguments in a multi-STARK proof.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct LookupData<F> {
-    /// Name of the global lookup interaction.
+    /// Numeric bus identifier for this global lookup.
+    pub bus_index: BusIndex,
+    /// Name of the global lookup interaction (for diagnostics).
     pub name: String,
     /// Index of the auxiliary column (if there are multiple auxiliary columns, this is the first one)
     pub aux_idx: usize,
@@ -122,7 +151,7 @@ impl<F: Field> Lookup<F> {
     pub fn global_count(lookups: &[Self]) -> usize {
         lookups
             .iter()
-            .filter(|lookup| matches!(lookup.kind, Kind::Global(_)))
+            .filter(|lookup| matches!(lookup.kind, Kind::Global { .. }))
             .count()
     }
 }
@@ -182,7 +211,7 @@ pub trait LookupEvaluator {
                 Kind::Local => {
                     self.eval_local_lookup(builder, context);
                 }
-                Kind::Global(_) => {
+                Kind::Global { .. } => {
                     let expected = builder.permutation_values()[pv_idx].clone();
                     pv_idx += 1;
                     self.eval_global_update(builder, context, expected.into());

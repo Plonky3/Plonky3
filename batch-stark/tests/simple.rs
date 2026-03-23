@@ -198,7 +198,8 @@ struct MulAirLookups {
     is_local: bool,
     is_global: bool,
     num_lookups: usize,
-    global_names: Vec<String>,
+    /// Per-rep global bus specification: (bus_index, name).
+    global_buses: Vec<(u16, String)>,
 }
 
 impl MulAirLookups {
@@ -207,14 +208,14 @@ impl MulAirLookups {
         is_local: bool,
         is_global: bool,
         num_lookups: usize,
-        global_names: Vec<String>,
+        global_buses: Vec<(u16, String)>,
     ) -> Self {
         Self {
             air,
             is_local,
             is_global,
             num_lookups,
-            global_names,
+            global_buses,
         }
     }
 }
@@ -258,7 +259,7 @@ impl<F: Field> LookupAir<F> for MulAirLookups {
         let lut = symbolic_main_local[last_idx]; //  Extra column that corresponds to a permutation of 'a'
 
         if self.is_global {
-            assert!(self.global_names.len() == self.air.reps);
+            assert!(self.global_buses.len() == self.air.reps);
         }
         // We add lookups rep by rep, so that we have a mix of local and global lookups, rather than having all local first then all global.
         for rep in 0..self.air.reps {
@@ -299,9 +300,10 @@ impl<F: Field> LookupAir<F> for MulAirLookups {
                     Direction::Send, // MulAir sends data to the global lookup
                 )];
 
+                let (bus_index, ref name) = self.global_buses[rep];
                 let global_lookup = LookupAir::register_lookup(
                     self,
-                    Kind::Global(self.global_names[rep].clone()),
+                    Kind::global(bus_index, name.clone()),
                     &lookup_inputs,
                 );
                 lookups.push(global_lookup);
@@ -352,7 +354,8 @@ struct FibAirLookups {
     air: FibonacciAir,
     is_global: bool,
     num_lookups: usize,
-    name_and_mult: Option<(String, u64)>,
+    /// (bus_index, name, multiplicity) for the global lookup.
+    bus_name_and_mult: Option<(u16, String, u64)>,
 }
 
 impl Default for FibAirLookups {
@@ -364,7 +367,7 @@ impl Default for FibAirLookups {
             },
             is_global: false,
             num_lookups: 0,
-            name_and_mult: None,
+            bus_name_and_mult: None,
         }
     }
 }
@@ -374,13 +377,13 @@ impl FibAirLookups {
         air: FibonacciAir,
         is_global: bool,
         num_lookups: usize,
-        name_and_mult: Option<(String, u64)>,
+        bus_name_and_mult: Option<(u16, String, u64)>,
     ) -> Self {
         Self {
             air,
             is_global,
             num_lookups,
-            name_and_mult,
+            bus_name_and_mult,
         }
     }
 }
@@ -431,9 +434,9 @@ impl<F: Field> LookupAir<F> for FibAirLookups {
             let left = symbolic_main_local[0]; // left column
             let right = symbolic_main_local[1]; // right column
 
-            let (name, multiplicity) = match &self.name_and_mult {
-                Some((n, m)) => (n.clone(), *m),
-                None => ("MulFib".to_string(), 2),
+            let (bus_index, name, multiplicity) = match &self.bus_name_and_mult {
+                Some((bi, n, m)) => (*bi, n.clone(), *m),
+                None => (0, "MulFib".to_string(), 2),
             };
 
             // Global lookup between FibAir inputs and MulAir inputs
@@ -444,7 +447,7 @@ impl<F: Field> LookupAir<F> for FibAirLookups {
             )];
 
             let global_lookup =
-                LookupAir::register_lookup(self, Kind::Global(name), &lookup_inputs);
+                LookupAir::register_lookup(self, Kind::global(bus_index, name), &lookup_inputs);
             lookups.push(global_lookup);
         }
 
@@ -1411,7 +1414,7 @@ fn two_adic_compat_case() -> CompatCase<MyConfig, Val> {
         false,
         true,
         0,
-        vec!["MulFib".to_string(), "MulFib".to_string()],
+        vec![(0, "MulFib".to_string()), (0, "MulFib".to_string())],
     );
 
     let fibonacci_air = FibonacciAir {
@@ -1453,7 +1456,7 @@ fn circle_compat_case() -> CompatCase<CircleConfig, CircleVal> {
         false,
         true,
         0,
-        vec!["MulFib".to_string(), "MulFib".to_string()],
+        vec![(0, "MulFib".to_string()), (0, "MulFib".to_string())],
     );
 
     let fibonacci_air = FibonacciAir {
@@ -1815,7 +1818,7 @@ fn test_batch_stark_global_lookups_only() -> Result<(), impl Debug> {
         false,
         true,
         0,
-        vec!["MulFib".to_string(), "MulFib".to_string()],
+        vec![(0, "MulFib".to_string()), (0, "MulFib".to_string())],
     ); // global only
 
     let log_n = 3;
@@ -1863,7 +1866,7 @@ fn test_batch_stark_both_lookups() -> Result<(), impl Debug> {
         true,
         true,
         0,
-        vec!["MulFib".to_string(), "MulFib".to_string()],
+        vec![(0, "MulFib".to_string()), (0, "MulFib".to_string())],
     ); // both
 
     let log_height = 4;
@@ -1914,7 +1917,7 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
         true,
         true,
         0,
-        vec!["MulFib".to_string(), "MulFib".to_string()],
+        vec![(0, "MulFib".to_string()), (0, "MulFib".to_string())],
     ); // both
 
     let log_height = 4;
@@ -1954,7 +1957,9 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
 
 #[cfg(not(debug_assertions))]
 #[test]
-#[should_panic(expected = "LookupError(\"GlobalCumulativeMismatch(None): MulFib2\")")]
+#[should_panic(
+    expected = "LookupError(\"GlobalCumulativeMismatch { bus_index: 1, name: None }: bus 1 ('MulFib2')\")"
+)]
 fn test_batch_stark_failed_global_lookup() {
     test_batch_stark_failed_global_lookup_inner();
 }
@@ -1962,7 +1967,7 @@ fn test_batch_stark_failed_global_lookup() {
 #[cfg(debug_assertions)]
 #[test]
 #[should_panic(
-    expected = "Lookup mismatch (global lookup 'MulFib2'): tuple [\"0\", \"1\"] has net multiplicity 2013265920. Locations: [Location { instance: 0, lookup: 1, row: 0 }]"
+    expected = "Lookup mismatch (global lookup bus 1 ('MulFib2')): tuple [\"0\", \"1\"] has net multiplicity 2013265920. Locations: [Location { instance: 0, lookup: 1, row: 0 }]"
 )]
 fn test_batch_stark_failed_global_lookup() {
     test_batch_stark_failed_global_lookup_inner();
@@ -1980,7 +1985,7 @@ fn test_batch_stark_failed_global_lookup_inner() {
         false,
         true,
         0,
-        vec!["MulFib1".to_string(), "MulFib2".to_string()], // Different names!
+        vec![(0, "MulFib1".to_string()), (1, "MulFib2".to_string())], // Different buses!
     );
     // This creates a mismatch: MulAir sends to "MulFib1" and "MulFib2"
     // but FibAir only receives from "MulFib1"
@@ -1991,7 +1996,7 @@ fn test_batch_stark_failed_global_lookup_inner() {
         tamper_index: None,
     };
     let fib_air_lookups =
-        FibAirLookups::new(fibonacci_air, true, 0, Some(("MulFib1".to_string(), 1)));
+        FibAirLookups::new(fibonacci_air, true, 0, Some((0, "MulFib1".to_string(), 1)));
 
     let mul_trace = mul_trace::<Val>(n, 2);
     let fib_trace = fib_trace::<Val>(0, 1, n);
@@ -2031,7 +2036,7 @@ fn test_batch_stark_rejects_truncated_global_lookup_data() {
         false,
         true,
         0,
-        vec!["MulFib".to_string(), "MulFib".to_string()],
+        vec![(0, "MulFib".to_string()), (0, "MulFib".to_string())],
     );
 
     let log_n = 3;
@@ -2098,7 +2103,7 @@ macro_rules! run_batch_stark_mixed_lookups {
             true,
             true,
             0,
-            vec!["MulFib1".to_string(), "MulFib2".to_string()],
+            vec![(0, "MulFib1".to_string()), (1, "MulFib2".to_string())],
         );
         // This AIR has no lookups.
         let mul_air_no_lookups =
@@ -2128,16 +2133,16 @@ macro_rules! run_batch_stark_mixed_lookups {
             fib_air_lookups,
             true,
             0,
-            Some(("MulFib1".to_string(), 1)),
+            Some((0, "MulFib1".to_string(), 1)),
         ); // global lookups
         let fib_air_with_lookups2 = FibAirLookups::new(
             fib_air_lookups,
             true,
             0,
-            Some(("MulFib2".to_string(), 1)),
+            Some((1, "MulFib2".to_string(), 1)),
         ); // global lookups
         let fib_air_no_lookups =
-            FibAirLookups::new(fib_air_no_lookups, false, 0, None); // global lookups
+            FibAirLookups::new(fib_air_no_lookups, false, 0, None); // no lookups
 
         // Generate traces. The airs with and without lookups have different heights.
         let mul_with_lookups_trace = mul_trace::<Val>(n1, reps);
