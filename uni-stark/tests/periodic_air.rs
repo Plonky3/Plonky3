@@ -60,8 +60,8 @@ mod tests {
             self.periodic.len()
         }
 
-        fn periodic_columns(&self) -> &[Vec<F>] {
-            &self.periodic
+        fn periodic_columns(&self) -> Vec<Vec<F>> {
+            self.periodic.clone()
         }
     }
 

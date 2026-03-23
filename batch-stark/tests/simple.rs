@@ -223,8 +223,8 @@ impl<F: Field> BaseAir<F> for PeriodicAir<F> {
         self.periodic.len()
     }
 
-    fn periodic_columns(&self) -> &[Vec<F>] {
-        &self.periodic
+    fn periodic_columns(&self) -> Vec<Vec<F>> {
+        self.periodic.clone()
     }
 }
 

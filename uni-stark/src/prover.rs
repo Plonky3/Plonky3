@@ -435,7 +435,8 @@ where
     let constraint_layout = get_constraint_layout(air, layout);
     let (base_alpha_powers, ext_alpha_powers) = constraint_layout.decompose_alpha(alpha);
     let periodic_cols = air.periodic_columns();
-    let periodic_table = pcs.build_periodic_lde_table(periodic_cols, trace_domain, quotient_domain);
+    let periodic_table =
+        pcs.build_periodic_lde_table(&periodic_cols, trace_domain, quotient_domain);
 
     (0..quotient_size)
         .into_par_iter()

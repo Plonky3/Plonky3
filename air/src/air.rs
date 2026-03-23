@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::{Add, Mul, Sub};
 
@@ -125,8 +126,8 @@ pub trait BaseAir<F>: Sync {
     /// Return the periodic table data.
     ///
     /// Override when implementing [`AirWithPeriodicColumns`].
-    fn periodic_columns(&self) -> &[Vec<F>] {
-        &[]
+    fn periodic_columns(&self) -> Vec<Vec<F>> {
+        vec![]
     }
 
     /// Return the periodic values for the given row index.

@@ -693,7 +693,8 @@ where
     let (base_alpha_powers, ext_alpha_powers) = constraint_layout.decompose_alpha(alpha);
 
     let periodic_cols = air.periodic_columns();
-    let periodic_table = pcs.build_periodic_lde_table(periodic_cols, trace_domain, quotient_domain);
+    let periodic_table =
+        pcs.build_periodic_lde_table(&periodic_cols, trace_domain, quotient_domain);
 
     // Precompute per-instance data used by the hot inner loop to avoid repeated allocations.
     let packed_perm_challenges: Vec<PackedChallenge<SC>> = permutation_challenges
