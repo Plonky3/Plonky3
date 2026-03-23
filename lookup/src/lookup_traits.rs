@@ -1,8 +1,8 @@
 use p3_air::{
-    AirBuilder, BaseEntry, BaseLeaf, ExtensionBuilder, PermutationAirBuilder, RowWindow,
-    SymbolicExpression, WindowAccess,
+    AirBuilder, BaseEntry, BaseLeaf, ExtensionBuilder, PermutationAirBuilder, SymbolicExpression,
 };
 use p3_field::{Field, PrimeCharacteristicRing};
+use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{StarkGenericConfig, Val};
@@ -43,7 +43,7 @@ pub trait LookupGadget: LookupEvaluator {
 /// A builder to generate the lookup traces, given the main trace, public values and permutation challenges.
 pub struct LookupTraceBuilder<'a, SC: StarkGenericConfig> {
     main: ViewPair<'a, Val<SC>>,
-    preprocessed: RowWindow<'a, Val<SC>>,
+    preprocessed: ViewPair<'a, Val<SC>>,
     public_values: &'a [Val<SC>],
     permutation_challenges: &'a [SC::Challenge],
     height: usize,
@@ -51,7 +51,7 @@ pub struct LookupTraceBuilder<'a, SC: StarkGenericConfig> {
 }
 
 impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
-    pub fn new(
+    pub const fn new(
         main: ViewPair<'a, Val<SC>>,
         preprocessed: ViewPair<'a, Val<SC>>,
         public_values: &'a [Val<SC>],
@@ -61,10 +61,7 @@ impl<'a, SC: StarkGenericConfig> LookupTraceBuilder<'a, SC> {
     ) -> Self {
         Self {
             main,
-            preprocessed: RowWindow::from_two_rows(
-                preprocessed.top.values,
-                preprocessed.bottom.values,
-            ),
+            preprocessed,
             public_values,
             permutation_challenges,
             height,
@@ -77,13 +74,13 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
     type F = Val<SC>;
     type Expr = Val<SC>;
     type Var = Val<SC>;
-    type PreprocessedWindow = RowWindow<'a, Val<SC>>;
-    type MainWindow = RowWindow<'a, Val<SC>>;
+    type PreprocessedWindow = ViewPair<'a, Val<SC>>;
+    type MainWindow = ViewPair<'a, Val<SC>>;
     type PublicVar = Val<SC>;
 
     #[inline]
     fn main(&self) -> Self::MainWindow {
-        RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
+        self.main
     }
 
     fn preprocessed(&self) -> &Self::PreprocessedWindow {
@@ -135,7 +132,7 @@ impl<SC: StarkGenericConfig> ExtensionBuilder for LookupTraceBuilder<'_, SC> {
 }
 
 impl<'a, SC: StarkGenericConfig> PermutationAirBuilder for LookupTraceBuilder<'a, SC> {
-    type MP = RowWindow<'a, SC::Challenge>;
+    type MP = ViewPair<'a, SC::Challenge>;
     type RandomVar = SC::Challenge;
 
     type PermutationVar = SC::Challenge;
@@ -166,8 +163,8 @@ where
                 BaseEntry::Main { offset } => {
                     let main = builder.main();
                     match offset {
-                        0 => main.current(v.index).unwrap().into(),
-                        1 => main.next(v.index).unwrap().into(),
+                        0 => main.get(0, v.index).unwrap().into(),
+                        1 => main.get(1, v.index).unwrap().into(),
                         _ => panic!("Cannot have expressions involving more than two rows."),
                     }
                 }
@@ -178,8 +175,8 @@ where
                 BaseEntry::Preprocessed { offset } => {
                     let prep = builder.preprocessed();
                     match offset {
-                        0 => prep.current(v.index).unwrap().into(),
-                        1 => prep.next(v.index).unwrap().into(),
+                        0 => prep.get(0, v.index).unwrap().into(),
+                        1 => prep.get(1, v.index).unwrap().into(),
                         _ => panic!("Cannot have expressions involving more than two rows."),
                     }
                 }

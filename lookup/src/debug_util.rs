@@ -9,11 +9,11 @@ use alloc::vec::Vec;
 use alloc::{format, vec};
 
 use hashbrown::HashMap;
-use p3_air::{AirBuilder, PermutationAirBuilder, RowWindow};
+use p3_air::{AirBuilder, PermutationAirBuilder};
 use p3_field::Field;
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
-use p3_matrix::stack::VerticalPair;
+use p3_matrix::stack::{VerticalPair, ViewPair};
 
 use crate::lookup_traits::{Kind, Lookup, symbolic_to_expr};
 
@@ -174,10 +174,7 @@ fn accumulate_lookup<F: Field>(
 
         let builder = MiniLookupBuilder {
             main: main_rows,
-            preprocessed: RowWindow::from_two_rows(
-                preprocessed_rows.top.values,
-                preprocessed_rows.bottom.values,
-            ),
+            preprocessed: preprocessed_rows,
             public_values: instance.public_values,
             permutation_challenges: instance.permutation_challenges,
             row,
@@ -206,8 +203,8 @@ fn accumulate_lookup<F: Field>(
 }
 
 struct MiniLookupBuilder<'a, F: Field> {
-    main: VerticalPair<RowMajorMatrixView<'a, F>, RowMajorMatrixView<'a, F>>,
-    preprocessed: RowWindow<'a, F>,
+    main: ViewPair<'a, F>,
+    preprocessed: ViewPair<'a, F>,
     public_values: &'a [F],
     permutation_challenges: &'a [F],
     row: usize,
@@ -218,12 +215,12 @@ impl<'a, F: Field> AirBuilder for MiniLookupBuilder<'a, F> {
     type F = F;
     type Expr = F;
     type Var = F;
-    type PreprocessedWindow = RowWindow<'a, F>;
-    type MainWindow = RowWindow<'a, F>;
+    type PreprocessedWindow = ViewPair<'a, F>;
+    type MainWindow = ViewPair<'a, F>;
     type PublicVar = F;
 
     fn main(&self) -> Self::MainWindow {
-        RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
+        self.main
     }
 
     fn preprocessed(&self) -> &Self::PreprocessedWindow {
@@ -259,14 +256,17 @@ impl<'a, F: Field> p3_air::ExtensionBuilder for MiniLookupBuilder<'a, F> {
 }
 
 impl<'a, F: Field> PermutationAirBuilder for MiniLookupBuilder<'a, F> {
-    type MP = RowWindow<'a, F>;
+    type MP = ViewPair<'a, F>;
     type RandomVar = F;
 
     type PermutationVar = F;
 
     fn permutation(&self) -> Self::MP {
-        // Empty slices; permutation columns are not needed for debug evals.
-        RowWindow::from_two_rows(&[], &[])
+        // Empty zero-width pair; permutation columns are not needed for debug evals.
+        ViewPair::new(
+            RowMajorMatrixView::new(&[], 0),
+            RowMajorMatrixView::new(&[], 0),
+        )
     }
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {

@@ -20,7 +20,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_air::{ExtensionBuilder, PermutationAirBuilder, WindowAccess};
+use p3_air::{ExtensionBuilder, PermutationAirBuilder};
 use p3_field::{Field, PrimeCharacteristicRing, dot_product};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -211,14 +211,14 @@ impl LogUpGadget {
         let beta = permutation_challenges[self.num_challenges() * column + 1];
 
         assert!(
-            permutation.current_slice().len() > column,
+            permutation.width() > column,
             "Permutation trace has insufficient width"
         );
 
         // Read s[i] from the local row at the specified column.
-        let s_local = permutation.current(column).unwrap().into();
+        let s_local = permutation.get(0, column).unwrap().into();
         // Read s[i+1] from the next row (or a zero-padded view on the last row).
-        let s_next = permutation.next(column).unwrap().into();
+        let s_next = permutation.get(1, column).unwrap().into();
 
         // Anchor s[0] = 0 at the start.
         //

@@ -2,8 +2,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
+use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, get_symbolic_constraints};
-use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
@@ -462,7 +462,6 @@ where
             let mut folder = ProverConstraintFolder {
                 main: main.as_view(),
                 preprocessed: preprocessed_view,
-                preprocessed_window: RowWindow::from_view(&preprocessed_view),
                 public_values,
                 is_first_row,
                 is_last_row,

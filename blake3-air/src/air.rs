@@ -4,8 +4,9 @@ use core::borrow::Borrow;
 
 use itertools::izip;
 use p3_air::utils::{add2, add3, pack_bits_le, xor_32_shift};
-use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
+use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -238,7 +239,8 @@ impl<AB: AirBuilder> Air<AB> for Blake3Air {
     #[inline]
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let local: &Blake3Cols<AB::Var> = main.current_slice().borrow();
+        let current_row = main.row_slice(0).unwrap();
+        let local: &Blake3Cols<AB::Var> = (*current_row).borrow();
 
         let initial_row_3 = [
             local.counter_low,

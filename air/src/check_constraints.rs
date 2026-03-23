@@ -9,7 +9,7 @@ use p3_matrix::stack::ViewPair;
 
 use crate::{
     Air, AirBuilder, AirBuilderWithContext, ExtensionBuilder, Name, NamedAirBuilder,
-    NamedExtensionBuilder, NamespaceExt, PermutationAirBuilder, RowWindow,
+    NamedExtensionBuilder, NamespaceExt, PermutationAirBuilder,
 };
 
 /// A single constraint violation captured during debug evaluation.
@@ -120,9 +120,9 @@ pub struct DebugConstraintBuilder<'a, F: Field, EF: ExtensionField<F> = F> {
     /// Vertical pair giving access to the current and next witness rows.
     main: ViewPair<'a, F>,
 
-    /// Window over the current and next preprocessed rows.
-    /// When the AIR has no preprocessed trace this is a zero-width window.
-    preprocessed: RowWindow<'a, F>,
+    /// Vertical pair of the current and next preprocessed rows.
+    /// When the AIR has no preprocessed trace this is a zero-width pair.
+    preprocessed: ViewPair<'a, F>,
 
     /// Slice of public values made available to the AIR during evaluation.
     public_values: &'a [F],
@@ -153,7 +153,7 @@ impl<'a, F: Field> DebugConstraintBuilder<'a, F> {
     /// Permutation-related fields are set to `None` / empty so that the
     /// builder can still satisfy trait bounds that require extension-field
     /// support, but calling permutation accessors will panic.
-    pub fn new(
+    pub const fn new(
         row_index: usize,
         main: ViewPair<'a, F>,
         preprocessed: ViewPair<'a, F>,
@@ -167,10 +167,7 @@ impl<'a, F: Field> DebugConstraintBuilder<'a, F> {
             constraint_index: 0,
             failures: Vec::new(),
             main,
-            preprocessed: RowWindow::from_two_rows(
-                preprocessed.top.values,
-                preprocessed.bottom.values,
-            ),
+            preprocessed,
             public_values,
             is_first_row,
             is_last_row,
@@ -188,7 +185,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> DebugConstraintBuilder<'a, F, EF> {
     /// Use this when the AIR declares lookup or permutation arguments
     /// that require access to the permutation trace and challenges.
     #[allow(clippy::too_many_arguments)]
-    pub fn new_with_permutation(
+    pub const fn new_with_permutation(
         row_index: usize,
         main: ViewPair<'a, F>,
         preprocessed: ViewPair<'a, F>,
@@ -205,10 +202,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> DebugConstraintBuilder<'a, F, EF> {
             constraint_index: 0,
             failures: Vec::new(),
             main,
-            preprocessed: RowWindow::from_two_rows(
-                preprocessed.top.values,
-                preprocessed.bottom.values,
-            ),
+            preprocessed,
             public_values,
             is_first_row,
             is_last_row,
@@ -243,12 +237,12 @@ where
     type F = F;
     type Expr = F;
     type Var = F;
-    type PreprocessedWindow = RowWindow<'a, F>;
-    type MainWindow = RowWindow<'a, F>;
+    type PreprocessedWindow = ViewPair<'a, F>;
+    type MainWindow = ViewPair<'a, F>;
     type PublicVar = F;
 
     fn main(&self) -> Self::MainWindow {
-        RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
+        self.main
     }
 
     fn preprocessed(&self) -> &Self::PreprocessedWindow {
@@ -304,7 +298,7 @@ impl<F: Field, EF: ExtensionField<F>> ExtensionBuilder for DebugConstraintBuilde
 impl<'a, F: Field, EF: ExtensionField<F>> PermutationAirBuilder
     for DebugConstraintBuilder<'a, F, EF>
 {
-    type MP = RowWindow<'a, EF>;
+    type MP = ViewPair<'a, EF>;
     type RandomVar = EF;
     type PermutationVar = EF;
 
@@ -312,9 +306,8 @@ impl<'a, F: Field, EF: ExtensionField<F>> PermutationAirBuilder
     ///
     /// Panics when the builder was created without permutation data.
     fn permutation(&self) -> Self::MP {
-        let p = self.permutation
-            .expect("permutation() called on a builder created without permutation data; use new_with_permutation()");
-        RowWindow::from_two_rows(p.top.values, p.bottom.values)
+        self.permutation
+            .expect("permutation() called on a builder created without permutation data; use new_with_permutation()")
     }
 
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
@@ -632,7 +625,7 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
 
     use super::*;
-    use crate::{BaseAir, WindowAccess};
+    use crate::BaseAir;
 
     /// Minimal AIR for testing transition and boundary constraints.
     ///
@@ -654,8 +647,8 @@ mod tests {
 
             // Transition constraint: next == current + 1 for every column.
             for col in 0..W {
-                let current = main.current(col).unwrap();
-                let next = main.next(col).unwrap();
+                let current = main.get(0, col).unwrap();
+                let next = main.get(1, col).unwrap();
                 builder.when_transition().assert_eq(next, current + F::ONE);
             }
 
@@ -663,7 +656,7 @@ mod tests {
             let public_values = builder.public_values;
             let mut when_last = builder.when(builder.is_last_row);
             for (i, &pv) in public_values.iter().enumerate().take(W) {
-                when_last.assert_eq(main.current(i).unwrap(), pv);
+                when_last.assert_eq(main.get(0, i).unwrap(), pv);
             }
         }
     }
@@ -775,7 +768,7 @@ mod tests {
         fn eval(&self, builder: &mut DebugConstraintBuilder<'_, F>) {
             let main = builder.main();
             for col in 0..W {
-                builder.assert_zero(main.current(col).unwrap());
+                builder.assert_zero(main.get(0, col).unwrap());
             }
         }
     }
@@ -886,9 +879,9 @@ mod tests {
         fn eval(&self, builder: &mut DebugConstraintBuilder<'_, F>) {
             let main = builder.main();
             // Constraint 0: unlabeled
-            builder.assert_zero(main.current(0).unwrap());
+            builder.assert_zero(main.get(0, 0).unwrap());
             // Constraint 1: labeled via NamedAirBuilder
-            builder.assert_zero_named(main.current(1).unwrap(), "col_1_must_be_zero");
+            builder.assert_zero_named(main.get(0, 1).unwrap(), "col_1_must_be_zero");
         }
     }
 
@@ -960,14 +953,14 @@ mod tests {
             let ns = "range_check";
 
             // Static namespace joined with static name.
-            builder.assert_zero_named(main.current(0).unwrap(), ns.join("limb_0"));
+            builder.assert_zero_named(main.get(0, 0).unwrap(), ns.join("limb_0"));
 
             // Namespace joined with a closure name.
             let i = 1;
-            builder.assert_zero_named(main.current(1).unwrap(), ns.name(|| format!("limb_{i}")));
+            builder.assert_zero_named(main.get(0, 1).unwrap(), ns.name(|| format!("limb_{i}")));
 
             // Plain closure name (not a namespace).
-            builder.assert_zero_named(main.current(2).unwrap(), || format!("col_{}", 2));
+            builder.assert_zero_named(main.get(0, 2).unwrap(), || format!("col_{}", 2));
         }
     }
 

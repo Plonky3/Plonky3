@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_air::{AirBuilder, ExtensionBuilder, RowWindow};
+use p3_air::{AirBuilder, ExtensionBuilder};
 use p3_field::{Algebra, BasedVectorSpace};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
@@ -21,8 +21,6 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     /// The preprocessed columns as a [`RowMajorMatrixView`].
     /// Zero-width when the AIR has no preprocessed trace.
     pub preprocessed: RowMajorMatrixView<'a, PackedVal<SC>>,
-    /// Pre-built window over the preprocessed columns.
-    pub preprocessed_window: RowWindow<'a, PackedVal<SC>>,
     /// Public inputs to the [AIR](`p3_air::Air`) implementation.
     pub public_values: &'a [Val<SC>],
     /// Evaluations of the first-row selector polynomial.
@@ -60,8 +58,6 @@ pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
     /// The preprocessed columns as a [`ViewPair`].
     /// Zero-width when the AIR has no preprocessed trace.
     pub preprocessed: ViewPair<'a, SC::Challenge>,
-    /// Pre-built window over the preprocessed columns.
-    pub preprocessed_window: RowWindow<'a, SC::Challenge>,
     /// Public values that are inputs to the computation
     pub public_values: &'a [Val<SC>],
     /// Evaluations of the first-row selector polynomial.
@@ -110,17 +106,17 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     type F = Val<SC>;
     type Expr = PackedVal<SC>;
     type Var = PackedVal<SC>;
-    type PreprocessedWindow = RowWindow<'a, PackedVal<SC>>;
-    type MainWindow = RowWindow<'a, PackedVal<SC>>;
+    type PreprocessedWindow = RowMajorMatrixView<'a, PackedVal<SC>>;
+    type MainWindow = RowMajorMatrixView<'a, PackedVal<SC>>;
     type PublicVar = Val<SC>;
 
     #[inline]
     fn main(&self) -> Self::MainWindow {
-        RowWindow::from_view(&self.main)
+        self.main
     }
 
     fn preprocessed(&self) -> &Self::PreprocessedWindow {
-        &self.preprocessed_window
+        &self.preprocessed
     }
 
     #[inline]
@@ -176,16 +172,16 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
     type F = Val<SC>;
     type Expr = SC::Challenge;
     type Var = SC::Challenge;
-    type PreprocessedWindow = RowWindow<'a, SC::Challenge>;
-    type MainWindow = RowWindow<'a, SC::Challenge>;
+    type PreprocessedWindow = ViewPair<'a, SC::Challenge>;
+    type MainWindow = ViewPair<'a, SC::Challenge>;
     type PublicVar = Val<SC>;
 
     fn main(&self) -> Self::MainWindow {
-        RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
+        self.main
     }
 
     fn preprocessed(&self) -> &Self::PreprocessedWindow {
-        &self.preprocessed_window
+        &self.preprocessed
     }
 
     fn is_first_row(&self) -> Self::Expr {

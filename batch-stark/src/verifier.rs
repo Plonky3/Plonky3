@@ -4,8 +4,8 @@ use alloc::{format, vec};
 use core::fmt::Debug;
 
 use hashbrown::HashMap;
+use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
-use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
@@ -699,12 +699,9 @@ where
         RowMajorMatrixView::new_row(preprocessed_next),
     );
 
-    let preprocessed_window =
-        RowWindow::from_two_rows(preprocessed.top.values, preprocessed.bottom.values);
     let inner_folder = VerifierConstraintFolder {
         main,
         preprocessed,
-        preprocessed_window,
         public_values,
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,

@@ -4,9 +4,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpression};
-use p3_air::{
-    Air, AirBuilder, BaseAir, BaseLeaf, ExtensionBuilder, PermutationAirBuilder, WindowAccess,
-};
+use p3_air::{Air, AirBuilder, BaseAir, BaseLeaf, ExtensionBuilder, PermutationAirBuilder};
 use p3_baby_bear::BabyBear;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
@@ -301,7 +299,7 @@ impl LookupAir<F> for RangeCheckAir {
         });
 
         let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.current_slice();
+        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
         // Perform each lookup independently using LookupContext
         (0..self.num_lookups)
@@ -536,7 +534,7 @@ fn test_symbolic_to_expr() {
 
     let main = builder.main();
 
-    let (local, next) = (main.current_slice(), main.next_slice());
+    let (local, next) = (main.row_slice(0).unwrap(), main.row_slice(1).unwrap());
 
     let mul = local[0] * next[1];
     let add = local[0] + next[1];
@@ -686,7 +684,7 @@ fn test_debug_util_detects_malformed_lookup() {
         main_width: 1,
         ..Default::default()
     });
-    let expr = builder.main().current(0).unwrap();
+    let expr = builder.main().get(0, 0).unwrap();
 
     // One local lookup with a single tuple; multiplicity is always +1,
     // so the total multiset count is non-zero.
@@ -1198,7 +1196,7 @@ impl LookupAir<F> for AddAir {
         });
 
         let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.current_slice();
+        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
         // Extract columns for the lookup entries: [inp1, inp2, sum]
         let inp1 = symbolic_main_local[0];
