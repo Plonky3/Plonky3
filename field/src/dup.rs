@@ -1,7 +1,7 @@
-/// Cheap duplication for prime-characteristic ring elements used in hot paths.
+/// Light supertrait of `Clone` to help speed up hot paths for types implementing `Copy`.
 ///
-///  - [`Copy`] scalars and packed fields use a trivial copy
-///  - non-[`Copy`] rings (e.g. symbolic expressions) should implement this with [`Clone::clone`]
+///  - [`Copy`] types (e.g. scalars and packed fields) use a trivial copy
+///  - non-[`Copy`] types (e.g. symbolic expressions) should implement this with [`Clone::clone`]
 ///
 /// It defaults to a trivial copy for types that are both [`Copy`] and [`Clone`].
 ///
