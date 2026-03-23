@@ -8,9 +8,8 @@ use p3_keccak_air::KeccakAir;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
 use p3_poseidon2_air::{Poseidon2Air, VectorizedPoseidon2Air};
-use p3_uni_stark::{
-    DebugConstraintBuilder, ProverConstraintFolder, StarkGenericConfig, VerifierConstraintFolder,
-};
+use p3_air::DebugConstraintBuilder;
+use p3_uni_stark::{ProverConstraintFolder, StarkGenericConfig, VerifierConstraintFolder};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 
