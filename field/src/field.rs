@@ -445,7 +445,7 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     #[must_use]
     #[inline]
     fn from_basis_coefficients_slice(slice: &[F]) -> Option<Self> {
-        Self::from_basis_coefficients_iter(slice.iter().cloned())
+        Self::from_basis_coefficients_iter(slice.iter().map(|x| x.dup()))
     }
 
     /// Fixes a basis for the algebra `A` and uses this to

@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use core::ops::Neg;
 
 use p3_air::{Air, PermutationAirBuilder, SymbolicExpression};
-use p3_field::Field;
+use p3_field::{Dup, Field};
 use serde::{Deserialize, Serialize};
 
 /// Defines errors that can occur during lookup verification.
@@ -224,7 +224,7 @@ pub trait LookupAir<F: Field> {
         let (element_exprs, multiplicities_exprs) = lookup_inputs
             .iter()
             .map(|(elems, mult, dir)| {
-                let multiplicity = dir.multiplicity(mult.clone());
+                let multiplicity = dir.multiplicity(mult.dup());
                 (elems.clone(), multiplicity)
             })
             .unzip();

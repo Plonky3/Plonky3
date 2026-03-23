@@ -21,7 +21,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::{ExtensionBuilder, PermutationAirBuilder, WindowAccess};
-use p3_field::{Field, PrimeCharacteristicRing, dot_product};
+use p3_field::{Dup, Field, PrimeCharacteristicRing, dot_product};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::VerticalPair;
@@ -77,18 +77,18 @@ impl LogUpGadget {
     ) -> Vec<AB::ExprEF>
     where
         AB: PermutationAirBuilder,
-        E: Into<AB::ExprEF> + Clone,
+        E: Into<AB::ExprEF> + Dup,
     {
         elements
             .iter()
             .map(|elts| {
                 // Combine the elements in the tuple using beta.
                 let combined_elt = elts.iter().fold(AB::ExprEF::ZERO, |acc, elt| {
-                    elt.clone().into() + acc * beta.clone()
+                    elt.dup().into() + acc * beta.dup()
                 });
 
                 // Compute (α - combined_elt)
-                alpha.clone() - combined_elt
+                alpha.dup() - combined_elt
             })
             .collect()
     }
@@ -105,8 +105,8 @@ impl LogUpGadget {
     ) -> (AB::ExprEF, AB::ExprEF)
     where
         AB: PermutationAirBuilder,
-        E: Into<AB::ExprEF> + Clone,
-        M: Into<AB::ExprEF> + Clone,
+        E: Into<AB::ExprEF> + Dup,
+        M: Into<AB::ExprEF> + Dup,
     {
         if elements.is_empty() {
             return (AB::ExprEF::ZERO, AB::ExprEF::ONE);
@@ -121,23 +121,23 @@ impl LogUpGadget {
         let mut pref = Vec::with_capacity(n + 1);
         pref.push(AB::ExprEF::ONE);
         for t in &terms {
-            pref.push(pref.last().unwrap().clone() * t.clone());
+            pref.push(pref.last().unwrap().dup() * t.dup());
         }
 
         // Build suffix products: suff[i] = ∏_{j=i}^{n-1}(α - e_j)
         let mut suff = vec![AB::ExprEF::ONE; n + 1];
         for i in (0..n).rev() {
-            suff[i] = suff[i + 1].clone() * terms[i].clone();
+            suff[i] = suff[i + 1].dup() * terms[i].dup();
         }
 
         // Common denominator is the product of all terms
-        let common_denominator = pref[n].clone();
+        let common_denominator = pref[n].dup();
 
         // Compute numerator: ∑(m_i * ∏_{j≠i}(α - e_j))
         //
         // The product without i is: pref[i] * suff[i+1]
         let numerator = (0..n).fold(AB::ExprEF::ZERO, |acc, i| {
-            acc + multiplicities[i].clone().into() * pref[i].clone() * suff[i + 1].clone()
+            acc + multiplicities[i].dup().into() * pref[i].dup() * suff[i + 1].dup()
         });
 
         (numerator, common_denominator)
@@ -225,7 +225,7 @@ impl LogUpGadget {
         // Avoids a high-degree boundary constraint.
         // Telescoping is enforced by the last-row check (s[n−1] + contribution[n-1] = 0).
         // This keeps aux and main traces aligned in length.
-        builder.when_first_row().assert_zero_ext(s_local.clone());
+        builder.when_first_row().assert_zero_ext(s_local.dup());
 
         // Build the fraction:  ∑ m_i/(α - combined_elements[i])  =  numerator / denominator .
         let (numerator, common_denominator) = self
@@ -245,7 +245,7 @@ impl LogUpGadget {
 
             // Transition constraint:
             builder.when_transition().assert_zero_ext(
-                (s_next - s_local.clone()) * common_denominator.clone() - numerator.clone(),
+                (s_next - s_local.dup()) * common_denominator.dup() - numerator.dup(),
             );
 
             // Final constraint:

@@ -177,7 +177,7 @@ where
     // Commit to all traces using a single batched commitment, preserving input order.
     let main_commit_inputs = instances
         .iter()
-        .zip(ext_trace_domains.iter().cloned())
+        .zip(ext_trace_domains.iter().copied())
         .map(|(inst, dom)| (dom, inst.trace.clone()))
         .collect::<Vec<_>>();
     let (main_commit, main_data) = pcs.commit(main_commit_inputs);
@@ -207,7 +207,7 @@ where
     instances
         .iter()
         .enumerate()
-        .zip(ext_trace_domains.iter().cloned())
+        .zip(ext_trace_domains.iter().copied())
         .for_each(|((i, inst), ext_domain)| {
             if !all_lookups[i].is_empty() {
                 let generated_perm = lookup_gadget.generate_permutation::<SC>(

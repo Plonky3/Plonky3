@@ -21,9 +21,9 @@ pub trait WindowAccess<T> {
     #[inline]
     fn current(&self, i: usize) -> Option<T>
     where
-        T: Clone,
+        T: Dup,
     {
-        self.current_slice().get(i).cloned()
+        self.current_slice().get(i).map(|x| x.dup())
     }
 
     /// Single element from the next row by index.
@@ -32,9 +32,9 @@ pub trait WindowAccess<T> {
     #[inline]
     fn next(&self, i: usize) -> Option<T>
     where
-        T: Clone,
+        T: Dup,
     {
-        self.next_slice().get(i).cloned()
+        self.next_slice().get(i).map(|x| x.dup())
     }
 }
 
