@@ -70,6 +70,9 @@ pub enum InvalidProofShapeError {
     /// Preprocessed metadata missing or mismatched.
     #[error("air {air}: preprocessed metadata mismatch")]
     PreprocessedMetadataMismatch { air: usize },
+    /// Public values length doesn't match what the AIR expects.
+    #[error("public values length mismatch: expected {expected}, got {got}")]
+    PublicValuesLengthMismatch { expected: usize, got: usize },
     /// Lookup commitment presence doesn't match lookup configuration.
     #[error("lookup commitment presence does not match lookup configuration")]
     LookupCommitmentMismatch,
