@@ -10,7 +10,7 @@ use core::ops::Deref;
 
 use itertools::Itertools;
 use p3_field::{
-    BasedVectorSpace, ExtensionField, Field, FieldArray, PackedFieldExtension, PackedValue,
+    BasedVectorSpace, Dup, ExtensionField, Field, FieldArray, PackedFieldExtension, PackedValue,
     PrimeCharacteristicRing,
 };
 use p3_maybe_rayon::prelude::*;
@@ -57,7 +57,7 @@ impl Display for Dimensions {
 /// The `Matrix` trait provides a uniform interface for accessing rows, elements,
 /// and computing with matrices in both sequential and parallel contexts. It supports
 /// packing strategies for SIMD optimizations and interaction with extension fields.
-pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
+pub trait Matrix<T: Send + Sync + Dup>: Send + Sync {
     /// Returns the number of columns in the matrix.
     fn width(&self) -> usize;
 
@@ -99,7 +99,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
     /// Breaking any of these assumptions is considered undefined behaviour.
     #[inline]
     unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
-        unsafe { self.row_slice_unchecked(r)[c].clone() }
+        unsafe { self.row_slice_unchecked(r)[c].dup() }
     }
 
     /// Returns an iterator over the elements of the `r`-th row.
@@ -267,7 +267,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
     where
         Self: Sized,
-        T: Clone,
+        T: Dup,
     {
         RowMajorMatrix::new(self.rows().flatten().collect(), self.width())
     }
@@ -288,7 +288,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
     )
     where
         P: PackedValue<Value = T>,
-        T: Clone + 'a,
+        T: Dup + 'a,
     {
         assert!(r < self.height(), "Row index out of bounds.");
         let num_packed = self.width() / P::WIDTH;
@@ -321,7 +321,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
     ) -> impl Iterator<Item = P> + Send + Sync
     where
         P: PackedValue<Value = T>,
-        T: Clone + Default + 'a,
+        T: Dup + Default + 'a,
     {
         let mut row_iter = self.row(r).expect("Row index out of bounds.").into_iter();
         let num_elems = self.width().div_ceil(P::WIDTH);
@@ -343,7 +343,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
     >
     where
         P: PackedValue<Value = T>,
-        T: Clone + 'a,
+        T: Dup + 'a,
     {
         (0..self.height())
             .into_par_iter()
@@ -358,7 +358,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
     ) -> impl IndexedParallelIterator<Item = impl Iterator<Item = P> + Send + Sync>
     where
         P: PackedValue<Value = T>,
-        T: Clone + Default + 'a,
+        T: Dup + Default + 'a,
     {
         (0..self.height())
             .into_par_iter()

@@ -2,6 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
 
+use p3_field::Dup;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::{Dimensions, Matrix};
 use serde::de::DeserializeOwned;
@@ -16,7 +17,7 @@ use serde::{Deserialize, Serialize};
 /// with the largest height. For matrices with smaller heights, some bits of the row index are
 /// removed (from the least-significant side) to get the effective row index. These semantics are
 /// useful in the FRI protocol. See the documentation for `open_batch` for more details.
-pub trait Mmcs<T: Send + Sync + Clone>: Clone {
+pub trait Mmcs<T: Send + Sync + Dup>: Clone {
     type ProverData<M>;
     type Commitment: Clone + Serialize + DeserializeOwned;
     type Proof: Clone + Serialize + DeserializeOwned;
@@ -59,7 +60,7 @@ pub trait Mmcs<T: Send + Sync + Clone>: Clone {
     /// A tuple `(commitment, prover_data)` for the resulting 1-column matrix.
     fn commit_vec(&self, input: Vec<T>) -> (Self::Commitment, Self::ProverData<RowMajorMatrix<T>>)
     where
-        T: Clone + Send + Sync,
+        T: Dup + Send + Sync,
     {
         self.commit_matrix(RowMajorMatrix::new_col(input))
     }
@@ -160,7 +161,7 @@ pub trait Mmcs<T: Send + Sync + Clone>: Clone {
 // Enable Serialize/Deserialize whenever T supports it.
 #[serde(bound(serialize = "T: Serialize"))]
 #[serde(bound(deserialize = "T: DeserializeOwned"))]
-pub struct BatchOpening<T: Send + Sync + Clone, InputMmcs: Mmcs<T>> {
+pub struct BatchOpening<T: Send + Sync + Dup, InputMmcs: Mmcs<T>> {
     /// The opened row values from each matrix in the batch.
     /// Each inner vector corresponds to one matrix.
     pub opened_values: Vec<Vec<T>>,
@@ -168,7 +169,7 @@ pub struct BatchOpening<T: Send + Sync + Clone, InputMmcs: Mmcs<T>> {
     pub opening_proof: InputMmcs::Proof,
 }
 
-impl<T: Send + Sync + Clone, InputMmcs: Mmcs<T>> BatchOpening<T, InputMmcs> {
+impl<T: Send + Sync + Dup, InputMmcs: Mmcs<T>> BatchOpening<T, InputMmcs> {
     /// Creates a new batch opening proof.
     #[inline]
     pub const fn new(opened_values: Vec<Vec<T>>, opening_proof: InputMmcs::Proof) -> Self {
@@ -191,14 +192,14 @@ impl<T: Send + Sync + Clone, InputMmcs: Mmcs<T>> BatchOpening<T, InputMmcs> {
 ///
 /// Primarily used by the verifier.
 #[derive(Copy, Clone)]
-pub struct BatchOpeningRef<'a, T: Send + Sync + Clone, InputMmcs: Mmcs<T>> {
+pub struct BatchOpeningRef<'a, T: Send + Sync + Dup, InputMmcs: Mmcs<T>> {
     /// Reference to the opened row values, as slices of base elements.
     pub opened_values: &'a [Vec<T>],
     /// Reference to the proof object used for verification.
     pub opening_proof: &'a InputMmcs::Proof,
 }
 
-impl<'a, T: Send + Sync + Clone, InputMmcs: Mmcs<T>> BatchOpeningRef<'a, T, InputMmcs> {
+impl<'a, T: Send + Sync + Dup, InputMmcs: Mmcs<T>> BatchOpeningRef<'a, T, InputMmcs> {
     /// Creates a new batch opening proof.
     #[inline]
     pub const fn new(opened_values: &'a [Vec<T>], opening_proof: &'a InputMmcs::Proof) -> Self {
@@ -215,7 +216,7 @@ impl<'a, T: Send + Sync + Clone, InputMmcs: Mmcs<T>> BatchOpeningRef<'a, T, Inpu
     }
 }
 
-impl<'a, T: Send + Sync + Clone, InputMmcs: Mmcs<T>> From<&'a BatchOpening<T, InputMmcs>>
+impl<'a, T: Send + Sync + Dup, InputMmcs: Mmcs<T>> From<&'a BatchOpening<T, InputMmcs>>
     for BatchOpeningRef<'a, T, InputMmcs>
 {
     #[inline]

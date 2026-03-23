@@ -1,6 +1,8 @@
 use core::marker::PhantomData;
 use core::ops::Range;
 
+use p3_field::Dup;
+
 use crate::Matrix;
 use crate::bitrev::BitReversibleMatrix;
 
@@ -21,7 +23,7 @@ pub struct HorizontallyTruncated<T, Inner> {
 
 impl<T, Inner: Matrix<T>> HorizontallyTruncated<T, Inner>
 where
-    T: Send + Sync + Clone,
+    T: Send + Sync + Dup,
 {
     /// Construct a new horizontally truncated view of a matrix.
     ///
@@ -54,7 +56,7 @@ where
 
 impl<T, Inner> Matrix<T> for HorizontallyTruncated<T, Inner>
 where
-    T: Send + Sync + Clone,
+    T: Send + Sync + Dup,
     Inner: Matrix<T>,
 {
     /// Returns the number of columns exposed by the truncated matrix.
@@ -127,7 +129,7 @@ where
     }
 }
 
-impl<T: Clone + Send + Sync, Inner: BitReversibleMatrix<T>> BitReversibleMatrix<T>
+impl<T: Dup + Send + Sync, Inner: BitReversibleMatrix<T>> BitReversibleMatrix<T>
     for HorizontallyTruncated<T, Inner>
 {
     type BitRev = HorizontallyTruncated<T, Inner::BitRev>;

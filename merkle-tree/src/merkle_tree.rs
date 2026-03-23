@@ -5,7 +5,7 @@ use core::cmp::Reverse;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
-use p3_field::PackedValue;
+use p3_field::{Dup, PackedValue};
 use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_symmetric::{CryptographicHasher, Hash, MerkleCap, PseudoCompressionFunction};
@@ -67,7 +67,7 @@ pub struct MerkleTree<F, W, M, const N: usize, const DIGEST_ELEMS: usize> {
     _phantom: PhantomData<F>,
 }
 
-impl<F: Clone + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGEST_ELEMS: usize>
+impl<F: Dup + Send + Sync, W: Clone, M: Matrix<F>, const N: usize, const DIGEST_ELEMS: usize>
     MerkleTree<F, W, M, N, DIGEST_ELEMS>
 {
     /// Build a tree from **one or more matrices**.

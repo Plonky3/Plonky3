@@ -1,3 +1,5 @@
+use p3_field::Dup;
+
 use crate::Matrix;
 use crate::row_index_mapped::{RowIndexMap, RowIndexMappedView};
 
@@ -27,7 +29,7 @@ impl VerticallyStridedRowIndexMap {
     /// - `inner`: The inner matrix to view.
     /// - `stride`: The number of rows between each selected row.
     /// - `offset`: The initial row to start from.
-    pub fn new_view<T: Send + Sync + Clone, Inner: Matrix<T>>(
+    pub fn new_view<T: Send + Sync + Dup, Inner: Matrix<T>>(
         inner: Inner,
         stride: usize,
         offset: usize,

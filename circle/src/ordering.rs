@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 
+use p3_field::Dup;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::row_index_mapped::{RowIndexMap, RowIndexMappedView};
@@ -63,7 +64,7 @@ impl RowIndexMap for CfftPerm {
     fn map_row_index(&self, r: usize) -> usize {
         cfft_permute_index(r, self.log_height)
     }
-    fn to_row_major_matrix<T: Clone + Send + Sync, Inner: Matrix<T>>(
+    fn to_row_major_matrix<T: Dup + Send + Sync, Inner: Matrix<T>>(
         &self,
         inner: Inner,
     ) -> RowMajorMatrix<T> {
@@ -73,11 +74,11 @@ impl RowIndexMap for CfftPerm {
     }
 }
 
-pub(crate) trait CfftPermutable<T: Send + Sync + Clone>: Matrix<T> + Sized {
+pub(crate) trait CfftPermutable<T: Send + Sync + Dup>: Matrix<T> + Sized {
     fn cfft_perm_rows(self) -> CfftView<Self>;
 }
 
-impl<T: Send + Sync + Clone, M: Matrix<T>> CfftPermutable<T> for M {
+impl<T: Send + Sync + Dup, M: Matrix<T>> CfftPermutable<T> for M {
     fn cfft_perm_rows(self) -> CfftView<M> {
         RowIndexMappedView {
             index_map: CfftPerm {

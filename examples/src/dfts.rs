@@ -1,7 +1,7 @@
 use std::ops::Deref;
 
 use p3_dft::{Radix2DFTSmallBatch, Radix2DitParallel, TwoAdicSubgroupDft};
-use p3_field::{PackedValue, TwoAdicField};
+use p3_field::{Dup, PackedValue, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversalPerm, BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::RowMajorMatrix;
@@ -33,7 +33,7 @@ impl<T> From<BitReversedMatrixView<RowMajorMatrix<T>>> for MaybeBitreversedMatri
 // from this trait in the proving loop so it's not a huge issue for now.
 impl<T> Matrix<T> for MaybeBitreversedMatrix<T>
 where
-    T: Send + Sync + Clone,
+    T: Send + Sync + Dup,
 {
     fn width(&self) -> usize {
         match self {
@@ -127,7 +127,7 @@ where
     )
     where
         P: PackedValue<Value = T>,
-        T: Clone + 'a,
+        T: Dup + 'a,
     {
         match self {
             Self::Yes(inner) => inner.horizontally_packed_row(r),
@@ -143,7 +143,7 @@ where
     ) -> impl Iterator<Item = P> + Send + Sync
     where
         P: PackedValue<Value = T>,
-        T: Clone + Default + 'a,
+        T: Dup + Default + 'a,
     {
         match self {
             Self::Yes(_) => {
@@ -156,7 +156,7 @@ where
 
 impl<T> BitReversibleMatrix<T> for MaybeBitreversedMatrix<T>
 where
-    T: Send + Sync + Clone,
+    T: Send + Sync + Dup,
 {
     type BitRev = Self;
 

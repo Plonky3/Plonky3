@@ -1,5 +1,7 @@
 use core::ops::Deref;
 
+use p3_field::Dup;
+
 use crate::Matrix;
 use crate::bitrev::BitReversibleMatrix;
 use crate::dense::RowMajorMatrixView;
@@ -58,7 +60,7 @@ impl<Top, Bottom> VerticalPair<Top, Bottom> {
     /// A `VerticalPair` that represents the combined matrix.
     pub fn new<T>(top: Top, bottom: Bottom) -> Self
     where
-        T: Send + Sync + Clone,
+        T: Send + Sync + Dup,
         Top: Matrix<T>,
         Bottom: Matrix<T>,
     {
@@ -78,7 +80,7 @@ impl<Left, Right> HorizontalPair<Left, Right> {
     /// A `HorizontalPair` that represents the combined matrix.
     pub fn new<T>(left: Left, right: Right) -> Self
     where
-        T: Send + Sync + Clone,
+        T: Send + Sync + Dup,
         Left: Matrix<T>,
         Right: Matrix<T>,
     {
@@ -87,7 +89,7 @@ impl<Left, Right> HorizontalPair<Left, Right> {
     }
 }
 
-impl<T: Send + Sync + Clone, Top: Matrix<T>, Bottom: Matrix<T>> Matrix<T>
+impl<T: Send + Sync + Dup, Top: Matrix<T>, Bottom: Matrix<T>> Matrix<T>
     for VerticalPair<Top, Bottom>
 {
     fn width(&self) -> usize {
@@ -175,7 +177,7 @@ impl<T: Send + Sync + Clone, Top: Matrix<T>, Bottom: Matrix<T>> Matrix<T>
     }
 }
 
-impl<T: Send + Sync + Clone, Left: Matrix<T>, Right: Matrix<T>> Matrix<T>
+impl<T: Send + Sync + Dup, Left: Matrix<T>, Right: Matrix<T>> Matrix<T>
     for HorizontalPair<Left, Right>
 {
     fn width(&self) -> usize {
@@ -247,7 +249,7 @@ where
     }
 }
 
-impl<T: Clone + Send + Sync, Left: BitReversibleMatrix<T>, Right: BitReversibleMatrix<T>>
+impl<T: Dup + Send + Sync, Left: BitReversibleMatrix<T>, Right: BitReversibleMatrix<T>>
     BitReversibleMatrix<T> for HorizontalPair<Left, Right>
 {
     type BitRev = HorizontalPair<Left::BitRev, Right::BitRev>;

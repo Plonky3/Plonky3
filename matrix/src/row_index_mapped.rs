@@ -1,6 +1,6 @@
 use core::ops::Deref;
 
-use p3_field::PackedValue;
+use p3_field::{Dup, PackedValue};
 
 use crate::Matrix;
 use crate::dense::RowMajorMatrix;
@@ -25,7 +25,7 @@ pub trait RowIndexMap: Send + Sync {
     ///
     /// This default implementation iterates over all mapped rows,
     /// collects them in order, and builds a dense representation.
-    fn to_row_major_matrix<T: Clone + Send + Sync, Inner: Matrix<T>>(
+    fn to_row_major_matrix<T: Dup + Send + Sync, Inner: Matrix<T>>(
         &self,
         inner: Inner,
     ) -> RowMajorMatrix<T> {
@@ -53,7 +53,7 @@ pub struct RowIndexMappedView<IndexMap, Inner> {
     pub inner: Inner,
 }
 
-impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
+impl<T: Send + Sync + Dup, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
     for RowIndexMappedView<IndexMap, Inner>
 {
     fn width(&self) -> usize {
@@ -118,7 +118,7 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
     where
         Self: Sized,
-        T: Clone,
+        T: Dup,
     {
         // Use Perm's optimized permutation routine, if it has one.
         self.index_map.to_row_major_matrix(self.inner)
@@ -133,7 +133,7 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
     )
     where
         P: PackedValue<Value = T>,
-        T: Clone + 'a,
+        T: Dup + 'a,
     {
         self.inner
             .horizontally_packed_row(self.index_map.map_row_index(r))
@@ -145,7 +145,7 @@ impl<T: Send + Sync + Clone, IndexMap: RowIndexMap, Inner: Matrix<T>> Matrix<T>
     ) -> impl Iterator<Item = P> + Send + Sync
     where
         P: PackedValue<Value = T>,
-        T: Clone + Default + 'a,
+        T: Dup + Default + 'a,
     {
         self.inner
             .padded_horizontally_packed_row(self.index_map.map_row_index(r))

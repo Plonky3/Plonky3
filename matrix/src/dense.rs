@@ -6,7 +6,8 @@ use core::marker::PhantomData;
 use core::ops::Deref;
 
 use p3_field::{
-    ExtensionField, Field, PackedValue, par_scale_slice_in_place, scale_slice_in_place_single_core,
+    Dup, ExtensionField, Field, PackedValue, par_scale_slice_in_place,
+    scale_slice_in_place_single_core,
 };
 use p3_maybe_rayon::prelude::*;
 use rand::distr::{Distribution, StandardUniform};
@@ -43,31 +44,31 @@ pub trait DenseStorage<T>: Borrow<[T]> + Send + Sync {
 }
 
 // Cow doesn't impl IntoOwned so we can't blanket it
-impl<T: Clone + Send + Sync> DenseStorage<T> for Vec<T> {
+impl<T: Dup + Send + Sync> DenseStorage<T> for Vec<T> {
     fn to_vec(self) -> Self {
         self
     }
 }
 
-impl<T: Clone + Send + Sync> DenseStorage<T> for &[T] {
+impl<T: Dup + Send + Sync> DenseStorage<T> for &[T] {
     fn to_vec(self) -> Vec<T> {
         <[T]>::to_vec(self)
     }
 }
 
-impl<T: Clone + Send + Sync> DenseStorage<T> for &mut [T] {
+impl<T: Dup + Send + Sync> DenseStorage<T> for &mut [T] {
     fn to_vec(self) -> Vec<T> {
         <[T]>::to_vec(self)
     }
 }
 
-impl<T: Clone + Send + Sync> DenseStorage<T> for Cow<'_, [T]> {
+impl<T: Dup + Send + Sync> DenseStorage<T> for Cow<'_, [T]> {
     fn to_vec(self) -> Vec<T> {
         self.into_owned()
     }
 }
 
-impl<T: Clone + Send + Sync + Default> DenseMatrix<T> {
+impl<T: Dup + Send + Sync + Default> DenseMatrix<T> {
     /// Create a new dense matrix of the given dimensions, backed by a `Vec`, and filled with
     /// default values.
     #[must_use]
@@ -76,7 +77,7 @@ impl<T: Clone + Send + Sync + Default> DenseMatrix<T> {
     }
 }
 
-impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
+impl<T: Dup + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     /// Create a new dense matrix of the given dimensions, backed by the given storage.
     ///
     /// Note that it is undefined behavior to create a matrix such that
@@ -419,7 +420,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     }
 }
 
-impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S> {
+impl<T: Dup + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S> {
     #[inline]
     fn width(&self) -> usize {
         self.width
@@ -438,10 +439,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     unsafe fn get_unchecked(&self, r: usize, c: usize) -> T {
         unsafe {
             // Safety: The caller must ensure that r < self.height() and c < self.width().
-            self.values
-                .borrow()
-                .get_unchecked(r * self.width + c)
-                .clone()
+            self.values.borrow().get_unchecked(r * self.width + c).dup()
         }
     }
 
@@ -458,7 +456,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
                 .borrow()
                 .get_unchecked(r * self.width + start..r * self.width + end)
                 .iter()
-                .cloned()
+                .map(|x| x.dup())
         }
     }
 
@@ -480,7 +478,7 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     fn to_row_major_matrix(self) -> RowMajorMatrix<T>
     where
         Self: Sized,
-        T: Clone,
+        T: Dup,
     {
         RowMajorMatrix::new(self.values.to_vec(), self.width)
     }
@@ -495,11 +493,11 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     )
     where
         P: PackedValue<Value = T>,
-        T: Clone + 'a,
+        T: Dup + 'a,
     {
         let buf = &self.values.borrow()[r * self.width..(r + 1) * self.width];
         let (packed, sfx) = P::pack_slice_with_suffix(buf);
-        (packed.iter().copied(), sfx.iter().cloned())
+        (packed.iter().copied(), sfx.iter().map(|x| x.dup()))
     }
 
     #[inline]
@@ -509,17 +507,18 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
     ) -> impl Iterator<Item = P> + Send + Sync
     where
         P: PackedValue<Value = T>,
-        T: Clone + Default + 'a,
+        T: Dup + Default + 'a,
     {
         let buf = &self.values.borrow()[r * self.width..(r + 1) * self.width];
         let (packed, sfx) = P::pack_slice_with_suffix(buf);
         packed.iter().copied().chain(
-            (!sfx.is_empty()).then(|| P::from_fn(|i| sfx.get(i).cloned().unwrap_or_default())),
+            (!sfx.is_empty())
+                .then(|| P::from_fn(|i| sfx.get(i).map(|x| x.dup()).unwrap_or_default())),
         )
     }
 }
 
-impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
+impl<T: Dup + Default + Send + Sync> DenseMatrix<T> {
     pub fn as_cow<'a>(self) -> RowMajorMatrixCow<'a, T> {
         RowMajorMatrixCow::new(Cow::Owned(self.values), self.width)
     }
@@ -629,7 +628,7 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
         // `resize` is a single capacity check + contiguous fill,
         // faster than `extend(repeat_n(..))` which uses iterator machinery.
         if rem != 0 {
-            values.resize(len + (width - rem), fill.clone());
+            values.resize(len + (width - rem), fill.dup());
         }
 
         // Guarantee at least one row so callers never get a zero-height matrix.
@@ -748,7 +747,7 @@ impl<T: Copy + Default + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
     }
 }
 
-impl<'a, T: Clone + Default + Send + Sync> RowMajorMatrixView<'a, T> {
+impl<'a, T: Dup + Default + Send + Sync> RowMajorMatrixView<'a, T> {
     pub fn as_cow(self) -> RowMajorMatrixCow<'a, T> {
         RowMajorMatrixCow::new(Cow::Borrowed(self.values), self.width)
     }

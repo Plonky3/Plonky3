@@ -1,3 +1,4 @@
+use p3_field::Dup;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 
 use crate::Matrix;
@@ -12,7 +13,7 @@ use crate::util::reverse_matrix_index_bits;
 ///
 /// This trait allows interoperability between regular matrices and views
 /// that access their rows in a bit-reversed order.
-pub trait BitReversibleMatrix<T: Send + Sync + Clone>: Matrix<T> {
+pub trait BitReversibleMatrix<T: Send + Sync + Dup>: Matrix<T> {
     /// The type returned when this matrix is viewed in bit-reversed order.
     type BitRev: BitReversibleMatrix<T>;
 
@@ -42,7 +43,7 @@ impl BitReversalPerm {
     ///
     /// # Returns
     /// A `BitReversedMatrixView` that wraps the input with row reordering.
-    pub fn new_view<T: Send + Sync + Clone, Inner: Matrix<T>>(
+    pub fn new_view<T: Send + Sync + Dup, Inner: Matrix<T>>(
         inner: Inner,
     ) -> BitReversedMatrixView<Inner> {
         RowIndexMappedView {
@@ -65,7 +66,7 @@ impl RowIndexMap for BitReversalPerm {
 
     // This might not be more efficient than the lazy generic impl
     // if we have a nested view.
-    fn to_row_major_matrix<T: Clone + Send + Sync, Inner: Matrix<T>>(
+    fn to_row_major_matrix<T: Dup + Send + Sync, Inner: Matrix<T>>(
         &self,
         inner: Inner,
     ) -> RowMajorMatrix<T> {
@@ -81,7 +82,7 @@ impl RowIndexMap for BitReversalPerm {
 /// to a `DenseMatrix`.
 pub type BitReversedMatrixView<Inner> = RowIndexMappedView<BitReversalPerm, Inner>;
 
-impl<T: Clone + Send + Sync, Inner: BitReversibleMatrix<T>> BitReversibleMatrix<T>
+impl<T: Dup + Send + Sync, Inner: BitReversibleMatrix<T>> BitReversibleMatrix<T>
     for BitReversedMatrixView<Inner>
 {
     type BitRev = Inner;
@@ -91,7 +92,7 @@ impl<T: Clone + Send + Sync, Inner: BitReversibleMatrix<T>> BitReversibleMatrix<
     }
 }
 
-impl<T: Clone + Send + Sync, S: DenseStorage<T>> BitReversibleMatrix<T> for DenseMatrix<T, S> {
+impl<T: Dup + Send + Sync, S: DenseStorage<T>> BitReversibleMatrix<T> for DenseMatrix<T, S> {
     type BitRev = BitReversedMatrixView<Self>;
 
     fn bit_reverse_rows(self) -> Self::BitRev {

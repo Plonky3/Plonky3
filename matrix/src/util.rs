@@ -1,5 +1,6 @@
 use core::borrow::BorrowMut;
 
+use p3_field::Dup;
 use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 use tracing::instrument;
@@ -35,7 +36,7 @@ use crate::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
 #[instrument(level = "debug", skip_all)]
 pub fn reverse_matrix_index_bits<'a, F, S>(mat: &mut DenseMatrix<F, S>)
 where
-    F: Clone + Send + Sync + 'a,
+    F: Dup + Send + Sync + 'a,
     S: DenseStorage<F> + BorrowMut<[F]>,
 {
     let w = mat.width();
@@ -65,7 +66,7 @@ where
 /// - `mat`: The matrix to modify.
 /// - `i`: The first row index (must be less than `j`).
 /// - `j`: The second row index.
-pub fn swap_rows<F: Clone + Send + Sync>(mat: &mut RowMajorMatrix<F>, i: usize, j: usize) {
+pub fn swap_rows<F: Dup + Send + Sync>(mat: &mut RowMajorMatrix<F>, i: usize, j: usize) {
     let w = mat.width();
     let (upper, lower) = mat.values.split_at_mut(j * w);
     let row_i = &mut upper[i * w..(i + 1) * w];
