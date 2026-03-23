@@ -1,14 +1,14 @@
 use core::borrow::Borrow;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use p3_air::{Air, AirBuilder, BaseAir, BaseLeaf, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::{ProverData, StarkInstance, prove_batch, verify_batch};
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
+use p3_field::{Field, PrimeField64};
 use p3_fri::{TwoAdicFriPcs, create_test_fri_params};
 use p3_lookup::LookupAir;
 use p3_matrix::dense::RowMajorMatrix;
@@ -23,14 +23,8 @@ type Challenge = BinomialExtensionField<Val, 4>;
 type Perm = Poseidon2BabyBear<16>;
 type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
-type ValMmcs = MerkleTreeMmcs<
-    <Val as Field>::Packing,
-    <Val as Field>::Packing,
-    MyHash,
-    MyCompress,
-    2,
-    8,
->;
+type ValMmcs =
+    MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 2, 8>;
 type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
 type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
 type Dft = Radix2DitParallel<Val>;

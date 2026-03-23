@@ -78,7 +78,7 @@ unsafe impl<T> Sync for DisjointMutPtr<T> {}
 impl<T> DisjointMutPtr<T> {
     /// Create a new `DisjointMutPtr` from a mutable slice.
     #[inline]
-    pub fn new(slice: &mut [T]) -> Self {
+    pub const fn new(slice: &mut [T]) -> Self {
         Self(slice.as_mut_ptr())
     }
 
@@ -89,7 +89,7 @@ impl<T> DisjointMutPtr<T> {
     /// The caller must ensure the range `[offset, offset+len)` is within bounds
     /// and does not overlap with any other concurrent access.
     #[inline]
-    pub unsafe fn slice_mut(self, offset: usize, len: usize) -> &'static mut [T] {
+    pub const unsafe fn slice_mut(self, offset: usize, len: usize) -> &'static mut [T] {
         unsafe { core::slice::from_raw_parts_mut(self.0.add(offset), len) }
     }
 }
