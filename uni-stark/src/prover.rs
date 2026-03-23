@@ -23,7 +23,7 @@ use crate::{
 #[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds)] // cfg not supported in where clauses?
 pub fn prove_with_preprocessed<
     SC,
-    #[cfg(debug_assertions)] A: for<'a> Air<crate::check_constraints::DebugConstraintBuilder<'a, Val<SC>>>,
+    #[cfg(debug_assertions)] A: for<'a> Air<p3_air::DebugConstraintBuilder<'a, Val<SC>>>,
     #[cfg(not(debug_assertions))] A,
 >(
     config: &SC,
@@ -37,7 +37,7 @@ where
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
     #[cfg(debug_assertions)]
-    crate::check_constraints::check_constraints(air, &trace, public_values);
+    p3_air::check_constraints(air, &trace, public_values);
 
     // Compute the height `N = 2^n` and `log_2(height)`, `n`, of the trace.
     let degree = trace.height();
@@ -379,7 +379,7 @@ where
 #[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds)] // cfg not supported in where clauses?
 pub fn prove<
     SC,
-    #[cfg(debug_assertions)] A: for<'a> Air<crate::check_constraints::DebugConstraintBuilder<'a, Val<SC>>>,
+    #[cfg(debug_assertions)] A: for<'a> Air<p3_air::DebugConstraintBuilder<'a, Val<SC>>>,
     #[cfg(not(debug_assertions))] A,
 >(
     config: &SC,
