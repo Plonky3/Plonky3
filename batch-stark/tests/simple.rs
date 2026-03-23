@@ -2075,6 +2075,68 @@ fn test_batch_stark_rejects_truncated_global_lookup_data() {
     }
 }
 
+<<<<<<< Updated upstream
+=======
+#[test]
+fn test_batch_stark_rejects_tampered_global_lookup_metadata() {
+    let config = make_config(2025);
+
+    let reps = 2;
+    let mul_air = MulAir { reps };
+    let mul_air_lookups = MulAirLookups::new(
+        mul_air,
+        false,
+        true,
+        0,
+        vec!["MulFib1".to_string(), "MulFib2".to_string()],
+    );
+
+    let log_n = 3;
+    let n = 1 << log_n;
+    let fibonacci_air = FibonacciAir {
+        log_height: log_n,
+        tamper_index: None,
+    };
+    let fib_air_lookups_1 =
+        FibAirLookups::new(fibonacci_air, true, 0, Some(("MulFib1".to_string(), 1)));
+    let fib_air_lookups_2 =
+        FibAirLookups::new(fibonacci_air, true, 0, Some(("MulFib2".to_string(), 1)));
+
+    let mul_trace = mul_trace::<Val>(n, 2);
+    let fib_trace_1 = fib_trace::<Val>(0, 1, n);
+    let fib_trace_2 = fib_trace::<Val>(0, 1, n);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
+
+    let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
+    let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups_1);
+    let air3 = DemoAirWithLookups::FibLookups(fib_air_lookups_2);
+
+    let mut airs = [air1, air2, air3];
+    let prover_data =
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_n, log_n, log_n]);
+    let common = &prover_data.common;
+    let traces = [&mul_trace, &fib_trace_1, &fib_trace_2];
+    let pvs = vec![vec![], fib_pis.clone(), fib_pis];
+
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, common);
+    let mut proof = prove_batch(&config, &instances, &prover_data);
+
+    proof.global_lookup_data[0][0].name = "tampered".to_string();
+
+    let err = verify_batch(&config, &airs, &proof, &pvs, common)
+        .expect_err("Verifier should reject tampered global lookup metadata");
+    match err {
+        VerificationError::InvalidProofShape(
+            InvalidProofShapeError::GlobalLookupDataMetadataMismatch { air, lookup, .. },
+        ) => {
+            assert_eq!(air, 0);
+            assert_eq!(lookup, 0);
+        }
+        _ => panic!("unexpected error: {err:?}"),
+    }
+}
+
+>>>>>>> Stashed changes
 /// Test mixing instances with lookups and instances without lookups.
 /// We have the following instances:
 /// - MulAir with both local and global lookups (looking into two different FibAir instances for each rep)
