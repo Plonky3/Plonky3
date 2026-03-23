@@ -1,9 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use core::borrow::Borrow;
 
 use p3_field::{Algebra, ExtensionField, Field};
-use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use tracing::instrument;
 
@@ -13,7 +11,7 @@ use crate::symbolic::expression_ext::SymbolicExpressionExt;
 use crate::symbolic::variable::{BaseEntry, ExtEntry, SymbolicVariableExt};
 use crate::{
     Air, AirBuilder, ExtensionBuilder, PeriodicAirBuilder, PermutationAirBuilder,
-    SymbolicExpression, SymbolicVariable, WindowAccess,
+    SymbolicExpression, SymbolicVariable,
 };
 
 /// Describes the shape of an AIR for symbolic constraint evaluation.
@@ -228,36 +226,6 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
 
     pub fn base_constraints(&self) -> Vec<SymbolicExpression<F>> {
         self.base_constraints.clone()
-    }
-}
-
-/// Implement `WindowAccess` for `RowMajorMatrix` treating it as a two-row window
-/// (first row = current, second row = next).
-///
-/// # Panics
-///
-/// Panics if the matrix does not have exactly 2 rows.
-impl<T: Clone + Send + Sync> WindowAccess<T> for RowMajorMatrix<T> {
-    fn current_slice(&self) -> &[T] {
-        assert_eq!(
-            self.height(),
-            2,
-            "WindowAccess for RowMajorMatrix requires exactly 2 rows, got {}",
-            self.height()
-        );
-        let values: &[T] = self.values.borrow();
-        &values[..self.width]
-    }
-
-    fn next_slice(&self) -> &[T] {
-        assert_eq!(
-            self.height(),
-            2,
-            "WindowAccess for RowMajorMatrix requires exactly 2 rows, got {}",
-            self.height()
-        );
-        let values: &[T] = self.values.borrow();
-        &values[self.width..]
     }
 }
 

@@ -1,6 +1,6 @@
 use core::borrow::Borrow;
 
-use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
@@ -8,6 +8,7 @@ use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeField64};
 use p3_fri::{HidingFriPcs, TwoAdicFriPcs, create_test_fri_params};
+use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -57,13 +58,18 @@ where
 {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let local: &MulFibPairRow<AB::Var> = main.current_slice().borrow();
-        let next: &MulFibPairRow<AB::Var> = main.next_slice().borrow();
+        let local_row = main.row_slice(0).unwrap();
+        let local: &MulFibPairRow<AB::Var> = (*local_row).borrow();
+        let next_row = main.row_slice(1).unwrap();
+        let next: &MulFibPairRow<AB::Var> = (*next_row).borrow();
 
         // Copy the preprocessed values we need so the immutable borrow on
         // `builder` is released before the mutable `when_transition` call.
-        let prep: &PreprocessedRow<AB::Var> = builder.preprocessed().current_slice().borrow();
-        let (prod_coeff, sum_coeff) = (prep.prod_coeff, prep.sum_coeff);
+        let (prod_coeff, sum_coeff) = {
+            let prep_row = builder.preprocessed().row_slice(0).unwrap();
+            let prep: &PreprocessedRow<AB::Var> = (*prep_row).borrow();
+            (prep.prod_coeff, prep.sum_coeff)
+        };
 
         let mut when_transition = builder.when_transition();
 

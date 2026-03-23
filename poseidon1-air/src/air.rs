@@ -29,8 +29,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 
-use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::{PrimeCharacteristicRing, PrimeField};
+use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_poseidon1::external::mds_multiply;
 use rand::distr::{Distribution, StandardUniform};
@@ -258,7 +259,8 @@ impl<
     fn eval(&self, builder: &mut AB) {
         // Read the current row as a flat slice, then reinterpret as columns.
         let main = builder.main();
-        let local = main.current_slice().borrow();
+        let current_row = main.row_slice(0).unwrap();
+        let local = (*current_row).borrow();
 
         eval::<_, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>(
             self, builder, local,

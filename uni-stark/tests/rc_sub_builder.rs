@@ -11,13 +11,14 @@
 use core::marker::PhantomData;
 
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder};
-use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::testing::TrivialPcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::BinomialExtensionField;
+use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_uni_stark::{StarkConfig, SubAirBuilder, prove, verify};
 use rand::SeedableRng;
@@ -43,8 +44,9 @@ where
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
 
-        let value = main.current(0).unwrap();
-        let bits = &main.current_slice()[1..];
+        let value = main.get(0, 0).unwrap();
+        let row = main.row_slice(0).unwrap();
+        let bits = &row[1..];
 
         let mut recomposed = AB::Expr::ZERO;
         for (i, bit) in bits.iter().enumerate() {
@@ -83,9 +85,9 @@ where
         // Evaluate the parent AIR
         let main = builder.main();
 
-        let accumulator = main.current(0).unwrap();
-        let range_value = main.current(1).unwrap();
-        let next_accumulator = main.next(0).unwrap();
+        let accumulator = main.get(0, 0).unwrap();
+        let range_value = main.get(0, 1).unwrap();
+        let next_accumulator = main.get(1, 0).unwrap();
 
         builder.when_first_row().assert_zero(accumulator);
         builder

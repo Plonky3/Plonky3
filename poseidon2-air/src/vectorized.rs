@@ -2,8 +2,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::{Borrow, BorrowMut};
 
-use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::{PrimeCharacteristicRing, PrimeField};
+use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
 use rand::distr::StandardUniform;
@@ -263,6 +264,7 @@ impl<
     #[inline]
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
+        let current_row = main.row_slice(0).unwrap();
         let local: &VectorizedPoseidon2Cols<
             _,
             WIDTH,
@@ -271,7 +273,7 @@ impl<
             HALF_FULL_ROUNDS,
             PARTIAL_ROUNDS,
             VECTOR_LEN,
-        > = main.current_slice().borrow();
+        > = (*current_row).borrow();
         for perm in &local.cols {
             eval(&self.air, builder, perm);
         }

@@ -1,8 +1,9 @@
 use core::array;
 use core::borrow::Borrow;
 
-use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir};
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
+use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -40,8 +41,10 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
         eval_round_flags(builder);
 
         let main = builder.main();
-        let local: &KeccakCols<AB::Var> = main.current_slice().borrow();
-        let next: &KeccakCols<AB::Var> = main.next_slice().borrow();
+        let current_row = main.row_slice(0).unwrap();
+        let local: &KeccakCols<AB::Var> = (*current_row).borrow();
+        let next_row = main.row_slice(1).unwrap();
+        let next: &KeccakCols<AB::Var> = (*next_row).borrow();
 
         let first_step = local.step_flags[0];
         let final_step = local.step_flags[NUM_ROUNDS_MIN_1];

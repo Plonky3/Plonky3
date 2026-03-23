@@ -1,4 +1,4 @@
-use p3_air::{AirBuilder, ExtensionBuilder, PermutationAirBuilder, RowWindow};
+use p3_air::{AirBuilder, ExtensionBuilder, PermutationAirBuilder};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{
@@ -17,12 +17,12 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
     type F = Val<SC>;
     type Expr = PackedVal<SC>;
     type Var = PackedVal<SC>;
-    type PreprocessedWindow = RowWindow<'a, PackedVal<SC>>;
-    type MainWindow = RowWindow<'a, PackedVal<SC>>;
+    type PreprocessedWindow = RowMajorMatrixView<'a, PackedVal<SC>>;
+    type MainWindow = RowMajorMatrixView<'a, PackedVal<SC>>;
     type PublicVar = Val<SC>;
 
     fn main(&self) -> Self::MainWindow {
-        RowWindow::from_view(&self.inner.main)
+        self.inner.main
     }
 
     fn preprocessed(&self) -> &Self::PreprocessedWindow {
@@ -78,12 +78,12 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder
     for ProverConstraintFolderWithLookups<'a, SC>
 {
     type RandomVar = PackedChallenge<SC>;
-    type MP = RowWindow<'a, PackedChallenge<SC>>;
+    type MP = RowMajorMatrixView<'a, PackedChallenge<SC>>;
 
     type PermutationVar = PackedChallenge<SC>;
 
     fn permutation(&self) -> Self::MP {
-        RowWindow::from_view(&self.permutation)
+        self.permutation
     }
 
     fn permutation_randomness(&self) -> &[PackedChallenge<SC>] {
@@ -107,11 +107,11 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
     type Expr = SC::Challenge;
     type Var = SC::Challenge;
     type PublicVar = Val<SC>;
-    type PreprocessedWindow = RowWindow<'a, SC::Challenge>;
-    type MainWindow = RowWindow<'a, SC::Challenge>;
+    type PreprocessedWindow = ViewPair<'a, SC::Challenge>;
+    type MainWindow = ViewPair<'a, SC::Challenge>;
 
     fn main(&self) -> Self::MainWindow {
-        RowWindow::from_two_rows(self.inner.main.top.values, self.inner.main.bottom.values)
+        self.inner.main
     }
 
     fn preprocessed(&self) -> &Self::PreprocessedWindow {
@@ -168,12 +168,12 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder
     for VerifierConstraintFolderWithLookups<'a, SC>
 {
     type RandomVar = SC::Challenge;
-    type MP = RowWindow<'a, SC::Challenge>;
+    type MP = ViewPair<'a, SC::Challenge>;
 
     type PermutationVar = SC::Challenge;
 
     fn permutation(&self) -> Self::MP {
-        RowWindow::from_two_rows(self.permutation.top.values, self.permutation.bottom.values)
+        self.permutation
     }
 
     fn permutation_randomness(&self) -> &[SC::Challenge] {

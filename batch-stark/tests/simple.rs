@@ -4,7 +4,7 @@ use core::marker::PhantomData;
 use core::slice::from_ref;
 
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpression};
-use p3_air::{Air, AirBuilder, BaseAir, BaseLeaf, PermutationAirBuilder, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir, BaseLeaf, PermutationAirBuilder};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::{
@@ -80,8 +80,10 @@ where
         let b0 = pis[1];
         let x = pis[2];
 
-        let local: &FibRow<AB::Var> = main.current_slice().borrow();
-        let next: &FibRow<AB::Var> = main.next_slice().borrow();
+        let local_row = main.row_slice(0).unwrap();
+        let local: &FibRow<AB::Var> = (*local_row).borrow();
+        let next_row = main.row_slice(1).unwrap();
+        let next: &FibRow<AB::Var> = (*next_row).borrow();
 
         let mut wf = builder.when_first_row();
         wf.assert_eq(local.left, a0);
@@ -166,8 +168,8 @@ impl<F> BaseAir<F> for MulAir {
 impl<AB: AirBuilder> Air<AB> for MulAir {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let local = main.current_slice();
-        let next = main.next_slice();
+        let local = main.row_slice(0).unwrap();
+        let next = main.row_slice(1).unwrap();
         for i in 0..self.reps {
             let s = i * 3;
             let a = local[s];
@@ -252,7 +254,7 @@ impl<F: Field> LookupAir<F> for MulAirLookups {
             ..Default::default()
         });
         let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.current_slice();
+        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
         let last_idx = symbolic_air_builder.main().width() - 1;
         let lut = symbolic_main_local[last_idx]; //  Extra column that corresponds to a permutation of 'a'
@@ -488,11 +490,11 @@ where
 {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
-        let local_main = main.current_slice();
+        let local_main = main.row_slice(0).unwrap();
 
         // Copy the preprocessed value so the immutable borrow on `builder`
         // is released before the mutable `assert_eq` call.
-        let prep_val = builder.preprocessed().current(0).unwrap();
+        let prep_val = builder.preprocessed().get(0, 0).unwrap();
 
         // Enforce: main[0] = multiplier * preprocessed[0]
         builder.assert_eq(
@@ -2257,7 +2259,7 @@ impl<F: Field> LookupAir<F> for SingleTableLocalLookupAir {
             ..Default::default()
         });
         let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.current_slice();
+        let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
 
         let sender_col1 = symbolic_main_local[0]; // Column that sends values
         let sender_col2 = symbolic_main_local[1]; // Column that sends values
