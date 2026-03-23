@@ -183,7 +183,7 @@ pub trait LookupEvaluator {
                     self.eval_local_lookup(builder, context);
                 }
                 Kind::Global(_) => {
-                    let expected = builder.permutation_values()[pv_idx].clone();
+                    let expected = builder.permutation_values()[pv_idx].dup();
                     pv_idx += 1;
                     self.eval_global_update(builder, context, expected.into());
                 }

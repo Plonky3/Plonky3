@@ -449,7 +449,7 @@ pub trait PermutationAirBuilder: ExtensionBuilder {
     type RandomVar: Into<Self::ExprEF> + Copy;
 
     /// Value type for expected cumulated values used in global lookup arguments.
-    type PermutationVar: Into<Self::ExprEF> + Clone;
+    type PermutationVar: Into<Self::ExprEF> + Dup;
 
     /// Return the current and next row slices of the permutation trace.
     fn permutation(&self) -> Self::MP;
