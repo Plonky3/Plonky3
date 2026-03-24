@@ -104,6 +104,7 @@ impl<SC: SGC> BatchTranscript<SC> {
     ) -> Challenge<SC> {
         if let Some(commit) = perm_commitment {
             self.challenger.observe(commit.clone());
+            // Observe cumulated lookup sums so the verifier can check them.
             for data in lookup_data.iter().flatten() {
                 self.challenger
                     .observe_algebra_element(data.expected_cumulated);
