@@ -134,6 +134,7 @@ impl<
 }
 
 /// A "vectorized" version of Poseidon2Air, for computing multiple Poseidon2 permutations per row.
+#[derive(Debug, Clone)]
 pub struct VectorizedPoseidon2Air<
     F: PrimeCharacteristicRing,
     LinearLayers,
