@@ -13,6 +13,9 @@
 
 set -euo pipefail
 
+# Branch that release PRs merge into (release-plz uses your current git branch as the PR base).
+RELEASE_BASE_BRANCH="${RELEASE_BASE_BRANCH:-v0.4.3}"
+
 check_binary_installed() {
   local binary_name="$1"
   if ! command -v "$binary_name" &> /dev/null; then
@@ -28,16 +31,21 @@ fi
 
 check_binary_installed "release-plz"
 
-# Ensure local main is up-to-date with remote
-git fetch origin main
-local_main=$(git rev-parse main)
-remote_main=$(git rev-parse origin/main)
-
-if [ "$local_main" != "$remote_main" ]; then
-  echo "Error: Local 'main' is not up-to-date with 'origin/main'."
-  echo "Please run: git checkout main && git pull"
+if [ "$(git branch --show-current)" != "$RELEASE_BASE_BRANCH" ]; then
+  echo "Error: Check out '$RELEASE_BASE_BRANCH' before running this script (current: $(git branch --show-current))."
+  echo "Override with: RELEASE_BASE_BRANCH=<branch> $0"
   exit 1
 fi
 
-echo "Creating release PR..."
+git fetch origin "$RELEASE_BASE_BRANCH"
+local_tip=$(git rev-parse "$RELEASE_BASE_BRANCH")
+remote_tip=$(git rev-parse "origin/$RELEASE_BASE_BRANCH")
+
+if [ "$local_tip" != "$remote_tip" ]; then
+  echo "Error: Local '$RELEASE_BASE_BRANCH' is not up-to-date with 'origin/$RELEASE_BASE_BRANCH'."
+  echo "Please run: git checkout $RELEASE_BASE_BRANCH && git pull"
+  exit 1
+fi
+
+echo "Creating release PR against origin/$RELEASE_BASE_BRANCH..."
 release-plz release-pr
