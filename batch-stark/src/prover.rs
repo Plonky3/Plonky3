@@ -767,6 +767,11 @@ where
         pad(&mut sels.inv_vanishing);
     }
 
+    debug_assert!(
+        quotient_size.is_multiple_of(pack_width),
+        "packed quotient loop requires quotient_size % pack_width == 0"
+    );
+
     // Decompose alpha into per-constraint powers, split by base vs extension constraints.
     let constraint_layout = get_constraint_layout(air, layout, lookups, lookup_gadget);
     let (base_alpha_powers, ext_alpha_powers) = constraint_layout.decompose_alpha(alpha);
