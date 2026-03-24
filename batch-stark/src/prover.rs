@@ -111,7 +111,7 @@ where
     SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
 {
     let common = &prover_data.common;
-    // Only one gadget type for now; extend when new gadgets are added.
+    // TODO: Extend if additional lookup gadgets are added.
     let lookup_gadget = LogUpGadget::new();
 
     let pcs = config.pcs();
