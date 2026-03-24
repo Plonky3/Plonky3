@@ -21,6 +21,28 @@ use crate::{
     VerifierConstraintFolder,
 };
 
+#[inline]
+fn checked_pow2(log_degree: usize) -> Option<usize> {
+    (log_degree < usize::BITS as usize).then(|| 1usize << log_degree)
+}
+
+#[inline]
+fn validate_degree_bits(
+    degree_bits: usize,
+    is_zk: usize,
+) -> Result<(usize, usize), InvalidProofShapeError> {
+    if degree_bits < is_zk {
+        return Err(InvalidProofShapeError::DegreeBitsTooSmall {
+            minimum: is_zk,
+            got: degree_bits,
+        });
+    }
+
+    let degree = checked_pow2(degree_bits)
+        .ok_or(InvalidProofShapeError::DegreeBitsTooLarge { got: degree_bits })?;
+    Ok((degree_bits - is_zk, degree))
+}
+
 /// Recomposes the quotient polynomial from its chunks evaluated at a point.
 ///
 /// Given quotient chunks and their domains, this computes the Lagrange
@@ -235,7 +257,7 @@ where
     } = proof;
 
     let pcs = config.pcs();
-    let degree = 1 << degree_bits;
+    let (base_degree_bits, degree) = validate_degree_bits(*degree_bits, config.is_zk())?;
     let trace_domain = pcs.natural_domain_for_degree(degree);
     // TODO: allow moving preprocessed commitment to preprocess time, if known in advance
     let (preprocessed_width, preprocessed_commit) =
@@ -263,10 +285,13 @@ where
         get_log_num_quotient_chunks::<Val<SC>, A>(air, layout, config.is_zk());
     let num_quotient_chunks = 1 << (log_num_quotient_chunks + config.is_zk());
     let mut challenger = config.initialise_challenger();
-    let init_trace_domain = pcs.natural_domain_for_degree(degree >> (config.is_zk()));
+    let init_trace_domain = pcs.natural_domain_for_degree(1 << base_degree_bits);
 
-    let quotient_domain =
-        trace_domain.create_disjoint_domain(1 << (degree_bits + log_num_quotient_chunks));
+    let quotient_domain_size = degree_bits
+        .checked_add(log_num_quotient_chunks)
+        .and_then(checked_pow2)
+        .ok_or(InvalidProofShapeError::DegreeBitsTooLarge { got: *degree_bits })?;
+    let quotient_domain = trace_domain.create_disjoint_domain(quotient_domain_size);
     let quotient_chunks_domains = quotient_domain.split_domains(num_quotient_chunks);
 
     let randomized_quotient_chunks_domains = quotient_chunks_domains
@@ -317,7 +342,7 @@ where
 
     // Observe the instance.
     challenger.observe(Val::<SC>::from_usize(proof.degree_bits));
-    challenger.observe(Val::<SC>::from_usize(proof.degree_bits - config.is_zk()));
+    challenger.observe(Val::<SC>::from_usize(base_degree_bits));
     challenger.observe(Val::<SC>::from_usize(preprocessed_width));
     // TODO: Might be best practice to include other instance data here in the transcript, like some
     // encoding of the AIR. This protects against transcript collisions between distinct instances.

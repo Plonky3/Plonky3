@@ -64,6 +64,24 @@ pub enum InvalidProofShapeError {
     /// Preprocessed values present when preprocessed width is zero.
     #[error("air {air}: unexpected preprocessed values")]
     UnexpectedPreprocessedValues { air: usize },
+    /// Proof degree bits are too small for the PCS ZK setting.
+    #[error("degree_bits too small for zk setting: expected at least {minimum}, got {got}")]
+    DegreeBitsTooSmall { minimum: usize, got: usize },
+    /// Proof degree bits are too large to safely construct verifier domains.
+    #[error("degree_bits too large for domain construction: got {got}")]
+    DegreeBitsTooLarge { got: usize },
+    /// Per-instance proof degree bits are too small for the PCS ZK setting.
+    #[error(
+        "air {air}: degree_bits too small for zk setting: expected at least {minimum}, got {got}"
+    )]
+    DegreeBitsTooSmallForAir {
+        air: usize,
+        minimum: usize,
+        got: usize,
+    },
+    /// Per-instance proof degree bits are too large to safely construct verifier domains.
+    #[error("air {air}: degree_bits too large for domain construction: got {got}")]
+    DegreeBitsTooLargeForAir { air: usize, got: usize },
     /// Missing preprocessed local or next values.
     #[error("air {air}: missing preprocessed values")]
     MissingPreprocessedValues { air: usize },
