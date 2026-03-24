@@ -218,8 +218,6 @@ where
                     &mut lookup_data[i],
                     &challenges_per_instance[i],
                 );
-                permutation_commit_inputs
-                    .push((ext_domain, generated_perm.clone().flatten_to_base()));
 
                 #[cfg(debug_assertions)]
                 {
@@ -243,6 +241,9 @@ where
                         lookup_constraints_inputs,
                     );
                 }
+
+                // Consume the generated matrix directly; no extra clone before flattening.
+                permutation_commit_inputs.push((ext_domain, generated_perm.flatten_to_base()));
             }
         });
 
