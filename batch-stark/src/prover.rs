@@ -123,27 +123,28 @@ where
     // Extended degree accounts for the ZK blinding factor (2x when ZK is enabled).
     let log_ext_degrees: Vec<usize> = log_degrees.iter().map(|&d| d + config.is_zk()).collect();
 
-    // Separate lookups and build initial (zeroed) lookup data for global lookups.
-    let (all_lookups, mut lookup_data): (Vec<Vec<_>>, Vec<Vec<_>>) = instances
+    // Borrow lookups directly and build initial (zeroed) lookup data for global lookups.
+    let all_lookups: Vec<&[Lookup<Val<SC>>]> = instances
         .iter()
-        .map(|inst| {
-            (
-                inst.lookups.clone(),
-                // Only global lookups produce cumulated values that enter the transcript.
-                inst.lookups
-                    .iter()
-                    .filter_map(|lookup| match &lookup.kind {
-                        Kind::Global(name) => Some(LookupData {
-                            name: name.clone(),
-                            aux_idx: lookup.columns[0],
-                            expected_cumulated: SC::Challenge::ZERO,
-                        }),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>(),
-            )
+        .map(|inst| inst.lookups.as_slice())
+        .collect();
+    let mut lookup_data: Vec<Vec<_>> = all_lookups
+        .iter()
+        .map(|lookups| {
+            // Only global lookups produce cumulated values that enter the transcript.
+            lookups
+                .iter()
+                .filter_map(|lookup| match &lookup.kind {
+                    Kind::Global(name) => Some(LookupData {
+                        name: name.clone(),
+                        aux_idx: lookup.columns[0],
+                        expected_cumulated: SC::Challenge::ZERO,
+                    }),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
         })
-        .unzip();
+        .collect();
 
     // Base and extended domains for every instance.
     let (trace_domains, ext_trace_domains): (Vec<Domain<SC>>, Vec<Domain<SC>>) = degrees
@@ -156,9 +157,12 @@ where
         })
         .unzip();
 
-    // Borrow AIRs and clone public values for later use.
+    // Extract AIRs and borrow public values; consume traces later without cloning.
     let airs: Vec<&A> = instances.iter().map(|i| i.air).collect();
-    let pub_vals: Vec<Vec<Val<SC>>> = instances.iter().map(|i| i.public_values.clone()).collect();
+    let pub_vals: Vec<&[Val<SC>]> = instances
+        .iter()
+        .map(|i| i.public_values.as_slice())
+        .collect();
 
     // Determine preprocessed widths and quotient chunk counts per instance.
     let mut preprocessed_widths = Vec::with_capacity(airs.len());
@@ -188,7 +192,7 @@ where
                     get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
                         air,
                         layout,
-                        &all_lookups[i],
+                        all_lookups[i],
                         config.is_zk(),
                         &lookup_gadget,
                     )
@@ -244,7 +248,7 @@ where
                     inst.trace,
                     &inst.air.preprocessed_trace(),
                     &inst.public_values,
-                    &all_lookups[i],
+                    all_lookups[i],
                     &mut lookup_data[i],
                     &challenges_per_instance[i],
                 );
@@ -259,7 +263,7 @@ where
                         .iter()
                         .map(|ld| ld.expected_cumulated)
                         .collect();
-                    let lookup_constraints_inputs = (all_lookups[i].as_slice(), &lookup_gadget);
+                    let lookup_constraints_inputs = (all_lookups[i], &lookup_gadget);
                     check_constraints(
                         inst.air,
                         inst.trace,
@@ -342,13 +346,13 @@ where
         // Debug-only: verify the static constraint-count hint matches symbolic analysis.
         debug_assert!(
             airs[i].num_constraints().is_none_or(|n| {
-                n == get_symbolic_constraints(airs[i], sym_layout, &all_lookups[i], &lookup_gadget)
+                n == get_symbolic_constraints(airs[i], sym_layout, all_lookups[i], &lookup_gadget)
                     .0
                     .len()
             }),
             "num_constraints() = {} but symbolic evaluation found {} base constraints",
             airs[i].num_constraints().unwrap(),
-            get_symbolic_constraints(airs[i], sym_layout, &all_lookups[i], &lookup_gadget,)
+            get_symbolic_constraints(airs[i], sym_layout, all_lookups[i], &lookup_gadget,)
                 .0
                 .len(),
         );
@@ -392,13 +396,13 @@ where
             .collect();
         let q_values = quotient_values(
             airs[i],
-            &pub_vals[i],
+            pub_vals[i],
             sym_layout,
             *trace_domain,
             quotient_domain,
             &trace_on_quotient_domain,
             permutation_on_quotient_domain.as_ref(),
-            &all_lookups[i],
+            all_lookups[i],
             &perm_vals,
             &lookup_gadget,
             &challenges_per_instance[i],
