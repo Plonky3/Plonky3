@@ -116,6 +116,7 @@ where
 /// This can act on `[A; WIDTH]` for any ring implementing `Algebra<MontyField31<FP>>`.
 /// This will usually be slower than the Poseidon2 permutation built from `Poseidon2InternalLayerMonty31` and
 /// `Poseidon2ExternalLayerMonty31` but it does work in more cases.
+#[derive(Debug, Clone, Copy)]
 pub struct GenericPoseidon2LinearLayersMonty31<FP, ILBP> {
     _phantom1: PhantomData<FP>,
     _phantom2: PhantomData<ILBP>,
