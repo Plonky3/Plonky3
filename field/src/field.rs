@@ -661,7 +661,18 @@ pub trait Algebra<F>:
 
     /// Optimal chunk size for [`batched_linear_combination`](Self::batched_linear_combination).
     ///
-    /// Override in implementations where a different chunk size is faster.
+    /// `mixed_dot_product<N>` requires roughly `2N + C` registers (N values,
+    /// N coefficients, plus C temporaries for the field's multiply-reduce).
+    /// The sweet spot depends on ISA register count and field element width:
+    ///
+    /// - **31-bit fields on AVX2** (16 ymm, C ≈ 3): N = 4–8
+    /// - **64-bit fields on AVX2** (16 ymm, C ≈ 5): N = 2
+    /// - **AVX-512** (32 zmm): same N works, extra registers add no ILP benefit
+    /// - **NEON** (32 × 128-bit): N = 16 for 31-bit, N = 2 for 64-bit
+    ///
+    /// The value must also be ≤ `FOLDER_BUF_SIZE` (the constraint accumulator's
+    /// stack buffer) so that flushes always exercise the SIMD fast path.
+    ///
     /// Must be one of 1, 2, 4, 8, 16, 32, or 64; other values cause a compile error.
     const BATCHED_LC_CHUNK: usize = 8;
 

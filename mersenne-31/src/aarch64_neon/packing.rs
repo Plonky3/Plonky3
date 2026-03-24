@@ -223,7 +223,9 @@ impl_div_methods!(PackedMersenne31Neon, Mersenne31);
 impl_sum_prod_base_field!(PackedMersenne31Neon, Mersenne31);
 
 impl Algebra<Mersenne31> for PackedMersenne31Neon {
-    // Benchmarked on AArch64 NEON: chunk=16 ≈ 51ns, chunk=8 ≈ 54ns, chunk=4 ≈ 59ns.
+    // 31-bit Mersenne field on NEON (32 × 128-bit registers).  Like Monty31,
+    // the large register file favours bigger chunks.
+    // Benchmarked (batched_lc len=100): chunk=16 ≈ 51ns, chunk=8 ≈ 54ns.
     const BATCHED_LC_CHUNK: usize = 16;
 }
 

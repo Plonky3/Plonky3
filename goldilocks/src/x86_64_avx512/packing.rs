@@ -149,7 +149,11 @@ impl_div_methods!(PackedGoldilocksAVX512, Goldilocks);
 impl_sum_prod_base_field!(PackedGoldilocksAVX512, Goldilocks);
 
 impl Algebra<Goldilocks> for PackedGoldilocksAVX512 {
-    // Benchmarked on AVX-512: chunk=4 ≈ 198ns, chunk=2 ≈ 198ns, chunk=32 ≈ 199ns.
+    // 64-bit Goldilocks on AVX-512 (32 zmm registers).  The extra registers
+    // accommodate the wider multiply temps, so N=4 fits without spilling
+    // (unlike AVX2 where N=4 causes +12% regression).  N=2 ties but N=4
+    // amortizes loop overhead better.
+    // Benchmarked (batched_lc len=100): chunk=4 ≈ 198ns, chunk=2 ≈ 198ns.
     const BATCHED_LC_CHUNK: usize = 4;
 }
 

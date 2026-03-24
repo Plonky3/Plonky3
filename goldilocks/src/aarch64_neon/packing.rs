@@ -141,7 +141,9 @@ impl_div_methods!(PackedGoldilocksNeon, Goldilocks);
 impl_sum_prod_base_field!(PackedGoldilocksNeon, Goldilocks);
 
 impl Algebra<Goldilocks> for PackedGoldilocksNeon {
-    // Benchmarked on AArch64 NEON: chunk=2 ≈ 182ns, chunk=4 ≈ 198ns, chunk=8 ≈ 221ns.
+    // 64-bit Goldilocks on NEON (32 × 128-bit registers).  Despite more
+    // registers than AVX2, the 64-bit multiply temps still favor small chunks.
+    // Benchmarked (batched_lc len=100): chunk=2 ≈ 182ns, chunk=4 ≈ 198ns.
     const BATCHED_LC_CHUNK: usize = 2;
 }
 

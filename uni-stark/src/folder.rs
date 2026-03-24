@@ -7,12 +7,29 @@ use p3_matrix::stack::ViewPair;
 
 use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
 
-/// Buffer size for stack-allocated constraint collection in [`ProverConstraintFolder`].
+/// Buffer size for stack-allocated constraint collection in [`ConstraintBuf`].
 ///
-/// Constraints are flushed via [`Algebra::batched_linear_combination`] whenever the buffer
-/// fills. 64 keeps the buffer small enough for L1 cache (~1 KB per buffer for 4-lane
-/// packed fields) while being large enough that most AIRs never flush mid-evaluation.
-pub const FOLDER_BUF_SIZE: usize = 64;
+/// Each flush calls [`Algebra::batched_linear_combination`] which processes its
+/// input in fixed-size chunks via SIMD `mixed_dot_product`. The chunk size
+/// ([`Algebra::BATCHED_LC_CHUNK`]) varies by packed-field implementation:
+///
+/// - 31-bit packed fields (BabyBear/KoalaBear/Mersenne31): 4–8 elements,
+///   limited by the ~2N+3 register footprint (N values + N coefficients +
+///   multiply-reduce temps) within AVX2's 16 ymm registers.
+/// - 64-bit packed fields (Goldilocks): 2–4 elements, because each multiply
+///   needs wider intermediates (~4 temp registers), so register pressure is
+///   ~2N+5.
+/// - NEON: 16 for 31-bit fields (32 × 128-bit registers give more headroom),
+///   2 for 64-bit Goldilocks.
+///
+/// `FOLDER_BUF_SIZE` must be ≥ the largest `BATCHED_LC_CHUNK` (currently 16 on
+/// NEON) so that every flush exercises the SIMD fast path rather than falling
+/// into the scalar remainder loop in `chunked_linear_combination`.
+///
+/// Stack footprint per folder: `base_buf = 16 × sizeof(PackedVal)` plus
+/// `ext_buf = 16 × sizeof(PackedChallenge)`. For BabyBear AVX2 that is
+/// 16 × 32 B + 16 × 128 B ≈ 2.5 KB, well within L1 even with many threads.
+pub const FOLDER_BUF_SIZE: usize = 16;
 
 /// Packed constraint folder for SIMD-optimized prover evaluation.
 ///

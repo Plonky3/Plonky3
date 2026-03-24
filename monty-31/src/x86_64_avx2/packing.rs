@@ -266,7 +266,10 @@ impl_div_methods!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
 impl_sum_prod_base_field!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
 
 impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
-    // Benchmarked on AVX2 (BabyBear): chunk=4 ≈ 47ns, chunk=8 ≈ 49ns, chunk=32 ≈ 49ns.
+    // 31-bit Montgomery field: each multiply-reduce uses ~2 temp registers, so
+    // mixed_dot_product<N> needs ~2N+3 registers.  N=4 fits AVX2's 16 ymm
+    // comfortably and is the clear micro-benchmark winner.
+    // Benchmarked (batched_lc len=100, BabyBear): chunk=4 ≈ 47ns, chunk=8 ≈ 49ns.
     const BATCHED_LC_CHUNK: usize = 4;
 
     #[inline(always)]

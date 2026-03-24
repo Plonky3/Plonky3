@@ -295,7 +295,10 @@ impl_sum_prod_base_field!(
 );
 
 impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31AVX512<FP> {
-    // Benchmarked on AVX-512 (BabyBear): chunk=4 ≈ 47ns, chunk=8 ≈ 49ns, chunk=2 ≈ 61ns.
+    // 31-bit Montgomery field on AVX-512 (32 zmm registers).  Register pressure
+    // is the same ~2N+3, but more registers are available.  N=4 remains optimal—
+    // larger chunks show no ILP benefit and slightly increase latency.
+    // Benchmarked (batched_lc len=100, BabyBear): chunk=4 ≈ 47ns, chunk=8 ≈ 49ns.
     const BATCHED_LC_CHUNK: usize = 4;
 
     #[inline(always)]

@@ -163,8 +163,11 @@ impl_div_methods!(PackedGoldilocksAVX2, Goldilocks);
 impl_sum_prod_base_field!(PackedGoldilocksAVX2, Goldilocks);
 
 impl Algebra<Goldilocks> for PackedGoldilocksAVX2 {
-    // Benchmarked on AVX2: chunk=32 ≈ 226ns, chunk=2 ≈ 228ns, chunk=16 ≈ 229ns.
-    const BATCHED_LC_CHUNK: usize = 32;
+    // Each Goldilocks multiply (64-bit) requires wide intermediates (~4 temp
+    // registers), giving mixed_dot_product<N> a footprint of ~2N+5 registers.
+    // AVX2 has 16 ymm: N=2 avoids spills, N=4 causes them (+12% in benchmarks).
+    // Benchmarked (batched_lc len=100): chunk=2 ≈ 228ns, chunk=4 ≈ 254ns.
+    const BATCHED_LC_CHUNK: usize = 2;
 }
 
 impl_packed_value!(PackedGoldilocksAVX2, Goldilocks, WIDTH);

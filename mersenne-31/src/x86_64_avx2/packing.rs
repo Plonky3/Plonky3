@@ -212,8 +212,12 @@ impl_div_methods!(PackedMersenne31AVX2, Mersenne31);
 impl_sum_prod_base_field!(PackedMersenne31AVX2, Mersenne31);
 
 impl Algebra<Mersenne31> for PackedMersenne31AVX2 {
-    // Benchmarked on AVX2: chunk=32 ≈ 73ns, chunk=4 ≈ 74ns, chunk=8 ≈ 74ns.
-    const BATCHED_LC_CHUNK: usize = 32;
+    // 31-bit field with simple reduction (conditional subtract, not Montgomery).
+    // mixed_dot_product register pressure is ~2N+3; N=8 fits AVX2's 16 ymm
+    // registers and keeps the chunk ≤ FOLDER_BUF_SIZE (16) so the SIMD fast
+    // path fires in the constraint folder.
+    // Benchmarked (batched_lc len=100): chunk=8 ≈ 74ns ≈ chunk=4 (74ns).
+    const BATCHED_LC_CHUNK: usize = 8;
 }
 
 #[inline]

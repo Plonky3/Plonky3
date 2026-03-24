@@ -214,7 +214,10 @@ impl_div_methods!(PackedMersenne31AVX512, Mersenne31);
 impl_sum_prod_base_field!(PackedMersenne31AVX512, Mersenne31);
 
 impl Algebra<Mersenne31> for PackedMersenne31AVX512 {
-    // Benchmarked on AVX-512: chunk=8 ≈ 77ns, chunk=2 ≈ 77ns, chunk=4 ≈ 78ns.
+    // 31-bit Mersenne field on AVX-512 (32 zmm registers).  Simple reduction
+    // means lower temp register usage (~2N+3).  N=8 is a marginal winner over
+    // N=2 and keeps chunk ≤ FOLDER_BUF_SIZE for the SIMD fast path.
+    // Benchmarked (batched_lc len=100): chunk=8 ≈ 77ns, chunk=2 ≈ 77ns.
     const BATCHED_LC_CHUNK: usize = 8;
 }
 
