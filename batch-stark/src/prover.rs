@@ -57,7 +57,6 @@ impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
         public_values: &[Vec<Val<SC>>],
         common_data: &CommonData<SC>,
     ) -> Vec<Self> {
-        // Zip four parallel slices and build one instance per AIR.
         airs.iter()
             .zip(traces.iter())
             .zip(public_values.iter())
