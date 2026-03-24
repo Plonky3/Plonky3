@@ -6,7 +6,6 @@ use core::fmt::Debug;
 use hashbrown::HashMap;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
 use p3_air::{Air, RowWindow};
-use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
@@ -22,12 +21,11 @@ use p3_uni_stark::{
 use p3_util::zip_eq::zip_eq;
 use tracing::{info_span, instrument};
 
-use crate::common::{CommonData, get_perm_challenges};
-use crate::config::{
-    Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_instance_binding,
-};
+use crate::common::CommonData;
+use crate::config::{Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val};
 use crate::proof::BatchProof;
 use crate::symbolic::get_log_num_quotient_chunks;
+use crate::transcript::BatchTranscript;
 
 #[instrument(skip_all)]
 pub fn verify_batch<SC, A>(
@@ -58,7 +56,7 @@ where
     let all_lookups = &common.lookups;
 
     let pcs = config.pcs();
-    let mut challenger = config.initialise_challenger();
+    let mut transcript = BatchTranscript::<SC>::new(config.initialise_challenger());
 
     // Sanity checks
     if airs.len() != opened_values.instances.len()
@@ -85,10 +83,6 @@ where
     {
         return Err(VerificationError::RandomizationError);
     }
-
-    // Observe the number of instances up front to match the prover's transcript.
-    let n_instances = airs.len();
-    challenger.observe_base_as_algebra_element::<Challenge<SC>>(Val::<SC>::from_usize(n_instances));
 
     // Validate opened values shape per instance and observe per-instance binding data.
     // Precompute per-instance preprocessed widths and number of quotient chunks.
@@ -225,28 +219,14 @@ where
             }
             .into());
         }
-
-        // Observe per-instance binding data: (log_ext_degree, log_degree), width, num quotient chunks.
-        let ext_db = degree_bits[i];
-        let base_db = ext_db - config.is_zk();
-        let width = A::width(air);
-        observe_instance_binding::<SC>(&mut challenger, ext_db, base_db, width, n_chunks);
     }
 
-    // Observe main commitment and public values (in instance order).
-    challenger.observe(commitments.main.clone());
-    for pv in public_values {
-        challenger.observe_slice(pv);
-    }
-
-    // Observe preprocessed widths for each instance. If a global
-    // preprocessed commitment exists, observe it once.
-    for &pre_w in preprocessed_widths.iter() {
-        challenger.observe_base_as_algebra_element::<Challenge<SC>>(Val::<SC>::from_usize(pre_w));
-    }
-    if let Some(global) = &common.preprocessed {
-        challenger.observe(global.commitment.clone());
-    }
+    // Transcript: observe instance bindings, main, preprocessed.
+    let log_degrees: Vec<usize> = degree_bits.iter().map(|&db| db - config.is_zk()).collect();
+    let widths: Vec<usize> = airs.iter().map(|a| a.width()).collect();
+    transcript.observe_instance_bindings(degree_bits, &log_degrees, &widths, &num_quotient_chunks);
+    transcript.observe_main(&commitments.main, public_values);
+    transcript.observe_preprocessed(&preprocessed_widths, common.preprocessed.as_ref());
 
     // Validate the shape of the lookup commitment.
     let is_lookup = commitments.permutation.is_some();
@@ -255,37 +235,19 @@ where
         return Err(InvalidProofShapeError::LookupCommitmentMismatch.into());
     }
 
-    // Fetch lookups and sample their challenges.
-    let challenges_per_instance =
-        get_perm_challenges::<SC, LogUpGadget>(&mut challenger, all_lookups, &lookup_gadget);
+    // Sample permutation challenges and alpha.
+    let challenges_per_instance = transcript.sample_perm_challenges(all_lookups, &lookup_gadget);
+    let alpha: Challenge<SC> = transcript
+        .observe_perm_and_sample_alpha(commitments.permutation.as_ref(), global_lookup_data);
 
-    // Then, observe the permutation tables, if any.
-    if is_lookup {
-        challenger.observe(
-            commitments
-                .permutation
-                .clone()
-                .expect("We checked that the commitment exists"),
-        );
-        for data in global_lookup_data.iter().flatten() {
-            challenger.observe_algebra_element(data.expected_cumulated);
-        }
+    // Observe quotient chunks and optional random commitment.
+    transcript.observe_quotient_commitment(&commitments.quotient_chunks);
+    if let Some(r_commit) = &commitments.random {
+        transcript.observe_random_commitment(r_commit);
     }
 
-    // Sample alpha for constraint folding
-    let alpha = challenger.sample_algebra_element();
-
-    // Observe quotient chunks commitment
-    challenger.observe(commitments.quotient_chunks.clone());
-
-    // We've already checked that commitments.random is present if and only if ZK is enabled.
-    // Observe the random commitment if it is present.
-    if let Some(r_commit) = commitments.random.clone() {
-        challenger.observe(r_commit);
-    }
-
-    // Sample OOD point
-    let zeta = challenger.sample_algebra_element();
+    // Sample OOD point.
+    let zeta = transcript.sample_zeta();
 
     // Build commitments_with_opening_points to verify openings.
     let mut coms_to_verify = vec![];
@@ -482,7 +444,7 @@ where
     }
 
     // Verify all openings via PCS.
-    pcs.verify(coms_to_verify, opening_proof, &mut challenger)
+    pcs.verify(coms_to_verify, opening_proof, &mut transcript.challenger)
         .map_err(VerificationError::InvalidOpeningArgument)?;
 
     // Now check constraint equality per instance.

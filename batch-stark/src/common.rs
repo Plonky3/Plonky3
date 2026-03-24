@@ -10,14 +10,12 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use hashbrown::HashMap;
 use p3_air::Air;
 use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpressionExt};
-use p3_challenger::FieldChallenger;
 use p3_commit::Pcs;
 use p3_field::{Algebra, BasedVectorSpace};
 use p3_lookup::LookupAir;
-use p3_lookup::lookup_traits::{Kind, Lookup, LookupGadget};
+use p3_lookup::lookup_traits::Lookup;
 use p3_matrix::Matrix;
 use p3_uni_stark::Val;
 use p3_util::log2_strict_usize;
@@ -272,42 +270,3 @@ where
     }
 }
 
-pub fn get_perm_challenges<SC: SGC, LG: LookupGadget>(
-    challenger: &mut SC::Challenger,
-    all_lookups: &[Vec<Lookup<Val<SC>>>],
-    lookup_gadget: &LG,
-) -> Vec<Vec<SC::Challenge>> {
-    let num_challenges_per_lookup = lookup_gadget.num_challenges();
-    let mut global_perm_challenges = HashMap::new();
-
-    all_lookups
-        .iter()
-        .map(|contexts| {
-            // Pre-allocate for the instance's challenges.
-            let num_challenges = contexts.len() * num_challenges_per_lookup;
-            let mut instance_challenges = Vec::with_capacity(num_challenges);
-
-            for context in contexts {
-                match &context.kind {
-                    Kind::Global(name) => {
-                        // Get or create the global challenges.
-                        let challenges: &mut Vec<SC::Challenge> =
-                            global_perm_challenges.entry(name).or_insert_with(|| {
-                                (0..num_challenges_per_lookup)
-                                    .map(|_| challenger.sample_algebra_element())
-                                    .collect()
-                            });
-                        instance_challenges.extend_from_slice(challenges);
-                    }
-                    Kind::Local => {
-                        instance_challenges.extend(
-                            (0..num_challenges_per_lookup)
-                                .map(|_| challenger.sample_algebra_element::<SC::Challenge>()),
-                        );
-                    }
-                }
-            }
-            instance_challenges
-        })
-        .collect()
-}
