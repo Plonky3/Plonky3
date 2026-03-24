@@ -21,7 +21,9 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::DisjointMutPtr;
 use p3_maybe_rayon::prelude::*;
-use p3_uni_stark::{OpenedValues, PackedChallenge, PackedVal, ProverConstraintFolder};
+use p3_uni_stark::{
+    ConstraintBuf, OpenedValues, PackedChallenge, PackedVal, ProverConstraintFolder,
+};
 use p3_util::log2_strict_usize;
 use tracing::{debug_span, info_span, instrument};
 
@@ -775,7 +777,8 @@ where
 
     // Decompose alpha into per-constraint powers, split by base vs extension constraints.
     let constraint_layout = get_constraint_layout(air, layout, lookups, lookup_gadget);
-    let (base_alpha_powers, ext_alpha_powers) = constraint_layout.decompose_alpha(alpha);
+    let (base_alpha_powers, ext_alpha_powers_flat) = constraint_layout.decompose_alpha(alpha);
+    let ext_alpha_powers = [ext_alpha_powers_flat];
 
     // Broadcast scalar challenges to packed representations for SIMD evaluation.
     let packed_perm_challenges: Vec<PackedChallenge<SC>> = permutation_challenges
@@ -787,9 +790,6 @@ where
         .map(|&v| PackedChallenge::<SC>::from(v))
         .collect();
 
-    // Capacities for the reusable per-task buffers.
-    let n_base = constraint_layout.base_indices.len();
-    let n_ext = constraint_layout.ext_indices.len();
     let constraint_count = constraint_layout.total_constraints();
     let perm_cols = if perm_width > 0 {
         perm_width / ext_degree
@@ -811,16 +811,10 @@ where
         .into_par_iter()
         .step_by(pack_width)
         .for_each_init(
-            // Per-task initialization: allocate constraint and permutation buffers once.
-            // These are cleared (without deallocating) and reused on every iteration.
-            || {
-                (
-                    Vec::with_capacity(n_base),
-                    Vec::with_capacity(n_ext),
-                    Vec::with_capacity(2 * perm_cols),
-                )
-            },
-            |(base_buf, ext_buf, perm_buf), i_start| {
+            // Per-task initialization: allocate permutation buffer once.
+            // Cleared (without deallocating) and reused on every iteration.
+            || Vec::with_capacity(2 * perm_cols),
+            |perm_buf, i_start| {
                 // Load SIMD-packed selector values for this chunk.
                 let i_range = i_start..i_start + pack_width;
                 let is_first_row =
@@ -878,9 +872,6 @@ where
                     .as_ref()
                     .map_or_else(|| RowMajorMatrixView::new(&[], 0), |m| m.as_view());
 
-                // Swap in the reusable constraint buffers (already cleared).
-                base_buf.clear();
-                ext_buf.clear();
                 let inner_folder = ProverConstraintFolder {
                     main: main.as_view(),
                     preprocessed: preprocessed_view,
@@ -889,10 +880,8 @@ where
                     is_first_row,
                     is_last_row,
                     is_transition,
-                    base_alpha_powers: &base_alpha_powers,
-                    ext_alpha_powers: &ext_alpha_powers,
-                    base_constraints: core::mem::take(base_buf),
-                    ext_constraints: core::mem::take(ext_buf),
+                    base: ConstraintBuf::new(&base_alpha_powers),
+                    ext: ConstraintBuf::new(&ext_alpha_powers),
                     constraint_index: 0,
                     constraint_count,
                 };
@@ -909,9 +898,7 @@ where
                 // Combine all constraints with alpha powers and divide by the vanishing polynomial.
                 let quotient = folder.inner.finalize_constraints() * inv_vanishing;
 
-                // Reclaim buffers for reuse in the next iteration.
-                *base_buf = folder.inner.base_constraints;
-                *ext_buf = folder.inner.ext_constraints;
+                // Reclaim permutation buffer for reuse in the next iteration.
                 *perm_buf = folder.permutation.to_row_major_matrix().values;
 
                 // Unpack the SIMD quotient into individual extension-field values
