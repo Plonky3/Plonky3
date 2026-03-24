@@ -26,11 +26,11 @@ use tracing::{debug_span, info_span, instrument};
 
 use crate::common::{CommonData, ProverData};
 use crate::config::{Challenge, Domain, StarkGenericConfig as SGC, Val};
-use crate::transcript::BatchTranscript;
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
 use crate::symbolic::{
     get_constraint_layout, get_log_num_quotient_chunks, get_symbolic_constraints,
 };
+use crate::transcript::BatchTranscript;
 
 /// A single AIR instance bundled with its execution trace, public inputs,
 /// and lookup declarations.
@@ -226,8 +226,7 @@ where
     // Transcript: Lookup challenges and permutation traces
 
     // Draw per-instance challenges for the lookup argument.
-    let challenges_per_instance =
-        transcript.sample_perm_challenges(&all_lookups, &lookup_gadget);
+    let challenges_per_instance = transcript.sample_perm_challenges(&all_lookups, &lookup_gadget);
 
     // Generate permutation traces for instances that have lookups.
     let mut permutation_commit_inputs = Vec::with_capacity(n_instances);
@@ -534,7 +533,11 @@ where
             rounds.push(lookup_round);
         }
 
-        pcs.open_with_preprocessing(rounds, &mut transcript.challenger, common.preprocessed.is_some())
+        pcs.open_with_preprocessing(
+            rounds,
+            &mut transcript.challenger,
+            common.preprocessed.is_some(),
+        )
     };
 
     // Parse opened values into per-instance structures
