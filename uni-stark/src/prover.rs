@@ -438,6 +438,25 @@ where
     let periodic_table =
         pcs.build_periodic_lde_table(&periodic_cols, trace_domain, quotient_domain);
 
+    let pack_width = PackedVal::<SC>::WIDTH;
+    let periodic_packed: Vec<Vec<PackedVal<SC>>> = if periodic_table.is_empty() {
+        Vec::new()
+    } else {
+        let ncols = periodic_table.width();
+        (0..quotient_size)
+            .step_by(pack_width)
+            .map(|i_start| {
+                (0..ncols)
+                    .map(|col_idx| {
+                        PackedVal::<SC>::from_fn(|offset| {
+                            *periodic_table.get(i_start + offset, col_idx)
+                        })
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+
     (0..quotient_size)
         .into_par_iter()
         .step_by(PackedVal::<SC>::WIDTH)
@@ -465,23 +484,16 @@ where
             let preprocessed_view = preprocessed
                 .as_ref()
                 .map_or_else(|| RowMajorMatrixView::new(&[], 0), |m| m.as_view());
-            let periodic_vals: Vec<PackedVal<SC>> = if periodic_table.is_empty() {
-                vec![]
+            let periodic_values: &[PackedVal<SC>] = if periodic_packed.is_empty() {
+                &[]
             } else {
-                (0..periodic_table.width())
-                    .map(|col_idx| {
-                        let slice: Vec<Val<SC>> = (0..PackedVal::<SC>::WIDTH)
-                            .map(|offset| *periodic_table.get(i_start + offset, col_idx))
-                            .collect();
-                        *PackedVal::<SC>::from_slice(&slice)
-                    })
-                    .collect()
+                &periodic_packed[i_start / pack_width]
             };
             let mut folder = ProverConstraintFolder {
                 main: main.as_view(),
                 preprocessed: preprocessed_view,
                 preprocessed_window: RowWindow::from_view(&preprocessed_view),
-                periodic_values: &periodic_vals,
+                periodic_values,
                 public_values,
                 is_first_row,
                 is_last_row,
