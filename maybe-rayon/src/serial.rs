@@ -152,9 +152,15 @@ pub trait ParIterExt: Iterator {
         Self: Sized,
         U: IntoIterator,
         F: Fn(Self::Item) -> U;
+
+    fn for_each_init<OP, INIT, T>(self, init: INIT, op: OP)
+    where
+        Self: Sized,
+        OP: Fn(&mut T, Self::Item) + Sync + Send,
+        INIT: Fn() -> T + Sync + Send;
 }
 
-impl<T: Iterator> ParIterExt for T {
+impl<I: Iterator> ParIterExt for I {
     fn find_any<P>(mut self, predicate: P) -> Option<Self::Item>
     where
         P: Fn(&Self::Item) -> bool + Sync + Send,
@@ -176,6 +182,16 @@ impl<T: Iterator> ParIterExt for T {
         F: Fn(Self::Item) -> U,
     {
         self.flat_map(map_op)
+    }
+
+    fn for_each_init<OP, INIT, T>(self, init: INIT, op: OP)
+    where
+        Self: Sized,
+        OP: Fn(&mut T, Self::Item) + Sync + Send,
+        INIT: Fn() -> T + Sync + Send,
+    {
+        let mut state = init();
+        self.for_each(|item| op(&mut state, item));
     }
 }
 
