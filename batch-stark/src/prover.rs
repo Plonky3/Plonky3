@@ -268,7 +268,6 @@ where
                 permutation_commit_inputs
                     .push((ext_domain, generated_perm.clone().flatten_to_base()));
 
-                // Debug-only: verify constraints hold on the concrete trace.
                 #[cfg(debug_assertions)]
                 {
                     use crate::check_constraints::check_constraints;
