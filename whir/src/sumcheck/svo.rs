@@ -305,12 +305,12 @@ impl<F: Field, EF: ExtensionField<F>> SvoClaim<F, EF> {
     }
 
     /// Returns the original challenge point for the equality polynomial.
-    pub fn point(&self) -> &Point<EF> {
+    pub const fn point(&self) -> &Point<EF> {
         &self.original
     }
 
     /// Returns the claimed evaluation of the polynomial
-    pub fn eval(&self) -> EF {
+    pub const fn eval(&self) -> EF {
         self.eval
     }
 
@@ -403,7 +403,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoClaim<F, EF> {
 
         // Accumulate each split eq into the output, weighted by powers of alpha.
         for (svo_claim, alpha) in selfs.iter().zip(alpha.powers()) {
-            svo_claim.point.accumulate_into_packed(out, &rs, alpha);
+            svo_claim.point.accumulate_into_packed(out, rs, alpha);
         }
     }
 }
