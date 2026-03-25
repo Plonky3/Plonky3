@@ -1,40 +1,86 @@
+//! Equality polynomial table with optional SIMD packing.
+//!
+//! Stores evaluations of eq(z, .) over the boolean hypercube, either as:
+//! - scalar extension-field elements or
+//! - SIMD-packed extension-field elements.
+//!
+//! # Mathematical Background
+//!
+//! The equality polynomial for a point z in F^k is:
+//!
+//! ```text
+//! eq(z, x) = prod_{i=0}^{k-1} (z_i * x_i + (1 - z_i) * (1 - x_i))
+//! ```
+//!
+//! Evaluating eq(z, .) over all x in {0,1}^k produces a table of 2^k values.
+
 use itertools::Itertools;
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
 use p3_util::log2_strict_usize;
 
 use crate::evals::Poly;
+use crate::multilinear::Point;
 
-/// Eq polynomial table, either as scalar extension elements or packed representation.
+/// Equality polynomial table in either scalar or SIMD-packed form.
+///
+/// # Variants
+///
+/// - Scalar: stores 2^k extension-field elements directly.
+/// - Packed: stores 2^{k - log_2(W)} packed elements, each holding W lanes.
+///   Only used when k >= log_2(W), where W is the SIMD width.
+///
+/// All kernel methods dispatch internally on the variant, so callers do not need to match.
 #[derive(Debug, Clone)]
 pub enum EqMaybePacked<F: Field, EF: ExtensionField<F>> {
+    /// Scalar extension-field evaluations, one per hypercube point.
     Unpacked(Poly<EF>),
+    /// SIMD-packed evaluations, each element holds W consecutive lanes.
     Packed(Poly<<EF as ExtensionField<F>>::ExtensionPacking>),
 }
 
 impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
-    /// Constructs an unpacked eq table.
-    pub(super) fn new_unpacked(point: &crate::multilinear::Point<EF>) -> Self {
+    /// Builds a scalar (unpacked) equality table from a multilinear point.
+    ///
+    /// Always produces the scalar variant regardless of the number of variables.
+    pub(super) fn new_unpacked(point: &Point<EF>) -> Self {
+        // Materialize eq(point, .) with unit scale into a scalar polynomial.
         Self::Unpacked(Poly::new_from_point(point.as_slice(), EF::ONE))
     }
 
-    /// Constructs a packed eq table when possible, otherwise falls back to unpacked.
-    pub(super) fn new_packed(point: &crate::multilinear::Point<EF>) -> Self {
+    /// Builds a SIMD-packed equality table when the point has enough variables.
+    ///
+    /// Falls back to scalar if the number of variables is less than log_2(W),
+    /// since there would be fewer evaluations than SIMD lanes.
+    pub(super) fn new_packed(point: &Point<EF>) -> Self {
+        // Check whether there are enough variables to fill at least one packed element.
         if point.num_vars() >= log2_strict_usize(F::Packing::WIDTH) {
             Self::Packed(Poly::new_packed_from_point(point.as_slice(), EF::ONE))
         } else {
+            // Not enough evaluations to pack; fall back to scalar.
             Self::Unpacked(Poly::new_from_point(point.as_slice(), EF::ONE))
         }
     }
 
-    /// Returns the number of variables.
+    /// Total number of boolean variables represented by this table.
+    ///
+    /// For packed tables, this accounts for the log_2(W) variables
+    /// absorbed into each SIMD lane.
     pub const fn num_vars(&self) -> usize {
         match self {
             Self::Unpacked(poly) => poly.num_vars(),
+            // Packed polynomial has k - log_2(W) stored entries,
+            // but represents k total variables.
             Self::Packed(poly) => poly.num_vars() + log2_strict_usize(F::Packing::WIDTH),
         }
     }
 
-    /// Number of scalar F elements per eq1 block (accounts for packing width).
+    /// Number of scalar base-field elements per eq1 block.
+    ///
+    /// - For unpacked: 2^k scalar elements.
+    /// - For packed: num_packed_entries * W scalar elements.
+    ///
+    /// This is used to determine chunk sizes when iterating over
+    /// a polynomial paired with this eq table.
     pub const fn scalar_chunk_size(&self) -> usize {
         match self {
             Self::Unpacked(eq1) => eq1.num_evals(),
@@ -42,42 +88,65 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         }
     }
 
-    // --- dot-product kernels (for eval) ---
-
-    /// Inner product with a base-field chunk: `sum_i eq1[i] * chunk[i]`.
+    /// Inner product of this eq table with a base-field slice.
+    ///
+    /// Computes sum_{i} eq1[i] * chunk[i].
+    ///
+    /// For packed tables, reinterprets the input slice as packed elements
+    /// and reduces the SIMD lanes via horizontal sum at the end.
     pub(super) fn dot_with_base(&self, chunk: &[F]) -> EF {
         match self {
+            // Scalar path: direct element-wise dot product.
             Self::Unpacked(eq1) => dot_product(eq1.iter().copied(), chunk.iter().copied()),
             Self::Packed(eq1) => {
+                // Reinterpret the flat scalar slice as packed SIMD elements.
+                // Compute packed dot product, then reduce lanes to a single scalar.
                 let sum = dot_product(
                     eq1.iter().copied(),
                     F::Packing::pack_slice(chunk).iter().copied(),
                 );
+                // Horizontal reduction: sum the W lanes of each packed result element.
                 EF::ExtensionPacking::to_ext_iter([sum]).sum()
             }
         }
     }
 
-    /// Inner product with an extension-field chunk: `sum_i eq1[i] * chunk[i]`.
+    /// Inner product of this eq table with an extension-field slice.
+    ///
+    /// Computes sum_{i} eq1[i] * chunk[i].
+    ///
+    /// For packed tables, groups the input into W-element sub-slices,
+    /// converts each group to a packed element, then reduces at the end.
     pub(super) fn dot_with_ext(&self, chunk: &[EF]) -> EF {
         match self {
+            // Scalar path: direct element-wise dot product.
             Self::Unpacked(eq1) => dot_product(eq1.iter().copied(), chunk.iter().copied()),
             Self::Packed(eq1) => {
+                // Group W consecutive extension-field elements into packed form,
+                // then dot product with the packed eq table.
                 let sum: EF::ExtensionPacking = dot_product(
                     chunk
                         .chunks(F::Packing::WIDTH)
                         .map(EF::ExtensionPacking::from_ext_slice),
                     eq1.iter().copied(),
                 );
+                // Horizontal reduction across SIMD lanes.
                 EF::ExtensionPacking::to_ext_iter([sum]).sum()
             }
         }
     }
 
-    /// Inner product with a packed extension-field chunk: `sum_i eq1[i] * chunk[i]`.
+    /// Inner product of this eq table with a pre-packed extension-field slice.
+    ///
+    /// Computes sum_{i} eq1[i] * chunk[i] where both sides are already packed.
+    ///
+    /// # Panics
+    ///
+    /// Panics (via unreachable) if the table is in unpacked form.
     pub(super) fn dot_with_ext_packed(&self, chunk: &[EF::ExtensionPacking]) -> EF {
         match self {
             Self::Packed(eq1) => {
+                // Both sides are packed; direct dot product then reduce.
                 let sum = dot_product(chunk.iter().copied(), eq1.iter().copied());
                 EF::ExtensionPacking::to_ext_iter([sum]).sum()
             }
@@ -85,17 +154,25 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         }
     }
 
-    // --- accumulate kernels ---
-
-    /// `out[i] += weight * eq1[i]`, handling packed unpacking internally.
+    /// Adds weight * eq1[i] to each element of a scalar output buffer.
+    ///
+    /// ```text
+    /// out[i] += weight * eq1[i]   for all i
+    /// ```
+    ///
+    /// For packed tables, unpacks each SIMD element into W scalar lanes
+    /// before accumulating into the output.
     pub(super) fn accumulate_scalar_into(&self, out: &mut [EF], weight: EF) {
         match self {
             Self::Unpacked(eq1) => {
+                // Scalar path: direct weighted accumulation.
                 out.iter_mut()
                     .zip(eq1.iter())
                     .for_each(|(out, &w1)| *out += weight * w1);
             }
             Self::Packed(eq1) => {
+                // Unpack each SIMD element into W scalar lanes,
+                // then accumulate weight * lane_value into the output.
                 out.chunks_mut(F::Packing::WIDTH)
                     .zip(eq1.iter())
                     .for_each(|(out, &w1)| {
@@ -107,10 +184,19 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         }
     }
 
-    /// Like [`accumulate_scalar_into`](Self::accumulate_scalar_into), but into packed output.
+    /// Adds weight * eq1[i] to each element of a packed output buffer.
+    ///
+    /// ```text
+    /// out[i] += weight * eq1[i]   for all i (packed elements)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics (via unreachable) if the table is in unpacked form.
     pub fn accumulate_packed_into(&self, out: &mut [EF::ExtensionPacking], weight: EF) {
         match self {
             Self::Packed(eq1) => {
+                // Both output and eq table are packed; direct accumulation.
                 out.iter_mut()
                     .zip(eq1.iter())
                     .for_each(|(out, &w1)| *out += w1 * weight);
@@ -119,33 +205,50 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         }
     }
 
-    // --- compress kernels ---
-
-    /// Weighted accumulation for compress_lo: for each eq1 entry, accumulate
-    /// `w0 * eq1[i] * chunk_row[j]` into `out[j]`.
+    /// Weighted accumulation for low-variable compression.
+    ///
+    /// For each eq1 entry, accumulates w0 * eq1[i] * chunk_row[j] into out[j].
+    ///
+    /// The input chunk contains data for all eq1 entries interleaved
+    /// with the inner (output) dimension. The output buffer has one entry
+    /// per inner coordinate.
+    ///
+    /// # Arguments
+    ///
+    /// - out: accumulator buffer of size 2^{k_inner}
+    /// - chunk: slice of base-field evaluations for one eq0 entry
+    /// - w0: the eq0 weight to multiply by
     pub(super) fn compress_lo_into(&self, out: &mut [EF], chunk: &[F], w0: EF) {
         let size_inner = out.len();
         match self {
             Self::Unpacked(eq1) => {
+                // Iterate over eq1 entries; each owns size_inner base-field elements.
                 chunk
                     .chunks(size_inner)
                     .zip_eq(eq1.iter())
                     .for_each(|(chunk, &w1)| {
+                        // Combined weight for this eq0 * eq1 entry.
                         let w = w0 * w1;
+                        // Accumulate weighted base-field values into the output.
                         out.iter_mut()
                             .zip_eq(chunk.iter())
                             .for_each(|(acc, &f)| *acc += w * f);
                     });
             }
             Self::Packed(eq1) => {
+                // Each packed eq1 entry covers W scalar eq1 entries.
+                // Outer chunk per packed entry: size_inner * W scalars.
                 chunk
                     .chunks(size_inner * F::Packing::WIDTH)
                     .zip_eq(eq1.iter())
                     .for_each(|(chunk, &w1)| {
+                        // Unpack the packed weight into W scalar lane weights.
+                        // Inner chunk per lane: size_inner scalars.
                         chunk
                             .chunks(size_inner)
                             .zip_eq(EF::ExtensionPacking::to_ext_iter([w1 * w0]))
                             .for_each(|(chunk, w)| {
+                                // Accumulate weighted base-field values for this lane.
                                 out.iter_mut()
                                     .zip_eq(chunk.iter())
                                     .for_each(|(acc, &f)| *acc += w * f);
@@ -155,7 +258,16 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         }
     }
 
-    /// Like [`compress_lo_into`](Self::compress_lo_into), but into packed output.
+    /// Weighted accumulation for low-variable compression into packed output.
+    ///
+    /// Same operation as the scalar compression kernel,
+    /// but writes into a packed extension-field buffer.
+    ///
+    /// # Arguments
+    ///
+    /// - out: packed accumulator buffer of size 2^{k_inner} / W
+    /// - chunk: slice of base-field evaluations for one eq0 entry
+    /// - w0: the eq0 weight to multiply by
     pub(super) fn compress_lo_to_packed_into(
         &self,
         out: &mut [EF::ExtensionPacking],
@@ -165,30 +277,39 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         match self {
             Self::Unpacked(eq1) => {
                 let packed_inner = out.len();
+                // Pack the entire scalar chunk into SIMD elements.
                 let chunk = F::Packing::pack_slice(chunk);
+                // Iterate over eq1 entries; each owns packed_inner packed elements.
                 chunk
                     .chunks(packed_inner)
                     .zip_eq(eq1.iter())
                     .for_each(|(chunk, &w1)| {
+                        // Broadcast the combined weight into packed form.
                         let w = EF::ExtensionPacking::from(w0 * w1);
+                        // Accumulate packed weighted values.
                         out.iter_mut()
                             .zip_eq(chunk.iter())
                             .for_each(|(acc, &f)| *acc += w * f);
                     });
             }
             Self::Packed(eq1) => {
-                // size_inner is in scalar F terms (= out.len() * WIDTH)
+                // Inner size in scalar terms: out.len() packed elements * W scalars each.
                 let scalar_inner = out.len() * F::Packing::WIDTH;
+                // Outer chunk per packed eq1 entry: scalar_inner * W scalars
+                // (W lanes, each with scalar_inner scalars).
                 chunk
                     .chunks(scalar_inner * F::Packing::WIDTH)
                     .zip_eq(eq1.iter())
                     .for_each(|(chunk, &w1)| {
+                        // Unpack into W lane weights; each lane gets scalar_inner scalars.
                         chunk
                             .chunks(scalar_inner)
                             .zip_eq(EF::ExtensionPacking::to_ext_iter([w1 * w0]))
                             .for_each(|(chunk, w)| {
+                                // Broadcast lane weight and pack the scalar sub-chunk.
                                 let w = EF::ExtensionPacking::from(w);
                                 let chunk = F::Packing::pack_slice(chunk);
+                                // Accumulate packed weighted values.
                                 out.iter_mut()
                                     .zip_eq(chunk.iter())
                                     .for_each(|(acc, &f)| *acc += w * f);
@@ -198,19 +319,37 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         }
     }
 
-    /// Per-row inner product for compress_hi: computes the dot product of one
-    /// row of `poly` with eq1, weighted by eq0.
+    /// Inner product of one polynomial row with the eq table, weighted by eq0.
+    ///
+    /// Computes:
+    /// ```text
+    /// sum_{j} eq0[j] * (sum_{i} eq1[i] * chunk[j * |eq1| + i])
+    /// ```
+    ///
+    /// This is the kernel for high-variable compression:
+    /// each output element is a full dot product of one row against the split eq tables.
+    ///
+    /// # Arguments
+    ///
+    /// - chunk: base-field slice of size 2^{num_vars}, representing one output row
+    /// - eq0: the low-half eq table weights
     pub(super) fn compress_hi_dot(&self, chunk: &[F], eq0: &Poly<EF>) -> EF {
         match self {
-            Self::Unpacked(eq1) => chunk
-                .chunks(eq1.num_evals())
-                .zip_eq(eq0.iter())
-                .map(|(chunk, &w0)| {
-                    dot_product::<EF, _, _>(eq1.iter().copied(), chunk.iter().copied()) * w0
-                })
-                .sum::<EF>(),
+            Self::Unpacked(eq1) => {
+                // Group the chunk by eq1 size, pair with eq0 weights.
+                // Inner dot product over eq1, then weight by eq0 and sum.
+                chunk
+                    .chunks(eq1.num_evals())
+                    .zip_eq(eq0.iter())
+                    .map(|(chunk, &w0)| {
+                        dot_product::<EF, _, _>(eq1.iter().copied(), chunk.iter().copied()) * w0
+                    })
+                    .sum::<EF>()
+            }
             Self::Packed(eq1) => {
+                // Pack the entire row into SIMD elements.
                 let chunk = F::Packing::pack_slice(chunk);
+                // Packed dot product per eq0 entry, then reduce lanes at the end.
                 let sum = chunk
                     .chunks(eq1.num_evals())
                     .zip_eq(eq0.iter())
@@ -220,7 +359,8 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
                             chunk.iter().copied(),
                         ) * w0
                     })
-                    .sum::<EF::ExtensionPacking>();
+                    .sum();
+                // Horizontal reduction across SIMD lanes.
                 EF::ExtensionPacking::to_ext_iter([sum]).sum()
             }
         }
@@ -243,33 +383,33 @@ mod tests {
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
-    use super::EqMaybePacked;
+    use super::*;
     use crate::evals::Poly;
-    use crate::multilinear::Point;
 
     type F = BabyBear;
     type PackedF = <F as Field>::Packing;
     type EF = BinomialExtensionField<F, 4>;
     type EP = <EF as ExtensionField<F>>::ExtensionPacking;
 
+    /// Minimum number of variables required for SIMD packing.
     const K_PACK: usize = log2_strict_usize(PackedF::WIDTH);
 
-    /// Naive multilinear evaluation: `sum_x eq(point, x) * evals[x]`.
+    /// Naive multilinear evaluation by materializing the full eq table.
     fn eval_reference<F: Field, EF: ExtensionField<F>>(evals: &[F], point: &[EF]) -> EF {
         let eq = Poly::new_from_point(point, EF::ONE);
         dot_product(eq.iter().copied(), evals.iter().copied())
     }
 
-    // -----------------------------------------------------------------------
-    // Construction: new_packed falls back to Unpacked for small num_vars
-    // -----------------------------------------------------------------------
+    // Construction
 
     #[test]
     fn test_new_packed_fallback_to_unpacked() {
         let mut rng = SmallRng::seed_from_u64(0);
+        // For variable counts below the packing threshold, packed must fall back.
         for k in 0..K_PACK {
             let point = Point::<EF>::rand(&mut rng, k);
             let eq = EqMaybePacked::<F, EF>::new_packed(&point);
+            // Should be scalar despite requesting packed.
             assert!(matches!(eq, EqMaybePacked::Unpacked(_)));
             assert_eq!(eq.num_vars(), k);
         }
@@ -278,9 +418,11 @@ mod tests {
     #[test]
     fn test_new_packed_uses_packed_when_enough_vars() {
         let mut rng = SmallRng::seed_from_u64(0);
+        // At or above the threshold, packed construction should succeed.
         for k in K_PACK..=8 {
             let point = Point::<EF>::rand(&mut rng, k);
             let eq = EqMaybePacked::<F, EF>::new_packed(&point);
+            // Should be in packed form.
             assert!(matches!(eq, EqMaybePacked::Packed(_)));
             assert_eq!(eq.num_vars(), k);
         }
@@ -289,6 +431,7 @@ mod tests {
     #[test]
     fn test_new_unpacked_always_unpacked() {
         let mut rng = SmallRng::seed_from_u64(0);
+        // Explicit unpacked construction never produces the packed variant.
         for k in 0..=8 {
             let point = Point::<EF>::rand(&mut rng, k);
             let eq = EqMaybePacked::<F, EF>::new_unpacked(&point);
@@ -297,16 +440,16 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // scalar_chunk_size consistency
-    // -----------------------------------------------------------------------
+    // Chunk size consistency
 
     #[test]
     fn test_scalar_chunk_size() {
         let mut rng = SmallRng::seed_from_u64(0);
+        // Both variants must report the same scalar chunk size for a given k.
         for k in 0..=8 {
             let point = Point::<EF>::rand(&mut rng, k);
             let unpacked = EqMaybePacked::<F, EF>::new_unpacked(&point);
+            // Scalar chunk size is always 2^k regardless of packing.
             assert_eq!(unpacked.scalar_chunk_size(), 1 << k);
 
             let packed = EqMaybePacked::<F, EF>::new_packed(&point);
@@ -314,9 +457,7 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // dot_with_base: packed == unpacked for all k
-    // -----------------------------------------------------------------------
+    // Dot product with base-field input
 
     proptest! {
         #[test]
@@ -325,6 +466,7 @@ mod tests {
             let point = Point::<EF>::rand(&mut rng, k);
             let chunk: Vec<F> = (0..1 << k).map(|_| rng.random()).collect();
 
+            // Both representations must produce the same dot product.
             let unpacked = EqMaybePacked::<F, EF>::new_unpacked(&point);
             let packed = EqMaybePacked::<F, EF>::new_packed(&point);
 
@@ -337,15 +479,14 @@ mod tests {
             let point = Point::<EF>::rand(&mut rng, k);
             let chunk: Vec<F> = (0..1 << k).map(|_| rng.random()).collect();
 
+            // Must equal the naive full-table evaluation.
             let expected = eval_reference(&chunk, point.as_slice());
             let unpacked = EqMaybePacked::<F, EF>::new_unpacked(&point);
             prop_assert_eq!(expected, unpacked.dot_with_base(&chunk));
         }
     }
 
-    // -----------------------------------------------------------------------
-    // dot_with_ext: packed == unpacked for all k
-    // -----------------------------------------------------------------------
+    // Dot product with extension-field input
 
     proptest! {
         #[test]
@@ -372,9 +513,7 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // dot_with_ext_packed: matches scalar dot_with_ext
-    // -----------------------------------------------------------------------
+    // Dot product with pre-packed extension-field input
 
     proptest! {
         #[test]
@@ -383,12 +522,13 @@ mod tests {
             let point = Point::<EF>::rand(&mut rng, k);
             let chunk_scalar: Vec<EF> = (0..1 << k).map(|_| rng.random()).collect();
 
-            // Pack the chunk
+            // Pack the scalar chunk into SIMD elements.
             let chunk_packed: Vec<_> = chunk_scalar
                 .chunks(PackedF::WIDTH)
                 .map(EP::from_ext_slice)
                 .collect();
 
+            // Packed dot product must match the scalar version.
             let packed = EqMaybePacked::<F, EF>::new_packed(&point);
             let unpacked = EqMaybePacked::<F, EF>::new_unpacked(&point);
 
@@ -399,9 +539,7 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // accumulate_scalar_into: packed == unpacked
-    // -----------------------------------------------------------------------
+    // Scalar accumulation
 
     proptest! {
         #[test]
@@ -413,6 +551,7 @@ mod tests {
             let unpacked = EqMaybePacked::<F, EF>::new_unpacked(&point);
             let packed = EqMaybePacked::<F, EF>::new_packed(&point);
 
+            // Both variants must produce identical output buffers.
             let mut out_unpacked = vec![EF::ZERO; 1 << k];
             let mut out_packed = vec![EF::ZERO; 1 << k];
 
@@ -428,10 +567,11 @@ mod tests {
             let point = Point::<EF>::rand(&mut rng, k);
             let weight: EF = rng.random();
 
-            // Naive: weight * eq(point, x) for each x
+            // Naive: materialize the full weighted eq table.
             let eq = Poly::<EF>::new_from_point(point.as_slice(), weight);
             let expected: Vec<EF> = eq.iter().copied().collect();
 
+            // Accumulation into a zero buffer should match.
             let unpacked = EqMaybePacked::<F, EF>::new_unpacked(&point);
             let mut out = vec![EF::ZERO; 1 << k];
             unpacked.accumulate_scalar_into(&mut out, weight);
@@ -440,9 +580,7 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // accumulate_packed_into: matches scalar version
-    // -----------------------------------------------------------------------
+    // Packed accumulation
 
     proptest! {
         #[test]
@@ -453,11 +591,11 @@ mod tests {
 
             let packed = EqMaybePacked::<F, EF>::new_packed(&point);
 
-            // Scalar reference
+            // Scalar reference accumulation.
             let mut out_scalar = vec![EF::ZERO; 1 << k];
             packed.accumulate_scalar_into(&mut out_scalar, weight);
 
-            // Packed
+            // Packed accumulation, then unpack for comparison.
             let mut out_packed = vec![EP::ZERO; (1 << k) / PackedF::WIDTH];
             packed.accumulate_packed_into(&mut out_packed, weight);
             let out_unpacked: Vec<EF> =
@@ -468,9 +606,7 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // compress_lo_into: packed == unpacked
-    // -----------------------------------------------------------------------
+    // Low-variable compression kernel
 
     proptest! {
         #[test]
@@ -479,6 +615,7 @@ mod tests {
             inner_k in 1usize..=4,
             seed in any::<u64>(),
         ) {
+            // Total variables = eq variables + inner (remaining) variables.
             let k = eq_k + inner_k;
             let mut rng = SmallRng::seed_from_u64(seed);
             let point = Point::<EF>::rand(&mut rng, eq_k);
@@ -488,6 +625,7 @@ mod tests {
             let unpacked = EqMaybePacked::<F, EF>::new_unpacked(&point);
             let packed = EqMaybePacked::<F, EF>::new_packed(&point);
 
+            // Accumulate into separate buffers; both must match.
             let mut out_u = vec![EF::ZERO; 1 << inner_k];
             let mut out_p = vec![EF::ZERO; 1 << inner_k];
 
@@ -498,9 +636,7 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // compress_lo_to_packed_into: matches scalar compress_lo_into
-    // -----------------------------------------------------------------------
+    // Packed low-variable compression kernel
 
     proptest! {
         #[test]
@@ -517,11 +653,11 @@ mod tests {
 
             let eq = EqMaybePacked::<F, EF>::new_packed(&point);
 
-            // Scalar reference
+            // Scalar reference compression.
             let mut out_scalar = vec![EF::ZERO; 1 << inner_k];
             eq.compress_lo_into(&mut out_scalar, &chunk, w0);
 
-            // Packed
+            // Packed compression, then unpack for comparison.
             let packed_inner = (1 << inner_k) / PackedF::WIDTH;
             let mut out_packed = vec![EP::ZERO; packed_inner];
             eq.compress_lo_to_packed_into(&mut out_packed, &chunk, w0);
@@ -533,9 +669,7 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // compress_hi_dot: packed == unpacked
-    // -----------------------------------------------------------------------
+    // High-variable compression kernel
 
     proptest! {
         #[test]
@@ -546,11 +680,12 @@ mod tests {
             let mut rng = SmallRng::seed_from_u64(seed);
             let point = Point::<EF>::rand(&mut rng, eq_k);
 
-            // eq0 and eq1 split at midpoint, like SplitEq does
+            // Split at midpoint, mirroring the factored structure.
             let (z0, z1) = point.split_at(eq_k / 2);
             let eq0 = Poly::<EF>::new_from_point(z0.as_slice(), EF::ONE);
             let chunk: Vec<F> = (0..1 << eq_k).map(|_| rng.random()).collect();
 
+            // Both representations must produce the same weighted dot product.
             let unpacked = EqMaybePacked::<F, EF>::new_unpacked(&z1);
             let packed = EqMaybePacked::<F, EF>::new_packed(&z1);
 
@@ -569,7 +704,7 @@ mod tests {
             let point = Point::<EF>::rand(&mut rng, eq_k);
             let chunk: Vec<F> = (0..1 << eq_k).map(|_| rng.random()).collect();
 
-            // compress_hi_dot on the full row should equal eval_reference
+            // A full-row dot against the split eq must equal the naive evaluation.
             let expected = eval_reference(&chunk, point.as_slice());
 
             let (z0, z1) = point.split_at(eq_k / 2);
@@ -580,16 +715,16 @@ mod tests {
         }
     }
 
-    // -----------------------------------------------------------------------
     // Edge cases
-    // -----------------------------------------------------------------------
 
     #[test]
     fn test_zero_vars() {
+        // A zero-variable eq table has exactly one entry (the empty product = 1).
         let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0), 0);
         let eq = EqMaybePacked::<F, EF>::new_unpacked(&point);
         assert_eq!(eq.num_vars(), 0);
         assert_eq!(eq.scalar_chunk_size(), 1);
+        // Dot with a single element should return that element times 1.
         assert_eq!(eq.dot_with_base(&[F::TWO]), EF::TWO);
         assert_eq!(eq.dot_with_ext(&[EF::TWO]), EF::TWO);
     }
@@ -599,9 +734,10 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(42);
         let point = Point::<EF>::rand(&mut rng, 4);
         let eq = EqMaybePacked::<F, EF>::new_unpacked(&point);
+        // Initialize output to all ones.
         let mut out = vec![EF::ONE; 1 << 4];
+        // Zero weight should not modify the buffer.
         eq.accumulate_scalar_into(&mut out, EF::ZERO);
-        // Adding zero weight should leave everything as ONE
         assert!(out.iter().all(|&v| v == EF::ONE));
     }
 }
