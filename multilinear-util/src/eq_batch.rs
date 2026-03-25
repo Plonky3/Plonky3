@@ -151,7 +151,7 @@ pub fn eval_eq_base_batch<F, EF, const INITIALIZED: bool>(
 fn fill_buffer_batch<F, A>(evals: RowMajorMatrixView<'_, F>, buffer: &mut RowMajorMatrix<A>)
 where
     F: Field,
-    A: Algebra<F> + Send + Sync + Clone,
+    A: Algebra<F> + Send + Sync,
 {
     // Process variables in reverse order to maintain correct bit ordering in output buffer.
     //
@@ -167,11 +167,11 @@ where
             // Process each column (each point in the batch) for the current row `idx`.
             for (col, &eval_point) in eval_row.iter().enumerate().take(width) {
                 // Read the current value directly from the buffer.
-                let val = buffer.values[idx * width + col].clone();
+                let val = buffer.values[idx * width + col].dup();
 
                 // Compute the two new values for the next level of the hypercube.
-                let scaled_val = val.clone() * eval_point;
-                let new_val = val - scaled_val.clone();
+                let scaled_val = val.dup() * eval_point;
+                let new_val = val - scaled_val.dup();
 
                 // Write the results back in-place.
                 buffer.values[idx * width + col] = new_val;
@@ -205,19 +205,22 @@ where
     debug_assert_eq!(evals.width(), scalars.len());
 
     // Compute the total sum of all scalars: ∑_i γ_i
-    let sum: FP = scalars.iter().cloned().sum();
+    let sum: FP = scalars.iter().map(|s| s.dup()).sum();
 
     // Compute ∑_i γ_i * z_{i,0}
     //
     // This gives us eq_sum(1) directly since eq(1, z) = z
-    let eq_1_sum: FP = dot_product(scalars.iter().cloned(), evals.values.iter().copied());
+    let eq_1_sum: FP = dot_product(
+        scalars.iter().map(|s| s.dup()),
+        evals.values.iter().copied(),
+    );
 
     // Use the identity: eq(0, z_i) = 1 - z_i.
     //
     // So ∑_i γ_i * (1 - z_i) = ∑_i γ_i - ∑_i γ_i * z_i.
     //
     // This saves approximately m adds compared to computing each term individually
-    let eq_0_sum = sum - eq_1_sum.clone();
+    let eq_0_sum = sum - eq_1_sum.dup();
 
     [eq_0_sum, eq_1_sum]
 }

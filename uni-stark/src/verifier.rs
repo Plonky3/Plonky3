@@ -286,6 +286,15 @@ where
     }
 
     let air_width = A::width(air);
+    let expected_public_values_len = air.num_public_values();
+    if public_values.len() != expected_public_values_len {
+        return Err(InvalidProofShapeError::PublicValuesLengthMismatch {
+            expected: expected_public_values_len,
+            got: public_values.len(),
+        }
+        .into());
+    }
+
     let main_next = !air.main_next_row_columns().is_empty();
     let pre_next = !air.preprocessed_next_row_columns().is_empty();
     let trace_next_ok = if main_next {

@@ -65,6 +65,11 @@ where
         || airs.len() != public_values.len()
         || airs.len() != degree_bits.len()
         || airs.len() != global_lookup_data.len()
+        || airs.len() != all_lookups.len()
+        || common
+            .preprocessed
+            .as_ref()
+            .is_some_and(|global| global.instances.len() != airs.len())
     {
         return Err(InvalidProofShapeError::InstanceCountMismatch.into());
     }
@@ -126,8 +131,18 @@ where
 
     for (i, air) in airs.iter().enumerate() {
         let air_width = A::width(air);
+        let expected_public_values_len = air.num_public_values();
+        let got_public_values_len = public_values[i].len();
         let inst_opened_vals = &opened_values.instances[i];
         let inst_base_opened_vals = &inst_opened_vals.base_opened_values;
+
+        if got_public_values_len != expected_public_values_len {
+            return Err(InvalidProofShapeError::PublicValuesLengthMismatch {
+                expected: expected_public_values_len,
+                got: got_public_values_len,
+            }
+            .into());
+        }
 
         // Validate trace widths match the AIR
         if inst_base_opened_vals.trace_local.len() != air_width {

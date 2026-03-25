@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::{Add, Mul, Sub};
 
-use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
+use p3_field::{Algebra, Dup, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 
 /// Read access to a pair of trace rows (typically current and next).
@@ -566,7 +566,7 @@ pub struct FilteredAirBuilder<'a, AB: AirBuilder> {
 
 impl<AB: AirBuilder> FilteredAirBuilder<'_, AB> {
     pub fn condition(&self) -> AB::Expr {
-        self.condition.clone()
+        self.condition.dup()
     }
 }
 

@@ -4,7 +4,7 @@ use core::borrow::Borrow;
 use core::marker::PhantomData;
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
-use p3_field::{PrimeCharacteristicRing, PrimeField};
+use p3_field::{Dup, PrimeCharacteristicRing, PrimeField};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
 use rand::distr::{Distribution, StandardUniform};
@@ -245,12 +245,12 @@ fn eval_full_round<
     builder: &mut AB,
 ) {
     for (i, (s, r)) in state.iter_mut().zip(round_constants.iter()).enumerate() {
-        *s += r.clone();
+        *s += r.dup();
         eval_sbox(&full_round.sbox[i], s, builder);
     }
     LinearLayers::external_linear_layer(state);
     for (state_i, post_i) in state.iter_mut().zip(full_round.post) {
-        builder.assert_eq(state_i.clone(), post_i);
+        builder.assert_eq(state_i.dup(), post_i);
         *state_i = post_i.into();
     }
 }
@@ -268,10 +268,10 @@ fn eval_partial_round<
     round_constant: &AB::F,
     builder: &mut AB,
 ) {
-    state[0] += round_constant.clone();
+    state[0] += round_constant.dup();
     eval_sbox(&partial_round.sbox, &mut state[0], builder);
 
-    builder.assert_eq(state[0].clone(), partial_round.post_sbox);
+    builder.assert_eq(state[0].dup(), partial_round.post_sbox);
     state[0] = partial_round.post_sbox.into();
 
     LinearLayers::internal_linear_layer(state);
@@ -299,20 +299,20 @@ fn eval_sbox<AB, const DEGREE: u64, const REGISTERS: usize>(
         (5, 1) => {
             let committed_x3 = sbox.0[0].into();
             let x2 = x.square();
-            builder.assert_eq(committed_x3.clone(), x2.clone() * x.clone());
+            builder.assert_eq(committed_x3.dup(), x2.dup() * x.dup());
             committed_x3 * x2
         }
         (7, 1) => {
             let committed_x3 = sbox.0[0].into();
-            builder.assert_eq(committed_x3.clone(), x.cube());
-            committed_x3.square() * x.clone()
+            builder.assert_eq(committed_x3.dup(), x.cube());
+            committed_x3.square() * x.dup()
         }
         (11, 2) => {
             let committed_x3 = sbox.0[0].into();
             let committed_x9 = sbox.0[1].into();
             let x2 = x.square();
-            builder.assert_eq(committed_x3.clone(), x2.clone() * x.clone());
-            builder.assert_eq(committed_x9.clone(), committed_x3.cube());
+            builder.assert_eq(committed_x3.dup(), x2.dup() * x.dup());
+            builder.assert_eq(committed_x9.dup(), committed_x3.cube());
             committed_x9 * x2
         }
         _ => panic!(

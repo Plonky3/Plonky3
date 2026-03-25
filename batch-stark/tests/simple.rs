@@ -1013,6 +1013,37 @@ fn test_invalid_public_values_rejected() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
+fn test_short_public_values_rejected() -> Result<(), Box<dyn std::error::Error>> {
+    let config = make_config(7);
+
+    let (air_fib, trace, fib_pis) = create_fib_instance(4);
+    let instances = vec![StarkInstance {
+        air: &air_fib,
+        trace: &trace,
+        public_values: fib_pis,
+        lookups: vec![],
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data);
+
+    let airs = vec![air_fib];
+    let short_pvs = vec![vec![Val::from_u64(0), Val::from_u64(1)]];
+    let err = verify_batch(&config, &airs, &proof, &short_pvs, common)
+        .expect_err("Should reject short public values");
+    match err {
+        VerificationError::InvalidProofShape(
+            InvalidProofShapeError::PublicValuesLengthMismatch { expected, got },
+        ) => {
+            assert_eq!(expected, 3);
+            assert_eq!(got, 2);
+        }
+        _ => panic!("unexpected error: {err:?}"),
+    }
+    Ok::<_, Box<dyn std::error::Error>>(())
+}
+
+#[test]
 fn test_different_widths() -> Result<(), impl Debug> {
     let config = make_config(4242);
 
