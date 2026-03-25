@@ -106,11 +106,11 @@ where
     #[instrument(name = "grind for proof-of-work witness", skip_all)]
     fn grind(&mut self, bits: usize) -> Self::Witness {
         // Ensure `bits` is small enough to be used in a shift.
-        assert!(bits < (usize::BITS as usize), "bit count must be valid");
+        assert!(bits < 64, "bit count must be valid");
 
         // Ensure the PoW target 2^bits is smaller than the field order.
         // Otherwise, the probability analysis for grinding would break.
-        assert!((1 << bits) < F::ORDER_U64);
+        assert!((1u64 << bits) < F::ORDER_U64);
 
         // Trivial case: 0 bits mean no PoW is required and any witness is valid.
         if bits == 0 {
@@ -123,14 +123,14 @@ where
 
         // Total number of batches needed to cover all field elements.
         // Each batch tests `lanes` witnesses in parallel.
-        let num_batches = (F::ORDER_U64 as usize).div_ceil(lanes);
+        let num_batches = F::ORDER_U64.div_ceil(lanes as u64);
 
         // Cache the field order.
         let order = F::ORDER_U64;
 
         // Bitmask used to check the PoW condition. eg. bits = 3 => mask = 0b111
         // We accept a witness if (sample & mask) == 0. This verifies 'bits' trailing zeros.
-        let mask = (1usize << bits) - 1;
+        let mask = (1u64 << bits) - 1;
 
         // In a duplex sponge, new inputs are absorbed sequentially at indices [0, 1, 2, ...].
         // The grinding witness is therefore absorbed at the next available position.
@@ -173,7 +173,7 @@ where
                 //   - Batch 0 -> candidates [0, 1, ..., F::Packing::WIDTH - 1]
                 //   - Batch 1 -> candidates [F::Packing::WIDTH, ..., 2 * F::Packing::WIDTH - 1]
                 //   - Batch k -> candidates [k * F::Packing::WIDTH, ..., (k+1) * F::Packing::WIDTH - 1]
-                let base = (batch * lanes) as u64;
+                let base = batch * lanes as u64;
 
                 // Start with a copy of the precomputed base state.
                 let mut packed_state = base_packed_state;
@@ -214,7 +214,7 @@ where
                     .zip(packed_witnesses.as_slice())
                     .find(|(sample, _)| {
                         // Accept if the low `bits` bits are all zero.
-                        (sample.as_canonical_u64() as usize & mask) == 0
+                        (sample.as_canonical_u64() & mask) == 0
                     })
                     .map(|(_, &witness)| witness)
             })
