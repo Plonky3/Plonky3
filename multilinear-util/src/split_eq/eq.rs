@@ -401,6 +401,7 @@ mod tests {
     fn test_new_packed_fallback_to_unpacked() {
         let mut rng = SmallRng::seed_from_u64(0);
         // For variable counts below the packing threshold, packed must fall back.
+        #[allow(clippy::reversed_empty_ranges)]
         for k in 0..K_PACK {
             let point = Point::<EF>::rand(&mut rng, k);
             let eq = EqMaybePacked::<F, EF>::new_packed(&point);

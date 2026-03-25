@@ -248,6 +248,13 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         }
     }
 
+    /// Materializes the full eq table as a polynomial.
+    pub fn materialize(&self) -> Poly<EF> {
+        let mut out = Poly::zero(self.num_vars());
+        self.accumulate_into(out.as_mut_slice(), None);
+        out
+    }
+
     /// Adds the factored eq table into a SIMD-packed output buffer.
     ///
     /// Same semantics as the scalar version, but the output is in packed form.
@@ -261,20 +268,30 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
             self.num_vars()
         );
         let w_scale = scale.unwrap_or(EF::ONE);
-        // Chunk size in packed elements (scalar chunk size / W).
-        let cs = self.eq1.scalar_chunk_size() / F::Packing::WIDTH;
-        if (1 << self.num_vars()) < PARALLEL_THRESHOLD {
-            out.chunks_mut(cs)
-                .zip(self.eq0.iter())
-                .for_each(|(chunk, &w0)| {
-                    self.eq1.accumulate_packed_into(chunk, w0 * w_scale);
+
+        // Apply naive method if number of variables is too small
+        if log2_strict_usize(F::Packing::WIDTH) * 2 > self.num_vars() {
+            out.iter_mut()
+                .zip_eq(self.materialize().0.chunks(F::Packing::WIDTH))
+                .for_each(|(out, chunk)| {
+                    *out += EF::ExtensionPacking::from_ext_slice(chunk) * w_scale;
                 });
         } else {
-            out.par_chunks_mut(cs)
-                .zip(self.eq0.0.par_iter())
-                .for_each(|(chunk, &w0)| {
-                    self.eq1.accumulate_packed_into(chunk, w0 * w_scale);
-                });
+            // Chunk size in packed elements (scalar chunk size / W).
+            let cs = self.eq1.scalar_chunk_size() / F::Packing::WIDTH;
+            if (1 << self.num_vars()) < PARALLEL_THRESHOLD {
+                out.chunks_mut(cs)
+                    .zip(self.eq0.iter())
+                    .for_each(|(chunk, &w0)| {
+                        self.eq1.accumulate_packed_into(chunk, w0 * w_scale);
+                    });
+            } else {
+                out.par_chunks_mut(cs)
+                    .zip(self.eq0.0.par_iter())
+                    .for_each(|(chunk, &w0)| {
+                        self.eq1.accumulate_packed_into(chunk, w0 * w_scale);
+                    });
+            }
         }
     }
 
@@ -566,7 +583,7 @@ mod tests {
 
         #[test]
         fn prop_accumulate_into_packed_matches_scalar(
-            k in (K_PACK + 1)..=14usize,
+            k in K_PACK..=14usize,
             seed in any::<u64>(),
         ) {
             let mut rng = SmallRng::seed_from_u64(seed);
