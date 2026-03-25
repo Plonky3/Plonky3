@@ -1,23 +1,20 @@
+mod data;
+
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
-use core::fmt::Debug;
 
+pub use data::VerifierData;
 use hashbrown::HashMap;
+use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
-use p3_air::{Air, RowWindow};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
+use p3_lookup::Lookup;
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::lookup_traits::LookupGadget;
-use p3_lookup::{AirWithLookups, Lookup};
-use p3_matrix::dense::RowMajorMatrixView;
-use p3_matrix::stack::VerticalPair;
-use p3_uni_stark::{
-    InvalidProofShapeError, VerificationError, VerifierConstraintFolder,
-    recompose_quotient_from_chunks,
-};
+use p3_uni_stark::{InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks};
 use p3_util::zip_eq::zip_eq;
 use tracing::{info_span, instrument};
 
@@ -570,17 +567,14 @@ where
             quotient,
         };
 
-        verify_constraints_with_lookups::<SC, A, LogUpGadget, PcsError<SC>>(
-            air,
-            &verifier_data,
-            &lookup_gadget,
-        )
-        .map_err(|e| match e {
-            VerificationError::OodEvaluationMismatch { .. } => {
-                VerificationError::OodEvaluationMismatch { index: Some(i) }
-            }
-            other => other,
-        })?;
+        verifier_data
+            .verify_constraints_with_lookups::<A, LogUpGadget, PcsError<SC>>(air, &lookup_gadget)
+            .map_err(|e| match e {
+                VerificationError::OodEvaluationMismatch { .. } => {
+                    VerificationError::OodEvaluationMismatch { index: Some(i) }
+                }
+                other => other,
+            })?;
     }
 
     let mut global_cumulative = HashMap::<&String, Vec<_>>::new();
@@ -595,119 +589,6 @@ where
         lookup_gadget
             .verify_global_final_value(&all_expected_cumulative)
             .map_err(|e| VerificationError::LookupError(format!("{e:?}: {name}")))?;
-    }
-
-    Ok(())
-}
-
-/// Structure storing all data needed for verifying one instance's constraints at the out-of-domain point.
-pub struct VerifierData<'a, SC: SGC> {
-    // Out-of-domain point at which constraints are evaluated
-    zeta: SC::Challenge,
-    // Challenge used to fold constraints
-    alpha: SC::Challenge,
-    // Main trace evaluated at `zeta`
-    trace_local: &'a [SC::Challenge],
-    // Main trace evaluated at the following point `g * zeta`, where `g` is the subgroup generator
-    trace_next: &'a [SC::Challenge],
-    // Preprocessed trace evaluated at `zeta`
-    preprocessed_local: &'a [SC::Challenge],
-    // Preprocessed trace evaluated at the following point `g * zeta`, where `g` is the subgroup generator
-    preprocessed_next: &'a [SC::Challenge],
-    // Permutation trace evaluated at `zeta`
-    permutation_local: &'a [SC::Challenge],
-    // Permutation trace evaluated at the following point `g * zeta`, where `g` is the subgroup generator
-    permutation_next: &'a [SC::Challenge],
-    // Challenges used for the lookup argument
-    permutation_challenges: &'a [SC::Challenge],
-    // Expected cumulated values for global lookup arguments
-    permutation_values: &'a [SC::Challenge],
-    // Periodic column polynomials evaluated at the OOD point `zeta`
-    periodic_values: &'a [SC::Challenge],
-    // Lookup contexts for this instance
-    lookups: &'a [Lookup<Val<SC>>],
-    // Public values for this instance
-    public_values: &'a [Val<SC>],
-    // Trace domain for this instance
-    trace_domain: Domain<SC>,
-    // Quotient polynomial evaluated at `zeta`
-    quotient: SC::Challenge,
-}
-
-/// Verifies that the folded constraints match the quotient polynomial at zeta.
-///
-/// This evaluates the AIR constraints at the out-of-domain point and checks
-/// that constraints(zeta) / Z_H(zeta) = quotient(zeta).
-#[allow(clippy::too_many_arguments)]
-pub fn verify_constraints_with_lookups<'a, SC, A, LG: LookupGadget, PcsErr: Debug>(
-    air: &A,
-    verifier_data: &VerifierData<'a, SC>,
-    lookup_gadget: &LG,
-) -> Result<(), VerificationError<PcsErr>>
-where
-    SC: SGC,
-    A: for<'b> Air<VerifierConstraintFolderWithLookups<'b, SC>>,
-{
-    let VerifierData {
-        trace_local,
-        trace_next,
-        preprocessed_local,
-        preprocessed_next,
-        permutation_local,
-        permutation_next,
-        permutation_challenges,
-        permutation_values,
-        periodic_values,
-        lookups,
-        public_values,
-        trace_domain,
-        zeta,
-        alpha,
-        quotient,
-    } = verifier_data;
-
-    let sels = trace_domain.selectors_at_point(*zeta);
-
-    let main = VerticalPair::new(
-        RowMajorMatrixView::new_row(trace_local),
-        RowMajorMatrixView::new_row(trace_next),
-    );
-
-    let preprocessed = VerticalPair::new(
-        RowMajorMatrixView::new_row(preprocessed_local),
-        RowMajorMatrixView::new_row(preprocessed_next),
-    );
-
-    let preprocessed_window =
-        RowWindow::from_two_rows(preprocessed.top.values, preprocessed.bottom.values);
-    let inner_folder = VerifierConstraintFolder {
-        main,
-        preprocessed,
-        preprocessed_window,
-        periodic_values,
-        public_values,
-        is_first_row: sels.is_first_row,
-        is_last_row: sels.is_last_row,
-        is_transition: sels.is_transition,
-        alpha: *alpha,
-        accumulator: SC::Challenge::ZERO,
-    };
-    let mut folder = VerifierConstraintFolderWithLookups {
-        inner: inner_folder,
-        permutation: VerticalPair::new(
-            RowMajorMatrixView::new_row(permutation_local),
-            RowMajorMatrixView::new_row(permutation_next),
-        ),
-        permutation_challenges,
-        permutation_values,
-    };
-    // Evaluate AIR and lookup constraints.
-    air.eval_with_lookups(&mut folder, lookups, lookup_gadget);
-    let folded_constraints = folder.inner.accumulator;
-
-    // Check that constraints(zeta) / Z_H(zeta) = quotient(zeta)
-    if folded_constraints * sels.inv_vanishing != *quotient {
-        return Err(VerificationError::OodEvaluationMismatch { index: None });
     }
 
     Ok(())
