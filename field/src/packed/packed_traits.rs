@@ -309,7 +309,6 @@ pub unsafe trait PackedField:
             current,
         }
     }
-
 }
 
 /// # Safety
