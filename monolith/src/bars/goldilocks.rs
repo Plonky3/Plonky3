@@ -117,8 +117,7 @@ impl<const WIDTH: usize, const LOOKUP_BITS: usize> MonolithBars<Goldilocks, WIDT
         for el in state.iter_mut().take(4) {
             let val = el.as_canonical_u64();
             let result = Self::bar(val);
-            // Safety: Goldilocks accepts any u64 as a (possibly non-canonical) representative.
-            *el = unsafe { Goldilocks::from_canonical_unchecked(result) };
+            *el = Goldilocks::new(result);
         }
     }
 

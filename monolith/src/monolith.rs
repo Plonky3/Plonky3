@@ -304,6 +304,9 @@ mod tests {
         // Known-answer test from the HorizenLabs reference implementation.
         // Input: [0, 1, 2, ..., 11], Width: 12, Rounds: 6 (NUM_FULL_ROUNDS=5).
         // Reference: https://github.com/HorizenLabs/monolith (LOOKUP_BITS=8).
+        //
+        // Note: no WIDTH=8 known-answer test exists because the HorizenLabs
+        // reference only provides test vectors for WIDTH=12.
         let bars = MonolithBarsGoldilocks::<8>;
         let mds = MonolithMdsMatrixGoldilocks;
         let monolith: MonolithGoldilocks8<_, 12, 5> = MonolithGoldilocks8::new(bars, mds);
