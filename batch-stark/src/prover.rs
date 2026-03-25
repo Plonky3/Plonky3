@@ -8,7 +8,6 @@ use alloc::vec::Vec;
 use p3_air::DebugConstraintBuilder;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
 use p3_air::{Air, RowWindow};
-use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{
     Algebra, BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
@@ -25,12 +24,13 @@ use p3_uni_stark::{OpenedValues, PackedChallenge, PackedVal, ProverConstraintFol
 use p3_util::log2_strict_usize;
 use tracing::{debug_span, info_span, instrument};
 
-use crate::common::{CommonData, ProverData, get_perm_challenges};
-use crate::config::{Challenge, Domain, StarkGenericConfig as SGC, Val, observe_instance_binding};
+use crate::common::{CommonData, ProverData};
+use crate::config::{Challenge, Domain, StarkGenericConfig as SGC, Val};
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
 use crate::symbolic::{
     get_constraint_layout, get_log_num_quotient_chunks, get_symbolic_constraints,
 };
+use crate::transcript::BatchTranscript;
 
 /// A single AIR instance bundled with its execution trace, public inputs,
 /// and lookup declarations.
@@ -115,7 +115,7 @@ where
     let lookup_gadget = LogUpGadget::new();
 
     let pcs = config.pcs();
-    let mut challenger = config.initialise_challenger();
+    let mut transcript = BatchTranscript::<SC>::new(config.initialise_challenger());
 
     // Collect per-instance degree information.
     let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
@@ -199,20 +199,16 @@ where
         })
         .unzip();
 
-    // Transcript: Observe instance count
-
-    // Bind the instance count so the transcript cannot be reinterpreted
-    // with a different partitioning of opened values.
     let n_instances = airs.len();
-    challenger.observe_base_as_algebra_element::<Challenge<SC>>(Val::<SC>::from_usize(n_instances));
+    let widths: Vec<usize> = airs.iter().map(|a| A::width(a)).collect();
 
-    // Bind per-instance structural data into the transcript.
+    // Transcript: Observe instance count and per-instance bindings.
+    transcript.observe_instance_count(n_instances);
     for i in 0..n_instances {
-        observe_instance_binding::<SC>(
-            &mut challenger,
+        transcript.observe_instance_binding(
             log_ext_degrees[i],
             log_degrees[i],
-            A::width(airs[i]),
+            widths[i],
             num_quotient_chunks[i],
         );
     }
@@ -227,26 +223,13 @@ where
         .collect::<Vec<_>>();
     let (main_commit, main_data) = pcs.commit(main_commit_inputs);
 
-    // Feed main commitment and public values into the Fiat–Shamir transcript.
-    challenger.observe(main_commit.clone());
-    for pv in &pub_vals {
-        challenger.observe_slice(pv);
-    }
-
-    // Bind preprocessed column widths; observe the global preprocessed
-    // commitment if one exists.
-    for &pre_w in preprocessed_widths.iter() {
-        challenger.observe_base_as_algebra_element::<Challenge<SC>>(Val::<SC>::from_usize(pre_w));
-    }
-    if let Some(global) = &common.preprocessed {
-        challenger.observe(global.commitment.clone());
-    }
+    transcript.observe_main(&main_commit, &pub_vals);
+    transcript.observe_preprocessed(&preprocessed_widths, common.preprocessed.as_ref());
 
     // Transcript: Lookup challenges and permutation traces
 
     // Draw per-instance challenges for the lookup argument.
-    let challenges_per_instance =
-        get_perm_challenges::<SC, LogUpGadget>(&mut challenger, &all_lookups, &lookup_gadget);
+    let challenges_per_instance = transcript.sample_perm_challenges(&all_lookups, &lookup_gadget);
 
     // Generate permutation traces for instances that have lookups.
     let mut permutation_commit_inputs = Vec::with_capacity(n_instances);
@@ -317,23 +300,18 @@ where
         check_lookups(&debug_instances);
     }
 
-    // Commit all permutation traces (if any) and observe in the transcript.
+    // Commit all permutation traces (if any).
     let permutation_commit_and_data = if !permutation_commit_inputs.is_empty() {
-        let commitment = pcs.commit(permutation_commit_inputs);
-        challenger.observe(commitment.0.clone());
-        // Observe cumulated lookup sums so the verifier can check them.
-        for data in lookup_data.iter().flatten() {
-            challenger.observe_algebra_element(data.expected_cumulated);
-        }
-        Some(commitment)
+        Some(pcs.commit(permutation_commit_inputs))
     } else {
         None
     };
 
-    // Transcript: Quotient computation
-
-    // Draw a random folding challenge for combining constraints.
-    let alpha: Challenge<SC> = challenger.sample_algebra_element();
+    // Transcript: observe permutation commitment + lookup data, sample alpha.
+    let alpha: Challenge<SC> = transcript.observe_perm_and_sample_alpha(
+        permutation_commit_and_data.as_ref().map(|(c, _)| c),
+        &lookup_data,
+    );
 
     // Accumulators for quotient chunk domains / matrices / per-instance ranges.
     let mut quotient_chunk_domains = Vec::new();
@@ -447,7 +425,7 @@ where
 
     // Commit all quotient chunks in a single batch.
     let (quotient_commit, quotient_data) = pcs.commit_ldes(quotient_chunk_mats);
-    challenger.observe(quotient_commit.clone());
+    transcript.observe_quotient_commitment(&quotient_commit);
 
     // Transcript: Optional ZK randomization polynomial
     //
@@ -467,13 +445,13 @@ where
     };
 
     if let Some(r_commit) = &opt_r_commit {
-        challenger.observe(r_commit.clone());
+        transcript.observe_random_commitment(r_commit);
     }
 
     // Transcript: OOD opening
 
     // Sample the out-of-domain evaluation point.
-    let zeta: Challenge<SC> = challenger.sample_algebra_element();
+    let zeta: Challenge<SC> = transcript.sample_zeta();
 
     // Build the opening rounds and produce the FRI opening proof.
     let (opened_values, opening_proof) = {
@@ -558,7 +536,11 @@ where
             rounds.push(lookup_round);
         }
 
-        pcs.open_with_preprocessing(rounds, &mut challenger, common.preprocessed.is_some())
+        pcs.open_with_preprocessing(
+            rounds,
+            &mut transcript.challenger,
+            common.preprocessed.is_some(),
+        )
     };
 
     // Parse opened values into per-instance structures

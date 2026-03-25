@@ -25,10 +25,11 @@ pub mod config;
 pub mod proof;
 pub mod prover;
 pub mod symbolic;
+pub(crate) mod transcript;
 pub mod verifier;
 
 // Re-export main types and functions for convenience
-pub use common::{CommonData, ProverData, ProverOnlyData, get_perm_challenges};
+pub use common::{CommonData, ProverData, ProverOnlyData};
 pub use config::{
     Challenge, Commitment, Domain, PackedChallenge, PackedVal, PcsError, PcsProof,
     StarkGenericConfig, Val,
