@@ -22,7 +22,7 @@ sha3.workspace = true
 criterion.workspace = true
 
 [[bench]]
-name = "permute"
+name = "monolith"
 harness = false
 
 [lints]
