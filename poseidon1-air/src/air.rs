@@ -240,20 +240,25 @@ pub(crate) fn eval<
     mds_multiply(&mut state, &air.partial_constants.m_i);
 
     // Partial round loop: S-box on state[0], commit, scalar constant, sparse matmul.
-    for round in 0..PARTIAL_ROUNDS {
+    for round in 0..PARTIAL_ROUNDS - 1 {
         eval_sparse_partial_round::<AB, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
             &local.partial_rounds[round],
-            if round < PARTIAL_ROUNDS - 1 {
-                Some(air.partial_constants.round_constants[round].clone())
-            } else {
-                None
-            },
+            Some(air.partial_constants.round_constants[round].clone()),
             &air.partial_constants.sparse_first_row[round],
             &air.partial_constants.v[round],
             builder,
         );
     }
+    // Last round: no round constant addition.
+    eval_sparse_partial_round::<AB, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
+        &mut state,
+        &local.partial_rounds[PARTIAL_ROUNDS - 1],
+        None,
+        &air.partial_constants.sparse_first_row[PARTIAL_ROUNDS - 1],
+        &air.partial_constants.v[PARTIAL_ROUNDS - 1],
+        builder,
+    );
 
     // Phase 3: Ending full rounds (RF/2 rounds)
     for round in 0..HALF_FULL_ROUNDS {
