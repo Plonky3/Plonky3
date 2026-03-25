@@ -597,3 +597,29 @@ where
         *self = *self / rhs;
     }
 }
+
+impl<F, PF> Div for PackedQuinticTrinomialExtensionField<F, PF>
+where
+    F: QuinticTrinomialExtendable,
+    PF: PackedField<Scalar = F>,
+{
+    type Output = Self;
+
+    #[allow(clippy::suspicious_arithmetic_impl)]
+    #[inline]
+    fn div(self, rhs: Self) -> Self {
+        let rhs_inv = Self::from_fn(|i| rhs.as_slice()[i].inverse());
+        self * rhs_inv
+    }
+}
+
+impl<F, PF> DivAssign for PackedQuinticTrinomialExtensionField<F, PF>
+where
+    F: QuinticTrinomialExtendable,
+    PF: PackedField<Scalar = F>,
+{
+    #[inline]
+    fn div_assign(&mut self, rhs: Self) {
+        *self = *self / rhs;
+    }
+}
