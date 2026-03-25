@@ -160,21 +160,6 @@ pub trait BaseAir<F>: Sync {
             .collect()
     }
 
-    /// Return the period of the column at index `col_idx`, if it exists.
-    fn get_column_period(&self, col_idx: usize) -> Option<usize> {
-        self.periodic_columns()
-            .get(col_idx)
-            .map(|col: &Vec<F>| col.len())
-    }
-
-    /// Return the maximum period among all periodic columns, or `None` if there are none.
-    fn get_max_column_period(&self) -> Option<usize> {
-        self.periodic_columns()
-            .iter()
-            .map(|col: &Vec<F>| col.len())
-            .max()
-    }
-
     /// Return a matrix with all periodic columns extended to a common height.
     ///
     /// The result is a row-major matrix where each row corresponds to a row index in the
