@@ -43,11 +43,8 @@ impl<SC: SGC> BatchTranscript<SC> {
     }
 
     /// Observe the main trace commitment and per-instance public values.
-    pub fn observe_main<PV>(
-        &mut self,
-        main_commitment: &Commitment<SC>,
-        public_values: &[PV],
-    ) where
+    pub fn observe_main<PV>(&mut self, main_commitment: &Commitment<SC>, public_values: &[PV])
+    where
         PV: AsRef<[Val<SC>]>,
     {
         self.challenger.observe(main_commitment.clone());
