@@ -65,6 +65,10 @@ pub struct Poseidon1Cols<
     pub beginning_full_rounds: [FullRound<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>; HALF_FULL_ROUNDS],
 
     /// Columns for the `RP` partial rounds.
+    /// 
+    /// These rounds apply the S-box only to `state[0]`, which is cheaper but
+    /// still increases the algebraic degree to resist algebraic attacks
+    /// (see Poseidon1 paper, Section 5.5.2).
     pub partial_rounds: [PartialRound<T, SBOX_DEGREE, SBOX_REGISTERS>; PARTIAL_ROUNDS],
 
     /// Columns for the last `RF/2` full rounds.
