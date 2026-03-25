@@ -6,13 +6,13 @@ use p3_baby_bear::{
     BABYBEAR_POSEIDON1_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_16,
     BABYBEAR_POSEIDON1_RC_16, BABYBEAR_S_BOX_DEGREE, BabyBear, MDSBabyBearData,
 };
-use p3_monty_31::MDSUtils;
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
 use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_params};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_merkle_tree::MerkleTreeMmcs;
+use p3_monty_31::MDSUtils;
 use p3_poseidon1::Poseidon1Constants;
 use p3_poseidon1_air::VectorizedPoseidon1Air;
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};

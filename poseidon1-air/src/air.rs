@@ -42,7 +42,9 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use crate::columns::{Poseidon1Cols, num_cols};
-use crate::{FullRound, FullRoundConstants, PartialRound, PartialRoundConstants, SBox, generate_trace_rows};
+use crate::{
+    FullRound, FullRoundConstants, PartialRound, PartialRoundConstants, SBox, generate_trace_rows,
+};
 
 /// The Poseidon1 AIR.
 ///

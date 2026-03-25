@@ -46,17 +46,13 @@ fn mds_for_trace_gen<F: PrimeField, const WIDTH: usize>(
 ) {
     if WIDTH == 16 {
         // SAFETY: WIDTH == 16, so [F; WIDTH] and [F; 16] have the same layout.
-        let state_16: &mut [F; 16] =
-            unsafe { &mut *(state as *mut [F; WIDTH] as *mut [F; 16]) };
-        let col_16: &[F; 16] =
-            unsafe { &*(circ_col as *const [F; WIDTH] as *const [F; 16]) };
+        let state_16: &mut [F; 16] = unsafe { &mut *(state as *mut [F; WIDTH] as *mut [F; 16]) };
+        let col_16: &[F; 16] = unsafe { &*(circ_col as *const [F; WIDTH] as *const [F; 16]) };
         p3_mds::karatsuba_convolution::mds_circulant_karatsuba_16(state_16, col_16);
     } else if WIDTH == 24 {
         // SAFETY: WIDTH == 24, so [F; WIDTH] and [F; 24] have the same layout.
-        let state_24: &mut [F; 24] =
-            unsafe { &mut *(state as *mut [F; WIDTH] as *mut [F; 24]) };
-        let col_24: &[F; 24] =
-            unsafe { &*(circ_col as *const [F; WIDTH] as *const [F; 24]) };
+        let state_24: &mut [F; 24] = unsafe { &mut *(state as *mut [F; WIDTH] as *mut [F; 24]) };
+        let col_24: &[F; 24] = unsafe { &*(circ_col as *const [F; WIDTH] as *const [F; 24]) };
         p3_mds::karatsuba_convolution::mds_circulant_karatsuba_24(state_24, col_24);
     } else {
         mds_multiply(state, dense_mds);
