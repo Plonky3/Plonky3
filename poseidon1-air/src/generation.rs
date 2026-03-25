@@ -25,7 +25,7 @@ use alloc::vec::Vec;
 use p3_mds::karatsuba_convolution::{mds_circulant_karatsuba_16, mds_circulant_karatsuba_24};
 use core::mem::MaybeUninit;
 
-use p3_field::PrimeField;
+use p3_field::{PrimeField, dot_product};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_maybe_rayon::prelude::*;
 use p3_poseidon1::external::mds_multiply;
