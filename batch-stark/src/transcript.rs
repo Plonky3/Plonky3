@@ -22,24 +22,24 @@ impl<SC: SGC> BatchTranscript<SC> {
         Self { challenger }
     }
 
-    /// Observe the instance count and per-instance structural bindings.
-    pub fn observe_instance_bindings(
-        &mut self,
-        log_ext_degrees: &[usize],
-        log_degrees: &[usize],
-        widths: &[usize],
-        num_quotient_chunks: &[usize],
-    ) {
-        // Bind the instance count so the transcript cannot be reinterpreted
-        // with a different partitioning of opened values.
-        let n = log_ext_degrees.len();
+    /// Bind the instance count so the transcript cannot be reinterpreted
+    /// with a different partitioning of opened values.
+    pub fn observe_instance_count(&mut self, n: usize) {
         self.observe_usize(n);
-        for i in 0..n {
-            self.observe_usize(log_ext_degrees[i]);
-            self.observe_usize(log_degrees[i]);
-            self.observe_usize(widths[i]);
-            self.observe_usize(num_quotient_chunks[i]);
-        }
+    }
+
+    /// Observe a single instance's structural binding data.
+    pub fn observe_instance_binding(
+        &mut self,
+        log_ext_degree: usize,
+        log_degree: usize,
+        width: usize,
+        num_quotient_chunks: usize,
+    ) {
+        self.observe_usize(log_ext_degree);
+        self.observe_usize(log_degree);
+        self.observe_usize(width);
+        self.observe_usize(num_quotient_chunks);
     }
 
     /// Observe the main trace commitment and per-instance public values.

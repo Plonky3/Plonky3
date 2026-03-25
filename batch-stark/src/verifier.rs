@@ -122,6 +122,9 @@ where
         num_quotient_chunks.push(n_chunks);
     }
 
+    // Observe the instance count up front to match the prover's transcript.
+    transcript.observe_instance_count(airs.len());
+
     for (i, air) in airs.iter().enumerate() {
         let air_width = A::width(air);
         let expected_public_values_len = air.num_public_values();
@@ -219,12 +222,16 @@ where
             }
             .into());
         }
+
+        // Observe per-instance binding data.
+        let ext_db = degree_bits[i];
+        let base_db = ext_db - config.is_zk();
+        let width = air.width();
+        let n_chunks = num_quotient_chunks[i];
+        transcript.observe_instance_binding(ext_db, base_db, width, n_chunks);
     }
 
-    // Transcript: observe instance bindings, main, preprocessed.
-    let log_degrees: Vec<usize> = degree_bits.iter().map(|&db| db - config.is_zk()).collect();
-    let widths: Vec<usize> = airs.iter().map(|a| a.width()).collect();
-    transcript.observe_instance_bindings(degree_bits, &log_degrees, &widths, &num_quotient_chunks);
+    // Observe main commitment and public values, then preprocessed data.
     transcript.observe_main(&commitments.main, public_values);
     transcript.observe_preprocessed(&preprocessed_widths, common.preprocessed.as_ref());
 

@@ -203,12 +203,15 @@ where
     let widths: Vec<usize> = airs.iter().map(|a| A::width(a)).collect();
 
     // Transcript: Observe instance count and per-instance bindings.
-    transcript.observe_instance_bindings(
-        &log_ext_degrees,
-        &log_degrees,
-        &widths,
-        &num_quotient_chunks,
-    );
+    transcript.observe_instance_count(n_instances);
+    for i in 0..n_instances {
+        transcript.observe_instance_binding(
+            log_ext_degrees[i],
+            log_degrees[i],
+            widths[i],
+            num_quotient_chunks[i],
+        );
+    }
 
     // Transcript: Main trace commitment
 
