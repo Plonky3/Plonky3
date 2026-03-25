@@ -37,4 +37,4 @@ pub use config::{
 pub use p3_uni_stark::{OpenedValues, VerificationError};
 pub use proof::{BatchCommitments, BatchOpenedValues, BatchProof};
 pub use prover::{StarkInstance, prove_batch};
-pub use verifier::verify_batch;
+pub use verifier::{VerifierData, verify_batch};
