@@ -30,6 +30,8 @@ impl<SC: SGC> BatchTranscript<SC> {
         widths: &[usize],
         num_quotient_chunks: &[usize],
     ) {
+        // Bind the instance count so the transcript cannot be reinterpreted
+        // with a different partitioning of opened values.
         let n = log_ext_degrees.len();
         self.observe_usize(n);
         for i in 0..n {
