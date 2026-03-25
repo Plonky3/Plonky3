@@ -109,24 +109,9 @@ pub struct FullRound<T, const WIDTH: usize, const SBOX_DEGREE: u64, const SBOX_R
 ///
 /// In a partial round, only `state[0]` passes through the S-box:
 ///
-/// ```text
-///   ┌──────────────────────────────────────────────────────────────────┐
-///   │  state[0]  state[1]  state[2]  ...  state[W-1]                   │
-///   │     │         │         │               │                        │
-///   │     ▼         │         │               │                        │
-///   │   S-box      (identity) (identity) ... (identity)                │
-///   │     │         │         │               │                        │
-///   │ add constant  │         │               │                        │
-///   │     │         │         │               │                        │
-///   │     └─────────┴─────────┴───────────────┘                        │
-///   │                       ▼                                          │
-///   │            sparse matrix multiply (O(t))                         │
-///   │                       │                                          │
-///   │                       ▼                                          │
-///   │                   post[0..W]                                     │
-///   └──────────────────────────────────────────────────────────────────┘
-/// ```
-///
+/// Using the sparse matrix decomposition (appendix of the Poseidon1 paper),
+/// we only need to commit to the s-box part (a similar trick is used in the AIR
+/// of poseidon2)
 #[repr(C)]
 pub struct PartialRound<T, const SBOX_DEGREE: u64, const SBOX_REGISTERS: usize> {
     /// S-box intermediate values for `state[0]` only.
