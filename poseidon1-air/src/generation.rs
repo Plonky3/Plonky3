@@ -415,11 +415,7 @@ fn generate_sparse_partial_round<
 
     // Sparse matrix multiply.
     let old_s0 = state[0];
-    let mut new_s0 = F::ZERO;
-    for j in 0..WIDTH {
-        new_s0 += state[j] * first_row[j];
-    }
-    state[0] = new_s0;
+    state[0] = dot_product(state.iter().copied(), first_row.iter().copied());
     for i in 1..WIDTH {
         state[i] += old_s0 * v[i - 1];
     }
