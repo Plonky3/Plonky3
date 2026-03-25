@@ -11,7 +11,7 @@
 //! The constraints mirror the three phases of the permutation:
 //!
 //! ```text
-//!   inputs ──▶ RF/2 full rounds ──▶ RP partial rounds ──▶ residual ──▶ RF/2 full rounds
+//!   inputs ──▶ RF/2 full rounds ──▶ sparse partial rounds ──▶ RF/2 full rounds
 //! ```
 //!
 //! Each round produces constraints that verify:
@@ -22,8 +22,12 @@
 //! 2. **S-box correctness**: The committed intermediate values (if any) and the
 //!    S-box output satisfy the power-map relation `x → x^α`.
 //!
-//! 3. **MDS correctness**: The committed `post` values equal the MDS matrix
-//!    applied to the post-S-box state.
+//! 3. **MDS correctness**: In full rounds, the committed `post` values equal the
+//!    MDS matrix applied to the post-S-box state. In partial rounds, the sparse
+//!    matrix multiply is folded into expressions (no separate constraint).
+//!
+//! **Sparse Partial** Rounds: The partial rounds use the sparse matrix decomposition from Appendix B of
+//! the Poseidon1 paper.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -38,8 +42,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use crate::columns::{Poseidon1Cols, num_cols};
-use crate::constants::RoundConstants;
-use crate::{FullRound, PartialRound, SBox, generate_trace_rows};
+use crate::{FullRound, FullRoundConstants, PartialRound, PartialRoundConstants, SBox, generate_trace_rows};
 
 /// The Poseidon1 AIR.
 ///
@@ -59,13 +62,14 @@ use crate::{FullRound, PartialRound, SBox, generate_trace_rows};
 ///
 /// - Each full round produces `WIDTH` constraints (one per post-state element)
 ///   plus S-box constraints.
-/// - Each partial round produces `WIDTH` constraints plus one S-box constraint.
+/// - Each partial round produces 1 constraint (for the S-box output) plus
+///   S-box intermediate constraints.
 ///
 /// Total:
 ///
 /// ```text
 ///   full round constraints:    2 * HALF_FULL_ROUNDS * (WIDTH + WIDTH * sbox_constraints)
-///   partial round constraints: PARTIAL_ROUNDS * (WIDTH + sbox_constraints)
+///   partial round constraints: PARTIAL_ROUNDS * (1 + sbox_constraints)
 /// ```
 #[derive(Debug)]
 pub struct Poseidon1Air<
@@ -76,8 +80,11 @@ pub struct Poseidon1Air<
     const HALF_FULL_ROUNDS: usize,
     const PARTIAL_ROUNDS: usize,
 > {
-    /// Pre-computed round constants (with forward constant substitution applied).
-    pub(crate) constants: RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
+    /// Pre-computed constants for full rounds (initial + terminal) and MDS matrix.
+    pub(crate) full_constants: FullRoundConstants<F, WIDTH>,
+
+    /// Pre-computed constants for partial rounds (sparse matrix decomposition).
+    pub(crate) partial_constants: PartialRoundConstants<F, WIDTH>,
 }
 
 impl<
@@ -91,7 +98,8 @@ impl<
 {
     fn clone(&self) -> Self {
         Self {
-            constants: self.constants.clone(),
+            full_constants: self.full_constants.clone(),
+            partial_constants: self.partial_constants.clone(),
         }
     }
 }
@@ -106,10 +114,18 @@ impl<
 > Poseidon1Air<F, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>
 {
     /// Construct a `Poseidon1Air` from pre-computed round constants.
-    pub const fn new(
-        constants: RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
+    ///
+    /// Use [`Poseidon1Constants::to_optimized`] to produce the two constant
+    /// structs from raw Poseidon1 parameters.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn new(
+        full_constants: FullRoundConstants<F, WIDTH>,
+        partial_constants: PartialRoundConstants<F, WIDTH>,
     ) -> Self {
-        Self { constants }
+        Self {
+            full_constants,
+            partial_constants,
+        }
     }
 
     /// Generate a trace with `num_hashes` random permutations.
@@ -132,7 +148,8 @@ impl<
         let inputs = (0..num_hashes).map(|_| rng.random()).collect();
         generate_trace_rows::<_, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>(
             inputs,
-            &self.constants,
+            &self.full_constants,
+            &self.partial_constants,
             extra_capacity_bits,
         )
     }
@@ -166,12 +183,11 @@ impl<
 /// It maintains a running `state` expression array and walks through all three phases:
 ///
 /// 1. Beginning full rounds
-/// 2. Partial rounds
-/// 3. Residual vector addition
-/// 4. Ending full rounds
+/// 2. Sparse partial rounds (first-round constants, m_i, then loop)
+/// 3. Ending full rounds
 ///
 /// At each round, the `state` expressions are updated and constrained against
-/// the committed `post` values. After constraining, the state is reset to the
+/// the committed values. After constraining, the state is reset to the
 /// committed values (degree 1) to prevent expression degree blowup.
 pub(crate) fn eval<
     AB: AirBuilder,
@@ -202,34 +218,39 @@ pub(crate) fn eval<
         eval_full_round::<AB, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
             &local.beginning_full_rounds[round],
-            &air.constants.beginning_full_round_constants[round],
-            &air.constants.mds_matrix,
+            &air.full_constants.initial[round],
+            &air.full_constants.dense_mds,
             builder,
         );
     }
 
-    // Phase 2: Partial rounds (RP rounds)
+    // Phase 2: Sparse partial rounds
     //
-    // Each round: add scalar constant to state[0] → S-box on state[0] → MDS multiply.
+    // Add first-round constants (full WIDTH vector).
+    for (s, c) in state
+        .iter_mut()
+        .zip(air.partial_constants.first_round_constants.iter())
+    {
+        *s += c.clone();
+    }
+
+    // Dense transition matrix m_i (applied once).
+    mds_multiply(&mut state, &air.partial_constants.m_i);
+
+    // Partial round loop: S-box on state[0], commit, scalar constant, sparse matmul.
     for round in 0..PARTIAL_ROUNDS {
-        eval_partial_round::<AB, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
+        eval_sparse_partial_round::<AB, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
             &local.partial_rounds[round],
-            &air.constants.partial_round_constants[round],
-            &air.constants.mds_matrix,
+            if round < PARTIAL_ROUNDS - 1 {
+                Some(air.partial_constants.round_constants[round].clone())
+            } else {
+                None
+            },
+            &air.partial_constants.sparse_first_row[round],
+            &air.partial_constants.v[round],
             builder,
         );
-    }
-
-    // Residual vector addition
-    //
-    // After forward constant substitution, the folded-away constants for
-    // state[1..WIDTH] accumulate into this residual. Add it once here.
-    for (s, r) in state
-        .iter_mut()
-        .zip(air.constants.partial_round_residual.iter())
-    {
-        *s += r.clone();
     }
 
     // Phase 3: Ending full rounds (RF/2 rounds)
@@ -237,8 +258,8 @@ pub(crate) fn eval<
         eval_full_round::<AB, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
             &local.ending_full_rounds[round],
-            &air.constants.ending_full_round_constants[round],
-            &air.constants.mds_matrix,
+            &air.full_constants.terminal[round],
+            &air.full_constants.dense_mds,
             builder,
         );
     }
@@ -311,41 +332,50 @@ fn eval_full_round<
     }
 }
 
-/// Evaluate constraints for one **partial** round.
+/// Evaluate constraints for one **sparse partial** round.
 ///
-/// A partial round applies the S-box only to `state[0]`:
-///
-/// 1. **AddRoundConstant**: Add the scalar `round_constant` to `state[0]`.
-/// 2. **S-box**: Apply `x → x^DEGREE` to `state[0]` only.
-/// 3. **MDS multiply**: Multiply the full state by the dense MDS matrix.
-///
-/// The full post-state is committed and constrained, same as in full rounds.
+/// 1. S-box on state[0].
+/// 2. Commit the S-box output and reset degree.
+/// 3. Add scalar round constant (except last round).
+/// 4. Sparse matrix multiply: dot product for new state[0], rank-1 update for rest.
 #[inline]
-fn eval_partial_round<
+fn eval_sparse_partial_round<
     AB: AirBuilder,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
 >(
     state: &mut [AB::Expr; WIDTH],
-    partial_round: &PartialRound<AB::Var, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
-    round_constant: &AB::F,
-    mds_matrix: &[[AB::F; WIDTH]; WIDTH],
+    partial_round: &PartialRound<AB::Var, SBOX_DEGREE, SBOX_REGISTERS>,
+    round_constant: Option<AB::F>,
+    first_row: &[AB::F; WIDTH],
+    v: &[AB::F; WIDTH],
     builder: &mut AB,
 ) {
-    // Step 1: Add the scalar constant to state[0] only.
-    state[0] += round_constant.clone();
-
-    // Step 2: S-box on state[0] only (state[1..WIDTH] pass through unchanged).
+    // S-box on state[0].
     eval_sbox(&partial_round.sbox, &mut state[0], builder);
 
-    // Step 3: Dense MDS multiply on the full state.
-    mds_multiply(state, mds_matrix);
+    // Commit the S-box output.
+    let committed: AB::Expr = partial_round.post_sbox.into();
+    builder.assert_eq(state[0].clone(), committed.clone());
+    state[0] = committed;
 
-    // Constrain the full post-state and reset degrees.
-    for (state_i, post_i) in state.iter_mut().zip(partial_round.post) {
-        builder.assert_eq(state_i.clone(), post_i);
-        *state_i = post_i.into();
+    // Add scalar round constant (all rounds except last).
+    if let Some(rc) = round_constant {
+        state[0] += rc;
+    }
+
+    // Sparse matrix multiply.
+    let old_s0 = state[0].clone();
+
+    let mut new_s0 = old_s0.clone() * first_row[0].clone();
+    for j in 1..WIDTH {
+        new_s0 += state[j].clone() * first_row[j].clone();
+    }
+    state[0] = new_s0;
+
+    for i in 1..WIDTH {
+        state[i] += old_s0.clone() * v[i - 1].clone();
     }
 }
 

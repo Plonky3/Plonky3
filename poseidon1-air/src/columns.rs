@@ -18,7 +18,7 @@
 //!
 //! - **Inputs**: `WIDTH` columns.
 //! - **Full rounds** (beginning + ending): `2 * HALF_FULL_ROUNDS * (WIDTH * (1 + SBOX_REGISTERS) + WIDTH)`.
-//! - **Partial rounds**: `PARTIAL_ROUNDS * (SBOX_REGISTERS + WIDTH)`.
+//! - **Partial rounds**: `PARTIAL_ROUNDS * (SBOX_REGISTERS + 1)`.
 
 use core::borrow::{Borrow, BorrowMut};
 use core::mem::size_of;
@@ -65,11 +65,7 @@ pub struct Poseidon1Cols<
     pub beginning_full_rounds: [FullRound<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>; HALF_FULL_ROUNDS],
 
     /// Columns for the `RP` partial rounds.
-    ///
-    /// These rounds apply the S-box only to `state[0]`, which is cheaper but
-    /// still increases the algebraic degree to resist algebraic attacks
-    /// (see Poseidon1 paper, Section 5.5.2).
-    pub partial_rounds: [PartialRound<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>; PARTIAL_ROUNDS],
+    pub partial_rounds: [PartialRound<T, SBOX_DEGREE, SBOX_REGISTERS>; PARTIAL_ROUNDS],
 
     /// Columns for the last `RF/2` full rounds.
     pub ending_full_rounds: [FullRound<T, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>; HALF_FULL_ROUNDS],
@@ -118,33 +114,29 @@ pub struct FullRound<T, const WIDTH: usize, const SBOX_DEGREE: u64, const SBOX_R
 ///   │  state[0]  state[1]  state[2]  ...  state[W-1]                   │
 ///   │     │         │         │               │                        │
 ///   │     ▼         │         │               │                        │
-///   │  S-box      (identity) (identity) ... (identity) (+ round const) │
+///   │   S-box      (identity) (identity) ... (identity)                │
+///   │     │         │         │               │                        │
+///   │ add constant  │         │               │                        │
 ///   │     │         │         │               │                        │
 ///   │     └─────────┴─────────┴───────────────┘                        │
 ///   │                       ▼                                          │
-///   │              MDS multiply (dense)                                │
+///   │            sparse matrix multiply (O(t))                         │
 ///   │                       │                                          │
 ///   │                       ▼                                          │
 ///   │                   post[0..W]                                     │
 ///   └──────────────────────────────────────────────────────────────────┘
 /// ```
 ///
-/// # Why store the full post-state?
-///
-/// The dense MDS matrix in Poseidon1 mixes **all** elements every round.
-/// If we only stored `post[0]` (as one might with a sparse internal matrix),
-/// the AIR expressions for subsequent rounds would accumulate multiplicative
-/// degree from every MDS entry, causing exponential expression blowup.
-///
-/// Storing all `WIDTH` post-state values resets the expression degree to 1.
 #[repr(C)]
-pub struct PartialRound<T, const WIDTH: usize, const SBOX_DEGREE: u64, const SBOX_REGISTERS: usize>
-{
+pub struct PartialRound<T, const SBOX_DEGREE: u64, const SBOX_REGISTERS: usize> {
     /// S-box intermediate values for `state[0]` only.
     pub sbox: SBox<T, SBOX_DEGREE, SBOX_REGISTERS>,
 
-    /// The complete state after the dense MDS multiply.
-    pub post: [T; WIDTH],
+    /// The committed S-box output for `state[0]`.
+    ///
+    /// Resets `state[0]` to degree 1 so the subsequent sparse matrix multiply
+    /// (and next round's S-box) maintains bounded constraint degree.
+    pub post_sbox: T,
 }
 
 /// Intermediate values for one S-box evaluation (`x → x^DEGREE`).
