@@ -34,7 +34,7 @@ use alloc::vec::Vec;
 use core::borrow::Borrow;
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
-use p3_field::{PrimeCharacteristicRing, PrimeField};
+use p3_field::{PrimeCharacteristicRing, PrimeField, dot_product};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_poseidon1::external::mds_multiply;
 use rand::distr::{Distribution, StandardUniform};
@@ -369,12 +369,7 @@ fn eval_sparse_partial_round<
 
     // Sparse matrix multiply.
     let old_s0 = state[0].clone();
-
-    let mut new_s0 = old_s0.clone() * first_row[0].clone();
-    for j in 1..WIDTH {
-        new_s0 += state[j].clone() * first_row[j].clone();
-    }
-    state[0] = new_s0;
+    state[0] = dot_product(state.iter().cloned(), first_row.iter().cloned());
 
     for i in 1..WIDTH {
         state[i] += old_s0.clone() * v[i - 1].clone();
