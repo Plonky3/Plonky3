@@ -22,9 +22,6 @@
 //!
 //! Both use 6 total rounds (NUM_FULL_ROUNDS = 5 rounds with constants + 1 final round without).
 
-extern crate alloc;
-
-use alloc::borrow::ToOwned;
 use core::array;
 
 use p3_field::PrimeCharacteristicRing;
@@ -131,10 +128,11 @@ where
     /// when combined with the MDS Concrete layer.
     #[inline]
     pub fn bricks(state: &mut [F; WIDTH]) {
-        // Snapshot the state before modifications so that each s_{i-1}
-        // refers to the value before Bricks, not a partially updated one.
-        for (x, x_mut) in state.to_owned().iter().zip(state.iter_mut().skip(1)) {
-            *x_mut += x.square();
+        // Iterate right-to-left so that state[i-1] is still its original
+        // value when we read it for state[i] += state[i-1]^2.
+        // This avoids cloning the entire state array.
+        for i in (1..WIDTH).rev() {
+            state[i] += state[i - 1].square();
         }
     }
 }

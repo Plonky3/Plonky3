@@ -1,8 +1,9 @@
 //! Concrete (MDS) layer for Monolith-31.
 
-use p3_field::PrimeField32;
+use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_mds::MdsPermutation;
-use p3_mds::util::apply_circulant;
+use p3_mds::karatsuba_convolution::Convolve;
+use p3_mds::util::{dot_product, first_row_to_first_col};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::Permutation;
 use sha3::digest::{ExtendableOutput, Update};
@@ -17,21 +18,61 @@ pub struct MonolithMdsMatrixMersenne31<const NUM_ROUNDS: usize>;
 /// Precomputed first row of the 16x16 circulant MDS matrix for Mersenne31.
 ///
 /// Taken from Section 4.5 of the Monolith paper.
-const MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH: [u64; 16] = [
+const MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH_ROW: [i64; 16] = [
     61402, 17845, 26798, 59689, 12021, 40901, 41351, 27521, 56951, 12034, 53865, 43244, 7454,
     33823, 28750, 1108,
 ];
+
+/// Convolution engine for the Monolith MDS matrix over Mersenne31.
+///
+/// The matrix entries sum to ~524757 < 2^20 << 2^24, satisfying the
+/// "small RHS" requirement for safe i64 accumulation with N=16.
+struct MonolithConvolveMersenne31;
+
+impl Convolve<Mersenne31, i64, i64> for MonolithConvolveMersenne31 {
+    const T_ZERO: i64 = 0;
+    const U_ZERO: i64 = 0;
+
+    #[inline(always)]
+    fn halve(val: i64) -> i64 {
+        val >> 1
+    }
+
+    /// Lift a Mersenne31 element to i64 for convolution.
+    #[inline(always)]
+    fn read(input: Mersenne31) -> i64 {
+        input.as_canonical_u32() as i64
+    }
+
+    /// For N=16: |x| < N * 2^31 = 2^35, |y| < 2^17 (max entry ~61402),
+    /// so each product < 2^52. Sum of 16 products < 2^56, fits in i64.
+    #[inline(always)]
+    fn parity_dot<const N: usize>(u: [i64; N], v: [i64; N]) -> i64 {
+        dot_product(u, v)
+    }
+
+    #[inline(always)]
+    fn reduce(z: i64) -> Mersenne31 {
+        debug_assert!(z >= 0);
+        Mersenne31::from_u64(z as u64)
+    }
+}
 
 impl<const WIDTH: usize, const NUM_ROUNDS: usize> Permutation<[Mersenne31; WIDTH]>
     for MonolithMdsMatrixMersenne31<NUM_ROUNDS>
 {
     fn permute(&self, input: [Mersenne31; WIDTH]) -> [Mersenne31; WIDTH] {
         if WIDTH == 16 {
-            // Use the precomputed circulant MDS matrix for the standard width.
-            let matrix: [u64; WIDTH] = MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH[..]
-                .try_into()
-                .unwrap();
-            apply_circulant(&matrix, &input)
+            const COL: [i64; 16] =
+                first_row_to_first_col(&MATRIX_CIRC_MDS_16_MERSENNE31_MONOLITH_ROW);
+            // Safety: WIDTH == 16 so the cast is valid.
+            let input_16: [Mersenne31; 16] = input[..].try_into().unwrap();
+            let out_16 = MonolithConvolveMersenne31::apply(
+                input_16,
+                COL,
+                MonolithConvolveMersenne31::conv16,
+            );
+            out_16[..].try_into().unwrap()
         } else {
             // For non-standard widths, derive a Cauchy MDS matrix from SHAKE-128.
             let mut shake = Shake128::default();
