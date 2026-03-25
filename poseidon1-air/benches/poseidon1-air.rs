@@ -67,6 +67,7 @@ fn babybear_air_constants() -> (
 ///
 /// - The STARK configuration (PCS + challenger).
 /// - The log_2 blowup factor needed when allocating trace memory.
+#[allow(clippy::type_complexity)]
 fn make_stark_config() -> (
     StarkConfig<
         TwoAdicFriPcs<

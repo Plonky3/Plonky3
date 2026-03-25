@@ -291,7 +291,7 @@ pub fn generate_trace_rows_for_perm<
             &mut state,
             full_round,
             rc,
-            &circ_col,
+            circ_col,
             &full_constants.dense_mds,
         );
     }
@@ -334,7 +334,7 @@ pub fn generate_trace_rows_for_perm<
             &mut state,
             full_round,
             rc,
-            &circ_col,
+            circ_col,
             &full_constants.dense_mds,
         );
     }
