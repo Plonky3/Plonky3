@@ -43,14 +43,16 @@ impl<SC: SGC> BatchTranscript<SC> {
     }
 
     /// Observe the main trace commitment and per-instance public values.
-    pub fn observe_main(
+    pub fn observe_main<PV>(
         &mut self,
         main_commitment: &Commitment<SC>,
-        public_values: &[Vec<Val<SC>>],
-    ) {
+        public_values: &[PV],
+    ) where
+        PV: AsRef<[Val<SC>]>,
+    {
         self.challenger.observe(main_commitment.clone());
         for pv in public_values {
-            self.challenger.observe_slice(pv);
+            self.challenger.observe_slice(pv.as_ref());
         }
     }
 
@@ -72,11 +74,15 @@ impl<SC: SGC> BatchTranscript<SC> {
     ///
     /// Global lookups with the same name share the same challenges; local
     /// lookups get fresh independent challenges.
-    pub fn sample_perm_challenges<LG: LookupGadget>(
+    pub fn sample_perm_challenges<LG, L>(
         &mut self,
-        all_lookups: &[Vec<Lookup<Val<SC>>>],
+        all_lookups: &[L],
         lookup_gadget: &LG,
-    ) -> Vec<Vec<SC::Challenge>> {
+    ) -> Vec<Vec<SC::Challenge>>
+    where
+        LG: LookupGadget,
+        L: AsRef<[Lookup<Val<SC>>]>,
+    {
         let n = lookup_gadget.num_challenges();
         let mut global = HashMap::new();
 
@@ -84,6 +90,7 @@ impl<SC: SGC> BatchTranscript<SC> {
             .iter()
             .map(|contexts| {
                 contexts
+                    .as_ref()
                     .iter()
                     .flat_map(|ctx| match &ctx.kind {
                         Kind::Global(name) => global
