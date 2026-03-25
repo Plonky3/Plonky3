@@ -22,8 +22,8 @@
 //! - S-box intermediates and post-states for full rounds.
 //! - S-box outputs for partial rounds (sparse matrix decomposition).
 use alloc::vec::Vec;
-use p3_mds::karatsuba_convolution::{mds_circulant_karatsuba_16, mds_circulant_karatsuba_24};
 use core::mem::MaybeUninit;
+use p3_mds::karatsuba_convolution::{mds_circulant_karatsuba_16, mds_circulant_karatsuba_24};
 
 use p3_field::{PrimeField, dot_product};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
@@ -46,18 +46,18 @@ fn mds_for_trace_gen<F: PrimeField, const WIDTH: usize>(
     dense_mds: &[[F; WIDTH]; WIDTH],
 ) {
     match WIDTH {
-          16 => {
-              let state_16: &mut [F; 16] = state.as_mut_slice().try_into().unwrap();
-              let col_16: &[F; 16] = circ_col.as_slice().try_into().unwrap();
-              mds_circulant_karatsuba_16(state_16, col_16);
-          }
-          24 => {
-              let state_24: &mut [F; 24] = state.as_mut_slice().try_into().unwrap();
-              let col_24: &[F; 24] = circ_col.as_slice().try_into().unwrap();
-              mds_circulant_karatsuba_24(state_24, col_24);
-          }
-          _ => mds_multiply(state, dense_mds),
-      }
+        16 => {
+            let state_16: &mut [F; 16] = state.as_mut_slice().try_into().unwrap();
+            let col_16: &[F; 16] = circ_col.as_slice().try_into().unwrap();
+            mds_circulant_karatsuba_16(state_16, col_16);
+        }
+        24 => {
+            let state_24: &mut [F; 24] = state.as_mut_slice().try_into().unwrap();
+            let col_24: &[F; 24] = circ_col.as_slice().try_into().unwrap();
+            mds_circulant_karatsuba_24(state_24, col_24);
+        }
+        _ => mds_multiply(state, dense_mds),
+    }
 }
 
 /// Generate a trace for multiple Poseidon1 permutations (vectorized layout).
@@ -130,6 +130,9 @@ pub fn generate_vectorized_trace_rows<
     assert!(suffix.is_empty(), "Alignment should match");
     assert_eq!(perms.len(), n);
 
+    // Derive circulant column from dense MDS (first column of circulant matrix).
+    let circ_col: [F; WIDTH] = core::array::from_fn(|i| full_constants.dense_mds[i][0]);
+
     // Compute each permutation in parallel (one Poseidon1Cols struct per permutation).
     perms.par_iter_mut().zip(inputs).for_each(|(perm, input)| {
         generate_trace_rows_for_perm::<
@@ -139,7 +142,7 @@ pub fn generate_vectorized_trace_rows<
             SBOX_REGISTERS,
             HALF_FULL_ROUNDS,
             PARTIAL_ROUNDS,
-        >(perm, input, full_constants, partial_constants);
+        >(perm, input, full_constants, partial_constants, &circ_col);
     });
 
     // All elements have been written; mark the Vec as initialized.
@@ -209,6 +212,9 @@ pub fn generate_trace_rows<
     assert!(suffix.is_empty(), "Alignment should match");
     assert_eq!(perms.len(), n);
 
+    // Derive circulant column from dense MDS (first column of circulant matrix).
+    let circ_col: [F; WIDTH] = core::array::from_fn(|i| full_constants.dense_mds[i][0]);
+
     // Compute each permutation in parallel.
     perms.par_iter_mut().zip(inputs).for_each(|(perm, input)| {
         generate_trace_rows_for_perm::<
@@ -218,7 +224,7 @@ pub fn generate_trace_rows<
             SBOX_REGISTERS,
             HALF_FULL_ROUNDS,
             PARTIAL_ROUNDS,
-        >(perm, input, full_constants, partial_constants);
+        >(perm, input, full_constants, partial_constants, &circ_col);
     });
 
     // All elements have been written; mark the Vec as initialized.
@@ -265,6 +271,7 @@ pub fn generate_trace_rows_for_perm<
     mut state: [F; WIDTH],
     full_constants: &FullRoundConstants<F, WIDTH>,
     partial_constants: &PartialRoundConstants<F, WIDTH>,
+    circ_col: &[F; WIDTH],
 ) {
     // Step 1: Write the initial state into the `inputs` columns.
     perm.inputs
@@ -273,9 +280,6 @@ pub fn generate_trace_rows_for_perm<
         .for_each(|(input, &x)| {
             input.write(x);
         });
-
-    // Derive circulant column from dense MDS (first column of circulant matrix).
-    let circ_col: [F; WIDTH] = core::array::from_fn(|i| full_constants.dense_mds[i][0]);
 
     // Step 2: Beginning full rounds (RF/2 rounds).
     for (full_round, rc) in perm
