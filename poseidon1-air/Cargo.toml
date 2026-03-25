@@ -42,9 +42,9 @@ tikv-jemallocator = "0.6"
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
 
-[lints]
-workspace = true
-
 [[bench]]
 name = "poseidon1-air"
 harness = false
+
+[lints]
+workspace = true
