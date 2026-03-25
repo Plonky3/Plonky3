@@ -194,7 +194,7 @@ pub trait BaseAir<F>: Sync {
 
         let max_period = cols.iter().map(|c| c.len()).max()?;
 
-        let values: Vec<F> = (0..max_period)
+        let values = (0..max_period)
             .flat_map(|row| cols.iter().map(move |col| col[row % col.len()].clone()))
             .collect();
 

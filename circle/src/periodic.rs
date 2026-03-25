@@ -61,12 +61,6 @@ pub fn build_periodic_lde_table_circle<F: ComplexExtendable>(
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CirclePeriodicEvaluator;
 
-impl CirclePeriodicEvaluator {
-    pub const fn new() -> Self {
-        Self
-    }
-}
-
 impl<F: ComplexExtendable> PeriodicEvaluator<F, CircleDomain<F>> for CirclePeriodicEvaluator {
     fn eval_on_lde(
         periodic_table: &[Vec<F>],
