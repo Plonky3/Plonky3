@@ -246,3 +246,349 @@ pub(crate) const fn monty_reduce_u128<MP: MontyParameters>(x: u128) -> u32 {
     // A single conditional subtraction of P yields a result in [0, P).
     add::<MP>(hi_r_mod_p, r)
 }
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    #[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Hash)]
+    struct KB;
+    impl MontyParameters for KB {
+        const PRIME: u32 = 0x7f000001; // 2^31 - 2^24 + 1
+        const MONTY_BITS: u32 = 32;
+        const MONTY_MU: u32 = 0x81000001;
+    }
+
+    #[derive(Copy, Clone, Default, Debug, Eq, PartialEq, Hash)]
+    struct BB;
+    impl MontyParameters for BB {
+        const PRIME: u32 = 0x78000001; // 2^31 - 2^27 + 1
+        const MONTY_BITS: u32 = 32;
+        const MONTY_MU: u32 = 0x88000001;
+    }
+
+    const KB_P: u32 = KB::PRIME;
+    const BB_P: u32 = BB::PRIME;
+
+    // R = 2^32, the Montgomery radix for both fields.
+    const R: u64 = 1u64 << 32;
+
+    // Input range upper bounds for the two reduction variants.
+    const KB_RP: u64 = KB_P as u64 * R;
+    const KB_TWO_RP: u64 = KB_RP * 2;
+    const BB_RP: u64 = BB_P as u64 * R;
+    const BB_TWO_RP: u64 = BB_RP * 2;
+
+    proptest! {
+        // ---------------------------------------------------------------
+        // to_monty / from_monty roundtrip
+        //
+        // Encoding then decoding must recover the original element:
+        //   from_monty(to_monty(x))  =  (x * R) * R^{-1}  =  x   (mod P)
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn kb_to_from_monty_roundtrip(x in 0..KB_P) {
+            prop_assert_eq!(from_monty::<KB>(to_monty::<KB>(x)), x);
+        }
+
+        #[test]
+        fn bb_to_from_monty_roundtrip(x in 0..BB_P) {
+            prop_assert_eq!(from_monty::<BB>(to_monty::<BB>(x)), x);
+        }
+
+        // Reverse direction — decoding then re-encoding:
+        //   to_monty(from_monty(m))  =  (m * R^{-1}) * R  =  m   (mod P)
+
+        #[test]
+        fn kb_from_to_monty_roundtrip(m in 0..KB_P) {
+            prop_assert_eq!(to_monty::<KB>(from_monty::<KB>(m)), m);
+        }
+
+        #[test]
+        fn bb_from_to_monty_roundtrip(m in 0..BB_P) {
+            prop_assert_eq!(to_monty::<BB>(from_monty::<BB>(m)), m);
+        }
+
+        // ---------------------------------------------------------------
+        // Output range: every conversion must land in [0, P).
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn kb_to_monty_output_range(x: u32) {
+            prop_assert!(to_monty::<KB>(x) < KB_P);
+        }
+
+        #[test]
+        fn bb_to_monty_output_range(x: u32) {
+            prop_assert!(to_monty::<BB>(x) < BB_P);
+        }
+
+        #[test]
+        fn kb_to_monty_signed_output_range(x: i32) {
+            prop_assert!(to_monty_signed::<KB>(x) < KB_P);
+        }
+
+        #[test]
+        fn bb_to_monty_signed_output_range(x: i32) {
+            prop_assert!(to_monty_signed::<BB>(x) < BB_P);
+        }
+
+        // ---------------------------------------------------------------
+        // Signed / unsigned consistency
+        //
+        // For non-negative inputs below P the signed and unsigned
+        // conversions must agree.
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn kb_to_monty_signed_agrees_for_positive(x in 0..KB_P) {
+            prop_assert_eq!(to_monty_signed::<KB>(x as i32), to_monty::<KB>(x));
+        }
+
+        #[test]
+        fn bb_to_monty_signed_agrees_for_positive(x in 0..BB_P) {
+            prop_assert_eq!(to_monty_signed::<BB>(x as i32), to_monty::<BB>(x));
+        }
+
+        // ---------------------------------------------------------------
+        // Negation identity
+        //
+        // The Montgomery forms of x and -x must sum to zero modulo P:
+        //   to_monty(x) + to_monty_signed(-x)  =  x*R + (-x)*R  =  0
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn kb_to_monty_signed_negation(x in 1..KB_P) {
+            let pos = to_monty::<KB>(x);
+            let neg = to_monty_signed::<KB>(-(x as i32));
+            prop_assert_eq!(add::<KB>(pos, neg), 0);
+        }
+
+        #[test]
+        fn bb_to_monty_signed_negation(x in 1..BB_P) {
+            let pos = to_monty::<BB>(x);
+            let neg = to_monty_signed::<BB>(-(x as i32));
+            prop_assert_eq!(add::<BB>(pos, neg), 0);
+        }
+
+        // ---------------------------------------------------------------
+        // 64-bit path must extend the 32-bit path
+        //
+        // Converting a u32 via the 64-bit function must give the same
+        // Montgomery form as the 32-bit function.
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn kb_to_monty_64_extends_32(x: u32) {
+            prop_assert_eq!(to_monty_64::<KB>(x as u64), to_monty::<KB>(x));
+        }
+
+        #[test]
+        fn bb_to_monty_64_extends_32(x: u32) {
+            prop_assert_eq!(to_monty_64::<BB>(x as u64), to_monty::<BB>(x));
+        }
+
+        // Signed 64-bit must agree with unsigned 64-bit for non-negative
+        // inputs below P.
+
+        #[test]
+        fn kb_to_monty_64_signed_agrees_for_positive(x in 0..KB_P) {
+            prop_assert_eq!(
+                to_monty_64_signed::<KB>(x as i64),
+                to_monty_64::<KB>(x as u64),
+            );
+        }
+
+        #[test]
+        fn bb_to_monty_64_signed_agrees_for_positive(x in 0..BB_P) {
+            prop_assert_eq!(
+                to_monty_64_signed::<BB>(x as i64),
+                to_monty_64::<BB>(x as u64),
+            );
+        }
+
+        // ---------------------------------------------------------------
+        // Modular addition: commutativity
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn kb_add_commutative(a in 0..KB_P, b in 0..KB_P) {
+            prop_assert_eq!(add::<KB>(a, b), add::<KB>(b, a));
+        }
+
+        #[test]
+        fn bb_add_commutative(a in 0..BB_P, b in 0..BB_P) {
+            prop_assert_eq!(add::<BB>(a, b), add::<BB>(b, a));
+        }
+
+        // ---------------------------------------------------------------
+        // Modular add / sub roundtrip
+        //
+        // Subtraction must undo addition and vice versa.
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn kb_add_sub_roundtrip(a in 0..KB_P, b in 0..KB_P) {
+            prop_assert_eq!(sub::<KB>(add::<KB>(a, b), b), a);
+        }
+
+        #[test]
+        fn bb_add_sub_roundtrip(a in 0..BB_P, b in 0..BB_P) {
+            prop_assert_eq!(sub::<BB>(add::<BB>(a, b), b), a);
+        }
+
+        #[test]
+        fn kb_sub_add_roundtrip(a in 0..KB_P, b in 0..KB_P) {
+            prop_assert_eq!(add::<KB>(sub::<KB>(a, b), b), a);
+        }
+
+        #[test]
+        fn bb_sub_add_roundtrip(a in 0..BB_P, b in 0..BB_P) {
+            prop_assert_eq!(add::<BB>(sub::<BB>(a, b), b), a);
+        }
+
+        // ---------------------------------------------------------------
+        // monty_reduce: output range and core Montgomery identity
+        //
+        // The core identity that defines Montgomery reduction:
+        //   result * R  ≡  x   (mod P)
+        //
+        // This verifies correctness without computing R^{-1} explicitly.
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn kb_monty_reduce_output_range(x in 0..KB_RP) {
+            prop_assert!(monty_reduce::<KB>(x) < KB_P);
+        }
+
+        #[test]
+        fn bb_monty_reduce_output_range(x in 0..BB_RP) {
+            prop_assert!(monty_reduce::<BB>(x) < BB_P);
+        }
+
+        #[test]
+        fn kb_monty_reduce_identity(x in 0..KB_RP) {
+            let result = monty_reduce::<KB>(x) as u64;
+            prop_assert_eq!((result * R) % KB_P as u64, x % KB_P as u64);
+        }
+
+        #[test]
+        fn bb_monty_reduce_identity(x in 0..BB_RP) {
+            let result = monty_reduce::<BB>(x) as u64;
+            prop_assert_eq!((result * R) % BB_P as u64, x % BB_P as u64);
+        }
+
+        // ---------------------------------------------------------------
+        // large_monty_reduce: must agree with monty_reduce on the
+        // overlapping range [0, R*P), and satisfy the same identity
+        // on its full domain [0, 2*R*P).
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn kb_large_agrees_with_standard(x in 0..KB_RP) {
+            prop_assert_eq!(large_monty_reduce::<KB>(x), monty_reduce::<KB>(x));
+        }
+
+        #[test]
+        fn bb_large_agrees_with_standard(x in 0..BB_RP) {
+            prop_assert_eq!(large_monty_reduce::<BB>(x), monty_reduce::<BB>(x));
+        }
+
+        #[test]
+        fn kb_large_monty_reduce_output_range(x in 0..KB_TWO_RP) {
+            prop_assert!(large_monty_reduce::<KB>(x) < KB_P);
+        }
+
+        #[test]
+        fn bb_large_monty_reduce_output_range(x in 0..BB_TWO_RP) {
+            prop_assert!(large_monty_reduce::<BB>(x) < BB_P);
+        }
+
+        #[test]
+        fn kb_large_monty_reduce_identity(x in 0..KB_TWO_RP) {
+            let result = large_monty_reduce::<KB>(x) as u64;
+            prop_assert_eq!((result * R) % KB_P as u64, x % KB_P as u64);
+        }
+
+        #[test]
+        fn bb_large_monty_reduce_identity(x in 0..BB_TWO_RP) {
+            let result = large_monty_reduce::<BB>(x) as u64;
+            prop_assert_eq!((result * R) % BB_P as u64, x % BB_P as u64);
+        }
+
+        // ---------------------------------------------------------------
+        // monty_reduce_u128: output range, core identity, and
+        // agreement with the u64 version on the overlapping range.
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn kb_monty_reduce_u128_output_range(lo: u64, hi: u32) {
+            let x = (hi as u128) << 64 | lo as u128;
+            prop_assert!(monty_reduce_u128::<KB>(x) < KB_P);
+        }
+
+        #[test]
+        fn bb_monty_reduce_u128_output_range(lo: u64, hi: u32) {
+            let x = (hi as u128) << 64 | lo as u128;
+            prop_assert!(monty_reduce_u128::<BB>(x) < BB_P);
+        }
+
+        #[test]
+        fn kb_monty_reduce_u128_identity(lo: u64, hi: u32) {
+            let x = (hi as u128) << 64 | lo as u128;
+            let result = monty_reduce_u128::<KB>(x) as u128;
+            prop_assert_eq!((result * R as u128) % KB_P as u128, x % KB_P as u128);
+        }
+
+        #[test]
+        fn bb_monty_reduce_u128_identity(lo: u64, hi: u32) {
+            let x = (hi as u128) << 64 | lo as u128;
+            let result = monty_reduce_u128::<BB>(x) as u128;
+            prop_assert_eq!((result * R as u128) % BB_P as u128, x % BB_P as u128);
+        }
+
+        #[test]
+        fn kb_monty_reduce_u128_agrees_with_u64(x in 0..KB_RP) {
+            prop_assert_eq!(
+                monty_reduce_u128::<KB>(x as u128),
+                monty_reduce::<KB>(x),
+            );
+        }
+
+        #[test]
+        fn bb_monty_reduce_u128_agrees_with_u64(x in 0..BB_RP) {
+            prop_assert_eq!(
+                monty_reduce_u128::<BB>(x as u128),
+                monty_reduce::<BB>(x),
+            );
+        }
+
+        // ---------------------------------------------------------------
+        // Montgomery multiplication
+        //
+        // Reducing the product of two Montgomery-form values must yield
+        // the Montgomery form of their field product:
+        //   reduce(to_monty(a) * to_monty(b))
+        //     = (a*R * b*R) * R^{-1}
+        //     = a*b*R
+        //     = to_monty(a*b mod P)
+        // ---------------------------------------------------------------
+
+        #[test]
+        fn kb_monty_mul_correct(a in 0..KB_P, b in 0..KB_P) {
+            let product = to_monty::<KB>(a) as u64 * to_monty::<KB>(b) as u64;
+            let expected = to_monty::<KB>(((a as u64 * b as u64) % KB_P as u64) as u32);
+            prop_assert_eq!(monty_reduce::<KB>(product), expected);
+        }
+
+        #[test]
+        fn bb_monty_mul_correct(a in 0..BB_P, b in 0..BB_P) {
+            let product = to_monty::<BB>(a) as u64 * to_monty::<BB>(b) as u64;
+            let expected = to_monty::<BB>(((a as u64 * b as u64) % BB_P as u64) as u32);
+            prop_assert_eq!(monty_reduce::<BB>(product), expected);
+        }
+    }
+}
