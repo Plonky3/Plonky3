@@ -491,34 +491,48 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
     type MainWindow = AB::MainWindow;
     type PublicVar = AB::PublicVar;
 
+    #[inline(always)]
     fn main(&self) -> Self::MainWindow {
         self.inner.main()
     }
 
+    #[inline(always)]
     fn preprocessed(&self) -> &Self::PreprocessedWindow {
         self.inner.preprocessed()
     }
 
+    #[inline(always)]
     fn is_first_row(&self) -> Self::Expr {
         self.inner.is_first_row()
     }
 
+    #[inline(always)]
     fn is_last_row(&self) -> Self::Expr {
         self.inner.is_last_row()
     }
 
+    #[inline(always)]
     fn is_transition(&self) -> Self::Expr {
         self.inner.is_transition()
     }
 
+    #[inline(always)]
     fn is_transition_window(&self, size: usize) -> Self::Expr {
         self.inner.is_transition_window(size)
     }
 
+    #[inline(always)]
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
         self.inner.assert_zero(self.condition() * x.into());
     }
 
+    #[inline(always)]
+    fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
+        let array = array.map(|x| self.condition() * x.into());
+        self.inner.assert_zeros(array);
+    }
+
+    #[inline(always)]
     fn public_values(&self) -> &[Self::PublicVar] {
         self.inner.public_values()
     }
@@ -527,6 +541,7 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
 impl<AB: PeriodicAirBuilder> PeriodicAirBuilder for FilteredAirBuilder<'_, AB> {
     type PeriodicVar = AB::PeriodicVar;
 
+    #[inline(always)]
     fn periodic_values(&self) -> &[Self::PeriodicVar] {
         self.inner.periodic_values()
     }
@@ -537,6 +552,7 @@ impl<AB: ExtensionBuilder> ExtensionBuilder for FilteredAirBuilder<'_, AB> {
     type ExprEF = AB::ExprEF;
     type VarEF = AB::VarEF;
 
+    #[inline(always)]
     fn assert_zero_ext<I>(&mut self, x: I)
     where
         I: Into<Self::ExprEF>,
@@ -555,14 +571,17 @@ impl<AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'_,
 
     type PermutationVar = AB::PermutationVar;
 
+    #[inline(always)]
     fn permutation(&self) -> Self::MP {
         self.inner.permutation()
     }
 
+    #[inline(always)]
     fn permutation_randomness(&self) -> &[Self::RandomVar] {
         self.inner.permutation_randomness()
     }
 
+    #[inline(always)]
     fn permutation_values(&self) -> &[Self::PermutationVar] {
         self.inner.permutation_values()
     }
@@ -571,6 +590,7 @@ impl<AB: PermutationAirBuilder> PermutationAirBuilder for FilteredAirBuilder<'_,
 impl<AB: AirBuilderWithContext> AirBuilderWithContext for FilteredAirBuilder<'_, AB> {
     type EvalContext = AB::EvalContext;
 
+    #[inline(always)]
     fn eval_context(&self) -> &Self::EvalContext {
         self.inner.eval_context()
     }

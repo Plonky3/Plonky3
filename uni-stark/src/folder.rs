@@ -248,41 +248,35 @@ where
     }
 
     /// Push a constraint value, auto-flushing when the buffer is full.
-    #[inline]
+    #[inline(always)]
     pub fn push(&mut self, val: T) {
         if self.len == N {
             self.flush();
         }
-        self.buf[self.len] = val;
+        debug_assert!(self.len < N);
+        // `% N` compiles to `& (N-1)` for power-of-two N, giving branchless
+        // bounds elision without unsafe.
+        self.buf[self.len % N] = val;
         self.len += 1;
     }
 
     /// Push a compile-time-sized batch, flushing as needed.
-    #[inline]
+    #[inline(always)]
     pub fn push_array<const M: usize>(&mut self, vals: [T; M]) {
-        let mut offset = 0;
-        while offset < M {
-            if self.len == N {
-                self.flush();
-            }
-            let space = N - self.len;
-            let chunk = if M - offset < space {
-                M - offset
-            } else {
-                space
-            };
-            self.buf[self.len..self.len + chunk].copy_from_slice(&vals[offset..offset + chunk]);
-            self.len += chunk;
-            offset += chunk;
+        for val in vals {
+            self.push(val);
         }
     }
 
     /// Combine buffered elements with their coefficients and accumulate.
-    #[inline]
+    #[inline(always)]
     pub fn flush(&mut self) {
-        if self.len == 0 {
-            return;
+        if self.len != 0 {
+            self.flush_inner();
         }
+    }
+
+    fn flush_inner(&mut self) {
         let buf = &self.buf[..self.len];
         let start = self.start;
         self.start += self.len;
