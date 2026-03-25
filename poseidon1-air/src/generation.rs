@@ -22,6 +22,7 @@
 //! - S-box intermediates and post-states for full rounds.
 //! - S-box outputs for partial rounds (sparse matrix decomposition).
 use alloc::vec::Vec;
+use p3_mds::karatsuba_convolution::{mds_circulant_karatsuba_16, mds_circulant_karatsuba_24};
 use core::mem::MaybeUninit;
 
 use p3_field::PrimeField;
