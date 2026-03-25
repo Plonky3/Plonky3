@@ -9,7 +9,7 @@ use p3_matrix::stack::ViewPair;
 
 use crate::{
     Air, AirBuilder, AirBuilderWithContext, ExtensionBuilder, Name, NamedAirBuilder,
-    NamedExtensionBuilder, NamespaceExt, PermutationAirBuilder, RowWindow,
+    NamedExtensionBuilder, NamespaceExt, PeriodicAirBuilder, PermutationAirBuilder, RowWindow,
 };
 
 /// A single constraint violation captured during debug evaluation.
@@ -145,6 +145,11 @@ pub struct DebugConstraintBuilder<'a, F: Field, EF: ExtensionField<F> = F> {
 
     /// Expected cumulated values for global lookup arguments.
     permutation_values: &'a [EF],
+
+    /// Values of each periodic column at [`Self::row_index`], in column order.
+    ///
+    /// Empty when the AIR has no periodic columns.
+    periodic_row: &'a [F],
 }
 
 impl<'a, F: Field> DebugConstraintBuilder<'a, F> {
@@ -153,6 +158,10 @@ impl<'a, F: Field> DebugConstraintBuilder<'a, F> {
     /// Permutation-related fields are set to `None` / empty so that the
     /// builder can still satisfy trait bounds that require extension-field
     /// support, but calling permutation accessors will panic.
+    ///
+    /// `periodic_row` must hold the slice returned by `BaseAir::periodic_values` for
+    /// the current row (or be empty when the AIR has no periodic columns).
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         row_index: usize,
         main: ViewPair<'a, F>,
@@ -161,6 +170,7 @@ impl<'a, F: Field> DebugConstraintBuilder<'a, F> {
         is_first_row: F,
         is_last_row: F,
         is_transition: F,
+        periodic_row: &'a [F],
     ) -> Self {
         Self {
             row_index,
@@ -178,6 +188,7 @@ impl<'a, F: Field> DebugConstraintBuilder<'a, F> {
             permutation: None,
             permutation_challenges: &[],
             permutation_values: &[],
+            periodic_row,
         }
     }
 }
@@ -187,6 +198,9 @@ impl<'a, F: Field, EF: ExtensionField<F>> DebugConstraintBuilder<'a, F, EF> {
     ///
     /// Use this when the AIR declares lookup or permutation arguments
     /// that require access to the permutation trace and challenges.
+    ///
+    /// `periodic_row` must hold the slice returned by `BaseAir::periodic_values` for
+    /// the current row (or be empty when the AIR has no periodic columns).
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_permutation(
         row_index: usize,
@@ -199,6 +213,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> DebugConstraintBuilder<'a, F, EF> {
         permutation: ViewPair<'a, EF>,
         permutation_challenges: &'a [EF],
         permutation_values: &'a [EF],
+        periodic_row: &'a [F],
     ) -> Self {
         Self {
             row_index,
@@ -216,6 +231,7 @@ impl<'a, F: Field, EF: ExtensionField<F>> DebugConstraintBuilder<'a, F, EF> {
             permutation: Some(permutation),
             permutation_challenges,
             permutation_values,
+            periodic_row,
         }
     }
 
@@ -298,6 +314,14 @@ impl<F: Field, EF: ExtensionField<F>> ExtensionBuilder for DebugConstraintBuilde
         I: Into<Self::ExprEF>,
     {
         self.assert_zero_ext_named(x, "");
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> PeriodicAirBuilder for DebugConstraintBuilder<'_, F, EF> {
+    type PeriodicVar = F;
+
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.periodic_row
     }
 }
 
@@ -489,6 +513,7 @@ where
         };
 
         // Construct the builder with row selectors derived from the position.
+        let periodic_row = air.periodic_values(row_index);
         let mut builder = DebugConstraintBuilder::new(
             row_index,
             main_pair,
@@ -497,6 +522,7 @@ where
             F::from_bool(row_index == 0),
             F::from_bool(row_index == height - 1),
             F::from_bool(row_index != height - 1),
+            &periodic_row,
         );
 
         // Run every AIR constraint on this row.
@@ -595,6 +621,7 @@ where
         };
 
         // Derive the row selectors from the current position.
+        let periodic_row = air.periodic_values(row_index);
         let mut builder = DebugConstraintBuilder::new(
             row_index,
             main_pair,
@@ -603,6 +630,7 @@ where
             F::from_bool(row_index == 0),
             F::from_bool(row_index == height - 1),
             F::from_bool(row_index != height - 1),
+            &periodic_row,
         );
 
         // Run every AIR constraint on this row.
@@ -755,6 +783,7 @@ mod tests {
             BabyBear::ONE,  // is_first_row
             BabyBear::ONE,  // is_last_row (single row)
             BabyBear::ZERO, // is_transition
+            &[],
         );
         air.eval(&mut builder);
         builder

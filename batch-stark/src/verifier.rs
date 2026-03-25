@@ -104,6 +104,7 @@ where
             preprocessed_width: pre_w,
             main_width: air.width(),
             num_public_values: air.num_public_values(),
+            num_periodic_columns: air.num_periodic_columns(),
             ..Default::default()
         };
         let log_num_chunks =
@@ -542,6 +543,11 @@ where
             .iter()
             .map(|ld| ld.expected_cumulated)
             .collect();
+        let periodic_values: Vec<Challenge<SC>> = air
+            .periodic_columns()
+            .iter()
+            .map(|col| ext_trace_domains[i].evaluate_periodic_column_at(col, zeta))
+            .collect();
         let verifier_data = VerifierData {
             trace_local: &opened_values.instances[i].base_opened_values.trace_local,
             trace_next: trace_next_ref,
@@ -555,6 +561,7 @@ where
             permutation_next: &perm_next_ext,
             permutation_challenges: &challenges_per_instance[i],
             permutation_values: &perm_vals,
+            periodic_values: &periodic_values,
             lookups: &all_lookups[i],
             public_values: &public_values[i],
             trace_domain: init_trace_domain,
@@ -615,6 +622,8 @@ pub struct VerifierData<'a, SC: SGC> {
     permutation_challenges: &'a [SC::Challenge],
     // Expected cumulated values for global lookup arguments
     permutation_values: &'a [SC::Challenge],
+    // Periodic column polynomials evaluated at the OOD point `zeta`
+    periodic_values: &'a [SC::Challenge],
     // Lookup contexts for this instance
     lookups: &'a [Lookup<Val<SC>>],
     // Public values for this instance
@@ -648,6 +657,7 @@ where
         permutation_next,
         permutation_challenges,
         permutation_values,
+        periodic_values,
         lookups,
         public_values,
         trace_domain,
@@ -674,6 +684,7 @@ where
         main,
         preprocessed,
         preprocessed_window,
+        periodic_values,
         public_values,
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,
