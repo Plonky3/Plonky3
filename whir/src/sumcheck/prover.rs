@@ -13,7 +13,7 @@ use crate::constraints::statement::EqStatement;
 use crate::constraints::statement::initial::{InitialStatement, InitialStatementInner};
 use crate::sumcheck::lagrange::lagrange_weights_012_multi;
 use crate::sumcheck::product_polynomial::{ProductPolynomial, sumcheck_coefficients_cross};
-use crate::sumcheck::svo::SplitEq;
+use crate::sumcheck::svo::SvoClaim;
 use crate::sumcheck::{SumcheckData, extrapolate_012};
 
 /// Prover state for the sumcheck protocol over a multilinear polynomial.
@@ -274,7 +274,7 @@ where
         challenger: &mut Challenger,
         folding_factor: usize,
         pow_bits: usize,
-        statements: &[SplitEq<F, EF>],
+        statements: &[SvoClaim<F, EF>],
     ) -> (Self, Point<EF>)
     where
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
@@ -306,7 +306,7 @@ where
         let mut sum = statements
             .iter()
             .zip(alpha.powers())
-            .map(|(statement, alpha)| statement.eval * alpha)
+            .map(|(statement, alpha)| statement.eval() * alpha)
             .sum::<EF>();
 
         // Gather the pre-computed accumulator tables for all constraints.
@@ -315,7 +315,7 @@ where
         // - [round][1] stores data for computing c_2
         let accumulators = statements
             .iter()
-            .map(SplitEq::accumulators)
+            .map(SvoClaim::accumulators)
             .collect::<Vec<_>>();
 
         // Collect verifier challenges across all SVO rounds.
@@ -354,21 +354,22 @@ where
             }
         });
 
+        let rs = Point::new(rs);
         // Materialize the evaluation polynomial by folding the original base-field
         // evaluations through all collected challenges at once.
-        let poly = poly.compress_lo_to_packed(&Point::new(rs.clone()), EF::ONE);
+        let poly = poly.compress_lo_to_packed(&rs, EF::ONE);
 
         // Materialize the weight polynomial in packed form by combining all split eq
         // constraints into a single packed weight array.
         let mut weights = Poly::<EF::ExtensionPacking>::zero(poly.num_vars());
-        SplitEq::combine_into_packed(statements, weights.as_mut_slice(), alpha, &rs);
+        SvoClaim::combine_into_packed(statements, weights.as_mut_slice(), alpha, &rs);
 
         // Wrap into a paired polynomial (packed) for subsequent standard rounds.
         let poly = ProductPolynomial::<F, EF>::new_packed(poly, weights);
 
         // Verify the sumcheck invariant after materialization.
         debug_assert_eq!(poly.dot_product(), sum);
-        (Self { poly, sum }, Point::new(rs))
+        (Self { poly, sum }, rs)
     }
 
     /// Entry point: constructs a sumcheck prover from base-field evaluations.
@@ -411,7 +412,7 @@ where
         let poly = &statement.poly;
         match &statement.inner {
             // SVO path: the statement has pre-split equality polynomials.
-            InitialStatementInner::Svo { split_eqs, l0 } => {
+            InitialStatementInner::Svo { statement, l0 } => {
                 // The folding factor must match the pre-configured split point.
                 assert_eq!(*l0, folding_factor);
                 // Ensure enough variables remain after SVO rounds for packed mode.
@@ -422,7 +423,7 @@ where
                     challenger,
                     folding_factor,
                     pow_bits,
-                    split_eqs,
+                    statement,
                 )
             }
             // Classic path: choose packed or scalar based on polynomial size.

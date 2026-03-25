@@ -21,10 +21,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
+use p3_field::{ExtensionField, Field, PackedValue, dot_product};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use p3_multilinear_util::split_eq::SplitEq;
 use p3_util::{log2_strict_usize, log3_strict_usize};
 
 /// Generates grid points for SVO accumulator evaluation.
@@ -150,6 +151,61 @@ pub fn calculate_accumulators<F: Field, EF: ExtensionField<F>>(
         .collect()
 }
 
+/// Challenge point split into an SVO prefix and a residual split-eq suffix.
+#[derive(Debug, Clone)]
+struct SvoPoint<F: Field, EF: ExtensionField<F>> {
+    /// The first `k_svo` coordinates of the original point, handled by the SVO
+    /// accumulator rounds.
+    z_svo: Point<EF>,
+    /// A factored table for `eq(z_rest, ·)` on the remaining coordinates after
+    /// removing `z_svo` from the original point.
+    split_eq: SplitEq<F, EF>,
+}
+
+impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
+    /// Returns the number of SVO variables (`l0`).
+    ///
+    /// This is the depth of the SVO optimization.
+    /// These coordinates are processed via the accumulator-based Lagrange
+    /// interpolation path rather than the standard fold-and-sum path.
+    const fn k_svo(&self) -> usize {
+        self.z_svo.num_vars()
+    }
+
+    /// Returns the number of variables covered by the split eq tables.
+    ///
+    /// ```text
+    /// k_split = inner_half_vars + outer_half_vars + log_2(SIMD_WIDTH)
+    /// ```
+    const fn k_split(&self) -> usize {
+        self.split_eq.num_vars()
+    }
+
+    /// Accumulates this claim's residual equality table into a packed buffer.
+    ///
+    /// Once the SVO rounds have fixed the prefix variables to `rs`, the remaining
+    /// weight vector is:
+    /// ```text
+    /// alpha · eq(z_svo, rs) · eq(z_rest, x_rest)
+    /// ```
+    /// for every assignment `x_rest` to the non-SVO variables.
+    ///
+    /// This method computes the scalar factor `alpha · eq(z_svo, rs)` and then asks
+    /// `split_eq` to materialize the residual `eq(z_rest, ·)` table into `out`.
+    fn accumulate_into_packed(&self, out: &mut [EF::ExtensionPacking], rs: &Point<EF>, alpha: EF) {
+        // Compute the scalar factor: alpha^j * eq(z_svo_j, rs).
+        //
+        // This evaluates the SVO portion of the equality polynomial at the
+        // sumcheck challenges `rs`, and folds in the batching challenge `alpha`.
+        // We pass `alpha` as the initial value to `new_from_point` so it gets
+        // multiplied into every term of the eq evaluation.
+        let scale = Poly::new_from_point(self.z_svo.as_slice(), alpha).eval_ext::<F>(rs);
+
+        // Materializes the contribution of this split eq into the output buffer.
+        self.split_eq.accumulate_into_packed(out, Some(scale));
+    }
+}
+
 /// Split equality polynomial with precomputed accumulators for optimized sumcheck proving.
 ///
 /// The equality polynomial for a point `w in F^k` is:
@@ -177,20 +233,9 @@ pub fn calculate_accumulators<F: Field, EF: ExtensionField<F>>(
 /// This reduces memory from `O(2^{k-l0})` to `O(2^{(k-l0)/2})`.
 /// Precomputes `O(3^l)` total accumulator values upfront.
 #[derive(Debug, Clone)]
-pub struct SplitEq<F: Field, EF: ExtensionField<F>> {
-    /// First part of the point where we apply the SVO optimization.
-    z_svo: Point<EF>,
-
-    /// Evaluations of eq for the lower-index half of rest of the point.
-    ///
-    /// Contains 2^{(k-l0)/2} extension field elements.
-    eq0: Poly<EF>,
-
-    /// Evaluations of eq for the higher-index half of rest of the point.
-    ///
-    /// Stored in packed form for SIMD operations.
-    /// Contains 2^{(k-l0)/2 - log2(packing_width)} packed elements.
-    eq1: Poly<EF::ExtensionPacking>,
+pub struct SvoClaim<F: Field, EF: ExtensionField<F>> {
+    /// Internal split representation of the challenge point.
+    point: SvoPoint<F, EF>,
 
     /// Precomputed accumulators for all SVO rounds.
     ///
@@ -202,14 +247,14 @@ pub struct SplitEq<F: Field, EF: ExtensionField<F>> {
     /// The evaluation `sum_x eq(w, x) * poly(x)` of the polynomial weighted by eq.
     ///
     /// This is the initial claimed sum for the sumcheck protocol.
-    pub eval: EF,
+    eval: EF,
 
     /// The original challenge point `w` for the equality polynomial.
-    pub point: Point<EF>,
+    original: Point<EF>,
 }
 
-impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
-    /// Creates a new split equality polynomial with precomputed accumulators.
+impl<F: Field, EF: ExtensionField<F>> SvoClaim<F, EF> {
+    /// Creates a new SVO equality claim with precomputed accumulators.
     ///
     /// 1. Splits the challenge point into SVO, scalar, and packed components.
     /// 2. Computes partial evaluations of `poly` weighted by the equality polynomial.
@@ -222,15 +267,11 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         assert!(k > l);
         assert!(k >= 2 * log2_strict_usize(F::Packing::WIDTH));
 
-        // Split into SVO part and the rest.
+        assert!(point.num_vars() > l);
+        // Split into SVO part and the rest
         let (z_svo, z_rest) = point.split_at(l);
-
-        // Split the rest into two halves for the eq tables.
-        let (z0, z1) = z_rest.split_at((k - l) / 2);
-
-        // Build evaluation tables: eq0 unpacked, eq1 packed for SIMD.
-        let eq0 = Poly::new_from_point(z0.as_slice(), EF::ONE);
-        let eq1 = Poly::new_packed_from_point(z1.as_slice(), EF::ONE);
+        // Build evaluation tables for the rest of the point
+        let split_eq = SplitEq::new_packed(&z_rest, EF::ONE);
 
         // Compute partial evaluations of the polynomial weighted by the split eq.
         //
@@ -239,65 +280,38 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         //
         // Also computes the full weighted evaluation by combining partial results
         // with the SVO portion of the equality polynomial.
-        let (partial_evals, eval) = {
-            // Each chunk of size 2^{k-l} is processed independently.
-            let k_split = eq1.num_vars() + eq0.num_vars() + log2_strict_usize(F::Packing::WIDTH);
-            let chunk_size = 1 << k_split;
-            let partial_evals = poly
-                .as_slice()
-                .chunks(chunk_size)
-                .map(|poly_chunk| {
-                    // Pack the polynomial chunk for SIMD operations.
-                    let poly_packed = F::Packing::pack_slice(poly_chunk);
-
-                    // Compute the double sum: sum_{x_L} sum_{x_R} left[x_L] * right[x_R] * poly[x_L, x_R]
-                    // The outer sum is over right indices (parallelized).
-                    // The inner sum is over left indices (vectorized via packing).
-                    let sum = poly_packed
-                        .par_chunks(eq1.num_evals())
-                        .zip_eq(eq0.as_slice().par_iter())
-                        .map(|(poly_packed, &eq0_val)| {
-                            // Inner sum: sum_{x_1} eq1[x_1] * poly[x_0, x_1]
-                            let inner_sum = poly_packed
-                                .iter()
-                                .zip_eq(eq1.iter())
-                                .map(|(&f, &eq1_val)| eq1_val * f)
-                                .sum::<EF::ExtensionPacking>();
-                            // Multiply by the eq0 weight.
-                            inner_sum * eq0_val
-                        })
-                        .sum::<EF::ExtensionPacking>();
-
-                    // Unpack the result to get a single extension field element.
-                    EF::ExtensionPacking::to_ext_iter([sum]).sum()
-                })
-                .collect::<Vec<_>>();
-
-            // Combine partial evals with eq_svo to get the full evaluation.
-            let eq_svo = Poly::new_from_point(z_svo.as_slice(), EF::ONE);
-            let eval =
-                dot_product::<EF, _, _>(eq_svo.iter().copied(), partial_evals.iter().copied());
-            (partial_evals, eval)
-        };
+        let eq_svo = Poly::new_from_point(z_svo.as_slice(), EF::ONE);
+        let partial_evals = split_eq.compress_hi(poly);
+        let eval = dot_product::<EF, _, _>(eq_svo.iter().copied(), partial_evals.iter().copied());
 
         // Precompute accumulators for all SVO rounds.
         let accumulators = (1..=z_svo.num_vars())
             .map(|i| {
                 let us = points_012::<F>(i);
-                let acc0 = calculate_accumulators(&us[0], &partial_evals, z_svo.as_slice());
-                let acc2 = calculate_accumulators(&us[1], &partial_evals, z_svo.as_slice());
+                let acc0 =
+                    calculate_accumulators(&us[0], partial_evals.as_slice(), z_svo.as_slice());
+                let acc2 =
+                    calculate_accumulators(&us[1], partial_evals.as_slice(), z_svo.as_slice());
                 [acc0, acc2]
             })
             .collect();
 
         Self {
-            z_svo,
-            eq0,
-            eq1,
+            point: SvoPoint { z_svo, split_eq },
             accumulators,
             eval,
-            point: point.clone(),
+            original: point.clone(),
         }
+    }
+
+    /// Returns the original challenge point for the equality polynomial.
+    pub fn point(&self) -> &Point<EF> {
+        &self.original
+    }
+
+    /// Returns the claimed evaluation of the polynomial
+    pub fn eval(&self) -> EF {
+        self.eval
     }
 
     /// Returns the total number of variables `k` in the original point.
@@ -324,19 +338,12 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     /// These coordinates are processed via the accumulator-based Lagrange
     /// interpolation path rather than the standard fold-and-sum path.
     pub const fn k_svo(&self) -> usize {
-        self.z_svo.num_vars()
+        self.point.k_svo()
     }
 
     /// Returns the number of variables covered by the split eq tables.
-    ///
-    /// ```text
-    /// k_split = inner_half_vars + outer_half_vars + log_2(SIMD_WIDTH)
-    /// ```
-    ///
-    /// The `log_2(SIMD_WIDTH)` term accounts for variables absorbed by SIMD packing.
-    /// Together with the SVO depth, this reconstructs the original `k`.
     pub const fn k_split(&self) -> usize {
-        self.eq1.num_vars() + self.eq0.num_vars() + log2_strict_usize(F::Packing::WIDTH)
+        self.point.k_split()
     }
 
     /// Combines multiple split eq polynomials into a single packed output.
@@ -368,7 +375,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         selfs: &[Self],
         out: &mut [EF::ExtensionPacking],
         alpha: EF,
-        rs: &[EF],
+        rs: &Point<EF>,
     ) {
         // Nothing to do if there are no split eqs.
         if selfs.is_empty() {
@@ -389,35 +396,14 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         let k_svo = selfs.iter().map(Self::k_svo).all_equal_value().unwrap();
 
         assert_eq!(
-            rs.len(),
+            rs.num_vars(),
             k_svo,
             "combine_into_packed: wrong number of SVO challenges"
         );
 
         // Accumulate each split eq into the output, weighted by powers of alpha.
-        for (split_eq, alpha) in selfs.iter().zip(alpha.powers()) {
-            // Compute the scalar factor: alpha^j * eq(z_svo_j, rs).
-            //
-            // This evaluates the SVO portion of the equality polynomial at the
-            // sumcheck challenges `rs`, and folds in the batching challenge `alpha`.
-            // We pass `alpha` as the initial value to `new_from_point` so it gets
-            // multiplied into every term of the eq evaluation.
-            let scale = Poly::new_from_point(split_eq.z_svo.as_slice(), alpha)
-                .eval_ext::<F>(&Point::new(rs.to_vec()));
-
-            // Process output in chunks of size |eq1|, one chunk per eq0 entry.
-            //
-            // The output is indexed as out[x_L * |eq1| + x_R], and we iterate
-            // over x_L (outer loop via chunks) and x_R (inner loop within chunk).
-            // For each position: out[x_L, x_R] += eq1[x_R] * eq0[x_L] * scale.
-            out.par_chunks_mut(split_eq.eq1.num_evals())
-                .zip(split_eq.eq0.as_slice().par_iter())
-                .for_each(|(chunk, &right)| {
-                    chunk
-                        .iter_mut()
-                        .zip(split_eq.eq1.iter())
-                        .for_each(|(out, &left)| *out += left * right * scale);
-                });
+        for (svo_claim, alpha) in selfs.iter().zip(alpha.powers()) {
+            svo_claim.point.accumulate_into_packed(out, &rs, alpha);
         }
     }
 }
@@ -562,7 +548,7 @@ mod tests {
 
         // Test for each SVO depth l from 1 to k/2 - 1.
         for l in 1..k / 2 {
-            let split_eq = SplitEq::<F, EF>::new(&z, l, &f);
+            let split_eq = SvoClaim::<F, EF>::new(&z, l, &f);
 
             // There should be exactly l accumulator rounds (one per SVO variable).
             let accumulators = split_eq.accumulators();
@@ -616,7 +602,7 @@ mod tests {
             let point = Point::<EF>::rand(&mut rng, k);
             let poly = Poly::new((0..1 << k).map(|_| rng.random()).collect());
             // Use l=0 SVO depth so all variables go into the split eq tables.
-            let split_eq = SplitEq::<F, EF>::new(&point, 0, &poly);
+            let split_eq = SvoClaim::<F, EF>::new(&point, 0, &poly);
             assert_eq!(split_eq.num_variables(), k, "k() mismatch for k={k}");
         }
     }
@@ -633,7 +619,7 @@ mod tests {
 
         let point = Point::<EF>::rand(&mut rng, k);
         let poly = Poly::new((0..1 << k).map(|_| rng.random()).collect());
-        let split_eq = SplitEq::<F, EF>::new(&point, 0, &poly);
+        let split_eq = SvoClaim::<F, EF>::new(&point, 0, &poly);
 
         // With l=0 SVO depth, all variables are in the split tables.
         // partial_evals on a k-variable polynomial should give 2^0 = 1 partial eval.
@@ -643,7 +629,7 @@ mod tests {
 
         // We need to create a new split_eq for n variables to test partial_evals
         let point_n = Point::<EF>::rand(&mut rng, n);
-        let split_eq_n = SplitEq::<F, EF>::new(&point_n, 0, &larger_poly);
+        let split_eq_n = SvoClaim::<F, EF>::new(&point_n, 0, &larger_poly);
         // The number of partial evals is 2^{k_svo} = 2^0 = 1 for l=0
         // This is implicitly tested by the constructor succeeding.
         assert_eq!(split_eq_n.num_variables(), n);
@@ -680,7 +666,7 @@ mod tests {
             let mut rng = SmallRng::seed_from_u64(k as u64);
             let point = Point::<EF>::rand(&mut rng, k);
             let poly = Poly::zero(k);
-            let split_eq = SplitEq::<F, EF>::new(&point, 0, &poly);
+            let split_eq = SvoClaim::<F, EF>::new(&point, 0, &poly);
 
             prop_assert_eq!(split_eq.num_variables(), k);
         }

@@ -26,7 +26,7 @@ use p3_util::log2_strict_usize;
 
 use crate::constraints::statement::EqStatement;
 use crate::parameters::SumcheckStrategy;
-use crate::sumcheck::svo::SplitEq;
+use crate::sumcheck::svo::SvoClaim;
 
 /// Manages the polynomial and constraints during the initial phase of WHIR.
 #[derive(Clone, Debug)]
@@ -65,7 +65,7 @@ pub enum InitialStatementInner<F: Field, EF: ExtensionField<F>> {
         l0: usize,
 
         /// Split equality polynomials for each constraint.
-        split_eqs: Vec<SplitEq<F, EF>>,
+        statement: Vec<SvoClaim<F, EF>>,
     },
 }
 
@@ -164,7 +164,7 @@ impl<F: Field, EF: ExtensionField<F>> InitialStatement<F, EF> {
     pub const fn is_empty(&self) -> bool {
         match &self.inner {
             InitialStatementInner::Classic(statement) => statement.is_empty(),
-            InitialStatementInner::Svo { split_eqs, .. } => split_eqs.is_empty(),
+            InitialStatementInner::Svo { statement, .. } => statement.is_empty(),
         }
     }
 
@@ -173,7 +173,7 @@ impl<F: Field, EF: ExtensionField<F>> InitialStatement<F, EF> {
     pub const fn len(&self) -> usize {
         match &self.inner {
             InitialStatementInner::Classic(statement) => statement.len(),
-            InitialStatementInner::Svo { split_eqs, .. } => split_eqs.len(),
+            InitialStatementInner::Svo { statement, .. } => statement.len(),
         }
     }
 
@@ -188,9 +188,9 @@ impl<F: Field, EF: ExtensionField<F>> InitialStatement<F, EF> {
     pub fn normalize(&self) -> EqStatement<EF> {
         match &self.inner {
             InitialStatementInner::Classic(statement) => statement.clone(),
-            InitialStatementInner::Svo { split_eqs, .. } => {
-                let points: Vec<_> = split_eqs.iter().map(|se| se.point.clone()).collect();
-                let evals: Vec<_> = split_eqs.iter().map(|se| se.eval).collect();
+            InitialStatementInner::Svo { statement, .. } => {
+                let points: Vec<_> = statement.iter().map(SvoClaim::point).cloned().collect();
+                let evals: Vec<_> = statement.iter().map(SvoClaim::eval).collect();
 
                 let mut statement = EqStatement::initialize(self.num_variables());
                 points
@@ -212,7 +212,7 @@ impl<F: Field, EF: ExtensionField<F>> InitialStatementInner<F, EF> {
     /// Creates a new SVO inner state with no constraints.
     const fn new_svo(l0: usize) -> Self {
         Self::Svo {
-            split_eqs: vec![],
+            statement: vec![],
             l0,
         }
     }
@@ -228,10 +228,10 @@ impl<F: Field, EF: ExtensionField<F>> InitialStatementInner<F, EF> {
                 statement.add_evaluated_constraint(point.clone(), eval);
                 eval
             }
-            Self::Svo { split_eqs, l0 } => {
-                let split_eq = SplitEq::new(point, *l0, poly);
-                let eval = split_eq.eval;
-                split_eqs.push(split_eq);
+            Self::Svo { statement, l0 } => {
+                let split_eq = SvoClaim::new(point, *l0, poly);
+                let eval = split_eq.eval();
+                statement.push(split_eq);
                 eval
             }
         }
@@ -425,9 +425,9 @@ mod tests {
     fn test_inner_svo_new() {
         let inner = InitialStatementInner::<F, EF>::new_svo(5);
 
-        if let InitialStatementInner::Svo { l0, split_eqs } = inner {
+        if let InitialStatementInner::Svo { l0, statement } = inner {
             assert_eq!(l0, 5);
-            assert!(split_eqs.is_empty());
+            assert!(statement.is_empty());
         } else {
             panic!("Expected Svo variant");
         }
@@ -457,9 +457,9 @@ mod tests {
         let point = Point::new((0..16).map(|_| EF::from_u64(1)).collect());
         let eval = inner.evaluate(&point, &poly);
 
-        if let InitialStatementInner::Svo { split_eqs, .. } = &inner {
-            assert_eq!(split_eqs.len(), 1);
-            assert_eq!(split_eqs[0].eval, eval);
+        if let InitialStatementInner::Svo { statement, .. } = &inner {
+            assert_eq!(statement.len(), 1);
+            assert_eq!(statement[0].eval(), eval);
         }
     }
 }
