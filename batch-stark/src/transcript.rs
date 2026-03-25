@@ -11,9 +11,9 @@ use crate::common::GlobalPreprocessed;
 use crate::config::{Challenge, Commitment, StarkGenericConfig as SGC, Val};
 
 /// Wrapper around a Fiat-Shamir challenger.
-pub(crate) struct BatchTranscript<SC: SGC> {
+pub struct BatchTranscript<SC: SGC> {
     /// The underlying challenger.
-    pub(crate) challenger: SC::Challenger,
+    pub challenger: SC::Challenger,
 }
 
 impl<SC: SGC> BatchTranscript<SC> {
