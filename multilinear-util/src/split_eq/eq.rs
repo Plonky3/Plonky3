@@ -6,7 +6,7 @@ use crate::evals::Poly;
 
 /// Eq polynomial table, either as scalar extension elements or packed representation.
 #[derive(Debug, Clone)]
-pub(crate) enum EqMaybePacked<F: Field, EF: ExtensionField<F>> {
+pub enum EqMaybePacked<F: Field, EF: ExtensionField<F>> {
     Unpacked(Poly<EF>),
     Packed(Poly<<EF as ExtensionField<F>>::ExtensionPacking>),
 }
@@ -27,7 +27,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     }
 
     /// Returns the number of variables.
-    pub(super) const fn num_vars(&self) -> usize {
+    pub const fn num_vars(&self) -> usize {
         match self {
             Self::Unpacked(poly) => poly.num_vars(),
             Self::Packed(poly) => poly.num_vars() + log2_strict_usize(F::Packing::WIDTH),
@@ -35,7 +35,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     }
 
     /// Number of scalar F elements per eq1 block (accounts for packing width).
-    pub(super) const fn scalar_chunk_size(&self) -> usize {
+    pub const fn scalar_chunk_size(&self) -> usize {
         match self {
             Self::Unpacked(eq1) => eq1.num_evals(),
             Self::Packed(eq1) => eq1.num_evals() * F::Packing::WIDTH,
@@ -108,7 +108,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     }
 
     /// Like [`accumulate_scalar_into`](Self::accumulate_scalar_into), but into packed output.
-    pub(super) fn accumulate_packed_into(&self, out: &mut [EF::ExtensionPacking], weight: EF) {
+    pub fn accumulate_packed_into(&self, out: &mut [EF::ExtensionPacking], weight: EF) {
         match self {
             Self::Packed(eq1) => {
                 out.iter_mut()

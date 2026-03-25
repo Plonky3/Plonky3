@@ -1,4 +1,4 @@
-pub(crate) mod eq;
+pub mod eq;
 
 use eq::EqMaybePacked;
 use itertools::Itertools;
@@ -16,9 +16,9 @@ use crate::multilinear::Point;
 #[derive(Debug, Clone)]
 pub struct SplitEq<F: Field, EF: ExtensionField<F>> {
     /// Eq table for the low-half variables `z_lo`.
-    pub(super) eq0: Poly<EF>,
+    pub(crate) eq0: Poly<EF>,
     /// Eq table for the high-half variables `z_hi`.
-    pub(super) eq1: EqMaybePacked<F, EF>,
+    pub(crate) eq1: EqMaybePacked<F, EF>,
 }
 
 impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
@@ -44,6 +44,16 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     /// Returns the number of variables.
     pub const fn num_vars(&self) -> usize {
         self.eq0.num_vars() + self.eq1.num_vars()
+    }
+
+    /// Returns a reference to the eq table for the low-half variables.
+    pub const fn eq0(&self) -> &Poly<EF> {
+        &self.eq0
+    }
+
+    /// Returns a reference to the eq table for the high-half variables.
+    pub const fn eq1(&self) -> &EqMaybePacked<F, EF> {
+        &self.eq1
     }
 
     // --- Eval ---
@@ -440,7 +450,7 @@ mod tests {
             prop_assert_eq!(&expected, &out);
 
             // Packed path, scale in constructor
-            let mut out = input.clone();
+            let mut out = input;
             SplitEq::<F, EF>::new_packed(&point, alpha)
                 .accumulate_into(out.as_mut_slice(), None);
             prop_assert_eq!(&expected, &out);
@@ -461,7 +471,7 @@ mod tests {
             accumulate_reference(expected.as_mut_slice(), &point, alpha);
 
             // Packed with scale as argument
-            let mut out = input.clone().pack::<F, EF>();
+            let mut out = input.pack::<F, EF>();
             SplitEq::<F, EF>::new_packed(&point, EF::ONE)
                 .accumulate_into_packed(out.as_mut_slice(), Some(alpha));
             prop_assert_eq!(&expected, &out.unpack::<F, EF>());
