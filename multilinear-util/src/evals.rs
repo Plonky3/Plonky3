@@ -130,7 +130,7 @@ impl<F> Poly<F> {
     where
         StandardUniform: Distribution<F>,
     {
-        Self(rng.random_iter().take(1 << k).collect::<Vec<F>>())
+        Self(rng.random_iter().take(1 << k).collect())
     }
 }
 
@@ -217,12 +217,17 @@ impl<Packed> Poly<Packed> {
         SplitEq::new_packed(point, EF::ONE).eval_packed(self)
     }
 
+    /// Converts a SIMD-packed polynomial back to scalar extension-field form.
+    ///
+    /// Expands each packed element into W scalar evaluations,
+    /// producing a polynomial with log_2(W) additional variables.
     pub fn unpack<F, EF>(&self) -> Poly<EF>
     where
         F: Field,
         EF: ExtensionField<F, ExtensionPacking = Packed>,
         Packed: PackedFieldExtension<F, EF> + Copy,
     {
+        // Allocate uninitialized output; every entry will be written by the unpacking.
         let mut out = Poly(unsafe {
             uninitialized_vec(1 << (self.num_vars() + log2_strict_usize(F::Packing::WIDTH)))
         });
@@ -230,6 +235,11 @@ impl<Packed> Poly<Packed> {
         out
     }
 
+    /// Unpacks into a pre-allocated scalar polynomial buffer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the output has the wrong number of variables.
     pub fn unpack_into<F, EF>(&self, out: &mut Poly<EF>)
     where
         F: Field,
@@ -240,7 +250,7 @@ impl<Packed> Poly<Packed> {
             out.num_vars(),
             self.num_vars() + log2_strict_usize(F::Packing::WIDTH)
         );
-        // TODO: should we do in parallel?
+        // Expand each packed element into W scalar extension-field elements.
         out.0
             .iter_mut()
             .zip(Packed::to_ext_iter(self.iter().copied()))
@@ -377,26 +387,35 @@ impl<F: Field> Poly<F> {
 }
 
 impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
-    /// Fixes the lowest variable at `zi`, returning a polynomial with one
-    /// fewer variable: `p(zi, x') = (1 - zi) · p(0, x') + zi · p(1, x')`.
+    /// Fixes the lowest variable at a challenge value, returning a folded polynomial.
     ///
-    /// Intended for base-field polynomials where the result lifts to `F`.
-    /// For extension-field polynomials, consider [`fix_lo_var_mut`](Self::fix_lo_var_mut)
-    /// to fix in-place and avoid extra allocation.
+    /// Computes:
+    /// ```text
+    /// p'(x') = (1 - zi) * p(0, x') + zi * p(1, x')
+    /// ```
+    ///
+    /// The result has one fewer variable (n - 1).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the polynomial is constant (zero free variables).
     pub fn fix_lo_var<F>(&self, zi: F) -> Poly<F>
     where
         F: Algebra<A> + Copy + Send + Sync,
     {
         assert!(self.as_constant().is_none(), "no free variables");
+        // Split evaluations into the x_0 = 0 half (p0) and x_0 = 1 half (p1).
         let (p0, p1) = self.0.split_at(self.num_evals() / 2);
         if self.num_evals() >= PARALLEL_THRESHOLD {
+            // Parallel: linear interpolation between each (p0, p1) pair.
             Poly::new(
                 p0.par_iter()
                     .zip(p1.par_iter())
                     .map(|(&a0, &a1)| zi * (a1 - a0) + a0)
-                    .collect::<Vec<_>>(),
+                    .collect(),
             )
         } else {
+            // Sequential: same linear interpolation.
             Poly::new(
                 p0.iter()
                     .zip(p1.iter())
@@ -406,8 +425,18 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         }
     }
 
-    /// In-place version of [`fix_lo_var`](Self::fix_lo_var). Writes the folded values
-    /// into the first half of the buffer and truncates.
+    /// In-place version of the low-variable fix.
+    ///
+    /// Folds the first half in place using:
+    /// ```text
+    /// p[i] = p[i] + (p[i + mid] - p[i]) * zi
+    /// ```
+    ///
+    /// Then truncates to the first half. No allocation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the polynomial is constant (zero free variables).
     pub fn fix_lo_var_mut<F: Copy + Send + Sync>(&mut self, zi: F)
     where
         A: Algebra<F>,
@@ -415,29 +444,45 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         assert!(self.as_constant().is_none(), "no free variables");
         let num_evals = self.num_evals();
         let mid = num_evals / 2;
+        // Split into x_0 = 0 (mutable) and x_0 = 1 (read-only) halves.
         let (p0, p1) = self.0.split_at_mut(mid);
 
         if num_evals >= PARALLEL_THRESHOLD {
+            // Parallel: fold each pair in place.
             p0.par_iter_mut()
                 .zip(p1.par_iter())
                 .for_each(|(a0, &a1)| *a0 += (a1 - *a0) * zi);
         } else {
+            // Sequential: fold each pair in place.
             p0.iter_mut()
                 .zip(p1.iter())
                 .for_each(|(a0, &a1)| *a0 += (a1 - *a0) * zi);
         }
 
+        // Discard the second half; the first half now holds the folded result.
         self.0.truncate(mid);
     }
 
-    /// Fixes the highest variable at `zi`, returning a polynomial with one
-    /// fewer variable: `p(x', zi) = (1 - zi) · p(x', 0) + zi · p(x', 1)`.
+    /// Fixes the highest variable at a challenge value, returning a folded polynomial.
+    ///
+    /// Computes:
+    /// ```text
+    /// p'(x') = (1 - zi) * p(x', 0) + zi * p(x', 1)
+    /// ```
+    ///
+    /// The result has one fewer variable (n - 1).
+    /// Unlike the low-variable version, consecutive pairs are adjacent in memory.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the polynomial is constant (zero free variables).
     pub fn fix_hi_var<F>(&self, zi: F) -> Poly<F>
     where
         F: Algebra<A> + Copy + Send + Sync,
     {
         assert!(self.as_constant().is_none(), "no free variables");
         if self.num_evals() >= PARALLEL_THRESHOLD {
+            // Parallel: interpolate each adjacent pair [p(x',0), p(x',1)].
             Poly::new(
                 self.0
                     .par_chunks(2)
@@ -445,6 +490,7 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
                     .collect(),
             )
         } else {
+            // Sequential: same interpolation over adjacent pairs.
             Poly::new(
                 self.0
                     .chunks(2)
@@ -454,13 +500,21 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         }
     }
 
-    /// In-place version of [`fix_hi_var`](Self::fix_hi_var). Computes the folded values
-    /// into a temporary buffer, then truncates and copies them back.
+    /// In-place version of the high-variable fix.
+    ///
+    /// Folds adjacent pairs, collects into a temporary buffer,
+    /// then truncates and overwrites.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the polynomial is constant (zero free variables).
     pub fn fix_hi_var_mut<F: Copy + Send + Sync>(&mut self, zi: F)
     where
         A: Algebra<F>,
     {
         assert!(self.as_constant().is_none(), "no free variables");
+        // Fold adjacent pairs into a temporary buffer.
+        // Cannot fold in place because pairs overlap with the output layout.
         let src = if self.num_evals() < PARALLEL_THRESHOLD {
             self.0
                 .chunks(2)
@@ -472,17 +526,28 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
                 .map(|a| (a[1] - a[0]) * zi + a[0])
                 .collect::<Vec<_>>()
         };
+        // Truncate to half size and copy the folded values back.
         let mid = self.num_evals() / 2;
         self.0.truncate(mid);
         self.0.copy_from_slice(&src);
     }
 
+    /// Converts a scalar extension-field polynomial into SIMD-packed form.
+    ///
+    /// Groups consecutive W evaluations into packed elements,
+    /// reducing the entry count from 2^k to 2^{k - log_2(W)}.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the polynomial has fewer variables than log_2(W).
     pub fn pack<F, EF>(&self) -> Poly<A::ExtensionPacking>
     where
         F: Field,
         A: ExtensionField<F>,
     {
+        // Require at least W evaluations to fill one packed element.
         assert!(self.num_vars() >= log2_strict_usize(F::Packing::WIDTH));
+        // Group W consecutive extension-field elements into each packed element.
         Poly(
             self.0
                 .par_chunks(F::Packing::WIDTH)
