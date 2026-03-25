@@ -693,8 +693,8 @@ pub(crate) mod test {
     use rand::{RngExt, SeedableRng};
 
     use crate::eq_batch::eval_eq_batch;
-    use crate::poly::{PARALLEL_THRESHOLD, Poly};
     use crate::point::Point;
+    use crate::poly::{PARALLEL_THRESHOLD, Poly};
 
     type F = BabyBear;
     type PackedF = <F as p3_field::Field>::Packing;

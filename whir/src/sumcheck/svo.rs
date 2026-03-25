@@ -23,8 +23,8 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
 use p3_maybe_rayon::prelude::*;
-use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::point::Point;
+use p3_multilinear_util::poly::Poly;
 use p3_util::{log2_strict_usize, log3_strict_usize};
 
 /// Generates grid points for SVO accumulator evaluation.

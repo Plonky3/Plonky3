@@ -18,8 +18,8 @@ use itertools::Itertools;
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
 use p3_util::log2_strict_usize;
 
-use crate::poly::Poly;
 use crate::point::Point;
+use crate::poly::Poly;
 
 /// Equality polynomial table in either scalar or SIMD-packed form.
 ///
