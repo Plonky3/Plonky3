@@ -4,12 +4,11 @@ use itertools::Itertools;
 use p3_field::{
     ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, dot_product,
 };
-use p3_matrix::{
-    Matrix,
-    dense::{RowMajorMatrix, RowMajorMatrixView},
-};
+use p3_matrix::Matrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
-use p3_multilinear_util::{evals::Poly, multilinear::Point};
+use p3_multilinear_util::evals::Poly;
+use p3_multilinear_util::multilinear::Point;
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
@@ -584,11 +583,11 @@ mod tests {
     use alloc::vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::{
-        PackedFieldExtension, PrimeCharacteristicRing, extension::BinomialExtensionField,
-    };
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{PackedFieldExtension, PrimeCharacteristicRing};
     use proptest::prelude::*;
-    use rand::{RngExt, SeedableRng, rngs::SmallRng};
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 

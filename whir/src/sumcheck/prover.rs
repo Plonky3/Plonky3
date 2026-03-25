@@ -4,24 +4,17 @@ use alloc::vec::Vec;
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
-use p3_multilinear_util::{evals::Poly, multilinear::Point};
+use p3_multilinear_util::evals::Poly;
+use p3_multilinear_util::multilinear::Point;
 use p3_util::log2_strict_usize;
 
-use crate::{
-    constraints::{
-        Constraint,
-        statement::{
-            EqStatement,
-            initial::{InitialStatement, InitialStatementInner},
-        },
-    },
-    sumcheck::{
-        SumcheckData, extrapolate_012,
-        lagrange::lagrange_weights_012_multi,
-        product_polynomial::{ProductPolynomial, sumcheck_coefficients_cross},
-        svo::SplitEq,
-    },
-};
+use crate::constraints::Constraint;
+use crate::constraints::statement::EqStatement;
+use crate::constraints::statement::initial::{InitialStatement, InitialStatementInner};
+use crate::sumcheck::lagrange::lagrange_weights_012_multi;
+use crate::sumcheck::product_polynomial::{ProductPolynomial, sumcheck_coefficients_cross};
+use crate::sumcheck::svo::SplitEq;
+use crate::sumcheck::{SumcheckData, extrapolate_012};
 
 /// Prover state for the sumcheck protocol over a multilinear polynomial.
 ///

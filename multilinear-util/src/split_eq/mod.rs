@@ -436,15 +436,12 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::{ExtensionField, Field, PackedValue, PrimeCharacteristicRing, dot_product};
-    use p3_util::log2_strict_usize;
+    use p3_field::{PrimeCharacteristicRing, dot_product};
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
-    use crate::evals::Poly;
-    use crate::multilinear::Point;
-    use crate::split_eq::SplitEq;
+    use super::*;
 
     type F = BabyBear;
     type PackedF = <F as Field>::Packing;

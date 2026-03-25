@@ -23,14 +23,13 @@ use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{
     ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, dot_product,
 };
-use p3_multilinear_util::{evals::Poly, multilinear::Point};
+use p3_multilinear_util::evals::Poly;
+use p3_multilinear_util::multilinear::Point;
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
-use crate::{
-    constraints::Constraint,
-    sumcheck::{SumcheckData, extrapolate_012},
-};
+use crate::constraints::Constraint;
+use crate::sumcheck::{SumcheckData, extrapolate_012};
 
 /// Computes the sumcheck round polynomial coefficients (c0, c2) for the product
 /// of two multilinear polynomials of the same type.
@@ -487,13 +486,16 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
 
 #[cfg(test)]
 mod tests {
-    use alloc::{vec, vec::Vec};
+    use alloc::vec;
+    use alloc::vec::Vec;
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::DuplexChallenger;
-    use p3_field::{Field, PrimeCharacteristicRing, extension::BinomialExtensionField};
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{Field, PrimeCharacteristicRing};
     use proptest::prelude::*;
-    use rand::{RngExt, SeedableRng, rngs::SmallRng};
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 
@@ -948,7 +950,8 @@ mod tests {
         // The combine function should:
         // 1. Update the weight polynomial with new constraint contributions
         // 2. Update the running sum accordingly
-        use crate::constraints::{Constraint, statement::EqStatement};
+        use crate::constraints::Constraint;
+        use crate::constraints::statement::EqStatement;
 
         let num_vars = 2;
         let evals = Poly::new(vec![EF::ONE; 4]);

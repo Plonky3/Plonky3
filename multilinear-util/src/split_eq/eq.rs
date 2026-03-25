@@ -373,18 +373,13 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::{
-        ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
-        dot_product,
-    };
-    use p3_util::log2_strict_usize;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::evals::Poly;
 
     type F = BabyBear;
     type PackedF = <F as Field>::Packing;

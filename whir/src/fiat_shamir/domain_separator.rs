@@ -7,10 +7,8 @@ use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 
-use crate::{
-    fiat_shamir::pattern::{Hint, Observe, Pattern, Sample},
-    parameters::{FoldingFactor, WhirConfig},
-};
+use crate::fiat_shamir::pattern::{Hint, Observe, Pattern, Sample};
+use crate::parameters::{FoldingFactor, WhirConfig};
 
 /// Configuration for a sumcheck phase in the protocol.
 #[derive(Debug)]

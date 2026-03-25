@@ -1,7 +1,10 @@
 //! Soundness analysis and security assumption models for Reed-Solomon proximity testing.
 
-use alloc::{format, string::String};
-use core::{f64::consts::LOG2_10, fmt::Display, str::FromStr};
+use alloc::format;
+use alloc::string::String;
+use core::f64::consts::LOG2_10;
+use core::fmt::Display;
+use core::str::FromStr;
 
 use serde::Serialize;
 

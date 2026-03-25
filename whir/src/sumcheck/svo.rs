@@ -17,12 +17,14 @@
 //! 2. Avoiding the full `2^l`-sized equality table.
 //! 3. Reconstructing round polynomials from compact accumulators via Lagrange interpolation.
 
-use alloc::{vec, vec::Vec};
+use alloc::vec;
+use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
 use p3_maybe_rayon::prelude::*;
-use p3_multilinear_util::{evals::Poly, multilinear::Point};
+use p3_multilinear_util::evals::Poly;
+use p3_multilinear_util::multilinear::Point;
 use p3_util::{log2_strict_usize, log3_strict_usize};
 
 /// Generates grid points for SVO accumulator evaluation.
@@ -424,10 +426,12 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
 mod tests {
     use alloc::vec::Vec;
 
-    use p3_field::{PrimeCharacteristicRing, dot_product, extension::BinomialExtensionField};
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{PrimeCharacteristicRing, dot_product};
     use p3_koala_bear::KoalaBear;
     use proptest::prelude::*;
-    use rand::{RngExt, SeedableRng, rngs::SmallRng};
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 

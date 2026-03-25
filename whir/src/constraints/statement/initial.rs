@@ -16,15 +16,17 @@
 //!
 //! 2. A set of evaluation constraints `p(z_i) = s_i` accumulated during the protocol.
 
-use alloc::{vec, vec::Vec};
+use alloc::vec;
+use alloc::vec::Vec;
 
 use p3_field::{ExtensionField, Field, PackedValue};
-use p3_multilinear_util::{evals::Poly, multilinear::Point};
+use p3_multilinear_util::evals::Poly;
+use p3_multilinear_util::multilinear::Point;
 use p3_util::log2_strict_usize;
 
-use crate::{
-    constraints::statement::EqStatement, parameters::SumcheckStrategy, sumcheck::svo::SplitEq,
-};
+use crate::constraints::statement::EqStatement;
+use crate::parameters::SumcheckStrategy;
+use crate::sumcheck::svo::SplitEq;
 
 /// Manages the polynomial and constraints during the initial phase of WHIR.
 #[derive(Clone, Debug)]
@@ -239,7 +241,8 @@ impl<F: Field, EF: ExtensionField<F>> InitialStatementInner<F, EF> {
 #[cfg(test)]
 mod tests {
     use p3_baby_bear::BabyBear;
-    use p3_field::{PrimeCharacteristicRing, extension::BinomialExtensionField};
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
 
     use super::*;
 

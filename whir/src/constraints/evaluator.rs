@@ -1,7 +1,8 @@
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_multilinear_util::multilinear::Point;
 
-use crate::{constraints::Constraint, parameters::FoldingFactor};
+use crate::constraints::Constraint;
+use crate::parameters::FoldingFactor;
 
 /// Evaluate a single round's constraint.
 fn eval_round<F: Field, EF: ExtensionField<F> + TwoAdicField>(
@@ -62,19 +63,20 @@ impl ConstraintPolyEvaluator {
 
 #[cfg(test)]
 mod tests {
-    use alloc::{vec, vec::Vec};
+    use alloc::vec;
+    use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::{PrimeCharacteristicRing, extension::BinomialExtensionField};
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
     use p3_multilinear_util::evals::Poly;
     use proptest::prelude::*;
-    use rand::{RngExt, SeedableRng, rngs::SmallRng};
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::{
-        constraints::statement::{EqStatement, SelectStatement},
-        parameters::FoldingFactor,
-    };
+    use crate::constraints::statement::{EqStatement, SelectStatement};
+    use crate::parameters::FoldingFactor;
 
     type F = BabyBear;
     type EF = BinomialExtensionField<BabyBear, 4>;
