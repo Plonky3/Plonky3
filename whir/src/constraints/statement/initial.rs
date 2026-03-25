@@ -20,8 +20,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::{ExtensionField, Field, PackedValue};
-use p3_multilinear_util::evals::Poly;
-use p3_multilinear_util::multilinear::Point;
+use p3_multilinear_util::poly::Poly;
+use p3_multilinear_util::point::Point;
 use p3_util::log2_strict_usize;
 
 use crate::constraints::statement::EqStatement;

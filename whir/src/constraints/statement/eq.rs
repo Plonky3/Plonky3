@@ -8,8 +8,8 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::eq_batch::eval_eq_batch;
-use p3_multilinear_util::evals::Poly;
-use p3_multilinear_util::multilinear::Point;
+use p3_multilinear_util::poly::Poly;
+use p3_multilinear_util::point::Point;
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 

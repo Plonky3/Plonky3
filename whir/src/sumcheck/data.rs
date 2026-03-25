@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field, TwoAdicField};
-use p3_multilinear_util::multilinear::Point;
+use p3_multilinear_util::point::Point;
 use serde::{Deserialize, Serialize};
 
 use crate::sumcheck::{SumcheckError, extrapolate_012};

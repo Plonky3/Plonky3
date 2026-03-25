@@ -1,5 +1,5 @@
 use p3_field::{ExtensionField, Field, TwoAdicField};
-use p3_multilinear_util::multilinear::Point;
+use p3_multilinear_util::point::Point;
 
 use crate::constraints::Constraint;
 use crate::parameters::FoldingFactor;
@@ -69,7 +69,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
-    use p3_multilinear_util::evals::Poly;
+    use p3_multilinear_util::poly::Poly;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};

@@ -26,8 +26,8 @@ use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue};
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
-use crate::evals::{PARALLEL_THRESHOLD, Poly};
-use crate::multilinear::Point;
+use crate::poly::{PARALLEL_THRESHOLD, Poly};
+use crate::point::Point;
 
 /// Factored eq polynomial table for scale * eq(z, .).
 ///

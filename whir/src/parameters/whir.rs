@@ -6,7 +6,7 @@ use core::marker::PhantomData;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, TwoAdicField};
-use p3_multilinear_util::evals::Poly;
+use p3_multilinear_util::poly::Poly;
 
 use super::{FoldingFactor, ProtocolParameters, SecurityAssumption};
 use crate::constraints::statement::initial::InitialStatement;
