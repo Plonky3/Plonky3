@@ -494,6 +494,19 @@ pub trait ExtensionBuilder: AirBuilder<F: Field> {
     where
         I: Into<Self::ExprEF>;
 
+    /// Assert that every element of a given array is zero in the extension field.
+    ///
+    /// Where possible, batching multiple `assert_zero_ext` calls into a single
+    /// `assert_zeros_ext` call will improve performance.
+    fn assert_zeros_ext<const N: usize, I>(&mut self, array: [I; N])
+    where
+        I: Into<Self::ExprEF>,
+    {
+        for x in array {
+            self.assert_zero_ext(x);
+        }
+    }
+
     /// Assert that two extension field expressions are equal.
     fn assert_eq_ext<I1, I2>(&mut self, x: I1, y: I2)
     where

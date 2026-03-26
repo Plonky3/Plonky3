@@ -320,6 +320,16 @@ where
         self.extension_constraints.push(x.into());
         self.constraint_types.push(ConstraintType::Ext);
     }
+
+    fn assert_zeros_ext<const N: usize, I>(&mut self, array: [I; N])
+    where
+        I: Into<Self::ExprEF>,
+    {
+        self.extension_constraints
+            .extend(array.into_iter().map(Into::into));
+        self.constraint_types
+            .extend(core::iter::repeat_n(ConstraintType::Ext, N));
+    }
 }
 
 impl<F: Field, EF: ExtensionField<F>> PermutationAirBuilder for SymbolicAirBuilder<F, EF>
@@ -727,6 +737,17 @@ mod tests {
         builder.assert_zero_ext(expr);
         let ext_constraints = builder.extension_constraints();
         assert_eq!(ext_constraints.len(), 1);
+    }
+
+    #[test]
+    fn test_assert_zeros_ext_batches_extension_constraints() {
+        let mut builder = SymbolicAirBuilder::<F, EF>::new(layout_with_perm(0, 2, 0, 2, 1, 0));
+        let a = SymbolicExpressionExt::<F, EF>::from(F::new(3));
+        let b = SymbolicExpressionExt::<F, EF>::from(F::new(4));
+        builder.assert_zeros_ext([a, b]);
+
+        assert_eq!(builder.extension_constraints().len(), 2);
+        assert_eq!(builder.constraint_layout().ext_indices.len(), 2);
     }
 
     #[test]
