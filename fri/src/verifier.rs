@@ -33,8 +33,6 @@ where
     FinalPolyMismatch,
     #[error("invalid proof-of-work witness")]
     InvalidPowWitness,
-    #[error("missing input: required input is not present")]
-    MissingInput,
 }
 
 /// A chain of FRI input openings allowing a verifier to check a sequence of
