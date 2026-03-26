@@ -294,6 +294,9 @@ fn coset_dft_oop<F: TwoAdicField + Ord>(
 ///
 /// For layer 0, all twiddle factors are 1 (root^0 = 1), so we use `TwiddleFreeButterfly`
 /// to avoid a Montgomery multiply by 1 across the entire matrix.
+///
+/// For layers 1..mid-1, the first twiddle in each block is also always 1 (twiddles[0] = 1),
+/// so we special-case the first row-pair of each block to use `TwiddleFreeButterfly` as well.
 #[instrument(level = "debug", skip_all)]
 fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F]) {
     let log_h = log2_strict_usize(mat.height());
@@ -311,7 +314,10 @@ fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F])
                 } else {
                     let layer_rev = log_h - 1 - layer;
                     let layer_pow = 1 << layer_rev;
-                    dit_layer(
+                    // For layers 1..mid-1, twiddles[0] = root^0 = 1 is always the first
+                    // twiddle consumed per block. Use the optimized version that applies
+                    // TwiddleFreeButterfly for the first row-pair of each block.
+                    dit_layer_first_one(
                         &mut submat,
                         layer,
                         twiddles.iter().step_by(layer_pow),
@@ -500,6 +506,56 @@ fn dit_layer_twiddle_free<F: Field>(
     };
 
     let blocks = submat.values.chunks_mut(2 * width);
+    if backwards {
+        for block in blocks.rev() {
+            process_block(block);
+        }
+    } else {
+        for block in blocks {
+            process_block(block);
+        }
+    }
+}
+
+/// One layer of a DIT butterfly network where the first twiddle factor per block is always 1.
+///
+/// This is used in `first_half` for layers 1..mid-1 of the standard (non-coset) DFT/inverse DFT,
+/// where `twiddles[0] = root^0 = 1`. The first row-pair of each block uses `TwiddleFreeButterfly`
+/// to avoid one Montgomery multiplication per block, while subsequent row-pairs use `DitButterfly`.
+///
+/// Correctness: The twiddle iterator yields `twiddles[0], twiddles[step], twiddles[2*step], ...`
+/// where `twiddles[0] = root^0 = 1`. Only used when this property holds.
+fn dit_layer_first_one<'a, F: Field>(
+    submat: &mut RowMajorMatrixViewMut<'_, F>,
+    layer: usize,
+    twiddles: impl Iterator<Item = &'a F> + Clone,
+    backwards: bool,
+) {
+    let half_block_size = 1 << layer;
+    let block_size = half_block_size * 2;
+    let width = submat.width();
+    debug_assert!(submat.height() >= block_size);
+    debug_assert!(half_block_size >= 2, "layer must be >= 1 for dit_layer_first_one");
+
+    let process_block = move |block: &mut [F]| {
+        let (lows, highs) = block.split_at_mut(half_block_size * width);
+        let mut tw_iter = twiddles.clone();
+        // First row-pair: twiddle is always 1, use TwiddleFreeButterfly to skip the multiply.
+        let _ = tw_iter.next(); // consume twiddles[0] = 1
+        let (lo0, lo_rest) = lows.split_at_mut(width);
+        let (hi0, hi_rest) = highs.split_at_mut(width);
+        TwiddleFreeButterfly.apply_to_rows(lo0, hi0);
+        // Remaining row-pairs use DitButterfly with their respective twiddle factors.
+        for (lo, hi, twiddle) in izip!(
+            lo_rest.chunks_mut(width),
+            hi_rest.chunks_mut(width),
+            tw_iter
+        ) {
+            DitButterfly(*twiddle).apply_to_rows(lo, hi);
+        }
+    };
+
+    let blocks = submat.values.chunks_mut(block_size * width);
     if backwards {
         for block in blocks.rev() {
             process_block(block);
