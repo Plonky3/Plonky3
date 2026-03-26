@@ -290,6 +290,27 @@ impl<F: Field> Butterfly<F> for ScaledDitButterfly<F> {
         let x_2_twiddle_scale = x_2 * self.twiddle_times_scale;
         (x_1_scale + x_2_twiddle_scale, x_1_scale - x_2_twiddle_scale)
     }
+
+    /// Override `apply_to_rows` to pre-broadcast both `scale` and `twiddle_times_scale`
+    /// into packed fields once before the inner loop.
+    #[inline]
+    fn apply_to_rows(&self, row_1: &mut [F], row_2: &mut [F]) {
+        let (shorts_1, suffix_1) = F::Packing::pack_slice_with_suffix_mut(row_1);
+        let (shorts_2, suffix_2) = F::Packing::pack_slice_with_suffix_mut(row_2);
+        debug_assert_eq!(shorts_1.len(), shorts_2.len());
+        debug_assert_eq!(suffix_1.len(), suffix_2.len());
+        let scale_packed = F::Packing::from(self.scale);
+        let twiddle_times_scale_packed = F::Packing::from(self.twiddle_times_scale);
+        for (x_1, x_2) in shorts_1.iter_mut().zip(shorts_2.iter_mut()) {
+            let x_1_scale = *x_1 * scale_packed;
+            let x_2_twiddle_scale = *x_2 * twiddle_times_scale_packed;
+            *x_1 = x_1_scale + x_2_twiddle_scale;
+            *x_2 = x_1_scale - x_2_twiddle_scale;
+        }
+        for (x_1, x_2) in suffix_1.iter_mut().zip(suffix_2.iter_mut()) {
+            self.apply_in_place(x_1, x_2);
+        }
+    }
 }
 
 /// Butterfly with no twiddle factor (`twiddle = 1`).
