@@ -542,6 +542,9 @@ fn dit_layer_oop<'a, F: Field>(
 ///
 /// This avoids an extra memory pass when scaling is required (e.g., 1/N in inverse DFT).
 /// When `scale` is `None`, this is identical to `dit_layer_rev`.
+///
+/// When `scale` is `Some(s)`, uses `ScaledDitButterfly::new(twiddle, s)` which precomputes
+/// `twiddle * scale` once per block, reducing multiplications in the hot loop from 3 to 2.
 fn dit_layer_rev_scaled<F: Field>(
     submat: &mut RowMajorMatrixViewMut<'_, F>,
     log_h: usize,
@@ -578,8 +581,8 @@ fn dit_layer_rev_scaled<F: Field>(
         }
         Some(s) => {
             // Fold scaling into the butterfly to avoid a separate memory pass.
-            // ScaledDitButterfly computes: (scale*(x1 + x2*twiddle), scale*(x1 - x2*twiddle))
-            // which equals: scale first, then butterfly — same result.
+            // ScaledDitButterfly::new precomputes twiddle * scale once per block,
+            // so the hot loop only needs 2 multiplications instead of 3.
             let blocks_and_twiddles = submat
                 .values
                 .chunks_mut(block_size * width)
@@ -587,12 +590,12 @@ fn dit_layer_rev_scaled<F: Field>(
             if backwards {
                 for (block, twiddle) in blocks_and_twiddles.rev() {
                     let (lo, hi) = block.split_at_mut(half_block_size * width);
-                    ScaledDitButterfly { twiddle, scale: s }.apply_to_rows(lo, hi);
+                    ScaledDitButterfly::new(twiddle, s).apply_to_rows(lo, hi);
                 }
             } else {
                 for (block, twiddle) in blocks_and_twiddles {
                     let (lo, hi) = block.split_at_mut(half_block_size * width);
-                    ScaledDitButterfly { twiddle, scale: s }.apply_to_rows(lo, hi);
+                    ScaledDitButterfly::new(twiddle, s).apply_to_rows(lo, hi);
                 }
             }
         }

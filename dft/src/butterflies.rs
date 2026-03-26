@@ -191,21 +191,48 @@ impl<F: Field> Butterfly<F> for DitButterfly<F> {
 ///   output_1 = (x1 + x2 * twiddle) * scale
 ///   output_2 = (x1 - x2 * twiddle) * scale
 /// ```
+/// which is equivalent to:
+/// ```text
+///   output_1 = x1 * scale + x2 * (twiddle * scale)
+///   output_2 = x1 * scale - x2 * (twiddle * scale)
+/// ```
+///
 /// This is used to merge a uniform scaling step (e.g., 1/N normalization in inverse DFT)
 /// into a butterfly pass, avoiding a separate memory pass over the data.
+///
+/// The struct stores `scale` and `twiddle_times_scale = twiddle * scale` so that the
+/// `apply` method only needs 2 multiplications instead of 3.
 #[derive(Copy, Clone)]
 pub struct ScaledDitButterfly<F> {
     pub twiddle: F,
     pub scale: F,
+    /// Precomputed product `twiddle * scale` to reduce multiplications in the hot loop.
+    pub twiddle_times_scale: F,
+}
+
+impl<F: Field> ScaledDitButterfly<F> {
+    /// Construct a `ScaledDitButterfly`, precomputing `twiddle * scale`.
+    #[inline]
+    pub fn new(twiddle: F, scale: F) -> Self {
+        Self {
+            twiddle,
+            scale,
+            twiddle_times_scale: twiddle * scale,
+        }
+    }
 }
 
 impl<F: Field> Butterfly<F> for ScaledDitButterfly<F> {
     #[inline]
     fn apply<PF: PackedField<Scalar = F>>(&self, x_1: PF, x_2: PF) -> (PF, PF) {
-        let x_2_twiddle = x_2 * self.twiddle;
-        let sum = (x_1 + x_2_twiddle) * self.scale;
-        let diff = (x_1 - x_2_twiddle) * self.scale;
-        (sum, diff)
+        // 2 multiplications instead of 3:
+        //   x1_s   = x1 * scale
+        //   x2_ts  = x2 * (twiddle * scale)   [precomputed]
+        //   out1   = x1_s + x2_ts
+        //   out2   = x1_s - x2_ts
+        let x_1_scale = x_1 * self.scale;
+        let x_2_twiddle_scale = x_2 * self.twiddle_times_scale;
+        (x_1_scale + x_2_twiddle_scale, x_1_scale - x_2_twiddle_scale)
     }
 }
 
