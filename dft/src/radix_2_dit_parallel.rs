@@ -447,10 +447,8 @@ fn second_half<F: Field>(
             }
             // Handle case where there are no layers in the second half (mid == log_h).
             // In that case, we still need to apply the scale.
-            if !scale_applied {
-                if let Some(s) = scale {
-                    submat.scale(s);
-                }
+            if !scale_applied && let Some(s) = scale {
+                submat.scale(s);
             }
         });
 }
