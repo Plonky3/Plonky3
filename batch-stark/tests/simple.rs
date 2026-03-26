@@ -4,7 +4,9 @@ use core::marker::PhantomData;
 use core::slice::from_ref;
 
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpression};
-use p3_air::{Air, AirBuilder, BaseAir, BaseLeaf, PermutationAirBuilder, WindowAccess};
+use p3_air::{
+    Air, AirBuilder, BaseAir, BaseLeaf, PeriodicAirBuilder, PermutationAirBuilder, WindowAccess,
+};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::{
@@ -181,6 +183,66 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
     }
 }
 impl<F: Field> LookupAir<F> for MulAir {}
+
+#[derive(Clone)]
+struct PeriodicAir<F> {
+    periodic: Vec<Vec<F>>,
+}
+
+impl<F: Field + PrimeCharacteristicRing> PeriodicAir<F> {
+    fn new() -> Self {
+        Self {
+            periodic: vec![
+                vec![
+                    F::from_u64(1),
+                    F::from_u64(2),
+                    F::from_u64(3),
+                    F::from_u64(4),
+                ],
+                vec![F::from_u64(10), F::from_u64(20)],
+            ],
+        }
+    }
+
+    fn valid_trace(&self, rows: usize) -> RowMajorMatrix<F> {
+        let mut values = F::zero_vec(rows * 2);
+        for (i, row) in values.chunks_exact_mut(2).enumerate() {
+            row[0] = self.periodic[0][i % self.periodic[0].len()];
+            row[1] = self.periodic[1][i % self.periodic[1].len()];
+        }
+        RowMajorMatrix::new(values, 2)
+    }
+}
+
+impl<F: Field> BaseAir<F> for PeriodicAir<F> {
+    fn width(&self) -> usize {
+        2
+    }
+
+    fn num_periodic_columns(&self) -> usize {
+        self.periodic.len()
+    }
+
+    fn periodic_columns(&self) -> Vec<Vec<F>> {
+        self.periodic.clone()
+    }
+}
+
+impl<AB: AirBuilder + PeriodicAirBuilder> Air<AB> for PeriodicAir<AB::F>
+where
+    AB::F: Field,
+{
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let local = main.current_slice();
+        let p0 = builder.periodic_values()[0].into();
+        let p1 = builder.periodic_values()[1].into();
+        builder.assert_eq(local[0], p0);
+        builder.assert_eq(local[1], p1);
+    }
+}
+
+impl<F: Field> LookupAir<F> for PeriodicAir<F> {}
 
 // --- MulAirLookups structure for local and global lookups ---
 // This AIR is a `MulAir` that can register global lookups with `FibAirLookups`, as well as local lookups with a lookup column. Its inputs are the Fibonacci values.
@@ -835,6 +897,23 @@ fn test_two_instances() -> Result<(), impl Debug> {
     let airs = vec![air_fib, air_mul];
     let pvs = vec![fib_pis, mul_pis];
     verify_batch(&config, &airs, &proof, &pvs, common)
+}
+
+#[test]
+fn test_periodic_air() -> Result<(), impl Debug> {
+    let config = make_config(42);
+    let air = PeriodicAir::<Val>::new();
+    let trace = air.valid_trace(1 << 6);
+    let instances = vec![StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values: vec![],
+        lookups: vec![],
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data);
+    verify_batch(&config, &[air], &proof, &[vec![]], common)
 }
 
 #[test]

@@ -100,6 +100,7 @@ pub fn verify_constraints<SC, A, PcsErr>(
     trace_next: &[SC::Challenge],
     preprocessed_local: Option<&[SC::Challenge]>,
     preprocessed_next: Option<&[SC::Challenge]>,
+    periodic_values: &[SC::Challenge],
     public_values: &[Val<SC>],
     trace_domain: Domain<SC>,
     zeta: SC::Challenge,
@@ -135,6 +136,7 @@ where
         main,
         preprocessed,
         preprocessed_window,
+        periodic_values,
         public_values,
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,
@@ -279,6 +281,7 @@ where
         preprocessed_width,
         main_width: air.width(),
         num_public_values: air.num_public_values(),
+        num_periodic_columns: air.num_periodic_columns(),
         ..Default::default()
     };
     let log_num_quotient_chunks =
@@ -372,6 +375,12 @@ where
     //
     // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has degree `d`.
     let zeta = challenger.sample_algebra_element();
+    let periodic_values: Vec<SC::Challenge> = air
+        .periodic_columns()
+        .iter()
+        .map(|periodic_col| trace_domain.evaluate_periodic_column_at(periodic_col, zeta))
+        .collect();
+
     let zeta_next = init_trace_domain
         .next_point(zeta)
         .ok_or(VerificationError::NextPointUnavailable)?;
@@ -466,6 +475,7 @@ where
         trace_next_slice,
         opened_values.preprocessed_local.as_deref(),
         preprocessed_next_for_verify,
+        &periodic_values,
         public_values,
         init_trace_domain,
         zeta,

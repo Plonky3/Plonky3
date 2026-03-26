@@ -1,33 +1,28 @@
+mod data;
+
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
-use core::fmt::Debug;
 
+pub use data::VerifierData;
 use hashbrown::HashMap;
+use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
-use p3_air::{Air, RowWindow};
-use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
+use p3_lookup::Lookup;
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::lookup_traits::LookupGadget;
-use p3_lookup::{AirWithLookups, Lookup};
-use p3_matrix::dense::RowMajorMatrixView;
-use p3_matrix::stack::VerticalPair;
-use p3_uni_stark::{
-    InvalidProofShapeError, VerificationError, VerifierConstraintFolder,
-    recompose_quotient_from_chunks,
-};
+use p3_uni_stark::{InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks};
 use p3_util::zip_eq::zip_eq;
 use tracing::{info_span, instrument};
 
-use crate::common::{CommonData, get_perm_challenges};
-use crate::config::{
-    Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val, observe_instance_binding,
-};
+use crate::common::CommonData;
+use crate::config::{Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val};
 use crate::proof::BatchProof;
 use crate::symbolic::get_log_num_quotient_chunks;
+use crate::transcript::BatchTranscript;
 
 #[inline]
 fn checked_pow2(log_degree: usize) -> Option<usize> {
@@ -85,7 +80,7 @@ where
     let all_lookups = &common.lookups;
 
     let pcs = config.pcs();
-    let mut challenger = config.initialise_challenger();
+    let mut transcript = BatchTranscript::<SC>::new(config.initialise_challenger());
 
     // Sanity checks
     if airs.len() != opened_values.instances.len()
@@ -112,10 +107,6 @@ where
     {
         return Err(VerificationError::RandomizationError);
     }
-
-    // Observe the number of instances up front to match the prover's transcript.
-    let n_instances = airs.len();
-    challenger.observe_base_as_algebra_element::<Challenge<SC>>(Val::<SC>::from_usize(n_instances));
 
     // Validate opened values shape per instance and observe per-instance binding data.
     // Precompute per-instance preprocessed widths and number of quotient chunks.
@@ -145,6 +136,7 @@ where
             preprocessed_width: pre_w,
             main_width: air.width(),
             num_public_values: air.num_public_values(),
+            num_periodic_columns: air.num_periodic_columns(),
             ..Default::default()
         };
         let log_num_chunks =
@@ -169,6 +161,9 @@ where
             })?;
         quotient_domain_sizes.push(quotient_domain_size);
     }
+
+    // Observe the instance count up front to match the prover's transcript.
+    transcript.observe_instance_count(airs.len());
 
     for (i, air) in airs.iter().enumerate() {
         let air_width = A::width(air);
@@ -268,27 +263,17 @@ where
             .into());
         }
 
-        // Observe per-instance binding data: (log_ext_degree, log_degree), width, num quotient chunks.
+        // Observe per-instance binding data.
         let ext_db = degree_bits[i];
         let base_db = base_degree_bits[i];
         let width = A::width(air);
-        observe_instance_binding::<SC>(&mut challenger, ext_db, base_db, width, n_chunks);
+        let n_chunks = num_quotient_chunks[i];
+        transcript.observe_instance_binding(ext_db, base_db, width, n_chunks);
     }
 
-    // Observe main commitment and public values (in instance order).
-    challenger.observe(commitments.main.clone());
-    for pv in public_values {
-        challenger.observe_slice(pv);
-    }
-
-    // Observe preprocessed widths for each instance. If a global
-    // preprocessed commitment exists, observe it once.
-    for &pre_w in preprocessed_widths.iter() {
-        challenger.observe_base_as_algebra_element::<Challenge<SC>>(Val::<SC>::from_usize(pre_w));
-    }
-    if let Some(global) = &common.preprocessed {
-        challenger.observe(global.commitment.clone());
-    }
+    // Observe main commitment and public values, then preprocessed data.
+    transcript.observe_main(&commitments.main, public_values);
+    transcript.observe_preprocessed(&preprocessed_widths, common.preprocessed.as_ref());
 
     // Validate the shape of the lookup commitment.
     let is_lookup = commitments.permutation.is_some();
@@ -297,37 +282,19 @@ where
         return Err(InvalidProofShapeError::LookupCommitmentMismatch.into());
     }
 
-    // Fetch lookups and sample their challenges.
-    let challenges_per_instance =
-        get_perm_challenges::<SC, LogUpGadget>(&mut challenger, all_lookups, &lookup_gadget);
+    // Sample permutation challenges and alpha.
+    let challenges_per_instance = transcript.sample_perm_challenges(all_lookups, &lookup_gadget);
+    let alpha: Challenge<SC> = transcript
+        .observe_perm_and_sample_alpha(commitments.permutation.as_ref(), global_lookup_data);
 
-    // Then, observe the permutation tables, if any.
-    if is_lookup {
-        challenger.observe(
-            commitments
-                .permutation
-                .clone()
-                .expect("We checked that the commitment exists"),
-        );
-        for data in global_lookup_data.iter().flatten() {
-            challenger.observe_algebra_element(data.expected_cumulated);
-        }
+    // Observe quotient chunks and optional random commitment.
+    transcript.observe_quotient_commitment(&commitments.quotient_chunks);
+    if let Some(r_commit) = &commitments.random {
+        transcript.observe_random_commitment(r_commit);
     }
 
-    // Sample alpha for constraint folding
-    let alpha = challenger.sample_algebra_element();
-
-    // Observe quotient chunks commitment
-    challenger.observe(commitments.quotient_chunks.clone());
-
-    // We've already checked that commitments.random is present if and only if ZK is enabled.
-    // Observe the random commitment if it is present.
-    if let Some(r_commit) = commitments.random.clone() {
-        challenger.observe(r_commit);
-    }
-
-    // Sample OOD point
-    let zeta = challenger.sample_algebra_element();
+    // Sample OOD point.
+    let zeta = transcript.sample_zeta();
 
     // Build commitments_with_opening_points to verify openings.
     let mut coms_to_verify = vec![];
@@ -522,7 +489,7 @@ where
     }
 
     // Verify all openings via PCS.
-    pcs.verify(coms_to_verify, opening_proof, &mut challenger)
+    pcs.verify(coms_to_verify, opening_proof, &mut transcript.challenger)
         .map_err(VerificationError::InvalidOpeningArgument)?;
 
     // Now check constraint equality per instance.
@@ -613,6 +580,11 @@ where
             .iter()
             .map(|ld| ld.expected_cumulated)
             .collect();
+        let periodic_values: Vec<Challenge<SC>> = air
+            .periodic_columns()
+            .iter()
+            .map(|col| ext_trace_domains[i].evaluate_periodic_column_at(col, zeta))
+            .collect();
         let verifier_data = VerifierData {
             trace_local: &opened_values.instances[i].base_opened_values.trace_local,
             trace_next: trace_next_ref,
@@ -626,6 +598,7 @@ where
             permutation_next: &perm_next_ext,
             permutation_challenges: &challenges_per_instance[i],
             permutation_values: &perm_vals,
+            periodic_values: &periodic_values,
             lookups: &all_lookups[i],
             public_values: &public_values[i],
             trace_domain: init_trace_domain,
@@ -634,17 +607,14 @@ where
             quotient,
         };
 
-        verify_constraints_with_lookups::<SC, A, LogUpGadget, PcsError<SC>>(
-            air,
-            &verifier_data,
-            &lookup_gadget,
-        )
-        .map_err(|e| match e {
-            VerificationError::OodEvaluationMismatch { .. } => {
-                VerificationError::OodEvaluationMismatch { index: Some(i) }
-            }
-            other => other,
-        })?;
+        verifier_data
+            .verify_constraints_with_lookups::<A, LogUpGadget, PcsError<SC>>(air, &lookup_gadget)
+            .map_err(|e| match e {
+                VerificationError::OodEvaluationMismatch { .. } => {
+                    VerificationError::OodEvaluationMismatch { index: Some(i) }
+                }
+                other => other,
+            })?;
     }
 
     let mut global_cumulative = HashMap::<&String, Vec<_>>::new();
@@ -659,115 +629,6 @@ where
         lookup_gadget
             .verify_global_final_value(&all_expected_cumulative)
             .map_err(|e| VerificationError::LookupError(format!("{e:?}: {name}")))?;
-    }
-
-    Ok(())
-}
-
-/// Structure storing all data needed for verifying one instance's constraints at the out-of-domain point.
-pub struct VerifierData<'a, SC: SGC> {
-    // Out-of-domain point at which constraints are evaluated
-    zeta: SC::Challenge,
-    // Challenge used to fold constraints
-    alpha: SC::Challenge,
-    // Main trace evaluated at `zeta`
-    trace_local: &'a [SC::Challenge],
-    // Main trace evaluated at the following point `g * zeta`, where `g` is the subgroup generator
-    trace_next: &'a [SC::Challenge],
-    // Preprocessed trace evaluated at `zeta`
-    preprocessed_local: &'a [SC::Challenge],
-    // Preprocessed trace evaluated at the following point `g * zeta`, where `g` is the subgroup generator
-    preprocessed_next: &'a [SC::Challenge],
-    // Permutation trace evaluated at `zeta`
-    permutation_local: &'a [SC::Challenge],
-    // Permutation trace evaluated at the following point `g * zeta`, where `g` is the subgroup generator
-    permutation_next: &'a [SC::Challenge],
-    // Challenges used for the lookup argument
-    permutation_challenges: &'a [SC::Challenge],
-    // Expected cumulated values for global lookup arguments
-    permutation_values: &'a [SC::Challenge],
-    // Lookup contexts for this instance
-    lookups: &'a [Lookup<Val<SC>>],
-    // Public values for this instance
-    public_values: &'a [Val<SC>],
-    // Trace domain for this instance
-    trace_domain: Domain<SC>,
-    // Quotient polynomial evaluated at `zeta`
-    quotient: SC::Challenge,
-}
-
-/// Verifies that the folded constraints match the quotient polynomial at zeta.
-///
-/// This evaluates the AIR constraints at the out-of-domain point and checks
-/// that constraints(zeta) / Z_H(zeta) = quotient(zeta).
-#[allow(clippy::too_many_arguments)]
-pub fn verify_constraints_with_lookups<'a, SC, A, LG: LookupGadget, PcsErr: Debug>(
-    air: &A,
-    verifier_data: &VerifierData<'a, SC>,
-    lookup_gadget: &LG,
-) -> Result<(), VerificationError<PcsErr>>
-where
-    SC: SGC,
-    A: for<'b> Air<VerifierConstraintFolderWithLookups<'b, SC>>,
-{
-    let VerifierData {
-        trace_local,
-        trace_next,
-        preprocessed_local,
-        preprocessed_next,
-        permutation_local,
-        permutation_next,
-        permutation_challenges,
-        permutation_values,
-        lookups,
-        public_values,
-        trace_domain,
-        zeta,
-        alpha,
-        quotient,
-    } = verifier_data;
-
-    let sels = trace_domain.selectors_at_point(*zeta);
-
-    let main = VerticalPair::new(
-        RowMajorMatrixView::new_row(trace_local),
-        RowMajorMatrixView::new_row(trace_next),
-    );
-
-    let preprocessed = VerticalPair::new(
-        RowMajorMatrixView::new_row(preprocessed_local),
-        RowMajorMatrixView::new_row(preprocessed_next),
-    );
-
-    let preprocessed_window =
-        RowWindow::from_two_rows(preprocessed.top.values, preprocessed.bottom.values);
-    let inner_folder = VerifierConstraintFolder {
-        main,
-        preprocessed,
-        preprocessed_window,
-        public_values,
-        is_first_row: sels.is_first_row,
-        is_last_row: sels.is_last_row,
-        is_transition: sels.is_transition,
-        alpha: *alpha,
-        accumulator: SC::Challenge::ZERO,
-    };
-    let mut folder = VerifierConstraintFolderWithLookups {
-        inner: inner_folder,
-        permutation: VerticalPair::new(
-            RowMajorMatrixView::new_row(permutation_local),
-            RowMajorMatrixView::new_row(permutation_next),
-        ),
-        permutation_challenges,
-        permutation_values,
-    };
-    // Evaluate AIR and lookup constraints.
-    air.eval_with_lookups(&mut folder, lookups, lookup_gadget);
-    let folded_constraints = folder.inner.accumulator;
-
-    // Check that constraints(zeta) / Z_H(zeta) = quotient(zeta)
-    if folded_constraints * sels.inv_vanishing != *quotient {
-        return Err(VerificationError::OodEvaluationMismatch { index: None });
     }
 
     Ok(())

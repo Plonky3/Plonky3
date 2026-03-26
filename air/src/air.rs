@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::{Add, Mul, Sub};
 
@@ -109,9 +110,80 @@ impl<T> WindowAccess<T> for RowWindow<'_, T> {
 pub trait BaseAir<F>: Sync {
     /// The number of columns (a.k.a. registers) in this AIR.
     fn width(&self) -> usize;
+
     /// Return an optional preprocessed trace matrix to be included in the prover's trace.
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         None
+    }
+
+    /// Return the number of periodic columns.
+    ///
+    /// Override when this AIR uses periodic columns; see [`Self::periodic_columns`].
+    fn num_periodic_columns(&self) -> usize {
+        0
+    }
+
+    /// Return the periodic table data.
+    ///
+    /// Periodic columns are columns whose values repeat with a fixed period that divides the
+    /// trace length. They are derived from public parameters and are never committed as part
+    /// of the trace — instead, both prover and verifier compute them from the data provided here.
+    ///
+    /// # Mathematical model
+    ///
+    /// For a trace of length n evaluated over a multiplicative subgroup H = {g⁰, g¹, ..., gⁿ⁻¹},
+    /// a periodic column with period p (where p divides n, both powers of 2) is defined as follows:
+    ///
+    /// - Let r = n/p be the number of repetitions.
+    /// - The p values are interpreted as evaluations of a polynomial f(x) of degree < p
+    ///   over the subgroup Hʳ = {g⁰, gʳ, g²ʳ, ..., g⁽ᵖ⁻¹⁾ʳ} of order p.
+    /// - The periodic extension f'(X) = f(Xʳ) has degree < p·r = n and satisfies
+    ///   f'(gⁱ) = f(gⁱʳ), which cycles through the p values as i increases.
+    ///
+    /// # Commitment
+    ///
+    /// Periodic columns are public parameters and must be committed during initialization of
+    /// the Fiat-Shamir transcript. The values returned are evaluations over a subgroup;
+    /// callers may convert to coefficient form for efficient evaluation if needed.
+    fn periodic_columns(&self) -> Vec<Vec<F>> {
+        vec![]
+    }
+
+    /// Return the periodic values for the given row index.
+    fn periodic_values(&self, row_index: usize) -> Vec<F>
+    where
+        F: Clone,
+    {
+        self.periodic_columns()
+            .iter()
+            .map(|col| col[row_index % col.len()].clone())
+            .collect()
+    }
+
+    /// Return a matrix with all periodic columns extended to a common height.
+    ///
+    /// The result is a row-major matrix where each row corresponds to a row index in the
+    /// common extended domain (of size equal to the maximum period), and each column
+    /// corresponds to one periodic column. Columns with smaller periods are repeated
+    /// cyclically to fill the extended domain.
+    ///
+    /// Returns `None` if there are no periodic columns.
+    fn periodic_columns_matrix(&self) -> Option<RowMajorMatrix<F>>
+    where
+        F: Clone + Send + Sync,
+    {
+        let cols = self.periodic_columns();
+        if cols.is_empty() {
+            return None;
+        }
+
+        let max_period = cols.iter().map(|c| c.len()).max()?;
+
+        let values = (0..max_period)
+            .flat_map(|row| cols.iter().map(move |col| col[row % col.len()].clone()))
+            .collect();
+
+        Some(RowMajorMatrix::new(values, cols.len()))
     }
 
     /// Which main trace columns have their next row accessed by this AIR's
