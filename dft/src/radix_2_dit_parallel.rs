@@ -17,13 +17,13 @@ use spin::RwLock;
 use tracing::{debug_span, instrument};
 
 use crate::TwoAdicSubgroupDft;
-use crate::butterflies::{Butterfly, DitButterfly, ScaledDitButterfly};
+use crate::butterflies::{Butterfly, DitButterfly, ScaledDitButterfly, TwiddleFreeButterfly};
 
 /// A parallel FFT algorithm which divides a butterfly network's layers into two halves.
 ///
 /// For the first half, we apply a butterfly network with smaller blocks in earlier layers,
 /// i.e. either DIT or Bowers G. Then we bit-reverse, and for the second half, we continue executing
-/// the same network but in bit-reversed order. This way we're always working with small blocks,
+/// the same network but in bit-revised order. This way we're always working with small blocks,
 /// so within each half, we can have a certain amount of parallelism with no cross-thread
 /// communication.
 #[derive(Default, Clone, Debug)]
@@ -291,6 +291,9 @@ fn coset_dft_oop<F: TwoAdicField + Ord>(
 }
 
 /// This can be used as the first half of a DIT butterfly network.
+///
+/// For layer 0, all twiddle factors are 1 (root^0 = 1), so we use `TwiddleFreeButterfly`
+/// to avoid a Montgomery multiply by 1 across the entire matrix.
 #[instrument(level = "debug", skip_all)]
 fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F]) {
     let log_h = log2_strict_usize(mat.height());
@@ -300,14 +303,21 @@ fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F])
         .for_each(|mut submat| {
             let mut backwards = false;
             for layer in 0..mid {
-                let layer_rev = log_h - 1 - layer;
-                let layer_pow = 1 << layer_rev;
-                dit_layer(
-                    &mut submat,
-                    layer,
-                    twiddles.iter().step_by(layer_pow),
-                    backwards,
-                );
+                if layer == 0 {
+                    // For layer 0, half_block_size=1 and each block clones the twiddle
+                    // iterator from the start, consuming only twiddles[0] = root^0 = 1.
+                    // Use TwiddleFreeButterfly to skip the multiply entirely.
+                    dit_layer_twiddle_free(&mut submat, backwards);
+                } else {
+                    let layer_rev = log_h - 1 - layer;
+                    let layer_pow = 1 << layer_rev;
+                    dit_layer(
+                        &mut submat,
+                        layer,
+                        twiddles.iter().step_by(layer_pow),
+                        backwards,
+                    );
+                }
                 backwards = !backwards;
             }
         });
@@ -465,6 +475,40 @@ fn second_half_general<F: Field>(
                 backwards = !backwards;
             }
         });
+}
+
+/// One layer of a DIT butterfly network where all twiddle factors are 1 (i.e., layer 0).
+///
+/// This is equivalent to `dit_layer` with `layer=0` and `twiddles[0]=1`, but uses
+/// `TwiddleFreeButterfly` to avoid a Montgomery multiplication by 1 in the hot loop.
+///
+/// Correctness: For layer=0, `half_block_size=1` and each block clones the twiddle
+/// iterator from position 0, consuming only `twiddles[0] = generator^0 = 1`.
+/// Since multiplying by 1 is a no-op, `TwiddleFreeButterfly` gives identical results.
+fn dit_layer_twiddle_free<F: Field>(
+    submat: &mut RowMajorMatrixViewMut<'_, F>,
+    backwards: bool,
+) {
+    // layer=0 means half_block_size=1, block_size=2.
+    let width = submat.width();
+    debug_assert!(submat.height() >= 2);
+
+    let process_block = move |block: &mut [F]| {
+        // Each block is exactly 2 rows: lo = block[0..width], hi = block[width..2*width]
+        let (lo, hi) = block.split_at_mut(width);
+        TwiddleFreeButterfly.apply_to_rows(lo, hi);
+    };
+
+    let blocks = submat.values.chunks_mut(2 * width);
+    if backwards {
+        for block in blocks.rev() {
+            process_block(block);
+        }
+    } else {
+        for block in blocks {
+            process_block(block);
+        }
+    }
 }
 
 /// One layer of a DIT butterfly network.
