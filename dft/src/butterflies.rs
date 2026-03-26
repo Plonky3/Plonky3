@@ -184,6 +184,31 @@ impl<F: Field> Butterfly<F> for DitButterfly<F> {
     }
 }
 
+/// DIT (Decimation-In-Time) butterfly operation with a post-multiplication scale factor.
+///
+/// This butterfly computes:
+/// ```text
+///   output_1 = (x1 + x2 * twiddle) * scale
+///   output_2 = (x1 - x2 * twiddle) * scale
+/// ```
+/// This is used to merge a uniform scaling step (e.g., 1/N normalization in inverse DFT)
+/// into a butterfly pass, avoiding a separate memory pass over the data.
+#[derive(Copy, Clone)]
+pub struct ScaledDitButterfly<F> {
+    pub twiddle: F,
+    pub scale: F,
+}
+
+impl<F: Field> Butterfly<F> for ScaledDitButterfly<F> {
+    #[inline]
+    fn apply<PF: PackedField<Scalar = F>>(&self, x_1: PF, x_2: PF) -> (PF, PF) {
+        let x_2_twiddle = x_2 * self.twiddle;
+        let sum = (x_1 + x_2_twiddle) * self.scale;
+        let diff = (x_1 - x_2_twiddle) * self.scale;
+        (sum, diff)
+    }
+}
+
 /// Butterfly with no twiddle factor (`twiddle = 1`).
 ///
 /// This is used when no root-of-unity scaling is needed.
@@ -202,5 +227,25 @@ impl<F: Field> Butterfly<F> for TwiddleFreeButterfly {
     #[inline]
     fn apply<PF: PackedField<Scalar = F>>(&self, x_1: PF, x_2: PF) -> (PF, PF) {
         (x_1 + x_2, x_1 - x_2)
+    }
+}
+
+/// Twiddle-free butterfly with a post-multiplication scale factor.
+///
+/// This butterfly computes:
+/// ```text
+///   output_1 = (x1 + x2) * scale
+///   output_2 = (x1 - x2) * scale
+/// ```
+/// This is used to merge a uniform scaling step into a butterfly pass.
+#[derive(Copy, Clone)]
+pub struct ScaledTwiddleFreeButterfly<F>(pub F);
+
+impl<F: Field> Butterfly<F> for ScaledTwiddleFreeButterfly<F> {
+    #[inline]
+    fn apply<PF: PackedField<Scalar = F>>(&self, x_1: PF, x_2: PF) -> (PF, PF) {
+        let sum = (x_1 + x_2) * self.0;
+        let diff = (x_1 - x_2) * self.0;
+        (sum, diff)
     }
 }
