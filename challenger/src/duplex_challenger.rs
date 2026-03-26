@@ -218,6 +218,20 @@ where
     F: PrimeField64,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
+    #[inline]
+    fn is_sample_bits_valid(&self, bits: usize) -> bool {
+        if bits >= usize::BITS as usize {
+            return false;
+        }
+        let Ok(bits_u32) = u32::try_from(bits) else {
+            return false;
+        };
+        let Some(bound) = 1u128.checked_shl(bits_u32) else {
+            return false;
+        };
+        bound < F::ORDER_U64 as u128
+    }
+
     /// The sampled bits are not perfectly uniform, but we can bound the error: every sequence
     /// appears with probability 1/p-close to uniform (1/2^b).
     ///
@@ -227,8 +241,10 @@ where
     /// sequence appears either with probability P1 = ⌊p / 2^b⌋ / p or P2 = (1 + ⌊p / 2^b⌋) / p.
     /// We have 1/2^b - 1/p ≤ P1, P2 ≤ 1/2^b + 1/p
     fn sample_bits(&mut self, bits: usize) -> usize {
-        assert!(bits < (usize::BITS as usize));
-        assert!((1 << bits) < F::ORDER_U64);
+        assert!(
+            self.is_sample_bits_valid(bits),
+            "bit count exceeds challenger sampling bounds"
+        );
         let rand_f: F = self.sample();
         let rand_usize = rand_f.as_canonical_u64() as usize;
         rand_usize & ((1 << bits) - 1)

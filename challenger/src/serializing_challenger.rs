@@ -159,10 +159,25 @@ where
     F: PrimeField32,
     Inner: CanSample<u8>,
 {
+    #[inline]
+    fn is_sample_bits_valid(&self, bits: usize) -> bool {
+        if bits >= usize::BITS as usize {
+            return false;
+        }
+        let Ok(bits_u32) = u32::try_from(bits) else {
+            return false;
+        };
+        let Some(bound) = 1u128.checked_shl(bits_u32) else {
+            return false;
+        };
+        bound <= F::ORDER_U64 as u128
+    }
+
     fn sample_bits(&mut self, bits: usize) -> usize {
-        assert!(bits < (usize::BITS as usize));
-        // Limiting the number of bits to the field size
-        assert!((1 << bits) <= F::ORDER_U64 as usize);
+        assert!(
+            self.is_sample_bits_valid(bits),
+            "bit count exceeds challenger sampling bounds"
+        );
         let rand_usize = u32::from_le_bytes(self.inner.sample_array()) as usize;
         rand_usize & ((1 << bits) - 1)
     }
@@ -317,9 +332,25 @@ where
     F: PrimeField64,
     Inner: CanSample<u8>,
 {
+    #[inline]
+    fn is_sample_bits_valid(&self, bits: usize) -> bool {
+        if bits >= usize::BITS as usize {
+            return false;
+        }
+        let Ok(bits_u32) = u32::try_from(bits) else {
+            return false;
+        };
+        let Some(bound) = 1u128.checked_shl(bits_u32) else {
+            return false;
+        };
+        bound <= F::ORDER_U64 as u128
+    }
+
     fn sample_bits(&mut self, bits: usize) -> usize {
-        assert!(bits < (usize::BITS as usize));
-        assert!((1u64 << bits) <= F::ORDER_U64);
+        assert!(
+            self.is_sample_bits_valid(bits),
+            "bit count exceeds challenger sampling bounds"
+        );
         let rand_u64 = u64::from_le_bytes(self.inner.sample_array());
         (rand_u64 & ((1u64 << bits) - 1)) as usize
     }
