@@ -489,10 +489,7 @@ fn second_half_general<F: Field>(
 /// Correctness: For layer=0, `half_block_size=1` and each block clones the twiddle
 /// iterator from position 0, consuming only `twiddles[0] = generator^0 = 1`.
 /// Since multiplying by 1 is a no-op, `TwiddleFreeButterfly` gives identical results.
-fn dit_layer_twiddle_free<F: Field>(
-    submat: &mut RowMajorMatrixViewMut<'_, F>,
-    backwards: bool,
-) {
+fn dit_layer_twiddle_free<F: Field>(submat: &mut RowMajorMatrixViewMut<'_, F>, backwards: bool) {
     // layer=0 means half_block_size=1, block_size=2.
     let width = submat.width();
     debug_assert!(submat.height() >= 2);
@@ -533,7 +530,10 @@ fn dit_layer_first_one<'a, F: Field>(
     let block_size = half_block_size * 2;
     let width = submat.width();
     debug_assert!(submat.height() >= block_size);
-    debug_assert!(half_block_size >= 2, "layer must be >= 1 for dit_layer_first_one");
+    debug_assert!(
+        half_block_size >= 2,
+        "layer must be >= 1 for dit_layer_first_one"
+    );
 
     let process_block = move |block: &mut [F]| {
         let (lows, highs) = block.split_at_mut(half_block_size * width);
