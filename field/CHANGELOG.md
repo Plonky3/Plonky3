@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.5.2] - 2026-03-27
+### Merged PRs
+- Make batched_linear_combination chunk size per-impl tunable (#1451)
+- Perf: abstract away Copy vs Clone (#1463)
+
 ## [0.5.1] - 2026-03-16
 ## [0.5.0] - 2026-03-10
 ### Merged PRs
