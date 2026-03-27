@@ -11,22 +11,12 @@ use p3_koala_bear::{
     KOALABEAR_POSEIDON_PARTIAL_ROUNDS_24, KoalaBear, MdsMatrixKoalaBear, Poseidon1KoalaBear,
 };
 use p3_mersenne_31::{
-    MERSENNE31_POSEIDON2_HALF_FULL_ROUNDS, MERSENNE31_POSEIDON2_PARTIAL_ROUNDS_16,
-    MERSENNE31_POSEIDON2_PARTIAL_ROUNDS_24, MdsMatrixMersenne31, Mersenne31,
+    Mersenne31, default_mersenne31_poseidon1_16, default_mersenne31_poseidon1_32,
 };
-use p3_poseidon1::{Poseidon1, Poseidon1ExternalLayerGeneric, Poseidon1InternalLayerGeneric};
 use p3_symmetric::Permutation;
 use p3_util::pretty_name;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
-
-type Poseidon1Generic<F, Mds, const WIDTH: usize, const ALPHA: u64> = Poseidon1<
-    F,
-    Poseidon1ExternalLayerGeneric<F, Mds, WIDTH>,
-    Poseidon1InternalLayerGeneric<F, WIDTH>,
-    WIDTH,
-    ALPHA,
->;
 
 fn bench_poseidon1(c: &mut Criterion) {
     let mut rng = SmallRng::seed_from_u64(1);
@@ -85,23 +75,15 @@ fn bench_poseidon1(c: &mut Criterion) {
     poseidon1_scalar::<Goldilocks, _, 12>(c, &gl_12);
     poseidon1_packed::<Goldilocks, _, 12>(c, &gl_12);
 
-    // Mersenne31: generic implementation with random constants.
-    // Uses Poseidon2 round number constants (Mersenne31 has no dedicated Poseidon1 module).
-    let m31_16: Poseidon1Generic<Mersenne31, MdsMatrixMersenne31, 16, 5> = Poseidon1::new_from_rng(
-        MERSENNE31_POSEIDON2_HALF_FULL_ROUNDS,
-        MERSENNE31_POSEIDON2_PARTIAL_ROUNDS_16,
-        &MdsMatrixMersenne31,
-        &mut rng,
-    );
+    // Mersenne31 width 16.
+    let m31_16 = default_mersenne31_poseidon1_16();
     poseidon1_scalar::<Mersenne31, _, 16>(c, &m31_16);
+    poseidon1_packed::<Mersenne31, _, 16>(c, &m31_16);
 
-    let m31_32: Poseidon1Generic<Mersenne31, MdsMatrixMersenne31, 32, 5> = Poseidon1::new_from_rng(
-        MERSENNE31_POSEIDON2_HALF_FULL_ROUNDS,
-        MERSENNE31_POSEIDON2_PARTIAL_ROUNDS_24,
-        &MdsMatrixMersenne31,
-        &mut rng,
-    );
+    // Mersenne31 width 32.
+    let m31_32 = default_mersenne31_poseidon1_32();
     poseidon1_scalar::<Mersenne31, _, 32>(c, &m31_32);
+    poseidon1_packed::<Mersenne31, _, 32>(c, &m31_32);
 }
 
 /// Benchmark using scalar field elements (no SIMD).

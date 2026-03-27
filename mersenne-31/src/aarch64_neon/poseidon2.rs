@@ -206,7 +206,7 @@ fn diagonal_mul_24(state: &mut [PackedMersenne31Neon; 24]) {
 /// - `input` must contain elements in canonical form `{0, ..., P}`.
 /// - `rc` must contain round constants in positive form `{0, ..., P}`.
 #[inline(always)]
-fn add_rc_and_sbox(input: &mut PackedMersenne31Neon, rc: uint32x4_t) {
+pub(super) fn add_rc_and_sbox(input: &mut PackedMersenne31Neon, rc: uint32x4_t) {
     unsafe {
         // Safety: If this code got compiled then NEON intrinsics are available.
         let input_vec = input.to_vector();

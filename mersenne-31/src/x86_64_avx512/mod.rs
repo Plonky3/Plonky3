@@ -1,3 +1,4 @@
+mod mds;
 mod packing;
 mod poseidon2;
 
