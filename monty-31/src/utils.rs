@@ -161,40 +161,17 @@ pub(crate) const fn large_monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
 ///
 /// where `R = 2^MONTY_BITS = 2^32`.
 ///
-/// # Safety
+/// # Preconditions
 ///
 /// - Input must satisfy `x < 2^96`.
 /// - Output is in `[0, P)`.
-///
-/// # Algorithm
-///
-/// Split `x` into two limbs:
-///
-/// ```text
-///     x = hi * 2^64 + lo
-///         ──          ──
-///         u32         u64
-/// ```
-///
-/// Since `R = 2^32`, multiplying by `R^{-1}` gives:
-///
-/// ```text
-///     x * R^{-1}  =  hi * 2^64 * 2^{-32}  +  lo * 2^{-32}   (mod P)
-///                 =  hi * 2^32            +  lo * R^{-1}    (mod P)
-/// ```
-///
-/// Each piece is reduced independently:
-/// - The low limb `lo * R^{-1} mod P` is a standard Montgomery reduction on a `u64`.
-/// - The high limb `hi * 2^32 mod P` is a conversion into Montgomery form.
-/// - The two residues are combined with a single modular addition.
-///
-/// # Performance
-///
-/// All arithmetic stays at 64 bits or below:
-/// - One Montgomery reduction on a `u64` (multiplies and shifts, no division).
-/// - One `u64 % P` where `P` is a compile-time constant.
-/// - One conditional subtraction for the final modular addition.
 pub(crate) const fn monty_reduce_u128<MP: MontyParameters>(x: u128) -> u32 {
+    // This function assumes MONTY_BITS == 32 for the limb split and range analysis.
+    const {
+        assert!(MP::MONTY_BITS == 32);
+    }
+    debug_assert!(x < 1 << 96);
+
     // Split the 128-bit input into its two limbs.
     //
     // ```text
