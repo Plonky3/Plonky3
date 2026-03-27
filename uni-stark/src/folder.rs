@@ -174,15 +174,6 @@ impl<SC: StarkGenericConfig> ExtensionBuilder for ProverConstraintFolder<'_, SC>
         self.ext_constraints.push(x.into());
         self.constraint_index += 1;
     }
-
-    fn assert_zeros_ext<const N: usize, I>(&mut self, array: [I; N])
-    where
-        I: Into<Self::ExprEF>,
-    {
-        self.ext_constraints
-            .extend(array.into_iter().map(Into::into));
-        self.constraint_index += N;
-    }
 }
 
 impl<SC: StarkGenericConfig> PeriodicAirBuilder for ProverConstraintFolder<'_, SC> {
