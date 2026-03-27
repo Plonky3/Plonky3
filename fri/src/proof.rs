@@ -40,3 +40,24 @@ pub struct CommitPhaseProofStep<F: Field, M: Mmcs<F>> {
 
     pub opening_proof: M::Proof,
 }
+
+impl<F: Field, M: Mmcs<F>> CommitPhaseProofStep<F, M> {
+    /// Validate protocol-level arity constraints and return `(log_arity, arity)`
+    /// on success.
+    ///
+    /// This separates "data is deserializable" from "data is protocol-valid".
+    #[inline]
+    pub(crate) fn checked_arity(
+        &self,
+        max_log_arity: usize,
+        log_current_height: usize,
+    ) -> Option<(usize, usize)> {
+        let log_arity = self.log_arity as usize;
+        if log_arity > max_log_arity || log_arity > log_current_height {
+            return None;
+        }
+        let shift = u32::try_from(log_arity).ok()?;
+        let arity = 1usize.checked_shl(shift)?;
+        Some((log_arity, arity))
+    }
+}
