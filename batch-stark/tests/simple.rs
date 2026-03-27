@@ -624,6 +624,29 @@ fn make_config(seed: u64) -> MyConfig {
     StarkConfig::new(pcs, challenger)
 }
 
+/// Minimal FRI shape so a tiny trace still completes `prove_batch` / `verify_batch`.
+fn make_config_allow_tiny_trace(seed: u64) -> MyConfig {
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let hash = MyHash::new(perm.clone());
+    let compress = MyCompress::new(perm.clone());
+    let val_mmcs = ValMmcs::new(hash, compress, 0);
+    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+    let dft = Dft::default();
+    let fri_params = FriParameters {
+        log_blowup: 1,
+        log_final_poly_len: 0,
+        max_log_arity: 1,
+        num_queries: 2,
+        commit_proof_of_work_bits: 1,
+        query_proof_of_work_bits: 1,
+        mmcs: challenge_mmcs,
+    };
+    let pcs = MyPcs::new(dft, val_mmcs, fri_params);
+    let challenger = Challenger::new(perm);
+    StarkConfig::new(pcs, challenger)
+}
+
 /// Same as make_config, but with a different arity.
 fn make_config_wide(seed: u64) -> MyConfigWide {
     let mut rng = SmallRng::seed_from_u64(seed);
@@ -1191,6 +1214,27 @@ fn test_single_instance() -> Result<(), impl Debug> {
     let config = make_config(9999);
 
     let (air_fib, fib_trace, fib_pis) = create_fib_instance(5); // 32 rows
+
+    let instances = vec![StarkInstance {
+        air: &air_fib,
+        trace: &fib_trace,
+        public_values: fib_pis.clone(),
+        lookups: vec![],
+    }];
+
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data);
+    let airs = vec![air_fib];
+    verify_batch(&config, &airs, &proof, &[fib_pis], common)
+}
+
+#[test]
+fn test_quotient_domain_size_not_multiple_of_packed_field_width() -> Result<(), impl Debug> {
+    let config = make_config_allow_tiny_trace(77_007);
+
+    // 2 rows → log2(trace)=1, one quotient chunk → quotient domain size = 2^1 = 2.
+    let (air_fib, fib_trace, fib_pis) = create_fib_instance(1);
 
     let instances = vec![StarkInstance {
         air: &air_fib,

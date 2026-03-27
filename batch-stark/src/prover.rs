@@ -747,21 +747,21 @@ where
     let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size());
     let next_step = 1 << qdb;
 
-    // Pad selectors so that even a sub-packing-width domain fills a full SIMD lane.
+    // Pad selectors so every packed chunk can load `pack_width` scalars. When
+    // `quotient_size` is not a multiple of `pack_width`, extend by repeating
+    // coset values modulo `quotient_size` (matching wrapped trace indexing).
     let pack_width = PackedVal::<SC>::WIDTH;
-    if quotient_size < pack_width {
-        let pad_len = pack_width;
-        let pad = |v: &mut Vec<_>| v.resize(pad_len, Val::<SC>::default());
-        pad(&mut sels.is_first_row);
-        pad(&mut sels.is_last_row);
-        pad(&mut sels.is_transition);
-        pad(&mut sels.inv_vanishing);
-    }
-
-    debug_assert!(
-        quotient_size.is_multiple_of(pack_width),
-        "packed quotient loop requires quotient_size % pack_width == 0"
-    );
+    let padded_sel_len = quotient_size.next_multiple_of(pack_width);
+    let pad_selectors = |v: &mut Vec<Val<SC>>| {
+        debug_assert_eq!(v.len(), quotient_size);
+        for idx in quotient_size..padded_sel_len {
+            v.push(v[idx % quotient_size]);
+        }
+    };
+    pad_selectors(&mut sels.is_first_row);
+    pad_selectors(&mut sels.is_last_row);
+    pad_selectors(&mut sels.is_transition);
+    pad_selectors(&mut sels.inv_vanishing);
 
     // Decompose alpha into per-constraint powers, split by base vs extension constraints.
     let constraint_layout = get_constraint_layout(air, layout, lookups, lookup_gadget);
@@ -809,13 +809,9 @@ where
         0
     };
 
-    // Number of scalar extension values to emit per packed chunk
-    // (may be less than a full packing at the tail).
-    let emit_count = core::cmp::min(quotient_size, pack_width);
-
     // Pre-allocate the output buffer and obtain a disjoint-write pointer.
-    // SAFETY: Each chunk writes to result[i_start .. i_start + emit_count]
-    // and `step_by(pack_width)` guarantees non-overlapping ranges.
+    // SAFETY: Each chunk writes to `result[i_start..i_start + chunk_emit]` with
+    // `chunk_emit = min(pack_width, quotient_size - i_start)`; ranges are disjoint.
     let mut result = SC::Challenge::zero_vec(quotient_size);
     let result_ptr = DisjointMutPtr::new(&mut result);
 
@@ -833,6 +829,7 @@ where
                 )
             },
             |(base_buf, ext_buf, perm_buf), i_start| {
+                let chunk_emit = pack_width.min(quotient_size - i_start);
                 // Load SIMD-packed selector values for this chunk.
                 let i_range = i_start..i_start + pack_width;
                 let is_first_row =
@@ -935,7 +932,7 @@ where
                 // Unpack the SIMD quotient into individual extension-field values
                 // and write them directly into the pre-allocated output buffer.
                 // SAFETY: Each i_start is unique and targets a disjoint slice.
-                let out = unsafe { result_ptr.slice_mut(i_start, emit_count) };
+                let out = unsafe { result_ptr.slice_mut(i_start, chunk_emit) };
                 for (idx_in_packing, slot) in out.iter_mut().enumerate() {
                     *slot = quotient.extract(idx_in_packing);
                 }
