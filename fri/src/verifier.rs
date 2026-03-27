@@ -3,7 +3,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+use p3_challenger::{CanObserve, CanSampleBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, Field, TwoAdicField};
@@ -39,6 +39,18 @@ where
 /// FRI folds and rolls. The first element of each pair indicates the round of
 /// fri in which the input should be rolled in. The second element is the opening.
 type FriOpenings<F> = Vec<(usize, F)>;
+
+#[inline]
+fn checked_shl_usize(value: usize, shift: usize) -> Option<usize> {
+    let shift = u32::try_from(shift).ok()?;
+    value.checked_shl(shift)
+}
+
+#[inline]
+fn checked_shr_usize(value: usize, shift: usize) -> Option<usize> {
+    let shift = u32::try_from(shift).ok()?;
+    value.checked_shr(shift)
+}
 
 /// Verifies a FRI proof.
 ///
@@ -114,8 +126,41 @@ where
 
     // With variable arity, we compute log_global_max_height by summing all log_arities.
     // Each round reduces the domain size by its log_arity.
-    let total_log_reduction: usize = log_arities.iter().sum();
-    let log_global_max_height = total_log_reduction + params.log_blowup + params.log_final_poly_len;
+    let total_log_reduction = log_arities
+        .iter()
+        .try_fold(0usize, |acc, &log_arity| acc.checked_add(log_arity))
+        .ok_or(FriError::InvalidProofShape)?;
+    let log_final_height = params
+        .log_blowup
+        .checked_add(params.log_final_poly_len)
+        .ok_or(FriError::InvalidProofShape)?;
+    let log_global_max_height = total_log_reduction
+        .checked_add(log_final_height)
+        .ok_or(FriError::InvalidProofShape)?;
+
+    // Protect all downstream shift/indexing paths from malformed arity schedules.
+    if log_global_max_height > Val::TWO_ADICITY {
+        return Err(FriError::InvalidProofShape);
+    }
+    let mut schedule_height = log_global_max_height;
+    for &log_arity in &log_arities {
+        if log_arity > params.max_log_arity || checked_shl_usize(1, log_arity).is_none() {
+            return Err(FriError::InvalidProofShape);
+        }
+        schedule_height = schedule_height
+            .checked_sub(log_arity)
+            .ok_or(FriError::InvalidProofShape)?;
+    }
+    if schedule_height != log_final_height {
+        return Err(FriError::InvalidProofShape);
+    }
+
+    let query_index_bits = log_global_max_height
+        .checked_add(folding.extra_query_index_bits())
+        .ok_or(FriError::InvalidProofShape)?;
+    if !challenger.is_sample_bits_valid(query_index_bits) {
+        return Err(FriError::InvalidProofShape);
+    }
 
     if proof.commit_pow_witnesses.len() != proof.commit_phase_commits.len() {
         return Err(FriError::InvalidProofShape);
@@ -160,17 +205,13 @@ where
         return Err(FriError::InvalidPowWitness);
     }
 
-    // The log of the final domain size.
-    let log_final_height = params.log_blowup + params.log_final_poly_len;
-
     for QueryProof {
         input_proof,
         commit_phase_openings,
     } in &proof.query_proofs
     {
         // For each query proof, we start by generating the random index.
-        let index =
-            challenger.sample_bits(log_global_max_height + folding.extra_query_index_bits());
+        let index = challenger.sample_bits(query_index_bits);
 
         // Next we open all polynomials `f` at the relevant index and combine them into our FRI inputs.
         let ro = open_input(
@@ -301,7 +342,10 @@ where
     // using FRI until the domain size reaches (1 << log_final_height).
     for ((&beta, comm), opening) in fold_data_iter {
         let log_arity = opening.log_arity as usize;
-        let arity = 1 << log_arity;
+        if log_arity > params.max_log_arity {
+            return Err(FriError::InvalidProofShape);
+        }
+        let arity = checked_shl_usize(1, log_arity).ok_or(FriError::InvalidProofShape)?;
 
         // Validate that sibling_values has the expected length (arity - 1)
         if opening.sibling_values.len() != arity - 1 {
@@ -323,15 +367,18 @@ where
         }
 
         // Compute the new height after folding
-        let log_folded_height = log_current_height - log_arity;
+        let log_folded_height = log_current_height
+            .checked_sub(log_arity)
+            .ok_or(FriError::InvalidProofShape)?;
 
         let dims = &[Dimensions {
             width: arity,
-            height: 1 << log_folded_height,
+            height: checked_shl_usize(1, log_folded_height).ok_or(FriError::InvalidProofShape)?,
         }];
 
         // Replace index with the index of the parent FRI node.
-        *start_index >>= log_arity;
+        *start_index =
+            checked_shr_usize(*start_index, log_arity).ok_or(FriError::InvalidProofShape)?;
 
         // Verify the commitment to the evaluations of the sibling nodes.
         params
@@ -439,8 +486,11 @@ where
         // assumed to always be Val::GENERATOR.
         let batch_heights = mats
             .iter()
-            .map(|(domain, _)| domain.size() << params.log_blowup)
-            .collect_vec();
+            .map(|(domain, _)| {
+                checked_shl_usize(domain.size(), params.log_blowup)
+                    .ok_or(FriError::InvalidProofShape)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let batch_dims = batch_heights
             .iter()
             // TODO: MMCS doesn't really need width; we put 0 for now.
@@ -450,11 +500,16 @@ where
         // If the maximum height of the batch is smaller than the global max height,
         // we need to correct the index by right shifting it.
         // If the batch is empty, we set the index to 0.
-        let reduced_index = batch_heights
-            .iter()
-            .max()
-            .map(|&h| index >> (log_global_max_height - log2_strict_usize(h)))
-            .unwrap_or(0);
+        let reduced_index = match batch_heights.iter().max() {
+            Some(&h) => {
+                let log_height = log2_strict_usize(h);
+                let bits_reduced = log_global_max_height
+                    .checked_sub(log_height)
+                    .ok_or(FriError::InvalidProofShape)?;
+                checked_shr_usize(index, bits_reduced).ok_or(FriError::InvalidProofShape)?
+            }
+            None => 0,
+        };
 
         input_mmcs
             .verify_batch(
@@ -471,10 +526,16 @@ where
             mats,
             FriError::InvalidProofShape,
         )? {
-            let log_height = log2_strict_usize(mat_domain.size()) + params.log_blowup;
+            let log_height = log2_strict_usize(mat_domain.size())
+                .checked_add(params.log_blowup)
+                .ok_or(FriError::InvalidProofShape)?;
 
-            let bits_reduced = log_global_max_height - log_height;
-            let rev_reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
+            let bits_reduced = log_global_max_height
+                .checked_sub(log_height)
+                .ok_or(FriError::InvalidProofShape)?;
+            let reduced_index =
+                checked_shr_usize(index, bits_reduced).ok_or(FriError::InvalidProofShape)?;
+            let rev_reduced_index = reverse_bits_len(reduced_index, log_height);
 
             // TODO: this can be nicer with domain methods?
 
