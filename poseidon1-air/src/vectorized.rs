@@ -205,7 +205,7 @@ impl<
     >
 {
     /// Construct a vectorized AIR from pre-computed round constants.
-    pub fn new(
+    pub const fn new(
         full_constants: FullRoundConstants<F, WIDTH>,
         partial_constants: PartialRoundConstants<F, WIDTH>,
     ) -> Self {
