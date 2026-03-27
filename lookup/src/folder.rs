@@ -81,14 +81,6 @@ impl<SC: StarkGenericConfig> ExtensionBuilder for ProverConstraintFolderWithLook
     {
         self.inner.assert_zero_ext(x);
     }
-
-    #[inline]
-    fn assert_zeros_ext<const N: usize, I>(&mut self, array: [I; N])
-    where
-        I: Into<Self::ExprEF>,
-    {
-        self.inner.assert_zeros_ext(array);
-    }
 }
 
 impl<'a, SC: StarkGenericConfig> PermutationAirBuilder

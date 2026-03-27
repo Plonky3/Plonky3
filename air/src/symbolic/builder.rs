@@ -320,16 +320,6 @@ where
         self.extension_constraints.push(x.into());
         self.constraint_types.push(ConstraintType::Ext);
     }
-
-    fn assert_zeros_ext<const N: usize, I>(&mut self, array: [I; N])
-    where
-        I: Into<Self::ExprEF>,
-    {
-        self.extension_constraints
-            .extend(array.into_iter().map(Into::into));
-        self.constraint_types
-            .extend(core::iter::repeat_n(ConstraintType::Ext, N));
-    }
 }
 
 impl<F: Field, EF: ExtensionField<F>> PermutationAirBuilder for SymbolicAirBuilder<F, EF>
