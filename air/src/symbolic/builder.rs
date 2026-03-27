@@ -730,6 +730,17 @@ mod tests {
     }
 
     #[test]
+    fn test_assert_zeros_ext_batches_extension_constraints() {
+        let mut builder = SymbolicAirBuilder::<F, EF>::new(layout_with_perm(0, 2, 0, 2, 1, 0));
+        let a = SymbolicExpressionExt::<F, EF>::from(F::new(3));
+        let b = SymbolicExpressionExt::<F, EF>::from(F::new(4));
+        builder.assert_zeros_ext([a, b]);
+
+        assert_eq!(builder.extension_constraints().len(), 2);
+        assert_eq!(builder.constraint_layout().ext_indices.len(), 2);
+    }
+
+    #[test]
     fn test_extension_constraints_initially_empty() {
         // A fresh builder starts with no extension constraints.
         let builder = SymbolicAirBuilder::<F, EF>::new(layout(0, 2, 0, 0));
