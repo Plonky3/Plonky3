@@ -119,8 +119,7 @@ impl<
     ///
     /// Use [`Poseidon1Constants::to_optimized`] to produce the two constant
     /// structs from raw Poseidon1 parameters.
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn new(
+    pub const fn new(
         full_constants: FullRoundConstants<F, WIDTH>,
         partial_constants: PartialRoundConstants<F, WIDTH>,
     ) -> Self {
