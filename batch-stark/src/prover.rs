@@ -829,7 +829,7 @@ where
                 )
             },
             |(base_buf, ext_buf, perm_buf), i_start| {
-                let chunk_emit = pack_width.min(quotient_size.saturating_sub(i_start));
+                let chunk_emit = pack_width.min(quotient_size - i_start);
                 // Load SIMD-packed selector values for this chunk.
                 let i_range = i_start..i_start + pack_width;
                 let is_first_row =
