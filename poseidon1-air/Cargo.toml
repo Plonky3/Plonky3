@@ -14,6 +14,7 @@ p3-air.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
+p3-mds.workspace = true
 p3-poseidon1.workspace = true
 
 rand.workspace = true
@@ -31,6 +32,7 @@ p3-monty-31 = { path = "../monty-31" }
 p3-symmetric = { path = "../symmetric" }
 p3-uni-stark = { path = "../uni-stark" }
 
+criterion = { version = "0.5", features = ["html_reports"] }
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
@@ -39,6 +41,10 @@ tikv-jemallocator = "0.6"
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
+
+[[bench]]
+name = "poseidon1-air"
+harness = false
 
 [lints]
 workspace = true
