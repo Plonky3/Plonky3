@@ -727,25 +727,37 @@ def generate_round_constants_poseidon1(grain, p, n, t, R_F, R_P):
     """
     Generate Poseidon1 round constants from the Grain LFSR.
 
-    Total constants: (R_F + R_P) * t
-    Every round (full and partial) has t constants.
+    Total constants sampled: (R_F + R_P) * t (to advance LFSR deterministically).
+
+    For partial rounds, only the scalar constant for state[0] is kept.
+    Constants for state[1..t] are zeroed out — they are purely linear and
+    get absorbed by the MDS layer with zero security contribution.
 
     Returns:
-        list of (R_F + R_P) lists of t constants each
+        full_round_constants: list of R_F lists of t constants each
+        partial_round_constants: list of R_P scalars (one per partial round)
     """
     num_rounds = R_F + R_P
     num_constants = num_rounds * t
+    R_f = R_F // 2
 
+    # Sample all constants from the LFSR (maintains nothing-up-my-sleeve property).
     raw = []
     for _ in range(num_constants):
         raw.append(grain.random_field_element(n, p))
 
-    # Split into per-round arrays
-    rounds = []
+    # Split into per-round arrays.
+    all_rounds = []
     for r in range(num_rounds):
-        rounds.append(raw[r * t : (r + 1) * t])
+        all_rounds.append(raw[r * t : (r + 1) * t])
 
-    return rounds
+    # Full round constants: initial R_f + terminal R_f.
+    full_round_constants = all_rounds[:R_f] + all_rounds[R_f + R_P:]
+
+    # Partial round constants: only the scalar for state[0].
+    partial_round_constants = [all_rounds[R_f + i][0] for i in range(R_P)]
+
+    return full_round_constants, partial_round_constants
 
 
 # =============================================================================
@@ -1026,42 +1038,37 @@ def generate_secure_mds(grain, p, n, t, verbose=False):
 # =============================================================================
 
 
-def poseidon1_permutation(state, mds, round_constants, alpha, p, t, R_F, R_P):
+def poseidon1_permutation(state, mds, full_round_constants, partial_round_constants, alpha, p, t, R_F, R_P):
     """
     Reference implementation of the Poseidon (original) permutation.
 
-    All rounds use the same MDS matrix and t round constants.
     Full rounds apply S-box to all elements; partial rounds only to s0.
+    Partial rounds only add a scalar constant to state[0] (state[1..t] constants are zero).
     """
     state = list(state)
     R_f = R_F // 2
-    rc_idx = 0
 
     # First R_f full rounds
-    for _ in range(R_f):
+    for r in range(R_f):
         for i in range(t):
-            state[i] = (state[i] + round_constants[rc_idx][i]) % p
+            state[i] = (state[i] + full_round_constants[r][i]) % p
         for i in range(t):
             state[i] = pow(state[i], alpha, p)
         state = mat_vec_mul(mds, state, p)
-        rc_idx += 1
 
     # R_P partial rounds
-    for _ in range(R_P):
-        for i in range(t):
-            state[i] = (state[i] + round_constants[rc_idx][i]) % p
+    for r in range(R_P):
+        state[0] = (state[0] + partial_round_constants[r]) % p
         state[0] = pow(state[0], alpha, p)
         state = mat_vec_mul(mds, state, p)
-        rc_idx += 1
 
     # Last R_f full rounds
-    for _ in range(R_f):
+    for r in range(R_f):
         for i in range(t):
-            state[i] = (state[i] + round_constants[rc_idx][i]) % p
+            state[i] = (state[i] + full_round_constants[R_f + r][i]) % p
         for i in range(t):
             state[i] = pow(state[i], alpha, p)
         state = mat_vec_mul(mds, state, p)
-        rc_idx += 1
 
     return state
 
@@ -1096,7 +1103,7 @@ def _wrap_hex_row(values, n, indent=4, max_width=100):
 
 
 def format_default_poseidon1(
-    field_name, width, round_constants, mds, p, n, alpha, R_F, R_P, skip_mds,
+    field_name, width, full_round_constants, partial_round_constants, mds, p, n, alpha, R_F, R_P, skip_mds,
 ):
     """
     Format Poseidon1 constants as a clean, language-neutral summary.
@@ -1105,6 +1112,7 @@ def format_default_poseidon1(
     """
     R_f = R_F // 2
     num_rounds = R_F + R_P
+    num_constants = R_F * width + R_P
     sep = "─" * 72
     lines = []
 
@@ -1120,7 +1128,7 @@ def format_default_poseidon1(
     lines.append(f"  Full rounds  {R_F}  ({R_f} initial + {R_f} final)")
     lines.append(f"  Partial      {R_P}")
     lines.append(f"  Total rounds {num_rounds}")
-    lines.append(f"  Constants    {num_rounds * width}  ({num_rounds} × {width})")
+    lines.append(f"  Constants    {num_constants}  ({R_F} × {width} full + {R_P} partial scalars)")
     lines.append("")
 
     # Round constants — first R_f full rounds
@@ -1130,18 +1138,16 @@ def format_default_poseidon1(
     for i in range(R_f):
         lines.append("")
         lines.append(f"  round {i}:")
-        lines.extend(_wrap_hex_row(round_constants[i], n))
+        lines.extend(_wrap_hex_row(full_round_constants[i], n))
 
     lines.append("")
 
-    # Partial rounds
+    # Partial rounds (scalars only)
     lines.append(sep)
-    lines.append(f"  Round Constants — Partial ({R_P} rounds × {width})")
+    lines.append(f"  Round Constants — Partial ({R_P} scalars)")
     lines.append(sep)
-    for i in range(R_P):
-        lines.append("")
-        lines.append(f"  round {R_f + i}:")
-        lines.extend(_wrap_hex_row(round_constants[R_f + i], n))
+    lines.append("")
+    lines.extend(_wrap_hex_row(partial_round_constants, n))
 
     lines.append("")
 
@@ -1152,7 +1158,7 @@ def format_default_poseidon1(
     for i in range(R_f):
         lines.append("")
         lines.append(f"  round {R_f + R_P + i}:")
-        lines.extend(_wrap_hex_row(round_constants[R_f + R_P + i], n))
+        lines.extend(_wrap_hex_row(full_round_constants[R_f + i], n))
 
     # MDS matrix
     if not skip_mds:
@@ -1172,7 +1178,7 @@ def format_default_poseidon1(
 
 
 def format_json_poseidon1(
-    field_name, width, round_constants, mds, p, n, alpha, R_F, R_P, skip_mds,
+    field_name, width, full_round_constants, partial_round_constants, mds, p, n, alpha, R_F, R_P, skip_mds,
 ):
     """Format Poseidon1 constants as JSON."""
     data = {
@@ -1182,7 +1188,8 @@ def format_json_poseidon1(
         "alpha": alpha,
         "R_F": R_F,
         "R_P": R_P,
-        "round_constants": [[format_hex(v, n) for v in rnd] for rnd in round_constants],
+        "full_round_constants": [[format_hex(v, n) for v in rnd] for rnd in full_round_constants],
+        "partial_round_constants": [format_hex(v, n) for v in partial_round_constants],
     }
     if not skip_mds:
         data["mds_matrix"] = [[format_hex(v, n) for v in row] for row in mds]
@@ -1269,7 +1276,7 @@ def main():
     # --- Generate round constants ---
     if args.verbose:
         print("Generating round constants...", flush=True)
-    round_constants = generate_round_constants_poseidon1(grain, p, n, t, R_F, R_P)
+    full_round_constants, partial_round_constants = generate_round_constants_poseidon1(grain, p, n, t, R_F, R_P)
 
     # --- Generate MDS matrix ---
     if not args.skip_mds:
@@ -1286,7 +1293,7 @@ def main():
 
     # --- Output ---
     fmt_args = (
-        args.field, t, round_constants, mds, p, n, alpha, R_F, R_P, args.skip_mds,
+        args.field, t, full_round_constants, partial_round_constants, mds, p, n, alpha, R_F, R_P, args.skip_mds,
     )
     if args.format == "default":
         print(format_default_poseidon1(*fmt_args))
@@ -1300,7 +1307,7 @@ def main():
                   "Output will NOT be meaningful.", file=sys.stderr)
         state_in = list(range(t))
         state_out = poseidon1_permutation(
-            state_in, mds, round_constants, alpha, p, t, R_F, R_P,
+            state_in, mds, full_round_constants, partial_round_constants, alpha, p, t, R_F, R_P,
         )
         print()
         print(f"Test vector (input = [0, 1, ..., {t-1}]):")

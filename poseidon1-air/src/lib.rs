@@ -75,9 +75,9 @@ mod tests {
     use core::mem::size_of;
 
     use p3_baby_bear::{
-        BABYBEAR_POSEIDON1_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_16,
-        BABYBEAR_POSEIDON1_RC_16, BABYBEAR_S_BOX_DEGREE, BabyBear, MDSBabyBearData,
-        default_babybear_poseidon1_16,
+        BABYBEAR_POSEIDON1_FULL_RC_16, BABYBEAR_POSEIDON1_HALF_FULL_ROUNDS,
+        BABYBEAR_POSEIDON1_PARTIAL_RC_16, BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_16,
+        BABYBEAR_S_BOX_DEGREE, BabyBear, MDSBabyBearData, default_babybear_poseidon1_16,
     };
     use p3_challenger::{HashChallenger, SerializingChallenger32};
     use p3_commit::ExtensionMmcs;
@@ -114,7 +114,8 @@ mod tests {
             rounds_f: 2 * BABYBEAR_POSEIDON1_HALF_FULL_ROUNDS,
             rounds_p: BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_16,
             mds_circ_col: MDSBabyBearData::MATRIX_CIRC_MDS_16_COL,
-            round_constants: BABYBEAR_POSEIDON1_RC_16.to_vec(),
+            full_round_constants: BABYBEAR_POSEIDON1_FULL_RC_16.to_vec(),
+            partial_round_constants: BABYBEAR_POSEIDON1_PARTIAL_RC_16.to_vec(),
         }
     }
 
