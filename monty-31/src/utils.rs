@@ -192,8 +192,7 @@ pub(crate) const fn large_monty_reduce<MP: MontyParameters>(x: u64) -> u32 {
 ///
 /// All arithmetic stays at 64 bits or below:
 /// - One Montgomery reduction on a `u64` (multiplies and shifts, no division).
-/// - One `u64 % P` where `P` is a compile-time constant (LLVM emits a
-///   multiply-and-shift sequence, ~3-5 cycles).
+/// - One `u64 % P` where `P` is a compile-time constant.
 /// - One conditional subtraction for the final modular addition.
 pub(crate) const fn monty_reduce_u128<MP: MontyParameters>(x: u128) -> u32 {
     // Split the 128-bit input into its two limbs.
