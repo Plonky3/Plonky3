@@ -3,7 +3,6 @@
 
 extern crate alloc;
 
-use alloc::borrow::ToOwned;
 use alloc::vec::Vec;
 
 use p3_field::integers::QuotientMap;
@@ -140,8 +139,10 @@ where
     #[inline]
     pub fn bricks(state: &mut [Mersenne31; WIDTH]) {
         // Feistel Type-3
-        for (x, x_mut) in state.to_owned().iter().zip(state.iter_mut().skip(1)) {
-            *x_mut += x.square();
+        // Reverse iteration so state[i] is still unmodified when read,
+        // avoiding a full array clone.
+        for i in (0..WIDTH - 1).rev() {
+            state[i + 1] += state[i].square();
         }
     }
 
