@@ -1,4 +1,5 @@
 /// Common `packed_mod_add` / `packed_mod_sub` proptests shared across architecture backends.
+#[allow(unused_macros)]
 macro_rules! packed_mod_tests {
     () => {
         use proptest::prelude::*;
