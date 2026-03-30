@@ -89,8 +89,6 @@ pub fn uint32x4_mod_sub(a: uint32x4_t, b: uint32x4_t, p: uint32x4_t) -> uint32x4
 ///
 /// Scalar add is assumed to be a function which implements `a + b % P` with the
 /// same specifications as above.
-///
-/// TODO: Add support for extensions of degree 2,3,6,7.
 #[inline(always)]
 pub fn packed_mod_add<const WIDTH: usize>(
     a: &[u32; WIDTH],
@@ -101,6 +99,15 @@ pub fn packed_mod_add<const WIDTH: usize>(
 ) {
     match WIDTH {
         1 => res[0] = scalar_add(a[0], b[0]),
+        2 => {
+            res[0] = scalar_add(a[0], b[0]);
+            res[1] = scalar_add(a[1], b[1]);
+        }
+        3 => {
+            res[0] = scalar_add(a[0], b[0]);
+            res[1] = scalar_add(a[1], b[1]);
+            res[2] = scalar_add(a[2], b[2]);
+        }
         4 => {
             // Perfectly fits into a uint32x4_t vector.
             let out: [u32; 4] = unsafe {
@@ -123,6 +130,35 @@ pub fn packed_mod_add<const WIDTH: usize>(
             };
 
             res[4] = scalar_add(a[4], b[4]);
+
+            res[..4].copy_from_slice(&out);
+        }
+        6 => {
+            // First 4 elements fit into a uint32x4_t, remaining 2 use scalar.
+            let out: [u32; 4] = unsafe {
+                let a = array_to_uint32x4([a[0], a[1], a[2], a[3]]);
+                let b = array_to_uint32x4([b[0], b[1], b[2], b[3]]);
+                let p: uint32x4_t = aarch64::vdupq_n_u32(p);
+                uint32x4_to_array(uint32x4_mod_add(a, b, p))
+            };
+
+            res[4] = scalar_add(a[4], b[4]);
+            res[5] = scalar_add(a[5], b[5]);
+
+            res[..4].copy_from_slice(&out);
+        }
+        7 => {
+            // First 4 elements fit into a uint32x4_t, remaining 3 use scalar.
+            let out: [u32; 4] = unsafe {
+                let a = array_to_uint32x4([a[0], a[1], a[2], a[3]]);
+                let b = array_to_uint32x4([b[0], b[1], b[2], b[3]]);
+                let p: uint32x4_t = aarch64::vdupq_n_u32(p);
+                uint32x4_to_array(uint32x4_mod_add(a, b, p))
+            };
+
+            res[4] = scalar_add(a[4], b[4]);
+            res[5] = scalar_add(a[5], b[5]);
+            res[6] = scalar_add(a[6], b[6]);
 
             res[..4].copy_from_slice(&out);
         }
@@ -159,7 +195,6 @@ pub fn packed_mod_add<const WIDTH: usize>(
 /// Scalar sub is assumed to be a function which implements `a - b % P` with the
 /// same specifications as above.
 ///
-/// TODO: Add support for extensions of degree 2,3,6,7.
 #[inline(always)]
 pub fn packed_mod_sub<const WIDTH: usize>(
     a: &[u32; WIDTH],
@@ -170,6 +205,15 @@ pub fn packed_mod_sub<const WIDTH: usize>(
 ) {
     match WIDTH {
         1 => res[0] = scalar_sub(a[0], b[0]),
+        2 => {
+            res[0] = scalar_sub(a[0], b[0]);
+            res[1] = scalar_sub(a[1], b[1]);
+        }
+        3 => {
+            res[0] = scalar_sub(a[0], b[0]);
+            res[1] = scalar_sub(a[1], b[1]);
+            res[2] = scalar_sub(a[2], b[2]);
+        }
         4 => {
             // Perfectly fits into a uint32x4_t vector.
             let out: [u32; 4] = unsafe {
@@ -195,6 +239,35 @@ pub fn packed_mod_sub<const WIDTH: usize>(
 
             res[..4].copy_from_slice(&out);
         }
+        6 => {
+            // First 4 elements fit into a uint32x4_t, remaining 2 use scalar.
+            let out: [u32; 4] = unsafe {
+                let a = array_to_uint32x4([a[0], a[1], a[2], a[3]]);
+                let b = array_to_uint32x4([b[0], b[1], b[2], b[3]]);
+                let p: uint32x4_t = aarch64::vdupq_n_u32(p);
+                uint32x4_to_array(uint32x4_mod_sub(a, b, p))
+            };
+
+            res[4] = scalar_sub(a[4], b[4]);
+            res[5] = scalar_sub(a[5], b[5]);
+
+            res[..4].copy_from_slice(&out);
+        }
+        7 => {
+            // First 4 elements fit into a uint32x4_t, remaining 3 use scalar.
+            let out: [u32; 4] = unsafe {
+                let a = array_to_uint32x4([a[0], a[1], a[2], a[3]]);
+                let b = array_to_uint32x4([b[0], b[1], b[2], b[3]]);
+                let p: uint32x4_t = aarch64::vdupq_n_u32(p);
+                uint32x4_to_array(uint32x4_mod_sub(a, b, p))
+            };
+
+            res[4] = scalar_sub(a[4], b[4]);
+            res[5] = scalar_sub(a[5], b[5]);
+            res[6] = scalar_sub(a[6], b[6]);
+
+            res[..4].copy_from_slice(&out);
+        }
         8 => {
             // This perfectly fits into two uint32x4_t elements.
             let (out_lo, out_hi): ([u32; 4], [u32; 4]) = unsafe {
@@ -214,5 +287,63 @@ pub fn packed_mod_sub<const WIDTH: usize>(
             res[4..].copy_from_slice(&out_hi);
         }
         _ => panic!("Currently unsupported width for packed subtraction"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::arch::aarch64;
+
+    use super::*;
+
+    // Common packed_mod_add / packed_mod_sub tests.
+    packed_mod_tests!();
+
+    // ------- Architecture-specific NEON intrinsic tests -------
+
+    fn check_uint32x4_mod_add(a: [u32; 4], b: [u32; 4]) {
+        unsafe {
+            let av = array_to_uint32x4(a);
+            let bv = array_to_uint32x4(b);
+            let p_vec: uint32x4_t = aarch64::vdupq_n_u32(P);
+            let res = uint32x4_to_array(uint32x4_mod_add(av, bv, p_vec));
+            for i in 0..4 {
+                assert_eq!(res[i], ref_add(a[i], b[i]), "add mismatch at index {i}");
+            }
+        }
+    }
+
+    fn check_uint32x4_mod_sub(a: [u32; 4], b: [u32; 4]) {
+        unsafe {
+            let av = array_to_uint32x4(a);
+            let bv = array_to_uint32x4(b);
+            let p_vec: uint32x4_t = aarch64::vdupq_n_u32(P);
+            let res = uint32x4_to_array(uint32x4_mod_sub(av, bv, p_vec));
+            for i in 0..4 {
+                assert_eq!(res[i], ref_sub(a[i], b[i]), "sub mismatch at index {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_uint32x4_mod_add() {
+        let mut runner = TestRunner::default();
+        runner
+            .run(&(array_strategy::<4>(), array_strategy::<4>()), |(a, b)| {
+                check_uint32x4_mod_add(a, b);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn test_uint32x4_mod_sub() {
+        let mut runner = TestRunner::default();
+        runner
+            .run(&(array_strategy::<4>(), array_strategy::<4>()), |(a, b)| {
+                check_uint32x4_mod_sub(a, b);
+                Ok(())
+            })
+            .unwrap();
     }
 }
