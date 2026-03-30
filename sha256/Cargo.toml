@@ -13,15 +13,13 @@ categories.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
 
-sha2 = { workspace = true, features = ["compress"] }
+sha2.workspace = true
 
 [dev-dependencies]
 hex-literal.workspace = true
 
 [features]
 default = []
-asm = ["sha2/asm"]
-force-soft = ["sha2/force-soft"]
 
 [lints]
 workspace = true
