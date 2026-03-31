@@ -30,7 +30,7 @@ use p3_poseidon1::internal::{
 };
 use p3_symmetric::Permutation;
 
-use super::poseidon2::add_rc_and_sbox;
+use super::utils::add_rc_and_sbox;
 use crate::{MdsMatrixMersenne31, Mersenne31, PackedMersenne31Neon};
 
 /// NEON-optimized external (full-round) layer for Mersenne31 Poseidon1.

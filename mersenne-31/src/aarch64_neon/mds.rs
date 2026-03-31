@@ -105,4 +105,25 @@ mod tests {
     proptest_neon_mds!(mds_neon_matches_scalar_12, 12, uniform12);
     proptest_neon_mds!(mds_neon_matches_scalar_16, 16, uniform16);
     proptest_neon_mds!(mds_neon_matches_scalar_32, 32, uniform32);
+
+    proptest! {
+        #[test]
+        fn mds_neon_matches_scalar_64(
+            a in prop::array::uniform32(arb_f()),
+            b in prop::array::uniform32(arb_f()),
+        ) {
+            let mut input = [F::ZERO; 64];
+            input[..32].copy_from_slice(&a);
+            input[32..].copy_from_slice(&b);
+
+            let mds = MdsMatrixMersenne31;
+            let expected = mds.permute(input);
+
+            let packed_input = input.map(Into::<PackedMersenne31Neon>::into);
+            let packed_output = mds.permute(packed_input);
+            let neon_output = packed_output.map(|x| x.0[0]);
+
+            prop_assert_eq!(neon_output, expected);
+        }
+    }
 }

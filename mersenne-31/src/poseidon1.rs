@@ -82,6 +82,8 @@ pub type Poseidon1Mersenne31<const WIDTH: usize> = Poseidon1<
 /// On aarch64 with NEON, uses NEON-optimized layers with pre-packed round
 /// constants and fused AddRC+S-box. On other platforms, falls back to the
 /// generic Karatsuba-based implementation.
+// TODO(Plonky3/Plonky3#1511): Add packed round constants for Poseidon1 with AVX2 / AVX512,
+// similar to the NEON implementation which pre-packs constants and fuses AddRC+S-box.
 #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
 pub type Poseidon1Mersenne31<const WIDTH: usize> = Poseidon1Mersenne31Generic<WIDTH>;
 
