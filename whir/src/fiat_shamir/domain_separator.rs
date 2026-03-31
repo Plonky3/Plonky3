@@ -178,9 +178,7 @@ where
         }
 
         self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
-        if params.commitment_ood_samples > 0 {
-            self.add_ood(params.commitment_ood_samples);
-        }
+        self.add_ood(params.commitment_ood_samples);
     }
 
     /// Append the full WHIR proof transcript to the domain separator.

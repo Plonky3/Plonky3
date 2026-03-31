@@ -27,9 +27,10 @@ pub enum SecurityAssumption {
     /// This requires no conjectures.
     UniqueDecoding,
 
-    /// Johnson bound assumes that the distance of each oracle is within the Johnson bound (1 - sqrt(rho)).
+    /// Johnson bound assumes that the distance of each oracle is within the Johnson bound (1 - sqrt(rho) - eta).
+    /// With eta = sqrt(rho)/20.
     /// We refer to this configuration as JB for short.
-    /// This assumes that RS have mutual correlated agreement for proximity parameter up to (1 - sqrt(rho)).
+    /// This assumes that RS have mutual correlated agreement for proximity parameter up to (1 - sqrt(rho) - eta).
     ///
     /// # Proximity Gaps Improvement
     ///
@@ -153,13 +154,11 @@ impl SecurityAssumption {
                 // n = 2^(log_degree + log_inv_rate)
                 let log_n = (log_degree + log_inv_rate) as f64;
 
-                // Constant from (2 * 10.5^5 / 3)
-                let constant = libm::log2(2. * libm::pow(10.5, 5.) / 3.);
-
                 // rho^(-3/2) contributes 1.5 * log_inv_rate
                 let log_rho_neg_3_2 = 1.5 * log_inv_rate as f64;
 
-                log_n + constant + log_rho_neg_3_2
+                // Constant from (2 * 10.5^5 / 3)
+                log_n + 16.376624613172645f64 + log_rho_neg_3_2
             }
 
             // In CB we assume the error is degree/(eta*rho^2)
