@@ -353,7 +353,7 @@ where
     let periodic_values: Vec<SC::Challenge> = air
         .periodic_columns()
         .iter()
-        .map(|periodic_col| trace_domain.evaluate_periodic_column_at(periodic_col, zeta))
+        .map(|periodic_col| init_trace_domain.evaluate_periodic_column_at(periodic_col, zeta))
         .collect();
 
     let zeta_next = init_trace_domain
