@@ -22,8 +22,8 @@ Round structure (for width t, R_F full rounds, R_P partial rounds):
 
 Supported fields:
   Field       Prime                  Bits  Alpha  Widths
-  BabyBear    2013265921             31    7      16, 24
-  KoalaBear   2130706433             31    3      16, 24
+  BabyBear    2013265921             31    7      16, 24, 32
+  KoalaBear   2130706433             31    3      16, 24, 32
   Goldilocks  2^64 - 2^32 + 1        64    7      8, 12, 16, 20
   Mersenne31  2^31 - 1               31    5      16, 24, 32
 
@@ -45,11 +45,11 @@ from math import ceil, floor, gcd, log, log2
 FIELDS = {
     "babybear": {
         "prime": 2013265921,
-        "valid_widths": [16, 24],
+        "valid_widths": [16, 24, 32],
     },
     "koalabear": {
         "prime": 2130706433,
-        "valid_widths": [16, 24],
+        "valid_widths": [16, 24, 32],
     },
     "goldilocks": {
         "prime": (1 << 64) - (1 << 32) + 1,
