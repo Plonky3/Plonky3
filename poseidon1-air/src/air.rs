@@ -332,10 +332,8 @@ fn eval_full_round<
 
     // Constrain: computed state must equal committed post-state.
     // Then reset state to the committed values (degree 1).
-    for (state_i, post_i) in state.iter_mut().zip(full_round.post) {
-        builder.assert_eq(state_i.clone(), post_i);
-        *state_i = post_i.into();
-    }
+    builder.assert_eq_arrays(state, &full_round.post);
+    *state = full_round.post.map(|x| x.into());
 }
 
 /// Evaluate constraints for one **sparse partial** round.
