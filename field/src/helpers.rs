@@ -8,23 +8,6 @@ use p3_maybe_rayon::prelude::*;
 use crate::field::Field;
 use crate::{PackedValue, PrimeCharacteristicRing, PrimeField, PrimeField32};
 
-/// Computes a multiplicative subgroup whose order is known in advance.
-pub fn cyclic_subgroup_known_order<F: Field>(
-    generator: F,
-    order: usize,
-) -> impl Iterator<Item = F> + Clone {
-    generator.powers().take(order)
-}
-
-/// Computes a coset of a multiplicative subgroup whose order is known in advance.
-pub fn cyclic_subgroup_coset_known_order<F: Field>(
-    generator: F,
-    shift: F,
-    order: usize,
-) -> impl Iterator<Item = F> + Clone {
-    generator.shifted_powers(shift).take(order)
-}
-
 /// Scales each element of the slice by `s` using packing.
 ///
 /// # Performance
