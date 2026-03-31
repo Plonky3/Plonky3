@@ -940,6 +940,23 @@ fn test_periodic_air() -> Result<(), impl Debug> {
 }
 
 #[test]
+fn test_periodic_air_zk() -> Result<(), impl Debug> {
+    let config = make_config_zk(1234);
+    let air = PeriodicAir::<Val>::new();
+    let trace = air.valid_trace(1 << 6);
+    let instances = vec![StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values: vec![],
+        lookups: vec![],
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data);
+    verify_batch(&config, &[air], &proof, &[vec![]], common)
+}
+
+#[test]
 fn test_two_instances_zk() -> Result<(), impl Debug> {
     let config = make_config_zk(1337);
 

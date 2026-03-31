@@ -543,7 +543,7 @@ where
         let periodic_values: Vec<Challenge<SC>> = air
             .periodic_columns()
             .iter()
-            .map(|col| ext_trace_domains[i].evaluate_periodic_column_at(col, zeta))
+            .map(|col| trace_domains[i].evaluate_periodic_column_at(col, zeta))
             .collect();
         let verifier_data = VerifierData {
             trace_local: &opened_values.instances[i].base_opened_values.trace_local,
