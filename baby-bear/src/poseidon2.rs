@@ -617,17 +617,29 @@ mod tests {
 
         assert_eq!(input, expected);
     }
-    /// Test on a roughly random input for width 32.
+
     #[test]
-    fn test_poseidon2_width_32_random() {
-        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
-        let perm = Poseidon2BabyBear::<32>::new_from_rng_128(&mut rng);
+    fn test_default_babybear_poseidon2_width_32() {
+        let mut input: [F; 32] = BabyBear::new_array([
+            377682961, 1957793603, 980981814, 6565119, 1583211709, 176593168, 1672635515,
+            226854190, 1096634172, 1317773742, 1472230830, 1621534427, 559807320, 1484241910,
+            1847825942, 3491998, 950152427, 1935451636, 275759400, 227625951, 1271142011,
+            1492341973, 1502961189, 147694103, 1939834518, 1449972249, 1822424048, 1518111482,
+            714203295, 383863563, 411489861, 1253612091,
+        ]);
 
-        let mut input: [F; 32] = rng.random();
-        let original = input;
+        let expected: [F; 32] = BabyBear::new_array([
+            303440672, 985419733, 780962554, 1395263823, 188752116, 1348917749, 677984158,
+            667170017, 97281439, 178741618, 1770541242, 1894441262, 847173187, 1374453653,
+            1242356754, 1485142795, 1019698843, 334329175, 540395852, 918117757, 1288401072,
+            508687761, 996827321, 1660764537, 546969284, 1848510002, 334793951, 736596659,
+            1928951999, 1444080616, 55017699, 1832626373,
+        ]);
 
+        let perm = default_babybear_poseidon2_32();
         perm.permute_mut(&mut input);
-        assert_ne!(input, original);
+
+        assert_eq!(input, expected);
     }
 
     /// Test the generic internal layer against the optimized internal layer

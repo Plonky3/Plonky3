@@ -674,18 +674,29 @@ mod tests {
 
         assert_eq!(input, expected);
     }
-    /// Test on a roughly random input for width 32.
+
     #[test]
-    fn test_poseidon2_width_32_random() {
-        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
-        let perm = Poseidon2KoalaBear::<32>::new_from_rng_128(&mut rng);
+    fn test_default_koalabear_poseidon2_width_32() {
+        let mut input: [F; 32] = KoalaBear::new_array([
+            377639580, 1129436247, 1046213469, 1189442335, 766997073, 331472151, 734344924,
+            499580178, 371511009, 1784992949, 961094784, 2047061722, 1120236986, 1332020114,
+            1511787480, 1290378453, 1414897608, 641041795, 1940105940, 1813107966, 1798618911,
+            1941729996, 1148636543, 505212370, 1519289406, 567500757, 728728142, 1833845584,
+            1298210282, 41111765, 297995683, 1596253449,
+        ]);
 
-        let mut input: [F; 32] = rng.random();
-        let original = input;
+        let expected: [F; 32] = KoalaBear::new_array([
+            1359114333, 192817145, 2112759047, 1534272756, 262772033, 1605905052, 1578475422,
+            1405808516, 1637426946, 1738584472, 1537483685, 1201015772, 472885949, 923753225,
+            1756848188, 1560950302, 672658610, 1934876055, 229950235, 798187377, 1626970896,
+            278337851, 1054262154, 1192644396, 257269960, 1845599185, 489110817, 1514396648,
+            345626239, 888828773, 1894876982, 500295195,
+        ]);
 
+        let perm = default_koalabear_poseidon2_32();
         perm.permute_mut(&mut input);
-        // Just verify it doesn't panic and output differs from input
-        assert_ne!(input, original);
+
+        assert_eq!(input, expected);
     }
 
     /// Test the generic internal layer against the optimized internal layer

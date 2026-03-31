@@ -620,9 +620,8 @@ mod tests {
         assert_eq!(input, expected);
     }
 
-    /// Test on a roughly random input for width 32.
     #[test]
-    fn test_poseidon2_width_32_random() {
+    fn test_default_mersenne31_poseidon2_width_32() {
         let mut input: [F; 32] = Mersenne31::new_array([
             886409618, 1327899896, 1902407911, 591953491, 648428576, 1844789031, 1198336108,
             355597330, 1799586834, 59617783, 790334801, 1968791836, 559272107, 31054313,
@@ -631,12 +630,17 @@ mod tests {
             71131202, 1749206695, 1717947831, 120589055,
         ]);
 
-        let original = input;
+        let expected: [F; 32] = Mersenne31::new_array([
+            1856060025, 1254059276, 2099136415, 1891507371, 202832695, 754761125, 1546769253,
+            2039240755, 969633288, 117763588, 624654727, 1034887750, 898944818, 1818019588,
+            1662865566, 1426397765, 102254187, 1541093348, 280956251, 1038202157, 1207554722,
+            1615928492, 2099241528, 997904479, 621678012, 724483212, 1292553224, 1107946119,
+            1584500975, 1889218820, 432786428, 1331980049,
+        ]);
 
-        let mut rng = Xoroshiro128Plus::seed_from_u64(1);
-        let perm = Poseidon2Mersenne31::new_from_rng_128(&mut rng);
-
+        let perm = default_mersenne31_poseidon2_32();
         perm.permute_mut(&mut input);
-        assert_ne!(input, original);
+
+        assert_eq!(input, expected);
     }
 }

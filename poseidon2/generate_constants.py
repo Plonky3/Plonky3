@@ -2,8 +2,8 @@
 """
 Poseidon2 Round Constant Generator
 
-Generates round constants, external/internal matrices, and test vectors for the
-Poseidon2 hash function over various prime fields.
+Generates round constants, external/internal matrices, and (with `--test-vector`)
+embedded canonical permutation inputs/outputs.
 
 Reference: Grassi et al., "Poseidon2: A Faster Version of the Poseidon Hash
 Function" (https://eprint.iacr.org/2023/323)
@@ -31,9 +31,11 @@ Usage:
   python poseidon2/generate_constants.py --field babybear --width 16
   python poseidon2/generate_constants.py --field mersenne31 --width 32 --format json
   python poseidon2/generate_constants.py --field goldilocks --width 8 -v
+  python poseidon2/generate_constants.py --field babybear --width 16 --test-vector
 """
 
 import argparse
+import hashlib
 import json
 import sys
 from math import ceil, floor, gcd, log, log2
@@ -61,6 +63,554 @@ FIELDS = {
     },
 }
 
+
+# Default Poseidon2 permutation test vectors (canonical literals).
+DEFAULT_POSEIDON2_TEST_VECTORS = {
+    ("babybear", 16): {
+        "permutation": "default_babybear_poseidon2_16()",
+        "rust_tests": ["baby-bear/src/poseidon2.rs — test_default_babybear_poseidon2_width_16"],
+        "input": [
+            894848333,
+            1437655012,
+            1200606629,
+            1690012884,
+            71131202,
+            1749206695,
+            1717947831,
+            120589055,
+            19776022,
+            42382981,
+            1831865506,
+            724844064,
+            171220207,
+            1299207443,
+            227047920,
+            1783754913,
+        ],
+        "expected": [
+            516096821,
+            90309867,
+            1101817252,
+            1660784290,
+            360715097,
+            1789519026,
+            1788910906,
+            563338433,
+            319524748,
+            1741414159,
+            1650859320,
+            894311162,
+            1121347488,
+            1692793758,
+            1052633829,
+            1344246938,
+        ],
+    },
+    ("babybear", 24): {
+        "permutation": "default_babybear_poseidon2_24()",
+        "rust_tests": ["baby-bear/src/poseidon2.rs — test_default_babybear_poseidon2_width_24"],
+        "input": [
+            886409618,
+            1327899896,
+            1902407911,
+            591953491,
+            648428576,
+            1844789031,
+            1198336108,
+            355597330,
+            1799586834,
+            59617783,
+            790334801,
+            1968791836,
+            559272107,
+            31054313,
+            1042221543,
+            474748436,
+            135686258,
+            263665994,
+            1962340735,
+            1741539604,
+            2026927696,
+            449439011,
+            1131357108,
+            50869465,
+        ],
+        "expected": [
+            882297297,
+            1264077610,
+            512812497,
+            782602970,
+            867738552,
+            1251075457,
+            309180082,
+            340784773,
+            524041877,
+            351272188,
+            404451680,
+            15001466,
+            322926653,
+            1773004150,
+            1718440818,
+            674682955,
+            1154713225,
+            1719133502,
+            324232301,
+            1005243141,
+            443371079,
+            268735940,
+            770060019,
+            718377682,
+        ],
+    },
+    ("babybear", 32): {
+        "permutation": "default_babybear_poseidon2_32()",
+        "rust_tests": [
+            "baby-bear/src/poseidon2.rs — test_default_babybear_poseidon2_width_32 "
+        ],
+        "input": [
+            377682961,
+            1957793603,
+            980981814,
+            6565119,
+            1583211709,
+            176593168,
+            1672635515,
+            226854190,
+            1096634172,
+            1317773742,
+            1472230830,
+            1621534427,
+            559807320,
+            1484241910,
+            1847825942,
+            3491998,
+            950152427,
+            1935451636,
+            275759400,
+            227625951,
+            1271142011,
+            1492341973,
+            1502961189,
+            147694103,
+            1939834518,
+            1449972249,
+            1822424048,
+            1518111482,
+            714203295,
+            383863563,
+            411489861,
+            1253612091,
+        ],
+        "expected": [
+            303440672,
+            985419733,
+            780962554,
+            1395263823,
+            188752116,
+            1348917749,
+            677984158,
+            667170017,
+            97281439,
+            178741618,
+            1770541242,
+            1894441262,
+            847173187,
+            1374453653,
+            1242356754,
+            1485142795,
+            1019698843,
+            334329175,
+            540395852,
+            918117757,
+            1288401072,
+            508687761,
+            996827321,
+            1660764537,
+            546969284,
+            1848510002,
+            334793951,
+            736596659,
+            1928951999,
+            1444080616,
+            55017699,
+            1832626373,
+        ],
+    },
+    ("koalabear", 16): {
+        "permutation": "default_koalabear_poseidon2_16()",
+        "rust_tests": ["koala-bear/src/poseidon2.rs — test_default_koalabear_poseidon2_width_16"],
+        "input": [
+            894848333,
+            1437655012,
+            1200606629,
+            1690012884,
+            71131202,
+            1749206695,
+            1717947831,
+            120589055,
+            19776022,
+            42382981,
+            1831865506,
+            724844064,
+            171220207,
+            1299207443,
+            227047920,
+            1783754913,
+        ],
+        "expected": [
+            1934285469,
+            604889435,
+            133449501,
+            1026180808,
+            1830659359,
+            176667110,
+            1391183747,
+            351743874,
+            1238264085,
+            1292768839,
+            2023573270,
+            1201586780,
+            1360691759,
+            1230682461,
+            748270449,
+            651545025,
+        ],
+    },
+    ("koalabear", 24): {
+        "permutation": "default_koalabear_poseidon2_24()",
+        "rust_tests": ["koala-bear/src/poseidon2.rs — test_default_koalabear_poseidon2_width_24"],
+        "input": [
+            886409618,
+            1327899896,
+            1902407911,
+            591953491,
+            648428576,
+            1844789031,
+            1198336108,
+            355597330,
+            1799586834,
+            59617783,
+            790334801,
+            1968791836,
+            559272107,
+            31054313,
+            1042221543,
+            474748436,
+            135686258,
+            263665994,
+            1962340735,
+            1741539604,
+            2026927696,
+            449439011,
+            1131357108,
+            50869465,
+        ],
+        "expected": [
+            382801106,
+            82839311,
+            1503190615,
+            1987418517,
+            854076995,
+            1862291425,
+            262755189,
+            1050814217,
+            722724562,
+            741265943,
+            1026879332,
+            754316749,
+            1966025564,
+            1518878196,
+            502200188,
+            1368172258,
+            845459257,
+            1711434837,
+            724453836,
+            171032289,
+            655223446,
+            1098636135,
+            407832555,
+            1707498914,
+        ],
+    },
+    ("koalabear", 32): {
+        "permutation": "default_koalabear_poseidon2_32()",
+        "rust_tests": [
+            "koala-bear/src/poseidon2.rs — test_default_koalabear_poseidon2_width_32 "
+        ],
+        "input": [
+            377639580,
+            1129436247,
+            1046213469,
+            1189442335,
+            766997073,
+            331472151,
+            734344924,
+            499580178,
+            371511009,
+            1784992949,
+            961094784,
+            2047061722,
+            1120236986,
+            1332020114,
+            1511787480,
+            1290378453,
+            1414897608,
+            641041795,
+            1940105940,
+            1813107966,
+            1798618911,
+            1941729996,
+            1148636543,
+            505212370,
+            1519289406,
+            567500757,
+            728728142,
+            1833845584,
+            1298210282,
+            41111765,
+            297995683,
+            1596253449,
+        ],
+        "expected": [
+            1359114333,
+            192817145,
+            2112759047,
+            1534272756,
+            262772033,
+            1605905052,
+            1578475422,
+            1405808516,
+            1637426946,
+            1738584472,
+            1537483685,
+            1201015772,
+            472885949,
+            923753225,
+            1756848188,
+            1560950302,
+            672658610,
+            1934876055,
+            229950235,
+            798187377,
+            1626970896,
+            278337851,
+            1054262154,
+            1192644396,
+            257269960,
+            1845599185,
+            489110817,
+            1514396648,
+            345626239,
+            888828773,
+            1894876982,
+            500295195,
+        ],
+    },
+    ("mersenne31", 16): {
+        "permutation": "default_mersenne31_poseidon2_16()",
+        "rust_tests": ["mersenne-31/src/poseidon2.rs — test_default_mersenne31_poseidon2_width_16"],
+        "input": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        "expected": [
+            0x0B2C803A,
+            0x5B1EE4D1,
+            0x49C6B1E3,
+            0x2CDC280C,
+            0x310A60C8,
+            0x530A729E,
+            0x4E61BCB4,
+            0x2E84D3C3,
+            0x58709C08,
+            0x7E82AC42,
+            0x2162BCEF,
+            0x6D153AB6,
+            0x742CF0E3,
+            0x2F21632D,
+            0x61ADCE1E,
+            0x1973D6F1,
+        ],
+    },
+    ("mersenne31", 24): {
+        "permutation": "default_mersenne31_poseidon2_24()",
+        "rust_tests": ["mersenne-31/src/poseidon2.rs — test_default_mersenne31_poseidon2_width_24"],
+        "input": list(range(24)),
+        "expected": [
+            0x2040F051,
+            0x7261DBFA,
+            0x4FBD519E,
+            0x2320ECAF,
+            0x039EF27C,
+            0x48D60AD5,
+            0x73CA17FF,
+            0x6023111A,
+            0x6C5E31E7,
+            0x373CD90D,
+            0x75A3AE11,
+            0x00ECC878,
+            0x33A7C097,
+            0x244C2171,
+            0x7552A38E,
+            0x58D20817,
+            0x00FEECB7,
+            0x47C43C88,
+            0x30D3001C,
+            0x24D09BA6,
+            0x71F241D9,
+            0x1C72AB2E,
+            0x4749F79D,
+            0x61FF7579,
+        ],
+    },
+    ("mersenne31", 32): {
+        "permutation": "default_mersenne31_poseidon2_32()",
+        "rust_tests": [
+            "mersenne-31/src/poseidon2.rs — test_default_mersenne31_poseidon2_width_32"
+        ],
+        "input": [
+            886409618,
+            1327899896,
+            1902407911,
+            591953491,
+            648428576,
+            1844789031,
+            1198336108,
+            355597330,
+            1799586834,
+            59617783,
+            790334801,
+            1968791836,
+            559272107,
+            31054313,
+            1042221543,
+            474748436,
+            135686258,
+            263665994,
+            1962340735,
+            1741539604,
+            2026927696,
+            449439011,
+            1131357108,
+            50869465,
+            894848333,
+            1437655012,
+            1200606629,
+            1690012884,
+            71131202,
+            1749206695,
+            1717947831,
+            120589055,
+        ],
+        "expected": [
+            1856060025,
+            1254059276,
+            2099136415,
+            1891507371,
+            202832695,
+            754761125,
+            1546769253,
+            2039240755,
+            969633288,
+            117763588,
+            624654727,
+            1034887750,
+            898944818,
+            1818019588,
+            1662865566,
+            1426397765,
+            102254187,
+            1541093348,
+            280956251,
+            1038202157,
+            1207554722,
+            1615928492,
+            2099241528,
+            997904479,
+            621678012,
+            724483212,
+            1292553224,
+            1107946119,
+            1584500975,
+            1889218820,
+            432786428,
+            1331980049,
+        ],
+    },
+    ("goldilocks", 8): {
+        "permutation": "default_goldilocks_poseidon2_8()",
+        "rust_tests": ["goldilocks/src/poseidon2.rs — test_default_goldilocks_poseidon2_width_8"],
+        "input": [0, 1, 2, 3, 4, 5, 6, 7],
+        "expected": [
+            0x020CF04A1B214D14,
+            0x84E14AAAEACAED25,
+            0x1AE0F640E81C7457,
+            0xA4D204CBAEB0D8A5,
+            0x0CF637B627B3A7FF,
+            0x788D304D948B486B,
+            0x7327133EA1949AF4,
+            0xF415ABB924DA395B,
+        ],
+    },
+    ("goldilocks", 12): {
+        "permutation": "default_goldilocks_poseidon2_12()",
+        "rust_tests": ["goldilocks/src/poseidon2.rs — test_default_goldilocks_poseidon2_width_12"],
+        "input": list(range(12)),
+        "expected": [
+            0xF292AB67C0F14B03,
+            0x0A32F1B37656544C,
+            0x053C61AB895498DE,
+            0x02FF92E55B196FFB,
+            0x58176E8F6F58CAB2,
+            0xB0AA1206E7AEC0F8,
+            0xE90C13F3DCE83CA4,
+            0xF4DA15333EDF39C2,
+            0x23B701C053C2CA6C,
+            0xD233D593DCDFBF58,
+            0x4EFFA5F9516FB52E,
+            0x0AAF4489F1F40166,
+        ],
+    },
+    ("goldilocks", 16): {
+        "permutation": "default_goldilocks_poseidon2_16()",
+        "rust_tests": [
+            "goldilocks/src/poseidon2.rs — test_default_goldilocks_poseidon2_width_16 "
+        ],
+        "input": [
+            5566333139537447289,
+            6332619238598470014,
+            6287757933960378228,
+            3590347415306286571,
+            5292348457121014769,
+            3628350668046320542,
+            12106279625554848022,
+            9881167366883827448,
+            11610943711509296728,
+            15458533499329302584,
+            9940874769430822472,
+            2449195810349960580,
+            6271849099249858303,
+            5098003553882423470,
+            2550474722356913284,
+            16793706415574197586,
+        ],
+        "expected": [
+            17363471649496040234,
+            17379317055181730139,
+            15593185324171680472,
+            3827176038427840937,
+            11044870504971387999,
+            5115049712654183786,
+            5044454358330956064,
+            14234749237683052767,
+            13255128155875443356,
+            6663913933593108421,
+            17059345908371998855,
+            15316992698834344060,
+            3568653445613141515,
+            12911066927142911650,
+            10746225424367601145,
+            16930547820292837221,
+        ],
+    },
+}
 
 def compute_alpha(p):
     """Smallest integer alpha >= 3 such that gcd(alpha, p-1) = 1."""
@@ -772,6 +1322,43 @@ def format_hex(value, n):
     return f"0x{value:0{hex_width}x}"
 
 
+def print_embedded_poseidon2_test_vector(field_name, width, n):
+    """
+    Print canonical input / expected output copied from Plonky3 Rust tests (or one-shot
+    derivations documented in DEFAULT_POSEIDON2_TEST_VECTORS) for reviewer spot-checks.
+    """
+    key = (field_name, width)
+    if key not in DEFAULT_POSEIDON2_TEST_VECTORS:
+        print(
+            f"\nNo embedded test vector for {field_name} width {width}.",
+            file=sys.stderr,
+        )
+        return
+
+    entry = DEFAULT_POSEIDON2_TEST_VECTORS[key]
+    p = FIELDS[field_name]["prime"]
+
+    print()
+    print("Embedded default Poseidon2 permutation vector (Plonky3 canonical literals)")
+    print(f"  Field: {field_name}  Width: {width}")
+    print(f"  Rust permutation: {entry['permutation']}")
+    for src in entry["rust_tests"]:
+        print(f"  Source: {src}")
+    print()
+
+    inp = entry["input"]
+    exp = entry["expected"]
+    print("  Input (canonical, decimal):")
+    print(f"    {inp}")
+    print("  Input (hex):")
+    print(f"    [{', '.join(format_hex(v, n) for v in inp)}]")
+    print()
+    print("  Expected output (canonical, decimal):")
+    print(f"    {exp}")
+    print("  Expected output (hex):")
+    print(f"    [{', '.join(format_hex(v, n) for v in exp)}]")
+
+
 def _wrap_hex_row(values, n, indent=4, max_width=100):
     """Wrap a list of hex values into multiple lines if they exceed max_width."""
     items = [format_hex(v, n) for v in values]
@@ -897,7 +1484,8 @@ def main():
         epilog="Examples:\n"
         "  python poseidon2/generate_constants.py --field babybear --width 16\n"
         "  python poseidon2/generate_constants.py --field goldilocks --width 8 --format json\n"
-        "  python poseidon2/generate_constants.py --field koalabear --width 24 -v\n",
+        "  python poseidon2/generate_constants.py --field koalabear --width 24 -v\n"
+        "  python poseidon2/generate_constants.py --field babybear --width 16 --skip-matrix --test-vector\n",
     )
     parser.add_argument(
         "--field",
@@ -937,7 +1525,10 @@ def main():
     parser.add_argument(
         "--test-vector",
         action="store_true",
-        help="Compute and print a test vector using the reference permutation",
+        help=(
+            "Print embedded canonical input/expected output for the default Poseidon2 permutation "
+            "(from Rust tests or documented one-shot derivations; not from the Python reference)"
+        ),
     )
     args = parser.parse_args()
 
@@ -1005,31 +1596,9 @@ def main():
     elif args.format == "json":
         print(format_json_poseidon2(*fmt_args))
 
-    # --- Test vector ---
+    # --- Test vector (embedded Plonky3 literals; independent of --skip-matrix) ---
     if args.test_vector:
-        if args.skip_matrix:
-            print(
-                "\nWarning: test vector uses zero diagonal (--skip-matrix). "
-                "Output will NOT match production.",
-                file=sys.stderr,
-            )
-        ext_mat = generate_external_matrix(t, p)
-        state_in = list(range(t))
-        state_out = poseidon2_permutation(
-            state_in,
-            ext_mat,
-            diag_m1,
-            external_initial,
-            internal,
-            external_final,
-            alpha,
-            p,
-            t,
-        )
-        print()
-        print(f"Test vector (input = [0, 1, ..., {t - 1}]):")
-        print(f"  Input:  [{', '.join(format_hex(v, n) for v in state_in)}]")
-        print(f"  Output: [{', '.join(format_hex(v, n) for v in state_out)}]")
+        print_embedded_poseidon2_test_vector(args.field, t, n)
 
 
 if __name__ == "__main__":
