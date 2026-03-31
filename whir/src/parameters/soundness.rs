@@ -42,7 +42,8 @@ pub enum SecurityAssumption {
     /// making provable 128-bit security achievable with degree-5 extensions of small prime fields.
     JohnsonBound,
 
-    /// Capacity bound assumes that the distance of each oracle is within the capacity bound 1 - rho.
+    /// Capacity bound assumes that the distance of each oracle is within the capacity bound (1 - rho - eta).
+    /// With eta = rho/20.
     /// We refer to this configuration as CB for short.
     /// This requires conjecturing that RS codes are decodable up to capacity and have correlated agreement (mutual in WHIR) up to capacity.
     CapacityBound,
@@ -140,7 +141,13 @@ impl SecurityAssumption {
             //
             // With eta = sqrt(rho)/20 (safe gap), m = max(ceil(sqrt(rho)/(2*eta)), 3) = max(10, 3) = 10.
             //
-            // The dominant term for large n:
+            // Only the first (dominant) term is kept.
+            // The second additive term (m + 1/2) / sqrt(rho) is O(1), negligible for large n.
+            // Within the first term, the sub-term 3*(m + 1/2)*gamma*rho is also dropped
+            // because 2*(m + 1/2)^5 dominates it when m = 10.
+            //
+            // This gives the approximation:
+            //
             //   a ~ (2 * 10.5^5) / (3 * rho^(3/2)) * n
             //
             // In log form:
@@ -154,11 +161,13 @@ impl SecurityAssumption {
                 // n = 2^(log_degree + log_inv_rate)
                 let log_n = (log_degree + log_inv_rate) as f64;
 
+                // Constant from (2 * 10.5^5 / 3)
+                let constant = libm::log2(2. * libm::pow(10.5, 5.) / 3.);
+
                 // rho^(-3/2) contributes 1.5 * log_inv_rate
                 let log_rho_neg_3_2 = 1.5 * log_inv_rate as f64;
 
-                // Constant from (2 * 10.5^5 / 3)
-                log_n + 16.376624613172645f64 + log_rho_neg_3_2
+                log_n + constant + log_rho_neg_3_2
             }
 
             // In CB we assume the error is degree/(eta*rho^2)

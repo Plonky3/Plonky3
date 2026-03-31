@@ -48,6 +48,26 @@ pub(crate) struct SumcheckParams {
 /// - `sub_label` identifies the semantic role (e.g., Merkle digest, folding randomness).
 /// - `count` is the number of field elements involved (omitted for hints).
 ///
+/// # Evaluation Claims Are Not Absorbed Here
+///
+/// The WHIR protocol takes a constrained Reed-Solomon code as a public input.
+/// When used as a polynomial commitment scheme, the evaluation claim
+/// (point and value) is encoded into that constraint.
+///
+/// This separator only encodes the **internal** transcript structure:
+/// - Merkle commitments
+/// - Sumcheck polynomials
+/// - Out-of-domain samples
+///
+/// It does **not** absorb the evaluation point or claimed value,
+/// because those are external inputs to the protocol.
+///
+/// For Fiat-Shamir soundness (BCS transformation), the caller **must**
+/// absorb the evaluation point and claimed value into the challenger
+/// before any WHIR challenges are derived.
+/// The PCS layer is typically responsible for this.
+/// Omitting this step allows proof replay across different claims.
+///
 /// # Protocol Structure
 ///
 /// The full WHIR proof transcript, as encoded by this separator, follows
@@ -149,6 +169,13 @@ where
     ///    configured with different parameters.
     /// 2. Observe the Merkle root of the committed polynomial.
     /// 3. Optionally, encode an OOD sampling step.
+    ///
+    /// # Safety
+    ///
+    /// Does **not** absorb the evaluation point or claimed value.
+    /// The caller must observe these public inputs into the challenger
+    /// before any challenges are sampled.
+    /// See the struct-level documentation for the rationale.
     pub fn commit_statement<MT: Mmcs<F>, Challenger, const DIGEST_ELEMS: usize>(
         &mut self,
         params: &WhirConfig<EF, F, MT, Challenger>,
@@ -182,6 +209,13 @@ where
     }
 
     /// Append the full WHIR proof transcript to the domain separator.
+    ///
+    /// # Safety
+    ///
+    /// Does **not** absorb the evaluation point or claimed value.
+    /// The caller must observe these public inputs into the challenger
+    /// before any challenges are sampled.
+    /// See the struct-level documentation for the rationale.
     ///
     /// # Algorithm
     ///
