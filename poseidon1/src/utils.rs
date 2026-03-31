@@ -416,7 +416,7 @@ pub fn forward_constant_substitution<F: Field, const N: usize>(
 /// - The per-round sparse v vectors.
 /// - The per-round sparse ŵ vectors.
 #[allow(clippy::type_complexity)]
-pub(crate) fn compute_optimized_constants<F: Field, const N: usize>(
+pub fn compute_optimized_constants<F: Field, const N: usize>(
     mds: &[[F; N]; N],
     rounds_p: usize,
     partial_rc: &[[F; N]],
