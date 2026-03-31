@@ -6,15 +6,15 @@ use alloc::{format, vec};
 
 pub use data::VerifierData;
 use hashbrown::HashMap;
-use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
 use p3_air::Air;
+use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
+use p3_lookup::Lookup;
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::lookup_traits::LookupGadget;
-use p3_lookup::Lookup;
-use p3_uni_stark::{recompose_quotient_from_chunks, InvalidProofShapeError, VerificationError};
+use p3_uni_stark::{InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks};
 use p3_util::zip_eq::zip_eq;
 use tracing::{info_span, instrument};
 
