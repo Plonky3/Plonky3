@@ -442,13 +442,14 @@ pub trait AirBuilder: Sized {
         I1: Dup + Into<Self::Expr>,
         I2: Dup + Into<Self::Expr>,
     {
-        assert_eq!(
+        debug_assert_eq!(
             lhs.len(),
             rhs.len(),
             "assert_eq_arrays: length mismatch ({} vs {})",
             lhs.len(),
             rhs.len()
         );
+
         for (a, b) in lhs.iter().zip(rhs.iter()) {
             self.assert_eq(a.dup(), b.dup());
         }
