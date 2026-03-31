@@ -83,7 +83,6 @@ impl<F: Field> Point<F> {
     /// More explicitly this computes `(1..log_n).map(|i| self.v_n(i)).product()`
     /// but uses far fewer `self.x.square().double() - F::ONE` steps compared to the naive implementation.
     pub fn v_n_prod(mut self, log_n: usize) -> F {
-        debug_assert!(log_n >= 2, "v_n_prod requires log_n >= 2");
         if log_n <= 1 {
             return F::ONE;
         }
@@ -106,7 +105,7 @@ impl<F: Field> Point<F> {
     /// The concrete value of the selector s_P = v_n / (v_0 . T_p⁻¹) at P=self, used for normalization.
     /// Circle STARKs, Section 5.1, Remark 16 (page 22 of the first revision PDF)
     pub fn s_p_at_p(self, log_n: usize) -> F {
-        debug_assert!(log_n >= 2, "s_p_at_p requires log_n >= 2");
+        debug_assert!(log_n >= 1, "s_p_at_p requires log_n >= 1");
         -self.v_n_prod(log_n).mul_2exp_u64((2 * log_n - 1) as u64) * self.y
     }
 
@@ -239,14 +238,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "v_n_prod requires log_n >= 2")]
-    fn test_v_n_prod_underflow_log_n_1() {
-        let p = Pt::generator(3);
-        let _ = p.v_n_prod(1);
-    }
-
-    #[test]
-    #[should_panic(expected = "s_p_at_p requires log_n >= 2")]
+    #[should_panic(expected = "s_p_at_p requires log_n >= 1")]
     fn test_s_p_at_p_underflow_log_n_0() {
         let p = Pt::generator(3);
         let _ = p.s_p_at_p(0);
