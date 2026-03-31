@@ -6,15 +6,15 @@ use alloc::{format, vec};
 
 pub use data::VerifierData;
 use hashbrown::HashMap;
-use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
+use p3_air::Air;
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
-use p3_lookup::Lookup;
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::lookup_traits::LookupGadget;
-use p3_uni_stark::{InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks};
+use p3_lookup::Lookup;
+use p3_uni_stark::{recompose_quotient_from_chunks, InvalidProofShapeError, VerificationError};
 use p3_util::zip_eq::zip_eq;
 use tracing::{info_span, instrument};
 
@@ -88,6 +88,8 @@ where
     let mut log_num_quotient_chunks = Vec::with_capacity(airs.len());
     // The total number of quotient chunks, including ZK randomization.
     let mut num_quotient_chunks = Vec::with_capacity(airs.len());
+    // Width of permutation columns in extension field coordinates.
+    let mut permutation_aux_widths = Vec::with_capacity(airs.len());
 
     for (i, air) in airs.iter().enumerate() {
         let pre_w = common
@@ -122,6 +124,8 @@ where
 
     // Observe the instance count up front to match the prover's transcript.
     transcript.observe_instance_count(airs.len());
+
+    let is_lookup = commitments.permutation.is_some();
 
     for (i, air) in airs.iter().enumerate() {
         let air_width = A::width(air);
@@ -221,6 +225,29 @@ where
             .into());
         }
 
+        let aux_width = all_lookups[i]
+            .iter()
+            .flat_map(|ctx| ctx.columns.iter().cloned())
+            .max()
+            .map(|m| m + 1)
+            .unwrap_or(0);
+        let expected_perm_len = aux_width * Challenge::<SC>::DIMENSION;
+        if is_lookup
+            && inst_opened_vals.permutation_local.len() != inst_opened_vals.permutation_next.len()
+        {
+            return Err(InvalidProofShapeError::PermutationLengthMismatch { air: i }.into());
+        }
+        if inst_opened_vals.permutation_local.len() != expected_perm_len
+            || inst_opened_vals.permutation_next.len() != expected_perm_len
+        {
+            return Err(InvalidProofShapeError::PermutationWidthMismatch {
+                air: i,
+                expected: expected_perm_len,
+            }
+            .into());
+        }
+        permutation_aux_widths.push(aux_width);
+
         // Observe per-instance binding data.
         let ext_db = degree_bits[i];
         let base_db = ext_db - config.is_zk();
@@ -234,8 +261,6 @@ where
     transcript.observe_preprocessed(&preprocessed_widths, common.preprocessed.as_ref());
 
     // Validate the shape of the lookup commitment.
-    let is_lookup = commitments.permutation.is_some();
-
     if is_lookup != all_lookups.iter().any(|c| !c.is_empty()) {
         return Err(InvalidProofShapeError::LookupCommitmentMismatch.into());
     }
@@ -429,9 +454,6 @@ where
             .zip(opened_values.instances.iter())
             .enumerate()
         {
-            if inst_opened_vals.permutation_local.len() != inst_opened_vals.permutation_next.len() {
-                return Err(InvalidProofShapeError::PermutationLengthMismatch { air: i }.into());
-            }
             if !inst_opened_vals.permutation_local.is_empty() {
                 let zeta_next = trace_domains[i]
                     .next_point(zeta)
@@ -471,24 +493,8 @@ where
         // Recompose permutation openings from base-flattened columns into extension field columns.
         // The permutation commitment is a base-flattened matrix with `width = aux_width * DIMENSION`.
         // For constraint evaluation, we need an extension field matrix with width `aux_width``.
-        let aux_width = all_lookups[i]
-            .iter()
-            .flat_map(|ctx| ctx.columns.iter().cloned())
-            .max()
-            .map(|m| m + 1)
-            .unwrap_or(0);
-
+        let aux_width = permutation_aux_widths[i];
         let ext_degree = Challenge::<SC>::DIMENSION;
-        let expected_perm_len = aux_width * ext_degree;
-        if opened_values.instances[i].permutation_local.len() != expected_perm_len
-            || opened_values.instances[i].permutation_next.len() != expected_perm_len
-        {
-            return Err(InvalidProofShapeError::PermutationWidthMismatch {
-                air: i,
-                expected: expected_perm_len,
-            }
-            .into());
-        }
 
         let recompose = |flat: &[Challenge<SC>]| -> Vec<Challenge<SC>> {
             if aux_width == 0 {
