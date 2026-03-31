@@ -608,7 +608,10 @@ where
     #[allow(clippy::suspicious_arithmetic_impl)]
     #[inline]
     fn div(self, rhs: Self) -> Self {
-        let rhs_inv = Self::from_fn(|i| rhs.as_slice()[i].inverse());
+        let mut rhs_inv = Self::broadcast(QuinticTrinomialExtensionField::<F>::ZERO);
+        crate::batch_multiplicative_inverse_general(rhs.as_slice(), rhs_inv.as_slice_mut(), |x| {
+            x.inverse()
+        });
         self * rhs_inv
     }
 }
