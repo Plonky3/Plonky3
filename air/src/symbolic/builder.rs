@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 
-use p3_field::{Algebra, ExtensionField, Field};
+use p3_field::{Algebra, Dup, ExtensionField, Field};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use tracing::instrument;
@@ -237,7 +237,7 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
 /// # Panics
 ///
 /// Panics if the matrix does not have exactly 2 rows.
-impl<T: Clone + Send + Sync> WindowAccess<T> for RowMajorMatrix<T> {
+impl<T: Dup + Send + Sync> WindowAccess<T> for RowMajorMatrix<T> {
     fn current_slice(&self) -> &[T] {
         assert_eq!(
             self.height(),

@@ -12,6 +12,7 @@ use core::marker::PhantomData;
 use core::ops::Range;
 
 use p3_air::{AirBuilder, BaseAir, WindowAccess};
+use p3_field::Dup;
 
 /// A column-restricted view over a trace window.
 ///
@@ -25,15 +26,17 @@ pub struct SubSliced<W, T> {
     _marker: PhantomData<T>,
 }
 
-impl<W: WindowAccess<T>, T> WindowAccess<T> for SubSliced<W, T> {
+impl<W: WindowAccess<T>, T: Dup> WindowAccess<T> for SubSliced<W, T> {
     #[inline]
     fn current_slice(&self) -> &[T] {
-        &self.window.current_slice()[self.range.clone()]
+        let r = &self.range;
+        &self.window.current_slice()[r.start..r.end]
     }
 
     #[inline]
     fn next_slice(&self) -> &[T] {
-        &self.window.next_slice()[self.range.clone()]
+        let r = &self.range;
+        &self.window.next_slice()[r.start..r.end]
     }
 }
 
@@ -77,9 +80,10 @@ impl<AB: AirBuilder, SubAir: BaseAir<AB::F>, F> AirBuilder for SubAirBuilder<'_,
     type PublicVar = AB::PublicVar;
 
     fn main(&self) -> Self::MainWindow {
+        let r = &self.column_range;
         SubSliced {
             window: self.inner.main(),
-            range: self.column_range.clone(),
+            range: r.start..r.end,
             _marker: PhantomData,
         }
     }

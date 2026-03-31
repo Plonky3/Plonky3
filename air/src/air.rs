@@ -9,7 +9,7 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 ///
 /// Implementors expose two flat slices that constraint evaluators use
 /// to express algebraic relations between rows.
-pub trait WindowAccess<T> {
+pub trait WindowAccess<T: Dup> {
     /// Full slice of the current row.
     fn current_slice(&self) -> &[T];
 
@@ -22,9 +22,9 @@ pub trait WindowAccess<T> {
     #[inline]
     fn current(&self, i: usize) -> Option<T>
     where
-        T: Clone,
+        T: Dup,
     {
-        self.current_slice().get(i).cloned()
+        self.current_slice().get(i).map(|x| x.dup())
     }
 
     /// Single element from the next row by index.
@@ -33,9 +33,9 @@ pub trait WindowAccess<T> {
     #[inline]
     fn next(&self, i: usize) -> Option<T>
     where
-        T: Clone,
+        T: Dup,
     {
-        self.next_slice().get(i).cloned()
+        self.next_slice().get(i).map(|x| x.dup())
     }
 }
 
@@ -94,7 +94,7 @@ impl<'a, T> RowWindow<'a, T> {
     }
 }
 
-impl<T> WindowAccess<T> for RowWindow<'_, T> {
+impl<T: Dup> WindowAccess<T> for RowWindow<'_, T> {
     #[inline]
     fn current_slice(&self) -> &[T] {
         self.current
@@ -152,11 +152,11 @@ pub trait BaseAir<F>: Sync {
     /// Return the periodic values for the given row index.
     fn periodic_values(&self, row_index: usize) -> Vec<F>
     where
-        F: Clone,
+        F: Dup,
     {
         self.periodic_columns()
             .iter()
-            .map(|col| col[row_index % col.len()].clone())
+            .map(|col| col[row_index % col.len()].dup())
             .collect()
     }
 
@@ -170,7 +170,7 @@ pub trait BaseAir<F>: Sync {
     /// Returns `None` if there are no periodic columns.
     fn periodic_columns_matrix(&self) -> Option<RowMajorMatrix<F>>
     where
-        F: Clone + Send + Sync,
+        F: Dup + Send + Sync,
     {
         let cols = self.periodic_columns();
         if cols.is_empty() {
@@ -180,7 +180,7 @@ pub trait BaseAir<F>: Sync {
         let max_period = cols.iter().map(|c| c.len()).max()?;
 
         let values = (0..max_period)
-            .flat_map(|row| cols.iter().map(move |col| col[row % col.len()].clone()))
+            .flat_map(|row| cols.iter().map(move |col| col[row % col.len()].dup()))
             .collect();
 
         Some(RowMajorMatrix::new(values, cols.len()))
@@ -333,10 +333,10 @@ pub trait AirBuilder: Sized {
         + Mul<Self::Expr, Output = Self::Expr>;
 
     /// Two-row window over the preprocessed trace columns.
-    type PreprocessedWindow: WindowAccess<Self::Var> + Clone;
+    type PreprocessedWindow: WindowAccess<Self::Var>;
 
     /// Two-row window over the main trace columns.
-    type MainWindow: WindowAccess<Self::Var> + Clone;
+    type MainWindow: WindowAccess<Self::Var>;
 
     /// Variable type for public values.
     type PublicVar: Into<Self::Expr> + Copy;
@@ -534,7 +534,7 @@ pub trait PermutationAirBuilder: ExtensionBuilder {
     type RandomVar: Into<Self::ExprEF> + Copy;
 
     /// Value type for expected cumulated values used in global lookup arguments.
-    type PermutationVar: Into<Self::ExprEF> + Clone;
+    type PermutationVar: Into<Self::ExprEF> + Dup;
 
     /// Return the current and next row slices of the permutation trace.
     fn permutation(&self) -> Self::MP;

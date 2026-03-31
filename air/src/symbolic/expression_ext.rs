@@ -1,7 +1,7 @@
 use alloc::sync::Arc;
 
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
+use p3_field::{Algebra, Dup, ExtensionField, Field, PrimeCharacteristicRing};
 
 use crate::symbolic::expression::BaseLeaf;
 use crate::symbolic::variable::SymbolicVariableExt;
@@ -67,7 +67,7 @@ impl<F: Field, EF> SymbolicExpressionExt<F, EF> {
     /// ([`ExtVariable`](ExtLeaf::ExtVariable) or [`ExtConstant`](ExtLeaf::ExtConstant)).
     pub fn to_base(&self) -> Option<SymbolicExpression<F>> {
         match self {
-            Self::Leaf(ExtLeaf::Base(e)) => Some(e.clone()),
+            Self::Leaf(ExtLeaf::Base(e)) => Some(e.dup()),
             Self::Leaf(ExtLeaf::ExtVariable(_) | ExtLeaf::ExtConstant(_)) => None,
             Self::Add {
                 x,

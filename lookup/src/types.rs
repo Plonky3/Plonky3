@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use core::ops::Neg;
 
 use p3_air::{Air, PermutationAirBuilder, SymbolicExpression};
-use p3_field::Field;
+use p3_field::{Dup, Field};
 use serde::{Deserialize, Serialize};
 
 /// Defines errors that can occur during lookup verification.
@@ -183,7 +183,7 @@ pub trait LookupEvaluator {
                     self.eval_local_lookup(builder, context);
                 }
                 Kind::Global(_) => {
-                    let expected = builder.permutation_values()[pv_idx].clone();
+                    let expected = builder.permutation_values()[pv_idx].dup();
                     pv_idx += 1;
                     self.eval_global_update(builder, context, expected.into());
                 }

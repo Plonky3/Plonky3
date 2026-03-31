@@ -242,19 +242,19 @@ impl<A: SymLeaf, T: Into<Self>> ops::Mul<T> for SymbolicExpr<A> {
 
 impl<A: SymLeaf, T: Into<Self>> ops::AddAssign<T> for SymbolicExpr<A> {
     fn add_assign(&mut self, rhs: T) {
-        *self = self.clone() + rhs.into();
+        *self = self.dup() + rhs.into();
     }
 }
 
 impl<A: SymLeaf, T: Into<Self>> ops::SubAssign<T> for SymbolicExpr<A> {
     fn sub_assign(&mut self, rhs: T) {
-        *self = self.clone() - rhs.into();
+        *self = self.dup() - rhs.into();
     }
 }
 
 impl<A: SymLeaf, T: Into<Self>> ops::MulAssign<T> for SymbolicExpr<A> {
     fn mul_assign(&mut self, rhs: T) {
-        *self = self.clone() * rhs.into();
+        *self = self.dup() * rhs.into();
     }
 }
 
