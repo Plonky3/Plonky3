@@ -44,6 +44,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
 
+use p3_air::utils::pack_bits_le;
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{PrimeCharacteristicRing, PrimeField32};
 use p3_matrix::dense::RowMajorMatrix;
@@ -329,7 +330,7 @@ fn eval_round<
 
         // Reconstruction constraint: the bits must reconstruct the Bar input.
         // sum(bits[i] * 2^i) == state[bar_idx]
-        let reconstructed = reconstruct_from_bits::<AB, FIELD_BITS>(&bits);
+        let reconstructed: AB::Expr = pack_bits_le(bits.iter().cloned());
         builder.assert_eq(reconstructed, state[bar_idx].clone());
 
         // S-box constraint: the committed bars_output must equal the chi S-box
@@ -384,64 +385,26 @@ fn eval_round<
     *state = round.post.map(|x| x.into());
 }
 
-/// Reconstruct a field element from its bit decomposition.
-///
-/// Computes `sum(bits[i] * 2^i)` for `i = 0..FIELD_BITS`.
-///
-/// The result is a degree-1 expression (linear combination of committed bits
-/// with constant coefficients `2^i`).
-#[inline]
-fn reconstruct_from_bits<AB: AirBuilder, const FIELD_BITS: usize>(
-    bits: &[AB::Expr; FIELD_BITS],
-) -> AB::Expr {
-    let mut result = AB::Expr::ZERO;
-    let mut power_of_two = AB::F::ONE;
-    for bit in bits {
-        result += bit.clone() * power_of_two.clone();
-        power_of_two = power_of_two.clone().double();
-    }
-    result
-}
-
 /// Evaluate the full Bar S-box on a bit-decomposed field element.
 ///
 /// Applies the chi-like S-box independently to each limb (determined by
-/// `limb_bits`), then reconstructs the output as a single field expression.
+/// `limb_bits`), then reconstructs the output as a single field expression
+/// using [`pack_bits_le`].
 ///
 /// # Chi S-box Formula (per limb)
 ///
 /// Rust's `u8::rotate_left(k)` maps bit position `i` in the result to bit
-/// `(i - k) mod n` of the input. Given this, for an `n`-bit limb with bits
-/// `x[0], x[1], ..., x[n-1]` (LSB to MSB):
+/// `(i - k) mod n` of the input. Combining with the final rotation:
 ///
 /// ```text
-///   // 8-bit limbs (3-input AND):
-///   tmp[i] = x[i] XOR ((NOT x[(i-1)%n]) AND x[(i-2)%n] AND x[(i-3)%n])
-///
-///   // 7-bit limbs (2-input AND):
-///   tmp[i] = x[i] XOR ((NOT x[(i-1)%n]) AND x[(i-2)%n])
-///
-///   // Final rotate left by 1:
-///   out[j] = tmp[(j-1) % n]
+///   // 8-bit: out[j] = x[(j-1)%n] XOR (andn(x[(j-2)%n], x[(j-3)%n]) * x[(j-4)%n])
+///   // 7-bit: out[j] = x[(j-1)%n] XOR andn(x[(j-2)%n], x[(j-3)%n])
 /// ```
 ///
-/// Combining both steps:
-/// ```text
-///   // 8-bit: out[j] = x[(j-1)%n] XOR ((NOT x[(j-2)%n]) AND x[(j-3)%n] AND x[(j-4)%n])
-///   // 7-bit: out[j] = x[(j-1)%n] XOR ((NOT x[(j-2)%n]) AND x[(j-3)%n])
-/// ```
+/// Uses the `andn` and `xor` methods from [`PrimeCharacteristicRing`], matching
+/// the same pattern used by the keccak-air for its chi step.
 ///
-/// Over Fp with boolean variables:
-/// - `NOT a = 1 - a`
-/// - `AND(a, b) = a * b`
-/// - `XOR(a, b) = a + b - 2*a*b`
-///
-/// The maximum degree is 4 (from XOR of a degree-1 bit with a degree-3 AND
-/// product in the 8-bit case).
-///
-/// # Returns
-///
-/// A degree-4 expression equal to `sum(output_bits[j] * 2^j)`.
+/// Maximum degree: 4 (XOR of degree-1 bit with degree-3 AND-NOT product).
 fn eval_bar_sbox<AB: AirBuilder, const FIELD_BITS: usize>(
     bits: &[AB::Expr; FIELD_BITS],
     limb_bits: &[usize],
@@ -449,52 +412,39 @@ fn eval_bar_sbox<AB: AirBuilder, const FIELD_BITS: usize>(
     let mut result = AB::Expr::ZERO;
     let mut bit_offset = 0;
 
-    // Process each limb independently.
     for (limb_idx, &n) in limb_bits.iter().enumerate() {
-        // Extract the bits for this limb.
         let x = &bits[bit_offset..bit_offset + n];
 
-        // Determine chi variant: last limb with < 8 bits uses 2-input AND.
+        // Last limb with < 8 bits uses 2-input AND (7-bit chi variant).
         let is_last_reduced = limb_idx == limb_bits.len() - 1 && n < 8;
 
-        // Helper for modular index subtraction within the limb.
+        // Modular index subtraction within the limb.
         let sub = |base: usize, offset: usize| (base + n - (offset % n)) % n;
 
-        // Compute each output bit of the chi S-box.
+        // Compute each output bit using andn/xor, then pack into a field element.
         //
-        // Combined formula (rotate_left applied to chi result):
-        //   out[j] = x[(j-1)%n] XOR chi_product_at((j-1)%n)
-        // where chi_product_at(i) uses x[(i-1)%n], x[(i-2)%n], x[(i-3)%n].
-        //
-        // Equivalently:
-        //   out[j] = x[sub(j,1)] XOR ((NOT x[sub(j,2)]) AND x[sub(j,3)] AND x[sub(j,4)])
-        for j in 0..n {
-            // x[(j-1) % n]: the "base" bit after rotation.
-            let x_base = x[sub(j, 1)].clone();
+        // out[j] = x[sub(j,1)].xor(andn(x[sub(j,2)], x[sub(j,3)]) [* x[sub(j,4)]])
+        let get_out_bit = |j: usize| -> AB::Expr {
+            // andn(a, b) = (1 - a) * b  (degree 2)
+            let andn = x[sub(j, 2)].clone().andn(&x[sub(j, 3)].clone());
 
-            // Compute the AND product portion of chi.
             let chi_product = if is_last_reduced {
-                // 7-bit S-box: (NOT x[(j-2)%n]) AND x[(j-3)%n]
-                let not_a = AB::Expr::ONE - x[sub(j, 2)].clone();
-                let b = x[sub(j, 3)].clone();
-                not_a * b // degree 2
+                andn // degree 2
             } else {
-                // 8-bit S-box: (NOT x[(j-2)%n]) AND x[(j-3)%n] AND x[(j-4)%n]
-                let not_a = AB::Expr::ONE - x[sub(j, 2)].clone();
-                let b = x[sub(j, 3)].clone();
-                let c = x[sub(j, 4)].clone();
-                not_a * b * c // degree 3
+                andn * x[sub(j, 4)].clone() // degree 3
             };
 
-            // XOR over Fp: a XOR b = a + b - 2*a*b (for boolean a, b).
-            // out[j] = x_base XOR chi_product
-            let out_bit =
-                x_base.clone() + chi_product.clone() - AB::Expr::TWO * x_base * chi_product;
+            // xor(a, b) = a + b - 2ab  (degree += 1)
+            x[sub(j, 1)].clone().xor(&chi_product)
+        };
 
-            // Accumulate into the reconstruction with the positional weight 2^(offset+j).
-            let power_of_two = AB::F::from_u64(1u64 << (bit_offset + j));
-            result += out_bit * power_of_two;
-        }
+        // Pack limb output bits into a field element using Horner evaluation.
+        let limb_value: AB::Expr =
+            pack_bits_le((0..n).map(get_out_bit));
+
+        // Shift limb value to its position and accumulate.
+        let limb_shift = AB::F::from_u64(1u64 << bit_offset);
+        result += limb_value * limb_shift;
 
         bit_offset += n;
     }
