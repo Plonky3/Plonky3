@@ -333,23 +333,3 @@ impl<F: Field> Butterfly<F> for TwiddleFreeButterfly {
         (x_1 + x_2, x_1 - x_2)
     }
 }
-
-/// Twiddle-free butterfly with a post-multiplication scale factor.
-///
-/// This butterfly computes:
-/// ```text
-///   output_1 = (x1 + x2) * scale
-///   output_2 = (x1 - x2) * scale
-/// ```
-/// This is used to merge a uniform scaling step into a butterfly pass.
-#[derive(Copy, Clone)]
-pub struct ScaledTwiddleFreeButterfly<F>(pub F);
-
-impl<F: Field> Butterfly<F> for ScaledTwiddleFreeButterfly<F> {
-    #[inline]
-    fn apply<PF: PackedField<Scalar = F>>(&self, x_1: PF, x_2: PF) -> (PF, PF) {
-        let sum = (x_1 + x_2) * self.0;
-        let diff = (x_1 - x_2) * self.0;
-        (sum, diff)
-    }
-}
