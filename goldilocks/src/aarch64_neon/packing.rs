@@ -116,6 +116,15 @@ impl PrimeCharacteristicRing for PackedGoldilocksNeon {
     }
 
     #[inline]
+    fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
+        Self::from_fn(|lane| {
+            let lhs_lane: [Goldilocks; N] = core::array::from_fn(|i| lhs[i].as_slice()[lane]);
+            let rhs_lane: [Goldilocks; N] = core::array::from_fn(|i| rhs[i].as_slice()[lane]);
+            Goldilocks::dot_product(&lhs_lane, &rhs_lane)
+        })
+    }
+
+    #[inline]
     fn square(&self) -> Self {
         Self::from_vector(square(self.to_vector()))
     }
@@ -144,6 +153,14 @@ impl_sum_prod_base_field!(PackedGoldilocksNeon, Goldilocks);
 impl Algebra<Goldilocks> for PackedGoldilocksNeon {
     // Benchmarked on AArch64 NEON: chunk=2 ≈ 182ns, chunk=4 ≈ 198ns, chunk=8 ≈ 221ns.
     const BATCHED_LC_CHUNK: usize = 2;
+
+    #[inline]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Goldilocks; N]) -> Self {
+        Self::from_fn(|lane| {
+            let a_lane: [Goldilocks; N] = core::array::from_fn(|i| a[i].as_slice()[lane]);
+            Goldilocks::dot_product(&a_lane, f)
+        })
+    }
 }
 
 impl_packed_value!(PackedGoldilocksNeon, Goldilocks, WIDTH);

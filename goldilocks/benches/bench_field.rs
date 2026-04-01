@@ -7,7 +7,8 @@ use p3_field_testing::bench_func::{
     benchmark_inv, benchmark_iter_sum, benchmark_sub_latency, benchmark_sub_throughput,
 };
 use p3_field_testing::{
-    benchmark_dot_array, benchmark_mul_latency, benchmark_mul_throughput, benchmark_sum_array,
+    benchmark_dot_array, benchmark_mixed_dot_array, benchmark_mul_latency,
+    benchmark_mul_throughput, benchmark_sum_array,
 };
 use p3_goldilocks::Goldilocks;
 use rand::rngs::SmallRng;
@@ -64,8 +65,22 @@ fn bench_packedfield(c: &mut Criterion) {
     benchmark_mul_latency::<<F as Field>::Packing, L_REPS>(c, &name);
     benchmark_mul_throughput::<<F as Field>::Packing, REPS>(c, &name);
 
+    benchmark_dot_array::<<F as Field>::Packing, 1>(c, &name);
+    benchmark_dot_array::<<F as Field>::Packing, 2>(c, &name);
+    benchmark_dot_array::<<F as Field>::Packing, 3>(c, &name);
+    benchmark_dot_array::<<F as Field>::Packing, 4>(c, &name);
+    benchmark_dot_array::<<F as Field>::Packing, 5>(c, &name);
+    benchmark_dot_array::<<F as Field>::Packing, 6>(c, &name);
+
     type PF = <F as Field>::Packing;
     benchmark_chunked_linear_combination::<F, PF, 100>(c, &name);
+
+    benchmark_mixed_dot_array::<PF, F, 1>(c, &name);
+    benchmark_mixed_dot_array::<PF, F, 2>(c, &name);
+    benchmark_mixed_dot_array::<PF, F, 3>(c, &name);
+    benchmark_mixed_dot_array::<PF, F, 4>(c, &name);
+    benchmark_mixed_dot_array::<PF, F, 5>(c, &name);
+    benchmark_mixed_dot_array::<PF, F, 6>(c, &name);
 }
 
 criterion_group!(goldilocks_arithmetic, bench_field, bench_packedfield);
