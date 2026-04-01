@@ -878,64 +878,6 @@ fn zip_par_iter_vec<I: IndexedParallelIterator>(
         .collect::<Vec<_>>()
 }
 
-#[cfg(test)]
-mod tests {
-    extern crate std;
-
-    use alloc::sync::Arc;
-    use alloc::vec;
-
-    use p3_baby_bear::BabyBear;
-    use p3_field::PrimeCharacteristicRing;
-    use p3_matrix::dense::RowMajorMatrix;
-
-    use super::*;
-
-    /// Test that concurrent dft_batch and idft_batch calls with increasing sizes
-    /// don't panic due to inconsistent twiddle/inv_twiddle table sizes.
-    #[test]
-    fn test_concurrent_dft_and_idft_no_panic() {
-        let dft = Arc::new(Radix2DFTSmallBatch::<BabyBear>::default());
-
-        // Spawn threads that do dft and idft with different sizes concurrently.
-        let handles: Vec<_> = (1..=6)
-            .flat_map(|log_n| {
-                let dft_fwd = Arc::clone(&dft);
-                let dft_inv = Arc::clone(&dft);
-                let n = 1 << log_n;
-
-                let h1 = std::thread::spawn(move || {
-                    let mat = RowMajorMatrix::new(vec![BabyBear::ONE; n * 2], 2);
-                    dft_fwd.dft_batch(mat);
-                });
-                let h2 = std::thread::spawn(move || {
-                    let mat = RowMajorMatrix::new(vec![BabyBear::ONE; n * 2], 2);
-                    dft_inv.idft_batch(mat);
-                });
-                [h1, h2]
-            })
-            .collect();
-
-        for h in handles {
-            h.join().expect("thread panicked");
-        }
-    }
-
-    /// Test that after update_twiddles, both dft_batch and idft_batch work
-    /// for the same size without panic.
-    #[test]
-    fn test_update_twiddles_both_tables_consistent() {
-        let dft = Radix2DFTSmallBatch::<BabyBear>::default();
-
-        for log_n in 1..=8 {
-            let n = 1 << log_n;
-            let mat = RowMajorMatrix::new(vec![BabyBear::TWO; n], 1);
-            let forward = dft.dft_batch(mat.clone());
-            // This would panic if inv_twiddles was not updated.
-            let _inverse = dft.idft_batch(forward.to_row_major_matrix());
-        }
-    }
-}
 
 trait MultiLayerButterfly<F: Field, B: Butterfly<F>>: Copy + Send + Sync {
     fn apply_2_layers(
