@@ -23,7 +23,7 @@ use crate::butterflies::{Butterfly, DitButterfly, ScaledDitButterfly, TwiddleFre
 ///
 /// For the first half, we apply a butterfly network with smaller blocks in earlier layers,
 /// i.e. either DIT or Bowers G. Then we bit-reverse, and for the second half, we continue executing
-/// the same network but in bit-revised order. This way we're always working with small blocks,
+/// the same network but in bit-reversed order. This way we're always working with small blocks,
 /// so within each half, we can have a certain amount of parallelism with no cross-thread
 /// communication.
 #[derive(Default, Clone, Debug)]
