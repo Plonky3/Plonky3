@@ -27,6 +27,7 @@ members = [
     "merkle-tree",
     "mersenne-31",
     "monolith",
+    "monolith-air",
     "monty-31",
     "multilinear-util",
     "poseidon1",
@@ -115,6 +116,8 @@ p3-maybe-rayon = { path = "maybe-rayon", version = "0.5.1" }
 p3-mds = { path = "mds", version = "0.5.1" }
 p3-merkle-tree = { path = "merkle-tree", version = "0.5.1" }
 p3-mersenne-31 = { path = "mersenne-31", version = "0.5.1" }
+p3-monolith = { path = "monolith", version = "0.5.1" }
+p3-monolith-air = { path = "monolith-air", version = "0.5.1" }
 p3-monty-31 = { path = "monty-31", version = "0.5.1" }
 p3-multilinear-util = { path = "multilinear-util", version = "0.5.1" }
 p3-poseidon1 = { path = "poseidon1", version = "0.5.1" }

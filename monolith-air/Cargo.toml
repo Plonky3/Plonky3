@@ -1,0 +1,43 @@
+[package]
+name = "p3-monolith-air"
+description = "An AIR implementation of the Monolith permutation family for use in zero-knowledge proof systems."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+p3-air.workspace = true
+p3-field.workspace = true
+p3-matrix.workspace = true
+p3-maybe-rayon.workspace = true
+p3-mds.workspace = true
+p3-monolith.workspace = true
+p3-poseidon1.workspace = true
+p3-symmetric.workspace = true
+
+rand.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+p3-challenger = { path = "../challenger" }
+proptest.workspace = true
+p3-commit = { path = "../commit" }
+p3-dft = { path = "../dft" }
+p3-fri = { path = "../fri" }
+p3-keccak = { path = "../keccak" }
+p3-merkle-tree = { path = "../merkle-tree" }
+p3-mersenne-31 = { path = "../mersenne-31" }
+p3-uni-stark = { path = "../uni-stark" }
+
+tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
+tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
+
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
+[lints]
+workspace = true
