@@ -230,6 +230,7 @@ mod tests {
         assert_eq!(generator.v_n_prod(log_n), vn_prod_gen);
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "v_n requires log_n >= 1")]
     fn test_v_n_underflow_log_n_0() {
@@ -237,6 +238,7 @@ mod tests {
         let _ = p.v_n(0);
     }
 
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "s_p_at_p requires log_n >= 1")]
     fn test_s_p_at_p_underflow_log_n_0() {
