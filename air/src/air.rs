@@ -437,7 +437,7 @@ pub trait AirBuilder: Sized {
     }
 
     /// Assert that two sequences of same length are equal element-wise.
-    fn assert_eq_arrays<I1, I2>(&mut self, lhs: &[I1], rhs: &[I2])
+    fn assert_eq_arrays<I1, I2, const N: usize>(&mut self, lhs: [I1; N], rhs: [I2; N])
     where
         I1: Dup + Into<Self::Expr>,
         I2: Dup + Into<Self::Expr>,
@@ -450,9 +450,10 @@ pub trait AirBuilder: Sized {
             rhs.len()
         );
 
-        for (a, b) in lhs.iter().zip(rhs.iter()) {
-            self.assert_eq(a.dup(), b.dup());
-        }
+        let diff: [Self::Expr; N] =
+            core::array::from_fn(|i| lhs[i].dup().into() - rhs[i].dup().into());
+
+        self.assert_zeros(diff);
     }
 
     /// Public input values available during constraint evaluation.
