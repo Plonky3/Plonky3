@@ -1,8 +1,9 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::array;
 use core::fmt::Debug;
 use core::iter::{Product, Sum};
-use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use itertools::Itertools;
 use p3_util::{flatten_to_base, reconstitute_from_base};
@@ -506,5 +507,78 @@ where
     #[inline]
     fn mul_assign(&mut self, rhs: PF) {
         *self = *self * rhs;
+    }
+}
+
+impl<F, PF, const D: usize> Div<BinomialExtensionField<F, D>>
+    for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    type Output = Self;
+
+    #[allow(clippy::suspicious_arithmetic_impl)]
+    #[inline]
+    fn div(self, rhs: BinomialExtensionField<F, D>) -> Self {
+        self * Self::from(rhs.inverse())
+    }
+}
+
+impl<F, PF, const D: usize> DivAssign<BinomialExtensionField<F, D>>
+    for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    #[inline]
+    fn div_assign(&mut self, rhs: BinomialExtensionField<F, D>) {
+        *self = *self / rhs;
+    }
+}
+
+impl<F, PF, const D: usize> Div for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    type Output = Self;
+
+    #[allow(clippy::suspicious_arithmetic_impl)]
+    #[inline]
+    fn div(self, rhs: Self) -> Self {
+        let mut rhs_scalars = Vec::with_capacity(PF::WIDTH);
+        for lane in 0..PF::WIDTH {
+            rhs_scalars.push(BinomialExtensionField::<F, D>::new(array::from_fn(|i| {
+                rhs.value[i].as_slice()[lane]
+            })));
+        }
+
+        let mut rhs_inv_scalars = vec![BinomialExtensionField::<F, D>::ZERO; PF::WIDTH];
+        crate::batch_multiplicative_inverse_general(
+            rhs_scalars.as_slice(),
+            rhs_inv_scalars.as_mut_slice(),
+            |x| x.inverse(),
+        );
+
+        let mut rhs_inv = Self::default();
+        for (lane, inv_lane) in rhs_inv_scalars.iter().copied().enumerate().take(PF::WIDTH) {
+            for i in 0..D {
+                rhs_inv.value[i].as_slice_mut()[lane] = inv_lane.value[i];
+            }
+        }
+
+        self * rhs_inv
+    }
+}
+
+impl<F, PF, const D: usize> DivAssign for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    #[inline]
+    fn div_assign(&mut self, rhs: Self) {
+        *self = *self / rhs;
     }
 }
