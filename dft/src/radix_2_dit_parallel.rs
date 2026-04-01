@@ -295,7 +295,7 @@ fn coset_dft_oop<F: TwoAdicField + Ord>(
 /// For layer 0, all twiddle factors are 1 (root^0 = 1), so we use `TwiddleFreeButterfly`
 /// to avoid a Montgomery multiply by 1 across the entire matrix.
 ///
-/// For layers 1..mid-1, the first twiddle in each block is also always 1 (twiddles[0] = 1),
+/// For layers 1 to mid-1 included, the first twiddle in each block is also always 1 (twiddles[0] = 1),
 /// so we special-case the first row-pair of each block to use `TwiddleFreeButterfly` as well.
 #[instrument(level = "debug", skip_all)]
 fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F]) {
