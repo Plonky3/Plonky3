@@ -249,8 +249,10 @@ fn eval_full_round<
         eval_sbox(&full_round.sbox[i], s, builder);
     }
     LinearLayers::external_linear_layer(state);
-    builder.assert_eq_arrays(state, &full_round.post.map(|x| x.into()));
-    *state = full_round.post.map(|x| x.into());
+    for (state_i, post_i) in state.iter_mut().zip(full_round.post) {
+        builder.assert_eq(state_i.clone(), post_i);
+        *state_i = post_i.into();
+    }
 }
 
 #[inline]
