@@ -163,6 +163,21 @@ pub fn benchmark_dot_array<R: PrimeCharacteristicRing + Copy, const N: usize>(
     });
 }
 
+/// Benchmark the time taken to do mixed dot products on a pair of `[A; N]` and `[F; N]` arrays.
+pub fn benchmark_mixed_dot_array<A: Algebra<F> + Copy, F: Field, const N: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<A> + Distribution<F>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let a = rng.random::<[A; N]>();
+    let f = rng.random::<[F; N]>();
+    c.bench_function(&format!("{name} mixed dot product/{N}"), |b| {
+        b.iter(|| black_box(A::mixed_dot_product(black_box(&a), black_box(&f))));
+    });
+}
+
 /// Benchmark the time taken to add two slices together.
 pub fn benchmark_add_slices<F: Field, const LENGTH: usize>(c: &mut Criterion, name: &str)
 where
