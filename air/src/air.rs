@@ -436,6 +436,26 @@ pub trait AirBuilder: Sized {
         self.assert_zero(x.into() - y.into());
     }
 
+    /// Assert that two sequences of same length are equal element-wise.
+    fn assert_eq_arrays<I1, I2, const N: usize>(&mut self, lhs: [I1; N], rhs: [I2; N])
+    where
+        I1: Dup + Into<Self::Expr>,
+        I2: Dup + Into<Self::Expr>,
+    {
+        debug_assert_eq!(
+            lhs.len(),
+            rhs.len(),
+            "assert_eq_arrays: length mismatch ({} vs {})",
+            lhs.len(),
+            rhs.len()
+        );
+
+        let diff: [Self::Expr; N] =
+            core::array::from_fn(|i| lhs[i].dup().into() - rhs[i].dup().into());
+
+        self.assert_zeros(diff);
+    }
+
     /// Public input values available during constraint evaluation.
     ///
     /// Returns an empty slice by default.
