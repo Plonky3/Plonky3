@@ -439,8 +439,7 @@ fn eval_bar_sbox<AB: AirBuilder, const FIELD_BITS: usize>(
         };
 
         // Pack limb output bits into a field element using Horner evaluation.
-        let limb_value: AB::Expr =
-            pack_bits_le((0..n).map(get_out_bit));
+        let limb_value: AB::Expr = pack_bits_le((0..n).map(get_out_bit));
 
         // Shift limb value to its position and accumulate.
         let limb_shift = AB::F::from_u64(1u64 << bit_offset);
