@@ -68,6 +68,7 @@ mod test_quartic_extension {
         &super::PACKED_ZEROS,
         &super::PACKED_ONES
     );
+    p3_field_testing::test_packed_binomial_extension_division!(F, 4);
 }
 
 #[cfg(test)]
@@ -153,6 +154,7 @@ mod test_octic_extension {
         &super::PACKED_ZEROS,
         &super::PACKED_ONES
     );
+    p3_field_testing::test_packed_binomial_extension_division!(F, 8);
 }
 
 #[cfg(test)]

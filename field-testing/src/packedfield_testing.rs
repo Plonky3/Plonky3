@@ -1,9 +1,12 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use p3_field::extension::{
+    BinomialExtensionField, BinomiallyExtendable, PackedBinomialExtensionField,
+};
 use p3_field::{
-    Algebra, ExtensionField, Field, PackedField, PackedFieldExtension, PackedFieldPow2,
-    PackedValue, PrimeCharacteristicRing,
+    Algebra, BasedVectorSpace, ExtensionField, Field, PackedField, PackedFieldExtension,
+    PackedFieldPow2, PackedValue, PrimeCharacteristicRing,
 };
 use proptest::prelude::*;
 use rand::distr::{Distribution, StandardUniform};
@@ -227,6 +230,74 @@ where
             .fold(PE::ZERO, |acc, (&v, &c)| acc + v * c);
         let got = PE::batched_linear_combination(&values[..len], &coeffs[..len]);
         assert_eq!(expected, got, "failed for len={len}");
+    }
+}
+
+pub fn test_packed_binomial_extension_division<F, const D: usize>()
+where
+    F: BinomiallyExtendable<D>,
+    StandardUniform: Distribution<BinomialExtensionField<F, D>>,
+{
+    let mut rng = SmallRng::seed_from_u64(0x04dd6059d9d02758);
+    let width = F::Packing::WIDTH;
+
+    let numerators: Vec<BinomialExtensionField<F, D>> = (0..width).map(|_| rng.random()).collect();
+    let mut sample_nonzero = || loop {
+        let x: BinomialExtensionField<F, D> = rng.random();
+        if !x.is_zero() {
+            break x;
+        }
+    };
+    let denominators: Vec<BinomialExtensionField<F, D>> =
+        (0..width).map(|_| sample_nonzero()).collect();
+
+    let packed_num = PackedBinomialExtensionField::<F, F::Packing, D>::from_ext_slice(&numerators);
+    let packed_den =
+        PackedBinomialExtensionField::<F, F::Packing, D>::from_ext_slice(&denominators);
+    let extract_lane = |x: &PackedBinomialExtensionField<F, F::Packing, D>, lane: usize| {
+        BinomialExtensionField::<F, D>::new(core::array::from_fn(|i| {
+            <PackedBinomialExtensionField<F, F::Packing, D> as BasedVectorSpace<F::Packing>>::as_basis_coefficients_slice(x)[i]
+                .as_slice()[lane]
+        }))
+    };
+
+    let quot = packed_num / packed_den;
+    for lane in 0..width {
+        assert_eq!(
+            extract_lane(&quot, lane),
+            numerators[lane] / denominators[lane],
+            "packed/packed division mismatch at lane {lane}"
+        );
+    }
+
+    let mut quot_assign = packed_num;
+    quot_assign /= packed_den;
+    for lane in 0..width {
+        assert_eq!(
+            extract_lane(&quot_assign, lane),
+            extract_lane(&quot, lane),
+            "packed/packed div_assign mismatch at lane {lane}"
+        );
+    }
+
+    let scalar_den = sample_nonzero();
+    let quot_scalar = packed_num / scalar_den;
+    for (lane, numerator) in numerators.iter().enumerate() {
+        assert_eq!(
+            extract_lane(&quot_scalar, lane),
+            *numerator / scalar_den,
+            "packed/scalar division mismatch at lane {lane}"
+        );
+    }
+
+    let mut quot_scalar_assign = packed_num;
+    quot_scalar_assign /= scalar_den;
+    for lane in 0..width {
+        assert_eq!(
+            extract_lane(&quot_scalar_assign, lane),
+            extract_lane(&quot_scalar, lane),
+            "packed/scalar div_assign mismatch at lane {lane}"
+        );
     }
 }
 
@@ -677,6 +748,16 @@ macro_rules! test_packed_extension_field {
                     $packedextfield,
                 >();
             }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! test_packed_binomial_extension_division {
+    ($basefield:ty, $degree:expr) => {
+        #[test]
+        fn test_packed_binomial_extension_division() {
+            $crate::test_packed_binomial_extension_division::<$basefield, $degree>();
         }
     };
 }
