@@ -285,8 +285,12 @@ where
         num_periodic_columns: air.num_periodic_columns(),
         ..Default::default()
     };
-    let log_num_quotient_chunks =
-        get_log_num_quotient_chunks::<Val<SC>, A>(air, layout, config.is_zk());
+    let log_num_quotient_chunks = get_log_num_quotient_chunks::<Val<SC>, A>(
+        air,
+        layout,
+        degree >> config.is_zk(),
+        config.is_zk(),
+    );
     let (_, num_quotient_chunks) = checked_log_size_sum(log_num_quotient_chunks, config.is_zk())
         .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
             air: None,
