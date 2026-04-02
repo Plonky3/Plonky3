@@ -1,4 +1,3 @@
-use alloc::vec;
 use alloc::vec::Vec;
 use core::array;
 use core::fmt::Debug;
@@ -547,24 +546,48 @@ where
     #[allow(clippy::suspicious_arithmetic_impl)]
     #[inline]
     fn div(self, rhs: Self) -> Self {
-        let mut rhs_scalars = Vec::with_capacity(PF::WIDTH);
-        for lane in 0..PF::WIDTH {
-            rhs_scalars.push(BinomialExtensionField::<F, D>::new(array::from_fn(|i| {
-                rhs.value[i].as_slice()[lane]
-            })));
-        }
-
-        let mut rhs_inv_scalars = vec![BinomialExtensionField::<F, D>::ZERO; PF::WIDTH];
-        crate::batch_multiplicative_inverse_general(
-            rhs_scalars.as_slice(),
-            rhs_inv_scalars.as_mut_slice(),
-            |x| x.inverse(),
-        );
-
         let mut rhs_inv = Self::default();
-        for (lane, inv_lane) in rhs_inv_scalars.iter().copied().enumerate().take(PF::WIDTH) {
+        // Montgomery's trick over packed lanes without heap allocation.
+        if PF::WIDTH > 0 {
+            let one = BinomialExtensionField::<F, D>::ONE;
             for i in 0..D {
-                rhs_inv.value[i].as_slice_mut()[lane] = inv_lane.value[i];
+                rhs_inv.value[i].as_slice_mut()[0] = one.value[i];
+            }
+
+            for lane in 1..PF::WIDTH {
+                let prev_prefix = BinomialExtensionField::<F, D>::new(array::from_fn(|i| {
+                    rhs_inv.value[i].as_slice()[lane - 1]
+                }));
+                let rhs_prev = BinomialExtensionField::<F, D>::new(array::from_fn(|i| {
+                    rhs.value[i].as_slice()[lane - 1]
+                }));
+                let prefix = prev_prefix * rhs_prev;
+                for i in 0..D {
+                    rhs_inv.value[i].as_slice_mut()[lane] = prefix.value[i];
+                }
+            }
+
+            let prefix_last = BinomialExtensionField::<F, D>::new(array::from_fn(|i| {
+                rhs_inv.value[i].as_slice()[PF::WIDTH - 1]
+            }));
+            let rhs_last = BinomialExtensionField::<F, D>::new(array::from_fn(|i| {
+                rhs.value[i].as_slice()[PF::WIDTH - 1]
+            }));
+            let mut suffix_inv = (prefix_last * rhs_last).inverse();
+
+            for lane in (0..PF::WIDTH).rev() {
+                let prefix = BinomialExtensionField::<F, D>::new(array::from_fn(|i| {
+                    rhs_inv.value[i].as_slice()[lane]
+                }));
+                let inv_lane = prefix * suffix_inv;
+                for i in 0..D {
+                    rhs_inv.value[i].as_slice_mut()[lane] = inv_lane.value[i];
+                }
+
+                let rhs_lane = BinomialExtensionField::<F, D>::new(array::from_fn(|i| {
+                    rhs.value[i].as_slice()[lane]
+                }));
+                suffix_inv *= rhs_lane;
             }
         }
 
