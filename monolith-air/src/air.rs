@@ -46,7 +46,7 @@ use core::borrow::Borrow;
 
 use p3_air::utils::pack_bits_le;
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
-use p3_field::{PrimeCharacteristicRing, PrimeField32};
+use p3_field::{PrimeCharacteristicRing, PrimeField64};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_monolith::MonolithBars;
 use p3_poseidon1::external::mds_multiply;
@@ -211,7 +211,7 @@ impl<
         extra_capacity_bits: usize,
     ) -> RowMajorMatrix<F>
     where
-        F: PrimeField32,
+        F: PrimeField64,
         StandardUniform: Distribution<[F; WIDTH]>,
     {
         // Deterministic PRNG for reproducible test inputs.
