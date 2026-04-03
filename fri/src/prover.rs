@@ -58,7 +58,8 @@ where
     Challenge: ExtensionField<Val>,
     InputMmcs: Mmcs<Val>,
     FriMmcs: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<FriMmcs::Commitment>,
+    Challenger:
+        FieldChallenger<Val> + GrindingChallenger + for<'a> CanObserve<&'a FriMmcs::Commitment>,
     Folding: FriFoldingStrategy<Val, Challenge, InputProof = Vec<BatchOpening<Val, InputMmcs>>>,
 {
     assert!(!inputs.is_empty());
@@ -175,7 +176,7 @@ where
     Val: TwoAdicField,
     Challenge: ExtensionField<Val>,
     M: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
+    Challenger: FieldChallenger<Val> + GrindingChallenger + for<'a> CanObserve<&'a M::Commitment>,
     Folding: FriFoldingStrategy<Val, Challenge>,
 {
     let mut inputs_iter = inputs.into_iter().peekable();
@@ -207,8 +208,8 @@ where
 
         // Commit to these evaluations and observe the commitment.
         let (commit, prover_data) = params.mmcs.commit_matrix(leaves);
-        challenger.observe(commit.clone());
         commits.push(commit);
+        challenger.observe(commits.last().unwrap());
 
         // Produce a proof of work witness after observing the commitment and
         // before the Fiat-Shamir batching challenge.

@@ -74,8 +74,10 @@ where
     InputMmcs: Mmcs<Val, Proof: Sync, Error: Sync>,
     FriMmcs: Mmcs<Challenge>,
     Challenge: TwoAdicField + ExtensionField<Val>,
-    Challenger:
-        FieldChallenger<Val> + CanObserve<FriMmcs::Commitment> + GrindingChallenger<Witness = Val>,
+    Challenger: FieldChallenger<Val>
+        + CanObserve<FriMmcs::Commitment>
+        + for<'a> CanObserve<&'a FriMmcs::Commitment>
+        + GrindingChallenger<Witness = Val>,
     R: Rng + Send + Sync,
 {
     type Domain = TwoAdicMultiplicativeCoset<Val>;
