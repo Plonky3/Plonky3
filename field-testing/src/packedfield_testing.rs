@@ -233,15 +233,29 @@ where
     }
 }
 
+/// Verify packed binomial extension division against scalar reference results.
+///
+/// Tests four operations:
+/// - Packed / packed (lane-wise division via Montgomery's trick)
+/// - Packed /= packed (in-place variant)
+/// - Packed / scalar (broadcast scalar inverse, then multiply)
+/// - Packed /= scalar (in-place variant)
+///
+/// Each is checked by extracting individual SIMD lanes and comparing
+/// against the equivalent scalar division.
 pub fn test_packed_binomial_extension_division<F, const D: usize>()
 where
     F: BinomiallyExtendable<D>,
     StandardUniform: Distribution<BinomialExtensionField<F, D>>,
 {
+    // Deterministic RNG for reproducible test failures.
     let mut rng = SmallRng::seed_from_u64(0x04dd6059d9d02758);
+    // Number of SIMD lanes in the packed representation.
     let width = F::Packing::WIDTH;
 
+    // Generate one random extension field element per lane for the numerator.
     let numerators: Vec<BinomialExtensionField<F, D>> = (0..width).map(|_| rng.random()).collect();
+    // Rejection-sample non-zero elements for the denominator (zero is not invertible).
     let mut sample_nonzero = || loop {
         let x: BinomialExtensionField<F, D> = rng.random();
         if !x.is_zero() {
@@ -251,9 +265,14 @@ where
     let denominators: Vec<BinomialExtensionField<F, D>> =
         (0..width).map(|_| sample_nonzero()).collect();
 
+    // Pack the scalar vectors into the SoA packed representation.
     let packed_num = PackedBinomialExtensionField::<F, F::Packing, D>::from_ext_slice(&numerators);
     let packed_den =
         PackedBinomialExtensionField::<F, F::Packing, D>::from_ext_slice(&denominators);
+
+    // Helper closure: extract a single extension field element from a given SIMD lane.
+    // Reads the lane-th scalar from each of the D packed coefficient arrays,
+    // then reassembles them into a scalar extension field element.
     let extract_lane = |x: &PackedBinomialExtensionField<F, F::Packing, D>, lane: usize| {
         BinomialExtensionField::<F, D>::new(core::array::from_fn(|i| {
             <PackedBinomialExtensionField<F, F::Packing, D> as BasedVectorSpace<F::Packing>>::as_basis_coefficients_slice(x)[i]
@@ -261,6 +280,8 @@ where
         }))
     };
 
+    // Test 1: packed / packed division.
+    // Each lane of the result must equal the scalar quotient of the corresponding lane inputs.
     let quot = packed_num / packed_den;
     for lane in 0..width {
         assert_eq!(
@@ -270,6 +291,8 @@ where
         );
     }
 
+    // Test 2: packed /= packed (in-place assignment).
+    // Must produce the same result as the non-assignment variant above.
     let mut quot_assign = packed_num;
     quot_assign /= packed_den;
     for lane in 0..width {
@@ -280,6 +303,8 @@ where
         );
     }
 
+    // Test 3: packed / scalar (broadcast division).
+    // Divides every lane by the same scalar extension field element.
     let scalar_den = sample_nonzero();
     let quot_scalar = packed_num / scalar_den;
     for (lane, numerator) in numerators.iter().enumerate() {
@@ -290,6 +315,8 @@ where
         );
     }
 
+    // Test 4: packed /= scalar (in-place broadcast division).
+    // Must produce the same result as the non-assignment variant above.
     let mut quot_scalar_assign = packed_num;
     quot_scalar_assign /= scalar_den;
     for lane in 0..width {
