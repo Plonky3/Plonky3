@@ -136,7 +136,6 @@ impl<const WIDTH: usize> PartialRoundLayerConstructor<Mersenne31, WIDTH>
     }
 }
 
-/// Packed AVX2 path: S-box on `state[0]` only, sparse matmul via scalar constants.
 impl<const WIDTH: usize> PartialRoundLayer<PackedMersenne31AVX2, WIDTH, 5>
     for Poseidon1InternalLayerMersenne31<WIDTH>
 {
