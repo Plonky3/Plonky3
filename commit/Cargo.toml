@@ -13,6 +13,7 @@ categories.workspace = true
 p3-field.workspace = true
 p3-interpolation.workspace = true
 p3-matrix.workspace = true
+p3-multilinear-util.workspace = true
 p3-util.workspace = true
 
 itertools.workspace = true
