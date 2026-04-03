@@ -84,7 +84,6 @@ where
     }
 }
 
-/// Scalar fallback: standard AddRC -> S-box -> MDS on `Mersenne31` elements.
 impl<const WIDTH: usize> FullRoundLayer<Mersenne31, WIDTH, 5>
     for Poseidon1ExternalLayerMersenne31<WIDTH>
 where
