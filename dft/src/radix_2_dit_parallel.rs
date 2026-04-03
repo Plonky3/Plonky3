@@ -418,23 +418,41 @@ fn second_half<F: Field>(
         .enumerate()
         .for_each(|(thread, mut submat)| {
             let mut backwards = false;
-            let mut scale_applied = false;
-            for layer in mid..log_h {
-                let first_block = thread << (layer - mid);
+            if let Some(scale) = scale {
+                // Fold the scale into the first butterfly layer to avoid a separate
+                // memory pass. This merges the O(N) scaling step into the first O(N)
+                // butterfly pass.
+                let mut scale_applied = false;
+                for layer in mid..log_h {
+                    let first_block = thread << (layer - mid);
+                    if !scale_applied {
+                        scale_applied = true;
+                        dit_layer_rev_scaled(
+                            &mut submat,
+                            log_h,
+                            layer,
+                            twiddles_rev[first_block..].iter().copied(),
+                            backwards,
+                            Some(scale),
+                        );
+                    } else {
+                        dit_layer_rev(
+                            &mut submat,
+                            log_h,
+                            layer,
+                            twiddles_rev[first_block..].iter().copied(),
+                            backwards,
+                        );
+                    }
+                    backwards = !backwards;
+                }
+                // Handle case where there are no layers in the second half (mid == log_h).
                 if !scale_applied {
-                    // Fold the scale into the first butterfly layer to avoid a separate
-                    // memory pass. This merges the O(N) scaling step into the first O(N)
-                    // butterfly pass.
-                    scale_applied = true;
-                    dit_layer_rev_scaled(
-                        &mut submat,
-                        log_h,
-                        layer,
-                        twiddles_rev[first_block..].iter().copied(),
-                        backwards,
-                        scale,
-                    );
-                } else {
+                    submat.scale(scale);
+                }
+            } else {
+                for layer in mid..log_h {
+                    let first_block = thread << (layer - mid);
                     dit_layer_rev(
                         &mut submat,
                         log_h,
@@ -442,13 +460,8 @@ fn second_half<F: Field>(
                         twiddles_rev[first_block..].iter().copied(),
                         backwards,
                     );
+                    backwards = !backwards;
                 }
-                backwards = !backwards;
-            }
-            // Handle case where there are no layers in the second half (mid == log_h).
-            // In that case, we still need to apply the scale.
-            if !scale_applied && let Some(s) = scale {
-                submat.scale(s);
             }
         });
 }
