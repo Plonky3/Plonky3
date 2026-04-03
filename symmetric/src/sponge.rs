@@ -33,7 +33,11 @@ where
     where
         I: IntoIterator<Item = T>,
     {
-        // static_assert(RATE < WIDTH)
+        const {
+            assert!(RATE > 0, "RATE must be > 0");
+            assert!(RATE < WIDTH, "RATE must be < WIDTH");
+            assert!(OUT <= WIDTH, "OUT must be <= WIDTH");
+        }
         let mut state = [T::default(); WIDTH];
         let mut input = input.into_iter();
 
@@ -106,6 +110,11 @@ where
     where
         I: IntoIterator<Item = F>,
     {
+        const {
+            assert!(RATE > 0, "RATE must be > 0");
+            assert!(RATE < WIDTH, "RATE must be < WIDTH");
+            assert!(OUT <= WIDTH, "OUT must be <= WIDTH");
+        }
         let mut state = [PF::default(); WIDTH];
         for block_chunk in &input.into_iter().chunks(RATE) {
             for (chunk_id, chunk) in (&block_chunk.chunks(self.num_f_elms))

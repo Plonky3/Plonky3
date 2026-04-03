@@ -49,6 +49,15 @@ impl<MP: MontyParameters> MontyField31<MP> {
     /// Any `u32` value is accepted and automatically converted to Montgomery form.
     #[inline(always)]
     pub const fn new(value: u32) -> Self {
+        const {
+            assert!(MP::PRIME % 2 == 1, "PRIME must be odd");
+            assert!(MP::PRIME < (1 << 31), "PRIME must be a 31-bit prime");
+            assert!(MP::MONTY_BITS == 32, "MONTY_BITS must be 32");
+            assert!(
+                MP::PRIME.wrapping_mul(MP::MONTY_MU) == 1,
+                "MONTY_MU must satisfy PRIME * MONTY_MU ≡ 1 (mod 2^32)"
+            );
+        }
         Self {
             value: to_monty::<MP>(value),
             _phantom: PhantomData,
@@ -651,6 +660,18 @@ impl<FP: FieldParameters> PrimeField32 for MontyField31<FP> {
 impl<FP: FieldParameters + TwoAdicData> TwoAdicField for MontyField31<FP> {
     const TWO_ADICITY: usize = FP::TWO_ADICITY;
     fn two_adic_generator(bits: usize) -> Self {
+        const {
+            // Verify that 2^TWO_ADICITY divides PRIME - 1.
+            assert!(
+                (FP::PRIME as u64 - 1).is_multiple_of(1u64 << FP::TWO_ADICITY),
+                "2^TWO_ADICITY must divide PRIME - 1"
+            );
+            // Verify maximality: 2^(TWO_ADICITY+1) must NOT divide PRIME - 1.
+            assert!(
+                ((FP::PRIME as u64 - 1) >> FP::TWO_ADICITY) % 2 == 1,
+                "TWO_ADICITY must be maximal"
+            );
+        }
         assert!(bits <= Self::TWO_ADICITY);
         FP::TWO_ADIC_GENERATORS.as_ref()[bits]
     }
