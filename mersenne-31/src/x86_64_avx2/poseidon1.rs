@@ -69,7 +69,6 @@ fn full_rounds_packed<const WIDTH: usize>(
     }
 }
 
-/// Packed AVX2 path: fused AddRC + S-box with pre-packed negative-form constants.
 impl<const WIDTH: usize> FullRoundLayer<PackedMersenne31AVX2, WIDTH, 5>
     for Poseidon1ExternalLayerMersenne31<WIDTH>
 where
