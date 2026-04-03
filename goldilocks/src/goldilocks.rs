@@ -370,9 +370,6 @@ impl Field for Goldilocks {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
     type Packing = crate::PackedGoldilocksAVX512;
 
-    #[cfg(target_arch = "aarch64")]
-    type Packing = crate::PackedGoldilocksNeon;
-
     #[cfg(not(any(
         all(
             target_arch = "x86_64",
@@ -380,7 +377,6 @@ impl Field for Goldilocks {
             not(target_feature = "avx512f")
         ),
         all(target_arch = "x86_64", target_feature = "avx512f"),
-        target_arch = "aarch64",
     )))]
     type Packing = Self;
 
