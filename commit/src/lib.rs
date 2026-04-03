@@ -9,6 +9,7 @@ mod domain;
 mod mmcs;
 mod pcs;
 mod periodic;
+pub mod soundness;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod testing;
@@ -18,3 +19,4 @@ pub use domain::*;
 pub use mmcs::*;
 pub use pcs::*;
 pub use periodic::*;
+pub use soundness::SecurityAssumption;

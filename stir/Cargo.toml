@@ -1,0 +1,48 @@
+[package]
+name = "p3-stir"
+description = "An implementation of the STIR (Reed-Solomon Proximity Testing with Fewer Queries) polynomial commitment scheme."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+p3-challenger.workspace = true
+p3-commit.workspace = true
+p3-dft.workspace = true
+p3-field.workspace = true
+p3-interpolation.workspace = true
+p3-matrix.workspace = true
+p3-maybe-rayon.workspace = true
+p3-util.workspace = true
+
+itertools.workspace = true
+libm.workspace = true
+serde = { workspace = true, features = ["derive", "alloc"] }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+p3-baby-bear = { path = "../baby-bear" }
+p3-goldilocks = { path = "../goldilocks" }
+p3-koala-bear = { path = "../koala-bear" }
+p3-keccak = { path = "../keccak" }
+p3-merkle-tree = { path = "../merkle-tree" }
+p3-symmetric = { path = "../symmetric" }
+p3-dft = { path = "../dft" }
+
+criterion.workspace = true
+rand = { workspace = true, features = ["std"] }
+
+[[bench]]
+name = "stir"
+harness = false
+
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
+[lints]
+workspace = true
