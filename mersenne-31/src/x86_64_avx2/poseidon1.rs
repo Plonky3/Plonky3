@@ -1,20 +1,4 @@
 //! AVX2-optimized Poseidon1 permutation layers for Mersenne31.
-//!
-//! Provides [`Poseidon1ExternalLayerMersenne31`] (full rounds) and
-//! [`Poseidon1InternalLayerMersenne31`] (partial rounds), implementing
-//! [`FullRoundLayer`] and [`PartialRoundLayer`] for [`PackedMersenne31AVX2`].
-//!
-//! # Optimization Strategy
-//!
-//! **Full rounds** — round constants are pre-packed into `__m256i` AVX2
-//! vectors in negative form ({-P, ..., 0}) at construction time. Each full
-//! round fuses the constant addition and the x^5 S-box into a single
-//! [`add_rc_and_sbox`] call, then applies the MDS permutation.
-//!
-//! **Partial rounds** — the sparse matrix decomposition from the Poseidon
-//! paper (Appendix B) is used with scalar `Mersenne31` constants. The
-//! S-box is applied only to `state[0]`; the remaining state elements are
-//! updated via the cheap sparse matrix–vector product ([`cheap_matmul`]).
 
 use alloc::vec::Vec;
 use core::arch::x86_64::__m256i;
