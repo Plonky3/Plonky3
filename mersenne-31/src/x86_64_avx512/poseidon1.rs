@@ -171,7 +171,6 @@ impl<const WIDTH: usize> PartialRoundLayer<PackedMersenne31AVX512, WIDTH, 5>
     }
 }
 
-/// Scalar fallback: delegates to the generic partial-round implementation.
 impl<const WIDTH: usize> PartialRoundLayer<Mersenne31, WIDTH, 5>
     for Poseidon1InternalLayerMersenne31<WIDTH>
 {
