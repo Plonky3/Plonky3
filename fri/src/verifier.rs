@@ -44,12 +44,6 @@ where
     FinalPolyLengthMismatch { expected: usize, got: usize },
     #[error("query proof count mismatch: expected {expected}, got {got}")]
     QueryProofCountMismatch { expected: usize, got: usize },
-    #[error("query {query}: commit-phase fold data count mismatch: expected {expected}, got {got}")]
-    QueryCommitPhaseDataCountMismatch {
-        query: usize,
-        expected: usize,
-        got: usize,
-    },
     #[error("missing initial reduced opening at log height {expected}")]
     MissingInitialReducedOpening { expected: usize },
     #[error("initial reduced opening height mismatch: expected {expected}, got {got}")]
@@ -243,13 +237,10 @@ where
     // The log of the final domain size.
     let log_final_height = params.log_blowup + params.log_final_poly_len;
 
-    for (
-        query,
-        QueryProof {
-            input_proof,
-            commit_phase_openings,
-        },
-    ) in proof.query_proofs.iter().enumerate()
+    for QueryProof {
+        input_proof,
+        commit_phase_openings,
+    } in proof.query_proofs.iter()
     {
         // For each query proof, we start by generating the random index.
         let index =
@@ -273,14 +264,6 @@ where
 
         // If we queried extra bits, shift them off now.
         let mut domain_index = index >> folding.extra_query_index_bits();
-
-        if commit_phase_openings.len() != proof.commit_phase_commits.len() {
-            return Err(FriError::QueryCommitPhaseDataCountMismatch {
-                query,
-                expected: proof.commit_phase_commits.len(),
-                got: commit_phase_openings.len(),
-            });
-        }
 
         let fold_data_iter = betas
             .iter()
@@ -569,6 +552,14 @@ where
             .map(|&h| index >> (log_global_max_height - log2_strict_usize(h)))
             .unwrap_or(0);
 
+        if batch_opening.opened_values.len() != mats.len() {
+            return Err(FriError::BatchOpenedValuesCountMismatch {
+                batch,
+                expected: mats.len(),
+                got: batch_opening.opened_values.len(),
+            });
+        }
+
         input_mmcs
             .verify_batch(
                 batch_commit,
@@ -577,14 +568,6 @@ where
                 batch_opening.into(),
             )
             .map_err(FriError::InputError)?;
-
-        if batch_opening.opened_values.len() != mats.len() {
-            return Err(FriError::BatchOpenedValuesCountMismatch {
-                batch,
-                expected: mats.len(),
-                got: batch_opening.opened_values.len(),
-            });
-        }
 
         // For each matrix in the commitment
         for (matrix, (mat_opening, (mat_domain, mat_points_and_values))) in batch_opening
@@ -647,4 +630,634 @@ where
         .rev()
         .map(|(log_height, (_, ro))| (log_height, ro))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::{CanSampleBits, DuplexChallenger};
+    use p3_commit::{ExtensionMmcs, Pcs};
+    use p3_dft::Radix2Dit;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_matrix::dense::RowMajorMatrix;
+    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use super::*;
+    use crate::{TwoAdicFriFolding, TwoAdicFriPcs};
+
+    type Val = BabyBear;
+    type Challenge = BinomialExtensionField<Val, 4>;
+    type Perm = Poseidon2BabyBear<16>;
+    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+    type ValMmcs =
+        MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 2, 8>;
+    type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+    type TestChallenger = DuplexChallenger<Val, Perm, 16, 8>;
+    type MyPcs = TwoAdicFriPcs<Val, Radix2Dit<Val>, ValMmcs, ChallengeMmcs>;
+    type Proof = FriProof<Challenge, ChallengeMmcs, Val, Vec<BatchOpening<Val, ValMmcs>>>;
+    type Folding =
+        TwoAdicFriFolding<Vec<BatchOpening<Val, ValMmcs>>, <ValMmcs as Mmcs<Val>>::Error>;
+
+    struct TestFixture {
+        proof: Proof,
+        fri_params: FriParameters<ChallengeMmcs>,
+        challenger: TestChallenger,
+        cwop: Vec<
+            CommitmentWithOpeningPoints<
+                Challenge,
+                <ValMmcs as Mmcs<Val>>::Commitment,
+                TwoAdicMultiplicativeCoset<Val>,
+            >,
+        >,
+        input_mmcs: ValMmcs,
+        alpha: Challenge,
+        betas: Vec<Challenge>,
+        log_global_max_height: usize,
+        log_final_height: usize,
+        first_query_index: usize,
+        first_query_ro: FriOpenings<Challenge>,
+    }
+
+    type VerifyResult = Result<
+        (),
+        FriError<<ChallengeMmcs as Mmcs<Challenge>>::Error, <ValMmcs as Mmcs<Val>>::Error>,
+    >;
+
+    impl TestFixture {
+        fn folding(&self) -> Folding {
+            TwoAdicFriFolding(core::marker::PhantomData)
+        }
+
+        fn verify(&self) -> VerifyResult {
+            let mut ch = self.challenger.clone();
+            verify_fri(
+                &self.folding(),
+                &self.fri_params,
+                &self.proof,
+                &mut ch,
+                &self.cwop,
+                &self.input_mmcs,
+            )
+        }
+
+        fn verify_with_proof(&self, proof: &Proof) -> VerifyResult {
+            let mut ch = self.challenger.clone();
+            verify_fri(
+                &self.folding(),
+                &self.fri_params,
+                proof,
+                &mut ch,
+                &self.cwop,
+                &self.input_mmcs,
+            )
+        }
+    }
+
+    fn make_test_fixture() -> TestFixture {
+        let mut rng = SmallRng::seed_from_u64(12345);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm.clone());
+        let input_mmcs = ValMmcs::new(hash.clone(), compress.clone(), 0);
+        let fri_mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress, 0));
+
+        let fri_params = FriParameters {
+            log_blowup: 1,
+            log_final_poly_len: 0,
+            max_log_arity: 1,
+            num_queries: 2,
+            commit_proof_of_work_bits: 0,
+            query_proof_of_work_bits: 0,
+            mmcs: fri_mmcs,
+        };
+
+        let dft = Radix2Dit::default();
+        let pcs = MyPcs::new(dft, input_mmcs.clone(), fri_params.clone());
+
+        // Two polynomials of different sizes in one batch.
+        let poly_log_sizes: [u8; 2] = [3, 4];
+        let val_sizes: Vec<Val> = poly_log_sizes.iter().map(|&i| Val::from_u8(i)).collect();
+
+        // -- prover --
+        let mut p_challenger = TestChallenger::new(perm.clone());
+        p_challenger.observe_slice(&val_sizes);
+
+        let evaluations: Vec<_> = poly_log_sizes
+            .iter()
+            .map(|&deg_bits| {
+                let deg = 1usize << deg_bits;
+                (
+                    <MyPcs as Pcs<Challenge, TestChallenger>>::natural_domain_for_degree(&pcs, deg),
+                    RowMajorMatrix::<Val>::rand_nonzero(&mut rng, deg, 2),
+                )
+            })
+            .collect();
+
+        let (commitment, prover_data) =
+            <MyPcs as Pcs<Challenge, TestChallenger>>::commit(&pcs, evaluations);
+        p_challenger.observe(&commitment);
+        let zeta: Challenge = p_challenger.sample_algebra_element();
+
+        let open_data = vec![(&prover_data, vec![vec![zeta]; poly_log_sizes.len()])];
+        let (opened_values, proof) = pcs.open(open_data, &mut p_challenger);
+
+        // -- verifier challenger up to the verify_fri entry point --
+        let mut v_ch = TestChallenger::new(perm);
+        v_ch.observe_slice(&val_sizes);
+        v_ch.observe(&commitment);
+        let v_zeta: Challenge = v_ch.sample_algebra_element();
+        debug_assert_eq!(zeta, v_zeta);
+
+        let cwop: Vec<
+            CommitmentWithOpeningPoints<
+                Challenge,
+                <ValMmcs as Mmcs<Val>>::Commitment,
+                TwoAdicMultiplicativeCoset<Val>,
+            >,
+        > = vec![(
+            commitment,
+            poly_log_sizes
+                .iter()
+                .map(|&s| {
+                    <MyPcs as Pcs<Challenge, TestChallenger>>::natural_domain_for_degree(
+                        &pcs,
+                        1 << s,
+                    )
+                })
+                .zip(opened_values.into_iter().flatten().flatten())
+                .map(|(domain, value)| (domain, vec![(v_zeta, value)]))
+                .collect(),
+        )];
+
+        // Observe evaluations, matching what TwoAdicFriPcs::verify does.
+        for cwop_entry in cwop.iter() {
+            let mats = &cwop_entry.1;
+            for mat_entry in mats.iter() {
+                let points_and_values = &mat_entry.1;
+                for (_, point) in points_and_values.iter() {
+                    v_ch.observe_algebra_slice(point);
+                }
+            }
+        }
+
+        // Save the challenger state that verify_fri will receive.
+        let saved_ch = v_ch.clone();
+
+        // Replay the verify_fri preamble to extract intermediate values.
+        let alpha: Challenge = v_ch.sample_algebra_element();
+
+        let betas: Vec<Challenge> = proof
+            .commit_phase_commits
+            .iter()
+            .zip(&proof.commit_pow_witnesses)
+            .map(|(comm, witness)| {
+                v_ch.observe(comm.clone());
+                assert!(v_ch.check_witness(0, *witness));
+                v_ch.sample_algebra_element()
+            })
+            .collect();
+
+        v_ch.observe_algebra_slice(&proof.final_poly);
+
+        let log_arities: Vec<usize> = proof.query_proofs[0]
+            .commit_phase_openings
+            .iter()
+            .map(|o| o.log_arity as usize)
+            .collect();
+        for &la in &log_arities {
+            v_ch.observe(Val::from_usize(la));
+        }
+        assert!(v_ch.check_witness(0, proof.query_pow_witness));
+
+        let total_log_reduction: usize = log_arities.iter().sum();
+        let log_global_max_height =
+            total_log_reduction + fri_params.log_blowup + fri_params.log_final_poly_len;
+        let log_final_height = fri_params.log_blowup + fri_params.log_final_poly_len;
+
+        let first_query_index = v_ch.sample_bits(log_global_max_height);
+
+        let first_query_ro = open_input(
+            &fri_params,
+            log_global_max_height,
+            first_query_index,
+            &proof.query_proofs[0].input_proof,
+            alpha,
+            &input_mmcs,
+            &cwop,
+        )
+        .expect("open_input must succeed on a valid proof");
+
+        TestFixture {
+            proof,
+            fri_params,
+            challenger: saved_ch,
+            cwop,
+            input_mmcs,
+            alpha,
+            betas,
+            log_global_max_height,
+            log_final_height,
+            first_query_index,
+            first_query_ro,
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // verify_fri: top-level proof shape checks
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn query_commit_phase_openings_count_mismatch() {
+        let fix = make_test_fixture();
+        let mut proof = fix.proof.clone();
+
+        // Drop one commit-phase opening from the first query so its
+        // count diverges from the number of commit-phase commitments.
+        let original_len = proof.query_proofs[0].commit_phase_openings.len();
+        proof.query_proofs[0].commit_phase_openings.pop();
+
+        let err = fix.verify_with_proof(&proof).unwrap_err();
+        match err {
+            FriError::QueryCommitPhaseOpeningsCountMismatch {
+                query,
+                expected,
+                got,
+            } => {
+                assert_eq!(query, 0);
+                assert_eq!(expected, original_len);
+                assert_eq!(got, original_len - 1);
+            }
+            other => panic!("expected QueryCommitPhaseOpeningsCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn query_log_arities_mismatch() {
+        let fix = make_test_fixture();
+        let mut proof = fix.proof.clone();
+
+        // Flip the log_arity of the first opening in the second query
+        // so the arity schedule diverges from query 0.
+        let original = proof.query_proofs[1].commit_phase_openings[0].log_arity;
+        proof.query_proofs[1].commit_phase_openings[0].log_arity = original + 1;
+
+        let err = fix.verify_with_proof(&proof).unwrap_err();
+        match err {
+            FriError::QueryLogAritiesMismatch {
+                query, expected, ..
+            } => {
+                assert_eq!(query, 1);
+                assert_eq!(expected[0], original as usize);
+            }
+            other => panic!("expected QueryLogAritiesMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn commit_pow_witness_count_mismatch() {
+        let fix = make_test_fixture();
+        let mut proof = fix.proof.clone();
+
+        // Add an extra PoW witness so the count exceeds the number
+        // of commit-phase commitments.
+        let expected_len = proof.commit_phase_commits.len();
+        proof.commit_pow_witnesses.push(Val::ZERO);
+
+        let err = fix.verify_with_proof(&proof).unwrap_err();
+        match err {
+            FriError::CommitPowWitnessCountMismatch { expected, got } => {
+                assert_eq!(expected, expected_len);
+                assert_eq!(got, expected_len + 1);
+            }
+            other => panic!("expected CommitPowWitnessCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn final_poly_length_mismatch() {
+        let fix = make_test_fixture();
+        let mut proof = fix.proof.clone();
+
+        // Append a spurious coefficient so the final polynomial
+        // exceeds the length dictated by the parameters.
+        let expected_len = fix.fri_params.final_poly_len();
+        proof.final_poly.push(Challenge::ZERO);
+
+        let err = fix.verify_with_proof(&proof).unwrap_err();
+        match err {
+            FriError::FinalPolyLengthMismatch { expected, got } => {
+                assert_eq!(expected, expected_len);
+                assert_eq!(got, expected_len + 1);
+            }
+            other => panic!("expected FinalPolyLengthMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn query_proof_count_mismatch() {
+        let fix = make_test_fixture();
+        let mut proof = fix.proof.clone();
+
+        // Remove one query proof so the count falls below num_queries.
+        proof.query_proofs.pop();
+
+        let err = fix.verify_with_proof(&proof).unwrap_err();
+        match err {
+            FriError::QueryProofCountMismatch { expected, got } => {
+                assert_eq!(expected, fix.fri_params.num_queries);
+                assert_eq!(got, fix.fri_params.num_queries - 1);
+            }
+            other => panic!("expected QueryProofCountMismatch, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // verify_query: fold-chain checks (called directly)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn missing_initial_reduced_opening() {
+        let fix = make_test_fixture();
+
+        // An empty reduced_openings vector means no polynomial was
+        // committed; the fold chain cannot start.
+        let betas: Vec<Challenge> = vec![];
+        let commits: Vec<<ChallengeMmcs as Mmcs<Challenge>>::Commitment> = vec![];
+        let openings: Vec<CommitPhaseProofStep<Challenge, ChallengeMmcs>> = vec![];
+        let fold_data = betas.iter().zip(commits.iter()).zip(openings.iter());
+
+        let mut idx = 0usize;
+        let err = verify_query::<Folding, Val, Challenge, ChallengeMmcs>(
+            &fix.folding(),
+            &fix.fri_params,
+            &mut idx,
+            fold_data,
+            vec![],
+            fix.log_global_max_height,
+            fix.log_final_height,
+        )
+        .unwrap_err();
+
+        match err {
+            FriError::MissingInitialReducedOpening { expected } => {
+                assert_eq!(expected, fix.log_global_max_height);
+            }
+            other => panic!("expected MissingInitialReducedOpening, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn initial_reduced_opening_height_mismatch() {
+        let fix = make_test_fixture();
+
+        // Provide a reduced opening whose log-height does not match
+        // the global maximum, so the fold chain rejects it.
+        let wrong_height = fix.log_global_max_height - 1;
+        let ro = vec![(wrong_height, Challenge::ONE)];
+
+        let betas: Vec<Challenge> = vec![];
+        let commits: Vec<<ChallengeMmcs as Mmcs<Challenge>>::Commitment> = vec![];
+        let openings: Vec<CommitPhaseProofStep<Challenge, ChallengeMmcs>> = vec![];
+        let fold_data = betas.iter().zip(commits.iter()).zip(openings.iter());
+
+        let mut idx = 0usize;
+        let err = verify_query::<Folding, Val, Challenge, ChallengeMmcs>(
+            &fix.folding(),
+            &fix.fri_params,
+            &mut idx,
+            fold_data,
+            ro,
+            fix.log_global_max_height,
+            fix.log_final_height,
+        )
+        .unwrap_err();
+
+        match err {
+            FriError::InitialReducedOpeningHeightMismatch { expected, got } => {
+                assert_eq!(expected, fix.log_global_max_height);
+                assert_eq!(got, wrong_height);
+            }
+            other => panic!("expected InitialReducedOpeningHeightMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sibling_values_length_mismatch() {
+        let fix = make_test_fixture();
+        let mut proof = fix.proof.clone();
+
+        // Add an extra sibling value to the first commit-phase
+        // opening of every query so the arity check fails.
+        for qp in &mut proof.query_proofs {
+            qp.commit_phase_openings[0]
+                .sibling_values
+                .push(Challenge::ZERO);
+        }
+
+        let err = fix.verify_with_proof(&proof).unwrap_err();
+        match err {
+            FriError::SiblingValuesLengthMismatch {
+                round,
+                expected,
+                got,
+            } => {
+                assert_eq!(round, 0);
+                // Binary folding: arity 2, expected siblings = 1.
+                assert_eq!(expected, 1);
+                assert_eq!(got, 2);
+            }
+            other => panic!("expected SiblingValuesLengthMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn final_fold_height_mismatch() {
+        let fix = make_test_fixture();
+
+        // Use the real fold data for the first query but drop the
+        // last round so folding stops one step early.
+        let n = fix.proof.commit_phase_commits.len();
+        assert!(n >= 2, "need at least two fold rounds");
+
+        let truncated_betas = &fix.betas[..n - 1];
+        let truncated_commits = &fix.proof.commit_phase_commits[..n - 1];
+        let truncated_openings = &fix.proof.query_proofs[0].commit_phase_openings[..n - 1];
+
+        let fold_data = truncated_betas
+            .iter()
+            .zip(truncated_commits.iter())
+            .zip(truncated_openings.iter());
+
+        let mut idx = fix.first_query_index;
+        let err = verify_query::<Folding, Val, Challenge, ChallengeMmcs>(
+            &fix.folding(),
+            &fix.fri_params,
+            &mut idx,
+            fold_data,
+            fix.first_query_ro.clone(),
+            fix.log_global_max_height,
+            fix.log_final_height,
+        )
+        .unwrap_err();
+
+        match err {
+            FriError::FinalFoldHeightMismatch { expected, got } => {
+                assert_eq!(expected, fix.log_final_height);
+                // Stopped one binary fold early.
+                assert_eq!(got, fix.log_final_height + 1);
+            }
+            other => panic!("expected FinalFoldHeightMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unconsumed_reduced_openings() {
+        let fix = make_test_fixture();
+
+        // Append an extra reduced opening at a height below the
+        // final fold height so no fold round ever consumes it.
+        let mut ro = fix.first_query_ro.clone();
+        ro.push((0, Challenge::ONE));
+
+        let fold_data = fix
+            .betas
+            .iter()
+            .zip(fix.proof.commit_phase_commits.iter())
+            .zip(fix.proof.query_proofs[0].commit_phase_openings.iter());
+
+        let mut idx = fix.first_query_index;
+        let err = verify_query::<Folding, Val, Challenge, ChallengeMmcs>(
+            &fix.folding(),
+            &fix.fri_params,
+            &mut idx,
+            fold_data,
+            ro,
+            fix.log_global_max_height,
+            fix.log_final_height,
+        )
+        .unwrap_err();
+
+        match err {
+            FriError::UnconsumedReducedOpenings {
+                next_log_height,
+                remaining,
+            } => {
+                assert_eq!(next_log_height, 0);
+                assert_eq!(remaining, 1);
+            }
+            other => panic!("expected UnconsumedReducedOpenings, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // open_input: input opening shape checks (called directly)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn input_proof_batch_count_mismatch() {
+        let fix = make_test_fixture();
+
+        // Pass an empty input proof vector while the verifier
+        // expects one batch, creating a count mismatch.
+        let empty_input: Vec<BatchOpening<Val, ValMmcs>> = vec![];
+        let err = open_input(
+            &fix.fri_params,
+            fix.log_global_max_height,
+            0,
+            &empty_input,
+            fix.alpha,
+            &fix.input_mmcs,
+            &fix.cwop,
+        )
+        .unwrap_err();
+
+        match err {
+            FriError::InputProofBatchCountMismatch { expected, got } => {
+                assert_eq!(expected, fix.cwop.len());
+                assert_eq!(got, 0);
+            }
+            other => panic!("expected InputProofBatchCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn batch_opened_values_count_mismatch() {
+        let fix = make_test_fixture();
+        let mut input_proof = fix.proof.query_proofs[0].input_proof.clone();
+
+        // Remove one matrix opening from the first batch so the
+        // count diverges from the number of committed matrices.
+        let original_len = input_proof[0].opened_values.len();
+        input_proof[0].opened_values.pop();
+
+        let err = open_input(
+            &fix.fri_params,
+            fix.log_global_max_height,
+            fix.first_query_index,
+            &input_proof,
+            fix.alpha,
+            &fix.input_mmcs,
+            &fix.cwop,
+        )
+        .unwrap_err();
+
+        match err {
+            FriError::BatchOpenedValuesCountMismatch {
+                batch,
+                expected,
+                got,
+            } => {
+                assert_eq!(batch, 0);
+                assert_eq!(expected, original_len);
+                assert_eq!(got, original_len - 1);
+            }
+            other => panic!("expected BatchOpenedValuesCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn point_evaluation_count_mismatch() {
+        let fix = make_test_fixture();
+        let mut cwop = fix.cwop.clone();
+
+        // Add a spurious evaluation value to the first point of
+        // the first matrix so the count exceeds the opened columns.
+        cwop[0].1[0].1[0].1.push(Challenge::ZERO);
+
+        let err = open_input(
+            &fix.fri_params,
+            fix.log_global_max_height,
+            fix.first_query_index,
+            &fix.proof.query_proofs[0].input_proof,
+            fix.alpha,
+            &fix.input_mmcs,
+            &cwop,
+        )
+        .unwrap_err();
+
+        match err {
+            FriError::PointEvaluationCountMismatch {
+                batch,
+                matrix,
+                point,
+                ..
+            } => {
+                assert_eq!(batch, 0);
+                assert_eq!(matrix, 0);
+                assert_eq!(point, 0);
+            }
+            other => panic!("expected PointEvaluationCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn valid_proof_passes() {
+        let fix = make_test_fixture();
+        fix.verify().expect("valid proof should pass verification");
+    }
 }
