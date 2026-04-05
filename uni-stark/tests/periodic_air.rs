@@ -9,7 +9,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs, create_test_fri_params_zk};
+use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
 use p3_mersenne_31::Mersenne31;
@@ -149,7 +149,7 @@ fn periodic_air_two_adic_zk_prove_verify() -> Result<(), impl Debug> {
     let val_mmcs = ValMmcs::new(hash, compress, 0, rng);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
-    let fri_params = create_test_fri_params_zk(challenge_mmcs);
+    let fri_params = FriParameters::new_testing_zk(challenge_mmcs);
     let pcs = Pcs::new(dft, val_mmcs, fri_params, 4, SmallRng::seed_from_u64(2));
     let challenger = Challenger::new(perm);
     let config = Config::new(pcs, challenger);

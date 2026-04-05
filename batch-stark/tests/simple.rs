@@ -18,7 +18,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
-use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs, create_test_fri_params};
+use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
 use p3_lookup::LookupAir;
 use p3_lookup::lookup_traits::{Direction, Kind, Lookup};
@@ -618,7 +618,7 @@ fn make_config(seed: u64) -> MyConfig {
     let val_mmcs = ValMmcs::new(hash, compress, 0);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
-    let fri_params = create_test_fri_params(challenge_mmcs, 2);
+    let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
     let pcs = MyPcs::new(dft, val_mmcs, fri_params);
     let challenger = Challenger::new(perm);
     StarkConfig::new(pcs, challenger)
@@ -657,7 +657,7 @@ fn make_config_wide(seed: u64) -> MyConfigWide {
     let val_mmcs = ValMmcsWide::new(hash, compress, 0);
     let challenge_mmcs = ChallengeMmcsWide::new(val_mmcs.clone());
     let dft = Dft::default();
-    let fri_params = create_test_fri_params(challenge_mmcs, 2);
+    let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
     let pcs = MyPcsWide::new(dft, val_mmcs, fri_params);
     let challenger = Challenger::new(perm);
     StarkConfig::new(pcs, challenger)
@@ -693,7 +693,7 @@ fn make_config_zk(seed: u64) -> MyHidingConfig {
     let val_mmcs = HidingValMmcs::new(hash, compress, 2, rng.clone());
     let challenge_mmcs = HidingChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
-    let fri_params = create_test_fri_params(challenge_mmcs, 2);
+    let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
     let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, rng);
     let challenger = Challenger::new(perm);
     StarkConfig::new(pcs, challenger)
