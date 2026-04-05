@@ -1055,15 +1055,17 @@ mod tests {
         let f = make_test_fixture();
         let mut proof = f.proof.clone();
 
-        // The QUERY phase fold chain needs a starting value: the combined
-        // evaluation of all input polynomials at the queried index.
+        // The QUERY phase fold chain needs a seed: the combined evaluation
+        // of all input polynomials at the queried index. It must live at
+        // the maximum domain height. No committed polynomials → no seed.
         //
-        // This seed lives at the maximum domain height log(|L^(0)|).
-        // Without any committed polynomials, the seed is missing and the
-        // fold chain cannot begin.
+        // Fixture state: 1 committed polynomial → 1 seed expected.
         //
-        // Mutation: clear all input proofs AND external commitment data.
-        // The input-opening step then returns an empty vector → no seed.
+        // Mutation: clear input proofs + external commitment data → no seed.
+        //
+        //     input proofs:      []   (was [batch_0])
+        //     commitment data:   []   (was [(commit, mats)])
+        //     → reduced openings = [] → fold chain has no starting value
         for qp in &mut proof.query_proofs {
             qp.input_proof = vec![];
         }
@@ -1096,17 +1098,16 @@ mod tests {
         let f = make_test_fixture();
         let mut proof = f.proof.clone();
 
-        // In each QUERY-phase fold round, the verifier reads the queried
-        // point's evaluation plus its (arity - 1) siblings from the oracle.
-        // For binary folding (arity = 2), each point has exactly 1 sibling.
+        // In each fold round the verifier reads the queried evaluation
+        // plus (arity - 1) siblings. Binary folding → arity 2 → 1 sibling.
+        // Siblings are not in the Fiat-Shamir transcript → safe to mutate.
+        //
+        // Fixture state: binary fold → expect 1 sibling per round.
         //
         // Mutation: push an extra sibling into round 0 of query 0.
         //
         //     Before: sibling_values = [s0]          (length 1 = arity - 1)
         //     After:  sibling_values = [s0, ZERO]    (length 2 = arity)
-        //
-        // Sibling values are not part of the Fiat-Shamir transcript, so
-        // this doesn't desync the challenger.
         proof.query_proofs[0].commit_phase_openings[0]
             .sibling_values
             .push(Challenge::ZERO);
@@ -1141,14 +1142,16 @@ mod tests {
         let f = make_test_fixture();
         let mut proof = f.proof.clone();
 
-        // Before folding, the verifier opens all committed input polynomials
-        // at the queried index. Each batch of polynomials requires exactly
-        // one Merkle batch-opening proof. This structural check fires before
-        // any cryptographic verification.
+        // Each batch of committed polynomials needs exactly one Merkle
+        // batch-opening proof. This check fires before any cryptographic work.
         //
         // Fixture state: 1 batch commitment → expect 1 batch opening.
         //
-        // Mutation: push an extra empty batch opening → 2 vs 1 expected.
+        // Mutation: push an extra empty batch opening.
+        //
+        //     batch openings:  [batch_0, EXTRA]
+        //     commitments:     [commit_0]
+        //     → 2 != 1 → error
         let extra_batch = BatchOpening {
             opened_values: vec![],
             opening_proof: proof.query_proofs[0].input_proof[0].opening_proof.clone(),
@@ -1179,14 +1182,16 @@ mod tests {
         let f = make_test_fixture();
         let mut proof = f.proof.clone();
 
-        // Within each batch, every committed matrix needs exactly one row of
-        // opened column values at the queried index. This structural check
-        // fires before the Merkle proof verification, catching the mismatch
-        // early as a typed error.
+        // Each committed matrix needs exactly one row of opened column
+        // values. This check fires before Merkle verification.
         //
         // Fixture state: 1 matrix per batch → expect 1 opened-values entry.
         //
-        // Mutation: pop the opened-values entry → 0 vs 1 expected.
+        // Mutation: pop the only opened-values entry.
+        //
+        //     opened_values:  []           (was [row_0])
+        //     matrices:       [matrix_0]
+        //     → 0 != 1 → error
         proof.query_proofs[0].input_proof[0].opened_values.pop();
 
         let mut challenger = f.challenger.clone();
@@ -1218,17 +1223,19 @@ mod tests {
         let f = make_test_fixture();
         let mut cwop = f.commitments_with_opening_points.clone();
 
-        // For each evaluation point z, the verifier pairs every opened
-        // column value f_i(x) with its claimed evaluation f_i(z) to form
-        // the quotient (f_i(z) - f_i(x)) / (z - x). These two vectors
-        // must have the same length.
+        // The verifier pairs opened column values f_i(x) with claimed
+        // evaluations f_i(z) to form (f_i(z) - f_i(x)) / (z - x).
+        // These two vectors must have the same length.
         //
         // Fixture state: 2 trace columns → 2 opened values, 2 claims.
         //
-        // Mutation: push an extra claim → 3 claims vs 2 opened values.
-        // This only modifies verifier-side data, not the proof, so the
-        // Merkle verification still passes. The original challenger is
-        // reused because claims are not observed into the transcript.
+        // Mutation: push an extra claim. Only touches verifier-side data,
+        // not the proof, so Merkle verification still passes. Claims are
+        // not in the transcript, so the original challenger is reused.
+        //
+        //     opened values:  [f_0(x), f_1(x)]             (length 2)
+        //     claims:         [f_0(z), f_1(z), EXTRA]      (length 3)
+        //     → 2 != 3 → error
         cwop[0].1[0].1[0].1.push(Challenge::ZERO);
 
         let mut challenger = f.challenger.clone();
@@ -1379,15 +1386,17 @@ mod tests {
         let params = make_fri_params_for_query_tests();
         let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
 
-        // When multiple polynomials of different degrees are committed,
-        // the fold chain rolls in each one at the round where the domain
-        // shrinks to that polynomial's height. After all rounds, every
-        // opening must have been consumed. Leftovers indicate openings at
-        // heights the fold schedule never visits.
+        // The fold chain rolls in each committed polynomial at the round
+        // where the domain shrinks to that polynomial's height. After all
+        // rounds, every opening must have been consumed.
+        //
+        // Fixture state: global max = final = 5 → zero fold rounds needed.
+        //
+        // Mutation: provide an extra opening at height 3 that no round visits.
         //
         //     reduced_openings = [(height=5, v1), (height=3, v2)]
-        //     global max = final = 5  → zero rounds needed → height check OK
-        //     → opening at height 3 is never consumed → error
+        //     fold rounds       = 0 → height 3 is never reached
+        //     → opening at height 3 left over → error
         let log_global_max_height = 5;
         let log_final_height = 5;
         let reduced_openings: FriOpenings<Challenge> = vec![
