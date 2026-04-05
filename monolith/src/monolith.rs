@@ -81,7 +81,7 @@ where
             assert!(WIDTH >= 8);
             assert!(WIDTH <= 24);
             assert!(WIDTH.is_multiple_of(4));
-            assert!(NUM_FULL_ROUNDS > 0, "NUM_FULL_ROUNDS must be > 0");
+            assert!(NUM_FULL_ROUNDS > 0);
         }
 
         // Derive round constants from SHAKE-128 seeded with the Monolith domain separator:

@@ -34,9 +34,9 @@ where
 {
     fn compress(&self, input: [[T; CHUNK]; N]) -> [T; CHUNK] {
         const {
-            assert!(N > 0, "N must be > 0");
-            assert!(CHUNK > 0, "CHUNK must be > 0");
-            assert!(CHUNK * N <= WIDTH, "CHUNK * N must be <= WIDTH");
+            assert!(N > 0);
+            assert!(CHUNK > 0);
+            assert!(CHUNK * N <= WIDTH);
         }
         let mut pre = [T::default(); WIDTH];
         for i in 0..N {

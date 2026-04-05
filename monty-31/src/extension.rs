@@ -87,10 +87,7 @@ where
 
     fn ext_two_adic_generator(bits: usize) -> [Self; WIDTH] {
         const {
-            assert!(
-                FP::EXT_TWO_ADICITY >= FP::TWO_ADICITY,
-                "EXT_TWO_ADICITY must be >= TWO_ADICITY"
-            );
+            assert!(FP::EXT_TWO_ADICITY >= FP::TWO_ADICITY);
         }
         assert!(bits <= Self::EXT_TWO_ADICITY);
         if bits <= FP::TWO_ADICITY {

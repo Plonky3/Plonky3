@@ -24,8 +24,8 @@ where
 {
     pub const fn new(num_rounds: usize, round_constants: Vec<F>, mds: Mds) -> Self {
         const {
-            assert!(WIDTH > 0, "WIDTH must be > 0");
-            assert!(ALPHA > 1, "ALPHA must be > 1 for a non-trivial S-box");
+            assert!(WIDTH > 0);
+            assert!(ALPHA > 1);
         }
         Self {
             num_rounds,

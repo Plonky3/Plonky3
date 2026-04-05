@@ -193,7 +193,7 @@ where
     /// optimized round constants. This is the typical entry point.
     pub fn new(raw: &Poseidon1Constants<F, WIDTH>) -> Self {
         const {
-            assert!(D > 1, "S-box degree D must be > 1");
+            assert!(D > 1);
         }
         let (full_constants, partial_constants) = raw.to_optimized();
         Self::new_from_precomputed(full_constants, partial_constants)

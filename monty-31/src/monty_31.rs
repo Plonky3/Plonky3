@@ -52,7 +52,7 @@ impl<MP: MontyParameters> MontyField31<MP> {
         const {
             assert!(MP::PRIME % 2 == 1, "PRIME must be odd");
             assert!(MP::PRIME < (1 << 31), "PRIME must be a 31-bit prime");
-            assert!(MP::MONTY_BITS == 32, "MONTY_BITS must be 32");
+            assert!(MP::MONTY_BITS == 32);
             assert!(
                 MP::PRIME.wrapping_mul(MP::MONTY_MU) == 1,
                 "MONTY_MU must satisfy PRIME * MONTY_MU ≡ 1 (mod 2^32)"
