@@ -44,12 +44,6 @@ where
     FinalPolyLengthMismatch { expected: usize, got: usize },
     #[error("query proof count mismatch: expected {expected}, got {got}")]
     QueryProofCountMismatch { expected: usize, got: usize },
-    #[error("query {query}: commit-phase fold data count mismatch: expected {expected}, got {got}")]
-    QueryCommitPhaseDataCountMismatch {
-        query: usize,
-        expected: usize,
-        got: usize,
-    },
     #[error("missing initial reduced opening at log height {expected}")]
     MissingInitialReducedOpening { expected: usize },
     #[error("initial reduced opening height mismatch: expected {expected}, got {got}")]
@@ -243,13 +237,10 @@ where
     // The log of the final domain size.
     let log_final_height = params.log_blowup + params.log_final_poly_len;
 
-    for (
-        query,
-        QueryProof {
-            input_proof,
-            commit_phase_openings,
-        },
-    ) in proof.query_proofs.iter().enumerate()
+    for QueryProof {
+        input_proof,
+        commit_phase_openings,
+    } in proof.query_proofs.iter()
     {
         // For each query proof, we start by generating the random index.
         let index =
@@ -273,14 +264,6 @@ where
 
         // If we queried extra bits, shift them off now.
         let mut domain_index = index >> folding.extra_query_index_bits();
-
-        if commit_phase_openings.len() != proof.commit_phase_commits.len() {
-            return Err(FriError::QueryCommitPhaseDataCountMismatch {
-                query,
-                expected: proof.commit_phase_commits.len(),
-                got: commit_phase_openings.len(),
-            });
-        }
 
         let fold_data_iter = betas
             .iter()
@@ -569,6 +552,14 @@ where
             .map(|&h| index >> (log_global_max_height - log2_strict_usize(h)))
             .unwrap_or(0);
 
+        if batch_opening.opened_values.len() != mats.len() {
+            return Err(FriError::BatchOpenedValuesCountMismatch {
+                batch,
+                expected: mats.len(),
+                got: batch_opening.opened_values.len(),
+            });
+        }
+
         input_mmcs
             .verify_batch(
                 batch_commit,
@@ -577,14 +568,6 @@ where
                 batch_opening.into(),
             )
             .map_err(FriError::InputError)?;
-
-        if batch_opening.opened_values.len() != mats.len() {
-            return Err(FriError::BatchOpenedValuesCountMismatch {
-                batch,
-                expected: mats.len(),
-                got: batch_opening.opened_values.len(),
-            });
-        }
 
         // For each matrix in the commitment
         for (matrix, (mat_opening, (mat_domain, mat_points_and_values))) in batch_opening
@@ -647,4 +630,801 @@ where
         .rev()
         .map(|(log_height, (_, ro))| (log_height, ro))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use core::marker::PhantomData;
+
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::DuplexChallenger;
+    use p3_commit::{BatchOpening, ExtensionMmcs, Mmcs, Pcs};
+    use p3_dft::Radix2Dit;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{Field, PrimeCharacteristicRing};
+    use p3_matrix::dense::RowMajorMatrix;
+    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use super::*;
+    use crate::{
+        CommitmentWithOpeningPoints, FriParameters, TwoAdicFriFolding, TwoAdicFriFoldingForMmcs,
+        TwoAdicFriPcs,
+    };
+
+    type Val = BabyBear;
+    type Challenge = BinomialExtensionField<Val, 4>;
+    type Perm = Poseidon2BabyBear<16>;
+    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+    type ValMmcs =
+        MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 2, 8>;
+    type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+    type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
+    type Proof = FriProof<Challenge, ChallengeMmcs, Val, Vec<BatchOpening<Val, ValMmcs>>>;
+    type Folding = TwoAdicFriFoldingForMmcs<Val, ValMmcs>;
+    type TestError =
+        FriError<<ChallengeMmcs as Mmcs<Challenge>>::Error, <ValMmcs as Mmcs<Val>>::Error>;
+
+    /// All the data needed to invoke the top-level FRI verification.
+    struct TestFixture {
+        /// Protocol parameters (blowup, arity, queries, etc.).
+        fri_params: FriParameters<ChallengeMmcs>,
+        /// Base-field commitment scheme used for input polynomials.
+        input_mmcs: ValMmcs,
+        /// A valid proof produced by a real prover run.
+        proof: Proof,
+        /// Fiat-Shamir challenger already advanced past the opened-values
+        /// observation step, ready for the verification entry point.
+        challenger: Challenger,
+        /// Commitment and opening-point data the verifier checks against.
+        commitments_with_opening_points: Vec<
+            CommitmentWithOpeningPoints<
+                Challenge,
+                <ValMmcs as Mmcs<Val>>::Commitment,
+                TwoAdicMultiplicativeCoset<Val>,
+            >,
+        >,
+    }
+
+    /// Build a deterministic, minimal test fixture.
+    ///
+    /// Commits a single 8-row, 2-column trace, opens it at one
+    /// random challenge point, and produces a valid FRI proof with:
+    /// - 2 queries (minimum for arity-consistency checks)
+    /// - binary folding (log arity 1)
+    /// - blowup factor 2
+    /// - zero proof-of-work bits
+    ///
+    /// # Proof Shape
+    ///
+    /// With degree 8 and blowup 2, the evaluation domain has 16 points.
+    /// Binary folding halves the domain each round, producing 3 COMMIT
+    /// rounds before reaching the final constant polynomial:
+    ///
+    /// ```text
+    ///     Round 0: |L^(0)| = 16  -->  |L^(1)| = 8   (commit + fold)
+    ///     Round 1: |L^(1)| = 8   -->  |L^(2)| = 4   (commit + fold)
+    ///     Round 2: |L^(2)| = 4   -->  |L^(3)| = 2   (commit + fold)
+    ///     Final:   1 coefficient (the constant polynomial)
+    /// ```
+    ///
+    /// The resulting proof contains:
+    /// - 3 commit-phase commitments (one per round)
+    /// - 3 proof-of-work witnesses (one per round)
+    /// - 2 query proofs, each with 3 commit-phase openings
+    /// - 1 final polynomial coefficient
+    ///
+    /// The challenger is advanced past the opened-values observation,
+    /// ready for the verification entry point.
+    fn make_test_fixture() -> TestFixture {
+        // Use a fixed seed so every test run is deterministic.
+        let mut rng = SmallRng::seed_from_u64(42);
+
+        // Build the permutation, hash, and compression for the Merkle tree.
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm.clone());
+
+        // - One commitment scheme for base-field inputs,
+        // - Another for extension-field FRI commitments.
+        let input_mmcs = ValMmcs::new(hash.clone(), compress.clone(), 0);
+        let challenge_mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress, 0));
+
+        // Minimal parameters that exercise all verifier paths cheaply.
+        //
+        // - blowup 2: evaluation domain is 2x the polynomial degree,
+        //   the smallest blowup for a sound protocol
+        // - final poly length 1: fold down to f^(r) with degree 0
+        // - binary folding: each round halves the domain (arity 2)
+        // - 2 queries: minimum for arity-schedule consistency checks
+        //   across different query proofs
+        // - 0 PoW bits: every witness is trivially valid
+        let fri_params = FriParameters {
+            log_blowup: 1,
+            log_final_poly_len: 0,
+            max_log_arity: 1,
+            num_queries: 2,
+            commit_proof_of_work_bits: 0,
+            query_proof_of_work_bits: 0,
+            mmcs: challenge_mmcs,
+        };
+
+        // Wrap the parameters and commitment scheme into a PCS instance.
+        let pcs = TwoAdicFriPcs::new(Radix2Dit::default(), input_mmcs.clone(), fri_params.clone());
+
+        // Commit to a single 8-row, 2-column trace matrix.
+        // With blowup 2 the evaluation domain has 16 points (log height 4).
+        // Binary folding produces 3 rounds: 16 -> 8 -> 4 -> 2.
+        let log_degree = 3;
+        let width = 2;
+        let domain = <TwoAdicFriPcs<Val, Radix2Dit<Val>, ValMmcs, ChallengeMmcs> as Pcs<
+            Challenge,
+            Challenger,
+        >>::natural_domain_for_degree(&pcs, 1 << log_degree);
+        let trace = RowMajorMatrix::<Val>::rand_nonzero(&mut rng, 1 << log_degree, width);
+
+        // Produce the Merkle commitment to the low-degree-extended trace.
+        let (commitment, prover_data) =
+            <TwoAdicFriPcs<Val, Radix2Dit<Val>, ValMmcs, ChallengeMmcs> as Pcs<
+                Challenge,
+                Challenger,
+            >>::commit(&pcs, [(domain, trace)]);
+
+        // Prover side:
+        // Observe the commitment, sample an opening point, and produce the FRI proof.
+        let mut p_challenger = Challenger::new(perm.clone());
+        p_challenger.observe(&commitment);
+        let zeta: Challenge = p_challenger.sample_algebra_element();
+        let (opened_values, proof) =
+            pcs.open(vec![(&prover_data, vec![vec![zeta]])], &mut p_challenger);
+
+        // Verifier side:
+        // Replay the transcript up to the point where the top-level FRI verification begins.
+        let mut v_challenger = Challenger::new(perm);
+        v_challenger.observe(&commitment);
+        let v_zeta: Challenge = v_challenger.sample_algebra_element();
+        assert_eq!(
+            v_zeta, zeta,
+            "prover and verifier must sample the same point"
+        );
+
+        // Assemble the commitment-with-opening-points structure that the
+        // verifier checks the proof against.
+        let cwop = vec![(
+            commitment,
+            vec![(domain, vec![(zeta, opened_values[0][0][0].clone())])],
+        )];
+
+        // Feed the opened evaluations into the verifier challenger.
+        // This is the last transcript step before FRI verification begins.
+        for (_, round) in &cwop {
+            for (_, mat) in round {
+                for (_, point) in mat {
+                    v_challenger.observe_algebra_slice(point);
+                }
+            }
+        }
+
+        TestFixture {
+            fri_params,
+            input_mmcs,
+            proof,
+            challenger: v_challenger,
+            commitments_with_opening_points: cwop,
+        }
+    }
+
+    /// Convenience wrapper that constructs the folding strategy and
+    /// invokes the top-level FRI verification.
+    fn run_verify_fri(
+        params: &FriParameters<ChallengeMmcs>,
+        proof: &Proof,
+        challenger: &mut Challenger,
+        cwop: &[CommitmentWithOpeningPoints<
+            Challenge,
+            <ValMmcs as Mmcs<Val>>::Commitment,
+            TwoAdicMultiplicativeCoset<Val>,
+        >],
+        input_mmcs: &ValMmcs,
+    ) -> Result<(), TestError> {
+        let folding: Folding = TwoAdicFriFolding(PhantomData);
+        verify_fri(&folding, params, proof, challenger, cwop, input_mmcs)
+    }
+
+    #[test]
+    fn valid_proof_passes() {
+        // Baseline: an unmodified proof must pass all checks.
+        let f = make_test_fixture();
+        let mut challenger = f.challenger.clone();
+        let result = run_verify_fri(
+            &f.fri_params,
+            &f.proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        );
+        assert!(result.is_ok(), "valid proof should pass: {result:?}");
+    }
+
+    #[test]
+    fn query_commit_phase_openings_count_mismatch() {
+        let f = make_test_fixture();
+        let mut proof = f.proof.clone();
+
+        // In FRI, each COMMIT round produces one oracle f^(i). During the
+        // QUERY phase, the verifier opens that oracle at the queried index.
+        // So each query proof must carry exactly one opening per round.
+        //
+        // Fixture state: 3 rounds → 3 commitments → expect 3 openings.
+        //
+        // Mutation: append a duplicate opening to query 0.
+        //
+        //     query 0 openings:  [round_0, round_1, round_2, EXTRA]
+        //     commitments:       [round_0, round_1, round_2]
+        //     → 4 != 3 → error on query 0
+        let extra = proof.query_proofs[0].commit_phase_openings[0].clone();
+        proof.query_proofs[0].commit_phase_openings.push(extra);
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject mismatched commit-phase opening count");
+
+        let expected_rounds = f.proof.commit_phase_commits.len();
+        match err {
+            FriError::QueryCommitPhaseOpeningsCountMismatch {
+                query,
+                expected,
+                got,
+            } => {
+                assert_eq!(query, 0);
+                assert_eq!(expected, expected_rounds);
+                assert_eq!(got, expected_rounds + 1);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn query_log_arities_mismatch() {
+        let f = make_test_fixture();
+        let mut proof = f.proof.clone();
+
+        // The folding schedule is the sequence of log-arities that
+        // controls how much the domain shrinks each round. In this fixture,
+        // binary folding means every round has log_arity = 1 (halving).
+        // This schedule must be identical across all query proofs — it is
+        // a protocol-wide constant, not a per-query choice.
+        //
+        // The verifier extracts the schedule from query 0 and checks all
+        // others against it.
+        //
+        // Mutation: bump the first round's log_arity in query 1 from 1 to 2.
+        //
+        //     query 0 schedule: [1, 1, 1]   ← reference
+        //     query 1 schedule: [2, 1, 1]   ← corrupted
+        //     → mismatch detected at query 1
+
+        // Capture the uncorrupted reference schedule from query 0.
+        let expected_arities: Vec<usize> = proof.query_proofs[0]
+            .commit_phase_openings
+            .iter()
+            .map(|o| o.log_arity as usize)
+            .collect();
+
+        // Corrupt query 1's first round.
+        proof.query_proofs[1].commit_phase_openings[0].log_arity += 1;
+
+        // Build what the corrupted schedule looks like for the assertion.
+        let mut corrupted_arities = expected_arities.clone();
+        corrupted_arities[0] += 1;
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject inconsistent arity schedule across queries");
+
+        match err {
+            FriError::QueryLogAritiesMismatch {
+                query,
+                expected,
+                got,
+            } => {
+                assert_eq!(query, 1);
+                assert_eq!(expected, expected_arities);
+                assert_eq!(got, corrupted_arities);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn commit_pow_witness_count_mismatch() {
+        let f = make_test_fixture();
+        let mut proof = f.proof.clone();
+
+        // Each COMMIT round includes a proof-of-work grinding step: the
+        // prover finds a hash preimage satisfying a difficulty target.
+        // There must be exactly one witness per round — one per commitment.
+        //
+        // Fixture state: 3 rounds → 3 commitments → expect 3 witnesses.
+        //
+        // Mutation: push a dummy witness → 4 witnesses vs 3 commitments.
+        proof.commit_pow_witnesses.push(Val::ZERO);
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject proof with extra PoW witness");
+
+        let expected_count = f.proof.commit_phase_commits.len();
+        match err {
+            FriError::CommitPowWitnessCountMismatch { expected, got } => {
+                assert_eq!(expected, expected_count);
+                assert_eq!(got, expected_count + 1);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn final_poly_length_mismatch() {
+        let f = make_test_fixture();
+        let mut proof = f.proof.clone();
+
+        // After all COMMIT rounds, f^(r) should be a polynomial of degree < 2^log_final_poly_len.
+        // The prover sends its coefficients.
+        // In this fixture, log_final_poly_len = 0 → exactly 1 coefficient.
+        //
+        // Mutation: append a zero coefficient → 2 coefficients vs 1 expected.
+        proof.final_poly.push(Challenge::ZERO);
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject proof with wrong final polynomial length");
+
+        let expected_len = f.fri_params.final_poly_len();
+        match err {
+            FriError::FinalPolyLengthMismatch { expected, got } => {
+                assert_eq!(expected, expected_len);
+                assert_eq!(got, expected_len + 1);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn query_proof_count_mismatch() {
+        let f = make_test_fixture();
+        let mut proof = f.proof.clone();
+
+        // The number of queries determines soundness: each independent
+        // query multiplies the cheating prover's probability of escaping
+        // detection. The protocol parameters fix the exact query count.
+        //
+        // Fixture state: num_queries = 2 → expect 2 query proofs.
+        //
+        // Mutation: pop one query proof → 1 vs 2 expected.
+        proof.query_proofs.pop();
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject proof with missing query proof");
+
+        match err {
+            FriError::QueryProofCountMismatch { expected, got } => {
+                assert_eq!(expected, f.fri_params.num_queries);
+                assert_eq!(got, f.fri_params.num_queries - 1);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_initial_reduced_opening() {
+        let f = make_test_fixture();
+        let mut proof = f.proof.clone();
+
+        // The QUERY phase fold chain needs a starting value: the combined
+        // evaluation of all input polynomials at the queried index.
+        //
+        // This seed lives at the maximum domain height log(|L^(0)|).
+        // Without any committed polynomials, the seed is missing and the
+        // fold chain cannot begin.
+        //
+        // Mutation: clear all input proofs AND external commitment data.
+        // The input-opening step then returns an empty vector → no seed.
+        for qp in &mut proof.query_proofs {
+            qp.input_proof = vec![];
+        }
+        let empty_cwop: Vec<
+            CommitmentWithOpeningPoints<
+                Challenge,
+                <ValMmcs as Mmcs<Val>>::Commitment,
+                TwoAdicMultiplicativeCoset<Val>,
+            >,
+        > = vec![];
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &empty_cwop,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject proof with no committed polynomials");
+
+        match err {
+            FriError::MissingInitialReducedOpening { .. } => {}
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sibling_values_length_mismatch() {
+        let f = make_test_fixture();
+        let mut proof = f.proof.clone();
+
+        // In each QUERY-phase fold round, the verifier reads the queried
+        // point's evaluation plus its (arity - 1) siblings from the oracle.
+        // For binary folding (arity = 2), each point has exactly 1 sibling.
+        //
+        // Mutation: push an extra sibling into round 0 of query 0.
+        //
+        //     Before: sibling_values = [s0]          (length 1 = arity - 1)
+        //     After:  sibling_values = [s0, ZERO]    (length 2 = arity)
+        //
+        // Sibling values are not part of the Fiat-Shamir transcript, so
+        // this doesn't desync the challenger.
+        proof.query_proofs[0].commit_phase_openings[0]
+            .sibling_values
+            .push(Challenge::ZERO);
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject proof with wrong number of sibling values");
+
+        match err {
+            FriError::SiblingValuesLengthMismatch {
+                round,
+                expected,
+                got,
+            } => {
+                // Binary fold: arity = 2, so expect 1 sibling, got 2.
+                assert_eq!(round, 0);
+                assert_eq!(expected, 1);
+                assert_eq!(got, 2);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn input_proof_batch_count_mismatch() {
+        let f = make_test_fixture();
+        let mut proof = f.proof.clone();
+
+        // Before folding, the verifier opens all committed input polynomials
+        // at the queried index. Each batch of polynomials requires exactly
+        // one Merkle batch-opening proof. This structural check fires before
+        // any cryptographic verification.
+        //
+        // Fixture state: 1 batch commitment → expect 1 batch opening.
+        //
+        // Mutation: push an extra empty batch opening → 2 vs 1 expected.
+        let extra_batch = BatchOpening {
+            opened_values: vec![],
+            opening_proof: proof.query_proofs[0].input_proof[0].opening_proof.clone(),
+        };
+        proof.query_proofs[0].input_proof.push(extra_batch);
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject proof with extra input batch");
+
+        match err {
+            FriError::InputProofBatchCountMismatch { expected, got } => {
+                assert_eq!(expected, 1);
+                assert_eq!(got, 2);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn batch_opened_values_count_mismatch() {
+        let f = make_test_fixture();
+        let mut proof = f.proof.clone();
+
+        // Within each batch, every committed matrix needs exactly one row of
+        // opened column values at the queried index. This structural check
+        // fires before the Merkle proof verification, catching the mismatch
+        // early as a typed error.
+        //
+        // Fixture state: 1 matrix per batch → expect 1 opened-values entry.
+        //
+        // Mutation: pop the opened-values entry → 0 vs 1 expected.
+        proof.query_proofs[0].input_proof[0].opened_values.pop();
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject proof with missing opened-values entry");
+
+        match err {
+            FriError::BatchOpenedValuesCountMismatch {
+                batch,
+                expected,
+                got,
+            } => {
+                assert_eq!(batch, 0);
+                assert_eq!(expected, 1);
+                assert_eq!(got, 0);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn point_evaluation_count_mismatch() {
+        let f = make_test_fixture();
+        let mut cwop = f.commitments_with_opening_points.clone();
+
+        // For each evaluation point z, the verifier pairs every opened
+        // column value f_i(x) with its claimed evaluation f_i(z) to form
+        // the quotient (f_i(z) - f_i(x)) / (z - x). These two vectors
+        // must have the same length.
+        //
+        // Fixture state: 2 trace columns → 2 opened values, 2 claims.
+        //
+        // Mutation: push an extra claim → 3 claims vs 2 opened values.
+        // This only modifies verifier-side data, not the proof, so the
+        // Merkle verification still passes. The original challenger is
+        // reused because claims are not observed into the transcript.
+        cwop[0].1[0].1[0].1.push(Challenge::ZERO);
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &f.proof,
+            &mut challenger,
+            &cwop,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject proof with extra claimed evaluation");
+
+        match err {
+            FriError::PointEvaluationCountMismatch {
+                batch,
+                matrix,
+                point,
+                expected,
+                got,
+            } => {
+                assert_eq!(batch, 0);
+                assert_eq!(matrix, 0);
+                assert_eq!(point, 0);
+                // 2 trace columns opened, but 3 claimed evaluations.
+                assert_eq!(expected, 2);
+                assert_eq!(got, 3);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    /// Build minimal FRI parameters for the direct fold-chain tests.
+    ///
+    /// The commitment scheme inside is never called because all
+    /// direct tests use an empty fold-data iterator (zero rounds).
+    fn make_fri_params_for_query_tests() -> FriParameters<ChallengeMmcs> {
+        let mut rng = SmallRng::seed_from_u64(99);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let val_mmcs = ValMmcs::new(hash, compress, 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs);
+
+        FriParameters {
+            log_blowup: 1,
+            log_final_poly_len: 0,
+            max_log_arity: 1,
+            num_queries: 2,
+            commit_proof_of_work_bits: 0,
+            query_proof_of_work_bits: 0,
+            mmcs: challenge_mmcs,
+        }
+    }
+
+    #[test]
+    fn initial_reduced_opening_height_mismatch() {
+        let params = make_fri_params_for_query_tests();
+        let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
+
+        // The fold chain starts at the global maximum domain height.
+        // Its seed (the first reduced opening) must live at that height.
+        //
+        //     global max height = 5   (domain |L^(0)| = 2^5 = 32)
+        //     opening height    = 3   (domain |L^(?)| = 2^3 = 8)
+        //     → mismatch: 5 != 3
+        let log_global_max_height = 5;
+        let wrong_height = 3;
+        let reduced_openings: FriOpenings<Challenge> =
+            vec![(wrong_height, Challenge::from(Val::from_u8(7)))];
+
+        // Empty fold-data: the error fires before any folding.
+        let betas: Vec<Challenge> = vec![];
+        let commits: Vec<<ChallengeMmcs as Mmcs<Challenge>>::Commitment> = vec![];
+        let openings: Vec<CommitPhaseProofStep<Challenge, ChallengeMmcs>> = vec![];
+        let fold_data_iter = betas.iter().zip(commits.iter()).zip(openings.iter());
+
+        let mut start_index = 0;
+        let log_final_height = 1;
+
+        let err = verify_query::<TwoAdicFriFolding<(), ()>, Val, Challenge, ChallengeMmcs>(
+            &folding,
+            &params,
+            &mut start_index,
+            fold_data_iter,
+            reduced_openings,
+            log_global_max_height,
+            log_final_height,
+        )
+        .expect_err("should reject opening at wrong initial height");
+
+        match err {
+            FriError::InitialReducedOpeningHeightMismatch { expected, got } => {
+                assert_eq!(expected, log_global_max_height);
+                assert_eq!(got, wrong_height);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn final_fold_height_mismatch() {
+        let params = make_fri_params_for_query_tests();
+        let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
+
+        // After all COMMIT rounds, the domain must have been folded down to
+        // exactly the final height. This defense-in-depth check guards
+        // against implementation bugs.
+        //
+        //     global max height = 5   → fold chain starts at 2^5
+        //     final height      = 1   → fold chain should end at 2^1
+        //     fold rounds       = 0   → no folding happens
+        //     → current height = 5 != final height 1 → error
+        let log_global_max_height = 5;
+        let log_final_height = 1;
+        let reduced_openings: FriOpenings<Challenge> =
+            vec![(log_global_max_height, Challenge::from(Val::from_u8(42)))];
+
+        // No fold rounds: jump straight to the final-height check.
+        let betas: Vec<Challenge> = vec![];
+        let commits: Vec<<ChallengeMmcs as Mmcs<Challenge>>::Commitment> = vec![];
+        let openings: Vec<CommitPhaseProofStep<Challenge, ChallengeMmcs>> = vec![];
+        let fold_data_iter = betas.iter().zip(commits.iter()).zip(openings.iter());
+
+        let mut start_index = 0;
+
+        let err = verify_query::<TwoAdicFriFolding<(), ()>, Val, Challenge, ChallengeMmcs>(
+            &folding,
+            &params,
+            &mut start_index,
+            fold_data_iter,
+            reduced_openings,
+            log_global_max_height,
+            log_final_height,
+        )
+        .expect_err("should reject when final height is not reached");
+
+        match err {
+            FriError::FinalFoldHeightMismatch { expected, got } => {
+                assert_eq!(expected, log_final_height);
+                assert_eq!(got, log_global_max_height);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unconsumed_reduced_openings() {
+        let params = make_fri_params_for_query_tests();
+        let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
+
+        // When multiple polynomials of different degrees are committed,
+        // the fold chain rolls in each one at the round where the domain
+        // shrinks to that polynomial's height. After all rounds, every
+        // opening must have been consumed. Leftovers indicate openings at
+        // heights the fold schedule never visits.
+        //
+        //     reduced_openings = [(height=5, v1), (height=3, v2)]
+        //     global max = final = 5  → zero rounds needed → height check OK
+        //     → opening at height 3 is never consumed → error
+        let log_global_max_height = 5;
+        let log_final_height = 5;
+        let reduced_openings: FriOpenings<Challenge> = vec![
+            // Seed at the max height — consumed immediately.
+            (log_global_max_height, Challenge::from(Val::from_u8(42))),
+            // Extra opening at height 3 — never reached, becomes leftover.
+            (3, Challenge::from(Val::from_u8(99))),
+        ];
+
+        // No fold rounds: the leftover is detected right after the loop.
+        let betas: Vec<Challenge> = vec![];
+        let commits: Vec<<ChallengeMmcs as Mmcs<Challenge>>::Commitment> = vec![];
+        let openings: Vec<CommitPhaseProofStep<Challenge, ChallengeMmcs>> = vec![];
+        let fold_data_iter = betas.iter().zip(commits.iter()).zip(openings.iter());
+
+        let mut start_index = 0;
+
+        let err = verify_query::<TwoAdicFriFolding<(), ()>, Val, Challenge, ChallengeMmcs>(
+            &folding,
+            &params,
+            &mut start_index,
+            fold_data_iter,
+            reduced_openings,
+            log_global_max_height,
+            log_final_height,
+        )
+        .expect_err("should reject proof with leftover reduced openings");
+
+        match err {
+            FriError::UnconsumedReducedOpenings {
+                next_log_height,
+                remaining,
+            } => {
+                assert_eq!(next_log_height, 3);
+                assert_eq!(remaining, 1);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
 }
