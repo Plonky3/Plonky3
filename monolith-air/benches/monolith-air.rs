@@ -10,7 +10,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2Bowers;
 use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::BinomialExtensionField;
-use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_params};
+use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_goldilocks::Goldilocks;
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_merkle_tree::MerkleTreeMmcs;
@@ -98,7 +98,7 @@ fn make_stark_config_m31() -> (
         byte_hash,
     );
 
-    let mut fri_params = create_benchmark_fri_params(challenge_mmcs);
+    let mut fri_params = FriParameters::new_benchmark(challenge_mmcs);
     fri_params.log_blowup = 2;
     let log_blowup = fri_params.log_blowup;
 
@@ -265,7 +265,7 @@ fn make_stark_config_goldilocks() -> (
     let challenger =
         SerializingChallenger64::<GlVal, HashChallenger<u8, _, 32>>::from_hasher(vec![], byte_hash);
 
-    let mut fri_params = create_benchmark_fri_params(challenge_mmcs);
+    let mut fri_params = FriParameters::new_benchmark(challenge_mmcs);
     fri_params.log_blowup = 2;
     let log_blowup = fri_params.log_blowup;
 
