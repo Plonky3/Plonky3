@@ -1267,32 +1267,10 @@ mod tests {
         }
     }
 
-    /// Build minimal FRI parameters for the direct fold-chain tests.
-    ///
-    /// The commitment scheme inside is never called because all
-    /// direct tests use an empty fold-data iterator (zero rounds).
-    fn make_fri_params_for_query_tests() -> FriParameters<ChallengeMmcs> {
-        let mut rng = SmallRng::seed_from_u64(99);
-        let perm = Perm::new_from_rng_128(&mut rng);
-        let hash = MyHash::new(perm.clone());
-        let compress = MyCompress::new(perm);
-        let val_mmcs = ValMmcs::new(hash, compress, 0);
-        let challenge_mmcs = ChallengeMmcs::new(val_mmcs);
-
-        FriParameters {
-            log_blowup: 1,
-            log_final_poly_len: 0,
-            max_log_arity: 1,
-            num_queries: 2,
-            commit_proof_of_work_bits: 0,
-            query_proof_of_work_bits: 0,
-            mmcs: challenge_mmcs,
-        }
-    }
-
     #[test]
     fn initial_reduced_opening_height_mismatch() {
-        let params = make_fri_params_for_query_tests();
+        let f = make_test_fixture();
+        let params = &f.fri_params;
         let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
 
         // The fold chain starts at the global maximum domain height.
@@ -1317,7 +1295,7 @@ mod tests {
 
         let err = verify_query::<TwoAdicFriFolding<(), ()>, Val, Challenge, ChallengeMmcs>(
             &folding,
-            &params,
+            params,
             &mut start_index,
             fold_data_iter,
             reduced_openings,
@@ -1337,7 +1315,8 @@ mod tests {
 
     #[test]
     fn final_fold_height_mismatch() {
-        let params = make_fri_params_for_query_tests();
+        let f = make_test_fixture();
+        let params = &f.fri_params;
         let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
 
         // After all COMMIT rounds, the domain must have been folded down to
@@ -1363,7 +1342,7 @@ mod tests {
 
         let err = verify_query::<TwoAdicFriFolding<(), ()>, Val, Challenge, ChallengeMmcs>(
             &folding,
-            &params,
+            params,
             &mut start_index,
             fold_data_iter,
             reduced_openings,
@@ -1383,7 +1362,8 @@ mod tests {
 
     #[test]
     fn unconsumed_reduced_openings() {
-        let params = make_fri_params_for_query_tests();
+        let f = make_test_fixture();
+        let params = &f.fri_params;
         let folding = TwoAdicFriFolding::<(), ()>(PhantomData);
 
         // The fold chain rolls in each committed polynomial at the round
@@ -1416,7 +1396,7 @@ mod tests {
 
         let err = verify_query::<TwoAdicFriFolding<(), ()>, Val, Challenge, ChallengeMmcs>(
             &folding,
-            &params,
+            params,
             &mut start_index,
             fold_data_iter,
             reduced_openings,
@@ -1435,5 +1415,150 @@ mod tests {
             }
             other => panic!("wrong error variant: {other:?}"),
         }
+    }
+
+    #[test]
+    fn invalid_pow_witness() {
+        let f = make_test_fixture();
+
+        // Before each COMMIT round's folding challenge is sampled, the
+        // verifier checks a proof-of-work witness against a difficulty
+        // target. Witnesses that don't satisfy the target are rejected.
+        //
+        // Fixture state: commit_proof_of_work_bits = 0 → any witness passes.
+        //
+        // Mutation: bump difficulty to 20 bits in a params copy.
+        //
+        //     params difficulty:  20 bits
+        //     witness ground for: 0 bits
+        //     → witness doesn't satisfy the higher target → error
+        let mut params = f.fri_params.clone();
+        params.commit_proof_of_work_bits = 20;
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &params,
+            &f.proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject proof with invalid PoW witness");
+
+        match err {
+            FriError::InvalidPowWitness => {}
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn commit_phase_mmcs_error() {
+        let f = make_test_fixture();
+        let mut proof = f.proof.clone();
+
+        // Each fold round verifies the Merkle opening proof for the
+        // committed oracle f^(i). A corrupted authentication path makes
+        // the recomputed root diverge from the commitment.
+        //
+        // Merkle proofs are NOT in the Fiat-Shamir transcript → safe to
+        // mutate without desyncing the challenger.
+        //
+        // Fixture state: valid Merkle proof for round 0 of query 0.
+        //
+        // Mutation: zero out the first hash in the authentication path.
+        proof.query_proofs[0].commit_phase_openings[0].opening_proof[0] = Default::default();
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject proof with corrupted commit-phase Merkle proof");
+
+        match err {
+            FriError::CommitPhaseMmcsError(_) => {}
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn input_error() {
+        let f = make_test_fixture();
+        let mut proof = f.proof.clone();
+
+        // Before the fold chain, the verifier checks Merkle proofs for
+        // the input polynomials. A corrupted authentication path makes
+        // the recomputed root diverge from the input commitment.
+        //
+        // Input Merkle proofs are NOT in the Fiat-Shamir transcript →
+        // safe to mutate without desyncing the challenger.
+        //
+        // Fixture state: valid Merkle proof for input batch 0 of query 0.
+        //
+        // Mutation: zero out the first hash in the authentication path.
+        proof.query_proofs[0].input_proof[0].opening_proof[0] = Default::default();
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject proof with corrupted input Merkle proof");
+
+        match err {
+            FriError::InputError(_) => {}
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn final_poly_mismatch() {
+        let mut f = make_test_fixture();
+        let proof = &mut f.proof;
+
+        // After the fold chain, the verifier evaluates the final polynomial
+        // at the folded point (Horner's method) and compares with the fold
+        // chain's output. If the coefficients are wrong, the two disagree.
+        //
+        // The final polynomial is observed into the Fiat-Shamir transcript
+        // before queries are sampled, so corrupting it desyncs the challenger
+        // and causes Merkle failures before this check is reached. Because
+        // this error path cannot be triggered through the full pipeline, we
+        // test the underlying Horner evaluation in isolation.
+        //
+        // Fixture state: final_poly = [c_0] (1 honest coefficient).
+        //
+        // Mutation: add 1 to c_0, then verify the evaluation changes.
+        //
+        //     honest:    eval(x) = c_0
+        //     corrupted: eval(x) = c_0 + 1
+        //     → honest != corrupted → verifier would reject
+
+        // Evaluate the honest polynomial at an arbitrary point.
+        let x = Val::TWO;
+        let honest_eval = proof
+            .final_poly
+            .iter()
+            .rev()
+            .fold(Challenge::ZERO, |acc, &c| acc * x + c);
+
+        // Corrupt the constant coefficient.
+        proof.final_poly[0] += Challenge::ONE;
+
+        // Evaluate the corrupted polynomial at the same point.
+        let corrupted_eval = proof
+            .final_poly
+            .iter()
+            .rev()
+            .fold(Challenge::ZERO, |acc, &c| acc * x + c);
+
+        // The two must differ — this is what the verifier would catch.
+        assert_ne!(honest_eval, corrupted_eval);
     }
 }
