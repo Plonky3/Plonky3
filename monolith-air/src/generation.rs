@@ -26,7 +26,7 @@
 use alloc::vec::Vec;
 use core::mem::MaybeUninit;
 
-use p3_field::PrimeField32;
+use p3_field::PrimeField64;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_maybe_rayon::prelude::*;
 use p3_monolith::MonolithBars;
@@ -53,7 +53,7 @@ use crate::columns::{MonolithCols, MonolithRoundCols, num_cols};
 /// Panics if `inputs.len()` is not a power of two.
 #[instrument(name = "generate Monolith trace", skip_all)]
 pub fn generate_trace_rows<
-    F: PrimeField32,
+    F: PrimeField64,
     B: MonolithBars<F, WIDTH> + Sync,
     const WIDTH: usize,
     const NUM_FULL_ROUNDS: usize,
@@ -128,7 +128,7 @@ pub fn generate_trace_rows<
 ///   4. Final round (same as above, but no round constants)
 /// ```
 pub fn generate_trace_rows_for_perm<
-    F: PrimeField32,
+    F: PrimeField64,
     B: MonolithBars<F, WIDTH>,
     const WIDTH: usize,
     const NUM_FULL_ROUNDS: usize,
@@ -180,7 +180,7 @@ pub fn generate_trace_rows_for_perm<
 /// and the post-state to the trace columns.
 #[inline]
 fn generate_round<
-    F: PrimeField32,
+    F: PrimeField64,
     B: MonolithBars<F, WIDTH>,
     const WIDTH: usize,
     const NUM_BARS: usize,
@@ -238,18 +238,18 @@ fn generate_round<
         });
 }
 
-/// Decompose a 32-bit prime field element into `FIELD_BITS` bits (LSB first).
+/// Decompose a prime field element into `FIELD_BITS` bits (LSB first).
 ///
-/// Each bit is a field element equal to 0 or 1. For Mersenne31 (31 bits),
-/// the canonical value is in `[0, 2^31 - 2]`, so 31 bits suffice.
+/// Each bit is a field element equal to 0 or 1. Uses the canonical `u64`
+/// representative (sufficient for Monolith-31 and Monolith-64).
 #[inline]
-pub(crate) fn decompose_to_bits<F: PrimeField32, const FIELD_BITS: usize>(
+pub(crate) fn decompose_to_bits<F: PrimeField64, const FIELD_BITS: usize>(
     element: F,
 ) -> [F; FIELD_BITS] {
-    let val = element.as_canonical_u32();
+    let val = element.as_canonical_u64();
     core::array::from_fn(|i| {
-        if i < 32 {
-            F::from_u32((val >> i) & 1)
+        if i < FIELD_BITS && i < 64 {
+            F::from_bool(((val >> i) & 1) != 0)
         } else {
             F::ZERO
         }
