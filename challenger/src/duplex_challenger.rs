@@ -72,6 +72,9 @@ where
     where
         F: Default,
     {
+        const {
+            assert!(RATE > 0 && RATE < WIDTH);
+        }
         Self {
             sponge_state: [F::default(); WIDTH],
             input_buffer: vec![],
