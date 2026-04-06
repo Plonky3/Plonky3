@@ -9,7 +9,7 @@ use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::BinomialExtensionField;
-use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_params};
+use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_monty_31::MDSUtils;
@@ -129,7 +129,7 @@ fn make_stark_config() -> (
         SerializingChallenger32::<Val, HashChallenger<u8, _, 32>>::from_hasher(vec![], byte_hash);
 
     // Derive FRI parameters (blowup, queries, etc.) from the commitment scheme.
-    let fri_params = create_benchmark_fri_params(challenge_mmcs);
+    let fri_params = FriParameters::new_benchmark(challenge_mmcs);
 
     // Save the blowup factor for trace allocation.
     let log_blowup = fri_params.log_blowup;

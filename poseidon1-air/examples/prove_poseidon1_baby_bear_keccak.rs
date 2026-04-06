@@ -9,7 +9,7 @@ use p3_baby_bear::{
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
-use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_params};
+use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_monty_31::MDSUtils;
@@ -126,7 +126,7 @@ fn prove_and_verify() -> Result<(), impl Debug> {
         VECTOR_LEN,
     > = VectorizedPoseidon1Air::new(full, partial);
 
-    let fri_params = create_benchmark_fri_params(challenge_mmcs);
+    let fri_params = FriParameters::new_benchmark(challenge_mmcs);
 
     // Generate the execution trace (with extra capacity for LDE blowup).
     let trace = air.generate_vectorized_trace_rows(NUM_PERMUTATIONS, fri_params.log_blowup);
