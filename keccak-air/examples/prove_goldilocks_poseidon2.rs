@@ -3,10 +3,9 @@ use core::fmt::Debug;
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
-use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
-use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_params};
-use p3_goldilocks::{Goldilocks, Poseidon2Goldilocks};
+use p3_fri::{FriParameters, TwoAdicFriPcs};
+use p3_goldilocks::{Goldilocks, HashPackedGoldilocks, Poseidon2Goldilocks};
 use p3_keccak_air::{KeccakAir, generate_trace_rows};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -45,7 +44,7 @@ fn main() -> Result<(), impl Debug> {
     let compress = MyCompress::new(perm.clone());
 
     type ValMmcs =
-        MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 2, 4>;
+        MerkleTreeMmcs<HashPackedGoldilocks, HashPackedGoldilocks, MyHash, MyCompress, 2, 4>;
     let val_mmcs = ValMmcs::new(hash, compress, 0);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
@@ -57,7 +56,7 @@ fn main() -> Result<(), impl Debug> {
     type Challenger = DuplexChallenger<Val, Perm, 8, 4>;
     let challenger = Challenger::new(perm);
 
-    let fri_params = create_benchmark_fri_params(challenge_mmcs);
+    let fri_params = FriParameters::new_benchmark(challenge_mmcs);
 
     let inputs = (0..NUM_HASHES).map(|_| rng.random()).collect::<Vec<_>>();
     let trace = generate_trace_rows::<Val>(inputs, fri_params.log_blowup);

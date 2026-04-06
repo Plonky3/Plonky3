@@ -66,8 +66,9 @@ pub type Poseidon1Mersenne31Generic<const WIDTH: usize> = Poseidon1<
 /// Poseidon1 permutation for Mersenne31.
 ///
 /// On aarch64 with NEON, uses NEON-optimized layers with pre-packed round
-/// constants and fused AddRC+S-box. On other platforms, falls back to the
-/// generic Karatsuba-based implementation.
+/// constants and fused AddRC+S-box. On x86_64 with AVX2/AVX512, uses
+/// negative-form packed constants with fused AddRC+S-box. On other platforms,
+/// falls back to the generic Karatsuba-based implementation.
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub type Poseidon1Mersenne31<const WIDTH: usize> = Poseidon1<
     Mersenne31,
@@ -77,14 +78,43 @@ pub type Poseidon1Mersenne31<const WIDTH: usize> = Poseidon1<
     MERSENNE31_POSEIDON1_S_BOX_DEGREE,
 >;
 
-/// Poseidon1 permutation for Mersenne31.
+/// Poseidon1 permutation for Mersenne31 (AVX2, no AVX512).
 ///
-/// On aarch64 with NEON, uses NEON-optimized layers with pre-packed round
-/// constants and fused AddRC+S-box. On other platforms, falls back to the
-/// generic Karatsuba-based implementation.
-// TODO(Plonky3/Plonky3#1511): Add packed round constants for Poseidon1 with AVX2 / AVX512,
-// similar to the NEON implementation which pre-packs constants and fuses AddRC+S-box.
-#[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
+/// Uses AVX2-optimized layers with negative-form packed round constants
+/// and fused AddRC+S-box in full rounds.
+#[cfg(all(
+    target_arch = "x86_64",
+    target_feature = "avx2",
+    not(target_feature = "avx512f")
+))]
+pub type Poseidon1Mersenne31<const WIDTH: usize> = Poseidon1<
+    Mersenne31,
+    crate::Poseidon1ExternalLayerMersenne31<WIDTH>,
+    crate::Poseidon1InternalLayerMersenne31<WIDTH>,
+    WIDTH,
+    MERSENNE31_POSEIDON1_S_BOX_DEGREE,
+>;
+
+/// Poseidon1 permutation for Mersenne31 (AVX512).
+///
+/// Uses AVX512-optimized layers with negative-form packed round constants
+/// and fused AddRC+S-box in full rounds.
+#[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
+pub type Poseidon1Mersenne31<const WIDTH: usize> = Poseidon1<
+    Mersenne31,
+    crate::Poseidon1ExternalLayerMersenne31<WIDTH>,
+    crate::Poseidon1InternalLayerMersenne31<WIDTH>,
+    WIDTH,
+    MERSENNE31_POSEIDON1_S_BOX_DEGREE,
+>;
+
+/// Poseidon1 permutation for Mersenne31 (generic fallback).
+///
+/// Used on platforms without NEON or AVX2/AVX512 SIMD support.
+#[cfg(not(any(
+    all(target_arch = "aarch64", target_feature = "neon"),
+    all(target_arch = "x86_64", target_feature = "avx2"),
+)))]
 pub type Poseidon1Mersenne31<const WIDTH: usize> = Poseidon1Mersenne31Generic<WIDTH>;
 
 /// Round constants for width-16 Poseidon1 on Mersenne31.
