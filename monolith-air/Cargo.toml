@@ -23,6 +23,8 @@ rand.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+
+criterion = { workspace = true, features = ["html_reports"] }
 p3-challenger = { path = "../challenger" }
 p3-circle = { path = "../circle" }
 p3-commit = { path = "../commit" }
@@ -36,8 +38,6 @@ p3-mersenne-31 = { path = "../mersenne-31" }
 p3-sha256 = { path = "../sha256" }
 p3-uni-stark = { path = "../uni-stark" }
 
-criterion = { workspace = true, features = ["html_reports"] }
-
 proptest.workspace = true
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
@@ -45,9 +45,9 @@ tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
 
-[lints]
-workspace = true
-
 [[bench]]
 name = "monolith-air"
 harness = false
+
+[lints]
+workspace = true
