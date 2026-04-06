@@ -23,6 +23,10 @@ where
     F: PrimeField + PermutationMonomial<ALPHA>,
 {
     pub const fn new(num_rounds: usize, round_constants: Vec<F>, mds: Mds) -> Self {
+        const {
+            assert!(WIDTH > 0);
+            assert!(ALPHA > 1);
+        }
         Self {
             num_rounds,
             mds,

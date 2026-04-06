@@ -41,6 +41,7 @@ where
             assert!(WIDTH >= 8);
             assert!(WIDTH <= 24);
             assert!(WIDTH.is_multiple_of(4));
+            assert!(NUM_FULL_ROUNDS > 0);
         }
 
         let round_constants = Self::instantiate_round_constants();
