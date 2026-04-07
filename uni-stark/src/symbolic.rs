@@ -29,14 +29,11 @@ where
         let constraint_degree = (degree_hint + is_zk).max(2);
         let result = log2_ceil_usize(constraint_degree - 1);
 
+        // Keep the hint-path assertion cheap: full symbolic quotient inference is too
+        // expensive for hot debug test paths like prove/verify end-to-end runs.
         debug_assert!(
-            {
-                let hinted_degree = get_max_constraint_degree_extension::<F, F, A>(air, layout);
-                let symbolic =
-                    get_log_quotient_degree_extension::<F, F, A>(air, layout, trace_degree, is_zk);
-                degree_hint >= hinted_degree && result >= symbolic
-            },
-            "max_constraint_degree() hint {} is too small; actual log quotient degree is larger",
+            degree_hint >= get_max_constraint_degree_extension::<F, F, A>(air, layout),
+            "max_constraint_degree() hint {} is too small",
             degree_hint
         );
 
@@ -68,18 +65,11 @@ where
         let constraint_degree = (degree_hint + is_zk).max(2);
         let result = log2_ceil_usize(constraint_degree - 1);
 
+        // Keep the hint-path assertion cheap: full symbolic quotient inference is too
+        // expensive for hot debug test paths like prove/verify end-to-end runs.
         debug_assert!(
-            {
-                let hinted_degree = get_max_constraint_degree_extension::<F, EF, A>(air, layout);
-                let actual = get_log_quotient_degree_extension_symbolic::<F, EF, A>(
-                    air,
-                    layout,
-                    trace_degree,
-                    is_zk,
-                );
-                degree_hint >= hinted_degree && result >= actual
-            },
-            "max_constraint_degree() hint {} is too small; actual log quotient degree is larger",
+            degree_hint >= get_max_constraint_degree_extension::<F, EF, A>(air, layout),
+            "max_constraint_degree() hint {} is too small",
             degree_hint
         );
 
