@@ -123,12 +123,11 @@ pub fn degree_correct<F: Field>(poly: &[F], r_comb: F, gap: usize) -> Vec<F> {
 /// Evaluate the degree-correction factor at a point and multiply it into `value`.
 pub fn eval_degree_correction<F: Field>(value: F, point: F, r_comb: F, gap: usize) -> F {
     let step = point * r_comb;
-    let mut geom = F::ZERO;
-    let mut power = F::ONE;
-    for _ in 0..=gap {
-        geom += power;
-        power *= step;
-    }
+    let geom = if step == F::ONE {
+        F::from_usize(gap + 1)
+    } else {
+        (F::ONE - step.exp_u64((gap + 1) as u64)) * (F::ONE - step).inverse()
+    };
     value * geom
 }
 
