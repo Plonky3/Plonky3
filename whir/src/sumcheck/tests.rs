@@ -285,7 +285,7 @@ fn run_sumcheck_test(
     // random challenges (prover_randomness) accumulated so far.
 
     let (mut sumcheck, mut prover_randomness) = SumcheckProver::from_base_evals(
-        &mut proof.first_mut().unwrap(),
+        proof.first_mut().unwrap(),
         &mut prover_challenger,
         folding0,
         0,
@@ -346,7 +346,7 @@ fn run_sumcheck_test(
     // No constraint is passed (None) because there are no more STIR queries after this point.
 
     prover_randomness.extend(&sumcheck.compute_sumcheck_polynomials(
-        &mut proof.last_mut().unwrap(),
+        proof.last_mut().unwrap(),
         &mut prover_challenger,
         final_rounds,
         0,
@@ -457,7 +457,7 @@ fn run_sumcheck_test(
     // VERIFY FINAL ROUND: fold the last remaining variables and finalize the sum.
     verifier_randomness.extend(
         &verify_final_sumcheck_rounds(
-            Some(&proof.last().unwrap()),
+            Some(proof.last().unwrap()),
             &mut verifier_challenger,
             &mut sum,
             final_rounds,
