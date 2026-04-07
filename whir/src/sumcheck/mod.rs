@@ -28,6 +28,8 @@ pub mod lagrange;
 pub mod product_polynomial;
 pub mod prover;
 pub mod svo;
+#[cfg(test)]
+mod tests;
 
 pub use data::{SumcheckData, verify_final_sumcheck_rounds};
 pub use error::SumcheckError;
