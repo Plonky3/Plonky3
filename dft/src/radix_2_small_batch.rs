@@ -82,7 +82,8 @@ impl<F: TwoAdicField> Radix2DFTSmallBatch<F> {
         // need it to be larger, which is wasteful.
 
         // roots_of_unity_table(fft_len) returns a vector of twiddles of length log_2(fft_len).
-        let curr_max_fft_len = 1 << self.twiddles.read().len();
+        let curr_max_fft_len =
+            (1 << self.twiddles.read().len()).min(1 << self.inv_twiddles.read().len());
         if fft_len > curr_max_fft_len {
             let mut new_twiddles = self.roots_of_unity_table(fft_len);
             let mut new_inv_twiddles: Vec<Vec<F>> = new_twiddles
@@ -876,6 +877,7 @@ fn zip_par_iter_vec<I: IndexedParallelIterator>(
         .map(|(hi, lo)| hi.zip(lo))
         .collect::<Vec<_>>()
 }
+
 
 trait MultiLayerButterfly<F: Field, B: Butterfly<F>>: Copy + Send + Sync {
     fn apply_2_layers(
