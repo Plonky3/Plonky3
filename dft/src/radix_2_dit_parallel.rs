@@ -17,7 +17,7 @@ use spin::RwLock;
 use tracing::{debug_span, instrument};
 
 use crate::TwoAdicSubgroupDft;
-use crate::butterflies::{Butterfly, DitButterfly};
+use crate::butterflies::{Butterfly, DitButterfly, ScaledDitButterfly, TwiddleFreeButterfly};
 
 /// A parallel FFT algorithm which divides a butterfly network's layers into two halves.
 ///
@@ -237,7 +237,6 @@ fn coset_dft<F: TwoAdicField + Ord>(
     let log_h = log2_strict_usize(mat.height());
     let mid = log_h.div_ceil(2);
 
-    // let twiddles = compute_factors((log_h, shift), &dft.coset_twiddles, compute_coset_twiddles);
     let twiddles = dft.get_or_compute_coset_twiddles((log_h, shift));
 
     // The first half looks like a normal DIT.
@@ -292,6 +291,12 @@ fn coset_dft_oop<F: TwoAdicField + Ord>(
 }
 
 /// This can be used as the first half of a DIT butterfly network.
+///
+/// For layer 0, all twiddle factors are 1 (root^0 = 1), so we use `TwiddleFreeButterfly`
+/// to avoid a Montgomery multiply by 1 across the entire matrix.
+///
+/// For layers 1 to mid-1 included, the first twiddle in each block is also always 1 (twiddles[0] = 1),
+/// so we special-case the first row-pair of each block to use `TwiddleFreeButterfly` as well.
 #[instrument(level = "debug", skip_all)]
 fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F]) {
     let log_h = log2_strict_usize(mat.height());
@@ -301,14 +306,24 @@ fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F])
         .for_each(|mut submat| {
             let mut backwards = false;
             for layer in 0..mid {
-                let layer_rev = log_h - 1 - layer;
-                let layer_pow = 1 << layer_rev;
-                dit_layer(
-                    &mut submat,
-                    layer,
-                    twiddles.iter().step_by(layer_pow),
-                    backwards,
-                );
+                if layer == 0 {
+                    // For layer 0, half_block_size=1 and each block clones the twiddle
+                    // iterator from the start, consuming only twiddles[0] = root^0 = 1.
+                    // Use TwiddleFreeButterfly to skip the multiply entirely.
+                    dit_layer_twiddle_free(&mut submat, backwards);
+                } else {
+                    let layer_rev = log_h - 1 - layer;
+                    let layer_pow = 1 << layer_rev;
+                    // For layers 1..mid-1, twiddles[0] = root^0 = 1 is always the first
+                    // twiddle consumed per block. Use the optimized version that applies
+                    // TwiddleFreeButterfly for the first row-pair of each block.
+                    dit_layer_first_one(
+                        &mut submat,
+                        layer,
+                        twiddles.iter().step_by(layer_pow),
+                        backwards,
+                    );
+                }
                 backwards = !backwards;
             }
         });
@@ -385,9 +400,9 @@ fn first_half_general_oop<F: Field>(
 
 /// This can be used as the second half of a DIT butterfly network. It works in bit-reversed order.
 ///
-/// The optional `scale` parameter is used to scale the matrix by a constant factor. Normally that
-/// would be a separate step, but it's best to merge it into a butterfly network to avoid a
-/// separate pass through main memory.
+/// The optional `scale` parameter is used to scale the matrix by a constant factor. Rather than
+/// doing a separate pass over memory, we fold the scaling into the first butterfly layer to
+/// eliminate an extra memory pass.
 #[instrument(level = "debug", skip_all)]
 #[inline(always)] // To avoid branch on scale
 fn second_half<F: Field>(
@@ -404,18 +419,49 @@ fn second_half<F: Field>(
         .for_each(|(thread, mut submat)| {
             let mut backwards = false;
             if let Some(scale) = scale {
-                submat.scale(scale);
-            }
-            for layer in mid..log_h {
-                let first_block = thread << (layer - mid);
-                dit_layer_rev(
-                    &mut submat,
-                    log_h,
-                    layer,
-                    twiddles_rev[first_block..].iter().copied(),
-                    backwards,
-                );
-                backwards = !backwards;
+                // Fold the scale into the first butterfly layer to avoid a separate
+                // memory pass. This merges the O(N) scaling step into the first O(N)
+                // butterfly pass.
+                let mut scale_applied = false;
+                for layer in mid..log_h {
+                    let first_block = thread << (layer - mid);
+                    if !scale_applied {
+                        scale_applied = true;
+                        dit_layer_rev_scaled(
+                            &mut submat,
+                            log_h,
+                            layer,
+                            twiddles_rev[first_block..].iter().copied(),
+                            backwards,
+                            Some(scale),
+                        );
+                    } else {
+                        dit_layer_rev(
+                            &mut submat,
+                            log_h,
+                            layer,
+                            twiddles_rev[first_block..].iter().copied(),
+                            backwards,
+                        );
+                    }
+                    backwards = !backwards;
+                }
+                // Handle case where there are no layers in the second half (mid == log_h).
+                if !scale_applied {
+                    submat.scale(scale);
+                }
+            } else {
+                for layer in mid..log_h {
+                    let first_block = thread << (layer - mid);
+                    dit_layer_rev(
+                        &mut submat,
+                        log_h,
+                        layer,
+                        twiddles_rev[first_block..].iter().copied(),
+                        backwards,
+                    );
+                    backwards = !backwards;
+                }
             }
         });
 }
@@ -446,6 +492,90 @@ fn second_half_general<F: Field>(
                 backwards = !backwards;
             }
         });
+}
+
+/// One layer of a DIT butterfly network where all twiddle factors are 1 (i.e., layer 0).
+///
+/// This is equivalent to `dit_layer` with `layer=0` and `twiddles[0]=1`, but uses
+/// `TwiddleFreeButterfly` to avoid a Montgomery multiplication by 1 in the hot loop.
+///
+/// Correctness: For layer=0, `half_block_size=1` and each block clones the twiddle
+/// iterator from position 0, consuming only `twiddles[0] = generator^0 = 1`.
+/// Since multiplying by 1 is a no-op, `TwiddleFreeButterfly` gives identical results.
+fn dit_layer_twiddle_free<F: Field>(submat: &mut RowMajorMatrixViewMut<'_, F>, backwards: bool) {
+    // layer=0 means half_block_size=1, block_size=2.
+    let width = submat.width();
+    debug_assert!(submat.height() >= 2);
+
+    let process_block = move |block: &mut [F]| {
+        // Each block is exactly 2 rows: lo = block[0..width], hi = block[width..2*width]
+        let (lo, hi) = block.split_at_mut(width);
+        TwiddleFreeButterfly.apply_to_rows(lo, hi);
+    };
+
+    let blocks = submat.values.chunks_mut(2 * width);
+    if backwards {
+        for block in blocks.rev() {
+            process_block(block);
+        }
+    } else {
+        for block in blocks {
+            process_block(block);
+        }
+    }
+}
+
+/// One layer of a DIT butterfly network where the first twiddle factor per block is always 1.
+///
+/// This is used in `first_half` for layers 1..mid-1 of the standard (non-coset) DFT/inverse DFT,
+/// where `twiddles[0] = root^0 = 1`. The first row-pair of each block uses `TwiddleFreeButterfly`
+/// to avoid one Montgomery multiplication per block, while subsequent row-pairs use `DitButterfly`.
+///
+/// Correctness: The twiddle iterator yields `twiddles[0], twiddles[step], twiddles[2*step], ...`
+/// where `twiddles[0] = root^0 = 1`. Only used when this property holds.
+fn dit_layer_first_one<'a, F: Field>(
+    submat: &mut RowMajorMatrixViewMut<'_, F>,
+    layer: usize,
+    twiddles: impl Iterator<Item = &'a F> + Clone,
+    backwards: bool,
+) {
+    let half_block_size = 1 << layer;
+    let block_size = half_block_size * 2;
+    let width = submat.width();
+    debug_assert!(submat.height() >= block_size);
+    debug_assert!(
+        half_block_size >= 2,
+        "layer must be >= 1 for dit_layer_first_one"
+    );
+
+    let process_block = move |block: &mut [F]| {
+        let (lows, highs) = block.split_at_mut(half_block_size * width);
+        let mut tw_iter = twiddles.clone();
+        // First row-pair: twiddle is always 1, use TwiddleFreeButterfly to skip the multiply.
+        let _ = tw_iter.next(); // consume twiddles[0] = 1
+        let (lo0, lo_rest) = lows.split_at_mut(width);
+        let (hi0, hi_rest) = highs.split_at_mut(width);
+        TwiddleFreeButterfly.apply_to_rows(lo0, hi0);
+        // Remaining row-pairs use DitButterfly with their respective twiddle factors.
+        for (lo, hi, twiddle) in izip!(
+            lo_rest.chunks_mut(width),
+            hi_rest.chunks_mut(width),
+            tw_iter
+        ) {
+            DitButterfly(*twiddle).apply_to_rows(lo, hi);
+        }
+    };
+
+    let blocks = submat.values.chunks_mut(block_size * width);
+    if backwards {
+        for block in blocks.rev() {
+            process_block(block);
+        }
+    } else {
+        for block in blocks {
+            process_block(block);
+        }
+    }
 }
 
 /// One layer of a DIT butterfly network.
@@ -483,7 +613,7 @@ fn dit_layer<'a, F: Field>(
     }
 }
 
-/// One layer of a DIT butterfly network.
+/// One layer of a DIT butterfly network, out-of-place.
 fn dit_layer_oop<'a, F: Field>(
     src: &RowMajorMatrixView<'_, F>,
     dst: &mut RowMajorMatrixViewMut<'_, MaybeUninit<F>>,
@@ -516,6 +646,70 @@ fn dit_layer_oop<'a, F: Field>(
 
     for (src_block, dst_block) in src_chunks.zip(dst_chunks) {
         process_blocks(src_block, dst_block);
+    }
+}
+
+/// Like `dit_layer_rev`, except with an optional scale factor folded into the butterfly.
+///
+/// This avoids an extra memory pass when scaling is required (e.g., 1/N in inverse DFT).
+/// When `scale` is `None`, this is identical to `dit_layer_rev`.
+///
+/// When `scale` is `Some(s)`, uses `ScaledDitButterfly::new(twiddle, s)` which precomputes
+/// `twiddle * scale` once per block, reducing multiplications in the hot loop from 3 to 2.
+fn dit_layer_rev_scaled<F: Field>(
+    submat: &mut RowMajorMatrixViewMut<'_, F>,
+    log_h: usize,
+    layer: usize,
+    twiddles_rev: impl DoubleEndedIterator<Item = F> + ExactSizeIterator,
+    backwards: bool,
+    scale: Option<F>,
+) {
+    let layer_rev = log_h - 1 - layer;
+
+    let half_block_size = 1 << layer_rev;
+    let block_size = half_block_size * 2;
+    let width = submat.width();
+    debug_assert!(submat.height() >= block_size);
+
+    match scale {
+        None => {
+            // No scaling: same as regular dit_layer_rev
+            let blocks_and_twiddles = submat
+                .values
+                .chunks_mut(block_size * width)
+                .zip(twiddles_rev);
+            if backwards {
+                for (block, twiddle) in blocks_and_twiddles.rev() {
+                    let (lo, hi) = block.split_at_mut(half_block_size * width);
+                    DitButterfly(twiddle).apply_to_rows(lo, hi);
+                }
+            } else {
+                for (block, twiddle) in blocks_and_twiddles {
+                    let (lo, hi) = block.split_at_mut(half_block_size * width);
+                    DitButterfly(twiddle).apply_to_rows(lo, hi);
+                }
+            }
+        }
+        Some(s) => {
+            // Fold scaling into the butterfly to avoid a separate memory pass.
+            // ScaledDitButterfly::new precomputes twiddle * scale once per block,
+            // so the hot loop only needs 2 multiplications instead of 3.
+            let blocks_and_twiddles = submat
+                .values
+                .chunks_mut(block_size * width)
+                .zip(twiddles_rev);
+            if backwards {
+                for (block, twiddle) in blocks_and_twiddles.rev() {
+                    let (lo, hi) = block.split_at_mut(half_block_size * width);
+                    ScaledDitButterfly::new(twiddle, s).apply_to_rows(lo, hi);
+                }
+            } else {
+                for (block, twiddle) in blocks_and_twiddles {
+                    let (lo, hi) = block.split_at_mut(half_block_size * width);
+                    ScaledDitButterfly::new(twiddle, s).apply_to_rows(lo, hi);
+                }
+            }
+        }
     }
 }
 
