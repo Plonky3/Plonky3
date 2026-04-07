@@ -250,7 +250,7 @@ fn eval_full_round<
     }
     LinearLayers::external_linear_layer(state);
     for (state_i, post_i) in state.iter_mut().zip(full_round.post) {
-        builder.assert_eq(state_i.dup(), post_i);
+        builder.assert_eq(state_i.clone(), post_i);
         *state_i = post_i.into();
     }
 }

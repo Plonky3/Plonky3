@@ -8,7 +8,6 @@ use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
-use p3_util::zip_eq::zip_eq;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 use thiserror::Error;
 
@@ -25,6 +24,69 @@ where
 {
     #[error("invalid proof shape")]
     InvalidProofShape,
+    #[error("query {query}: commit phase opening count mismatch: expected {expected}, got {got}")]
+    QueryCommitPhaseOpeningsCountMismatch {
+        query: usize,
+        expected: usize,
+        got: usize,
+    },
+    #[error(
+        "query {query}: commit phase log-arity schedule mismatch: expected {expected:?}, got {got:?}"
+    )]
+    QueryLogAritiesMismatch {
+        query: usize,
+        expected: Vec<usize>,
+        got: Vec<usize>,
+    },
+    #[error("commit PoW witness count mismatch: expected {expected}, got {got}")]
+    CommitPowWitnessCountMismatch { expected: usize, got: usize },
+    #[error("final polynomial length mismatch: expected {expected}, got {got}")]
+    FinalPolyLengthMismatch { expected: usize, got: usize },
+    #[error("query proof count mismatch: expected {expected}, got {got}")]
+    QueryProofCountMismatch { expected: usize, got: usize },
+    #[error("query {query}: commit-phase fold data count mismatch: expected {expected}, got {got}")]
+    QueryCommitPhaseDataCountMismatch {
+        query: usize,
+        expected: usize,
+        got: usize,
+    },
+    #[error("missing initial reduced opening at log height {expected}")]
+    MissingInitialReducedOpening { expected: usize },
+    #[error("initial reduced opening height mismatch: expected {expected}, got {got}")]
+    InitialReducedOpeningHeightMismatch { expected: usize, got: usize },
+    #[error("round {round}: sibling values length mismatch: expected {expected}, got {got}")]
+    SiblingValuesLengthMismatch {
+        round: usize,
+        expected: usize,
+        got: usize,
+    },
+    #[error("final folded height mismatch: expected {expected}, got {got}")]
+    FinalFoldHeightMismatch { expected: usize, got: usize },
+    #[error(
+        "unconsumed reduced openings remain after folding: next log height {next_log_height}, remaining {remaining}"
+    )]
+    UnconsumedReducedOpenings {
+        next_log_height: usize,
+        remaining: usize,
+    },
+    #[error("input proof batch count mismatch: expected {expected}, got {got}")]
+    InputProofBatchCountMismatch { expected: usize, got: usize },
+    #[error("batch {batch}: opened-values matrix count mismatch: expected {expected}, got {got}")]
+    BatchOpenedValuesCountMismatch {
+        batch: usize,
+        expected: usize,
+        got: usize,
+    },
+    #[error(
+        "batch {batch}, matrix {matrix}, point {point}: evaluation count mismatch: expected {expected}, got {got}"
+    )]
+    PointEvaluationCountMismatch {
+        batch: usize,
+        matrix: usize,
+        point: usize,
+        expected: usize,
+        got: usize,
+    },
     #[error("commit phase MMCS error: {0:?}")]
     CommitPhaseMmcsError(CommitMmcsErr),
     #[error("input error: {0:?}")]
@@ -33,8 +95,6 @@ where
     FinalPolyMismatch,
     #[error("invalid proof-of-work witness")]
     InvalidPowWitness,
-    #[error("missing input: required input is not present")]
-    MissingInput,
 }
 
 /// A chain of FRI input openings allowing a verifier to check a sequence of
@@ -84,12 +144,16 @@ where
     let alpha: Challenge = challenger.sample_algebra_element();
 
     // Validate that all query proofs have the same number of commit phase openings
-    if !proof
-        .query_proofs
-        .iter()
-        .all(|qp| qp.commit_phase_openings.len() == proof.commit_phase_commits.len())
-    {
-        return Err(FriError::InvalidProofShape);
+    let expected_rounds = proof.commit_phase_commits.len();
+    for (query, qp) in proof.query_proofs.iter().enumerate() {
+        let got_rounds = qp.commit_phase_openings.len();
+        if got_rounds != expected_rounds {
+            return Err(FriError::QueryCommitPhaseOpeningsCountMismatch {
+                query,
+                expected: expected_rounds,
+                got: got_rounds,
+            });
+        }
     }
 
     // Extract the per-round folding arities from the proof and ensure they are consistent.
@@ -104,14 +168,19 @@ where
         })
         .unwrap_or_default();
 
-    if proof.query_proofs.iter().any(|qp| {
-        qp.commit_phase_openings
+    for (query, qp) in proof.query_proofs.iter().enumerate().skip(1) {
+        let got_log_arities = qp
+            .commit_phase_openings
             .iter()
             .map(|o| o.log_arity as usize)
-            .collect::<Vec<_>>()
-            != log_arities
-    }) {
-        return Err(FriError::InvalidProofShape);
+            .collect::<Vec<_>>();
+        if got_log_arities != log_arities {
+            return Err(FriError::QueryLogAritiesMismatch {
+                query,
+                expected: log_arities,
+                got: got_log_arities,
+            });
+        }
     }
 
     // With variable arity, we compute log_global_max_height by summing all log_arities.
@@ -120,7 +189,10 @@ where
     let log_global_max_height = total_log_reduction + params.log_blowup + params.log_final_poly_len;
 
     if proof.commit_pow_witnesses.len() != proof.commit_phase_commits.len() {
-        return Err(FriError::InvalidProofShape);
+        return Err(FriError::CommitPowWitnessCountMismatch {
+            expected: proof.commit_phase_commits.len(),
+            got: proof.commit_pow_witnesses.len(),
+        });
     }
 
     // Generate all of the random challenges for the FRI rounds, checking PoW per round.
@@ -141,7 +213,10 @@ where
 
     // Ensure that the final polynomial has the expected degree.
     if proof.final_poly.len() != params.final_poly_len() {
-        return Err(FriError::InvalidProofShape);
+        return Err(FriError::FinalPolyLengthMismatch {
+            expected: params.final_poly_len(),
+            got: proof.final_poly.len(),
+        });
     }
 
     // Observe all coefficients of the final polynomial.
@@ -149,7 +224,10 @@ where
 
     // Ensure that we have the expected number of FRI query proofs.
     if proof.query_proofs.len() != params.num_queries {
-        return Err(FriError::InvalidProofShape);
+        return Err(FriError::QueryProofCountMismatch {
+            expected: params.num_queries,
+            got: proof.query_proofs.len(),
+        });
     }
 
     // Bind the variable-arity schedule into the transcript before query grinding.
@@ -165,10 +243,13 @@ where
     // The log of the final domain size.
     let log_final_height = params.log_blowup + params.log_final_poly_len;
 
-    for QueryProof {
-        input_proof,
-        commit_phase_openings,
-    } in &proof.query_proofs
+    for (
+        query,
+        QueryProof {
+            input_proof,
+            commit_phase_openings,
+        },
+    ) in proof.query_proofs.iter().enumerate()
     {
         // For each query proof, we start by generating the random index.
         let index =
@@ -193,6 +274,19 @@ where
         // If we queried extra bits, shift them off now.
         let mut domain_index = index >> folding.extra_query_index_bits();
 
+        if commit_phase_openings.len() != proof.commit_phase_commits.len() {
+            return Err(FriError::QueryCommitPhaseDataCountMismatch {
+                query,
+                expected: proof.commit_phase_commits.len(),
+                got: commit_phase_openings.len(),
+            });
+        }
+
+        let fold_data_iter = betas
+            .iter()
+            .zip(proof.commit_phase_commits.iter())
+            .zip(commit_phase_openings.iter());
+
         // Starting at the evaluation at `index` of the initial domain,
         // perform FRI folds until the domain size reaches the final domain size.
         // Check after each fold that the pair of sibling evaluations at the current
@@ -201,15 +295,7 @@ where
             folding,
             params,
             &mut domain_index,
-            zip_eq(
-                zip_eq(
-                    &betas,
-                    &proof.commit_phase_commits,
-                    FriError::InvalidProofShape,
-                )?,
-                commit_phase_openings,
-                FriError::InvalidProofShape,
-            )?,
+            fold_data_iter,
             ro,
             log_global_max_height,
             log_final_height,
@@ -291,8 +377,16 @@ where
     // but they should be satisfied by any non malicious prover.
     // ro_iter being empty means that we have committed to no polynomials at all and
     // we need to roll in a polynomial initially otherwise we are just folding a zero polynomial.
-    if ro_iter.peek().is_none() || ro_iter.peek().unwrap().0 != log_global_max_height {
-        return Err(FriError::InvalidProofShape);
+    let Some((first_log_height, _)) = ro_iter.peek() else {
+        return Err(FriError::MissingInitialReducedOpening {
+            expected: log_global_max_height,
+        });
+    };
+    if *first_log_height != log_global_max_height {
+        return Err(FriError::InitialReducedOpeningHeightMismatch {
+            expected: log_global_max_height,
+            got: *first_log_height,
+        });
     }
     let mut folded_eval = ro_iter.next().unwrap().1;
 
@@ -301,13 +395,17 @@ where
 
     // We start with evaluations over a domain of size (1 << log_global_max_height). We fold
     // using FRI until the domain size reaches (1 << log_final_height).
-    for ((&beta, comm), opening) in fold_data_iter {
+    for (round, ((&beta, comm), opening)) in fold_data_iter.enumerate() {
         let log_arity = opening.log_arity as usize;
         let arity = 1 << log_arity;
 
         // Validate that sibling_values has the expected length (arity - 1)
         if opening.sibling_values.len() != arity - 1 {
-            return Err(FriError::InvalidProofShape);
+            return Err(FriError::SiblingValuesLengthMismatch {
+                round,
+                expected: arity - 1,
+                got: opening.sibling_values.len(),
+            });
         }
 
         // Reconstruct the full evaluation row from self + siblings
@@ -374,12 +472,18 @@ where
 
     // Verify we reached the expected final height
     if log_current_height != log_final_height {
-        return Err(FriError::InvalidProofShape);
+        return Err(FriError::FinalFoldHeightMismatch {
+            expected: log_final_height,
+            got: log_current_height,
+        });
     }
 
     // If ro_iter is not empty, we failed to fold in some polynomial evaluations.
-    if ro_iter.next().is_some() {
-        return Err(FriError::InvalidProofShape);
+    if let Some((next_log_height, _)) = ro_iter.next() {
+        return Err(FriError::UnconsumedReducedOpenings {
+            next_log_height,
+            remaining: 1 + ro_iter.count(),
+        });
     }
 
     // If we reached this point, we have verified that, starting at the initial index,
@@ -430,12 +534,19 @@ where
     // log_height -> (alpha_pow, reduced_opening)
     let mut reduced_openings = BTreeMap::<usize, (Challenge, Challenge)>::new();
 
+    if input_proof.len() != commitments_with_opening_points.len() {
+        return Err(FriError::InputProofBatchCountMismatch {
+            expected: commitments_with_opening_points.len(),
+            got: input_proof.len(),
+        });
+    }
+
     // For each batch commitment and opening proof
-    for (batch_opening, (batch_commit, mats)) in zip_eq(
-        input_proof,
-        commitments_with_opening_points,
-        FriError::InvalidProofShape,
-    )? {
+    for (batch, (batch_opening, (batch_commit, mats))) in input_proof
+        .iter()
+        .zip(commitments_with_opening_points.iter())
+        .enumerate()
+    {
         // Find the height of each matrix in the batch.
         // Currently we only check domain.size() as the shift is
         // assumed to always be Val::GENERATOR.
@@ -467,12 +578,21 @@ where
             )
             .map_err(FriError::InputError)?;
 
+        if batch_opening.opened_values.len() != mats.len() {
+            return Err(FriError::BatchOpenedValuesCountMismatch {
+                batch,
+                expected: mats.len(),
+                got: batch_opening.opened_values.len(),
+            });
+        }
+
         // For each matrix in the commitment
-        for (mat_opening, (mat_domain, mat_points_and_values)) in zip_eq(
-            &batch_opening.opened_values,
-            mats,
-            FriError::InvalidProofShape,
-        )? {
+        for (matrix, (mat_opening, (mat_domain, mat_points_and_values))) in batch_opening
+            .opened_values
+            .iter()
+            .zip(mats.iter())
+            .enumerate()
+        {
             let log_height = log2_strict_usize(mat_domain.size()) + params.log_blowup;
 
             let bits_reduced = log_global_max_height - log_height;
@@ -490,10 +610,18 @@ where
 
             // For each polynomial `f` in our matrix, compute `(f(z) - f(x))/(z - x)`,
             // scale by the appropriate alpha power and add to the reduced opening for this log_height.
-            for (z, ps_at_z) in mat_points_and_values {
+            for (point, (z, ps_at_z)) in mat_points_and_values.iter().enumerate() {
                 let quotient = (*z - x).inverse();
-                for (&p_at_x, &p_at_z) in zip_eq(mat_opening, ps_at_z, FriError::InvalidProofShape)?
-                {
+                if mat_opening.len() != ps_at_z.len() {
+                    return Err(FriError::PointEvaluationCountMismatch {
+                        batch,
+                        matrix,
+                        point,
+                        expected: mat_opening.len(),
+                        got: ps_at_z.len(),
+                    });
+                }
+                for (&p_at_x, &p_at_z) in mat_opening.iter().zip(ps_at_z.iter()) {
                     // Note we just checked batch proofs to ensure p_at_x is correct.
                     // x, z were sent by the verifier.
                     // ps_at_z was sent to the verifier and we are using fri to prove it is correct.

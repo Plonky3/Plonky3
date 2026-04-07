@@ -477,6 +477,9 @@ mod tests {
         fn width(&self) -> usize {
             self.width
         }
+        fn num_periodic_columns(&self) -> usize {
+            self.periodic_columns().len()
+        }
     }
 
     impl Air<SymbolicAirBuilder<F>> for MockAir {
@@ -724,6 +727,17 @@ mod tests {
         builder.assert_zero_ext(expr);
         let ext_constraints = builder.extension_constraints();
         assert_eq!(ext_constraints.len(), 1);
+    }
+
+    #[test]
+    fn test_assert_zeros_ext_batches_extension_constraints() {
+        let mut builder = SymbolicAirBuilder::<F, EF>::new(layout_with_perm(0, 2, 0, 2, 1, 0));
+        let a = SymbolicExpressionExt::<F, EF>::from(F::new(3));
+        let b = SymbolicExpressionExt::<F, EF>::from(F::new(4));
+        builder.assert_zeros_ext([a, b]);
+
+        assert_eq!(builder.extension_constraints().len(), 2);
+        assert_eq!(builder.constraint_layout().ext_indices.len(), 2);
     }
 
     #[test]

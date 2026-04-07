@@ -4,19 +4,19 @@ use core::fmt::Debug;
 
 use p3_baby_bear::{
     BABYBEAR_POSEIDON1_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_16,
-    BABYBEAR_S_BOX_DEGREE, BabyBear,
+    BABYBEAR_POSEIDON1_RC_16, BABYBEAR_S_BOX_DEGREE, BabyBear, MDSBabyBearData,
 };
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
-use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_params};
+use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_poseidon1_air::{RoundConstants, VectorizedPoseidon1Air};
+use p3_monty_31::MDSUtils;
+use p3_poseidon1::Poseidon1Constants;
+use p3_poseidon1_air::VectorizedPoseidon1Air;
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{StarkConfig, prove, verify};
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
 #[cfg(target_family = "unix")]
 use tikv_jemallocator::Jemalloc;
 use tracing_forest::ForestLayer;
@@ -109,9 +109,13 @@ fn prove_and_verify() -> Result<(), impl Debug> {
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
     let challenger = Challenger::from_hasher(vec![], byte_hash);
 
-    // WARNING: SmallRng is NOT cryptographically secure. Use a real PRNG in production.
-    let mut rng = SmallRng::seed_from_u64(1);
-    let constants = RoundConstants::from_rng(&mut rng);
+    let raw = Poseidon1Constants {
+        rounds_f: 2 * HALF_FULL_ROUNDS,
+        rounds_p: PARTIAL_ROUNDS,
+        mds_circ_col: MDSBabyBearData::MATRIX_CIRC_MDS_16_COL,
+        round_constants: BABYBEAR_POSEIDON1_RC_16.to_vec(),
+    };
+    let (full, partial) = raw.to_optimized();
     let air: VectorizedPoseidon1Air<
         Val,
         WIDTH,
@@ -120,9 +124,9 @@ fn prove_and_verify() -> Result<(), impl Debug> {
         HALF_FULL_ROUNDS,
         PARTIAL_ROUNDS,
         VECTOR_LEN,
-    > = VectorizedPoseidon1Air::new(constants);
+    > = VectorizedPoseidon1Air::new(full, partial);
 
-    let fri_params = create_benchmark_fri_params(challenge_mmcs);
+    let fri_params = FriParameters::new_benchmark(challenge_mmcs);
 
     // Generate the execution trace (with extra capacity for LDE blowup).
     let trace = air.generate_vectorized_trace_rows(NUM_PERMUTATIONS, fri_params.log_blowup);

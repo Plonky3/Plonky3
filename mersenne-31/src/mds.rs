@@ -187,7 +187,7 @@ impl Permutation<[Mersenne31; 12]> for MdsMatrixMersenne31 {
 }
 impl MdsPermutation<Mersenne31, 12> for MdsMatrixMersenne31 {}
 
-const MATRIX_CIRC_MDS_16_SML_ROW: [i64; 16] =
+pub(crate) const MATRIX_CIRC_MDS_16_SML_ROW: [i64; 16] =
     [1, 1, 51, 1, 11, 17, 2, 1, 101, 63, 15, 2, 67, 22, 13, 3];
 
 impl Permutation<[Mersenne31; 16]> for MdsMatrixMersenne31 {
@@ -204,7 +204,7 @@ impl Permutation<[Mersenne31; 16]> for MdsMatrixMersenne31 {
 impl MdsPermutation<Mersenne31, 16> for MdsMatrixMersenne31 {}
 
 #[rustfmt::skip]
-const MATRIX_CIRC_MDS_32_MERSENNE31_ROW: [i64; 32] = [
+pub(crate) const MATRIX_CIRC_MDS_32_MERSENNE31_ROW: [i64; 32] = [
     0x1896DC78, 0x559D1E29, 0x04EBD732, 0x3FF449D7,
     0x2DB0E2CE, 0x26776B85, 0x76018E57, 0x1025FA13,
     0x06486BAB, 0x37706EBA, 0x25EB966B, 0x113C24E5,

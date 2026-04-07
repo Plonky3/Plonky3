@@ -6,7 +6,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::extension::{BinomialExtensionField, ComplexExtendable};
 use p3_field::{ExtensionField, Field, PrimeField32, PrimeField64, TwoAdicField};
-use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_params, create_benchmark_fri_params_high_arity};
+use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher};
@@ -96,7 +96,7 @@ where
     let val_mmcs = get_keccak_mmcs(3);
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
-    let fri_params = create_benchmark_fri_params_high_arity(challenge_mmcs);
+    let fri_params = FriParameters::new_benchmark_high_arity(challenge_mmcs);
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
@@ -138,7 +138,7 @@ where
     let val_mmcs = get_poseidon2_mmcs::<F, _, _>(perm16, perm24.clone(), 3);
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
-    let fri_params = create_benchmark_fri_params_high_arity(challenge_mmcs);
+    let fri_params = FriParameters::new_benchmark_high_arity(challenge_mmcs);
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
@@ -175,7 +175,7 @@ pub fn prove_m31_keccak<
     let val_mmcs = get_keccak_mmcs(0);
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
-    let fri_params = create_benchmark_fri_params(challenge_mmcs);
+    let fri_params = FriParameters::new_benchmark(challenge_mmcs);
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
@@ -216,7 +216,7 @@ where
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
-    let fri_params = create_benchmark_fri_params(challenge_mmcs);
+    let fri_params = FriParameters::new_benchmark(challenge_mmcs);
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 

@@ -11,8 +11,8 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::op_assign_macros::{
     impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
-    impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field,
-    ring_sum,
+    impl_packed_field_div, impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field,
+    impl_sum_prod_base_field, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
@@ -116,6 +116,15 @@ impl PrimeCharacteristicRing for PackedGoldilocksNeon {
     }
 
     #[inline]
+    fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
+        Self::from_fn(|lane| {
+            let lhs_lane: [Goldilocks; N] = core::array::from_fn(|i| lhs[i].as_slice()[lane]);
+            let rhs_lane: [Goldilocks; N] = core::array::from_fn(|i| rhs[i].as_slice()[lane]);
+            Goldilocks::dot_product(&lhs_lane, &rhs_lane)
+        })
+    }
+
+    #[inline]
     fn square(&self) -> Self {
         Self::from_vector(square(self.to_vector()))
     }
@@ -138,11 +147,20 @@ impl_add_base_field!(PackedGoldilocksNeon, Goldilocks);
 impl_sub_base_field!(PackedGoldilocksNeon, Goldilocks);
 impl_mul_base_field!(PackedGoldilocksNeon, Goldilocks);
 impl_div_methods!(PackedGoldilocksNeon, Goldilocks);
+impl_packed_field_div!(PackedGoldilocksNeon);
 impl_sum_prod_base_field!(PackedGoldilocksNeon, Goldilocks);
 
 impl Algebra<Goldilocks> for PackedGoldilocksNeon {
     // Benchmarked on AArch64 NEON: chunk=2 ≈ 182ns, chunk=4 ≈ 198ns, chunk=8 ≈ 221ns.
     const BATCHED_LC_CHUNK: usize = 2;
+
+    #[inline]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Goldilocks; N]) -> Self {
+        Self::from_fn(|lane| {
+            let a_lane: [Goldilocks; N] = core::array::from_fn(|i| a[i].as_slice()[lane]);
+            Goldilocks::dot_product(&a_lane, f)
+        })
+    }
 }
 
 impl_packed_value!(PackedGoldilocksNeon, Goldilocks, WIDTH);

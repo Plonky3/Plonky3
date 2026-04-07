@@ -1,13 +1,14 @@
 use alloc::vec::Vec;
 use core::arch::x86_64::{self, __m512i};
 
-use p3_field::{PrimeCharacteristicRing, PrimeField32};
+use p3_field::PrimeCharacteristicRing;
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
     InternalLayerConstructor, MDSMat4, mds_light_permutation,
 };
 
-use crate::{Mersenne31, P, PackedMersenne31AVX512, exp5};
+use super::utils::{add_rc_and_sbox, convert_to_vec_neg_form};
+use crate::{Mersenne31, P, PackedMersenne31AVX512};
 
 /// The internal layers of the Poseidon2 permutation for Mersenne31.
 ///
@@ -45,15 +46,6 @@ impl<const WIDTH: usize> ExternalLayerConstructor<Mersenne31, WIDTH>
 {
     fn new_from_constants(external_constants: ExternalLayerConstants<Mersenne31, WIDTH>) -> Self {
         Self::new_from_constants(external_constants)
-    }
-}
-
-/// Convert elements from the standard form {0, ..., P} to {-P, ..., 0} and copy into a vector
-fn convert_to_vec_neg_form(input: i32) -> __m512i {
-    let input_sub_p = input - (Mersenne31::ORDER_U32 as i32);
-    unsafe {
-        // Safety: If this code got compiled then AVX512-F intrinsics are available.
-        x86_64::_mm512_set1_epi32(input_sub_p)
     }
 }
 
@@ -193,25 +185,6 @@ fn diagonal_mul_24(state: &mut [PackedMersenne31AVX512; 24]) {
     state[21] = mul_2exp_i::<20, 11>(state[21]);
     state[22] = mul_2exp_i::<21, 10>(state[22]);
     state[23] = mul_2exp_i::<22, 9>(state[23]);
-}
-
-/// Compute the map x -> (x + rc)^5 on Mersenne-31 field elements.
-/// x must be represented as a value in {0..P}.
-/// rc must be represented as a value in {-P, ..., 0}.
-/// If the inputs do not conform to these representations, the result is undefined.
-/// The output will be represented as a value in {0..P}.
-#[inline(always)]
-fn add_rc_and_sbox(input: PackedMersenne31AVX512, rc: __m512i) -> PackedMersenne31AVX512 {
-    unsafe {
-        // Safety: If this code got compiled then AVX512-F intrinsics are available.
-        let input_vec = input.to_vector();
-        let input_plus_rc = x86_64::_mm512_add_epi32(input_vec, rc);
-
-        // Due to the representations of input and rc, input_plus_rc is in {-P, ..., P}.
-        // This is exactly the required bound to apply sbox.
-        let input_post_sbox = exp5(input_plus_rc);
-        PackedMersenne31AVX512::from_vector(input_post_sbox)
-    }
 }
 
 /// Compute a single Poseidon2 internal layer on a state of width 16.

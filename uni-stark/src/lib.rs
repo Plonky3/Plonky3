@@ -4,7 +4,6 @@
 
 extern crate alloc;
 
-mod check_constraints;
 mod config;
 mod error;
 mod folder;
@@ -15,7 +14,6 @@ mod sub_builder;
 mod symbolic;
 mod verifier;
 
-pub use check_constraints::*;
 pub use config::*;
 pub use error::*;
 pub use folder::*;

@@ -4,7 +4,9 @@ use core::marker::PhantomData;
 use core::slice::from_ref;
 
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpression};
-use p3_air::{Air, AirBuilder, BaseAir, BaseLeaf, PermutationAirBuilder, WindowAccess};
+use p3_air::{
+    Air, AirBuilder, BaseAir, BaseLeaf, PeriodicAirBuilder, PermutationAirBuilder, WindowAccess,
+};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::{
@@ -16,7 +18,7 @@ use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
-use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs, create_test_fri_params};
+use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
 use p3_lookup::LookupAir;
 use p3_lookup::lookup_traits::{Direction, Kind, Lookup};
@@ -181,6 +183,66 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
     }
 }
 impl<F: Field> LookupAir<F> for MulAir {}
+
+#[derive(Clone)]
+struct PeriodicAir<F> {
+    periodic: Vec<Vec<F>>,
+}
+
+impl<F: Field + PrimeCharacteristicRing> PeriodicAir<F> {
+    fn new() -> Self {
+        Self {
+            periodic: vec![
+                vec![
+                    F::from_u64(1),
+                    F::from_u64(2),
+                    F::from_u64(3),
+                    F::from_u64(4),
+                ],
+                vec![F::from_u64(10), F::from_u64(20)],
+            ],
+        }
+    }
+
+    fn valid_trace(&self, rows: usize) -> RowMajorMatrix<F> {
+        let mut values = F::zero_vec(rows * 2);
+        for (i, row) in values.chunks_exact_mut(2).enumerate() {
+            row[0] = self.periodic[0][i % self.periodic[0].len()];
+            row[1] = self.periodic[1][i % self.periodic[1].len()];
+        }
+        RowMajorMatrix::new(values, 2)
+    }
+}
+
+impl<F: Field> BaseAir<F> for PeriodicAir<F> {
+    fn width(&self) -> usize {
+        2
+    }
+
+    fn num_periodic_columns(&self) -> usize {
+        self.periodic.len()
+    }
+
+    fn periodic_columns(&self) -> Vec<Vec<F>> {
+        self.periodic.clone()
+    }
+}
+
+impl<AB: AirBuilder + PeriodicAirBuilder> Air<AB> for PeriodicAir<AB::F>
+where
+    AB::F: Field,
+{
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let local = main.current_slice();
+        let p0 = builder.periodic_values()[0].into();
+        let p1 = builder.periodic_values()[1].into();
+        builder.assert_eq(local[0], p0);
+        builder.assert_eq(local[1], p1);
+    }
+}
+
+impl<F: Field> LookupAir<F> for PeriodicAir<F> {}
 
 // --- MulAirLookups structure for local and global lookups ---
 // This AIR is a `MulAir` that can register global lookups with `FibAirLookups`, as well as local lookups with a lookup column. Its inputs are the Fibonacci values.
@@ -556,7 +618,30 @@ fn make_config(seed: u64) -> MyConfig {
     let val_mmcs = ValMmcs::new(hash, compress, 0);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
-    let fri_params = create_test_fri_params(challenge_mmcs, 2);
+    let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
+    let pcs = MyPcs::new(dft, val_mmcs, fri_params);
+    let challenger = Challenger::new(perm);
+    StarkConfig::new(pcs, challenger)
+}
+
+/// Minimal FRI shape so a tiny trace still completes `prove_batch` / `verify_batch`.
+fn make_config_allow_tiny_trace(seed: u64) -> MyConfig {
+    let mut rng = SmallRng::seed_from_u64(seed);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let hash = MyHash::new(perm.clone());
+    let compress = MyCompress::new(perm.clone());
+    let val_mmcs = ValMmcs::new(hash, compress, 0);
+    let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+    let dft = Dft::default();
+    let fri_params = FriParameters {
+        log_blowup: 1,
+        log_final_poly_len: 0,
+        max_log_arity: 1,
+        num_queries: 2,
+        commit_proof_of_work_bits: 1,
+        query_proof_of_work_bits: 1,
+        mmcs: challenge_mmcs,
+    };
     let pcs = MyPcs::new(dft, val_mmcs, fri_params);
     let challenger = Challenger::new(perm);
     StarkConfig::new(pcs, challenger)
@@ -572,7 +657,7 @@ fn make_config_wide(seed: u64) -> MyConfigWide {
     let val_mmcs = ValMmcsWide::new(hash, compress, 0);
     let challenge_mmcs = ChallengeMmcsWide::new(val_mmcs.clone());
     let dft = Dft::default();
-    let fri_params = create_test_fri_params(challenge_mmcs, 2);
+    let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
     let pcs = MyPcsWide::new(dft, val_mmcs, fri_params);
     let challenger = Challenger::new(perm);
     StarkConfig::new(pcs, challenger)
@@ -608,7 +693,7 @@ fn make_config_zk(seed: u64) -> MyHidingConfig {
     let val_mmcs = HidingValMmcs::new(hash, compress, 2, rng.clone());
     let challenge_mmcs = HidingChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
-    let fri_params = create_test_fri_params(challenge_mmcs, 2);
+    let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
     let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, rng);
     let challenger = Challenger::new(perm);
     StarkConfig::new(pcs, challenger)
@@ -835,6 +920,40 @@ fn test_two_instances() -> Result<(), impl Debug> {
     let airs = vec![air_fib, air_mul];
     let pvs = vec![fib_pis, mul_pis];
     verify_batch(&config, &airs, &proof, &pvs, common)
+}
+
+#[test]
+fn test_periodic_air() -> Result<(), impl Debug> {
+    let config = make_config(42);
+    let air = PeriodicAir::<Val>::new();
+    let trace = air.valid_trace(1 << 6);
+    let instances = vec![StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values: vec![],
+        lookups: vec![],
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data);
+    verify_batch(&config, &[air], &proof, &[vec![]], common)
+}
+
+#[test]
+fn test_periodic_air_zk() -> Result<(), impl Debug> {
+    let config = make_config_zk(1234);
+    let air = PeriodicAir::<Val>::new();
+    let trace = air.valid_trace(1 << 6);
+    let instances = vec![StarkInstance {
+        air: &air,
+        trace: &trace,
+        public_values: vec![],
+        lookups: vec![],
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data);
+    verify_batch(&config, &[air], &proof, &[vec![]], common)
 }
 
 #[test]
@@ -1112,6 +1231,27 @@ fn test_single_instance() -> Result<(), impl Debug> {
     let config = make_config(9999);
 
     let (air_fib, fib_trace, fib_pis) = create_fib_instance(5); // 32 rows
+
+    let instances = vec![StarkInstance {
+        air: &air_fib,
+        trace: &fib_trace,
+        public_values: fib_pis.clone(),
+        lookups: vec![],
+    }];
+
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data);
+    let airs = vec![air_fib];
+    verify_batch(&config, &airs, &proof, &[fib_pis], common)
+}
+
+#[test]
+fn test_quotient_domain_size_not_multiple_of_packed_field_width() -> Result<(), impl Debug> {
+    let config = make_config_allow_tiny_trace(77_007);
+
+    // 2 rows → log2(trace)=1, one quotient chunk → quotient domain size = 2^1 = 2.
+    let (air_fib, fib_trace, fib_pis) = create_fib_instance(1);
 
     let instances = vec![StarkInstance {
         air: &air_fib,

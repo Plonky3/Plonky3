@@ -5,7 +5,10 @@ use core::marker::PhantomData;
 
 use itertools::{Itertools, izip};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, OpenedValues, Pcs, PolynomialSpace};
+use p3_commit::{
+    BatchOpening, BatchOpeningRef, BuildPeriodicLdeTableFast, Mmcs, OpenedValues, Pcs,
+    PeriodicLdeTable, PolynomialSpace,
+};
 use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field};
 use p3_fri::FriParameters;
@@ -26,7 +29,10 @@ use crate::folding::{CircleFriFolding, CircleFriFoldingForMmcs, fold_y, fold_y_r
 use crate::point::Point;
 use crate::prover::prove;
 use crate::verifier::verify;
-use crate::{CfftPerm, CfftPermutable, CircleEvaluations, CircleFriProof, cfft_permute_index};
+use crate::{
+    CfftPerm, CfftPermutable, CircleEvaluations, CircleFriProof, build_periodic_lde_table_circle,
+    cfft_permute_index,
+};
 
 #[derive(Clone, Debug)]
 pub struct CirclePcs<Val: Field, InputMmcs, FriMmcs> {
@@ -559,12 +565,33 @@ where
     }
 }
 
+impl<Val, InputMmcs, FriMmcs> BuildPeriodicLdeTableFast for CirclePcs<Val, InputMmcs, FriMmcs>
+where
+    Val: ComplexExtendable,
+    InputMmcs: Mmcs<Val>,
+{
+    type PeriodicDomain = CircleDomain<Val>;
+
+    fn maybe_build_periodic_lde_table_fast(
+        &self,
+        periodic_cols: &[Vec<p3_commit::Val<Self::PeriodicDomain>>],
+        trace_domain: Self::PeriodicDomain,
+        quotient_domain: Self::PeriodicDomain,
+    ) -> Option<PeriodicLdeTable<p3_commit::Val<Self::PeriodicDomain>>>
+    where
+        p3_commit::Val<Self::PeriodicDomain>: Clone,
+    {
+        let table = build_periodic_lde_table_circle(periodic_cols, &trace_domain, &quotient_domain);
+        Some(table)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use p3_challenger::{HashChallenger, SerializingChallenger32};
     use p3_commit::ExtensionMmcs;
     use p3_field::extension::BinomialExtensionField;
-    use p3_fri::create_test_fri_params;
+    use p3_fri::FriParameters;
     use p3_keccak::Keccak256Hash;
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_mersenne_31::Mersenne31;
@@ -599,7 +626,7 @@ mod tests {
 
         type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
 
-        let fri_params = create_test_fri_params(challenge_mmcs, 0);
+        let fri_params = FriParameters::new_testing(challenge_mmcs, 0);
 
         type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
         let pcs = Pcs {
