@@ -315,6 +315,84 @@ fn test_short_public_values_rejected() {
 }
 
 #[test]
+fn test_degree_bits_too_large_rejected() {
+    let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
+    let config = make_two_adic_config(2);
+    let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(21)];
+
+    let mut proof = prove(&config, &FibonacciAir {}, trace, &pis);
+    proof.degree_bits = usize::BITS as usize;
+
+    let err = verify(&config, &FibonacciAir {}, &proof, &pis)
+        .expect_err("verification should reject oversized degree_bits");
+    match err {
+        p3_uni_stark::VerificationError::InvalidProofShape(
+            InvalidProofShapeError::DegreeBitsTooLarge { got },
+        ) => {
+            assert_eq!(got, usize::BITS as usize);
+        }
+        _ => panic!("unexpected error: {err:?}"),
+    }
+}
+
+#[test]
+fn test_degree_bits_too_small_for_zk_rejected() {
+    type ByteHash = Keccak256Hash;
+    let byte_hash = ByteHash {};
+
+    type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
+    let u64_hash = U64Hash::new(KeccakF {});
+
+    type FieldHash = SerializingHasher<U64Hash>;
+    let field_hash = FieldHash::new(u64_hash);
+
+    type MyCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;
+    let compress = MyCompress::new(u64_hash);
+
+    type ValHidingMmcs = MerkleTreeHidingMmcs<
+        [Val; p3_keccak::VECTOR_LEN],
+        [u64; p3_keccak::VECTOR_LEN],
+        FieldHash,
+        MyCompress,
+        SmallRng,
+        2,
+        4,
+        4,
+    >;
+
+    type MyZkChallenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+    type ChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ValHidingMmcs>;
+    type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, SmallRng>;
+    type MyHidingConfig = StarkConfig<HidingPcs, Challenge, MyZkChallenger>;
+
+    let rng = SmallRng::seed_from_u64(1);
+    let val_mmcs = ValHidingMmcs::new(field_hash, compress, 0, rng);
+    let challenge_mmcs = ChallengeHidingMmcs::new(val_mmcs.clone());
+    let dft = Dft::default();
+    let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
+    let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
+    let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, SmallRng::seed_from_u64(1));
+    let challenger = MyZkChallenger::from_hasher(vec![], byte_hash);
+    let config = MyHidingConfig::new(pcs, challenger);
+    let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(21)];
+
+    let mut proof = prove(&config, &FibonacciAir {}, trace, &pis);
+    proof.degree_bits = 0;
+
+    let err = verify(&config, &FibonacciAir {}, &proof, &pis)
+        .expect_err("verification should reject too-small degree_bits in zk mode");
+    match err {
+        p3_uni_stark::VerificationError::InvalidProofShape(
+            InvalidProofShapeError::DegreeBitsTooSmall { minimum, got },
+        ) => {
+            assert_eq!(minimum, 1);
+            assert_eq!(got, 0);
+        }
+        _ => panic!("unexpected error: {err:?}"),
+    }
+}
+
+#[test]
 fn verify_two_adic_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
     let (config, air, pis, _) = two_adic_compat_case();
     let proof_bytes = read_fixture(TWO_ADIC_FIXTURE)

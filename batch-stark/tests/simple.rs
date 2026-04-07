@@ -1084,6 +1084,69 @@ fn test_short_public_values_rejected() -> Result<(), Box<dyn std::error::Error>>
 }
 
 #[test]
+fn test_degree_bits_too_large_rejected() -> Result<(), Box<dyn std::error::Error>> {
+    let config = make_config(7);
+
+    let (air_fib, trace, fib_pis) = create_fib_instance(4);
+    let instances = vec![StarkInstance {
+        air: &air_fib,
+        trace: &trace,
+        public_values: fib_pis.clone(),
+        lookups: vec![],
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let mut proof = prove_batch(&config, &instances, &prover_data);
+    proof.degree_bits[0] = usize::BITS as usize;
+
+    let airs = vec![air_fib];
+    let err = verify_batch(&config, &airs, &proof, &[fib_pis], common)
+        .expect_err("Should reject oversized degree_bits");
+    match err {
+        VerificationError::InvalidProofShape(
+            InvalidProofShapeError::DegreeBitsTooLargeForAir { air, got },
+        ) => {
+            assert_eq!(air, 0);
+            assert_eq!(got, usize::BITS as usize);
+        }
+        _ => panic!("unexpected error: {err:?}"),
+    }
+    Ok::<_, Box<dyn std::error::Error>>(())
+}
+
+#[test]
+fn test_degree_bits_too_small_for_zk_rejected() -> Result<(), Box<dyn std::error::Error>> {
+    let config = make_config_zk(1337);
+
+    let (air_fib, trace, fib_pis) = create_fib_instance(4);
+    let instances = vec![StarkInstance {
+        air: &air_fib,
+        trace: &trace,
+        public_values: fib_pis.clone(),
+        lookups: vec![],
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let mut proof = prove_batch(&config, &instances, &prover_data);
+    proof.degree_bits[0] = 0;
+
+    let airs = vec![air_fib];
+    let err = verify_batch(&config, &airs, &proof, &[fib_pis], common)
+        .expect_err("Should reject too-small degree_bits in zk mode");
+    match err {
+        VerificationError::InvalidProofShape(
+            InvalidProofShapeError::DegreeBitsTooSmallForAir { air, minimum, got },
+        ) => {
+            assert_eq!(air, 0);
+            assert_eq!(minimum, 1);
+            assert_eq!(got, 0);
+        }
+        _ => panic!("unexpected error: {err:?}"),
+    }
+    Ok::<_, Box<dyn std::error::Error>>(())
+}
+
+#[test]
 fn test_different_widths() -> Result<(), impl Debug> {
     let config = make_config(4242);
 

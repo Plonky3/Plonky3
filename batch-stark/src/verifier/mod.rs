@@ -24,6 +24,33 @@ use crate::proof::BatchProof;
 use crate::symbolic::get_log_num_quotient_chunks;
 use crate::transcript::BatchTranscript;
 
+#[inline]
+fn checked_pow2(log_degree: usize) -> Option<usize> {
+    (log_degree < usize::BITS as usize).then(|| 1usize << log_degree)
+}
+
+#[inline]
+fn validate_degree_bits_for_air(
+    air: usize,
+    degree_bits: usize,
+    is_zk: usize,
+) -> Result<(usize, usize), InvalidProofShapeError> {
+    if degree_bits < is_zk {
+        return Err(InvalidProofShapeError::DegreeBitsTooSmallForAir {
+            air,
+            minimum: is_zk,
+            got: degree_bits,
+        });
+    }
+
+    let degree =
+        checked_pow2(degree_bits).ok_or(InvalidProofShapeError::DegreeBitsTooLargeForAir {
+            air,
+            got: degree_bits,
+        })?;
+    Ok((degree_bits - is_zk, degree))
+}
+
 #[instrument(skip_all)]
 pub fn verify_batch<SC, A>(
     config: &SC,
@@ -88,8 +115,15 @@ where
     let mut log_num_quotient_chunks = Vec::with_capacity(airs.len());
     // The total number of quotient chunks, including ZK randomization.
     let mut num_quotient_chunks = Vec::with_capacity(airs.len());
+    let mut base_degree_bits = Vec::with_capacity(airs.len());
+    let mut ext_degrees = Vec::with_capacity(airs.len());
 
     for (i, air) in airs.iter().enumerate() {
+        let (base_db, ext_degree) =
+            validate_degree_bits_for_air(i, degree_bits[i], config.is_zk())?;
+        base_degree_bits.push(base_db);
+        ext_degrees.push(ext_degree);
+
         let pre_w = common
             .preprocessed
             .as_ref()
@@ -223,7 +257,7 @@ where
 
         // Observe per-instance binding data.
         let ext_db = degree_bits[i];
-        let base_db = ext_db - config.is_zk();
+        let base_db = base_degree_bits[i];
         let width = air.width();
         let n_chunks = num_quotient_chunks[i];
         transcript.observe_instance_binding(ext_db, base_db, width, n_chunks);
@@ -258,16 +292,14 @@ where
     let mut coms_to_verify = vec![];
 
     // Trace round: per instance, open at zeta and zeta_next
-    let (trace_domains, ext_trace_domains): (Vec<Domain<SC>>, Vec<Domain<SC>>) = degree_bits
+    let trace_domains = base_degree_bits
         .iter()
-        .map(|&ext_db| {
-            let base_db = ext_db - config.is_zk();
-            (
-                pcs.natural_domain_for_degree(1 << base_db),
-                pcs.natural_domain_for_degree(1 << ext_db),
-            )
-        })
-        .unzip();
+        .map(|&base_db| pcs.natural_domain_for_degree(1 << base_db))
+        .collect::<Vec<_>>();
+    let ext_trace_domains = ext_degrees
+        .iter()
+        .map(|&degree| pcs.natural_domain_for_degree(degree))
+        .collect::<Vec<_>>();
 
     if let Some(random_commit) = &commitments.random {
         coms_to_verify.push((
@@ -319,10 +351,17 @@ where
             let log_num_chunks = log_num_quotient_chunks[i];
             let n_chunks = num_quotient_chunks[i];
             let ext_dom = ext_trace_domains[i];
-            let qdom = ext_dom.create_disjoint_domain(1 << (ext_db + log_num_chunks));
-            qdom.split_domains(n_chunks)
+            let quotient_domain_size = ext_db
+                .checked_add(log_num_chunks)
+                .and_then(checked_pow2)
+                .ok_or(InvalidProofShapeError::DegreeBitsTooLargeForAir {
+                    air: i,
+                    got: ext_db,
+                })?;
+            let qdom = ext_dom.create_disjoint_domain(quotient_domain_size);
+            Ok(qdom.split_domains(n_chunks))
         })
-        .collect();
+        .collect::<Result<Vec<_>, InvalidProofShapeError>>()?;
 
     // When ZK is enabled, the size of the quotient chunks' domains doubles.
     let randomized_quotient_chunks_domains = quotient_domains
