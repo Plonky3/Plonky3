@@ -8,9 +8,36 @@ use crate::fiat_shamir::errors::FiatShamirError;
 
 /// Sample cryptographically secure STIR query indices from the transcript.
 ///
-/// Returns sorted, deduplicated indices in `[0, folded_domain_size)`.
+/// - Draws `num_queries` random indices in `[0, folded_domain_size)`,
+/// - Then sorts and deduplicates them.
 ///
-/// Batches transcript calls when possible to reduce overhead.
+/// The returned vector may therefore contain **fewer** than `num_queries` entries when collisions occur.
+///
+/// # Soundness note
+///
+/// The WHIR shift-query soundness bound is `(1 - δ)^t` where `t` is the number
+/// of *distinct* query positions (Theorem 5.2, ε^shift). Duplicate queries test
+/// the same codeword position twice and contribute no additional soundness.
+/// Because `folded_domain_size` is typically ≥ 2^18 and `num_queries` = O(λ)
+/// with λ ≤ 128, the birthday-bound collision probability is negligible
+/// (~t² / 2n ≈ 2^{-4}), so dedup almost never reduces the effective count.
+///
+/// TODO: consider switching to rejection sampling (sample-without-replacement)
+/// to guarantee exactly `num_queries` distinct indices and tighten the
+/// soundness accounting. The current approach relies on the collision
+/// probability being negligible, which should be validated for small domains
+/// or high query counts.
+///
+/// # Batching strategy
+///
+/// When possible, multiple query indices are extracted from a single
+/// `challenger.sample_bits` call to reduce Fiat-Shamir overhead:
+///
+/// - If all bits fit in one call (≤ `max_bits_per_call`), a single sample
+///   suffices.
+/// - Otherwise, indices are batched into groups that fit within the per-call
+///   bit budget.
+/// - As a fallback, one transcript call is made per query.
 ///
 /// # Panics
 ///
