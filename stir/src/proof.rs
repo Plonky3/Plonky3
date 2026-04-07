@@ -43,21 +43,17 @@ pub struct StirProof<EF: Field, M: Mmcs<EF>, Witness> {
     deserialize = "Witness: Deserialize<'de>",
 ))]
 pub struct StirRoundProof<EF: Field, M: Mmcs<EF>, Witness> {
-    /// Commitment to the next round's codeword.
+    /// Commitment to the folded oracle `g_i` on the next round's domain.
     pub commitment: M::Commitment,
 
     /// Proof-of-work witness for the folding step.
     pub folding_pow_witness: Witness,
 
-    // TODO: we don't need to send this in theory
-    /// Coefficients of the folded polynomial `g_i`.
-    pub fold_polynomial: Vec<EF>,
+    /// Evaluations of the FOLDED polynomial at each OOD point.
+    pub ood_answers: Vec<EF>,
 
     /// Proof-of-work witness for the STIR query phase of this round.
     pub pow_witness: Witness,
-
-    /// Evaluations of the FOLDED polynomial at each OOD point.
-    pub ood_answers: Vec<EF>,
 
     /// Shake polynomial coefficients.
     ///
@@ -68,54 +64,35 @@ pub struct StirRoundProof<EF: Field, M: Mmcs<EF>, Witness> {
 
     /// Merkle openings for each STIR query.
     pub query_proofs: Vec<StirQueryProof<EF, M>>,
-
-    /// Openings from the next-round commitment at the sampled shift-query points.
-    ///
-    /// These bind the committed next-round oracle to the current round's
-    /// degree-corrected quotient state.
-    pub next_query_proofs: Vec<StirNextQueryProof<EF, M>>,
 }
 
 /// Merkle opening and fiber evaluations for a single STIR query.
 ///
-/// Contains openings from the current round's commitment (for the fold computation).
-/// In Construction 5.2, the next-round oracle is the degree-corrected quotient of the
-/// fold polynomial, so fold-consistency is not checked directly here; it is established
-/// via the shake-polynomial argument instead.
+/// The opened row is taken from the CURRENT commitment:
+/// - in round 0 this is the current oracle itself,
+/// - in later rounds this is the previous round's folded oracle `g_i`.
+///
+/// The verifier translates the opened row into current-round oracle values before
+/// applying the fold.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound = "")]
 pub struct StirQueryProof<EF: Field, M: Mmcs<EF>> {
-    /// The `k = 2^log_folding_factor` evaluations of the current polynomial at the fiber.
-    pub fiber_evals: Vec<EF>,
-
-    /// Merkle opening proof authenticating `fiber_evals` against the current committed codeword.
-    pub opening_proof: M::Proof,
-}
-
-/// Merkle opening for the next-round commitment at a sampled current-round query point.
-///
-/// The next-round codeword is committed as a fiber matrix, so opening a single queried value
-/// reveals the entire corresponding row.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(bound = "")]
-pub struct StirNextQueryProof<EF: Field, M: Mmcs<EF>> {
-    /// The opened row from the next-round commitment's fiber matrix.
+    /// The opened row from the current commitment's fiber matrix.
     pub row_evals: Vec<EF>,
 
-    /// Merkle opening proof authenticating `row_evals` against the next-round commitment.
+    /// Merkle opening proof authenticating `row_evals` against the current commitment.
     pub opening_proof: M::Proof,
 }
 
 /// Merkle opening and fiber evaluations for a final-round query.
 ///
-/// Used to verify consistency between the last committed codeword and the final polynomial.
-/// Unlike [`StirQueryProof`] there is no subsequent commitment to link to.
+/// Used to verify consistency between the last virtual oracle and the final polynomial.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound = "")]
 pub struct StirFinalQueryProof<EF: Field, M: Mmcs<EF>> {
-    /// The `k = 2^log_folding_factor` evaluations of the last committed codeword at the fiber.
-    pub fiber_evals: Vec<EF>,
+    /// The opened row from the last commitment's fiber matrix.
+    pub row_evals: Vec<EF>,
 
-    /// Merkle opening proof authenticating `fiber_evals` against the last committed codeword.
+    /// Merkle opening proof authenticating `row_evals` against the last committed codeword.
     pub opening_proof: M::Proof,
 }

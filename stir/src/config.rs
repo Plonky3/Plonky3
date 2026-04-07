@@ -85,7 +85,8 @@ pub struct StirRoundConfig<F> {
     ///
     /// The domain is `shift * <g>` where `g` is the two-adic generator of order
     /// `2^log_domain_size`. Shifts stay in the base field to enable base-field FFTs.
-    /// Advances as `shift^k` each round (where `k = 2^log_folding_factor`).
+    /// Advances to a disjoint coset each round so the next witness domain avoids the
+    /// current round's fold-query set.
     pub domain_shift: F,
 
     /// Log₂ of the folding arity applied at the end of this round.
@@ -239,8 +240,7 @@ where
 
         // Initial domain shift: use the multiplicative generator so the
         // initial domain is disjoint from all subgroups of the base field.
-        // Each round: new_shift = old_shift^(2^log_folding_factor) = old_shift^k.
-        // This is the shift of the FOLD domain, which equals the LDE domain shift.
+        // Each round commits the folded oracle on a disjoint coset of the next domain.
         let initial_shift = F::GENERATOR;
 
         let mut round_configs = Vec::with_capacity(num_rounds);
@@ -254,6 +254,13 @@ where
         let mut domain_shift = initial_shift;
 
         for _round in 0..num_rounds {
+            assert!(
+                F::GENERATOR.exp_power_of_2(log_domain_size - 1) != F::ONE,
+                "STIR's compact disjoint-coset schedule requires Field::GENERATOR to lie \
+                 outside the subgroup of size 2^{}.",
+                log_domain_size - 1,
+            );
+
             let log_fold_domain_size = log_domain_size - log_folding_factor;
 
             // After the fold, degree drops by k and rate improves.
@@ -318,8 +325,9 @@ where
             // Domain halves each round (LDE step), not shrinks by k.
             log_domain_size -= 1;
             log_inv_rate = next_log_inv_rate;
-            // New shift = old_shift^k (fold-domain shift = LDE-domain shift).
-            domain_shift = domain_shift.exp_power_of_2(log_folding_factor);
+            // Next witness domain shift = fold-domain shift multiplied by the field generator,
+            // which keeps it outside the fold domain's ambient subgroup coset.
+            domain_shift = domain_shift.exp_power_of_2(log_folding_factor) * F::GENERATOR;
         }
 
         // Final round parameters use the accumulated (improved) inverse rate.

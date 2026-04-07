@@ -132,8 +132,18 @@ pub fn eval_degree_correction<F: Field>(value: F, point: F, r_comb: F, gap: usiz
     value * geom
 }
 
-pub(crate) const fn fold_index_to_next_natural_index(j: usize, log_arity: usize) -> usize {
-    j << log_arity.saturating_sub(1)
+/// Evaluate the vanishing polynomial `prod_{y in roots} (point - y)` at `point`.
+pub fn eval_vanishing_at_roots<F: Field>(roots: &[F], point: F) -> F {
+    roots.iter().fold(F::ONE, |acc, &root| acc * (point - root))
+}
+
+/// Shift for the next committed domain.
+///
+/// The folded polynomial naturally lives on `current_shift^(2^log_arity) * H`. We commit it on
+/// a disjoint coset of the next-round domain by multiplying that natural shift by the field's
+/// multiplicative generator.
+pub fn next_domain_shift<F: Field>(current_shift: F, log_arity: usize) -> F {
+    current_shift.exp_power_of_2(log_arity) * F::GENERATOR
 }
 
 /// Compute the shake polynomial for a set of evaluation points.

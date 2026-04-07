@@ -140,7 +140,7 @@ mod babybear_stir {
     }
 
     #[test]
-    fn test_tampered_next_query_opening_fails() {
+    fn test_tampered_round_query_opening_fails() {
         let (params, dft, challenger) = make_params(1, 1);
         let mut rng = seeded_rng();
         let log_degree = 8;
@@ -151,7 +151,8 @@ mod babybear_stir {
         let mut p_challenger = challenger.clone();
         let mut proof = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
 
-        proof.round_proofs[0].next_query_proofs[0].row_evals[0] += EF::from(F::ONE);
+        assert!(!proof.round_proofs[0].query_proofs.is_empty());
+        proof.round_proofs[0].query_proofs[0].row_evals[0] += EF::from(F::ONE);
 
         let mut v_challenger = challenger;
         assert!(
@@ -160,7 +161,7 @@ mod babybear_stir {
     }
 
     #[test]
-    fn test_tampered_fold_polynomial_fails() {
+    fn test_tampered_ood_answer_fails() {
         let (params, dft, challenger) = make_params(1, 1);
         let mut rng = seeded_rng();
         let log_degree = 8;
@@ -171,7 +172,8 @@ mod babybear_stir {
         let mut p_challenger = challenger.clone();
         let mut proof = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
 
-        proof.round_proofs[0].fold_polynomial[0] += EF::from(F::ONE);
+        assert!(!proof.round_proofs[0].ood_answers.is_empty());
+        proof.round_proofs[0].ood_answers[0] += EF::from(F::ONE);
 
         let mut v_challenger = challenger;
         assert!(

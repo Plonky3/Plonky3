@@ -16,12 +16,10 @@ use p3_matrix::dense::RowMajorMatrix;
 use tracing::instrument;
 
 use crate::config::StirConfig;
-use crate::proof::{
-    StirFinalQueryProof, StirNextQueryProof, StirProof, StirQueryProof, StirRoundProof,
-};
+use crate::proof::{StirFinalQueryProof, StirProof, StirQueryProof, StirRoundProof};
 use crate::utils::{
     add_polys, compute_shake_polynomial, degree_correct, eval_poly, fold_codeword,
-    fold_index_to_next_natural_index, interpolate_poly, quotient_by_roots, scale_poly,
+    interpolate_poly, next_domain_shift, quotient_by_roots, scale_poly,
 };
 
 /// Prove that a polynomial (given in coefficient form over `EF`) has low degree,
@@ -59,7 +57,8 @@ where
     coeffs.resize(initial_domain_size, EF::ZERO);
     let initial_codeword = codeword_from_coeffs(dft, coeffs, initial_shift, log_initial_domain);
 
-    let mut current_codeword = initial_codeword;
+    let mut current_oracle_codeword = initial_codeword.clone();
+    let mut current_commit_codeword = initial_codeword;
     let mut current_shift = initial_shift;
     let mut current_log_domain = log_initial_domain;
 
@@ -69,15 +68,15 @@ where
         config.log_folding_factor
     };
     let (initial_commit, initial_data) =
-        commit_as_fiber_matrix(&config.mmcs, &current_codeword, log_arity0);
+        commit_as_fiber_matrix(&config.mmcs, &current_commit_codeword, log_arity0);
     challenger.observe(initial_commit.clone());
 
-    let mut all_data: Vec<M::ProverData<RowMajorMatrix<EF>>> = vec![initial_data];
+    let mut current_commit_data = initial_data;
 
     let mut round_proofs = Vec::with_capacity(num_rounds);
 
     // Collect first-round query fold-domain indices (for PCS binding).
-    let mut first_round_query_indices: Vec<usize> = Vec::new();
+    let mut first_round_query_indices = Vec::new();
 
     // Intermediate rounds (Construction 5.2).
     for round in 0..num_rounds {
@@ -89,39 +88,49 @@ where
         let fold_height = 1 << fold_log_domain;
 
         let fold_shift = current_shift.exp_power_of_2(log_arity);
-        let lde_log_domain = current_log_domain - 1;
-        let lde_shift = fold_shift;
+        let next_log_domain = current_log_domain - 1;
+        let next_shift = next_domain_shift(current_shift, log_arity);
 
         // Step 1: fold. Derive gamma after folding PoW.
         let folding_pow_witness = challenger.grind(rc.folding_pow_bits);
         let gamma: EF = challenger.sample_algebra_element();
 
         let folded_codeword = fold_codeword::<F, EF>(
-            &current_codeword,
+            &current_oracle_codeword,
             gamma,
             log_arity,
             current_log_domain,
             current_shift,
         );
         let fold_coeffs = coeffs_from_codeword(dft, &folded_codeword, fold_shift);
-        challenger.observe_algebra_slice(&fold_coeffs);
 
-        // Step 2: OOD sampling (before committing f_{i+1}).
-        // OOD points must be outside both the current domain L_i (shift = current_shift)
-        // and the next LDE domain (shift = lde_shift).
+        let next_log_arity = if round + 1 < num_rounds {
+            config.round_configs[round + 1].log_folding_factor
+        } else {
+            config.log_folding_factor
+        };
+        let next_commit_codeword =
+            codeword_from_coeffs(dft, fold_coeffs.clone(), next_shift, next_log_domain);
+        let (new_commit, new_data) =
+            commit_as_fiber_matrix(&config.mmcs, &next_commit_codeword, next_log_arity);
+        challenger.observe(new_commit.clone());
+
+        // Step 2: OOD sampling.
+        // OOD points must be outside both the current witness domain and the next witness domain.
         let current_domain_size = 1usize << current_log_domain;
-        let lde_size = 1usize << lde_log_domain;
-        let mut ood_points: Vec<EF> = Vec::with_capacity(rc.num_ood_samples);
+        let next_domain_size = 1usize << next_log_domain;
+        let mut ood_points = Vec::with_capacity(rc.num_ood_samples);
         while ood_points.len() < rc.num_ood_samples {
             let z: EF = challenger.sample_algebra_element();
             let z_norm_cur = z * EF::from(current_shift).inverse();
             let outside_current = z_norm_cur.exp_power_of_2(current_log_domain) != EF::ONE
                 || current_domain_size == 1;
-            let z_norm_lde = z * EF::from(lde_shift).inverse();
-            let outside_lde = z_norm_lde.exp_power_of_2(lde_log_domain) != EF::ONE || lde_size == 1;
+            let z_norm_next = z * EF::from(next_shift).inverse();
+            let outside_next =
+                z_norm_next.exp_power_of_2(next_log_domain) != EF::ONE || next_domain_size == 1;
             // Deduplicate OOD points.
             let not_dup = ood_points.iter().all(|&existing| existing != z);
-            if outside_current && outside_lde && not_dup {
+            if outside_current && outside_next && not_dup {
                 ood_points.push(z);
             }
         }
@@ -137,28 +146,28 @@ where
 
         let fold_gen = F::two_adic_generator(fold_log_domain);
 
-        let mut query_proofs: Vec<StirQueryProof<EF, M>> = Vec::with_capacity(rc.num_queries);
-        let mut query_indices: Vec<usize> = Vec::with_capacity(rc.num_queries);
-        let mut query_points: Vec<EF> = Vec::with_capacity(rc.num_queries);
-        let mut query_answers: Vec<EF> = Vec::with_capacity(rc.num_queries);
+        let mut query_proofs = Vec::with_capacity(rc.num_queries);
+        let mut query_points = Vec::with_capacity(rc.num_queries);
+        let mut query_answers = Vec::with_capacity(rc.num_queries);
 
         let mut seen_query_indices: alloc::collections::BTreeSet<usize> =
             alloc::collections::BTreeSet::new();
 
         let r_comb: EF = challenger.sample_algebra_element();
 
+        let current_opening_data = &current_commit_data;
+
         for _ in 0..rc.num_queries {
             let j = challenger.sample_bits(fold_log_domain);
             let fold_point = EF::from(fold_shift) * EF::from(fold_gen.exp_u64(j as u64));
-            query_indices.push(j);
 
-            let opening = config.mmcs.open_batch(j, &all_data[round]);
-            let fiber_evals: Vec<EF> = (0..arity)
-                .map(|k| current_codeword[j + k * fold_height])
+            let opening = config.mmcs.open_batch(j, current_opening_data);
+            let row_evals = (0..arity)
+                .map(|k| current_commit_codeword[j + k * fold_height])
                 .collect();
 
             query_proofs.push(StirQueryProof {
-                fiber_evals,
+                row_evals,
                 opening_proof: opening.opening_proof,
             });
 
@@ -193,60 +202,29 @@ where
         // stays consistent with the verifier.
         let _rho: EF = challenger.sample_algebra_element();
 
-        // Step 5: Construction 5.2 — compute f_{i+1} = DegCor((g_i − Ans_i) / Z_{G_i}).
-        // The quotient is exact because Ans_i interpolates g_i at all points in G_i.
+        // Step 5: Construction 5.2 — compute the next virtual witness polynomial
+        // f_{i+1} = DegCor((g_i − Ans_i) / Z_{G_i}).
         let num_answers = all_points.len();
         let numerator = add_polys(&fold_coeffs, &scale_poly(&ans_poly, EF::ZERO - EF::ONE));
         let quotient = quotient_by_roots(&numerator, &all_points);
         let f_next_coeffs = degree_correct(&quotient, r_comb, num_answers);
-
-        // Step 6: LDE f_{i+1} and commit.
-        let lde_codeword = codeword_from_coeffs(dft, f_next_coeffs, lde_shift, lde_log_domain);
-
-        let next_log_arity = if round + 1 < num_rounds {
-            config.round_configs[round + 1].log_folding_factor
-        } else {
-            config.log_folding_factor
-        };
-        let next_arity = 1usize << next_log_arity;
-        let next_height = 1usize << (lde_log_domain - next_log_arity);
-        let (new_commit, new_data) =
-            commit_as_fiber_matrix(&config.mmcs, &lde_codeword, next_log_arity);
-
-        let next_query_proofs: Vec<StirNextQueryProof<EF, M>> = query_indices
-            .iter()
-            .map(|&j| {
-                let natural_index = fold_index_to_next_natural_index(j, log_arity);
-                let row = natural_index % next_height;
-                let opening = config.mmcs.open_batch(row, &new_data);
-                let row_evals: Vec<EF> = (0..next_arity)
-                    .map(|col| lde_codeword[row + col * next_height])
-                    .collect();
-
-                StirNextQueryProof {
-                    row_evals,
-                    opening_proof: opening.opening_proof,
-                }
-            })
-            .collect();
-
-        challenger.observe(new_commit.clone());
-        all_data.push(new_data);
+        let next_oracle_codeword =
+            codeword_from_coeffs(dft, f_next_coeffs, next_shift, next_log_domain);
 
         round_proofs.push(StirRoundProof {
             commitment: new_commit,
             folding_pow_witness,
-            fold_polynomial: fold_coeffs,
-            pow_witness,
             ood_answers,
+            pow_witness,
             shake_polynomial: shake_poly,
             query_proofs,
-            next_query_proofs,
         });
 
-        current_codeword = lde_codeword;
-        current_shift = lde_shift;
-        current_log_domain = lde_log_domain;
+        current_oracle_codeword = next_oracle_codeword;
+        current_commit_codeword = next_commit_codeword;
+        current_commit_data = new_data;
+        current_shift = next_shift;
+        current_log_domain = next_log_domain;
     }
 
     // Final round: fold the last committed codeword and send the resulting polynomial.
@@ -260,7 +238,7 @@ where
     let final_gamma: EF = challenger.sample_algebra_element();
 
     let final_codeword = fold_codeword::<F, EF>(
-        &current_codeword,
+        &current_oracle_codeword,
         final_gamma,
         final_log_arity,
         current_log_domain,
@@ -274,21 +252,17 @@ where
     challenger.observe_algebra_slice(&final_poly);
     let final_pow_witness = challenger.grind(config.final_pow_bits);
 
-    let last_commit_data = &all_data[num_rounds];
-    let final_gen = F::two_adic_generator(final_new_log_domain);
-    let _ = final_gen;
-
     let mut final_query_proofs = Vec::with_capacity(config.final_queries);
     let mut final_seen: alloc::collections::BTreeSet<usize> = alloc::collections::BTreeSet::new();
     for _ in 0..config.final_queries {
         let j = challenger.sample_bits(final_new_log_domain);
         final_seen.insert(j);
-        let opening = config.mmcs.open_batch(j, last_commit_data);
-        let fiber_evals: Vec<EF> = (0..final_arity)
-            .map(|k| current_codeword[j + k * final_new_height])
+        let opening = config.mmcs.open_batch(j, &current_commit_data);
+        let row_evals = (0..final_arity)
+            .map(|k| current_commit_codeword[j + k * final_new_height])
             .collect();
         final_query_proofs.push(StirFinalQueryProof {
-            fiber_evals,
+            row_evals,
             opening_proof: opening.opening_proof,
         });
     }

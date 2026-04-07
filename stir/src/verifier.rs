@@ -11,9 +11,54 @@ use thiserror::Error;
 use crate::config::StirConfig;
 use crate::proof::StirProof;
 use crate::utils::{
-    add_polys, check_shake_consistency, eval_degree_correction, eval_poly, fold_fiber,
-    fold_index_to_next_natural_index, interpolate_poly, quotient_by_roots, scale_poly,
+    check_shake_consistency, eval_degree_correction, eval_poly, eval_vanishing_at_roots,
+    fold_fiber, interpolate_poly, next_domain_shift,
 };
+
+#[derive(Clone)]
+struct VirtualRoundContext<EF> {
+    ans_poly: Vec<EF>,
+    all_points: Vec<EF>,
+    r_comb: EF,
+}
+
+fn materialize_virtual_fiber<F, EF>(
+    row_evals: &[EF],
+    row_index: usize,
+    row_height: usize,
+    current_log_domain: usize,
+    current_shift: F,
+    prev_ctx: Option<&VirtualRoundContext<EF>>,
+) -> Option<Vec<EF>>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
+{
+    let Some(ctx) = prev_ctx else {
+        return Some(row_evals.to_vec());
+    };
+
+    let domain_gen = F::two_adic_generator(current_log_domain);
+    row_evals
+        .iter()
+        .enumerate()
+        .map(|(col, &g_value)| {
+            let natural_index = row_index + col * row_height;
+            let x = EF::from(current_shift) * EF::from(domain_gen.exp_u64(natural_index as u64));
+            let vanishing = eval_vanishing_at_roots(&ctx.all_points, x);
+            if vanishing == EF::ZERO {
+                return None;
+            }
+            let quotient = (g_value - eval_poly(&ctx.ans_poly, x)) * vanishing.inverse();
+            Some(eval_degree_correction(
+                quotient,
+                x,
+                ctx.r_comb,
+                ctx.all_points.len(),
+            ))
+        })
+        .collect()
+}
 
 /// Errors returned by [`verify_stir`].
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -31,29 +76,12 @@ pub enum StirError<MmcsError, InputError = ()> {
         source: MmcsError,
     },
 
-    /// A Merkle opening into the next-round commitment failed.
-    #[error("Invalid next-round MMCS opening proof in round {round}, query {query}")]
-    InvalidNextMmcsProof {
-        round: usize,
-        query: usize,
-        #[source]
-        source: MmcsError,
-    },
-
     /// The shake polynomial identity failed at the random evaluation point.
     #[error("Shake polynomial consistency check failed in round {round}")]
     InvalidShakeConsistency { round: usize },
 
-    /// A claimed OOD answer is inconsistent with the folded polynomial.
-    #[error("Invalid OOD answer in round {round}, sample {sample}")]
-    InvalidOodAnswer { round: usize, sample: usize },
-
-    /// The folded polynomial is inconsistent with the opened current-round fiber.
-    #[error("Invalid fold consistency in round {round}, query {query}")]
-    InvalidFoldConsistency { round: usize, query: usize },
-
-    /// The committed next-round oracle is inconsistent with the current round's quotient state.
-    #[error("Invalid round transition in round {round}, query {query}")]
+    /// A virtual-oracle evaluation landed in the prior round's challenge set.
+    #[error("Invalid virtual-oracle query in round {round}, query {query}")]
     InvalidRoundConsistency { round: usize, query: usize },
 
     /// The final polynomial does not evaluate consistently with the last committed codeword.
@@ -83,22 +111,7 @@ impl<E1, IE1> StirError<E1, IE1> {
                 query,
                 source,
             },
-            Self::InvalidNextMmcsProof {
-                round,
-                query,
-                source,
-            } => StirError::InvalidNextMmcsProof {
-                round,
-                query,
-                source,
-            },
             Self::InvalidShakeConsistency { round } => StirError::InvalidShakeConsistency { round },
-            Self::InvalidOodAnswer { round, sample } => {
-                StirError::InvalidOodAnswer { round, sample }
-            }
-            Self::InvalidFoldConsistency { round, query } => {
-                StirError::InvalidFoldConsistency { round, query }
-            }
             Self::InvalidRoundConsistency { round, query } => {
                 StirError::InvalidRoundConsistency { round, query }
             }
@@ -135,6 +148,7 @@ where
         F::GENERATOR
     };
     let mut current_log_domain = config.log_starting_domain_size();
+    let mut prev_ctx: Option<VirtualRoundContext<EF>> = None;
 
     let round_commitment = |r: usize| -> &M::Commitment {
         if r == 0 {
@@ -152,52 +166,43 @@ where
         let fold_log_domain = current_log_domain - log_arity;
         let fold_height = 1usize << fold_log_domain;
 
-        let lde_log_domain = current_log_domain - 1;
         let fold_shift = current_shift.exp_power_of_2(log_arity);
-        let lde_shift = fold_shift;
+        let next_log_domain = current_log_domain - 1;
+        let next_shift = next_domain_shift(current_shift, log_arity);
 
-        // Step 1 & 2: folding PoW and folding challenge gamma.
+        // Step 1: folding PoW, folding challenge gamma, and folded-oracle commitment.
         if !challenger.check_witness(rc.folding_pow_bits, rp.folding_pow_witness) {
             return Err(StirError::InvalidPowWitness { round });
         }
 
         let gamma: EF = challenger.sample_algebra_element();
-        let max_fold_len = 1usize << (rc.log_degree - rc.log_folding_factor);
-        if rp.fold_polynomial.is_empty() || rp.fold_polynomial.len() > max_fold_len {
-            return Err(StirError::InvalidProofShape);
-        }
-        challenger.observe_algebra_slice(&rp.fold_polynomial);
+        challenger.observe(rp.commitment.clone());
 
-        // Step 3 & 4: OOD sampling and answer observation.
+        // Step 2: OOD sampling and answer observation.
         if rp.ood_answers.len() != rc.num_ood_samples {
             return Err(StirError::InvalidProofShape);
         }
 
         let current_domain_size = 1usize << current_log_domain;
-        let lde_size = 1usize << lde_log_domain;
+        let next_domain_size = 1usize << next_log_domain;
         let mut ood_points: Vec<EF> = Vec::with_capacity(rc.num_ood_samples);
         while ood_points.len() < rc.num_ood_samples {
             let z: EF = challenger.sample_algebra_element();
             let z_norm_cur = z * EF::from(current_shift).inverse();
             let outside_current = z_norm_cur.exp_power_of_2(current_log_domain) != EF::ONE
                 || current_domain_size == 1;
-            let z_norm_lde = z * EF::from(lde_shift).inverse();
-            let outside_lde = z_norm_lde.exp_power_of_2(lde_log_domain) != EF::ONE || lde_size == 1;
+            let z_norm_next = z * EF::from(next_shift).inverse();
+            let outside_next =
+                z_norm_next.exp_power_of_2(next_log_domain) != EF::ONE || next_domain_size == 1;
             let not_dup = ood_points.iter().all(|&existing| existing != z);
-            if outside_current && outside_lde && not_dup {
+            if outside_current && outside_next && not_dup {
                 ood_points.push(z);
-            }
-        }
-
-        for (sample, (&z, &answer)) in ood_points.iter().zip(rp.ood_answers.iter()).enumerate() {
-            if eval_poly(&rp.fold_polynomial, z) != answer {
-                return Err(StirError::InvalidOodAnswer { round, sample });
             }
         }
 
         challenger.observe_algebra_slice(&rp.ood_answers);
 
-        // Step 5 & 6: query PoW, query sampling, and fiber verification.
+        // Step 3: query PoW, combination challenge, query sampling, and fiber verification.
         if !challenger.check_witness(rc.pow_bits, rp.pow_witness) {
             return Err(StirError::InvalidPowWitness { round });
         }
@@ -214,7 +219,6 @@ where
             width: arity
         }];
 
-        let mut query_indices: Vec<usize> = Vec::with_capacity(rc.num_queries);
         let mut query_points: Vec<EF> = Vec::with_capacity(rc.num_queries);
         let mut query_answers: Vec<EF> = Vec::with_capacity(rc.num_queries);
 
@@ -225,17 +229,15 @@ where
 
         for (q, qp) in rp.query_proofs.iter().enumerate() {
             let j = challenger.sample_bits(fold_log_domain);
-            query_indices.push(j);
-
-            let fold_point = EF::from(fold_shift) * EF::from(fold_gen.exp_u64(j as u64));
-
-            if qp.fiber_evals.len() != arity {
+            if qp.row_evals.len() != arity {
                 return Err(StirError::InvalidProofShape);
             }
 
-            // Verify the Merkle opening of f_i at row j.
+            let fold_point = EF::from(fold_shift) * EF::from(fold_gen.exp_u64(j as u64));
+
+            // Verify the Merkle opening of the current commitment at row j.
             let opened_values: alloc::vec::Vec<alloc::vec::Vec<EF>> =
-                alloc::vec![qp.fiber_evals.clone()];
+                alloc::vec![qp.row_evals.clone()];
             let batch_opening = BatchOpeningRef::new(&opened_values, &qp.opening_proof);
             config
                 .mmcs
@@ -246,13 +248,18 @@ where
                     source,
                 })?;
 
-            // Compute g_i(fold_point) by Lagrange interpolation of the fiber.
-            let fold_val =
-                fold_fiber::<F, EF>(&qp.fiber_evals, j, fold_log_domain, log_arity, gamma);
+            let current_fiber = materialize_virtual_fiber::<F, EF>(
+                &qp.row_evals,
+                j,
+                fold_height,
+                current_log_domain,
+                current_shift,
+                prev_ctx.as_ref(),
+            )
+            .ok_or(StirError::InvalidRoundConsistency { round, query: q })?;
 
-            if fold_val != eval_poly(&rp.fold_polynomial, fold_point) {
-                return Err(StirError::InvalidFoldConsistency { round, query: q });
-            }
+            let fold_val =
+                fold_fiber::<F, EF>(&current_fiber, j, fold_log_domain, log_arity, gamma);
 
             if seen_query_indices.insert(j) {
                 query_points.push(fold_point);
@@ -260,7 +267,7 @@ where
             }
         }
 
-        // Step 7 & 8: shake polynomial observation and consistency check.
+        // Step 4: shake polynomial observation and consistency check.
         let all_points: Vec<EF> = ood_points
             .iter()
             .chain(query_points.iter())
@@ -289,71 +296,17 @@ where
             return Err(StirError::InvalidShakeConsistency { round });
         }
 
-        // Step 9: observe the next-round commitment (f_{i+1}).
-        // The commitment is placed at the END of the round so that the
-        // next-round gamma is derived after f_{i+1} is fixed.
-        let num_answers = all_points.len();
-        let numerator = add_polys(
-            &rp.fold_polynomial,
-            &scale_poly(&ans_poly, EF::ZERO - EF::ONE),
-        );
-        let quotient = quotient_by_roots(&numerator, &all_points);
+        prev_ctx = Some(VirtualRoundContext {
+            ans_poly,
+            all_points,
+            r_comb,
+        });
 
-        challenger.observe(rp.commitment.clone());
-
-        if rp.next_query_proofs.len() != rc.num_queries {
-            return Err(StirError::InvalidProofShape);
-        }
-
-        let next_log_arity = if round + 1 < num_rounds {
-            config.round_configs[round + 1].log_folding_factor
-        } else {
-            config.log_folding_factor
-        };
-        let next_arity = 1usize << next_log_arity;
-        let next_height = 1usize << (lde_log_domain - next_log_arity);
-        let next_dimensions = alloc::vec![Dimensions {
-            height: next_height,
-            width: next_arity,
-        }];
-
-        for (q, (&j, next_qp)) in query_indices
-            .iter()
-            .zip(rp.next_query_proofs.iter())
-            .enumerate()
-        {
-            if next_qp.row_evals.len() != next_arity {
-                return Err(StirError::InvalidProofShape);
-            }
-
-            let natural_index = fold_index_to_next_natural_index(j, log_arity);
-            let row = natural_index % next_height;
-            let col = natural_index / next_height;
-
-            let opened_values: alloc::vec::Vec<alloc::vec::Vec<EF>> =
-                alloc::vec![next_qp.row_evals.clone()];
-            let batch_opening = BatchOpeningRef::new(&opened_values, &next_qp.opening_proof);
-            config
-                .mmcs
-                .verify_batch(&rp.commitment, &next_dimensions, row, batch_opening)
-                .map_err(|source| StirError::InvalidNextMmcsProof {
-                    round,
-                    query: q,
-                    source,
-                })?;
-
-            let x = EF::from(fold_shift) * EF::from(fold_gen.exp_u64(j as u64));
-            let expected = eval_degree_correction(eval_poly(&quotient, x), x, r_comb, num_answers);
-            if next_qp.row_evals[col] != expected {
-                return Err(StirError::InvalidRoundConsistency { round, query: q });
-            }
-        }
-
-        current_shift = lde_shift;
-        current_log_domain = lde_log_domain;
+        current_shift = next_shift;
+        current_log_domain = next_log_domain;
     }
 
-    // Final round: verify the final fold against the last committed codeword.
+    // Final round: verify the final fold against the last virtual oracle.
     let final_log_arity = config.log_folding_factor;
     let final_arity = 1usize << final_log_arity;
     let final_new_log_domain = current_log_domain - final_log_arity;
@@ -399,12 +352,12 @@ where
     for (q, fqp) in proof.final_query_proofs.iter().enumerate() {
         let j = challenger.sample_bits(final_new_log_domain);
 
-        if fqp.fiber_evals.len() != final_arity {
+        if fqp.row_evals.len() != final_arity {
             return Err(StirError::InvalidProofShape);
         }
 
         let opened_values: alloc::vec::Vec<alloc::vec::Vec<EF>> =
-            alloc::vec![fqp.fiber_evals.clone()];
+            alloc::vec![fqp.row_evals.clone()];
         let batch_opening = BatchOpeningRef::new(&opened_values, &fqp.opening_proof);
         config
             .mmcs
@@ -415,8 +368,21 @@ where
                 source,
             })?;
 
+        let current_fiber = materialize_virtual_fiber::<F, EF>(
+            &fqp.row_evals,
+            j,
+            final_new_height,
+            current_log_domain,
+            current_shift,
+            prev_ctx.as_ref(),
+        )
+        .ok_or(StirError::InvalidRoundConsistency {
+            round: num_rounds,
+            query: q,
+        })?;
+
         let fold_val = fold_fiber::<F, EF>(
-            &fqp.fiber_evals,
+            &current_fiber,
             j,
             final_new_log_domain,
             final_log_arity,

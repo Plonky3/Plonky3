@@ -43,6 +43,7 @@ use tracing::instrument;
 use crate::config::{StirConfig, StirParameters};
 use crate::proof::StirProof;
 use crate::prover::{coeffs_from_codeword, prove_stir};
+use crate::utils::next_domain_shift;
 use crate::verifier::{StirError, verify_stir};
 
 /// A polynomial commitment scheme using STIR to generate opening proofs.
@@ -488,14 +489,14 @@ where
 
                 let _ = ch_replay.check_witness(rc0.folding_pow_bits, rp0.folding_pow_witness);
                 let _gamma: Challenge = ch_replay.sample_algebra_element();
-                ch_replay.observe_algebra_slice(&rp0.fold_polynomial);
+                ch_replay.observe(rp0.commitment.clone());
 
                 let current_log_domain = stir_config.log_starting_domain_size();
-                let lde_log_domain = current_log_domain - 1;
+                let next_log_domain = current_log_domain - 1;
                 let initial_shift = rc0.domain_shift;
-                let lde_shift: Val = initial_shift.exp_power_of_2(log_arity0);
+                let next_shift: Val = next_domain_shift(initial_shift, log_arity0);
                 let current_domain_size = 1usize << current_log_domain;
-                let lde_size = 1usize << lde_log_domain;
+                let next_domain_size = 1usize << next_log_domain;
 
                 let mut ood_replay: Vec<Challenge> = Vec::with_capacity(rc0.num_ood_samples);
                 while ood_replay.len() < rc0.num_ood_samples {
@@ -504,11 +505,12 @@ where
                     let outside_current = z_norm_cur.exp_power_of_2(current_log_domain)
                         != Challenge::ONE
                         || current_domain_size == 1;
-                    let z_norm_lde = z * Challenge::from(lde_shift).inverse();
-                    let outside_lde = z_norm_lde.exp_power_of_2(lde_log_domain) != Challenge::ONE
-                        || lde_size == 1;
+                    let z_norm_next = z * Challenge::from(next_shift).inverse();
+                    let outside_next = z_norm_next.exp_power_of_2(next_log_domain)
+                        != Challenge::ONE
+                        || next_domain_size == 1;
                     let not_dup = ood_replay.iter().all(|&existing| existing != z);
-                    if outside_current && outside_lde && not_dup {
+                    if outside_current && outside_next && not_dup {
                         ood_replay.push(z);
                     }
                 }
@@ -538,7 +540,7 @@ where
 
                 rp0.query_proofs
                     .iter()
-                    .map(|qp| qp.fiber_evals.as_slice())
+                    .map(|qp| qp.row_evals.as_slice())
                     .collect()
             } else {
                 // num_rounds == 0: final queries target the initial codeword directly.
@@ -577,7 +579,7 @@ where
                 stir_proof
                     .final_query_proofs
                     .iter()
-                    .map(|fqp| fqp.fiber_evals.as_slice())
+                    .map(|fqp| fqp.row_evals.as_slice())
                     .collect()
             };
 
