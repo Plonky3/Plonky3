@@ -29,17 +29,18 @@ use p3_util::log2_strict_usize;
 use tracing::instrument;
 
 use crate::constraints::Constraint;
-use crate::sumcheck::{SumcheckData, extrapolate_012};
+use crate::sumcheck::{SumcheckData, extrapolate_01inf};
 
-/// Computes the sumcheck round polynomial coefficients (c0, c2) for the product
-/// of two multilinear polynomials of the same type.
+/// Computes the sumcheck round polynomial coefficients `(h(0), h(inf))` for the
+/// product of two multilinear polynomials of the same type.
 ///
 /// Given two multilinear polynomials `evals` and `weights` of the same size,
-/// computes the univariate polynomial h(X) = sum_{b in {0,1}^{n-1}} evals(X, b) * weights(X, b).
+/// computes the univariate polynomial `h(X) = sum_{b in {0,1}^{n-1}} evals(X, b) * weights(X, b)`.
 ///
-/// Returns (h(0), h(2)):
-/// - h(0) = sum_{b} evals(0, b) * weights(0, b)
-/// - h(2) = sum_{b} evals(2, b) * weights(2, b) where evals(2, b) = 2*evals(1,b) - evals(0,b)
+/// Returns `(h(0), h(inf))`:
+/// - `h(0)` = `sum_{b} evals(0, b) * weights(0, b)`
+/// - `h(inf)` = `sum_{b} (evals(1,b) - evals(0,b)) * (weights(1,b) - weights(0,b))`
+///   (leading coefficient of the degree-2 polynomial)
 fn sumcheck_coefficients<T: PrimeCharacteristicRing + Copy>(
     evals: &Poly<T>,
     weights: &Poly<T>,
@@ -50,21 +51,22 @@ fn sumcheck_coefficients<T: PrimeCharacteristicRing + Copy>(
     let (w_lo, w_hi) = weights.as_slice().split_at(half);
 
     let mut c0 = T::ZERO;
-    let mut c2 = T::ZERO;
+    let mut c_inf = T::ZERO;
 
     for i in 0..half {
         c0 += e_lo[i] * w_lo[i];
-        let e2 = e_hi[i].double() - e_lo[i];
-        let w2 = w_hi[i].double() - w_lo[i];
-        c2 += e2 * w2;
+        // e_inf = e(1) - e(0), w_inf = w(1) - w(0): the leading coefficients.
+        let e_inf = e_hi[i] - e_lo[i];
+        let w_inf = w_hi[i] - w_lo[i];
+        c_inf += e_inf * w_inf;
     }
 
-    (c0, c2)
+    (c0, c_inf)
 }
 
 /// Cross-type variant of sumcheck coefficients where the evaluation polynomial
-/// is over a base type `B` and the weight polynomial is over an algebra type `A`
-/// that contains `B` (e.g., base field evals with extension field weights).
+/// is over a base type and the weight polynomial is over an algebra type
+/// that contains it (e.g., base field evals with extension field weights).
 pub fn sumcheck_coefficients_cross<B, A>(evals: &Poly<B>, weights: &Poly<A>) -> (A, A)
 where
     B: PrimeCharacteristicRing + Copy,
@@ -76,16 +78,16 @@ where
     let (w_lo, w_hi) = weights.as_slice().split_at(half);
 
     let mut c0 = A::ZERO;
-    let mut c2 = A::ZERO;
+    let mut c_inf = A::ZERO;
 
     for i in 0..half {
         c0 += A::from(e_lo[i]) * w_lo[i];
-        let e2 = e_hi[i].double() - e_lo[i];
-        let w2 = w_hi[i].double() - w_lo[i];
-        c2 += A::from(e2) * w2;
+        let e_inf = e_hi[i] - e_lo[i];
+        let w_inf = w_hi[i] - w_lo[i];
+        c_inf += A::from(e_inf) * w_inf;
     }
 
-    (c0, c2)
+    (c0, c_inf)
 }
 
 /// A paired representation of evaluation and weight polynomials for quadratic sumcheck.
@@ -372,11 +374,11 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         // Step 1: Compute sumcheck polynomial coefficients.
         //
         // The strategy differs based on representation to maximize SIMD utilization.
-        let (c0, c2) = match self {
+        let (c0, c_inf) = match self {
             Self::Packed { evals, weights } => {
                 // Compute coefficients using packed arithmetic.
                 // Each operation processes SIMD_WIDTH elements in parallel.
-                let (c0, c2) = sumcheck_coefficients(evals, weights);
+                let (c0, c_inf) = sumcheck_coefficients(evals, weights);
 
                 // Horizontal reduction: sum across all SIMD lanes to get scalar result.
                 //
@@ -384,7 +386,7 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
                 // We need the sum across all lanes as the final coefficient.
                 (
                     EF::ExtensionPacking::to_ext_iter([c0]).sum(),
-                    EF::ExtensionPacking::to_ext_iter([c2]).sum(),
+                    EF::ExtensionPacking::to_ext_iter([c_inf]).sum(),
                 )
             }
             Self::Small { evals, weights } => {
@@ -394,17 +396,16 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         };
 
         // Step 2-4: Commit to transcript, do PoW, and receive challenge.
-        let r = sumcheck_data.observe_and_sample(challenger, c0, c2, pow_bits);
+        let r = sumcheck_data.observe_and_sample(challenger, c0, c_inf, pow_bits);
 
         // Step 5: Fold both polynomials using the challenge.
         self.compress(r);
 
-        // Step 6: Update the claimed sum using the quadratic formula.
+        // Step 6: Update the claimed sum.
         //
-        // Recall: h(X) = c_0 + c_1 * X + c_2 * X^2
-        //
-        // Update sum := h(r)
-        *sum = extrapolate_012(c0, *sum - c0, c2, r);
+        // h(r) = h(0)*(1-r) + h(1)*r + h(inf)*r*(r-1)
+        // where h(1) = claimed_sum - h(0).
+        *sum = extrapolate_01inf(c0, *sum - c0, c_inf, r);
 
         // Sanity check: the updated sum should equal the inner product after folding.
         debug_assert_eq!(*sum, self.dot_product());
@@ -556,9 +557,9 @@ mod tests {
         //   evals   = [e0, e1] where f(0) = e0, f(1) = e1
         //   weights = [w0, w1] where g(0) = w0, g(1) = w1
         //
-        // sumcheck_coefficients returns (h(0), h(2)) where:
-        //   h(0) = f(0) * g(0) = e0 * w0
-        //   h(2) = f(2) * g(2) = (2*e1 - e0) * (2*w1 - w0)
+        // sumcheck_coefficients returns (h(0), h(inf)) where:
+        //   h(0)   = f(0) * g(0)     = e0 * w0
+        //   h(inf) = (e1-e0)*(w1-w0)   (leading coefficient)
         let e0 = EF::from_u64(3);
         let e1 = EF::from_u64(7);
         let w0 = EF::from_u64(2);
@@ -567,24 +568,23 @@ mod tests {
         let evals = Poly::new(vec![e0, e1]);
         let weights = Poly::new(vec![w0, w1]);
 
-        let (h0, h2) = sumcheck_coefficients(&evals, &weights);
+        let (h0, h_inf) = sumcheck_coefficients(&evals, &weights);
 
         // h(0) = e0 * w0
         let expected_h0 = e0 * w0;
         assert_eq!(h0, expected_h0);
 
-        // h(2) = (2*e1 - e0) * (2*w1 - w0)
-        let expected_h2 = (e1.double() - e0) * (w1.double() - w0);
-        assert_eq!(h2, expected_h2);
+        // h(inf) = (e1 - e0) * (w1 - w0)  (leading coefficient)
+        let expected_h_inf = (e1 - e0) * (w1 - w0);
+        assert_eq!(h_inf, expected_h_inf);
 
         // Verify consistency: h(0) + h(1) should equal the claimed sum.
-        // h(0) = c0
+        // h(0) = e0 * w0
         // h(1) = e1 * w1
         // sum = e0*w0 + e1*w1
-        let h_0 = h0;
         let h_1 = e1 * w1;
         let sum = e0 * w0 + e1 * w1;
-        assert_eq!(h_0 + h_1, sum);
+        assert_eq!(h0 + h_1, sum);
     }
 
     #[test]
@@ -639,17 +639,17 @@ mod tests {
         assert_eq!(folded_evals.as_slice(), &[expected_e0, expected_e1]);
 
         // After folding, dot_product equals h(r) where h is the sumcheck polynomial:
-        //   h(X) = c0 + c1*X + c2*X^2
-        //   c0 = e0*w0 + e1*w1
-        //   c2 = (e2 - e0)*(w2 - w0) + (e3 - e1)*(w3 - w1)
-        //   h(1) = e2*w2 + e3*w3
-        //   c1 = h(1) - c0 - c2
-        //   h(r) = c0 + c1*r + c2*r^2
-        let c0 = e0 * w0 + e1 * w1;
-        let c2 = (e2 - e0) * (w2 - w0) + (e3 - e1) * (w3 - w1);
+        //   h(X) = h(0) + b*X + a*X^2
+        //   h(0)  = e0*w0 + e1*w1
+        //   h(inf) = a = (e2-e0)*(w2-w0) + (e3-e1)*(w3-w1)  (leading coefficient)
+        //   h(1)  = e2*w2 + e3*w3
+        //   b     = h(1) - h(0) - a
+        //   h(r)  = h(0) + b*r + a*r^2
+        let h_0 = e0 * w0 + e1 * w1;
+        let a = (e2 - e0) * (w2 - w0) + (e3 - e1) * (w3 - w1);
         let h_1 = e2 * w2 + e3 * w3;
-        let c1 = h_1 - c0 - c2;
-        let h_r = c0 + c1 * r + c2 * r.square();
+        let b = h_1 - h_0 - a;
+        let h_r = h_0 + b * r + a * r.square();
 
         assert_eq!(poly.dot_product(), h_r);
     }
@@ -808,7 +808,7 @@ mod tests {
         // Test the round() function which is the core sumcheck protocol.
         //
         // The round function should:
-        // 1. Compute sumcheck coefficients (c0, c2)
+        // 1. Compute sumcheck coefficients (h(0), h(inf))
         // 2. Update the claimed sum to h(r) where r is the challenge
         // 3. Fold both polynomials
         // 4. Return the challenge r
@@ -1065,9 +1065,9 @@ mod tests {
             );
 
             // Compute sumcheck coefficients before folding.
-            // sumcheck_coefficients returns (h(0), h(2)) where h is the univariate
+            // Returns (h(0), h(inf)) where h is the univariate
             // polynomial h(X) = sum_{b in {0,1}^{n-1}} f(X, b) * w(X, b).
-            let (c0, c2) = match &poly {
+            let (c0, c_inf) = match &poly {
                 ProductPolynomial::Small {
                     evals: small_evals,
                     weights: small_weights,
@@ -1084,9 +1084,8 @@ mod tests {
             let r = EF::from_u64(challenge_val);
             poly.compress(r);
 
-            // Use Lagrange interpolation to compute h(r) from h(0), h(1), h(2).
-            // h(r) = extrapolate_012(c0, h_1, c2, r)
-            let h_r = extrapolate_012(c0, h_1, c2, r);
+            // Reconstruct h(r) from (h(0), h(1), h(inf)).
+            let h_r = extrapolate_01inf(c0, h_1, c_inf, r);
 
             // After folding, dot_product should equal h(r).
             prop_assert_eq!(poly.dot_product(), h_r);
