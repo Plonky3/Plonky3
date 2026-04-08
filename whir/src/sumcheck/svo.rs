@@ -593,6 +593,35 @@ mod tests {
         result
     }
 
+    /// Compare the grid expansion against naive multilinear evaluation on every
+    /// point of `{0,1,2}^l`.
+    fn assert_evals_012_grid_matches_naive(boolean_evals: &[EF]) {
+        let num_vars = log2_strict_usize(boolean_evals.len());
+        let poly = Poly::new(boolean_evals.to_vec());
+        let grid = evals_012_grid(boolean_evals);
+
+        for (idx, &grid_val) in grid.iter().enumerate() {
+            // Decode the flat ternary index into per-variable digits.
+            let mut tmp = idx;
+            let mut digits = Vec::with_capacity(num_vars);
+            for _ in 0..num_vars {
+                digits.push(tmp % 3);
+                tmp /= 3;
+            }
+
+            let point = Point::new(
+                digits
+                    .iter()
+                    .copied()
+                    .map(|digit| EF::from(F::from_u32(digit as u32)))
+                    .collect::<Vec<_>>(),
+            );
+
+            let expected = compress_multi_ef(&poly, point.as_slice()).as_slice()[0];
+            assert_eq!(grid_val, expected);
+        }
+    }
+
     // Tests for evals_012_grid_into
 
     #[test]
@@ -812,6 +841,46 @@ mod tests {
             .collect();
 
         assert_eq!(grid_combined, linear_combined);
+    }
+
+    #[test]
+    fn test_evals_012_grid_into_large_stride_branch_matches_naive() {
+        // `num_vars = 7` guarantees the final stage has `in_stride = 3^6 = 729`,
+        // which takes the large-stride branch (`in_stride >= 256`).
+        let num_vars = 7;
+        let mut rng = SmallRng::seed_from_u64(2025);
+        let evals: Vec<EF> = (0..1 << num_vars).map(|_| rng.random()).collect();
+        assert_evals_012_grid_matches_naive(evals.as_slice());
+    }
+
+    #[test]
+    #[should_panic(expected = "Not a power of two")]
+    fn test_evals_012_grid_into_panics_on_non_power_of_two_input() {
+        let input = [EF::ZERO; 3];
+        let mut output = [EF::ZERO; 3];
+        let mut scratch = [EF::ZERO; 3];
+
+        evals_012_grid_into(&input, &mut output, &mut scratch);
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion `left == right` failed")]
+    fn test_evals_012_grid_into_panics_on_wrong_output_len() {
+        let input = [EF::ZERO; 4];
+        let mut output = [EF::ZERO; 8];
+        let mut scratch = [EF::ZERO; 9];
+
+        evals_012_grid_into(&input, &mut output, &mut scratch);
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion `left == right` failed")]
+    fn test_evals_012_grid_into_panics_on_wrong_scratch_len() {
+        let input = [EF::ZERO; 4];
+        let mut output = [EF::ZERO; 9];
+        let mut scratch = [EF::ZERO; 8];
+
+        evals_012_grid_into(&input, &mut output, &mut scratch);
     }
 
     #[test]
@@ -1059,32 +1128,7 @@ mod tests {
             // extension at that point by repeatedly fixing variables.
             let mut rng = SmallRng::seed_from_u64(num_vars as u64);
             let evals: Vec<EF> = (0..1 << num_vars).map(|_| rng.random()).collect();
-            let poly = Poly::new(evals.clone());
-            let grid = evals_012_grid(evals.as_slice());
-
-            for (idx, &grid_val) in grid.iter().enumerate() {
-                // Decode the flat ternary index into per-variable digits.
-                // index = d_0 + 3*d_1 + 9*d_2 + ..., so repeated mod-3 extracts digits.
-                let mut tmp = idx;
-                let mut digits = Vec::with_capacity(num_vars);
-                for _ in 0..num_vars {
-                    digits.push(tmp % 3);
-                    tmp /= 3;
-                }
-
-                // Build the evaluation point from the ternary digits.
-                let point = Point::new(
-                    digits
-                        .iter()
-                        .copied()
-                        .map(|digit| EF::from(F::from_u32(digit as u32)))
-                        .collect::<Vec<_>>(),
-                );
-
-                // The naive reference: fix variables one by one and read the constant.
-                let expected = compress_multi_ef(&poly, point.as_slice()).as_slice()[0];
-                prop_assert_eq!(grid_val, expected);
-            }
+            assert_evals_012_grid_matches_naive(evals.as_slice());
         }
 
         /// Verify grid-expansion accumulators match the per-point Lagrange reference.
