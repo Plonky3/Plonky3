@@ -97,7 +97,7 @@ fn bench_sumcheck_prover(c: &mut Criterion) {
     group.finish();
 }
 
-/// SVO claim building: this is where the Jolt grid-expansion optimization applies.
+/// SVO claim building: this is where the grid-expansion optimization applies.
 fn bench_svo_claim_build(c: &mut Criterion) {
     let mut group = c.benchmark_group("whir/svo_claim_build");
 
