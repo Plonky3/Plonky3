@@ -27,6 +27,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-koala-bear = { path = "../koala-bear" }
 proptest.workspace = true
@@ -34,6 +35,10 @@ rand.workspace = true
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
+
+[[bench]]
+name = "sumcheck"
+harness = false
 
 [lints]
 workspace = true
