@@ -101,7 +101,13 @@ fn bench_sumcheck_prover(c: &mut Criterion) {
 fn bench_svo_claim_build(c: &mut Criterion) {
     let mut group = c.benchmark_group("whir/svo_claim_build");
 
-    let cases = [(12, 3, "k12_l3"), (14, 4, "k14_l4"), (16, 5, "k16_l5")];
+    // l=1,2,3 are the straightline-specialized cases; l=4 is the general-path control.
+    let cases = [
+        (12, 1, "k12_l1"),
+        (12, 2, "k12_l2"),
+        (12, 3, "k12_l3"),
+        (12, 4, "k12_l4"),
+    ];
 
     for &(num_vars, l, label) in &cases {
         let mut rng = SmallRng::seed_from_u64(((num_vars as u64) << 32) | l as u64);
