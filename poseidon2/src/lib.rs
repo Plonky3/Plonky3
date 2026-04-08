@@ -61,6 +61,7 @@ where
                 i += 1;
             }
             assert!(found, "WIDTH must be one of the supported widths");
+            assert!(D > 1);
         }
         let external_layer = ExternalPerm::new_from_constants(external_constants);
         let internal_layer = InternalPerm::new_from_constants(internal_constants);

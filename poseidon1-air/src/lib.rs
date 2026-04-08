@@ -85,7 +85,7 @@ mod tests {
     use p3_challenger::{HashChallenger, SerializingChallenger32};
     use p3_commit::ExtensionMmcs;
     use p3_field::extension::BinomialExtensionField;
-    use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_params};
+    use p3_fri::{FriParameters, TwoAdicFriPcs};
     use p3_keccak::{Keccak256Hash, KeccakF};
     use p3_matrix::Matrix;
     use p3_merkle_tree::MerkleTreeMmcs;
@@ -271,7 +271,7 @@ mod tests {
         );
 
         // FRI parameters (log_blowup determines the LDE blowup factor).
-        let fri_params = create_benchmark_fri_params(challenge_mmcs);
+        let fri_params = FriParameters::new_benchmark(challenge_mmcs);
 
         // Generate the trace with extra capacity for the LDE blowup.
         let trace = air.generate_trace_rows(16, fri_params.log_blowup);

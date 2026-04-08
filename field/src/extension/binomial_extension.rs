@@ -41,6 +41,7 @@ impl<F, A, const D: usize> BinomialExtensionField<F, D, A> {
     /// base elements are already valid field elements.
     #[inline]
     pub const fn new(value: [A; D]) -> Self {
+        const { assert!(D > 1) }
         Self {
             value,
             _phantom: PhantomData,

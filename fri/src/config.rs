@@ -42,6 +42,76 @@ impl<M> FriParameters<M> {
     pub const fn conjectured_soundness_bits(&self) -> usize {
         self.log_blowup * self.num_queries + self.query_proof_of_work_bits
     }
+
+    /// Creates a minimal set of `FriParameters` for testing purposes.
+    /// These parameters are designed to reduce computational cost during tests.
+    pub const fn new_testing(mmcs: M, log_final_poly_len: usize) -> Self {
+        Self {
+            log_blowup: 2,
+            log_final_poly_len,
+            max_log_arity: 1,
+            num_queries: 2,
+            commit_proof_of_work_bits: 1,
+            query_proof_of_work_bits: 1,
+            mmcs,
+        }
+    }
+
+    /// Creates a minimal set of `FriParameters` for testing purposes, with zk enabled.
+    /// These parameters are designed to reduce computational cost during tests.
+    pub const fn new_testing_zk(mmcs: M) -> Self {
+        Self {
+            log_blowup: 2,
+            log_final_poly_len: 0,
+            max_log_arity: 1,
+            num_queries: 2,
+            commit_proof_of_work_bits: 1,
+            query_proof_of_work_bits: 1,
+            mmcs,
+        }
+    }
+
+    /// Creates a set of `FriParameters` suitable for benchmarking.
+    /// These parameters represent typical settings used in production-like scenarios.
+    pub const fn new_benchmark(mmcs: M) -> Self {
+        Self {
+            log_blowup: 1,
+            log_final_poly_len: 0,
+            max_log_arity: 1,
+            num_queries: 100,
+            commit_proof_of_work_bits: 0,
+            query_proof_of_work_bits: 16,
+            mmcs,
+        }
+    }
+
+    /// Creates a set of `FriParameters` suitable for benchmarking with high arity.
+    /// These parameters represent typical settings used in production-like scenarios.
+    pub const fn new_benchmark_high_arity(mmcs: M) -> Self {
+        Self {
+            log_blowup: 1,
+            log_final_poly_len: 0,
+            max_log_arity: 3,
+            num_queries: 100,
+            commit_proof_of_work_bits: 0,
+            query_proof_of_work_bits: 16,
+            mmcs,
+        }
+    }
+
+    /// Creates a set of `FriParameters` suitable for benchmarking with zk enabled.
+    /// These parameters represent typical settings used in production-like scenarios.
+    pub const fn new_benchmark_zk(mmcs: M) -> Self {
+        Self {
+            log_blowup: 2,
+            log_final_poly_len: 0,
+            max_log_arity: 1,
+            num_queries: 100,
+            commit_proof_of_work_bits: 0,
+            query_proof_of_work_bits: 16,
+            mmcs,
+        }
+    }
 }
 
 /// Whereas `FriParameters` encompasses parameters the end user can set, `FriFoldingStrategy` is
@@ -102,77 +172,4 @@ pub fn compute_log_arity_for_round(
     });
 
     max_fold.min(max_log_arity)
-}
-
-/// Creates a minimal set of `FriParameters` for testing purposes.
-/// These parameters are designed to reduce computational cost during tests.
-pub const fn create_test_fri_params<Mmcs>(
-    mmcs: Mmcs,
-    log_final_poly_len: usize,
-) -> FriParameters<Mmcs> {
-    FriParameters {
-        log_blowup: 2,
-        log_final_poly_len,
-        max_log_arity: 1,
-        num_queries: 2,
-        commit_proof_of_work_bits: 1,
-        query_proof_of_work_bits: 1,
-        mmcs,
-    }
-}
-
-/// Creates a minimal set of `FriParameters` for testing purposes, with zk enabled.
-/// These parameters are designed to reduce computational cost during tests.
-pub const fn create_test_fri_params_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
-    FriParameters {
-        log_blowup: 2,
-        log_final_poly_len: 0,
-        max_log_arity: 1,
-        num_queries: 2,
-        commit_proof_of_work_bits: 1,
-        query_proof_of_work_bits: 1,
-        mmcs,
-    }
-}
-
-/// Creates a set of `FriParameters` suitable for benchmarking.
-/// These parameters represent typical settings used in production-like scenarios.
-pub const fn create_benchmark_fri_params<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
-    FriParameters {
-        log_blowup: 1,
-        log_final_poly_len: 0,
-        max_log_arity: 1,
-        num_queries: 100,
-        commit_proof_of_work_bits: 0,
-        query_proof_of_work_bits: 16,
-        mmcs,
-    }
-}
-
-/// Creates a set of `FriParameters` suitable for benchmarking.
-/// These parameters represent typical settings used in production-like scenarios.
-pub const fn create_benchmark_fri_params_high_arity<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
-    FriParameters {
-        log_blowup: 1,
-        log_final_poly_len: 0,
-        max_log_arity: 3,
-        num_queries: 100,
-        commit_proof_of_work_bits: 0,
-        query_proof_of_work_bits: 16,
-        mmcs,
-    }
-}
-
-/// Creates a set of `FriParameters` suitable for benchmarking with zk enabled.
-/// These parameters represent typical settings used in production-like scenarios.
-pub const fn create_benchmark_fri_params_zk<Mmcs>(mmcs: Mmcs) -> FriParameters<Mmcs> {
-    FriParameters {
-        log_blowup: 2,
-        log_final_poly_len: 0,
-        max_log_arity: 1,
-        num_queries: 100,
-        commit_proof_of_work_bits: 0,
-        query_proof_of_work_bits: 16,
-        mmcs,
-    }
 }

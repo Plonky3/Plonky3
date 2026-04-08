@@ -33,7 +33,11 @@ where
     InnerP: CryptographicPermutation<[T; WIDTH]>,
 {
     fn compress(&self, input: [[T; CHUNK]; N]) -> [T; CHUNK] {
-        const { assert!(CHUNK * N <= WIDTH) }
+        const {
+            assert!(N > 0);
+            assert!(CHUNK > 0);
+            assert!(CHUNK * N <= WIDTH);
+        }
         let mut pre = [T::default(); WIDTH];
         for i in 0..N {
             pre[i * CHUNK..(i + 1) * CHUNK].copy_from_slice(&input[i]);
