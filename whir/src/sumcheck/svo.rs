@@ -17,6 +17,7 @@
 //! 2. Avoiding the full `2^l`-sized equality table.
 //! 3. Reconstructing round polynomials from compact accumulators via Lagrange interpolation.
 
+use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
@@ -191,6 +192,9 @@ fn evals_012_grid_into<F: Field>(boolean_evals: &[F], output: &mut [F], scratch:
 /// accumulators are then simple pointwise products on the slices with
 /// final coordinate fixed to `0` or `2`.
 ///
+/// For l <= 3, straightline specializations avoid all loop overhead, buffer
+/// allocation, and parallelization machinery.
+///
 /// Total cost: O(3^l) field operations.
 fn calculate_accumulators<F: Field, EF: ExtensionField<F>>(
     l: usize,
@@ -219,16 +223,191 @@ fn calculate_accumulators<F: Field, EF: ExtensionField<F>>(
         .map(|chunk| dot_product::<EF, _, _>(eq1.iter().copied(), chunk.iter().copied()))
         .collect();
 
-    // Expand both tables onto the {0,1,2}^l grid.
+    // For small l, use straightline specializations that avoid loop/buffer overhead.
+    match l {
+        1 => calculate_accumulators_1(eq0.as_slice(), &reduced_evals),
+        2 => calculate_accumulators_2(eq0.as_slice(), &reduced_evals),
+        3 => calculate_accumulators_3(eq0.as_slice(), &reduced_evals),
+        _ => calculate_accumulators_general(l, eq0.as_slice(), &reduced_evals),
+    }
+}
+
+/// Straightline accumulator computation for l=1.
+///
+/// ```text
+///     eq0:     [e0, e1]          (2 values on {0,1})
+///     reduced: [r0, r1]          (2 values on {0,1})
+///
+///     Grid on {0,1,2}:
+///       f(0) = f[0],  f(1) = f[1],  f(2) = 2*f[1] - f[0]
+///
+///     acc0 = [eq0(0) * red(0)]   = [e0 * r0]               (1 value)
+///     acc2 = [eq0(2) * red(2)]   = [(2*e1-e0) * (2*r1-r0)] (1 value)
+/// ```
+fn calculate_accumulators_1<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 2] {
+    assert_eq!(eq0.len(), 2);
+    assert_eq!(reduced.len(), 2);
+
+    let (e0, e1) = (eq0[0], eq0[1]);
+    let (r0, r1) = (reduced[0], reduced[1]);
+
+    // Extrapolate both tables to point 2: f(2) = 2*f(1) - f(0).
+    let e2 = e1.double() - e0;
+    let r2 = r1.double() - r0;
+
+    [vec![e0 * r0], vec![e2 * r2]]
+}
+
+/// Straightline accumulator computation for l=2.
+///
+/// Grid layout after expansion (x_0 slowest, x_1 fastest):
+///
+/// ```text
+///     grid[0..3] = x_0=0 group: f(0,0), f(0,1), f(0,2)
+///     grid[3..6] = x_0=1 group: f(1,0), f(1,1), f(1,2)
+///     grid[6..9] = x_0=2 group: f(2,0), f(2,1), f(2,2)
+///
+///     stride = 3^{l-1} = 3
+///     acc0 = grid[0..3]  = x_0=0 slice, x_1 in {0,1,2}
+///     acc2 = grid[6..9]  = x_0=2 slice, x_1 in {0,1,2}
+/// ```
+fn calculate_accumulators_2<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 2] {
+    assert_eq!(eq0.len(), 4);
+    assert_eq!(reduced.len(), 4);
+
+    // Boolean evaluations: index = x_0 + 2*x_1.
+    let (e00, e10, e01, e11) = (eq0[0], eq0[1], eq0[2], eq0[3]);
+    let (r00, r10, r01, r11) = (reduced[0], reduced[1], reduced[2], reduced[3]);
+
+    // Extrapolate x_0 to get x_0=2 values.
+    let e20 = e10.double() - e00;
+    let e21 = e11.double() - e01;
+    let r20 = r10.double() - r00;
+    let r21 = r11.double() - r01;
+
+    // Extrapolate x_1 to get x_1=2 values (only needed for x_0=0 and x_0=2).
+    let e02 = e01.double() - e00;
+    let r02 = r01.double() - r00;
+
+    // acc0: x_0=0 slice, indexed by x_1 in {0,1,2}.
+    // acc2: x_0=2 slice, indexed by x_1 in {0,1,2}.
+    [
+        vec![e00 * r00, e01 * r01, e02 * r02],
+        vec![
+            e20 * r20,
+            e21 * r21,
+            (e21.double() - e20) * (r21.double() - r20),
+        ],
+    ]
+}
+
+/// Straightline accumulator computation for l=3.
+///
+/// Grid layout after expansion (x_0 slowest, x_2 fastest):
+///
+/// ```text
+///     stride = 3^{l-1} = 9
+///     acc0 = grid[0..9]   = x_0=0 slice
+///     acc2 = grid[18..27] = x_0=2 slice
+///
+///     Within each x_0 group, 9 entries ordered by (x_1, x_2):
+///       x_1=0: f(x_0, 0, 0), f(x_0, 0, 1), f(x_0, 0, 2)
+///       x_1=1: f(x_0, 1, 0), f(x_0, 1, 1), f(x_0, 1, 2)
+///       x_1=2: f(x_0, 2, 0), f(x_0, 2, 1), f(x_0, 2, 2)
+/// ```
+fn calculate_accumulators_3<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 2] {
+    assert_eq!(eq0.len(), 8);
+    assert_eq!(reduced.len(), 8);
+
+    // Boolean evaluations: index = x_0 + 2*x_1 + 4*x_2.
+    // Name: e_ijk = eq0(x_0=i, x_1=j, x_2=k), similarly for r.
+    let (e_000, e_100, e_010, e_110, e_001, e_101, e_011, e_111) = (
+        eq0[0], eq0[1], eq0[2], eq0[3], eq0[4], eq0[5], eq0[6], eq0[7],
+    );
+    let (r_000, r_100, r_010, r_110, r_001, r_101, r_011, r_111) = (
+        reduced[0], reduced[1], reduced[2], reduced[3], reduced[4], reduced[5], reduced[6],
+        reduced[7],
+    );
+
+    // Extrapolate x_0: f(2,j,k) = 2*f(1,j,k) - f(0,j,k).
+    let e_200 = e_100.double() - e_000;
+    let e_210 = e_110.double() - e_010;
+    let e_201 = e_101.double() - e_001;
+    let e_211 = e_111.double() - e_011;
+    let r_200 = r_100.double() - r_000;
+    let r_210 = r_110.double() - r_010;
+    let r_201 = r_101.double() - r_001;
+    let r_211 = r_111.double() - r_011;
+
+    // Extrapolate x_1: f(i,2,k) = 2*f(i,1,k) - f(i,0,k).
+    // Only needed for x_0=0 and x_0=2.
+    let e_020 = e_010.double() - e_000;
+    let e_220 = e_210.double() - e_200;
+    let e_021 = e_011.double() - e_001;
+    let e_221 = e_211.double() - e_201;
+    let r_020 = r_010.double() - r_000;
+    let r_220 = r_210.double() - r_200;
+    let r_021 = r_011.double() - r_001;
+    let r_221 = r_211.double() - r_201;
+
+    // Extrapolate x_2: f(i,j,2) = 2*f(i,j,1) - f(i,j,0).
+    // Only needed for x_0=0 and x_0=2 (the slices we read out).
+    let e_002 = e_001.double() - e_000;
+    let e_012 = e_011.double() - e_010;
+    let e_022 = e_021.double() - e_020;
+    let e_202 = e_201.double() - e_200;
+    let e_212 = e_211.double() - e_210;
+    let e_222 = e_221.double() - e_220;
+    let r_002 = r_001.double() - r_000;
+    let r_012 = r_011.double() - r_010;
+    let r_022 = r_021.double() - r_020;
+    let r_202 = r_201.double() - r_200;
+    let r_212 = r_211.double() - r_210;
+    let r_222 = r_221.double() - r_220;
+
+    // acc0: x_0=0 slice, 9 entries ordered (x_1, x_2) with x_2 fastest.
+    // acc2: x_0=2 slice, same layout.
+    [
+        vec![
+            e_000 * r_000,
+            e_001 * r_001,
+            e_002 * r_002,
+            e_010 * r_010,
+            e_011 * r_011,
+            e_012 * r_012,
+            e_020 * r_020,
+            e_021 * r_021,
+            e_022 * r_022,
+        ],
+        vec![
+            e_200 * r_200,
+            e_201 * r_201,
+            e_202 * r_202,
+            e_210 * r_210,
+            e_211 * r_211,
+            e_212 * r_212,
+            e_220 * r_220,
+            e_221 * r_221,
+            e_222 * r_222,
+        ],
+    ]
+}
+
+/// General accumulator computation for l >= 4.
+///
+/// Allocates `{0,1,2}^l` buffers and runs the staged grid expansion.
+fn calculate_accumulators_general<F: Field, EF: ExtensionField<F>>(
+    l: usize,
+    eq0: &[EF],
+    reduced_evals: &[EF],
+) -> [Vec<EF>; 2] {
     let grid_len = 3usize.pow(l as u32);
     let mut eq0_grid = EF::zero_vec(grid_len);
     let mut reduced_grid = EF::zero_vec(grid_len);
     let mut scratch = EF::zero_vec(grid_len);
-    evals_012_grid_into(eq0.as_slice(), &mut eq0_grid, &mut scratch);
-    evals_012_grid_into(reduced_evals.as_slice(), &mut reduced_grid, &mut scratch);
+    evals_012_grid_into(eq0, &mut eq0_grid, &mut scratch);
+    evals_012_grid_into(reduced_evals, &mut reduced_grid, &mut scratch);
 
-    // Slice out the accumulator values: pointwise products where the last
-    // coordinate is fixed to 0 or 2.
     let stride = 3usize.pow((l - 1) as u32);
 
     let acc0 = eq0_grid[..stride]
@@ -1164,6 +1343,45 @@ mod tests {
                 prop_assert_eq!(acc0, ref_acc0);
                 prop_assert_eq!(acc2, ref_acc2);
             }
+        }
+
+        /// Verify l=1 straightline matches the general path.
+        #[test]
+        fn prop_accumulators_1_matches_general(seed in 0u64..1000) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let eq0: Vec<EF> = (0..2).map(|_| rng.random()).collect();
+            let reduced: Vec<EF> = (0..2).map(|_| rng.random()).collect();
+
+            let fast = calculate_accumulators_1(&eq0, &reduced);
+            let general = calculate_accumulators_general::<F, EF>(1, &eq0, &reduced);
+
+            prop_assert_eq!(fast, general);
+        }
+
+        /// Verify l=2 straightline matches the general path.
+        #[test]
+        fn prop_accumulators_2_matches_general(seed in 0u64..1000) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let eq0: Vec<EF> = (0..4).map(|_| rng.random()).collect();
+            let reduced: Vec<EF> = (0..4).map(|_| rng.random()).collect();
+
+            let fast = calculate_accumulators_2(&eq0, &reduced);
+            let general = calculate_accumulators_general::<F, EF>(2, &eq0, &reduced);
+
+            prop_assert_eq!(fast, general);
+        }
+
+        /// Verify l=3 straightline matches the general path.
+        #[test]
+        fn prop_accumulators_3_matches_general(seed in 0u64..1000) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let eq0: Vec<EF> = (0..8).map(|_| rng.random()).collect();
+            let reduced: Vec<EF> = (0..8).map(|_| rng.random()).collect();
+
+            let fast = calculate_accumulators_3(&eq0, &reduced);
+            let general = calculate_accumulators_general::<F, EF>(3, &eq0, &reduced);
+
+            prop_assert_eq!(fast, general);
         }
 
         /// Verify that grid expansion preserves the original Boolean-hypercube values.
