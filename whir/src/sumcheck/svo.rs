@@ -504,6 +504,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoClaim<F, EF> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
     use alloc::vec::Vec;
 
     use p3_field::extension::BinomialExtensionField;
@@ -662,13 +663,13 @@ mod tests {
         // Output (x_0 slowest, x_1 fastest), index = x_1 + 3*x_0:
         //   idx:   0  1  2   3   4   5   6   7   8
         //   val:   1  5  9   3  11  19   5  17  29
-        let input = [1, 3, 5, 11].map(|v| EF::from_u32(v));
+        let input = [1, 3, 5, 11].map(EF::from_u32);
         let mut output = [EF::ZERO; 9];
         let mut scratch = [EF::ZERO; 9];
 
         evals_012_grid_into(&input, &mut output, &mut scratch);
 
-        let expected = [1, 5, 9, 3, 11, 19, 5, 17, 29].map(|v| EF::from_u32(v));
+        let expected = [1, 5, 9, 3, 11, 19, 5, 17, 29].map(EF::from_u32);
         assert_eq!(output, expected);
     }
 
@@ -727,7 +728,7 @@ mod tests {
             let input: Vec<EF> = (0..1 << num_vars).map(|_| rng.random()).collect();
             let grid = evals_012_grid(&input);
 
-            for bool_idx in 0..input.len() {
+            for (bool_idx, &input_val) in input.iter().enumerate() {
                 // Extract binary digits (low-var-first): b_0, b_1, ..., b_{l-1}.
                 let mut bits = Vec::with_capacity(num_vars);
                 let mut tmp = bool_idx;
@@ -746,7 +747,7 @@ mod tests {
                 }
 
                 assert_eq!(
-                    grid[ternary_idx], input[bool_idx],
+                    grid[ternary_idx], input_val,
                     "Boolean point mismatch at bool_idx={bool_idx}, num_vars={num_vars}"
                 );
             }
@@ -1060,9 +1061,8 @@ mod tests {
             let evals: Vec<EF> = (0..1 << num_vars).map(|_| rng.random()).collect();
             let poly = Poly::new(evals.clone());
             let grid = evals_012_grid(evals.as_slice());
-            let total = 3usize.pow(num_vars as u32);
 
-            for idx in 0..total {
+            for (idx, &grid_val) in grid.iter().enumerate() {
                 // Decode the flat ternary index into per-variable digits.
                 // index = d_0 + 3*d_1 + 9*d_2 + ..., so repeated mod-3 extracts digits.
                 let mut tmp = idx;
@@ -1083,7 +1083,7 @@ mod tests {
 
                 // The naive reference: fix variables one by one and read the constant.
                 let expected = compress_multi_ef(&poly, point.as_slice()).as_slice()[0];
-                prop_assert_eq!(grid[idx], expected);
+                prop_assert_eq!(grid_val, expected);
             }
         }
 
@@ -1129,7 +1129,7 @@ mod tests {
             let input: Vec<EF> = (0..1 << num_vars).map(|_| rng.random()).collect();
             let grid = evals_012_grid(&input);
 
-            for bool_idx in 0..(1 << num_vars) {
+            for (bool_idx, &input_val) in input.iter().enumerate() {
                 // Extract binary digits (low-var-first): b_0, b_1, ..., b_{l-1}.
                 let mut bits = Vec::with_capacity(num_vars);
                 let mut tmp = bool_idx;
@@ -1146,7 +1146,7 @@ mod tests {
                     power_of_3 *= 3;
                 }
 
-                prop_assert_eq!(grid[ternary_idx], input[bool_idx]);
+                prop_assert_eq!(grid[ternary_idx], input_val);
             }
         }
     }
