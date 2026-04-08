@@ -17,7 +17,6 @@
 //! 2. Avoiding the full `2^l`-sized equality table.
 //! 3. Reconstructing round polynomials from compact accumulators via Lagrange interpolation.
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
