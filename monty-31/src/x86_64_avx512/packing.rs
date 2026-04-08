@@ -20,7 +20,6 @@ use p3_field::op_assign_macros::{
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
     PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm512_mod_add,
-    mm512_mod_sub,
 };
 use p3_util::reconstitute_from_base;
 use rand::distr::{Distribution, StandardUniform};
@@ -112,11 +111,24 @@ impl<PMP: PackedMontyParameters> Add for PackedMontyField31AVX512<PMP> {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        let lhs = self.to_vector();
-        let rhs = rhs.to_vector();
-        let res = mm512_mod_add(lhs, rhs, PMP::PACKED_P);
+        // We want this to compile to:
+        //      vpaddd    t, lhs, rhs
+        //      vpcmpleud over_p, P, t        // mask: t >= P  (runs on port 5, not port 0)
+        //      vpsubd    res{over_p}, t, P   // subtract P where t >= P
+        // throughput: 1 cyc/vec (16 els/cyc)
+        // latency: 3 cyc
+        //
+        // This avoids `vpminud` (port 0), which is already under heavy pressure from
+        // the multiplications in the Montgomery reduction (`vpmuludq` also on port 0).
+        // The comparison `vpcmpleud` runs on port 5 instead, relieving port 0.
         unsafe {
-            // Safety: `add` returns values in canonical form when given values in canonical form.
+            let lhs = self.to_vector();
+            let rhs = rhs.to_vector();
+            let t = x86_64::_mm512_add_epi32(lhs, rhs);
+            // over_p is set where t >= P, i.e., where we need to subtract P
+            let over_p = x86_64::_mm512_cmple_epu32_mask(PMP::PACKED_P, t);
+            let res = x86_64::_mm512_mask_sub_epi32(t, over_p, t, PMP::PACKED_P);
+            // Safety: result is in [0, P) when inputs are in [0, P).
             Self::from_vector(res)
         }
     }
@@ -126,11 +138,24 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX512<PMP> {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        let lhs = self.to_vector();
-        let rhs = rhs.to_vector();
-        let res = mm512_mod_sub(lhs, rhs, PMP::PACKED_P);
+        // We want this to compile to:
+        //      vpsubd    t, lhs, rhs
+        //      vpcmpltud underflow, lhs, rhs  // mask: lhs < rhs (runs on port 5, not port 0)
+        //      vpaddd    res{underflow}, t, P // add P back where underflow occurred
+        // throughput: 1 cyc/vec (16 els/cyc)
+        // latency: 3 cyc
+        //
+        // This avoids `vpminud` (port 0), which is already under heavy pressure from
+        // the multiplications in the Montgomery reduction (`vpmuludq` also on port 0).
+        // The comparison `vpcmpltud` runs on port 5 instead, relieving port 0.
         unsafe {
-            // Safety: `mm512_mod_sub` returns values in canonical form when given values in canonical form.
+            let lhs = self.to_vector();
+            let rhs = rhs.to_vector();
+            let t = x86_64::_mm512_sub_epi32(lhs, rhs);
+            // underflow is set where lhs < rhs, meaning t wrapped around
+            let underflow = x86_64::_mm512_cmplt_epu32_mask(lhs, rhs);
+            let res = x86_64::_mm512_mask_add_epi32(t, underflow, t, PMP::PACKED_P);
+            // Safety: result is in [0, P) when inputs are in [0, P).
             Self::from_vector(res)
         }
     }
