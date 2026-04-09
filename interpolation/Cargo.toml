@@ -17,6 +17,7 @@ p3-util.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
+proptest.workspace = true
 
 [lints]
 workspace = true
