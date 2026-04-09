@@ -8,7 +8,6 @@ use p3_field::{ExtensionField, Field};
 use p3_fri::verifier::FriError;
 use p3_fri::{FriFoldingStrategy, FriParameters};
 use p3_matrix::Dimensions;
-use p3_util::zip_eq::zip_eq;
 
 use crate::{CircleCommitPhaseProofStep, CircleFriProof};
 
@@ -42,7 +41,10 @@ where
     challenger.observe_algebra_element(proof.final_poly);
 
     if proof.query_proofs.len() != params.num_queries {
-        return Err(FriError::InvalidProofShape);
+        return Err(FriError::QueryProofCountMismatch {
+            expected: params.num_queries,
+            got: proof.query_proofs.len(),
+        });
     }
 
     // Check PoW.
@@ -51,12 +53,16 @@ where
     }
 
     // Validate that all query proofs have the same number of commit phase openings
-    if !proof
-        .query_proofs
-        .iter()
-        .all(|qp| qp.commit_phase_openings.len() == proof.commit_phase_commits.len())
-    {
-        return Err(FriError::InvalidProofShape);
+    let expected_rounds = proof.commit_phase_commits.len();
+    for (query, qp) in proof.query_proofs.iter().enumerate() {
+        let got_rounds = qp.commit_phase_openings.len();
+        if got_rounds != expected_rounds {
+            return Err(FriError::QueryCommitPhaseOpeningsCountMismatch {
+                query,
+                expected: expected_rounds,
+                got: got_rounds,
+            });
+        }
     }
 
     // With variable arity, compute log_max_height by summing all log_arities
@@ -72,7 +78,7 @@ where
         .unwrap_or(0);
     let log_max_height = total_log_reduction + params.log_blowup;
 
-    for qp in &proof.query_proofs {
+    for (query, qp) in proof.query_proofs.iter().enumerate() {
         let index = challenger.sample_bits(log_max_height + folding.extra_query_index_bits());
         let ro = open_input(index, &qp.input_proof).map_err(FriError::InputError)?;
 
@@ -80,6 +86,19 @@ where
             ro.iter().tuple_windows().all(|((l, _), (r, _))| l > r),
             "reduced openings sorted by height descending"
         );
+
+        if qp.commit_phase_openings.len() != proof.commit_phase_commits.len() {
+            return Err(FriError::QueryCommitPhaseDataCountMismatch {
+                query,
+                expected: proof.commit_phase_commits.len(),
+                got: qp.commit_phase_openings.len(),
+            });
+        }
+
+        let fold_data_iter = betas
+            .iter()
+            .zip(proof.commit_phase_commits.iter())
+            .zip(qp.commit_phase_openings.iter());
 
         // Starting at the evaluation at `index` of the initial domain,
         // perform fri folds until the domain size reaches the final domain size.
@@ -89,15 +108,7 @@ where
             folding,
             params,
             index >> folding.extra_query_index_bits(),
-            zip_eq(
-                zip_eq(
-                    &betas,
-                    &proof.commit_phase_commits,
-                    FriError::InvalidProofShape,
-                )?,
-                &qp.commit_phase_openings,
-                FriError::InvalidProofShape,
-            )?,
+            fold_data_iter,
             ro,
             log_max_height,
         )?;
@@ -152,13 +163,17 @@ where
 
     // We start with evaluations over a domain of size (1 << log_max_height). We fold
     // using FRI until the domain size reaches (1 << log_blowup).
-    for ((&beta, comm), opening) in steps {
+    for (round, ((&beta, comm), opening)) in steps.enumerate() {
         let log_arity = opening.log_arity as usize;
         let arity = 1 << log_arity;
 
         // Validate that sibling_values has the expected length (arity - 1)
         if opening.sibling_values.len() != arity - 1 {
-            return Err(FriError::InvalidProofShape);
+            return Err(FriError::SiblingValuesLengthMismatch {
+                round,
+                expected: arity - 1,
+                got: opening.sibling_values.len(),
+            });
         }
 
         // If there are new polynomials to roll in at this height, do so.
@@ -212,12 +227,18 @@ where
 
     // Verify we reached the expected final height
     if log_current_height != params.log_blowup {
-        return Err(FriError::InvalidProofShape);
+        return Err(FriError::FinalFoldHeightMismatch {
+            expected: params.log_blowup,
+            got: log_current_height,
+        });
     }
 
     // If ro_iter is not empty, we failed to fold in some polynomial evaluations.
-    if ro_iter.next().is_some() {
-        return Err(FriError::InvalidProofShape);
+    if let Some((next_log_height, _)) = ro_iter.next() {
+        return Err(FriError::UnconsumedReducedOpenings {
+            next_log_height,
+            remaining: 1 + ro_iter.count(),
+        });
     }
 
     // If we reached this point, we have verified that, starting at the initial index,

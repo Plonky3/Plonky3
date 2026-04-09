@@ -654,10 +654,32 @@ mod tests {
 
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
         pcs.verify(
-            vec![(comm, vec![(d, vec![(zeta, values[0][0][0].clone())])])],
+            vec![(
+                comm.clone(),
+                vec![(d, vec![(zeta, values[0][0][0].clone())])],
+            )],
             &proof,
             &mut chal,
         )
         .expect("verify err");
+
+        let mut malformed_proof = proof.clone();
+        malformed_proof.fri_proof.query_proofs.pop();
+
+        let mut chal = Challenger::from_hasher(vec![], byte_hash);
+        let err = pcs
+            .verify(
+                vec![(comm, vec![(d, vec![(zeta, values[0][0][0].clone())])])],
+                &malformed_proof,
+                &mut chal,
+            )
+            .expect_err("expected query proof count mismatch");
+
+        assert!(matches!(
+            err,
+            FriError::QueryProofCountMismatch { expected, got }
+                if expected == pcs.fri_params.num_queries
+                    && got + 1 == pcs.fri_params.num_queries
+        ));
     }
 }
