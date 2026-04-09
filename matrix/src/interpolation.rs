@@ -1,8 +1,4 @@
-//! Tools for Lagrange interpolation.
-
-#![no_std]
-
-extern crate alloc;
+//! Lagrange interpolation over two-adic cosets.
 
 use alloc::vec::Vec;
 
@@ -10,9 +6,10 @@ use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
     ExtensionField, TwoAdicField, batch_multiplicative_inverse, scale_slice_in_place_single_core,
 };
-use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
+
+use crate::Matrix;
 
 /// Extension trait that adds Lagrange interpolation over two-adic cosets to any [`Matrix`].
 ///
@@ -155,13 +152,14 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{
-        ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField, batch_multiplicative_inverse,
+        ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField,
+        batch_multiplicative_inverse,
     };
-    use p3_matrix::dense::RowMajorMatrix;
     use p3_util::log2_strict_usize;
     use proptest::prelude::*;
 
-    use crate::Interpolate;
+    use super::Interpolate;
+    use crate::dense::RowMajorMatrix;
 
     type F = BabyBear;
     type EF4 = BinomialExtensionField<BabyBear, 4>;

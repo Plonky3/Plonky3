@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse};
-use p3_interpolation::Interpolate;
+use p3_matrix::interpolation::Interpolate;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};

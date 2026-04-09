@@ -29,7 +29,7 @@ use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
     ExtensionField, PackedFieldExtension, TwoAdicField, batch_multiplicative_inverse, dot_product,
 };
-use p3_interpolation::Interpolate;
+use p3_matrix::interpolation::Interpolate;
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow};
