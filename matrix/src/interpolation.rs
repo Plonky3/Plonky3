@@ -152,8 +152,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{
-        ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField,
-        batch_multiplicative_inverse,
+        ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField, batch_multiplicative_inverse,
     };
     use p3_util::log2_strict_usize;
     use proptest::prelude::*;
