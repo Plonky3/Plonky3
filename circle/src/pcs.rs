@@ -777,11 +777,19 @@ mod tests {
         // the remaining one).
         let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
 
+        // Capture the original sibling count and arity before mutating.
+        let log_arity =
+            proof.fri_proof.query_proofs[0].commit_phase_openings[0].log_arity as usize;
+        let arity = 1usize << log_arity;
+        let original_sibling_count =
+            proof.fri_proof.query_proofs[0].commit_phase_openings[0].sibling_values.len();
+
         // Mutation: remove one sibling value from query 0, round 0.
         //
-        //     before: sibling_values = [s_0, ..., s_{k-2}]   (k - 1 elements)
-        //     after:  sibling_values = [s_0, ..., s_{k-3}]   (k - 2 elements)
-        //     → expected k - 1, got k - 2 → error at round 0
+        //     arity = 2^{log_arity}, expected siblings = arity - 1
+        //     before: sibling_values = [s_0, ..., s_{arity-2}]   (arity - 1 elements)
+        //     after:  sibling_values = [s_0, ..., s_{arity-3}]   (arity - 2 elements)
+        //     → expected arity - 1, got arity - 2 → error at round 0
         proof.fri_proof.query_proofs[0].commit_phase_openings[0]
             .sibling_values
             .pop();
@@ -799,12 +807,10 @@ mod tests {
         };
         // Error must identify round 0 as the offender.
         assert_eq!(round, 0);
-        // One sibling was removed, so got should be exactly one less.
-        assert_eq!(
-            got + 1,
-            expected,
-            "popping one sibling should yield got = expected - 1"
-        );
+        // The verifier expects (arity - 1) siblings per folding group.
+        assert_eq!(expected, arity - 1);
+        // We popped one, so one fewer than the original count.
+        assert_eq!(got, original_sibling_count - 1);
     }
 
     // Two error variants cannot be triggered through the PCS verification
@@ -836,6 +842,13 @@ mod tests {
             return;
         }
 
+        // Capture the reference arity schedule from query 0 before mutating.
+        let reference_arities: Vec<usize> = proof.fri_proof.query_proofs[0]
+            .commit_phase_openings
+            .iter()
+            .map(|o| o.log_arity as usize)
+            .collect();
+
         // Mutation: bump the log_arity of query 1's first round by 1.
         //
         //     query 0 arities: [a_0, a_1, ..., a_{n-1}]       (reference)
@@ -844,13 +857,26 @@ mod tests {
         let original = proof.fri_proof.query_proofs[1].commit_phase_openings[0].log_arity;
         proof.fri_proof.query_proofs[1].commit_phase_openings[0].log_arity = original + 1;
 
+        // Build the expected corrupted schedule for query 1.
+        let mut corrupted_arities = reference_arities.clone();
+        corrupted_arities[0] = original as usize + 1;
+
         let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
             .expect_err("expected QueryLogAritiesMismatch");
 
-        let FriError::QueryLogAritiesMismatch { query, .. } = err else {
+        let FriError::QueryLogAritiesMismatch {
+            query,
+            expected,
+            got,
+        } = err
+        else {
             panic!("expected QueryLogAritiesMismatch, got {err:?}");
         };
         // Error must identify query 1 (the first one compared against the reference).
         assert_eq!(query, 1);
+        // The expected schedule is query 0's (the reference).
+        assert_eq!(expected, reference_arities);
+        // The got schedule is query 1's corrupted version.
+        assert_eq!(got, corrupted_arities);
     }
 }
