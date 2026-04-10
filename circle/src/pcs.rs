@@ -616,7 +616,17 @@ mod tests {
         InputError<<ValMmcs as Mmcs<Val>>::Error, <ChallengeMmcs as Mmcs<Challenge>>::Error>,
     >;
 
-    /// Shared test fixture: builds a valid PCS commitment, opening, and proof.
+    /// Build a valid Circle PCS proof for a random single-column trace.
+    ///
+    /// Returns all the pieces needed to verify (or re-verify after mutation):
+    /// the PCS instance, hasher seed, commitment, domain, evaluation point,
+    /// opened values, and the proof itself.
+    ///
+    /// # Fixture parameters
+    ///
+    /// - Trace: 2^{10} = 1024 rows, 1 column of random field elements.
+    /// - FRI: testing parameters with log_blowup = 2, log_final_poly_len = 0.
+    /// - Hash: Keccak-256 with a binary Merkle tree.
     #[allow(clippy::type_complexity)]
     fn setup_valid_proof() -> (
         TestPcs,
@@ -629,11 +639,16 @@ mod tests {
     ) {
         let mut rng = SmallRng::seed_from_u64(0);
 
+        // Build the hash stack: field hasher → compression → Merkle tree.
         let byte_hash = ByteHash {};
         let field_hash = FieldHash::new(byte_hash);
         let compress = MyCompress::new(byte_hash);
         let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+
+        // Wrap the value-domain Merkle tree for extension-field leaves.
         let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+        // Minimal FRI parameters for fast test execution.
         let fri_params = FriParameters::new_testing(challenge_mmcs, 0);
 
         let pcs = TestPcs {
@@ -642,6 +657,7 @@ mod tests {
             _phantom: PhantomData,
         };
 
+        // Generate a random trace on a circle domain of size 2^{10}.
         let log_n = 10;
         let d = <TestPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
             &pcs,
@@ -649,18 +665,26 @@ mod tests {
         );
 
         let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
+
+        // Commit to the trace and produce the Merkle root.
         let (comm, data) =
             <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
+
+        // Random evaluation point in the extension field.
         let zeta: Challenge = rng.random();
 
+        // Generate the opening proof at the chosen evaluation point.
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
         let (values, proof) = pcs.open(vec![(&data, vec![vec![zeta]])], &mut chal);
 
         (pcs, byte_hash, comm, d, zeta, values, proof)
     }
 
-    /// Attempts to verify `proof` with the given PCS setup, returning the
-    /// verification result.
+    /// Run the PCS verifier with the given proof and return the result.
+    ///
+    /// This is a thin wrapper that reconstructs a fresh challenger and
+    /// calls the verification routine. Tests use it to verify both valid
+    /// proofs and intentionally malformed ones.
     fn try_verify(
         pcs: &TestPcs,
         byte_hash: ByteHash,
@@ -670,6 +694,8 @@ mod tests {
         values: &[Vec<Vec<Vec<Challenge>>>],
         proof: &CirclePcsProof<Val, Challenge, ValMmcs, ChallengeMmcs, Val>,
     ) -> Result<(), TestError> {
+        // Build a fresh challenger from the same seed so the transcript
+        // replays identically to what the prover produced.
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
         pcs.verify(
             vec![(comm.clone(), vec![(d, vec![(zeta, values[0][0][0].clone())])])],
@@ -680,21 +706,28 @@ mod tests {
 
     #[test]
     fn circle_pcs() {
-        // Very simple pcs test. More rigorous tests in p3_fri/tests/pcs.
+        // Smoke test: an honestly generated proof must verify successfully.
         let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
-
         try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof).expect("verify err");
     }
 
     #[test]
     fn reject_query_proof_count_mismatch() {
+        // Invariant: the proof must contain exactly num_queries query proofs.
+        // The verifier rejects if the count is wrong.
         let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
 
+        // Mutation: remove one query proof so the count falls short.
+        //
+        //     before: query_proofs = [q_0, q_1, ..., q_{n-1}]   (n = num_queries)
+        //     after:  query_proofs = [q_0, q_1, ..., q_{n-2}]   (n - 1)
+        //     → expected n, got n - 1 → error
         proof.fri_proof.query_proofs.pop();
 
         let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
             .expect_err("expected QueryProofCountMismatch");
 
+        // Destructure for precise field assertions (better diagnostics than matches!).
         let FriError::QueryProofCountMismatch { expected, got } = err else {
             panic!("expected QueryProofCountMismatch, got {err:?}");
         };
@@ -704,9 +737,20 @@ mod tests {
 
     #[test]
     fn reject_query_commit_phase_openings_count_mismatch() {
+        // Invariant: each query proof must carry exactly one opening per
+        // commit-phase round. If a query has fewer (or more) openings than
+        // there are commitments, the proof shape is invalid.
         let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
 
+        // We need the original proof to assert against its commitment count,
+        // so clone before mutating.
         let mut bad = proof.clone();
+
+        // Mutation: remove the last opening from query 0.
+        //
+        //     commit_phase_commits:                [c_0, ..., c_{n-1}]   (n rounds)
+        //     query 0 commit_phase_openings:       [o_0, ..., o_{n-2}]   (n - 1 after pop)
+        //     → n != n - 1 → error on query 0
         bad.fri_proof.query_proofs[0].commit_phase_openings.pop();
 
         let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &bad)
@@ -720,6 +764,7 @@ mod tests {
         else {
             panic!("expected QueryCommitPhaseOpeningsCountMismatch, got {err:?}");
         };
+        // Error must identify query 0 as the offender.
         assert_eq!(query, 0);
         assert_eq!(expected, proof.fri_proof.commit_phase_commits.len());
         assert_eq!(got, expected - 1);
@@ -727,8 +772,16 @@ mod tests {
 
     #[test]
     fn reject_sibling_values_length_mismatch() {
+        // Invariant: in each folding round with arity k, the prover must
+        // supply exactly k - 1 sibling values (the queried evaluation is
+        // the remaining one).
         let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
 
+        // Mutation: remove one sibling value from query 0, round 0.
+        //
+        //     before: sibling_values = [s_0, ..., s_{k-2}]   (k - 1 elements)
+        //     after:  sibling_values = [s_0, ..., s_{k-3}]   (k - 2 elements)
+        //     → expected k - 1, got k - 2 → error at round 0
         proof.fri_proof.query_proofs[0].commit_phase_openings[0]
             .sibling_values
             .pop();
@@ -744,7 +797,9 @@ mod tests {
         else {
             panic!("expected SiblingValuesLengthMismatch, got {err:?}");
         };
+        // Error must identify round 0 as the offender.
         assert_eq!(round, 0);
+        // One sibling was removed, so got should be exactly one less.
         assert_eq!(
             got + 1,
             expected,
@@ -752,22 +807,40 @@ mod tests {
         );
     }
 
-    // NOTE: `FinalFoldHeightMismatch` and `UnconsumedReducedOpenings` cannot be
-    // triggered through the PCS layer because MMCS commitment verification or
-    // input-proof checks fail first for any mutation that would reach those
-    // code paths. They are tested implicitly through the circle verifier's
-    // internal logic and protect against a malicious prover bypassing MMCS.
+    // Two error variants cannot be triggered through the PCS verification
+    // layer because Merkle commitment checks or input-proof validation
+    // fail first for any proof mutation that would reach those code paths:
+    //
+    // - Final fold height mismatch: requires the total folding to stop at
+    //   the wrong domain size, but altering round counts also invalidates
+    //   Merkle proofs.
+    // - Unconsumed reduced openings: requires leftover polynomial data
+    //   after folding completes, but input-proof checks reject the shape
+    //   before the folding loop runs.
+    //
+    // Both are reachable by a malicious prover who crafts openings that
+    // pass Merkle checks but have wrong structure — they serve as defense
+    // in depth in the low-level verifier.
 
     #[test]
     fn reject_query_log_arities_mismatch() {
+        // Invariant: all query proofs must use the same per-round folding
+        // arity schedule. The verifier takes the first query proof's
+        // schedule as a reference and rejects any that differ.
         let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
 
-        // Only possible when there are at least 2 query proofs.
+        // This check compares query 1 against query 0, so we need at least
+        // two query proofs. With testing parameters this is always true, but
+        // guard defensively.
         if proof.fri_proof.query_proofs.len() < 2 {
             return;
         }
 
-        // Corrupt the log_arity of the first opening in the second query proof.
+        // Mutation: bump the log_arity of query 1's first round by 1.
+        //
+        //     query 0 arities: [a_0, a_1, ..., a_{n-1}]       (reference)
+        //     query 1 arities: [a_0 + 1, a_1, ..., a_{n-1}]   (corrupted)
+        //     → schedules differ → error on query 1
         let original = proof.fri_proof.query_proofs[1].commit_phase_openings[0].log_arity;
         proof.fri_proof.query_proofs[1].commit_phase_openings[0].log_arity = original + 1;
 
@@ -777,6 +850,7 @@ mod tests {
         let FriError::QueryLogAritiesMismatch { query, .. } = err else {
             panic!("expected QueryLogAritiesMismatch, got {err:?}");
         };
+        // Error must identify query 1 (the first one compared against the reference).
         assert_eq!(query, 1);
     }
 }
