@@ -591,6 +591,7 @@ mod tests {
     use p3_challenger::{HashChallenger, SerializingChallenger32};
     use p3_commit::ExtensionMmcs;
     use p3_field::extension::BinomialExtensionField;
+    use p3_fri::verifier::FriError;
     use p3_fri::FriParameters;
     use p3_keccak::Keccak256Hash;
     use p3_merkle_tree::MerkleTreeMmcs;
@@ -601,85 +602,181 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn circle_pcs() {
-        // Very simple pcs test. More rigorous tests in p3_fri/tests/pcs.
+    type Val = Mersenne31;
+    type Challenge = BinomialExtensionField<Mersenne31, 3>;
+    type ByteHash = Keccak256Hash;
+    type FieldHash = SerializingHasher<ByteHash>;
+    type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
+    type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 2, 32>;
+    type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+    type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
+    type TestPcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
+    type TestError = FriError<
+        <ChallengeMmcs as Mmcs<Challenge>>::Error,
+        InputError<<ValMmcs as Mmcs<Val>>::Error, <ChallengeMmcs as Mmcs<Challenge>>::Error>,
+    >;
 
+    /// Shared test fixture: builds a valid PCS commitment, opening, and proof.
+    #[allow(clippy::type_complexity)]
+    fn setup_valid_proof() -> (
+        TestPcs,
+        ByteHash,
+        <ValMmcs as Mmcs<Val>>::Commitment,
+        CircleDomain<Val>,
+        Challenge,
+        Vec<Vec<Vec<Vec<Challenge>>>>,
+        CirclePcsProof<Val, Challenge, ValMmcs, ChallengeMmcs, Val>,
+    ) {
         let mut rng = SmallRng::seed_from_u64(0);
 
-        type Val = Mersenne31;
-        type Challenge = BinomialExtensionField<Mersenne31, 3>;
-
-        type ByteHash = Keccak256Hash;
-        type FieldHash = SerializingHasher<ByteHash>;
         let byte_hash = ByteHash {};
         let field_hash = FieldHash::new(byte_hash);
-
-        type MyCompress = CompressionFunctionFromHasher<ByteHash, 2, 32>;
         let compress = MyCompress::new(byte_hash);
-
-        type ValMmcs = MerkleTreeMmcs<Val, u8, FieldHash, MyCompress, 2, 32>;
         let val_mmcs = ValMmcs::new(field_hash, compress, 0);
-
-        type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
         let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
-
-        type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
-
         let fri_params = FriParameters::new_testing(challenge_mmcs, 0);
 
-        type Pcs = CirclePcs<Val, ValMmcs, ChallengeMmcs>;
-        let pcs = Pcs {
+        let pcs = TestPcs {
             mmcs: val_mmcs,
             fri_params,
             _phantom: PhantomData,
         };
 
         let log_n = 10;
-
-        let d = <Pcs as p3_commit::Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+        let d = <TestPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
             &pcs,
             1 << log_n,
         );
 
         let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
-
         let (comm, data) =
-            <Pcs as p3_commit::Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
-
+            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
         let zeta: Challenge = rng.random();
 
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
         let (values, proof) = pcs.open(vec![(&data, vec![vec![zeta]])], &mut chal);
 
+        (pcs, byte_hash, comm, d, zeta, values, proof)
+    }
+
+    /// Attempts to verify `proof` with the given PCS setup, returning the
+    /// verification result.
+    fn try_verify(
+        pcs: &TestPcs,
+        byte_hash: ByteHash,
+        comm: &<ValMmcs as Mmcs<Val>>::Commitment,
+        d: CircleDomain<Val>,
+        zeta: Challenge,
+        values: &[Vec<Vec<Vec<Challenge>>>],
+        proof: &CirclePcsProof<Val, Challenge, ValMmcs, ChallengeMmcs, Val>,
+    ) -> Result<(), TestError> {
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
         pcs.verify(
-            vec![(
-                comm.clone(),
-                vec![(d, vec![(zeta, values[0][0][0].clone())])],
-            )],
-            &proof,
+            vec![(comm.clone(), vec![(d, vec![(zeta, values[0][0][0].clone())])])],
+            proof,
             &mut chal,
         )
-        .expect("verify err");
+    }
 
-        let mut malformed_proof = proof.clone();
-        malformed_proof.fri_proof.query_proofs.pop();
+    #[test]
+    fn circle_pcs() {
+        // Very simple pcs test. More rigorous tests in p3_fri/tests/pcs.
+        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
 
-        let mut chal = Challenger::from_hasher(vec![], byte_hash);
-        let err = pcs
-            .verify(
-                vec![(comm, vec![(d, vec![(zeta, values[0][0][0].clone())])])],
-                &malformed_proof,
-                &mut chal,
-            )
-            .expect_err("expected query proof count mismatch");
+        try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof).expect("verify err");
+    }
 
-        assert!(matches!(
-            err,
-            FriError::QueryProofCountMismatch { expected, got }
-                if expected == pcs.fri_params.num_queries
-                    && got + 1 == pcs.fri_params.num_queries
-        ));
+    #[test]
+    fn reject_query_proof_count_mismatch() {
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+
+        proof.fri_proof.query_proofs.pop();
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("expected QueryProofCountMismatch");
+
+        let FriError::QueryProofCountMismatch { expected, got } = err else {
+            panic!("expected QueryProofCountMismatch, got {err:?}");
+        };
+        assert_eq!(expected, pcs.fri_params.num_queries);
+        assert_eq!(got, pcs.fri_params.num_queries - 1);
+    }
+
+    #[test]
+    fn reject_query_commit_phase_openings_count_mismatch() {
+        let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
+
+        let mut bad = proof.clone();
+        bad.fri_proof.query_proofs[0].commit_phase_openings.pop();
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &bad)
+            .expect_err("expected QueryCommitPhaseOpeningsCountMismatch");
+
+        let FriError::QueryCommitPhaseOpeningsCountMismatch {
+            query,
+            expected,
+            got,
+        } = err
+        else {
+            panic!("expected QueryCommitPhaseOpeningsCountMismatch, got {err:?}");
+        };
+        assert_eq!(query, 0);
+        assert_eq!(expected, proof.fri_proof.commit_phase_commits.len());
+        assert_eq!(got, expected - 1);
+    }
+
+    #[test]
+    fn reject_sibling_values_length_mismatch() {
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+
+        proof.fri_proof.query_proofs[0].commit_phase_openings[0]
+            .sibling_values
+            .pop();
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("expected SiblingValuesLengthMismatch");
+
+        let FriError::SiblingValuesLengthMismatch {
+            round,
+            expected,
+            got,
+        } = err
+        else {
+            panic!("expected SiblingValuesLengthMismatch, got {err:?}");
+        };
+        assert_eq!(round, 0);
+        assert_eq!(
+            got + 1,
+            expected,
+            "popping one sibling should yield got = expected - 1"
+        );
+    }
+
+    // NOTE: `FinalFoldHeightMismatch` and `UnconsumedReducedOpenings` cannot be
+    // triggered through the PCS layer because MMCS commitment verification or
+    // input-proof checks fail first for any mutation that would reach those
+    // code paths. They are tested implicitly through the circle verifier's
+    // internal logic and protect against a malicious prover bypassing MMCS.
+
+    #[test]
+    fn reject_query_log_arities_mismatch() {
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+
+        // Only possible when there are at least 2 query proofs.
+        if proof.fri_proof.query_proofs.len() < 2 {
+            return;
+        }
+
+        // Corrupt the log_arity of the first opening in the second query proof.
+        let original = proof.fri_proof.query_proofs[1].commit_phase_openings[0].log_arity;
+        proof.fri_proof.query_proofs[1].commit_phase_openings[0].log_arity = original + 1;
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("expected QueryLogAritiesMismatch");
+
+        let FriError::QueryLogAritiesMismatch { query, .. } = err else {
+            panic!("expected QueryLogAritiesMismatch, got {err:?}");
+        };
+        assert_eq!(query, 1);
     }
 }

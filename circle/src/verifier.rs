@@ -65,20 +65,39 @@ where
         }
     }
 
-    // With variable arity, compute log_max_height by summing all log_arities
-    let total_log_reduction: usize = proof
+    // Extract the per-round folding arities from the first query proof and ensure all
+    // query proofs use the same schedule (mirrors the standard FRI verifier check).
+    let log_arities: Vec<usize> = proof
         .query_proofs
         .first()
         .map(|qp| {
             qp.commit_phase_openings
                 .iter()
                 .map(|o| o.log_arity as usize)
-                .sum()
+                .collect()
         })
-        .unwrap_or(0);
+        .unwrap_or_default();
+
+    for (query, qp) in proof.query_proofs.iter().enumerate().skip(1) {
+        let got_log_arities: Vec<usize> = qp
+            .commit_phase_openings
+            .iter()
+            .map(|o| o.log_arity as usize)
+            .collect();
+        if got_log_arities != log_arities {
+            return Err(FriError::QueryLogAritiesMismatch {
+                query,
+                expected: log_arities,
+                got: got_log_arities,
+            });
+        }
+    }
+
+    // With variable arity, compute log_max_height by summing all log_arities.
+    let total_log_reduction: usize = log_arities.iter().sum();
     let log_max_height = total_log_reduction + params.log_blowup;
 
-    for (query, qp) in proof.query_proofs.iter().enumerate() {
+    for qp in &proof.query_proofs {
         let index = challenger.sample_bits(log_max_height + folding.extra_query_index_bits());
         let ro = open_input(index, &qp.input_proof).map_err(FriError::InputError)?;
 
@@ -87,14 +106,8 @@ where
             "reduced openings sorted by height descending"
         );
 
-        if qp.commit_phase_openings.len() != proof.commit_phase_commits.len() {
-            return Err(FriError::QueryCommitPhaseDataCountMismatch {
-                query,
-                expected: proof.commit_phase_commits.len(),
-                got: qp.commit_phase_openings.len(),
-            });
-        }
-
+        // betas.len() == commit_phase_commits.len() by construction (lines 31–38).
+        // commit_phase_openings.len() == commit_phase_commits.len() by the check above (lines 56–66).
         let fold_data_iter = betas
             .iter()
             .zip(proof.commit_phase_commits.iter())
