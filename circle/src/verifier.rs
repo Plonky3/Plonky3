@@ -185,10 +185,7 @@ where
 /// - The Merkle commitment to the evaluations on this round's domain.
 /// - The prover-supplied sibling values and Merkle opening proof.
 type CommitStep<'a, F, M> = (
-    (
-        &'a F,
-        &'a <M as Mmcs<F>>::Commitment,
-    ),
+    (&'a F, &'a <M as Mmcs<F>>::Commitment),
     &'a CircleCommitPhaseProofStep<F, M>,
 );
 

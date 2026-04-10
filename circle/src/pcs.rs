@@ -591,8 +591,8 @@ mod tests {
     use p3_challenger::{HashChallenger, SerializingChallenger32};
     use p3_commit::ExtensionMmcs;
     use p3_field::extension::BinomialExtensionField;
-    use p3_fri::verifier::FriError;
     use p3_fri::FriParameters;
+    use p3_fri::verifier::FriError;
     use p3_keccak::Keccak256Hash;
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_mersenne_31::Mersenne31;
@@ -659,16 +659,13 @@ mod tests {
 
         // Generate a random trace on a circle domain of size 2^{10}.
         let log_n = 10;
-        let d = <TestPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
-            &pcs,
-            1 << log_n,
-        );
+        let d =
+            <TestPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_n);
 
         let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
 
         // Commit to the trace and produce the Merkle root.
-        let (comm, data) =
-            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
+        let (comm, data) = <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
 
         // Random evaluation point in the extension field.
         let zeta: Challenge = rng.random();
@@ -698,7 +695,10 @@ mod tests {
         // replays identically to what the prover produced.
         let mut chal = Challenger::from_hasher(vec![], byte_hash);
         pcs.verify(
-            vec![(comm.clone(), vec![(d, vec![(zeta, values[0][0][0].clone())])])],
+            vec![(
+                comm.clone(),
+                vec![(d, vec![(zeta, values[0][0][0].clone())])],
+            )],
             proof,
             &mut chal,
         )
@@ -778,11 +778,11 @@ mod tests {
         let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
 
         // Capture the original sibling count and arity before mutating.
-        let log_arity =
-            proof.fri_proof.query_proofs[0].commit_phase_openings[0].log_arity as usize;
+        let log_arity = proof.fri_proof.query_proofs[0].commit_phase_openings[0].log_arity as usize;
         let arity = 1usize << log_arity;
-        let original_sibling_count =
-            proof.fri_proof.query_proofs[0].commit_phase_openings[0].sibling_values.len();
+        let original_sibling_count = proof.fri_proof.query_proofs[0].commit_phase_openings[0]
+            .sibling_values
+            .len();
 
         // Mutation: remove one sibling value from query 0, round 0.
         //
