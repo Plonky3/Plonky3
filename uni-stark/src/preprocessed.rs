@@ -40,15 +40,19 @@ pub struct PreprocessedVerifierKey<SC: StarkGenericConfig> {
     pub commitment: <SC::Pcs as Pcs<SC::Challenge, SC::Challenger>>::Commitment,
 }
 
-/// Set up and commit the preprocessed trace for a given [`Air`] and degree.
+/// Set up and commit the preprocessed trace for a given [`Air`] and base trace degree.
 ///
 /// This can be called once per [`Air`]/degree configuration to obtain reusable
 /// prover data for preprocessed columns. Returns `None` if the [`Air`] does not
 /// define any preprocessed columns.
+///
+/// `degree_bits` is `log2` of the base trace degree (without ZK padding).
+/// The returned [`PreprocessedProverData`] and [`PreprocessedVerifierKey`]
+/// store the extended `degree_bits` (with ZK padding, when enabled).
 pub fn setup_preprocessed<SC, A>(
     config: &SC,
     air: &A,
-    degree_bits: usize,
+    trace_degree_bits: usize,
 ) -> Option<(PreprocessedProverData<SC>, PreprocessedVerifierKey<SC>)>
 where
     SC: StarkGenericConfig,
@@ -57,8 +61,9 @@ where
     let pcs = config.pcs();
     let is_zk = config.is_zk();
 
-    let init_degree = 1 << degree_bits;
-    let degree = 1 << (degree_bits + is_zk);
+    let base_degree = 1 << trace_degree_bits;
+    let ext_degree_bits = trace_degree_bits + is_zk;
+    let ext_degree = 1 << ext_degree_bits;
 
     let preprocessed = air.preprocessed_trace()?;
 
@@ -69,15 +74,15 @@ where
 
     assert_eq!(
         preprocessed.height(),
-        init_degree,
-        "preprocessed trace height must equal trace degree"
+        base_degree,
+        "preprocessed trace height must equal base trace degree (without ZK padding)"
     );
 
-    let trace_domain = pcs.natural_domain_for_degree(degree);
+    let trace_domain = pcs.natural_domain_for_degree(ext_degree);
     let (commitment, prover_data) = debug_span!("commit to preprocessed trace")
         .in_scope(|| pcs.commit_preprocessing([(trace_domain, preprocessed)]));
 
-    let degree_bits = degree_bits + is_zk;
+    let degree_bits = ext_degree_bits;
     let prover_data = PreprocessedProverData {
         width,
         degree_bits,
