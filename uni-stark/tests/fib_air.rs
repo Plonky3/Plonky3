@@ -152,6 +152,39 @@ fn make_two_adic_config(log_final_poly_len: usize) -> MyConfig {
     MyConfig::new(pcs, challenger)
 }
 
+type ZkByteHash = Keccak256Hash;
+type ZkU64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
+type ZkFieldHash = SerializingHasher<ZkU64Hash>;
+type ZkCompress = CompressionFunctionFromHasher<ZkU64Hash, 2, 4>;
+type ZkValHidingMmcs = MerkleTreeHidingMmcs<
+    [Val; p3_keccak::VECTOR_LEN],
+    [u64; p3_keccak::VECTOR_LEN],
+    ZkFieldHash,
+    ZkCompress,
+    SmallRng,
+    2,
+    4,
+    4,
+>;
+type ZkChallenger = SerializingChallenger32<Val, HashChallenger<u8, ZkByteHash, 32>>;
+type ZkChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ZkValHidingMmcs>;
+type ZkHidingPcs = HidingFriPcs<Val, Dft, ZkValHidingMmcs, ZkChallengeHidingMmcs, SmallRng>;
+type ZkConfig = StarkConfig<ZkHidingPcs, Challenge, ZkChallenger>;
+
+fn make_zk_config() -> ZkConfig {
+    let byte_hash = ZkByteHash {};
+    let u64_hash = ZkU64Hash::new(KeccakF {});
+    let field_hash = ZkFieldHash::new(u64_hash);
+    let compress = ZkCompress::new(u64_hash);
+    let val_mmcs = ZkValHidingMmcs::new(field_hash, compress, 0, SmallRng::seed_from_u64(1));
+    let challenge_mmcs = ZkChallengeHidingMmcs::new(val_mmcs.clone());
+    let dft = Dft::default();
+    let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
+    let pcs = ZkHidingPcs::new(dft, val_mmcs, fri_params, 4, SmallRng::seed_from_u64(1));
+    let challenger = ZkChallenger::from_hasher(vec![], byte_hash);
+    ZkConfig::new(pcs, challenger)
+}
+
 fn two_adic_compat_case() -> (MyConfig, FibonacciAir, Vec<Val>, RowMajorMatrix<Val>) {
     let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
     let config = make_two_adic_config(2);
@@ -235,48 +268,11 @@ fn test_public_value_impl(n: usize, x: u64, log_final_poly_len: usize) {
 
 #[test]
 fn test_zk() {
-    type ByteHash = Keccak256Hash;
-    let byte_hash = ByteHash {};
-
-    type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
-    let u64_hash = U64Hash::new(KeccakF {});
-
-    type FieldHash = SerializingHasher<U64Hash>;
-    let field_hash = FieldHash::new(u64_hash);
-
-    type MyCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;
-    let compress = MyCompress::new(u64_hash);
-
-    type ValHidingMmcs = MerkleTreeHidingMmcs<
-        [Val; p3_keccak::VECTOR_LEN],
-        [u64; p3_keccak::VECTOR_LEN],
-        FieldHash,
-        MyCompress,
-        SmallRng,
-        2,
-        4,
-        4,
-    >;
-
-    let rng = SmallRng::seed_from_u64(1);
-    let val_mmcs = ValHidingMmcs::new(field_hash, compress, 0, rng);
-
-    type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
-
-    type ChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ValHidingMmcs>;
-
     let n = 1 << 3;
     let x = 21;
 
-    let challenge_mmcs = ChallengeHidingMmcs::new(val_mmcs.clone());
-    let dft = Dft::default();
     let trace = generate_trace_rows::<Val>(0, 1, n);
-    let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
-    type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, SmallRng>;
-    type MyHidingConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
-    let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, SmallRng::seed_from_u64(1));
-    let challenger = Challenger::from_hasher(vec![], byte_hash);
-    let config = MyHidingConfig::new(pcs, challenger);
+    let config = make_zk_config();
     let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(x)];
     let proof = prove(&config, &FibonacciAir {}, trace, &pis);
     verify(&config, &FibonacciAir {}, &proof, &pis).expect("verification failed");
@@ -327,8 +323,10 @@ fn test_degree_bits_too_large_rejected() {
         .expect_err("verification should reject oversized degree_bits");
     match err {
         p3_uni_stark::VerificationError::InvalidProofShape(
-            InvalidProofShapeError::DegreeBitsTooLarge { got },
+            InvalidProofShapeError::DegreeBitsTooLarge { air, maximum, got },
         ) => {
+            assert_eq!(air, None);
+            assert_eq!(maximum, usize::BITS as usize - 1);
             assert_eq!(got, usize::BITS as usize);
         }
         _ => panic!("unexpected error: {err:?}"),
@@ -337,43 +335,8 @@ fn test_degree_bits_too_large_rejected() {
 
 #[test]
 fn test_degree_bits_too_small_for_zk_rejected() {
-    type ByteHash = Keccak256Hash;
-    let byte_hash = ByteHash {};
-
-    type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
-    let u64_hash = U64Hash::new(KeccakF {});
-
-    type FieldHash = SerializingHasher<U64Hash>;
-    let field_hash = FieldHash::new(u64_hash);
-
-    type MyCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;
-    let compress = MyCompress::new(u64_hash);
-
-    type ValHidingMmcs = MerkleTreeHidingMmcs<
-        [Val; p3_keccak::VECTOR_LEN],
-        [u64; p3_keccak::VECTOR_LEN],
-        FieldHash,
-        MyCompress,
-        SmallRng,
-        2,
-        4,
-        4,
-    >;
-
-    type MyZkChallenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
-    type ChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ValHidingMmcs>;
-    type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, SmallRng>;
-    type MyHidingConfig = StarkConfig<HidingPcs, Challenge, MyZkChallenger>;
-
-    let rng = SmallRng::seed_from_u64(1);
-    let val_mmcs = ValHidingMmcs::new(field_hash, compress, 0, rng);
-    let challenge_mmcs = ChallengeHidingMmcs::new(val_mmcs.clone());
-    let dft = Dft::default();
     let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
-    let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
-    let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, SmallRng::seed_from_u64(1));
-    let challenger = MyZkChallenger::from_hasher(vec![], byte_hash);
-    let config = MyHidingConfig::new(pcs, challenger);
+    let config = make_zk_config();
     let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(21)];
 
     let mut proof = prove(&config, &FibonacciAir {}, trace, &pis);
@@ -383,8 +346,9 @@ fn test_degree_bits_too_small_for_zk_rejected() {
         .expect_err("verification should reject too-small degree_bits in zk mode");
     match err {
         p3_uni_stark::VerificationError::InvalidProofShape(
-            InvalidProofShapeError::DegreeBitsTooSmall { minimum, got },
+            InvalidProofShapeError::DegreeBitsTooSmall { air, minimum, got },
         ) => {
+            assert_eq!(air, None);
             assert_eq!(minimum, 1);
             assert_eq!(got, 0);
         }

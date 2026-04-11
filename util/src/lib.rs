@@ -30,6 +30,16 @@ pub const fn log2_ceil_u64(n: u64) -> u64 {
     (u64::BITS - n.saturating_sub(1).leading_zeros()) as u64
 }
 
+/// Returns `2^log_degree` if it can be represented by `usize`.
+#[must_use]
+pub const fn checked_pow2(log_degree: usize) -> Option<usize> {
+    if log_degree < usize::BITS as usize {
+        Some(1usize << log_degree)
+    } else {
+        None
+    }
+}
+
 /// Computes `log_2(n)`
 ///
 /// # Panics
@@ -1012,6 +1022,17 @@ mod tests {
             log2_strict_usize(1 << (usize::BITS - 1)),
             usize::BITS as usize - 1
         );
+    }
+
+    #[test]
+    fn test_checked_pow2() {
+        assert_eq!(checked_pow2(0), Some(1));
+        assert_eq!(checked_pow2(5), Some(32));
+
+        let max = usize::BITS as usize - 1;
+        assert_eq!(checked_pow2(max), Some(1usize << max));
+        assert_eq!(checked_pow2(usize::BITS as usize), None);
+        assert_eq!(checked_pow2(usize::MAX), None);
     }
 
     #[test]

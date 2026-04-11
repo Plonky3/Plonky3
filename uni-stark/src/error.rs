@@ -65,23 +65,31 @@ pub enum InvalidProofShapeError {
     #[error("air {air}: unexpected preprocessed values")]
     UnexpectedPreprocessedValues { air: usize },
     /// Proof degree bits are too small for the PCS ZK setting.
-    #[error("degree_bits too small for zk setting: expected at least {minimum}, got {got}")]
-    DegreeBitsTooSmall { minimum: usize, got: usize },
-    /// Proof degree bits are too large to safely construct verifier domains.
-    #[error("degree_bits too large for domain construction: got {got}")]
-    DegreeBitsTooLarge { got: usize },
-    /// Per-instance proof degree bits are too small for the PCS ZK setting.
     #[error(
-        "air {air}: degree_bits too small for zk setting: expected at least {minimum}, got {got}"
+        "{}degree_bits too small for zk setting: expected at least {minimum}, got {got}",
+        match air {
+            Some(air) => format!("air {air}: "),
+            None => String::new(),
+        }
     )]
-    DegreeBitsTooSmallForAir {
-        air: usize,
+    DegreeBitsTooSmall {
+        air: Option<usize>,
         minimum: usize,
         got: usize,
     },
-    /// Per-instance proof degree bits are too large to safely construct verifier domains.
-    #[error("air {air}: degree_bits too large for domain construction: got {got}")]
-    DegreeBitsTooLargeForAir { air: usize, got: usize },
+    /// Proof degree bits are too large to safely construct verifier domains.
+    #[error(
+        "{}degree_bits too large for domain construction: expected at most {maximum}, got {got}",
+        match air {
+            Some(air) => format!("air {air}: "),
+            None => String::new(),
+        }
+    )]
+    DegreeBitsTooLarge {
+        air: Option<usize>,
+        maximum: usize,
+        got: usize,
+    },
     /// Missing preprocessed local or next values.
     #[error("air {air}: missing preprocessed values")]
     MissingPreprocessedValues { air: usize },

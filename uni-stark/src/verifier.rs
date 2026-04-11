@@ -11,7 +11,7 @@ use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
-use p3_util::zip_eq::zip_eq;
+use p3_util::{checked_pow2, zip_eq::zip_eq};
 use tracing::instrument;
 
 use crate::error::{InvalidProofShapeError, VerificationError};
@@ -21,25 +21,24 @@ use crate::{
     VerifierConstraintFolder,
 };
 
-#[inline]
-fn checked_pow2(log_degree: usize) -> Option<usize> {
-    (log_degree < usize::BITS as usize).then(|| 1usize << log_degree)
-}
-
-#[inline]
-fn validate_degree_bits(
+pub fn validate_degree_bits(
+    air: Option<usize>,
     degree_bits: usize,
     is_zk: usize,
 ) -> Result<(usize, usize), InvalidProofShapeError> {
     if degree_bits < is_zk {
         return Err(InvalidProofShapeError::DegreeBitsTooSmall {
+            air,
             minimum: is_zk,
             got: degree_bits,
         });
     }
 
-    let degree = checked_pow2(degree_bits)
-        .ok_or(InvalidProofShapeError::DegreeBitsTooLarge { got: degree_bits })?;
+    let degree = checked_pow2(degree_bits).ok_or(InvalidProofShapeError::DegreeBitsTooLarge {
+        air,
+        maximum: usize::BITS as usize - 1,
+        got: degree_bits,
+    })?;
     Ok((degree_bits - is_zk, degree))
 }
 
@@ -257,9 +256,10 @@ where
         opening_proof,
         degree_bits,
     } = proof;
+    let degree_bits = *degree_bits;
 
     let pcs = config.pcs();
-    let (base_degree_bits, degree) = validate_degree_bits(*degree_bits, config.is_zk())?;
+    let (base_degree_bits, degree) = validate_degree_bits(None, degree_bits, config.is_zk())?;
     let trace_domain = pcs.natural_domain_for_degree(degree);
     // TODO: allow moving preprocessed commitment to preprocess time, if known in advance
     let (preprocessed_width, preprocessed_commit) =
@@ -268,11 +268,11 @@ where
     // Ensure the preprocessed trace and main trace have the same height.
     if let Some(vk) = preprocessed_vk
         && preprocessed_width > 0
-        && vk.degree_bits != *degree_bits
+        && vk.degree_bits != degree_bits
     {
         return Err(InvalidProofShapeError::PreprocessedDegreeMismatch {
             vk_degree_bits: vk.degree_bits,
-            proof_degree_bits: *degree_bits,
+            proof_degree_bits: degree_bits,
         }
         .into());
     }
@@ -286,14 +286,24 @@ where
     };
     let log_num_quotient_chunks =
         get_log_num_quotient_chunks::<Val<SC>, A>(air, layout, config.is_zk());
-    let num_quotient_chunks = 1 << (log_num_quotient_chunks + config.is_zk());
+    let num_quotient_chunk_bits = log_num_quotient_chunks.saturating_add(config.is_zk());
+    let num_quotient_chunks = checked_pow2(num_quotient_chunk_bits).ok_or(
+        InvalidProofShapeError::DegreeBitsTooLarge {
+            air: None,
+            maximum: usize::BITS as usize - 1,
+            got: num_quotient_chunk_bits,
+        },
+    )?;
     let mut challenger = config.initialise_challenger();
-    let init_trace_domain = pcs.natural_domain_for_degree(1 << base_degree_bits);
+    let init_trace_domain = pcs.natural_domain_for_degree(degree >> config.is_zk());
 
-    let quotient_domain_size = degree_bits
-        .checked_add(log_num_quotient_chunks)
-        .and_then(checked_pow2)
-        .ok_or(InvalidProofShapeError::DegreeBitsTooLarge { got: *degree_bits })?;
+    let quotient_domain_bits = degree_bits.saturating_add(log_num_quotient_chunks);
+    let quotient_domain_size =
+        checked_pow2(quotient_domain_bits).ok_or(InvalidProofShapeError::DegreeBitsTooLarge {
+            air: None,
+            maximum: usize::BITS as usize - 1,
+            got: quotient_domain_bits,
+        })?;
     let quotient_domain = trace_domain.create_disjoint_domain(quotient_domain_size);
     let quotient_chunks_domains = quotient_domain.split_domains(num_quotient_chunks);
 
@@ -344,7 +354,7 @@ where
     }
 
     // Observe the instance.
-    challenger.observe(Val::<SC>::from_usize(proof.degree_bits));
+    challenger.observe(Val::<SC>::from_usize(degree_bits));
     challenger.observe(Val::<SC>::from_usize(base_degree_bits));
     challenger.observe(Val::<SC>::from_usize(preprocessed_width));
     // TODO: Might be best practice to include other instance data here in the transcript, like some

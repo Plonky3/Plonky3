@@ -1103,10 +1103,13 @@ fn test_degree_bits_too_large_rejected() -> Result<(), Box<dyn std::error::Error
     let err = verify_batch(&config, &airs, &proof, &[fib_pis], common)
         .expect_err("Should reject oversized degree_bits");
     match err {
-        VerificationError::InvalidProofShape(
-            InvalidProofShapeError::DegreeBitsTooLargeForAir { air, got },
-        ) => {
-            assert_eq!(air, 0);
+        VerificationError::InvalidProofShape(InvalidProofShapeError::DegreeBitsTooLarge {
+            air,
+            maximum,
+            got,
+        }) => {
+            assert_eq!(air, Some(0));
+            assert_eq!(maximum, usize::BITS as usize - 1);
             assert_eq!(got, usize::BITS as usize);
         }
         _ => panic!("unexpected error: {err:?}"),
@@ -1134,10 +1137,12 @@ fn test_degree_bits_too_small_for_zk_rejected() -> Result<(), Box<dyn std::error
     let err = verify_batch(&config, &airs, &proof, &[fib_pis], common)
         .expect_err("Should reject too-small degree_bits in zk mode");
     match err {
-        VerificationError::InvalidProofShape(
-            InvalidProofShapeError::DegreeBitsTooSmallForAir { air, minimum, got },
-        ) => {
-            assert_eq!(air, 0);
+        VerificationError::InvalidProofShape(InvalidProofShapeError::DegreeBitsTooSmall {
+            air,
+            minimum,
+            got,
+        }) => {
+            assert_eq!(air, Some(0));
             assert_eq!(minimum, 1);
             assert_eq!(got, 0);
         }

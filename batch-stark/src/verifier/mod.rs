@@ -14,8 +14,10 @@ use p3_lookup::Lookup;
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::lookup_traits::LookupGadget;
-use p3_uni_stark::{InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks};
-use p3_util::zip_eq::zip_eq;
+use p3_uni_stark::{
+    InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks, validate_degree_bits,
+};
+use p3_util::{checked_pow2, zip_eq::zip_eq};
 use tracing::{info_span, instrument};
 
 use crate::common::CommonData;
@@ -23,33 +25,6 @@ use crate::config::{Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val}
 use crate::proof::BatchProof;
 use crate::symbolic::get_log_num_quotient_chunks;
 use crate::transcript::BatchTranscript;
-
-#[inline]
-fn checked_pow2(log_degree: usize) -> Option<usize> {
-    (log_degree < usize::BITS as usize).then(|| 1usize << log_degree)
-}
-
-#[inline]
-fn validate_degree_bits_for_air(
-    air: usize,
-    degree_bits: usize,
-    is_zk: usize,
-) -> Result<(usize, usize), InvalidProofShapeError> {
-    if degree_bits < is_zk {
-        return Err(InvalidProofShapeError::DegreeBitsTooSmallForAir {
-            air,
-            minimum: is_zk,
-            got: degree_bits,
-        });
-    }
-
-    let degree =
-        checked_pow2(degree_bits).ok_or(InvalidProofShapeError::DegreeBitsTooLargeForAir {
-            air,
-            got: degree_bits,
-        })?;
-    Ok((degree_bits - is_zk, degree))
-}
 
 #[instrument(skip_all)]
 pub fn verify_batch<SC, A>(
@@ -116,13 +91,13 @@ where
     // The total number of quotient chunks, including ZK randomization.
     let mut num_quotient_chunks = Vec::with_capacity(airs.len());
     let mut base_degree_bits = Vec::with_capacity(airs.len());
-    let mut ext_degrees = Vec::with_capacity(airs.len());
+    let mut ext_domain_sizes = Vec::with_capacity(airs.len());
 
     for (i, air) in airs.iter().enumerate() {
-        let (base_db, ext_degree) =
-            validate_degree_bits_for_air(i, degree_bits[i], config.is_zk())?;
+        let (base_db, ext_domain_size) =
+            validate_degree_bits(Some(i), degree_bits[i], config.is_zk())?;
         base_degree_bits.push(base_db);
-        ext_degrees.push(ext_degree);
+        ext_domain_sizes.push(ext_domain_size);
 
         let pre_w = common
             .preprocessed
@@ -150,7 +125,13 @@ where
             });
         log_num_quotient_chunks.push(log_num_chunks);
 
-        let n_chunks = 1 << (log_num_chunks + config.is_zk());
+        let num_chunk_bits = log_num_chunks.saturating_add(config.is_zk());
+        let n_chunks =
+            checked_pow2(num_chunk_bits).ok_or(InvalidProofShapeError::DegreeBitsTooLarge {
+                air: Some(i),
+                maximum: usize::BITS as usize - 1,
+                got: num_chunk_bits,
+            })?;
         num_quotient_chunks.push(n_chunks);
     }
 
@@ -292,11 +273,11 @@ where
     let mut coms_to_verify = vec![];
 
     // Trace round: per instance, open at zeta and zeta_next
-    let trace_domains = base_degree_bits
+    let trace_domains = ext_domain_sizes
         .iter()
-        .map(|&base_db| pcs.natural_domain_for_degree(1 << base_db))
+        .map(|&ext_size| pcs.natural_domain_for_degree(ext_size >> config.is_zk()))
         .collect::<Vec<_>>();
-    let ext_trace_domains = ext_degrees
+    let ext_trace_domains = ext_domain_sizes
         .iter()
         .map(|&degree| pcs.natural_domain_for_degree(degree))
         .collect::<Vec<_>>();
@@ -351,13 +332,14 @@ where
             let log_num_chunks = log_num_quotient_chunks[i];
             let n_chunks = num_quotient_chunks[i];
             let ext_dom = ext_trace_domains[i];
-            let quotient_domain_size = ext_db
-                .checked_add(log_num_chunks)
-                .and_then(checked_pow2)
-                .ok_or(InvalidProofShapeError::DegreeBitsTooLargeForAir {
-                    air: i,
-                    got: ext_db,
-                })?;
+            let quotient_domain_bits = ext_db.saturating_add(log_num_chunks);
+            let quotient_domain_size = checked_pow2(quotient_domain_bits).ok_or(
+                InvalidProofShapeError::DegreeBitsTooLarge {
+                    air: Some(i),
+                    maximum: usize::BITS as usize - 1,
+                    got: quotient_domain_bits,
+                },
+            )?;
             let qdom = ext_dom.create_disjoint_domain(quotient_domain_size);
             Ok(qdom.split_domains(n_chunks))
         })
