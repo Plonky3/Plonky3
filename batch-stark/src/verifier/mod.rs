@@ -274,14 +274,15 @@ where
     let mut coms_to_verify = vec![];
 
     // Trace round: per instance, open at zeta and zeta_next
-    let trace_domains = ext_domain_sizes
+    let (trace_domains, ext_trace_domains): (Vec<Domain<SC>>, Vec<Domain<SC>>) = ext_domain_sizes
         .iter()
-        .map(|&ext_size| pcs.natural_domain_for_degree(ext_size >> config.is_zk()))
-        .collect::<Vec<_>>();
-    let ext_trace_domains = ext_domain_sizes
-        .iter()
-        .map(|&degree| pcs.natural_domain_for_degree(degree))
-        .collect::<Vec<_>>();
+        .map(|&ext_size| {
+            (
+                pcs.natural_domain_for_degree(ext_size >> config.is_zk()),
+                pcs.natural_domain_for_degree(ext_size),
+            )
+        })
+        .unzip();
 
     if let Some(random_commit) = &commitments.random {
         coms_to_verify.push((
