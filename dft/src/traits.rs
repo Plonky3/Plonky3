@@ -4,7 +4,7 @@ use p3_field::{BasedVectorSpace, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::BitReversibleMatrix;
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::util::swap_rows;
+use p3_matrix::util::{reverse_matrix_index_bits, swap_rows};
 
 use crate::util::{coset_shift_cols, divide_by_height};
 
@@ -119,6 +119,36 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         }
 
         dft
+    }
+
+    /// Compute the inverse DFT of `vec`, where the evaluations are given
+    /// in bit-reversed order.
+    ///
+    /// #### Mathematical Description
+    ///
+    /// Let `H` denote the unique multiplicative subgroup of order `vec.len()`.
+    /// Treating `vec` as the evaluations of a polynomial on `H`, stored in
+    /// bit-reversed order, compute the coefficients of that polynomial.
+    fn idft_bitrev(&self, vec: Vec<F>) -> Vec<F> {
+        self.idft_batch_bitrev(RowMajorMatrix::new_col(vec)).values
+    }
+
+    /// Compute the inverse DFT of each column in `mat`, where the evaluations
+    /// are given in bit-reversed order.
+    ///
+    /// #### Mathematical Description
+    ///
+    /// Let `H` denote the unique multiplicative subgroup of order `mat.height()`.
+    /// Treating each column of `mat` as the evaluations of a polynomial on `H`,
+    /// stored in bit-reversed order, compute the coefficients of those polynomials.
+    ///
+    /// This method avoids the overhead of converting from bit-reversed to
+    /// natural order before computing the inverse, which is beneficial when
+    /// evaluations are already available in bit-reversed form (e.g., the inner
+    /// storage of a `BitReversedMatrixView` returned by `dft_batch`).
+    fn idft_batch_bitrev(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+        reverse_matrix_index_bits(&mut mat);
+        self.idft_batch(mat)
     }
 
     /// Compute the "coset iDFT" of `vec`. This is the inverse operation of "coset DFT".
