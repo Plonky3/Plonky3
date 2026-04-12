@@ -227,7 +227,9 @@ where
             return Err(InvalidProofShapeError::PreprocessedWidthMismatch { air: i }.into());
         }
 
-        let expected_global_lookup_data_len = Lookup::global_count(&all_lookups[i]);
+        let expected_global_lookup_entries =
+            Lookup::global_entries(&all_lookups[i]).collect::<Vec<_>>();
+        let expected_global_lookup_data_len = expected_global_lookup_entries.len();
         let got_global_lookup_data_len = global_lookup_data[i].len();
         if got_global_lookup_data_len != expected_global_lookup_data_len {
             return Err(InvalidProofShapeError::GlobalLookupDataCountMismatch {
@@ -236,6 +238,24 @@ where
                 got: got_global_lookup_data_len,
             }
             .into());
+        }
+        for (lookup_idx, ((expected_name, expected_aux_idx), data)) in
+            expected_global_lookup_entries
+                .into_iter()
+                .zip(global_lookup_data[i].iter())
+                .enumerate()
+        {
+            if data.name != *expected_name || data.aux_idx != expected_aux_idx {
+                return Err(InvalidProofShapeError::GlobalLookupDataMetadataMismatch {
+                    air: i,
+                    lookup: lookup_idx,
+                    expected_name: expected_name.clone(),
+                    got_name: data.name.clone(),
+                    expected_aux_idx,
+                    got_aux_idx: data.aux_idx,
+                }
+                .into());
+            }
         }
 
         // Observe per-instance binding data.
@@ -600,11 +620,14 @@ where
     }
 
     let mut global_cumulative = HashMap::<&String, Vec<_>>::new();
-    for data in global_lookup_data.iter().flatten() {
-        global_cumulative
-            .entry(&data.name)
-            .or_default()
-            .push(data.expected_cumulated);
+    for (lookups, data_for_instance) in all_lookups.iter().zip(global_lookup_data.iter()) {
+        debug_assert_eq!(Lookup::global_count(lookups), data_for_instance.len());
+        for ((name, _), data) in Lookup::global_entries(lookups).zip(data_for_instance.iter()) {
+            global_cumulative
+                .entry(name)
+                .or_default()
+                .push(data.expected_cumulated);
+        }
     }
 
     for (name, all_expected_cumulative) in global_cumulative {

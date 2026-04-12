@@ -10,7 +10,8 @@ use p3_air::{
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::{
-    ProverData, StarkGenericConfig, StarkInstance, VerificationError, prove_batch, verify_batch,
+    CommonData, ProverData, StarkGenericConfig, StarkInstance, VerificationError, prove_batch,
+    verify_batch,
 };
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
@@ -2318,6 +2319,176 @@ fn test_batch_stark_rejects_truncated_global_lookup_data() {
             assert_eq!(air, 0);
             assert_eq!(expected, 2);
             assert_eq!(got, 1);
+        }
+        _ => panic!("unexpected error: {err:?}"),
+    }
+}
+
+/// Builds a 3-AIR batch proof with global lookups, suitable for metadata
+/// tampering tests. Returns all state needed to mutate and re-verify.
+///
+/// The fixture has the following topology:
+///
+/// ```text
+///     AIR 0 (MulAir)   — 2 global lookups: "MulFib1", "MulFib2"
+///     AIR 1 (FibAir)   — 1 global lookup sending into "MulFib1"
+///     AIR 2 (FibAir)   — 1 global lookup sending into "MulFib2"
+/// ```
+#[allow(clippy::type_complexity)]
+fn make_global_lookup_proof() -> (
+    MyConfig,
+    [DemoAirWithLookups; 3],
+    BatchProof<MyConfig>,
+    Vec<Vec<Val>>,
+    CommonData<MyConfig>,
+) {
+    let config = make_config(2025);
+
+    // MulAir with 2 repetitions and two named global lookups.
+    let reps = 2;
+    let mul_air = MulAir { reps };
+    let mul_air_lookups = MulAirLookups::new(
+        mul_air,
+        false,
+        true,
+        0,
+        vec!["MulFib1".to_string(), "MulFib2".to_string()],
+    );
+
+    // Two FibAir instances, each sending into one of the MulAir lookups.
+    let log_n = 3;
+    let n = 1 << log_n;
+    let fibonacci_air = FibonacciAir {
+        log_height: log_n,
+        tamper_index: None,
+    };
+    let fib_air_lookups_1 =
+        FibAirLookups::new(fibonacci_air, true, 0, Some(("MulFib1".to_string(), 1)));
+    let fib_air_lookups_2 =
+        FibAirLookups::new(fibonacci_air, true, 0, Some(("MulFib2".to_string(), 1)));
+
+    let mul_trace = mul_trace::<Val>(n, 2);
+    let fib_trace_1 = fib_trace::<Val>(0, 1, n);
+    let fib_trace_2 = fib_trace::<Val>(0, 1, n);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
+
+    let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
+    let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups_1);
+    let air3 = DemoAirWithLookups::FibLookups(fib_air_lookups_2);
+
+    let mut airs = [air1, air2, air3];
+    let prover_data =
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_n, log_n, log_n]);
+    let common = &prover_data.common;
+    let traces = [&mul_trace, &fib_trace_1, &fib_trace_2];
+    let pvs = vec![vec![], fib_pis.clone(), fib_pis];
+
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, common);
+    let proof = prove_batch(&config, &instances, &prover_data);
+    (config, airs, proof, pvs, prover_data.common)
+}
+
+#[test]
+fn test_batch_stark_rejects_tampered_global_lookup_metadata() {
+    // Global lookup data carries a `name` field that identifies which lookup
+    // interaction the data belongs to. The verifier must cross-check this
+    // against the AIR's declared interactions. A malicious proof could rename
+    // a lookup to mix cumulative values across unrelated interactions,
+    // breaking soundness.
+
+    let (config, airs, mut proof, pvs, common) = make_global_lookup_proof();
+
+    // Fixture state: AIR 0 has two global lookups.
+    //
+    //     global_lookup_data[0][0].name = "MulFib1"  (from AIR declaration)
+    //     global_lookup_data[0][1].name = "MulFib2"  (from AIR declaration)
+    //
+    // Mutation: rename the first lookup to "tampered".
+    //
+    //     proof says:   name = "tampered"
+    //     AIR declares: name = "MulFib1"
+    //     → mismatch → error on AIR 0, lookup 0
+    proof.global_lookup_data[0][0].name = "tampered".to_string();
+
+    let err = verify_batch(&config, &airs, &proof, &pvs, &common)
+        .expect_err("Verifier should reject tampered global lookup metadata");
+
+    // Verify all diagnostic fields:
+    //   - air: 0                    — MulAir is the first instance
+    //   - lookup: 0                 — first global lookup within that AIR
+    //   - expected_name: "MulFib1"  — what the AIR declares
+    //   - got_name: "tampered"      — what the proof supplied
+    //   - expected_aux_idx: 0       — column index from the AIR
+    //   - got_aux_idx: 0            — unchanged, only name was tampered
+    match err {
+        VerificationError::InvalidProofShape(
+            InvalidProofShapeError::GlobalLookupDataMetadataMismatch {
+                air,
+                lookup,
+                expected_name,
+                got_name,
+                expected_aux_idx,
+                got_aux_idx,
+            },
+        ) => {
+            assert_eq!(air, 0);
+            assert_eq!(lookup, 0);
+            assert_eq!(expected_name, "MulFib1");
+            assert_eq!(got_name, "tampered");
+            assert_eq!(expected_aux_idx, 0);
+            assert_eq!(got_aux_idx, 0);
+        }
+        _ => panic!("unexpected error: {err:?}"),
+    }
+}
+
+#[test]
+fn test_batch_stark_rejects_tampered_global_lookup_aux_idx() {
+    // The `aux_idx` field in global lookup data identifies which auxiliary
+    // (permutation) column holds the running sum for that interaction. A
+    // malicious proof could point to a different column, causing the verifier
+    // to check the wrong cumulative value. The guard validates aux_idx
+    // against the AIR declaration.
+
+    let (config, airs, mut proof, pvs, common) = make_global_lookup_proof();
+
+    // Fixture state: AIR 0's first global lookup has aux_idx = 0.
+    //
+    // Mutation: set aux_idx to 42, a column that doesn't correspond to
+    // this interaction.
+    //
+    //     proof says:   aux_idx = 42
+    //     AIR declares: aux_idx = 0
+    //     → mismatch → error on AIR 0, lookup 0
+    proof.global_lookup_data[0][0].aux_idx = 42;
+
+    let err = verify_batch(&config, &airs, &proof, &pvs, &common)
+        .expect_err("Verifier should reject tampered global lookup aux index");
+
+    // Verify all diagnostic fields:
+    //   - air: 0                    — MulAir is the first instance
+    //   - lookup: 0                 — first global lookup within that AIR
+    //   - expected_name: "MulFib1"  — unchanged, only aux_idx was tampered
+    //   - got_name: "MulFib1"       — matches (name is correct)
+    //   - expected_aux_idx: 0       — what the AIR declares
+    //   - got_aux_idx: 42           — the tampered value
+    match err {
+        VerificationError::InvalidProofShape(
+            InvalidProofShapeError::GlobalLookupDataMetadataMismatch {
+                air,
+                lookup,
+                expected_name,
+                got_name,
+                expected_aux_idx,
+                got_aux_idx,
+            },
+        ) => {
+            assert_eq!(air, 0);
+            assert_eq!(lookup, 0);
+            assert_eq!(expected_name, "MulFib1");
+            assert_eq!(got_name, "MulFib1");
+            assert_eq!(expected_aux_idx, 0);
+            assert_eq!(got_aux_idx, 42);
         }
         _ => panic!("unexpected error: {err:?}"),
     }
