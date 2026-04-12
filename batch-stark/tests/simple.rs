@@ -1084,6 +1084,114 @@ fn test_short_public_values_rejected() -> Result<(), Box<dyn std::error::Error>>
 }
 
 #[test]
+fn test_degree_bits_too_large_rejected() -> Result<(), Box<dyn std::error::Error>> {
+    // The verifier constructs evaluation domains via `1 << degree_bits`.
+    // A malicious proof can set degree_bits >= usize::BITS (e.g. 64 on
+    // a 64-bit platform), which would panic on the left shift. The guard
+    // must reject this before any domain construction happens.
+
+    // Non-ZK config — the overflow check is independent of the ZK setting.
+    let config = make_config(7);
+
+    // Build a valid Fibonacci proof with a 2^4 = 16-row trace.
+    let (air_fib, trace, fib_pis) = create_fib_instance(4);
+    let instances = vec![StarkInstance {
+        air: &air_fib,
+        trace: &trace,
+        public_values: fib_pis.clone(),
+        lookups: vec![],
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let mut proof = prove_batch(&config, &instances, &prover_data);
+
+    // Mutation: overwrite the first AIR's degree_bits to exactly the bit
+    // width of usize, which is the smallest value that overflows.
+    //
+    //     degree_bits = 64  (on 64-bit)
+    //     1_usize << 64  →  shift overflow  →  must be caught
+    proof.degree_bits[0] = usize::BITS as usize;
+
+    let airs = vec![air_fib];
+
+    // Verification must fail with a structured error, not a panic.
+    let err = verify_batch(&config, &airs, &proof, &[fib_pis], common)
+        .expect_err("Should reject oversized degree_bits");
+
+    // Verify the error carries the correct diagnostic fields:
+    //   - air: Some(0)          — first (and only) AIR instance
+    //   - maximum: BITS - 1     — largest safe exponent (63 on 64-bit)
+    //   - got: BITS             — the tampered value we injected (64)
+    match err {
+        VerificationError::InvalidProofShape(InvalidProofShapeError::DegreeBitsTooLarge {
+            air,
+            maximum,
+            got,
+        }) => {
+            assert_eq!(air, Some(0));
+            assert_eq!(maximum, usize::BITS as usize - 1);
+            assert_eq!(got, usize::BITS as usize);
+        }
+        _ => panic!("unexpected error: {err:?}"),
+    }
+    Ok::<_, Box<dyn std::error::Error>>(())
+}
+
+#[test]
+fn test_degree_bits_too_small_for_zk_rejected() -> Result<(), Box<dyn std::error::Error>> {
+    // In ZK mode the prover extends the trace by one bit (is_zk = 1), so
+    // the verifier computes `base_degree_bits = degree_bits - is_zk`.
+    // If degree_bits < is_zk that subtraction underflows. The guard must
+    // reject this with a clear minimum-threshold error.
+
+    // ZK-enabled config — is_zk = 1, meaning degree_bits must be >= 1.
+    let config = make_config_zk(1337);
+
+    // Build a valid Fibonacci proof with a 2^4 = 16-row trace.
+    let (air_fib, trace, fib_pis) = create_fib_instance(4);
+    let instances = vec![StarkInstance {
+        air: &air_fib,
+        trace: &trace,
+        public_values: fib_pis.clone(),
+        lookups: vec![],
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let mut proof = prove_batch(&config, &instances, &prover_data);
+
+    // Mutation: set degree_bits to 0, which is below the ZK minimum.
+    //
+    //     is_zk = 1
+    //     degree_bits = 0
+    //     base_degree_bits = 0 - 1  →  underflow  →  must be caught
+    proof.degree_bits[0] = 0;
+
+    let airs = vec![air_fib];
+
+    // Verification must fail before any domain arithmetic.
+    let err = verify_batch(&config, &airs, &proof, &[fib_pis], common)
+        .expect_err("Should reject too-small degree_bits in zk mode");
+
+    // Verify the error carries the correct diagnostic fields:
+    //   - air: Some(0)   — first (and only) AIR instance
+    //   - minimum: 1     — is_zk, the smallest acceptable degree_bits
+    //   - got: 0         — the tampered value we injected
+    match err {
+        VerificationError::InvalidProofShape(InvalidProofShapeError::DegreeBitsTooSmall {
+            air,
+            minimum,
+            got,
+        }) => {
+            assert_eq!(air, Some(0));
+            assert_eq!(minimum, 1);
+            assert_eq!(got, 0);
+        }
+        _ => panic!("unexpected error: {err:?}"),
+    }
+    Ok::<_, Box<dyn std::error::Error>>(())
+}
+
+#[test]
 fn test_different_widths() -> Result<(), impl Debug> {
     let config = make_config(4242);
 
