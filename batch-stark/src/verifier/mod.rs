@@ -17,7 +17,7 @@ use p3_lookup::lookup_traits::LookupGadget;
 use p3_uni_stark::{
     InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks, validate_degree_bits,
 };
-use p3_util::checked_pow2;
+use p3_util::checked_log_size_sum;
 use p3_util::zip_eq::zip_eq;
 use tracing::{info_span, instrument};
 
@@ -126,13 +126,13 @@ where
             });
         log_num_quotient_chunks.push(log_num_chunks);
 
-        let num_chunk_bits = log_num_chunks.saturating_add(config.is_zk());
-        let n_chunks =
-            checked_pow2(num_chunk_bits).ok_or(InvalidProofShapeError::DegreeBitsTooLarge {
+        let (_, n_chunks) = checked_log_size_sum(log_num_chunks, config.is_zk()).ok_or(
+            InvalidProofShapeError::QuotientDomainTooLarge {
                 air: Some(i),
                 maximum: usize::BITS as usize - 1,
-                got: num_chunk_bits,
-            })?;
+                got: log_num_chunks.saturating_add(config.is_zk()),
+            },
+        )?;
         num_quotient_chunks.push(n_chunks);
     }
 
@@ -333,12 +333,11 @@ where
             let log_num_chunks = log_num_quotient_chunks[i];
             let n_chunks = num_quotient_chunks[i];
             let ext_dom = ext_trace_domains[i];
-            let quotient_domain_bits = ext_db.saturating_add(log_num_chunks);
-            let quotient_domain_size = checked_pow2(quotient_domain_bits).ok_or(
-                InvalidProofShapeError::DegreeBitsTooLarge {
+            let (_, quotient_domain_size) = checked_log_size_sum(ext_db, log_num_chunks).ok_or(
+                InvalidProofShapeError::QuotientDomainTooLarge {
                     air: Some(i),
                     maximum: usize::BITS as usize - 1,
-                    got: quotient_domain_bits,
+                    got: ext_db.saturating_add(log_num_chunks),
                 },
             )?;
             let qdom = ext_dom.create_disjoint_domain(quotient_domain_size);

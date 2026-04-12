@@ -11,8 +11,8 @@ use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
-use p3_util::checked_pow2;
 use p3_util::zip_eq::zip_eq;
+use p3_util::{checked_log_size_sum, checked_pow2};
 use tracing::instrument;
 
 use crate::error::{InvalidProofShapeError, VerificationError};
@@ -287,23 +287,20 @@ where
     };
     let log_num_quotient_chunks =
         get_log_num_quotient_chunks::<Val<SC>, A>(air, layout, config.is_zk());
-    let num_quotient_chunk_bits = log_num_quotient_chunks.saturating_add(config.is_zk());
-    let num_quotient_chunks = checked_pow2(num_quotient_chunk_bits).ok_or(
-        InvalidProofShapeError::DegreeBitsTooLarge {
+    let (_, num_quotient_chunks) = checked_log_size_sum(log_num_quotient_chunks, config.is_zk())
+        .ok_or(InvalidProofShapeError::QuotientDomainTooLarge {
             air: None,
             maximum: usize::BITS as usize - 1,
-            got: num_quotient_chunk_bits,
-        },
-    )?;
+            got: log_num_quotient_chunks.saturating_add(config.is_zk()),
+        })?;
     let mut challenger = config.initialise_challenger();
     let init_trace_domain = pcs.natural_domain_for_degree(degree >> config.is_zk());
 
-    let quotient_domain_bits = degree_bits.saturating_add(log_num_quotient_chunks);
-    let quotient_domain_size =
-        checked_pow2(quotient_domain_bits).ok_or(InvalidProofShapeError::DegreeBitsTooLarge {
+    let (_, quotient_domain_size) = checked_log_size_sum(degree_bits, log_num_quotient_chunks)
+        .ok_or(InvalidProofShapeError::QuotientDomainTooLarge {
             air: None,
             maximum: usize::BITS as usize - 1,
-            got: quotient_domain_bits,
+            got: degree_bits.saturating_add(log_num_quotient_chunks),
         })?;
     let quotient_domain = trace_domain.create_disjoint_domain(quotient_domain_size);
     let quotient_chunks_domains = quotient_domain.split_domains(num_quotient_chunks);

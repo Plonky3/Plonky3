@@ -84,6 +84,16 @@ pub enum InvalidProofShapeError {
         maximum: usize,
         got: usize,
     },
+    /// The quotient domain log-size overflows after adding degree bits and quotient chunk bits.
+    #[error(
+        "{}quotient domain too large: log-size {got} exceeds maximum {maximum}",
+        air.map_or_else(String::new, |air| format!("air {air}: "))
+    )]
+    QuotientDomainTooLarge {
+        air: Option<usize>,
+        maximum: usize,
+        got: usize,
+    },
     /// Missing preprocessed local or next values.
     #[error("air {air}: missing preprocessed values")]
     MissingPreprocessedValues { air: usize },
