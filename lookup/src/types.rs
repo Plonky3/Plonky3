@@ -119,6 +119,7 @@ impl<F: Field> Lookup<F> {
     }
 
     /// Iterates over the global lookup interactions in declaration order.
+    /// Panics if any global lookup has an empty columns vec.
     pub fn global_entries(lookups: &[Self]) -> impl Iterator<Item = (&String, usize)> + '_ {
         lookups.iter().filter_map(|lookup| match &lookup.kind {
             Kind::Global(name) => Some((name, lookup.columns[0])),

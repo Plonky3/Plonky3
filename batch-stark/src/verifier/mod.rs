@@ -599,6 +599,7 @@ where
 
     let mut global_cumulative = HashMap::<&String, Vec<_>>::new();
     for (lookups, data_for_instance) in all_lookups.iter().zip(global_lookup_data.iter()) {
+        debug_assert_eq!(Lookup::global_count(lookups), data_for_instance.len());
         for ((name, _), data) in Lookup::global_entries(lookups).zip(data_for_instance.iter()) {
             global_cumulative
                 .entry(name)
