@@ -1026,12 +1026,38 @@ mod tests {
 
     #[test]
     fn test_checked_pow2() {
+        // 2^0 = 1, the smallest valid exponent.
         assert_eq!(checked_pow2(0), Some(1));
+
+        // 2^1 = 2.
+        assert_eq!(checked_pow2(1), Some(2));
+
+        // 2^5 = 32, a typical small power.
         assert_eq!(checked_pow2(5), Some(32));
 
-        let max = usize::BITS as usize - 1;
-        assert_eq!(checked_pow2(max), Some(1usize << max));
+        // 2^10 = 1024, commonly used as a domain size in FRI.
+        assert_eq!(checked_pow2(10), Some(1024));
+
+        // 2^20 = 1_048_576, a realistic large trace length.
+        assert_eq!(checked_pow2(20), Some(1_048_576));
+
+        // Largest representable power: 2^(BITS - 1).
+        // On a 64-bit platform this is 2^63 = 0x8000_0000_0000_0000.
+        let max_exp = usize::BITS as usize - 1;
+        assert_eq!(checked_pow2(max_exp), Some(1usize << max_exp));
+
+        // Exponent equal to the bit width would shift 1 out of range.
+        //
+        //     1_usize << 64  (on 64-bit)  →  overflow
+        //
+        // Must return `None`.
         assert_eq!(checked_pow2(usize::BITS as usize), None);
+
+        // One past the maximum: also out of range.
+        assert_eq!(checked_pow2(usize::BITS as usize + 1), None);
+
+        // Extreme exponent: usize::MAX is astronomically beyond
+        // representable range — must return `None`.
         assert_eq!(checked_pow2(usize::MAX), None);
     }
 
