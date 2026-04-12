@@ -17,7 +17,8 @@ use p3_lookup::lookup_traits::LookupGadget;
 use p3_uni_stark::{
     InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks, validate_degree_bits,
 };
-use p3_util::{checked_pow2, zip_eq::zip_eq};
+use p3_util::checked_pow2;
+use p3_util::zip_eq::zip_eq;
 use tracing::{info_span, instrument};
 
 use crate::common::CommonData;

@@ -11,7 +11,8 @@ use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
-use p3_util::{checked_pow2, zip_eq::zip_eq};
+use p3_util::checked_pow2;
+use p3_util::zip_eq::zip_eq;
 use tracing::instrument;
 
 use crate::error::{InvalidProofShapeError, VerificationError};

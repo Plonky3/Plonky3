@@ -67,10 +67,7 @@ pub enum InvalidProofShapeError {
     /// Proof degree bits are too small for the PCS ZK setting.
     #[error(
         "{}degree_bits too small for zk setting: expected at least {minimum}, got {got}",
-        match air {
-            Some(air) => format!("air {air}: "),
-            None => String::new(),
-        }
+        air.map_or_else(String::new, |air| format!("air {air}: "))
     )]
     DegreeBitsTooSmall {
         air: Option<usize>,
@@ -80,10 +77,7 @@ pub enum InvalidProofShapeError {
     /// Proof degree bits are too large to safely construct verifier domains.
     #[error(
         "{}degree_bits too large for domain construction: expected at most {maximum}, got {got}",
-        match air {
-            Some(air) => format!("air {air}: "),
-            None => String::new(),
-        }
+        air.map_or_else(String::new, |air| format!("air {air}: "))
     )]
     DegreeBitsTooLarge {
         air: Option<usize>,
