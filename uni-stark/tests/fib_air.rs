@@ -312,15 +312,41 @@ fn test_short_public_values_rejected() {
 
 #[test]
 fn test_degree_bits_too_large_rejected() {
+    // The uni-stark verifier builds an evaluation domain via `1 << degree_bits`.
+    // A malicious proof can set degree_bits >= usize::BITS (e.g. 64 on a 64-bit
+    // platform), causing a shift overflow. The verifier must reject this with a
+    // structured error before any domain construction.
+
+    // Generate a valid 2^3 = 8-row Fibonacci trace: fib(0) = 0, fib(1) = 1.
     let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
+
+    // Non-ZK config with log_final_poly_len = 2 (FRI stops at degree 4).
+    // The overflow check is independent of the ZK setting.
     let config = make_two_adic_config(2);
+
+    // Public inputs: [fib(0), fib(1), fib(7)] = [0, 1, 21].
     let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(21)];
 
+    // Produce a legitimate proof, then tamper with the degree_bits field.
     let mut proof = prove(&config, &FibonacciAir {}, trace, &pis);
+
+    // Mutation: set degree_bits to exactly the bit width of usize, the
+    // smallest value that overflows:
+    //
+    //     degree_bits = 64  (on 64-bit)
+    //     1_usize << 64  →  shift overflow  →  must be caught
     proof.degree_bits = usize::BITS as usize;
 
+    // Verification must fail deterministically, not panic.
     let err = verify(&config, &FibonacciAir {}, &proof, &pis)
         .expect_err("verification should reject oversized degree_bits");
+
+    // Verify the error carries the correct diagnostic fields.
+    // Unlike batch-stark, uni-stark has a single AIR so `air` is None.
+    //
+    //   - air: None              — uni-stark doesn't index by AIR
+    //   - maximum: BITS - 1      — largest safe exponent (63 on 64-bit)
+    //   - got: BITS              — the tampered value we injected (64)
     match err {
         p3_uni_stark::VerificationError::InvalidProofShape(
             InvalidProofShapeError::DegreeBitsTooLarge { air, maximum, got },
@@ -335,15 +361,39 @@ fn test_degree_bits_too_large_rejected() {
 
 #[test]
 fn test_degree_bits_too_small_for_zk_rejected() {
+    // In ZK mode the prover extends the trace by one bit (is_zk = 1), so the
+    // verifier computes `base_degree_bits = degree_bits - is_zk`. If a
+    // malicious proof sets degree_bits = 0 while is_zk = 1, that subtraction
+    // underflows. The verifier must reject this before any arithmetic.
+
+    // Generate a valid 2^3 = 8-row Fibonacci trace.
     let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
+
+    // ZK-enabled config — is_zk = 1, meaning degree_bits must be >= 1.
     let config = make_zk_config();
+
+    // Public inputs: [fib(0), fib(1), fib(7)] = [0, 1, 21].
     let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(21)];
 
+    // Produce a legitimate ZK proof, then tamper with degree_bits.
     let mut proof = prove(&config, &FibonacciAir {}, trace, &pis);
+
+    // Mutation: set degree_bits to 0, below the ZK minimum.
+    //
+    //     is_zk = 1
+    //     degree_bits = 0
+    //     base_degree_bits = 0 - 1  →  underflow  →  must be caught
     proof.degree_bits = 0;
 
+    // Verification must fail with a structured error.
     let err = verify(&config, &FibonacciAir {}, &proof, &pis)
         .expect_err("verification should reject too-small degree_bits in zk mode");
+
+    // Verify the error carries the correct diagnostic fields:
+    //
+    //   - air: None       — uni-stark doesn't index by AIR
+    //   - minimum: 1      — is_zk, the smallest acceptable degree_bits
+    //   - got: 0          — the tampered value we injected
     match err {
         p3_uni_stark::VerificationError::InvalidProofShape(
             InvalidProofShapeError::DegreeBitsTooSmall { air, minimum, got },
