@@ -126,13 +126,14 @@ where
             });
         log_num_quotient_chunks.push(log_num_chunks);
 
-        let (_, n_chunks) = checked_log_size_sum(log_num_chunks, config.is_zk()).ok_or(
-            InvalidProofShapeError::QuotientDomainTooLarge {
-                air: Some(i),
-                maximum: usize::BITS as usize - 1,
-                got: log_num_chunks.saturating_add(config.is_zk()),
-            },
-        )?;
+        let (_, n_chunks) =
+            checked_log_size_sum(log_num_chunks, config.is_zk()).ok_or_else(|| {
+                InvalidProofShapeError::QuotientDomainTooLarge {
+                    air: Some(i),
+                    maximum: usize::BITS as usize - 1,
+                    got: log_num_chunks.saturating_add(config.is_zk()),
+                }
+            })?;
         num_quotient_chunks.push(n_chunks);
     }
 
@@ -334,13 +335,12 @@ where
             let log_num_chunks = log_num_quotient_chunks[i];
             let n_chunks = num_quotient_chunks[i];
             let ext_dom = ext_trace_domains[i];
-            let (_, quotient_domain_size) = checked_log_size_sum(ext_db, log_num_chunks).ok_or(
-                InvalidProofShapeError::QuotientDomainTooLarge {
+            let (_, quotient_domain_size) = checked_log_size_sum(ext_db, log_num_chunks)
+                .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
                     air: Some(i),
                     maximum: usize::BITS as usize - 1,
                     got: ext_db.saturating_add(log_num_chunks),
-                },
-            )?;
+                })?;
             let qdom = ext_dom.create_disjoint_domain(quotient_domain_size);
             Ok(qdom.split_domains(n_chunks))
         })

@@ -288,7 +288,7 @@ where
     let log_num_quotient_chunks =
         get_log_num_quotient_chunks::<Val<SC>, A>(air, layout, config.is_zk());
     let (_, num_quotient_chunks) = checked_log_size_sum(log_num_quotient_chunks, config.is_zk())
-        .ok_or(InvalidProofShapeError::QuotientDomainTooLarge {
+        .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
             air: None,
             maximum: usize::BITS as usize - 1,
             got: log_num_quotient_chunks.saturating_add(config.is_zk()),
@@ -297,7 +297,7 @@ where
     let init_trace_domain = pcs.natural_domain_for_degree(degree >> config.is_zk());
 
     let (_, quotient_domain_size) = checked_log_size_sum(degree_bits, log_num_quotient_chunks)
-        .ok_or(InvalidProofShapeError::QuotientDomainTooLarge {
+        .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
             air: None,
             maximum: usize::BITS as usize - 1,
             got: degree_bits.saturating_add(log_num_quotient_chunks),
