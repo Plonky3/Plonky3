@@ -125,8 +125,7 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
         // Vanishing polynomial evaluated at z: Z_{gH}(z) = z^N - g^N.
         let vanishing_polynomial = point_pow_height - shift_pow_height;
 
-        // Denominator: N * g^N. Multiplying by 2^log_height is equivalent to * N in a
-        // two-adic field (since N is a power of two, this is a left-shift).
+        // Compute the Denominator: N * g^N.
         let denominator = shift_pow_height.mul_2exp_u64(log_height as u64);
 
         // Global scaling factor: s = Z_{gH}(z) / (N * g^N).
