@@ -6,6 +6,44 @@ use p3_util::log2_strict_usize;
 
 use crate::fiat_shamir::errors::FiatShamirError;
 
+/// Upper bound on bits drawn from a single Fiat-Shamir squeeze.
+///
+/// # Why 20
+///
+/// Two competing constraints pin this value:
+///
+/// - **Must cover the folded domain.**
+///   Starting domains range from 2^18 to 2^30.
+///   Folding with k >= 4 shrinks by >= 2^4 per round.
+///   So 2^20 ~ 1M comfortably exceeds any folded domain.
+///
+/// - **Must keep modular bias negligible.**
+///   Drawing `b` bits and reducing mod `n` biases by `2^b / n - 1`.
+///
+/// ```text
+///   Field          b    n = 2^18    bias
+///   ─────────────  ──   ────────    ──────────
+///   KoalaBear 31   20   2^18        ~3  (capped to b = 30 by F::bits()-1)
+///   Goldilocks 64  20   2^18        ~2^{-44}  (negligible)
+/// ```
+///
+/// At runtime the effective limit is `min(F::bits() - 1, 20)`,
+/// so smaller fields automatically tighten the budget.
+///
+/// # Soundness context (WHIR paper, Theorem 5.2)
+///
+/// These indices feed the shift-query check:
+///
+/// ```text
+///   epsilon^shift  <=  (1 - delta)^t
+/// ```
+///
+/// The proof assumes uniform sampling.
+/// Any bias inflates the effective `delta`, so keeping it small is security-critical.
+///
+/// Reference: Arnon, Chiesa, Fenzi, Yogev 2024, Section 2.1.3, Step 5.
+const MAX_SAMPLE_BITS: usize = 20;
+
 /// Sample cryptographically secure STIR query indices from the transcript.
 ///
 /// - Draws `num_queries` random indices in `[0, folded_domain_size)`,
@@ -59,7 +97,7 @@ where
     let domain_size_bits = log2_strict_usize(folded_domain_size);
 
     // Conservative limit to avoid statistical bias.
-    let max_bits_per_call = (F::bits() - 1).min(20);
+    let max_bits_per_call = (F::bits() - 1).min(MAX_SAMPLE_BITS);
 
     let total_bits_needed = num_queries * domain_size_bits;
     let mut queries = Vec::with_capacity(num_queries);
