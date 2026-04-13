@@ -115,8 +115,8 @@ impl<PMP: PackedMontyParameters> Add for PackedMontyField31AVX512<PMP> {
         //      vpaddd    t, lhs, rhs
         //      vpcmpleud over_p, P, t        // mask: t >= P  (runs on port 5, not port 0)
         //      vpsubd    res{over_p}, t, P   // subtract P where t >= P
-        // throughput: 1 cyc/vec (16 els/cyc)
-        // latency: 3 cyc
+        // throughput: 1.5 cyc/vec (10.67 els/cyc)
+        // latency: 5 cyc
         //
         // This avoids `vpminud` (port 0), which is already under heavy pressure from
         // the multiplications in the Montgomery reduction (`vpmuludq` also on port 0).
