@@ -69,7 +69,7 @@ where
             // Section 6: S-box(x) = x^d where d ≥ 3.
             assert!(
                 D >= 3,
-                "Poseidon2 requires D >= 3 (paper Section 6: d >= 3)"
+                "Poseidon2 requires D >= 3 (paper Section 6)"
             );
         }
 
