@@ -264,7 +264,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
 
-    use super::{partial_permute_state, PartialRoundConstants};
+    use super::{PartialRoundConstants, partial_permute_state};
 
     type F = BabyBear;
 

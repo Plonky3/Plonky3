@@ -34,16 +34,16 @@ use alloc::vec::Vec;
 use core::borrow::Borrow;
 
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
-use p3_field::{dot_product, PrimeCharacteristicRing, PrimeField};
+use p3_field::{PrimeCharacteristicRing, PrimeField, dot_product};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_poseidon1::external::mds_multiply;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
-use crate::columns::{num_cols, Poseidon1Cols};
+use crate::columns::{Poseidon1Cols, num_cols};
 use crate::{
-    generate_trace_rows, FullRound, FullRoundConstants, PartialRound, PartialRoundConstants, SBox,
+    FullRound, FullRoundConstants, PartialRound, PartialRoundConstants, SBox, generate_trace_rows,
 };
 
 /// The Poseidon1 AIR.
@@ -90,14 +90,13 @@ pub struct Poseidon1Air<
 }
 
 impl<
-        F: PrimeCharacteristicRing,
-        const WIDTH: usize,
-        const SBOX_DEGREE: u64,
-        const SBOX_REGISTERS: usize,
-        const HALF_FULL_ROUNDS: usize,
-        const PARTIAL_ROUNDS: usize,
-    > Clone
-    for Poseidon1Air<F, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>
+    F: PrimeCharacteristicRing,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+> Clone for Poseidon1Air<F, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>
 {
     fn clone(&self) -> Self {
         Self {
@@ -108,13 +107,13 @@ impl<
 }
 
 impl<
-        F: PrimeCharacteristicRing,
-        const WIDTH: usize,
-        const SBOX_DEGREE: u64,
-        const SBOX_REGISTERS: usize,
-        const HALF_FULL_ROUNDS: usize,
-        const PARTIAL_ROUNDS: usize,
-    > Poseidon1Air<F, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>
+    F: PrimeCharacteristicRing,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+> Poseidon1Air<F, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>
 {
     /// Construct a `Poseidon1Air` from pre-computed round constants.
     ///
@@ -158,13 +157,13 @@ impl<
 }
 
 impl<
-        F: PrimeCharacteristicRing + Sync,
-        const WIDTH: usize,
-        const SBOX_DEGREE: u64,
-        const SBOX_REGISTERS: usize,
-        const HALF_FULL_ROUNDS: usize,
-        const PARTIAL_ROUNDS: usize,
-    > BaseAir<F>
+    F: PrimeCharacteristicRing + Sync,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+> BaseAir<F>
     for Poseidon1Air<F, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>
 {
     /// Returns the number of trace columns (the AIR width).
@@ -280,13 +279,13 @@ pub(crate) fn eval<
 }
 
 impl<
-        AB: AirBuilder,
-        const WIDTH: usize,
-        const SBOX_DEGREE: u64,
-        const SBOX_REGISTERS: usize,
-        const HALF_FULL_ROUNDS: usize,
-        const PARTIAL_ROUNDS: usize,
-    > Air<AB>
+    AB: AirBuilder,
+    const WIDTH: usize,
+    const SBOX_DEGREE: u64,
+    const SBOX_REGISTERS: usize,
+    const HALF_FULL_ROUNDS: usize,
+    const PARTIAL_ROUNDS: usize,
+> Air<AB>
     for Poseidon1Air<AB::F, WIDTH, SBOX_DEGREE, SBOX_REGISTERS, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>
 {
     #[inline]

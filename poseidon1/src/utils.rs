@@ -69,7 +69,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{dot_product, Field};
+use p3_field::{Field, dot_product};
 
 /// Expand a circulant matrix from its first column into a dense NxN matrix.
 ///
