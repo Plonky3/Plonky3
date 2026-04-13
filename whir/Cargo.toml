@@ -41,13 +41,13 @@ tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
 
-[[example]]
-name = "whir"
-required-features = []
-
 [[bench]]
 name = "sumcheck"
 harness = false
+
+[[example]]
+name = "whir"
+required-features = []
 
 [lints]
 workspace = true
