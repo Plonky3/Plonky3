@@ -62,9 +62,15 @@ where
                 i += 1;
             }
             // Section 6: t ∈ {2, 3, 4, ..., 24}.
-            assert!(found, "WIDTH must be one of the supported widths (paper Section 6)");
+            assert!(
+                found,
+                "WIDTH must be one of the supported widths (paper Section 6)"
+            );
             // Section 6: S-box(x) = x^d where d ≥ 3.
-            assert!(D >= 3, "Poseidon2 requires D >= 3 (paper Section 6: d >= 3)");
+            assert!(
+                D >= 3,
+                "Poseidon2 requires D >= 3 (paper Section 6: d >= 3)"
+            );
         }
 
         // Runtime checks on round parameters.
@@ -106,7 +112,7 @@ where
         // Runtime checks before generating constants.
         // Section 6 / Fig.1: RF must be even (split into initial and terminal halves).
         assert!(
-            rounds_f % 2 == 0,
+            rounds_f.is_multiple_of(2),
             "Poseidon2 requires rounds_f to be even (paper Section 6: RF = 2*Rf)"
         );
         // Section 7.1: RF ≥ 6 for statistical attack resistance.

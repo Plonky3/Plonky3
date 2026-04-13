@@ -120,7 +120,7 @@ impl<F: PrimeField, const WIDTH: usize> Poseidon1Constants<F, WIDTH> {
         // Validate parameters before performing the sparse matrix decomposition.
         // Section 2.2: RF = 2·Rf, must be even.
         assert!(
-            self.rounds_f % 2 == 0,
+            self.rounds_f.is_multiple_of(2),
             "Poseidon1 requires rounds_f to be even (paper Section 2.2: RF = 2*Rf)"
         );
         // Section 5.5.1 / Eq.(2): RF ≥ 6 for statistical attack resistance.
@@ -218,15 +218,21 @@ where
         // Compile-time structural checks from the Poseidon specification.
         const {
             // Section 2.3: POSEIDONπ takes inputs of t ≥ 2 words.
-            assert!(WIDTH >= 2, "Poseidon1 requires WIDTH >= 2 (paper Section 2.3: t >= 2)");
+            assert!(
+                WIDTH >= 2,
+                "Poseidon1 requires WIDTH >= 2 (paper Section 2.3: t >= 2)"
+            );
             // Section 2.3: S-box(x) = x^α where α ≥ 3.
-            assert!(D >= 3, "Poseidon1 requires D >= 3 (paper Section 2.3: alpha >= 3)");
+            assert!(
+                D >= 3,
+                "Poseidon1 requires D >= 3 (paper Section 2.3: alpha >= 3)"
+            );
         }
 
         // Runtime checks on round parameters.
         // Section 2.2: RF = 2·Rf, must be even (split into beginning and ending halves).
         assert!(
-            raw.rounds_f % 2 == 0,
+            raw.rounds_f.is_multiple_of(2),
             "Poseidon1 requires rounds_f to be even (paper Section 2.2: RF = 2*Rf)"
         );
         // Section 5.5.1 / Eq.(2): RF ≥ 6 for statistical attack resistance.
@@ -284,9 +290,15 @@ where
         // Compile-time structural checks from the Poseidon specification.
         const {
             // Section 2.3: POSEIDONπ takes inputs of t ≥ 2 words.
-            assert!(WIDTH >= 2, "Poseidon1 requires WIDTH >= 2 (paper Section 2.3: t >= 2)");
+            assert!(
+                WIDTH >= 2,
+                "Poseidon1 requires WIDTH >= 2 (paper Section 2.3: t >= 2)"
+            );
             // Section 2.3: S-box(x) = x^α where α ≥ 3.
-            assert!(D >= 3, "Poseidon1 requires D >= 3 (paper Section 2.3: alpha >= 3)");
+            assert!(
+                D >= 3,
+                "Poseidon1 requires D >= 3 (paper Section 2.3: alpha >= 3)"
+            );
         }
 
         let rounds_f = 2 * half_num_full_rounds;
