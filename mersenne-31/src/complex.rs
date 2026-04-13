@@ -200,4 +200,5 @@ mod tests {
         &super::PACKED_ZEROS,
         &super::PACKED_ONES
     );
+    p3_field_testing::test_packed_binomial_extension_division!(F, 2);
 }

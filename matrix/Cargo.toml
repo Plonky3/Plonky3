@@ -23,6 +23,7 @@ tracing.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-goldilocks = { path = "../goldilocks" }
 p3-mersenne-31 = { path = "../mersenne-31" }
+proptest.workspace = true
 
 criterion.workspace = true
 

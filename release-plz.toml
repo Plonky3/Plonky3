@@ -61,10 +61,6 @@ name = "p3-goldilocks"
 version_group = "plonky3"
 
 [[package]]
-name = "p3-interpolation"
-version_group = "plonky3"
-
-[[package]]
 name = "p3-keccak"
 version_group = "plonky3"
 

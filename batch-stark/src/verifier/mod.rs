@@ -14,7 +14,10 @@ use p3_lookup::Lookup;
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::lookup_traits::LookupGadget;
-use p3_uni_stark::{InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks};
+use p3_uni_stark::{
+    InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks, validate_degree_bits,
+};
+use p3_util::checked_log_size_sum;
 use p3_util::zip_eq::zip_eq;
 use tracing::{info_span, instrument};
 
@@ -88,8 +91,15 @@ where
     let mut log_num_quotient_chunks = Vec::with_capacity(airs.len());
     // The total number of quotient chunks, including ZK randomization.
     let mut num_quotient_chunks = Vec::with_capacity(airs.len());
+    let mut base_degree_bits = Vec::with_capacity(airs.len());
+    let mut ext_domain_sizes = Vec::with_capacity(airs.len());
 
     for (i, air) in airs.iter().enumerate() {
+        let (base_db, ext_domain_size) =
+            validate_degree_bits(Some(i), degree_bits[i], config.is_zk())?;
+        base_degree_bits.push(base_db);
+        ext_domain_sizes.push(ext_domain_size);
+
         let pre_w = common
             .preprocessed
             .as_ref()
@@ -116,7 +126,14 @@ where
             });
         log_num_quotient_chunks.push(log_num_chunks);
 
-        let n_chunks = 1 << (log_num_chunks + config.is_zk());
+        let (_, n_chunks) =
+            checked_log_size_sum(log_num_chunks, config.is_zk()).ok_or_else(|| {
+                InvalidProofShapeError::QuotientDomainTooLarge {
+                    air: Some(i),
+                    maximum: usize::BITS as usize - 1,
+                    got: log_num_chunks.saturating_add(config.is_zk()),
+                }
+            })?;
         num_quotient_chunks.push(n_chunks);
     }
 
@@ -210,7 +227,9 @@ where
             return Err(InvalidProofShapeError::PreprocessedWidthMismatch { air: i }.into());
         }
 
-        let expected_global_lookup_data_len = Lookup::global_count(&all_lookups[i]);
+        let expected_global_lookup_entries =
+            Lookup::global_entries(&all_lookups[i]).collect::<Vec<_>>();
+        let expected_global_lookup_data_len = expected_global_lookup_entries.len();
         let got_global_lookup_data_len = global_lookup_data[i].len();
         if got_global_lookup_data_len != expected_global_lookup_data_len {
             return Err(InvalidProofShapeError::GlobalLookupDataCountMismatch {
@@ -220,10 +239,28 @@ where
             }
             .into());
         }
+        for (lookup_idx, ((expected_name, expected_aux_idx), data)) in
+            expected_global_lookup_entries
+                .into_iter()
+                .zip(global_lookup_data[i].iter())
+                .enumerate()
+        {
+            if data.name != *expected_name || data.aux_idx != expected_aux_idx {
+                return Err(InvalidProofShapeError::GlobalLookupDataMetadataMismatch {
+                    air: i,
+                    lookup: lookup_idx,
+                    expected_name: expected_name.clone(),
+                    got_name: data.name.clone(),
+                    expected_aux_idx,
+                    got_aux_idx: data.aux_idx,
+                }
+                .into());
+            }
+        }
 
         // Observe per-instance binding data.
         let ext_db = degree_bits[i];
-        let base_db = ext_db - config.is_zk();
+        let base_db = base_degree_bits[i];
         let width = air.width();
         let n_chunks = num_quotient_chunks[i];
         transcript.observe_instance_binding(ext_db, base_db, width, n_chunks);
@@ -258,13 +295,12 @@ where
     let mut coms_to_verify = vec![];
 
     // Trace round: per instance, open at zeta and zeta_next
-    let (trace_domains, ext_trace_domains): (Vec<Domain<SC>>, Vec<Domain<SC>>) = degree_bits
+    let (trace_domains, ext_trace_domains): (Vec<Domain<SC>>, Vec<Domain<SC>>) = ext_domain_sizes
         .iter()
-        .map(|&ext_db| {
-            let base_db = ext_db - config.is_zk();
+        .map(|&ext_size| {
             (
-                pcs.natural_domain_for_degree(1 << base_db),
-                pcs.natural_domain_for_degree(1 << ext_db),
+                pcs.natural_domain_for_degree(ext_size >> config.is_zk()),
+                pcs.natural_domain_for_degree(ext_size),
             )
         })
         .unzip();
@@ -319,10 +355,16 @@ where
             let log_num_chunks = log_num_quotient_chunks[i];
             let n_chunks = num_quotient_chunks[i];
             let ext_dom = ext_trace_domains[i];
-            let qdom = ext_dom.create_disjoint_domain(1 << (ext_db + log_num_chunks));
-            qdom.split_domains(n_chunks)
+            let (_, quotient_domain_size) = checked_log_size_sum(ext_db, log_num_chunks)
+                .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
+                    air: Some(i),
+                    maximum: usize::BITS as usize - 1,
+                    got: ext_db.saturating_add(log_num_chunks),
+                })?;
+            let qdom = ext_dom.create_disjoint_domain(quotient_domain_size);
+            Ok(qdom.split_domains(n_chunks))
         })
-        .collect();
+        .collect::<Result<Vec<_>, InvalidProofShapeError>>()?;
 
     // When ZK is enabled, the size of the quotient chunks' domains doubles.
     let randomized_quotient_chunks_domains = quotient_domains
@@ -578,11 +620,14 @@ where
     }
 
     let mut global_cumulative = HashMap::<&String, Vec<_>>::new();
-    for data in global_lookup_data.iter().flatten() {
-        global_cumulative
-            .entry(&data.name)
-            .or_default()
-            .push(data.expected_cumulated);
+    for (lookups, data_for_instance) in all_lookups.iter().zip(global_lookup_data.iter()) {
+        debug_assert_eq!(Lookup::global_count(lookups), data_for_instance.len());
+        for ((name, _), data) in Lookup::global_entries(lookups).zip(data_for_instance.iter()) {
+            global_cumulative
+                .entry(name)
+                .or_default()
+                .push(data.expected_cumulated);
+        }
     }
 
     for (name, all_expected_cumulative) in global_cumulative {

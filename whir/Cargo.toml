@@ -29,6 +29,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 clap.workspace = true
+criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-keccak = { path = "../keccak" }
 p3-koala-bear = { path = "../koala-bear" }
@@ -43,6 +44,10 @@ parallel = ["p3-maybe-rayon/parallel"]
 [[example]]
 name = "whir"
 required-features = []
+
+[[bench]]
+name = "sumcheck"
+harness = false
 
 [lints]
 workspace = true
