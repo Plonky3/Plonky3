@@ -312,8 +312,8 @@ pub trait InterpolateArbitrary<F: Field>: Matrix<F> {
             // touches only the domain array (sequential access, no dependency
             // chain on the basis coefficient array).
             let mut b_xk = F::ONE;
-            for i in 0..k {
-                b_xk *= x_k - x_coords[i];
+            for &x_i in &x_coords[..k] {
+                b_xk *= x_k - x_i;
             }
             // Zero means x_k duplicates an earlier domain point.
             let b_xk_inv = b_xk.try_inverse()?;
@@ -338,9 +338,8 @@ pub trait InterpolateArbitrary<F: Field>: Matrix<F> {
             }
 
             // Accumulate: result[i][j] += c_j * basis[i].
-            for i in 0..=k {
+            for (i, &b_i) in basis.iter().enumerate().take(k + 1) {
                 let row = result.row_mut(i);
-                let b_i = basis[i];
                 for j in 0..w {
                     row[j] += scratch[j] * b_i;
                 }
