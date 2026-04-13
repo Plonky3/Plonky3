@@ -117,6 +117,29 @@ impl<F: PrimeField, const WIDTH: usize> Poseidon1Constants<F, WIDTH> {
         FullRoundConstants<F, WIDTH>,
         PartialRoundConstants<F, WIDTH>,
     ) {
+        // Validate parameters before performing the sparse matrix decomposition.
+        // Section 2.2: RF = 2·Rf, must be even.
+        assert!(
+            self.rounds_f % 2 == 0,
+            "Poseidon1 requires rounds_f to be even (paper Section 2.2: RF = 2*Rf)"
+        );
+        // Section 5.5.1 / Eq.(2): RF ≥ 6 for statistical attack resistance.
+        assert!(
+            self.rounds_f >= 6,
+            "Poseidon1 requires rounds_f >= 6 (paper Section 5.5.1, Eq.(2): statistical attacks)"
+        );
+        // Section 2.2 / Section 5.5.2: partial rounds provide algebraic degree growth.
+        assert!(
+            self.rounds_p > 0,
+            "Poseidon1 requires rounds_p > 0 (paper Section 5.5.2: algebraic attacks)"
+        );
+        // Round constants layout: [initial_full (RF/2) | partial (RP) | terminal_full (RF/2)].
+        assert_eq!(
+            self.round_constants.len(),
+            self.rounds_f + self.rounds_p,
+            "Poseidon1 round_constants length must equal rounds_f + rounds_p"
+        );
+
         let half_f = self.rounds_f / 2;
         let rounds_p = self.rounds_p;
 
@@ -192,9 +215,38 @@ where
     /// Internally computes the sparse matrix decomposition and the
     /// optimized round constants. This is the typical entry point.
     pub fn new(raw: &Poseidon1Constants<F, WIDTH>) -> Self {
+        // Compile-time structural checks from the Poseidon specification.
         const {
-            assert!(D > 1);
+            // Section 2.3: POSEIDONπ takes inputs of t ≥ 2 words.
+            assert!(WIDTH >= 2, "Poseidon1 requires WIDTH >= 2 (paper Section 2.3: t >= 2)");
+            // Section 2.3: S-box(x) = x^α where α ≥ 3.
+            assert!(D >= 3, "Poseidon1 requires D >= 3 (paper Section 2.3: alpha >= 3)");
         }
+
+        // Runtime checks on round parameters.
+        // Section 2.2: RF = 2·Rf, must be even (split into beginning and ending halves).
+        assert!(
+            raw.rounds_f % 2 == 0,
+            "Poseidon1 requires rounds_f to be even (paper Section 2.2: RF = 2*Rf)"
+        );
+        // Section 5.5.1 / Eq.(2): RF ≥ 6 for statistical attack resistance.
+        assert!(
+            raw.rounds_f >= 6,
+            "Poseidon1 requires rounds_f >= 6 (paper Section 5.5.1, Eq.(2): statistical attacks)"
+        );
+        // Section 2.2 / Section 5.5.2: partial rounds provide algebraic degree
+        // growth against interpolation and Gröbner basis attacks.
+        assert!(
+            raw.rounds_p > 0,
+            "Poseidon1 requires rounds_p > 0 (paper Section 5.5.2: algebraic attacks)"
+        );
+        // Round constants layout: [initial_full (RF/2) | partial (RP) | terminal_full (RF/2)].
+        assert_eq!(
+            raw.round_constants.len(),
+            raw.rounds_f + raw.rounds_p,
+            "Poseidon1 round_constants length must equal rounds_f + rounds_p"
+        );
+
         let (full_constants, partial_constants) = raw.to_optimized();
         Self::new_from_precomputed(full_constants, partial_constants)
     }
@@ -229,7 +281,29 @@ where
     where
         StandardUniform: Distribution<F>,
     {
+        // Compile-time structural checks from the Poseidon specification.
+        const {
+            // Section 2.3: POSEIDONπ takes inputs of t ≥ 2 words.
+            assert!(WIDTH >= 2, "Poseidon1 requires WIDTH >= 2 (paper Section 2.3: t >= 2)");
+            // Section 2.3: S-box(x) = x^α where α ≥ 3.
+            assert!(D >= 3, "Poseidon1 requires D >= 3 (paper Section 2.3: alpha >= 3)");
+        }
+
         let rounds_f = 2 * half_num_full_rounds;
+
+        // Runtime checks on round parameters.
+        // Section 5.5.1 / Eq.(2): RF ≥ 6 for statistical attack resistance.
+        assert!(
+            rounds_f >= 6,
+            "Poseidon1 requires rounds_f >= 6 (paper Section 5.5.1, Eq.(2): statistical attacks)"
+        );
+        // Section 2.2 / Section 5.5.2: partial rounds provide algebraic degree
+        // growth against interpolation and Gröbner basis attacks.
+        assert!(
+            num_partial_rounds > 0,
+            "Poseidon1 requires rounds_p > 0 (paper Section 5.5.2: algebraic attacks)"
+        );
+
         let num_rounds = rounds_f + num_partial_rounds;
 
         // Generate random round constants.
