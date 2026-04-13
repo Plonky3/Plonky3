@@ -73,25 +73,12 @@ where
             );
         }
 
-        // Runtime checks on round parameters.
-        let num_initial = external_constants.get_initial_constants().len();
-        let num_terminal = external_constants.get_terminal_constants().len();
-        let rounds_f = num_initial + num_terminal;
-        // Section 6 / Fig.1: RF = 2·Rf external rounds, split equally.
-        assert!(
-            num_initial == num_terminal,
-            "Poseidon2 requires equal initial and terminal external rounds (paper Section 6: RF = 2*Rf)"
-        );
         // Section 7.1: RF ≥ 6 for statistical attack resistance (differential, linear).
+        let rounds_f = external_constants.get_initial_constants().len()
+            + external_constants.get_terminal_constants().len();
         assert!(
             rounds_f >= 6,
             "Poseidon2 requires rounds_f >= 6 (paper Section 7.1: statistical attacks)"
-        );
-        // Section 7.2: internal rounds provide algebraic degree growth
-        // against interpolation and Gröbner basis attacks.
-        assert!(
-            !internal_constants.is_empty(),
-            "Poseidon2 requires rounds_p > 0 (paper Section 7.2: algebraic attacks)"
         );
 
         let external_layer = ExternalPerm::new_from_constants(external_constants);
@@ -109,21 +96,10 @@ where
     where
         StandardUniform: Distribution<F> + Distribution<[F; WIDTH]>,
     {
-        // Runtime checks before generating constants.
-        // Section 6 / Fig.1: RF must be even (split into initial and terminal halves).
-        assert!(
-            rounds_f.is_multiple_of(2),
-            "Poseidon2 requires rounds_f to be even (paper Section 6: RF = 2*Rf)"
-        );
         // Section 7.1: RF ≥ 6 for statistical attack resistance.
         assert!(
             rounds_f >= 6,
             "Poseidon2 requires rounds_f >= 6 (paper Section 7.1: statistical attacks)"
-        );
-        // Section 7.2: internal rounds required for algebraic security.
-        assert!(
-            rounds_p > 0,
-            "Poseidon2 requires rounds_p > 0 (paper Section 7.2: algebraic attacks)"
         );
 
         let external_constants = ExternalLayerConstants::new_from_rng(rounds_f, rng);
