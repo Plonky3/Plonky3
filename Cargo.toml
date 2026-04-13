@@ -16,7 +16,6 @@ members = [
     "field-testing",
     "fri",
     "goldilocks",
-    "interpolation",
     "keccak",
     "keccak-air",
     "koala-bear",
@@ -105,7 +104,6 @@ p3-field = { path = "field", version = "0.5.1" }
 p3-field-testing = { path = "field-testing", version = "0.5.1" }
 p3-fri = { path = "fri", version = "0.5.1" }
 p3-goldilocks = { path = "goldilocks", version = "0.5.1" }
-p3-interpolation = { path = "interpolation", version = "0.5.1" }
 p3-keccak = { path = "keccak", version = "0.5.1" }
 p3-keccak-air = { path = "keccak-air", version = "0.5.1" }
 p3-koala-bear = { path = "koala-bear", version = "0.5.1" }
