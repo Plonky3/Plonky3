@@ -139,8 +139,8 @@ impl<PMP: PackedMontyParameters> Sub for PackedMontyField31AVX512<PMP> {
     #[inline]
     fn sub(self, rhs: Self) -> Self {
         // We want this to compile to:
+        //      vpcmpltud underflow, lhs, rhs
         //      vpsubd    t, lhs, rhs
-        //      vpcmpltud underflow, lhs, rhs  // mask: lhs < rhs (runs on port 5, not port 0)
         //      vpaddd    res{underflow}, t, P // add P back where underflow occurred
         // throughput: 1.5 cyc/vec (10.67 els/cyc)
         // latency: 4 cyc
