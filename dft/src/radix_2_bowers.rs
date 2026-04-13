@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 
 use p3_field::{Field, PrimeCharacteristicRing, TwoAdicField};
 use p3_matrix::Matrix;
+use p3_matrix::bitrev::BitReversibleMatrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
@@ -26,8 +27,9 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
         mat
     }
 
-    /// Compute the inverse DFT of each column in `mat`.
-    fn idft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+    /// Compute the inverse DFT of each column in `evals`.
+    fn idft_batch(&self, evals: impl BitReversibleMatrix<F>) -> RowMajorMatrix<F> {
+        let mut mat = evals.to_row_major_matrix();
         bowers_g_t(&mut mat.as_view_mut());
         divide_by_height(&mut mat);
         reverse_matrix_index_bits(&mut mat);
