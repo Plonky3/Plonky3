@@ -118,7 +118,7 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
         //
         // where Z_{gH}(z) = z^N - g^N is the vanishing polynomial of the coset.
 
-        // Raise point and shift to the N-th power via repeated squaring (log_height steps).
+        // Raise point and shift to the N-th power.
         let point_pow_height = point.exp_power_of_2(log_height);
         let shift_pow_height = shift.exp_power_of_2(log_height);
 
