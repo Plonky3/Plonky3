@@ -67,10 +67,7 @@ where
                 "WIDTH must be one of the supported widths (paper Section 6)"
             );
             // Section 6: S-box(x) = x^d where d ≥ 3.
-            assert!(
-                D >= 3,
-                "Poseidon2 requires D >= 3 (paper Section 6)"
-            );
+            assert!(D >= 3, "Poseidon2 requires D >= 3 (paper Section 6)");
         }
 
         // Section 7.1: RF ≥ 6 for statistical attack resistance (differential, linear).
