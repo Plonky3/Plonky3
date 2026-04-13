@@ -69,7 +69,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::{Field, dot_product};
+use p3_field::{dot_product, Field};
 
 /// Expand a circulant matrix from its first column into a dense NxN matrix.
 ///
@@ -326,14 +326,16 @@ fn equivalent_round_constants<F: Field, const N: usize>(
     partial_rc: &[[F; N]],
     mds_inv: &[[F; N]; N],
 ) -> ([F; N], Vec<F>) {
-    let rounds_p = partial_rc.len();
-    let mut opt_partial_rc = F::zero_vec(rounds_p);
+    let (last_rc, prefix_rc) = partial_rc
+        .split_last()
+        .expect("Poseidon1 optimized constants require rounds_p > 0");
+    let mut opt_partial_rc = F::zero_vec(partial_rc.len());
 
     // Start with the last partial round's full constant vector.
-    let mut tmp = partial_rc[rounds_p - 1];
+    let mut tmp = *last_rc;
 
     // Process rounds in reverse: from second-to-last down to first.
-    for i in (0..rounds_p - 1).rev() {
+    for (i, rc) in prefix_rc.iter().enumerate().rev() {
         // Push the accumulated constants backward through M^{-1}.
         let inv_cip = matrix_vec_mul(mds_inv, &tmp);
 
@@ -341,7 +343,7 @@ fn equivalent_round_constants<F: Field, const N: usize>(
         opt_partial_rc[i + 1] = inv_cip[0];
 
         // Load round i's constants and add the remaining backward-substituted values.
-        tmp = partial_rc[i];
+        tmp = *rc;
         for j in 1..N {
             tmp[j] += inv_cip[j];
         }
@@ -421,6 +423,16 @@ pub fn compute_optimized_constants<F: Field, const N: usize>(
     rounds_p: usize,
     partial_rc: &[[F; N]],
 ) -> ([F; N], Vec<F>, [[F; N]; N], Vec<[F; N]>, Vec<[F; N]>) {
+    assert!(
+        rounds_p > 0,
+        "Poseidon1 optimized constants require rounds_p > 0"
+    );
+    assert_eq!(
+        partial_rc.len(),
+        rounds_p,
+        "Poseidon1 partial round constants length must match rounds_p"
+    );
+
     let mds_inv = matrix_inverse(mds);
     let (first_round_constants, opt_partial_rc) = equivalent_round_constants(partial_rc, &mds_inv);
     let (m_i, sparse_v, sparse_w_hat) = compute_equivalent_matrices(mds, rounds_p);
@@ -577,5 +589,25 @@ mod tests {
             textbook_state, scalar_state,
             "Textbook and textbook+scalar partial rounds should match"
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "Poseidon1 optimized constants require rounds_p > 0")]
+    fn test_compute_optimized_constants_rejects_zero_partial_rounds() {
+        let mut rng = SmallRng::seed_from_u64(7);
+        let mds: [[F; 4]; 4] = rng.random();
+        let partial_rc = vec![];
+
+        let _ = compute_optimized_constants::<F, 4>(&mds, 0, &partial_rc);
+    }
+
+    #[test]
+    #[should_panic(expected = "Poseidon1 partial round constants length must match rounds_p")]
+    fn test_compute_optimized_constants_rejects_mismatched_partial_constants_len() {
+        let mut rng = SmallRng::seed_from_u64(8);
+        let mds: [[F; 4]; 4] = rng.random();
+        let partial_rc = vec![];
+
+        let _ = compute_optimized_constants::<F, 4>(&mds, 1, &partial_rc);
     }
 }

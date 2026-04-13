@@ -189,11 +189,28 @@ pub fn partial_permute_state<
     // Apply the dense transition matrix m_i (once).
     mds_multiply(state, &constants.m_i);
 
-    let rounds_p = constants.sparse_first_row.len();
+    let (last_sparse_first_row, sparse_first_rows) = constants
+        .sparse_first_row
+        .split_last()
+        .expect("Poseidon1 partial rounds require rounds_p > 0");
+    let (last_v, vs) = constants
+        .v
+        .split_last()
+        .expect("Poseidon1 partial rounds require rounds_p > 0");
+    assert_eq!(
+        sparse_first_rows.len(),
+        vs.len(),
+        "Poseidon1 partial round constants are inconsistent"
+    );
+    assert_eq!(
+        constants.round_constants.len(),
+        sparse_first_rows.len(),
+        "Poseidon1 scalar partial round constants must have length rounds_p - 1"
+    );
 
     // Partial rounds 0..RP-2: S-box + scalar RC + sparse matmul.
     // The last round is handled separately to avoid a branch per iteration.
-    for r in 0..rounds_p - 1 {
+    for r in 0..sparse_first_rows.len() {
         // S-box on state[0] only.
         state[0] = state[0].injective_exp_n();
 
@@ -201,16 +218,12 @@ pub fn partial_permute_state<
         state[0] += constants.round_constants[r];
 
         // Sparse matrix multiply.
-        cheap_matmul(state, &constants.sparse_first_row[r], &constants.v[r]);
+        cheap_matmul(state, &sparse_first_rows[r], &vs[r]);
     }
 
     // Last partial round: S-box + sparse matmul (no round constant).
     state[0] = state[0].injective_exp_n();
-    cheap_matmul(
-        state,
-        &constants.sparse_first_row[rounds_p - 1],
-        &constants.v[rounds_p - 1],
-    );
+    cheap_matmul(state, last_sparse_first_row, last_v);
 }
 
 /// Textbook partial round permutation with forward-substituted scalar constants.
@@ -241,5 +254,51 @@ pub fn textbook_partial_permute_state<
     }
     for (s, &r) in state.iter_mut().zip(constants.textbook_residual.iter()) {
         *s += r;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+
+    use super::{partial_permute_state, PartialRoundConstants};
+
+    type F = BabyBear;
+
+    #[test]
+    #[should_panic(expected = "Poseidon1 partial rounds require rounds_p > 0")]
+    fn test_partial_permute_state_rejects_zero_partial_rounds() {
+        let constants = PartialRoundConstants {
+            first_round_constants: [F::ZERO; 4],
+            m_i: [[F::ZERO; 4]; 4],
+            sparse_first_row: vec![],
+            v: vec![],
+            round_constants: vec![],
+            textbook_scalar_constants: vec![],
+            textbook_residual: [F::ZERO; 4],
+        };
+        let mut state = [F::ZERO; 4];
+        partial_permute_state::<F, F, 4, 7>(&mut state, &constants);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Poseidon1 scalar partial round constants must have length rounds_p - 1"
+    )]
+    fn test_partial_permute_state_rejects_mismatched_scalar_constants() {
+        let constants = PartialRoundConstants {
+            first_round_constants: [F::ZERO; 4],
+            m_i: [[F::ZERO; 4]; 4],
+            sparse_first_row: vec![[F::ONE; 4], [F::ONE; 4]],
+            v: vec![[F::ZERO; 4], [F::ZERO; 4]],
+            round_constants: vec![],
+            textbook_scalar_constants: vec![],
+            textbook_residual: [F::ZERO; 4],
+        };
+        let mut state = [F::ZERO; 4];
+        partial_permute_state::<F, F, 4, 7>(&mut state, &constants);
     }
 }
