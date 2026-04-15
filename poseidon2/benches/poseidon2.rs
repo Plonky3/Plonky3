@@ -35,7 +35,7 @@ fn bench_poseidon12(c: &mut Criterion) {
     let poseidon2_gold_16 = Poseidon2Goldilocks::<16>::new_from_rng_128(&mut rng);
     poseidon2::<Goldilocks, Poseidon2Goldilocks<16>, 16>(c, &poseidon2_gold_16);
 
-    let poseidon2_bn254 = Poseidon2Bn254::<3>::new_from_rng(8, 22, &mut rng);
+    let poseidon2_bn254 = Poseidon2Bn254::<3>::new_from_rng(8, 56, &mut rng);
     poseidon2::<Bn254, Poseidon2Bn254<3>, 3>(c, &poseidon2_bn254);
 }
 
