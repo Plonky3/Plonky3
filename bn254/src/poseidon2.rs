@@ -19,6 +19,22 @@ use crate::Bn254;
 /// satisfying `gcd(α, p - 1) = 1` is 5.
 pub const BN254_S_BOX_DEGREE: u64 = 5;
 
+/// Number of full rounds per half for BN254 Poseidon2 (`RF / 2`).
+///
+/// The total number of full rounds is `RF = 8` (4 beginning + 4 ending).
+/// Follows the Poseidon2 paper's security analysis with a +2 RF margin.
+///
+/// Reference: <https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_bn256.rs>
+pub const BN254_POSEIDON2_HALF_FULL_ROUNDS: usize = 4;
+
+/// Number of partial rounds for BN254 Poseidon2 (width 3).
+///
+/// Matches the reference implementation from the HorizenLabs Poseidon2 codebase
+/// for the BN256 scalar field at 128-bit security.
+///
+/// Reference: <https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_bn256.rs>
+pub const BN254_POSEIDON2_PARTIAL_ROUNDS_3: usize = 56;
+
 /// An implementation of the Poseidon2 hash function for the Bn254Fr field.
 ///
 /// It acts on arrays of the form `[Bn254Fr; WIDTH]`.
@@ -147,8 +163,8 @@ mod tests {
     #[test]
     fn test_poseidon2_bn254() {
         const WIDTH: usize = 3;
-        const ROUNDS_F: usize = 8;
-        const ROUNDS_P: usize = 56;
+        const ROUNDS_F: usize = 2 * BN254_POSEIDON2_HALF_FULL_ROUNDS;
+        const ROUNDS_P: usize = BN254_POSEIDON2_PARTIAL_ROUNDS_3;
 
         type F = Bn254;
 
