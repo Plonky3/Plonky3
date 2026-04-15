@@ -268,7 +268,14 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Neon<FP>
             1 => *self,
             2 => self.square(),
             3 => self.cube(),
-            4 => self.square().square(),
+            4 => {
+                let val = self.to_signed_vector();
+                unsafe {
+                    // Safety: `exp_4` returns values in canonical form when given values in canonical form.
+                    let res = exp_4::<FP>(val);
+                    Self::from_vector(res)
+                }
+            }
             5 => {
                 let val = self.to_signed_vector();
                 unsafe {
@@ -546,6 +553,63 @@ fn cube<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
 
         // Safe as mul_with_precomp::<MPNeon, true> returns integers in [0, P)
         aarch64::vreinterpretq_u32_s32(val_3)
+    }
+}
+
+/// Raise packed field elements to the fourth power: x -> x^4.
+///
+/// # Overview
+///
+/// Chains two Montgomery squarings while keeping the intermediate
+/// x^2 in unreduced signed form (-P, P).
+///
+/// A normal square produces a fully reduced result in [0, P).
+/// That reduction costs 2 extra instructions (a compare and a
+/// fused multiply-subtract).
+/// Because Montgomery multiplication already accepts signed
+/// inputs in (-P, P), the intermediate x^2 can feed straight
+/// into the second squaring without that reduction.
+///
+/// # Data Flow
+///
+/// ```text
+///     val ──► x^2  (unreduced, in (-P, P))  ──► x^4  (canonical, in [0, P))
+///             │                                   │
+///             5 instr (no reduction)              7 instr (with reduction)
+/// ```
+///
+/// # Performance
+///
+/// ```text
+///     Naive  (two canonical squares):   2 x 7 = 14 instr,  ~28 cyc latency
+///     Here   (skip one reduction):      5 + 7 = 12 instr,  ~24 cyc latency
+///                                       ─────────────────
+///                                       saves 2 instr / 4 cyc
+/// ```
+///
+/// # Safety
+///
+/// - Inputs must be signed 32-bit integers in [-P, P].
+/// - Outputs are unsigned 32-bit integers in [0, P).
+#[inline]
+#[must_use]
+fn exp_4<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
+    unsafe {
+        // Precompute mu * val (mod 2^32).
+        // Reused by the first squaring since both operands are val.
+        let mu_val = mulby_mu::<MPNeon>(val);
+
+        // x^2 — unreduced output in (-P, P).
+        // Skips the 2-instruction canonical reduction;
+        // The next Montgomery multiply accepts this range directly.
+        let val_2 = mul_with_precomp::<MPNeon, false>(val, val, mu_val);
+
+        // Fresh precomputation for x^2 (new operand for the second squaring).
+        let mu_val_2 = mulby_mu::<MPNeon>(val_2);
+
+        // x^4 — canonical output in [0, P), safe to reinterpret as unsigned.
+        let val_4 = mul_with_precomp::<MPNeon, true>(val_2, val_2, mu_val_2);
+        aarch64::vreinterpretq_u32_s32(val_4)
     }
 }
 
