@@ -17,6 +17,26 @@
 //! ```text
 //!     h(r) = h(0)*(1-r) + h(1)*r + h(inf)*r*(r-1)
 //! ```
+//!
+//! # Why "evaluation at infinity"?
+//!
+//! Homogenize h(X) into H(X, Z) on the projective line:
+//!
+//! ```text
+//!     h(X) = aX^2 + bX + c   -->   H(X, Z) = aX^2 + bXZ + cZ^2
+//! ```
+//!
+//! Evaluating at the projective point at infinity (X:Z) = (1:0):
+//!
+//! ```text
+//!     H(1, 0) = a             (the leading coefficient)
+//! ```
+//!
+//! A degree-d polynomial is uniquely recovered from d finite-point
+//! evaluations plus its leading coefficient.
+//!
+//! See Lemma 2 in Dao et al., *Speeding Up Sum-Check Proving*, 2026:
+//! <https://eprint.iacr.org/2026/587>
 
 use alloc::vec::Vec;
 
