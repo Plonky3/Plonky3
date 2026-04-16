@@ -280,7 +280,7 @@ fn run_sumcheck_test(
 
     // ROUND 0: Initialize the sumcheck prover from the base evaluations.
     // This performs the first folding round: it computes the sumcheck polynomials
-    // h(X) = c0 + c1*X + c2*X^2 for each variable being folded, writes them into
+    // h(X) = c + b*X + a*X^2 for each variable being folded, writes them into
     // the proof, and returns the partially folded state along with the verifier's
     // random challenges (prover_randomness) accumulated so far.
 

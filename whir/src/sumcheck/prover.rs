@@ -11,10 +11,10 @@ use p3_util::log2_strict_usize;
 use crate::constraints::Constraint;
 use crate::constraints::statement::EqStatement;
 use crate::constraints::statement::initial::{InitialStatement, InitialStatementInner};
-use crate::sumcheck::lagrange::lagrange_weights_012_multi;
+use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
 use crate::sumcheck::product_polynomial::{ProductPolynomial, sumcheck_coefficients_cross};
 use crate::sumcheck::svo::SvoClaim;
-use crate::sumcheck::{SumcheckData, extrapolate_012};
+use crate::sumcheck::{SumcheckData, extrapolate_01inf};
 
 /// Prover state for the sumcheck protocol over a multilinear polynomial.
 ///
@@ -102,18 +102,18 @@ where
         // so we write directly rather than accumulate.
         statement.combine_hypercube::<F, false>(&mut weights, &mut sum, alpha);
 
-        // Compute the constant and quadratic coefficients of the round polynomial:
-        //   c_0 = h(0) = sum_{b in {0,1}^{k-1}} f(0, b) * w(0, b)
-        //   c_2 = h(2) = sum_{b in {0,1}^{k-1}} f(2, b) * w(2, b)
+        // Compute the constant and leading coefficients of the round polynomial:
+        //   h(0)   = sum_{b in {0,1}^{k-1}} f(0, b) * w(0, b)
+        //   h(inf) = sum_{b} (f(1,b) - f(0,b)) * (w(1,b) - w(0,b))
         //
-        // The linear coefficient c_1 is derived by the verifier from:
+        // The linear coefficient is derived by the verifier from:
         //   h(0) + h(1) = claimed_sum
-        let (c0, c2) = sumcheck_coefficients_cross(poly, &weights);
+        let (c0, c_inf) = sumcheck_coefficients_cross(poly, &weights);
 
-        // Commit (c_0, c_2) to the Fiat-Shamir transcript.
+        // Commit (h(0), h(inf)) to the Fiat-Shamir transcript.
         // Perform any required proof-of-work grinding.
         // Receive the verifier's challenge `r`.
-        let r = sumcheck_data.observe_and_sample(challenger, c0, c2, pow_bits);
+        let r = sumcheck_data.observe_and_sample(challenger, c0, c_inf, pow_bits);
 
         // Fold the weight polynomial by binding its first variable to `r`:
         //   w'(x_2, ..., x_k) = w(0, x_2, ...) + r * (w(1, ...) - w(0, ...))
@@ -123,9 +123,8 @@ where
         // Promote base field evaluations into extension field elements during the fold.
         let evals = poly.fix_lo_var(r);
 
-        // Update the claimed sum to h(r) using quadratic extrapolation.
-        // h(1) = sum - c_0, since h(0) + h(1) = sum.
-        sum = extrapolate_012(c0, sum - c0, c2, r);
+        // Update the claimed sum: h(r) = h(0)*(1-r) + h(1)*r + h(inf)*r*(r-1).
+        sum = extrapolate_01inf(c0, sum - c0, c_inf, r);
 
         // Wrap the folded polynomials into a paired polynomial (scalar variant).
         let mut poly = ProductPolynomial::<F, EF>::new_small(evals, weights);
@@ -196,25 +195,24 @@ where
 
         // Compute sumcheck coefficients in packed arithmetic.
         // The result is still in packed form (one value per SIMD lane).
-        let (c0, c2) = sumcheck_coefficients_cross(&poly_packed, &weights);
+        let (c0, c_inf) = sumcheck_coefficients_cross(&poly_packed, &weights);
 
         // Sum across all SIMD lanes to produce scalar coefficients.
         // The sumcheck polynomial is a sum over ALL evaluation points, not per-lane.
         let c0 = EF::ExtensionPacking::to_ext_iter([c0]).sum();
-        let c2 = EF::ExtensionPacking::to_ext_iter([c2]).sum();
+        let c_inf = EF::ExtensionPacking::to_ext_iter([c_inf]).sum();
 
-        // Commit (c_0, c_2) to the transcript and receive the challenge.
-        let r = sumcheck_data.observe_and_sample(challenger, c0, c2, pow_bits);
+        // Commit (h(0), h(inf)) to the transcript and receive the challenge.
+        let r = sumcheck_data.observe_and_sample(challenger, c0, c_inf, pow_bits);
 
         // Fold the packed weight polynomial by binding the first variable to `r`.
         weights.fix_lo_var_mut(r);
 
         // Fold the base-field evaluations and promote into packed extension field form.
-        // Uses compress_lo_to_packed with a single-variable point to fold and pack.
         let evals = poly.compress_lo_to_packed(&Point::new(alloc::vec![r]), EF::ONE);
 
-        // Update the claimed sum to h(r) via quadratic extrapolation.
-        sum = extrapolate_012(c0, sum - c0, c2, r);
+        // Update the claimed sum: h(r) = h(0)*(1-r) + h(1)*r + h(inf)*r*(r-1).
+        sum = extrapolate_01inf(c0, sum - c0, c_inf, r);
 
         // Wrap into a paired polynomial (packed variant).
         // The constructor checks whether the data is small enough for scalar mode.
@@ -323,31 +321,29 @@ where
         tracing::info_span!("svo rounds").in_scope(|| {
             for round_idx in 0..folding_factor {
                 // Initialize round polynomial coefficients to zero.
-                let (mut c0, mut c2): (EF, EF) = Default::default();
+                let (mut c0, mut c_inf): (EF, EF) = Default::default();
 
-                // Compute Lagrange interpolation weights from previous challenges.
-                // These reconstruct round polynomial coefficients from the
-                // pre-computed accumulators without materializing the full equality table.
-                let weights = lagrange_weights_012_multi(rs.as_slice());
+                // Compute interpolation weights from previous challenges.
+                let weights = lagrange_weights_01inf_multi(rs.as_slice());
 
                 // Accumulate each constraint's contribution, scaled by alpha^j.
                 for (accumulators, alpha) in accumulators.iter().zip(alpha.powers()) {
-                    // Accumulators for computing h(0) and h(2) at this round.
+                    // Accumulators for h(0) and h(inf) at this round.
                     let acc0 = &accumulators[round_idx][0];
-                    let acc2 = &accumulators[round_idx][1];
+                    let acc_inf = &accumulators[round_idx][1];
 
-                    // Dot product with Lagrange weights reconstructs the coefficient.
+                    // Dot product with weights reconstructs the coefficient.
                     c0 += alpha
                         * dot_product::<EF, _, _>(acc0.iter().copied(), weights.iter().copied());
-                    c2 += alpha
-                        * dot_product::<EF, _, _>(acc2.iter().copied(), weights.iter().copied());
+                    c_inf += alpha
+                        * dot_product::<EF, _, _>(acc_inf.iter().copied(), weights.iter().copied());
                 }
 
-                // Commit (c_0, c_2) to the transcript and receive challenge r_i.
-                let r = sumcheck_data.observe_and_sample(challenger, c0, c2, pow_bits);
+                // Commit (h(0), h(inf)) to the transcript and receive challenge r_i.
+                let r = sumcheck_data.observe_and_sample(challenger, c0, c_inf, pow_bits);
 
-                // Update the claimed sum to h(r) using quadratic extrapolation.
-                sum = extrapolate_012(c0, sum - c0, c2, r);
+                // Update the claimed sum.
+                sum = extrapolate_01inf(c0, sum - c0, c_inf, r);
 
                 // Record this round's challenge for the next round's Lagrange weights.
                 rs.push(r);
