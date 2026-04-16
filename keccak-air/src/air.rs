@@ -10,7 +10,7 @@ use rand::{RngExt, SeedableRng};
 use crate::columns::{KeccakCols, NUM_KECCAK_COLS};
 use crate::constants::RC_BITS;
 use crate::round_flags::eval_round_flags;
-use crate::{BITS_PER_LIMB, NUM_ROUNDS, NUM_ROUNDS_MIN_1, U64_LIMBS, generate_trace_rows};
+use crate::{BITS_PER_LIMB, NUM_ROUNDS_MIN_1, U64_LIMBS, generate_trace_rows};
 
 /// Assumes the field size is at least 16 bits.
 #[derive(Debug)]
@@ -172,10 +172,9 @@ impl<AB: AirBuilder> Air<AB> for KeccakAir {
 
         let get_xored_bit = |i| {
             let mut rc_bit_i = AB::Expr::ZERO;
-            for r in 0..NUM_ROUNDS {
-                let this_round = local.step_flags[r];
-                let this_round_constant = AB::Expr::from_bool(RC_BITS[r][i] != 0);
-                rc_bit_i += this_round * this_round_constant;
+            for (rc_bits_r, &step_flag) in RC_BITS.iter().zip(local.step_flags.iter()) {
+                let this_round_constant = AB::Expr::from_bool(rc_bits_r[i] != 0);
+                rc_bit_i += step_flag * this_round_constant;
             }
 
             rc_bit_i.xor(&AB::Expr::from(local.a_prime_prime_0_0_bits[i]))
