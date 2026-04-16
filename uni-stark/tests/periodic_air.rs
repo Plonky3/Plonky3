@@ -20,6 +20,8 @@ use p3_uni_stark::{StarkConfig, prove, verify};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
+const fn assert_sync<T: Sync>() {}
+
 #[derive(Clone)]
 struct PeriodicAir<F> {
     periodic: Vec<Vec<F>>,
@@ -141,6 +143,10 @@ fn periodic_air_two_adic_zk_prove_verify() -> Result<(), impl Debug> {
     type Pcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, SmallRng>;
     type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
     type Config = StarkConfig<Pcs, Challenge, Challenger>;
+
+    assert_sync::<ValMmcs>();
+    assert_sync::<Pcs>();
+    assert_sync::<Config>();
 
     let mut rng = SmallRng::seed_from_u64(1);
     let perm = Perm::new_from_rng_128(&mut rng);

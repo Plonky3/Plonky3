@@ -1,5 +1,4 @@
 use alloc::vec::Vec;
-use core::cell::RefCell;
 
 use itertools::Itertools;
 use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
@@ -13,6 +12,7 @@ use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use spin::Mutex;
 
 use crate::{MerkleCap, MerkleTree, MerkleTreeError, MerkleTreeMmcs};
 
@@ -35,7 +35,7 @@ use crate::{MerkleCap, MerkleTree, MerkleTreeError, MerkleTreeMmcs};
 /// - `H`: the leaf hasher
 /// - `C`: the digest compression function
 /// - `R`: a random number generator for blinding leaves
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct MerkleTreeHidingMmcs<
     P,
     PW,
@@ -47,7 +47,7 @@ pub struct MerkleTreeHidingMmcs<
     const SALT_ELEMS: usize,
 > {
     inner: MerkleTreeMmcs<P, PW, H, C, N, DIGEST_ELEMS>,
-    rng: RefCell<R>,
+    rng: Mutex<R>,
 }
 
 impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize>
@@ -66,12 +66,26 @@ impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS
         let inner = MerkleTreeMmcs::new(hash, compress, cap_height);
         Self {
             inner,
-            rng: RefCell::new(rng),
+            rng: Mutex::new(rng),
         }
     }
 
     pub const fn cap_height(&self) -> usize {
         self.inner.cap_height()
+    }
+}
+
+impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize> Clone
+    for MerkleTreeHidingMmcs<P, PW, H, C, R, N, DIGEST_ELEMS, SALT_ELEMS>
+where
+    MerkleTreeMmcs<P, PW, H, C, N, DIGEST_ELEMS>: Clone,
+    R: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            rng: Mutex::new(self.rng.lock().clone()),
+        }
     }
 }
 
@@ -87,7 +101,7 @@ where
     C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>
         + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>
         + Sync,
-    R: Rng + Clone,
+    R: Rng + Clone + Send,
     PW::Value: Eq + Clone,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
     StandardUniform: Distribution<P::Value>,
@@ -108,11 +122,11 @@ where
         &self,
         inputs: Vec<M>,
     ) -> (Self::Commitment, Self::ProverData<M>) {
+        let mut rng = self.rng.lock();
         let salted_inputs = inputs
             .into_iter()
             .map(|mat| {
-                let salts =
-                    RowMajorMatrix::rand(&mut *self.rng.borrow_mut(), mat.height(), SALT_ELEMS);
+                let salts = RowMajorMatrix::rand(&mut *rng, mat.height(), SALT_ELEMS);
                 HorizontalPair::new(mat, salts)
             })
             .collect();
@@ -181,6 +195,8 @@ mod tests {
     use super::MerkleTreeHidingMmcs;
     use crate::MerkleTreeError;
 
+    const fn assert_sync<T: Sync>() {}
+
     type F = BabyBear;
     const SALT_ELEMS: usize = 4;
 
@@ -230,5 +246,10 @@ mod tests {
         let (commit, prover_data) = mmcs.commit(mats);
         let batch_proof = mmcs.open_batch(17, &prover_data);
         mmcs.verify_batch(&commit, &dims, 17, (&batch_proof).into())
+    }
+
+    #[test]
+    fn hiding_mmcs_is_sync() {
+        assert_sync::<MyMmcs>();
     }
 }
