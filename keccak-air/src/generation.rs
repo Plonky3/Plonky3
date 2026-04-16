@@ -356,8 +356,8 @@ mod tests {
 
             // Preimage must be identical in all 24 rows.
             let first = rows[0].preimage;
-            for round in 1..NUM_ROUNDS {
-                prop_assert_eq!(rows[round].preimage, first,
+            for (round, row) in rows.iter().enumerate().take(NUM_ROUNDS).skip(1) {
+                prop_assert_eq!(row.preimage, first,
                     "preimage changed at round {}", round);
             }
         }
@@ -372,10 +372,10 @@ mod tests {
             //     round  0: [1, 0, 0, …, 0]
             //     round  1: [0, 1, 0, …, 0]
             //     round 23: [0, 0, 0, …, 1]
-            for round in 0..NUM_ROUNDS {
+            for (round, row) in rows.iter().enumerate().take(NUM_ROUNDS) {
                 for flag in 0..NUM_ROUNDS {
                     let expected = if flag == round { Goldilocks::ONE } else { Goldilocks::ZERO };
-                    prop_assert_eq!(rows[round].step_flags[flag], expected,
+                    prop_assert_eq!(row.step_flags[flag], expected,
                         "step_flags[{}] wrong at round {}", flag, round);
                 }
             }

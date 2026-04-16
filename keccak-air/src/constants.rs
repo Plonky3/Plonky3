@@ -171,11 +171,9 @@ mod tests {
         // We also reconstruct each 64-bit constant from its bits
         // and compare against the original — any single-bit typo
         // in the 24 * 64 = 1536 entries would be caught.
-        for r in 0..24 {
+        for (r, rc_bits_r) in RC_BITS.iter().enumerate() {
             let mut reconstructed = 0u64;
-            for z in 0..64 {
-                let bit = RC_BITS[r][z];
-
+            for (z, &bit) in rc_bits_r.iter().enumerate() {
                 // Each entry must be 0 or 1.
                 assert!(bit <= 1, "RC_BITS[{r}][{z}] = {bit}, expected 0 or 1");
 
