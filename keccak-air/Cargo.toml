@@ -35,6 +35,7 @@ p3-sha256 = { path = "../sha256" }
 p3-symmetric = { path = "../symmetric" }
 p3-uni-stark = { path = "../uni-stark" }
 
+proptest.workspace = true
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
