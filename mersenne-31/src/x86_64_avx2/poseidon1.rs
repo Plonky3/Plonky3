@@ -205,9 +205,11 @@ mod tests {
 
         let mut avx2_input = input.map(Into::<PackedMersenne31AVX2>::into);
         perm.permute_mut(&mut avx2_input);
-        let avx2_output = avx2_input.map(|x| x.0[0]);
 
-        assert_eq!(avx2_output, expected);
+        for lane in 0..avx2_input[0].0.len() {
+            let avx2_output = avx2_input.map(|x| x.0[lane]);
+            assert_eq!(avx2_output, expected, "lane {} mismatch", lane);
+        }
     }
 
     /// Known-answer test for width 32 through the AVX2 packed path.
@@ -230,9 +232,11 @@ mod tests {
 
         let mut avx2_input = input.map(Into::<PackedMersenne31AVX2>::into);
         perm.permute_mut(&mut avx2_input);
-        let avx2_output = avx2_input.map(|x| x.0[0]);
 
-        assert_eq!(avx2_output, expected);
+        for lane in 0..avx2_input[0].0.len() {
+            let avx2_output = avx2_input.map(|x| x.0[lane]);
+            assert_eq!(avx2_output, expected, "lane {} mismatch", lane);
+        }
     }
 
     fn arb_f() -> impl Strategy<Value = F> {
@@ -246,14 +250,22 @@ mod tests {
         ) {
             let perm = default_mersenne31_poseidon1_16();
 
-            let mut expected = input;
-            perm.permute_mut(&mut expected);
+            let mut packed_input = core::array::from_fn(|i| {
+                let mut packed = PackedMersenne31AVX2::ZERO;
+                for lane in 0..packed.0.len() {
+                    packed.0[lane] = input[i] + F::from_u32((lane + 1) as u32);
+                }
+                packed
+            });
+            perm.permute_mut(&mut packed_input);
 
-            let mut avx2_input = input.map(Into::<PackedMersenne31AVX2>::into);
-            perm.permute_mut(&mut avx2_input);
-            let avx2_output = avx2_input.map(|x| x.0[0]);
+            for lane in 0..packed_input[0].0.len() {
+                let mut expected = input.map(|x| x + F::from_u32((lane + 1) as u32));
+                perm.permute_mut(&mut expected);
+                let packed_output = packed_input.map(|x| x.0[lane]);
 
-            prop_assert_eq!(avx2_output, expected);
+                prop_assert_eq!(packed_output, expected, "lane {} mismatch", lane);
+            }
         }
 
         #[test]
@@ -262,14 +274,22 @@ mod tests {
         ) {
             let perm = default_mersenne31_poseidon1_32();
 
-            let mut expected = input;
-            perm.permute_mut(&mut expected);
+            let mut packed_input = core::array::from_fn(|i| {
+                let mut packed = PackedMersenne31AVX2::ZERO;
+                for lane in 0..packed.0.len() {
+                    packed.0[lane] = input[i] + F::from_u32((lane + 1) as u32);
+                }
+                packed
+            });
+            perm.permute_mut(&mut packed_input);
 
-            let mut avx2_input = input.map(Into::<PackedMersenne31AVX2>::into);
-            perm.permute_mut(&mut avx2_input);
-            let avx2_output = avx2_input.map(|x| x.0[0]);
+            for lane in 0..packed_input[0].0.len() {
+                let mut expected = input.map(|x| x + F::from_u32((lane + 1) as u32));
+                perm.permute_mut(&mut expected);
+                let packed_output = packed_input.map(|x| x.0[lane]);
 
-            prop_assert_eq!(avx2_output, expected);
+                prop_assert_eq!(packed_output, expected, "lane {} mismatch", lane);
+            }
         }
     }
 }
