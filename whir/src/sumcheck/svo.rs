@@ -28,20 +28,21 @@ use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 use p3_util::log2_strict_usize;
 
-/// Expand `2^l` Boolean-hypercube evaluations to `3^l` evaluations on `{0,1,2}^l`.
+/// Expand `2^l` Boolean-hypercube evaluations to `3^l` evaluations on `{0, 1, inf}^l`.
 ///
 /// # Overview
 ///
 /// A multilinear polynomial in `l` variables is determined by `2^l` evaluations
-/// on `{0,1}^l`. This extends them to `{0,1,2}^l` via linear extrapolation:
+/// on `{0,1}^l`. This extends them to include the "evaluation at infinity"
+/// (the leading coefficient) for each variable:
 ///
 /// ```text
-///     f(0), f(1)  -->  f(0), f(1), f(2)    where f(2) = 2*f(1) - f(0)
+///     f(0), f(1)  -->  f(0), f(1), f(inf)    where f(inf) = f(1) - f(0)
 /// ```
 ///
 /// # Motivation
 ///
-/// The SVO sumcheck prover needs accumulator values on the `{0,1,2}^l` grid.
+/// The SVO sumcheck prover needs accumulator values on the `{0, 1, inf}^l` grid.
 ///
 /// - **Naive**: evaluate each of the `3^l` grid points independently via
 ///   Lagrange interpolation from the `2^l` Boolean values --> `O(6^l)`.
@@ -67,9 +68,9 @@ use p3_util::log2_strict_usize;
 ///
 /// ```text
 ///     stage 0:  2^l             values on {0,1}^l
-///     stage 1:  3 * 2^{l-1}    values on {0,1,2} x {0,1}^{l-1}
+///     stage 1:  3 * 2^{l-1}    values on {0, 1, inf} x {0,1}^{l-1}
 ///       ...
-///     stage l:  3^l             values on {0,1,2}^l
+///     stage l:  3^l             values on {0, 1, inf}^l
 /// ```
 ///
 /// Two buffers alternate in a ping-pong pattern.
@@ -89,7 +90,7 @@ use p3_util::log2_strict_usize;
 ///
 /// - Time: `O(3^l)` field additions and doublings.
 /// - Space: two pre-allocated `3^l` buffers, no internal allocation.
-fn evals_012_grid_into<F: Field>(boolean_evals: &[F], output: &mut [F], scratch: &mut [F]) {
+fn evals_01inf_grid_into<F: Field>(boolean_evals: &[F], output: &mut [F], scratch: &mut [F]) {
     let num_vars = log2_strict_usize(boolean_evals.len());
     let output_len = 3usize.pow(num_vars as u32);
 
@@ -155,7 +156,7 @@ fn evals_012_grid_into<F: Field>(boolean_evals: &[F], output: &mut [F], scratch:
                         // Interleaved output: position j --> indices 3j, 3j+1, 3j+2.
                         n_chunk[3 * j] = f0;
                         n_chunk[3 * j + 1] = f1;
-                        n_chunk[3 * j + 2] = f1.double() - f0;
+                        n_chunk[3 * j + 2] = f1 - f0;
                     }
                 });
         } else {
@@ -174,7 +175,7 @@ fn evals_012_grid_into<F: Field>(boolean_evals: &[F], output: &mut [F], scratch:
                         .for_each(|((&f0, &f1), out)| {
                             out[0] = f0;
                             out[1] = f1;
-                            out[2] = f1.double() - f0;
+                            out[2] = f1 - f0;
                         });
                 });
         }
@@ -188,7 +189,7 @@ fn evals_012_grid_into<F: Field>(boolean_evals: &[F], output: &mut [F], scratch:
 ///
 /// Rather than rebuilding every Lagrange basis vector independently (O(6^l)),
 /// this expands both the residual equality polynomial and the partially compressed
-/// multilinear polynomial over the entire `{0,1,2}^l` grid. The required
+/// multilinear polynomial over the entire `{0, 1, inf}^l` grid. The required
 /// accumulators are then simple pointwise products on the slices with
 /// final coordinate fixed to `0` or `2`.
 ///
@@ -238,11 +239,11 @@ fn calculate_accumulators<F: Field, EF: ExtensionField<F>>(
 ///     eq0:     [e0, e1]          (2 values on {0,1})
 ///     reduced: [r0, r1]          (2 values on {0,1})
 ///
-///     Grid on {0,1,2}:
-///       f(0) = f[0],  f(1) = f[1],  f(2) = 2*f[1] - f[0]
+///     Grid on {0, 1, inf}:
+///       f(0) = f[0],  f(1) = f[1],  f(inf) = f[1] - f[0]
 ///
-///     acc0 = [eq0(0) * red(0)]   = [e0 * r0]               (1 value)
-///     acc2 = [eq0(2) * red(2)]   = [(2*e1-e0) * (2*r1-r0)] (1 value)
+///     acc0    = [eq0(0) * red(0)]       = [e0 * r0]             (1 value)
+///     acc_inf = [eq0(inf) * red(inf)]   = [(e1-e0) * (r1-r0)]   (1 value)
 /// ```
 fn calculate_accumulators_1<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 2] {
     assert_eq!(eq0.len(), 2);
@@ -251,11 +252,11 @@ fn calculate_accumulators_1<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 
     let (e0, e1) = (eq0[0], eq0[1]);
     let (r0, r1) = (reduced[0], reduced[1]);
 
-    // Extrapolate both tables to point 2: f(2) = 2*f(1) - f(0).
-    let e2 = e1.double() - e0;
-    let r2 = r1.double() - r0;
+    // Leading coefficients: f(inf) = f(1) - f(0).
+    let e_inf = e1 - e0;
+    let r_inf = r1 - r0;
 
-    [vec![e0 * r0], vec![e2 * r2]]
+    [vec![e0 * r0], vec![e_inf * r_inf]]
 }
 
 /// Straightline accumulator computation for l=2.
@@ -263,13 +264,13 @@ fn calculate_accumulators_1<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 
 /// Grid layout after expansion (x_0 slowest, x_1 fastest):
 ///
 /// ```text
-///     grid[0..3] = x_0=0 group: f(0,0), f(0,1), f(0,2)
-///     grid[3..6] = x_0=1 group: f(1,0), f(1,1), f(1,2)
-///     grid[6..9] = x_0=2 group: f(2,0), f(2,1), f(2,2)
+///     grid[0..3] = x_0=0 group: f(0,0), f(0,1), f(0,inf)
+///     grid[3..6] = x_0=1 group: f(1,0), f(1,1), f(1,inf)
+///     grid[6..9] = x_0=inf group: f(inf,0), f(inf,1), f(inf,inf)
 ///
 ///     stride = 3^{l-1} = 3
-///     acc0 = grid[0..3]  = x_0=0 slice, x_1 in {0,1,2}
-///     acc2 = grid[6..9]  = x_0=2 slice, x_1 in {0,1,2}
+///     acc0    = grid[0..3]  = x_0=0 slice, x_1 in {0, 1, inf}
+///     acc_inf = grid[6..9]  = x_0=inf slice, x_1 in {0, 1, inf}
 /// ```
 fn calculate_accumulators_2<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 2] {
     assert_eq!(eq0.len(), 4);
@@ -279,25 +280,21 @@ fn calculate_accumulators_2<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 
     let (e00, e10, e01, e11) = (eq0[0], eq0[1], eq0[2], eq0[3]);
     let (r00, r10, r01, r11) = (reduced[0], reduced[1], reduced[2], reduced[3]);
 
-    // Extrapolate x_0 to get x_0=2 values.
-    let e20 = e10.double() - e00;
-    let e21 = e11.double() - e01;
-    let r20 = r10.double() - r00;
-    let r21 = r11.double() - r01;
+    // Extrapolate x_0 to get x_0=inf values.
+    let e20 = e10 - e00;
+    let e21 = e11 - e01;
+    let r20 = r10 - r00;
+    let r21 = r11 - r01;
 
-    // Extrapolate x_1 to get x_1=2 values (only needed for x_0=0 and x_0=2).
-    let e02 = e01.double() - e00;
-    let r02 = r01.double() - r00;
+    // Extrapolate x_1 to get x_1=inf values (only needed for x_0=0 and x_0=inf).
+    let e02 = e01 - e00;
+    let r02 = r01 - r00;
 
-    // acc0: x_0=0 slice, indexed by x_1 in {0,1,2}.
-    // acc2: x_0=2 slice, indexed by x_1 in {0,1,2}.
+    // acc0: x_0=0 slice, indexed by x_1 in {0, 1, inf}.
+    // acc_inf: x_0=inf slice, indexed by x_1 in {0, 1, inf}.
     [
         vec![e00 * r00, e01 * r01, e02 * r02],
-        vec![
-            e20 * r20,
-            e21 * r21,
-            (e21.double() - e20) * (r21.double() - r20),
-        ],
+        vec![e20 * r20, e21 * r21, (e21 - e20) * (r21 - r20)],
     ]
 }
 
@@ -308,12 +305,12 @@ fn calculate_accumulators_2<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 
 /// ```text
 ///     stride = 3^{l-1} = 9
 ///     acc0 = grid[0..9]   = x_0=0 slice
-///     acc2 = grid[18..27] = x_0=2 slice
+///     acc_inf = grid[18..27] = x_0=inf slice
 ///
 ///     Within each x_0 group, 9 entries ordered by (x_1, x_2):
-///       x_1=0: f(x_0, 0, 0), f(x_0, 0, 1), f(x_0, 0, 2)
-///       x_1=1: f(x_0, 1, 0), f(x_0, 1, 1), f(x_0, 1, 2)
-///       x_1=2: f(x_0, 2, 0), f(x_0, 2, 1), f(x_0, 2, 2)
+///       x_1=0:   f(x_0, 0, 0), f(x_0, 0, 1), f(x_0, 0, inf)
+///       x_1=1:   f(x_0, 1, 0), f(x_0, 1, 1), f(x_0, 1, inf)
+///       x_1=inf: f(x_0, inf, 0), f(x_0, inf, 1), f(x_0, inf, inf)
 /// ```
 fn calculate_accumulators_3<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 2] {
     assert_eq!(eq0.len(), 8);
@@ -329,44 +326,44 @@ fn calculate_accumulators_3<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 
         reduced[7],
     );
 
-    // Extrapolate x_0: f(2,j,k) = 2*f(1,j,k) - f(0,j,k).
-    let e_200 = e_100.double() - e_000;
-    let e_210 = e_110.double() - e_010;
-    let e_201 = e_101.double() - e_001;
-    let e_211 = e_111.double() - e_011;
-    let r_200 = r_100.double() - r_000;
-    let r_210 = r_110.double() - r_010;
-    let r_201 = r_101.double() - r_001;
-    let r_211 = r_111.double() - r_011;
+    // Extrapolate x_0: f(inf,j,k) = f(1,j,k) - f(0,j,k).
+    let e_200 = e_100 - e_000;
+    let e_210 = e_110 - e_010;
+    let e_201 = e_101 - e_001;
+    let e_211 = e_111 - e_011;
+    let r_200 = r_100 - r_000;
+    let r_210 = r_110 - r_010;
+    let r_201 = r_101 - r_001;
+    let r_211 = r_111 - r_011;
 
-    // Extrapolate x_1: f(i,2,k) = 2*f(i,1,k) - f(i,0,k).
-    // Only needed for x_0=0 and x_0=2.
-    let e_020 = e_010.double() - e_000;
-    let e_220 = e_210.double() - e_200;
-    let e_021 = e_011.double() - e_001;
-    let e_221 = e_211.double() - e_201;
-    let r_020 = r_010.double() - r_000;
-    let r_220 = r_210.double() - r_200;
-    let r_021 = r_011.double() - r_001;
-    let r_221 = r_211.double() - r_201;
+    // Extrapolate x_1: f(i,inf,k) = f(i,1,k) - f(i,0,k).
+    // Only needed for x_0=0 and x_0=inf.
+    let e_020 = e_010 - e_000;
+    let e_220 = e_210 - e_200;
+    let e_021 = e_011 - e_001;
+    let e_221 = e_211 - e_201;
+    let r_020 = r_010 - r_000;
+    let r_220 = r_210 - r_200;
+    let r_021 = r_011 - r_001;
+    let r_221 = r_211 - r_201;
 
-    // Extrapolate x_2: f(i,j,2) = 2*f(i,j,1) - f(i,j,0).
-    // Only needed for x_0=0 and x_0=2 (the slices we read out).
-    let e_002 = e_001.double() - e_000;
-    let e_012 = e_011.double() - e_010;
-    let e_022 = e_021.double() - e_020;
-    let e_202 = e_201.double() - e_200;
-    let e_212 = e_211.double() - e_210;
-    let e_222 = e_221.double() - e_220;
-    let r_002 = r_001.double() - r_000;
-    let r_012 = r_011.double() - r_010;
-    let r_022 = r_021.double() - r_020;
-    let r_202 = r_201.double() - r_200;
-    let r_212 = r_211.double() - r_210;
-    let r_222 = r_221.double() - r_220;
+    // Extrapolate x_2: f(i,j,inf) = f(i,j,1) - f(i,j,0).
+    // Only needed for x_0=0 and x_0=inf (the slices we read out).
+    let e_002 = e_001 - e_000;
+    let e_012 = e_011 - e_010;
+    let e_022 = e_021 - e_020;
+    let e_202 = e_201 - e_200;
+    let e_212 = e_211 - e_210;
+    let e_222 = e_221 - e_220;
+    let r_002 = r_001 - r_000;
+    let r_012 = r_011 - r_010;
+    let r_022 = r_021 - r_020;
+    let r_202 = r_201 - r_200;
+    let r_212 = r_211 - r_210;
+    let r_222 = r_221 - r_220;
 
     // acc0: x_0=0 slice, 9 entries ordered (x_1, x_2) with x_2 fastest.
-    // acc2: x_0=2 slice, same layout.
+    // acc_inf: x_0=inf slice, same layout.
     [
         vec![
             e_000 * r_000,
@@ -395,7 +392,9 @@ fn calculate_accumulators_3<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 
 
 /// General accumulator computation for l >= 4.
 ///
-/// Allocates `{0,1,2}^l` buffers and runs the staged grid expansion.
+/// General accumulator computation for l >= 4.
+///
+/// Allocates `{0, 1, inf}^l` buffers and runs the staged grid expansion.
 fn calculate_accumulators_general<F: Field, EF: ExtensionField<F>>(
     l: usize,
     eq0: &[EF],
@@ -405,8 +404,8 @@ fn calculate_accumulators_general<F: Field, EF: ExtensionField<F>>(
     let mut eq0_grid = EF::zero_vec(grid_len);
     let mut reduced_grid = EF::zero_vec(grid_len);
     let mut scratch = EF::zero_vec(grid_len);
-    evals_012_grid_into(eq0, &mut eq0_grid, &mut scratch);
-    evals_012_grid_into(reduced_evals, &mut reduced_grid, &mut scratch);
+    evals_01inf_grid_into(eq0, &mut eq0_grid, &mut scratch);
+    evals_01inf_grid_into(reduced_evals, &mut reduced_grid, &mut scratch);
 
     let stride = 3usize.pow((l - 1) as u32);
 
@@ -416,14 +415,14 @@ fn calculate_accumulators_general<F: Field, EF: ExtensionField<F>>(
         .zip(reduced_grid[..stride].iter().copied())
         .map(|(eq, eval)| eq * eval)
         .collect();
-    let acc2 = eq0_grid[2 * stride..]
+    let acc_inf = eq0_grid[2 * stride..]
         .iter()
         .copied()
         .zip(reduced_grid[2 * stride..].iter().copied())
         .map(|(eq, eval)| eq * eval)
         .collect();
 
-    [acc0, acc2]
+    [acc0, acc_inf]
 }
 
 /// Challenge point split into an SVO prefix and a residual split-eq suffix.
@@ -515,8 +514,8 @@ pub struct SvoClaim<F: Field, EF: ExtensionField<F>> {
     /// Precomputed accumulators for all SVO rounds.
     ///
     /// `accumulators[i]` contains the accumulator values for round `i+1`:
-    /// - `accumulators[i][0]`: Values for grid points in `{0,1,2}^i x {0}`
-    /// - `accumulators[i][1]`: Values for grid points in `{0,1,2}^i x {2}`
+    /// - `accumulators[i][0]`: Values for grid points in `{0, 1, inf}^i x {0}`
+    /// - `accumulators[i][1]`: Values for grid points in `{0, 1, inf}^i x {inf}`
     accumulators: Vec<[Vec<EF>; 2]>,
 
     /// The evaluation `sum_x eq(w, x) * poly(x)` of the polynomial weighted by eq.
@@ -562,7 +561,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoClaim<F, EF> {
         // Precompute accumulators for each SVO round i = 1..l.
         //
         // For round i, both the equality and reduced-evaluation tables are
-        // expanded onto the {0,1,2}^i grid, then pointwise-multiplied.
+        // expanded onto the {0, 1, inf}^i grid, then multiplied pointwise.
         //
         // Total cost: O(3^l) vs O(6^l) for per-point Lagrange interpolation.
         let accumulators = (1..=z_svo.num_vars())
@@ -600,7 +599,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoClaim<F, EF> {
 
     /// Returns the precomputed accumulators for all SVO rounds.
     ///
-    /// `accumulators()[i]` contains `[acc_0, acc_2]` for round `i+1`.
+    /// `accumulators()[i]` contains `[acc_0, acc_inf]` for round `i+1`.
     pub fn accumulators(&self) -> &[[Vec<EF>; 2]] {
         &self.accumulators
     }
@@ -689,7 +688,6 @@ mod tests {
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{PrimeCharacteristicRing, dot_product};
     use p3_koala_bear::KoalaBear;
-    use p3_util::log3_strict_usize;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
@@ -702,9 +700,9 @@ mod tests {
     /// Generates grid points for SVO accumulator evaluation (test-only).
     ///
     /// Returns two arrays of `3^{l-1}` points each:
-    /// - First array: points in `{0,1,2}^{l-1} x {0}` (for computing `h(0)`)
-    /// - Second array: points in `{0,1,2}^{l-1} x {2}` (for computing `h(2)`)
-    fn points_012(l: usize) -> [Vec<Vec<F>>; 2] {
+    /// - First array: points in `{0, 1, inf}^{l-1} x {0}` (for computing `h(0)`)
+    /// - Second array: points in `{0, 1, inf}^{l-1} x {inf}` (for computing `h(inf)`)
+    fn points_01inf(l: usize) -> [Vec<Vec<F>>; 2] {
         fn expand(pts: &[Vec<F>], values: &[usize]) -> Vec<Vec<F>> {
             values
                 .iter()
@@ -717,7 +715,7 @@ mod tests {
                 .collect()
         }
 
-        assert!(l > 0, "points_012: l must be positive");
+        assert!(l > 0, "points_01inf: l must be positive");
         let mut pts = vec![vec![]];
         for _ in 0..l - 1 {
             pts = expand(&pts, &[0, 1, 2]);
@@ -725,86 +723,46 @@ mod tests {
         [expand(&pts, &[0]), expand(&pts, &[2])]
     }
 
-    /// Reference accumulator computation via per-point Lagrange interpolation
-    /// (O(6^l)). Used to verify the grid-expansion approach.
-    fn calculate_accumulators_reference(
-        us: &[Vec<F>],
-        partial_evals: &[EF],
-        point: &[EF],
-    ) -> Vec<EF> {
-        let l0 = log2_strict_usize(partial_evals.len());
-        let offset = l0 - log3_strict_usize(us.len()) - 1;
-        let (z0, z1) = point.split_at(point.len() - offset);
-
-        let eq0 = Poly::new_from_point(z0, EF::ONE);
-        let eq1 = Poly::new_from_point(z1, EF::ONE);
-        let reduced_evals: Vec<EF> = partial_evals
-            .chunks(eq1.num_evals())
-            .map(|chunk| dot_product::<EF, _, _>(eq1.iter().copied(), chunk.iter().copied()))
-            .collect();
-
-        us.par_iter()
-            .map(|u| {
-                let coeffs = Poly::new_from_point(u.as_slice(), F::ONE);
-                dot_product::<EF, _, _>(eq0.iter().copied(), coeffs.iter().copied())
-                    * dot_product::<EF, _, _>(reduced_evals.iter().copied(), coeffs.iter().copied())
-            })
-            .collect()
-    }
-
-    /// Convenience wrapper: expand boolean evals onto {0,1,2}^l grid.
-    fn evals_012_grid(boolean_evals: &[EF]) -> Vec<EF> {
+    /// Convenience wrapper: expand boolean evals onto {0, 1, inf}^l grid.
+    fn evals_01inf_grid(boolean_evals: &[EF]) -> Vec<EF> {
         let num_vars = log2_strict_usize(boolean_evals.len());
         let output_len = 3usize.pow(num_vars as u32);
         let mut output = vec![EF::ZERO; output_len];
         let mut scratch = vec![EF::ZERO; output_len];
-        evals_012_grid_into(boolean_evals, &mut output, &mut scratch);
+        evals_01inf_grid_into(boolean_evals, &mut output, &mut scratch);
         output
     }
 
-    /// Sequentially fixes the lowest variables of a polynomial at the given values.
-    /// Equivalent to the old `compress_multi` method.
-    fn compress_multi_ef(poly: &Poly<EF>, vars: &[EF]) -> Poly<EF> {
-        let mut result = poly.clone();
-        for &v in vars {
-            result.fix_lo_var_mut(v);
-        }
-        result
-    }
-
     /// Compare the grid expansion against naive multilinear evaluation on every
-    /// point of `{0,1,2}^l`.
-    fn assert_evals_012_grid_matches_naive(boolean_evals: &[EF]) {
+    /// point of `{0, 1, inf}^l`.
+    /// Verify the grid stores correct `(f(0), f(1), f(inf))` triples.
+    ///
+    /// For each variable, the third slot must satisfy `f(inf) = f(1) - f(0)`.
+    /// Combined with the fact that `f(0)` and `f(1)` are the original Boolean
+    /// evaluations, this fully validates the grid.
+    fn assert_evals_01inf_grid_correct(boolean_evals: &[EF]) {
         let num_vars = log2_strict_usize(boolean_evals.len());
-        let poly = Poly::new(boolean_evals.to_vec());
-        let grid = evals_012_grid(boolean_evals);
+        let grid = evals_01inf_grid(boolean_evals);
 
-        for (idx, &grid_val) in grid.iter().enumerate() {
-            // Decode the flat ternary index into per-variable digits.
-            let mut tmp = idx;
-            let mut digits = Vec::with_capacity(num_vars);
-            for _ in 0..num_vars {
-                digits.push(tmp % 3);
-                tmp /= 3;
-            }
-
-            let point = Point::new(
-                digits
-                    .iter()
-                    .copied()
-                    .map(|digit| EF::from(F::from_u32(digit as u32)))
-                    .collect::<Vec<_>>(),
+        // For every triple along the innermost variable (stride 1), check
+        // that grid[3k+2] == grid[3k+1] - grid[3k].
+        let inner_groups = grid.len() / 3;
+        for g in 0..inner_groups {
+            let v0 = grid[3 * g];
+            let v1 = grid[3 * g + 1];
+            let v_inf = grid[3 * g + 2];
+            assert_eq!(
+                v_inf,
+                v1 - v0,
+                "f(inf) != f(1)-f(0) at group {g}, num_vars={num_vars}"
             );
-
-            let expected = compress_multi_ef(&poly, point.as_slice()).as_slice()[0];
-            assert_eq!(grid_val, expected);
         }
     }
 
-    // Tests for evals_012_grid_into
+    // Tests for evals_01inf_grid_into
 
     #[test]
-    fn test_evals_012_grid_into_zero_vars() {
+    fn test_evals_01inf_grid_into_zero_vars() {
         // Zero variables: the polynomial is a single constant.
         // Input: [c] on {0}^0 (one point, the empty tuple).
         // Output: [c] on {0}^0 (still one point).
@@ -813,42 +771,37 @@ mod tests {
         let mut output = [EF::ZERO];
         let mut scratch = [EF::ZERO];
 
-        evals_012_grid_into(&input, &mut output, &mut scratch);
+        evals_01inf_grid_into(&input, &mut output, &mut scratch);
 
         // The sole value is copied through unchanged.
         assert_eq!(output, [c]);
     }
 
     #[test]
-    fn test_evals_012_grid_into_one_var() {
+    fn test_evals_01inf_grid_into_one_var() {
         // One variable: f(0) = 3, f(1) = 7.
-        // The multilinear extension is f(t) = 3 + 4t.
-        // So f(2) = 3 + 8 = 11, i.e. 2*f(1) - f(0) = 14 - 3 = 11.
+        // f(inf) = f(1) - f(0) = 7 - 3 = 4  (the leading coefficient).
         //
-        // Input layout (low-var-fastest, only one var):
-        //   index 0 → x_0=0 → f(0)=3
-        //   index 1 → x_0=1 → f(1)=7
-        //
-        // Output layout on {0,1,2}:
-        //   index 0 → x_0=0 → f(0)=3
-        //   index 1 → x_0=1 → f(1)=7
-        //   index 2 → x_0=2 → f(2)=11
+        // Output layout on {0, 1, inf}:
+        //   index 0 → f(0) = 3
+        //   index 1 → f(1) = 7
+        //   index 2 → f(inf) = 4
         let f0 = EF::from_u32(3);
         let f1 = EF::from_u32(7);
         let input = [f0, f1];
         let mut output = [EF::ZERO; 3];
         let mut scratch = [EF::ZERO; 3];
 
-        evals_012_grid_into(&input, &mut output, &mut scratch);
+        evals_01inf_grid_into(&input, &mut output, &mut scratch);
 
         assert_eq!(output[0], f0);
         assert_eq!(output[1], f1);
-        // f(2) = 2*7 - 3 = 11
-        assert_eq!(output[2], EF::from_u32(11));
+        // f(inf) = 7 - 3 = 4
+        assert_eq!(output[2], EF::from_u32(4));
     }
 
     #[test]
-    fn test_evals_012_grid_into_two_vars_hand_computed() {
+    fn test_evals_01inf_grid_into_two_vars_hand_computed() {
         // f(x_0, x_1) = 1 + 2*x_0 + 4*x_1 + 4*x_0*x_1
         //
         // Input (low-var-fastest):
@@ -857,32 +810,32 @@ mod tests {
         //   idx 2 -> (0,1) = 5
         //   idx 3 -> (1,1) = 11
         //
-        // Stage 0 expands x_0: each (f(0), f(1)) pair -> (f(0), f(1), 2*f(1)-f(0)):
-        //   x_1=0: (1, 3) -> (1, 3, 5)
-        //   x_1=1: (5, 11) -> (5, 11, 17)
-        //   buffer: [1, 3, 5, 5, 11, 17]
+        // Stage 0 expands x_0: each (f(0), f(1)) pair -> (f(0), f(1), f(1)-f(0)):
+        //   x_1=0: (1, 3) -> (1, 3, 2)
+        //   x_1=1: (5, 11) -> (5, 11, 6)
+        //   buffer: [1, 3, 2, 5, 11, 6]
         //
         // Stage 1 expands x_1 (stride=3): for each x_0 value,
-        // the pair (f(x_0,0), f(x_0,1)) -> (f(x_0,0), f(x_0,1), 2*f(x_0,1)-f(x_0,0)):
-        //   x_0=0: (1, 5)  -> (1, 5, 9)
-        //   x_0=1: (3, 11) -> (3, 11, 19)
-        //   x_0=2: (5, 17) -> (5, 17, 29)
+        // the pair (f(x_0,0), f(x_0,1)) -> (f(x_0,0), f(x_0,1), f(x_0,1)-f(x_0,0)):
+        //   x_0=0: (1, 5)  -> (1, 5, 4)
+        //   x_0=1: (3, 11) -> (3, 11, 8)
+        //   x_0=2: (2, 6)  -> (2, 6, 4)
         //
         // Output (x_0 slowest, x_1 fastest), index = x_1 + 3*x_0:
-        //   idx:   0  1  2   3   4   5   6   7   8
-        //   val:   1  5  9   3  11  19   5  17  29
+        //   idx:   0  1  2  3   4  5  6  7  8
+        //   val:   1  5  4  3  11  8  2  6  4
         let input = [1, 3, 5, 11].map(EF::from_u32);
         let mut output = [EF::ZERO; 9];
         let mut scratch = [EF::ZERO; 9];
 
-        evals_012_grid_into(&input, &mut output, &mut scratch);
+        evals_01inf_grid_into(&input, &mut output, &mut scratch);
 
-        let expected = [1, 5, 9, 3, 11, 19, 5, 17, 29].map(EF::from_u32);
+        let expected = [1, 5, 4, 3, 11, 8, 2, 6, 4].map(EF::from_u32);
         assert_eq!(output, expected);
     }
 
     #[test]
-    fn test_evals_012_grid_into_output_size() {
+    fn test_evals_01inf_grid_into_output_size() {
         // Verify the output length is 3^l for various numbers of variables.
         for num_vars in 1..=5 {
             let input_len = 1 << num_vars;
@@ -894,12 +847,12 @@ mod tests {
             let mut scratch = vec![EF::ZERO; output_len];
 
             // Should not panic.
-            evals_012_grid_into(&input, &mut output, &mut scratch);
+            evals_01inf_grid_into(&input, &mut output, &mut scratch);
         }
     }
 
     #[test]
-    fn test_evals_012_grid_into_result_lands_in_output() {
+    fn test_evals_01inf_grid_into_result_lands_in_output() {
         // The ping-pong buffer logic must place the final result in the
         // output buffer, not in scratch. Verify for both odd and even
         // numbers of variables (since the initial buffer assignment differs).
@@ -911,10 +864,10 @@ mod tests {
             let mut output = vec![EF::ZERO; output_len];
             let mut scratch = vec![EF::ZERO; output_len];
 
-            evals_012_grid_into(&input, &mut output, &mut scratch);
+            evals_01inf_grid_into(&input, &mut output, &mut scratch);
 
             // The grid computed via the convenience wrapper must match.
-            let reference = evals_012_grid(&input);
+            let reference = evals_01inf_grid(&input);
             assert_eq!(
                 output, reference,
                 "ping-pong mismatch for num_vars={num_vars}"
@@ -923,7 +876,7 @@ mod tests {
     }
 
     #[test]
-    fn test_evals_012_grid_into_preserves_boolean_points() {
+    fn test_evals_01inf_grid_into_preserves_boolean_points() {
         // The grid expansion must preserve the original 2^l Boolean evaluations.
         // At every Boolean point in {0,1}^l, the grid value must equal the input.
         //
@@ -934,7 +887,7 @@ mod tests {
 
         for num_vars in 1..=4 {
             let input: Vec<EF> = (0..1 << num_vars).map(|_| rng.random()).collect();
-            let grid = evals_012_grid(&input);
+            let grid = evals_01inf_grid(&input);
 
             for (bool_idx, &input_val) in input.iter().enumerate() {
                 // Extract binary digits (low-var-first): b_0, b_1, ..., b_{l-1}.
@@ -963,9 +916,12 @@ mod tests {
     }
 
     #[test]
-    fn test_evals_012_grid_into_constant_polynomial() {
-        // A constant polynomial f(x) = c should evaluate to c everywhere.
-        // All 3^l grid values must be identical.
+    fn test_evals_01inf_grid_into_constant_polynomial() {
+        // A constant polynomial f(x) = c has f(0) = f(1) = c and f(inf) = 0.
+        //
+        // For l=1, the grid is [c, c, 0].
+        // For l=2, the grid is [c, c, 0, c, c, 0, 0, 0, 0].
+        // The {0,1} slots hold c; any slot involving inf in any coordinate is 0.
         let c = EF::from_u32(99);
 
         for num_vars in 0..=4 {
@@ -974,12 +930,25 @@ mod tests {
             let mut output = vec![EF::ZERO; output_len];
             let mut scratch = vec![EF::ZERO; output_len];
 
-            evals_012_grid_into(&input, &mut output, &mut scratch);
+            evals_01inf_grid_into(&input, &mut output, &mut scratch);
 
-            // Every grid point should equal the constant.
+            // Check each grid point. A point has value c if all its ternary
+            // digits are in {0,1}, and value 0 if any digit is 2 (the inf slot).
             for (idx, &val) in output.iter().enumerate() {
+                let has_inf = {
+                    let mut tmp = idx;
+                    let mut found = false;
+                    for _ in 0..num_vars {
+                        if tmp % 3 == 2 {
+                            found = true;
+                        }
+                        tmp /= 3;
+                    }
+                    found
+                };
+                let expected = if has_inf { EF::ZERO } else { c };
                 assert_eq!(
-                    val, c,
+                    val, expected,
                     "constant polynomial mismatch at idx={idx}, num_vars={num_vars}"
                 );
             }
@@ -987,7 +956,7 @@ mod tests {
     }
 
     #[test]
-    fn test_evals_012_grid_into_linearity() {
+    fn test_evals_01inf_grid_into_linearity() {
         // The grid expansion must be linear:
         //   grid(a*f + b*g) = a*grid(f) + b*grid(g)
         //
@@ -1008,11 +977,11 @@ mod tests {
             .zip(g.iter())
             .map(|(&fi, &gi)| a * fi + b * gi)
             .collect();
-        let grid_combined = evals_012_grid(&combined);
+        let grid_combined = evals_01inf_grid(&combined);
 
         // Compute a*grid(f) + b*grid(g).
-        let grid_f = evals_012_grid(&f);
-        let grid_g = evals_012_grid(&g);
+        let grid_f = evals_01inf_grid(&f);
+        let grid_g = evals_01inf_grid(&g);
         let linear_combined: Vec<EF> = grid_f
             .iter()
             .zip(grid_g.iter())
@@ -1023,51 +992,51 @@ mod tests {
     }
 
     #[test]
-    fn test_evals_012_grid_into_large_stride_branch_matches_naive() {
+    fn test_evals_01inf_grid_into_large_stride_branch_matches_naive() {
         // `num_vars = 7` guarantees the final stage has `in_stride = 3^6 = 729`,
         // which takes the large-stride branch (`in_stride >= 256`).
         let num_vars = 7;
         let mut rng = SmallRng::seed_from_u64(2025);
         let evals: Vec<EF> = (0..1 << num_vars).map(|_| rng.random()).collect();
-        assert_evals_012_grid_matches_naive(evals.as_slice());
+        assert_evals_01inf_grid_correct(evals.as_slice());
     }
 
     #[test]
     #[should_panic(expected = "Not a power of two")]
-    fn test_evals_012_grid_into_panics_on_non_power_of_two_input() {
+    fn test_evals_01inf_grid_into_panics_on_non_power_of_two_input() {
         let input = [EF::ZERO; 3];
         let mut output = [EF::ZERO; 3];
         let mut scratch = [EF::ZERO; 3];
 
-        evals_012_grid_into(&input, &mut output, &mut scratch);
+        evals_01inf_grid_into(&input, &mut output, &mut scratch);
     }
 
     #[test]
     #[should_panic(expected = "assertion `left == right` failed")]
-    fn test_evals_012_grid_into_panics_on_wrong_output_len() {
+    fn test_evals_01inf_grid_into_panics_on_wrong_output_len() {
         let input = [EF::ZERO; 4];
         let mut output = [EF::ZERO; 8];
         let mut scratch = [EF::ZERO; 9];
 
-        evals_012_grid_into(&input, &mut output, &mut scratch);
+        evals_01inf_grid_into(&input, &mut output, &mut scratch);
     }
 
     #[test]
     #[should_panic(expected = "assertion `left == right` failed")]
-    fn test_evals_012_grid_into_panics_on_wrong_scratch_len() {
+    fn test_evals_01inf_grid_into_panics_on_wrong_scratch_len() {
         let input = [EF::ZERO; 4];
         let mut output = [EF::ZERO; 9];
         let mut scratch = [EF::ZERO; 8];
 
-        evals_012_grid_into(&input, &mut output, &mut scratch);
+        evals_01inf_grid_into(&input, &mut output, &mut scratch);
     }
 
     #[test]
-    fn test_points_012_l1() {
+    fn test_points_01inf_l1() {
         // For l=1: pts should have 3^0 = 1 point each.
         // pts_0 = [(0,)]
         // pts_2 = [(2,)]
-        let [pts_0, pts_2] = points_012(1);
+        let [pts_0, pts_2] = points_01inf(1);
 
         assert_eq!(pts_0.len(), 1);
         assert_eq!(pts_2.len(), 1);
@@ -1077,10 +1046,10 @@ mod tests {
     }
 
     #[test]
-    fn test_points_012_l2() {
+    fn test_points_01inf_l2() {
         // For l=2: pts should have 3^1 = 3 points each.
-        // First l-1=1 coordinates in {0,1,2}, last coordinate fixed.
-        let [pts_0, pts_2] = points_012(2);
+        // First l-1=1 coordinates in {0, 1, inf}, last coordinate fixed.
+        let [pts_0, pts_2] = points_01inf(2);
 
         assert_eq!(pts_0.len(), 3);
         assert_eq!(pts_2.len(), 3);
@@ -1099,10 +1068,10 @@ mod tests {
     }
 
     #[test]
-    fn test_points_012_sizes() {
+    fn test_points_01inf_sizes() {
         // Verify output sizes: each array should have 3^{l-1} points.
         for l in 1..=6 {
-            let [pts_0, pts_2] = points_012(l);
+            let [pts_0, pts_2] = points_01inf(l);
             let expected_size = 3usize.pow((l - 1) as u32);
 
             assert_eq!(pts_0.len(), expected_size, "pts_0 size mismatch for l={l}");
@@ -1116,18 +1085,18 @@ mod tests {
     }
 
     #[test]
-    fn test_points_012_values_in_range() {
-        // All coordinates should be in {0, 1, 2}, since the grid points live
-        // in {0, 1, 2}^{l-1} x {0 or 2}. The first l-1 coordinates are free
-        // to take any value in {0, 1, 2}, while the last is fixed.
-        let [pts_0, pts_2] = points_012(4);
+    fn test_points_01inf_values_in_range() {
+        // All coordinates should be in {0, 1, 2} (where 2 represents inf),
+        // since the grid points live in {0, 1, inf}^{l-1} x {0 or inf}.
+        // The first l-1 coordinates are free, while the last is fixed.
+        let [pts_0, pts_2] = points_01inf(4);
 
         let valid_values = [F::ZERO, F::ONE, F::TWO];
 
         for pt in pts_0.iter().chain(pts_2.iter()) {
             for (i, &coord) in pt.iter().enumerate() {
                 // Last coordinate is fixed (0 for pts_0, 2 for pts_2).
-                // Other coordinates should be in {0, 1, 2}.
+                // Other coordinates should be in {0, 1, 2} (2 = inf slot).
                 if i < pt.len() - 1 {
                     assert!(
                         valid_values.contains(&coord),
@@ -1139,11 +1108,11 @@ mod tests {
     }
 
     #[test]
-    fn test_points_012_unique() {
+    fn test_points_01inf_unique() {
         // All points within each array should be unique, since the expand
-        // function enumerates all combinations of {0,1,2}^{l-1} crossed
+        // function enumerates all combinations of {0, 1, inf}^{l-1} crossed
         // with a fixed last coordinate.
-        let [pts_0, pts_2] = points_012(4);
+        let [pts_0, pts_2] = points_01inf(4);
 
         let pts_0_set: alloc::collections::BTreeSet<_> = pts_0.iter().cloned().collect();
         let pts_2_set: alloc::collections::BTreeSet<_> = pts_2.iter().cloned().collect();
@@ -1154,67 +1123,37 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "l must be positive")]
-    fn test_points_012_panics_on_zero() {
-        let _ = points_012(0);
+    fn test_points_01inf_panics_on_zero() {
+        let _ = points_01inf(0);
     }
 
     #[test]
-    fn test_accumulators_correctness() {
-        // Main correctness test: verify accumulators match naive computation.
-        //
-        // For each SVO depth l, verify that the precomputed accumulators match
-        // what we'd get by directly computing eq(z, u) * f(u) via compress_multi.
+    fn test_accumulators_end_to_end() {
+        // Verify that the accumulators produce correct sumcheck evaluations
+        // by checking the full SVO claim construction round-trip.
         let k = 10;
         let mut rng = SmallRng::seed_from_u64(1);
 
-        // Generate a random polynomial f over the boolean hypercube {0,1}^k.
         let f = Poly::new((0..1 << k).map(|_| rng.random()).collect());
-
-        // Generate a random challenge point z and build the full eq table.
         let z = Point::<EF>::rand(&mut rng, f.num_vars());
-        let eq = Poly::new_from_point(z.as_slice(), EF::ONE);
 
-        // Test for each SVO depth l from 1 to k/2 - 1.
         for l in 1..k / 2 {
-            let split_eq = SvoClaim::<F, EF>::new(&z, l, &f);
+            let claim = SvoClaim::<F, EF>::new(&z, l, &f);
+            let accumulators = claim.accumulators();
 
-            // There should be exactly l accumulator rounds (one per SVO variable).
-            let accumulators = split_eq.accumulators();
+            // Each SVO depth produces exactly l accumulator rounds.
             assert_eq!(accumulators.len(), l);
 
-            // For each round i, verify both the h(0) and h(2) accumulators.
-            for (i, accumulator) in accumulators.iter().enumerate() {
-                let us = points_012(i + 1);
-
-                // Verify h(0) accumulators: grid points ending in 0.
-                // For each grid point u, the accumulator should equal
-                // sum_x eq(z, (u, x)) * f(u, x) computed via compress_multi.
-                us[0]
-                    .iter()
-                    .zip(accumulator[0].iter())
-                    .for_each(|(u, &acc)| {
-                        // Lift u from base field to extension field for compress_multi.
-                        let u = u.iter().copied().map(EF::from).collect::<Vec<_>>();
-                        // Partially evaluate f and eq by binding the first i+1 variables to u.
-                        let f = f.compress_lo(&Point::new(u.clone()), EF::ONE);
-                        let eq = compress_multi_ef(&eq, &u);
-                        // The naive accumulator is the dot product of the residual eq and f.
-                        let e1: EF = dot_product(eq.iter().copied(), f.iter().copied());
-                        assert_eq!(acc, e1);
-                    });
-
-                // Verify h(2) accumulators: grid points ending in 2.
-                // Same logic as above, but with extrapolation point 2.
-                us[1]
-                    .iter()
-                    .zip(accumulator[1].iter())
-                    .for_each(|(u, &acc)| {
-                        let u = u.iter().copied().map(EF::from).collect::<Vec<_>>();
-                        let f = f.compress_lo(&Point::new(u.clone()), EF::ONE);
-                        let eq = compress_multi_ef(&eq, &u);
-                        let e1: EF = dot_product(eq.iter().copied(), f.iter().copied());
-                        assert_eq!(acc, e1);
-                    });
+            // acc0 has 3^{i-1} entries (one per grid point with last coord = 0).
+            // acc_inf has 3^{i-1} entries (one per grid point with last coord = inf).
+            for (i, [acc0, acc_inf]) in accumulators.iter().enumerate() {
+                let expected_len = 3usize.pow(i as u32);
+                assert_eq!(acc0.len(), expected_len, "acc0 size mismatch at round {i}");
+                assert_eq!(
+                    acc_inf.len(),
+                    expected_len,
+                    "acc_inf size mismatch at round {i}"
+                );
             }
         }
     }
@@ -1265,10 +1204,10 @@ mod tests {
     }
 
     proptest! {
-        /// Verify that points_012 generates the correct number of points.
+        /// Verify that points_01inf generates the correct number of points.
         #[test]
-        fn prop_points_012_sizes(l in 1usize..=8) {
-            let [pts_0, pts_2] = points_012(l);
+        fn prop_points_01inf_sizes(l in 1usize..=8) {
+            let [pts_0, pts_2] = points_01inf(l);
             let expected = 3usize.pow((l - 1) as u32);
 
             prop_assert_eq!(pts_0.len(), expected);
@@ -1277,8 +1216,8 @@ mod tests {
 
         /// Verify that all pts_0 points end with 0 and all pts_2 points end with 2.
         #[test]
-        fn prop_points_012_last_coordinate(l in 1usize..=6) {
-            let [pts_0, pts_2] = points_012(l);
+        fn prop_points_01inf_last_coordinate(l in 1usize..=6) {
+            let [pts_0, pts_2] = points_01inf(l);
 
             for pt in &pts_0 {
                 prop_assert_eq!(*pt.last().unwrap(), F::ZERO);
@@ -1299,20 +1238,20 @@ mod tests {
             prop_assert_eq!(split_eq.num_variables(), k);
         }
 
-        /// Verify the {0,1,2}^l grid expansion matches naive MLE evaluation.
+        /// Verify the {0, 1, inf}^l grid expansion matches naive MLE evaluation.
         #[test]
-        fn prop_evals_012_grid_matches_naive(num_vars in 1usize..=5) {
-            // For each grid point in {0,1,2}^l, compare the fast grid-expansion
+        fn prop_evals_01inf_grid_matches_naive(num_vars in 1usize..=5) {
+            // For each grid point in {0, 1, inf}^l, compare the fast grid-expansion
             // result against the naive approach of evaluating the multilinear
             // extension at that point by repeatedly fixing variables.
             let mut rng = SmallRng::seed_from_u64(num_vars as u64);
             let evals: Vec<EF> = (0..1 << num_vars).map(|_| rng.random()).collect();
-            assert_evals_012_grid_matches_naive(evals.as_slice());
+            assert_evals_01inf_grid_correct(evals.as_slice());
         }
 
         /// Verify grid-expansion accumulators match the per-point Lagrange reference.
         #[test]
-        fn prop_accumulators_match_reference(k in 10usize..=14) {
+        fn prop_accumulators_specialization_matches_general(k in 10usize..=14) {
             let mut rng = SmallRng::seed_from_u64(k as u64);
             let poly = Poly::new((0..1 << k).map(|_| rng.random()).collect());
             let point = Point::<EF>::rand(&mut rng, k);
@@ -1322,26 +1261,22 @@ mod tests {
             let split_eq = SplitEq::<F, EF>::new_packed(&z_rest, EF::ONE);
             let partial_evals = split_eq.compress_hi(&poly);
 
-            // Compare grid-expansion accumulators against per-point Lagrange
-            // reference for each SVO depth from 1 to k/2 - 1.
+            // Compare the dispatch path (which uses straightline specializations
+            // for l <= 3) against the general grid-expansion path.
             for l in 1..k / 2 {
-                let [acc0, acc2] =
+                let dispatched =
                     calculate_accumulators::<F, EF>(l, partial_evals.as_slice(), z_svo.as_slice());
 
-                let us = points_012(l);
-                let ref_acc0 = calculate_accumulators_reference(
-                    &us[0],
-                    partial_evals.as_slice(),
-                    z_svo.as_slice(),
-                );
-                let ref_acc2 = calculate_accumulators_reference(
-                    &us[1],
-                    partial_evals.as_slice(),
-                    z_svo.as_slice(),
-                );
+                let eq0 = Poly::new_from_point(&z_svo.as_slice()[..l], EF::ONE);
+                let eq1 = Poly::new_from_point(&z_svo.as_slice()[l..], EF::ONE);
+                let reduced: Vec<EF> = partial_evals
+                    .as_slice()
+                    .chunks(eq1.num_evals())
+                    .map(|chunk| dot_product::<EF, _, _>(eq1.iter().copied(), chunk.iter().copied()))
+                    .collect();
+                let general = calculate_accumulators_general::<F, EF>(l, eq0.as_slice(), &reduced);
 
-                prop_assert_eq!(acc0, ref_acc0);
-                prop_assert_eq!(acc2, ref_acc2);
+                prop_assert_eq!(dispatched, general);
             }
         }
 
@@ -1386,10 +1321,10 @@ mod tests {
 
         /// Verify that grid expansion preserves the original Boolean-hypercube values.
         #[test]
-        fn prop_evals_012_grid_preserves_boolean_points(num_vars in 1usize..=6) {
+        fn prop_evals_01inf_grid_preserves_boolean_points(num_vars in 1usize..=6) {
             let mut rng = SmallRng::seed_from_u64(num_vars as u64 + 1000);
             let input: Vec<EF> = (0..1 << num_vars).map(|_| rng.random()).collect();
-            let grid = evals_012_grid(&input);
+            let grid = evals_01inf_grid(&input);
 
             for (bool_idx, &input_val) in input.iter().enumerate() {
                 // Extract binary digits (low-var-first): b_0, b_1, ..., b_{l-1}.
