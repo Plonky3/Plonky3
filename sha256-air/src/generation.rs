@@ -127,11 +127,10 @@ fn generate_trace_row_for_compression<F: PrimeField64>(
         let w_t = tmp.wrapping_add(s0).wrapping_add(w_m16);
         w_words[t] = w_t;
 
-        // Commit every committed value for step `t`.
+        // Commit every auxiliary value for step `t`.
         //
-        // The bit decomposition of `W[t]` is the *only* representation
-        // carried in the trace. Its packed form is reconstructed on the fly
-        // from the bits whenever an add constraint needs it.
+        // `W[t]`: bit form only — the AIR re-packs from bits when an add
+        // constraint needs the packed view.
         row.w[t] = u32_to_bits_le(w_t);
         row.sched_sigma0[i] = u32_to_limbs(s0).map(F::from_u16);
         row.sched_sigma1[i] = u32_to_limbs(s1).map(F::from_u16);
@@ -180,18 +179,15 @@ fn generate_trace_row_for_compression<F: PrimeField64>(
 
         // Shifted slots for the next round.
         //
-        // The spec defines `T2 = big_sigma0 + Maj` and `new_a = T1 + T2`;
-        // we fold the two additions into a single three-term sum inside the
-        // AIR, so the intermediate `T2` value is computed here purely for
-        // the sake of the reference (it is not committed).
+        // Mirrors the fused AIR add: `new_a = T_1 + big_sigma_0 + maj`
+        // replaces the spec's two-step `T_2 = big_sigma_0 + maj; new_a = T_1 + T_2`.
         let new_a = t1.wrapping_add(sigma0_a).wrapping_add(maj);
         let new_e = d.wrapping_add(t1);
 
         // Commit every packed intermediate for this round.
         //
-        // The "new_a / new_e" values are not committed as packed columns —
-        // they land in bit form in the next chain slot below, and the AIR
-        // rebuilds the packed view on demand via `pack_word`.
+        // `new_a` / `new_e`: bit form only — written into the next chain
+        // slot below. The AIR re-packs from those bits on demand.
         round.sigma1_e = u32_to_limbs(sigma1_e).map(F::from_u16);
         round.ch = u32_to_limbs(ch).map(F::from_u16);
         round.tmp1 = u32_to_limbs(tmp1).map(F::from_u16);

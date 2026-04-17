@@ -22,12 +22,11 @@
 //!
 //! # Avoiding redundant packed columns
 //!
-//! Whenever an addition's *output* already has a committed bit decomposition
-//! (for example the next entry in the working-variable chain), the packed
-//! value can be written directly into the add-constraint as a sum of those
-//! bits instead of committing a separate packed column. The generalized
-//! add helpers in `air.rs` accept an expression in the output slot, so no
-//! bridge constraint is required.
+//! Values whose bits are already committed never need a second packed column.
+//!
+//! - Rebuild the packed form as a weighted sum of the bits.
+//! - Plug that expression directly into the add-helper output slot.
+//! - Saves one column per value and one bridge constraint.
 //!
 //! # Working-variable shift chain
 //!
@@ -80,11 +79,12 @@ pub const CHAIN_LEN: usize = 4 + NUM_COMPRESSION_ROUNDS;
 /// Packed intermediates produced by a single compression round.
 ///
 /// Every field is a 2-limb little-endian representation of a 32-bit value:
-/// `limbs[0]` holds bits 0..16 and `limbs[1]` holds bits 16..32.
 ///
-/// Values that could be derived by re-packing the next chain entry are not
-/// committed here; the `new_a` / `new_e` outputs land directly in the chain
-/// in bit form.
+/// - `limbs[0]`: bits 0..16.
+/// - `limbs[1]`: bits 16..32.
+///
+/// The `new_a` / `new_e` outputs are *not* stored here. They live in the
+/// next chain slot in bit form, and the AIR repacks them on demand.
 #[repr(C)]
 pub struct Sha256RoundCols<T> {
     /// Big-sigma-1 applied to the round's `e` input.

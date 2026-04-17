@@ -205,12 +205,10 @@ fn eval_message_schedule<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB
             &w_tm7_packed_expr,
         );
 
-        // Three-term add #2: pack(W[t]) = tmp + small_sigma0 + W[t - 16].
+        // Three-term add #2: pack(W[t]) = tmp + small_sigma_0 + W[t - 16].
         //
-        // The bit decomposition `local.w[t]` is already committed and
-        // range-checked, so we feed its packing directly into the add
-        // constraint as an expression - no separate `w_packed` column is
-        // needed.
+        // Output slot is an expression, not a committed column — `W[t]` is
+        // already boolean-checked bit-wise, so its packing is free.
         let w_t_packed_expr = pack_word::<AB>(&local.w[t]);
         let sched_sigma0_expr: [AB::Expr; U32_LIMBS] = local.sched_sigma0[i].map(Into::into);
         let w_tm16_packed_expr = pack_word::<AB>(&local.w[t - 16]);
@@ -226,7 +224,7 @@ fn eval_message_schedule<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB
 
 /// Enforce one compression round per iteration.
 ///
-/// Each round reads its eight working variables from the two chains and
+/// Each round reads its eight working variables from the chains and
 /// evaluates:
 ///
 /// ```text
@@ -240,9 +238,19 @@ fn eval_message_schedule<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB
 ///     new_e      = d  + T1                           (mod 2^32)
 /// ```
 ///
-/// The spec defines `T2 = big_sigma0 + maj` and `new_a = T1 + T2`. We fold
-/// those two additions into a single three-term add to avoid committing a
-/// `T2` column; the final constraint degree stays at 3.
+/// # Why one add for `new_a`?
+///
+/// The spec writes this as two steps:
+///
+/// ```text
+///     T_2   = big_sigma0 + maj
+///     new_a = T_1 + T_2
+/// ```
+///
+/// We fuse them into a single three-term add.
+///
+/// - Drops the `T_2` column.
+/// - Constraint degree stays at 3.
 fn eval_compression<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB::Var>) {
     for (t, round) in local.rounds.iter().enumerate() {
         // Read the eight working variables for round `t` from the chains.
@@ -296,14 +304,13 @@ fn eval_compression<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB::Var
         // Maj check: degree-3 identity `a * b + c * (a XOR b)`.
         assert_maj_matches::<AB>(builder, a_bits, b_bits, c_bits, &round.maj);
 
-        // Three-term add directly into the next `a`-chain slot:
-        //     pack(a_chain[t + 4]) = T1 + big_sigma0 + maj.
+        // Three-term add straight into the next `a`-chain slot.
         //
-        // The spec splits this into `T2 = big_sigma0 + maj` followed by
-        // `new_a = T1 + T2`. Folding both into one add keeps the constraint
-        // at degree 3 and saves a `T2` column. The output's 16-bit limb
-        // range is automatic because the bit decomposition in the chain is
-        // already boolean-checked.
+        //     pack(a_chain[t + 4]) = T_1 + big_sigma_0 + maj
+        //
+        // Fuses the spec's two-step update into one add (see the header doc).
+        // Output limbs are in `[0, 2^16)` because the chain slot is already
+        // boolean-checked.
         let new_a_packed_expr = pack_word::<AB>(&local.a_chain[t + 4]);
         let sigma0_a_expr: [AB::Expr; U32_LIMBS] = round.sigma0_a.map(Into::into);
         let maj_expr: [AB::Expr; U32_LIMBS] = round.maj.map(Into::into);
@@ -319,12 +326,7 @@ fn eval_compression<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB::Var
         //     pack(e_chain[t + 4]) = d + T1.
         let new_e_packed_expr = pack_word::<AB>(&local.e_chain[t + 4]);
         let d_packed_expr = pack_word::<AB>(d_bits);
-        add2_expr_out(
-            builder,
-            &new_e_packed_expr,
-            &round.t1,
-            &d_packed_expr,
-        );
+        add2_expr_out(builder, &new_e_packed_expr, &round.t1, &d_packed_expr);
     }
 }
 
@@ -423,23 +425,20 @@ fn add3<AB: AirBuilder>(
 ///
 /// # Soundness
 ///
-/// The mathematical proof in `add2` requires every limb of `a`, `b`, `c` to
-/// lie in `[0, 2^16)`. When `a` is the packing of 32 range-checked boolean
-/// columns, each limb is a sum of 16 terms of the form `2^i * bit_i` with
-/// `bit_i in {0, 1}`, so each limb is automatically in `[0, 2^16)` and the
-/// proof carries over verbatim.
+/// The upstream `add2` proof needs every limb in `[0, 2^16)`.
+///
+/// - `b`, `c`: inherited from their callers.
+/// - `a`: a sum of 16 boolean bits × `2^i`, so each limb is in `[0, 2^16)` by construction.
 ///
 /// # Arguments
 ///
-/// - `a`: output as a 2-limb expression (typically the packing of a
-///   committed bit decomposition).
+/// - `a`: output as a 2-limb expression.
 /// - `b`: committed addend.
 /// - `c`: addend expression.
 ///
 /// # Constraint degree
 ///
-/// Emits two degree-2 constraints (`acc * (acc + 2^32)` and `acc_16 *
-/// (acc_16 + 2^16)`).
+/// Two degree-2 constraints.
 #[inline]
 fn add2_expr_out<AB: AirBuilder>(
     builder: &mut AB,
@@ -473,12 +472,12 @@ fn add2_expr_out<AB: AirBuilder>(
 ///
 /// # Soundness
 ///
-/// Same argument as [`add2_expr_out`]: the output limbs are ranged by
-/// construction when `a` is a packing of boolean columns.
+/// Same argument as the two-addend variant: `a`'s limbs are in `[0, 2^16)`
+/// whenever it is built from boolean-checked bits.
 ///
 /// # Constraint degree
 ///
-/// Emits two degree-3 constraints.
+/// Two degree-3 constraints.
 #[inline]
 fn add3_expr_out<AB: AirBuilder>(
     builder: &mut AB,
@@ -626,10 +625,7 @@ fn assert_sigma_matches<AB: AirBuilder>(
 
     // Destructure the built expressions and emit one equality per limb.
     let [built_lo, built_hi] = built;
-    builder.assert_zeros([
-        packed[0].into() - built_lo,
-        packed[1].into() - built_hi,
-    ]);
+    builder.assert_zeros([packed[0].into() - built_lo, packed[1].into() - built_hi]);
 }
 
 /// Assert `packed` equals `Ch(e, f, g)` in packed form.
@@ -671,10 +667,7 @@ fn assert_ch_matches<AB: AirBuilder>(
     }
 
     let [built_lo, built_hi] = built;
-    builder.assert_zeros([
-        packed[0].into() - built_lo,
-        packed[1].into() - built_hi,
-    ]);
+    builder.assert_zeros([packed[0].into() - built_lo, packed[1].into() - built_hi]);
 }
 
 /// Assert `packed` equals `Maj(a, b, c)` in packed form.
@@ -717,8 +710,5 @@ fn assert_maj_matches<AB: AirBuilder>(
     }
 
     let [built_lo, built_hi] = built;
-    builder.assert_zeros([
-        packed[0].into() - built_lo,
-        packed[1].into() - built_hi,
-    ]);
+    builder.assert_zeros([packed[0].into() - built_lo, packed[1].into() - built_hi]);
 }
