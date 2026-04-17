@@ -35,8 +35,17 @@ sha2.workspace = true
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
+criterion = { version = "0.8", features = ["html_reports"] }
+
+[target.'cfg(target_family = "unix")'.dev-dependencies]
+tikv-jemallocator = "0.6"
+
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
+
+[[bench]]
+name = "sha256-air"
+harness = false
 
 [lints]
 workspace = true

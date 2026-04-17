@@ -22,11 +22,11 @@
 //! - Addition helpers: degree 3.
 
 use alloc::vec::Vec;
-use core::array;
 use core::borrow::Borrow;
 
-use p3_air::utils::{add2, add3, pack_bits_le};
+use p3_air::utils::pack_bits_le;
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+use p3_field::integers::QuotientMap;
 use p3_field::{Dup, PrimeCharacteristicRing, PrimeField64};
 use p3_matrix::dense::RowMajorMatrix;
 use rand::rngs::SmallRng;
@@ -65,7 +65,7 @@ impl Sha256Air {
         num_hashes: usize,
         extra_capacity_bits: usize,
     ) -> RowMajorMatrix<F> {
-        // Deterministic RNG so two invocations with the same arguments yield identical traces
+        // Deterministic RNG so two invocations with the same arguments yield identical traces.
         //
         // Useful for reproducible benchmarks and fuzzing.
         let mut rng = SmallRng::seed_from_u64(1);
@@ -205,20 +205,22 @@ fn eval_message_schedule<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB
             &w_tm7_packed_expr,
         );
 
-        // Three-term add #2: w_packed = tmp + small_sigma0 + W[t - 16].
+        // Three-term add #2: pack(W[t]) = tmp + small_sigma0 + W[t - 16].
+        //
+        // The bit decomposition `local.w[t]` is already committed and
+        // range-checked, so we feed its packing directly into the add
+        // constraint as an expression - no separate `w_packed` column is
+        // needed.
+        let w_t_packed_expr = pack_word::<AB>(&local.w[t]);
         let sched_sigma0_expr: [AB::Expr; U32_LIMBS] = local.sched_sigma0[i].map(Into::into);
         let w_tm16_packed_expr = pack_word::<AB>(&local.w[t - 16]);
-        add3(
+        add3_expr_out(
             builder,
-            &local.w_packed[i],
+            &w_t_packed_expr,
             &local.sched_tmp[i],
             &sched_sigma0_expr,
             &w_tm16_packed_expr,
         );
-
-        // Bridge: w_packed must agree with the bit decomposition the next
-        // round will consume.
-        assert_packed_equals_bits::<AB>(builder, &local.w_packed[i], &local.w[t]);
     }
 }
 
@@ -234,10 +236,13 @@ fn eval_message_schedule<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB
 ///     T1         = tmp1 + K[t] + W[t]                (mod 2^32)
 ///     big_sigma0 = ROTR_2 (a) XOR ROTR_13(a) XOR ROTR_22(a)
 ///     maj        = (a AND b) XOR (a AND c) XOR (b AND c)
-///     T2         = big_sigma0 + maj                  (mod 2^32)
-///     new_a      = T1 + T2                           (mod 2^32)
+///     new_a      = T1 + big_sigma0 + maj             (mod 2^32)
 ///     new_e      = d  + T1                           (mod 2^32)
 /// ```
+///
+/// The spec defines `T2 = big_sigma0 + maj` and `new_a = T1 + T2`. We fold
+/// those two additions into a single three-term add to avoid committing a
+/// `T2` column; the final constraint degree stays at 3.
 fn eval_compression<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB::Var>) {
     for (t, round) in local.rounds.iter().enumerate() {
         // Read the eight working variables for round `t` from the chains.
@@ -291,23 +296,35 @@ fn eval_compression<AB: AirBuilder>(builder: &mut AB, local: &Sha256Cols<AB::Var
         // Maj check: degree-3 identity `a * b + c * (a XOR b)`.
         assert_maj_matches::<AB>(builder, a_bits, b_bits, c_bits, &round.maj);
 
-        // Two-term add: T2 = big_sigma0 + maj.
+        // Three-term add directly into the next `a`-chain slot:
+        //     pack(a_chain[t + 4]) = T1 + big_sigma0 + maj.
+        //
+        // The spec splits this into `T2 = big_sigma0 + maj` followed by
+        // `new_a = T1 + T2`. Folding both into one add keeps the constraint
+        // at degree 3 and saves a `T2` column. The output's 16-bit limb
+        // range is automatic because the bit decomposition in the chain is
+        // already boolean-checked.
+        let new_a_packed_expr = pack_word::<AB>(&local.a_chain[t + 4]);
+        let sigma0_a_expr: [AB::Expr; U32_LIMBS] = round.sigma0_a.map(Into::into);
         let maj_expr: [AB::Expr; U32_LIMBS] = round.maj.map(Into::into);
-        add2(builder, &round.t2, &round.sigma0_a, &maj_expr);
+        add3_expr_out(
+            builder,
+            &new_a_packed_expr,
+            &round.t1,
+            &sigma0_a_expr,
+            &maj_expr,
+        );
 
-        // Two-term add: new_a = T1 + T2.
-        let t2_expr: [AB::Expr; U32_LIMBS] = round.t2.map(Into::into);
-        add2(builder, &round.new_a_packed, &round.t1, &t2_expr);
-
-        // Two-term add: new_e = d + T1.
+        // Two-term add directly into the next `e`-chain slot:
+        //     pack(e_chain[t + 4]) = d + T1.
+        let new_e_packed_expr = pack_word::<AB>(&local.e_chain[t + 4]);
         let d_packed_expr = pack_word::<AB>(d_bits);
-        add2(builder, &round.new_e_packed, &round.t1, &d_packed_expr);
-
-        // Bridge: packed new_a must match the next chain slot bit-by-bit, so
-        // round t+1 reads the exact value we just produced.
-        assert_packed_equals_bits::<AB>(builder, &round.new_a_packed, &local.a_chain[t + 4]);
-        // Same bridge for new_e.
-        assert_packed_equals_bits::<AB>(builder, &round.new_e_packed, &local.e_chain[t + 4]);
+        add2_expr_out(
+            builder,
+            &new_e_packed_expr,
+            &round.t1,
+            &d_packed_expr,
+        );
     }
 }
 
@@ -375,6 +392,123 @@ fn assert_packed_equals_bits<AB: AirBuilder>(
     let [lo, hi] = pack_word::<AB>(bits);
     // Emit one equality per limb.
     builder.assert_zeros([packed[0].into() - lo, packed[1].into() - hi]);
+}
+
+/// Wrapper around `p3_air::utils::add2` to keep this file self-contained.
+///
+/// See the upstream helper for the soundness argument.
+#[inline]
+fn add2<AB: AirBuilder>(
+    builder: &mut AB,
+    a: &[AB::Var; U32_LIMBS],
+    b: &[AB::Var; U32_LIMBS],
+    c: &[AB::Expr; U32_LIMBS],
+) {
+    p3_air::utils::add2(builder, a, b, c);
+}
+
+/// Wrapper around `p3_air::utils::add3`.
+#[inline]
+fn add3<AB: AirBuilder>(
+    builder: &mut AB,
+    a: &[AB::Var; U32_LIMBS],
+    b: &[AB::Var; U32_LIMBS],
+    c: &[AB::Expr; U32_LIMBS],
+    d: &[AB::Expr; U32_LIMBS],
+) {
+    p3_air::utils::add3(builder, a, b, c, d);
+}
+
+/// Variant of `add2` where the output `a` is supplied as an expression.
+///
+/// # Soundness
+///
+/// The mathematical proof in `add2` requires every limb of `a`, `b`, `c` to
+/// lie in `[0, 2^16)`. When `a` is the packing of 32 range-checked boolean
+/// columns, each limb is a sum of 16 terms of the form `2^i * bit_i` with
+/// `bit_i in {0, 1}`, so each limb is automatically in `[0, 2^16)` and the
+/// proof carries over verbatim.
+///
+/// # Arguments
+///
+/// - `a`: output as a 2-limb expression (typically the packing of a
+///   committed bit decomposition).
+/// - `b`: committed addend.
+/// - `c`: addend expression.
+///
+/// # Constraint degree
+///
+/// Emits two degree-2 constraints (`acc * (acc + 2^32)` and `acc_16 *
+/// (acc_16 + 2^16)`).
+#[inline]
+fn add2_expr_out<AB: AirBuilder>(
+    builder: &mut AB,
+    a: &[AB::Expr; U32_LIMBS],
+    b: &[AB::Var; U32_LIMBS],
+    c: &[AB::Expr; U32_LIMBS],
+) {
+    // Materialize 2^16 and 2^32 as field constants.
+    let two_16 = <AB::Expr as PrimeCharacteristicRing>::PrimeSubfield::from_canonical_checked(
+        1 << BITS_PER_LIMB,
+    )
+    .expect("characteristic must exceed 2^17");
+    let two_32 = two_16.square();
+
+    // 16-bit accumulator: difference of the low limbs.
+    let acc_16 = a[0].dup() - b[0] - c[0].dup();
+    // 32-bit accumulator: build up from the 16-bit limb plus the high limb
+    // shifted by 2^16.
+    let acc_32 = a[1].dup() - b[1] - c[1].dup();
+    let acc = acc_16.dup() + acc_32.mul_2exp_u64(BITS_PER_LIMB as u64);
+
+    builder.assert_zeros([
+        // 32-bit overflow check: forces acc ∈ {0, -2^32} mod P.
+        acc.dup() * (acc + AB::Expr::from_prime_subfield(two_32)),
+        // 16-bit overflow check: forces acc_16 ∈ {0, -2^16} mod P.
+        acc_16.dup() * (acc_16 + AB::Expr::from_prime_subfield(two_16)),
+    ]);
+}
+
+/// Variant of `add3` where the output `a` is supplied as an expression.
+///
+/// # Soundness
+///
+/// Same argument as [`add2_expr_out`]: the output limbs are ranged by
+/// construction when `a` is a packing of boolean columns.
+///
+/// # Constraint degree
+///
+/// Emits two degree-3 constraints.
+#[inline]
+fn add3_expr_out<AB: AirBuilder>(
+    builder: &mut AB,
+    a: &[AB::Expr; U32_LIMBS],
+    b: &[AB::Var; U32_LIMBS],
+    c: &[AB::Expr; U32_LIMBS],
+    d: &[AB::Expr; U32_LIMBS],
+) {
+    // Materialize 2^16 and 2^32.
+    let two_16 = <AB::Expr as PrimeCharacteristicRing>::PrimeSubfield::from_canonical_checked(
+        1 << BITS_PER_LIMB,
+    )
+    .expect("characteristic must exceed 3 * 2^16");
+    let two_32 = two_16.square();
+
+    // 16-bit accumulator with four addends.
+    let acc_16 = a[0].dup() - b[0] - c[0].dup() - d[0].dup();
+    let acc_32 = a[1].dup() - b[1] - c[1].dup() - d[1].dup();
+    let acc = acc_16.dup() + acc_32.mul_2exp_u64(BITS_PER_LIMB as u64);
+
+    builder.assert_zeros([
+        // Cubic check at the 32-bit level: forces acc ∈ {0, -2^32, -2*2^32}.
+        acc.dup()
+            * (acc.dup() + AB::Expr::from_prime_subfield(two_32))
+            * (acc + AB::Expr::from_prime_subfield(two_32.double())),
+        // Cubic check at the 16-bit limb level.
+        acc_16.dup()
+            * (acc_16.dup() + AB::Expr::from_prime_subfield(two_16))
+            * (acc_16 + AB::Expr::from_prime_subfield(two_16.double())),
+    ]);
 }
 
 /// Selector for the four SHA-256 "sigma" combinators.
@@ -466,9 +600,9 @@ fn assert_sigma_matches<AB: AirBuilder>(
         }
     };
 
-    // Per-limb accumulators holding the packed value rebuilt from bits.
-    let mut accumulators: [AB::Expr; U32_LIMBS] = [AB::Expr::ZERO; U32_LIMBS];
-    for (limb, acc_slot) in accumulators.iter_mut().enumerate() {
+    // Build one packed expression per limb via Horner from high bit to low.
+    let mut built: [AB::Expr; U32_LIMBS] = [AB::Expr::ZERO, AB::Expr::ZERO];
+    for (limb, slot) in built.iter_mut().enumerate() {
         // Bit range covered by this limb: [lo, hi).
         let lo = limb * BITS_PER_LIMB;
         let hi = lo + BITS_PER_LIMB;
@@ -487,14 +621,14 @@ fn assert_sigma_matches<AB: AirBuilder>(
             // Horner step: shift the accumulator left by 1 then add the bit.
             acc = acc.double() + bit_value;
         }
-        *acc_slot = acc;
+        *slot = acc;
     }
 
-    // Emit one equality per limb between the stored packed value and the
-    // reconstructed expression.
+    // Destructure the built expressions and emit one equality per limb.
+    let [built_lo, built_hi] = built;
     builder.assert_zeros([
-        packed[0].into() - core::mem::replace(&mut accumulators[0], AB::Expr::ZERO),
-        packed[1].into() - core::mem::replace(&mut accumulators[1], AB::Expr::ZERO),
+        packed[0].into() - built_lo,
+        packed[1].into() - built_hi,
     ]);
 }
 
@@ -517,8 +651,8 @@ fn assert_ch_matches<AB: AirBuilder>(
     g: &[AB::Var; WORD_BITS],
     packed: &[AB::Var; U32_LIMBS],
 ) {
-    let mut accumulators: [AB::Expr; U32_LIMBS] = [AB::Expr::ZERO; U32_LIMBS];
-    for (limb, acc_slot) in accumulators.iter_mut().enumerate() {
+    let mut built: [AB::Expr; U32_LIMBS] = [AB::Expr::ZERO, AB::Expr::ZERO];
+    for (limb, slot) in built.iter_mut().enumerate() {
         let lo = limb * BITS_PER_LIMB;
         let hi = lo + BITS_PER_LIMB;
         let mut acc = AB::Expr::ZERO;
@@ -533,13 +667,13 @@ fn assert_ch_matches<AB: AirBuilder>(
             // Horner step.
             acc = acc.double() + ch_i;
         }
-        *acc_slot = acc;
+        *slot = acc;
     }
 
-    // Per-limb equality check.
+    let [built_lo, built_hi] = built;
     builder.assert_zeros([
-        packed[0].into() - core::mem::replace(&mut accumulators[0], AB::Expr::ZERO),
-        packed[1].into() - core::mem::replace(&mut accumulators[1], AB::Expr::ZERO),
+        packed[0].into() - built_lo,
+        packed[1].into() - built_hi,
     ]);
 }
 
@@ -562,8 +696,8 @@ fn assert_maj_matches<AB: AirBuilder>(
     c: &[AB::Var; WORD_BITS],
     packed: &[AB::Var; U32_LIMBS],
 ) {
-    let mut accumulators: [AB::Expr; U32_LIMBS] = [AB::Expr::ZERO; U32_LIMBS];
-    for (limb, acc_slot) in accumulators.iter_mut().enumerate() {
+    let mut built: [AB::Expr; U32_LIMBS] = [AB::Expr::ZERO, AB::Expr::ZERO];
+    for (limb, slot) in built.iter_mut().enumerate() {
         let lo = limb * BITS_PER_LIMB;
         let hi = lo + BITS_PER_LIMB;
         let mut acc = AB::Expr::ZERO;
@@ -579,12 +713,12 @@ fn assert_maj_matches<AB: AirBuilder>(
             // Horner step.
             acc = acc.double() + maj_i;
         }
-        *acc_slot = acc;
+        *slot = acc;
     }
 
-    // Per-limb equality check.
+    let [built_lo, built_hi] = built;
     builder.assert_zeros([
-        packed[0].into() - core::mem::replace(&mut accumulators[0], AB::Expr::ZERO),
-        packed[1].into() - core::mem::replace(&mut accumulators[1], AB::Expr::ZERO),
+        packed[0].into() - built_lo,
+        packed[1].into() - built_hi,
     ]);
 }

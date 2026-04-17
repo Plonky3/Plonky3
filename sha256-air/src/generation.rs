@@ -128,11 +128,14 @@ fn generate_trace_row_for_compression<F: PrimeField64>(
         w_words[t] = w_t;
 
         // Commit every committed value for step `t`.
+        //
+        // The bit decomposition of `W[t]` is the *only* representation
+        // carried in the trace. Its packed form is reconstructed on the fly
+        // from the bits whenever an add constraint needs it.
         row.w[t] = u32_to_bits_le(w_t);
         row.sched_sigma0[i] = u32_to_limbs(s0).map(F::from_u16);
         row.sched_sigma1[i] = u32_to_limbs(s1).map(F::from_u16);
         row.sched_tmp[i] = u32_to_limbs(tmp).map(F::from_u16);
-        row.w_packed[i] = u32_to_limbs(w_t).map(F::from_u16);
     }
     // Sanity check for the extension count.
     debug_assert_eq!(SCHEDULE_EXTENSIONS, NUM_COMPRESSION_ROUNDS - BLOCK_WORDS);
@@ -175,23 +178,26 @@ fn generate_trace_row_for_compression<F: PrimeField64>(
         // Maj(a, b, c) = (a AND b) XOR (a AND c) XOR (b AND c).
         let maj = (a & b) ^ (a & c) ^ (b & c);
 
-        // T2 = big_sigma0 + Maj.
-        let t2 = sigma0_a.wrapping_add(maj);
-
         // Shifted slots for the next round.
-        let new_a = t1.wrapping_add(t2);
+        //
+        // The spec defines `T2 = big_sigma0 + Maj` and `new_a = T1 + T2`;
+        // we fold the two additions into a single three-term sum inside the
+        // AIR, so the intermediate `T2` value is computed here purely for
+        // the sake of the reference (it is not committed).
+        let new_a = t1.wrapping_add(sigma0_a).wrapping_add(maj);
         let new_e = d.wrapping_add(t1);
 
         // Commit every packed intermediate for this round.
+        //
+        // The "new_a / new_e" values are not committed as packed columns —
+        // they land in bit form in the next chain slot below, and the AIR
+        // rebuilds the packed view on demand via `pack_word`.
         round.sigma1_e = u32_to_limbs(sigma1_e).map(F::from_u16);
         round.ch = u32_to_limbs(ch).map(F::from_u16);
         round.tmp1 = u32_to_limbs(tmp1).map(F::from_u16);
         round.t1 = u32_to_limbs(t1).map(F::from_u16);
         round.sigma0_a = u32_to_limbs(sigma0_a).map(F::from_u16);
         round.maj = u32_to_limbs(maj).map(F::from_u16);
-        round.t2 = u32_to_limbs(t2).map(F::from_u16);
-        round.new_a_packed = u32_to_limbs(new_a).map(F::from_u16);
-        round.new_e_packed = u32_to_limbs(new_e).map(F::from_u16);
 
         // Extend the chains so the next round can read the shifted variables
         // directly.

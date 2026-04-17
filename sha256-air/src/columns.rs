@@ -20,6 +20,15 @@
 //!     packed[1] = bit[16] + 2 * bit[17] + ... + 2^15 * bit[31]
 //! ```
 //!
+//! # Avoiding redundant packed columns
+//!
+//! Whenever an addition's *output* already has a committed bit decomposition
+//! (for example the next entry in the working-variable chain), the packed
+//! value can be written directly into the add-constraint as a sum of those
+//! bits instead of committing a separate packed column. The generalized
+//! add helpers in `air.rs` accept an expression in the output slot, so no
+//! bridge constraint is required.
+//!
 //! # Working-variable shift chain
 //!
 //! The compression round updates `(a, b, c, d, e, f, g, h)` by shifting:
@@ -72,6 +81,10 @@ pub const CHAIN_LEN: usize = 4 + NUM_COMPRESSION_ROUNDS;
 ///
 /// Every field is a 2-limb little-endian representation of a 32-bit value:
 /// `limbs[0]` holds bits 0..16 and `limbs[1]` holds bits 16..32.
+///
+/// Values that could be derived by re-packing the next chain entry are not
+/// committed here; the `new_a` / `new_e` outputs land directly in the chain
+/// in bit form.
 #[repr(C)]
 pub struct Sha256RoundCols<T> {
     /// Big-sigma-1 applied to the round's `e` input.
@@ -106,25 +119,6 @@ pub struct Sha256RoundCols<T> {
     ///
     /// Formula: `(a AND b) XOR (a AND c) XOR (b AND c)`.
     pub maj: [T; U32_LIMBS],
-
-    /// Full value of `T_2`.
-    ///
-    /// Value: `sigma0_a + maj  (mod 2^32)`.
-    pub t2: [T; U32_LIMBS],
-
-    /// Packed value of the new `a` slot.
-    ///
-    /// Value: `t1 + t2  (mod 2^32)`.
-    ///
-    /// The bit decomposition lives in the `a` chain at offset `t + 4`.
-    pub new_a_packed: [T; U32_LIMBS],
-
-    /// Packed value of the new `e` slot.
-    ///
-    /// Value: `d + t1  (mod 2^32)`.
-    ///
-    /// The bit decomposition lives in the `e` chain at offset `t + 4`.
-    pub new_e_packed: [T; U32_LIMBS],
 }
 
 /// One trace row.
@@ -136,7 +130,7 @@ pub struct Sha256Cols<T> {
     /// Input chaining state, one word per index in packed form.
     ///
     /// Committed in packed form so the output addition can feed it directly
-    /// into the `add2` helper without an extra repack step.
+    /// into the add helper without an extra repack step.
     pub h_in: [[T; U32_LIMBS]; STATE_WORDS],
 
     /// Full bit decomposition of every value that flows through the `a` slot.
@@ -155,13 +149,6 @@ pub struct Sha256Cols<T> {
     ///
     /// Indices 16..64 are constrained by the message-schedule recurrence.
     pub w: [[T; WORD_BITS]; NUM_COMPRESSION_ROUNDS],
-
-    /// Packed form of `W[16 + i]`, one entry per expanded word.
-    ///
-    /// Committed because the add helpers require their output as a committed
-    /// `[Var; 2]`. A bridging constraint ties this back to the matching bit
-    /// decomposition.
-    pub w_packed: [[T; U32_LIMBS]; SCHEDULE_EXTENSIONS],
 
     /// Packed small-sigma-0 values used by the message schedule.
     ///
