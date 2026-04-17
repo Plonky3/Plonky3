@@ -4,8 +4,7 @@ use p3_air::{Air, RowWindow};
 use p3_commit::PolynomialSpace;
 use p3_field::PrimeCharacteristicRing;
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
-use p3_lookup::lookup_traits::LookupGadget;
-use p3_lookup::{AirWithLookups, Lookup};
+use p3_lookup::{Lookup, LookupProtocol};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_uni_stark::{VerificationError, VerifierConstraintFolder};
@@ -51,7 +50,7 @@ impl<'a, SC: SGC> VerifierData<'a, SC> {
     ///
     /// This evaluates the AIR constraints at the out-of-domain point and checks
     /// that constraints(zeta) / Z_H(zeta) = quotient(zeta).
-    pub fn verify_constraints_with_lookups<A, LG: LookupGadget, PcsErr: Debug>(
+    pub fn verify_constraints_with_lookups<A, LG: LookupProtocol, PcsErr: Debug>(
         &self,
         air: &A,
         lookup_gadget: &LG,
@@ -95,7 +94,7 @@ impl<'a, SC: SGC> VerifierData<'a, SC> {
             permutation_values: self.permutation_values,
         };
         // Evaluate AIR and lookup constraints.
-        air.eval_with_lookups(&mut folder, self.lookups, lookup_gadget);
+        lookup_gadget.eval_air_and_lookups(air, &mut folder, self.lookups);
 
         // Check that constraints(zeta) / Z_H(zeta) = quotient(zeta)
         if folder.inner.accumulator * sels.inv_vanishing != self.quotient {

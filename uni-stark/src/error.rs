@@ -115,15 +115,15 @@ pub enum InvalidProofShapeError {
     },
     /// Global lookup proof metadata doesn't match the AIR's declared interactions.
     #[error(
-        "air {air}: global lookup data metadata mismatch at index {lookup}: expected name={expected_name}, aux_idx={expected_aux_idx}; got name={got_name}, aux_idx={got_aux_idx}"
+        "air {air}: global lookup data metadata mismatch at index {lookup}: expected name={expected_name}, aux_column={expected_aux_column}; got name={got_name}, aux_column={got_aux_column}"
     )]
     GlobalLookupDataMetadataMismatch {
         air: usize,
         lookup: usize,
         expected_name: String,
         got_name: String,
-        expected_aux_idx: usize,
-        got_aux_idx: usize,
+        expected_aux_column: usize,
+        got_aux_column: usize,
     },
     /// Permutation local and next have different lengths.
     #[error("air {air}: permutation local/next length mismatch")]

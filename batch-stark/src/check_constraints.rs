@@ -2,8 +2,7 @@ use alloc::vec::Vec;
 
 use p3_air::{Air, DebugConstraintBuilder};
 use p3_field::{ExtensionField, Field};
-use p3_lookup::AirWithLookups;
-use p3_lookup::lookup_traits::{Lookup, LookupGadget};
+use p3_lookup::{Lookup, LookupProtocol};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::VerticalPair;
@@ -50,7 +49,7 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
     F: Field,
     EF: ExtensionField<F>,
     A: for<'a> Air<DebugConstraintBuilder<'a, F, EF>>,
-    LG: LookupGadget,
+    LG: LookupProtocol,
 {
     let height = main.height();
 
@@ -112,7 +111,7 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
             &periodic_row,
         );
 
-        air.eval_with_lookups(&mut builder, lookups, lookup_gadget);
+        lookup_gadget.eval_air_and_lookups(air, &mut builder, lookups);
 
         // Stop at the first failing row and report all violations at once.
         if builder.has_failures() {

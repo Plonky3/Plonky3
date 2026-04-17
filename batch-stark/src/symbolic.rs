@@ -5,8 +5,7 @@ use p3_air::symbolic::{
     AirLayout, ConstraintLayout, SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt,
 };
 use p3_field::{Algebra, ExtensionField, Field};
-use p3_lookup::AirWithLookups;
-use p3_lookup::lookup_traits::{Kind, Lookup, LookupGadget};
+use p3_lookup::{Kind, Lookup, LookupProtocol};
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
@@ -26,7 +25,7 @@ where
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
-    LG: LookupGadget,
+    LG: LookupProtocol,
 {
     let num_aux_cols = contexts.len() * lookup_gadget.num_aux_cols();
     let num_challenges = contexts.len() * lookup_gadget.num_challenges();
@@ -41,7 +40,7 @@ where
         ..layout
     };
     let mut builder = SymbolicAirBuilder::new(layout);
-    air.eval_with_lookups(&mut builder, contexts, lookup_gadget);
+    lookup_gadget.eval_air_and_lookups(air, &mut builder, contexts);
     builder.constraint_layout()
 }
 
@@ -57,7 +56,7 @@ where
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
-    LG: LookupGadget,
+    LG: LookupProtocol,
 {
     assert!(is_zk <= 1, "is_zk must be either 0 or 1");
 
@@ -107,7 +106,7 @@ where
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
-    LG: LookupGadget,
+    LG: LookupProtocol,
 {
     let (base, extension) = get_symbolic_constraints(air, layout, contexts, lookup_gadget);
     let base_degree = base.iter().map(|c| c.degree_multiple()).max().unwrap_or(0);
@@ -134,7 +133,7 @@ where
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
-    LG: LookupGadget,
+    LG: LookupProtocol,
 {
     let num_lookups = contexts.len();
     let num_aux_cols = num_lookups * lookup_gadget.num_aux_cols();
@@ -152,7 +151,7 @@ where
     let mut builder = SymbolicAirBuilder::new(layout);
 
     // Evaluate AIR and lookup constraints.
-    air.eval_with_lookups(&mut builder, contexts, lookup_gadget);
+    lookup_gadget.eval_air_and_lookups(air, &mut builder, contexts);
     let base_constraints = builder.base_constraints();
     let extension_constraints = builder.extension_constraints();
     (base_constraints, extension_constraints)

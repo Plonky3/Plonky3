@@ -1,3 +1,4 @@
+use alloc::vec::Vec;
 use core::ops::{Add, Mul, Sub};
 
 use p3_field::{Algebra, Dup, ExtensionField, Field, PrimeCharacteristicRing};
@@ -173,6 +174,45 @@ pub trait AirBuilder: Sized {
     /// into a single assert_bools call will improve performance.
     fn assert_bool<I: Into<Self::Expr>>(&mut self, x: I) {
         self.assert_zero(x.into().bool_check());
+    }
+
+    /// Record a **global** (cross-AIR) interaction on the named bus.
+    ///
+    /// - `bus_name` — shared identifier across AIRs on the same bus.
+    /// - `fields` — message elements.
+    /// - `count` — signed multiplicity (+ = send, - = receive).
+    /// - `count_weight` — soundness weight (`1` for queries, `0` for table entries).
+    fn push_interaction<E: Into<Self::Expr>>(
+        &mut self,
+        _bus_name: &str,
+        fields: impl IntoIterator<Item = E>,
+        _count: impl Into<Self::Expr>,
+        _count_weight: u32,
+    ) {
+        // Default: no-op.
+        fields.into_iter().for_each(drop);
+    }
+
+    /// Record a **local** (intra-AIR) lookup — both sides in one call.
+    ///
+    /// Bundles multiple `(fields, count)` pairs into a single running sum
+    /// that must return to zero. No cross-AIR communication.
+    fn push_local_interaction(
+        &mut self,
+        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Self::Expr)>,
+    ) {
+        // Default: no-op.
+        tuples.into_iter().for_each(drop);
+    }
+
+    /// Number of global (cross-AIR) interactions recorded so far.
+    fn num_global_interactions(&self) -> usize {
+        0
+    }
+
+    /// Number of local (intra-AIR) interactions recorded so far.
+    fn num_local_interactions(&self) -> usize {
+        0
     }
 }
 
