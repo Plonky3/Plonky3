@@ -103,7 +103,7 @@ mod tests {
         }
         let mut state = h_in;
         // `compress256` operates in place on the chaining state.
-        sha2::block_api::compress256(&mut state, core::slice::from_ref(&block_bytes.into()));
+        sha2::block_api::compress256(&mut state, core::slice::from_ref(&block_bytes));
         state
     }
 
@@ -120,7 +120,7 @@ mod tests {
     }
 
     /// Expose the raw buffer as typed column rows.
-    fn rows<'a>(trace: &'a p3_matrix::dense::RowMajorMatrix<F>) -> &'a [Sha256Cols<F>] {
+    fn rows(trace: &p3_matrix::dense::RowMajorMatrix<F>) -> &[Sha256Cols<F>] {
         // Safe: the trace was allocated with exactly the column struct layout.
         let (prefix, rows, suffix) = unsafe { trace.values.align_to::<Sha256Cols<F>>() };
         assert!(prefix.is_empty());
