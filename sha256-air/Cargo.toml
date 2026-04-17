@@ -18,6 +18,9 @@ p3-maybe-rayon.workspace = true
 rand.workspace = true
 tracing.workspace = true
 
+[target.'cfg(target_family = "unix")'.dev-dependencies]
+tikv-jemallocator = "0.6"
+
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
 p3-challenger = { path = "../challenger" }
@@ -30,15 +33,11 @@ p3-merkle-tree = { path = "../merkle-tree" }
 p3-symmetric = { path = "../symmetric" }
 p3-uni-stark = { path = "../uni-stark" }
 
+criterion = { version = "0.8", features = ["html_reports"] }
 proptest.workspace = true
 sha2.workspace = true
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
-
-criterion = { version = "0.8", features = ["html_reports"] }
-
-[target.'cfg(target_family = "unix")'.dev-dependencies]
-tikv-jemallocator = "0.6"
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
