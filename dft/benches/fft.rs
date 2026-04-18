@@ -40,6 +40,11 @@ fn bench_fft(c: &mut Criterion) {
 
     ifft::<Goldilocks, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
 
+    ifft_bit_reversed::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
+    ifft_bit_reversed::<BabyBear, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
+    ifft_bit_reversed::<Goldilocks, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
+    ifft_bit_reversed::<Goldilocks, Radix2DitParallel<_>, BATCH_SIZE>(c, log_sizes);
+
     coset_lde::<BabyBear, RecursiveDft<_>, BATCH_SIZE>(c, log_sizes);
     coset_lde::<BabyBear, Radix2Dit<_>, BATCH_SIZE>(c, log_sizes);
     coset_lde::<BabyBear, Radix2Bowers, BATCH_SIZE>(c, log_sizes);
@@ -167,6 +172,35 @@ where
         group.bench_with_input(BenchmarkId::from_parameter(n), &dft, |b, dft| {
             b.iter(|| {
                 dft.idft_batch(messages.clone());
+            });
+        });
+    }
+}
+
+fn ifft_bit_reversed<F, Dft, const BATCH_SIZE: usize>(c: &mut Criterion, log_sizes: &[usize])
+where
+    F: TwoAdicField,
+    Dft: TwoAdicSubgroupDft<F>,
+    StandardUniform: Distribution<F>,
+{
+    let mut group = c.benchmark_group(format!(
+        "ifft_bit_reversed/{}/{}/ncols={}",
+        pretty_name::<F>(),
+        pretty_name::<Dft>(),
+        BATCH_SIZE
+    ));
+    group.sample_size(10);
+
+    let mut rng = SmallRng::seed_from_u64(1);
+    for n_log in log_sizes {
+        let n = 1 << n_log;
+
+        let messages = RowMajorMatrix::rand(&mut rng, n, BATCH_SIZE);
+
+        let dft = Dft::default();
+        group.bench_with_input(BenchmarkId::from_parameter(n), &dft, |b, dft| {
+            b.iter(|| {
+                dft.idft_batch_bit_reversed(messages.clone());
             });
         });
     }

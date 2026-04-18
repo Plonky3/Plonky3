@@ -334,6 +334,32 @@ proptest! {
     }
 
     #[test]
+    fn all_idft_bit_reversed_agree(seed: u64, log_h in 0usize..=7, w in arb_width()) {
+        let h = 1 << log_h;
+        let mat = rand_matrix(seed, h, w);
+
+        // The returned view, materialized to row-major, must equal the natural
+        // iDFT of the same matrix for every backend.
+        let expected = NaiveDft.idft_batch(mat.clone());
+
+        let naive = NaiveDft.idft_batch_bit_reversed(mat.clone()).to_row_major_matrix();
+        let dit = Radix2Dit::default().idft_batch_bit_reversed(mat.clone()).to_row_major_matrix();
+        let bowers = Radix2Bowers.idft_batch_bit_reversed(mat.clone()).to_row_major_matrix();
+        let parallel = Radix2DitParallel::default()
+            .idft_batch_bit_reversed(mat.clone())
+            .to_row_major_matrix();
+        let small_batch = Radix2DFTSmallBatch::default()
+            .idft_batch_bit_reversed(mat)
+            .to_row_major_matrix();
+
+        prop_assert_eq!(&expected, &naive);
+        prop_assert_eq!(&expected, &dit);
+        prop_assert_eq!(&expected, &bowers);
+        prop_assert_eq!(&expected, &parallel);
+        prop_assert_eq!(&expected, &small_batch);
+    }
+
+    #[test]
     fn all_ldes_agree(
         seed: u64, log_h in 0usize..=7, w in arb_width(), added_bits in arb_added_bits()
     ) {

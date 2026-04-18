@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 
 use p3_field::{Field, PrimeCharacteristicRing, TwoAdicField};
 use p3_matrix::Matrix;
+use p3_matrix::bitrev::{BitReversalPerm, BitReversedMatrixView};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
@@ -32,6 +33,20 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
         divide_by_height(&mut mat);
         reverse_matrix_index_bits(&mut mat);
         mat
+    }
+
+    /// Like `idft_batch`, but skips the final bit-reversal: the returned view
+    /// presents natural-order coefficients to a reader while the inner matrix
+    /// already holds the coefficients in bit-reversed order.
+    fn idft_batch_bit_reversed(
+        &self,
+        mut mat: RowMajorMatrix<F>,
+    ) -> BitReversedMatrixView<RowMajorMatrix<F>> {
+        // The `bowers_g_t` network outputs coefficients in bit-reversed order,
+        // so after scaling by 1/h we can wrap directly.
+        bowers_g_t(&mut mat.as_view_mut());
+        divide_by_height(&mut mat);
+        BitReversalPerm::new_view(mat)
     }
 
     fn lde_batch(&self, mut mat: RowMajorMatrix<F>, added_bits: usize) -> RowMajorMatrix<F> {

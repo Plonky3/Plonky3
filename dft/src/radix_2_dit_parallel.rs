@@ -165,6 +165,34 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         mat.bit_reverse_rows()
     }
 
+    #[instrument(skip_all, level = "debug", fields(dims = %mat.dimensions()))]
+    fn idft_batch_bit_reversed(
+        &self,
+        mut mat: RowMajorMatrix<F>,
+    ) -> BitReversedMatrixView<RowMajorMatrix<F>> {
+        let h = mat.height();
+        let log_h = log2_strict_usize(h);
+        let mid = log_h.div_ceil(2);
+
+        // Mirror of `dft_batch`: same split-butterfly structure, with inverse
+        // twiddles and the 1/h scaling folded into the second half.
+        let inverse_twiddles = self.get_or_compute_inverse_twiddles(log_h);
+
+        reverse_matrix_index_bits(&mut mat);
+        first_half(&mut mat, mid, &inverse_twiddles.twiddles);
+
+        reverse_matrix_index_bits(&mut mat);
+
+        // Fold the 1/h scaling into the first butterfly layer of the second half,
+        // matching the pattern in `coset_lde_batch`.  If `F` is an extension field,
+        // inverting in the prime subfield is much cheaper.
+        let h_inv_subfield = F::PrimeSubfield::from_int(h).try_inverse();
+        let scale = h_inv_subfield.map(F::from_prime_subfield);
+        second_half(&mut mat, mid, &inverse_twiddles.bitrev_twiddles, scale);
+
+        mat.bit_reverse_rows()
+    }
+
     #[instrument(skip_all, level = "debug", fields(dims = %mat.dimensions(), added_bits = added_bits))]
     fn coset_lde_batch(
         &self,

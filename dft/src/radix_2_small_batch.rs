@@ -253,6 +253,14 @@ where
         mat
     }
 
+    // `Radix2DFTSmallBatch` intentionally does not override `idft_batch_bit_reversed`.
+    // The skip-the-initial-reverse shortcut used by `Radix2Bowers` does not apply
+    // here: this backend's DIF pipeline is structured around a bit-reversed
+    // intermediate rather than a bit-reversed output, so skipping the initial
+    // reversal changes the interpretation of the input instead of saving a pass.
+    // The trait default (materialise + reverse, then wrap) is the conservative
+    // fallback and still benefits any caller that peels the view.
+
     fn coset_lde_batch(
         &self,
         mut mat: RowMajorMatrix<F>,

@@ -2,9 +2,9 @@ use alloc::vec::Vec;
 
 use p3_field::{BasedVectorSpace, TwoAdicField};
 use p3_matrix::Matrix;
-use p3_matrix::bitrev::BitReversibleMatrix;
+use p3_matrix::bitrev::{BitReversalPerm, BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::RowMajorMatrix;
-use p3_matrix::util::swap_rows;
+use p3_matrix::util::{reverse_matrix_index_bits, swap_rows};
 
 use crate::util::{coset_shift_cols, divide_by_height};
 
@@ -119,6 +119,34 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         }
 
         dft
+    }
+
+    /// Compute the inverse DFT of each column in `mat`, returning a view over
+    /// bit-reversed coefficients.
+    ///
+    /// Reading the returned view row-by-row yields natural-order coefficients
+    /// (identical to `idft_batch`).  Callers that want to consume the coefficients
+    /// in bit-reversed order can peel the view via `bit_reverse_rows()` and avoid
+    /// the physical reordering.  Backends whose `idft_batch` internally materialises
+    /// a bit-reversed intermediate (e.g. `Radix2Bowers`, `Radix2DitParallel`) can
+    /// override this method to skip the final reversal entirely.
+    ///
+    /// #### Mathematical Description
+    ///
+    /// Let `H` denote the unique multiplicative subgroup of order `mat.height()`.
+    /// Treating each column of `mat` as the evaluations of a polynomial on `H`,
+    /// compute the coefficients of those polynomials.
+    fn idft_batch_bit_reversed(
+        &self,
+        mat: RowMajorMatrix<F>,
+    ) -> BitReversedMatrixView<RowMajorMatrix<F>> {
+        // Default: run the standard iDFT and physically bit-reverse the result so
+        // that the wrapping view presents natural-order coefficients to a reader
+        // and the inner matrix holds bit-reversed coefficients for callers that
+        // peel the view.
+        let mut coeffs = self.idft_batch(mat);
+        reverse_matrix_index_bits(&mut coeffs);
+        BitReversalPerm::new_view(coeffs)
     }
 
     /// Compute the "coset iDFT" of `vec`. This is the inverse operation of "coset DFT".
