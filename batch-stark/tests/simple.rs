@@ -18,6 +18,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
 use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
+use p3_lookup::InteractionBuilder;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
@@ -275,7 +276,7 @@ impl<F> BaseAir<F> for MulAirLookups {
 impl<AB> Air<AB> for MulAirLookups
 where
     AB::Var: Debug,
-    AB: AirBuilder + PermutationAirBuilder,
+    AB: AirBuilder + PermutationAirBuilder + InteractionBuilder,
 {
     fn eval(&self, builder: &mut AB) {
         self.air.eval(builder);
@@ -391,7 +392,7 @@ impl<F: Field> BaseAir<F> for FibAirLookups {
     }
 }
 
-impl<AB: PermutationAirBuilder> Air<AB> for FibAirLookups {
+impl<AB: PermutationAirBuilder + InteractionBuilder> Air<AB> for FibAirLookups {
     fn eval(&self, builder: &mut AB) {
         self.air.eval(builder);
 
@@ -713,7 +714,7 @@ impl<F: Field> BaseAir<F> for DemoAirWithLookups {
     }
 }
 
-impl<AB: PermutationAirBuilder> Air<AB> for DemoAirWithLookups
+impl<AB: PermutationAirBuilder + InteractionBuilder> Air<AB> for DemoAirWithLookups
 where
     AB::Var: Debug,
 {
@@ -2472,7 +2473,7 @@ impl<F> BaseAir<F> for SingleTableLocalLookupAir {
 impl<AB> Air<AB> for SingleTableLocalLookupAir
 where
     AB::Var: Debug,
-    AB: AirBuilder + PermutationAirBuilder,
+    AB: AirBuilder + PermutationAirBuilder + InteractionBuilder,
 {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();

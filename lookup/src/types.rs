@@ -5,10 +5,13 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Deref;
 
-use p3_air::symbolic::{AirLayout, SymbolicAirBuilder};
-use p3_air::{Air, SymbolicExpression, SymbolicInteraction, SymbolicLocalInteraction};
+use p3_air::symbolic::AirLayout;
+use p3_air::{Air, SymbolicExpression};
 use p3_field::{ExtensionField, Field};
 use serde::{Deserialize, Serialize};
+
+use crate::builder::{SymbolicInteraction, SymbolicLocalInteraction};
+use crate::symbolic::InteractionSymbolicBuilder;
 
 /// Whether a lookup is local to one AIR or shared across AIRs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,10 +45,10 @@ impl<F: Field> Lookups<F> {
     pub fn from_air<EF, A>(air: &A) -> Self
     where
         EF: ExtensionField<F>,
-        A: Air<SymbolicAirBuilder<F, EF>>,
+        A: Air<InteractionSymbolicBuilder<F, EF>>,
         F: Clone + Send + Sync,
     {
-        let mut builder = SymbolicAirBuilder::<F, EF>::new(AirLayout::from_air(air));
+        let mut builder = InteractionSymbolicBuilder::<F, EF>::new(AirLayout::from_air(air));
         air.eval(&mut builder);
         Self::from_interactions(builder.global_interactions(), builder.local_interactions())
     }

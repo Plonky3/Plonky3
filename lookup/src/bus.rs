@@ -6,7 +6,7 @@
 //!
 //! The proving system guarantees that all messages on a bus balance globally.
 
-use p3_air::AirBuilder;
+use crate::builder::InteractionBuilder;
 
 /// Subset (table-lookup) bus.
 ///
@@ -49,7 +49,7 @@ impl<'a> LookupBus<'a> {
         key: impl IntoIterator<Item = E>,
         multiplicity: impl Into<AB::Expr>,
     ) where
-        AB: AirBuilder,
+        AB: InteractionBuilder,
         E: Into<AB::Expr>,
     {
         builder.push_interaction(self.name, key, multiplicity, 1);
@@ -69,7 +69,7 @@ impl<'a> LookupBus<'a> {
         key: impl IntoIterator<Item = E>,
         num_lookups: impl Into<AB::Expr>,
     ) where
-        AB: AirBuilder,
+        AB: InteractionBuilder,
         E: Into<AB::Expr>,
     {
         builder.push_interaction(self.name, key, -num_lookups.into(), 0);
@@ -115,7 +115,7 @@ impl<'a> PermutationCheckBus<'a> {
         fields: impl IntoIterator<Item = E>,
         multiplicity: impl Into<AB::Expr>,
     ) where
-        AB: AirBuilder,
+        AB: InteractionBuilder,
         E: Into<AB::Expr>,
     {
         builder.push_interaction(self.name, fields, multiplicity, 1);
@@ -133,7 +133,7 @@ impl<'a> PermutationCheckBus<'a> {
         fields: impl IntoIterator<Item = E>,
         multiplicity: impl Into<AB::Expr>,
     ) where
-        AB: AirBuilder,
+        AB: InteractionBuilder,
         E: Into<AB::Expr>,
     {
         builder.push_interaction(self.name, fields, -multiplicity.into(), 1);
@@ -196,7 +196,9 @@ mod tests {
             unimplemented!()
         }
         fn assert_zero<I: Into<Self::Expr>>(&mut self, _: I) {}
+    }
 
+    impl InteractionBuilder for MockBuilder {
         fn push_interaction<E: Into<Self::Expr>>(
             &mut self,
             bus_name: &str,
@@ -210,6 +212,13 @@ mod tests {
                 num_fields,
                 count_weight,
             });
+        }
+
+        fn push_local_interaction(
+            &mut self,
+            tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Self::Expr)>,
+        ) {
+            tuples.into_iter().for_each(drop);
         }
 
         fn num_global_interactions(&self) -> usize {

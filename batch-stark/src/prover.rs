@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 #[cfg(debug_assertions)]
 use p3_air::DebugConstraintBuilder;
-use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
+use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_air::{Air, RowWindow};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{
@@ -14,7 +14,7 @@ use p3_field::{
 };
 use p3_lookup::folder::ProverConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::{Kind, Lookup, LookupData, LookupProtocol};
+use p3_lookup::{InteractionSymbolicBuilder, Kind, Lookup, LookupData, LookupProtocol};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::DisjointMutPtr;
@@ -88,10 +88,10 @@ impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
 pub fn prove_batch<
     SC,
     #[cfg(debug_assertions)] A: for<'a> Air<DebugConstraintBuilder<'a, Val<SC>, SC::Challenge>>
-        + Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
+        + Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<ProverConstraintFolderWithLookups<'a, SC>>
         + Clone,
-    #[cfg(not(debug_assertions))] A: for<'a> Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
+    #[cfg(not(debug_assertions))] A: for<'a> Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<ProverConstraintFolderWithLookups<'a, SC>>
         + Clone,
 >(
@@ -710,7 +710,7 @@ pub fn quotient_values<SC, A, Mat, LG>(
 ) -> Vec<SC::Challenge>
 where
     SC: SGC,
-    A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
+    A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<ProverConstraintFolderWithLookups<'a, SC>>,
     Mat: Matrix<Val<SC>> + Sync,
     LG: LookupProtocol + Sync,

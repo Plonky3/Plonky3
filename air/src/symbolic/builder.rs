@@ -1,4 +1,3 @@
-use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::Borrow;
@@ -144,49 +143,7 @@ where
     (builder.base_constraints(), builder.extension_constraints())
 }
 
-/// A cross-AIR interaction recorded during symbolic evaluation.
-///
-/// ```text
-///     bus_name:     "memory"          fields:       [addr, value]
-///     count:        is_active         count_weight: 1
-/// ```
-#[derive(Clone, Debug)]
-pub struct SymbolicInteraction<F> {
-    /// Bus identifier.
-    ///
-    /// AIRs sharing the same name form one logical channel.
-    pub bus_name: String,
-
-    /// Message elements (symbolic expressions evaluated per trace row).
-    pub fields: Vec<SymbolicExpression<F>>,
-
-    /// Signed multiplicity (positive = send, negative = receive).
-    pub count: SymbolicExpression<F>,
-
-    /// Soundness weight for the trace height constraint:
-    /// `∑ weight_i × height_i < p`.
-    ///
-    /// Typically:
-    /// - `1` for queries,
-    /// - `0` for table entries.
-    pub count_weight: u32,
-}
-
-/// An intra-AIR lookup recorded during symbolic evaluation.
-///
-/// Bundles multiple (fields, count) tuples into a single running sum
-/// that must return to zero. No cross-AIR communication.
-///
-/// ```text
-///     tuples: [(query_fields, +1), (table_fields, -mult)]
-/// ```
-#[derive(Clone, Debug)]
-pub struct SymbolicLocalInteraction<F> {
-    /// Each tuple: `(message_fields, signed_count)`.
-    pub tuples: Vec<(Vec<SymbolicExpression<F>>, SymbolicExpression<F>)>,
-}
-
-/// Symbolic AIR builder that records constraints and interactions.
+/// Symbolic AIR builder that records constraints.
 #[derive(Debug)]
 pub struct SymbolicAirBuilder<F: Field, EF: ExtensionField<F> = F> {
     preprocessed: RowMajorMatrix<SymbolicVariable<F>>,
@@ -199,10 +156,6 @@ pub struct SymbolicAirBuilder<F: Field, EF: ExtensionField<F> = F> {
     permutation_values: Vec<SymbolicVariableExt<F, EF>>,
     extension_constraints: Vec<SymbolicExpressionExt<F, EF>>,
     constraint_types: Vec<ConstraintType>,
-    /// Global interactions.
-    global_interactions: Vec<SymbolicInteraction<F>>,
-    /// Local interactions.
-    local_interactions: Vec<SymbolicLocalInteraction<F>>,
 }
 
 impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
@@ -263,8 +216,6 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
             permutation_values,
             extension_constraints: vec![],
             constraint_types: vec![],
-            global_interactions: vec![],
-            local_interactions: vec![],
         }
     }
 
@@ -290,21 +241,6 @@ impl<F: Field, EF: ExtensionField<F>> SymbolicAirBuilder<F, EF> {
 
     pub fn base_constraints(&self) -> Vec<SymbolicExpression<F>> {
         self.base_constraints.clone()
-    }
-
-    /// Global (cross-AIR) interactions recorded.
-    pub fn global_interactions(&self) -> &[SymbolicInteraction<F>] {
-        &self.global_interactions
-    }
-
-    /// Number of global (cross-AIR) interactions recorded.
-    pub const fn num_global_interactions(&self) -> usize {
-        self.global_interactions.len()
-    }
-
-    /// Local (intra-AIR) interactions recorded.
-    pub fn local_interactions(&self) -> &[SymbolicLocalInteraction<F>] {
-        &self.local_interactions
     }
 }
 
@@ -379,38 +315,6 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
 
     fn public_values(&self) -> &[Self::PublicVar] {
         &self.public_values
-    }
-
-    fn push_interaction<E: Into<Self::Expr>>(
-        &mut self,
-        bus_name: &str,
-        fields: impl IntoIterator<Item = E>,
-        count: impl Into<Self::Expr>,
-        count_weight: u32,
-    ) {
-        self.global_interactions.push(SymbolicInteraction {
-            bus_name: String::from(bus_name),
-            fields: fields.into_iter().map(Into::into).collect(),
-            count: count.into(),
-            count_weight,
-        });
-    }
-
-    fn push_local_interaction(
-        &mut self,
-        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Self::Expr)>,
-    ) {
-        self.local_interactions.push(SymbolicLocalInteraction {
-            tuples: tuples.into_iter().collect(),
-        });
-    }
-
-    fn num_global_interactions(&self) -> usize {
-        self.global_interactions.len()
-    }
-
-    fn num_local_interactions(&self) -> usize {
-        self.local_interactions.len()
     }
 }
 
@@ -1179,76 +1083,4 @@ mod tests {
         }
     }
 
-    /// An AIR that pushes interactions via `AirBuilder`.
-    #[derive(Debug)]
-    struct InteractingAir;
-
-    impl BaseAir<F> for InteractingAir {
-        fn width(&self) -> usize {
-            3
-        }
-    }
-
-    impl Air<SymbolicAirBuilder<F>> for InteractingAir {
-        fn eval(&self, builder: &mut SymbolicAirBuilder<F>) {
-            let main = builder.main();
-            let a = main.current_slice()[0];
-            let b = main.current_slice()[1];
-            let m = main.current_slice()[2];
-
-            // Normal constraint.
-            builder.assert_zero(a - b);
-
-            // Two interactions on different buses.
-            let a_expr: SymbolicExpression<F> = a.into();
-            let b_expr: SymbolicExpression<F> = b.into();
-            let m_expr: SymbolicExpression<F> = m.into();
-            builder.push_interaction("memory", [a_expr.clone(), b_expr], m_expr.clone(), 1);
-            builder.push_interaction("range", [a_expr], m_expr, 1);
-        }
-    }
-
-    #[test]
-    fn symbolic_builder_records_interactions() {
-        let layout = AirLayout {
-            main_width: 3,
-            ..Default::default()
-        };
-        let mut builder = SymbolicAirBuilder::<F>::new(layout);
-        InteractingAir.eval(&mut builder);
-
-        // One normal constraint.
-        assert_eq!(builder.base_constraints().len(), 1);
-
-        // Two interactions recorded.
-        let interactions = builder.global_interactions();
-        assert_eq!(interactions.len(), 2);
-
-        assert_eq!(interactions[0].bus_name, "memory");
-        assert_eq!(interactions[0].fields.len(), 2);
-        assert_eq!(interactions[0].count_weight, 1);
-
-        assert_eq!(interactions[1].bus_name, "range");
-        assert_eq!(interactions[1].fields.len(), 1);
-        assert_eq!(interactions[1].count_weight, 1);
-    }
-
-    #[test]
-    fn symbolic_builder_no_interactions_by_default() {
-        let layout = AirLayout {
-            main_width: 2,
-            ..Default::default()
-        };
-        let mut builder = SymbolicAirBuilder::<F>::new(layout);
-
-        // A plain AIR with no interactions.
-        let mock = MockAir {
-            constraints: vec![SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0)],
-            width: 2,
-        };
-        mock.eval(&mut builder);
-
-        assert_eq!(builder.global_interactions().len(), 0);
-        assert_eq!(builder.base_constraints().len(), 1);
-    }
 }

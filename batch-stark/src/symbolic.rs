@@ -2,10 +2,10 @@ use alloc::vec::Vec;
 
 use p3_air::Air;
 use p3_air::symbolic::{
-    AirLayout, ConstraintLayout, SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt,
+    AirLayout, ConstraintLayout, SymbolicExpression, SymbolicExpressionExt,
 };
 use p3_field::{Algebra, ExtensionField, Field};
-use p3_lookup::{Kind, Lookup, LookupProtocol};
+use p3_lookup::{InteractionSymbolicBuilder, Kind, Lookup, LookupProtocol};
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
@@ -23,7 +23,7 @@ pub fn get_constraint_layout<F, EF, A, LG>(
 where
     F: Field,
     EF: ExtensionField<F>,
-    A: Air<SymbolicAirBuilder<F, EF>>,
+    A: Air<InteractionSymbolicBuilder<F, EF>>,
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
     LG: LookupProtocol,
 {
@@ -39,7 +39,7 @@ where
         num_permutation_values,
         ..layout
     };
-    let mut builder = SymbolicAirBuilder::new(layout);
+    let mut builder = InteractionSymbolicBuilder::new(layout);
     lookup_gadget.eval_air_and_lookups(air, &mut builder, contexts);
     builder.constraint_layout()
 }
@@ -54,7 +54,7 @@ pub fn get_log_num_quotient_chunks<F, EF, A, LG>(
 where
     F: Field,
     EF: ExtensionField<F>,
-    A: Air<SymbolicAirBuilder<F, EF>>,
+    A: Air<InteractionSymbolicBuilder<F, EF>>,
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
     LG: LookupProtocol,
 {
@@ -104,7 +104,7 @@ pub fn get_max_constraint_degree<F, EF, A, LG>(
 where
     F: Field,
     EF: ExtensionField<F>,
-    A: Air<SymbolicAirBuilder<F, EF>>,
+    A: Air<InteractionSymbolicBuilder<F, EF>>,
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
     LG: LookupProtocol,
 {
@@ -131,7 +131,7 @@ pub fn get_symbolic_constraints<F, EF, A, LG>(
 where
     F: Field,
     EF: ExtensionField<F>,
-    A: Air<SymbolicAirBuilder<F, EF>>,
+    A: Air<InteractionSymbolicBuilder<F, EF>>,
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
     LG: LookupProtocol,
 {
@@ -148,7 +148,7 @@ where
         num_permutation_values,
         ..layout
     };
-    let mut builder = SymbolicAirBuilder::new(layout);
+    let mut builder = InteractionSymbolicBuilder::new(layout);
 
     // Evaluate AIR and lookup constraints.
     lookup_gadget.eval_air_and_lookups(air, &mut builder, contexts);

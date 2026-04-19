@@ -7,6 +7,7 @@ use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpression};
 use p3_air::{
     Air, AirBuilder, BaseAir, BaseLeaf, ExtensionBuilder, PermutationAirBuilder, WindowAccess,
 };
+use crate::builder::InteractionBuilder;
 use p3_baby_bear::BabyBear;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
@@ -269,7 +270,7 @@ impl RangeCheckAir {
 
 impl<AB> Air<AB> for RangeCheckAir
 where
-    AB: AirBuilder<F: Field>,
+    AB: AirBuilder<F: Field> + InteractionBuilder,
 {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();
@@ -1127,7 +1128,7 @@ impl<F: Field> BaseAir<F> for AddAir {
 
 impl<AB> Air<AB> for AddAir
 where
-    AB: AirBuilder<F: Field>,
+    AB: AirBuilder<F: Field> + InteractionBuilder,
 {
     fn eval(&self, builder: &mut AB) {
         let main = builder.main();

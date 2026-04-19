@@ -7,12 +7,12 @@ use alloc::{format, vec};
 pub use data::VerifierData;
 use hashbrown::HashMap;
 use p3_air::Air;
-use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
+use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::{Kind, LookupProtocol};
+use p3_lookup::{InteractionSymbolicBuilder, Kind, LookupProtocol};
 use p3_uni_stark::{
     InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks, validate_degree_bits,
 };
@@ -37,7 +37,7 @@ pub fn verify_batch<SC, A>(
 where
     SC: SGC,
     SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
-    A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
+    A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<VerifierConstraintFolderWithLookups<'a, SC>>,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
 {
