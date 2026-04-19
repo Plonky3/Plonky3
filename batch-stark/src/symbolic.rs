@@ -1,9 +1,7 @@
 use alloc::vec::Vec;
 
 use p3_air::Air;
-use p3_air::symbolic::{
-    AirLayout, ConstraintLayout, SymbolicExpression, SymbolicExpressionExt,
-};
+use p3_air::symbolic::{AirLayout, ConstraintLayout, SymbolicExpression, SymbolicExpressionExt};
 use p3_field::{Algebra, ExtensionField, Field};
 use p3_lookup::{InteractionSymbolicBuilder, Kind, Lookup, LookupProtocol};
 use p3_util::log2_ceil_usize;

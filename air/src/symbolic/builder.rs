@@ -1082,5 +1082,4 @@ mod tests {
             assert_eq!(val, EF::ONE);
         }
     }
-
 }

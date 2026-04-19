@@ -7,7 +7,6 @@ use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpression};
 use p3_air::{
     Air, AirBuilder, BaseAir, BaseLeaf, ExtensionBuilder, PermutationAirBuilder, WindowAccess,
 };
-use crate::builder::InteractionBuilder;
 use p3_baby_bear::BabyBear;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
@@ -17,6 +16,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use crate::Lookups;
+use crate::builder::InteractionBuilder;
 use crate::logup::LogUpGadget;
 use crate::protocol::LookupProtocol;
 use crate::traits::{Kind, Lookup};
