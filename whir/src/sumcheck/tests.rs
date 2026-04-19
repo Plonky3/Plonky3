@@ -11,26 +11,25 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use crate::constraints::Constraint;
-use crate::constraints::evaluator::ConstraintPolyEvaluator;
 use crate::constraints::statement::initial::InitialStatement;
 use crate::constraints::statement::{EqStatement, SelectStatement};
-use crate::fiat_shamir::domain_separator::DomainSeparator;
-use crate::parameters::{FoldingFactor, SumcheckStrategy};
-use crate::sumcheck::prover::SumcheckProver;
-use crate::sumcheck::{SumcheckData, verify_final_sumcheck_rounds};
+use crate::parameters::FoldingFactor;
+use crate::sumcheck::SumcheckData;
+use crate::sumcheck::single::SingleSumcheck;
+use crate::sumcheck::strategy::{PrefixSumcheck, SumcheckStrategy};
 
 // Base field: BabyBear (a 31-bit prime field suitable for fast arithmetic).
-type F = BabyBear;
+pub(crate) type F = BabyBear;
 // Extension field: degree-4 binomial extension of BabyBear, used for challenge sampling.
-type EF = BinomialExtensionField<F, 4>;
+pub(crate) type EF = BinomialExtensionField<F, 4>;
 // Poseidon2 permutation over BabyBear with width 16, used as the core hash primitive.
-type Perm = Poseidon2BabyBear<16>;
+pub(crate) type Perm = Poseidon2BabyBear<16>;
 
 // Fiat-Shamir challenger: duplex sponge over BabyBear with width 16 and capacity 8.
-type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
+pub(crate) type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
 
-/// Creates a fresh `DomainSeparator` and `DuplexChallenger` using a fixed RNG seed.
-fn domainsep_and_challenger() -> (DomainSeparator<EF, F>, MyChallenger) {
+/// Creates a fresh `DuplexChallenger` using a fixed RNG seed.
+pub(crate) fn challenger() -> MyChallenger {
     // Initialize a small random number generator with a fixed seed.
     let mut rng = SmallRng::seed_from_u64(1);
 
@@ -38,10 +37,7 @@ fn domainsep_and_challenger() -> (DomainSeparator<EF, F>, MyChallenger) {
     let perm = Perm::new_from_rng_128(&mut rng);
 
     // Create a new duplex challenger over the field `F` with this permutation
-    let challenger = MyChallenger::new(perm);
-
-    // Return a fresh (empty) domain separator and the challenger
-    (DomainSeparator::new(vec![]), challenger)
+    MyChallenger::new(perm)
 }
 
 // Simulates the prover side of STIR constraint derivation for an intermediate round.
@@ -57,7 +53,7 @@ fn domainsep_and_challenger() -> (DomainSeparator<EF, F>, MyChallenger) {
 //
 // The evaluations are pushed into `constraint_evals` so the verifier can read them later
 // (simulating what would normally be transmitted in the proof).
-fn make_constraint_ext<Challenger>(
+pub(crate) fn make_constraint_ext<Challenger>(
     challenger: &mut Challenger,
     constraint_evals: &mut Vec<EF>,
     num_vars: usize,
@@ -140,7 +136,7 @@ where
 // The key invariant is that the verifier's challenger must stay perfectly synchronized
 // with the prover's challenger: both sample the same random points and observe the same
 // evaluations, so their Fiat-Shamir transcripts remain identical.
-fn read_constraint<Challenger>(
+pub(crate) fn read_constraint<Challenger>(
     challenger: &mut Challenger,
     constraint_evals: &[EF],
     num_vars: usize,
@@ -226,7 +222,7 @@ fn run_sumcheck_test(
     folding_factor: FoldingFactor,
     num_eqs: &[usize],
     num_sels: &[usize],
-    strategy: SumcheckStrategy,
+    apply_svo: bool,
 ) -> Point<EF> {
     // Compute how many intermediate folding rounds there are, plus the size of the final round.
     // For example, with num_vars=6 and folding_factor=2: num_rounds=2, final_rounds=2.
@@ -246,23 +242,19 @@ fn run_sumcheck_test(
     // The prover has access to the full polynomial and produces a proof transcript.
     // The challenger is cloned so that prover and verifier start from the same state
     // but evolve independently (they must stay synchronized via Fiat-Shamir).
-    let (domsep, challenger) = domainsep_and_challenger();
+    let challenger = challenger();
     let mut prover_challenger = challenger.clone();
 
     // Crate empty proof for each round
     let mut proof = vec![SumcheckData::<F, EF>::default(); num_rounds + 2];
 
-    // Absorb the domain separator into the prover's transcript.
-    domsep.observe_domain_separator(&mut prover_challenger);
-
     // Store constraint evaluations for each round (prover writes, verifier reads)
-    // TODO: read from proof in verifier side
     let mut all_constraint_evals: Vec<Vec<EF>> = Vec::new();
 
     // Build the initial statement from the polynomial. The initial statement wraps
     // the raw evaluations and supports constraint evaluation before the first fold.
     let folding0 = folding_factor.at_round(0);
-    let mut initial_statement = InitialStatement::new(poly.clone(), folding0, strategy);
+    let mut initial_statement = InitialStatement::new(poly.clone(), folding0, apply_svo);
 
     // Sample eq constraints for the initial round: for each constraint, draw a random
     // univariate challenge, expand it to a multilinear point, evaluate the polynomial
@@ -284,7 +276,7 @@ fn run_sumcheck_test(
     // the proof, and returns the partially folded state along with the verifier's
     // random challenges (prover_randomness) accumulated so far.
 
-    let (mut sumcheck, mut prover_randomness) = SumcheckProver::from_base_evals(
+    let (mut sumcheck, mut prover_randomness) = SingleSumcheck::new(
         proof.first_mut().unwrap(),
         &mut prover_challenger,
         folding0,
@@ -336,7 +328,7 @@ fn run_sumcheck_test(
         num_vars_inter -= folding;
 
         // Sanity check: the sumcheck state should track the correct variable count.
-        assert_eq!(sumcheck.num_variables(), num_vars_inter);
+        assert_eq!(sumcheck.num_vars(), num_vars_inter);
     }
 
     // After all intermediate rounds, the remaining variables should equal final_rounds.
@@ -358,7 +350,7 @@ fn run_sumcheck_test(
     let final_folded_value = sumcheck.evals().as_constant().unwrap();
 
     // All variables have been folded away.
-    assert_eq!(sumcheck.num_variables(), 0);
+    assert_eq!(sumcheck.num_vars(), 0);
 
     // Core correctness check: the final folded value must equal the polynomial
     // evaluated at the full random point r that was built from all verifier challenges.
@@ -388,11 +380,6 @@ fn run_sumcheck_test(
 
     // Track remaining variables, mirroring the prover’s count.
     let mut num_vars_inter = num_vars;
-
-    // Absorb the same domain separator as the prover to synchronize transcripts.
-    domsep.observe_domain_separator(&mut verifier_challenger);
-
-    // println!("{:#?}", proof);
 
     // VERIFY INITIAL ROUND (round 0):
     // The initial round only has eq constraints (no select constraints, hence 0 for num_sels).
@@ -456,14 +443,11 @@ fn run_sumcheck_test(
 
     // VERIFY FINAL ROUND: fold the last remaining variables and finalize the sum.
     verifier_randomness.extend(
-        &verify_final_sumcheck_rounds(
-            Some(proof.last().unwrap()),
-            &mut verifier_challenger,
-            &mut sum,
-            final_rounds,
-            0,
-        )
-        .unwrap(),
+        &proof
+            .last()
+            .unwrap()
+            .verify_rounds(&mut verifier_challenger, &mut sum, 0)
+            .unwrap(),
     );
 
     // ==================== FINAL CHECKS ====================
@@ -473,11 +457,8 @@ fn run_sumcheck_test(
     assert_eq!(prover_randomness, verifier_randomness);
 
     // Evaluate the aggregated constraint weight polynomial at the full random point.
-    // This polynomial encodes the linear combination of all eq and select constraints
-    // across all rounds. The reversed point accounts for the bit-reversal convention
-    // used by the constraint evaluator.
-    let evaluator = ConstraintPolyEvaluator::new(folding_factor);
-    let weights = evaluator.eval_constraints_poly(&constraints, &verifier_randomness.reversed());
+    // Single-sumcheck follows the prefix-order strategy.
+    let weights = PrefixSumcheck::eval_constraints_poly(&constraints, &verifier_randomness);
 
     // The fundamental sumcheck identity: the accumulated sum from all rounds must equal
     // the final folded polynomial value f(r) multiplied by the constraint weights.
@@ -489,7 +470,7 @@ fn run_sumcheck_test(
 }
 
 #[test]
-fn test_sumcheck_prover() {
+fn test_single_sumcheck() {
     // Brute-force test over all valid (num_vars, folding_factor) combinations.
     // For each configuration, 100 random constraint setups are tested to cover
     // a wide variety of eq/sel constraint counts (0, 1, or 2 each).
@@ -527,7 +508,7 @@ fn test_sumcheck_prover() {
                     folding_factor,
                     &num_eq_points,
                     &num_sel_points,
-                    SumcheckStrategy::Classic,
+                    false,
                 );
 
                 // Run the same test with the SVO (Shifted Virtual Oracle) strategy.
@@ -536,7 +517,7 @@ fn test_sumcheck_prover() {
                     folding_factor,
                     &num_eq_points,
                     &num_sel_points,
-                    SumcheckStrategy::Svo,
+                    true,
                 );
 
                 // Both strategies must produce the exact same random evaluation point.

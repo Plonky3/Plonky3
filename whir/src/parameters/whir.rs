@@ -11,23 +11,6 @@ use p3_multilinear_util::poly::Poly;
 use super::{FoldingFactor, ProtocolParameters, SecurityAssumption};
 use crate::constraints::statement::initial::InitialStatement;
 
-/// Selects which sumcheck algorithm variant to use during proving.
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SumcheckStrategy {
-    /// Protocol with statement using classic sumcheck (no optimization).
-    ///
-    /// This is the standard baseline implementation where the prover proves
-    /// both polynomial commitment validity and evaluation statements.
-    Classic,
-
-    /// Protocol with statement using Small Value Optimization (SVO).
-    ///
-    /// Uses SVO from Algorithm 6 of <https://eprint.iacr.org/2025/1117> with
-    /// specialized accumulators for the first three rounds to reduce prover work.
-    #[default]
-    Svo,
-}
-
 /// Derived configuration for a single intermediate WHIR round.
 ///
 /// All values are computed from the user-facing protocol parameters
@@ -489,13 +472,9 @@ where
     pub const fn initial_statement(
         &self,
         polynomial: Poly<F>,
-        sumcheck_strategy: SumcheckStrategy,
+        apply_svo: bool,
     ) -> InitialStatement<F, EF> {
-        InitialStatement::new(
-            polynomial,
-            self.folding_factor.at_round(0),
-            sumcheck_strategy,
-        )
+        InitialStatement::new(polynomial, self.folding_factor.at_round(0), apply_svo)
     }
 }
 

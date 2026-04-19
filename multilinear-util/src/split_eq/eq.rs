@@ -205,7 +205,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         }
     }
 
-    /// Weighted accumulation for low-variable compression.
+    /// Weighted accumulation for prefix-variable compression.
     ///
     /// For each eq1 entry, accumulates w0 * eq1[i] * chunk_row[j] into out[j].
     ///
@@ -218,7 +218,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// - out: accumulator buffer of size 2^{k_inner}
     /// - chunk: slice of base-field evaluations for one eq0 entry
     /// - w0: the eq0 weight to multiply by
-    pub(super) fn compress_lo_into(&self, out: &mut [EF], chunk: &[F], w0: EF) {
+    pub(super) fn compress_prefix_into(&self, out: &mut [EF], chunk: &[F], w0: EF) {
         let size_inner = out.len();
         match self {
             Self::Unpacked(eq1) => {
@@ -258,7 +258,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         }
     }
 
-    /// Weighted accumulation for low-variable compression into packed output.
+    /// Weighted accumulation for prefix-variable compression into packed output.
     ///
     /// Same operation as the scalar compression kernel,
     /// but writes into a packed extension-field buffer.
@@ -268,7 +268,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// - out: packed accumulator buffer of size 2^{k_inner} / W
     /// - chunk: slice of base-field evaluations for one eq0 entry
     /// - w0: the eq0 weight to multiply by
-    pub(super) fn compress_lo_to_packed_into(
+    pub(super) fn compress_prefix_to_packed_into(
         &self,
         out: &mut [EF::ExtensionPacking],
         chunk: &[F],
@@ -326,14 +326,14 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// sum_{j} eq0[j] * (sum_{i} eq1[i] * chunk[j * |eq1| + i])
     /// ```
     ///
-    /// This is the kernel for high-variable compression:
+    /// This is the kernel for suffix-variable compression:
     /// each output element is a full dot product of one row against the split eq tables.
     ///
     /// # Arguments
     ///
     /// - chunk: base-field slice of size 2^{num_vars}, representing one output row
-    /// - eq0: the low-half eq table weights
-    pub(super) fn compress_hi_dot(&self, chunk: &[F], eq0: &Poly<EF>) -> EF {
+    /// - eq0: the prefix-half eq table weights
+    pub(super) fn compress_suffix_dot(&self, chunk: &[F], eq0: &Poly<EF>) -> EF {
         match self {
             Self::Unpacked(eq1) => {
                 // Group the chunk by eq1 size, pair with eq0 weights.
@@ -602,11 +602,11 @@ mod tests {
         }
     }
 
-    // Low-variable compression kernel
+    // Prefix-variable compression kernel
 
     proptest! {
         #[test]
-        fn prop_compress_lo_packed_eq_unpacked(
+        fn prop_compress_prefix_packed_eq_unpacked(
             eq_k in K_PACK..=8usize,
             inner_k in 1usize..=4,
             seed in any::<u64>(),
@@ -625,18 +625,18 @@ mod tests {
             let mut out_u = vec![EF::ZERO; 1 << inner_k];
             let mut out_p = vec![EF::ZERO; 1 << inner_k];
 
-            unpacked.compress_lo_into(&mut out_u, &chunk, w0);
-            packed.compress_lo_into(&mut out_p, &chunk, w0);
+            unpacked.compress_prefix_into(&mut out_u, &chunk, w0);
+            packed.compress_prefix_into(&mut out_p, &chunk, w0);
 
             prop_assert_eq!(out_u, out_p);
         }
     }
 
-    // Packed low-variable compression kernel
+    // Packed prefix-variable compression kernel
 
     proptest! {
         #[test]
-        fn prop_compress_lo_to_packed_matches_scalar(
+        fn prop_compress_prefix_to_packed_matches_scalar(
             eq_k in K_PACK..=8usize,
             inner_k in K_PACK..=4usize,
             seed in any::<u64>(),
@@ -651,12 +651,12 @@ mod tests {
 
             // Scalar reference compression.
             let mut out_scalar = vec![EF::ZERO; 1 << inner_k];
-            eq.compress_lo_into(&mut out_scalar, &chunk, w0);
+            eq.compress_prefix_into(&mut out_scalar, &chunk, w0);
 
             // Packed compression, then unpack for comparison.
             let packed_inner = (1 << inner_k) / PackedF::WIDTH;
             let mut out_packed = vec![EP::ZERO; packed_inner];
-            eq.compress_lo_to_packed_into(&mut out_packed, &chunk, w0);
+            eq.compress_prefix_to_packed_into(&mut out_packed, &chunk, w0);
             let out_unpacked: Vec<EF> =
                 <EP as PackedFieldExtension<F, EF>>::to_ext_iter(out_packed.iter().copied())
                     .collect();
@@ -665,11 +665,11 @@ mod tests {
         }
     }
 
-    // High-variable compression kernel
+    // Suffix-variable compression kernel
 
     proptest! {
         #[test]
-        fn prop_compress_hi_dot_packed_eq_unpacked(
+        fn prop_compress_suffix_dot_packed_eq_unpacked(
             eq_k in K_PACK..=8usize,
             seed in any::<u64>(),
         ) {
@@ -686,13 +686,13 @@ mod tests {
             let packed = EqMaybePacked::<F, EF>::new_packed(&z1);
 
             prop_assert_eq!(
-                unpacked.compress_hi_dot(&chunk, &eq0),
-                packed.compress_hi_dot(&chunk, &eq0),
+                unpacked.compress_suffix_dot(&chunk, &eq0),
+                packed.compress_suffix_dot(&chunk, &eq0),
             );
         }
 
         #[test]
-        fn prop_compress_hi_dot_matches_reference(
+        fn prop_compress_suffix_dot_matches_reference(
             eq_k in 0usize..=10,
             seed in any::<u64>(),
         ) {
@@ -707,7 +707,7 @@ mod tests {
             let eq0 = Poly::<EF>::new_from_point(z0.as_slice(), EF::ONE);
             let unpacked = EqMaybePacked::<F, EF>::new_unpacked(&z1);
 
-            prop_assert_eq!(expected, unpacked.compress_hi_dot(&chunk, &eq0));
+            prop_assert_eq!(expected, unpacked.compress_suffix_dot(&chunk, &eq0));
         }
     }
 

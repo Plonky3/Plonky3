@@ -25,7 +25,6 @@ use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
 
 use crate::constraints::statement::EqStatement;
-use crate::parameters::SumcheckStrategy;
 use crate::sumcheck::svo::SvoClaim;
 
 /// Manages the polynomial and constraints during the initial phase of WHIR.
@@ -108,19 +107,18 @@ impl<F: Field, EF: ExtensionField<F>> InitialStatement<F, EF> {
     /// where `k` is the number of variables. This ensures enough parallelism
     /// for packed field operations.
     #[must_use]
-    pub const fn new(poly: Poly<F>, l0: usize, strategy: SumcheckStrategy) -> Self {
-        match strategy {
-            SumcheckStrategy::Classic => Self::new_classic(poly),
-            SumcheckStrategy::Svo => {
-                let k = poly.num_vars();
-                // Check if polynomial is large enough for SVO optimization.
-                if k > 2 * log2_strict_usize(F::Packing::WIDTH) + l0 {
-                    Self::new_svo(poly, l0)
-                } else {
-                    // Fallback to classic for small polynomials.
-                    Self::new_classic(poly)
-                }
+    pub const fn new(poly: Poly<F>, l0: usize, apply_svo: bool) -> Self {
+        if apply_svo {
+            let k = poly.num_vars();
+            // Check if polynomial is large enough for SVO optimization.
+            if k > 2 * log2_strict_usize(F::Packing::WIDTH) + l0 {
+                Self::new_svo(poly, l0)
+            } else {
+                // Fallback to classic for small polynomials.
+                Self::new_classic(poly)
             }
+        } else {
+            Self::new_classic(poly)
         }
     }
 
@@ -189,14 +187,15 @@ impl<F: Field, EF: ExtensionField<F>> InitialStatement<F, EF> {
         match &self.inner {
             InitialStatementInner::Classic(statement) => statement.clone(),
             InitialStatementInner::Svo { statement, .. } => {
-                let points: Vec<_> = statement.iter().map(SvoClaim::point).cloned().collect();
+                let points: Vec<_> = statement.iter().map(SvoClaim::original).cloned().collect();
                 let evals: Vec<_> = statement.iter().map(SvoClaim::eval).collect();
 
                 let mut statement = EqStatement::initialize(self.num_variables());
                 points
                     .iter()
+                    .cloned()
                     .zip(evals.iter())
-                    .for_each(|(pt, &ev)| statement.add_evaluated_constraint(pt.clone(), ev));
+                    .for_each(|(point, &ev)| statement.add_evaluated_constraint(point, ev));
                 statement
             }
         }
@@ -229,9 +228,9 @@ impl<F: Field, EF: ExtensionField<F>> InitialStatementInner<F, EF> {
                 eval
             }
             Self::Svo { statement, l0 } => {
-                let split_eq = SvoClaim::new(point, *l0, poly);
-                let eval = split_eq.eval();
-                statement.push(split_eq);
+                let claim = SvoClaim::new(point, *l0, poly);
+                let eval = claim.eval();
+                statement.push(claim);
                 eval
             }
         }
@@ -248,6 +247,9 @@ mod tests {
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
+
+    const APPLY_SVO: bool = true;
+    const CLASSIC: bool = false;
 
     /// Creates a simple test polynomial with known evaluations.
     ///
@@ -273,7 +275,7 @@ mod tests {
     #[test]
     fn test_new_classic_strategy() {
         let poly = make_test_poly();
-        let statement = InitialStatement::<F, EF>::new(poly, 2, SumcheckStrategy::Classic);
+        let statement = InitialStatement::<F, EF>::new(poly, 2, CLASSIC);
 
         assert_eq!(statement.num_variables(), 2);
         assert_eq!(statement.poly.num_evals(), 4);
@@ -284,7 +286,7 @@ mod tests {
     fn test_new_svo_strategy_fallback_to_classic() {
         // Small polynomial should fallback to classic even with SVO strategy.
         let poly = make_test_poly();
-        let statement = InitialStatement::<F, EF>::new(poly, 2, SumcheckStrategy::Svo);
+        let statement = InitialStatement::<F, EF>::new(poly, 2, APPLY_SVO);
 
         assert!(matches!(statement.inner, InitialStatementInner::Classic(_)));
 
@@ -295,7 +297,7 @@ mod tests {
     #[test]
     fn test_new_svo_strategy_with_large_poly() {
         let poly = make_large_poly();
-        let statement = InitialStatement::<F, EF>::new(poly, 4, SumcheckStrategy::Svo);
+        let statement = InitialStatement::<F, EF>::new(poly, 4, APPLY_SVO);
 
         assert!(matches!(statement.inner, InitialStatementInner::Svo { .. }));
         assert_eq!(statement.num_variables(), 16);
@@ -304,7 +306,7 @@ mod tests {
     #[test]
     fn test_evaluate_classic() {
         let poly = make_test_poly();
-        let mut statement = InitialStatement::<F, EF>::new(poly, 2, SumcheckStrategy::Classic);
+        let mut statement = InitialStatement::<F, EF>::new(poly, 2, CLASSIC);
 
         // Evaluate at Boolean point (0, 1).
         let point = Point::new(vec![EF::ZERO, EF::ONE]);
@@ -318,8 +320,7 @@ mod tests {
     #[test]
     fn test_evaluate_extension_point() {
         let poly = make_test_poly();
-        let mut statement =
-            InitialStatement::<F, EF>::new(poly.clone(), 2, SumcheckStrategy::Classic);
+        let mut statement = InitialStatement::<F, EF>::new(poly.clone(), 2, CLASSIC);
 
         // Evaluate at non-Boolean extension field point.
         let point = Point::new(vec![EF::from_u64(3), EF::from_u64(7)]);
@@ -332,8 +333,7 @@ mod tests {
     #[test]
     fn test_multiple_evaluations() {
         let poly = make_test_poly();
-        let mut statement =
-            InitialStatement::<F, EF>::new(poly.clone(), 2, SumcheckStrategy::Classic);
+        let mut statement = InitialStatement::<F, EF>::new(poly.clone(), 2, CLASSIC);
 
         let point1 = Point::new(vec![EF::ZERO, EF::ZERO]);
         let point2 = Point::new(vec![EF::ONE, EF::ONE]);
@@ -353,7 +353,7 @@ mod tests {
     #[should_panic(expected = "Point has 3 variables but statement expects 2")]
     fn test_evaluate_wrong_variable_count() {
         let poly = make_test_poly();
-        let mut statement = InitialStatement::<F, EF>::new(poly, 2, SumcheckStrategy::Classic);
+        let mut statement = InitialStatement::<F, EF>::new(poly, 2, CLASSIC);
 
         let wrong_point = Point::new(vec![EF::ONE, EF::ZERO, EF::ONE]);
         let _ = statement.evaluate(&wrong_point);
@@ -362,7 +362,7 @@ mod tests {
     #[test]
     fn test_normalize_classic() {
         let poly = make_test_poly();
-        let mut statement = InitialStatement::<F, EF>::new(poly, 2, SumcheckStrategy::Classic);
+        let mut statement = InitialStatement::<F, EF>::new(poly, 2, CLASSIC);
 
         let point1 = Point::new(vec![EF::ZERO, EF::ONE]);
         let point2 = Point::new(vec![EF::ONE, EF::ZERO]);
@@ -385,7 +385,7 @@ mod tests {
     #[test]
     fn test_normalize_svo() {
         let poly = make_large_poly();
-        let mut statement = InitialStatement::<F, EF>::new(poly, 4, SumcheckStrategy::Svo);
+        let mut statement = InitialStatement::<F, EF>::new(poly, 4, APPLY_SVO);
 
         let point = Point::new((0..16).map(|i| EF::from_u64(i as u64)).collect());
         let eval = statement.evaluate(&point);
@@ -401,11 +401,11 @@ mod tests {
     #[test]
     fn test_num_variables() {
         let poly = make_test_poly();
-        let statement = InitialStatement::<F, EF>::new(poly, 2, SumcheckStrategy::Classic);
+        let statement = InitialStatement::<F, EF>::new(poly, 2, CLASSIC);
         assert_eq!(statement.num_variables(), 2);
 
         let large_poly = make_large_poly();
-        let large_statement = InitialStatement::<F, EF>::new(large_poly, 4, SumcheckStrategy::Svo);
+        let large_statement = InitialStatement::<F, EF>::new(large_poly, 4, APPLY_SVO);
         assert_eq!(large_statement.num_variables(), 16);
     }
 

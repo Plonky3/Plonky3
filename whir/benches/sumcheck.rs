@@ -5,9 +5,8 @@ use p3_field::extension::BinomialExtensionField;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_whir::constraints::statement::initial::InitialStatement;
-use p3_whir::parameters::SumcheckStrategy;
 use p3_whir::sumcheck::SumcheckData;
-use p3_whir::sumcheck::prover::SumcheckProver;
+use p3_whir::sumcheck::single::SingleSumcheck;
 use p3_whir::sumcheck::svo::SvoClaim;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -27,13 +26,13 @@ fn make_statement(
     num_vars: usize,
     folding_factor: usize,
     num_constraints: usize,
-    strategy: SumcheckStrategy,
+    apply_svo: bool,
 ) -> InitialStatement<F, EF> {
     let mut rng = SmallRng::seed_from_u64(
         (num_vars as u64) ^ ((folding_factor as u64) << 16) ^ ((num_constraints as u64) << 32),
     );
     let poly = Poly::new((0..1 << num_vars).map(|_| rng.random()).collect());
-    let mut stmt = InitialStatement::<F, EF>::new(poly, folding_factor, strategy);
+    let mut stmt = InitialStatement::<F, EF>::new(poly, folding_factor, apply_svo);
     for _ in 0..num_constraints {
         let pt = Point::<EF>::rand(&mut rng, num_vars);
         let _ = stmt.evaluate(&pt);
@@ -52,30 +51,14 @@ fn bench_sumcheck_prover(c: &mut Criterion) {
     ];
 
     for &(num_vars, folding_factor, num_constraints, label) in &cases {
-        let classic_stmt = make_statement(
-            num_vars,
-            folding_factor,
-            num_constraints,
-            SumcheckStrategy::Classic,
-        );
-        let svo_stmt = make_statement(
-            num_vars,
-            folding_factor,
-            num_constraints,
-            SumcheckStrategy::Svo,
-        );
+        let classic_stmt = make_statement(num_vars, folding_factor, num_constraints, false);
+        let svo_stmt = make_statement(num_vars, folding_factor, num_constraints, true);
 
         group.bench_with_input(BenchmarkId::new("classic", label), &label, |b, _| {
             b.iter(|| {
                 let mut data = SumcheckData::default();
                 let mut challenger = make_challenger();
-                SumcheckProver::from_base_evals(
-                    &mut data,
-                    &mut challenger,
-                    folding_factor,
-                    0,
-                    &classic_stmt,
-                )
+                SingleSumcheck::new(&mut data, &mut challenger, folding_factor, 0, &classic_stmt)
             });
         });
 
@@ -83,13 +66,7 @@ fn bench_sumcheck_prover(c: &mut Criterion) {
             b.iter(|| {
                 let mut data = SumcheckData::default();
                 let mut challenger = make_challenger();
-                SumcheckProver::from_base_evals(
-                    &mut data,
-                    &mut challenger,
-                    folding_factor,
-                    0,
-                    &svo_stmt,
-                )
+                SingleSumcheck::new(&mut data, &mut challenger, folding_factor, 0, &svo_stmt)
             });
         });
     }

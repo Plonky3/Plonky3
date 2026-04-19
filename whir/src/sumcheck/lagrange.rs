@@ -56,17 +56,7 @@ use p3_field::Field;
 /// Note: these do NOT form a partition of unity (they do not sum to 1).
 pub(crate) fn lagrange_weights_01inf<F: Field>(r: F) -> [F; 3] {
     let r_minus_one = r - F::ONE;
-
-    // L_0(r) = 1 - r
-    let l0 = F::ONE - r;
-
-    // L_1(r) = r
-    let l1 = r;
-
-    // L_inf(r) = r * (r - 1)
-    let l_inf = r * r_minus_one;
-
-    [l0, l1, l_inf]
+    [F::ONE - r, r, r * r_minus_one]
 }
 
 /// Computes tensor product weights for multivariate interpolation on `{0, 1, inf}^k`.

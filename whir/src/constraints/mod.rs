@@ -5,9 +5,6 @@ use p3_util::log2_strict_usize;
 
 use crate::constraints::statement::{EqStatement, SelectStatement};
 
-/// Constraint evaluation utilities.
-pub mod evaluator;
-
 /// Statement types for polynomial evaluation constraints.
 pub mod statement;
 

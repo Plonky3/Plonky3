@@ -331,28 +331,28 @@ impl<F: Field> Poly<F> {
         }
     }
 
-    /// Fixes the low variables of a multilinear polynomial using the split eq
-    /// tables, returning a reduced polynomial over the remaining high variables.
+    /// Fixes the prefix variables of a multilinear polynomial using the split eq
+    /// tables, returning a reduced polynomial over the remaining suffix variables.
     ///
     /// Given `poly` with `n` variables and split eq with `m ≤ n` variables, computes:
     /// ```text
-    ///   out(x_hi) = Σ_{y_lo ∈ {0,1}^m} eq(point, y_lo) · poly(y_lo, x_hi)
+    ///   out(x_suffix) = Σ_{y_prefix ∈ {0,1}^m} eq(point, y_prefix) · poly(y_prefix, x_suffix)
     /// ```
-    pub fn compress_lo<EF>(&self, point: &Point<EF>, scale: EF) -> Poly<EF>
+    pub fn compress_prefix<EF>(&self, point: &Point<EF>, scale: EF) -> Poly<EF>
     where
         EF: ExtensionField<F>,
     {
-        SplitEq::<F, EF>::new_packed(point, scale).compress_lo(self)
+        SplitEq::<F, EF>::new_packed(point, scale).compress_prefix(self)
     }
 
-    /// Like [`compress_lo`](Self::compress_lo), but returns the result in packed
+    /// Like [`compress_prefix`](Self::compress_prefix), but returns the result in packed
     /// extension-field representation. Requires that `poly` has enough variables
     /// to fill at least one packed element after compression.
     ///
     /// ```text
-    ///   out(x_hi) = Σ_{y_lo ∈ {0,1}^m} eq(point, y_lo) · poly(y_lo, x_hi)
+    ///   out(x_suffix) = Σ_{y_prefix ∈ {0,1}^m} eq(point, y_prefix) · poly(y_prefix, x_suffix)
     /// ```
-    pub fn compress_lo_to_packed<EF>(
+    pub fn compress_prefix_to_packed<EF>(
         &self,
         point: &Point<EF>,
         scale: EF,
@@ -360,38 +360,38 @@ impl<F: Field> Poly<F> {
     where
         EF: ExtensionField<F>,
     {
-        SplitEq::<F, EF>::new_packed(point, scale).compress_lo_to_packed(self)
+        SplitEq::<F, EF>::new_packed(point, scale).compress_prefix_to_packed(self)
     }
 
-    /// Fixes the high variables of a multilinear polynomial using the split eq
-    /// tables, returning a reduced polynomial over the remaining low variables.
+    /// Fixes the suffix variables of a multilinear polynomial using the split eq
+    /// tables, returning a reduced polynomial over the remaining prefix variables.
     ///
     /// Given `poly` with `n` variables and split eq with `m ≤ n` variables, computes:
     /// ```text
-    ///   out(x_lo) = Σ_{y_hi ∈ {0,1}^m} eq(point, y_hi) · poly(x_lo, y_hi)
+    ///   out(x_prefix) = Σ_{y_suffix ∈ {0,1}^m} eq(point, y_suffix) · poly(x_prefix, y_suffix)
     /// ```
-    pub fn compress_hi<EF>(&self, point: &Point<EF>, scale: EF) -> Poly<EF>
+    pub fn compress_suffix<EF>(&self, point: &Point<EF>, scale: EF) -> Poly<EF>
     where
         EF: ExtensionField<F>,
     {
-        SplitEq::<F, EF>::new_packed(point, scale).compress_hi(self)
+        SplitEq::<F, EF>::new_packed(point, scale).compress_suffix(self)
     }
 
-    /// Like [`compress_hi`](Self::compress_hi), but writes into a pre-allocated buffer.
-    pub fn compress_hi_into<EF>(&self, out: &mut [EF], point: &Point<EF>, scale: EF)
+    /// Like [`compress_suffix`](Self::compress_suffix), but writes into a pre-allocated buffer.
+    pub fn compress_suffix_into<EF>(&self, out: &mut [EF], point: &Point<EF>, scale: EF)
     where
         EF: ExtensionField<F>,
     {
-        SplitEq::<F, EF>::new_packed(point, scale).compress_hi_into(out, self);
+        SplitEq::<F, EF>::new_packed(point, scale).compress_suffix_into(out, self);
     }
 }
 
 impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
-    /// Fixes the lowest variable at a challenge value, returning a folded polynomial.
+    /// Fixes the prefix variable at a challenge value, returning a folded polynomial.
     ///
     /// Computes:
     /// ```text
-    /// p'(x') = (1 - zi) * p(0, x') + zi * p(1, x')
+    /// p'(x') = (1 - r) * p(0, x') + r * p(1, x')
     /// ```
     ///
     /// The result has one fewer variable (n - 1).
@@ -399,7 +399,7 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
     /// # Panics
     ///
     /// Panics if the polynomial is constant (zero free variables).
-    pub fn fix_lo_var<F>(&self, zi: F) -> Poly<F>
+    pub fn fix_prefix_var<F>(&self, r: F) -> Poly<F>
     where
         F: Algebra<A> + Copy + Send + Sync,
     {
@@ -411,7 +411,7 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
             Poly::new(
                 p0.par_iter()
                     .zip(p1.par_iter())
-                    .map(|(&a0, &a1)| zi * (a1 - a0) + a0)
+                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
                     .collect(),
             )
         } else {
@@ -419,17 +419,56 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
             Poly::new(
                 p0.iter()
                     .zip(p1.iter())
-                    .map(|(&a0, &a1)| zi * (a1 - a0) + a0)
+                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
                     .collect(),
             )
         }
     }
 
-    /// In-place version of the low-variable fix.
+    /// Fixes the suffix variable at a challenge value, returning a folded polynomial
+    /// in SIMD-packed form.
+    ///
+    /// Computes:
+    /// ```text
+    /// p'(x') = (1 - r) * p(x', 0) + r * p(x', 1)
+    /// ```
+    ///
+    /// The result has one fewer variable (n - 1).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the polynomial is constant (zero free variables).
+    pub fn fix_suffix_var_to_packed<Ext>(&self, r: Ext) -> Poly<Ext::ExtensionPacking>
+    where
+        A: Field,
+        Ext: ExtensionField<A>,
+    {
+        let r = Ext::ExtensionPacking::from_ext_slice(&vec![r; A::Packing::WIDTH]);
+        let poly = A::Packing::pack_slice(self.as_slice());
+        // Split evaluations into the x_0 = 0 half (p0) and x_0 = 1 half (p1).
+        let (p0, p1) = poly.split_at(poly.len() / 2);
+        if self.num_evals() >= PARALLEL_THRESHOLD {
+            Poly::new(
+                p0.par_iter()
+                    .zip(p1.par_iter())
+                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            Poly::new(
+                p0.iter()
+                    .zip(p1.iter())
+                    .map(|(&a0, &a1)| r * (a1 - a0) + a0)
+                    .collect::<Vec<_>>(),
+            )
+        }
+    }
+
+    /// In-place version of the prefix-variable fix.
     ///
     /// Folds the first half in place using:
     /// ```text
-    /// p[i] = p[i] + (p[i + mid] - p[i]) * zi
+    /// p[i] = p[i] + (p[i + mid] - p[i]) * r
     /// ```
     ///
     /// Then truncates to the first half. No allocation.
@@ -437,7 +476,7 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
     /// # Panics
     ///
     /// Panics if the polynomial is constant (zero free variables).
-    pub fn fix_lo_var_mut<F: Copy + Send + Sync>(&mut self, zi: F)
+    pub fn fix_prefix_var_mut<F: Copy + Send + Sync>(&mut self, r: F)
     where
         A: Algebra<F>,
     {
@@ -451,32 +490,32 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
             // Parallel: fold each pair in place.
             p0.par_iter_mut()
                 .zip(p1.par_iter())
-                .for_each(|(a0, &a1)| *a0 += (a1 - *a0) * zi);
+                .for_each(|(a0, &a1)| *a0 += (a1 - *a0) * r);
         } else {
             // Sequential: fold each pair in place.
             p0.iter_mut()
                 .zip(p1.iter())
-                .for_each(|(a0, &a1)| *a0 += (a1 - *a0) * zi);
+                .for_each(|(a0, &a1)| *a0 += (a1 - *a0) * r);
         }
 
         // Discard the second half; the first half now holds the folded result.
         self.0.truncate(mid);
     }
 
-    /// Fixes the highest variable at a challenge value, returning a folded polynomial.
+    /// Fixes the suffix variable at a challenge value, returning a folded polynomial.
     ///
     /// Computes:
     /// ```text
-    /// p'(x') = (1 - zi) * p(x', 0) + zi * p(x', 1)
+    /// p'(x') = (1 - r) * p(x', 0) + r * p(x', 1)
     /// ```
     ///
     /// The result has one fewer variable (n - 1).
-    /// Unlike the low-variable version, consecutive pairs are adjacent in memory.
+    /// Unlike the prefix-variable version, consecutive pairs are adjacent in memory.
     ///
     /// # Panics
     ///
     /// Panics if the polynomial is constant (zero free variables).
-    pub fn fix_hi_var<F>(&self, zi: F) -> Poly<F>
+    pub fn fix_suffix_var<F>(&self, r: F) -> Poly<F>
     where
         F: Algebra<A> + Copy + Send + Sync,
     {
@@ -486,21 +525,16 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
             Poly::new(
                 self.0
                     .par_chunks(2)
-                    .map(|a| zi * (a[1] - a[0]) + a[0])
+                    .map(|a| r * (a[1] - a[0]) + a[0])
                     .collect(),
             )
         } else {
             // Sequential: same interpolation over adjacent pairs.
-            Poly::new(
-                self.0
-                    .chunks(2)
-                    .map(|a| zi * (a[1] - a[0]) + a[0])
-                    .collect(),
-            )
+            Poly::new(self.0.chunks(2).map(|a| r * (a[1] - a[0]) + a[0]).collect())
         }
     }
 
-    /// In-place version of the high-variable fix.
+    /// In-place version of the suffix-variable fix.
     ///
     /// Folds adjacent pairs, collects into a temporary buffer,
     /// then truncates and overwrites.
@@ -508,7 +542,7 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
     /// # Panics
     ///
     /// Panics if the polynomial is constant (zero free variables).
-    pub fn fix_hi_var_mut<F: Copy + Send + Sync>(&mut self, zi: F)
+    pub fn fix_suffix_var_mut<F: Copy + Send + Sync>(&mut self, r: F)
     where
         A: Algebra<F>,
     {
@@ -518,12 +552,12 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         let src = if self.num_evals() < PARALLEL_THRESHOLD {
             self.0
                 .chunks(2)
-                .map(|a| (a[1] - a[0]) * zi + a[0])
+                .map(|a| (a[1] - a[0]) * r + a[0])
                 .collect::<Vec<_>>()
         } else {
             self.0
                 .par_chunks(2)
-                .map(|a| (a[1] - a[0]) * zi + a[0])
+                .map(|a| (a[1] - a[0]) * r + a[0])
                 .collect::<Vec<_>>()
         };
         // Truncate to half size and copy the folded values back.
@@ -1126,9 +1160,9 @@ pub(crate) mod test {
             let eval_part = Point::new(randomness[k..randomness.len()].to_vec());
             let fold_random = Point::new(fold_part.clone());
             let eval_point1 = Point::new([fold_part.clone(), eval_part.0.clone()].concat());
-            let folded_evals = evals_list.compress_lo(&fold_random, F::ONE);
+            let folded_evals = evals_list.compress_prefix(&fold_random, F::ONE);
             assert_eq!(folded_evals.num_vars(), num_variables - k);
-            let folded_coeffs = evals_list.compress_lo(&fold_random, F::ONE);
+            let folded_coeffs = evals_list.compress_prefix(&fold_random, F::ONE);
             assert_eq!(folded_coeffs.num_vars(), num_variables - k);
             assert_eq!(
                 folded_evals.eval_base(&eval_part),
@@ -1148,7 +1182,7 @@ pub(crate) mod test {
         let poly = Poly::new(evals);
         let evals_list: Poly<F> = poly;
         let r1 = EF::from_u64(5);
-        let folded = evals_list.compress_lo(&Point::new(vec![r1]), EF::ONE);
+        let folded = evals_list.compress_prefix(&Point::new(vec![r1]), EF::ONE);
 
         for x0_f in 0..10 {
             let x0 = EF::from_u64(x0_f);
@@ -1250,7 +1284,7 @@ pub(crate) mod test {
     #[should_panic]
     fn test_compress_panics_on_constant() {
         let mut evals_list = Poly::new(vec![F::from_u64(42)]);
-        evals_list.fix_hi_var_mut(F::ONE);
+        evals_list.fix_suffix_var_mut(F::ONE);
     }
 
     #[test]
@@ -1274,7 +1308,7 @@ pub(crate) mod test {
         ];
         assert_eq!(evals_list.num_vars(), 3);
         assert_eq!(evals_list.num_evals(), 8);
-        evals_list.fix_lo_var_mut(r);
+        evals_list.fix_prefix_var_mut(r);
         assert_eq!(evals_list.num_vars(), 2);
         assert_eq!(evals_list.num_evals(), 4);
         assert_eq!(evals_list.as_slice(), &expected);
@@ -1292,7 +1326,7 @@ pub(crate) mod test {
         let mut evals_list = Poly::new(initial_evals);
         let r = F::from_u64(3);
         let num_variables_before = evals_list.num_vars();
-        evals_list.fix_lo_var_mut(r);
+        evals_list.fix_prefix_var_mut(r);
         assert_eq!(evals_list.num_vars(), num_variables_before - 1);
         assert_eq!(evals_list.num_evals(), mid);
         assert_eq!(
@@ -1311,7 +1345,7 @@ pub(crate) mod test {
         let mut evals_list = Poly::new(initial_evals);
         let challenges = vec![F::from_u64(3), F::from_u64(7), F::from_u64(11)];
         for &r in &challenges {
-            evals_list.fix_lo_var_mut(r);
+            evals_list.fix_prefix_var_mut(r);
         }
         assert_eq!(evals_list.num_vars(), 1);
         assert_eq!(evals_list.num_evals(), 2);
@@ -1323,7 +1357,7 @@ pub(crate) mod test {
         let p_1 = F::from_u64(9);
         let mut evals_list = Poly::new(vec![p_0, p_1]);
         let r = F::from_u64(7);
-        evals_list.fix_lo_var_mut(r);
+        evals_list.fix_prefix_var_mut(r);
         assert_eq!(evals_list.num_vars(), 0);
         assert_eq!(evals_list.num_evals(), 1);
         let expected = r * (p_1 - p_0) + p_0;
@@ -1343,7 +1377,7 @@ pub(crate) mod test {
         let mut evals_list =
             Poly::new(vec![p_000, p_001, p_010, p_011, p_100, p_101, p_110, p_111]);
         let r = F::ZERO;
-        evals_list.fix_lo_var_mut(r);
+        evals_list.fix_prefix_var_mut(r);
         let expected = vec![p_000, p_001, p_010, p_011];
         assert_eq!(evals_list.as_slice(), &expected);
     }
@@ -1361,7 +1395,7 @@ pub(crate) mod test {
         let mut evals_list =
             Poly::new(vec![p_000, p_001, p_010, p_011, p_100, p_101, p_110, p_111]);
         let r = F::ONE;
-        evals_list.fix_lo_var_mut(r);
+        evals_list.fix_prefix_var_mut(r);
         let expected = vec![p_100, p_101, p_110, p_111];
         assert_eq!(evals_list.as_slice(), &expected);
     }
@@ -1378,7 +1412,7 @@ pub(crate) mod test {
             let r: F = rng.random();
 
             let mut list = Poly::new(evals);
-            list.fix_lo_var_mut(r);
+            list.fix_prefix_var_mut(r);
 
             prop_assert_eq!(list.num_vars(), n - 1);
             prop_assert_eq!(list.num_evals(), num_evals / 2);
@@ -1394,11 +1428,11 @@ pub(crate) mod test {
             let evals: Vec<F> = (0..num_evals).map(|_| rng.random()).collect();
 
             let mut list_zero = Poly::new(evals.clone());
-            list_zero.fix_lo_var_mut(F::ZERO);
+            list_zero.fix_prefix_var_mut(F::ZERO);
             prop_assert_eq!(list_zero.num_evals(), num_evals / 2);
 
             let mut list_one = Poly::new(evals);
-            list_one.fix_lo_var_mut(F::ONE);
+            list_one.fix_prefix_var_mut(F::ONE);
             prop_assert_eq!(list_one.num_evals(), num_evals / 2);
 
             if list_zero.as_slice() != list_one.as_slice() {
@@ -1421,7 +1455,7 @@ pub(crate) mod test {
 
             let mut list = Poly::new(evals);
             for &r in &challenges {
-                list.fix_lo_var_mut(r);
+                list.fix_prefix_var_mut(r);
             }
 
             prop_assert_eq!(list.num_vars(), n - actual_rounds);
@@ -1441,7 +1475,7 @@ pub(crate) mod test {
             F::from_u64(7),
             F::from_u64(8),
         ]);
-        let result = poly.compress_lo(&Point::new(vec![]), EF::ONE);
+        let result = poly.compress_prefix(&Point::new(vec![]), EF::ONE);
         assert_eq!(result.0.len(), 8, "Result should have 8 evaluations");
         let expected_poly = Poly::new(vec![
             EF::from_u64(1),
@@ -1464,7 +1498,7 @@ pub(crate) mod test {
         let poly = Poly::new((1..=8).map(F::from_u64).collect());
         let r2 = EF::from_u64(3);
         let challenges = vec![r2];
-        let result = poly.compress_lo(&Point::new(challenges), EF::ONE);
+        let result = poly.compress_prefix(&Point::new(challenges), EF::ONE);
         assert_eq!(
             result.0.len(),
             4,
@@ -1505,7 +1539,7 @@ pub(crate) mod test {
         let r2 = EF::from_u64(2);
         let r1 = EF::from_u64(3);
         let challenges = vec![r2, r1];
-        let result = poly.compress_lo(&Point::new(challenges), EF::ONE);
+        let result = poly.compress_prefix(&Point::new(challenges), EF::ONE);
         assert_eq!(
             result.0.len(),
             2,
@@ -1544,7 +1578,7 @@ pub(crate) mod test {
         let r1 = EF::from_u64(5);
         let r0 = EF::from_u64(7);
         let challenges = vec![r1, r0];
-        let result = poly.compress_lo(&Point::new(challenges), EF::ONE);
+        let result = poly.compress_prefix(&Point::new(challenges), EF::ONE);
         assert_eq!(
             result.0.len(),
             1,
@@ -1576,7 +1610,7 @@ pub(crate) mod test {
             F::from_u64(4),
         ]);
         let challenges = vec![EF::from_u64(2), EF::from_u64(3), EF::from_u64(5)];
-        let _ = poly.compress_lo(&Point::new(challenges), EF::ONE);
+        let _ = poly.compress_prefix(&Point::new(challenges), EF::ONE);
     }
 
     #[test]
@@ -1638,7 +1672,7 @@ pub(crate) mod test {
     }
 
     #[test]
-    fn test_fix_lo_var() {
+    fn test_fix_prefix_var() {
         let mut rng = SmallRng::seed_from_u64(0);
         for k in 1..=20 {
             let poly = Poly::<F>::rand(&mut rng, k);
@@ -1646,24 +1680,24 @@ pub(crate) mod test {
 
             // returning variant
             let z0 = point.as_slice().first().copied().unwrap();
-            let mut compressed = poly.fix_lo_var(z0);
+            let mut compressed = poly.fix_prefix_var(z0);
             for &zi in point.as_slice().iter().skip(1) {
-                compressed = compressed.fix_lo_var(zi);
+                compressed = compressed.fix_prefix_var(zi);
             }
             assert_eq!(compressed.as_constant().unwrap(), poly.eval_base(&point));
 
             // mutable variant
             let z0 = point.as_slice().first().copied().unwrap();
-            let mut compressed = poly.fix_lo_var(z0);
+            let mut compressed = poly.fix_prefix_var(z0);
             for &zi in point.as_slice().iter().skip(1) {
-                compressed.fix_lo_var_mut(zi);
+                compressed.fix_prefix_var_mut(zi);
             }
             assert_eq!(compressed.as_constant().unwrap(), poly.eval_base(&point));
         }
     }
 
     #[test]
-    fn test_fix_hi_var() {
+    fn test_fix_suffix_var() {
         let mut rng = SmallRng::seed_from_u64(0);
         for k in 1..=20 {
             let poly = Poly::<F>::rand(&mut rng, k);
@@ -1671,24 +1705,24 @@ pub(crate) mod test {
 
             // returning variant
             let z0 = point.as_slice().last().copied().unwrap();
-            let mut compressed = poly.fix_hi_var(z0);
+            let mut compressed = poly.fix_suffix_var(z0);
             for &zi in point.as_slice().iter().rev().skip(1) {
-                compressed = compressed.fix_hi_var(zi);
+                compressed = compressed.fix_suffix_var(zi);
             }
             assert_eq!(compressed.as_constant().unwrap(), poly.eval_base(&point));
 
             // mutable variant
             let z0 = point.as_slice().last().copied().unwrap();
-            let mut compressed = poly.fix_hi_var(z0);
+            let mut compressed = poly.fix_suffix_var(z0);
             for &zi in point.as_slice().iter().rev().skip(1) {
-                compressed.fix_hi_var_mut(zi);
+                compressed.fix_suffix_var_mut(zi);
             }
             assert_eq!(compressed.as_constant().unwrap(), poly.eval_base(&point));
         }
     }
 
     #[test]
-    fn test_compress_hi() {
+    fn test_compress_suffix() {
         let mut rng = SmallRng::seed_from_u64(0);
         for k in 1..=20 {
             let poly = Poly::<F>::rand(&mut rng, k);
@@ -1696,17 +1730,17 @@ pub(crate) mod test {
                 let point: Point<EF> = Point::rand(&mut rng, point_k);
 
                 let z0 = point.as_slice().first().copied().unwrap();
-                let mut compressed0 = poly.fix_lo_var(z0);
+                let mut compressed0 = poly.fix_prefix_var(z0);
                 for &zi in point.as_slice().iter().skip(1) {
-                    compressed0.fix_lo_var_mut(zi);
+                    compressed0.fix_prefix_var_mut(zi);
                 }
-                let compressed1 = poly.compress_lo(&point, EF::ONE);
+                let compressed1 = poly.compress_prefix(&point, EF::ONE);
                 assert_eq!(compressed0.num_vars(), compressed1.num_vars());
                 assert_eq!(compressed0, compressed1);
 
                 if k > point_k + log2_strict_usize(PackedF::WIDTH) {
                     let compressed1 = poly
-                        .compress_lo_to_packed(&point, EF::ONE)
+                        .compress_prefix_to_packed(&point, EF::ONE)
                         .unpack::<F, EF>();
                     assert_eq!(compressed0.num_vars(), compressed1.num_vars());
                     assert_eq!(compressed0, compressed1);
@@ -1716,7 +1750,7 @@ pub(crate) mod test {
     }
 
     #[test]
-    fn test_compress_lo() {
+    fn test_compress_prefix() {
         let mut rng = SmallRng::seed_from_u64(0);
         for k in 1..=20 {
             let poly = Poly::<F>::rand(&mut rng, k);
@@ -1724,11 +1758,11 @@ pub(crate) mod test {
                 let point: Point<EF> = Point::rand(&mut rng, point_k);
 
                 let z0 = point.as_slice().last().copied().unwrap();
-                let mut compressed0 = poly.fix_hi_var(z0);
+                let mut compressed0 = poly.fix_suffix_var(z0);
                 for &zi in point.as_slice().iter().rev().skip(1) {
-                    compressed0.fix_hi_var_mut(zi);
+                    compressed0.fix_suffix_var_mut(zi);
                 }
-                let compressed1 = poly.compress_hi(&point, EF::ONE);
+                let compressed1 = poly.compress_suffix(&point, EF::ONE);
                 assert_eq!(compressed0.num_vars(), compressed1.num_vars());
                 assert_eq!(compressed0, compressed1);
             }

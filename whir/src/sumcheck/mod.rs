@@ -25,12 +25,42 @@
 pub mod data;
 pub mod error;
 pub mod lagrange;
+pub mod layout;
 pub mod product_polynomial;
-pub mod prover;
+pub mod single;
+pub mod strategy;
 pub mod svo;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
-pub use data::{SumcheckData, verify_final_sumcheck_rounds};
+use core::marker::PhantomData;
+
+pub use data::SumcheckData;
 pub use error::SumcheckError;
 pub(crate) use lagrange::extrapolate_01inf;
+use p3_field::{ExtensionField, Field};
+
+/// A claimed evaluation together with layout-specific auxiliary data.
+#[derive(Debug, Clone)]
+pub struct Claim<F: Field, EF: ExtensionField<F>, P, Data> {
+    /// Point representation used to evaluate or later reconstruct this claim.
+    pub(crate) point: P,
+    /// Claimed value at `point`.
+    pub(crate) eval: EF,
+    /// Extra strategy-specific prover or verifier metadata.
+    pub(crate) data: Data,
+    /// Keeps the base field in the type without storing a runtime value.
+    pub(crate) _marker: PhantomData<F>,
+}
+
+impl<F: Field, EF: ExtensionField<F>, P, Data> Claim<F, EF, P, Data> {
+    /// Returns the claimed value.
+    pub const fn eval(&self) -> EF {
+        self.eval
+    }
+
+    /// Returns the point representation attached to this claim.
+    pub const fn point(&self) -> &P {
+        &self.point
+    }
+}

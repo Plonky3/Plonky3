@@ -1,4 +1,4 @@
-//! Split-Value Optimization (SVO) for the sumcheck protocol.
+//! Small-Value Optimization (SVO) for the sumcheck protocol.
 //!
 //! Optimizes sumcheck proving when the polynomial includes an equality polynomial factor.
 //! Implements Algorithm 5 from "Speeding Up Sum-Check Proving" (ePrint 2025/1117).
@@ -28,7 +28,11 @@ use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 use p3_util::log2_strict_usize;
 
-/// Expand `2^l` Boolean-hypercube evaluations to `3^l` evaluations on `{0, 1, inf}^l`.
+use crate::sumcheck::Claim;
+use crate::sumcheck::layout::MultiClaimSuffixLayout as MultiClaim;
+use crate::sumcheck::strategy::VariableOrder;
+
+/// Expand `2^l` Boolean-hypercube evaluations to `3^l` evaluations on `{0,1,inf}^l`.
 ///
 /// # Overview
 ///
@@ -50,7 +54,7 @@ use p3_util::log2_strict_usize;
 ///
 /// # Memory Layout
 ///
-/// The input uses low-variable-fastest ordering: `idx = x_0 + 2*x_1 + ...`
+/// The input uses prefix-variable-fastest ordering: `idx = x_0 + 2*x_1 + ...`
 ///
 /// The output uses the same convention as the expansion order. The first
 /// variable processed (x_0) becomes the **slowest**-varying coordinate
@@ -59,7 +63,7 @@ use p3_util::log2_strict_usize;
 /// ```text
 ///     l=2 example:
 ///     index:   0      1      2      3      4      5      6      7      8
-///     point: (0,0)  (0,1)  (0,2)  (1,0)  (1,1)  (1,2)  (2,0)  (2,1)  (2,2)
+///     point: (0,0)  (0,1)  (0,inf)  (1,0)  (1,1)  (1,inf)  (inf,0)  (inf,1)  (inf,inf)
 /// ```
 ///
 /// # Algorithm
@@ -136,7 +140,7 @@ fn evals_01inf_grid_into<F: Field>(boolean_evals: &[F], output: &mut [F], scratc
         // Slice only the live region (early stages use less than the full buffer).
         //
         //     cur  per block: [ f(0)-group | f(1)-group ]   each of size in_stride
-        //     next per block: [ f(0)-group | f(1)-group | f(2)-group ]
+        //     next per block: [ f(0)-group | f(1)-group | f(inf)-group ]
         let cur_slice = &cur[..blocks * 2 * in_stride];
         let next_slice = &mut next[..blocks * 3 * in_stride];
 
@@ -145,7 +149,7 @@ fn evals_01inf_grid_into<F: Field>(boolean_evals: &[F], output: &mut [F], scratc
             //
             //     l=2, stage 0 (stride=1, blocks=2):
             //     cur:   [ f(0,0) f(1,0) | f(0,1) f(1,1) ]
-            //     next:  [ f(0,0) f(1,0) f(2,0) | f(0,1) f(1,1) f(2,1) ]
+            //     next:  [ f(0,0) f(1,0) f(inf,0) | f(0,1) f(1,1) f(inf,1) ]
             cur_slice
                 .par_chunks(2 * in_stride)
                 .zip(next_slice.par_chunks_mut(3 * in_stride))
@@ -167,7 +171,7 @@ fn evals_01inf_grid_into<F: Field>(boolean_evals: &[F], output: &mut [F], scratc
                 .for_each(|(c_chunk, n_chunk)| {
                     // Split into left=f(0) half, right=f(1) half.
                     let (c_left, c_right) = c_chunk.split_at(in_stride);
-                    // Each (f0, f1) pair --> (f0, f1, 2*f1 - f0) triple.
+                    // Each (f0, f1) pair --> (f0, f1, f1 - f0) triple.
                     c_left
                         .par_iter()
                         .zip(c_right.par_iter())
@@ -185,19 +189,97 @@ fn evals_01inf_grid_into<F: Field>(boolean_evals: &[F], output: &mut [F], scratc
     }
 }
 
+fn evals_01inf_grid_prefix<F: Field>(evals: &[F]) -> Vec<F> {
+    fn reverse_ternary_digits(mut idx: usize, l: usize) -> usize {
+        let mut rev = 0usize;
+        for _ in 0..l {
+            rev = 3 * rev + (idx % 3);
+            idx /= 3;
+        }
+        rev
+    }
+
+    let grid_len = 3usize.pow(log2_strict_usize(evals.len()) as u32);
+    let l = log2_strict_usize(evals.len());
+    let mut prefix = F::zero_vec(grid_len);
+    let mut scratch = F::zero_vec(grid_len);
+    evals_01inf_grid_into(evals, &mut prefix, &mut scratch);
+
+    let mut out = F::zero_vec(grid_len);
+    for (src_idx, value) in prefix.into_iter().enumerate() {
+        out[reverse_ternary_digits(src_idx, l)] = value;
+    }
+    out
+}
+
+/// Builds the SVO accumulators for a batch of claims.
+///
+/// At round `l = round_idx + 1`, we first combine the round-`l` partial evaluations
+/// from all openings using the provided batching coefficients `alphas`. We then
+/// evaluate both that combined polynomial and the active equality polynomial on the
+/// ternary grid `{0,1,inf}^l`, and keep only the first and last thirds of that
+/// recursive grid, corresponding to the active coordinate fixed to `0` and `inf`.
+/// Those are exactly the two values needed to reconstruct the quadratic round
+/// polynomial.
+pub(crate) fn calculate_accumulators_batch<F: Field, EF: ExtensionField<F>>(
+    claim: &MultiClaim<F, EF>,
+    alphas: &[EF],
+) -> SvoAccumulators<EF> {
+    assert_eq!(claim.len(), alphas.len());
+    let k = claim.num_vars_svo();
+
+    (0..k)
+        .map(|round_idx| {
+            let l = round_idx + 1;
+            let mut acc = Poly::<EF>::zero(l);
+            claim
+                .partial_evals(round_idx)
+                .iter()
+                .zip(alphas.iter())
+                .for_each(|(partial, &alpha)| {
+                    acc.as_mut_slice()
+                        .iter_mut()
+                        .zip_eq(partial.iter())
+                        .for_each(|(out, &f)| *out += alpha * f);
+                });
+
+            let (_, svo_active) = claim.point().z_svo().split_at(k - l);
+            let eq_grid = evals_01inf_grid_prefix(
+                Poly::new_from_point(svo_active.as_slice(), EF::ONE).as_slice(),
+            );
+            let acc_grid = evals_01inf_grid_prefix(acc.as_slice());
+            let stride = 3usize.pow(round_idx as u32);
+
+            let acc0 = eq_grid[..stride]
+                .iter()
+                .zip(acc_grid[..stride].iter())
+                .map(|(&eq, &eval)| eq * eval)
+                .collect::<Vec<_>>();
+
+            let acc_inf = eq_grid[2 * stride..]
+                .iter()
+                .zip(acc_grid[2 * stride..].iter())
+                .map(|(&eq, &eval)| eq * eval)
+                .collect::<Vec<_>>();
+
+            [acc0, acc_inf]
+        })
+        .collect()
+}
+
 /// Computes the SVO accumulators using grid expansion.
 ///
 /// Rather than rebuilding every Lagrange basis vector independently (O(6^l)),
 /// this expands both the residual equality polynomial and the partially compressed
 /// multilinear polynomial over the entire `{0, 1, inf}^l` grid. The required
 /// accumulators are then simple pointwise products on the slices with
-/// final coordinate fixed to `0` or `2`.
+/// final coordinate fixed to `0` or `inf`.
 ///
 /// For l <= 3, straightline specializations avoid all loop overhead, buffer
 /// allocation, and parallelization machinery.
 ///
 /// Total cost: O(3^l) field operations.
-fn calculate_accumulators<F: Field, EF: ExtensionField<F>>(
+fn calculate_accumulator<F: Field, EF: ExtensionField<F>>(
     l: usize,
     partial_evals: &[EF],
     point: &[EF],
@@ -219,17 +301,17 @@ fn calculate_accumulators<F: Field, EF: ExtensionField<F>>(
     // Reduce partial evaluations over the outer variables using eq1.
     //
     // This computes: sum_{x1} eq(z1, x1) * partial_evals[chunk_for_x1]
-    let reduced_evals: Vec<EF> = partial_evals
+    let reduced_evals = partial_evals
         .chunks(eq1.num_evals())
         .map(|chunk| dot_product::<EF, _, _>(eq1.iter().copied(), chunk.iter().copied()))
-        .collect();
+        .collect::<Vec<_>>();
 
     // For small l, use straightline specializations that avoid loop/buffer overhead.
     match l {
-        1 => calculate_accumulators_1(eq0.as_slice(), &reduced_evals),
-        2 => calculate_accumulators_2(eq0.as_slice(), &reduced_evals),
-        3 => calculate_accumulators_3(eq0.as_slice(), &reduced_evals),
-        _ => calculate_accumulators_general(l, eq0.as_slice(), &reduced_evals),
+        1 => calculate_accumulator_1(eq0.as_slice(), &reduced_evals),
+        2 => calculate_accumulator_2(eq0.as_slice(), &reduced_evals),
+        3 => calculate_accumulator_3(eq0.as_slice(), &reduced_evals),
+        _ => calculate_accumulator_general(l, eq0.as_slice(), &reduced_evals),
     }
 }
 
@@ -245,7 +327,7 @@ fn calculate_accumulators<F: Field, EF: ExtensionField<F>>(
 ///     acc0    = [eq0(0) * red(0)]       = [e0 * r0]             (1 value)
 ///     acc_inf = [eq0(inf) * red(inf)]   = [(e1-e0) * (r1-r0)]   (1 value)
 /// ```
-fn calculate_accumulators_1<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 2] {
+fn calculate_accumulator_1<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 2] {
     assert_eq!(eq0.len(), 2);
     assert_eq!(reduced.len(), 2);
 
@@ -272,7 +354,7 @@ fn calculate_accumulators_1<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 
 ///     acc0    = grid[0..3]  = x_0=0 slice, x_1 in {0, 1, inf}
 ///     acc_inf = grid[6..9]  = x_0=inf slice, x_1 in {0, 1, inf}
 /// ```
-fn calculate_accumulators_2<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 2] {
+fn calculate_accumulator_2<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 2] {
     assert_eq!(eq0.len(), 4);
     assert_eq!(reduced.len(), 4);
 
@@ -312,7 +394,7 @@ fn calculate_accumulators_2<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 
 ///       x_1=1:   f(x_0, 1, 0), f(x_0, 1, 1), f(x_0, 1, inf)
 ///       x_1=inf: f(x_0, inf, 0), f(x_0, inf, 1), f(x_0, inf, inf)
 /// ```
-fn calculate_accumulators_3<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 2] {
+fn calculate_accumulator_3<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 2] {
     assert_eq!(eq0.len(), 8);
     assert_eq!(reduced.len(), 8);
 
@@ -392,10 +474,8 @@ fn calculate_accumulators_3<EF: Field>(eq0: &[EF], reduced: &[EF]) -> [Vec<EF>; 
 
 /// General accumulator computation for l >= 4.
 ///
-/// General accumulator computation for l >= 4.
-///
 /// Allocates `{0, 1, inf}^l` buffers and runs the staged grid expansion.
-fn calculate_accumulators_general<F: Field, EF: ExtensionField<F>>(
+fn calculate_accumulator_general<F: Field, EF: ExtensionField<F>>(
     l: usize,
     eq0: &[EF],
     reduced_evals: &[EF],
@@ -404,11 +484,11 @@ fn calculate_accumulators_general<F: Field, EF: ExtensionField<F>>(
     let mut eq0_grid = EF::zero_vec(grid_len);
     let mut reduced_grid = EF::zero_vec(grid_len);
     let mut scratch = EF::zero_vec(grid_len);
+
     evals_01inf_grid_into(eq0, &mut eq0_grid, &mut scratch);
     evals_01inf_grid_into(reduced_evals, &mut reduced_grid, &mut scratch);
 
     let stride = 3usize.pow((l - 1) as u32);
-
     let acc0 = eq0_grid[..stride]
         .iter()
         .copied()
@@ -425,107 +505,209 @@ fn calculate_accumulators_general<F: Field, EF: ExtensionField<F>>(
     [acc0, acc_inf]
 }
 
+/// Precompute accumulators for each SVO round i = 1..l.
+///
+/// For round i, both the equality and reduced-evaluation tables are
+/// expanded onto the {0,1,2}^i grid, then pointwise-multiplied.
+///
+/// Total cost: O(3^l) vs O(6^l) for per-point Lagrange interpolation.
+pub(crate) fn calculate_accumulators<F: Field, EF: ExtensionField<F>>(
+    partial_evals: &[EF],
+    point: &[EF],
+) -> SvoAccumulators<EF> {
+    let l0 = log2_strict_usize(partial_evals.len());
+    assert_eq!(point.len(), l0);
+
+    (1..=l0)
+        .map(|l| calculate_accumulator::<F, EF>(l, partial_evals, point))
+        .collect()
+}
+
+/// Per-round accumulator slices for the SVO rounds.
+///
+/// For round `i + 1`, the entry stores:
+/// - `[0]`: accumulator values on `{0,1,2}^i x {0}`
+/// - `[1]`: accumulator values on `{0,1,2}^i x {2}`
+///
+/// We do not store the `x {1}` face because the verifier can derive `h(1)` from the
+/// claimed sum and `h(0)`.
+pub(super) type SvoAccumulators<EF> = Vec<[Vec<EF>; 2]>;
+
 /// Challenge point split into an SVO prefix and a residual split-eq suffix.
+///
+/// The split direction depends on [`VariableOrder`]:
+/// - `Prefix`: `z_svo` is the prefix `l0` variables and `z_split` represents the
+///   remaining suffix.
+/// - `Suffix`: `z_svo` is the suffix `l0` variables and `z_split` represents the
+///   remaining prefix.
 #[derive(Debug, Clone)]
-struct SvoPoint<F: Field, EF: ExtensionField<F>> {
+pub struct SvoPoint<F: Field, EF: ExtensionField<F>> {
     /// The first `k_svo` coordinates of the original point, handled by the SVO
     /// accumulator rounds.
-    z_svo: Point<EF>,
+    pub(crate) z_svo: Point<EF>,
     /// A factored table for `eq(z_rest, ·)` on the remaining coordinates after
     /// removing `z_svo` from the original point.
-    split_eq: SplitEq<F, EF>,
+    pub(crate) z_split: SplitEq<F, EF>,
+    /// The original point.
+    pub(crate) original: Point<EF>,
+    /// Variable processing order
+    var_order: VariableOrder,
 }
 
 impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
+    /// Splits a challenge point into the SVO portion and the residual split-eq
+    /// portion according to `var_order`.
+    ///
+    /// `l0` is the number of variables handled by the SVO optimization.
+    pub fn new_unpacked(l0: usize, point: &Point<EF>, var_order: VariableOrder) -> Self {
+        assert!(l0 <= point.num_vars());
+        let (svo, split) = match var_order {
+            VariableOrder::Prefix => point.split_at(l0),
+            VariableOrder::Suffix => {
+                let (split, svo) = point.split_at(point.num_vars() - l0);
+                (svo, split)
+            }
+        };
+        let split = SplitEq::new_unpacked(&split, EF::ONE);
+        Self {
+            z_svo: svo,
+            z_split: split,
+            original: point.clone(),
+            var_order,
+        }
+    }
+
+    /// Splits a challenge point into a prefix SVO portion and a residual suffix.
+    ///
+    /// `l0` is the number of variables handled by the SVO optimization.
+    pub fn new_packed(l0: usize, point: &Point<EF>) -> Self {
+        assert!(l0 <= point.num_vars());
+        let (svo, split) = point.split_at(l0);
+        let split = SplitEq::new_packed(&split, EF::ONE);
+        Self {
+            z_svo: svo,
+            z_split: split,
+            original: point.clone(),
+            var_order: VariableOrder::Prefix,
+        }
+    }
+
+    /// Accumulates this claim's residual equality table into a buffer.
+    ///
+    /// Once the SVO rounds have fixed the suffix variables to `rs`, the remaining
+    /// weight vector is:
+    /// ```text
+    /// alpha  · eq(z_rest, x_rest) · eq(z_svo, rs)
+    /// ```
+    /// for every assignment `x_rest` to the non-SVO variables.
+    ///
+    /// This method computes the scalar factor `alpha · eq(z_svo, rs)` and then asks
+    /// `split_eq` to materialize the residual `eq(z_rest, ·)` table into `out`.
+    pub fn accumulate_into(&self, out: &mut [EF], rs: &Point<EF>, mut scale: EF) {
+        assert_eq!(rs.num_vars(), self.num_vars_svo());
+        scale *= Point::eval_eq(self.z_svo.as_slice(), rs.as_slice());
+        self.z_split.accumulate_into(out, Some(scale));
+    }
+
+    /// Accumulates this claim's residual equality table into a packed buffer.
+    ///
+    /// Once the SVO rounds have fixed the suffix variables to `rs`, the remaining
+    /// weight vector is:
+    /// ```text
+    /// alpha  · eq(z_rest, x_rest) · eq(z_svo, rs)
+    /// ```
+    /// for every assignment `x_rest` to the non-SVO variables.
+    ///
+    /// This method computes the scalar factor `alpha · eq(z_svo, rs)` and then asks
+    /// `split_eq` to materialize the residual `eq(z_rest, ·)` table into `out`.
+    pub fn accumulate_into_packed(
+        &self,
+        out: &mut [EF::ExtensionPacking],
+        rs: &Point<EF>,
+        mut scale: EF,
+    ) {
+        assert!(matches!(self.var_order, VariableOrder::Prefix));
+        assert_eq!(rs.num_vars(), self.num_vars_svo());
+        scale *= Point::eval_eq(self.z_svo.as_slice(), rs.as_slice());
+        self.z_split.accumulate_into_packed(out, Some(scale));
+    }
+
+    /// Evaluates `poly` at this point and returns all partial evaluations seen
+    /// during the SVO rounds.
+    ///
+    /// The non-SVO prefix is compressed first using `SplitEq`. The result is a
+    /// polynomial only in the SVO variables, which is then:
+    /// - evaluated at `z_svo` to obtain the opening value
+    /// - partially compressed after each SVO round to feed the accumulator path
+    pub fn eval(&self, poly: &Poly<F>) -> (EF, Vec<Poly<EF>>) {
+        assert_eq!(self.num_vars(), poly.num_vars());
+        let (compressed, partial_evals) = match self.var_order {
+            VariableOrder::Prefix => {
+                let compressed = self.z_split.compress_suffix(poly);
+                let partial_evals = (1..=self.num_vars_svo())
+                    .map(|i| {
+                        let (_svo_active, svo_rest) = self.z_svo.split_at(i);
+                        compressed.compress_suffix(&svo_rest, EF::ONE)
+                    })
+                    .collect::<Vec<_>>();
+                (compressed, partial_evals)
+            }
+            VariableOrder::Suffix => {
+                let compressed = self.z_split.compress_prefix(poly);
+                let partial_evals = (1..=self.num_vars_svo())
+                    .map(|i| {
+                        let (svo_rest, _svo_active) =
+                            self.z_svo.split_at(self.z_svo.num_vars() - i);
+                        compressed.compress_prefix(&svo_rest, EF::ONE)
+                    })
+                    .collect::<Vec<_>>();
+                (compressed, partial_evals)
+            }
+        };
+        let eval = compressed.eval_base(&self.z_svo);
+        (eval, partial_evals)
+    }
+
     /// Returns the number of SVO variables (`l0`).
     ///
     /// This is the depth of the SVO optimization.
     /// These coordinates are processed via the accumulator-based Lagrange
     /// interpolation path rather than the standard fold-and-sum path.
-    const fn k_svo(&self) -> usize {
+    pub const fn num_vars_svo(&self) -> usize {
         self.z_svo.num_vars()
     }
 
     /// Returns the number of variables covered by the split eq tables.
     ///
     /// ```text
-    /// k_split = inner_half_vars + outer_half_vars + log_2(SIMD_WIDTH)
+    /// num_vars_split = inner_half_vars + outer_half_vars
     /// ```
-    const fn k_split(&self) -> usize {
-        self.split_eq.num_vars()
+    pub const fn num_vars_split(&self) -> usize {
+        self.z_split.num_vars()
     }
 
-    /// Accumulates this claim's residual equality table into a packed buffer.
-    ///
-    /// Once the SVO rounds have fixed the prefix variables to `rs`, the remaining
-    /// weight vector is:
-    /// ```text
-    /// alpha · eq(z_svo, rs) · eq(z_rest, x_rest)
-    /// ```
-    /// for every assignment `x_rest` to the non-SVO variables.
-    ///
-    /// This method computes the scalar factor `alpha · eq(z_svo, rs)` and then asks
-    /// `split_eq` to materialize the residual `eq(z_rest, ·)` table into `out`.
-    fn accumulate_into_packed(&self, out: &mut [EF::ExtensionPacking], rs: &Point<EF>, alpha: EF) {
-        // Compute the scalar factor: alpha^j * eq(z_svo_j, rs).
-        //
-        // This evaluates the SVO portion of the equality polynomial at the
-        // sumcheck challenges `rs`, and folds in the batching challenge `alpha`.
-        // We pass `alpha` as the initial value to `new_from_point` so it gets
-        // multiplied into every term of the eq evaluation.
-        let scale = Poly::new_from_point(self.z_svo.as_slice(), alpha).eval_ext::<F>(rs);
+    /// Returns the number of variables of the represented point.
+    pub const fn num_vars(&self) -> usize {
+        self.z_svo.num_vars() + self.z_split.num_vars()
+    }
 
-        // Materializes the contribution of this split eq into the output buffer.
-        self.split_eq.accumulate_into_packed(out, Some(scale));
+    /// Returns the SVO suffix of the represented point.
+    pub const fn z_svo(&self) -> &Point<EF> {
+        &self.z_svo
+    }
+
+    /// Returns the factored equality table for the non-SVO prefix of the represented point.
+    pub const fn z_split(&self) -> &SplitEq<F, EF> {
+        &self.z_split
+    }
+
+    /// Returns the original point represented by this struct.
+    pub const fn var_order(&self) -> VariableOrder {
+        self.var_order
     }
 }
 
-/// Split equality polynomial with precomputed accumulators for optimized sumcheck proving.
-///
-/// The equality polynomial for a point `w in F^k` is:
-///
-/// ```text
-/// eq(w, X) = prod_{i=1}^{k} (w_i * X_i + (1 - w_i) * (1 - X_i))
-/// ```
-///
-/// This struct exploits the product structure by splitting `w` into three parts:
-///
-/// - The first `l0` coordinates, kept as a raw point for SVO rounds.
-/// - The next `(k - l0) / 2` coordinates, stored as a scalar evaluation table.
-/// - The remaining coordinates, stored as a packed evaluation table for SIMD.
-///
-/// This allows computing `eq(w, x)` for many `x` values efficiently by:
-/// 1. Pre-computing small tables for each half.
-/// 2. Combining them as needed during the sumcheck protocol.
-///
-/// # Memory
-///
-/// Instead of storing a `2^{k-l0}`-sized table, we store:
-/// - `2^{(k-l0)/2}` scalar extension field elements for the first half.
-/// - `2^{(k-l0)/2}` packed extension field elements for the second half.
-///
-/// This reduces memory from `O(2^{k-l0})` to `O(2^{(k-l0)/2})`.
-/// Precomputes `O(3^l)` total accumulator values upfront.
-#[derive(Debug, Clone)]
-pub struct SvoClaim<F: Field, EF: ExtensionField<F>> {
-    /// Internal split representation of the challenge point.
-    point: SvoPoint<F, EF>,
-
-    /// Precomputed accumulators for all SVO rounds.
-    ///
-    /// `accumulators[i]` contains the accumulator values for round `i+1`:
-    /// - `accumulators[i][0]`: Values for grid points in `{0, 1, inf}^i x {0}`
-    /// - `accumulators[i][1]`: Values for grid points in `{0, 1, inf}^i x {inf}`
-    accumulators: Vec<[Vec<EF>; 2]>,
-
-    /// The evaluation `sum_x eq(w, x) * poly(x)` of the polynomial weighted by eq.
-    ///
-    /// This is the initial claimed sum for the sumcheck protocol.
-    eval: EF,
-
-    /// The original challenge point `w` for the equality polynomial.
-    original: Point<EF>,
-}
+pub type SvoClaim<F, EF> = Claim<F, EF, SvoPoint<F, EF>, SvoAccumulators<EF>>;
 
 impl<F: Field, EF: ExtensionField<F>> SvoClaim<F, EF> {
     /// Creates a new SVO equality claim with precomputed accumulators.
@@ -534,19 +716,13 @@ impl<F: Field, EF: ExtensionField<F>> SvoClaim<F, EF> {
     /// 2. Computes partial evaluations of `poly` weighted by the equality polynomial.
     /// 3. Evaluates `poly` at `point`, storing the result in `eval`.
     /// 4. Precomputes accumulators for all `l` SVO rounds.
-    #[tracing::instrument(skip_all)]
     pub fn new(point: &Point<EF>, l: usize, poly: &Poly<F>) -> Self {
         let k = point.num_vars();
         assert_eq!(k, poly.num_vars());
         assert!(k > l);
         assert!(k >= 2 * log2_strict_usize(F::Packing::WIDTH));
 
-        assert!(point.num_vars() > l);
-        // Split into SVO part and the rest
-        let (z_svo, z_rest) = point.split_at(l);
-        // Build evaluation tables for the rest of the point
-        let split_eq = SplitEq::new_packed(&z_rest, EF::ONE);
-
+        let point = SvoPoint::new_packed(l, point);
         // Compute partial evaluations of the polynomial weighted by the split eq.
         //
         // For each chunk of the polynomial (one per SVO hypercube point), computes:
@@ -554,9 +730,8 @@ impl<F: Field, EF: ExtensionField<F>> SvoClaim<F, EF> {
         //
         // Also computes the full weighted evaluation by combining partial results
         // with the SVO portion of the equality polynomial.
-        let eq_svo = Poly::new_from_point(z_svo.as_slice(), EF::ONE);
-        let partial_evals = split_eq.compress_hi(poly);
-        let eval = dot_product::<EF, _, _>(eq_svo.iter().copied(), partial_evals.iter().copied());
+        let partial_evals = point.z_split().compress_suffix(poly);
+        let eval = partial_evals.eval_base(point.z_svo());
 
         // Precompute accumulators for each SVO round i = 1..l.
         //
@@ -564,26 +739,20 @@ impl<F: Field, EF: ExtensionField<F>> SvoClaim<F, EF> {
         // expanded onto the {0, 1, inf}^i grid, then multiplied pointwise.
         //
         // Total cost: O(3^l) vs O(6^l) for per-point Lagrange interpolation.
-        let accumulators = (1..=z_svo.num_vars())
-            .map(|i| calculate_accumulators(i, partial_evals.as_slice(), z_svo.as_slice()))
-            .collect();
+        let accumulators =
+            calculate_accumulators::<F, EF>(partial_evals.as_slice(), point.z_svo().as_slice());
 
         Self {
-            point: SvoPoint { z_svo, split_eq },
-            accumulators,
+            point,
+            data: accumulators,
             eval,
-            original: point.clone(),
+            _marker: core::marker::PhantomData,
         }
     }
 
     /// Returns the original challenge point for the equality polynomial.
-    pub const fn point(&self) -> &Point<EF> {
-        &self.original
-    }
-
-    /// Returns the claimed evaluation of the polynomial
-    pub const fn eval(&self) -> EF {
-        self.eval
+    pub const fn original(&self) -> &Point<EF> {
+        &self.point.original
     }
 
     /// Returns the total number of variables `k` in the original point.
@@ -593,29 +762,15 @@ impl<F: Field, EF: ExtensionField<F>> SvoClaim<F, EF> {
     /// ```text
     /// k = k_svo + k_split
     /// ```
-    pub const fn num_variables(&self) -> usize {
-        self.k_svo() + self.k_split()
+    pub const fn num_vars(&self) -> usize {
+        self.point.num_vars()
     }
 
     /// Returns the precomputed accumulators for all SVO rounds.
     ///
-    /// `accumulators()[i]` contains `[acc_0, acc_inf]` for round `i+1`.
-    pub fn accumulators(&self) -> &[[Vec<EF>; 2]] {
-        &self.accumulators
-    }
-
-    /// Returns the number of SVO variables (`l0`).
-    ///
-    /// This is the depth of the SVO optimization.
-    /// These coordinates are processed via the accumulator-based Lagrange
-    /// interpolation path rather than the standard fold-and-sum path.
-    pub const fn k_svo(&self) -> usize {
-        self.point.k_svo()
-    }
-
-    /// Returns the number of variables covered by the split eq tables.
-    pub const fn k_split(&self) -> usize {
-        self.point.k_split()
+    /// `accumulators()[i]` contains `[acc_0, acc_2]` for round `i+1`.
+    pub const fn accumulators(&self) -> &SvoAccumulators<EF> {
+        &self.data
     }
 
     /// Combines multiple split eq polynomials into a single packed output.
@@ -642,86 +797,36 @@ impl<F: Field, EF: ExtensionField<F>> SvoClaim<F, EF> {
     ///   Must have size `2^{k_split - log_2(SIMD_WIDTH)}`.
     /// * `alpha` - Batching challenge for merging multiple constraints.
     /// * `rs` - The `k_svo` random challenges from the completed SVO rounds.
-    #[tracing::instrument(skip_all, fields(k = log2_strict_usize(out.len()), selfs = selfs.len()))]
-    pub fn combine_into_packed(
-        selfs: &[Self],
-        out: &mut [EF::ExtensionPacking],
-        alpha: EF,
+    pub fn accumulate_into_packed(
+        &self,
+        accumulators: &mut [EF::ExtensionPacking],
         rs: &Point<EF>,
+        scale: EF,
     ) {
-        // Nothing to do if there are no split eqs.
-        if selfs.is_empty() {
-            return;
-        }
-
-        // Verify all split eqs have the same k.
-        let k_split = selfs.iter().map(Self::k_split).all_equal_value().unwrap();
-
-        // Verify output buffer size.
-        assert_eq!(
-            out.len(),
-            1 << (k_split - log2_strict_usize(F::Packing::WIDTH)),
-            "combine_into_packed: output buffer has wrong size"
-        );
-
-        // Verify all split eqs have the same SVO size.
-        let k_svo = selfs.iter().map(Self::k_svo).all_equal_value().unwrap();
-
-        assert_eq!(
-            rs.num_vars(),
-            k_svo,
-            "combine_into_packed: wrong number of SVO challenges"
-        );
-
-        // Accumulate each split eq into the output, weighted by powers of alpha.
-        for (svo_claim, alpha) in selfs.iter().zip(alpha.powers()) {
-            svo_claim.point.accumulate_into_packed(out, rs, alpha);
-        }
+        self.point().accumulate_into_packed(accumulators, rs, scale);
     }
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
+
     use alloc::vec;
     use alloc::vec::Vec;
 
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::{PrimeCharacteristicRing, dot_product};
+    use p3_field::{PackedFieldExtension, PrimeCharacteristicRing, dot_product};
     use p3_koala_bear::KoalaBear;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
+    use crate::sumcheck::layout::OpeningSuffixLayout;
+    use crate::sumcheck::strategy::{SuffixSumcheck, SumcheckStrategy};
 
     type F = KoalaBear;
     type EF = BinomialExtensionField<F, 4>;
-
-    /// Generates grid points for SVO accumulator evaluation (test-only).
-    ///
-    /// Returns two arrays of `3^{l-1}` points each:
-    /// - First array: points in `{0, 1, inf}^{l-1} x {0}` (for computing `h(0)`)
-    /// - Second array: points in `{0, 1, inf}^{l-1} x {inf}` (for computing `h(inf)`)
-    fn points_01inf(l: usize) -> [Vec<Vec<F>>; 2] {
-        fn expand(pts: &[Vec<F>], values: &[usize]) -> Vec<Vec<F>> {
-            values
-                .iter()
-                .flat_map(|&v| {
-                    pts.iter().cloned().map(move |mut p| {
-                        p.push(F::from_u32(v as u32));
-                        p
-                    })
-                })
-                .collect()
-        }
-
-        assert!(l > 0, "points_01inf: l must be positive");
-        let mut pts = vec![vec![]];
-        for _ in 0..l - 1 {
-            pts = expand(&pts, &[0, 1, 2]);
-        }
-        [expand(&pts, &[0]), expand(&pts, &[2])]
-    }
 
     /// Convenience wrapper: expand boolean evals onto {0, 1, inf}^l grid.
     fn evals_01inf_grid(boolean_evals: &[EF]) -> Vec<EF> {
@@ -1032,102 +1137,6 @@ mod tests {
     }
 
     #[test]
-    fn test_points_01inf_l1() {
-        // For l=1: pts should have 3^0 = 1 point each.
-        // pts_0 = [(0,)]
-        // pts_2 = [(2,)]
-        let [pts_0, pts_2] = points_01inf(1);
-
-        assert_eq!(pts_0.len(), 1);
-        assert_eq!(pts_2.len(), 1);
-
-        assert_eq!(pts_0[0], vec![F::ZERO]);
-        assert_eq!(pts_2[0], vec![F::TWO]);
-    }
-
-    #[test]
-    fn test_points_01inf_l2() {
-        // For l=2: pts should have 3^1 = 3 points each.
-        // First l-1=1 coordinates in {0, 1, inf}, last coordinate fixed.
-        let [pts_0, pts_2] = points_01inf(2);
-
-        assert_eq!(pts_0.len(), 3);
-        assert_eq!(pts_2.len(), 3);
-
-        // All pts_0 should end with 0.
-        for pt in &pts_0 {
-            assert_eq!(pt.len(), 2);
-            assert_eq!(*pt.last().unwrap(), F::ZERO);
-        }
-
-        // All pts_2 should end with 2.
-        for pt in &pts_2 {
-            assert_eq!(pt.len(), 2);
-            assert_eq!(*pt.last().unwrap(), F::TWO);
-        }
-    }
-
-    #[test]
-    fn test_points_01inf_sizes() {
-        // Verify output sizes: each array should have 3^{l-1} points.
-        for l in 1..=6 {
-            let [pts_0, pts_2] = points_01inf(l);
-            let expected_size = 3usize.pow((l - 1) as u32);
-
-            assert_eq!(pts_0.len(), expected_size, "pts_0 size mismatch for l={l}");
-            assert_eq!(pts_2.len(), expected_size, "pts_2 size mismatch for l={l}");
-
-            // Each point should have l coordinates.
-            for pt in pts_0.iter().chain(pts_2.iter()) {
-                assert_eq!(pt.len(), l, "point dimension mismatch for l={l}");
-            }
-        }
-    }
-
-    #[test]
-    fn test_points_01inf_values_in_range() {
-        // All coordinates should be in {0, 1, 2} (where 2 represents inf),
-        // since the grid points live in {0, 1, inf}^{l-1} x {0 or inf}.
-        // The first l-1 coordinates are free, while the last is fixed.
-        let [pts_0, pts_2] = points_01inf(4);
-
-        let valid_values = [F::ZERO, F::ONE, F::TWO];
-
-        for pt in pts_0.iter().chain(pts_2.iter()) {
-            for (i, &coord) in pt.iter().enumerate() {
-                // Last coordinate is fixed (0 for pts_0, 2 for pts_2).
-                // Other coordinates should be in {0, 1, 2} (2 = inf slot).
-                if i < pt.len() - 1 {
-                    assert!(
-                        valid_values.contains(&coord),
-                        "invalid coordinate value at position {i}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_points_01inf_unique() {
-        // All points within each array should be unique, since the expand
-        // function enumerates all combinations of {0, 1, inf}^{l-1} crossed
-        // with a fixed last coordinate.
-        let [pts_0, pts_2] = points_01inf(4);
-
-        let pts_0_set: alloc::collections::BTreeSet<_> = pts_0.iter().cloned().collect();
-        let pts_2_set: alloc::collections::BTreeSet<_> = pts_2.iter().cloned().collect();
-
-        assert_eq!(pts_0_set.len(), pts_0.len(), "pts_0 contains duplicates");
-        assert_eq!(pts_2_set.len(), pts_2.len(), "pts_2 contains duplicates");
-    }
-
-    #[test]
-    #[should_panic(expected = "l must be positive")]
-    fn test_points_01inf_panics_on_zero() {
-        let _ = points_01inf(0);
-    }
-
-    #[test]
     fn test_accumulators_end_to_end() {
         // Verify that the accumulators produce correct sumcheck evaluations
         // by checking the full SVO claim construction round-trip.
@@ -1170,7 +1179,7 @@ mod tests {
             let poly = Poly::new((0..1 << k).map(|_| rng.random()).collect());
             // Use l=0 SVO depth so all variables go into the split eq tables.
             let split_eq = SvoClaim::<F, EF>::new(&point, 0, &poly);
-            assert_eq!(split_eq.num_variables(), k, "k() mismatch for k={k}");
+            assert_eq!(split_eq.num_vars(), k, "k() mismatch for k={k}");
         }
     }
 
@@ -1199,45 +1208,81 @@ mod tests {
         let split_eq_n = SvoClaim::<F, EF>::new(&point_n, 0, &larger_poly);
         // The number of partial evals is 2^{k_svo} = 2^0 = 1 for l=0
         // This is implicitly tested by the constructor succeeding.
-        assert_eq!(split_eq_n.num_variables(), n);
+        assert_eq!(split_eq_n.num_vars(), n);
         let _ = split_eq;
     }
 
+    #[test]
+    fn test_batch_svo_accumulators() {
+        let k = 12;
+        let n_polys = 3;
+        let mut rng = SmallRng::seed_from_u64(0);
+        let polys = (0..n_polys)
+            .map(|_| Poly::<F>::rand(&mut rng, k))
+            .collect::<Vec<_>>();
+        let alphas = (0..polys.len())
+            .map(|_| rng.random::<EF>())
+            .collect::<Vec<_>>();
+        let point = Point::<EF>::rand(&mut rng, k);
+
+        for l0 in 0..=k / 2 {
+            let svo_point = SvoPoint::<F, EF>::new_unpacked(l0, &point, VariableOrder::Suffix);
+            let openings = polys
+                .iter()
+                .map(|poly| {
+                    let opening = OpeningSuffixLayout::eval_poly(None, &svo_point, poly);
+                    assert_eq!(opening.eval(), poly.eval_base(&point));
+                    opening
+                })
+                .collect::<Vec<_>>();
+            let claim = MultiClaim::new(svo_point, openings);
+
+            let accumulators = calculate_accumulators_batch(&claim, &alphas);
+            if l0 == 0 {
+                assert!(accumulators.is_empty());
+                continue;
+            }
+
+            let mut poly = Poly::<EF>::zero(l0);
+            claim
+                .openings()
+                .iter()
+                .zip(alphas.iter())
+                .for_each(|(opening, &alpha)| {
+                    let full_svo_poly = opening
+                        .data()
+                        .last()
+                        .expect("l0 > 0 guarantees one SVO partial polynomial");
+                    poly.as_mut_slice()
+                        .iter_mut()
+                        .zip(full_svo_poly.iter())
+                        .for_each(|(out, &value)| *out += alpha * value);
+                });
+
+            let mut eq = Poly::new_from_point(claim.point().z_svo().as_slice(), EF::ONE);
+            let mut rs = Vec::with_capacity(l0);
+
+            for [acc0, acc_inf] in accumulators.iter() {
+                let weights = lagrange_weights_01inf_multi(rs.as_slice());
+                let c0 = dot_product::<EF, _, _>(acc0.iter().copied(), weights.iter().copied());
+                let cinf =
+                    dot_product::<EF, _, _>(acc_inf.iter().copied(), weights.iter().copied());
+
+                let (c0_ref, cinf_ref) =
+                    SuffixSumcheck::sumcheck_coefficients(poly.as_slice(), eq.as_slice());
+
+                assert_eq!(c0, c0_ref);
+                assert_eq!(cinf, cinf_ref);
+
+                let r: EF = rng.random();
+                poly.fix_suffix_var_mut(r);
+                eq.fix_suffix_var_mut(r);
+                rs.push(r);
+            }
+        }
+    }
+
     proptest! {
-        /// Verify that points_01inf generates the correct number of points.
-        #[test]
-        fn prop_points_01inf_sizes(l in 1usize..=8) {
-            let [pts_0, pts_2] = points_01inf(l);
-            let expected = 3usize.pow((l - 1) as u32);
-
-            prop_assert_eq!(pts_0.len(), expected);
-            prop_assert_eq!(pts_2.len(), expected);
-        }
-
-        /// Verify that all pts_0 points end with 0 and all pts_2 points end with 2.
-        #[test]
-        fn prop_points_01inf_last_coordinate(l in 1usize..=6) {
-            let [pts_0, pts_2] = points_01inf(l);
-
-            for pt in &pts_0 {
-                prop_assert_eq!(*pt.last().unwrap(), F::ZERO);
-            }
-            for pt in &pts_2 {
-                prop_assert_eq!(*pt.last().unwrap(), F::TWO);
-            }
-        }
-
-        /// Verify that the total variable count matches the original point dimension.
-        #[test]
-        fn prop_split_eq_k_consistency(k in 8usize..=14) {
-            let mut rng = SmallRng::seed_from_u64(k as u64);
-            let point = Point::<EF>::rand(&mut rng, k);
-            let poly = Poly::zero(k);
-            let split_eq = SvoClaim::<F, EF>::new(&point, 0, &poly);
-
-            prop_assert_eq!(split_eq.num_variables(), k);
-        }
-
         /// Verify the {0, 1, inf}^l grid expansion matches naive MLE evaluation.
         #[test]
         fn prop_evals_01inf_grid_matches_naive(num_vars in 1usize..=5) {
@@ -1259,13 +1304,13 @@ mod tests {
             // Split the point at half to get partial evaluations.
             let (z_svo, z_rest) = point.split_at(k / 2);
             let split_eq = SplitEq::<F, EF>::new_packed(&z_rest, EF::ONE);
-            let partial_evals = split_eq.compress_hi(&poly);
+            let partial_evals = split_eq.compress_suffix(&poly);
 
             // Compare the dispatch path (which uses straightline specializations
             // for l <= 3) against the general grid-expansion path.
             for l in 1..k / 2 {
                 let dispatched =
-                    calculate_accumulators::<F, EF>(l, partial_evals.as_slice(), z_svo.as_slice());
+                    calculate_accumulator::<F, EF>(l, partial_evals.as_slice(), z_svo.as_slice());
 
                 let eq0 = Poly::new_from_point(&z_svo.as_slice()[..l], EF::ONE);
                 let eq1 = Poly::new_from_point(&z_svo.as_slice()[l..], EF::ONE);
@@ -1274,7 +1319,7 @@ mod tests {
                     .chunks(eq1.num_evals())
                     .map(|chunk| dot_product::<EF, _, _>(eq1.iter().copied(), chunk.iter().copied()))
                     .collect();
-                let general = calculate_accumulators_general::<F, EF>(l, eq0.as_slice(), &reduced);
+                let general = calculate_accumulator_general::<F, EF>(l, eq0.as_slice(), &reduced);
 
                 prop_assert_eq!(dispatched, general);
             }
@@ -1287,8 +1332,8 @@ mod tests {
             let eq0: Vec<EF> = (0..2).map(|_| rng.random()).collect();
             let reduced: Vec<EF> = (0..2).map(|_| rng.random()).collect();
 
-            let fast = calculate_accumulators_1(&eq0, &reduced);
-            let general = calculate_accumulators_general::<F, EF>(1, &eq0, &reduced);
+            let fast = calculate_accumulator_1(&eq0, &reduced);
+            let general = calculate_accumulator_general::<F, EF>(1, &eq0, &reduced);
 
             prop_assert_eq!(fast, general);
         }
@@ -1300,8 +1345,8 @@ mod tests {
             let eq0: Vec<EF> = (0..4).map(|_| rng.random()).collect();
             let reduced: Vec<EF> = (0..4).map(|_| rng.random()).collect();
 
-            let fast = calculate_accumulators_2(&eq0, &reduced);
-            let general = calculate_accumulators_general::<F, EF>(2, &eq0, &reduced);
+            let fast = calculate_accumulator_2(&eq0, &reduced);
+            let general = calculate_accumulator_general::<F, EF>(2, &eq0, &reduced);
 
             prop_assert_eq!(fast, general);
         }
@@ -1313,8 +1358,8 @@ mod tests {
             let eq0: Vec<EF> = (0..8).map(|_| rng.random()).collect();
             let reduced: Vec<EF> = (0..8).map(|_| rng.random()).collect();
 
-            let fast = calculate_accumulators_3(&eq0, &reduced);
-            let general = calculate_accumulators_general::<F, EF>(3, &eq0, &reduced);
+            let fast = calculate_accumulator_3(&eq0, &reduced);
+            let general = calculate_accumulator_general::<F, EF>(3, &eq0, &reduced);
 
             prop_assert_eq!(fast, general);
         }
@@ -1344,6 +1389,130 @@ mod tests {
                 }
 
                 prop_assert_eq!(grid[ternary_idx], input_val);
+            }
+        }
+    }
+
+    #[test]
+    fn test_svo_point_eval() {
+        let assert_eval = |svo_point: &SvoPoint<F, EF>, poly: &Poly<F>, point: &Point<EF>| {
+            let e0 = poly.eval_base(point);
+
+            let (e1, partial_evals) = svo_point.eval(poly);
+            assert_eq!(e0, e1);
+            assert_eq!(partial_evals.len(), svo_point.num_vars_svo());
+
+            match svo_point.var_order() {
+                VariableOrder::Prefix => {
+                    partial_evals.iter().enumerate().for_each(|(i, pe0)| {
+                        let (_point_lo, point_hi) = point.split_at(i + 1);
+                        assert_eq!(pe0, &poly.compress_suffix(&point_hi, EF::ONE));
+                        assert_eq!(e0, pe0.eval_base(&svo_point.z_svo().split_at(i + 1).0));
+                    });
+                }
+                VariableOrder::Suffix => {
+                    partial_evals.iter().enumerate().for_each(|(i, pe0)| {
+                        let (point_lo, point_hi) = point.split_at(point.num_vars() - i - 1);
+                        assert_eq!(pe0, &poly.compress_prefix(&point_lo, EF::ONE));
+                        assert_eq!(e0, pe0.eval_base(&point_hi));
+                    });
+                }
+            }
+        };
+
+        let k = 12;
+        let mut rng = SmallRng::seed_from_u64(11);
+        let poly = Poly::<F>::rand(&mut rng, k);
+        let point = Point::<EF>::rand(&mut rng, k);
+
+        for l0 in 0..=k {
+            let unpacked_prefix =
+                SvoPoint::<F, EF>::new_unpacked(l0, &point, VariableOrder::Prefix);
+            assert_eval(&unpacked_prefix, &poly, &point);
+        }
+
+        for l0 in 0..=k {
+            let unpacked_suffix =
+                SvoPoint::<F, EF>::new_unpacked(l0, &point, VariableOrder::Suffix);
+            assert_eval(&unpacked_suffix, &poly, &point);
+        }
+
+        for l0 in 0..=k {
+            let packed_prefix = SvoPoint::<F, EF>::new_packed(l0, &point);
+            assert_eval(&packed_prefix, &poly, &point);
+        }
+    }
+
+    #[test]
+    fn test_svo_point_accumulate() {
+        type F = KoalaBear;
+        type EF = BinomialExtensionField<F, 4>;
+        type PackedEF = <EF as ExtensionField<F>>::ExtensionPacking;
+
+        let mut rng = SmallRng::seed_from_u64(0);
+
+        let assert_accumulate_unpacked =
+            |svo_point: &SvoPoint<F, EF>, point: &Point<EF>, scale: EF, rs: &Point<EF>| {
+                let eq = Poly::new_from_point(point.as_slice(), EF::ONE);
+                let expected = match svo_point.var_order() {
+                    VariableOrder::Prefix => eq.compress_prefix(rs, scale),
+                    VariableOrder::Suffix => eq.compress_suffix(rs, scale),
+                };
+
+                let mut out = Poly::<EF>::zero(expected.num_vars());
+                svo_point.accumulate_into(out.as_mut_slice(), rs, scale);
+                assert_eq!(out, expected);
+            };
+
+        let assert_accumulate_packed =
+            |svo_point: &SvoPoint<F, EF>, point: &Point<EF>, scale: EF, rs: &Point<EF>| {
+                let eq = Poly::new_from_point(point.as_slice(), EF::ONE);
+                let expected = eq.compress_prefix(rs, scale);
+                let k_pack = log2_strict_usize(<<F as Field>::Packing as PackedValue>::WIDTH);
+                assert!(expected.num_vars() >= k_pack);
+
+                let mut out = Poly::<PackedEF>::zero(expected.num_vars() - k_pack);
+                svo_point.accumulate_into_packed(out.as_mut_slice(), rs, scale);
+                let unpacked =
+                    <PackedEF as PackedFieldExtension<F, EF>>::to_ext_iter(out.iter().copied())
+                        .take(expected.num_evals())
+                        .collect::<Vec<_>>();
+                assert_eq!(unpacked, expected.as_slice());
+            };
+
+        let k = 12;
+        let k_pack = log2_strict_usize(<<F as Field>::Packing as PackedValue>::WIDTH);
+        let point = Point::<EF>::rand(&mut rng, k);
+        let scale: EF = rng.random();
+
+        for l0 in 0..=k {
+            let unpacked_prefix =
+                SvoPoint::<F, EF>::new_unpacked(l0, &point, VariableOrder::Prefix);
+            assert_eq!(unpacked_prefix.var_order(), VariableOrder::Prefix);
+            assert_eq!(unpacked_prefix.num_vars(), k);
+            assert_eq!(unpacked_prefix.num_vars_svo(), l0);
+            assert_eq!(unpacked_prefix.num_vars_split(), k - l0);
+            assert_accumulate_unpacked(&unpacked_prefix, &point, scale, &Point::rand(&mut rng, l0));
+        }
+
+        for l0 in 0..=k {
+            let unpacked_suffix =
+                SvoPoint::<F, EF>::new_unpacked(l0, &point, VariableOrder::Suffix);
+            assert_eq!(unpacked_suffix.var_order(), VariableOrder::Suffix);
+            assert_eq!(unpacked_suffix.num_vars(), k);
+            assert_eq!(unpacked_suffix.num_vars_svo(), l0);
+            assert_eq!(unpacked_suffix.num_vars_split(), k - l0);
+            assert_accumulate_unpacked(&unpacked_suffix, &point, scale, &Point::rand(&mut rng, l0));
+        }
+
+        for l0 in 0..=k {
+            if k - l0 >= k_pack {
+                let packed_prefix = SvoPoint::<F, EF>::new_packed(l0, &point);
+                assert_eq!(packed_prefix.var_order(), VariableOrder::Prefix);
+                assert_eq!(packed_prefix.num_vars(), k);
+                assert_eq!(packed_prefix.num_vars_svo(), l0);
+                assert_eq!(packed_prefix.num_vars_split(), k - l0);
+                assert_accumulate_packed(&packed_prefix, &point, scale, &Point::rand(&mut rng, l0));
             }
         }
     }

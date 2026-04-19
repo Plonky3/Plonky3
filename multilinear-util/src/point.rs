@@ -22,6 +22,22 @@ where
         Self(coords)
     }
 
+    /// Construct a `Point` corresponding to a vertex of the hypercube.
+    #[must_use]
+    pub fn hypercube(value: usize, num_vars: usize) -> Self {
+        assert!(value < (1 << num_vars));
+        let vars = (0..num_vars)
+            .map(|i| {
+                if (value >> i) & 1 == 1 {
+                    F::ONE
+                } else {
+                    F::ZERO
+                }
+            })
+            .collect::<Vec<_>>();
+        Self(vars.iter().rev().copied().collect())
+    }
+
     /// Returns the number of variables (dimension `n`).
     #[inline]
     #[must_use]
@@ -94,7 +110,7 @@ where
     /// Panics if `p` and `q` have different lengths.
     #[must_use]
     #[inline]
-    pub fn eval_eq(p: &[F], q: &[F]) -> F {
+    pub fn eval_eq<EF: ExtensionField<F>>(p: &[F], q: &[EF]) -> EF {
         assert_eq!(
             p.len(),
             q.len(),
@@ -106,7 +122,7 @@ where
         // to avoid unnecessary multiplications.
         p.iter()
             .zip(q)
-            .map(|(&l, &r)| F::ONE + l * r.double() - l - r)
+            .map(|(&l, &r)| r.double() * l - l - r + F::ONE)
             .product()
     }
 
@@ -122,19 +138,23 @@ where
         Self::eval_eq(self.as_slice(), point.as_slice())
     }
 
-    /// Computes `select(c, p)`, where `p` is another `Point`.
+    /// Computes `select(c, pow(var))`,.
     ///
     /// The **selection polynomial** for two vectors is:
     /// ```ignore
     /// select(s1, s2) = ∏ (s1_i * s2_i - s2_i + 1)
     /// ```
-    #[must_use]
-    pub fn select_poly<EF: ExtensionField<F>>(&self, point: &Point<EF>) -> EF {
-        assert_eq!(self.num_vars(), point.num_vars());
-
-        self.into_iter()
-            .zip(point)
-            .map(|(&l, &r)| r * (l - F::ONE) + F::ONE)
+    pub fn select_poly<BaseField: Field>(&self, mut var: BaseField) -> F
+    where
+        F: ExtensionField<BaseField>,
+    {
+        self.iter()
+            .rev()
+            .map(|&r| {
+                let term = r * (F::NEG_ONE + var) + F::ONE;
+                var = var.square();
+                term
+            })
             .product()
     }
 
