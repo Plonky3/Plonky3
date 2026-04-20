@@ -4,11 +4,9 @@
 //!
 //! - Prefix prover: SIMD-packed first round.
 //! - Suffix prover: SVO-accumulator preprocessing.
-//! - Shared traversal helper: walks placements, columns, claims, and openings.
 
 mod prefix;
 mod suffix;
-mod util;
 
 pub use prefix::PrefixProver;
 pub use suffix::SuffixProver;

@@ -195,22 +195,13 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     /// - Virtual claims continue the alpha sequence after the concrete ones.
     pub fn sum(&self, alpha: EF) -> EF {
         let mut sum = EF::ZERO;
-        // Running alpha power; starts at 1 and advances per visited opening.
-        let mut alpha_i = EF::ONE;
+        let mut alphas = alpha.powers();
 
-        // Concrete openings: outer placement → column → claim → filtered opening.
+        // Concrete openings: three loops, no filter. Alphas match insertion order.
         for placement in &self.placements {
-            let claims = &self.claim_map[placement.idx()];
-            for poly_idx in 0..placement.num_polys() {
-                for claim in claims {
-                    for opening in claim.openings() {
-                        // Filter: only visit openings tied to the current column.
-                        if opening.poly_idx() == Some(poly_idx) {
-                            sum += opening.eval() * alpha_i;
-                            // Advance alpha after every visited opening.
-                            alpha_i *= alpha;
-                        }
-                    }
+            for claim in &self.claim_map[placement.idx()] {
+                for opening in claim.openings() {
+                    sum += opening.eval() * alphas.next().unwrap();
                 }
             }
         }
@@ -234,20 +225,15 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         // Output statement spans the full stacked variable space.
         let mut eq_statement = EqStatement::initialize(self.k);
 
-        // Concrete contributions: lift each claim point into the stacked space via the selector.
+        // Concrete contributions: walk each opening in insertion order and lift
+        // its claim point through the selector for that opening's column.
         for placement in &self.placements {
-            let claims = &self.claim_map[placement.idx()];
-            for (poly_idx, selector) in placement.selectors().iter().enumerate() {
-                for claim in claims {
-                    for opening in claim.openings() {
-                        // Filter: only openings tied to the current column.
-                        if opening.poly_idx() == Some(poly_idx) {
-                            // Prefix the local point with the selector bits.
-                            let lifted = selector.lift(claim.point());
-                            // Record the equality constraint at the lifted point.
-                            eq_statement.add_evaluated_constraint(lifted, opening.eval());
-                        }
-                    }
+            for claim in &self.claim_map[placement.idx()] {
+                for opening in claim.openings() {
+                    // The opening's column tells us which selector to lift through.
+                    let col = opening.poly_idx().unwrap();
+                    let lifted = placement.selectors()[col].lift(claim.point());
+                    eq_statement.add_evaluated_constraint(lifted, opening.eval());
                 }
             }
         }

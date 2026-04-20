@@ -10,7 +10,6 @@ use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 use p3_util::log2_strict_usize;
 
-use super::util::traverse_openings;
 use crate::sumcheck::layout::opening::{MultiClaim, Opening, PrefixMultiClaim, PrefixVirtualClaim};
 use crate::sumcheck::layout::witness::{Table, TablePlacement};
 use crate::sumcheck::product_polynomial::ProductPolynomial;
@@ -217,17 +216,42 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
     }
 
     /// Computes the batched claimed sum from concrete and virtual openings.
+    ///
+    /// # Identity
+    ///
+    /// ```text
+    ///     sum = sum_{i}  alpha^i * eval_i
+    /// ```
+    ///
+    /// # Alpha ordering
+    ///
+    /// Powers of `alpha` are handed out in insertion order:
+    ///
+    /// - Outer: placements, in the order the witness laid them out.
+    /// - Middle: claims recorded against that placement's source table.
+    /// - Inner: openings inside each claim, in the order they were recorded.
+    ///
+    /// # Virtual claims
+    ///
+    /// - Virtual evaluations continue the same alpha sequence.
+    /// - They start at `alpha^n`, with `n` the total concrete opening count.
+    ///
+    /// # Verifier agreement
+    ///
+    /// The verifier walks its claim registry with the same three-loop order,
+    /// so both sides assign the same `alpha^i` to the same claim point.
     fn sum(&self, alpha: EF) -> EF {
         let mut sum = EF::ZERO;
+        let mut alphas = alpha.powers();
 
-        // Concrete openings: scale each by its alpha power and accumulate.
-        traverse_openings(
-            &self.placements,
-            |id| self.num_variables_table(id),
-            &self.claim_map,
-            alpha,
-            |v| sum += v.opening.eval() * v.alpha,
-        );
+        // Concrete openings: three loops, no filter.
+        for placement in &self.placements {
+            for claim in &self.claim_map[placement.idx()] {
+                for opening in claim.openings() {
+                    sum += opening.eval() * alphas.next().unwrap();
+                }
+            }
+        }
 
         // Virtual claims continue the alpha sequence right after the concrete ones.
         sum += dot_product::<EF, _, _>(
@@ -244,27 +268,34 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
     ///     out(x) = sum_{i}  alpha^i * eq(z_i, x)
     /// ```
     ///
-    /// Concrete claims contribute into their owning slot only.
-    /// Virtual claims span the entire stacked output buffer.
+    /// - Concrete openings write into their owning slot, found via the
+    ///   selector for the opening's column.
+    /// - Virtual claims span the entire stacked output buffer.
     #[tracing::instrument(skip_all)]
     fn combine_eqs(&self, alpha: EF) -> Poly<EF::ExtensionPacking> {
         // Packed output has 2^(num_variables - k_pack) entries; each holds WIDTH scalars.
         let k_pack = log2_strict_usize(F::Packing::WIDTH);
         let mut out = Poly::<EF::ExtensionPacking>::zero(self.num_variables - k_pack);
 
-        // Concrete claims write into their per-slot packed range.
-        traverse_openings(
-            &self.placements,
-            |id| self.num_variables_table(id),
-            &self.claim_map,
-            alpha,
-            |v| {
-                let packed_range = (v.slot.start >> k_pack)..(v.slot.end >> k_pack);
-                v.claim
-                    .point()
-                    .accumulate_into_packed(&mut out.as_mut_slice()[packed_range], Some(v.alpha));
-            },
-        );
+        let mut alphas = alpha.powers();
+
+        // Concrete openings: write each into the slot its column's selector addresses.
+        for placement in &self.placements {
+            let num_variables_table = self.num_variables_table(placement.idx());
+            let slot_size = 1usize << num_variables_table;
+            for claim in &self.claim_map[placement.idx()] {
+                for opening in claim.openings() {
+                    // The opening's column tells us which selector picks the slot.
+                    let col = opening.poly_idx().unwrap();
+                    let off = placement.selectors()[col].index() << num_variables_table;
+                    let packed_range = (off >> k_pack)..((off + slot_size) >> k_pack);
+                    claim.point().accumulate_into_packed(
+                        &mut out.as_mut_slice()[packed_range],
+                        Some(alphas.next().unwrap()),
+                    );
+                }
+            }
+        }
 
         // Virtual claims contribute across the whole output.
         // Start alpha where the concrete openings stopped.

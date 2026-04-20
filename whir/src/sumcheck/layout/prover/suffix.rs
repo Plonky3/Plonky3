@@ -10,7 +10,6 @@ use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 
-use super::util::traverse_openings;
 use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
 use crate::sumcheck::layout::opening::{MultiClaim, Opening, SuffixMultiClaim, SuffixVirtualClaim};
 use crate::sumcheck::layout::witness::{Table, TablePlacement};
@@ -255,44 +254,22 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         let alpha: EF = challenger.sample_algebra_element();
         let n_claims = self.num_claims();
 
-        // Stage A: flatten alpha powers per opening in natural opening order.
+        // Stage A: batch per-claim accumulators using insertion-order alpha powers.
         //
-        // - Traversal visits openings in poly-index-sorted order.
-        // - That order may differ from natural insertion order.
-        // - Indexing by opening_idx keeps the per-claim alpha vector
-        //   aligned with the claim's opening list.
-        let mut claim_alphas = self
-            .claim_map
+        // - Iteration order is placement order, matching `sum` and `combine_eqs`.
+        // - Each claim consumes exactly `claim.len()` consecutive powers from
+        //   the shared iterator, so the per-claim alpha vector is aligned with
+        //   the claim's opening list by construction.
+        let mut alphas = alpha.powers();
+        let accumulators: Vec<_> = self
+            .placements
             .iter()
-            .map(|claims| {
-                claims
-                    .iter()
-                    .map(|claim| EF::zero_vec(claim.len()))
-                    .collect::<Vec<_>>()
+            .flat_map(|placement| self.claim_map[placement.idx()].iter())
+            .map(|claim| {
+                let per_claim: Vec<EF> = alphas.by_ref().take(claim.len()).collect();
+                calculate_accumulators_batch(claim, &per_claim)
             })
-            .collect::<Vec<_>>();
-        traverse_openings(
-            &self.placements,
-            |id| self.num_variables_table(id),
-            &self.claim_map,
-            alpha,
-            |v| {
-                claim_alphas[v.table_idx][v.claim_idx][v.opening_idx] = v.alpha;
-            },
-        );
-
-        // Stage B: batch per-claim accumulator sets using the flattened alphas.
-        let claim_alphas = &claim_alphas;
-        let accumulators = self
-            .claim_map
-            .iter()
-            .enumerate()
-            .flat_map(|(table_idx, claims)| {
-                claims.iter().enumerate().map(move |(claim_idx, claim)| {
-                    calculate_accumulators_batch(claim, &claim_alphas[table_idx][claim_idx])
-                })
-            })
-            .collect::<Vec<_>>();
+            .collect();
 
         // Stage C: drive the preprocessing rounds from the accumulators.
         let mut sum = self.sum(alpha);
@@ -379,17 +356,42 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     }
 
     /// Computes the batched claimed sum from concrete and virtual openings.
+    ///
+    /// # Identity
+    ///
+    /// ```text
+    ///     sum = sum_{i}  alpha^i * eval_i
+    /// ```
+    ///
+    /// # Alpha ordering
+    ///
+    /// Powers of `alpha` are handed out in insertion order:
+    ///
+    /// - Outer: placements, in the order the witness laid them out.
+    /// - Middle: claims recorded against that placement's source table.
+    /// - Inner: openings inside each claim, in the order they were recorded.
+    ///
+    /// # Virtual claims
+    ///
+    /// - Virtual evaluations continue the same alpha sequence.
+    /// - They start at `alpha^n`, with `n` the total concrete opening count.
+    ///
+    /// # Verifier agreement
+    ///
+    /// The verifier walks its claim registry with the same three-loop order,
+    /// so both sides assign the same `alpha^i` to the same claim point.
     fn sum(&self, alpha: EF) -> EF {
         let mut sum = EF::ZERO;
+        let mut alphas = alpha.powers();
 
-        // Concrete openings: scale each by its alpha power and accumulate.
-        traverse_openings(
-            &self.placements,
-            |id| self.num_variables_table(id),
-            &self.claim_map,
-            alpha,
-            |v| sum += v.opening.eval() * v.alpha,
-        );
+        // Concrete openings: three loops, no filter.
+        for placement in &self.placements {
+            for claim in &self.claim_map[placement.idx()] {
+                for opening in claim.openings() {
+                    sum += opening.eval() * alphas.next().unwrap();
+                }
+            }
+        }
 
         // Virtual claims continue the alpha sequence right after the concrete ones.
         sum += dot_product::<EF, _, _>(
@@ -447,21 +449,27 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         // Output arity: stacked arity minus the folded challenges.
         let mut out = Poly::<EF>::zero(self.num_variables - rs.num_variables());
 
-        // Concrete claims: each opening contributes into its owning slot.
-        traverse_openings(
-            &self.placements,
-            |id| self.num_variables_table(id),
-            &self.claim_map,
-            alpha,
-            |v| {
-                // Fold the scalar slot range down by the SVO depth.
-                let folded_range = (v.slot.start >> self.folding)..(v.slot.end >> self.folding);
-                // Accumulate alpha * eq(point, .) weighted table into the slot.
-                v.claim
-                    .point()
-                    .accumulate_into(&mut out.as_mut_slice()[folded_range], rs, v.alpha);
-            },
-        );
+        let mut alphas = alpha.powers();
+
+        // Concrete claims: write each into the slot its column's selector addresses.
+        for placement in &self.placements {
+            let num_variables_table = self.num_variables_table(placement.idx());
+            let slot_size = 1usize << num_variables_table;
+            for claim in &self.claim_map[placement.idx()] {
+                for opening in claim.openings() {
+                    // The opening's column tells us which selector picks the slot.
+                    let col = opening.poly_idx().unwrap();
+                    let off = placement.selectors()[col].index() << num_variables_table;
+                    // Fold the scalar slot range down by the SVO depth.
+                    let folded_range = (off >> self.folding)..((off + slot_size) >> self.folding);
+                    claim.point().accumulate_into(
+                        &mut out.as_mut_slice()[folded_range],
+                        rs,
+                        alphas.next().unwrap(),
+                    );
+                }
+            }
+        }
 
         // Virtual claims: span the full output; alpha continues after concrete ones.
         let mut alpha_i = alpha.exp_u64(self.num_claims() as u64);
