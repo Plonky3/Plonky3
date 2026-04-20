@@ -53,6 +53,22 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
     LG: LookupGadget,
 {
     let height = main.height();
+    if let Some(prep) = preprocessed.as_ref() {
+        assert_eq!(
+            prep.height(),
+            height,
+            "debug constraint check requires preprocessed trace height ({}) to match main trace height ({})",
+            prep.height(),
+            height
+        );
+    }
+    assert_eq!(
+        permutation.height(),
+        height,
+        "debug constraint check requires permutation trace height ({}) to match main trace height ({})",
+        permutation.height(),
+        height
+    );
 
     let (lookups, lookup_gadget) = lookup_constraints_inputs;
 

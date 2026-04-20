@@ -477,6 +477,15 @@ where
 {
     let height = main.height();
     let preprocessed = air.preprocessed_trace();
+    if let Some(prep) = preprocessed.as_ref() {
+        assert_eq!(
+            prep.height(),
+            height,
+            "debug constraint check requires preprocessed trace height ({}) to match main trace height ({})",
+            prep.height(),
+            height
+        );
+    }
 
     for row_index in 0..height {
         let row_index_next = (row_index + 1) % height;
@@ -572,6 +581,15 @@ where
 {
     let height = main.height();
     let preprocessed = air.preprocessed_trace();
+    if let Some(prep) = preprocessed.as_ref() {
+        assert_eq!(
+            prep.height(),
+            height,
+            "debug constraint check requires preprocessed trace height ({}) to match main trace height ({})",
+            prep.height(),
+            height
+        );
+    }
 
     // Accumulate violations across all rows.
     let mut all_failures = Vec::new();
