@@ -8,4 +8,6 @@ mod helpers;
 mod poseidon2;
 
 pub use bn254::*;
-pub use poseidon2::Poseidon2Bn254;
+pub use poseidon2::{
+    BN254_POSEIDON2_FULL_ROUNDS, BN254_POSEIDON2_PARTIAL_ROUNDS, BN254_S_BOX_DEGREE, Poseidon2Bn254,
+};

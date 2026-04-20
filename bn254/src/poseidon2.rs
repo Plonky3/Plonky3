@@ -19,6 +19,16 @@ use crate::Bn254;
 /// satisfying `gcd(α, p - 1) = 1` is 5.
 pub const BN254_S_BOX_DEGREE: u64 = 5;
 
+/// Number of full rounds for BN254 Poseidon2.
+///
+/// Matches the BN254/BN256 parameter set used by zkhash.
+pub const BN254_POSEIDON2_FULL_ROUNDS: usize = 8;
+
+/// Number of partial rounds for BN254 Poseidon2.
+///
+/// Matches the BN254/BN256 parameter set used by zkhash.
+pub const BN254_POSEIDON2_PARTIAL_ROUNDS: usize = 56;
+
 /// An implementation of the Poseidon2 hash function for the Bn254Fr field.
 ///
 /// It acts on arrays of the form `[Bn254Fr; WIDTH]`.
@@ -147,8 +157,6 @@ mod tests {
     #[test]
     fn test_poseidon2_bn254() {
         const WIDTH: usize = 3;
-        const ROUNDS_F: usize = 8;
-        const ROUNDS_P: usize = 56;
 
         type F = Bn254;
 
@@ -170,15 +178,15 @@ mod tests {
             })
             .collect();
 
-        let internal_start = ROUNDS_F / 2;
-        let internal_end = (ROUNDS_F / 2) + ROUNDS_P;
+        let internal_start = BN254_POSEIDON2_FULL_ROUNDS / 2;
+        let internal_end = (BN254_POSEIDON2_FULL_ROUNDS / 2) + BN254_POSEIDON2_PARTIAL_ROUNDS;
         let internal_round_constants = round_constants
             .drain(internal_start..internal_end)
             .map(|vec| vec[0])
             .collect::<Vec<_>>();
         let external_round_constants = ExternalLayerConstants::new(
-            round_constants[..(ROUNDS_F / 2)].to_vec(),
-            round_constants[(ROUNDS_F / 2)..].to_vec(),
+            round_constants[..(BN254_POSEIDON2_FULL_ROUNDS / 2)].to_vec(),
+            round_constants[(BN254_POSEIDON2_FULL_ROUNDS / 2)..].to_vec(),
         );
         // Our Poseidon2 implementation.
         let poseidon2 = Poseidon2Bn254::new(external_round_constants, internal_round_constants);
