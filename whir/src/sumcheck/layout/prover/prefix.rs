@@ -14,7 +14,7 @@ use super::util::traverse_openings;
 use crate::sumcheck::layout::opening::{MultiClaim, Opening, PrefixMultiClaim, PrefixVirtualClaim};
 use crate::sumcheck::layout::witness::{Table, TablePlacement};
 use crate::sumcheck::product_polynomial::ProductPolynomial;
-use crate::sumcheck::strategy::{PrefixSumcheck, SumcheckProver, SumcheckStrategy};
+use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
 use crate::sumcheck::{Claim, SumcheckData, extrapolate_01inf};
 
 /// Stacked-sumcheck prover with prefix-first variable binding.
@@ -155,7 +155,7 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
         sumcheck_data: &mut SumcheckData<F, EF>,
         pow_bits: usize,
         challenger: &mut Ch,
-    ) -> (SumcheckProver<F, EF, PrefixSumcheck>, Point<EF>)
+    ) -> (SumcheckProver<F, EF>, Point<EF>)
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
@@ -181,7 +181,7 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
         let poly = F::Packing::pack_slice(self.poly.as_slice());
 
         // First-round coefficients in packed arithmetic.
-        let (c0, c_inf) = PrefixSumcheck::sumcheck_coefficients(poly, weights.as_slice());
+        let (c0, c_inf) = VariableOrder::Prefix.sumcheck_coefficients(poly, weights.as_slice());
         // Horizontal reduction across SIMD lanes.
         let c0 = EF::ExtensionPacking::to_ext_iter([c0]).sum();
         let c_inf = EF::ExtensionPacking::to_ext_iter([c_inf]).sum();
@@ -193,7 +193,8 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
         sum = extrapolate_01inf(c0, sum - c0, c_inf, r);
 
         // Phase 3: pack (poly, weights) into a product polynomial for the residual rounds.
-        let mut prod_poly = ProductPolynomial::<F, EF, PrefixSumcheck>::new_packed(poly, weights);
+        let mut prod_poly =
+            ProductPolynomial::<F, EF>::new_packed(VariableOrder::Prefix, poly, weights);
         debug_assert_eq!(prod_poly.dot_product(), sum);
 
         // Phase 4: rounds 2..folding run on the product polynomial directly.

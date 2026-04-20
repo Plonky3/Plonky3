@@ -827,7 +827,7 @@ mod test {
     use super::*;
     use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
     use crate::sumcheck::layout::Opening;
-    use crate::sumcheck::strategy::{SuffixSumcheck, SumcheckStrategy};
+    use crate::sumcheck::strategy::VariableOrder;
 
     type F = KoalaBear;
     type EF = BinomialExtensionField<F, 4>;
@@ -1276,7 +1276,7 @@ mod test {
                     dot_product::<EF, _, _>(acc_inf.iter().copied(), weights.iter().copied());
 
                 let (c0_ref, cinf_ref) =
-                    SuffixSumcheck::sumcheck_coefficients(poly.as_slice(), eq.as_slice());
+                    VariableOrder::Suffix.sumcheck_coefficients(poly.as_slice(), eq.as_slice());
 
                 assert_eq!(c0, c0_ref);
                 assert_eq!(cinf, cinf_ref);

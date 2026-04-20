@@ -15,7 +15,7 @@ use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
 use crate::sumcheck::layout::opening::{MultiClaim, Opening, SuffixMultiClaim, SuffixVirtualClaim};
 use crate::sumcheck::layout::witness::{Table, TablePlacement};
 use crate::sumcheck::product_polynomial::ProductPolynomial;
-use crate::sumcheck::strategy::{SuffixSumcheck, SumcheckProver, VariableOrder};
+use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
 use crate::sumcheck::svo::{SvoPoint, calculate_accumulators_batch};
 use crate::sumcheck::{Claim, SumcheckData, extrapolate_01inf};
 
@@ -246,7 +246,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         sumcheck_data: &mut SumcheckData<F, EF>,
         pow_bits: usize,
         challenger: &mut Ch,
-    ) -> (SumcheckProver<F, EF, SuffixSumcheck>, Point<EF>)
+    ) -> (SumcheckProver<F, EF>, Point<EF>)
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
@@ -362,7 +362,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         // Factor 2 of the product: the batched equality-weight poly.
         let weights = self.combine_eqs(&reversed, alpha);
         // Pair them; the product polynomial drives the remaining rounds.
-        let poly = ProductPolynomial::new_unpacked(compressed, weights);
+        let poly = ProductPolynomial::new_unpacked(VariableOrder::Suffix, compressed, weights);
         // Cross-check: the dot product of the two factors must equal the
         // running sum accumulated across the preprocessing rounds.
         debug_assert_eq!(poly.dot_product(), sum);

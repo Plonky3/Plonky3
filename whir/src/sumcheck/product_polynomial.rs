@@ -19,8 +19,6 @@
 //! At each round, we compute a univariate polynomial `h(X)` that represents the partial sum
 //! over remaining variables. For quadratic sumcheck, `h(X)` is degree-2.
 
-use core::marker::PhantomData;
-
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
 use p3_multilinear_util::point::Point;
@@ -29,7 +27,7 @@ use p3_util::log2_strict_usize;
 use tracing::instrument;
 
 use crate::constraints::Constraint;
-use crate::sumcheck::strategy::SumcheckStrategy;
+use crate::sumcheck::strategy::VariableOrder;
 use crate::sumcheck::{SumcheckData, extrapolate_01inf};
 
 /// A paired representation of evaluation and weight polynomials for quadratic sumcheck.
@@ -112,35 +110,36 @@ enum MaybePacked<F: Field, EF: ExtensionField<F>> {
     },
 }
 
-/// Paired evaluation and weight polynomials, tagged by a sumcheck strategy.
+/// Paired evaluation and weight polynomials, tagged by a variable-binding order.
 ///
 /// # Contents
 ///
 /// - Backing data kept in either SIMD-packed or scalar form.
-/// - Strategy type tag that drives round-level dispatch.
+/// - Variable-binding order that drives round-level dispatch.
 ///
-/// # Role of the strategy type
+/// # Why a runtime tag
 ///
-/// Hot-path operations dispatch through strategy-level associated functions:
+/// Round operations dispatch through `VariableOrder`:
 ///
 /// - Variable binding: prefix-first or suffix-first folding.
-/// - Round coefficients: differ in which side of the hypercube is summed.
+/// - Round coefficients: differ in which hypercube axis is summed.
 ///
-/// Both strategy structs are zero-sized, so only the type is carried — no
-/// runtime value is needed to pick the dispatch.
+/// The tag is consulted once per round; the per-round work is `O(2^n)`, so
+/// the branch is immeasurable next to the inner loops.
 #[derive(Debug, Clone)]
-pub struct ProductPolynomial<F: Field, EF: ExtensionField<F>, St: SumcheckStrategy> {
+pub struct ProductPolynomial<F: Field, EF: ExtensionField<F>> {
     /// Paired polynomial data, SIMD-packed for large inputs and scalar otherwise.
     inner: MaybePacked<F, EF>,
-    /// Ties the sumcheck strategy into the type without storing a runtime value.
-    _strategy: PhantomData<St>,
+    /// Variable-binding direction consulted once per round.
+    order: VariableOrder,
 }
 
-impl<F: Field, EF: ExtensionField<F>, St: SumcheckStrategy> ProductPolynomial<F, EF, St> {
+impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     /// Creates a packed variant and runs an immediate transition check.
     ///
     /// # Arguments
     ///
+    /// - `order`   — variable-binding direction used by every round.
     /// - `evals`   — packed evaluations of the sumchecked polynomial.
     /// - `weights` — packed evaluations of the weight polynomial.
     ///
@@ -148,16 +147,17 @@ impl<F: Field, EF: ExtensionField<F>, St: SumcheckStrategy> ProductPolynomial<F,
     ///
     /// - Evaluation and weight polynomials must share the same arity.
     pub fn new_packed(
+        order: VariableOrder,
         evals: Poly<EF::ExtensionPacking>,
         weights: Poly<EF::ExtensionPacking>,
     ) -> Self {
         // Paired polynomials must share the same variable space.
         assert_eq!(evals.num_vars(), weights.num_vars());
 
-        // Wrap the packed pair; the strategy type tag is zero-sized.
+        // Wrap the packed pair; the order tag fits in one byte.
         let mut poly = Self {
             inner: MaybePacked::Packed { evals, weights },
-            _strategy: PhantomData,
+            order,
         };
 
         // Corner case: if the input is already small, switch to scalar mode.
@@ -169,13 +169,19 @@ impl<F: Field, EF: ExtensionField<F>, St: SumcheckStrategy> ProductPolynomial<F,
     ///
     /// # Arguments
     ///
+    /// - `order`   — variable-binding direction used by every round.
     /// - `evals`   — scalar evaluations of the sumchecked polynomial.
     /// - `weights` — scalar evaluations of the weight polynomial.
-    pub const fn new_unpacked(evals: Poly<EF>, weights: Poly<EF>) -> Self {
+    pub const fn new_unpacked(order: VariableOrder, evals: Poly<EF>, weights: Poly<EF>) -> Self {
         Self {
             inner: MaybePacked::Unpacked { evals, weights },
-            _strategy: PhantomData,
+            order,
         }
+    }
+
+    /// Returns the variable-binding order used by this polynomial.
+    pub const fn order(&self) -> VariableOrder {
+        self.order
     }
 
     /// Returns the number of variables in the multilinear polynomials.
@@ -238,18 +244,18 @@ impl<F: Field, EF: ExtensionField<F>, St: SumcheckStrategy> ProductPolynomial<F,
     ///
     /// * `r` - The verifier's challenge for this round.
     fn compress(&mut self, r: EF) {
+        // Read the order once; the inner arms share the same dispatch target.
+        let order = self.order;
         match &mut self.inner {
             // Apply folding to both packed polynomials.
-            //
-            // The compress operation handles SIMD lanes correctly.
             MaybePacked::Packed { evals, weights } => {
-                St::fix_var(evals, r);
-                St::fix_var(weights, r);
+                order.fix_var(evals, r);
+                order.fix_var(weights, r);
             }
             // Apply folding to both scalar polynomials.
             MaybePacked::Unpacked { evals, weights } => {
-                St::fix_var(evals, r);
-                St::fix_var(weights, r);
+                order.fix_var(evals, r);
+                order.fix_var(weights, r);
             }
         }
     }
@@ -289,8 +295,8 @@ impl<F: Field, EF: ExtensionField<F>, St: SumcheckStrategy> ProductPolynomial<F,
                 let weights =
                     EF::ExtensionPacking::to_ext_iter(weights.as_slice().iter().copied()).collect();
 
-                // Replace self with the scalar variant.
-                *self = Self::new_unpacked(Poly::new(evals), Poly::new(weights));
+                // Replace self with the scalar variant, carrying the same order.
+                *self = Self::new_unpacked(self.order, Poly::new(evals), Poly::new(weights));
             }
         }
     }
@@ -339,25 +345,21 @@ impl<F: Field, EF: ExtensionField<F>, St: SumcheckStrategy> ProductPolynomial<F,
         // Step 1: Compute sumcheck polynomial coefficients.
         //
         // The strategy differs based on representation to maximize SIMD utilization.
+        let order = self.order;
         let (c0, c_inf) = match &self.inner {
             MaybePacked::Packed { evals, weights } => {
-                // Compute coefficients using packed arithmetic.
-                // Each operation processes SIMD_WIDTH elements in parallel
+                // Packed round coefficients: SIMD-parallel per-lane accumulation.
+                let (c0, c_inf) = order.sumcheck_coefficients(evals.as_slice(), weights.as_slice());
 
-                let (c0, c_inf) = St::sumcheck_coefficients(evals.as_slice(), weights.as_slice());
-
-                // Horizontal reduction: sum across all SIMD lanes to get scalar result.
-                //
-                // The packed computation gives us one result per lane.
-                // We need the sum across all lanes as the final coefficient.
+                // Horizontal reduction across SIMD lanes.
                 (
                     EF::ExtensionPacking::to_ext_iter([c0]).sum(),
                     EF::ExtensionPacking::to_ext_iter([c_inf]).sum(),
                 )
             }
             MaybePacked::Unpacked { evals, weights } => {
-                // Compute coefficients directly on scalar elements.
-                St::sumcheck_coefficients(evals.as_slice(), weights.as_slice())
+                // Scalar round coefficients.
+                order.sumcheck_coefficients(evals.as_slice(), weights.as_slice())
             }
         };
 
@@ -465,7 +467,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::sumcheck::strategy::{PrefixSumcheck, sumcheck_coefficients_prefix};
+    use crate::sumcheck::strategy::sumcheck_coefficients_prefix;
 
     type F = BabyBear;
     type EF = BinomialExtensionField<BabyBear, 4>;
@@ -485,7 +487,7 @@ mod tests {
         let weights = Poly::new(vec![EF::TWO; 8]);
 
         // Force Small variant by using new_unpacked directly.
-        let poly = ProductPolynomial::<F, EF, PrefixSumcheck>::new_unpacked(evals, weights);
+        let poly = ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, evals, weights);
 
         // The logical number of variables should be 3 (since 2^3 = 8).
         assert_eq!(poly.num_vars(), 3);
@@ -509,7 +511,7 @@ mod tests {
         let evals = Poly::new(vec![e0, e1, e2, e3]);
         let weights = Poly::new(vec![w0, w1, w2, w3]);
 
-        let poly = ProductPolynomial::<F, EF, PrefixSumcheck>::new_unpacked(evals, weights);
+        let poly = ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, evals, weights);
 
         // dot_product = e0*w0 + e1*w1 + e2*w2 + e3*w3
         let expected = e0 * w0 + e1 * w1 + e2 * w2 + e3 * w3;
@@ -586,7 +588,8 @@ mod tests {
         let evals = Poly::new(vec![e0, e1, e2, e3]);
         let weights = Poly::new(vec![w0, w1, w2, w3]);
 
-        let mut poly = ProductPolynomial::<F, EF, PrefixSumcheck>::new_unpacked(evals, weights);
+        let mut poly =
+            ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, evals, weights);
 
         // Initial dot product: sum = e0*w0 + e1*w1 + e2*w2 + e3*w3
         let initial_sum = e0 * w0 + e1 * w1 + e2 * w2 + e3 * w3;
@@ -639,7 +642,7 @@ mod tests {
         let evals = Poly::new(vec![e0, e1, e2, e3]);
         let weights = Poly::new(vec![EF::ONE; 4]);
 
-        let poly = ProductPolynomial::<F, EF, PrefixSumcheck>::new_unpacked(evals, weights);
+        let poly = ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, evals, weights);
 
         // Evaluate at (x0, x1):
         //   f(x0, x1) = e0*(1-x0)*(1-x1) + e1*(1-x0)*x1 + e2*x0*(1-x1) + e3*x0*x1
@@ -689,8 +692,11 @@ mod tests {
                 .collect(),
         );
 
-        let mut poly =
-            ProductPolynomial::<F, EF, PrefixSumcheck>::new_packed(packed_evals, packed_weights);
+        let mut poly = ProductPolynomial::<F, EF>::new_packed(
+            VariableOrder::Prefix,
+            packed_evals,
+            packed_weights,
+        );
 
         // Initially should be Packed with correct internal structure.
         match &poly.inner {
@@ -750,7 +756,7 @@ mod tests {
         let evals = Poly::new(vec![EP::from_ext_slice(&evals_scalar)]);
         let weights = Poly::new(vec![EP::from_ext_slice(&weights_scalar)]);
 
-        let poly = ProductPolynomial::<F, EF, PrefixSumcheck>::new_packed(evals, weights);
+        let poly = ProductPolynomial::<F, EF>::new_packed(VariableOrder::Prefix, evals, weights);
 
         // Should have transitioned to Small with correct values.
         match &poly.inner {
@@ -794,7 +800,8 @@ mod tests {
         let evals = Poly::new(vec![e0, e1, e2, e3]);
         let weights = Poly::new(vec![w0, w1, w2, w3]);
 
-        let mut poly = ProductPolynomial::<F, EF, PrefixSumcheck>::new_unpacked(evals, weights);
+        let mut poly =
+            ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, evals, weights);
 
         // Initial sum = e0*w0 + e1*w1 + e2*w2 + e3*w3
         let mut sum = e0 * w0 + e1 * w1 + e2 * w2 + e3 * w3;
@@ -829,7 +836,8 @@ mod tests {
         let evals: Vec<EF> = (0..num_evals).map(|_| EF::from_u64(rng.random())).collect();
         let weights: Vec<EF> = (0..num_evals).map(|_| EF::from_u64(rng.random())).collect();
 
-        let mut poly = ProductPolynomial::<F, EF, PrefixSumcheck>::new_unpacked(
+        let mut poly = ProductPolynomial::<F, EF>::new_unpacked(
+            VariableOrder::Prefix,
             Poly::new(evals),
             Poly::new(weights),
         );
@@ -873,7 +881,8 @@ mod tests {
             .sum();
 
         // Create Small variant and verify.
-        let small_poly = ProductPolynomial::<F, EF, PrefixSumcheck>::new_unpacked(
+        let small_poly = ProductPolynomial::<F, EF>::new_unpacked(
+            VariableOrder::Prefix,
             Poly::new(evals_scalar.clone()),
             Poly::new(weights_scalar.clone()),
         );
@@ -893,8 +902,11 @@ mod tests {
                 .collect(),
         );
 
-        let packed_poly =
-            ProductPolynomial::<F, EF, PrefixSumcheck>::new_packed(packed_evals, packed_weights);
+        let packed_poly = ProductPolynomial::<F, EF>::new_packed(
+            VariableOrder::Prefix,
+            packed_evals,
+            packed_weights,
+        );
         assert_eq!(packed_poly.dot_product(), expected);
     }
 
@@ -909,7 +921,7 @@ mod tests {
         let evals = Poly::new(vec![e0, e1, e2, e3]);
         let weights = Poly::new(vec![EF::ONE; 4]);
 
-        let poly = ProductPolynomial::<F, EF, PrefixSumcheck>::new_unpacked(evals, weights);
+        let poly = ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, evals, weights);
 
         let extracted = poly.evals();
         assert_eq!(extracted.as_slice(), &[e0, e1, e2, e3]);
@@ -930,7 +942,7 @@ mod tests {
         let weights = Poly::new(vec![EF::ONE; 4]);
 
         let mut poly =
-            ProductPolynomial::<F, EF, PrefixSumcheck>::new_unpacked(evals.clone(), weights);
+            ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, evals.clone(), weights);
 
         // Initial state: dot_product = 4 (all ones)
         let initial_dot = poly.dot_product();
@@ -969,7 +981,7 @@ mod tests {
         let evals = Poly::new(vec![e00, e01, e10, e11]);
         let weights = Poly::new(vec![EF::ONE; 4]);
 
-        let poly = ProductPolynomial::<F, EF, PrefixSumcheck>::new_unpacked(evals, weights);
+        let poly = ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, evals, weights);
 
         // Evaluate at (0, 0) -> should return e00
         let point_00 = Point::new(vec![EF::ZERO, EF::ZERO]);
@@ -1003,7 +1015,7 @@ mod tests {
                 .map(|_| EF::from_u64(u64::from(rng.random::<u32>())))
                 .collect();
 
-            let poly = ProductPolynomial::<F, EF,PrefixSumcheck>::new_unpacked(
+            let poly = ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix,
                 Poly::new(evals.clone()),
                 Poly::new(weights.clone()),
             );
@@ -1032,7 +1044,7 @@ mod tests {
                 .map(|_| EF::from_u64(u64::from(rng.random::<u32>())))
                 .collect();
 
-            let mut poly = ProductPolynomial::<F, EF,PrefixSumcheck>::new_unpacked(
+            let mut poly = ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix,
                 Poly::new(evals),
                 Poly::new(weights),
             );
@@ -1078,7 +1090,7 @@ mod tests {
                 .map(|_| EF::from_u64(u64::from(rng.random::<u32>())))
                 .collect();
 
-            let mut poly = ProductPolynomial::<F, EF,PrefixSumcheck>::new_unpacked(
+            let mut poly = ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix,
                 Poly::new(evals),
                 Poly::new(weights),
             );

@@ -16,7 +16,7 @@ use crate::constraints::statement::{EqStatement, SelectStatement};
 use crate::parameters::{FoldingFactor, SumcheckMode};
 use crate::sumcheck::SumcheckData;
 use crate::sumcheck::single::SingleSumcheck;
-use crate::sumcheck::strategy::{PrefixSumcheck, SumcheckStrategy};
+use crate::sumcheck::strategy::VariableOrder;
 
 // Base field: BabyBear (a 31-bit prime field suitable for fast arithmetic).
 pub(crate) type F = BabyBear;
@@ -458,7 +458,7 @@ fn run_sumcheck_test(
 
     // Evaluate the aggregated constraint weight polynomial at the full random point.
     // Single-sumcheck follows the prefix-order strategy.
-    let weights = PrefixSumcheck::eval_constraints_poly(&constraints, &verifier_randomness);
+    let weights = VariableOrder::Prefix.eval_constraints_poly(&constraints, &verifier_randomness);
 
     // The fundamental sumcheck identity: the accumulated sum from all rounds must equal
     // the final folded polynomial value f(r) multiplied by the constraint weights.

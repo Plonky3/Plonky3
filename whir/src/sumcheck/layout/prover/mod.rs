@@ -91,7 +91,7 @@ pub(super) mod test_utils {
     use super::{PrefixProver, SuffixProver};
     use crate::sumcheck::SumcheckData;
     use crate::sumcheck::layout::{Table, TableShape, Verifier, Witness};
-    use crate::sumcheck::strategy::{PrefixSumcheck, SuffixSumcheck, SumcheckStrategy};
+    use crate::sumcheck::strategy::VariableOrder;
     use crate::sumcheck::tests::*;
 
     /// Preprocessing rounds each end-to-end test consumes on both sides.
@@ -167,11 +167,12 @@ pub(super) mod test_utils {
 
     /// Runs the verifier side and the final batched-sum check.
     ///
-    /// Mode-agnostic: only needs the sumcheck strategy to evaluate the
-    /// batched-constraint polynomial. Every caller-provided value comes
-    /// straight from the prover side.
+    /// Mode-agnostic: the binding direction is passed in as a runtime tag used
+    /// only to evaluate the batched-constraint polynomial. Every caller-provided
+    /// value comes straight from the prover side.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn verify_roundtrip<St: SumcheckStrategy>(
+    pub(crate) fn verify_roundtrip(
+        order: VariableOrder,
         stacked_num_vars: usize,
         opening_claims: Vec<(usize, Vec<usize>, Vec<EF>)>,
         virtual_eval: EF,
@@ -244,7 +245,7 @@ pub(super) mod test_utils {
         //     - Prover and verifier agreed on the same randomness.
         //     - Batched sum equals the final folded value times the batched weights.
         assert_eq!(expected_randomness, &verifier_challenge);
-        let weights = St::eval_constraints_poly(&constraints, &verifier_challenge);
+        let weights = order.eval_constraints_poly(&constraints, &verifier_challenge);
         assert_eq!(sum, final_folded_value * weights);
     }
 
@@ -253,8 +254,8 @@ pub(super) mod test_utils {
     /// Returns the two extra transcript chunks, the intermediate evals, and
     /// the final folded value. Extends `prover_randomness` with every
     /// challenge sampled during these two phases.
-    pub(crate) fn drive_intermediate_and_final<St: SumcheckStrategy>(
-        prover: &mut crate::sumcheck::strategy::SumcheckProver<F, EF, St>,
+    pub(crate) fn drive_intermediate_and_final(
+        prover: &mut crate::sumcheck::strategy::SumcheckProver<F, EF>,
         prover_challenger: &mut MyChallenger,
         prover_randomness: &mut Point<EF>,
         stacked_num_vars: usize,
@@ -360,7 +361,8 @@ pub(super) mod test_utils {
             final_folded_value,
         );
 
-        verify_roundtrip::<PrefixSumcheck>(
+        verify_roundtrip(
+            VariableOrder::Prefix,
             stacked_num_vars,
             opening_claims,
             virtual_eval,
@@ -409,7 +411,8 @@ pub(super) mod test_utils {
             final_folded_value,
         );
 
-        verify_roundtrip::<SuffixSumcheck>(
+        verify_roundtrip(
+            VariableOrder::Suffix,
             stacked_num_vars,
             opening_claims,
             virtual_eval,

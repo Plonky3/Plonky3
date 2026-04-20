@@ -10,7 +10,7 @@ use crate::constraints::statement::EqStatement;
 use crate::constraints::statement::initial::{InitialStatement, InitialStatementInner};
 use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
 use crate::sumcheck::product_polynomial::ProductPolynomial;
-use crate::sumcheck::strategy::{PrefixSumcheck, SumcheckProver, SumcheckStrategy};
+use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
 use crate::sumcheck::svo::SvoClaim;
 use crate::sumcheck::{SumcheckData, extrapolate_01inf};
 
@@ -42,7 +42,7 @@ impl SingleSumcheck {
         folding_factor: usize,
         pow_bits: usize,
         statement: &EqStatement<EF>,
-    ) -> (SumcheckProver<F, EF, PrefixSumcheck>, Point<EF>)
+    ) -> (SumcheckProver<F, EF>, Point<EF>)
     where
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
@@ -71,7 +71,7 @@ impl SingleSumcheck {
         // The linear coefficient is derived by the verifier from:
         //   h(0) + h(1) = claimed_sum
         let (c0, c_inf) =
-            PrefixSumcheck::sumcheck_coefficients(poly.as_slice(), weights.as_slice());
+            VariableOrder::Prefix.sumcheck_coefficients(poly.as_slice(), weights.as_slice());
 
         // Commit (h(0), h(inf)) to the Fiat-Shamir transcript.
         // Perform any required proof-of-work grinding.
@@ -90,7 +90,8 @@ impl SingleSumcheck {
         sum = extrapolate_01inf(c0, sum - c0, c_inf, r);
 
         // Wrap the folded polynomials into a paired polynomial (scalar variant).
-        let mut poly = ProductPolynomial::<F, EF, PrefixSumcheck>::new_unpacked(poly, weights);
+        let mut poly =
+            ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, poly, weights);
 
         // Verify the core sumcheck invariant.
         debug_assert_eq!(poly.dot_product(), sum);
@@ -132,7 +133,7 @@ impl SingleSumcheck {
         folding_factor: usize,
         pow_bits: usize,
         statement: &EqStatement<EF>,
-    ) -> (SumcheckProver<F, EF, PrefixSumcheck>, Point<EF>)
+    ) -> (SumcheckProver<F, EF>, Point<EF>)
     where
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
@@ -154,10 +155,8 @@ impl SingleSumcheck {
 
         // Compute sumcheck coefficients in packed arithmetic.
         // The result is still in packed form (one value per SIMD lane).
-        let (c0, c_inf) = PrefixSumcheck::sumcheck_coefficients(
-            F::Packing::pack_slice(poly.as_slice()),
-            weights.as_slice(),
-        );
+        let (c0, c_inf) = VariableOrder::Prefix
+            .sumcheck_coefficients(F::Packing::pack_slice(poly.as_slice()), weights.as_slice());
 
         // Sum across all SIMD lanes to produce scalar coefficients.
         // The sumcheck polynomial is a sum over ALL evaluation points, not per-lane.
@@ -177,7 +176,8 @@ impl SingleSumcheck {
 
         // Wrap into a paired polynomial (packed variant).
         // The constructor checks whether the data is small enough for scalar mode.
-        let mut poly = ProductPolynomial::<F, EF, PrefixSumcheck>::new_packed(evals, weights);
+        let mut poly =
+            ProductPolynomial::<F, EF>::new_packed(VariableOrder::Prefix, evals, weights);
 
         // Verify the sumcheck invariant.
         debug_assert_eq!(poly.dot_product(), sum);
@@ -234,7 +234,7 @@ impl SingleSumcheck {
         folding_factor: usize,
         pow_bits: usize,
         statements: &[SvoClaim<F, EF>],
-    ) -> (SumcheckProver<F, EF, PrefixSumcheck>, Point<EF>)
+    ) -> (SumcheckProver<F, EF>, Point<EF>)
     where
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
@@ -325,7 +325,7 @@ impl SingleSumcheck {
             });
 
         // Wrap into a paired polynomial (packed) for subsequent standard rounds.
-        let poly = ProductPolynomial::<F, EF, PrefixSumcheck>::new_packed(poly, weights);
+        let poly = ProductPolynomial::<F, EF>::new_packed(VariableOrder::Prefix, poly, weights);
 
         // Verify the sumcheck invariant after materialization.
         debug_assert_eq!(poly.dot_product(), sum);
@@ -357,7 +357,7 @@ impl SingleSumcheck {
         folding_factor: usize,
         pow_bits: usize,
         statement: &InitialStatement<F, EF>,
-    ) -> (SumcheckProver<F, EF, PrefixSumcheck>, Point<EF>)
+    ) -> (SumcheckProver<F, EF>, Point<EF>)
     where
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
