@@ -16,6 +16,14 @@ use crate::constraints::Constraint;
 use crate::sumcheck::SumcheckData;
 use crate::sumcheck::product_polynomial::ProductPolynomial;
 
+/// Input size at which the round-coefficient routines switch from serial to parallel execution.
+///
+/// # Why this value
+///
+/// - Below `2^14` paired elements, the rayon splitting and join overhead outweighs the parallel work.
+/// - Above it, the fold-reduce amortises the splitting cost.
+const PAR_THRESHOLD: usize = 1 << 14;
+
 /// Computes `(h(0), h(inf))` for a prefix-binding sumcheck round.
 ///
 /// # Inputs
@@ -42,7 +50,7 @@ where
     let (e_lo, e_hi) = evals.split_at(half);
     let (w_lo, w_hi) = weights.split_at(half);
 
-    if evals.len() > (1 << 14) {
+    if evals.len() > PAR_THRESHOLD {
         // Parallel path: one fold-reduce across chunked lanes.
         e_lo.par_iter()
             .zip(e_hi.par_iter())
@@ -91,7 +99,7 @@ where
     // Precondition: paired slices must be aligned; adjacent pairs address the suffix bit.
     assert_eq!(evals.len(), weights.len());
 
-    if evals.len() > (1 << 14) {
+    if evals.len() > PAR_THRESHOLD {
         // Parallel path: chunks of size 2 expose the suffix variable.
         evals
             .par_chunks(2)
