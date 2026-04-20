@@ -1,5 +1,6 @@
 //! Verifier-side reconstruction of the stacked layout and its claims.
 
+use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
@@ -32,9 +33,12 @@ impl TableShape {
     /// # Panics
     ///
     /// - Column count must be at least one.
+    /// - Log row count must fit in the target's pointer width.
     pub const fn new(k: usize, width: usize) -> Self {
-        // Positive column count is the only non-trivial precondition.
+        // Positive column count.
         assert!(width > 0);
+        // Bound on the shift to rule out `1 << k` overflow on the current target.
+        assert!(k < usize::BITS as usize);
         // Expand the log row count to the concrete row count.
         Self(Dimensions {
             width,
@@ -63,6 +67,10 @@ impl TableShape {
 pub struct Verifier<F: Field, EF: ExtensionField<F>> {
     /// Per-table placement metadata inside the stacked polynomial.
     placements: Vec<TablePlacement>,
+    /// Side-map: source-table index → position into `placements`.
+    ///
+    /// Lets lookups by source table run in O(1) instead of a linear scan over placements.
+    placement_by_table: Vec<usize>,
     /// Number of variables of the stacked polynomial.
     k: usize,
     /// Concrete claims recorded per source table.
@@ -111,8 +119,15 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
             placements.push(TablePlacement::new(table_idx, selectors));
         }
 
+        // Build the side-map: source-table index → index into `placements`.
+        let mut placement_by_table = vec![0usize; tables.len()];
+        for (i, p) in placements.iter().enumerate() {
+            placement_by_table[p.idx()] = i;
+        }
+
         Self {
             placements,
+            placement_by_table,
             k,
             // One (empty) concrete-claim list per source table.
             claim_map: (0..tables.len()).map(|_| Vec::new()).collect(),
@@ -134,26 +149,52 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         self.k - selector_vars
     }
 
-    /// Records concrete opening claims for one table at a local point.
+    /// Records concrete opening claims for one table.
     ///
     /// # Arguments
     ///
-    /// - `table_idx` — source table index.
-    /// - `point`     — evaluation point in the table's local variable space.
-    /// - `polys`     — column indices that were opened.
-    /// - `evals`     — claimed evaluations, aligned with the column list.
+    /// - `table_idx`  — source table index.
+    /// - `polys`      — column indices that were opened; must be non-empty.
+    /// - `evals`      — claimed evaluations, aligned with the column list.
+    /// - `challenger` — Fiat–Shamir transcript.
+    ///
+    /// # Fiat–Shamir
+    ///
+    /// - Samples the opening point internally from the challenger.
+    /// - Absorbs the evaluations into the transcript.
+    /// - Mirrors exactly the prover's `eval` absorption order.
     ///
     /// # Panics
     ///
-    /// - The point must match the table's arity.
+    /// - Columns list must be non-empty.
     /// - Column list and evaluation list must have equal length.
     /// - Every column index must be in range for this table.
-    pub fn add_claim(&mut self, table_idx: usize, point: Point<EF>, polys: &[usize], evals: &[EF]) {
+    pub fn add_claim<Ch>(
+        &mut self,
+        table_idx: usize,
+        polys: &[usize],
+        evals: &[EF],
+        challenger: &mut Ch,
+    ) where
+        Ch: p3_challenger::FieldChallenger<F> + p3_challenger::GrindingChallenger<Witness = F>,
+    {
         let placement = self.placement(table_idx);
-        // Preconditions: point arity, list-length match, in-range column indices.
-        assert_eq!(point.num_variables(), self.num_variables_table(table_idx));
+        // Preconditions.
+        assert!(
+            !polys.is_empty(),
+            "opening schedule must name at least one column"
+        );
         assert_eq!(polys.len(), evals.len());
         assert!(polys.iter().all(|&i| i < placement.num_polys()));
+
+        // Sample the local-frame opening point from the transcript.
+        let point = Point::expand_from_univariate(
+            challenger.sample_algebra_element(),
+            self.num_variables_table(table_idx),
+        );
+
+        // Absorb the evals into the transcript; mirrors the prover's eval.
+        challenger.observe_algebra_slice(evals);
 
         // Pair each column index with its claimed evaluation into an opening.
         let openings = polys
@@ -168,12 +209,19 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
 
     /// Records a virtual evaluation claim on the full stacked polynomial.
     ///
-    /// # Panics
+    /// # Fiat–Shamir
     ///
-    /// - The point must cover every stacked variable.
-    pub fn add_virtual_eval(&mut self, point: Point<EF>, eval: EF) {
-        // Precondition: the claim covers the full stacked variable space.
-        assert_eq!(point.num_variables(), self.k);
+    /// - Samples the opening point from the challenger.
+    /// - Absorbs the evaluation into the transcript.
+    /// - Mirrors exactly the prover's `add_virtual_eval` absorption order.
+    pub fn add_virtual_eval<Ch>(&mut self, eval: EF, challenger: &mut Ch)
+    where
+        Ch: p3_challenger::FieldChallenger<F> + p3_challenger::GrindingChallenger<Witness = F>,
+    {
+        // Sample a challenge point covering every stacked variable.
+        let point = Point::expand_from_univariate(challenger.sample_algebra_element(), self.k);
+        // Absorb the evaluation into the transcript.
+        challenger.observe_algebra_element(eval);
         // Record the claim with unit payload (verifier side carries no extras).
         self.virtual_claims.push(Claim {
             point,
@@ -248,12 +296,10 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     }
 
     /// Returns the placement metadata for the given source table.
+    ///
+    /// O(1) via the side-map built at construction.
     fn placement(&self, table_idx: usize) -> &TablePlacement {
-        // Linear scan; placements are few (one per source table).
-        self.placements
-            .iter()
-            .find(|p| p.idx() == table_idx)
-            .unwrap()
+        &self.placements[self.placement_by_table[table_idx]]
     }
 
     /// Returns the number of concrete openings recorded so far.
@@ -269,15 +315,10 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
 mod tests {
     use alloc::vec;
 
-    use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
-    use p3_field::extension::BinomialExtensionField;
-    use p3_multilinear_util::point::Point;
 
     use super::*;
-
-    type F = BabyBear;
-    type EF = BinomialExtensionField<F, 4>;
+    use crate::sumcheck::tests::{EF, F, challenger};
 
     #[test]
     fn table_shape_new_stores_dimensions_and_derives_getters() {
@@ -354,14 +395,15 @@ mod tests {
         let mut verifier: Verifier<F, EF> = Verifier::new(&shapes);
         assert_eq!(verifier.num_claims(), 0);
 
+        // Fresh Fiat-Shamir transcript; add_claim samples the point and absorbs.
+        let mut ch = challenger();
+
         // Add two openings on table 0; count jumps from 0 to 2.
-        let point_a = Point::new(vec![EF::ZERO; verifier.num_variables_table(0)]);
-        verifier.add_claim(0, point_a, &[0, 1], &[EF::from_u64(7), EF::from_u64(11)]);
+        verifier.add_claim(0, &[0, 1], &[EF::from_u64(7), EF::from_u64(11)], &mut ch);
         assert_eq!(verifier.num_claims(), 2);
 
         // Add one opening on table 1; count jumps from 2 to 3.
-        let point_b = Point::new(vec![EF::ZERO; verifier.num_variables_table(1)]);
-        verifier.add_claim(1, point_b, &[0], &[EF::from_u64(13)]);
+        verifier.add_claim(1, &[0], &[EF::from_u64(13)], &mut ch);
         assert_eq!(verifier.num_claims(), 3);
     }
 
@@ -378,13 +420,14 @@ mod tests {
         let shapes = vec![TableShape::new(9, 2)];
         let mut verifier: Verifier<F, EF> = Verifier::new(&shapes);
 
-        // Concrete claim: two columns of table 0 at a (zero-filled) local point.
-        let local = Point::new(vec![EF::ZERO; verifier.num_variables_table(0)]);
-        verifier.add_claim(0, local, &[0, 1], &[EF::from_u64(7), EF::from_u64(11)]);
+        // Fresh transcript; points are sampled inside add_claim / add_virtual_eval.
+        let mut ch = challenger();
+
+        // Concrete claim: two columns of table 0.
+        verifier.add_claim(0, &[0, 1], &[EF::from_u64(7), EF::from_u64(11)], &mut ch);
 
         // Virtual claim: covers the full stacked space.
-        let stacked = Point::new(vec![EF::ZERO; verifier.k]);
-        verifier.add_virtual_eval(stacked, EF::from_u64(13));
+        verifier.add_virtual_eval(EF::from_u64(13), &mut ch);
 
         // Manual batched sum with alpha = 5.
         let alpha = EF::from_u64(5);
@@ -420,8 +463,8 @@ mod tests {
         let mut verifier: Verifier<F, EF> = Verifier::new(&shapes);
 
         // Record a single opening on table 1; table 0 stays empty.
-        let point = Point::new(vec![EF::ZERO; verifier.num_variables_table(1)]);
-        verifier.add_claim(1, point, &[0], &[EF::from_u64(9)]);
+        let mut ch = challenger();
+        verifier.add_claim(1, &[0], &[EF::from_u64(9)], &mut ch);
 
         // Check: only one opening → sum equals its eval scaled by alpha^0.
         assert_eq!(verifier.sum(EF::from_u64(3)), EF::from_u64(9));

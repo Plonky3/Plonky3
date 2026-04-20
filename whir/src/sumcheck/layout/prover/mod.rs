@@ -131,22 +131,14 @@ pub(super) mod test_utils {
         let mut verifier: Verifier<F, EF> = Verifier::new(shapes);
 
         // Re-sample the same opening points and record the claimed evaluations.
+        // `add_claim` samples the point + absorbs the evals internally, mirroring
+        // the prover's `eval`.
         for (table_idx, polys, evals) in opening_claims {
-            let point = Point::expand_from_univariate(
-                verifier_challenger.sample_algebra_element(),
-                verifier.num_variables_table(table_idx),
-            );
-            verifier_challenger.observe_algebra_slice(&evals);
-            verifier.add_claim(table_idx, point, &polys, &evals);
+            verifier.add_claim(table_idx, &polys, &evals, &mut verifier_challenger);
         }
 
-        // Re-sample the virtual claim too.
-        let virtual_point = Point::expand_from_univariate(
-            verifier_challenger.sample_algebra_element(),
-            stacked_num_variables,
-        );
-        verifier_challenger.observe_algebra_element(virtual_eval);
-        verifier.add_virtual_eval(virtual_point, virtual_eval);
+        // Re-sample the virtual claim too; mirrors the prover's `add_virtual_eval`.
+        verifier.add_virtual_eval(virtual_eval, &mut verifier_challenger);
 
         // Sample the batching challenge, build the initial constraint, seed the running sum.
         let alpha = verifier_challenger.sample_algebra_element();
@@ -245,23 +237,19 @@ pub(super) mod test_utils {
     /// Replays an opening schedule against a prover, returning the
     /// `(table_idx, polys, evals)` triples the verifier will reconstruct.
     ///
-    /// Mutates the challenger in lockstep with what the prover observes,
-    /// so both sides stay in sync when the verifier replays the transcript.
+    /// The prover's `eval` internally samples the point and absorbs the
+    /// returned evaluations, keeping the challenger in lockstep with the
+    /// verifier's `add_claim` replay on the other side.
     fn replay_schedule<F>(
         calls: &[(usize, &[usize])],
-        challenger: &mut MyChallenger,
         mut step: F,
     ) -> Vec<(usize, Vec<usize>, Vec<EF>)>
     where
-        F: FnMut(&mut MyChallenger, usize, &[usize]) -> Vec<EF>,
+        F: FnMut(usize, &[usize]) -> Vec<EF>,
     {
         calls
             .iter()
-            .map(|&(table_idx, polys)| {
-                let evals = step(challenger, table_idx, polys);
-                challenger.observe_algebra_slice(&evals);
-                (table_idx, polys.to_vec(), evals)
-            })
+            .map(|&(table_idx, polys)| (table_idx, polys.to_vec(), step(table_idx, polys)))
             .collect()
     }
 
@@ -277,12 +265,8 @@ pub(super) mod test_utils {
         // Prover: build prefix mode, record openings, add a virtual claim.
         let mut prover_state: PrefixProver<F, EF> = witness.as_prefix_prover();
         let stacked_poly = prover_state.poly().clone();
-        let opening_claims = replay_schedule(calls, &mut prover_challenger, |ch, t, polys| {
-            let point = Point::expand_from_univariate(
-                ch.sample_algebra_element(),
-                prover_state.num_variables_table(t),
-            );
-            prover_state.eval(&point, t, polys)
+        let opening_claims = replay_schedule(calls, |t, polys| {
+            prover_state.eval(t, polys, &mut prover_challenger)
         });
         let virtual_eval = prover_state.add_virtual_eval(&mut prover_challenger);
 
@@ -333,12 +317,8 @@ pub(super) mod test_utils {
 
         let mut prover_state: SuffixProver<F, EF> = witness.as_suffix_prover();
         let stacked_poly = prover_state.poly().clone();
-        let opening_claims = replay_schedule(calls, &mut prover_challenger, |ch, t, polys| {
-            let point = Point::expand_from_univariate(
-                ch.sample_algebra_element(),
-                prover_state.num_variables_table(t),
-            );
-            prover_state.eval(&point, t, polys)
+        let opening_claims = replay_schedule(calls, |t, polys| {
+            prover_state.eval(t, polys, &mut prover_challenger)
         });
         let virtual_eval = prover_state.add_virtual_eval(&mut prover_challenger);
 

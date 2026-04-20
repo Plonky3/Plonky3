@@ -167,8 +167,14 @@ impl<F: Field> Witness<F> {
     ///
     /// # Panics
     ///
+    /// - Table list must be non-empty.
     /// - Every table arity must exceed the preprocessing depth.
     pub fn new(tables: Vec<Table<F>>, folding: usize) -> Self {
+        // Precondition: need at least one source table to stack.
+        assert!(
+            !tables.is_empty(),
+            "Witness requires at least one source table"
+        );
         // Precondition: every table must have at least one variable left after folding.
         assert!(tables.iter().all(|table| table.num_variables() > folding));
 

@@ -88,6 +88,16 @@ impl<EF: Field> Opening<EF, ()> {
 ///     point     ── shared by every opening
 ///     openings  [opening_0, opening_1, ...]
 /// ```
+///
+/// # Alpha-ordering contract
+///
+/// - Each recorded opening consumes one power of the batching challenge.
+/// - The canonical ordering is insertion order, walked as:
+///     - placements, in witness-layout order,
+///     - claims inside each placement, in recording order,
+///     - openings inside each claim, in the order they entered `eval`.
+/// - Prover and verifier walk the same three-loop nest, so the alpha-to-claim
+///   mapping is forced to agree when the transcripts mirror each other.
 #[derive(Debug, Clone)]
 pub struct MultiClaim<F: Field, EF: ExtensionField<F>, Point, Data> {
     /// Shared evaluation point of every opening in the batch.

@@ -38,6 +38,12 @@ pub struct SuffixProver<F: Field, EF: ExtensionField<F>> {
     /// Stacked committed polynomial.
     pub(crate) poly: Poly<F>,
     /// Concrete claims recorded per source table (carries per-round SVO partials).
+    ///
+    /// # Invariants
+    ///
+    /// - Every opening stored here is tied to a concrete source column.
+    /// - Virtual openings never enter this map.
+    /// - Claims are appended in insertion order.
     pub(crate) claim_map: Vec<Vec<SuffixMultiClaim<F, EF>>>,
     /// Virtual claims carrying precomputed SVO accumulators.
     pub(crate) virtual_claims: Vec<SuffixVirtualClaim<F, EF>>,
@@ -59,24 +65,46 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         &self.poly
     }
 
-    /// Records opening claims for the selected columns at `point`.
+    /// Records opening claims for the selected columns of `table_idx`.
     ///
     /// # Arguments
     ///
-    /// - `point`      — evaluation point in the table's local variable space.
     /// - `table_idx`  — source table index.
-    /// - `polys`      — columns to open.
+    /// - `polys`      — columns to open; must be non-empty.
+    /// - `challenger` — Fiat–Shamir transcript.
+    ///
+    /// # Fiat–Shamir
+    ///
+    /// - Samples the opening point internally from the challenger.
+    /// - Absorbs the evaluations into the transcript before returning.
+    /// - The verifier's `add_claim` performs the symmetric absorption.
+    ///
+    /// # Panics
+    ///
+    /// - Columns list must be non-empty.
     #[tracing::instrument(skip_all)]
-    pub fn eval(&mut self, point: &Point<EF>, table_idx: usize, polys: &[usize]) -> Vec<EF> {
-        // Invariant: the evaluation point lives in the table's local frame.
+    pub fn eval<Ch>(&mut self, table_idx: usize, polys: &[usize], challenger: &mut Ch) -> Vec<EF>
+    where
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        // Precondition: opening nothing would silently push an empty MultiClaim.
+        assert!(
+            !polys.is_empty(),
+            "opening schedule must name at least one column"
+        );
+
+        // Sample the local-frame opening point from the transcript.
         let table = &self.tables[table_idx];
-        assert_eq!(point.num_variables(), table.num_variables());
+        let point = Point::expand_from_univariate(
+            challenger.sample_algebra_element(),
+            table.num_variables(),
+        );
 
         // Factorise the point with the suffix split; every selected column reuses it.
-        let point = SvoPoint::new_unpacked(self.folding, point, VariableOrder::Suffix);
+        let point = SvoPoint::new_unpacked(self.folding, &point, VariableOrder::Suffix);
 
         // Evaluate each requested column and split into (opening, eval) in a single pass.
-        let (openings, evals) = polys
+        let (openings, evals): (Vec<_>, Vec<EF>) = polys
             .iter()
             .map(|&poly_idx| {
                 // Per-column eval plus the per-round partial-eval polynomials.
@@ -90,6 +118,9 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
                 (opening, eval)
             })
             .unzip();
+
+        // Bind the evaluations into the transcript; the verifier absorbs the same bytes.
+        challenger.observe_algebra_slice(&evals);
 
         // Store the batch with its shared SVO point.
         self.claim_map[table_idx].push(SuffixMultiClaim::new(point, openings));
@@ -494,7 +525,6 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
 mod tests {
     use alloc::vec::Vec;
 
-    use p3_multilinear_util::point::Point;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
@@ -521,17 +551,15 @@ mod tests {
         // Fresh prover: no claims recorded yet.
         assert_eq!(prover.num_claims(), 0);
 
-        // Deterministic RNG so point values stay reproducible across runs.
-        let mut rng = SmallRng::seed_from_u64(42);
-        let point_a = Point::<EF>::rand(&mut rng, prover.num_variables_table(0));
-        let point_b = Point::<EF>::rand(&mut rng, prover.num_variables_table(1));
+        // Fresh Fiat-Shamir transcript; eval samples its own point and absorbs.
+        let mut ch = challenger();
 
         // Record two openings on table 0 → count advances from 0 to 2.
-        prover.eval(&point_a, 0, &[0, 1]);
+        prover.eval(0, &[0, 1], &mut ch);
         assert_eq!(prover.num_claims(), 2);
 
         // Record one more opening on table 1 → count advances from 2 to 3.
-        prover.eval(&point_b, 1, &[0]);
+        prover.eval(1, &[0], &mut ch);
         assert_eq!(prover.num_claims(), 3);
     }
 
@@ -547,14 +575,14 @@ mod tests {
         let witness = build_witness();
         let mut prover: SuffixProver<F, EF> = witness.as_suffix_prover();
 
-        // Sample a deterministic opening point with the table's arity.
-        let mut rng = SmallRng::seed_from_u64(7);
-        let point = Point::<EF>::rand(&mut rng, prover.num_variables_table(0));
+        // Fresh Fiat-Shamir transcript.
+        let mut ch = challenger();
 
         // Record two openings; evals[0], evals[1] line up with columns 0, 1.
-        let evals = prover.eval(&point, 0, &[0, 1]);
+        let evals = prover.eval(0, &[0, 1], &mut ch);
 
-        // Pick a random batching challenge and compute the expected sum by hand.
+        // Deterministic alpha for hand-rolled comparison.
+        let mut rng = SmallRng::seed_from_u64(7);
         let alpha: EF = rng.random();
         let expected = evals[0] + alpha * evals[1];
 
