@@ -56,6 +56,10 @@ use p3_field::Field;
 /// Note: these do NOT form a partition of unity (they do not sum to 1).
 pub(crate) fn lagrange_weights_01inf<F: Field>(r: F) -> [F; 3] {
     let r_minus_one = r - F::ONE;
+
+    // L_0(r) = 1 - r
+    // L_1(r) = r
+    // L_inf(r) = r * (r - 1)
     [F::ONE - r, r, r * r_minus_one]
 }
 

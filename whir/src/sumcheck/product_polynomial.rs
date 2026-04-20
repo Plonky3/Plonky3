@@ -19,6 +19,8 @@
 //! At each round, we compute a univariate polynomial `h(X)` that represents the partial sum
 //! over remaining variables. For quadratic sumcheck, `h(X)` is degree-2.
 
+use core::marker::PhantomData;
+
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
 use p3_multilinear_util::point::Point;
@@ -110,59 +112,69 @@ enum MaybePacked<F: Field, EF: ExtensionField<F>> {
     },
 }
 
+/// Paired evaluation and weight polynomials, tagged by a sumcheck strategy.
+///
+/// # Contents
+///
+/// - Backing data kept in either SIMD-packed or scalar form.
+/// - Strategy type tag that drives round-level dispatch.
+///
+/// # Role of the strategy type
+///
+/// Hot-path operations dispatch through strategy-level associated functions:
+///
+/// - Variable binding: prefix-first or suffix-first folding.
+/// - Round coefficients: differ in which side of the hypercube is summed.
+///
+/// Both strategy structs are zero-sized, so only the type is carried — no
+/// runtime value is needed to pick the dispatch.
 #[derive(Debug, Clone)]
 pub struct ProductPolynomial<F: Field, EF: ExtensionField<F>, St: SumcheckStrategy> {
+    /// Paired polynomial data, SIMD-packed for large inputs and scalar otherwise.
     inner: MaybePacked<F, EF>,
-    _stategy: St,
-}
-
-impl<F: Field, EF: ExtensionField<F>, St: SumcheckStrategy> From<MaybePacked<F, EF>>
-    for ProductPolynomial<F, EF, St>
-{
-    fn from(inner: MaybePacked<F, EF>) -> Self {
-        Self {
-            inner,
-            _stategy: St::default(),
-        }
-    }
+    /// Ties the sumcheck strategy into the type without storing a runtime value.
+    _strategy: PhantomData<St>,
 }
 
 impl<F: Field, EF: ExtensionField<F>, St: SumcheckStrategy> ProductPolynomial<F, EF, St> {
-    /// Creates a packed variant and checks for immediate transition.
-    ///
-    /// This constructor is used when we know the data is already in packed format.
-    /// It performs a transition check in case the packed data has been folded down
-    /// to a single packed element.
+    /// Creates a packed variant and runs an immediate transition check.
     ///
     /// # Arguments
     ///
-    /// * `evals` - Packed evaluations of `f(x)`.
-    /// * `weights` - Packed evaluations of `w(x)`.
+    /// - `evals`   — packed evaluations of the sumchecked polynomial.
+    /// - `weights` — packed evaluations of the weight polynomial.
+    ///
+    /// # Panics
+    ///
+    /// - Evaluation and weight polynomials must share the same arity.
     pub fn new_packed(
         evals: Poly<EF::ExtensionPacking>,
         weights: Poly<EF::ExtensionPacking>,
     ) -> Self {
+        // Paired polynomials must share the same variable space.
         assert_eq!(evals.num_vars(), weights.num_vars());
-        let mut poly: Self = MaybePacked::Packed { evals, weights }.into();
 
-        // Check if we should immediately transition to scalar mode.
-        // This handles edge cases where the input is already small.
+        // Wrap the packed pair; the strategy type tag is zero-sized.
+        let mut poly = Self {
+            inner: MaybePacked::Packed { evals, weights },
+            _strategy: PhantomData,
+        };
+
+        // Corner case: if the input is already small, switch to scalar mode.
         poly.transition();
         poly
     }
 
-    /// Creates a scalar variant.
-    ///
-    /// Used when the polynomial is too small for SIMD packing.
+    /// Creates a scalar variant for polynomials too small for SIMD packing.
     ///
     /// # Arguments
     ///
-    /// * `evals` - Scalar evaluations of `f(x)`.
-    /// * `weights` - Scalar evaluations of `w(x)`.
-    pub fn new_unpacked(evals: Poly<EF>, weights: Poly<EF>) -> Self {
+    /// - `evals`   — scalar evaluations of the sumchecked polynomial.
+    /// - `weights` — scalar evaluations of the weight polynomial.
+    pub const fn new_unpacked(evals: Poly<EF>, weights: Poly<EF>) -> Self {
         Self {
             inner: MaybePacked::Unpacked { evals, weights },
-            _stategy: St::default(),
+            _strategy: PhantomData,
         }
     }
 

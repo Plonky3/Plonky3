@@ -100,12 +100,12 @@ where
 }
 
 /// Strategy hooks for choosing variable order and residual constraint evaluation.
-pub trait SumcheckStrategy: Default {
+pub trait SumcheckStrategy {
     /// Computes `(h(0), h(inf))` for one quadratic sumcheck round.
     fn sumcheck_coefficients<B, A>(evals: &[B], weights: &[A]) -> (A, A)
     where
         B: PrimeCharacteristicRing + Copy + Send + Sync,
-        A: p3_field::Algebra<B> + Copy + Send + Sync;
+        A: Algebra<B> + Copy + Send + Sync;
 
     /// Binds the active round variable of `poly` to challenge `r`.
     fn fix_var<A: Algebra<Challenge> + Copy + Send + Sync, Challenge: Copy + Send + Sync>(
