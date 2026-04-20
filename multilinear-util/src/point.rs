@@ -605,9 +605,9 @@ mod tests {
             .collect();
         let poly = Poly::new(evals.clone());
 
-        for i in 0..(1 << num_vars) {
+        for (i, &expected) in evals.iter().enumerate() {
             let point = Point::<F>::hypercube(i, num_vars);
-            assert_eq!(poly.eval_base(&point), evals[i]);
+            assert_eq!(poly.eval_base(&point), expected);
         }
     }
 
