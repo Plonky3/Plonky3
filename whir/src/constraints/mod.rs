@@ -676,7 +676,7 @@ mod tests {
             assert_eq!(*coeff, expected_weights[i]);
 
             // Verify point reference matches original
-            assert_eq!(point.num_vars(), num_variables);
+            assert_eq!(point.num_variables(), num_variables);
         }
     }
 

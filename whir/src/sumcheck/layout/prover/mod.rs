@@ -173,7 +173,7 @@ pub(super) mod test_utils {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn verify_roundtrip(
         order: VariableOrder,
-        stacked_num_vars: usize,
+        stacked_num_variables: usize,
         opening_claims: Vec<(usize, Vec<usize>, Vec<EF>)>,
         virtual_eval: EF,
         proof0: &SumcheckData<F, EF>,
@@ -191,7 +191,7 @@ pub(super) mod test_utils {
         for (table_idx, polys, evals) in opening_claims {
             let point = Point::expand_from_univariate(
                 verifier_challenger.sample_algebra_element(),
-                verifier.num_vars_table(table_idx),
+                verifier.num_variables_table(table_idx),
             );
             verifier_challenger.observe_algebra_slice(&evals);
             verifier.add_claim(table_idx, point, &polys, &evals);
@@ -200,7 +200,7 @@ pub(super) mod test_utils {
         // Re-sample the virtual claim too.
         let virtual_point = Point::expand_from_univariate(
             verifier_challenger.sample_algebra_element(),
-            stacked_num_vars,
+            stacked_num_variables,
         );
         verifier_challenger.observe_algebra_element(virtual_eval);
         verifier.add_virtual_eval(virtual_point, virtual_eval);
@@ -224,7 +224,7 @@ pub(super) mod test_utils {
         let intermediate_constraint = read_constraint(
             &mut verifier_challenger,
             intermediate_evals,
-            stacked_num_vars - FOLDING,
+            stacked_num_variables - FOLDING,
             ROUND_EQ_POINTS,
             ROUND_SEL_POINTS,
         );
@@ -258,14 +258,14 @@ pub(super) mod test_utils {
         prover: &mut crate::sumcheck::strategy::SumcheckProver<F, EF>,
         prover_challenger: &mut MyChallenger,
         prover_randomness: &mut Point<EF>,
-        stacked_num_vars: usize,
+        stacked_num_variables: usize,
     ) -> (SumcheckData<F, EF>, SumcheckData<F, EF>, Vec<EF>, EF) {
         // Intermediate phase: build a STIR-style constraint and absorb it.
         let mut intermediate_evals: Vec<EF> = Vec::new();
         let constraint = make_constraint_ext(
             prover_challenger,
             &mut intermediate_evals,
-            prover.num_vars(),
+            prover.num_variables(),
             ROUND_EQ_POINTS,
             ROUND_SEL_POINTS,
             &prover.poly(),
@@ -279,9 +279,9 @@ pub(super) mod test_utils {
             POW_BITS,
             Some(constraint),
         ));
-        let remaining_vars = stacked_num_vars - FOLDING - FOLDING;
+        let remaining_vars = stacked_num_variables - FOLDING - FOLDING;
         assert_eq!(proof1.num_rounds(), FOLDING);
-        assert_eq!(prover.num_vars(), remaining_vars);
+        assert_eq!(prover.num_variables(), remaining_vars);
 
         // Final phase: fold the remaining variables down to a constant.
         let mut proof2 = SumcheckData::<F, EF>::default();
@@ -293,7 +293,7 @@ pub(super) mod test_utils {
             None,
         ));
         assert_eq!(proof2.num_rounds(), remaining_vars);
-        assert_eq!(prover.num_vars(), 0);
+        assert_eq!(prover.num_variables(), 0);
 
         let final_folded_value = prover.poly().as_constant().unwrap();
         (proof1, proof2, intermediate_evals, final_folded_value)
@@ -326,7 +326,7 @@ pub(super) mod test_utils {
     pub(crate) fn run_prefix_roundtrip(calls: &[(usize, &[usize])]) {
         let mut prover_challenger = challenger();
         let witness = build_witness();
-        let stacked_num_vars = witness.num_vars();
+        let stacked_num_variables = witness.num_variables();
 
         // Prover: build prefix mode, record openings, add a virtual claim.
         let mut prover_state: PrefixProver<F, EF> = witness.as_prefix_prover();
@@ -334,7 +334,7 @@ pub(super) mod test_utils {
         let opening_claims = replay_schedule(calls, &mut prover_challenger, |ch, t, polys| {
             let point = Point::expand_from_univariate(
                 ch.sample_algebra_element(),
-                prover_state.num_vars_table(t),
+                prover_state.num_variables_table(t),
             );
             prover_state.eval(&point, t, polys)
         });
@@ -345,14 +345,14 @@ pub(super) mod test_utils {
         let (mut prover, mut prover_randomness) =
             prover_state.into_sumcheck(&mut proof0, 0, &mut prover_challenger);
         assert_eq!(proof0.num_rounds(), FOLDING);
-        assert_eq!(prover.num_vars(), stacked_num_vars - FOLDING);
+        assert_eq!(prover.num_variables(), stacked_num_variables - FOLDING);
 
         // Intermediate + final rounds (mode-agnostic once the residual prover exists).
         let (proof1, proof2, intermediate_evals, final_folded_value) = drive_intermediate_and_final(
             &mut prover,
             &mut prover_challenger,
             &mut prover_randomness,
-            stacked_num_vars,
+            stacked_num_variables,
         );
 
         // Prefix mode binds variables in order: evaluate directly at the folded point.
@@ -363,7 +363,7 @@ pub(super) mod test_utils {
 
         verify_roundtrip(
             VariableOrder::Prefix,
-            stacked_num_vars,
+            stacked_num_variables,
             opening_claims,
             virtual_eval,
             &proof0,
@@ -379,14 +379,14 @@ pub(super) mod test_utils {
     pub(crate) fn run_suffix_roundtrip(calls: &[(usize, &[usize])]) {
         let mut prover_challenger = challenger();
         let witness = build_witness();
-        let stacked_num_vars = witness.num_vars();
+        let stacked_num_variables = witness.num_variables();
 
         let mut prover_state: SuffixProver<F, EF> = witness.as_suffix_prover();
         let stacked_poly = prover_state.poly().clone();
         let opening_claims = replay_schedule(calls, &mut prover_challenger, |ch, t, polys| {
             let point = Point::expand_from_univariate(
                 ch.sample_algebra_element(),
-                prover_state.num_vars_table(t),
+                prover_state.num_variables_table(t),
             );
             prover_state.eval(&point, t, polys)
         });
@@ -396,13 +396,13 @@ pub(super) mod test_utils {
         let (mut prover, mut prover_randomness) =
             prover_state.into_sumcheck(&mut proof0, 0, &mut prover_challenger);
         assert_eq!(proof0.num_rounds(), FOLDING);
-        assert_eq!(prover.num_vars(), stacked_num_vars - FOLDING);
+        assert_eq!(prover.num_variables(), stacked_num_variables - FOLDING);
 
         let (proof1, proof2, intermediate_evals, final_folded_value) = drive_intermediate_and_final(
             &mut prover,
             &mut prover_challenger,
             &mut prover_randomness,
-            stacked_num_vars,
+            stacked_num_variables,
         );
 
         // Suffix mode binds variables in reverse: evaluate at the reversed folded point.
@@ -413,7 +413,7 @@ pub(super) mod test_utils {
 
         verify_roundtrip(
             VariableOrder::Suffix,
-            stacked_num_vars,
+            stacked_num_variables,
             opening_claims,
             virtual_eval,
             &proof0,

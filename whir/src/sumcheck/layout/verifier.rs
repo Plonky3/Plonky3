@@ -122,13 +122,13 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     }
 
     /// Returns the arity of the source table at the given index.
-    pub fn num_vars_table(&self, table_idx: usize) -> usize {
+    pub fn num_variables_table(&self, table_idx: usize) -> usize {
         // Look up this table's placement; every column shares the same selector bit-width.
         let placement = self.placement(table_idx);
         let selector_vars = placement
             .selectors()
             .first()
-            .map(Selector::num_vars)
+            .map(Selector::num_variables)
             .unwrap_or(0);
         // Table arity is the stacked arity minus the selector bits that address the slot.
         self.k - selector_vars
@@ -151,7 +151,7 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     pub fn add_claim(&mut self, table_idx: usize, point: Point<EF>, polys: &[usize], evals: &[EF]) {
         let placement = self.placement(table_idx);
         // Preconditions: point arity, list-length match, in-range column indices.
-        assert_eq!(point.num_vars(), self.num_vars_table(table_idx));
+        assert_eq!(point.num_variables(), self.num_variables_table(table_idx));
         assert_eq!(polys.len(), evals.len());
         assert!(polys.iter().all(|&i| i < placement.num_polys()));
 
@@ -173,7 +173,7 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     /// - The point must cover every stacked variable.
     pub fn add_virtual_eval(&mut self, point: Point<EF>, eval: EF) {
         // Precondition: the claim covers the full stacked variable space.
-        assert_eq!(point.num_vars(), self.k);
+        assert_eq!(point.num_variables(), self.k);
         // Record the claim with unit payload (verifier side carries no extras).
         self.virtual_claims.push(Claim {
             point,
@@ -338,21 +338,21 @@ mod tests {
     }
 
     #[test]
-    fn verifier_num_vars_table_derives_from_selector_bits() {
+    fn verifier_num_variables_table_derives_from_selector_bits() {
         // Invariant:
-        //     num_vars_table equals the stacked arity minus the selector bits.
+        //     num_variables_table equals the stacked arity minus the selector bits.
         //
         // Fixture state:
         //     shapes: [arity 9 × 2 cols, arity 10 × 2 cols]
         //     stacked rows = 2^9 * 2 + 2^10 * 2 = 3 * 2^10 → k = ceil(log2) = 11
-        //     table 0 (arity 9) → selector bits = 2 → num_vars_table = 9
-        //     table 1 (arity 10) → selector bits = 1 → num_vars_table = 10
+        //     table 0 (arity 9) → selector bits = 2 → num_variables_table = 9
+        //     table 1 (arity 10) → selector bits = 1 → num_variables_table = 10
         let shapes = vec![TableShape::new(9, 2), TableShape::new(10, 2)];
         let verifier: Verifier<F, EF> = Verifier::new(&shapes);
 
         // Check derivation per table.
-        assert_eq!(verifier.num_vars_table(0), 9);
-        assert_eq!(verifier.num_vars_table(1), 10);
+        assert_eq!(verifier.num_variables_table(0), 9);
+        assert_eq!(verifier.num_variables_table(1), 10);
     }
 
     #[test]
@@ -369,12 +369,12 @@ mod tests {
         assert_eq!(verifier.num_claims(), 0);
 
         // Add two openings on table 0; count jumps from 0 to 2.
-        let point_a = Point::new(vec![EF::ZERO; verifier.num_vars_table(0)]);
+        let point_a = Point::new(vec![EF::ZERO; verifier.num_variables_table(0)]);
         verifier.add_claim(0, point_a, &[0, 1], &[EF::from_u64(7), EF::from_u64(11)]);
         assert_eq!(verifier.num_claims(), 2);
 
         // Add one opening on table 1; count jumps from 2 to 3.
-        let point_b = Point::new(vec![EF::ZERO; verifier.num_vars_table(1)]);
+        let point_b = Point::new(vec![EF::ZERO; verifier.num_variables_table(1)]);
         verifier.add_claim(1, point_b, &[0], &[EF::from_u64(13)]);
         assert_eq!(verifier.num_claims(), 3);
     }
@@ -393,7 +393,7 @@ mod tests {
         let mut verifier: Verifier<F, EF> = Verifier::new(&shapes);
 
         // Concrete claim: two columns of table 0 at a (zero-filled) local point.
-        let local = Point::new(vec![EF::ZERO; verifier.num_vars_table(0)]);
+        let local = Point::new(vec![EF::ZERO; verifier.num_variables_table(0)]);
         verifier.add_claim(0, local, &[0, 1], &[EF::from_u64(7), EF::from_u64(11)]);
 
         // Virtual claim: covers the full stacked space.
@@ -434,7 +434,7 @@ mod tests {
         let mut verifier: Verifier<F, EF> = Verifier::new(&shapes);
 
         // Record a single opening on table 1; table 0 stays empty.
-        let point = Point::new(vec![EF::ZERO; verifier.num_vars_table(1)]);
+        let point = Point::new(vec![EF::ZERO; verifier.num_variables_table(1)]);
         verifier.add_claim(1, point, &[0], &[EF::from_u64(9)]);
 
         // Check: only one opening → sum equals its eval scaled by alpha^0.

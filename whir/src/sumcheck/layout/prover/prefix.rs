@@ -30,7 +30,7 @@ pub struct PrefixProver<F: Field, EF: ExtensionField<F>> {
     /// Per-table placement metadata inside the stacked polynomial.
     pub(crate) placements: Vec<TablePlacement>,
     /// Number of variables of the stacked polynomial.
-    pub(crate) num_vars: usize,
+    pub(crate) num_variables: usize,
     /// Number of preprocessing rounds consumed before residual sumcheck.
     pub(crate) folding: usize,
     /// Stacked committed polynomial.
@@ -43,13 +43,13 @@ pub struct PrefixProver<F: Field, EF: ExtensionField<F>> {
 
 impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
     /// Returns the number of variables of the stacked polynomial.
-    pub const fn num_vars(&self) -> usize {
-        self.num_vars
+    pub const fn num_variables(&self) -> usize {
+        self.num_variables
     }
 
     /// Returns the number of variables of table `id`.
-    pub fn num_vars_table(&self, id: usize) -> usize {
-        self.tables[id].num_vars()
+    pub fn num_variables_table(&self, id: usize) -> usize {
+        self.tables[id].num_variables()
     }
 
     /// Returns the stacked committed polynomial.
@@ -68,7 +68,7 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
     pub fn eval(&mut self, point: &Point<EF>, table_idx: usize, polys: &[usize]) -> Vec<EF> {
         // Invariant: the evaluation point lives in the table's local frame.
         let table = &self.tables[table_idx];
-        assert_eq!(point.num_vars(), table.num_vars());
+        assert_eq!(point.num_variables(), table.num_variables());
 
         // Factorise the point once; every selected column reuses it.
         let point = SplitEq::new_packed(point, EF::ONE);
@@ -107,7 +107,7 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
     {
         // Sample a challenge point covering every stacked variable.
         let point =
-            Point::expand_from_univariate(challenger.sample_algebra_element(), self.num_vars);
+            Point::expand_from_univariate(challenger.sample_algebra_element(), self.num_variables);
 
         // Evaluate the stacked polynomial directly.
         let eval = self.poly.eval_base(&point);
@@ -160,15 +160,15 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Sanity: preprocessing cannot consume more rounds than the stacked arity.
-        assert!(self.folding <= self.num_vars);
+        assert!(self.folding <= self.num_variables);
 
         // Precondition for packed per-slot accumulation.
         let k_pack = log2_strict_usize(F::Packing::WIDTH);
         assert!(
             self.placements
                 .iter()
-                .all(|p| self.num_vars_table(p.idx()) >= k_pack),
-            "prefix mode requires num_vars_table >= log2(packing width) for every table",
+                .all(|p| self.num_variables_table(p.idx()) >= k_pack),
+            "prefix mode requires num_variables_table >= log2(packing width) for every table",
         );
 
         // Batching challenge for combining every recorded claim.
@@ -223,7 +223,7 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
         // Concrete openings: scale each by its alpha power and accumulate.
         traverse_openings(
             &self.placements,
-            |id| self.num_vars_table(id),
+            |id| self.num_variables_table(id),
             &self.claim_map,
             alpha,
             |v| sum += v.opening.eval() * v.alpha,
@@ -248,14 +248,14 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
     /// Virtual claims span the entire stacked output buffer.
     #[tracing::instrument(skip_all)]
     fn combine_eqs(&self, alpha: EF) -> Poly<EF::ExtensionPacking> {
-        // Packed output has 2^(num_vars - k_pack) entries; each holds WIDTH scalars.
+        // Packed output has 2^(num_variables - k_pack) entries; each holds WIDTH scalars.
         let k_pack = log2_strict_usize(F::Packing::WIDTH);
-        let mut out = Poly::<EF::ExtensionPacking>::zero(self.num_vars - k_pack);
+        let mut out = Poly::<EF::ExtensionPacking>::zero(self.num_variables - k_pack);
 
         // Concrete claims write into their per-slot packed range.
         traverse_openings(
             &self.placements,
-            |id| self.num_vars_table(id),
+            |id| self.num_variables_table(id),
             &self.claim_map,
             alpha,
             |v| {
@@ -311,8 +311,8 @@ mod tests {
 
         // Deterministic RNG so point values stay reproducible across runs.
         let mut rng = SmallRng::seed_from_u64(42);
-        let point_a = Point::<EF>::rand(&mut rng, prover.num_vars_table(0));
-        let point_b = Point::<EF>::rand(&mut rng, prover.num_vars_table(1));
+        let point_a = Point::<EF>::rand(&mut rng, prover.num_variables_table(0));
+        let point_b = Point::<EF>::rand(&mut rng, prover.num_variables_table(1));
 
         // Record two openings on table 0 → count advances from 0 to 2.
         prover.eval(&point_a, 0, &[0, 1]);
@@ -337,7 +337,7 @@ mod tests {
 
         // Sample a deterministic opening point with the table's arity.
         let mut rng = SmallRng::seed_from_u64(7);
-        let point = Point::<EF>::rand(&mut rng, prover.num_vars_table(0));
+        let point = Point::<EF>::rand(&mut rng, prover.num_variables_table(0));
 
         // Record two openings; evals[0], evals[1] line up with columns 0, 1.
         let evals = prover.eval(&point, 0, &[0, 1]);

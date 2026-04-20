@@ -14,31 +14,34 @@ use crate::sumcheck::layout::prover::{PrefixProver, SuffixProver};
 #[derive(Debug, Clone, Copy)]
 pub struct Selector {
     /// Bit-width of the slot address, carved from the stacked variables.
-    num_vars: usize,
-    /// Slot index, interpreted as an integer in `0..2^num_vars`.
+    num_variables: usize,
+    /// Slot index, interpreted as an integer in `0..2^num_variables`.
     index: usize,
 }
 
 impl Selector {
-    /// Builds a selector over `num_vars` bits pointing at slot `index`.
+    /// Builds a selector over `num_variables` bits pointing at slot `index`.
     ///
     /// # Panics
     ///
-    /// - Slot index must fit in `num_vars` bits.
-    pub const fn new(num_vars: usize, index: usize) -> Self {
+    /// - Slot index must fit in `num_variables` bits.
+    pub const fn new(num_variables: usize, index: usize) -> Self {
         // Bounds check: slot index must address a valid hypercube point.
-        assert!(index < (1 << num_vars));
-        Self { num_vars, index }
+        assert!(index < (1 << num_variables));
+        Self {
+            num_variables,
+            index,
+        }
     }
 
     /// Returns the hypercube point that addresses this slot.
     pub fn point<F: Field>(&self) -> Point<F> {
-        Point::hypercube(self.index, self.num_vars)
+        Point::hypercube(self.index, self.num_variables)
     }
 
     /// Returns the number of selector bits.
-    pub const fn num_vars(&self) -> usize {
-        self.num_vars
+    pub const fn num_variables(&self) -> usize {
+        self.num_variables
     }
 
     /// Returns the slot index.
@@ -77,7 +80,7 @@ impl<F: Field> Table<F> {
         assert!(!polys.is_empty());
         // Consistency precondition: every column shares the same arity.
         assert!(
-            polys.iter().map(Poly::num_vars).all_equal(),
+            polys.iter().map(Poly::num_variables).all_equal(),
             "every column of a table must share the same arity",
         );
         Self(polys)
@@ -94,14 +97,14 @@ impl<F: Field> Table<F> {
     }
 
     /// Returns the shared number of variables.
-    pub fn num_vars(&self) -> usize {
+    pub fn num_variables(&self) -> usize {
         // Invariant (set by the constructor): every column shares this value.
-        self.0[0].num_vars()
+        self.0[0].num_variables()
     }
 
     /// Returns the total number of stacked evaluations contributed.
     pub fn size(&self) -> usize {
-        (1 << self.num_vars()) * self.num_polys()
+        (1 << self.num_variables()) * self.num_polys()
     }
 }
 
@@ -144,7 +147,7 @@ pub struct Witness<F: Field> {
     /// Per-table placement metadata inside the stacked polynomial.
     pub(super) placements: Vec<TablePlacement>,
     /// Number of variables of the stacked polynomial.
-    pub(super) num_vars: usize,
+    pub(super) num_variables: usize,
     /// Preprocessing depth (number of rounds the protocol folds upfront).
     pub(super) folding: usize,
     /// Stacked committed polynomial.
@@ -153,8 +156,8 @@ pub struct Witness<F: Field> {
 
 impl<F: Field> Witness<F> {
     /// Returns the arity of the source table at the given index.
-    pub fn num_vars_table(&self, id: usize) -> usize {
-        self.tables[id].num_vars()
+    pub fn num_variables_table(&self, id: usize) -> usize {
+        self.tables[id].num_variables()
     }
 
     /// Stacks the given tables into a single committed polynomial.
@@ -172,25 +175,25 @@ impl<F: Field> Witness<F> {
     /// - Every table arity must exceed the preprocessing depth.
     pub fn new(tables: Vec<Table<F>>, folding: usize) -> Self {
         // Precondition: every table must have at least one variable left after folding.
-        assert!(tables.iter().all(|table| table.num_vars() > folding));
+        assert!(tables.iter().all(|table| table.num_variables() > folding));
 
         // Sort table indices by arity ascending; reverse-iterate to place largest first.
         let mut table_order = (0..tables.len()).collect::<Vec<_>>();
-        table_order.sort_by_key(|&i| tables[i].num_vars());
+        table_order.sort_by_key(|&i| tables[i].num_variables());
 
         // Stacked arity: log2 of total stacked size, rounded up to the next power of two.
-        let num_vars = log2_ceil_usize(tables.iter().map(Table::size).sum::<usize>());
+        let num_variables = log2_ceil_usize(tables.iter().map(Table::size).sum::<usize>());
 
         // Running cursor into the stacked polynomial, in scalar units.
         let mut offset = 0usize;
         let mut placements = Vec::new();
         // Stacked buffer starts zero; unused tail entries stay zero.
-        let mut stacked = Poly::<F>::zero(num_vars);
+        let mut stacked = Poly::<F>::zero(num_variables);
 
         // Walk tables largest-first; each column claims one slot.
         for &table_idx in table_order.iter().rev() {
             let table = &tables[table_idx];
-            let k = table.num_vars();
+            let k = table.num_variables();
             // Slot size per column: 2^arity.
             let slot_size = 1usize << k;
 
@@ -200,11 +203,11 @@ impl<F: Field> Witness<F> {
                 .iter()
                 .map(|poly| {
                     // Defensive check: every column of a table shares the same arity.
-                    assert_eq!(k, poly.num_vars());
+                    assert_eq!(k, poly.num_variables());
                     // Selector points at the next free slot in the stacked hypercube.
-                    let selector = Selector::new(num_vars - k, offset >> k);
+                    let selector = Selector::new(num_variables - k, offset >> k);
                     // Destination offset inside the stacked buffer.
-                    let dst = selector.index << poly.num_vars();
+                    let dst = selector.index << poly.num_variables();
                     // Copy this column's evaluations into its assigned slot.
                     stacked.as_mut_slice()[dst..dst + poly.num_evals()]
                         .copy_from_slice(poly.as_slice());
@@ -220,15 +223,15 @@ impl<F: Field> Witness<F> {
         Self {
             tables,
             placements,
-            num_vars,
+            num_variables,
             folding,
             poly: stacked,
         }
     }
 
     /// Returns the number of variables of the stacked polynomial.
-    pub const fn num_vars(&self) -> usize {
-        self.num_vars
+    pub const fn num_variables(&self) -> usize {
+        self.num_variables
     }
 
     /// Consumes the witness and hands it to a prefix-mode prover.
@@ -238,7 +241,7 @@ impl<F: Field> Witness<F> {
         PrefixProver {
             tables: self.tables,
             placements: self.placements,
-            num_vars: self.num_vars,
+            num_variables: self.num_variables,
             folding: self.folding,
             poly: self.poly,
             claim_map: (0..num_tables).map(|_| Vec::new()).collect(),
@@ -253,7 +256,7 @@ impl<F: Field> Witness<F> {
         SuffixProver {
             tables: self.tables,
             placements: self.placements,
-            num_vars: self.num_vars,
+            num_variables: self.num_variables,
             folding: self.folding,
             poly: self.poly,
             claim_map: (0..num_tables).map(|_| Vec::new()).collect(),
@@ -279,16 +282,16 @@ mod tests {
     type EF = BinomialExtensionField<F, 4>;
 
     #[test]
-    fn selector_new_stores_num_vars_and_index() {
+    fn selector_new_stores_num_variables_and_index() {
         // Invariant:
         //     Constructor stores both fields verbatim.
         //
         // Fixture state:
-        //     num_vars = 3, index = 5
+        //     num_variables = 3, index = 5
         let sel = Selector::new(3, 5);
 
         // Check: getters return what was passed in.
-        assert_eq!(sel.num_vars(), 3);
+        assert_eq!(sel.num_variables(), 3);
         assert_eq!(sel.index(), 5);
     }
 
@@ -296,25 +299,25 @@ mod tests {
     #[should_panic]
     fn selector_new_panics_on_index_out_of_range() {
         // Invariant:
-        //     A slot index that does not fit in num_vars bits is rejected.
+        //     A slot index that does not fit in num_variables bits is rejected.
         //
         // Fixture state:
-        //     num_vars = 2 → legal indices are 0..=3; use 4 to trigger panic.
+        //     num_variables = 2 → legal indices are 0..=3; use 4 to trigger panic.
         let _ = Selector::new(2, 4);
     }
 
     #[test]
     fn selector_point_returns_boolean_vector_of_right_length() {
         // Invariant:
-        //     point() returns a num_vars-long vector of 0/1 field elements.
+        //     point() returns a num_variables-long vector of 0/1 field elements.
         //
         // Fixture state:
-        //     num_vars = 3, index = 5 = 0b101 → point bits are {1, 0, 1}.
+        //     num_variables = 3, index = 5 = 0b101 → point bits are {1, 0, 1}.
         let sel = Selector::new(3, 5);
         let point: Point<F> = sel.point();
 
         // Check: length matches the bit-width.
-        assert_eq!(point.num_vars(), 3);
+        assert_eq!(point.num_variables(), 3);
 
         // Check: every coordinate is either 0 or 1.
         for &bit in point.as_slice() {
@@ -326,7 +329,7 @@ mod tests {
     fn selector_lift_prefixes_selector_bits_onto_other() {
         // Invariant:
         //     lift(other) returns a point with the selector bits prepended,
-        //     total length = selector.num_vars() + other.num_vars().
+        //     total length = selector.num_variables() + other.num_variables().
         //
         // Fixture state:
         //     selector: 3-bit, index 5 → 3 prefix coordinates.
@@ -336,7 +339,7 @@ mod tests {
         let lifted = sel.lift(&other);
 
         // Check: total length is the concatenation length.
-        assert_eq!(lifted.num_vars(), 5);
+        assert_eq!(lifted.num_variables(), 5);
 
         // Check: the suffix matches the original point element-wise.
         for i in 0..2 {
@@ -368,18 +371,18 @@ mod tests {
     #[test]
     fn table_accessors_report_shape() {
         // Invariant:
-        //     num_polys, num_vars, size, and poly(id) all agree with the input.
+        //     num_polys, num_variables, size, and poly(id) all agree with the input.
         //
         // Fixture state:
-        //     two columns of arity 3 → num_polys = 2, num_vars = 3, size = 2^3 * 2 = 16.
+        //     two columns of arity 3 → num_polys = 2, num_variables = 3, size = 2^3 * 2 = 16.
         let table = Table::new(vec![Poly::<F>::zero(3), Poly::<F>::zero(3)]);
 
         // Check: all shape queries match the fixture.
         assert_eq!(table.num_polys(), 2);
-        assert_eq!(table.num_vars(), 3);
+        assert_eq!(table.num_variables(), 3);
         assert_eq!(table.size(), 16);
         // Check: column lookup returns a ref to the i-th poly with matching arity.
-        assert_eq!(table.poly(0).num_vars(), 3);
+        assert_eq!(table.poly(0).num_variables(), 3);
     }
 
     #[test]
@@ -388,7 +391,7 @@ mod tests {
         //     TablePlacement forwards the table index and the selector slice.
         //
         // Fixture state:
-        //     idx = 7, two selectors with num_vars = 2.
+        //     idx = 7, two selectors with num_variables = 2.
         let selectors = vec![Selector::new(2, 0), Selector::new(2, 1)];
         let placement = TablePlacement::new(7, selectors);
 
@@ -434,26 +437,26 @@ mod tests {
     }
 
     #[test]
-    fn witness_num_vars_is_stacked_arity_rounded_up() {
+    fn witness_num_variables_is_stacked_arity_rounded_up() {
         // Invariant:
-        //     num_vars equals log2_ceil of total stacked size.
+        //     num_variables equals log2_ceil of total stacked size.
         //
         // Fixture state:
         //     total size = 2^3 * 2 + 2^4 * 2 = 16 + 32 = 48 → ceil(log2) = 6.
         let w = fixture_witness();
-        assert_eq!(w.num_vars(), 6);
+        assert_eq!(w.num_variables(), 6);
     }
 
     #[test]
-    fn witness_num_vars_table_returns_source_arity() {
+    fn witness_num_variables_table_returns_source_arity() {
         // Invariant:
-        //     num_vars_table returns the arity of the stored source table.
+        //     num_variables_table returns the arity of the stored source table.
         //
         // Fixture state:
         //     table 0: arity 3, table 1: arity 4.
         let w = fixture_witness();
-        assert_eq!(w.num_vars_table(0), 3);
-        assert_eq!(w.num_vars_table(1), 4);
+        assert_eq!(w.num_variables_table(0), 3);
+        assert_eq!(w.num_variables_table(1), 4);
     }
 
     #[test]
@@ -472,7 +475,7 @@ mod tests {
             let table = &w.tables[placement.idx()];
             for (poly_idx, selector) in placement.selectors().iter().enumerate() {
                 let col = table.poly(poly_idx);
-                let dst = selector.index() << col.num_vars();
+                let dst = selector.index() << col.num_variables();
                 let slot = &w.poly.as_slice()[dst..dst + col.num_evals()];
                 // Check: slot contents match the source column evaluations.
                 assert_eq!(slot, col.as_slice());
@@ -487,13 +490,13 @@ mod tests {
         //     stacked polynomial and the per-table shapes.
         let w = fixture_witness();
         let stacked_copy = w.poly.clone();
-        let num_vars = w.num_vars();
+        let num_variables = w.num_variables();
 
         // Hand off the witness to a prefix-mode prover.
         let prover: PrefixProver<F, EF> = w.as_prefix_prover();
 
         // Check: arity matches the original stacked polynomial.
-        assert_eq!(prover.num_vars(), num_vars);
+        assert_eq!(prover.num_variables(), num_variables);
         // Check: the committed polynomial is bit-for-bit identical.
         assert_eq!(prover.poly().as_slice(), stacked_copy.as_slice());
     }
@@ -505,13 +508,13 @@ mod tests {
         //     stacked polynomial and the per-table shapes.
         let w = fixture_witness();
         let stacked_copy = w.poly.clone();
-        let num_vars = w.num_vars();
+        let num_variables = w.num_variables();
 
         // Hand off the witness to a suffix-mode prover.
         let prover: SuffixProver<F, EF> = w.as_suffix_prover();
 
         // Check: arity matches the original stacked polynomial.
-        assert_eq!(prover.num_vars(), num_vars);
+        assert_eq!(prover.num_variables(), num_variables);
         // Check: the committed polynomial is bit-for-bit identical.
         assert_eq!(prover.poly().as_slice(), stacked_copy.as_slice());
     }
@@ -530,7 +533,7 @@ mod tests {
         // Invariant:
         //     For any valid set of table shapes:
         //     - every column's evaluations live at selector.index << arity
-        //     - num_vars equals log2_ceil of total size
+        //     - num_variables equals log2_ceil of total size
         //     - trailing slots past the concatenation stay zero
         #[test]
         fn witness_stacks_columns_and_zeros_the_tail(shapes in arb_table_shapes()) {
@@ -552,7 +555,7 @@ mod tests {
             let witness = Witness::new(tables, 1);
 
             // Check: stacked arity equals log2_ceil of total occupied size.
-            assert_eq!(witness.num_vars(), log2_ceil_usize(total_used));
+            assert_eq!(witness.num_variables(), log2_ceil_usize(total_used));
 
             // Check: each column's evaluations land at the predicted slot.
             let mut used = 0usize;
@@ -560,7 +563,7 @@ mod tests {
                 let table = &witness.tables[placement.idx()];
                 for (poly_idx, selector) in placement.selectors().iter().enumerate() {
                     let col = table.poly(poly_idx);
-                    let dst = selector.index() << col.num_vars();
+                    let dst = selector.index() << col.num_variables();
                     let slot = &witness.poly.as_slice()[dst..dst + col.num_evals()];
                     assert_eq!(slot, col.as_slice());
                     used += col.num_evals();
@@ -571,7 +574,7 @@ mod tests {
             assert_eq!(used, total_used);
 
             // Check: every entry past the concatenation is the zero element.
-            let stacked_len = 1usize << witness.num_vars();
+            let stacked_len = 1usize << witness.num_variables();
             for &v in &witness.poly.as_slice()[used..stacked_len] {
                 // The specific region of "used" is contiguous here only because
                 // placements are emitted largest-first and slot offsets are the

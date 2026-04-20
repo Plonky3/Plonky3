@@ -68,7 +68,7 @@ pub(super) fn traverse_openings<F, EF, Point, Data>(
     let mut off = 0usize;
 
     for placement in placements {
-        // Each column of this table owns a slot of size 2^num_vars_table.
+        // Each column of this table owns a slot of size 2^num_variables_table.
         let slot_size = 1usize << slot_bits(placement.idx());
 
         for poly_idx in 0..placement.num_polys() {

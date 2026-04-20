@@ -24,7 +24,7 @@ use crate::constraints::statement::initial::InitialStatement;
 /// with `k` the number of variables, `l_0` the SVO depth, and `W` the
 /// base-field packing width.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SumcheckMode {
+pub enum SumcheckStrategy {
     /// Standard quadratic sumcheck.
     ///
     /// No structural assumption on the weight polynomial.
@@ -473,7 +473,7 @@ where
     /// - `degree` is 2^(remaining variables after all folds up to this round).
     ///
     /// ```text
-    /// inv_rate = (round_domain_size >> rs_reduction) / 2^(num_vars - total_folded)
+    /// inv_rate = (round_domain_size >> rs_reduction) / 2^(num_variables - total_folded)
     /// ```
     pub fn inv_rate(&self, round: usize) -> usize {
         // Shrink the domain by this round's reduction factor.
@@ -495,7 +495,7 @@ where
     pub const fn initial_statement(
         &self,
         polynomial: Poly<F>,
-        mode: SumcheckMode,
+        mode: SumcheckStrategy,
     ) -> InitialStatement<F, EF> {
         InitialStatement::new(polynomial, self.folding_factor.at_round(0), mode)
     }

@@ -246,8 +246,8 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     }
 
     /// Returns the number of remaining (unbound) variables.
-    pub fn num_vars(&self) -> usize {
-        self.poly.num_vars()
+    pub fn num_variables(&self) -> usize {
+        self.poly.num_variables()
     }
 
     /// Extracts the current evaluation polynomial as scalar extension-field elements.
@@ -360,22 +360,23 @@ mod tests {
     // Generates a random list of constraints for fuzzing the evaluator.
     fn random_constraints(
         rng: &mut SmallRng,
-        num_vars: usize,
+        num_variables: usize,
         rounds: usize,
     ) -> Vec<Constraint<F, EF>> {
         (0..rounds)
             .map(|_| {
-                let num_vars = rng.random_range(1..=num_vars);
+                let num_variables = rng.random_range(1..=num_variables);
                 let gamma = rng.random();
 
                 // Up to 3 equality constraints at random points.
-                let mut eq_statement = EqStatement::initialize(num_vars);
+                let mut eq_statement = EqStatement::initialize(num_variables);
                 (0..rng.random_range(0..=3)).for_each(|_| {
-                    eq_statement.add_evaluated_constraint(Point::rand(rng, num_vars), rng.random());
+                    eq_statement
+                        .add_evaluated_constraint(Point::rand(rng, num_variables), rng.random());
                 });
 
                 // Up to 3 selector constraints at random variables.
-                let mut sel_statement = SelectStatement::<F, EF>::initialize(num_vars);
+                let mut sel_statement = SelectStatement::<F, EF>::initialize(num_variables);
                 (0..rng.random_range(0..=3))
                     .for_each(|_| sel_statement.add_constraint(rng.random(), rng.random()));
 
@@ -418,13 +419,13 @@ mod tests {
         //     implementation across random constraint sets and challenge points.
         #[test]
         fn prop_eval_constraints_poly_matches_reference(
-            total_num_vars in 2usize..=20,
+            total_num_variables in 2usize..=20,
             rounds in 1usize..=8,
             seed in any::<u64>(),
         ) {
             let mut rng = SmallRng::seed_from_u64(seed);
-            let constraints = random_constraints(&mut rng, total_num_vars, rounds);
-            let challenge = Point::rand(&mut rng, total_num_vars);
+            let constraints = random_constraints(&mut rng, total_num_variables, rounds);
+            let challenge = Point::rand(&mut rng, total_num_variables);
 
             prop_assert_eq!(
                 VariableOrder::Prefix.eval_constraints_poly(&constraints, &challenge),

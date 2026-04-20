@@ -58,7 +58,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     /// The scale factor is absorbed into the prefix-half table.
     pub fn new_unpacked(point: &Point<EF>, scale: EF) -> Self {
         // Split z into (z_prefix, z_suffix) at the midpoint.
-        let (z0, z1) = point.split_at(point.num_vars() / 2);
+        let (z0, z1) = point.split_at(point.num_variables() / 2);
         // Build eq0 = scale * eq(z_prefix, .) and eq1 = eq(z_suffix, .).
         let eq0 = Poly::new_from_point(z0.as_slice(), scale);
         let eq1 = EqMaybePacked::new_unpacked(&z1);
@@ -71,7 +71,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     /// The scale factor is absorbed into the prefix-half table.
     pub fn new_packed(point: &Point<EF>, scale: EF) -> Self {
         // Split z into (z_prefix, z_suffix) at the midpoint.
-        let (z0, z1) = point.split_at(point.num_vars() / 2);
+        let (z0, z1) = point.split_at(point.num_variables() / 2);
         // Build eq0 with scale, and attempt SIMD packing for eq1.
         let eq0 = Poly::new_from_point(z0.as_slice(), scale);
         let eq1 = EqMaybePacked::new_packed(&z1);
@@ -79,8 +79,8 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     }
 
     /// Total number of variables: k = k_prefix + k_suffix.
-    pub const fn num_vars(&self) -> usize {
-        self.eq0.num_vars() + self.eq1.num_vars()
+    pub const fn num_variables(&self) -> usize {
+        self.eq0.num_variables() + self.eq1.num_variables()
     }
 
     /// Returns the prefix-half eq table.
@@ -104,7 +104,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     ///
     /// Panics if the polynomial and eq table have different numbers of variables.
     pub fn eval_base(&self, poly: &Poly<F>) -> EF {
-        assert_eq!(poly.num_vars(), self.num_vars());
+        assert_eq!(poly.num_variables(), self.num_variables());
 
         // Short-circuit: a constant polynomial evaluates to itself
         // since eq(z, .) sums to 1 over the hypercube.
@@ -114,7 +114,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
 
         // Number of scalar elements per eq1 block.
         let cs = self.eq1.scalar_chunk_size();
-        if (1 << self.num_vars()) < PARALLEL_THRESHOLD {
+        if (1 << self.num_variables()) < PARALLEL_THRESHOLD {
             // Sequential: chunk poly by eq1 block size, pair with eq0 weights.
             // For each chunk, compute the inner dot product with eq1,
             // then multiply by the corresponding eq0 weight.
@@ -144,7 +144,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     ///
     /// Panics if the polynomial and eq table have different numbers of variables.
     pub fn eval_ext(&self, poly: &Poly<EF>) -> EF {
-        assert_eq!(poly.num_vars(), self.num_vars());
+        assert_eq!(poly.num_variables(), self.num_variables());
 
         // Short-circuit for constant polynomials.
         if let Some(constant) = poly.as_constant() {
@@ -152,7 +152,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         }
 
         let cs = self.eq1.scalar_chunk_size();
-        if (1 << self.num_vars()) < PARALLEL_THRESHOLD {
+        if (1 << self.num_variables()) < PARALLEL_THRESHOLD {
             // Sequential outer loop: dot each chunk with eq1, weight by eq0.
             poly.0
                 .chunks(cs)
@@ -183,14 +183,14 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     /// Panics if the packed polynomial size is inconsistent with the eq table.
     pub fn eval_packed(&self, poly: &Poly<EF::ExtensionPacking>) -> EF {
         assert_eq!(
-            poly.num_vars() + log2_strict_usize(F::Packing::WIDTH),
-            self.num_vars()
+            poly.num_variables() + log2_strict_usize(F::Packing::WIDTH),
+            self.num_variables()
         );
         match &self.eq1 {
             EqMaybePacked::Packed(eq1) => {
                 // Both polynomial and eq1 are packed; use packed dot product kernel.
                 let cs = eq1.num_evals();
-                if (1 << (self.num_vars() - log2_strict_usize(F::Packing::WIDTH)))
+                if (1 << (self.num_variables() - log2_strict_usize(F::Packing::WIDTH)))
                     < PARALLEL_THRESHOLD
                 {
                     poly.0
@@ -227,11 +227,11 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     ///
     /// Panics if the output buffer length is not 2^k.
     pub fn accumulate_into(&self, out: &mut [EF], scale: Option<EF>) {
-        assert_eq!(log2_strict_usize(out.len()), self.num_vars());
+        assert_eq!(log2_strict_usize(out.len()), self.num_variables());
         // Collapse optional scale into a single weight; identity if absent.
         let w_scale = scale.unwrap_or(EF::ONE);
         let cs = self.eq1.scalar_chunk_size();
-        if (1 << self.num_vars()) < PARALLEL_THRESHOLD {
+        if (1 << self.num_variables()) < PARALLEL_THRESHOLD {
             // Sequential: for each eq0 entry, accumulate eq1 * (eq0_weight * scale).
             out.chunks_mut(cs)
                 .zip(self.eq0.iter())
@@ -250,7 +250,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
 
     /// Materializes the full eq table as a polynomial.
     pub fn materialize(&self) -> Poly<EF> {
-        let mut out = Poly::zero(self.num_vars());
+        let mut out = Poly::zero(self.num_variables());
         self.accumulate_into(out.as_mut_slice(), None);
         out
     }
@@ -265,12 +265,12 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     pub fn accumulate_into_packed(&self, out: &mut [EF::ExtensionPacking], scale: Option<EF>) {
         assert_eq!(
             log2_strict_usize(F::Packing::WIDTH * out.len()),
-            self.num_vars()
+            self.num_variables()
         );
         let w_scale = scale.unwrap_or(EF::ONE);
 
         // Apply naive method if number of variables is too small
-        if log2_strict_usize(F::Packing::WIDTH) * 2 > self.num_vars() {
+        if log2_strict_usize(F::Packing::WIDTH) * 2 > self.num_variables() {
             out.iter_mut()
                 .zip_eq(self.materialize().0.chunks(F::Packing::WIDTH))
                 .for_each(|(out, chunk)| {
@@ -279,7 +279,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         } else {
             // Chunk size in packed elements (scalar chunk size / W).
             let cs = self.eq1.scalar_chunk_size() / F::Packing::WIDTH;
-            if (1 << self.num_vars()) < PARALLEL_THRESHOLD {
+            if (1 << self.num_variables()) < PARALLEL_THRESHOLD {
                 out.chunks_mut(cs)
                     .zip(self.eq0.iter())
                     .for_each(|(chunk, &w0)| {
@@ -309,13 +309,13 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     ///
     /// Panics if the eq table has more variables than the polynomial.
     pub fn compress_prefix(&self, poly: &Poly<F>) -> Poly<EF> {
-        assert!(self.num_vars() <= poly.num_vars());
+        assert!(self.num_variables() <= poly.num_variables());
         // Number of remaining (output) variables.
-        let k_inner = poly.num_vars() - self.num_vars();
+        let k_inner = poly.num_variables() - self.num_variables();
         // Number of base-field elements per eq0 entry.
         let size_outer = poly.num_evals() / self.eq0.num_evals();
 
-        if (1 << poly.num_vars()) < PARALLEL_THRESHOLD {
+        if (1 << poly.num_variables()) < PARALLEL_THRESHOLD {
             // Sequential: accumulate each eq0 chunk into a shared output buffer.
             let mut out = Poly::<EF>::zero(k_inner);
             poly.0
@@ -359,14 +359,16 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     /// - Panics if the eq table has more variables than the polynomial.
     /// - Panics if the remaining variables are fewer than log_2(W).
     pub fn compress_prefix_to_packed(&self, poly: &Poly<F>) -> Poly<EF::ExtensionPacking> {
-        assert!(self.num_vars() <= poly.num_vars());
-        assert!(poly.num_vars() >= (self.num_vars() + log2_strict_usize(F::Packing::WIDTH)));
+        assert!(self.num_variables() <= poly.num_variables());
+        assert!(
+            poly.num_variables() >= (self.num_variables() + log2_strict_usize(F::Packing::WIDTH))
+        );
         let k_pack = log2_strict_usize(F::Packing::WIDTH);
         // Output has k_inner packed variables (each packed element holds W scalars).
-        let k_inner = poly.num_vars() - self.num_vars() - k_pack;
+        let k_inner = poly.num_variables() - self.num_variables() - k_pack;
         let size_outer = poly.num_evals() / self.eq0.num_evals();
 
-        if (1 << poly.num_vars()) < PARALLEL_THRESHOLD {
+        if (1 << poly.num_variables()) < PARALLEL_THRESHOLD {
             let mut out = Poly::<EF::ExtensionPacking>::zero(k_inner);
             poly.0
                 .chunks(size_outer)
@@ -413,7 +415,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     /// Panics if the eq table has more variables than the polynomial.
     pub fn compress_suffix(&self, poly: &Poly<F>) -> Poly<EF> {
         // Allocate output and delegate to the in-place version.
-        let mut out = Poly::zero(poly.num_vars() - self.num_vars());
+        let mut out = Poly::zero(poly.num_variables() - self.num_variables());
         self.compress_suffix_into(out.as_mut_slice(), poly);
         out
     }
@@ -425,21 +427,21 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     /// - Panics if the eq table has more variables than the polynomial.
     /// - Panics if the output buffer length != 2^{n-m}.
     pub fn compress_suffix_into(&self, out: &mut [EF], poly: &Poly<F>) {
-        assert!(self.num_vars() <= poly.num_vars());
-        assert_eq!(out.len(), poly.num_evals() >> self.num_vars());
+        assert!(self.num_variables() <= poly.num_variables());
+        assert_eq!(out.len(), poly.num_evals() >> self.num_variables());
 
-        if (1 << self.num_vars()) < PARALLEL_THRESHOLD {
+        if (1 << self.num_variables()) < PARALLEL_THRESHOLD {
             // Sequential: each output element is a full dot product of one row
             // against the factored eq tables.
             out.iter_mut()
-                .zip_eq(poly.0.chunks(1 << self.num_vars()))
+                .zip_eq(poly.0.chunks(1 << self.num_variables()))
                 .for_each(|(out, chunk)| {
                     *out = self.eq1.compress_suffix_dot(chunk, &self.eq0);
                 });
         } else {
             // Parallel: each output element is independent.
             out.par_iter_mut()
-                .zip(poly.0.par_chunks(1 << self.num_vars()))
+                .zip(poly.0.par_chunks(1 << self.num_variables()))
                 .for_each(|(out, chunk)| {
                     *out = self.eq1.compress_suffix_dot(chunk, &self.eq0);
                 });
@@ -706,7 +708,7 @@ mod tests {
         // Compressing all variables should produce a 0-variable (scalar) result.
         let split = SplitEq::<F, EF>::new_unpacked(&point, EF::ONE);
         let compressed = split.compress_prefix(&poly);
-        assert_eq!(compressed.num_vars(), 0);
+        assert_eq!(compressed.num_variables(), 0);
         assert_eq!(compressed.as_constant().unwrap(), expected);
     }
 
@@ -721,7 +723,7 @@ mod tests {
         // Compressing zero variables should return the polynomial lifted to the extension field.
         let split = SplitEq::<F, EF>::new_unpacked(&point, EF::ONE);
         let compressed = split.compress_suffix(&poly);
-        assert_eq!(compressed.num_vars(), k);
+        assert_eq!(compressed.num_variables(), k);
         // Each element should equal its base-field counterpart promoted to the extension.
         for (c, &p) in compressed.iter().zip(poly.iter()) {
             assert_eq!(*c, EF::from(p));

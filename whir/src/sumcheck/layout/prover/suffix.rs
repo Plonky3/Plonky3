@@ -33,7 +33,7 @@ pub struct SuffixProver<F: Field, EF: ExtensionField<F>> {
     /// Per-table placement metadata inside the stacked polynomial.
     pub(crate) placements: Vec<TablePlacement>,
     /// Number of variables of the stacked polynomial.
-    pub(crate) num_vars: usize,
+    pub(crate) num_variables: usize,
     /// Number of preprocessing rounds consumed before residual sumcheck.
     pub(crate) folding: usize,
     /// Stacked committed polynomial.
@@ -46,13 +46,13 @@ pub struct SuffixProver<F: Field, EF: ExtensionField<F>> {
 
 impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     /// Returns the number of variables of the stacked polynomial.
-    pub const fn num_vars(&self) -> usize {
-        self.num_vars
+    pub const fn num_variables(&self) -> usize {
+        self.num_variables
     }
 
     /// Returns the number of variables of table `id`.
-    pub fn num_vars_table(&self, id: usize) -> usize {
-        self.tables[id].num_vars()
+    pub fn num_variables_table(&self, id: usize) -> usize {
+        self.tables[id].num_variables()
     }
 
     /// Returns the stacked committed polynomial.
@@ -71,7 +71,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     pub fn eval(&mut self, point: &Point<EF>, table_idx: usize, polys: &[usize]) -> Vec<EF> {
         // Invariant: the evaluation point lives in the table's local frame.
         let table = &self.tables[table_idx];
-        assert_eq!(point.num_vars(), table.num_vars());
+        assert_eq!(point.num_variables(), table.num_variables());
 
         // Factorise the point with the suffix split; every selected column reuses it.
         let point = SvoPoint::new_unpacked(self.folding, point, VariableOrder::Suffix);
@@ -121,7 +121,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     {
         // Sample a challenge point covering every stacked variable.
         let point =
-            Point::expand_from_univariate(challenger.sample_algebra_element(), self.num_vars);
+            Point::expand_from_univariate(challenger.sample_algebra_element(), self.num_variables);
 
         // Per-column accumulation state:
         //
@@ -138,7 +138,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
                 let poly = self.tables[placement.idx()].poly(poly_idx);
 
                 // Split the challenge into (selector_bits, local_bits).
-                let (selector_part, local_part) = point.split_at(selector.num_vars());
+                let (selector_part, local_part) = point.split_at(selector.num_variables());
 
                 // Scalar weight: eq(selector, selector_part) for this column.
                 let weight =
@@ -251,7 +251,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Sanity: preprocessing cannot consume more rounds than the stacked arity.
-        assert!(self.folding <= self.num_vars);
+        assert!(self.folding <= self.num_variables);
         let alpha: EF = challenger.sample_algebra_element();
         let n_claims = self.num_claims();
 
@@ -273,7 +273,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
             .collect::<Vec<_>>();
         traverse_openings(
             &self.placements,
-            |id| self.num_vars_table(id),
+            |id| self.num_variables_table(id),
             &self.claim_map,
             alpha,
             |v| {
@@ -385,7 +385,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         // Concrete openings: scale each by its alpha power and accumulate.
         traverse_openings(
             &self.placements,
-            |id| self.num_vars_table(id),
+            |id| self.num_variables_table(id),
             &self.claim_map,
             alpha,
             |v| sum += v.opening.eval() * v.alpha,
@@ -411,20 +411,21 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     /// - One output slot per column; writes never overlap.
     /// - Output arity is the stacked arity minus the number of challenges.
     fn compress_stacked(&self, rs: &Point<EF>) -> Poly<EF> {
-        assert!(rs.num_vars() <= self.num_vars);
-        // Output: residual stacked space of size 2^(num_vars - |rs|).
-        let mut out = Poly::<EF>::zero(self.num_vars - rs.num_vars());
+        assert!(rs.num_variables() <= self.num_variables);
+        // Output: residual stacked space of size 2^(num_variables - |rs|).
+        let mut out = Poly::<EF>::zero(self.num_variables - rs.num_variables());
         let rs = SplitEq::new_unpacked(rs, EF::ONE);
 
         for placement in &self.placements {
             for (poly_idx, selector) in placement.selectors().iter().enumerate() {
                 let poly = self.tables[placement.idx()].poly(poly_idx);
-                assert!(rs.num_vars() <= poly.num_vars());
+                assert!(rs.num_variables() <= poly.num_variables());
                 // Slot start in the compressed output.
-                let off = selector.index() << (poly.num_vars() - rs.num_vars());
+                let off = selector.index() << (poly.num_variables() - rs.num_variables());
                 // Write this column's compression into its own slot.
                 rs.compress_suffix_into(
-                    &mut out.as_mut_slice()[off..off + (1 << (poly.num_vars() - rs.num_vars()))],
+                    &mut out.as_mut_slice()
+                        [off..off + (1 << (poly.num_variables() - rs.num_variables()))],
                     poly,
                 );
             }
@@ -442,14 +443,14 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     #[tracing::instrument(skip_all)]
     fn combine_eqs(&self, rs: &Point<EF>, alpha: EF) -> Poly<EF> {
         // Preconditions: challenge count matches the folding depth.
-        assert_eq!(rs.num_vars(), self.folding);
+        assert_eq!(rs.num_variables(), self.folding);
         // Output arity: stacked arity minus the folded challenges.
-        let mut out = Poly::<EF>::zero(self.num_vars - rs.num_vars());
+        let mut out = Poly::<EF>::zero(self.num_variables - rs.num_variables());
 
         // Concrete claims: each opening contributes into its owning slot.
         traverse_openings(
             &self.placements,
-            |id| self.num_vars_table(id),
+            |id| self.num_variables_table(id),
             &self.claim_map,
             alpha,
             |v| {
@@ -466,7 +467,9 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         let mut alpha_i = alpha.exp_u64(self.num_claims() as u64);
         for claim in &self.virtual_claims {
             // Split the claim point into (rest-of-space, svo-sub-point).
-            let (rest, svo) = claim.point.split_at(claim.point.num_vars() - rs.num_vars());
+            let (rest, svo) = claim
+                .point
+                .split_at(claim.point.num_variables() - rs.num_variables());
             // Scalar weight: alpha^i times the equality between svo part and rs.
             let scale = alpha_i * Point::eval_eq(svo.as_slice(), rs.as_slice());
             // Contribute the scaled equality table across the whole output.
@@ -511,8 +514,8 @@ mod tests {
 
         // Deterministic RNG so point values stay reproducible across runs.
         let mut rng = SmallRng::seed_from_u64(42);
-        let point_a = Point::<EF>::rand(&mut rng, prover.num_vars_table(0));
-        let point_b = Point::<EF>::rand(&mut rng, prover.num_vars_table(1));
+        let point_a = Point::<EF>::rand(&mut rng, prover.num_variables_table(0));
+        let point_b = Point::<EF>::rand(&mut rng, prover.num_variables_table(1));
 
         // Record two openings on table 0 → count advances from 0 to 2.
         prover.eval(&point_a, 0, &[0, 1]);
@@ -537,7 +540,7 @@ mod tests {
 
         // Sample a deterministic opening point with the table's arity.
         let mut rng = SmallRng::seed_from_u64(7);
-        let point = Point::<EF>::rand(&mut rng, prover.num_vars_table(0));
+        let point = Point::<EF>::rand(&mut rng, prover.num_variables_table(0));
 
         // Record two openings; evals[0], evals[1] line up with columns 0, 1.
         let evals = prover.eval(&point, 0, &[0, 1]);

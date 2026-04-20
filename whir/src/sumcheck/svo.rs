@@ -95,14 +95,14 @@ use crate::sumcheck::strategy::VariableOrder;
 /// - Time: `O(3^l)` field additions and doublings.
 /// - Space: two pre-allocated `3^l` buffers, no internal allocation.
 fn evals_01inf_grid_into<F: Field>(boolean_evals: &[F], output: &mut [F], scratch: &mut [F]) {
-    let num_vars = log2_strict_usize(boolean_evals.len());
-    let output_len = 3usize.pow(num_vars as u32);
+    let num_variables = log2_strict_usize(boolean_evals.len());
+    let output_len = 3usize.pow(num_variables as u32);
 
     assert_eq!(output.len(), output_len);
     assert_eq!(scratch.len(), output_len);
 
     // Single constant -- nothing to expand.
-    if num_vars == 0 {
+    if num_variables == 0 {
         output[0] = boolean_evals[0];
         return;
     }
@@ -113,7 +113,7 @@ fn evals_01inf_grid_into<F: Field>(boolean_evals: &[F], output: &mut [F], scratc
     //
     //     l odd  --> start in scratch --> after l swaps --> output  OK
     //     l even --> start in output  --> after l swaps --> output  OK
-    let (mut cur, mut next) = if num_vars % 2 == 1 {
+    let (mut cur, mut next) = if num_variables % 2 == 1 {
         scratch[..boolean_evals.len()].copy_from_slice(boolean_evals);
         (&mut scratch[..], &mut output[..])
     } else {
@@ -128,14 +128,14 @@ fn evals_01inf_grid_into<F: Field>(boolean_evals: &[F], output: &mut [F], scratc
     // thread scheduling; above this there may be only 1-2 blocks.
     const PARALLEL_STRIDE_THRESHOLD: usize = 256;
 
-    for stage in 0..num_vars {
+    for stage in 0..num_variables {
         // Stride = 3^stage: how many consecutive elements share the same
         // value of the variable being expanded (the already-expanded
         // variables each contribute a factor of 3).
         let in_stride = 3usize.pow(stage as u32);
 
         // Blocks = 2^{remaining}: independent groups of (f(0), f(1)) pairs.
-        let blocks = 1usize << (num_vars - stage - 1);
+        let blocks = 1usize << (num_variables - stage - 1);
 
         // Slice only the live region (early stages use less than the full buffer).
         //
@@ -226,7 +226,7 @@ pub(crate) fn calculate_accumulators_batch<F: Field, EF: ExtensionField<F>>(
     alphas: &[EF],
 ) -> SvoAccumulators<EF> {
     assert_eq!(claim.len(), alphas.len());
-    let k = claim.point().num_vars_svo();
+    let k = claim.point().num_variables_svo();
 
     (0..k)
         .map(|round_idx| {
@@ -564,11 +564,11 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     ///
     /// `l0` is the number of variables handled by the SVO optimization.
     pub fn new_unpacked(l0: usize, point: &Point<EF>, var_order: VariableOrder) -> Self {
-        assert!(l0 <= point.num_vars());
+        assert!(l0 <= point.num_variables());
         let (svo, split) = match var_order {
             VariableOrder::Prefix => point.split_at(l0),
             VariableOrder::Suffix => {
-                let (split, svo) = point.split_at(point.num_vars() - l0);
+                let (split, svo) = point.split_at(point.num_variables() - l0);
                 (svo, split)
             }
         };
@@ -585,7 +585,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     ///
     /// `l0` is the number of variables handled by the SVO optimization.
     pub fn new_packed(l0: usize, point: &Point<EF>) -> Self {
-        assert!(l0 <= point.num_vars());
+        assert!(l0 <= point.num_variables());
         let (svo, split) = point.split_at(l0);
         let split = SplitEq::new_packed(&split, EF::ONE);
         Self {
@@ -608,7 +608,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     /// This method computes the scalar factor `alpha · eq(z_svo, rs)` and then asks
     /// `split_eq` to materialize the residual `eq(z_rest, ·)` table into `out`.
     pub fn accumulate_into(&self, out: &mut [EF], rs: &Point<EF>, mut scale: EF) {
-        assert_eq!(rs.num_vars(), self.num_vars_svo());
+        assert_eq!(rs.num_variables(), self.num_variables_svo());
         scale *= Point::eval_eq(self.z_svo.as_slice(), rs.as_slice());
         self.z_split.accumulate_into(out, Some(scale));
     }
@@ -631,7 +631,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
         mut scale: EF,
     ) {
         assert!(matches!(self.var_order, VariableOrder::Prefix));
-        assert_eq!(rs.num_vars(), self.num_vars_svo());
+        assert_eq!(rs.num_variables(), self.num_variables_svo());
         scale *= Point::eval_eq(self.z_svo.as_slice(), rs.as_slice());
         self.z_split.accumulate_into_packed(out, Some(scale));
     }
@@ -644,11 +644,11 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     /// - evaluated at `z_svo` to obtain the opening value
     /// - partially compressed after each SVO round to feed the accumulator path
     pub fn eval(&self, poly: &Poly<F>) -> (EF, Vec<Poly<EF>>) {
-        assert_eq!(self.num_vars(), poly.num_vars());
+        assert_eq!(self.num_variables(), poly.num_variables());
         let (compressed, partial_evals) = match self.var_order {
             VariableOrder::Prefix => {
                 let compressed = self.z_split.compress_suffix(poly);
-                let partial_evals = (1..=self.num_vars_svo())
+                let partial_evals = (1..=self.num_variables_svo())
                     .map(|i| {
                         let (_svo_active, svo_rest) = self.z_svo.split_at(i);
                         compressed.compress_suffix(&svo_rest, EF::ONE)
@@ -658,10 +658,10 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
             }
             VariableOrder::Suffix => {
                 let compressed = self.z_split.compress_prefix(poly);
-                let partial_evals = (1..=self.num_vars_svo())
+                let partial_evals = (1..=self.num_variables_svo())
                     .map(|i| {
                         let (svo_rest, _svo_active) =
-                            self.z_svo.split_at(self.z_svo.num_vars() - i);
+                            self.z_svo.split_at(self.z_svo.num_variables() - i);
                         compressed.compress_prefix(&svo_rest, EF::ONE)
                     })
                     .collect::<Vec<_>>();
@@ -677,22 +677,22 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     /// This is the depth of the SVO optimization.
     /// These coordinates are processed via the accumulator-based Lagrange
     /// interpolation path rather than the standard fold-and-sum path.
-    pub const fn num_vars_svo(&self) -> usize {
-        self.z_svo.num_vars()
+    pub const fn num_variables_svo(&self) -> usize {
+        self.z_svo.num_variables()
     }
 
     /// Returns the number of variables covered by the split eq tables.
     ///
     /// ```text
-    /// num_vars_split = inner_half_vars + outer_half_vars
+    /// num_variables_split = inner_half_vars + outer_half_vars
     /// ```
-    pub const fn num_vars_split(&self) -> usize {
-        self.z_split.num_vars()
+    pub const fn num_variables_split(&self) -> usize {
+        self.z_split.num_variables()
     }
 
     /// Returns the number of variables of the represented point.
-    pub const fn num_vars(&self) -> usize {
-        self.z_svo.num_vars() + self.z_split.num_vars()
+    pub const fn num_variables(&self) -> usize {
+        self.z_svo.num_variables() + self.z_split.num_variables()
     }
 
     /// Returns the SVO suffix of the represented point.
@@ -721,8 +721,8 @@ impl<F: Field, EF: ExtensionField<F>> SvoClaim<F, EF> {
     /// 3. Evaluates `poly` at `point`, storing the result in `eval`.
     /// 4. Precomputes accumulators for all `l` SVO rounds.
     pub fn new(point: &Point<EF>, l: usize, poly: &Poly<F>) -> Self {
-        let k = point.num_vars();
-        assert_eq!(k, poly.num_vars());
+        let k = point.num_variables();
+        assert_eq!(k, poly.num_variables());
         assert!(k > l);
         assert!(k >= 2 * log2_strict_usize(F::Packing::WIDTH));
 
@@ -766,8 +766,8 @@ impl<F: Field, EF: ExtensionField<F>> SvoClaim<F, EF> {
     /// ```text
     /// k = k_svo + k_split
     /// ```
-    pub const fn num_vars(&self) -> usize {
-        self.point.num_vars()
+    pub const fn num_variables(&self) -> usize {
+        self.point.num_variables()
     }
 
     /// Returns the precomputed accumulators for all SVO rounds.
@@ -834,8 +834,8 @@ mod test {
 
     /// Convenience wrapper: expand boolean evals onto {0, 1, inf}^l grid.
     fn evals_01inf_grid(boolean_evals: &[EF]) -> Vec<EF> {
-        let num_vars = log2_strict_usize(boolean_evals.len());
-        let output_len = 3usize.pow(num_vars as u32);
+        let num_variables = log2_strict_usize(boolean_evals.len());
+        let output_len = 3usize.pow(num_variables as u32);
         let mut output = vec![EF::ZERO; output_len];
         let mut scratch = vec![EF::ZERO; output_len];
         evals_01inf_grid_into(boolean_evals, &mut output, &mut scratch);
@@ -850,7 +850,7 @@ mod test {
     /// Combined with the fact that `f(0)` and `f(1)` are the original Boolean
     /// evaluations, this fully validates the grid.
     fn assert_evals_01inf_grid_correct(boolean_evals: &[EF]) {
-        let num_vars = log2_strict_usize(boolean_evals.len());
+        let num_variables = log2_strict_usize(boolean_evals.len());
         let grid = evals_01inf_grid(boolean_evals);
 
         // For every triple along the innermost variable (stride 1), check
@@ -863,7 +863,7 @@ mod test {
             assert_eq!(
                 v_inf,
                 v1 - v0,
-                "f(inf) != f(1)-f(0) at group {g}, num_vars={num_vars}"
+                "f(inf) != f(1)-f(0) at group {g}, num_variables={num_variables}"
             );
         }
     }
@@ -946,9 +946,9 @@ mod test {
     #[test]
     fn test_evals_01inf_grid_into_output_size() {
         // Verify the output length is 3^l for various numbers of variables.
-        for num_vars in 1..=5 {
-            let input_len = 1 << num_vars;
-            let output_len = 3usize.pow(num_vars as u32);
+        for num_variables in 1..=5 {
+            let input_len = 1 << num_variables;
+            let output_len = 3usize.pow(num_variables as u32);
 
             // Use all-zero input; we only care about sizes here.
             let input = vec![EF::ZERO; input_len];
@@ -967,9 +967,9 @@ mod test {
         // numbers of variables (since the initial buffer assignment differs).
         let mut rng = SmallRng::seed_from_u64(123);
 
-        for num_vars in 1..=4 {
-            let input: Vec<EF> = (0..1 << num_vars).map(|_| rng.random()).collect();
-            let output_len = 3usize.pow(num_vars as u32);
+        for num_variables in 1..=4 {
+            let input: Vec<EF> = (0..1 << num_variables).map(|_| rng.random()).collect();
+            let output_len = 3usize.pow(num_variables as u32);
             let mut output = vec![EF::ZERO; output_len];
             let mut scratch = vec![EF::ZERO; output_len];
 
@@ -979,7 +979,7 @@ mod test {
             let reference = evals_01inf_grid(&input);
             assert_eq!(
                 output, reference,
-                "ping-pong mismatch for num_vars={num_vars}"
+                "ping-pong mismatch for num_variables={num_variables}"
             );
         }
     }
@@ -994,15 +994,15 @@ mod test {
         // so the ternary index for a Boolean point is b_{l-1} + 3*b_{l-2} + ... + 3^{l-1}*b_0.
         let mut rng = SmallRng::seed_from_u64(77);
 
-        for num_vars in 1..=4 {
-            let input: Vec<EF> = (0..1 << num_vars).map(|_| rng.random()).collect();
+        for num_variables in 1..=4 {
+            let input: Vec<EF> = (0..1 << num_variables).map(|_| rng.random()).collect();
             let grid = evals_01inf_grid(&input);
 
             for (bool_idx, &input_val) in input.iter().enumerate() {
                 // Extract binary digits (low-var-first): b_0, b_1, ..., b_{l-1}.
-                let mut bits = Vec::with_capacity(num_vars);
+                let mut bits = Vec::with_capacity(num_variables);
                 let mut tmp = bool_idx;
-                for _ in 0..num_vars {
+                for _ in 0..num_variables {
                     bits.push(tmp & 1);
                     tmp >>= 1;
                 }
@@ -1018,7 +1018,7 @@ mod test {
 
                 assert_eq!(
                     grid[ternary_idx], input_val,
-                    "Boolean point mismatch at bool_idx={bool_idx}, num_vars={num_vars}"
+                    "Boolean point mismatch at bool_idx={bool_idx}, num_variables={num_variables}"
                 );
             }
         }
@@ -1033,9 +1033,9 @@ mod test {
         // The {0,1} slots hold c; any slot involving inf in any coordinate is 0.
         let c = EF::from_u32(99);
 
-        for num_vars in 0..=4 {
-            let input = vec![c; 1 << num_vars];
-            let output_len = 3usize.pow(num_vars as u32);
+        for num_variables in 0..=4 {
+            let input = vec![c; 1 << num_variables];
+            let output_len = 3usize.pow(num_variables as u32);
             let mut output = vec![EF::ZERO; output_len];
             let mut scratch = vec![EF::ZERO; output_len];
 
@@ -1047,7 +1047,7 @@ mod test {
                 let has_inf = {
                     let mut tmp = idx;
                     let mut found = false;
-                    for _ in 0..num_vars {
+                    for _ in 0..num_variables {
                         if tmp % 3 == 2 {
                             found = true;
                         }
@@ -1058,7 +1058,7 @@ mod test {
                 let expected = if has_inf { EF::ZERO } else { c };
                 assert_eq!(
                     val, expected,
-                    "constant polynomial mismatch at idx={idx}, num_vars={num_vars}"
+                    "constant polynomial mismatch at idx={idx}, num_variables={num_variables}"
                 );
             }
         }
@@ -1072,8 +1072,8 @@ mod test {
         // This follows from the extrapolation formula being linear,
         // but verify it concretely.
         let mut rng = SmallRng::seed_from_u64(55);
-        let num_vars = 3;
-        let n = 1 << num_vars;
+        let num_variables = 3;
+        let n = 1 << num_variables;
 
         let f: Vec<EF> = (0..n).map(|_| rng.random()).collect();
         let g: Vec<EF> = (0..n).map(|_| rng.random()).collect();
@@ -1102,11 +1102,11 @@ mod test {
 
     #[test]
     fn test_evals_01inf_grid_into_large_stride_branch_matches_naive() {
-        // `num_vars = 7` guarantees the final stage has `in_stride = 3^6 = 729`,
+        // `num_variables = 7` guarantees the final stage has `in_stride = 3^6 = 729`,
         // which takes the large-stride branch (`in_stride >= 256`).
-        let num_vars = 7;
+        let num_variables = 7;
         let mut rng = SmallRng::seed_from_u64(2025);
-        let evals: Vec<EF> = (0..1 << num_vars).map(|_| rng.random()).collect();
+        let evals: Vec<EF> = (0..1 << num_variables).map(|_| rng.random()).collect();
         assert_evals_01inf_grid_correct(evals.as_slice());
     }
 
@@ -1148,7 +1148,7 @@ mod test {
         let mut rng = SmallRng::seed_from_u64(1);
 
         let f = Poly::new((0..1 << k).map(|_| rng.random()).collect());
-        let z = Point::<EF>::rand(&mut rng, f.num_vars());
+        let z = Point::<EF>::rand(&mut rng, f.num_variables());
 
         for l in 1..k / 2 {
             let claim = SvoClaim::<F, EF>::new(&z, l, &f);
@@ -1183,7 +1183,7 @@ mod test {
             let poly = Poly::new((0..1 << k).map(|_| rng.random()).collect());
             // Use l=0 SVO depth so all variables go into the split eq tables.
             let split_eq = SvoClaim::<F, EF>::new(&point, 0, &poly);
-            assert_eq!(split_eq.num_vars(), k, "k() mismatch for k={k}");
+            assert_eq!(split_eq.num_variables(), k, "k() mismatch for k={k}");
         }
     }
 
@@ -1212,7 +1212,7 @@ mod test {
         let split_eq_n = SvoClaim::<F, EF>::new(&point_n, 0, &larger_poly);
         // The number of partial evals is 2^{k_svo} = 2^0 = 1 for l=0
         // This is implicitly tested by the constructor succeeding.
-        assert_eq!(split_eq_n.num_vars(), n);
+        assert_eq!(split_eq_n.num_variables(), n);
         let _ = split_eq;
     }
 
@@ -1292,12 +1292,12 @@ mod test {
     proptest! {
         /// Verify the {0, 1, inf}^l grid expansion matches naive MLE evaluation.
         #[test]
-        fn prop_evals_01inf_grid_matches_naive(num_vars in 1usize..=5) {
+        fn prop_evals_01inf_grid_matches_naive(num_variables in 1usize..=5) {
             // For each grid point in {0, 1, inf}^l, compare the fast grid-expansion
             // result against the naive approach of evaluating the multilinear
             // extension at that point by repeatedly fixing variables.
-            let mut rng = SmallRng::seed_from_u64(num_vars as u64);
-            let evals: Vec<EF> = (0..1 << num_vars).map(|_| rng.random()).collect();
+            let mut rng = SmallRng::seed_from_u64(num_variables as u64);
+            let evals: Vec<EF> = (0..1 << num_variables).map(|_| rng.random()).collect();
             assert_evals_01inf_grid_correct(evals.as_slice());
         }
 
@@ -1373,16 +1373,16 @@ mod test {
 
         /// Verify that grid expansion preserves the original Boolean-hypercube values.
         #[test]
-        fn prop_evals_01inf_grid_preserves_boolean_points(num_vars in 1usize..=6) {
-            let mut rng = SmallRng::seed_from_u64(num_vars as u64 + 1000);
-            let input: Vec<EF> = (0..1 << num_vars).map(|_| rng.random()).collect();
+        fn prop_evals_01inf_grid_preserves_boolean_points(num_variables in 1usize..=6) {
+            let mut rng = SmallRng::seed_from_u64(num_variables as u64 + 1000);
+            let input: Vec<EF> = (0..1 << num_variables).map(|_| rng.random()).collect();
             let grid = evals_01inf_grid(&input);
 
             for (bool_idx, &input_val) in input.iter().enumerate() {
                 // Extract binary digits (low-var-first): b_0, b_1, ..., b_{l-1}.
-                let mut bits = Vec::with_capacity(num_vars);
+                let mut bits = Vec::with_capacity(num_variables);
                 let mut tmp = bool_idx;
-                for _ in 0..num_vars {
+                for _ in 0..num_variables {
                     bits.push(tmp & 1);
                     tmp >>= 1;
                 }
@@ -1407,7 +1407,7 @@ mod test {
 
             let (e1, partial_evals) = svo_point.eval(poly);
             assert_eq!(e0, e1);
-            assert_eq!(partial_evals.len(), svo_point.num_vars_svo());
+            assert_eq!(partial_evals.len(), svo_point.num_variables_svo());
 
             match svo_point.var_order() {
                 VariableOrder::Prefix => {
@@ -1419,7 +1419,7 @@ mod test {
                 }
                 VariableOrder::Suffix => {
                     partial_evals.iter().enumerate().for_each(|(i, pe0)| {
-                        let (point_lo, point_hi) = point.split_at(point.num_vars() - i - 1);
+                        let (point_lo, point_hi) = point.split_at(point.num_variables() - i - 1);
                         assert_eq!(pe0, &poly.compress_prefix(&point_lo, EF::ONE));
                         assert_eq!(e0, pe0.eval_base(&point_hi));
                     });
@@ -1466,7 +1466,7 @@ mod test {
                     VariableOrder::Suffix => eq.compress_suffix(rs, scale),
                 };
 
-                let mut out = Poly::<EF>::zero(expected.num_vars());
+                let mut out = Poly::<EF>::zero(expected.num_variables());
                 svo_point.accumulate_into(out.as_mut_slice(), rs, scale);
                 assert_eq!(out, expected);
             };
@@ -1476,9 +1476,9 @@ mod test {
                 let eq = Poly::new_from_point(point.as_slice(), EF::ONE);
                 let expected = eq.compress_prefix(rs, scale);
                 let k_pack = log2_strict_usize(<<F as Field>::Packing as PackedValue>::WIDTH);
-                assert!(expected.num_vars() >= k_pack);
+                assert!(expected.num_variables() >= k_pack);
 
-                let mut out = Poly::<PackedEF>::zero(expected.num_vars() - k_pack);
+                let mut out = Poly::<PackedEF>::zero(expected.num_variables() - k_pack);
                 svo_point.accumulate_into_packed(out.as_mut_slice(), rs, scale);
                 let unpacked =
                     <PackedEF as PackedFieldExtension<F, EF>>::to_ext_iter(out.iter().copied())
@@ -1496,9 +1496,9 @@ mod test {
             let unpacked_prefix =
                 SvoPoint::<F, EF>::new_unpacked(l0, &point, VariableOrder::Prefix);
             assert_eq!(unpacked_prefix.var_order(), VariableOrder::Prefix);
-            assert_eq!(unpacked_prefix.num_vars(), k);
-            assert_eq!(unpacked_prefix.num_vars_svo(), l0);
-            assert_eq!(unpacked_prefix.num_vars_split(), k - l0);
+            assert_eq!(unpacked_prefix.num_variables(), k);
+            assert_eq!(unpacked_prefix.num_variables_svo(), l0);
+            assert_eq!(unpacked_prefix.num_variables_split(), k - l0);
             assert_accumulate_unpacked(&unpacked_prefix, &point, scale, &Point::rand(&mut rng, l0));
         }
 
@@ -1506,9 +1506,9 @@ mod test {
             let unpacked_suffix =
                 SvoPoint::<F, EF>::new_unpacked(l0, &point, VariableOrder::Suffix);
             assert_eq!(unpacked_suffix.var_order(), VariableOrder::Suffix);
-            assert_eq!(unpacked_suffix.num_vars(), k);
-            assert_eq!(unpacked_suffix.num_vars_svo(), l0);
-            assert_eq!(unpacked_suffix.num_vars_split(), k - l0);
+            assert_eq!(unpacked_suffix.num_variables(), k);
+            assert_eq!(unpacked_suffix.num_variables_svo(), l0);
+            assert_eq!(unpacked_suffix.num_variables_split(), k - l0);
             assert_accumulate_unpacked(&unpacked_suffix, &point, scale, &Point::rand(&mut rng, l0));
         }
 
@@ -1516,9 +1516,9 @@ mod test {
             if k - l0 >= k_pack {
                 let packed_prefix = SvoPoint::<F, EF>::new_packed(l0, &point);
                 assert_eq!(packed_prefix.var_order(), VariableOrder::Prefix);
-                assert_eq!(packed_prefix.num_vars(), k);
-                assert_eq!(packed_prefix.num_vars_svo(), l0);
-                assert_eq!(packed_prefix.num_vars_split(), k - l0);
+                assert_eq!(packed_prefix.num_variables(), k);
+                assert_eq!(packed_prefix.num_variables_svo(), l0);
+                assert_eq!(packed_prefix.num_variables_split(), k - l0);
                 assert_accumulate_packed(&packed_prefix, &point, scale, &Point::rand(&mut rng, l0));
             }
         }

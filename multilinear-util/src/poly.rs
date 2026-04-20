@@ -86,7 +86,7 @@ impl<F> Poly<F> {
     /// Returns the number of variables in the multilinear polynomial.
     #[must_use]
     #[inline]
-    pub const fn num_vars(&self) -> usize {
+    pub const fn num_variables(&self) -> usize {
         // Safety: The length is guaranteed to be a power of two.
         self.0.len().ilog2() as usize
     }
@@ -229,7 +229,7 @@ impl<Packed> Poly<Packed> {
     {
         // Allocate uninitialized output; every entry will be written by the unpacking.
         let mut out = Poly(unsafe {
-            uninitialized_vec(1 << (self.num_vars() + log2_strict_usize(F::Packing::WIDTH)))
+            uninitialized_vec(1 << (self.num_variables() + log2_strict_usize(F::Packing::WIDTH)))
         });
         self.unpack_into(&mut out);
         out
@@ -247,8 +247,8 @@ impl<Packed> Poly<Packed> {
         Packed: PackedFieldExtension<F, EF> + Copy,
     {
         assert_eq!(
-            out.num_vars(),
-            self.num_vars() + log2_strict_usize(F::Packing::WIDTH)
+            out.num_variables(),
+            self.num_variables() + log2_strict_usize(F::Packing::WIDTH)
         );
         // Expand each packed element into W scalar extension-field elements.
         out.0
@@ -301,7 +301,7 @@ impl<F: Field> Poly<F> {
     #[must_use]
     #[inline]
     pub fn eval_base<EF: ExtensionField<F>>(&self, point: &Point<EF>) -> EF {
-        if point.num_vars() < MLE_RECURSION_THRESHOLD {
+        if point.num_variables() < MLE_RECURSION_THRESHOLD {
             eval_multilinear_recursive(&self.0, point.as_slice())
         } else {
             SplitEq::new_packed(point, EF::ONE).eval_base(self)
@@ -324,7 +324,7 @@ impl<F: Field> Poly<F> {
     where
         F: ExtensionField<BaseField>,
     {
-        if point.num_vars() < MLE_RECURSION_THRESHOLD {
+        if point.num_variables() < MLE_RECURSION_THRESHOLD {
             eval_multilinear_recursive(&self.0, point.as_slice())
         } else {
             SplitEq::new_packed(point, F::ONE).eval_ext(self)
@@ -584,7 +584,7 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         A: ExtensionField<F>,
     {
         // Require at least W evaluations to fill one packed element.
-        assert!(self.num_vars() >= log2_strict_usize(F::Packing::WIDTH));
+        assert!(self.num_variables() >= log2_strict_usize(F::Packing::WIDTH));
         // Group W consecutive extension-field elements into each packed element.
         Poly(
             self.0
@@ -750,7 +750,7 @@ pub(crate) mod test {
         let evaluations_list = Poly::new(evals.clone());
 
         assert_eq!(evaluations_list.num_evals(), evals.len());
-        assert_eq!(evaluations_list.num_vars(), 2);
+        assert_eq!(evaluations_list.num_variables(), 2);
         assert_eq!(evaluations_list.as_slice(), &evals);
     }
 
@@ -818,7 +818,7 @@ pub(crate) mod test {
         for k in 0..5 {
             let poly = Poly::<F>::zero(k);
             assert_eq!(poly.num_evals(), 1 << k);
-            assert_eq!(poly.num_vars(), k);
+            assert_eq!(poly.num_variables(), k);
         }
     }
 
@@ -1165,9 +1165,9 @@ pub(crate) mod test {
             let fold_random = Point::new(fold_part.clone());
             let eval_point1 = Point::new([fold_part.clone(), eval_part.0.clone()].concat());
             let folded_evals = evals_list.compress_prefix(&fold_random, F::ONE);
-            assert_eq!(folded_evals.num_vars(), num_variables - k);
+            assert_eq!(folded_evals.num_variables(), num_variables - k);
             let folded_coeffs = evals_list.compress_prefix(&fold_random, F::ONE);
-            assert_eq!(folded_coeffs.num_vars(), num_variables - k);
+            assert_eq!(folded_coeffs.num_variables(), num_variables - k);
             assert_eq!(
                 folded_evals.eval_base(&eval_part),
                 evals_list.eval_base(&eval_point1)
@@ -1233,7 +1233,7 @@ pub(crate) mod test {
         let point = Point::<F>::new(vec![]);
         let value = F::from_u64(42);
         let evals_list = Poly::new_from_point(point.as_slice(), value);
-        assert_eq!(evals_list.num_vars(), 0);
+        assert_eq!(evals_list.num_variables(), 0);
         assert_eq!(evals_list.as_slice(), &[value]);
         assert_eq!(evals_list.as_constant(), Some(value));
     }
@@ -1245,7 +1245,7 @@ pub(crate) mod test {
         let value = F::from_u64(3);
         let evals_list = Poly::new_from_point(point.as_slice(), value);
         let expected = vec![value * (F::ONE - p0), value * p0];
-        assert_eq!(evals_list.num_vars(), 1);
+        assert_eq!(evals_list.num_variables(), 1);
         assert_eq!(evals_list.as_slice(), &expected);
     }
 
@@ -1265,7 +1265,7 @@ pub(crate) mod test {
             let term2 = if b2 == 1 { p[2] } else { F::ONE - p[2] };
             expected.push(value * term0 * term1 * term2);
         }
-        assert_eq!(evals_list.num_vars(), 3);
+        assert_eq!(evals_list.num_variables(), 3);
         assert_eq!(evals_list.as_slice(), &expected);
     }
 
@@ -1273,14 +1273,14 @@ pub(crate) mod test {
     fn test_as_constant_for_constant_poly() {
         let constant_value = F::from_u64(42);
         let evals = Poly::new(vec![constant_value]);
-        assert_eq!(evals.num_vars(), 0);
+        assert_eq!(evals.num_variables(), 0);
         assert_eq!(evals.as_constant(), Some(constant_value));
     }
 
     #[test]
     fn test_as_constant_for_non_constant_poly() {
         let evals = Poly::new(vec![F::ONE, F::ZERO, F::ONE, F::ZERO]);
-        assert_ne!(evals.num_vars(), 0);
+        assert_ne!(evals.num_variables(), 0);
         assert_eq!(evals.as_constant(), None);
     }
 
@@ -1310,10 +1310,10 @@ pub(crate) mod test {
             r * (p_110 - p_010) + p_010,
             r * (p_111 - p_011) + p_011,
         ];
-        assert_eq!(evals_list.num_vars(), 3);
+        assert_eq!(evals_list.num_variables(), 3);
         assert_eq!(evals_list.num_evals(), 8);
         evals_list.fix_prefix_var_mut(r);
-        assert_eq!(evals_list.num_vars(), 2);
+        assert_eq!(evals_list.num_variables(), 2);
         assert_eq!(evals_list.num_evals(), 4);
         assert_eq!(evals_list.as_slice(), &expected);
     }
@@ -1329,9 +1329,9 @@ pub(crate) mod test {
         let initial_evals: Vec<F> = (0..num_evals).map(|i| F::from_usize(i + 1)).collect();
         let mut evals_list = Poly::new(initial_evals);
         let r = F::from_u64(3);
-        let num_variables_before = evals_list.num_vars();
+        let num_variables_before = evals_list.num_variables();
         evals_list.fix_prefix_var_mut(r);
-        assert_eq!(evals_list.num_vars(), num_variables_before - 1);
+        assert_eq!(evals_list.num_variables(), num_variables_before - 1);
         assert_eq!(evals_list.num_evals(), mid);
         assert_eq!(
             evals_list.as_slice()[0],
@@ -1351,7 +1351,7 @@ pub(crate) mod test {
         for &r in &challenges {
             evals_list.fix_prefix_var_mut(r);
         }
-        assert_eq!(evals_list.num_vars(), 1);
+        assert_eq!(evals_list.num_variables(), 1);
         assert_eq!(evals_list.num_evals(), 2);
     }
 
@@ -1362,7 +1362,7 @@ pub(crate) mod test {
         let mut evals_list = Poly::new(vec![p_0, p_1]);
         let r = F::from_u64(7);
         evals_list.fix_prefix_var_mut(r);
-        assert_eq!(evals_list.num_vars(), 0);
+        assert_eq!(evals_list.num_variables(), 0);
         assert_eq!(evals_list.num_evals(), 1);
         let expected = r * (p_1 - p_0) + p_0;
         assert_eq!(evals_list.as_slice(), vec![expected]);
@@ -1418,7 +1418,7 @@ pub(crate) mod test {
             let mut list = Poly::new(evals);
             list.fix_prefix_var_mut(r);
 
-            prop_assert_eq!(list.num_vars(), n - 1);
+            prop_assert_eq!(list.num_variables(), n - 1);
             prop_assert_eq!(list.num_evals(), num_evals / 2);
         }
 
@@ -1462,7 +1462,7 @@ pub(crate) mod test {
                 list.fix_prefix_var_mut(r);
             }
 
-            prop_assert_eq!(list.num_vars(), n - actual_rounds);
+            prop_assert_eq!(list.num_variables(), n - actual_rounds);
             prop_assert_eq!(list.num_evals(), 1 << (n - actual_rounds));
         }
     }
@@ -1605,7 +1605,7 @@ pub(crate) mod test {
     }
 
     #[test]
-    #[should_panic(expected = "assertion failed: self.num_vars() <= poly.num_vars()")]
+    #[should_panic(expected = "assertion failed: self.num_variables() <= poly.num_variables()")]
     fn test_fold_batch_too_many_challenges() {
         let poly = Poly::new(vec![
             F::from_u64(1),
@@ -1623,7 +1623,7 @@ pub(crate) mod test {
         for k in 1..=20 {
             let poly = Poly::<F>::rand(&mut rng, k);
             assert_eq!(poly.num_evals(), 1 << k);
-            assert_eq!(poly.num_vars(), k);
+            assert_eq!(poly.num_variables(), k);
             let point: Point<EF> = Point::rand(&mut rng, k);
             assert_eq!(
                 eval_reference(poly.as_slice(), point.as_slice()),
@@ -1638,7 +1638,7 @@ pub(crate) mod test {
         for k in 1..=20 {
             let poly = Poly::<EF>::rand(&mut rng, k);
             assert_eq!(poly.num_evals(), 1 << k);
-            assert_eq!(poly.num_vars(), k);
+            assert_eq!(poly.num_variables(), k);
             let point: Point<EF> = Point::rand(&mut rng, k);
 
             assert_eq!(
@@ -1661,12 +1661,12 @@ pub(crate) mod test {
         for k in k_pack..=20 {
             let poly = Poly::<EF>::rand(&mut rng, k);
             assert_eq!(poly.num_evals(), 1 << k);
-            assert_eq!(poly.num_vars(), k);
+            assert_eq!(poly.num_variables(), k);
 
             let point: Point<EF> = Point::rand(&mut rng, k);
             let packed_poly = poly.pack::<F, EF>();
             assert_eq!(packed_poly.num_evals(), 1 << (k - k_pack));
-            assert_eq!(packed_poly.num_vars(), k - k_pack);
+            assert_eq!(packed_poly.num_variables(), k - k_pack);
 
             assert_eq!(
                 eval_reference(poly.as_slice(), point.as_slice()),
@@ -1739,7 +1739,7 @@ pub(crate) mod test {
             let scalar = poly.fix_prefix_var::<EF>(r);
             let packed = poly.fix_prefix_var_to_packed::<EF>(r).unpack::<F, EF>();
 
-            assert_eq!(scalar.num_vars(), packed.num_vars());
+            assert_eq!(scalar.num_variables(), packed.num_variables());
             assert_eq!(scalar, packed);
         }
     }
@@ -1832,14 +1832,14 @@ pub(crate) mod test {
                     compressed0.fix_prefix_var_mut(zi);
                 }
                 let compressed1 = poly.compress_prefix(&point, EF::ONE);
-                assert_eq!(compressed0.num_vars(), compressed1.num_vars());
+                assert_eq!(compressed0.num_variables(), compressed1.num_variables());
                 assert_eq!(compressed0, compressed1);
 
                 if k > point_k + log2_strict_usize(PackedF::WIDTH) {
                     let compressed1 = poly
                         .compress_prefix_to_packed(&point, EF::ONE)
                         .unpack::<F, EF>();
-                    assert_eq!(compressed0.num_vars(), compressed1.num_vars());
+                    assert_eq!(compressed0.num_variables(), compressed1.num_variables());
                     assert_eq!(compressed0, compressed1);
                 }
             }
@@ -1860,7 +1860,7 @@ pub(crate) mod test {
                     compressed0.fix_suffix_var_mut(zi);
                 }
                 let compressed1 = poly.compress_suffix(&point, EF::ONE);
-                assert_eq!(compressed0.num_vars(), compressed1.num_vars());
+                assert_eq!(compressed0.num_variables(), compressed1.num_variables());
                 assert_eq!(compressed0, compressed1);
             }
         }

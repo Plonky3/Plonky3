@@ -24,13 +24,13 @@ where
 
     /// Construct a `Point` corresponding to a vertex of the hypercube.
     ///
-    /// Returns `value` encoded big-endian: bit `num_vars - 1 - i` lands at coordinate `i`.
+    /// Returns `value` encoded big-endian: bit `num_variables - 1 - i` lands at coordinate `i`.
     #[must_use]
-    pub fn hypercube(value: usize, num_vars: usize) -> Self {
-        assert!(value < (1 << num_vars));
+    pub fn hypercube(value: usize, num_variables: usize) -> Self {
+        assert!(value < (1 << num_variables));
         Self(
-            (0..num_vars)
-                .map(|i| F::from_bool((value >> (num_vars - 1 - i)) & 1 == 1))
+            (0..num_variables)
+                .map(|i| F::from_bool((value >> (num_variables - 1 - i)) & 1 == 1))
                 .collect(),
         )
     }
@@ -38,7 +38,7 @@ where
     /// Returns the number of variables (dimension `n`).
     #[inline]
     #[must_use]
-    pub const fn num_vars(&self) -> usize {
+    pub const fn num_variables(&self) -> usize {
         self.0.len()
     }
 
@@ -168,7 +168,11 @@ where
 
     /// Transposes points so same-index variables are aligned in rows.
     pub fn transpose(points: &[Self], rev_order: bool) -> RowMajorMatrix<F> {
-        let k = points.iter().map(Self::num_vars).all_equal_value().unwrap();
+        let k = points
+            .iter()
+            .map(Self::num_variables)
+            .all_equal_value()
+            .unwrap();
         let n = points.len();
         let mut flat = F::zero_vec(k * n);
         points.iter().enumerate().for_each(|(i, point)| {
@@ -240,7 +244,7 @@ mod tests {
     #[test]
     fn test_num_variables() {
         let point = Point::<F>(vec![F::from_u64(1), F::from_u64(0), F::from_u64(1)]);
-        assert_eq!(point.num_vars(), 3);
+        assert_eq!(point.num_variables(), 3);
     }
 
     #[test]
@@ -560,13 +564,13 @@ mod tests {
     fn test_hypercube_zero_vars_returns_empty_point() {
         // {0,1}^0 has one point: the empty tuple.
         let point = Point::<F>::hypercube(0, 0);
-        assert_eq!(point.num_vars(), 0);
+        assert_eq!(point.num_variables(), 0);
         assert_eq!(point.as_slice(), &[] as &[F]);
     }
 
     #[test]
     fn test_hypercube_single_bit_covers_both_values() {
-        // num_vars = 1: 0 → [ZERO], 1 → [ONE].
+        // num_variables = 1: 0 → [ZERO], 1 → [ONE].
         assert_eq!(Point::<F>::hypercube(0, 1).as_slice(), &[F::ZERO]);
         assert_eq!(Point::<F>::hypercube(1, 1).as_slice(), &[F::ONE]);
     }
@@ -585,10 +589,10 @@ mod tests {
     #[test]
     fn test_hypercube_max_value_is_all_ones() {
         // value = (1 << n) - 1 → every bit is 1 → every coord is ONE.
-        for num_vars in 1..=6 {
-            let max_value = (1 << num_vars) - 1;
-            let point = Point::<F>::hypercube(max_value, num_vars);
-            assert_eq!(point.as_slice(), vec![F::ONE; num_vars].as_slice());
+        for num_variables in 1..=6 {
+            let max_value = (1 << num_variables) - 1;
+            let point = Point::<F>::hypercube(max_value, num_variables);
+            assert_eq!(point.as_slice(), vec![F::ONE; num_variables].as_slice());
         }
     }
 
@@ -597,16 +601,16 @@ mod tests {
         // Invariant: evaluating a lex-stored poly at the hypercube point
         // for index i returns the i-th stored element.
         use crate::poly::Poly;
-        let num_vars = 3;
+        let num_variables = 3;
 
         // i-th eval = i, so lookups are identifiable by inspection.
-        let evals: Vec<F> = (0..(1 << num_vars))
+        let evals: Vec<F> = (0..(1 << num_variables))
             .map(|i| F::from_u64(i as u64))
             .collect();
         let poly = Poly::new(evals.clone());
 
         for (i, &expected) in evals.iter().enumerate() {
-            let point = Point::<F>::hypercube(i, num_vars);
+            let point = Point::<F>::hypercube(i, num_variables);
             assert_eq!(poly.eval_base(&point), expected);
         }
     }
@@ -614,21 +618,21 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_hypercube_panics_on_out_of_range_value() {
-        // Precondition: value < 1 << num_vars.
+        // Precondition: value < 1 << num_variables.
         // Mutation: first out-of-range value.
         let _ = Point::<F>::hypercube(1 << 3, 3);
     }
 
     proptest! {
         #[test]
-        fn proptest_hypercube_shape_and_values(num_vars in 0usize..=8, seed in any::<u64>()) {
+        fn proptest_hypercube_shape_and_values(num_variables in 0usize..=8, seed in any::<u64>()) {
             // Invariants:
-            //   1. length == num_vars.
+            //   1. length == num_variables.
             //   2. every coord ∈ {ZERO, ONE}.
-            let value = if num_vars == 0 { 0 } else { (seed as usize) % (1 << num_vars) };
-            let point = Point::<F>::hypercube(value, num_vars);
+            let value = if num_variables == 0 { 0 } else { (seed as usize) % (1 << num_variables) };
+            let point = Point::<F>::hypercube(value, num_variables);
 
-            prop_assert_eq!(point.num_vars(), num_vars);
+            prop_assert_eq!(point.num_variables(), num_variables);
             for &c in point.as_slice() {
                 prop_assert!(c == F::ZERO || c == F::ONE);
             }
@@ -636,15 +640,15 @@ mod tests {
 
         #[test]
         fn proptest_hypercube_matches_bit_decomposition(
-            num_vars in 1usize..=10,
+            num_variables in 1usize..=10,
             seed in any::<u64>(),
         ) {
             // Invariant: coord i == bit (n - 1 - i) of value.
-            let value = (seed as usize) % (1 << num_vars);
-            let point = Point::<F>::hypercube(value, num_vars);
+            let value = (seed as usize) % (1 << num_variables);
+            let point = Point::<F>::hypercube(value, num_variables);
 
             for (i, &coord) in point.as_slice().iter().enumerate() {
-                let bit = (value >> (num_vars - 1 - i)) & 1;
+                let bit = (value >> (num_variables - 1 - i)) & 1;
                 let expected = if bit == 1 { F::ONE } else { F::ZERO };
                 prop_assert_eq!(coord, expected);
             }

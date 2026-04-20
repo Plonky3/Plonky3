@@ -50,7 +50,7 @@ impl SingleSumcheck {
         // into a single weight polynomial via random linear combination.
         let alpha: EF = challenger.sample_algebra_element();
 
-        let k = poly.num_vars();
+        let k = poly.num_variables();
 
         // Initialize a zero weight polynomial with the same number of variables.
         let mut weights = Poly::zero(k);
@@ -140,7 +140,7 @@ impl SingleSumcheck {
         // Sample a batching challenge for combining multiple constraints.
         let alpha: EF = challenger.sample_algebra_element();
 
-        let k = poly.num_vars();
+        let k = poly.num_variables();
 
         // The packed representation absorbs the last k_pack variables into SIMD lanes.
         // So the weight polynomial needs only 2^{k - k_pack} packed entries.
@@ -243,7 +243,7 @@ impl SingleSumcheck {
         // Sample the batching challenge for combining multiple split eq constraints.
         let alpha: EF = challenger.sample_algebra_element();
 
-        let k = poly.num_vars();
+        let k = poly.num_variables();
         assert!(
             folding_factor <= k,
             "number of rounds must be less than or equal to instance size"
@@ -251,7 +251,7 @@ impl SingleSumcheck {
 
         // All constraints must operate over the same number of variables.
         for statement in statements {
-            assert_eq!(statement.num_vars(), k);
+            assert_eq!(statement.num_variables(), k);
         }
 
         let k_pack = log2_strict_usize(F::Packing::WIDTH);
@@ -316,7 +316,7 @@ impl SingleSumcheck {
 
         // Materialize the weight polynomial in packed form by combining all split eq
         // constraints into a single packed weight array.
-        let mut weights = Poly::<EF::ExtensionPacking>::zero(poly.num_vars());
+        let mut weights = Poly::<EF::ExtensionPacking>::zero(poly.num_variables());
         statements
             .iter()
             .zip(alpha.powers())

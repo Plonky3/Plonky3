@@ -152,7 +152,7 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         weights: Poly<EF::ExtensionPacking>,
     ) -> Self {
         // Paired polynomials must share the same variable space.
-        assert_eq!(evals.num_vars(), weights.num_vars());
+        assert_eq!(evals.num_variables(), weights.num_variables());
 
         // Wrap the packed pair; the order tag fits in one byte.
         let mut poly = Self {
@@ -192,19 +192,19 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     ///
     /// - **Packed**: `stored_variables + log_2(SIMD_WIDTH)`
     /// - **Small**: `stored_variables`
-    pub fn num_vars(&self) -> usize {
+    pub fn num_variables(&self) -> usize {
         match &self.inner {
             MaybePacked::Packed { evals, weights } => {
                 // Get the number of variables in the packed representation.
-                let k = evals.num_vars();
-                assert_eq!(k, weights.num_vars());
+                let k = evals.num_variables();
+                assert_eq!(k, weights.num_variables());
 
                 // Add back the variables absorbed by SIMD packing.
                 k + log2_strict_usize(F::Packing::WIDTH)
             }
             MaybePacked::Unpacked { evals, weights } => {
-                let k = evals.num_vars();
-                assert_eq!(k, weights.num_vars());
+                let k = evals.num_variables();
+                assert_eq!(k, weights.num_variables());
                 k
             }
         }
@@ -283,8 +283,8 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     fn transition(&mut self) {
         if let MaybePacked::Packed { evals, weights } = &mut self.inner {
             // Check if we've folded down to a single packed element.
-            let k = evals.num_vars();
-            assert_eq!(k, weights.num_vars());
+            let k = evals.num_variables();
+            assert_eq!(k, weights.num_variables());
 
             if k == 0 {
                 // Unpack the single packed element into SIMD_WIDTH scalar elements.
@@ -490,7 +490,7 @@ mod tests {
         let poly = ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, evals, weights);
 
         // The logical number of variables should be 3 (since 2^3 = 8).
-        assert_eq!(poly.num_vars(), 3);
+        assert_eq!(poly.num_variables(), 3);
     }
 
     #[test]
@@ -672,8 +672,8 @@ mod tests {
 
         // Start with simd_log + 2 variables (e.g., if simd_width=16, start with 6 vars = 64 evals).
         // This gives us 4 packed elements initially (2 stored variables).
-        let num_vars = simd_log + 2;
-        let num_evals = 1 << num_vars;
+        let num_variables = simd_log + 2;
+        let num_evals = 1 << num_variables;
 
         // Create scalar evaluations and pack them
         let evals_scalar = vec![EF::ONE; num_evals];
@@ -713,7 +713,7 @@ mod tests {
                 panic!("Expected Packed variant initially");
             }
         }
-        assert_eq!(poly.num_vars(), num_vars);
+        assert_eq!(poly.num_variables(), num_variables);
 
         // Fold twice to reduce to simd_log variables (threshold for transition).
         for _ in 0..2 {
@@ -733,7 +733,7 @@ mod tests {
                 panic!("Expected Small variant after transition");
             }
         }
-        assert_eq!(poly.num_vars(), simd_log);
+        assert_eq!(poly.num_variables(), simd_log);
     }
 
     #[test]
@@ -774,7 +774,7 @@ mod tests {
         }
 
         // Should have log_2(simd_width) variables.
-        assert_eq!(poly.num_vars(), log2_strict_usize(simd_width));
+        assert_eq!(poly.num_variables(), log2_strict_usize(simd_width));
     }
 
     #[test]
@@ -830,8 +830,8 @@ mod tests {
         // - Number of variables decreases by 1
         // - dot_product() == sum
         let mut rng = SmallRng::seed_from_u64(123);
-        let num_vars = 4;
-        let num_evals = 1 << num_vars;
+        let num_variables = 4;
+        let num_evals = 1 << num_variables;
 
         let evals: Vec<EF> = (0..num_evals).map(|_| EF::from_u64(rng.random())).collect();
         let weights: Vec<EF> = (0..num_evals).map(|_| EF::from_u64(rng.random())).collect();
@@ -847,8 +847,8 @@ mod tests {
         let mut challenger = make_challenger();
 
         // Perform all rounds except the last (need at least 1 evaluation left).
-        for expected_vars in (1..=num_vars).rev() {
-            assert_eq!(poly.num_vars(), expected_vars);
+        for expected_vars in (1..=num_variables).rev() {
+            assert_eq!(poly.num_variables(), expected_vars);
 
             let _ = poly.round(&mut sumcheck_data, &mut challenger, &mut sum, 0);
 
@@ -857,7 +857,7 @@ mod tests {
         }
 
         // After all rounds, should have 0 variables (1 evaluation).
-        assert_eq!(poly.num_vars(), 0);
+        assert_eq!(poly.num_variables(), 0);
     }
 
     #[test]
@@ -866,8 +866,8 @@ mod tests {
         type EP = <EF as ExtensionField<F>>::ExtensionPacking;
 
         let simd_width = <F as Field>::Packing::WIDTH;
-        let num_vars = log2_strict_usize(simd_width) + 1;
-        let num_evals = 1 << num_vars;
+        let num_variables = log2_strict_usize(simd_width) + 1;
+        let num_evals = 1 << num_variables;
 
         let mut rng = SmallRng::seed_from_u64(456);
         let evals_scalar: Vec<EF> = (0..num_evals).map(|_| EF::from_u64(rng.random())).collect();
@@ -937,7 +937,7 @@ mod tests {
         use crate::constraints::Constraint;
         use crate::constraints::statement::EqStatement;
 
-        let num_vars = 2;
+        let num_variables = 2;
         let evals = Poly::new(vec![EF::ONE; 4]);
         let weights = Poly::new(vec![EF::ONE; 4]);
 
@@ -949,7 +949,7 @@ mod tests {
         assert_eq!(initial_dot, EF::from_u64(4));
 
         // Create an EqStatement with one constraint.
-        let mut eq_statement = EqStatement::initialize(num_vars);
+        let mut eq_statement = EqStatement::initialize(num_variables);
         let point = Point::new(vec![EF::from_u64(2), EF::from_u64(3)]);
         let eval = evals.eval_ext::<F>(&point);
         eq_statement.add_evaluated_constraint(point, eval);
@@ -1005,8 +1005,8 @@ mod tests {
         #[test]
         fn prop_dot_product_consistency(seed in 0u64..1000) {
             let mut rng = SmallRng::seed_from_u64(seed);
-            let num_vars = 3;
-            let num_evals = 1 << num_vars;
+            let num_variables = 3;
+            let num_evals = 1 << num_variables;
 
             let evals: Vec<EF> = (0..num_evals)
                 .map(|_| EF::from_u64(u64::from(rng.random::<u32>())))
@@ -1034,8 +1034,8 @@ mod tests {
         #[test]
         fn prop_compress_maintains_invariant(seed in 0u64..1000, challenge_val in 1u64..100) {
             let mut rng = SmallRng::seed_from_u64(seed);
-            let num_vars = 3;
-            let num_evals = 1 << num_vars;
+            let num_variables = 3;
+            let num_evals = 1 << num_variables;
 
             let evals: Vec<EF> = (0..num_evals)
                 .map(|_| EF::from_u64(u64::from(rng.random::<u32>())))
@@ -1080,8 +1080,8 @@ mod tests {
         #[test]
         fn prop_round_maintains_invariant(seed in 0u64..1000) {
             let mut rng = SmallRng::seed_from_u64(seed);
-            let num_vars = 4;
-            let num_evals = 1 << num_vars;
+            let num_variables = 4;
+            let num_evals = 1 << num_variables;
 
             let evals: Vec<EF> = (0..num_evals)
                 .map(|_| EF::from_u64(u64::from(rng.random::<u32>())))

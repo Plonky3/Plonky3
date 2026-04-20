@@ -53,7 +53,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// since there would be fewer evaluations than SIMD lanes.
     pub(super) fn new_packed(point: &Point<EF>) -> Self {
         // Check whether there are enough variables to fill at least one packed element.
-        if point.num_vars() >= log2_strict_usize(F::Packing::WIDTH) {
+        if point.num_variables() >= log2_strict_usize(F::Packing::WIDTH) {
             Self::Packed(Poly::new_packed_from_point(point.as_slice(), EF::ONE))
         } else {
             // Not enough evaluations to pack; fall back to scalar.
@@ -65,12 +65,12 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     ///
     /// For packed tables, this accounts for the log_2(W) variables
     /// absorbed into each SIMD lane.
-    pub const fn num_vars(&self) -> usize {
+    pub const fn num_variables(&self) -> usize {
         match self {
-            Self::Unpacked(poly) => poly.num_vars(),
+            Self::Unpacked(poly) => poly.num_variables(),
             // Packed polynomial has k - log_2(W) stored entries,
             // but represents k total variables.
-            Self::Packed(poly) => poly.num_vars() + log2_strict_usize(F::Packing::WIDTH),
+            Self::Packed(poly) => poly.num_variables() + log2_strict_usize(F::Packing::WIDTH),
         }
     }
 
@@ -331,7 +331,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     ///
     /// # Arguments
     ///
-    /// - chunk: base-field slice of size 2^{num_vars}, representing one output row
+    /// - chunk: base-field slice of size 2^{num_variables}, representing one output row
     /// - eq0: the prefix-half eq table weights
     pub(super) fn compress_suffix_dot(&self, chunk: &[F], eq0: &Poly<EF>) -> EF {
         match self {
@@ -407,7 +407,7 @@ mod tests {
             let eq = EqMaybePacked::<F, EF>::new_packed(&point);
             // Should be scalar despite requesting packed.
             assert!(matches!(eq, EqMaybePacked::Unpacked(_)));
-            assert_eq!(eq.num_vars(), k);
+            assert_eq!(eq.num_variables(), k);
         }
     }
 
@@ -420,7 +420,7 @@ mod tests {
             let eq = EqMaybePacked::<F, EF>::new_packed(&point);
             // Should be in packed form.
             assert!(matches!(eq, EqMaybePacked::Packed(_)));
-            assert_eq!(eq.num_vars(), k);
+            assert_eq!(eq.num_variables(), k);
         }
     }
 
@@ -432,7 +432,7 @@ mod tests {
             let point = Point::<EF>::rand(&mut rng, k);
             let eq = EqMaybePacked::<F, EF>::new_unpacked(&point);
             assert!(matches!(eq, EqMaybePacked::Unpacked(_)));
-            assert_eq!(eq.num_vars(), k);
+            assert_eq!(eq.num_variables(), k);
         }
     }
 
@@ -718,7 +718,7 @@ mod tests {
         // A zero-variable eq table has exactly one entry (the empty product = 1).
         let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0), 0);
         let eq = EqMaybePacked::<F, EF>::new_unpacked(&point);
-        assert_eq!(eq.num_vars(), 0);
+        assert_eq!(eq.num_variables(), 0);
         assert_eq!(eq.scalar_chunk_size(), 1);
         // Dot with a single element should return that element times 1.
         assert_eq!(eq.dot_with_base(&[F::TWO]), EF::TWO);
