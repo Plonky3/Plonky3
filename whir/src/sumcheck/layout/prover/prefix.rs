@@ -11,9 +11,7 @@ use p3_multilinear_util::split_eq::SplitEq;
 use p3_util::log2_strict_usize;
 
 use super::util::traverse_openings;
-use crate::sumcheck::layout::opening::{
-    MultiClaim, Opening, PrefixMultiClaim, PrefixVirtualClaim,
-};
+use crate::sumcheck::layout::opening::{MultiClaim, Opening, PrefixMultiClaim, PrefixVirtualClaim};
 use crate::sumcheck::layout::witness::{Table, TablePlacement};
 use crate::sumcheck::product_polynomial::ProductPolynomial;
 use crate::sumcheck::strategy::{PrefixSumcheck, SumcheckProver, SumcheckStrategy};
@@ -28,19 +26,19 @@ use crate::sumcheck::{Claim, SumcheckData, extrapolate_01inf};
 #[derive(Debug, Clone)]
 pub struct PrefixProver<F: Field, EF: ExtensionField<F>> {
     /// Source tables behind the stacked polynomial.
-    pub(in crate::sumcheck::layout) tables: Vec<Table<F>>,
+    pub(crate) tables: Vec<Table<F>>,
     /// Per-table placement metadata inside the stacked polynomial.
-    pub(in crate::sumcheck::layout) placements: Vec<TablePlacement>,
+    pub(crate) placements: Vec<TablePlacement>,
     /// Number of variables of the stacked polynomial.
-    pub(in crate::sumcheck::layout) num_vars: usize,
+    pub(crate) num_vars: usize,
     /// Number of preprocessing rounds consumed before residual sumcheck.
-    pub(in crate::sumcheck::layout) folding: usize,
+    pub(crate) folding: usize,
     /// Stacked committed polynomial.
-    pub(in crate::sumcheck::layout) poly: Poly<F>,
+    pub(crate) poly: Poly<F>,
     /// Concrete claims recorded per source table.
-    pub(in crate::sumcheck::layout) claim_map: Vec<Vec<PrefixMultiClaim<F, EF>>>,
+    pub(crate) claim_map: Vec<Vec<PrefixMultiClaim<F, EF>>>,
     /// Virtual claims sampled directly on the stacked polynomial.
-    pub(in crate::sumcheck::layout) virtual_claims: Vec<PrefixVirtualClaim<F, EF>>,
+    pub(crate) virtual_claims: Vec<PrefixVirtualClaim<F, EF>>,
 }
 
 impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {

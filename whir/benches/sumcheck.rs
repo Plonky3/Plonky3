@@ -52,10 +52,13 @@ fn bench_sumcheck_prover(c: &mut Criterion) {
     ];
 
     for &(num_vars, folding_factor, num_constraints, label) in &cases {
-        let classic_stmt =
-            make_statement(num_vars, folding_factor, num_constraints, SumcheckMode::Classic);
-        let svo_stmt =
-            make_statement(num_vars, folding_factor, num_constraints, SumcheckMode::Svo);
+        let classic_stmt = make_statement(
+            num_vars,
+            folding_factor,
+            num_constraints,
+            SumcheckMode::Classic,
+        );
+        let svo_stmt = make_statement(num_vars, folding_factor, num_constraints, SumcheckMode::Svo);
 
         group.bench_with_input(BenchmarkId::new("classic", label), &label, |b, _| {
             b.iter(|| {

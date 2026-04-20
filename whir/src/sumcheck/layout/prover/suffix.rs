@@ -29,19 +29,19 @@ use crate::sumcheck::{Claim, SumcheckData, extrapolate_01inf};
 #[derive(Debug, Clone)]
 pub struct SuffixProver<F: Field, EF: ExtensionField<F>> {
     /// Source tables behind the stacked polynomial.
-    pub(in crate::sumcheck::layout) tables: Vec<Table<F>>,
+    pub(crate) tables: Vec<Table<F>>,
     /// Per-table placement metadata inside the stacked polynomial.
-    pub(in crate::sumcheck::layout) placements: Vec<TablePlacement>,
+    pub(crate) placements: Vec<TablePlacement>,
     /// Number of variables of the stacked polynomial.
-    pub(in crate::sumcheck::layout) num_vars: usize,
+    pub(crate) num_vars: usize,
     /// Number of preprocessing rounds consumed before residual sumcheck.
-    pub(in crate::sumcheck::layout) folding: usize,
+    pub(crate) folding: usize,
     /// Stacked committed polynomial.
-    pub(in crate::sumcheck::layout) poly: Poly<F>,
+    pub(crate) poly: Poly<F>,
     /// Concrete claims recorded per source table (carries per-round SVO partials).
-    pub(in crate::sumcheck::layout) claim_map: Vec<Vec<SuffixMultiClaim<F, EF>>>,
+    pub(crate) claim_map: Vec<Vec<SuffixMultiClaim<F, EF>>>,
     /// Virtual claims carrying precomputed SVO accumulators.
-    pub(in crate::sumcheck::layout) virtual_claims: Vec<SuffixVirtualClaim<F, EF>>,
+    pub(crate) virtual_claims: Vec<SuffixVirtualClaim<F, EF>>,
 }
 
 impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
