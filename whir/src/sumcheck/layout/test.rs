@@ -16,7 +16,7 @@ use crate::sumcheck::layout::{
 use crate::sumcheck::strategy::VariableOrder;
 use crate::sumcheck::tests::*;
 
-fn run_test<L: LayoutStrategy>() {
+fn run_test<L: LayoutStrategy>(calls: &[(usize, &[usize])]) {
     let folding = 4;
     let pow_bits = 10;
 
@@ -58,11 +58,10 @@ fn run_test<L: LayoutStrategy>() {
         opening_claims.push((table_idx, polys.to_vec(), evals));
     };
 
-    // Evaluate columns
-    apply_shared_point(&mut layout, &mut prover_challenger, 0, &[0, 1]);
-    apply_shared_point(&mut layout, &mut prover_challenger, 0, &[0]);
-    apply_shared_point(&mut layout, &mut prover_challenger, 1, &[0, 1]);
-    apply_shared_point(&mut layout, &mut prover_challenger, 1, &[1]);
+    // Replay the caller-provided opening schedule.
+    for &(table_idx, polys) in calls {
+        apply_shared_point(&mut layout, &mut prover_challenger, table_idx, polys);
+    }
 
     let virtual_eval = layout.add_virtual_eval(&mut prover_challenger);
 
@@ -202,12 +201,43 @@ fn run_test<L: LayoutStrategy>() {
     assert_eq!(sum, final_folded_value * weights);
 }
 
+// Baseline opening schedule: polys within each claim are in ascending order.
+const ASCENDING_POLYS: &[(usize, &[usize])] = &[
+    (0, &[0, 1]),
+    (0, &[0]),
+    (1, &[0, 1]),
+    (1, &[1]),
+];
+
+// Regression schedule: first call on table 0 uses non-ascending polys.
+// Triggers alpha/partial-eval misalignment in the buggy SuffixLayout path.
+const NON_ASCENDING_POLYS: &[(usize, &[usize])] = &[
+    (0, &[1, 0]),
+    (0, &[0]),
+    (1, &[0, 1]),
+    (1, &[1]),
+];
+
 #[test]
 fn test_prefix_layout() {
-    run_test::<PrefixLayout>();
+    run_test::<PrefixLayout>(ASCENDING_POLYS);
 }
 
 #[test]
 fn test_suffix_layout() {
-    run_test::<SuffixLayout>();
+    run_test::<SuffixLayout>(ASCENDING_POLYS);
+}
+
+#[test]
+fn test_prefix_layout_non_ascending_polys() {
+    // Invariant: opening order within a claim must not affect correctness.
+    run_test::<PrefixLayout>(NON_ASCENDING_POLYS);
+}
+
+#[test]
+fn test_suffix_layout_non_ascending_polys() {
+    // Regression: SuffixLayout previously pushed alphas in visit order while
+    // partial evals iterated in natural order, misaligning the batching
+    // coefficients whenever polys within a claim were not sorted ascending.
+    run_test::<SuffixLayout>(NON_ASCENDING_POLYS);
 }

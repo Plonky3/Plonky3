@@ -196,14 +196,23 @@ impl LayoutStrategy for SuffixLayout {
         let alpha: EF = challenger.sample_algebra_element();
         let n_claims = l.num_claims();
 
+        // Pre-size each inner vector to the claim's opening count.
+        // Indexing by opening_idx keeps alphas aligned with natural-order
+        // partial evals; for_each_opening fires in poly_idx-sorted order,
+        // so push-based accumulation would swap alphas on non-ascending polys.
         let mut claim_alphas = l
             .claim_map
             .iter()
-            .map(|claims| (0..claims.len()).map(|_| Vec::new()).collect::<Vec<_>>())
+            .map(|claims| {
+                claims
+                    .iter()
+                    .map(|claim| vec![EF::ZERO; claim.len()])
+                    .collect::<Vec<_>>()
+            })
             .collect::<Vec<_>>();
 
-        l.for_each_opening(alpha, |table_idx, claim_idx, _, _, _, alpha_i, _| {
-            claim_alphas[table_idx][claim_idx].push(alpha_i);
+        l.for_each_opening(alpha, |table_idx, claim_idx, opening_idx, _, _, alpha_i, _| {
+            claim_alphas[table_idx][claim_idx][opening_idx] = alpha_i;
         });
 
         let claim_alphas = &claim_alphas;

@@ -35,7 +35,7 @@ pub struct Selector {
 
 impl Selector {
     /// Creates a selector over `num_vars` selector bits with the given slot index.
-    pub fn new(num_vars: usize, index: usize) -> Self {
+    pub const fn new(num_vars: usize, index: usize) -> Self {
         assert!(index < (1 << num_vars));
         Self { num_vars, index }
     }
@@ -57,13 +57,7 @@ impl Selector {
 
     /// Lifts a local point into the stacked witness by prefixing the selector bits.
     pub fn lift<Ext: Field>(&self, other: &Point<Ext>) -> Point<Ext> {
-        Point::new(
-            self.point()
-                .iter()
-                .chain(other.iter())
-                .copied()
-                .collect::<Vec<_>>(),
-        )
+        Point::new(self.point().iter().chain(other.iter()).copied().collect())
     }
 }
 

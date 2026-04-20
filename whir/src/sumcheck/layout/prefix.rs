@@ -103,6 +103,17 @@ impl LayoutStrategy for PrefixLayout {
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         assert!(l.folding() <= l.num_vars());
+
+        // PrefixLayout uses packed accumulation per table slot, so each
+        // table must have at least one packed element's worth of scalars.
+        let k_pack = log2_strict_usize(F::Packing::WIDTH);
+        assert!(
+            l.layout
+                .iter()
+                .all(|tl| l.num_vars_table(tl.idx()) >= k_pack),
+            "PrefixLayout requires num_vars_table >= log2(packing width) for every table",
+        );
+
         let folding = l.folding;
         let alpha: EF = challenger.sample_algebra_element();
 
