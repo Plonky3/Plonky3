@@ -116,7 +116,7 @@ impl LayoutStrategy for PrefixLayout {
 
         let r = sumcheck_data.observe_and_sample(challenger, c0, c_inf, pow_bits);
         weights.fix_prefix_var_mut(r);
-        let poly = l.poly.fix_suffix_var_to_packed(r);
+        let poly = l.poly.fix_prefix_var_to_packed(r);
         sum = extrapolate_01inf(c0, sum - c0, c_inf, r);
 
         let mut prod_poly = ProductPolynomial::<F, EF, PrefixSumcheck>::new_packed(poly, weights);

@@ -425,12 +425,12 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         }
     }
 
-    /// Fixes the suffix variable at a challenge value, returning a folded polynomial
+    /// Fixes the prefix variable at a challenge value, returning a folded polynomial
     /// in SIMD-packed form.
     ///
     /// Computes:
     /// ```text
-    /// p'(x') = (1 - r) * p(x', 0) + r * p(x', 1)
+    ///     p'(x') = (1 - r) * p(0, x') + r * p(1, x')
     /// ```
     ///
     /// The result has one fewer variable (n - 1).
@@ -438,28 +438,32 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
     /// # Panics
     ///
     /// Panics if the polynomial is constant (zero free variables).
-    pub fn fix_suffix_var_to_packed<Ext>(&self, r: Ext) -> Poly<Ext::ExtensionPacking>
+    pub fn fix_prefix_var_to_packed<Ext>(&self, r: Ext) -> Poly<Ext::ExtensionPacking>
     where
         A: Field,
         Ext: ExtensionField<A>,
     {
+        // Broadcast the scalar challenge into every SIMD lane.
         let r = Ext::ExtensionPacking::from_ext_slice(&vec![r; A::Packing::WIDTH]);
+        // Reinterpret the base-field scalars as packed elements.
         let poly = A::Packing::pack_slice(self.as_slice());
         // Split evaluations into the x_0 = 0 half (p0) and x_0 = 1 half (p1).
         let (p0, p1) = poly.split_at(poly.len() / 2);
         if self.num_evals() >= PARALLEL_THRESHOLD {
+            // Parallel: linear interpolation between (p0, p1) pairs.
             Poly::new(
                 p0.par_iter()
                     .zip(p1.par_iter())
                     .map(|(&a0, &a1)| r * (a1 - a0) + a0)
-                    .collect::<Vec<_>>(),
+                    .collect(),
             )
         } else {
+            // Sequential: same interpolation.
             Poly::new(
                 p0.iter()
                     .zip(p1.iter())
                     .map(|(&a0, &a1)| r * (a1 - a0) + a0)
-                    .collect::<Vec<_>>(),
+                    .collect(),
             )
         }
     }
@@ -1718,6 +1722,99 @@ pub(crate) mod test {
                 compressed.fix_suffix_var_mut(zi);
             }
             assert_eq!(compressed.as_constant().unwrap(), poly.eval_base(&point));
+        }
+    }
+
+    #[test]
+    fn test_fix_prefix_var_to_packed_matches_scalar() {
+        // Invariant: packed fold == scalar fold after unpacking.
+        let mut rng = SmallRng::seed_from_u64(0);
+        let k_pack = log2_strict_usize(PackedF::WIDTH);
+
+        // Need k >= k_pack + 1 so the output holds >= 1 packed entry.
+        for k in (k_pack + 1)..=14 {
+            let poly = Poly::<F>::rand(&mut rng, k);
+            let r: EF = rng.random();
+
+            let scalar = poly.fix_prefix_var::<EF>(r);
+            let packed = poly.fix_prefix_var_to_packed::<EF>(r).unpack::<F, EF>();
+
+            assert_eq!(scalar.num_vars(), packed.num_vars());
+            assert_eq!(scalar, packed);
+        }
+    }
+
+    #[test]
+    fn test_fix_prefix_var_to_packed_boundary_values() {
+        // r = 0 → keep x_0 = 0 half.
+        // r = 1 → keep x_0 = 1 half.
+        let k_pack = log2_strict_usize(PackedF::WIDTH);
+        let k = k_pack + 1;
+        let n = 1 << k;
+
+        // i-th eval = i, so halves are identifiable by inspection.
+        let evals: Vec<F> = (0..n).map(|i| F::from_u64(i as u64)).collect();
+        let poly = Poly::new(evals.clone());
+        let lift = |s: &[F]| -> Vec<EF> { s.iter().copied().map(EF::from).collect() };
+
+        let folded_zero = poly
+            .fix_prefix_var_to_packed::<EF>(EF::ZERO)
+            .unpack::<F, EF>();
+        assert_eq!(folded_zero.as_slice(), lift(&evals[..n / 2]).as_slice());
+
+        let folded_one = poly
+            .fix_prefix_var_to_packed::<EF>(EF::ONE)
+            .unpack::<F, EF>();
+        assert_eq!(folded_one.as_slice(), lift(&evals[n / 2..]).as_slice());
+    }
+
+    #[test]
+    fn test_fix_prefix_var_to_packed_reduces_to_eval_at_point() {
+        // Invariant: folding every variable of p yields p at the full point.
+        let mut rng = SmallRng::seed_from_u64(0);
+        let k_pack = log2_strict_usize(PackedF::WIDTH);
+
+        for k in (k_pack + 1)..=10 {
+            let poly = Poly::<F>::rand(&mut rng, k);
+            let point: Point<EF> = Point::rand(&mut rng, k);
+
+            // Round 1: packed fold of x_0.
+            let r0 = point.as_slice()[0];
+            let mut folded = poly.fix_prefix_var_to_packed::<EF>(r0).unpack::<F, EF>();
+
+            // Rounds 2..n: scalar folds for remaining variables.
+            for &ri in point.as_slice().iter().skip(1) {
+                folded.fix_prefix_var_mut(ri);
+            }
+
+            assert_eq!(folded.as_constant().unwrap(), poly.eval_base(&point));
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_fix_prefix_var_to_packed_panics_on_constant() {
+        // Fixture: zero-variable polynomial.
+        // Expected: panic — no variable to fold.
+        let poly = Poly::<F>::new(vec![F::from_u64(42)]);
+        let _ = poly.fix_prefix_var_to_packed::<EF>(EF::ZERO);
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_fix_prefix_var_to_packed_agrees_with_scalar(
+            k in (log2_strict_usize(PackedF::WIDTH) + 1)..=12usize,
+            seed in any::<u64>(),
+        ) {
+            // Random cross-check over many (k, r, poly) triples.
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let poly = Poly::<F>::rand(&mut rng, k);
+            let r: EF = rng.random();
+
+            let scalar = poly.fix_prefix_var::<EF>(r);
+            let packed = poly.fix_prefix_var_to_packed::<EF>(r).unpack::<F, EF>();
+
+            prop_assert_eq!(scalar, packed);
         }
     }
 
