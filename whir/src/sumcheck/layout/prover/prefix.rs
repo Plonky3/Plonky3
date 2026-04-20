@@ -290,8 +290,9 @@ mod tests {
 
     use super::PrefixProver;
     use crate::sumcheck::layout::prover::test_utils::{
-        ASCENDING_POLYS, NON_ASCENDING_POLYS, arb_opening_schedule, build_witness,
-        run_prefix_roundtrip,
+        ASCENDING_POLYS, NON_ASCENDING_POLYS, arb_opening_schedule, arb_witness_and_schedule,
+        build_witness, build_witness_from_shape, run_prefix_roundtrip, run_prefix_roundtrip_with,
+        table_shapes_from,
     };
     use crate::sumcheck::tests::*;
 
@@ -379,6 +380,33 @@ mod tests {
                 .collect();
             // Drive both sides; the runner asserts agreement internally.
             run_prefix_roundtrip(&borrowed);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 8, ..ProptestConfig::default() })]
+
+        // Invariant:
+        //     Roundtrip agreement holds for ANY valid witness shape, not just
+        //     the fixed two-table fixture.
+        //
+        // Strategy:
+        //     Random witness shape (1..=3 tables, arity in [5, 8], 1..=3 cols per
+        //     table) paired with a matching opening schedule over that shape.
+        #[test]
+        fn prefix_roundtrip_shape_proptest(
+            (shape, schedule) in arb_witness_and_schedule(),
+        ) {
+            // Build a matching witness and verifier-side shapes for this case.
+            let witness = build_witness_from_shape(&shape);
+            let shapes = table_shapes_from(&shape);
+            // Adapt the owned schedule to the slice-pair shape the runner expects.
+            let borrowed: Vec<(usize, &[usize])> = schedule
+                .iter()
+                .map(|(t, polys)| (*t, polys.as_slice()))
+                .collect();
+            // Drive both sides on the generated shape; runner asserts agreement.
+            run_prefix_roundtrip_with(witness, &shapes, &borrowed);
         }
     }
 }

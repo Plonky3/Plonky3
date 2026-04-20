@@ -1,66 +1,10 @@
-//! Stacked-sumcheck provers over a concatenated multilinear polynomial.
+//! Provers for the stacked layout, specialised per residual-sumcheck binding mode.
 //!
-//! # Why stack
+//! # Modules
 //!
-//! - A WHIR commitment carries a fixed per-commitment overhead (FFT + Merkle).
-//! - Committing each table separately multiplies that overhead by the table count.
-//! - Stacking concatenates every table into one multilinear polynomial and
-//!   commits once, so a single commitment covers all tables.
-//! - WHIR natively supports multiple opening claims on the committed polynomial,
-//!   so no extra batching sumcheck is needed on top.
-//!
-//! # Layout of the stacked polynomial
-//!
-//! - Sort source tables by arity, largest first.
-//! - Lay columns out back-to-back on the boolean hypercube.
-//! - Each column takes a contiguous slot of size `2^arity`.
-//! - Pad with zeros up to the next power of two.
-//! - The concatenation is itself a multilinear polynomial.
-//!
-//! Example: three tables with `(4, 3, 2)` variables and one column each.
-//!
-//! ```text
-//!     +---- 16 ----+-- 8 --+-- 4 --+-- pad --+
-//!     |    P_1     |  P_2  |  P_3  |  zeros  |
-//!     +------------+-------+-------+---------+
-//!     0           16      24      28        32
-//! ```
-//!
-//! # Selectors: addressing a slot by a boolean prefix
-//!
-//! - Each column is reached by prefixing its local variables with a boolean
-//!   selector that picks the slot.
-//! - Local variables follow the selector bits.
-//!
-//! For the example above, with `P` the stacked polynomial:
-//!
-//! ```text
-//!     P_1(x_1, x_2, x_3, x_4) = P(0,       x_1, x_2, x_3, x_4)
-//!     P_2(x_1, x_2, x_3)      = P(1, 0,    x_1, x_2, x_3)
-//!     P_3(x_1, x_2)           = P(1, 1, 0, x_1, x_2)
-//! ```
-//!
-//! # Why selector lifts stay cheap in WHIR
-//!
-//! - The WHIR cost of adding an equality constraint `P(z) = y` scales as
-//!   `O(2^k)`, where `k` counts the coordinates of `z` that are not in `{0, 1}`.
-//! - Selector coordinates are always boolean, so they do not inflate `k`.
-//! - Lifting a local claim into a stacked claim therefore adds no asymptotic
-//!   cost beyond the original local coordinates.
-//!
-//! # Residual sumcheck: two binding modes
-//!
-//! After lifting, a batching challenge `alpha` collapses every recorded
-//! opening into one residual claim. The residual sumcheck can bind variables
-//! in two different orders:
-//!
-//! - Prefix-first binding: round one runs in SIMD-packed arithmetic, and the
-//!   remaining rounds drive a product polynomial.
-//! - Suffix-first binding: SVO accumulators are precomputed at claim-recording
-//!   time and folded round by round with Lagrange weights.
-//!
-//! Both modes end at the same residual product polynomial; the binding order
-//! only decides which fast-path tricks apply on the first rounds.
+//! - Prefix prover: SIMD-packed first round.
+//! - Suffix prover: SVO-accumulator preprocessing.
+//! - Shared traversal helper: walks placements, columns, claims, and openings.
 
 mod prefix;
 mod suffix;
@@ -173,6 +117,7 @@ pub(super) mod test_utils {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn verify_roundtrip(
         order: VariableOrder,
+        shapes: &[TableShape],
         stacked_num_variables: usize,
         opening_claims: Vec<(usize, Vec<usize>, Vec<EF>)>,
         virtual_eval: EF,
@@ -185,7 +130,7 @@ pub(super) mod test_utils {
     ) {
         // Fresh challenger: verifier must stay in lockstep with the prover transcript.
         let mut verifier_challenger = challenger();
-        let mut verifier: Verifier<F, EF> = Verifier::new(&table_shapes());
+        let mut verifier: Verifier<F, EF> = Verifier::new(shapes);
 
         // Re-sample the same opening points and record the claimed evaluations.
         for (table_idx, polys, evals) in opening_claims {
@@ -322,10 +267,13 @@ pub(super) mod test_utils {
             .collect()
     }
 
-    /// Runs the full prefix-mode roundtrip against the shared witness.
-    pub(crate) fn run_prefix_roundtrip(calls: &[(usize, &[usize])]) {
+    /// Runs the full prefix-mode roundtrip against a caller-supplied witness.
+    pub(crate) fn run_prefix_roundtrip_with(
+        witness: Witness<F>,
+        shapes: &[TableShape],
+        calls: &[(usize, &[usize])],
+    ) {
         let mut prover_challenger = challenger();
-        let witness = build_witness();
         let stacked_num_variables = witness.num_variables();
 
         // Prover: build prefix mode, record openings, add a virtual claim.
@@ -363,6 +311,7 @@ pub(super) mod test_utils {
 
         verify_roundtrip(
             VariableOrder::Prefix,
+            shapes,
             stacked_num_variables,
             opening_claims,
             virtual_eval,
@@ -375,10 +324,13 @@ pub(super) mod test_utils {
         );
     }
 
-    /// Runs the full suffix-mode roundtrip against the shared witness.
-    pub(crate) fn run_suffix_roundtrip(calls: &[(usize, &[usize])]) {
+    /// Runs the full suffix-mode roundtrip against a caller-supplied witness.
+    pub(crate) fn run_suffix_roundtrip_with(
+        witness: Witness<F>,
+        shapes: &[TableShape],
+        calls: &[(usize, &[usize])],
+    ) {
         let mut prover_challenger = challenger();
-        let witness = build_witness();
         let stacked_num_variables = witness.num_variables();
 
         let mut prover_state: SuffixProver<F, EF> = witness.as_suffix_prover();
@@ -413,6 +365,7 @@ pub(super) mod test_utils {
 
         verify_roundtrip(
             VariableOrder::Suffix,
+            shapes,
             stacked_num_variables,
             opening_claims,
             virtual_eval,
@@ -423,5 +376,138 @@ pub(super) mod test_utils {
             &prover_randomness,
             final_folded_value,
         );
+    }
+
+    /// Thin shim: runs the prefix-mode roundtrip on the shared fixed-shape witness.
+    pub(crate) fn run_prefix_roundtrip(calls: &[(usize, &[usize])]) {
+        run_prefix_roundtrip_with(build_witness(), &table_shapes(), calls);
+    }
+
+    /// Thin shim: runs the suffix-mode roundtrip on the shared fixed-shape witness.
+    pub(crate) fn run_suffix_roundtrip(calls: &[(usize, &[usize])]) {
+        run_suffix_roundtrip_with(build_witness(), &table_shapes(), calls);
+    }
+
+    /// Minimum source-table arity used by the shape proptest.
+    ///
+    /// # Constraints
+    ///
+    /// - Must exceed the preprocessing depth (every table arity > FOLDING).
+    /// - Must be at least `log2(packing_width)` so prefix mode accepts it.
+    ///   BabyBear packing widths on current targets peak at 16, giving `k_pack = 4`.
+    const SHAPE_MIN_ARITY: usize = 5;
+
+    /// Upper bound on per-table arity in the shape proptest.
+    const SHAPE_MAX_ARITY: usize = 8;
+
+    /// Upper bound on the number of columns per table.
+    const SHAPE_MAX_COLUMNS: usize = 3;
+
+    /// Upper bound on the number of tables per witness.
+    const SHAPE_MAX_TABLES: usize = 3;
+
+    /// Upper bound on the number of opening calls in the generated schedule.
+    const SHAPE_MAX_CALLS: usize = 5;
+
+    /// One `(arity, column_count)` pair per source table.
+    pub(crate) type WitnessShape = Vec<(usize, usize)>;
+
+    /// One `(table_index, column_subset)` pair per opening call.
+    pub(crate) type OpeningSchedule = Vec<(usize, Vec<usize>)>;
+
+    /// Builds a deterministic witness matching the given `(arity, column_count)` shape.
+    ///
+    /// # Arguments
+    ///
+    /// - `shape` — one `(arity, column_count)` pair per source table.
+    pub(crate) fn build_witness_from_shape(shape: &[(usize, usize)]) -> Witness<F> {
+        // Fixed seed: every proptest case gets reproducible polynomial evaluations.
+        let mut rng = SmallRng::seed_from_u64(42);
+
+        // One table per (arity, column_count) pair; each column is a random polynomial.
+        let tables: Vec<Table<F>> = shape
+            .iter()
+            .map(|&(arity, num_cols)| {
+                let polys: Vec<Poly<F>> = (0..num_cols)
+                    .map(|_| Poly::<F>::rand(&mut rng, arity))
+                    .collect();
+                Table::new(polys)
+            })
+            .collect();
+
+        Witness::new(tables, FOLDING)
+    }
+
+    /// Mirrors a `(arity, column_count)` shape onto the verifier-side table shapes.
+    pub(crate) fn table_shapes_from(shape: &[(usize, usize)]) -> Vec<TableShape> {
+        shape
+            .iter()
+            .map(|&(arity, num_cols)| TableShape::new(arity, num_cols))
+            .collect()
+    }
+
+    /// Proptest strategy: random witness shape paired with a valid opening schedule.
+    ///
+    /// # Shape
+    ///
+    /// - 1..=`SHAPE_MAX_TABLES` source tables.
+    /// - Each table: arity in `[SHAPE_MIN_ARITY, SHAPE_MAX_ARITY]`, column count
+    ///   in `[1, SHAPE_MAX_COLUMNS]`.
+    ///
+    /// # Schedule
+    ///
+    /// - 1..=`SHAPE_MAX_CALLS` opening calls over the generated witness.
+    /// - Every call picks an existing table index and a non-empty, de-duplicated
+    ///   subset of that table's columns (columns may appear in any order).
+    pub(crate) fn arb_witness_and_schedule()
+    -> impl Strategy<Value = (WitnessShape, OpeningSchedule)> {
+        // Step 1: pick the witness shape.
+        //
+        // Stacked arity must accommodate two phases of FOLDING rounds plus the
+        // final fold-to-constant phase, so total size must exceed `2^(2 * FOLDING - 1)`.
+        let shape = prop::collection::vec(
+            (
+                SHAPE_MIN_ARITY..=SHAPE_MAX_ARITY,
+                1usize..=SHAPE_MAX_COLUMNS,
+            ),
+            1..=SHAPE_MAX_TABLES,
+        )
+        .prop_filter(
+            "stacked polynomial must support two phases of FOLDING rounds",
+            |shape| {
+                let total: usize = shape.iter().map(|&(a, c)| (1usize << a) * c).sum();
+                // log2_ceil(total) >= 2 * FOLDING.
+                total > (1usize << (2 * FOLDING - 1))
+            },
+        );
+
+        shape.prop_flat_map(|shape| {
+            // Step 2: given the shape, pick a schedule that respects it.
+            let num_tables = shape.len();
+            let shape_for_calls = shape.clone();
+
+            // One call: pick a table, then a non-empty unique column subset.
+            let one_call = (0..num_tables).prop_flat_map(move |t_idx| {
+                let num_cols = shape_for_calls[t_idx].1;
+                // Draw a random column sequence of length 1..=num_cols, then deduplicate
+                // while preserving first-seen order so the opening list stays valid.
+                prop::collection::vec(0..num_cols, 1..=num_cols).prop_map(move |cols| {
+                    let mut seen = vec![false; num_cols];
+                    let dedup: Vec<usize> = cols
+                        .into_iter()
+                        .filter(|&c| {
+                            let first = !seen[c];
+                            seen[c] = true;
+                            first
+                        })
+                        .collect();
+                    (t_idx, dedup)
+                })
+            });
+
+            // Step 3: bundle the schedule back with its originating shape.
+            prop::collection::vec(one_call, 1..=SHAPE_MAX_CALLS)
+                .prop_map(move |sched| (shape.clone(), sched))
+        })
     }
 }
