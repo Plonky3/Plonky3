@@ -29,7 +29,7 @@ use p3_multilinear_util::split_eq::SplitEq;
 use p3_util::log2_strict_usize;
 
 use crate::sumcheck::Claim;
-use crate::sumcheck::layout::MultiClaimSuffixLayout as MultiClaim;
+use crate::sumcheck::layout::SuffixMultiClaim as MultiClaim;
 use crate::sumcheck::strategy::VariableOrder;
 
 /// Expand `2^l` Boolean-hypercube evaluations to `3^l` evaluations on `{0,1,inf}^l`.
@@ -226,15 +226,19 @@ pub(crate) fn calculate_accumulators_batch<F: Field, EF: ExtensionField<F>>(
     alphas: &[EF],
 ) -> SvoAccumulators<EF> {
     assert_eq!(claim.len(), alphas.len());
-    let k = claim.num_vars_svo();
+    let k = claim.point().num_vars_svo();
 
     (0..k)
         .map(|round_idx| {
             let l = round_idx + 1;
             let mut acc = Poly::<EF>::zero(l);
+
+            // Pick each opening's round-`round_idx` partial evaluation and
+            // accumulate `alpha * partial` into `acc`.
             claim
-                .partial_evals(round_idx)
+                .openings()
                 .iter()
+                .map(|opening| &opening.data()[round_idx])
                 .zip(alphas.iter())
                 .for_each(|(partial, &alpha)| {
                     acc.as_mut_slice()
@@ -822,7 +826,7 @@ mod test {
 
     use super::*;
     use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
-    use crate::sumcheck::layout::OpeningSuffixLayout;
+    use crate::sumcheck::layout::Opening;
     use crate::sumcheck::strategy::{SuffixSumcheck, SumcheckStrategy};
 
     type F = KoalaBear;
@@ -1230,7 +1234,10 @@ mod test {
             let openings = polys
                 .iter()
                 .map(|poly| {
-                    let opening = OpeningSuffixLayout::eval_poly(None, &svo_point, poly);
+                    // Virtual opening: evaluate the column at the SVO point and
+                    // carry the per-round partial evaluations as payload.
+                    let (eval, partial_evals) = svo_point.eval(poly);
+                    let opening = Opening::with_data(None, eval, partial_evals);
                     assert_eq!(opening.eval(), poly.eval_base(&point));
                     opening
                 })

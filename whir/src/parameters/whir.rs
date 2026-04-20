@@ -17,9 +17,11 @@ use crate::constraints::statement::initial::InitialStatement;
 ///
 /// SVO silently falls back to Classic when the polynomial is too small:
 ///
+/// ```text
 ///     k <= 2 * log_2(W) + l_0
+/// ```
 ///
-/// with k the number of variables, l_0 the SVO depth, and W the
+/// with `k` the number of variables, `l_0` the SVO depth, and `W` the
 /// base-field packing width.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SumcheckMode {
