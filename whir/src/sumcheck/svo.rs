@@ -1237,7 +1237,11 @@ mod test {
                     // Virtual opening: evaluate the column at the SVO point and
                     // carry the per-round partial evaluations as payload.
                     let (eval, partial_evals) = svo_point.eval(poly);
-                    let opening = Opening::with_data(None, eval, partial_evals);
+                    let opening = Opening {
+                        poly_idx: None,
+                        eval,
+                        data: partial_evals,
+                    };
                     assert_eq!(opening.eval(), poly.eval_base(&point));
                     opening
                 })

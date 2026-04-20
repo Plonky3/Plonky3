@@ -260,7 +260,11 @@ mod tests {
         let placements = vec![make_placement(0, 1)];
         let claim = MultiClaim::<F, EF, (), ()>::new(
             (),
-            vec![Opening::with_data(None, EF::from_u64(42), ())],
+            vec![Opening {
+                poly_idx: None,
+                eval: EF::from_u64(42),
+                data: (),
+            }],
         );
         let claim_map = vec![vec![claim]];
 

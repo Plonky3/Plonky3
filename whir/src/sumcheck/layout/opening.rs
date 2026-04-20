@@ -42,11 +42,11 @@ pub type VerifierVirtualClaim<F, EF> = Claim<F, EF, Point<EF>, ()>;
 #[derive(Debug, Clone)]
 pub struct Opening<EF: Field, Data> {
     /// Source column index, or `None` for a virtual opening.
-    pub(super) poly_idx: Option<usize>,
+    pub(crate) poly_idx: Option<usize>,
     /// Value of the polynomial at the shared claim point.
-    pub(super) eval: EF,
+    pub(crate) eval: EF,
     /// Strategy-specific payload attached to this opening.
-    pub(super) data: Data,
+    pub(crate) data: Data,
 }
 
 impl<EF: Field, Data> Opening<EF, Data> {
@@ -63,21 +63,6 @@ impl<EF: Field, Data> Opening<EF, Data> {
     /// Returns the strategy-specific payload.
     pub const fn data(&self) -> &Data {
         &self.data
-    }
-
-    /// Builds an opening from its parts.
-    ///
-    /// # Arguments
-    ///
-    /// - `poly_idx` — source column index, or `None` for a virtual opening.
-    /// - `eval`     — value of the polynomial at the shared claim point.
-    /// - `data`     — strategy-specific payload.
-    pub const fn with_data(poly_idx: Option<usize>, eval: EF, data: Data) -> Self {
-        Self {
-            poly_idx,
-            eval,
-            data,
-        }
     }
 }
 

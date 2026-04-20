@@ -155,11 +155,6 @@ pub struct Witness<F: Field> {
 }
 
 impl<F: Field> Witness<F> {
-    /// Returns the arity of the source table at the given index.
-    pub fn num_variables_table(&self, id: usize) -> usize {
-        self.tables[id].num_variables()
-    }
-
     /// Stacks the given tables into a single committed polynomial.
     ///
     /// # Algorithm
@@ -445,18 +440,6 @@ mod tests {
         //     total size = 2^3 * 2 + 2^4 * 2 = 16 + 32 = 48 → ceil(log2) = 6.
         let w = fixture_witness();
         assert_eq!(w.num_variables(), 6);
-    }
-
-    #[test]
-    fn witness_num_variables_table_returns_source_arity() {
-        // Invariant:
-        //     num_variables_table returns the arity of the stored source table.
-        //
-        // Fixture state:
-        //     table 0: arity 3, table 1: arity 4.
-        let w = fixture_witness();
-        assert_eq!(w.num_variables_table(0), 3);
-        assert_eq!(w.num_variables_table(1), 4);
     }
 
     #[test]
