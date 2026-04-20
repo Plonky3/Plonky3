@@ -11,6 +11,27 @@ use p3_multilinear_util::poly::Poly;
 use super::{FoldingFactor, ProtocolParameters, SecurityAssumption};
 use crate::constraints::statement::initial::InitialStatement;
 
+/// Selects which sumcheck variant is used for the initial round.
+///
+/// # Fallback
+///
+/// SVO silently falls back to Classic when the polynomial is too small:
+///
+///     k <= 2 * log_2(W) + l_0
+///
+/// with k the number of variables, l_0 the SVO depth, and W the
+/// base-field packing width.
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SumcheckMode {
+    /// Standard quadratic sumcheck.
+    ///
+    /// No structural assumption on the weight polynomial.
+    Classic,
+    /// Small-Value Optimization (Algorithm 5, ePrint 2025/1117).
+    #[default]
+    Svo,
+}
+
 /// Derived configuration for a single intermediate WHIR round.
 ///
 /// All values are computed from the user-facing protocol parameters
@@ -467,14 +488,14 @@ where
     /// Create the initial statement for the WHIR protocol.
     ///
     /// Wraps the polynomial with the first-round folding factor and
-    /// the chosen sumcheck strategy. Evaluation constraints are added
+    /// the chosen sumcheck mode. Evaluation constraints are added
     /// by the caller before proving begins.
     pub const fn initial_statement(
         &self,
         polynomial: Poly<F>,
-        apply_svo: bool,
+        mode: SumcheckMode,
     ) -> InitialStatement<F, EF> {
-        InitialStatement::new(polynomial, self.folding_factor.at_round(0), apply_svo)
+        InitialStatement::new(polynomial, self.folding_factor.at_round(0), mode)
     }
 }
 

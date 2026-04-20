@@ -5,6 +5,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_whir::constraints::statement::initial::InitialStatement;
+use p3_whir::parameters::SumcheckMode;
 use p3_whir::sumcheck::SumcheckData;
 use p3_whir::sumcheck::single::SingleSumcheck;
 use p3_whir::sumcheck::svo::SvoClaim;
@@ -21,18 +22,18 @@ fn make_challenger() -> Challenger {
     DuplexChallenger::new(perm)
 }
 
-/// Builds an initial statement with `num_constraints` random evaluation points.
+/// Build an initial statement with `num_constraints` random evaluation points.
 fn make_statement(
     num_vars: usize,
     folding_factor: usize,
     num_constraints: usize,
-    apply_svo: bool,
+    mode: SumcheckMode,
 ) -> InitialStatement<F, EF> {
     let mut rng = SmallRng::seed_from_u64(
         (num_vars as u64) ^ ((folding_factor as u64) << 16) ^ ((num_constraints as u64) << 32),
     );
     let poly = Poly::new((0..1 << num_vars).map(|_| rng.random()).collect());
-    let mut stmt = InitialStatement::<F, EF>::new(poly, folding_factor, apply_svo);
+    let mut stmt = InitialStatement::<F, EF>::new(poly, folding_factor, mode);
     for _ in 0..num_constraints {
         let pt = Point::<EF>::rand(&mut rng, num_vars);
         let _ = stmt.evaluate(&pt);
@@ -51,8 +52,10 @@ fn bench_sumcheck_prover(c: &mut Criterion) {
     ];
 
     for &(num_vars, folding_factor, num_constraints, label) in &cases {
-        let classic_stmt = make_statement(num_vars, folding_factor, num_constraints, false);
-        let svo_stmt = make_statement(num_vars, folding_factor, num_constraints, true);
+        let classic_stmt =
+            make_statement(num_vars, folding_factor, num_constraints, SumcheckMode::Classic);
+        let svo_stmt =
+            make_statement(num_vars, folding_factor, num_constraints, SumcheckMode::Svo);
 
         group.bench_with_input(BenchmarkId::new("classic", label), &label, |b, _| {
             b.iter(|| {

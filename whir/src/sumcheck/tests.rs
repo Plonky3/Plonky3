@@ -13,7 +13,7 @@ use rand::{RngExt, SeedableRng};
 use crate::constraints::Constraint;
 use crate::constraints::statement::initial::InitialStatement;
 use crate::constraints::statement::{EqStatement, SelectStatement};
-use crate::parameters::FoldingFactor;
+use crate::parameters::{FoldingFactor, SumcheckMode};
 use crate::sumcheck::SumcheckData;
 use crate::sumcheck::single::SingleSumcheck;
 use crate::sumcheck::strategy::{PrefixSumcheck, SumcheckStrategy};
@@ -222,7 +222,7 @@ fn run_sumcheck_test(
     folding_factor: FoldingFactor,
     num_eqs: &[usize],
     num_sels: &[usize],
-    apply_svo: bool,
+    mode: SumcheckMode,
 ) -> Point<EF> {
     // Compute how many intermediate folding rounds there are, plus the size of the final round.
     // For example, with num_vars=6 and folding_factor=2: num_rounds=2, final_rounds=2.
@@ -254,7 +254,7 @@ fn run_sumcheck_test(
     // Build the initial statement from the polynomial. The initial statement wraps
     // the raw evaluations and supports constraint evaluation before the first fold.
     let folding0 = folding_factor.at_round(0);
-    let mut initial_statement = InitialStatement::new(poly.clone(), folding0, apply_svo);
+    let mut initial_statement = InitialStatement::new(poly.clone(), folding0, mode);
 
     // Sample eq constraints for the initial round: for each constraint, draw a random
     // univariate challenge, expand it to a multilinear point, evaluate the polynomial
@@ -502,26 +502,25 @@ fn test_single_sumcheck() {
                     .map(|_| rng.random_range(0..=2))
                     .collect::<Vec<_>>();
 
-                // Run the full prover-verifier test with the Classic sumcheck strategy.
+                // Classic path.
                 let randomness_classic = run_sumcheck_test(
                     num_vars,
                     folding_factor,
                     &num_eq_points,
                     &num_sel_points,
-                    false,
+                    SumcheckMode::Classic,
                 );
 
-                // Run the same test with the SVO (Shifted Virtual Oracle) strategy.
+                // SVO path (falls back to Classic for small polynomials).
                 let randomness_svo = run_sumcheck_test(
                     num_vars,
                     folding_factor,
                     &num_eq_points,
                     &num_sel_points,
-                    true,
+                    SumcheckMode::Svo,
                 );
 
-                // Both strategies must produce the exact same random evaluation point.
-                // This confirms they are functionally equivalent implementations.
+                // Both modes must derive the same verifier randomness.
                 assert_eq!(randomness_classic, randomness_svo);
             }
         }
