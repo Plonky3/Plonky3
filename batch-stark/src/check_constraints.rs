@@ -53,6 +53,22 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
     LG: LookupGadget,
 {
     let height = main.height();
+    if let Some(prep) = preprocessed.as_ref() {
+        assert_eq!(
+            prep.height(),
+            height,
+            "debug constraint check requires preprocessed trace height ({}) to match main trace height ({})",
+            prep.height(),
+            height
+        );
+    }
+    assert_eq!(
+        permutation.height(),
+        height,
+        "debug constraint check requires permutation trace height ({}) to match main trace height ({})",
+        permutation.height(),
+        height
+    );
 
     let (lookups, lookup_gadget) = lookup_constraints_inputs;
 
@@ -122,5 +138,175 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
                  failed constraint indices = {indices:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_air::{Air, BaseAir, DebugConstraintBuilder};
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_lookup::logup::LogUpGadget;
+
+    use super::*;
+
+    /// Quartic extension over the base field; matches the arity used in the rest of the test suite.
+    type EF = BinomialExtensionField<BabyBear, 4>;
+
+    /// No-constraint AIR with a configurable preprocessed trace.
+    ///
+    /// Lets a test force a preprocessed shape independent of the main trace.
+    #[derive(Debug)]
+    struct ShapeProbeAir {
+        /// Rows advertised in the preprocessed trace. `0` reports `None`.
+        prep_height: usize,
+        /// Columns of the advertised preprocessed trace. Ignored when height is `0`.
+        prep_width: usize,
+    }
+
+    impl<F: Field> BaseAir<F> for ShapeProbeAir {
+        fn width(&self) -> usize {
+            // Single column; every fixture is `vec![F::ZERO; height]`.
+            1
+        }
+
+        fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
+            // Height == 0 is the sentinel for "AIR has no preprocessed trace".
+            if self.prep_height == 0 {
+                return None;
+            }
+
+            // Row-major flat buffer: height * width zero elements.
+            //
+            //     layout (prep_height = 2, prep_width = 3):
+            //       row 0: [ 0, 0, 0 ]
+            //       row 1: [ 0, 0, 0 ]
+            //       flat : [ 0, 0, 0, 0, 0, 0 ]
+            let total = self.prep_height * self.prep_width;
+            Some(RowMajorMatrix::new(vec![F::ZERO; total], self.prep_width))
+        }
+    }
+
+    impl<F, EF> Air<DebugConstraintBuilder<'_, F, EF>> for ShapeProbeAir
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
+        fn eval(&self, _builder: &mut DebugConstraintBuilder<'_, F, EF>) {
+            // Empty: every panic must come from a pre-loop guard, not from eval.
+        }
+    }
+
+    #[test]
+    fn test_matching_heights_pass_through() {
+        // Invariant: all three traces share a height → both guards accept → empty loop runs.
+        //
+        // Fixture state:
+        //   main         : 4 rows × 1 col  (base field)
+        //   preprocessed : 4 rows × 1 col  (advertised by the AIR)
+        //   permutation  : 4 rows × 1 col  (extension field)
+        //
+        //     row index :  0   1   2   3
+        //     main      : [0] [0] [0] [0]
+        //     prep      : [0] [0] [0] [0]
+        //     perm      : [0] [0] [0] [0]
+        //                 → all heights == 4 → guards pass
+        let air = ShapeProbeAir {
+            prep_height: 4,
+            prep_width: 1,
+        };
+
+        // Zero-valued traces; content is irrelevant because eval reads nothing.
+        let main: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 1);
+        let preprocessed = <ShapeProbeAir as BaseAir<BabyBear>>::preprocessed_trace(&air);
+        let permutation: RowMajorMatrix<EF> = RowMajorMatrix::new(vec![EF::ZERO; 4], 1);
+
+        // Must return cleanly. A panic here would mean a guard rejected a well-shaped input.
+        check_constraints::<BabyBear, EF, _, LogUpGadget>(
+            &air,
+            &main,
+            &preprocessed,
+            &permutation,
+            &[],
+            &[],
+            &[],
+            (&[], &LogUpGadget),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "preprocessed trace height")]
+    fn test_preprocessed_height_mismatch_panics() {
+        // Invariant: a taller preprocessed trace must trip the first pre-loop guard.
+        //
+        // Fixture state:
+        //   main         : 4 rows × 1 col
+        //   preprocessed : 8 rows × 1 col  (AIR advertises an oversized shape)
+        //   permutation  : 4 rows × 1 col  (matches main deliberately)
+        //
+        //     main rows : [0, 1, 2, 3]
+        //     prep rows : [0, 1, 2, 3, 4, 5, 6, 7]
+        //     perm rows : [0, 1, 2, 3]
+        //                 → prep guard trips first: 8 != 4
+        //
+        // Why permutation matches: a correct permutation isolates the preprocessed guard.
+        let air = ShapeProbeAir {
+            prep_height: 8,
+            prep_width: 1,
+        };
+        let main: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 1);
+        let preprocessed = <ShapeProbeAir as BaseAir<BabyBear>>::preprocessed_trace(&air);
+        let permutation: RowMajorMatrix<EF> = RowMajorMatrix::new(vec![EF::ZERO; 4], 1);
+
+        // Expected: panic on entry, before any row is dereferenced.
+        check_constraints::<BabyBear, EF, _, LogUpGadget>(
+            &air,
+            &main,
+            &preprocessed,
+            &permutation,
+            &[],
+            &[],
+            &[],
+            (&[], &LogUpGadget),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "permutation trace height")]
+    fn test_permutation_height_mismatch_panics() {
+        // Invariant: the permutation guard is unconditional → fires regardless of preprocessed.
+        //
+        // Fixture state:
+        //   main         : 4 rows × 1 col
+        //   preprocessed : absent   (None — first guard is skipped entirely)
+        //   permutation  : 8 rows × 1 col  (deliberately oversized)
+        //
+        //     main rows : [0, 1, 2, 3]
+        //     perm rows : [0, 1, 2, 3, 4, 5, 6, 7]
+        //                 → first guard skipped, second trips: 8 != 4
+        //
+        // Why preprocessed is absent: first guard skipped → panic must come from the second.
+        let air = ShapeProbeAir {
+            prep_height: 0,
+            prep_width: 0,
+        };
+        let main: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 1);
+        let preprocessed: Option<RowMajorMatrix<BabyBear>> = None;
+        let permutation: RowMajorMatrix<EF> = RowMajorMatrix::new(vec![EF::ZERO; 8], 1);
+
+        // Expected: panic on entry, before any row is dereferenced.
+        check_constraints::<BabyBear, EF, _, LogUpGadget>(
+            &air,
+            &main,
+            &preprocessed,
+            &permutation,
+            &[],
+            &[],
+            &[],
+            (&[], &LogUpGadget),
+        );
     }
 }
