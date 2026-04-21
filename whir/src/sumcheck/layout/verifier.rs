@@ -16,6 +16,7 @@ use crate::sumcheck::layout::opening::{
     VerifierMultiClaim as MultiClaim, VerifierOpening as Opening,
     VerifierVirtualClaim as VirtualClaim,
 };
+use crate::sumcheck::layout::plan::{LayoutShape, plan_layout};
 use crate::sumcheck::layout::witness::{Selector, TablePlacement};
 
 /// Shape-only description of one verifier table.
@@ -44,11 +45,6 @@ impl TableShape {
             width,
             height: 1 << k,
         })
-    }
-
-    /// Returns the total number of stacked evaluations contributed.
-    const fn area(&self) -> usize {
-        self.0.width * self.0.height
     }
 
     /// Returns the number of variables per column.
@@ -89,35 +85,15 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     /// - Each column occupies one slot of size `2^arity`.
     /// - Stacked arity equals `log2` of total stacked size, rounded up.
     pub fn new(tables: &[TableShape]) -> Self {
-        // Sort table indices by arity ascending; reverse-iterate to place largest first.
-        let mut order = (0..tables.len()).collect::<Vec<usize>>();
-        order.sort_by_key(|&i| tables[i].k());
-
-        // Stacked arity: log2 of total stacked size, rounded up to the next power of two.
-        let k = log2_ceil_usize(tables.iter().map(TableShape::area).sum::<usize>());
-
-        // Running offset into the stacked polynomial, in scalar units.
-        let mut offset = 0usize;
-        let mut placements = Vec::new();
-
-        // Lay out largest tables first; each column gets its own slot.
-        for &table_idx in order.iter().rev() {
-            let table = &tables[table_idx];
-            // Slot size per column: 2^arity.
-            let slot_size = 1usize << table.k();
-
-            // Assign one selector per column, advancing the offset after each.
-            let selectors = (0..table.width())
-                .map(|_| {
-                    // Selector bit-width is stacked arity minus table arity.
-                    let selector = Selector::new(k - table.k(), offset >> table.k());
-                    // Advance the cursor by one slot.
-                    offset += slot_size;
-                    selector
-                })
-                .collect();
-            placements.push(TablePlacement::new(table_idx, selectors));
-        }
+        // Delegate slot assignment to the shared planner (same routine as the prover).
+        let shapes: Vec<LayoutShape> = tables
+            .iter()
+            .map(|t| LayoutShape {
+                arity: t.k(),
+                width: t.width(),
+            })
+            .collect();
+        let (k, placements) = plan_layout(&shapes);
 
         // Build the side-map: source-table index → index into `placements`.
         let mut placement_by_table = vec![0usize; tables.len()];
@@ -326,16 +302,14 @@ mod tests {
         //     A shape of log-rows = k and width = w exposes:
         //         k()     = k
         //         width() = w
-        //         area()  = w * 2^k
         //
         // Fixture state:
-        //     k = 3, width = 2 → height = 8, area = 16.
+        //     k = 3, width = 2 → height = 8.
         let shape = TableShape::new(3, 2);
 
         // Check each derived quantity.
         assert_eq!(shape.k(), 3);
         assert_eq!(shape.width(), 2);
-        assert_eq!(shape.area(), 16);
     }
 
     #[test]

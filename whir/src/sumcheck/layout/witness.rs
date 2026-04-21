@@ -6,8 +6,8 @@ use itertools::Itertools;
 use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
-use p3_util::log2_ceil_usize;
 
+use crate::sumcheck::layout::plan::{LayoutShape, plan_layout};
 use crate::sumcheck::layout::prover::{PrefixProver, SuffixProver};
 
 /// Identifies one slot inside the stacked polynomial.
@@ -178,47 +178,28 @@ impl<F: Field> Witness<F> {
         // Precondition: every table must have at least one variable left after folding.
         assert!(tables.iter().all(|table| table.num_variables() > folding));
 
-        // Sort table indices by arity ascending; reverse-iterate to place largest first.
-        let mut table_order = (0..tables.len()).collect::<Vec<_>>();
-        table_order.sort_by_key(|&i| tables[i].num_variables());
+        // Delegate slot assignment to the shared planner (same routine as the verifier).
+        let shapes: Vec<LayoutShape> = tables
+            .iter()
+            .map(|t| LayoutShape {
+                arity: t.num_variables(),
+                width: t.num_polys(),
+            })
+            .collect();
+        let (num_variables, placements) = plan_layout(&shapes);
 
-        // Stacked arity: log2 of total stacked size, rounded up to the next power of two.
-        let num_variables = log2_ceil_usize(tables.iter().map(Table::size).sum::<usize>());
-
-        // Running cursor into the stacked polynomial, in scalar units.
-        let mut offset = 0usize;
-        let mut placements = Vec::new();
         // Stacked buffer starts zero; unused tail entries stay zero.
         let mut stacked = Poly::<F>::zero(num_variables);
 
-        // Walk tables largest-first; each column claims one slot.
-        for &table_idx in table_order.iter().rev() {
-            let table = &tables[table_idx];
-            let k = table.num_variables();
-            // Slot size per column: 2^arity.
-            let slot_size = 1usize << k;
-
-            // Build one selector per column, copying column data into its slot.
-            let selectors = table
-                .0
-                .iter()
-                .map(|poly| {
-                    // Defensive check: every column of a table shares the same arity.
-                    assert_eq!(k, poly.num_variables());
-                    // Selector points at the next free slot in the stacked hypercube.
-                    let selector = Selector::new(num_variables - k, offset >> k);
-                    // Destination offset inside the stacked buffer.
-                    let dst = selector.index << poly.num_variables();
-                    // Copy this column's evaluations into its assigned slot.
-                    stacked.as_mut_slice()[dst..dst + poly.num_evals()]
-                        .copy_from_slice(poly.as_slice());
-                    // Advance the cursor by one slot for the next column.
-                    offset += slot_size;
-                    selector
-                })
-                .collect();
-
-            placements.push(TablePlacement::new(table_idx, selectors));
+        // Copy each source column into its planner-assigned slot.
+        for placement in &placements {
+            let table = &tables[placement.idx()];
+            for (poly_idx, selector) in placement.selectors().iter().enumerate() {
+                let poly = table.poly(poly_idx);
+                let dst = selector.index() << poly.num_variables();
+                stacked.as_mut_slice()[dst..dst + poly.num_evals()]
+                    .copy_from_slice(poly.as_slice());
+            }
         }
 
         Self {
@@ -273,6 +254,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_util::log2_ceil_usize;
     use proptest::prelude::*;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;

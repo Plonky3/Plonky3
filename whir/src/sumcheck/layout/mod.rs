@@ -70,6 +70,7 @@
 //! - Jagged PCS: ePrint 2025/0917.
 
 mod opening;
+mod plan;
 mod prover;
 mod verifier;
 mod witness;
