@@ -23,12 +23,16 @@ p3-util = { workspace = true }
 num-bigint = { version = "0.4.3", default-features = false }
 rand = "0.8.5"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
+cfg-if = "1.0.4"
 
 [dev-dependencies]
 criterion = "0.5"
 p3-field-testing = { workspace = true }
 rand_chacha = "0.3.1"
 rand_xoshiro = "0.6.0"
+
+[build-dependencies]
+rustc_version = "0.4.1"
 
 [[bench]]
 name = "bench_field"
