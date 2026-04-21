@@ -1,6 +1,3 @@
-use alloc::format;
-use alloc::vec::Vec;
-
 use p3_air::{Air, DebugConstraintBuilder};
 use p3_field::{ExtensionField, Field};
 use p3_lookup::AirWithLookups;
@@ -133,20 +130,10 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
 
         // Stop at the first failing row and report all violations at once.
         if builder.has_failures() {
-            let rendered_failures = builder
-                .failures()
-                .iter()
-                .map(|failure| {
-                    failure.label.as_deref().map_or_else(
-                        || format!("{}", failure.constraint),
-                        |label| format!("{} ({label})", failure.constraint),
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
+            let rendered = builder.formatted_failures();
             panic!(
                 "constraints not satisfied on row {row_index}: \
-                 failed constraints = [{rendered_failures}]"
+                 failed constraints = {rendered}"
             );
         }
     }
