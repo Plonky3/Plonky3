@@ -1,3 +1,4 @@
+use alloc::format;
 use alloc::vec::Vec;
 
 use p3_air::{Air, DebugConstraintBuilder};
@@ -22,7 +23,7 @@ type LookupConstraintsInputs<'a, F, LG> = (&'a [Lookup<F>], &'a LG);
 /// for first/last row assertions.
 ///
 /// Collects all constraint failures for the first failing row, then panics with
-/// a summary listing every violated constraint index.
+/// a summary listing every violated constraint (index with optional label).
 ///
 /// # Arguments
 /// - `air`: The [AIR](`p3_air::Air`) logic to run.
@@ -132,10 +133,20 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
 
         // Stop at the first failing row and report all violations at once.
         if builder.has_failures() {
-            let indices: Vec<usize> = builder.failures().iter().map(|f| f.constraint).collect();
+            let rendered_failures = builder
+                .failures()
+                .iter()
+                .map(|failure| {
+                    failure.label.as_deref().map_or_else(
+                        || format!("{}", failure.constraint),
+                        |label| format!("{} ({label})", failure.constraint),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
             panic!(
                 "constraints not satisfied on row {row_index}: \
-                 failed constraint indices = {indices:?}"
+                 failed constraints = [{rendered_failures}]"
             );
         }
     }

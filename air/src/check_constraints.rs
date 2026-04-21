@@ -462,7 +462,8 @@ impl<F: Field, EF: ExtensionField<F>> NamedExtensionBuilder for DebugConstraintB
 /// 1. Builds a vertical pair of the current and next rows (wrapping around
 ///    at the end).
 /// 2. Sets the first-row, last-row and transition selectors.
-/// 3. Evaluates the AIR, collecting all violated constraint indices.
+/// 3. Evaluates the AIR, collecting all violated constraints
+///    (index with optional label).
 /// 4. Stops at the first row that has at least one violation and panics
 ///    with a summary of every violated constraint on that row.
 ///
@@ -539,10 +540,20 @@ where
 
         // Stop at the first failing row and report all violations at once.
         if builder.has_failures() {
-            let indices: Vec<usize> = builder.failures().iter().map(|f| f.constraint).collect();
+            let rendered_failures = builder
+                .failures()
+                .iter()
+                .map(|failure| {
+                    failure.label.as_deref().map_or_else(
+                        || failure.constraint.to_string(),
+                        |label| format!("{} ({label})", failure.constraint),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
             panic!(
                 "constraints not satisfied on row {row_index}: \
-                 failed constraint indices = {indices:?}"
+                 failed constraints = [{rendered_failures}]"
             );
         }
     }
@@ -868,11 +879,20 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "failed constraint indices = [0, 2]")]
+    #[should_panic(expected = "failed constraints = [0, 2]")]
     fn test_panic_message_lists_all_failed_indices() {
         let air = AllZeroAir::<3>;
         let values = vec![BabyBear::ONE, BabyBear::ZERO, BabyBear::new(7)];
         let main = RowMajorMatrix::new(values, 3);
+        check_constraints(&air, &main, &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "1 (col_1_must_be_zero)")]
+    fn test_panic_message_includes_label_when_available() {
+        let air = NamedConstraintAir;
+        let values = vec![BabyBear::ONE, BabyBear::ONE];
+        let main = RowMajorMatrix::new(values, 2);
         check_constraints(&air, &main, &[]);
     }
 
