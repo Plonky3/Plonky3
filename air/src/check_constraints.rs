@@ -1,6 +1,7 @@
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::fmt;
 
 use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
@@ -48,6 +49,16 @@ pub struct ConstraintFailure {
     /// - Set when the constraint was asserted via [`NamedAirBuilder`].
     /// - `None` when the standard unlabeled assertion was used.
     pub label: Option<String>,
+}
+
+impl fmt::Display for ConstraintFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "#{}", self.constraint)?;
+        if let Some(label) = &self.label {
+            write!(f, " {label:?}")?;
+        }
+        Ok(())
+    }
 }
 
 /// Summary of all constraint violations across a full trace evaluation.
@@ -243,6 +254,15 @@ impl<'a, F: Field, EF: ExtensionField<F>> DebugConstraintBuilder<'a, F, EF> {
     /// Borrow the list of recorded constraint violations.
     pub fn failures(&self) -> &[ConstraintFailure] {
         &self.failures
+    }
+
+    /// Render the recorded violations as a bracketed, comma-separated list.
+    ///
+    /// Output form: `[#0, #1 "col_1_must_be_zero", #4]`. Every entry starts
+    /// with `#`, so mixed labeled and unlabeled entries stay unambiguous.
+    pub fn formatted_failures(&self) -> String {
+        let entries: Vec<String> = self.failures.iter().map(ToString::to_string).collect();
+        format!("[{}]", entries.join(", "))
     }
 
     /// Consume the builder and return all recorded constraint violations.
@@ -462,7 +482,8 @@ impl<F: Field, EF: ExtensionField<F>> NamedExtensionBuilder for DebugConstraintB
 /// 1. Builds a vertical pair of the current and next rows (wrapping around
 ///    at the end).
 /// 2. Sets the first-row, last-row and transition selectors.
-/// 3. Evaluates the AIR, collecting all violated constraint indices.
+/// 3. Evaluates the AIR, collecting all violated constraints
+///    (index with optional label).
 /// 4. Stops at the first row that has at least one violation and panics
 ///    with a summary of every violated constraint on that row.
 ///
@@ -539,10 +560,10 @@ where
 
         // Stop at the first failing row and report all violations at once.
         if builder.has_failures() {
-            let indices: Vec<usize> = builder.failures().iter().map(|f| f.constraint).collect();
+            let rendered = builder.formatted_failures();
             panic!(
                 "constraints not satisfied on row {row_index}: \
-                 failed constraint indices = {indices:?}"
+                 failed constraints = {rendered}"
             );
         }
     }
@@ -868,11 +889,20 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "failed constraint indices = [0, 2]")]
+    #[should_panic(expected = "failed constraints = [#0, #2]")]
     fn test_panic_message_lists_all_failed_indices() {
         let air = AllZeroAir::<3>;
         let values = vec![BabyBear::ONE, BabyBear::ZERO, BabyBear::new(7)];
         let main = RowMajorMatrix::new(values, 3);
+        check_constraints(&air, &main, &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "failed constraints = [#0, #1 \"col_1_must_be_zero\"]")]
+    fn test_panic_message_includes_label_when_available() {
+        let air = NamedConstraintAir;
+        let values = vec![BabyBear::ONE, BabyBear::ONE];
+        let main = RowMajorMatrix::new(values, 2);
         check_constraints(&air, &main, &[]);
     }
 
