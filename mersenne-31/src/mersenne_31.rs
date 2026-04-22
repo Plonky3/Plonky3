@@ -174,9 +174,9 @@ impl Field for Mersenne31 {
         if #[cfg(all(target_arch = "aarch64", target_feature = "neon"))] {
             type Packing = crate::PackedMersenne31Neon;
         } else if #[cfg(all(target_arch = "x86_64", target_feature = "avx512f", rustc_version_1_89_or_later))] {
-            type Packing = crate::PackedMersenne31AVX2;
-        } else if #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))] {
             type Packing = crate::PackedMersenne31AVX512;
+        } else if #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))] {
+            type Packing = crate::PackedMersenne31AVX2;
         } else {
             type Packing = Self;
         }
