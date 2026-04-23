@@ -14,7 +14,8 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, PrimeField64, impl_packed_field_pow_2,
+    PermutationMonomial, PrimeCharacteristicRing, PrimeField64, dispatch_chunked_mixed_dot_product,
+    impl_packed_field_pow_2,
 };
 use p3_util::reconstitute_from_base;
 use rand::distr::{Distribution, StandardUniform};
@@ -166,6 +167,11 @@ impl_sum_prod_base_field!(PackedGoldilocksAVX2, Goldilocks);
 impl Algebra<Goldilocks> for PackedGoldilocksAVX2 {
     // Benchmarked on AVX2: chunk=32 ≈ 226ns, chunk=2 ≈ 228ns, chunk=16 ≈ 229ns.
     const BATCHED_LC_CHUNK: usize = 32;
+
+    #[inline(always)]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Goldilocks; N]) -> Self {
+        dispatch_chunked_mixed_dot_product::<Self, Goldilocks, N>(a, f, Self::BATCHED_LC_CHUNK)
+    }
 }
 
 impl_packed_value!(PackedGoldilocksAVX2, Goldilocks, WIDTH);

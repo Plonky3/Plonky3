@@ -13,8 +13,8 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, uint32x4_mod_add,
-    uint32x4_mod_sub,
+    PermutationMonomial, PrimeCharacteristicRing, dispatch_chunked_mixed_dot_product,
+    impl_packed_field_pow_2, uint32x4_mod_add, uint32x4_mod_sub,
 };
 use p3_util::reconstitute_from_base;
 use rand::distr::{Distribution, StandardUniform};
@@ -226,6 +226,11 @@ impl_sum_prod_base_field!(PackedMersenne31Neon, Mersenne31);
 impl Algebra<Mersenne31> for PackedMersenne31Neon {
     // Benchmarked on AArch64 NEON: chunk=16 ≈ 51ns, chunk=8 ≈ 54ns, chunk=4 ≈ 59ns.
     const BATCHED_LC_CHUNK: usize = 16;
+
+    #[inline(always)]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Mersenne31; N]) -> Self {
+        dispatch_chunked_mixed_dot_product::<Self, Mersenne31, N>(a, f, Self::BATCHED_LC_CHUNK)
+    }
 }
 
 /// Given a `val` in `0, ..., 2 P`, return a `res` in `0, ..., P` such that `res = val (mod P)`

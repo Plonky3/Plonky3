@@ -696,6 +696,68 @@ pub trait Algebra<F>:
     }
 }
 
+/// Dot product over fixed-size arrays, processed in chunks of `CHUNK`.
+///
+/// This variant is intended for hot paths where the length is known at compile time
+/// (e.g. Poseidon matrix multiplies) and allows packed-field implementations to
+/// select a chunking strategy without changing call sites.
+#[must_use]
+#[inline]
+pub fn chunked_mixed_dot_product<
+    const CHUNK: usize,
+    A: Algebra<F> + Dup,
+    F: Dup,
+    const N: usize,
+>(
+    values: &[A; N],
+    coeffs: &[F; N],
+) -> A {
+    const { assert!(CHUNK != 0, "chunked_mixed_dot_product requires CHUNK > 0") }
+
+    // Fast path: for short vectors avoid chunk-loop overhead and preserve
+    // `sum_array`'s balanced reduction tree.
+    if N <= CHUNK {
+        let products: [A; N] = core::array::from_fn(|i| values[i].dup() * coeffs[i].dup());
+        return A::sum_array::<N>(&products);
+    }
+
+    let (val_chunks, val_rem) = values.as_slice().as_chunks::<CHUNK>();
+    let (coeff_chunks, coeff_rem) = coeffs.as_slice().as_chunks::<CHUNK>();
+
+    debug_assert_eq!(val_chunks.len(), coeff_chunks.len());
+    let mut acc = A::ZERO;
+    for (vc, cc) in zip(val_chunks, coeff_chunks) {
+        let products: [A; CHUNK] = core::array::from_fn(|i| vc[i].dup() * cc[i].dup());
+        acc += A::sum_array::<CHUNK>(&products);
+    }
+
+    debug_assert_eq!(val_rem.len(), coeff_rem.len());
+    for (v, c) in zip(val_rem, coeff_rem) {
+        acc += v.dup() * c.dup();
+    }
+    acc
+}
+
+/// Dispatch [`chunked_mixed_dot_product`] over supported chunk sizes.
+#[must_use]
+#[inline]
+pub fn dispatch_chunked_mixed_dot_product<A: Algebra<F> + Dup, F: Dup, const N: usize>(
+    values: &[A; N],
+    coeffs: &[F; N],
+    chunk: usize,
+) -> A {
+    match chunk {
+        1 => chunked_mixed_dot_product::<1, A, F, N>(values, coeffs),
+        2 => chunked_mixed_dot_product::<2, A, F, N>(values, coeffs),
+        4 => chunked_mixed_dot_product::<4, A, F, N>(values, coeffs),
+        8 => chunked_mixed_dot_product::<8, A, F, N>(values, coeffs),
+        16 => chunked_mixed_dot_product::<16, A, F, N>(values, coeffs),
+        32 => chunked_mixed_dot_product::<32, A, F, N>(values, coeffs),
+        64 => chunked_mixed_dot_product::<64, A, F, N>(values, coeffs),
+        _ => panic!("mixed_dot_product chunk must be one of 1, 2, 4, 8, 16, 32, or 64"),
+    }
+}
+
 /// Linear combination over runtime-length slices, processing in chunks of `CHUNK`.
 ///
 /// Computes `Σ values[i] * coeffs[i]` by batching into fixed-size chunks and

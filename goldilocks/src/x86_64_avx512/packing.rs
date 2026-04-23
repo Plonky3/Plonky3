@@ -14,7 +14,8 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, PrimeField64, impl_packed_field_pow_2,
+    PermutationMonomial, PrimeCharacteristicRing, PrimeField64, dispatch_chunked_mixed_dot_product,
+    impl_packed_field_pow_2,
 };
 use p3_util::reconstitute_from_base;
 use rand::distr::{Distribution, StandardUniform};
@@ -152,6 +153,11 @@ impl_sum_prod_base_field!(PackedGoldilocksAVX512, Goldilocks);
 impl Algebra<Goldilocks> for PackedGoldilocksAVX512 {
     // Benchmarked on AVX-512: chunk=4 ≈ 198ns, chunk=2 ≈ 198ns, chunk=32 ≈ 199ns.
     const BATCHED_LC_CHUNK: usize = 4;
+
+    #[inline(always)]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Goldilocks; N]) -> Self {
+        dispatch_chunked_mixed_dot_product::<Self, Goldilocks, N>(a, f, Self::BATCHED_LC_CHUNK)
+    }
 }
 
 // Degree of the smallest permutation polynomial for Goldilocks.

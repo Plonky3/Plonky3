@@ -13,8 +13,8 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, mm512_mod_add,
-    mm512_mod_sub,
+    PermutationMonomial, PrimeCharacteristicRing, dispatch_chunked_mixed_dot_product,
+    impl_packed_field_pow_2, mm512_mod_add, mm512_mod_sub,
 };
 use p3_util::reconstitute_from_base;
 use rand::distr::{Distribution, StandardUniform};
@@ -217,6 +217,11 @@ impl_sum_prod_base_field!(PackedMersenne31AVX512, Mersenne31);
 impl Algebra<Mersenne31> for PackedMersenne31AVX512 {
     // Benchmarked on AVX-512: chunk=8 ≈ 77ns, chunk=2 ≈ 77ns, chunk=4 ≈ 78ns.
     const BATCHED_LC_CHUNK: usize = 8;
+
+    #[inline(always)]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Mersenne31; N]) -> Self {
+        dispatch_chunked_mixed_dot_product::<Self, Mersenne31, N>(a, f, Self::BATCHED_LC_CHUNK)
+    }
 }
 
 #[inline]
