@@ -348,10 +348,12 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
                     .sum::<EF>()
             }
             // Decompose the per-row `PackedEF × F::Packing` dot product into four
-            // per-coef `F::Packing × F::Packing` dot products, each of which goes
-            // through Plonky3's specialized `PackedMontyField31::dot_product<N>`
-            // (VPMULUDQ + VPADDQ with Monty reduction amortized across 4-chunks).
-            // Gives ~4× fewer Monty reductions than the eager path at N=32.
+            // per-coef `F::Packing × F::Packing` dot products, each driven by
+            // chunked calls to `PackedMontyField31::dot_product::<4>` — the
+            // `dot_product_4` primitive (VPMULUDQ + VPADDQ on x86, analogous
+            // intrinsics on NEON) accumulates u64 products and applies one Monty
+            // reduction per 4-wide group. Gives ~4× fewer Monty reductions than
+            // the eager path at every N ≥ 4, with a scalar tail for the residue.
             Self::Packed(eq1) => compress_hi_dot_delayed_packed::<F, EF>(eq1.as_slice(), chunk, eq0),
         }
     }
