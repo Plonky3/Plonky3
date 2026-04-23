@@ -2,21 +2,20 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, get_symbolic_constraints};
+use p3_air::symbolic::{get_symbolic_constraints, AirLayout, SymbolicAirBuilder};
 use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
-use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
+use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use tracing::{debug_span, info_span, instrument};
 
 use crate::{
-    Commitments, Domain, OpenedValues, PackedVal, PreprocessedProverData, Proof,
-    ProverConstraintFolder, StarkGenericConfig, Val, get_constraint_layout,
-    get_log_num_quotient_chunks,
+    get_constraint_layout, get_log_num_quotient_chunks, Commitments, Domain, OpenedValues,
+    PackedVal, PreprocessedProverData, Proof, ProverConstraintFolder, StarkGenericConfig, Val,
 };
 
 #[instrument(skip_all)]
@@ -117,7 +116,8 @@ where
     // We get the constraint bound:
     //          deg(C(x)) <= deg(C) * (N - 1) + 1
     // The `+1` is due to the `is_transition` selector which is not accounted for in `deg(C)`. Note
-    // that S_i^2 should never appear in a constraint as it should just be replaced by `S_i`.
+    // that these selectors are not normalized in general, so `S_i^2` is not usually equal to
+    // `S_i`; repeated selector factors still contribute to the constraint degree.
     //
     // For now in comments we assume that `deg(C) = 3` meaning `deg(C(x)) <= 3N - 2`
 
