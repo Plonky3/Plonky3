@@ -12,9 +12,6 @@
 //! roughly 4× Monty reductions across the inner loop, stacked with an
 //! independent-accumulator ILP gain from the per-coefficient decomposition.
 
-use alloc::vec;
-use alloc::vec::Vec;
-
 use p3_field::{
     BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
     PrimeCharacteristicRing,
@@ -57,28 +54,46 @@ where
 
     let chunk_packed = F::Packing::pack_slice(chunk);
 
-    // Transpose `eq1_packed` into four per-coefficient slices sharing one
-    // allocation: layout is `[c0 | c1 | c2 | c3]`, each sub-block of length n.
-    // One heap round-trip per `compress_hi_dot` call, amortized across `eq0`
-    // outer iterations. Separate per-coefficient slices give `dot_product_4`
-    // contiguous loads.
-    let mut transposed: Vec<F::Packing> = vec![F::Packing::default(); 4 * n];
-    {
-        let (c0, rest) = transposed.split_at_mut(n);
-        let (c1, rest) = rest.split_at_mut(n);
-        let (c2, c3) = rest.split_at_mut(n);
-        for (i, item) in eq1_packed.iter().enumerate() {
-            let coefs = item.as_basis_coefficients_slice();
-            c0[i] = coefs[0];
-            c1[i] = coefs[1];
-            c2[i] = coefs[2];
-            c3[i] = coefs[3];
-        }
+    // Stack-buffer transpose. MAX_STACK_N bounds the worst-case stack footprint
+    // (4 * MAX_STACK_N * size_of::<F::Packing>()); for N > MAX_STACK_N we fall
+    // back to the eager path so stack usage stays bounded.
+    //
+    // The per-coefficient buffers are `MaybeUninit` so we only touch the first
+    // `n` slots — crucial when MAX_STACK_N >> n (e.g. n=1 for small SVO rounds),
+    // because zero-filling the whole buffer would otherwise dwarf the actual work.
+    // 128 covers the hottest WHIR shapes: 22-var/l=4 on AVX-512 gives N=32,
+    // 25-var/l=4 on AVX-512 gives N=128, and AVX2/NEON shifts the exponent
+    // only upward for a given shape (narrower packing → larger N).
+    // Stack footprint: 4 * 128 * size_of::<F::Packing>() = ~32 KiB on AVX-512.
+    const MAX_STACK_N: usize = 128;
+    if n > MAX_STACK_N {
+        return fallback::<F, EF>(eq1_packed, chunk, eq0);
     }
-    let (c0, rest) = transposed.split_at(n);
-    let (c1, rest) = rest.split_at(n);
-    let (c2, c3) = rest.split_at(n);
-    let cs: [&[F::Packing]; 4] = [c0, c1, c2, c3];
+    let mut c0: [core::mem::MaybeUninit<F::Packing>; MAX_STACK_N] =
+        [const { core::mem::MaybeUninit::uninit() }; MAX_STACK_N];
+    let mut c1: [core::mem::MaybeUninit<F::Packing>; MAX_STACK_N] =
+        [const { core::mem::MaybeUninit::uninit() }; MAX_STACK_N];
+    let mut c2: [core::mem::MaybeUninit<F::Packing>; MAX_STACK_N] =
+        [const { core::mem::MaybeUninit::uninit() }; MAX_STACK_N];
+    let mut c3: [core::mem::MaybeUninit<F::Packing>; MAX_STACK_N] =
+        [const { core::mem::MaybeUninit::uninit() }; MAX_STACK_N];
+    for (i, item) in eq1_packed.iter().enumerate() {
+        let coefs = item.as_basis_coefficients_slice();
+        c0[i].write(coefs[0]);
+        c1[i].write(coefs[1]);
+        c2[i].write(coefs[2]);
+        c3[i].write(coefs[3]);
+    }
+    // SAFETY: each buffer's first `n` elements were just initialized above via
+    // `MaybeUninit::write`. We only expose the initialized prefix.
+    let cs: [&[F::Packing]; 4] = unsafe {
+        [
+            core::slice::from_raw_parts(c0.as_ptr().cast::<F::Packing>(), n),
+            core::slice::from_raw_parts(c1.as_ptr().cast::<F::Packing>(), n),
+            core::slice::from_raw_parts(c2.as_ptr().cast::<F::Packing>(), n),
+            core::slice::from_raw_parts(c3.as_ptr().cast::<F::Packing>(), n),
+        ]
+    };
 
     let mut acc = EF::ExtensionPacking::default();
     for (j, w0) in eq0.as_slice().iter().enumerate() {
