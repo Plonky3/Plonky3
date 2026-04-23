@@ -18,6 +18,7 @@ use itertools::Itertools;
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
 use p3_util::log2_strict_usize;
 
+use super::delayed::compress_hi_dot_delayed_packed;
 use crate::point::Point;
 use crate::poly::Poly;
 
@@ -346,23 +347,12 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
                     })
                     .sum::<EF>()
             }
-            Self::Packed(eq1) => {
-                // Pack the entire row into SIMD elements.
-                let chunk = F::Packing::pack_slice(chunk);
-                // Packed dot product per eq0 entry, then reduce lanes at the end.
-                let sum = chunk
-                    .chunks(eq1.num_evals())
-                    .zip_eq(eq0.iter())
-                    .map(|(chunk, &w0)| {
-                        dot_product::<EF::ExtensionPacking, _, _>(
-                            eq1.iter().copied(),
-                            chunk.iter().copied(),
-                        ) * w0
-                    })
-                    .sum();
-                // Horizontal reduction across SIMD lanes.
-                EF::ExtensionPacking::to_ext_iter([sum]).sum()
-            }
+            // Decompose the per-row `PackedEF × F::Packing` dot product into four
+            // per-coef `F::Packing × F::Packing` dot products, each of which goes
+            // through Plonky3's specialized `PackedMontyField31::dot_product<N>`
+            // (VPMULUDQ + VPADDQ with Monty reduction amortized across 4-chunks).
+            // Gives ~4× fewer Monty reductions than the eager path at N=32.
+            Self::Packed(eq1) => compress_hi_dot_delayed_packed::<F, EF>(eq1.as_slice(), chunk, eq0),
         }
     }
 }
