@@ -147,19 +147,20 @@ where
 
     // Fast-path guard: stack transpose needs bounded `N`.
     if n <= MAX_STACK_N {
-        // Lift `EF::DIMENSION` (an associated const) into a true const
-        // generic by an explicit match. Each arm gets a fully unrolled
-        // monomorphisation of the inner kernel; non-matching arms are
-        // dead at every concrete call site.
+        // Lift `EF::DIMENSION` (associated const) into a true const generic:
+        //
+        //     - each arm pins `D` to a concrete number,
+        //     - each arm becomes a fully unrolled monomorphisation,
+        //     - non-matching arms are dead at every concrete call site.
         match EF::DIMENSION {
-            1 => return run_fast_path::<F, EF, 1>(eq1_packed, chunk_packed, eq0, n),
-            2 => return run_fast_path::<F, EF, 2>(eq1_packed, chunk_packed, eq0, n),
-            3 => return run_fast_path::<F, EF, 3>(eq1_packed, chunk_packed, eq0, n),
-            4 => return run_fast_path::<F, EF, 4>(eq1_packed, chunk_packed, eq0, n),
-            5 => return run_fast_path::<F, EF, 5>(eq1_packed, chunk_packed, eq0, n),
-            6 => return run_fast_path::<F, EF, 6>(eq1_packed, chunk_packed, eq0, n),
-            7 => return run_fast_path::<F, EF, 7>(eq1_packed, chunk_packed, eq0, n),
-            8 => return run_fast_path::<F, EF, 8>(eq1_packed, chunk_packed, eq0, n),
+            1 => return basis_split_dot::<F, EF, 1>(eq1_packed, chunk_packed, eq0, n),
+            2 => return basis_split_dot::<F, EF, 2>(eq1_packed, chunk_packed, eq0, n),
+            3 => return basis_split_dot::<F, EF, 3>(eq1_packed, chunk_packed, eq0, n),
+            4 => return basis_split_dot::<F, EF, 4>(eq1_packed, chunk_packed, eq0, n),
+            5 => return basis_split_dot::<F, EF, 5>(eq1_packed, chunk_packed, eq0, n),
+            6 => return basis_split_dot::<F, EF, 6>(eq1_packed, chunk_packed, eq0, n),
+            7 => return basis_split_dot::<F, EF, 7>(eq1_packed, chunk_packed, eq0, n),
+            8 => return basis_split_dot::<F, EF, 8>(eq1_packed, chunk_packed, eq0, n),
             _ => {}
         }
     }
@@ -184,9 +185,12 @@ where
 
 /// Inner group size for the delayed-reduction primitive.
 ///
-/// Fixed at 4 because `F::Packing::dot_product::<4>` maps to the
-/// `dot_product_4` primitive on every SIMD target. `N mod 4` residues
-/// fall to a scalar tail.
+/// - Every `F::Packing` impl specialises `dot_product::<4>` to a
+///   hand-tuned four-wide kernel, so the choice is portable across
+///   fields (Monty-31, Goldilocks, …).
+/// - On 31-bit fields it is also the `u64` overflow ceiling
+///   (`4 * 2^62 < 2^64`).
+/// - `N mod 4` residues fall to the scalar tail.
 const CHUNK: usize = 4;
 
 /// Upper bound on `N` for the stack-transpose fast path.
@@ -198,21 +202,18 @@ const CHUNK: usize = 4;
 ///         =  8 KiB  on NEON    (D = 4, packing width  4)
 /// ```
 ///
-/// 128 comfortably covers the hottest workloads; larger `N` routes to
-/// the fallback so the stack reservation stays bounded.
+/// 128 comfortably covers the hottest workloads;
+/// Larger `N` routes to the fallback so the stack reservation stays bounded.
 const MAX_STACK_N: usize = 128;
 
 /// Const-generic inner kernel for the packed high-eq dot product.
 ///
-/// Implements the basis-split / delayed-reduction / interleaved-loop
-/// recipe parameterised by the extension dimension `D`. Each supported
-/// `D` gets its own monomorphisation, so the per-coefficient loop is
-/// fully unrolled and the per-coefficient accumulator array is
-/// register-allocated rather than stack-spilled.
+/// # Caller invariants
 ///
-/// Caller invariant: `D == EF::DIMENSION` and `n <= MAX_STACK_N`.
+/// - `D == EF::DIMENSION`,
+/// - `n <= MAX_STACK_N`.
 #[inline]
-fn run_fast_path<F, EF, const D: usize>(
+fn basis_split_dot<F, EF, const D: usize>(
     eq1_packed: &[EF::ExtensionPacking],
     chunk_packed: &[F::Packing],
     eq0: &Poly<EF>,
@@ -227,13 +228,15 @@ where
     //     input  : [ (c_0, ..., c_{D-1})_i ]
     //     output : per-coefficient buffers c_0[..], ..., c_{D-1}[..]
     //
-    // `MaybeUninit` skips the zero-fill; only the first `n` slots of
-    // each buffer are written by the loop below.
+    // `MaybeUninit` skips the zero-fill;
+    //
+    // Only the first `n` slots of each buffer are written by the loop below.
     let mut bufs: [[MaybeUninit<F::Packing>; MAX_STACK_N]; D] =
         [[const { MaybeUninit::uninit() }; MAX_STACK_N]; D];
     for (i, item) in eq1_packed.iter().enumerate() {
-        // `coefs.len()` equals `EF::DIMENSION`, which the dispatcher
-        // pinned to `D` at the call site.
+        // `coefs.len()` equals `EF::DIMENSION`.
+        //
+        // The dispatcher pinned to `D` at the call site.
         let coefs = item.as_basis_coefficients_slice();
         for k in 0..D {
             bufs[k][i].write(coefs[k]);
@@ -242,9 +245,8 @@ where
 
     // SAFETY:
     //
-    // The loop above initialised exactly the first `n` slots of each
-    // buffer via `MaybeUninit::write`. We expose only that prefix, and
-    // the buffers are not aliased.
+    // The loop above initialised exactly the first `n` slots of each buffer.
+    // We expose only that prefix, and the buffers are not aliased.
     let cs: [&[F::Packing]; D] = core::array::from_fn(|k| unsafe {
         core::slice::from_raw_parts(bufs[k].as_ptr().cast::<F::Packing>(), n)
     });
@@ -292,8 +294,8 @@ where
 
     // Phase 3: horizontal reduction.
     //
-    // The accumulator carries `W` parallel partial sums, one per SIMD
-    // lane. Flatten into a single scalar result.
+    // The accumulator carries `W` parallel partial sums, one per SIMD lane.
+    // Flatten into a single scalar result.
     EF::ExtensionPacking::to_ext_iter([acc]).sum()
 }
 
@@ -312,16 +314,16 @@ mod tests {
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
     type PF = <F as Field>::Packing;
-    type PEF = <EF as ExtensionField<F>>::ExtensionPacking;
+    type PackedEF = <EF as ExtensionField<F>>::ExtensionPacking;
 
     /// Naive triple-nested reference: no SIMD tricks, no basis split.
-    fn reference(eq1_packed: &[PEF], chunk: &[F], eq0: &Poly<EF>) -> EF {
+    fn reference(eq1_packed: &[PackedEF], chunk: &[F], eq0: &Poly<EF>) -> EF {
         // Repack the base-field row the same way the kernel does.
         let chunk_packed = PF::pack_slice(chunk);
         let n = eq1_packed.len();
 
         // Accumulate the triple sum over `(j, i)` in packed form.
-        let mut total = PEF::ZERO;
+        let mut total = PackedEF::ZERO;
         for (j, &w0) in eq0.as_slice().iter().enumerate() {
             let piece = &chunk_packed[j * n..(j + 1) * n];
             for (&eq1i, &pi) in eq1_packed.iter().zip(piece) {
@@ -330,11 +332,11 @@ mod tests {
         }
 
         // Horizontal-reduce to a scalar so the output type matches.
-        <PEF as PackedFieldExtension<F, EF>>::to_ext_iter([total]).sum()
+        <PackedEF as PackedFieldExtension<F, EF>>::to_ext_iter([total]).sum()
     }
 
     /// Deterministic random input generator for the kernel and reference.
-    fn random_inputs(n: usize, m_vars: usize, seed: u64) -> (Vec<PEF>, Vec<F>, Poly<EF>) {
+    fn random_inputs(n: usize, m_vars: usize, seed: u64) -> (Vec<PackedEF>, Vec<F>, Poly<EF>) {
         // Number of base-field lanes per SIMD packing.
         let w = PF::WIDTH;
         // Length of `eq0`; the polynomial constructor requires a power of two.
