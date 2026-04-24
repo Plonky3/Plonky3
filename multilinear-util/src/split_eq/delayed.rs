@@ -104,10 +104,8 @@ where
             let mut a = F::Packing::ZERO;
             let mut i = 0;
             while i + CHUNK <= n {
-                let lhs: &[F::Packing; CHUNK] =
-                    (&src[i..i + CHUNK]).try_into().unwrap();
-                let rhs: &[F::Packing; CHUNK] =
-                    (&piece[i..i + CHUNK]).try_into().unwrap();
+                let lhs: &[F::Packing; CHUNK] = (&src[i..i + CHUNK]).try_into().unwrap();
+                let rhs: &[F::Packing; CHUNK] = (&piece[i..i + CHUNK]).try_into().unwrap();
                 a += F::Packing::dot_product::<CHUNK>(lhs, rhs);
                 i += CHUNK;
             }

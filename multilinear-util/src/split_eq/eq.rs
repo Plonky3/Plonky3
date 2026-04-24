@@ -354,7 +354,9 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
             // intrinsics on NEON) accumulates u64 products and applies one Monty
             // reduction per 4-wide group. Gives ~4× fewer Monty reductions than
             // the eager path at every N ≥ 4, with a scalar tail for the residue.
-            Self::Packed(eq1) => compress_hi_dot_delayed_packed::<F, EF>(eq1.as_slice(), chunk, eq0),
+            Self::Packed(eq1) => {
+                compress_hi_dot_delayed_packed::<F, EF>(eq1.as_slice(), chunk, eq0)
+            }
         }
     }
 }
