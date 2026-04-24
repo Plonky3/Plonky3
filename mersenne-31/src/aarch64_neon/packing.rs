@@ -229,7 +229,11 @@ impl Algebra<Mersenne31> for PackedMersenne31Neon {
 
     #[inline(always)]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Mersenne31; N]) -> Self {
-        dispatch_chunked_mixed_dot_product::<Self, Mersenne31, N>(a, f, Self::BATCHED_LC_CHUNK)
+        dispatch_chunked_mixed_dot_product::<Self, Mersenne31, N>(
+            a,
+            f,
+            <Self as Algebra<Mersenne31>>::BATCHED_LC_CHUNK,
+        )
     }
 }
 
