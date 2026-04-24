@@ -115,9 +115,9 @@ where
     //          C(x) = C(T_1(x), ..., T_w(x), T_1(hx), ... T_w(hx), S_1(x), S_2(x), S_3(x))
     // We get the constraint bound:
     //          deg(C(x)) <= deg(C) * (N - 1) + 1
-    // The `+1` is due to the `is_transition` selector which is not accounted for in `deg(C)`. Note
-    // that these selectors are not normalized in general, so `S_i^2` is not usually equal to
-    // `S_i`; repeated selector factors still contribute to the constraint degree.
+    // The `+1` is due to the `is_transition` selector which is not accounted for in `deg(C)`.
+    // Although these selectors are not normalized in general, `S_i^2` vanishes on the same rows
+    // as `S_i`, so a constraint using `S_i^2` can always be rewritten with a single `S_i` factor.
     //
     // For now in comments we assume that `deg(C) = 3` meaning `deg(C(x)) <= 3N - 2`
 
