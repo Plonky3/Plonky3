@@ -711,7 +711,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     }
 }
 
-pub type SvoClaim<F, EF> = Claim<F, EF, SvoPoint<F, EF>, SvoAccumulators<EF>>;
+pub type SvoClaim<F, EF> = Claim<EF, SvoPoint<F, EF>, SvoAccumulators<EF>>;
 
 impl<F: Field, EF: ExtensionField<F>> SvoClaim<F, EF> {
     /// Creates a new SVO equality claim with precomputed accumulators.
@@ -750,7 +750,6 @@ impl<F: Field, EF: ExtensionField<F>> SvoClaim<F, EF> {
             point,
             data: accumulators,
             eval,
-            _marker: core::marker::PhantomData,
         }
     }
 

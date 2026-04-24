@@ -1,7 +1,6 @@
 //! Opened claims on stacked tables.
 
 use alloc::vec::Vec;
-use core::marker::PhantomData;
 
 use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
@@ -14,23 +13,23 @@ use crate::sumcheck::svo::{SvoAccumulators, SvoPoint};
 /// Opening in the prefix mode (no auxiliary payload).
 pub type PrefixOpening<EF> = Opening<EF, ()>;
 /// Multi-opening claim over a split-equality point in the prefix mode.
-pub type PrefixMultiClaim<F, EF> = MultiClaim<F, EF, SplitEq<F, EF>, ()>;
+pub type PrefixMultiClaim<F, EF> = MultiClaim<EF, SplitEq<F, EF>, ()>;
 /// Virtual claim over the stacked polynomial in the prefix mode.
-pub type PrefixVirtualClaim<F, EF> = Claim<F, EF, Point<EF>, ()>;
+pub type PrefixVirtualClaim<EF> = Claim<EF, Point<EF>, ()>;
 
 /// Opening in the suffix mode: carries one partial evaluation per SVO round.
 pub type SuffixOpening<EF> = Opening<EF, Vec<Poly<EF>>>;
 /// Multi-opening claim over an SVO point in the suffix mode.
-pub type SuffixMultiClaim<F, EF> = MultiClaim<F, EF, SvoPoint<F, EF>, Vec<Poly<EF>>>;
+pub type SuffixMultiClaim<F, EF> = MultiClaim<EF, SvoPoint<F, EF>, Vec<Poly<EF>>>;
 /// Virtual claim carrying precomputed SVO accumulators.
-pub type SuffixVirtualClaim<F, EF> = Claim<F, EF, Point<EF>, SvoAccumulators<EF>>;
+pub type SuffixVirtualClaim<EF> = Claim<EF, Point<EF>, SvoAccumulators<EF>>;
 
 /// Opening on the verifier side: column index plus claimed evaluation.
 pub type VerifierOpening<EF> = Opening<EF, ()>;
 /// Multi-opening claim over a plain point on the verifier side.
-pub type VerifierMultiClaim<F, EF> = MultiClaim<F, EF, Point<EF>, ()>;
+pub type VerifierMultiClaim<EF> = MultiClaim<EF, Point<EF>, ()>;
 /// Virtual evaluation claim on the stacked polynomial (verifier side).
-pub type VerifierVirtualClaim<F, EF> = Claim<F, EF, Point<EF>, ()>;
+pub type VerifierVirtualClaim<EF> = Claim<EF, Point<EF>, ()>;
 
 /// Single opening of one polynomial at a shared evaluation point.
 ///
@@ -99,23 +98,17 @@ impl<EF: Field> Opening<EF, ()> {
 /// - Prover and verifier walk the same three-loop nest, so the alpha-to-claim
 ///   mapping is forced to agree when the transcripts mirror each other.
 #[derive(Debug, Clone)]
-pub struct MultiClaim<F: Field, EF: ExtensionField<F>, Point, Data> {
+pub struct MultiClaim<F: ExtensionField<F>, Point, Data> {
     /// Shared evaluation point of every opening in the batch.
     pub(super) point: Point,
     /// Openings attached to the shared point, in insertion order.
-    pub(super) openings: Vec<Opening<EF, Data>>,
-    /// Ties the base field into the type without storing a runtime value.
-    pub(super) _marker: PhantomData<F>,
+    pub(super) openings: Vec<Opening<F, Data>>,
 }
 
-impl<F: Field, EF: ExtensionField<F>, Point, Data> MultiClaim<F, EF, Point, Data> {
+impl<EF: Field, Point, Data> MultiClaim<EF, Point, Data> {
     /// Builds a batch sharing `point`, holding the given openings.
     pub const fn new(point: Point, openings: Vec<Opening<EF, Data>>) -> Self {
-        Self {
-            point,
-            openings,
-            _marker: PhantomData,
-        }
+        Self { point, openings }
     }
 
     /// Returns the shared evaluation point.
@@ -217,7 +210,7 @@ mod tests {
             Opening::<F, ()>::new(0, F::from_u64(1)),
             Opening::<F, ()>::new(1, F::from_u64(2)),
         ];
-        let claim = MultiClaim::<F, F, u32, ()>::new(100, openings);
+        let claim = MultiClaim::<F, u32, ()>::new(100, openings);
 
         // Constructor must forward the point and the openings vector verbatim.
         assert_eq!(*claim.point(), 100);
@@ -231,7 +224,7 @@ mod tests {
             let openings: Vec<Opening<F, ()>> = (0..n)
                 .map(|i| Opening::new(i, F::from_u64(i as u64)))
                 .collect();
-            let claim = MultiClaim::<F, F, u32, ()>::new(0, openings);
+            let claim = MultiClaim::<F, u32, ()>::new(0, openings);
 
             // Invariant: reported length equals constructed size.
             assert_eq!(claim.len(), n);
@@ -241,11 +234,11 @@ mod tests {
     #[test]
     fn multi_claim_is_empty_is_true_iff_no_openings() {
         // Empty claim: is_empty must be true.
-        let empty: MultiClaim<F, F, u32, ()> = MultiClaim::new(0, vec![]);
+        let empty: MultiClaim<F, u32, ()> = MultiClaim::new(0, vec![]);
         assert!(empty.is_empty());
 
         // Non-empty claim: is_empty must be false.
-        let filled = MultiClaim::<F, F, u32, ()>::new(0, vec![Opening::new(0, F::from_u64(1))]);
+        let filled = MultiClaim::<F, u32, ()>::new(0, vec![Opening::new(0, F::from_u64(1))]);
         assert!(!filled.is_empty());
     }
 
@@ -260,7 +253,7 @@ mod tests {
             Opening::<F, ()>::new(0, F::from_u64(0)),
             Opening::<F, ()>::new(1, F::from_u64(10)),
         ];
-        let claim = MultiClaim::<F, F, u32, ()>::new(0, expected.clone());
+        let claim = MultiClaim::<F, u32, ()>::new(0, expected.clone());
 
         for (i, got) in claim.openings().iter().enumerate() {
             assert_eq!(got.poly_idx(), expected[i].poly_idx());
@@ -271,7 +264,7 @@ mod tests {
     #[test]
     fn multi_claim_clone_preserves_point_and_openings() {
         // Regression: derived Clone must copy both the point and the Vec contents.
-        let claim = MultiClaim::<F, F, u32, ()>::new(
+        let claim = MultiClaim::<F, u32, ()>::new(
             77,
             vec![
                 Opening::new(1, F::from_u64(5)),

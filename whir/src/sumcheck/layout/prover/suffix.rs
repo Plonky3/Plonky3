@@ -2,7 +2,6 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
-use core::marker::PhantomData;
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field, dot_product};
@@ -46,7 +45,7 @@ pub struct SuffixProver<F: Field, EF: ExtensionField<F>> {
     /// - Claims are appended in insertion order.
     pub(crate) claim_map: Vec<Vec<SuffixMultiClaim<F, EF>>>,
     /// Virtual claims carrying precomputed SVO accumulators.
-    pub(crate) virtual_claims: Vec<SuffixVirtualClaim<F, EF>>,
+    pub(crate) virtual_claims: Vec<SuffixVirtualClaim<EF>>,
 }
 
 impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
@@ -245,7 +244,6 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
             point,
             eval,
             data: accumulators,
-            _marker: PhantomData,
         });
 
         eval

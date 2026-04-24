@@ -33,29 +33,25 @@ pub mod svo;
 #[cfg(test)]
 pub(crate) mod tests;
 
-use core::marker::PhantomData;
-
 pub use data::SumcheckData;
 pub use error::SumcheckError;
 pub(crate) use lagrange::extrapolate_01inf;
-use p3_field::{ExtensionField, Field};
+use p3_field::Field;
 
 /// A claimed evaluation together with layout-specific auxiliary data.
 #[derive(Debug, Clone)]
-pub struct Claim<F: Field, EF: ExtensionField<F>, P, Data> {
+pub struct Claim<F: Field, P, Data> {
     /// Point representation used to evaluate or later reconstruct this claim.
     pub(crate) point: P,
     /// Claimed value at `point`.
-    pub(crate) eval: EF,
+    pub(crate) eval: F,
     /// Extra strategy-specific prover or verifier metadata.
     pub(crate) data: Data,
-    /// Keeps the base field in the type without storing a runtime value.
-    pub(crate) _marker: PhantomData<F>,
 }
 
-impl<F: Field, EF: ExtensionField<F>, P, Data> Claim<F, EF, P, Data> {
+impl<F: Field, P, Data> Claim<F, P, Data> {
     /// Returns the claimed value.
-    pub const fn eval(&self) -> EF {
+    pub const fn eval(&self) -> F {
         self.eval
     }
 

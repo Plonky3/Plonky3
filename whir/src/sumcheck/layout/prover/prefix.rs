@@ -1,7 +1,6 @@
 //! Prefix-mode stacked-sumcheck prover.
 
 use alloc::vec::Vec;
-use core::marker::PhantomData;
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
@@ -43,7 +42,7 @@ pub struct PrefixProver<F: Field, EF: ExtensionField<F>> {
     /// - Claims are appended in insertion order.
     pub(crate) claim_map: Vec<Vec<PrefixMultiClaim<F, EF>>>,
     /// Virtual claims sampled directly on the stacked polynomial.
-    pub(crate) virtual_claims: Vec<PrefixVirtualClaim<F, EF>>,
+    pub(crate) virtual_claims: Vec<PrefixVirtualClaim<EF>>,
 }
 
 impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
@@ -150,7 +149,6 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
             point,
             eval,
             data: (),
-            _marker: PhantomData,
         });
 
         eval

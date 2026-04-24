@@ -103,7 +103,7 @@ impl<F: Field> Table<F> {
     }
 
     /// Returns the total number of stacked evaluations contributed.
-    pub fn size(&self) -> usize {
+    pub fn num_total_values(&self) -> usize {
         (1 << self.num_variables()) * self.num_polys()
     }
 }
@@ -363,7 +363,7 @@ mod tests {
         // Check: all shape queries match the fixture.
         assert_eq!(table.num_polys(), 2);
         assert_eq!(table.num_variables(), 3);
-        assert_eq!(table.size(), 16);
+        assert_eq!(table.num_total_values(), 16);
         // Check: column lookup returns a ref to the i-th poly with matching arity.
         assert_eq!(table.poly(0).num_variables(), 3);
     }
@@ -520,7 +520,7 @@ mod tests {
                 .collect();
 
             // Total stacked size (before power-of-two rounding).
-            let total_used: usize = tables.iter().map(Table::size).sum();
+            let total_used: usize = tables.iter().map(Table::num_total_values).sum();
 
             // Folding = 1 is always safe since the strategy guarantees arity >= 2.
             let witness = Witness::new(tables, 1);

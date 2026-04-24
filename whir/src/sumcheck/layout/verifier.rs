@@ -70,9 +70,11 @@ pub struct Verifier<F: Field, EF: ExtensionField<F>> {
     /// Number of variables of the stacked polynomial.
     k: usize,
     /// Concrete claims recorded per source table.
-    claim_map: Vec<Vec<MultiClaim<F, EF>>>,
+    claim_map: Vec<Vec<MultiClaim<EF>>>,
     /// Virtual claims sampled directly on the stacked polynomial.
-    virtual_claims: Vec<VirtualClaim<F, EF>>,
+    virtual_claims: Vec<VirtualClaim<EF>>,
+    /// Marker to tie the challenger's field type
+    _marker: PhantomData<F>,
 }
 
 impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
@@ -109,6 +111,7 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
             claim_map: (0..tables.len()).map(|_| Vec::new()).collect(),
             // No virtual claims recorded yet.
             virtual_claims: Vec::new(),
+            _marker: PhantomData,
         }
     }
 
@@ -203,7 +206,6 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
             point,
             eval,
             data: (),
-            _marker: PhantomData,
         });
     }
 
