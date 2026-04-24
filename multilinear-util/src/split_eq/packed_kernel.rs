@@ -103,8 +103,10 @@ use crate::poly::Poly;
 ///
 /// Two code paths, selected per call:
 ///
-/// - Dimension `4` and `N <= 128`: basis-split plus interleaved
-///   delayed-reduction dot products.
+/// - `EF::DIMENSION ∈ {1, …, 8}` and `N <= 128`: basis-split plus
+///   interleaved delayed-reduction dot products. Dispatched into a
+///   const-generic inner function so each supported dimension gets its
+///   own fully unrolled monomorphisation.
 /// - Otherwise: one packed-extension dot product per row.
 ///
 /// # Panics
@@ -120,25 +122,6 @@ where
     F: Field,
     EF: ExtensionField<F>,
 {
-    // Inner group size for the delayed-reduction primitive.
-    //
-    // Why 4:
-    //     - maps to the `dot_product_4` primitive on every SIMD target,
-    //     - `N mod 4` residues fall to the scalar tail below.
-    const CHUNK: usize = 4;
-
-    // Upper bound on `N` for the stack-transpose fast path.
-    //
-    // Stack footprint:
-    //     4 * 128 * size_of::<Packing>()
-    //         = 32 KiB  on AVX-512  (packing width 16)
-    //         =  8 KiB  on NEON     (packing width  4)
-    //
-    // Rationale: 128 covers the hottest workloads;
-    //
-    // Larger `N` routes to the fallback so the stack reservation stays bounded.
-    const MAX_STACK_N: usize = 128;
-
     // Number of packed slots on the left of each dot product.
     let n = eq1_packed.len();
 
@@ -147,101 +130,38 @@ where
     // Requires `chunk.len() % W == 0`, which the caller guarantees.
     let chunk_packed = F::Packing::pack_slice(chunk);
 
-    // Fast-path guard:
-    //     - basis split needs dimension 4,
-    //     - stack transpose needs bounded `N`.
-    if EF::DIMENSION == 4 && n <= MAX_STACK_N {
-        // Phase 1: transpose array-of-structs into structure-of-arrays.
-        //
-        //     input  : [ (c0, c1, c2, c3)_i ]
-        //     output : c0 = [c0_0, c0_1, ...], c1, c2, c3
-        //
-        // `MaybeUninit` skips the zero-fill;
-        //
-        // Only the first `n` slots of each buffer are written by the loop below.
-        let mut c0 = [const { MaybeUninit::uninit() }; MAX_STACK_N];
-        let mut c1 = [const { MaybeUninit::uninit() }; MAX_STACK_N];
-        let mut c2 = [const { MaybeUninit::uninit() }; MAX_STACK_N];
-        let mut c3 = [const { MaybeUninit::uninit() }; MAX_STACK_N];
+    // Debug-only shape check:
+    //     - `chunk` must carry one `n`-block row per entry of `eq0`,
+    //     - i.e. `chunk_packed.len() == n * |eq0|` in packed units.
+    //
+    // A mismatch would panic later inside `chunks_exact` + `zip_eq`
+    // with a generic message; this assertion names the invariant.
+    debug_assert_eq!(
+        chunk_packed.len(),
+        n * eq0.as_slice().len(),
+        "chunk must hold |eq0| * N * W base-field elements \
+         (got {} packed, expected {} = N * |eq0|)",
+        chunk_packed.len(),
+        n * eq0.as_slice().len(),
+    );
 
-        // Split each packed element into its four coefficients.
-        for (i, item) in eq1_packed.iter().enumerate() {
-            // Length of `coefs` is 4 because `EF::DIMENSION == 4`.
-            let coefs = item.as_basis_coefficients_slice();
-            c0[i].write(coefs[0]);
-            c1[i].write(coefs[1]);
-            c2[i].write(coefs[2]);
-            c3[i].write(coefs[3]);
+    // Fast-path guard: stack transpose needs bounded `N`.
+    if n <= MAX_STACK_N {
+        // Lift `EF::DIMENSION` (an associated const) into a true const
+        // generic by an explicit match. Each arm gets a fully unrolled
+        // monomorphisation of the inner kernel; non-matching arms are
+        // dead at every concrete call site.
+        match EF::DIMENSION {
+            1 => return run_fast_path::<F, EF, 1>(eq1_packed, chunk_packed, eq0, n),
+            2 => return run_fast_path::<F, EF, 2>(eq1_packed, chunk_packed, eq0, n),
+            3 => return run_fast_path::<F, EF, 3>(eq1_packed, chunk_packed, eq0, n),
+            4 => return run_fast_path::<F, EF, 4>(eq1_packed, chunk_packed, eq0, n),
+            5 => return run_fast_path::<F, EF, 5>(eq1_packed, chunk_packed, eq0, n),
+            6 => return run_fast_path::<F, EF, 6>(eq1_packed, chunk_packed, eq0, n),
+            7 => return run_fast_path::<F, EF, 7>(eq1_packed, chunk_packed, eq0, n),
+            8 => return run_fast_path::<F, EF, 8>(eq1_packed, chunk_packed, eq0, n),
+            _ => {}
         }
-
-        // SAFETY:
-        //
-        // The loop above initialised exactly the first `n` slots of each buffer.
-        //
-        // We expose only that prefix, and the buffers are not aliased.
-        let [c0s, c1s, c2s, c3s] = unsafe {
-            [
-                core::slice::from_raw_parts(c0.as_ptr().cast::<F::Packing>(), n),
-                core::slice::from_raw_parts(c1.as_ptr().cast::<F::Packing>(), n),
-                core::slice::from_raw_parts(c2.as_ptr().cast::<F::Packing>(), n),
-                core::slice::from_raw_parts(c3.as_ptr().cast::<F::Packing>(), n),
-            ]
-        };
-
-        // Phase 2: interleaved per-row dot product.
-        //
-        // One pass over `i` drives all four coefficient accumulators,
-        // reusing a single load of each right-hand block per step.
-        let mut acc = EF::ExtensionPacking::ZERO;
-        for (j, w0) in eq0.as_slice().iter().enumerate() {
-            // Right-hand side for row `j`: `n` packed base-field blocks.
-            let piece = &chunk_packed[j * n..(j + 1) * n];
-
-            // Four independent accumulators, one per basis coefficient.
-            let mut a0 = F::Packing::ZERO;
-            let mut a1 = F::Packing::ZERO;
-            let mut a2 = F::Packing::ZERO;
-            let mut a3 = F::Packing::ZERO;
-
-            // Main loop: four `dot_product_4` calls per step.
-            //     - four independent accumulator chains,
-            //     - one Montgomery reduction per four multiplies.
-            let mut i = 0;
-            while i + CHUNK <= n {
-                let rhs = (&piece[i..i + CHUNK]).try_into().unwrap();
-                let l0 = (&c0s[i..i + CHUNK]).try_into().unwrap();
-                let l1 = (&c1s[i..i + CHUNK]).try_into().unwrap();
-                let l2 = (&c2s[i..i + CHUNK]).try_into().unwrap();
-                let l3 = (&c3s[i..i + CHUNK]).try_into().unwrap();
-                a0 += F::Packing::dot_product::<CHUNK>(l0, rhs);
-                a1 += F::Packing::dot_product::<CHUNK>(l1, rhs);
-                a2 += F::Packing::dot_product::<CHUNK>(l2, rhs);
-                a3 += F::Packing::dot_product::<CHUNK>(l3, rhs);
-                i += CHUNK;
-            }
-
-            // Scalar tail: sweep up the `n mod CHUNK` trailing positions.
-            while i < n {
-                let p = piece[i];
-                a0 += c0s[i] * p;
-                a1 += c1s[i] * p;
-                a2 += c2s[i] * p;
-                a3 += c3s[i] * p;
-                i += 1;
-            }
-
-            // - Reassemble into a packed extension element,
-            // - Weight by the scalar from `eq0`,
-            // - Fold into the running accumulator.
-            let coefs = [a0, a1, a2, a3];
-            acc += EF::ExtensionPacking::from_basis_coefficients_fn(|k| coefs[k]) * *w0;
-        }
-
-        // Phase 3: horizontal reduction.
-        //
-        // The accumulator carries `W` parallel partial sums, one per SIMD lane.
-        // Flatten into a single scalar result.
-        return EF::ExtensionPacking::to_ext_iter([acc]).sum();
     }
 
     // Fallback: one full packed-extension dot product per row.
@@ -260,6 +180,121 @@ where
 
     // Lane-wise horizontal reduction to a scalar.
     EF::ExtensionPacking::to_ext_iter([sum]).sum()
+}
+
+/// Inner group size for the delayed-reduction primitive.
+///
+/// Fixed at 4 because `F::Packing::dot_product::<4>` maps to the
+/// `dot_product_4` primitive on every SIMD target. `N mod 4` residues
+/// fall to a scalar tail.
+const CHUNK: usize = 4;
+
+/// Upper bound on `N` for the stack-transpose fast path.
+///
+/// Stack footprint:
+/// ```text
+///     D * MAX_STACK_N * size_of::<Packing>()
+///         = 32 KiB  on AVX-512 (D = 4, packing width 16)
+///         =  8 KiB  on NEON    (D = 4, packing width  4)
+/// ```
+///
+/// 128 comfortably covers the hottest workloads; larger `N` routes to
+/// the fallback so the stack reservation stays bounded.
+const MAX_STACK_N: usize = 128;
+
+/// Const-generic inner kernel for the packed high-eq dot product.
+///
+/// Implements the basis-split / delayed-reduction / interleaved-loop
+/// recipe parameterised by the extension dimension `D`. Each supported
+/// `D` gets its own monomorphisation, so the per-coefficient loop is
+/// fully unrolled and the per-coefficient accumulator array is
+/// register-allocated rather than stack-spilled.
+///
+/// Caller invariant: `D == EF::DIMENSION` and `n <= MAX_STACK_N`.
+#[inline]
+fn run_fast_path<F, EF, const D: usize>(
+    eq1_packed: &[EF::ExtensionPacking],
+    chunk_packed: &[F::Packing],
+    eq0: &Poly<EF>,
+    n: usize,
+) -> EF
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    // Phase 1: transpose array-of-structs into structure-of-arrays.
+    //
+    //     input  : [ (c_0, ..., c_{D-1})_i ]
+    //     output : per-coefficient buffers c_0[..], ..., c_{D-1}[..]
+    //
+    // `MaybeUninit` skips the zero-fill; only the first `n` slots of
+    // each buffer are written by the loop below.
+    let mut bufs: [[MaybeUninit<F::Packing>; MAX_STACK_N]; D] =
+        [[const { MaybeUninit::uninit() }; MAX_STACK_N]; D];
+    for (i, item) in eq1_packed.iter().enumerate() {
+        // `coefs.len()` equals `EF::DIMENSION`, which the dispatcher
+        // pinned to `D` at the call site.
+        let coefs = item.as_basis_coefficients_slice();
+        for k in 0..D {
+            bufs[k][i].write(coefs[k]);
+        }
+    }
+
+    // SAFETY:
+    //
+    // The loop above initialised exactly the first `n` slots of each
+    // buffer via `MaybeUninit::write`. We expose only that prefix, and
+    // the buffers are not aliased.
+    let cs: [&[F::Packing]; D] = core::array::from_fn(|k| unsafe {
+        core::slice::from_raw_parts(bufs[k].as_ptr().cast::<F::Packing>(), n)
+    });
+
+    // Phase 2: interleaved per-row dot product.
+    //
+    // One pass over `i` drives all `D` coefficient accumulators,
+    // reusing a single load of each right-hand block per step.
+    let mut acc = EF::ExtensionPacking::ZERO;
+    for (j, w0) in eq0.as_slice().iter().enumerate() {
+        // Right-hand side for row `j`: `n` packed base-field blocks.
+        let piece = &chunk_packed[j * n..(j + 1) * n];
+
+        // `D` independent accumulators, one per basis coefficient.
+        // Small const-D array: LLVM promotes to scalar registers.
+        let mut a = [F::Packing::ZERO; D];
+
+        // Main loop: `D` `dot_product_4` calls per step.
+        //     - `D` independent accumulator chains,
+        //     - one Montgomery reduction per four multiplies.
+        let mut i = 0;
+        while i + CHUNK <= n {
+            let rhs: &[F::Packing; CHUNK] = (&piece[i..i + CHUNK]).try_into().unwrap();
+            for k in 0..D {
+                let l: &[F::Packing; CHUNK] = (&cs[k][i..i + CHUNK]).try_into().unwrap();
+                a[k] += F::Packing::dot_product::<CHUNK>(l, rhs);
+            }
+            i += CHUNK;
+        }
+
+        // Scalar tail: sweep up the `n mod CHUNK` trailing positions.
+        while i < n {
+            let p = piece[i];
+            for k in 0..D {
+                a[k] += cs[k][i] * p;
+            }
+            i += 1;
+        }
+
+        // - Reassemble into a packed extension element,
+        // - Weight by the scalar from `eq0`,
+        // - Fold into the running accumulator.
+        acc += EF::ExtensionPacking::from_basis_coefficients_fn(|k| a[k]) * *w0;
+    }
+
+    // Phase 3: horizontal reduction.
+    //
+    // The accumulator carries `W` parallel partial sums, one per SIMD
+    // lane. Flatten into a single scalar result.
+    EF::ExtensionPacking::to_ext_iter([acc]).sum()
 }
 
 #[cfg(test)]
