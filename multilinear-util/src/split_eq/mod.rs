@@ -18,8 +18,8 @@
 //! The high-half table (eq1) may be stored in SIMD-packed form
 //! for faster inner-loop throughput on supported architectures.
 
-mod delayed;
 pub mod eq;
+mod packed_kernel;
 
 use eq::EqMaybePacked;
 use itertools::Itertools;

@@ -18,7 +18,7 @@ use itertools::Itertools;
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
 use p3_util::log2_strict_usize;
 
-use super::delayed::compress_hi_dot_delayed_packed;
+use super::packed_kernel::compress_hi_dot_packed;
 use crate::point::Point;
 use crate::poly::Poly;
 
@@ -347,16 +347,11 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
                     })
                     .sum::<EF>()
             }
-            // Decompose the per-row `PackedEF × F::Packing` dot product into four
-            // per-coef `F::Packing × F::Packing` dot products, each driven by
-            // chunked calls to `PackedMontyField31::dot_product::<4>` — the
-            // `dot_product_4` primitive (VPMULUDQ + VPADDQ on x86, analogous
-            // intrinsics on NEON) accumulates u64 products and applies one Monty
-            // reduction per 4-wide group. Gives ~4× fewer Monty reductions than
-            // the eager path at every N ≥ 4, with a scalar tail for the residue.
-            Self::Packed(eq1) => {
-                compress_hi_dot_delayed_packed::<F, EF>(eq1.as_slice(), chunk, eq0)
-            }
+            // Packed path: delegate to the SIMD kernel.
+            //     - basis split into four per-coefficient dot products,
+            //     - one Montgomery reduction per four multiplies,
+            //     - interleaved inner loop for ILP.
+            Self::Packed(eq1) => compress_hi_dot_packed::<F, EF>(eq1.as_slice(), chunk, eq0),
         }
     }
 }
