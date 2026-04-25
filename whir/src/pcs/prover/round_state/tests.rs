@@ -81,8 +81,7 @@ fn setup_domain_and_commitment(
         rs_domain_initial_reduction_factor: 1,
     };
 
-    let whir_proof =
-        WhirProof::from_protocol_parameters(&protocol_params, poly.num_variables());
+    let whir_proof = WhirProof::from_protocol_parameters(&protocol_params, poly.num_variables());
 
     let mut domsep = DomainSeparator::new(vec![]);
     domsep.commit_statement::<_, _, DIGEST_ELEMS>(params);
