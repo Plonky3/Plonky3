@@ -33,7 +33,7 @@ pub mod svo;
 #[cfg(test)]
 pub(crate) mod tests;
 
-pub use data::SumcheckData;
+pub use data::{SumcheckData, verify_final_sumcheck_rounds};
 pub use error::SumcheckError;
 pub(crate) use lagrange::extrapolate_01inf;
 use p3_field::Field;

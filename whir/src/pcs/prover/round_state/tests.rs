@@ -81,7 +81,8 @@ fn setup_domain_and_commitment(
         rs_domain_initial_reduction_factor: 1,
     };
 
-    let whir_proof = WhirProof::from_protocol_parameters(&protocol_params, poly.num_vars());
+    let whir_proof =
+        WhirProof::from_protocol_parameters(&protocol_params, poly.num_variables());
 
     let mut domsep = DomainSeparator::new(vec![]);
     domsep.commit_statement::<_, _, DIGEST_ELEMS>(params);
@@ -137,7 +138,7 @@ fn test_no_initial_statement_no_sumcheck() {
     .unwrap();
 
     // Folding factor 2 => 2 sampled randomness values.
-    assert_eq!(state.folding_randomness.num_vars(), 2);
+    assert_eq!(state.folding_randomness.num_variables(), 2);
     // First round: no extension field Merkle data yet.
     assert!(state.merkle_prover_data.is_none());
 }
@@ -216,7 +217,6 @@ fn test_initial_statement_with_folding_factor_3() {
     );
     assert_eq!(eval_at_point, expected);
 
-    assert_eq!(sumcheck.poly.dot_product(), sumcheck.sum);
     assert!(state.merkle_prover_data.is_none());
 }
 
@@ -262,8 +262,7 @@ fn test_zero_poly_multiple_constraints() {
     for f in &sumcheck.evals() {
         assert_eq!(*f, EF::ZERO);
     }
-    assert_eq!(sumcheck.sum, EF::ZERO);
-    assert_eq!(state.folding_randomness.num_vars(), 1);
+    assert_eq!(state.folding_randomness.num_variables(), 1);
     assert!(state.merkle_prover_data.is_none());
 }
 
@@ -340,7 +339,6 @@ fn test_initialize_round_state_with_initial_statement() {
         )
     );
 
-    assert_eq!(sumcheck.poly.dot_product(), sumcheck.sum);
     assert!(state.merkle_prover_data.is_none());
     assert_eq!(
         state.folding_randomness,

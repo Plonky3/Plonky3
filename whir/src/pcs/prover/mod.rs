@@ -126,7 +126,7 @@ where
     {
         let folded_evaluations = &round_state.sumcheck_prover.evals();
         let num_variables = self.num_variables - self.folding_factor.total_number(round_index);
-        assert_eq!(num_variables, folded_evaluations.num_vars());
+        assert_eq!(num_variables, folded_evaluations.num_variables());
 
         // Final round: send polynomial in the clear.
         if round_index == self.n_rounds() {
@@ -139,7 +139,7 @@ where
 
         // Transpose and zero-pad for DFT.
         let padded = info_span!("transpose & pad").in_scope(|| {
-            let num_vars = folded_evaluations.num_vars();
+            let num_vars = folded_evaluations.num_variables();
             let mut mat = RowMajorMatrixView::new(
                 folded_evaluations.as_slice(),
                 1 << (num_vars - folding_factor_next),

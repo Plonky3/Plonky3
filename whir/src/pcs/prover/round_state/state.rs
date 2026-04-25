@@ -8,7 +8,8 @@ use tracing::instrument;
 use crate::constraints::statement::initial::InitialStatement;
 use crate::fiat_shamir::errors::FiatShamirError;
 use crate::sumcheck::SumcheckData;
-use crate::sumcheck::prover::SumcheckProver;
+use crate::sumcheck::single::SingleSumcheck;
+use crate::sumcheck::strategy::SumcheckProver;
 
 /// Per-round state during WHIR proof generation.
 ///
@@ -52,7 +53,7 @@ where
     where
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        let (sumcheck_prover, folding_randomness) = SumcheckProver::from_base_evals(
+        let (sumcheck_prover, folding_randomness) = SingleSumcheck::new(
             sumcheck_data,
             challenger,
             folding_factor,

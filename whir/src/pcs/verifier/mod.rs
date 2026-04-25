@@ -17,10 +17,10 @@ use super::committer::reader::ParsedCommitment;
 use super::utils::get_challenge_stir_queries;
 use crate::alloc::string::ToString;
 use crate::constraints::Constraint;
-use crate::constraints::evaluator::ConstraintPolyEvaluator;
 use crate::constraints::statement::{EqStatement, SelectStatement};
 use crate::parameters::{RoundConfig, WhirConfig};
 use crate::pcs::proof::{QueryOpening, WhirProof};
+use crate::sumcheck::strategy::VariableOrder;
 use crate::sumcheck::verify_final_sumcheck_rounds;
 
 pub mod errors;
@@ -164,11 +164,9 @@ where
                 .collect(),
         );
 
-        let point_for_eval = folding_randomness.reversed();
-
         // Evaluate the constraint polynomial at the folding point.
-        let evaluation_of_weights = ConstraintPolyEvaluator::new(self.folding_factor)
-            .eval_constraints_poly(&constraints, &point_for_eval);
+        let evaluation_of_weights =
+            VariableOrder::Prefix.eval_constraints_poly(&constraints, &folding_randomness);
 
         // Final consistency check: claimed_eval == weight * f(r).
         let final_value = final_evaluations.eval_ext::<F>(&final_sumcheck_randomness);
