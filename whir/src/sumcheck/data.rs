@@ -124,39 +124,3 @@ impl<F, EF> SumcheckData<F, EF> {
         Ok(Point::new(randomness))
     }
 }
-
-/// Verify the final sumcheck rounds.
-///
-/// This is a free function because the caller may not have a `SumcheckData` at all when `rounds == 0`.
-///
-/// # Returns
-///
-/// A `Point` of folding randomness values.
-pub fn verify_final_sumcheck_rounds<F, EF, Challenger>(
-    final_sumcheck: Option<&SumcheckData<F, EF>>,
-    challenger: &mut Challenger,
-    claimed_sum: &mut EF,
-    rounds: usize,
-    pow_bits: usize,
-) -> Result<Point<EF>, SumcheckError>
-where
-    F: TwoAdicField,
-    EF: ExtensionField<F> + TwoAdicField,
-    Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
-{
-    if rounds == 0 {
-        return Ok(Point::new(Vec::new()));
-    }
-
-    let sumcheck = final_sumcheck.ok_or(SumcheckError::MissingSumcheckData {
-        expected_rounds: rounds,
-    })?;
-
-    if sumcheck.polynomial_evaluations.len() != rounds {
-        return Err(SumcheckError::RoundCountMismatch {
-            expected: rounds,
-            actual: sumcheck.polynomial_evaluations.len(),
-        });
-    }
-    sumcheck.verify_rounds(challenger, claimed_sum, pow_bits)
-}

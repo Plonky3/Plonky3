@@ -7,7 +7,7 @@ use p3_multilinear_util::poly::Poly;
 use p3_whir::constraints::statement::initial::InitialStatement;
 use p3_whir::parameters::SumcheckStrategy;
 use p3_whir::sumcheck::SumcheckData;
-use p3_whir::sumcheck::prover::SumcheckProver;
+use p3_whir::sumcheck::single::SingleSumcheck;
 use p3_whir::sumcheck::svo::SvoClaim;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -22,20 +22,20 @@ fn make_challenger() -> Challenger {
     DuplexChallenger::new(perm)
 }
 
-/// Builds an initial statement with `num_constraints` random evaluation points.
+/// Build an initial statement with `num_constraints` random evaluation points.
 fn make_statement(
-    num_vars: usize,
+    num_variables: usize,
     folding_factor: usize,
     num_constraints: usize,
-    strategy: SumcheckStrategy,
+    mode: SumcheckStrategy,
 ) -> InitialStatement<F, EF> {
     let mut rng = SmallRng::seed_from_u64(
-        (num_vars as u64) ^ ((folding_factor as u64) << 16) ^ ((num_constraints as u64) << 32),
+        (num_variables as u64) ^ ((folding_factor as u64) << 16) ^ ((num_constraints as u64) << 32),
     );
-    let poly = Poly::new((0..1 << num_vars).map(|_| rng.random()).collect());
-    let mut stmt = InitialStatement::<F, EF>::new(poly, folding_factor, strategy);
+    let poly = Poly::new((0..1 << num_variables).map(|_| rng.random()).collect());
+    let mut stmt = InitialStatement::<F, EF>::new(poly, folding_factor, mode);
     for _ in 0..num_constraints {
-        let pt = Point::<EF>::rand(&mut rng, num_vars);
+        let pt = Point::<EF>::rand(&mut rng, num_variables);
         let _ = stmt.evaluate(&pt);
     }
     stmt
@@ -51,15 +51,15 @@ fn bench_sumcheck_prover(c: &mut Criterion) {
         (22, 4, 4, "large"),
     ];
 
-    for &(num_vars, folding_factor, num_constraints, label) in &cases {
+    for &(num_variables, folding_factor, num_constraints, label) in &cases {
         let classic_stmt = make_statement(
-            num_vars,
+            num_variables,
             folding_factor,
             num_constraints,
             SumcheckStrategy::Classic,
         );
         let svo_stmt = make_statement(
-            num_vars,
+            num_variables,
             folding_factor,
             num_constraints,
             SumcheckStrategy::Svo,
@@ -69,13 +69,7 @@ fn bench_sumcheck_prover(c: &mut Criterion) {
             b.iter(|| {
                 let mut data = SumcheckData::default();
                 let mut challenger = make_challenger();
-                SumcheckProver::from_base_evals(
-                    &mut data,
-                    &mut challenger,
-                    folding_factor,
-                    0,
-                    &classic_stmt,
-                )
+                SingleSumcheck::new(&mut data, &mut challenger, folding_factor, 0, &classic_stmt)
             });
         });
 
@@ -83,13 +77,7 @@ fn bench_sumcheck_prover(c: &mut Criterion) {
             b.iter(|| {
                 let mut data = SumcheckData::default();
                 let mut challenger = make_challenger();
-                SumcheckProver::from_base_evals(
-                    &mut data,
-                    &mut challenger,
-                    folding_factor,
-                    0,
-                    &svo_stmt,
-                )
+                SingleSumcheck::new(&mut data, &mut challenger, folding_factor, 0, &svo_stmt)
             });
         });
     }
@@ -109,10 +97,10 @@ fn bench_svo_claim_build(c: &mut Criterion) {
         (12, 4, "k12_l4"),
     ];
 
-    for &(num_vars, l, label) in &cases {
-        let mut rng = SmallRng::seed_from_u64(((num_vars as u64) << 32) | l as u64);
-        let poly = Poly::new((0..1 << num_vars).map(|_| rng.random()).collect());
-        let point = Point::<EF>::rand(&mut rng, num_vars);
+    for &(num_variables, l, label) in &cases {
+        let mut rng = SmallRng::seed_from_u64(((num_variables as u64) << 32) | l as u64);
+        let poly = Poly::new((0..1 << num_variables).map(|_| rng.random()).collect());
+        let point = Point::<EF>::rand(&mut rng, num_variables);
 
         group.bench_with_input(BenchmarkId::new("claim_build", label), &label, |b, _| {
             b.iter(|| SvoClaim::<F, EF>::new(&point, l, &poly));

@@ -5,9 +5,6 @@ use p3_util::log2_strict_usize;
 
 use crate::constraints::statement::{EqStatement, SelectStatement};
 
-/// Constraint evaluation utilities.
-pub mod evaluator;
-
 /// Statement types for polynomial evaluation constraints.
 pub mod statement;
 
@@ -679,7 +676,7 @@ mod tests {
             assert_eq!(*coeff, expected_weights[i]);
 
             // Verify point reference matches original
-            assert_eq!(point.num_vars(), num_variables);
+            assert_eq!(point.num_variables(), num_variables);
         }
     }
 
