@@ -696,11 +696,31 @@ pub trait Algebra<F>:
     }
 }
 
-/// Dot product over fixed-size arrays, processed in chunks of `CHUNK`.
+/// Compute `Σ values[i] * coeffs[i]` over `N` pairs.
 ///
-/// This variant is intended for hot paths where the length is known at compile time
-/// (e.g. Poseidon matrix multiplies) and allows packed-field implementations to
-/// select a chunking strategy without changing call sites.
+/// A single long sum forces every add to wait for the previous one. Instead,
+/// we split the pairs into groups of `CHUNK`, sum each group on its own, and
+/// add up the group totals. Several partial sums run in parallel on the CPU,
+/// so the total latency is shorter than one straight chain.
+///
+/// The result is the same for every valid `CHUNK` — only the speed changes.
+///
+/// # Layout
+///
+/// For `N = q * CHUNK + r` with `0 <= r < CHUNK`:
+///
+/// ```text
+///     ┌── group 0 ──┬── group 1 ──┬─ ... ─┬── tail (r) ──┐
+///     │   CHUNK     │   CHUNK     │       │   r pairs    │
+///     └──────┬──────┴──────┬──────┴───────┴──────┬───────┘
+///            ▼             ▼                     ▼
+///       tree-sum      tree-sum             scalar adds
+///            └──► acc ◄────┴──────► acc ◄────────┘
+/// ```
+///
+/// # Panics
+///
+/// Compile-time panic if `CHUNK` is zero.
 #[must_use]
 #[inline]
 pub fn chunked_mixed_dot_product<
@@ -712,25 +732,29 @@ pub fn chunked_mixed_dot_product<
     values: &[A; N],
     coeffs: &[F; N],
 ) -> A {
+    // CHUNK = 0 would make the group count undefined.
     const { assert!(CHUNK != 0, "chunked_mixed_dot_product requires CHUNK > 0") }
 
-    // Fast path: for short vectors avoid chunk-loop overhead and preserve
-    // `sum_array`'s balanced reduction tree.
+    // Fast path: N fits in one group → single balanced tree, no outer loop.
     if N <= CHUNK {
         let products: [A; N] = core::array::from_fn(|i| values[i].dup() * coeffs[i].dup());
         return A::sum_array::<N>(&products);
     }
 
+    // Split off q complete groups; r leftover pairs go to the tail.
     let (val_chunks, val_rem) = values.as_slice().as_chunks::<CHUNK>();
     let (coeff_chunks, coeff_rem) = coeffs.as_slice().as_chunks::<CHUNK>();
-
     debug_assert_eq!(val_chunks.len(), coeff_chunks.len());
+
+    // One add per group; runs in parallel with the next group's multiplies.
     let mut acc = A::ZERO;
     for (vc, cc) in zip(val_chunks, coeff_chunks) {
         let products: [A; CHUNK] = core::array::from_fn(|i| vc[i].dup() * cc[i].dup());
+        // Balanced tree of depth log2(CHUNK), folded into acc.
         acc += A::sum_array::<CHUNK>(&products);
     }
 
+    // Tail: at most CHUNK - 1 pairs as a serial multiply-add chain.
     debug_assert_eq!(val_rem.len(), coeff_rem.len());
     for (v, c) in zip(val_rem, coeff_rem) {
         acc += v.dup() * c.dup();
@@ -738,7 +762,17 @@ pub fn chunked_mixed_dot_product<
     acc
 }
 
-/// Dispatch [`chunked_mixed_dot_product`] over supported chunk sizes.
+/// Lower a runtime chunk size into a const-generic call to the fixed-chunk dot product.
+///
+/// Each backend picks its preferred chunk size at runtime; the inner routine
+/// needs it as a const for unrolling. This wrapper bridges the gap.
+///
+/// Supported sizes: `1, 2, 4, 8, 16, 32, 64` — powers of two only, so the
+/// inner balanced tree stays balanced.
+///
+/// # Panics
+///
+/// Runtime panic if `chunk` is outside the supported set.
 #[must_use]
 #[inline]
 pub fn dispatch_chunked_mixed_dot_product<A: Algebra<F> + Dup, F: Dup, const N: usize>(
@@ -754,6 +788,7 @@ pub fn dispatch_chunked_mixed_dot_product<A: Algebra<F> + Dup, F: Dup, const N: 
         16 => chunked_mixed_dot_product::<16, A, F, N>(values, coeffs),
         32 => chunked_mixed_dot_product::<32, A, F, N>(values, coeffs),
         64 => chunked_mixed_dot_product::<64, A, F, N>(values, coeffs),
+        // Unsupported chunk = configuration bug in a backend.
         _ => panic!("mixed_dot_product chunk must be one of 1, 2, 4, 8, 16, 32, or 64"),
     }
 }
