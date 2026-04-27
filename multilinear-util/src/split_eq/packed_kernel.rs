@@ -188,11 +188,10 @@ where
 /// # Two roles
 ///
 /// - **Interleave grain** (field-agnostic): round-robin step across
-///   the per-basis accumulators in the interleaved loop. Small
-///   enough to keep them in scalar registers, large enough to
-///   amortise loop overhead.
+///   the per-basis accumulators. Keeps the array in scalar registers
+///   and amortises loop overhead.
 /// - **Overflow ceiling** (Monty-31 only): largest delayed-reduction
-///   group that fits in a `u64` accumulator.
+///   group that fits in a `u64` accumulator:
 ///
 /// ```text
 ///     element            < 2^31
@@ -202,20 +201,16 @@ where
 ///
 /// # Behaviour across fields
 ///
-/// - **Monty-31**: routes the inner loop through the hand-tuned
-///   delayed-reduction primitive — source of the ~4x reduction-count
-///   win that motivates this kernel.
-/// - **Other fields**: the kernel stays correct. Basis-split and ILP
-///   wins still apply; the delayed-reduction win does not (the
-///   field's hand-tuned group size may differ from `4`).
+/// - **Monty-31**: hits a hand-tuned delayed-reduction primitive.
+///   Source of the ~4x reduction-count win.
+/// - **Other fields**: still correct. Basis-split and ILP wins apply;
+///   the delayed-reduction win does not.
 ///
-/// # TODO: make the group size field-tunable
+/// # TODO: field-tunable group size
 ///
-/// Promote this constant to a per-field associated value and
-/// dispatch the kernel on it alongside the existing extension-
-/// dimension match. Each field would then hit its own hand-tuned
-/// dot-product specialisation automatically, without baking
-/// field-specific knowledge into this kernel.
+/// - Lift this constant to a per-field associated value.
+/// - Dispatch on it alongside the existing dimension match.
+/// - Each field then hits its own hand-tuned specialisation.
 const CHUNK: usize = 4;
 
 /// Upper bound on `N` for the stack-transpose fast path.
