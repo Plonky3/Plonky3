@@ -1,7 +1,8 @@
 mod helpers {
     use p3_baby_bear::BabyBear;
     use p3_field::{
-        PrimeCharacteristicRing, add_scaled_slice_in_place, dot_product, field_to_array,
+        PrimeCharacteristicRing, add_scaled_slice_in_place, chunked_mixed_dot_product,
+        dispatch_chunked_mixed_dot_product, dot_product, field_to_array,
         par_add_scaled_slice_in_place, reduce_32, split_32,
     };
 
@@ -267,5 +268,121 @@ mod helpers {
 
         // Should be all zeros: [0, 0, 0]
         assert_eq!(arr, [BabyBear::ZERO; 3]);
+    }
+
+    #[test]
+    fn test_chunked_mixed_dot_product_zero_length() {
+        // Empty inputs hit the N <= CHUNK fast path with N = 0.
+        // The fast path builds an empty product array and reduces it.
+        // Expected: empty sum yields the additive identity.
+        let a: [BabyBear; 0] = [];
+        let f: [BabyBear; 0] = [];
+
+        assert_eq!(
+            chunked_mixed_dot_product::<4, BabyBear, BabyBear, 0>(&a, &f),
+            BabyBear::ZERO,
+        );
+    }
+
+    #[test]
+    fn test_chunked_mixed_dot_product_fast_path_n_equals_chunk() {
+        // Boundary: N == CHUNK. The condition `N <= CHUNK` is still true,
+        // so this exercises the fast path on its upper edge — no outer
+        // loop, single balanced reduction over CHUNK products.
+        //
+        //     a = [2, 3, 5, 7]
+        //     f = [11, 13, 17, 19]
+        //     expected = 2*11 + 3*13 + 5*17 + 7*19
+        //              = 22  + 39  + 85  + 133  = 279
+        let a = [
+            BabyBear::TWO,
+            BabyBear::from_u8(3),
+            BabyBear::from_u8(5),
+            BabyBear::from_u8(7),
+        ];
+        let f = [
+            BabyBear::from_u8(11),
+            BabyBear::from_u8(13),
+            BabyBear::from_u8(17),
+            BabyBear::from_u8(19),
+        ];
+
+        assert_eq!(
+            chunked_mixed_dot_product::<4, BabyBear, BabyBear, 4>(&a, &f),
+            BabyBear::from_u32(279),
+        );
+    }
+
+    #[test]
+    fn test_chunked_mixed_dot_product_no_remainder() {
+        // N = 8, CHUNK = 4: exactly two complete groups, no tail.
+        // Exercises the chunked main loop only.
+        //
+        //     a = [1, 2, 3, 4, 5, 6, 7, 8]
+        //     f = [1; 8]
+        //     expected = 1+2+3+...+8 = 36
+        let a: [BabyBear; 8] = core::array::from_fn(|i| BabyBear::from_u8((i + 1) as u8));
+        let f: [BabyBear; 8] = [BabyBear::ONE; 8];
+
+        assert_eq!(
+            chunked_mixed_dot_product::<4, BabyBear, BabyBear, 8>(&a, &f),
+            BabyBear::from_u8(36),
+        );
+    }
+
+    #[test]
+    fn test_chunked_mixed_dot_product_with_remainder() {
+        // N = 10, CHUNK = 4: two complete groups plus a tail of 2.
+        // Exercises both the chunked main loop and the scalar tail.
+        //
+        //     layout:  [group_0 = pairs 0..=3][group_1 = pairs 4..=7][tail = pairs 8..=9]
+        //     a = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        //     f = [1; 10]
+        //     expected = 1+2+...+10 = 55
+        let a: [BabyBear; 10] = core::array::from_fn(|i| BabyBear::from_u8((i + 1) as u8));
+        let f: [BabyBear; 10] = [BabyBear::ONE; 10];
+
+        assert_eq!(
+            chunked_mixed_dot_product::<4, BabyBear, BabyBear, 10>(&a, &f),
+            BabyBear::from_u8(55),
+        );
+    }
+
+    #[test]
+    fn test_dispatch_chunked_mixed_dot_product_invariant_over_valid_chunks() {
+        // Field addition is associative, so the chunk choice never changes
+        // the mathematical result. Run all seven supported chunk values
+        // against the same input and assert agreement.
+        //
+        // N = 20 was picked so different chunks land in different paths:
+        //
+        //     CHUNK = 1   → 20 chunked groups, no tail        (chunked path)
+        //     CHUNK = 2   → 10 chunked groups, no tail        (chunked path)
+        //     CHUNK = 4   →  5 chunked groups, no tail        (chunked path)
+        //     CHUNK = 8   →  2 chunked groups, tail of 4      (chunked + tail)
+        //     CHUNK = 16  →  1 chunked group,  tail of 4      (chunked + tail)
+        //     CHUNK = 32  → fast path                          (N <= CHUNK)
+        //     CHUNK = 64  → fast path                          (N <= CHUNK)
+        let a: [BabyBear; 20] = core::array::from_fn(|i| BabyBear::from_u32(i as u32 * 7 + 11));
+        let f: [BabyBear; 20] = core::array::from_fn(|i| BabyBear::from_u32(i as u32 * 13 + 5));
+
+        // Reference: any valid chunk yields the same value.
+        let reference = chunked_mixed_dot_product::<1, BabyBear, BabyBear, 20>(&a, &f);
+
+        // Every supported runtime chunk size must reproduce that value.
+        for chunk in [1usize, 2, 4, 8, 16, 32, 64] {
+            let r = dispatch_chunked_mixed_dot_product::<BabyBear, BabyBear, 20>(&a, &f, chunk);
+            assert_eq!(r, reference, "chunk={chunk} disagreed with reference");
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "mixed_dot_product chunk must be one of 1, 2, 4, 8, 16, 32, or 64")]
+    fn test_dispatch_chunked_mixed_dot_product_panics_on_invalid_chunk() {
+        // Any chunk outside the supported power-of-two set must panic.
+        let a = [BabyBear::ONE; 4];
+        let f = [BabyBear::ONE; 4];
+
+        let _ = dispatch_chunked_mixed_dot_product::<BabyBear, BabyBear, 4>(&a, &f, 3);
     }
 }
