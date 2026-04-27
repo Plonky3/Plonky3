@@ -185,34 +185,37 @@ where
 
 /// Inner group size for the per-basis dot products.
 ///
-/// Plays two distinct roles, which could be split in two separate
-/// constants. Only one of the roles is field-specific:
+/// # Two roles
 ///
-/// - **Interleave grain (field-agnostic).** Round-robin frequency
-///   across the `D` per-basis accumulators inside the interleaved
-///   loop — small enough to keep the accumulator array in scalar
-///   registers, large enough to amortise loop overhead.
-/// - **Overflow ceiling (Monty-31 only).** `4 * 2^62 < 2^64` is the
-///   maximum number of `u64` products per lane before reduction.
-///   On Monty-31, `F::Packing::dot_product::<4>` resolves to a
-///   hand-tuned primitive that defers the Montgomery reduction
-///   across the group — source of the "~4x fewer Monty reductions"
-///   win.
+/// - **Interleave grain** (field-agnostic): round-robin step across
+///   the per-basis accumulators in the interleaved loop. Small
+///   enough to keep them in scalar registers, large enough to
+///   amortise loop overhead.
+/// - **Overflow ceiling** (Monty-31 only): largest delayed-reduction
+///   group that fits in a `u64` accumulator.
 ///
-/// On non-Monty-31 fields the second role does not apply. Example:
-/// on Goldilocks, `dot_product::<4>` falls into a generic
-/// per-element sum (only `N=2` is specialised — cf.
-/// `BATCHED_LC_CHUNK = 2` in
-/// `goldilocks/src/aarch64_neon/packing.rs`). The kernel still beats
-/// eager there — the basis-split and ILP wins are field-agnostic —
-/// just not field-optimally.
+/// ```text
+///     element            < 2^31
+///     product            < 2^62
+///     4 products summed  < 2^64    (just fits)
+/// ```
 ///
+/// # Behaviour across fields
 ///
-/// In-tree, every caller is Monty-31 ext4. If a non-Monty-31 caller becomes
-/// hot (e.g. Goldilocks is added as a WHIR config):
-/// (a) lift CHUNK to a field-associated constant (cf.
-/// `<F::Packing as Algebra<F>>::BATCHED_LC_CHUNK`)
-/// (b) add a chunk-size dispatch alongside the existing `D` dispatcher.
+/// - **Monty-31**: routes the inner loop through the hand-tuned
+///   delayed-reduction primitive — source of the ~4x reduction-count
+///   win that motivates this kernel.
+/// - **Other fields**: the kernel stays correct. Basis-split and ILP
+///   wins still apply; the delayed-reduction win does not (the
+///   field's hand-tuned group size may differ from `4`).
+///
+/// # TODO: make the group size field-tunable
+///
+/// Promote this constant to a per-field associated value and
+/// dispatch the kernel on it alongside the existing extension-
+/// dimension match. Each field would then hit its own hand-tuned
+/// dot-product specialisation automatically, without baking
+/// field-specific knowledge into this kernel.
 const CHUNK: usize = 4;
 
 /// Upper bound on `N` for the stack-transpose fast path.
