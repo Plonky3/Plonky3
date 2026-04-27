@@ -68,6 +68,17 @@ pub trait CanSampleBits<T> {
     ///
     /// Guarantees that the returned value fits within the requested bit width.
     fn sample_bits(&mut self, bits: usize) -> T;
+
+    /// Returns whether `bits` is a valid input for [`Self::sample_bits`].
+    ///
+    /// The default implementation is permissive. Challengers with stricter
+    /// bounds should override this method so callers can pre-validate inputs
+    /// and fail with a recoverable error instead of panicking.
+    #[inline(always)]
+    fn is_sample_bits_valid(&self, bits: usize) -> bool {
+        let _ = bits;
+        true
+    }
 }
 
 /// Uniform bit sampling interface.
@@ -191,6 +202,11 @@ where
     #[inline(always)]
     fn sample_bits(&mut self, bits: usize) -> T {
         (*self).sample_bits(bits)
+    }
+
+    #[inline(always)]
+    fn is_sample_bits_valid(&self, bits: usize) -> bool {
+        (**self).is_sample_bits_valid(bits)
     }
 }
 
