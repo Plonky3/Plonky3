@@ -156,7 +156,11 @@ impl Algebra<Goldilocks> for PackedGoldilocksAVX512 {
 
     #[inline(always)]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Goldilocks; N]) -> Self {
-        dispatch_chunked_mixed_dot_product::<Self, Goldilocks, N>(a, f, Self::BATCHED_LC_CHUNK)
+        dispatch_chunked_mixed_dot_product::<Self, Goldilocks, N>(
+            a,
+            f,
+            <Self as Algebra<Goldilocks>>::BATCHED_LC_CHUNK,
+        )
     }
 }
 
