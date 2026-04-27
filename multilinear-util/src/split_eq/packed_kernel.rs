@@ -183,14 +183,36 @@ where
     EF::ExtensionPacking::to_ext_iter([sum]).sum()
 }
 
-/// Inner group size for the delayed-reduction primitive.
+/// Inner group size for the per-basis dot products.
 ///
-/// - Every `F::Packing` impl specialises `dot_product::<4>` to a
-///   hand-tuned four-wide kernel, so the choice is portable across
-///   fields (Monty-31, Goldilocks, …).
-/// - On 31-bit fields it is also the `u64` overflow ceiling
-///   (`4 * 2^62 < 2^64`).
-/// - `N mod 4` residues fall to the scalar tail.
+/// Plays two distinct roles, which could be split in two separate
+/// constants. Only one of the roles is field-specific:
+///
+/// - **Interleave grain (field-agnostic).** Round-robin frequency
+///   across the `D` per-basis accumulators inside the interleaved
+///   loop — small enough to keep the accumulator array in scalar
+///   registers, large enough to amortise loop overhead.
+/// - **Overflow ceiling (Monty-31 only).** `4 * 2^62 < 2^64` is the
+///   maximum number of `u64` products per lane before reduction.
+///   On Monty-31, `F::Packing::dot_product::<4>` resolves to a
+///   hand-tuned primitive that defers the Montgomery reduction
+///   across the group — source of the "~4x fewer Monty reductions"
+///   win.
+///
+/// On non-Monty-31 fields the second role does not apply. Example:
+/// on Goldilocks, `dot_product::<4>` falls into a generic
+/// per-element sum (only `N=2` is specialised — cf.
+/// `BATCHED_LC_CHUNK = 2` in
+/// `goldilocks/src/aarch64_neon/packing.rs`). The kernel still beats
+/// eager there — the basis-split and ILP wins are field-agnostic —
+/// just not field-optimally.
+///
+///
+/// In-tree, every caller is Monty-31 ext4. If a non-Monty-31 caller becomes
+/// hot (e.g. Goldilocks is added as a WHIR config):
+/// (a) lift CHUNK to a field-associated constant (cf.
+/// `<F::Packing as Algebra<F>>::BATCHED_LC_CHUNK`)
+/// (b) add a chunk-size dispatch alongside the existing `D` dispatcher.
 const CHUNK: usize = 4;
 
 /// Upper bound on `N` for the stack-transpose fast path.
