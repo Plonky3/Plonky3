@@ -30,6 +30,32 @@ pub const fn log2_ceil_u64(n: u64) -> u64 {
     (u64::BITS - n.saturating_sub(1).leading_zeros()) as u64
 }
 
+/// Returns `2^log_degree` if it can be represented by `usize`.
+#[must_use]
+pub const fn checked_pow2(log_degree: usize) -> Option<usize> {
+    if log_degree < usize::BITS as usize {
+        Some(1usize << log_degree)
+    } else {
+        None
+    }
+}
+
+/// Adds two log-sizes and computes the resulting power of two.
+///
+/// Returns:
+/// - `(a + b, 2^(a + b))` when the sum fits in a `usize` shift,
+/// - `None` if the addition overflows or the resulting power exceeds the representable range.
+#[must_use]
+pub const fn checked_log_size_sum(a: usize, b: usize) -> Option<(usize, usize)> {
+    match a.checked_add(b) {
+        Some(sum) => match checked_pow2(sum) {
+            Some(size) => Some((sum, size)),
+            None => None,
+        },
+        None => None,
+    }
+}
+
 /// Computes `log_2(n)`
 ///
 /// # Panics
@@ -1012,6 +1038,97 @@ mod tests {
             log2_strict_usize(1 << (usize::BITS - 1)),
             usize::BITS as usize - 1
         );
+    }
+
+    #[test]
+    fn test_checked_pow2() {
+        // 2^0 = 1, the smallest valid exponent.
+        assert_eq!(checked_pow2(0), Some(1));
+
+        // 2^1 = 2.
+        assert_eq!(checked_pow2(1), Some(2));
+
+        // 2^5 = 32, a typical small power.
+        assert_eq!(checked_pow2(5), Some(32));
+
+        // 2^10 = 1024, commonly used as a domain size in FRI.
+        assert_eq!(checked_pow2(10), Some(1024));
+
+        // 2^20 = 1_048_576, a realistic large trace length.
+        assert_eq!(checked_pow2(20), Some(1_048_576));
+
+        // Largest representable power: 2^(BITS - 1).
+        // On a 64-bit platform this is 2^63 = 0x8000_0000_0000_0000.
+        let max_exp = usize::BITS as usize - 1;
+        assert_eq!(checked_pow2(max_exp), Some(1usize << max_exp));
+
+        // Exponent equal to the bit width would shift 1 out of range.
+        //
+        //     1_usize << 64  (on 64-bit)  →  overflow
+        //
+        // Must return `None`.
+        assert_eq!(checked_pow2(usize::BITS as usize), None);
+
+        // One past the maximum: also out of range.
+        assert_eq!(checked_pow2(usize::BITS as usize + 1), None);
+
+        // Extreme exponent: usize::MAX is astronomically beyond
+        // representable range — must return `None`.
+        assert_eq!(checked_pow2(usize::MAX), None);
+    }
+
+    #[test]
+    fn test_checked_log_size_sum() {
+        // Both zero: 0 + 0 = 0, 2^0 = 1.
+        assert_eq!(checked_log_size_sum(0, 0), Some((0, 1)));
+
+        // Identity cases: adding zero to either side is a no-op.
+        assert_eq!(checked_log_size_sum(5, 0), Some((5, 32)));
+        assert_eq!(checked_log_size_sum(0, 10), Some((10, 1024)));
+
+        // Typical FRI scenario: degree_bits=10, log_quotient_chunks=2.
+        //
+        //     10 + 2 = 12,  2^12 = 4096
+        assert_eq!(checked_log_size_sum(10, 2), Some((12, 4096)));
+
+        // Commutativity: order of operands must not matter.
+        assert_eq!(checked_log_size_sum(2, 10), Some((12, 4096)));
+
+        // Large realistic case: degree_bits=20, log_chunks=3.
+        //
+        //     20 + 3 = 23,  2^23 = 8_388_608
+        assert_eq!(checked_log_size_sum(20, 3), Some((23, 8_388_608)));
+
+        // Largest representable sum: (BITS - 2) + 1 = BITS - 1.
+        let almost_max = usize::BITS as usize - 2;
+        let max_exp = usize::BITS as usize - 1;
+        assert_eq!(
+            checked_log_size_sum(almost_max, 1),
+            Some((max_exp, 1usize << max_exp))
+        );
+
+        // Sum exactly at the bit width: overflows the shift.
+        //
+        //     (BITS - 1) + 1 = BITS  →  2^BITS is unrepresentable  →  None
+        assert_eq!(checked_log_size_sum(max_exp, 1), None);
+
+        // Both operands large but sum still within range.
+        //
+        //     32 + 31 = 63  (on 64-bit)  →  2^63 is representable
+        let half = usize::BITS as usize / 2;
+        let other_half = max_exp - half;
+        assert_eq!(
+            checked_log_size_sum(half, other_half),
+            Some((max_exp, 1usize << max_exp))
+        );
+
+        // Addition itself overflows usize, not just the shift.
+        //
+        //     usize::MAX + 1  →  checked_add returns None  →  None
+        assert_eq!(checked_log_size_sum(usize::MAX, 1), None);
+
+        // Both operands at usize::MAX: addition doubly overflows.
+        assert_eq!(checked_log_size_sum(usize::MAX, usize::MAX), None);
     }
 
     #[test]

@@ -32,9 +32,9 @@ pub struct PreprocessedInstanceMeta {
     pub matrix_index: usize,
     /// Width (number of columns) of the preprocessed trace.
     pub width: usize,
-    /// Log2 of the base trace degree for this instance's preprocessed trace.
+    /// Log2 of the extended trace degree for this instance's preprocessed trace.
     ///
-    /// This matches the log2 of the main trace degree (without ZK padding)
+    /// This matches the log2 of the main trace degree (with ZK padding)
     /// for that instance.
     pub degree_bits: usize,
 }

@@ -29,10 +29,10 @@ use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
     ExtensionField, PackedFieldExtension, TwoAdicField, batch_multiplicative_inverse, dot_product,
 };
-use p3_interpolation::interpolate_coset_with_precomputation;
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow};
+use p3_matrix::interpolation::Interpolate;
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
@@ -528,8 +528,7 @@ where
                                     // interpolate to get the evaluation of each polynomial in the matrix
                                     // at the desired point.
                                     let inv_denoms = &inv_denoms.get(&point).unwrap()[..h];
-                                    interpolate_coset_with_precomputation(
-                                        &low_coset,
+                                    low_coset.interpolate_coset_with_precomputation(
                                         Val::GENERATOR,
                                         point,
                                         coset_h,

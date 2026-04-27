@@ -64,6 +64,36 @@ pub enum InvalidProofShapeError {
     /// Preprocessed values present when preprocessed width is zero.
     #[error("air {air}: unexpected preprocessed values")]
     UnexpectedPreprocessedValues { air: usize },
+    /// Proof degree bits are too small for the PCS ZK setting.
+    #[error(
+        "{}degree_bits too small for zk setting: expected at least {minimum}, got {got}",
+        air.map_or_else(String::new, |air| format!("air {air}: "))
+    )]
+    DegreeBitsTooSmall {
+        air: Option<usize>,
+        minimum: usize,
+        got: usize,
+    },
+    /// Proof degree bits are too large to safely construct verifier domains.
+    #[error(
+        "{}degree_bits too large for domain construction: expected at most {maximum}, got {got}",
+        air.map_or_else(String::new, |air| format!("air {air}: "))
+    )]
+    DegreeBitsTooLarge {
+        air: Option<usize>,
+        maximum: usize,
+        got: usize,
+    },
+    /// The quotient domain log-size overflows after adding degree bits and quotient chunk bits.
+    #[error(
+        "{}quotient domain too large: log-size {got} exceeds maximum {maximum}",
+        air.map_or_else(String::new, |air| format!("air {air}: "))
+    )]
+    QuotientDomainTooLarge {
+        air: Option<usize>,
+        maximum: usize,
+        got: usize,
+    },
     /// Missing preprocessed local or next values.
     #[error("air {air}: missing preprocessed values")]
     MissingPreprocessedValues { air: usize },
@@ -82,6 +112,18 @@ pub enum InvalidProofShapeError {
         air: usize,
         expected: usize,
         got: usize,
+    },
+    /// Global lookup proof metadata doesn't match the AIR's declared interactions.
+    #[error(
+        "air {air}: global lookup data metadata mismatch at index {lookup}: expected name={expected_name}, aux_idx={expected_aux_idx}; got name={got_name}, aux_idx={got_aux_idx}"
+    )]
+    GlobalLookupDataMetadataMismatch {
+        air: usize,
+        lookup: usize,
+        expected_name: String,
+        got_name: String,
+        expected_aux_idx: usize,
+        got_aux_idx: usize,
     },
     /// Permutation local and next have different lengths.
     #[error("air {air}: permutation local/next length mismatch")]

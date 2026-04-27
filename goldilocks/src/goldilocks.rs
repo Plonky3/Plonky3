@@ -326,8 +326,8 @@ impl PrimeCharacteristicRing for Goldilocks {
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY:
         // Due to `#[repr(transparent)]`, Goldilocks and u64 have the same size, alignment
-        // and memory layout making `flatten_to_base` safe. This this will create
-        // a vector Goldilocks elements with value set to 0.
+        // and memory layout making `flatten_to_base` safe. This will create
+        // a vector of Goldilocks elements with value set to 0.
         unsafe { flatten_to_base(vec![0u64; len]) }
     }
 }
@@ -361,9 +361,6 @@ impl Field for Goldilocks {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
     type Packing = crate::PackedGoldilocksAVX512;
 
-    #[cfg(target_arch = "aarch64")]
-    type Packing = crate::PackedGoldilocksNeon;
-
     #[cfg(not(any(
         all(
             target_arch = "x86_64",
@@ -371,7 +368,6 @@ impl Field for Goldilocks {
             not(target_feature = "avx512f")
         ),
         all(target_arch = "x86_64", target_feature = "avx512f"),
-        target_arch = "aarch64",
     )))]
     type Packing = Self;
 

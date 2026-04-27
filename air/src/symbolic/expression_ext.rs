@@ -1,6 +1,8 @@
 use alloc::sync::Arc;
 
-use p3_field::extension::{BinomialExtensionField, CubicTrinomialExtensionField};
+use p3_field::extension::{
+    BinomialExtensionField, CubicTrinomialExtensionField, QuinticTrinomialExtensionField,
+};
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
 
 use crate::symbolic::expression::BaseLeaf;
@@ -178,11 +180,29 @@ where
     }
 }
 
+impl<F: Field> From<QuinticTrinomialExtensionField<F>>
+    for SymbolicExpressionExt<F, QuinticTrinomialExtensionField<F>>
+where
+    QuinticTrinomialExtensionField<F>: ExtensionField<F>,
+{
+    fn from(ef: QuinticTrinomialExtensionField<F>) -> Self {
+        Self::Leaf(ExtLeaf::ExtConstant(ef))
+    }
+}
+
 /// Concrete [`Algebra`] for [`CubicTrinomialExtensionField`] — avoids overlap with `Algebra<F>`.
 impl<F: Field> Algebra<CubicTrinomialExtensionField<F>>
     for SymbolicExpressionExt<F, CubicTrinomialExtensionField<F>>
 where
     CubicTrinomialExtensionField<F>: ExtensionField<F>,
+{
+}
+
+/// Concrete [`Algebra`] for [`QuinticTrinomialExtensionField`] — avoids overlap with `Algebra<F>`.
+impl<F: Field> Algebra<QuinticTrinomialExtensionField<F>>
+    for SymbolicExpressionExt<F, QuinticTrinomialExtensionField<F>>
+where
+    QuinticTrinomialExtensionField<F>: ExtensionField<F>,
 {
 }
 

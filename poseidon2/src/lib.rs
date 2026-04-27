@@ -51,6 +51,7 @@ where
         external_constants: ExternalLayerConstants<F, WIDTH>,
         internal_constants: Vec<F>,
     ) -> Self {
+        // Compile-time structural checks from the Poseidon2 specification.
         const {
             let mut i = 0;
             let mut found = false;
@@ -60,8 +61,23 @@ where
                 }
                 i += 1;
             }
-            assert!(found, "WIDTH must be one of the supported widths");
+            // Section 6: t ∈ {2, 3, 4, ..., 24}.
+            assert!(
+                found,
+                "WIDTH must be one of the supported widths (paper Section 6)"
+            );
+            // Section 6: S-box(x) = x^d where d ≥ 3.
+            assert!(D >= 3, "Poseidon2 requires D >= 3 (paper Section 6)");
         }
+
+        // Section 7.1: RF ≥ 6 for statistical attack resistance (differential, linear).
+        let rounds_f = external_constants.get_initial_constants().len()
+            + external_constants.get_terminal_constants().len();
+        assert!(
+            rounds_f >= 6,
+            "Poseidon2 requires rounds_f >= 6 (paper Section 7.1: statistical attacks)"
+        );
+
         let external_layer = ExternalPerm::new_from_constants(external_constants);
         let internal_layer = InternalPerm::new_from_constants(internal_constants);
 
@@ -77,6 +93,12 @@ where
     where
         StandardUniform: Distribution<F> + Distribution<[F; WIDTH]>,
     {
+        // Section 7.1: RF ≥ 6 for statistical attack resistance.
+        assert!(
+            rounds_f >= 6,
+            "Poseidon2 requires rounds_f >= 6 (paper Section 7.1: statistical attacks)"
+        );
+
         let external_constants = ExternalLayerConstants::new_from_rng(rounds_f, rng);
         let internal_constants = rng.sample_iter(StandardUniform).take(rounds_p).collect();
 

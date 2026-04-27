@@ -1,5 +1,8 @@
 pub mod interleaves;
 mod packed_traits;
+#[cfg(test)]
+#[macro_use]
+mod tests_packed_mod;
 
 #[allow(unused_imports)]
 pub use interleaves::*; // Only used when vectorizations are available

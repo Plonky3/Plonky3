@@ -268,7 +268,14 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Neon<FP>
             1 => *self,
             2 => self.square(),
             3 => self.cube(),
-            4 => self.square().square(),
+            4 => {
+                let val = self.to_signed_vector();
+                unsafe {
+                    // Safety: `exp_4` returns values in canonical form when given values in canonical form.
+                    let res = exp_4::<FP>(val);
+                    Self::from_vector(res)
+                }
+            }
             5 => {
                 let val = self.to_signed_vector();
                 unsafe {
@@ -546,6 +553,32 @@ fn cube<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
 
         // Safe as mul_with_precomp::<MPNeon, true> returns integers in [0, P)
         aarch64::vreinterpretq_u32_s32(val_3)
+    }
+}
+
+/// Take the fourth power of the MontyField31 field elements.
+///
+/// # Safety
+/// Inputs must be signed 32-bit integers in the range [-P, P].
+/// Outputs will be a unsigned 32-bit integers in canonical form [0, ..., P).
+#[inline]
+#[must_use]
+fn exp_4<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
+    // throughput: 3 cyc/vec (1.33 els/cyc)
+    // latency: 25 cyc
+
+    unsafe {
+        let mu_val = mulby_mu::<MPNeon>(val);
+
+        let val_2 = mul_with_precomp::<MPNeon, false>(val, val, mu_val);
+
+        // val_2 replaces val as both operands, so mu must be recomputed.
+        let mu_val_2 = mulby_mu::<MPNeon>(val_2);
+
+        let val_4 = mul_with_precomp::<MPNeon, true>(val_2, val_2, mu_val_2);
+
+        // Safe as mul_with_precomp::<MPNeon, true> returns integers in [0, P)
+        aarch64::vreinterpretq_u32_s32(val_4)
     }
 }
 

@@ -46,11 +46,14 @@
 //! # Design Characteristics
 //!
 //! - **No initial linear layer.** The permutation starts directly with full rounds.
-//! - **Dense MDS matrix.** A full `t × t` MDS matrix (typically Cauchy) is used
-//!   in every round, fully mixing all state elements.
-//! - **Full post-state in partial rounds.** Because the dense MDS fully mixes all
-//!   elements, partial rounds must store the entire `WIDTH`-element post-state to
-//!   avoid expression degree blowup in the AIR.
+//! - **Dense MDS matrix.** A full `t × t` MDS matrix (typically circulant) is used
+//!   in full rounds, fully mixing all state elements.
+//! - **Karatsuba convolution.** Full-round MDS multiplies use Karatsuba convolution
+//!   for supported widths (16, 24), reducing cost from O(t²) to O(t log²t).
+//! - **Sparse partial rounds.** Partial rounds use the sparse matrix decomposition
+//!   from Appendix B of the Poseidon1 paper, storing only 1 committed value per
+//!   round (the S-box output for `state[0]`) instead of the full WIDTH-element
+//!   post-state.
 
 #![no_std]
 
@@ -58,14 +61,14 @@ extern crate alloc;
 
 mod air;
 mod columns;
-mod constants;
 mod generation;
 mod vectorized;
 
 pub use air::*;
 pub use columns::*;
-pub use constants::*;
 pub use generation::*;
+pub use p3_poseidon1::external::FullRoundConstants;
+pub use p3_poseidon1::internal::PartialRoundConstants;
 pub use vectorized::*;
 
 #[cfg(test)]
@@ -82,7 +85,7 @@ mod tests {
     use p3_challenger::{HashChallenger, SerializingChallenger32};
     use p3_commit::ExtensionMmcs;
     use p3_field::extension::BinomialExtensionField;
-    use p3_fri::{TwoAdicFriPcs, create_benchmark_fri_params};
+    use p3_fri::{FriParameters, TwoAdicFriPcs};
     use p3_keccak::{Keccak256Hash, KeccakF};
     use p3_matrix::Matrix;
     use p3_merkle_tree::MerkleTreeMmcs;
@@ -92,11 +95,8 @@ mod tests {
         CompressionFunctionFromHasher, PaddingFreeSponge, Permutation, SerializingHasher,
     };
     use p3_uni_stark::{StarkConfig, prove, verify};
-    use rand::SeedableRng;
-    use rand::rngs::SmallRng;
 
     use crate::columns::{Poseidon1Cols, num_cols};
-    use crate::constants::RoundConstants;
     use crate::{Poseidon1Air, generate_trace_rows};
 
     type F = BabyBear;
@@ -133,13 +133,39 @@ mod tests {
     }
 
     #[test]
+    fn test_poseidon1_air_degree_babybear() {
+        use p3_air::BaseAir;
+        use p3_air::symbolic::{AirLayout, get_max_constraint_degree};
+
+        let raw = babybear_poseidon1_constants_16();
+        let (full, partial) = raw.to_optimized();
+        let air: Poseidon1Air<
+            F,
+            WIDTH,
+            SBOX_DEGREE,
+            SBOX_REGISTERS,
+            HALF_FULL_ROUNDS,
+            PARTIAL_ROUNDS,
+        > = Poseidon1Air::new(full, partial);
+
+        let layout = AirLayout {
+            main_width: air.width(),
+            ..Default::default()
+        };
+        let degree = get_max_constraint_degree::<F, _>(&air, layout);
+        assert_eq!(
+            degree, 3,
+            "Expected constraint degree 3 for BabyBear (7, 1)"
+        );
+    }
+
+    #[test]
     fn test_known_answer_babybear_16() {
         // Build AIR constants from the raw BabyBear Poseidon1 parameters.
         //
-        // This applies forward constant substitution internally.
+        // This applies the sparse matrix decomposition internally.
         let raw = babybear_poseidon1_constants_16();
-        let air_constants: RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS> =
-            RoundConstants::from_poseidon1_constants(&raw);
+        let (full, partial) = raw.to_optimized();
 
         // Generate a single permutation trace with sequential input [0..15].
         let input: [F; 16] = F::new_array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
@@ -151,7 +177,7 @@ mod tests {
             SBOX_REGISTERS,
             HALF_FULL_ROUNDS,
             PARTIAL_ROUNDS,
-        >(inputs, &air_constants, 0);
+        >(inputs, &full, &partial, 0);
 
         // One input → one row in the trace.
         assert_eq!(trace.height(), 1);
@@ -179,10 +205,8 @@ mod tests {
 
     #[test]
     fn test_constraint_satisfaction_babybear_16() {
-        // Use random constants (not real Poseidon1 parameters) for generality.
-        let mut rng = SmallRng::seed_from_u64(1);
-        let air_constants: RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS> =
-            RoundConstants::from_rng(&mut rng);
+        let raw = babybear_poseidon1_constants_16();
+        let (full, partial) = raw.to_optimized();
 
         let air: Poseidon1Air<
             F,
@@ -191,7 +215,7 @@ mod tests {
             SBOX_REGISTERS,
             HALF_FULL_ROUNDS,
             PARTIAL_ROUNDS,
-        > = Poseidon1Air::new(air_constants);
+        > = Poseidon1Air::new(full, partial);
 
         // Generate 16 permutations and check every constraint row-by-row.
         let trace = air.generate_trace_rows(16, 0);
@@ -203,10 +227,8 @@ mod tests {
         type Val = BabyBear;
         type Challenge = BinomialExtensionField<Val, 4>;
 
-        // Build the AIR with random constants.
-        let mut rng = SmallRng::seed_from_u64(1);
-        let air_constants: RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS> =
-            RoundConstants::from_rng(&mut rng);
+        let raw = babybear_poseidon1_constants_16();
+        let (full, partial) = raw.to_optimized();
 
         let air: Poseidon1Air<
             Val,
@@ -215,7 +237,7 @@ mod tests {
             SBOX_REGISTERS,
             HALF_FULL_ROUNDS,
             PARTIAL_ROUNDS,
-        > = Poseidon1Air::new(air_constants);
+        > = Poseidon1Air::new(full, partial);
 
         // Hash function for Merkle tree leaves and Fiat-Shamir challenger.
         let byte_hash = Keccak256Hash {};
@@ -249,7 +271,7 @@ mod tests {
         );
 
         // FRI parameters (log_blowup determines the LDE blowup factor).
-        let fri_params = create_benchmark_fri_params(challenge_mmcs);
+        let fri_params = FriParameters::new_benchmark(challenge_mmcs);
 
         // Generate the trace with extra capacity for the LDE blowup.
         let trace = air.generate_trace_rows(16, fri_params.log_blowup);

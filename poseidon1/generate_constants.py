@@ -52,6 +52,10 @@ FIELDS = {
         "prime": (1 << 64) - (1 << 32) + 1,
         "valid_widths": [8, 12],
     },
+    "mersenne31": {
+        "prime": (1 << 31) - 1,
+        "valid_widths": [16, 32],
+    },
 }
 
 

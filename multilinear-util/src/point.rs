@@ -10,16 +10,29 @@ use rand::distr::{Distribution, StandardUniform};
 
 /// A point `(x_1, ..., x_n)` in `F^n` for some field `F`.
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
-pub struct MultilinearPoint<F>(pub(crate) Vec<F>);
+pub struct Point<F>(pub(crate) Vec<F>);
 
-impl<F> MultilinearPoint<F>
+impl<F> Point<F>
 where
     F: Field,
 {
-    /// Construct a new `MultilinearPoint` from a vector of field elements.
+    /// Construct a new `Point` from a vector of field elements.
     #[must_use]
     pub const fn new(coords: Vec<F>) -> Self {
         Self(coords)
+    }
+
+    /// Construct a `Point` corresponding to a vertex of the hypercube.
+    ///
+    /// Returns `value` encoded big-endian: bit `num_variables - 1 - i` lands at coordinate `i`.
+    #[must_use]
+    pub fn hypercube(value: usize, num_variables: usize) -> Self {
+        assert!(value < (1 << num_variables));
+        Self(
+            (0..num_variables)
+                .map(|i| F::from_bool((value >> (num_variables - 1 - i)) & 1 == 1))
+                .collect(),
+        )
     }
 
     /// Returns the number of variables (dimension `n`).
@@ -87,14 +100,14 @@ where
     /// eq(p, q) = ∏ (p_i * q_i + (1 - p_i) * (1 - q_i))
     /// ```
     ///
-    /// This is a static method that avoids allocating `MultilinearPoint` wrappers
+    /// This is a static method that avoids allocating `Point` wrappers
     /// when you already have slices.
     ///
     /// # Panics
     /// Panics if `p` and `q` have different lengths.
     #[must_use]
     #[inline]
-    pub fn eval_eq(p: &[F], q: &[F]) -> F {
+    pub fn eval_eq<EF: ExtensionField<F>>(p: &[F], q: &[EF]) -> EF {
         assert_eq!(
             p.len(),
             q.len(),
@@ -106,11 +119,11 @@ where
         // to avoid unnecessary multiplications.
         p.iter()
             .zip(q)
-            .map(|(&l, &r)| F::ONE + l * r.double() - l - r)
+            .map(|(&l, &r)| r.double() * l - l - r + F::ONE)
             .product()
     }
 
-    /// Computes `eq(c, p)`, where `p` is another `MultilinearPoint`.
+    /// Computes `eq(c, p)`, where `p` is another `Point`.
     ///
     /// The **equality polynomial** for two vectors is:
     /// ```ignore
@@ -122,29 +135,33 @@ where
         Self::eval_eq(self.as_slice(), point.as_slice())
     }
 
-    /// Computes `select(c, p)`, where `p` is another `MultilinearPoint`.
+    /// Computes `select(c, pow(var))`,.
     ///
     /// The **selection polynomial** for two vectors is:
     /// ```ignore
     /// select(s1, s2) = ∏ (s1_i * s2_i - s2_i + 1)
     /// ```
-    #[must_use]
-    pub fn select_poly<EF: ExtensionField<F>>(&self, point: &MultilinearPoint<EF>) -> EF {
-        assert_eq!(self.num_variables(), point.num_variables());
-
-        self.into_iter()
-            .zip(point)
-            .map(|(&l, &r)| r * (l - F::ONE) + F::ONE)
+    pub fn select_poly<BaseField: Field>(&self, mut var: BaseField) -> F
+    where
+        F: ExtensionField<BaseField>,
+    {
+        self.iter()
+            .rev()
+            .map(|&r| {
+                let term = r * (F::NEG_ONE + var) + F::ONE;
+                var = var.square();
+                term
+            })
             .product()
     }
 
-    /// Returns a new `MultilinearPoint` with the variables in reversed order.
+    /// Returns a new `Point` with the variables in reversed order.
     #[must_use]
     pub fn reversed(&self) -> Self {
         Self(self.0.iter().rev().copied().collect())
     }
 
-    /// Extends this `MultilinearPoint` in-place by appending the coordinates of `other`.
+    /// Extends this `Point` in-place by appending the coordinates of `other`.
     pub fn extend(&mut self, other: &Self) {
         self.0.extend_from_slice(&other.0);
     }
@@ -177,7 +194,7 @@ where
     }
 }
 
-impl<F> MultilinearPoint<F>
+impl<F> Point<F>
 where
     StandardUniform: Distribution<F>,
 {
@@ -186,7 +203,7 @@ where
     }
 }
 
-impl<'a, F> IntoIterator for &'a MultilinearPoint<F> {
+impl<'a, F> IntoIterator for &'a Point<F> {
     type Item = &'a F;
     type IntoIter = core::slice::Iter<'a, F>;
     fn into_iter(self) -> Self::IntoIter {
@@ -194,7 +211,7 @@ impl<'a, F> IntoIterator for &'a MultilinearPoint<F> {
     }
 }
 
-impl<F> IntoIterator for MultilinearPoint<F> {
+impl<F> IntoIterator for Point<F> {
     type Item = F;
     type IntoIter = alloc::vec::IntoIter<F>;
     fn into_iter(self) -> Self::IntoIter {
@@ -202,7 +219,7 @@ impl<F> IntoIterator for MultilinearPoint<F> {
     }
 }
 
-impl<F> Index<usize> for MultilinearPoint<F> {
+impl<F> Index<usize> for Point<F> {
     type Output = F;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -226,14 +243,14 @@ mod tests {
     type F = BabyBear;
     #[test]
     fn test_num_variables() {
-        let point = MultilinearPoint::<F>(vec![F::from_u64(1), F::from_u64(0), F::from_u64(1)]);
+        let point = Point::<F>(vec![F::from_u64(1), F::from_u64(0), F::from_u64(1)]);
         assert_eq!(point.num_variables(), 3);
     }
 
     #[test]
     fn test_expand_from_univariate_single_variable() {
         let point = F::from_u64(3);
-        let expanded = MultilinearPoint::expand_from_univariate(point, 1);
+        let expanded = Point::expand_from_univariate(point, 1);
 
         // For n = 1, we expect [y]
         assert_eq!(expanded.0, vec![point]);
@@ -242,7 +259,7 @@ mod tests {
     #[test]
     fn test_expand_from_univariate_two_variables() {
         let point = F::from_u64(2);
-        let expanded = MultilinearPoint::expand_from_univariate(point, 2);
+        let expanded = Point::expand_from_univariate(point, 2);
 
         // For n = 2, we expect [y^2, y]
         let expected = vec![point * point, point];
@@ -252,7 +269,7 @@ mod tests {
     #[test]
     fn test_expand_from_univariate_three_variables() {
         let point = F::from_u64(5);
-        let expanded = MultilinearPoint::expand_from_univariate(point, 3);
+        let expanded = Point::expand_from_univariate(point, 3);
 
         // For n = 3, we expect [y^4, y^2, y]
         let expected = vec![point.exp_u64(4), point.exp_u64(2), point];
@@ -262,7 +279,7 @@ mod tests {
     #[test]
     fn test_expand_from_univariate_large_variables() {
         let point = F::from_u64(7);
-        let expanded = MultilinearPoint::expand_from_univariate(point, 5);
+        let expanded = Point::expand_from_univariate(point, 5);
 
         // For n = 5, we expect [y^16, y^8, y^4, y^2, y]
         let expected = vec![
@@ -278,7 +295,7 @@ mod tests {
     #[test]
     fn test_expand_from_univariate_identity() {
         let point = F::ONE;
-        let expanded = MultilinearPoint::expand_from_univariate(point, 4);
+        let expanded = Point::expand_from_univariate(point, 4);
 
         // Since 1^k = 1 for all k, the result should be [1, 1, 1, 1]
         let expected = vec![F::ONE; 4];
@@ -288,7 +305,7 @@ mod tests {
     #[test]
     fn test_expand_from_univariate_zero() {
         let point = F::ZERO;
-        let expanded = MultilinearPoint::expand_from_univariate(point, 4);
+        let expanded = Point::expand_from_univariate(point, 4);
 
         // Since 0^k = 0 for all k, the result should be [0, 0, 0, 0]
         let expected = vec![F::ZERO; 4];
@@ -298,7 +315,7 @@ mod tests {
     #[test]
     fn test_expand_from_univariate_empty() {
         let point = F::from_u64(9);
-        let expanded = MultilinearPoint::expand_from_univariate(point, 0);
+        let expanded = Point::expand_from_univariate(point, 0);
 
         // No variables should return an empty vector
         assert_eq!(expanded.0, vec![]);
@@ -307,7 +324,7 @@ mod tests {
     #[test]
     fn test_expand_from_univariate_powers_correctness() {
         let point = F::from_u64(3);
-        let expanded = MultilinearPoint::expand_from_univariate(point, 6);
+        let expanded = Point::expand_from_univariate(point, 6);
 
         // For n = 6, we expect [y^32, y^16, y^8, y^4, y^2, y]
         let expected = vec![
@@ -323,32 +340,32 @@ mod tests {
 
     #[test]
     fn test_eq_poly_outside_all_zeros() {
-        let ml_point1 = MultilinearPoint(vec![F::ZERO; 4]);
-        let ml_point2 = MultilinearPoint(vec![F::ZERO; 4]);
+        let ml_point1 = Point(vec![F::ZERO; 4]);
+        let ml_point2 = Point(vec![F::ZERO; 4]);
 
         assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
     }
 
     #[test]
     fn test_eq_poly_outside_all_ones() {
-        let ml_point1 = MultilinearPoint(vec![F::ONE; 4]);
-        let ml_point2 = MultilinearPoint(vec![F::ONE; 4]);
+        let ml_point1 = Point(vec![F::ONE; 4]);
+        let ml_point2 = Point(vec![F::ONE; 4]);
 
         assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
     }
 
     #[test]
     fn test_eq_poly_outside_mixed_match() {
-        let ml_point1 = MultilinearPoint(vec![F::ONE, F::ZERO, F::ONE, F::ZERO]);
-        let ml_point2 = MultilinearPoint(vec![F::ONE, F::ZERO, F::ONE, F::ZERO]);
+        let ml_point1 = Point(vec![F::ONE, F::ZERO, F::ONE, F::ZERO]);
+        let ml_point2 = Point(vec![F::ONE, F::ZERO, F::ONE, F::ZERO]);
 
         assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
     }
 
     #[test]
     fn test_eq_poly_outside_mixed_mismatch() {
-        let ml_point1 = MultilinearPoint(vec![F::ONE, F::ZERO, F::ONE, F::ZERO]);
-        let ml_point2 = MultilinearPoint(vec![F::ZERO, F::ONE, F::ZERO, F::ONE]);
+        let ml_point1 = Point(vec![F::ONE, F::ZERO, F::ONE, F::ZERO]);
+        let ml_point2 = Point(vec![F::ZERO, F::ONE, F::ZERO, F::ONE]);
 
         assert_eq!(ml_point1.eq_poly(&ml_point2), F::ZERO);
     }
@@ -360,7 +377,7 @@ mod tests {
         let q = [F::from_u64(7), F::from_u64(11), F::from_u64(13)];
 
         // Compute using static method
-        let result = MultilinearPoint::eval_eq(&p, &q);
+        let result = Point::eval_eq(&p, &q);
 
         // Compute manually: eq(p,q) = ∏ (p_i * q_i + (1 - p_i) * (1 - q_i))
         let expected = (F::ONE + p[0] * q[0].double() - p[0] - q[0])
@@ -370,23 +387,23 @@ mod tests {
         assert_eq!(result, expected);
 
         // Test that it matches eq_poly
-        let ml_p = MultilinearPoint::new(p.to_vec());
-        let ml_q = MultilinearPoint::new(q.to_vec());
+        let ml_p = Point::new(p.to_vec());
+        let ml_q = Point::new(q.to_vec());
         assert_eq!(result, ml_p.eq_poly(&ml_q));
     }
 
     #[test]
     fn test_eq_poly_outside_single_variable_match() {
-        let ml_point1 = MultilinearPoint(vec![F::ONE]);
-        let ml_point2 = MultilinearPoint(vec![F::ONE]);
+        let ml_point1 = Point(vec![F::ONE]);
+        let ml_point2 = Point(vec![F::ONE]);
 
         assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
     }
 
     #[test]
     fn test_eq_poly_outside_single_variable_mismatch() {
-        let ml_point1 = MultilinearPoint(vec![F::ONE]);
-        let ml_point2 = MultilinearPoint(vec![F::ZERO]);
+        let ml_point1 = Point(vec![F::ONE]);
+        let ml_point2 = Point(vec![F::ZERO]);
 
         assert_eq!(ml_point1.eq_poly(&ml_point2), F::ZERO);
     }
@@ -398,14 +415,14 @@ mod tests {
         let x01 = F::from_u8(56);
         let x02 = F::from_u8(5);
         let x03 = F::from_u8(12);
-        let ml_point1 = MultilinearPoint(vec![x00, x01, x02, x03]);
+        let ml_point1 = Point(vec![x00, x01, x02, x03]);
 
         // Construct the second multilinear point with different non-binary field values
         let x10 = F::from_u8(43);
         let x11 = F::from_u8(5);
         let x12 = F::from_u8(54);
         let x13 = F::from_u8(242);
-        let ml_point2 = MultilinearPoint(vec![x10, x11, x12, x13]);
+        let ml_point2 = Point(vec![x10, x11, x12, x13]);
 
         // Compute the equality polynomial between ml_point1 and ml_point2
         let result = ml_point1.eq_poly(&ml_point2);
@@ -424,7 +441,7 @@ mod tests {
 
     #[test]
     fn test_eq_poly_outside_large_match() {
-        let ml_point1 = MultilinearPoint(vec![
+        let ml_point1 = Point(vec![
             F::ONE,
             F::ONE,
             F::ZERO,
@@ -434,7 +451,7 @@ mod tests {
             F::ONE,
             F::ZERO,
         ]);
-        let ml_point2 = MultilinearPoint(vec![
+        let ml_point2 = Point(vec![
             F::ONE,
             F::ONE,
             F::ZERO,
@@ -450,7 +467,7 @@ mod tests {
 
     #[test]
     fn test_eq_poly_outside_large_mismatch() {
-        let ml_point1 = MultilinearPoint(vec![
+        let ml_point1 = Point(vec![
             F::ONE,
             F::ONE,
             F::ZERO,
@@ -460,7 +477,7 @@ mod tests {
             F::ONE,
             F::ZERO,
         ]);
-        let ml_point2 = MultilinearPoint(vec![
+        let ml_point2 = Point(vec![
             F::ONE,
             F::ONE,
             F::ZERO,
@@ -476,8 +493,8 @@ mod tests {
 
     #[test]
     fn test_eq_poly_outside_empty_vector() {
-        let ml_point1 = MultilinearPoint::<F>(vec![]);
-        let ml_point2 = MultilinearPoint::<F>(vec![]);
+        let ml_point1 = Point::<F>(vec![]);
+        let ml_point2 = Point::<F>(vec![]);
 
         assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
     }
@@ -485,8 +502,8 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_eq_poly_outside_different_lengths() {
-        let ml_point1 = MultilinearPoint(vec![F::ONE, F::ZERO]);
-        let ml_point2 = MultilinearPoint(vec![F::ONE, F::ZERO, F::ONE]);
+        let ml_point1 = Point(vec![F::ONE, F::ZERO]);
+        let ml_point2 = Point(vec![F::ONE, F::ZERO, F::ONE]);
 
         // Should panic because lengths do not match
         let _ = ml_point1.eq_poly(&ml_point2);
@@ -502,7 +519,7 @@ mod tests {
         let mut all_same_count = 0;
 
         for _ in 0..K {
-            let point = MultilinearPoint::<F>::rand(&mut rng, N);
+            let point = Point::<F>::rand(&mut rng, N);
             let first = point.0[0];
 
             // Check if all coordinates are the same as the first one
@@ -527,8 +544,8 @@ mod tests {
             })
         ) {
             // Convert both u8 vectors to field elements
-            let p1 = MultilinearPoint(coords1.iter().copied().map(F::from_u8).collect());
-            let p2 = MultilinearPoint(coords2.iter().copied().map(F::from_u8).collect());
+            let p1 = Point(coords1.iter().copied().map(F::from_u8).collect());
+            let p2 = Point(coords2.iter().copied().map(F::from_u8).collect());
 
             // Evaluate eq_poly
             let result = p1.eq_poly(&p2);
@@ -540,6 +557,101 @@ mod tests {
             });
 
             prop_assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn test_hypercube_zero_vars_returns_empty_point() {
+        // {0,1}^0 has one point: the empty tuple.
+        let point = Point::<F>::hypercube(0, 0);
+        assert_eq!(point.num_variables(), 0);
+        assert_eq!(point.as_slice(), &[] as &[F]);
+    }
+
+    #[test]
+    fn test_hypercube_single_bit_covers_both_values() {
+        // num_variables = 1: 0 → [ZERO], 1 → [ONE].
+        assert_eq!(Point::<F>::hypercube(0, 1).as_slice(), &[F::ZERO]);
+        assert_eq!(Point::<F>::hypercube(1, 1).as_slice(), &[F::ONE]);
+    }
+
+    #[test]
+    fn test_hypercube_big_endian_layout_hand_computed() {
+        // Fixture: value = 5 = 0b101, n = 3.
+        //
+        //     coord 0 ← bit 2 = 1 → ONE
+        //     coord 1 ← bit 1 = 0 → ZERO
+        //     coord 2 ← bit 0 = 1 → ONE
+        let point = Point::<F>::hypercube(5, 3);
+        assert_eq!(point.as_slice(), &[F::ONE, F::ZERO, F::ONE]);
+    }
+
+    #[test]
+    fn test_hypercube_max_value_is_all_ones() {
+        // value = (1 << n) - 1 → every bit is 1 → every coord is ONE.
+        for num_variables in 1..=6 {
+            let max_value = (1 << num_variables) - 1;
+            let point = Point::<F>::hypercube(max_value, num_variables);
+            assert_eq!(point.as_slice(), vec![F::ONE; num_variables].as_slice());
+        }
+    }
+
+    #[test]
+    fn test_hypercube_indexes_lexicographic_poly() {
+        // Invariant: evaluating a lex-stored poly at the hypercube point
+        // for index i returns the i-th stored element.
+        use crate::poly::Poly;
+        let num_variables = 3;
+
+        // i-th eval = i, so lookups are identifiable by inspection.
+        let evals: Vec<F> = (0..(1 << num_variables))
+            .map(|i| F::from_u64(i as u64))
+            .collect();
+        let poly = Poly::new(evals.clone());
+
+        for (i, &expected) in evals.iter().enumerate() {
+            let point = Point::<F>::hypercube(i, num_variables);
+            assert_eq!(poly.eval_base(&point), expected);
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_hypercube_panics_on_out_of_range_value() {
+        // Precondition: value < 1 << num_variables.
+        // Mutation: first out-of-range value.
+        let _ = Point::<F>::hypercube(1 << 3, 3);
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_hypercube_shape_and_values(num_variables in 0usize..=8, seed in any::<u64>()) {
+            // Invariants:
+            //   1. length == num_variables.
+            //   2. every coord ∈ {ZERO, ONE}.
+            let value = if num_variables == 0 { 0 } else { (seed as usize) % (1 << num_variables) };
+            let point = Point::<F>::hypercube(value, num_variables);
+
+            prop_assert_eq!(point.num_variables(), num_variables);
+            for &c in point.as_slice() {
+                prop_assert!(c == F::ZERO || c == F::ONE);
+            }
+        }
+
+        #[test]
+        fn proptest_hypercube_matches_bit_decomposition(
+            num_variables in 1usize..=10,
+            seed in any::<u64>(),
+        ) {
+            // Invariant: coord i == bit (n - 1 - i) of value.
+            let value = (seed as usize) % (1 << num_variables);
+            let point = Point::<F>::hypercube(value, num_variables);
+
+            for (i, &coord) in point.as_slice().iter().enumerate() {
+                let bit = (value >> (num_variables - 1 - i)) & 1;
+                let expected = if bit == 1 { F::ONE } else { F::ZERO };
+                prop_assert_eq!(coord, expected);
+            }
         }
     }
 }
