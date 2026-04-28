@@ -631,7 +631,7 @@ where
     }
 
     let mut global_cumulative = global_cumulative.into_iter().collect::<Vec<_>>();
-    global_cumulative.sort_by(|(a, _), (b, _)| a.cmp(b));
+    global_cumulative.sort_by_key(|(name, _)| *name);
 
     for (name, all_expected_cumulative) in global_cumulative {
         lookup_gadget
