@@ -26,6 +26,21 @@ pub mod round_state;
 pub type Proof<W, const DIGEST_ELEMS: usize> = Vec<Vec<[W; DIGEST_ELEMS]>>;
 pub type Leafs<F> = Vec<Vec<F>>;
 
+/// Per-round prover state with the Merkle authentication shapes
+/// baked in for the WHIR commitment scheme.
+///
+/// - The first round commits to evaluations laid out as a base-field
+///   row-major matrix.
+/// - Subsequent rounds commit to folded extension-field evaluations,
+///   reinterpreted as wider base-field rows so a single Merkle backend
+///   handles both shapes.
+type WhirRoundState<EF, F, MT> = RoundState<
+    EF,
+    F,
+    <MT as Mmcs<F>>::ProverData<DenseMatrix<F>>,
+    <MT as Mmcs<F>>::ProverData<FlatMatrixView<F, EF, DenseMatrix<EF>>>,
+>;
+
 /// Orchestrates the full WHIR proving protocol.
 #[derive(Debug)]
 pub struct WhirProver<'a, EF, F, MT, Challenger>(pub &'a WhirConfig<EF, F, MT, Challenger>)
@@ -106,19 +121,13 @@ where
 
     #[instrument(skip_all, fields(round_number = round_index, log_size = self.num_variables - self.folding_factor.total_number(round_index)))]
     #[allow(clippy::too_many_lines)]
-    #[allow(clippy::type_complexity)]
     fn round<Dft: TwoAdicSubgroupDft<F>>(
         &self,
         dft: &Dft,
         round_index: usize,
         proof: &mut WhirProof<F, EF, MT>,
         challenger: &mut Challenger,
-        round_state: &mut RoundState<
-            EF,
-            F,
-            MT::ProverData<DenseMatrix<F>>,
-            MT::ProverData<FlatMatrixView<F, EF, DenseMatrix<EF>>>,
-        >,
+        round_state: &mut WhirRoundState<EF, F, MT>,
         extension_mmcs: &ExtensionMmcs<F, EF, MT>,
     ) -> Result<(), FiatShamirError>
     where
@@ -257,21 +266,14 @@ where
     }
 
     #[instrument(skip_all)]
-    #[allow(clippy::type_complexity)]
     fn final_round(
         &self,
         round_index: usize,
         proof: &mut WhirProof<F, EF, MT>,
         challenger: &mut Challenger,
-        round_state: &mut RoundState<
-            EF,
-            F,
-            MT::ProverData<DenseMatrix<F>>,
-            MT::ProverData<FlatMatrixView<F, EF, DenseMatrix<EF>>>,
-        >,
+        round_state: &mut WhirRoundState<EF, F, MT>,
         extension_mmcs: &ExtensionMmcs<F, EF, MT>,
-    ) -> Result<(), FiatShamirError>
-where {
+    ) -> Result<(), FiatShamirError> {
         // Send final polynomial coefficients in the clear.
         challenger.observe_algebra_slice(round_state.sumcheck_prover.evals().as_slice());
         proof.final_poly = Some(round_state.sumcheck_prover.evals());
