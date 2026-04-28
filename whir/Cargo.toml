@@ -45,6 +45,10 @@ parallel = ["p3-maybe-rayon/parallel"]
 name = "sumcheck"
 harness = false
 
+[[bench]]
+name = "whir_pcs"
+harness = false
+
 [[example]]
 name = "whir"
 required-features = []
