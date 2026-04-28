@@ -1708,12 +1708,7 @@ mod tests {
     #[test]
     fn test_div16_asm_edge_values() {
         for &a in EDGE_VALUES {
-            let expected = F::new(a)
-                .halve()
-                .halve()
-                .halve()
-                .halve()
-                .as_canonical_u64();
+            let expected = F::new(a).halve().halve().halve().halve().as_canonical_u64();
             let got = canon(unsafe { div16_asm(a) });
             assert_eq!(got, expected, "div16({a})");
         }
@@ -2833,7 +2828,9 @@ mod tests {
             for i in 0..8 {
                 let x = F::new(state[i]);
                 let x2 = x * x;
-                let expected = x2 * x * (x2 * x2);
+                let x3 = x2 * x;
+                let x4 = x2 * x2;
+                let expected = x3 * x4;
                 prop_assert_eq!(canon(got[i]), expected.as_canonical_u64());
             }
         }
@@ -2879,7 +2876,9 @@ mod tests {
             let mut expected: [F; 8] = core::array::from_fn(|i| F::new(state[i]) + F::new(rc[i]));
             for x in expected.iter_mut() {
                 let x2 = *x * *x;
-                *x = x2 * *x * (x2 * x2);
+                let x3 = x2 * *x;
+                let x4 = x2 * x2;
+                *x = x3 * x4;
             }
             mds_light_permutation(&mut expected, &MDSMat4);
             let mut got = state;
@@ -2910,15 +2909,13 @@ mod tests {
     // Compares the ASM permute against a field-level reference.
     // -------------------------------------------------------------------
 
-    fn field_internal_round<const WIDTH: usize>(
-        state: &mut [F; WIDTH],
-        diag: [F; WIDTH],
-        rc: u64,
-    ) {
+    fn field_internal_round<const WIDTH: usize>(state: &mut [F; WIDTH], diag: [F; WIDTH], rc: u64) {
         state[0] += F::new(rc);
         let s = state[0];
         let s2 = s * s;
-        state[0] = s2 * s * (s2 * s2);
+        let s3 = s2 * s;
+        let s4 = s2 * s2;
+        state[0] = s3 * s4;
         matmul_internal(state, diag);
     }
 
@@ -2962,14 +2959,16 @@ mod tests {
 
         let canon_consts = vec![P - 1; 22];
         let noncanon_consts = vec![u64::MAX; 22];
-        let mixed_consts: Vec<u64> = (0..22).map(|i| if i % 2 == 0 { P } else { u64::MAX - i as u64 }).collect();
+        let mixed_consts: Vec<u64> = (0..22)
+            .map(|i| if i % 2 == 0 { P } else { u64::MAX - i as u64 })
+            .collect();
 
         vec![
             (max_canonical, canon_consts.clone()),
-            (max_noncanonical, canon_consts.clone()),
+            (max_noncanonical, canon_consts),
             (max_noncanonical, noncanon_consts.clone()),
             (alternating, mixed_consts.clone()),
-            (near_p_plus, mixed_consts.clone()),
+            (near_p_plus, mixed_consts),
             (zero_state, noncanon_consts),
         ]
     }
@@ -3001,7 +3000,6 @@ mod tests {
             run_internal_stress(MATRIX_DIAG_20_GOLDILOCKS, state, &consts);
         }
     }
-
 
     #[test]
     fn test_internal_permute_specialized_w8_stress() {
@@ -3059,12 +3057,16 @@ mod tests {
             let mut expected: [F; 8] = core::array::from_fn(|i| F::new(state[i]) + F::new(rc[i]));
             for x in expected.iter_mut() {
                 let x2 = *x * *x;
-                *x = x2 * *x * (x2 * x2);
+                let x3 = x2 * *x;
+                let x4 = x2 * x2;
+                *x = x3 * x4;
             }
             mds_light_permutation(&mut expected, &MDSMat4);
 
             let mut got = state;
-            unsafe { external_round_asm(&mut got, &rc); }
+            unsafe {
+                external_round_asm(&mut got, &rc);
+            }
 
             for i in 0..8 {
                 assert_eq!(canon(got[i]), expected[i].as_canonical_u64());
@@ -3078,10 +3080,14 @@ mod tests {
             let rc = [u64::MAX; 8];
 
             let mut expected = state;
-            unsafe { external_round_asm(&mut expected, &rc); }
+            unsafe {
+                external_round_asm(&mut expected, &rc);
+            }
 
             let mut got = state;
-            unsafe { external_round_fused_w8(&mut got, &rc); }
+            unsafe {
+                external_round_fused_w8(&mut got, &rc);
+            }
 
             for i in 0..8 {
                 assert_eq!(canon(got[i]), canon(expected[i]));

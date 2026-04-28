@@ -896,7 +896,9 @@ mod tests {
         fn test_sbox_s0_asm_danger(vals in danger_array::<8>()) {
             let x = F::new(vals[0]);
             let x2 = x * x;
-            let expected = x2 * x * (x2 * x2);
+            let x3 = x2 * x;
+            let x4 = x2 * x2;
+            let expected = x3 * x4;
             let mut state = vals;
             unsafe { sbox_s0_asm(&mut state); }
             prop_assert_eq!(canon(state[0]), expected.as_canonical_u64());
@@ -1019,7 +1021,9 @@ mod tests {
             }
             expected[0] = new0;
             let mut got = state;
-            unsafe { cheap_matmul_asm_w8(&mut got, &first_row, &v); }
+            unsafe {
+                cheap_matmul_asm_w8(&mut got, &first_row, &v);
+            }
             for i in 0..8 {
                 assert_eq!(canon(got[i]), expected[i].as_canonical_u64(), "i={i}");
             }
@@ -1042,7 +1046,9 @@ mod tests {
             }
             expected[0] = new0;
             let mut got = state;
-            unsafe { cheap_matmul_asm_w12(&mut got, &first_row, &v); }
+            unsafe {
+                cheap_matmul_asm_w12(&mut got, &first_row, &v);
+            }
             for i in 0..12 {
                 assert_eq!(canon(got[i]), expected[i].as_canonical_u64(), "i={i}");
             }
@@ -1053,11 +1059,12 @@ mod tests {
     fn test_add_rc_w8_stress() {
         let rc = [u64::MAX; 8];
         for state in adversarial_states_w8() {
-            let expected: [u64; 8] = core::array::from_fn(|i| {
-                (F::new(state[i]) + F::new(rc[i])).as_canonical_u64()
-            });
+            let expected: [u64; 8] =
+                core::array::from_fn(|i| (F::new(state[i]) + F::new(rc[i])).as_canonical_u64());
             let mut got = state;
-            unsafe { add_rc_asm(&mut got, &rc); }
+            unsafe {
+                add_rc_asm(&mut got, &rc);
+            }
             for i in 0..8 {
                 assert_eq!(canon(got[i]), expected[i], "i={i}");
             }
