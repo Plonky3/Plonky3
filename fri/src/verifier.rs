@@ -1424,14 +1424,6 @@ mod tests {
         // Before each COMMIT round's folding challenge is sampled, the
         // verifier checks a proof-of-work witness against a difficulty
         // target. Witnesses that don't satisfy the target are rejected.
-        //
-        // Fixture state: commit_proof_of_work_bits = 0 → any witness passes.
-        //
-        // Mutation: bump difficulty to 20 bits in a params copy.
-        //
-        //     params difficulty:  20 bits
-        //     witness ground for: 0 bits
-        //     → witness doesn't satisfy the higher target → error
         let mut params = f.fri_params.clone();
         params.commit_proof_of_work_bits = 20;
 
