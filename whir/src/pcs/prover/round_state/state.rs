@@ -31,7 +31,6 @@ where
     pub merkle_prover_data: Option<ExtData>,
 }
 
-#[allow(clippy::mismatching_type_param_order)]
 impl<EF, F, BaseData, ExtData> RoundState<EF, F, BaseData, ExtData>
 where
     F: TwoAdicField + Ord,
