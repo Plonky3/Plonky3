@@ -575,6 +575,7 @@ impl TwoAdicField for Bn254 {
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::ToString;
     use p3_field_testing::{test_field, test_field_json_serialization, test_prime_field};
     use proptest::prelude::*;
 
@@ -626,6 +627,34 @@ mod tests {
         let f_r_minus_2 = F::NEG_ONE + F::NEG_ONE;
 
         test_field_json_serialization(&[f_100, f_1, f_2, f_r_minus_1, f_r_minus_2]);
+    }
+
+    fn limbs_to_le_bytes(limbs: [u64; 4]) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        for (i, limb) in limbs.iter().enumerate() {
+            bytes[i * 8..(i + 1) * 8].copy_from_slice(&limb.to_le_bytes());
+        }
+        bytes
+    }
+
+    fn assert_deserialize_rejected(bytes: &[u8]) {
+        let json = serde_json::to_string(bytes).unwrap();
+        let err = serde_json::from_str::<Bn254>(&json).unwrap_err();
+        assert!(err.to_string().contains("Invalid field element"));
+    }
+
+    #[test]
+    fn test_bn254_deserialize_boundary_rejections() {
+        let prime_bytes = limbs_to_le_bytes(BN254_PRIME);
+        assert_deserialize_rejected(&prime_bytes); // value == modulus
+
+        let mut over_prime = BN254_PRIME;
+        over_prime[0] += 1;
+        let over_prime_bytes = limbs_to_le_bytes(over_prime);
+        assert_deserialize_rejected(&over_prime_bytes); // value > modulus
+
+        assert_deserialize_rejected(&[0u8; 31]); // too short
+        assert_deserialize_rejected(&[0u8; 33]); // too long
     }
 
     const ZERO: Bn254 = Bn254::ZERO;
