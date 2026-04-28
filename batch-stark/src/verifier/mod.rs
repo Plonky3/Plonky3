@@ -630,6 +630,9 @@ where
         }
     }
 
+    let mut global_cumulative = global_cumulative.into_iter().collect::<Vec<_>>();
+    global_cumulative.sort_by(|(a, _), (b, _)| a.cmp(b));
+
     for (name, all_expected_cumulative) in global_cumulative {
         lookup_gadget
             .verify_global_final_value(&all_expected_cumulative)
