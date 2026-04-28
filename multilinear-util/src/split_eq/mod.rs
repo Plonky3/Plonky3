@@ -19,6 +19,7 @@
 //! for faster inner-loop throughput on supported architectures.
 
 pub mod eq;
+mod packed_kernel;
 
 use eq::EqMaybePacked;
 use itertools::Itertools;
