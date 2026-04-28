@@ -1495,10 +1495,6 @@ mod tests {
         //
         // Input Merkle proofs are NOT in the Fiat-Shamir transcript →
         // safe to mutate without desyncing the challenger.
-        //
-        // Fixture state: valid Merkle proof for input batch 0 of query 0.
-        //
-        // Mutation: zero out the first hash in the authentication path.
         proof.query_proofs[0].input_proof[0].opening_proof[0] = Default::default();
 
         let mut challenger = f.challenger.clone();
