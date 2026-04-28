@@ -533,7 +533,7 @@ where
                                     // Slice the precomputed adjusted weights to match this matrix's height.
                                     // Zero-allocation hot path: straight to the SIMD dot product.
                                     let adj = &adjusted_weights.get(&point).unwrap()[..h];
-                                    low_coset.interpolate_coset_with_adjusted_weights(
+                                    low_coset.interpolate_coset_with_precomputation(
                                         Val::GENERATOR,
                                         point,
                                         adj,

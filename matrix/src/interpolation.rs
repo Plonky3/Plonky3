@@ -5,16 +5,28 @@
 //!
 //! # Mathematical background
 //!
-//! Given evaluations of a polynomial f over a coset g * H of size N = 2^k,
-//! the barycentric formula recovers f(z) for any z outside the coset:
+//! Slight variation of this approach: <https://hackmd.io/@vbuterin/barycentric_evaluation>.
 //!
+//! We start with the evaluations of a polynomial `f` over a coset `gH` of size `N`
+//! and want to compute `f(z)`.
+//!
+//! Observe that `z^N - g^N` is equal to `0` at all points in the coset.
+//! Thus `(z^N - g^N)/(z - gh^i)` is equal to `0` at all points except for `gh^i`
+//! where it is equal to:
 //! ```text
-//!   f(z) = (z^N - g^N) / (N * g^N)  *  sum_i  g*h^i / (z - g*h^i)  *  f(g*h^i)
-//!         = z * (z^N - g^N) / (N * g^N)  * sum_i (1/(z - g*h^i) - 1/z) * f(g*h^i)
+//!   N * (gh^i)^{N - 1} = N * g^N * (gh^i)^{-1}.
+//! ```
+//!
+//! Hence `L_i(z) = h^i * (z^N - g^N)/(N * g^{N - 1} * (z - gh^i))` will be equal
+//! to `1` at `gh^i` and `0` at all other points in the coset. This means that we
+//! can compute `f(z)` as:
+//! ```text
+//!   sum_i L_i(z) f(gh^i) = (z^N - g^N)/(N * g^N) * sum_i gh^i/(z - gh^i) * f(gh^i)
+//!                        = z * (z^N - g^N)/(N * g^N) * sum_i (1/(z - gh^i) - 1/z) * f(gh^i).
 //! ```
 //!
 //! This second equality lets us trade off N extension-by-base multiplications for
-//! A single extension-by-extension multiplication, an extension inversion and N
+//! a single extension-by-extension multiplication, an extension inversion and N
 //! extension-by-extension subtractions. For large N this is worth it.
 //!
 //! Thus we define the **adjusted weights** to be `(1/(z - g*h^i) - 1/z)` and work with
@@ -94,37 +106,17 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
 
         // Convert to adjusted weights and delegate to the zero-allocation hot path.
         let adjusted = compute_adjusted_weights(point, &diff_invs);
-        self.interpolate_coset_with_adjusted_weights(shift, point, &adjusted)
-    }
-
-    /// Evaluate a batch of polynomials using precomputed inverse denominators.
-    ///
-    /// Accepts 1/(z - x_i) values computed by the caller. Converts them to
-    /// adjusted weights internally, then delegates to the zero-allocation path.
-    ///
-    /// Prefer the adjusted-weights variant when the same denominators are reused
-    /// across multiple matrices — it avoids re-subtracting z^{-1} on every call.
-    ///
-    /// # Safety
-    ///
-    /// - The evaluation point must not lie in the coset.
-    /// - Coset and inverse-denominator slices must be consistent with row ordering.
-    fn interpolate_coset_with_precomputation<EF: ExtensionField<F>>(
-        &self,
-        shift: F,
-        point: EF,
-        coset: &[F],
-        diff_invs: &[EF],
-    ) -> Vec<EF> {
-        debug_assert_eq!(coset.len(), diff_invs.len());
-        debug_assert_eq!(coset.len(), self.height());
-
-        // Convert 1/(z - x_i) to adjusted form and delegate.
-        let adjusted = compute_adjusted_weights(point, diff_invs);
-        self.interpolate_coset_with_adjusted_weights(shift, point, &adjusted)
+        self.interpolate_coset_with_precomputation(shift, point, &adjusted)
     }
 
     /// Fastest interpolation path — zero allocation beyond the result vector.
+    ///
+    /// Given evaluations of a batch of polynomials over the given coset of the canonical
+    /// power-of-two subgroup, evaluate the polynomials at `point`.
+    ///
+    /// This method takes the precomputed `adjusted_weights` and should
+    /// be preferred over [`interpolate_coset`](Interpolate::interpolate_coset) when repeatedly
+    /// called with the same subgroup and/or point.
     ///
     /// # Overview
     ///
@@ -154,40 +146,8 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
     /// - log_2(N) extension-field squarings (for z^N).
     /// - log_2(N) base-field squarings (for g^N).
     /// - One SIMD-parallel column-wise dot product over the full matrix.
-    /// Given evaluations of a batch of polynomials over the given coset of the canonical
-    /// power-of-two subgroup, evaluate the polynomials at `point`.
-    ///
-    /// This method takes the precomputed `adjusted_weights` and should
-    /// be preferred over [`interpolate_coset`](Interpolate::interpolate_coset) when repeatedly
-    /// called with the same subgroup and/or point.
-    ///
-    /// # Overview
-    ///
-    /// Each adjusted weight encodes the identity:
-    ///
-    /// ```text
-    ///   g*h^i / (z - g*h^i)  =  z * adjusted_i
-    /// ```
-    ///
-    /// so the full barycentric formula becomes:
-    ///
-    /// ```text
-    ///   f(z)  =  z * (z^N - g^N) / (N * g^N)  *  sum_i  adjusted_i * f(g*h^i)
-    /// ```
-    ///
-    /// # Safety
-    ///
-    /// - The evaluation point must not lie in the coset.
-    /// - Each weight must equal 1/(z - x_i) - 1/z for the corresponding coset element.
-    ///
-    /// # Performance
-    ///
-    /// - One base-field inversion (for N * g^N).
-    /// - log_2(N) extension-field squarings (for z^N).
-    /// - log_2(N) base-field squarings (for g^N).
-    /// - One SIMD-parallel column-wise dot product over the full matrix.
     /// - No heap allocation except the result vector.
-    fn interpolate_coset_with_adjusted_weights<EF: ExtensionField<F>>(
+    fn interpolate_coset_with_precomputation<EF: ExtensionField<F>>(
         &self,
         shift: F,
         point: EF,
@@ -237,27 +197,31 @@ mod tests {
     use p3_util::log2_strict_usize;
     use proptest::prelude::*;
 
-    use super::Interpolate;
+    use super::{Interpolate, compute_adjusted_weights};
     use crate::dense::RowMajorMatrix;
 
     type F = BabyBear;
     type EF4 = BinomialExtensionField<BabyBear, 4>;
 
+    /// Evaluate a polynomial (given by coefficients) at a point using Horner's method.
+    ///
+    /// Horner's method: `f(z) = c_0 + z*(c_1 + z*(c_2 + ...))`.
+    /// Processes coefficients from highest degree down to constant term.
     fn eval_poly<EF: ExtensionField<F>>(coeffs: &[F], point: EF) -> EF {
-        // Horner's method: fold from the highest-degree coefficient down.
-        // f(z) = c_0 + z * (c_1 + z * (c_2 + ...))
         coeffs
             .iter()
             .rev()
             .fold(EF::ZERO, |acc, &c| acc * point + c)
     }
 
+    /// Evaluate a polynomial at all points of a coset, returning the evaluations.
     fn eval_poly_on_coset<EF: ExtensionField<F>>(coeffs: &[F], shift: F, log_n: usize) -> Vec<EF> {
         let n = 1 << log_n;
+        // Build the coset {shift * h^0, shift * h^1, ..., shift * h^{n-1}}.
         let subgroup_gen = F::two_adic_generator(log_n);
         (0..n)
             .map(|i| {
-                // Coset element at index i: shift * generator^i.
+                // Coset element: shift * subgroup_gen^i.
                 let coset_elem = shift * subgroup_gen.exp_u64(i as u64);
                 eval_poly(coeffs, EF::from(coset_elem))
             })
@@ -266,59 +230,65 @@ mod tests {
 
     #[test]
     fn test_interpolate_subgroup() {
-        // Invariant: interpolating f(x) = x^2 + 2x + 3 at z = 100
-        // must recover f(100) = 10203.
-        //
-        // Fixture: 8 precomputed evaluations over the canonical subgroup.
+        // Polynomial: f(x) = x^2 + 2x + 3, evaluated over the 8-point two-adic subgroup.
+        // Known answer: f(100) = 10000 + 200 + 3 = 10203.
+
+        // Pre-computed evaluations of f over the canonical 8-point subgroup {h^0, ..., h^7}.
         let evals = [
             6, 886605102, 1443543107, 708307799, 2, 556938009, 569722818, 1874680944,
         ]
         .map(F::from_u32);
 
-        // One polynomial (1 column), 8 evaluation points (8 rows).
+        // Single column matrix: one polynomial, 8 evaluation rows.
         let evals_mat = RowMajorMatrix::new(evals.to_vec(), 1);
 
-        // z = 100 lies outside the subgroup.
+        // Interpolate at z = 100, which lies outside the subgroup.
         let point = F::from_u16(100);
         let result = evals_mat.interpolate_subgroup(point);
 
-        // 100^2 + 2*100 + 3 = 10203.
+        // Verify the known answer: f(100) = 10203.
         assert_eq!(result, vec![F::from_u16(10203)]);
     }
 
     #[test]
     fn test_interpolate_coset() {
-        // Invariant: both the full path and the precomputation path must
-        // agree on f(100) = 10203 for f(x) = x^2 + 2x + 3.
-        //
-        // Fixture: 8-point coset shifted by the field's multiplicative generator.
+        // Polynomial: f(x) = x^2 + 2x + 3, evaluated over an 8-point coset shifted
+        // by the field generator. Known answer: f(100) = 10203.
+
+        // Coset shift: the multiplicative generator of the field.
         let shift = F::GENERATOR;
 
+        // Pre-computed evaluations of f over the coset {shift * h^0, ..., shift * h^7}.
         let evals = [
             1026, 129027310, 457985035, 994890337, 902, 1988942953, 1555278970, 913671254,
         ]
         .map(F::from_u32);
 
+        // Single column matrix: one polynomial, 8 rows.
         let evals_mat = RowMajorMatrix::new(evals.to_vec(), 1);
 
-        // Part 1: full path (builds coset + batch-inverts internally).
+        // Part 1: test the standard coset interpolation path.
         let point = F::from_u16(100);
         let result = evals_mat.interpolate_coset(shift, point);
         assert_eq!(result, vec![F::from_u16(10203)]);
 
-        // Part 2: precomputation path (caller provides coset + inverse denominators).
+        // Part 2: test the precomputation path, which should give the same result.
+        // Manually build the coset elements and adjusted weights.
         let n = evals.len();
         let k = log2_strict_usize(n);
 
-        // Build the 8-element coset manually.
+        // Coset elements: {shift * h^0, shift * h^1, ..., shift * h^{N-1}}.
         let coset = F::two_adic_generator(k).shifted_powers(shift).collect_n(n);
 
-        // Compute 1/(z - x_i) via batch inversion.
+        // Inverse denominators: 1/(z - coset_i) for each coset element.
         let denom: Vec<_> = coset.iter().map(|&w| point - w).collect();
         let denom = batch_multiplicative_inverse(&denom);
 
-        // Both paths must be bit-identical.
-        let result = evals_mat.interpolate_coset_with_precomputation(shift, point, &coset, &denom);
+        // Adjusted weights: 1/(z - coset_i) - 1/z.
+        let adjusted = compute_adjusted_weights(point, &denom);
+
+        // The precomputation variant must produce the same result.
+        let result = evals_mat.interpolate_coset_with_precomputation(shift, point, &adjusted);
         assert_eq!(result, vec![F::from_u16(10203)]);
     }
 
@@ -362,19 +332,16 @@ mod tests {
 
     #[test]
     fn test_interpolate_coset_multiple_polynomials() {
-        // Invariant: batch interpolation of K polynomials via a K-column matrix
-        // must agree with interpolating each polynomial individually.
+        // Verify batch interpolation: two polynomials evaluated over the same coset
+        // are interpolated simultaneously using a 2-column matrix.
         //
-        // Fixture: two polynomials over an 8-point coset.
+        //     f_1(x) = x^2 + 2x + 3
+        //     f_2(x) = 4x^2 + 5x + 6
         //
-        //   f_1(x) = x^2 + 2x + 3
-        //   f_2(x) = 4x^2 + 5x + 6
-        //
-        //   Matrix layout (8 rows x 2 columns):
-        //
-        //     row i = [ f_1(coset_i),  f_2(coset_i) ]
+        //     Matrix layout (8 rows x 2 columns):
+        //         row i = [ f_1(coset[i]), f_2(coset[i]) ]
 
-        // 8-point coset shifted by the quartic extension generator.
+        // Build the 8-point coset shifted by the extension field generator.
         let shift = EF4::GENERATOR;
         let coset = EF4::two_adic_generator(3)
             .shifted_powers(shift)
@@ -383,82 +350,94 @@ mod tests {
         let f1 = |x: EF4| x * x + x * F::TWO + F::from_u32(3);
         let f2 = |x: EF4| x * x * F::from_u32(4) + x * F::from_u32(5) + F::from_u32(6);
 
-        // Interleave: [f1(c_0), f2(c_0), f1(c_1), f2(c_1), ...].
+        // Interleave evaluations: [f1(c0), f2(c0), f1(c1), f2(c1), ...].
         let evals: Vec<_> = coset.iter().flat_map(|&x| vec![f1(x), f2(x)]).collect();
+
+        // Two-column matrix: each column is one polynomial's evaluations.
         let evals_mat = RowMajorMatrix::new(evals, 2);
 
-        // Interpolate both columns at z = 77.
+        // Interpolate both polynomials at z = 77.
         let point = EF4::from_u32(77);
         let result = evals_mat.interpolate_coset(shift, point);
 
-        // Each column must match direct evaluation.
-        assert_eq!(result[0], f1(point));
-        assert_eq!(result[1], f2(point));
+        // Compare against direct evaluation of each polynomial at the same point.
+        let expected_f1 = f1(point);
+        let expected_f2 = f2(point);
+
+        assert_eq!(result[0], expected_f1);
+        assert_eq!(result[1], expected_f2);
     }
 
     #[test]
     fn test_interpolate_subgroup_multiple_columns() {
-        // Invariant: the subgroup path (shift = 1) must produce the same
-        // results as the coset path for multi-column matrices.
+        // Same as the coset multi-polynomial test, but over the canonical subgroup
+        // (shift = 1). Verifies that the subgroup path correctly delegates to
+        // the coset path and produces identical results.
         //
-        //   f_1(x) = x^2 + 2x + 3
-        //   f_2(x) = 4x^2 + 5x + 6
+        //     f_1(x) = x^2 + 2x + 3
+        //     f_2(x) = 4x^2 + 5x + 6
 
         let f1 = |x: EF4| x * x + x * F::TWO + F::from_u32(3);
         let f2 = |x: EF4| x * x * F::from_u32(4) + x * F::from_u32(5) + F::from_u32(6);
 
-        // Canonical 8-point subgroup.
+        // Evaluation domain: the canonical 2^3 = 8-point subgroup {h^0, ..., h^7}.
         let subgroup_iter = EF4::two_adic_generator(3).powers().take(8);
 
-        // Interleaved evaluations => 8 rows x 2 columns.
+        // Evaluate both polynomials on the subgroup, interleaved.
         let evals: Vec<_> = subgroup_iter.flat_map(|x| vec![f1(x), f2(x)]).collect();
+
+        // 8 rows x 2 columns: column 0 holds f_1 evaluations, column 1 holds f_2.
         let evals_mat = RowMajorMatrix::new(evals, 2);
 
-        // z = 77 lies outside the subgroup.
+        // Interpolate at z = 77, which lies outside the subgroup.
         let point = EF4::from_u32(77);
         let result = evals_mat.interpolate_subgroup(point);
 
-        assert_eq!(result, vec![f1(point), f2(point)]);
+        // Compare against direct evaluation of each polynomial.
+        let expected_f1 = f1(point);
+        let expected_f2 = f2(point);
+
+        assert_eq!(result, vec![expected_f1, expected_f2]);
     }
 
     proptest! {
+        // Correctness: subgroup round-trip
         #[test]
         fn prop_roundtrip_subgroup(
             log_n in 1usize..=4,
             coeffs_raw in prop::collection::vec(0u32..2013265921, 1..=16),
             point_raw in 1u32..2013265921u32,
         ) {
-            // Invariant: evaluate f on the canonical subgroup, interpolate at z,
-            // and the result must equal direct Horner evaluation of f at z.
+            // Invariant: evaluate f on 2^log_n-subgroup, interpolate at z → must equal f(z).
             //
-            //   coeffs -> eval on {h^0, ..., h^{N-1}} -> interpolate at z
-            //   coeffs -> Horner at z
-            //   Both must agree.
+            //     coeffs  →  eval on {h^0, ..., h^{N-1}}  →  interpolate at z
+            //     coeffs  →  Horner at z
+            //     Both must agree.
 
             // Truncate to degree < N so the polynomial is uniquely determined.
             let n = 1usize << log_n;
             let coeffs: Vec<F> = coeffs_raw.iter().take(n).map(|&v| F::from_u32(v)).collect();
 
-            // Evaluate on the canonical subgroup (shift = 1).
+            // Evaluate on canonical subgroup (shift = 1).
             let evals: Vec<F> = eval_poly_on_coset(&coeffs, F::ONE, log_n);
             let evals_mat = RowMajorMatrix::new(evals, 1);
 
             let point = EF4::from_u32(point_raw);
 
+            // Compare interpolation against direct Horner evaluation.
             let result = evals_mat.interpolate_subgroup(point);
             let expected = eval_poly(&coeffs, point);
             prop_assert_eq!(result[0], expected);
         }
 
+        // Correctness: coset round-trip (shift = GENERATOR)
         #[test]
         fn prop_roundtrip_coset(
             log_n in 1usize..=4,
             coeffs_raw in prop::collection::vec(0u32..2013265921, 1..=16),
             point_raw in 1u32..2013265921u32,
         ) {
-            // Invariant: same round-trip as above, but over a shifted coset
-            // with shift = multiplicative generator.
-
+            // Same round-trip as above, but over a shifted coset {g*h^i}.
             let n = 1usize << log_n;
             let coeffs: Vec<F> = coeffs_raw.iter().take(n).map(|&v| F::from_u32(v)).collect();
             let shift = F::GENERATOR;
@@ -472,15 +451,18 @@ mod tests {
             prop_assert_eq!(result[0], expected);
         }
 
+        // Path equivalence: standard vs precomputation
         #[test]
         fn prop_precomputation_equivalence(
             log_n in 1usize..=4,
             coeffs_raw in prop::collection::vec(0u32..2013265921, 1..=16),
             point_raw in 1u32..2013265921u32,
         ) {
-            // Invariant: the full path and the precomputation path must be
-            // bit-identical — they compute the same barycentric formula.
-
+            // Invariant: both code paths compute the same barycentric formula.
+            //
+            //     interpolate_coset                     (builds coset + adjusted weights internally)
+            //     interpolate_coset_with_precomputation (caller provides adjusted weights)
+            //     → must be bit-identical.
             let n = 1usize << log_n;
             let coeffs: Vec<F> = coeffs_raw.iter().take(n).map(|&v| F::from_u32(v)).collect();
             let shift = F::GENERATOR;
@@ -489,34 +471,33 @@ mod tests {
             let evals_mat = RowMajorMatrix::new(evals, 1);
             let point = EF4::from_u32(point_raw);
 
-            // Full path (builds everything internally).
+            // Standard path.
             let result_standard = evals_mat.interpolate_coset(shift, point);
 
-            // Manual precomputation path (caller builds coset + inverse denoms).
+            // Manual precomputation path.
             let subgroup_gen = F::two_adic_generator(log_n);
             let coset: Vec<F> =
                 (0..n).map(|i| shift * subgroup_gen.exp_u64(i as u64)).collect();
             let diffs: Vec<EF4> = coset.iter().map(|&c| point - c).collect();
             let diff_invs = batch_multiplicative_inverse(&diffs);
+            let adjusted = compute_adjusted_weights(point, &diff_invs);
             let result_precomp = evals_mat
-                .interpolate_coset_with_precomputation(shift, point, &coset, &diff_invs);
+                .interpolate_coset_with_precomputation(shift, point, &adjusted);
 
             prop_assert_eq!(result_standard, result_precomp);
         }
 
+        // Constant polynomial: f(x) = c → interpolation at any z must return c.
         #[test]
         fn prop_constant_polynomial(
             log_n in 1usize..=4,
             c_raw in 0u32..2013265921u32,
             point_raw in 1u32..2013265921u32,
         ) {
-            // Invariant: a constant polynomial evaluates to the same value
-            // everywhere. Interpolation at any external point must recover it.
-
             let n = 1usize << log_n;
             let c = F::from_u32(c_raw);
 
-            // N identical evaluations => degree-0 polynomial.
+            // N identical evaluations → constant polynomial.
             let evals = vec![c; n];
             let evals_mat = RowMajorMatrix::new(evals, 1);
             let point = EF4::from_u32(point_raw);
@@ -525,6 +506,7 @@ mod tests {
             prop_assert_eq!(result[0], EF4::from(c));
         }
 
+        // Linearity: interp(a*f + b*g) == a*interp(f) + b*interp(g)
         #[test]
         fn prop_linearity(
             log_n in 1usize..=3,
@@ -534,16 +516,14 @@ mod tests {
             b_raw in 0u32..2013265921u32,
             point_raw in 1u32..2013265921u32,
         ) {
-            // Invariant: barycentric interpolation is linear.
-            //   interp(a*f + b*g, z) == a * interp(f, z) + b * interp(g, z)
-
+            // Invariant: barycentric interpolation is linear over the evaluation column.
             let n = 1usize << log_n;
             let f_coeffs: Vec<F> = f_raw.iter().take(n).map(|&v| F::from_u32(v)).collect();
             let g_coeffs: Vec<F> = g_raw.iter().take(n).map(|&v| F::from_u32(v)).collect();
             let a = F::from_u32(a_raw);
             let b = F::from_u32(b_raw);
 
-            // Evaluate f, g, and the linear combination on the canonical subgroup.
+            // Evaluate f, g, and (a*f + b*g) on the canonical subgroup.
             let f_evals: Vec<F> = eval_poly_on_coset(&f_coeffs, F::ONE, log_n);
             let g_evals: Vec<F> = eval_poly_on_coset(&g_coeffs, F::ONE, log_n);
             let combined_evals: Vec<F> = f_evals
@@ -566,6 +546,7 @@ mod tests {
             prop_assert_eq!(interp_combined, expected);
         }
 
+        // Batch equivalence: 2-column matrix vs two 1-column matrices
         #[test]
         fn prop_batch_equals_individual(
             log_n in 1usize..=3,
@@ -573,15 +554,12 @@ mod tests {
             g_raw in prop::collection::vec(0u32..2013265921, 1..=8),
             point_raw in 1u32..2013265921u32,
         ) {
-            // Invariant: a multi-column matrix must produce the same results
-            // as interpolating each column individually.
+            // Invariant: batch[col_j] == individual[col_j] for all j.
             //
-            //   batch (N x 2):  [ f(c_0)  g(c_0) ]  -> interpolate -> [ f(z), g(z) ]
-            //                   [ f(c_1)  g(c_1) ]
-            //                   ...
-            //
-            //   single (N x 1) each  -> interpolate -> f(z), g(z)
-
+            //     batch_mat (N×2):       [f(c_0) g(c_0)]     → interpolate → [f(z), g(z)]
+            //                            [f(c_1) g(c_1)]
+            //                            ...
+            //     f_mat (N×1), g_mat (N×1) → interpolate each → f(z), g(z)
             let n = 1usize << log_n;
             let f_coeffs: Vec<F> = f_raw.iter().take(n).map(|&v| F::from_u32(v)).collect();
             let g_coeffs: Vec<F> = g_raw.iter().take(n).map(|&v| F::from_u32(v)).collect();
@@ -590,7 +568,7 @@ mod tests {
             let f_evals: Vec<F> = eval_poly_on_coset(&f_coeffs, shift, log_n);
             let g_evals: Vec<F> = eval_poly_on_coset(&g_coeffs, shift, log_n);
 
-            // Interleave into a 2-column batch matrix.
+            // Interleave into 2-column batch matrix.
             let batch_evals: Vec<F> = f_evals
                 .iter()
                 .zip(&g_evals)
