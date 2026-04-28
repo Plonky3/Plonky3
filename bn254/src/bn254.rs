@@ -576,6 +576,7 @@ impl TwoAdicField for Bn254 {
 #[cfg(test)]
 mod tests {
     use alloc::string::ToString;
+
     use p3_field_testing::{test_field, test_field_json_serialization, test_prime_field};
     use proptest::prelude::*;
 
