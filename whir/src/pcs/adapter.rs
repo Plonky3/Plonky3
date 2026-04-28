@@ -15,7 +15,7 @@ use p3_multilinear_util::poly::Poly;
 use super::committer::reader::CommitmentReader;
 use super::committer::writer::CommitmentWriter;
 use super::proof::WhirProof;
-use super::prover::Prover;
+use super::prover::WhirProver;
 use super::verifier::Verifier;
 use super::verifier::errors::VerifierError;
 use crate::constraints::statement::EqStatement;
@@ -228,7 +228,7 @@ where
         //     5. Perform proof-of-work grinding to bind the transcript.
         //     6. Generate STIR query positions and open Merkle paths.
         //   Final round: send the polynomial coefficients in the clear.
-        let prover = Prover(&self.config);
+        let prover = WhirProver(&self.config);
         prover
             .prove(
                 &self.dft,

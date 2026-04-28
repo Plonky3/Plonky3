@@ -25,7 +25,7 @@ use p3_whir::parameters::{
 use p3_whir::pcs::committer::reader::CommitmentReader;
 use p3_whir::pcs::committer::writer::CommitmentWriter;
 use p3_whir::pcs::proof::WhirProof;
-use p3_whir::pcs::prover::Prover;
+use p3_whir::pcs::prover::WhirProver;
 use p3_whir::pcs::verifier::Verifier;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -212,7 +212,7 @@ fn main() {
     let commit_time = time.elapsed();
 
     // Phase 2: Opening proof (multi-round sumcheck + STIR queries + PoW).
-    let prover = Prover(&params);
+    let prover = WhirProver(&params);
     let time = Instant::now();
     prover
         .prove(

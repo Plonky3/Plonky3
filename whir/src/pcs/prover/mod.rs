@@ -28,12 +28,12 @@ pub type Leafs<F> = Vec<Vec<F>>;
 
 /// Orchestrates the full WHIR proving protocol.
 #[derive(Debug)]
-pub struct Prover<'a, EF, F, MT, Challenger>(pub &'a WhirConfig<EF, F, MT, Challenger>)
+pub struct WhirProver<'a, EF, F, MT, Challenger>(pub &'a WhirConfig<EF, F, MT, Challenger>)
 where
     F: Field,
     EF: ExtensionField<F>;
 
-impl<EF, F, MT, Challenger> Deref for Prover<'_, EF, F, MT, Challenger>
+impl<EF, F, MT, Challenger> Deref for WhirProver<'_, EF, F, MT, Challenger>
 where
     F: Field,
     EF: ExtensionField<F>,
@@ -45,7 +45,7 @@ where
     }
 }
 
-impl<EF, F, MT, Challenger> Prover<'_, EF, F, MT, Challenger>
+impl<EF, F, MT, Challenger> WhirProver<'_, EF, F, MT, Challenger>
 where
     F: TwoAdicField + Ord,
     EF: ExtensionField<F> + TwoAdicField,
