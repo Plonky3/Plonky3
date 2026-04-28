@@ -404,13 +404,15 @@ pub unsafe fn add_scalar_s0_asm(state: &mut [u64], rc: u64) {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use p3_field::PrimeField64;
     use proptest::prelude::*;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
     use super::*;
-    use crate::Goldilocks;
+    use crate::{Goldilocks, P};
 
     type F = Goldilocks;
 
@@ -422,6 +424,50 @@ mod tests {
     /// against field-level references.
     fn canon(x: u64) -> u64 {
         F::new(x).as_canonical_u64()
+    }
+
+    const EPSILON: u64 = P.wrapping_neg();
+
+    /// Boundary u64s probed against every scalar ASM op.
+    const EDGE_VALUES: &[u64] = &[
+        0,
+        1,
+        2,
+        EPSILON - 1,
+        EPSILON,
+        EPSILON + 1,
+        1u64 << 31,
+        (1u64 << 32) + 1,
+        1u64 << 33,
+        1u64 << 63,
+        P - 2,
+        P - 1,
+        P,
+        P + 1,
+        P + 2,
+        18_446_744_069_605_983_184,
+        18_446_744_073_709_551_599,
+        u64::MAX - 1,
+        u64::MAX,
+    ];
+
+    /// Strategy biased toward the non-canonical band.
+    fn danger_u64() -> impl Strategy<Value = u64> {
+        prop_oneof![
+            prop::sample::select(EDGE_VALUES.to_vec()),
+            P..u64::MAX,
+            P..=P.saturating_add(EPSILON - 1),
+            any::<u64>(),
+        ]
+    }
+
+    /// Length-`WIDTH` array of danger-band u64s.
+    fn danger_array<const WIDTH: usize>() -> impl Strategy<Value = [u64; WIDTH]> {
+        prop::collection::vec(danger_u64(), WIDTH).prop_map(|v: Vec<u64>| {
+            let mut a = [0u64; WIDTH];
+            a.copy_from_slice(&v);
+            a
+        })
     }
 
     proptest! {
@@ -837,6 +883,183 @@ mod tests {
             for i in 0..12 {
                 prop_assert_eq!(canon(s0[i]), canon(ref0[i]));
                 prop_assert_eq!(canon(s1[i]), canon(ref1[i]));
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Danger-zone proptests.
+    // -------------------------------------------------------------------
+
+    proptest! {
+        #[test]
+        fn test_sbox_s0_asm_danger(vals in danger_array::<8>()) {
+            let x = F::new(vals[0]);
+            let x2 = x * x;
+            let expected = x2 * x * (x2 * x2);
+            let mut state = vals;
+            unsafe { sbox_s0_asm(&mut state); }
+            prop_assert_eq!(canon(state[0]), expected.as_canonical_u64());
+        }
+
+        #[test]
+        fn test_add_rc_w8_danger(
+            vals in danger_array::<8>(),
+            rc in danger_array::<8>(),
+        ) {
+            let expected: [u64; 8] = core::array::from_fn(|i| {
+                (F::new(vals[i]) + F::new(rc[i])).as_canonical_u64()
+            });
+            let mut state = vals;
+            unsafe { add_rc_asm(&mut state, &rc); }
+            for i in 0..8 {
+                prop_assert_eq!(canon(state[i]), expected[i]);
+            }
+        }
+
+        #[test]
+        fn test_cheap_matmul_w8_danger(
+            vals in danger_array::<8>(),
+            first_row in danger_array::<8>(),
+            v in danger_array::<8>(),
+        ) {
+            let f: [F; 8] = vals.map(F::new);
+            let fr: [F; 8] = first_row.map(F::new);
+            let fv: [F; 8] = v.map(F::new);
+            let old = f[0];
+            let new0: F = (0..8).map(|i| f[i] * fr[i]).sum();
+            let mut expected = f;
+            for i in 1..8 {
+                expected[i] = f[i] + old * fv[i - 1];
+            }
+            expected[0] = new0;
+            let mut state = vals;
+            unsafe { cheap_matmul_asm_w8(&mut state, &first_row, &v); }
+            for i in 0..8 {
+                prop_assert_eq!(canon(state[i]), expected[i].as_canonical_u64());
+            }
+        }
+
+        #[test]
+        fn test_cheap_matmul_w12_danger(
+            vals in danger_array::<12>(),
+            first_row in danger_array::<12>(),
+            v in danger_array::<12>(),
+        ) {
+            let f: [F; 12] = vals.map(F::new);
+            let fr: [F; 12] = first_row.map(F::new);
+            let fv: [F; 12] = v.map(F::new);
+            let old = f[0];
+            let new0: F = (0..12).map(|i| f[i] * fr[i]).sum();
+            let mut expected = f;
+            for i in 1..12 {
+                expected[i] = f[i] + old * fv[i - 1];
+            }
+            expected[0] = new0;
+            let mut state = vals;
+            unsafe { cheap_matmul_asm_w12(&mut state, &first_row, &v); }
+            for i in 0..12 {
+                prop_assert_eq!(canon(state[i]), expected[i].as_canonical_u64());
+            }
+        }
+
+        #[test]
+        fn test_dense_matmul_w8_danger(vals in danger_array::<8>()) {
+            let mut rng = SmallRng::seed_from_u64(101);
+            let m: [[u64; 8]; 8] = rand::RngExt::random(&mut rng);
+            let f: [F; 8] = vals.map(F::new);
+            let expected: [F; 8] = core::array::from_fn(|i| {
+                (0..8).map(|j| f[j] * F::new(m[i][j])).sum()
+            });
+            let mut state = vals;
+            dense_matmul_asm_w8(&mut state, &m);
+            for i in 0..8 {
+                prop_assert_eq!(canon(state[i]), expected[i].as_canonical_u64());
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Adversarial-state stress tests against field-level references.
+    // -------------------------------------------------------------------
+
+    fn adversarial_states_w8() -> [[u64; 8]; 5] {
+        [
+            [P - 1; 8],
+            [u64::MAX; 8],
+            core::array::from_fn(|i| if i % 2 == 0 { P - 1 } else { u64::MAX }),
+            core::array::from_fn(|i| P + (i as u64)),
+            [0; 8],
+        ]
+    }
+
+    fn adversarial_states_w12() -> [[u64; 12]; 5] {
+        [
+            [P - 1; 12],
+            [u64::MAX; 12],
+            core::array::from_fn(|i| if i % 2 == 0 { P - 1 } else { u64::MAX }),
+            core::array::from_fn(|i| P + (i as u64)),
+            [0; 12],
+        ]
+    }
+
+    #[test]
+    fn test_cheap_matmul_w8_stress() {
+        let first_row = [P - 1; 8];
+        let v = [u64::MAX; 8];
+        for state in adversarial_states_w8() {
+            let f: [F; 8] = state.map(F::new);
+            let fr: [F; 8] = first_row.map(F::new);
+            let fv: [F; 8] = v.map(F::new);
+            let old = f[0];
+            let new0: F = (0..8).map(|i| f[i] * fr[i]).sum();
+            let mut expected = f;
+            for i in 1..8 {
+                expected[i] = f[i] + old * fv[i - 1];
+            }
+            expected[0] = new0;
+            let mut got = state;
+            unsafe { cheap_matmul_asm_w8(&mut got, &first_row, &v); }
+            for i in 0..8 {
+                assert_eq!(canon(got[i]), expected[i].as_canonical_u64(), "i={i}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_cheap_matmul_w12_stress() {
+        let first_row = [P - 1; 12];
+        let v = [u64::MAX; 12];
+        for state in adversarial_states_w12() {
+            let f: [F; 12] = state.map(F::new);
+            let fr: [F; 12] = first_row.map(F::new);
+            let fv: [F; 12] = v.map(F::new);
+            let old = f[0];
+            let new0: F = (0..12).map(|i| f[i] * fr[i]).sum();
+            let mut expected = f;
+            for i in 1..12 {
+                expected[i] = f[i] + old * fv[i - 1];
+            }
+            expected[0] = new0;
+            let mut got = state;
+            unsafe { cheap_matmul_asm_w12(&mut got, &first_row, &v); }
+            for i in 0..12 {
+                assert_eq!(canon(got[i]), expected[i].as_canonical_u64(), "i={i}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_add_rc_w8_stress() {
+        let rc = [u64::MAX; 8];
+        for state in adversarial_states_w8() {
+            let expected: [u64; 8] = core::array::from_fn(|i| {
+                (F::new(state[i]) + F::new(rc[i])).as_canonical_u64()
+            });
+            let mut got = state;
+            unsafe { add_rc_asm(&mut got, &rc); }
+            for i in 0..8 {
+                assert_eq!(canon(got[i]), expected[i], "i={i}");
             }
         }
     }
