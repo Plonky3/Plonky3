@@ -10,19 +10,15 @@
 //!
 //! ```text
 //!   f(z) = (z^N - g^N) / (N * g^N)  *  sum_i  g*h^i / (z - g*h^i)  *  f(g*h^i)
+//!         = z * (z^N - g^N) / (N * g^N)  * sum_i (1/(z - g*h^i) - 1/z) * f(g*h^i)
 //! ```
 //!
-//! The per-element weight g*h^i / (z - g*h^i) normally requires N
-//! extension-by-base multiplications. An algebraic identity eliminates them:
+//! This second equality lets us trade off N extension-by-base multiplications for
+//! A single extension-by-extension multiplication, an extension inversion and N
+//! extension-by-extension subtractions. For large N this is worth it.
 //!
-//! ```text
-//!   g*h^i / (z - g*h^i)  =  z * ( 1/(z - g*h^i) - 1/z )
-//! ```
-//!
-//! So we define **adjusted weights** as the parenthesized difference, absorb the
-//! extra factor of z into the global scalar, and feed the adjusted weights
-//! straight into the SIMD-optimized dot product — zero per-element coset work.
-
+//! Thus we define the **adjusted weights** to be `(1/(z - g*h^i) - 1/z)` and work with
+//! these instead.
 use alloc::vec::Vec;
 
 use p3_field::coset::TwoAdicMultiplicativeCoset;
