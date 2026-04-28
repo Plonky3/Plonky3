@@ -26,7 +26,7 @@ use p3_whir::pcs::committer::reader::CommitmentReader;
 use p3_whir::pcs::committer::writer::CommitmentWriter;
 use p3_whir::pcs::proof::WhirProof;
 use p3_whir::pcs::prover::WhirProver;
-use p3_whir::pcs::verifier::Verifier;
+use p3_whir::pcs::verifier::WhirVerifier;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 use tracing::{info, warn};
@@ -227,7 +227,7 @@ fn main() {
 
     // Verifier: independent transcript from the same domain separator.
     let commitment_reader = CommitmentReader::new(&params);
-    let verifier = Verifier::new(&params);
+    let verifier = WhirVerifier::new(&params);
 
     let mut verifier_challenger = challenger;
     domainsep.observe_domain_separator(&mut verifier_challenger);

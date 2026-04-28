@@ -27,12 +27,14 @@ pub mod errors;
 
 /// WHIR protocol verifier.
 #[derive(Debug)]
-pub struct Verifier<'a, EF, F, MT, Challenger>(pub(crate) &'a WhirConfig<EF, F, MT, Challenger>)
+pub struct WhirVerifier<'a, EF, F, MT, Challenger>(
+    pub(crate) &'a WhirConfig<EF, F, MT, Challenger>,
+)
 where
     F: Field,
     EF: ExtensionField<F>;
 
-impl<'a, EF, F, MT, Challenger> Verifier<'a, EF, F, MT, Challenger>
+impl<'a, EF, F, MT, Challenger> WhirVerifier<'a, EF, F, MT, Challenger>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
@@ -322,7 +324,7 @@ where
     }
 }
 
-impl<EF, F, MT, Challenger> Deref for Verifier<'_, EF, F, MT, Challenger>
+impl<EF, F, MT, Challenger> Deref for WhirVerifier<'_, EF, F, MT, Challenger>
 where
     F: Field,
     EF: ExtensionField<F>,

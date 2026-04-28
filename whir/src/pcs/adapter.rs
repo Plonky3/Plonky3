@@ -16,7 +16,7 @@ use super::committer::reader::CommitmentReader;
 use super::committer::writer::CommitmentWriter;
 use super::proof::WhirProof;
 use super::prover::WhirProver;
-use super::verifier::Verifier;
+use super::verifier::WhirVerifier;
 use super::verifier::errors::VerifierError;
 use crate::constraints::statement::EqStatement;
 use crate::constraints::statement::initial::InitialStatement;
@@ -279,7 +279,7 @@ where
         //   2. Verify each sumcheck round.
         //   3. Check STIR query openings against Merkle proofs.
         //   4. Verify the final polynomial evaluation.
-        let verifier = Verifier::new(&self.config);
+        let verifier = WhirVerifier::new(&self.config);
         verifier.verify(proof, challenger, &parsed_commitment, eq_statement)?;
 
         Ok(())
