@@ -1,141 +1,182 @@
-//! Lagrange interpolation over two-adic cosets.
-
+//! Barycentric Lagrange interpolation over two-adic cosets.
+//!
+//! Evaluates polynomials at out-of-domain points given their evaluations
+//! over a power-of-two multiplicative coset.
+//!
+//! # Mathematical background
+//!
+//! Slight variation of this approach: <https://hackmd.io/@vbuterin/barycentric_evaluation>.
+//!
+//! We start with the evaluations of a polynomial `f` over a coset `gH` of size `N`
+//! and want to compute `f(z)`.
+//!
+//! Observe that `z^N - g^N` is equal to `0` at all points in the coset.
+//! Thus `(z^N - g^N)/(z - gh^i)` is equal to `0` at all points except for `gh^i`
+//! where it is equal to:
+//! ```text
+//!   N * (gh^i)^{N - 1} = N * g^N * (gh^i)^{-1}.
+//! ```
+//!
+//! Hence `L_i(z) = h^i * (z^N - g^N)/(N * g^{N - 1} * (z - gh^i))` will be equal
+//! to `1` at `gh^i` and `0` at all other points in the coset. This means that we
+//! can compute `f(z)` as:
+//! ```text
+//!   sum_i L_i(z) f(gh^i) = (z^N - g^N)/(N * g^N) * sum_i gh^i/(z - gh^i) * f(gh^i)
+//!                        = z * (z^N - g^N)/(N * g^N) * sum_i (1/(z - gh^i) - 1/z) * f(gh^i).
+//! ```
+//!
+//! This second equality lets us trade off N extension-by-base multiplications for
+//! a single extension-by-extension multiplication, an extension inversion and N
+//! extension-by-extension subtractions. For large N this is worth it.
+//!
+//! Thus we define the **adjusted weights** to be `(1/(z - g*h^i) - 1/z)` and work with
+//! these instead.
 use alloc::vec::Vec;
 
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    ExtensionField, TwoAdicField, batch_multiplicative_inverse, scale_slice_in_place_single_core,
+    ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse,
+    scale_slice_in_place_single_core,
 };
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
 use crate::Matrix;
 
-/// Extension trait that adds Lagrange interpolation over two-adic cosets to any [`Matrix`].
+/// Subtract z^{-1} from each inverse denominator to produce adjusted barycentric weights.
 ///
-/// This is automatically implemented for every `M: Matrix<F>` where `F: TwoAdicField`.
-/// So there is nothing to implement manually — just import the trait.
+/// # Overview
+///
+/// Converts raw 1/(z - x_i) values into the form needed by the
+/// zero-allocation interpolation path.
+///
+/// Intended to be called once per opening point z, then reused across
+/// every matrix opened at that point.
+///
+/// # Performance
+///
+/// One extension-field inversion + N parallel extension-field subtractions.
+pub fn compute_adjusted_weights<EF: Field>(point: EF, diff_invs: &[EF]) -> Vec<EF> {
+    // Single inversion of z, amortised over all N weights.
+    let point_inv = point.inverse();
+    // Subtract z^{-1} from each 1/(z - x_i) in parallel.
+    diff_invs.par_iter().map(|&d| d - point_inv).collect()
+}
+
+/// Barycentric Lagrange interpolation over two-adic cosets.
+///
+/// Blanket-implemented for every matrix over a two-adic field.
+/// Import the trait, then call the methods directly on any matrix.
 pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
-    /// Given evaluations of a batch of polynomials over the canonical power-of-two subgroup,
-    /// evaluate the polynomials at `point`.
+    /// Evaluate a batch of polynomials at a point outside the canonical subgroup.
     ///
-    /// The canonical subgroup is the coset with shift = 1, so this delegates directly
-    /// to the coset interpolation method.
+    /// Convenience wrapper that uses shift = 1.
     ///
-    /// This assumes the point is not in the subgroup, otherwise the behavior is undefined.
+    /// # Safety
+    ///
+    /// The evaluation point must not lie in the subgroup.
     fn interpolate_subgroup<EF: ExtensionField<F>>(&self, point: EF) -> Vec<EF> {
-        // The canonical subgroup is the coset g*H with g = 1.
+        // Canonical subgroup has unit shift.
         self.interpolate_coset(F::ONE, point)
     }
 
-    /// Given evaluations of a batch of polynomials over the given coset of the canonical
-    /// power-of-two subgroup, evaluate the polynomials at `point`.
+    /// Evaluate a batch of polynomials at a point outside a shifted coset.
     ///
-    /// This assumes the point is not in the coset, otherwise the behavior is undefined.
+    /// Builds the coset, batch-inverts the denominators, converts to adjusted
+    /// weights, and evaluates — all in one call.
     ///
-    /// The evaluations must be given in standard (not bit-reversed) order.
+    /// Evaluations must be in standard (not bit-reversed) order.
+    ///
+    /// # Safety
+    ///
+    /// The evaluation point must not lie in the coset.
     fn interpolate_coset<EF: ExtensionField<F>>(&self, shift: F, point: EF) -> Vec<EF> {
-        // The matrix height equals the coset size N = 2^log_height.
         let log_height = log2_strict_usize(self.height());
 
-        // Build the coset elements: {shift * h^0, shift * h^1, ..., shift * h^{N-1}}
-        // where h is the 2-adic generator of order N.
-        let coset = TwoAdicMultiplicativeCoset::new(shift, log_height)
+        // Materialise the coset so the diff computation can use parallel iteration.
+        let coset: Vec<F> = TwoAdicMultiplicativeCoset::new(shift, log_height)
             .unwrap()
             .iter()
             .collect();
 
-        // Compute the difference (point - coset_element) for each coset element,
-        // then batch-invert to get 1/(z - g*h^i) in a single Montgomery inversion.
-        let diffs: Vec<_> = coset.par_iter().map(|&g| point - g).collect();
+        // Compute z - x_i in parallel, then batch-invert in one shot
+        // (Montgomery's trick: single field inversion + O(N) multiplications).
+        let diffs: Vec<EF> = coset.par_iter().map(|&g| point - g).collect();
         let diff_invs = batch_multiplicative_inverse(&diffs);
 
-        // Delegate to the precomputation variant with the coset and inverses we just built.
-        self.interpolate_coset_with_precomputation(shift, point, &coset, &diff_invs)
+        // Convert to adjusted weights and delegate to the zero-allocation hot path.
+        let adjusted = compute_adjusted_weights(point, &diff_invs);
+        self.interpolate_coset_with_precomputation(shift, point, &adjusted)
     }
 
+    /// Fastest interpolation path — zero allocation beyond the result vector.
+    ///
     /// Given evaluations of a batch of polynomials over the given coset of the canonical
     /// power-of-two subgroup, evaluate the polynomials at `point`.
     ///
-    /// This assumes the point is not in the coset, otherwise the behavior is undefined.
-    ///
-    /// This method takes the precomputed `coset` points and `diff_invs` (the inverses of the
-    /// differences between the evaluation point and each shifted subgroup element), and should
+    /// This method takes the precomputed `adjusted_weights` and should
     /// be preferred over [`interpolate_coset`](Interpolate::interpolate_coset) when repeatedly
     /// called with the same subgroup and/or point.
     ///
-    /// Unlike `interpolate_coset`, the parameters `coset` and `diff_invs` may use any indexing
-    /// scheme, as long as they are consistent with the row ordering of `self`.
+    /// # Overview
+    ///
+    /// Each adjusted weight encodes the identity:
+    ///
+    /// ```text
+    ///   g*h^i / (z - g*h^i)  =  z * adjusted_i
+    /// ```
+    ///
+    /// so the full barycentric formula becomes:
+    ///
+    /// ```text
+    ///   f(z)  =  z * (z^N - g^N) / (N * g^N)  *  sum_i  adjusted_i * f(g*h^i)
+    /// ```
+    ///
+    /// The inner sum is a single SIMD-optimized column-wise dot product.
+    /// The outer scalar is computed with one base-field inversion.
+    ///
+    /// # Safety
+    ///
+    /// - The evaluation point must not lie in the coset.
+    /// - Each weight must equal 1/(z - x_i) - 1/z for the corresponding coset element.
+    ///
+    /// # Performance
+    ///
+    /// - One base-field inversion (for N * g^N).
+    /// - log_2(N) extension-field squarings (for z^N).
+    /// - log_2(N) base-field squarings (for g^N).
+    /// - One SIMD-parallel column-wise dot product over the full matrix.
+    /// - No heap allocation except the result vector.
     fn interpolate_coset_with_precomputation<EF: ExtensionField<F>>(
         &self,
         shift: F,
         point: EF,
-        coset: &[F],
-        diff_invs: &[EF],
+        adjusted_weights: &[EF],
     ) -> Vec<EF> {
-        // Slight variation of this approach: https://hackmd.io/@vbuterin/barycentric_evaluation
-        debug_assert_eq!(coset.len(), diff_invs.len());
-        debug_assert_eq!(coset.len(), self.height());
+        debug_assert_eq!(adjusted_weights.len(), self.height());
 
-        // We start with the evaluations of a polynomial `f` over a coset `gH` of size `N`
-        // and want to compute `f(z)`.
-        //
-        // Observe that `z^N - g^N` is equal to `0` at all points in the coset.
-        // Thus `(z^N - g^N)/(z - gh^i)` is equal to `0` at all points except for `gh^i`
-        // where it is equal to:
-        //          `N * (gh^i)^{N - 1} = N * g^N * (gh^i)^{-1}.`
-        //
-        // Hence `L_i(z) = h^i * (z^N - g^N)/(N * g^{N - 1} * (z - gh^i))` will be equal
-        // to `1` at `gh^i` and `0` at all other points in the coset. This means that we
-        // can compute `f(z)` as:
-        //   `\sum_i L_i(z) f(gh^i) = (z^N - g^N)/(N * g^N) * \sum_i gh^i/(z - gh^i) f(gh^i).`
-
-        // TODO: It might be possible to speed this up by refactoring the code to instead compute:
-        //          `((z/g)^N - 1)/N * \sum_i 1/(z/(gh^i) - 1) f(gh^i).`
-        // This would remove the need for the multiplications and collections in `col_scale` and
-        // let us remove one of the `exp_power_of_2` calls (which are somewhat expensive as they
-        // are over the extension field). We could also remove the .inverse() in scale_vec.
-
-        // N = 2^log_height is the coset size.
         let log_height = log2_strict_usize(self.height());
 
-        // Phase 1: Build the per-element barycentric weights.
+        // Phase 1: Global scaling factor
         //
-        // For each coset element g*h^i, compute the weight:
-        //     w_i = g*h^i / (z - g*h^i)
+        //   s = z * (z^N - g^N) / (N * g^N)
         //
-        // These are the numerator terms in the barycentric Lagrange formula.
-        let col_scale: Vec<_> = coset
-            .par_iter()
-            .zip(diff_invs)
-            .map(|(&sg, &diff_inv)| diff_inv * sg)
-            .collect();
+        // z^N via extension-field repeated squaring (expensive).
+        let z_pow_n = point.exp_power_of_2(log_height);
+        // g^N via base-field repeated squaring (cheap — single-word ops).
+        let g_pow_n = shift.exp_power_of_2(log_height);
+        // Combine denominator N * g^N and invert once (only base-field inversion).
+        let denom_inv = g_pow_n.mul_2exp_u64(log_height as u64).inverse();
+        // Assemble: z * (z^N - g^N) * 1/(N * g^N).
+        let scaling_factor = point * (z_pow_n - g_pow_n) * denom_inv;
 
-        // Phase 2: Compute the global scaling factor.
+        // Phase 2: Weighted column sums via the SIMD-optimized dot product.
         //
-        // The barycentric formula gives:
-        //     f(z) = Z_{gH}(z) / (N * g^N) * \sum_i w_i * f(g*h^i)
-        //
-        // where Z_{gH}(z) = z^N - g^N is the vanishing polynomial of the coset.
+        // Computes M^T * adjusted_weights, yielding one extension-field
+        // result per column (polynomial).
+        let mut evals = self.columnwise_dot_product(adjusted_weights);
 
-        // Raise point and shift to the N-th power.
-        let point_pow_height = point.exp_power_of_2(log_height);
-        let shift_pow_height = shift.exp_power_of_2(log_height);
-
-        // Vanishing polynomial evaluated at z: Z_{gH}(z) = z^N - g^N.
-        let vanishing_polynomial = point_pow_height - shift_pow_height;
-
-        // Compute the Denominator: N * g^N.
-        let denominator = shift_pow_height.mul_2exp_u64(log_height as u64);
-
-        // Global scaling factor: s = Z_{gH}(z) / (N * g^N).
-        let scaling_factor = vanishing_polynomial * denominator.inverse();
-
-        // Phase 3: Evaluate all column polynomials at once.
-        //
-        // M^T * col_scale computes \sum_i w_i * f_j(g*h^i) for each column j.
-        // Then multiply each result by the global scaling factor s.
-        let mut evals = self.columnwise_dot_product(&col_scale);
+        // Phase 3: Apply the global scalar to every column result.
         scale_slice_in_place_single_core(&mut evals, scaling_factor);
         evals
     }
@@ -156,16 +197,17 @@ mod tests {
     use p3_util::log2_strict_usize;
     use proptest::prelude::*;
 
-    use super::Interpolate;
+    use super::{Interpolate, compute_adjusted_weights};
     use crate::dense::RowMajorMatrix;
 
     type F = BabyBear;
     type EF4 = BinomialExtensionField<BabyBear, 4>;
 
     /// Evaluate a polynomial (given by coefficients) at a point using Horner's method.
+    ///
+    /// Horner's method: `f(z) = c_0 + z*(c_1 + z*(c_2 + ...))`.
+    /// Processes coefficients from highest degree down to constant term.
     fn eval_poly<EF: ExtensionField<F>>(coeffs: &[F], point: EF) -> EF {
-        // Horner's method: f(z) = c_0 + z*(c_1 + z*(c_2 + ...))
-        // Process coefficients from highest degree down to constant term.
         coeffs
             .iter()
             .rev()
@@ -231,7 +273,7 @@ mod tests {
         assert_eq!(result, vec![F::from_u16(10203)]);
 
         // Part 2: test the precomputation path, which should give the same result.
-        // Manually build the coset elements and inverse denominators.
+        // Manually build the coset elements and adjusted weights.
         let n = evals.len();
         let k = log2_strict_usize(n);
 
@@ -242,51 +284,49 @@ mod tests {
         let denom: Vec<_> = coset.iter().map(|&w| point - w).collect();
         let denom = batch_multiplicative_inverse(&denom);
 
+        // Adjusted weights: 1/(z - coset_i) - 1/z.
+        let adjusted = compute_adjusted_weights(point, &denom);
+
         // The precomputation variant must produce the same result.
-        let result = evals_mat.interpolate_coset_with_precomputation(shift, point, &coset, &denom);
+        let result = evals_mat.interpolate_coset_with_precomputation(shift, point, &adjusted);
         assert_eq!(result, vec![F::from_u16(10203)]);
     }
 
     #[test]
     fn test_interpolate_coset_single_point_identity() {
-        // Invariant: a constant polynomial f(x) = c evaluates to c everywhere,
-        // so interpolation at any external point must recover exactly c.
-
-        // Constant polynomial: all 8 evaluations are the same value.
+        // Invariant: a constant polynomial f(x) = c evaluates to c everywhere.
+        // Interpolation at any external point must recover exactly c.
         let c = F::from_u32(42);
+
+        // 8 identical evaluations => constant polynomial of degree 0.
         let evals = vec![c; 8];
         let evals_mat = RowMajorMatrix::new(evals, 1);
 
-        // Shifted coset and an arbitrary external evaluation point.
         let shift = F::GENERATOR;
         let point = F::from_u16(1337);
 
-        // Interpolation must recover the constant exactly.
         let result = evals_mat.interpolate_coset(shift, point);
         assert_eq!(result, vec![c]);
     }
 
     #[test]
     fn test_interpolate_subgroup_degree_3_correctness() {
-        // Verify that a degree-3 polynomial over a degree-4 extension field
-        // is correctly interpolated from exactly 2^2 = 4 subgroup points.
-        // A degree-3 polynomial requires exactly 4 evaluation points.
+        // Invariant: a degree-3 polynomial over a quartic extension field is
+        // uniquely determined by 4 = 2^2 evaluation points.
+        // Interpolation must match direct evaluation.
 
-        // f(x) = x^3 + 2*x^2 + 3*x + 4, defined over the quartic extension.
+        // f(x) = x^3 + 2*x^2 + 3*x + 4
         let poly = |x: EF4| x * x * x + x * x * F::TWO + x * F::from_u32(3) + F::from_u32(4);
 
-        // Evaluate f at the 4 elements of the canonical 2^2-subgroup.
+        // Evaluate at the 4 elements of the canonical 2^2-subgroup.
         let subgroup = EF4::two_adic_generator(2).powers().collect_n(4);
         let evals: Vec<_> = subgroup.iter().map(|&x| poly(x)).collect();
-
-        // Single column matrix: one polynomial, 4 evaluation rows.
         let evals_mat = RowMajorMatrix::new(evals, 1);
 
-        // Interpolate at z = 5 and compare against direct evaluation.
+        // Interpolate at z = 5 and compare against direct Horner evaluation.
         let point = EF4::from_u16(5);
         let result = evals_mat.interpolate_subgroup(point);
         let expected = poly(point);
-
         assert_eq!(result[0], expected);
     }
 
@@ -420,8 +460,8 @@ mod tests {
         ) {
             // Invariant: both code paths compute the same barycentric formula.
             //
-            //     interpolate_coset           (builds coset + inverses internally)
-            //     interpolate_coset_with_precomputation (caller provides them)
+            //     interpolate_coset                     (builds coset + adjusted weights internally)
+            //     interpolate_coset_with_precomputation (caller provides adjusted weights)
             //     → must be bit-identical.
             let n = 1usize << log_n;
             let coeffs: Vec<F> = coeffs_raw.iter().take(n).map(|&v| F::from_u32(v)).collect();
@@ -440,8 +480,9 @@ mod tests {
                 (0..n).map(|i| shift * subgroup_gen.exp_u64(i as u64)).collect();
             let diffs: Vec<EF4> = coset.iter().map(|&c| point - c).collect();
             let diff_invs = batch_multiplicative_inverse(&diffs);
+            let adjusted = compute_adjusted_weights(point, &diff_invs);
             let result_precomp = evals_mat
-                .interpolate_coset_with_precomputation(shift, point, &coset, &diff_invs);
+                .interpolate_coset_with_precomputation(shift, point, &adjusted);
 
             prop_assert_eq!(result_standard, result_precomp);
         }
