@@ -1,4 +1,4 @@
-//! Traits for polynomial commitment schemes.
+//! Traits for univariate polynomial commitment schemes.
 
 use alloc::vec::Vec;
 use core::fmt::Debug;

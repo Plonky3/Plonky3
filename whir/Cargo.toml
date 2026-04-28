@@ -15,6 +15,7 @@ itertools.workspace = true
 libm.workspace = true
 p3-challenger.workspace = true
 p3-commit.workspace = true
+p3-dft.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
@@ -27,11 +28,15 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+clap.workspace = true
 criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
+p3-keccak = { path = "../keccak" }
 p3-koala-bear = { path = "../koala-bear" }
 proptest.workspace = true
 rand.workspace = true
+tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
+tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
@@ -39,6 +44,10 @@ parallel = ["p3-maybe-rayon/parallel"]
 [[bench]]
 name = "sumcheck"
 harness = false
+
+[[example]]
+name = "whir"
+required-features = []
 
 [lints]
 workspace = true
