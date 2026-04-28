@@ -125,8 +125,7 @@ pub(super) unsafe fn mul_add_asm(a: u64, b: u64, c: u64) -> u64 {
 
 /// Add two Goldilocks elements with overflow handling using inline assembly.
 ///
-/// Computes `a + b mod P`. On overflow (carry out of 64 bits), subtracts
-/// P by adding EPSILON (which equals -P mod 2^64, i.e. 2^32 - 1).
+/// Computes `a + b mod P`, accepting non-canonical inputs.
 #[inline(always)]
 pub(super) unsafe fn add_asm(a: u64, b: u64) -> u64 {
     let result: u64;
