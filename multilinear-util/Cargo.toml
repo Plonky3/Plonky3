@@ -33,5 +33,9 @@ parallel = ["p3-maybe-rayon/parallel"]
 name = "evaleq_batched"
 harness = false
 
+[[bench]]
+name = "compress_kernels"
+harness = false
+
 [lints]
 workspace = true
