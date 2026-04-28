@@ -59,7 +59,7 @@ impl<F, A> CubicTrinomialExtensionField<F, A> {
 impl<F: Copy> CubicTrinomialExtensionField<F, F> {
     /// Convert a `[[F; D]; N]` array to an array of extension field elements.
     ///
-    /// Const version of `input.map(BinomialExtensionField::new)`.
+    /// Const version of `input.map(CubicTrinomialExtensionField::new)`.
     ///
     /// # Panics
     /// Panics if `N == 0`.
@@ -78,23 +78,20 @@ impl<F: Copy> CubicTrinomialExtensionField<F, F> {
 
 impl<F: Field, A: Algebra<F>> Default for CubicTrinomialExtensionField<F, A> {
     fn default() -> Self {
-        Self::new(array::from_fn(|_| A::ZERO))
+        Self::new([A::ZERO, A::ZERO, A::ZERO])
     }
 }
 
 impl<F: Field, A: Algebra<F>> From<A> for CubicTrinomialExtensionField<F, A> {
     fn from(x: A) -> Self {
-        Self::new(field_to_array(x))
+        Self::new([x, A::ZERO, A::ZERO])
     }
 }
 
 impl<F, A> From<[A; 3]> for CubicTrinomialExtensionField<F, A> {
     #[inline]
     fn from(x: [A; 3]) -> Self {
-        Self {
-            value: x,
-            _phantom: PhantomData,
-        }
+        Self::new(x)
     }
 }
 
@@ -160,9 +157,9 @@ impl<F: CubicTrinomialExtendable> HasFrobenius<F> for CubicTrinomialExtensionFie
     fn frobenius(&self) -> Self {
         let a = &self.value;
         let m = F::FROBENIUS_MATRIX;
-        let c0 = m[0][0] * a[0] + m[0][1] * a[1] + m[0][2] * a[2];
-        let c1 = m[1][0] * a[0] + m[1][1] * a[1] + m[1][2] * a[2];
-        let c2 = m[2][0] * a[0] + m[2][1] * a[1] + m[2][2] * a[2];
+        let c0 = a[0] + m[0][1] * a[1] + m[0][2] * a[2];
+        let c1 = m[1][1] * a[1] + m[1][2] * a[2];
+        let c2 = m[2][1] * a[1] + m[2][2] * a[2];
         Self::new([c0, c1, c2])
     }
 
@@ -195,13 +192,27 @@ impl<F: CubicTrinomialExtendable> HasFrobenius<F> for CubicTrinomialExtensionFie
         }
         let a_exp_p = self.frobenius();
         let prod_conj = (*self * a_exp_p).frobenius();
-        let norm_elt = *self * prod_conj;
-        debug_assert!(
-            norm_elt.value[1].is_zero() && norm_elt.value[2].is_zero(),
-            "norm should lie in the base field"
-        );
-        let norm = norm_elt.value[0];
+        let norm = self.compute_norm_with_prod_conj(&prod_conj);
+        debug_assert_eq!(Self::from(norm), *self * prod_conj);
         prod_conj * norm.inverse()
+    }
+}
+
+impl<F: CubicTrinomialExtendable> CubicTrinomialExtensionField<F> {
+    /// Compute the norm given pre-computed product of conjugates.
+    ///
+    /// The norm `Norm(a) = a * prod_conj` lies in the base field.
+    /// This computes only the constant coefficient for efficiency.
+    #[inline]
+    fn compute_norm_with_prod_conj(&self, prod_conj: &Self) -> F {
+        let a = &self.value;
+        let b = &prod_conj.value;
+
+        // For trinomial X^3 - X - 1, the constant term of a*b is c_0 + c_3.
+        let c0 = a[0] * b[0];
+        let c3 = F::dot_product::<2>(&[a[1], a[2]], &[b[2], b[1]]);
+
+        c0 + c3
     }
 }
 
@@ -590,28 +601,20 @@ impl<F: CubicTrinomialExtendable + HasTwoAdicCubicExtension> TwoAdicField
 /// Multiply in `R[X]/(X^3 - X - 1)`.
 #[inline]
 pub fn trinomial_cubic_mul<R: PrimeCharacteristicRing>(a: &[R; 3], b: &[R; 3], res: &mut [R; 3]) {
-    let c0 = a[0].dup() * b[0].dup();
-    let c1 = R::dot_product::<2>(&[a[0].dup(), a[1].dup()], &[b[1].dup(), b[0].dup()]);
-    let c2 = R::dot_product::<3>(
-        &[a[0].dup(), a[1].dup(), a[2].dup()],
-        &[b[2].dup(), b[1].dup(), b[0].dup()],
-    );
-    let c3 = R::dot_product::<2>(&[a[1].dup(), a[2].dup()], &[b[2].dup(), b[1].dup()]);
-    let c4 = a[2].dup() * b[2].dup();
+    let b0_plus_b2 = b[0].dup() + b[2].dup();
+    let b1_plus_b2 = b[1].dup() + b[2].dup();
 
-    res[0] = c0 + c3.dup();
-    res[1] = c1 + c3 + c4.dup();
-    res[2] = c2 + c4;
+    res[0] = R::dot_product::<3>(a, &[b[0].dup(), b[2].dup(), b[1].dup()]);
+    res[1] = R::dot_product::<3>(a, &[b[1].dup(), b0_plus_b2.dup(), b1_plus_b2]);
+    res[2] = R::dot_product::<3>(a, &[b[2].dup(), b[1].dup(), b0_plus_b2]);
 }
 
 #[inline]
 pub(super) fn cubic_square<R: PrimeCharacteristicRing>(a: &[R; 3], res: &mut [R; 3]) {
-    let a0_sq = a[0].square();
-    let a1_sq = a[1].square();
-    let a2_sq = a[2].square();
-    let a1_a2 = a[1].dup() * a[2].dup();
+    let a0_plus_a2 = a[0].dup() + a[2].dup();
+    let a1_plus_a2 = a[1].dup() + a[2].dup();
 
-    res[0] = a0_sq + a1_a2.double();
-    res[1] = (a[0].dup() * a[1].dup() + a1_a2).double() + a2_sq.dup();
-    res[2] = (a[0].dup() * a[2].dup()).double() + a1_sq + a2_sq;
+    res[0] = R::dot_product::<3>(a, &[a[0].dup(), a[2].dup(), a[1].dup()]);
+    res[1] = R::dot_product::<3>(a, &[a[1].dup(), a0_plus_a2.dup(), a1_plus_a2]);
+    res[2] = R::dot_product::<3>(a, &[a[2].dup(), a[1].dup(), a0_plus_a2]);
 }

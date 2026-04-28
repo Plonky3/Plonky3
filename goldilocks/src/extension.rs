@@ -71,7 +71,7 @@ impl CubicTrinomialExtendable for Goldilocks {
     // K.<a> = F.extension(x^3 - x - 1)
     // g = 2 + a
     // order = p^3 - 1
-    // assert all(g^(order // q) != 1 for q in prime_factors(order))
+    // assert g.multiplicative_order() == order
     // ```
     const EXT_GENERATOR: [Self; 3] = [Self::TWO, Self::ONE, Self::ZERO];
 }
@@ -213,6 +213,15 @@ mod test_cubic_trinomial_extension {
             (BigUint::from(724723u32), 1),
             (BigUint::from(167034643597991036904547663171u128), 1),
         ]
+    }
+
+    // TODO: Consider generalizing and putting into test_extension_field!
+    #[test]
+    fn test_defining_relation() {
+        let x = EF::new([F::ZERO, F::ONE, F::ZERO]);
+        let x_cubed = x * x * x;
+        let x_plus_one = x + EF::ONE;
+        assert_eq!(x_cubed, x_plus_one, "X^3 should equal X + 1");
     }
 
     test_field!(

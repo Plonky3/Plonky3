@@ -45,7 +45,7 @@ impl<F: Field, PF: PackedField<Scalar = F>> Default for PackedCubicTrinomialExte
     #[inline]
     fn default() -> Self {
         Self {
-            value: array::from_fn(|_| PF::ZERO),
+            value: [PF::ZERO, PF::ZERO, PF::ZERO],
         }
     }
 }
@@ -65,7 +65,7 @@ impl<F: Field, PF: PackedField<Scalar = F>> From<PF> for PackedCubicTrinomialExt
     #[inline]
     fn from(x: PF) -> Self {
         Self {
-            value: field_to_array(x),
+            value: [x, PF::ZERO, PF::ZERO],
         }
     }
 }
