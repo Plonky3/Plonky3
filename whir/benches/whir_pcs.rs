@@ -11,6 +11,7 @@ use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
+use p3_matrix::dense::DenseMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -40,6 +41,17 @@ type MerkleCompress = TruncatedPermutation<Poseidon16, 2, 8, 16>;
 type Challenger = DuplexChallenger<F, Poseidon16, 16, 8>;
 type PackedF = <F as Field>::Packing;
 type Mmcs = MerkleTreeMmcs<PackedF, PackedF, MerkleHash, MerkleCompress, 2, 8>;
+
+/// Prover-side state retained between commit and prove.
+type ProverData = <Mmcs as p3_commit::Mmcs<F>>::ProverData<DenseMatrix<F>>;
+
+/// Per-iteration mutable inputs produced by the commit phase.
+type CommitOutput = (
+    WhirProof<F, EF, Mmcs>,
+    InitialStatement<F, EF>,
+    Challenger,
+    ProverData,
+);
 
 // Polynomial sizes (log_2 of coefficient count).
 const SMALL: usize = 14;
@@ -220,14 +232,7 @@ impl Bench {
     /// Run the commit phase and return the per-iteration mutable inputs.
     ///
     /// Used to seed both the prove benchmark and the verify-side proof construction.
-    fn commit(
-        &self,
-    ) -> (
-        WhirProof<F, EF, Mmcs>,
-        InitialStatement<F, EF>,
-        Challenger,
-        <Mmcs as p3_commit::Mmcs<F>>::ProverData<p3_matrix::dense::DenseMatrix<F>>,
-    ) {
+    fn commit(&self) -> CommitOutput {
         let mut proof = self.proof();
         let mut statement = self.statement();
         let mut challenger = self.challenger();
@@ -335,29 +340,35 @@ fn bench_scaling(c: &mut Criterion) {
     ];
 
     // Commit phase across all three sizes.
-    let mut group = c.benchmark_group("whir_pcs/scaling/commit");
-    configure_heavy(&mut group);
-    for (label, bench) in &cases {
-        bench.bench_commit(&mut group, label);
+    {
+        let mut group = c.benchmark_group("whir_pcs/scaling/commit");
+        configure_heavy(&mut group);
+        for (label, bench) in &cases {
+            bench.bench_commit(&mut group, label);
+        }
+        group.finish();
     }
-    group.finish();
 
     // Prove phase across all three sizes.
-    let mut group = c.benchmark_group("whir_pcs/scaling/prove");
-    configure_heavy(&mut group);
-    for (label, bench) in &cases {
-        bench.bench_prove(&mut group, label);
+    {
+        let mut group = c.benchmark_group("whir_pcs/scaling/prove");
+        configure_heavy(&mut group);
+        for (label, bench) in &cases {
+            bench.bench_prove(&mut group, label);
+        }
+        group.finish();
     }
-    group.finish();
 
     // Verify is fast enough to keep a higher sample count.
-    let mut group = c.benchmark_group("whir_pcs/scaling/verify");
-    group.sample_size(20);
-    group.measurement_time(Duration::from_secs(10));
-    for (label, bench) in &cases {
-        bench.bench_verify(&mut group, label);
+    {
+        let mut group = c.benchmark_group("whir_pcs/scaling/verify");
+        group.sample_size(20);
+        group.measurement_time(Duration::from_secs(10));
+        for (label, bench) in &cases {
+            bench.bench_verify(&mut group, label);
+        }
+        group.finish();
     }
-    group.finish();
 }
 
 /// Options sweep at the medium size, prove phase only.
@@ -365,39 +376,46 @@ fn bench_options(c: &mut Criterion) {
     let base = Options::sized(MEDIUM);
 
     // Sumcheck strategy: classic vs SVO. The user-requested axis.
-    let mut group = c.benchmark_group("whir_pcs/options/sumcheck");
-    configure_heavy(&mut group);
-    for (label, mode) in [
-        ("classic", SumcheckStrategy::Classic),
-        ("svo", SumcheckStrategy::Svo),
-    ] {
-        Bench::new(base.with_sumcheck(mode)).bench_prove(&mut group, label);
+    {
+        let mut group = c.benchmark_group("whir_pcs/options/sumcheck");
+        configure_heavy(&mut group);
+        for (label, mode) in [
+            ("classic", SumcheckStrategy::Classic),
+            ("svo", SumcheckStrategy::Svo),
+        ] {
+            Bench::new(base.with_sumcheck(mode)).bench_prove(&mut group, label);
+        }
+        group.finish();
     }
-    group.finish();
 
     // Soundness assumption: drives query counts, OOD samples, and PoW.
-    let mut group = c.benchmark_group("whir_pcs/options/soundness");
-    configure_heavy(&mut group);
-    for (label, assumption) in [
-        ("ud", SecurityAssumption::UniqueDecoding),
-        ("jb", SecurityAssumption::JohnsonBound),
-        ("cb", SecurityAssumption::CapacityBound),
-    ] {
-        Bench::new(base.with_soundness(assumption)).bench_prove(&mut group, label);
+    {
+        let mut group = c.benchmark_group("whir_pcs/options/soundness");
+        configure_heavy(&mut group);
+        for (label, assumption) in [
+            ("ud", SecurityAssumption::UniqueDecoding),
+            ("jb", SecurityAssumption::JohnsonBound),
+            ("cb", SecurityAssumption::CapacityBound),
+        ] {
+            Bench::new(base.with_soundness(assumption)).bench_prove(&mut group, label);
+        }
+        group.finish();
     }
-    group.finish();
 
     // Folding factor: trades round count against per-round work.
     //
-    // The lower bound k = 3 matches `RS_INITIAL_REDUCTION`. A smaller k
-    // would violate the protocol invariant that the first-round domain
-    // reduction never exceeds the folding factor.
-    let mut group = c.benchmark_group("whir_pcs/options/folding");
-    configure_heavy(&mut group);
-    for k in [3_usize, 4, 5] {
-        Bench::new(base.with_folding(k)).bench_prove(&mut group, &format!("k{k}"));
+    // The lower bound k = 3 matches `RS_INITIAL_REDUCTION`.
+    //
+    // A smaller k would violate the protocol invariant that the first-round
+    // domain reduction never exceeds the folding factor.
+    {
+        let mut group = c.benchmark_group("whir_pcs/options/folding");
+        configure_heavy(&mut group);
+        for k in [3_usize, 4, 5] {
+            Bench::new(base.with_folding(k)).bench_prove(&mut group, &format!("k{k}"));
+        }
+        group.finish();
     }
-    group.finish();
 }
 
 criterion_group!(benches, bench_scaling, bench_options);
