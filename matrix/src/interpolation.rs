@@ -154,6 +154,38 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
     /// - log_2(N) extension-field squarings (for z^N).
     /// - log_2(N) base-field squarings (for g^N).
     /// - One SIMD-parallel column-wise dot product over the full matrix.
+    /// Given evaluations of a batch of polynomials over the given coset of the canonical
+    /// power-of-two subgroup, evaluate the polynomials at `point`.
+    ///
+    /// This method takes the precomputed `adjusted_weights` and should
+    /// be preferred over [`interpolate_coset`](Interpolate::interpolate_coset) when repeatedly
+    /// called with the same subgroup and/or point.
+    ///
+    /// # Overview
+    ///
+    /// Each adjusted weight encodes the identity:
+    ///
+    /// ```text
+    ///   g*h^i / (z - g*h^i)  =  z * adjusted_i
+    /// ```
+    ///
+    /// so the full barycentric formula becomes:
+    ///
+    /// ```text
+    ///   f(z)  =  z * (z^N - g^N) / (N * g^N)  *  sum_i  adjusted_i * f(g*h^i)
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// - The evaluation point must not lie in the coset.
+    /// - Each weight must equal 1/(z - x_i) - 1/z for the corresponding coset element.
+    ///
+    /// # Performance
+    ///
+    /// - One base-field inversion (for N * g^N).
+    /// - log_2(N) extension-field squarings (for z^N).
+    /// - log_2(N) base-field squarings (for g^N).
+    /// - One SIMD-parallel column-wise dot product over the full matrix.
     /// - No heap allocation except the result vector.
     fn interpolate_coset_with_adjusted_weights<EF: ExtensionField<F>>(
         &self,
