@@ -630,32 +630,58 @@ mod tests {
         test_field_json_serialization(&[f_100, f_1, f_2, f_r_minus_1, f_r_minus_2]);
     }
 
-    fn limbs_to_le_bytes(limbs: [u64; 4]) -> [u8; 32] {
-        let mut bytes = [0u8; 32];
-        for (i, limb) in limbs.iter().enumerate() {
-            bytes[i * 8..(i + 1) * 8].copy_from_slice(&limb.to_le_bytes());
-        }
-        bytes
-    }
+    #[test]
+    fn test_bn254_deserialize_boundary_rejections() {
+        // Valid inputs are exactly the 32-byte little-endian encodings of values in [0, P).
+        // Each entry below is one distinct way to fall outside that set.
 
-    fn assert_deserialize_rejected(bytes: &[u8]) {
-        let json = serde_json::to_string(bytes).unwrap();
-        let err = serde_json::from_str::<Bn254>(&json).unwrap_err();
-        assert!(err.to_string().contains("Invalid field element"));
+        // value == P. Encoded by reinterpreting the limbs of the modulus as bytes.
+        let prime_bytes: [u8; 32] = unsafe { transmute(BN254_PRIME.map(u64::to_le_bytes)) };
+
+        // value == P + 1.
+        //
+        // Low limb is 0x43e1f593f0000001, far from u64::MAX, so `+= 1` cannot overflow.
+        let mut over_prime = BN254_PRIME;
+        over_prime[0] += 1;
+        let over_prime_bytes: [u8; 32] = unsafe { transmute(over_prime.map(u64::to_le_bytes)) };
+
+        let cases: &[&[u8]] = &[
+            &prime_bytes,      // == P
+            &over_prime_bytes, // == P + 1
+            &[0xff_u8; 32],    // == 2^256 - 1, top of the byte-space
+            &[],               // empty: fails the length check before any limb is read
+            &[0u8; 31],        // one byte too short (value would otherwise be valid zero)
+            &[0u8; 33],        // one byte too long (same isolation as the short case)
+        ];
+
+        for bytes in cases {
+            // Round-trip via JSON: bytes -> JSON array -> Bn254 deserializer.
+            let json = serde_json::to_string(bytes).unwrap();
+            let err = serde_json::from_str::<Bn254>(&json).unwrap_err();
+
+            // The deserializer's only custom error path uses this message.
+            //
+            // Matching on it ensures the rejection came from the field validator.
+            assert!(
+                err.to_string().contains("Invalid field element"),
+                "expected field-validation error, got: {err}"
+            );
+        }
     }
 
     #[test]
-    fn test_bn254_deserialize_boundary_rejections() {
-        let prime_bytes = limbs_to_le_bytes(BN254_PRIME);
-        assert_deserialize_rejected(&prime_bytes); // value == modulus
+    fn test_bn254_deserialize_accepts_max_valid() {
+        // The boundary at P is exclusive: P - 1 must still round-trip.
+        // A flipped comparison rejecting every value would slip past a rejection-only suite.
 
-        let mut over_prime = BN254_PRIME;
-        over_prime[0] += 1;
-        let over_prime_bytes = limbs_to_le_bytes(over_prime);
-        assert_deserialize_rejected(&over_prime_bytes); // value > modulus
+        // PRIME's low limb is non-zero (0x43e1f593f0000001), so `-= 1` cannot underflow.
+        let mut p_minus_one = BN254_PRIME;
+        p_minus_one[0] -= 1;
+        let bytes: [u8; 32] = unsafe { transmute(p_minus_one.map(u64::to_le_bytes)) };
 
-        assert_deserialize_rejected(&[0u8; 31]); // too short
-        assert_deserialize_rejected(&[0u8; 33]); // too long
+        // Must deserialize cleanly; the resulting field element is irrelevant.
+        let json = serde_json::to_string(bytes.as_slice()).unwrap();
+        let _: Bn254 = serde_json::from_str(&json).expect("P-1 must round-trip");
     }
 
     const ZERO: Bn254 = Bn254::ZERO;
