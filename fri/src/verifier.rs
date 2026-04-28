@@ -1531,14 +1531,6 @@ mod tests {
         // and causes Merkle failures before this check is reached. Because
         // this error path cannot be triggered through the full pipeline, we
         // test the underlying Horner evaluation in isolation.
-        //
-        // Fixture state: final_poly = [c_0] (1 honest coefficient).
-        //
-        // Mutation: add 1 to c_0, then verify the evaluation changes.
-        //
-        //     honest:    eval(x) = c_0
-        //     corrupted: eval(x) = c_0 + 1
-        //     → honest != corrupted → verifier would reject
 
         // Evaluate the honest polynomial at an arbitrary point.
         let x = Val::TWO;
