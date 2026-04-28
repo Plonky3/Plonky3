@@ -129,16 +129,31 @@ pub(super) unsafe fn mul_add_asm(a: u64, b: u64, c: u64) -> u64 {
 #[inline(always)]
 pub(super) unsafe fn add_asm(a: u64, b: u64) -> u64 {
     let result: u64;
+    let _t0: u64;
+    let _t1: u64;
     let _adj: u64;
 
     unsafe {
         asm!(
-            "adds  {result}, {a}, {b}",
+            // Canonicalize one input: if b >= P, subtract P.
+            "subs  {t0}, {b}, {p}",
+            "csel  {b_canon}, {t0}, {b}, cs",
+
+            // Add, folding 2^64 overflow via EPSILON.
+            "adds  {result}, {a}, {b_canon}",
             "csetm {adj:w}, cs",
             "add   {result}, {result}, {adj}",
+
+            // Final reduction: if result >= P, subtract P.
+            "subs  {t1}, {result}, {p}",
+            "csel  {result}, {t1}, {result}, cs",
             a = in(reg) a,
             b = in(reg) b,
+            b_canon = out(reg) _,
+            p = in(reg) P,
             result = out(reg) result,
+            t0 = out(reg) _t0,
+            t1 = out(reg) _t1,
             adj = out(reg) _adj,
             options(pure, nomem, nostack),
         );
@@ -209,6 +224,17 @@ mod tests {
     /// Reduce a raw `u64` to its canonical Goldilocks representative.
     fn canon(x: u64) -> u64 {
         F::new(x).as_canonical_u64()
+    }
+
+    #[test]
+    fn test_add_asm_large_values() {
+        let a: u64 = 18_446_744_069_605_983_184; // = p + 191_398_863
+        let b: u64 = 18_446_744_073_709_551_599; // = p + 4_294_967_278
+        // (a + b) mod p == 4_486_366_141
+        let expected = 4_486_366_141u64;
+
+        let got = canon(unsafe { add_asm(a, b) });
+        assert_eq!(got, expected);
     }
 
     proptest! {
