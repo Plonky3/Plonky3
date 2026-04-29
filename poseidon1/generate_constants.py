@@ -1210,82 +1210,56 @@ def format_json_poseidon1(
 # =============================================================================
 
 
+_NUMBER_RE = re.compile(r"0x[0-9a-fA-F_]+|\d+")
+
+
+def _parse_int(token):
+    token = token.replace("_", "")
+    return int(token, 16) if token.lower().startswith("0x") else int(token)
+
+
 def _parse_rust_round_constants(rust_path, const_name, width):
     """
     Parse a Poseidon1 2D round-constant array from a Rust source file.
 
-    Returns:
-        List[List[int]] with shape [num_rounds][width].
+    Expects a declaration of the form:
+
+        pub const NAME: [[T; W]; R] = ...::new_2d_array([ <body> ]);
+
+    Returns a list of `R` rows, each a list of `W` ints.
     """
     source = rust_path.read_text(encoding="utf-8")
     pattern = re.compile(
-        rf"pub const {re.escape(const_name)}\s*:\s*\[\[[^\]]+;\s*{width}\s*\];\s*(\d+)\s*\]\s*="
-        rf"\s*[^=]+?::new_2d_array\(\[(.*?)\]\);",
+        rf"pub const {re.escape(const_name)}\s*:\s*\[\s*\[[^;]+;\s*{width}\s*\]\s*;\s*(\d+)\s*\]"
+        rf".*?new_2d_array\(\s*\[(.*?)\]\s*\)\s*;",
         re.S,
     )
     match = pattern.search(source)
     if not match:
+        raise ValueError(f"Could not find {const_name} (width {width}) in {rust_path}")
+
+    rounds = int(match.group(1))
+    # Strip `// ...` line comments before extracting numeric literals.
+    body = "\n".join(line.split("//", 1)[0] for line in match.group(2).splitlines())
+    values = [_parse_int(tok) for tok in _NUMBER_RE.findall(body)]
+
+    expected = rounds * width
+    if len(values) != expected:
         raise ValueError(
-            f"Could not find constant '{const_name}' with width {width} in {rust_path}"
+            f"{const_name}: expected {expected} values ({rounds}×{width}), found {len(values)}"
         )
-
-    declared_rounds = int(match.group(1))
-    body = match.group(2)
-
-    # Strip line comments so numeric extraction isn't polluted by doc examples.
-    body = "\n".join(line.split("//", 1)[0] for line in body.splitlines())
-
-    # Collect top-level rows from the 2D array payload.
-    rows = []
-    depth = 0
-    current = []
-    for ch in body:
-        if ch == "[":
-            depth += 1
-            if depth == 1:
-                current = []
-                continue
-        if ch == "]":
-            if depth == 1:
-                rows.append("".join(current))
-                current = []
-                depth -= 1
-                continue
-            depth -= 1
-        if depth >= 1:
-            current.append(ch)
-
-    parsed = []
-    for row in rows:
-        tokens = re.findall(r"0x[0-9a-fA-F_]+|\d+", row)
-        values = [
-            int(tok.replace("_", ""), 16) if tok.lower().startswith("0x") else int(tok)
-            for tok in tokens
-        ]
-        parsed.append(values)
-
-    if len(parsed) != declared_rounds:
-        raise ValueError(
-            f"{const_name} in {rust_path} declares {declared_rounds} rounds but parsed {len(parsed)}"
-        )
-    for idx, values in enumerate(parsed):
-        if len(values) != width:
-            raise ValueError(
-                f"{const_name} row {idx} in {rust_path} has width {len(values)}, expected {width}"
-            )
-    return parsed
+    return [values[r * width : (r + 1) * width] for r in range(rounds)]
 
 
-def verify_generated_constants_against_rust(field_name, width, generated_round_constants, repo_root=None):
+def verify_generated_constants_against_rust(field_name, width, generated, repo_root=None):
     """
-    Compare freshly generated constants with in-tree Rust constants.
+    Compare freshly generated constants against in-tree Rust constants.
 
-    Returns:
-        (ok: bool, message: str)
+    Returns (ok, message).
     """
     key = (field_name, width)
     if key not in RUST_ROUND_CONSTANTS:
-        return False, f"No in-tree mapping defined for field={field_name}, width={width}"
+        return False, f"No mapping for field={field_name}, width={width}"
 
     root = Path(repo_root) if repo_root else Path(__file__).resolve().parent.parent
     rel_path, const_name = RUST_ROUND_CONSTANTS[key]
@@ -1293,31 +1267,22 @@ def verify_generated_constants_against_rust(field_name, width, generated_round_c
     if not rust_path.exists():
         return False, f"Rust file not found: {rust_path}"
 
-    rust_constants = _parse_rust_round_constants(rust_path, const_name, width)
+    rust = _parse_rust_round_constants(rust_path, const_name, width)
+    if rust == generated:
+        return True, f"Rust constants match generated values: {const_name}"
 
-    if len(rust_constants) != len(generated_round_constants):
-        return (
-            False,
-            f"Round count mismatch for {const_name}: rust={len(rust_constants)} "
-            f"generated={len(generated_round_constants)}",
-        )
-
-    for round_idx, (rust_row, gen_row) in enumerate(zip(rust_constants, generated_round_constants)):
-        if len(rust_row) != len(gen_row):
-            return (
-                False,
-                f"Width mismatch at round {round_idx} for {const_name}: "
-                f"rust={len(rust_row)} generated={len(gen_row)}",
-            )
-        for col_idx, (rust_v, gen_v) in enumerate(zip(rust_row, gen_row)):
-            if rust_v != gen_v:
-                return (
-                    False,
-                    f"Mismatch in {const_name} at round {round_idx}, col {col_idx}: "
-                    f"rust={hex(rust_v)} generated={hex(gen_v)}",
+    # Find the first divergence to report.
+    for r, (rust_row, gen_row) in enumerate(zip(rust, generated)):
+        for c, (rv, gv) in enumerate(zip(rust_row, gen_row)):
+            if rv != gv:
+                return False, (
+                    f"{const_name}: mismatch at round {r}, col {c}: "
+                    f"rust={hex(rv)} generated={hex(gv)}"
                 )
-
-    return True, f"Rust constants match generated values: {const_name}"
+    return False, (
+        f"{const_name}: shape mismatch (rust {len(rust)} rounds, "
+        f"generated {len(generated)} rounds)"
+    )
 
 
 # =============================================================================

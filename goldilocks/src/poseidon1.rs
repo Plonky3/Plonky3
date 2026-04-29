@@ -936,51 +936,40 @@ mod tests {
 
     type F = Goldilocks;
 
-    fn assert_constants_match_generator(width: usize) {
-        let script =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../poseidon1/generate_constants.py");
-        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        let width_arg = width.to_string();
+    /// Run `generate_constants.py --check-rust-only` for `(field, width)` and panic on mismatch.
+    ///
+    /// Tries `python3`, `python`, then `py -3` to cover Linux, macOS, and Windows.
+    fn assert_constants_match_generator(field: &str, width: usize) {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let script = manifest.join("../poseidon1/generate_constants.py");
+        let repo_root = manifest.join("..");
+        let width_str = width.to_string();
 
-        let script_arg = script.to_string_lossy().into_owned();
-        let repo_root_arg = repo_root.to_string_lossy().into_owned();
-
-        let python_launchers: [(&str, &[&str]); 3] =
-            [("python3", &[]), ("python", &[]), ("py", &["-3"])];
+        let launchers: &[(&str, &[&str])] = &[("python3", &[]), ("python", &[]), ("py", &["-3"])];
         let mut errors = Vec::new();
 
-        for (bin, prefix) in python_launchers {
-            let mut cmd = Command::new(bin);
-            cmd.args(prefix);
-            cmd.args([
-                script_arg.as_str(),
-                "--field",
-                "goldilocks",
-                "--width",
-                width_arg.as_str(),
-                "--skip-mds",
-                "--check-rust-only",
-                "--repo-root",
-                repo_root_arg.as_str(),
-            ]);
-
-            match cmd.output() {
-                Ok(output) if output.status.success() => return,
-                Ok(output) => {
-                    errors.push(format!(
-                        "{bin}: exit {:?}\nstdout:\n{}\nstderr:\n{}",
-                        output.status.code(),
-                        String::from_utf8_lossy(&output.stdout),
-                        String::from_utf8_lossy(&output.stderr),
-                    ));
-                }
-                Err(err) => errors.push(format!("{bin}: {err}")),
+        for &(bin, prefix) in launchers {
+            let result = Command::new(bin)
+                .args(prefix)
+                .arg(&script)
+                .args(["--field", field, "--width", &width_str])
+                .args(["--skip-mds", "--check-rust-only", "--repo-root"])
+                .arg(&repo_root)
+                .output();
+            match result {
+                Ok(out) if out.status.success() => return,
+                Ok(out) => errors.push(format!(
+                    "{bin}: exit {:?}\nstdout: {}\nstderr: {}",
+                    out.status.code(),
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr),
+                )),
+                Err(e) => errors.push(format!("{bin}: {e}")),
             }
         }
-
         panic!(
-            "Failed to verify Goldilocks Poseidon1 constants for width {width}.\n{}",
-            errors.join("\n\n")
+            "Failed to verify {field} Poseidon1 width {width}:\n{}",
+            errors.join("\n")
         );
     }
 
@@ -1032,12 +1021,12 @@ mod tests {
 
     #[test]
     fn test_poseidon_constants_match_generator_width_8() {
-        assert_constants_match_generator(8);
+        assert_constants_match_generator("goldilocks", 8);
     }
 
     #[test]
     fn test_poseidon_constants_match_generator_width_12() {
-        assert_constants_match_generator(12);
+        assert_constants_match_generator("goldilocks", 12);
     }
 
     /// Smoke test for width 16 with random constants.
