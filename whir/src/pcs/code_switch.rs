@@ -65,8 +65,11 @@ pub struct ZkMaskClaim<EF> {
 
 /// Additional per-round proof data for the ZK code-switching path.
 ///
-/// Held as `Option<WhirRoundZkProof<...>>` inside `WhirRoundProof`.
-/// When `None`, the round was non-ZK and no extra bytes are serialized.
+/// Intended to be held as `Option<WhirRoundZkProof<...>>` inside
+/// `WhirRoundProof` once the prover/verifier round flow is wired.
+///
+/// Keeping this separate from `WhirRoundProof` for now lets the standalone
+/// math tests define the ZK proof shape without changing non-ZK serialization.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound(
     serialize = "EF: Serialize, MT::Commitment: Serialize, MT::Proof: Serialize",

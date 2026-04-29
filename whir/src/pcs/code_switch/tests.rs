@@ -9,8 +9,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_baby_bear::BabyBear;
-use p3_field::extension::BinomialExtensionField;
 use p3_field::PrimeCharacteristicRing;
+use p3_field::extension::BinomialExtensionField;
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -132,10 +132,7 @@ fn test_construction_9_7_mu_prime_identity_n0() {
     let query_positions: Vec<usize> = vec![0, 2, 4];
     assert_eq!(query_positions.len(), t);
 
-    let source_openings: Vec<EF> = query_positions
-        .iter()
-        .map(|&pos| f_codeword[pos])
-        .collect();
+    let source_openings: Vec<EF> = query_positions.iter().map(|&pos| f_codeword[pos]).collect();
 
     let nu_dim = 1 + t_ood + t * iota;
     let rho_batch = ef(77);
@@ -331,6 +328,111 @@ fn test_construction_9_7_mu_prime_identity_n2() {
     assert_eq!(
         mu_prime, mu_prime_from_relation,
         "Construction 9.7 mu' identity failed with n=2 auxiliary masks"
+    );
+}
+
+/// Same identity with `iota = 2`, so queried source symbols expand to multiple
+/// flattened generator rows `x_{i,l} = iota * x_i + l`.
+#[test]
+fn test_construction_9_7_mu_prime_identity_iota2() {
+    let ell = 4;
+    let r_len = 2;
+    let s_pad_len = 2;
+    let t_ood = 2;
+    let t = 2;
+    let iota = 2;
+
+    let source_enc = TrivialEncoding {
+        message_len: ell,
+        randomness_len: r_len,
+    };
+
+    let f: Vec<EF> = (1..=ell as u64).map(|i| ef(i * 2)).collect();
+    let r: Vec<EF> = (0..r_len as u64).map(|i| ef(30 + i)).collect();
+    let s_pad: Vec<EF> = (0..s_pad_len as u64).map(|i| ef(40 + i)).collect();
+    let f_codeword = source_enc.encode(&f, &r);
+
+    let sl: Vec<EF> = (0..ell as u64).map(|i| ef(7 + i * 3)).collect();
+    let mu = inner_product(&f, &sl);
+
+    let rho_ood_points = vec![ef(6), ef(8)];
+    let mut f_r_s = Vec::with_capacity(ell + r_len + s_pad_len);
+    f_r_s.extend_from_slice(&f);
+    f_r_s.extend_from_slice(&r);
+    f_r_s.extend_from_slice(&s_pad);
+    let y = apply_ood_zero_evader(&rho_ood_points, &f_r_s);
+
+    let query_symbols = [0_usize, 2_usize];
+    let mut source_openings = Vec::with_capacity(t * iota);
+    for &symbol in &query_symbols {
+        for limb in 0..iota {
+            source_openings.push(f_codeword[symbol * iota + limb]);
+        }
+    }
+
+    let nu_dim = 1 + t_ood + t * iota;
+    let nu = batching_zero_evader(ef(13), nu_dim);
+
+    let mut mu_prime = nu[0] * mu;
+    for i in 0..t_ood {
+        mu_prime += nu[1 + i] * y[i];
+    }
+    for i in 0..t {
+        for l in 0..iota {
+            mu_prime += nu[1 + t_ood + i * iota + l] * source_openings[i * iota + l];
+        }
+    }
+
+    let mut sl_prime = vec![EF::ZERO; ell];
+    for j in 0..ell {
+        sl_prime[j] += nu[0] * sl[j];
+    }
+    for i in 0..t_ood {
+        let mut power = EF::ONE;
+        for j in 0..ell {
+            sl_prime[j] += nu[1 + i] * power;
+            power *= rho_ood_points[i];
+        }
+    }
+    for i in 0..t {
+        for l in 0..iota {
+            let flat_index = query_symbols[i] * iota + l;
+            let g_sharp = source_enc.g_sharp_row(flat_index);
+            for j in 0..ell {
+                sl_prime[j] += nu[1 + t_ood + i * iota + l] * g_sharp[j];
+            }
+        }
+    }
+
+    let mask_msg_len = r_len + s_pad_len;
+    let mut sl_mask = vec![EF::ZERO; mask_msg_len];
+    for i in 0..t_ood {
+        let mut power = EF::ONE;
+        for _ in 0..ell {
+            power *= rho_ood_points[i];
+        }
+        for j in 0..mask_msg_len {
+            sl_mask[j] += nu[1 + i] * power;
+            power *= rho_ood_points[i];
+        }
+    }
+    for i in 0..t {
+        for l in 0..iota {
+            let flat_index = query_symbols[i] * iota + l;
+            let g_dollar = source_enc.g_dollar_row(flat_index);
+            for j in 0..r_len {
+                sl_mask[j] += nu[1 + t_ood + i * iota + l] * g_dollar[j];
+            }
+        }
+    }
+
+    let mut r_s_pad = r.clone();
+    r_s_pad.extend_from_slice(&s_pad);
+    let mu_prime_from_relation = inner_product(&f, &sl_prime) + inner_product(&r_s_pad, &sl_mask);
+
+    assert_eq!(
+        mu_prime, mu_prime_from_relation,
+        "Construction 9.7 mu' identity failed for iota=2 flattened row indexing"
     );
 }
 
