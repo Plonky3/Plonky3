@@ -95,20 +95,35 @@ unsafe fn div_2_32_asm(x: u64) -> u64 {
     result
 }
 
-/// Subtract two Goldilocks elements with borrow handling using inline assembly.
+/// Subtract two Goldilocks elements, accepting non-canonical inputs.
 #[inline(always)]
 unsafe fn sub_asm(a: u64, b: u64) -> u64 {
     let result: u64;
+    let _t0: u64;
+    let _t1: u64;
     let _adj: u64;
 
     unsafe {
         asm!(
-            "subs  {result}, {a}, {b}",
+            // Canonicalize one input: if b >= P, subtract P.
+            "subs  {t0}, {b}, {p}",
+            "csel  {b_canon}, {t0}, {b}, cs",
+
+            // Subtract, folding 2^64 underflow via EPSILON.
+            "subs  {result}, {a}, {b_canon}",
             "csetm {adj:w}, cc",
             "sub   {result}, {result}, {adj}",
+
+            // Final reduction: if result >= P, subtract P.
+            "subs  {t1}, {result}, {p}",
+            "csel  {result}, {t1}, {result}, cs",
             a = in(reg) a,
             b = in(reg) b,
+            b_canon = out(reg) _,
+            p = in(reg) P,
             result = out(reg) result,
+            t0 = out(reg) _t0,
+            t1 = out(reg) _t1,
             adj = out(reg) _adj,
             options(pure, nomem, nostack),
         );
@@ -1563,6 +1578,7 @@ pub fn external_terminal_neon<const WIDTH: usize>(
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
     use alloc::vec::Vec;
 
     use p3_field::{PrimeCharacteristicRing, PrimeField64};
@@ -1572,6 +1588,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::aarch64_neon::{EDGE_VALUES, danger_array, danger_u64};
     use crate::{
         Goldilocks, MATRIX_DIAG_8_GOLDILOCKS, MATRIX_DIAG_12_GOLDILOCKS, MATRIX_DIAG_16_GOLDILOCKS,
         MATRIX_DIAG_20_GOLDILOCKS,
@@ -1592,6 +1609,94 @@ mod tests {
     /// Extract both u64 lanes from a NEON vector.
     unsafe fn read_neon(v: uint64x2_t) -> (u64, u64) {
         unsafe { (vgetq_lane_u64::<0>(v), vgetq_lane_u64::<1>(v)) }
+    }
+
+    // -------------------------------------------------------------------
+    // Deterministic edge-value coverage for unary / binary scalar ops.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_sub_asm_edge_pairs() {
+        for &a in EDGE_VALUES {
+            for &b in EDGE_VALUES {
+                let expected = (F::new(a) - F::new(b)).as_canonical_u64();
+                let got = canon(unsafe { sub_asm(a, b) });
+                assert_eq!(got, expected, "sub({a}, {b})");
+            }
+        }
+    }
+
+    #[test]
+    fn test_double_asm_edge_values() {
+        for &a in EDGE_VALUES {
+            let expected = (F::new(a) + F::new(a)).as_canonical_u64();
+            let got = canon(unsafe { double_asm(a) });
+            assert_eq!(got, expected, "double({a})");
+        }
+    }
+
+    #[test]
+    fn test_div2_asm_edge_values() {
+        for &a in EDGE_VALUES {
+            let expected = F::new(a).halve().as_canonical_u64();
+            let got = canon(unsafe { div2_asm(a) });
+            assert_eq!(got, expected, "div2({a})");
+        }
+    }
+
+    #[test]
+    fn test_div4_asm_edge_values() {
+        for &a in EDGE_VALUES {
+            let expected = F::new(a).halve().halve().as_canonical_u64();
+            let got = canon(unsafe { div4_asm(a) });
+            assert_eq!(got, expected, "div4({a})");
+        }
+    }
+
+    #[test]
+    fn test_div8_asm_edge_values() {
+        for &a in EDGE_VALUES {
+            let expected = F::new(a).halve().halve().halve().as_canonical_u64();
+            let got = canon(unsafe { div8_asm(a) });
+            assert_eq!(got, expected, "div8({a})");
+        }
+    }
+
+    #[test]
+    fn test_div16_asm_edge_values() {
+        for &a in EDGE_VALUES {
+            let expected = F::new(a).halve().halve().halve().halve().as_canonical_u64();
+            let got = canon(unsafe { div16_asm(a) });
+            assert_eq!(got, expected, "div16({a})");
+        }
+    }
+
+    #[test]
+    fn test_div32_asm_edge_values() {
+        for &a in EDGE_VALUES {
+            let expected = F::new(a)
+                .halve()
+                .halve()
+                .halve()
+                .halve()
+                .halve()
+                .as_canonical_u64();
+            let got = canon(unsafe { div32_asm(a) });
+            assert_eq!(got, expected, "div32({a})");
+        }
+    }
+
+    #[test]
+    fn test_div_2_32_asm_edge_values() {
+        for &a in EDGE_VALUES {
+            let mut v = F::new(a);
+            for _ in 0..32 {
+                v = v.halve();
+            }
+            let expected = v.as_canonical_u64();
+            let got = canon(unsafe { div_2_32_asm(a) });
+            assert_eq!(got, expected, "div_2_32({a})");
+        }
     }
 
     proptest! {
@@ -2617,5 +2722,333 @@ mod tests {
     #[test]
     fn test_internal_permute_neon_generic_w20() {
         test_internal_neon_generic_matches_scalar(MATRIX_DIAG_20_GOLDILOCKS);
+    }
+
+    // -------------------------------------------------------------------
+    // Danger-zone proptests:
+    //
+    // Same shape as the uniform variants, but inputs are concentrated in the non-canonical band.
+    // -------------------------------------------------------------------
+
+    proptest! {
+        #[test]
+        fn test_sub_asm_danger(a in danger_u64(), b in danger_u64()) {
+            let expected = (F::new(a) - F::new(b)).as_canonical_u64();
+            let got = canon(unsafe { sub_asm(a, b) });
+            prop_assert_eq!(got, expected);
+        }
+
+        #[test]
+        fn test_double_asm_danger(a in danger_u64()) {
+            let expected = (F::new(a) + F::new(a)).as_canonical_u64();
+            let got = canon(unsafe { double_asm(a) });
+            prop_assert_eq!(got, expected);
+        }
+
+        #[test]
+        fn test_div2_asm_danger(a in danger_u64()) {
+            let expected = F::new(a).halve().as_canonical_u64();
+            let got = canon(unsafe { div2_asm(a) });
+            prop_assert_eq!(got, expected);
+        }
+
+        #[test]
+        fn test_div_2_32_asm_danger(a in danger_u64()) {
+            let mut v = F::new(a);
+            for _ in 0..32 { v = v.halve(); }
+            let got = canon(unsafe { div_2_32_asm(a) });
+            prop_assert_eq!(got, v.as_canonical_u64());
+        }
+
+        #[test]
+        fn test_apply_mat4_asm_danger(state in danger_array::<4>()) {
+            let f: [F; 4] = state.map(F::new);
+            let two = F::TWO;
+            let three = two + F::ONE;
+            let expected = [
+                two * f[0] + three * f[1] + f[2] + f[3],
+                f[0] + two * f[1] + three * f[2] + f[3],
+                f[0] + f[1] + two * f[2] + three * f[3],
+                three * f[0] + f[1] + f[2] + two * f[3],
+            ];
+            let mut got = state;
+            unsafe { apply_mat4_asm(&mut got); }
+            for i in 0..4 {
+                prop_assert_eq!(canon(got[i]), expected[i].as_canonical_u64());
+            }
+        }
+
+        #[test]
+        fn test_sbox_layer_asm_danger(state in danger_array::<8>()) {
+            let mut got = state;
+            unsafe { sbox_layer_asm(&mut got); }
+            for i in 0..8 {
+                let x = F::new(state[i]);
+                let x2 = x * x;
+                let x3 = x2 * x;
+                let x4 = x2 * x2;
+                let expected = x3 * x4;
+                prop_assert_eq!(canon(got[i]), expected.as_canonical_u64());
+            }
+        }
+
+        #[test]
+        fn test_mds_light_w8_danger(state in danger_array::<8>()) {
+            let mut field_state: [F; 8] = state.map(F::new);
+            mds_light_permutation(&mut field_state, &MDSMat4);
+            let mut asm_state = state;
+            unsafe { mds_light_permutation_asm(&mut asm_state); }
+            for i in 0..8 {
+                prop_assert_eq!(canon(asm_state[i]), field_state[i].as_canonical_u64());
+            }
+        }
+
+        #[test]
+        fn test_mds_light_w12_danger(state in danger_array::<12>()) {
+            let mut field_state: [F; 12] = state.map(F::new);
+            mds_light_permutation(&mut field_state, &MDSMat4);
+            let mut asm_state = state;
+            unsafe { mds_light_permutation_asm(&mut asm_state); }
+            for i in 0..12 {
+                prop_assert_eq!(canon(asm_state[i]), field_state[i].as_canonical_u64());
+            }
+        }
+
+        #[test]
+        fn test_mds_light_w16_danger(state in danger_array::<16>()) {
+            let mut field_state: [F; 16] = state.map(F::new);
+            mds_light_permutation(&mut field_state, &MDSMat4);
+            let mut asm_state = state;
+            unsafe { mds_light_permutation_asm(&mut asm_state); }
+            for i in 0..16 {
+                prop_assert_eq!(canon(asm_state[i]), field_state[i].as_canonical_u64());
+            }
+        }
+
+        #[test]
+        fn test_external_round_w8_danger(
+            state in danger_array::<8>(),
+            rc in danger_array::<8>(),
+        ) {
+            let mut expected: [F; 8] = core::array::from_fn(|i| F::new(state[i]) + F::new(rc[i]));
+            for x in expected.iter_mut() {
+                let x2 = *x * *x;
+                let x3 = x2 * *x;
+                let x4 = x2 * x2;
+                *x = x3 * x4;
+            }
+            mds_light_permutation(&mut expected, &MDSMat4);
+            let mut got = state;
+            unsafe { external_round_asm(&mut got, &rc); }
+            for i in 0..8 {
+                prop_assert_eq!(canon(got[i]), expected[i].as_canonical_u64());
+            }
+        }
+
+        #[test]
+        fn test_external_round_fused_w8_danger(
+            state in danger_array::<8>(),
+            rc in danger_array::<8>(),
+        ) {
+            let mut ref_state = state;
+            let mut got = state;
+            unsafe { external_round_asm(&mut ref_state, &rc); }
+            unsafe { external_round_fused_w8(&mut got, &rc); }
+            for i in 0..8 {
+                prop_assert_eq!(canon(got[i]), canon(ref_state[i]));
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Adversarial-state stress tests for the full internal permute.
+    //
+    // Compares the ASM permute against a field-level reference.
+    // -------------------------------------------------------------------
+
+    fn field_internal_round<const WIDTH: usize>(state: &mut [F; WIDTH], diag: [F; WIDTH], rc: u64) {
+        state[0] += F::new(rc);
+        let s = state[0];
+        let s2 = s * s;
+        let s3 = s2 * s;
+        let s4 = s2 * s2;
+        state[0] = s3 * s4;
+        matmul_internal(state, diag);
+    }
+
+    fn run_internal_stress<const WIDTH: usize>(
+        diag: [F; WIDTH],
+        state_init: [u64; WIDTH],
+        constants: &[u64],
+    ) {
+        let mut state_field: [F; WIDTH] = state_init.map(F::new);
+        for &rc in constants {
+            field_internal_round(&mut state_field, diag, rc);
+        }
+
+        let mut state_asm = state_init;
+        let diag_raw: [u64; WIDTH] = core::array::from_fn(|i| diag[i].value);
+        internal_permute_state_asm(&mut state_asm, &diag_raw, constants);
+
+        for i in 0..WIDTH {
+            assert_eq!(
+                canon(state_asm[i]),
+                state_field[i].as_canonical_u64(),
+                "i={i}, init={state_init:?}, constants={constants:?}",
+            );
+        }
+    }
+
+    /// State + constants designed to hit the non-canonical band hard:
+    /// (a) all canonical max,
+    /// (b) all non-canonical max,
+    /// (c) alternating,
+    /// (d) all-zero state with non-canonical constants.
+    ///
+    /// Repeated rounds compound any latent reduction bug.
+    fn adversarial_states<const WIDTH: usize>() -> Vec<([u64; WIDTH], Vec<u64>)> {
+        let max_canonical = [P - 1; WIDTH];
+        let max_noncanonical = [u64::MAX; WIDTH];
+        let alternating: [u64; WIDTH] =
+            core::array::from_fn(|i| if i % 2 == 0 { P - 1 } else { u64::MAX });
+        let near_p_plus: [u64; WIDTH] = core::array::from_fn(|i| P + (i as u64));
+        let zero_state = [0u64; WIDTH];
+
+        let canon_consts = vec![P - 1; 22];
+        let noncanon_consts = vec![u64::MAX; 22];
+        let mixed_consts: Vec<u64> = (0..22)
+            .map(|i| if i % 2 == 0 { P } else { u64::MAX - i as u64 })
+            .collect();
+
+        vec![
+            (max_canonical, canon_consts.clone()),
+            (max_noncanonical, canon_consts),
+            (max_noncanonical, noncanon_consts.clone()),
+            (alternating, mixed_consts.clone()),
+            (near_p_plus, mixed_consts),
+            (zero_state, noncanon_consts),
+        ]
+    }
+
+    #[test]
+    fn test_internal_permute_w8_stress() {
+        for (state, consts) in adversarial_states::<8>() {
+            run_internal_stress(MATRIX_DIAG_8_GOLDILOCKS, state, &consts);
+        }
+    }
+
+    #[test]
+    fn test_internal_permute_w12_stress() {
+        for (state, consts) in adversarial_states::<12>() {
+            run_internal_stress(MATRIX_DIAG_12_GOLDILOCKS, state, &consts);
+        }
+    }
+
+    #[test]
+    fn test_internal_permute_w16_stress() {
+        for (state, consts) in adversarial_states::<16>() {
+            run_internal_stress(MATRIX_DIAG_16_GOLDILOCKS, state, &consts);
+        }
+    }
+
+    #[test]
+    fn test_internal_permute_w20_stress() {
+        for (state, consts) in adversarial_states::<20>() {
+            run_internal_stress(MATRIX_DIAG_20_GOLDILOCKS, state, &consts);
+        }
+    }
+
+    #[test]
+    fn test_internal_permute_specialized_w8_stress() {
+        for (state, consts) in adversarial_states::<8>() {
+            let mut got = state;
+            internal_permute_state_asm_w8(&mut got, &consts);
+
+            let mut expected = state;
+            let diag: [u64; 8] = core::array::from_fn(|i| MATRIX_DIAG_8_GOLDILOCKS[i].value);
+            internal_permute_state_asm(&mut expected, &diag, &consts);
+
+            for i in 0..8 {
+                assert_eq!(canon(got[i]), canon(expected[i]));
+            }
+        }
+    }
+
+    #[test]
+    fn test_internal_permute_specialized_w12_stress() {
+        for (state, consts) in adversarial_states::<12>() {
+            let mut got = state;
+            internal_permute_state_asm_w12(&mut got, &consts);
+
+            let mut expected = state;
+            let diag: [u64; 12] = core::array::from_fn(|i| MATRIX_DIAG_12_GOLDILOCKS[i].value);
+            internal_permute_state_asm(&mut expected, &diag, &consts);
+
+            for i in 0..12 {
+                assert_eq!(canon(got[i]), canon(expected[i]));
+            }
+        }
+    }
+
+    #[test]
+    fn test_internal_permute_specialized_w16_stress() {
+        for (state, consts) in adversarial_states::<16>() {
+            let mut got = state;
+            internal_permute_state_asm_w16(&mut got, &consts);
+
+            let mut expected = state;
+            let diag: [u64; 16] = core::array::from_fn(|i| MATRIX_DIAG_16_GOLDILOCKS[i].value);
+            internal_permute_state_asm(&mut expected, &diag, &consts);
+
+            for i in 0..16 {
+                assert_eq!(canon(got[i]), canon(expected[i]));
+            }
+        }
+    }
+
+    #[test]
+    fn test_external_round_w8_stress() {
+        for (state, _) in adversarial_states::<8>() {
+            let rc = [P - 1; 8];
+
+            let mut expected: [F; 8] = core::array::from_fn(|i| F::new(state[i]) + F::new(rc[i]));
+            for x in expected.iter_mut() {
+                let x2 = *x * *x;
+                let x3 = x2 * *x;
+                let x4 = x2 * x2;
+                *x = x3 * x4;
+            }
+            mds_light_permutation(&mut expected, &MDSMat4);
+
+            let mut got = state;
+            unsafe {
+                external_round_asm(&mut got, &rc);
+            }
+
+            for i in 0..8 {
+                assert_eq!(canon(got[i]), expected[i].as_canonical_u64());
+            }
+        }
+    }
+
+    #[test]
+    fn test_external_round_fused_w8_stress() {
+        for (state, _) in adversarial_states::<8>() {
+            let rc = [u64::MAX; 8];
+
+            let mut expected = state;
+            unsafe {
+                external_round_asm(&mut expected, &rc);
+            }
+
+            let mut got = state;
+            unsafe {
+                external_round_fused_w8(&mut got, &rc);
+            }
+
+            for i in 0..8 {
+                assert_eq!(canon(got[i]), canon(expected[i]));
+            }
+        }
     }
 }
