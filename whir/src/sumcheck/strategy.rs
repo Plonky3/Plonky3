@@ -84,27 +84,23 @@ fn round_reduce<A: Copy + PrimeCharacteristicRing>(a: (A, A), b: (A, A)) -> (A, 
     (a.0 + b.0, a.1 + b.1)
 }
 
-/// Round-coefficient kernel for prefix-binding sumcheck.
+/// Computes `(h(0), h(inf))` for a prefix-binding sumcheck round.
 ///
-/// # Arguments
+/// # Inputs
 ///
-/// - `evals`   — hypercube evaluations of the round polynomial.
-/// - `weights` — hypercube evaluations of the weight polynomial.
+/// - `evals`   — multilinear evaluations of `f(X)` over the hypercube.
+/// - `weights` — multilinear evaluations of `w(X)` over the hypercube.
 ///
 /// # Returns
 ///
-/// `(h(0), h(inf))` for the round univariate
-/// `h(X) = sum_{b in {0,1}^{n-1}} f(X, b) * w(X, b)`.
+/// - `h(0)`   = sum_{b in {0,1}^{n-1}} f(0, b) * w(0, b)
+/// - `h(inf)` = sum_{b} (f(1, b) - f(0, b)) * (w(1, b) - w(0, b))
 ///
-/// The first slot is the constant term; the second is the leading
-/// coefficient. Together with the running claim they fix the degree-2
-/// round message, saving one field element per round on the wire.
+/// # Complexity
 ///
-/// # Performance
-///
-/// `O(2^n)`. Parallel above the rayon split threshold. The main loop is
-/// tiled by `K` over a delayed-reduction dot product on Monty-31 packings;
-/// the `half mod K` tail uses a streaming fold.
+/// O(2^n). Parallelised above a 2^14 threshold. The main loop is tiled by
+/// `K` over a delayed-reduction dot product; the `half mod K` tail uses a
+/// streaming fold.
 pub fn sumcheck_coefficients_prefix<B, A>(evals: &[B], weights: &[A]) -> (A, A)
 where
     B: PrimeCharacteristicRing + Copy + Send + Sync,
@@ -176,22 +172,22 @@ where
     round_reduce(main, tail)
 }
 
-/// Round-coefficient kernel for suffix-binding sumcheck.
+/// Computes `(h(0), h(inf))` for a suffix-binding sumcheck round.
 ///
-/// # Arguments
+/// # Inputs
 ///
-/// - `evals`   — hypercube evaluations of the round polynomial.
-/// - `weights` — hypercube evaluations of the weight polynomial.
+/// - `evals`   — multilinear evaluations of `f(X)` over the hypercube.
+/// - `weights` — multilinear evaluations of `w(X)` over the hypercube.
 ///
 /// # Returns
 ///
-/// `(h(0), h(inf))` for the round univariate
-/// `h(X) = sum_{b in {0,1}^{n-1}} f(b, X) * w(b, X)`.
+/// - `h(0)`   = sum_{b in {0,1}^{n-1}} f(b, 0) * w(b, 0)
+/// - `h(inf)` = sum_{b} (f(b, 1) - f(b, 0)) * (w(b, 1) - w(b, 0))
 ///
-/// # Performance
+/// # Complexity
 ///
-/// `O(2^n)`. Parallel above the rayon split threshold. The main loop walks
-/// the buffer in `2K`-wide chunks: each chunk gathers `K` adjacent
+/// O(2^n). Parallelised above a 2^14 threshold. The main loop walks the
+/// buffer in `2K`-wide chunks: each chunk gathers `K` adjacent
 /// `(b_n=0, b_n=1)` pairs and dispatches to a delayed-reduction dot
 /// product.
 pub fn sumcheck_coefficients_suffix<B, A>(evals: &[B], weights: &[A]) -> (A, A)

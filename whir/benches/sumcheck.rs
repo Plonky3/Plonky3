@@ -20,9 +20,7 @@ type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
 type Perm = Poseidon2BabyBear<16>;
 type Challenger = DuplexChallenger<F, Perm, 16, 8>;
-// Packed base-field type used by the SIMD round-coefficient kernel.
 type FP = <F as Field>::Packing;
-// Packed extension-field accumulator paired with the base packing above.
 type EFPacked = <EF as ExtensionField<F>>::ExtensionPacking;
 
 fn make_challenger() -> Challenger {
