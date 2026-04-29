@@ -213,7 +213,9 @@ pub(super) fn pack_lanes<const WIDTH: usize>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
+    use alloc::vec::Vec;
+
     use p3_field::{PrimeCharacteristicRing, PrimeField64};
     use proptest::prelude::*;
 
@@ -226,19 +228,8 @@ mod tests {
         F::new(x).as_canonical_u64()
     }
 
-    #[test]
-    fn test_add_asm_large_values() {
-        let a: u64 = 18_446_744_069_605_983_184; // = p + 191_398_863
-        let b: u64 = 18_446_744_073_709_551_599; // = p + 4_294_967_278
-        // (a + b) mod p == 4_486_366_141
-        let expected = 4_486_366_141u64;
-
-        let got = canon(unsafe { add_asm(a, b) });
-        assert_eq!(got, expected);
-    }
-
     /// Boundary u64s probed against every scalar ASM op.
-    const EDGE_VALUES: &[u64] = &[
+    pub const EDGE_VALUES: &[u64] = &[
         0,
         1,
         2,
@@ -261,13 +252,32 @@ mod tests {
     ];
 
     /// Strategy biased toward the non-canonical band.
-    fn danger_u64() -> impl Strategy<Value = u64> {
+    pub fn danger_u64() -> impl Strategy<Value = u64> {
         prop_oneof![
             prop::sample::select(EDGE_VALUES.to_vec()),
             P..u64::MAX,
             P..=P.saturating_add(EPSILON - 1),
             any::<u64>(),
         ]
+    }
+
+    /// Length-`WIDTH` array of danger-band u64s.
+    pub fn danger_array<const WIDTH: usize>() -> impl Strategy<Value = [u64; WIDTH]> {
+        prop::collection::vec(danger_u64(), WIDTH).prop_map(|v: Vec<u64>| {
+            v.try_into()
+                .expect("prop::collection::vec produces exactly WIDTH elements")
+        })
+    }
+
+    #[test]
+    fn test_add_asm_large_values() {
+        let a: u64 = 18_446_744_069_605_983_184; // = p + 191_398_863
+        let b: u64 = 18_446_744_073_709_551_599; // = p + 4_294_967_278
+        // (a + b) mod p == 4_486_366_141
+        let expected = 4_486_366_141u64;
+
+        let got = canon(unsafe { add_asm(a, b) });
+        assert_eq!(got, expected);
     }
 
     #[test]

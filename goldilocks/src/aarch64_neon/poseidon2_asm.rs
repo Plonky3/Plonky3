@@ -1588,6 +1588,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::aarch64_neon::{EDGE_VALUES, danger_array, danger_u64};
     use crate::{
         Goldilocks, MATRIX_DIAG_8_GOLDILOCKS, MATRIX_DIAG_12_GOLDILOCKS, MATRIX_DIAG_16_GOLDILOCKS,
         MATRIX_DIAG_20_GOLDILOCKS,
@@ -1608,50 +1609,6 @@ mod tests {
     /// Extract both u64 lanes from a NEON vector.
     unsafe fn read_neon(v: uint64x2_t) -> (u64, u64) {
         unsafe { (vgetq_lane_u64::<0>(v), vgetq_lane_u64::<1>(v)) }
-    }
-
-    const EPSILON: u64 = P.wrapping_neg();
-
-    /// Boundary u64s probed against every scalar ASM op.
-    const EDGE_VALUES: &[u64] = &[
-        0,
-        1,
-        2,
-        EPSILON - 1,
-        EPSILON,
-        EPSILON + 1,
-        1u64 << 31,
-        (1u64 << 32) + 1,
-        1u64 << 33,
-        1u64 << 63,
-        P - 2,
-        P - 1,
-        P,
-        P + 1,
-        P + 2,
-        18_446_744_069_605_983_184,
-        18_446_744_073_709_551_599,
-        u64::MAX - 1,
-        u64::MAX,
-    ];
-
-    /// Strategy biased toward the non-canonical band.
-    fn danger_u64() -> impl Strategy<Value = u64> {
-        prop_oneof![
-            prop::sample::select(EDGE_VALUES.to_vec()),
-            P..u64::MAX,
-            P..=P.saturating_add(EPSILON - 1),
-            any::<u64>(),
-        ]
-    }
-
-    /// Length-`WIDTH` array of danger-band u64s.
-    fn danger_array<const WIDTH: usize>() -> impl Strategy<Value = [u64; WIDTH]> {
-        prop::collection::vec(danger_u64(), WIDTH).prop_map(|v: Vec<u64>| {
-            let mut a = [0u64; WIDTH];
-            a.copy_from_slice(&v);
-            a
-        })
     }
 
     // -------------------------------------------------------------------

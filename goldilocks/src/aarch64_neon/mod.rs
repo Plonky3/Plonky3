@@ -10,3 +10,5 @@ pub use mds::MdsNeonGoldilocks;
 pub use packing::*;
 pub use poseidon1::*;
 pub use poseidon2::*;
+#[cfg(test)]
+pub(super) use utils::tests::{EDGE_VALUES, danger_array, danger_u64};
