@@ -300,7 +300,8 @@ where
 /// # Caller invariants
 ///
 /// - `D == EF::DIMENSION`,
-/// - `F::Packing::WIDTH % CHUNK == 0`.
+/// - `F::Packing::WIDTH % CHUNK == 0`,
+/// - `eq1_packed.len() <= MAX_STACK_N` (bounds the pre-multiply stack buffer).
 #[inline]
 fn compress_prefix_to_packed_packed_kernel<F, EF, const D: usize>(
     out: &mut [EF::ExtensionPacking],
@@ -322,6 +323,10 @@ fn compress_prefix_to_packed_packed_kernel<F, EF, const D: usize>(
         w.is_multiple_of(CHUNK),
         "W = {w} must be a multiple of CHUNK = {CHUNK}"
     );
+    debug_assert!(
+        n_packed <= MAX_STACK_N,
+        "n_packed = {n_packed} must fit in the stack-resident pre-multiply buffer (MAX_STACK_N = {MAX_STACK_N})"
+    );
     let lane_batches = w / CHUNK;
 
     // View the base-field row as packed rows, indexed by (w_idx, lane).
@@ -330,6 +335,24 @@ fn compress_prefix_to_packed_packed_kernel<F, EF, const D: usize>(
     //         packs   chunk[(w_idx * W + lane) * packed_inner * W + i_pkt * W..]
     let chunk_packed = F::Packing::pack_slice(chunk);
     debug_assert_eq!(chunk_packed.len(), n_packed * w * packed_inner);
+
+    // Phase 0: pre-multiply each eq1 slot by w0 once.
+    //
+    //     pw[w_idx] = eq1_packed[w_idx] * w0     (depends only on w_idx)
+    //
+    // - Without this pre-pass: recomputed once per tile per w_idx.
+    // - With it: recomputed once per w_idx total.
+    // - Buffer is stack-resident; only the first n_packed slots are written.
+    let mut pw_buf = [const { MaybeUninit::uninit() }; MAX_STACK_N];
+    for (slot, &eq1_i) in pw_buf.iter_mut().zip(eq1_packed.iter()) {
+        slot.write(eq1_i * w0);
+    }
+    // SAFETY: The loop above wrote exactly:
+    // - the first `n_packed` slots,
+    // - the buffer is not aliased.
+    let pw: &[EF::ExtensionPacking] = unsafe {
+        core::slice::from_raw_parts(pw_buf.as_ptr().cast::<EF::ExtensionPacking>(), n_packed)
+    };
 
     // Phase 1: outer tile over output positions.
     //
@@ -342,10 +365,10 @@ fn compress_prefix_to_packed_packed_kernel<F, EF, const D: usize>(
 
         // Phase 2: walk every (w_idx, lane) pair contributing to the tile.
         for w_idx in 0..n_packed {
-            // One packed * scalar extension multiply, reused across every
-            // lane batch and every output position in the tile below.
-            let pw = eq1_packed[w_idx] * w0;
-            let pw_coefs = pw.as_basis_coefficients_slice();
+            // Pull the pre-multiplied weight from the buffer;
+            //
+            // No redundant packed-extension multiply per tile.
+            let pw_coefs = pw[w_idx].as_basis_coefficients_slice();
 
             for batch in 0..lane_batches {
                 let lane_start = batch * CHUNK;
@@ -441,13 +464,26 @@ fn compress_prefix_to_packed_packed_kernel_eager<F, EF>(
 ///
 /// # Algorithm
 ///
-/// Two code paths, selected per call:
+/// Two code paths, selected per call.
 ///
-/// - `EF::DIMENSION ∈ {1, …, 8}` and `W % CHUNK == 0`: basis-split with
-///   delayed Montgomery reduction and tiling over output positions.
-///   Dispatched into a const-generic inner function so each supported
-///   dimension gets its own fully unrolled monomorphisation.
-/// - Otherwise: one full packed-extension multiply per inner step.
+/// ## Fast path
+///
+/// Conditions:
+///
+/// - `EF::DIMENSION ∈ {1, …, 8}`,
+/// - `W % CHUNK == 0`,
+/// - `n_packed <= MAX_STACK_N`.
+///
+/// What it does:
+///
+/// - Basis split + delayed Montgomery reduction.
+/// - Tiling over output positions.
+/// - One const-generic monomorphisation per supported `D`.
+///
+/// ## Eager fallback
+///
+/// - Used when any fast-path condition fails.
+/// - One full packed-extension multiply per inner step.
 ///
 /// # Panics
 ///
@@ -462,7 +498,7 @@ pub(super) fn compress_prefix_to_packed_packed<F, EF>(
     F: Field,
     EF: ExtensionField<F>,
 {
-    if F::Packing::WIDTH.is_multiple_of(CHUNK) {
+    if F::Packing::WIDTH.is_multiple_of(CHUNK) && eq1_packed.len() <= MAX_STACK_N {
         match EF::DIMENSION {
             1 => {
                 compress_prefix_to_packed_packed_kernel::<F, EF, 1>(out, eq1_packed, chunk, w0);
