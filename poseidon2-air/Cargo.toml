@@ -30,15 +30,13 @@ p3-koala-bear = { path = "../koala-bear" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-symmetric = { path = "../symmetric" }
 p3-uni-stark = { path = "../uni-stark" }
+p3-zk-alloc = { path = "../zk-alloc" }
 
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
 [target.'cfg(target_family = "unix")'.dev-dependencies]
 tikv-jemallocator = "0.6"
-
-[dev-dependencies.p3-zk-alloc]
-path = "../zk-alloc"
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
