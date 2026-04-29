@@ -8,6 +8,10 @@
 //! Chiesa, Fenzi, Weissenberg. "Zero-Knowledge IOPPs for Constrained Interleaved Codes."
 //! ePrint 2026/391.
 
+// The three helpers below are pub(crate) stubs for upcoming #1586 / #1587 integration.
+// Until those callers land, only the test module references them.
+#![allow(dead_code)]
+
 use alloc::vec::Vec;
 
 use p3_field::Field;
