@@ -11,7 +11,7 @@ categories.workspace = true
 
 [dependencies]
 
-[target.'cfg(not(all(target_os = "linux", target_arch = "x86_64")))'.dependencies]
+[target.'cfg(all(target_family = "unix", not(all(target_os = "linux", target_arch = "x86_64"))))'.dependencies]
 libc = "0.2"
 
 [lints]

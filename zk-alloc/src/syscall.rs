@@ -70,7 +70,7 @@ mod imp {
     }
 }
 
-#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+#[cfg(all(target_family = "unix", not(all(target_os = "linux", target_arch = "x86_64"))))]
 mod imp {
     use std::ptr;
 
@@ -92,9 +92,20 @@ mod imp {
     }
 
     #[inline]
-    pub unsafe fn madvise(_ptr: *mut u8, _size: usize, _advice: usize) {
-        // The advice values we pass are Linux-specific.
+    pub unsafe fn madvise(_ptr: *mut u8, _size: usize, _advice: usize) {}
+}
+
+#[cfg(not(target_family = "unix"))]
+mod imp {
+    pub const MADV_NOHUGEPAGE: usize = 0;
+
+    #[inline]
+    pub unsafe fn mmap_anonymous(_size: usize) -> *mut u8 {
+        std::ptr::null_mut()
     }
+
+    #[inline]
+    pub unsafe fn madvise(_ptr: *mut u8, _size: usize, _advice: usize) {}
 }
 
 pub use imp::{MADV_NOHUGEPAGE, madvise, mmap_anonymous};
