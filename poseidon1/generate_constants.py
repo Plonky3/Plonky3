@@ -32,8 +32,10 @@ Usage:
 
 import argparse
 import json
+import re
 import sys
 from math import ceil, floor, gcd, log, log2, inf
+from pathlib import Path
 
 # =============================================================================
 # Field Definitions
@@ -56,6 +58,16 @@ FIELDS = {
         "prime": (1 << 31) - 1,
         "valid_widths": [16, 32],
     },
+}
+
+# Round-constant locations for in-tree reproducibility checks.
+RUST_ROUND_CONSTANTS = {
+    ("babybear", 16): ("baby-bear/src/poseidon1.rs", "BABYBEAR_POSEIDON1_RC_16"),
+    ("babybear", 24): ("baby-bear/src/poseidon1.rs", "BABYBEAR_POSEIDON1_RC_24"),
+    ("koalabear", 16): ("koala-bear/src/poseidon1.rs", "KOALABEAR_POSEIDON1_RC_16"),
+    ("koalabear", 24): ("koala-bear/src/poseidon1.rs", "KOALABEAR_POSEIDON1_RC_24"),
+    ("goldilocks", 8): ("goldilocks/src/poseidon1.rs", "GOLDILOCKS_POSEIDON1_RC_8"),
+    ("goldilocks", 12): ("goldilocks/src/poseidon1.rs", "GOLDILOCKS_POSEIDON1_RC_12"),
 }
 
 
@@ -1194,6 +1206,121 @@ def format_json_poseidon1(
 
 
 # =============================================================================
+# Rust Constant Verification
+# =============================================================================
+
+
+def _parse_rust_round_constants(rust_path, const_name, width):
+    """
+    Parse a Poseidon1 2D round-constant array from a Rust source file.
+
+    Returns:
+        List[List[int]] with shape [num_rounds][width].
+    """
+    source = rust_path.read_text(encoding="utf-8")
+    pattern = re.compile(
+        rf"pub const {re.escape(const_name)}\s*:\s*\[\[[^\]]+;\s*{width}\s*\];\s*(\d+)\s*\]\s*="
+        rf"\s*[^=]+?::new_2d_array\(\[(.*?)\]\);",
+        re.S,
+    )
+    match = pattern.search(source)
+    if not match:
+        raise ValueError(
+            f"Could not find constant '{const_name}' with width {width} in {rust_path}"
+        )
+
+    declared_rounds = int(match.group(1))
+    body = match.group(2)
+
+    # Strip line comments so numeric extraction isn't polluted by doc examples.
+    body = "\n".join(line.split("//", 1)[0] for line in body.splitlines())
+
+    # Collect top-level rows from the 2D array payload.
+    rows = []
+    depth = 0
+    current = []
+    for ch in body:
+        if ch == "[":
+            depth += 1
+            if depth == 1:
+                current = []
+                continue
+        if ch == "]":
+            if depth == 1:
+                rows.append("".join(current))
+                current = []
+                depth -= 1
+                continue
+            depth -= 1
+        if depth >= 1:
+            current.append(ch)
+
+    parsed = []
+    for row in rows:
+        tokens = re.findall(r"0x[0-9a-fA-F_]+|\d+", row)
+        values = [
+            int(tok.replace("_", ""), 16) if tok.lower().startswith("0x") else int(tok)
+            for tok in tokens
+        ]
+        parsed.append(values)
+
+    if len(parsed) != declared_rounds:
+        raise ValueError(
+            f"{const_name} in {rust_path} declares {declared_rounds} rounds but parsed {len(parsed)}"
+        )
+    for idx, values in enumerate(parsed):
+        if len(values) != width:
+            raise ValueError(
+                f"{const_name} row {idx} in {rust_path} has width {len(values)}, expected {width}"
+            )
+    return parsed
+
+
+def verify_generated_constants_against_rust(field_name, width, generated_round_constants, repo_root=None):
+    """
+    Compare freshly generated constants with in-tree Rust constants.
+
+    Returns:
+        (ok: bool, message: str)
+    """
+    key = (field_name, width)
+    if key not in RUST_ROUND_CONSTANTS:
+        return False, f"No in-tree mapping defined for field={field_name}, width={width}"
+
+    root = Path(repo_root) if repo_root else Path(__file__).resolve().parent.parent
+    rel_path, const_name = RUST_ROUND_CONSTANTS[key]
+    rust_path = root / rel_path
+    if not rust_path.exists():
+        return False, f"Rust file not found: {rust_path}"
+
+    rust_constants = _parse_rust_round_constants(rust_path, const_name, width)
+
+    if len(rust_constants) != len(generated_round_constants):
+        return (
+            False,
+            f"Round count mismatch for {const_name}: rust={len(rust_constants)} "
+            f"generated={len(generated_round_constants)}",
+        )
+
+    for round_idx, (rust_row, gen_row) in enumerate(zip(rust_constants, generated_round_constants)):
+        if len(rust_row) != len(gen_row):
+            return (
+                False,
+                f"Width mismatch at round {round_idx} for {const_name}: "
+                f"rust={len(rust_row)} generated={len(gen_row)}",
+            )
+        for col_idx, (rust_v, gen_v) in enumerate(zip(rust_row, gen_row)):
+            if rust_v != gen_v:
+                return (
+                    False,
+                    f"Mismatch in {const_name} at round {round_idx}, col {col_idx}: "
+                    f"rust={hex(rust_v)} generated={hex(gen_v)}",
+                )
+
+    return True, f"Rust constants match generated values: {const_name}"
+
+
+# =============================================================================
 # CLI
 # =============================================================================
 
@@ -1237,7 +1364,21 @@ def main():
         "--test-vector", action="store_true",
         help="Compute and print a test vector using the reference permutation",
     )
+    parser.add_argument(
+        "--check-rust", action="store_true",
+        help="Verify generated round constants against in-tree Rust constants for this field/width",
+    )
+    parser.add_argument(
+        "--check-rust-only", action="store_true",
+        help="Run --check-rust and suppress formatted constant output",
+    )
+    parser.add_argument(
+        "--repo-root", default=None,
+        help="Repository root to use for --check-rust (defaults to script-relative root)",
+    )
     args = parser.parse_args()
+    if args.check_rust_only:
+        args.check_rust = True
 
     field_info = FIELDS[args.field]
     p = field_info["prime"]
@@ -1275,6 +1416,17 @@ def main():
         print("Generating round constants...", flush=True)
     round_constants = generate_round_constants_poseidon1(grain, p, n, t, R_F, R_P)
 
+    # --- Optional in-tree Rust constant verification ---
+    if args.check_rust:
+        ok, msg = verify_generated_constants_against_rust(
+            args.field, t, round_constants, repo_root=args.repo_root,
+        )
+        if not ok:
+            print(f"Rust constant verification failed: {msg}", file=sys.stderr)
+            sys.exit(1)
+        if args.verbose:
+            print(msg)
+
     # --- Generate MDS matrix ---
     if not args.skip_mds:
         if args.verbose:
@@ -1292,10 +1444,11 @@ def main():
     fmt_args = (
         args.field, t, round_constants, mds, p, n, alpha, R_F, R_P, args.skip_mds,
     )
-    if args.format == "default":
-        print(format_default_poseidon1(*fmt_args))
-    elif args.format == "json":
-        print(format_json_poseidon1(*fmt_args))
+    if not args.check_rust_only:
+        if args.format == "default":
+            print(format_default_poseidon1(*fmt_args))
+        elif args.format == "json":
+            print(format_json_poseidon1(*fmt_args))
 
     # --- Test vector ---
     if args.test_vector:

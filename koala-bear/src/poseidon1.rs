@@ -470,11 +470,68 @@ pub fn default_koalabear_poseidon1_24() -> Poseidon1KoalaBear<24> {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
+    use alloc::format;
+    use alloc::string::String;
+    use alloc::string::ToString;
+    use alloc::vec::Vec;
+    use std::path::PathBuf;
+    use std::process::Command;
+
     use p3_symmetric::Permutation;
 
     use super::*;
 
     type F = KoalaBear;
+
+    fn assert_constants_match_generator(width: usize) {
+        let script =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../poseidon1/generate_constants.py");
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+        let width_arg = width.to_string();
+
+        let script_arg = script.to_string_lossy().into_owned();
+        let repo_root_arg = repo_root.to_string_lossy().into_owned();
+
+        let python_launchers: [(&str, &[&str]); 3] =
+            [("python3", &[]), ("python", &[]), ("py", &["-3"])];
+        let mut errors = Vec::new();
+
+        for (bin, prefix) in python_launchers {
+            let mut cmd = Command::new(bin);
+            cmd.args(prefix);
+            cmd.args([
+                script_arg.as_str(),
+                "--field",
+                "koalabear",
+                "--width",
+                width_arg.as_str(),
+                "--skip-mds",
+                "--check-rust-only",
+                "--repo-root",
+                repo_root_arg.as_str(),
+            ]);
+
+            match cmd.output() {
+                Ok(output) if output.status.success() => return,
+                Ok(output) => {
+                    errors.push(format!(
+                        "{bin}: exit {:?}\nstdout:\n{}\nstderr:\n{}",
+                        output.status.code(),
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr),
+                    ));
+                }
+                Err(err) => errors.push(format!("{bin}: {err}")),
+            }
+        }
+
+        panic!(
+            "Failed to verify KoalaBear Poseidon1 constants for width {width}.\n{}",
+            errors.join("\n\n")
+        );
+    }
 
     #[test]
     fn test_poseidon_width_16() {
@@ -510,5 +567,15 @@ mod tests {
 
         perm.permute_mut(&mut input);
         assert_eq!(input, expected);
+    }
+
+    #[test]
+    fn test_poseidon_constants_match_generator_width_16() {
+        assert_constants_match_generator(16);
+    }
+
+    #[test]
+    fn test_poseidon_constants_match_generator_width_24() {
+        assert_constants_match_generator(24);
     }
 }
