@@ -24,21 +24,87 @@ use crate::sumcheck::product_polynomial::ProductPolynomial;
 /// - Above it, the fold-reduce amortises the splitting cost.
 const PAR_THRESHOLD: usize = 1 << 14;
 
-/// Computes `(h(0), h(inf))` for a prefix-binding sumcheck round.
+/// Tile size for the chunked round-coefficient kernel.
 ///
-/// # Inputs
+/// On Monty-31 packings, hand-written delayed-reduction primitives exist for tile sizes `2, 4, 5, 8`;
 ///
-/// - `evals`   — multilinear evaluations of `f(X)` over the hypercube.
-/// - `weights` — multilinear evaluations of `w(X)` over the hypercube.
+/// `8` is the deepest available on every supported target.
+///
+/// - Larger overruns the integer-multiply pipeline depth;
+/// - Smaller dilutes the delayed-reduction win.
+const K: usize = 8;
+
+/// Per-tile MAC: extends a `(constant, leading)` accumulator pair.
+///
+/// # Algorithm
+///
+/// Folding the active variable in `h(X) = sum_b f(X, b) * w(X, b)` gives:
+///
+/// ```text
+///     constant += sum_i  w_lo[i] * e_lo[i]
+///     leading  += sum_i  (w_hi[i] - w_lo[i]) * (e_hi[i] - e_lo[i])
+/// ```
+///
+/// where `lo`, `hi` are the two faces of the active variable. Each sum is
+/// one delayed-reduction dot product over `K` pairs, collapsing `K`
+/// widening multiplies into one Montgomery reduce per output coordinate.
+#[inline(always)]
+fn chunk_round_step<B, A>(e_lo: &[B; K], e_hi: &[B; K], w_lo: &[A; K], w_hi: &[A; K]) -> (A, A)
+where
+    B: PrimeCharacteristicRing + Copy,
+    A: Algebra<B> + Copy,
+{
+    // Constant term: one delayed-reduction dot product over the b_0 = 0 face.
+    let acc0 = A::mixed_dot_product::<K>(w_lo, e_lo);
+
+    // Materialise the differences (b_0 = 1 minus b_0 = 0) tile-locally so
+    // they can feed the same primitive. `K` base subs, no reductions.
+    let diffs_e: [B; K] = core::array::from_fn(|i| e_hi[i] - e_lo[i]);
+    let diffs_w: [A; K] = core::array::from_fn(|i| w_hi[i] - w_lo[i]);
+
+    // Leading coefficient: dot product of the differences.
+    let acc_inf = A::mixed_dot_product::<K>(&diffs_w, &diffs_e);
+
+    (acc0, acc_inf)
+}
+
+/// Per-pair MAC for the streaming tail (at most `K - 1` leftover pairs).
+#[inline(always)]
+fn round_step<B, A>((acc0, acc_inf): (A, A), e0: B, e1: B, w0: A, w1: A) -> (A, A)
+where
+    B: PrimeCharacteristicRing + Copy,
+    A: Algebra<B> + Copy,
+{
+    (acc0 + w0 * e0, acc_inf + (w1 - w0) * (e1 - e0))
+}
+
+/// Component-wise sum of two `(constant, leading)` accumulator pairs.
+#[inline(always)]
+fn round_reduce<A: Copy + PrimeCharacteristicRing>(a: (A, A), b: (A, A)) -> (A, A) {
+    (a.0 + b.0, a.1 + b.1)
+}
+
+/// Round-coefficient kernel for prefix-binding sumcheck.
+///
+/// # Arguments
+///
+/// - `evals`   — hypercube evaluations of the round polynomial.
+/// - `weights` — hypercube evaluations of the weight polynomial.
 ///
 /// # Returns
 ///
-/// - `h(0)`   = sum_{b in {0,1}^{n-1}} f(0, b) * w(0, b)
-/// - `h(inf)` = sum_{b} (f(1, b) - f(0, b)) * (w(1, b) - w(0, b))
+/// `(h(0), h(inf))` for the round univariate
+/// `h(X) = sum_{b in {0,1}^{n-1}} f(X, b) * w(X, b)`.
 ///
-/// # Complexity
+/// The first slot is the constant term; the second is the leading
+/// coefficient. Together with the running claim they fix the degree-2
+/// round message, saving one field element per round on the wire.
 ///
-/// O(2^n). Parallelised above a 2^14 threshold.
+/// # Performance
+///
+/// `O(2^n)`. Parallel above the rayon split threshold. The main loop is
+/// tiled by `K` over a delayed-reduction dot product on Monty-31 packings;
+/// the `half mod K` tail uses a streaming fold.
 pub fn sumcheck_coefficients_prefix<B, A>(evals: &[B], weights: &[A]) -> (A, A)
 where
     B: PrimeCharacteristicRing + Copy + Send + Sync,
@@ -50,47 +116,84 @@ where
     let (e_lo, e_hi) = evals.split_at(half);
     let (w_lo, w_hi) = weights.split_at(half);
 
-    if evals.len() > PAR_THRESHOLD {
-        // Parallel path: one fold-reduce across chunked lanes.
-        e_lo.par_iter()
-            .zip(e_hi.par_iter())
-            .zip(w_lo.par_iter().zip(w_hi.par_iter()))
+    let body = (half / K) * K;
+    let (e_lo_main, e_lo_tail) = e_lo.split_at(body);
+    let (e_hi_main, e_hi_tail) = e_hi.split_at(body);
+    let (w_lo_main, w_lo_tail) = w_lo.split_at(body);
+    let (w_hi_main, w_hi_tail) = w_hi.split_at(body);
+
+    // Main chunked loop: K pairs per iteration via delayed-reduction dot products.
+    let main: (A, A) = if half > PAR_THRESHOLD {
+        e_lo_main
+            .par_chunks_exact(K)
+            .zip(e_hi_main.par_chunks_exact(K))
+            .zip(
+                w_lo_main
+                    .par_chunks_exact(K)
+                    .zip(w_hi_main.par_chunks_exact(K)),
+            )
             .par_fold_reduce(
                 || (A::ZERO, A::ZERO),
-                |(acc0, acc_inf), ((&e0, &e1), (&w0, &w1))| {
-                    (acc0 + w0 * e0, acc_inf + (w1 - w0) * (e1 - e0))
+                |acc, ((e_lo_c, e_hi_c), (w_lo_c, w_hi_c))| {
+                    let chunk = chunk_round_step::<B, A>(
+                        e_lo_c.try_into().unwrap(),
+                        e_hi_c.try_into().unwrap(),
+                        w_lo_c.try_into().unwrap(),
+                        w_hi_c.try_into().unwrap(),
+                    );
+                    round_reduce(acc, chunk)
                 },
-                |(acc0, acc_inf), (val0, val_inf)| (acc0 + val0, acc_inf + val_inf),
+                round_reduce,
             )
     } else {
-        // Serial path: avoid the rayon-splitting overhead for small inputs.
-        e_lo.iter()
-            .zip(e_hi.iter())
-            .zip(w_lo.iter().zip(w_hi.iter()))
+        e_lo_main
+            .chunks_exact(K)
+            .zip(e_hi_main.chunks_exact(K))
+            .zip(w_lo_main.chunks_exact(K).zip(w_hi_main.chunks_exact(K)))
             .fold(
                 (A::ZERO, A::ZERO),
-                |(acc0, acc_inf), ((&e0, &e1), (&w0, &w1))| {
-                    (acc0 + w0 * e0, acc_inf + (w1 - w0) * (e1 - e0))
+                |acc, ((e_lo_c, e_hi_c), (w_lo_c, w_hi_c))| {
+                    let chunk = chunk_round_step::<B, A>(
+                        e_lo_c.try_into().unwrap(),
+                        e_hi_c.try_into().unwrap(),
+                        w_lo_c.try_into().unwrap(),
+                        w_hi_c.try_into().unwrap(),
+                    );
+                    round_reduce(acc, chunk)
                 },
             )
-    }
+    };
+
+    // Tail: at most K-1 pairs; streaming fold with eager reduction is fine.
+    let tail = e_lo_tail
+        .iter()
+        .zip(e_hi_tail.iter())
+        .zip(w_lo_tail.iter().zip(w_hi_tail.iter()))
+        .fold((A::ZERO, A::ZERO), |acc, ((&e0, &e1), (&w0, &w1))| {
+            round_step(acc, e0, e1, w0, w1)
+        });
+
+    round_reduce(main, tail)
 }
 
-/// Computes `(h(0), h(inf))` for a suffix-binding sumcheck round.
+/// Round-coefficient kernel for suffix-binding sumcheck.
 ///
-/// # Inputs
+/// # Arguments
 ///
-/// - `evals`   — multilinear evaluations of `f(X)` over the hypercube.
-/// - `weights` — multilinear evaluations of `w(X)` over the hypercube.
+/// - `evals`   — hypercube evaluations of the round polynomial.
+/// - `weights` — hypercube evaluations of the weight polynomial.
 ///
 /// # Returns
 ///
-/// - `h(0)`   = sum_{b in {0,1}^{n-1}} f(b, 0) * w(b, 0)
-/// - `h(inf)` = sum_{b} (f(b, 1) - f(b, 0)) * (w(b, 1) - w(b, 0))
+/// `(h(0), h(inf))` for the round univariate
+/// `h(X) = sum_{b in {0,1}^{n-1}} f(b, X) * w(b, X)`.
 ///
-/// # Complexity
+/// # Performance
 ///
-/// O(2^n). Parallelised above a 2^14 threshold.
+/// `O(2^n)`. Parallel above the rayon split threshold. The main loop walks
+/// the buffer in `2K`-wide chunks: each chunk gathers `K` adjacent
+/// `(b_n=0, b_n=1)` pairs and dispatches to a delayed-reduction dot
+/// product.
 pub fn sumcheck_coefficients_suffix<B, A>(evals: &[B], weights: &[A]) -> (A, A)
 where
     B: PrimeCharacteristicRing + Copy + Send + Sync,
@@ -99,27 +202,56 @@ where
     // Precondition: paired slices must be aligned; adjacent pairs address the suffix bit.
     assert_eq!(evals.len(), weights.len());
 
-    if evals.len() > PAR_THRESHOLD {
-        // Parallel path: chunks of size 2 expose the suffix variable.
-        evals
-            .par_chunks(2)
-            .zip(weights.par_chunks(2))
+    let half = evals.len() / 2;
+    // Each chunk consumes 2K consecutive elements (K pairs).
+    let body_pairs = (half / K) * K;
+    let body_elems = body_pairs * 2;
+    let (evals_main, evals_tail) = evals.split_at(body_elems);
+    let (weights_main, weights_tail) = weights.split_at(body_elems);
+
+    #[inline(always)]
+    fn gather_pairs<T: Copy>(chunk: &[T]) -> ([T; K], [T; K]) {
+        // Layout: [t0, t1, t2, t3, ...]; even indices = "0", odd indices = "1".
+        let lo: [T; K] = core::array::from_fn(|i| chunk[2 * i]);
+        let hi: [T; K] = core::array::from_fn(|i| chunk[2 * i + 1]);
+        (lo, hi)
+    }
+
+    let main: (A, A) = if evals.len() > PAR_THRESHOLD {
+        evals_main
+            .par_chunks_exact(2 * K)
+            .zip(weights_main.par_chunks_exact(2 * K))
             .par_fold_reduce(
                 || (A::ZERO, A::ZERO),
-                |(acc0, acc_inf), (e, w)| {
-                    (acc0 + w[0] * e[0], acc_inf + (w[1] - w[0]) * (e[1] - e[0]))
+                |acc, (e_chunk, w_chunk)| {
+                    let (e_lo, e_hi) = gather_pairs::<B>(e_chunk);
+                    let (w_lo, w_hi) = gather_pairs::<A>(w_chunk);
+                    let chunk = chunk_round_step::<B, A>(&e_lo, &e_hi, &w_lo, &w_hi);
+                    round_reduce(acc, chunk)
                 },
-                |(acc0, acc_inf), (val0, val_inf)| (acc0 + val0, acc_inf + val_inf),
+                round_reduce,
             )
     } else {
-        // Serial path.
-        evals
-            .chunks(2)
-            .zip(weights.chunks(2))
-            .fold((A::ZERO, A::ZERO), |(acc0, acc_inf), (e, w)| {
-                (acc0 + w[0] * e[0], acc_inf + (w[1] - w[0]) * (e[1] - e[0]))
+        evals_main
+            .chunks_exact(2 * K)
+            .zip(weights_main.chunks_exact(2 * K))
+            .fold((A::ZERO, A::ZERO), |acc, (e_chunk, w_chunk)| {
+                let (e_lo, e_hi) = gather_pairs::<B>(e_chunk);
+                let (w_lo, w_hi) = gather_pairs::<A>(w_chunk);
+                let chunk = chunk_round_step::<B, A>(&e_lo, &e_hi, &w_lo, &w_hi);
+                round_reduce(acc, chunk)
             })
-    }
+    };
+
+    // Tail: at most K-1 pairs; streaming fold over adjacent (0,1) chunks.
+    let tail = evals_tail
+        .chunks(2)
+        .zip(weights_tail.chunks(2))
+        .fold((A::ZERO, A::ZERO), |acc, (e, w)| {
+            round_step(acc, e[0], e[1], w[0], w[1])
+        });
+
+    round_reduce(main, tail)
 }
 
 /// Which side of the variable order is bound first by the sumcheck rounds.
