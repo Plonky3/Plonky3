@@ -70,7 +70,10 @@ fn make_packed_inputs(num_variables: usize) -> (Vec<FP>, Vec<EFPacked>) {
     // Repack base-field evaluations into SIMD lanes of width FP::WIDTH.
     let evals_packed = FP::pack_slice(&evals).to_vec();
     // Repack extension weights similarly: one EFPacked per WIDTH consecutive elements.
-    let weights_packed = weights.chunks(FP::WIDTH).map(EFPacked::from_ext_slice).collect();
+    let weights_packed = weights
+        .chunks(FP::WIDTH)
+        .map(EFPacked::from_ext_slice)
+        .collect();
 
     (evals_packed, weights_packed)
 }
