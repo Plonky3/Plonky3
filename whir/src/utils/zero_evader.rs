@@ -21,11 +21,6 @@ use p3_field::Field;
 /// `ze_star_n(sigma) = (1, sigma, ..., sigma^{n-1})`, so this computes ordinary
 /// univariate polynomial evaluation in monomial basis:
 ///
-/// ```text
-/// ze_star_n(sigma) . message
-///     = message[0] + message[1]*sigma + ... + message[n-1]*sigma^{n-1}
-/// ```
-///
 /// Zero-evader error is `(n-1)/|F|`: at most `n-1` roots for a nonzero degree-(n-1)
 /// polynomial (Schwartz-Zippel).
 ///
@@ -85,8 +80,8 @@ pub(crate) fn eval_padded_zero_evader<F: Field>(
 ///
 /// Computes `ze_star_n(sigma) . message + mask * randomness`.
 ///
-/// When `mask != 0`, the map `s -> eval_ze_star_n(sigma, message) + mask * s` is a
-/// bijection on F, so the output is uniformly distributed over F for uniform `randomness`.
+/// When mask != 0, the map `s -> eval_ze_star_n(sigma, message) + mask * s` is a
+/// bijection on F, so the output is uniformly distributed over F for uniform randomness.
 /// This is the t = 1 instance of the perfect-privacy guarantee from Lemma 9.3.
 pub(crate) fn eval_scalar_padded_ze_star_n<F: Field>(
     sigma: F,
