@@ -62,16 +62,22 @@ static OVERFLOW_BYTES: AtomicUsize = AtomicUsize::new(0);
 thread_local! {
     /// Where this thread's next allocation lands. Advanced past each allocation.
     static ARENA_PTR: Cell<usize> = const { Cell::new(0) };
-    /// One past the last byte of this thread's slab.
+    /// One past the last byte of this thread's slab. An alloc fits iff
+    /// `aligned + size <= ARENA_END`.
     static ARENA_END: Cell<usize> = const { Cell::new(0) };
-    /// Base address of this thread's slab (`0` = not yet claimed).
+    /// Base address of this thread's slab (`0` = not yet claimed). On reset,
+    /// `ARENA_PTR` is set back to this value.
     static ARENA_BASE: Cell<usize> = const { Cell::new(0) };
-    /// Last `GENERATION` value this thread observed.
+    /// Last `GENERATION` value this thread observed. When the global moves past
+    /// this, the next allocation resets `ARENA_PTR` to `ARENA_BASE` and updates
+    /// this field.
     static ARENA_GEN: Cell<usize> = const { Cell::new(0) };
-    /// `true` if this thread arrived after all slabs were claimed.
+    /// `true` if this thread was created after all slabs were already claimed.
+    /// Such threads skip arena logic entirely and always use the system allocator.
     static ARENA_NO_SLAB: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Returns the base address of the mmap'd region, mapping it on the first call.
 fn ensure_region() -> usize {
     REGION_INIT.call_once(|| {
         let cpus = std::thread::available_parallelism()
@@ -144,7 +150,7 @@ unsafe fn arena_alloc_cold(size: usize, align: usize) -> *mut u8 {
         }
         ARENA_PTR.set(base);
         ARENA_GEN.set(generation);
-        let aligned = (base + align - 1) & !(align - 1);
+        let aligned = base.next_multiple_of(align);
         let new_ptr = aligned + size;
         if new_ptr <= ARENA_END.get() {
             ARENA_PTR.set(new_ptr);
@@ -167,8 +173,8 @@ unsafe impl GlobalAlloc for ZkAllocator {
         if ARENA_ACTIVE.load(Ordering::Relaxed) {
             let generation = GENERATION.load(Ordering::Relaxed);
             if ARENA_GEN.get() == generation {
-                let ptr = ARENA_PTR.get();
-                let aligned = (ptr + layout.align() - 1) & !(layout.align() - 1);
+                let align = layout.align();
+                let aligned = (ARENA_PTR.get() + align - 1) & !(align - 1);
                 let new_ptr = aligned + layout.size();
                 if new_ptr <= ARENA_END.get() {
                     ARENA_PTR.set(new_ptr);
@@ -186,7 +192,7 @@ unsafe impl GlobalAlloc for ZkAllocator {
         let base = REGION_BASE.load(Ordering::Relaxed);
         let region_size = REGION_SIZE.load(Ordering::Relaxed);
         if base != 0 && addr >= base && addr < base + region_size {
-            return;
+            return; // arena-owned pointer — free is a no-op
         }
         unsafe { std::alloc::System.dealloc(ptr, layout) };
     }
@@ -196,6 +202,7 @@ unsafe impl GlobalAlloc for ZkAllocator {
         if new_size <= layout.size() {
             return ptr;
         }
+        // SAFETY: new_size > layout.size() > 0, align unchanged from valid layout.
         let new_layout = unsafe { Layout::from_size_align_unchecked(new_size, layout.align()) };
         let new_ptr = unsafe { self.alloc(new_layout) };
         if !new_ptr.is_null() {
