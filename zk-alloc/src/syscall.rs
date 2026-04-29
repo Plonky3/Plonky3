@@ -18,7 +18,15 @@ mod imp {
     pub const MADV_NOHUGEPAGE: usize = 15;
 
     #[inline]
-    unsafe fn syscall6(nr: usize, a1: usize, a2: usize, a3: usize, a4: usize, a5: usize, a6: usize) -> isize {
+    unsafe fn syscall6(
+        nr: usize,
+        a1: usize,
+        a2: usize,
+        a3: usize,
+        a4: usize,
+        a5: usize,
+        a6: usize,
+    ) -> isize {
         let ret: isize;
         unsafe {
             std::arch::asm!(
@@ -60,8 +68,22 @@ mod imp {
     #[inline]
     pub unsafe fn mmap_anonymous(size: usize) -> *mut u8 {
         let flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
-        let ret = unsafe { syscall6(SYS_MMAP, 0, size, PROT_READ | PROT_WRITE, flags, usize::MAX, 0) };
-        if ret < 0 { ptr::null_mut() } else { ret as *mut u8 }
+        let ret = unsafe {
+            syscall6(
+                SYS_MMAP,
+                0,
+                size,
+                PROT_READ | PROT_WRITE,
+                flags,
+                usize::MAX,
+                0,
+            )
+        };
+        if ret < 0 {
+            ptr::null_mut()
+        } else {
+            ret as *mut u8
+        }
     }
 
     #[inline]
@@ -70,7 +92,10 @@ mod imp {
     }
 }
 
-#[cfg(all(target_family = "unix", not(all(target_os = "linux", target_arch = "x86_64"))))]
+#[cfg(all(
+    target_family = "unix",
+    not(all(target_os = "linux", target_arch = "x86_64"))
+))]
 mod imp {
     use std::ptr;
 
