@@ -6,6 +6,10 @@
 //! phase's data. Allocations that don't fit (too large, or beyond max threads) fall
 //! back to the system allocator.
 //!
+//! Slab size defaults to 8GB per thread. Set `ZK_ALLOC_SLAB_GB` to override
+//! (e.g. `ZK_ALLOC_SLAB_GB=12` for large workloads). Use `overflow_stats()`
+//! to check if allocations spill to the system allocator.
+//!
 //! ```ignore
 //! loop {
 //!     begin_phase();               // arena ON; slabs reset lazily
@@ -22,11 +26,15 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 mod syscall;
 
-const SLAB_SIZE: usize = 8 << 30; // 8GB
+const DEFAULT_SLAB_GB: usize = 8;
 const SLACK: usize = 4;
 
 #[derive(Debug)]
 pub struct ZkAllocator;
+
+/// Per-thread slab size in bytes. Set once during `ensure_region()` from the
+/// `ZK_ALLOC_SLAB_GB` environment variable (default: 8).
+static SLAB_SIZE: AtomicUsize = AtomicUsize::new(0);
 
 /// Incremented by `begin_phase()`. Every thread caches the last value it saw in
 /// `ARENA_GEN`; when they differ, the thread resets its allocation cursor to the start
@@ -80,11 +88,18 @@ thread_local! {
 /// Returns the base address of the mmap'd region, mapping it on the first call.
 fn ensure_region() -> usize {
     REGION_INIT.call_once(|| {
+        let slab_gb = std::env::var("ZK_ALLOC_SLAB_GB")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_SLAB_GB);
+        let slab_size = slab_gb << 30;
+        SLAB_SIZE.store(slab_size, Ordering::Release);
+
         let cpus = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(8);
         let max_threads = cpus + SLACK;
-        let region_size = SLAB_SIZE * max_threads;
+        let region_size = slab_size * max_threads;
 
         // SAFETY: mmap_anonymous returns a page-aligned pointer or null.
         // MAP_NORESERVE means no physical memory is committed until pages are touched.
@@ -128,6 +143,11 @@ pub fn reset_overflow_stats() {
     OVERFLOW_BYTES.store(0, Ordering::Relaxed);
 }
 
+/// Returns the per-thread slab size in bytes. Zero before the first `begin_phase()`.
+pub fn slab_size() -> usize {
+    SLAB_SIZE.load(Ordering::Relaxed)
+}
+
 #[cold]
 #[inline(never)]
 unsafe fn arena_alloc_cold(size: usize, align: usize) -> *mut u8 {
@@ -144,9 +164,10 @@ unsafe fn arena_alloc_cold(size: usize, align: usize) -> *mut u8 {
                     std::alloc::System.alloc(Layout::from_size_align_unchecked(size, align))
                 };
             }
-            base = region + idx * SLAB_SIZE;
+            let slab_size = SLAB_SIZE.load(Ordering::Relaxed);
+            base = region + idx * slab_size;
             ARENA_BASE.set(base);
-            ARENA_END.set(base + SLAB_SIZE);
+            ARENA_END.set(base + slab_size);
         }
         ARENA_PTR.set(base);
         ARENA_GEN.set(generation);
