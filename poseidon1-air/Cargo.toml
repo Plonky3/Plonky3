@@ -39,8 +39,12 @@ tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 [target.'cfg(target_family = "unix")'.dev-dependencies]
 tikv-jemallocator = "0.6"
 
+[dev-dependencies.p3-zk-alloc]
+path = "../zk-alloc"
+
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
+zk-alloc = []
 
 [[bench]]
 name = "poseidon1-air"

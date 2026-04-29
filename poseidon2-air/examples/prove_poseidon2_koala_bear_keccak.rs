@@ -15,7 +15,7 @@ use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, Serializing
 use p3_uni_stark::{StarkConfig, prove, verify};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
-#[cfg(target_family = "unix")]
+#[cfg(all(target_family = "unix", not(feature = "zk-alloc")))]
 use tikv_jemallocator::Jemalloc;
 use tracing_forest::ForestLayer;
 use tracing_forest::util::LevelFilter;
@@ -23,9 +23,13 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-#[cfg(target_family = "unix")]
+#[cfg(feature = "zk-alloc")]
 #[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
+static GLOBAL: p3_zk_alloc::ZkAllocator = p3_zk_alloc::ZkAllocator;
+
+#[cfg(all(target_family = "unix", not(feature = "zk-alloc")))]
+#[global_allocator]
+static GLOBAL_JE: Jemalloc = Jemalloc;
 
 const WIDTH: usize = 16;
 const SBOX_DEGREE: u64 = KOALABEAR_S_BOX_DEGREE;
@@ -52,11 +56,14 @@ fn main() -> Result<(), impl Debug> {
         .with(ForestLayer::default())
         .init();
 
-    const PROOFS: usize = 2;
-    for _ in 1..PROOFS {
-        prove_and_verify()?;
-    }
-    prove_and_verify()
+    prove_and_verify()?;
+
+    #[cfg(feature = "zk-alloc")]
+    p3_zk_alloc::begin_phase();
+    let result = prove_and_verify();
+    #[cfg(feature = "zk-alloc")]
+    p3_zk_alloc::end_phase();
+    result
 }
 
 fn prove_and_verify() -> Result<(), impl Debug> {

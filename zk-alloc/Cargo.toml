@@ -1,0 +1,18 @@
+[package]
+name = "p3-zk-alloc"
+description = "Bump+reset arena allocator for ZK proving workloads"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+
+[target.'cfg(not(all(target_os = "linux", target_arch = "x86_64")))'.dependencies]
+libc = "0.2"
+
+[lints]
+workspace = true

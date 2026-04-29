@@ -17,7 +17,7 @@ use p3_poseidon1::Poseidon1Constants;
 use p3_poseidon1_air::VectorizedPoseidon1Air;
 use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{StarkConfig, prove, verify};
-#[cfg(target_family = "unix")]
+#[cfg(all(target_family = "unix", not(feature = "zk-alloc")))]
 use tikv_jemallocator::Jemalloc;
 use tracing_forest::ForestLayer;
 use tracing_forest::util::LevelFilter;
@@ -25,9 +25,13 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-#[cfg(target_family = "unix")]
+#[cfg(feature = "zk-alloc")]
 #[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
+static GLOBAL: p3_zk_alloc::ZkAllocator = p3_zk_alloc::ZkAllocator;
+
+#[cfg(all(target_family = "unix", not(feature = "zk-alloc")))]
+#[global_allocator]
+static GLOBAL_JE: Jemalloc = Jemalloc;
 
 // Poseidon1 parameters for BabyBear width 16.
 const WIDTH: usize = 16;
@@ -62,12 +66,14 @@ fn main() -> Result<(), impl Debug> {
         .with(ForestLayer::default())
         .init();
 
-    // Run multiple prove-verify cycles to warm up and benchmark.
-    const PROOFS: usize = 2;
-    for _ in 1..PROOFS {
-        prove_and_verify()?;
-    }
-    prove_and_verify()
+    prove_and_verify()?;
+
+    #[cfg(feature = "zk-alloc")]
+    p3_zk_alloc::begin_phase();
+    let result = prove_and_verify();
+    #[cfg(feature = "zk-alloc")]
+    p3_zk_alloc::end_phase();
+    result
 }
 
 /// Run one complete prove-verify cycle.
