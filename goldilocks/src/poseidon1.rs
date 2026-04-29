@@ -923,8 +923,7 @@ mod tests {
     extern crate std;
 
     use alloc::format;
-    use alloc::string::String;
-    use alloc::string::ToString;
+    use alloc::string::{String, ToString};
     use alloc::vec::Vec;
     use std::path::PathBuf;
     use std::process::Command;
