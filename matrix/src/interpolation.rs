@@ -943,8 +943,6 @@ mod tests {
 
     #[test]
     fn test_interpolate_arbitrary_extension_point() {
-        // Same quadratic as `test_interpolate_arbitrary_known_quadratic`, but with the target
-        // point taken from EF4 to exercise the `EF: ExtensionField<F>` generic.
         // f(x) = x^2 + 2x + 3, evaluated at x = 0, 1, 2.
         let xs = [F::from_u32(0), F::from_u32(1), F::from_u32(2)];
         let evals = RowMajorMatrix::new(vec![F::from_u32(3), F::from_u32(6), F::from_u32(11)], 1);
