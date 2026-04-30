@@ -8,8 +8,8 @@ use p3_util::log2_ceil_u64;
 use tracing::instrument;
 
 use crate::{
-    CanFinalizeDigest, CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger,
-    HashChallenger,
+    CanFinalizeDigest, CanObserve, CanSample, CanSampleBits, CanSampleUniformBits, FieldChallenger,
+    GrindingChallenger, HashChallenger, ResamplingError,
 };
 
 /// Given a challenger that can observe and sample bytes, produces a challenger that is able to
@@ -168,6 +168,23 @@ where
     }
 }
 
+/// The inner challenger draws uniform bytes (cryptographic hash output), so
+/// taking the low `bits` of a `u32` assembled from those bytes is exactly
+/// uniform on `[0, 2^bits)`. No field-side rejection is required and the
+/// `RESAMPLE` flag is irrelevant — sampling never errors.
+impl<F, Inner> CanSampleUniformBits<F> for SerializingChallenger32<F, Inner>
+where
+    F: PrimeField32,
+    Inner: CanSample<u8>,
+{
+    fn sample_uniform_bits<const RESAMPLE: bool>(
+        &mut self,
+        bits: usize,
+    ) -> Result<usize, ResamplingError> {
+        Ok(self.sample_bits(bits))
+    }
+}
+
 impl<F, Inner> GrindingChallenger for SerializingChallenger32<F, Inner>
 where
     F: PrimeField32,
@@ -322,6 +339,22 @@ where
         assert!((1u64 << bits) <= F::ORDER_U64);
         let rand_u64 = u64::from_le_bytes(self.inner.sample_array());
         (rand_u64 & ((1u64 << bits) - 1)) as usize
+    }
+}
+
+/// See [`CanSampleUniformBits`] for `SerializingChallenger32` — the same
+/// reasoning applies here: uniform inner bytes give uniform low bits with
+/// no field-side rejection.
+impl<F, Inner> CanSampleUniformBits<F> for SerializingChallenger64<F, Inner>
+where
+    F: PrimeField64,
+    Inner: CanSample<u8>,
+{
+    fn sample_uniform_bits<const RESAMPLE: bool>(
+        &mut self,
+        bits: usize,
+    ) -> Result<usize, ResamplingError> {
+        Ok(self.sample_bits(bits))
     }
 }
 
