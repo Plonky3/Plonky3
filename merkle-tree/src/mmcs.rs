@@ -485,8 +485,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         // Phase 1: Restore the full (unpruned) authentication paths from
         // the compact representation. This copies shared upper siblings
         // from each predecessor in a single forward pass.
-        let restored =
-            restore_paths(&pruned_opening.pruned_proof).ok_or(MalformedPrunedProof)?;
+        let restored = restore_paths(&pruned_opening.pruned_proof).ok_or(MalformedPrunedProof)?;
 
         // The number of restored paths must match the number of query openings.
         if restored.len() != pruned_opening.opened_values.len() {
