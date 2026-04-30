@@ -213,7 +213,9 @@ pub(super) fn pack_lanes<const WIDTH: usize>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
+    use alloc::vec::Vec;
+
     use p3_field::{PrimeCharacteristicRing, PrimeField64};
     use proptest::prelude::*;
 
@@ -226,6 +228,47 @@ mod tests {
         F::new(x).as_canonical_u64()
     }
 
+    /// Boundary u64s probed against every scalar ASM op.
+    pub const EDGE_VALUES: &[u64] = &[
+        0,
+        1,
+        2,
+        EPSILON - 1,
+        EPSILON,
+        EPSILON + 1,
+        1u64 << 31,
+        (1u64 << 32) + 1,
+        1u64 << 33,
+        1u64 << 63,
+        P - 2,
+        P - 1, // largest canonical
+        P,     // smallest non-canonical (= 0 mod P)
+        P + 1,
+        P + 2,
+        18_446_744_069_605_983_184, // PR #1580 regression input a
+        18_446_744_073_709_551_599, // PR #1580 regression input b
+        u64::MAX - 1,
+        u64::MAX, // largest non-canonical
+    ];
+
+    /// Strategy biased toward the non-canonical band.
+    pub fn danger_u64() -> impl Strategy<Value = u64> {
+        prop_oneof![
+            prop::sample::select(EDGE_VALUES.to_vec()),
+            P..u64::MAX,
+            P..=P.saturating_add(EPSILON - 1),
+            any::<u64>(),
+        ]
+    }
+
+    /// Length-`WIDTH` array of danger-band u64s.
+    pub fn danger_array<const WIDTH: usize>() -> impl Strategy<Value = [u64; WIDTH]> {
+        prop::collection::vec(danger_u64(), WIDTH).prop_map(|v: Vec<u64>| {
+            v.try_into()
+                .expect("prop::collection::vec produces exactly WIDTH elements")
+        })
+    }
+
     #[test]
     fn test_add_asm_large_values() {
         let a: u64 = 18_446_744_069_605_983_184; // = p + 191_398_863
@@ -235,6 +278,55 @@ mod tests {
 
         let got = canon(unsafe { add_asm(a, b) });
         assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn test_add_asm_edge_pairs() {
+        for &a in EDGE_VALUES {
+            for &b in EDGE_VALUES {
+                let expected = (F::new(a) + F::new(b)).as_canonical_u64();
+                let got = canon(unsafe { add_asm(a, b) });
+                assert_eq!(got, expected, "add({a}, {b})");
+            }
+        }
+    }
+
+    #[test]
+    fn test_mul_asm_edge_pairs() {
+        for &a in EDGE_VALUES {
+            for &b in EDGE_VALUES {
+                let expected = (F::new(a) * F::new(b)).as_canonical_u64();
+                let got = canon(unsafe { mul_asm(a, b) });
+                assert_eq!(got, expected, "mul({a}, {b})");
+            }
+        }
+    }
+
+    #[test]
+    fn test_mul_add_asm_edge_triples() {
+        for &a in EDGE_VALUES {
+            for &b in EDGE_VALUES {
+                for &c in EDGE_VALUES {
+                    let expected = (F::new(a) * F::new(b) + F::new(c)).as_canonical_u64();
+                    let got = canon(unsafe { mul_add_asm(a, b, c) });
+                    assert_eq!(got, expected, "mul_add({a}, {b}, {c})");
+                }
+            }
+        }
+    }
+
+    /// Repeated accumulation drives intermediate values deep into the non-canonical band.
+    ///
+    /// The canonical end result must still match.
+    #[test]
+    fn test_add_asm_chained_accumulation() {
+        let mut acc_asm: u64 = P - 1;
+        let mut acc_ref = F::new(P - 1);
+        for _ in 0..1000 {
+            acc_asm = unsafe { add_asm(acc_asm, P - 1) };
+            acc_ref += F::new(P - 1);
+        }
+        assert_eq!(canon(acc_asm), acc_ref.as_canonical_u64());
     }
 
     proptest! {
@@ -261,6 +353,32 @@ mod tests {
         /// Verify ASM fused multiply-add against field multiply-add.
         #[test]
         fn test_mul_add_asm(a: u64, b: u64, c: u64) {
+            let expected = (F::new(a) * F::new(b) + F::new(c)).as_canonical_u64();
+            let got = canon(unsafe { mul_add_asm(a, b, c) });
+            prop_assert_eq!(got, expected);
+        }
+
+        /// Same checks, biased toward the non-canonical band.
+        #[test]
+        fn test_add_asm_danger(a in danger_u64(), b in danger_u64()) {
+            let expected = (F::new(a) + F::new(b)).as_canonical_u64();
+            let got = canon(unsafe { add_asm(a, b) });
+            prop_assert_eq!(got, expected);
+        }
+
+        #[test]
+        fn test_mul_asm_danger(a in danger_u64(), b in danger_u64()) {
+            let expected = (F::new(a) * F::new(b)).as_canonical_u64();
+            let got = canon(unsafe { mul_asm(a, b) });
+            prop_assert_eq!(got, expected);
+        }
+
+        #[test]
+        fn test_mul_add_asm_danger(
+            a in danger_u64(),
+            b in danger_u64(),
+            c in danger_u64(),
+        ) {
             let expected = (F::new(a) * F::new(b) + F::new(c)).as_canonical_u64();
             let got = canon(unsafe { mul_add_asm(a, b, c) });
             prop_assert_eq!(got, expected);

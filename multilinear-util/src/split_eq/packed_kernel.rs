@@ -77,11 +77,9 @@ use core::mem::MaybeUninit;
 
 use itertools::Itertools;
 use p3_field::{
-    BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
+    Algebra, BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue,
     PrimeCharacteristicRing, dot_product,
 };
-
-use crate::poly::Poly;
 
 /// SIMD kernel for the packed high-eq dot product.
 ///
@@ -116,7 +114,7 @@ use crate::poly::Poly;
 pub(super) fn compress_hi_dot_packed<F, EF>(
     eq1_packed: &[EF::ExtensionPacking],
     chunk: &[F],
-    eq0: &Poly<EF>,
+    eq0: &[EF],
 ) -> EF
 where
     F: Field,
@@ -138,11 +136,11 @@ where
     // with a generic message; this assertion names the invariant.
     debug_assert_eq!(
         chunk_packed.len(),
-        n * eq0.as_slice().len(),
+        n * eq0.len(),
         "chunk must hold |eq0| * N * W base-field elements \
          (got {} packed, expected {} = N * |eq0|)",
         chunk_packed.len(),
-        n * eq0.as_slice().len(),
+        n * eq0.len(),
     );
 
     // Fast-path guard: stack transpose needs bounded `N`.
@@ -170,7 +168,7 @@ where
     //     - used when the fast-path constraints do not hold.
     let sum: EF::ExtensionPacking = chunk_packed
         .chunks_exact(n)
-        .zip_eq(eq0.as_slice())
+        .zip_eq(eq0)
         .map(|(piece, &w0)| {
             dot_product::<EF::ExtensionPacking, _, _>(
                 eq1_packed.iter().copied(),
@@ -236,7 +234,7 @@ const MAX_STACK_N: usize = 128;
 fn basis_split_dot<F, EF, const D: usize>(
     eq1_packed: &[EF::ExtensionPacking],
     chunk_packed: &[F::Packing],
-    eq0: &Poly<EF>,
+    eq0: &[EF],
     n: usize,
 ) -> EF
 where
@@ -276,35 +274,13 @@ where
     // One pass over `i` drives all `D` coefficient accumulators,
     // reusing a single load of each right-hand block per step.
     let mut acc = EF::ExtensionPacking::ZERO;
-    for (j, w0) in eq0.as_slice().iter().enumerate() {
+    for (j, w0) in eq0.iter().enumerate() {
         // Right-hand side for row `j`: `n` packed base-field blocks.
         let piece = &chunk_packed[j * n..(j + 1) * n];
 
-        // `D` independent accumulators, one per basis coefficient.
-        // Small const-D array: LLVM promotes to scalar registers.
-        let mut a = [F::Packing::ZERO; D];
-
-        // Main loop: `D` `dot_product_4` calls per step.
-        //     - `D` independent accumulator chains,
-        //     - one Montgomery reduction per four multiplies.
-        let mut i = 0;
-        while i + CHUNK <= n {
-            let rhs: &[F::Packing; CHUNK] = (&piece[i..i + CHUNK]).try_into().unwrap();
-            for k in 0..D {
-                let l: &[F::Packing; CHUNK] = (&cs[k][i..i + CHUNK]).try_into().unwrap();
-                a[k] += F::Packing::dot_product::<CHUNK>(l, rhs);
-            }
-            i += CHUNK;
-        }
-
-        // Scalar tail: sweep up the `n mod CHUNK` trailing positions.
-        while i < n {
-            let p = piece[i];
-            for k in 0..D {
-                a[k] += cs[k][i] * p;
-            }
-            i += 1;
-        }
+        // Per-coefficient delayed-reduction dot product against `piece`.
+        // Returns the D-coefficient F::Packing array.
+        let a = packed_basis_dot::<F, D>(&cs, piece);
 
         // - Reassemble into a packed extension element,
         // - Weight by the scalar from `eq0`,
@@ -319,8 +295,339 @@ where
     EF::ExtensionPacking::to_ext_iter([acc]).sum()
 }
 
+/// Const-generic inner kernel for the prefix-fold packed-output path.
+///
+/// # Caller invariants
+///
+/// - `D == EF::DIMENSION`,
+/// - `F::Packing::WIDTH % CHUNK == 0`,
+/// - `eq1_packed.len() <= MAX_STACK_N` (bounds the pre-multiply stack buffer).
+fn compress_prefix_to_packed_packed_kernel<F, EF, const D: usize>(
+    out: &mut [EF::ExtensionPacking],
+    eq1_packed: &[EF::ExtensionPacking],
+    chunk: &[F],
+    w0: EF,
+) where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    let n_packed = eq1_packed.len();
+    let packed_inner = out.len();
+    let w = F::Packing::WIDTH;
+
+    // CHUNK divides W: every batch of CHUNK lanes stays inside one w_idx.
+    //
+    // So the gathered scalar weights all come from the same packed entry.
+    debug_assert!(
+        w.is_multiple_of(CHUNK),
+        "W = {w} must be a multiple of CHUNK = {CHUNK}"
+    );
+    debug_assert!(
+        n_packed <= MAX_STACK_N,
+        "n_packed = {n_packed} must fit in the stack-resident pre-multiply buffer (MAX_STACK_N = {MAX_STACK_N})"
+    );
+    let lane_batches = w / CHUNK;
+
+    // View the base-field row as packed rows, indexed by (w_idx, lane).
+    //
+    //     chunk_packed[(w_idx * W + lane) * packed_inner + i_pkt]
+    //         packs   chunk[(w_idx * W + lane) * packed_inner * W + i_pkt * W..]
+    let chunk_packed = F::Packing::pack_slice(chunk);
+    debug_assert_eq!(chunk_packed.len(), n_packed * w * packed_inner);
+
+    // Phase 0: pre-multiply each eq1 slot by w0 once.
+    //
+    //     pw[w_idx] = eq1_packed[w_idx] * w0     (depends only on w_idx)
+    //
+    // - Without this pre-pass: recomputed once per tile per w_idx.
+    // - With it: recomputed once per w_idx total.
+    // - Buffer is stack-resident; only the first n_packed slots are written.
+    let mut pw_buf = [const { MaybeUninit::uninit() }; MAX_STACK_N];
+    for (slot, &eq1_i) in pw_buf.iter_mut().zip(eq1_packed.iter()) {
+        slot.write(eq1_i * w0);
+    }
+    // SAFETY: The loop above wrote exactly:
+    // - the first `n_packed` slots,
+    // - we expose only that prefix,
+    // - the buffer is not aliased,
+    // - `MaybeUninit<T>` shares layout and alignment with `T`.
+    let pw: &[EF::ExtensionPacking] = unsafe {
+        core::slice::from_raw_parts(pw_buf.as_ptr().cast::<EF::ExtensionPacking>(), n_packed)
+    };
+
+    // Phase 1: outer tile over output positions.
+    //
+    // Each tile keeps `TILE * D` per-coefficient accumulators in registers
+    // and only commits them to the output buffer at tile end.
+    let mut tile_start = 0;
+    while tile_start < packed_inner {
+        let tile_len = TILE.min(packed_inner - tile_start);
+        let mut acc = [[F::Packing::ZERO; D]; TILE];
+
+        // Phase 2: walk every (w_idx, lane) pair contributing to the tile.
+        for w_idx in 0..n_packed {
+            // Pull the pre-multiplied weight from the buffer;
+            //
+            // No redundant packed-extension multiply per tile.
+            let pw_coefs = pw[w_idx].as_basis_coefficients_slice();
+
+            for batch in 0..lane_batches {
+                let lane_start = batch * CHUNK;
+
+                // Pre-extract the CHUNK scalar weights per coefficient
+                // by reading the matching lanes of the packed coefficient.
+                let scalars: [[F; CHUNK]; D] = core::array::from_fn(|k| {
+                    let coef_lanes = pw_coefs[k].as_slice();
+                    core::array::from_fn(|c| coef_lanes[lane_start + c])
+                });
+
+                // Per output position in the tile:
+                //   - gather CHUNK packed values from chunk_packed,
+                //   - run D delayed-reduction dot products over them.
+                for (t, acc_t) in acc[..tile_len].iter_mut().enumerate() {
+                    let i_pkt = tile_start + t;
+                    let packed_vals: [F::Packing; CHUNK] = core::array::from_fn(|c| {
+                        chunk_packed[(w_idx * w + lane_start + c) * packed_inner + i_pkt]
+                    });
+                    for (k, acc_tk) in acc_t.iter_mut().enumerate() {
+                        *acc_tk +=
+                            F::Packing::mixed_dot_product::<CHUNK>(&packed_vals, &scalars[k]);
+                    }
+                }
+            }
+        }
+
+        // Phase 3: fold each per-output accumulator into the output buffer.
+        for (t, acc_t) in acc[..tile_len].iter().enumerate() {
+            out[tile_start + t] += EF::ExtensionPacking::from_basis_coefficients_fn(|k| acc_t[k]);
+        }
+
+        tile_start += TILE;
+    }
+}
+
+/// Eager fallback for the prefix-fold packed-output path.
+///
+/// # Behaviour
+///
+/// - One Montgomery reduction per inner multiply.
+/// - No basis split, no tiling.
+///
+/// # When this runs
+///
+/// - `EF::DIMENSION` outside `1..=8`, or
+/// - `F::Packing::WIDTH % CHUNK != 0`.
+fn compress_prefix_to_packed_packed_kernel_eager<F, EF>(
+    out: &mut [EF::ExtensionPacking],
+    eq1_packed: &[EF::ExtensionPacking],
+    chunk: &[F],
+    w0: EF,
+) where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    // Empty output is a no-op:
+    //
+    // - With no output slots, the inner stride collapses to zero.
+    // - Iterating the row in zero-sized chunks panics.
+    // - Bail before that step.
+    if out.is_empty() {
+        return;
+    }
+
+    let scalar_inner = out.len() * F::Packing::WIDTH;
+    chunk
+        .chunks(scalar_inner * F::Packing::WIDTH)
+        .zip_eq(eq1_packed.iter())
+        .for_each(|(chunk, &w1)| {
+            chunk
+                .chunks(scalar_inner)
+                .zip_eq(EF::ExtensionPacking::to_ext_iter([w1 * w0]))
+                .for_each(|(chunk, w)| {
+                    let w = EF::ExtensionPacking::from(w);
+                    let chunk = F::Packing::pack_slice(chunk);
+                    out.iter_mut()
+                        .zip_eq(chunk.iter())
+                        .for_each(|(acc, &f)| *acc += w * f);
+                });
+        });
+}
+
+/// SIMD kernel for the prefix-fold accumulation into a packed output.
+///
+/// # Arguments
+///
+/// - `out`: packed accumulator buffer of length `packed_inner`.
+/// - `eq1_packed`: packed extension-field row of length `n_packed`.
+/// - `chunk`: base-field row of `n_packed * W` per-lane sub-rows of
+///   `packed_inner * W` elements each, where `W` is the base-field
+///   packing width.
+/// - `w0`: scalar extension-field weight applied to every eq1 lane.
+///
+/// # Effect
+///
+/// ```text
+///     out[i_pkt] += sum_{w_idx, lane}
+///         (eq1_packed[w_idx] * w0).lane[lane]
+///         * F::Packing(chunk[(w_idx * W + lane) * packed_inner * W + i_pkt * W..])
+/// ```
+///
+/// # Algorithm
+///
+/// Two code paths, selected per call.
+///
+/// ## Fast path
+///
+/// Conditions:
+///
+/// - `EF::DIMENSION ∈ {1, …, 8}`,
+/// - `W % CHUNK == 0`,
+/// - `n_packed <= MAX_STACK_N`.
+///
+/// What it does:
+///
+/// - Basis split + delayed Montgomery reduction.
+/// - Tiling over output positions.
+/// - One const-generic monomorphisation per supported `D`.
+///
+/// ## Eager fallback
+///
+/// - Used when any fast-path condition fails.
+/// - One full packed-extension multiply per inner step.
+///
+/// # Panics
+///
+/// - `chunk.len()` is not a multiple of the base-field packing width, or
+/// - `chunk.len() < n_packed * W * packed_inner * W`.
+pub(super) fn compress_prefix_to_packed_packed<F, EF>(
+    out: &mut [EF::ExtensionPacking],
+    eq1_packed: &[EF::ExtensionPacking],
+    chunk: &[F],
+    w0: EF,
+) where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    if F::Packing::WIDTH.is_multiple_of(CHUNK) && eq1_packed.len() <= MAX_STACK_N {
+        match EF::DIMENSION {
+            1 => {
+                compress_prefix_to_packed_packed_kernel::<F, EF, 1>(out, eq1_packed, chunk, w0);
+                return;
+            }
+            2 => {
+                compress_prefix_to_packed_packed_kernel::<F, EF, 2>(out, eq1_packed, chunk, w0);
+                return;
+            }
+            3 => {
+                compress_prefix_to_packed_packed_kernel::<F, EF, 3>(out, eq1_packed, chunk, w0);
+                return;
+            }
+            4 => {
+                compress_prefix_to_packed_packed_kernel::<F, EF, 4>(out, eq1_packed, chunk, w0);
+                return;
+            }
+            5 => {
+                compress_prefix_to_packed_packed_kernel::<F, EF, 5>(out, eq1_packed, chunk, w0);
+                return;
+            }
+            6 => {
+                compress_prefix_to_packed_packed_kernel::<F, EF, 6>(out, eq1_packed, chunk, w0);
+                return;
+            }
+            7 => {
+                compress_prefix_to_packed_packed_kernel::<F, EF, 7>(out, eq1_packed, chunk, w0);
+                return;
+            }
+            8 => {
+                compress_prefix_to_packed_packed_kernel::<F, EF, 8>(out, eq1_packed, chunk, w0);
+                return;
+            }
+            _ => {}
+        }
+    }
+    compress_prefix_to_packed_packed_kernel_eager::<F, EF>(out, eq1_packed, chunk, w0);
+}
+
+/// Tile size in output positions for the prefix-fold packed kernel.
+///
+/// # Why this value
+///
+/// - Holds `TILE * D` per-coefficient accumulators in scalar registers.
+/// - Lets the inner loop become throughput-bound on the dot primitive.
+/// - Keeps the touched output slice in L1 across one tile.
+///
+/// Stack footprint per call:
+///
+/// ```text
+///     TILE * D * sizeof(F::Packing)
+///         = 8 * 8 * 64 B = 4 KiB on AVX-512 (D = 8, packing width 16)
+///         = 8 * 4 * 16 B = 512 B on NEON    (D = 4, packing width  4)
+/// ```
+const TILE: usize = 8;
+
+/// Per-coefficient delayed-reduction dot product.
+///
+/// # Returns
+///
+/// A `D`-coefficient `F::Packing` array, where coefficient `k` holds
+///
+/// ```text
+///     sum_i cs[k][i] * rhs[i].
+/// ```
+///
+/// # Algorithm
+///
+/// - Main loop: `D` independent dot products on aligned blocks of
+///   `CHUNK` items, one Montgomery reduction per block per coefficient.
+/// - Scalar tail: sweeps the `n mod CHUNK` trailing positions.
+///
+/// # Caller invariants
+///
+/// - `cs[k].len() == rhs.len()` for every `k`.
+#[inline]
+fn packed_basis_dot<F, const D: usize>(
+    cs: &[&[F::Packing]; D],
+    rhs: &[F::Packing],
+) -> [F::Packing; D]
+where
+    F: Field,
+{
+    let n = rhs.len();
+
+    // `D` independent accumulators, one per basis coefficient.
+    //
+    // Small const-D array: LLVM promotes to scalar registers.
+    let mut a = [F::Packing::ZERO; D];
+
+    // Main loop: `D` `dot_product_<CHUNK>` calls per step.
+    //     - `D` independent accumulator chains,
+    //     - one Montgomery reduction per `CHUNK` multiplies,
+    //     - one shared load of the `rhs` CHUNK across all `D`.
+    let mut i = 0;
+    while i + CHUNK <= n {
+        let rhs_chunk: &[F::Packing; CHUNK] = (&rhs[i..i + CHUNK]).try_into().unwrap();
+        for k in 0..D {
+            let l: &[F::Packing; CHUNK] = (&cs[k][i..i + CHUNK]).try_into().unwrap();
+            a[k] += F::Packing::dot_product::<CHUNK>(l, rhs_chunk);
+        }
+        i += CHUNK;
+    }
+
+    // Scalar tail: sweep up the `n mod CHUNK` trailing positions.
+    while i < n {
+        let p = rhs[i];
+        for k in 0..D {
+            a[k] += cs[k][i] * p;
+        }
+        i += 1;
+    }
+
+    a
+}
+
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
@@ -330,6 +637,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::poly::Poly;
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
@@ -389,7 +697,7 @@ mod tests {
 
             // Kernel and naive reference on the same inputs.
             prop_assert_eq!(
-                compress_hi_dot_packed::<F, EF>(&eq1, &chunk, &eq0),
+                compress_hi_dot_packed::<F, EF>(&eq1, &chunk, eq0.as_slice()),
                 reference(&eq1, &chunk, &eq0),
             );
         }
@@ -410,7 +718,7 @@ mod tests {
 
             // Both sides feed the same inputs to their respective path.
             prop_assert_eq!(
-                compress_hi_dot_packed::<F, EF>(&eq1, &chunk, &eq0),
+                compress_hi_dot_packed::<F, EF>(&eq1, &chunk, eq0.as_slice()),
                 reference(&eq1, &chunk, &eq0),
             );
         }
@@ -425,7 +733,7 @@ mod tests {
         //     eq1   = []
         //     chunk = []
         //     eq0   = [0, 0]
-        let eq0 = Poly::<EF>::new([EF::ZERO, EF::ZERO].to_vec());
+        let eq0 = [EF::ZERO, EF::ZERO];
 
         // Expected: empty fold returns the additive identity.
         assert_eq!(compress_hi_dot_packed::<F, EF>(&[], &[], &eq0), EF::ZERO,);
@@ -446,10 +754,198 @@ mod tests {
 
             // Kernel must match the naive reference at every residue.
             assert_eq!(
-                compress_hi_dot_packed::<F, EF>(&eq1, &chunk, &eq0),
+                compress_hi_dot_packed::<F, EF>(&eq1, &chunk, eq0.as_slice()),
                 reference(&eq1, &chunk, &eq0),
                 "mismatch at n = {n}",
             );
         }
+    }
+
+    /// Builds random inputs for the prefix-fold packed-output kernel.
+    ///
+    /// Shape:
+    ///
+    /// - `n_packed`: packed eq1 entries.
+    /// - `packed_inner`: packed output positions.
+    /// - `chunk` length: `n_packed * W * packed_inner * W` scalars.
+    fn random_prefix_inputs(
+        n_packed: usize,
+        packed_inner: usize,
+        seed: u64,
+    ) -> (Vec<PackedEF>, Vec<F>, EF) {
+        // Number of base-field lanes per SIMD packing.
+        let w = PF::WIDTH;
+        // One RNG seeded per shape gives reproducible inputs.
+        let mut rng = SmallRng::seed_from_u64(seed);
+
+        // Packed eq1 row: one PackedEF per slot.
+        let eq1: Vec<PackedEF> = (0..n_packed).map(|_| rng.random()).collect();
+        // Chunk layout: `n_packed * W` per-lane sub-rows, each of length
+        // `packed_inner * W` base-field elements.
+        let chunk: Vec<F> = (0..n_packed * w * packed_inner * w)
+            .map(|_| rng.random())
+            .collect();
+        // Outer scalar weight applied to every eq1 lane.
+        let w0: EF = rng.random();
+
+        (eq1, chunk, w0)
+    }
+
+    proptest! {
+        #[test]
+        fn prefix_to_packed_kernel_matches_eager(
+            n_packed in 0usize..=8,
+            inner_k in 0usize..=5,
+            seed in any::<u64>(),
+        ) {
+            // Invariant: kernel output equals the eager fallback for
+            // every shape in the supported range.
+            //
+            // Fixture state:
+            //     n_packed   = 0..8 - covers the empty case + small N.
+            //     inner_k    = 0..5 - 1 to 32 packed output positions,
+            //                         covers multi-tile + the TILE = 8 boundary.
+            let packed_inner = 1usize << inner_k;
+            let (eq1, chunk, w0) = random_prefix_inputs(n_packed, packed_inner, seed);
+
+            let mut out_kernel = vec![PackedEF::ZERO; packed_inner];
+            let mut out_eager = vec![PackedEF::ZERO; packed_inner];
+
+            compress_prefix_to_packed_packed::<F, EF>(&mut out_kernel, &eq1, &chunk, w0);
+            compress_prefix_to_packed_packed_kernel_eager::<F, EF>(
+                &mut out_eager,
+                &eq1,
+                &chunk,
+                w0,
+            );
+
+            prop_assert_eq!(out_kernel, out_eager);
+        }
+    }
+
+    #[test]
+    fn prefix_to_packed_kernel_empty_out_does_not_panic() {
+        // Invariant: an empty output slice is a no-op on both paths.
+        //
+        // Fixture state:
+        //     n_packed     = 3        - eq1 sized as if the fast path would engage.
+        //     packed_inner = 0        - empty output short-circuits both kernels.
+        //     chunk        = []       - matches packed_inner = 0.
+        let mut rng = SmallRng::seed_from_u64(0xCAFE);
+        let mut out_fast: Vec<PackedEF> = Vec::new();
+        let mut out_eager: Vec<PackedEF> = Vec::new();
+
+        let eq1: Vec<PackedEF> = (0..3).map(|_| rng.random()).collect();
+        let chunk: Vec<F> = Vec::new();
+        let w0: EF = rng.random();
+
+        // Both calls must return cleanly without writing or panicking.
+        compress_prefix_to_packed_packed::<F, EF>(&mut out_fast, &eq1, &chunk, w0);
+        compress_prefix_to_packed_packed_kernel_eager::<F, EF>(&mut out_eager, &eq1, &chunk, w0);
+
+        // No slots → nothing was written.
+        assert!(out_fast.is_empty());
+        assert!(out_eager.is_empty());
+    }
+
+    #[test]
+    fn prefix_to_packed_kernel_empty_eq1_is_noop() {
+        // Invariant: empty eq1 -> empty sum -> out unchanged.
+        //
+        // Fixture state:
+        //     n_packed     = 0
+        //     packed_inner = 4
+        //     out          = [random PackedEF; 4]
+        let mut rng = SmallRng::seed_from_u64(0xFEED);
+        let initial: Vec<PackedEF> = (0..4).map(|_| rng.random()).collect();
+        let mut out = initial.clone();
+
+        compress_prefix_to_packed_packed::<F, EF>(&mut out, &[], &[], rng.random());
+
+        // Out should be byte-for-byte identical: nothing to add.
+        for (a, b) in out.iter().zip(initial.iter()) {
+            assert_eq!(a, b);
+        }
+    }
+
+    #[test]
+    fn prefix_to_packed_kernel_zero_w0_is_noop() {
+        // Invariant: w0 = 0 -> every (eq1[i] * w0) = 0 -> out unchanged,
+        // regardless of eq1 and chunk shape.
+        //
+        // Fixture state:
+        //     n_packed     = 4
+        //     packed_inner = 8         - exactly one TILE.
+        //     w0           = EF::ZERO
+        let (eq1, chunk, _) = random_prefix_inputs(4, 8, 0xBEEF);
+        let mut rng = SmallRng::seed_from_u64(0xBEEF + 1);
+        let initial: Vec<PackedEF> = (0..8).map(|_| rng.random()).collect();
+        let mut out = initial.clone();
+
+        compress_prefix_to_packed_packed::<F, EF>(&mut out, &eq1, &chunk, EF::ZERO);
+
+        for (a, b) in out.iter().zip(initial.iter()) {
+            assert_eq!(a, b);
+        }
+    }
+
+    #[test]
+    fn prefix_to_packed_kernel_partial_tile() {
+        // Invariant: when packed_inner < TILE, the single-shorter-tile
+        // path matches the eager fallback exactly.
+        //
+        // Fixture state:
+        //     n_packed     = 3
+        //     packed_inner = 5         - one tile of length 5 (< TILE = 8).
+        let (eq1, chunk, w0) = random_prefix_inputs(3, 5, 0xC0DE);
+
+        let mut out_kernel = vec![PackedEF::ZERO; 5];
+        let mut out_eager = vec![PackedEF::ZERO; 5];
+
+        compress_prefix_to_packed_packed::<F, EF>(&mut out_kernel, &eq1, &chunk, w0);
+        compress_prefix_to_packed_packed_kernel_eager::<F, EF>(&mut out_eager, &eq1, &chunk, w0);
+
+        assert_eq!(out_kernel, out_eager);
+    }
+
+    #[test]
+    fn prefix_to_packed_kernel_multi_tile() {
+        // Invariant: multiple tiles (packed_inner > TILE) reduce
+        // identically to the eager fallback.
+        //
+        // Fixture state:
+        //     n_packed     = 4
+        //     packed_inner = 17        - two full tiles + one short tail.
+        let (eq1, chunk, w0) = random_prefix_inputs(4, 17, 0xC0FFEE);
+
+        let mut out_kernel = vec![PackedEF::ZERO; 17];
+        let mut out_eager = vec![PackedEF::ZERO; 17];
+
+        compress_prefix_to_packed_packed::<F, EF>(&mut out_kernel, &eq1, &chunk, w0);
+        compress_prefix_to_packed_packed_kernel_eager::<F, EF>(&mut out_eager, &eq1, &chunk, w0);
+
+        assert_eq!(out_kernel, out_eager);
+    }
+
+    #[test]
+    fn prefix_to_packed_kernel_accumulates_into_out() {
+        // Invariant: the kernel ADDS to `out`, it does not overwrite —
+        // matching the eager fallback's `*acc += w * f` semantics.
+        //
+        // Fixture state:
+        //     n_packed     = 2
+        //     packed_inner = 8
+        //     initial out  = nonzero random
+        let (eq1, chunk, w0) = random_prefix_inputs(2, 8, 0xDEAD);
+        let mut rng = SmallRng::seed_from_u64(0xDEAD + 1);
+        let initial: Vec<PackedEF> = (0..8).map(|_| rng.random()).collect();
+
+        let mut out_kernel = initial.clone();
+        let mut out_eager = initial;
+
+        compress_prefix_to_packed_packed::<F, EF>(&mut out_kernel, &eq1, &chunk, w0);
+        compress_prefix_to_packed_packed_kernel_eager::<F, EF>(&mut out_eager, &eq1, &chunk, w0);
+
+        assert_eq!(out_kernel, out_eager);
     }
 }

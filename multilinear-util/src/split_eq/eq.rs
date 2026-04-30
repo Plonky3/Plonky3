@@ -18,7 +18,7 @@ use itertools::Itertools;
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
 use p3_util::log2_strict_usize;
 
-use super::packed_kernel::compress_hi_dot_packed;
+use super::packed_kernel::{compress_hi_dot_packed, compress_prefix_to_packed_packed};
 use crate::point::Point;
 use crate::poly::Poly;
 
@@ -293,29 +293,12 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
                             .for_each(|(acc, &f)| *acc += w * f);
                     });
             }
+            // Packed path: delegate to the SIMD kernel.
+            //     - basis split into D per-coefficient mixed dot products,
+            //     - one Montgomery reduction per CHUNK multiplies,
+            //     - tiled inner loop for ILP.
             Self::Packed(eq1) => {
-                // Inner size in scalar terms: out.len() packed elements * W scalars each.
-                let scalar_inner = out.len() * F::Packing::WIDTH;
-                // Outer chunk per packed eq1 entry: scalar_inner * W scalars
-                // (W lanes, each with scalar_inner scalars).
-                chunk
-                    .chunks(scalar_inner * F::Packing::WIDTH)
-                    .zip_eq(eq1.iter())
-                    .for_each(|(chunk, &w1)| {
-                        // Unpack into W lane weights; each lane gets scalar_inner scalars.
-                        chunk
-                            .chunks(scalar_inner)
-                            .zip_eq(EF::ExtensionPacking::to_ext_iter([w1 * w0]))
-                            .for_each(|(chunk, w)| {
-                                // Broadcast lane weight and pack the scalar sub-chunk.
-                                let w = EF::ExtensionPacking::from(w);
-                                let chunk = F::Packing::pack_slice(chunk);
-                                // Accumulate packed weighted values.
-                                out.iter_mut()
-                                    .zip_eq(chunk.iter())
-                                    .for_each(|(acc, &f)| *acc += w * f);
-                            });
-                    });
+                compress_prefix_to_packed_packed::<F, EF>(out, eq1.as_slice(), chunk, w0);
             }
         }
     }
@@ -351,7 +334,9 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
             //     - basis split into four per-coefficient dot products,
             //     - one Montgomery reduction per four multiplies,
             //     - interleaved inner loop for ILP.
-            Self::Packed(eq1) => compress_hi_dot_packed::<F, EF>(eq1.as_slice(), chunk, eq0),
+            Self::Packed(eq1) => {
+                compress_hi_dot_packed::<F, EF>(eq1.as_slice(), chunk, eq0.as_slice())
+            }
         }
     }
 }
