@@ -168,19 +168,29 @@ where
     }
 }
 
-/// The inner challenger draws uniform bytes (cryptographic hash output), so
-/// taking the low `bits` of a `u32` assembled from those bytes is exactly
-/// uniform on `[0, 2^bits)`. No field-side rejection is required and the
-/// `RESAMPLE` flag is irrelevant — sampling never errors.
 impl<F, Inner> CanSampleUniformBits<F> for SerializingChallenger32<F, Inner>
 where
     F: PrimeField32,
     Inner: CanSample<u8>,
 {
+    /// Sample uniform bits by masking bytes from the inner stream.
+    ///
+    /// # Overview
+    ///
+    /// The inner stream emits cryptographic-hash bytes uniform on `[0, 2^8)`.
+    ///
+    /// Reading 4 bytes as a 32-bit integer and masking the low `bits` is
+    /// exactly uniform on `[0, 2^bits)`.
+    ///
+    /// No field-element decomposition occurs, so no rejection band exists.
+    /// The const generic is therefore inert: this function never errors
+    /// and never resamples.
     fn sample_uniform_bits<const RESAMPLE: bool>(
         &mut self,
         bits: usize,
     ) -> Result<usize, ResamplingError> {
+        // Byte-sourced sampling is uniform without rejection, so the
+        // result is always valid and the error arm is unreachable.
         Ok(self.sample_bits(bits))
     }
 }
@@ -342,18 +352,29 @@ where
     }
 }
 
-/// See [`CanSampleUniformBits`] for `SerializingChallenger32` — the same
-/// reasoning applies here: uniform inner bytes give uniform low bits with
-/// no field-side rejection.
 impl<F, Inner> CanSampleUniformBits<F> for SerializingChallenger64<F, Inner>
 where
     F: PrimeField64,
     Inner: CanSample<u8>,
 {
+    /// Sample uniform bits by masking bytes from the inner stream.
+    ///
+    /// # Overview
+    ///
+    /// The inner stream emits cryptographic-hash bytes uniform on `[0, 2^8)`.
+    ///
+    /// Reading 8 bytes as a 64-bit integer and masking the low `bits` is
+    /// exactly uniform on `[0, 2^bits)`.
+    ///
+    /// No field-element decomposition occurs, so no rejection band exists.
+    /// The const generic is therefore inert: this function never errors
+    /// and never resamples.
     fn sample_uniform_bits<const RESAMPLE: bool>(
         &mut self,
         bits: usize,
     ) -> Result<usize, ResamplingError> {
+        // Byte-sourced sampling is uniform without rejection, so the
+        // result is always valid and the error arm is unreachable.
         Ok(self.sample_bits(bits))
     }
 }
