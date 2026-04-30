@@ -266,10 +266,6 @@ impl LogUpGadget {
 }
 
 impl LookupProtocol for LogUpGadget {
-    fn num_aux_cols(&self) -> usize {
-        1
-    }
-
     fn num_challenges(&self) -> usize {
         2
     }
@@ -381,7 +377,7 @@ impl LookupProtocol for LogUpGadget {
         challenges: &[SC::Challenge],
     ) -> RowMajorMatrix<SC::Challenge> {
         let height = main.height();
-        let width = self.num_aux_cols() * lookups.len();
+        let width = lookups.len();
 
         // Validate challenge count matches number of lookups.
         debug_assert_eq!(

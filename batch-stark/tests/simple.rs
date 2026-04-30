@@ -66,6 +66,10 @@ impl<F: Field> BaseAir<F> for FibonacciAir {
         }
         Some(m)
     }
+
+    fn preprocessed_width(&self) -> usize {
+        1
+    }
 }
 
 impl<AB: AirBuilder> Air<AB> for FibonacciAir
@@ -390,6 +394,10 @@ impl<F: Field> BaseAir<F> for FibAirLookups {
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         self.air.preprocessed_trace()
     }
+
+    fn preprocessed_width(&self) -> usize {
+        <FibonacciAir as BaseAir<F>>::preprocessed_width(&self.air)
+    }
 }
 
 impl<AB: PermutationAirBuilder + InteractionBuilder> Air<AB> for FibAirLookups {
@@ -440,6 +448,10 @@ impl<F: Field> BaseAir<F> for PreprocessedMulAir {
             *v = F::from_u64(i as u64);
         }
         Some(m)
+    }
+
+    fn preprocessed_width(&self) -> usize {
+        1
     }
 
     fn preprocessed_next_row_columns(&self) -> Vec<usize> {
@@ -671,6 +683,14 @@ impl<F: PrimeField64> BaseAir<F> for DemoAir {
         }
     }
 
+    fn preprocessed_width(&self) -> usize {
+        match self {
+            Self::Fib(a) => <FibonacciAir as BaseAir<F>>::preprocessed_width(a),
+            Self::Mul(a) => <MulAir as BaseAir<F>>::preprocessed_width(a),
+            Self::PreprocessedMul(a) => <PreprocessedMulAir as BaseAir<F>>::preprocessed_width(a),
+        }
+    }
+
     fn preprocessed_next_row_columns(&self) -> Vec<usize> {
         match self {
             Self::Fib(a) => <FibonacciAir as BaseAir<F>>::preprocessed_next_row_columns(a),
@@ -710,6 +730,13 @@ impl<F: Field> BaseAir<F> for DemoAirWithLookups {
         match self {
             Self::FibLookups(a) => <FibAirLookups as BaseAir<F>>::preprocessed_trace(a),
             Self::MulLookups(a) => <MulAirLookups as BaseAir<F>>::preprocessed_trace(a),
+        }
+    }
+
+    fn preprocessed_width(&self) -> usize {
+        match self {
+            Self::FibLookups(a) => <FibAirLookups as BaseAir<F>>::preprocessed_width(a),
+            Self::MulLookups(a) => <MulAirLookups as BaseAir<F>>::preprocessed_width(a),
         }
     }
 }

@@ -54,6 +54,9 @@ impl<F: Field> BaseAir<F> for FibonacciAir {
         }
         Some(m)
     }
+    fn preprocessed_width(&self) -> usize {
+        1
+    }
 }
 
 #[derive(Clone, Copy)]

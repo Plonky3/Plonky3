@@ -9,10 +9,10 @@ use crate::types::{Kind, Lookup, LookupData, LookupError};
 
 /// A lookup protocol that can evaluate constraints, generate permutation
 /// traces, and verify global sums.
+///
+/// Each lookup uses exactly one auxiliary column in the permutation trace,
+/// matching the single [`Lookup::column`] field.
 pub trait LookupProtocol {
-    /// Auxiliary columns per lookup (1 for LogUp).
-    fn num_aux_cols(&self) -> usize;
-
     /// Random challenges per lookup (2 for LogUp: `α`, `β`).
     fn num_challenges(&self) -> usize;
 
@@ -69,6 +69,14 @@ pub trait LookupProtocol {
         air.eval(builder);
         if !lookups.is_empty() {
             self.eval_all(builder, lookups);
+        } else {
+            // No lookups declared: catch the inconsistent case where the builder
+            // was nonetheless given permutation values to consume.
+            assert_eq!(
+                0,
+                builder.permutation_values().len(),
+                "permutation values count mismatch"
+            );
         }
     }
 }

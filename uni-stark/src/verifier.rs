@@ -178,8 +178,7 @@ where
     // - Otherwise, derive width from the AIR's preprocessed trace (if any).
     let preprocessed_width = preprocessed_vk
         .map(|vk| vk.width)
-        .or_else(|| air.preprocessed_trace().as_ref().map(|m| m.width))
-        .unwrap_or(0);
+        .unwrap_or_else(|| air.preprocessed_width());
 
     // Check that the proof's opened preprocessed values match the expected width.
     let preprocessed_local_len = opened_values

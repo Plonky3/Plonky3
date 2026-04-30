@@ -25,14 +25,13 @@ where
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
     LG: LookupProtocol,
 {
-    let num_aux_cols = contexts.len() * lookup_gadget.num_aux_cols();
     let num_challenges = contexts.len() * lookup_gadget.num_challenges();
     let num_permutation_values = contexts
         .iter()
         .filter(|c| matches!(&c.kind, Kind::Global(_)))
         .count();
     let layout = AirLayout {
-        permutation_width: num_aux_cols,
+        permutation_width: contexts.len(),
         num_permutation_challenges: num_challenges,
         num_permutation_values,
         ..layout
@@ -134,14 +133,13 @@ where
     LG: LookupProtocol,
 {
     let num_lookups = contexts.len();
-    let num_aux_cols = num_lookups * lookup_gadget.num_aux_cols();
     let num_challenges = num_lookups * lookup_gadget.num_challenges();
     let num_permutation_values = contexts
         .iter()
         .filter(|c| matches!(&c.kind, Kind::Global(_)))
         .count();
     let layout = AirLayout {
-        permutation_width: num_aux_cols,
+        permutation_width: num_lookups,
         num_permutation_challenges: num_challenges,
         num_permutation_values,
         ..layout

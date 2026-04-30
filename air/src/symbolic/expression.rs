@@ -93,16 +93,28 @@ impl<F: Field> SymbolicExpression<F> {
                     BaseEntry::Main { offset } => {
                         let main = builder.main();
                         match offset {
-                            0 => main.current(v.index).unwrap().into(),
-                            1 => main.next(v.index).unwrap().into(),
+                            0 => main
+                                .current(v.index)
+                                .expect("main column index out of bounds")
+                                .into(),
+                            1 => main
+                                .next(v.index)
+                                .expect("main column index out of bounds")
+                                .into(),
                             _ => panic!("expressions cannot span more than two rows"),
                         }
                     }
                     BaseEntry::Preprocessed { offset } => {
                         let prep = builder.preprocessed();
                         match offset {
-                            0 => prep.current(v.index).unwrap().into(),
-                            1 => prep.next(v.index).unwrap().into(),
+                            0 => prep
+                                .current(v.index)
+                                .expect("preprocessed column index out of bounds")
+                                .into(),
+                            1 => prep
+                                .next(v.index)
+                                .expect("preprocessed column index out of bounds")
+                                .into(),
                             _ => panic!("expressions cannot span more than two rows"),
                         }
                     }

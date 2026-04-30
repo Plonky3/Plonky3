@@ -42,7 +42,7 @@ impl AirLayout {
     /// Derive layout from an AIR's metadata.
     pub fn from_air<F: Clone + Send + Sync>(air: &impl BaseAir<F>) -> Self {
         Self {
-            preprocessed_width: air.preprocessed_trace().as_ref().map_or(0, |t| t.width()),
+            preprocessed_width: air.preprocessed_width(),
             main_width: air.width(),
             num_public_values: air.num_public_values(),
             num_periodic_columns: air.num_periodic_columns(),
