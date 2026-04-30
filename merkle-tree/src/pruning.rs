@@ -59,7 +59,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(serialize = "[D; DIGEST_ELEMS]: Serialize"))]
 #[serde(bound(deserialize = "[D; DIGEST_ELEMS]: serde::de::DeserializeOwned"))]
-pub struct MerkleAuthPath<D, const DIGEST_ELEMS: usize> {
+pub(crate) struct MerkleAuthPath<D, const DIGEST_ELEMS: usize> {
     /// Index of this leaf in the tree (0-based).
     pub leaf_index: usize,
 
@@ -68,25 +68,6 @@ pub struct MerkleAuthPath<D, const DIGEST_ELEMS: usize> {
     /// The count at each level is 2^shift - 1, where shift is the log_2
     /// of the compression arity at that level.
     pub siblings: Vec<[D; DIGEST_ELEMS]>,
-}
-
-impl<D: Clone, const DIGEST_ELEMS: usize> MerkleAuthPath<D, DIGEST_ELEMS> {
-    /// Returns the slice of siblings at a given tree level.
-    ///
-    /// The shift schedule describes log_2(arity) at each level.
-    /// This computes the flat-buffer offset and element count on the fly.
-    #[inline]
-    pub fn level_siblings(&self, level: usize, shift_schedule: &[u32]) -> &[[D; DIGEST_ELEMS]] {
-        // Compute where this level's siblings begin in the flat buffer
-        // and how many elements it spans.
-        //
-        //   Example: shift_schedule = [1, 2, 1] (binary, 4-ary, binary)
-        //     level 0 → offset 0, count 1   (1 binary sibling)
-        //     level 1 → offset 1, count 3   (3 quad siblings)
-        //     level 2 → offset 4, count 1   (1 binary sibling)
-        let (start, count) = level_offset_and_count(level, shift_schedule);
-        &self.siblings[start..start + count]
-    }
 }
 
 /// Compact representation of multiple Merkle authentication paths with
@@ -132,36 +113,8 @@ pub struct PrunedMerklePaths<D, const DIGEST_ELEMS: usize> {
 pub struct PrunedPath<D, const DIGEST_ELEMS: usize> {
     /// Leaf index in the original tree.
     pub leaf_index: usize,
-    /// How many complete levels are stored in the sibling buffer.
-    pub num_levels_stored: usize,
     /// Flat sibling digests for the first few levels only (below LCA).
     pub siblings: Vec<[D; DIGEST_ELEMS]>,
-}
-
-/// Computes the flat-buffer offset and element count for a given level.
-///
-/// Each level contributes 2^shift - 1 siblings.
-/// The offset is the sum of all preceding levels' counts.
-///
-/// # Returns
-///
-/// (byte offset into the flat sibling buffer, number of siblings at this level).
-#[inline]
-fn level_offset_and_count(level: usize, shift_schedule: &[u32]) -> (usize, usize) {
-    // Sum the sibling counts for all levels before the target.
-    // Each level contributes 2^shift - 1 siblings (arity minus the queried child).
-    //
-    //   Example: shift_schedule = [1, 2, 1], target level = 2
-    //     level 0: 2^1 - 1 = 1 sibling  → offset += 1
-    //     level 1: 2^2 - 1 = 3 siblings → offset += 3
-    //     → start offset = 4
-    let mut offset = 0;
-    for &shift in &shift_schedule[..level] {
-        offset += (1usize << shift) - 1;
-    }
-    // Sibling count at the target level.
-    let count = (1usize << shift_schedule[level]) - 1;
-    (offset, count)
 }
 
 /// Total number of sibling digests for the first few levels.
@@ -241,7 +194,7 @@ fn first_shared_level_generic(a: usize, b: usize, shift_schedule: &[u32]) -> usi
 /// - Binary trees: O(1) LCA via bitwise XOR (checked once, hoisted).
 /// - N-ary trees: O(h) LCA via shift loop per consecutive pair.
 /// - Sorting: lightweight u32 index array, not the full path structs.
-pub fn prune_paths<D, const DIGEST_ELEMS: usize>(
+pub(crate) fn prune_paths<D, const DIGEST_ELEMS: usize>(
     num_levels: usize,
     shift_schedule: &[u32],
     paths: &[MerkleAuthPath<D, DIGEST_ELEMS>],
@@ -340,7 +293,6 @@ where
 
         pruned_paths.push(PrunedPath {
             leaf_index: path.leaf_index,
-            num_levels_stored: keep,
             // Slice the flat buffer up to the computed boundary.
             siblings: path.siblings[..sibling_count].to_vec(),
         });
@@ -369,7 +321,7 @@ where
 ///
 /// Returns `None` if the number of levels is 64 or more (DoS prevention,
 /// since 2^64 leaves would require unbounded allocations).
-pub fn restore_paths<D, const DIGEST_ELEMS: usize>(
+pub(crate) fn restore_paths<D, const DIGEST_ELEMS: usize>(
     pruned: &PrunedMerklePaths<D, DIGEST_ELEMS>,
 ) -> Option<Vec<MerkleAuthPath<D, DIGEST_ELEMS>>>
 where
@@ -378,16 +330,26 @@ where
     let num_levels = pruned.num_levels;
     let n = pruned.paths.len();
 
+    // Reject trees deeper than 63 levels to prevent unbounded allocations.
+    // A depth-64 tree would have 2^64 leaves — clearly a DoS attempt.
+    //
+    // TODO: tighten this. 32-bit `usize` targets need depth < 32, and even
+    // on 64-bit, common field 2-adicities mean realistic proofs stay well
+    // below 32 levels — anything past that is suspicious.
+    if num_levels >= 64 {
+        return None;
+    }
+
+    // The shift schedule must cover every level claimed by the proof.
+    // A shorter schedule would slice-index past the end below.
+    if pruned.shift_schedule.len() != num_levels {
+        return None;
+    }
+
     // Compute how many sibling digests a complete (unpruned) path contains.
     //
     //   Example: shift_schedule = [1, 2, 1] → 1 + 3 + 1 = 5 siblings total
     let full_sibling_count = total_siblings_for_levels(num_levels, &pruned.shift_schedule);
-
-    // Reject trees deeper than 63 levels to prevent unbounded allocations.
-    // A depth-64 tree would have 2^64 leaves — clearly a DoS attempt.
-    if num_levels >= 64 {
-        return None;
-    }
 
     // Zero paths with zero queries is valid (empty proof).
     // Zero paths with nonzero queries is malformed.
@@ -447,20 +409,6 @@ where
         .collect()
 }
 
-// Metrics
-
-/// Total number of individual sibling digests across all pruned paths.
-///
-/// Compare against the unpruned total (paths * full sibling count)
-/// to measure the compression ratio.
-pub fn pruned_sibling_count<D, const DIGEST_ELEMS: usize>(
-    pruned: &PrunedMerklePaths<D, DIGEST_ELEMS>,
-) -> usize {
-    // Sum the flat sibling buffer lengths across all pruned paths.
-    // Compare this against (num_paths * full_sibling_count) for compression ratio.
-    pruned.paths.iter().map(|p| p.siblings.len()).sum()
-}
-
 // Tests
 
 #[cfg(test)]
@@ -471,6 +419,16 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    /// Total number of individual sibling digests across all pruned paths.
+    ///
+    /// Compare against the unpruned total (paths * full sibling count)
+    /// to measure the compression ratio.
+    fn pruned_sibling_count<D, const DIGEST_ELEMS: usize>(
+        pruned: &PrunedMerklePaths<D, DIGEST_ELEMS>,
+    ) -> usize {
+        pruned.paths.iter().map(|p| p.siblings.len()).sum()
+    }
 
     fn binary_shifts(h: usize) -> Vec<u32> {
         // All levels binary (arity 2 → shift 1).
@@ -627,43 +585,6 @@ mod tests {
         }
     }
 
-    // Level offset tests
-
-    #[test]
-    fn test_level_offset_binary() {
-        // Binary tree: 1 sibling per level.
-        //   level 0 → offset 0, count 1
-        //   level 1 → offset 1, count 1
-        //   level 2 → offset 2, count 1
-        //   level 3 → offset 3, count 1
-        let s = binary_shifts(4);
-        assert_eq!(level_offset_and_count(0, &s), (0, 1));
-        assert_eq!(level_offset_and_count(1, &s), (1, 1));
-        assert_eq!(level_offset_and_count(2, &s), (2, 1));
-        assert_eq!(level_offset_and_count(3, &s), (3, 1));
-    }
-
-    #[test]
-    fn test_level_offset_4ary() {
-        // 4-ary tree: 3 siblings per level.
-        //   level 0 → offset 0, count 3
-        //   level 1 → offset 3, count 3
-        //   level 2 → offset 6, count 3
-        let s = quad_shifts(3);
-        assert_eq!(level_offset_and_count(0, &s), (0, 3));
-        assert_eq!(level_offset_and_count(1, &s), (3, 3));
-        assert_eq!(level_offset_and_count(2, &s), (6, 3));
-    }
-
-    #[test]
-    fn test_level_offset_mixed() {
-        // Mixed arity: binary (1), 4-ary (3), binary (1) → offsets 0, 1, 4.
-        let s = vec![1u32, 2, 1];
-        assert_eq!(level_offset_and_count(0, &s), (0, 1));
-        assert_eq!(level_offset_and_count(1, &s), (1, 3));
-        assert_eq!(level_offset_and_count(2, &s), (4, 1));
-    }
-
     // Total siblings tests
 
     #[test]
@@ -702,32 +623,6 @@ mod tests {
         assert_eq!(total_siblings_for_levels(3, &s), 11);
     }
 
-    #[test]
-    fn test_total_siblings_consistent_with_level_offsets() {
-        // The total for n levels must equal the offset of level n
-        // (i.e., one past the last element of level n-1).
-        // Verify this identity for several schedules.
-        for schedule in [
-            vec![1u32, 1, 1, 1],
-            vec![2, 2, 2],
-            vec![1, 2, 1, 3],
-            vec![3, 1, 2],
-        ] {
-            for n in 0..schedule.len() {
-                let total = total_siblings_for_levels(n, &schedule);
-                if n > 0 {
-                    // offset(n) should equal total_siblings(n) because
-                    // both are the sum of counts for levels 0..n.
-                    let (offset_n, _) = level_offset_and_count(n, &schedule);
-                    assert_eq!(
-                        total, offset_n,
-                        "schedule={schedule:?}, n={n}: total={total}, offset={offset_n}"
-                    );
-                }
-            }
-        }
-    }
-
     // Pruning tests
 
     #[test]
@@ -740,11 +635,10 @@ mod tests {
     #[test]
     fn test_prune_single_path() {
         // A single path has no predecessor to share with → all levels kept.
+        // Binary: 1 sibling per level × 3 levels = 3 total.
         let path = mock_path::<2>(5, 3);
         let pruned = prune_paths(3, &binary_shifts(3), &[path]);
         assert_eq!(pruned.paths.len(), 1);
-        assert_eq!(pruned.paths[0].num_levels_stored, 3);
-        // Binary: 1 sibling per level × 3 levels = 3 total.
         assert_eq!(pruned.paths[0].siblings.len(), 3);
     }
 
@@ -754,22 +648,22 @@ mod tests {
         // First path: all 3 levels. Second path: only level 0.
         let paths = [mock_path::<2>(4, 3), mock_path::<2>(5, 3)];
         let pruned = prune_paths(3, &binary_shifts(3), &paths);
-        assert_eq!(pruned.paths[0].num_levels_stored, 3);
-        assert_eq!(pruned.paths[1].num_levels_stored, 1);
+        assert_eq!(pruned.paths[0].siblings.len(), 3);
+        assert_eq!(pruned.paths[1].siblings.len(), 1);
     }
 
     #[test]
     fn test_prune_all_leaves_binary_height3() {
         // All 8 leaves in a height-3 binary tree.
         //
-        // Expected level counts per sorted path:
+        // Expected sibling counts per sorted path (1 sibling per binary level):
         //   [3, 1, 2, 1, 3, 1, 2, 1]
         //
         // Total pruned siblings: 14 vs unpruned 8 * 3 = 24.
         let h = 3;
         let paths: Vec<_> = (0..8).map(|i| mock_path::<2>(i, h)).collect();
         let pruned = prune_paths(h, &binary_shifts(h), &paths);
-        let counts: Vec<usize> = pruned.paths.iter().map(|p| p.num_levels_stored).collect();
+        let counts: Vec<usize> = pruned.paths.iter().map(|p| p.siblings.len()).collect();
         assert_eq!(counts, vec![3, 1, 2, 1, 3, 1, 2, 1]);
         assert_eq!(pruned_sibling_count(&pruned), 14);
     }
@@ -777,14 +671,14 @@ mod tests {
     #[test]
     fn test_prune_4ary_adjacent() {
         // Leaves 0-3 are siblings in a 4-ary tree → all share level 1.
-        // First path: both levels. Remaining paths: only level 0.
+        // First path: both levels (6 siblings). Remaining paths: only level 0 (3 siblings).
         let s = quad_shifts(2);
         let paths: Vec<_> = (0..4).map(|i| realistic_quad_path::<2>(i, 2)).collect();
         let pruned = prune_paths(2, &s, &paths);
-        assert_eq!(pruned.paths[0].num_levels_stored, 2);
-        assert_eq!(pruned.paths[1].num_levels_stored, 1);
-        assert_eq!(pruned.paths[2].num_levels_stored, 1);
-        assert_eq!(pruned.paths[3].num_levels_stored, 1);
+        assert_eq!(pruned.paths[0].siblings.len(), 6);
+        assert_eq!(pruned.paths[1].siblings.len(), 3);
+        assert_eq!(pruned.paths[2].siblings.len(), 3);
+        assert_eq!(pruned.paths[3].siblings.len(), 3);
     }
 
     #[test]
@@ -895,6 +789,21 @@ mod tests {
         assert_eq!(restored, paths);
     }
 
+    #[test]
+    fn test_roundtrip_mixed_arity() {
+        // Mixed schedule [1, 2, 1] (binary, 4-ary, binary) → 16 leaves.
+        // Exercises both the LCA loop and the per-level sibling counts.
+        let shifts = vec![1u32, 2, 1];
+        let indices = [0, 1, 4, 7, 8, 11, 15];
+        let paths: Vec<_> = indices
+            .iter()
+            .map(|&i| realistic_nary_path::<2>(i, &shifts))
+            .collect();
+        let pruned = prune_paths(shifts.len(), &shifts, &paths);
+        let restored = restore_paths(&pruned).unwrap();
+        assert_eq!(restored, paths);
+    }
+
     // Error / bounds tests
 
     #[test]
@@ -906,7 +815,6 @@ mod tests {
             original_order: vec![0],
             paths: vec![PrunedPath {
                 leaf_index: 0,
-                num_levels_stored: 0,
                 siblings: vec![],
             }],
         };
@@ -935,7 +843,6 @@ mod tests {
             original_order: vec![0],
             paths: vec![PrunedPath {
                 leaf_index: 0,
-                num_levels_stored: 1,
                 siblings: vec![[0; 2]],
             }],
         };

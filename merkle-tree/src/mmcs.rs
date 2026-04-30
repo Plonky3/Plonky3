@@ -33,7 +33,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::MerkleTreeError::{
-    CapMismatch, EmptyBatch, IncompatibleHeights, IndexOutOfBounds, WrongBatchSize, WrongHeight,
+    CapMismatch, EmptyBatch, IncompatibleHeights, IndexOutOfBounds, MalformedPrunedProof,
+    WrongBatchSize, WrongHeight,
 };
 use crate::merkle_tree::{padded_len, select_arity_step};
 use crate::pruning::{MerkleAuthPath, prune_paths, restore_paths};
@@ -122,6 +123,10 @@ pub enum MerkleTreeError {
         /// The actual tree depth.
         tree_depth: usize,
     },
+
+    /// A pruned batch opening could not be restored (malformed proof).
+    #[error("malformed pruned proof: cannot restore full authentication paths")]
+    MalformedPrunedProof,
 }
 
 /// The arity schedule and query positions for a given Merkle path.
@@ -293,11 +298,9 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         P: PackedValue,
         PW: PackedValue,
         H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
-            + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
-            + Sync,
+            + CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
         C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>
-            + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>
-            + Sync,
+            + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>,
         PW::Value: Eq + Clone,
         [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
     {
@@ -312,7 +315,12 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         //     layers:          [0] [1] [2] [3] [4]
         //     cap covers:                      [4]   (1 layer from the top)
         //     proof covers:    [0] [1] [2] [3]       (4 proof levels)
-        let max_height = self.get_max_height(prover_data);
+        let max_height = prover_data
+            .leaves
+            .iter()
+            .map(|m| m.height())
+            .max()
+            .expect("No committed matrices?");
         let num_layers = prover_data.digest_layers.len();
         let effective_cap_height = self.cap_height.min(num_layers.saturating_sub(1));
         let proof_levels = num_layers
@@ -478,10 +486,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         // the compact representation. This copies shared upper siblings
         // from each predecessor in a single forward pass.
         let restored =
-            restore_paths(&pruned_opening.pruned_proof).ok_or(MerkleTreeError::WrongHeight {
-                expected_proof_len: 0,
-                num_siblings: 0,
-            })?;
+            restore_paths(&pruned_opening.pruned_proof).ok_or(MalformedPrunedProof)?;
 
         // The number of restored paths must match the number of query openings.
         if restored.len() != pruned_opening.opened_values.len() {
@@ -493,6 +498,10 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         // Each path's flat sibling buffer is borrowed directly — no cloning.
         // The standard single-index verification hashes the opened values,
         // replays the arity schedule, and checks the result against the cap.
+        //
+        // TODO: amortize verifier cost across paths the same way the proof
+        // is amortized — shared upper-level compressions are recomputed once
+        // per path instead of once per shared subtree.
         for (auth_path, opened) in restored.iter().zip(&pruned_opening.opened_values) {
             let batch_ref = BatchOpeningRef::new(opened.as_slice(), &auth_path.siblings);
             self.verify_batch(commit, dimensions, auth_path.leaf_index, batch_ref)?;
@@ -1960,6 +1969,29 @@ mod tests {
         assert!(
             result.is_ok(),
             "mixed-height pruned verification should succeed"
+        );
+    }
+
+    #[test]
+    fn pruned_opening_4ary_mixed_heights() {
+        // 4-ary MMCS with matrices at heights that don't align to the same
+        // power of 4 — the schedule mixes 4-ary steps with binary bridges.
+        let seed = 88u64;
+        let mmcs = make_4ary_mmcs_pruning(seed);
+
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mat1 = RowMajorMatrix::<F>::rand(&mut rng, 64, 4);
+        let mat2 = RowMajorMatrix::<F>::rand(&mut rng, 8, 6);
+        let dims = vec![mat1.dimensions(), mat2.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat1, mat2]);
+
+        let indices: Vec<usize> = vec![0, 5, 17, 33, 50, 63];
+        let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
+
+        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        assert!(
+            result.is_ok(),
+            "4-ary mixed-height pruned verification should succeed"
         );
     }
 
