@@ -645,6 +645,31 @@ where
     test_dot_n!(16);
 }
 
+/// Assert that a packed-field dot product matches scalar dot product for a broadcasted test vector.
+///
+/// This is useful for backend-specific regression tests that want deterministic scalar inputs while
+/// still checking lane-wise packed behavior.
+pub fn assert_broadcast_dot_product_matches_scalar<PF, const N: usize>(
+    lhs: [PF::Scalar; N],
+    rhs: [PF::Scalar; N],
+    case_name: &str,
+) where
+    PF: PackedField + Eq,
+{
+    let scalar_result = PF::Scalar::dot_product::<N>(&lhs, &rhs);
+    let packed_lhs = lhs.map(PF::broadcast);
+    let packed_rhs = rhs.map(PF::broadcast);
+    let packed_result = PF::dot_product::<N>(&packed_lhs, &packed_rhs);
+
+    for lane in 0..PF::WIDTH {
+        assert_eq!(
+            packed_result.as_slice()[lane],
+            scalar_result,
+            "{case_name}: dot_product::<{N}> mismatch at lane {lane}",
+        );
+    }
+}
+
 /// Test packed field operations vs scalar with 256 random packed vectors via proptest.
 ///
 /// Verifies add, sub, mul, neg match lane-by-lane scalar results.
