@@ -32,12 +32,17 @@ use crate::fiat_shamir::errors::FiatShamirError;
 ///   eps_shift  <=  (1 - delta)^t
 /// ```
 ///
-/// `t` must count **distinct, uniform** positions. Two leaks closed here:
+/// `t` counts independent **uniformly-sampled** positions; distinctness
+/// is not required (collisions waste opening work but do not weaken the
+/// bound). Per-draw uniformity is the only leak closed here:
 ///
 /// - **Biased draws** — bit-decomposing a uniform field element biases
-///   each draw by `~ 2^bits / |F|`, which inflates `delta`.
-/// - **Dedup shrinkage** — sample-with-replacement plus deduplication
-///   returns fewer positions than asked, which lowers `t`.
+///   each draw by `~ 2^bits / |F|`, which inflates `delta`. Routed
+///   through `sample_uniform_bits` for exact uniformity.
+///
+/// Duplicate rejection is a cleanliness choice — it pins output length
+/// at `t = min(num_queries, folded_domain_size)` and unifies the
+/// common-case and saturation-case paths below.
 ///
 /// # Saturation
 ///
