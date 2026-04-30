@@ -13,9 +13,8 @@ use p3_field::op_assign_macros::{
     impl_sum_prod_base_field, ring_sum,
 };
 use p3_field::{
-    Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, uint32x4_mod_add,
-    uint32x4_mod_sub,
+    impl_packed_field_pow_2, uint32x4_mod_add, uint32x4_mod_sub, Algebra, Field, InjectiveMonomial,
+    PackedField, PackedFieldPow2, PackedValue, PermutationMonomial, PrimeCharacteristicRing,
 };
 use p3_util::reconstitute_from_base;
 use rand::distr::{Distribution, StandardUniform};
@@ -1083,9 +1082,11 @@ where
         let c_hi_red = aarch64::vminq_u32(c_hi_sum, c_hi_sub);
 
         // Now incorporate carry: c_hi_red ∈ [0, P-2] (max is 2P-2 reduced to P-2).
-        // Adding carry (0 or 1) gives at most P-1, so no further reduction needed.
+        // Adding carry (0 or 1) can produce P in boundary cases, so reduce once more.
         // Subtracting -1 adds 1; subtracting 0 is a no-op.
-        let c_hi_prime = aarch64::vsubq_u32(c_hi_red, carry);
+        let c_hi_with_carry = aarch64::vsubq_u32(c_hi_red, carry);
+        let c_hi_prime_sub = aarch64::vsubq_u32(c_hi_with_carry, P::PACKED_P);
+        let c_hi_prime = aarch64::vminq_u32(c_hi_with_carry, c_hi_prime_sub);
 
         // Montgomery reduction (identical to dot_product_4).
         //

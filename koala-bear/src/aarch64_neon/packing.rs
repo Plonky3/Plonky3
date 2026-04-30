@@ -69,9 +69,8 @@ mod tests {
             "dot_product_5 carry-critical case should overflow c_lo"
         );
         assert_eq!(
-            c_hi_prime,
-            prime - 1,
-            "dot_product_5 carry-critical case should hit c_hi_prime = P-1",
+            c_hi_prime, prime,
+            "dot_product_5 carry-critical case should hit c_hi_prime = P before final reduction",
         );
         assert!(
             c_lo < c_lo_a,
