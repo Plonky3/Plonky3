@@ -204,7 +204,7 @@ pub trait InterpolateArbitrary<F: Field>: Matrix<F> {
     ///
     /// - `None` if any domain points coincide.
     /// - The matching row directly when the target equals a domain point.
-    fn interpolate_arbitrary_points<EF: ExtensionField<F>>(
+    fn interpolate_arbitrary_point<EF: ExtensionField<F>>(
         &self,
         x_coords: &[F],
         point: EF,
