@@ -233,6 +233,12 @@ pub trait InterpolateArbitrary<F: Field>: Matrix<F> {
     ///
     /// Hot path: O(n * width) per call when weights are reused across targets.
     ///
+    /// # Safety
+    ///
+    /// - The evaluation point must not lie in the coset.
+    /// - Each weight must equal 1/(z - x_i) - 1/z for the corresponding coset element.
+    ///
+    ///
     /// # Panics
     ///
     /// Debug-panics if the slices differ in length from the matrix height.
