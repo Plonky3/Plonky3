@@ -90,11 +90,18 @@ fn bench_svo_claim_build(c: &mut Criterion) {
     let mut group = c.benchmark_group("whir/svo_claim_build");
 
     // l=1,2,3 are the straightline-specialized cases; l=4 is the general-path control.
+    //
+    // k12_* shapes:  N in 1..4, below the SIMD path on NEON (W = 4).
+    // k16_l4, k18_l4, k20_l4: production-shape N = 16 / 32 / 64.
+    //   These exercise the SIMD path on every supported width.
     let cases = [
         (12, 1, "k12_l1"),
         (12, 2, "k12_l2"),
         (12, 3, "k12_l3"),
         (12, 4, "k12_l4"),
+        (16, 4, "k16_l4"),
+        (18, 4, "k18_l4"),
+        (20, 4, "k20_l4"),
     ];
 
     for &(num_variables, l, label) in &cases {
