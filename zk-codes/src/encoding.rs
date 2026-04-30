@@ -17,14 +17,16 @@ pub trait ZkEncoding<F: Field> {
         self.randomness_len()
     }
 
-    /// Statistical simulation error (0 for Reed–Solomon).
+    /// Statistical simulation error (0 for Reed-Solomon).
     fn error(&self) -> f64;
 
     /// Encodes a message with random masking.
     fn encode<R: Rng>(&self, msg: &[F], rng: &mut R) -> Self::Codeword;
 
-    /// For `|query_set| <= query_bound()`, identically (or `error()`-close) distributed
-    /// to `encode(msg, _)[query_set]`, without access to `msg`.
+    /// Produces identically distributed evaluations without access to the message.
+    ///
+    /// Requires `|query_set| <= query_bound()`.
+    /// The distribution is identical (or `error()`-close) to `encode(msg, _)[query_set]`.
     fn simulate<R: Rng>(&self, query_set: &[usize], rng: &mut R) -> Vec<F>;
 }
 
@@ -36,9 +38,13 @@ pub trait ZkEncodingWithRandomness<F: Field>: ZkEncoding<F> {
 
 /// A zero-knowledge encoding whose generator matrix rows can be accessed.
 pub trait LinearZkEncoding<F: Field>: ZkEncoding<F> {
-    /// Returns the generator-matrix row for the message part (G^# of Definition 3.17).
+    /// Returns the generator-matrix row for the message part.
+    ///
+    /// This is `G^#` of Definition 3.17 of eprint 2026/391.
     fn message_row(&self, position: usize) -> Vec<F>;
 
-    /// Returns the generator-matrix row for the randomness part (G^$ of Definition 3.17).
+    /// Returns the generator-matrix row for the randomness part.
+    ///
+    /// This is `G^$` of Definition 3.17 of eprint 2026/391.
     fn randomness_row(&self, position: usize) -> Vec<F>;
 }
