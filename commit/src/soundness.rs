@@ -41,6 +41,210 @@ pub enum SecurityAssumption {
 }
 
 impl SecurityAssumption {
+    fn rate_from_log_inv_rate(log_inv_rate: usize) -> f64 {
+        libm::pow(2., -(log_inv_rate as f64))
+    }
+
+    fn log2_sum(a: f64, b: f64) -> f64 {
+        if a.is_infinite() && a.is_sign_negative() {
+            return b;
+        }
+        if b.is_infinite() && b.is_sign_negative() {
+            return a;
+        }
+        if a >= b {
+            a + libm::log2(1. + libm::pow(2., b - a))
+        } else {
+            b + libm::log2(1. + libm::pow(2., a - b))
+        }
+    }
+
+    fn log2_field_minus_domain(field_size_bits: usize, log_domain_size: usize) -> f64 {
+        assert!(
+            field_size_bits > log_domain_size,
+            "challenge field must contain points outside the evaluation domain"
+        );
+        let ratio = libm::pow(2., log_domain_size as f64 - field_size_bits as f64);
+        field_size_bits as f64 + libm::log2(1. - ratio)
+    }
+
+    fn query_count_from_failure_base(security_bits: usize, failure_base: f64) -> usize {
+        assert!(
+            failure_base > 0. && failure_base < 1.,
+            "STIR query-count formula requires a failure base in (0, 1), got {failure_base}"
+        );
+        libm::ceil(security_bits as f64 / -libm::log2(failure_base)) as usize
+    }
+
+    /// Fixed number of OOD samples `s` from the paper's recommended parameter schedule.
+    ///
+    /// - Johnson-bound soundness uses the provable schedule with `s = 1`.
+    /// - Capacity-bound soundness uses the conjectured schedule with `s = 2`.
+    ///
+    /// Unique decoding is not covered by the paper's recommended STIR schedule.
+    #[must_use]
+    pub fn stir_num_ood_samples(&self) -> usize {
+        match self {
+            Self::JohnsonBound => 1,
+            Self::CapacityBound => 2,
+            Self::UniqueDecoding => {
+                panic!("STIR's paper-backed parameter schedule does not support UniqueDecoding")
+            }
+        }
+    }
+
+    /// The per-query failure base from the paper's recommended STIR schedule.
+    ///
+    /// For the provable regime this is `sqrt(rho) + eta_i`.
+    /// For the conjectured regime this is `rho + eta_i`.
+    #[must_use]
+    pub fn stir_query_failure_base(&self, log_inv_rate: usize, eta: f64) -> f64 {
+        match self {
+            Self::JohnsonBound => libm::sqrt(Self::rate_from_log_inv_rate(log_inv_rate)) + eta,
+            Self::CapacityBound => Self::rate_from_log_inv_rate(log_inv_rate) + eta,
+            Self::UniqueDecoding => {
+                panic!("STIR's paper-backed parameter schedule does not support UniqueDecoding")
+            }
+        }
+    }
+
+    /// The appendix-level upper bound imposed on the recursively chosen `eta_i`.
+    ///
+    /// Appendix C.1 shows the provable schedule under `eta_i <= sqrt(rho_i) / 20`.
+    /// Appendix C.2 shows the conjectured schedule under `eta_i <= rho_i / 2`.
+    #[must_use]
+    pub fn stir_eta_upper_bound(&self, log_inv_rate: usize) -> f64 {
+        match self {
+            Self::JohnsonBound => libm::sqrt(Self::rate_from_log_inv_rate(log_inv_rate)) / 20.,
+            Self::CapacityBound => Self::rate_from_log_inv_rate(log_inv_rate) / 2.,
+            Self::UniqueDecoding => {
+                panic!("STIR's paper-backed parameter schedule does not support UniqueDecoding")
+            }
+        }
+    }
+
+    /// Returns whether `eta` satisfies the appendix-level side condition needed by the
+    /// paper's recommended STIR schedule.
+    #[must_use]
+    pub fn stir_eta_is_valid(&self, log_inv_rate: usize, eta: f64) -> bool {
+        eta.is_finite() && eta > 0. && eta <= self.stir_eta_upper_bound(log_inv_rate)
+    }
+
+    /// Initial `eta_0` from §5.3's recommended STIR schedule.
+    #[must_use]
+    pub fn stir_initial_eta(
+        &self,
+        security_bits: usize,
+        log_degree: usize,
+        log_inv_rate: usize,
+        log_folding_factor: usize,
+        field_size_bits: usize,
+    ) -> f64 {
+        let k = 1usize << log_folding_factor;
+        let log_k_minus_1 = libm::log2((k - 1) as f64);
+        let log_d_over_k = (log_degree - log_folding_factor) as f64;
+
+        let log_eta = match self {
+            // η₀ := (2^λ (k - 1) (d/k)^2 / (2^7 |F|))^(1/7)
+            Self::JohnsonBound => {
+                ((security_bits as f64) + log_k_minus_1 + 2. * log_d_over_k
+                    - 7.
+                    - field_size_bits as f64)
+                    / 7.
+            }
+            // With c₁ = c₂ = 1:
+            // η₀ := 2^λ (k - 1) (d/k) / (ρ² |F|)
+            Self::CapacityBound => {
+                (security_bits as f64) + log_k_minus_1 + log_d_over_k + 2. * (log_inv_rate as f64)
+                    - field_size_bits as f64
+            }
+            Self::UniqueDecoding => {
+                panic!("STIR's paper-backed parameter schedule does not support UniqueDecoding")
+            }
+        };
+
+        libm::pow(2., log_eta)
+    }
+
+    /// Recursive `eta_i` from §5.3's recommended STIR schedule.
+    ///
+    /// `prev_queries` is `t_{i-1}` from the previous stage.
+    #[must_use]
+    pub fn stir_recursive_eta(
+        &self,
+        security_bits: usize,
+        log_degree: usize,
+        log_inv_rate: usize,
+        log_domain_size: usize,
+        log_folding_factor: usize,
+        field_size_bits: usize,
+        prev_queries: usize,
+    ) -> f64 {
+        let k = 1usize << log_folding_factor;
+        let log_domain = log_domain_size as f64;
+        let log_field_minus_domain =
+            Self::log2_field_minus_domain(field_size_bits, log_domain_size);
+
+        match self {
+            Self::JohnsonBound => {
+                // max(
+                //   sqrt(2^λ d_i / (8 ρ_i (|F| - |L_i|))),
+                //   (2^(λ+1) (t_{i-1} d_i^2 + (k-1) (d_i / k)^2) / (2^7 |F|))^(1/7)
+                // )
+                let log_term_1 = ((security_bits as f64) + log_degree as f64 - 3.
+                    + log_inv_rate as f64
+                    - log_field_minus_domain)
+                    / 2.;
+
+                let log_prev_queries_piece =
+                    libm::log2(prev_queries as f64) + 2. * log_degree as f64;
+                let log_k_term =
+                    libm::log2((k - 1) as f64) + 2. * (log_degree - log_folding_factor) as f64;
+                let log_sum = Self::log2_sum(log_prev_queries_piece, log_k_term);
+                let log_term_2 =
+                    ((security_bits as f64) + 1. + log_sum - 7. - field_size_bits as f64) / 7.;
+
+                libm::pow(2., log_term_1.max(log_term_2))
+            }
+            Self::CapacityBound => {
+                // With c₁ = c₂ = c₃ = 1:
+                // max(
+                //   2ρ_i / d_i,
+                //   (d_i / ρ_i) * sqrt(2^λ d_i^2 / (2 (|F| - |L_i|)^2)),
+                //   2^(λ+1) d_i / (ρ_i² |F|)
+                //     * ((t_{i-1} + 1) + (k - 1)/k)
+                // )
+                let log_term_1 = 1. - log_domain;
+
+                let log_term_2 = log_domain
+                    + ((security_bits as f64) + 2. * log_degree as f64
+                        - 1.
+                        - 2. * log_field_minus_domain)
+                        / 2.;
+
+                let third_factor = (prev_queries + 1) as f64 + (k - 1) as f64 / k as f64;
+                let log_term_3 =
+                    (security_bits as f64) + 1. + log_degree as f64 + 2. * (log_inv_rate as f64)
+                        - field_size_bits as f64
+                        + libm::log2(third_factor);
+
+                libm::pow(2., log_term_1.max(log_term_2).max(log_term_3))
+            }
+            Self::UniqueDecoding => {
+                panic!("STIR's paper-backed parameter schedule does not support UniqueDecoding")
+            }
+        }
+    }
+
+    /// STIR query count for a stage whose per-query failure base is known.
+    ///
+    /// This is the `ceil(target / -log2(base))` form used by §5.3.
+    #[must_use]
+    pub fn stir_queries_for_base(&self, security_bits: usize, failure_base: f64) -> usize {
+        let _ = self;
+        Self::query_count_from_failure_base(security_bits, failure_base)
+    }
+
     /// In both JB and CB theorems such as list-size only hold for proximity parameters slightly below the bound.
     /// E.g. in JB proximity gaps holds for every delta in (0, 1 - sqrt(rho)).
     /// eta is the distance between the chosen proximity parameter and the bound.

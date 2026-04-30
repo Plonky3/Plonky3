@@ -110,38 +110,38 @@ mod babybear_stir {
     }
 
     #[test]
-    fn test_prove_verify_blowup1_fold1_degree8() {
-        let (params, dft, challenger) = make_params(1, 1);
-        do_test_stir_prove_verify::<F, EF, _, _, _>(&params, &dft, &challenger, 8);
-    }
-
-    #[test]
-    fn test_prove_verify_blowup2_fold1_degree8() {
-        let (params, dft, challenger) = make_params(2, 1);
-        do_test_stir_prove_verify::<F, EF, _, _, _>(&params, &dft, &challenger, 8);
-    }
-
-    #[test]
     fn test_prove_verify_blowup1_fold2_degree8() {
         let (params, dft, challenger) = make_params(1, 2);
         do_test_stir_prove_verify::<F, EF, _, _, _>(&params, &dft, &challenger, 8);
     }
 
     #[test]
-    fn test_prove_verify_blowup1_fold1_degree4() {
-        let (params, dft, challenger) = make_params(1, 1);
+    fn test_prove_verify_blowup2_fold2_degree8() {
+        let (params, dft, challenger) = make_params(2, 2);
+        do_test_stir_prove_verify::<F, EF, _, _, _>(&params, &dft, &challenger, 8);
+    }
+
+    #[test]
+    fn test_prove_verify_blowup1_fold3_degree12() {
+        let (params, dft, challenger) = make_params(1, 3);
+        do_test_stir_prove_verify::<F, EF, _, _, _>(&params, &dft, &challenger, 12);
+    }
+
+    #[test]
+    fn test_prove_verify_blowup1_fold2_degree4() {
+        let (params, dft, challenger) = make_params(1, 2);
         do_test_stir_prove_verify::<F, EF, _, _, _>(&params, &dft, &challenger, 4);
     }
 
     #[test]
-    fn test_prove_verify_blowup1_fold1_degree12() {
-        let (params, dft, challenger) = make_params(1, 1);
+    fn test_prove_verify_blowup1_fold2_degree12() {
+        let (params, dft, challenger) = make_params(1, 2);
         do_test_stir_prove_verify::<F, EF, _, _, _>(&params, &dft, &challenger, 12);
     }
 
     #[test]
     fn test_tampered_round_query_opening_fails() {
-        let (params, dft, challenger) = make_params(1, 1);
+        let (params, dft, challenger) = make_params(1, 2);
         let mut rng = seeded_rng();
         let log_degree = 8;
         let degree = 1usize << log_degree;
@@ -162,7 +162,7 @@ mod babybear_stir {
 
     #[test]
     fn test_tampered_ood_answer_fails() {
-        let (params, dft, challenger) = make_params(1, 1);
+        let (params, dft, challenger) = make_params(1, 2);
         let mut rng = seeded_rng();
         let log_degree = 8;
         let degree = 1usize << log_degree;
@@ -224,21 +224,21 @@ mod koalabear_stir {
     }
 
     #[test]
-    fn test_prove_verify_blowup1_fold1_degree8() {
-        let (params, dft, challenger) = make_params(1, 1);
-        do_test_stir_prove_verify::<F, EF, _, _, _>(&params, &dft, &challenger, 8);
-    }
-
-    #[test]
-    fn test_prove_verify_blowup2_fold1_degree8() {
-        let (params, dft, challenger) = make_params(2, 1);
-        do_test_stir_prove_verify::<F, EF, _, _, _>(&params, &dft, &challenger, 8);
-    }
-
-    #[test]
     fn test_prove_verify_blowup1_fold2_degree8() {
         let (params, dft, challenger) = make_params(1, 2);
         do_test_stir_prove_verify::<F, EF, _, _, _>(&params, &dft, &challenger, 8);
+    }
+
+    #[test]
+    fn test_prove_verify_blowup2_fold2_degree8() {
+        let (params, dft, challenger) = make_params(2, 2);
+        do_test_stir_prove_verify::<F, EF, _, _, _>(&params, &dft, &challenger, 8);
+    }
+
+    #[test]
+    fn test_prove_verify_blowup1_fold3_degree12() {
+        let (params, dft, challenger) = make_params(1, 3);
+        do_test_stir_prove_verify::<F, EF, _, _, _>(&params, &dft, &challenger, 12);
     }
 }
 
@@ -284,8 +284,8 @@ mod goldilocks_stir {
     }
 
     #[test]
-    fn test_prove_verify_blowup1_fold1_degree8() {
-        let (params, dft, challenger) = make_params(1, 1);
+    fn test_prove_verify_blowup1_fold2_degree8() {
+        let (params, dft, challenger) = make_params(1, 2);
         do_test_stir_prove_verify::<F, EF, _, _, _>(&params, &dft, &challenger, 8);
     }
 
@@ -327,7 +327,7 @@ mod babybear_pcs {
 
         let stir_params = StirParameters {
             log_blowup: 1,
-            log_folding_factor: 1,
+            log_folding_factor: 2,
             soundness_type: SecurityAssumption::CapacityBound,
             security_level: 16,
             max_pow_bits: 0,

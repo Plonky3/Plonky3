@@ -3,15 +3,14 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use libm;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, SecurityAssumption};
 use p3_field::{ExtensionField, TwoAdicField};
 
 /// Maximum log-degree at which the prover sends the polynomial directly.
 ///
-/// When the remaining polynomial degree is at most `2^MAX_LOG_DEGREE_DIRECT`,
-/// the prover sends it in coefficient form instead of producing another STIR round.
+/// The current prover/verifier pipeline folds all the way down to a constant-size
+/// final polynomial before the direct-send stage.
 pub const MAX_LOG_DEGREE_DIRECT: usize = 0;
 
 /// User-facing STIR protocol parameters.
@@ -34,10 +33,8 @@ pub struct StirParameters<M> {
     /// (LDE step). This decoupling causes the code rate to improve each round.
     /// Must satisfy `log_folding_factor <= log_starting_degree - MAX_LOG_DEGREE_DIRECT`.
     ///
-    /// **Note**: `log_folding_factor = 1` (arity k = 2) gives FRI-like behaviour with no rate
-    /// improvement per round. Theorem 5.1 in the STIR paper requires k ≥ 4
-    /// (`log_folding_factor ≥ 2`) for the stated regime. k = 2 is supported but operates
-    /// outside the paper's theorem.
+    /// The paper-backed STIR schedule implemented here requires `k ≥ 4`
+    /// (`log_folding_factor ≥ 2`).
     pub log_folding_factor: usize,
 
     /// Which Reed-Solomon proximity bound to assume for soundness analysis.
@@ -46,10 +43,10 @@ pub struct StirParameters<M> {
     /// Target security level in bits.
     pub security_level: usize,
 
-    /// Maximum allowed proof-of-work difficulty in bits.
+    /// Fixed proof-of-work difficulty in bits applied to each Fiat-Shamir grinding step.
     ///
-    /// If any derived round PoW exceeds this, the configuration is considered infeasible
-    /// (check via [`StirConfig::check_pow_bits`]).
+    /// Following the paper's discussion of PoW-assisted parameters, this reduces the
+    /// algebraic target from `security_level` to `security_level - max_pow_bits`.
     pub max_pow_bits: usize,
 
     /// Merkle tree commitment scheme for codeword commitments.
@@ -95,36 +92,29 @@ pub struct StirRoundConfig<F> {
     /// the next round's polynomial.
     pub log_folding_factor: usize,
 
+    /// The round's `eta_i` parameter from the paper's recommended schedule.
+    pub eta: f64,
+
     /// Number of STIR proximity queries in this round.
     ///
-    /// Decreases each round as the code rate improves (more inverse rate → fewer
-    /// queries needed to achieve the same security level).
+    /// Derived directly from §5.3 using the round's rate and `eta_i`.
     pub num_queries: usize,
 
     /// Number of out-of-domain (OOD) evaluation samples in this round.
     ///
-    /// Computed using the post-fold (improved) rate and next-round degree.
+    /// Fixed to `s = 1` in the provable regime and `s = 2` in the conjectured regime.
     pub num_ood_samples: usize,
 
-    /// Proof-of-work difficulty (bits) for the STIR query phase in this round.
-    ///
-    /// Clamped to [`StirParameters::max_pow_bits`]. Use `required_pow_bits` to detect
-    /// whether the cap prevents reaching the full security target.
+    /// Fixed proof-of-work difficulty used for the STIR query phase in this round.
     pub pow_bits: usize,
 
-    /// Proof-of-work difficulty (bits) for the polynomial folding step in this round.
-    ///
-    /// Clamped to [`StirParameters::max_pow_bits`]. Use `required_folding_pow_bits` to detect
-    /// whether the cap prevents reaching the full security target.
+    /// Fixed proof-of-work difficulty used for the polynomial folding step in this round.
     pub folding_pow_bits: usize,
 
-    /// Unclamped PoW difficulty required to reach the security target for the query phase.
-    ///
-    /// If this exceeds `max_pow_bits`, the round cannot achieve the full security target
-    /// at the configured PoW cap. Detected by [`StirConfig::check_pow_bits`].
+    /// Kept for API compatibility; now equal to the configured fixed PoW difficulty.
     pub required_pow_bits: usize,
 
-    /// Unclamped PoW difficulty required to reach the security target for the folding step.
+    /// Kept for API compatibility; now equal to the configured fixed PoW difficulty.
     pub required_folding_pow_bits: usize,
 }
 
@@ -143,7 +133,7 @@ pub struct StirConfig<F, EF, M, Challenger> {
     /// Target security level in bits.
     pub security_level: usize,
 
-    /// Maximum allowed proof-of-work difficulty in bits.
+    /// Fixed proof-of-work difficulty in bits applied to each grinding step.
     pub max_pow_bits: usize,
 
     /// Log₂ of the inverse rate of the initial RS code.
@@ -163,20 +153,19 @@ pub struct StirConfig<F, EF, M, Challenger> {
     /// Number of STIR proximity queries in the final round.
     pub final_queries: usize,
 
-    /// Proof-of-work difficulty (bits) for the final query phase.
-    ///
-    /// Clamped to `max_pow_bits`. See `required_final_pow_bits` for the unclamped value.
+    /// The final round's `eta_M` parameter from the paper's recommended schedule.
+    pub final_eta: f64,
+
+    /// Fixed proof-of-work difficulty used for the final query phase.
     pub final_pow_bits: usize,
 
-    /// Proof-of-work difficulty (bits) for the final folding step.
-    ///
-    /// Clamped to `max_pow_bits`. See `required_final_folding_pow_bits` for the unclamped value.
+    /// Fixed proof-of-work difficulty used for the final folding step.
     pub final_folding_pow_bits: usize,
 
-    /// Unclamped PoW bits required to reach the security target for the final query phase.
+    /// Kept for API compatibility; now equal to the configured fixed PoW difficulty.
     pub required_final_pow_bits: usize,
 
-    /// Unclamped PoW bits required to reach the security target for the final folding step.
+    /// Kept for API compatibility; now equal to the configured fixed PoW difficulty.
     pub required_final_folding_pow_bits: usize,
 
     /// Merkle tree commitment scheme.
@@ -198,13 +187,11 @@ where
     ///
     /// # Panics
     ///
-    /// Panics if `log_folding_factor == 0` (would divide by zero when computing total folds),
-    /// or if `log_folding_factor > log_starting_degree`.
+    /// Panics if `log_folding_factor < 2` or if `log_folding_factor > log_starting_degree`.
     pub fn new(log_starting_degree: usize, params: StirParameters<M>) -> Self {
         assert!(
-            params.log_folding_factor >= 1,
-            "log_folding_factor must be at least 1; got 0, which would divide by zero when \
-             computing total_folds."
+            params.log_folding_factor >= 2,
+            "the paper-backed STIR parameter schedule requires log_folding_factor >= 2 (k >= 4)"
         );
         assert!(
             params.log_folding_factor <= log_starting_degree,
@@ -220,19 +207,31 @@ where
             F::TWO_ADICITY,
         );
 
-        // PoW contributes independently, so the algebraic protocol only needs
-        // to cover the remaining security gap.
-        let protocol_security_level = params.security_level.saturating_sub(params.max_pow_bits);
+        assert!(
+            !matches!(params.soundness_type, SecurityAssumption::UniqueDecoding),
+            "the paper-backed STIR parameter schedule does not support UniqueDecoding"
+        );
+        assert!(
+            params.security_level > params.max_pow_bits,
+            "security_level must be greater than max_pow_bits"
+        );
 
         let field_size_bits = EF::bits();
         let log_blowup = params.log_blowup;
         let log_folding_factor = params.log_folding_factor;
+        let algebraic_security_level = params.security_level - params.max_pow_bits;
+        let fixed_pow_bits = params.max_pow_bits;
+        let num_ood_samples = params.soundness_type.stir_num_ood_samples();
 
         // Determine number of intermediate rounds.
         // We fold until log_degree <= MAX_LOG_DEGREE_DIRECT, then send directly.
         // Each round reduces log_degree by log_folding_factor.
         let foldable_bits = log_starting_degree.saturating_sub(MAX_LOG_DEGREE_DIRECT);
         let total_folds = foldable_bits / log_folding_factor;
+        assert!(
+            total_folds > 0,
+            "STIR requires at least one fold before the final direct-send stage"
+        );
 
         // Last fold produces the final polynomial; intermediate rounds = total_folds - 1.
         let num_rounds = total_folds.saturating_sub(1);
@@ -253,102 +252,125 @@ where
         let mut log_inv_rate = log_blowup;
         let mut domain_shift = initial_shift;
 
-        for _round in 0..num_rounds {
+        let query_count = |is_final: bool, stage_log_inv_rate: usize, eta: f64| {
+            let target_bits = if is_final {
+                algebraic_security_level
+            } else {
+                algebraic_security_level + 1
+            };
+            let failure_base = params
+                .soundness_type
+                .stir_query_failure_base(stage_log_inv_rate, eta);
+            params
+                .soundness_type
+                .stir_queries_for_base(target_bits, failure_base)
+        };
+        let validate_eta = |stage: usize, stage_log_inv_rate: usize, eta: f64| {
+            assert!(
+                params
+                    .soundness_type
+                    .stir_eta_is_valid(stage_log_inv_rate, eta),
+                "round {stage} produced eta = {eta}, which violates the paper's side-condition \
+                 bound {}",
+                params
+                    .soundness_type
+                    .stir_eta_upper_bound(stage_log_inv_rate)
+            );
+        };
+
+        let mut final_eta = params.soundness_type.stir_initial_eta(
+            algebraic_security_level,
+            log_degree,
+            log_inv_rate,
+            log_folding_factor,
+            field_size_bits,
+        );
+        validate_eta(0, log_inv_rate, final_eta);
+
+        let final_queries = if total_folds == 1 {
+            query_count(true, log_inv_rate, final_eta)
+        } else {
+            let num_queries = query_count(false, log_inv_rate, final_eta);
             assert!(
                 F::GENERATOR.exp_power_of_2(log_domain_size - 1) != F::ONE,
                 "STIR's compact disjoint-coset schedule requires Field::GENERATOR to lie \
                  outside the subgroup of size 2^{}.",
                 log_domain_size - 1,
             );
-
-            let log_fold_domain_size = log_domain_size - log_folding_factor;
-
-            // After the fold, degree drops by k and rate improves.
-            let log_degree_next = log_degree - log_folding_factor;
-            let next_log_inv_rate = log_inv_rate + (log_folding_factor - 1);
-
-            // Queries use the CURRENT (pre-fold) rate.
-            let num_queries = params
-                .soundness_type
-                .queries(protocol_security_level, log_inv_rate);
-
-            // OOD samples and combination errors use the post-fold (improved) rate and degree.
-            let num_ood_samples = params.soundness_type.determine_ood_samples(
-                params.security_level,
-                log_degree_next,
-                next_log_inv_rate,
-                field_size_bits,
-            );
-
-            let query_error = params
-                .soundness_type
-                .queries_error(log_inv_rate, num_queries);
-
-            let combination_error = params.soundness_type.queries_combination_error(
-                field_size_bits,
-                log_degree_next,
-                next_log_inv_rate,
-                num_ood_samples,
-                num_queries,
-            );
-
-            let required_pow_bits = 0_f64
-                .max(params.security_level as f64 - query_error.min(combination_error))
-                as usize;
-            let pow_bits = required_pow_bits.min(params.max_pow_bits);
-
-            // Folding PoW uses the post-fold rate (proximity gap of the new code).
-            let required_folding_pow_bits = libm::ceil(params.soundness_type.folding_pow_bits(
-                params.security_level,
-                field_size_bits,
-                log_degree_next,
-                next_log_inv_rate,
-            )) as usize;
-            let folding_pow_bits = required_folding_pow_bits.min(params.max_pow_bits);
-
             round_configs.push(StirRoundConfig {
                 log_degree,
                 log_domain_size,
-                log_fold_domain_size,
+                log_fold_domain_size: log_domain_size - log_folding_factor,
                 domain_shift,
                 log_folding_factor,
+                eta: final_eta,
                 num_queries,
                 num_ood_samples,
-                pow_bits,
-                folding_pow_bits,
-                required_pow_bits,
-                required_folding_pow_bits,
+                pow_bits: fixed_pow_bits,
+                folding_pow_bits: fixed_pow_bits,
+                required_pow_bits: fixed_pow_bits,
+                required_folding_pow_bits: fixed_pow_bits,
             });
 
-            // Advance state for the next round.
+            let mut prev_queries = num_queries;
             log_degree -= log_folding_factor;
-            // Domain halves each round (LDE step), not shrinks by k.
             log_domain_size -= 1;
-            log_inv_rate = next_log_inv_rate;
-            // Next witness domain shift = fold-domain shift multiplied by the field generator,
-            // which keeps it outside the fold domain's ambient subgroup coset.
+            log_inv_rate += log_folding_factor - 1;
             domain_shift = domain_shift.exp_power_of_2(log_folding_factor) * F::GENERATOR;
-        }
 
-        // Final round parameters use the accumulated (improved) inverse rate.
-        let final_queries = params
-            .soundness_type
-            .queries(protocol_security_level, log_inv_rate);
+            for round in 1..num_rounds {
+                final_eta = params.soundness_type.stir_recursive_eta(
+                    algebraic_security_level,
+                    log_degree,
+                    log_inv_rate,
+                    log_domain_size,
+                    log_folding_factor,
+                    field_size_bits,
+                    prev_queries,
+                );
+                validate_eta(round, log_inv_rate, final_eta);
 
-        let required_final_pow_bits = libm::ceil(
-            0_f64.max(
-                params.security_level as f64
-                    - params
-                        .soundness_type
-                        .queries_error(log_inv_rate, final_queries),
-            ),
-        ) as usize;
-        let final_pow_bits = required_final_pow_bits.min(params.max_pow_bits);
+                let num_queries = query_count(false, log_inv_rate, final_eta);
+                assert!(
+                    F::GENERATOR.exp_power_of_2(log_domain_size - 1) != F::ONE,
+                    "STIR's compact disjoint-coset schedule requires Field::GENERATOR to lie \
+                     outside the subgroup of size 2^{}.",
+                    log_domain_size - 1,
+                );
+                round_configs.push(StirRoundConfig {
+                    log_degree,
+                    log_domain_size,
+                    log_fold_domain_size: log_domain_size - log_folding_factor,
+                    domain_shift,
+                    log_folding_factor,
+                    eta: final_eta,
+                    num_queries,
+                    num_ood_samples,
+                    pow_bits: fixed_pow_bits,
+                    folding_pow_bits: fixed_pow_bits,
+                    required_pow_bits: fixed_pow_bits,
+                    required_folding_pow_bits: fixed_pow_bits,
+                });
 
-        let required_final_folding_pow_bits =
-            libm::ceil(0_f64.max(params.security_level as f64 - (field_size_bits - 1) as f64))
-                as usize;
-        let final_folding_pow_bits = required_final_folding_pow_bits.min(params.max_pow_bits);
+                prev_queries = num_queries;
+                log_degree -= log_folding_factor;
+                log_domain_size -= 1;
+                log_inv_rate += log_folding_factor - 1;
+                domain_shift = domain_shift.exp_power_of_2(log_folding_factor) * F::GENERATOR;
+            }
+
+            final_eta = params.soundness_type.stir_recursive_eta(
+                algebraic_security_level,
+                log_degree,
+                log_inv_rate,
+                log_domain_size,
+                log_folding_factor,
+                field_size_bits,
+                prev_queries,
+            );
+            validate_eta(num_rounds, log_inv_rate, final_eta);
+            query_count(true, log_inv_rate, final_eta)
+        };
 
         let config = Self {
             log_starting_degree,
@@ -360,21 +382,14 @@ where
             round_configs,
             log_final_degree,
             final_queries,
-            final_pow_bits,
-            final_folding_pow_bits,
-            required_final_pow_bits,
-            required_final_folding_pow_bits,
+            final_eta,
+            final_pow_bits: fixed_pow_bits,
+            final_folding_pow_bits: fixed_pow_bits,
+            required_final_pow_bits: fixed_pow_bits,
+            required_final_folding_pow_bits: fixed_pow_bits,
             mmcs: params.mmcs,
             _phantom: PhantomData,
         };
-
-        assert!(
-            config.check_pow_bits(),
-            "max_pow_bits ({}) is insufficient to reach the {} -bit security target. \
-             Increase max_pow_bits or lower the security_level.",
-            config.max_pow_bits,
-            config.security_level,
-        );
 
         config
     }
@@ -399,21 +414,9 @@ where
         1 << self.log_final_degree
     }
 
-    /// Returns `true` if `max_pow_bits` is sufficient to reach the security target in every round.
-    ///
-    /// When this returns `false`, the algebraic soundness gap in some round exceeds
-    /// `max_pow_bits`, meaning the actual security level is below `security_level`. Callers
-    /// should either increase `max_pow_bits`, increase the blowup factor, or use more queries.
+    /// Returns `true` when the configured PoW leaves a positive algebraic security target.
     pub fn check_pow_bits(&self) -> bool {
-        if self.required_final_pow_bits > self.max_pow_bits
-            || self.required_final_folding_pow_bits > self.max_pow_bits
-        {
-            return false;
-        }
-        self.round_configs.iter().all(|r| {
-            r.required_pow_bits <= self.max_pow_bits
-                && r.required_folding_pow_bits <= self.max_pow_bits
-        })
+        self.security_level > self.max_pow_bits
     }
 }
 
@@ -449,25 +452,20 @@ mod tests {
 
         let params = StirParameters {
             log_blowup: 1,
-            log_folding_factor: 1,
+            log_folding_factor: 2,
             soundness_type: SecurityAssumption::CapacityBound,
             security_level: 80,
             max_pow_bits: 20,
             mmcs,
         };
 
-        // log_starting_degree=8, fold by 2 each round -> 8 rounds total, 7 intermediate
+        // log_starting_degree=8, fold by 4 each round -> 4 folds total, 3 intermediate rounds.
         let config = StirConfig::<F, EF, MyMmcs, MyChallenger>::new(8, params);
         assert_eq!(config.log_final_degree, 0);
-        // total_folds = 8, num_rounds = 7
-        assert_eq!(config.num_rounds(), 7);
+        assert_eq!(config.num_rounds(), 3);
+        assert_eq!(config.final_pow_bits, 20);
+        assert_eq!(config.final_folding_pow_bits, 20);
 
-        // For k=2, rate is constant (log_folding_factor - 1 = 0), so queries are constant.
-        let q0 = config.round_configs[0].num_queries;
-        for rc in &config.round_configs {
-            assert_eq!(rc.num_queries, q0, "k=2 should have constant query count");
-        }
-        // Domain halves each round (not shrinks by k=2 since k=2 means no rate improvement).
         let initial_log_domain = 8 + 1; // log_starting_degree + log_blowup
         for (i, rc) in config.round_configs.iter().enumerate() {
             assert_eq!(
@@ -480,6 +478,67 @@ mod tests {
                 rc.log_domain_size - rc.log_folding_factor,
                 "log_fold_domain_size = log_domain_size - log_folding_factor"
             );
+            assert_eq!(rc.num_ood_samples, 2, "capacity-bound STIR uses s = 2");
+            assert!(rc.eta.is_finite() && rc.eta > 0.);
+            if i > 0 {
+                assert!(
+                    rc.num_queries <= config.round_configs[i - 1].num_queries,
+                    "query counts should not increase as the code rate improves"
+                );
+            }
         }
+        assert!(config.final_eta.is_finite() && config.final_eta > 0.);
+    }
+
+    #[test]
+    fn test_stir_config_uses_fixed_ood_schedule() {
+        use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+        use p3_challenger::DuplexChallenger;
+        use p3_commit::ExtensionMmcs;
+        use p3_field::Field;
+        use p3_field::extension::BinomialExtensionField;
+        use p3_merkle_tree::MerkleTreeMmcs;
+        use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+        use rand::SeedableRng;
+
+        type F = BabyBear;
+        type EF = BinomialExtensionField<F, 4>;
+        type Perm = Poseidon2BabyBear<16>;
+        type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+        type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+        type PackedF = <F as Field>::Packing;
+        type ValMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
+        type MyMmcs = ExtensionMmcs<F, EF, ValMmcs>;
+        type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
+
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(7);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let val_mmcs = ValMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+
+        let jb = StirConfig::<F, EF, MyMmcs, MyChallenger>::new(
+            8,
+            StirParameters {
+                log_blowup: 2,
+                log_folding_factor: 2,
+                soundness_type: SecurityAssumption::JohnsonBound,
+                security_level: 80,
+                max_pow_bits: 20,
+                mmcs: MyMmcs::new(val_mmcs.clone()),
+            },
+        );
+        assert!(jb.round_configs.iter().all(|rc| rc.num_ood_samples == 1));
+
+        let cb = StirConfig::<F, EF, MyMmcs, MyChallenger>::new(
+            8,
+            StirParameters {
+                log_blowup: 2,
+                log_folding_factor: 2,
+                soundness_type: SecurityAssumption::CapacityBound,
+                security_level: 80,
+                max_pow_bits: 20,
+                mmcs: MyMmcs::new(val_mmcs),
+            },
+        );
+        assert!(cb.round_configs.iter().all(|rc| rc.num_ood_samples == 2));
     }
 }

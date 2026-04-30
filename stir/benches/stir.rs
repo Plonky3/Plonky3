@@ -9,8 +9,7 @@
 //! (DFTs, Merkle trees, Lagrange folds, shake polynomial arithmetic) without PoW
 //! grinding noise.  Real deployments add PoW overhead on top of these numbers.
 //!
-//! Three configurations are benchmarked:
-//!   - `fold1`: arity 2 per round (k=2); no rate improvement, FRI-like behaviour
+//! Two theorem-compatible configurations are benchmarked:
 //!   - `fold2`: arity 4 per round (k=4); rate improves by 1 bit per round
 //!   - `fold3`: arity 8 per round (k=8); rate improves by 2 bits per round (fewest queries)
 
@@ -157,28 +156,6 @@ fn bench_verify<F, EF, M, D, C>(
     }
 }
 
-fn bench_stir_babybear_fold1(c: &mut Criterion) {
-    let log_degrees: Vec<usize> = (14..=22).collect();
-    let (params, dft, challenger) = make_stir_env(1);
-
-    bench_prove::<Val, Challenge, MyMmcs, Dft, Challenger>(
-        c,
-        &params,
-        &dft,
-        &challenger,
-        &log_degrees,
-        "stir_babybear_blowup1_fold1",
-    );
-    bench_verify::<Val, Challenge, MyMmcs, Dft, Challenger>(
-        c,
-        &params,
-        &dft,
-        &challenger,
-        &log_degrees,
-        "stir_babybear_blowup1_fold1",
-    );
-}
-
 fn bench_stir_babybear_fold2(c: &mut Criterion) {
     let log_degrees: Vec<usize> = (14..=22).collect();
     let (params, dft, challenger) = make_stir_env(2);
@@ -225,7 +202,6 @@ fn bench_stir_babybear_fold3(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_stir_babybear_fold1,
     bench_stir_babybear_fold2,
     bench_stir_babybear_fold3,
 );
