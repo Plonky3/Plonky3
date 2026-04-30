@@ -1,85 +1,74 @@
 use alloc::vec::Vec;
 
-use p3_challenger::FieldChallenger;
+use p3_challenger::{CanSampleUniformBits, FieldChallenger};
 use p3_field::{ExtensionField, Field};
 use p3_util::log2_strict_usize;
 
 use crate::fiat_shamir::errors::FiatShamirError;
 
-/// Upper bound on bits drawn from a single Fiat-Shamir squeeze.
+/// Sample `t` distinct STIR query indices uniformly from the transcript.
 ///
-/// # Why 20
-///
-/// Two competing constraints pin this value:
-///
-/// - **Must cover the folded domain.**
-///   Starting domains range from 2^18 to 2^30.
-///   Folding with k >= 4 shrinks by >= 2^4 per round.
-///   So 2^20 ~ 1M comfortably exceeds any folded domain.
-///
-/// - **Must keep modular bias negligible.**
-///   Drawing `b` bits and reducing mod `n` biases by `2^b / n - 1`.
+/// # Pipeline
 ///
 /// ```text
-///   Field          b    n = 2^18    bias
-///   ─────────────  ──   ────────    ──────────
-///   KoalaBear 31   20   2^18        ~3  (capped to b = 30 by F::bits()-1)
-///   Goldilocks 64  20   2^18        ~2^{-44}  (negligible)
+///   transcript --> uniform draws --> reject collisions --> sort
+///                  [0, 2^k)          distinct              ascending
 /// ```
 ///
-/// At runtime the effective limit is `min(F::bits() - 1, 20)`,
-/// so smaller fields automatically tighten the budget.
+/// with `k = log2(folded_domain_size)` and
+/// `folded_domain_size = domain_size >> folding_factor`.
 ///
-/// # Soundness context (WHIR paper, Theorem 5.2)
+/// # Output
 ///
-/// These indices feed the shift-query check:
+/// - length = `t = min(num_queries, folded_domain_size)`
+/// - range  = `[0, folded_domain_size)`
+/// - order  = strictly ascending, pairwise distinct, uniform per index
+///
+/// # Soundness
+///
+/// WHIR shift-query bound (Arnon-Chiesa-Fenzi-Yogev 2024, Thm 5.2):
 ///
 /// ```text
-///   epsilon^shift  <=  (1 - delta)^t
+///   eps_shift  <=  (1 - delta)^t
 /// ```
 ///
-/// The proof assumes uniform sampling.
-/// Any bias inflates the effective `delta`, so keeping it small is security-critical.
+/// `t` counts independent **uniformly-sampled** positions; distinctness
+/// is not required (collisions waste opening work but do not weaken the
+/// bound). Per-draw uniformity is the only leak closed here:
 ///
-/// Reference: Arnon, Chiesa, Fenzi, Yogev 2024, Section 2.1.3, Step 5.
-const MAX_SAMPLE_BITS: usize = 20;
-
-/// Sample cryptographically secure STIR query indices from the transcript.
+/// - **Biased draws** — bit-decomposing a uniform field element biases
+///   each draw by `~ 2^bits / |F|`, which inflates `delta`. Routed
+///   through `sample_uniform_bits` for exact uniformity.
 ///
-/// - Draws `num_queries` random indices in `[0, folded_domain_size)`,
-/// - Then sorts and deduplicates them.
+/// Duplicate rejection is a cleanliness choice — it pins output length
+/// at `t = min(num_queries, folded_domain_size)` and unifies the
+/// common-case and saturation-case paths below.
 ///
-/// The returned vector may therefore contain **fewer** than `num_queries` entries when collisions occur.
+/// # Saturation
 ///
-/// # Soundness note
+/// `num_queries > folded_domain_size` returns the full domain. This is
+/// WHIR's final round: 1-4 folded positions vs. `final_queries` up to 75.
 ///
-/// The WHIR shift-query soundness bound is `(1 - δ)^t` where `t` is the number
-/// of *distinct* query positions (Theorem 5.2, ε^shift). Duplicate queries test
-/// the same codeword position twice and contribute no additional soundness.
-/// Because `folded_domain_size` is typically ≥ 2^18 and `num_queries` = O(λ)
-/// with λ ≤ 128, the birthday-bound collision probability is negligible
-/// (~t² / 2n ≈ 2^{-4}), so dedup almost never reduces the effective count.
+/// # Cost
 ///
-/// TODO: consider switching to rejection sampling (sample-without-replacement)
-/// to guarantee exactly `num_queries` distinct indices and tighten the
-/// soundness accounting. The current approach relies on the collision
-/// probability being negligible, which should be validated for small domains
-/// or high query counts.
-///
-/// # Batching strategy
-///
-/// When possible, multiple query indices are extracted from a single
-/// `challenger.sample_bits` call to reduce Fiat-Shamir overhead:
-///
-/// - If all bits fit in one call (≤ `max_bits_per_call`), a single sample
-///   suffices.
-/// - Otherwise, indices are batched into groups that fit within the per-call
-///   bit budget.
-/// - As a fallback, one transcript call is made per query.
+/// ```text
+///   per draw         | 1-2 field samples, reject prob ~ 1 / |F|
+///   loop, common     | O(t)
+///   loop, saturated  | O(t log t)   (coupon collector)
+/// ```
 ///
 /// # Panics
 ///
-/// Panics if `domain_size` is not a power of two.
+/// `domain_size >> folding_factor` must be a power of two.
+///
+/// # TODO (possible recursion ideas)
+///
+/// - Prefer `n` independent draws (with duplicates allowed) over
+///   `n` distinct indices for recursion-friendliness.
+/// - The WHIR paper's `(1 - delta)^t` bound is over independent
+///   draws; distinctness only lets `t` shrink slightly for the
+///   same security, with negligible practical effect.
+/// - Revisit when wiring this through a recursive verifier.
 pub fn get_challenge_stir_queries<Challenger, F, EF>(
     domain_size: usize,
     folding_factor: usize,
@@ -87,64 +76,246 @@ pub fn get_challenge_stir_queries<Challenger, F, EF>(
     challenger: &mut Challenger,
 ) -> Result<Vec<usize>, FiatShamirError>
 where
-    Challenger: FieldChallenger<F>,
+    Challenger: FieldChallenger<F> + CanSampleUniformBits<F>,
     F: Field,
     EF: ExtensionField<F>,
 {
-    // Apply folding to get the reduced domain size.
+    // Phase 1: derive the addressable folded domain.
+    //
+    //   folded_domain_size = domain_size >> folding_factor
+    //   k                  = log2(folded_domain_size)
+    //
+    // Each index fits in `k` bits.
     let folded_domain_size = domain_size >> folding_factor;
-    // Bits needed to index the folded domain.
     let domain_size_bits = log2_strict_usize(folded_domain_size);
 
-    // Conservative limit to avoid statistical bias.
-    let max_bits_per_call = (F::bits() - 1).min(MAX_SAMPLE_BITS);
+    // Phase 2: cap the request at the domain size.
+    //
+    //   num_queries <= folded_domain_size  ->  target = num_queries
+    //   num_queries  > folded_domain_size  ->  target = folded_domain_size
+    //                                          (open every position)
+    let target = num_queries.min(folded_domain_size);
 
-    let total_bits_needed = num_queries * domain_size_bits;
-    let mut queries = Vec::with_capacity(num_queries);
+    // Phase 3: rejection-sample distinct indices.
+    //
+    //   loop:
+    //     q <- uniform on [0, 2^k)
+    //     append q if not already present
+    //   until len == target
+    let mut queries: Vec<usize> = Vec::with_capacity(target);
+    while queries.len() < target {
+        // RESAMPLE = true: the impl loops on field-side rejection internally.
+        //
+        // So the error arm is unreachable for every challenger in this workspace.
+        let q = challenger
+            .sample_uniform_bits::<true>(domain_size_bits)
+            .expect("RESAMPLE = true: rejection loops internally, never errors");
 
-    if total_bits_needed <= max_bits_per_call {
-        // All bits fit in a single transcript call.
-        let mut all_bits = challenger.sample_bits(total_bits_needed);
-        let mask = (1 << domain_size_bits) - 1;
-
-        for _ in 0..num_queries {
-            let query_bits = all_bits & mask;
-            queries.push(query_bits % folded_domain_size);
-            all_bits >>= domain_size_bits;
-        }
-    } else {
-        let queries_per_batch = max_bits_per_call / domain_size_bits;
-
-        if queries_per_batch >= 2 {
-            // Batch multiple queries per transcript call.
-            let mut remaining = num_queries;
-            let mask = (1 << domain_size_bits) - 1;
-
-            while remaining > 0 {
-                let batch_size = remaining.min(queries_per_batch);
-                let batch_bits = batch_size * domain_size_bits;
-
-                let mut all_bits = challenger.sample_bits(batch_bits);
-
-                for _ in 0..batch_size {
-                    let query_index = (all_bits & mask) % folded_domain_size;
-                    queries.push(query_index);
-                    all_bits >>= domain_size_bits;
-                }
-
-                remaining -= batch_size;
-            }
-        } else {
-            // Fallback: one transcript call per query.
-            for _ in 0..num_queries {
-                let value = challenger.sample_bits(domain_size_bits);
-                queries.push(value);
-            }
+        if !queries.contains(&q) {
+            queries.push(q);
         }
     }
 
+    // Phase 4: verifier and Merkle-proof code consume ascending indices.
     queries.sort_unstable();
-    queries.dedup();
-
     Ok(queries)
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::collections::BTreeSet;
+    use alloc::vec::Vec;
+
+    use p3_challenger::{CanObserve, DuplexChallenger};
+    use p3_field::extension::BinomialExtensionField;
+    use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
+    use proptest::prelude::*;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    use super::*;
+
+    type F = KoalaBear;
+    type EF = BinomialExtensionField<F, 4>;
+    type Perm = Poseidon2KoalaBear<16>;
+    type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
+
+    /// Build a deterministic duplex challenger from a seed.
+    ///
+    /// - Permutation: fixed across calls (seed-independent)
+    /// - Transcript prefix: derived from `seed`
+    ///
+    /// Same seed -> byte-identical sample stream.
+    fn challenger_with_seed(seed: u64) -> MyChallenger {
+        // Permutation: deterministic across all test runs.
+        let mut perm_rng = SmallRng::seed_from_u64(42);
+        let perm = Perm::new_from_rng_128(&mut perm_rng);
+        let mut challenger = MyChallenger::new(perm);
+
+        // Transcript primer: 8 field elements derived from `seed`. This is
+        // what makes two challengers with the same seed byte-identical.
+        let mut transcript_rng = SmallRng::seed_from_u64(seed);
+        let primer: Vec<F> = (0..8).map(|_| transcript_rng.random()).collect();
+        challenger.observe_slice(&primer);
+        challenger
+    }
+
+    /// Strategy for non-saturated `(domain_size, folding_factor, num_queries)`.
+    ///
+    /// ```text
+    ///   log_folded     in [1, 8]   -> folded in [2, 256]
+    ///   folding_factor in [0, 4]
+    ///   num_queries    in [1, folded]
+    /// ```
+    ///
+    /// Saturation (`num_queries > folded`) is covered by a dedicated test.
+    fn arb_query_params() -> impl Strategy<Value = (usize, usize, usize)> {
+        (1usize..=8, 0usize..=4).prop_flat_map(|(log_folded, folding_factor)| {
+            let folded = 1usize << log_folded;
+            let domain_size = folded << folding_factor;
+            (1usize..=folded)
+                .prop_map(move |num_queries| (domain_size, folding_factor, num_queries))
+        })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn prop_get_challenge_stir_queries_invariants(
+            (domain_size, folding_factor, num_queries) in arb_query_params(),
+            seed in any::<u64>(),
+        ) {
+            // Five invariants, one challenger setup per case:
+            // (1) length
+            // (2) range
+            // (3) strict sort
+            // (4) distinct
+            // (5) deterministic replay
+            let folded_domain_size = domain_size >> folding_factor;
+
+            // First run: seed -> queries_a.
+            let mut challenger_a = challenger_with_seed(seed);
+            let queries_a = get_challenge_stir_queries::<MyChallenger, F, EF>(
+                domain_size,
+                folding_factor,
+                num_queries,
+                &mut challenger_a,
+            )
+            .expect("RESAMPLE = true cannot fail");
+
+            // (1) length == request.
+            prop_assert_eq!(queries_a.len(), num_queries);
+
+            // (2) every index in [0, folded_domain_size).
+            for &q in &queries_a {
+                prop_assert!(
+                    q < folded_domain_size,
+                    "out of range: {} not in [0, {})", q, folded_domain_size
+                );
+            }
+
+            // (3) strictly ascending.
+            prop_assert!(
+                queries_a.windows(2).all(|w| w[0] < w[1]),
+                "not sorted: {:?}", queries_a
+            );
+
+            // (4) pairwise distinct -- redundant given (3); set check
+            //     guards against a future weakening of (3).
+            let unique: BTreeSet<usize> = queries_a.iter().copied().collect();
+            prop_assert_eq!(unique.len(), num_queries, "duplicates in {:?}", queries_a);
+
+            // (5) determinism: same seed -> byte-identical output.
+            //     This is the prover/verifier Fiat-Shamir replay property.
+            let mut challenger_b = challenger_with_seed(seed);
+            let queries_b = get_challenge_stir_queries::<MyChallenger, F, EF>(
+                domain_size,
+                folding_factor,
+                num_queries,
+                &mut challenger_b,
+            )
+            .expect("RESAMPLE = true cannot fail");
+            prop_assert_eq!(queries_a, queries_b);
+        }
+    }
+
+    #[test]
+    fn saturates_when_num_queries_exceeds_domain() {
+        // WHIR final-round regime: ask for more queries than positions.
+        //
+        //   folded_domain_size = 16 >> 2 = 4
+        //   num_queries        = 75            (>> 4)
+        //   expected           = [0, 1, 2, 3]  (full domain, ascending)
+        let domain_size = 16usize;
+        let folding_factor = 2usize;
+        let folded_domain_size = domain_size >> folding_factor;
+        let num_queries = 75usize;
+
+        let mut challenger = challenger_with_seed(0xC0FFEE);
+        let queries = get_challenge_stir_queries::<MyChallenger, F, EF>(
+            domain_size,
+            folding_factor,
+            num_queries,
+            &mut challenger,
+        )
+        .expect("RESAMPLE = true cannot fail");
+
+        // Length capped at the domain; output is the full domain ascending.
+        assert_eq!(queries.len(), folded_domain_size);
+        assert_eq!(queries, (0..folded_domain_size).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn empirical_uniformity_single_query() {
+        // Histogram-based regression detector for uniform sampling.
+        //
+        //   N = 16 buckets, M = 4096 draws, expected = M/N = 256
+        //
+        // Hoeffding on the bucket indicator 1[q == k]:
+        //
+        //   Pr[ |count_k - 256| >= t ]  <=  2 * exp(-2 t^2 / M)
+        //
+        // With t = 160:
+        //
+        //   per-bucket    : 2  * exp(-12.5) ~ 7.4e-6
+        //   union 16 bins : 32 * exp(-12.5) ~ 1.2e-4
+        //
+        // Cryptographic uniformity rests on the field-side rejection
+        // primitive; this test only catches gross regressions.
+        const FOLDED_DOMAIN_SIZE: usize = 16;
+        const NUM_DRAWS: usize = 4096;
+        const TOLERANCE: usize = 160;
+
+        // Pick parameters so the folded domain has exactly 16 positions.
+        let domain_size: usize = 64;
+        let folding_factor: usize = 2;
+        assert_eq!(domain_size >> folding_factor, FOLDED_DOMAIN_SIZE);
+
+        // Histogram one draw per challenger seed.
+        let mut counts = [0usize; FOLDED_DOMAIN_SIZE];
+        // Histogram: one draw per seed.
+        for seed in 0u64..NUM_DRAWS as u64 {
+            let mut challenger = challenger_with_seed(seed);
+            let q = get_challenge_stir_queries::<MyChallenger, F, EF>(
+                domain_size,
+                folding_factor,
+                1,
+                &mut challenger,
+            )
+            .expect("RESAMPLE = true cannot fail");
+            assert_eq!(q.len(), 1);
+            counts[q[0]] += 1;
+        }
+
+        // Each bucket within +/- TOLERANCE of expected count.
+        let expected = NUM_DRAWS / FOLDED_DOMAIN_SIZE;
+        for (bucket, &count) in counts.iter().enumerate() {
+            let deviation = count.abs_diff(expected);
+            assert!(
+                deviation <= TOLERANCE,
+                "bucket {bucket}: count {count} deviates from {expected} by {deviation} > {TOLERANCE}; counts = {counts:?}"
+            );
+        }
+    }
 }

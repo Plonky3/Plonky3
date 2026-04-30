@@ -8,8 +8,8 @@ use p3_util::log2_ceil_u64;
 use tracing::instrument;
 
 use crate::{
-    CanFinalizeDigest, CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger,
-    HashChallenger,
+    CanFinalizeDigest, CanObserve, CanSample, CanSampleBits, CanSampleUniformBits, FieldChallenger,
+    GrindingChallenger, HashChallenger, ResamplingError,
 };
 
 /// Given a challenger that can observe and sample bytes, produces a challenger that is able to
@@ -168,6 +168,33 @@ where
     }
 }
 
+impl<F, Inner> CanSampleUniformBits<F> for SerializingChallenger32<F, Inner>
+where
+    F: PrimeField32,
+    Inner: CanSample<u8>,
+{
+    /// Sample uniform bits by masking bytes from the inner stream.
+    ///
+    /// # Overview
+    ///
+    /// The inner stream emits cryptographic-hash bytes uniform on `[0, 2^8)`.
+    ///
+    /// Reading 4 bytes as a 32-bit integer and masking the low `bits` is
+    /// exactly uniform on `[0, 2^bits)`.
+    ///
+    /// No field-element decomposition occurs, so no rejection band exists.
+    /// The const generic is therefore inert: this function never errors
+    /// and never resamples.
+    fn sample_uniform_bits<const RESAMPLE: bool>(
+        &mut self,
+        bits: usize,
+    ) -> Result<usize, ResamplingError> {
+        // Byte-sourced sampling is uniform without rejection, so the
+        // result is always valid and the error arm is unreachable.
+        Ok(self.sample_bits(bits))
+    }
+}
+
 impl<F, Inner> GrindingChallenger for SerializingChallenger32<F, Inner>
 where
     F: PrimeField32,
@@ -322,6 +349,33 @@ where
         assert!((1u64 << bits) <= F::ORDER_U64);
         let rand_u64 = u64::from_le_bytes(self.inner.sample_array());
         (rand_u64 & ((1u64 << bits) - 1)) as usize
+    }
+}
+
+impl<F, Inner> CanSampleUniformBits<F> for SerializingChallenger64<F, Inner>
+where
+    F: PrimeField64,
+    Inner: CanSample<u8>,
+{
+    /// Sample uniform bits by masking bytes from the inner stream.
+    ///
+    /// # Overview
+    ///
+    /// The inner stream emits cryptographic-hash bytes uniform on `[0, 2^8)`.
+    ///
+    /// Reading 8 bytes as a 64-bit integer and masking the low `bits` is
+    /// exactly uniform on `[0, 2^bits)`.
+    ///
+    /// No field-element decomposition occurs, so no rejection band exists.
+    /// The const generic is therefore inert: this function never errors
+    /// and never resamples.
+    fn sample_uniform_bits<const RESAMPLE: bool>(
+        &mut self,
+        bits: usize,
+    ) -> Result<usize, ResamplingError> {
+        // Byte-sourced sampling is uniform without rejection, so the
+        // result is always valid and the error arm is unreachable.
+        Ok(self.sample_bits(bits))
     }
 }
 
