@@ -302,7 +302,6 @@ where
 /// - `D == EF::DIMENSION`,
 /// - `F::Packing::WIDTH % CHUNK == 0`,
 /// - `eq1_packed.len() <= MAX_STACK_N` (bounds the pre-multiply stack buffer).
-#[inline]
 fn compress_prefix_to_packed_packed_kernel<F, EF, const D: usize>(
     out: &mut [EF::ExtensionPacking],
     eq1_packed: &[EF::ExtensionPacking],
@@ -349,7 +348,9 @@ fn compress_prefix_to_packed_packed_kernel<F, EF, const D: usize>(
     }
     // SAFETY: The loop above wrote exactly:
     // - the first `n_packed` slots,
-    // - the buffer is not aliased.
+    // - we expose only that prefix,
+    // - the buffer is not aliased,
+    // - `MaybeUninit<T>` shares layout and alignment with `T`.
     let pw: &[EF::ExtensionPacking] = unsafe {
         core::slice::from_raw_parts(pw_buf.as_ptr().cast::<EF::ExtensionPacking>(), n_packed)
     };
@@ -425,6 +426,15 @@ fn compress_prefix_to_packed_packed_kernel_eager<F, EF>(
     F: Field,
     EF: ExtensionField<F>,
 {
+    // Empty output is a no-op:
+    //
+    // - With no output slots, the inner stride collapses to zero.
+    // - Iterating the row in zero-sized chunks panics.
+    // - Bail before that step.
+    if out.is_empty() {
+        return;
+    }
+
     let scalar_inner = out.len() * F::Packing::WIDTH;
     chunk
         .chunks(scalar_inner * F::Packing::WIDTH)
@@ -785,7 +795,7 @@ mod tests {
         #[test]
         fn prefix_to_packed_kernel_matches_eager(
             n_packed in 0usize..=8,
-            inner_k in 0usize..=4,
+            inner_k in 0usize..=5,
             seed in any::<u64>(),
         ) {
             // Invariant: kernel output equals the eager fallback for
@@ -793,7 +803,8 @@ mod tests {
             //
             // Fixture state:
             //     n_packed   = 0..8 - covers the empty case + small N.
-            //     inner_k    = 0..4 - 1 to 16 packed output positions, straddling the TILE = 8 boundary.
+            //     inner_k    = 0..5 - 1 to 32 packed output positions,
+            //                         covers multi-tile + the TILE = 8 boundary.
             let packed_inner = 1usize << inner_k;
             let (eq1, chunk, w0) = random_prefix_inputs(n_packed, packed_inner, seed);
 
@@ -810,6 +821,31 @@ mod tests {
 
             prop_assert_eq!(out_kernel, out_eager);
         }
+    }
+
+    #[test]
+    fn prefix_to_packed_kernel_empty_out_does_not_panic() {
+        // Invariant: an empty output slice is a no-op on both paths.
+        //
+        // Fixture state:
+        //     n_packed     = 3        - eq1 sized as if the fast path would engage.
+        //     packed_inner = 0        - empty output short-circuits both kernels.
+        //     chunk        = []       - matches packed_inner = 0.
+        let mut rng = SmallRng::seed_from_u64(0xCAFE);
+        let mut out_fast: Vec<PackedEF> = Vec::new();
+        let mut out_eager: Vec<PackedEF> = Vec::new();
+
+        let eq1: Vec<PackedEF> = (0..3).map(|_| rng.random()).collect();
+        let chunk: Vec<F> = Vec::new();
+        let w0: EF = rng.random();
+
+        // Both calls must return cleanly without writing or panicking.
+        compress_prefix_to_packed_packed::<F, EF>(&mut out_fast, &eq1, &chunk, w0);
+        compress_prefix_to_packed_packed_kernel_eager::<F, EF>(&mut out_eager, &eq1, &chunk, w0);
+
+        // No slots → nothing was written.
+        assert!(out_fast.is_empty());
+        assert!(out_eager.is_empty());
     }
 
     #[test]
