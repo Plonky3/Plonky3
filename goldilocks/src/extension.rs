@@ -1,5 +1,6 @@
 use p3_field::extension::{
-    BinomiallyExtendable, BinomiallyExtendableAlgebra, HasTwoAdicBinomialExtension,
+    BinomiallyExtendable, BinomiallyExtendableAlgebra, CubicExtendableAlgebra,
+    CubicTrinomialExtendable, HasTwoAdicBinomialExtension, HasTwoAdicCubicExtension,
 };
 use p3_field::{PrimeCharacteristicRing, TwoAdicField, field_to_array};
 
@@ -32,6 +33,56 @@ impl HasTwoAdicBinomialExtension<2> for Goldilocks {
         } else {
             [Self::two_adic_generator(bits), Self::ZERO]
         }
+    }
+}
+
+impl CubicExtendableAlgebra<Self> for Goldilocks {}
+
+impl CubicTrinomialExtendable for Goldilocks {
+    // Verifiable via:
+    // ```sage
+    // p = 2**64 - 2**32 + 1
+    // R.<x> = GF(p)[]
+    // assert (x^3 - x - 1).is_irreducible()
+    // ```
+    const FROBENIUS_MATRIX: [[Self; 3]; 3] = [
+        [
+            Self::ONE,
+            Self::new(10615703402128488253),
+            Self::new(6700183068485440220),
+        ],
+        [
+            Self::ZERO,
+            Self::new(10050274602728160328),
+            Self::new(14531223735771536287),
+        ],
+        [
+            Self::ZERO,
+            Self::new(11746561000929144102),
+            Self::new(8396469466686423992),
+        ],
+    ];
+
+    // Verifiable via:
+    // ```sage
+    // p = 2**64 - 2**32 + 1
+    // F = GF(p)
+    // R.<x> = F[]
+    // K.<a> = F.extension(x^3 - x - 1)
+    // g = 2 + a
+    // order = p^3 - 1
+    // assert g.multiplicative_order() == order
+    // ```
+    const EXT_GENERATOR: [Self; 3] = [Self::TWO, Self::ONE, Self::ZERO];
+}
+
+impl HasTwoAdicCubicExtension for Goldilocks {
+    const EXT_TWO_ADICITY: usize = 32;
+
+    fn ext_two_adic_generator(bits: usize) -> [Self; 3] {
+        assert!(bits <= 32);
+
+        field_to_array(Self::two_adic_generator(bits))
     }
 }
 
@@ -129,6 +180,71 @@ mod test_quadratic_extension {
         &super::PACKED_ONES
     );
     p3_field_testing::test_packed_binomial_extension_division!(F, 2);
+}
+
+#[cfg(test)]
+mod test_cubic_trinomial_extension {
+
+    use num_bigint::BigUint;
+    use p3_field::extension::CubicTrinomialExtensionField;
+    use p3_field::{ExtensionField, PrimeCharacteristicRing};
+    use p3_field_testing::{
+        test_extension_field, test_field, test_frobenius, test_packed_extension_field,
+        test_two_adic_extension_field,
+    };
+
+    use crate::Goldilocks;
+
+    type F = Goldilocks;
+    type EF = CubicTrinomialExtensionField<F>;
+
+    const ZEROS: [EF; 1] = [EF::ZERO];
+    const ONES: [EF; 1] = [EF::ONE];
+
+    fn multiplicative_group_prime_factorization() -> [(BigUint, u32); 9] {
+        [
+            (BigUint::from(2u8), 32),
+            (BigUint::from(3u8), 2),
+            (BigUint::from(5u8), 1),
+            (BigUint::from(17u8), 1),
+            (BigUint::from(257u16), 1),
+            (BigUint::from(937u16), 1),
+            (BigUint::from(65537u32), 1),
+            (BigUint::from(724723u32), 1),
+            (BigUint::from(167034643597991036904547663171u128), 1),
+        ]
+    }
+
+    // TODO: Consider generalizing and putting into test_extension_field!
+    #[test]
+    fn test_defining_relation() {
+        let x = EF::new([F::ZERO, F::ONE, F::ZERO]);
+        let x_cubed = x * x * x;
+        let x_plus_one = x + EF::ONE;
+        assert_eq!(x_cubed, x_plus_one, "X^3 should equal X + 1");
+    }
+
+    test_field!(
+        super::EF,
+        &super::ZEROS,
+        &super::ONES,
+        &super::multiplicative_group_prime_factorization()
+    );
+
+    test_extension_field!(super::F, super::EF);
+    test_two_adic_extension_field!(super::F, super::EF);
+    test_frobenius!(super::F, super::EF);
+
+    type Pef = <EF as ExtensionField<F>>::ExtensionPacking;
+    const PACKED_ZEROS: [Pef; 1] = [Pef::ZERO];
+    const PACKED_ONES: [Pef; 1] = [Pef::ONE];
+    test_packed_extension_field!(
+        super::F,
+        super::EF,
+        super::Pef,
+        &super::PACKED_ZEROS,
+        &super::PACKED_ONES
+    );
 }
 
 #[cfg(test)]

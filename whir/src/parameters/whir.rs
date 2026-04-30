@@ -11,19 +11,25 @@ use p3_multilinear_util::poly::Poly;
 use super::{FoldingFactor, ProtocolParameters, SecurityAssumption};
 use crate::constraints::statement::initial::InitialStatement;
 
-/// Selects which sumcheck algorithm variant to use during proving.
+/// Selects which sumcheck variant is used for the initial round.
+///
+/// # Fallback
+///
+/// SVO silently falls back to Classic when the polynomial is too small:
+///
+/// ```text
+///     k <= 2 * log_2(W) + l_0
+/// ```
+///
+/// with `k` the number of variables, `l_0` the SVO depth, and `W` the
+/// base-field packing width.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SumcheckStrategy {
-    /// Protocol with statement using classic sumcheck (no optimization).
+    /// Standard quadratic sumcheck.
     ///
-    /// This is the standard baseline implementation where the prover proves
-    /// both polynomial commitment validity and evaluation statements.
+    /// No structural assumption on the weight polynomial.
     Classic,
-
-    /// Protocol with statement using Small Value Optimization (SVO).
-    ///
-    /// Uses SVO from Algorithm 6 of <https://eprint.iacr.org/2025/1117> with
-    /// specialized accumulators for the first three rounds to reduce prover work.
+    /// Small-Value Optimization (Algorithm 5, ePrint 2025/1117).
     #[default]
     Svo,
 }
@@ -467,7 +473,7 @@ where
     /// - `degree` is 2^(remaining variables after all folds up to this round).
     ///
     /// ```text
-    /// inv_rate = (round_domain_size >> rs_reduction) / 2^(num_vars - total_folded)
+    /// inv_rate = (round_domain_size >> rs_reduction) / 2^(num_variables - total_folded)
     /// ```
     pub fn inv_rate(&self, round: usize) -> usize {
         // Shrink the domain by this round's reduction factor.
@@ -484,18 +490,14 @@ where
     /// Create the initial statement for the WHIR protocol.
     ///
     /// Wraps the polynomial with the first-round folding factor and
-    /// the chosen sumcheck strategy. Evaluation constraints are added
+    /// the chosen sumcheck mode. Evaluation constraints are added
     /// by the caller before proving begins.
     pub const fn initial_statement(
         &self,
         polynomial: Poly<F>,
-        sumcheck_strategy: SumcheckStrategy,
+        mode: SumcheckStrategy,
     ) -> InitialStatement<F, EF> {
-        InitialStatement::new(
-            polynomial,
-            self.folding_factor.at_round(0),
-            sumcheck_strategy,
-        )
+        InitialStatement::new(polynomial, self.folding_factor.at_round(0), mode)
     }
 }
 

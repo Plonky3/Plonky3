@@ -1,5 +1,3 @@
-//! Sumcheck prover: constructs and executes the sumcheck protocol for multilinear polynomials.
-
 use alloc::vec::Vec;
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
@@ -8,53 +6,17 @@ use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
 
-use crate::constraints::Constraint;
 use crate::constraints::statement::EqStatement;
 use crate::constraints::statement::initial::{InitialStatement, InitialStatementInner};
-use crate::sumcheck::lagrange::lagrange_weights_012_multi;
-use crate::sumcheck::product_polynomial::{ProductPolynomial, sumcheck_coefficients_cross};
+use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
+use crate::sumcheck::product_polynomial::ProductPolynomial;
+use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
 use crate::sumcheck::svo::SvoClaim;
-use crate::sumcheck::{SumcheckData, extrapolate_012};
+use crate::sumcheck::{SumcheckData, extrapolate_01inf};
 
-/// Prover state for the sumcheck protocol over a multilinear polynomial.
-///
-/// Holds the partially-folded polynomial pair `(f, w)` and the current claimed sum.
-///
-/// # Invariant
-///
-/// At every point during the protocol:
-///
-/// ```text
-/// sum == sum_{x in {0,1}^n} f(x) * w(x)
-/// ```
-///
-/// where `n` is the number of remaining unbound variables.
-/// It decreases by one per round as variables are bound to verifier challenges.
-#[derive(Debug, Clone)]
-pub struct SumcheckProver<F: Field, EF: ExtensionField<F>> {
-    /// Paired evaluation and weight polynomials for the quadratic sumcheck.
-    ///
-    /// Stores both `f(x)` and `w(x)` in either SIMD-packed or scalar format.
-    /// The format is chosen automatically based on polynomial size.
-    pub poly: ProductPolynomial<F, EF>,
+pub struct SingleSumcheck;
 
-    /// Current claimed sum for the remaining variables.
-    ///
-    /// Tracks `sum_{x in {0,1}^n} f(x) * w(x)`.
-    ///
-    /// After each round binding variable `X_i` to challenge `r_i`, updated via:
-    ///
-    /// ```text
-    /// sum := h(r_i)  where  h(X) = c_0 + c_1 * X + c_2 * X^2
-    /// ```
-    pub sum: EF,
-}
-
-impl<F, EF> SumcheckProver<F, EF>
-where
-    F: Field + Ord,
-    EF: ExtensionField<F>,
-{
+impl SingleSumcheck {
     /// Constructs a sumcheck instance using the classic approach with scalar arithmetic.
     ///
     /// Fallback path for small polynomials where SIMD packing is not beneficial.
@@ -63,7 +25,7 @@ where
     ///
     /// 1. Sample a batching challenge `alpha` from the Fiat-Shamir transcript.
     /// 2. Build `w(x)` from equality constraints via random linear combination.
-    /// 3. Compute `(c_0, c_2)` for the first round.
+    /// 3. Compute `(h(0), h(inf))` for the first round.
     /// 4. Commit to the transcript, perform proof-of-work, receive challenge `r`.
     /// 5. Fold both `f` and `w` by binding the first variable to `r`.
     /// 6. Run the remaining rounds via the standard one-variable-per-round protocol.
@@ -73,14 +35,14 @@ where
     /// - The partially-folded prover state.
     /// - The verifier challenges `(r_1, ..., r_{folding_factor})`.
     #[tracing::instrument(skip_all)]
-    fn new_classic_small<Challenger>(
+    pub fn new_classic_unpacked<Challenger, F: Field, EF: ExtensionField<F>>(
         poly: &Poly<F>,
         sumcheck_data: &mut SumcheckData<F, EF>,
         challenger: &mut Challenger,
         folding_factor: usize,
         pow_bits: usize,
         statement: &EqStatement<EF>,
-    ) -> (Self, Point<EF>)
+    ) -> (SumcheckProver<F, EF>, Point<EF>)
     where
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
@@ -88,7 +50,7 @@ where
         // into a single weight polynomial via random linear combination.
         let alpha: EF = challenger.sample_algebra_element();
 
-        let k = poly.num_vars();
+        let k = poly.num_variables();
 
         // Initialize a zero weight polynomial with the same number of variables.
         let mut weights = Poly::zero(k);
@@ -102,33 +64,34 @@ where
         // so we write directly rather than accumulate.
         statement.combine_hypercube::<F, false>(&mut weights, &mut sum, alpha);
 
-        // Compute the constant and quadratic coefficients of the round polynomial:
-        //   c_0 = h(0) = sum_{b in {0,1}^{k-1}} f(0, b) * w(0, b)
-        //   c_2 = h(2) = sum_{b in {0,1}^{k-1}} f(2, b) * w(2, b)
+        // Compute the constant and leading coefficients of the round polynomial:
+        //   h(0)   = sum_{b in {0,1}^{k-1}} f(0, b) * w(0, b)
+        //   h(inf) = sum_{b} (f(1,b) - f(0,b)) * (w(1,b) - w(0,b))
         //
-        // The linear coefficient c_1 is derived by the verifier from:
+        // The linear coefficient is derived by the verifier from:
         //   h(0) + h(1) = claimed_sum
-        let (c0, c2) = sumcheck_coefficients_cross(poly, &weights);
+        let (c0, c_inf) =
+            VariableOrder::Prefix.sumcheck_coefficients(poly.as_slice(), weights.as_slice());
 
-        // Commit (c_0, c_2) to the Fiat-Shamir transcript.
+        // Commit (h(0), h(inf)) to the Fiat-Shamir transcript.
         // Perform any required proof-of-work grinding.
         // Receive the verifier's challenge `r`.
-        let r = sumcheck_data.observe_and_sample(challenger, c0, c2, pow_bits);
+        let r = sumcheck_data.observe_and_sample(challenger, c0, c_inf, pow_bits);
 
         // Fold the weight polynomial by binding its first variable to `r`:
         //   w'(x_2, ..., x_k) = w(0, x_2, ...) + r * (w(1, ...) - w(0, ...))
-        weights.fix_lo_var_mut(r);
+        weights.fix_prefix_var_mut(r);
 
         // Fold the evaluation polynomial similarly.
         // Promote base field evaluations into extension field elements during the fold.
-        let evals = poly.fix_lo_var(r);
+        let poly = poly.fix_prefix_var(r);
 
-        // Update the claimed sum to h(r) using quadratic extrapolation.
-        // h(1) = sum - c_0, since h(0) + h(1) = sum.
-        sum = extrapolate_012(c0, sum - c0, c2, r);
+        // Update the claimed sum: h(r) = h(0)*(1-r) + h(1)*r + h(inf)*r*(r-1).
+        sum = extrapolate_01inf(c0, sum - c0, c_inf, r);
 
         // Wrap the folded polynomials into a paired polynomial (scalar variant).
-        let mut poly = ProductPolynomial::<F, EF>::new_small(evals, weights);
+        let mut poly =
+            ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, poly, weights);
 
         // Verify the core sumcheck invariant.
         debug_assert_eq!(poly.dot_product(), sum);
@@ -143,7 +106,7 @@ where
             )
             .collect();
 
-        (Self { poly, sum }, Point::new(rs))
+        (SumcheckProver::new(poly, sum), Point::new(rs))
     }
 
     /// Constructs a sumcheck instance using the classic approach with SIMD-packed arithmetic.
@@ -156,28 +119,28 @@ where
     /// Same as the scalar classic approach, except:
     /// - The weight polynomial uses packed entries (fewer elements, each holding SIMD_WIDTH values).
     /// - The evaluation polynomial is packed into SIMD lanes before computing coefficients.
-    /// - A horizontal reduction (sum across SIMD lanes) produces scalar `(c_0, c_2)`.
+    /// - A horizontal reduction (sum across SIMD lanes) produces scalar `(h(0), h(inf))`.
     ///
     /// # Returns
     ///
     /// - The partially-folded prover state.
     /// - The verifier challenges `(r_1, ..., r_{folding_factor})`.
     #[tracing::instrument(skip_all)]
-    fn new_classic_packed<Challenger>(
+    pub fn new_classic_packed<Challenger, F: Field, EF: ExtensionField<F>>(
         poly: &Poly<F>,
         sumcheck_data: &mut SumcheckData<F, EF>,
         challenger: &mut Challenger,
         folding_factor: usize,
         pow_bits: usize,
         statement: &EqStatement<EF>,
-    ) -> (Self, Point<EF>)
+    ) -> (SumcheckProver<F, EF>, Point<EF>)
     where
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Sample a batching challenge for combining multiple constraints.
         let alpha: EF = challenger.sample_algebra_element();
 
-        let k = poly.num_vars();
+        let k = poly.num_variables();
 
         // The packed representation absorbs the last k_pack variables into SIMD lanes.
         // So the weight polynomial needs only 2^{k - k_pack} packed entries.
@@ -190,35 +153,31 @@ where
         // Populate packed weights from equality constraints.
         statement.combine_hypercube_packed::<F, false>(&mut weights, &mut sum, alpha);
 
-        // Pack the base-field evaluations into SIMD lanes.
-        // Each packed element holds SIMD_WIDTH consecutive evaluations.
-        let poly_packed = Poly::new(F::Packing::pack_slice(poly.as_slice()).to_vec());
-
         // Compute sumcheck coefficients in packed arithmetic.
         // The result is still in packed form (one value per SIMD lane).
-        let (c0, c2) = sumcheck_coefficients_cross(&poly_packed, &weights);
+        let (c0, c_inf) = VariableOrder::Prefix
+            .sumcheck_coefficients(F::Packing::pack_slice(poly.as_slice()), weights.as_slice());
 
         // Sum across all SIMD lanes to produce scalar coefficients.
         // The sumcheck polynomial is a sum over ALL evaluation points, not per-lane.
         let c0 = EF::ExtensionPacking::to_ext_iter([c0]).sum();
-        let c2 = EF::ExtensionPacking::to_ext_iter([c2]).sum();
+        let c_inf = EF::ExtensionPacking::to_ext_iter([c_inf]).sum();
 
-        // Commit (c_0, c_2) to the transcript and receive the challenge.
-        let r = sumcheck_data.observe_and_sample(challenger, c0, c2, pow_bits);
+        // Commit (h(0), h(inf)) to the transcript and receive the challenge.
+        let r = sumcheck_data.observe_and_sample(challenger, c0, c_inf, pow_bits);
 
         // Fold the packed weight polynomial by binding the first variable to `r`.
-        weights.fix_lo_var_mut(r);
+        weights.fix_prefix_var_mut(r);
 
         // Fold the base-field evaluations and promote into packed extension field form.
-        // Uses compress_lo_to_packed with a single-variable point to fold and pack.
-        let evals = poly.compress_lo_to_packed(&Point::new(alloc::vec![r]), EF::ONE);
+        let evals = poly.compress_prefix_to_packed(&Point::new(alloc::vec![r]), EF::ONE);
 
-        // Update the claimed sum to h(r) via quadratic extrapolation.
-        sum = extrapolate_012(c0, sum - c0, c2, r);
+        sum = extrapolate_01inf(c0, sum - c0, c_inf, r);
 
         // Wrap into a paired polynomial (packed variant).
         // The constructor checks whether the data is small enough for scalar mode.
-        let mut poly = ProductPolynomial::<F, EF>::new_packed(evals, weights);
+        let mut poly =
+            ProductPolynomial::<F, EF>::new_packed(VariableOrder::Prefix, evals, weights);
 
         // Verify the sumcheck invariant.
         debug_assert_eq!(poly.dot_product(), sum);
@@ -231,7 +190,7 @@ where
             )
             .collect();
 
-        (Self { poly, sum }, Point::new(rs))
+        (SumcheckProver::new(poly, sum), Point::new(rs))
     }
 
     /// Constructs a sumcheck instance using the Split-Value Optimization (Algorithm 5).
@@ -250,9 +209,9 @@ where
     /// For each round `i`:
     ///
     /// 1. Compute Lagrange weights from challenges collected so far.
-    /// 2. For each constraint, compute its contribution to `c_0` and `c_2`
+    /// 2. For each constraint, compute its contribution to `h(0)` and `h(inf)`
     ///    via dot products of accumulators with Lagrange weights, scaled by `alpha^j`.
-    /// 3. Commit `(c_0, c_2)` and receive challenge `r_i`.
+    /// 3. Commit `(h(0), h(inf))` and receive challenge `r_i`.
     /// 4. Update the claimed sum via quadratic extrapolation.
     ///
     /// After all rounds, the polynomial and weights are materialized in packed form.
@@ -268,14 +227,14 @@ where
     /// - If any constraint has a mismatched number of variables.
     /// - If there are not enough variables for packed representation after folding.
     #[tracing::instrument(skip_all)]
-    pub fn new_svo<Challenger>(
+    pub fn new_svo<Challenger, F: Field, EF: ExtensionField<F>>(
         poly: &Poly<F>,
         sumcheck_data: &mut SumcheckData<F, EF>,
         challenger: &mut Challenger,
         folding_factor: usize,
         pow_bits: usize,
         statements: &[SvoClaim<F, EF>],
-    ) -> (Self, Point<EF>)
+    ) -> (SumcheckProver<F, EF>, Point<EF>)
     where
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
@@ -284,7 +243,7 @@ where
         // Sample the batching challenge for combining multiple split eq constraints.
         let alpha: EF = challenger.sample_algebra_element();
 
-        let k = poly.num_vars();
+        let k = poly.num_variables();
         assert!(
             folding_factor <= k,
             "number of rounds must be less than or equal to instance size"
@@ -310,9 +269,7 @@ where
             .sum::<EF>();
 
         // Gather the pre-computed accumulator tables for all constraints.
-        // Each provides a 2D array indexed by [round][{0, 2}]:
-        // - [round][0] stores data for computing c_0
-        // - [round][1] stores data for computing c_2
+        // Each provides a 2D array indexed by [round][{0, inf}].
         let accumulators = statements
             .iter()
             .map(SvoClaim::accumulators)
@@ -323,31 +280,29 @@ where
         tracing::info_span!("svo rounds").in_scope(|| {
             for round_idx in 0..folding_factor {
                 // Initialize round polynomial coefficients to zero.
-                let (mut c0, mut c2): (EF, EF) = Default::default();
+                let (mut c0, mut c_inf): (EF, EF) = Default::default();
 
-                // Compute Lagrange interpolation weights from previous challenges.
-                // These reconstruct round polynomial coefficients from the
-                // pre-computed accumulators without materializing the full equality table.
-                let weights = lagrange_weights_012_multi(rs.as_slice());
+                // Compute interpolation weights from previous challenges.
+                let weights = lagrange_weights_01inf_multi(rs.as_slice());
 
                 // Accumulate each constraint's contribution, scaled by alpha^j.
                 for (accumulators, alpha) in accumulators.iter().zip(alpha.powers()) {
-                    // Accumulators for computing h(0) and h(2) at this round.
+                    // Accumulators for h(0) and h(inf) at this round.
                     let acc0 = &accumulators[round_idx][0];
-                    let acc2 = &accumulators[round_idx][1];
+                    let acc_inf = &accumulators[round_idx][1];
 
-                    // Dot product with Lagrange weights reconstructs the coefficient.
+                    // Dot product with weights reconstructs the coefficient.
                     c0 += alpha
                         * dot_product::<EF, _, _>(acc0.iter().copied(), weights.iter().copied());
-                    c2 += alpha
-                        * dot_product::<EF, _, _>(acc2.iter().copied(), weights.iter().copied());
+                    c_inf += alpha
+                        * dot_product::<EF, _, _>(acc_inf.iter().copied(), weights.iter().copied());
                 }
 
-                // Commit (c_0, c_2) to the transcript and receive challenge r_i.
-                let r = sumcheck_data.observe_and_sample(challenger, c0, c2, pow_bits);
+                // Commit (h(0), h(inf)) to the transcript and receive challenge r_i.
+                let r = sumcheck_data.observe_and_sample(challenger, c0, c_inf, pow_bits);
 
-                // Update the claimed sum to h(r) using quadratic extrapolation.
-                sum = extrapolate_012(c0, sum - c0, c2, r);
+                // Update the claimed sum.
+                sum = extrapolate_01inf(c0, sum - c0, c_inf, r);
 
                 // Record this round's challenge for the next round's Lagrange weights.
                 rs.push(r);
@@ -357,19 +312,24 @@ where
         let rs = Point::new(rs);
         // Materialize the evaluation polynomial by folding the original base-field
         // evaluations through all collected challenges at once.
-        let poly = poly.compress_lo_to_packed(&rs, EF::ONE);
+        let poly = poly.compress_prefix_to_packed(&rs, EF::ONE);
 
         // Materialize the weight polynomial in packed form by combining all split eq
         // constraints into a single packed weight array.
-        let mut weights = Poly::<EF::ExtensionPacking>::zero(poly.num_vars());
-        SvoClaim::combine_into_packed(statements, weights.as_mut_slice(), alpha, &rs);
+        let mut weights = Poly::<EF::ExtensionPacking>::zero(poly.num_variables());
+        statements
+            .iter()
+            .zip(alpha.powers())
+            .for_each(|(statement, alpha)| {
+                statement.accumulate_into_packed(weights.as_mut_slice(), &rs, alpha);
+            });
 
         // Wrap into a paired polynomial (packed) for subsequent standard rounds.
-        let poly = ProductPolynomial::<F, EF>::new_packed(poly, weights);
+        let poly = ProductPolynomial::<F, EF>::new_packed(VariableOrder::Prefix, poly, weights);
 
         // Verify the sumcheck invariant after materialization.
         debug_assert_eq!(poly.dot_product(), sum);
-        (Self { poly, sum }, rs)
+        (SumcheckProver::new(poly, sum), rs)
     }
 
     /// Entry point: constructs a sumcheck prover from base-field evaluations.
@@ -390,13 +350,14 @@ where
     /// - If the folding factor is 0 or exceeds the number of variables.
     /// - For SVO: if the folding factor does not match the pre-configured split point.
     #[tracing::instrument(skip_all)]
-    pub fn from_base_evals<Challenger>(
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new<Challenger, F: Field, EF: ExtensionField<F>>(
         sumcheck_data: &mut SumcheckData<F, EF>,
         challenger: &mut Challenger,
         folding_factor: usize,
         pow_bits: usize,
         statement: &InitialStatement<F, EF>,
-    ) -> (Self, Point<EF>)
+    ) -> (SumcheckProver<F, EF>, Point<EF>)
     where
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
@@ -440,7 +401,7 @@ where
                     )
                 } else {
                     // Too small for SIMD; use scalar arithmetic.
-                    Self::new_classic_small(
+                    Self::new_classic_unpacked(
                         poly,
                         sumcheck_data,
                         challenger,
@@ -451,79 +412,5 @@ where
                 }
             }
         }
-    }
-
-    /// Returns the number of remaining (unbound) variables.
-    ///
-    /// Decreases by one per round.
-    /// Reaches zero when the polynomial is fully evaluated at a single point.
-    pub fn num_variables(&self) -> usize {
-        self.poly.num_variables()
-    }
-
-    /// Extracts the current evaluation polynomial as scalar extension field elements.
-    ///
-    /// If the internal representation is SIMD-packed, unpacks all lanes first.
-    #[tracing::instrument(skip_all)]
-    pub fn evals(&self) -> Poly<EF> {
-        self.poly.evals()
-    }
-
-    /// Evaluates `f` at a given multilinear point via interpolation.
-    ///
-    /// The weight polynomial is not involved in this evaluation.
-    pub fn eval(&self, point: &Point<EF>) -> EF {
-        self.poly.eval(point)
-    }
-
-    /// Runs additional sumcheck rounds, optionally incorporating new constraints.
-    ///
-    /// Two phases:
-    ///
-    /// 1. **Constraint folding** (optional):
-    ///    If a constraint is provided, fold it into the weight polynomial
-    ///    and update the claimed sum before any rounds.
-    ///    Used to incorporate STIR challenges between batches.
-    ///
-    /// 2. **Round execution**:
-    ///    Performs `folding_factor` rounds of one-variable-per-round sumcheck.
-    ///    Each round computes `(c_0, c_2)`, commits, receives a challenge, and folds.
-    ///
-    /// # Returns
-    ///
-    /// The verifier challenges `(r_1, ..., r_{folding_factor})` from this batch.
-    ///
-    /// # Panics
-    ///
-    /// If `folding_factor` exceeds the current number of remaining variables.
-    #[tracing::instrument(skip_all)]
-    pub fn compute_sumcheck_polynomials<Challenger>(
-        &mut self,
-        sumcheck_data: &mut SumcheckData<F, EF>,
-        challenger: &mut Challenger,
-        folding_factor: usize,
-        pow_bits: usize,
-        constraint: Option<Constraint<F, EF>>,
-    ) -> Point<EF>
-    where
-        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
-    {
-        // If a new constraint is provided, fold it into the weight polynomial
-        // and update the claimed sum before starting rounds.
-        if let Some(constraint) = constraint {
-            self.poly.combine(&mut self.sum, &constraint);
-        }
-
-        // Execute rounds of the standard sumcheck protocol.
-        // Each call computes coefficients, commits, receives a challenge, and folds.
-        let res = (0..folding_factor)
-            .map(|_| {
-                self.poly
-                    .round(sumcheck_data, challenger, &mut self.sum, pow_bits)
-            })
-            .collect();
-
-        // Return the collected verifier challenges.
-        Point::new(res)
     }
 }

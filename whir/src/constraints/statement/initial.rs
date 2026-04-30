@@ -74,7 +74,7 @@ impl<F: Field, EF: ExtensionField<F>> InitialStatement<F, EF> {
     ///
     /// Initializes an empty constraint set that accumulates as the protocol progresses.
     const fn new_classic(poly: Poly<F>) -> Self {
-        let num_variables = poly.num_vars();
+        let num_variables = poly.num_variables();
         Self {
             poly,
             inner: InitialStatementInner::new_classic(num_variables),
@@ -91,15 +91,15 @@ impl<F: Field, EF: ExtensionField<F>> InitialStatement<F, EF> {
         }
     }
 
-    /// Creates a new initial statement with the specified strategy.
+    /// Creates a new initial statement with the specified mode.
     ///
     /// Automatically selects the appropriate internal representation based on the
-    /// strategy and polynomial size. For SVO, falls back to classic if the polynomial
+    /// mode and polynomial size. For SVO, falls back to classic if the polynomial
     /// is too small to benefit from the optimization.
     ///
     /// # SVO Requirements
     ///
-    /// The SVO strategy requires:
+    /// The SVO mode requires:
     ///
     /// ```text
     /// k > 2 * log2(SIMD_WIDTH) + l0
@@ -108,16 +108,17 @@ impl<F: Field, EF: ExtensionField<F>> InitialStatement<F, EF> {
     /// where `k` is the number of variables. This ensures enough parallelism
     /// for packed field operations.
     #[must_use]
-    pub const fn new(poly: Poly<F>, l0: usize, strategy: SumcheckStrategy) -> Self {
-        match strategy {
+    pub const fn new(poly: Poly<F>, l0: usize, mode: SumcheckStrategy) -> Self {
+        match mode {
+            // Classic path: always available.
             SumcheckStrategy::Classic => Self::new_classic(poly),
             SumcheckStrategy::Svo => {
-                let k = poly.num_vars();
-                // Check if polynomial is large enough for SVO optimization.
+                // SVO is only worthwhile above the packing threshold.
+                let k = poly.num_variables();
                 if k > 2 * log2_strict_usize(F::Packing::WIDTH) + l0 {
                     Self::new_svo(poly, l0)
                 } else {
-                    // Fallback to classic for small polynomials.
+                    // Too small for SVO: silently use the scalar path.
                     Self::new_classic(poly)
                 }
             }
@@ -143,10 +144,10 @@ impl<F: Field, EF: ExtensionField<F>> InitialStatement<F, EF> {
     #[must_use]
     pub fn evaluate(&mut self, point: &Point<EF>) -> EF {
         assert_eq!(
-            point.num_vars(),
+            point.num_variables(),
             self.num_variables(),
             "Point has {} variables but statement expects {}",
-            point.num_vars(),
+            point.num_variables(),
             self.num_variables()
         );
         self.inner.evaluate(point, &self.poly)
@@ -156,7 +157,7 @@ impl<F: Field, EF: ExtensionField<F>> InitialStatement<F, EF> {
     ///
     /// This is `n` where the polynomial is defined over `{0,1}^n`.
     pub const fn num_variables(&self) -> usize {
-        self.poly.num_vars()
+        self.poly.num_variables()
     }
 
     /// Returns true if no constraints have been added yet.
@@ -189,14 +190,15 @@ impl<F: Field, EF: ExtensionField<F>> InitialStatement<F, EF> {
         match &self.inner {
             InitialStatementInner::Classic(statement) => statement.clone(),
             InitialStatementInner::Svo { statement, .. } => {
-                let points: Vec<_> = statement.iter().map(SvoClaim::point).cloned().collect();
+                let points: Vec<_> = statement.iter().map(SvoClaim::original).cloned().collect();
                 let evals: Vec<_> = statement.iter().map(SvoClaim::eval).collect();
 
                 let mut statement = EqStatement::initialize(self.num_variables());
                 points
                     .iter()
+                    .cloned()
                     .zip(evals.iter())
-                    .for_each(|(pt, &ev)| statement.add_evaluated_constraint(pt.clone(), ev));
+                    .for_each(|(point, &ev)| statement.add_evaluated_constraint(point, ev));
                 statement
             }
         }
@@ -229,9 +231,9 @@ impl<F: Field, EF: ExtensionField<F>> InitialStatementInner<F, EF> {
                 eval
             }
             Self::Svo { statement, l0 } => {
-                let split_eq = SvoClaim::new(point, *l0, poly);
-                let eval = split_eq.eval();
-                statement.push(split_eq);
+                let claim = SvoClaim::new(point, *l0, poly);
+                let eval = claim.eval();
+                statement.push(claim);
                 eval
             }
         }

@@ -416,7 +416,7 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for ExtFieldEvaluator<F,
         buffer_vals: &[Self::PackedField],
         scalars: &[Self::OutputField],
     ) {
-        let num_vars = evals.height();
+        let num_variables = evals.height();
         let num_points = evals.width();
         // Allocate workspace for the recursive evaluation.
         //
@@ -425,7 +425,7 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for ExtFieldEvaluator<F,
         // - The largest unrolled base case (n=3).
         //
         // This ensures enough memory for all scenarios.
-        let workspace_len = (2 * (num_vars + 1) * num_points).max(8 * num_points);
+        let workspace_len = (2 * (num_variables + 1) * num_points).max(8 * num_points);
         let mut workspace = Self::PackedField::zero_vec(workspace_len);
         eval_eq_packed_batch::<F, EF, EF, Self, INITIALIZED>(
             evals,
@@ -486,7 +486,7 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
         buffer_vals: &[Self::PackedField],
         scalars: &[Self::OutputField],
     ) {
-        let num_vars = evals.height();
+        let num_variables = evals.height();
         let num_points = evals.width();
 
         // Allocate workspace for the recursive evaluation.
@@ -496,7 +496,7 @@ impl<F: Field, EF: ExtensionField<F>> EqualityEvaluator for BaseFieldEvaluator<F
         // - The largest unrolled base case (n=3).
         //
         // This ensures enough memory for all scenarios.
-        let workspace_len = (2 * (num_vars + 1) * num_points).max(8 * num_points);
+        let workspace_len = (2 * (num_variables + 1) * num_points).max(8 * num_points);
         let mut workspace = Self::PackedField::zero_vec(workspace_len);
         eval_eq_packed_batch::<F, F, EF, Self, INITIALIZED>(
             evals,
@@ -575,9 +575,9 @@ fn eval_eq_batch_common<F, IF, EF, E, const INITIALIZED: bool>(
     }
 
     // Validate input dimensions
-    let num_vars = evals.height();
+    let num_variables = evals.height();
     debug_assert_eq!(evals.width(), scalars.len());
-    debug_assert_eq!(out.len(), 1 << num_vars);
+    debug_assert_eq!(out.len(), 1 << num_variables);
 
     // For small problems, use the basic recursive approach
     let packing_width = F::Packing::WIDTH;
@@ -586,15 +586,15 @@ fn eval_eq_batch_common<F, IF, EF, E, const INITIALIZED: bool>(
 
     // If the number of variables is small, there is no need to use
     // parallelization or packings.
-    if num_vars <= packing_width + 1 + log_num_threads {
+    if num_variables <= packing_width + 1 + log_num_threads {
         // Allocate workspace once for all recursive calls
         //
         // The max function ensures we allocate at least 1 element to avoid empty slice issues
-        let mut workspace = EF::zero_vec((2 * evals.width() * num_vars).max(1));
+        let mut workspace = EF::zero_vec((2 * evals.width() * num_variables).max(1));
         eval_eq_batch_basic::<F, IF, EF, INITIALIZED>(evals, scalars, out, &mut workspace);
     } else {
         let log_packing_width = log2_strict_usize(packing_width);
-        let eval_len_min_packing = num_vars - log_packing_width;
+        let eval_len_min_packing = num_variables - log_packing_width;
 
         // Split the variables into three parts:
         // - evals[..log_num_threads] (the first log_num_threads variables)
@@ -667,11 +667,11 @@ fn eval_eq_batch_basic<F, IF, EF, const INITIALIZED: bool>(
     IF: Field,
     EF: ExtensionField<F> + Algebra<IF>,
 {
-    let num_vars = evals.height();
+    let num_variables = evals.height();
     let num_points = evals.width();
-    debug_assert_eq!(out.len(), 1 << num_vars);
+    debug_assert_eq!(out.len(), 1 << num_variables);
 
-    match num_vars {
+    match num_variables {
         0 => {
             // Base case: sum all scalars
             let sum: EF = scalars.iter().copied().sum();
@@ -760,11 +760,11 @@ fn eval_eq_packed_batch<F, IF, EF, E, const INITIALIZED: bool>(
     EF: ExtensionField<F>,
     E: EqualityEvaluator<InputField = IF, OutputField = EF>,
 {
-    let num_vars = eval_points.height();
+    let num_variables = eval_points.height();
     let num_points = eval_points.width();
-    debug_assert_eq!(out.len(), F::Packing::WIDTH << num_vars);
+    debug_assert_eq!(out.len(), F::Packing::WIDTH << num_variables);
 
-    match num_vars {
+    match num_variables {
         0 => {
             // Base case of the recursion.
             E::accumulate_packed_batch::<INITIALIZED>(out, eq_evals, scalars);
@@ -1034,15 +1034,15 @@ mod tests {
         F: Field,
         EF: ExtensionField<F>,
     {
-        let num_vars = eval_point.len();
-        debug_assert_eq!(out.len(), 1 << num_vars);
+        let num_variables = eval_point.len();
+        debug_assert_eq!(out.len(), 1 << num_variables);
 
         // Evaluate eq(x, z) for all x ∈ {0,1}^n
         // Note: We iterate in reverse order to match the big-endian bit indexing used by the optimized version
-        for (x, o) in out.iter_mut().enumerate().take(1 << num_vars) {
+        for (x, o) in out.iter_mut().enumerate().take(1 << num_variables) {
             let mut eq_val = scalar;
             for (i, &z_i) in eval_point.iter().enumerate().rev() {
-                let x_i = ((x >> (num_vars - 1 - i)) & 1) as u64;
+                let x_i = ((x >> (num_variables - 1 - i)) & 1) as u64;
                 if x_i == 1 {
                     eq_val *= z_i;
                 } else {
@@ -1210,13 +1210,13 @@ mod tests {
         let threshold = packing_width.ilog2() as usize + 1 + log_num_threads;
 
         // Use variables > threshold to force parallel path
-        let num_vars = threshold + 2;
+        let num_variables = threshold + 2;
         let num_points = 3;
 
         // Create random evaluation points and scalars
         let mut rng = SmallRng::seed_from_u64(54321);
         let eval_points: Vec<Vec<F>> = (0..num_points)
-            .map(|_| (0..num_vars).map(|_| rng.random()).collect())
+            .map(|_| (0..num_variables).map(|_| rng.random()).collect())
             .collect();
 
         let scalars: Vec<EF4> = (0..num_points)
@@ -1224,8 +1224,8 @@ mod tests {
             .collect();
 
         // Create matrix layout: rows are variables, columns are evaluation points
-        let mut evals_data = Vec::with_capacity(num_vars * num_points);
-        for var_idx in 0..num_vars {
+        let mut evals_data = Vec::with_capacity(num_variables * num_points);
+        for var_idx in 0..num_variables {
             for point in &eval_points {
                 evals_data.push(EF4::from(point[var_idx]));
             }
@@ -1233,12 +1233,12 @@ mod tests {
         let evals = RowMajorMatrixView::new(&evals_data, num_points);
 
         // Test parallel batched path
-        let mut output_batch_parallel = EF4::zero_vec(1 << num_vars);
+        let mut output_batch_parallel = EF4::zero_vec(1 << num_variables);
         eval_eq_batch::<F, EF4, false>(evals, &mut output_batch_parallel, &scalars);
 
         // Verify correctness by comparing against basic batch evaluation
-        let mut output_batch_basic = EF4::zero_vec(1 << num_vars);
-        let mut workspace = EF4::zero_vec(2 * num_points * num_vars);
+        let mut output_batch_basic = EF4::zero_vec(1 << num_variables);
+        let mut workspace = EF4::zero_vec(2 * num_points * num_variables);
         eval_eq_batch_basic::<F, EF4, EF4, false>(
             evals,
             &scalars,
@@ -1261,26 +1261,26 @@ mod tests {
         let threshold = packing_width.ilog2() as usize + 1 + log_num_threads;
 
         // Use enough variables to exceed the threshold
-        let num_vars = threshold + 1;
+        let num_variables = threshold + 1;
         let num_points = 3;
 
         // Create random base field evaluation points and extension field scalars
         let mut rng = SmallRng::seed_from_u64(9876);
         let eval_points: Vec<Vec<F>> = (0..num_points)
-            .map(|_| (0..num_vars).map(|_| rng.random()).collect())
+            .map(|_| (0..num_variables).map(|_| rng.random()).collect())
             .collect();
 
         let scalars: Vec<EF4> = (0..num_points).map(|_| rng.random()).collect();
 
         // Create matrix layout: rows are variables, columns are points
-        let mut evals_data = Vec::with_capacity(num_vars * num_points);
-        for var_idx in 0..num_vars {
+        let mut evals_data = Vec::with_capacity(num_variables * num_points);
+        for var_idx in 0..num_variables {
             for point in &eval_points {
                 evals_data.push(point[var_idx]);
             }
         }
         let evals = RowMajorMatrixView::new(&evals_data, num_points);
-        let out_len = 1 << num_vars;
+        let out_len = 1 << num_variables;
 
         // Run the parallel version
         let mut output_parallel = EF4::zero_vec(out_len);
@@ -1288,7 +1288,7 @@ mod tests {
 
         // Run the sequential version for comparison
         let mut output_basic = EF4::zero_vec(out_len);
-        let mut workspace = EF4::zero_vec(2 * num_points * num_vars);
+        let mut workspace = EF4::zero_vec(2 * num_points * num_variables);
         eval_eq_batch_basic::<F, F, EF4, false>(evals, &scalars, &mut output_basic, &mut workspace);
 
         // Assert that the parallel version matches the sequential version
