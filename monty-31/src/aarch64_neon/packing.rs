@@ -13,8 +13,9 @@ use p3_field::op_assign_macros::{
     impl_sum_prod_base_field, ring_sum,
 };
 use p3_field::{
-    impl_packed_field_pow_2, uint32x4_mod_add, uint32x4_mod_sub, Algebra, Field, InjectiveMonomial,
-    PackedField, PackedFieldPow2, PackedValue, PermutationMonomial, PrimeCharacteristicRing,
+    Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
+    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, uint32x4_mod_add,
+    uint32x4_mod_sub,
 };
 use p3_util::reconstitute_from_base;
 use rand::distr::{Distribution, StandardUniform};
