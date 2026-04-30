@@ -484,7 +484,7 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         let k = self.num_variables();
         let k_pack = log2_strict_usize(F::Packing::WIDTH);
         assert!(k >= k_pack);
-        assert_eq!(weights.num_vars() + k_pack, k);
+        assert_eq!(weights.num_variables() + k_pack, k);
 
         // Accumulate the scalar target sum first.
         self.combine_evals(sum, challenge, shift);

@@ -32,10 +32,10 @@ use p3_field::{
     BasedVectorSpace, ExtensionField, PackedFieldExtension, TwoAdicField,
     batch_multiplicative_inverse,
 };
-use p3_interpolation::interpolate_coset_with_precomputation;
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow, RowMajorMatrixView};
+use p3_matrix::interpolation::{Interpolate, compute_adjusted_weights};
 use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
 use tracing::instrument;
@@ -213,6 +213,13 @@ where
 
         let inv_denoms = compute_inverse_denominators::<Val, Challenge>(&mats_and_points, &coset);
 
+        // Precompute adjusted barycentric weights once per opening point.
+        // adjusted[i] = 1/(z - x_i) - 1/z, reused across all matrices opened at z.
+        let adjusted_weights: LinearMap<Challenge, Vec<Challenge>> = inv_denoms
+            .iter()
+            .map(|(point, denoms)| (*point, compute_adjusted_weights(*point, denoms)))
+            .collect();
+
         let all_opened_values: OpenedValues<Challenge> = mats_and_points
             .iter()
             .map(|(mats, points)| {
@@ -220,17 +227,17 @@ where
                     .map(|(mat, points_for_mat)| {
                         let h = mat.height() >> self.stir.log_blowup;
                         let (low_coset, _) = mat.split_rows(h);
-                        let coset_h = &coset[..h];
+
                         points_for_mat
                             .iter()
                             .map(|&point| {
-                                let inv_d = &inv_denoms.get(&point).unwrap()[..h];
-                                let ys = interpolate_coset_with_precomputation(
-                                    &low_coset,
+                                // Slice the precomputed adjusted weights to match this matrix's height.
+                                // Zero-allocation hot path: straight to the SIMD dot product.
+                                let adj = &adjusted_weights.get(&point).unwrap()[..h];
+                                let ys = low_coset.interpolate_coset_with_precomputation(
                                     Val::GENERATOR,
                                     point,
-                                    coset_h,
-                                    inv_d,
+                                    adj,
                                 );
                                 challenger.observe_algebra_slice(&ys);
                                 ys

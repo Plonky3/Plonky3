@@ -152,6 +152,39 @@ fn make_two_adic_config(log_final_poly_len: usize) -> MyConfig {
     MyConfig::new(pcs, challenger)
 }
 
+type ZkByteHash = Keccak256Hash;
+type ZkU64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
+type ZkFieldHash = SerializingHasher<ZkU64Hash>;
+type ZkCompress = CompressionFunctionFromHasher<ZkU64Hash, 2, 4>;
+type ZkValHidingMmcs = MerkleTreeHidingMmcs<
+    [Val; p3_keccak::VECTOR_LEN],
+    [u64; p3_keccak::VECTOR_LEN],
+    ZkFieldHash,
+    ZkCompress,
+    SmallRng,
+    2,
+    4,
+    4,
+>;
+type ZkChallenger = SerializingChallenger32<Val, HashChallenger<u8, ZkByteHash, 32>>;
+type ZkChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ZkValHidingMmcs>;
+type ZkHidingPcs = HidingFriPcs<Val, Dft, ZkValHidingMmcs, ZkChallengeHidingMmcs, SmallRng>;
+type ZkConfig = StarkConfig<ZkHidingPcs, Challenge, ZkChallenger>;
+
+fn make_zk_config() -> ZkConfig {
+    let byte_hash = ZkByteHash {};
+    let u64_hash = ZkU64Hash::new(KeccakF {});
+    let field_hash = ZkFieldHash::new(u64_hash);
+    let compress = ZkCompress::new(u64_hash);
+    let val_mmcs = ZkValHidingMmcs::new(field_hash, compress, 0, SmallRng::seed_from_u64(1));
+    let challenge_mmcs = ZkChallengeHidingMmcs::new(val_mmcs.clone());
+    let dft = Dft::default();
+    let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
+    let pcs = ZkHidingPcs::new(dft, val_mmcs, fri_params, 4, SmallRng::seed_from_u64(1));
+    let challenger = ZkChallenger::from_hasher(vec![], byte_hash);
+    ZkConfig::new(pcs, challenger)
+}
+
 fn two_adic_compat_case() -> (MyConfig, FibonacciAir, Vec<Val>, RowMajorMatrix<Val>) {
     let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
     let config = make_two_adic_config(2);
@@ -235,48 +268,11 @@ fn test_public_value_impl(n: usize, x: u64, log_final_poly_len: usize) {
 
 #[test]
 fn test_zk() {
-    type ByteHash = Keccak256Hash;
-    let byte_hash = ByteHash {};
-
-    type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
-    let u64_hash = U64Hash::new(KeccakF {});
-
-    type FieldHash = SerializingHasher<U64Hash>;
-    let field_hash = FieldHash::new(u64_hash);
-
-    type MyCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;
-    let compress = MyCompress::new(u64_hash);
-
-    type ValHidingMmcs = MerkleTreeHidingMmcs<
-        [Val; p3_keccak::VECTOR_LEN],
-        [u64; p3_keccak::VECTOR_LEN],
-        FieldHash,
-        MyCompress,
-        SmallRng,
-        2,
-        4,
-        4,
-    >;
-
-    let rng = SmallRng::seed_from_u64(1);
-    let val_mmcs = ValHidingMmcs::new(field_hash, compress, 0, rng);
-
-    type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
-
-    type ChallengeHidingMmcs = ExtensionMmcs<Val, Challenge, ValHidingMmcs>;
-
     let n = 1 << 3;
     let x = 21;
 
-    let challenge_mmcs = ChallengeHidingMmcs::new(val_mmcs.clone());
-    let dft = Dft::default();
     let trace = generate_trace_rows::<Val>(0, 1, n);
-    let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
-    type HidingPcs = HidingFriPcs<Val, Dft, ValHidingMmcs, ChallengeHidingMmcs, SmallRng>;
-    type MyHidingConfig = StarkConfig<HidingPcs, Challenge, Challenger>;
-    let pcs = HidingPcs::new(dft, val_mmcs, fri_params, 4, SmallRng::seed_from_u64(1));
-    let challenger = Challenger::from_hasher(vec![], byte_hash);
-    let config = MyHidingConfig::new(pcs, challenger);
+    let config = make_zk_config();
     let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(x)];
     let proof = prove(&config, &FibonacciAir {}, trace, &pis);
     verify(&config, &FibonacciAir {}, &proof, &pis).expect("verification failed");
@@ -309,6 +305,102 @@ fn test_short_public_values_rejected() {
         ) => {
             assert_eq!(expected, 3);
             assert_eq!(got, 2);
+        }
+        _ => panic!("unexpected error: {err:?}"),
+    }
+}
+
+#[test]
+fn test_degree_bits_too_large_rejected() {
+    // The uni-stark verifier builds an evaluation domain via `1 << degree_bits`.
+    // A malicious proof can set degree_bits >= usize::BITS (e.g. 64 on a 64-bit
+    // platform), causing a shift overflow. The verifier must reject this with a
+    // structured error before any domain construction.
+
+    // Generate a valid 2^3 = 8-row Fibonacci trace: fib(0) = 0, fib(1) = 1.
+    let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
+
+    // Non-ZK config with log_final_poly_len = 2 (FRI stops at degree 4).
+    // The overflow check is independent of the ZK setting.
+    let config = make_two_adic_config(2);
+
+    // Public inputs: [fib(0), fib(1), fib(7)] = [0, 1, 21].
+    let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(21)];
+
+    // Produce a legitimate proof, then tamper with the degree_bits field.
+    let mut proof = prove(&config, &FibonacciAir {}, trace, &pis);
+
+    // Mutation: set degree_bits to exactly the bit width of usize, the
+    // smallest value that overflows:
+    //
+    //     degree_bits = 64  (on 64-bit)
+    //     1_usize << 64  →  shift overflow  →  must be caught
+    proof.degree_bits = usize::BITS as usize;
+
+    // Verification must fail deterministically, not panic.
+    let err = verify(&config, &FibonacciAir {}, &proof, &pis)
+        .expect_err("verification should reject oversized degree_bits");
+
+    // Verify the error carries the correct diagnostic fields.
+    // Unlike batch-stark, uni-stark has a single AIR so `air` is None.
+    //
+    //   - air: None              — uni-stark doesn't index by AIR
+    //   - maximum: BITS - 1      — largest safe exponent (63 on 64-bit)
+    //   - got: BITS              — the tampered value we injected (64)
+    match err {
+        p3_uni_stark::VerificationError::InvalidProofShape(
+            InvalidProofShapeError::DegreeBitsTooLarge { air, maximum, got },
+        ) => {
+            assert_eq!(air, None);
+            assert_eq!(maximum, usize::BITS as usize - 1);
+            assert_eq!(got, usize::BITS as usize);
+        }
+        _ => panic!("unexpected error: {err:?}"),
+    }
+}
+
+#[test]
+fn test_degree_bits_too_small_for_zk_rejected() {
+    // In ZK mode the prover extends the trace by one bit (is_zk = 1), so the
+    // verifier computes `base_degree_bits = degree_bits - is_zk`. If a
+    // malicious proof sets degree_bits = 0 while is_zk = 1, that subtraction
+    // underflows. The verifier must reject this before any arithmetic.
+
+    // Generate a valid 2^3 = 8-row Fibonacci trace.
+    let trace = generate_trace_rows::<Val>(0, 1, 1 << 3);
+
+    // ZK-enabled config — is_zk = 1, meaning degree_bits must be >= 1.
+    let config = make_zk_config();
+
+    // Public inputs: [fib(0), fib(1), fib(7)] = [0, 1, 21].
+    let pis = vec![BabyBear::ZERO, BabyBear::ONE, BabyBear::from_u64(21)];
+
+    // Produce a legitimate ZK proof, then tamper with degree_bits.
+    let mut proof = prove(&config, &FibonacciAir {}, trace, &pis);
+
+    // Mutation: set degree_bits to 0, below the ZK minimum.
+    //
+    //     is_zk = 1
+    //     degree_bits = 0
+    //     base_degree_bits = 0 - 1  →  underflow  →  must be caught
+    proof.degree_bits = 0;
+
+    // Verification must fail with a structured error.
+    let err = verify(&config, &FibonacciAir {}, &proof, &pis)
+        .expect_err("verification should reject too-small degree_bits in zk mode");
+
+    // Verify the error carries the correct diagnostic fields:
+    //
+    //   - air: None       — uni-stark doesn't index by AIR
+    //   - minimum: 1      — is_zk, the smallest acceptable degree_bits
+    //   - got: 0          — the tampered value we injected
+    match err {
+        p3_uni_stark::VerificationError::InvalidProofShape(
+            InvalidProofShapeError::DegreeBitsTooSmall { air, minimum, got },
+        ) => {
+            assert_eq!(air, None);
+            assert_eq!(minimum, 1);
+            assert_eq!(got, 0);
         }
         _ => panic!("unexpected error: {err:?}"),
     }

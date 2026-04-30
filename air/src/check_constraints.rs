@@ -1,6 +1,7 @@
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::fmt;
 
 use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
@@ -48,6 +49,16 @@ pub struct ConstraintFailure {
     /// - Set when the constraint was asserted via [`NamedAirBuilder`].
     /// - `None` when the standard unlabeled assertion was used.
     pub label: Option<String>,
+}
+
+impl fmt::Display for ConstraintFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "#{}", self.constraint)?;
+        if let Some(label) = &self.label {
+            write!(f, " {label:?}")?;
+        }
+        Ok(())
+    }
 }
 
 /// Summary of all constraint violations across a full trace evaluation.
@@ -243,6 +254,15 @@ impl<'a, F: Field, EF: ExtensionField<F>> DebugConstraintBuilder<'a, F, EF> {
     /// Borrow the list of recorded constraint violations.
     pub fn failures(&self) -> &[ConstraintFailure] {
         &self.failures
+    }
+
+    /// Render the recorded violations as a bracketed, comma-separated list.
+    ///
+    /// Output form: `[#0, #1 "col_1_must_be_zero", #4]`. Every entry starts
+    /// with `#`, so mixed labeled and unlabeled entries stay unambiguous.
+    pub fn formatted_failures(&self) -> String {
+        let entries: Vec<String> = self.failures.iter().map(ToString::to_string).collect();
+        format!("[{}]", entries.join(", "))
     }
 
     /// Consume the builder and return all recorded constraint violations.
@@ -462,7 +482,8 @@ impl<F: Field, EF: ExtensionField<F>> NamedExtensionBuilder for DebugConstraintB
 /// 1. Builds a vertical pair of the current and next rows (wrapping around
 ///    at the end).
 /// 2. Sets the first-row, last-row and transition selectors.
-/// 3. Evaluates the AIR, collecting all violated constraint indices.
+/// 3. Evaluates the AIR, collecting all violated constraints
+///    (index with optional label).
 /// 4. Stops at the first row that has at least one violation and panics
 ///    with a summary of every violated constraint on that row.
 ///
@@ -477,6 +498,15 @@ where
 {
     let height = main.height();
     let preprocessed = air.preprocessed_trace();
+    if let Some(prep) = preprocessed.as_ref() {
+        assert_eq!(
+            prep.height(),
+            height,
+            "debug constraint check requires preprocessed trace height ({}) to match main trace height ({})",
+            prep.height(),
+            height
+        );
+    }
 
     for row_index in 0..height {
         let row_index_next = (row_index + 1) % height;
@@ -530,10 +560,10 @@ where
 
         // Stop at the first failing row and report all violations at once.
         if builder.has_failures() {
-            let indices: Vec<usize> = builder.failures().iter().map(|f| f.constraint).collect();
+            let rendered = builder.formatted_failures();
             panic!(
                 "constraints not satisfied on row {row_index}: \
-                 failed constraint indices = {indices:?}"
+                 failed constraints = {rendered}"
             );
         }
     }
@@ -572,6 +602,15 @@ where
 {
     let height = main.height();
     let preprocessed = air.preprocessed_trace();
+    if let Some(prep) = preprocessed.as_ref() {
+        assert_eq!(
+            prep.height(),
+            height,
+            "debug constraint check requires preprocessed trace height ({}) to match main trace height ({})",
+            prep.height(),
+            height
+        );
+    }
 
     // Accumulate violations across all rows.
     let mut all_failures = Vec::new();
@@ -850,11 +889,20 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "failed constraint indices = [0, 2]")]
+    #[should_panic(expected = "failed constraints = [#0, #2]")]
     fn test_panic_message_lists_all_failed_indices() {
         let air = AllZeroAir::<3>;
         let values = vec![BabyBear::ONE, BabyBear::ZERO, BabyBear::new(7)];
         let main = RowMajorMatrix::new(values, 3);
+        check_constraints(&air, &main, &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "failed constraints = [#0, #1 \"col_1_must_be_zero\"]")]
+    fn test_panic_message_includes_label_when_available() {
+        let air = NamedConstraintAir;
+        let values = vec![BabyBear::ONE, BabyBear::ONE];
+        let main = RowMajorMatrix::new(values, 2);
         check_constraints(&air, &main, &[]);
     }
 
@@ -1012,5 +1060,134 @@ mod tests {
         assert_eq!(failures[0].label.as_deref(), Some("range_check::limb_0"));
         assert_eq!(failures[1].label.as_deref(), Some("range_check::limb_1"));
         assert_eq!(failures[2].label.as_deref(), Some("col_2"));
+    }
+
+    /// No-constraint AIR with a configurable preprocessed trace.
+    ///
+    /// Lets a test force a preprocessed shape independent of the main trace.
+    #[derive(Debug)]
+    struct ShapeProbeAir {
+        /// Rows advertised in the preprocessed trace. `0` reports `None`.
+        prep_height: usize,
+        /// Columns of the advertised preprocessed trace. Ignored when height is `0`.
+        prep_width: usize,
+    }
+
+    impl<F: Field> BaseAir<F> for ShapeProbeAir {
+        fn width(&self) -> usize {
+            // Single column; every fixture is `vec![F::ZERO; height]`.
+            1
+        }
+
+        fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
+            // Height == 0 is the sentinel for "AIR has no preprocessed trace".
+            if self.prep_height == 0 {
+                return None;
+            }
+
+            // Row-major flat buffer: height * width zero elements.
+            //
+            //     layout (prep_height = 2, prep_width = 3):
+            //       row 0: [ 0, 0, 0 ]
+            //       row 1: [ 0, 0, 0 ]
+            //       flat : [ 0, 0, 0, 0, 0, 0 ]
+            let total = self.prep_height * self.prep_width;
+            Some(RowMajorMatrix::new(vec![F::ZERO; total], self.prep_width))
+        }
+    }
+
+    impl<F: Field> Air<DebugConstraintBuilder<'_, F>> for ShapeProbeAir {
+        fn eval(&self, _builder: &mut DebugConstraintBuilder<'_, F>) {
+            // Empty: every panic must come from a pre-loop guard, not from eval.
+        }
+    }
+
+    #[test]
+    fn test_preprocessed_height_matches_main_passes() {
+        // Invariant: matching heights → guard accepts → empty eval loop runs cleanly.
+        //
+        // Fixture state:
+        //   main         : 4 rows × 1 col
+        //   preprocessed : 4 rows × 1 col  (advertised by the AIR)
+        //
+        //     main rows : [0, 1, 2, 3]
+        //     prep rows : [0, 1, 2, 3]
+        //                 → 4 == 4 → guard passes
+        let air = ShapeProbeAir {
+            prep_height: 4,
+            prep_width: 1,
+        };
+
+        // Zero-valued rows; content is irrelevant because no constraint reads it.
+        let main = RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 1);
+
+        // Must return cleanly. A panic here would mean the guard rejected a well-shaped input.
+        check_constraints(&air, &main, &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "preprocessed trace height")]
+    fn test_preprocessed_height_mismatch_panics_in_check_constraints() {
+        // Invariant: a taller preprocessed trace must trip the guard before
+        // any `unsafe` row-indexing on the oversized matrix runs.
+        //
+        // Fixture state:
+        //   main         : 4 rows × 1 col
+        //   preprocessed : 8 rows × 1 col  (AIR advertises an oversized shape)
+        //
+        //     main rows : [0, 1, 2, 3]
+        //     prep rows : [0, 1, 2, 3, 4, 5, 6, 7]
+        //                 → 8 != 4 → guard panics on entry
+        let air = ShapeProbeAir {
+            prep_height: 8,
+            prep_width: 1,
+        };
+
+        // Main deliberately shorter than the advertised preprocessed trace.
+        let main = RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 1);
+
+        // Expected: panic before row 0 is ever dereferenced.
+        check_constraints(&air, &main, &[]);
+    }
+
+    #[test]
+    fn test_preprocessed_height_matches_main_passes_in_check_all_constraints() {
+        // Invariant: collect-all carries the same guard; matching heights also succeed.
+        //
+        // Fixture state:
+        //   main         : 4 rows × 1 col
+        //   preprocessed : 4 rows × 1 col  → empty report returned
+        let air = ShapeProbeAir {
+            prep_height: 4,
+            prep_width: 1,
+        };
+        let main = RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 1);
+
+        // No failure cap; we expect no failures anyway.
+        let report = check_all_constraints(&air, &main, &[], None);
+
+        // Empty AIR → no failures recorded.
+        assert!(report.is_ok());
+
+        // Loop still walked every row.
+        assert_eq!(report.total_rows, 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "preprocessed trace height")]
+    fn test_preprocessed_height_mismatch_panics_in_check_all_constraints() {
+        // Invariant: same mismatch as the single-pass case → collect-all panics the same way.
+        //
+        // Fixture state:
+        //   main         : 4 rows × 1 col
+        //   preprocessed : 8 rows × 1 col  → 8 != 4 → guard panics on entry
+        let air = ShapeProbeAir {
+            prep_height: 8,
+            prep_width: 1,
+        };
+        let main = RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 1);
+
+        // Expected: panic on entry. The would-be report is unreachable → bound to `_`.
+        let _ = check_all_constraints(&air, &main, &[], None);
     }
 }

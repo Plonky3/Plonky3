@@ -369,7 +369,9 @@ impl<const WIDTH: usize> ExternalLayer<PackedMersenne31AVX2, WIDTH, 5>
 
 #[cfg(test)]
 mod tests {
+    use p3_field::PrimeCharacteristicRing;
     use p3_symmetric::Permutation;
+    use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
@@ -380,6 +382,10 @@ mod tests {
     type Perm16 = Poseidon2Mersenne31<16>;
     type Perm24 = Poseidon2Mersenne31<24>;
     type Perm32 = Poseidon2Mersenne31<32>;
+
+    fn arb_f() -> impl Strategy<Value = F> {
+        prop::num::u32::ANY.prop_map(F::from_u32)
+    }
 
     /// Test that the output is the same as the scalar version on a random input of length 16.
     #[test]
@@ -423,16 +429,20 @@ mod tests {
         assert_eq!(avx2_output, expected);
     }
 
-    #[test]
-    fn test_avx2_poseidon2_width_32() {
-        let mut rng = SmallRng::seed_from_u64(1);
-        let poseidon2 = Perm32::new_from_rng_128(&mut rng);
-        let input: [F; 32] = rng.random();
-        let mut expected = input;
-        poseidon2.permute_mut(&mut expected);
-        let mut avx2_input = input.map(Into::<PackedMersenne31AVX2>::into);
-        poseidon2.permute_mut(&mut avx2_input);
-        let avx2_output = avx2_input.map(|x| x.0[0]);
-        assert_eq!(avx2_output, expected);
+    proptest! {
+        #[test]
+        fn prop_avx2_poseidon2_width_32(input in prop::array::uniform32(arb_f())) {
+            let mut rng = SmallRng::seed_from_u64(1);
+            let poseidon2 = Perm32::new_from_rng_128(&mut rng);
+
+            let mut expected = input;
+            poseidon2.permute_mut(&mut expected);
+
+            let mut avx2_input = input.map(Into::<PackedMersenne31AVX2>::into);
+            poseidon2.permute_mut(&mut avx2_input);
+            let avx2_output = avx2_input.map(|x| x.0[0]);
+
+            prop_assert_eq!(avx2_output, expected);
+        }
     }
 }

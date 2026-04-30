@@ -27,14 +27,22 @@ mod tests {
         ) {
             let perm = default_koalabear_poseidon1_16();
 
-            let mut expected = input;
-            perm.permute_mut(&mut expected);
+            let mut packed_input = core::array::from_fn(|i| {
+                let mut packed = PackedKoalaBearNeon::ZERO;
+                for lane in 0..packed.0.len() {
+                    packed.0[lane] = input[i] + F::from_u32((lane + 1) as u32);
+                }
+                packed
+            });
+            perm.permute_mut(&mut packed_input);
 
-            let mut neon_input = input.map(Into::<PackedKoalaBearNeon>::into);
-            perm.permute_mut(&mut neon_input);
-            let neon_output = neon_input.map(|x| x.0[0]);
+            for lane in 0..packed_input[0].0.len() {
+                let mut expected = input.map(|x| x + F::from_u32((lane + 1) as u32));
+                perm.permute_mut(&mut expected);
+                let packed_output = packed_input.map(|x| x.0[lane]);
 
-            prop_assert_eq!(neon_output, expected);
+                prop_assert_eq!(packed_output, expected, "lane {} mismatch", lane);
+            }
         }
 
         #[test]
@@ -43,14 +51,22 @@ mod tests {
         ) {
             let perm = default_koalabear_poseidon1_24();
 
-            let mut expected = input;
-            perm.permute_mut(&mut expected);
+            let mut packed_input = core::array::from_fn(|i| {
+                let mut packed = PackedKoalaBearNeon::ZERO;
+                for lane in 0..packed.0.len() {
+                    packed.0[lane] = input[i] + F::from_u32((lane + 1) as u32);
+                }
+                packed
+            });
+            perm.permute_mut(&mut packed_input);
 
-            let mut neon_input = input.map(Into::<PackedKoalaBearNeon>::into);
-            perm.permute_mut(&mut neon_input);
-            let neon_output = neon_input.map(|x| x.0[0]);
+            for lane in 0..packed_input[0].0.len() {
+                let mut expected = input.map(|x| x + F::from_u32((lane + 1) as u32));
+                perm.permute_mut(&mut expected);
+                let packed_output = packed_input.map(|x| x.0[lane]);
 
-            prop_assert_eq!(neon_output, expected);
+                prop_assert_eq!(packed_output, expected, "lane {} mismatch", lane);
+            }
         }
     }
 }

@@ -18,6 +18,7 @@ use itertools::Itertools;
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
 use p3_util::log2_strict_usize;
 
+use super::packed_kernel::compress_hi_dot_packed;
 use crate::point::Point;
 use crate::poly::Poly;
 
@@ -53,7 +54,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// since there would be fewer evaluations than SIMD lanes.
     pub(super) fn new_packed(point: &Point<EF>) -> Self {
         // Check whether there are enough variables to fill at least one packed element.
-        if point.num_vars() >= log2_strict_usize(F::Packing::WIDTH) {
+        if point.num_variables() >= log2_strict_usize(F::Packing::WIDTH) {
             Self::Packed(Poly::new_packed_from_point(point.as_slice(), EF::ONE))
         } else {
             // Not enough evaluations to pack; fall back to scalar.
@@ -65,12 +66,12 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     ///
     /// For packed tables, this accounts for the log_2(W) variables
     /// absorbed into each SIMD lane.
-    pub const fn num_vars(&self) -> usize {
+    pub const fn num_variables(&self) -> usize {
         match self {
-            Self::Unpacked(poly) => poly.num_vars(),
+            Self::Unpacked(poly) => poly.num_variables(),
             // Packed polynomial has k - log_2(W) stored entries,
             // but represents k total variables.
-            Self::Packed(poly) => poly.num_vars() + log2_strict_usize(F::Packing::WIDTH),
+            Self::Packed(poly) => poly.num_variables() + log2_strict_usize(F::Packing::WIDTH),
         }
     }
 
@@ -205,7 +206,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         }
     }
 
-    /// Weighted accumulation for low-variable compression.
+    /// Weighted accumulation for prefix-variable compression.
     ///
     /// For each eq1 entry, accumulates w0 * eq1[i] * chunk_row[j] into out[j].
     ///
@@ -218,7 +219,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// - out: accumulator buffer of size 2^{k_inner}
     /// - chunk: slice of base-field evaluations for one eq0 entry
     /// - w0: the eq0 weight to multiply by
-    pub(super) fn compress_lo_into(&self, out: &mut [EF], chunk: &[F], w0: EF) {
+    pub(super) fn compress_prefix_into(&self, out: &mut [EF], chunk: &[F], w0: EF) {
         let size_inner = out.len();
         match self {
             Self::Unpacked(eq1) => {
@@ -258,7 +259,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         }
     }
 
-    /// Weighted accumulation for low-variable compression into packed output.
+    /// Weighted accumulation for prefix-variable compression into packed output.
     ///
     /// Same operation as the scalar compression kernel,
     /// but writes into a packed extension-field buffer.
@@ -268,7 +269,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// - out: packed accumulator buffer of size 2^{k_inner} / W
     /// - chunk: slice of base-field evaluations for one eq0 entry
     /// - w0: the eq0 weight to multiply by
-    pub(super) fn compress_lo_to_packed_into(
+    pub(super) fn compress_prefix_to_packed_into(
         &self,
         out: &mut [EF::ExtensionPacking],
         chunk: &[F],
@@ -326,14 +327,14 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     /// sum_{j} eq0[j] * (sum_{i} eq1[i] * chunk[j * |eq1| + i])
     /// ```
     ///
-    /// This is the kernel for high-variable compression:
+    /// This is the kernel for suffix-variable compression:
     /// each output element is a full dot product of one row against the split eq tables.
     ///
     /// # Arguments
     ///
-    /// - chunk: base-field slice of size 2^{num_vars}, representing one output row
-    /// - eq0: the low-half eq table weights
-    pub(super) fn compress_hi_dot(&self, chunk: &[F], eq0: &Poly<EF>) -> EF {
+    /// - chunk: base-field slice of size 2^{num_variables}, representing one output row
+    /// - eq0: the prefix-half eq table weights
+    pub(super) fn compress_suffix_dot(&self, chunk: &[F], eq0: &Poly<EF>) -> EF {
         match self {
             Self::Unpacked(eq1) => {
                 // Group the chunk by eq1 size, pair with eq0 weights.
@@ -346,23 +347,11 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
                     })
                     .sum::<EF>()
             }
-            Self::Packed(eq1) => {
-                // Pack the entire row into SIMD elements.
-                let chunk = F::Packing::pack_slice(chunk);
-                // Packed dot product per eq0 entry, then reduce lanes at the end.
-                let sum = chunk
-                    .chunks(eq1.num_evals())
-                    .zip_eq(eq0.iter())
-                    .map(|(chunk, &w0)| {
-                        dot_product::<EF::ExtensionPacking, _, _>(
-                            eq1.iter().copied(),
-                            chunk.iter().copied(),
-                        ) * w0
-                    })
-                    .sum();
-                // Horizontal reduction across SIMD lanes.
-                EF::ExtensionPacking::to_ext_iter([sum]).sum()
-            }
+            // Packed path: delegate to the SIMD kernel.
+            //     - basis split into four per-coefficient dot products,
+            //     - one Montgomery reduction per four multiplies,
+            //     - interleaved inner loop for ILP.
+            Self::Packed(eq1) => compress_hi_dot_packed::<F, EF>(eq1.as_slice(), chunk, eq0),
         }
     }
 }
@@ -407,7 +396,7 @@ mod tests {
             let eq = EqMaybePacked::<F, EF>::new_packed(&point);
             // Should be scalar despite requesting packed.
             assert!(matches!(eq, EqMaybePacked::Unpacked(_)));
-            assert_eq!(eq.num_vars(), k);
+            assert_eq!(eq.num_variables(), k);
         }
     }
 
@@ -420,7 +409,7 @@ mod tests {
             let eq = EqMaybePacked::<F, EF>::new_packed(&point);
             // Should be in packed form.
             assert!(matches!(eq, EqMaybePacked::Packed(_)));
-            assert_eq!(eq.num_vars(), k);
+            assert_eq!(eq.num_variables(), k);
         }
     }
 
@@ -432,7 +421,7 @@ mod tests {
             let point = Point::<EF>::rand(&mut rng, k);
             let eq = EqMaybePacked::<F, EF>::new_unpacked(&point);
             assert!(matches!(eq, EqMaybePacked::Unpacked(_)));
-            assert_eq!(eq.num_vars(), k);
+            assert_eq!(eq.num_variables(), k);
         }
     }
 
@@ -602,11 +591,11 @@ mod tests {
         }
     }
 
-    // Low-variable compression kernel
+    // Prefix-variable compression kernel
 
     proptest! {
         #[test]
-        fn prop_compress_lo_packed_eq_unpacked(
+        fn prop_compress_prefix_packed_eq_unpacked(
             eq_k in K_PACK..=8usize,
             inner_k in 1usize..=4,
             seed in any::<u64>(),
@@ -625,18 +614,18 @@ mod tests {
             let mut out_u = vec![EF::ZERO; 1 << inner_k];
             let mut out_p = vec![EF::ZERO; 1 << inner_k];
 
-            unpacked.compress_lo_into(&mut out_u, &chunk, w0);
-            packed.compress_lo_into(&mut out_p, &chunk, w0);
+            unpacked.compress_prefix_into(&mut out_u, &chunk, w0);
+            packed.compress_prefix_into(&mut out_p, &chunk, w0);
 
             prop_assert_eq!(out_u, out_p);
         }
     }
 
-    // Packed low-variable compression kernel
+    // Packed prefix-variable compression kernel
 
     proptest! {
         #[test]
-        fn prop_compress_lo_to_packed_matches_scalar(
+        fn prop_compress_prefix_to_packed_matches_scalar(
             eq_k in K_PACK..=8usize,
             inner_k in K_PACK..=4usize,
             seed in any::<u64>(),
@@ -651,12 +640,12 @@ mod tests {
 
             // Scalar reference compression.
             let mut out_scalar = vec![EF::ZERO; 1 << inner_k];
-            eq.compress_lo_into(&mut out_scalar, &chunk, w0);
+            eq.compress_prefix_into(&mut out_scalar, &chunk, w0);
 
             // Packed compression, then unpack for comparison.
             let packed_inner = (1 << inner_k) / PackedF::WIDTH;
             let mut out_packed = vec![EP::ZERO; packed_inner];
-            eq.compress_lo_to_packed_into(&mut out_packed, &chunk, w0);
+            eq.compress_prefix_to_packed_into(&mut out_packed, &chunk, w0);
             let out_unpacked: Vec<EF> =
                 <EP as PackedFieldExtension<F, EF>>::to_ext_iter(out_packed.iter().copied())
                     .collect();
@@ -665,11 +654,11 @@ mod tests {
         }
     }
 
-    // High-variable compression kernel
+    // Suffix-variable compression kernel
 
     proptest! {
         #[test]
-        fn prop_compress_hi_dot_packed_eq_unpacked(
+        fn prop_compress_suffix_dot_packed_eq_unpacked(
             eq_k in K_PACK..=8usize,
             seed in any::<u64>(),
         ) {
@@ -686,13 +675,13 @@ mod tests {
             let packed = EqMaybePacked::<F, EF>::new_packed(&z1);
 
             prop_assert_eq!(
-                unpacked.compress_hi_dot(&chunk, &eq0),
-                packed.compress_hi_dot(&chunk, &eq0),
+                unpacked.compress_suffix_dot(&chunk, &eq0),
+                packed.compress_suffix_dot(&chunk, &eq0),
             );
         }
 
         #[test]
-        fn prop_compress_hi_dot_matches_reference(
+        fn prop_compress_suffix_dot_matches_reference(
             eq_k in 0usize..=10,
             seed in any::<u64>(),
         ) {
@@ -707,7 +696,7 @@ mod tests {
             let eq0 = Poly::<EF>::new_from_point(z0.as_slice(), EF::ONE);
             let unpacked = EqMaybePacked::<F, EF>::new_unpacked(&z1);
 
-            prop_assert_eq!(expected, unpacked.compress_hi_dot(&chunk, &eq0));
+            prop_assert_eq!(expected, unpacked.compress_suffix_dot(&chunk, &eq0));
         }
     }
 
@@ -718,7 +707,7 @@ mod tests {
         // A zero-variable eq table has exactly one entry (the empty product = 1).
         let point = Point::<EF>::rand(&mut SmallRng::seed_from_u64(0), 0);
         let eq = EqMaybePacked::<F, EF>::new_unpacked(&point);
-        assert_eq!(eq.num_vars(), 0);
+        assert_eq!(eq.num_variables(), 0);
         assert_eq!(eq.scalar_chunk_size(), 1);
         // Dot with a single element should return that element times 1.
         assert_eq!(eq.dot_with_base(&[F::TWO]), EF::TWO);

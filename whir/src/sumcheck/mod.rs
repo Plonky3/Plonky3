@@ -25,10 +25,38 @@
 pub mod data;
 pub mod error;
 pub mod lagrange;
+pub mod layout;
 pub mod product_polynomial;
-pub mod prover;
+pub mod single;
+pub mod strategy;
 pub mod svo;
+#[cfg(test)]
+pub(crate) mod tests;
 
 pub use data::{SumcheckData, verify_final_sumcheck_rounds};
 pub use error::SumcheckError;
-pub(crate) use lagrange::extrapolate_012;
+pub(crate) use lagrange::extrapolate_01inf;
+use p3_field::Field;
+
+/// A claimed evaluation together with layout-specific auxiliary data.
+#[derive(Debug, Clone)]
+pub struct Claim<F: Field, P, Data> {
+    /// Point representation used to evaluate or later reconstruct this claim.
+    pub(crate) point: P,
+    /// Claimed value at `point`.
+    pub(crate) eval: F,
+    /// Extra strategy-specific prover or verifier metadata.
+    pub(crate) data: Data,
+}
+
+impl<F: Field, P, Data> Claim<F, P, Data> {
+    /// Returns the claimed value.
+    pub const fn eval(&self) -> F {
+        self.eval
+    }
+
+    /// Returns the point representation attached to this claim.
+    pub const fn point(&self) -> &P {
+        &self.point
+    }
+}

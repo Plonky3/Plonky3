@@ -10,21 +10,22 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+
+itertools.workspace = true
 p3-field.workspace = true
 p3-maybe-rayon.workspace = true
 p3-util.workspace = true
-
-itertools.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 tracing.workspace = true
 
 [dev-dependencies]
+
+criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-goldilocks = { path = "../goldilocks" }
 p3-mersenne-31 = { path = "../mersenne-31" }
-
-criterion.workspace = true
+proptest.workspace = true
 
 [[bench]]
 name = "transpose_benchmark"
@@ -34,6 +35,11 @@ harness = false
 [[bench]]
 name = "columnwise_dot_product"
 path = "benches/columnwise_dot_product.rs"
+harness = false
+
+[[bench]]
+name = "interpolation"
+path = "benches/interpolation.rs"
 harness = false
 
 [lints]
