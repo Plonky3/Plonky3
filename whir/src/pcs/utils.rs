@@ -60,6 +60,15 @@ use crate::fiat_shamir::errors::FiatShamirError;
 /// # Panics
 ///
 /// `domain_size >> folding_factor` must be a power of two.
+///
+/// # TODO (possible recursion ideas)
+///
+/// - Prefer `n` independent draws (with duplicates allowed) over
+///   `n` distinct indices for recursion-friendliness.
+/// - The WHIR paper's `(1 - delta)^t` bound is over independent
+///   draws; distinctness only lets `t` shrink slightly for the
+///   same security, with negligible practical effect.
+/// - Revisit when wiring this through a recursive verifier.
 pub fn get_challenge_stir_queries<Challenger, F, EF>(
     domain_size: usize,
     folding_factor: usize,
