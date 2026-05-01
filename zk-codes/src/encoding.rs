@@ -1,9 +1,11 @@
 use alloc::vec::Vec;
+
 use p3_field::Field;
 use rand::Rng;
 
 /// A randomized encoding such that any `t` codeword positions reveal nothing about the message.
 pub trait ZkEncoding<F: Field> {
+    /// The codeword type produced by the encoding.
     type Codeword;
 
     /// The length of the message being encoded.
@@ -13,11 +15,16 @@ pub trait ZkEncoding<F: Field> {
     fn randomness_len(&self) -> usize;
 
     /// The maximum number of queries that can be perfectly simulated.
+    ///
+    /// - The default is correct for Reed-Solomon;
+    /// - Other encodings should override.
     fn query_bound(&self) -> usize {
         self.randomness_len()
     }
 
-    /// Statistical simulation error (0 for Reed-Solomon).
+    /// Statistical simulation error:
+    /// - `0` for Reed-Solomon,
+    /// - Otherwise an upper bound.
     fn error(&self) -> f64;
 
     /// Encodes a message with random masking.
@@ -25,8 +32,10 @@ pub trait ZkEncoding<F: Field> {
 
     /// Produces identically distributed evaluations without access to the message.
     ///
-    /// Requires `|query_set| <= query_bound()`.
-    /// The distribution is identical (or `error()`-close) to `encode(msg, _)[query_set]`.
+    /// - The number of distinct positions must not exceed the query bound.
+    /// - Duplicate positions yield the same value (matching the real codeword).
+    /// - The output distribution is identical (or close, up to the simulation error)
+    ///   to the real codeword at the queried positions.
     fn simulate<R: Rng>(&self, query_set: &[usize], rng: &mut R) -> Vec<F>;
 }
 

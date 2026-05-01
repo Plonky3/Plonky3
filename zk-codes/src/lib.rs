@@ -1,3 +1,5 @@
+//! Zero-knowledge codes (Section 3.2.1 of eprint 2026/391).
+
 #![no_std]
 
 extern crate alloc;

@@ -1,14 +1,15 @@
-use crate::{LinearZkEncoding, ZkEncoding, ZkEncodingWithRandomness};
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::TwoAdicField;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
-use rand::{
-    Rng, RngExt,
-    distr::{Distribution, StandardUniform},
-};
+use p3_util::log2_strict_usize;
+use rand::distr::{Distribution, StandardUniform};
+use rand::{Rng, RngExt};
+
+use crate::{LinearZkEncoding, ZkEncoding, ZkEncodingWithRandomness};
 
 /// A Reed-Solomon zero-knowledge encoding.
 ///
@@ -45,11 +46,24 @@ pub struct ReedSolomonZkEncoding<F, Dft> {
     pub m: usize,
     /// The discrete Fourier transform implementation.
     pub dft: Dft,
-    pub _phantom: PhantomData<F>,
+    _phantom: PhantomData<F>,
 }
 
 impl<F: TwoAdicField, Dft> ReedSolomonZkEncoding<F, Dft> {
+    /// Construct a Reed-Solomon zero-knowledge encoding.
+    ///
+    /// # Panics
+    /// - if `m` is not a power of two,
+    /// - if `msg_len + t > m`.
     pub const fn new(t: usize, msg_len: usize, m: usize, dft: Dft) -> Self {
+        assert!(
+            m.is_power_of_two(),
+            "Codeword length m must be a power of two"
+        );
+        assert!(
+            msg_len + t <= m,
+            "Message and randomness exceed codeword length"
+        );
         Self {
             t,
             msg_len,
@@ -60,10 +74,26 @@ impl<F: TwoAdicField, Dft> ReedSolomonZkEncoding<F, Dft> {
     }
 
     /// Retrieve the evaluation point `x` at the given index in the DFT domain.
+    ///
+    /// `position` is taken modulo `m` (powers of an `m`-th root of unity are cyclic).
     pub fn evaluation_point(&self, position: usize) -> F {
-        let log2_m = self.m.trailing_zeros() as usize;
+        let log2_m = log2_strict_usize(self.m);
         let g = F::two_adic_generator(log2_m);
         g.exp_u64(position as u64)
+    }
+
+    /// Allocation-free iterator over the message-part row `G^#[position, *]`.
+    pub fn message_row_iter(&self, position: usize) -> impl Iterator<Item = F> {
+        let x = self.evaluation_point(position);
+        x.powers().take(self.msg_len)
+    }
+
+    /// Allocation-free iterator over the randomness-part row `G^$[position, *]`.
+    pub fn randomness_row_iter(&self, position: usize) -> impl Iterator<Item = F> {
+        let x = self.evaluation_point(position);
+        let start = x.exp_u64(self.msg_len as u64);
+        let t = self.t;
+        core::iter::successors((t > 0).then_some(start), move |&prev| Some(prev * x)).take(t)
     }
 }
 
@@ -84,21 +114,36 @@ where
     }
 
     fn error(&self) -> f64 {
-        0.0 // Reed-Solomon encoding provides perfect zero-knowledge (0 error).
+        // Reed-Solomon encoding provides perfect zero-knowledge (0 error).
+        0.0
     }
 
     fn encode<R: Rng>(&self, msg: &[F], rng: &mut R) -> Self::Codeword {
-        let randomness: Vec<F> = (0..self.t).map(|_| rng.random::<F>()).collect();
+        let randomness: Vec<F> = (0..self.t).map(|_| rng.random()).collect();
         self.encode_with_randomness(msg, &randomness)
     }
 
     fn simulate<R: Rng>(&self, query_set: &[usize], rng: &mut R) -> Vec<F> {
+        // Each unique position gets one fresh uniform sample.
+        //
+        // Repeated positions reuse the same sample (matching the real codeword).
+        let mut cache: Vec<(usize, F)> = Vec::with_capacity(query_set.len());
+        let out: Vec<F> = query_set
+            .iter()
+            .map(|&p| match cache.iter().find(|(q, _)| *q == p) {
+                Some(&(_, v)) => v,
+                None => {
+                    let v: F = rng.random();
+                    cache.push((p, v));
+                    v
+                }
+            })
+            .collect();
         assert!(
-            query_set.len() <= self.t,
-            "Cannot simulate more than t queries"
+            cache.len() <= self.t,
+            "Cannot simulate more than t distinct positions"
         );
-        // Any subset of size <= t evaluates to completely uniform randomness.
-        (0..query_set.len()).map(|_| rng.random::<F>()).collect()
+        out
     }
 }
 
@@ -118,10 +163,6 @@ where
             randomness.len(),
             self.t,
             "Randomness length must match configured t"
-        );
-        assert!(
-            self.msg_len + self.t <= self.m,
-            "Message and randomness exceed codeword length"
         );
         let mut coeffs = Vec::with_capacity(self.m);
         coeffs.extend_from_slice(msg);
@@ -153,8 +194,7 @@ where
     ///
     /// `l` is the message length and `x_i` is the evaluation point.
     fn message_row(&self, position: usize) -> Vec<F> {
-        let x = self.evaluation_point(position);
-        x.powers().take(self.msg_len).collect()
+        self.message_row_iter(position).collect()
     }
 
     /// Evaluates the randomness (mask) segment of the generator polynomial.
@@ -172,27 +212,26 @@ where
     ///
     /// `l` is the message length, `t` is the random bound, and `x_i` is the evaluation point.
     fn randomness_row(&self, position: usize) -> Vec<F> {
-        let x = self.evaluation_point(position);
-        let mut pow = x.exp_u64(self.msg_len as u64);
-        let mut row = Vec::with_capacity(self.t);
-        for _ in 0..self.t {
-            row.push(pow);
-            pow *= x;
-        }
-        row
+        self.randomness_row_iter(position).collect()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloc::vec;
+
     use p3_baby_bear::BabyBear;
     use p3_dft::Radix2Dit;
-    use p3_field::PrimeCharacteristicRing;
+    use p3_field::{Field, PrimeCharacteristicRing};
+    use p3_goldilocks::Goldilocks;
+    use p3_koala_bear::KoalaBear;
     use proptest::prelude::*;
     use rand::SeedableRng;
     use rand_xoshiro::Xoshiro256PlusPlus;
+
+    use super::*;
+
+    type F = BabyBear;
 
     #[test]
     fn test_zero_randomness_matches_plain_rs() {
@@ -200,47 +239,237 @@ mod tests {
         let t = 2;
         let m = 8;
         let dft = Radix2Dit::default();
-        let encoding = ReedSolomonZkEncoding::<BabyBear, _>::new(t, msg_len, m, dft.clone());
+        let encoding = ReedSolomonZkEncoding::<F, _>::new(t, msg_len, m, dft.clone());
 
-        let msg = vec![
-            BabyBear::new(1),
-            BabyBear::new(2),
-            BabyBear::new(3),
-            BabyBear::new(4),
-        ];
+        let msg = vec![F::new(1), F::new(2), F::new(3), F::new(4)];
 
         // Eval with zero randomness.
-        let encoded = encoding.encode_with_randomness(&msg, &vec![BabyBear::ZERO; t]);
+        let encoded = encoding.encode_with_randomness(&msg, &vec![F::ZERO; t]);
 
         // Plain RS encodes by padding the message with zeros.
         let mut plain_coeffs = msg;
-        plain_coeffs.resize(m, BabyBear::ZERO);
+        plain_coeffs.resize(m, F::ZERO);
         let plain_mat = RowMajorMatrix::new_col(plain_coeffs);
         let plain_encoded = dft.dft_batch(plain_mat).to_row_major_matrix();
 
         assert_eq!(encoded.values, plain_encoded.values);
     }
 
+    #[test]
+    fn test_t_zero_matches_plain_rs() {
+        // Degenerate case t=0: encoding is plain RS.
+        let msg_len = 4;
+        let t = 0;
+        let m = 8;
+        let dft = Radix2Dit::default();
+        let encoding = ReedSolomonZkEncoding::<F, _>::new(t, msg_len, m, dft.clone());
+
+        let msg = vec![F::new(7), F::new(11), F::new(13), F::new(17)];
+        let encoded = encoding.encode_with_randomness(&msg, &[]);
+        let mut plain_coeffs = msg;
+        plain_coeffs.resize(m, F::ZERO);
+        let plain_encoded = dft
+            .dft_batch(RowMajorMatrix::new_col(plain_coeffs))
+            .to_row_major_matrix();
+
+        assert_eq!(encoded.values, plain_encoded.values);
+    }
+
+    #[test]
+    fn test_zero_message_length() {
+        // Message of length 0: encoding is the random mask polynomial alone.
+        let msg_len = 0;
+        let t = 4;
+        let m = 8;
+        let dft = Radix2Dit::default();
+        let encoding = ReedSolomonZkEncoding::<F, _>::new(t, msg_len, m, dft.clone());
+
+        let r = vec![F::new(2), F::new(3), F::new(5), F::new(7)];
+        let encoded = encoding.encode_with_randomness(&[], &r);
+
+        // Equivalent plain RS encoding of the mask placed at coefficients [0..t).
+        let mut plain_coeffs = r;
+        plain_coeffs.resize(m, F::ZERO);
+        let plain_encoded = dft
+            .dft_batch(RowMajorMatrix::new_col(plain_coeffs))
+            .to_row_major_matrix();
+
+        assert_eq!(encoded.values, plain_encoded.values);
+    }
+
+    #[test]
+    fn test_msg_plus_t_equals_m_boundary() {
+        // Boundary: msg_len + t == m, randomness fills the remaining coefficients exactly.
+        let msg_len = 5;
+        let t = 3;
+        let m = 8;
+        let dft = Radix2Dit::default();
+        let encoding = ReedSolomonZkEncoding::<F, _>::new(t, msg_len, m, dft);
+
+        let msg: Vec<_> = (0..msg_len).map(|i| F::new(i as u32 + 1)).collect();
+        let r: Vec<_> = (0..t).map(|i| F::new(100 + i as u32)).collect();
+        let encoded = encoding.encode_with_randomness(&msg, &r);
+
+        // Decomposition still holds at every position.
+        for (i, &enc_val) in encoded.values.iter().enumerate().take(m) {
+            let m_dot: F = encoding
+                .message_row(i)
+                .iter()
+                .zip(&msg)
+                .map(|(a, b)| *a * *b)
+                .sum();
+            let r_dot: F = encoding
+                .randomness_row(i)
+                .iter()
+                .zip(&r)
+                .map(|(a, b)| *a * *b)
+                .sum();
+            assert_eq!(enc_val, m_dot + r_dot);
+        }
+    }
+
+    #[test]
+    fn test_boundary_field_values() {
+        // Cover msg coefficients at the field's edge values: 0, 1, P-1.
+        let msg_len = 3;
+        let t = 2;
+        let m = 8;
+        let dft = Radix2Dit::default();
+        let encoding = ReedSolomonZkEncoding::<F, _>::new(t, msg_len, m, dft);
+
+        let msg = vec![F::ZERO, F::ONE, F::NEG_ONE];
+        let r = vec![F::ZERO, F::NEG_ONE];
+        let encoded = encoding.encode_with_randomness(&msg, &r);
+
+        // Decomposition holds at every position.
+        for (i, &enc_val) in encoded.values.iter().enumerate().take(m) {
+            let m_dot: F = encoding
+                .message_row(i)
+                .iter()
+                .zip(&msg)
+                .map(|(a, b)| *a * *b)
+                .sum();
+            let r_dot: F = encoding
+                .randomness_row(i)
+                .iter()
+                .zip(&r)
+                .map(|(a, b)| *a * *b)
+                .sum();
+            assert_eq!(enc_val, m_dot + r_dot);
+        }
+    }
+
+    #[test]
+    fn test_encoding_is_linear() {
+        // Enc(a + b, r1 + r2) == Enc(a, r1) + Enc(b, r2).
+        let msg_len = 4;
+        let t = 3;
+        let m = 16;
+        let dft = Radix2Dit::default();
+        let encoding = ReedSolomonZkEncoding::<F, _>::new(t, msg_len, m, dft);
+
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(99);
+        let a: Vec<F> = (0..msg_len).map(|_| rng.random()).collect();
+        let b: Vec<F> = (0..msg_len).map(|_| rng.random()).collect();
+        let r1: Vec<F> = (0..t).map(|_| rng.random()).collect();
+        let r2: Vec<F> = (0..t).map(|_| rng.random()).collect();
+
+        let lhs = {
+            let s_msg: Vec<_> = a.iter().zip(&b).map(|(x, y)| *x + *y).collect();
+            let s_r: Vec<_> = r1.iter().zip(&r2).map(|(x, y)| *x + *y).collect();
+            encoding.encode_with_randomness(&s_msg, &s_r).values
+        };
+        let rhs = {
+            let ea = encoding.encode_with_randomness(&a, &r1).values;
+            let eb = encoding.encode_with_randomness(&b, &r2).values;
+            ea.iter().zip(&eb).map(|(x, y)| *x + *y).collect::<Vec<_>>()
+        };
+        assert_eq!(lhs, rhs);
+    }
+
+    #[test]
+    fn test_encode_with_randomness_is_deterministic() {
+        let msg_len = 4;
+        let t = 2;
+        let m = 8;
+        let dft = Radix2Dit::default();
+        let encoding = ReedSolomonZkEncoding::<F, _>::new(t, msg_len, m, dft);
+
+        let msg: Vec<_> = (0..msg_len).map(|i| F::new(i as u32)).collect();
+        let r = vec![F::new(123), F::new(456)];
+        let a = encoding.encode_with_randomness(&msg, &r).values;
+        let b = encoding.encode_with_randomness(&msg, &r).values;
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_simulate_handles_duplicate_positions() {
+        // Real codeword has equal values at duplicated positions; simulator must too.
+        let msg_len = 2;
+        let t = 2;
+        let m = 4;
+        let dft = Radix2Dit::default();
+        let encoding = ReedSolomonZkEncoding::<F, _>::new(t, msg_len, m, dft);
+
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(1);
+        let sim = encoding.simulate(&[2, 1, 2, 1, 2], &mut rng);
+
+        // Same indices yield the same value; distinct indices need not.
+        assert_eq!(sim[0], sim[2]);
+        assert_eq!(sim[0], sim[4]);
+        assert_eq!(sim[1], sim[3]);
+    }
+
+    #[test]
+    fn test_simulate_is_uniform_marginal_via_bijection() {
+        // For t distinct positions, the map r -> Enc(msg, r)[S] is bijective.
+        // Concretely, we invert the t x t linear system at S and round-trip.
+        let msg_len = 2;
+        let t = 2;
+        let m = 8;
+        let dft = Radix2Dit::default();
+        let encoding = ReedSolomonZkEncoding::<F, _>::new(t, msg_len, m, dft);
+
+        let positions = [3usize, 5usize];
+        let msg = vec![F::new(11), F::new(22)];
+        let target = [F::new(101), F::new(202)];
+
+        // Solve M * r = target - G^# * msg via Cramer's rule (t = 2).
+        let r0 = encoding.randomness_row(positions[0]);
+        let r1 = encoding.randomness_row(positions[1]);
+        let m0 = encoding.message_row(positions[0]);
+        let m1 = encoding.message_row(positions[1]);
+        let m_dot_0: F = m0.iter().zip(&msg).map(|(a, b)| *a * *b).sum();
+        let m_dot_1: F = m1.iter().zip(&msg).map(|(a, b)| *a * *b).sum();
+        let b0 = target[0] - m_dot_0;
+        let b1 = target[1] - m_dot_1;
+        let det = r0[0] * r1[1] - r0[1] * r1[0];
+        let det_inv = det
+            .try_inverse()
+            .expect("matrix at distinct positions is invertible");
+        let r = vec![
+            (b0 * r1[1] - b1 * r0[1]) * det_inv,
+            (r0[0] * b1 - r1[0] * b0) * det_inv,
+        ];
+
+        let encoded = encoding.encode_with_randomness(&msg, &r).values;
+        assert_eq!(encoded[positions[0]], target[0]);
+        assert_eq!(encoded[positions[1]], target[1]);
+    }
+
     proptest! {
         #[test]
-        fn test_simulate_distribution(seed in any::<u64>(), msg_seed in any::<u64>()) {
+        fn test_simulate_length_matches_query_set(seed: u64, q in 0usize..4) {
             let msg_len = 2;
-            let t = 2;
-            let m = 4;
+            let t = 4;
+            let m = 8;
             let dft = Radix2Dit::default();
-            let encoding = ReedSolomonZkEncoding::<BabyBear, _>::new(t, msg_len, m, dft);
+            let encoding = ReedSolomonZkEncoding::<F, _>::new(t, msg_len, m, dft);
 
-            let mut msg_rng = Xoshiro256PlusPlus::seed_from_u64(msg_seed);
-            let msg = vec![msg_rng.random::<BabyBear>(), msg_rng.random::<BabyBear>()];
-
-            let mut rng1 = Xoshiro256PlusPlus::seed_from_u64(seed);
-            let _encoded = encoding.encode(&msg, &mut rng1);
-
-            let mut rng2 = Xoshiro256PlusPlus::seed_from_u64(seed);
-            let simulated = encoding.simulate(&[0, 1], &mut rng2);
-
-            // Any subset size <= t matches the theoretical uniform distribution.
-            assert_eq!(simulated.len(), 2);
+            let positions: Vec<usize> = (0..q).map(|i| i % m).collect();
+            let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);
+            let sim = encoding.simulate(&positions, &mut rng);
+            prop_assert_eq!(sim.len(), q);
         }
     }
 
@@ -250,13 +479,13 @@ mod tests {
         let msg_len = 2;
         let m = 8;
         let dft = Radix2Dit::default();
-        let encoding = ReedSolomonZkEncoding::<BabyBear, _>::new(t, msg_len, m, dft);
+        let encoding = ReedSolomonZkEncoding::<F, _>::new(t, msg_len, m, dft);
 
-        let msg = vec![BabyBear::new(3), BabyBear::new(5)];
+        let msg = vec![F::new(3), F::new(5)];
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(42);
 
         // Capture randomness for manual evaluation.
-        let rand_values: Vec<BabyBear> = (0..t).map(|_| rng.random()).collect();
+        let rand_values: Vec<F> = (0..t).map(|_| rng.random()).collect();
 
         // Encode using the identical randomness.
         let encoded = encoding.encode_with_randomness(&msg, &rand_values).values;
@@ -266,8 +495,8 @@ mod tests {
             let msg_row = encoding.message_row(i);
             let rand_row = encoding.randomness_row(i);
 
-            let msg_dot: BabyBear = msg_row.iter().zip(&msg).map(|(a, b)| *a * *b).sum();
-            let rand_dot: BabyBear = rand_row
+            let msg_dot: F = msg_row.iter().zip(&msg).map(|(a, b)| *a * *b).sum();
+            let rand_dot: F = rand_row
                 .iter()
                 .zip(&rand_values)
                 .map(|(a, b)| *a * *b)
@@ -275,5 +504,96 @@ mod tests {
 
             assert_eq!(enc_val, msg_dot + rand_dot);
         }
+    }
+
+    #[test]
+    fn test_row_iter_matches_row_vec() {
+        // The iterator and Vec accessors must agree.
+        let t = 3;
+        let msg_len = 4;
+        let m = 16;
+        let dft = Radix2Dit::default();
+        let encoding = ReedSolomonZkEncoding::<F, _>::new(t, msg_len, m, dft);
+
+        for i in 0..m {
+            let msg_iter: Vec<_> = encoding.message_row_iter(i).collect();
+            assert_eq!(msg_iter, encoding.message_row(i));
+            let rand_iter: Vec<_> = encoding.randomness_row_iter(i).collect();
+            assert_eq!(rand_iter, encoding.randomness_row(i));
+        }
+    }
+
+    #[test]
+    fn test_row_decomposition_koala_bear() {
+        let t = 2;
+        let msg_len = 3;
+        let m = 8;
+        let dft = Radix2Dit::default();
+        let encoding = ReedSolomonZkEncoding::<KoalaBear, _>::new(t, msg_len, m, dft);
+
+        let msg = vec![KoalaBear::new(7), KoalaBear::new(11), KoalaBear::new(13)];
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(7);
+        let r: Vec<KoalaBear> = (0..t).map(|_| rng.random()).collect();
+        let encoded = encoding.encode_with_randomness(&msg, &r).values;
+
+        for (i, &enc_val) in encoded.iter().enumerate().take(m) {
+            let m_dot: KoalaBear = encoding
+                .message_row(i)
+                .iter()
+                .zip(&msg)
+                .map(|(a, b)| *a * *b)
+                .sum();
+            let r_dot: KoalaBear = encoding
+                .randomness_row(i)
+                .iter()
+                .zip(&r)
+                .map(|(a, b)| *a * *b)
+                .sum();
+            assert_eq!(enc_val, m_dot + r_dot);
+        }
+    }
+
+    #[test]
+    fn test_row_decomposition_goldilocks() {
+        let t = 2;
+        let msg_len = 2;
+        let m = 8;
+        let dft = Radix2Dit::default();
+        let encoding = ReedSolomonZkEncoding::<Goldilocks, _>::new(t, msg_len, m, dft);
+
+        let msg = vec![Goldilocks::new(123), Goldilocks::new(456)];
+        let mut rng = Xoshiro256PlusPlus::seed_from_u64(123);
+        let r: Vec<Goldilocks> = (0..t).map(|_| rng.random()).collect();
+        let encoded = encoding.encode_with_randomness(&msg, &r).values;
+
+        for (i, &enc_val) in encoded.iter().enumerate().take(m) {
+            let m_dot: Goldilocks = encoding
+                .message_row(i)
+                .iter()
+                .zip(&msg)
+                .map(|(a, b)| *a * *b)
+                .sum();
+            let r_dot: Goldilocks = encoding
+                .randomness_row(i)
+                .iter()
+                .zip(&r)
+                .map(|(a, b)| *a * *b)
+                .sum();
+            assert_eq!(enc_val, m_dot + r_dot);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "must be a power of two")]
+    fn test_new_panics_on_non_power_of_two_m() {
+        let dft = Radix2Dit::<F>::default();
+        let _ = ReedSolomonZkEncoding::<F, _>::new(2, 4, 12, dft);
+    }
+
+    #[test]
+    #[should_panic(expected = "exceed codeword length")]
+    fn test_new_panics_when_msg_plus_t_exceeds_m() {
+        let dft = Radix2Dit::<F>::default();
+        let _ = ReedSolomonZkEncoding::<F, _>::new(5, 5, 8, dft);
     }
 }

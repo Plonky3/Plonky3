@@ -13,11 +13,14 @@ categories.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
 p3-dft.workspace = true
+p3-util.workspace = true
 rand.workspace = true
 itertools.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
+p3-koala-bear = { path = "../koala-bear" }
+p3-goldilocks = { path = "../goldilocks" }
 proptest.workspace = true
 criterion.workspace = true
 rand_xoshiro.workspace = true

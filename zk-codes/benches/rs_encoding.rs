@@ -26,7 +26,7 @@ fn bench_rs_encoding(c: &mut Criterion) {
             b.iter(|| encoding.encode(&msg, &mut rng));
         });
 
-        group.bench_function("plain rs", |b| {
+        group.bench_with_input(BenchmarkId::new("plain_rs", log_n), &log_n, |b, _| {
             b.iter(|| {
                 let mut coeffs = msg.clone();
                 coeffs.resize(m, BabyBear::ZERO);
