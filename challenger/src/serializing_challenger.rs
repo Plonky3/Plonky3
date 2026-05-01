@@ -443,3 +443,78 @@ where
         self.inner.finalize()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_goldilocks::Goldilocks;
+    use p3_symmetric::CryptographicHasher;
+
+    use super::*;
+    use crate::HashChallenger;
+
+    /// Toy byte hasher: deterministic length-only fingerprint.
+    ///
+    /// Enough to drive the challenger plumbing without pulling in a real hash crate.
+    #[derive(Clone)]
+    struct ByteCountHasher;
+
+    impl CryptographicHasher<u8, [u8; 32]> for ByteCountHasher {
+        fn hash_iter<I>(&self, input: I) -> [u8; 32]
+        where
+            I: IntoIterator<Item = u8>,
+        {
+            let len = input.into_iter().count() as u8;
+            core::array::from_fn(|i| len.wrapping_add(i as u8))
+        }
+
+        fn hash_iter_slices<'a, I>(&self, input: I) -> [u8; 32]
+        where
+            I: IntoIterator<Item = &'a [u8]>,
+        {
+            let len = input.into_iter().map(<[u8]>::len).sum::<usize>() as u8;
+            core::array::from_fn(|i| len.wrapping_add(i as u8))
+        }
+    }
+
+    type Inner = HashChallenger<u8, ByteCountHasher, 32>;
+
+    #[test]
+    fn test_serializing_challenger32_grind_zero_bits_returns_zero() {
+        // bits == 0: must short-circuit to ZERO without consuming bytes.
+        type F = BabyBear;
+        let inner = Inner::new(vec![0, 1, 2, 3], ByteCountHasher);
+        let mut challenger = SerializingChallenger32::<F, Inner>::new(inner);
+
+        // Pristine shadow: equal next-byte proves no inner mutation.
+        let mut shadow = challenger.clone();
+
+        let witness = challenger.grind(0);
+
+        assert_eq!(witness, F::ZERO);
+        let after_grind: u8 = challenger.inner.sample();
+        let no_grind: u8 = shadow.inner.sample();
+        assert_eq!(after_grind, no_grind);
+    }
+
+    #[test]
+    fn test_serializing_challenger64_grind_zero_bits_returns_zero() {
+        // bits == 0: must short-circuit to ZERO without consuming bytes.
+        type F = Goldilocks;
+        let inner = Inner::new(vec![0, 1, 2, 3], ByteCountHasher);
+        let mut challenger = SerializingChallenger64::<F, Inner>::new(inner);
+
+        // Pristine shadow: equal next-byte proves no inner mutation.
+        let mut shadow = challenger.clone();
+
+        let witness = challenger.grind(0);
+
+        assert_eq!(witness, F::ZERO);
+        let after_grind: u8 = challenger.inner.sample();
+        let no_grind: u8 = shadow.inner.sample();
+        assert_eq!(after_grind, no_grind);
+    }
+}

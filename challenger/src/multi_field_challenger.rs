@@ -255,6 +255,7 @@ mod tests {
     use p3_symmetric::Permutation;
 
     use super::*;
+    use crate::grinding_challenger::GrindingChallenger;
 
     const WIDTH: usize = 8;
     const RATE: usize = 4;
@@ -404,5 +405,22 @@ mod tests {
             RATE * num_f_elms,
             "After duplexing, output buffer should contain RATE * num_f_elms elements"
         );
+    }
+
+    #[test]
+    fn test_grind_zero_bits_returns_zero() {
+        // bits == 0: must short-circuit to ZERO without touching state.
+        let mut challenger =
+            MultiField32Challenger::<F, PF, _, WIDTH, RATE>::new(MixingPermutation).unwrap();
+
+        // Snapshot to detect any transcript mutation.
+        let before = challenger.clone();
+
+        let witness = challenger.grind(0);
+
+        assert_eq!(witness, F::ZERO);
+        assert_eq!(challenger.input_buffer, before.input_buffer);
+        assert_eq!(challenger.output_buffer, before.output_buffer);
+        assert_eq!(challenger.sponge_state, before.sponge_state);
     }
 }
