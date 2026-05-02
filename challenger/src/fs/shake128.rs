@@ -92,7 +92,10 @@ mod tests {
     ///
     /// On odd-length input or any non-hex character.
     fn hex_to_bytes(hex: &str) -> Vec<u8> {
-        assert!(hex.len().is_multiple_of(2), "hex string length must be even");
+        assert!(
+            hex.len().is_multiple_of(2),
+            "hex string length must be even"
+        );
         let mut out = Vec::with_capacity(hex.len() / 2);
         for chunk in hex.as_bytes().chunks(2) {
             // Two ASCII nibbles per output byte.

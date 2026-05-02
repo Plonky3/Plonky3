@@ -144,8 +144,8 @@ impl Pattern for PatternPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fs::pattern::step::{Hierarchy, Kind};
     use crate::fs::pattern::state::PatternState;
+    use crate::fs::pattern::step::{Hierarchy, Kind};
 
     /// Outer Protocol container with one nested Challenge atomic.
     fn build_simple_pattern() -> InteractionPattern {

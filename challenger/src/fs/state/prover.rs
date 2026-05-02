@@ -278,8 +278,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
-    use p3_field::PrimeField32;
-    use p3_field::PrimeCharacteristicRing;
+    use p3_field::{PrimeCharacteristicRing, PrimeField32};
 
     use crate::fs::codecs::BytesToFieldCodec;
     use crate::fs::domain_separator::DomainSeparator;
