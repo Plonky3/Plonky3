@@ -7,9 +7,10 @@
 //! 1. A fresh mask oracle `s = Enc_{C_zk}((r, s_pad), r'')`.
 //! 2. A private-zero-evader OOD answer `y = ze_ood(rho) · (f, r, s_pad)^T`.
 //!
-//! This module is gated on the upstream dependency stack (#1584, #1585, #1586)
-//! and currently contains the mathematical identity tests and type scaffolding
-//! that can be validated independently.
+//! The type scaffolding and math identity tests use `p3-zk-codes`
+//! (`LinearZkEncoding`) and `whir::utils` (zero-evader helpers) which
+//! landed via #1584/#1585. Full prover/verifier wiring awaits #1586
+//! (HVZK sumcheck with sublinear masks).
 
 use alloc::vec::Vec;
 

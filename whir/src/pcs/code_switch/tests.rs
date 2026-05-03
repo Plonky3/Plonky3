@@ -2,15 +2,21 @@
 //!
 //! These tests validate the mathematical invariants of Construction 9.7
 //! from eprint 2026/391 using hand-constructed data over BabyBear.
-//! They have zero dependency on the upstream #1584/#1585/#1586 implementations
-//! and can run against current `main`.
+//!
+//! As of #1584/#1585 merging, these tests use the real `p3-zk-codes`
+//! (`LinearZkEncoding`) and `whir::utils` (`eval_ze_star_n`, `padded_ood_t1`)
+//! APIs instead of hand-rolled stubs.
 
 use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_baby_bear::BabyBear;
+use p3_dft::Radix2Dit;
 use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::BinomialExtensionField;
+use p3_zk_codes::{LinearZkEncoding, ReedSolomonZkEncoding, ZkEncodingWithRandomness};
+
+use crate::utils::{eval_ze_star_n, padded_ood_t1};
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -21,23 +27,6 @@ fn ef(v: u64) -> EF {
 
 fn inner_product(a: &[EF], b: &[EF]) -> EF {
     a.iter().zip(b.iter()).map(|(x, y)| *x * *y).sum()
-}
-
-/// Compute `ze_ood(rho) * vec` where each row i of ze_ood is
-/// `(rho_i^0, rho_i^1, ..., rho_i^{len-1})`.
-fn apply_ood_zero_evader(rho_points: &[EF], vec: &[EF]) -> Vec<EF> {
-    rho_points
-        .iter()
-        .map(|rho| {
-            let mut power = EF::ONE;
-            let mut acc = EF::ZERO;
-            for v in vec {
-                acc += power * *v;
-                power *= *rho;
-            }
-            acc
-        })
-        .collect()
 }
 
 /// Returns `(1, rho, rho^2, ..., rho^{dim-1})`.
@@ -51,51 +40,20 @@ fn batching_zero_evader(rho: EF, dim: usize) -> Vec<EF> {
     nu
 }
 
-/// Trivial encoding for testing: `Enc(f, r) = f || r`.
-/// `G^#[i, :]` is the `i`-th standard basis vector of length `ell`,
-/// `G^$[i, :]` is the `(i - ell)`-th standard basis vector of length `r`.
-struct TrivialEncoding {
-    message_len: usize,
-    randomness_len: usize,
+fn make_rs_encoding(msg_len: usize, t: usize, m: usize) -> ReedSolomonZkEncoding<F, Radix2Dit<F>> {
+    ReedSolomonZkEncoding::new(t, msg_len, m, Radix2Dit::default())
 }
 
-impl TrivialEncoding {
-    fn encode(&self, f: &[EF], r: &[EF]) -> Vec<EF> {
-        assert_eq!(f.len(), self.message_len);
-        assert_eq!(r.len(), self.randomness_len);
-        let mut cw = f.to_vec();
-        cw.extend_from_slice(r);
-        cw
-    }
-
-    fn g_sharp_row(&self, symbol_index: usize) -> Vec<EF> {
-        let mut row = vec![EF::ZERO; self.message_len];
-        if symbol_index < self.message_len {
-            row[symbol_index] = EF::ONE;
-        }
-        row
-    }
-
-    fn g_dollar_row(&self, symbol_index: usize) -> Vec<EF> {
-        let mut row = vec![EF::ZERO; self.randomness_len];
-        if symbol_index >= self.message_len {
-            row[symbol_index - self.message_len] = EF::ONE;
-        }
-        row
-    }
+/// Lift a base-field row into extension-field elements for inner products.
+fn lift_row(row: &[F]) -> Vec<EF> {
+    row.iter().map(|&x| EF::from(x)).collect()
 }
 
 /// Construction 9.7 `mu'` identity test with `n = 0` (no prior auxiliary masks).
 ///
-/// Validates the completeness equation:
-///
-/// ```text
-/// mu' = nu_1 * mu
-///     + sum_{i in [t_ood]} nu_{1+i} * y_i
-///     + sum_{i in [t]} sum_{l in [iota]} nu_{1+t_ood+i*iota+l} * f(x_i)_l
-/// ```
-///
-/// AND that `mu'` equals `<f, sl'> + <(r, s_pad), sl_mask>`.
+/// Uses `ReedSolomonZkEncoding` with `msg_len=4, t=2, m=8` and validates
+/// the completeness equation using `LinearZkEncoding::message_row` /
+/// `randomness_row` for `G^#` / `G^$` and `eval_ze_star_n` for OOD answers.
 #[test]
 fn test_construction_9_7_mu_prime_identity_n0() {
     let ell = 4;
@@ -104,17 +62,18 @@ fn test_construction_9_7_mu_prime_identity_n0() {
     let t_ood = 2;
     let t = 3;
     let iota = 1;
+    let m = 8;
 
-    let source_enc = TrivialEncoding {
-        message_len: ell,
-        randomness_len: r_len,
-    };
+    let source_enc = make_rs_encoding(ell, r_len, m);
 
     let f: Vec<EF> = (1..=ell as u64).map(ef).collect();
     let r: Vec<EF> = (10..10 + r_len as u64).map(ef).collect();
     let s_pad: Vec<EF> = (20..20 + s_pad_len as u64).map(ef).collect();
 
-    let f_codeword = source_enc.encode(&f, &r);
+    let f_base: Vec<F> = (1..=ell as u64).map(F::from_u64).collect();
+    let r_base: Vec<F> = (10..10 + r_len as u64).map(F::from_u64).collect();
+    let cw = source_enc.encode_with_randomness(&f_base, &r_base);
+    let f_codeword: Vec<EF> = cw.values.iter().map(|&v| EF::from(v)).collect();
 
     let sl: Vec<EF> = (1..=ell as u64).map(|i| ef(i * 100)).collect();
     let mu = inner_product(&f, &sl);
@@ -126,7 +85,10 @@ fn test_construction_9_7_mu_prime_identity_n0() {
     f_r_s.extend_from_slice(&r);
     f_r_s.extend_from_slice(&s_pad);
 
-    let y = apply_ood_zero_evader(&rho_ood_points, &f_r_s);
+    let y: Vec<EF> = rho_ood_points
+        .iter()
+        .map(|&rho| eval_ze_star_n(rho, &f_r_s))
+        .collect();
     assert_eq!(y.len(), t_ood);
 
     let query_positions: Vec<usize> = vec![0, 2, 4];
@@ -138,7 +100,6 @@ fn test_construction_9_7_mu_prime_identity_n0() {
     let rho_batch = ef(77);
     let nu = batching_zero_evader(rho_batch, nu_dim);
 
-    // Verifier computes mu'.
     let mut mu_prime = nu[0] * mu;
     for i in 0..t_ood {
         mu_prime += nu[1 + i] * y[i];
@@ -149,7 +110,6 @@ fn test_construction_9_7_mu_prime_identity_n0() {
         }
     }
 
-    // Build output relation linear forms and verify identity.
     let mut sl_prime = vec![EF::ZERO; ell];
     for j in 0..ell {
         sl_prime[j] += nu[0] * sl[j];
@@ -163,7 +123,7 @@ fn test_construction_9_7_mu_prime_identity_n0() {
     }
     for i in 0..t {
         for l in 0..iota {
-            let g_sharp = source_enc.g_sharp_row(query_positions[i] + l);
+            let g_sharp = lift_row(&source_enc.message_row(query_positions[i] + l));
             for j in 0..ell {
                 sl_prime[j] += nu[1 + t_ood + i * iota + l] * g_sharp[j];
             }
@@ -184,7 +144,7 @@ fn test_construction_9_7_mu_prime_identity_n0() {
     }
     for i in 0..t {
         for l in 0..iota {
-            let g_dollar = source_enc.g_dollar_row(query_positions[i] + l);
+            let g_dollar = lift_row(&source_enc.randomness_row(query_positions[i] + l));
             for j in 0..r_len {
                 sl_mask[j] += nu[1 + t_ood + i * iota + l] * g_dollar[j];
             }
@@ -212,17 +172,18 @@ fn test_construction_9_7_mu_prime_identity_n2() {
     let t = 2;
     let iota = 1;
     let n = 2;
+    let m = 8;
 
-    let source_enc = TrivialEncoding {
-        message_len: ell,
-        randomness_len: r_len,
-    };
+    let source_enc = make_rs_encoding(ell, r_len, m);
 
     let f: Vec<EF> = (1..=ell as u64).map(|i| ef(i * 3)).collect();
     let r: Vec<EF> = (10..10 + r_len as u64).map(ef).collect();
     let s_pad: Vec<EF> = vec![ef(42)];
 
-    let f_codeword = source_enc.encode(&f, &r);
+    let f_base: Vec<F> = (1..=ell as u64).map(|i| F::from_u64(i * 3)).collect();
+    let r_base: Vec<F> = (10..10 + r_len as u64).map(F::from_u64).collect();
+    let cw = source_enc.encode_with_randomness(&f_base, &r_base);
+    let f_codeword: Vec<EF> = cw.values.iter().map(|&v| EF::from(v)).collect();
 
     let sl: Vec<EF> = (1..=ell as u64).map(|i| ef(i * 7)).collect();
 
@@ -252,7 +213,10 @@ fn test_construction_9_7_mu_prime_identity_n2() {
     f_r_s.extend_from_slice(&f);
     f_r_s.extend_from_slice(&r);
     f_r_s.extend_from_slice(&s_pad);
-    let y = apply_ood_zero_evader(&rho_ood_points, &f_r_s);
+    let y: Vec<EF> = rho_ood_points
+        .iter()
+        .map(|&rho| eval_ze_star_n(rho, &f_r_s))
+        .collect();
 
     let query_positions: Vec<usize> = vec![1, 3];
     let source_openings: Vec<EF> = query_positions.iter().map(|&p| f_codeword[p]).collect();
@@ -271,7 +235,6 @@ fn test_construction_9_7_mu_prime_identity_n2() {
         }
     }
 
-    // Output relation decomposition.
     let mut sl_prime = vec![EF::ZERO; ell];
     for j in 0..ell {
         sl_prime[j] += nu[0] * sl[j];
@@ -285,14 +248,13 @@ fn test_construction_9_7_mu_prime_identity_n2() {
     }
     for i in 0..t {
         for l in 0..iota {
-            let g_sharp = source_enc.g_sharp_row(query_positions[i] + l);
+            let g_sharp = lift_row(&source_enc.message_row(query_positions[i] + l));
             for j in 0..ell {
                 sl_prime[j] += nu[1 + t_ood + i * iota + l] * g_sharp[j];
             }
         }
     }
 
-    // Auxiliary mask contribution: nu_1 * sum_i <xi_i, sl_aux_i>.
     let mut aux_contribution = EF::ZERO;
     for i in 0..n {
         aux_contribution += nu[0] * inner_product(&xi[i], &sl_aux[i]);
@@ -312,7 +274,7 @@ fn test_construction_9_7_mu_prime_identity_n2() {
     }
     for i in 0..t {
         for l in 0..iota {
-            let g_dollar = source_enc.g_dollar_row(query_positions[i] + l);
+            let g_dollar = lift_row(&source_enc.randomness_row(query_positions[i] + l));
             for j in 0..r_len {
                 sl_mask[j] += nu[1 + t_ood + i * iota + l] * g_dollar[j];
             }
@@ -333,6 +295,8 @@ fn test_construction_9_7_mu_prime_identity_n2() {
 
 /// Same identity with `iota = 2`, so queried source symbols expand to multiple
 /// flattened generator rows `x_{i,l} = iota * x_i + l`.
+///
+/// Uses a larger domain (`m = 16`) to accommodate `msg_len + t = 6 < 16`.
 #[test]
 fn test_construction_9_7_mu_prime_identity_iota2() {
     let ell = 4;
@@ -341,16 +305,18 @@ fn test_construction_9_7_mu_prime_identity_iota2() {
     let t_ood = 2;
     let t = 2;
     let iota = 2;
+    let m = 16;
 
-    let source_enc = TrivialEncoding {
-        message_len: ell,
-        randomness_len: r_len,
-    };
+    let source_enc = make_rs_encoding(ell, r_len, m);
 
     let f: Vec<EF> = (1..=ell as u64).map(|i| ef(i * 2)).collect();
     let r: Vec<EF> = (0..r_len as u64).map(|i| ef(30 + i)).collect();
     let s_pad: Vec<EF> = (0..s_pad_len as u64).map(|i| ef(40 + i)).collect();
-    let f_codeword = source_enc.encode(&f, &r);
+
+    let f_base: Vec<F> = (1..=ell as u64).map(|i| F::from_u64(i * 2)).collect();
+    let r_base: Vec<F> = (0..r_len as u64).map(|i| F::from_u64(30 + i)).collect();
+    let cw = source_enc.encode_with_randomness(&f_base, &r_base);
+    let f_codeword: Vec<EF> = cw.values.iter().map(|&v| EF::from(v)).collect();
 
     let sl: Vec<EF> = (0..ell as u64).map(|i| ef(7 + i * 3)).collect();
     let mu = inner_product(&f, &sl);
@@ -360,7 +326,10 @@ fn test_construction_9_7_mu_prime_identity_iota2() {
     f_r_s.extend_from_slice(&f);
     f_r_s.extend_from_slice(&r);
     f_r_s.extend_from_slice(&s_pad);
-    let y = apply_ood_zero_evader(&rho_ood_points, &f_r_s);
+    let y: Vec<EF> = rho_ood_points
+        .iter()
+        .map(|&rho| eval_ze_star_n(rho, &f_r_s))
+        .collect();
 
     let query_symbols = [0_usize, 2_usize];
     let mut source_openings = Vec::with_capacity(t * iota);
@@ -397,7 +366,7 @@ fn test_construction_9_7_mu_prime_identity_iota2() {
     for i in 0..t {
         for l in 0..iota {
             let flat_index = query_symbols[i] * iota + l;
-            let g_sharp = source_enc.g_sharp_row(flat_index);
+            let g_sharp = lift_row(&source_enc.message_row(flat_index));
             for j in 0..ell {
                 sl_prime[j] += nu[1 + t_ood + i * iota + l] * g_sharp[j];
             }
@@ -419,7 +388,7 @@ fn test_construction_9_7_mu_prime_identity_iota2() {
     for i in 0..t {
         for l in 0..iota {
             let flat_index = query_symbols[i] * iota + l;
-            let g_dollar = source_enc.g_dollar_row(flat_index);
+            let g_dollar = lift_row(&source_enc.randomness_row(flat_index));
             for j in 0..r_len {
                 sl_mask[j] += nu[1 + t_ood + i * iota + l] * g_dollar[j];
             }
@@ -436,7 +405,8 @@ fn test_construction_9_7_mu_prime_identity_iota2() {
     );
 }
 
-/// Verify private zero-evader OOD answer matches polynomial evaluation.
+/// Verify private zero-evader OOD answer via `padded_ood_t1` matches
+/// the manual `eval_ze_star_n` on the concatenated vector.
 #[test]
 fn test_private_ood_answer_consistency() {
     let f = vec![ef(3), ef(7), ef(11)];
@@ -449,9 +419,15 @@ fn test_private_ood_answer_consistency() {
     concat.extend_from_slice(&s_pad);
 
     let rho = ef(17);
-    let y = apply_ood_zero_evader(&[rho], &concat);
 
-    // 3 + 7*17 + 11*17^2 + 5*17^3 + 9*17^4 + 13*17^5
+    let from_concat = eval_ze_star_n(rho, &concat);
+    let from_padded = padded_ood_t1(rho, &f, &[r.clone(), s_pad.clone()].concat());
+
+    assert_eq!(
+        from_concat, from_padded,
+        "padded_ood_t1 vs eval_ze_star_n mismatch"
+    );
+
     let r17 = rho;
     let expected = concat[0]
         + concat[1] * r17
@@ -460,7 +436,7 @@ fn test_private_ood_answer_consistency() {
         + concat[4] * r17 * r17 * r17 * r17
         + concat[5] * r17 * r17 * r17 * r17 * r17;
 
-    assert_eq!(y[0], expected, "OOD univariate evaluation mismatch");
+    assert_eq!(from_concat, expected, "OOD univariate evaluation mismatch");
 }
 
 /// Verify batching zero-evader produces correct powers.
@@ -473,4 +449,38 @@ fn test_batching_zero_evader_powers() {
     assert_eq!(nu[1], rho);
     assert_eq!(nu[2], rho * rho);
     assert_eq!(nu[3], rho * rho * rho);
+}
+
+/// Verify that `ReedSolomonZkEncoding::message_row` / `randomness_row`
+/// decompose the codeword correctly: `cw[i] = <msg, G^#[i]> + <rand, G^$[i]>`.
+#[test]
+fn test_rs_row_decomposition_matches_encoding() {
+    let msg_len = 4;
+    let t = 2;
+    let m = 8;
+    let enc = make_rs_encoding(msg_len, t, m);
+
+    let msg: Vec<F> = (1..=msg_len as u64).map(F::from_u64).collect();
+    let rand: Vec<F> = (10..10 + t as u64).map(F::from_u64).collect();
+    let cw = enc.encode_with_randomness(&msg, &rand);
+
+    for i in 0..m {
+        let m_dot: F = enc
+            .message_row(i)
+            .iter()
+            .zip(&msg)
+            .map(|(a, b)| *a * *b)
+            .sum();
+        let r_dot: F = enc
+            .randomness_row(i)
+            .iter()
+            .zip(&rand)
+            .map(|(a, b)| *a * *b)
+            .sum();
+        assert_eq!(
+            cw.values[i],
+            m_dot + r_dot,
+            "Row decomposition failed at position {i}"
+        );
+    }
 }
