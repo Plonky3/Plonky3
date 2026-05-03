@@ -1,11 +1,11 @@
 mod data;
 
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 
 pub use data::VerifierData;
-use hashbrown::HashMap;
 use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
 use p3_commit::{Pcs, PolynomialSpace};
@@ -619,7 +619,7 @@ where
             })?;
     }
 
-    let mut global_cumulative = HashMap::<&String, Vec<_>>::new();
+    let mut global_cumulative = BTreeMap::<&String, Vec<_>>::new();
     for (lookups, data_for_instance) in all_lookups.iter().zip(global_lookup_data.iter()) {
         debug_assert_eq!(Lookup::global_count(lookups), data_for_instance.len());
         for ((name, _), data) in Lookup::global_entries(lookups).zip(data_for_instance.iter()) {
