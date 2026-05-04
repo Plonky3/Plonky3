@@ -87,8 +87,7 @@ use rand::{Rng, RngExt};
 
 use crate::constraints::statement::EqStatement;
 use crate::sumcheck::extrapolate_01inf;
-use crate::sumcheck::product_polynomial::ProductPolynomial;
-use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
+use crate::sumcheck::strategy::VariableOrder;
 
 /// Per-round transcript records for the HVZK sumcheck.
 ///
@@ -113,9 +112,10 @@ pub struct ZkSumcheck;
 
 /// Stateful prover for the HVZK sumcheck (Construction 6.3).
 ///
-/// Wraps a plain [`SumcheckProver`] (which handles the witness-side polynomial
-/// fold exactly as in the non-ZK path) and adds the mask bookkeeping required
-/// to build `ĥ_j` per the per-round formula in the module docs.
+/// Carries the plain-piece polynomial pair (`evals`, `weights`) and its running
+/// sum — folded at each `γ_j` exactly like the non-ZK path — plus the mask
+/// bookkeeping required to build `ĥ_j` per the per-round formula in the module
+/// docs.
 #[allow(dead_code)]
 pub struct ZkSumcheckProver<F, EF, Enc, M>
 where
@@ -125,10 +125,19 @@ where
     Enc::Codeword: Matrix<F>,
     M: Mmcs<F>,
 {
-    /// Plain sumcheck state (poly + claimed sum). Tracks the plain piece only;
-    /// folded at each `γ_j` exactly like the non-ZK path. Corresponds to the
-    /// `Ĝ(X_1, …, X_k)` polynomial of Construction 6.3 step 4.
-    base: SumcheckProver<F, EF>,
+    /// Folded evaluations of the witness polynomial — the first factor of the
+    /// `Ĝ(X_1, …, X_k)` plain piece in Construction 6.3 step 4. Promoted to EF
+    /// after round 1's fold and refolded at each `γ_j`.
+    evals: Poly<EF>,
+    /// Folded weights polynomial — the second factor of `Ĝ`, derived from the
+    /// `EqStatement` plus the `α` batching challenge. Refolded in lockstep with
+    /// `evals`.
+    weights: Poly<EF>,
+    /// Plain-piece sum: `Σ_{x ∈ {0,1}^{k-rounds_done}} evals(x) · weights(x)`,
+    /// the residual hypercube sum tracked by the standard sumcheck invariant
+    /// (matches `SumcheckProver::sum` in `single.rs`). Updated to
+    /// `plain_h_{j-1}(γ_{j-1})` after each round-{j-1} fold.
+    plain_sum: EF,
     /// ZK encoding `Enc_{C_zk}` used for the masks (Theorem 6.2 ingredient `C_zk`).
     encoding: Enc,
     /// The `k` mask polynomials `s_1, …, s_k ∈ F^{<ℓ_zk}[X]` as coefficient
@@ -373,20 +382,30 @@ impl ZkSumcheck {
         let mask_evals_at_gamma: Vec<EF> = vec![s1_at_gamma1];
 
         // Fold base polynomial and weights at γ_1; update plain sum to
-        // plain_h(γ_1) via quadratic extrapolation. `base.sum` tracks the
+        // plain_h(γ_1) via quadratic extrapolation. `plain_sum` tracks the
         // plain-piece sum only — mask-side bookkeeping lives in this struct's
         // other fields, multiplied by `ε` when assembled into `ĥ_j`.
         weights.fix_prefix_var_mut(gamma_1);
         let folded_poly = poly.fix_prefix_var(gamma_1);
         let new_sum = extrapolate_01inf(plain_c0, sum - plain_c0, plain_c_inf, gamma_1);
 
-        let product_poly =
-            ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, folded_poly, weights);
-        debug_assert_eq!(product_poly.dot_product(), new_sum);
-        let base = SumcheckProver::new(product_poly, new_sum);
+        // Sanity: the folded pair's hypercube dot product equals the updated
+        // plain sum (mirrors `ProductPolynomial::dot_product` ↔ `sum` invariant
+        // in `single.rs`). Catches fold/extrapolate mismatches before round 2.
+        debug_assert_eq!(
+            folded_poly
+                .iter()
+                .zip(weights.iter())
+                .map(|(&e, &w)| e * w)
+                .sum::<EF>(),
+            new_sum,
+            "round-1 fold should preserve plain sumcheck invariant",
+        );
 
         let prover = ZkSumcheckProver {
-            base,
+            evals: folded_poly,
+            weights,
+            plain_sum: new_sum,
             encoding: encoding.clone(),
             masks,
             mask_oracles,
@@ -414,18 +433,150 @@ where
     ///
     /// Computes `ĥ_j` per the per-round formula in the module docs, observes
     /// its `max(ell_zk - 1, 2)` non-linear coefficients on the transcript,
-    /// grinds, samples `γ_j`, folds the base prover, and updates the running
+    /// grinds, samples `γ_j`, folds `(evals, weights)`, and updates the running
     /// mask bookkeeping. Returns `γ_j`.
+    ///
+    /// # Panics
+    ///
+    /// - If no rounds remain (caller must invoke at most `k-1` times after
+    ///   construction).
     pub fn round<Challenger>(
         &mut self,
-        _zk_data: &mut ZkSumcheckData<F, EF>,
-        _challenger: &mut Challenger,
-        _pow_bits: usize,
+        zk_data: &mut ZkSumcheckData<F, EF>,
+        challenger: &mut Challenger,
+        pow_bits: usize,
     ) -> EF
     where
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        unimplemented!("HVZK sumcheck round (j > 1) not yet implemented")
+        assert!(self.rounds_left > 0, "HVZK sumcheck has no rounds left");
+
+        let k = self.masks.len();
+        // 1-indexed round number: at the start of `round()` we have
+        // `rounds_left = k - j + 1`, so `j = k - rounds_left + 1`.
+        let j = k - self.rounds_left + 1;
+        // 0-indexed mask slot for s_j.
+        let s_j = &self.masks[j - 1];
+        let ell_zk = s_j.len();
+
+        // Snapshot ĥ_{j-1}(γ_{j-1}) for the affine-consistency debug check.
+        // At this point `mask_evals_at_gamma` has length `j-1` and contains
+        // `s_1(γ_1), …, s_{j-1}(γ_{j-1})`; `sum_future_endpoints` is in its
+        // pre-decrement state, holding `Σ_{l ≥ j}(s_l(0)+s_l(1))`. Then
+        //
+        //   ĥ_{j-1}(γ_{j-1})
+        //     = 2^{k-(j-1)} · (live + past mask sum at γ_<j)        // = Σ mask_evals_at_gamma
+        //     + 2^{k-j}     · Σ_{l > j-1}(s_l(0)+s_l(1))            // = sum_future_endpoints
+        //     + ε           · plain_h_{j-1}(γ_{j-1}).               // = plain_sum
+        //
+        // The future-mask term is non-empty for all `j ∈ 2..=k` because there
+        // is always at least one mask with index `≥ j` (namely `s_j`).
+        #[cfg(debug_assertions)]
+        let prev_h_at_gamma_prev: EF = {
+            let mult_live_past = F::TWO.exp_u64(self.rounds_left as u64);
+            let mult_future = F::TWO.exp_u64((self.rounds_left - 1) as u64);
+            let past_mask_sum: EF = self.mask_evals_at_gamma.iter().copied().sum();
+            EF::from(mult_live_past) * past_mask_sum
+                + EF::from(mult_future * self.sum_future_endpoints)
+                + self.eps * self.plain_sum
+        };
+
+        // Start-of-round decrement: subtract `s_j`'s endpoints so the running
+        // sum holds `Σ_{l > j}(s_l(0)+s_l(1))` — the future-mask term the
+        // per-round formula expects. Mirrors the same step inlined for round 1
+        // in `new_classic_unpacked`.
+        let s_j_endpoints = s_j[0] + s_j.iter().copied().sum::<F>();
+        self.sum_future_endpoints -= s_j_endpoints;
+
+        // Plain piece (degree-2): returns (c_0, c_∞); derive c_1 from the
+        // affine constraint h(0) + h(1) = plain_sum.
+        let (plain_c0, plain_c_inf) = VariableOrder::Prefix
+            .sumcheck_coefficients(self.evals.as_slice(), self.weights.as_slice());
+        let plain_c1 = self.plain_sum - plain_c0.double() - plain_c_inf;
+
+        // Build `ĥ_j` of length `max(ell_zk, 3)`:
+        //   indices 0..ell_zk : live-mask piece           = 2^{k-j} · s_j(X)
+        //   index 0           : past-mask contribution   += 2^{k-j} · Σ_{l<j} s_l(γ_l)
+        //   index 0           : future-mask contribution += 2^{k-j-1} · Σ_{l>j}(s_l(0)+s_l(1))
+        //   indices 0..3      : plain piece              += ε · (c_0 + c_1·X + c_∞·X²)
+        // The future-mask term is only present when `j < k`.
+        let h_size = core::cmp::max(ell_zk, 3);
+        let mut h: Vec<EF> = vec![EF::ZERO; h_size];
+
+        // Live mask: 2^{k-j} = 2^{rounds_left - 1}.
+        let mult_live = F::TWO.exp_u64((self.rounds_left - 1) as u64);
+        for (i, &c) in s_j.iter().enumerate() {
+            h[i] += EF::from(mult_live * c);
+        }
+
+        // Past masks: same multiplier as live; constant in X (added to c_0).
+        let past_mask_sum: EF = self.mask_evals_at_gamma.iter().copied().sum();
+        h[0] += EF::from(mult_live) * past_mask_sum;
+
+        // Future masks: 2^{k-j-1} = 2^{rounds_left - 2}; only when `j < k`.
+        if j < k {
+            let mult_future = F::TWO.exp_u64((self.rounds_left - 2) as u64);
+            h[0] += EF::from(mult_future * self.sum_future_endpoints);
+        }
+
+        // Plain piece: ε · (c_0 + c_1·X + c_∞·X²).
+        h[0] += self.eps * plain_c0;
+        h[1] += self.eps * plain_c1;
+        h[2] += self.eps * plain_c_inf;
+
+        // Affine consistency check (cheap: O(ell_zk) sum):
+        //   h(0) + h(1) = 2·c_0 + Σ_{i ≥ 1} c_i  must equal  ĥ_{j-1}(γ_{j-1}).
+        debug_assert_eq!(
+            h[0].double() + h[1..].iter().copied().sum::<EF>(),
+            prev_h_at_gamma_prev,
+            "ĥ_j should satisfy h(0) + h(1) = ĥ_{{j-1}}(γ_{{j-1}})",
+        );
+
+        // Wire format: send (c_0, c_2, c_3, …, c_d), skipping c_1; verifier
+        // reconstructs c_1 from the affine consistency check above.
+        let mut h_wire: Vec<EF> = Vec::with_capacity(h_size - 1);
+        h_wire.push(h[0]);
+        for i in 2..h_size {
+            h_wire.push(h[i]);
+        }
+
+        challenger.observe_algebra_slice(&h_wire);
+        zk_data.round_coefficients.push(h_wire);
+
+        // Proof-of-work grind, then sample γ_j.
+        if pow_bits > 0 {
+            zk_data.pow_witnesses.push(challenger.grind(pow_bits));
+        }
+        let gamma_j: EF = challenger.sample_algebra_element();
+
+        // Cache `s_j(γ_j)` via Horner for the past-mask term in future rounds.
+        let sj_at_gamma_j: EF = s_j
+            .iter()
+            .rev()
+            .copied()
+            .fold(EF::ZERO, |acc, c| acc * gamma_j + EF::from(c));
+        self.mask_evals_at_gamma.push(sj_at_gamma_j);
+
+        // Fold both polynomials at γ_j and update the plain sum to
+        // plain_h_j(γ_j) via quadratic extrapolation.
+        self.evals.fix_prefix_var_mut(gamma_j);
+        self.weights.fix_prefix_var_mut(gamma_j);
+        self.plain_sum =
+            extrapolate_01inf(plain_c0, self.plain_sum - plain_c0, plain_c_inf, gamma_j);
+
+        // Sanity: hypercube dot-product still matches the running plain sum.
+        debug_assert_eq!(
+            self.evals
+                .iter()
+                .zip(self.weights.iter())
+                .map(|(&e, &w)| e * w)
+                .sum::<EF>(),
+            self.plain_sum,
+            "fold should preserve plain sumcheck invariant after round j",
+        );
+
+        self.rounds_left -= 1;
+        gamma_j
     }
 
     /// Read-only access to the encoded mask oracles for downstream protocols
