@@ -16,7 +16,7 @@ impl MontyParametersAVX2 for KoalaBearParameters {
 
 #[cfg(test)]
 mod tests {
-    use p3_field_testing::test_packed_field;
+    use p3_field_testing::{test_packed_field, test_packed_field_dot_product_boundary};
 
     use super::WIDTH;
     use crate::KoalaBear;
@@ -32,4 +32,6 @@ mod tests {
         &[crate::PackedKoalaBearAVX2::ONE],
         p3_monty_31::PackedMontyField31AVX2::<crate::KoalaBearParameters>(super::SPECIAL_VALS)
     );
+
+    test_packed_field_dot_product_boundary!(crate::PackedKoalaBearAVX2);
 }

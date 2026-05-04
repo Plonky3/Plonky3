@@ -368,7 +368,7 @@ impl_packed_field_pow_2!(
 
 #[cfg(test)]
 mod tests {
-    use p3_field_testing::test_packed_field;
+    use p3_field_testing::{test_packed_field, test_packed_field_dot_product_boundary};
 
     use super::{Mersenne31, PackedMersenne31Neon};
 
@@ -387,4 +387,6 @@ mod tests {
         &[crate::PackedMersenne31Neon::ONE],
         super::SPECIAL_VALS
     );
+
+    test_packed_field_dot_product_boundary!(crate::PackedMersenne31Neon);
 }
