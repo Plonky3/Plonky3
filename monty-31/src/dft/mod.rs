@@ -229,22 +229,25 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         mat.bit_reverse_rows()
     }
 
-    #[instrument(skip_all, fields(dims = %mat.dimensions(), added_bits))]
-    fn idft_batch(&self, mat: RowMajorMatrix<MontyField31<MP>>) -> RowMajorMatrix<MontyField31<MP>>
+    #[instrument(skip_all, fields(added_bits))]
+    fn idft_batch(
+        &self,
+        evals: impl BitReversibleMatrix<MontyField31<MP>>,
+    ) -> RowMajorMatrix<MontyField31<MP>>
     where
         MP: MontyParameters + FieldParameters + TwoAdicData,
     {
-        let nrows = mat.height();
-        let ncols = mat.width();
+        let nrows = evals.height();
+        let ncols = evals.width();
         if nrows <= 1 {
-            return mat;
+            return evals.to_row_major_matrix();
         }
 
         let mut scratch = debug_span!("allocate scratch space")
             .in_scope(|| RowMajorMatrix::default(nrows, ncols));
 
-        let mut mat =
-            debug_span!("initial bitrev").in_scope(|| mat.bit_reverse_rows().to_row_major_matrix());
+        let mut mat = debug_span!("initial bitrev")
+            .in_scope(|| evals.bit_reverse_rows().to_row_major_matrix());
 
         self.update_twiddles(nrows);
         let inv_twiddles = self.get_inv_twiddles();

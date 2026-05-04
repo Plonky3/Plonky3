@@ -165,6 +165,26 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         mat.bit_reverse_rows()
     }
 
+    fn idft_batch(&self, evals: impl BitReversibleMatrix<F>) -> RowMajorMatrix<F> {
+        let mut mat = evals.bit_reverse_rows().to_row_major_matrix();
+
+        let h = mat.height();
+        let log_h = log2_strict_usize(h);
+        let mid = log_h.div_ceil(2);
+
+        let inverse_twiddles = self.get_or_compute_inverse_twiddles(log_h);
+
+        first_half(&mut mat, mid, &inverse_twiddles.twiddles);
+        reverse_matrix_index_bits(&mut mat);
+
+        let h_inv_subfield = F::PrimeSubfield::from_int(h).try_inverse();
+        let scale = h_inv_subfield.map(F::from_prime_subfield);
+        second_half(&mut mat, mid, &inverse_twiddles.bitrev_twiddles, scale);
+
+        reverse_matrix_index_bits(&mut mat);
+        mat
+    }
+
     #[instrument(skip_all, level = "debug", fields(dims = %mat.dimensions(), added_bits = added_bits))]
     fn coset_lde_batch(
         &self,

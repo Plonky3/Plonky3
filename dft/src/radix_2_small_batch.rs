@@ -7,6 +7,7 @@ use core::iter;
 use itertools::Itertools;
 use p3_field::{Field, TwoAdicField, scale_slice_in_place_single_core};
 use p3_matrix::Matrix;
+use p3_matrix::bitrev::BitReversibleMatrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::reverse_matrix_index_bits;
 use p3_maybe_rayon::prelude::*;
@@ -189,7 +190,8 @@ where
         mat
     }
 
-    fn idft_batch(&self, mut mat: RowMajorMatrix<F>) -> RowMajorMatrix<F> {
+    fn idft_batch(&self, evals: impl BitReversibleMatrix<F>) -> RowMajorMatrix<F> {
+        let mut mat = evals.bit_reverse_rows().to_row_major_matrix();
         let h = mat.height();
         let w = mat.width();
         let log_h = log2_strict_usize(h);
@@ -210,9 +212,6 @@ where
         let num_par_rows = estimate_num_rows_in_l1::<F>(h, w);
         let log_num_par_rows = log2_strict_usize(num_par_rows);
         let chunk_size = num_par_rows * w;
-
-        // Need to start by bit-reversing the matrix.
-        reverse_matrix_index_bits(&mut mat);
 
         // For the initial blocks, they are small enough that we can split the matrix
         // into chunks of size `chunk_size` and process them in parallel.

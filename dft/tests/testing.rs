@@ -334,6 +334,27 @@ proptest! {
     }
 
     #[test]
+    fn all_idfts_with_bitrev_input_agree(seed: u64, log_h in 0usize..=7, w in arb_width()) {
+        use p3_matrix::bitrev::BitReversibleMatrix;
+
+        let h = 1 << log_h;
+        let mat = rand_matrix(seed, h, w);
+
+        // Wrap in a bit-reversed view, exercising the BitReversibleMatrix
+        // input path of idft_batch (equivalent to the old idft_batch_bitrev).
+        let naive = NaiveDft.idft_batch(mat.clone().bit_reverse_rows());
+        let dit = Radix2Dit::default().idft_batch(mat.clone().bit_reverse_rows());
+        let bowers = Radix2Bowers.idft_batch(mat.clone().bit_reverse_rows());
+        let parallel = Radix2DitParallel::default().idft_batch(mat.clone().bit_reverse_rows());
+        let small_batch = Radix2DFTSmallBatch::default().idft_batch(mat.bit_reverse_rows());
+
+        prop_assert_eq!(&naive, &dit);
+        prop_assert_eq!(&naive, &bowers);
+        prop_assert_eq!(&naive, &parallel);
+        prop_assert_eq!(&naive, &small_batch);
+    }
+
+    #[test]
     fn all_ldes_agree(
         seed: u64, log_h in 0usize..=7, w in arb_width(), added_bits in arb_added_bits()
     ) {
@@ -409,6 +430,19 @@ proptest! {
         // This backend returns a bit-reversed view; materialize it
         // before passing to the inverse.
         let forward = dft.dft_batch(original.clone()).to_row_major_matrix();
+        let back = dft.idft_batch(forward);
+
+        prop_assert_eq!(original, back);
+    }
+
+    #[test]
+    fn dit_parallel_dft_idft_direct_roundtrip(seed: u64, log_h in arb_log_h(), w in arb_width()) {
+        let dft = Radix2DitParallel::<F>::default();
+        let original = rand_matrix(seed, 1 << log_h, w);
+
+        // Pass dft_batch output directly to idft_batch without materializing.
+        // This exercises the zero-copy BitReversedMatrixView input path.
+        let forward = dft.dft_batch(original.clone());
         let back = dft.idft_batch(forward);
 
         prop_assert_eq!(original, back);
