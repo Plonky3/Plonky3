@@ -1,16 +1,24 @@
 //! Head-to-head FRI vs WHIR comparison.
 //!
-//! Configuration:
+//! # Fixed configuration
+//!
 //! - Merkle hash: Poseidon1 (arithmetic, field-element digests).
-//! - Message size: 2^22 elements.
+//! - Message size: `2^22` field elements.
 //!
-//! FRI is reported in two matrix shapes:
-//! - single-polynomial (width 1) — natural pair to WHIR's single multilinear,
-//!   but not plonky3 FRI's optimised regime;
-//! - batch (width 2^LOG_FRI_BATCH_WIDTH) — the regime plonky3 FRI is tuned for,
-//!   matching real STARK trace shapes.
+//! # FRI variants reported
 //!
-//! Run with: `cargo bench -p p3-whir --bench fri_vs_whir`
+//! - `fri-single` — matrix width 1.
+//!   - apples-to-apples shape with WHIR's single multilinear;
+//!   - **not** plonky3 FRI's optimised regime.
+//! - `fri-batch` — matrix width `2^LOG_FRI_BATCH_WIDTH`.
+//!   - the regime plonky3 FRI is tuned for;
+//!   - matches real STARK trace shapes.
+//!
+//! # Run
+//!
+//! ```bash
+//! cargo bench -p p3-whir --bench fri_vs_whir
+//! ```
 
 use std::time::Instant;
 
@@ -156,19 +164,22 @@ const FRI_NUM_QUERIES: usize = SECURITY_LEVEL.div_ceil(LOG_BLOWUP) - FRI_QUERY_P
 
 /// log_2 of the matrix width for the production-shape FRI variant.
 ///
-/// plonky3 FRI is implemented as a batch FRI tuned for wide matrices (typical
-/// AIR traces have hundreds to thousands of columns). Single-polynomial FRI
-/// is therefore not its optimised regime.
+/// # Why a width parameter exists
 ///
-/// `8` gives a width of 256, which is:
+/// - plonky3 FRI is a batch FRI, tuned for wide matrices.
+/// - Typical AIR traces have hundreds to thousands of columns.
+/// - Single-polynomial FRI (width 1) is therefore *not* its optimised regime.
+///
+/// # Why `8` (width 256)
 ///
 /// - wide enough to put plonky3 FRI in its tuned regime;
-/// - small enough that, at the lowest message size in the sweep, the
-///   per-column polynomial still has 2^10 evaluations (so per-round FRI
-///   work is not dominated by overhead).
+/// - per-column polynomial size at `m = 22` is still `2^14`,
+///   so per-round FRI work is not dominated by overhead.
 ///
-/// 1024 (closer to a real Poseidon2-trace width) is also defensible; we
-/// keep 256 to stay safe at the small end of the sweep.
+/// # Other defensible choices
+///
+/// - `10` (width 1024) — closer to a real Poseidon2-trace width.
+/// - We keep `8` for safety at the small end of any future sweep.
 const LOG_FRI_BATCH_WIDTH: usize = 8;
 
 /// Message-size sweep.
@@ -398,13 +409,20 @@ impl<InMmcs: Mmcs<F>, ChMmcs: Mmcs<EF>, T> FriChal<InMmcs, ChMmcs> for T where
 ///
 /// # Width regimes
 ///
-/// - `log_width = 0` — one polynomial of size `2^log_n`. The classic FRI statement.
-///   This pairs naturally with WHIR's single-multilinear shape, but is **not**
-///   plonky3 FRI's optimised regime.
-/// - `log_width > 0` — batched FRI on `2^log_width` polynomials of size
-///   `2^(log_n - log_width)`, tested jointly via random linear combination.
-///   This is the shape plonky3 FRI is actually tuned for and what real STARK
-///   traces look like.
+/// ## `log_width = 0` — single polynomial
+///
+/// - **shape**: one univariate of degree `< 2^log_n`.
+/// - **claim**: one evaluation at one point.
+/// - **pairing**: apples-to-apples with WHIR's single multilinear.
+/// - **caveat**: this is *not* plonky3 FRI's optimised regime.
+///
+/// ## `log_width > 0` — batched FRI
+///
+/// - **shape**: `2^log_width` univariates of degree `< 2^(log_n - log_width)`.
+/// - **tested via**: random linear combination of the columns.
+/// - **claim**: `2^log_width` evaluations at one common point.
+/// - **pairing**: matches real STARK trace shapes (typically hundreds of columns).
+/// - **why this regime**: plonky3 FRI is implemented and tuned for it.
 struct FriRig<InMmcs, ChMmcs, Ch>
 where
     InMmcs: Mmcs<F>,
