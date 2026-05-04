@@ -2269,6 +2269,53 @@ fn test_batch_stark_failed_global_lookup_inner() {
     verify_batch(&config, &airs, &proof, &pvs, common).unwrap();
 }
 
+#[cfg(not(debug_assertions))]
+#[test]
+fn test_batch_stark_multiple_failed_global_lookups_report_stable_name() {
+    let config = make_config(2025);
+
+    let reps = 2;
+    let mul_air = MulAir { reps };
+    let mul_air_lookups = MulAirLookups::new(
+        mul_air,
+        false,
+        true,
+        0,
+        vec!["MulFib1".to_string(), "MulFib2".to_string()],
+    );
+
+    let log_n = 3;
+    let n = 1 << log_n;
+    let fibonacci_air = FibonacciAir {
+        log_height: log_n,
+        tamper_index: None,
+    };
+    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, 0, None);
+
+    let mul_trace = mul_trace::<Val>(n, reps);
+    let fib_trace = fib_trace::<Val>(0, 1, n);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
+    let traces = [&mul_trace, &fib_trace];
+    let pvs = vec![vec![], fib_pis];
+
+    let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
+    let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups);
+    let mut airs = [air1, air2];
+    let prover_data =
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_n, log_n]);
+    let common = &prover_data.common;
+
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, common);
+    let proof = prove_batch(&config, &instances, &prover_data);
+
+    let err = verify_batch(&config, &airs, &proof, &pvs, common)
+        .expect_err("Verifier should reject multiple failed global lookups");
+    assert_eq!(
+        format!("{err:?}"),
+        "LookupError(\"GlobalCumulativeMismatch(None): MulFib\")"
+    );
+}
+
 #[test]
 fn test_batch_stark_rejects_truncated_global_lookup_data() {
     let config = make_config(2025);
