@@ -4,7 +4,9 @@ use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_field_testing::bench_func::{
     benchmark_add_latency, benchmark_add_throughput, benchmark_chunked_linear_combination,
-    benchmark_inv, benchmark_iter_sum, benchmark_sub_latency, benchmark_sub_throughput,
+    benchmark_div_2exp, benchmark_double_latency, benchmark_double_throughput, benchmark_halve,
+    benchmark_inv, benchmark_iter_sum, benchmark_mul_2exp, benchmark_neg_latency,
+    benchmark_neg_throughput, benchmark_square, benchmark_sub_latency, benchmark_sub_throughput,
 };
 use p3_field_testing::{
     benchmark_dot_array, benchmark_mixed_dot_array, benchmark_mul_latency,
@@ -21,9 +23,14 @@ fn bench_field(c: &mut Criterion) {
     const REPS: usize = 200;
     benchmark_mul_latency::<F, 100>(c, name);
     benchmark_mul_throughput::<F, 25>(c, name);
+    benchmark_square::<F>(c, name);
     benchmark_inv::<F>(c, name);
     benchmark_iter_sum::<F, 4, REPS>(c, name);
+
     benchmark_sum_array::<F, 4, REPS>(c, name);
+    benchmark_sum_array::<F, 5, REPS>(c, name);
+    benchmark_sum_array::<F, 6, REPS>(c, name);
+    benchmark_sum_array::<F, 7, REPS>(c, name);
 
     benchmark_dot_array::<F, 1>(c, name);
     benchmark_dot_array::<F, 2>(c, name);
@@ -40,6 +47,21 @@ fn bench_field(c: &mut Criterion) {
     benchmark_sub_latency::<F, L_REPS>(c, name);
     benchmark_sub_throughput::<F, REPS>(c, name);
 
+    benchmark_halve::<F, REPS>(c, name);
+
+    benchmark_mul_2exp::<F, REPS>(c, name, 1);
+    benchmark_mul_2exp::<F, REPS>(c, name, 10);
+    benchmark_mul_2exp::<F, REPS>(c, name, 32);
+    benchmark_mul_2exp::<F, REPS>(c, name, 63);
+
+    benchmark_div_2exp::<F, REPS>(c, name, 1);
+    benchmark_div_2exp::<F, REPS>(c, name, 10);
+
+    benchmark_neg_latency::<F, L_REPS>(c, name);
+    benchmark_neg_throughput::<F, REPS>(c, name);
+    benchmark_double_latency::<F, L_REPS>(c, name);
+    benchmark_double_throughput::<F, REPS>(c, name);
+
     benchmark_chunked_linear_combination::<F, F, 100>(c, name);
 
     let mut rng = SmallRng::seed_from_u64(1);
@@ -51,6 +73,7 @@ fn bench_field(c: &mut Criterion) {
         );
     });
 }
+
 fn bench_packedfield(c: &mut Criterion) {
     let name = type_name::<<F as Field>::Packing>().to_string();
     // Note that each round of throughput has 10 operations
