@@ -513,13 +513,79 @@ impl SecurityAssumption {
         num_variables: usize,
         log_inv_rate: usize,
     ) -> f64 {
-        let prox_gaps_error = self.prox_gaps_error(num_variables, log_inv_rate, field_size_bits, 2);
-
-        let sumcheck_error = self.fold_sumcheck_error(field_size_bits, num_variables, log_inv_rate);
-
-        let error = prox_gaps_error.min(sumcheck_error);
-
+        let error = self.fold_algebraic_bits(field_size_bits, num_variables, log_inv_rate);
         0_f64.max(security_level as f64 - error)
+    }
+
+    /// Algebraic bits of security delivered by the STIR folding step.
+    ///
+    /// Returns the minimum (= worst) of the proximity-gaps error and the fold-sumcheck error,
+    /// both expressed as bits of security (higher = better). The folding PoW must bridge from
+    /// this value to `security_level`.
+    #[must_use]
+    pub fn fold_algebraic_bits(
+        &self,
+        field_size_bits: usize,
+        num_variables: usize,
+        log_inv_rate: usize,
+    ) -> f64 {
+        let prox_gaps = self.prox_gaps_error(num_variables, log_inv_rate, field_size_bits, 2);
+        let sumcheck = self.fold_sumcheck_error(field_size_bits, num_variables, log_inv_rate);
+        prox_gaps.min(sumcheck)
+    }
+
+    /// Algebraic bits of security delivered by an intermediate STIR query phase.
+    ///
+    /// Combines:
+    /// - Query failure: `t · log2(1/(rho + eta))` bits (calibrated by `eta` and the query count).
+    /// - OOD soundness: see [`Self::ood_error`].
+    /// - Random-linear-combination soundness: see [`Self::queries_combination_error`].
+    ///
+    /// Returns the minimum of the three (= the worst term, which dominates the per-round error).
+    #[must_use]
+    pub fn stir_query_algebraic_bits(
+        &self,
+        field_size_bits: usize,
+        log_degree: usize,
+        log_inv_rate: usize,
+        eta: f64,
+        num_queries: usize,
+        num_ood_samples: usize,
+    ) -> f64 {
+        let failure_base = self.stir_query_failure_base(log_inv_rate, eta);
+        assert!(
+            failure_base > 0. && failure_base < 1.,
+            "STIR query failure base must lie in (0, 1)"
+        );
+        let query_failure = -(num_queries as f64) * libm::log2(failure_base);
+        let ood = self.ood_error(log_degree, log_inv_rate, field_size_bits, num_ood_samples);
+        let combination = self.queries_combination_error(
+            field_size_bits,
+            log_degree,
+            log_inv_rate,
+            num_ood_samples,
+            num_queries,
+        );
+        query_failure.min(ood).min(combination)
+    }
+
+    /// Algebraic bits of security delivered by the STIR final query phase.
+    ///
+    /// The final round verifies queries directly against the sent final polynomial; there is no
+    /// OOD or random-combination step. Returns the query-failure bits only.
+    #[must_use]
+    pub fn stir_final_query_algebraic_bits(
+        &self,
+        log_inv_rate: usize,
+        eta: f64,
+        num_queries: usize,
+    ) -> f64 {
+        let failure_base = self.stir_query_failure_base(log_inv_rate, eta);
+        assert!(
+            failure_base > 0. && failure_base < 1.,
+            "STIR query failure base must lie in (0, 1)"
+        );
+        -(num_queries as f64) * libm::log2(failure_base)
     }
 }
 
