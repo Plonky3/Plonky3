@@ -1,13 +1,17 @@
+use std::hint::black_box;
+
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_field::extension::BinomialExtensionField;
+use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_whir::constraints::statement::initial::InitialStatement;
 use p3_whir::parameters::SumcheckStrategy;
 use p3_whir::sumcheck::SumcheckData;
 use p3_whir::sumcheck::single::SingleSumcheck;
+use p3_whir::sumcheck::strategy::sumcheck_coefficients_prefix;
 use p3_whir::sumcheck::svo::SvoClaim;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -16,6 +20,8 @@ type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
 type Perm = Poseidon2BabyBear<16>;
 type Challenger = DuplexChallenger<F, Perm, 16, 8>;
+type FP = <F as Field>::Packing;
+type EFPacked = <EF as ExtensionField<F>>::ExtensionPacking;
 
 fn make_challenger() -> Challenger {
     let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(42));
@@ -39,6 +45,35 @@ fn make_statement(
         let _ = stmt.evaluate(&pt);
     }
     stmt
+}
+
+/// Random packed input pair sized to `2^num_variables` evaluations.
+///
+/// Mirrors the layout consumed by the round-coefficient kernel inside
+/// `ProductPolynomial::round`:
+///
+/// ```text
+///     evals_packed   : &[F::Packing]              base-field
+///     weights_packed : &[EF::ExtensionPacking]    extension-field accumulator
+/// ```
+fn make_packed_inputs(num_variables: usize) -> (Vec<FP>, Vec<EFPacked>) {
+    // Per-size deterministic seed so successive bench runs are reproducible.
+    let mut rng = SmallRng::seed_from_u64(0xc0ffee ^ num_variables as u64);
+    let n = 1 << num_variables;
+
+    // Scalar buffers first; the packing layer demands a contiguous slice.
+    let evals: Vec<F> = (0..n).map(|_| F::from_u32(rng.random::<u32>())).collect();
+    let weights: Vec<EF> = (0..n).map(|_| rng.random()).collect();
+
+    // Repack base-field evaluations into SIMD lanes of width FP::WIDTH.
+    let evals_packed = FP::pack_slice(&evals).to_vec();
+    // Repack extension weights similarly: one EFPacked per WIDTH consecutive elements.
+    let weights_packed = weights
+        .chunks(FP::WIDTH)
+        .map(EFPacked::from_ext_slice)
+        .collect();
+
+    (evals_packed, weights_packed)
 }
 
 /// End-to-end sumcheck prover: Classic vs SVO.
@@ -117,5 +152,81 @@ fn bench_svo_claim_build(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_sumcheck_prover, bench_svo_claim_build);
+/// Round-coefficient kernel measured in isolation.
+///
+/// # Scope
+///
+/// Excludes:
+///
+/// - challenger sampling
+/// - transcript bookkeeping
+/// - equality polynomial construction
+/// - binding
+fn bench_round_coefficients(c: &mut Criterion) {
+    let mut group = c.benchmark_group("whir/kernel");
+    let n = 20;
+    let (evals, weights) = make_packed_inputs(n);
+
+    // Prefix-binding: split halves of the buffer feed (acc0, acc_inf).
+    group.bench_with_input(
+        BenchmarkId::new("round_coefficients_prefix", n),
+        &n,
+        |b, _| {
+            b.iter(|| {
+                let (c0, c_inf) =
+                    sumcheck_coefficients_prefix(black_box(&evals), black_box(&weights));
+                black_box((c0, c_inf))
+            });
+        },
+    );
+
+    group.finish();
+}
+
+/// In-place binding kernel measured in isolation.
+///
+/// # Operation
+///
+/// Each round of sumcheck binds the active variable by overwriting the
+/// first half of the buffer with a linear interpolation against the
+/// verifier challenge `r`:
+///
+/// ```text
+///     p[i] <- p[i] + (p[i + mid] - p[i]) * r       for i in 0..mid
+/// ```
+///
+/// where `mid = len / 2`. The pass runs twice per round in the prover —
+/// once for the evaluation polynomial and once for the weight polynomial.
+fn bench_fix_prefix_var_mut(c: &mut Criterion) {
+    let mut group = c.benchmark_group("whir/kernel");
+    let n = 20;
+    let (_, weights) = make_packed_inputs(n);
+
+    // Scalar challenge; broadcast onto the packed lanes inside the kernel.
+    let mut rng = SmallRng::seed_from_u64(0xdeadbeef ^ n as u64);
+    let r: EF = rng.random();
+    let template = Poly::<EFPacked>::new(weights);
+
+    group.bench_with_input(BenchmarkId::new("fix_prefix_var_mut", n), &n, |b, _| {
+        // Buffer is mutated in place; a fresh clone per iteration restores it.
+        b.iter_batched_ref(
+            || template.clone(),
+            |poly| {
+                poly.fix_prefix_var_mut(black_box(r));
+                black_box(&*poly);
+            },
+            criterion::BatchSize::LargeInput,
+        );
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_sumcheck_prover,
+    bench_svo_claim_build,
+    bench_round_coefficients,
+    bench_fix_prefix_var_mut,
+);
 criterion_main!(benches);
