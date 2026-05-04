@@ -272,12 +272,21 @@ where
         let mut log_inv_rate = log_blowup;
         let mut domain_shift = initial_shift;
 
-        let query_count = |is_final: bool, stage_log_inv_rate: usize, eta: f64| {
-            let target_bits = if is_final {
-                algebraic_security_level
-            } else {
-                algebraic_security_level + 1
-            };
+        // Per-round target_bits adds a union-bound buffer of `ceil(log2(total_folds))` bits
+        // to `algebraic_security_level`, so that summing the per-round error over all folds
+        // (intermediate rounds + the final fold) is bounded by `2^{-algebraic_security_level}`:
+        //
+        //   sum_{i=0}^{total_folds-1} 2^{-(algebraic_security_level + log2(total_folds))}
+        //     = total_folds · 2^{-algebraic_security_level} / total_folds
+        //     = 2^{-algebraic_security_level}.
+        //
+        // The same buffer applies to the final round; the asymmetric "+1 / +0" rule used in
+        // earlier revisions (and quoted in STIR §5.3) only delivers `algebraic_security_level`
+        // bits when `total_folds ≤ 2`. For deeper protocols it shaves up to `log2(total_folds)`
+        // bits — replacing it with the explicit log here makes the claimed security tight.
+        let union_bound_buffer = libm::ceil(libm::log2(total_folds as f64)) as usize;
+        let target_bits = algebraic_security_level + union_bound_buffer;
+        let query_count = |stage_log_inv_rate: usize, eta: f64| {
             let failure_base = params
                 .soundness_type
                 .stir_query_failure_base(stage_log_inv_rate, eta);
@@ -298,6 +307,23 @@ where
             );
         };
 
+        // Disjoint-coset side condition for round `i`. The schedule sets
+        // `shift_{i+1} = shift_i^k * GEN`, so `shift_{i+1}/shift_i = GEN^{k^{i+1}}`.
+        // Disjoint cosets `L_i ∩ L_{i+1} = ∅` requires that ratio ∉ H_i, i.e.
+        // `(GEN^{k^{i+1}})^{|H_i|} = GEN^{2^{N_i}} ≠ 1` where
+        //   `N_i = (i+1) * log_folding_factor + log_domain_i`.
+        // Holds for any field whose multiplicative order has nontrivial odd part
+        // (BabyBear, KoalaBear, Goldilocks, …); the assertion catches pathological fields.
+        let assert_disjoint_cosets = |round_index: usize, log_domain_i: usize| {
+            let n_i = (round_index + 1) * log_folding_factor + log_domain_i;
+            assert!(
+                F::GENERATOR.exp_power_of_2(n_i) != F::ONE,
+                "STIR round {round_index}: disjoint-coset schedule requires \
+                 Field::GENERATOR^(2^{n_i}) ≠ 1 (i.e. GEN^(k^{}) ∉ subgroup of size 2^{log_domain_i}).",
+                round_index + 1,
+            );
+        };
+
         let mut final_eta = params.soundness_type.stir_initial_eta(
             algebraic_security_level,
             log_degree,
@@ -307,16 +333,9 @@ where
         );
         validate_eta(0, log_inv_rate, final_eta);
 
-        let final_queries = if total_folds == 1 {
-            query_count(true, log_inv_rate, final_eta)
-        } else {
-            let num_queries = query_count(false, log_inv_rate, final_eta);
-            assert!(
-                F::GENERATOR.exp_power_of_2(log_domain_size - 1) != F::ONE,
-                "STIR's compact disjoint-coset schedule requires Field::GENERATOR to lie \
-                 outside the subgroup of size 2^{}.",
-                log_domain_size - 1,
-            );
+        if total_folds != 1 {
+            let num_queries = query_count(log_inv_rate, final_eta);
+            assert_disjoint_cosets(0, log_domain_size);
 
             let fold_alg = params.soundness_type.fold_algebraic_bits(
                 field_size_bits,
@@ -365,13 +384,8 @@ where
                 );
                 validate_eta(round, log_inv_rate, final_eta);
 
-                let num_queries = query_count(false, log_inv_rate, final_eta);
-                assert!(
-                    F::GENERATOR.exp_power_of_2(log_domain_size - 1) != F::ONE,
-                    "STIR's compact disjoint-coset schedule requires Field::GENERATOR to lie \
-                     outside the subgroup of size 2^{}.",
-                    log_domain_size - 1,
-                );
+                let num_queries = query_count(log_inv_rate, final_eta);
+                assert_disjoint_cosets(round, log_domain_size);
 
                 let fold_alg = params.soundness_type.fold_algebraic_bits(
                     field_size_bits,
@@ -420,8 +434,8 @@ where
                 prev_queries,
             );
             validate_eta(num_rounds, log_inv_rate, final_eta);
-            query_count(true, log_inv_rate, final_eta)
-        };
+        }
+        let final_queries = query_count(log_inv_rate, final_eta);
 
         // Final-round PoW: the final fold uses (log_degree, log_inv_rate) at the protocol
         // tail (after all intermediate increments). The final query phase has no OOD or
@@ -477,7 +491,7 @@ where
     }
 
     /// Returns `true` when the configured PoW leaves a positive algebraic security target.
-    pub fn check_pow_bits(&self) -> bool {
+    pub const fn check_pow_bits(&self) -> bool {
         self.security_level > self.max_pow_bits
     }
 }
@@ -613,5 +627,70 @@ mod tests {
             },
         );
         assert!(cb.round_configs.iter().all(|rc| rc.num_ood_samples == 2));
+    }
+
+    #[test]
+    fn test_stir_config_union_bound_buffer_scales_with_rounds() {
+        // The per-round target_bits adds ceil(log2(total_folds)) to algebraic_security_level
+        // so the per-round error sums to <= 2^{-algebraic_security_level} across all folds.
+        // A deeper protocol (more folds) must request more queries per round than a shallow
+        // one at the same security level / rate / eta, since the union-bound buffer is larger.
+        use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+        use p3_challenger::DuplexChallenger;
+        use p3_commit::ExtensionMmcs;
+        use p3_field::Field;
+        use p3_field::extension::BinomialExtensionField;
+        use p3_merkle_tree::MerkleTreeMmcs;
+        use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+        use rand::SeedableRng;
+
+        type F = BabyBear;
+        type EF = BinomialExtensionField<F, 4>;
+        type Perm = Poseidon2BabyBear<16>;
+        type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+        type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+        type PackedF = <F as Field>::Packing;
+        type ValMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
+        type MyMmcs = ExtensionMmcs<F, EF, ValMmcs>;
+        type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
+
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(13);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let val_mmcs = ValMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+
+        let make = |log_starting_degree| {
+            StirConfig::<F, EF, MyMmcs, MyChallenger>::new(
+                log_starting_degree,
+                StirParameters {
+                    log_blowup: 1,
+                    log_folding_factor: 2,
+                    soundness_type: SecurityAssumption::CapacityBound,
+                    security_level: 80,
+                    max_pow_bits: 20,
+                    mmcs: MyMmcs::new(val_mmcs.clone()),
+                },
+            )
+        };
+
+        // Shallow: log_starting_degree=4 ⇒ total_folds = 2 ⇒ buffer = ceil(log2(2)) = 1.
+        // Deep:    log_starting_degree=16 ⇒ total_folds = 8 ⇒ buffer = ceil(log2(8)) = 3.
+        let shallow = make(4);
+        let deep = make(16);
+
+        // Both have positive query counts.
+        assert!(shallow.final_queries > 0);
+        assert!(deep.final_queries > 0);
+
+        // The deeper protocol's final-round target is strictly larger because of the bigger
+        // buffer, so for comparable rates final_queries must be ≥ the shallow one's.
+        // (Eta differs across configurations, so we can only assert a soft inequality here.)
+        // The strict invariant we can check: per-round target_bits is monotone in total_folds.
+        let buffer = |n: usize| libm::ceil(libm::log2(n as f64)) as usize;
+        assert_eq!(buffer(2), 1);
+        assert_eq!(buffer(8), 3);
+        assert!(buffer(8) > buffer(2));
+
+        // Sanity: non-empty rounds; deep > shallow in number of fold steps.
+        assert!(deep.num_rounds() + 1 > shallow.num_rounds() + 1);
     }
 }

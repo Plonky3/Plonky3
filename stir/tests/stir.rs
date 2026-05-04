@@ -455,4 +455,17 @@ mod babybear_pcs {
     fn test_pcs_multiple_different_degrees() {
         do_test_pcs(&[4, 6, 8]);
     }
+
+    #[test]
+    #[should_panic(expected = "is below the minimum")]
+    fn test_pcs_rejects_too_small_matrix() {
+        // log_folding_factor = 2 ⇒ minimum natural matrix height = 2^2 = 4. A height-2
+        // matrix should be rejected at commit time with a clear error rather than
+        // panicking deep inside StirConfig::new.
+        let (pcs, _challenger) = get_pcs();
+        let mut rng = seeded_rng();
+        let domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 2);
+        let mat = RowMajorMatrix::<Val>::rand(&mut rng, 2, 3);
+        let _ = <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
+    }
 }

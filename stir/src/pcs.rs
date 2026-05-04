@@ -116,10 +116,21 @@ where
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
     ) -> (Self::Commitment, Self::ProverData) {
+        let min_height = 1usize << self.stir.log_folding_factor;
         let ldes: Vec<_> = evaluations
             .into_iter()
             .map(|(domain, evals)| {
                 assert_eq!(domain.size(), evals.height());
+                assert!(
+                    evals.height() >= min_height,
+                    "STIR PCS: matrix height {} is below the minimum of 2^{} (= {}) required \
+                     by log_folding_factor = {}. Pad the matrix to at least this height before \
+                     committing, or lower log_folding_factor.",
+                    evals.height(),
+                    self.stir.log_folding_factor,
+                    min_height,
+                    self.stir.log_folding_factor,
+                );
                 let shift = Val::GENERATOR / domain.shift();
                 self.dft
                     .coset_lde_batch(evals, self.stir.log_blowup, shift)
@@ -159,9 +170,18 @@ where
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
         _num_chunks: usize,
     ) -> Vec<RowMajorMatrix<Val>> {
+        let min_height = 1usize << self.stir.log_folding_factor;
         evaluations
             .into_iter()
             .map(|(domain, evals)| {
+                assert!(
+                    evals.height() >= min_height,
+                    "STIR PCS quotient: matrix height {} is below 2^{} required by \
+                     log_folding_factor = {}.",
+                    evals.height(),
+                    self.stir.log_folding_factor,
+                    self.stir.log_folding_factor,
+                );
                 let shift = Val::GENERATOR / domain.shift();
                 self.dft
                     .coset_lde_batch(evals, self.stir.log_blowup, shift)
@@ -172,6 +192,19 @@ where
     }
 
     fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
+        let min_lde_height = 1usize << (self.stir.log_folding_factor + self.stir.log_blowup);
+        for lde in &ldes {
+            assert!(
+                lde.height() >= min_lde_height,
+                "STIR PCS: pre-computed LDE height {} is below 2^{} (= {}) required by \
+                 log_folding_factor + log_blowup = {} + {}.",
+                lde.height(),
+                self.stir.log_folding_factor + self.stir.log_blowup,
+                min_lde_height,
+                self.stir.log_folding_factor,
+                self.stir.log_blowup,
+            );
+        }
         self.input_mmcs.commit(ldes)
     }
 
