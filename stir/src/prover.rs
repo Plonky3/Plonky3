@@ -196,6 +196,9 @@ where
 
         let ans_poly = interpolate_poly(&all_points, &all_values);
         let shake_poly = compute_shake_polynomial(&ans_poly, &all_points);
+        // Bind ans_poly into the transcript BEFORE rho is sampled — otherwise a malicious prover
+        // could fit Ans to satisfy the shake identity at a known rho.
+        challenger.observe_algebra_slice(&ans_poly);
         challenger.observe_algebra_slice(&shake_poly);
 
         // Sample and discard the shake-check challenge so the transcript state
@@ -216,6 +219,7 @@ where
             folding_pow_witness,
             ood_answers,
             pow_witness,
+            ans_polynomial: ans_poly,
             shake_polynomial: shake_poly,
             query_proofs,
         });

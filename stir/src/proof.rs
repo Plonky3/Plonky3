@@ -55,11 +55,21 @@ pub struct StirRoundProof<EF: Field, M: Mmcs<EF>, Witness> {
     /// Proof-of-work witness for the STIR query phase of this round.
     pub pow_witness: Witness,
 
+    /// Answer polynomial coefficients.
+    ///
+    /// The unique polynomial `Ans(X)` of degree `< |P|` interpolating `(y_i, v_i)` for every
+    /// `y_i ∈ P` (OOD + queried points) and its claimed value `v_i`. Sent by the prover so the
+    /// verifier avoids the O(|P|²) Newton interpolation; correctness against the queried/OOD
+    /// values is enforced together with `shake_polynomial` at a random `rho`.
+    pub ans_polynomial: Vec<EF>,
+
     /// Shake polynomial coefficients.
     ///
     /// `S(X) = sum_{y in P} (Ans(X) - Ans(y)) / (X - y)` where `P` is the set of all OOD +
     /// queried points. Sent by the prover and checked by the verifier at a random evaluation
-    /// point.
+    /// point: `S(rho) == sum_i (Ans(rho) - v_i) / (rho - y_i)`. Both `ans_polynomial` and
+    /// `shake_polynomial` are observed in the transcript before `rho` is sampled, so a
+    /// malicious prover cannot fit `Ans` to a known `rho`.
     pub shake_polynomial: Vec<EF>,
 
     /// Merkle openings for each STIR query.

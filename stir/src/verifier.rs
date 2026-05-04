@@ -12,7 +12,7 @@ use crate::config::StirConfig;
 use crate::proof::StirProof;
 use crate::utils::{
     check_shake_consistency, eval_degree_correction, eval_poly, eval_vanishing_at_roots,
-    fold_fiber, interpolate_poly, next_domain_shift,
+    fold_fiber, next_domain_shift,
 };
 
 #[derive(Clone)]
@@ -267,7 +267,7 @@ where
             }
         }
 
-        // Step 4: shake polynomial observation and consistency check.
+        // Step 4: ans + shake polynomial observation and consistency check.
         let all_points: Vec<EF> = ood_points
             .iter()
             .chain(query_points.iter())
@@ -280,14 +280,25 @@ where
             .copied()
             .collect();
 
+        // Ans interpolates |all_points| values, so its degree is `< all_points.len()`. The
+        // prover may have stripped trailing zeros, so accept any length up to that bound; reject
+        // anything larger as malformed. Shake has degree `< all_points.len() - 1`.
+        let max_ans_len = all_points.len();
+        if rp.ans_polynomial.len() > max_ans_len
+            || rp.shake_polynomial.len() > max_ans_len.saturating_sub(1)
+        {
+            return Err(StirError::InvalidProofShape);
+        }
+
+        // Bind ans_poly into the transcript BEFORE rho. The shake identity is a one-point check;
+        // observing both polys first means the prover commits to Ans before learning rho.
+        challenger.observe_algebra_slice(&rp.ans_polynomial);
         challenger.observe_algebra_slice(&rp.shake_polynomial);
 
         let rho: EF = challenger.sample_algebra_element();
 
-        let ans_poly = interpolate_poly(&all_points, &all_values);
-
         if !check_shake_consistency(
-            &ans_poly,
+            &rp.ans_polynomial,
             &rp.shake_polynomial,
             &all_points,
             &all_values,
@@ -297,7 +308,7 @@ where
         }
 
         prev_ctx = Some(VirtualRoundContext {
-            ans_poly,
+            ans_poly: rp.ans_polynomial.clone(),
             all_points,
             r_comb,
         });

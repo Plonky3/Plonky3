@@ -180,6 +180,50 @@ mod babybear_stir {
             verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger).is_err()
         );
     }
+
+    #[test]
+    fn test_tampered_ans_polynomial_fails() {
+        let (params, dft, challenger) = make_params(1, 2);
+        let mut rng = seeded_rng();
+        let log_degree = 8;
+        let degree = 1usize << log_degree;
+        let poly_coeffs: Vec<EF> = (0..degree).map(|_| rng.random()).collect();
+
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
+        let mut p_challenger = challenger.clone();
+        let mut proof = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
+
+        // Tamper the prover-supplied answer polynomial. The shake identity at the
+        // verifier-sampled rho should catch it with overwhelming probability.
+        assert!(!proof.round_proofs[0].ans_polynomial.is_empty());
+        proof.round_proofs[0].ans_polynomial[0] += EF::from(F::ONE);
+
+        let mut v_challenger = challenger;
+        assert!(
+            verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger).is_err()
+        );
+    }
+
+    #[test]
+    fn test_tampered_shake_polynomial_fails() {
+        let (params, dft, challenger) = make_params(1, 2);
+        let mut rng = seeded_rng();
+        let log_degree = 8;
+        let degree = 1usize << log_degree;
+        let poly_coeffs: Vec<EF> = (0..degree).map(|_| rng.random()).collect();
+
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
+        let mut p_challenger = challenger.clone();
+        let mut proof = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
+
+        assert!(!proof.round_proofs[0].shake_polynomial.is_empty());
+        proof.round_proofs[0].shake_polynomial[0] += EF::from(F::ONE);
+
+        let mut v_challenger = challenger;
+        assert!(
+            verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger).is_err()
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
