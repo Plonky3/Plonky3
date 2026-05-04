@@ -31,8 +31,11 @@ tracing.workspace = true
 clap.workspace = true
 criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
+p3-blake3 = { path = "../blake3" }
+p3-fri = { path = "../fri" }
 p3-keccak = { path = "../keccak" }
 p3-koala-bear = { path = "../koala-bear" }
+postcard = { workspace = true, features = ["alloc"] }
 proptest.workspace = true
 rand.workspace = true
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
@@ -43,6 +46,10 @@ parallel = ["p3-maybe-rayon/parallel"]
 
 [[bench]]
 name = "sumcheck"
+harness = false
+
+[[bench]]
+name = "fri_vs_whir"
 harness = false
 
 [[example]]
