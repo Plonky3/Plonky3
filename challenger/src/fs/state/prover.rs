@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 
 use p3_field::{BasedVectorSpace, PrimeField};
 
+use crate::fs::bound::TranscriptBound;
 use crate::fs::codecs::Codec;
 use crate::fs::codecs::decode_field::{encode_field_be, field_byte_size};
 use crate::fs::domain_separator::DomainSeparator;
@@ -103,7 +104,7 @@ impl<C, U: Unit> ProverState<C, U> {
     }
 
     /// Absorb one prover scalar through the supplied codec.
-    pub fn add_scalar<F, Cdc>(&mut self, label: Label, value: &F)
+    pub fn add_scalar<F, Cdc>(&mut self, label: Label, value: &F) -> TranscriptBound<F>
     where
         F: PrimeField,
         Cdc: Codec<C, F>,
@@ -120,12 +121,13 @@ impl<C, U: Unit> ProverState<C, U> {
         // Append the canonical big-endian encoding to the wire.
         let bytes = encode_field_be::<F>(value);
         self.narg.extend_from_slice(&bytes);
+        TranscriptBound::wrap(*value)
     }
 
     /// Absorb a known-length list of scalars under a single pattern step.
     ///
     /// No length prefix is written; the recorded pattern is the source of truth.
-    pub fn add_scalars<F, Cdc>(&mut self, label: Label, values: &[F])
+    pub fn add_scalars<F, Cdc>(&mut self, label: Label, values: &[F]) -> Vec<TranscriptBound<F>>
     where
         F: PrimeField,
         Cdc: Codec<C, F>,
@@ -137,19 +139,22 @@ impl<C, U: Unit> ProverState<C, U> {
             label,
             Length::Fixed(values.len()),
         ));
-        // Absorb each value and append its canonical big-endian encoding to the wire.
+        // Absorb each value, mirror its canonical encoding to the wire, and bind it.
+        let mut bound = Vec::with_capacity(values.len());
         for v in values {
             Cdc::observe(&mut self.challenger, v);
             let bytes = encode_field_be::<F>(v);
             self.narg.extend_from_slice(&bytes);
+            bound.push(TranscriptBound::wrap(*v));
         }
+        bound
     }
 
     /// Absorb one extension-field element coefficient by coefficient.
-    pub fn add_extension<F, EF, Cdc>(&mut self, label: Label, value: &EF)
+    pub fn add_extension<F, EF, Cdc>(&mut self, label: Label, value: &EF) -> TranscriptBound<EF>
     where
         F: PrimeField,
-        EF: BasedVectorSpace<F>,
+        EF: BasedVectorSpace<F> + Copy,
         Cdc: Codec<C, F>,
     {
         // Validate: the next pattern step is a scalar message of extension type.
@@ -165,6 +170,7 @@ impl<C, U: Unit> ProverState<C, U> {
             let bytes = encode_field_be::<F>(coeff);
             self.narg.extend_from_slice(&bytes);
         }
+        TranscriptBound::wrap(*value)
     }
 
     /// Append a hint to the wire buffer without absorbing it into the sponge.
@@ -182,7 +188,7 @@ impl<C, U: Unit> ProverState<C, U> {
     }
 
     /// Sample one challenge scalar of type `F` via codec `Cdc`.
-    pub fn challenge_scalar<F, Cdc>(&mut self, label: Label) -> F
+    pub fn challenge_scalar<F, Cdc>(&mut self, label: Label) -> TranscriptBound<F>
     where
         F: PrimeField,
         Cdc: Codec<C, F>,
@@ -193,11 +199,11 @@ impl<C, U: Unit> ProverState<C, U> {
             label,
             Length::Scalar,
         ));
-        Cdc::sample(&mut self.challenger)
+        TranscriptBound::wrap(Cdc::sample(&mut self.challenger))
     }
 
     /// Sample `n` challenge scalars of type `F` under a single pattern step.
-    pub fn challenge_scalars<F, Cdc>(&mut self, label: Label, n: usize) -> Vec<F>
+    pub fn challenge_scalars<F, Cdc>(&mut self, label: Label, n: usize) -> Vec<TranscriptBound<F>>
     where
         F: PrimeField,
         Cdc: Codec<C, F>,
@@ -208,11 +214,13 @@ impl<C, U: Unit> ProverState<C, U> {
             label,
             Length::Fixed(n),
         ));
-        (0..n).map(|_| Cdc::sample(&mut self.challenger)).collect()
+        (0..n)
+            .map(|_| TranscriptBound::wrap(Cdc::sample(&mut self.challenger)))
+            .collect()
     }
 
     /// Sample one challenge extension-field element coefficient by coefficient.
-    pub fn challenge_extension<F, EF, Cdc>(&mut self, label: Label) -> EF
+    pub fn challenge_extension<F, EF, Cdc>(&mut self, label: Label) -> TranscriptBound<EF>
     where
         F: PrimeField,
         EF: BasedVectorSpace<F>,
@@ -224,7 +232,9 @@ impl<C, U: Unit> ProverState<C, U> {
             label,
             Length::Scalar,
         ));
-        EF::from_basis_coefficients_fn(|_| Cdc::sample(&mut self.challenger))
+        TranscriptBound::wrap(EF::from_basis_coefficients_fn(|_| {
+            Cdc::sample(&mut self.challenger)
+        }))
     }
 
     /// Run a proof-of-work step and append the witness to the wire buffer.
@@ -280,6 +290,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::{PrimeCharacteristicRing, PrimeField32};
 
+    use crate::fs::TranscriptBound;
     use crate::fs::codecs::BytesToFieldCodec;
     use crate::fs::domain_separator::DomainSeparator;
     use crate::fs::pattern::{Hierarchy, Interaction, InteractionPattern, Kind, Length};
@@ -331,12 +342,16 @@ mod tests {
         verifier.finalize().expect("NARG must be fully consumed");
 
         // Property 1: messages round-trip byte-for-byte through the wire.
-        assert_eq!(read_messages, messages);
+        let read_inner: Vec<F> = read_messages
+            .into_iter()
+            .map(TranscriptBound::into_inner)
+            .collect();
+        assert_eq!(read_inner, messages);
         // Property 2: both sides derive the same challenge stream.
         assert_eq!(prover_challenges, verifier_challenges);
         // Property 3: every challenge lies in the canonical range [0, p).
         for c in &verifier_challenges {
-            assert!(c.as_canonical_u32() < F::ORDER_U32);
+            assert!(c.as_inner().as_canonical_u32() < F::ORDER_U32);
         }
     }
 
@@ -349,8 +364,8 @@ mod tests {
         ])
         .unwrap();
 
-        // Helper: run a prover with the given salt and return the challenge.
-        let drive = |salt: &[u8]| -> F {
+        // Helper: run a prover with the given salt and return the bound challenge.
+        let drive = |salt: &[u8]| -> TranscriptBound<F> {
             let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"zk", pattern.clone());
             ds.bind_pattern_hash();
             let mut p = ProverState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds);
@@ -418,8 +433,8 @@ mod tests {
         let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"hint-test", pattern);
         ds.bind_pattern_hash();
 
-        // Helper: run a prover with the given hint bytes and return (challenge, wire).
-        let drive_with_hint = |hint: &[u8; 4]| -> (F, Vec<u8>) {
+        // Helper: run a prover with the given hint bytes and return (bound challenge, wire).
+        let drive_with_hint = |hint: &[u8; 4]| -> (TranscriptBound<F>, Vec<u8>) {
             let mut p = ProverState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds);
             p.add_hint("merkle-path", hint);
             let c = p.challenge_scalar::<F, BytesToFieldCodec<F>>("alpha");
@@ -450,8 +465,8 @@ mod tests {
         // Three small messages reused across both runs.
         let messages: Vec<F> = alloc::vec![F::from_u32(7), F::from_u32(11), F::from_u32(13)];
 
-        // Helper: drive a prover under the given protocol name and return its challenges.
-        let drive = |name: &[u8]| -> Vec<F> {
+        // Helper: drive a prover under the given protocol name and return its bound challenges.
+        let drive = |name: &[u8]| -> Vec<TranscriptBound<F>> {
             let pattern = small_pattern();
             let mut ds: DomainSeparator<u8> = DomainSeparator::new(0x01, name, pattern);
             ds.bind_pattern_hash();
