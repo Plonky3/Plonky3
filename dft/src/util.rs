@@ -1,8 +1,10 @@
+use alloc::vec::Vec;
 use core::borrow::BorrowMut;
 
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Field, PrimeCharacteristicRing, scale_slice_in_place_single_core};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{DenseMatrix, DenseStorage, RowMajorMatrix};
+use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
@@ -25,14 +27,17 @@ pub fn divide_by_height<F: Field, S: DenseStorage<F> + BorrowMut<[F]>>(
 }
 
 /// Multiply each element of row `i` of `mat` by `shift**i`.
+///
+/// Precomputes all powers of `shift` up front so rows can be scaled in parallel.
 pub(crate) fn coset_shift_cols<F: Field>(mat: &mut RowMajorMatrix<F>, shift: F) {
-    mat.rows_mut()
-        .zip(shift.powers())
-        .for_each(|(row, weight)| {
-            row.iter_mut().for_each(|coeff| {
-                *coeff *= weight;
-            });
-        });
+    if shift == F::ONE {
+        return;
+    }
+
+    let weights: Vec<F> = shift.powers().take(mat.height()).collect();
+    mat.par_rows_mut()
+        .zip(weights.into_par_iter())
+        .for_each(|(row, weight)| scale_slice_in_place_single_core(row, weight));
 }
 
 #[cfg(test)]
@@ -150,5 +155,24 @@ mod tests {
         let expected = vec![F::from_u8(7), F::from_u8(8), F::from_u8(9), F::from_u8(10)];
 
         assert_eq!(mat.values, expected);
+    }
+
+    #[test]
+    fn test_coset_shift_cols_matches_scalar_reference() {
+        let mut actual = RowMajorMatrix::new((1u8..=24).map(F::from_u8).collect(), 3);
+        let mut expected = actual.clone();
+        let shift = F::from_u8(3);
+
+        let mut weight = F::ONE;
+        for row in expected.rows_mut() {
+            for coeff in row.iter_mut() {
+                *coeff *= weight;
+            }
+            weight *= shift;
+        }
+
+        coset_shift_cols(&mut actual, shift);
+
+        assert_eq!(actual, expected);
     }
 }
