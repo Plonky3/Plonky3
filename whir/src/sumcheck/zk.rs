@@ -93,8 +93,7 @@
 //!
 //! # Implementation TODOs
 //!
-//! - [ ] Add `p3-zk-codes` to `whir/Cargo.toml` (path-dep, like the other
-//!       `p3-*` crates).
+//! - [x] Add `p3-zk-codes` to `whir/Cargo.toml`.
 //! - [ ] Decide const-generic gating on `super::single` types so non-ZK
 //!       transcript stays byte-identical (regression test required).
 //! - [ ] Add a `static_assert!` (or const evaluator) enforcing
