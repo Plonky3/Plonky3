@@ -14,4 +14,19 @@ pub enum SumcheckError {
     /// Proof-of-work witness verification failed.
     #[error("Invalid proof-of-work witness")]
     InvalidPowWitness,
+
+    /// HVZK sumcheck: a per-round wire payload had the wrong number of field
+    /// elements. Each round must carry `max(ℓ_zk - 1, 2)` elements (after the
+    /// linear coefficient is skipped per Lemma 6.4 / paper §6).
+    #[error("HVZK round {round}: wire size mismatch, expected {expected}, got {actual}")]
+    WireSizeMismatch {
+        round: usize,
+        expected: usize,
+        actual: usize,
+    },
+
+    /// HVZK sumcheck: the number of supplied mask commitments does not match
+    /// the folding factor `k`.
+    #[error("HVZK mask commitment count mismatch: expected {expected}, got {actual}")]
+    MaskCommitmentCountMismatch { expected: usize, actual: usize },
 }

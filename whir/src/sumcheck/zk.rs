@@ -86,6 +86,7 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
 use crate::constraints::statement::EqStatement;
+use crate::sumcheck::error::SumcheckError;
 use crate::sumcheck::extrapolate_01inf;
 use crate::sumcheck::strategy::VariableOrder;
 
@@ -95,13 +96,27 @@ use crate::sumcheck::strategy::VariableOrder;
 /// round's wire payload carries `max(ℓ_zk - 1, 2)` field elements (after
 /// skipping `c_1`). The length is constant within a proof but only known at
 /// runtime (derived from `encoding.message_len()`), hence the inner `Vec<EF>`.
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct ZkSumcheckData<F, EF> {
+    /// `μ̃ = Σ_{b ∈ {0,1}^k} ŝ(b)` — the prover's "new target" sent in step 2
+    /// of Construction 6.3. Observed on the transcript before the verifier
+    /// samples `ε`; lifted to `EF` at observation time.
+    pub mu_tilde: F,
     /// Per-round wire coefficients of `ĥ_j` with the linear term skipped.
     /// Layout per entry: `[c_0, c_2, c_3, …, c_d]` where `d = max(ℓ_zk - 1, 2)`.
     pub round_coefficients: Vec<Vec<EF>>,
     /// Per-round proof-of-work witnesses (one entry per round if `pow_bits > 0`).
     pub pow_witnesses: Vec<F>,
+}
+
+impl<F: Field, EF> Default for ZkSumcheckData<F, EF> {
+    fn default() -> Self {
+        Self {
+            mu_tilde: F::ZERO,
+            round_coefficients: Vec::new(),
+            pow_witnesses: Vec::new(),
+        }
+    }
 }
 
 /// Namespace for the HVZK variant of the WHIR sumcheck.
@@ -308,6 +323,9 @@ impl ZkSumcheck {
 
         // Lift `μ̃` to EF for transcript observation (codebase convention).
         challenger.observe_algebra_element(EF::from(mu_tilde));
+        // Record `μ̃` in the proof so the verifier can re-observe it in the
+        // same position before sampling `ε`.
+        zk_data.mu_tilde = mu_tilde;
 
         // --- Construction 6.3 step 3: sample ε ---
         let eps: EF = challenger.sample_algebra_element();
@@ -418,6 +436,175 @@ impl ZkSumcheck {
         };
 
         (prover, Point::new(vec![gamma_1]))
+    }
+
+    /// Verifier counterpart of [`Self::new_classic_unpacked`].
+    ///
+    /// Replays the prover's transcript actions from `zk_data` and the supplied
+    /// `mask_commits`, reconstructs the dropped linear coefficient `c_1` of
+    /// each round polynomial via the affine consistency check, verifies any
+    /// proof-of-work witnesses, and samples `(γ_1, …, γ_k)` from the
+    /// challenger. Returns the challenge point and the residual claim
+    /// `ĥ_k(γ_k)` that downstream protocols (e.g. the committed sumcheck
+    /// relation, §5 of eprint 2026/391) must check against the mask oracles +
+    /// the witness polynomial.
+    ///
+    /// # Inputs
+    ///
+    /// - `zk_data` — the prover's `ZkSumcheckData` proof artefact (μ̃, per-round
+    ///   wire forms, PoW witnesses).
+    /// - `challenger` — Fiat-Shamir transcript, must be in the same state the
+    ///   prover's transcript was in at the start of `new_classic_unpacked`.
+    /// - `folding_factor` — `k`.
+    /// - `pow_bits` — proof-of-work difficulty (must match the prover).
+    /// - `statement` — same `EqStatement` the prover used; the verifier uses
+    ///   it to derive `μ` from the claimed evaluations and `α` (without ever
+    ///   building the weight polynomial).
+    /// - `mask_commits` — the `k` MMCS mask commitments, in mask order; the
+    ///   verifier observes them on the transcript exactly as the prover did.
+    /// - `ell_zk` — `encoding.message_len()`. Used to re-derive the wire size
+    ///   `max(ℓ_zk - 1, 2)`.
+    ///
+    /// # Errors
+    ///
+    /// - [`SumcheckError::RoundCountMismatch`] if `zk_data.round_coefficients`
+    ///   does not have exactly `folding_factor` entries.
+    /// - [`SumcheckError::MaskCommitmentCountMismatch`] if `mask_commits.len()
+    ///   != folding_factor`.
+    /// - [`SumcheckError::WireSizeMismatch`] if any round's wire form has the
+    ///   wrong length.
+    /// - [`SumcheckError::InvalidPowWitness`] on a failed PoW check.
+    ///
+    /// # Panics
+    ///
+    /// - If `char(F) == 2` or `ell_zk < 2` (Lemma 6.4 hypotheses).
+    /// - If `folding_factor == 0`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn verify_classic_unpacked<F, EF, M, Challenger>(
+        zk_data: &ZkSumcheckData<F, EF>,
+        challenger: &mut Challenger,
+        folding_factor: usize,
+        pow_bits: usize,
+        statement: &EqStatement<EF>,
+        mask_commits: &[M::Commitment],
+        ell_zk: usize,
+    ) -> Result<(Point<EF>, EF), SumcheckError>
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+        M: Mmcs<F>,
+        Challenger:
+            FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
+    {
+        let k = folding_factor;
+
+        assert!(
+            F::TWO != F::ZERO,
+            "Construction 6.3 (Lemma 6.4) requires char(F) != 2",
+        );
+        assert!(
+            ell_zk >= 2,
+            "Construction 6.3 (Lemma 6.4) requires ell_zk >= 2",
+        );
+        assert!(k >= 1, "sumcheck requires at least one round");
+
+        // Proof-shape checks: each must hold or the proof is malformed,
+        // independent of any field arithmetic.
+        if zk_data.round_coefficients.len() != k {
+            return Err(SumcheckError::RoundCountMismatch {
+                expected: k,
+                actual: zk_data.round_coefficients.len(),
+            });
+        }
+        if mask_commits.len() != k {
+            return Err(SumcheckError::MaskCommitmentCountMismatch {
+                expected: k,
+                actual: mask_commits.len(),
+            });
+        }
+        // Wire form is `[c_0, c_2, …, c_d]` of length `max(ℓ_zk, 3) - 1` =
+        // `max(ℓ_zk - 1, 2)`.
+        let h_size = core::cmp::max(ell_zk, 3);
+        let wire_size = h_size - 1;
+        for (idx, wire) in zk_data.round_coefficients.iter().enumerate() {
+            if wire.len() != wire_size {
+                return Err(SumcheckError::WireSizeMismatch {
+                    round: idx + 1,
+                    expected: wire_size,
+                    actual: wire.len(),
+                });
+            }
+        }
+
+        // === Prelude: mirror the prover's transcript actions before round 1. ===
+
+        // Sample α and accumulate μ from the EqStatement directly. Equivalent
+        // to the prover's `combine_hypercube` accumulation but without
+        // materialising the weight polynomial.
+        let alpha: EF = challenger.sample_algebra_element();
+        let mut mu = EF::ZERO;
+        statement.combine_evals(&mut mu, alpha);
+
+        // Observe each mask commitment in the same order the prover did.
+        for commit in mask_commits {
+            challenger.observe(commit.clone());
+        }
+
+        // Observe μ̃ (lifted to EF — codebase convention; matches prover).
+        challenger.observe_algebra_element(EF::from(zk_data.mu_tilde));
+
+        // Sample ε.
+        let eps: EF = challenger.sample_algebra_element();
+
+        // === Sumcheck rounds ===
+
+        // Round-1 affine target: ĥ_1(0) + ĥ_1(1) = ε·μ + μ̃.
+        // For round j ≥ 2 the target gets overwritten with ĥ_{j-1}(γ_{j-1}).
+        let mut target: EF = eps * mu + EF::from(zk_data.mu_tilde);
+        let mut randomness: Vec<EF> = Vec::with_capacity(k);
+
+        for (j_idx, wire) in zk_data.round_coefficients.iter().enumerate() {
+            // Reconstruct the dropped `c_1` from
+            //   target = ĥ_j(0) + ĥ_j(1) = 2·c_0 + c_1 + Σ_{i ≥ 2} c_i.
+            let c0 = wire[0];
+            let high_sum: EF = wire[1..].iter().copied().sum();
+            let c1 = target - c0.double() - high_sum;
+
+            // Observe the wire form on the transcript (same bytes the prover
+            // pushed). Subsequent grind / sample reproduces the prover's flow.
+            challenger.observe_algebra_slice(wire);
+
+            // Verify PoW (only when prover grinded).
+            if pow_bits > 0
+                && !challenger.check_witness(pow_bits, zk_data.pow_witnesses[j_idx])
+            {
+                return Err(SumcheckError::InvalidPowWitness);
+            }
+
+            let gamma_j: EF = challenger.sample_algebra_element();
+
+            // Reassemble [c_0, c_1, c_2, …, c_d] and Horner-evaluate at γ_j.
+            // Iterate via chained iterators to avoid the allocation.
+            let coeffs = core::iter::once(c0)
+                .chain(core::iter::once(c1))
+                .chain(wire[1..].iter().copied());
+            // Horner needs highest-degree first; collect into a small stack
+            // buffer via Vec then iterate reversed (bounded length, ≤ ell_zk).
+            let mut coeffs_vec: Vec<EF> = Vec::with_capacity(h_size);
+            coeffs_vec.extend(coeffs);
+            let h_at_gamma_j: EF = coeffs_vec
+                .iter()
+                .rev()
+                .copied()
+                .fold(EF::ZERO, |acc, c| acc * gamma_j + c);
+
+            target = h_at_gamma_j;
+            randomness.push(gamma_j);
+        }
+
+        // After the round-k iteration `target = ĥ_k(γ_k)`, the residual claim
+        // the next protocol layer (committed sumcheck relation) must verify.
+        Ok((Point::new(randomness), target))
     }
 }
 
@@ -587,5 +774,138 @@ where
     /// instance.
     pub fn mask_oracles(&self) -> &[(M::Commitment, M::ProverData<Enc::Codeword>)] {
         &self.mask_oracles
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::DuplexChallenger;
+    use p3_dft::Radix2DFTSmallBatch;
+    use p3_field::Field;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_multilinear_util::point::Point;
+    use p3_multilinear_util::poly::Poly;
+    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
+
+    use super::*;
+    use crate::constraints::statement::EqStatement;
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+    type Perm = Poseidon2BabyBear<16>;
+    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+    type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
+    type PackedF = <F as Field>::Packing;
+    type MyMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
+    type MyDft = Radix2DFTSmallBatch<F>;
+    type MyEnc = ReedSolomonZkEncoding<F, MyDft>;
+
+    /// Prover/verifier roundtrip: the verifier's Fiat-Shamir replay must agree
+    /// with the prover on every `γ_j`. Any divergence in observed bytes (mask
+    /// commits, μ̃, per-round wire form, PoW witness, sample order) breaks the
+    /// γ-equality at the offending round and onward.
+    #[test]
+    fn prover_verifier_roundtrip_classic_unpacked() {
+        let mut perm_rng = SmallRng::seed_from_u64(42);
+        let perm = Perm::new_from_rng_128(&mut perm_rng);
+
+        // MMCS for mask commitments (matches `pcs/tests.rs` setup).
+        let merkle_hash = MyHash::new(perm.clone());
+        let merkle_compress = MyCompress::new(perm.clone());
+        let mmcs: MyMmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
+
+        // Reed-Solomon ZK encoding: msg_len = ell_zk = 2 (the smallest valid
+        // value per Lemma 6.4); m = 8, t = 2 keeps message + randomness ≤ m.
+        let dft = MyDft::default();
+        let ell_zk = 2;
+        let encoding = MyEnc::new(2, ell_zk, 8, dft);
+
+        // Random multilinear polynomial with 4 variables (16 evaluations).
+        let n_vars = 4;
+        let mut data_rng = SmallRng::seed_from_u64(7);
+        let evals: Vec<F> = (0..(1 << n_vars)).map(|_| data_rng.random()).collect();
+        let poly = Poly::new(evals);
+
+        // EqStatement with one random point; the eval is computed against the
+        // poly so the claim is consistent (otherwise μ would not match the
+        // hypercube sum the prover computes internally).
+        let mut eq_statement = EqStatement::initialize(n_vars);
+        let eq_point: Point<EF> = Point::new(
+            (0..n_vars)
+                .map(|_| data_rng.random::<EF>())
+                .collect::<Vec<EF>>(),
+        );
+        let eq_eval = poly.eval_base::<EF>(&eq_point);
+        eq_statement.add_evaluated_constraint(eq_point, eq_eval);
+
+        let folding_factor = 3;
+        let pow_bits = 0;
+
+        // === Prover ===
+        // Fresh challenger seeded identically to the verifier's via cloned
+        // permutation state.
+        let mut prover_challenger = MyChallenger::new(perm.clone());
+        let mut zk_data = ZkSumcheckData::<F, EF>::default();
+        let mut prover_rng = SmallRng::seed_from_u64(11);
+
+        let (mut prover, gamma_1_point) = ZkSumcheck::new_classic_unpacked::<F, EF, _, _, _, _>(
+            &poly,
+            &mut zk_data,
+            &mut prover_challenger,
+            folding_factor,
+            pow_bits,
+            &eq_statement,
+            &encoding,
+            &mmcs,
+            &mut prover_rng,
+        );
+
+        // Collect the prover's challenges (γ_1 from the constructor, γ_2..γ_k
+        // from `round()`).
+        let mut prover_randomness: Vec<EF> = gamma_1_point.iter().copied().collect();
+        for _ in 1..folding_factor {
+            let gamma_j = prover.round(&mut zk_data, &mut prover_challenger, pow_bits);
+            prover_randomness.push(gamma_j);
+        }
+
+        // Snapshot mask commitments (before the prover state goes out of scope
+        // — `mask_oracles` holds the prover data which the verifier doesn't
+        // need, only the commitment half).
+        let mask_commits: Vec<_> = prover
+            .mask_oracles()
+            .iter()
+            .map(|(c, _)| c.clone())
+            .collect();
+
+        // === Verifier ===
+        let mut verifier_challenger = MyChallenger::new(perm);
+        let (verifier_point, _final_target) =
+            ZkSumcheck::verify_classic_unpacked::<F, EF, MyMmcs, _>(
+                &zk_data,
+                &mut verifier_challenger,
+                folding_factor,
+                pow_bits,
+                &eq_statement,
+                &mask_commits,
+                ell_zk,
+            )
+            .expect("HVZK verifier should accept honest proof");
+
+        // Equality of randomness vectors implies byte-level FS agreement: the
+        // verifier observed the same prelude bytes (α, mask commits, μ̃, ε)
+        // and the same per-round wire bytes the prover pushed.
+        assert_eq!(
+            prover_randomness,
+            verifier_point.iter().copied().collect::<Vec<EF>>(),
+            "prover and verifier disagreed on the sumcheck randomness",
+        );
     }
 }
