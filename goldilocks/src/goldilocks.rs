@@ -260,7 +260,11 @@ impl PrimeCharacteristicRing for Goldilocks {
         // In the goldilocks field, 2^192 = 1 mod P.
         // Thus 2^{-n} = 2^{192 - n} mod P.
         exp %= 192;
-        self.mul_2exp_u64(192 - exp)
+        match exp {
+            0 => *self,
+            1 => self.halve(),
+            _ => self.mul_2exp_u64(192 - exp),
+        }
     }
 
     #[inline]
