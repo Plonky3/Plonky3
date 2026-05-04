@@ -56,7 +56,16 @@
 //!
 //! # Per-round formula (Construction 6.3 step 4(a))
 //!
-//! For round `j` (1-indexed), with `γ = (γ_1, …, γ_{j-1})` already sampled:
+//! For round `j` (1-indexed), with `γ = (γ_1, …, γ_{j-1})` already sampled.
+//! The running `sum_future_endpoints` field follows a uniform "decrement at
+//! the *start* of each round" convention so there is no special case for
+//! entry into round 1: see field doc on [`ZkSumcheckProver::sum_future_endpoints`].
+//!
+//! At the start of round `j`, before building `ĥ_j`:
+//! - `sum_future_endpoints -= s_j(0) + s_j(1)`.
+//!   At this point `sum_future_endpoints == Σ_{l > j} (s_l(0) + s_l(1))`.
+//!
+//! Then build `ĥ_j(X)`:
 //!
 //! ```text
 //! ĥ_j(X) = 2^{k-j}   · s_j(X)                                  (live mask)
@@ -67,8 +76,10 @@
 //!
 //! After observing `ĥ_j` (minus c1) and sampling `γ_j` the prover:
 //! - pushes `s_j(γ_j)` onto `mask_evals_at_gamma`,
-//! - decrements `sum_future_endpoints -= s_{j+1}(0) + s_{j+1}(1)` (if a next round exists),
 //! - calls `base.fix_prefix_var_mut(γ_j)`.
+//!
+//! No after-round bookkeeping for `sum_future_endpoints` — the next round's
+//! start-decrement handles the transition.
 //!
 //! The closed-form `μ̃ = 2^{k-1} · sum_future_endpoints_initial` is checked
 //! against the naive `Σ_{b ∈ {0,1}^k} ŝ(b)` form via `debug_assert!` in the
@@ -148,12 +159,18 @@ where
     ///  ε ← F.
     ///  here challenges come from the extension field EF
     eps: EF,
-    /// Running scalar `Σ_{l > current_round} (s_l(0) + s_l(1))`.
-    /// Precomputed at construction (`μ̃ = 2^{k-1} · sum_future_endpoints`
-    /// initially); decremented per round as masks transition from "future"
-    /// to "past".
-    /// in the paper:
-    /// Construction 6.3, step 2 + per round forumla in step 4(a)
+    /// Running scalar tracking the future-mask endpoint sum.
+    ///
+    /// **Convention (Option B):** at the start of round `j`, *before* the
+    /// per-round decrement, the field holds `Σ_{l ≥ j} (s_l(0) + s_l(1))`.
+    /// Each `round()` decrements by `s_j(0) + s_j(1)` *at its start* —
+    /// after the decrement the field holds `Σ_{l > j}`, which is what the
+    /// per-round `ĥ_j` formula expects (see module-level docstring).
+    ///
+    /// At construction the field is initialised to `Σ_{l=1}^k (s_l(0)+s_l(1))`
+    /// (= `Σ_{l ≥ 1}`, matching the convention at the entry to round 1).
+    /// The same value is used in the closed-form `μ̃ = 2^{k-1} · this`.
+    /// In the paper: Construction 6.3 step 2 + per-round formula step 4(a).
     sum_future_endpoints: F,
     /// `s_l(γ_l)` for `l < current_round`, accumulated as rounds progress.
     mask_evals_at_gamma: Vec<EF>,
