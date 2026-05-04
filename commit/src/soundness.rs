@@ -170,6 +170,7 @@ impl SecurityAssumption {
     ///
     /// `prev_queries` is `t_{i-1}` from the previous stage.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn stir_recursive_eta(
         &self,
         security_bits: usize,

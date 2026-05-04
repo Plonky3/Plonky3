@@ -142,11 +142,9 @@ where
 
     challenger.observe(proof.initial_commitment.clone());
 
-    let mut current_shift = if num_rounds > 0 {
-        config.round_configs[0].domain_shift
-    } else {
-        F::GENERATOR
-    };
+    // Initial domain shift is always F::GENERATOR; round_configs[0].domain_shift mirrors it
+    // when num_rounds > 0.
+    let mut current_shift = F::GENERATOR;
     let mut current_log_domain = config.log_starting_domain_size();
     let mut prev_ctx: Option<VirtualRoundContext<EF>> = None;
 

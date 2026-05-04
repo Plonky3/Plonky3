@@ -27,13 +27,19 @@ use crate::utils::{
 ///
 /// The initial codeword commitment is observed in the challenger internally; callers must
 /// NOT pre-commit the initial codeword.
+///
+/// Returns `(proof, first_round_query_indices)`. The second component is the deduplicated
+/// fold-domain indices the prover queried in the first round (or in the final round, when
+/// there are no intermediate rounds). It is the prover-side hint the PCS layer uses to bind
+/// input commitments at the matching positions; it is NOT part of the verifier-checked proof
+/// (the verifier re-derives these indices from the Fiat-Shamir transcript).
 #[instrument(skip_all)]
 pub fn prove_stir<F, EF, Dft, M, Challenger>(
     config: &StirConfig<F, EF, M, Challenger>,
     poly_coeffs: Vec<EF>,
     dft: &Dft,
     challenger: &mut Challenger,
-) -> StirProof<EF, M, Challenger::Witness>
+) -> (StirProof<EF, M, Challenger::Witness>, Vec<usize>)
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
@@ -43,13 +49,9 @@ where
 {
     let num_rounds = config.num_rounds();
 
-    // Commit to the initial codeword on L_0.
-    let initial_shift = if num_rounds > 0 {
-        config.round_configs[0].domain_shift
-    } else {
-        F::GENERATOR
-    };
-
+    // Commit to the initial codeword on L_0. The folding factor is constant across rounds
+    // (config.log_folding_factor) and the initial domain shift is always F::GENERATOR.
+    let initial_shift = F::GENERATOR;
     let log_initial_domain = config.log_starting_domain_size();
     let initial_domain_size = 1 << log_initial_domain;
 
@@ -62,13 +64,11 @@ where
     let mut current_shift = initial_shift;
     let mut current_log_domain = log_initial_domain;
 
-    let log_arity0 = if num_rounds > 0 {
-        config.round_configs[0].log_folding_factor
-    } else {
-        config.log_folding_factor
-    };
-    let (initial_commit, initial_data) =
-        commit_as_fiber_matrix(&config.mmcs, &current_commit_codeword, log_arity0);
+    let (initial_commit, initial_data) = commit_as_fiber_matrix(
+        &config.mmcs,
+        &current_commit_codeword,
+        config.log_folding_factor,
+    );
     challenger.observe(initial_commit.clone());
 
     let mut current_commit_data = initial_data;
@@ -100,19 +100,16 @@ where
             gamma,
             log_arity,
             current_log_domain,
-            current_shift,
         );
         let fold_coeffs = coeffs_from_codeword(dft, &folded_codeword, fold_shift);
 
-        let next_log_arity = if round + 1 < num_rounds {
-            config.round_configs[round + 1].log_folding_factor
-        } else {
-            config.log_folding_factor
-        };
         let next_commit_codeword =
             codeword_from_coeffs(dft, fold_coeffs.clone(), next_shift, next_log_domain);
-        let (new_commit, new_data) =
-            commit_as_fiber_matrix(&config.mmcs, &next_commit_codeword, next_log_arity);
+        let (new_commit, new_data) = commit_as_fiber_matrix(
+            &config.mmcs,
+            &next_commit_codeword,
+            config.log_folding_factor,
+        );
         challenger.observe(new_commit.clone());
 
         // Step 2: OOD sampling.
@@ -246,7 +243,6 @@ where
         final_gamma,
         final_log_arity,
         current_log_domain,
-        current_shift,
     );
     let final_new_coeffs = coeffs_from_codeword(dft, &final_codeword, final_new_shift);
     let final_len = config.final_poly_len();
@@ -277,15 +273,15 @@ where
         first_round_query_indices = final_seen.into_iter().collect();
     }
 
-    StirProof {
+    let proof = StirProof {
         initial_commitment: initial_commit,
         round_proofs,
         final_polynomial: final_poly,
         final_folding_pow_witness,
         final_pow_witness,
         final_query_proofs,
-        first_round_query_indices,
-    }
+    };
+    (proof, first_round_query_indices)
 }
 
 /// Evaluate a polynomial (coefficients in `EF`) on a coset `shift * <g>` of size

@@ -30,10 +30,6 @@ pub struct StirProof<EF: Field, M: Mmcs<EF>, Witness> {
 
     /// Merkle openings for the final consistency queries against the last committed codeword.
     pub final_query_proofs: Vec<StirFinalQueryProof<EF, M>>,
-
-    /// Deduplicated fold-domain indices queried in the first round (or the final round when
-    /// there are no intermediate rounds). Used by the PCS layer for the input-binding check.
-    pub first_round_query_indices: Vec<usize>,
 }
 
 /// Proof for a single STIR round.

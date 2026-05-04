@@ -55,7 +55,7 @@ fn do_test_stir_prove_verify<F, EF, Dft, M, Challenger>(
     // -----------------------------------------------------------------------
     let mut p_challenger = challenger_template.clone();
 
-    let proof = prove_stir(&config, poly_coeffs, dft, &mut p_challenger);
+    let (proof, _query_indices) = prove_stir(&config, poly_coeffs, dft, &mut p_challenger);
 
     // -----------------------------------------------------------------------
     // Verify
@@ -149,7 +149,7 @@ mod babybear_stir {
 
         let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
         let mut p_challenger = challenger.clone();
-        let mut proof = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
+        let (mut proof, _query_indices) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
 
         assert!(!proof.round_proofs[0].query_proofs.is_empty());
         proof.round_proofs[0].query_proofs[0].row_evals[0] += EF::from(F::ONE);
@@ -170,7 +170,7 @@ mod babybear_stir {
 
         let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
         let mut p_challenger = challenger.clone();
-        let mut proof = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
+        let (mut proof, _query_indices) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
 
         assert!(!proof.round_proofs[0].ood_answers.is_empty());
         proof.round_proofs[0].ood_answers[0] += EF::from(F::ONE);
@@ -191,7 +191,7 @@ mod babybear_stir {
 
         let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
         let mut p_challenger = challenger.clone();
-        let mut proof = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
+        let (mut proof, _query_indices) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
 
         // Tamper the prover-supplied answer polynomial. The shake identity at the
         // verifier-sampled rho should catch it with overwhelming probability.
@@ -214,7 +214,7 @@ mod babybear_stir {
 
         let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
         let mut p_challenger = challenger.clone();
-        let mut proof = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
+        let (mut proof, _query_indices) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
 
         assert!(!proof.round_proofs[0].shake_polynomial.is_empty());
         proof.round_proofs[0].shake_polynomial[0] += EF::from(F::ONE);

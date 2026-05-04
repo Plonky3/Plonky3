@@ -313,7 +313,6 @@ pub fn fold_codeword<F: TwoAdicField, EF: ExtensionField<F>>(
     beta: EF,
     log_arity: usize,
     log_domain_size: usize,
-    _shift: F, // reserved for future shift-aware folding; currently unused (subgroup coords)
 ) -> Vec<EF> {
     let arity = 1 << log_arity;
     let new_height = codeword.len() / arity;

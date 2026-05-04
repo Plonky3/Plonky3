@@ -262,7 +262,7 @@ fn test_fold_codeword_arity2_constant_polynomial() {
     let codeword = codeword_from_coeffs(&dft, coeffs, shift, log_domain);
 
     let gamma = ef(7);
-    let folded = fold_codeword::<F, EF>(&codeword, gamma, 1, log_domain, shift);
+    let folded = fold_codeword::<F, EF>(&codeword, gamma, 1, log_domain);
 
     // Folded codeword should have all entries equal to 5 (constant polynomial).
     for &v in &folded {
@@ -288,7 +288,7 @@ fn test_fold_codeword_agrees_with_fold_fiber() {
     let codeword = codeword_from_coeffs(&dft, coeffs, shift, log_domain);
 
     let gamma = ef(42);
-    let folded = fold_codeword::<F, EF>(&codeword, gamma, log_arity, log_domain, shift);
+    let folded = fold_codeword::<F, EF>(&codeword, gamma, log_arity, log_domain);
 
     let new_height = codeword.len() >> log_arity;
     let log_new_height = log_domain - log_arity;

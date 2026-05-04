@@ -322,22 +322,12 @@ where
                 self.stir.clone(),
             );
 
-            let stir_proof = prove_stir(&stir_config, stir_coeffs, &self.dft, challenger);
+            let (stir_proof, first_round_query_indices) =
+                prove_stir(&stir_config, stir_coeffs, &self.dft, challenger);
 
-            // Input binding for this bucket.
-            let (log_arity0, fold_height0) = if stir_config.num_rounds() > 0 {
-                let lff = stir_config.round_configs[0].log_folding_factor;
-                (
-                    lff,
-                    (1usize << stir_config.log_starting_domain_size()) >> lff,
-                )
-            } else {
-                let lff = stir_config.log_folding_factor;
-                (
-                    lff,
-                    (1usize << stir_config.log_starting_domain_size()) >> lff,
-                )
-            };
+            // Input binding for this bucket. Folding factor is constant across rounds.
+            let log_arity0 = stir_config.log_folding_factor;
+            let fold_height0 = (1usize << stir_config.log_starting_domain_size()) >> log_arity0;
             let arity0 = 1usize << log_arity0;
 
             let input_openings: Vec<Vec<BatchOpening<Val, InputMmcs>>> =
@@ -351,8 +341,7 @@ where
                         let commit_max_height = mats.iter().map(|m| m.height()).max().unwrap();
                         let log_commit_max = log2_strict_usize(commit_max_height);
 
-                        stir_proof
-                            .first_round_query_indices
+                        first_round_query_indices
                             .iter()
                             .flat_map(|&j| {
                                 (0..arity0).map(move |l| {
@@ -483,16 +472,18 @@ where
                 e.map_input_err(|_| unreachable!("verify_stir does not produce InputError"))
             })?;
 
-            // Derive query indices and fiber-eval source for input binding.
-            let log_arity0;
-            let fold_height0;
+            // Derive query indices and fiber-eval source for input binding. The folding
+            // factor is constant across rounds (config.log_folding_factor), so the same
+            // arity/fold_height applies whether the first round is intermediate or final.
+            let log_arity0 = stir_config.log_folding_factor;
+            let fold_height0 = (1usize << stir_config.log_starting_domain_size()) >> log_arity0;
+            let arity0 = 1usize << log_arity0;
+
             let first_round_unique_js: Vec<usize>;
             let j_to_proof_idx: LinearMap<usize, usize>;
             let fiber_evals_per_query: Vec<&[Challenge]> = if stir_config.num_rounds() > 0 {
                 let rp0 = &stir_proof.round_proofs[0];
                 let rc0 = &stir_config.round_configs[0];
-                log_arity0 = rc0.log_folding_factor;
-                fold_height0 = (1usize << stir_config.log_starting_domain_size()) >> log_arity0;
 
                 let _ = ch_replay.check_witness(rc0.folding_pow_bits, rp0.folding_pow_witness);
                 let _gamma: Challenge = ch_replay.sample_algebra_element();
@@ -551,9 +542,6 @@ where
                     .collect()
             } else {
                 // num_rounds == 0: final queries target the initial codeword directly.
-                log_arity0 = stir_config.log_folding_factor;
-                fold_height0 = (1usize << stir_config.log_starting_domain_size()) >> log_arity0;
-
                 let _ = ch_replay.check_witness(
                     stir_config.final_folding_pow_bits,
                     stir_proof.final_folding_pow_witness,
@@ -589,8 +577,6 @@ where
                     .map(|fqp| fqp.row_evals.as_slice())
                     .collect()
             };
-
-            let arity0 = 1usize << log_arity0;
 
             // Verify input MMCS openings and check consistency with STIR fiber evals.
             for (commit_idx, ((commitment, domain_claims), per_commit_openings)) in
@@ -689,8 +675,6 @@ where
                         }
                     }
                 }
-
-                let _ = commit_idx;
             }
         }
 

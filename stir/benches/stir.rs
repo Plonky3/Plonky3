@@ -142,7 +142,8 @@ fn bench_verify<F, EF, M, D, C>(
                 b.iter_batched(
                     || {
                         let mut p_ch = challenger_template.clone();
-                        prove_stir(&config, poly.clone(), dft, &mut p_ch)
+                        let (proof, _) = prove_stir(&config, poly.clone(), dft, &mut p_ch);
+                        proof
                     },
                     |proof| {
                         let mut v_ch = challenger_template.clone();
