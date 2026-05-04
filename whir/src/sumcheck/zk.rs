@@ -92,7 +92,8 @@ use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_zk_codes::ZkEncoding;
-use rand::Rng;
+use rand::distr::{Distribution, StandardUniform};
+use rand::{Rng, RngExt};
 
 use crate::constraints::statement::EqStatement;
 use crate::sumcheck::SumcheckData;
@@ -177,14 +178,14 @@ impl ZkSumcheck {
     ///   [`super::single::SingleSumcheck::new_classic_unpacked`].
     #[allow(clippy::too_many_arguments)]
     pub fn new_classic_unpacked<F, EF, Enc, Challenger, R>(
-        _poly: &Poly<F>,
-        _sumcheck_data: &mut SumcheckData<F, EF>,
-        _challenger: &mut Challenger,
-        _folding_factor: usize,
-        _pow_bits: usize,
-        _statement: &EqStatement<EF>,
-        _encoding: &Enc,
-        _rng: &mut R,
+        poly: &Poly<F>,
+        sumcheck_data: &mut SumcheckData<F, EF>,
+        challenger: &mut Challenger,
+        folding_factor: usize,
+        pow_bits: usize,
+        statement: &EqStatement<EF>,
+        encoding: &Enc,
+        rng: &mut R,
     ) -> (ZkSumcheckProver<F, EF, Enc>, Point<EF>)
     where
         F: Field,
@@ -192,19 +193,125 @@ impl ZkSumcheck {
         Enc: ZkEncoding<F>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
         R: Rng,
+        StandardUniform: Distribution<F>,
     {
-        // TODO(commit 2): runtime asserts (char(F) != 2, ell_zk >= 2).
-        // TODO(commit 2): Step 1 — sample k masks, encode each via encoding.encode,
-        //                  observe each mask oracle on the challenger.
-        // TODO(commit 2): Step 2 — compute μ̃ via closed form
-        //                  μ̃ = 2^{k-1} · Σ_l (s_l(0) + s_l(1));
-        //                  debug_assert against naive Σ_{b ∈ {0,1}^k} ŝ(b);
-        //                  observe μ̃.
-        // TODO(commit 2): Step 3 — sample ε from challenger.
-        // TODO(commit 3): Step 4 round 1 — build ĥ_1 (mask piece + ε·plain_piece);
-        //                  serialize as (c0, c2, …, c_{ℓ_zk-1}); observe; grind;
-        //                  sample γ_1; fold base; update bookkeeping.
-        unimplemented!("commits 2–3 of PR #1605: prelude + first masked round")
+        let k = folding_factor;
+        let ell_zk = encoding.message_len();
+
+        // ----- Field constraints (decision block item 5) -----
+        assert!(
+            F::TWO != F::ZERO,
+            "Construction 6.3 (Lemma 6.4) requires char(F) != 2",
+        );
+        assert!(
+            ell_zk >= 2,
+            "Construction 6.3 (Lemma 6.4) requires ell_zk >= 2",
+        );
+        assert!(k >= 1, "sumcheck requires at least one round");
+
+        // ----- Step 1 — sample k masks `s_1, …, s_k ∈ F^{<ell_zk}[X]` -----
+        // Each mask is a coefficient vector of length `ell_zk` over F.
+        let masks: Vec<Vec<F>> = (0..k)
+            .map(|_| (0..ell_zk).map(|_| rng.random()).collect())
+            .collect();
+
+        // Encode each mask under `C_zk`. Encoding randomness is consumed by
+        // `Enc::encode` and not stored here — see the deferred-randomness
+        // discussion in `_search_log.md`; downstream composition will need
+        // `Enc: ZkEncodingWithRandomness` and a `mask_randomness` field.
+        let mask_oracles: Vec<Enc::Codeword> = masks
+            .iter()
+            .map(|mask| encoding.encode(mask, rng))
+            .collect();
+
+        // ⚠ TODO(observation gap, pre-commit-3 design call):
+        // Construction 6.3 requires observing each mask oracle on the
+        // challenger here (decision block item 3 — masks committed before ε).
+        // `Enc::Codeword` is an opaque associated type with no
+        // `FieldChallenger`-compatible accessor on the `ZkEncoding` trait,
+        // so we cannot do this generically without one of:
+        //   - extending `ZkEncoding` with `fn observe<C>(&self, c, &mut C)`;
+        //   - adding a `Enc::Codeword: AsRef<[F]>` (or similar) bound here;
+        //   - committing each codeword via Merkle and observing the root,
+        //     mirroring how `single.rs` handles the witness oracle upstream.
+        // Until that decision is made, FIAT–SHAMIR BINDING TO THE MASKS IS
+        // BROKEN: a malicious prover could swap masks after seeing ε. This
+        // is captured by the (still-to-be-written) byte-identity snapshot
+        // test, which will fail when the observation lands — that is
+        // intended.
+
+        // ----- Step 2 — compute μ̃ via the closed form -----
+        // For separable masks `ŝ(b) = Σ_l ŝ_l(b_l)`,
+        //     μ̃ := Σ_{b ∈ {0,1}^k} ŝ(b) = 2^{k-1} · Σ_l (s_l(0) + s_l(1)).
+        //
+        // For a polynomial `s(X) = c_0 + c_1·X + … + c_{ell_zk-1}·X^{ell_zk-1}`
+        // over F, `s(0) = c_0` and `s(1) = Σ c_i`, so
+        //     `s(0) + s(1) = c_0 + Σ c_i = mask[0] + mask.iter().sum()`.
+        let sum_future_endpoints: F = masks
+            .iter()
+            .map(|mask| mask[0] + mask.iter().copied().sum::<F>())
+            .sum();
+        let two_to_k_minus_1 = F::TWO.exp_u64((k - 1) as u64);
+        let mu_tilde: F = two_to_k_minus_1 * sum_future_endpoints;
+
+        // Cross-check the closed form against the naive `Σ_{b ∈ {0,1}^k} ŝ(b)`.
+        // Catches the multiplicity-bug class that the reference impl
+        // (WizardOfMenlo/whir#241) shipped at first; see `_search_log.md`.
+        // Bounded loop (only runs in debug) — k is at most a few dozen in
+        // realistic settings.
+        #[cfg(debug_assertions)]
+        {
+            let mut naive = F::ZERO;
+            for bits in 0..(1u64 << k) {
+                for (l, mask) in masks.iter().enumerate() {
+                    let b_l = (bits >> l) & 1;
+                    let s_l_eval = if b_l == 0 {
+                        mask[0]
+                    } else {
+                        mask.iter().copied().sum::<F>()
+                    };
+                    naive += s_l_eval;
+                }
+            }
+            debug_assert_eq!(
+                mu_tilde, naive,
+                "μ̃ closed form does not match naive Σ_{{b ∈ {{0,1}}^k}} ŝ(b)",
+            );
+        }
+
+        // Observe μ̃ on the challenger. μ̃ lives in F (mask coefficients are
+        // in F, b ∈ {0,1} so all `s_l(b)` stay in F); lift to EF for the
+        // observation to match the rest of the codebase's algebra-element
+        // transcript convention.
+        challenger.observe_algebra_element(EF::from(mu_tilde));
+
+        // ----- Step 3 — sample ε from the challenger -----
+        let _eps: EF = challenger.sample_algebra_element();
+
+        // Suppress unused-binding warnings for state we'll wire up in
+        // commit 3; keeping them in scope so the call sites are visible.
+        let _ = (
+            poly,
+            sumcheck_data,
+            pow_bits,
+            statement,
+            masks,
+            mask_oracles,
+            sum_future_endpoints,
+        );
+
+        // TODO(commit 3 of PR #1605): Step 4, round 1.
+        // - Build ĥ_1 from `base.sumcheck_coefficients(...)` (plain piece) +
+        //   mask piece (live mask `s_1` weighted by `2^{k-1}`, plus
+        //   future-mask endpoints weighted by `2^{k-2}`).
+        // - Wire format: send (c0, c2, …, c_{ell_zk-1}); verifier derives c1
+        //   from `ĥ_1(0) + ĥ_1(1) = ε·μ + μ̃`.
+        // - Observe ĥ_1 coefficients (minus c1) on transcript.
+        // - Grind PoW; sample γ_1.
+        // - Fold base prover at γ_1; push s_1(γ_1) onto mask_evals_at_gamma;
+        //   decrement sum_future_endpoints by `s_2(0) + s_2(1)` if k ≥ 2.
+        // - Construct and return `(ZkSumcheckProver { … }, Point::new(vec![γ_1]))`.
+        unimplemented!("commit 3 of PR #1605: round 1 + ZkSumcheckProver construction")
     }
 
     // TODO(follow-up commits): verifier counterpart (`verify_classic_unpacked`)
