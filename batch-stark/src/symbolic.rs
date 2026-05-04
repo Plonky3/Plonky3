@@ -1,12 +1,9 @@
 use alloc::vec::Vec;
 
 use p3_air::Air;
-use p3_air::symbolic::{
-    AirLayout, ConstraintLayout, SymbolicAirBuilder, SymbolicExpression, SymbolicExpressionExt,
-};
+use p3_air::symbolic::{AirLayout, ConstraintLayout, SymbolicExpression, SymbolicExpressionExt};
 use p3_field::{Algebra, ExtensionField, Field};
-use p3_lookup::AirWithLookups;
-use p3_lookup::lookup_traits::{Kind, Lookup, LookupGadget};
+use p3_lookup::{InteractionSymbolicBuilder, Kind, Lookup, LookupProtocol};
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
@@ -24,24 +21,23 @@ pub fn get_constraint_layout<F, EF, A, LG>(
 where
     F: Field,
     EF: ExtensionField<F>,
-    A: Air<SymbolicAirBuilder<F, EF>>,
+    A: Air<InteractionSymbolicBuilder<F, EF>>,
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
-    LG: LookupGadget,
+    LG: LookupProtocol,
 {
-    let num_aux_cols = contexts.len() * lookup_gadget.num_aux_cols();
     let num_challenges = contexts.len() * lookup_gadget.num_challenges();
     let num_permutation_values = contexts
         .iter()
         .filter(|c| matches!(&c.kind, Kind::Global(_)))
         .count();
     let layout = AirLayout {
-        permutation_width: num_aux_cols,
+        permutation_width: contexts.len(),
         num_permutation_challenges: num_challenges,
         num_permutation_values,
         ..layout
     };
-    let mut builder = SymbolicAirBuilder::new(layout);
-    air.eval_with_lookups(&mut builder, contexts, lookup_gadget);
+    let mut builder = InteractionSymbolicBuilder::new(layout);
+    lookup_gadget.eval_air_and_lookups(air, &mut builder, contexts);
     builder.constraint_layout()
 }
 
@@ -55,9 +51,9 @@ pub fn get_log_num_quotient_chunks<F, EF, A, LG>(
 where
     F: Field,
     EF: ExtensionField<F>,
-    A: Air<SymbolicAirBuilder<F, EF>>,
+    A: Air<InteractionSymbolicBuilder<F, EF>>,
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
-    LG: LookupGadget,
+    LG: LookupProtocol,
 {
     assert!(is_zk <= 1, "is_zk must be either 0 or 1");
 
@@ -105,9 +101,9 @@ pub fn get_max_constraint_degree<F, EF, A, LG>(
 where
     F: Field,
     EF: ExtensionField<F>,
-    A: Air<SymbolicAirBuilder<F, EF>>,
+    A: Air<InteractionSymbolicBuilder<F, EF>>,
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
-    LG: LookupGadget,
+    LG: LookupProtocol,
 {
     let (base, extension) = get_symbolic_constraints(air, layout, contexts, lookup_gadget);
     let base_degree = base.iter().map(|c| c.degree_multiple()).max().unwrap_or(0);
@@ -132,27 +128,26 @@ pub fn get_symbolic_constraints<F, EF, A, LG>(
 where
     F: Field,
     EF: ExtensionField<F>,
-    A: Air<SymbolicAirBuilder<F, EF>>,
+    A: Air<InteractionSymbolicBuilder<F, EF>>,
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
-    LG: LookupGadget,
+    LG: LookupProtocol,
 {
     let num_lookups = contexts.len();
-    let num_aux_cols = num_lookups * lookup_gadget.num_aux_cols();
     let num_challenges = num_lookups * lookup_gadget.num_challenges();
     let num_permutation_values = contexts
         .iter()
         .filter(|c| matches!(&c.kind, Kind::Global(_)))
         .count();
     let layout = AirLayout {
-        permutation_width: num_aux_cols,
+        permutation_width: num_lookups,
         num_permutation_challenges: num_challenges,
         num_permutation_values,
         ..layout
     };
-    let mut builder = SymbolicAirBuilder::new(layout);
+    let mut builder = InteractionSymbolicBuilder::new(layout);
 
     // Evaluate AIR and lookup constraints.
-    air.eval_with_lookups(&mut builder, contexts, lookup_gadget);
+    lookup_gadget.eval_air_and_lookups(air, &mut builder, contexts);
     let base_constraints = builder.base_constraints();
     let extension_constraints = builder.extension_constraints();
     (base_constraints, extension_constraints)

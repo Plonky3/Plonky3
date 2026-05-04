@@ -12,7 +12,7 @@ use crate::symbolic::expression::BaseLeaf;
 use crate::symbolic::expression_ext::SymbolicExpressionExt;
 use crate::symbolic::variable::{BaseEntry, ExtEntry, SymbolicVariableExt};
 use crate::{
-    Air, AirBuilder, ExtensionBuilder, PeriodicAirBuilder, PermutationAirBuilder,
+    Air, AirBuilder, BaseAir, ExtensionBuilder, PeriodicAirBuilder, PermutationAirBuilder,
     SymbolicExpression, SymbolicVariable, WindowAccess,
 };
 
@@ -36,6 +36,19 @@ pub struct AirLayout {
     pub num_permutation_values: usize,
     /// Length of [`PeriodicAirBuilder::periodic_values`].
     pub num_periodic_columns: usize,
+}
+
+impl AirLayout {
+    /// Derive layout from an AIR's metadata.
+    pub fn from_air<F: Clone + Send + Sync>(air: &impl BaseAir<F>) -> Self {
+        Self {
+            preprocessed_width: air.preprocessed_width(),
+            main_width: air.width(),
+            num_public_values: air.num_public_values(),
+            num_periodic_columns: air.num_periodic_columns(),
+            ..Default::default()
+        }
+    }
 }
 
 #[instrument(skip_all, level = "debug")]
@@ -130,7 +143,7 @@ where
     (builder.base_constraints(), builder.extension_constraints())
 }
 
-/// An [`AirBuilder`] for evaluating constraints symbolically, and recording them for later use.
+/// Symbolic AIR builder that records constraints.
 #[derive(Debug)]
 pub struct SymbolicAirBuilder<F: Field, EF: ExtensionField<F> = F> {
     preprocessed: RowMajorMatrix<SymbolicVariable<F>>,

@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_lookup::lookup_traits::LookupData;
+use p3_lookup::traits::LookupData;
 use p3_uni_stark::OpenedValues;
 use serde::{Deserialize, Serialize};
 

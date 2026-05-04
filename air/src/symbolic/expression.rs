@@ -1,7 +1,8 @@
 use p3_field::{Algebra, ExtensionField, Field, InjectiveMonomial};
 
-use crate::symbolic::variable::SymbolicVariable;
+use crate::symbolic::variable::{BaseEntry, SymbolicVariable};
 use crate::symbolic::{SymLeaf, SymbolicExpr};
+use crate::{AirBuilder, WindowAccess};
 
 /// Leaf nodes for base-field symbolic expressions.
 ///
@@ -73,6 +74,68 @@ impl<F: Field, EF: ExtensionField<F>> From<F> for SymbolicExpression<EF> {
     }
 }
 
+impl<F: Field> SymbolicExpression<F> {
+    /// Evaluate this symbolic expression against a concrete [`AirBuilder`].
+    ///
+    /// Leaves resolve from the builder's trace windows, public values,
+    /// and selectors. Arithmetic nodes recurse into children.
+    ///
+    /// # Panics
+    ///
+    /// Panics on periodic columns and row offsets beyond 1.
+    pub fn resolve<AB>(&self, builder: &AB) -> AB::Expr
+    where
+        AB: AirBuilder<F = F>,
+    {
+        match self {
+            Self::Leaf(leaf) => match leaf {
+                BaseLeaf::Variable(v) => match v.entry {
+                    BaseEntry::Main { offset } => {
+                        let main = builder.main();
+                        match offset {
+                            0 => main
+                                .current(v.index)
+                                .expect("main column index out of bounds")
+                                .into(),
+                            1 => main
+                                .next(v.index)
+                                .expect("main column index out of bounds")
+                                .into(),
+                            _ => panic!("expressions cannot span more than two rows"),
+                        }
+                    }
+                    BaseEntry::Preprocessed { offset } => {
+                        let prep = builder.preprocessed();
+                        match offset {
+                            0 => prep
+                                .current(v.index)
+                                .expect("preprocessed column index out of bounds")
+                                .into(),
+                            1 => prep
+                                .next(v.index)
+                                .expect("preprocessed column index out of bounds")
+                                .into(),
+                            _ => panic!("expressions cannot span more than two rows"),
+                        }
+                    }
+                    BaseEntry::Public => builder.public_values()[v.index].into(),
+                    BaseEntry::Periodic => {
+                        panic!("periodic columns cannot be resolved in this context")
+                    }
+                },
+                BaseLeaf::IsFirstRow => builder.is_first_row(),
+                BaseLeaf::IsLastRow => builder.is_last_row(),
+                BaseLeaf::IsTransition => builder.is_transition_window(2),
+                BaseLeaf::Constant(c) => AB::Expr::from(*c),
+            },
+            Self::Add { x, y, .. } => x.resolve(builder) + y.resolve(builder),
+            Self::Sub { x, y, .. } => x.resolve(builder) - y.resolve(builder),
+            Self::Neg { x, .. } => -x.resolve(builder),
+            Self::Mul { x, y, .. } => x.resolve(builder) * y.resolve(builder),
+        }
+    }
+}
+
 impl<F: Field> Algebra<F> for SymbolicExpression<F> {}
 
 impl<F: Field> Algebra<SymbolicVariable<F>> for SymbolicExpression<F> {}
@@ -89,6 +152,7 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
+    use p3_matrix::dense::RowMajorMatrix;
 
     use super::*;
     use crate::symbolic::BaseEntry;
@@ -725,5 +789,156 @@ mod tests {
         // x * 0 should have degree 0 (constant).
         let result = var * zero;
         assert_eq!(result.degree_multiple(), 0);
+    }
+
+    /// Two-row trace builder.
+    struct ResolveTestBuilder {
+        main: RowMajorMatrix<BabyBear>,
+        public_values: Vec<BabyBear>,
+        is_first: BabyBear,
+        is_last: BabyBear,
+        is_transition: BabyBear,
+    }
+
+    impl AirBuilder for ResolveTestBuilder {
+        type F = BabyBear;
+        type Expr = BabyBear;
+        type Var = BabyBear;
+        type PreprocessedWindow = RowMajorMatrix<BabyBear>;
+        type MainWindow = RowMajorMatrix<BabyBear>;
+        type PublicVar = BabyBear;
+
+        fn main(&self) -> Self::MainWindow {
+            self.main.clone()
+        }
+
+        fn preprocessed(&self) -> &Self::PreprocessedWindow {
+            unimplemented!("no preprocessed columns in test builder")
+        }
+
+        fn is_first_row(&self) -> Self::Expr {
+            self.is_first
+        }
+
+        fn is_last_row(&self) -> Self::Expr {
+            self.is_last
+        }
+
+        fn is_transition_window(&self, _: usize) -> Self::Expr {
+            self.is_transition
+        }
+
+        fn assert_zero<I: Into<Self::Expr>>(&mut self, _: I) {}
+
+        fn public_values(&self) -> &[Self::PublicVar] {
+            &self.public_values
+        }
+    }
+
+    /// 2-row × 2-column trace:
+    ///
+    /// ```text
+    ///     row 0 (current): [10, 20]
+    ///     row 1 (next):    [30, 40]
+    /// ```
+    fn test_builder() -> ResolveTestBuilder {
+        ResolveTestBuilder {
+            main: RowMajorMatrix::new(
+                vec![
+                    BabyBear::new(10),
+                    BabyBear::new(20), // current row
+                    BabyBear::new(30),
+                    BabyBear::new(40), // next row
+                ],
+                2, // width
+            ),
+            public_values: vec![BabyBear::new(99)],
+            is_first: BabyBear::ONE,
+            is_last: BabyBear::ZERO,
+            is_transition: BabyBear::ONE,
+        }
+    }
+
+    #[test]
+    fn resolve_main_current_row() {
+        let b = test_builder();
+        // Main column 0, offset 0 → current row value 10.
+        let expr =
+            SymbolicExpression::from(SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0));
+        assert_eq!(expr.resolve(&b), BabyBear::new(10));
+    }
+
+    #[test]
+    fn resolve_main_next_row() {
+        let b = test_builder();
+        // Main column 1, offset 1 → next row value 40.
+        let expr =
+            SymbolicExpression::from(SymbolicVariable::new(BaseEntry::Main { offset: 1 }, 1));
+        assert_eq!(expr.resolve(&b), BabyBear::new(40));
+    }
+
+    #[test]
+    fn resolve_public_value() {
+        let b = test_builder();
+        // Public value at index 0 → 99.
+        let expr = SymbolicExpression::from(SymbolicVariable::new(BaseEntry::Public, 0));
+        assert_eq!(expr.resolve(&b), BabyBear::new(99));
+    }
+
+    #[test]
+    fn resolve_constant() {
+        let b = test_builder();
+        let expr = SymbolicExpression::<BabyBear>::from(BabyBear::new(42));
+        assert_eq!(expr.resolve(&b), BabyBear::new(42));
+    }
+
+    #[test]
+    fn resolve_selectors() {
+        let b = test_builder();
+
+        let first = SymbolicExpression::<BabyBear>::Leaf(BaseLeaf::IsFirstRow);
+        assert_eq!(first.resolve(&b), BabyBear::ONE, "is_first_row = 1");
+
+        let last = SymbolicExpression::<BabyBear>::Leaf(BaseLeaf::IsLastRow);
+        assert_eq!(last.resolve(&b), BabyBear::ZERO, "is_last_row = 0");
+
+        let trans = SymbolicExpression::<BabyBear>::Leaf(BaseLeaf::IsTransition);
+        assert_eq!(trans.resolve(&b), BabyBear::ONE, "is_transition = 1");
+    }
+
+    #[test]
+    fn resolve_arithmetic() {
+        let b = test_builder();
+
+        // col0_curr = 10, col1_curr = 20.
+        let col0 =
+            SymbolicExpression::from(SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0));
+        let col1 =
+            SymbolicExpression::from(SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 1));
+
+        // 10 + 20 = 30.
+        let add = col0.clone() + col1.clone();
+        assert_eq!(add.resolve(&b), BabyBear::new(30));
+
+        // 10 - 20 = -10 (mod p).
+        let sub = col0.clone() - col1.clone();
+        assert_eq!(sub.resolve(&b), BabyBear::new(10) - BabyBear::new(20));
+
+        // 10 * 20 = 200.
+        let mul = col0.clone() * col1;
+        assert_eq!(mul.resolve(&b), BabyBear::new(200));
+
+        // -10 (mod p).
+        let neg = -col0;
+        assert_eq!(neg.resolve(&b), -BabyBear::new(10));
+    }
+
+    #[test]
+    #[should_panic(expected = "periodic columns cannot be resolved")]
+    fn resolve_periodic_panics() {
+        let b = test_builder();
+        let expr =
+            SymbolicExpression::from(SymbolicVariable::<BabyBear>::new(BaseEntry::Periodic, 0));
+        let _ = expr.resolve(&b);
     }
 }

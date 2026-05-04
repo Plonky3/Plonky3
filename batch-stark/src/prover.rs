@@ -6,16 +6,15 @@ use alloc::vec::Vec;
 
 #[cfg(debug_assertions)]
 use p3_air::DebugConstraintBuilder;
-use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
+use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_air::{Air, RowWindow};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{
     Algebra, BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
 };
-use p3_lookup::AirWithLookups;
 use p3_lookup::folder::ProverConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::lookup_traits::{Kind, Lookup, LookupData, LookupGadget};
+use p3_lookup::{InteractionSymbolicBuilder, Kind, Lookup, LookupData, LookupProtocol};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::DisjointMutPtr;
@@ -24,7 +23,7 @@ use p3_uni_stark::{OpenedValues, PackedChallenge, PackedVal, ProverConstraintFol
 use p3_util::log2_strict_usize;
 use tracing::{debug_span, info_span, instrument};
 
-use crate::common::{CommonData, ProverData};
+use crate::common::ProverData;
 use crate::config::{Challenge, Domain, StarkGenericConfig as SGC, Val};
 use crate::proof::{BatchCommitments, BatchOpenedValues, BatchProof, OpenedValuesWithLookups};
 use crate::symbolic::{
@@ -44,28 +43,22 @@ pub struct StarkInstance<'a, SC: SGC, A> {
     pub trace: &'a RowMajorMatrix<Val<SC>>,
     /// Public input values exposed by this instance.
     pub public_values: Vec<Val<SC>>,
-    /// Lookup declarations (local + global) for this instance.
-    pub lookups: Vec<Lookup<Val<SC>>>,
 }
 
 impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
-    /// Build a vector of instances from parallel slices of AIRs, traces,
-    /// public values, and the common data that stores per-instance lookups.
+    /// Build instances from parallel slices of AIRs, traces, and public values.
     pub fn new_multiple(
         airs: &'a [A],
         traces: &'a [&'a RowMajorMatrix<Val<SC>>],
         public_values: &[Vec<Val<SC>>],
-        common_data: &CommonData<SC>,
     ) -> Vec<Self> {
         airs.iter()
             .zip(traces.iter())
             .zip(public_values.iter())
-            .zip(common_data.lookups.iter())
-            .map(|(((air, trace), public_values), lookups)| Self {
+            .map(|((air, trace), public_values)| Self {
                 air,
                 trace,
                 public_values: public_values.clone(),
-                lookups: lookups.clone(),
             })
             .collect()
     }
@@ -95,10 +88,10 @@ impl<'a, SC: SGC, A> StarkInstance<'a, SC, A> {
 pub fn prove_batch<
     SC,
     #[cfg(debug_assertions)] A: for<'a> Air<DebugConstraintBuilder<'a, Val<SC>, SC::Challenge>>
-        + Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
+        + Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<ProverConstraintFolderWithLookups<'a, SC>>
         + Clone,
-    #[cfg(not(debug_assertions))] A: for<'a> Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
+    #[cfg(not(debug_assertions))] A: for<'a> Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<ProverConstraintFolderWithLookups<'a, SC>>
         + Clone,
 >(
@@ -123,11 +116,8 @@ where
     // Extended degree accounts for the ZK blinding factor (2x when ZK is enabled).
     let log_ext_degrees: Vec<usize> = log_degrees.iter().map(|&d| d + config.is_zk()).collect();
 
-    // Borrow lookups directly and build initial (zeroed) lookup data for global lookups.
-    let all_lookups: Vec<&[Lookup<Val<SC>>]> = instances
-        .iter()
-        .map(|inst| inst.lookups.as_slice())
-        .collect();
+    // Read lookups from the keygen-cached CommonData (not from instances).
+    let all_lookups: Vec<&[Lookup<Val<SC>>]> = common.lookups.iter().map(|l| &**l).collect();
     let mut lookup_data: Vec<Vec<_>> = all_lookups
         .iter()
         .map(|lookups| {
@@ -137,8 +127,8 @@ where
                 .filter_map(|lookup| match &lookup.kind {
                     Kind::Global(name) => Some(LookupData {
                         name: name.clone(),
-                        aux_idx: lookup.columns[0],
-                        expected_cumulated: SC::Challenge::ZERO,
+                        aux_column: lookup.column,
+                        cumulative_sum: SC::Challenge::ZERO,
                     }),
                     _ => None,
                 })
@@ -260,10 +250,8 @@ where
 
                     let preprocessed_trace = inst.air.preprocessed_trace();
 
-                    let perm_vals: Vec<SC::Challenge> = lookup_data[i]
-                        .iter()
-                        .map(|ld| ld.expected_cumulated)
-                        .collect();
+                    let perm_vals: Vec<SC::Challenge> =
+                        lookup_data[i].iter().map(|ld| ld.cumulative_sum).collect();
                     let lookup_constraints_inputs = (all_lookups[i], &lookup_gadget);
                     check_constraints(
                         inst.air,
@@ -294,11 +282,12 @@ where
         let debug_instances: Vec<_> = instances
             .iter()
             .zip(preprocessed_traces.iter())
-            .map(|(inst, prep)| LookupDebugInstance {
+            .zip(all_lookups.iter())
+            .map(|((inst, prep), lookups)| LookupDebugInstance {
                 main_trace: inst.trace,
                 preprocessed_trace: prep,
                 public_values: &inst.public_values,
-                lookups: &inst.lookups,
+                lookups,
                 permutation_challenges: &[],
             })
             .collect();
@@ -392,10 +381,7 @@ where
             });
 
         // Compute quotient(x) = constraints(x) / Z_H(x) on the quotient domain.
-        let perm_vals: Vec<_> = lookup_data[i]
-            .iter()
-            .map(|ld| ld.expected_cumulated)
-            .collect();
+        let perm_vals: Vec<_> = lookup_data[i].iter().map(|ld| ld.cumulative_sum).collect();
         let q_values = quotient_values(
             pcs,
             airs[i],
@@ -724,10 +710,10 @@ pub fn quotient_values<SC, A, Mat, LG>(
 ) -> Vec<SC::Challenge>
 where
     SC: SGC,
-    A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
+    A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<ProverConstraintFolderWithLookups<'a, SC>>,
     Mat: Matrix<Val<SC>> + Sync,
-    LG: LookupGadget + Sync,
+    LG: LookupProtocol + Sync,
     SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
 {
     let quotient_size = quotient_domain.size();
@@ -919,7 +905,7 @@ where
                     permutation_challenges: &packed_perm_challenges,
                     permutation_values: &permutation_vals_packed,
                 };
-                air.eval_with_lookups(&mut folder, lookups, lookup_gadget);
+                lookup_gadget.eval_air_and_lookups(air, &mut folder, lookups);
 
                 // Combine all constraints with alpha powers and divide by the vanishing polynomial.
                 let quotient = folder.inner.finalize_constraints() * inv_vanishing;

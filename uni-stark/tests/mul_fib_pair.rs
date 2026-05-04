@@ -49,6 +49,9 @@ impl<F: PrimeField64> BaseAir<F> for MulFibPAir {
             self.tamper_index,
         ))
     }
+    fn preprocessed_width(&self) -> usize {
+        NUM_PREPROCESSED_COLS
+    }
 }
 
 impl<AB: AirBuilder> Air<AB> for MulFibPAir
