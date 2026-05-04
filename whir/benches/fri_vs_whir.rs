@@ -1,12 +1,14 @@
-//! Head-to-head FRI vs WHIR comparison across three Merkle hash backends.
+//! Head-to-head FRI vs WHIR comparison.
 //!
-//! Three hash modes are swept:
-//! - Poseidon1, Poseidon2 (arithmetic; field-element digests),
-//! - Blake3 (byte-oriented; 32-byte digests).
+//! Configuration:
+//! - Merkle hash: Poseidon1 (arithmetic, field-element digests).
+//! - Message size: 2^22 elements.
 //!
-//! For each hash the protocol-level parameters are otherwise locked.
-//!
-//! So the comparison isolates the hash-function effect.
+//! FRI is reported in two matrix shapes:
+//! - single-polynomial (width 1) — natural pair to WHIR's single multilinear,
+//!   but not plonky3 FRI's optimised regime;
+//! - batch (width 2^LOG_FRI_BATCH_WIDTH) — the regime plonky3 FRI is tuned for,
+//!   matching real STARK trace shapes.
 //!
 //! Run with: `cargo bench -p p3-whir --bench fri_vs_whir`
 
@@ -14,10 +16,8 @@ use std::time::Instant;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use itertools::Itertools;
-use p3_blake3::Blake3;
 use p3_challenger::{
     CanObserve, CanSampleUniformBits, DuplexChallenger, FieldChallenger, GrindingChallenger,
-    HashChallenger, SerializingChallenger32,
 };
 use p3_commit::{BatchOpening, ExtensionMmcs, Mmcs, Pcs};
 use p3_dft::Radix2DFTSmallBatch;
@@ -26,16 +26,13 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PackedValue};
 use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_koala_bear::{
-    KoalaBear, Poseidon1KoalaBear, Poseidon2KoalaBear, default_koalabear_poseidon1_16,
-    default_koalabear_poseidon1_24,
+    KoalaBear, Poseidon1KoalaBear, default_koalabear_poseidon1_16, default_koalabear_poseidon1_24,
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
-use p3_symmetric::{
-    CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
-};
+use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::constraints::statement::EqStatement;
 use p3_whir::constraints::statement::initial::InitialStatement;
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
@@ -157,11 +154,27 @@ const FRI_QUERY_POW_BITS: usize = POW_BITS;
 /// Solves `log_blowup * queries + query_pow_bits >= security_level` for `queries`.
 const FRI_NUM_QUERIES: usize = SECURITY_LEVEL.div_ceil(LOG_BLOWUP) - FRI_QUERY_POW_BITS;
 
+/// log_2 of the matrix width for the production-shape FRI variant.
+///
+/// plonky3 FRI is implemented as a batch FRI tuned for wide matrices (typical
+/// AIR traces have hundreds to thousands of columns). Single-polynomial FRI
+/// is therefore not its optimised regime.
+///
+/// `8` gives a width of 256, which is:
+///
+/// - wide enough to put plonky3 FRI in its tuned regime;
+/// - small enough that, at the lowest message size in the sweep, the
+///   per-column polynomial still has 2^10 evaluations (so per-round FRI
+///   work is not dominated by overhead).
+///
+/// 1024 (closer to a real Poseidon2-trace width) is also defensible; we
+/// keep 256 to stay safe at the small end of the sweep.
+const LOG_FRI_BATCH_WIDTH: usize = 8;
+
 /// Message-size sweep.
 ///
-/// `m = 18` is a small but realistic SNARK trace width.
 /// `m = 22` matches the largest case in the WHIR paper Table 2 first row.
-const M_VALUES: [usize; 3] = [18, 20, 22];
+const M_VALUES: [usize; 1] = [22];
 
 /// RNG seed used to make the bench deterministic across runs.
 const BENCH_SEED: u64 = 0xA17_5C0DE;
@@ -371,13 +384,27 @@ impl<InMmcs: Mmcs<F>, ChMmcs: Mmcs<EF>, T> FriChal<InMmcs, ChMmcs> for T where
 {
 }
 
-/// Carrier for one fully-prepared FRI setup at a given message size.
+/// One prepared FRI setup at a fixed message size and matrix width.
 ///
-/// The message is stored as a width-1 matrix: one polynomial, one column,
-/// so the comparison mirrors WHIR's single-polynomial commitment.
+/// # Layout
 ///
-/// Concrete domain type sidesteps the `Pcs<EF, Ch>` projection so the struct
-/// definition does not need to repeat every Pcs-impl bound.
+/// The committed matrix has shape:
+///
+/// ```text
+///     rows    = 2^(log_n - log_width)
+///     columns = 2^log_width
+///     total committed elements = 2^log_n   (independent of log_width)
+/// ```
+///
+/// # Width regimes
+///
+/// - `log_width = 0` — one polynomial of size `2^log_n`. The classic FRI statement.
+///   This pairs naturally with WHIR's single-multilinear shape, but is **not**
+///   plonky3 FRI's optimised regime.
+/// - `log_width > 0` — batched FRI on `2^log_width` polynomials of size
+///   `2^(log_n - log_width)`, tested jointly via random linear combination.
+///   This is the shape plonky3 FRI is actually tuned for and what real STARK
+///   traces look like.
 struct FriRig<InMmcs, ChMmcs, Ch>
 where
     InMmcs: Mmcs<F>,
@@ -389,16 +416,18 @@ where
     challenger: Ch,
 }
 
-/// Concrete FRI proof type, expanded so the struct/alias does not need every
-/// Pcs<EF, Ch> trait bound just to mention the type.
+/// FRI proof type for this bench's MMCS configuration.
 type FriProofTy<InMmcs, ChMmcs> = p3_fri::FriProof<EF, ChMmcs, F, Vec<BatchOpening<F, InMmcs>>>;
 
-/// Concrete FRI commitment type for an input MMCS.
+/// FRI commitment type for an input MMCS.
 type FriCommitTy<InMmcs> = <InMmcs as Mmcs<F>>::Commitment;
 
-/// Build a fresh FRI rig for the given message size.
+/// Build a fresh FRI rig for the given message size and matrix width.
+///
+/// See the rig type's documentation for the meaning of `log_n` and `log_width`.
 fn fri_setup<InMmcs, ChMmcs, Ch>(
     log_n: usize,
+    log_width: usize,
     val_mmcs: InMmcs,
     challenge_mmcs: ChMmcs,
     base_challenger: Ch,
@@ -408,7 +437,7 @@ where
     ChMmcs: FriChallengeMmcs,
     Ch: FriChal<InMmcs, ChMmcs>,
 {
-    // FRI protocol knobs matched to the same target soundness as WHIR.
+    // Protocol parameters matched to the same target soundness as WHIR.
     let fri_params = FriParameters {
         log_blowup: LOG_BLOWUP,
         log_final_poly_len: FRI_LOG_FINAL_POLY_LEN,
@@ -419,20 +448,33 @@ where
         mmcs: challenge_mmcs,
     };
 
-    // Pre-allocate twiddle factors up to the LDE size = 2^(log_n + log_blowup).
-    let dft = Dft::new(1 << (log_n + LOG_BLOWUP));
+    // Matrix shape:
+    //
+    //     rows per column = 2^(log_n - log_width)
+    //     columns         = 2^log_width
+    //     LDE rows        = 2^(log_n - log_width + log_blowup)
+    //
+    // Total committed = 2^log_n field elements regardless of log_width.
+    let log_height = log_n - log_width;
+    let width = 1 << log_width;
+
+    // Pre-size the twiddle table to the per-column LDE row count.
+    let dft = Dft::new(1 << (log_height + LOG_BLOWUP));
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_params);
 
-    // Per-rig RNG, distinct from the WHIR rig at the same size.
-    let mut rng = SmallRng::seed_from_u64(BENCH_SEED ^ ((log_n as u64) << 16) ^ 0xF1);
+    // RNG seed mixes the width so width-1 and width-N rigs at the same `log_n`
+    // do not share polynomial samples.
+    let mut rng = SmallRng::seed_from_u64(
+        BENCH_SEED ^ ((log_n as u64) << 16) ^ ((log_width as u64) << 8) ^ 0xF1,
+    );
 
-    // Width-1 row-major matrix: 1 column x 2^log_n rows.
-    let message = RowMajorMatrix::<F>::rand(&mut rng, 1 << log_n, 1);
+    // Random row-major matrix sized exactly as the layout above prescribes.
+    let message = RowMajorMatrix::<F>::rand(&mut rng, 1 << log_height, width);
 
-    // UFCS pins the challenger type so trait selection is unambiguous.
+    // UFCS spelling pins the challenger generic so trait selection is unambiguous.
     let domain = <TwoAdicFriPcs<F, Dft, InMmcs, ChMmcs> as Pcs<EF, Ch>>::natural_domain_for_degree(
         &pcs,
-        1 << log_n,
+        1 << log_height,
     );
 
     FriRig {
@@ -443,7 +485,16 @@ where
     }
 }
 
-/// Run one full FRI proving cycle (commit + open) and return the produced proof.
+/// Run one full FRI proving cycle (commit + open).
+///
+/// # Returns
+///
+/// - the commitment Merkle root;
+/// - the FRI proof;
+/// - the opening point sampled from the transcript;
+/// - one evaluation per committed column at that opening point;
+/// - the commit-phase wall-clock in milliseconds;
+/// - the open-phase wall-clock in milliseconds.
 #[allow(clippy::type_complexity)]
 fn fri_prove_full<InMmcs, ChMmcs, Ch>(
     rig: &FriRig<InMmcs, ChMmcs, Ch>,
@@ -451,7 +502,7 @@ fn fri_prove_full<InMmcs, ChMmcs, Ch>(
     FriCommitTy<InMmcs>,
     FriProofTy<InMmcs, ChMmcs>,
     EF,
-    EF,
+    Vec<EF>,
     u128,
     u128,
 )
@@ -460,9 +511,10 @@ where
     ChMmcs: FriChallengeMmcs,
     Ch: FriChal<InMmcs, ChMmcs>,
 {
+    // Each iteration starts from a fresh prover transcript.
     let mut prover_challenger = rig.challenger.clone();
 
-    // Phase 1: commit (coset LDE + Merkle).
+    // Phase 1 — commit: coset LDE of the message, then a Merkle tree over the LDE.
     let t = Instant::now();
     let (commit, prover_data) = <TwoAdicFriPcs<F, Dft, InMmcs, ChMmcs> as Pcs<EF, Ch>>::commit(
         &rig.pcs,
@@ -470,19 +522,19 @@ where
     );
     let commit_ms = t.elapsed().as_millis();
 
-    // Bind the commitment to the transcript so the FRI challenges are committed.
+    // Bind the Merkle root into the transcript before drawing the opening point,
+    // so the verifier can re-derive the same point during verification.
     prover_challenger.observe(commit.clone());
     let zeta: EF = prover_challenger.sample_algebra_element();
 
-    // open() takes one entry per commitment;
-    // Each entry pairs the prover data with a list of opening points per matrix.
+    // Open-call argument shape:
     //
-    //   - outer Vec : one entry per commitment       (here: 1)
-    //   - middle Vec: one entry per matrix           (here: 1)
-    //   - inner Vec : opening points for that matrix (here: [zeta])
+    //     data_and_points : one entry per commitment           (here: 1)
+    //         per entry   : one list per matrix in commitment  (here: 1)
+    //             per list: one entry per opening point        (here: [zeta])
     let data_and_points = vec![(&prover_data, vec![vec![zeta]])];
 
-    // Phase 2: open (FRI commit phase + query phase + PoW).
+    // Phase 2 — open: FRI commit phase + query phase + proof-of-work grind.
     let t = Instant::now();
     let (openings, proof) = <TwoAdicFriPcs<F, Dft, InMmcs, ChMmcs> as Pcs<EF, Ch>>::open(
         &rig.pcs,
@@ -491,15 +543,15 @@ where
     );
     let open_ms = t.elapsed().as_millis();
 
-    // openings is a 4-level nested Vec, indexed [round][matrix][point][column]:
+    // `openings` is a 4-level nested Vec indexed by:
     //
-    //   - level 0 : one entry per round   (here: 1)
-    //   - level 1 : one entry per matrix  (here: 1)
-    //   - level 2 : one entry per point   (here: 1)
-    //   - level 3 : one entry per column  (here: 1)
-    let value = openings[0][0][0][0];
+    //     openings[round][matrix][point][column]
+    //
+    // For our shape (1 commitment, 1 matrix, 1 point, `width` columns) the inner
+    // slice carries every committed polynomial's evaluation at `zeta`.
+    let values = openings[0][0][0].clone();
 
-    (commit, proof, zeta, value, commit_ms, open_ms)
+    (commit, proof, zeta, values, commit_ms, open_ms)
 }
 
 /// Run one full FRI verification cycle and assert it accepts.
@@ -508,27 +560,30 @@ fn fri_verify_full<InMmcs, ChMmcs, Ch>(
     commit: &FriCommitTy<InMmcs>,
     proof: &FriProofTy<InMmcs, ChMmcs>,
     zeta: EF,
-    value: EF,
+    values: &[EF],
 ) -> u128
 where
     InMmcs: FriInputMmcs,
     ChMmcs: FriChallengeMmcs,
     Ch: FriChal<InMmcs, ChMmcs>,
 {
+    // Each verification call starts from a fresh transcript clone.
     let mut verifier_challenger = rig.challenger.clone();
+
+    // Re-derive the opening point and confirm it matches the prover's. A drift
+    // here means the bench wired up the challengers wrong.
     verifier_challenger.observe(commit.clone());
     let derived: EF = verifier_challenger.sample_algebra_element();
     assert_eq!(derived, zeta, "verifier challenger drifted from prover");
 
-    // verify() takes one entry per commitment;
-    // Each entry pairs the commitment with a list of (domain, claims) per matrix.
+    // Verify-call argument shape:
     //
-    //   - outer Vec  : one entry per commitment        (here: 1)
-    //   - middle Vec : one entry per matrix            (here: 1)
-    //   - claims Vec : (point, per-column evaluations) (here: (zeta, [value]))
+    //     claims      : one entry per commitment           (here: 1)
+    //         per entry  : one list per matrix             (here: 1)
+    //             per list: (point, per-column evaluations) at that point
     let claims = vec![(
         commit.clone(),
-        vec![(rig.domain, vec![(zeta, vec![value])])],
+        vec![(rig.domain, vec![(zeta, values.to_vec())])],
     )];
 
     let t = Instant::now();
@@ -576,68 +631,6 @@ mod poseidon1 {
     }
 }
 
-/// Poseidon2-backed Merkle + duplex challenger.
-mod poseidon2 {
-    use super::*;
-
-    pub const NAME: &str = "poseidon2";
-
-    pub type Perm16 = Poseidon2KoalaBear<16>;
-    pub type Perm24 = Poseidon2KoalaBear<24>;
-    pub type MerkleHash = PaddingFreeSponge<Perm24, 24, 16, 8>;
-    pub type MerkleCompress = TruncatedPermutation<Perm16, 2, 8, 16>;
-    pub type PackedF = <F as Field>::Packing;
-    pub type ValMmcs = MerkleTreeMmcs<PackedF, PackedF, MerkleHash, MerkleCompress, 2, 8>;
-    pub type ChallengeMmcs = ExtensionMmcs<F, EF, ValMmcs>;
-    pub type Challenger = DuplexChallenger<F, Perm16, 16, 8>;
-
-    pub type DigestW = F;
-    pub const DIGEST_ELEMS: usize = 8;
-
-    pub fn build_kit() -> (Challenger, ValMmcs, ChallengeMmcs) {
-        // Round constants are derived from a fixed seed for reproducibility.
-        let mut rng = SmallRng::seed_from_u64(BENCH_SEED);
-        let perm16 = Perm16::new_from_rng_128(&mut rng);
-        let perm24 = Perm24::new_from_rng_128(&mut rng);
-        let merkle_hash = MerkleHash::new(perm24);
-        let merkle_compress = MerkleCompress::new(perm16.clone());
-        let val_mmcs = ValMmcs::new(merkle_hash, merkle_compress, 0);
-        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
-        let challenger = Challenger::new(perm16);
-        (challenger, val_mmcs, challenge_mmcs)
-    }
-}
-
-/// Blake3-backed Merkle + serializing byte challenger.
-mod blake3_hash {
-    use super::*;
-
-    pub const NAME: &str = "blake3";
-
-    /// Field-element hasher built by serialising to bytes and feeding into Blake3.
-    pub type FieldHash = SerializingHasher<Blake3>;
-    /// 2-to-1 compression of two 32-byte digests through Blake3.
-    pub type MyCompress = CompressionFunctionFromHasher<Blake3, 2, 32>;
-    pub type ValMmcs = MerkleTreeMmcs<F, u8, FieldHash, MyCompress, 2, 32>;
-    pub type ChallengeMmcs = ExtensionMmcs<F, EF, ValMmcs>;
-    pub type Challenger = SerializingChallenger32<F, HashChallenger<u8, Blake3, 32>>;
-
-    /// Digest element type; for byte hashes the digest is a u8 array.
-    pub type DigestW = u8;
-    /// Number of bytes per digest (Blake3 outputs 32 bytes).
-    pub const DIGEST_ELEMS: usize = 32;
-
-    pub fn build_kit() -> (Challenger, ValMmcs, ChallengeMmcs) {
-        let byte_hash = Blake3;
-        let field_hash = FieldHash::new(byte_hash);
-        let compress = MyCompress::new(byte_hash);
-        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
-        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
-        let challenger = Challenger::from_hasher(vec![], byte_hash);
-        (challenger, val_mmcs, challenge_mmcs)
-    }
-}
-
 /// Diagnostic table: per-phase timings and proof bytes for every (hash, m, protocol) triple.
 fn print_diagnostic_table() {
     println!();
@@ -647,27 +640,41 @@ fn print_diagnostic_table() {
     println!("  hash      |  m | proto | commit ms | open ms | verify us | proof bytes | queries");
     println!("------------+----+-------+-----------+---------+-----------+-------------+--------");
 
-    // Each closure runs the full diagnostic for one hash mode and prints its rows.
-    // Closures are needed because the type universe differs across hashes.
+    // Per-hash dispatch. A macro is needed because each hash module exposes a
+    // different set of type aliases (MMCS, challenger, digest type), so each
+    // call site monomorphises differently.
+    //
+    // Three protocols are printed per `(hash, m)` cell:
+    //
+    //   - fri-single : single-polynomial FRI (matrix width 1). Apples-to-apples
+    //                  shape with WHIR's single-multilinear opening, but not
+    //                  plonky3 FRI's optimised regime.
+    //   - fri-batch  : batched FRI with matrix width 2^LOG_FRI_BATCH_WIDTH.
+    //                  This is plonky3 FRI's tuned regime and the shape real
+    //                  STARK traces have.
+    //   - whir       : WHIR as a polynomial commitment scheme.
     macro_rules! diag_block {
         ($module:ident) => {{
             for &m in &M_VALUES {
                 let (challenger, val_mmcs, challenge_mmcs) = $module::build_kit();
+
+                // Single-polynomial FRI (width 1) — apples-to-apples with WHIR's shape.
                 let fri_rig = fri_setup(
                     m,
+                    0,
                     val_mmcs.clone(),
                     challenge_mmcs.clone(),
                     challenger.clone(),
                 );
-                let (commit, fri_proof, zeta, value, fri_commit_ms, fri_open_ms) =
+                let (commit, fri_proof, zeta, values, fri_commit_ms, fri_open_ms) =
                     fri_prove_full(&fri_rig);
-                let fri_verify_us = fri_verify_full(&fri_rig, &commit, &fri_proof, zeta, value);
+                let fri_verify_us = fri_verify_full(&fri_rig, &commit, &fri_proof, zeta, &values);
                 let fri_bytes = postcard::to_allocvec(&fri_proof)
                     .expect("postcard FRI")
                     .len();
 
                 println!(
-                    " {:<10} | {:>2} | fri   | {:>9} | {:>7} | {:>9} | {:>11} | {} (single-shot)",
+                    " {:<10} | {:>2} | fri-s | {:>9} | {:>7} | {:>9} | {:>11} | {} (single-shot)",
                     $module::NAME,
                     m,
                     fri_commit_ms,
@@ -680,6 +687,50 @@ fn print_diagnostic_table() {
                 drop(fri_proof);
                 drop(fri_rig);
 
+                // Batch FRI (matrix width 2^LOG_FRI_BATCH_WIDTH) — plonky3 FRI's
+                // tuned regime; same total committed elements as the width-1 case.
+                let frib_rig = fri_setup(
+                    m,
+                    LOG_FRI_BATCH_WIDTH,
+                    val_mmcs.clone(),
+                    challenge_mmcs,
+                    challenger.clone(),
+                );
+                let (
+                    frib_commit,
+                    frib_proof,
+                    frib_zeta,
+                    frib_values,
+                    frib_commit_ms,
+                    frib_open_ms,
+                ) = fri_prove_full(&frib_rig);
+                let frib_verify_us = fri_verify_full(
+                    &frib_rig,
+                    &frib_commit,
+                    &frib_proof,
+                    frib_zeta,
+                    &frib_values,
+                );
+                let frib_bytes = postcard::to_allocvec(&frib_proof)
+                    .expect("postcard FRI batch")
+                    .len();
+
+                println!(
+                    " {:<10} | {:>2} | fri-b | {:>9} | {:>7} | {:>9} | {:>11} | {} (single-shot, {} cols)",
+                    $module::NAME,
+                    m,
+                    frib_commit_ms,
+                    frib_open_ms,
+                    frib_verify_us,
+                    frib_bytes,
+                    FRI_NUM_QUERIES,
+                    1 << LOG_FRI_BATCH_WIDTH,
+                );
+
+                drop(frib_proof);
+                drop(frib_rig);
+
+                // WHIR as a polynomial commitment scheme.
                 let whir_rig = whir_setup(m, val_mmcs, challenger);
                 let (whir_proof, whir_commit_ms, whir_open_ms) = whir_prove_full(&whir_rig);
                 let whir_verify_us =
@@ -721,8 +772,6 @@ fn print_diagnostic_table() {
     }
 
     diag_block!(poseidon1);
-    diag_block!(poseidon2);
-    diag_block!(blake3_hash);
 
     println!();
 }
@@ -743,13 +792,39 @@ fn bench_prove(c: &mut Criterion) {
             for &m in &M_VALUES {
                 let (challenger, val_mmcs, challenge_mmcs) = $module::build_kit();
 
-                let fri_rig = fri_setup(m, val_mmcs.clone(), challenge_mmcs, challenger.clone());
-                let label_fri = format!("fri/{}", $module::NAME);
+                // Single-polynomial FRI.
+                let fri_rig = fri_setup(
+                    m,
+                    0,
+                    val_mmcs.clone(),
+                    challenge_mmcs.clone(),
+                    challenger.clone(),
+                );
+                let label_fri = format!("fri-single/{}", $module::NAME);
                 group.bench_with_input(BenchmarkId::new(label_fri, m), &m, |b, _| {
                     b.iter_batched(
                         || (),
                         |()| {
                             let _ = fri_prove_full(&fri_rig);
+                        },
+                        BatchSize::LargeInput,
+                    );
+                });
+
+                // Batch FRI in plonky3's tuned regime.
+                let frib_rig = fri_setup(
+                    m,
+                    LOG_FRI_BATCH_WIDTH,
+                    val_mmcs.clone(),
+                    challenge_mmcs,
+                    challenger.clone(),
+                );
+                let label_frib = format!("fri-batch/{}", $module::NAME);
+                group.bench_with_input(BenchmarkId::new(label_frib, m), &m, |b, _| {
+                    b.iter_batched(
+                        || (),
+                        |()| {
+                            let _ = fri_prove_full(&frib_rig);
                         },
                         BatchSize::LargeInput,
                     );
@@ -771,8 +846,6 @@ fn bench_prove(c: &mut Criterion) {
     }
 
     prove_block!(poseidon1);
-    prove_block!(poseidon2);
-    prove_block!(blake3_hash);
 
     group.finish();
 }
@@ -786,12 +859,43 @@ fn bench_verify(c: &mut Criterion) {
             for &m in &M_VALUES {
                 let (challenger, val_mmcs, challenge_mmcs) = $module::build_kit();
 
-                let fri_rig = fri_setup(m, val_mmcs.clone(), challenge_mmcs, challenger.clone());
-                let (commit, fri_proof, zeta, value, _, _) = fri_prove_full(&fri_rig);
-                let label_fri = format!("fri/{}", $module::NAME);
+                // Single-polynomial FRI: pre-prove once so the inner loop only
+                // measures verification.
+                let fri_rig = fri_setup(
+                    m,
+                    0,
+                    val_mmcs.clone(),
+                    challenge_mmcs.clone(),
+                    challenger.clone(),
+                );
+                let (commit, fri_proof, zeta, values, _, _) = fri_prove_full(&fri_rig);
+                let label_fri = format!("fri-single/{}", $module::NAME);
                 group.bench_with_input(BenchmarkId::new(label_fri, m), &m, |b, _| {
                     b.iter(|| {
-                        fri_verify_full(&fri_rig, &commit, &fri_proof, zeta, value);
+                        fri_verify_full(&fri_rig, &commit, &fri_proof, zeta, &values);
+                    });
+                });
+
+                // Batch FRI: same pre-prove pattern.
+                let frib_rig = fri_setup(
+                    m,
+                    LOG_FRI_BATCH_WIDTH,
+                    val_mmcs.clone(),
+                    challenge_mmcs,
+                    challenger.clone(),
+                );
+                let (frib_commit, frib_proof, frib_zeta, frib_values, _, _) =
+                    fri_prove_full(&frib_rig);
+                let label_frib = format!("fri-batch/{}", $module::NAME);
+                group.bench_with_input(BenchmarkId::new(label_frib, m), &m, |b, _| {
+                    b.iter(|| {
+                        fri_verify_full(
+                            &frib_rig,
+                            &frib_commit,
+                            &frib_proof,
+                            frib_zeta,
+                            &frib_values,
+                        );
                     });
                 });
 
@@ -811,8 +915,6 @@ fn bench_verify(c: &mut Criterion) {
     }
 
     verify_block!(poseidon1);
-    verify_block!(poseidon2);
-    verify_block!(blake3_hash);
 
     group.finish();
 }
