@@ -325,6 +325,28 @@ where
     }
 }
 
+pub fn test_mul_slice<F: Field>()
+where
+    StandardUniform: Distribution<F>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let lengths = [
+        F::Packing::WIDTH - 1,
+        F::Packing::WIDTH,
+        (F::Packing::WIDTH - 1) + (F::Packing::WIDTH << 10),
+    ];
+    for len in lengths {
+        let mut slice_1: Vec<_> = (&mut rng).sample_iter(StandardUniform).take(len).collect();
+        let slice_1_copy = slice_1.clone();
+        let slice_2: Vec<_> = (&mut rng).sample_iter(StandardUniform).take(len).collect();
+
+        F::mul_slices(&mut slice_1, &slice_2);
+        for i in 0..len {
+            assert_eq!(slice_1[i], slice_1_copy[i] * slice_2[i]);
+        }
+    }
+}
+
 pub fn test_inverse<F: Field>()
 where
     StandardUniform: Distribution<F>,
@@ -1028,6 +1050,14 @@ macro_rules! test_field {
             #[test]
             fn test_field_axioms_proptest() {
                 $crate::test_field_axioms_proptest::<$field>();
+            }
+            #[test]
+            fn test_add_slice() {
+                $crate::test_add_slice::<$field>();
+            }
+            #[test]
+            fn test_mul_slice() {
+                $crate::test_mul_slice::<$field>();
             }
         }
 
