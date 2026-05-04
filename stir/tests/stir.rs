@@ -407,6 +407,85 @@ mod babybear_stir {
             verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger).is_err()
         );
     }
+
+    #[test]
+    fn test_tampered_final_polynomial_fails() {
+        // The final polynomial is observed into the FS transcript, so corrupting it both
+        // (a) directly breaks the final-fold check at the queried positions and
+        // (b) desynchronizes the verifier transcript, causing downstream sample_bits / PoW
+        // checks to differ from the prover's. Either way, verification must fail.
+        let (params, dft, challenger) = make_params(1, 2);
+        let mut rng = seeded_rng();
+        let log_degree = 8;
+        let degree = 1usize << log_degree;
+        let poly_coeffs: Vec<EF> = (0..degree).map(|_| rng.random()).collect();
+
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
+        let mut p_challenger = challenger.clone();
+        let (mut proof, _idx) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
+
+        assert!(!proof.final_polynomial.is_empty());
+        proof.final_polynomial[0] += EF::from(F::ONE);
+
+        let mut v_challenger = challenger;
+        assert!(
+            verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger).is_err(),
+            "tampered final_polynomial must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_tampered_final_query_proof_fails() {
+        let (params, dft, challenger) = make_params(1, 2);
+        let mut rng = seeded_rng();
+        let log_degree = 8;
+        let degree = 1usize << log_degree;
+        let poly_coeffs: Vec<EF> = (0..degree).map(|_| rng.random()).collect();
+
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
+        let mut p_challenger = challenger.clone();
+        let (mut proof, _idx) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
+
+        assert!(!proof.final_query_proofs.is_empty());
+        assert!(!proof.final_query_proofs[0].row_evals.is_empty());
+        proof.final_query_proofs[0].row_evals[0] += EF::from(F::ONE);
+
+        let mut v_challenger = challenger;
+        assert!(
+            verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger).is_err(),
+            "tampered final_query_proofs.row_evals must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_tampered_round_commitment_fails() {
+        // Replacing a round commitment with a different value should desynchronize the
+        // verifier's transcript and/or fail Merkle verification at the queries.
+        let (params, dft, challenger) = make_params(1, 2);
+        let mut rng = seeded_rng();
+        let log_degree = 8;
+        let degree = 1usize << log_degree;
+        let poly_coeffs: Vec<EF> = (0..degree).map(|_| rng.random()).collect();
+
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
+        assert!(
+            config.num_rounds() >= 2,
+            "need at least two rounds to swap commitments"
+        );
+
+        let mut p_challenger = challenger.clone();
+        let (mut proof, _idx) = prove_stir(&config, poly_coeffs, &dft, &mut p_challenger);
+
+        // Swap two distinct round commitments. Both are MMCS commitments so swapping
+        // produces a syntactically valid but semantically wrong proof.
+        proof.round_proofs.swap(0, 1);
+
+        let mut v_challenger = challenger;
+        assert!(
+            verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_challenger).is_err(),
+            "swapped round commitments must be rejected"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -650,5 +729,106 @@ mod babybear_pcs {
         let domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 2);
         let mat = RowMajorMatrix::<Val>::rand(&mut rng, 2, 3);
         let _ = <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
+    }
+
+    /// Open and verify across **two independent commitments**: each commitment carries one
+    /// matrix, and the opening claims span both. Exercises the multi-`commitments_with_opening_points`
+    /// loop in `pcs::open` / `pcs::verify`, which the single-commitment tests miss.
+    #[test]
+    fn test_pcs_two_commitments() {
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+
+        let log_d_a = 6;
+        let log_d_b = 7;
+        let width = 3;
+
+        let domain_a =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d_a);
+        let mat_a = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d_a, width);
+        let domain_b =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d_b);
+        let mat_b = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d_b, width);
+
+        let mut p_ch = challenger_template.clone();
+        let (commit_a, data_a) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain_a, mat_a)]);
+        p_ch.observe(commit_a.clone());
+        let (commit_b, data_b) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain_b, mat_b)]);
+        p_ch.observe(commit_b.clone());
+
+        let zeta: Challenge = p_ch.sample_algebra_element();
+
+        // Each commitment has one matrix, opened at the same `zeta`.
+        let data_and_points = vec![(&data_a, vec![vec![zeta]]), (&data_b, vec![vec![zeta]])];
+        let (opening_values, proof) =
+            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
+
+        // Verify.
+        let mut v_ch = challenger_template;
+        v_ch.observe(commit_a.clone());
+        v_ch.observe(commit_b.clone());
+        let v_zeta: Challenge = v_ch.sample_algebra_element();
+        assert_eq!(v_zeta, zeta);
+
+        let opening_a = opening_values[0][0][0].clone();
+        let opening_b = opening_values[1][0][0].clone();
+
+        let commitments_with_claims = vec![
+            (commit_a, vec![(domain_a, vec![(zeta, opening_a)])]),
+            (commit_b, vec![(domain_b, vec![(zeta, opening_b)])]),
+        ];
+
+        <MyPcs as Pcs<Challenge, Challenger>>::verify(
+            &pcs,
+            commitments_with_claims,
+            &proof,
+            &mut v_ch,
+        )
+        .unwrap_or_else(|e| panic!("two-commitment PCS verification failed: {e:?}"));
+    }
+
+    /// Tampering with the alpha-batched opening value (the claimed `f_i(z)`) should be
+    /// rejected by the input-MMCS binding check inside `pcs::verify`.
+    #[test]
+    fn test_pcs_tampered_opening_value_fails() {
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+        let log_d = 6;
+        let width = 3;
+
+        let domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
+        let mat = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, width);
+
+        let mut p_ch = challenger_template.clone();
+        let (commit, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat)]);
+        p_ch.observe(commit.clone());
+        let zeta: Challenge = p_ch.sample_algebra_element();
+        let (opening_values, proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+            &pcs,
+            vec![(&data, vec![vec![zeta]])],
+            &mut p_ch,
+        );
+
+        let mut v_ch = challenger_template;
+        v_ch.observe(commit.clone());
+        let v_zeta: Challenge = v_ch.sample_algebra_element();
+        assert_eq!(v_zeta, zeta);
+
+        // Tamper one coordinate of the claimed evaluation. The reduced opening recomputed
+        // by the verifier will diverge from what STIR queried, so the input-binding loop
+        // must reject.
+        let mut tampered = opening_values[0][0][0].clone();
+        tampered[0] += Challenge::from(Val::ONE);
+
+        let claims = vec![(commit, vec![(domain, vec![(zeta, tampered)])])];
+        let res = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch);
+        assert!(
+            res.is_err(),
+            "PCS verify must reject a tampered claimed opening"
+        );
     }
 }

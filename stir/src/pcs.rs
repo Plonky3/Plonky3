@@ -5,14 +5,18 @@
 //!
 //! **Open**: alpha-batch quotient polynomials `(f_i(z) - f_i(x)) / (z - x)` into per-height
 //! reduced-opening polynomials, then run [`prove_stir`] on each distinct LDE-height bucket.
-//! At each bucket's first-round STIR query positions the prover also opens the input LDE
-//! matrices (via `InputMmcs`) so the verifier can confirm the reduced-opening polynomial is
-//! correctly derived from the committed inputs.
+//! [`prove_stir`] returns the deduplicated first-round STIR query indices alongside the IOP
+//! proof; at those positions the prover also opens the input LDE matrices (via `InputMmcs`)
+//! so the verifier can confirm the reduced-opening polynomial is correctly derived from the
+//! committed inputs.
 //!
 //! **Verify**: replay the same alpha-batching from the opening values, then for each height
-//! bucket call [`verify_stir`] and replay the first-round transcript to derive query positions,
-//! verifying the input MMCS openings against the committed input and checking consistency with
-//! the STIR first-round fiber evaluations.
+//! bucket call [`verify_stir`] and consume its [`StirVerifyOutputs`] — the sorted unique
+//! first-round query indices and their fiber evaluations. With those in hand the verifier
+//! checks each input MMCS opening against the committed input and confirms it agrees with
+//! the STIR first-round fiber evaluations. No hand-mirrored transcript replay is needed.
+//!
+//! [`StirVerifyOutputs`]: crate::verifier::StirVerifyOutputs
 
 use alloc::borrow::Cow;
 use alloc::collections::BTreeSet;
@@ -94,11 +98,13 @@ where
     /// Proof structure: one entry per distinct LDE-height bucket (descending).
     ///
     /// Each bucket contains:
-    /// - `stir_proof`: the STIR IOP proof for that bucket (includes the initial commitment
-    ///   and first-round query indices).
-    /// - `input_openings[commit_idx]`: per-commitment batch openings at the
-    ///   bucket's first-round STIR fiber positions.  Empty if the commitment
-    ///   has no matrices at this bucket's LDE height.
+    /// - `stir_proof`: the STIR IOP proof for that bucket (initial commitment plus per-round
+    ///   IOP messages). The first-round query indices are NOT serialized — the verifier
+    ///   re-derives them from `verify_stir`'s side outputs.
+    /// - `input_openings[commit_idx]`: per-commitment batch openings at the bucket's
+    ///   first-round STIR fiber positions, in the same sorted-by-index order the verifier
+    ///   reconstructs from `verify_stir`. Empty if the commitment has no matrices at this
+    ///   bucket's LDE height.
     type Proof = Vec<(
         StirProof<Challenge, StirMmcs, Val>,
         Vec<Vec<BatchOpening<Val, InputMmcs>>>,
