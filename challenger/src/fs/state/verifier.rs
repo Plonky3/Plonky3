@@ -4,6 +4,7 @@ use alloc::vec::Vec;
 
 use p3_field::{BasedVectorSpace, PrimeField};
 
+use crate::fs::bound::TranscriptBound;
 use crate::fs::codecs::Codec;
 use crate::fs::codecs::decode_field::{
     decode_field_be_canonical, encode_field_be, field_byte_size,
@@ -135,7 +136,10 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     }
 
     /// Replay an `add_scalar` step from the prover.
-    pub fn next_scalar<F, Cdc>(&mut self, label: Label) -> Result<F, TranscriptError>
+    pub fn next_scalar<F, Cdc>(
+        &mut self,
+        label: Label,
+    ) -> Result<TranscriptBound<F>, TranscriptError>
     where
         F: PrimeField,
         Cdc: Codec<C, F>,
@@ -153,7 +157,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
         let value = decode_field_be_canonical::<F>(raw)?;
         // Absorb through the same codec the prover used so both sides agree.
         Cdc::observe(&mut self.challenger, &value);
-        Ok(value)
+        Ok(TranscriptBound::wrap(value))
     }
 
     /// Replay an `add_scalars` step from the prover.
@@ -161,7 +165,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
         &mut self,
         label: Label,
         n: usize,
-    ) -> Result<Vec<F>, TranscriptError>
+    ) -> Result<Vec<TranscriptBound<F>>, TranscriptError>
     where
         F: PrimeField,
         Cdc: Codec<C, F>,
@@ -173,20 +177,23 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
             label,
             Length::Fixed(n),
         ));
-        // Pull `n` canonical encodings from the wire, decoding and absorbing each.
+        // Pull `n` canonical encodings from the wire, decoding, absorbing, and binding each.
         let need = field_byte_size::<F>();
         let mut out = Vec::with_capacity(n);
         for _ in 0..n {
             let raw = self.take_bytes(need)?;
             let v = decode_field_be_canonical::<F>(raw)?;
             Cdc::observe(&mut self.challenger, &v);
-            out.push(v);
+            out.push(TranscriptBound::wrap(v));
         }
         Ok(out)
     }
 
     /// Replay an `add_extension` step from the prover.
-    pub fn next_extension<F, EF, Cdc>(&mut self, label: Label) -> Result<EF, TranscriptError>
+    pub fn next_extension<F, EF, Cdc>(
+        &mut self,
+        label: Label,
+    ) -> Result<TranscriptBound<EF>, TranscriptError>
     where
         F: PrimeField,
         EF: BasedVectorSpace<F>,
@@ -210,9 +217,12 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
             coeffs.push(v);
         }
         // Reconstruct in the same basis order the prover used.
-        EF::from_basis_coefficients_iter(coeffs.into_iter()).ok_or(TranscriptError::BadProofShape {
-            reason: "extension element basis size mismatch",
-        })
+        let value = EF::from_basis_coefficients_iter(coeffs.into_iter()).ok_or(
+            TranscriptError::BadProofShape {
+                reason: "extension element basis size mismatch",
+            },
+        )?;
+        Ok(TranscriptBound::wrap(value))
     }
 
     /// Replay an `add_hint` step.
@@ -233,7 +243,7 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
     }
 
     /// Sample one challenge scalar in lockstep with the prover.
-    pub fn challenge_scalar<F, Cdc>(&mut self, label: Label) -> F
+    pub fn challenge_scalar<F, Cdc>(&mut self, label: Label) -> TranscriptBound<F>
     where
         F: PrimeField,
         Cdc: Codec<C, F>,
@@ -244,11 +254,11 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
             label,
             Length::Scalar,
         ));
-        Cdc::sample(&mut self.challenger)
+        TranscriptBound::wrap(Cdc::sample(&mut self.challenger))
     }
 
     /// Sample `n` challenge scalars in lockstep with the prover.
-    pub fn challenge_scalars<F, Cdc>(&mut self, label: Label, n: usize) -> Vec<F>
+    pub fn challenge_scalars<F, Cdc>(&mut self, label: Label, n: usize) -> Vec<TranscriptBound<F>>
     where
         F: PrimeField,
         Cdc: Codec<C, F>,
@@ -259,11 +269,13 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
             label,
             Length::Fixed(n),
         ));
-        (0..n).map(|_| Cdc::sample(&mut self.challenger)).collect()
+        (0..n)
+            .map(|_| TranscriptBound::wrap(Cdc::sample(&mut self.challenger)))
+            .collect()
     }
 
     /// Sample one challenge extension-field element in lockstep with the prover.
-    pub fn challenge_extension<F, EF, Cdc>(&mut self, label: Label) -> EF
+    pub fn challenge_extension<F, EF, Cdc>(&mut self, label: Label) -> TranscriptBound<EF>
     where
         F: PrimeField,
         EF: BasedVectorSpace<F>,
@@ -275,7 +287,9 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
             label,
             Length::Scalar,
         ));
-        EF::from_basis_coefficients_fn(|_| Cdc::sample(&mut self.challenger))
+        TranscriptBound::wrap(EF::from_basis_coefficients_fn(|_| {
+            Cdc::sample(&mut self.challenger)
+        }))
     }
 
     /// Replay a proof-of-work step.
