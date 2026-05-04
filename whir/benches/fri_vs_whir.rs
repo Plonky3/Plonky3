@@ -1,18 +1,45 @@
 //! Head-to-head FRI vs WHIR comparison.
 //!
-//! # Fixed configuration
+//! # What the bench measures
 //!
-//! - Merkle hash: Poseidon1 (arithmetic, field-element digests).
-//! - Message size: `2^22` field elements.
+//! - Prover wall-clock (commit + open).
+//! - Verifier wall-clock.
+//! - Postcard-serialised proof size.
 //!
-//! # FRI variants reported
+//! # Substrate (matched on both sides)
 //!
-//! - `fri-single` — matrix width 1.
-//!   - same single-polynomial shape as WHIR's multilinear;
-//!   - **not** plonky3 FRI's optimised regime.
-//! - `fri-batch` — matrix width `2^LOG_FRI_BATCH_WIDTH`.
-//!   - the regime plonky3 FRI is tuned for;
-//!   - matches real STARK trace shapes.
+//! - Field            : KoalaBear, with quartic extension `EF`.
+//! - Merkle hash      : Poseidon1 (arithmetic, field-element digests).
+//! - Message          : `2^22` base-field elements.
+//! - Code rate        : `ρ = 2^-1` (`log_blowup = 1`).
+//! - Soundness target : 100 bits, capacity-regime conjecture.
+//!
+//! # Workload (matched claim shape)
+//!
+//! Both protocols arrange the `2^22` elements as `256 = 2^8` polynomials
+//! of size `2^14`, and open all 256 at one common point.
+//!
+//! `fri-batch`:
+//! - polynomials  : 256 univariates, each of degree `< 2^14`
+//! - opening point: `z ∈ EF`
+//! - reveals      : `v_i = f_i(z)` for `i ∈ {0..256}`
+//!
+//! `whir`:
+//! - polynomial   : 1 multilinear in 22 variables (= 256 stacked 14-var multilinears)
+//! - opening point: 256 points sharing the trailing `ζ ∈ EF^14`
+//! - reveals      : `v_i = p̃(i_binary, ζ)` for `i ∈ {0..256}`
+//!
+//! # Why the two claims are equivalent
+//!
+//! WHIR paper §1.1 bridge:
+//!
+//! ```text
+//!     ζ = (z, z^2, z^4, …, z^{2^13})    ⇒    f_i(z) = p̃(i_binary, ζ)
+//! ```
+//!
+//! - Same data shape    : `2^22` base-field elements committed.
+//! - Same opening shape : 256 evaluations at one common point.
+//! - Same scalar count  : 256 EF values revealed by the prover.
 //!
 //! # Run
 //!
@@ -31,7 +58,7 @@ use p3_commit::{BatchOpening, ExtensionMmcs, Mmcs, Pcs};
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PackedValue};
+use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
 use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_koala_bear::{
     KoalaBear, Poseidon1KoalaBear, default_koalabear_poseidon1_16, default_koalabear_poseidon1_24,
@@ -66,49 +93,36 @@ type EF = BinomialExtensionField<F, 4>;
 /// DFT backend used by both protocols.
 type Dft = Radix2DFTSmallBatch<F>;
 
-// Polynomial shape: FRI is univariate, WHIR is multilinear.
+// Polynomial worlds — FRI is univariate, WHIR is multilinear.
 //
-// Both protocols commit to a message of 2^m field elements:
+// FRI:
+//   - message   : univariate of degree < 2^m
+//   - committed : coefficient vector
+//   - open at   : z ∈ EF
 //
-//     FRI    coefficients of a univariate polynomial of degree < 2^m
-//     WHIR   evaluations of an m-variate multilinear polynomial
+// WHIR:
+//   - message   : multilinear in m variables
+//   - committed : evaluation table on {0,1}^m
+//   - open at   : z ∈ EF^m
 //
-// Shared substrate (matched across both sides):
+// Both encode the same claim "f at one random query equals v".
+// The §1.1 bridge identifies the two opening shapes:
 //
-//     code rate          rho = 2^(-log_blowup)
-//     evaluation domain  |L| = 2^(m + log_blowup)
-//     hash, MMCS, challenger, DFT, RNG seed
+//     univariate at z    ==    multilinear at (z, z^2, z^4, …, z^{2^(m-1)})
 //
-// Opening points live in different spaces:
+// Soundness regimes for RS proximity testing:
 //
-//     FRI    z in EF          (one field element)
-//     WHIR   z in EF^m        (m-tuple on the Boolean cube)
+//   - unique-decoding : proven       , bound (1 - ρ) / 2
+//   - Johnson         : proven       , bound 1 - √ρ
+//   - capacity        : conjectured  , bound 1 - ρ - η
 //
-// Both encode the same claim: f(z) = v at one random query.
-// A univariate evaluation at z equals the multilinear evaluation at
+// plonky3 FRI exposes only the capacity-regime formula
 //
-//     (z, z^2, z^4, ..., z^(2^(m-1)))
+//     soundness_bits = log_blowup * num_queries + pow_bits
 //
-// so the two views are interchangeable.
-//
-// Anchor: vary m, lock every other knob.
-
-// Soundness regimes for Reed-Solomon proximity testing:
-//
-//     regime           status        proximity bound
-//     unique-decoding  proven        (1 - rho) / 2
-//     Johnson          proven        1 - sqrt(rho)
-//     capacity         conjectured   1 - rho - eta
-//
-// Constraint: plonky3 FRI exposes only the capacity-regime formula
-//             `log_blowup * num_queries + pow_bits`. Stricter
-//             regimes are not surfaced by the crate.
-//
-// Choice:     WHIR runs in the capacity regime to match.
-//             A stricter WHIR setting would force more queries
-//             than FRI pays for, biasing the comparison.
-//
-// Outcome:    same soundness bits under the same conjecture.
+// so WHIR is also configured at `SecurityAssumption::CapacityBound`.
+// A stricter WHIR setting would force more queries than FRI pays
+// for, biasing the comparison.
 
 /// Target soundness in bits for both protocols.
 ///
@@ -162,24 +176,30 @@ const FRI_QUERY_POW_BITS: usize = POW_BITS;
 /// Solves `log_blowup * queries + query_pow_bits >= security_level` for `queries`.
 const FRI_NUM_QUERIES: usize = SECURITY_LEVEL.div_ceil(LOG_BLOWUP) - FRI_QUERY_POW_BITS;
 
-/// log_2 of the matrix width for the production-shape FRI variant.
+/// Common batching log for both protocols.
 ///
-/// # Why a width parameter exists
+/// # Role
 ///
-/// - plonky3 FRI is a batch FRI, tuned for wide matrices.
-/// - Typical AIR traces have hundreds to thousands of columns.
-/// - Single-polynomial FRI (width 1) is therefore *not* its optimised regime.
+/// Splits the `2^22` committed elements into `2^k` polynomials of `2^(22 - k)` each:
+///
+/// ```text
+///     FRI    2^k univariate columns of degree < 2^(22 - k)
+///            opened at one common z ∈ EF
+///
+///     WHIR   1 multilinear in 22 variables, with 2^k evaluation
+///            constraints sharing the last (22 - k) coordinates
+/// ```
 ///
 /// # Why `8` (width 256)
 ///
-/// - wide enough to put plonky3 FRI in its tuned regime;
-/// - per-column polynomial size at `m = 22` is still `2^14`,
-///   so per-round FRI work is not dominated by overhead.
+/// - Wide enough to put plonky3 FRI in its tuned batch-FRI regime.
+/// - Per-column size at `m = 22` is still `2^14`, so FRI's folding work is not overhead-bound.
+/// - Matches the column-count order of magnitude of real STARK traces.
 ///
-/// # Other defensible choices
+/// # Alternatives
 ///
-/// - `10` (width 1024) — closer to a real Poseidon2-trace width.
-/// - We keep `8` for safety at the small end of any future sweep.
+/// - `10` (width 1024) — closer to a real Poseidon2 trace width.
+/// - `8` is the safer pick at the small end of any future `m` sweep.
 const LOG_FRI_BATCH_WIDTH: usize = 8;
 
 /// Message-size sweep.
@@ -215,10 +235,13 @@ impl<MT: Mmcs<F>, T> WhirChallenger<MT> for T where
 {
 }
 
-/// Carrier for one fully-prepared WHIR setup at a given `num_variables`.
+/// Carrier for one fully-prepared WHIR setup.
 ///
-/// The MMCS and challenger types are generic so the same struct can carry any
-/// hash backend.
+/// # Shape
+///
+/// - 1 multilinear in `num_variables` variables.
+/// - `2^log_width` evaluation constraints, all sharing the last `num_variables - log_width` coordinates.
+/// - Mirrors batched FRI's "open `2^log_width` univariates at one common point".
 struct WhirRig<MT: Mmcs<F>, Ch> {
     /// Logarithm of the message length.
     num_variables: usize,
@@ -238,12 +261,52 @@ struct WhirRig<MT: Mmcs<F>, Ch> {
     challenger: Ch,
 }
 
-/// Build a fresh WHIR rig for the given message size.
-fn whir_setup<MT, Ch>(num_variables: usize, mmcs: MT, base_challenger: Ch) -> WhirRig<MT, Ch>
+/// Build a fresh WHIR rig matching batched FRI's `(num_variables, log_width)` shape.
+///
+/// # Arguments
+///
+/// - `num_variables` — total log-size of the committed multilinear (`m`).
+/// - `log_width` — log of the number of polynomials opened.
+///
+/// # Layout at the bench's standard `(m, k) = (22, 8)`
+///
+/// Committed:
+/// - 1 multilinear, 22 variables, `2^22` evaluations on `{0,1}^22`.
+///
+/// Opening:
+/// - 256 evaluation constraints.
+/// - Each constraint point is the concatenation of two parts:
+///   - first 8 coords  : column-index bits, walks `{0,1}^8`.
+///   - last  14 coords : shared row vector `ζ`, sampled once in `EF^14`.
+///
+/// # Equivalence with batched FRI
+///
+/// `fri-batch` opens `2^log_width` univariates at one common `z ∈ EF`.
+///
+/// `whir` opens the multilinear at `2^log_width` points sharing the
+/// trailing `ζ ∈ EF^(m - log_width)` coordinates.
+///
+/// The WHIR §1.1 bridge identifies the two:
+///
+/// ```text
+///     ζ = (z, z^2, z^4, …, z^{2^(m - log_width - 1)})
+///     ⇒  f_i(z)  =  p̃(i_binary, ζ)        for every i ∈ {0..256}
+/// ```
+fn whir_setup<MT, Ch>(
+    num_variables: usize,
+    log_width: usize,
+    mmcs: MT,
+    base_challenger: Ch,
+) -> WhirRig<MT, Ch>
 where
     MT: WhirMmcs,
     Ch: WhirChallenger<MT>,
 {
+    assert!(
+        log_width <= num_variables,
+        "log_width = {log_width} cannot exceed num_variables = {num_variables}"
+    );
+
     // WHIR protocol knobs collected into one struct.
     let params = ProtocolParameters {
         security_level: SECURITY_LEVEL,
@@ -258,16 +321,54 @@ where
     // Per-round protocol layout: query counts, OOD samples, PoW bits per round.
     let config = WhirConfig::<EF, F, MT, Ch>::new(num_variables, params.clone());
 
-    // Per-rig RNG: distinct seed per `num_variables` so two rigs can't accidentally collide.
-    let mut rng = SmallRng::seed_from_u64(BENCH_SEED ^ ((num_variables as u64) << 16));
+    // Per-rig RNG: distinct seed per `(num_variables, log_width)` so two rigs
+    // cannot accidentally collide on polynomial samples.
+    let mut rng = SmallRng::seed_from_u64(
+        BENCH_SEED ^ ((num_variables as u64) << 16) ^ ((log_width as u64) << 8),
+    );
 
     // Random multilinear polynomial laid out as one coefficient per Boolean cube point.
     let polynomial = Poly::<F>::new((0..(1 << num_variables)).map(|_| rng.random()).collect());
 
-    // Build the initial statement and register one random evaluation claim.
+    // Build the initial statement that will accumulate evaluation constraints.
     let mut statement = config.initial_statement(polynomial, SumcheckStrategy::default());
-    let z = Point::<EF>::rand(&mut rng, num_variables);
-    let _ = statement.evaluate(&z);
+
+    // Shared row vector ζ ∈ EF^(num_variables - log_width):
+    //   - sampled once and reused across all 2^log_width constraints;
+    //   - mirrors fri-batch's single z ∈ EF shared across 2^log_width columns;
+    //   - kept as a Vec so we can splice it onto each per-column point.
+    let row_dim = num_variables - log_width;
+    let zeta: Vec<EF> = Point::<EF>::rand(&mut rng, row_dim).into_iter().collect();
+    let num_polys = 1usize << log_width;
+
+    // Walk the boolean cube on the first `log_width` coordinates.
+    // Each walk produces one (point, eval) constraint added to the statement.
+    //
+    // Per constraint, the point has two parts:
+    //   - first  log_width coords : column-index bits, varies per constraint
+    //   - last   row_dim   coords : shared row vector ζ, fixed across all constraints
+    //
+    // Concretely at log_width = 8, row_dim = 14:
+    //   - constraint   0 : column bits = 00000000, then ζ
+    //   - constraint   1 : column bits = 10000000, then ζ
+    //   - constraint   2 : column bits = 01000000, then ζ
+    //   - …
+    //   - constraint 255 : column bits = 11111111, then ζ
+    //
+    // `statement.evaluate(&point)` computes p̃(point) and registers the
+    // constraint internally.
+    for column in 0..num_polys {
+        let mut coords = Vec::with_capacity(num_variables);
+        // Pack the column index as little-endian boolean coordinates.
+        for bit_index in 0..log_width {
+            let bit = (column >> bit_index) & 1;
+            coords.push(if bit == 0 { EF::ZERO } else { EF::ONE });
+        }
+        // Append the shared row vector ζ once per column.
+        coords.extend_from_slice(&zeta);
+        let point = Point::<EF>::new(coords);
+        let _ = statement.evaluate(&point);
+    }
 
     // Equality-form statement consumed by the verifier (same data, normalised layout).
     let verifier_statement = statement.clone().normalize();
@@ -397,32 +498,18 @@ impl<InMmcs: Mmcs<F>, ChMmcs: Mmcs<EF>, T> FriChal<InMmcs, ChMmcs> for T where
 
 /// One prepared FRI setup at a fixed message size and matrix width.
 ///
-/// # Layout
+/// # Matrix shape
 ///
-/// The committed matrix has shape:
+/// - rows    : `2^(log_n - log_width)`
+/// - columns : `2^log_width`
+/// - total   : `2^log_n` field elements (independent of `log_width`)
 ///
-/// ```text
-///     rows    = 2^(log_n - log_width)
-///     columns = 2^log_width
-///     total committed elements = 2^log_n   (independent of log_width)
-/// ```
+/// # Workload at the bench's standard `(log_n, log_width) = (22, 8)`
 ///
-/// # Width regimes
-///
-/// ## `log_width = 0` — single polynomial
-///
-/// - **shape**: one univariate of degree `< 2^log_n`.
-/// - **claim**: one evaluation at one point.
-/// - **pairing**: matches WHIR's single-multilinear shape (1 polynomial, 1 evaluation).
-/// - **caveat**: this is *not* plonky3 FRI's optimised regime.
-///
-/// ## `log_width > 0` — batched FRI
-///
-/// - **shape**: `2^log_width` univariates of degree `< 2^(log_n - log_width)`.
-/// - **tested via**: random linear combination of the columns.
-/// - **claim**: `2^log_width` evaluations at one common point.
-/// - **pairing**: matches real STARK trace shapes (typically hundreds of columns).
-/// - **why this regime**: plonky3 FRI is implemented and tuned for it.
+/// - 256 columns × 2^14 rows — plonky3 batched-FRI's tuned regime.
+/// - All 256 columns opened at one common `z ∈ EF`.
+/// - Reveals 256 univariate evaluations.
+/// - Matches `whir`'s 256 multilinear evaluations on a 22-var polynomial sharing 14 coordinates.
 struct FriRig<InMmcs, ChMmcs, Ch>
 where
     InMmcs: Mmcs<F>,
@@ -467,12 +554,10 @@ where
     };
 
     // Matrix shape:
-    //
-    //     rows per column = 2^(log_n - log_width)
-    //     columns         = 2^log_width
-    //     LDE rows        = 2^(log_n - log_width + log_blowup)
-    //
-    // Total committed = 2^log_n field elements regardless of log_width.
+    //   - rows per column : 2^(log_n - log_width)
+    //   - columns         : 2^log_width
+    //   - LDE rows        : 2^(log_n - log_width + log_blowup)
+    //   - total committed : 2^log_n field elements (independent of log_width)
     let log_height = log_n - log_width;
     let width = 1 << log_width;
 
@@ -546,10 +631,9 @@ where
     let zeta: EF = prover_challenger.sample_algebra_element();
 
     // Open-call argument shape:
-    //
-    //     data_and_points : one entry per commitment           (here: 1)
-    //         per entry   : one list per matrix in commitment  (here: 1)
-    //             per list: one entry per opening point        (here: [zeta])
+    //   - outer : one entry per commitment           (here: 1)
+    //   - mid   : one list per matrix in commitment  (here: 1)
+    //   - inner : one entry per opening point        (here: [zeta])
     let data_and_points = vec![(&prover_data, vec![vec![zeta]])];
 
     // Phase 2 — open: FRI commit phase + query phase + proof-of-work grind.
@@ -561,12 +645,9 @@ where
     );
     let open_ms = t.elapsed().as_millis();
 
-    // `openings` is a 4-level nested Vec indexed by:
-    //
-    //     openings[round][matrix][point][column]
-    //
-    // For our shape (1 commitment, 1 matrix, 1 point, `width` columns) the inner
-    // slice carries every committed polynomial's evaluation at `zeta`.
+    // `openings` is a 4-level nested Vec indexed by `[round][matrix][point][column]`.
+    // For our shape (1 commitment, 1 matrix, 1 point, `width` columns) the
+    // inner slice carries every committed polynomial's evaluation at `zeta`.
     let values = openings[0][0][0].clone();
 
     (commit, proof, zeta, values, commit_ms, open_ms)
@@ -595,10 +676,9 @@ where
     assert_eq!(derived, zeta, "verifier challenger drifted from prover");
 
     // Verify-call argument shape:
-    //
-    //     claims      : one entry per commitment           (here: 1)
-    //         per entry  : one list per matrix             (here: 1)
-    //             per list: (point, per-column evaluations) at that point
+    //   - outer : one entry per commitment    (here: 1)
+    //   - mid   : one list per matrix         (here: 1)
+    //   - inner : (point, per-column evaluations at that point)
     let claims = vec![(
         commit.clone(),
         vec![(rig.domain, vec![(zeta, values.to_vec())])],
@@ -659,60 +739,26 @@ fn print_diagnostic_table() {
     println!("------------+----+-------+-----------+---------+-----------+-------------+--------");
 
     // Why a macro
-    //
-    // - Each hash module exposes its own type aliases (MMCS, challenger, digest).
+    // - Each hash module exposes its own MMCS, challenger, and digest aliases.
     // - The macro forces a fresh monomorphisation at every call site.
     //
-    // Three protocols printed per `(hash, m)` cell:
+    // Two protocols printed per `(hash, m)` cell, both at width 2^LOG_FRI_BATCH_WIDTH.
     //
-    //   fri-single
-    //     - single-polynomial FRI (matrix width 1)
-    //     - same shape as WHIR's single multilinear
-    //     - not plonky3 FRI's optimised regime
+    // fri-batch:
+    //   - 256 univariates of degree < 2^14
+    //   - opened at one common z ∈ EF
     //
-    //   fri-batch
-    //     - batched FRI with matrix width 2^LOG_FRI_BATCH_WIDTH
-    //     - plonky3 FRI's tuned regime
-    //     - matches real STARK trace shapes
-    //
-    //   whir
-    //     - WHIR as a polynomial commitment scheme
+    // whir:
+    //   - 1 multilinear in 22 variables
+    //   - 256 evaluation constraints sharing 14 coordinates
+    //     (the same `z` lifted via the WHIR §1.1 univariate-multilinear bridge)
     macro_rules! diag_block {
         ($module:ident) => {{
             for &m in &M_VALUES {
                 let (challenger, val_mmcs, challenge_mmcs) = $module::build_kit();
 
-                // Single-polynomial FRI (width 1) — matches WHIR's single-multilinear shape.
-                let fri_rig = fri_setup(
-                    m,
-                    0,
-                    val_mmcs.clone(),
-                    challenge_mmcs.clone(),
-                    challenger.clone(),
-                );
-                let (commit, fri_proof, zeta, values, fri_commit_ms, fri_open_ms) =
-                    fri_prove_full(&fri_rig);
-                let fri_verify_us = fri_verify_full(&fri_rig, &commit, &fri_proof, zeta, &values);
-                let fri_bytes = postcard::to_allocvec(&fri_proof)
-                    .expect("postcard FRI")
-                    .len();
-
-                println!(
-                    " {:<10} | {:>2} | fri-s | {:>9} | {:>7} | {:>9} | {:>11} | {} (single-shot)",
-                    $module::NAME,
-                    m,
-                    fri_commit_ms,
-                    fri_open_ms,
-                    fri_verify_us,
-                    fri_bytes,
-                    FRI_NUM_QUERIES,
-                );
-
-                drop(fri_proof);
-                drop(fri_rig);
-
                 // Batch FRI (matrix width 2^LOG_FRI_BATCH_WIDTH) — plonky3 FRI's
-                // tuned regime; same total committed elements as the width-1 case.
+                // tuned regime, opened at one common point.
                 let frib_rig = fri_setup(
                     m,
                     LOG_FRI_BATCH_WIDTH,
@@ -754,8 +800,9 @@ fn print_diagnostic_table() {
                 drop(frib_proof);
                 drop(frib_rig);
 
-                // WHIR as a polynomial commitment scheme.
-                let whir_rig = whir_setup(m, val_mmcs, challenger);
+                // WHIR with 256 evaluation constraints on one 22-var multilinear,
+                // matching fri-batch's claim shape.
+                let whir_rig = whir_setup(m, LOG_FRI_BATCH_WIDTH, val_mmcs, challenger);
                 let (whir_proof, whir_commit_ms, whir_open_ms) = whir_prove_full(&whir_rig);
                 let whir_verify_us =
                     whir_verify_full::<_, _, $module::DigestW, { $module::DIGEST_ELEMS }>(
@@ -774,7 +821,7 @@ fn print_diagnostic_table() {
                     .join(",");
 
                 println!(
-                    " {:<10} | {:>2} | whir  | {:>9} | {:>7} | {:>9} | {:>11} | [{}]",
+                    " {:<10} | {:>2} | whir  | {:>9} | {:>7} | {:>9} | {:>11} | [{}] ({} constraints)",
                     $module::NAME,
                     m,
                     whir_commit_ms,
@@ -782,6 +829,7 @@ fn print_diagnostic_table() {
                     whir_verify_us,
                     whir_bytes,
                     whir_queries,
+                    1 << LOG_FRI_BATCH_WIDTH,
                 );
 
                 assert!(
@@ -816,26 +864,8 @@ fn bench_prove(c: &mut Criterion) {
             for &m in &M_VALUES {
                 let (challenger, val_mmcs, challenge_mmcs) = $module::build_kit();
 
-                // Single-polynomial FRI.
-                let fri_rig = fri_setup(
-                    m,
-                    0,
-                    val_mmcs.clone(),
-                    challenge_mmcs.clone(),
-                    challenger.clone(),
-                );
-                let label_fri = format!("fri-single/{}", $module::NAME);
-                group.bench_with_input(BenchmarkId::new(label_fri, m), &m, |b, _| {
-                    b.iter_batched(
-                        || (),
-                        |()| {
-                            let _ = fri_prove_full(&fri_rig);
-                        },
-                        BatchSize::LargeInput,
-                    );
-                });
-
-                // Batch FRI in plonky3's tuned regime.
+                // Batch FRI in plonky3's tuned regime: 256 columns of 2^14 rows,
+                // opened at one common point.
                 let frib_rig = fri_setup(
                     m,
                     LOG_FRI_BATCH_WIDTH,
@@ -854,7 +884,9 @@ fn bench_prove(c: &mut Criterion) {
                     );
                 });
 
-                let whir_rig = whir_setup(m, val_mmcs, challenger);
+                // WHIR with 256 evaluation constraints sharing 14 coordinates,
+                // mirroring fri-batch's claim shape via the §1.1 bridge.
+                let whir_rig = whir_setup(m, LOG_FRI_BATCH_WIDTH, val_mmcs, challenger);
                 let label_whir = format!("whir/{}", $module::NAME);
                 group.bench_with_input(BenchmarkId::new(label_whir, m), &m, |b, _| {
                     b.iter_batched(
@@ -883,24 +915,7 @@ fn bench_verify(c: &mut Criterion) {
             for &m in &M_VALUES {
                 let (challenger, val_mmcs, challenge_mmcs) = $module::build_kit();
 
-                // Single-polynomial FRI: pre-prove once so the inner loop only
-                // measures verification.
-                let fri_rig = fri_setup(
-                    m,
-                    0,
-                    val_mmcs.clone(),
-                    challenge_mmcs.clone(),
-                    challenger.clone(),
-                );
-                let (commit, fri_proof, zeta, values, _, _) = fri_prove_full(&fri_rig);
-                let label_fri = format!("fri-single/{}", $module::NAME);
-                group.bench_with_input(BenchmarkId::new(label_fri, m), &m, |b, _| {
-                    b.iter(|| {
-                        fri_verify_full(&fri_rig, &commit, &fri_proof, zeta, &values);
-                    });
-                });
-
-                // Batch FRI: same pre-prove pattern.
+                // Pre-prove once for batch FRI so the inner loop only times verification.
                 let frib_rig = fri_setup(
                     m,
                     LOG_FRI_BATCH_WIDTH,
@@ -923,7 +938,8 @@ fn bench_verify(c: &mut Criterion) {
                     });
                 });
 
-                let whir_rig = whir_setup(m, val_mmcs, challenger);
+                // Same for WHIR: prove once, then time the verifier in isolation.
+                let whir_rig = whir_setup(m, LOG_FRI_BATCH_WIDTH, val_mmcs, challenger);
                 let (whir_proof, _, _) = whir_prove_full(&whir_rig);
                 let label_whir = format!("whir/{}", $module::NAME);
                 group.bench_with_input(BenchmarkId::new(label_whir, m), &m, |b, _| {
