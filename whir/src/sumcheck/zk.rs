@@ -58,6 +58,11 @@
 //!
 //! # API guideline (from the issue, not binding)
 //!
+//! Naming note: issue #1586 spells the embedded prover as `WhirSumcheckProver<F, EF>`,
+//! which is a naming slip — that type doesn't exist. The actual stateful prover
+//! returned by `SingleSumcheck::new_*` is [`super::strategy::SumcheckProver`],
+//! and that is what we compose here.
+//!
 //! ```ignore
 //! pub struct ZkSumcheckProver<F, EF, Enc>
 //! where
@@ -65,10 +70,10 @@
 //!     EF: ExtensionField<F>,
 //!     Enc: p3_zk_codes::ZkEncoding<F>,
 //! {
-//!     base: super::single::SingleSumcheck /* prover state */,
+//!     base: super::strategy::SumcheckProver<F, EF>, // poly + claimed sum
 //!     encoding: Enc,
-//!     masks: Vec<UnivariatePolynomial<F>>,        // s_1, …, s_k
-//!     mask_oracles: Vec<Enc::Codeword>,           // Enc_{C_zk}(s_j)
+//!     masks: Vec<UnivariatePolynomial<F>>,          // s_1, …, s_k
+//!     mask_oracles: Vec<Enc::Codeword>,             // Enc_{C_zk}(s_j)
 //! }
 //!
 //! impl<F, EF, Enc> ZkSumcheckProver<F, EF, Enc>
