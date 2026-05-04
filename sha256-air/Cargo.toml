@@ -1,0 +1,50 @@
+[package]
+name = "p3-sha256-air"
+description = "An AIR implementation of the SHA-256 compression function for use in zero-knowledge proof systems."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+p3-air.workspace = true
+p3-field.workspace = true
+p3-matrix.workspace = true
+p3-maybe-rayon.workspace = true
+
+rand.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_family = "unix")'.dev-dependencies]
+tikv-jemallocator = "0.6"
+
+[dev-dependencies]
+p3-baby-bear = { path = "../baby-bear" }
+p3-challenger = { path = "../challenger" }
+p3-commit = { path = "../commit" }
+p3-dft = { path = "../dft" }
+p3-fri = { path = "../fri" }
+p3-goldilocks = { path = "../goldilocks" }
+p3-keccak = { path = "../keccak" }
+p3-merkle-tree = { path = "../merkle-tree" }
+p3-symmetric = { path = "../symmetric" }
+p3-uni-stark = { path = "../uni-stark" }
+
+criterion = { version = "0.8", features = ["html_reports"] }
+proptest.workspace = true
+sha2.workspace = true
+tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
+tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
+
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
+[[bench]]
+name = "sha256-air"
+harness = false
+
+[lints]
+workspace = true
