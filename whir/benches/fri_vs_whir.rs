@@ -8,7 +8,7 @@
 //! # FRI variants reported
 //!
 //! - `fri-single` — matrix width 1.
-//!   - apples-to-apples shape with WHIR's single multilinear;
+//!   - same single-polynomial shape as WHIR's multilinear;
 //!   - **not** plonky3 FRI's optimised regime.
 //! - `fri-batch` — matrix width `2^LOG_FRI_BATCH_WIDTH`.
 //!   - the regime plonky3 FRI is tuned for;
@@ -413,7 +413,7 @@ impl<InMmcs: Mmcs<F>, ChMmcs: Mmcs<EF>, T> FriChal<InMmcs, ChMmcs> for T where
 ///
 /// - **shape**: one univariate of degree `< 2^log_n`.
 /// - **claim**: one evaluation at one point.
-/// - **pairing**: apples-to-apples with WHIR's single multilinear.
+/// - **pairing**: matches WHIR's single-multilinear shape (1 polynomial, 1 evaluation).
 /// - **caveat**: this is *not* plonky3 FRI's optimised regime.
 ///
 /// ## `log_width > 0` — batched FRI
@@ -658,25 +658,31 @@ fn print_diagnostic_table() {
     println!("  hash      |  m | proto | commit ms | open ms | verify us | proof bytes | queries");
     println!("------------+----+-------+-----------+---------+-----------+-------------+--------");
 
-    // Per-hash dispatch. A macro is needed because each hash module exposes a
-    // different set of type aliases (MMCS, challenger, digest type), so each
-    // call site monomorphises differently.
+    // Why a macro
     //
-    // Three protocols are printed per `(hash, m)` cell:
+    // - Each hash module exposes its own type aliases (MMCS, challenger, digest).
+    // - The macro forces a fresh monomorphisation at every call site.
     //
-    //   - fri-single : single-polynomial FRI (matrix width 1). Apples-to-apples
-    //                  shape with WHIR's single-multilinear opening, but not
-    //                  plonky3 FRI's optimised regime.
-    //   - fri-batch  : batched FRI with matrix width 2^LOG_FRI_BATCH_WIDTH.
-    //                  This is plonky3 FRI's tuned regime and the shape real
-    //                  STARK traces have.
-    //   - whir       : WHIR as a polynomial commitment scheme.
+    // Three protocols printed per `(hash, m)` cell:
+    //
+    //   fri-single
+    //     - single-polynomial FRI (matrix width 1)
+    //     - same shape as WHIR's single multilinear
+    //     - not plonky3 FRI's optimised regime
+    //
+    //   fri-batch
+    //     - batched FRI with matrix width 2^LOG_FRI_BATCH_WIDTH
+    //     - plonky3 FRI's tuned regime
+    //     - matches real STARK trace shapes
+    //
+    //   whir
+    //     - WHIR as a polynomial commitment scheme
     macro_rules! diag_block {
         ($module:ident) => {{
             for &m in &M_VALUES {
                 let (challenger, val_mmcs, challenge_mmcs) = $module::build_kit();
 
-                // Single-polynomial FRI (width 1) — apples-to-apples with WHIR's shape.
+                // Single-polynomial FRI (width 1) — matches WHIR's single-multilinear shape.
                 let fri_rig = fri_setup(
                     m,
                     0,
