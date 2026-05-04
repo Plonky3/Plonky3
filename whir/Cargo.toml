@@ -24,6 +24,7 @@ p3-multilinear-util.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
 p3-zk-codes.workspace = true
+rand.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
 thiserror.workspace = true
 tracing.workspace = true
@@ -35,7 +36,6 @@ p3-baby-bear = { path = "../baby-bear" }
 p3-keccak = { path = "../keccak" }
 p3-koala-bear = { path = "../koala-bear" }
 proptest.workspace = true
-rand.workspace = true
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
