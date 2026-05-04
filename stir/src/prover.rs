@@ -307,6 +307,11 @@ where
 }
 
 /// Recover polynomial coefficients from a natural-order codeword on coset `shift * <g>`.
+///
+/// The returned vector has length `codeword.len()`. Trailing zero coefficients are not
+/// stripped: callers downstream (`add_polys`, `multiply_polys`, `codeword_from_coeffs`)
+/// either handle variable-length inputs or explicitly resize, and a content-dependent
+/// length here would make the contract brittle against future refactors.
 pub fn coeffs_from_codeword<F, EF, Dft>(dft: &Dft, codeword: &[EF], shift: F) -> Vec<EF>
 where
     F: TwoAdicField,
@@ -315,11 +320,7 @@ where
 {
     let mat = RowMajorMatrix::new_col(codeword.to_vec());
     let result = dft.coset_idft_algebra_batch(mat, shift);
-    let mut coeffs = result.values;
-    while coeffs.last() == Some(&EF::ZERO) && coeffs.len() > 1 {
-        coeffs.pop();
-    }
-    coeffs
+    result.values
 }
 
 /// Commit a natural-order codeword of length `N` as a fiber-organised

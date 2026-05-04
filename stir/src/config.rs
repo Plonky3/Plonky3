@@ -8,12 +8,6 @@ use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_commit::{Mmcs, SecurityAssumption};
 use p3_field::{ExtensionField, TwoAdicField};
 
-/// Maximum log-degree at which the prover sends the polynomial directly.
-///
-/// The current prover/verifier pipeline folds all the way down to a constant-size
-/// final polynomial before the direct-send stage.
-pub const MAX_LOG_DEGREE_DIRECT: usize = 0;
-
 /// User-facing STIR protocol parameters.
 ///
 /// These are the inputs from which the full [`StirConfig`] is derived.
@@ -32,7 +26,7 @@ pub struct StirParameters<M> {
     /// Each round folds `2^log_folding_factor` evaluation points into one,
     /// reducing the degree by that same factor, while the committed domain is halved
     /// (LDE step). This decoupling causes the code rate to improve each round.
-    /// Must satisfy `log_folding_factor <= log_starting_degree - MAX_LOG_DEGREE_DIRECT`.
+    /// Must satisfy `log_folding_factor <= log_starting_degree`.
     ///
     /// The paper-backed STIR schedule implemented here requires `k ≥ 4`
     /// (`log_folding_factor ≥ 2`).
@@ -243,11 +237,10 @@ where
             needed
         };
 
-        // Determine number of intermediate rounds.
-        // We fold until log_degree <= MAX_LOG_DEGREE_DIRECT, then send directly.
-        // Each round reduces log_degree by log_folding_factor.
-        let foldable_bits = log_starting_degree.saturating_sub(MAX_LOG_DEGREE_DIRECT);
-        let total_folds = foldable_bits / log_folding_factor;
+        // Determine number of intermediate rounds. We fold all the way down to a polynomial
+        // of size `2^log_final_degree` (where log_final_degree < log_folding_factor) and
+        // send it directly. Each round reduces log_degree by log_folding_factor.
+        let total_folds = log_starting_degree / log_folding_factor;
         assert!(
             total_folds > 0,
             "STIR requires at least one fold before the final direct-send stage"

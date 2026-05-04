@@ -122,12 +122,30 @@ impl<E1, IE1> StirError<E1, IE1> {
     }
 }
 
+/// Side outputs of a successful STIR verification.
+///
+/// The PCS layer needs to bind the input commitment to the STIR proof at the same fold-domain
+/// positions the verifier sampled in the first round (or the final round, when
+/// `num_rounds == 0`). Rather than have the PCS replay the Fiat-Shamir transcript by hand —
+/// fragile against any future change to `verify_stir`'s transcript order — `verify_stir`
+/// returns this view directly. `first_round_fiber_evals[i]` corresponds to
+/// `first_round_indices[i]`, and the indices are sorted in ascending order.
+#[derive(Debug, Clone)]
+pub struct StirVerifyOutputs<EF> {
+    /// Sorted (ascending) unique fold-domain query indices from the first round (or the final
+    /// round when `num_rounds == 0`). Length ≤ `num_queries` (or `final_queries`) due to
+    /// deduplication.
+    pub first_round_indices: Vec<usize>,
+    /// Row evaluations for each unique query, aligned with `first_round_indices`.
+    pub first_round_fiber_evals: Vec<Vec<EF>>,
+}
+
 /// Verify a STIR proof (Construction 5.2).
 pub fn verify_stir<F, EF, M, Challenger>(
     config: &StirConfig<F, EF, M, Challenger>,
     proof: &StirProof<EF, M, Challenger::Witness>,
     challenger: &mut Challenger,
-) -> Result<(), StirError<M::Error>>
+) -> Result<StirVerifyOutputs<EF>, StirError<M::Error>>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
@@ -147,6 +165,10 @@ where
     let mut current_shift = F::GENERATOR;
     let mut current_log_domain = config.log_starting_domain_size();
     let mut prev_ctx: Option<VirtualRoundContext<EF>> = None;
+
+    // Round-0 query view, recorded once and returned for the PCS input-binding step.
+    // Pairs are inserted in challenger-sample (insertion) order; sorted by index at the end.
+    let mut first_round_pairs: Vec<(usize, Vec<EF>)> = Vec::new();
 
     let round_commitment = |r: usize| -> &M::Commitment {
         if r == 0 {
@@ -262,6 +284,9 @@ where
             if seen_query_indices.insert(j) {
                 query_points.push(fold_point);
                 query_answers.push(fold_val);
+                if round == 0 {
+                    first_round_pairs.push((j, qp.row_evals.clone()));
+                }
             }
         }
 
@@ -358,6 +383,10 @@ where
     }];
     let final_gen = F::two_adic_generator(final_new_log_domain);
 
+    // When num_rounds == 0 the final queries also serve as the PCS first-round binding.
+    // Track them with the same dedup-on-first-occurrence rule as the intermediate-round path.
+    let mut final_seen: alloc::collections::BTreeSet<usize> = alloc::collections::BTreeSet::new();
+
     for (q, fqp) in proof.final_query_proofs.iter().enumerate() {
         let j = challenger.sample_bits(final_new_log_domain);
 
@@ -404,7 +433,20 @@ where
         if fold_val != expected {
             return Err(StirError::FinalPolyMismatch);
         }
+
+        if num_rounds == 0 && final_seen.insert(j) {
+            first_round_pairs.push((j, fqp.row_evals.clone()));
+        }
     }
 
-    Ok(())
+    // Sort by index (ascending) so the PCS layer's output ordering is deterministic and
+    // matches the prover-side `first_round_query_indices` which is also sorted.
+    first_round_pairs.sort_by_key(|(j, _)| *j);
+    let (first_round_indices, first_round_fiber_evals): (Vec<_>, Vec<_>) =
+        first_round_pairs.into_iter().unzip();
+
+    Ok(StirVerifyOutputs {
+        first_round_indices,
+        first_round_fiber_evals,
+    })
 }

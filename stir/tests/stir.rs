@@ -86,9 +86,11 @@ mod babybear_stir {
     type Dft = Radix2DitParallel<F>;
     type Challenger = DuplexChallenger<F, Perm, 16, 8>;
 
-    fn make_params(
+    fn make_params_full(
         log_blowup: usize,
         log_folding_factor: usize,
+        security_level: usize,
+        max_pow_bits: usize,
     ) -> (StirParameters<MyMmcs>, Dft, Challenger) {
         let perm = Perm::new_from_rng_128(&mut seeded_rng());
         let hash = MyHash::new(perm.clone());
@@ -100,13 +102,20 @@ mod babybear_stir {
             log_blowup,
             log_folding_factor,
             soundness_type: SecurityAssumption::CapacityBound,
-            // Low security + no PoW for fast tests. Real deployments use
-            // security_level=128 and appropriate max_pow_bits.
-            security_level: 16,
-            max_pow_bits: 0,
+            security_level,
+            max_pow_bits,
             mmcs,
         };
         (params, Dft::default(), Challenger::new(perm))
+    }
+
+    fn make_params(
+        log_blowup: usize,
+        log_folding_factor: usize,
+    ) -> (StirParameters<MyMmcs>, Dft, Challenger) {
+        // Low security + no PoW for fast tests. Real deployments use
+        // security_level=128 and appropriate max_pow_bits.
+        make_params_full(log_blowup, log_folding_factor, 16, 0)
     }
 
     #[test]
@@ -137,6 +146,180 @@ mod babybear_stir {
     fn test_prove_verify_blowup1_fold2_degree12() {
         let (params, dft, challenger) = make_params(1, 2);
         do_test_stir_prove_verify::<F, EF, _, _, _>(&params, &dft, &challenger, 12);
+    }
+
+    #[test]
+    fn test_prove_verify_zero_intermediate_rounds() {
+        // log_starting_degree == log_folding_factor ⇒ total_folds = 1, num_rounds = 0:
+        // exercise the final-only path including the `prev_ctx == None` branch in
+        // `materialize_virtual_fiber`.
+        let (params, dft, challenger) = make_params(1, 3);
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(3, params);
+        assert_eq!(config.num_rounds(), 0);
+        assert_eq!(config.log_final_degree, 0);
+
+        let mut rng = seeded_rng();
+        let degree = 1usize << 3;
+        let poly_coeffs: Vec<EF> = (0..degree).map(|_| rng.random()).collect();
+
+        let mut p_ch = challenger.clone();
+        let (proof, _idx) = prove_stir(&config, poly_coeffs, &dft, &mut p_ch);
+        assert!(proof.round_proofs.is_empty());
+
+        let mut v_ch = challenger;
+        verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_ch)
+            .expect("verification of num_rounds == 0 protocol failed");
+    }
+
+    // ---------------------------------------------------------------------------
+    // Proof-of-work / grinding tests
+    //
+    // Default tests use max_pow_bits=0, which short-circuits `grind` and `check_witness`
+    // and bypasses the entire grinding code path. These tests configure parameters such
+    // that derived `pow_bits` is ≥ 1 (typically ~10 with security_level=32, max_pow_bits=12),
+    // exercising the actual grind loop and the `observe(witness) + sample_bits == 0` check.
+    // ---------------------------------------------------------------------------
+
+    /// Returns `(params, dft, challenger)` tuned so derived per-round `pow_bits` is positive.
+    fn make_pow_params() -> (StirParameters<MyMmcs>, Dft, Challenger) {
+        // security_level=32, max_pow_bits=12 gives derived pow_bits ~10 per round on
+        // BabyBear quartic — small enough to run in a few ms but exercises the grinding
+        // code path end-to-end.
+        make_params_full(1, 2, 32, 12)
+    }
+
+    /// Fixed log_starting_degree used by the PoW tests.
+    const POW_LOG_DEGREE: usize = 8;
+
+    fn pow_proof_setup() -> (
+        StirConfig<F, EF, MyMmcs, Challenger>,
+        Dft,
+        Challenger,
+        Vec<EF>,
+    ) {
+        let (params, dft, challenger) = make_pow_params();
+        let mut rng = seeded_rng();
+        let degree = 1usize << POW_LOG_DEGREE;
+        let poly: Vec<EF> = (0..degree).map(|_| rng.random()).collect();
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(POW_LOG_DEGREE, params);
+        (config, dft, challenger, poly)
+    }
+
+    #[test]
+    fn test_prove_verify_with_grinding() {
+        let (config, dft, challenger, poly) = pow_proof_setup();
+
+        // Sanity: the test is only meaningful if at least one round actually grinds.
+        let any_query_pow =
+            config.round_configs.iter().any(|rc| rc.pow_bits > 0) || config.final_pow_bits > 0;
+        assert!(
+            any_query_pow,
+            "PoW test parameters must produce at least one round with pow_bits > 0"
+        );
+
+        let mut p_ch = challenger.clone();
+        let (proof, _idx) = prove_stir(&config, poly, &dft, &mut p_ch);
+
+        let mut v_ch = challenger;
+        verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_ch)
+            .expect("verification with PoW grinding failed");
+    }
+
+    #[test]
+    fn test_tampered_round_pow_witness_fails() {
+        let (config, dft, challenger, poly) = pow_proof_setup();
+        let round_with_pow = config
+            .round_configs
+            .iter()
+            .position(|rc| rc.pow_bits > 0)
+            .expect("expected at least one intermediate round with pow_bits > 0");
+
+        let mut p_ch = challenger.clone();
+        let (mut proof, _idx) = prove_stir(&config, poly, &dft, &mut p_ch);
+
+        // Corrupt the query-phase PoW witness. After observing the bogus witness, the
+        // sampled bits will (with overwhelming probability) not all be zero, so
+        // `check_witness` returns false and verify rejects.
+        proof.round_proofs[round_with_pow].pow_witness += F::ONE;
+
+        let mut v_ch = challenger;
+        let err = verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_ch)
+            .expect_err("tampered pow_witness must be rejected");
+        assert!(matches!(err, p3_stir::StirError::InvalidPowWitness { .. }));
+    }
+
+    #[test]
+    fn test_tampered_final_pow_witness_fails() {
+        let (config, dft, challenger, poly) = pow_proof_setup();
+        assert!(
+            config.final_pow_bits > 0,
+            "expected final_pow_bits > 0 under PoW test parameters"
+        );
+
+        let mut p_ch = challenger.clone();
+        let (mut proof, _idx) = prove_stir(&config, poly, &dft, &mut p_ch);
+
+        proof.final_pow_witness += F::ONE;
+
+        let mut v_ch = challenger;
+        let err = verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof, &mut v_ch)
+            .expect_err("tampered final_pow_witness must be rejected");
+        assert!(matches!(err, p3_stir::StirError::InvalidPowWitness { .. }));
+    }
+
+    #[test]
+    fn test_grinding_proof_verifies_under_replay() {
+        // Two prove runs from the same FS state must produce identical proofs even with
+        // grinding active (grind is deterministic given the transcript).
+        let (config, dft, challenger, poly) = pow_proof_setup();
+
+        let mut p_ch_a = challenger.clone();
+        let (proof_a, idx_a) = prove_stir(&config, poly.clone(), &dft, &mut p_ch_a);
+        let mut p_ch_b = challenger;
+        let (proof_b, idx_b) = prove_stir(&config, poly, &dft, &mut p_ch_b);
+
+        assert_eq!(idx_a, idx_b);
+        assert_eq!(proof_a.final_polynomial, proof_b.final_polynomial);
+        assert_eq!(proof_a.final_pow_witness, proof_b.final_pow_witness);
+        assert_eq!(
+            proof_a.final_folding_pow_witness,
+            proof_b.final_folding_pow_witness
+        );
+        assert_eq!(proof_a.round_proofs.len(), proof_b.round_proofs.len());
+        for (a, b) in proof_a.round_proofs.iter().zip(proof_b.round_proofs.iter()) {
+            assert_eq!(a.pow_witness, b.pow_witness);
+            assert_eq!(a.folding_pow_witness, b.folding_pow_witness);
+        }
+    }
+
+    #[test]
+    fn test_prove_is_deterministic() {
+        // Cloning the challenger and re-running `prove_stir` must produce the same proof
+        // (Fiat-Shamir transcript determinism).
+        let (params, dft, challenger) = make_params(1, 2);
+        let mut rng = seeded_rng();
+        let log_degree = 8;
+        let degree = 1usize << log_degree;
+        let poly_coeffs: Vec<EF> = (0..degree).map(|_| rng.random()).collect();
+
+        let config = StirConfig::<F, EF, MyMmcs, Challenger>::new(log_degree, params);
+        let mut p_ch_a = challenger.clone();
+        let mut p_ch_b = challenger;
+        let (proof_a, idx_a) = prove_stir(&config, poly_coeffs.clone(), &dft, &mut p_ch_a);
+        let (proof_b, idx_b) = prove_stir(&config, poly_coeffs, &dft, &mut p_ch_b);
+
+        assert_eq!(idx_a, idx_b);
+        assert_eq!(
+            proof_a.final_polynomial, proof_b.final_polynomial,
+            "final_polynomial must be deterministic under FS replay"
+        );
+        assert_eq!(proof_a.round_proofs.len(), proof_b.round_proofs.len());
+        for (rp_a, rp_b) in proof_a.round_proofs.iter().zip(proof_b.round_proofs.iter()) {
+            assert_eq!(rp_a.ood_answers, rp_b.ood_answers);
+            assert_eq!(rp_a.ans_polynomial, rp_b.ans_polynomial);
+            assert_eq!(rp_a.shake_polynomial, rp_b.shake_polynomial);
+            assert_eq!(rp_a.query_proofs.len(), rp_b.query_proofs.len());
+        }
     }
 
     #[test]

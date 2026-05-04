@@ -28,4 +28,4 @@ pub mod verifier;
 pub use config::{StirConfig, StirParameters, StirRoundConfig};
 pub use pcs::TwoAdicStirPcs;
 pub use proof::{StirFinalQueryProof, StirProof, StirQueryProof, StirRoundProof};
-pub use verifier::StirError;
+pub use verifier::{StirError, StirVerifyOutputs};

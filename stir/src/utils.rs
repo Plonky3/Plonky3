@@ -30,10 +30,16 @@ pub fn eval_poly<F: Field>(poly: &[F], point: F) -> F {
 ///
 /// For a polynomial `p(X)` and point `a`:
 /// `p(X) = (X - a) * q(X) + p(a)`
+///
+/// # Panics
+///
+/// Panics if `poly` is empty. Callers handle the empty case explicitly upstream
+/// (`quotient_by_roots` checks `poly.len() > roots.len()`).
 pub fn divide_by_linear<F: Field>(poly: &[F], point: F) -> (Vec<F>, F) {
-    if poly.is_empty() {
-        return (vec![], F::ZERO);
-    }
+    assert!(
+        !poly.is_empty(),
+        "divide_by_linear: cannot divide an empty polynomial by a linear factor"
+    );
 
     let n = poly.len();
     let mut quotient = vec![F::ZERO; n - 1];
@@ -90,14 +96,31 @@ pub fn multiply_polys<F: Field>(a: &[F], b: &[F]) -> Vec<F> {
 
 /// Divide `poly` by the vanishing polynomial over `roots`.
 ///
-/// Panics in debug builds if the division is not exact.
+/// `poly` is required to vanish on every root (true by construction inside the STIR prover,
+/// where the numerator is `g_i − Ans_i` and `Ans_i` interpolates `g_i` on every root).
+///
+/// Each per-root remainder is asserted to be zero in **release builds too** — a silently
+/// dropped remainder would yield the wrong virtual oracle, and the cost of one field equality
+/// per round is negligible.
+///
+/// Returns the empty vector when the quotient reduces to the zero polynomial (legitimately,
+/// when `poly.len() ≤ roots.len()` and `poly` vanishes on all roots: any polynomial of degree
+/// `< n` that vanishes on `n` distinct points is identically zero). In that case downstream
+/// callers (`multiply_polys`, `codeword_from_coeffs`) treat the empty input as the zero
+/// polynomial.
 pub fn quotient_by_roots<F: Field>(poly: &[F], roots: &[F]) -> Vec<F> {
     let mut quotient = poly.to_vec();
     for &root in roots {
+        if quotient.is_empty() {
+            // Already reduced to the zero polynomial; further linear divisions stay zero.
+            break;
+        }
         let (q, remainder) = divide_by_linear(&quotient, root);
-        debug_assert!(
+        assert!(
             remainder == F::ZERO,
-            "quotient_by_roots: non-zero remainder when dividing by (X - root)"
+            "quotient_by_roots: non-zero remainder when dividing by (X - root). \
+             The input polynomial does not vanish on every root — this should not happen \
+             with an honest STIR prover."
         );
         quotient = q;
     }
@@ -297,7 +320,22 @@ pub fn check_shake_consistency<F: Field>(
 /// x_l = g^{j + l * new_height}   (l = 0, …, k-1)
 /// ```
 ///
-/// (The coset shift is NOT included in the x-coordinates — consistent with the FRI convention.)
+/// # Convention vs the STIR paper (eprint 2024/390)
+///
+/// Construction 4.5 of the paper defines `Fold(f, β)(y)` as the Lagrange interpolation of
+/// `(x, f(x))` for `x ∈ q⁻¹(y)` evaluated at `β`, where `q(x) = x^k`. With **natural** coset
+/// coordinates (i.e. including the shift `α`), the preimages of `y = (α·g^j)^k` are
+/// `α·g^{j + l·new_height}`. The polynomial implemented here uses **subgroup** coordinates
+/// (`g^{j + l·new_height}` without the shift `α`), which by linearity of Lagrange
+/// interpolation in the challenge corresponds to the natural-coset fold at challenge
+/// `β · α^{-1}` (for arity 2 — the algebraic relation generalises to higher arity via
+/// `α^{(k-1)}` scaling that cancels in barycentric form).
+///
+/// Soundness is preserved because `β` is uniformly random in the challenge field and so is
+/// the rescaled challenge. Both prover and verifier follow the same convention end-to-end
+/// (`fold_codeword`, `fold_fiber`, `coeffs_from_codeword(_, _, fold_shift)`,
+/// `materialize_virtual_fiber`), so the polynomial recovered from `fold_coeffs` is
+/// well-defined and consistent across the protocol.
 ///
 /// # Optimisation for arity 2
 ///

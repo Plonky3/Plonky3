@@ -43,7 +43,6 @@ use tracing::instrument;
 use crate::config::{StirConfig, StirParameters};
 use crate::proof::StirProof;
 use crate::prover::{coeffs_from_codeword, prove_stir};
-use crate::utils::next_domain_shift;
 use crate::verifier::{StirError, verify_stir};
 
 /// A polynomial commitment scheme using STIR to generate opening proofs.
@@ -290,17 +289,22 @@ where
             Challenge::ExtensionPacking::to_ext_iter(packed_alpha_powers.iter().copied())
                 .collect_vec();
 
-        // `reduced[h]`: alpha-batched reduced-opening at log-height h.
-        let mut reduced_openings: [Option<Vec<Challenge>>; 32] = core::array::from_fn(|_| None);
-        let mut num_reduced = [0usize; 32];
+        // `reduced[log_h]`: alpha-batched reduced-opening at log-height `log_h`. Keyed by
+        // arbitrary `log_h` so the structure scales with the field's two-adicity rather than
+        // a hardcoded array bound.
+        let mut reduced_openings: alloc::collections::BTreeMap<usize, Vec<Challenge>> =
+            alloc::collections::BTreeMap::new();
+        let mut num_reduced: alloc::collections::BTreeMap<usize, usize> =
+            alloc::collections::BTreeMap::new();
 
         for ((mats, points), opened_vals) in mats_and_points.iter().zip(&all_opened_values) {
             for ((mat, points_for_mat), opened_for_mat) in
                 izip!(mats.iter(), points.iter()).zip(opened_vals.iter())
             {
                 let log_h = log2_strict_usize(mat.height());
-                let ro = reduced_openings[log_h]
-                    .get_or_insert_with(|| vec![Challenge::ZERO; mat.height()]);
+                let ro = reduced_openings
+                    .entry(log_h)
+                    .or_insert_with(|| vec![Challenge::ZERO; mat.height()]);
 
                 // Precompute alpha-batched row values for this matrix (reused per point).
                 let p_x_vec: Vec<Challenge> = mat
@@ -313,8 +317,9 @@ where
                     .collect_vec();
 
                 for (point, ys) in points_for_mat.iter().zip(opened_for_mat.iter()) {
-                    let alpha_pow_offset = alpha.exp_u64(num_reduced[log_h] as u64);
-                    num_reduced[log_h] += ys.len();
+                    let height_count = num_reduced.entry(log_h).or_insert(0);
+                    let alpha_pow_offset = alpha.exp_u64(*height_count as u64);
+                    *height_count += ys.len();
 
                     let full_height = mat.height();
                     let inv_denom = &inv_denoms.get(point).unwrap()[..full_height];
@@ -336,13 +341,14 @@ where
 
         // Step 3: For each non-empty height bucket (descending), run STIR on the bucket's
         // reduced opening and bind the input MMCS. Each distinct LDE height gets its own
-        // STIR sub-proof.
+        // STIR sub-proof. BTreeMap iterates in ascending key order, so reverse for descending.
         let mut bucket_proofs = Vec::new();
 
-        for log_h in (0..32usize).rev() {
-            let Some(ro) = reduced_openings[log_h].take() else {
-                continue;
-            };
+        let bucket_log_heights: Vec<usize> = reduced_openings.keys().rev().copied().collect();
+        for log_h in bucket_log_heights {
+            let ro = reduced_openings
+                .remove(&log_h)
+                .expect("present by construction");
             let bucket_height = 1usize << log_h;
 
             let mut ro_natural = ro;
@@ -441,8 +447,11 @@ where
             return Err(StirError::InvalidProofShape);
         }
 
-        // Precompute alpha_pow_offset for each (commit, mat, point) triple.
-        let mut height_num_reduced: [usize; 32] = [0; 32];
+        // Precompute alpha_pow_offset for each (commit, mat, point) triple. Tracked per
+        // log_h via a BTreeMap so the structure scales with the field's two-adicity rather
+        // than a hardcoded array length.
+        let mut height_num_reduced: alloc::collections::BTreeMap<usize, usize> =
+            alloc::collections::BTreeMap::new();
         let alpha_offsets: Vec<Vec<Vec<Challenge>>> = commitments_with_opening_points
             .iter()
             .map(|(_, domain_claims)| {
@@ -453,8 +462,9 @@ where
                         point_claims
                             .iter()
                             .map(|(_, vals)| {
-                                let offset = alpha.exp_u64(height_num_reduced[log_h] as u64);
-                                height_num_reduced[log_h] += vals.len();
+                                let height_count = height_num_reduced.entry(log_h).or_insert(0);
+                                let offset = alpha.exp_u64(*height_count as u64);
+                                *height_count += vals.len();
                                 offset
                             })
                             .collect()
@@ -498,118 +508,21 @@ where
                 self.stir.clone(),
             );
 
-            let mut ch_replay = challenger.clone();
-            ch_replay.observe(stir_proof.initial_commitment.clone());
-
-            verify_stir(&stir_config, stir_proof, challenger).map_err(|e| {
+            // Run STIR verification and consume its first-round query view directly. No
+            // hand-mirrored transcript replay: anything that touches the FS state is contained
+            // inside `verify_stir` itself.
+            let stir_outputs = verify_stir(&stir_config, stir_proof, challenger).map_err(|e| {
                 e.map_input_err(|_| unreachable!("verify_stir does not produce InputError"))
             })?;
 
-            // Derive query indices and fiber-eval source for input binding. The folding
-            // factor is constant across rounds (config.log_folding_factor), so the same
-            // arity/fold_height applies whether the first round is intermediate or final.
+            // The folding factor is constant across rounds, so the same arity/fold_height
+            // applies whether STIR ran with intermediate rounds or only a final round.
             let log_arity0 = stir_config.log_folding_factor;
             let fold_height0 = (1usize << stir_config.log_starting_domain_size()) >> log_arity0;
             let arity0 = 1usize << log_arity0;
 
-            let first_round_unique_js: Vec<usize>;
-            let j_to_proof_idx: LinearMap<usize, usize>;
-            let fiber_evals_per_query: Vec<&[Challenge]> = if stir_config.num_rounds() > 0 {
-                let rp0 = &stir_proof.round_proofs[0];
-                let rc0 = &stir_config.round_configs[0];
-
-                let _ = ch_replay.check_witness(rc0.folding_pow_bits, rp0.folding_pow_witness);
-                let _gamma: Challenge = ch_replay.sample_algebra_element();
-                ch_replay.observe(rp0.commitment.clone());
-
-                let current_log_domain = stir_config.log_starting_domain_size();
-                let next_log_domain = current_log_domain - 1;
-                let initial_shift = rc0.domain_shift;
-                let next_shift: Val = next_domain_shift(initial_shift, log_arity0);
-                let current_domain_size = 1usize << current_log_domain;
-                let next_domain_size = 1usize << next_log_domain;
-
-                let mut ood_replay: Vec<Challenge> = Vec::with_capacity(rc0.num_ood_samples);
-                while ood_replay.len() < rc0.num_ood_samples {
-                    let z: Challenge = ch_replay.sample_algebra_element();
-                    let z_norm_cur = z * Challenge::from(initial_shift).inverse();
-                    let outside_current = z_norm_cur.exp_power_of_2(current_log_domain)
-                        != Challenge::ONE
-                        || current_domain_size == 1;
-                    let z_norm_next = z * Challenge::from(next_shift).inverse();
-                    let outside_next = z_norm_next.exp_power_of_2(next_log_domain)
-                        != Challenge::ONE
-                        || next_domain_size == 1;
-                    let not_dup = ood_replay.iter().all(|&existing| existing != z);
-                    if outside_current && outside_next && not_dup {
-                        ood_replay.push(z);
-                    }
-                }
-                ch_replay.observe_algebra_slice(&rp0.ood_answers);
-                let _ = ch_replay.check_witness(rc0.pow_bits, rp0.pow_witness);
-                let _r_comb: Challenge = ch_replay.sample_algebra_element();
-
-                let fold_log_domain = current_log_domain - log_arity0;
-                let mut query_js: Vec<usize> = Vec::with_capacity(rc0.num_queries);
-                let mut seen: BTreeSet<usize> = BTreeSet::new();
-                for _ in 0..rc0.num_queries {
-                    let j = ch_replay.sample_bits(fold_log_domain);
-                    query_js.push(j);
-                    seen.insert(j);
-                }
-                first_round_unique_js = seen.into_iter().collect();
-                j_to_proof_idx =
-                    query_js
-                        .iter()
-                        .enumerate()
-                        .fold(LinearMap::new(), |mut map, (k, &j)| {
-                            if map.get(&j).is_none() {
-                                map.insert(j, k);
-                            }
-                            map
-                        });
-
-                rp0.query_proofs
-                    .iter()
-                    .map(|qp| qp.row_evals.as_slice())
-                    .collect()
-            } else {
-                // num_rounds == 0: final queries target the initial codeword directly.
-                let _ = ch_replay.check_witness(
-                    stir_config.final_folding_pow_bits,
-                    stir_proof.final_folding_pow_witness,
-                );
-                let _gamma: Challenge = ch_replay.sample_algebra_element();
-                ch_replay.observe_algebra_slice(&stir_proof.final_polynomial);
-                let _ = ch_replay
-                    .check_witness(stir_config.final_pow_bits, stir_proof.final_pow_witness);
-
-                let final_new_log_domain = stir_config.log_starting_domain_size() - log_arity0;
-                let mut query_js: Vec<usize> = Vec::with_capacity(stir_config.final_queries);
-                let mut seen: BTreeSet<usize> = BTreeSet::new();
-                for _ in 0..stir_config.final_queries {
-                    let j = ch_replay.sample_bits(final_new_log_domain);
-                    query_js.push(j);
-                    seen.insert(j);
-                }
-                first_round_unique_js = seen.into_iter().collect();
-                j_to_proof_idx =
-                    query_js
-                        .iter()
-                        .enumerate()
-                        .fold(LinearMap::new(), |mut map, (k, &j)| {
-                            if map.get(&j).is_none() {
-                                map.insert(j, k);
-                            }
-                            map
-                        });
-
-                stir_proof
-                    .final_query_proofs
-                    .iter()
-                    .map(|fqp| fqp.row_evals.as_slice())
-                    .collect()
-            };
+            let first_round_unique_js = stir_outputs.first_round_indices;
+            let fiber_evals_per_query = stir_outputs.first_round_fiber_evals;
 
             // Verify input MMCS openings and check consistency with STIR fiber evals.
             for (commit_idx, ((commitment, domain_claims), per_commit_openings)) in
@@ -651,7 +564,11 @@ where
 
                 let mut opening_idx = 0usize;
 
-                for &j in &first_round_unique_js {
+                for (q_idx, &j) in first_round_unique_js.iter().enumerate() {
+                    let row_evals = &fiber_evals_per_query[q_idx];
+                    if row_evals.len() != arity0 {
+                        return Err(StirError::InvalidProofShape);
+                    }
                     #[allow(clippy::needless_range_loop)]
                     for l in 0..arity0 {
                         let p = j + l * fold_height0;
@@ -700,10 +617,7 @@ where
                             }
                         }
 
-                        let proof_k = *j_to_proof_idx.get(&j).unwrap();
-                        let stir_val = fiber_evals_per_query[proof_k][l];
-
-                        if expected_ro != stir_val {
+                        if expected_ro != row_evals[l] {
                             return Err(StirError::InvalidProofShape);
                         }
                     }

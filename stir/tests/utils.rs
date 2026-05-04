@@ -5,7 +5,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_stir::utils::{
     add_polys, check_shake_consistency, compute_shake_polynomial, divide_by_linear, eval_poly,
-    interpolate_poly, scale_poly,
+    interpolate_poly, quotient_by_roots, scale_poly,
 };
 
 type F = BabyBear;
@@ -83,11 +83,42 @@ fn test_divide_by_linear_exact_divisor() {
 }
 
 #[test]
-fn test_divide_by_linear_empty() {
+#[should_panic(expected = "cannot divide an empty polynomial")]
+fn test_divide_by_linear_empty_panics() {
     let poly: Vec<F> = vec![];
-    let (q, r) = divide_by_linear(&poly, f(5));
-    assert!(q.is_empty());
-    assert_eq!(r, F::ZERO);
+    let _ = divide_by_linear(&poly, f(5));
+}
+
+#[test]
+fn test_quotient_by_roots_basic() {
+    // poly = (x - 1)(x - 2) = 2 - 3x + x^2; coefficients are [const, x, x^2].
+    let poly = vec![f(2), F::ZERO - f(3), F::ONE];
+    let roots = vec![f(1), f(2)];
+    let q = quotient_by_roots(&poly, &roots);
+    // Both factors removed; quotient is the constant 1.
+    assert_eq!(q, vec![F::ONE]);
+}
+
+#[test]
+fn test_quotient_by_roots_zero_polynomial_short_circuits() {
+    // The zero polynomial vanishes on every point. quotient_by_roots accepts arbitrary
+    // many roots and short-circuits to an empty result once the running quotient is empty.
+    // (Pre-empty case: the protocol relies on this for late STIR rounds where
+    // `fold_coeffs.len() ≤ all_points.len()` and `numerator = fold_coeffs - ans_poly`
+    // is identically zero.)
+    let poly = vec![F::ZERO, F::ZERO, F::ZERO];
+    let roots = vec![f(1), f(2), f(3), f(4), f(5)];
+    let q = quotient_by_roots(&poly, &roots);
+    assert!(q.is_empty(), "zero polynomial divided by anything is zero");
+}
+
+#[test]
+#[should_panic(expected = "non-zero remainder when dividing by")]
+fn test_quotient_by_roots_rejects_non_vanishing_input() {
+    // poly(x) = x + 1; root = 2 ⇒ poly(2) = 3 ≠ 0.
+    let poly = vec![F::ONE, F::ONE];
+    let roots = vec![f(2)];
+    let _ = quotient_by_roots(&poly, &roots);
 }
 
 // ---------------------------------------------------------------------------
