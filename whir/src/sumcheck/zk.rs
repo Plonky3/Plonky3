@@ -125,32 +125,40 @@ where
 {
     /// Plain sumcheck state (poly + claimed sum). Folded at each `γ_j`
     /// exactly like the non-ZK path — fold logic is unchanged.
+    /// In the reference paper:
+    /// Construction 6.3, step 4: the Ĝ(X_1,…,X_k) polynomial
     base: SumcheckProver<F, EF>,
     /// ZK encoding used for the masks.
+    /// in the reference paper:
+    /// Theorem 6.2 ingredients: C_zk ⊆ Σ_zk^{m_zk}; Enc is C_zk
     encoding: Enc,
     /// `k` mask polynomials `s_1, …, s_k` as coefficient vectors of length
-    /// `ell_zk`.
+    /// `ell_zk`
+    ///  in the reference paper:
+    ///  Construction 6.3, step 1: "P samples s_1, …, s_k ∈ F^{<ℓ_zk}[X]"
     masks: Vec<Vec<F>>,
     /// Encoded mask oracles. Kept in state and exposed via
     /// [`Self::mask_oracles`] so downstream protocols (committed sumcheck
     /// relation, §2.4 / §5 of the paper) can consume them.
+    /// These are the encoded codewords sent as oracles in round 1
     mask_oracles: Vec<Enc::Codeword>,
     /// Combination challenge `ε` sampled after observing `μ̃`. Used in every
-    /// subsequent round to scale the plain piece.
+    /// subsequent round to scale the plain piece. In the paper:
+    ///  ε ← F.
+    ///  here challenges come from the extension field EF
     eps: EF,
     /// Running scalar `Σ_{l > current_round} (s_l(0) + s_l(1))`.
     /// Precomputed at construction (`μ̃ = 2^{k-1} · sum_future_endpoints`
     /// initially); decremented per round as masks transition from "future"
     /// to "past".
+    /// in the paper:
+    /// Construction 6.3, step 2 + per round forumla in step 4(a)
     sum_future_endpoints: F,
     /// `s_l(γ_l)` for `l < current_round`, accumulated as rounds progress.
-    mask_evals_at_gamma: Vec<F>,
+    mask_evals_at_gamma: Vec<EF>,
     /// Number of rounds remaining (`k` initially, decremented per round).
+    /// Standard bookkeeping
     rounds_left: usize,
-    /// Mask coefficient length `ℓ_zk`. Wire-format degree of `ĥ_j` is
-    /// `ℓ_zk - 1` (we send `ℓ_zk - 1` coefficients per round, skipping the
-    /// linear one — see decision block item 4).
-    ell_zk: usize,
 }
 
 impl ZkSumcheck {
