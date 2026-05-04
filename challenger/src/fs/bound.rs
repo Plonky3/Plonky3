@@ -17,7 +17,9 @@
 pub struct TranscriptBound<T>(T);
 
 impl<T> TranscriptBound<T> {
-    /// Build a bound witness. Crate-internal: callers must go through a transcript method.
+    /// Build a bound witness.
+    ///
+    /// Crate-internal: callers must go through a transcript method.
     pub(in crate::fs) const fn wrap(value: T) -> Self {
         Self(value)
     }
@@ -36,8 +38,9 @@ impl<T> TranscriptBound<T> {
 
     /// Lift a deterministic derivation to bound outputs.
     ///
-    /// `f` must be a pure function of `T`; non-determinism inside `f`
-    /// silently launders the binding.
+    /// `f` must be a pure function of `T`;
+    ///
+    /// Non-determinism inside `f` silently launders the binding.
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> TranscriptBound<U> {
         TranscriptBound(f(self.0))
     }
