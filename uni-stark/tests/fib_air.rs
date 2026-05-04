@@ -20,6 +20,8 @@ use p3_uni_stark::{InvalidProofShapeError, StarkConfig, prove, verify};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
+const fn assert_sync<T: Sync>() {}
+
 /// For testing the public values feature
 pub struct FibonacciAir {}
 
@@ -172,6 +174,10 @@ type ZkHidingPcs = HidingFriPcs<Val, Dft, ZkValHidingMmcs, ZkChallengeHidingMmcs
 type ZkConfig = StarkConfig<ZkHidingPcs, Challenge, ZkChallenger>;
 
 fn make_zk_config() -> ZkConfig {
+    assert_sync::<ZkValHidingMmcs>();
+    assert_sync::<ZkHidingPcs>();
+    assert_sync::<ZkConfig>();
+
     let byte_hash = ZkByteHash {};
     let u64_hash = ZkU64Hash::new(KeccakF {});
     let field_hash = ZkFieldHash::new(u64_hash);

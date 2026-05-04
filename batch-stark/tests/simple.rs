@@ -35,6 +35,8 @@ use p3_util::log2_strict_usize;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
+const fn assert_sync<T: Sync>() {}
+
 const TWO_ADIC_FIXTURE: &str = "tests/fixtures/batch_stark_two_adic_v1.postcard";
 const CIRCLE_FIXTURE: &str = "tests/fixtures/batch_stark_circle_v1.postcard";
 
@@ -687,6 +689,10 @@ fn make_two_adic_compat_config(seed: u64) -> MyConfig {
 }
 
 fn make_config_zk(seed: u64) -> MyHidingConfig {
+    assert_sync::<HidingValMmcs>();
+    assert_sync::<HidingPcs>();
+    assert_sync::<MyHidingConfig>();
+
     let mut rng = SmallRng::seed_from_u64(seed);
     let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
