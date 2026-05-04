@@ -14,7 +14,7 @@
 set -euo pipefail
 
 # Branch that release PRs merge into (release-plz uses your current git branch as the PR base).
-RELEASE_BASE_BRANCH="${RELEASE_BASE_BRANCH:-v0.5.2}"
+RELEASE_BASE_BRANCH="${RELEASE_BASE_BRANCH:-v0.5.3}"
 
 check_binary_installed() {
   local binary_name="$1"

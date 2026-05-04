@@ -4,7 +4,7 @@ on:
   pull_request:
     types: [closed]
     branches:
-      - v0.5.2
+      - v0.5.3
   # Allow manual re-runs if publish fails (e.g., crates.io outage)
   workflow_dispatch:
 
