@@ -414,3 +414,102 @@ impl SingleSumcheck {
         }
     }
 }
+
+#[cfg(test)]
+mod snapshot_tests {
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::DuplexChallenger;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{BasedVectorSpace, PrimeCharacteristicRing, PrimeField32};
+    use p3_multilinear_util::point::Point;
+    use p3_multilinear_util::poly::Poly;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use super::*;
+    use crate::constraints::statement::EqStatement;
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+    type Perm = Poseidon2BabyBear<16>;
+    type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
+
+    /// Canonical `[u32; 4]` view of an extension field element. The four
+    /// coordinates are the BabyBear coefficients of the binomial-extension
+    /// basis; they fully determine the element.
+    fn ef_to_u32s(ef: EF) -> [u32; 4] {
+        let coeffs = <EF as BasedVectorSpace<F>>::as_basis_coefficients_slice(&ef);
+        [
+            coeffs[0].as_canonical_u32(),
+            coeffs[1].as_canonical_u32(),
+            coeffs[2].as_canonical_u32(),
+            coeffs[3].as_canonical_u32(),
+        ]
+    }
+
+    /// Byte-identity regression for the non-ZK SingleSumcheck transcript.
+    ///
+    /// Pins down the prover's verifier-randomness vector for a fixed-seed run
+    /// of [`SingleSumcheck::new_classic_unpacked`] (BabyBear / BinomialExt-4 /
+    /// Poseidon2 challenger; deterministic poly + eq constraint). The HVZK
+    /// work in this PR is meant to leave the non-ZK path bit-exact; any drift
+    /// in observation order, extrapolation, or wire format flips one of the
+    /// snapshot rows, surfacing the regression in CI.
+    #[test]
+    fn single_sumcheck_classic_unpacked_transcript_snapshot() {
+        let mut perm_rng = SmallRng::seed_from_u64(0);
+        let perm = Perm::new_from_rng_128(&mut perm_rng);
+
+        let n_vars = 4;
+        let folding_factor = 3;
+        let pow_bits = 0;
+
+        // Deterministic poly: `evals[i] = i` for `i ∈ 0..16`.
+        let evals: Vec<F> = (0u64..(1u64 << n_vars)).map(F::from_u64).collect();
+        let poly = Poly::new(evals);
+
+        // Single eq constraint at the extension point `(1, 2, 3, 4)`. The
+        // claimed eval is computed against the deterministic poly so the
+        // statement is consistent.
+        let mut eq_statement = EqStatement::initialize(n_vars);
+        let eq_point: Point<EF> = Point::new(vec![
+            EF::from_u64(1),
+            EF::from_u64(2),
+            EF::from_u64(3),
+            EF::from_u64(4),
+        ]);
+        let eq_eval = poly.eval_base::<EF>(&eq_point);
+        eq_statement.add_evaluated_constraint(eq_point, eq_eval);
+
+        let mut challenger = MyChallenger::new(perm);
+        let mut sumcheck_data = SumcheckData::<F, EF>::default();
+        let (_prover, randomness) = SingleSumcheck::new_classic_unpacked(
+            &poly,
+            &mut sumcheck_data,
+            &mut challenger,
+            folding_factor,
+            pow_bits,
+            &eq_statement,
+        );
+
+        let actual: Vec<[u32; 4]> = randomness.iter().copied().map(ef_to_u32s).collect();
+
+        // Snapshot baked from a fresh run on commit 7f7cf0d9 (HVZK-WHIR 3/6
+        // verifier landed). Update only when the non-ZK transcript is
+        // *intentionally* changed (e.g. wire-format change, extrapolation
+        // rewrite); never as a side-effect of unrelated work.
+        let expected: [[u32; 4]; 3] = [
+            [442_139_089, 1_383_666_090, 1_529_608_712, 206_815_401],
+            [777_415_449, 1_571_276_197, 346_063_355, 1_357_693_652],
+            [366_387_062, 1_645_628_713, 1_578_297_881, 941_983_341],
+        ];
+        assert_eq!(
+            actual.as_slice(),
+            expected.as_slice(),
+            "SingleSumcheck non-ZK transcript drift detected",
+        );
+    }
+}

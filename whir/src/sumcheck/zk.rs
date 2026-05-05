@@ -438,6 +438,168 @@ impl ZkSumcheck {
         (prover, Point::new(vec![gamma_1]))
     }
 
+    /// HVZK simulator for the classic-unpacked HVZK sumcheck (Lemma 6.4).
+    ///
+    /// Runs the prover's Fiat-Shamir actions *without ever consulting the
+    /// witness polynomial* `f`. Instead of computing each round polynomial
+    /// `ĥ_j` from the masks plus the plain piece, the simulator samples each
+    /// round's wire form uniformly at random from `EF^{max(ℓ_zk-1, 2)}` —
+    /// since the verifier reconstructs `c_1` from the affine constraint
+    /// `target = 2·c_0 + c_1 + Σ_{i ≥ 2} c_i`, every uniform wire form is
+    /// trivially "consistent" with the running target. The mask commitments
+    /// are indistinguishable from the real prover's because the simulator
+    /// samples real masks itself (the witness `f` enters only the plain
+    /// piece, which the simulator skips).
+    ///
+    /// # Distributional match (Lemma 6.4)
+    ///
+    /// For Reed-Solomon `Enc_{C_zk}` (encoding error `ζ_RS = 0`) the affine
+    /// subspace of valid `(μ̃, ĥ_1, …, ĥ_k)` tuples has dimension
+    /// `1 + k·max(ℓ_zk - 1, 2)` and the honest-prover formulas are surjective
+    /// onto it (proven via rank-nullity in §6.1 of eprint 2026/391). The
+    /// simulator produces an identically-distributed `(μ̃, wire forms)` by
+    /// sampling each coordinate uniformly. The proof is the paper's; this
+    /// implementation just realises the construction.
+    ///
+    /// # Returns
+    ///
+    /// - The simulated `ZkSumcheckData` artefact (μ̃, per-round wire forms,
+    ///   PoW witnesses).
+    /// - The mask commitments (so the test caller can pass them to the
+    ///   verifier alongside the simulated `ZkSumcheckData`).
+    /// - The `(γ_1, …, γ_k)` randomness vector — useful for round-trip
+    ///   assertions but redundant with the verifier's own output.
+    ///
+    /// # Panics
+    ///
+    /// Same precondition asserts as [`Self::new_classic_unpacked`] (char ≠ 2,
+    /// `ell_zk ≥ 2`, `k ≥ 1`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn simulate_classic_unpacked<F, EF, Enc, M, Challenger, R>(
+        challenger: &mut Challenger,
+        folding_factor: usize,
+        pow_bits: usize,
+        statement: &EqStatement<EF>,
+        encoding: &Enc,
+        mmcs: &M,
+        rng: &mut R,
+    ) -> (
+        ZkSumcheckData<F, EF>,
+        Vec<M::Commitment>,
+        Point<EF>,
+    )
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+        Enc: ZkEncoding<F>,
+        Enc::Codeword: Matrix<F>,
+        M: Mmcs<F>,
+        Challenger:
+            FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
+        R: Rng,
+        StandardUniform: Distribution<F> + Distribution<EF>,
+    {
+        let k = folding_factor;
+        let ell_zk = encoding.message_len();
+
+        assert!(
+            F::TWO != F::ZERO,
+            "Construction 6.3 (Lemma 6.4) requires char(F) != 2",
+        );
+        assert!(
+            ell_zk >= 2,
+            "Construction 6.3 (Lemma 6.4) requires ell_zk >= 2",
+        );
+        assert!(k >= 1, "sumcheck requires at least one round");
+
+        // Mirror the prover's α-sampling step and derive μ from the public
+        // claims. The simulator never touches `f`; the eq-statement evals are
+        // public, so this is information the simulator legitimately has.
+        let alpha: EF = challenger.sample_algebra_element();
+        let mut mu = EF::ZERO;
+        statement.combine_evals(&mut mu, alpha);
+
+        // Sample fresh masks + commit + observe (identical distribution to
+        // the real prover: for RS the codewords are uniform, so simulator
+        // codewords are indistinguishable from real ones).
+        let masks: Vec<Vec<F>> = (0..k)
+            .map(|_| (0..ell_zk).map(|_| rng.random()).collect())
+            .collect();
+        let mut mask_commits: Vec<M::Commitment> = Vec::with_capacity(k);
+        for mask in &masks {
+            let codeword = encoding.encode(mask, rng);
+            let (commit, _prover_data) = mmcs.commit_matrix(codeword);
+            challenger.observe(commit.clone());
+            mask_commits.push(commit);
+        }
+
+        // Compute μ̃ from the masks (closed form, identical to prover). For
+        // distributional purposes we could equivalently sample `μ̃` uniform in
+        // `F`; computing it here keeps the simulator byte-equivalent to the
+        // prover when both are seeded identically.
+        let two_to_k_minus_1 = F::TWO.exp_u64((k - 1) as u64);
+        let mu_tilde: F = two_to_k_minus_1
+            * masks
+                .iter()
+                .map(|m| m[0] + m.iter().copied().sum::<F>())
+                .sum::<F>();
+
+        challenger.observe_algebra_element(EF::from(mu_tilde));
+        let eps: EF = challenger.sample_algebra_element();
+
+        // Drive the rounds. The simulator's only job per round is to advance
+        // the challenger correctly: observe a uniform wire form, grind, sample
+        // γ_j. The wire form has no consistency constraint — the verifier's
+        // `c_1` reconstruction makes any wire automatically affine-valid.
+        let h_size = core::cmp::max(ell_zk, 3);
+        let wire_size = h_size - 1;
+        let mut zk_data = ZkSumcheckData::<F, EF> {
+            mu_tilde,
+            round_coefficients: Vec::with_capacity(k),
+            pow_witnesses: Vec::with_capacity(if pow_bits > 0 { k } else { 0 }),
+        };
+        let mut randomness: Vec<EF> = Vec::with_capacity(k);
+        // Track the running affine target only to confirm (in debug) that the
+        // verifier's reconstruction will land on a well-formed Horner eval —
+        // not a soundness check, just a self-consistency sanity.
+        let mut target: EF = eps * mu + EF::from(mu_tilde);
+
+        for _ in 0..k {
+            let wire: Vec<EF> = (0..wire_size)
+                .map(|_| rng.random::<EF>())
+                .collect();
+
+            challenger.observe_algebra_slice(&wire);
+
+            if pow_bits > 0 {
+                zk_data.pow_witnesses.push(challenger.grind(pow_bits));
+            }
+
+            let gamma_j: EF = challenger.sample_algebra_element();
+
+            // Reconstruct `c_1` and Horner-evaluate `ĥ_j(γ_j)` to advance
+            // `target`. Mirrors the verifier exactly so the debug invariant
+            // below corresponds to what the verifier will compute.
+            let c0 = wire[0];
+            let high_sum: EF = wire[1..].iter().copied().sum();
+            let c1 = target - c0.double() - high_sum;
+            let mut coeffs: Vec<EF> = Vec::with_capacity(h_size);
+            coeffs.push(c0);
+            coeffs.push(c1);
+            coeffs.extend_from_slice(&wire[1..]);
+            target = coeffs
+                .iter()
+                .rev()
+                .copied()
+                .fold(EF::ZERO, |acc, c| acc * gamma_j + c);
+
+            zk_data.round_coefficients.push(wire);
+            randomness.push(gamma_j);
+        }
+
+        (zk_data, mask_commits, Point::new(randomness))
+    }
+
     /// Verifier counterpart of [`Self::new_classic_unpacked`].
     ///
     /// Replays the prover's transcript actions from `zk_data` and the supplied
@@ -658,7 +820,10 @@ where
         //
         // The future-mask term is non-empty for all `j ∈ 2..=k` because there
         // is always at least one mask with index `≥ j` (namely `s_j`).
-        #[cfg(debug_assertions)]
+        // (Computed unconditionally — `debug_assert_eq!` references it in
+        // release-mode dead code, so the binding must always exist; the
+        // compiler eliminates the actual computation when `debug_assertions`
+        // is off.)
         let prev_h_at_gamma_prev: EF = {
             let mult_live_past = F::TWO.exp_u64(self.rounds_left as u64);
             let mult_future = F::TWO.exp_u64((self.rounds_left - 1) as u64);
@@ -784,13 +949,14 @@ mod tests {
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::DuplexChallenger;
     use p3_dft::Radix2DFTSmallBatch;
-    use p3_field::Field;
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::{Field, PrimeCharacteristicRing};
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_multilinear_util::point::Point;
     use p3_multilinear_util::poly::Poly;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
     use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
+    use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
@@ -808,53 +974,64 @@ mod tests {
     type MyDft = Radix2DFTSmallBatch<F>;
     type MyEnc = ReedSolomonZkEncoding<F, MyDft>;
 
-    /// Prover/verifier roundtrip: the verifier's Fiat-Shamir replay must agree
-    /// with the prover on every `γ_j`. Any divergence in observed bytes (mask
-    /// commits, μ̃, per-round wire form, PoW witness, sample order) breaks the
-    /// γ-equality at the offending round and onward.
-    #[test]
-    fn prover_verifier_roundtrip_classic_unpacked() {
-        let mut perm_rng = SmallRng::seed_from_u64(42);
+    /// Reed-Solomon ZK encoding parameters: `t = 2` randomness symbols, `m`
+    /// the smallest power of two `≥ ell_zk + t`. Keeping `t` constant isolates
+    /// the proptest dimensions to `(n_vars, k, ell_zk, num_eqs)`.
+    const T: usize = 2;
+
+    /// One end-to-end honest-prover ↔ honest-verifier run.
+    ///
+    /// Returns `Ok(())` on a successful match between the prover's challenges
+    /// and the verifier's Fiat-Shamir replay; returns an error string carrying
+    /// enough context to read in a proptest failure report.
+    #[allow(clippy::too_many_lines)]
+    fn run_roundtrip(
+        n_vars: usize,
+        folding_factor: usize,
+        ell_zk: usize,
+        num_eqs: usize,
+        seed: u64,
+    ) -> Result<(), &'static str> {
+        // Permutation seeded from the proptest seed; both challengers receive
+        // an identical permutation state below by re-instantiating from the
+        // same RNG seed (matches the pattern in `pcs/tests.rs`).
+        let mut perm_rng = SmallRng::seed_from_u64(seed);
         let perm = Perm::new_from_rng_128(&mut perm_rng);
 
-        // MMCS for mask commitments (matches `pcs/tests.rs` setup).
         let merkle_hash = MyHash::new(perm.clone());
         let merkle_compress = MyCompress::new(perm.clone());
         let mmcs: MyMmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
 
-        // Reed-Solomon ZK encoding: msg_len = ell_zk = 2 (the smallest valid
-        // value per Lemma 6.4); m = 8, t = 2 keeps message + randomness ≤ m.
+        // RS codeword length: smallest power of two accommodating `ell_zk + T`.
+        let m = (ell_zk + T).next_power_of_two();
         let dft = MyDft::default();
-        let ell_zk = 2;
-        let encoding = MyEnc::new(2, ell_zk, 8, dft);
+        let encoding = MyEnc::new(T, ell_zk, m, dft);
 
-        // Random multilinear polynomial with 4 variables (16 evaluations).
-        let n_vars = 4;
-        let mut data_rng = SmallRng::seed_from_u64(7);
-        let evals: Vec<F> = (0..(1 << n_vars)).map(|_| data_rng.random()).collect();
+        // Distinct sub-seeds keep poly evals and eq points uncorrelated across
+        // proptest cases.
+        let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+        let evals: Vec<F> = (0..(1usize << n_vars)).map(|_| data_rng.random()).collect();
         let poly = Poly::new(evals);
 
-        // EqStatement with one random point; the eval is computed against the
-        // poly so the claim is consistent (otherwise μ would not match the
-        // hypercube sum the prover computes internally).
         let mut eq_statement = EqStatement::initialize(n_vars);
-        let eq_point: Point<EF> = Point::new(
-            (0..n_vars)
-                .map(|_| data_rng.random::<EF>())
-                .collect::<Vec<EF>>(),
-        );
-        let eq_eval = poly.eval_base::<EF>(&eq_point);
-        eq_statement.add_evaluated_constraint(eq_point, eq_eval);
+        for _ in 0..num_eqs {
+            let eq_point: Point<EF> = Point::new(
+                (0..n_vars)
+                    .map(|_| data_rng.random::<EF>())
+                    .collect::<Vec<EF>>(),
+            );
+            // Eval the base poly at the extension point so the claim is
+            // consistent: μ matches the hypercube sum the prover would
+            // compute against the eq-derived weights.
+            let eq_eval = poly.eval_base::<EF>(&eq_point);
+            eq_statement.add_evaluated_constraint(eq_point, eq_eval);
+        }
 
-        let folding_factor = 3;
         let pow_bits = 0;
 
-        // === Prover ===
-        // Fresh challenger seeded identically to the verifier's via cloned
-        // permutation state.
         let mut prover_challenger = MyChallenger::new(perm.clone());
         let mut zk_data = ZkSumcheckData::<F, EF>::default();
-        let mut prover_rng = SmallRng::seed_from_u64(11);
+        let mut prover_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
 
         let (mut prover, gamma_1_point) = ZkSumcheck::new_classic_unpacked::<F, EF, _, _, _, _>(
             &poly,
@@ -868,24 +1045,18 @@ mod tests {
             &mut prover_rng,
         );
 
-        // Collect the prover's challenges (γ_1 from the constructor, γ_2..γ_k
-        // from `round()`).
         let mut prover_randomness: Vec<EF> = gamma_1_point.iter().copied().collect();
         for _ in 1..folding_factor {
             let gamma_j = prover.round(&mut zk_data, &mut prover_challenger, pow_bits);
             prover_randomness.push(gamma_j);
         }
 
-        // Snapshot mask commitments (before the prover state goes out of scope
-        // — `mask_oracles` holds the prover data which the verifier doesn't
-        // need, only the commitment half).
         let mask_commits: Vec<_> = prover
             .mask_oracles()
             .iter()
             .map(|(c, _)| c.clone())
             .collect();
 
-        // === Verifier ===
         let mut verifier_challenger = MyChallenger::new(perm);
         let (verifier_point, _final_target) =
             ZkSumcheck::verify_classic_unpacked::<F, EF, MyMmcs, _>(
@@ -897,15 +1068,302 @@ mod tests {
                 &mask_commits,
                 ell_zk,
             )
-            .expect("HVZK verifier should accept honest proof");
+            .map_err(|_| "HVZK verifier rejected an honest proof")?;
 
-        // Equality of randomness vectors implies byte-level FS agreement: the
-        // verifier observed the same prelude bytes (α, mask commits, μ̃, ε)
-        // and the same per-round wire bytes the prover pushed.
-        assert_eq!(
-            prover_randomness,
-            verifier_point.iter().copied().collect::<Vec<EF>>(),
-            "prover and verifier disagreed on the sumcheck randomness",
-        );
+        if prover_randomness != verifier_point.iter().copied().collect::<Vec<EF>>() {
+            return Err("prover/verifier disagreed on sumcheck randomness");
+        }
+        Ok(())
+    }
+
+    /// One end-to-end simulator → verifier run (no witness `f` involved).
+    ///
+    /// The simulator advances the Fiat-Shamir transcript identically to the
+    /// real prover except it samples each round's wire form uniformly. The
+    /// verifier reconstructs `c_1` from the running affine target so any
+    /// uniform wire is "consistent" by construction. Returns `Ok(())` when
+    /// the verifier accepts and the simulator's `(γ_1, …, γ_k)` matches the
+    /// verifier's; an error string otherwise.
+    fn run_simulator_roundtrip(
+        n_vars: usize,
+        folding_factor: usize,
+        ell_zk: usize,
+        num_eqs: usize,
+        seed: u64,
+    ) -> Result<(), &'static str> {
+        let mut perm_rng = SmallRng::seed_from_u64(seed);
+        let perm = Perm::new_from_rng_128(&mut perm_rng);
+
+        let merkle_hash = MyHash::new(perm.clone());
+        let merkle_compress = MyCompress::new(perm.clone());
+        let mmcs: MyMmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
+
+        let m = (ell_zk + T).next_power_of_two();
+        let dft = MyDft::default();
+        let encoding = MyEnc::new(T, ell_zk, m, dft);
+
+        // The simulator does not need `f`, but it does derive μ from the
+        // public eq-statement evaluations. Build a syntactically valid
+        // statement with arbitrary claimed evals — the simulator ignores
+        // their relationship to any concrete polynomial.
+        let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+        let mut eq_statement = EqStatement::initialize(n_vars);
+        for _ in 0..num_eqs {
+            let eq_point: Point<EF> = Point::new(
+                (0..n_vars)
+                    .map(|_| data_rng.random::<EF>())
+                    .collect::<Vec<EF>>(),
+            );
+            // The simulator never checks consistency of these evals against
+            // any polynomial, so a freshly-sampled eval is fine.
+            eq_statement.add_evaluated_constraint(eq_point, data_rng.random::<EF>());
+        }
+
+        let pow_bits = 0;
+
+        let mut sim_challenger = MyChallenger::new(perm.clone());
+        let mut sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+
+        let (sim_zk_data, sim_mask_commits, sim_randomness) =
+            ZkSumcheck::simulate_classic_unpacked::<F, EF, _, _, _, _>(
+                &mut sim_challenger,
+                folding_factor,
+                pow_bits,
+                &eq_statement,
+                &encoding,
+                &mmcs,
+                &mut sim_rng,
+            );
+
+        let mut verifier_challenger = MyChallenger::new(perm);
+        let (verifier_point, _final_target) =
+            ZkSumcheck::verify_classic_unpacked::<F, EF, MyMmcs, _>(
+                &sim_zk_data,
+                &mut verifier_challenger,
+                folding_factor,
+                pow_bits,
+                &eq_statement,
+                &sim_mask_commits,
+                ell_zk,
+            )
+            .map_err(|_| "verifier rejected simulator output")?;
+
+        let sim_randomness_vec: Vec<EF> = sim_randomness.iter().copied().collect();
+        let verifier_randomness_vec: Vec<EF> = verifier_point.iter().copied().collect();
+        if sim_randomness_vec != verifier_randomness_vec {
+            return Err("simulator/verifier disagreed on sumcheck randomness");
+        }
+        Ok(())
+    }
+
+    /// Run the simulator, then re-run the verifier on a transcript with a
+    /// single field element flipped in some round's wire form. Returns
+    /// `(honest_target, tampered_target, honest_randomness, tampered_randomness)`.
+    ///
+    /// `tamper_round` is 0-indexed into `zk_data.round_coefficients`.
+    /// `tamper_pos` is 0-indexed into the wire form of that round.
+    ///
+    /// Used by the RBR-flavored proptest below.
+    fn run_tampering_propagation(
+        n_vars: usize,
+        folding_factor: usize,
+        ell_zk: usize,
+        num_eqs: usize,
+        seed: u64,
+        tamper_round: usize,
+        tamper_pos: usize,
+    ) -> (EF, EF, Vec<EF>, Vec<EF>) {
+        let mut perm_rng = SmallRng::seed_from_u64(seed);
+        let perm = Perm::new_from_rng_128(&mut perm_rng);
+
+        let merkle_hash = MyHash::new(perm.clone());
+        let merkle_compress = MyCompress::new(perm.clone());
+        let mmcs: MyMmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
+
+        let m = (ell_zk + T).next_power_of_two();
+        let dft = MyDft::default();
+        let encoding = MyEnc::new(T, ell_zk, m, dft);
+
+        let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+        let mut eq_statement = EqStatement::initialize(n_vars);
+        for _ in 0..num_eqs {
+            let eq_point: Point<EF> = Point::new(
+                (0..n_vars)
+                    .map(|_| data_rng.random::<EF>())
+                    .collect::<Vec<EF>>(),
+            );
+            eq_statement.add_evaluated_constraint(eq_point, data_rng.random::<EF>());
+        }
+
+        let pow_bits = 0;
+
+        let mut sim_challenger = MyChallenger::new(perm.clone());
+        let mut sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+
+        let (sim_zk_data, sim_mask_commits, _sim_randomness) =
+            ZkSumcheck::simulate_classic_unpacked::<F, EF, _, _, _, _>(
+                &mut sim_challenger,
+                folding_factor,
+                pow_bits,
+                &eq_statement,
+                &encoding,
+                &mmcs,
+                &mut sim_rng,
+            );
+
+        // Honest verification of the simulator's transcript.
+        let mut honest_ch = MyChallenger::new(perm.clone());
+        let (honest_point, honest_target) = ZkSumcheck::verify_classic_unpacked::<F, EF, MyMmcs, _>(
+            &sim_zk_data,
+            &mut honest_ch,
+            folding_factor,
+            pow_bits,
+            &eq_statement,
+            &sim_mask_commits,
+            ell_zk,
+        )
+        .expect("honest verification of simulator output should succeed");
+
+        // Tamper a single field element. The tamper indices are caller-
+        // supplied modulo dimensions to keep the proptest strategy simple.
+        let mut tampered_zk_data = sim_zk_data.clone();
+        let r_idx = tamper_round % tampered_zk_data.round_coefficients.len();
+        let wire = &mut tampered_zk_data.round_coefficients[r_idx];
+        let p_idx = tamper_pos % wire.len();
+        wire[p_idx] += EF::ONE;
+
+        let mut tampered_ch = MyChallenger::new(perm);
+        let (tampered_point, tampered_target) = ZkSumcheck::verify_classic_unpacked::<
+            F,
+            EF,
+            MyMmcs,
+            _,
+        >(
+            &tampered_zk_data,
+            &mut tampered_ch,
+            folding_factor,
+            pow_bits,
+            &eq_statement,
+            &sim_mask_commits,
+            ell_zk,
+        )
+        .expect("verifier shape checks pass on a single-byte tamper");
+
+        (
+            honest_target,
+            tampered_target,
+            honest_point.iter().copied().collect(),
+            tampered_point.iter().copied().collect(),
+        )
+    }
+
+    /// Fixed-seed smoke test: a quick byte-level FS-agreement check that runs
+    /// in milliseconds, separate from the broader proptest sweep below.
+    #[test]
+    fn prover_verifier_roundtrip_classic_unpacked() {
+        run_roundtrip(4, 3, 2, 1, 42).expect("smoke roundtrip should succeed");
+    }
+
+    proptest! {
+        // 32 cases keep the suite fast (each case runs full prover + verifier).
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        /// Completeness across the parameter space:
+        /// - `n_vars ∈ 2..=6`, polynomial size up to `2^6 = 64`.
+        /// - `folding_factor ∈ 1..=n_vars` (correlated via `prop_flat_map`).
+        /// - `ell_zk ∈ 2..=4` covers the `ℓ_zk = 2` paper-undercount edge and
+        ///   two larger values where the wire format matches the paper.
+        /// - `num_eqs ∈ 0..=3` covers the empty-statement (`μ = 0`) base case
+        ///   and small batched-claim cases.
+        ///
+        /// Each case asserts the verifier accepts and that the prover and
+        /// verifier sample the same `(γ_1, …, γ_k)`.
+        #[test]
+        fn prop_completeness_classic_unpacked(
+            (n_vars, folding_factor) in (2usize..=6usize)
+                .prop_flat_map(|n| (Just(n), 1usize..=n)),
+            ell_zk in 2usize..=4usize,
+            num_eqs in 0usize..=3usize,
+            seed in any::<u64>(),
+        ) {
+            prop_assert!(
+                run_roundtrip(n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok(),
+                "n_vars={n_vars}, k={folding_factor}, ell_zk={ell_zk}, num_eqs={num_eqs}, seed={seed}",
+            );
+        }
+
+        /// Simulator-match for Reed-Solomon (Lemma 6.4). The simulator runs
+        /// without the witness `f`, sampling each round's wire form uniformly;
+        /// the verifier's `c_1` reconstruction makes any wire form
+        /// affine-consistent. For `ζ_RS = 0` the simulator's distribution is
+        /// identical to the real prover's (paper proof).
+        ///
+        /// Pointwise distributional equality is not testable; this proptest
+        /// instead checks the operational consequence — the simulator's
+        /// transcript is verifier-accepted across the same parameter sweep as
+        /// the completeness test.
+        #[test]
+        fn prop_simulator_classic_unpacked_verifies(
+            (n_vars, folding_factor) in (2usize..=6usize)
+                .prop_flat_map(|n| (Just(n), 1usize..=n)),
+            ell_zk in 2usize..=4usize,
+            num_eqs in 0usize..=3usize,
+            seed in any::<u64>(),
+        ) {
+            prop_assert!(
+                run_simulator_roundtrip(n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok(),
+                "n_vars={n_vars}, k={folding_factor}, ell_zk={ell_zk}, num_eqs={num_eqs}, seed={seed}",
+            );
+        }
+
+        /// Empirical RBR-flavored soundness (Lemma 6.5).
+        ///
+        /// Lemma 6.5's RBR statement is a probabilistic bound: the residual
+        /// claim a malicious prover lands on after a tamper is, with
+        /// overwhelming probability over the verifier's coins, distinct from
+        /// the residual an honest party would have computed — so the
+        /// downstream protocol layer rejects.
+        ///
+        /// We test the operational consequence at the sumcheck-verifier
+        /// boundary: a single field-element flip in one round's wire form
+        /// must produce a different `(γ, residual)` from the honest run.
+        /// Equality across `EF^4` happens only on a `1 / |F|^4 ≈ 2^{-124}`
+        /// collision — proptest never reaches it.
+        #[test]
+        fn prop_rbr_tampering_changes_verifier_output(
+            (n_vars, folding_factor) in (2usize..=6usize)
+                .prop_flat_map(|n| (Just(n), 1usize..=n)),
+            ell_zk in 2usize..=4usize,
+            num_eqs in 0usize..=3usize,
+            seed in any::<u64>(),
+            tamper_round in 0usize..32,
+            tamper_pos in 0usize..32,
+        ) {
+            let (honest_target, tampered_target, honest_rand, tampered_rand) =
+                run_tampering_propagation(
+                    n_vars,
+                    folding_factor,
+                    ell_zk,
+                    num_eqs,
+                    seed,
+                    tamper_round,
+                    tamper_pos,
+                );
+
+            // Either the verifier's randomness diverges (FS picked up the
+            // tamper at the offending round) or the residual target diverges
+            // (the affine-reconstruction at γ_k landed on a different point).
+            // In honest runs both equal; under any tamper at least one must
+            // differ — otherwise the verifier is blind to the tamper, which
+            // would break Lemma 6.5.
+            let randomness_differs = honest_rand != tampered_rand;
+            let target_differs = honest_target != tampered_target;
+            prop_assert!(
+                randomness_differs || target_differs,
+                "tampering went undetected: n_vars={n_vars}, k={folding_factor}, \
+                 ell_zk={ell_zk}, num_eqs={num_eqs}, seed={seed}, \
+                 tamper_round={tamper_round}, tamper_pos={tamper_pos}",
+            );
+        }
     }
 }

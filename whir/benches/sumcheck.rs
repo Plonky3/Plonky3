@@ -1,14 +1,21 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
+use p3_dft::Radix2DFTSmallBatch;
+use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
+use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use p3_whir::constraints::statement::EqStatement;
 use p3_whir::constraints::statement::initial::InitialStatement;
 use p3_whir::parameters::SumcheckStrategy;
 use p3_whir::sumcheck::SumcheckData;
 use p3_whir::sumcheck::single::SingleSumcheck;
 use p3_whir::sumcheck::svo::SvoClaim;
+use p3_whir::sumcheck::zk::{ZkSumcheck, ZkSumcheckData};
+use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -16,6 +23,12 @@ type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
 type Perm = Poseidon2BabyBear<16>;
 type Challenger = DuplexChallenger<F, Perm, 16, 8>;
+type ZkHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+type ZkCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+type PackedF = <F as Field>::Packing;
+type ZkMmcs = MerkleTreeMmcs<PackedF, PackedF, ZkHash, ZkCompress, 2, 8>;
+type ZkDft = Radix2DFTSmallBatch<F>;
+type ZkEnc = ReedSolomonZkEncoding<F, ZkDft>;
 
 fn make_challenger() -> Challenger {
     let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(42));
@@ -117,5 +130,87 @@ fn bench_svo_claim_build(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_sumcheck_prover, bench_svo_claim_build);
+/// Compares the non-ZK prover (`SingleSumcheck::new_classic_unpacked`) against
+/// the HVZK prover (`ZkSumcheck::new_classic_unpacked` + `round()` for j=2..=k)
+/// at small input scale. The full acceptance criterion (`≤ 1.05× at 2^20 rows,
+/// k=4, λ=100`) targets the SIMD-packed path; this scalar harness ships with
+/// `n_vars = 14, k = 4, ℓ_zk = 2` to keep CI fast and is the qualitative
+/// equivalent for the unpacked code path.
+fn bench_zk_overhead_classic_unpacked(c: &mut Criterion) {
+    let mut group = c.benchmark_group("whir/zk_sumcheck_prover");
+
+    let n_vars = 14;
+    let folding_factor = 4;
+    let ell_zk = 2;
+    let pow_bits = 0;
+
+    // Witness polynomial fixed across both benches so the inputs are identical
+    // up to the HVZK-specific bookkeeping.
+    let mut data_rng = SmallRng::seed_from_u64(0);
+    let evals: Vec<F> = (0..1usize << n_vars).map(|_| data_rng.random()).collect();
+    let poly = Poly::new(evals);
+
+    let mut eq_statement = EqStatement::initialize(n_vars);
+    let pt = Point::<EF>::rand(&mut data_rng, n_vars);
+    let pt_eval = poly.eval_base::<EF>(&pt);
+    eq_statement.add_evaluated_constraint(pt, pt_eval);
+
+    // HVZK setup: Reed-Solomon encoding + Poseidon2-Merkle MMCS. Built once
+    // and cloned per iteration so the bench measures protocol cost, not setup.
+    let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(0xfeed));
+    let merkle_hash = ZkHash::new(perm.clone());
+    let merkle_compress = ZkCompress::new(perm);
+    let mmcs: ZkMmcs = ZkMmcs::new(merkle_hash, merkle_compress, 0);
+
+    let dft = ZkDft::default();
+    let t: usize = 2;
+    let m = (ell_zk + t).next_power_of_two();
+    let encoding = ZkEnc::new(t, ell_zk, m, dft);
+
+    group.bench_with_input(BenchmarkId::new("plain", "k4"), &(), |b, ()| {
+        b.iter(|| {
+            let mut data = SumcheckData::<F, EF>::default();
+            let mut challenger = make_challenger();
+            SingleSumcheck::new_classic_unpacked::<_, F, EF>(
+                &poly,
+                &mut data,
+                &mut challenger,
+                folding_factor,
+                pow_bits,
+                &eq_statement,
+            )
+        });
+    });
+
+    group.bench_with_input(BenchmarkId::new("hvzk", "k4"), &(), |b, ()| {
+        b.iter(|| {
+            let mut data = ZkSumcheckData::<F, EF>::default();
+            let mut challenger = make_challenger();
+            let mut bench_rng = SmallRng::seed_from_u64(0);
+            let (mut prover, _) = ZkSumcheck::new_classic_unpacked::<F, EF, _, _, _, _>(
+                &poly,
+                &mut data,
+                &mut challenger,
+                folding_factor,
+                pow_bits,
+                &eq_statement,
+                &encoding,
+                &mmcs,
+                &mut bench_rng,
+            );
+            for _ in 1..folding_factor {
+                let _ = prover.round(&mut data, &mut challenger, pow_bits);
+            }
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_sumcheck_prover,
+    bench_svo_claim_build,
+    bench_zk_overhead_classic_unpacked
+);
 criterion_main!(benches);
