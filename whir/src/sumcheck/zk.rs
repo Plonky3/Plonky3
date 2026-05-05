@@ -125,6 +125,17 @@ impl<F: Field, EF> Default for ZkSumcheckData<F, EF> {
 /// constructors for each sumcheck strategy.
 pub struct ZkSumcheck;
 
+/// `(MMCS commitment, MMCS prover data)` for one encoded mask codeword.
+///
+/// Held by [`ZkSumcheckProver`] so downstream consumers (committed sumcheck
+/// relation, §2.4 / §5 of eprint 2026/391) can produce opening proofs for
+/// queries to the mask oracles. Bounds on the type parameters are inferred at
+/// each use site from the surrounding `where` clauses.
+type MaskOracle<F, Enc, M> = (
+    <M as Mmcs<F>>::Commitment,
+    <M as Mmcs<F>>::ProverData<<Enc as ZkEncoding<F>>::Codeword>,
+);
+
 /// Stateful prover for the HVZK sumcheck (Construction 6.3).
 ///
 /// Carries the plain-piece polynomial pair (`evals`, `weights`) and its running
@@ -165,7 +176,7 @@ where
     /// - The prover data is kept so downstream consumers (committed sumcheck
     ///   relation, §2.4 / §5 of the paper) can produce opening proofs for
     ///   queries to the mask oracles.
-    mask_oracles: Vec<(M::Commitment, M::ProverData<Enc::Codeword>)>,
+    mask_oracles: Vec<MaskOracle<F, Enc, M>>,
     /// Combination challenge `ε` sampled after `μ̃`; multiplies the plain
     /// piece in every round polynomial. Widened to the extension field for
     /// soundness margin (the paper writes `ε ← F`).
@@ -279,7 +290,7 @@ impl ZkSumcheck {
         let masks: Vec<Vec<F>> = (0..k)
             .map(|_| (0..ell_zk).map(|_| rng.random()).collect())
             .collect();
-        let mask_oracles: Vec<(M::Commitment, M::ProverData<Enc::Codeword>)> = masks
+        let mask_oracles: Vec<MaskOracle<F, Enc, M>> = masks
             .iter()
             .map(|mask| {
                 let codeword = encoding.encode(mask, rng);
@@ -378,9 +389,7 @@ impl ZkSumcheck {
         // reconstructs c_1 from the affine consistency check above.
         let mut h1_wire: Vec<EF> = Vec::with_capacity(h1_size - 1);
         h1_wire.push(h1[0]);
-        for i in 2..h1_size {
-            h1_wire.push(h1[i]);
-        }
+        h1_wire.extend_from_slice(&h1[2..]);
 
         challenger.observe_algebra_slice(&h1_wire);
         zk_data.round_coefficients.push(h1_wire);
@@ -880,9 +889,7 @@ where
         // reconstructs c_1 from the affine consistency check above.
         let mut h_wire: Vec<EF> = Vec::with_capacity(h_size - 1);
         h_wire.push(h[0]);
-        for i in 2..h_size {
-            h_wire.push(h[i]);
-        }
+        h_wire.extend_from_slice(&h[2..]);
 
         challenger.observe_algebra_slice(&h_wire);
         zk_data.round_coefficients.push(h_wire);
@@ -929,7 +936,7 @@ where
     /// Returns `(MMCS commitment, prover data)` per mask. Callers produce
     /// opening proofs by passing the prover data back into the same MMCS
     /// instance.
-    pub fn mask_oracles(&self) -> &[(M::Commitment, M::ProverData<Enc::Codeword>)] {
+    pub fn mask_oracles(&self) -> &[MaskOracle<F, Enc, M>] {
         &self.mask_oracles
     }
 }
