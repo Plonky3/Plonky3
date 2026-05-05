@@ -42,17 +42,40 @@ fn batch_multiplicative_inverse_helper<F: Field>(x: &[F], result: &mut [F]) {
 
     let n = x.len();
     assert_eq!(result.len(), n);
-    if !n.is_multiple_of(WIDTH) {
-        // There isn't a very clean way to do this with FieldArray; for now just do it in serial.
-        // Another simple (though suboptimal) workaround would be to make two separate calls, one
-        // for the packed part and one for the remainder.
-        return batch_multiplicative_inverse_general(x, result, |x| x.inverse());
+
+    let tail_len = n % WIDTH;
+
+    // Fast path: input is WIDTH-aligned. Single packed Montgomery pass, identical
+    // shape to the previous implementation for this case.
+    if tail_len == 0 {
+        if n == 0 {
+            return;
+        }
+        let x_packed = FieldArray::<F, WIDTH>::pack_slice(x);
+        let result_packed = FieldArray::<F, WIDTH>::pack_slice_mut(result);
+        batch_multiplicative_inverse_general(x_packed, result_packed, |x_packed| {
+            x_packed.inverse()
+        });
+        return;
     }
 
-    let x_packed = FieldArray::<F, 4>::pack_slice(x);
-    let result_packed = FieldArray::<F, 4>::pack_slice_mut(result);
+    // Mixed path: process the largest WIDTH-aligned prefix with packed Montgomery
+    // (4-lane ILP), then handle the 1..WIDTH-element tail with a scalar Montgomery
+    // pass. Montgomery's trick is self-contained per chunk, so independent
+    // prefix/tail passes produce the same inverses as a single contiguous pass.
+    let main_len = n - tail_len;
+    let (x_main, x_tail) = x.split_at(main_len);
+    let (result_main, result_tail) = result.split_at_mut(main_len);
 
-    batch_multiplicative_inverse_general(x_packed, result_packed, |x_packed| x_packed.inverse());
+    if !x_main.is_empty() {
+        let x_packed = FieldArray::<F, WIDTH>::pack_slice(x_main);
+        let result_packed = FieldArray::<F, WIDTH>::pack_slice_mut(result_main);
+        batch_multiplicative_inverse_general(x_packed, result_packed, |x_packed| {
+            x_packed.inverse()
+        });
+    }
+
+    batch_multiplicative_inverse_general(x_tail, result_tail, |x| x.inverse());
 }
 
 /// A simple single-threaded implementation of Montgomery's trick. Since not all `PrimeCharacteristicRing`s
