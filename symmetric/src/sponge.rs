@@ -1,7 +1,7 @@
 use alloc::string::String;
-use itertools::Itertools;
 use core::marker::PhantomData;
 
+use itertools::Itertools;
 use p3_field::{
     PrimeField, PrimeField32, SpongePaddingValue, absorb_radix_bits,
     max_shifted_absorb_injective_limbs, reduce_packed_shifted,

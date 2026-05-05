@@ -2,9 +2,9 @@ mod helpers {
     use p3_baby_bear::BabyBear;
     use p3_field::{
         Field, PrimeCharacteristicRing, PrimeField, PrimeField32, absorb_radix_bits,
-        add_scaled_slice_in_place, dot_product, field_to_array, injective_pack_bits,
-        chunked_mixed_dot_product, dispatch_chunked_mixed_dot_product,
-        max_absorb_injective_limbs, max_packed_injective_limbs, max_shifted_absorb_injective_limbs,
+        add_scaled_slice_in_place, chunked_mixed_dot_product, dispatch_chunked_mixed_dot_product,
+        dot_product, field_to_array, injective_pack_bits, max_absorb_injective_limbs,
+        max_packed_injective_limbs, max_shifted_absorb_injective_limbs,
         max_shifted_packed_injective_limbs, par_add_scaled_slice_in_place,
         pf_packed_limbs_cover_order, reduce_32, reduce_packed, reduce_packed_shifted, split_32,
         split_pf_to_field_order_limbs, split_pf_to_packed_limbs, squeeze_field_order_num_limbs,
