@@ -22,6 +22,12 @@ impl<F, EF, Inner> FlatMatrixView<F, EF, Inner> {
     }
 }
 
+impl<F, EF, Inner: Clone> Clone for FlatMatrixView<F, EF, Inner> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
+
 impl<F, EF, Inner> Deref for FlatMatrixView<F, EF, Inner> {
     type Target = Inner;
 
