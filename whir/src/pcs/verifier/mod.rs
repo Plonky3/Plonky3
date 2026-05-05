@@ -236,11 +236,48 @@ where
         proof: &WhirProof<F, EF, MT>,
         challenger: &mut Challenger,
         initial_oracles: &[WhirBatchedInitialVerifierOracle<EF, MT::Commitment>],
-        mut statement: EqStatement<EF>,
+        statement: EqStatement<EF>,
     ) -> Result<Point<EF>, VerifierError>
     where
         Challenger: CanObserve<MT::Commitment>,
     {
+        let initial_select = SelectStatement::initialize(statement.num_variables());
+        self.verify_batched_initial_with_select(
+            proof,
+            challenger,
+            initial_oracles,
+            statement,
+            initial_select,
+        )
+    }
+
+    /// Verify a WHIR proof whose virtual initial oracle carries both
+    /// multilinear-message equality constraints and RS-codeword select
+    /// constraints.
+    ///
+    /// This is the verifier-side form of WHIR Construction 7.4 for relations
+    /// such as WARP: ordinary message claims use `EqStatement`, while
+    /// codeword-domain claims stay in `SelectStatement` and are checked by the
+    /// constrained-RS proximity protocol instead of a verifier-side RS adjoint.
+    #[instrument(skip_all)]
+    #[allow(clippy::too_many_lines)]
+    pub fn verify_batched_initial_with_select(
+        &self,
+        proof: &WhirProof<F, EF, MT>,
+        challenger: &mut Challenger,
+        initial_oracles: &[WhirBatchedInitialVerifierOracle<EF, MT::Commitment>],
+        mut statement: EqStatement<EF>,
+        initial_select: SelectStatement<F, EF>,
+    ) -> Result<Point<EF>, VerifierError>
+    where
+        Challenger: CanObserve<MT::Commitment>,
+    {
+        assert_eq!(
+            statement.num_variables(),
+            initial_select.num_variables(),
+            "initial WHIR eq/select arity mismatch"
+        );
+
         let mut constraints = Vec::new();
         let mut round_folding_randomness = Vec::new();
         let mut claimed_eval = EF::ZERO;
@@ -269,7 +306,7 @@ where
         let constraint = Constraint::new(
             challenger.sample_algebra_element(),
             statement,
-            SelectStatement::initialize(self.num_variables),
+            initial_select,
         );
         constraint.combine_evals(&mut claimed_eval);
         constraints.push(constraint);

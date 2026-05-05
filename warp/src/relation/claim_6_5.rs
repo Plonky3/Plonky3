@@ -21,7 +21,43 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::Field;
+use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue};
+
+/// Reusable buffers for the specialised Claim 6.5 kernels.
+///
+/// The hot WARP prover path invokes Claim 6.5 many times per accumulation
+/// step. Keeping the large intermediate coefficient tables here lets callers
+/// reuse allocations across `(round, i)` work items while preserving the same
+/// coefficient-level algorithm.
+pub struct Claim65Scratch<F, EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    pub(crate) scalar_current: Vec<EF>,
+    pub(crate) scalar_next: Vec<EF>,
+    pub(crate) packed_current: Vec<EF::ExtensionPacking>,
+    pub(crate) packed_next: Vec<EF::ExtensionPacking>,
+    pub(crate) lane_buf: Vec<EF>,
+    pub(crate) broadcast_buf: Vec<EF>,
+}
+
+impl<F, EF> Claim65Scratch<F, EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    pub const fn new() -> Self {
+        Self {
+            scalar_current: Vec::new(),
+            scalar_next: Vec::new(),
+            packed_current: Vec::new(),
+            packed_next: Vec::new(),
+            lane_buf: Vec::new(),
+            broadcast_buf: Vec::new(),
+        }
+    }
+}
 
 /// Recursive composition algorithm (WARP paper Claim 6.5, lines 2148–2190).
 ///
@@ -95,6 +131,94 @@ pub fn poly_lerp_via_linear<EF: Field>(q_lo: &[EF], q_hi: &[EF], c: [EF; 2]) -> 
         out[k + 1] += q_diff_k * c_linear;
     }
     out
+}
+
+#[inline]
+pub(crate) fn packed_ext_scalar_with_scratch<F, EF>(
+    value: EF,
+    broadcast_buf: &mut Vec<EF>,
+) -> EF::ExtensionPacking
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    broadcast_buf.clear();
+    broadcast_buf.resize(F::Packing::WIDTH, value);
+    <EF::ExtensionPacking as PackedFieldExtension<F, EF>>::from_ext_slice(broadcast_buf)
+}
+
+pub(crate) fn fold_claim_6_5_scalar_round<EF>(
+    current: &[EF],
+    width: usize,
+    len: usize,
+    c0: EF,
+    c1: EF,
+    next: &mut [EF],
+) where
+    EF: Field,
+{
+    debug_assert_eq!(current.len(), len * width);
+    debug_assert_eq!(next.len(), (len / 2) * (width + 1));
+    let half = len / 2;
+    let next_width = width + 1;
+    for b in 0..half {
+        let lo_base = b * width;
+        let hi_base = (b + half) * width;
+        let out_base = b * next_width;
+        for k in 0..width {
+            let lo = current[lo_base + k];
+            let diff = current[hi_base + k] - lo;
+            next[out_base + k] += lo + diff * c0;
+            next[out_base + k + 1] += diff * c1;
+        }
+    }
+}
+
+pub(crate) fn fold_claim_6_5_packed_round<F, EF>(
+    current: &[EF::ExtensionPacking],
+    width: usize,
+    len: usize,
+    c0: EF::ExtensionPacking,
+    c1: EF::ExtensionPacking,
+    next: &mut [EF::ExtensionPacking],
+) where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    debug_assert_eq!(current.len(), len * width);
+    debug_assert_eq!(next.len(), (len / 2) * (width + 1));
+    let half = len / 2;
+    let next_width = width + 1;
+    for b in 0..half {
+        let lo_base = b * width;
+        let hi_base = (b + half) * width;
+        let out_base = b * next_width;
+        for k in 0..width {
+            let lo = current[lo_base + k];
+            let diff = current[hi_base + k] - lo;
+            next[out_base + k] += lo + diff * c0;
+            next[out_base + k + 1] += diff * c1;
+        }
+    }
+}
+
+pub(crate) fn unpack_packed_coeffs_to_scalar<F, EF>(
+    packed: &[EF::ExtensionPacking],
+    width: usize,
+    out: &mut Vec<EF>,
+) where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    let pack_w = F::Packing::WIDTH;
+    debug_assert_eq!(packed.len(), width);
+    out.clear();
+    out.resize(pack_w * width, EF::ZERO);
+    for (coeff_idx, &coeff) in packed.iter().enumerate() {
+        for (lane, value) in EF::ExtensionPacking::to_ext_iter([coeff]).enumerate() {
+            out[lane * width + coeff_idx] = value;
+        }
+    }
 }
 
 #[cfg(test)]

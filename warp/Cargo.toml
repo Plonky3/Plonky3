@@ -11,9 +11,6 @@ categories.workspace = true
 
 [dependencies]
 itertools.workspace = true
-openvm-cpu-backend = { path = "../../stark-backend/crates/cpu-backend", default-features = false, optional = true }
-openvm-stark-backend = { path = "../../stark-backend/crates/stark-backend", default-features = false, optional = true }
-p3-air.workspace = true
 p3-challenger.workspace = true
 p3-commit.workspace = true
 p3-dft.workspace = true
@@ -31,20 +28,13 @@ tracing.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
-openvm-stark-sdk = { path = "../../stark-backend/crates/stark-sdk", default-features = false, features = ["cpu-backend"] }
 p3-baby-bear = { path = "../baby-bear" }
 postcard = { workspace = true, features = ["use-std"] }
 proptest.workspace = true
 rand.workspace = true
 
 [features]
-parallel = [
-    "p3-maybe-rayon/parallel",
-    "openvm-cpu-backend?/parallel",
-    "openvm-stark-backend?/parallel",
-    "openvm-stark-sdk/parallel",
-]
-stark-backend = ["dep:openvm-cpu-backend", "dep:openvm-stark-backend"]
+parallel = ["p3-maybe-rayon/parallel"]
 
 [[bench]]
 name = "sumcheck"

@@ -1665,7 +1665,9 @@ where
         for (oracle_id, _, _) in &inputs {
             challenger.observe(F::from_usize(*oracle_id));
         }
-        let (root, shared) = base_message_pcs.commit_base_batch_deferred(matrices, &mut challenger);
+        let encoded = base_message_pcs.encode_base_batch_initial_oracles(matrices);
+        let (root, shared) =
+            base_message_pcs.commit_base_batch_encoded_deferred(encoded, &mut challenger);
 
         let mut out = Vec::with_capacity(width);
         for (column, (oracle_id, _codeword, message)) in inputs.into_iter().enumerate() {
@@ -1726,10 +1728,10 @@ where
                     .compiler
                     .code()
                     .systematic_message_from_codeword(&codeword);
-                let (commitment, prover_data) = message_pcs.commit_extension_deferred(
-                    RowMajorMatrix::new(message.clone(), 1),
-                    &mut challenger,
-                );
+                let encoded = message_pcs
+                    .encode_extension_initial_oracle(RowMajorMatrix::new(message.clone(), 1));
+                let (commitment, prover_data) =
+                    message_pcs.commit_extension_encoded_deferred(encoded, &mut challenger);
                 return Ok((
                     RootIopBoundCommitment {
                         oracle_id,
@@ -3279,6 +3281,43 @@ where
         }
         value
     }
+
+    fn batched_weight_eval_from_message_eq_point<F, Dft>(
+        &self,
+        code: &ReedSolomonCode<F, Dft>,
+        message_point: &[EF],
+        gamma: EF,
+    ) -> Option<EF>
+    where
+        F: TwoAdicField,
+        Dft: TwoAdicSubgroupDft<F>,
+    {
+        let stride = 1 << code.log_inv_rate();
+        let mut scale = EF::ONE;
+        let mut value = EF::ZERO;
+        for constraint in &self.constraints {
+            let local = match &constraint.query {
+                NativeWarpCompactRootQuery::Index(index) => {
+                    if !index.is_multiple_of(stride) {
+                        return None;
+                    }
+                    eval_eq_at_hypercube_index(message_point, index / stride)
+                }
+                NativeWarpCompactRootQuery::Mle(point) => {
+                    let (prefix, suffix) = point.split_at(code.log_msg_len());
+                    if point.len() != code.log_codeword_len()
+                        || suffix.iter().any(|&coord| coord != EF::ZERO)
+                    {
+                        return None;
+                    }
+                    eval_eq_point(message_point, prefix)
+                }
+            };
+            value += scale * local;
+            scale *= gamma;
+        }
+        Some(value)
+    }
 }
 
 fn compact_batched_root_weights<F, EF, Dft>(
@@ -3571,20 +3610,25 @@ where
         return Err(LinearSigmaReductionError::FinalCheckFailed);
     }
 
-    let message_eq = Poly::<EF>::new_from_point(point.as_slice(), EF::ONE);
-    let encoded_message_eq = code.encode_algebra(message_eq.as_slice());
-    let encoded_message_eq_poly = Poly::new(encoded_message_eq.clone());
+    let mut encoded_message_eq = None;
+    let mut encoded_message_eq_poly = None;
     let coeffs = scales
         .iter()
         .zip(&gammas)
         .zip(statements)
         .map(|((&scale, &gamma), statement)| {
-            scale
-                * statement.batched_weight_eval_from_encoded_eq::<F>(
-                    &encoded_message_eq,
-                    &encoded_message_eq_poly,
-                    gamma,
-                )
+            let local = statement
+                .batched_weight_eval_from_message_eq_point::<F, Dft>(code, point.as_slice(), gamma)
+                .unwrap_or_else(|| {
+                    let encoded = encoded_message_eq.get_or_insert_with(|| {
+                        let message_eq = Poly::<EF>::new_from_point(point.as_slice(), EF::ONE);
+                        code.encode_algebra(message_eq.as_slice())
+                    });
+                    let poly =
+                        encoded_message_eq_poly.get_or_insert_with(|| Poly::new(encoded.clone()));
+                    statement.batched_weight_eval_from_encoded_eq::<F>(encoded, poly, gamma)
+                });
+            scale * local
         })
         .collect::<Vec<_>>();
 
@@ -3626,6 +3670,29 @@ fn observe_native_root_commitment<F, Challenger, Comm>(
     commitment
         .commitment
         .observe_payload_into::<F, _>(challenger);
+}
+
+fn eval_eq_point<EF: Field>(lhs: &[EF], rhs: &[EF]) -> EF {
+    debug_assert_eq!(lhs.len(), rhs.len());
+    lhs.iter()
+        .zip(rhs)
+        .map(|(&l, &r)| l * r + (EF::ONE - l) * (EF::ONE - r))
+        .product()
+}
+
+fn eval_eq_at_hypercube_index<EF: Field>(point: &[EF], index: usize) -> EF {
+    let num_variables = point.len();
+    point
+        .iter()
+        .enumerate()
+        .map(|(bit, &coord)| {
+            if (index >> (num_variables - 1 - bit)) & 1 == 1 {
+                coord
+            } else {
+                EF::ONE - coord
+            }
+        })
+        .product()
 }
 
 /// Build claims from parallel point/value lists.

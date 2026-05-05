@@ -25,7 +25,7 @@ use super::verifier::{WhirBatchedInitialVerifierOracle, WhirVerifier};
 use crate::constraints::statement::initial::InitialStatement;
 use crate::constraints::statement::{
     EqStatement, LinearSigmaOpeningClaim, LinearSigmaReductionError, LinearSigmaReductionProof,
-    LinearSigmaStatement,
+    LinearSigmaStatement, SelectStatement,
 };
 use crate::fiat_shamir::domain_separator::DomainSeparator;
 use crate::parameters::{ProtocolParameters, SumcheckStrategy, WhirConfig};
@@ -164,6 +164,62 @@ where
             ood_statement: self.ood_statement.clone(),
             proof: self.proof.clone(),
         }
+    }
+}
+
+/// A base-field initial WHIR oracle after applying WHIR's Reed-Solomon
+/// encoding layout.
+///
+/// This object is intentionally opaque: it carries both the original
+/// multilinear message polynomial and the encoded initial oracle matrix, and it
+/// can only be constructed by [`WhirPcs`]. Consumers pass it back to WHIR
+/// commitment methods to guarantee that the committed oracle is the exact RS
+/// encoding of the polynomial used by the WHIR sumcheck statement.
+pub struct WhirEncodedBaseOracle<F>
+where
+    F: Field,
+{
+    poly: Poly<F>,
+    matrix: DenseMatrix<F>,
+}
+
+impl<F> WhirEncodedBaseOracle<F>
+where
+    F: Field,
+{
+    /// The original Boolean-hypercube evaluations before WHIR encoding.
+    pub fn message_evaluations(&self) -> &[F] {
+        self.poly.as_slice()
+    }
+
+    /// The initial Reed-Solomon oracle matrix committed by WHIR.
+    pub fn encoded_matrix(&self) -> &DenseMatrix<F> {
+        &self.matrix
+    }
+}
+
+/// An extension-field initial WHIR oracle after applying WHIR's Reed-Solomon
+/// encoding layout.
+pub struct WhirEncodedExtensionOracle<EF>
+where
+    EF: Field,
+{
+    poly: Poly<EF>,
+    matrix: DenseMatrix<EF>,
+}
+
+impl<EF> WhirEncodedExtensionOracle<EF>
+where
+    EF: Field,
+{
+    /// The original Boolean-hypercube evaluations before WHIR encoding.
+    pub fn message_evaluations(&self) -> &[EF] {
+        self.poly.as_slice()
+    }
+
+    /// The initial Reed-Solomon oracle matrix committed by WHIR.
+    pub fn encoded_matrix(&self) -> &DenseMatrix<EF> {
+        &self.matrix
     }
 }
 
@@ -375,6 +431,121 @@ where
         ds
     }
 
+    /// Encode a base-field multilinear message into WHIR's initial
+    /// Reed-Solomon oracle matrix without committing it.
+    ///
+    /// This exposes the exact RS layout used by WHIR's commitment phase:
+    /// split off the variables folded in round 0 as row entries, transpose the
+    /// remaining variables into the DFT domain, zero-pad to the starting rate,
+    /// then apply the configured DFT backend. The returned opaque object keeps
+    /// the message polynomial and encoded matrix together so later commitment
+    /// cannot accidentally mix different representations.
+    pub fn encode_base_initial_oracle(
+        &self,
+        evaluations: RowMajorMatrix<F>,
+    ) -> WhirEncodedBaseOracle<F>
+    where
+        Dft: TwoAdicSubgroupDft<F>,
+    {
+        assert_eq!(
+            evaluations.width(),
+            1,
+            "WHIR currently supports committing a single polynomial",
+        );
+        assert_eq!(
+            evaluations.height(),
+            1 << self.config.num_variables,
+            "evaluation vector length must be 2^num_variables",
+        );
+
+        let poly = Poly::new(evaluations.values);
+        let matrix = self.encode_base_initial_poly(&poly);
+        WhirEncodedBaseOracle { poly, matrix }
+    }
+
+    /// Encode several base-field messages using the same WHIR RS layout.
+    pub fn encode_base_batch_initial_oracles(
+        &self,
+        evaluations: Vec<RowMajorMatrix<F>>,
+    ) -> Vec<WhirEncodedBaseOracle<F>>
+    where
+        Dft: TwoAdicSubgroupDft<F>,
+    {
+        evaluations
+            .into_iter()
+            .map(|evaluations| self.encode_base_initial_oracle(evaluations))
+            .collect()
+    }
+
+    /// Encode an extension-field multilinear message into WHIR's initial
+    /// Reed-Solomon oracle matrix without committing it.
+    pub fn encode_extension_initial_oracle(
+        &self,
+        evaluations: RowMajorMatrix<EF>,
+    ) -> WhirEncodedExtensionOracle<EF>
+    where
+        Dft: TwoAdicSubgroupDft<F>,
+    {
+        assert_eq!(
+            evaluations.width(),
+            1,
+            "WHIR currently supports committing a single polynomial",
+        );
+        assert_eq!(
+            evaluations.height(),
+            1 << self.config.num_variables,
+            "evaluation vector length must be 2^num_variables",
+        );
+
+        let poly = Poly::new(evaluations.values);
+        let matrix = self.encode_extension_initial_poly(&poly);
+        WhirEncodedExtensionOracle { poly, matrix }
+    }
+
+    fn encode_base_initial_poly(&self, poly: &Poly<F>) -> DenseMatrix<F>
+    where
+        Dft: TwoAdicSubgroupDft<F>,
+    {
+        let num_vars = poly.num_variables();
+        assert_eq!(
+            num_vars, self.config.num_variables,
+            "WHIR initial oracle arity mismatch"
+        );
+        let mut padded = RowMajorMatrixView::new(
+            poly.as_slice(),
+            1 << (num_vars - self.config.folding_factor.at_round(0)),
+        )
+        .transpose();
+        padded.pad_to_height(
+            1 << (num_vars + self.config.starting_log_inv_rate
+                - self.config.folding_factor.at_round(0)),
+            F::ZERO,
+        );
+        self.dft.dft_batch(padded).to_row_major_matrix()
+    }
+
+    fn encode_extension_initial_poly(&self, poly: &Poly<EF>) -> DenseMatrix<EF>
+    where
+        Dft: TwoAdicSubgroupDft<F>,
+    {
+        let num_vars = poly.num_variables();
+        assert_eq!(
+            num_vars, self.config.num_variables,
+            "WHIR initial oracle arity mismatch"
+        );
+        let mut padded = RowMajorMatrixView::new(
+            poly.as_slice(),
+            1 << (num_vars - self.config.folding_factor.at_round(0)),
+        )
+        .transpose();
+        padded.pad_to_height(
+            1 << (num_vars + self.config.starting_log_inv_rate
+                - self.config.folding_factor.at_round(0)),
+            EF::ZERO,
+        );
+        self.dft.dft_algebra_batch(padded).to_row_major_matrix()
+    }
+
     /// Commit to a polynomial before its user opening points are known.
     ///
     /// This runs the same initial WHIR commitment phase as
@@ -394,19 +565,27 @@ where
         Challenger: CanObserve<MT::Commitment> + Clone,
         Dft: TwoAdicSubgroupDft<F>,
     {
-        assert_eq!(
-            evaluations.width(),
-            1,
-            "WHIR currently supports committing a single polynomial",
-        );
-        assert_eq!(
-            evaluations.height(),
-            1 << self.config.num_variables,
-            "evaluation vector length must be 2^num_variables",
-        );
+        let encoded = self.encode_base_initial_oracle(evaluations);
+        self.commit_encoded_deferred(encoded, challenger)
+    }
 
-        let poly = Poly::new(evaluations.values);
-        let mut statement = self.config.initial_statement(poly, self.sumcheck_strategy);
+    /// Commit a base-field initial oracle that was already encoded through
+    /// [`Self::encode_base_initial_oracle`].
+    pub fn commit_encoded_deferred(
+        &self,
+        encoded: WhirEncodedBaseOracle<F>,
+        challenger: &mut Challenger,
+    ) -> (
+        MT::Commitment,
+        WhirDeferredProverData<F, EF, MT, DIGEST_ELEMS>,
+    )
+    where
+        MT::Commitment: Clone,
+        Challenger: CanObserve<MT::Commitment> + Clone,
+    {
+        let mut statement = self
+            .config
+            .initial_statement(encoded.poly, self.sumcheck_strategy);
 
         let ds = self.build_domain_separator();
         ds.observe_domain_separator(challenger);
@@ -414,15 +593,19 @@ where
         let mut proof =
             WhirProof::from_protocol_parameters(&self.protocol_params, self.config.num_variables);
 
-        let committer = CommitmentWriter::new(&self.config);
-        let merkle_data = committer
-            .commit(&self.dft, &mut proof, challenger, &mut statement)
-            .expect("commitment phase failed");
+        let (commitment, merkle_data) = self.config.mmcs.commit_matrix(encoded.matrix);
+        proof.initial_commitment = Some(commitment.clone());
+        challenger.observe(commitment.clone());
 
-        let commitment = proof
-            .initial_commitment
-            .clone()
-            .expect("commitment should be set after commit phase");
+        for _ in 0..self.config.commitment_ood_samples {
+            let point = Point::expand_from_univariate(
+                challenger.sample_algebra_element(),
+                self.config.num_variables,
+            );
+            let eval = statement.evaluate(&point);
+            proof.initial_ood_answers.push(eval);
+            challenger.observe_algebra_element(eval);
+        }
 
         (
             commitment,
@@ -456,40 +639,34 @@ where
         Challenger: CanObserve<MT::Commitment> + Clone,
         Dft: TwoAdicSubgroupDft<F>,
     {
+        let encoded = self.encode_base_batch_initial_oracles(evaluations);
+        self.commit_base_batch_encoded_deferred(encoded, _challenger)
+    }
+
+    /// Commit several base-field initial polynomials that were already encoded
+    /// through [`Self::encode_base_batch_initial_oracles`].
+    pub fn commit_base_batch_encoded_deferred(
+        &self,
+        encoded: Vec<WhirEncodedBaseOracle<F>>,
+        _challenger: &mut Challenger,
+    ) -> (
+        MT::Commitment,
+        Arc<WhirSharedBaseDeferredProverData<F, EF, MT, DIGEST_ELEMS>>,
+    )
+    where
+        MT::Commitment: Clone,
+        Challenger: CanObserve<MT::Commitment> + Clone,
+    {
         assert!(
-            !evaluations.is_empty(),
+            !encoded.is_empty(),
             "shared WHIR commitment requires at least one polynomial",
         );
 
-        let mut polys = Vec::with_capacity(evaluations.len());
-        let mut folded_matrices = Vec::with_capacity(evaluations.len());
-        for evaluations in evaluations {
-            assert_eq!(
-                evaluations.width(),
-                1,
-                "shared WHIR currently supports single-column polynomials",
-            );
-            assert_eq!(
-                evaluations.height(),
-                1 << self.config.num_variables,
-                "evaluation vector length must be 2^num_variables",
-            );
-
-            let poly = Poly::new(evaluations.values);
-            let num_vars = poly.num_variables();
-            let mut padded = RowMajorMatrixView::new(
-                poly.as_slice(),
-                1 << (num_vars - self.config.folding_factor.at_round(0)),
-            )
-            .transpose();
-            padded.pad_to_height(
-                1 << (num_vars + self.config.starting_log_inv_rate
-                    - self.config.folding_factor.at_round(0)),
-                F::ZERO,
-            );
-            let folded_matrix = self.dft.dft_batch(padded).to_row_major_matrix();
-            polys.push(poly);
-            folded_matrices.push(folded_matrix);
+        let mut polys = Vec::with_capacity(encoded.len());
+        let mut folded_matrices = Vec::with_capacity(encoded.len());
+        for encoded in encoded {
+            polys.push(encoded.poly);
+            folded_matrices.push(encoded.matrix);
         }
 
         let (commitment, merkle_data) = self.config.mmcs.commit(folded_matrices);
@@ -525,41 +702,33 @@ where
         Challenger: CanObserve<MT::Commitment> + Clone,
         Dft: TwoAdicSubgroupDft<F>,
     {
-        assert_eq!(
-            evaluations.width(),
-            1,
-            "WHIR currently supports committing a single polynomial",
-        );
-        assert_eq!(
-            evaluations.height(),
-            1 << self.config.num_variables,
-            "evaluation vector length must be 2^num_variables",
-        );
+        let encoded = self.encode_extension_initial_oracle(evaluations);
+        self.commit_extension_encoded_deferred(encoded, challenger)
+    }
 
-        let poly = Poly::new(evaluations.values);
+    /// Commit an extension-field initial oracle that was already encoded
+    /// through [`Self::encode_extension_initial_oracle`].
+    pub fn commit_extension_encoded_deferred(
+        &self,
+        encoded: WhirEncodedExtensionOracle<EF>,
+        challenger: &mut Challenger,
+    ) -> (
+        MT::Commitment,
+        WhirExtensionDeferredProverData<F, EF, MT, DIGEST_ELEMS>,
+    )
+    where
+        MT::Commitment: Clone,
+        Challenger: CanObserve<MT::Commitment> + Clone,
+    {
+        let poly = encoded.poly;
         let ds = self.build_domain_separator();
         ds.observe_domain_separator(challenger);
 
         let mut proof =
             WhirProof::from_protocol_parameters(&self.protocol_params, self.config.num_variables);
 
-        let padded = {
-            let num_vars = poly.num_variables();
-            let mut mat = p3_matrix::dense::RowMajorMatrixView::new(
-                poly.as_slice(),
-                1 << (num_vars - self.config.folding_factor.at_round(0)),
-            )
-            .transpose();
-            mat.pad_to_height(
-                1 << (num_vars + self.config.starting_log_inv_rate
-                    - self.config.folding_factor.at_round(0)),
-                EF::ZERO,
-            );
-            mat
-        };
-        let folded_matrix = self.dft.dft_algebra_batch(padded).to_row_major_matrix();
         let extension_mmcs = ExtensionMmcs::new(self.config.mmcs.clone());
-        let (commitment, merkle_data) = extension_mmcs.commit_matrix(folded_matrix);
+        let (commitment, merkle_data) = extension_mmcs.commit_matrix(encoded.matrix);
 
         proof.initial_commitment = Some(commitment.clone());
         challenger.observe(commitment.clone());
@@ -729,8 +898,42 @@ where
         Challenger: CanObserve<MT::Commitment>,
         Dft: TwoAdicSubgroupDft<F>,
     {
+        let initial_select = SelectStatement::initialize(self.config.num_variables);
+        self.open_grouped_batched_deferred_with_initial_select(
+            oracles,
+            opening_point,
+            opening_value,
+            &initial_select,
+            challenger,
+        )
+    }
+
+    /// Prove one opening of a virtual initial oracle with extra constrained-RS
+    /// select claims on that same virtual oracle.
+    ///
+    /// This is the WHIR-native shape used by WARP when RS-codeword claims
+    /// should remain constrained-RS obligations instead of being lowered to a
+    /// verifier-side dense message-domain linear form.
+    pub fn open_grouped_batched_deferred_with_initial_select(
+        &self,
+        oracles: Vec<WhirBatchedDeferredProverOracle<F, EF, MT, DIGEST_ELEMS>>,
+        opening_point: Point<EF>,
+        opening_value: EF,
+        initial_select: &SelectStatement<F, EF>,
+        challenger: &mut Challenger,
+    ) -> Result<WhirProof<F, EF, MT>, LinearSigmaReductionError>
+    where
+        Challenger: CanObserve<MT::Commitment>,
+        Dft: TwoAdicSubgroupDft<F>,
+    {
         if oracles.is_empty() {
             return Err(LinearSigmaReductionError::EmptyStatement);
+        }
+        if initial_select.num_variables() != self.config.num_variables {
+            return Err(LinearSigmaReductionError::ArityMismatch {
+                expected: self.config.num_variables,
+                actual: initial_select.num_variables(),
+            });
         }
 
         let ds = self.build_domain_separator();
@@ -837,12 +1040,13 @@ where
 
         let prover = WhirProver(&self.config);
         prover
-            .prove_batched_initial(
+            .prove_batched_initial_with_select(
                 &self.dft,
                 &mut proof,
                 challenger,
                 &virtual_poly,
                 &statement,
+                initial_select,
                 prover_data,
             )
             .expect("batched WHIR proving phase failed");
@@ -981,6 +1185,32 @@ where
         Challenger: CanObserve<MT::Commitment>,
         Dft: TwoAdicSubgroupDft<F>,
     {
+        let initial_select = SelectStatement::initialize(self.config.num_variables);
+        self.verify_batched_deferred_with_initial_select(
+            oracles,
+            opening_point,
+            opening_value,
+            initial_select,
+            proof,
+            challenger,
+        )
+    }
+
+    /// Verify a virtual initial-oracle opening with extra constrained-RS select
+    /// claims on that same virtual oracle.
+    pub fn verify_batched_deferred_with_initial_select(
+        &self,
+        oracles: &[WhirBatchedDeferredVerifierOracle<EF, MT::Commitment>],
+        opening_point: Point<EF>,
+        opening_value: EF,
+        initial_select: SelectStatement<F, EF>,
+        proof: &WhirProof<F, EF, MT>,
+        challenger: &mut Challenger,
+    ) -> Result<(), VerifierError>
+    where
+        Challenger: CanObserve<MT::Commitment>,
+        Dft: TwoAdicSubgroupDft<F>,
+    {
         let ds = self.build_domain_separator();
         ds.observe_domain_separator(challenger);
 
@@ -1012,7 +1242,13 @@ where
         statement.add_evaluated_constraint(opening_point, opening_value);
 
         let verifier = WhirVerifier::new(&self.config);
-        verifier.verify_batched_initial(proof, challenger, &initial_oracles, statement)?;
+        verifier.verify_batched_initial_with_select(
+            proof,
+            challenger,
+            &initial_oracles,
+            statement,
+            initial_select,
+        )?;
 
         Ok(())
     }

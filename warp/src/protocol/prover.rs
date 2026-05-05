@@ -27,8 +27,9 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{
     ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, TwoAdicField,
 };
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
+use p3_multilinear_util::eq_batch::eval_eq_batch;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use tracing::instrument;
@@ -38,7 +39,11 @@ use crate::accumulator::{
     WarpProofExternal, WarpProofExternalBatched,
 };
 use crate::code::ReedSolomonCode;
-use crate::relation::{BundledPesat, lagrange_interpolate_int_points};
+use crate::relation::claim_6_5::{
+    fold_claim_6_5_packed_round, fold_claim_6_5_scalar_round, packed_ext_scalar_with_scratch,
+    unpack_packed_coeffs_to_scalar,
+};
+use crate::relation::{BundledPesat, Claim65Scratch, lagrange_interpolate_int_points};
 use crate::sumcheck::{SumcheckProof, observe_and_sample};
 use crate::transcript::{bind_protocol, sample_indices};
 
@@ -48,6 +53,10 @@ use super::{
     ExternalCodewordBatchOpeningProver, ExternalCodewordOpeningProver, ExternalCommitmentObserver,
     ExternalCommittedCodeword,
 };
+
+/// Match WHIR's sumcheck split threshold: below this, Rayon overhead usually
+/// dominates; above it, large linear folds benefit from parallel lanes.
+const PAR_THRESHOLD: usize = 1 << 14;
 
 /// WARP prover bound to a specific PESAT, RS code, and Mmcs.
 pub struct WarpProver<'a, F, EF, MT, Dft, Pesat>
@@ -423,13 +432,10 @@ where
         let xi_eq: Vec<EF> = xi_eq_full.as_slice()[..r].to_vec();
 
         // Build eq*(X) over {0,1}^{log n}: Σ_{j ∈ [r]} ξ_j · eq(ζ_j, X).
-        let mut eq_star = Poly::<EF>::zero(log_n);
-        for j in 0..r {
-            let scaled = Poly::<EF>::new_from_point(&zetas[j], xi_eq[j]);
-            for (acc_slot, &v) in eq_star.as_mut_slice().iter_mut().zip(scaled.iter()) {
-                *acc_slot += v;
-            }
-        }
+        // This is exactly the WARP §8.2 batching polynomial. Use Plonky3's
+        // batched equality kernel instead of materializing one equality table
+        // per ζ_j.
+        let eq_star = weighted_eq_poly::<F, EF>(&zetas[..r], &xi_eq, log_n);
         // σ⁽²⁾ = Σ_j ξ_j · ν_j.
         let sigma_2: EF = (0..r).map(|j| xi_eq[j] * nus[j]).sum();
 
@@ -995,13 +1001,7 @@ where
         let r = self.params.r();
         let xi_eq: Vec<EF> = xi_eq_full.as_slice()[..r].to_vec();
 
-        let mut eq_star = Poly::<EF>::zero(log_n);
-        for j in 0..r {
-            let scaled = Poly::<EF>::new_from_point(&zetas[j], xi_eq[j]);
-            for (acc_slot, &v) in eq_star.as_mut_slice().iter_mut().zip(scaled.iter()) {
-                *acc_slot += v;
-            }
-        }
+        let eq_star = weighted_eq_poly::<F, EF>(&zetas[..r], &xi_eq, log_n);
         let sigma_2: EF = (0..r).map(|j| xi_eq[j] * nus[j]).sum();
 
         let mut batching_proof = SumcheckProof::<EF>::new();
@@ -1407,13 +1407,7 @@ where
         let r = self.params.r();
         let xi_eq: Vec<EF> = xi_eq_full.as_slice()[..r].to_vec();
 
-        let mut eq_star = Poly::<EF>::zero(log_n);
-        for j in 0..r {
-            let scaled = Poly::<EF>::new_from_point(&zetas[j], xi_eq[j]);
-            for (acc_slot, &v) in eq_star.as_mut_slice().iter_mut().zip(scaled.iter()) {
-                *acc_slot += v;
-            }
-        }
+        let eq_star = weighted_eq_poly::<F, EF>(&zetas[..r], &xi_eq, log_n);
         let sigma_2: EF = (0..r).map(|j| xi_eq[j] * nus[j]).sum();
 
         let mut batching_proof = SumcheckProof::<EF>::new();
@@ -1590,104 +1584,170 @@ where
         let half = f_table.len() / 2;
         let n = f_table[0].len();
 
-        // Per-i contribution kernel — builds the i-th term of the round
-        // polynomial in coefficient form. Pure function (no shared state),
-        // so it parallelises trivially across `i`.
-        //
-        // Per-i work breakdown:
-        // - Codeword side: direct Claim 6.5 composition over linear q_b(X)
-        //   polynomials, with packed prefix folds.
-        // - Constraint side: one `bundled_round_poly` call (Lemma 6.4 /
-        //   Claim 6.5) — `O(M · d)` field ops.
-        // - Combine + multiply by linear `eq_τ(X)`.
-        let kernel = |i: usize| -> Vec<EF> {
-            let codeword_coeffs = codeword_claim_6_5_coeffs::<F, EF>(
-                &f_table[i],
-                &f_table[i + half],
-                &a_table[i],
-                &a_table[i + half],
-            );
-
-            let constraint_coeffs = self.pesat.bundled_round_poly(
-                &b_table[i],
-                &b_table[i + half],
-                &w_table[i],
-                &w_table[i + half],
-            );
-
-            // Build g_i(X) = û_i(X) + ω · pb_i(X), then multiply by linear
-            // eq_τ_i(X) = eq_lo + (eq_hi − eq_lo) · X. Accumulate into a
-            // local Vec sized to the round-poly length so the reduce step
-            // is a simple element-wise add.
-            let eq_lo = eq_table[i];
-            let eq_diff = eq_table[i + half] - eq_lo;
-            let g_len = codeword_coeffs.len().max(constraint_coeffs.len());
-            let mut local = vec![EF::ZERO; d1 + 1];
-            for k in 0..=g_len {
-                let g_k = {
-                    let mut v = EF::ZERO;
-                    if k < codeword_coeffs.len() {
-                        v += codeword_coeffs[k];
-                    }
-                    if k < constraint_coeffs.len() {
-                        v += omega * constraint_coeffs[k];
-                    }
-                    v
-                };
-                let g_k_minus_1 = if k == 0 {
-                    EF::ZERO
-                } else {
-                    let mut v = EF::ZERO;
-                    let km1 = k - 1;
-                    if km1 < codeword_coeffs.len() {
-                        v += codeword_coeffs[km1];
-                    }
-                    if km1 < constraint_coeffs.len() {
-                        v += omega * constraint_coeffs[km1];
-                    }
-                    v
-                };
-                local[k] += g_k * eq_lo + g_k_minus_1 * eq_diff;
-            }
-            local
-        };
-
         // Reduce the per-i local round-poly contributions into a single
-        // round polynomial via element-wise sum. Mirrors Plonky3 WHIR's
-        // `par_fold_reduce` pattern (`whir/src/sumcheck/strategy.rs:55-64`):
-        // parallel above the scalar-overhead threshold, sequential below.
+        // round polynomial via element-wise sum. The fold accumulator owns
+        // reusable Claim 6.5 work tables, so the hot path accumulates the
+        // codeword and constraint contributions directly into `acc` instead
+        // of allocating one round-polynomial Vec per paired row.
+        //
+        // Mirrors Plonky3 WHIR's `par_fold_reduce` pattern
+        // (`whir/src/sumcheck/strategy.rs:55-64`): parallel above the
+        // scalar-overhead threshold, sequential below.
         //
         // We parallelise across `i` (the bundling axis) instead of within a
         // single `i`'s inner work — each `i` is a coarse-grained task with
         // O(n + M·d) work, comfortably above the rayon split-overhead floor.
-        let acc_init = || vec![EF::ZERO; d1 + 1];
-        let acc_combine = |mut a: Vec<EF>, b: Vec<EF>| {
-            for (lhs, rhs) in a.iter_mut().zip(b.into_iter()) {
-                *lhs += rhs;
-            }
-            a
-        };
-
         // PAR_THRESHOLD chosen analogously to whir (`PAR_THRESHOLD = 1 << 14`):
         // each `i` does ~`(log n + 2) · (n / W) + M · d` field ops; we go
         // parallel once `half · per_i_work` clears ~2^14 effective ops, which
         // for our scales (`n ≥ 1024`) means `half ≥ 2` is already worth it.
         if half >= 2 && n >= 1024 {
-            (0..half).into_par_iter().map(kernel).par_fold_reduce(
-                acc_init,
-                acc_combine,
-                |mut a, b| {
-                    for (lhs, rhs) in a.iter_mut().zip(b.into_iter()) {
-                        *lhs += rhs;
-                    }
-                    a
-                },
-            )
-        } else {
             (0..half)
-                .map(kernel)
-                .fold(acc_init(), |acc, b| acc_combine(acc, b))
+                .into_par_iter()
+                .par_fold_reduce(
+                    || TwinRoundScratch::<F, EF>::new(d1),
+                    |mut scratch, i| {
+                        add_twin_round_contribution::<F, EF, Pesat>(
+                            self.pesat,
+                            d1,
+                            i,
+                            half,
+                            f_table,
+                            w_table,
+                            a_table,
+                            b_table,
+                            eq_table,
+                            omega,
+                            &mut scratch,
+                        );
+                        scratch
+                    },
+                    |mut a, b| {
+                        for (lhs, rhs) in a.acc.iter_mut().zip(b.acc.into_iter()) {
+                            *lhs += rhs;
+                        }
+                        a
+                    },
+                )
+                .acc
+        } else {
+            let mut scratch = TwinRoundScratch::<F, EF>::new(d1);
+            for i in 0..half {
+                add_twin_round_contribution::<F, EF, Pesat>(
+                    self.pesat,
+                    d1,
+                    i,
+                    half,
+                    f_table,
+                    w_table,
+                    a_table,
+                    b_table,
+                    eq_table,
+                    omega,
+                    &mut scratch,
+                );
+            }
+            scratch.acc
         }
+    }
+}
+
+struct TwinRoundScratch<F, EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    codeword: Claim65Scratch<F, EF>,
+    constraint: Claim65Scratch<F, EF>,
+    codeword_coeffs: Vec<EF>,
+    constraint_coeffs: Vec<EF>,
+    acc: Vec<EF>,
+}
+
+impl<F, EF> TwinRoundScratch<F, EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    fn new(degree: usize) -> Self {
+        Self {
+            codeword: Claim65Scratch::new(),
+            constraint: Claim65Scratch::new(),
+            codeword_coeffs: Vec::new(),
+            constraint_coeffs: Vec::new(),
+            acc: vec![EF::ZERO; degree + 1],
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_twin_round_contribution<F, EF, Pesat>(
+    pesat: &Pesat,
+    d1: usize,
+    i: usize,
+    half: usize,
+    f_table: &[Vec<EF>],
+    w_table: &[Vec<EF>],
+    a_table: &[Vec<EF>],
+    b_table: &[Vec<EF>],
+    eq_table: &[EF],
+    omega: EF,
+    scratch: &mut TwinRoundScratch<F, EF>,
+) where
+    F: Field,
+    EF: ExtensionField<F>,
+    Pesat: BundledPesat<F, EF>,
+{
+    codeword_claim_6_5_coeffs_into::<F, EF>(
+        &f_table[i],
+        &f_table[i + half],
+        &a_table[i],
+        &a_table[i + half],
+        &mut scratch.codeword_coeffs,
+        &mut scratch.codeword,
+    );
+
+    pesat.bundled_round_poly_into(
+        &b_table[i],
+        &b_table[i + half],
+        &w_table[i],
+        &w_table[i + half],
+        &mut scratch.constraint_coeffs,
+        &mut scratch.constraint,
+    );
+
+    // Build g_i(X) = û_i(X) + ω · pb_i(X), then multiply by linear
+    // eq_τ_i(X) = eq_lo + (eq_hi − eq_lo) · X. This writes directly into
+    // the fold accumulator. The order and coefficients are identical to the
+    // previous local-vector path; only allocation strategy changes.
+    let eq_lo = eq_table[i];
+    let eq_diff = eq_table[i + half] - eq_lo;
+    let g_len = scratch
+        .codeword_coeffs
+        .len()
+        .max(scratch.constraint_coeffs.len());
+    debug_assert!(g_len <= d1);
+    for k in 0..=g_len {
+        let mut g_k = EF::ZERO;
+        if k < scratch.codeword_coeffs.len() {
+            g_k += scratch.codeword_coeffs[k];
+        }
+        if k < scratch.constraint_coeffs.len() {
+            g_k += omega * scratch.constraint_coeffs[k];
+        }
+
+        let mut g_k_minus_1 = EF::ZERO;
+        if k > 0 {
+            let km1 = k - 1;
+            if km1 < scratch.codeword_coeffs.len() {
+                g_k_minus_1 += scratch.codeword_coeffs[km1];
+            }
+            if km1 < scratch.constraint_coeffs.len() {
+                g_k_minus_1 += omega * scratch.constraint_coeffs[km1];
+            }
+        }
+
+        scratch.acc[k] += g_k * eq_lo + g_k_minus_1 * eq_diff;
     }
 }
 
@@ -1703,8 +1763,26 @@ where
 /// WARP Claim 6.5 composition algorithm. The packed path folds the prefix
 /// variables over SIMD lanes, then finishes the lane-local suffix variables
 /// scalar.
+#[cfg(test)]
 fn codeword_claim_6_5_coeffs<F, EF>(f_lo: &[EF], f_hi: &[EF], a_lo: &[EF], a_hi: &[EF]) -> Vec<EF>
 where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    let mut out = Vec::new();
+    let mut scratch = Claim65Scratch::<F, EF>::new();
+    codeword_claim_6_5_coeffs_into::<F, EF>(f_lo, f_hi, a_lo, a_hi, &mut out, &mut scratch);
+    out
+}
+
+fn codeword_claim_6_5_coeffs_into<F, EF>(
+    f_lo: &[EF],
+    f_hi: &[EF],
+    a_lo: &[EF],
+    a_hi: &[EF],
+    out: &mut Vec<EF>,
+    scratch: &mut Claim65Scratch<F, EF>,
+) where
     F: Field,
     EF: ExtensionField<F>,
 {
@@ -1713,53 +1791,94 @@ where
     debug_assert_eq!(a_lo.len(), f_lo.len().ilog2() as usize);
     debug_assert_eq!(a_lo.len(), a_hi.len());
 
+    // Fresh WARP inputs have α = 0^{log n}. When both endpoints are fresh
+    // descendants, eq(A(X), b) is the fixed selector eq(0, b), so the full
+    // Claim 6.5 codeword composition collapses to the first codeword entry:
+    // f_lo[0] + X · (f_hi[0] - f_lo[0]). This preserves the exact same
+    // polynomial while avoiding an O(n) scan for fresh/fresh pairs.
+    if a_lo.iter().all(|&x| x == EF::ZERO) && a_hi.iter().all(|&x| x == EF::ZERO) {
+        out.clear();
+        out.push(f_lo[0]);
+        out.push(f_hi[0] - f_lo[0]);
+        return;
+    }
+
     let pack_w = F::Packing::WIDTH;
     if f_lo.len() >= pack_w * 2 && f_lo.len().is_multiple_of(pack_w) {
-        codeword_claim_6_5_coeffs_packed_prefix::<F, EF>(f_lo, f_hi, a_lo, a_hi)
+        codeword_claim_6_5_coeffs_packed_prefix_into::<F, EF>(f_lo, f_hi, a_lo, a_hi, out, scratch);
     } else {
-        codeword_claim_6_5_coeffs_scalar(f_lo, f_hi, a_lo, a_hi)
+        codeword_claim_6_5_coeffs_scalar_into::<F, EF>(f_lo, f_hi, a_lo, a_hi, out, scratch);
     }
 }
 
-fn codeword_claim_6_5_coeffs_scalar<EF>(
+#[cfg(test)]
+fn codeword_claim_6_5_coeffs_scalar<F, EF>(
     f_lo: &[EF],
     f_hi: &[EF],
     a_lo: &[EF],
     a_hi: &[EF],
 ) -> Vec<EF>
 where
-    EF: Field,
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    let mut out = Vec::new();
+    let mut scratch = Claim65Scratch::<F, EF>::new();
+    codeword_claim_6_5_coeffs_scalar_into::<F, EF>(f_lo, f_hi, a_lo, a_hi, &mut out, &mut scratch);
+    out
+}
+
+fn codeword_claim_6_5_coeffs_scalar_into<F, EF>(
+    f_lo: &[EF],
+    f_hi: &[EF],
+    a_lo: &[EF],
+    a_hi: &[EF],
+    out: &mut Vec<EF>,
+    scratch: &mut Claim65Scratch<F, EF>,
+) where
+    F: Field,
+    EF: ExtensionField<F>,
 {
     let mut width = 2;
     let mut len = f_lo.len();
-    let mut current = Vec::with_capacity(len * width);
+    scratch.scalar_current.clear();
     for (&lo, &hi) in f_lo.iter().zip(f_hi) {
-        current.push(lo);
-        current.push(hi - lo);
+        scratch.scalar_current.push(lo);
+        scratch.scalar_current.push(hi - lo);
     }
 
     for (&c0, &c_at_one) in a_lo.iter().zip(a_hi) {
         let c1 = c_at_one - c0;
         let next_len = len / 2;
         let next_width = width + 1;
-        let mut next = EF::zero_vec(next_len * next_width);
-        fold_claim_6_5_scalar_round(&current, width, len, c0, c1, &mut next);
-        current = next;
+        scratch.scalar_next.clear();
+        scratch.scalar_next.resize(next_len * next_width, EF::ZERO);
+        fold_claim_6_5_scalar_round(
+            &scratch.scalar_current,
+            width,
+            len,
+            c0,
+            c1,
+            &mut scratch.scalar_next,
+        );
+        core::mem::swap(&mut scratch.scalar_current, &mut scratch.scalar_next);
         width = next_width;
         len = next_len;
     }
 
     debug_assert_eq!(len, 1);
-    current
+    out.clear();
+    out.extend_from_slice(&scratch.scalar_current);
 }
 
-fn codeword_claim_6_5_coeffs_packed_prefix<F, EF>(
+fn codeword_claim_6_5_coeffs_packed_prefix_into<F, EF>(
     f_lo: &[EF],
     f_hi: &[EF],
     a_lo: &[EF],
     a_hi: &[EF],
-) -> Vec<EF>
-where
+    out: &mut Vec<EF>,
+    scratch: &mut Claim65Scratch<F, EF>,
+) where
     F: Field,
     EF: ExtensionField<F>,
 {
@@ -1770,125 +1889,77 @@ where
 
     let mut width = 2;
     let mut len = f_lo.len() / pack_w;
-    let mut current = Vec::with_capacity(len * width);
+    scratch.packed_current.clear();
+    scratch.lane_buf.clear();
+    scratch.lane_buf.resize(pack_w, EF::ZERO);
     for (lo_chunk, hi_chunk) in f_lo.chunks_exact(pack_w).zip(f_hi.chunks_exact(pack_w)) {
-        current
+        scratch
+            .packed_current
             .push(<EF::ExtensionPacking as PackedFieldExtension<F, EF>>::from_ext_slice(lo_chunk));
-        let diff = lo_chunk
-            .iter()
-            .zip(hi_chunk)
-            .map(|(&lo, &hi)| hi - lo)
-            .collect::<Vec<_>>();
-        current.push(<EF::ExtensionPacking as PackedFieldExtension<F, EF>>::from_ext_slice(&diff));
+        for lane in 0..pack_w {
+            scratch.lane_buf[lane] = hi_chunk[lane] - lo_chunk[lane];
+        }
+        scratch.packed_current.push(
+            <EF::ExtensionPacking as PackedFieldExtension<F, EF>>::from_ext_slice(
+                &scratch.lane_buf,
+            ),
+        );
     }
 
     for (&c0, &c_at_one) in a_lo.iter().zip(a_hi).take(packed_rounds) {
         let c1 = c_at_one - c0;
-        let c0_packed = packed_ext_scalar::<F, EF>(c0);
-        let c1_packed = packed_ext_scalar::<F, EF>(c1);
+        let c0_packed = packed_ext_scalar_with_scratch::<F, EF>(c0, &mut scratch.broadcast_buf);
+        let c1_packed = packed_ext_scalar_with_scratch::<F, EF>(c1, &mut scratch.broadcast_buf);
         let next_len = len / 2;
         let next_width = width + 1;
-        let mut next = vec![EF::ExtensionPacking::ZERO; next_len * next_width];
-        fold_claim_6_5_packed_round::<F, EF>(&current, width, len, c0_packed, c1_packed, &mut next);
-        current = next;
+        scratch.packed_next.clear();
+        scratch
+            .packed_next
+            .resize(next_len * next_width, EF::ExtensionPacking::ZERO);
+        fold_claim_6_5_packed_round::<F, EF>(
+            &scratch.packed_current,
+            width,
+            len,
+            c0_packed,
+            c1_packed,
+            &mut scratch.packed_next,
+        );
+        core::mem::swap(&mut scratch.packed_current, &mut scratch.packed_next);
         width = next_width;
         len = next_len;
     }
     debug_assert_eq!(len, 1);
 
-    let mut scalar_current = Vec::with_capacity(pack_w * width);
-    let mut coeff_lanes = Vec::with_capacity(width);
-    for &coeff in &current {
-        coeff_lanes.push(EF::ExtensionPacking::to_ext_iter([coeff]).collect::<Vec<_>>());
-    }
-    for lane in 0..pack_w {
-        for coeff in &coeff_lanes {
-            scalar_current.push(coeff[lane]);
-        }
-    }
-
+    unpack_packed_coeffs_to_scalar::<F, EF>(
+        &scratch.packed_current,
+        width,
+        &mut scratch.scalar_current,
+    );
     let mut scalar_width = width;
     let mut scalar_len = pack_w;
     for (&c0, &c_at_one) in a_lo.iter().zip(a_hi).skip(packed_rounds) {
         let c1 = c_at_one - c0;
         let next_len = scalar_len / 2;
         let next_width = scalar_width + 1;
-        let mut next = EF::zero_vec(next_len * next_width);
-        fold_claim_6_5_scalar_round(&scalar_current, scalar_width, scalar_len, c0, c1, &mut next);
-        scalar_current = next;
+        scratch.scalar_next.clear();
+        scratch.scalar_next.resize(next_len * next_width, EF::ZERO);
+        fold_claim_6_5_scalar_round(
+            &scratch.scalar_current,
+            scalar_width,
+            scalar_len,
+            c0,
+            c1,
+            &mut scratch.scalar_next,
+        );
+        core::mem::swap(&mut scratch.scalar_current, &mut scratch.scalar_next);
         scalar_width = next_width;
         scalar_len = next_len;
     }
 
     debug_assert_eq!(scalar_len, 1);
     debug_assert_eq!(scalar_width, log_n + 2);
-    scalar_current
-}
-
-#[inline]
-fn packed_ext_scalar<F, EF>(value: EF) -> EF::ExtensionPacking
-where
-    F: Field,
-    EF: ExtensionField<F>,
-{
-    <EF::ExtensionPacking as PackedFieldExtension<F, EF>>::from_ext_slice(
-        &alloc::vec![value; F::Packing::WIDTH],
-    )
-}
-
-fn fold_claim_6_5_scalar_round<EF>(
-    current: &[EF],
-    width: usize,
-    len: usize,
-    c0: EF,
-    c1: EF,
-    next: &mut [EF],
-) where
-    EF: Field,
-{
-    debug_assert_eq!(current.len(), len * width);
-    debug_assert_eq!(next.len(), (len / 2) * (width + 1));
-    let half = len / 2;
-    let next_width = width + 1;
-    for b in 0..half {
-        let lo_base = b * width;
-        let hi_base = (b + half) * width;
-        let out_base = b * next_width;
-        for k in 0..width {
-            let lo = current[lo_base + k];
-            let diff = current[hi_base + k] - lo;
-            next[out_base + k] += lo + diff * c0;
-            next[out_base + k + 1] += diff * c1;
-        }
-    }
-}
-
-fn fold_claim_6_5_packed_round<F, EF>(
-    current: &[EF::ExtensionPacking],
-    width: usize,
-    len: usize,
-    c0: EF::ExtensionPacking,
-    c1: EF::ExtensionPacking,
-    next: &mut [EF::ExtensionPacking],
-) where
-    F: Field,
-    EF: ExtensionField<F>,
-{
-    debug_assert_eq!(current.len(), len * width);
-    debug_assert_eq!(next.len(), (len / 2) * (width + 1));
-    let half = len / 2;
-    let next_width = width + 1;
-    for b in 0..half {
-        let lo_base = b * width;
-        let hi_base = (b + half) * width;
-        let out_base = b * next_width;
-        for k in 0..width {
-            let lo = current[lo_base + k];
-            let diff = current[hi_base + k] - lo;
-            next[out_base + k] += lo + diff * c0;
-            next[out_base + k + 1] += diff * c1;
-        }
-    }
+    out.clear();
+    out.extend_from_slice(&scratch.scalar_current);
 }
 
 /// Compute `[h(0), h(1), h(2)]` of the §8.2 round polynomial
@@ -2051,6 +2122,27 @@ mod tests {
     }
 
     #[test]
+    fn weighted_eq_poly_matches_table_sum_reference() {
+        let log_n = 5;
+        let points = (0..4)
+            .map(|j| deterministic_vec(log_n, 11 + 37 * j as u64))
+            .collect::<Vec<_>>();
+        let scalars = deterministic_vec(points.len(), 101);
+
+        let actual = weighted_eq_poly::<TestF, TestEF>(&points, &scalars, log_n);
+
+        let mut expected = Poly::<TestEF>::zero(log_n);
+        for (point, &scale) in points.iter().zip(&scalars) {
+            let scaled = Poly::<TestEF>::new_from_point(point, scale);
+            for (acc, &value) in expected.as_mut_slice().iter_mut().zip(scaled.iter()) {
+                *acc += value;
+            }
+        }
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn codeword_claim_6_5_scalar_matches_interpolation_reference() {
         let n = 4;
         let f_lo = deterministic_vec(n, 3);
@@ -2058,7 +2150,7 @@ mod tests {
         let a_lo = deterministic_vec(n.ilog2() as usize, 101);
         let a_hi = deterministic_vec(n.ilog2() as usize, 211);
         let expected = codeword_claim_reference(&f_lo, &f_hi, &a_lo, &a_hi);
-        let actual = codeword_claim_6_5_coeffs_scalar(&f_lo, &f_hi, &a_lo, &a_hi);
+        let actual = codeword_claim_6_5_coeffs_scalar::<TestF, TestEF>(&f_lo, &f_hi, &a_lo, &a_hi);
         assert_eq!(actual, expected);
     }
 
@@ -2073,22 +2165,46 @@ mod tests {
         let actual = codeword_claim_6_5_coeffs::<TestF, TestEF>(&f_lo, &f_hi, &a_lo, &a_hi);
         assert_eq!(actual, expected);
     }
+
+    #[test]
+    fn codeword_claim_6_5_zero_alpha_selects_first_codeword_entry() {
+        let n = <TestF as Field>::Packing::WIDTH * 4;
+        let f_lo = deterministic_vec(n, 13);
+        let f_hi = deterministic_vec(n, 97);
+        let a_lo = vec![TestEF::ZERO; n.ilog2() as usize];
+        let a_hi = vec![TestEF::ZERO; n.ilog2() as usize];
+        let actual = codeword_claim_6_5_coeffs::<TestF, TestEF>(&f_lo, &f_hi, &a_lo, &a_hi);
+        assert_eq!(actual, vec![f_lo[0], f_hi[0] - f_lo[0]]);
+    }
 }
 
 /// Componentwise linear interpolation between two equal-length vectors.
 #[inline]
-fn lerp_vec<EF: Field>(lo: &[EF], hi: &[EF], alpha: EF) -> Vec<EF> {
+fn lerp_vec<EF>(lo: &[EF], hi: &[EF], alpha: EF) -> Vec<EF>
+where
+    EF: Field + Send + Sync,
+{
     debug_assert_eq!(lo.len(), hi.len());
-    lo.iter()
-        .zip(hi.iter())
-        .map(|(&l, &r)| lerp(l, r, alpha))
-        .collect()
+    if lo.len() > PAR_THRESHOLD {
+        lo.par_iter()
+            .zip(hi.par_iter())
+            .map(|(&l, &r)| lerp(l, r, alpha))
+            .collect()
+    } else {
+        lo.iter()
+            .zip(hi.iter())
+            .map(|(&l, &r)| lerp(l, r, alpha))
+            .collect()
+    }
 }
 
 /// Fold a `Vec<Vec<EF>>` table along its first axis at challenge `γ`,
 /// returning a half-length table whose `i`-th entry is
 /// `(1 − γ) · table[i] + γ · table[i + half]` componentwise.
-fn fold_table<EF: Field>(table: &[Vec<EF>], gamma: EF) -> Vec<Vec<EF>> {
+fn fold_table<EF>(table: &[Vec<EF>], gamma: EF) -> Vec<Vec<EF>>
+where
+    EF: Field + Send + Sync,
+{
     let half = table.len() / 2;
     (0..half)
         .map(|i| lerp_vec(&table[i], &table[i + half], gamma))
@@ -2101,6 +2217,37 @@ fn fold_eq<EF: Field>(eq: &[EF], gamma: EF) -> Vec<EF> {
     (0..half)
         .map(|i| lerp(eq[i], eq[i + half], gamma))
         .collect()
+}
+
+/// Build the WARP §8.2 batching polynomial
+/// `eq*(X) = Σ_j scalars[j] · eq(points[j], X)` over `{0,1}^{log_n}`.
+///
+/// This is algebraically identical to summing `Poly::new_from_point` tables,
+/// but uses Plonky3's batched equality kernel, the same primitive WHIR uses
+/// for equality constraints. The row-major matrix has variables as rows and
+/// batching points as columns, matching `eval_eq_batch`'s convention.
+pub(crate) fn weighted_eq_poly<F, EF>(points: &[Vec<EF>], scalars: &[EF], log_n: usize) -> Poly<EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    assert_eq!(points.len(), scalars.len());
+    assert!(!points.is_empty());
+    assert!(points.iter().all(|point| point.len() == log_n));
+
+    let width = points.len();
+    let mut point_matrix = Vec::with_capacity(log_n * width);
+    for var_idx in 0..log_n {
+        point_matrix.extend(points.iter().map(|point| point[var_idx]));
+    }
+
+    let mut values = vec![EF::ZERO; 1 << log_n];
+    eval_eq_batch::<F, EF, false>(
+        RowMajorMatrixView::new(&point_matrix, width),
+        &mut values,
+        scalars,
+    );
+    Poly::new(values)
 }
 
 /// Build a Boolean point `binary(x) ∈ {0,1}^{log n}` for a shift query.

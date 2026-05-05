@@ -10,12 +10,15 @@
 //! constraint-side round polynomial. This avoids routing the same simple
 //! relation through a generic constraint interpreter in prover hot loops.
 
-use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 
+use super::claim_6_5::{
+    Claim65Scratch, fold_claim_6_5_packed_round, fold_claim_6_5_scalar_round,
+    packed_ext_scalar_with_scratch, unpack_packed_coeffs_to_scalar,
+};
 use super::{BundledPesat, PesatShape};
 
 /// PESAT relation for one Boolean constraint per witness coordinate.
@@ -90,7 +93,26 @@ where
         assert_eq!(b_hi.len(), self.log_witness, "b_hi length");
         assert_eq!(w_lo.len(), self.witness_len(), "w_lo length");
         assert_eq!(w_hi.len(), self.witness_len(), "w_hi length");
-        boolean_claim_6_5_coeffs::<F, EF>(b_lo, b_hi, w_lo, w_hi)
+        let mut out = Vec::new();
+        let mut scratch = Claim65Scratch::<F, EF>::new();
+        boolean_claim_6_5_coeffs_into::<F, EF>(b_lo, b_hi, w_lo, w_hi, &mut out, &mut scratch);
+        out
+    }
+
+    fn bundled_round_poly_into(
+        &self,
+        b_lo: &[EF],
+        b_hi: &[EF],
+        w_lo: &[EF],
+        w_hi: &[EF],
+        out: &mut Vec<EF>,
+        scratch: &mut Claim65Scratch<F, EF>,
+    ) {
+        assert_eq!(b_lo.len(), self.log_witness, "b_lo length");
+        assert_eq!(b_hi.len(), self.log_witness, "b_hi length");
+        assert_eq!(w_lo.len(), self.witness_len(), "w_lo length");
+        assert_eq!(w_hi.len(), self.witness_len(), "w_hi length");
+        boolean_claim_6_5_coeffs_into::<F, EF>(b_lo, b_hi, w_lo, w_hi, out, scratch);
     }
 
     fn description(&self) -> Vec<u8> {
@@ -104,57 +126,106 @@ fn boolean_lerp_poly<EF: Field>(lo: EF, hi: EF) -> [EF; 3] {
     [lo * (lo - EF::ONE), diff * (lo + lo - EF::ONE), diff * diff]
 }
 
+#[cfg(test)]
 fn boolean_claim_6_5_coeffs<F, EF>(b_lo: &[EF], b_hi: &[EF], w_lo: &[EF], w_hi: &[EF]) -> Vec<EF>
 where
     F: Field,
     EF: ExtensionField<F>,
 {
+    let mut out = Vec::new();
+    let mut scratch = Claim65Scratch::<F, EF>::new();
+    boolean_claim_6_5_coeffs_into::<F, EF>(b_lo, b_hi, w_lo, w_hi, &mut out, &mut scratch);
+    out
+}
+
+fn boolean_claim_6_5_coeffs_into<F, EF>(
+    b_lo: &[EF],
+    b_hi: &[EF],
+    w_lo: &[EF],
+    w_hi: &[EF],
+    out: &mut Vec<EF>,
+    scratch: &mut Claim65Scratch<F, EF>,
+) where
+    F: Field,
+    EF: ExtensionField<F>,
+{
     let pack_w = F::Packing::WIDTH;
     if w_lo.len() >= pack_w * 2 && w_lo.len().is_multiple_of(pack_w) {
-        boolean_claim_6_5_coeffs_packed_prefix::<F, EF>(b_lo, b_hi, w_lo, w_hi)
+        boolean_claim_6_5_coeffs_packed_prefix_into::<F, EF>(b_lo, b_hi, w_lo, w_hi, out, scratch);
     } else {
-        boolean_claim_6_5_coeffs_scalar(b_lo, b_hi, w_lo, w_hi)
+        boolean_claim_6_5_coeffs_scalar_into::<F, EF>(b_lo, b_hi, w_lo, w_hi, out, scratch);
     }
 }
 
-fn boolean_claim_6_5_coeffs_scalar<EF>(
+#[cfg(test)]
+fn boolean_claim_6_5_coeffs_scalar<F, EF>(
     b_lo: &[EF],
     b_hi: &[EF],
     w_lo: &[EF],
     w_hi: &[EF],
 ) -> Vec<EF>
 where
-    EF: Field,
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    let mut out = Vec::new();
+    let mut scratch = Claim65Scratch::<F, EF>::new();
+    boolean_claim_6_5_coeffs_scalar_into::<F, EF>(b_lo, b_hi, w_lo, w_hi, &mut out, &mut scratch);
+    out
+}
+
+fn boolean_claim_6_5_coeffs_scalar_into<F, EF>(
+    b_lo: &[EF],
+    b_hi: &[EF],
+    w_lo: &[EF],
+    w_hi: &[EF],
+    out: &mut Vec<EF>,
+    scratch: &mut Claim65Scratch<F, EF>,
+) where
+    F: Field,
+    EF: ExtensionField<F>,
 {
     let mut width = 3;
     let mut len = w_lo.len();
-    let mut current = Vec::with_capacity(len * width);
+    scratch.scalar_current.clear();
     for (&lo, &hi) in w_lo.iter().zip(w_hi) {
-        current.extend_from_slice(&boolean_lerp_poly(lo, hi));
+        scratch
+            .scalar_current
+            .extend_from_slice(&boolean_lerp_poly(lo, hi));
     }
 
     for (&c0, &c_at_one) in b_lo.iter().zip(b_hi) {
         let c1 = c_at_one - c0;
         let next_len = len / 2;
         let next_width = width + 1;
-        let mut next = EF::zero_vec(next_len * next_width);
-        fold_claim_6_5_scalar_round(&current, width, len, c0, c1, &mut next);
-        current = next;
+        scratch.scalar_next.clear();
+        scratch.scalar_next.resize(next_len * next_width, EF::ZERO);
+        fold_claim_6_5_scalar_round(
+            &scratch.scalar_current,
+            width,
+            len,
+            c0,
+            c1,
+            &mut scratch.scalar_next,
+        );
+        core::mem::swap(&mut scratch.scalar_current, &mut scratch.scalar_next);
         width = next_width;
         len = next_len;
     }
 
     debug_assert_eq!(len, 1);
-    current
+    out.clear();
+    out.extend_from_slice(&scratch.scalar_current);
 }
 
-fn boolean_claim_6_5_coeffs_packed_prefix<F, EF>(
+fn boolean_claim_6_5_coeffs_packed_prefix_into<F, EF>(
     b_lo: &[EF],
     b_hi: &[EF],
     w_lo: &[EF],
     w_hi: &[EF],
-) -> Vec<EF>
-where
+    out: &mut Vec<EF>,
+    scratch: &mut Claim65Scratch<F, EF>,
+) where
     F: Field,
     EF: ExtensionField<F>,
 {
@@ -165,10 +236,11 @@ where
 
     let mut width = 3;
     let mut len = w_lo.len() / pack_w;
-    let mut current = Vec::with_capacity(len * width);
-    let mut q0 = vec![EF::ZERO; pack_w];
-    let mut q1 = vec![EF::ZERO; pack_w];
-    let mut q2 = vec![EF::ZERO; pack_w];
+    scratch.packed_current.clear();
+    scratch.lane_buf.clear();
+    scratch.lane_buf.resize(3 * pack_w, EF::ZERO);
+    let (q0, rest) = scratch.lane_buf.split_at_mut(pack_w);
+    let (q1, q2) = rest.split_at_mut(pack_w);
     for (lo_chunk, hi_chunk) in w_lo.chunks_exact(pack_w).zip(w_hi.chunks_exact(pack_w)) {
         for lane in 0..pack_w {
             let coeffs = boolean_lerp_poly(lo_chunk[lane], hi_chunk[lane]);
@@ -176,118 +248,71 @@ where
             q1[lane] = coeffs[1];
             q2[lane] = coeffs[2];
         }
-        current.push(<EF::ExtensionPacking as PackedFieldExtension<F, EF>>::from_ext_slice(&q0));
-        current.push(<EF::ExtensionPacking as PackedFieldExtension<F, EF>>::from_ext_slice(&q1));
-        current.push(<EF::ExtensionPacking as PackedFieldExtension<F, EF>>::from_ext_slice(&q2));
+        scratch
+            .packed_current
+            .push(<EF::ExtensionPacking as PackedFieldExtension<F, EF>>::from_ext_slice(q0));
+        scratch
+            .packed_current
+            .push(<EF::ExtensionPacking as PackedFieldExtension<F, EF>>::from_ext_slice(q1));
+        scratch
+            .packed_current
+            .push(<EF::ExtensionPacking as PackedFieldExtension<F, EF>>::from_ext_slice(q2));
     }
 
     for (&c0, &c_at_one) in b_lo.iter().zip(b_hi).take(packed_rounds) {
         let c1 = c_at_one - c0;
-        let c0_packed = packed_ext_scalar::<F, EF>(c0);
-        let c1_packed = packed_ext_scalar::<F, EF>(c1);
+        let c0_packed = packed_ext_scalar_with_scratch::<F, EF>(c0, &mut scratch.broadcast_buf);
+        let c1_packed = packed_ext_scalar_with_scratch::<F, EF>(c1, &mut scratch.broadcast_buf);
         let next_len = len / 2;
         let next_width = width + 1;
-        let mut next = vec![EF::ExtensionPacking::ZERO; next_len * next_width];
-        fold_claim_6_5_packed_round::<F, EF>(&current, width, len, c0_packed, c1_packed, &mut next);
-        current = next;
+        scratch.packed_next.clear();
+        scratch
+            .packed_next
+            .resize(next_len * next_width, EF::ExtensionPacking::ZERO);
+        fold_claim_6_5_packed_round::<F, EF>(
+            &scratch.packed_current,
+            width,
+            len,
+            c0_packed,
+            c1_packed,
+            &mut scratch.packed_next,
+        );
+        core::mem::swap(&mut scratch.packed_current, &mut scratch.packed_next);
         width = next_width;
         len = next_len;
     }
     debug_assert_eq!(len, 1);
 
-    let mut scalar_current = Vec::with_capacity(pack_w * width);
-    let mut coeff_lanes = Vec::with_capacity(width);
-    for &coeff in &current {
-        coeff_lanes.push(EF::ExtensionPacking::to_ext_iter([coeff]).collect::<Vec<_>>());
-    }
-    for lane in 0..pack_w {
-        for coeff in &coeff_lanes {
-            scalar_current.push(coeff[lane]);
-        }
-    }
-
+    unpack_packed_coeffs_to_scalar::<F, EF>(
+        &scratch.packed_current,
+        width,
+        &mut scratch.scalar_current,
+    );
     let mut scalar_width = width;
     let mut scalar_len = pack_w;
     for (&c0, &c_at_one) in b_lo.iter().zip(b_hi).skip(packed_rounds) {
         let c1 = c_at_one - c0;
         let next_len = scalar_len / 2;
         let next_width = scalar_width + 1;
-        let mut next = EF::zero_vec(next_len * next_width);
-        fold_claim_6_5_scalar_round(&scalar_current, scalar_width, scalar_len, c0, c1, &mut next);
-        scalar_current = next;
+        scratch.scalar_next.clear();
+        scratch.scalar_next.resize(next_len * next_width, EF::ZERO);
+        fold_claim_6_5_scalar_round(
+            &scratch.scalar_current,
+            scalar_width,
+            scalar_len,
+            c0,
+            c1,
+            &mut scratch.scalar_next,
+        );
+        core::mem::swap(&mut scratch.scalar_current, &mut scratch.scalar_next);
         scalar_width = next_width;
         scalar_len = next_len;
     }
 
     debug_assert_eq!(scalar_len, 1);
     debug_assert_eq!(scalar_width, log_n + 3);
-    scalar_current
-}
-
-#[inline]
-fn packed_ext_scalar<F, EF>(value: EF) -> EF::ExtensionPacking
-where
-    F: Field,
-    EF: ExtensionField<F>,
-{
-    <EF::ExtensionPacking as PackedFieldExtension<F, EF>>::from_ext_slice(
-        &alloc::vec![value; F::Packing::WIDTH],
-    )
-}
-
-fn fold_claim_6_5_scalar_round<EF>(
-    current: &[EF],
-    width: usize,
-    len: usize,
-    c0: EF,
-    c1: EF,
-    next: &mut [EF],
-) where
-    EF: Field,
-{
-    debug_assert_eq!(current.len(), len * width);
-    debug_assert_eq!(next.len(), (len / 2) * (width + 1));
-    let half = len / 2;
-    let next_width = width + 1;
-    for b in 0..half {
-        let lo_base = b * width;
-        let hi_base = (b + half) * width;
-        let out_base = b * next_width;
-        for k in 0..width {
-            let lo = current[lo_base + k];
-            let diff = current[hi_base + k] - lo;
-            next[out_base + k] += lo + diff * c0;
-            next[out_base + k + 1] += diff * c1;
-        }
-    }
-}
-
-fn fold_claim_6_5_packed_round<F, EF>(
-    current: &[EF::ExtensionPacking],
-    width: usize,
-    len: usize,
-    c0: EF::ExtensionPacking,
-    c1: EF::ExtensionPacking,
-    next: &mut [EF::ExtensionPacking],
-) where
-    F: Field,
-    EF: ExtensionField<F>,
-{
-    debug_assert_eq!(current.len(), len * width);
-    debug_assert_eq!(next.len(), (len / 2) * (width + 1));
-    let half = len / 2;
-    let next_width = width + 1;
-    for b in 0..half {
-        let lo_base = b * width;
-        let hi_base = (b + half) * width;
-        let out_base = b * next_width;
-        for k in 0..width {
-            let lo = current[lo_base + k];
-            let diff = current[hi_base + k] - lo;
-            next[out_base + k] += lo + diff * c0;
-            next[out_base + k + 1] += diff * c1;
-        }
-    }
+    out.clear();
+    out.extend_from_slice(&scratch.scalar_current);
 }
 
 #[cfg(test)]
@@ -339,7 +364,7 @@ mod tests {
         let w_lo = deterministic_vec(n, 3);
         let w_hi = deterministic_vec(n, 4);
         let expected = reference(&b_lo, &b_hi, &w_lo, &w_hi);
-        let actual = boolean_claim_6_5_coeffs_scalar(&b_lo, &b_hi, &w_lo, &w_hi);
+        let actual = boolean_claim_6_5_coeffs_scalar::<TestF, TestEF>(&b_lo, &b_hi, &w_lo, &w_hi);
         assert_eq!(actual, expected);
     }
 

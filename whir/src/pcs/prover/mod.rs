@@ -255,14 +255,56 @@ where
         Dft: TwoAdicSubgroupDft<F>,
         Challenger: CanObserve<MT::Commitment>,
     {
+        let initial_select = SelectStatement::initialize(statement.num_variables());
+        self.prove_batched_initial_with_select(
+            dft,
+            proof,
+            challenger,
+            virtual_poly,
+            statement,
+            &initial_select,
+            prover_data,
+        )
+    }
+
+    /// Execute the WHIR prover for a virtual initial oracle with additional
+    /// codeword-domain constraints on that same initial RS oracle.
+    ///
+    /// `statement` carries ordinary multilinear-message equality claims, while
+    /// `initial_select` carries RS-codeword evaluation claims using the same
+    /// select constraint that WHIR uses for STIR queries. This is the
+    /// Construction 7.4 shape needed by WARP: verifier-facing codeword queries
+    /// are kept as constrained-RS obligations instead of being lowered through
+    /// a verifier-side RS adjoint.
+    #[instrument(skip_all)]
+    pub fn prove_batched_initial_with_select<Dft>(
+        &self,
+        dft: &Dft,
+        proof: &mut WhirProof<F, EF, MT>,
+        challenger: &mut Challenger,
+        virtual_poly: &Poly<EF>,
+        statement: &EqStatement<EF>,
+        initial_select: &SelectStatement<F, EF>,
+        prover_data: Vec<WhirBatchedInitialMerkleProverData<EF, F, MT>>,
+    ) -> Result<(), FiatShamirError>
+    where
+        Dft: TwoAdicSubgroupDft<F>,
+        Challenger: CanObserve<MT::Commitment>,
+    {
         assert!(self.validate_parameters(), "Invalid prover parameters");
+        assert_eq!(
+            statement.num_variables(),
+            initial_select.num_variables(),
+            "initial WHIR eq/select arity mismatch"
+        );
 
         let extension_mmcs = ExtensionMmcs::new(self.mmcs.clone());
-        let (sumcheck_prover, folding_randomness) = self.extension_initial_sumcheck(
+        let (sumcheck_prover, folding_randomness) = self.extension_initial_sumcheck_with_select(
             &mut proof.initial_sumcheck,
             challenger,
             virtual_poly,
             statement,
+            initial_select,
             self.folding_factor.at_round(0),
             self.starting_folding_pow_bits,
         );
@@ -321,11 +363,54 @@ where
         folding_factor: usize,
         pow_bits: usize,
     ) -> (SumcheckProver<F, EF>, Point<EF>) {
+        let initial_select = SelectStatement::initialize(statement.num_variables());
+        self.extension_initial_sumcheck_with_select(
+            sumcheck_data,
+            challenger,
+            poly,
+            statement,
+            &initial_select,
+            folding_factor,
+            pow_bits,
+        )
+    }
+
+    fn extension_initial_sumcheck_with_select(
+        &self,
+        sumcheck_data: &mut SumcheckData<F, EF>,
+        challenger: &mut Challenger,
+        poly: &Poly<EF>,
+        statement: &EqStatement<EF>,
+        initial_select: &SelectStatement<F, EF>,
+        folding_factor: usize,
+        pow_bits: usize,
+    ) -> (SumcheckProver<F, EF>, Point<EF>) {
         assert_ne!(folding_factor, 0);
         let alpha = challenger.sample_algebra_element();
+        let constraint = Constraint::new(alpha, statement.clone(), initial_select.clone());
+        self.extension_initial_sumcheck_with_constraint(
+            sumcheck_data,
+            challenger,
+            poly,
+            constraint,
+            folding_factor,
+            pow_bits,
+        )
+    }
+
+    fn extension_initial_sumcheck_with_constraint(
+        &self,
+        sumcheck_data: &mut SumcheckData<F, EF>,
+        challenger: &mut Challenger,
+        poly: &Poly<EF>,
+        constraint: Constraint<F, EF>,
+        folding_factor: usize,
+        pow_bits: usize,
+    ) -> (SumcheckProver<F, EF>, Point<EF>) {
+        assert_ne!(folding_factor, 0);
         let mut weights = Poly::zero(poly.num_variables());
         let mut sum = EF::ZERO;
-        statement.combine_hypercube::<F, false>(&mut weights, &mut sum, alpha);
+        constraint.combine(&mut weights, &mut sum);
 
         let (c0, c_inf) =
             VariableOrder::Prefix.sumcheck_coefficients(poly.as_slice(), weights.as_slice());

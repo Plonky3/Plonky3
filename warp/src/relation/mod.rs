@@ -33,7 +33,7 @@ pub mod boolean;
 pub mod claim_6_5;
 
 pub use boolean::BooleanPesat;
-pub use claim_6_5::{eq_dot_q_recursive, poly_lerp_via_linear};
+pub use claim_6_5::{Claim65Scratch, eq_dot_q_recursive, poly_lerp_via_linear};
 
 /// Shape parameters of a PESAT instance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,6 +160,26 @@ pub trait BundledPesat<F: Field, EF: ExtensionField<F>>: Sync + Send {
     /// - All four input slices must have the right length per `shape()`.
     fn bundled_round_poly(&self, b_lo: &[EF], b_hi: &[EF], w_lo: &[EF], w_hi: &[EF]) -> Vec<EF> {
         default_round_poly_via_claim_6_5(self, b_lo, b_hi, w_lo, w_hi)
+    }
+
+    /// Scratch-buffer variant of [`bundled_round_poly`](Self::bundled_round_poly).
+    ///
+    /// The default implementation preserves compatibility for arbitrary
+    /// `BundledPesat` implementations. Hot relations, such as
+    /// [`BooleanPesat`](crate::relation::BooleanPesat), override this to avoid
+    /// allocating a fresh coefficient vector and Claim 6.5 work tables for every
+    /// WARP §6.3 `(round, i)` contribution.
+    fn bundled_round_poly_into(
+        &self,
+        b_lo: &[EF],
+        b_hi: &[EF],
+        w_lo: &[EF],
+        w_hi: &[EF],
+        out: &mut Vec<EF>,
+        _scratch: &mut Claim65Scratch<F, EF>,
+    ) {
+        out.clear();
+        out.extend(self.bundled_round_poly(b_lo, b_hi, w_lo, w_hi));
     }
 
     /// Bytes that bind this constraint system into the Fiat–Shamir transcript.

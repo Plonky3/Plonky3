@@ -650,6 +650,26 @@ struct WarpWhirRootPhaseDurations {
     step_times: Vec<Duration>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct WarpWhirRootVerifyPhaseDurations {
+    setup: Duration,
+    chain: Duration,
+    root_system_setup: Duration,
+    root_whir: Duration,
+    total: Duration,
+    claim_shape: RootClaimShape,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct RootClaimShape {
+    index: usize,
+    systematic_index: usize,
+    nonsystematic_index: usize,
+    mle: usize,
+    message_subspace_mle: usize,
+    codeword_mle: usize,
+}
+
 struct BenchRootIopWhirAccumulatorData {
     commitment: BenchRootCommitment,
     codeword: Vec<EF>,
@@ -1419,6 +1439,15 @@ fn prove_warp_whir_root(fixture: &WarpKernelFixture, witnesses: &[Vec<F>]) {
 }
 
 fn verify_warp_whir_root_bundle(fixture: &WarpKernelFixture, bundle: &WarpWhirRootBundle) {
+    verify_warp_whir_root_bundle_with_phases(fixture, bundle);
+}
+
+fn verify_warp_whir_root_bundle_with_phases(
+    fixture: &WarpKernelFixture,
+    bundle: &WarpWhirRootBundle,
+) -> WarpWhirRootVerifyPhaseDurations {
+    let total_start = Instant::now();
+    let phase_start = Instant::now();
     let whir_pcs = make_whir_pcs(fixture);
     let base_message_pcs = make_whir_pcs_for_num_vars(&fixture.mmcs, fixture.code.log_msg_len());
     let root_iop_verifier = BenchRootIopWhirVerifier::new(fixture.code.log_codeword_len());
@@ -1431,6 +1460,9 @@ fn verify_warp_whir_root_bundle(fixture: &WarpKernelFixture, bundle: &WarpWhirRo
         );
     let root_verifier =
         WarpRootVerifier::new(&fixture.mmcs, &fixture.code, &fixture.pesat, fixture.params);
+    let setup = phase_start.elapsed();
+
+    let phase_start = Instant::now();
     let verified = root_verifier
         .verify_external_linear_chain_accumulator_batched(
             &BenchChallenger::new(),
@@ -1441,22 +1473,72 @@ fn verify_warp_whir_root_bundle(fixture: &WarpKernelFixture, bundle: &WarpWhirRo
         )
         .expect("WHIR-backed WARP root verify");
     assert_eq!(verified, bundle.instance);
+    let expected_commitments = root_iop_verifier.expected_inner_commitments();
+    let expected_claims = root_iop_verifier.expected_claims();
+    let claim_shape = root_claim_shape(&fixture.code, &expected_claims);
+    let chain = phase_start.elapsed();
 
+    let phase_start = Instant::now();
     let root_system = NativeWarpWhirRootProofSystem::new_with_base_message_pcs(
         &whir_pcs,
         &base_message_pcs,
         &fixture.code,
         BenchChallenger::new(),
     );
+    let root_system_setup = phase_start.elapsed();
+
+    let phase_start = Instant::now();
     root_system
         .verify(
-            &root_iop_verifier.expected_inner_commitments(),
-            &root_iop_verifier.expected_claims(),
+            &expected_commitments,
+            &expected_claims,
             &bundle.root_iop_proof,
             &mut BenchChallenger::new(),
             0,
         )
         .expect("WARP root IOP WHIR proof verification");
+    let root_whir = phase_start.elapsed();
+    WarpWhirRootVerifyPhaseDurations {
+        setup,
+        chain,
+        root_system_setup,
+        root_whir,
+        total: total_start.elapsed(),
+        claim_shape,
+    }
+}
+
+fn root_claim_shape(
+    code: &ReedSolomonCode<F, MyDft>,
+    claims: &[RootIopOpeningClaim<F, EF>],
+) -> RootClaimShape {
+    let stride = 1 << code.log_inv_rate();
+    let mut shape = RootClaimShape::default();
+    for claim in claims {
+        match &claim.point {
+            RootIopOpeningPoint::Index(index) => {
+                shape.index += 1;
+                if index.is_multiple_of(stride) {
+                    shape.systematic_index += 1;
+                } else {
+                    shape.nonsystematic_index += 1;
+                }
+            }
+            RootIopOpeningPoint::Mle(point) => {
+                shape.mle += 1;
+                if point.len() == code.log_codeword_len()
+                    && point[code.log_msg_len()..]
+                        .iter()
+                        .all(|&coord| coord == EF::ZERO)
+                {
+                    shape.message_subspace_mle += 1;
+                } else {
+                    shape.codeword_mle += 1;
+                }
+            }
+        }
+    }
+    shape
 }
 
 fn parse_usize_list_env(name: &str, default: &[usize]) -> Vec<usize> {
@@ -1495,12 +1577,94 @@ fn average_duration(total: Duration, iterations: usize) -> Duration {
     Duration::from_nanos((total.as_nanos() / iterations as u128) as u64)
 }
 
+#[derive(Clone, Copy, Debug)]
+struct DurationStats {
+    min: Duration,
+    median: Duration,
+    mean: Duration,
+    max: Duration,
+    stddev: Duration,
+}
+
 fn time_average(iterations: usize, mut f: impl FnMut()) -> Duration {
     let start = Instant::now();
     for _ in 0..iterations {
         f();
     }
     average_duration(start.elapsed(), iterations)
+}
+
+fn duration_from_nanos(nanos: u128) -> Duration {
+    Duration::from_nanos(nanos.min(u64::MAX as u128) as u64)
+}
+
+fn duration_stats(samples: &mut [Duration]) -> DurationStats {
+    assert!(
+        !samples.is_empty(),
+        "duration_stats needs at least one sample"
+    );
+    samples.sort_unstable();
+    let len = samples.len();
+    let median = if len % 2 == 0 {
+        duration_from_nanos((samples[len / 2 - 1].as_nanos() + samples[len / 2].as_nanos()) / 2)
+    } else {
+        samples[len / 2]
+    };
+    let sum = samples.iter().map(Duration::as_nanos).sum::<u128>();
+    let mean_nanos = sum / len as u128;
+    let mean_f64 = mean_nanos as f64;
+    let variance = samples
+        .iter()
+        .map(|sample| {
+            let delta = sample.as_nanos() as f64 - mean_f64;
+            delta * delta
+        })
+        .sum::<f64>()
+        / len as f64;
+    DurationStats {
+        min: samples[0],
+        median,
+        mean: duration_from_nanos(mean_nanos),
+        max: samples[len - 1],
+        stddev: duration_from_nanos(variance.sqrt() as u128),
+    }
+}
+
+fn time_paired_stats(
+    iterations: usize,
+    warmup: usize,
+    mut left: impl FnMut(),
+    mut right: impl FnMut(),
+) -> (DurationStats, DurationStats) {
+    for _ in 0..warmup {
+        left();
+        right();
+    }
+
+    let mut left_samples = Vec::with_capacity(iterations);
+    let mut right_samples = Vec::with_capacity(iterations);
+    for i in 0..iterations {
+        if i % 2 == 0 {
+            let start = Instant::now();
+            left();
+            left_samples.push(start.elapsed());
+            let start = Instant::now();
+            right();
+            right_samples.push(start.elapsed());
+        } else {
+            let start = Instant::now();
+            right();
+            right_samples.push(start.elapsed());
+            let start = Instant::now();
+            left();
+            left_samples.push(start.elapsed());
+        }
+    }
+
+    (
+        duration_stats(&mut left_samples),
+        duration_stats(&mut right_samples),
+    )
 }
 
 #[allow(dead_code)]
@@ -1530,6 +1694,17 @@ fn format_warp_over_whir(warp: Duration, whir: Duration) -> String {
     } else {
         format!("{ratio:.2}x ({pct:.0}%)")
     }
+}
+
+fn format_duration_stats(stats: DurationStats) -> String {
+    format!(
+        "min={} med={} mean={} max={} sd={}",
+        format_duration(stats.min),
+        format_duration(stats.median),
+        format_duration(stats.mean),
+        format_duration(stats.max),
+        format_duration(stats.stddev),
+    )
 }
 
 fn print_sumcheck_comparison(num_variable_cases: &[usize], n_values: &[usize]) {
@@ -1653,19 +1828,26 @@ fn print_warp_whir_finalizer_comparison(num_variable_cases: &[usize], n_values: 
 
 fn print_warp_whir_root_comparison(num_variable_cases: &[usize], n_values: &[usize]) {
     let iterations = parse_usize_env("P3_WARP_WHIR_ROOT_COMPARE_ITERS", 1).max(1);
+    let warmup = parse_usize_env("P3_WARP_WHIR_ROOT_COMPARE_WARMUP", 1);
     let print_phases = env::var("P3_WARP_WHIR_ROOT_PHASES").as_deref() == Ok("1");
+    let print_stats = iterations > 1 || env::var("P3_WARP_WHIR_ROOT_STATS").as_deref() == Ok("1");
     let arity = warp_fresh_per_step();
     eprintln!();
     eprintln!("=== WHIR-backed WARP root vs N full WHIR PCS comparison ===");
     eprintln!("    WHIR lane: N full WhirPcs commit+open proofs and WhirPcs verifications.");
     eprintln!(
-        "    WARP lane: WARP VACC/DACC root recorder + direct batched linear-Sigma root reduction + one WHIR batched opening when possible."
+        "    WARP lane: WARP VACC/DACC root recorder + batched-eq section 8.2 reduction + one WHIR batched opening when possible."
     );
     eprintln!(
         "    WARP arity: {arity} fresh inputs in the first step, then {} per chained step.",
         arity - 1
     );
-    eprintln!("    Times are single-process wall-clock averages over {iterations} iteration(s).");
+    eprintln!(
+        "    Times are paired medians over {iterations} sample(s) after {warmup} warmup iteration(s)."
+    );
+    eprintln!(
+        "    Each sample alternates WHIR/WARP order to reduce thermal, allocator, and scheduler bias."
+    );
     if print_phases {
         eprintln!("    Extra WARP phase timings are single setup runs used for verifier input.");
     }
@@ -1711,38 +1893,42 @@ fn print_warp_whir_root_comparison(num_variable_cases: &[usize], n_values: &[usi
             let steps = step_plan(n, arity).len();
 
             print_progress(format!(
-                "    running k={num_variables}, N={n}: full WHIR prover..."
+                "    running k={num_variables}, N={n}: paired WHIR/WARP prover samples..."
             ));
-            let whir_prove_time = time_average(iterations, || {
-                prove_n_whir_full_pcs(&fixture, &warp_witnesses);
-            });
+            let (whir_prove_stats, warp_prove_stats) = time_paired_stats(
+                iterations,
+                warmup,
+                || {
+                    prove_n_whir_full_pcs(&fixture, &warp_witnesses);
+                },
+                || {
+                    prove_warp_whir_root(&fixture, &warp_witnesses);
+                },
+            );
             print_progress(format!(
-                "    running k={num_variables}, N={n}: full WHIR verifier setup..."
+                "    running k={num_variables}, N={n}: verifier setup..."
             ));
             let whir_bundle = build_n_whir_full_pcs(&fixture, &warp_witnesses);
-            print_progress(format!(
-                "    running k={num_variables}, N={n}: full WHIR verifier..."
-            ));
-            let whir_verify_time = time_average(iterations, || {
-                verify_n_whir_full_pcs_bundle(&fixture, &whir_bundle);
-            });
-            print_progress(format!(
-                "    running k={num_variables}, N={n}: WARP root prover..."
-            ));
-            let warp_prove_time = time_average(iterations, || {
-                prove_warp_whir_root(&fixture, &warp_witnesses);
-            });
-            print_progress(format!(
-                "    running k={num_variables}, N={n}: WARP root verifier setup..."
-            ));
             let (bundle, warp_phases) =
                 build_warp_whir_root_bundle_with_phases(&fixture, &warp_witnesses);
+            let warp_verify_phases = if print_phases {
+                Some(verify_warp_whir_root_bundle_with_phases(&fixture, &bundle))
+            } else {
+                None
+            };
             print_progress(format!(
-                "    running k={num_variables}, N={n}: WARP root verifier..."
+                "    running k={num_variables}, N={n}: paired WHIR/WARP verifier samples..."
             ));
-            let verify_time = time_average(iterations, || {
-                verify_warp_whir_root_bundle(&fixture, &bundle);
-            });
+            let (whir_verify_stats, warp_verify_stats) = time_paired_stats(
+                iterations,
+                warmup,
+                || {
+                    verify_n_whir_full_pcs_bundle(&fixture, &whir_bundle);
+                },
+                || {
+                    verify_warp_whir_root_bundle(&fixture, &bundle);
+                },
+            );
 
             eprintln!(
                 "{:<6}{:<8}{:<8}{:<10}{:<10}{:<12}{:<16}{:<16}{:<24}{:<16}{:<16}{:<24}",
@@ -1752,13 +1938,25 @@ fn print_warp_whir_root_comparison(num_variable_cases: &[usize], n_values: &[usi
                 bundle.oracle_count,
                 bundle.claim_count,
                 bundle.whir_opening_count,
-                format_duration(whir_prove_time),
-                format_duration(warp_prove_time),
-                format_warp_over_whir(warp_prove_time, whir_prove_time),
-                format_duration(whir_verify_time),
-                format_duration(verify_time),
-                format_warp_over_whir(verify_time, whir_verify_time),
+                format_duration(whir_prove_stats.median),
+                format_duration(warp_prove_stats.median),
+                format_warp_over_whir(warp_prove_stats.median, whir_prove_stats.median),
+                format_duration(whir_verify_stats.median),
+                format_duration(warp_verify_stats.median),
+                format_warp_over_whir(warp_verify_stats.median, whir_verify_stats.median),
             );
+            if print_stats {
+                eprintln!(
+                    "      Prove stats:  WHIR [{}] | WARP [{}]",
+                    format_duration_stats(whir_prove_stats),
+                    format_duration_stats(warp_prove_stats),
+                );
+                eprintln!(
+                    "      Verify stats: WHIR [{}] | WARP [{}]",
+                    format_duration_stats(whir_verify_stats),
+                    format_duration_stats(warp_verify_stats),
+                );
+            }
             if print_phases {
                 let steps = warp_phases
                     .step_times
@@ -1778,7 +1976,120 @@ fn print_warp_whir_root_comparison(num_variable_cases: &[usize], n_values: &[usi
                     format_duration(warp_phases.total),
                 );
                 eprintln!("      WARP step phases: {steps}");
+                let verify_phases = warp_verify_phases.as_ref().expect("verify phases exist");
+                eprintln!(
+                    "      WARP verify phases: setup={} chain={} root_system_setup={} root_whir={} total={}",
+                    format_duration(verify_phases.setup),
+                    format_duration(verify_phases.chain),
+                    format_duration(verify_phases.root_system_setup),
+                    format_duration(verify_phases.root_whir),
+                    format_duration(verify_phases.total),
+                );
+                eprintln!(
+                    "      WARP verify claims: index={} systematic_index={} nonsystematic_index={} mle={} message_subspace_mle={} codeword_mle={}",
+                    verify_phases.claim_shape.index,
+                    verify_phases.claim_shape.systematic_index,
+                    verify_phases.claim_shape.nonsystematic_index,
+                    verify_phases.claim_shape.mle,
+                    verify_phases.claim_shape.message_subspace_mle,
+                    verify_phases.claim_shape.codeword_mle,
+                );
             }
+        }
+    }
+    eprintln!();
+}
+
+fn print_warp_whir_root_verify_profile(num_variable_cases: &[usize], n_values: &[usize]) {
+    let iterations = parse_usize_env("P3_WARP_WHIR_ROOT_VERIFY_ITERS", 64).max(1);
+    let warmup = parse_usize_env("P3_WARP_WHIR_ROOT_VERIFY_WARMUP", 2);
+    let arity = warp_fresh_per_step();
+    eprintln!();
+    eprintln!("=== WARP root verifier-only profile harness ===");
+    eprintln!(
+        "    Builds one WARP root proof, then repeatedly verifies it to make verifier profiling visible."
+    );
+    eprintln!(
+        "    Times are medians over {iterations} verifier sample(s) after {warmup} warmup iteration(s)."
+    );
+    eprintln!(
+        "{:<6}{:<8}{:<8}{:<16}{:<16}{:<16}{:<16}{:<16}{:<16}{:<16}{:<16}",
+        "k",
+        "N",
+        "steps",
+        "verify",
+        "setup",
+        "chain",
+        "root_whir",
+        "nonsys_idx",
+        "mle",
+        "msg_mle",
+        "cw_mle",
+    );
+
+    for &num_variables in num_variable_cases {
+        for &n in n_values {
+            if n < arity || (n - arity) % (arity - 1) != 0 {
+                eprintln!(
+                    "{:<6}{:<8}{:<8}{:<16}{:<16}{:<16}{:<16}{:<16}{:<16}{:<16}{:<16}",
+                    num_variables, n, "-", "skip", "-", "-", "-", "-", "-", "-", "invalid N",
+                );
+                continue;
+            }
+
+            let fixture = make_warp_fixture(num_variables);
+            let warp_witnesses = make_boolean_witnesses(num_variables, n);
+            let steps = step_plan(n, arity).len();
+
+            print_progress(format!(
+                "    running k={num_variables}, N={n}: building one WARP root proof..."
+            ));
+            let (bundle, _warp_phases) =
+                build_warp_whir_root_bundle_with_phases(&fixture, &warp_witnesses);
+
+            for _ in 0..warmup {
+                verify_warp_whir_root_bundle(&fixture, &bundle);
+            }
+
+            print_progress(format!(
+                "    running k={num_variables}, N={n}: verifier-only samples..."
+            ));
+            let mut total_samples = Vec::with_capacity(iterations);
+            let mut last_phases = WarpWhirRootVerifyPhaseDurations::default();
+            for _ in 0..iterations {
+                let phases = verify_warp_whir_root_bundle_with_phases(&fixture, &bundle);
+                total_samples.push(phases.total);
+                last_phases = phases;
+            }
+            let stats = duration_stats(&mut total_samples);
+
+            eprintln!(
+                "{:<6}{:<8}{:<8}{:<16}{:<16}{:<16}{:<16}{:<16}{:<16}{:<16}{:<16}",
+                num_variables,
+                n,
+                steps,
+                format_duration(stats.median),
+                format_duration(last_phases.setup),
+                format_duration(last_phases.chain),
+                format_duration(last_phases.root_whir),
+                last_phases.claim_shape.nonsystematic_index,
+                last_phases.claim_shape.mle,
+                last_phases.claim_shape.message_subspace_mle,
+                last_phases.claim_shape.codeword_mle,
+            );
+            eprintln!(
+                "      Verify stats: WARP [{}]",
+                format_duration_stats(stats)
+            );
+            eprintln!(
+                "      Claim shape: index={} systematic_index={} nonsystematic_index={} mle={} message_subspace_mle={} codeword_mle={}",
+                last_phases.claim_shape.index,
+                last_phases.claim_shape.systematic_index,
+                last_phases.claim_shape.nonsystematic_index,
+                last_phases.claim_shape.mle,
+                last_phases.claim_shape.message_subspace_mle,
+                last_phases.claim_shape.codeword_mle,
+            );
         }
     }
     eprintln!();
@@ -1798,6 +2109,10 @@ fn bench_sumcheck_like_prover(c: &mut Criterion) {
     }
     if env::var("P3_WARP_WHIR_ROOT_COMPARE").as_deref() == Ok("1") {
         print_warp_whir_root_comparison(&num_variable_cases, &n_values);
+        return;
+    }
+    if env::var("P3_WARP_WHIR_ROOT_VERIFY_PROFILE").as_deref() == Ok("1") {
+        print_warp_whir_root_verify_profile(&num_variable_cases, &n_values);
         return;
     }
 

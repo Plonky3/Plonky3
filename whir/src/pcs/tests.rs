@@ -17,7 +17,9 @@ use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
-use crate::constraints::statement::{EqStatement, LinearSigmaConstraint, LinearSigmaStatement};
+use crate::constraints::statement::{
+    EqStatement, LinearSigmaConstraint, LinearSigmaStatement, SelectStatement,
+};
 use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, SumcheckStrategy};
 use crate::pcs::{
     WhirBatchedDeferredProverOracle, WhirBatchedDeferredVerifierOracle, WhirLinearSigmaError,
@@ -196,6 +198,40 @@ fn test_whir_linear_sigma_deferred_end_to_end() {
 }
 
 #[test]
+fn test_whir_encoded_base_deferred_end_to_end() {
+    let num_variables = 4;
+    let (pcs, mut rng) = test_pcs(num_variables);
+    let evaluations: Vec<F> = (0..(1 << num_variables)).map(|_| rng.random()).collect();
+    let poly = Poly::new(evaluations.clone());
+    let point = Point::expand_from_univariate(rng.random(), num_variables);
+    let value = poly.eval_base(&point);
+
+    let encoded = pcs.encode_base_initial_oracle(RowMajorMatrix::new(evaluations.clone(), 1));
+    assert_eq!(encoded.message_evaluations(), evaluations.as_slice());
+    assert_eq!(encoded.encoded_matrix().width, 1 << 2);
+    assert_eq!(
+        encoded.encoded_matrix().values.len() / encoded.encoded_matrix().width,
+        1 << (num_variables + 1 - 2)
+    );
+
+    let mut prover_challenger = challenger();
+    let (commitment, prover_data) = pcs.commit_encoded_deferred(encoded, &mut prover_challenger);
+    let (opened_values, proof) =
+        pcs.open_deferred(prover_data, &[vec![point.clone()]], &mut prover_challenger);
+
+    assert_eq!(opened_values[0][0], value);
+
+    let mut verifier_challenger = challenger();
+    pcs.verify_deferred(
+        &commitment,
+        &[vec![(point, value)]],
+        &proof,
+        &mut verifier_challenger,
+    )
+    .expect("encoded base deferred verification");
+}
+
+#[test]
 fn test_whir_extension_deferred_end_to_end() {
     let num_variables = 4;
     let (pcs, mut rng) = test_pcs(num_variables);
@@ -221,6 +257,41 @@ fn test_whir_extension_deferred_end_to_end() {
         &mut verifier_challenger,
     )
     .expect("extension deferred verification");
+}
+
+#[test]
+fn test_whir_encoded_extension_deferred_end_to_end() {
+    let num_variables = 4;
+    let (pcs, mut rng) = test_pcs(num_variables);
+    let evaluations: Vec<EF> = (0..(1 << num_variables)).map(|_| rng.random()).collect();
+    let poly = Poly::new(evaluations.clone());
+    let point = Point::expand_from_univariate(rng.random(), num_variables);
+    let value = poly.eval_ext::<F>(&point);
+
+    let encoded = pcs.encode_extension_initial_oracle(RowMajorMatrix::new(evaluations.clone(), 1));
+    assert_eq!(encoded.message_evaluations(), evaluations.as_slice());
+    assert_eq!(encoded.encoded_matrix().width, 1 << 2);
+    assert_eq!(
+        encoded.encoded_matrix().values.len() / encoded.encoded_matrix().width,
+        1 << (num_variables + 1 - 2)
+    );
+
+    let mut prover_challenger = challenger();
+    let (commitment, prover_data) =
+        pcs.commit_extension_encoded_deferred(encoded, &mut prover_challenger);
+    let (opened_values, proof) =
+        pcs.open_extension_deferred(prover_data, &[vec![point.clone()]], &mut prover_challenger);
+
+    assert_eq!(opened_values[0][0], value);
+
+    let mut verifier_challenger = challenger();
+    pcs.verify_extension_deferred(
+        &commitment,
+        &[vec![(point, value)]],
+        &proof,
+        &mut verifier_challenger,
+    )
+    .expect("encoded extension deferred verification");
 }
 
 #[test]
@@ -282,6 +353,70 @@ fn test_whir_shared_base_batched_deferred_end_to_end() {
         &mut verifier_challenger,
     )
     .expect_err("wrong shared coefficients must fail");
+}
+
+#[test]
+fn test_whir_batched_deferred_with_initial_select_end_to_end() {
+    let num_variables = 4;
+    let (pcs, mut rng) = test_pcs(num_variables);
+    let evaluations: Vec<F> = (0..(1 << num_variables)).map(|_| rng.random()).collect();
+    let poly = Poly::new(evaluations.clone());
+    let eval_matrix = RowMajorMatrix::new(evaluations, 1);
+    let opening_point = Point::expand_from_univariate(rng.random(), num_variables);
+    let opening_value = poly.eval_base(&opening_point);
+    let select_var = F::from_u64(7);
+    let select_value = poly
+        .iter()
+        .rfold(EF::ZERO, |acc, &coeff| acc * select_var + EF::from(coeff));
+
+    let mut select = SelectStatement::initialize(num_variables);
+    select.add_constraint(select_var, select_value);
+
+    let mut commit_challenger = challenger();
+    let (commitment, prover_data) = pcs.commit_deferred(eval_matrix, &mut commit_challenger);
+    let mut prover_challenger = challenger();
+    let proof = pcs
+        .open_grouped_batched_deferred_with_initial_select(
+            vec![WhirBatchedDeferredProverOracle::Base {
+                coeff: EF::ONE,
+                data: prover_data,
+            }],
+            opening_point.clone(),
+            opening_value,
+            &select,
+            &mut prover_challenger,
+        )
+        .expect("select-constrained batched proof");
+
+    let mut verifier_challenger = challenger();
+    pcs.verify_batched_deferred_with_initial_select(
+        &[WhirBatchedDeferredVerifierOracle::Base {
+            coeff: EF::ONE,
+            commitment: commitment.clone(),
+        }],
+        opening_point.clone(),
+        opening_value,
+        select.clone(),
+        &proof,
+        &mut verifier_challenger,
+    )
+    .expect("select-constrained batched verification");
+
+    let mut wrong_select = SelectStatement::initialize(num_variables);
+    wrong_select.add_constraint(select_var, select_value + EF::ONE);
+    let mut verifier_challenger = challenger();
+    pcs.verify_batched_deferred_with_initial_select(
+        &[WhirBatchedDeferredVerifierOracle::Base {
+            coeff: EF::ONE,
+            commitment,
+        }],
+        opening_point,
+        opening_value,
+        wrong_select,
+        &proof,
+        &mut verifier_challenger,
+    )
+    .expect_err("wrong select constraint must fail");
 }
 
 #[test]
