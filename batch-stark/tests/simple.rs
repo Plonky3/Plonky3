@@ -3,7 +3,7 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use core::slice::from_ref;
 
-use p3_air::{Air, AirBuilder, BaseAir, PeriodicAirBuilder, PermutationAirBuilder, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::{
@@ -228,7 +228,7 @@ impl<F: Field> BaseAir<F> for PeriodicAir<F> {
     }
 }
 
-impl<AB: AirBuilder + PeriodicAirBuilder> Air<AB> for PeriodicAir<AB::F>
+impl<AB: AirBuilder> Air<AB> for PeriodicAir<AB::F>
 where
     AB::F: Field,
 {

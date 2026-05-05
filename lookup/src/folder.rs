@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_air::{AirBuilder, ExtensionBuilder, PeriodicAirBuilder, PermutationAirBuilder, RowWindow};
+use p3_air::{AirBuilder, ExtensionBuilder, PermutationAirBuilder, RowWindow};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
 use p3_uni_stark::{
@@ -24,6 +24,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
     type PreprocessedWindow = RowWindow<'a, PackedVal<SC>>;
     type MainWindow = RowWindow<'a, PackedVal<SC>>;
     type PublicVar = Val<SC>;
+    type PeriodicVar = PackedVal<SC>;
 
     fn main(&self) -> Self::MainWindow {
         RowWindow::from_view(&self.inner.main)
@@ -63,10 +64,6 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
     fn public_values(&self) -> &[Self::PublicVar] {
         self.inner.public_values
     }
-}
-
-impl<SC: StarkGenericConfig> PeriodicAirBuilder for ProverConstraintFolderWithLookups<'_, SC> {
-    type PeriodicVar = PackedVal<SC>;
 
     #[inline]
     fn periodic_values(&self) -> &[Self::PeriodicVar] {
@@ -122,6 +119,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
     type PublicVar = Val<SC>;
     type PreprocessedWindow = RowWindow<'a, SC::Challenge>;
     type MainWindow = RowWindow<'a, SC::Challenge>;
+    type PeriodicVar = SC::Challenge;
 
     fn main(&self) -> Self::MainWindow {
         RowWindow::from_two_rows(self.inner.main.top.values, self.inner.main.bottom.values)
@@ -161,10 +159,6 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
     fn assert_zeros<const N: usize, I: Into<Self::Expr>>(&mut self, array: [I; N]) {
         self.inner.assert_zeros(array);
     }
-}
-
-impl<SC: StarkGenericConfig> PeriodicAirBuilder for VerifierConstraintFolderWithLookups<'_, SC> {
-    type PeriodicVar = SC::Challenge;
 
     #[inline]
     fn periodic_values(&self) -> &[Self::PeriodicVar] {

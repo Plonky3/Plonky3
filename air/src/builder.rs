@@ -45,6 +45,14 @@ pub trait AirBuilder: Sized {
     /// Variable type for public values.
     type PublicVar: Into<Self::Expr> + Copy;
 
+    /// Variable type for periodic column values at the current row.
+    ///
+    /// - Periodic columns are commitment-free witness data.
+    /// - Their values repeat with a fixed period.
+    /// - Builders without periodic data still pick a concrete type, so
+    ///   the trait can be implemented uniformly.
+    type PeriodicVar: Into<Self::Expr> + Copy;
+
     /// Return the current and next row slices of the main (primary) trace.
     fn main(&self) -> Self::MainWindow;
 
@@ -167,6 +175,15 @@ pub trait AirBuilder: Sized {
         &[]
     }
 
+    /// Values of every periodic column at the current row.
+    ///
+    /// - One entry per periodic column declared by the AIR.
+    /// - Ordering matches the AIR's declared column order.
+    /// - Default is empty for builders without periodic data.
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        &[]
+    }
+
     /// Assert that `x` is a boolean, i.e. either `0` or `1`.
     ///
     /// Where possible, batching multiple assert_bool calls
@@ -174,15 +191,6 @@ pub trait AirBuilder: Sized {
     fn assert_bool<I: Into<Self::Expr>>(&mut self, x: I) {
         self.assert_zero(x.into().bool_check());
     }
-}
-
-/// Extension of [`AirBuilder`] for builders that supply periodic column values.
-pub trait PeriodicAirBuilder: AirBuilder {
-    /// Variable type for periodic column values.
-    type PeriodicVar: Into<Self::Expr> + Copy;
-
-    /// Periodic column values at the current row.
-    fn periodic_values(&self) -> &[Self::PeriodicVar];
 }
 
 /// Extension trait for builders that carry additional runtime context.

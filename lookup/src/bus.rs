@@ -179,6 +179,7 @@ mod tests {
         type PreprocessedWindow = RowWindow<'static, F>;
         type MainWindow = RowWindow<'static, F>;
         type PublicVar = F;
+        type PeriodicVar = F;
 
         fn main(&self) -> Self::MainWindow {
             unimplemented!()

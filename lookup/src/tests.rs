@@ -175,6 +175,7 @@ impl AirBuilder for MockAirBuilder {
     type PreprocessedWindow = RowMajorMatrix<F>;
     type MainWindow = RowMajorMatrix<F>;
     type PublicVar = F;
+    type PeriodicVar = F;
 
     fn main(&self) -> Self::MainWindow {
         self.window(&self.main)

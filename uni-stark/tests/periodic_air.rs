@@ -1,7 +1,7 @@
 use core::fmt::Debug;
 use core::marker::PhantomData;
 
-use p3_air::{Air, AirBuilder, BaseAir, PeriodicAirBuilder, WindowAccess};
+use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_circle::CirclePcs;
@@ -64,7 +64,7 @@ impl<F: Field> BaseAir<F> for PeriodicAir<F> {
     }
 }
 
-impl<AB: AirBuilder + PeriodicAirBuilder> Air<AB> for PeriodicAir<AB::F>
+impl<AB: AirBuilder> Air<AB> for PeriodicAir<AB::F>
 where
     AB::F: Field,
 {

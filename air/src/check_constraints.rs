@@ -10,7 +10,7 @@ use p3_matrix::stack::ViewPair;
 
 use crate::{
     Air, AirBuilder, AirBuilderWithContext, ExtensionBuilder, Name, NamedAirBuilder,
-    NamedExtensionBuilder, NamespaceExt, PeriodicAirBuilder, PermutationAirBuilder, RowWindow,
+    NamedExtensionBuilder, NamespaceExt, PermutationAirBuilder, RowWindow,
 };
 
 /// A single constraint violation captured during debug evaluation.
@@ -282,6 +282,7 @@ where
     type PreprocessedWindow = RowWindow<'a, F>;
     type MainWindow = RowWindow<'a, F>;
     type PublicVar = F;
+    type PeriodicVar = F;
 
     fn main(&self) -> Self::MainWindow {
         RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
@@ -312,6 +313,10 @@ where
     fn public_values(&self) -> &[Self::PublicVar] {
         self.public_values
     }
+
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.periodic_row
+    }
 }
 
 impl<F: Field, EF: ExtensionField<F>> AirBuilderWithContext for DebugConstraintBuilder<'_, F, EF> {
@@ -334,14 +339,6 @@ impl<F: Field, EF: ExtensionField<F>> ExtensionBuilder for DebugConstraintBuilde
         I: Into<Self::ExprEF>,
     {
         self.assert_zero_ext_named(x, "");
-    }
-}
-
-impl<F: Field, EF: ExtensionField<F>> PeriodicAirBuilder for DebugConstraintBuilder<'_, F, EF> {
-    type PeriodicVar = F;
-
-    fn periodic_values(&self) -> &[Self::PeriodicVar] {
-        self.periodic_row
     }
 }
 
