@@ -687,6 +687,16 @@ impl ZkSumcheck {
                 actual: mask_commits.len(),
             });
         }
+        // PoW witness count is only meaningful when `pow_bits > 0`; the
+        // prover writes one per round in that case (see `zk.rs` round-loop).
+        // Validating here keeps the indexing inside the round loop panic-free
+        // on adversarial proofs.
+        if pow_bits > 0 && zk_data.pow_witnesses.len() != k {
+            return Err(SumcheckError::PowWitnessCountMismatch {
+                expected: k,
+                actual: zk_data.pow_witnesses.len(),
+            });
+        }
         // Wire form is `[c_0, c_2, …, c_d]` of length `max(ℓ_zk, 3) - 1` =
         // `max(ℓ_zk - 1, 2)`.
         let h_size = core::cmp::max(ell_zk, 3);
