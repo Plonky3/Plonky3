@@ -22,6 +22,7 @@ use rand::{RngExt, SeedableRng};
 
 type F = BabyBear;
 type EF4 = BinomialExtensionField<F, 4>;
+type EF5 = BinomialExtensionField<F, 5>;
 
 const SIZES: &[usize] = &[
     63, 64, 65, 255, 256, 257, 511, 512, 513, 1023, 1024, 1025, 1027, 4095, 4096, 4099, 16383,
@@ -67,5 +68,14 @@ fn bench_baby_bear_ext4(c: &mut Criterion) {
     bench_field::<EF4>(c, "batch_multiplicative_inverse/BabyBear-EF4", 0xB4);
 }
 
-criterion_group!(benches, bench_baby_bear, bench_baby_bear_ext4);
+fn bench_baby_bear_ext5(c: &mut Criterion) {
+    bench_field::<EF5>(c, "batch_multiplicative_inverse/BabyBear-EF5", 0xB5);
+}
+
+criterion_group!(
+    benches,
+    bench_baby_bear,
+    bench_baby_bear_ext4,
+    bench_baby_bear_ext5
+);
 criterion_main!(benches);
