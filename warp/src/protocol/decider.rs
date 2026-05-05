@@ -57,7 +57,7 @@ where
         assert_eq!(
             pesat.shape().explicit_len,
             0,
-            "p3-warp v1 supports instance-free AIR/PESAT only (κ = 0)"
+            "p3-warp v1 supports instance-free PESAT only (κ = 0)"
         );
         assert_eq!(
             code.msg_len(),

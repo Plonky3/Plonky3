@@ -74,9 +74,8 @@ where
 /// individually rather than via one stacked alphabet-`F^{ℓ_1}` tree.
 ///
 /// Suitable when fresh codewords arrive pre-committed from upstream
-/// pipelines — for example OpenVM segment outputs (each segment's
-/// `R_main_i` is exactly this shape), or batched STARK proofs whose
-/// trace commitments are RS-code Merkle roots.
+/// pipelines, for example batched STARK proofs whose trace commitments are
+/// RS-code Merkle roots.
 ///
 /// Building one from a raw witness is a one-liner via
 /// [`WarpProver::commit_witness`].
@@ -114,7 +113,7 @@ where
         assert_eq!(
             pesat.shape().explicit_len,
             0,
-            "p3-warp v1 supports instance-free AIR/PESAT only (κ = 0)"
+            "p3-warp v1 supports instance-free PESAT only (κ = 0)"
         );
         assert_eq!(
             code.msg_len(),
@@ -592,10 +591,9 @@ where
     /// let (acc2, proof2) = prover.prove_with_committed(&mut ch, committed, &[]);
     /// ```
     ///
-    /// In real OpenVM-style usage the `CommittedCodeword` is *not* built
-    /// via this helper — it comes directly from upstream (e.g., the SWIRL
-    /// `stacked_commit` step's output). This helper exists for benches and
-    /// tests where the input starts as a raw `Vec<F>` witness.
+    /// In precommitted usage the `CommittedCodeword` may come directly from an
+    /// upstream PCS. This helper exists for benches and tests where the input
+    /// starts as a raw `Vec<F>` witness.
     pub fn commit_witness(&self, witness: Vec<F>) -> CommittedCodeword<F, MT> {
         let k = self.code.msg_len();
         assert_eq!(witness.len(), k, "witness length must equal k = {k}");
@@ -623,7 +621,7 @@ where
     ///   eliminates one of the two Merkle trees per step (the dominant
     ///   per-step prover cost — see `warp/docs/zkvm-pipeline.md`). Saves
     ///   ~50% of step Merkle work in pipelines that already pre-commit
-    ///   their inputs (OpenVM, batched STARK proofs, etc.).
+    ///   their inputs.
     /// - The proof type is [`WarpProofCommitted`]: it omits `rt_0` (the
     ///   verifier holds the `ℓ_1` external commitments) and carries one
     ///   Merkle path **per `(shift, fresh)` pair** instead of one path
@@ -716,10 +714,9 @@ where
     /// Prove one accumulation step using external PCS backends for both fresh
     /// inputs and accumulated WARP codewords.
     ///
-    /// This is the SWIRL/OpenVM-oriented entry point: fresh segment codewords
-    /// can be supplied by `stark-backend`, and every new accumulator is
-    /// committed with the caller-provided accumulator backend so subsequent
-    /// WARP steps and the outer root proof see the same canonical layout.
+    /// This entry point lets fresh codewords and every new accumulator use
+    /// caller-provided commitment backends so subsequent WARP steps and the
+    /// root proof see the same canonical layout.
     #[instrument(skip_all, name = "warp::prove_with_external_committed_accumulator")]
     pub fn prove_with_external_committed_accumulator<Challenger, Fresh, FreshOpenings, AccBackend>(
         &self,
@@ -1563,7 +1560,7 @@ where
     /// - `û_{i'}(X)   = Σ_{b ∈ [n)} eq(A_{i'}(X), b) · F̂_{i', b}(X)`
     ///   (Claim 6.5: `m = log n`, `d = 1`, cost `O(n)` per `i'`).
     /// - `pb_{i'}(X)  = Σ_{c ∈ [M)} eq(B_τ_{i'}(X), c) · p̂_c(B_x_{i'}(X), W_{i'}(X))`
-    ///   (Claim 6.5: `m = log M`, `d = AIR degree`, cost `O(M · d)` per `i'` —
+    ///   (Claim 6.5: `m = log M`, `d = PESAT degree`, cost `O(M · d)` per `i'` —
     ///   delegated to [`BundledPesat::bundled_round_poly`]).
     ///
     /// # Cost

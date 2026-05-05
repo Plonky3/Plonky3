@@ -18,7 +18,7 @@ pub use external::{
     ExternalCommittedCodeword, MmcsExternalOpeningVerifier,
 };
 pub use prover::{CommittedCodeword, ExtProverData, WarpProver};
-pub use verifier::{WarpStepSumcheckAirWitness, WarpVerifier};
+pub use verifier::WarpVerifier;
 
 /// Soundness parameters for one WARP step.
 #[derive(Clone, Copy, Debug)]

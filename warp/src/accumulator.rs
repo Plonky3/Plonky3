@@ -98,7 +98,7 @@ pub struct WarpProof<F, EF, Comm, Proof> {
 /// In this variant the `ℓ_1` fresh codewords are committed
 /// **individually** rather than via one stacked alphabet-`F^{ℓ_1}` tree.
 /// The verifier consumes the `ℓ_1` external commitments separately
-/// (e.g., the segment `R_main_i` roots in OpenVM), so this proof
+/// (e.g., precommitted segment roots), so this proof
 /// **omits `rt_0`** and instead carries one Merkle path **per `(shift,
 /// fresh)` pair**.
 ///
@@ -148,7 +148,8 @@ pub struct WarpProofCommitted<F, EF, Comm, Proof> {
 ///
 /// This is the generic form of [`WarpProofCommitted`]. It keeps the WARP
 /// accumulator commitment/proofs on the local Plonky3 `Mmcs`, but lets fresh
-/// inputs use a different opening proof type. This is needed for SWIRL/OpenVM:
+/// inputs use a different opening proof type. This is needed for precommitted
+/// PCS inputs:
 /// its initial commitment authenticates row groups of an RS codeword matrix,
 /// not a single Plonky3 `Mmcs` row proof.
 #[derive(Clone, Debug, Serialize, Deserialize)]

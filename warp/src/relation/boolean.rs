@@ -8,7 +8,7 @@
 //!
 //! It implements the WARP paper's Claim 6.5 directly for the §6.3
 //! constraint-side round polynomial. This avoids routing the same simple
-//! relation through a generic AIR interpreter in prover hot loops.
+//! relation through a generic constraint interpreter in prover hot loops.
 
 use alloc::vec;
 use alloc::vec::Vec;

@@ -18,7 +18,7 @@
 //! folded witness `ŵ` is equivalent to a fixed subset of the folded codeword
 //! `F̂`. It is also the natural layout for a WHIR-native finalizer, because the
 //! final PESAT check can be reduced to openings of the same Reed-Solomon
-//! oracle instead of proving a separate coefficient/codeword consistency AIR.
+//! oracle instead of proving a separate coefficient/codeword consistency proof.
 //!
 //! The corresponding multilinear extension `f̂` of the codeword is then the
 //! standard MLE of the evaluation vector — exactly what

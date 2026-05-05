@@ -15,7 +15,7 @@
 //! The optimal-cost algorithm is the bottleneck inner kernel of the WARP
 //! §6.3 twin-constraint sumcheck prover (Lemma 6.4); applying it on both
 //! the codeword side (`m = log n`, `d = 1`) and the constraint side
-//! (`m = log M`, `d = AIR degree`) brings the per-round cost from
+//! (`m = log M`, `d = PESAT degree`) brings the per-round cost from
 //! `O((n + M·d) · log(n·M·d))` down to `O(n + M·d)`.
 
 use alloc::vec;

@@ -1,14 +1,14 @@
 //! WHIR-facing opening layer for a WARP accumulator.
 //!
 //! This module is the WHIR-facing boundary for replacing the current
-//! FRI-backed root AIR proof with a WHIR-native final proof. It provides a
+//! FRI-backed root proof with a WHIR-native final proof. It provides a
 //! precommitted opening proof for the RS/MLE accumulator opening
 //!
 //! ```text
 //!     f_hat(alpha) = mu
 //! ```
 //!
-//! and a row-sumcheck proof for the AIR/PESAT decider claim
+//! and a sumcheck proof for the Boolean PESAT decider claim
 //! `Pb(beta, C^{-1}(f)) = eta`, using Plonky3's
 //! [`MultilinearPcs`](p3_commit::MultilinearPcs) abstraction. The important
 //! soundness condition is enforced explicitly throughout: PCS openings are
@@ -21,7 +21,6 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use p3_air::{Air, BaseAir};
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{MultilinearOpenedValues, MultilinearPcs};
 use p3_dft::TwoAdicSubgroupDft;
@@ -43,8 +42,7 @@ use crate::protocol::{
     ExternalCodewordOpeningProver, ExternalCodewordOpeningVerifier, ExternalCommitmentObserver,
     ExternalCommittedCodeword,
 };
-use crate::relation::air::{AirAsPesat, EvalBuilder};
-use crate::relation::{BooleanPesat, BundledPesat, lagrange_interpolate_int_points};
+use crate::relation::{BooleanPesat, BundledPesat};
 use crate::sumcheck::{SumcheckProof, observe_and_sample, verify_sumcheck};
 
 /// PCS proof for the accumulator codeword opening `f_hat(alpha) = mu`.
@@ -55,34 +53,29 @@ pub struct WhirAccumulatorOpeningProof<PcsProof> {
     pub pcs_proof: PcsProof,
 }
 
-/// WHIR-facing proof of the final AIR-as-PESAT decider claim.
+/// WHIR-facing proof of the final PESAT decider claim.
 ///
 /// The final decider equation `Pb(beta, C^{-1}(f)) = eta` is reduced by a
-/// row-sumcheck to terminal trace claims. In systematic RS mode, `C^{-1}(f)` is
-/// the message subspace of the committed codeword. Current-row claims are
-/// opened at the terminal row point. If the AIR reads next-row values, this
-/// proof also carries Boolean-row openings of the committed witness table; the
-/// verifier recomputes the shifted terminal values from those openings.
+/// sumcheck to one terminal witness claim. In systematic RS mode, `C^{-1}(f)`
+/// is the message subspace of the committed codeword.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(
     bound = "EF: Serialize + serde::de::DeserializeOwned, PcsProof: Serialize + serde::de::DeserializeOwned"
 )]
-pub struct WhirAirPesatProof<EF, PcsProof> {
-    /// Sumcheck over the AIR row hypercube.
+pub struct WhirPesatProof<EF, PcsProof> {
+    /// Sumcheck over the PESAT witness hypercube.
     pub decider_sumcheck: SumcheckProof<EF>,
-    /// Claimed terminal main-trace column values at the sampled row point.
+    /// Claimed terminal witness value at the sampled point.
     pub terminal_values: Vec<EF>,
-    /// Claimed terminal next-row values. Empty when the AIR reads no next row.
+    /// Reserved for legacy serialization compatibility; always empty on the
+    /// direct Boolean path.
     pub next_terminal_values: Vec<EF>,
-    /// Boolean-row openings used to derive `next_terminal_values`, row-major
-    /// over the original trace. Empty when the AIR reads no next row.
+    /// Reserved for legacy serialization compatibility; always empty on the
+    /// direct Boolean path.
     pub next_opened_row_values: Vec<EF>,
     /// PCS opening proof for terminal values on the systematic RS oracle.
     pub pcs_proof: PcsProof,
 }
-
-/// Backwards-compatible alias for the first current-row-only name.
-pub type WhirCurrentRowPesatProof<EF, PcsProof> = WhirAirPesatProof<EF, PcsProof>;
 
 /// WHIR-facing final WARP proof.
 ///
@@ -105,8 +98,8 @@ pub type WhirCurrentRowPesatProof<EF, PcsProof> = WhirAirPesatProof<EF, PcsProof
 pub struct WhirWarpFinalizerProof<EF, PcsProof> {
     /// Opening proof for `f_hat(alpha) = mu`.
     pub accumulator_opening: WhirAccumulatorOpeningProof<PcsProof>,
-    /// AIR/PESAT decider proof for `Pb(beta, C^{-1}(f)) = eta`.
-    pub air_pesat: WhirAirPesatProof<EF, PcsProof>,
+    /// PESAT decider proof for `Pb(beta, C^{-1}(f)) = eta`.
+    pub pesat: WhirPesatProof<EF, PcsProof>,
 }
 
 /// Opening backend for arbitrary MLE points on an already committed accumulator.
@@ -115,7 +108,7 @@ pub struct WhirWarpFinalizerProof<EF, PcsProof> {
 /// recommitting the final accumulator. The ordinary
 /// [`AccumulatorCommitmentBackend`] trait only opens Boolean codeword indices for
 /// WARP shift queries; the final decider also needs extension-point openings
-/// such as `f_hat(alpha)` and terminal AIR row claims.
+/// such as `f_hat(alpha)` and terminal PESAT claims.
 pub trait AccumulatorPointOpeningBackend<F, EF, Challenger>:
     AccumulatorCommitmentBackend<F, EF, Challenger>
 where
@@ -1215,32 +1208,6 @@ where
     }
 }
 
-/// WHIR-native decider proof for AIR-as-PESAT.
-///
-/// This is the next replacement piece for the FRI root proof: it proves
-/// `Pb(beta, w) = eta` and reduces the terminal witness claims to openings of
-/// the same committed systematic RS codeword. AIRs that read next-row cells are
-/// supported by a conservative shifted-row opening strategy: the verifier
-/// reconstructs the shifted terminal claim from WHIR openings of the original
-/// Boolean rows. That fallback is sound and modular, but not yet the final
-/// asymptotically succinct shifted virtual-oracle construction.
-pub struct WhirAirPesatProtocol<'a, F, EF, Pcs, Challenger, Dft, A>
-where
-    F: TwoAdicField,
-    EF: ExtensionField<F>,
-    Dft: TwoAdicSubgroupDft<F>,
-{
-    pcs: &'a Pcs,
-    code: &'a ReedSolomonCode<F, Dft>,
-    pesat: &'a AirAsPesat<A, F, EF>,
-    challenger_seed: Challenger,
-    _ph: PhantomData<EF>,
-}
-
-/// Backwards-compatible alias for the first current-row-only name.
-pub type WhirCurrentRowPesatProtocol<'a, F, EF, Pcs, Challenger, Dft, A> =
-    WhirAirPesatProtocol<'a, F, EF, Pcs, Challenger, Dft, A>;
-
 /// WHIR-native decider proof for the direct Boolean PESAT relation.
 pub struct WhirBooleanPesatProtocol<'a, F, EF, Pcs, Challenger, Dft>
 where
@@ -1291,7 +1258,7 @@ where
         &self,
         instance: &AccumulatorInstance<EF, Pcs::Commitment>,
         witness: &AccumulatorWitness<EF, ProverData>,
-    ) -> Result<WhirAirPesatProof<EF, Pcs::Proof>, FinalizerError> {
+    ) -> Result<WhirPesatProof<EF, Pcs::Proof>, FinalizerError> {
         self.validate_pesat_shape(instance)?;
         if witness.f.len() != self.code.codeword_len() {
             return Err(FinalizerError::Decider(DeciderError::EncodingMismatch));
@@ -1321,7 +1288,7 @@ where
             return Err(FinalizerError::Decider(DeciderError::EncodingMismatch));
         }
 
-        Ok(WhirAirPesatProof {
+        Ok(WhirPesatProof {
             decider_sumcheck: sumcheck,
             terminal_values: vec![terminal_value],
             next_terminal_values: Vec::new(),
@@ -1334,7 +1301,7 @@ where
     pub fn verify(
         &self,
         instance: &AccumulatorInstance<EF, Pcs::Commitment>,
-        proof: &WhirAirPesatProof<EF, Pcs::Proof>,
+        proof: &WhirPesatProof<EF, Pcs::Proof>,
     ) -> Result<(), FinalizerError> {
         self.validate_pesat_shape(instance)?;
         if proof.terminal_values.len() != 1
@@ -1550,15 +1517,15 @@ where
             self.pcs,
             self.code,
             self.pesat,
-            self.tagged_challenger(WHIR_WARP_AIR_PESAT_TAG),
+            self.tagged_challenger(WHIR_WARP_PESAT_TAG),
         );
 
         let accumulator_opening = opening_protocol.prove(instance, witness)?;
-        let air_pesat = boolean_protocol.prove(instance, witness)?;
+        let pesat = boolean_protocol.prove(instance, witness)?;
 
         Ok(WhirWarpFinalizerProof {
             accumulator_opening,
-            air_pesat,
+            pesat,
         })
     }
 
@@ -1577,11 +1544,11 @@ where
             self.pcs,
             self.code,
             self.pesat,
-            self.tagged_challenger(WHIR_WARP_AIR_PESAT_TAG),
+            self.tagged_challenger(WHIR_WARP_PESAT_TAG),
         );
 
         opening_protocol.verify(instance, &proof.accumulator_opening)?;
-        boolean_protocol.verify(instance, &proof.air_pesat)
+        boolean_protocol.verify(instance, &proof.pesat)
     }
 
     fn tagged_challenger(&self, tag: u64) -> Challenger {
@@ -1745,906 +1712,10 @@ where
     }
 }
 
-/// Composed WHIR-native finalizer for the final WARP accumulator.
-///
-/// The protocol intentionally stays generic over [`MultilinearPcs`]. That
-/// lets Plonky3 wire in a WHIR PCS once its commitment type/layout matches the
-/// WARP accumulator root, while tests can use a transparent PCS to exercise the
-/// full decider assembly. The constructor does not create or transform a
-/// commitment; both subproofs verify against `instance.rt`.
-pub struct WhirWarpFinalizerProtocol<'a, F, EF, Pcs, Challenger, Dft, A>
-where
-    F: TwoAdicField + PrimeCharacteristicRing,
-    EF: ExtensionField<F>,
-    Dft: TwoAdicSubgroupDft<F>,
-{
-    pcs: &'a Pcs,
-    code: &'a ReedSolomonCode<F, Dft>,
-    pesat: &'a AirAsPesat<A, F, EF>,
-    challenger_seed: Challenger,
-    _ph: PhantomData<EF>,
-}
-
-impl<'a, F, EF, Pcs, Challenger, Dft, A>
-    WhirWarpFinalizerProtocol<'a, F, EF, Pcs, Challenger, Dft, A>
-where
-    F: TwoAdicField + PrimeCharacteristicRing,
-    EF: ExtensionField<F>,
-    Dft: TwoAdicSubgroupDft<F>,
-{
-    /// Create a composed WHIR finalizer from a compatible PCS.
-    pub const fn new(
-        pcs: &'a Pcs,
-        code: &'a ReedSolomonCode<F, Dft>,
-        pesat: &'a AirAsPesat<A, F, EF>,
-        challenger_seed: Challenger,
-    ) -> Self {
-        Self {
-            pcs,
-            code,
-            pesat,
-            challenger_seed,
-            _ph: PhantomData,
-        }
-    }
-}
-
-impl<'a, F, EF, Pcs, Challenger, Dft, A>
-    WhirWarpFinalizerProtocol<'a, F, EF, Pcs, Challenger, Dft, A>
-where
-    F: TwoAdicField + PrimeCharacteristicRing,
-    EF: ExtensionField<F> + TwoAdicField,
-    Pcs: MultilinearPcs<EF, Challenger, Val = EF>,
-    Pcs::Commitment: Clone + PartialEq,
-    Challenger:
-        FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<Pcs::Commitment> + Clone,
-    Dft: TwoAdicSubgroupDft<F>,
-    A: BaseAir<F> + for<'b> Air<EvalBuilder<'b, F, EF>>,
-    AirAsPesat<A, F, EF>: BundledPesat<F, EF>,
-{
-    /// Prove the final accumulator opening and final AIR/PESAT decider claim.
-    pub fn prove<ProverData>(
-        &self,
-        instance: &AccumulatorInstance<EF, Pcs::Commitment>,
-        witness: &AccumulatorWitness<EF, ProverData>,
-    ) -> Result<WhirWarpFinalizerProof<EF, Pcs::Proof>, FinalizerError> {
-        let opening_protocol = WhirAccumulatorOpeningProtocol::<F, EF, Pcs, Challenger, Dft>::new(
-            self.pcs,
-            self.code,
-            self.tagged_challenger(WHIR_WARP_OPENING_TAG),
-        );
-        let air_protocol = WhirAirPesatProtocol::<F, EF, Pcs, Challenger, Dft, A>::new(
-            self.pcs,
-            self.code,
-            self.pesat,
-            self.tagged_challenger(WHIR_WARP_AIR_PESAT_TAG),
-        );
-
-        let accumulator_opening = opening_protocol.prove(instance, witness)?;
-        let air_pesat = air_protocol.prove(instance, witness)?;
-
-        Ok(WhirWarpFinalizerProof {
-            accumulator_opening,
-            air_pesat,
-        })
-    }
-
-    /// Verify both final WARP decider subclaims against the same commitment.
-    pub fn verify(
-        &self,
-        instance: &AccumulatorInstance<EF, Pcs::Commitment>,
-        proof: &WhirWarpFinalizerProof<EF, Pcs::Proof>,
-    ) -> Result<(), FinalizerError> {
-        let opening_protocol = WhirAccumulatorOpeningProtocol::<F, EF, Pcs, Challenger, Dft>::new(
-            self.pcs,
-            self.code,
-            self.tagged_challenger(WHIR_WARP_OPENING_TAG),
-        );
-        let air_protocol = WhirAirPesatProtocol::<F, EF, Pcs, Challenger, Dft, A>::new(
-            self.pcs,
-            self.code,
-            self.pesat,
-            self.tagged_challenger(WHIR_WARP_AIR_PESAT_TAG),
-        );
-
-        opening_protocol.verify(instance, &proof.accumulator_opening)?;
-        air_protocol.verify(instance, &proof.air_pesat)
-    }
-
-    fn tagged_challenger(&self, tag: u64) -> Challenger {
-        let mut challenger = self.challenger_seed.clone();
-        challenger.observe(F::from_u64(tag));
-        challenger
-    }
-}
-
-impl<'a, F, EF, Pcs, Challenger, Dft, A, ProverData>
-    crate::finalize::AccumulatorFinalizer<F, EF, Pcs::Commitment, ProverData>
-    for WhirWarpFinalizerProtocol<'a, F, EF, Pcs, Challenger, Dft, A>
-where
-    F: TwoAdicField + PrimeCharacteristicRing,
-    EF: ExtensionField<F> + TwoAdicField,
-    Pcs: MultilinearPcs<EF, Challenger, Val = EF>,
-    Pcs::Commitment: Clone + PartialEq,
-    Challenger:
-        FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<Pcs::Commitment> + Clone,
-    Dft: TwoAdicSubgroupDft<F>,
-    A: BaseAir<F> + for<'b> Air<EvalBuilder<'b, F, EF>>,
-    AirAsPesat<A, F, EF>: BundledPesat<F, EF>,
-{
-    type Proof = WhirWarpFinalizerProof<EF, Pcs::Proof>;
-
-    fn finalize(
-        &self,
-        instance: &AccumulatorInstance<EF, Pcs::Commitment>,
-        witness: &AccumulatorWitness<EF, ProverData>,
-    ) -> Result<Self::Proof, FinalizerError> {
-        self.prove(instance, witness)
-    }
-
-    fn verify(
-        &self,
-        instance: &AccumulatorInstance<EF, Pcs::Commitment>,
-        proof: &Self::Proof,
-    ) -> Result<(), FinalizerError> {
-        WhirWarpFinalizerProtocol::verify(self, instance, proof)
-    }
-}
-
-/// WHIR finalizer that reuses the final accumulator's existing WHIR commitment.
-///
-/// This is the optimized path for WARP roots built with
-/// [`WhirLimbAccumulatorBackend`]. It wraps the generic
-/// [`WhirWarpFinalizerProtocol`] with a small PCS adapter whose `commit/open`
-/// calls prove openings against `acc.w.td` and `acc.x.rt` instead of
-/// recomputing the final accumulator commitment.
-#[derive(Clone)]
-pub struct WhirPrecommittedWarpFinalizerProtocol<'a, F, EF, Backend, Challenger, Dft, A>
-where
-    F: TwoAdicField + PrimeCharacteristicRing,
-    EF: ExtensionField<F>,
-    Challenger: FieldChallenger<F>,
-    Backend: AccumulatorPointOpeningBackend<F, EF, Challenger>,
-    Dft: TwoAdicSubgroupDft<F>,
-{
-    backend: &'a Backend,
-    code: &'a ReedSolomonCode<F, Dft>,
-    pesat: &'a AirAsPesat<A, F, EF>,
-    challenger_seed: Challenger,
-}
-
-impl<'a, F, EF, Backend, Challenger, Dft, A>
-    WhirPrecommittedWarpFinalizerProtocol<'a, F, EF, Backend, Challenger, Dft, A>
-where
-    F: TwoAdicField + PrimeCharacteristicRing,
-    EF: ExtensionField<F>,
-    Challenger: FieldChallenger<F>,
-    Backend: AccumulatorPointOpeningBackend<F, EF, Challenger>,
-    Dft: TwoAdicSubgroupDft<F>,
-{
-    /// Create a finalizer over an accumulator backend that supports arbitrary
-    /// MLE point openings for its already committed accumulator.
-    pub const fn new(
-        backend: &'a Backend,
-        code: &'a ReedSolomonCode<F, Dft>,
-        pesat: &'a AirAsPesat<A, F, EF>,
-        challenger_seed: Challenger,
-    ) -> Self {
-        Self {
-            backend,
-            code,
-            pesat,
-            challenger_seed,
-        }
-    }
-}
-
-impl<'a, F, EF, Backend, Challenger, Dft, A>
-    WhirPrecommittedWarpFinalizerProtocol<'a, F, EF, Backend, Challenger, Dft, A>
-where
-    F: TwoAdicField + PrimeCharacteristicRing,
-    EF: ExtensionField<F> + TwoAdicField,
-    Backend: AccumulatorPointOpeningBackend<F, EF, Challenger>,
-    Backend::Commitment: Clone + PartialEq,
-    Challenger: FieldChallenger<F>
-        + GrindingChallenger<Witness = F>
-        + CanObserve<Backend::Commitment>
-        + Clone,
-    Dft: TwoAdicSubgroupDft<F>,
-    A: BaseAir<F> + for<'b> Air<EvalBuilder<'b, F, EF>>,
-    AirAsPesat<A, F, EF>: BundledPesat<F, EF>,
-{
-    /// Prove both final decider claims against the accumulator commitment already
-    /// present in `instance.rt`.
-    pub fn prove(
-        &self,
-        instance: &AccumulatorInstance<EF, Backend::Commitment>,
-        witness: &AccumulatorWitness<EF, Backend::ProverData>,
-    ) -> Result<WhirWarpFinalizerProof<EF, Backend::PointProof>, FinalizerError> {
-        let pcs = PrecommittedAccumulatorPcs::<F, EF, Backend, Challenger>::prover(
-            self.backend,
-            &instance.rt,
-            &witness.td,
-        );
-        let finalizer = WhirWarpFinalizerProtocol::<F, EF, _, Challenger, Dft, A>::new(
-            &pcs,
-            self.code,
-            self.pesat,
-            self.challenger_seed.clone(),
-        );
-        finalizer.prove(instance, witness)
-    }
-
-    /// Verify both final decider claims against the accumulator commitment already
-    /// present in `instance.rt`.
-    pub fn verify(
-        &self,
-        instance: &AccumulatorInstance<EF, Backend::Commitment>,
-        proof: &WhirWarpFinalizerProof<EF, Backend::PointProof>,
-    ) -> Result<(), FinalizerError> {
-        let pcs = PrecommittedAccumulatorPcs::<F, EF, Backend, Challenger>::verifier(self.backend);
-        let finalizer = WhirWarpFinalizerProtocol::<F, EF, _, Challenger, Dft, A>::new(
-            &pcs,
-            self.code,
-            self.pesat,
-            self.challenger_seed.clone(),
-        );
-        finalizer.verify(instance, proof)
-    }
-}
-
-impl<'a, F, EF, Backend, Challenger, Dft, A>
-    crate::finalize::AccumulatorFinalizer<F, EF, Backend::Commitment, Backend::ProverData>
-    for WhirPrecommittedWarpFinalizerProtocol<'a, F, EF, Backend, Challenger, Dft, A>
-where
-    F: TwoAdicField + PrimeCharacteristicRing,
-    EF: ExtensionField<F> + TwoAdicField,
-    Backend: AccumulatorPointOpeningBackend<F, EF, Challenger>,
-    Backend::Commitment: Clone + PartialEq,
-    Challenger: FieldChallenger<F>
-        + GrindingChallenger<Witness = F>
-        + CanObserve<Backend::Commitment>
-        + Clone,
-    Dft: TwoAdicSubgroupDft<F>,
-    A: BaseAir<F> + for<'b> Air<EvalBuilder<'b, F, EF>>,
-    AirAsPesat<A, F, EF>: BundledPesat<F, EF>,
-{
-    type Proof = WhirWarpFinalizerProof<EF, Backend::PointProof>;
-
-    fn finalize(
-        &self,
-        instance: &AccumulatorInstance<EF, Backend::Commitment>,
-        witness: &AccumulatorWitness<EF, Backend::ProverData>,
-    ) -> Result<Self::Proof, FinalizerError> {
-        self.prove(instance, witness)
-    }
-
-    fn verify(
-        &self,
-        instance: &AccumulatorInstance<EF, Backend::Commitment>,
-        proof: &Self::Proof,
-    ) -> Result<(), FinalizerError> {
-        WhirPrecommittedWarpFinalizerProtocol::verify(self, instance, proof)
-    }
-}
-
 const WHIR_WARP_OPENING_TAG: u64 = 0x5741_5250_4f50_454e;
-const WHIR_WARP_AIR_PESAT_TAG: u64 = 0x5741_5250_4149_5250;
+const WHIR_WARP_PESAT_TAG: u64 = 0x5741_5250_5045_5341;
 const EXTENSION_LIMB_PCS_TAG: u64 = 0x5741_5250_4c49_4d42;
 const WHIR_CODEWORD_BACKEND_TAG: u64 = 0x5741_5250_434f_4445;
-
-impl<'a, F, EF, Pcs, Challenger, Dft, A> WhirAirPesatProtocol<'a, F, EF, Pcs, Challenger, Dft, A>
-where
-    F: TwoAdicField,
-    EF: ExtensionField<F>,
-    Dft: TwoAdicSubgroupDft<F>,
-{
-    /// Create a current-row AIR decider protocol.
-    pub const fn new(
-        pcs: &'a Pcs,
-        code: &'a ReedSolomonCode<F, Dft>,
-        pesat: &'a AirAsPesat<A, F, EF>,
-        challenger_seed: Challenger,
-    ) -> Self {
-        Self {
-            pcs,
-            code,
-            pesat,
-            challenger_seed,
-            _ph: PhantomData,
-        }
-    }
-}
-
-impl<'a, F, EF, Pcs, Challenger, Dft, A> WhirAirPesatProtocol<'a, F, EF, Pcs, Challenger, Dft, A>
-where
-    F: TwoAdicField,
-    EF: ExtensionField<F> + TwoAdicField,
-    Pcs: MultilinearPcs<EF, Challenger, Val = EF>,
-    Pcs::Commitment: Clone + PartialEq,
-    Challenger:
-        FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<Pcs::Commitment> + Clone,
-    Dft: TwoAdicSubgroupDft<F>,
-    A: BaseAir<F> + for<'b> Air<EvalBuilder<'b, F, EF>>,
-    AirAsPesat<A, F, EF>: BundledPesat<F, EF>,
-{
-    /// Prove `Pb(beta, C^{-1}(f)) = eta` by row-sumcheck plus PCS openings.
-    pub fn prove<ProverData>(
-        &self,
-        instance: &AccumulatorInstance<EF, Pcs::Commitment>,
-        witness: &AccumulatorWitness<EF, ProverData>,
-    ) -> Result<WhirAirPesatProof<EF, Pcs::Proof>, FinalizerError> {
-        self.validate_pesat_shape(instance)?;
-        if witness.f.len() != self.code.codeword_len() {
-            return Err(FinalizerError::Decider(DeciderError::EncodingMismatch));
-        }
-        let committed_witness = self.systematic_witness_from_codeword(&witness.f)?;
-
-        let mut challenger = self.challenger_seed.clone();
-        self.observe_statement(instance, &mut challenger);
-        let (sumcheck, row_point, final_claim, terminal_values, next_values_for_claim) = if self
-            .uses_next_row_values()
-        {
-            let trace_polys = self.trace_polys(&committed_witness);
-            let (sumcheck, row_point, final_claim) =
-                self.prove_row_sumcheck(instance, &trace_polys, &mut challenger);
-            let terminal_values = self.column_values_at(&trace_polys.current, row_point.as_slice());
-            let next_values_for_claim =
-                self.next_terminal_values_at(&trace_polys, row_point.as_slice());
-            (
-                sumcheck,
-                row_point,
-                final_claim,
-                terminal_values,
-                next_values_for_claim,
-            )
-        } else {
-            self.prove_current_row_sumcheck(instance, &committed_witness, &mut challenger)
-        };
-        let next_terminal_values = if self.uses_next_row_values() {
-            next_values_for_claim.clone()
-        } else {
-            Vec::new()
-        };
-        self.check_terminal_claim(
-            instance,
-            row_point.as_slice(),
-            &terminal_values,
-            &next_values_for_claim,
-            final_claim,
-        )?;
-
-        self.observe_terminal_values(&terminal_values, &next_terminal_values, &mut challenger);
-        let next_opened_row_values = self.next_opened_row_values(&committed_witness);
-        let opening_points = [self.opening_points(row_point.as_slice())];
-        let evaluations = RowMajorMatrix::new(witness.f.clone(), 1);
-        let (commitment, prover_data) =
-            self.pcs
-                .commit(evaluations, &opening_points, &mut challenger);
-        if commitment != instance.rt {
-            return Err(FinalizerError::Decider(DeciderError::MerkleRoot));
-        }
-        let (opened_values, pcs_proof) = self.pcs.open(prover_data, &mut challenger);
-        let expected_opened_values =
-            self.expected_opened_values(&terminal_values, &next_opened_row_values);
-        let opened_values = opened_values.first().ok_or(FinalizerError::Unsupported(
-            "PCS did not return terminal openings",
-        ))?;
-        if opened_values != &expected_opened_values {
-            return Err(FinalizerError::Decider(DeciderError::EncodingMismatch));
-        }
-
-        Ok(WhirAirPesatProof {
-            decider_sumcheck: sumcheck,
-            terminal_values,
-            next_terminal_values,
-            next_opened_row_values,
-            pcs_proof,
-        })
-    }
-
-    /// Verify the current-row AIR decider proof against the accumulator root.
-    pub fn verify(
-        &self,
-        instance: &AccumulatorInstance<EF, Pcs::Commitment>,
-        proof: &WhirAirPesatProof<EF, Pcs::Proof>,
-    ) -> Result<(), FinalizerError> {
-        self.validate_pesat_shape(instance)?;
-        let mut challenger = self.challenger_seed.clone();
-        self.observe_statement(instance, &mut challenger);
-        let degree = self.row_sumcheck_degree();
-        let (row_point, final_claim) = verify_sumcheck::<F, EF, _>(
-            &proof.decider_sumcheck,
-            &mut challenger,
-            instance.eta,
-            self.pesat.log_height(),
-            degree,
-            "whir-current-row-pesat",
-        )?;
-        if proof.terminal_values.len() != self.pesat.main_width() {
-            return Err(FinalizerError::Decider(DeciderError::EncodingMismatch));
-        }
-        self.validate_next_openings(
-            row_point.as_slice(),
-            &proof.next_terminal_values,
-            &proof.next_opened_row_values,
-        )?;
-        self.check_terminal_claim(
-            instance,
-            row_point.as_slice(),
-            &proof.terminal_values,
-            &self.next_values_for_claim(&proof.next_terminal_values),
-            final_claim,
-        )?;
-
-        self.observe_terminal_values(
-            &proof.terminal_values,
-            &proof.next_terminal_values,
-            &mut challenger,
-        );
-        let opening_points = self.opening_points(row_point.as_slice());
-        let opened_values =
-            self.expected_opened_values(&proof.terminal_values, &proof.next_opened_row_values);
-        let opening_claims = [opening_points
-            .iter()
-            .cloned()
-            .zip(opened_values)
-            .collect::<Vec<_>>()];
-        self.pcs
-            .verify(
-                &instance.rt,
-                &opening_claims,
-                &proof.pcs_proof,
-                &mut challenger,
-            )
-            .map_err(|err| FinalizerError::OpeningProof(format!("{err:?}")))
-    }
-
-    fn validate_pesat_shape(
-        &self,
-        instance: &AccumulatorInstance<EF, Pcs::Commitment>,
-    ) -> Result<(), FinalizerError> {
-        if !self.code.is_systematic() {
-            return Err(FinalizerError::Unsupported(
-                "WHIR-native WARP finalization requires systematic RS encoding",
-            ));
-        }
-        if self.pcs.num_vars() != self.code.log_codeword_len() {
-            return Err(FinalizerError::Unsupported(
-                "PCS variable count must match the WARP codeword MLE dimension",
-            ));
-        }
-        if self.pesat.shape().explicit_len != 0 {
-            return Err(FinalizerError::Unsupported(
-                "current-row WHIR PESAT proof only supports instance-free AIR/PESAT",
-            ));
-        }
-        if self.pesat.shape().witness_len() != self.code.msg_len() {
-            return Err(FinalizerError::Decider(DeciderError::EncodingMismatch));
-        }
-        if self.pesat.log_height() + self.pesat.main_width().trailing_zeros() as usize
-            != self.code.log_msg_len()
-        {
-            return Err(FinalizerError::Decider(DeciderError::EncodingMismatch));
-        }
-        if instance.beta.len() != self.pesat.shape().log_constraints {
-            return Err(FinalizerError::Decider(DeciderError::BundledPesat));
-        }
-        for col in self.pesat.main_next_row_columns() {
-            if col >= self.pesat.main_width() {
-                return Err(FinalizerError::Unsupported(
-                    "AIR reports an out-of-range next-row column",
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn observe_statement(
-        &self,
-        instance: &AccumulatorInstance<EF, Pcs::Commitment>,
-        challenger: &mut Challenger,
-    ) {
-        challenger.observe(instance.rt.clone());
-        challenger.observe_algebra_slice(&instance.beta);
-        challenger.observe_algebra_element(instance.eta);
-    }
-
-    fn row_sumcheck_degree(&self) -> usize {
-        self.pesat.max_degree() + 1
-    }
-
-    fn uses_next_row_values(&self) -> bool {
-        self.pesat.uses_next_row_values()
-    }
-
-    fn prove_row_sumcheck(
-        &self,
-        instance: &AccumulatorInstance<EF, Pcs::Commitment>,
-        trace_polys: &TracePolys<EF>,
-        challenger: &mut Challenger,
-    ) -> (SumcheckProof<EF>, Point<EF>, EF) {
-        let degree = self.row_sumcheck_degree();
-        let rounds = self.pesat.log_height();
-        let mut proof = SumcheckProof::<EF>::new();
-        let mut prefix = Vec::with_capacity(rounds);
-        let mut claim = instance.eta;
-        for round in 0..rounds {
-            let suffix_bits = rounds - round - 1;
-            let evals = (0..=degree)
-                .map(|x| {
-                    let x = EF::from_u64(x as u64);
-                    self.partial_row_sum(instance, trace_polys, &prefix, x, suffix_bits)
-                })
-                .collect::<Vec<_>>();
-            let coeffs = lagrange_interpolate_int_points(&evals);
-            debug_assert_eq!(coeffs[0] + coeffs.iter().copied().sum::<EF>(), claim);
-            let challenge = observe_and_sample::<F, EF, _>(&mut proof, challenger, coeffs.clone());
-            claim = coeffs
-                .iter()
-                .rev()
-                .fold(EF::ZERO, |acc, &c| acc * challenge + c);
-            prefix.push(challenge);
-        }
-        (proof, Point::new(prefix), claim)
-    }
-
-    fn prove_current_row_sumcheck(
-        &self,
-        instance: &AccumulatorInstance<EF, Pcs::Commitment>,
-        witness: &[EF],
-        challenger: &mut Challenger,
-    ) -> (SumcheckProof<EF>, Point<EF>, EF, Vec<EF>, Vec<EF>) {
-        let height = self.pesat.height();
-        let width = self.pesat.main_width();
-        debug_assert_eq!(witness.len(), height * width);
-
-        let degree = self.row_sumcheck_degree();
-        let rounds = self.pesat.log_height();
-        let mut proof = SumcheckProof::<EF>::new();
-        let mut prefix = Vec::with_capacity(rounds);
-        let mut claim = instance.eta;
-        let mut folded_columns = (0..width)
-            .map(|col| {
-                (0..height)
-                    .map(|row| witness[row * width + col])
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-
-        for round in 0..rounds {
-            let suffix_bits = rounds - round - 1;
-            let half_len = 1usize << suffix_bits;
-            let evals = (0..=degree)
-                .map(|x| {
-                    let x = EF::from_u64(x as u64);
-                    self.partial_current_row_sum(instance, &folded_columns, &prefix, x, suffix_bits)
-                })
-                .collect::<Vec<_>>();
-            let coeffs = lagrange_interpolate_int_points(&evals);
-            debug_assert_eq!(coeffs[0] + coeffs.iter().copied().sum::<EF>(), claim);
-            let challenge = observe_and_sample::<F, EF, _>(&mut proof, challenger, coeffs.clone());
-            claim = coeffs
-                .iter()
-                .rev()
-                .fold(EF::ZERO, |acc, &c| acc * challenge + c);
-
-            for column in &mut folded_columns {
-                for suffix in 0..half_len {
-                    let lo = column[suffix];
-                    let hi = column[suffix + half_len];
-                    column[suffix] = lo + challenge * (hi - lo);
-                }
-                column.truncate(half_len);
-            }
-            prefix.push(challenge);
-        }
-
-        let terminal_values = folded_columns
-            .iter()
-            .map(|column| column[0])
-            .collect::<Vec<_>>();
-        (
-            proof,
-            Point::new(prefix),
-            claim,
-            terminal_values,
-            EF::zero_vec(width),
-        )
-    }
-
-    fn partial_current_row_sum(
-        &self,
-        instance: &AccumulatorInstance<EF, Pcs::Commitment>,
-        folded_columns: &[Vec<EF>],
-        prefix: &[EF],
-        round_value: EF,
-        suffix_bits: usize,
-    ) -> EF {
-        let half_len = 1usize << suffix_bits;
-        let width = self.pesat.main_width();
-        let mut values = EF::zero_vec(width);
-        let mut row_point = EF::zero_vec(self.pesat.log_height());
-        row_point[..prefix.len()].copy_from_slice(prefix);
-        row_point[prefix.len()] = round_value;
-
-        let (beta_row, beta_constraint) = self.split_beta(instance);
-        let prefix_eq = eval_eq_ext(&beta_row[..prefix.len()], prefix);
-        let beta_round = beta_row[prefix.len()];
-        let round_eq = beta_round * round_value + (EF::ONE - beta_round) * (EF::ONE - round_value);
-        let suffix_eq =
-            Poly::<EF>::new_from_point(&beta_row[prefix.len() + 1..], prefix_eq * round_eq);
-        let constraint_eq = Poly::<EF>::new_from_point(beta_constraint, EF::ONE);
-        let next_zero = EF::zero_vec(width);
-
-        (0..half_len)
-            .map(|suffix| {
-                for (value, column) in values.iter_mut().zip(folded_columns.iter()) {
-                    let lo = column[suffix];
-                    let hi = column[suffix + half_len];
-                    *value = lo + round_value * (hi - lo);
-                }
-                fill_row_point_suffix(&mut row_point, prefix.len() + 1, suffix, suffix_bits);
-                suffix_eq.as_slice()[suffix]
-                    * self.pesat.evaluate_row_constraint_combination_with_eq(
-                        &row_point,
-                        constraint_eq.as_slice(),
-                        &values,
-                        &next_zero,
-                    )
-            })
-            .sum()
-    }
-
-    fn partial_row_sum(
-        &self,
-        instance: &AccumulatorInstance<EF, Pcs::Commitment>,
-        trace_polys: &TracePolys<EF>,
-        prefix: &[EF],
-        round_value: EF,
-        suffix_bits: usize,
-    ) -> EF {
-        (0..(1usize << suffix_bits))
-            .map(|suffix| {
-                let row_point = row_point_from_parts(prefix, round_value, suffix, suffix_bits);
-                self.row_summand(instance, trace_polys, &row_point)
-            })
-            .sum()
-    }
-
-    fn row_summand(
-        &self,
-        instance: &AccumulatorInstance<EF, Pcs::Commitment>,
-        trace_polys: &TracePolys<EF>,
-        row_point: &[EF],
-    ) -> EF {
-        let (beta_row, beta_constraint) = self.split_beta(instance);
-        let row_eq = eval_eq_ext(beta_row, row_point);
-        let values = self.column_values_at(&trace_polys.current, row_point);
-        let next_values = self.next_terminal_values_at(trace_polys, row_point);
-        row_eq
-            * self.pesat.evaluate_row_constraint_combination(
-                row_point,
-                beta_constraint,
-                &values,
-                &next_values,
-            )
-    }
-
-    fn check_terminal_claim(
-        &self,
-        instance: &AccumulatorInstance<EF, Pcs::Commitment>,
-        row_point: &[EF],
-        terminal_values: &[EF],
-        next_terminal_values: &[EF],
-        final_claim: EF,
-    ) -> Result<(), FinalizerError> {
-        let (beta_row, beta_constraint) = self.split_beta(instance);
-        let expected = eval_eq_ext(beta_row, row_point)
-            * self.pesat.evaluate_row_constraint_combination(
-                row_point,
-                beta_constraint,
-                terminal_values,
-                next_terminal_values,
-            );
-        if expected != final_claim {
-            return Err(FinalizerError::Decider(DeciderError::BundledPesat));
-        }
-        Ok(())
-    }
-
-    fn split_beta<'b>(
-        &self,
-        instance: &'b AccumulatorInstance<EF, Pcs::Commitment>,
-    ) -> (&'b [EF], &'b [EF]) {
-        instance.beta.split_at(self.pesat.log_height())
-    }
-
-    fn trace_polys(&self, witness: &[EF]) -> TracePolys<EF> {
-        let height = self.pesat.height();
-        let width = self.pesat.main_width();
-        let current = (0..width)
-            .map(|col| Poly::new((0..height).map(|row| witness[row * width + col]).collect()))
-            .collect();
-        let next = self.uses_next_row_values().then(|| {
-            (0..width)
-                .map(|col| {
-                    Poly::new(
-                        (0..height)
-                            .map(|row| {
-                                let next_row = (row + 1) % height;
-                                witness[next_row * width + col]
-                            })
-                            .collect(),
-                    )
-                })
-                .collect()
-        });
-        TracePolys { current, next }
-    }
-
-    fn systematic_witness_from_codeword(&self, codeword: &[EF]) -> Result<Vec<EF>, FinalizerError> {
-        if codeword.len() != self.code.codeword_len() {
-            return Err(FinalizerError::Decider(DeciderError::EncodingMismatch));
-        }
-        Ok((0..self.code.msg_len())
-            .map(|index| codeword[self.code.systematic_codeword_index(index)])
-            .collect())
-    }
-
-    fn column_values_at(&self, column_polys: &[Poly<EF>], row_point: &[EF]) -> Vec<EF> {
-        let row_point = Point::new(row_point.to_vec());
-        column_polys
-            .iter()
-            .map(|poly| poly.eval_ext::<F>(&row_point))
-            .collect()
-    }
-
-    fn next_terminal_values_at(&self, trace_polys: &TracePolys<EF>, row_point: &[EF]) -> Vec<EF> {
-        match &trace_polys.next {
-            Some(next_polys) => self.column_values_at(next_polys, row_point),
-            None => EF::zero_vec(self.pesat.main_width()),
-        }
-    }
-
-    fn next_opened_row_values(&self, witness: &[EF]) -> Vec<EF> {
-        if self.uses_next_row_values() {
-            witness.to_vec()
-        } else {
-            Vec::new()
-        }
-    }
-
-    fn observe_terminal_values(
-        &self,
-        terminal_values: &[EF],
-        next_terminal_values: &[EF],
-        challenger: &mut Challenger,
-    ) {
-        challenger.observe_algebra_slice(terminal_values);
-        if self.uses_next_row_values() {
-            challenger.observe_algebra_slice(next_terminal_values);
-        }
-    }
-
-    fn next_values_for_claim(&self, next_terminal_values: &[EF]) -> Vec<EF> {
-        if self.uses_next_row_values() {
-            next_terminal_values.to_vec()
-        } else {
-            EF::zero_vec(self.pesat.main_width())
-        }
-    }
-
-    fn validate_next_openings(
-        &self,
-        row_point: &[EF],
-        next_terminal_values: &[EF],
-        next_opened_row_values: &[EF],
-    ) -> Result<(), FinalizerError> {
-        if !self.uses_next_row_values() {
-            if !next_terminal_values.is_empty() || !next_opened_row_values.is_empty() {
-                return Err(FinalizerError::Decider(DeciderError::EncodingMismatch));
-            }
-            return Ok(());
-        }
-
-        if next_terminal_values.len() != self.pesat.main_width()
-            || next_opened_row_values.len() != self.pesat.shape().witness_len()
-        {
-            return Err(FinalizerError::Decider(DeciderError::EncodingMismatch));
-        }
-        let expected_next =
-            self.next_terminal_values_from_opened_rows(next_opened_row_values, row_point);
-        if expected_next != next_terminal_values {
-            return Err(FinalizerError::Decider(DeciderError::BundledPesat));
-        }
-        Ok(())
-    }
-
-    fn next_terminal_values_from_opened_rows(
-        &self,
-        opened_rows: &[EF],
-        row_point: &[EF],
-    ) -> Vec<EF> {
-        let height = self.pesat.height();
-        let width = self.pesat.main_width();
-        let row_eq = Poly::<EF>::new_from_point(row_point, EF::ONE);
-        (0..width)
-            .map(|col| {
-                (0..height)
-                    .map(|row| {
-                        let next_row = (row + 1) % height;
-                        row_eq.as_slice()[row] * opened_rows[next_row * width + col]
-                    })
-                    .sum()
-            })
-            .collect()
-    }
-
-    fn expected_opened_values(
-        &self,
-        terminal_values: &[EF],
-        next_opened_row_values: &[EF],
-    ) -> Vec<EF> {
-        let mut values = Vec::with_capacity(terminal_values.len() + next_opened_row_values.len());
-        values.extend_from_slice(terminal_values);
-        values.extend_from_slice(next_opened_row_values);
-        values
-    }
-
-    fn opening_points(&self, row_point: &[EF]) -> Vec<Point<EF>> {
-        let log_width = self.pesat.main_width().trailing_zeros() as usize;
-        let mut points = vec_map(0..self.pesat.main_width(), |col| {
-            let mut message_point = Vec::with_capacity(self.code.log_msg_len());
-            message_point.extend_from_slice(row_point);
-            message_point.extend(Point::<EF>::hypercube(col, log_width));
-            self.code.systematic_message_point(&message_point)
-        });
-
-        if self.uses_next_row_values() {
-            for row in 0..self.pesat.height() {
-                let row_point = Point::<EF>::hypercube(row, self.pesat.log_height());
-                for col in 0..self.pesat.main_width() {
-                    let mut message_point = Vec::with_capacity(self.code.log_msg_len());
-                    message_point.extend(row_point.iter().copied());
-                    message_point.extend(Point::<EF>::hypercube(col, log_width));
-                    points.push(self.code.systematic_message_point(&message_point));
-                }
-            }
-        }
-        points
-    }
-}
-
-struct TracePolys<EF> {
-    current: Vec<Poly<EF>>,
-    next: Option<Vec<Poly<EF>>>,
-}
-
-fn row_point_from_parts<EF: Field>(
-    prefix: &[EF],
-    round_value: EF,
-    suffix: usize,
-    suffix_bits: usize,
-) -> Vec<EF> {
-    let mut point = Vec::with_capacity(prefix.len() + 1 + suffix_bits);
-    point.extend_from_slice(prefix);
-    point.push(round_value);
-    point.extend(Point::<EF>::hypercube(suffix, suffix_bits));
-    point
-}
-
-fn fill_row_point_suffix<EF: Field>(
-    point: &mut [EF],
-    offset: usize,
-    suffix: usize,
-    suffix_bits: usize,
-) {
-    debug_assert!(offset + suffix_bits <= point.len());
-    for i in 0..suffix_bits {
-        point[offset + i] = EF::from_bool((suffix >> (suffix_bits - 1 - i)) & 1 == 1);
-    }
-}
 
 fn eval_eq_ext<EF: Field>(lhs: &[EF], rhs: &[EF]) -> EF {
     debug_assert_eq!(lhs.len(), rhs.len());
@@ -2664,10 +1735,6 @@ fn boolean_index_point<EF: Field>(index: usize, log_len: usize) -> Vec<EF> {
             }
         })
         .collect()
-}
-
-fn vec_map<T, U>(iter: impl IntoIterator<Item = T>, f: impl FnMut(T) -> U) -> Vec<U> {
-    iter.into_iter().map(f).collect()
 }
 
 fn extension_limb_challenger<F, Challenger>(challenger: &Challenger, limb: usize) -> Challenger
@@ -2938,7 +2005,6 @@ mod tests {
     use alloc::vec::Vec;
     use core::marker::PhantomData;
 
-    use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::{
         CanObserve, CanSample, CanSampleBits, DuplexChallenger, FieldChallenger, GrindingChallenger,
@@ -3329,118 +2395,6 @@ mod tests {
         (code, instance, witness)
     }
 
-    #[derive(Clone, Debug)]
-    struct BoolAir {
-        width: usize,
-    }
-
-    impl<FF: Field> BaseAir<FF> for BoolAir {
-        fn width(&self) -> usize {
-            self.width
-        }
-
-        fn num_constraints(&self) -> Option<usize> {
-            Some(self.width)
-        }
-
-        fn max_constraint_degree(&self) -> Option<usize> {
-            Some(2)
-        }
-
-        fn num_public_values(&self) -> usize {
-            0
-        }
-
-        fn main_next_row_columns(&self) -> Vec<usize> {
-            Vec::new()
-        }
-    }
-
-    impl<AB> Air<AB> for BoolAir
-    where
-        AB: AirBuilder,
-        AB::F: Field,
-    {
-        fn eval(&self, builder: &mut AB) {
-            let main = builder.main();
-            for cell in main.current_slice().iter().copied().take(self.width) {
-                let cell: AB::Expr = cell.into();
-                builder.assert_zero(cell.clone() * (cell - AB::Expr::ONE));
-            }
-        }
-    }
-
-    #[derive(Clone, Debug)]
-    struct NextRowAir;
-
-    impl<FF: Field> BaseAir<FF> for NextRowAir {
-        fn width(&self) -> usize {
-            1
-        }
-
-        fn num_constraints(&self) -> Option<usize> {
-            Some(1)
-        }
-
-        fn max_constraint_degree(&self) -> Option<usize> {
-            Some(2)
-        }
-
-        fn num_public_values(&self) -> usize {
-            0
-        }
-
-        fn main_next_row_columns(&self) -> Vec<usize> {
-            vec![0]
-        }
-    }
-
-    impl<AB> Air<AB> for NextRowAir
-    where
-        AB: AirBuilder,
-        AB::F: Field,
-    {
-        fn eval(&self, builder: &mut AB) {
-            let main = builder.main();
-            let current: AB::Expr = main.current_slice()[0].into();
-            let next: AB::Expr = main.next_slice()[0].into();
-            builder.assert_zero(builder.is_transition_window(2) * (next - current - AB::Expr::ONE));
-        }
-    }
-
-    fn current_row_pesat_fixture() -> (
-        ReedSolomonCode<F, Dft>,
-        AirAsPesat<BoolAir, F, EF>,
-        AccumulatorInstance<EF, Vec<EF>>,
-        AccumulatorWitness<EF, ()>,
-    ) {
-        let log_height = 2;
-        let width = 4;
-        let air = BoolAir { width };
-        let pesat = AirAsPesat::new(air, log_height, b"BoolAir/current-row-whir".to_vec());
-        let code = ReedSolomonCode::new_systematic(pesat.shape().log_witness, 1, Dft::default());
-
-        let w = (0..pesat.shape().witness_len())
-            .map(|i| EF::from_bool(i % 3 == 0))
-            .collect::<Vec<_>>();
-        let f = code.encode_algebra::<EF>(&w);
-        let beta = (0..pesat.shape().log_constraints)
-            .map(|i| EF::from_u64((i as u64) + 2))
-            .collect::<Vec<_>>();
-        let beta_eq = Poly::<EF>::new_from_point(&beta, EF::ONE);
-        let eta = pesat.evaluate_bundled(beta_eq.as_slice(), &w);
-        let instance = AccumulatorInstance {
-            rt: f.clone(),
-            alpha: vec![EF::ZERO; code.log_codeword_len()],
-            mu: Poly::<EF>::new(f.clone())
-                .eval_ext::<F>(&Point::new(vec![EF::ZERO; code.log_codeword_len()])),
-            beta,
-            eta,
-        };
-        let witness = AccumulatorWitness { td: (), f, w };
-        (code, pesat, instance, witness)
-    }
-
     fn boolean_pesat_fixture() -> (
         ReedSolomonCode<F, Dft>,
         BooleanPesat<F, EF>,
@@ -3471,40 +2425,9 @@ mod tests {
         (code, pesat, instance, witness)
     }
 
-    fn next_row_pesat_fixture() -> (
-        ReedSolomonCode<F, Dft>,
-        AirAsPesat<NextRowAir, F, EF>,
-        AccumulatorInstance<EF, Vec<EF>>,
-        AccumulatorWitness<EF, ()>,
-    ) {
-        let log_height = 2;
-        let pesat = AirAsPesat::new(NextRowAir, log_height, b"NextRowAir/whir".to_vec());
-        let code = ReedSolomonCode::new_systematic(pesat.shape().log_witness, 1, Dft::default());
-        let w = (0..pesat.height())
-            .map(|row| EF::from_u64(row as u64))
-            .collect::<Vec<_>>();
-        let f = code.encode_algebra::<EF>(&w);
-        let beta = (0..pesat.shape().log_constraints)
-            .map(|i| EF::from_u64((i as u64) + 7))
-            .collect::<Vec<_>>();
-        let beta_eq = Poly::<EF>::new_from_point(&beta, EF::ONE);
-        let eta = pesat.evaluate_bundled(beta_eq.as_slice(), &w);
-        assert_eq!(eta, EF::ZERO);
-        let instance = AccumulatorInstance {
-            rt: f.clone(),
-            alpha: vec![EF::ZERO; code.log_codeword_len()],
-            mu: Poly::<EF>::new(f.clone())
-                .eval_ext::<F>(&Point::new(vec![EF::ZERO; code.log_codeword_len()])),
-            beta,
-            eta,
-        };
-        let witness = AccumulatorWitness { td: (), f, w };
-        (code, pesat, instance, witness)
-    }
-
     fn whir_native_root_fixture() -> (
         ReedSolomonCode<F, Dft>,
-        AirAsPesat<BoolAir, F, EF>,
+        BooleanPesat<F, EF>,
         MyMmcs,
         crate::WarpParams,
         TestChallenger<F>,
@@ -3515,10 +2438,8 @@ mod tests {
         use crate::{WarpParams, WarpRootProver};
 
         let code = systematic_code();
-        let log_height = 2;
-        let width = 4;
-        let air = BoolAir { width };
-        let pesat = AirAsPesat::new(air, log_height, b"BoolAir/whir-root".to_vec());
+        let pesat =
+            BooleanPesat::<F, EF>::new(code.log_msg_len(), b"BooleanPesat/whir-root".to_vec());
         let mut rng = SmallRng::seed_from_u64(0x5254);
         let perm = Perm::new_from_rng_128(&mut rng);
         let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
@@ -3534,7 +2455,7 @@ mod tests {
             TestChallenger::new(F::from_u64(29)),
         );
         let finalizer =
-            WhirPrecommittedWarpFinalizerProtocol::<F, EF, _, TestChallenger<F>, Dft, _>::new(
+            WhirPrecommittedBooleanWarpFinalizerProtocol::<F, EF, _, TestChallenger<F>, Dft>::new(
                 &acc_backend,
                 &code,
                 &pesat,
@@ -3590,7 +2511,7 @@ mod tests {
 
     fn verify_whir_native_root(
         code: &ReedSolomonCode<F, Dft>,
-        pesat: &AirAsPesat<BoolAir, F, EF>,
+        pesat: &BooleanPesat<F, EF>,
         mmcs: &MyMmcs,
         params: crate::WarpParams,
         base_challenger: &TestChallenger<F>,
@@ -3608,7 +2529,7 @@ mod tests {
             TestChallenger::new(F::from_u64(29)),
         );
         let finalizer =
-            WhirPrecommittedWarpFinalizerProtocol::<F, EF, _, TestChallenger<F>, Dft, _>::new(
+            WhirPrecommittedBooleanWarpFinalizerProtocol::<F, EF, _, TestChallenger<F>, Dft>::new(
                 &acc_backend,
                 code,
                 pesat,
@@ -3867,7 +2788,7 @@ mod tests {
     fn whir_native_root_rejects_tampered_finalizer_terminal() {
         let (code, pesat, mmcs, params, base_challenger, whir_pcs, _, mut root_proof) =
             whir_native_root_fixture();
-        root_proof.final_proof.air_pesat.terminal_values[0] += EF::ONE;
+        root_proof.final_proof.pesat.terminal_values[0] += EF::ONE;
 
         verify_whir_native_root(
             &code,
@@ -3879,128 +2800,6 @@ mod tests {
             &root_proof,
         )
         .expect_err("tampered WHIR finalizer terminal value must be rejected");
-    }
-
-    #[test]
-    fn current_row_pesat_protocol_proves_and_verifies_decider_claim() {
-        let (code, pesat, instance, witness) = current_row_pesat_fixture();
-        let pcs = RawEvalPcs::<EF>::new(code.log_codeword_len());
-        let challenger = TestChallenger::new(F::ONE);
-        let protocol = WhirCurrentRowPesatProtocol::<F, EF, _, TestChallenger<F>, Dft, _>::new(
-            &pcs, &code, &pesat, challenger,
-        );
-
-        let proof = protocol.prove(&instance, &witness).unwrap();
-        protocol.verify(&instance, &proof).unwrap();
-    }
-
-    #[test]
-    fn current_row_pesat_protocol_derives_witness_from_committed_codeword() {
-        let (code, pesat, instance, mut witness) = current_row_pesat_fixture();
-        let pcs = RawEvalPcs::<EF>::new(code.log_codeword_len());
-        let protocol = WhirCurrentRowPesatProtocol::<F, EF, _, TestChallenger<F>, Dft, _>::new(
-            &pcs,
-            &code,
-            &pesat,
-            TestChallenger::new(F::ONE),
-        );
-
-        for value in &mut witness.w {
-            *value += EF::ONE;
-        }
-
-        let proof = protocol.prove(&instance, &witness).unwrap();
-        protocol.verify(&instance, &proof).unwrap();
-    }
-
-    #[test]
-    fn current_row_pesat_protocol_rejects_bad_eta() {
-        let (code, pesat, mut instance, witness) = current_row_pesat_fixture();
-        let pcs = RawEvalPcs::<EF>::new(code.log_codeword_len());
-        let challenger = TestChallenger::new(F::ONE);
-        let protocol = WhirCurrentRowPesatProtocol::<F, EF, _, TestChallenger<F>, Dft, _>::new(
-            &pcs, &code, &pesat, challenger,
-        );
-        let proof = protocol.prove(&instance, &witness).unwrap();
-        instance.eta += EF::ONE;
-
-        let err = protocol.verify(&instance, &proof).unwrap_err();
-        assert!(matches!(err, FinalizerError::Verifier(_)));
-    }
-
-    #[test]
-    fn air_pesat_protocol_proves_and_verifies_next_row_decider_claim() {
-        let (code, pesat, instance, witness) = next_row_pesat_fixture();
-        let pcs = RawEvalPcs::<EF>::new(code.log_codeword_len());
-        let protocol = WhirCurrentRowPesatProtocol::<F, EF, _, TestChallenger<F>, Dft, _>::new(
-            &pcs,
-            &code,
-            &pesat,
-            TestChallenger::new(F::ONE),
-        );
-
-        let proof = protocol.prove(&instance, &witness).unwrap();
-        assert_eq!(proof.next_terminal_values.len(), pesat.main_width());
-        assert_eq!(
-            proof.next_opened_row_values.len(),
-            pesat.shape().witness_len()
-        );
-        protocol.verify(&instance, &proof).unwrap();
-    }
-
-    #[test]
-    fn air_pesat_protocol_rejects_tampered_shifted_terminal() {
-        let (code, pesat, instance, witness) = next_row_pesat_fixture();
-        let pcs = RawEvalPcs::<EF>::new(code.log_codeword_len());
-        let protocol = WhirCurrentRowPesatProtocol::<F, EF, _, TestChallenger<F>, Dft, _>::new(
-            &pcs,
-            &code,
-            &pesat,
-            TestChallenger::new(F::ONE),
-        );
-
-        let mut proof = protocol.prove(&instance, &witness).unwrap();
-        proof.next_terminal_values[0] += EF::ONE;
-        let err = protocol.verify(&instance, &proof).unwrap_err();
-        assert!(matches!(
-            err,
-            FinalizerError::Decider(DeciderError::BundledPesat)
-        ));
-    }
-
-    #[test]
-    fn air_pesat_protocol_rejects_tampered_shifted_row_opening() {
-        let (code, pesat, instance, witness) = next_row_pesat_fixture();
-        let pcs = RawEvalPcs::<EF>::new(code.log_codeword_len());
-        let protocol = WhirCurrentRowPesatProtocol::<F, EF, _, TestChallenger<F>, Dft, _>::new(
-            &pcs,
-            &code,
-            &pesat,
-            TestChallenger::new(F::ONE),
-        );
-
-        let mut proof = protocol.prove(&instance, &witness).unwrap();
-        proof.next_opened_row_values[1] += EF::ONE;
-        let err = protocol.verify(&instance, &proof).unwrap_err();
-        assert!(matches!(
-            err,
-            FinalizerError::Decider(DeciderError::BundledPesat) | FinalizerError::OpeningProof(_)
-        ));
-    }
-
-    #[test]
-    fn whir_warp_finalizer_proves_and_verifies_both_decider_claims() {
-        let (code, pesat, instance, witness) = current_row_pesat_fixture();
-        let pcs = RawEvalPcs::<EF>::new(code.log_codeword_len());
-        let protocol = WhirWarpFinalizerProtocol::<F, EF, _, TestChallenger<F>, Dft, _>::new(
-            &pcs,
-            &code,
-            &pesat,
-            TestChallenger::new(F::ONE),
-        );
-
-        let proof = protocol.prove(&instance, &witness).unwrap();
-        protocol.verify(&instance, &proof).unwrap();
     }
 
     #[test]
@@ -4050,8 +2849,8 @@ mod tests {
     }
 
     #[test]
-    fn whir_warp_finalizer_accepts_extension_limb_pcs_commitment() {
-        let (code, pesat, raw_instance, witness) = current_row_pesat_fixture();
+    fn whir_boolean_warp_finalizer_accepts_extension_limb_pcs_commitment() {
+        let (code, pesat, raw_instance, witness) = boolean_pesat_fixture();
         let inner = BaseEvalPcs::<F, EF>::new(code.log_codeword_len());
         let pcs = ExtensionLimbPcs::<F, EF, _>::new(&inner);
         let opening_points = [vec![Point::new(raw_instance.alpha.clone())]];
@@ -4067,7 +2866,7 @@ mod tests {
             beta: raw_instance.beta,
             eta: raw_instance.eta,
         };
-        let protocol = WhirWarpFinalizerProtocol::<F, EF, _, TestChallenger<F>, Dft, _>::new(
+        let protocol = WhirBooleanWarpFinalizerProtocol::<F, EF, _, TestChallenger<F>, Dft>::new(
             &pcs,
             &code,
             &pesat,
@@ -4079,10 +2878,10 @@ mod tests {
     }
 
     #[test]
-    fn whir_warp_finalizer_rejects_bad_accumulator_opening_claim() {
-        let (code, pesat, mut instance, witness) = current_row_pesat_fixture();
+    fn whir_boolean_warp_finalizer_rejects_bad_accumulator_opening_claim() {
+        let (code, pesat, mut instance, witness) = boolean_pesat_fixture();
         let pcs = RawEvalPcs::<EF>::new(code.log_codeword_len());
-        let protocol = WhirWarpFinalizerProtocol::<F, EF, _, TestChallenger<F>, Dft, _>::new(
+        let protocol = WhirBooleanWarpFinalizerProtocol::<F, EF, _, TestChallenger<F>, Dft>::new(
             &pcs,
             &code,
             &pesat,

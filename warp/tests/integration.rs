@@ -1,8 +1,8 @@
-//! End-to-end WARP tests over a simple Boolean AIR.
+//! End-to-end WARP tests over the direct Boolean PESAT relation.
 //!
-//! The test AIR has `main_width = 4` columns and one quadratic constraint
-//! per column: `cell · (cell − 1) = 0`. So a satisfying witness is any
-//! trace where every cell is in `{0, 1}`.
+//! The relation has one quadratic constraint per witness coordinate:
+//! `cell · (cell − 1) = 0`. So a satisfying witness is any vector where
+//! every cell is in `{0, 1}`.
 //!
 //! Coverage:
 //!
@@ -15,7 +15,6 @@
 
 use std::vec::Vec;
 
-use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear, default_babybear_poseidon2_16};
 use p3_challenger::DuplexChallenger;
 use p3_commit::Mmcs;
@@ -27,7 +26,7 @@ use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_warp::error::{DeciderError, FinalizerError, VerifierError, WarpError};
 use p3_warp::finalize::{Finalizer, LocalDeciderFinalizer, WitnessFinalizer};
 use p3_warp::{
-    AirAsPesat, CommittedCodeword, MmcsExternalOpeningVerifier, ReedSolomonCode, WarpDecider,
+    BooleanPesat, CommittedCodeword, MmcsExternalOpeningVerifier, ReedSolomonCode, WarpDecider,
     WarpParams, WarpProof, WarpProver, WarpRootProver, WarpRootVerifier, WarpVerifier,
 };
 use rand::rngs::SmallRng;
@@ -49,78 +48,25 @@ type MyDft = Radix2DFTSmallBatch<F>;
 type MyComm = <MyMmcs as Mmcs<F>>::Commitment;
 type MyMtProof = <MyMmcs as Mmcs<F>>::Proof;
 
-// -----------------------------------------------------------------------------
-// Test AIR: each cell is Boolean (one quadratic constraint per column).
-// -----------------------------------------------------------------------------
-
-#[derive(Clone, Debug)]
-struct BoolAir {
-    width: usize,
-}
-
-impl<FF: Field> BaseAir<FF> for BoolAir {
-    fn width(&self) -> usize {
-        self.width
-    }
-
-    fn num_constraints(&self) -> Option<usize> {
-        Some(self.width)
-    }
-
-    fn max_constraint_degree(&self) -> Option<usize> {
-        Some(2)
-    }
-
-    fn num_public_values(&self) -> usize {
-        0
-    }
-
-    fn main_next_row_columns(&self) -> Vec<usize> {
-        // No transition constraints — never need next-row access.
-        Vec::new()
-    }
-}
-
-impl<AB> Air<AB> for BoolAir
-where
-    AB: AirBuilder,
-    AB::F: Field,
-{
-    fn eval(&self, builder: &mut AB) {
-        let main = builder.main();
-        let row = main.current_slice().to_vec();
-        for cell in row.into_iter().take(self.width) {
-            // cell · (cell − 1) = 0 ⇔ cell ∈ {0, 1}.
-            let cell_expr: AB::Expr = cell.into();
-            builder.assert_zero(cell_expr.clone() * (cell_expr - AB::Expr::ONE));
-        }
-    }
-}
-
-// -----------------------------------------------------------------------------
-// Test fixtures.
-// -----------------------------------------------------------------------------
-
 const MAIN_WIDTH: usize = 4;
 const LOG_HEIGHT: usize = 3;
+const LOG_WITNESS: usize = 5;
 const LOG_INV_RATE: usize = 1;
 const NUM_FRESH: usize = 4;
 
 fn make_components() -> (
     MyMmcs,
     MyChallenger,
-    AirAsPesat<BoolAir, F, EF>,
+    BooleanPesat<F, EF>,
     ReedSolomonCode<F, MyDft>,
 ) {
     let perm = make_permutation();
     let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm.clone()), 0);
     let dft = Radix2DFTSmallBatch::<F>::default();
     let challenger = MyChallenger::new(perm);
-    let air = BoolAir { width: MAIN_WIDTH };
-    let pesat: AirAsPesat<BoolAir, F, EF> =
-        AirAsPesat::new(air, LOG_HEIGHT, b"BoolAir/v1".to_vec());
+    let pesat = BooleanPesat::<F, EF>::new(LOG_WITNESS, b"BooleanPesat/v1".to_vec());
     // log_msg = log_main_width + log_height = 2 + 3 = 5; n = 2^(5+1) = 64.
-    let code = ReedSolomonCode::<F, MyDft>::new_systematic(2 + LOG_HEIGHT, LOG_INV_RATE, dft);
+    let code = ReedSolomonCode::<F, MyDft>::new_systematic(LOG_WITNESS, LOG_INV_RATE, dft);
     (mmcs, challenger, pesat, code)
 }
 
@@ -225,7 +171,7 @@ fn honest_two_step_accumulation_accepts() {
 fn produce_proof() -> (
     MyMmcs,
     MyChallenger,
-    AirAsPesat<BoolAir, F, EF>,
+    BooleanPesat<F, EF>,
     ReedSolomonCode<F, MyDft>,
     WarpParams,
     p3_warp::AccumulatorInstance<EF, MyComm>,
@@ -842,7 +788,7 @@ fn prove_with_committed_round_trips_one_step() {
 
     let prover = WarpProver::new(&mmcs, &code, &pesat, params);
 
-    // Commit each fresh witness externally — simulating an OpenVM-style
+    // Commit each fresh witness externally, simulating an upstream PCS
     // pipeline where segments arrive pre-committed.
     let fresh_committed: Vec<CommittedCodeword<F, MyMmcs>> = witnesses
         .into_iter()

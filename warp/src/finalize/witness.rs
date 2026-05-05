@@ -25,9 +25,8 @@
 
 use core::marker::PhantomData;
 
-use alloc::{format, vec::Vec};
+use alloc::vec::Vec;
 
-use p3_challenger::FieldChallenger;
 use p3_commit::Mmcs;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, TwoAdicField};
@@ -39,10 +38,10 @@ use serde::{Deserialize, Serialize};
 use crate::accumulator::{AccumulatorInstance, AccumulatorWitness};
 use crate::code::ReedSolomonCode;
 use crate::error::{DeciderError, FinalizerError};
-use crate::protocol::{AccumulatorCommitmentBackend, prover::ExtProverData};
+use crate::protocol::prover::ExtProverData;
 use crate::relation::BundledPesat;
 
-use super::{AccumulatorFinalizer, Finalizer};
+use super::Finalizer;
 
 /// Transmissible proof carrying the witness side `acc.w` of a WARP
 /// accumulator (sans the Mmcs prover-data, which is redundant).
@@ -82,7 +81,7 @@ where
         assert_eq!(
             pesat.shape().explicit_len,
             0,
-            "p3-warp v1 supports instance-free AIR/PESAT only (κ = 0)"
+            "p3-warp v1 supports instance-free PESAT only (κ = 0)"
         );
         assert_eq!(
             code.msg_len(),
@@ -91,53 +90,6 @@ where
         );
         Self {
             mmcs,
-            code,
-            pesat,
-            _ph: PhantomData,
-        }
-    }
-}
-
-/// Witness-carrying finalizer for accumulator commitments supplied by an
-/// external backend such as stark-backend/SWIRL.
-pub struct BackendWitnessFinalizer<'a, F, EF, Dft, Pesat, AccBackend, Challenger>
-where
-    F: TwoAdicField,
-    EF: ExtensionField<F> + TwoAdicField,
-    Dft: TwoAdicSubgroupDft<F>,
-    Pesat: BundledPesat<F, EF>,
-{
-    acc_backend: &'a AccBackend,
-    code: &'a ReedSolomonCode<F, Dft>,
-    pesat: &'a Pesat,
-    _ph: PhantomData<(EF, Challenger)>,
-}
-
-impl<'a, F, EF, Dft, Pesat, AccBackend, Challenger>
-    BackendWitnessFinalizer<'a, F, EF, Dft, Pesat, AccBackend, Challenger>
-where
-    F: TwoAdicField,
-    EF: ExtensionField<F> + TwoAdicField,
-    Dft: TwoAdicSubgroupDft<F>,
-    Pesat: BundledPesat<F, EF>,
-{
-    pub fn new(
-        acc_backend: &'a AccBackend,
-        code: &'a ReedSolomonCode<F, Dft>,
-        pesat: &'a Pesat,
-    ) -> Self {
-        assert_eq!(
-            pesat.shape().explicit_len,
-            0,
-            "p3-warp v1 supports instance-free AIR/PESAT only (κ = 0)"
-        );
-        assert_eq!(
-            code.msg_len(),
-            pesat.shape().witness_len(),
-            "RS message length must equal PESAT witness length"
-        );
-        Self {
-            acc_backend,
             code,
             pesat,
             _ph: PhantomData,
@@ -219,81 +171,6 @@ where
         }
 
         // 4. Codeword consistency: C(w) == f.
-        let f_recomputed = self.code.encode_algebra::<EF>(&proof.w);
-        if f_recomputed != proof.f {
-            return Err(FinalizerError::Decider(DeciderError::EncodingMismatch));
-        }
-
-        Ok(())
-    }
-}
-
-impl<'a, F, EF, Dft, Pesat, AccBackend, Challenger>
-    AccumulatorFinalizer<F, EF, AccBackend::Commitment, AccBackend::ProverData>
-    for BackendWitnessFinalizer<'a, F, EF, Dft, Pesat, AccBackend, Challenger>
-where
-    F: TwoAdicField,
-    EF: ExtensionField<F> + TwoAdicField,
-    Dft: TwoAdicSubgroupDft<F>,
-    Pesat: BundledPesat<F, EF>,
-    Challenger: FieldChallenger<F>,
-    AccBackend: AccumulatorCommitmentBackend<F, EF, Challenger>,
-    AccBackend::Commitment: PartialEq,
-{
-    type Proof = WitnessProof<EF>;
-
-    fn finalize(
-        &self,
-        _instance: &AccumulatorInstance<EF, AccBackend::Commitment>,
-        witness: &AccumulatorWitness<EF, AccBackend::ProverData>,
-    ) -> Result<Self::Proof, FinalizerError> {
-        Ok(WitnessProof {
-            f: witness.f.clone(),
-            w: witness.w.clone(),
-        })
-    }
-
-    fn verify(
-        &self,
-        instance: &AccumulatorInstance<EF, AccBackend::Commitment>,
-        proof: &Self::Proof,
-    ) -> Result<(), FinalizerError> {
-        let n = self.code.codeword_len();
-        let k = self.code.msg_len();
-        let shape = self.pesat.shape();
-        let log_m = shape.log_constraints;
-
-        if proof.f.len() != n || proof.w.len() != k {
-            return Err(FinalizerError::Decider(DeciderError::EncodingMismatch));
-        }
-
-        let (rt_recomputed, _td) = self.acc_backend.commit(proof.f.clone()).map_err(|err| {
-            FinalizerError::OpeningProof(format!("accumulator recommitment failed: {err:?}"))
-        })?;
-        if rt_recomputed != instance.rt {
-            return Err(FinalizerError::Decider(DeciderError::MerkleRoot));
-        }
-
-        let f_poly = Poly::<EF>::new(proof.f.clone());
-        let alpha_pt = Point::<EF>::new(instance.alpha.clone());
-        if f_poly.eval_ext::<F>(&alpha_pt) != instance.mu {
-            return Err(FinalizerError::Decider(DeciderError::MlEval));
-        }
-
-        if instance.beta.len() != shape.beta_len() {
-            return Err(FinalizerError::Decider(DeciderError::BundledPesat));
-        }
-        let beta_tau = &instance.beta[..log_m];
-        let beta_x = &instance.beta[log_m..];
-        let mut z = Vec::with_capacity(beta_x.len() + proof.w.len());
-        z.extend_from_slice(beta_x);
-        z.extend_from_slice(&proof.w);
-        let beta_tau_eq = Poly::<EF>::new_from_point(beta_tau, EF::ONE);
-        let eta_recomputed = self.pesat.evaluate_bundled(beta_tau_eq.as_slice(), &z);
-        if eta_recomputed != instance.eta {
-            return Err(FinalizerError::Decider(DeciderError::BundledPesat));
-        }
-
         let f_recomputed = self.code.encode_algebra::<EF>(&proof.w);
         if f_recomputed != proof.f {
             return Err(FinalizerError::Decider(DeciderError::EncodingMismatch));

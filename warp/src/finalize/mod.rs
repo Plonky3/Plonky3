@@ -30,12 +30,13 @@
 //!   not succinct, but transmissible.
 //! - [`whir::WhirAccumulatorOpeningProtocol`]: fail-closed precommitted
 //!   multilinear opening layer for the accumulator claim `f_hat(α) = µ`.
-//! - [`whir::WhirAirPesatProtocol`]: WHIR-native row-sumcheck plus
-//!   systematic-RS openings for the AIR/PESAT decider claim `Pb(β, w) = η`.
-//! - [`whir::WhirWarpFinalizerProtocol`]: composed finalizer proof for both
-//!   decider claims. It is only sound with a PCS whose commitment layout is the
-//!   accumulator's existing `rt`; creating a fresh unrelated WHIR commitment is
-//!   not a sound WARP finalizer.
+//! - [`whir::WhirBooleanPesatProtocol`]: WHIR-native sumcheck plus
+//!   systematic-RS openings for the Boolean PESAT decider claim
+//!   `Pb(β, w) = η`.
+//! - [`whir::WhirBooleanWarpFinalizerProtocol`]: composed finalizer proof for
+//!   both decider claims. It is only sound with a PCS whose commitment layout is
+//!   the accumulator's existing `rt`; creating a fresh unrelated WHIR commitment
+//!   is not a sound WARP finalizer.
 
 pub mod local;
 pub mod whir;
@@ -45,14 +46,12 @@ pub use local::LocalDeciderFinalizer;
 pub use whir::{
     AccumulatorPointOpeningBackend, ExtensionLimbPcs, ExtensionLimbPcsError, ExtensionLimbPcsProof,
     ExtensionLimbPcsProverData, PrecommittedAccumulatorPcs, WhirAccumulatorOpeningProof,
-    WhirAccumulatorOpeningProtocol, WhirAirPesatProof, WhirAirPesatProtocol,
-    WhirBooleanPesatProtocol, WhirBooleanWarpFinalizerProtocol, WhirCodewordBackend,
-    WhirCommittedCodeword, WhirCurrentRowPesatProof, WhirCurrentRowPesatProtocol,
-    WhirLimbAccumulatorBackend, WhirLimbAccumulatorOpeningProof, WhirLimbAccumulatorProverData,
-    WhirPrecommittedBooleanWarpFinalizerProtocol, WhirPrecommittedWarpFinalizerProtocol,
-    WhirWarpFinalizerProof, WhirWarpFinalizerProtocol,
+    WhirAccumulatorOpeningProtocol, WhirBooleanPesatProtocol, WhirBooleanWarpFinalizerProtocol,
+    WhirCodewordBackend, WhirCommittedCodeword, WhirLimbAccumulatorBackend,
+    WhirLimbAccumulatorOpeningProof, WhirLimbAccumulatorProverData, WhirPesatProof,
+    WhirPrecommittedBooleanWarpFinalizerProtocol, WhirWarpFinalizerProof,
 };
-pub use witness::{BackendWitnessFinalizer, WitnessFinalizer, WitnessProof};
+pub use witness::{WitnessFinalizer, WitnessProof};
 
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
@@ -105,9 +104,8 @@ where
 /// Finalizer abstraction for accumulator commitments that are not represented
 /// as a Plonky3 [`Mmcs`] commitment.
 ///
-/// This is used by the SWIRL/OpenVM path where the WARP accumulator is
-/// committed with stark-backend's native row-group Merkle layout rather than
-/// `ExtensionMmcs`.
+/// This is used by root proof paths where the WARP accumulator is committed
+/// with an external layout rather than `ExtensionMmcs`.
 pub trait AccumulatorFinalizer<F, EF, Comm, ProverData>
 where
     F: Field,

@@ -20,21 +20,18 @@
 //! - `bundled_round_poly(b_lo, b_hi, w_lo, w_hi)` for the §6.3 sumcheck
 //!   prover, which folds two adjacent (β, w) pairs along the round axis.
 //!
-//! The trait is intentionally protocol-agnostic. The v1 implementation
-//! ships a single concrete impl: [`AirAsPesat`](air::AirAsPesat), an
-//! adapter that lifts any [`p3_air::Air`] into a `BundledPesat` so every
-//! existing Plonky3 AIR is accumulatable without modification.
+//! The trait is intentionally protocol-agnostic. The Plonky3-native benchmark
+//! path uses [`BooleanPesat`](boolean::BooleanPesat), a direct Boolean relation
+//! with one quadratic constraint per witness coordinate.
 
 use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::{ExtensionField, Field, batch_multiplicative_inverse};
 
-pub mod air;
 pub mod boolean;
 pub mod claim_6_5;
 
-pub use air::AirAsPesat;
 pub use boolean::BooleanPesat;
 pub use claim_6_5::{eq_dot_q_recursive, poly_lerp_via_linear};
 
@@ -168,7 +165,7 @@ pub trait BundledPesat<F: Field, EF: ExtensionField<F>>: Sync + Send {
     /// Bytes that bind this constraint system into the Fiat–Shamir transcript.
     ///
     /// Should be a deterministic encoding of the relation's structure (e.g.,
-    /// constraint matrices for R1CS, AIR-spec hash for an AIR). Two distinct
+    /// constraint matrices or relation metadata). Two distinct
     /// PESAT instances must produce distinct descriptions.
     fn description(&self) -> Vec<u8>;
 

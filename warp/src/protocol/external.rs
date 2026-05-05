@@ -3,9 +3,8 @@
 //! WARP's alphabet-`F` variant only needs three things from each fresh input:
 //! the committed RS codeword, the underlying witness/message, and authenticated
 //! openings at sampled shift-query indices. This module isolates those
-//! operations from Plonky3's [`Mmcs`] so upstream PCS implementations such as
-//! OpenVM/SWIRL can feed WARP without being coerced into the wrong commitment
-//! abstraction.
+//! operations from Plonky3's [`Mmcs`] so upstream PCS implementations can feed
+//! WARP without being coerced into the wrong commitment abstraction.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -55,8 +54,8 @@ pub trait ExternalCommittedCodeword<F: Field> {
 ///
 /// This is separate from [`ExternalCommittedCodeword`] because different
 /// commitment systems bind different verifier-visible metadata. A plain
-/// Plonky3 Merkle commitment only observes the root/cap; SWIRL also needs to
-/// bind the committed matrix shape, trace metadata, and public values.
+/// Plonky3 Merkle commitment only observes the root/cap; other systems may
+/// also bind matrix shape, trace metadata, and public values.
 pub trait ExternalCommitmentObserver<F, Challenger>: ExternalCommittedCodeword<F>
 where
     F: Field,
@@ -170,7 +169,7 @@ where
 /// Fresh inputs may arrive from one PCS while the merged WARP accumulator uses
 /// another commitment format. This trait isolates the accumulator side so the
 /// same WARP algebra can use either Plonky3's local [`ExtensionMmcs`] or a
-/// SWIRL-compatible backend supplied by `stark-backend`.
+/// backend supplied by the root proof compiler.
 pub trait AccumulatorCommitmentBackend<F, EF, Challenger>
 where
     F: Field,

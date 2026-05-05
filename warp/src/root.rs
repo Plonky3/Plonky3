@@ -14,10 +14,8 @@
 //! `PACC/VACC` maintain the accumulator, and `DACC` checks the final
 //! `(rt, alpha, mu, beta, eta)` against a witness `(f, w)`.
 //!
-//! This module intentionally keeps only the native root composition. A
-//! succinct proof for real zkVM segments should be built from the segment AIRs
-//! exposed by `stark-backend`/SWIRL rather than from the experimental
-//! hand-written verifier AIRs that used to live here.
+//! This module intentionally keeps only the native root composition and the
+//! reusable external-commitment hooks used by the WHIR compiler.
 
 use alloc::vec::Vec;
 use core::marker::PhantomData;
@@ -39,7 +37,7 @@ use crate::protocol::{
     AccumulatorBatchOpeningBackend, AccumulatorCommitmentBackend,
     ExternalCodewordBatchOpeningProver, ExternalCodewordBatchOpeningVerifier,
     ExternalCodewordOpeningProver, ExternalCodewordOpeningVerifier, ExternalCommitmentObserver,
-    ExternalCommittedCodeword, WarpParams, WarpProver, WarpStepSumcheckAirWitness, WarpVerifier,
+    ExternalCommittedCodeword, WarpParams, WarpProver, WarpVerifier,
 };
 use crate::relation::BundledPesat;
 
@@ -153,7 +151,7 @@ pub struct WarpExternalRootProofBatched<F, EF, AccComm, FreshComm, FreshProof, A
 
 /// Public shape of a linear WARP root proof.
 ///
-/// This is the statement boundary a future succinct root AIR should bind:
+/// This is the statement boundary a future succinct root proof should bind:
 /// it records the arity of each `VACC` edge and the public accumulator
 /// instance output by each edge. The step proofs and final decider witness
 /// are private to the root proof backend.
@@ -187,7 +185,7 @@ pub struct WarpExternalRootClaim<EF, AccComm, FreshComm> {
 /// Native receipt for a successfully verified WARP root proof.
 ///
 /// This is not yet a succinct proof. It is the public statement contract for
-/// the outer SWIRL/WHIR proof: the outer proof should expose `claim_digest`
+/// the outer WHIR proof: the outer proof should expose `claim_digest`
 /// and prove that native verification of `claim` accepted.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound = "EF: Serialize + serde::de::DeserializeOwned,
@@ -228,7 +226,7 @@ impl<EF, AccComm, FreshComm> WarpExternalRootClaim<EF, AccComm, FreshComm> {
     /// Observe this public claim into a challenger in canonical order.
     ///
     /// External fresh commitments are observed through the same backend
-    /// verifier hook used by `VACC`, so SWIRL/OpenVM claims bind all metadata
+    /// verifier hook used by `VACC`, so external claims bind all metadata
     /// required by their opening verifier.
     pub fn observe_into<F, Challenger, FreshVerifier>(
         &self,
@@ -582,8 +580,8 @@ where
     /// Prove a linear chain whose fresh inputs were already committed by an
     /// external PCS.
     ///
-    /// This is the reusable version of the SWIRL/OpenVM handoff used in the
-    /// benchmarks. The returned proof contains all verifier-visible external
+    /// This is the reusable external-handoff path used in the benchmarks. The
+    /// returned proof contains all verifier-visible external
     /// fresh commitments, all intermediate accumulator instances, every WARP
     /// step proof, and the finalizer proof. A future succinct outer proof
     /// should prove verification of exactly this object.
@@ -665,10 +663,9 @@ where
     /// Prove a linear externally committed chain using an external
     /// accumulator commitment backend.
     ///
-    /// This is the canonical SWIRL/OpenVM handoff: fresh inputs and every
-    /// intermediate WARP accumulator are bound with their native backend
-    /// layouts, so the root proof does not fall back to Plonky3
-    /// `ExtensionMmcs` for accumulated codewords.
+    /// Fresh inputs and every intermediate WARP accumulator are bound with
+    /// their caller-provided backend layouts, so the root proof does not fall
+    /// back to Plonky3 `ExtensionMmcs` for accumulated codewords.
     pub fn prove_external_linear_chain_accumulator<
         Challenger,
         Fresh,
@@ -948,7 +945,7 @@ where
     /// verify the finalizer.
     ///
     /// This is the native verifier for the statement a future outer
-    /// SWIRL/WHIR proof should arithmetize.
+    /// WHIR proof should arithmetize.
     pub fn verify_external_linear_chain<Challenger, FreshVerifier, Fin>(
         &self,
         base_challenger: &Challenger,
@@ -1000,7 +997,7 @@ where
     }
 
     /// Verify an externally committed WARP chain whose accumulator
-    /// commitments use an external backend such as stark-backend/SWIRL.
+    /// commitments use a caller-provided external backend.
     pub fn verify_external_linear_chain_accumulator<Challenger, FreshVerifier, AccBackend, Fin>(
         &self,
         base_challenger: &Challenger,
@@ -1171,7 +1168,7 @@ where
     }
 
     /// Verify an externally committed root proof and return the public claim
-    /// receipt that an outer SWIRL/WHIR proof should expose.
+    /// receipt that an outer WHIR proof should expose.
     pub fn verify_external_linear_chain_with_receipt<Challenger, FreshVerifier, Fin>(
         &self,
         base_challenger: &Challenger,
@@ -1216,178 +1213,5 @@ where
             claim_digest,
             final_instance,
         })
-    }
-
-    /// Verify an externally committed root proof, return its receipt, and
-    /// expose the transcript-derived sumcheck AIR witnesses for every WARP
-    /// accumulation step.
-    ///
-    /// The returned witnesses are derived only after the native verifier has
-    /// accepted each step, including all external PCS openings. They are the
-    /// values that an outer SWIRL proof should feed into
-    /// [`BinomialSumcheckAir`](crate::sumcheck_air::BinomialSumcheckAir).
-    pub fn verify_external_linear_chain_with_sumcheck_witnesses<Challenger, FreshVerifier, Fin>(
-        &self,
-        base_challenger: &Challenger,
-        fresh_verifier: &FreshVerifier,
-        proof: &WarpExternalRootProof<
-            F,
-            EF,
-            MT::Commitment,
-            FreshVerifier::Commitment,
-            FreshVerifier::Proof,
-            MT::Proof,
-            Fin::Proof,
-        >,
-        finalizer: &Fin,
-    ) -> Result<
-        (
-            WarpExternalRootReceipt<
-                EF,
-                MT::Commitment,
-                FreshVerifier::Commitment,
-                <Challenger as CanFinalizeDigest>::Digest,
-            >,
-            Vec<WarpStepSumcheckAirWitness<EF>>,
-        ),
-        WarpError,
-    >
-    where
-        Challenger: FieldChallenger<F>
-            + GrindingChallenger<Witness = F>
-            + CanObserve<MT::Commitment>
-            + CanFinalizeDigest
-            + Clone,
-        FreshVerifier: ExternalCodewordOpeningVerifier<F, Challenger>,
-        FreshVerifier::Commitment: Clone,
-        MT::Commitment: Clone,
-        Fin: Finalizer<F, EF, MT, ExtProverData<F, EF, MT>>,
-    {
-        if proof.steps.is_empty() {
-            return Err(WarpError::Config("root proof requires at least one step"));
-        }
-
-        let mut previous: Option<AccumulatorInstance<EF, MT::Commitment>> = None;
-        let mut sumcheck_witnesses = Vec::with_capacity(proof.steps.len());
-        for step in &proof.steps {
-            let priors: &[AccumulatorInstance<EF, MT::Commitment>] = match previous.as_ref() {
-                Some(instance) => core::slice::from_ref(instance),
-                None => &[],
-            };
-            let witness = self
-                .step_verifier
-                .verify_with_external_committed_sumcheck_witness(
-                    base_challenger,
-                    fresh_verifier,
-                    &step.fresh_commitments,
-                    priors,
-                    &step.instance,
-                    &step.proof,
-                )?;
-            previous = Some(step.instance.clone());
-            sumcheck_witnesses.push(witness);
-        }
-
-        let final_instance = previous.expect("non-empty proof.steps checked above");
-        finalizer.verify(&final_instance, &proof.final_proof)?;
-        let claim = proof.claim();
-        let claim_digest =
-            claim.digest::<F, Challenger, FreshVerifier>(base_challenger.clone(), fresh_verifier);
-        Ok((
-            WarpExternalRootReceipt {
-                claim,
-                claim_digest,
-                final_instance,
-            },
-            sumcheck_witnesses,
-        ))
-    }
-
-    /// Verify an externally committed root proof with an external
-    /// accumulator backend, return its receipt, and expose transcript-derived
-    /// sumcheck AIR witnesses for every WARP step.
-    pub fn verify_external_linear_chain_accumulator_with_sumcheck_witnesses<
-        Challenger,
-        FreshVerifier,
-        AccBackend,
-        Fin,
-    >(
-        &self,
-        base_challenger: &Challenger,
-        fresh_verifier: &FreshVerifier,
-        acc_backend: &AccBackend,
-        proof: &WarpExternalRootProof<
-            F,
-            EF,
-            AccBackend::Commitment,
-            FreshVerifier::Commitment,
-            FreshVerifier::Proof,
-            AccBackend::Proof,
-            Fin::Proof,
-        >,
-        finalizer: &Fin,
-    ) -> Result<
-        (
-            WarpExternalRootReceipt<
-                EF,
-                AccBackend::Commitment,
-                FreshVerifier::Commitment,
-                <Challenger as CanFinalizeDigest>::Digest,
-            >,
-            Vec<WarpStepSumcheckAirWitness<EF>>,
-        ),
-        WarpError,
-    >
-    where
-        Challenger:
-            FieldChallenger<F> + GrindingChallenger<Witness = F> + CanFinalizeDigest + Clone,
-        FreshVerifier: ExternalCodewordOpeningVerifier<F, Challenger>,
-        FreshVerifier::Commitment: Clone,
-        AccBackend: AccumulatorCommitmentBackend<F, EF, Challenger>,
-        Fin: AccumulatorFinalizer<F, EF, AccBackend::Commitment, AccBackend::ProverData>,
-    {
-        if proof.steps.is_empty() {
-            return Err(WarpError::Config("root proof requires at least one step"));
-        }
-
-        let mut previous: Option<AccumulatorInstance<EF, AccBackend::Commitment>> = None;
-        let mut sumcheck_witnesses = Vec::with_capacity(proof.steps.len());
-        for step in &proof.steps {
-            let priors: &[AccumulatorInstance<EF, AccBackend::Commitment>] = match previous.as_ref()
-            {
-                Some(instance) => core::slice::from_ref(instance),
-                None => &[],
-            };
-            let witness = self
-                .step_verifier
-                .verify_with_external_committed_accumulator_sumcheck_witness(
-                    base_challenger,
-                    fresh_verifier,
-                    acc_backend,
-                    &step.fresh_commitments,
-                    priors,
-                    &step.instance,
-                    &step.proof,
-                )?;
-            previous = Some(step.instance.clone());
-            sumcheck_witnesses.push(witness);
-        }
-
-        let final_instance = previous.expect("non-empty proof.steps checked above");
-        finalizer.verify(&final_instance, &proof.final_proof)?;
-        let claim = proof.claim();
-        let claim_digest = claim.digest_accumulator::<F, Challenger, FreshVerifier, AccBackend>(
-            base_challenger.clone(),
-            fresh_verifier,
-            acc_backend,
-        );
-        Ok((
-            WarpExternalRootReceipt {
-                claim,
-                claim_digest,
-                final_instance,
-            },
-            sumcheck_witnesses,
-        ))
     }
 }
