@@ -25,6 +25,50 @@ use crate::sumcheck::verify_final_sumcheck_rounds;
 
 pub mod errors;
 
+fn accumulate_scaled<EF: Field>(acc: &mut Option<Vec<EF>>, coeff: EF, values: &[EF]) {
+    match acc {
+        Some(acc) => {
+            for (slot, &value) in acc.iter_mut().zip(values) {
+                *slot += coeff * value;
+            }
+        }
+        None => {
+            *acc = Some(values.iter().map(|&value| coeff * value).collect());
+        }
+    }
+}
+
+fn accumulate_scaled_base<F, EF>(acc: &mut Option<Vec<EF>>, coeff: EF, values: &[F])
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    match acc {
+        Some(acc) => {
+            for (slot, &value) in acc.iter_mut().zip(values) {
+                *slot += coeff * EF::from(value);
+            }
+        }
+        None => {
+            *acc = Some(
+                values
+                    .iter()
+                    .map(|&value| coeff * EF::from(value))
+                    .collect(),
+            );
+        }
+    }
+}
+
+/// One independently committed initial oracle participating in a batched WHIR
+/// proof for the virtual polynomial `sum_i coeff_i * f_i`.
+#[derive(Clone, Debug)]
+pub enum WhirBatchedInitialVerifierOracle<EF, D> {
+    Base { coeff: EF, root: D },
+    Extension { coeff: EF, root: D },
+    SharedBase { coeffs: Vec<EF>, root: D },
+}
+
 /// WHIR protocol verifier.
 #[derive(Debug)]
 pub struct WhirVerifier<'a, EF, F, MT, Challenger>(
@@ -183,6 +227,170 @@ where
         Ok(folding_randomness)
     }
 
+    /// Verify a WHIR proof whose initial oracle is the virtual linear
+    /// combination of several independently committed initial oracles.
+    #[instrument(skip_all)]
+    #[allow(clippy::too_many_lines)]
+    pub fn verify_batched_initial(
+        &self,
+        proof: &WhirProof<F, EF, MT>,
+        challenger: &mut Challenger,
+        initial_oracles: &[WhirBatchedInitialVerifierOracle<EF, MT::Commitment>],
+        mut statement: EqStatement<EF>,
+    ) -> Result<Point<EF>, VerifierError>
+    where
+        Challenger: CanObserve<MT::Commitment>,
+    {
+        let mut constraints = Vec::new();
+        let mut round_folding_randomness = Vec::new();
+        let mut claimed_eval = EF::ZERO;
+
+        let mut initial_ood_statement = EqStatement::initialize(self.num_variables);
+        for oracle in initial_oracles {
+            match oracle {
+                WhirBatchedInitialVerifierOracle::Base { root, .. }
+                | WhirBatchedInitialVerifierOracle::Extension { root, .. }
+                | WhirBatchedInitialVerifierOracle::SharedBase { root, .. } => {
+                    challenger.observe(root.clone());
+                }
+            }
+        }
+        for i in 0..self.commitment_ood_samples {
+            let point = Point::expand_from_univariate(
+                challenger.sample_algebra_element(),
+                self.num_variables,
+            );
+            let eval = proof.initial_ood_answers[i];
+            challenger.observe_algebra_element(eval);
+            initial_ood_statement.add_evaluated_constraint(point, eval);
+        }
+
+        statement.concatenate(&initial_ood_statement);
+        let constraint = Constraint::new(
+            challenger.sample_algebra_element(),
+            statement,
+            SelectStatement::initialize(self.num_variables),
+        );
+        constraint.combine_evals(&mut claimed_eval);
+        constraints.push(constraint);
+
+        let folding_randomness = proof.initial_sumcheck.verify_rounds(
+            challenger,
+            &mut claimed_eval,
+            self.starting_folding_pow_bits,
+        )?;
+        round_folding_randomness.push(folding_randomness);
+
+        let mut prev_commitment: Option<ParsedCommitment<EF, MT::Commitment>> = None;
+        for round_index in 0..self.n_rounds() {
+            let round_params = &self.round_parameters[round_index];
+            let new_commitment = ParsedCommitment::<_, MT::Commitment>::parse_with_round(
+                proof,
+                challenger,
+                round_params.num_variables,
+                round_params.ood_samples,
+                Some(round_index),
+            );
+
+            let stir_statement = if round_index == 0 {
+                self.verify_batched_stir_challenges(
+                    proof,
+                    challenger,
+                    round_params,
+                    initial_oracles,
+                    round_folding_randomness.last().unwrap(),
+                    round_index,
+                )?
+            } else {
+                self.verify_stir_challenges(
+                    proof,
+                    challenger,
+                    round_params,
+                    prev_commitment.as_ref().unwrap(),
+                    round_folding_randomness.last().unwrap(),
+                    round_index,
+                )?
+            };
+
+            let constraint = Constraint::new(
+                challenger.sample_algebra_element(),
+                new_commitment.ood_statement.clone(),
+                stir_statement,
+            );
+            constraint.combine_evals(&mut claimed_eval);
+            constraints.push(constraint);
+
+            let folding_randomness = proof.rounds[round_index].sumcheck.verify_rounds(
+                challenger,
+                &mut claimed_eval,
+                round_params.folding_pow_bits,
+            )?;
+            round_folding_randomness.push(folding_randomness);
+            prev_commitment = Some(new_commitment);
+        }
+
+        let Some(final_evaluations) = proof.final_poly.clone() else {
+            panic!("Expected final polynomial");
+        };
+        challenger.observe_algebra_slice(final_evaluations.as_slice());
+
+        let stir_statement = if self.n_rounds() == 0 {
+            self.verify_batched_stir_challenges(
+                proof,
+                challenger,
+                &self.final_round_config(),
+                initial_oracles,
+                round_folding_randomness.last().unwrap(),
+                self.n_rounds(),
+            )?
+        } else {
+            self.verify_stir_challenges(
+                proof,
+                challenger,
+                &self.final_round_config(),
+                prev_commitment.as_ref().unwrap(),
+                round_folding_randomness.last().unwrap(),
+                self.n_rounds(),
+            )?
+        };
+
+        stir_statement
+            .verify(&final_evaluations)
+            .then_some(())
+            .ok_or_else(|| VerifierError::StirChallengeFailed {
+                challenge_id: 0,
+                details: "STIR constraint verification failed on final polynomial".to_string(),
+            })?;
+
+        let final_sumcheck_randomness = verify_final_sumcheck_rounds(
+            proof.final_sumcheck.as_ref(),
+            challenger,
+            &mut claimed_eval,
+            self.final_sumcheck_rounds,
+            self.final_folding_pow_bits,
+        )?;
+        round_folding_randomness.push(final_sumcheck_randomness.clone());
+
+        let folding_randomness = Point::new(
+            round_folding_randomness
+                .into_iter()
+                .flat_map(IntoIterator::into_iter)
+                .collect(),
+        );
+        let evaluation_of_weights =
+            VariableOrder::Prefix.eval_constraints_poly(&constraints, &folding_randomness);
+        let final_value = final_evaluations.eval_ext::<F>(&final_sumcheck_randomness);
+        if claimed_eval != evaluation_of_weights * final_value {
+            return Err(VerifierError::SumcheckFailed {
+                round: self.final_sumcheck_rounds,
+                expected: (evaluation_of_weights * final_value).to_string(),
+                actual: claimed_eval.to_string(),
+            });
+        }
+
+        Ok(folding_randomness)
+    }
+
     /// Verify STIR in-domain queries and produce associated constraints.
     ///
     /// Checks PoW witness, generates query indices, verifies Merkle proofs,
@@ -251,6 +459,197 @@ where
         ))
     }
 
+    /// Batched-initial variant of [`Self::verify_stir_challenges`].
+    pub fn verify_batched_stir_challenges(
+        &self,
+        proof: &WhirProof<F, EF, MT>,
+        challenger: &mut Challenger,
+        params: &RoundConfig<F>,
+        initial_oracles: &[WhirBatchedInitialVerifierOracle<EF, MT::Commitment>],
+        folding_randomness: &Point<EF>,
+        round_index: usize,
+    ) -> Result<SelectStatement<F, EF>, VerifierError>
+    where
+        Challenger: CanObserve<MT::Commitment>,
+    {
+        let pow_witness = if round_index < self.n_rounds() {
+            proof
+                .get_pow_after_commitment(round_index)
+                .ok_or(VerifierError::InvalidRoundIndex { index: round_index })?
+        } else {
+            proof.final_pow_witness
+        };
+        if params.pow_bits > 0 && !challenger.check_witness(params.pow_bits, pow_witness) {
+            return Err(VerifierError::InvalidPowWitness);
+        }
+
+        if round_index < self.n_rounds() {
+            challenger.sample();
+        }
+
+        let stir_challenges_indexes = get_challenge_stir_queries::<Challenger, F, EF>(
+            params.domain_size,
+            params.folding_factor,
+            params.num_queries,
+            challenger,
+        )?;
+
+        let dimensions = vec![Dimensions {
+            height: params.domain_size >> params.folding_factor,
+            width: 1 << params.folding_factor,
+        }];
+        let answers = self.verify_batched_merkle_proof(
+            proof,
+            initial_oracles,
+            &stir_challenges_indexes,
+            &dimensions,
+            round_index,
+        )?;
+
+        let folds: Vec<_> = answers
+            .into_iter()
+            .map(|answer| Poly::new(answer).eval_ext::<F>(folding_randomness))
+            .collect();
+
+        let stir_constraints = stir_challenges_indexes
+            .iter()
+            .map(|&index| params.folded_domain_gen.exp_u64(index as u64))
+            .collect();
+
+        Ok(SelectStatement::new(
+            params.num_variables,
+            stir_constraints,
+            folds,
+        ))
+    }
+
+    fn verify_batched_merkle_proof(
+        &self,
+        proof: &WhirProof<F, EF, MT>,
+        initial_oracles: &[WhirBatchedInitialVerifierOracle<EF, MT::Commitment>],
+        indices: &[usize],
+        dimensions: &[Dimensions],
+        round_index: usize,
+    ) -> Result<Vec<Vec<EF>>, VerifierError> {
+        let extension_mmcs = ExtensionMmcs::new(self.mmcs.clone());
+        let queries = if round_index == self.n_rounds() {
+            &proof.final_queries
+        } else {
+            &proof
+                .rounds
+                .get(round_index)
+                .ok_or_else(|| VerifierError::MerkleProofInvalid {
+                    position: 0,
+                    reason: format!("Round {round_index} not found in proof"),
+                })?
+                .queries
+        };
+
+        let mut results = Vec::with_capacity(indices.len());
+        for (&index, query) in indices.iter().zip(queries.iter()) {
+            let QueryOpening::Batched { openings } = query else {
+                return Err(VerifierError::MerkleProofInvalid {
+                    position: index,
+                    reason: "expected batched initial Merkle opening".to_string(),
+                });
+            };
+            if openings.len() != initial_oracles.len() {
+                return Err(VerifierError::MerkleProofInvalid {
+                    position: index,
+                    reason: "batched opening arity mismatch".to_string(),
+                });
+            }
+
+            let mut combined: Option<Vec<EF>> = None;
+            for (oracle, opening) in initial_oracles.iter().zip(openings.iter()) {
+                match (oracle, opening) {
+                    (
+                        WhirBatchedInitialVerifierOracle::Base { coeff, root },
+                        QueryOpening::Base { values, proof },
+                    ) => {
+                        self.mmcs
+                            .verify_batch(
+                                root,
+                                dimensions,
+                                index,
+                                BatchOpeningRef {
+                                    opened_values: from_ref(values),
+                                    opening_proof: proof,
+                                },
+                            )
+                            .map_err(|_| VerifierError::MerkleProofInvalid {
+                                position: index,
+                                reason: "base batched Merkle proof failed".to_string(),
+                            })?;
+                        let values = values
+                            .iter()
+                            .map(|&value| EF::from(value))
+                            .collect::<Vec<_>>();
+                        accumulate_scaled(&mut combined, *coeff, &values);
+                    }
+                    (
+                        WhirBatchedInitialVerifierOracle::Extension { coeff, root },
+                        QueryOpening::Extension { values, proof },
+                    ) => {
+                        extension_mmcs
+                            .verify_batch(
+                                root,
+                                dimensions,
+                                index,
+                                BatchOpeningRef {
+                                    opened_values: from_ref(values),
+                                    opening_proof: proof,
+                                },
+                            )
+                            .map_err(|_| VerifierError::MerkleProofInvalid {
+                                position: index,
+                                reason: "extension batched Merkle proof failed".to_string(),
+                            })?;
+                        accumulate_scaled(&mut combined, *coeff, values);
+                    }
+                    (
+                        WhirBatchedInitialVerifierOracle::SharedBase { coeffs, root },
+                        QueryOpening::SharedBase { values, proof },
+                    ) => {
+                        if values.len() != coeffs.len() {
+                            return Err(VerifierError::MerkleProofInvalid {
+                                position: index,
+                                reason: "shared base opening arity mismatch".to_string(),
+                            });
+                        }
+                        let shared_dimensions = vec![dimensions[0]; values.len()];
+                        self.mmcs
+                            .verify_batch(
+                                root,
+                                &shared_dimensions,
+                                index,
+                                BatchOpeningRef {
+                                    opened_values: values,
+                                    opening_proof: proof,
+                                },
+                            )
+                            .map_err(|_| VerifierError::MerkleProofInvalid {
+                                position: index,
+                                reason: "shared base Merkle proof failed".to_string(),
+                            })?;
+                        for (coeff, values) in coeffs.iter().zip(values.iter()) {
+                            accumulate_scaled_base::<F, EF>(&mut combined, *coeff, values);
+                        }
+                    }
+                    _ => {
+                        return Err(VerifierError::MerkleProofInvalid {
+                            position: index,
+                            reason: "batched opening field mismatch".to_string(),
+                        });
+                    }
+                }
+            }
+            results.push(combined.unwrap_or_default());
+        }
+
+        Ok(results)
+    }
+
     /// Verify Merkle multi-opening proofs at the given indices.
     pub fn verify_merkle_proof(
         &self,
@@ -314,6 +713,20 @@ where
                         })?;
 
                     values.clone()
+                }
+                QueryOpening::Batched { .. } => {
+                    return Err(VerifierError::MerkleProofInvalid {
+                        position: index,
+                        reason: "unexpected batched Merkle opening for single-root verifier"
+                            .to_string(),
+                    });
+                }
+                QueryOpening::SharedBase { .. } => {
+                    return Err(VerifierError::MerkleProofInvalid {
+                        position: index,
+                        reason: "unexpected shared-base Merkle opening for single-root verifier"
+                            .to_string(),
+                    });
                 }
             };
 

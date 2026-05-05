@@ -37,6 +37,7 @@ members = [
     "symmetric",
     "uni-stark",
     "util",
+    "warp",
     "whir",
 ]
 
@@ -124,6 +125,7 @@ p3-sha256 = { path = "sha256", version = "0.5.1" }
 p3-symmetric = { path = "symmetric", version = "0.5.1" }
 p3-uni-stark = { path = "uni-stark", version = "0.5.1" }
 p3-util = { path = "util", version = "0.5.1" }
+p3-warp = { path = "warp", version = "0.5.1" }
 p3-whir = { path = "whir", version = "0.5.1" }
 
 [workspace.package]

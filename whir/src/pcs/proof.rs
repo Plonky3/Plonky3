@@ -96,6 +96,16 @@ pub enum QueryOpening<F, EF, Proof> {
     /// Extension field opening (subsequent rounds).
     #[serde(rename = "extension")]
     Extension { values: Vec<EF>, proof: Proof },
+    /// Opening of one shared base-field root that commits several initial
+    /// polynomials as an MMCS matrix batch.
+    #[serde(rename = "shared_base")]
+    SharedBase { values: Vec<Vec<F>>, proof: Proof },
+    /// Batched initial opening against multiple independently committed
+    /// oracles.
+    #[serde(rename = "batched")]
+    Batched {
+        openings: Vec<QueryOpening<F, EF, Proof>>,
+    },
 }
 
 impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> WhirProof<F, EF, MT> {

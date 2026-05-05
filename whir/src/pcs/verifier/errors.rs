@@ -10,6 +10,10 @@ use crate::sumcheck::SumcheckError;
 /// Errors during WHIR proof verification.
 #[derive(Error, Debug)]
 pub enum VerifierError {
+    /// The proof is bound to a different initial commitment than the verifier supplied.
+    #[error("Initial commitment does not match the verifier-supplied commitment")]
+    CommitmentMismatch,
+
     /// Merkle proof verification failed.
     #[error("Merkle proof verification failed at position {position}: {reason}")]
     MerkleProofInvalid { position: usize, reason: String },

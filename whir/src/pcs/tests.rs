@@ -1,22 +1,28 @@
 //! End-to-end tests exercising the WHIR PCS through the multilinear trait.
 
+use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
-use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
+use p3_multilinear_util::poly::Poly;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
+use crate::constraints::statement::{EqStatement, LinearSigmaConstraint, LinearSigmaStatement};
 use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, SumcheckStrategy};
-use crate::pcs::WhirPcs;
+use crate::pcs::{
+    WhirBatchedDeferredProverOracle, WhirBatchedDeferredVerifierOracle, WhirLinearSigmaError,
+    WhirPcs,
+};
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -31,6 +37,45 @@ type MyMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
 
 type MyDft = Radix2DFTSmallBatch<F>;
 type TestWhirPcs = WhirPcs<EF, F, MyMmcs, MyChallenger, MyDft, 8>;
+
+fn test_pcs(num_variables: usize) -> (TestWhirPcs, SmallRng) {
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    let merkle_hash = MyHash::new(perm.clone());
+    let merkle_compress = MyCompress::new(perm);
+    let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
+    let params = ProtocolParameters {
+        security_level: 32,
+        pow_bits: 0,
+        rs_domain_initial_reduction_factor: 1,
+        folding_factor: FoldingFactor::Constant(2),
+        mmcs,
+        soundness_type: SecurityAssumption::CapacityBound,
+        starting_log_inv_rate: 1,
+    };
+    (
+        TestWhirPcs::new(
+            num_variables,
+            params,
+            MyDft::default(),
+            SumcheckStrategy::Classic,
+        ),
+        rng,
+    )
+}
+
+fn challenger() -> MyChallenger {
+    let mut rng = SmallRng::seed_from_u64(1);
+    MyChallenger::new(Perm::new_from_rng_128(&mut rng))
+}
+
+fn linear_eval_statement(poly: &Poly<F>, point: Point<EF>) -> LinearSigmaStatement<EF> {
+    let mut eq = EqStatement::initialize(poly.num_variables());
+    eq.add_evaluated_constraint(point.clone(), poly.eval_base(&point));
+    let mut statement = LinearSigmaStatement::initialize(poly.num_variables());
+    statement.add_constraint(LinearSigmaConstraint::from_eq_statement::<F>(&eq, EF::ONE));
+    statement
+}
 
 /// Run a full commit -> open -> verify cycle through the trait interface.
 ///
@@ -120,6 +165,183 @@ fn run_whir_pcs_lifecycle(
     // Phase 3: verify the proof against the commitment and claims.
     pcs.verify(&commitment, &[claims], &proof, &mut verifier_challenger)
         .expect("verification failed");
+}
+
+#[test]
+fn test_whir_linear_sigma_deferred_end_to_end() {
+    let num_variables = 4;
+    let (pcs, mut rng) = test_pcs(num_variables);
+    let evaluations: Vec<F> = (0..(1 << num_variables)).map(|_| rng.random()).collect();
+    let poly = Poly::new(evaluations.clone());
+    let eval_matrix = RowMajorMatrix::new(evaluations, 1);
+    let point = Point::expand_from_univariate(rng.random(), num_variables);
+    let statement = linear_eval_statement(&poly, point);
+
+    let mut prover_challenger = challenger();
+    let (commitment, prover_data) = pcs.commit_deferred(eval_matrix, &mut prover_challenger);
+    let (residual_claim, proof) = pcs
+        .open_linear_sigma_deferred(prover_data, &statement, &mut prover_challenger, 0)
+        .expect("linear Sigma proof");
+
+    let mut verifier_challenger = challenger();
+    let verified_residual = pcs
+        .verify_linear_sigma_deferred(&commitment, &statement, &proof, &mut verifier_challenger, 0)
+        .expect("linear Sigma verification");
+
+    assert_eq!(verified_residual, residual_claim);
+    assert_eq!(
+        verified_residual.value,
+        poly.eval_base(&verified_residual.point)
+    );
+}
+
+#[test]
+fn test_whir_extension_deferred_end_to_end() {
+    let num_variables = 4;
+    let (pcs, mut rng) = test_pcs(num_variables);
+    let evaluations: Vec<EF> = (0..(1 << num_variables)).map(|_| rng.random()).collect();
+    let poly = Poly::new(evaluations.clone());
+    let eval_matrix = RowMajorMatrix::new(evaluations, 1);
+    let point = Point::expand_from_univariate(rng.random(), num_variables);
+    let value = poly.eval_ext::<F>(&point);
+
+    let mut prover_challenger = challenger();
+    let (commitment, prover_data) =
+        pcs.commit_extension_deferred(eval_matrix, &mut prover_challenger);
+    let (opened_values, proof) =
+        pcs.open_extension_deferred(prover_data, &[vec![point.clone()]], &mut prover_challenger);
+
+    assert_eq!(opened_values[0][0], value);
+
+    let mut verifier_challenger = challenger();
+    pcs.verify_extension_deferred(
+        &commitment,
+        &[vec![(point, value)]],
+        &proof,
+        &mut verifier_challenger,
+    )
+    .expect("extension deferred verification");
+}
+
+#[test]
+fn test_whir_shared_base_batched_deferred_end_to_end() {
+    let num_variables = 4;
+    let (pcs, mut rng) = test_pcs(num_variables);
+    let evaluations0: Vec<F> = (0..(1 << num_variables)).map(|_| rng.random()).collect();
+    let evaluations1: Vec<F> = (0..(1 << num_variables)).map(|_| rng.random()).collect();
+    let poly0 = Poly::new(evaluations0.clone());
+    let poly1 = Poly::new(evaluations1.clone());
+    let coeffs = vec![EF::from_u64(7), EF::from_u64(11)];
+    let point = Point::expand_from_univariate(rng.random(), num_variables);
+    let value = coeffs[0] * poly0.eval_base(&point) + coeffs[1] * poly1.eval_base(&point);
+
+    let mut prover_challenger = challenger();
+    let (commitment, shared) = pcs.commit_base_batch_deferred(
+        vec![
+            RowMajorMatrix::new(evaluations0, 1),
+            RowMajorMatrix::new(evaluations1, 1),
+        ],
+        &mut prover_challenger,
+    );
+    let proof = pcs
+        .open_grouped_batched_deferred(
+            vec![WhirBatchedDeferredProverOracle::SharedBase {
+                coeffs: coeffs.clone(),
+                data: shared,
+            }],
+            point.clone(),
+            value,
+            &mut prover_challenger,
+        )
+        .expect("shared base batched proof");
+
+    let mut verifier_challenger = challenger();
+    pcs.verify_batched_deferred(
+        &[WhirBatchedDeferredVerifierOracle::SharedBase {
+            coeffs: coeffs.clone(),
+            commitment: commitment.clone(),
+        }],
+        point.clone(),
+        value,
+        &proof,
+        &mut verifier_challenger,
+    )
+    .expect("shared base batched verification");
+
+    let mut verifier_challenger = challenger();
+    let mut wrong_coeffs = coeffs;
+    wrong_coeffs[1] += EF::ONE;
+    pcs.verify_batched_deferred(
+        &[WhirBatchedDeferredVerifierOracle::SharedBase {
+            coeffs: wrong_coeffs,
+            commitment,
+        }],
+        point,
+        value,
+        &proof,
+        &mut verifier_challenger,
+    )
+    .expect_err("wrong shared coefficients must fail");
+}
+
+#[test]
+fn test_whir_linear_sigma_rejects_tampered_reduction() {
+    let num_variables = 4;
+    let (pcs, mut rng) = test_pcs(num_variables);
+    let evaluations: Vec<F> = (0..(1 << num_variables)).map(|_| rng.random()).collect();
+    let poly = Poly::new(evaluations.clone());
+    let eval_matrix = RowMajorMatrix::new(evaluations, 1);
+    let point = Point::expand_from_univariate(rng.random(), num_variables);
+    let statement = linear_eval_statement(&poly, point);
+
+    let mut prover_challenger = challenger();
+    let (commitment, prover_data) = pcs.commit_deferred(eval_matrix, &mut prover_challenger);
+    let (_, mut proof) = pcs
+        .open_linear_sigma_deferred(prover_data, &statement, &mut prover_challenger, 0)
+        .expect("linear Sigma proof");
+    proof.reduction.oracle_eval += EF::ONE;
+
+    let mut verifier_challenger = challenger();
+    let err = pcs
+        .verify_linear_sigma_deferred(&commitment, &statement, &proof, &mut verifier_challenger, 0)
+        .expect_err("tampered reduction must fail");
+    assert!(matches!(err, WhirLinearSigmaError::Reduction(_)));
+}
+
+#[test]
+fn test_whir_linear_sigma_rejects_wrong_commitment() {
+    let num_variables = 4;
+    let (pcs, mut rng) = test_pcs(num_variables);
+    let evaluations: Vec<F> = (0..(1 << num_variables)).map(|_| rng.random()).collect();
+    let poly = Poly::new(evaluations.clone());
+    let eval_matrix = RowMajorMatrix::new(evaluations, 1);
+    let point = Point::expand_from_univariate(rng.random(), num_variables);
+    let statement = linear_eval_statement(&poly, point);
+
+    let mut prover_challenger = challenger();
+    let (_commitment, prover_data) = pcs.commit_deferred(eval_matrix, &mut prover_challenger);
+    let (_, proof) = pcs
+        .open_linear_sigma_deferred(prover_data, &statement, &mut prover_challenger, 0)
+        .expect("linear Sigma proof");
+
+    let other_evaluations: Vec<F> = (0..(1 << num_variables)).map(|_| rng.random()).collect();
+    let mut other_challenger = challenger();
+    let (wrong_commitment, _) = pcs.commit_deferred(
+        RowMajorMatrix::new(other_evaluations, 1),
+        &mut other_challenger,
+    );
+
+    let mut verifier_challenger = challenger();
+    let err = pcs
+        .verify_linear_sigma_deferred(
+            &wrong_commitment,
+            &statement,
+            &proof,
+            &mut verifier_challenger,
+            0,
+        )
+        .expect_err("wrong commitment must fail");
+    assert!(matches!(err, WhirLinearSigmaError::Pcs(_)));
 }
 
 #[test]
