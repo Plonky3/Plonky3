@@ -8,6 +8,7 @@ use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, batch_multiplicative_inverse};
 use p3_fri::FriFoldingStrategy;
 use p3_matrix::Matrix;
+use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 
 use crate::domain::CircleDomain;
@@ -55,15 +56,15 @@ fn fold<F: ComplexExtendable, EF: ExtensionField<F>>(
     twiddles: &[F],
 ) -> Vec<EF> {
     evals
-        .rows()
-        .zip(twiddles)
+        .par_rows()
+        .zip(twiddles.par_iter())
         .map(|(mut row, &t)| {
             let (lo, hi) = row.next_tuple().unwrap();
             let sum = lo + hi;
             let diff = (lo - hi) * t;
             (sum + beta * diff).halve()
         })
-        .collect_vec()
+        .collect()
 }
 
 pub(crate) fn fold_y<F: ComplexExtendable, EF: ExtensionField<F>>(
