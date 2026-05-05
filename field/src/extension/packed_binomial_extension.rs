@@ -88,7 +88,7 @@ impl<F: BinomiallyExtendable<D>, PF: PackedField<Scalar = F>, const D: usize> Al
     #[inline]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[PF; N]) -> Self
     where
-        PF: crate::Dup,
+        PF: Dup,
     {
         // Output container; each coordinate is filled independently below.
         let mut result = Self::default();
