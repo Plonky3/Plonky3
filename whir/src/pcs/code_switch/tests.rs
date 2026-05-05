@@ -116,16 +116,16 @@ fn test_construction_9_7_mu_prime_identity_n0() {
     }
     for i in 0..t_ood {
         let mut power = EF::ONE;
-        for j in 0..ell {
-            sl_prime[j] += nu[1 + i] * power;
+        for sp in sl_prime.iter_mut() {
+            *sp += nu[1 + i] * power;
             power *= rho_ood_points[i];
         }
     }
     for i in 0..t {
         for l in 0..iota {
             let g_sharp = lift_row(&source_enc.message_row(query_positions[i] + l));
-            for j in 0..ell {
-                sl_prime[j] += nu[1 + t_ood + i * iota + l] * g_sharp[j];
+            for (sp, gs) in sl_prime.iter_mut().zip(&g_sharp) {
+                *sp += nu[1 + t_ood + i * iota + l] * *gs;
             }
         }
     }
@@ -137,16 +137,16 @@ fn test_construction_9_7_mu_prime_identity_n0() {
         for _ in 0..ell {
             power *= rho_ood_points[i];
         }
-        for j in 0..mask_msg_len {
-            sl_mask[j] += nu[1 + i] * power;
+        for sm in sl_mask.iter_mut() {
+            *sm += nu[1 + i] * power;
             power *= rho_ood_points[i];
         }
     }
     for i in 0..t {
         for l in 0..iota {
             let g_dollar = lift_row(&source_enc.randomness_row(query_positions[i] + l));
-            for j in 0..r_len {
-                sl_mask[j] += nu[1 + t_ood + i * iota + l] * g_dollar[j];
+            for (sm, gd) in sl_mask.iter_mut().zip(&g_dollar) {
+                *sm += nu[1 + t_ood + i * iota + l] * *gd;
             }
         }
     }
@@ -208,7 +208,7 @@ fn test_construction_9_7_mu_prime_identity_n2() {
         mu += inner_product(&xi[i], &sl_aux[i]);
     }
 
-    let rho_ood_points = vec![ef(99)];
+    let rho_ood_points = [ef(99)];
     let mut f_r_s: Vec<EF> = Vec::new();
     f_r_s.extend_from_slice(&f);
     f_r_s.extend_from_slice(&r);
@@ -236,21 +236,21 @@ fn test_construction_9_7_mu_prime_identity_n2() {
     }
 
     let mut sl_prime = vec![EF::ZERO; ell];
-    for j in 0..ell {
-        sl_prime[j] += nu[0] * sl[j];
+    for (sp, s) in sl_prime.iter_mut().zip(&sl) {
+        *sp += nu[0] * *s;
     }
     for i in 0..t_ood {
         let mut power = EF::ONE;
-        for j in 0..ell {
-            sl_prime[j] += nu[1 + i] * power;
+        for sp in sl_prime.iter_mut() {
+            *sp += nu[1 + i] * power;
             power *= rho_ood_points[i];
         }
     }
     for i in 0..t {
         for l in 0..iota {
             let g_sharp = lift_row(&source_enc.message_row(query_positions[i] + l));
-            for j in 0..ell {
-                sl_prime[j] += nu[1 + t_ood + i * iota + l] * g_sharp[j];
+            for (sp, gs) in sl_prime.iter_mut().zip(&g_sharp) {
+                *sp += nu[1 + t_ood + i * iota + l] * *gs;
             }
         }
     }
@@ -267,16 +267,16 @@ fn test_construction_9_7_mu_prime_identity_n2() {
         for _ in 0..ell {
             power *= rho_ood_points[i];
         }
-        for j in 0..mask_msg_len {
-            sl_mask[j] += nu[1 + i] * power;
+        for sm in sl_mask.iter_mut() {
+            *sm += nu[1 + i] * power;
             power *= rho_ood_points[i];
         }
     }
     for i in 0..t {
         for l in 0..iota {
             let g_dollar = lift_row(&source_enc.randomness_row(query_positions[i] + l));
-            for j in 0..r_len {
-                sl_mask[j] += nu[1 + t_ood + i * iota + l] * g_dollar[j];
+            for (sm, gd) in sl_mask.iter_mut().zip(&g_dollar) {
+                *sm += nu[1 + t_ood + i * iota + l] * *gd;
             }
         }
     }
@@ -321,7 +321,7 @@ fn test_construction_9_7_mu_prime_identity_iota2() {
     let sl: Vec<EF> = (0..ell as u64).map(|i| ef(7 + i * 3)).collect();
     let mu = inner_product(&f, &sl);
 
-    let rho_ood_points = vec![ef(6), ef(8)];
+    let rho_ood_points = [ef(6), ef(8)];
     let mut f_r_s = Vec::with_capacity(ell + r_len + s_pad_len);
     f_r_s.extend_from_slice(&f);
     f_r_s.extend_from_slice(&r);
@@ -353,13 +353,13 @@ fn test_construction_9_7_mu_prime_identity_iota2() {
     }
 
     let mut sl_prime = vec![EF::ZERO; ell];
-    for j in 0..ell {
-        sl_prime[j] += nu[0] * sl[j];
+    for (sp, s) in sl_prime.iter_mut().zip(&sl) {
+        *sp += nu[0] * *s;
     }
     for i in 0..t_ood {
         let mut power = EF::ONE;
-        for j in 0..ell {
-            sl_prime[j] += nu[1 + i] * power;
+        for sp in sl_prime.iter_mut() {
+            *sp += nu[1 + i] * power;
             power *= rho_ood_points[i];
         }
     }
@@ -367,8 +367,8 @@ fn test_construction_9_7_mu_prime_identity_iota2() {
         for l in 0..iota {
             let flat_index = query_symbols[i] * iota + l;
             let g_sharp = lift_row(&source_enc.message_row(flat_index));
-            for j in 0..ell {
-                sl_prime[j] += nu[1 + t_ood + i * iota + l] * g_sharp[j];
+            for (sp, gs) in sl_prime.iter_mut().zip(&g_sharp) {
+                *sp += nu[1 + t_ood + i * iota + l] * *gs;
             }
         }
     }
@@ -380,8 +380,8 @@ fn test_construction_9_7_mu_prime_identity_iota2() {
         for _ in 0..ell {
             power *= rho_ood_points[i];
         }
-        for j in 0..mask_msg_len {
-            sl_mask[j] += nu[1 + i] * power;
+        for sm in sl_mask.iter_mut() {
+            *sm += nu[1 + i] * power;
             power *= rho_ood_points[i];
         }
     }
@@ -389,8 +389,8 @@ fn test_construction_9_7_mu_prime_identity_iota2() {
         for l in 0..iota {
             let flat_index = query_symbols[i] * iota + l;
             let g_dollar = lift_row(&source_enc.randomness_row(flat_index));
-            for j in 0..r_len {
-                sl_mask[j] += nu[1 + t_ood + i * iota + l] * g_dollar[j];
+            for (sm, gd) in sl_mask.iter_mut().zip(&g_dollar) {
+                *sm += nu[1 + t_ood + i * iota + l] * *gd;
             }
         }
     }
