@@ -483,11 +483,7 @@ impl ZkSumcheck {
         encoding: &Enc,
         mmcs: &M,
         rng: &mut R,
-    ) -> (
-        ZkSumcheckData<F, EF>,
-        Vec<M::Commitment>,
-        Point<EF>,
-    )
+    ) -> (ZkSumcheckData<F, EF>, Vec<M::Commitment>, Point<EF>)
     where
         F: Field,
         EF: ExtensionField<F>,
@@ -565,9 +561,7 @@ impl ZkSumcheck {
         let mut target: EF = eps * mu + EF::from(mu_tilde);
 
         for _ in 0..k {
-            let wire: Vec<EF> = (0..wire_size)
-                .map(|_| rng.random::<EF>())
-                .collect();
+            let wire: Vec<EF> = (0..wire_size).map(|_| rng.random::<EF>()).collect();
 
             challenger.observe_algebra_slice(&wire);
 
@@ -737,9 +731,7 @@ impl ZkSumcheck {
             challenger.observe_algebra_slice(wire);
 
             // Verify PoW (only when prover grinded).
-            if pow_bits > 0
-                && !challenger.check_witness(pow_bits, zk_data.pow_witnesses[j_idx])
-            {
+            if pow_bits > 0 && !challenger.check_witness(pow_bits, zk_data.pow_witnesses[j_idx]) {
                 return Err(SumcheckError::InvalidPowWitness);
             }
 
@@ -1213,16 +1205,17 @@ mod tests {
 
         // Honest verification of the simulator's transcript.
         let mut honest_ch = MyChallenger::new(perm.clone());
-        let (honest_point, honest_target) = ZkSumcheck::verify_classic_unpacked::<F, EF, MyMmcs, _>(
-            &sim_zk_data,
-            &mut honest_ch,
-            folding_factor,
-            pow_bits,
-            &eq_statement,
-            &sim_mask_commits,
-            ell_zk,
-        )
-        .expect("honest verification of simulator output should succeed");
+        let (honest_point, honest_target) =
+            ZkSumcheck::verify_classic_unpacked::<F, EF, MyMmcs, _>(
+                &sim_zk_data,
+                &mut honest_ch,
+                folding_factor,
+                pow_bits,
+                &eq_statement,
+                &sim_mask_commits,
+                ell_zk,
+            )
+            .expect("honest verification of simulator output should succeed");
 
         // Tamper a single field element. The tamper indices are caller-
         // supplied modulo dimensions to keep the proptest strategy simple.
@@ -1233,21 +1226,17 @@ mod tests {
         wire[p_idx] += EF::ONE;
 
         let mut tampered_ch = MyChallenger::new(perm);
-        let (tampered_point, tampered_target) = ZkSumcheck::verify_classic_unpacked::<
-            F,
-            EF,
-            MyMmcs,
-            _,
-        >(
-            &tampered_zk_data,
-            &mut tampered_ch,
-            folding_factor,
-            pow_bits,
-            &eq_statement,
-            &sim_mask_commits,
-            ell_zk,
-        )
-        .expect("verifier shape checks pass on a single-byte tamper");
+        let (tampered_point, tampered_target) =
+            ZkSumcheck::verify_classic_unpacked::<F, EF, MyMmcs, _>(
+                &tampered_zk_data,
+                &mut tampered_ch,
+                folding_factor,
+                pow_bits,
+                &eq_statement,
+                &sim_mask_commits,
+                ell_zk,
+            )
+            .expect("verifier shape checks pass on a single-byte tamper");
 
         (
             honest_target,
