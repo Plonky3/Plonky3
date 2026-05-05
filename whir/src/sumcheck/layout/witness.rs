@@ -6,9 +6,11 @@ use itertools::Itertools;
 use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use p3_util::reverse_bits_len;
 
 use crate::sumcheck::layout::plan::{LayoutShape, plan_layout};
 use crate::sumcheck::layout::prover::{PrefixProver, SuffixProver};
+use crate::sumcheck::table::TableShape;
 
 /// Identifies one slot inside the stacked polynomial.
 #[derive(Debug, Clone, Copy)]
@@ -35,26 +37,44 @@ impl Selector {
     }
 
     /// Returns the hypercube point that addresses this slot.
+    #[inline(always)]
     pub fn point<F: Field>(&self) -> Point<F> {
         Point::hypercube(self.index, self.num_variables)
     }
 
     /// Returns the number of selector bits.
+    #[inline(always)]
     pub const fn num_variables(&self) -> usize {
         self.num_variables
     }
 
     /// Returns the slot index.
+    #[inline(always)]
     pub const fn index(&self) -> usize {
         self.index
     }
 
+    /// Returns this selector with its bitstring reversed.
+    #[inline(always)]
+    pub const fn reverse(&mut self) {
+        self.index = reverse_bits_len(self.index, self.num_variables);
+    }
+
     /// Prefixes `other` with the selector bits.
-    pub fn lift<Ext: Field>(&self, other: &Point<Ext>) -> Point<Ext> {
+    #[inline(always)]
+    pub fn lift_prefix<Ext: Field>(&self, other: &Point<Ext>) -> Point<Ext> {
         // Expand the slot index as selector bits; single allocation.
         let mut out: Point<Ext> = self.point();
         // Append the local coordinates to finish the stacked-space point.
         out.extend(other);
+        out
+    }
+
+    /// Appends the selector bits after the local coordinates.
+    #[inline(always)]
+    pub fn lift_suffix<Ext: Field>(&self, other: &Point<Ext>) -> Point<Ext> {
+        let mut out = other.clone();
+        out.extend(&self.point());
         out
     }
 }
@@ -102,9 +122,24 @@ impl<F: Field> Table<F> {
         self.0[0].num_variables()
     }
 
+    /// Returns the verifier shape of this table.
+    pub fn shape(&self) -> TableShape {
+        TableShape::new(self.num_variables(), self.num_polys())
+    }
+
     /// Returns the total number of stacked evaluations contributed.
     pub fn num_total_values(&self) -> usize {
         (1 << self.num_variables()) * self.num_polys()
+    }
+
+    /// Pads every column with zeros until the table has at least `num_variables`.
+    fn pad_zeros(&mut self, num_variables: usize) {
+        let current_num_variables = self.num_variables();
+        if current_num_variables < num_variables {
+            self.0
+                .iter_mut()
+                .for_each(|poly| poly.pad_zeros(num_variables));
+        }
     }
 }
 
@@ -121,6 +156,11 @@ impl TablePlacement {
     /// Creates placement metadata for table index `idx` with the given selectors.
     pub const fn new(idx: usize, selectors: Vec<Selector>) -> Self {
         Self { idx, selectors }
+    }
+
+    /// Reverses every selector bitstring in this placement.
+    pub fn reverse_selectors(&mut self) {
+        self.selectors.iter_mut().for_each(Selector::reverse);
     }
 
     /// Returns the number of columns placed for this table.
@@ -168,15 +208,16 @@ impl<F: Field> Witness<F> {
     /// # Panics
     ///
     /// - Table list must be non-empty.
-    /// - Every table arity must exceed the preprocessing depth.
-    pub fn new(tables: Vec<Table<F>>, folding: usize) -> Self {
+    /// - Tables below the preprocessing depth are zero-padded to that depth.
+    #[tracing::instrument(skip_all)]
+    pub fn new(mut tables: Vec<Table<F>>, folding: usize) -> Self {
         // Precondition: need at least one source table to stack.
         assert!(
             !tables.is_empty(),
             "Witness requires at least one source table"
         );
-        // Precondition: every table must have at least one variable left after folding.
-        assert!(tables.iter().all(|table| table.num_variables() > folding));
+        // Normalize small tables to the committed arity used by the protocol.
+        tables.iter_mut().for_each(|table| table.pad_zeros(folding));
 
         // Delegate slot assignment to the shared planner (same routine as the verifier).
         let shapes: Vec<LayoutShape> = tables
@@ -196,9 +237,76 @@ impl<F: Field> Witness<F> {
             let table = &tables[placement.idx()];
             for (poly_idx, selector) in placement.selectors().iter().enumerate() {
                 let poly = table.poly(poly_idx);
-                let dst = selector.index() << poly.num_variables();
+                let dst = selector.index << poly.num_variables();
                 stacked.as_mut_slice()[dst..dst + poly.num_evals()]
                     .copy_from_slice(poly.as_slice());
+            }
+        }
+
+        Self {
+            tables,
+            placements,
+            num_variables,
+            folding,
+            poly: stacked,
+        }
+    }
+
+    /// Stacks the given tables with local variables before selector variables.
+    ///
+    /// # Layout
+    ///
+    /// Current `new` stores each column contiguously as:
+    ///
+    /// ```text
+    ///     P(selector_bits, local_bits)
+    /// ```
+    ///
+    /// This constructor stores each column strided by selector bits as:
+    ///
+    /// ```text
+    ///     P(local_bits, selector_bits)
+    /// ```
+    ///
+    /// Local table evaluation order is preserved. Only selector bitstrings are
+    /// reversed from the prefix-oriented planner so mixed-arity selector codes
+    /// remain suffix-disjoint.
+    ///
+    /// # Panics
+    ///
+    /// - Table list must be non-empty.
+    /// - Tables below the preprocessing depth are zero-padded to that depth.
+    #[tracing::instrument(skip_all)]
+    pub fn new_interleaved(mut tables: Vec<Table<F>>, folding: usize) -> Self {
+        assert!(
+            !tables.is_empty(),
+            "Witness requires at least one source table"
+        );
+        tables.iter_mut().for_each(|table| table.pad_zeros(folding));
+
+        let shapes: Vec<LayoutShape> = tables
+            .iter()
+            .map(|t| LayoutShape {
+                arity: t.num_variables(),
+                width: t.num_polys(),
+            })
+            .collect();
+        let (num_variables, mut placements) = plan_layout(&shapes);
+        placements
+            .iter_mut()
+            .for_each(TablePlacement::reverse_selectors);
+
+        let mut stacked = Poly::<F>::zero(num_variables);
+
+        for placement in &placements {
+            let table = &tables[placement.idx()];
+            for (poly_idx, selector) in placement.selectors().iter().enumerate() {
+                let poly = table.poly(poly_idx);
+
+                for (local_idx, &value) in poly.as_slice().iter().enumerate() {
+                    let dst = (local_idx << selector.num_variables) | selector.index;
+                    stacked.as_mut_slice()[dst] = value;
+                }
             }
         }
 
@@ -214,6 +322,11 @@ impl<F: Field> Witness<F> {
     /// Returns the number of variables of the stacked polynomial.
     pub const fn num_variables(&self) -> usize {
         self.num_variables
+    }
+
+    /// Returns verifier table shapes after witness normalization/padding.
+    pub fn table_shapes(&self) -> Vec<TableShape> {
+        self.tables.iter().map(Table::shape).collect()
     }
 
     /// Consumes the witness and hands it to a prefix-mode prover.
@@ -260,6 +373,7 @@ mod tests {
     use rand::rngs::SmallRng;
 
     use super::*;
+    use crate::sumcheck::layout::Layout;
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
@@ -319,7 +433,7 @@ mod tests {
         //     other:    2-variable point over EF.
         let sel = Selector::new(3, 5);
         let other: Point<EF> = Point::new(vec![EF::from_u64(7), EF::from_u64(11)]);
-        let lifted = sel.lift(&other);
+        let lifted = sel.lift_prefix(&other);
 
         // Check: total length is the concatenation length.
         assert_eq!(lifted.num_variables(), 5);
@@ -452,6 +566,57 @@ mod tests {
                 assert_eq!(slot, col.as_slice());
             }
         }
+    }
+
+    #[test]
+    fn witness_new_interleaves_by_suffix_selectors() {
+        // Invariant:
+        //     Local-first stacking stores P(local_bits, selector_bits), preserving
+        //     each table's local evaluation order.
+        //
+        // Fixture state:
+        //     A has arity 2: [a0, a1, a2, a3]
+        //     B has arity 1: [b0, b1]
+        //     Expected storage: [a0, b0, a1, 0, a2, b1, a3, 0].
+        let a0 = F::from_u64(10);
+        let a1 = F::from_u64(11);
+        let a2 = F::from_u64(12);
+        let a3 = F::from_u64(13);
+        let b0 = F::from_u64(20);
+        let b1 = F::from_u64(21);
+
+        let table_a = Table::new(vec![Poly::new(vec![a0, a1, a2, a3])]);
+        let table_b = Table::new(vec![Poly::new(vec![b0, b1])]);
+        let witness = Witness::new_interleaved(vec![table_a, table_b], 0);
+
+        assert_eq!(witness.num_variables(), 3);
+        assert_eq!(
+            witness.poly.as_slice(),
+            &[a0, b0, a1, F::ZERO, a2, b1, a3, F::ZERO],
+        );
+    }
+
+    #[test]
+    fn witness_new_pads_tables_below_folding() {
+        // Invariant:
+        //     A table smaller than the preprocessing depth is committed as the
+        //     zero-padded polynomial with arity equal to folding.
+        let a0 = F::from_u64(10);
+        let a1 = F::from_u64(11);
+        let table = Table::new(vec![Poly::new(vec![a0, a1])]);
+
+        let witness = Witness::new(vec![table], 3);
+
+        assert_eq!(witness.tables[0].num_variables(), 3);
+        assert_eq!(witness.num_variables(), 3);
+        assert_eq!(
+            witness.tables[0].poly(0).as_slice(),
+            &[a0, a1, F::ZERO, F::ZERO, F::ZERO, F::ZERO, F::ZERO, F::ZERO],
+        );
+        assert_eq!(
+            witness.poly.as_slice(),
+            &[a0, a1, F::ZERO, F::ZERO, F::ZERO, F::ZERO, F::ZERO, F::ZERO],
+        );
     }
 
     #[test]

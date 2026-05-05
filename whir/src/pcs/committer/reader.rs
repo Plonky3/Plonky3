@@ -3,7 +3,7 @@ use core::ops::Deref;
 
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field, PackedValue, TwoAdicField};
+use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_multilinear_util::point::Point;
 
 use crate::constraints::statement::EqStatement;
@@ -26,29 +26,13 @@ impl<F, D> ParsedCommitment<F, D>
 where
     F: Field,
 {
-    /// Parse a commitment from the proof and transcript state.
-    pub fn parse<EF, MT: Mmcs<F>, Challenger>(
-        proof: &WhirProof<F, EF, MT>,
-        challenger: &mut Challenger,
-        num_variables: usize,
-        ood_samples: usize,
-    ) -> ParsedCommitment<EF, MT::Commitment>
-    where
-        F: TwoAdicField,
-        EF: ExtensionField<F> + TwoAdicField,
-        Challenger:
-            FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<MT::Commitment>,
-    {
-        Self::parse_with_round(proof, challenger, num_variables, ood_samples, None)
-    }
-
     /// Parse a commitment for a specific round (or initial if `None`).
     pub fn parse_with_round<EF, MT: Mmcs<F>, Challenger>(
         proof: &WhirProof<F, EF, MT>,
         challenger: &mut Challenger,
         num_variables: usize,
         ood_samples: usize,
-        round_index: Option<usize>,
+        round_index: usize,
     ) -> ParsedCommitment<EF, MT::Commitment>
     where
         F: TwoAdicField,
@@ -57,21 +41,9 @@ where
             FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<MT::Commitment>,
     {
         // Extract root and OOD answers from either the initial commitment or a round.
-        let (root, ood_answers) = round_index.map_or_else(
-            || {
-                (
-                    proof.initial_commitment.clone().unwrap(),
-                    proof.initial_ood_answers.clone(),
-                )
-            },
-            |idx| {
-                let round_proof = &proof.rounds[idx];
-                (
-                    round_proof.commitment.clone().unwrap(),
-                    round_proof.ood_answers.clone(),
-                )
-            },
-        );
+        let round_proof = &proof.rounds[round_index];
+        let root = round_proof.commitment.clone().unwrap();
+        let ood_answers = round_proof.ood_answers.clone();
 
         // Observe the Merkle root in the transcript.
         challenger.observe(root.clone());
@@ -95,50 +67,28 @@ where
 
 /// Lightweight wrapper for parsing commitment data during verification.
 #[derive(Debug)]
-pub struct CommitmentReader<'a, EF, F, MT: Mmcs<F>, Challenger>(
-    &'a WhirConfig<EF, F, MT, Challenger>,
-)
+pub struct CommitmentReader<'a, EF, F, Challenger>(&'a WhirConfig<EF, F, Challenger>)
 where
     F: Field,
     EF: ExtensionField<F>;
 
-impl<'a, EF, F, MT, Challenger> CommitmentReader<'a, EF, F, MT, Challenger>
+impl<'a, EF, F, Challenger> CommitmentReader<'a, EF, F, Challenger>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
-    MT: Mmcs<F>,
 {
-    pub const fn new(params: &'a WhirConfig<EF, F, MT, Challenger>) -> Self {
+    pub const fn new(params: &'a WhirConfig<EF, F, Challenger>) -> Self {
         Self(params)
-    }
-
-    /// Parse the initial commitment from the proof and verifier transcript.
-    pub fn parse_commitment<W, const DIGEST_ELEMS: usize>(
-        &self,
-        proof: &WhirProof<F, EF, MT>,
-        challenger: &mut Challenger,
-    ) -> ParsedCommitment<EF, MT::Commitment>
-    where
-        W: PackedValue<Value = W> + Eq + Copy,
-        Challenger: CanObserve<MT::Commitment>,
-    {
-        ParsedCommitment::<_, MT::Commitment>::parse(
-            proof,
-            challenger,
-            self.num_variables,
-            self.commitment_ood_samples,
-        )
     }
 }
 
-impl<EF, F, MT, Challenger> Deref for CommitmentReader<'_, EF, F, MT, Challenger>
+impl<EF, F, Challenger> Deref for CommitmentReader<'_, EF, F, Challenger>
 where
     F: Field,
     EF: ExtensionField<F>,
-    MT: Mmcs<F>,
 {
-    type Target = WhirConfig<EF, F, MT, Challenger>;
+    type Target = WhirConfig<EF, F, Challenger>;
 
     fn deref(&self) -> &Self::Target {
         self.0

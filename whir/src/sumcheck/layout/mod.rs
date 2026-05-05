@@ -76,9 +76,30 @@ mod verifier;
 mod witness;
 
 pub use opening::{
-    MultiClaim, Opening, PrefixMultiClaim, PrefixOpening, PrefixVirtualClaim, SuffixMultiClaim,
-    SuffixOpening, SuffixVirtualClaim, VerifierMultiClaim, VerifierOpening, VerifierVirtualClaim,
+    MultiClaim, Opening, ProverMultiClaim, ProverVirtualClaim, VerifierMultiClaim, VerifierOpening,
+    VerifierVirtualClaim,
 };
-pub use prover::{PrefixProver, SuffixProver};
-pub use verifier::{TableShape, Verifier};
+pub use prover::{Layout, PrefixProver, SuffixProver};
+pub use verifier::Verifier;
 pub use witness::{Selector, Table, TablePlacement, Witness};
+
+use crate::sumcheck::strategy::VariableOrder;
+pub use crate::sumcheck::table::TableShape;
+
+/// Verifier-side metadata required to replay a committed layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayoutStrategy {
+    /// Whether selector bits are reversed and appended after local bits.
+    pub reverse_selectors: bool,
+    /// Variable order used by the residual WHIR/sumcheck rounds.
+    pub variable_order: VariableOrder,
+}
+
+impl LayoutStrategy {
+    pub const fn new(reverse_selectors: bool, variable_order: VariableOrder) -> Self {
+        Self {
+            reverse_selectors,
+            variable_order,
+        }
+    }
+}

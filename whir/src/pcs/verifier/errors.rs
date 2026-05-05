@@ -29,6 +29,10 @@ pub enum VerifierError {
         details: String,
     },
 
+    /// Public opening protocol and proof evaluations are inconsistent.
+    #[error("Invalid opening shape: {details}")]
+    InvalidOpeningShape { details: String },
+
     /// Sumcheck verification error.
     #[error(transparent)]
     Sumcheck(#[from] SumcheckError),

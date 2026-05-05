@@ -1,6 +1,6 @@
 //! End-to-end tests exercising the WHIR PCS through the multilinear trait.
 
-use alloc::vec::Vec;
+use alloc::vec;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
@@ -8,15 +8,17 @@ use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
-use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_multilinear_util::point::Point;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+use rand::SeedableRng;
 use rand::rngs::SmallRng;
-use rand::{RngExt, SeedableRng};
 
-use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, SumcheckStrategy};
-use crate::pcs::WhirPcs;
+use crate::fiat_shamir::domain_separator::DomainSeparator;
+use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
+use crate::pcs::prover::WhirProver;
+use crate::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Witness};
+use crate::sumcheck::tests::{random_table_specs, table_specs_to_tables};
+use crate::sumcheck::{OpeningProtocol, TableSpec};
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -30,34 +32,50 @@ type PackedF = <F as Field>::Packing;
 type MyMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
 
 type MyDft = Radix2DFTSmallBatch<F>;
-type TestWhirPcs = WhirPcs<EF, F, MyMmcs, MyChallenger, MyDft, 8>;
+type TestWhirPcs<L> = WhirProver<EF, F, MyDft, MyMmcs, MyChallenger, L>;
 
-/// Run a full commit -> open -> verify cycle through the trait interface.
-///
-/// This exercises the complete WHIR protocol (Construction 5.1):
-///
-/// 1. Build a random multilinear polynomial f: {0,1}^m -> F.
-/// 2. Choose random evaluation points z_1, ..., z_t in F^m.
-/// 3. Commit to f and register the opening points.
-/// 4. Produce an opening proof via multi-round sumcheck + STIR queries.
-/// 5. Verify the proof against the commitment and claimed evaluations.
+pub(crate) fn challenger() -> MyChallenger {
+    let mut rng = SmallRng::seed_from_u64(1);
+    let perm = Perm::new_from_rng_128(&mut rng);
+    MyChallenger::new(perm)
+}
+
 #[allow(clippy::too_many_arguments)]
-fn run_whir_pcs_lifecycle(
-    num_variables: usize,
+fn run_whir_pcs<L: Layout<F, EF>>(
+    specs: &[TableSpec],
     folding_factor: FoldingFactor,
-    num_points: usize,
     soundness_type: SecurityAssumption,
     pow_bits: usize,
     rs_domain_initial_reduction_factor: usize,
-    sumcheck_strategy: SumcheckStrategy,
 ) {
-    // Total number of evaluations on the Boolean hypercube: 2^m.
-    let num_evaluations = 1 << num_variables;
+    let folding = folding_factor.at_round(0);
+    let tables = table_specs_to_tables(specs);
+    let witness = L::new_witness(tables, folding);
+    let protocol = OpeningProtocol::new(specs.to_vec()).pad_to_min_num_variables(folding);
+    assert_eq!(witness.table_shapes(), protocol.table_shapes());
 
-    // Deterministic RNG for reproducible tests.
-    let mut rng = SmallRng::seed_from_u64(1);
+    run_whir_pcs_lifecycle_with_witness::<L>(
+        witness,
+        protocol,
+        folding_factor,
+        soundness_type,
+        pow_bits,
+        rs_domain_initial_reduction_factor,
+    );
+}
 
+#[allow(clippy::too_many_arguments)]
+fn run_whir_pcs_lifecycle_with_witness<L: Layout<F, EF>>(
+    witness: Witness<F>,
+    protocol: OpeningProtocol,
+    folding_factor: FoldingFactor,
+    soundness_type: SecurityAssumption,
+    pow_bits: usize,
+    rs_domain_initial_reduction_factor: usize,
+) {
     // Build Poseidon2-based hash and compression for the Merkle tree.
+    let num_variables = witness.num_variables();
+    let mut rng = SmallRng::seed_from_u64(1);
     let perm = Perm::new_from_rng_128(&mut rng);
     let merkle_hash = MyHash::new(perm.clone());
     let merkle_compress = MyCompress::new(perm);
@@ -65,69 +83,64 @@ fn run_whir_pcs_lifecycle(
 
     // Assemble the protocol parameters.
     // Security level 32 keeps the test fast; production would use 100-128.
-    let whir_params = ProtocolParameters {
+    let params = ProtocolParameters {
         security_level: 32,
         pow_bits,
         rs_domain_initial_reduction_factor,
         folding_factor,
-        mmcs,
         soundness_type,
         starting_log_inv_rate: 1,
     };
 
     // Instantiate the PCS through the trait.
     let dft = MyDft::default();
-    let pcs = TestWhirPcs::new(num_variables, whir_params, dft, sumcheck_strategy);
+    let config = WhirConfig::new(num_variables, params);
+    let pcs = TestWhirPcs::<L>::new(config, dft, mmcs);
 
-    // Generate a random multilinear polynomial as a flat evaluation vector.
-    let evaluations: Vec<F> = (0..num_evaluations).map(|_| rng.random()).collect();
-    // Wrap as a single-column matrix (one polynomial).
-    let eval_matrix = RowMajorMatrix::new(evaluations, 1);
+    // Prover
+    let (commitment, proof) = {
+        let mut challenger = challenger();
+        let mut domain_separator = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<8>(&mut domain_separator);
+        domain_separator.observe_domain_separator(&mut challenger);
 
-    // Sample random extension-field points where we claim to know f(z_i).
-    // Each point is expanded from a single univariate seed into m coordinates
-    // via pow(z, m) = (z^{2^0}, ..., z^{2^{m-1}}).
-    let opening_points: Vec<Point<EF>> = (0..num_points)
-        .map(|_| Point::expand_from_univariate(rng.random(), num_variables))
-        .collect();
+        let (commitment, prover_data) =
+            <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
+                &pcs,
+                witness,
+                &mut challenger,
+            );
+        let proof = <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::open(
+            &pcs,
+            prover_data,
+            protocol.clone(),
+            &mut challenger,
+        );
+        (commitment, proof)
+    };
 
-    // Prover side: fresh challenger seeded identically to the verifier's.
-    let mut rng2 = SmallRng::seed_from_u64(1);
-    let mut prover_challenger = MyChallenger::new(Perm::new_from_rng_128(&mut rng2));
+    // Verifier
+    {
+        let mut challenger = challenger();
+        let mut domain_separator = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<8>(&mut domain_separator);
+        domain_separator.observe_domain_separator(&mut challenger);
 
-    // Phase 1: commit to the polynomial and register opening points.
-    // Internally this runs DFT encoding, Merkle commitment, and OOD sampling.
-    let (commitment, prover_data) = pcs.commit(
-        eval_matrix,
-        core::slice::from_ref(&opening_points),
-        &mut prover_challenger,
-    );
-
-    // Phase 2: produce the opening proof.
-    // Internally this runs M rounds of sumcheck + STIR queries + PoW grinding.
-    let (opened_values, proof) = pcs.open(prover_data, &mut prover_challenger);
-
-    // Package the claimed evaluations as (point, value) pairs for the verifier.
-    let claims: Vec<(Point<EF>, EF)> = opening_points
-        .into_iter()
-        .zip(opened_values[0].iter().copied())
-        .collect();
-
-    // Verifier side: independent challenger with the same seed.
-    let mut rng3 = SmallRng::seed_from_u64(1);
-    let mut verifier_challenger = MyChallenger::new(Perm::new_from_rng_128(&mut rng3));
-
-    // Phase 3: verify the proof against the commitment and claims.
-    pcs.verify(&commitment, &[claims], &proof, &mut verifier_challenger)
+        <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::verify(
+            &pcs,
+            &commitment,
+            &proof,
+            &mut challenger,
+            protocol,
+        )
         .expect("verification failed");
+    }
 }
 
 #[test]
 fn test_whir_end_to_end() {
-    // Sweep all meaningful parameter combinations.
-    //
-    // The folding factor k controls how many variables are eliminated per round.
-    // WHIR supports constant k or a different k for the first round.
+    const N: usize = 5;
+
     let folding_factors = [
         FoldingFactor::Constant(1),
         FoldingFactor::Constant(2),
@@ -138,25 +151,15 @@ fn test_whir_end_to_end() {
         FoldingFactor::ConstantFromSecondRound(3, 2),
         FoldingFactor::ConstantFromSecondRound(5, 2),
     ];
-
-    // Three soundness regimes with different proximity parameters:
-    //   - Unique decoding: delta = (1-rho)/2
-    //   - Johnson bound:   delta = 1 - sqrt(rho) - eta
-    //   - Capacity bound:  delta = 1 - rho - eta  (conjectured)
     let soundness_type = [
         SecurityAssumption::JohnsonBound,
         SecurityAssumption::CapacityBound,
         SecurityAssumption::UniqueDecoding,
     ];
-
-    // Number of evaluation claims to prove (0 = proximity test only).
-    let num_points = [0, 1, 2];
-
-    // Proof-of-work difficulty: prevents query manipulation (Section 6.2).
     let pow_bits = [0, 5, 10];
-
-    // Initial domain reduction before the first folding round.
     let rs_domain_initial_reduction_factors = 1..=3;
+
+    let mut rng = SmallRng::seed_from_u64(7);
 
     for rs_domain_initial_reduction_factor in rs_domain_initial_reduction_factors {
         for folding_factor in folding_factors {
@@ -165,35 +168,25 @@ fn test_whir_end_to_end() {
             if folding_factor.at_round(0) < rs_domain_initial_reduction_factor {
                 continue;
             }
-            // Test polynomial sizes from k to 3k variables, where k is
-            // the first-round folding factor. This covers 1-round, 2-round,
-            // and 3-round protocol executions.
-            let num_variables = folding_factor.at_round(0)..=3 * folding_factor.at_round(0);
-            for num_variable in num_variables {
-                for num_points in num_points {
-                    for soundness_type in soundness_type {
-                        for pow_bits in pow_bits {
-                            // Test both sumcheck strategies: classic constraint
-                            // batching and split-value optimization.
-                            run_whir_pcs_lifecycle(
-                                num_variable,
-                                folding_factor,
-                                num_points,
-                                soundness_type,
-                                pow_bits,
-                                rs_domain_initial_reduction_factor,
-                                SumcheckStrategy::Svo,
-                            );
-                            run_whir_pcs_lifecycle(
-                                num_variable,
-                                folding_factor,
-                                num_points,
-                                soundness_type,
-                                pow_bits,
-                                rs_domain_initial_reduction_factor,
-                                SumcheckStrategy::Classic,
-                            );
-                        }
+
+            for soundness_type in soundness_type {
+                for pow_bits in pow_bits {
+                    for _ in 0..N {
+                        let specs = random_table_specs(&mut rng, folding_factor.at_round(0));
+                        run_whir_pcs::<PrefixProver<F, EF>>(
+                            &specs,
+                            folding_factor,
+                            soundness_type,
+                            pow_bits,
+                            rs_domain_initial_reduction_factor,
+                        );
+                        run_whir_pcs::<SuffixProver<F, EF>>(
+                            &specs,
+                            folding_factor,
+                            soundness_type,
+                            pow_bits,
+                            rs_domain_initial_reduction_factor,
+                        );
                     }
                 }
             }
@@ -201,12 +194,10 @@ fn test_whir_end_to_end() {
     }
 }
 
-#[cfg(test)]
 mod keccak_tests {
     //! Same lifecycle test using Keccak-based Merkle trees over a different field.
 
     use alloc::vec;
-    use alloc::vec::Vec;
 
     use p3_challenger::{HashChallenger, SerializingChallenger32};
     use p3_commit::MultilinearPcs;
@@ -214,115 +205,104 @@ mod keccak_tests {
     use p3_field::extension::BinomialExtensionField;
     use p3_keccak::{Keccak256Hash, KeccakF};
     use p3_koala_bear::KoalaBear;
-    use p3_matrix::dense::RowMajorMatrix;
     use p3_merkle_tree::MerkleTreeMmcs;
-    use p3_multilinear_util::point::Point;
+    use p3_multilinear_util::poly::Poly;
     use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
+    use rand::SeedableRng;
     use rand::rngs::SmallRng;
-    use rand::{RngExt, SeedableRng};
 
-    use crate::parameters::{
-        FoldingFactor, ProtocolParameters, SecurityAssumption, SumcheckStrategy,
-    };
-    use crate::pcs::WhirPcs;
+    use crate::fiat_shamir::domain_separator::DomainSeparator;
+    use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
+    use crate::pcs::prover::WhirProver;
+    use crate::sumcheck::layout::{Layout, SuffixProver, Table};
+    use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
 
     type F = KoalaBear;
     type EF = BinomialExtensionField<F, 4>;
 
-    // Keccak sponge producing u64 digests for Merkle leaves.
     type U64Hash = PaddingFreeSponge<KeccakF, 25, 17, 4>;
-    // Serializing wrapper to hash field elements via the Keccak sponge.
     type KeccakFieldHash = SerializingHasher<U64Hash>;
-    // 2-to-1 compression for internal Merkle nodes.
     type KeccakCompress = CompressionFunctionFromHasher<U64Hash, 2, 4>;
 
-    // Byte-based challenger using Keccak-256 for Fiat-Shamir.
     type KeccakChallenger = SerializingChallenger32<F, HashChallenger<u8, Keccak256Hash, 32>>;
     type MyMmcs = MerkleTreeMmcs<F, u64, KeccakFieldHash, KeccakCompress, 2, 4>;
-
     type MyDft = Radix2DFTSmallBatch<F>;
-    // Digest width is 4 (four u64 elements per Keccak Merkle node).
-    type TestWhirPcs = WhirPcs<EF, F, MyMmcs, KeccakChallenger, MyDft, 4>;
+    type LayoutMode = SuffixProver<F, EF>;
+    type TestWhirPcs = WhirProver<EF, F, MyDft, MyMmcs, KeccakChallenger, LayoutMode>;
 
-    #[allow(clippy::too_many_arguments)]
-    fn run_whir_pcs_lifecycle_keccak(
-        num_variables: usize,
-        folding_factor: FoldingFactor,
-        num_points: usize,
-        soundness_type: SecurityAssumption,
-        pow_bits: usize,
-        rs_domain_initial_reduction_factor: usize,
-        sumcheck_strategy: SumcheckStrategy,
-    ) {
-        let num_evaluations = 1 << num_variables;
+    fn challenger() -> KeccakChallenger {
+        KeccakChallenger::new(HashChallenger::<u8, Keccak256Hash, 32>::new(
+            vec![],
+            Keccak256Hash {},
+        ))
+    }
 
-        // Build Keccak-based Merkle tree primitives.
+    #[test]
+    fn test_whir_keccak_end_to_end() {
+        const NUM_VARIABLES: usize = 16;
+        const FOLDING: usize = 4;
+
+        let mut rng = SmallRng::seed_from_u64(1);
+        let table = Table::new(vec![Poly::<F>::rand(&mut rng, NUM_VARIABLES)]);
+        let witness = LayoutMode::new_witness(vec![table], FOLDING);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            TableShape::new(NUM_VARIABLES, 1),
+            vec![vec![0]],
+        )]);
+        assert_eq!(witness.table_shapes(), protocol.table_shapes());
+
         let u64_hash = U64Hash::new(KeccakF {});
         let merkle_hash = KeccakFieldHash::new(u64_hash);
         let merkle_compress = KeccakCompress::new(u64_hash);
         let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
 
-        // Assemble protocol parameters with Keccak hashing.
-        let whir_params = ProtocolParameters {
+        let params = ProtocolParameters {
             security_level: 32,
-            pow_bits,
-            rs_domain_initial_reduction_factor,
-            folding_factor,
-            mmcs,
-            soundness_type,
+            pow_bits: 0,
+            rs_domain_initial_reduction_factor: 1,
+            folding_factor: FoldingFactor::Constant(FOLDING),
+            soundness_type: SecurityAssumption::CapacityBound,
             starting_log_inv_rate: 1,
         };
-
-        // Instantiate the PCS through the trait.
-        let dft = MyDft::default();
-        let pcs = TestWhirPcs::new(num_variables, whir_params, dft, sumcheck_strategy);
-
-        // Random polynomial and opening points.
-        let mut rng = SmallRng::seed_from_u64(1);
-        let evaluations: Vec<F> = (0..num_evaluations).map(|_| rng.random()).collect();
-        let eval_matrix = RowMajorMatrix::new(evaluations, 1);
-
-        let opening_points: Vec<Point<EF>> = (0..num_points)
-            .map(|_| Point::expand_from_univariate(rng.random(), num_variables))
-            .collect();
-
-        // Prover: commit and open using a Keccak-based challenger.
-        let inner = HashChallenger::<u8, Keccak256Hash, 32>::new(vec![], Keccak256Hash {});
-        let mut prover_challenger = KeccakChallenger::new(inner);
-
-        let (commitment, prover_data) = pcs.commit(
-            eval_matrix,
-            core::slice::from_ref(&opening_points),
-            &mut prover_challenger,
+        let pcs = TestWhirPcs::new(
+            WhirConfig::new(witness.num_variables(), params),
+            MyDft::default(),
+            mmcs,
         );
 
-        let (opened_values, proof) = pcs.open(prover_data, &mut prover_challenger);
+        let (commitment, proof) = {
+            let mut prover_challenger = challenger();
+            let mut domain_separator = DomainSeparator::new(vec![]);
+            pcs.add_domain_separator::<4>(&mut domain_separator);
+            domain_separator.observe_domain_separator(&mut prover_challenger);
 
-        // Package claims for the verifier.
-        let claims: Vec<(Point<EF>, EF)> = opening_points
-            .into_iter()
-            .zip(opened_values[0].iter().copied())
-            .collect();
+            let (commitment, prover_data) =
+                <TestWhirPcs as MultilinearPcs<EF, KeccakChallenger>>::commit(
+                    &pcs,
+                    witness,
+                    &mut prover_challenger,
+                );
+            let proof = <TestWhirPcs as MultilinearPcs<EF, KeccakChallenger>>::open(
+                &pcs,
+                prover_data,
+                protocol.clone(),
+                &mut prover_challenger,
+            );
+            (commitment, proof)
+        };
 
-        // Verifier: independent challenger with the same empty initial state.
-        let inner = HashChallenger::<u8, Keccak256Hash, 32>::new(vec![], Keccak256Hash {});
-        let mut verifier_challenger = KeccakChallenger::new(inner);
+        let mut verifier_challenger = challenger();
+        let mut domain_separator = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<4>(&mut domain_separator);
+        domain_separator.observe_domain_separator(&mut verifier_challenger);
 
-        pcs.verify(&commitment, &[claims], &proof, &mut verifier_challenger)
-            .expect("keccak verification failed");
-    }
-
-    #[test]
-    fn test_whir_keccak_end_to_end() {
-        // Single representative configuration to verify Keccak compatibility.
-        run_whir_pcs_lifecycle_keccak(
-            10,
-            FoldingFactor::Constant(4),
-            2,
-            SecurityAssumption::CapacityBound,
-            0,
-            1,
-            SumcheckStrategy::default(),
-        );
+        <TestWhirPcs as MultilinearPcs<EF, KeccakChallenger>>::verify(
+            &pcs,
+            &commitment,
+            &proof,
+            &mut verifier_challenger,
+            protocol,
+        )
+        .expect("keccak verification failed");
     }
 }

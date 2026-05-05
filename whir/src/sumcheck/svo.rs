@@ -29,7 +29,7 @@ use p3_multilinear_util::split_eq::SplitEq;
 use p3_util::log2_strict_usize;
 
 use crate::sumcheck::Claim;
-use crate::sumcheck::layout::SuffixMultiClaim as MultiClaim;
+use crate::sumcheck::layout::ProverMultiClaim as MultiClaim;
 use crate::sumcheck::strategy::VariableOrder;
 
 /// Expand `2^l` Boolean-hypercube evaluations to `3^l` evaluations on `{0,1,inf}^l`.
@@ -246,6 +246,11 @@ pub(crate) fn calculate_accumulators_batch<F: Field, EF: ExtensionField<F>>(
                         .zip_eq(partial.iter())
                         .for_each(|(out, &f)| *out += alpha * f);
                 });
+
+            if matches!(claim.point().var_order(), VariableOrder::Prefix) {
+                let (svo_active, _) = claim.point().z_svo().split_at(l);
+                return calculate_accumulator::<F, EF>(l, acc.as_slice(), svo_active.as_slice());
+            }
 
             let (_, svo_active) = claim.point().z_svo().split_at(k - l);
             let eq_grid = evals_01inf_grid_prefix(
@@ -1287,6 +1292,67 @@ mod test {
                 let r: EF = rng.random();
                 poly.fix_suffix_var_mut(r);
                 eq.fix_suffix_var_mut(r);
+                rs.push(r);
+            }
+        }
+
+        for l0 in 0..=k / 2 {
+            let svo_point = SvoPoint::<F, EF>::new_unpacked(l0, &point, VariableOrder::Prefix);
+            let openings = polys
+                .iter()
+                .map(|poly| {
+                    let (eval, partial_evals) = svo_point.eval(poly);
+                    let opening = Opening {
+                        poly_idx: None,
+                        eval,
+                        data: partial_evals,
+                    };
+                    assert_eq!(opening.eval(), poly.eval_base(&point));
+                    opening
+                })
+                .collect::<Vec<_>>();
+            let claim = MultiClaim::new(svo_point, openings);
+
+            let accumulators = calculate_accumulators_batch(&claim, &alphas);
+            if l0 == 0 {
+                assert!(accumulators.is_empty());
+                continue;
+            }
+
+            let mut poly = Poly::<EF>::zero(l0);
+            claim
+                .openings()
+                .iter()
+                .zip(alphas.iter())
+                .for_each(|(opening, &alpha)| {
+                    let full_svo_poly = opening
+                        .data()
+                        .last()
+                        .expect("l0 > 0 guarantees one SVO partial polynomial");
+                    poly.as_mut_slice()
+                        .iter_mut()
+                        .zip(full_svo_poly.iter())
+                        .for_each(|(out, &value)| *out += alpha * value);
+                });
+
+            let mut eq = Poly::new_from_point(claim.point().z_svo().as_slice(), EF::ONE);
+            let mut rs = Vec::with_capacity(l0);
+
+            for [acc0, acc_inf] in accumulators.iter() {
+                let weights = lagrange_weights_01inf_multi(rs.as_slice());
+                let c0 = dot_product::<EF, _, _>(acc0.iter().copied(), weights.iter().copied());
+                let cinf =
+                    dot_product::<EF, _, _>(acc_inf.iter().copied(), weights.iter().copied());
+
+                let (c0_ref, cinf_ref) =
+                    VariableOrder::Prefix.sumcheck_coefficients(poly.as_slice(), eq.as_slice());
+
+                assert_eq!(c0, c0_ref);
+                assert_eq!(cinf, cinf_ref);
+
+                let r: EF = rng.random();
+                poly.fix_prefix_var_mut(r);
+                eq.fix_prefix_var_mut(r);
                 rs.push(r);
             }
         }

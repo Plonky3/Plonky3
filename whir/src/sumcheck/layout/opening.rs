@@ -5,24 +5,14 @@ use alloc::vec::Vec;
 use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
-use p3_multilinear_util::split_eq::SplitEq;
 
 use crate::sumcheck::Claim;
 use crate::sumcheck::svo::{SvoAccumulators, SvoPoint};
 
-/// Opening in the prefix mode (no auxiliary payload).
-pub type PrefixOpening<EF> = Opening<EF, ()>;
-/// Multi-opening claim over a split-equality point in the prefix mode.
-pub type PrefixMultiClaim<F, EF> = MultiClaim<EF, SplitEq<F, EF>, ()>;
-/// Virtual claim over the stacked polynomial in the prefix mode.
-pub type PrefixVirtualClaim<EF> = Claim<EF, Point<EF>, ()>;
-
-/// Opening in the suffix mode: carries one partial evaluation per SVO round.
-pub type SuffixOpening<EF> = Opening<EF, Vec<Poly<EF>>>;
-/// Multi-opening claim over an SVO point in the suffix mode.
-pub type SuffixMultiClaim<F, EF> = MultiClaim<EF, SvoPoint<F, EF>, Vec<Poly<EF>>>;
+/// Multi-opening claim over an SVO point.
+pub type ProverMultiClaim<F, EF> = MultiClaim<EF, SvoPoint<F, EF>, Vec<Poly<EF>>>;
 /// Virtual claim carrying precomputed SVO accumulators.
-pub type SuffixVirtualClaim<EF> = Claim<EF, Point<EF>, SvoAccumulators<EF>>;
+pub type ProverVirtualClaim<EF> = Claim<EF, Point<EF>, SvoAccumulators<EF>>;
 
 /// Opening on the verifier side: column index plus claimed evaluation.
 pub type VerifierOpening<EF> = Opening<EF, ()>;
