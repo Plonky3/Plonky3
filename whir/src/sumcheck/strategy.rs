@@ -108,6 +108,7 @@ where
 {
     // Precondition: paired slices must be aligned; half-and-half split addresses the prefix bit.
     assert_eq!(evals.len(), weights.len());
+    assert!(evals.len().is_multiple_of(2));
     let half = evals.len() / 2;
     let (e_lo, e_hi) = evals.split_at(half);
     let (w_lo, w_hi) = weights.split_at(half);
@@ -197,6 +198,7 @@ where
 {
     // Precondition: paired slices must be aligned; adjacent pairs address the suffix bit.
     assert_eq!(evals.len(), weights.len());
+    assert!(evals.len().is_multiple_of(2));
 
     let half = evals.len() / 2;
     // Each chunk consumes 2K consecutive elements (K pairs).

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::{BinomialExtensionField, binomial_mul, vector_add, vector_sub};
 use crate::extension::{BinomiallyExtendable, binomial_square};
 use crate::{
-    Algebra, BasedVectorSpace, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
+    Algebra, BasedVectorSpace, Dup, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
     PrimeCharacteristicRing, field_to_array,
 };
 
