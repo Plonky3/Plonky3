@@ -40,6 +40,7 @@ tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
 [features]
+default = ["parallel"]
 parallel = ["p3-maybe-rayon/parallel"]
 
 [[bench]]
