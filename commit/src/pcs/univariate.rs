@@ -312,10 +312,52 @@ where
         }
         let trace_size = trace_domain.size();
         let quotient_size = quotient_domain.size();
+        assert!(
+            quotient_size >= trace_size,
+            "quotient domain size ({quotient_size}) must be >= trace domain size ({trace_size})",
+        );
+        assert_eq!(
+            quotient_size % trace_size,
+            0,
+            "quotient domain size ({quotient_size}) must be divisible by trace domain size ({trace_size})",
+        );
         let blowup = quotient_size / trace_size;
-        let max_period = periodic_cols.iter().map(|c| c.len()).max().unwrap();
-        let extended_height = max_period * blowup;
+        assert!(
+            blowup.is_power_of_two(),
+            "blowup factor ({blowup}) must be a power of two",
+        );
+        let max_period = periodic_cols
+            .iter()
+            .map(|col| {
+                let period = col.len();
+                assert!(
+                    period > 0,
+                    "periodic column length must be > 0, got {period}",
+                );
+                assert!(
+                    period.is_power_of_two(),
+                    "periodic column length must be a power of 2"
+                );
+                assert_eq!(
+                    trace_size % period,
+                    0,
+                    "trace domain size ({trace_size}) must be divisible by periodic column length ({period})",
+                );
+                period
+            })
+            .max()
+            .unwrap();
+        let extended_height = max_period
+            .checked_mul(blowup)
+            .expect("extended height overflow when computing max_period * blowup");
+        assert!(
+            extended_height <= quotient_size,
+            "extended periodic height ({extended_height}) must be <= quotient domain size ({quotient_size})",
+        );
         let num_cols = periodic_cols.len();
+        let row_major_capacity = extended_height
+            .checked_mul(num_cols)
+            .expect("row-major periodic table capacity overflow");
 
         let mut quotient_pts = Vec::with_capacity(extended_height);
         let mut pt = quotient_domain.first_point();
@@ -331,7 +373,7 @@ where
             .map(|col| (0..max_period).map(|i| col[i % col.len()]).collect())
             .collect();
 
-        let mut row_major = Vec::with_capacity(extended_height * num_cols);
+        let mut row_major = Vec::with_capacity(row_major_capacity);
         for point in quotient_pts.iter().take(extended_height) {
             for padded in &padded_cols {
                 row_major.push(trace_domain.evaluate_periodic_column_at(padded, *point));

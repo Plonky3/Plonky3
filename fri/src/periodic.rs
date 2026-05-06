@@ -28,6 +28,7 @@
 //! could be computed once per distinct period and reused across columns sharing that period.
 
 use alloc::vec::Vec;
+use core::convert::TryFrom;
 
 use p3_commit::{PeriodicEvaluator, PeriodicLdeTable};
 use p3_dft::TwoAdicSubgroupDft;
@@ -87,8 +88,21 @@ where
 
         let trace_len = trace_domain.size();
         let lde_len = lde_domain.size();
+        assert!(
+            lde_len >= trace_len,
+            "LDE domain size ({lde_len}) must be >= trace domain size ({trace_len})",
+        );
+        assert_eq!(
+            lde_len % trace_len,
+            0,
+            "LDE domain size ({lde_len}) must be divisible by trace domain size ({trace_len})",
+        );
         let lde_shift = lde_domain.shift();
         let blowup = lde_len / trace_len;
+        assert!(
+            blowup.is_power_of_two(),
+            "blowup factor ({blowup}) must be a power of two",
+        );
         let log_blowup = log2_strict_usize(blowup);
 
         // Find the maximum period and validate all columns
@@ -96,21 +110,42 @@ where
             .iter()
             .map(|col| {
                 let period = col.len();
-                debug_assert!(
+                assert!(
+                    period > 0,
+                    "periodic column length must be > 0, got {period}",
+                );
+                assert!(
                     period.is_power_of_two(),
                     "periodic column length must be a power of 2"
+                );
+                assert_eq!(
+                    trace_len % period,
+                    0,
+                    "trace domain size ({trace_len}) must be divisible by periodic column length ({period})",
                 );
                 period
             })
             .max()
             .unwrap();
 
-        let extended_height = max_period * blowup;
+        let extended_height = max_period
+            .checked_mul(blowup)
+            .expect("extended height overflow when computing max_period * blowup");
         let num_cols = periodic_table.len();
+        let row_major_capacity = extended_height
+            .checked_mul(num_cols)
+            .expect("row-major periodic table capacity overflow");
 
         // Compute the shift for the periodic subdomain at max_period.
         // This aligns the periodic domain with the LDE domain so modular indexing works.
-        let periodic_shift = lde_shift.exp_u64((lde_len / extended_height) as u64);
+        assert_eq!(
+            lde_len % extended_height,
+            0,
+            "LDE domain size ({lde_len}) must be divisible by extended periodic height ({extended_height})",
+        );
+        let shift_exp = u64::try_from(lde_len / extended_height)
+            .expect("periodic shift exponent does not fit into u64");
+        let periodic_shift = lde_shift.exp_u64(shift_exp);
 
         let dft = Dft::default();
 
@@ -134,7 +169,7 @@ where
         }
 
         // Convert from column-major to row-major storage
-        let mut row_major_values = Vec::with_capacity(extended_height * num_cols);
+        let mut row_major_values = Vec::with_capacity(row_major_capacity);
         for row_idx in 0..extended_height {
             for col in &columns {
                 row_major_values.push(col[row_idx]);
@@ -155,12 +190,22 @@ where
             .iter()
             .map(|col| {
                 let period = col.len();
-                debug_assert!(
+                assert!(
+                    period > 0,
+                    "periodic column length must be > 0, got {period}",
+                );
+                assert!(
                     period.is_power_of_two(),
                     "periodic column length must be a power of 2"
                 );
+                assert_eq!(
+                    trace_len % period,
+                    0,
+                    "trace domain size ({trace_len}) must be divisible by periodic column length ({period})",
+                );
 
-                let exponent = (trace_len / period) as u64;
+                let exponent = u64::try_from(trace_len / period)
+                    .expect("periodic projection exponent does not fit into u64");
 
                 // Project point to periodic subdomain: ζ^(n/p)
                 let periodic_point = point.exp_u64(exponent);

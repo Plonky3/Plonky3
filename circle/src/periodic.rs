@@ -28,6 +28,7 @@
 //! same period.
 
 use alloc::vec::Vec;
+use core::convert::TryFrom;
 
 use p3_commit::{PeriodicEvaluator, PeriodicLdeTable, PolynomialSpace};
 use p3_field::ExtensionField;
@@ -72,17 +73,32 @@ impl<F: ComplexExtendable> PeriodicEvaluator<F, CircleDomain<F>> for CirclePerio
         }
 
         let trace_len = trace_domain.size();
-        let log_blowup = lde_domain.log_n - trace_domain.log_n;
-        let blowup = 1 << log_blowup;
+        let log_blowup = lde_domain
+            .log_n
+            .checked_sub(trace_domain.log_n)
+            .expect("LDE domain log_n must be >= trace domain log_n");
+        let log_blowup_u32 = u32::try_from(log_blowup).expect("log_blowup does not fit into u32");
+        let blowup = 1usize
+            .checked_shl(log_blowup_u32)
+            .expect("blowup overflow when computing 1 << log_blowup");
 
         // Find the maximum period and validate all columns
         let max_period = periodic_table
             .iter()
             .map(|col| {
                 let period = col.len();
-                debug_assert!(
+                assert!(
+                    period > 0,
+                    "periodic column length must be > 0, got {period}",
+                );
+                assert!(
                     period.is_power_of_two(),
                     "periodic column length must be a power of 2"
+                );
+                assert_eq!(
+                    trace_len % period,
+                    0,
+                    "trace domain size ({trace_len}) must be divisible by periodic column length ({period})",
                 );
                 period
             })
@@ -91,14 +107,21 @@ impl<F: ComplexExtendable> PeriodicEvaluator<F, CircleDomain<F>> for CirclePerio
 
         let log_max_period = log2_strict_usize(max_period);
         let log_repetitions = log2_strict_usize(trace_len / max_period);
-        let extended_height = max_period * blowup;
+        let extended_height = max_period
+            .checked_mul(blowup)
+            .expect("extended height overflow when computing max_period * blowup");
         let num_cols = periodic_table.len();
+        let row_major_capacity = extended_height
+            .checked_mul(num_cols)
+            .expect("row-major periodic table capacity overflow");
 
         // Compute the shift for the periodic subdomain at max_period.
         // This aligns the periodic domain with the LDE domain so modular indexing works.
         let extended_shift = lde_domain.shift.repeated_double(log_repetitions);
-        let extended_periodic_domain =
-            CircleDomain::new(log_max_period + log_blowup, extended_shift);
+        let extended_log_n = log_max_period
+            .checked_add(log_blowup)
+            .expect("extended periodic domain log size overflow");
+        let extended_periodic_domain = CircleDomain::new(extended_log_n, extended_shift);
 
         // Process each column: pad to max_period, then extrapolate
         // Build the result in column-major order first, then transpose to row-major
@@ -128,7 +151,7 @@ impl<F: ComplexExtendable> PeriodicEvaluator<F, CircleDomain<F>> for CirclePerio
         }
 
         // Convert from column-major to row-major storage
-        let mut row_major_values = Vec::with_capacity(extended_height * num_cols);
+        let mut row_major_values = Vec::with_capacity(row_major_capacity);
         for row_idx in 0..extended_height {
             for col in &columns {
                 row_major_values.push(col[row_idx]);
