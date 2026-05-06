@@ -16,7 +16,13 @@ use crate::pcs::proof::PcsProof;
 use crate::sumcheck::OpeningProtocol;
 use crate::sumcheck::layout::{Layout, Verifier, Witness};
 
-/// Prover-side data retained between commit and open.
+/// Prover-side handoff between the commit and open phases of the PCS.
+///
+/// # Lifecycle
+///
+/// - Built by the commit phase alongside the public commitment.
+/// - Stored by the caller while the public transcript advances.
+/// - Consumed by the opening phase; never reused afterwards.
 pub struct WhirProverData<F, EF, MT, L>
 where
     F: TwoAdicField,
@@ -24,8 +30,11 @@ where
     MT: Mmcs<F>,
     L: Layout<F, EF>,
 {
+    /// Layout-mode prover holding the per-table opening claims accumulator.
     pub layout: L,
+    /// Merkle prover data behind the initial commitment; reused to open STIR queries.
     pub merkle_data: MT::ProverData<DenseMatrix<F>>,
+    /// Marker tying the data to its extension field; carries no runtime state.
     _marker: PhantomData<EF>,
 }
 
