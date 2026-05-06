@@ -15,9 +15,7 @@ use rand::{RngExt, SeedableRng};
 use crate::constraints::Constraint;
 use crate::constraints::statement::{EqStatement, SelectStatement};
 use crate::parameters::FoldingFactor;
-use crate::sumcheck::layout::{
-    Layout, PrefixProver, SuffixProver, Table, TableShape, Verifier as LayoutVerifier,
-};
+use crate::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table, TableShape, Verifier};
 use crate::sumcheck::strategy::VariableOrder;
 use crate::sumcheck::{OpeningProtocol, PointSchedule, SumcheckData, TableSpec};
 
@@ -376,7 +374,7 @@ where
     let mut num_variables_inter = num_variables;
 
     {
-        let mut layout_verifier = LayoutVerifier::<F, EF>::new(&protocol.table_shapes(), strategy);
+        let mut layout_verifier = Verifier::<F, EF>::new(&protocol.table_shapes(), strategy);
         for ((table_idx, polys), evals) in protocol.iter_openings().zip(&opening_evals) {
             layout_verifier.add_claim(table_idx, polys, evals, &mut verifier_challenger);
         }

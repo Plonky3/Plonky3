@@ -11,10 +11,7 @@ use crate::constraints::Constraint;
 use crate::constraints::statement::EqStatement;
 use crate::sumcheck::Claim;
 use crate::sumcheck::layout::LayoutStrategy;
-use crate::sumcheck::layout::opening::{
-    VerifierMultiClaim as MultiClaim, VerifierOpening as Opening,
-    VerifierVirtualClaim as VirtualClaim,
-};
+use crate::sumcheck::layout::opening::{VerifierMultiClaim, VerifierOpening, VerifierVirtualClaim};
 use crate::sumcheck::layout::plan::{LayoutShape, plan_layout};
 use crate::sumcheck::layout::witness::{Selector, TablePlacement};
 use crate::sumcheck::table::TableShape;
@@ -31,9 +28,9 @@ pub struct Verifier<F: Field, EF: ExtensionField<F>> {
     /// Number of variables of the stacked polynomial.
     k: usize,
     /// Concrete claims recorded per source table.
-    claim_map: Vec<Vec<MultiClaim<EF>>>,
+    claim_map: Vec<Vec<VerifierMultiClaim<EF>>>,
     /// Virtual claims sampled directly on the stacked polynomial.
-    virtual_claims: Vec<VirtualClaim<EF>>,
+    virtual_claims: Vec<VerifierVirtualClaim<EF>>,
     /// Whether selector bitstrings are reversed and laid out after local bits.
     strategy: LayoutStrategy,
     /// Marker to tie the challenger's field type
@@ -148,11 +145,11 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         let openings = polys
             .iter()
             .zip(evals.iter())
-            .map(|(&poly_idx, &eval)| Opening::new(poly_idx, eval))
+            .map(|(&poly_idx, &eval)| VerifierOpening::new(poly_idx, eval))
             .collect();
 
         // Store the batch under this table's claim list.
-        self.claim_map[table_idx].push(MultiClaim::new(point, openings));
+        self.claim_map[table_idx].push(VerifierMultiClaim::new(point, openings));
     }
 
     /// Records a virtual evaluation claim on the full stacked polynomial.
@@ -203,7 +200,7 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
 
         // Virtual claims: continue the alpha sequence right after the concrete ones.
         sum += dot_product::<EF, _, _>(
-            self.virtual_claims.iter().map(VirtualClaim::eval),
+            self.virtual_claims.iter().map(VerifierVirtualClaim::eval),
             alpha.powers().skip(self.num_claims()),
         );
 
@@ -257,7 +254,7 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     fn num_claims(&self) -> usize {
         self.claim_map
             .iter()
-            .flat_map(|claims| claims.iter().map(MultiClaim::len))
+            .flat_map(|claims| claims.iter().map(VerifierMultiClaim::len))
             .sum()
     }
 }

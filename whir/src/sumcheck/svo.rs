@@ -28,7 +28,7 @@ use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 use p3_util::log2_strict_usize;
 
-use crate::sumcheck::layout::ProverMultiClaim as MultiClaim;
+use crate::sumcheck::layout::ProverMultiClaim;
 use crate::sumcheck::strategy::VariableOrder;
 
 /// Expand `2^l` Boolean-hypercube evaluations to `3^l` evaluations on `{0,1,inf}^l`.
@@ -221,7 +221,7 @@ fn evals_01inf_grid_prefix<F: Field>(evals: &[F]) -> Vec<F> {
 /// Those are exactly the two values needed to reconstruct the quadratic round
 /// polynomial.
 pub(crate) fn calculate_accumulators_batch<F: Field, EF: ExtensionField<F>>(
-    claim: &MultiClaim<F, EF>,
+    claim: &ProverMultiClaim<F, EF>,
     alphas: &[EF],
 ) -> SvoAccumulators<EF> {
     assert_eq!(claim.len(), alphas.len());
@@ -1043,7 +1043,7 @@ mod test {
                     opening
                 })
                 .collect::<Vec<_>>();
-            let claim = MultiClaim::new(svo_point, openings);
+            let claim = ProverMultiClaim::new(svo_point, openings);
 
             let accumulators = calculate_accumulators_batch(&claim, &alphas);
             if l0 == 0 {
@@ -1104,7 +1104,7 @@ mod test {
                     opening
                 })
                 .collect::<Vec<_>>();
-            let claim = MultiClaim::new(svo_point, openings);
+            let claim = ProverMultiClaim::new(svo_point, openings);
 
             let accumulators = calculate_accumulators_batch(&claim, &alphas);
             if l0 == 0 {

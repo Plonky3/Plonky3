@@ -14,7 +14,7 @@ use super::verifier::WhirVerifier;
 use super::verifier::errors::VerifierError;
 use crate::pcs::proof::PcsProof;
 use crate::sumcheck::OpeningProtocol;
-use crate::sumcheck::layout::{Layout, Verifier as LayoutVerifier, Witness};
+use crate::sumcheck::layout::{Layout, Verifier, Witness};
 
 /// Prover-side data retained between commit and open.
 pub struct WhirProverData<F, EF, MT, L>
@@ -119,8 +119,7 @@ where
     ) -> Result<(), Self::Error> {
         challenger.observe(commitment.clone());
 
-        let mut layout_verifier =
-            LayoutVerifier::<F, EF>::new(&protocol.table_shapes(), L::strategy());
+        let mut layout_verifier = Verifier::<F, EF>::new(&protocol.table_shapes(), L::strategy());
         for &eval in &proof.whir.initial_ood_answers {
             layout_verifier.add_virtual_eval(eval, challenger);
         }

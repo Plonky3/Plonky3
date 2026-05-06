@@ -16,9 +16,7 @@ use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
 use crate::sumcheck::layout::opening::Opening;
 use crate::sumcheck::layout::prover::Layout;
 use crate::sumcheck::layout::witness::{Table, TablePlacement};
-use crate::sumcheck::layout::{
-    LayoutStrategy, ProverMultiClaim as MultiClaim, ProverVirtualClaim as VirtualClaim, Witness,
-};
+use crate::sumcheck::layout::{LayoutStrategy, ProverMultiClaim, ProverVirtualClaim, Witness};
 use crate::sumcheck::product_polynomial::ProductPolynomial;
 use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
 use crate::sumcheck::svo::{SvoPoint, calculate_accumulators_batch};
@@ -49,9 +47,9 @@ pub struct PrefixProver<F: Field, EF: ExtensionField<F>> {
     /// - Every opening stored here is tied to a concrete source column.
     /// - Virtual openings never enter this map.
     /// - Claims are appended in insertion order.
-    pub(crate) claim_map: Vec<Vec<MultiClaim<F, EF>>>,
+    pub(crate) claim_map: Vec<Vec<ProverMultiClaim<F, EF>>>,
     /// Virtual claims sampled directly on the stacked polynomial.
-    pub(crate) virtual_claims: Vec<VirtualClaim<EF>>,
+    pub(crate) virtual_claims: Vec<ProverVirtualClaim<EF>>,
 }
 
 impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
@@ -137,7 +135,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        // Precondition: opening nothing would silently push an empty MultiClaim.
+        // Precondition: opening nothing would silently push an empty ProverMultiClaim.
         assert!(
             !polys.is_empty(),
             "opening schedule must name at least one column"
@@ -171,7 +169,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         challenger.observe_algebra_slice(&evals);
 
         // Store the batch for the later sumcheck reduction.
-        self.claim_map[table_idx].push(MultiClaim::new(point, openings));
+        self.claim_map[table_idx].push(ProverMultiClaim::new(point, openings));
 
         evals
     }
@@ -220,7 +218,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         }
 
         let accumulators = calculate_accumulators_batch(
-            &MultiClaim::new(
+            &ProverMultiClaim::new(
                 SvoPoint::new_unpacked(self.folding, &point, VariableOrder::Prefix),
                 openings,
             ),
@@ -347,7 +345,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
     fn num_claims(&self) -> usize {
         self.claim_map
             .iter()
-            .flat_map(|claims| claims.iter().map(MultiClaim::len))
+            .flat_map(|claims| claims.iter().map(ProverMultiClaim::len))
             .sum()
     }
 

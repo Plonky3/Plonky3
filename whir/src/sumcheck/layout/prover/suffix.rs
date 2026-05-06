@@ -14,9 +14,7 @@ use p3_multilinear_util::split_eq::SplitEq;
 
 use crate::pcs::committer::writer::commit_base;
 use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
-use crate::sumcheck::layout::opening::{
-    Opening, ProverMultiClaim as MultiClaim, ProverVirtualClaim as VirtualClaim,
-};
+use crate::sumcheck::layout::opening::{Opening, ProverMultiClaim, ProverVirtualClaim};
 use crate::sumcheck::layout::prover::Layout;
 use crate::sumcheck::layout::witness::{Table, TablePlacement};
 use crate::sumcheck::layout::{LayoutStrategy, Witness};
@@ -49,9 +47,9 @@ pub struct SuffixProver<F: Field, EF: ExtensionField<F>> {
     /// - Every opening stored here is tied to a concrete source column.
     /// - Virtual openings never enter this map.
     /// - Claims are appended in insertion order.
-    pub(crate) claim_map: Vec<Vec<MultiClaim<F, EF>>>,
+    pub(crate) claim_map: Vec<Vec<ProverMultiClaim<F, EF>>>,
     /// Virtual claims carrying precomputed SVO accumulators.
-    pub(crate) virtual_claims: Vec<VirtualClaim<EF>>,
+    pub(crate) virtual_claims: Vec<ProverVirtualClaim<EF>>,
 }
 
 impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
@@ -138,7 +136,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        // Precondition: opening nothing would silently push an empty MultiClaim.
+        // Precondition: opening nothing would silently push an empty ProverMultiClaim.
         assert!(
             !polys.is_empty(),
             "opening schedule must name at least one column"
@@ -174,7 +172,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
         challenger.observe_algebra_slice(&evals);
 
         // Store the batch with its shared SVO point.
-        self.claim_map[table_idx].push(MultiClaim::new(point, openings));
+        self.claim_map[table_idx].push(ProverMultiClaim::new(point, openings));
 
         evals
     }
@@ -248,7 +246,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
 
         // Batch every per-column opening into per-round SVO accumulators.
         let accumulators = calculate_accumulators_batch(
-            &MultiClaim::new(
+            &ProverMultiClaim::new(
                 SvoPoint::new_unpacked(self.folding, &point, VariableOrder::Suffix),
                 openings,
             ),
@@ -281,7 +279,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
             assert_eq!(
                 accumulators,
                 calculate_accumulators_batch(
-                    &MultiClaim::new(
+                    &ProverMultiClaim::new(
                         SvoPoint::new_unpacked(self.folding, &point, VariableOrder::Suffix),
                         vec![opening],
                     ),
@@ -432,7 +430,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
     fn num_claims(&self) -> usize {
         self.claim_map
             .iter()
-            .flat_map(|claims| claims.iter().map(MultiClaim::len))
+            .flat_map(|claims| claims.iter().map(ProverMultiClaim::len))
             .sum()
     }
 
