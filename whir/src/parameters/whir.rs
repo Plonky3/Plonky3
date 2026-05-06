@@ -11,29 +11,6 @@ use p3_field::{ExtensionField, Field, TwoAdicField};
 use super::ProtocolParameters;
 use crate::pcs::proof::WhirProof;
 
-/// Selects which sumcheck variant is used for the initial round.
-///
-/// # Fallback
-///
-/// SVO silently falls back to Classic when the polynomial is too small:
-///
-/// ```text
-///     k <= 2 * log_2(W) + l_0
-/// ```
-///
-/// with `k` the number of variables, `l_0` the SVO depth, and `W` the
-/// base-field packing width.
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SumcheckStrategy {
-    /// Standard quadratic sumcheck.
-    ///
-    /// No structural assumption on the weight polynomial.
-    Classic,
-    /// Small-Value Optimization (Algorithm 5, ePrint 2025/1117).
-    #[default]
-    Svo,
-}
-
 /// Derived configuration for a single intermediate WHIR round.
 ///
 /// All values are computed from the user-facing protocol parameters
