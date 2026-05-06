@@ -441,6 +441,68 @@ mod tests {
     }
 
     #[test]
+    fn selector_lift_suffix_appends_selector_bits_after_other() {
+        // Invariant:
+        //     lift_suffix(other) returns a point with the local coordinates
+        //     first and the selector bits appended, total length =
+        //     other.num_variables() + selector.num_variables().
+        //
+        // Fixture state:
+        //     selector: 3-bit, index 5 = 0b101 → bits {1, 0, 1}.
+        //     other:    2-variable point over EF.
+        let sel = Selector::new(3, 5);
+        let other: Point<EF> = Point::new(vec![EF::from_u64(7), EF::from_u64(11)]);
+        let lifted = sel.lift_suffix(&other);
+
+        // Check: total length is the concatenation length.
+        assert_eq!(lifted.num_variables(), 5);
+
+        // Check: the prefix matches the original point element-wise.
+        assert_eq!(lifted.as_slice()[0], other.as_slice()[0]);
+        assert_eq!(lifted.as_slice()[1], other.as_slice()[1]);
+
+        // Check: the suffix is the boolean expansion of the slot index.
+        let selector_bits: Point<EF> = sel.point();
+        assert_eq!(lifted.as_slice()[2], selector_bits.as_slice()[0]);
+        assert_eq!(lifted.as_slice()[3], selector_bits.as_slice()[1]);
+        assert_eq!(lifted.as_slice()[4], selector_bits.as_slice()[2]);
+    }
+
+    #[test]
+    fn selector_reverse_swaps_msb_and_lsb_within_width() {
+        // Invariant:
+        //     reverse() flips the slot index bitstring within num_variables bits,
+        //     leaving num_variables itself untouched.
+        //
+        // Fixture state:
+        //     num_variables = 4, index = 0b0010 = 2 → reversed: 0b0100 = 4.
+        let mut sel = Selector::new(4, 0b0010);
+        sel.reverse();
+
+        // Check: bit-width is preserved.
+        assert_eq!(sel.num_variables(), 4);
+        // Check: index has been bit-reversed within those 4 bits.
+        assert_eq!(sel.index(), 0b0100);
+    }
+
+    #[test]
+    fn selector_reverse_is_idempotent_under_double_application() {
+        // Invariant:
+        //     Reversing a selector twice restores the original index.
+        //
+        // Fixture state:
+        //     num_variables = 5, index = 13 → reverse → reverse → 13.
+        let mut sel = Selector::new(5, 13);
+        let original_index = sel.index();
+
+        sel.reverse();
+        sel.reverse();
+
+        assert_eq!(sel.num_variables(), 5);
+        assert_eq!(sel.index(), original_index);
+    }
+
+    #[test]
     #[should_panic]
     fn table_new_panics_on_empty_polys() {
         // Invariant:
@@ -493,6 +555,56 @@ mod tests {
         assert_eq!(placement.num_polys(), 2);
         // Check: selectors() exposes the underlying slice.
         assert_eq!(placement.selectors().len(), 2);
+    }
+
+    #[test]
+    fn table_placement_reverse_selectors_flips_each_in_place() {
+        // Invariant:
+        //     reverse_selectors() bit-reverses every selector index in place,
+        //     leaving each selector's width and the placement's table index
+        //     untouched.
+        //
+        // Fixture state:
+        //     idx = 4, three selectors of width 3 with indices {0b001, 0b010, 0b110}.
+        //     Reversed indices within 3 bits: {0b100, 0b010, 0b011} = {4, 2, 3}.
+        let selectors = vec![
+            Selector::new(3, 0b001),
+            Selector::new(3, 0b010),
+            Selector::new(3, 0b110),
+        ];
+        let mut placement = TablePlacement::new(4, selectors);
+
+        placement.reverse_selectors();
+
+        // Check: the table index is preserved.
+        assert_eq!(placement.idx(), 4);
+        // Check: every selector's width is preserved.
+        for selector in placement.selectors() {
+            assert_eq!(selector.num_variables(), 3);
+        }
+        // Check: each selector index has been bit-reversed within 3 bits.
+        let indices: Vec<usize> = placement.selectors().iter().map(Selector::index).collect();
+        assert_eq!(indices, vec![0b100, 0b010, 0b011]);
+    }
+
+    #[test]
+    fn table_shape_reports_arity_and_width() {
+        // Invariant:
+        //     shape() returns the (num_variables, width) pair derived from the
+        //     table's columns.
+        //
+        // Fixture state:
+        //     three columns of arity 4 → expected shape: (4, 3).
+        let table = Table::new(vec![
+            Poly::<F>::zero(4),
+            Poly::<F>::zero(4),
+            Poly::<F>::zero(4),
+        ]);
+
+        let shape = table.shape();
+
+        assert_eq!(shape.num_variables(), 4);
+        assert_eq!(shape.width(), 3);
     }
 
     // Builds a deterministic witness with two tables of arities (4, 3) and
@@ -612,6 +724,74 @@ mod tests {
             witness.poly.as_slice(),
             &[a0, a1, F::ZERO, F::ZERO, F::ZERO, F::ZERO, F::ZERO, F::ZERO],
         );
+    }
+
+    #[test]
+    fn witness_table_shapes_returns_shapes_in_source_order() {
+        // Invariant:
+        //     table_shapes() returns one shape per source table, in the order
+        //     the witness was constructed (independent of placement order).
+        //
+        // Fixture state:
+        //     table 0: arity 3, two columns → shape (3, 2).
+        //     table 1: arity 4, two columns → shape (4, 2).
+        //     Source order: [table 0, table 1].
+        let w = fixture_witness();
+
+        let shapes = w.table_shapes();
+
+        assert_eq!(shapes, vec![TableShape::new(3, 2), TableShape::new(4, 2)],);
+    }
+
+    #[test]
+    fn witness_poly_returns_the_stacked_polynomial() {
+        // Invariant:
+        //     poly() returns a borrow of the stacked committed polynomial.
+        //     Its arity equals num_variables() and its contents match the
+        //     internal field used by every consumer.
+        //
+        // Fixture state:
+        //     two-table fixture; expected stacked arity = 6.
+        let w = fixture_witness();
+
+        let stacked = w.poly();
+
+        assert_eq!(stacked.num_variables(), w.num_variables());
+        assert_eq!(stacked.as_slice(), w.poly.as_slice());
+    }
+
+    #[test]
+    fn witness_into_parts_preserves_every_field() {
+        // Invariant:
+        //     into_parts() destructures the witness while preserving every
+        //     field byte-for-byte: source tables (in source order), placement
+        //     metadata, stacked arity, folding depth, and stacked polynomial.
+        //
+        // Fixture state:
+        //     two-table fixture; folding = 1.
+        let w = fixture_witness();
+        // Snapshot every field before consumption.
+        let expected_num_variables = w.num_variables();
+        let expected_folding = w.folding;
+        let expected_table_shapes = w.table_shapes();
+        let expected_placement_idx: Vec<usize> =
+            w.placements.iter().map(TablePlacement::idx).collect();
+        let expected_poly = w.poly.clone();
+
+        let parts = w.into_parts();
+
+        // Check: scalar fields survive the move.
+        assert_eq!(parts.num_variables, expected_num_variables);
+        assert_eq!(parts.folding, expected_folding);
+        // Check: source tables are carried over in source order.
+        let actual_table_shapes: Vec<TableShape> = parts.tables.iter().map(Table::shape).collect();
+        assert_eq!(actual_table_shapes, expected_table_shapes);
+        // Check: placement order and table indices survive verbatim.
+        let actual_placement_idx: Vec<usize> =
+            parts.placements.iter().map(TablePlacement::idx).collect();
+        assert_eq!(actual_placement_idx, expected_placement_idx);
+        // Check: the stacked polynomial is bit-for-bit identical.
+        assert_eq!(parts.poly.as_slice(), expected_poly.as_slice());
     }
 
     #[test]

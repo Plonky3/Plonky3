@@ -103,3 +103,29 @@ impl LayoutStrategy {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn layout_strategy_new_stores_constructor_arguments_verbatim() {
+        // Invariant:
+        //     LayoutStrategy::new copies its two arguments into the matching
+        //     fields without mutation. The two reachable shapes — prefix
+        //     binding without selector reversal, and suffix binding with
+        //     selector reversal — are exercised exactly the same way.
+        //
+        // Fixture state:
+        //     case A: (reverse_selectors = false, Prefix)
+        //     case B: (reverse_selectors = true,  Suffix)
+        let case_a = LayoutStrategy::new(false, VariableOrder::Prefix);
+        let case_b = LayoutStrategy::new(true, VariableOrder::Suffix);
+
+        assert!(!case_a.reverse_selectors);
+        assert_eq!(case_a.variable_order, VariableOrder::Prefix);
+
+        assert!(case_b.reverse_selectors);
+        assert_eq!(case_b.variable_order, VariableOrder::Suffix);
+    }
+}
