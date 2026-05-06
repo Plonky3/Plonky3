@@ -17,10 +17,9 @@ use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
 use p3_uni_stark::{InvalidProofShapeError, StarkConfig, prove, verify};
+use p3_util::assert_sync;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
-
-const fn assert_sync<T: Sync>() {}
 
 /// For testing the public values feature
 pub struct FibonacciAir {}

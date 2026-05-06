@@ -189,13 +189,12 @@ mod tests {
     use p3_matrix::Matrix;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use p3_util::assert_sync;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
     use super::MerkleTreeHidingMmcs;
     use crate::MerkleTreeError;
-
-    const fn assert_sync<T: Sync>() {}
 
     type F = BabyBear;
     const SALT_ELEMS: usize = 4;
