@@ -44,24 +44,38 @@ impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> Default for Whi
     }
 }
 
+/// Public opening proof produced by the WHIR PCS adapter.
+///
+/// # Layout
+///
+/// Two pieces travel together so the verifier can replay the protocol from
+/// a single proof object:
+///
+/// - The proximity transcript: sumcheck rounds, intermediate commitments,
+///   STIR query openings, and the final polynomial sent in the clear.
+/// - The public opening evaluations indexed by batch then by column:
+///
+/// ```text
+///     evals[i][j]  =  value of the j-th opened column in the i-th batch
+/// ```
+///
+/// # Ordering invariant
+///
+/// The batches appear in the same order as the public opening schedule, so
+/// the verifier can walk both side-by-side without re-sorting. A length
+/// mismatch on either axis causes the adapter to reject before any Merkle
+/// or sumcheck check runs.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
     serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::Proof: Serialize",
     deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::Proof: Deserialize<'de>"
 ))]
-/// Complete opening proof for the WHIR multilinear PCS adapter.
-///
-/// The inner WHIR proof carries the proximity/sumcheck transcript and Merkle
-/// openings. The `evals` vector carries the public evaluation claims for the
-/// requested opening protocol, in the same order as
-/// `OpeningProtocol::iter_openings`.
 pub struct PcsProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
-    /// Underlying WHIR proof, including the initial commitment.
+    /// Proximity transcript: initial commitment, sumcheck rounds, per-round
+    /// commitments, STIR query openings, and the final polynomial.
     pub whir: WhirProof<F, EF, MT>,
-    /// Evaluation batches corresponding to the opening protocol.
-    ///
-    /// `evals[i][j]` is the `j`-th column evaluation in the `i`-th protocol
-    /// opening batch.
+    /// Outer index walks opening batches in schedule order; inner index walks
+    /// the columns opened inside each batch in their requested order.
     pub evals: Vec<Vec<EF>>,
 }
 
