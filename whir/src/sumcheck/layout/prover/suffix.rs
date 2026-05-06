@@ -12,7 +12,6 @@ use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 
-use crate::pcs::prover::WhirProver;
 use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
 use crate::sumcheck::layout::opening::{
     Opening, ProverMultiClaim as MultiClaim, ProverVirtualClaim as VirtualClaim,
@@ -57,9 +56,20 @@ pub struct SuffixProver<F: Field, EF: ExtensionField<F>> {
 }
 
 impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
-    #[cfg(test)]
     fn from_witness(witness: Witness<F>) -> Self {
-        Self::from_witness(witness)
+        // Move the witness fields out so the prover owns them outright.
+        let parts = witness.into_parts();
+        // One claim list per source table; virtual claims live in their own bucket.
+        let num_tables = parts.tables.len();
+        Self {
+            tables: parts.tables,
+            placements: parts.placements,
+            num_variables: parts.num_variables,
+            folding: parts.folding,
+            poly: parts.poly,
+            claim_map: (0..num_tables).map(|_| Vec::new()).collect(),
+            virtual_claims: Vec::new(),
+        }
     }
 
     fn new_witness(tables: Vec<Table<F>>, folding: usize) -> Witness<F> {
@@ -68,9 +78,11 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
 
     fn commit<Dft, MT, Challenger>(
         dft: &Dft,
+        mmcs: &MT,
         challenger: &mut Challenger,
         witness: Witness<F>,
-        whir: &WhirProver<EF, F, Dft, MT, Challenger, Self>,
+        folding: usize,
+        starting_log_inv_rate: usize,
     ) -> (Self, MT::Commitment, MT::ProverData<DenseMatrix<F>>)
     where
         Dft: TwoAdicSubgroupDft<F>,
@@ -79,11 +91,11 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
     {
         let (root, prover_data) = Self::variable_order().commit_base(
             dft,
-            &whir.mmcs,
+            mmcs,
             challenger,
             &witness.poly,
-            whir.params.folding_factor.at_round(0),
-            whir.params.starting_log_inv_rate,
+            folding,
+            starting_log_inv_rate,
         );
 
         (Self::from_witness(witness), root, prover_data)
@@ -567,9 +579,5 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
         }
 
         out
-    }
-
-    fn from_witness(witness: Witness<F>) -> Self {
-        witness.as_suffix_prover()
     }
 }

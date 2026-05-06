@@ -3,13 +3,12 @@
 use alloc::vec::Vec;
 
 use itertools::Itertools;
-use p3_field::{ExtensionField, Field};
+use p3_field::Field;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_util::reverse_bits_len;
 
 use crate::sumcheck::layout::plan::{LayoutShape, plan_layout};
-use crate::sumcheck::layout::prover::{PrefixProver, SuffixProver};
 use crate::sumcheck::table::TableShape;
 
 /// Identifies one slot inside the stacked polynomial.
@@ -329,35 +328,32 @@ impl<F: Field> Witness<F> {
         self.tables.iter().map(Table::shape).collect()
     }
 
-    /// Consumes the witness and hands it to a prefix-mode prover.
-    pub fn as_prefix_prover<EF: ExtensionField<F>>(self) -> PrefixProver<F, EF> {
-        // One empty concrete-claim list per source table.
-        let num_tables = self.tables.len();
-        PrefixProver {
+    /// Splits the witness into its owned components for downstream use.
+    pub(super) fn into_parts(self) -> WitnessParts<F> {
+        // Hand each field to the caller verbatim; no normalisation is needed.
+        WitnessParts {
             tables: self.tables,
             placements: self.placements,
             num_variables: self.num_variables,
             folding: self.folding,
             poly: self.poly,
-            claim_map: (0..num_tables).map(|_| Vec::new()).collect(),
-            virtual_claims: Vec::new(),
         }
     }
+}
 
-    /// Consumes the witness and hands it to a suffix-mode prover.
-    pub fn as_suffix_prover<EF: ExtensionField<F>>(self) -> SuffixProver<F, EF> {
-        // One empty concrete-claim list per source table.
-        let num_tables = self.tables.len();
-        SuffixProver {
-            tables: self.tables,
-            placements: self.placements,
-            num_variables: self.num_variables,
-            folding: self.folding,
-            poly: self.poly,
-            claim_map: (0..num_tables).map(|_| Vec::new()).collect(),
-            virtual_claims: Vec::new(),
-        }
-    }
+/// Owned components of a stacked-layout commitment.
+#[derive(Debug, Clone)]
+pub(super) struct WitnessParts<F: Field> {
+    /// Source tables stacked into the committed polynomial.
+    pub(super) tables: Vec<Table<F>>,
+    /// Per-table placement metadata inside the stacked polynomial.
+    pub(super) placements: Vec<TablePlacement>,
+    /// Number of variables of the stacked polynomial.
+    pub(super) num_variables: usize,
+    /// Number of preprocessing rounds folded upfront.
+    pub(super) folding: usize,
+    /// Stacked committed polynomial.
+    pub(super) poly: Poly<F>,
 }
 
 #[cfg(test)]
@@ -373,7 +369,7 @@ mod tests {
     use rand::rngs::SmallRng;
 
     use super::*;
-    use crate::sumcheck::layout::Layout;
+    use crate::sumcheck::layout::{Layout, PrefixProver, SuffixProver};
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
@@ -620,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn witness_as_prefix_prover_carries_stacked_state() {
+    fn prefix_prover_from_witness_carries_stacked_state() {
         // Invariant:
         //     Handing the witness to the prefix prover preserves the
         //     stacked polynomial and the per-table shapes.
@@ -628,8 +624,8 @@ mod tests {
         let stacked_copy = w.poly.clone();
         let num_variables = w.num_variables();
 
-        // Hand off the witness to a prefix-mode prover.
-        let prover: PrefixProver<F, EF> = w.as_prefix_prover();
+        // Build a prefix-mode prover from the witness.
+        let prover = PrefixProver::<F, EF>::from_witness(w);
 
         // Check: arity matches the original stacked polynomial.
         assert_eq!(prover.num_variables(), num_variables);
@@ -638,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn witness_as_suffix_prover_carries_stacked_state() {
+    fn suffix_prover_from_witness_carries_stacked_state() {
         // Invariant:
         //     Handing the witness to the suffix prover preserves the
         //     stacked polynomial and the per-table shapes.
@@ -646,8 +642,8 @@ mod tests {
         let stacked_copy = w.poly.clone();
         let num_variables = w.num_variables();
 
-        // Hand off the witness to a suffix-mode prover.
-        let prover: SuffixProver<F, EF> = w.as_suffix_prover();
+        // Build a suffix-mode prover from the witness.
+        let prover = SuffixProver::<F, EF>::from_witness(w);
 
         // Check: arity matches the original stacked polynomial.
         assert_eq!(prover.num_variables(), num_variables);

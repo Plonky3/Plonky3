@@ -214,7 +214,7 @@ mod keccak_tests {
     use crate::fiat_shamir::domain_separator::DomainSeparator;
     use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
     use crate::pcs::prover::WhirProver;
-    use crate::sumcheck::layout::{Layout, SuffixProver, Table};
+    use crate::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
     use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
 
     type F = KoalaBear;
@@ -227,8 +227,7 @@ mod keccak_tests {
     type KeccakChallenger = SerializingChallenger32<F, HashChallenger<u8, Keccak256Hash, 32>>;
     type MyMmcs = MerkleTreeMmcs<F, u64, KeccakFieldHash, KeccakCompress, 2, 4>;
     type MyDft = Radix2DFTSmallBatch<F>;
-    type LayoutMode = SuffixProver<F, EF>;
-    type TestWhirPcs = WhirProver<EF, F, MyDft, MyMmcs, KeccakChallenger, LayoutMode>;
+    type TestWhirPcs<L> = WhirProver<EF, F, MyDft, MyMmcs, KeccakChallenger, L>;
 
     fn challenger() -> KeccakChallenger {
         KeccakChallenger::new(HashChallenger::<u8, Keccak256Hash, 32>::new(
@@ -237,25 +236,30 @@ mod keccak_tests {
         ))
     }
 
-    #[test]
-    fn test_whir_keccak_end_to_end() {
+    /// Runs the full commit + open + verify lifecycle with Keccak Merkle trees.
+    fn run_keccak_end_to_end<L: Layout<F, EF>>() {
+        // Fixture: a single-table polynomial of arity 16 folded 4 vars at a time.
         const NUM_VARIABLES: usize = 16;
         const FOLDING: usize = 4;
 
+        // Build one random table, stack it through the chosen layout mode.
         let mut rng = SmallRng::seed_from_u64(1);
         let table = Table::new(vec![Poly::<F>::rand(&mut rng, NUM_VARIABLES)]);
-        let witness = LayoutMode::new_witness(vec![table], FOLDING);
+        let witness = L::new_witness(vec![table], FOLDING);
+        // Public protocol: open the single column at one point.
         let protocol = OpeningProtocol::new(vec![TableSpec::new(
             TableShape::new(NUM_VARIABLES, 1),
             vec![vec![0]],
         )]);
         assert_eq!(witness.table_shapes(), protocol.table_shapes());
 
+        // Wire Keccak-f as both the leaf-hash sponge and the 2-to-1 compressor.
         let u64_hash = U64Hash::new(KeccakF {});
         let merkle_hash = KeccakFieldHash::new(u64_hash);
         let merkle_compress = KeccakCompress::new(u64_hash);
         let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
 
+        // Security level 32 keeps the test fast; not a production setting.
         let params = ProtocolParameters {
             security_level: 32,
             pow_bits: 0,
@@ -264,25 +268,26 @@ mod keccak_tests {
             soundness_type: SecurityAssumption::CapacityBound,
             starting_log_inv_rate: 1,
         };
-        let pcs = TestWhirPcs::new(
+        let pcs = TestWhirPcs::<L>::new(
             WhirConfig::new(witness.num_variables(), params),
             MyDft::default(),
             mmcs,
         );
 
+        // Prover side: seed the transcript with the protocol description, commit, open.
         let (commitment, proof) = {
             let mut prover_challenger = challenger();
             let mut domain_separator = DomainSeparator::new(vec![]);
             pcs.add_domain_separator::<4>(&mut domain_separator);
             domain_separator.observe_domain_separator(&mut prover_challenger);
 
-            let (commitment, prover_data) =
-                <TestWhirPcs as MultilinearPcs<EF, KeccakChallenger>>::commit(
-                    &pcs,
-                    witness,
-                    &mut prover_challenger,
-                );
-            let proof = <TestWhirPcs as MultilinearPcs<EF, KeccakChallenger>>::open(
+            let (commitment, prover_data) = <TestWhirPcs<L> as MultilinearPcs<
+                EF,
+                KeccakChallenger,
+            >>::commit(
+                &pcs, witness, &mut prover_challenger
+            );
+            let proof = <TestWhirPcs<L> as MultilinearPcs<EF, KeccakChallenger>>::open(
                 &pcs,
                 prover_data,
                 protocol.clone(),
@@ -291,12 +296,14 @@ mod keccak_tests {
             (commitment, proof)
         };
 
+        // Verifier side: replay the same transcript prefix from a fresh challenger.
         let mut verifier_challenger = challenger();
         let mut domain_separator = DomainSeparator::new(vec![]);
         pcs.add_domain_separator::<4>(&mut domain_separator);
         domain_separator.observe_domain_separator(&mut verifier_challenger);
 
-        <TestWhirPcs as MultilinearPcs<EF, KeccakChallenger>>::verify(
+        // Final assertion: the honest proof must verify under both layout modes.
+        <TestWhirPcs<L> as MultilinearPcs<EF, KeccakChallenger>>::verify(
             &pcs,
             &commitment,
             &proof,
@@ -304,5 +311,17 @@ mod keccak_tests {
             protocol,
         )
         .expect("keccak verification failed");
+    }
+
+    #[test]
+    fn test_whir_keccak_end_to_end_suffix() {
+        // Suffix mode binds the SVO suffix variables first.
+        run_keccak_end_to_end::<SuffixProver<F, EF>>();
+    }
+
+    #[test]
+    fn test_whir_keccak_end_to_end_prefix() {
+        // Prefix mode binds the SVO prefix variables first; covers the other layout path.
+        run_keccak_end_to_end::<PrefixProver<F, EF>>();
     }
 }

@@ -20,26 +20,35 @@ use p3_multilinear_util::poly::Poly;
 pub use prefix::PrefixProver;
 pub use suffix::SuffixProver;
 
-use crate::pcs::prover::WhirProver;
 use crate::sumcheck::SumcheckData;
 use crate::sumcheck::layout::{LayoutStrategy, Table, Witness};
 use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
 
 /// Stacked-sumcheck prover layout
 pub trait Layout<F: TwoAdicField, EF: ExtensionField<F>>: Sized {
-    /// Builds this layout from a witness.
-    #[cfg(test)]
+    /// Builds this layout from a committed witness.
     fn from_witness(witness: Witness<F>) -> Self;
 
     /// Builds a witness structure for this layout from source tables.
     fn new_witness(tables: Vec<Table<F>>, folding: usize) -> Witness<F>;
 
-    /// Commits to the witness and returns the layout
+    /// Commits to the witness and returns the layout.
+    ///
+    /// # Arguments
+    ///
+    /// - `dft`                    — base-field DFT used to encode the codeword.
+    /// - `mmcs`                   — Merkle commitment scheme over the base field.
+    /// - `challenger`             — Fiat–Shamir transcript; absorbs the Merkle root.
+    /// - `witness`                — stacked committed polynomial plus its tables.
+    /// - `folding`                — folding factor consumed by the first WHIR round.
+    /// - `starting_log_inv_rate`  — initial log-inverse rate of the RS code.
     fn commit<Dft, MT, Challenger>(
         dft: &Dft,
+        mmcs: &MT,
         challenger: &mut Challenger,
         witness: Witness<F>,
-        whir: &WhirProver<EF, F, Dft, MT, Challenger, Self>,
+        folding: usize,
+        starting_log_inv_rate: usize,
     ) -> (Self, MT::Commitment, MT::ProverData<DenseMatrix<F>>)
     where
         Dft: TwoAdicSubgroupDft<F>,

@@ -64,7 +64,7 @@ fn make_table(num_variables: usize) -> Table<F> {
 
 fn setup_prefix(table: &Table<F>, folding: usize) -> (PrefixProver<F, EF>, Challenger) {
     let witness = PrefixProver::<F, EF>::new_witness(vec![table.clone()], folding);
-    let mut prover = witness.as_prefix_prover();
+    let mut prover = PrefixProver::<F, EF>::from_witness(witness);
     let mut challenger = make_challenger();
     let evals = prover.eval(0, &[0], &mut challenger);
     assert_eq!(evals.len(), 1);
@@ -73,7 +73,7 @@ fn setup_prefix(table: &Table<F>, folding: usize) -> (PrefixProver<F, EF>, Chall
 
 fn setup_suffix(table: &Table<F>, folding: usize) -> (SuffixProver<F, EF>, Challenger) {
     let witness = SuffixProver::<F, EF>::new_witness(vec![table.clone()], folding);
-    let mut prover = witness.as_suffix_prover();
+    let mut prover = SuffixProver::<F, EF>::from_witness(witness);
     let mut challenger = make_challenger();
     let evals = prover.eval(0, &[0], &mut challenger);
     assert_eq!(evals.len(), 1);

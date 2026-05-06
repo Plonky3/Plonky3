@@ -60,7 +60,14 @@ where
         challenger: &mut Challenger,
     ) -> (Self::Commitment, Self::ProverData) {
         assert_eq!(witness.num_variables(), self.config.num_variables);
-        let (layout, commitment, merkle_data) = L::commit(&self.dft, challenger, witness, self);
+        let (layout, commitment, merkle_data) = L::commit(
+            &self.dft,
+            &self.mmcs,
+            challenger,
+            witness,
+            self.config.folding_factor.at_round(0),
+            self.config.starting_log_inv_rate,
+        );
         (
             commitment,
             WhirProverData {
