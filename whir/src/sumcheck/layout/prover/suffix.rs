@@ -12,6 +12,7 @@ use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 
+use crate::pcs::committer::writer::commit_base;
 use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
 use crate::sumcheck::layout::opening::{
     Opening, ProverMultiClaim as MultiClaim, ProverVirtualClaim as VirtualClaim,
@@ -88,7 +89,8 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
         MT: Mmcs<F>,
         Challenger: CanObserve<MT::Commitment>,
     {
-        let (root, prover_data) = Self::variable_order().commit_base(
+        let (root, prover_data) = commit_base(
+            Self::variable_order(),
             dft,
             mmcs,
             challenger,

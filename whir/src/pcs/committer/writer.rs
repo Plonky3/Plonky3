@@ -20,7 +20,7 @@ use crate::sumcheck::strategy::VariableOrder;
 /// Prefix order transposes the local folding block before padding so the first
 /// folded variables become columns. Suffix order keeps the folding block as the
 /// row width and only zero-pads the row count.
-fn commit_base<F, Dft, MT, Challenger>(
+pub(crate) fn commit_base<F, Dft, MT, Challenger>(
     order: VariableOrder,
     dft: &Dft,
     mmcs: &MT,
@@ -69,11 +69,11 @@ where
 /// Encodes and commits a folded extension-field polynomial.
 ///
 /// This is used after each non-final WHIR folding round. The layout mirrors
-/// [`commit_base`], but the DFT runs over extension-field values and the
-/// commitment is made through [`ExtensionMmcs`], which views extension rows as
+/// the base-field path, but the DFT runs over extension-field values and the
+/// commitment is made through an extension MMCS that views extension rows as
 /// base-field data for the underlying Merkle tree.
 #[allow(clippy::type_complexity)]
-fn commit_extension<F, EF, Dft, MT>(
+pub(crate) fn commit_extension<F, EF, Dft, MT>(
     order: VariableOrder,
     dft: &Dft,
     extension_mmcs: &ExtensionMmcs<F, EF, MT>,
@@ -117,64 +117,4 @@ where
     };
 
     info_span!("commit_matrix").in_scope(|| extension_mmcs.commit_matrix(encoded))
-}
-
-impl VariableOrder {
-    /// Commits the initial base-field polynomial in this variable order.
-    ///
-    /// Returns the Merkle commitment and prover data needed to open STIR
-    /// queries against the initial codeword. The commitment root is also
-    /// observed into `challenger`.
-    pub fn commit_base<F, Dft, MT, Challenger>(
-        self,
-        dft: &Dft,
-        mmcs: &MT,
-        challenger: &mut Challenger,
-        poly: &Poly<F>,
-        folding: usize,
-        starting_log_inv_rate: usize,
-    ) -> (MT::Commitment, MT::ProverData<DenseMatrix<F>>)
-    where
-        F: TwoAdicField,
-        Dft: TwoAdicSubgroupDft<F>,
-        MT: Mmcs<F>,
-        Challenger: CanObserve<MT::Commitment>,
-    {
-        commit_base(
-            self,
-            dft,
-            mmcs,
-            challenger,
-            poly,
-            folding,
-            starting_log_inv_rate,
-        )
-    }
-
-    /// Commits a folded extension-field polynomial in this variable order.
-    ///
-    /// Returns the Merkle commitment and prover data for the next WHIR round.
-    /// The caller is responsible for observing the returned commitment in the
-    /// transcript, because round commitments are written into round-specific
-    /// proof state.
-    #[allow(clippy::type_complexity)]
-    pub fn commit_extension<F, EF, Dft, MT>(
-        self,
-        dft: &Dft,
-        extension_mmcs: &ExtensionMmcs<F, EF, MT>,
-        poly: &Poly<EF>,
-        folding: usize,
-        inv_rate: usize,
-    ) -> (
-        MT::Commitment,
-        <MT as Mmcs<F>>::ProverData<FlatMatrixView<F, EF, DenseMatrix<EF>>>,
-    )
-    where
-        F: TwoAdicField,
-        EF: ExtensionField<F> + TwoAdicField,
-        Dft: TwoAdicSubgroupDft<F>,
-        MT: Mmcs<F>,
-    {
-        commit_extension(self, dft, extension_mmcs, poly, folding, inv_rate)
-    }
 }

@@ -17,6 +17,7 @@ use crate::constraints::statement::{EqStatement, SelectStatement};
 use crate::fiat_shamir::domain_separator::DomainSeparator;
 use crate::fiat_shamir::errors::FiatShamirError;
 use crate::parameters::WhirConfig;
+use crate::pcs::committer::writer::commit_extension;
 use crate::pcs::proof::{QueryOpening, SumcheckData, WhirProof};
 use crate::pcs::utils::get_challenge_stir_queries;
 use crate::sumcheck::layout::Layout;
@@ -191,7 +192,8 @@ where
         let folding_factor_next = self.params.folding_factor.at_round(round_index + 1);
         let inv_rate = self.inv_rate(round_index);
 
-        let (root, prover_data) = variable_order.commit_extension(
+        let (root, prover_data) = commit_extension(
+            variable_order,
             &self.dft,
             &self.extension_mmcs,
             folded_evaluations,
