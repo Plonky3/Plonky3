@@ -41,10 +41,12 @@ type WhirRoundState<EF, F, MT> = RoundState<
     <MT as Mmcs<F>>::ProverData<FlatMatrixView<F, EF, DenseMatrix<EF>>>,
 >;
 
-#[derive(Debug)]
 /// Active Merkle prover data for the polynomial currently being queried.
+#[derive(Debug)]
 enum RoundData<BaseData, ExtData> {
+    /// Base-field commitment produced by the initial round.
     Base(BaseData),
+    /// Extension-field commitment produced by every subsequent folded round.
     Ext(ExtData),
 }
 
@@ -66,16 +68,22 @@ where
     round_data: RoundData<BaseData, ExtData>,
 }
 
+/// WHIR prover bundling the protocol config with its FFT and commitment backends.
 #[derive(Debug)]
 pub struct WhirProver<EF, F, Dft, MT, Challenger, Layout>
 where
     F: Field,
     EF: ExtensionField<F>,
 {
+    /// Derived per-protocol parameters and per-round configuration.
     pub config: WhirConfig<EF, F, Challenger>,
+    /// FFT engine used to encode polynomials before each commitment.
     pub dft: Dft,
+    /// Base-field Merkle commitment scheme used in the initial round.
     pub mmcs: MT,
+    /// Extension-field commitment scheme used in every folded round.
     pub extension_mmcs: ExtensionMmcs<F, EF, MT>,
+    /// Marker tying the prover to a specific stacked-layout binding mode.
     _marker: PhantomData<Layout>,
 }
 
@@ -100,6 +108,10 @@ where
     MT: Mmcs<F>,
     L: Layout<F, EF>,
 {
+    /// Builds a prover from a derived config, an FFT engine, and a base-field MMCS.
+    ///
+    /// The extension-field MMCS is constructed by wrapping the base-field one,
+    /// so callers never have to thread it through manually.
     pub fn new(config: WhirConfig<EF, F, Challenger>, dft: Dft, mmcs: MT) -> Self {
         let extension_mmcs = ExtensionMmcs::new(mmcs.clone());
         Self {
