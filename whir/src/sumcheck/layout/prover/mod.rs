@@ -16,7 +16,6 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_matrix::dense::DenseMatrix;
 use p3_multilinear_util::point::Point;
-use p3_multilinear_util::poly::Poly;
 pub use prefix::PrefixProver;
 pub use suffix::SuffixProver;
 
@@ -74,9 +73,6 @@ pub trait Layout<F: TwoAdicField, EF: ExtensionField<F>>: Sized {
 
     /// Returns the number of variables of table `id`.
     fn num_variables_table(&self, id: usize) -> usize;
-
-    /// Returns the stacked committed polynomial.
-    fn poly(&self) -> &Poly<F>;
 
     /// Records opening claims for the selected columns of `table_idx`.
     fn eval<Ch>(&mut self, table_idx: usize, polys: &[usize], challenger: &mut Ch) -> Vec<EF>
@@ -294,7 +290,7 @@ pub(super) mod test_utils {
             prover.num_variables(),
             ROUND_EQ_POINTS,
             ROUND_SEL_POINTS,
-            &prover.poly(),
+            &prover.evals(),
         );
 
         let mut proof1 = SumcheckData::<F, EF>::default();
@@ -321,7 +317,7 @@ pub(super) mod test_utils {
         assert_eq!(proof2.num_rounds(), remaining_vars);
         assert_eq!(prover.num_variables(), 0);
 
-        let final_folded_value = prover.poly().as_constant().unwrap();
+        let final_folded_value = prover.evals().as_constant().unwrap();
         (proof1, proof2, intermediate_evals, final_folded_value)
     }
 
@@ -354,12 +350,13 @@ pub(super) mod test_utils {
     {
         let mut prover_challenger = challenger();
         let stacked_num_variables = witness.num_variables();
+        // Snapshot the stacked polynomial before the witness is consumed.
+        let stacked_poly = witness.poly().clone();
 
         // Prover: build the selected layout, record openings, add a virtual claim.
         let mut prover_state = L::from_witness(witness);
         let strategy = L::strategy();
         let order = strategy.variable_order;
-        let stacked_poly = prover_state.poly().clone();
         let opening_claims = replay_schedule(calls, |t, polys| {
             prover_state.eval(t, polys, &mut prover_challenger)
         });

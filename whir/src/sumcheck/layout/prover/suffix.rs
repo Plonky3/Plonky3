@@ -41,8 +41,6 @@ pub struct SuffixProver<F: Field, EF: ExtensionField<F>> {
     pub(crate) num_variables: usize,
     /// Number of preprocessing rounds consumed before residual sumcheck.
     pub(crate) folding: usize,
-    /// Stacked committed polynomial.
-    pub(crate) poly: Poly<F>,
     /// Concrete claims recorded per source table (carries per-round SVO partials).
     ///
     /// # Invariants
@@ -58,6 +56,8 @@ pub struct SuffixProver<F: Field, EF: ExtensionField<F>> {
 impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
     fn from_witness(witness: Witness<F>) -> Self {
         // Move the witness fields out so the prover owns them outright.
+        // The stacked polynomial is intentionally discarded: every suffix-mode
+        // primitive walks the per-table data instead.
         let parts = witness.into_parts();
         // One claim list per source table; virtual claims live in their own bucket.
         let num_tables = parts.tables.len();
@@ -66,7 +66,6 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
             placements: parts.placements,
             num_variables: parts.num_variables,
             folding: parts.folding,
-            poly: parts.poly,
             claim_map: (0..num_tables).map(|_| Vec::new()).collect(),
             virtual_claims: Vec::new(),
         }
@@ -113,11 +112,6 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
     /// Returns the number of variables of table `id`.
     fn num_variables_table(&self, id: usize) -> usize {
         self.tables[id].num_variables()
-    }
-
-    /// Returns the stacked committed polynomial.
-    fn poly(&self) -> &Poly<F> {
-        &self.poly
     }
 
     /// Records opening claims for the selected columns of `table_idx`.

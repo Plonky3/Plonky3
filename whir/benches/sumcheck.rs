@@ -5,12 +5,10 @@ use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
-use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_whir::sumcheck::SumcheckData;
 use p3_whir::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_whir::sumcheck::strategy::sumcheck_coefficients_prefix;
-use p3_whir::sumcheck::svo::SvoClaim;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -117,38 +115,6 @@ fn bench_sumcheck_prover(c: &mut Criterion) {
     group.finish();
 }
 
-/// SVO claim building: this is where the grid-expansion optimization applies.
-fn bench_svo_claim_build(c: &mut Criterion) {
-    let mut group = c.benchmark_group("whir/svo_claim_build");
-
-    // l=1,2,3 are the straightline-specialized cases; l=4 is the general-path control.
-    //
-    // k12_* shapes:  N in 1..4, below the SIMD path on NEON (W = 4).
-    // k16_l4, k18_l4, k20_l4: production-shape N = 16 / 32 / 64.
-    //   These exercise the SIMD path on every supported width.
-    let cases = [
-        (12, 1, "k12_l1"),
-        (12, 2, "k12_l2"),
-        (12, 3, "k12_l3"),
-        (12, 4, "k12_l4"),
-        (16, 4, "k16_l4"),
-        (18, 4, "k18_l4"),
-        (20, 4, "k20_l4"),
-    ];
-
-    for &(num_variables, l, label) in &cases {
-        let mut rng = SmallRng::seed_from_u64(((num_variables as u64) << 32) | l as u64);
-        let poly = Poly::new((0..1 << num_variables).map(|_| rng.random()).collect());
-        let point = Point::<EF>::rand(&mut rng, num_variables);
-
-        group.bench_with_input(BenchmarkId::new("claim_build", label), &label, |b, _| {
-            b.iter(|| SvoClaim::<F, EF>::new(&point, l, &poly));
-        });
-    }
-
-    group.finish();
-}
-
 /// Round-coefficient kernel measured in isolation.
 ///
 /// # Scope
@@ -222,7 +188,6 @@ fn bench_fix_prefix_var_mut(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_sumcheck_prover,
-    bench_svo_claim_build,
     bench_round_coefficients,
     bench_fix_prefix_var_mut,
 );

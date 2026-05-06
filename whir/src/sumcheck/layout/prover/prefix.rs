@@ -113,11 +113,6 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         self.tables[id].num_variables()
     }
 
-    /// Returns the stacked committed polynomial.
-    fn poly(&self) -> &Poly<F> {
-        &self.poly
-    }
-
     /// Records opening claims for the selected columns of `table_idx`.
     ///
     /// # Arguments

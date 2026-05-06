@@ -126,11 +126,6 @@ impl<F: Field> Table<F> {
         TableShape::new(self.num_variables(), self.num_polys())
     }
 
-    /// Returns the total number of stacked evaluations contributed.
-    pub fn num_total_values(&self) -> usize {
-        (1 << self.num_variables()) * self.num_polys()
-    }
-
     /// Pads every column with zeros until the table has at least `num_variables`.
     fn pad_zeros(&mut self, num_variables: usize) {
         let current_num_variables = self.num_variables();
@@ -328,6 +323,11 @@ impl<F: Field> Witness<F> {
         self.tables.iter().map(Table::shape).collect()
     }
 
+    /// Returns the stacked committed polynomial.
+    pub const fn poly(&self) -> &Poly<F> {
+        &self.poly
+    }
+
     /// Splits the witness into its owned components for downstream use.
     pub(super) fn into_parts(self) -> WitnessParts<F> {
         // Hand each field to the caller verbatim; no normalisation is needed.
@@ -473,7 +473,6 @@ mod tests {
         // Check: all shape queries match the fixture.
         assert_eq!(table.num_polys(), 2);
         assert_eq!(table.num_variables(), 3);
-        assert_eq!(table.num_total_values(), 16);
         // Check: column lookup returns a ref to the i-th poly with matching arity.
         assert_eq!(table.poly(0).num_variables(), 3);
     }
@@ -630,25 +629,30 @@ mod tests {
         // Check: arity matches the original stacked polynomial.
         assert_eq!(prover.num_variables(), num_variables);
         // Check: the committed polynomial is bit-for-bit identical.
-        assert_eq!(prover.poly().as_slice(), stacked_copy.as_slice());
+        assert_eq!(prover.poly.as_slice(), stacked_copy.as_slice());
     }
 
     #[test]
     fn suffix_prover_from_witness_carries_stacked_state() {
         // Invariant:
         //     Handing the witness to the suffix prover preserves the
-        //     stacked polynomial and the per-table shapes.
+        //     stacked arity and the per-table data layout.
+        //
+        //     The suffix prover does not retain the stacked polynomial —
+        //     it walks per-table evaluations on demand — so this test only
+        //     checks the structural fields that survive the move.
         let w = fixture_witness();
-        let stacked_copy = w.poly.clone();
         let num_variables = w.num_variables();
+        let table_shapes = w.table_shapes();
 
         // Build a suffix-mode prover from the witness.
         let prover = SuffixProver::<F, EF>::from_witness(w);
 
-        // Check: arity matches the original stacked polynomial.
+        // Check: stacked arity matches.
         assert_eq!(prover.num_variables(), num_variables);
-        // Check: the committed polynomial is bit-for-bit identical.
-        assert_eq!(prover.poly().as_slice(), stacked_copy.as_slice());
+        // Check: every source table is carried over with its original shape.
+        let prover_shapes: Vec<TableShape> = prover.tables.iter().map(Table::shape).collect();
+        assert_eq!(prover_shapes, table_shapes);
     }
 
     // Proptest strategy: random table shapes within safe bounds.
@@ -681,7 +685,10 @@ mod tests {
                 .collect();
 
             // Total stacked size (before power-of-two rounding).
-            let total_used: usize = tables.iter().map(Table::num_total_values).sum();
+            let total_used: usize = tables
+                .iter()
+                .map(|t| (1 << t.num_variables()) * t.num_polys())
+                .sum();
 
             // Folding = 1 is always safe since the strategy guarantees arity >= 2.
             let witness = Witness::new(tables, 1);

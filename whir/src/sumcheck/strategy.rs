@@ -370,11 +370,6 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
         Self { poly, sum }
     }
 
-    /// Returns the current evaluation polynomial as scalar extension-field values.
-    pub fn poly(&self) -> Poly<EF> {
-        self.poly.evals()
-    }
-
     /// Returns the number of remaining (unbound) variables.
     pub fn num_variables(&self) -> usize {
         self.poly.num_variables()

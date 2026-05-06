@@ -19,7 +19,7 @@ use crate::sumcheck::layout::{
     Layout, PrefixProver, SuffixProver, Table, TableShape, Verifier as LayoutVerifier,
 };
 use crate::sumcheck::strategy::VariableOrder;
-use crate::sumcheck::{OpeningClaims, OpeningProtocol, PointSchedule, SumcheckData, TableSpec};
+use crate::sumcheck::{OpeningProtocol, PointSchedule, SumcheckData, TableSpec};
 
 // Base field: BabyBear (a 31-bit prime field suitable for fast arithmetic).
 pub(crate) type F = BabyBear;
@@ -273,7 +273,7 @@ pub(crate) fn random_table_specs(rng: &mut SmallRng, folding: usize) -> Vec<Tabl
 pub(crate) fn stacked_num_variables(specs: &[TableSpec], folding: usize) -> usize {
     let total_evals = specs
         .iter()
-        .map(|spec| spec.shape().width() << spec.committed_num_variables(folding))
+        .map(|spec| spec.shape().width() << spec.shape().num_variables().max(folding))
         .sum::<usize>();
     log2_ceil_usize(total_evals)
 }
@@ -313,15 +313,15 @@ where
     let mut proof = vec![SumcheckData::<F, EF>::default(); num_rounds + 2];
     let mut all_constraint_evals: Vec<Vec<EF>> = Vec::new();
 
+    // Snapshot the stacked polynomial before the witness is consumed.
+    let stacked_poly = witness.poly().clone();
     let mut layout = L::from_witness(witness);
     let strategy = L::strategy();
-    let stacked_poly = layout.poly().clone();
 
-    let opening_evals = protocol
+    let opening_evals: Vec<Vec<EF>> = protocol
         .iter_openings()
         .map(|(table_idx, polys)| layout.eval(table_idx, polys, &mut prover_challenger))
-        .collect::<Vec<_>>();
-    let opening_claims = OpeningClaims::new(protocol, opening_evals);
+        .collect();
 
     let (mut sumcheck, mut prover_randomness) =
         layout.into_sumcheck(proof.first_mut().unwrap(), 0, &mut prover_challenger);
@@ -376,9 +376,8 @@ where
     let mut num_variables_inter = num_variables;
 
     {
-        let mut layout_verifier =
-            LayoutVerifier::<F, EF>::new(&opening_claims.protocol().table_shapes(), strategy);
-        for (table_idx, polys, evals) in opening_claims.iter_openings() {
+        let mut layout_verifier = LayoutVerifier::<F, EF>::new(&protocol.table_shapes(), strategy);
+        for ((table_idx, polys), evals) in protocol.iter_openings().zip(&opening_evals) {
             layout_verifier.add_claim(table_idx, polys, evals, &mut verifier_challenger);
         }
         let alpha = verifier_challenger.sample_algebra_element();

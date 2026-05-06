@@ -74,11 +74,6 @@ impl OpeningProtocol {
         Self(tables)
     }
 
-    /// Returns the table specs in protocol order.
-    pub fn tables(&self) -> &[TableSpec] {
-        &self.0
-    }
-
     /// Returns the table shapes in protocol order.
     pub fn table_shapes(&self) -> Vec<TableShape> {
         self.0.iter().map(|table| *table.shape()).collect()
@@ -111,46 +106,6 @@ impl OpeningProtocol {
                 .iter()
                 .map(move |polys| (table_idx, polys.as_slice()))
         })
-    }
-}
-
-/// Claimed evaluations for an [`OpeningProtocol`].
-#[derive(Debug, Clone, Default)]
-pub struct OpeningClaims<EF> {
-    protocol: OpeningProtocol,
-    evals: Vec<Vec<EF>>,
-}
-
-impl<EF> OpeningClaims<EF> {
-    /// Attaches evaluations to a protocol.
-    ///
-    /// # Panics
-    ///
-    /// - The number of evaluation batches must match the protocol.
-    /// - Each evaluation batch must match the number of opened columns at the
-    ///   corresponding point.
-    pub fn new(protocol: OpeningProtocol, evals: Vec<Vec<EF>>) -> Self {
-        assert_eq!(protocol.num_openings(), evals.len());
-        assert!(
-            protocol
-                .iter_openings()
-                .zip(&evals)
-                .all(|((_, polys), evals)| polys.len() == evals.len())
-        );
-        Self { protocol, evals }
-    }
-
-    /// Returns the protocol these evaluations claim against.
-    pub const fn protocol(&self) -> &OpeningProtocol {
-        &self.protocol
-    }
-
-    /// Iterates over all opening claims in transcript order.
-    pub fn iter_openings(&self) -> impl Iterator<Item = (usize, &[usize], &[EF])> {
-        self.protocol
-            .iter_openings()
-            .zip(&self.evals)
-            .map(|((table_idx, polys), evals)| (table_idx, polys, evals.as_slice()))
     }
 }
 
@@ -188,10 +143,5 @@ impl TableSpec {
         if self.shape.num_variables() < min_num_variables {
             self.shape = TableShape::new(min_num_variables, self.shape.width());
         }
-    }
-
-    /// Number of variables after applying the minimum first-round folding size.
-    pub fn committed_num_variables(&self, folding: usize) -> usize {
-        self.shape.num_variables().max(folding)
     }
 }
