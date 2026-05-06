@@ -133,22 +133,17 @@ where
             layout_verifier.add_virtual_eval(eval, challenger);
         }
         if protocol.num_openings() != proof.evals.len() {
-            return Err(VerifierError::InvalidOpeningShape {
-                details: alloc::format!(
-                    "expected {} opening evaluation batches, got {}",
-                    protocol.num_openings(),
-                    proof.evals.len()
-                ),
+            return Err(VerifierError::OpeningBatchCountMismatch {
+                expected: protocol.num_openings(),
+                actual: proof.evals.len(),
             });
         }
         for ((table_idx, polys), evals) in protocol.iter_openings().zip(&proof.evals) {
             if polys.len() != evals.len() {
-                return Err(VerifierError::InvalidOpeningShape {
-                    details: alloc::format!(
-                        "table {table_idx} opening expected {} evaluations, got {}",
-                        polys.len(),
-                        evals.len()
-                    ),
+                return Err(VerifierError::OpeningBatchSizeMismatch {
+                    table_idx,
+                    expected: polys.len(),
+                    actual: evals.len(),
                 });
             }
             layout_verifier.add_claim(table_idx, polys, evals, challenger);

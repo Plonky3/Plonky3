@@ -29,9 +29,21 @@ pub enum VerifierError {
         details: String,
     },
 
-    /// Public opening protocol and proof evaluations are inconsistent.
-    #[error("Invalid opening shape: {details}")]
-    InvalidOpeningShape { details: String },
+    /// The proof carries the wrong number of opening evaluation batches.
+    ///
+    /// Raised by the adapter before any sumcheck or Merkle work.
+    #[error("expected {expected} opening evaluation batches, got {actual}")]
+    OpeningBatchCountMismatch { expected: usize, actual: usize },
+
+    /// One opening batch has the wrong number of evaluations for its column list.
+    ///
+    /// Raised by the adapter before any sumcheck or Merkle work.
+    #[error("table {table_idx} opening expected {expected} evaluations, got {actual}")]
+    OpeningBatchSizeMismatch {
+        table_idx: usize,
+        expected: usize,
+        actual: usize,
+    },
 
     /// Sumcheck verification error.
     #[error(transparent)]

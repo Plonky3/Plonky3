@@ -194,6 +194,186 @@ fn test_whir_end_to_end() {
     }
 }
 
+mod error_variant_tests {
+    //! Lock the precise error variant emitted on each opening-shape mismatch.
+    use alloc::vec;
+
+    use p3_commit::MultilinearPcs;
+    use p3_multilinear_util::poly::Poly;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use super::{
+        EF, F, MyChallenger, MyCompress, MyDft, MyHash, MyMmcs, Perm, TestWhirPcs, challenger,
+    };
+    use crate::fiat_shamir::domain_separator::DomainSeparator;
+    use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
+    use crate::pcs::proof::PcsProof;
+    use crate::pcs::verifier::errors::VerifierError;
+    use crate::sumcheck::layout::{Layout, SuffixProver, Table};
+    use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
+
+    /// Suffix-mode prover used for every shape-mismatch scenario.
+    type L = SuffixProver<F, EF>;
+
+    /// Stacked-polynomial arity: large enough for one intermediate STIR round.
+    const NUM_VARIABLES: usize = 12;
+    /// Variables eliminated per WHIR fold.
+    const FOLDING: usize = 4;
+
+    /// Builds a working PCS plus an honest commitment and proof for two batches.
+    ///
+    /// # Layout
+    ///
+    /// - Single table of arity 12 with two columns.
+    /// - Two opening batches: first opens both columns; second opens column 0.
+    ///
+    /// Yields `protocol.num_openings() == 2` and the inner batch sizes
+    /// `(2, 1)`. Both axes can be tampered independently.
+    #[allow(clippy::type_complexity)]
+    fn commit_and_open() -> (
+        TestWhirPcs<L>,
+        <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::Commitment,
+        PcsProof<F, EF, MyMmcs>,
+        OpeningProtocol,
+    ) {
+        // Random table of two columns; deterministic seed for reproducibility.
+        let mut rng = SmallRng::seed_from_u64(1);
+        let table = Table::new(vec![
+            Poly::<F>::rand(&mut rng, NUM_VARIABLES),
+            Poly::<F>::rand(&mut rng, NUM_VARIABLES),
+        ]);
+        let witness = L::new_witness(vec![table], FOLDING);
+        // Two opening batches: (cols [0, 1]) and (col [0]).
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            TableShape::new(NUM_VARIABLES, 2),
+            vec![vec![0, 1], vec![0]],
+        )]);
+
+        // Same Poseidon2 seed as elsewhere for byte-for-byte reproducibility.
+        let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(1));
+        let merkle_hash = MyHash::new(perm.clone());
+        let merkle_compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
+
+        let params = ProtocolParameters {
+            security_level: 32,
+            pow_bits: 0,
+            rs_domain_initial_reduction_factor: 1,
+            folding_factor: FoldingFactor::Constant(FOLDING),
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        };
+        let pcs = TestWhirPcs::<L>::new(
+            WhirConfig::new(witness.num_variables(), params),
+            MyDft::default(),
+            mmcs,
+        );
+
+        let mut prover_challenger = challenger();
+        let mut domain_separator = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<8>(&mut domain_separator);
+        domain_separator.observe_domain_separator(&mut prover_challenger);
+
+        let (commitment, prover_data) =
+            <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
+                &pcs,
+                witness,
+                &mut prover_challenger,
+            );
+        let proof = <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::open(
+            &pcs,
+            prover_data,
+            protocol.clone(),
+            &mut prover_challenger,
+        );
+
+        (pcs, commitment, proof, protocol)
+    }
+
+    /// Replays the verifier on a (possibly tampered) proof and returns the result.
+    fn verify(
+        pcs: &TestWhirPcs<L>,
+        commitment: &<TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::Commitment,
+        proof: &PcsProof<F, EF, MyMmcs>,
+        protocol: OpeningProtocol,
+    ) -> Result<(), VerifierError> {
+        // Verifier needs the same transcript prefix the prover absorbed.
+        let mut verifier_challenger = challenger();
+        let mut domain_separator = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<8>(&mut domain_separator);
+        domain_separator.observe_domain_separator(&mut verifier_challenger);
+
+        <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::verify(
+            pcs,
+            commitment,
+            proof,
+            &mut verifier_challenger,
+            protocol,
+        )
+    }
+
+    #[test]
+    fn rejects_with_batch_count_mismatch_when_a_batch_is_missing() {
+        // Domain note: protocol.num_openings() must equal proof.evals.len().
+        // The adapter checks this before any sumcheck or Merkle work, so the
+        // failure mode is structural — the variant carries the two integers
+        // verbatim.
+        //
+        // Fixture state: protocol declares 2 batches; honest proof has 2.
+        //
+        // Mutation: drop the trailing batch from the proof.
+        //
+        //     protocol batches:  2
+        //     proof.evals:       2  ->  1
+        //     -> expected = 2, actual = 1
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        assert_eq!(proof.evals.len(), 2);
+        proof.evals.pop();
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::OpeningBatchCountMismatch { expected, actual } => {
+                assert_eq!(expected, 2);
+                assert_eq!(actual, 1);
+            }
+            other => panic!("expected OpeningBatchCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_with_batch_size_mismatch_when_an_eval_is_dropped() {
+        // Domain note: every batch i must carry exactly polys[i].len()
+        // evaluations. The check runs per batch in protocol order, so the
+        // first offender wins.
+        //
+        // Fixture state: batch 0 opens columns [0, 1] -> 2 evaluations expected.
+        //
+        // Mutation: drop one evaluation from batch 0.
+        //
+        //     protocol batch 0 columns:  [0, 1]   (len 2)
+        //     proof.evals[0]:            [v0, v1] -> [v0]
+        //     -> table_idx = 0, expected = 2, actual = 1
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        assert_eq!(proof.evals[0].len(), 2);
+        proof.evals[0].pop();
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::OpeningBatchSizeMismatch {
+                table_idx,
+                expected,
+                actual,
+            } => {
+                assert_eq!(table_idx, 0);
+                assert_eq!(expected, 2);
+                assert_eq!(actual, 1);
+            }
+            other => panic!("expected OpeningBatchSizeMismatch, got {other:?}"),
+        }
+    }
+}
+
 mod keccak_tests {
     //! Same lifecycle test using Keccak-based Merkle trees over a different field.
 
