@@ -21,7 +21,7 @@ use crate::constraints::statement::SelectStatement;
 use crate::parameters::{RoundConfig, WhirConfig};
 use crate::pcs::proof::{QueryOpening, WhirProof};
 use crate::sumcheck::strategy::VariableOrder;
-use crate::sumcheck::verify_final_sumcheck_rounds;
+use crate::sumcheck::{SumcheckError, verify_final_sumcheck_rounds};
 
 pub mod errors;
 
@@ -100,13 +100,32 @@ where
     where
         Challenger: CanObserve<MT::Commitment>,
     {
+        // Reject a proof that carries the wrong number of rounds before any
+        // transcript work. The per-round commitment slot is checked further
+        // down, where each round is parsed.
+        let expected_rounds = self.n_rounds();
+        if proof.rounds.len() != expected_rounds {
+            return Err(VerifierError::RoundCountMismatch {
+                expected: expected_rounds,
+                actual: proof.rounds.len(),
+            });
+        }
+
         let mut constraints = Vec::new();
         let mut round_folding_randomness = Vec::new();
         let mut prev_commitment = parsed_commitment.clone();
 
         constraints.push(initial_constraint);
 
-        // Verify the initial sumcheck.
+        // Initial sumcheck rounds == first-round folding factor.
+        let expected_initial_rounds = self.folding_factor(0);
+        let actual_initial_rounds = proof.initial_sumcheck.polynomial_evaluations().len();
+        if actual_initial_rounds != expected_initial_rounds {
+            return Err(VerifierError::Sumcheck(SumcheckError::RoundCountMismatch {
+                expected: expected_initial_rounds,
+                actual: actual_initial_rounds,
+            }));
+        }
         let folding_randomness = proof.initial_sumcheck.verify_rounds(
             challenger,
             &mut claimed_eval,
@@ -118,14 +137,15 @@ where
         for round_index in 0..self.n_rounds() {
             let round_params = &self.round_parameters[round_index];
 
-            // Parse the round commitment from the proof.
+            // Index is in bounds thanks to the length check at function entry,
+            // so only a missing commitment slot can fail here.
             let new_commitment = ParsedCommitment::<_, MT::Commitment>::parse_with_round(
                 proof,
                 challenger,
                 round_params.num_variables,
                 round_params.ood_samples,
                 round_index,
-            );
+            )?;
 
             // Verify STIR in-domain challenges against the previous commitment.
             let stir_statement = self.verify_stir_challenges(
@@ -156,9 +176,10 @@ where
         }
 
         // Final round: receive the polynomial in the clear.
-        let Some(final_evaluations) = proof.final_poly.clone() else {
-            panic!("Expected final polynomial");
-        };
+        let final_evaluations = proof
+            .final_poly
+            .clone()
+            .ok_or(VerifierError::MissingFinalPoly)?;
         challenger.observe_algebra_slice(final_evaluations.as_slice());
 
         // Verify final STIR challenges.

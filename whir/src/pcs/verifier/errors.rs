@@ -60,4 +60,16 @@ pub enum VerifierError {
     /// Proof-of-work witness verification failed.
     #[error("Invalid proof-of-work witness")]
     InvalidPowWitness,
+
+    /// Proof is missing the Merkle commitment for a round.
+    #[error("Proof is missing the Merkle commitment for round {round}")]
+    MissingRoundCommitment { round: usize },
+
+    /// Proof contains an unexpected number of rounds.
+    #[error("Proof has {actual} rounds, expected {expected}")]
+    RoundCountMismatch { expected: usize, actual: usize },
+
+    /// Proof is missing the final polynomial evaluations.
+    #[error("Proof is missing the final polynomial evaluations")]
+    MissingFinalPoly,
 }
