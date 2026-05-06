@@ -9,6 +9,7 @@ use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
+use p3_maybe_rayon::DisjointMutPtr;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use tracing::{debug_span, info_span, instrument};
@@ -420,9 +421,11 @@ where
     let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size());
     let next_step = 1 << qdb;
 
-    // We take PackedVal::<SC>::WIDTH worth of values at a time from a quotient_size slice, so we need to
-    // pad with default values in the case where quotient_size is smaller than PackedVal::<SC>::WIDTH.
-    for _ in quotient_size..PackedVal::<SC>::WIDTH {
+    let pack_width = PackedVal::<SC>::WIDTH;
+
+    // We take `pack_width` values at a time from quotient-domain slices, so pad
+    // selectors when the quotient domain is smaller than one packed chunk.
+    for _ in quotient_size..pack_width {
         sels.is_first_row.push(Val::<SC>::default());
         sels.is_last_row.push(Val::<SC>::default());
         sels.is_transition.push(Val::<SC>::default());
@@ -435,7 +438,6 @@ where
     let periodic_table =
         pcs.build_periodic_lde_table(&periodic_cols, trace_domain, quotient_domain);
 
-    let pack_width = PackedVal::<SC>::WIDTH;
     let periodic_packed: Vec<Vec<PackedVal<SC>>> = if periodic_table.is_empty() {
         Vec::new()
     } else {
@@ -454,62 +456,84 @@ where
             .collect()
     };
 
+    let n_base = constraint_layout.base_indices.len();
+    let n_ext = constraint_layout.ext_indices.len();
+    let constraint_count = constraint_layout.total_constraints();
+
+    let mut result = SC::Challenge::zero_vec(quotient_size);
+    let result_ptr = DisjointMutPtr::new(&mut result);
+
     (0..quotient_size)
         .into_par_iter()
-        .step_by(PackedVal::<SC>::WIDTH)
-        .flat_map_iter(|i_start| {
-            let i_range = i_start..i_start + PackedVal::<SC>::WIDTH;
+        .step_by(pack_width)
+        .for_each_init(
+            || (Vec::with_capacity(n_base), Vec::with_capacity(n_ext)),
+            |(base_buf, ext_buf), i_start| {
+                let chunk_emit = pack_width.min(quotient_size - i_start);
+                let i_range = i_start..i_start + pack_width;
 
-            let is_first_row = *PackedVal::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
-            let is_last_row = *PackedVal::<SC>::from_slice(&sels.is_last_row[i_range.clone()]);
-            let is_transition = *PackedVal::<SC>::from_slice(&sels.is_transition[i_range.clone()]);
-            let inv_vanishing = *PackedVal::<SC>::from_slice(&sels.inv_vanishing[i_range]);
+                let is_first_row =
+                    *PackedVal::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
+                let is_last_row = *PackedVal::<SC>::from_slice(&sels.is_last_row[i_range.clone()]);
+                let is_transition =
+                    *PackedVal::<SC>::from_slice(&sels.is_transition[i_range.clone()]);
+                let inv_vanishing = *PackedVal::<SC>::from_slice(&sels.inv_vanishing[i_range]);
 
-            let main = RowMajorMatrix::new(
-                trace_on_quotient_domain.vertically_packed_row_pair(i_start, next_step),
-                width,
-            );
+                let main = RowMajorMatrix::new(
+                    trace_on_quotient_domain.vertically_packed_row_pair(i_start, next_step),
+                    width,
+                );
 
-            let preprocessed = preprocessed_on_quotient_domain.map(|preprocessed| {
-                let preprocessed_width = preprocessed.width();
-                RowMajorMatrix::new(
-                    preprocessed.vertically_packed_row_pair(i_start, next_step),
-                    preprocessed_width,
-                )
-            });
+                let preprocessed = preprocessed_on_quotient_domain.map(|preprocessed| {
+                    let preprocessed_width = preprocessed.width();
+                    RowMajorMatrix::new(
+                        preprocessed.vertically_packed_row_pair(i_start, next_step),
+                        preprocessed_width,
+                    )
+                });
 
-            let preprocessed_view = preprocessed
-                .as_ref()
-                .map_or_else(|| RowMajorMatrixView::new(&[], 0), |m| m.as_view());
-            let periodic_values: &[PackedVal<SC>] = if periodic_packed.is_empty() {
-                &[]
-            } else {
-                &periodic_packed[i_start / pack_width]
-            };
-            let mut folder = ProverConstraintFolder {
-                main: main.as_view(),
-                preprocessed: preprocessed_view,
-                preprocessed_window: RowWindow::from_view(&preprocessed_view),
-                periodic_values,
-                public_values,
-                is_first_row,
-                is_last_row,
-                is_transition,
-                base_alpha_powers: &base_alpha_powers,
-                ext_alpha_powers: &ext_alpha_powers,
-                base_constraints: Vec::with_capacity(constraint_layout.base_indices.len()),
-                ext_constraints: Vec::with_capacity(constraint_layout.ext_indices.len()),
-                constraint_index: 0,
-                constraint_count: constraint_layout.total_constraints(),
-            };
-            air.eval(&mut folder);
+                let preprocessed_view = preprocessed
+                    .as_ref()
+                    .map_or_else(|| RowMajorMatrixView::new(&[], 0), |m| m.as_view());
+                let periodic_values: &[PackedVal<SC>] = if periodic_packed.is_empty() {
+                    &[]
+                } else {
+                    &periodic_packed[i_start / pack_width]
+                };
 
-            // quotient(x) = constraints(x) / Z_H(x)
-            let quotient = folder.finalize_constraints() * inv_vanishing;
+                base_buf.clear();
+                ext_buf.clear();
+                let mut folder = ProverConstraintFolder {
+                    main: main.as_view(),
+                    preprocessed: preprocessed_view,
+                    preprocessed_window: RowWindow::from_view(&preprocessed_view),
+                    periodic_values,
+                    public_values,
+                    is_first_row,
+                    is_last_row,
+                    is_transition,
+                    base_alpha_powers: &base_alpha_powers,
+                    ext_alpha_powers: &ext_alpha_powers,
+                    base_constraints: core::mem::take(base_buf),
+                    ext_constraints: core::mem::take(ext_buf),
+                    constraint_index: 0,
+                    constraint_count,
+                };
+                air.eval(&mut folder);
 
-            // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
-            (0..core::cmp::min(quotient_size, PackedVal::<SC>::WIDTH))
-                .map(move |idx_in_packing| quotient.extract(idx_in_packing))
-        })
-        .collect()
+                // quotient(x) = constraints(x) / Z_H(x)
+                let quotient = folder.finalize_constraints() * inv_vanishing;
+
+                *base_buf = folder.base_constraints;
+                *ext_buf = folder.ext_constraints;
+
+                // SAFETY: each parallel chunk writes to a unique quotient-domain range.
+                let out = unsafe { result_ptr.slice_mut(i_start, chunk_emit) };
+                for (idx_in_packing, slot) in out.iter_mut().enumerate() {
+                    *slot = quotient.extract(idx_in_packing);
+                }
+            },
+        );
+
+    result
 }
