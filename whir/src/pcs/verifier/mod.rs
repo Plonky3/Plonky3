@@ -25,7 +25,24 @@ use crate::sumcheck::verify_final_sumcheck_rounds;
 
 pub mod errors;
 
-/// WHIR protocol verifier.
+/// Replays a WHIR opening proof against a public commitment and the
+/// constraint built by the layout adapter.
+///
+/// # Borrowing
+///
+/// - Config and Merkle scheme are borrowed for the lifetime of the check.
+/// - Nothing is cloned across `verify`.
+/// - Construction is `const`; spinning up a fresh verifier per proof is free.
+///
+/// # Variable order
+///
+/// Tag declared by the prover at commit time. Selects which way folding
+/// randomness is consumed in the final identity and STIR unfold:
+///
+/// ```text
+///     Prefix:  fold(rs)         -> final eval, query unfold
+///     Suffix:  fold(rs.rev())   -> same checks, reversed binding
+/// ```
 #[derive(Debug)]
 pub struct WhirVerifier<'a, EF, F, MT, Challenger>
 where
@@ -33,8 +50,11 @@ where
     EF: ExtensionField<F>,
     MT: Mmcs<F>,
 {
+    /// Derived per-protocol parameters and per-round configuration.
     pub(crate) config: &'a WhirConfig<EF, F, Challenger>,
+    /// Base-field Merkle commitment scheme used to authenticate STIR queries.
     pub(crate) mmcs: &'a MT,
+    /// Binding direction used to interpret folding randomness.
     pub(crate) variable_order: VariableOrder,
 }
 
@@ -45,6 +65,13 @@ where
     MT: Mmcs<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanSampleUniformBits<F>,
 {
+    /// Wraps the verifier-side dependencies into a single replay context.
+    ///
+    /// # Arguments
+    ///
+    /// - `config`         — derived per-protocol parameters and per-round configuration.
+    /// - `mmcs`           — base-field Merkle commitment scheme used to authenticate STIR queries.
+    /// - `variable_order` — binding direction the prover declared at commit time.
     pub const fn new(
         config: &'a WhirConfig<EF, F, Challenger>,
         mmcs: &'a MT,
