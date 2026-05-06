@@ -60,6 +60,43 @@ pub struct TableSpec {
     point_schedule: PointSchedule,
 }
 
+impl TableSpec {
+    /// Builds a table spec from a shape and point-local opening schedule.
+    ///
+    /// # Panics
+    ///
+    /// - Every scheduled polynomial index must be less than the table width.
+    pub fn new(shape: TableShape, point_schedule: PointSchedule) -> Self {
+        assert!(
+            point_schedule
+                .iter()
+                .flatten()
+                .all(|&poly_idx| poly_idx < shape.width())
+        );
+        Self {
+            shape,
+            point_schedule,
+        }
+    }
+
+    /// Returns the logical table shape.
+    pub const fn shape(&self) -> &TableShape {
+        &self.shape
+    }
+
+    /// Returns the point-local opening schedule.
+    pub const fn point_schedule(&self) -> &PointSchedule {
+        &self.point_schedule
+    }
+
+    /// Pads this table shape to at least `min_num_variables`.
+    pub const fn pad_to_min_num_variables(&mut self, min_num_variables: usize) {
+        if self.shape.num_variables() < min_num_variables {
+            self.shape = TableShape::new(min_num_variables, self.shape.width());
+        }
+    }
+}
+
 /// Public protocol describing committed tables and their opening schedule.
 ///
 /// This is the shape agreement between prover and verifier. The prover must
@@ -106,43 +143,6 @@ impl OpeningProtocol {
                 .iter()
                 .map(move |polys| (table_idx, polys.as_slice()))
         })
-    }
-}
-
-impl TableSpec {
-    /// Builds a table spec from a shape and point-local opening schedule.
-    ///
-    /// # Panics
-    ///
-    /// - Every scheduled polynomial index must be less than the table width.
-    pub fn new(shape: TableShape, point_schedule: PointSchedule) -> Self {
-        assert!(
-            point_schedule
-                .iter()
-                .flatten()
-                .all(|&poly_idx| poly_idx < shape.width())
-        );
-        Self {
-            shape,
-            point_schedule,
-        }
-    }
-
-    /// Returns the logical table shape.
-    pub const fn shape(&self) -> &TableShape {
-        &self.shape
-    }
-
-    /// Returns the point-local opening schedule.
-    pub const fn point_schedule(&self) -> &PointSchedule {
-        &self.point_schedule
-    }
-
-    /// Pads this table shape to at least `min_num_variables`.
-    pub const fn pad_to_min_num_variables(&mut self, min_num_variables: usize) {
-        if self.shape.num_variables() < min_num_variables {
-            self.shape = TableShape::new(min_num_variables, self.shape.width());
-        }
     }
 }
 
