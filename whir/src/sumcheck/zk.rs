@@ -1350,7 +1350,7 @@ mod tests {
         // Simulator transcript (independent challenger + RNG; we check the
         // invariant on each side independently, not byte-equality of wires —
         // wires depend on RNG state, only their distribution matters).
-        let mut sim_challenger = MyChallenger::new(perm.clone());
+        let mut sim_challenger = MyChallenger::new(perm);
         let mut sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(3));
         let (zk_data_sim, _, _) = ZkSumcheck::simulate_classic_unpacked::<F, EF, _, _, _, _>(
             &mut sim_challenger,
@@ -1379,8 +1379,14 @@ mod tests {
             }
             Ok(())
         };
-        check(&zk_data_honest, "honest wire outside F-subspace at index ≥ 2")?;
-        check(&zk_data_sim, "simulator wire outside F-subspace at index ≥ 2")?;
+        check(
+            &zk_data_honest,
+            "honest wire outside F-subspace at index ≥ 2",
+        )?;
+        check(
+            &zk_data_sim,
+            "simulator wire outside F-subspace at index ≥ 2",
+        )?;
         Ok(())
     }
 

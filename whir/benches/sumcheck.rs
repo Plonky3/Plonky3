@@ -4,10 +4,9 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_dft::Radix2DFTSmallBatch;
-use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
-use p3_merkle_tree::MerkleTreeMmcs;
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
+use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -237,6 +236,9 @@ fn bench_zk_overhead_classic_unpacked(c: &mut Criterion) {
                 let _ = prover.round(&mut data, &mut challenger, pow_bits);
             }
         });
+    });
+}
+
 /// Round-coefficient kernel measured in isolation.
 ///
 /// # Scope
@@ -311,7 +313,7 @@ criterion_group!(
     benches,
     bench_sumcheck_prover,
     bench_svo_claim_build,
-    bench_zk_overhead_classic_unpacked
+    bench_zk_overhead_classic_unpacked,
     bench_round_coefficients,
     bench_fix_prefix_var_mut,
 );
