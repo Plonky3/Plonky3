@@ -46,7 +46,7 @@ impl PseudoCompressionFunction<[u8; 32], 2> for Sha256Compress {
         let mut state = H256_256;
         // [[u8; 32]; 2] has same memory layout as [u8; 64]
         let block: &[u8; 64] = unsafe { core::mem::transmute(&input) };
-        sha2::compress256(&mut state, core::slice::from_ref(block.into()));
+        sha2::block_api::compress256(&mut state, core::slice::from_ref(block));
 
         let mut output = [0u8; 32];
         for (chunk, word) in output.chunks_exact_mut(4).zip(state) {

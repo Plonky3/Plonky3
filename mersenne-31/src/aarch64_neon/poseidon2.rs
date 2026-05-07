@@ -11,7 +11,7 @@ use p3_poseidon2::{
     external_terminal_permute_state,
 };
 
-use super::packing::exp5;
+use super::utils::add_rc_and_sbox;
 use crate::{Mersenne31, PackedMersenne31Neon};
 
 /// The prime P = 2^31 - 1 as a packed NEON vector.
@@ -189,43 +189,6 @@ fn diagonal_mul_24(state: &mut [PackedMersenne31Neon; 24]) {
     state[21] = mul_2exp_i::<20, 11>(state[21]);
     state[22] = mul_2exp_i::<21, 10>(state[22]);
     state[23] = mul_2exp_i::<22, 9>(state[23]);
-}
-
-/// Compute the fused AddRoundConstant and S-Box operation: `x -> (x + rc)^5`.
-///
-/// # Optimization
-/// 1. Adds `rc` (positive form). Result is in `[0, 2P]`.
-/// 2. Performs "Min-Reduction": `min(sum, sum - P)`.
-///    - If `sum < P`, `sum - P` wraps to a huge value, `min` selects `sum`.
-///    - If `sum >= P`, `sum - P` is small, `min` selects `sum - P`.
-///    - Cost: 2 instructions (`sub`, `min`).
-/// 3. Calls `exp5`. Since input is now strictly `[0, P]`, `exp5` does not need
-///    to handle signs or absolute values.
-///
-/// # Safety
-/// - `input` must contain elements in canonical form `{0, ..., P}`.
-/// - `rc` must contain round constants in positive form `{0, ..., P}`.
-#[inline(always)]
-fn add_rc_and_sbox(input: &mut PackedMersenne31Neon, rc: uint32x4_t) {
-    unsafe {
-        // Safety: If this code got compiled then NEON intrinsics are available.
-        let input_vec = input.to_vector();
-
-        // 1. Add round constant. Result in [0, 2P].
-        let sum = aarch64::vaddq_u32(input_vec, rc);
-
-        // 2. Fast Reduction to [0, P].
-        // If sum >= P, we want (sum - P).
-        // If sum < P, (sum - P) underflows to > P.
-        // Unsigned min selects the correct modular result.
-        let diff = aarch64::vsubq_u32(sum, P);
-        let reduced = aarch64::vminq_u32(sum, diff);
-
-        // 3. Apply S-box (optimized for positive inputs).
-        let output = exp5(reduced);
-
-        *input = PackedMersenne31Neon::from_vector(output);
-    }
 }
 
 /// Compute a single Poseidon2 internal layer on a state of width 16.

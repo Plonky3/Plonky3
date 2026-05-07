@@ -57,3 +57,39 @@ pub mod iter {
     #[cfg(feature = "parallel")]
     pub use rayon::iter::{repeat, repeat_n};
 }
+
+/// A raw mutable pointer wrapper that implements [`Send`] and [`Sync`].
+///
+/// Used to enable parallel writes to disjoint slices of a pre-allocated buffer
+/// from within closures that require `Send + Sync` (e.g. [`rayon::ParallelIterator::for_each_init`]).
+///
+/// # Safety
+///
+/// The caller must ensure that concurrent accesses through this pointer always
+/// target **non-overlapping** memory regions.
+#[derive(Clone, Copy)]
+pub struct DisjointMutPtr<T>(*mut T);
+
+// SAFETY: The contract of DisjointMutPtr guarantees that each thread writes to
+// a disjoint region, so sharing the pointer across threads is safe.
+unsafe impl<T> Send for DisjointMutPtr<T> {}
+unsafe impl<T> Sync for DisjointMutPtr<T> {}
+
+impl<T> DisjointMutPtr<T> {
+    /// Create a new `DisjointMutPtr` from a mutable slice.
+    #[inline]
+    pub const fn new(slice: &mut [T]) -> Self {
+        Self(slice.as_mut_ptr())
+    }
+
+    /// Get a mutable slice starting at `offset` with `len` elements.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the range `[offset, offset+len)` is within bounds
+    /// and does not overlap with any other concurrent access.
+    #[inline]
+    pub const unsafe fn slice_mut(self, offset: usize, len: usize) -> &'static mut [T] {
+        unsafe { core::slice::from_raw_parts_mut(self.0.add(offset), len) }
+    }
+}

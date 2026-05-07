@@ -9,12 +9,13 @@ use p3_field::exponentiation::exp_10540996611094048183;
 use p3_field::interleave::{interleave_u64, interleave_u128, interleave_u256};
 use p3_field::op_assign_macros::{
     impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
-    impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field,
-    ring_sum,
+    impl_packed_field_div, impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field,
+    impl_sum_prod_base_field, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, PrimeField64, impl_packed_field_pow_2,
+    PermutationMonomial, PrimeCharacteristicRing, PrimeField64, dispatch_chunked_mixed_dot_product,
+    impl_packed_field_pow_2,
 };
 use p3_util::reconstitute_from_base;
 use rand::distr::{Distribution, StandardUniform};
@@ -146,9 +147,22 @@ impl_add_base_field!(PackedGoldilocksAVX512, Goldilocks);
 impl_sub_base_field!(PackedGoldilocksAVX512, Goldilocks);
 impl_mul_base_field!(PackedGoldilocksAVX512, Goldilocks);
 impl_div_methods!(PackedGoldilocksAVX512, Goldilocks);
+impl_packed_field_div!(PackedGoldilocksAVX512);
 impl_sum_prod_base_field!(PackedGoldilocksAVX512, Goldilocks);
 
-impl Algebra<Goldilocks> for PackedGoldilocksAVX512 {}
+impl Algebra<Goldilocks> for PackedGoldilocksAVX512 {
+    // Benchmarked on AVX-512: chunk=4 ≈ 198ns, chunk=2 ≈ 198ns, chunk=32 ≈ 199ns.
+    const BATCHED_LC_CHUNK: usize = 4;
+
+    #[inline(always)]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Goldilocks; N]) -> Self {
+        dispatch_chunked_mixed_dot_product::<Self, Goldilocks, N>(
+            a,
+            f,
+            <Self as Algebra<Goldilocks>>::BATCHED_LC_CHUNK,
+        )
+    }
+}
 
 // Degree of the smallest permutation polynomial for Goldilocks.
 //

@@ -1,3 +1,65 @@
+//! Utilities for describing logical columns over a `(preprocessed_row, main_row)` pair.
+//!
+//! [`VirtualPairCol`] lets a gadget talk about a derived value without allocating a dedicated
+//! trace column. Instead, define the value once as an affine combination of existing
+//! preprocessed and main columns, then reuse that description anywhere the row layout matches.
+//!
+//! Typical uses include:
+//! - combining fixed columns and witness columns into one gadget input,
+//! - defining lookup/table values as packed or shifted views over existing columns,
+//! - reusing the same gadget wiring across multiple traces that share a column layout.
+//!
+//! # Example: combine fixed and witness columns
+//!
+//! ```
+//! use p3_air::{PairCol, VirtualPairCol};
+//! use p3_baby_bear::BabyBear;
+//! use p3_field::PrimeCharacteristicRing;
+//!
+//! type F = BabyBear;
+//!
+//! let gadget_input = VirtualPairCol::new(
+//!     vec![
+//!         (PairCol::Main(0), F::ONE),
+//!         (PairCol::Main(1), F::from_u8(2)),
+//!         (PairCol::Preprocessed(0), F::ONE),
+//!     ],
+//!     F::from_u8(7),
+//! );
+//!
+//! let preprocessed = [F::from_u8(5)];
+//! let main = [F::from_u8(11), F::from_u8(13)];
+//!
+//! assert_eq!(gadget_input.apply::<F, F>(&preprocessed, &main), F::from_u8(49));
+//! ```
+//!
+//! # Example: reuse one logical lookup key across traces
+//!
+//! ```
+//! use p3_air::{PairCol, VirtualPairCol};
+//! use p3_baby_bear::BabyBear;
+//! use p3_field::PrimeCharacteristicRing;
+//!
+//! type F = BabyBear;
+//!
+//! // Pack two witness limbs, and include a fixed table offset.
+//! let lookup_key = VirtualPairCol::new(
+//!     vec![
+//!         (PairCol::Main(0), F::ONE),
+//!         (PairCol::Main(1), F::from_u8(16)),
+//!         (PairCol::Preprocessed(0), F::from_u8(64)),
+//!     ],
+//!     F::ZERO,
+//! );
+//!
+//! let table_layout = [F::from_u8(1)];
+//! let trace_a = [F::from_u8(3), F::from_u8(2)];
+//! let trace_b = [F::from_u8(5), F::from_u8(1)];
+//!
+//! assert_eq!(lookup_key.apply::<F, F>(&table_layout, &trace_a), F::from_u8(99));
+//! assert_eq!(lookup_key.apply::<F, F>(&table_layout, &trace_b), F::from_u8(85));
+//! ```
+
 use alloc::vec;
 use alloc::vec::Vec;
 use core::ops::Mul;
@@ -10,6 +72,11 @@ use p3_field::{Field, PrimeCharacteristicRing};
 /// - `w_i` are the column weights
 /// - `V_i` are the columns (either preprocessed or main trace columns)
 /// - `c` is a constant term
+///
+/// A `VirtualPairCol` does not allocate any new trace storage. It only records how to read a
+/// logical value from the existing preprocessed and main rows, which makes it convenient for
+/// reusable gadget inputs, packed lookup values, and cross-trace layouts that share the same
+/// column wiring.
 #[derive(Clone, Debug)]
 pub struct VirtualPairCol<F: Field> {
     /// Linear combination coefficients: pairs of (column, weight).
@@ -337,6 +404,45 @@ mod tests {
 
         // result = 3*4 + 2*6 + 5
         assert_eq!(result, F::from_u8(29));
+    }
+
+    #[test]
+    fn test_virtual_pair_col_can_pack_lookup_value() {
+        let col = VirtualPairCol::new(
+            vec![
+                (PairCol::Main(0), F::ONE),
+                (PairCol::Main(1), F::from_u8(16)),
+                (PairCol::Preprocessed(0), F::from_u8(64)),
+            ],
+            F::ZERO,
+        );
+
+        let pre = [F::from_u8(1)];
+        let main = [F::from_u8(3), F::from_u8(2)];
+
+        let result = col.apply::<F, F>(&pre, &main);
+
+        assert_eq!(result, F::from_u8(99));
+    }
+
+    #[test]
+    fn test_virtual_pair_col_reuses_layout_across_traces() {
+        let col = VirtualPairCol::new(
+            vec![
+                (PairCol::Preprocessed(0), F::ONE),
+                (PairCol::Main(0), F::ONE),
+                (PairCol::Main(1), F::NEG_ONE),
+            ],
+            F::from_u8(3),
+        );
+
+        let pre_a = [F::from_u8(10)];
+        let main_a = [F::from_u8(8), F::from_u8(2)];
+        let pre_b = [F::from_u8(7)];
+        let main_b = [F::from_u8(4), F::from_u8(9)];
+
+        assert_eq!(col.apply::<F, F>(&pre_a, &main_a), F::from_u8(19));
+        assert_eq!(col.apply::<F, F>(&pre_b, &main_b), F::from_u8(5));
     }
 
     #[test]

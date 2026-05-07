@@ -10,6 +10,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::instrument;
 
+use crate::cfft::CircleEvaluations;
 use crate::point::Point;
 
 /// A twin-coset of the circle group on F. It has a power-of-two size and an arbitrary shift.
@@ -90,6 +91,20 @@ impl<F: ComplexExtendable> CircleDomain<F> {
 
     pub(crate) fn s_p_normalized<EF: ExtensionField<F>>(&self, p: Point<F>, at: Point<EF>) -> EF {
         self.vanishing_poly(at) / (p.v_tilde_p(at) * p.s_p_at_p(self.log_n))
+    }
+
+    /// `log_period`, `log_repetitions` with `trace_len / period = 2^log_repetitions`.
+    fn periodic_column_fold_params(&self, period: usize) -> (usize, usize) {
+        debug_assert!(period.is_power_of_two());
+        let trace_len = self.size();
+        assert_eq!(
+            trace_len % period,
+            0,
+            "trace length must be divisible by periodic column length"
+        );
+        let log_period = log2_strict_usize(period);
+        let log_repetitions = log2_strict_usize(trace_len / period);
+        (log_period, log_repetitions)
     }
 }
 
@@ -239,6 +254,44 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
             is_transition,
             inv_vanishing,
         }
+    }
+
+    fn evaluate_polynomial_at<Ext: ExtensionField<F>>(&self, evals: &[F], point: Ext) -> Ext {
+        assert!(
+            self.is_standard(),
+            "evaluate_polynomial_at requires standard position"
+        );
+        assert_eq!(evals.len(), self.size());
+        let values = RowMajorMatrix::new(evals.to_vec(), 1);
+        let circle_evals = CircleEvaluations::from_natural_order(*self, values);
+        let circle_point = Point::from_projective_line(point);
+        circle_evals.evaluate_at_point(circle_point)[0]
+    }
+
+    fn evaluate_periodic_column_at<Ext: ExtensionField<F>>(&self, col: &[F], point: Ext) -> Ext {
+        if col.is_empty() {
+            return Ext::ZERO;
+        }
+        assert!(
+            self.is_standard(),
+            "evaluate_periodic_column_at requires standard position"
+        );
+        assert!(
+            col.len().is_power_of_two(),
+            "periodic column length must be a power of 2"
+        );
+
+        let (log_period, log_repetitions) = self.periodic_column_fold_params(col.len());
+        let periodic_domain = Self::standard(log_period);
+
+        let evals = CircleEvaluations::from_natural_order(
+            periodic_domain,
+            RowMajorMatrix::new_col(col.to_vec()),
+        );
+
+        let query_point = Point::<Ext>::from_projective_line(point);
+        let periodic_point = query_point.repeated_double(log_repetitions);
+        evals.evaluate_at_point(periodic_point)[0]
     }
 }
 

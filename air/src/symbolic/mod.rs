@@ -12,7 +12,7 @@ use core::ops;
 pub use builder::*;
 pub use expression::{BaseLeaf, SymbolicExpression};
 pub use expression_ext::{ExtLeaf, SymbolicExpressionExt};
-use p3_field::{ExtensionField, Field, PrimeCharacteristicRing};
+use p3_field::{Dup, ExtensionField, Field, PrimeCharacteristicRing};
 pub use variable::{BaseEntry, ExtEntry, SymbolicVariable, SymbolicVariableExt};
 
 /// Properties that leaf nodes must provide for the generic expression tree.
@@ -196,6 +196,13 @@ impl<A: SymLeaf> PrimeCharacteristicRing for SymbolicExpr<A> {
     #[inline]
     fn from_prime_subfield(f: Self::PrimeSubfield) -> Self {
         Self::Leaf(A::from_const(A::F::from_prime_subfield(f)))
+    }
+}
+
+impl<A: SymLeaf> Dup for SymbolicExpr<A> {
+    #[inline(always)]
+    fn dup(&self) -> Self {
+        self.clone()
     }
 }
 

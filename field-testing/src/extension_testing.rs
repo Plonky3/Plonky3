@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 
 use p3_field::extension::HasFrobenius;
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue};
+use proptest::prelude::*;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -144,41 +145,38 @@ where
     assert_eq!(EF::ZERO.frobenius(), EF::ZERO);
     assert_eq!(EF::ONE.frobenius(), EF::ONE);
     assert_eq!(EF::TWO.frobenius(), EF::TWO);
+    assert_eq!(EF::NEG_ONE.frobenius(), EF::NEG_ONE);
 }
 
-/// Test that Frobenius is multiplicative: φ(a·b) = φ(a)·φ(b).
-pub fn test_frobenius_multiplicative<F, EF>()
+/// Test Frobenius automorphism properties with 256 random pairs via proptest.
+///
+/// Verifies additivity: φ(a+b) = φ(a)+φ(b)
+/// and multiplicativity: φ(a·b) = φ(a)·φ(b).
+pub fn test_frobenius_proptest<F, EF>()
 where
     F: Field,
-    EF: ExtensionField<F> + HasFrobenius<F>,
+    EF: ExtensionField<F> + HasFrobenius<F> + core::fmt::Debug + 'static,
     StandardUniform: Distribution<EF>,
 {
-    let mut rng = SmallRng::seed_from_u64(1);
-    let a: EF = rng.random();
-    let b: EF = rng.random();
-
-    let ab = a * b;
-    assert_eq!(
-        ab.frobenius(),
-        a.frobenius() * b.frobenius(),
-        "Frobenius should be multiplicative"
-    );
-}
-
-/// Test that Frobenius is additive: φ(a+b) = φ(a)+φ(b).
-pub fn test_frobenius_additive<F, EF>()
-where
-    F: Field,
-    EF: ExtensionField<F> + HasFrobenius<F>,
-    StandardUniform: Distribution<EF>,
-{
-    let mut rng = SmallRng::seed_from_u64(1);
-    let a: EF = rng.random();
-    let b: EF = rng.random();
-
-    assert_eq!(
-        (a + b).frobenius(),
-        a.frobenius() + b.frobenius(),
-        "Frobenius should be additive"
-    );
+    let config = ProptestConfig::with_cases(256);
+    let arb_ef = || {
+        any::<u64>().prop_map(|seed| {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            rng.random::<EF>()
+        })
+    };
+    proptest!(config, |(a in arb_ef(), b in arb_ef())| {
+        // Additivity
+        prop_assert_eq!(
+            (a + b).frobenius(),
+            a.frobenius() + b.frobenius(),
+            "Frobenius additivity"
+        );
+        // Multiplicativity
+        prop_assert_eq!(
+            (a * b).frobenius(),
+            a.frobenius() * b.frobenius(),
+            "Frobenius multiplicativity"
+        );
+    });
 }

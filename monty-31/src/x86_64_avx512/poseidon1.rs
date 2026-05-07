@@ -5,6 +5,7 @@ use core::arch::x86_64::__m512i;
 use core::marker::PhantomData;
 use core::mem::transmute;
 
+use p3_field::PrimeCharacteristicRing;
 use p3_mds::karatsuba_convolution::{mds_circulant_karatsuba_16, mds_circulant_karatsuba_24};
 use p3_poseidon1::external::{
     FullRoundConstants, FullRoundLayer, FullRoundLayerConstructor, mds_multiply,
@@ -155,15 +156,15 @@ where
                 split.s0 += self.packed_round_constants[r];
             }
 
-            let s_hi: &[PackedMontyField31AVX512<FP>; 15] = unsafe { transmute(&split.s_hi) };
-            let first_row = &self.packed_sparse_first_row[r];
-            let mut partial_dot = s_hi[0] * first_row[1];
-            for j in 1..15 {
-                partial_dot += s_hi[j] * first_row[j + 1];
-            }
+            let s_hi: [PackedMontyField31AVX512<FP>; 15] = unsafe { transmute(split.s_hi) };
+            let first_row =
+                InternalLayer16::from_packed_field_array(self.packed_sparse_first_row[r]);
+            let first_row_hi: [PackedMontyField31AVX512<FP>; 15] =
+                unsafe { transmute(first_row.s_hi) };
+            let partial_dot = PackedMontyField31AVX512::<FP>::dot_product(&s_hi, &first_row_hi);
 
             let s0_val = split.s0;
-            split.s0 = s0_val * first_row[0] + partial_dot;
+            split.s0 = s0_val * first_row.s0 + partial_dot;
 
             let v = &self.packed_v[r];
             let s_hi_mut: &mut [PackedMontyField31AVX512<FP>; 15] =
@@ -207,15 +208,15 @@ where
                 split.s0 += self.packed_round_constants[r];
             }
 
-            let s_hi: &[PackedMontyField31AVX512<FP>; 23] = unsafe { transmute(&split.s_hi) };
-            let first_row = &self.packed_sparse_first_row[r];
-            let mut partial_dot = s_hi[0] * first_row[1];
-            for j in 1..23 {
-                partial_dot += s_hi[j] * first_row[j + 1];
-            }
+            let s_hi: [PackedMontyField31AVX512<FP>; 23] = unsafe { transmute(split.s_hi) };
+            let first_row =
+                InternalLayer24::from_packed_field_array(self.packed_sparse_first_row[r]);
+            let first_row_hi: [PackedMontyField31AVX512<FP>; 23] =
+                unsafe { transmute(first_row.s_hi) };
+            let partial_dot = PackedMontyField31AVX512::<FP>::dot_product(&s_hi, &first_row_hi);
 
             let s0_val = split.s0;
-            split.s0 = s0_val * first_row[0] + partial_dot;
+            split.s0 = s0_val * first_row.s0 + partial_dot;
 
             let v = &self.packed_v[r];
             let s_hi_mut: &mut [PackedMontyField31AVX512<FP>; 23] =

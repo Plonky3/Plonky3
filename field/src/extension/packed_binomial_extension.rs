@@ -2,7 +2,7 @@ use alloc::vec::Vec;
 use core::array;
 use core::fmt::Debug;
 use core::iter::{Product, Sum};
-use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
+use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use itertools::Itertools;
 use p3_util::{flatten_to_base, reconstitute_from_base};
@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::{BinomialExtensionField, binomial_mul, vector_add, vector_sub};
 use crate::extension::{BinomiallyExtendable, binomial_square};
 use crate::{
-    Algebra, BasedVectorSpace, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
+    Algebra, BasedVectorSpace, Dup, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
     PrimeCharacteristicRing, field_to_array,
 };
 
@@ -85,6 +85,30 @@ impl<F: BinomiallyExtendable<D>, PF: PackedField<Scalar = F>, const D: usize>
 impl<F: BinomiallyExtendable<D>, PF: PackedField<Scalar = F>, const D: usize> Algebra<PF>
     for PackedBinomialExtensionField<F, PF, D>
 {
+    #[inline]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[PF; N]) -> Self
+    where
+        PF: Dup,
+    {
+        // Output container; each coordinate is filled independently below.
+        let mut result = Self::default();
+
+        // One base-field dot product per output coordinate.
+        for k in 0..D {
+            // Strided gather of the k-th coordinate from each extension input:
+            //
+            //     coord_k = [ a_0[k], a_1[k], ..., a_{N-1}[k] ]
+            let coord_k: [PF; N] = core::array::from_fn(|i| a[i].value[k]);
+
+            // Base-level dot product.
+            //
+            // - For Monty-31 packings this is the delayed-reduction primitive;
+            // - For other packings it falls back to the eager default and the override is a no-op gain.
+            result.value[k] = PF::dot_product::<N>(&coord_k, f);
+        }
+
+        result
+    }
 }
 
 impl<F, PF, const D: usize> PrimeCharacteristicRing for PackedBinomialExtensionField<F, PF, D>
@@ -203,8 +227,7 @@ where
         let width = F::Packing::WIDTH;
         assert_eq!(ext_slice.len(), width);
 
-        let res = array::from_fn(|i| F::Packing::from_fn(|j| ext_slice[j].value[i]));
-        Self::new(res)
+        Self::new(F::Packing::pack_columns_fn(|lane| ext_slice[lane].value))
     }
 
     #[inline]
@@ -507,5 +530,136 @@ where
     #[inline]
     fn mul_assign(&mut self, rhs: PF) {
         *self = *self * rhs;
+    }
+}
+
+impl<F, PF, const D: usize> Div<BinomialExtensionField<F, D>>
+    for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    type Output = Self;
+
+    #[allow(clippy::suspicious_arithmetic_impl)]
+    #[inline]
+    fn div(self, rhs: BinomialExtensionField<F, D>) -> Self {
+        self * Self::from(rhs.inverse())
+    }
+}
+
+impl<F, PF, const D: usize> DivAssign<BinomialExtensionField<F, D>>
+    for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    #[inline]
+    fn div_assign(&mut self, rhs: BinomialExtensionField<F, D>) {
+        *self = *self / rhs;
+    }
+}
+
+impl<F, PF, const D: usize> Div for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    type Output = Self;
+
+    #[allow(clippy::suspicious_arithmetic_impl)]
+    #[inline]
+    fn div(self, rhs: Self) -> Self {
+        // This buffer will hold prefix products during the forward pass,
+        // then the final per-lane inverses after the backward pass.
+        let mut rhs_inv = Self::default();
+
+        if PF::WIDTH > 0 {
+            // Forward pass: build cumulative prefix products.
+            //
+            // After this loop:
+            //   rhs_inv[0] = 1
+            //   rhs_inv[1] = rhs[0]
+            //   rhs_inv[2] = rhs[0] * rhs[1]
+            //   ...
+            //   rhs_inv[k] = rhs[0] * rhs[1] * ... * rhs[k-1]
+
+            // Seed the first lane with the multiplicative identity.
+            let one = BinomialExtensionField::<F, D>::ONE;
+            for i in 0..D {
+                rhs_inv.value[i].as_slice_mut()[0] = one.value[i];
+            }
+
+            for lane in 1..PF::WIDTH {
+                // Extract the prefix product accumulated so far (from the previous lane).
+                let prev_prefix = BinomialExtensionField::<F, D>::new(array::from_fn(|i| {
+                    rhs_inv.value[i].as_slice()[lane - 1]
+                }));
+                // Extract the divisor element at the previous lane.
+                let rhs_prev = BinomialExtensionField::<F, D>::new(array::from_fn(|i| {
+                    rhs.value[i].as_slice()[lane - 1]
+                }));
+                // Extend the running product: prefix[lane] = prefix[lane-1] * rhs[lane-1].
+                let prefix = prev_prefix * rhs_prev;
+                // Store the new prefix product back into the buffer at this lane.
+                for i in 0..D {
+                    rhs_inv.value[i].as_slice_mut()[lane] = prefix.value[i];
+                }
+            }
+
+            // Single inversion: compute the inverse of the full product across all lanes:
+            // (rhs[0] * rhs[1] * ... * rhs[N-1])^{-1}.
+            let prefix_last = BinomialExtensionField::<F, D>::new(array::from_fn(|i| {
+                rhs_inv.value[i].as_slice()[PF::WIDTH - 1]
+            }));
+            let rhs_last = BinomialExtensionField::<F, D>::new(array::from_fn(|i| {
+                rhs.value[i].as_slice()[PF::WIDTH - 1]
+            }));
+            let mut suffix_inv = (prefix_last * rhs_last).inverse();
+
+            // Backward pass: recover individual inverses.
+            //
+            // Invariant at the start of each iteration:
+            //   suffix_inv = (rhs[lane] * rhs[lane+1] * ... * rhs[N-1])^{-1}
+            //
+            // So: rhs[lane]^{-1} = prefix[lane] * suffix_inv
+            //     because prefix[lane] * suffix_inv
+            //           = (rhs[0] * ... * rhs[lane-1]) * (rhs[lane] * ... * rhs[N-1])^{-1}
+            //           ... and the rhs[0] * ... * rhs[lane-1] terms cancel with the
+            //           corresponding factors in the denominator, leaving rhs[lane]^{-1}.
+            for lane in (0..PF::WIDTH).rev() {
+                // Read the prefix product stored during the forward pass.
+                let prefix = BinomialExtensionField::<F, D>::new(array::from_fn(|i| {
+                    rhs_inv.value[i].as_slice()[lane]
+                }));
+                // Combine prefix and suffix inverse to get rhs[lane]^{-1}.
+                let inv_lane = prefix * suffix_inv;
+                // Write the computed inverse back into the buffer.
+                for i in 0..D {
+                    rhs_inv.value[i].as_slice_mut()[lane] = inv_lane.value[i];
+                }
+
+                // Update the running suffix inverse by absorbing rhs[lane].
+                // This peels off rhs[lane] from the suffix for the next iteration.
+                let rhs_lane = BinomialExtensionField::<F, D>::new(array::from_fn(|i| {
+                    rhs.value[i].as_slice()[lane]
+                }));
+                suffix_inv *= rhs_lane;
+            }
+        }
+
+        // Final multiplication: numerator * (1 / denominator) per lane.
+        self * rhs_inv
+    }
+}
+
+impl<F, PF, const D: usize> DivAssign for PackedBinomialExtensionField<F, PF, D>
+where
+    F: BinomiallyExtendable<D>,
+    PF: PackedField<Scalar = F>,
+{
+    #[inline]
+    fn div_assign(&mut self, rhs: Self) {
+        *self = *self / rhs;
     }
 }

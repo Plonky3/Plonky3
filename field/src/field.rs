@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display};
 use core::hash::Hash;
-use core::iter::{Product, Sum};
+use core::iter::{Product, Sum, zip};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, slice};
 
@@ -15,7 +15,7 @@ use serde::de::DeserializeOwned;
 use crate::exponentiation::bits_u64;
 use crate::integers::{QuotientMap, from_integer_types};
 use crate::packed::PackedField;
-use crate::{Packable, PackedFieldExtension, PackedValue};
+use crate::{Dup, Packable, PackedFieldExtension, PackedValue};
 
 /// A commutative ring, `R`, with prime characteristic, `p`.
 ///
@@ -55,7 +55,7 @@ use crate::{Packable, PackedFieldExtension, PackedValue};
 pub trait PrimeCharacteristicRing:
     Sized
     + Default
-    + Clone
+    + Dup
     + Add<Output = Self>
     + AddAssign
     + Sub<Output = Self>
@@ -135,7 +135,7 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline(always)]
     fn double(&self) -> Self {
-        self.clone() + self.clone()
+        self.dup() + self.dup()
     }
 
     /// The elementary function `halve(a) = a/2`.
@@ -149,7 +149,7 @@ pub trait PrimeCharacteristicRing:
         // is circular when PrimeSubfield = Self. It should also be overwritten by
         // most rings to avoid the multiplication.
         let half = Self::from_prime_subfield(Self::PrimeSubfield::ONE.halve());
-        self.clone() * half
+        self.dup() * half
     }
 
     /// The elementary function `square(a) = a^2`.
@@ -158,7 +158,7 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline(always)]
     fn square(&self) -> Self {
-        self.clone() * self.clone()
+        self.dup() * self.dup()
     }
 
     /// The elementary function `cube(a) = a^3`.
@@ -167,7 +167,7 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline(always)]
     fn cube(&self) -> Self {
-        self.square() * self.clone()
+        self.square() * self.dup()
     }
 
     /// Computes the arithmetic generalization of boolean `xor`.
@@ -176,7 +176,7 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline(always)]
     fn xor(&self, y: &Self) -> Self {
-        self.clone() + y.clone() - self.clone() * y.clone().double()
+        self.dup() + y.dup() - self.dup() * y.dup().double()
     }
 
     /// Computes the arithmetic generalization of a triple `xor`.
@@ -194,7 +194,7 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline(always)]
     fn andn(&self, y: &Self) -> Self {
-        (Self::ONE - self.clone()) * y.clone()
+        (Self::ONE - self.dup()) * y.dup()
     }
 
     /// The vanishing polynomial for boolean values: `x * (x - 1)`.
@@ -206,7 +206,7 @@ pub trait PrimeCharacteristicRing:
     fn bool_check(&self) -> Self {
         // Note: We could delegate to `andn`, but to maintain backwards
         // compatible AIR definitions, we stick with `x * (x - 1)` here.
-        self.clone() * (self.clone() - Self::ONE)
+        self.dup() * (self.dup() - Self::ONE)
     }
 
     /// Exponentiation by a `u64` power.
@@ -217,12 +217,12 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline]
     fn exp_u64(&self, power: u64) -> Self {
-        let mut current = self.clone();
+        let mut current = self.dup();
         let mut product = Self::ONE;
 
         for j in 0..bits_u64(power) {
             if (power >> j) & 1 != 0 {
-                product *= current.clone();
+                product *= current.dup();
             }
             current = current.square();
         }
@@ -240,15 +240,15 @@ pub trait PrimeCharacteristicRing:
     fn exp_const_u64<const POWER: u64>(&self) -> Self {
         match POWER {
             0 => Self::ONE,
-            1 => self.clone(),
+            1 => self.dup(),
             2 => self.square(),
             3 => self.cube(),
             4 => self.square().square(),
-            5 => self.square().square() * self.clone(),
+            5 => self.square().square() * self.dup(),
             6 => self.square().cube(),
             7 => {
                 let x2 = self.square();
-                let x3 = x2.clone() * self.clone();
+                let x3 = x2.dup() * self.dup();
                 let x4 = x2.square();
                 x3 * x4
             }
@@ -262,7 +262,7 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline]
     fn exp_power_of_2(&self, power_log: usize) -> Self {
-        let mut res = self.clone();
+        let mut res = self.dup();
         for _ in 0..power_log {
             res = res.square();
         }
@@ -277,7 +277,7 @@ pub trait PrimeCharacteristicRing:
     fn mul_2exp_u64(&self, exp: u64) -> Self {
         // Some rings might want to reimplement this to avoid the
         // exponentiations (and potentially even the multiplication).
-        self.clone() * Self::TWO.exp_u64(exp)
+        self.dup() * Self::TWO.exp_u64(exp)
     }
 
     /// Divide by a given power of two. `div_2exp_u64(a, exp) = a/2^exp`
@@ -289,7 +289,7 @@ pub trait PrimeCharacteristicRing:
     fn div_2exp_u64(&self, exp: u64) -> Self {
         // Some rings might want to reimplement this to avoid the
         // exponentiations (and potentially even the multiplication).
-        self.clone() * Self::from_prime_subfield(Self::PrimeSubfield::ONE.halve().exp_u64(exp))
+        self.dup() * Self::from_prime_subfield(Self::PrimeSubfield::ONE.halve().exp_u64(exp))
     }
 
     /// Construct an iterator which returns powers of `self`: `self^0, self^1, self^2, ...`.
@@ -304,7 +304,7 @@ pub trait PrimeCharacteristicRing:
     #[inline]
     fn shifted_powers(&self, start: Self) -> Powers<Self> {
         Powers {
-            base: self.clone(),
+            base: self.dup(),
             current: start,
         }
     }
@@ -313,7 +313,7 @@ pub trait PrimeCharacteristicRing:
     #[must_use]
     #[inline]
     fn dot_product<const N: usize>(u: &[Self; N], v: &[Self; N]) -> Self {
-        u.iter().zip(v).map(|(x, y)| x.clone() * y.clone()).sum()
+        u.iter().zip(v).map(|(x, y)| x.dup() * y.dup()).sum()
     }
 
     /// Compute the sum of a slice of elements whose length is a compile time constant.
@@ -342,10 +342,10 @@ pub trait PrimeCharacteristicRing:
         // I only tested this on `AVX2` though so there might be a better value for other architectures.
         match N {
             0 => Self::ZERO,
-            1 => input[0].clone(),
-            2 => input[0].clone() + input[1].clone(),
-            3 => input[0].clone() + input[1].clone() + input[2].clone(),
-            4 => (input[0].clone() + input[1].clone()) + (input[2].clone() + input[3].clone()),
+            1 => input[0].dup(),
+            2 => input[0].dup() + input[1].dup(),
+            3 => input[0].dup() + input[1].dup() + input[2].dup(),
+            4 => (input[0].dup() + input[1].dup()) + (input[2].dup() + input[3].dup()),
             5 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<1>(&input[4..]),
             6 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<2>(&input[4..]),
             7 => Self::sum_array::<4>(&input[..4]) + Self::sum_array::<3>(&input[4..]),
@@ -653,11 +653,177 @@ pub trait Algebra<F>:
     #[inline]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[F; N]) -> Self
     where
-        F: Clone,
+        F: Dup,
     {
-        let products: [Self; N] = core::array::from_fn(|i| a[i].clone() * f[i].clone());
+        let products: [Self; N] = core::array::from_fn(|i| a[i].dup() * f[i].dup());
         Self::sum_array::<N>(&products)
     }
+
+    /// Optimal chunk size for [`batched_linear_combination`](Self::batched_linear_combination).
+    ///
+    /// Override in implementations where a different chunk size is faster.
+    /// Must be one of 1, 2, 4, 8, 16, 32, or 64; other values cause a compile error.
+    const BATCHED_LC_CHUNK: usize = 8;
+
+    /// Runtime-length linear combination: `Σ values[i] * coeffs[i]`.
+    ///
+    /// Like [`mixed_dot_product`](Self::mixed_dot_product) but for slices whose
+    /// length is not known at compile time. Processes in chunks of
+    /// [`BATCHED_LC_CHUNK`](Self::BATCHED_LC_CHUNK), delegating each chunk to
+    /// `mixed_dot_product` to leverage SIMD-specialized overrides.
+    #[must_use]
+    #[inline]
+    fn batched_linear_combination(values: &[Self], coeffs: &[F]) -> Self
+    where
+        F: Dup,
+    {
+        const {
+            assert!(
+                matches!(Self::BATCHED_LC_CHUNK, 1 | 2 | 4 | 8 | 16 | 32 | 64),
+                "BATCHED_LC_CHUNK must be one of 1, 2, 4, 8, 16, 32, or 64"
+            );
+        }
+        match Self::BATCHED_LC_CHUNK {
+            1 => chunked_linear_combination::<1, Self, F>(values, coeffs),
+            2 => chunked_linear_combination::<2, Self, F>(values, coeffs),
+            4 => chunked_linear_combination::<4, Self, F>(values, coeffs),
+            8 => chunked_linear_combination::<8, Self, F>(values, coeffs),
+            16 => chunked_linear_combination::<16, Self, F>(values, coeffs),
+            32 => chunked_linear_combination::<32, Self, F>(values, coeffs),
+            64 => chunked_linear_combination::<64, Self, F>(values, coeffs),
+            _ => unreachable!(),
+        }
+    }
+}
+
+/// Compute `Σ values[i] * coeffs[i]` over `N` pairs.
+///
+/// A single long sum forces every add to wait for the previous one. Instead,
+/// we split the pairs into groups of `CHUNK`, sum each group on its own, and
+/// add up the group totals. Several partial sums run in parallel on the CPU,
+/// so the total latency is shorter than one straight chain.
+///
+/// The result is the same for every valid `CHUNK` — only the speed changes.
+///
+/// # Layout
+///
+/// For `N = q * CHUNK + r` with `0 <= r < CHUNK`:
+///
+/// ```text
+///     ┌── group 0 ──┬── group 1 ──┬─ ... ─┬── tail (r) ──┐
+///     │   CHUNK     │   CHUNK     │       │   r pairs    │
+///     └──────┬──────┴──────┬──────┴───────┴──────┬───────┘
+///            ▼             ▼                     ▼
+///       tree-sum      tree-sum             scalar adds
+///            └──► acc ◄────┴──────► acc ◄────────┘
+/// ```
+///
+/// # Panics
+///
+/// Compile-time panic if `CHUNK` is zero.
+#[must_use]
+#[inline]
+pub fn chunked_mixed_dot_product<
+    const CHUNK: usize,
+    A: Algebra<F> + Dup,
+    F: Dup,
+    const N: usize,
+>(
+    values: &[A; N],
+    coeffs: &[F; N],
+) -> A {
+    // CHUNK = 0 would make the group count undefined.
+    const { assert!(CHUNK != 0, "chunked_mixed_dot_product requires CHUNK > 0") }
+
+    // Fast path: N fits in one group → single balanced tree, no outer loop.
+    if N <= CHUNK {
+        let products: [A; N] = core::array::from_fn(|i| values[i].dup() * coeffs[i].dup());
+        return A::sum_array::<N>(&products);
+    }
+
+    // Split off q complete groups; r leftover pairs go to the tail.
+    let (val_chunks, val_rem) = values.as_slice().as_chunks::<CHUNK>();
+    let (coeff_chunks, coeff_rem) = coeffs.as_slice().as_chunks::<CHUNK>();
+    debug_assert_eq!(val_chunks.len(), coeff_chunks.len());
+
+    // One add per group; runs in parallel with the next group's multiplies.
+    let mut acc = A::ZERO;
+    for (vc, cc) in zip(val_chunks, coeff_chunks) {
+        let products: [A; CHUNK] = core::array::from_fn(|i| vc[i].dup() * cc[i].dup());
+        // Balanced tree of depth log2(CHUNK), folded into acc.
+        acc += A::sum_array::<CHUNK>(&products);
+    }
+
+    // Tail: at most CHUNK - 1 pairs as a serial multiply-add chain.
+    debug_assert_eq!(val_rem.len(), coeff_rem.len());
+    for (v, c) in zip(val_rem, coeff_rem) {
+        acc += v.dup() * c.dup();
+    }
+    acc
+}
+
+/// Lower a runtime chunk size into a const-generic call to the fixed-chunk dot product.
+///
+/// Each backend picks its preferred chunk size at runtime; the inner routine
+/// needs it as a const for unrolling. This wrapper bridges the gap.
+///
+/// Supported sizes: `1, 2, 4, 8, 16, 32, 64` — powers of two only, so the
+/// inner balanced tree stays balanced.
+///
+/// # Panics
+///
+/// Runtime panic if `chunk` is outside the supported set.
+#[must_use]
+#[inline]
+pub fn dispatch_chunked_mixed_dot_product<A: Algebra<F> + Dup, F: Dup, const N: usize>(
+    values: &[A; N],
+    coeffs: &[F; N],
+    chunk: usize,
+) -> A {
+    match chunk {
+        1 => chunked_mixed_dot_product::<1, A, F, N>(values, coeffs),
+        2 => chunked_mixed_dot_product::<2, A, F, N>(values, coeffs),
+        4 => chunked_mixed_dot_product::<4, A, F, N>(values, coeffs),
+        8 => chunked_mixed_dot_product::<8, A, F, N>(values, coeffs),
+        16 => chunked_mixed_dot_product::<16, A, F, N>(values, coeffs),
+        32 => chunked_mixed_dot_product::<32, A, F, N>(values, coeffs),
+        64 => chunked_mixed_dot_product::<64, A, F, N>(values, coeffs),
+        // Unsupported chunk = configuration bug in a backend.
+        _ => panic!("mixed_dot_product chunk must be one of 1, 2, 4, 8, 16, 32, or 64"),
+    }
+}
+
+/// Linear combination over runtime-length slices, processing in chunks of `CHUNK`.
+///
+/// Computes `Σ values[i] * coeffs[i]` by batching into fixed-size chunks and
+/// delegating each to [`Algebra::mixed_dot_product`], which SIMD implementations
+/// override with fused multiply-accumulate intrinsics.
+///
+/// This is the implementation backing [`Algebra::batched_linear_combination`].
+/// Use it directly when overriding that method with a different chunk size.
+#[must_use]
+#[inline]
+pub fn chunked_linear_combination<const CHUNK: usize, A: Algebra<F> + Dup, F: Dup>(
+    values: &[A],
+    coeffs: &[F],
+) -> A {
+    const { assert!(CHUNK != 0, "chunked_linear_combination requires CHUNK > 0") }
+    assert_eq!(values.len(), coeffs.len());
+
+    let (val_chunks, val_rem) = values.as_chunks::<CHUNK>();
+    let (coeff_chunks, coeff_rem) = coeffs.as_chunks::<CHUNK>();
+
+    debug_assert_eq!(val_chunks.len(), coeff_chunks.len());
+    let mut acc = A::ZERO;
+    for (vc, cc) in zip(val_chunks, coeff_chunks) {
+        acc += A::mixed_dot_product::<CHUNK>(vc, cc);
+    }
+
+    debug_assert_eq!(val_rem.len(), coeff_rem.len());
+    for (v, c) in zip(val_rem, coeff_rem) {
+        acc += v.dup() * c.dup();
+    }
+    acc
 }
 
 // Every ring is an algebra over itself.
@@ -994,8 +1160,8 @@ impl<R: PrimeCharacteristicRing> Iterator for Powers<R> {
     type Item = R;
 
     fn next(&mut self) -> Option<R> {
-        let result = self.current.clone();
-        self.current *= self.base.clone();
+        let result = self.current.dup();
+        self.current *= self.base.dup();
         Some(result)
     }
 }

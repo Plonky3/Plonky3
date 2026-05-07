@@ -18,6 +18,7 @@ serde = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
 p3-koala-bear = { path = "../koala-bear" }
+proptest.workspace = true
 
 [lints]
 workspace = true

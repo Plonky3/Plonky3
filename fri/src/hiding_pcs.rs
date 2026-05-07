@@ -2,10 +2,12 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpening, Mmcs, OpenedValues, Pcs, PolynomialSpace};
+use p3_commit::{
+    BatchOpening, BuildPeriodicLdeTableFast, Mmcs, OpenedValues, Pcs, PolynomialSpace,
+};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::{ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse};
+use p3_field::{ExtensionField, TwoAdicField, batch_multiplicative_inverse};
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversalPerm, BitReversibleMatrix};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixCow};
@@ -15,7 +17,7 @@ use p3_util::zip_eq::zip_eq;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 use spin::Mutex;
-use tracing::{info_span, instrument};
+use tracing::info_span;
 
 use crate::verifier::FriError;
 use crate::{FriParameters, FriProof, TwoAdicFriPcs};
@@ -110,8 +112,7 @@ where
                         // To generate it, we add `w + 2 * num_random_codewords` columns to the original matrix, then reshape it by setting the width to `w + num_random_codewords`.
                         // All columns are added on the right hand side so, after reshaping, this has the net effect of adding `num_random_codewords` random columns on the right and interleaving the original trace with random rows.
 
-                        let mut random_evaluation = add_random_cols(
-                            &mat,
+                        let mut random_evaluation = mat.with_random_cols(
                             mat_width + 2 * self.num_random_codewords,
                             &mut *self.rng.lock(),
                         );
@@ -137,7 +138,7 @@ where
                 // Let `w` and `h` be the width and height of the original matrix. The padded matrix should have height `2h` and width `w`.
                 // To generate it, we add `w` zero columns to the original matrix, then reshape it by setting the width to `w`.
                 // All columns are added on the right hand side so, after reshaping, this has the net effect of adding interleaving the original trace with zero rows.
-                let mut padded_evaluation = add_zero_cols(&mat, mat_width);
+                let mut padded_evaluation = mat.with_zero_cols(mat_width);
                 padded_evaluation.width = mat_width;
                 (domain, padded_evaluation)
             })
@@ -176,7 +177,7 @@ where
         let mut rng = self.rng.lock();
         let randomized_evaluations: Vec<RowMajorMatrix<Val>> = evaluations
             .into_iter()
-            .map(|mat| add_random_cols(&mat, self.num_random_codewords, &mut *rng))
+            .map(|mat| mat.with_random_cols(self.num_random_codewords, &mut *rng))
             .collect();
         // Add random values to the LDE evaluations as described in https://eprint.iacr.org/2024/1037.pdf.
         // If we have `d` chunks, let q'_i(X) = q_i(X) + v_H_i(X) * t_i(X) where t(X) is random, for 1 <= i < d.
@@ -414,56 +415,27 @@ where
     }
 }
 
-#[instrument(level = "debug", skip_all)]
-fn add_random_cols<Val, R>(
-    mat: &RowMajorMatrix<Val>,
-    num_random_codewords: usize,
-    mut rng: R,
-) -> RowMajorMatrix<Val>
+impl<Val, Dft, InputMmcs, FriMmcs, R> BuildPeriodicLdeTableFast
+    for HidingFriPcs<Val, Dft, InputMmcs, FriMmcs, R>
 where
-    Val: Field,
-    R: Rng + Send + Sync,
-    StandardUniform: Distribution<Val>,
+    Val: TwoAdicField,
+    Dft: TwoAdicSubgroupDft<Val>,
+    InputMmcs: Mmcs<Val>,
 {
-    let old_w = mat.width();
-    let new_w = old_w + num_random_codewords;
-    let h = mat.height();
+    type PeriodicDomain = TwoAdicMultiplicativeCoset<Val>;
 
-    let new_values = Val::zero_vec(new_w * h);
-    let mut result = RowMajorMatrix::new(new_values, new_w);
-    // Can be parallelized by adding par_, but there are some complications with the RNG.
-    // We could just use rng(), but ideally we want to keep it generic...
-    result
-        .rows_mut()
-        .zip(mat.row_slices())
-        .for_each(|(new_row, old_row)| {
-            new_row[..old_w].copy_from_slice(old_row);
-            new_row[old_w..].iter_mut().for_each(|v| *v = rng.random());
-        });
-    result
-}
-
-/// Adds `num_extra_columns` zero columns to the right of `mat`, then reshapes it by setting the width to
-/// `mat.width() + num_extra_columns`.
-#[instrument(level = "debug", skip_all)]
-fn add_zero_cols<Val>(mat: &RowMajorMatrix<Val>, num_extra_columns: usize) -> RowMajorMatrix<Val>
-where
-    Val: Field,
-{
-    let old_w = mat.width();
-    let new_w = old_w + num_extra_columns;
-    let h = mat.height();
-
-    let new_values = Val::zero_vec(new_w * h);
-    let mut result = RowMajorMatrix::new(new_values, new_w);
-
-    result
-        .rows_mut()
-        .zip(mat.row_slices())
-        .for_each(|(new_row, old_row)| {
-            new_row[..old_w].copy_from_slice(old_row);
-        });
-    result
+    fn maybe_build_periodic_lde_table_fast(
+        &self,
+        periodic_cols: &[Vec<p3_commit::Val<Self::PeriodicDomain>>],
+        trace_domain: Self::PeriodicDomain,
+        quotient_domain: Self::PeriodicDomain,
+    ) -> Option<p3_commit::PeriodicLdeTable<p3_commit::Val<Self::PeriodicDomain>>>
+    where
+        p3_commit::Val<Self::PeriodicDomain>: Clone,
+    {
+        self.inner
+            .maybe_build_periodic_lde_table_fast(periodic_cols, trace_domain, quotient_domain)
+    }
 }
 
 /// Compute the normalizing constants for the Langrange selectors of the provided domains.

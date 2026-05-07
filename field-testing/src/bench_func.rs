@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use core::hint::black_box;
 
 use criterion::{BatchSize, Criterion};
-use p3_field::{Algebra, Field, PrimeCharacteristicRing};
+use p3_field::{Algebra, Field, PrimeCharacteristicRing, chunked_linear_combination};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 use rand::rngs::SmallRng;
@@ -160,6 +160,21 @@ pub fn benchmark_dot_array<R: PrimeCharacteristicRing + Copy, const N: usize>(
 
     c.bench_function(&format!("{name} dot product/{N}"), |b| {
         b.iter(|| black_box(R::dot_product(black_box(&lhs), black_box(&rhs))));
+    });
+}
+
+/// Benchmark the time taken to do mixed dot products on a pair of `[A; N]` and `[F; N]` arrays.
+pub fn benchmark_mixed_dot_array<A: Algebra<F> + Copy, F: Field, const N: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<A> + Distribution<F>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let a = rng.random::<[A; N]>();
+    let f = rng.random::<[F; N]>();
+    c.bench_function(&format!("{name} mixed dot product/{N}"), |b| {
+        b.iter(|| black_box(A::mixed_dot_product(black_box(&a), black_box(&f))));
     });
 }
 
@@ -493,4 +508,159 @@ pub fn benchmark_exp_const<R: PrimeCharacteristicRing + Copy, const POWER: u64, 
             BatchSize::SmallInput,
         );
     });
+}
+
+pub fn benchmark_neg_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<R>,
+{
+    c.bench_function(&format!("neg-latency/{N} {name}"), |b| {
+        b.iter_batched(
+            || {
+                let mut rng = SmallRng::seed_from_u64(1);
+                let mut vec = Vec::new();
+                for _ in 0..N {
+                    vec.push(rng.random::<R>());
+                }
+                vec
+            },
+            |x| x.iter().fold(R::ZERO, |acc, y| -(acc + *y)),
+            BatchSize::SmallInput,
+        );
+    });
+}
+
+pub fn benchmark_neg_throughput<R: PrimeCharacteristicRing + Copy, const N: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<R>,
+{
+    c.bench_function(&format!("neg-throughput/{N} {name}"), |b| {
+        b.iter_batched(
+            || {
+                let mut rng = SmallRng::seed_from_u64(1);
+                (
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                )
+            },
+            |(mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h, mut i, mut j)| {
+                for _ in 0..N {
+                    (a, b, c, d, e, f, g, h, i, j) = (-a, -b, -c, -d, -e, -f, -g, -h, -i, -j);
+                }
+                (a, b, c, d, e, f, g, h, i, j)
+            },
+            BatchSize::SmallInput,
+        );
+    });
+}
+
+pub fn benchmark_double_latency<R: PrimeCharacteristicRing + Copy, const N: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<R>,
+{
+    c.bench_function(&format!("double-latency/{N} {name}"), |b| {
+        b.iter_batched(
+            || {
+                let mut rng = SmallRng::seed_from_u64(1);
+                black_box(rng.random::<R>())
+            },
+            |x| {
+                let mut acc = x;
+                for _ in 0..N {
+                    acc = acc.double();
+                }
+                acc
+            },
+            BatchSize::SmallInput,
+        );
+    });
+}
+
+pub fn benchmark_double_throughput<R: PrimeCharacteristicRing + Copy, const N: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<R>,
+{
+    c.bench_function(&format!("double-throughput/{N} {name}"), |b| {
+        b.iter_batched(
+            || {
+                let mut rng = SmallRng::seed_from_u64(1);
+                (
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                    rng.random::<R>(),
+                )
+            },
+            |(mut a, mut b, mut c, mut d, mut e, mut f, mut g, mut h, mut i, mut j)| {
+                for _ in 0..N {
+                    (a, b, c, d, e, f, g, h, i, j) = (
+                        a.double(),
+                        b.double(),
+                        c.double(),
+                        d.double(),
+                        e.double(),
+                        f.double(),
+                        g.double(),
+                        h.double(),
+                        i.double(),
+                        j.double(),
+                    );
+                }
+                (a, b, c, d, e, f, g, h, i, j)
+            },
+            BatchSize::SmallInput,
+        );
+    });
+}
+
+/// Benchmark [`chunked_linear_combination`] across all candidate chunk sizes
+/// (1, 2, 4, 8, 16, 32, 64) on `LEN` elements.
+pub fn benchmark_chunked_linear_combination<F: Field, A: Algebra<F> + Copy, const LEN: usize>(
+    c: &mut Criterion,
+    name: &str,
+) where
+    StandardUniform: Distribution<F> + Distribution<A>,
+{
+    let mut rng = SmallRng::seed_from_u64(1);
+    let values: Vec<A> = (0..LEN).map(|_| rng.random()).collect();
+    let coeffs: Vec<F> = (0..LEN).map(|_| rng.random()).collect();
+
+    macro_rules! bench_chunk {
+        ($($chunk:literal),*) => {$(
+            c.bench_function(
+                &format!("{name} batched_lc/chunk={}, len={LEN}", $chunk),
+                |b| {
+                    b.iter(|| {
+                        chunked_linear_combination::<$chunk, A, F>(
+                            black_box(values.as_slice()),
+                            black_box(coeffs.as_slice()),
+                        )
+                    });
+                },
+            );
+        )*};
+    }
+    bench_chunk!(1, 2, 4, 8, 16, 32, 64);
 }

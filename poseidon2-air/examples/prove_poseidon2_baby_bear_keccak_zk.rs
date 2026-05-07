@@ -7,7 +7,7 @@ use p3_baby_bear::{
 use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
-use p3_fri::{HidingFriPcs, create_benchmark_fri_params_zk};
+use p3_fri::{FriParameters, HidingFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_merkle_tree::MerkleTreeHidingMmcs;
 use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
@@ -96,7 +96,7 @@ fn main() -> Result<(), impl Debug> {
         VECTOR_LEN,
     > = VectorizedPoseidon2Air::new(constants);
 
-    let fri_params = create_benchmark_fri_params_zk(challenge_mmcs);
+    let fri_params = FriParameters::new_benchmark_zk(challenge_mmcs);
 
     let trace = air.generate_vectorized_trace_rows(NUM_PERMUTATIONS, fri_params.log_blowup);
 

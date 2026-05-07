@@ -9,8 +9,8 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use p3_field::interleave::{interleave_u32, interleave_u64};
 use p3_field::op_assign_macros::{
     impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
-    impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field,
-    ring_sum,
+    impl_packed_field_div, impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field,
+    impl_sum_prod_base_field, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
@@ -268,7 +268,14 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for PackedMontyField31Neon<FP>
             1 => *self,
             2 => self.square(),
             3 => self.cube(),
-            4 => self.square().square(),
+            4 => {
+                let val = self.to_signed_vector();
+                unsafe {
+                    // Safety: `exp_4` returns values in canonical form when given values in canonical form.
+                    let res = exp_4::<FP>(val);
+                    Self::from_vector(res)
+                }
+            }
             5 => {
                 let val = self.to_signed_vector();
                 unsafe {
@@ -307,9 +314,13 @@ impl_mul_base_field!(
     (PackedMontyParameters, PMP)
 );
 impl_div_methods!(PackedMontyField31Neon, MontyField31, (FieldParameters, FP));
+impl_packed_field_div!(PackedMontyField31Neon, (FieldParameters, FP));
 impl_sum_prod_base_field!(PackedMontyField31Neon, MontyField31, (FieldParameters, FP));
 
 impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31Neon<FP> {
+    // Benchmarked on AArch64 NEON (BabyBear): chunk=16 ≈ 52ns, chunk=8 ≈ 58ns, chunk=4 ≈ 57ns.
+    const BATCHED_LC_CHUNK: usize = 16;
+
     #[inline(always)]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[MontyField31<FP>; N]) -> Self {
         general_dot_product::<_, _, _, N>(a, f)
@@ -545,6 +556,32 @@ fn cube<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
     }
 }
 
+/// Take the fourth power of the MontyField31 field elements.
+///
+/// # Safety
+/// Inputs must be signed 32-bit integers in the range [-P, P].
+/// Outputs will be a unsigned 32-bit integers in canonical form [0, ..., P).
+#[inline]
+#[must_use]
+fn exp_4<MPNeon: MontyParametersNeon>(val: int32x4_t) -> uint32x4_t {
+    // throughput: 3 cyc/vec (1.33 els/cyc)
+    // latency: 25 cyc
+
+    unsafe {
+        let mu_val = mulby_mu::<MPNeon>(val);
+
+        let val_2 = mul_with_precomp::<MPNeon, false>(val, val, mu_val);
+
+        // val_2 replaces val as both operands, so mu must be recomputed.
+        let mu_val_2 = mulby_mu::<MPNeon>(val_2);
+
+        let val_4 = mul_with_precomp::<MPNeon, true>(val_2, val_2, mu_val_2);
+
+        // Safe as mul_with_precomp::<MPNeon, true> returns integers in [0, P)
+        aarch64::vreinterpretq_u32_s32(val_4)
+    }
+}
+
 /// Take the fifth power of the MontyField31 field elements.
 ///
 /// # Safety
@@ -637,11 +674,6 @@ impl_packed_value!(
 
 unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31Neon<FP> {
     type Scalar = MontyField31<FP>;
-
-    #[inline]
-    fn packed_linear_combination<const N: usize>(coeffs: &[Self::Scalar], vecs: &[Self]) -> Self {
-        general_dot_product::<_, _, _, N>(coeffs, vecs)
-    }
 }
 
 impl_packed_field_pow_2!(
@@ -759,6 +791,22 @@ where
             dot_product_4(
                 &[lhs[0], lhs[1], lhs[2], lhs[3]],
                 &[rhs[0], rhs[1], rhs[2], rhs[3]],
+            )
+        },
+        5 => unsafe {
+            dot_product_5(
+                &[lhs[0], lhs[1], lhs[2], lhs[3], lhs[4]],
+                &[rhs[0], rhs[1], rhs[2], rhs[3], rhs[4]],
+            )
+        },
+        8 => unsafe {
+            dot_product_8(
+                &[
+                    lhs[0], lhs[1], lhs[2], lhs[3], lhs[4], lhs[5], lhs[6], lhs[7],
+                ],
+                &[
+                    rhs[0], rhs[1], rhs[2], rhs[3], rhs[4], rhs[5], rhs[6], rhs[7],
+                ],
             )
         },
         64 => {
@@ -939,6 +987,127 @@ pub(crate) fn quartic_mul_packed<FP, const WIDTH: usize>(
     res.copy_from_slice(&result.0);
 }
 
+/// Compute the elementary function `l0*r0 + l1*r1 + l2*r2 + l3*r3 + l4*r4` given ten inputs
+/// in canonical form.
+///
+/// If the inputs are not in canonical form, the result is undefined.
+#[inline]
+unsafe fn dot_product_5<P, LHS, RHS>(lhs: &[LHS; 5], rhs: &[RHS; 5]) -> PackedMontyField31Neon<P>
+where
+    P: FieldParameters + MontyParametersNeon,
+    LHS: IntoVec<P>,
+    RHS: IntoVec<P>,
+{
+    unsafe {
+        // Materialize all vectors once.
+        let lhs0 = lhs[0].into_vec();
+        let rhs0 = rhs[0].into_vec();
+        let lhs1 = lhs[1].into_vec();
+        let rhs1 = rhs[1].into_vec();
+        let lhs2 = lhs[2].into_vec();
+        let rhs2 = rhs[2].into_vec();
+        let lhs3 = lhs[3].into_vec();
+        let rhs3 = rhs[3].into_vec();
+        let lhs4 = lhs[4].into_vec();
+        let rhs4 = rhs[4].into_vec();
+
+        // Group A: accumulate terms 0-2 in wide form. Safe: 3*(P-1)^2 < 2^64.
+
+        // Low half (Lanes 0 & 1)
+        let mut sum_al =
+            aarch64::vmull_u32(aarch64::vget_low_u32(lhs0), aarch64::vget_low_u32(rhs0));
+        sum_al = aarch64::vmlal_u32(
+            sum_al,
+            aarch64::vget_low_u32(lhs1),
+            aarch64::vget_low_u32(rhs1),
+        );
+        sum_al = aarch64::vmlal_u32(
+            sum_al,
+            aarch64::vget_low_u32(lhs2),
+            aarch64::vget_low_u32(rhs2),
+        );
+
+        // High half (Lanes 2 & 3)
+        let mut sum_ah = aarch64::vmull_high_u32(lhs0, rhs0);
+        sum_ah = aarch64::vmlal_high_u32(sum_ah, lhs1, rhs1);
+        sum_ah = aarch64::vmlal_high_u32(sum_ah, lhs2, rhs2);
+
+        // Group B: accumulate terms 3-4 in wide form. Safe: 2*(P-1)^2 < 2^64.
+
+        // Low half (Lanes 0 & 1)
+        let mut sum_bl =
+            aarch64::vmull_u32(aarch64::vget_low_u32(lhs3), aarch64::vget_low_u32(rhs3));
+        sum_bl = aarch64::vmlal_u32(
+            sum_bl,
+            aarch64::vget_low_u32(lhs4),
+            aarch64::vget_low_u32(rhs4),
+        );
+
+        // High half (Lanes 2 & 3)
+        let mut sum_bh = aarch64::vmull_high_u32(lhs3, rhs3);
+        sum_bh = aarch64::vmlal_high_u32(sum_bh, lhs4, rhs4);
+
+        // Split each group into 32-bit c_lo, c_hi.
+        let c_lo_a = aarch64::vuzp1q_u32(
+            aarch64::vreinterpretq_u32_u64(sum_al),
+            aarch64::vreinterpretq_u32_u64(sum_ah),
+        );
+        let c_hi_a = aarch64::vuzp2q_u32(
+            aarch64::vreinterpretq_u32_u64(sum_al),
+            aarch64::vreinterpretq_u32_u64(sum_ah),
+        );
+        let c_lo_b = aarch64::vuzp1q_u32(
+            aarch64::vreinterpretq_u32_u64(sum_bl),
+            aarch64::vreinterpretq_u32_u64(sum_bh),
+        );
+        let c_hi_b = aarch64::vuzp2q_u32(
+            aarch64::vreinterpretq_u32_u64(sum_bl),
+            aarch64::vreinterpretq_u32_u64(sum_bh),
+        );
+
+        // Reduce group A's c_hi from [0, 2P) to [0, P). Group B's c_hi < P needs no reduction.
+        let c_hi_a_sub = aarch64::vsubq_u32(c_hi_a, P::PACKED_P);
+        let c_hi_a_red = aarch64::vminq_u32(c_hi_a, c_hi_a_sub);
+
+        // Merge the two groups with carry propagation.
+        //
+        // c_lo = c_lo_a + c_lo_b (wrapping u32 add).
+        let c_lo = aarch64::vaddq_u32(c_lo_a, c_lo_b);
+        // carry = -1 (all 1s) if c_lo wrapped, 0 otherwise.
+        let carry = aarch64::vcltq_u32(c_lo, c_lo_a);
+
+        // c_hi_sum ∈ [0, 2P-2].
+        let c_hi_sum = aarch64::vaddq_u32(c_hi_a_red, c_hi_b);
+        // Subtracting -1 adds 1; subtracting 0 is a no-op. c_hi ∈ [0, 2P-1].
+        let c_hi = aarch64::vsubq_u32(c_hi_sum, carry);
+        // Conditional subtract by P → c_hi_prime ∈ [0, P-1].
+        let c_hi_sub = aarch64::vsubq_u32(c_hi, P::PACKED_P);
+        let c_hi_prime = aarch64::vminq_u32(c_hi, c_hi_sub);
+
+        // Montgomery reduction (identical to dot_product_4).
+        //
+        // q ≡ c_lo ⋅ μ (mod 2^{32}).
+        let q = aarch64::vmulq_u32(c_lo, aarch64::vreinterpretq_u32_s32(P::PACKED_MU));
+
+        // (q⋅P)_hi = high 32 bits of q⋅P.
+        let qp_l = aarch64::vmull_u32(aarch64::vget_low_u32(q), aarch64::vget_low_u32(P::PACKED_P));
+        let qp_h = aarch64::vmull_high_u32(q, P::PACKED_P);
+        let qp_hi = aarch64::vuzp2q_u32(
+            aarch64::vreinterpretq_u32_u64(qp_l),
+            aarch64::vreinterpretq_u32_u64(qp_h),
+        );
+
+        let d = aarch64::vsubq_u32(c_hi_prime, qp_hi);
+
+        // Canonicalize d from (-P, P) to [0, P) branchlessly.
+        let underflow = aarch64::vcltq_u32(c_hi_prime, qp_hi);
+        let canonical_res = aarch64::vmlsq_u32(d, underflow, P::PACKED_P);
+
+        // Safety: The result is now in canonical form [0, P).
+        PackedMontyField31Neon::from_vector(canonical_res)
+    }
+}
+
 /// Multiplication in a quintic binomial extension field.
 #[inline]
 pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
@@ -946,10 +1115,11 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     b: &[MontyField31<FP>; WIDTH],
     res: &mut [MontyField31<FP>; WIDTH],
 ) where
-    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+    FP: FieldParameters + BinomialExtensionData<WIDTH> + MontyParametersNeon,
 {
-    // TODO: This could be optimised further with a custom NEON implementation.
     assert_eq!(WIDTH, 5);
+
+    // Precompute w⋅b once (base-field multiply by the binomial constant).
     let packed_b = PackedMontyField31Neon([b[1], b[2], b[3], b[4]]);
     let w_b = FP::mul_w(packed_b).0;
     let w_b1 = w_b[0];
@@ -962,13 +1132,7 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
     // Square term = a0*b2 + a1*b1 + a2*b0 + w(a3*b4 + a4*b3)
     // Cubic term = a0*b3 + a1*b2 + a2*b1 + a3*b0 + w*a4*b4
     // Quartic term = a0*b4 + a1*b3 + a2*b2 + a3*b1 + a4*b0
-    let lhs: [PackedMontyField31Neon<FP>; 5] = [
-        a[0].into(),
-        a[1].into(),
-        a[2].into(),
-        a[3].into(),
-        a[4].into(),
-    ];
+    let lhs = [a[0], a[1], a[2], a[3], a[4]];
     let rhs = [
         PackedMontyField31Neon([b[0], b[1], b[2], b[3]]),
         PackedMontyField31Neon([w_b4, b[0], b[1], b[2]]),
@@ -977,9 +1141,12 @@ pub(crate) fn quintic_mul_packed<FP, const WIDTH: usize>(
         PackedMontyField31Neon([w_b1, w_b2, w_b3, w_b4]),
     ];
 
-    let dot = PackedMontyField31Neon::dot_product(&lhs, &rhs).0;
+    // Compute c0-c3 using fused 5-term wide accumulation with a single Montgomery reduction.
+    let dot = unsafe { dot_product_5(&lhs, &rhs) }.0;
 
     res[..4].copy_from_slice(&dot);
+
+    // Compute c4 using scalar wide accumulation (runs on integer ALU in parallel with NEON).
     res[4] =
         MontyField31::dot_product::<5>(a[..].try_into().unwrap(), &[b[4], b[3], b[2], b[1], b[0]]);
 }
@@ -1025,6 +1192,156 @@ pub(crate) fn quintic_mul_packed_trinomial<FP: FieldParameters>(
     );
 }
 
+/// Compute the 8-term dot product `Σ(i=0..7) lhs[i] * rhs[i]` given sixteen inputs
+/// in canonical form.
+///
+/// Accumulates two independent groups of 4 in wide (u64) form, merges their 32-bit
+/// halves with carry propagation, then performs a single Montgomery reduction.
+/// This saves one full Montgomery reduction + one modular add compared to
+/// `dot_product_4 + dot_product_4 + add`.
+///
+/// If the inputs are not in canonical form, the result is undefined.
+#[inline]
+unsafe fn dot_product_8<P, LHS, RHS>(lhs: &[LHS; 8], rhs: &[RHS; 8]) -> PackedMontyField31Neon<P>
+where
+    P: FieldParameters + MontyParametersNeon,
+    LHS: IntoVec<P>,
+    RHS: IntoVec<P>,
+{
+    unsafe {
+        // Materialize all vectors once.
+        let lhs0 = lhs[0].into_vec();
+        let rhs0 = rhs[0].into_vec();
+        let lhs1 = lhs[1].into_vec();
+        let rhs1 = rhs[1].into_vec();
+        let lhs2 = lhs[2].into_vec();
+        let rhs2 = rhs[2].into_vec();
+        let lhs3 = lhs[3].into_vec();
+        let rhs3 = rhs[3].into_vec();
+        let lhs4 = lhs[4].into_vec();
+        let rhs4 = rhs[4].into_vec();
+        let lhs5 = lhs[5].into_vec();
+        let rhs5 = rhs[5].into_vec();
+        let lhs6 = lhs[6].into_vec();
+        let rhs6 = rhs[6].into_vec();
+        let lhs7 = lhs[7].into_vec();
+        let rhs7 = rhs[7].into_vec();
+
+        // Group A: accumulate terms 0-3 in wide form. Safe: 4*(P-1)^2 < 2^64.
+
+        // Low half (Lanes 0 & 1)
+        let mut sum_al =
+            aarch64::vmull_u32(aarch64::vget_low_u32(lhs0), aarch64::vget_low_u32(rhs0));
+        sum_al = aarch64::vmlal_u32(
+            sum_al,
+            aarch64::vget_low_u32(lhs1),
+            aarch64::vget_low_u32(rhs1),
+        );
+        sum_al = aarch64::vmlal_u32(
+            sum_al,
+            aarch64::vget_low_u32(lhs2),
+            aarch64::vget_low_u32(rhs2),
+        );
+        sum_al = aarch64::vmlal_u32(
+            sum_al,
+            aarch64::vget_low_u32(lhs3),
+            aarch64::vget_low_u32(rhs3),
+        );
+
+        // High half (Lanes 2 & 3)
+        let mut sum_ah = aarch64::vmull_high_u32(lhs0, rhs0);
+        sum_ah = aarch64::vmlal_high_u32(sum_ah, lhs1, rhs1);
+        sum_ah = aarch64::vmlal_high_u32(sum_ah, lhs2, rhs2);
+        sum_ah = aarch64::vmlal_high_u32(sum_ah, lhs3, rhs3);
+
+        // Group B: accumulate terms 4-7 in wide form.
+
+        // Low half (Lanes 0 & 1)
+        let mut sum_bl =
+            aarch64::vmull_u32(aarch64::vget_low_u32(lhs4), aarch64::vget_low_u32(rhs4));
+        sum_bl = aarch64::vmlal_u32(
+            sum_bl,
+            aarch64::vget_low_u32(lhs5),
+            aarch64::vget_low_u32(rhs5),
+        );
+        sum_bl = aarch64::vmlal_u32(
+            sum_bl,
+            aarch64::vget_low_u32(lhs6),
+            aarch64::vget_low_u32(rhs6),
+        );
+        sum_bl = aarch64::vmlal_u32(
+            sum_bl,
+            aarch64::vget_low_u32(lhs7),
+            aarch64::vget_low_u32(rhs7),
+        );
+
+        // High half (Lanes 2 & 3)
+        let mut sum_bh = aarch64::vmull_high_u32(lhs4, rhs4);
+        sum_bh = aarch64::vmlal_high_u32(sum_bh, lhs5, rhs5);
+        sum_bh = aarch64::vmlal_high_u32(sum_bh, lhs6, rhs6);
+        sum_bh = aarch64::vmlal_high_u32(sum_bh, lhs7, rhs7);
+
+        // Split each group into 32-bit c_lo, c_hi.
+        let c_lo_a = aarch64::vuzp1q_u32(
+            aarch64::vreinterpretq_u32_u64(sum_al),
+            aarch64::vreinterpretq_u32_u64(sum_ah),
+        );
+        let c_hi_a = aarch64::vuzp2q_u32(
+            aarch64::vreinterpretq_u32_u64(sum_al),
+            aarch64::vreinterpretq_u32_u64(sum_ah),
+        );
+        let c_lo_b = aarch64::vuzp1q_u32(
+            aarch64::vreinterpretq_u32_u64(sum_bl),
+            aarch64::vreinterpretq_u32_u64(sum_bh),
+        );
+        let c_hi_b = aarch64::vuzp2q_u32(
+            aarch64::vreinterpretq_u32_u64(sum_bl),
+            aarch64::vreinterpretq_u32_u64(sum_bh),
+        );
+
+        // Reduce each c_hi from [0, 2P) to [0, P).
+        let c_hi_a_sub = aarch64::vsubq_u32(c_hi_a, P::PACKED_P);
+        let c_hi_a_red = aarch64::vminq_u32(c_hi_a, c_hi_a_sub);
+        let c_hi_b_sub = aarch64::vsubq_u32(c_hi_b, P::PACKED_P);
+        let c_hi_b_red = aarch64::vminq_u32(c_hi_b, c_hi_b_sub);
+
+        // Merge the two groups: c_lo = c_lo_a + c_lo_b (wrapping),
+        // c_hi = c_hi_a' + c_hi_b' + carry.
+        let c_lo = aarch64::vaddq_u32(c_lo_a, c_lo_b);
+        // carry = -1 (all 1s) if c_lo wrapped, 0 otherwise.
+        let carry = aarch64::vcltq_u32(c_lo, c_lo_a);
+        let c_hi_sum = aarch64::vaddq_u32(c_hi_a_red, c_hi_b_red);
+        // Subtracting -1 adds 1; subtracting 0 is a no-op.
+        let c_hi = aarch64::vsubq_u32(c_hi_sum, carry);
+
+        // c_hi ∈ [0, 2P): c_hi_a' + c_hi_b' < 2P, carry adds at most 1.
+        // Reduce to [0, P) with a single conditional subtraction.
+        let c_hi_sub = aarch64::vsubq_u32(c_hi, P::PACKED_P);
+        let c_hi_prime = aarch64::vminq_u32(c_hi, c_hi_sub);
+
+        // Montgomery reduction (identical to dot_product_4).
+        // q ≡ c_lo ⋅ μ (mod 2^{32}).
+        let q = aarch64::vmulq_u32(c_lo, aarch64::vreinterpretq_u32_s32(P::PACKED_MU));
+
+        // (q⋅P)_hi = high 32 bits of q⋅P.
+        let qp_l = aarch64::vmull_u32(aarch64::vget_low_u32(q), aarch64::vget_low_u32(P::PACKED_P));
+        let qp_h = aarch64::vmull_high_u32(q, P::PACKED_P);
+        let qp_hi = aarch64::vuzp2q_u32(
+            aarch64::vreinterpretq_u32_u64(qp_l),
+            aarch64::vreinterpretq_u32_u64(qp_h),
+        );
+
+        let d = aarch64::vsubq_u32(c_hi_prime, qp_hi);
+
+        // Canonicalize d from (-P, P) to [0, P) branchlessly.
+        let underflow = aarch64::vcltq_u32(c_hi_prime, qp_hi);
+        let canonical_res = aarch64::vmlsq_u32(d, underflow, P::PACKED_P);
+
+        // Safety: The result is now in canonical form [0, P).
+        PackedMontyField31Neon::from_vector(canonical_res)
+    }
+}
+
 /// Multiplication in an octic binomial extension field.
 #[inline]
 pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
@@ -1032,9 +1349,8 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
     b: &[MontyField31<FP>; WIDTH],
     res: &mut [MontyField31<FP>; WIDTH],
 ) where
-    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+    FP: FieldParameters + BinomialExtensionData<WIDTH> + MontyParametersNeon,
 {
-    // TODO: This could be optimised further with a custom NEON implementation.
     assert_eq!(WIDTH, 8);
     let packed_b_lo = PackedMontyField31Neon([b[0], b[1], b[2], b[3]]);
     let packed_b_hi = PackedMontyField31Neon([b[4], b[5], b[6], b[7]]);
@@ -1049,16 +1365,7 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
     // Quintic coefficient = a0*b5 + ... + a5*b0 + w(a6*b7 + ... + a7*b6)
     // Sextic coefficient = a0*b6 + ... + a6*b0 + w*a7*b7
     // Final coefficient = a0*b7 + ... + a7*b0
-    let lhs: [PackedMontyField31Neon<FP>; 8] = [
-        a[0].into(),
-        a[1].into(),
-        a[2].into(),
-        a[3].into(),
-        a[4].into(),
-        a[5].into(),
-        a[6].into(),
-        a[7].into(),
-    ];
+    let lhs = [a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]];
     let rhs_0 = [
         PackedMontyField31Neon([b[0], b[1], b[2], b[3]]),
         PackedMontyField31Neon([w_b_hi[3], b[0], b[1], b[2]]),
@@ -1080,8 +1387,10 @@ pub(crate) fn octic_mul_packed<FP, const WIDTH: usize>(
         PackedMontyField31Neon([w_b_hi[1], w_b_hi[2], w_b_hi[3], b[0]]),
     ];
 
-    let dot_0 = PackedMontyField31Neon::dot_product(&lhs, &rhs_0).0;
-    let dot_1 = PackedMontyField31Neon::dot_product(&lhs, &rhs_1).0;
+    // Compute c[0..4] and c[4..8] using fused 8-term dot products
+    // with a single Montgomery reduction per group.
+    let dot_0 = unsafe { dot_product_8(&lhs, &rhs_0) }.0;
+    let dot_1 = unsafe { dot_product_8(&lhs, &rhs_1) }.0;
 
     res[..4].copy_from_slice(&dot_0);
     res[4..].copy_from_slice(&dot_1);

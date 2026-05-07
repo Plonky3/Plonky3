@@ -1,65 +1,11 @@
 use alloc::vec::Vec;
 
-use p3_air::{AirBuilder, ExtensionBuilder, RowWindow};
-use p3_field::{Algebra, BasedVectorSpace, PackedField, PrimeCharacteristicRing};
+use p3_air::{AirBuilder, ExtensionBuilder, PeriodicAirBuilder, RowWindow};
+use p3_field::{Algebra, BasedVectorSpace};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
 
 use crate::{PackedChallenge, PackedVal, StarkGenericConfig, Val};
-
-/// Batch size for constraint linear-combination chunks in [`finalize_constraints`].
-const CONSTRAINT_BATCH: usize = 8;
-
-/// Batched linear combination of packed extension field values with EF coefficients.
-///
-/// Extension-field analogue of [`PackedField::packed_linear_combination`]. Processes
-/// `coeffs` and `values` in chunks of [`CONSTRAINT_BATCH`], then handles the remainder.
-#[inline]
-fn batched_ext_linear_combination<PE, EF>(coeffs: &[EF], values: &[PE]) -> PE
-where
-    EF: p3_field::Field,
-    PE: PrimeCharacteristicRing + Algebra<EF> + Copy,
-{
-    debug_assert_eq!(coeffs.len(), values.len());
-
-    let len = coeffs.len();
-    let mut acc = PE::ZERO;
-    let mut start = 0;
-    while start + CONSTRAINT_BATCH <= len {
-        let batch: [PE; CONSTRAINT_BATCH] =
-            core::array::from_fn(|i| values[start + i] * coeffs[start + i]);
-        acc += PE::sum_array::<CONSTRAINT_BATCH>(&batch);
-        start += CONSTRAINT_BATCH;
-    }
-    for (&coeff, &val) in coeffs[start..].iter().zip(&values[start..]) {
-        acc += val * coeff;
-    }
-    acc
-}
-
-/// Batched linear combination of packed base field values with F coefficients.
-///
-/// Wraps [`PackedField::packed_linear_combination`] with batched chunking
-/// and remainder handling, mirroring [`batched_ext_linear_combination`].
-#[inline]
-fn batched_base_linear_combination<P: PackedField>(coeffs: &[P::Scalar], values: &[P]) -> P {
-    debug_assert_eq!(coeffs.len(), values.len());
-
-    let len = coeffs.len();
-    let mut acc = P::ZERO;
-    let mut start = 0;
-    while start + CONSTRAINT_BATCH <= len {
-        acc += P::packed_linear_combination::<CONSTRAINT_BATCH>(
-            &coeffs[start..start + CONSTRAINT_BATCH],
-            &values[start..start + CONSTRAINT_BATCH],
-        );
-        start += CONSTRAINT_BATCH;
-    }
-    for (&coeff, &val) in coeffs[start..].iter().zip(&values[start..]) {
-        acc += val * coeff;
-    }
-    acc
-}
 
 /// Packed constraint folder for SIMD-optimized prover evaluation.
 ///
@@ -67,7 +13,7 @@ fn batched_base_linear_combination<P: PackedField>(coeffs: &[P::Scalar], values:
 ///
 /// Collects constraints during `air.eval()` into separate base/ext vectors, then
 /// combines them in [`Self::finalize_constraints`] using decomposed alpha powers and
-/// `packed_linear_combination` for efficient SIMD accumulation.
+/// `batched_linear_combination` for efficient SIMD accumulation.
 #[derive(Debug)]
 pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     /// The [`RowMajorMatrixView`] containing rows on which the constraint polynomial is evaluated.
@@ -77,13 +23,18 @@ pub struct ProverConstraintFolder<'a, SC: StarkGenericConfig> {
     pub preprocessed: RowMajorMatrixView<'a, PackedVal<SC>>,
     /// Pre-built window over the preprocessed columns.
     pub preprocessed_window: RowWindow<'a, PackedVal<SC>>,
+    /// Periodic column values at the current row(s), one packed value per column.
+    pub periodic_values: &'a [PackedVal<SC>],
     /// Public inputs to the [AIR](`p3_air::Air`) implementation.
     pub public_values: &'a [Val<SC>],
-    /// Evaluations of the Selector polynomial for the first row of the trace
+    /// Evaluations of the first-row selector polynomial.
+    /// Non-zero only on the first trace row.
     pub is_first_row: PackedVal<SC>,
-    /// Evaluations of the Selector polynomial for the last row of the trace
+    /// Evaluations of the last-row selector polynomial.
+    /// Non-zero only on the last trace row.
     pub is_last_row: PackedVal<SC>,
-    /// Evaluations of the Selector polynomial for rows where transition constraints should be applied
+    /// Evaluations of the transition selector polynomial.
+    /// Zero only on the last trace row.
     pub is_transition: PackedVal<SC>,
     /// Base-field alpha powers, reordered to match base constraint emission order.
     /// `base_alpha_powers[d][j]` = d-th basis coefficient of alpha power for j-th base constraint.
@@ -113,13 +64,18 @@ pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
     pub preprocessed: ViewPair<'a, SC::Challenge>,
     /// Pre-built window over the preprocessed columns.
     pub preprocessed_window: RowWindow<'a, SC::Challenge>,
+    /// Periodic column values at the opened point.
+    pub periodic_values: &'a [SC::Challenge],
     /// Public values that are inputs to the computation
     pub public_values: &'a [Val<SC>],
-    /// Evaluations of the Selector polynomial for the first row of the trace
+    /// Evaluations of the first-row selector polynomial.
+    /// Non-zero only on the first trace row.
     pub is_first_row: SC::Challenge,
-    /// Evaluations of the Selector polynomial for the last row of the trace
+    /// Evaluations of the last-row selector polynomial.
+    /// Non-zero only on the last trace row.
     pub is_last_row: SC::Challenge,
-    /// Evaluations of the Selector polynomial for rows where transition constraints should be applied
+    /// Evaluations of the transition selector polynomial.
+    /// Zero only on the last trace row.
     pub is_transition: SC::Challenge,
     /// Single challenge value used for constraint combination
     pub alpha: SC::Challenge,
@@ -130,10 +86,9 @@ pub struct VerifierConstraintFolder<'a, SC: StarkGenericConfig> {
 impl<SC: StarkGenericConfig> ProverConstraintFolder<'_, SC> {
     /// Combine all collected constraints with their pre-computed alpha powers.
     ///
-    /// Base constraints use `batched_base_linear_combination` per basis dimension,
+    /// Base constraints use [`Algebra::batched_linear_combination`] per basis dimension,
     /// decomposing the extension-field multiply into D base-field SIMD dot products.
-    /// Extension constraints use `batched_ext_linear_combination` with scalar EF
-    /// coefficients. Both process in chunks of `CONSTRAINT_BATCH`.
+    /// Extension constraints use the same method with scalar EF coefficients.
     ///
     /// We keep base and extension constraints separate because the base constraints can
     /// stay in the base field and use packed SIMD arithmetic. Decomposing EF powers of
@@ -146,9 +101,12 @@ impl<SC: StarkGenericConfig> ProverConstraintFolder<'_, SC> {
         let base = &self.base_constraints;
         let base_powers = self.base_alpha_powers;
         let acc = PackedChallenge::<SC>::from_basis_coefficients_fn(|d| {
-            batched_base_linear_combination(&base_powers[d], base)
+            PackedVal::<SC>::batched_linear_combination(base, &base_powers[d])
         });
-        acc + batched_ext_linear_combination(self.ext_alpha_powers, &self.ext_constraints)
+        acc + PackedChallenge::<SC>::batched_linear_combination(
+            &self.ext_constraints,
+            self.ext_alpha_powers,
+        )
     }
 }
 
@@ -218,6 +176,15 @@ impl<SC: StarkGenericConfig> ExtensionBuilder for ProverConstraintFolder<'_, SC>
     }
 }
 
+impl<SC: StarkGenericConfig> PeriodicAirBuilder for ProverConstraintFolder<'_, SC> {
+    type PeriodicVar = PackedVal<SC>;
+
+    #[inline]
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.periodic_values
+    }
+}
+
 impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC> {
     type F = Val<SC>;
     type Expr = SC::Challenge;
@@ -254,5 +221,14 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
 
     fn public_values(&self) -> &[Self::PublicVar] {
         self.public_values
+    }
+}
+
+impl<SC: StarkGenericConfig> PeriodicAirBuilder for VerifierConstraintFolder<'_, SC> {
+    type PeriodicVar = SC::Challenge;
+
+    #[inline]
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.periodic_values
     }
 }

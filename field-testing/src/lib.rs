@@ -21,15 +21,28 @@ use num_bigint::BigUint;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
     ExtensionField, Field, PackedValue, PrimeCharacteristicRing, PrimeField32, PrimeField64,
-    TwoAdicField,
+    TwoAdicField, batch_multiplicative_inverse,
 };
 use p3_util::iter_array_chunks_padded;
 pub use packedfield_testing::*;
+use proptest::prelude::*;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+
+/// Generate a random field element from a u64 seed, for use in proptest strategies.
+fn arb_field<F>() -> impl Strategy<Value = F>
+where
+    F: core::fmt::Debug + 'static,
+    StandardUniform: Distribution<F>,
+{
+    any::<u64>().prop_map(|seed| {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        rng.random()
+    })
+}
 
 #[allow(clippy::eq_op)]
 pub fn test_ring_with_eq<R: PrimeCharacteristicRing + Copy + Eq>(zeros: &[R], ones: &[R])
@@ -222,6 +235,17 @@ where
 
     test_binary_ops(zeros, ones, x, y, z);
 
+    // Edge case tests with special values
+    for &a in &[R::ZERO, R::ONE, R::TWO, R::NEG_ONE] {
+        for &b in &[R::ZERO, R::ONE, R::TWO, R::NEG_ONE] {
+            assert_eq!(a + b, b + a, "commutativity with special values");
+            assert_eq!(a * b, b * a, "commutativity with special values");
+        }
+        assert_eq!(a * a, a.square(), "square with special value");
+        assert_eq!(a * a * a, a.cube(), "cube with special value");
+        assert_eq!(a.halve().double(), a, "halve/double with special value");
+    }
+
     // Test that Product of empty iterator returns ONE (the multiplicative identity)
     let empty: [R; 0] = [];
     let product_result: R = empty.into_iter().product();
@@ -230,23 +254,6 @@ where
         R::ONE,
         "Product of empty iterator should return ONE, not ZERO"
     );
-}
-
-pub fn test_inv_div<F: Field>()
-where
-    StandardUniform: Distribution<F>,
-{
-    let mut rng = SmallRng::seed_from_u64(1);
-    let x = rng.random::<F>();
-    let y = rng.random::<F>();
-    let z = rng.random::<F>();
-    assert_eq!(F::TWO.inverse(), F::ONE.halve());
-    assert_eq!(x * x.inverse(), F::ONE);
-    assert_eq!(x.inverse() * x, F::ONE);
-    assert_eq!(x.square().inverse(), x.inverse().square());
-    assert_eq!((x / y) * y, x);
-    assert_eq!(x / (y * z), (x / y) / z);
-    assert_eq!((x * y) / z, x * (y / z));
 }
 
 pub fn test_mul_2exp_u64<R: PrimeCharacteristicRing + Eq>()
@@ -324,6 +331,11 @@ where
 {
     assert_eq!(None, F::ZERO.try_inverse());
     assert_eq!(Some(F::ONE), F::ONE.try_inverse());
+    assert_eq!(F::NEG_ONE.inverse(), F::NEG_ONE, "-1 is its own inverse");
+    let two_inv = F::TWO
+        .try_inverse()
+        .expect("2 must be invertible in this field (test_inverse assumes characteristic != 2)");
+    assert_eq!(two_inv, F::ONE.halve(), "inverse of 2 == halve(1)");
     let mut rng = SmallRng::seed_from_u64(1);
     for _ in 0..1000 {
         let x = rng.random::<F>();
@@ -331,6 +343,51 @@ where
             let z = x.inverse();
             assert_ne!(x, z);
             assert_eq!(x * z, F::ONE);
+        }
+    }
+}
+
+/// Verify [`batch_multiplicative_inverse`] against the naive per-element inverse
+/// across a range of input lengths.
+///
+/// Sizes are chosen to exercise:
+/// - the empty input,
+/// - lengths below the packing width (tail-only path),
+/// - lengths whose remainder mod the packing width is 1, 2, or 3
+///   (mixed prefix-packed + tail-serial path),
+/// - lengths that straddle the internal `par_chunks` boundary (1024)
+///   so the trailing chunk receives a non-aligned tail.
+pub fn test_batch_multiplicative_inverse<F: Field>()
+where
+    StandardUniform: Distribution<F>,
+{
+    let mut rng = SmallRng::seed_from_u64(0xBA7C);
+
+    let lengths = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 15, 16, 17, 63, 64, 65, 1023, 1024, 1025, 1027, 2049, 4099,
+    ];
+
+    for &n in &lengths {
+        let xs: Vec<F> = (0..n)
+            .map(|_| {
+                // Reject zero so every input is invertible.
+                let mut x = rng.random::<F>();
+                while x.is_zero() {
+                    x = rng.random::<F>();
+                }
+                x
+            })
+            .collect();
+
+        let got = batch_multiplicative_inverse(&xs);
+        assert_eq!(got.len(), n, "result length mismatch for n = {n}");
+
+        for (i, (x, inv)) in xs.iter().zip(&got).enumerate() {
+            assert_eq!(
+                *x * *inv,
+                F::ONE,
+                "x[{i}] * inv[{i}] != 1 for input length {n}"
+            );
         }
     }
 }
@@ -881,6 +938,90 @@ where
     assert_eq!(combined_u64s, expected_combined_u64s);
 }
 
+/// Test ring axioms with 256 random (x, y, z) triplets via proptest.
+///
+/// Tests commutativity, associativity, distributivity, negation,
+/// subtraction identities, square/cube, double/halve, and
+/// multiplication by zero and negative one.
+pub fn test_ring_axioms_proptest<R>()
+where
+    R: PrimeCharacteristicRing + Copy + Eq + core::fmt::Debug + 'static,
+    StandardUniform: Distribution<R>,
+{
+    let config = ProptestConfig::with_cases(256);
+    proptest!(config, |(x in arb_field::<R>(), y in arb_field::<R>(), z in arb_field::<R>())| {
+        // Commutativity
+        prop_assert_eq!(x + y, y + x, "addition commutativity");
+        prop_assert_eq!(x * y, y * x, "multiplication commutativity");
+
+        // Associativity
+        prop_assert_eq!(x + (y + z), (x + y) + z, "addition associativity");
+        prop_assert_eq!(x * (y * z), (x * y) * z, "multiplication associativity");
+
+        // Distributivity
+        prop_assert_eq!(x * (y + z), x * y + x * z, "left distributivity");
+        prop_assert_eq!((x + y) * z, x * z + y * z, "right distributivity");
+
+        // Negation
+        prop_assert_eq!(x + (-x), R::ZERO, "additive inverse");
+        prop_assert_eq!(-(-x), x, "double negation");
+
+        // Subtraction identities
+        prop_assert_eq!(x - (y - z), (x - y) + z, "sub-sub identity");
+        prop_assert_eq!(x - (y + z), (x - y) - z, "sub-add identity");
+
+        // Square and cube
+        prop_assert_eq!(x * x, x.square(), "square");
+        prop_assert_eq!(x * x * x, x.cube(), "cube");
+
+        // Double and halve
+        prop_assert_eq!(x.double(), x + x, "double");
+        prop_assert_eq!(x.halve().double(), x, "halve roundtrip");
+
+        // Multiplication by zero and negative one
+        prop_assert_eq!(x * R::ZERO, R::ZERO, "x * 0 == 0");
+        prop_assert_eq!(R::NEG_ONE * x, -x, "-1 * x == -x");
+    });
+}
+
+/// Test field axioms (inverse, division) with deterministic edge cases
+/// and 256 random non-zero (x, y, z) triplets via proptest.
+pub fn test_field_axioms_proptest<F>()
+where
+    F: Field + core::fmt::Debug + 'static,
+    StandardUniform: Distribution<F>,
+{
+    // Deterministic edge cases
+    assert_eq!(F::TWO.inverse(), F::ONE.halve());
+    assert_eq!(F::NEG_ONE.inverse(), F::NEG_ONE, "-1 is its own inverse");
+    assert_eq!(
+        F::GENERATOR.inverse() * F::GENERATOR,
+        F::ONE,
+        "generator inverse roundtrip"
+    );
+
+    // Proptest: 256 random triplets, all non-zero
+    let config = ProptestConfig::with_cases(256);
+    proptest!(config, |(x in arb_field::<F>(), y in arb_field::<F>(), z in arb_field::<F>())| {
+        // Skip if any element is zero
+        if x.is_zero() || y.is_zero() || z.is_zero() {
+            return Ok(());
+        }
+
+        // Inverse properties
+        prop_assert_eq!(x * x.inverse(), F::ONE, "x * x^-1 == 1");
+        prop_assert_eq!(x.inverse().inverse(), x, "double inverse");
+        prop_assert_eq!(x.square().inverse(), x.inverse().square(), "square-inverse commutativity");
+
+        // Division roundtrip
+        prop_assert_eq!((x / y) * y, x, "division roundtrip");
+
+        // Division associativity
+        prop_assert_eq!(x / (y * z), (x / y) / z, "division-multiplication associativity");
+        prop_assert_eq!((x * y) / z, x * (y / z), "multiplication-division associativity");
+    });
+}
+
 #[macro_export]
 macro_rules! test_ring_with_eq {
     ($ring:ty, $zeros: expr, $ones: expr) => {
@@ -910,12 +1051,12 @@ macro_rules! test_field {
 
         mod field_tests {
             #[test]
-            fn test_inv_div() {
-                $crate::test_inv_div::<$field>();
-            }
-            #[test]
             fn test_inverse() {
                 $crate::test_inverse::<$field>();
+            }
+            #[test]
+            fn test_batch_multiplicative_inverse() {
+                $crate::test_batch_multiplicative_inverse::<$field>();
             }
             #[test]
             fn test_generator() {
@@ -928,6 +1069,14 @@ macro_rules! test_field {
             #[test]
             fn test_powers_collect() {
                 $crate::test_powers_collect::<$field>();
+            }
+            #[test]
+            fn test_ring_axioms_proptest() {
+                $crate::test_ring_axioms_proptest::<$field>();
+            }
+            #[test]
+            fn test_field_axioms_proptest() {
+                $crate::test_field_axioms_proptest::<$field>();
             }
         }
 
@@ -1209,13 +1358,8 @@ macro_rules! test_frobenius {
             }
 
             #[test]
-            fn test_frobenius_multiplicative() {
-                $crate::test_frobenius_multiplicative::<$field, $ef>();
-            }
-
-            #[test]
-            fn test_frobenius_additive() {
-                $crate::test_frobenius_additive::<$field, $ef>();
+            fn test_frobenius_proptest() {
+                $crate::test_frobenius_proptest::<$field, $ef>();
             }
         }
     };

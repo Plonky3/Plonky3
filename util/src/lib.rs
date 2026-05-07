@@ -36,6 +36,32 @@ pub const fn log2_ceil_u64(n: u64) -> u64 {
     (u64::BITS - n.saturating_sub(1).leading_zeros()) as u64
 }
 
+/// Returns `2^log_degree` if it can be represented by `usize`.
+#[must_use]
+pub const fn checked_pow2(log_degree: usize) -> Option<usize> {
+    if log_degree < usize::BITS as usize {
+        Some(1usize << log_degree)
+    } else {
+        None
+    }
+}
+
+/// Adds two log-sizes and computes the resulting power of two.
+///
+/// Returns:
+/// - `(a + b, 2^(a + b))` when the sum fits in a `usize` shift,
+/// - `None` if the addition overflows or the resulting power exceeds the representable range.
+#[must_use]
+pub const fn checked_log_size_sum(a: usize, b: usize) -> Option<(usize, usize)> {
+    match a.checked_add(b) {
+        Some(sum) => match checked_pow2(sum) {
+            Some(size) => Some((sum, size)),
+            None => None,
+        },
+        None => None,
+    }
+}
+
 /// Computes `log_2(n)`
 ///
 /// # Panics
@@ -51,6 +77,91 @@ pub const fn log2_strict_usize(n: usize) -> usize {
         assume(n == 1 << res);
     }
     res as usize
+}
+
+/// Precomputed table of all powers of 3 that fit in a `u64`.
+///
+/// The maximum power is `3^40 = 12_157_665_459_056_928_801`.
+///
+/// We use `u64` instead of `usize` so the table compiles safely on 32-bit targets,
+/// where `3^40` would overflow a 32-bit `usize`.
+const POWERS_OF_3: [u64; 41] = {
+    // Start with 3^0 = 1.
+    let mut table = [0u64; 41];
+    table[0] = 1;
+
+    // Fill iteratively: each entry is 3 times the previous one.
+    let mut i = 1;
+    while i < 41 {
+        table[i] = table[i - 1] * 3;
+        i += 1;
+    }
+    table
+};
+
+/// Maps a bit-position (i.e. `floor(log2(n))`) to the corresponding base-3 exponent.
+///
+/// Because `3^k` grows faster than `2^k`, every power of 3 has a unique highest set
+/// bit position. This lets us use `leading_zeros()` to jump straight to the answer
+/// in O(1) without any loop or binary search.
+///
+/// Entries that don't correspond to any power of 3 are unused (left as 0).
+const LOG2_TO_EXP: [u8; 64] = {
+    // Initialize every slot to 0.
+    let mut table = [0u8; 64];
+
+    // For each power of 3, record which log2 bucket it falls into.
+    let mut i = 0;
+    while i < 41 {
+        // Compute floor(log2(3^i)) via the highest set bit.
+        let log2 = (u64::BITS - 1 - POWERS_OF_3[i].leading_zeros()) as usize;
+
+        // Store the exponent i at the corresponding bit-position.
+        table[log2] = i as u8;
+        i += 1;
+    }
+    table
+};
+
+/// Computes the strict base-3 logarithm of `n`.
+///
+/// Returns `k` such that `3^k == n`. Panics if `n` is not a power of 3.
+///
+/// This is the base-3 analogue of [`log2_strict_usize`].
+///
+/// # Arguments
+///
+/// * `n` - A positive integer that must be a power of 3 (i.e., 1, 3, 9, 27, 81, ...).
+///
+/// # Returns
+///
+/// The exponent `k` where `3^k == n`.
+///
+/// # Panics
+///
+/// Panics if:
+/// - `n` is zero
+/// - `n` is not a power of 3
+#[must_use]
+#[inline]
+pub const fn log3_strict_usize(n: usize) -> usize {
+    // Zero has no logarithm - check explicitly for a clear error message.
+    assert!(n != 0, "log3_strict_usize: input must be non-zero");
+
+    // Instantly find the candidate exponent via the highest set bit.
+    //
+    // Because every power of 3 occupies a unique log2 bucket, this single
+    // lookup gives us the answer in O(1) with zero branches.
+    let log2 = (usize::BITS - 1 - n.leading_zeros()) as usize;
+    let res = LOG2_TO_EXP[log2] as usize;
+
+    // Verify the result: catches non-powers of 3 in a single O(1) check.
+    assert!(
+        POWERS_OF_3[res] as usize == n,
+        "log3_strict_usize: input is not a power of 3"
+    );
+
+    res
 }
 
 /// Returns `[0, ..., N - 1]`.
@@ -774,6 +885,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
+    use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
@@ -935,6 +1047,97 @@ mod tests {
     }
 
     #[test]
+    fn test_checked_pow2() {
+        // 2^0 = 1, the smallest valid exponent.
+        assert_eq!(checked_pow2(0), Some(1));
+
+        // 2^1 = 2.
+        assert_eq!(checked_pow2(1), Some(2));
+
+        // 2^5 = 32, a typical small power.
+        assert_eq!(checked_pow2(5), Some(32));
+
+        // 2^10 = 1024, commonly used as a domain size in FRI.
+        assert_eq!(checked_pow2(10), Some(1024));
+
+        // 2^20 = 1_048_576, a realistic large trace length.
+        assert_eq!(checked_pow2(20), Some(1_048_576));
+
+        // Largest representable power: 2^(BITS - 1).
+        // On a 64-bit platform this is 2^63 = 0x8000_0000_0000_0000.
+        let max_exp = usize::BITS as usize - 1;
+        assert_eq!(checked_pow2(max_exp), Some(1usize << max_exp));
+
+        // Exponent equal to the bit width would shift 1 out of range.
+        //
+        //     1_usize << 64  (on 64-bit)  →  overflow
+        //
+        // Must return `None`.
+        assert_eq!(checked_pow2(usize::BITS as usize), None);
+
+        // One past the maximum: also out of range.
+        assert_eq!(checked_pow2(usize::BITS as usize + 1), None);
+
+        // Extreme exponent: usize::MAX is astronomically beyond
+        // representable range — must return `None`.
+        assert_eq!(checked_pow2(usize::MAX), None);
+    }
+
+    #[test]
+    fn test_checked_log_size_sum() {
+        // Both zero: 0 + 0 = 0, 2^0 = 1.
+        assert_eq!(checked_log_size_sum(0, 0), Some((0, 1)));
+
+        // Identity cases: adding zero to either side is a no-op.
+        assert_eq!(checked_log_size_sum(5, 0), Some((5, 32)));
+        assert_eq!(checked_log_size_sum(0, 10), Some((10, 1024)));
+
+        // Typical FRI scenario: degree_bits=10, log_quotient_chunks=2.
+        //
+        //     10 + 2 = 12,  2^12 = 4096
+        assert_eq!(checked_log_size_sum(10, 2), Some((12, 4096)));
+
+        // Commutativity: order of operands must not matter.
+        assert_eq!(checked_log_size_sum(2, 10), Some((12, 4096)));
+
+        // Large realistic case: degree_bits=20, log_chunks=3.
+        //
+        //     20 + 3 = 23,  2^23 = 8_388_608
+        assert_eq!(checked_log_size_sum(20, 3), Some((23, 8_388_608)));
+
+        // Largest representable sum: (BITS - 2) + 1 = BITS - 1.
+        let almost_max = usize::BITS as usize - 2;
+        let max_exp = usize::BITS as usize - 1;
+        assert_eq!(
+            checked_log_size_sum(almost_max, 1),
+            Some((max_exp, 1usize << max_exp))
+        );
+
+        // Sum exactly at the bit width: overflows the shift.
+        //
+        //     (BITS - 1) + 1 = BITS  →  2^BITS is unrepresentable  →  None
+        assert_eq!(checked_log_size_sum(max_exp, 1), None);
+
+        // Both operands large but sum still within range.
+        //
+        //     32 + 31 = 63  (on 64-bit)  →  2^63 is representable
+        let half = usize::BITS as usize / 2;
+        let other_half = max_exp - half;
+        assert_eq!(
+            checked_log_size_sum(half, other_half),
+            Some((max_exp, 1usize << max_exp))
+        );
+
+        // Addition itself overflows usize, not just the shift.
+        //
+        //     usize::MAX + 1  →  checked_add returns None  →  None
+        assert_eq!(checked_log_size_sum(usize::MAX, 1), None);
+
+        // Both operands at usize::MAX: addition doubly overflows.
+        assert_eq!(checked_log_size_sum(usize::MAX, usize::MAX), None);
+    }
+
+    #[test]
     #[should_panic]
     fn test_log2_strict_usize_zero() {
         let _ = log2_strict_usize(0);
@@ -950,6 +1153,60 @@ mod tests {
     #[should_panic]
     fn test_log2_strict_usize_max() {
         let _ = log2_strict_usize(usize::MAX);
+    }
+
+    #[test]
+    fn test_log3_strict_powers_of_3() {
+        // Test all powers of 3 up to 3^12 = 531441.
+        assert_eq!(log3_strict_usize(1), 0);
+        assert_eq!(log3_strict_usize(3), 1);
+        assert_eq!(log3_strict_usize(9), 2);
+        assert_eq!(log3_strict_usize(27), 3);
+        assert_eq!(log3_strict_usize(81), 4);
+        assert_eq!(log3_strict_usize(243), 5);
+        assert_eq!(log3_strict_usize(729), 6);
+        assert_eq!(log3_strict_usize(2187), 7);
+        assert_eq!(log3_strict_usize(6561), 8);
+        assert_eq!(log3_strict_usize(19683), 9);
+        assert_eq!(log3_strict_usize(59049), 10);
+        assert_eq!(log3_strict_usize(177_147), 11);
+        assert_eq!(log3_strict_usize(531_441), 12);
+    }
+
+    #[test]
+    #[should_panic(expected = "input must be non-zero")]
+    fn test_log3_strict_panics_on_zero() {
+        let _ = log3_strict_usize(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "is not a power of 3")]
+    fn test_log3_strict_panics_on_non_power_of_3() {
+        // 2 is not a power of 3.
+        let _ = log3_strict_usize(2);
+    }
+
+    #[test]
+    #[should_panic(expected = "is not a power of 3")]
+    fn test_log3_strict_panics_on_power_of_2() {
+        // 8 = 2^3 is not a power of 3.
+        let _ = log3_strict_usize(8);
+    }
+
+    #[test]
+    #[should_panic(expected = "is not a power of 3")]
+    fn test_log3_strict_panics_on_product_with_other_primes() {
+        // 6 = 2 * 3 is not a power of 3.
+        let _ = log3_strict_usize(6);
+    }
+
+    proptest! {
+        #[test]
+        fn test_log3_strict_roundtrip(k in 0u32..25u32) {
+            // Roundtrip: 3^k -> log3_strict_usize -> k
+            let n = 3usize.pow(k);
+            assert_eq!(log3_strict_usize(n), k as usize);
+        }
     }
 
     #[test]

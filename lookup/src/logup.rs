@@ -21,7 +21,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::{ExtensionBuilder, PermutationAirBuilder, WindowAccess};
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Field, PrimeCharacteristicRing, dot_product};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::VerticalPair;
@@ -29,10 +29,12 @@ use p3_maybe_rayon::prelude::*;
 use p3_uni_stark::{StarkGenericConfig, Val};
 use tracing::instrument;
 
-use crate::lookup_traits::{
-    Kind, Lookup, LookupData, LookupGadget, LookupTraceBuilder, symbolic_to_expr,
-};
-use crate::types::{LookupError, LookupEvaluator};
+use crate::protocol::LookupProtocol;
+use crate::traits::LookupTraceBuilder;
+use crate::types::{Kind, Lookup, LookupData, LookupError};
+
+/// Type alias for the row evaluation context used during permutation trace generation.
+pub type RowEvalContext<'a, SC> = LookupTraceBuilder<'a, SC>;
 
 /// Core LogUp gadget implementing lookup arguments via logarithmic derivatives.
 ///
@@ -147,52 +149,48 @@ impl LogUpGadget {
     ///
     /// # Arguments:
     /// * builder - The AIR builder to construct expressions.
-    /// * context - The lookup context containing:
+    /// * lookup - The lookup context containing:
     ///     * the kind of lookup (local or global),
     ///     * elements,
     ///     * multiplicities,
-    ///     * and auxiliary column indices.
-    /// * opt_expected_cumulated - Optional expected cumulative value for global lookups. For local lookups, this should be `None`.
+    ///     * and auxiliary column index.
+    /// * opt_cumulative_sum - Optional expected cumulative value for global lookups. For local lookups, this should be `None`.
     fn eval_update<AB>(
         &self,
         builder: &mut AB,
-        context: &Lookup<AB::F>,
-        opt_expected_cumulated: Option<AB::ExprEF>,
+        lookup: &Lookup<AB::F>,
+        opt_cumulative_sum: Option<AB::ExprEF>,
     ) where
         AB: PermutationAirBuilder,
     {
         let Lookup {
             kind,
-            element_exprs,
-            multiplicities_exprs,
-            columns,
-        } = context;
+            elements,
+            multiplicities,
+            column,
+        } = lookup;
 
         assert!(
-            element_exprs.len() == multiplicities_exprs.len(),
+            elements.len() == multiplicities.len(),
             "Mismatched lengths: elements and multiplicities must have same length"
         );
-        assert_eq!(
-            columns.len(),
-            self.num_aux_cols(),
-            "There is exactly one auxiliary column for LogUp"
-        );
-        let column = columns[0];
+
+        let column = *column;
 
         // First, turn the symbolic expressions into builder expressions, for elements and multiplicities.
-        let elements = element_exprs
+        let elements = elements
             .iter()
             .map(|exprs| {
                 exprs
                     .iter()
-                    .map(|expr| symbolic_to_expr(builder, expr).into())
+                    .map(|expr| expr.resolve(builder).into())
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
-        let multiplicities = multiplicities_exprs
+        let multiplicities = multiplicities
             .iter()
-            .map(|expr| symbolic_to_expr(builder, expr).into())
+            .map(|expr| expr.resolve(builder).into())
             .collect::<Vec<_>>();
 
         // Access the permutation (aux) table. It carries the running sum column `s`.
@@ -236,8 +234,8 @@ impl LogUpGadget {
                 &beta.into(),
             );
 
-        if let Some(expected_cumulated) = opt_expected_cumulated {
-            // If there is an `expected_cumulated`, we are in a global lookup update.
+        if let Some(cumulative_sum) = opt_cumulative_sum {
+            // If there is a `cumulative_sum`, we are in a global lookup update.
             assert!(
                 matches!(kind, Kind::Global(_)),
                 "Expected cumulated value provided for a non-global lookup"
@@ -249,10 +247,10 @@ impl LogUpGadget {
             );
 
             // Final constraint:
-            let final_val = (expected_cumulated - s_local) * common_denominator - numerator;
+            let final_val = (cumulative_sum - s_local) * common_denominator - numerator;
             builder.when_last_row().assert_zero_ext(final_val);
         } else {
-            // If we don't have an `expected_cumulated`, we are in a local lookup update.
+            // If we don't have a `cumulative_sum`, we are in a local lookup update.
             assert!(
                 matches!(kind, Kind::Local),
                 "No expected cumulated value provided for a global lookup"
@@ -267,11 +265,7 @@ impl LogUpGadget {
     }
 }
 
-impl LookupEvaluator for LogUpGadget {
-    fn num_aux_cols(&self) -> usize {
-        1
-    }
-
+impl LookupProtocol for LogUpGadget {
     fn num_challenges(&self) -> usize {
         2
     }
@@ -286,48 +280,39 @@ impl LookupEvaluator for LogUpGadget {
     /// `combined_elements[i] = ∑elements[i][n-j] * β^j`.
     ///
     /// This is implemented using a running sum column that should sum to zero.
-    fn eval_local_lookup<AB>(&self, builder: &mut AB, context: &Lookup<AB::F>)
+    fn eval_local<AB>(&self, builder: &mut AB, lookup: &Lookup<AB::F>)
     where
         AB: PermutationAirBuilder,
     {
-        if let Kind::Global(_) = context.kind {
+        if let Kind::Global(_) = lookup.kind {
             panic!("Global lookups are not supported in local evaluation")
         }
 
-        self.eval_update(builder, context, None);
+        self.eval_update(builder, lookup, None);
     }
 
     /// # Mathematical Details
     /// The constraint enforces:
     /// ```text
-    /// ∑_i(multiplicities[i] / (α - combined_elements[i])) = `expected_cumulated`
+    /// ∑_i(multiplicities[i] / (α - combined_elements[i])) = `cumulative_sum`
     /// ```
     ///
     /// where `multiplicities` can be negative, and
     /// `combined_elements[i] = ∑elements[i][n-j] * β^j`.
     ///
-    /// `expected_cumulated` is provided by the prover, and the sum of all `expected_cumulated` for this global interaction
+    /// `cumulative_sum` is provided by the prover, and the sum of all `cumulative_sum` for this global interaction
     /// should be 0. The latter is checked as the final step, after all AIRS have been verified.
     ///
-    /// This is implemented using a running sum column that should sum to `expected_cumulated`.
-    fn eval_global_update<AB>(
-        &self,
-        builder: &mut AB,
-        context: &Lookup<AB::F>,
-        expected_cumulated: AB::ExprEF,
-    ) where
+    /// This is implemented using a running sum column that should sum to `cumulative_sum`.
+    fn eval_global<AB>(&self, builder: &mut AB, lookup: &Lookup<AB::F>, cumulative_sum: AB::ExprEF)
+    where
         AB: PermutationAirBuilder,
     {
-        self.eval_update(builder, context, Some(expected_cumulated));
+        self.eval_update(builder, lookup, Some(cumulative_sum));
     }
-}
 
-impl LookupGadget for LogUpGadget {
-    fn verify_global_final_value<EF: Field>(
-        &self,
-        all_expected_cumulative: &[EF],
-    ) -> Result<(), LookupError> {
-        let total = all_expected_cumulative.iter().cloned().sum::<EF>();
+    fn verify_global_sum<EF: Field>(&self, cumulative_sums: &[EF]) -> Result<(), LookupError> {
+        let total = cumulative_sums.iter().copied().sum::<EF>();
 
         if !total.is_zero() {
             // We set the name associated to the lookup to None because we don't have access to the actual name here.
@@ -351,15 +336,15 @@ impl LookupGadget for LogUpGadget {
     ///
     /// The constraint degree is then:
     /// `1 + max(deg(numerator), deg(common_denominator))`
-    fn constraint_degree<F: Field>(&self, context: &Lookup<F>) -> usize {
-        assert!(context.multiplicities_exprs.len() == context.element_exprs.len());
+    fn constraint_degree<F: Field>(&self, lookup: &Lookup<F>) -> usize {
+        assert!(lookup.multiplicities.len() == lookup.elements.len());
 
-        let n = context.multiplicities_exprs.len();
+        let n = lookup.multiplicities.len();
 
         // Compute degrees in a single pass.
         let mut degs = Vec::with_capacity(n);
         let mut deg_sum = 0;
-        for elems in &context.element_exprs {
+        for elems in &lookup.elements {
             let deg = elems
                 .iter()
                 .map(|elt| elt.degree_multiple())
@@ -373,9 +358,8 @@ impl LookupGadget for LogUpGadget {
         let deg_denom_constr = 1 + deg_sum;
 
         // Compute degree(numerator).
-        let multiplicities = &context.multiplicities_exprs;
         let deg_num = (0..n)
-            .map(|i| multiplicities[i].degree_multiple() + deg_sum - degs[i])
+            .map(|i| lookup.multiplicities[i].degree_multiple() + deg_sum - degs[i])
             .max()
             .unwrap_or(0);
 
@@ -390,14 +374,14 @@ impl LookupGadget for LogUpGadget {
         public_values: &[Val<SC>],
         lookups: &[Lookup<Val<SC>>],
         lookup_data: &mut [LookupData<SC::Challenge>],
-        permutation_challenges: &[SC::Challenge],
+        challenges: &[SC::Challenge],
     ) -> RowMajorMatrix<SC::Challenge> {
         let height = main.height();
-        let width = self.num_aux_cols() * lookups.len();
+        let width = lookups.len();
 
         // Validate challenge count matches number of lookups.
         debug_assert_eq!(
-            permutation_challenges.len(),
+            challenges.len(),
             lookups.len() * self.num_challenges(),
             "perm challenge count must be per-lookup"
         );
@@ -409,7 +393,7 @@ impl LookupGadget for LogUpGadget {
 
             let mut seen = BTreeSet::new();
             for ctx in lookups {
-                let a = ctx.columns[0];
+                let a = ctx.column;
                 if !seen.insert(a) {
                     panic!("duplicate aux column index {a} across lookups");
                 }
@@ -419,115 +403,157 @@ impl LookupGadget for LogUpGadget {
         // 1. PRE-COMPUTE DENOMINATORS
         // We flatten all denominators from all rows/lookups into one giant vector.
         // Order: Row -> Lookup -> Element Tuple
-        let denoms_per_row: usize = lookups.iter().map(|l| l.element_exprs.len()).sum();
+        let denoms_per_row: usize = lookups.iter().map(|l| l.elements.len()).sum();
         let mut lookup_denom_offsets = Vec::with_capacity(lookups.len() + 1);
         lookup_denom_offsets.push(0);
         for l in lookups.iter() {
             lookup_denom_offsets
-                .push(lookup_denom_offsets.last().copied().unwrap() + l.element_exprs.len());
+                .push(lookup_denom_offsets.last().copied().unwrap() + l.elements.len());
         }
         let num_lookups = lookups.len();
 
-        let mut all_denominators = vec![SC::Challenge::ZERO; height * denoms_per_row];
-        let mut all_multiplicities = vec![Val::<SC>::ZERO; height * denoms_per_row];
-
-        all_denominators
-            .par_chunks_mut(denoms_per_row)
-            .zip(all_multiplicities.par_chunks_mut(denoms_per_row))
-            .enumerate()
-            .for_each(|(i, (denom_row, mult_row))| {
-                let local_main_row = main.row_slice(i).unwrap();
-                let next_main_row = main.row_slice((i + 1) % height).unwrap();
-                let main_rows = VerticalPair::new(
-                    RowMajorMatrixView::new_row(&local_main_row),
-                    RowMajorMatrixView::new_row(&next_main_row),
-                );
-                let preprocessed_rows_data = preprocessed.as_ref().map(|prep| {
-                    (
-                        prep.row_slice(i).unwrap(),
-                        prep.row_slice((i + 1) % height).unwrap(),
-                    )
-                });
-                let preprocessed_rows = match preprocessed_rows_data.as_ref() {
-                    Some((local_preprocessed_row, next_preprocessed_row)) => VerticalPair::new(
-                        RowMajorMatrixView::new_row(local_preprocessed_row),
-                        RowMajorMatrixView::new_row(next_preprocessed_row),
-                    ),
-                    None => VerticalPair::new(
-                        RowMajorMatrixView::new(&[], 0),
-                        RowMajorMatrixView::new(&[], 0),
-                    ),
-                };
-
-                let row_builder: LookupTraceBuilder<'_, SC> = LookupTraceBuilder::new(
-                    main_rows,
-                    preprocessed_rows,
-                    public_values,
-                    permutation_challenges,
-                    height,
-                    i,
-                );
-
-                let mut offset = 0;
-                for context in lookups.iter() {
-                    let alpha = permutation_challenges[self.num_challenges() * context.columns[0]];
-                    let beta =
-                        permutation_challenges[self.num_challenges() * context.columns[0] + 1];
-
-                    // Evaluate each tuple's elements and combine them via Horner's method
-                    // in a single pass. This avoids allocating a temporary vector of
-                    // evaluated elements per tuple, then another vector of combined results.
-                    //
-                    // For a tuple (e_0, e_1, …, e_{k-1}), computes:
-                    //
-                    //   combined = e_0 + e_1·β + e_2·β^2 + … + e_{k-1}·β^{k-1}
-                    //
-                    // Then stores (α − combined) as the denominator.
-                    for (j, elts) in context.element_exprs.iter().enumerate() {
-                        let combined_elt = elts.iter().fold(SC::Challenge::ZERO, |acc, e| {
-                            acc * beta + symbolic_to_expr(&row_builder, e)
-                        });
-                        denom_row[offset] = alpha - combined_elt;
-                        mult_row[offset] =
-                            symbolic_to_expr(&row_builder, &context.multiplicities_exprs[j]);
-                        offset += 1;
-                    }
-                }
-            });
-
-        debug_assert_eq!(all_denominators.len(), height * denoms_per_row);
-
-        // 2. BATCH INVERSION
-        // This turns O(N) inversions into O(1) inversion + O(N) multiplications.
-        // Recomputing multiplicities during trace building is cheaper than recomputing inversions,
-        // or storing them beforehand (as they could possibly constitute quite a large amount of data).
-        let all_inverses = p3_field::batch_multiplicative_inverse(&all_denominators);
-
-        #[cfg(debug_assertions)]
-        let mut inv_cursor = 0;
-        #[cfg(debug_assertions)]
-        let _debug_check: Vec<_> = (0..height)
-            .map(|_| {
-                lookups.iter().for_each(|context| {
-                    inv_cursor += context.multiplicities_exprs.len();
-                });
+        // Hoist the per-lookup random challenges out of the hot per-row loop.
+        // Each lookup uses a pair (alpha, beta) that is constant across all rows.
+        // alpha is the running-sum challenge, beta combines tuple elements.
+        let lookup_challenges: Vec<(SC::Challenge, SC::Challenge)> = lookups
+            .iter()
+            .map(|lookup| {
+                // Index into the flat challenge array by the lookup's auxiliary column index.
+                let base = self.num_challenges() * lookup.column;
+                (challenges[base], challenges[base + 1])
             })
             .collect();
 
-        // 3. BUILD TRACE
+        // Fused chunk-local batch inversion.
+        //
+        // Instead of three global passes (fill denoms -> batch invert -> build row sums)
+        // with three full-height intermediate arrays alive at once, we process
+        // fixed-size chunks end-to-end inside each thread.
+        //
+        // Per-thread working set: CHUNK_SIZE * denoms_per_row * (16 + 4) bytes,
+        // which fits comfortably in L2 cache for typical parameters.
+        //
+        // Memory layout (flat, row-major within each chunk):
+        //
+        // ```text
+        //   local_denoms:  [ row_0_denom_0 .. row_0_denom_D | row_1_denom_0 .. | ... ]
+        //   local_mults:   [ row_0_mult_0  .. row_0_mult_D  | row_1_mult_0  .. | ... ]
+        // ```
+        //
+        // where D = denoms_per_row (total element tuples across all lookups).
+
+        // Matches the internal chunk size of the batch inversion routine.
+        //
+        // TODO: benchmark this value across different fields and architectures
+        // to determine if a more general or adaptive constant is warranted.
+        const CHUNK_SIZE: usize = 1024;
+
+        // Output buffer: one row-sum per (row, lookup) pair, row-major order.
         let mut row_sums = SC::Challenge::zero_vec(height * num_lookups);
+
         row_sums
-            .par_chunks_mut(num_lookups)
+            .par_chunks_mut(CHUNK_SIZE * num_lookups)
             .enumerate()
-            .for_each(|(i, row_sums_i)| {
-                let inv_base = i * denoms_per_row;
-                for (lookup_idx, _context) in lookups.iter().enumerate() {
-                    let start = lookup_denom_offsets[lookup_idx];
-                    let end = lookup_denom_offsets[lookup_idx + 1];
-                    let sum = (start..end)
-                        .map(|k| all_inverses[inv_base + k] * all_multiplicities[inv_base + k])
-                        .sum();
-                    row_sums_i[lookup_idx] = sum;
+            .for_each(|(chunk_idx, chunk_row_sums)| {
+                // Derive the absolute row range for this chunk.
+                let start_row = chunk_idx * CHUNK_SIZE;
+                // The last chunk may be shorter than CHUNK_SIZE.
+                let num_rows = chunk_row_sums.len() / num_lookups;
+
+                // Thread-local denominator and multiplicity buffers.
+                let mut local_denoms = SC::Challenge::zero_vec(num_rows * denoms_per_row);
+                let mut local_mults = Val::<SC>::zero_vec(num_rows * denoms_per_row);
+
+                // Phase 1: Fill denominators and multiplicities for every row in this chunk.
+                for local_i in 0..num_rows {
+                    let i = start_row + local_i;
+
+                    // Build the two-row window (current, next) for the main trace.
+                    // Wraps around at the trace boundary.
+                    let local_main_row = main.row_slice(i).unwrap();
+                    let next_main_row = main.row_slice((i + 1) % height).unwrap();
+                    let main_rows = VerticalPair::new(
+                        RowMajorMatrixView::new_row(&local_main_row),
+                        RowMajorMatrixView::new_row(&next_main_row),
+                    );
+
+                    // Same two-row window for the preprocessed trace, if present.
+                    let preprocessed_rows_data = preprocessed.as_ref().map(|prep| {
+                        (
+                            prep.row_slice(i).unwrap(),
+                            prep.row_slice((i + 1) % height).unwrap(),
+                        )
+                    });
+                    let preprocessed_rows = match preprocessed_rows_data.as_ref() {
+                        Some((local_preprocessed_row, next_preprocessed_row)) => VerticalPair::new(
+                            RowMajorMatrixView::new_row(local_preprocessed_row),
+                            RowMajorMatrixView::new_row(next_preprocessed_row),
+                        ),
+                        // Empty views when there is no preprocessed trace.
+                        None => VerticalPair::new(
+                            RowMajorMatrixView::new(&[], 0),
+                            RowMajorMatrixView::new(&[], 0),
+                        ),
+                    };
+
+                    // Concrete evaluator: resolves symbolic expressions to field values
+                    // using the current row's data.
+                    let row_ctx: RowEvalContext<'_, SC> = RowEvalContext::new(
+                        main_rows,
+                        preprocessed_rows,
+                        public_values,
+                        challenges,
+                        height,
+                        i,
+                    );
+
+                    // Walk through each lookup's element tuples and fill the flat buffers.
+                    let mut offset = local_i * denoms_per_row;
+                    for (lookup, &(alpha, beta)) in lookups.iter().zip(lookup_challenges.iter()) {
+                        for (j, elts) in lookup.elements.iter().enumerate() {
+                            // Combine tuple elements via Horner's method:
+                            //   combined = e_0 * beta^{k-1} + e_1 * beta^{k-2} + ... + e_{k-1}
+                            // Then store (alpha - combined) as the denominator.
+                            let mut iter = elts.iter();
+                            let combined_elt = iter.next().map_or(SC::Challenge::ZERO, |first| {
+                                iter.fold(
+                                    first.resolve(&row_ctx).into(),
+                                    |acc: SC::Challenge, e| acc * beta + e.resolve(&row_ctx),
+                                )
+                            });
+                            local_denoms[offset] = alpha - combined_elt;
+
+                            // Store the multiplicity as a base-field element (4 bytes vs 16 for
+                            // extension) to keep the buffer small and the later dot product cheap.
+                            local_mults[offset] = lookup.multiplicities[j].resolve(&row_ctx);
+                            offset += 1;
+                        }
+                    }
+                }
+
+                // Phase 2: Batch-invert all denominators in this chunk.
+                // Montgomery's trick: 1 inversion + O(N) multiplications.
+                let local_inverses = p3_field::batch_multiplicative_inverse(&local_denoms);
+                // Free the denominator buffer immediately to reduce peak memory.
+                drop(local_denoms);
+
+                // Phase 3: Accumulate per-row sums: sum_j( inverse_j * multiplicity_j ) grouped by lookup.
+                //
+                // The multiplication is extension * base (cheaper than extension * extension).
+                //
+                // TODO: investigate fusing batch inversion with multiplicity multiplication.
+                for local_i in 0..num_rows {
+                    let inv_base = local_i * denoms_per_row;
+                    for (lookup_idx, _lookup) in lookups.iter().enumerate() {
+                        // Slice out the range of denominators belonging to this lookup.
+                        let start = lookup_denom_offsets[lookup_idx];
+                        let end = lookup_denom_offsets[lookup_idx + 1];
+                        let inv_slice = &local_inverses[inv_base + start..inv_base + end];
+                        let mult_slice = &local_mults[inv_base + start..inv_base + end];
+                        // Dot product: sum of (1 / denominator) * multiplicity for each tuple.
+                        chunk_row_sums[local_i * num_lookups + lookup_idx] =
+                            dot_product(inv_slice.iter().copied(), mult_slice.iter().copied());
+                    }
                 }
             });
 
@@ -558,8 +584,8 @@ impl LookupGadget for LogUpGadget {
         // Reuse a single buffer across all lookup columns to avoid re-allocating on every iteration.
         let mut prefix = SC::Challenge::zero_vec(height);
 
-        for (lookup_idx, context) in lookups.iter().enumerate() {
-            let aux_idx = context.columns[0];
+        for (lookup_idx, lookup) in lookups.iter().enumerate() {
+            let aux_column = lookup.column;
 
             // Fill the buffer with this column's per-row contributions.
             for (i, val) in prefix.iter_mut().enumerate() {
@@ -604,20 +630,18 @@ impl LookupGadget for LogUpGadget {
                 .skip(1)
                 .enumerate()
                 .for_each(|(i, row)| {
-                    row[aux_idx] = prefix[i];
+                    row[aux_column] = prefix[i];
                 });
 
             // For global lookups, record the total sum across all rows.
-            if matches!(context.kind, Kind::Global(_)) {
-                lookup_data[permutation_counter].expected_cumulated = prefix[height - 1];
+            if matches!(lookup.kind, Kind::Global(_)) {
+                lookup_data[permutation_counter].cumulative_sum = prefix[height - 1];
                 permutation_counter += 1;
             }
         }
 
         // Check that we have updated all `lookup_data` entries.
         debug_assert_eq!(permutation_counter, lookup_data.len());
-        #[cfg(debug_assertions)] // Compiler complains about inv_cursor despite being under a `debug_assert`
-        debug_assert_eq!(inv_cursor, all_inverses.len());
         RowMajorMatrix::new(aux_trace, width)
     }
 }

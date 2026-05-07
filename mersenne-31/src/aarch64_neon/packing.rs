@@ -8,13 +8,13 @@ use p3_field::exponentiation::exp_1717986917;
 use p3_field::interleave::{interleave_u32, interleave_u64};
 use p3_field::op_assign_macros::{
     impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
-    impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field,
-    ring_sum,
+    impl_packed_field_div, impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field,
+    impl_sum_prod_base_field, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, impl_packed_field_pow_2, uint32x4_mod_add,
-    uint32x4_mod_sub,
+    PermutationMonomial, PrimeCharacteristicRing, dispatch_chunked_mixed_dot_product,
+    impl_packed_field_pow_2, uint32x4_mod_add, uint32x4_mod_sub,
 };
 use p3_util::reconstitute_from_base;
 use rand::distr::{Distribution, StandardUniform};
@@ -220,9 +220,22 @@ impl_add_base_field!(PackedMersenne31Neon, Mersenne31);
 impl_sub_base_field!(PackedMersenne31Neon, Mersenne31);
 impl_mul_base_field!(PackedMersenne31Neon, Mersenne31);
 impl_div_methods!(PackedMersenne31Neon, Mersenne31);
+impl_packed_field_div!(PackedMersenne31Neon);
 impl_sum_prod_base_field!(PackedMersenne31Neon, Mersenne31);
 
-impl Algebra<Mersenne31> for PackedMersenne31Neon {}
+impl Algebra<Mersenne31> for PackedMersenne31Neon {
+    // Benchmarked on AArch64 NEON: chunk=16 ≈ 51ns, chunk=8 ≈ 54ns, chunk=4 ≈ 59ns.
+    const BATCHED_LC_CHUNK: usize = 16;
+
+    #[inline(always)]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Mersenne31; N]) -> Self {
+        dispatch_chunked_mixed_dot_product::<Self, Mersenne31, N>(
+            a,
+            f,
+            <Self as Algebra<Mersenne31>>::BATCHED_LC_CHUNK,
+        )
+    }
+}
 
 /// Given a `val` in `0, ..., 2 P`, return a `res` in `0, ..., P` such that `res = val (mod P)`
 #[inline]
@@ -355,7 +368,7 @@ impl_packed_field_pow_2!(
 
 #[cfg(test)]
 mod tests {
-    use p3_field_testing::test_packed_field;
+    use p3_field_testing::{test_packed_field, test_packed_field_dot_product_boundary};
 
     use super::{Mersenne31, PackedMersenne31Neon};
 
@@ -374,4 +387,6 @@ mod tests {
         &[crate::PackedMersenne31Neon::ONE],
         super::SPECIAL_VALS
     );
+
+    test_packed_field_dot_product_boundary!(crate::PackedMersenne31Neon);
 }

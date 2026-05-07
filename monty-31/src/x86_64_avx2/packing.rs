@@ -8,8 +8,8 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 use p3_field::interleave::{interleave_u32, interleave_u64, interleave_u128};
 use p3_field::op_assign_macros::{
     impl_add_assign, impl_add_base_field, impl_div_methods, impl_mul_base_field, impl_mul_methods,
-    impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field, impl_sum_prod_base_field,
-    ring_sum,
+    impl_packed_field_div, impl_packed_value, impl_rng, impl_sub_assign, impl_sub_base_field,
+    impl_sum_prod_base_field, ring_sum,
 };
 use p3_field::{
     Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
@@ -263,9 +263,13 @@ impl_mul_base_field!(
     (PackedMontyParameters, PMP)
 );
 impl_div_methods!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
+impl_packed_field_div!(PackedMontyField31AVX2, (FieldParameters, FP));
 impl_sum_prod_base_field!(PackedMontyField31AVX2, MontyField31, (FieldParameters, FP));
 
 impl<FP: FieldParameters> Algebra<MontyField31<FP>> for PackedMontyField31AVX2<FP> {
+    // Benchmarked on AVX2 (BabyBear): chunk=4 ≈ 47ns, chunk=8 ≈ 49ns, chunk=32 ≈ 49ns.
+    const BATCHED_LC_CHUNK: usize = 4;
+
     #[inline(always)]
     fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[MontyField31<FP>; N]) -> Self {
         general_dot_product::<_, _, _, N>(a, f)
@@ -998,11 +1002,6 @@ impl_packed_value!(
 
 unsafe impl<FP: FieldParameters> PackedField for PackedMontyField31AVX2<FP> {
     type Scalar = MontyField31<FP>;
-
-    #[inline]
-    fn packed_linear_combination<const N: usize>(coeffs: &[Self::Scalar], vecs: &[Self]) -> Self {
-        general_dot_product::<_, _, _, N>(coeffs, vecs)
-    }
 }
 
 impl_packed_field_pow_2!(

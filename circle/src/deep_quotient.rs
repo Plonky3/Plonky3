@@ -141,6 +141,8 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
 
         // Invert the denominators.
         let vp_denom_invs = batch_multiplicative_inverse(&vp_denoms);
+        // Free the denominator buffer immediately to reduce peak memory.
+        drop(vp_denoms);
 
         // Precompute powers of alpha for constraint part computation
         // TODO: These should be passed in as parameters to avoid recomputation

@@ -15,7 +15,7 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField64, RawDataSerializable, TwoAdicField, halve_u64, impl_raw_serializable_primefield64,
+    PrimeField64, RawDataSerializable, TwoAdicField, impl_raw_serializable_primefield64,
     quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
 };
 use p3_util::{assume, branch_hint, flatten_to_base, gcd_inner};
@@ -233,7 +233,14 @@ impl PrimeCharacteristicRing for Goldilocks {
 
     #[inline]
     fn halve(&self) -> Self {
-        Self::new(halve_u64::<P>(self.value))
+        // Branchless halving: x/2 = (x >> 1) + ((x & 1) * (p+1)/2).
+        // When x is odd, add (p+1)/2 to compensate for the lost bit.
+        // Uses mask arithmetic to avoid the 50/50 unpredictable branch.
+        const HALF_P_PLUS_1: u64 = (P + 1) >> 1; // 0x7FFFFFFF80000001
+        let lo_bit = self.value & 1;
+        let half = self.value >> 1;
+        let mask = 0u64.wrapping_sub(lo_bit); // all-ones when odd, zero when even
+        Self::new(half.wrapping_add(mask & HALF_P_PLUS_1))
     }
 
     #[inline]
@@ -253,7 +260,11 @@ impl PrimeCharacteristicRing for Goldilocks {
         // In the goldilocks field, 2^192 = 1 mod P.
         // Thus 2^{-n} = 2^{192 - n} mod P.
         exp %= 192;
-        self.mul_2exp_u64(192 - exp)
+        match exp {
+            0 => *self,
+            1 => self.halve(),
+            _ => self.mul_2exp_u64(192 - exp),
+        }
     }
 
     #[inline]
@@ -277,7 +288,9 @@ impl PrimeCharacteristicRing for Goldilocks {
         // 1. It is a multiple of P.
         // 2. It is greater than the maximum possible value of the sum of the products of two u64s.
         const OFFSET: u128 = ((P as u128) << 64) - (P as u128) + ((P as u128) << 32);
-        assert!((N as u32) <= (1 << 31));
+        const {
+            assert!((N as u32) <= (1 << 31));
+        }
         match N {
             0 => Self::ZERO,
             1 => lhs[0] * rhs[0],
@@ -324,8 +337,8 @@ impl PrimeCharacteristicRing for Goldilocks {
     fn zero_vec(len: usize) -> Vec<Self> {
         // SAFETY:
         // Due to `#[repr(transparent)]`, Goldilocks and u64 have the same size, alignment
-        // and memory layout making `flatten_to_base` safe. This this will create
-        // a vector Goldilocks elements with value set to 0.
+        // and memory layout making `flatten_to_base` safe. This will create
+        // a vector of Goldilocks elements with value set to 0.
         unsafe { flatten_to_base(vec![0u64; len]) }
     }
 }
@@ -359,9 +372,6 @@ impl Field for Goldilocks {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
     type Packing = crate::PackedGoldilocksAVX512;
 
-    #[cfg(target_arch = "aarch64")]
-    type Packing = crate::PackedGoldilocksNeon;
-
     #[cfg(not(any(
         all(
             target_arch = "x86_64",
@@ -369,7 +379,6 @@ impl Field for Goldilocks {
             not(target_feature = "avx512f")
         ),
         all(target_arch = "x86_64", target_feature = "avx512f"),
-        target_arch = "aarch64",
     )))]
     type Packing = Self;
 

@@ -25,6 +25,7 @@ serde = { workspace = true, features = ["derive", "alloc"] }
 tracing.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-circle = { path = "../circle" }
 p3-commit = { path = "../commit" }
@@ -40,6 +41,10 @@ rand.workspace = true
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
+
+[[bench]]
+name = "prove_batch"
+harness = false
 
 [lints]
 workspace = true

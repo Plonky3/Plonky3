@@ -6,6 +6,7 @@ use core::ops::Deref;
 use p3_field::{ExtensionField, Field};
 
 use crate::Matrix;
+use crate::bitrev::BitReversibleMatrix;
 
 /// A view that flattens a matrix of extension field elements into a matrix of base field elements.
 ///
@@ -129,6 +130,19 @@ where
         let value = self.inner.peek()?.as_basis_coefficients_slice()[self.idx];
         self.idx += 1;
         Some(value)
+    }
+}
+
+impl<F, EF, Inner> BitReversibleMatrix<F> for FlatMatrixView<F, EF, Inner>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    Inner: BitReversibleMatrix<EF>,
+{
+    type BitRev = FlatMatrixView<F, EF, Inner::BitRev>;
+
+    fn bit_reverse_rows(self) -> Self::BitRev {
+        FlatMatrixView::new(self.0.bit_reverse_rows())
     }
 }
 

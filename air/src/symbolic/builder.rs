@@ -12,7 +12,7 @@ use crate::symbolic::expression::BaseLeaf;
 use crate::symbolic::expression_ext::SymbolicExpressionExt;
 use crate::symbolic::variable::{BaseEntry, ExtEntry, SymbolicVariableExt};
 use crate::{
-    Air, AirBuilder, ExtensionBuilder, PeriodicAirBuilder, PermutationAirBuilder,
+    Air, AirBuilder, BaseAir, ExtensionBuilder, PeriodicAirBuilder, PermutationAirBuilder,
     SymbolicExpression, SymbolicVariable, WindowAccess,
 };
 
@@ -36,6 +36,19 @@ pub struct AirLayout {
     pub num_permutation_values: usize,
     /// Length of [`PeriodicAirBuilder::periodic_values`].
     pub num_periodic_columns: usize,
+}
+
+impl AirLayout {
+    /// Derive layout from an AIR's metadata.
+    pub fn from_air<F: Clone + Send + Sync>(air: &impl BaseAir<F>) -> Self {
+        Self {
+            preprocessed_width: air.preprocessed_width(),
+            main_width: air.width(),
+            num_public_values: air.num_public_values(),
+            num_periodic_columns: air.num_periodic_columns(),
+            ..Default::default()
+        }
+    }
 }
 
 #[instrument(skip_all, level = "debug")]
@@ -130,7 +143,7 @@ where
     (builder.base_constraints(), builder.extension_constraints())
 }
 
-/// An [`AirBuilder`] for evaluating constraints symbolically, and recording them for later use.
+/// Symbolic AIR builder that records constraints.
 #[derive(Debug)]
 pub struct SymbolicAirBuilder<F: Field, EF: ExtensionField<F> = F> {
     preprocessed: RowMajorMatrix<SymbolicVariable<F>>,
@@ -366,7 +379,7 @@ enum ConstraintType {
 ///
 /// When alpha powers are pre-computed in global order `[α^{N−1}, …, α⁰]`,
 /// the layout tells us which powers correspond to base-field constraints (for
-/// `packed_linear_combination`) and which to extension-field constraints.
+/// `batched_linear_combination`) and which to extension-field constraints.
 #[derive(Debug, Default)]
 pub struct ConstraintLayout {
     /// Global indices of base-field constraints, in emission order.
@@ -385,7 +398,7 @@ impl ConstraintLayout {
     ///
     /// Returns `(base_alpha_powers, ext_alpha_powers)` where:
     /// - `base_alpha_powers[d][j]` = d-th basis coefficient of the alpha power for
-    ///   the j-th base constraint (transposed + reordered for `packed_linear_combination`)
+    ///   the j-th base constraint (transposed + reordered for `batched_linear_combination`)
     /// - `ext_alpha_powers[j]` = full EF alpha power for the j-th extension constraint
     ///
     /// Constraints are emitted in one global order and folded into a single random
@@ -400,7 +413,7 @@ impl ConstraintLayout {
     /// throughput, while extension constraints must stay in the extension field. This
     /// method splits the precomputed powers accordingly, and also transposes EF powers
     /// into their base-field coordinates so the base-field path can use
-    /// `packed_linear_combination` without repeated cross-field conversions.
+    /// `batched_linear_combination` without repeated cross-field conversions.
     pub fn decompose_alpha<F: Field, EF: ExtensionField<F>>(
         &self,
         alpha: EF,
@@ -476,6 +489,9 @@ mod tests {
     impl BaseAir<F> for MockAir {
         fn width(&self) -> usize {
             self.width
+        }
+        fn num_periodic_columns(&self) -> usize {
+            self.periodic_columns().len()
         }
     }
 
@@ -724,6 +740,17 @@ mod tests {
         builder.assert_zero_ext(expr);
         let ext_constraints = builder.extension_constraints();
         assert_eq!(ext_constraints.len(), 1);
+    }
+
+    #[test]
+    fn test_assert_zeros_ext_batches_extension_constraints() {
+        let mut builder = SymbolicAirBuilder::<F, EF>::new(layout_with_perm(0, 2, 0, 2, 1, 0));
+        let a = SymbolicExpressionExt::<F, EF>::from(F::new(3));
+        let b = SymbolicExpressionExt::<F, EF>::from(F::new(4));
+        builder.assert_zeros_ext([a, b]);
+
+        assert_eq!(builder.extension_constraints().len(), 2);
+        assert_eq!(builder.constraint_layout().ext_indices.len(), 2);
     }
 
     #[test]

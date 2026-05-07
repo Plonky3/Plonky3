@@ -23,7 +23,7 @@ use crate::{
 #[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds)] // cfg not supported in where clauses?
 pub fn prove_with_preprocessed<
     SC,
-    #[cfg(debug_assertions)] A: for<'a> Air<crate::check_constraints::DebugConstraintBuilder<'a, Val<SC>>>,
+    #[cfg(debug_assertions)] A: for<'a> Air<p3_air::DebugConstraintBuilder<'a, Val<SC>>>,
     #[cfg(not(debug_assertions))] A,
 >(
     config: &SC,
@@ -37,7 +37,7 @@ where
     A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
 {
     #[cfg(debug_assertions)]
-    crate::check_constraints::check_constraints(air, &trace, public_values);
+    p3_air::check_constraints(air, &trace, public_values);
 
     // Compute the height `N = 2^n` and `log_2(height)`, `n`, of the trace.
     let degree = trace.height();
@@ -52,16 +52,13 @@ where
     //   callers must use `setup_preprocessed` and pass the resulting data in.
     let preprocessed_width = preprocessed.map_or_else(
         || {
-            if let Some(preprocessed_trace) = air.preprocessed_trace() {
-                let width = preprocessed_trace.width();
-                if width > 0 {
-                    panic!(
-                        "AIR defines preprocessed columns (width = {}), \
-                         but no PreprocessedProverData was provided. \
-                         Call `setup_preprocessed` and pass it to `prove_with_preprocessed`.",
-                        width
-                    );
-                }
+            let width = air.preprocessed_width();
+            if width > 0 {
+                panic!(
+                    "AIR defines preprocessed columns (width = {width}), \
+                     but no PreprocessedProverData was provided. \
+                     Call `setup_preprocessed` and pass it to `prove_with_preprocessed`."
+                );
             }
             0
         },
@@ -78,6 +75,7 @@ where
         preprocessed_width,
         main_width: air.width(),
         num_public_values: air.num_public_values(),
+        num_periodic_columns: air.num_periodic_columns(),
         ..Default::default()
     };
 
@@ -97,15 +95,15 @@ where
     //
     // When we convert to working with polynomials, the `X_i`'s and `Y_i`'s will be replaced by the
     // degree `N - 1` polynomials `T_i(x)` and `T_i(hx)` respectively. The selector polynomials are
-    //  a little more complicated however.
+    // a little more complicated, however.
     //
-    // In our our case, the selector polynomials are `S_1(x) = is_first_row`, `S_2(x) = is_last_row`
+    // In our case, the selector polynomials are `S_1(x) = is_first_row`, `S_2(x) = is_last_row`
     // and `S_3(x) = is_transition`. Both `S_1(x)` and `S_2(x)` are polynomials of degree `N - 1`
-    // as they must be non zero only at a single location in the initial domain. However, `is_transition`
-    // is a polynomial of degree `1` as it simply need to be `0` on the last row.
+    // as they must be non-zero only at a single location in the initial domain. However,
+    // `is_transition` is a polynomial of degree `1` as it simply needs to be `0` on the last row.
     //
     // The constraint degree (`deg(C)`) is the linear factor of `N` in the constraint polynomial. In other
-    // words, it is roughly the total degree of `C` however, we treat `Z_3` as a constant term which does
+    // words, it is roughly the total degree of `C`; however, we treat `Z_3` as a constant term which does
     // not contribute to the degree.
     //
     // E.g. `C_j = Z_1 * (X_1^3 - X_2 * X_3 * X_4)` would have degree `4`.
@@ -216,6 +214,7 @@ where
     // at every point in the quotient domain. The degree of `Q(x)` is `<= deg(C(x)) - N = 2N - 2` in the case
     // where `deg(C) = 3`. (See the discussion above constraint_degree for more details.)
     let quotient_values = quotient_values(
+        pcs,
         air,
         public_values,
         layout,
@@ -379,7 +378,7 @@ where
 #[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds)] // cfg not supported in where clauses?
 pub fn prove<
     SC,
-    #[cfg(debug_assertions)] A: for<'a> Air<crate::check_constraints::DebugConstraintBuilder<'a, Val<SC>>>,
+    #[cfg(debug_assertions)] A: for<'a> Air<p3_air::DebugConstraintBuilder<'a, Val<SC>>>,
     #[cfg(not(debug_assertions))] A,
 >(
     config: &SC,
@@ -398,6 +397,7 @@ where
 // TODO: Group some arguments to remove the `allow`?
 #[allow(clippy::too_many_arguments)]
 pub fn quotient_values<SC, A, Mat>(
+    pcs: &SC::Pcs,
     air: &A,
     public_values: &[Val<SC>],
     layout: AirLayout,
@@ -431,6 +431,28 @@ where
 
     let constraint_layout = get_constraint_layout(air, layout);
     let (base_alpha_powers, ext_alpha_powers) = constraint_layout.decompose_alpha(alpha);
+    let periodic_cols = air.periodic_columns();
+    let periodic_table =
+        pcs.build_periodic_lde_table(&periodic_cols, trace_domain, quotient_domain);
+
+    let pack_width = PackedVal::<SC>::WIDTH;
+    let periodic_packed: Vec<Vec<PackedVal<SC>>> = if periodic_table.is_empty() {
+        Vec::new()
+    } else {
+        let ncols = periodic_table.width();
+        (0..quotient_size)
+            .step_by(pack_width)
+            .map(|i_start| {
+                (0..ncols)
+                    .map(|col_idx| {
+                        PackedVal::<SC>::from_fn(|offset| {
+                            *periodic_table.get(i_start + offset, col_idx)
+                        })
+                    })
+                    .collect()
+            })
+            .collect()
+    };
 
     (0..quotient_size)
         .into_par_iter()
@@ -459,10 +481,16 @@ where
             let preprocessed_view = preprocessed
                 .as_ref()
                 .map_or_else(|| RowMajorMatrixView::new(&[], 0), |m| m.as_view());
+            let periodic_values: &[PackedVal<SC>] = if periodic_packed.is_empty() {
+                &[]
+            } else {
+                &periodic_packed[i_start / pack_width]
+            };
             let mut folder = ProverConstraintFolder {
                 main: main.as_view(),
                 preprocessed: preprocessed_view,
                 preprocessed_window: RowWindow::from_view(&preprocessed_view),
+                periodic_values,
                 public_values,
                 is_first_row,
                 is_last_row,

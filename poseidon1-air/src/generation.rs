@@ -19,19 +19,46 @@
 //! Each row stores:
 //!
 //! - The initial state (`inputs`).
-//! - S-box intermediates and post-states for every round.
-
+//! - S-box intermediates and post-states for full rounds.
+//! - S-box outputs for partial rounds (sparse matrix decomposition).
 use alloc::vec::Vec;
 use core::mem::MaybeUninit;
 
-use p3_field::PrimeField;
+use p3_field::{PrimeField, dot_product};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_maybe_rayon::prelude::*;
+use p3_mds::karatsuba_convolution::{mds_circulant_karatsuba_16, mds_circulant_karatsuba_24};
 use p3_poseidon1::external::mds_multiply;
 use tracing::instrument;
 
 use crate::columns::{Poseidon1Cols, num_cols};
-use crate::{FullRound, PartialRound, RoundConstants, SBox};
+use crate::{FullRound, FullRoundConstants, PartialRound, PartialRoundConstants, SBox};
+
+/// Karatsuba MDS multiply for trace generation.
+///
+/// Uses Karatsuba convolution for supported widths (16, 24), falling back
+/// to dense O(t²) multiplication otherwise. Concrete field types satisfy
+/// the `Copy` bound required by the Karatsuba implementation.
+#[inline]
+fn mds_for_trace_gen<F: PrimeField, const WIDTH: usize>(
+    state: &mut [F; WIDTH],
+    circ_col: &[F; WIDTH],
+    dense_mds: &[[F; WIDTH]; WIDTH],
+) {
+    match WIDTH {
+        16 => {
+            let state_16: &mut [F; 16] = state.as_mut_slice().try_into().unwrap();
+            let col_16: &[F; 16] = circ_col.as_slice().try_into().unwrap();
+            mds_circulant_karatsuba_16(state_16, col_16);
+        }
+        24 => {
+            let state_24: &mut [F; 24] = state.as_mut_slice().try_into().unwrap();
+            let col_24: &[F; 24] = circ_col.as_slice().try_into().unwrap();
+            mds_circulant_karatsuba_24(state_24, col_24);
+        }
+        _ => mds_multiply(state, dense_mds),
+    }
+}
 
 /// Generate a trace for multiple Poseidon1 permutations (vectorized layout).
 ///
@@ -62,7 +89,8 @@ pub fn generate_vectorized_trace_rows<
     const VECTOR_LEN: usize,
 >(
     inputs: Vec<[F; WIDTH]>,
-    round_constants: &RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
+    full_constants: &FullRoundConstants<F, WIDTH>,
+    partial_constants: &PartialRoundConstants<F, WIDTH>,
     extra_capacity_bits: usize,
 ) -> RowMajorMatrix<F> {
     let n = inputs.len();
@@ -102,6 +130,9 @@ pub fn generate_vectorized_trace_rows<
     assert!(suffix.is_empty(), "Alignment should match");
     assert_eq!(perms.len(), n);
 
+    // Derive circulant column from dense MDS (first column of circulant matrix).
+    let circ_col: [F; WIDTH] = core::array::from_fn(|i| full_constants.dense_mds[i][0]);
+
     // Compute each permutation in parallel (one Poseidon1Cols struct per permutation).
     perms.par_iter_mut().zip(inputs).for_each(|(perm, input)| {
         generate_trace_rows_for_perm::<
@@ -111,7 +142,7 @@ pub fn generate_vectorized_trace_rows<
             SBOX_REGISTERS,
             HALF_FULL_ROUNDS,
             PARTIAL_ROUNDS,
-        >(perm, input, round_constants);
+        >(perm, input, full_constants, partial_constants, &circ_col);
     });
 
     // All elements have been written; mark the Vec as initialized.
@@ -146,7 +177,8 @@ pub fn generate_trace_rows<
     const PARTIAL_ROUNDS: usize,
 >(
     inputs: Vec<[F; WIDTH]>,
-    constants: &RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
+    full_constants: &FullRoundConstants<F, WIDTH>,
+    partial_constants: &PartialRoundConstants<F, WIDTH>,
     extra_capacity_bits: usize,
 ) -> RowMajorMatrix<F> {
     let n = inputs.len();
@@ -180,6 +212,9 @@ pub fn generate_trace_rows<
     assert!(suffix.is_empty(), "Alignment should match");
     assert_eq!(perms.len(), n);
 
+    // Derive circulant column from dense MDS (first column of circulant matrix).
+    let circ_col: [F; WIDTH] = core::array::from_fn(|i| full_constants.dense_mds[i][0]);
+
     // Compute each permutation in parallel.
     perms.par_iter_mut().zip(inputs).for_each(|(perm, input)| {
         generate_trace_rows_for_perm::<
@@ -189,7 +224,7 @@ pub fn generate_trace_rows<
             SBOX_REGISTERS,
             HALF_FULL_ROUNDS,
             PARTIAL_ROUNDS,
-        >(perm, input, constants);
+        >(perm, input, full_constants, partial_constants, &circ_col);
     });
 
     // All elements have been written; mark the Vec as initialized.
@@ -210,14 +245,13 @@ pub fn generate_trace_rows<
 /// ```text
 ///   1. Write inputs
 ///   2. Beginning full rounds (RF/2 rounds)
-///   3. Partial rounds (RP rounds)
-///   4. Add residual vector
-///   5. Ending full rounds (RF/2 rounds)
+///   3. Sparse partial rounds (first-round constants, m_i, then loop)
+///   4. Ending full rounds (RF/2 rounds)
 /// ```
 ///
 /// The `state` array tracks the live permutation state and is modified in
-/// place at each step. The committed columns (`sbox`, `post`) are written
-/// as side effects.
+/// place at each step. The committed columns (`sbox`, `post`, `post_sbox`)
+/// are written as side effects.
 pub fn generate_trace_rows_for_perm<
     F: PrimeField,
     const WIDTH: usize,
@@ -235,7 +269,9 @@ pub fn generate_trace_rows_for_perm<
         PARTIAL_ROUNDS,
     >,
     mut state: [F; WIDTH],
-    constants: &RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
+    full_constants: &FullRoundConstants<F, WIDTH>,
+    partial_constants: &PartialRoundConstants<F, WIDTH>,
+    circ_col: &[F; WIDTH],
 ) {
     // Step 1: Write the initial state into the `inputs` columns.
     perm.inputs
@@ -249,49 +285,57 @@ pub fn generate_trace_rows_for_perm<
     for (full_round, rc) in perm
         .beginning_full_rounds
         .iter_mut()
-        .zip(&constants.beginning_full_round_constants)
+        .zip(&full_constants.initial)
     {
         generate_full_round::<_, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
             full_round,
             rc,
-            &constants.mds_matrix,
+            circ_col,
+            &full_constants.dense_mds,
         );
     }
 
-    // Step 3: Partial rounds (RP rounds).
-    for (partial_round, constant) in perm
-        .partial_rounds
+    // Step 3: Sparse partial rounds.
+    // Add first-round constants.
+    for (s, &c) in state
         .iter_mut()
-        .zip(&constants.partial_round_constants)
+        .zip(partial_constants.first_round_constants.iter())
     {
-        generate_partial_round::<_, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
+        *s += c;
+    }
+    // Dense transition matrix m_i (once).
+    mds_multiply(&mut state, &partial_constants.m_i);
+
+    // Partial round loop.
+    let rounds_p = partial_constants.sparse_first_row.len();
+    for round in 0..rounds_p {
+        let rc = if round < rounds_p - 1 {
+            Some(partial_constants.round_constants[round])
+        } else {
+            None
+        };
+        generate_sparse_partial_round::<F, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
-            partial_round,
-            *constant,
-            &constants.mds_matrix,
+            &mut perm.partial_rounds[round],
+            rc,
+            &partial_constants.sparse_first_row[round],
+            &partial_constants.v[round],
         );
     }
 
-    // Step 4: Add the residual vector from forward constant substitution.
-    for (s, &r) in state
-        .iter_mut()
-        .zip(constants.partial_round_residual.iter())
-    {
-        *s += r;
-    }
-
-    // Step 5: Ending full rounds (RF/2 rounds).
+    // Step 4: Ending full rounds (RF/2 rounds).
     for (full_round, rc) in perm
         .ending_full_rounds
         .iter_mut()
-        .zip(&constants.ending_full_round_constants)
+        .zip(&full_constants.terminal)
     {
         generate_full_round::<_, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>(
             &mut state,
             full_round,
             rc,
-            &constants.mds_matrix,
+            circ_col,
+            &full_constants.dense_mds,
         );
     }
 }
@@ -302,7 +346,8 @@ pub fn generate_trace_rows_for_perm<
 /// 1. Add the round constant.
 /// 2. Compute the S-box and write intermediates.
 ///
-/// Then multiply by the MDS matrix and write the post-state.
+/// Then multiply by the MDS matrix (using Karatsuba for WIDTH 16 or 24)
+/// and write the post-state.
 #[inline]
 fn generate_full_round<
     F: PrimeField,
@@ -313,9 +358,9 @@ fn generate_full_round<
     state: &mut [F; WIDTH],
     full_round: &mut FullRound<MaybeUninit<F>, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
     round_constants: &[F; WIDTH],
-    mds_matrix: &[[F; WIDTH]; WIDTH],
+    circ_col: &[F; WIDTH],
+    dense_mds: &[[F; WIDTH]; WIDTH],
 ) {
-    // AddRoundConstants + S-box for each state element.
     for ((state_i, const_i), sbox_i) in state
         .iter_mut()
         .zip(round_constants.iter())
@@ -329,7 +374,8 @@ fn generate_full_round<
     }
 
     // MDS multiply: state = MDS * state.
-    mds_multiply(state, mds_matrix);
+    // Karatsuba MDS for supported widths, dense fallback otherwise.
+    mds_for_trace_gen(state, circ_col, dense_mds);
 
     // Write the post-state to the trace.
     full_round
@@ -341,41 +387,42 @@ fn generate_full_round<
         });
 }
 
-/// Execute one partial round and write the trace columns.
+/// Execute one sparse partial round and write the trace columns.
 ///
-/// 1. Add the scalar constant to `state[0]`.
-/// 2. Compute the S-box on `state[0]` and write intermediates.
-/// 3. Multiply by the dense MDS matrix.
-/// 4. Write the full post-state.
+/// 1. S-box on `state[0]` and write intermediates.
+/// 2. Write the committed S-box output.
+/// 3. Add scalar round constant (if present).
+/// 4. Sparse matrix multiply: dot product for new `state[0]`, rank-1 update for rest.
 #[inline]
-fn generate_partial_round<
+fn generate_sparse_partial_round<
     F: PrimeField,
     const WIDTH: usize,
     const SBOX_DEGREE: u64,
     const SBOX_REGISTERS: usize,
 >(
     state: &mut [F; WIDTH],
-    partial_round: &mut PartialRound<MaybeUninit<F>, WIDTH, SBOX_DEGREE, SBOX_REGISTERS>,
-    round_constant: F,
-    mds_matrix: &[[F; WIDTH]; WIDTH],
+    partial_round: &mut PartialRound<MaybeUninit<F>, SBOX_DEGREE, SBOX_REGISTERS>,
+    round_constant: Option<F>,
+    first_row: &[F; WIDTH],
+    v: &[F; WIDTH],
 ) {
-    // AddRoundConstant: only state[0] gets a constant.
-    state[0] += round_constant;
-
-    // S-box: only state[0] passes through x^DEGREE.
+    // S-box on state[0].
     generate_sbox(&mut partial_round.sbox, &mut state[0]);
 
-    // MDS multiply: state = MDS * state (dense, all elements mixed).
-    mds_multiply(state, mds_matrix);
+    // Write the committed S-box output.
+    partial_round.post_sbox.write(state[0]);
 
-    // Write the full post-state to the trace.
-    partial_round
-        .post
-        .iter_mut()
-        .zip(*state)
-        .for_each(|(post, x)| {
-            post.write(x);
-        });
+    // Add scalar round constant (if present).
+    if let Some(rc) = round_constant {
+        state[0] += rc;
+    }
+
+    // Sparse matrix multiply.
+    let old_s0 = state[0];
+    state[0] = dot_product(state.iter().copied(), first_row.iter().copied());
+    for i in 1..WIDTH {
+        state[i] += old_s0 * v[i - 1];
+    }
 }
 
 /// Compute the S-box `x → x^DEGREE` and write intermediate values to the trace.

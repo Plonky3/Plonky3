@@ -17,6 +17,7 @@ p3-util.workspace = true
 
 criterion.workspace = true
 num-bigint.workspace = true
+proptest.workspace = true
 rand.workspace = true
 
 serde.workspace = true

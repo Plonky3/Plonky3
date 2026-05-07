@@ -1,8 +1,11 @@
+use core::any::type_name;
+
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use p3_field::PrimeCharacteristicRing;
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_field_testing::bench_func::{
-    benchmark_add_latency, benchmark_add_throughput, benchmark_dot_array, benchmark_inv,
-    benchmark_iter_sum, benchmark_sub_latency, benchmark_sub_throughput, benchmark_sum_array,
+    benchmark_add_latency, benchmark_add_throughput, benchmark_chunked_linear_combination,
+    benchmark_dot_array, benchmark_inv, benchmark_iter_sum, benchmark_sub_latency,
+    benchmark_sub_throughput, benchmark_sum_array,
 };
 use p3_mersenne_31::Mersenne31;
 use rand::rngs::SmallRng;
@@ -48,5 +51,14 @@ fn bench_field(c: &mut Criterion) {
     });
 }
 
-criterion_group!(mersenne31_arithmetics, bench_field);
+fn bench_packedfield(c: &mut Criterion) {
+    let scalar_name = type_name::<F>().to_string();
+    benchmark_chunked_linear_combination::<F, F, 100>(c, &scalar_name);
+
+    type PF = <F as Field>::Packing;
+    let packed_name = type_name::<PF>().to_string();
+    benchmark_chunked_linear_combination::<F, PF, 100>(c, &packed_name);
+}
+
+criterion_group!(mersenne31_arithmetics, bench_field, bench_packedfield);
 criterion_main!(mersenne31_arithmetics);

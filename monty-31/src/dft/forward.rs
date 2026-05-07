@@ -87,11 +87,11 @@ fn monty_forward_butterfly<MP: FieldParameters + TwoAdicData>(
     <MontyField31<MP> as Field>::Packing,
     <MontyField31<MP> as Field>::Packing,
 ) {
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     {
         x.forward_butterfly(y, roots)
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
     {
         forward_butterfly(x, y, roots)
     }

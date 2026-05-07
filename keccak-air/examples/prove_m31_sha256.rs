@@ -5,7 +5,7 @@ use p3_challenger::{HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
 use p3_field::extension::BinomialExtensionField;
-use p3_fri::create_benchmark_fri_params;
+use p3_fri::FriParameters;
 use p3_keccak_air::{KeccakAir, generate_trace_rows};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_mersenne_31::Mersenne31;
@@ -52,7 +52,7 @@ fn main() -> Result<(), impl Debug> {
     type Challenger = SerializingChallenger32<Val, HashChallenger<u8, ByteHash, 32>>;
     let challenger = Challenger::from_hasher(vec![], byte_hash);
 
-    let fri_params = create_benchmark_fri_params(challenge_mmcs);
+    let fri_params = FriParameters::new_benchmark(challenge_mmcs);
 
     let mut rng = SmallRng::seed_from_u64(1);
     let inputs = (0..NUM_HASHES).map(|_| rng.random()).collect::<Vec<_>>();

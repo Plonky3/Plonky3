@@ -1,8 +1,7 @@
 //! See [`crate::prover`] for an overview of the protocol and a more detailed soundness analysis.
 
-use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
-use alloc::{format, vec};
 
 use itertools::Itertools;
 use p3_air::symbolic::SymbolicAirBuilder;
@@ -13,14 +12,36 @@ use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_util::zip_eq::zip_eq;
-use thiserror::Error;
+use p3_util::{checked_log_size_sum, checked_pow2};
 use tracing::instrument;
 
+use crate::error::{InvalidProofShapeError, VerificationError};
 use crate::symbolic::get_log_num_quotient_chunks;
 use crate::{
     AirLayout, Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
     VerifierConstraintFolder,
 };
+
+pub fn validate_degree_bits(
+    air: Option<usize>,
+    degree_bits: usize,
+    is_zk: usize,
+) -> Result<(usize, usize), InvalidProofShapeError> {
+    if degree_bits < is_zk {
+        return Err(InvalidProofShapeError::DegreeBitsTooSmall {
+            air,
+            minimum: is_zk,
+            got: degree_bits,
+        });
+    }
+
+    let degree = checked_pow2(degree_bits).ok_or(InvalidProofShapeError::DegreeBitsTooLarge {
+        air,
+        maximum: usize::BITS as usize - 1,
+        got: degree_bits,
+    })?;
+    Ok((degree_bits - is_zk, degree))
+}
 
 /// Recomposes the quotient polynomial from its chunks evaluated at a point.
 ///
@@ -79,6 +100,7 @@ pub fn verify_constraints<SC, A, PcsErr>(
     trace_next: &[SC::Challenge],
     preprocessed_local: Option<&[SC::Challenge]>,
     preprocessed_next: Option<&[SC::Challenge]>,
+    periodic_values: &[SC::Challenge],
     public_values: &[Val<SC>],
     trace_domain: Domain<SC>,
     zeta: SC::Challenge,
@@ -114,6 +136,7 @@ where
         main,
         preprocessed,
         preprocessed_window,
+        periodic_values,
         public_values,
         is_first_row: sels.is_first_row,
         is_last_row: sels.is_last_row,
@@ -155,8 +178,7 @@ where
     // - Otherwise, derive width from the AIR's preprocessed trace (if any).
     let preprocessed_width = preprocessed_vk
         .map(|vk| vk.width)
-        .or_else(|| air.preprocessed_trace().as_ref().map(|m| m.width))
-        .unwrap_or(0);
+        .unwrap_or_else(|| air.preprocessed_width());
 
     // Check that the proof's opened preprocessed values match the expected width.
     let preprocessed_local_len = opened_values
@@ -173,8 +195,13 @@ where
         0
     };
     if preprocessed_width != preprocessed_local_len || expected_next_len != preprocessed_next_len {
-        // Verifier expects preprocessed trace while proof does not have it, or vice versa
-        return Err(VerificationError::InvalidProofShape);
+        return Err(InvalidProofShapeError::PreprocessedTraceWidthMismatch {
+            expected_local: preprocessed_width,
+            expected_next: expected_next_len,
+            got_local: preprocessed_local_len,
+            got_next: preprocessed_next_len,
+        }
+        .into());
     }
 
     // Validate consistency between width, verifier key, and zk settings.
@@ -193,7 +220,7 @@ where
         // - Width is 0 but VK is provided.
         // - Width > 0 but VK is missing.
         // - Width > 0 but VK width mismatches the expected width.
-        _ => Err(VerificationError::InvalidProofShape),
+        _ => Err(InvalidProofShapeError::PreprocessedVerifierKeyInconsistency.into()),
     }
 }
 
@@ -229,9 +256,10 @@ where
         opening_proof,
         degree_bits,
     } = proof;
+    let degree_bits = *degree_bits;
 
     let pcs = config.pcs();
-    let degree = 1 << degree_bits;
+    let (base_degree_bits, degree) = validate_degree_bits(None, degree_bits, config.is_zk())?;
     let trace_domain = pcs.natural_domain_for_degree(degree);
     // TODO: allow moving preprocessed commitment to preprocess time, if known in advance
     let (preprocessed_width, preprocessed_commit) =
@@ -240,25 +268,40 @@ where
     // Ensure the preprocessed trace and main trace have the same height.
     if let Some(vk) = preprocessed_vk
         && preprocessed_width > 0
-        && vk.degree_bits != *degree_bits
+        && vk.degree_bits != degree_bits
     {
-        return Err(VerificationError::InvalidProofShape);
+        return Err(InvalidProofShapeError::PreprocessedDegreeMismatch {
+            vk_degree_bits: vk.degree_bits,
+            proof_degree_bits: degree_bits,
+        }
+        .into());
     }
 
     let layout = AirLayout {
         preprocessed_width,
         main_width: air.width(),
         num_public_values: air.num_public_values(),
+        num_periodic_columns: air.num_periodic_columns(),
         ..Default::default()
     };
     let log_num_quotient_chunks =
         get_log_num_quotient_chunks::<Val<SC>, A>(air, layout, config.is_zk());
-    let num_quotient_chunks = 1 << (log_num_quotient_chunks + config.is_zk());
+    let (_, num_quotient_chunks) = checked_log_size_sum(log_num_quotient_chunks, config.is_zk())
+        .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
+            air: None,
+            maximum: usize::BITS as usize - 1,
+            got: log_num_quotient_chunks.saturating_add(config.is_zk()),
+        })?;
     let mut challenger = config.initialise_challenger();
-    let init_trace_domain = pcs.natural_domain_for_degree(degree >> (config.is_zk()));
+    let init_trace_domain = pcs.natural_domain_for_degree(degree >> config.is_zk());
 
-    let quotient_domain =
-        trace_domain.create_disjoint_domain(1 << (degree_bits + log_num_quotient_chunks));
+    let (_, quotient_domain_size) = checked_log_size_sum(degree_bits, log_num_quotient_chunks)
+        .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
+            air: None,
+            maximum: usize::BITS as usize - 1,
+            got: degree_bits.saturating_add(log_num_quotient_chunks),
+        })?;
+    let quotient_domain = trace_domain.create_disjoint_domain(quotient_domain_size);
     let quotient_chunks_domains = quotient_domain.split_domains(num_quotient_chunks);
 
     let randomized_quotient_chunks_domains = quotient_chunks_domains
@@ -275,6 +318,15 @@ where
     }
 
     let air_width = A::width(air);
+    let expected_public_values_len = air.num_public_values();
+    if public_values.len() != expected_public_values_len {
+        return Err(InvalidProofShapeError::PublicValuesLengthMismatch {
+            expected: expected_public_values_len,
+            got: public_values.len(),
+        }
+        .into());
+    }
+
     let main_next = !air.main_next_row_columns().is_empty();
     let pre_next = !air.preprocessed_next_row_columns().is_empty();
     let trace_next_ok = if main_next {
@@ -295,12 +347,12 @@ where
         // We've already checked that opened_values.random is present if and only if ZK is enabled.
         && opened_values.random.as_ref().is_none_or(|r_comm| r_comm.len() == SC::Challenge::DIMENSION);
     if !valid_shape {
-        return Err(VerificationError::InvalidProofShape);
+        return Err(InvalidProofShapeError::OpenedValuesDimensionMismatch.into());
     }
 
     // Observe the instance.
-    challenger.observe(Val::<SC>::from_usize(proof.degree_bits));
-    challenger.observe(Val::<SC>::from_usize(proof.degree_bits - config.is_zk()));
+    challenger.observe(Val::<SC>::from_usize(degree_bits));
+    challenger.observe(Val::<SC>::from_usize(base_degree_bits));
     challenger.observe(Val::<SC>::from_usize(preprocessed_width));
     // TODO: Might be best practice to include other instance data here in the transcript, like some
     // encoding of the AIR. This protects against transcript collisions between distinct instances.
@@ -330,6 +382,12 @@ where
     //
     // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has degree `d`.
     let zeta = challenger.sample_algebra_element();
+    let periodic_values: Vec<SC::Challenge> = air
+        .periodic_columns()
+        .iter()
+        .map(|periodic_col| init_trace_domain.evaluate_periodic_column_at(periodic_col, zeta))
+        .collect();
+
     let zeta_next = init_trace_domain
         .next_point(zeta)
         .ok_or(VerificationError::NextPointUnavailable)?;
@@ -371,7 +429,9 @@ where
             zip_eq(
                 randomized_quotient_chunks_domains.iter(),
                 &opened_values.quotient_chunks,
-                VerificationError::InvalidProofShape,
+                VerificationError::from(InvalidProofShapeError::QuotientDomainsCountMismatch {
+                    air: 0,
+                }),
             )?
             .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
             .collect_vec(),
@@ -422,6 +482,7 @@ where
         trace_next_slice,
         opened_values.preprocessed_local.as_deref(),
         preprocessed_next_for_verify,
+        &periodic_values,
         public_values,
         init_trace_domain,
         zeta,
@@ -430,31 +491,4 @@ where
     )?;
 
     Ok(())
-}
-
-#[derive(Debug, Error)]
-pub enum VerificationError<PcsErr>
-where
-    PcsErr: core::fmt::Debug,
-{
-    #[error("invalid proof shape")]
-    InvalidProofShape,
-    /// An error occurred while verifying the claimed openings.
-    #[error("invalid opening argument: {0:?}")]
-    InvalidOpeningArgument(PcsErr),
-    /// Out-of-domain evaluation mismatch, i.e. `constraints(zeta)` did not match
-    /// `quotient(zeta) Z_H(zeta)`.
-    #[error("out-of-domain evaluation mismatch{}", .index.map(|i| format!(" at index {}", i)).unwrap_or_default())]
-    OodEvaluationMismatch { index: Option<usize> },
-    /// The FRI batch randomization does not correspond to the ZK setting.
-    #[error("randomization error: FRI batch randomization does not match ZK setting")]
-    RandomizationError,
-    /// The domain does not support computing the next point algebraically.
-    #[error(
-        "next point unavailable: domain does not support computing the next point algebraically"
-    )]
-    NextPointUnavailable,
-    /// Lookup related error
-    #[error("lookup error: {0}")]
-    LookupError(String),
 }

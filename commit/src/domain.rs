@@ -5,6 +5,7 @@ use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::interpolation::Interpolate;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 
 /// Given a `PolynomialSpace`, `S`, and a subset `R`, a Lagrange selector `P_R` is
@@ -127,6 +128,30 @@ pub trait PolynomialSpace: Copy {
     ///
     /// Note that these may not be normalized.
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>>;
+
+    /// Evaluate the polynomial defined by `evals` (evaluations over `self`) at `point`.
+    fn evaluate_polynomial_at<Ext: ExtensionField<Self::Val>>(
+        &self,
+        evals: &[Self::Val],
+        point: Ext,
+    ) -> Ext;
+
+    /// Evaluate a periodic column polynomial at `point`.
+    ///
+    /// `col` contains the period-length evaluations: row `i` of the full trace
+    /// gets value `col[i % col.len()]`. The default expands to trace size and
+    /// delegates to [`Self::evaluate_polynomial_at`]; domains with algebraic
+    /// structure (e.g. two-adic cosets) can override for O(period) work.
+    fn evaluate_periodic_column_at<Ext: ExtensionField<Self::Val>>(
+        &self,
+        col: &[Self::Val],
+        point: Ext,
+    ) -> Ext {
+        let n = self.size();
+        let period = col.len();
+        let evals: Vec<Self::Val> = (0..n).map(|i| col[i % period]).collect();
+        self.evaluate_polynomial_at(&evals, point)
+    }
 }
 
 impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
@@ -289,5 +314,21 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
                 .take(coset.size())
                 .collect(),
         }
+    }
+
+    fn evaluate_polynomial_at<Ext: ExtensionField<Val>>(&self, evals: &[Val], point: Ext) -> Ext {
+        let evals_mat = RowMajorMatrix::new(evals.to_vec(), 1);
+        evals_mat.interpolate_coset(self.shift(), point)[0]
+    }
+
+    fn evaluate_periodic_column_at<Ext: ExtensionField<Val>>(
+        &self,
+        col: &[Val],
+        point: Ext,
+    ) -> Ext {
+        let log_period = log2_strict_usize(col.len());
+        let folds = self.log_size() - log_period;
+        let sub_coset = Self::new(self.shift().exp_power_of_2(folds), log_period).unwrap();
+        sub_coset.evaluate_polynomial_at(col, point.exp_power_of_2(folds))
     }
 }

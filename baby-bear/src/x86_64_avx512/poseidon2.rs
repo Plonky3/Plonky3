@@ -192,7 +192,9 @@ impl InternalLayerParametersAVX512<BabyBearParameters, 32> for BabyBearInternalL
 
 #[cfg(test)]
 mod tests {
+    use p3_field::PrimeCharacteristicRing;
     use p3_symmetric::Permutation;
+    use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
@@ -201,6 +203,11 @@ mod tests {
     type F = BabyBear;
     type Perm16 = Poseidon2BabyBear<16>;
     type Perm24 = Poseidon2BabyBear<24>;
+    type Perm32 = Poseidon2BabyBear<32>;
+
+    fn arb_f() -> impl Strategy<Value = F> {
+        prop::num::u32::ANY.prop_map(F::from_u32)
+    }
 
     /// Test that the output is the same as the scalar version on a random input.
     #[test]
@@ -244,16 +251,20 @@ mod tests {
         assert_eq!(avx512_output, expected);
     }
 
-    #[test]
-    fn test_avx512_poseidon2_width_32() {
-        let mut rng = SmallRng::seed_from_u64(1);
-        let poseidon2 = Poseidon2BabyBear::<32>::new_from_rng_128(&mut rng);
-        let input: [F; 32] = rng.random();
-        let mut expected = input;
-        poseidon2.permute_mut(&mut expected);
-        let mut avx512_input = input.map(Into::<PackedBabyBearAVX512>::into);
-        poseidon2.permute_mut(&mut avx512_input);
-        let avx512_output = avx512_input.map(|x| x.0[0]);
-        assert_eq!(avx512_output, expected);
+    proptest! {
+        #[test]
+        fn prop_avx512_poseidon2_width_32(input in prop::array::uniform32(arb_f())) {
+            let mut rng = SmallRng::seed_from_u64(1);
+            let poseidon2 = Perm32::new_from_rng_128(&mut rng);
+
+            let mut expected = input;
+            poseidon2.permute_mut(&mut expected);
+
+            let mut avx512_input = input.map(Into::<PackedBabyBearAVX512>::into);
+            poseidon2.permute_mut(&mut avx512_input);
+            let avx512_output = avx512_input.map(|x| x.0[0]);
+
+            prop_assert_eq!(avx512_output, expected);
+        }
     }
 }

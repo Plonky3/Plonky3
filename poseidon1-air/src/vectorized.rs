@@ -39,8 +39,10 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use crate::air::eval;
-use crate::constants::RoundConstants;
-use crate::{Poseidon1Air, Poseidon1Cols, generate_vectorized_trace_rows};
+use crate::{
+    FullRoundConstants, PartialRoundConstants, Poseidon1Air, Poseidon1Cols,
+    generate_vectorized_trace_rows,
+};
 
 /// Column layout for a vectorized Poseidon1 row.
 ///
@@ -204,10 +206,11 @@ impl<
 {
     /// Construct a vectorized AIR from pre-computed round constants.
     pub const fn new(
-        constants: RoundConstants<F, WIDTH, HALF_FULL_ROUNDS, PARTIAL_ROUNDS>,
+        full_constants: FullRoundConstants<F, WIDTH>,
+        partial_constants: PartialRoundConstants<F, WIDTH>,
     ) -> Self {
         Self {
-            air: Poseidon1Air::new(constants),
+            air: Poseidon1Air::new(full_constants, partial_constants),
         }
     }
 
@@ -234,7 +237,12 @@ impl<
             HALF_FULL_ROUNDS,
             PARTIAL_ROUNDS,
             VECTOR_LEN,
-        >(inputs, &self.air.constants, extra_capacity_bits)
+        >(
+            inputs,
+            &self.air.full_constants,
+            &self.air.partial_constants,
+            extra_capacity_bits,
+        )
     }
 }
 

@@ -47,13 +47,13 @@ impl<R: PrimeCharacteristicRing> Complex<R> {
     #[inline(always)]
     #[must_use]
     pub fn real(&self) -> R {
-        self.value[0].clone()
+        self.value[0].dup()
     }
 
     #[inline(always)]
     #[must_use]
     pub fn imag(&self) -> R {
-        self.value[1].clone()
+        self.value[1].dup()
     }
 
     #[inline(always)]
@@ -70,7 +70,7 @@ impl<R: PrimeCharacteristicRing> Complex<R> {
     #[inline(always)]
     #[must_use]
     pub fn to_array(&self) -> [R; 2] {
-        self.value.clone()
+        core::array::from_fn(|i| self.value[i].dup())
     }
 
     // Sometimes we want to rotate over an extension that's not necessarily ComplexExtendable,

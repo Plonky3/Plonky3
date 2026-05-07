@@ -15,6 +15,7 @@ p3-dft.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
 p3-mds.workspace = true
+p3-poseidon1.workspace = true
 p3-poseidon2.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
@@ -29,6 +30,7 @@ serde = { workspace = true, features = ["derive"] }
 p3-field-testing = { path = "../field-testing" }
 
 criterion.workspace = true
+proptest.workspace = true
 rand_xoshiro.workspace = true
 
 [[bench]]
