@@ -15,7 +15,7 @@ use p3_field::op_assign_macros::{
 };
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
-    PrimeField64, RawDataSerializable, TwoAdicField, halve_u64, impl_raw_serializable_primefield64,
+    PrimeField64, RawDataSerializable, TwoAdicField, impl_raw_serializable_primefield64,
     quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
 };
 use p3_util::{assume, branch_hint, flatten_to_base, gcd_inner};
@@ -233,7 +233,14 @@ impl PrimeCharacteristicRing for Goldilocks {
 
     #[inline]
     fn halve(&self) -> Self {
-        Self::new(halve_u64::<P>(self.value))
+        // Branchless halving: x/2 = (x >> 1) + ((x & 1) * (p+1)/2).
+        // When x is odd, add (p+1)/2 to compensate for the lost bit.
+        // Uses mask arithmetic to avoid the 50/50 unpredictable branch.
+        const HALF_P_PLUS_1: u64 = (P + 1) >> 1; // 0x7FFFFFFF80000001
+        let lo_bit = self.value & 1;
+        let half = self.value >> 1;
+        let mask = 0u64.wrapping_sub(lo_bit); // all-ones when odd, zero when even
+        Self::new(half.wrapping_add(mask & HALF_P_PLUS_1))
     }
 
     #[inline]
@@ -253,7 +260,11 @@ impl PrimeCharacteristicRing for Goldilocks {
         // In the goldilocks field, 2^192 = 1 mod P.
         // Thus 2^{-n} = 2^{192 - n} mod P.
         exp %= 192;
-        self.mul_2exp_u64(192 - exp)
+        match exp {
+            0 => *self,
+            1 => self.halve(),
+            _ => self.mul_2exp_u64(192 - exp),
+        }
     }
 
     #[inline]

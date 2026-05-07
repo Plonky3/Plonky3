@@ -1,3 +1,5 @@
+use alloc::vec::Vec;
+
 use p3_air::{AirBuilder, ExtensionBuilder, PeriodicAirBuilder, PermutationAirBuilder, RowWindow};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
@@ -5,6 +7,8 @@ use p3_uni_stark::{
     PackedChallenge, PackedVal, ProverConstraintFolder, StarkGenericConfig, Val,
     VerifierConstraintFolder,
 };
+
+use crate::builder::InteractionBuilder;
 
 pub struct ProverConstraintFolderWithLookups<'a, SC: StarkGenericConfig> {
     pub inner: ProverConstraintFolder<'a, SC>,
@@ -200,5 +204,48 @@ impl<'a, SC: StarkGenericConfig> PermutationAirBuilder
 
     fn permutation_values(&self) -> &[SC::Challenge] {
         self.permutation_values
+    }
+}
+
+impl<SC: StarkGenericConfig> InteractionBuilder for ProverConstraintFolderWithLookups<'_, SC> {
+    fn push_interaction<E: Into<Self::Expr>>(
+        &mut self,
+        _bus_name: &str,
+        fields: impl IntoIterator<Item = E>,
+        _count: impl Into<Self::Expr>,
+        _count_weight: u32,
+    ) {
+        // Drain the iterator so side effects in a wrapping adapter still fire,
+        // preserving the semantics of a real recording builder.
+        fields.into_iter().for_each(drop);
+    }
+
+    fn push_local_interaction(
+        &mut self,
+        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Self::Expr)>,
+    ) {
+        // Same rationale as the global path: keep iterator consumption observable.
+        tuples.into_iter().for_each(drop);
+    }
+}
+
+impl<SC: StarkGenericConfig> InteractionBuilder for VerifierConstraintFolderWithLookups<'_, SC> {
+    fn push_interaction<E: Into<Self::Expr>>(
+        &mut self,
+        _bus_name: &str,
+        fields: impl IntoIterator<Item = E>,
+        _count: impl Into<Self::Expr>,
+        _count_weight: u32,
+    ) {
+        // Drain the iterator so side effects in a wrapping adapter still fire.
+        fields.into_iter().for_each(drop);
+    }
+
+    fn push_local_interaction(
+        &mut self,
+        tuples: impl IntoIterator<Item = (Vec<Self::Expr>, Self::Expr)>,
+    ) {
+        // Same rationale as the global path.
+        tuples.into_iter().for_each(drop);
     }
 }

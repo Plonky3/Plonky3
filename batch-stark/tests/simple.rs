@@ -3,10 +3,7 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 use core::slice::from_ref;
 
-use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpression};
-use p3_air::{
-    Air, AirBuilder, BaseAir, BaseLeaf, PeriodicAirBuilder, PermutationAirBuilder, WindowAccess,
-};
+use p3_air::{Air, AirBuilder, BaseAir, PeriodicAirBuilder, PermutationAirBuilder, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::{
@@ -21,8 +18,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
 use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
-use p3_lookup::LookupAir;
-use p3_lookup::lookup_traits::{Direction, Kind, Lookup};
+use p3_lookup::InteractionBuilder;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
@@ -69,6 +65,10 @@ impl<F: Field> BaseAir<F> for FibonacciAir {
             m.values[idx] += F::ONE;
         }
         Some(m)
+    }
+
+    fn preprocessed_width(&self) -> usize {
+        1
     }
 }
 
@@ -183,7 +183,6 @@ impl<AB: AirBuilder> Air<AB> for MulAir {
         }
     }
 }
-impl<F: Field> LookupAir<F> for MulAir {}
 
 #[derive(Clone)]
 struct PeriodicAir<F> {
@@ -243,8 +242,6 @@ where
     }
 }
 
-impl<F: Field> LookupAir<F> for PeriodicAir<F> {}
-
 // --- MulAirLookups structure for local and global lookups ---
 // This AIR is a `MulAir` that can register global lookups with `FibAirLookups`, as well as local lookups with a lookup column. Its inputs are the Fibonacci values.
 // - when `is_local` is true, this AIR creates local lookups between its first column and its last column.
@@ -260,23 +257,15 @@ struct MulAirLookups {
     air: MulAir,
     is_local: bool,
     is_global: bool,
-    num_lookups: usize,
     global_names: Vec<String>,
 }
 
 impl MulAirLookups {
-    const fn new(
-        air: MulAir,
-        is_local: bool,
-        is_global: bool,
-        num_lookups: usize,
-        global_names: Vec<String>,
-    ) -> Self {
+    const fn new(air: MulAir, is_local: bool, is_global: bool, global_names: Vec<String>) -> Self {
         Self {
             air,
             is_local,
             is_global,
-            num_lookups,
             global_names,
         }
     }
@@ -291,87 +280,40 @@ impl<F> BaseAir<F> for MulAirLookups {
 impl<AB> Air<AB> for MulAirLookups
 where
     AB::Var: Debug,
-    AB: AirBuilder + PermutationAirBuilder,
+    AB: AirBuilder + PermutationAirBuilder + InteractionBuilder,
 {
     fn eval(&self, builder: &mut AB) {
         self.air.eval(builder);
-    }
-}
 
-impl<F: Field> LookupAir<F> for MulAirLookups {
-    fn add_lookup_columns(&mut self) -> Vec<usize> {
-        let new_idx = self.num_lookups;
-        self.num_lookups += 1;
-        vec![new_idx]
-    }
+        // Cross-AIR and intra-AIR interactions.
+        let main = builder.main();
+        let local = main.current_slice();
+        let last_idx = <Self as BaseAir<AB::F>>::width(self) - 1;
+        let lut = local[last_idx]; // Extra column: permutation of 'a'
 
-    fn get_lookups(&mut self) -> Vec<Lookup<F>> {
-        let mut lookups = Vec::new();
-        self.num_lookups = 0;
-
-        // Create symbolic air builder to access symbolic variables
-        let symbolic_air_builder = SymbolicAirBuilder::<F>::new(AirLayout {
-            main_width: BaseAir::<F>::width(self),
-            ..Default::default()
-        });
-        let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.current_slice();
-
-        let last_idx = symbolic_air_builder.main().width() - 1;
-        let lut = symbolic_main_local[last_idx]; //  Extra column that corresponds to a permutation of 'a'
-
-        if self.is_global {
-            assert!(self.global_names.len() == self.air.reps);
-        }
-        // We add lookups rep by rep, so that we have a mix of local and global lookups, rather than having all local first then all global.
         for rep in 0..self.air.reps {
-            if self.is_local {
-                let base_idx = rep * 3;
-                let a = symbolic_main_local[base_idx]; // First input
-                // Create lookup inputs for each multiplication input
-                // We'll create a local lookup table with integers 0 to height
-                let lookup_inputs = vec![
-                    // Lookup for 'a' against a permuted column.
-                    (
-                        vec![a.into()],
-                        SymbolicExpression::Leaf(BaseLeaf::Constant(F::ONE)),
-                        Direction::Receive,
-                    ),
-                    // Provide the range values (this would be done in the trace generation)
-                    (
-                        vec![lut.into()], // This represents the range values
-                        SymbolicExpression::Leaf(BaseLeaf::Constant(F::ONE)),
-                        Direction::Send,
-                    ),
-                ];
+            let base_idx = rep * 3;
+            let a = local[base_idx];
+            let b = local[base_idx + 1];
 
-                let local_lookup = LookupAir::register_lookup(self, Kind::Local, &lookup_inputs);
-                lookups.push(local_lookup);
+            // Local lookup: 'a' against the permuted column.
+            if self.is_local {
+                builder.push_local_interaction(vec![
+                    (vec![a.into()], AB::Expr::ONE),    // query (receive)
+                    (vec![lut.into()], -AB::Expr::ONE), // table (send, negated)
+                ]);
             }
 
-            // Global lookups: between MulAir inputs and FibAir inputs
+            // Global lookup: send (a, b) to FibAirLookups.
             if self.is_global {
-                let base_idx = rep * 3;
-                let a = symbolic_main_local[base_idx]; // First input
-                let b = symbolic_main_local[base_idx + 1]; // Second input
-
-                // Global lookup between MulAir inputs and FibAir inputs
-                let lookup_inputs = vec![(
-                    vec![a.into(), b.into()],
-                    SymbolicExpression::Leaf(BaseLeaf::Constant(F::ONE)),
-                    Direction::Send, // MulAir sends data to the global lookup
-                )];
-
-                let global_lookup = LookupAir::register_lookup(
-                    self,
-                    Kind::Global(self.global_names[rep].clone()),
-                    &lookup_inputs,
+                builder.push_interaction(
+                    &self.global_names[rep],
+                    [a.into(), b.into()],
+                    -AB::Expr::ONE, // Send = negative count
+                    1,
                 );
-                lookups.push(global_lookup);
             }
         }
-
-        lookups
     }
 }
 
@@ -414,7 +356,6 @@ fn mul_trace<F: Field>(rows: usize, reps: usize) -> RowMajorMatrix<F> {
 struct FibAirLookups {
     air: FibonacciAir,
     is_global: bool,
-    num_lookups: usize,
     name_and_mult: Option<(String, u64)>,
 }
 
@@ -426,23 +367,16 @@ impl Default for FibAirLookups {
                 tamper_index: None,
             },
             is_global: false,
-            num_lookups: 0,
             name_and_mult: None,
         }
     }
 }
 
 impl FibAirLookups {
-    const fn new(
-        air: FibonacciAir,
-        is_global: bool,
-        num_lookups: usize,
-        name_and_mult: Option<(String, u64)>,
-    ) -> Self {
+    const fn new(air: FibonacciAir, is_global: bool, name_and_mult: Option<(String, u64)>) -> Self {
         Self {
             air,
             is_global,
-            num_lookups,
             name_and_mult,
         }
     }
@@ -460,58 +394,35 @@ impl<F: Field> BaseAir<F> for FibAirLookups {
     fn preprocessed_trace(&self) -> Option<RowMajorMatrix<F>> {
         self.air.preprocessed_trace()
     }
+
+    fn preprocessed_width(&self) -> usize {
+        <FibonacciAir as BaseAir<F>>::preprocessed_width(&self.air)
+    }
 }
 
-impl<AB: PermutationAirBuilder> Air<AB> for FibAirLookups {
+impl<AB: PermutationAirBuilder + InteractionBuilder> Air<AB> for FibAirLookups {
     fn eval(&self, builder: &mut AB) {
         self.air.eval(builder);
-    }
-}
 
-impl<F: Field> LookupAir<F> for FibAirLookups {
-    fn add_lookup_columns(&mut self) -> Vec<usize> {
-        let new_idx = self.num_lookups;
-        self.num_lookups += 1;
-        vec![new_idx]
-    }
-
-    fn get_lookups(&mut self) -> Vec<Lookup<F>> {
-        let mut lookups = Vec::new();
-        self.num_lookups = 0;
-
+        // Global interaction — receive (left, right) from MulAirLookups.
         if self.is_global {
-            // Create symbolic air builder to access symbolic variables
-            let symbolic_air_builder = SymbolicAirBuilder::<F>::new(AirLayout {
-                main_width: BaseAir::<F>::width(self),
-                num_public_values: 3,
-                ..Default::default()
-            });
-            let symbolic_main = symbolic_air_builder.main();
-            let symbolic_main_local = symbolic_main.row_slice(0).unwrap();
-
-            // Global lookups: between FibAir inputs and MulAir inputs
-            // FibAir has 2 columns: left and right
-            let left = symbolic_main_local[0]; // left column
-            let right = symbolic_main_local[1]; // right column
+            let main = builder.main();
+            let left = main.current(0).unwrap();
+            let right = main.current(1).unwrap();
 
             let (name, multiplicity) = match &self.name_and_mult {
                 Some((n, m)) => (n.clone(), *m),
                 None => ("MulFib".to_string(), 2),
             };
 
-            // Global lookup between FibAir inputs and MulAir inputs
-            let lookup_inputs = vec![(
-                vec![left.into(), right.into()],
-                SymbolicExpression::Leaf(BaseLeaf::Constant(F::from_u64(multiplicity))),
-                Direction::Receive, // FibAir receives data from the global lookup
-            )];
-
-            let global_lookup =
-                LookupAir::register_lookup(self, Kind::Global(name), &lookup_inputs);
-            lookups.push(global_lookup);
+            // Receive = positive count (counterpart to MulAirLookups' negative send).
+            builder.push_interaction(
+                &name,
+                [left.into(), right.into()],
+                AB::Expr::from_u64(multiplicity),
+                1,
+            );
         }
-
-        lookups
     }
 }
 
@@ -539,6 +450,10 @@ impl<F: Field> BaseAir<F> for PreprocessedMulAir {
         Some(m)
     }
 
+    fn preprocessed_width(&self) -> usize {
+        1
+    }
+
     fn preprocessed_next_row_columns(&self) -> Vec<usize> {
         vec![]
     }
@@ -564,7 +479,6 @@ where
         );
     }
 }
-impl<F: Field> LookupAir<F> for PreprocessedMulAir {}
 
 fn preprocessed_mul_trace<F: Field>(rows: usize, multiplier: u64) -> RowMajorMatrix<F> {
     assert!(rows.is_power_of_two());
@@ -769,6 +683,14 @@ impl<F: PrimeField64> BaseAir<F> for DemoAir {
         }
     }
 
+    fn preprocessed_width(&self) -> usize {
+        match self {
+            Self::Fib(a) => <FibonacciAir as BaseAir<F>>::preprocessed_width(a),
+            Self::Mul(a) => <MulAir as BaseAir<F>>::preprocessed_width(a),
+            Self::PreprocessedMul(a) => <PreprocessedMulAir as BaseAir<F>>::preprocessed_width(a),
+        }
+    }
+
     fn preprocessed_next_row_columns(&self) -> Vec<usize> {
         match self {
             Self::Fib(a) => <FibonacciAir as BaseAir<F>>::preprocessed_next_row_columns(a),
@@ -810,9 +732,16 @@ impl<F: Field> BaseAir<F> for DemoAirWithLookups {
             Self::MulLookups(a) => <MulAirLookups as BaseAir<F>>::preprocessed_trace(a),
         }
     }
+
+    fn preprocessed_width(&self) -> usize {
+        match self {
+            Self::FibLookups(a) => <FibAirLookups as BaseAir<F>>::preprocessed_width(a),
+            Self::MulLookups(a) => <MulAirLookups as BaseAir<F>>::preprocessed_width(a),
+        }
+    }
 }
 
-impl<AB: PermutationAirBuilder> Air<AB> for DemoAirWithLookups
+impl<AB: PermutationAirBuilder + InteractionBuilder> Air<AB> for DemoAirWithLookups
 where
     AB::Var: Debug,
 {
@@ -820,22 +749,6 @@ where
         match self {
             Self::FibLookups(a) => <FibAirLookups as Air<AB>>::eval(a, builder),
             Self::MulLookups(a) => <MulAirLookups as Air<AB>>::eval(a, builder),
-        }
-    }
-}
-
-impl<F: Field> LookupAir<F> for DemoAirWithLookups {
-    fn add_lookup_columns(&mut self) -> Vec<usize> {
-        match self {
-            Self::FibLookups(a) => LookupAir::<F>::add_lookup_columns(a),
-            Self::MulLookups(a) => LookupAir::<F>::add_lookup_columns(a),
-        }
-    }
-
-    fn get_lookups(&mut self) -> Vec<Lookup<F>> {
-        match self {
-            Self::FibLookups(a) => LookupAir::<F>::get_lookups(a),
-            Self::MulLookups(a) => LookupAir::<F>::get_lookups(a),
         }
     }
 }
@@ -853,7 +766,6 @@ where
         }
     }
 }
-impl<F: PrimeField64> LookupAir<F> for DemoAir {}
 
 /// Creates a Fibonacci instance with specified log height.
 fn create_fib_instance(log_height: usize) -> (DemoAir, RowMajorMatrix<Val>, Vec<Val>) {
@@ -904,13 +816,11 @@ fn test_two_instances() -> Result<(), impl Debug> {
             air: &air_fib,
             trace: &fib_trace,
             public_values: fib_pis.clone(),
-            lookups: vec![],
         },
         StarkInstance {
             air: &air_mul,
             trace: &mul_trace,
             public_values: mul_pis.clone(),
-            lookups: vec![],
         },
     ];
 
@@ -932,7 +842,6 @@ fn test_periodic_air() -> Result<(), impl Debug> {
         air: &air,
         trace: &trace,
         public_values: vec![],
-        lookups: vec![],
     }];
     let prover_data = ProverData::from_instances(&config, &instances);
     let common = &prover_data.common;
@@ -949,7 +858,6 @@ fn test_periodic_air_zk() -> Result<(), impl Debug> {
         air: &air,
         trace: &trace,
         public_values: vec![],
-        lookups: vec![],
     }];
     let prover_data = ProverData::from_instances(&config, &instances);
     let common = &prover_data.common;
@@ -969,13 +877,11 @@ fn test_two_instances_zk() -> Result<(), impl Debug> {
             air: &air_fib,
             trace: &fib_trace,
             public_values: fib_pis.clone(),
-            lookups: vec![],
         },
         StarkInstance {
             air: &air_mul,
             trace: &mul_trace,
             public_values: mul_pis.clone(),
-            lookups: vec![],
         },
     ];
 
@@ -1000,19 +906,16 @@ fn test_three_instances_mixed_sizes() -> Result<(), impl Debug> {
             air: &air_fib16,
             trace: &fib16_trace,
             public_values: fib16_pis.clone(),
-            lookups: vec![],
         },
         StarkInstance {
             air: &air_mul8,
             trace: &mul8_trace,
             public_values: mul8_pis.clone(),
-            lookups: vec![],
         },
         StarkInstance {
             air: &air_fib8,
             trace: &fib8_trace,
             public_values: fib8_pis.clone(),
-            lookups: vec![],
         },
     ];
 
@@ -1035,7 +938,6 @@ fn test_invalid_public_values_rejected() -> Result<(), Box<dyn std::error::Error
         air: &air_fib,
         trace: &trace,
         public_values: fib_pis,
-        lookups: vec![],
     }];
     let prover_data = ProverData::from_instances(&config, &instances);
     let common = &prover_data.common;
@@ -1062,7 +964,6 @@ fn test_short_public_values_rejected() -> Result<(), Box<dyn std::error::Error>>
         air: &air_fib,
         trace: &trace,
         public_values: fib_pis,
-        lookups: vec![],
     }];
     let prover_data = ProverData::from_instances(&config, &instances);
     let common = &prover_data.common;
@@ -1100,7 +1001,6 @@ fn test_degree_bits_too_large_rejected() -> Result<(), Box<dyn std::error::Error
         air: &air_fib,
         trace: &trace,
         public_values: fib_pis.clone(),
-        lookups: vec![],
     }];
     let prover_data = ProverData::from_instances(&config, &instances);
     let common = &prover_data.common;
@@ -1154,7 +1054,6 @@ fn test_degree_bits_too_small_for_zk_rejected() -> Result<(), Box<dyn std::error
         air: &air_fib,
         trace: &trace,
         public_values: fib_pis.clone(),
-        lookups: vec![],
     }];
     let prover_data = ProverData::from_instances(&config, &instances);
     let common = &prover_data.common;
@@ -1206,19 +1105,16 @@ fn test_different_widths() -> Result<(), impl Debug> {
             air: &air_mul2,
             trace: &mul2_trace,
             public_values: mul2_pis.clone(),
-            lookups: vec![],
         },
         StarkInstance {
             air: &air_fib,
             trace: &fib_trace,
             public_values: fib_pis.clone(),
-            lookups: vec![],
         },
         StarkInstance {
             air: &air_mul3,
             trace: &mul3_trace,
             public_values: mul3_pis.clone(),
-            lookups: vec![],
         },
     ];
 
@@ -1240,7 +1136,6 @@ fn test_preprocessed_tampered_fails() -> Result<(), Box<dyn std::error::Error>> 
         air: &air,
         trace: &trace,
         public_values: fib_pis.clone(),
-        lookups: vec![],
     }];
 
     let prover_data = ProverData::from_instances(&config, &instances);
@@ -1266,9 +1161,9 @@ fn test_preprocessed_tampered_fails() -> Result<(), Box<dyn std::error::Error>> 
     // Create CommonData with tampered AIR to test verification failure
     // Use the proof's degree_bits (which are log_degrees since ZK is not supported)
     let degree_bits = proof.degree_bits.clone();
-    let mut airs_tampered = vec![air_tampered];
+    let airs_tampered = vec![air_tampered];
     let prover_data_tampered =
-        ProverData::from_airs_and_degrees(&config, &mut airs_tampered, &degree_bits);
+        ProverData::from_airs_and_degrees(&config, &airs_tampered, &degree_bits);
     let common_tampered = &prover_data_tampered.common;
 
     let res = verify_batch(&config, &airs_tampered, &proof, &[fib_pis], common_tampered);
@@ -1298,7 +1193,6 @@ fn test_preprocessed_reuse_common_multi_proofs() -> Result<(), Box<dyn std::erro
         air: &air,
         trace: &trace1,
         public_values: fib_pis1.clone(),
-        lookups: vec![],
     }];
     let prover_data = ProverData::from_instances(&config, &instances1);
     let common = &prover_data.common;
@@ -1321,7 +1215,6 @@ fn test_preprocessed_reuse_common_multi_proofs() -> Result<(), Box<dyn std::erro
         air: &airs[0],
         trace: &trace2,
         public_values: fib_pis2.clone(),
-        lookups: vec![],
     }];
     let proof2 = prove_batch(&config, &instances2, &prover_data);
 
@@ -1345,7 +1238,6 @@ fn test_single_instance() -> Result<(), impl Debug> {
         air: &air_fib,
         trace: &fib_trace,
         public_values: fib_pis.clone(),
-        lookups: vec![],
     }];
 
     let prover_data = ProverData::from_instances(&config, &instances);
@@ -1366,7 +1258,6 @@ fn test_quotient_domain_size_not_multiple_of_packed_field_width() -> Result<(), 
         air: &air_fib,
         trace: &fib_trace,
         public_values: fib_pis.clone(),
-        lookups: vec![],
     }];
 
     let prover_data = ProverData::from_instances(&config, &instances);
@@ -1388,13 +1279,11 @@ fn test_mixed_preprocessed() -> Result<(), impl Debug> {
             air: &air_fib,
             trace: &fib_trace,
             public_values: fib_pis.clone(),
-            lookups: vec![],
         },
         StarkInstance {
             air: &air_mul,
             trace: &mul_trace,
             public_values: mul_pis.clone(),
-            lookups: vec![],
         },
     ];
 
@@ -1423,7 +1312,6 @@ fn test_invalid_trace_width_rejected() {
         air: &air_fib,
         trace: &fib_trace,
         public_values: fib_pis.clone(),
-        lookups: vec![],
     }];
 
     // Generate a valid proof
@@ -1517,13 +1405,11 @@ fn test_reorder_instances_rejected() {
             air: &air_a,
             trace: &tr_a,
             public_values: pv_a.clone(),
-            lookups: vec![],
         },
         StarkInstance {
             air: &air_b,
             trace: &tr_b,
             public_values: pv_b.clone(),
-            lookups: vec![],
         },
     ];
 
@@ -1535,9 +1421,9 @@ fn test_reorder_instances_rejected() {
     let proof = prove_batch(&config, &instances, &prover_data);
 
     // Swap order at verify -> should fail (create new CommonData with swapped AIRs)
-    let mut airs_swapped = vec![air_b, air_a];
+    let airs_swapped = vec![air_b, air_a];
     let prover_data_swapped =
-        ProverData::from_airs_and_degrees(&config, &mut airs_swapped, &log_degrees);
+        ProverData::from_airs_and_degrees(&config, &airs_swapped, &log_degrees);
     let common_swapped = &prover_data_swapped.common;
     let res = verify_batch(
         &config,
@@ -1561,7 +1447,6 @@ fn test_quotient_chunk_element_len_rejected() {
         air: &air,
         trace: &tr,
         public_values: pv.clone(),
-        lookups: vec![],
     }];
     let prover_data = ProverData::from_instances(&config, &instances);
     let common = &prover_data.common;
@@ -1618,13 +1503,11 @@ fn test_circle_stark_batch() -> Result<(), impl Debug> {
             air: &airs[0],
             trace: &trace1,
             public_values: fib_pis1.clone(),
-            lookups: vec![],
         },
         StarkInstance {
             air: &airs[1],
             trace: &trace2,
             public_values: fib_pis2.clone(),
-            lookups: vec![],
         },
     ];
 
@@ -1659,7 +1542,6 @@ fn two_adic_compat_case() -> CompatCase<MyConfig, Val> {
         mul_air,
         false,
         true,
-        0,
         vec!["MulFib".to_string(), "MulFib".to_string()],
     );
 
@@ -1667,7 +1549,7 @@ fn two_adic_compat_case() -> CompatCase<MyConfig, Val> {
         log_height: log_n,
         tamper_index: None,
     };
-    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, 0, None);
+    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, None);
 
     let mul_trace = mul_trace::<Val>(n, reps);
     let fib_trace = fib_trace::<Val>(0, 1, n);
@@ -1701,7 +1583,6 @@ fn circle_compat_case() -> CompatCase<CircleConfig, CircleVal> {
         mul_air,
         false,
         true,
-        0,
         vec!["MulFib".to_string(), "MulFib".to_string()],
     );
 
@@ -1709,7 +1590,7 @@ fn circle_compat_case() -> CompatCase<CircleConfig, CircleVal> {
         log_height: log_n,
         tamper_index: None,
     };
-    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, 0, None);
+    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, None);
 
     let mul_trace = mul_trace::<CircleVal>(n, reps);
     let fib_trace = fib_trace::<CircleVal>(0, 1, n);
@@ -1751,11 +1632,11 @@ fn read_fixture(path: &str) -> std::io::Result<Vec<u8>> {
 
 #[test]
 fn verify_two_adic_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
-    let (config, mut airs, _traces, pvs, _log_degrees) = two_adic_compat_case();
+    let (config, airs, _traces, pvs, _log_degrees) = two_adic_compat_case();
     let proof_bytes = read_fixture(TWO_ADIC_FIXTURE)
         .expect("Missing fixture. Run: cargo test -p p3-batch-stark --test simple -- --ignored");
     let proof: BatchProof<MyConfig> = postcard::from_bytes(&proof_bytes)?;
-    let prover_data = ProverData::from_airs_and_degrees(&config, &mut airs, &proof.degree_bits);
+    let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &proof.degree_bits);
     let common = &prover_data.common;
     verify_batch(&config, &airs, &proof, &pvs, common)?;
     Ok(())
@@ -1763,11 +1644,11 @@ fn verify_two_adic_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn verify_circle_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
-    let (config, mut airs, _traces, pvs, _log_degrees) = circle_compat_case();
+    let (config, airs, _traces, pvs, _log_degrees) = circle_compat_case();
     let proof_bytes = read_fixture(CIRCLE_FIXTURE)
         .expect("Missing fixture. Run: cargo test -p p3-batch-stark --test simple -- --ignored");
     let proof: BatchProof<CircleConfig> = postcard::from_bytes(&proof_bytes)?;
-    let prover_data = ProverData::from_airs_and_degrees(&config, &mut airs, &proof.degree_bits);
+    let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &proof.degree_bits);
     let common = &prover_data.common;
     verify_batch(&config, &airs, &proof, &pvs, common)?;
     Ok(())
@@ -1777,11 +1658,11 @@ fn verify_circle_compat_fixture() -> Result<(), Box<dyn std::error::Error>> {
 #[ignore]
 fn generate_two_adic_fixture() -> Result<(), Box<dyn std::error::Error>> {
     // Regen: cargo test -p p3-batch-stark --test simple -- --ignored
-    let (config, mut airs, traces, pvs, log_degrees) = two_adic_compat_case();
-    let prover_data = ProverData::from_airs_and_degrees(&config, &mut airs, &log_degrees);
-    let common = &prover_data.common;
+    let (config, airs, traces, pvs, log_degrees) = two_adic_compat_case();
+    let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &log_degrees);
+    let _common = &prover_data.common;
     let traces = [&traces[0], &traces[1]];
-    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, common);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs);
     let proof = prove_batch(&config, &instances, &prover_data);
     let bytes = postcard::to_allocvec(&proof)?;
     write_fixture(TWO_ADIC_FIXTURE, &bytes)?;
@@ -1792,11 +1673,11 @@ fn generate_two_adic_fixture() -> Result<(), Box<dyn std::error::Error>> {
 #[ignore]
 fn generate_circle_fixture() -> Result<(), Box<dyn std::error::Error>> {
     // Regen: cargo test -p p3-batch-stark --test simple -- --ignored
-    let (config, mut airs, traces, pvs, log_degrees) = circle_compat_case();
-    let prover_data = ProverData::from_airs_and_degrees(&config, &mut airs, &log_degrees);
-    let common = &prover_data.common;
+    let (config, airs, traces, pvs, log_degrees) = circle_compat_case();
+    let prover_data = ProverData::from_airs_and_degrees(&config, &airs, &log_degrees);
+    let _common = &prover_data.common;
     let traces = [&traces[0], &traces[1]];
-    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, common);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs);
     let proof = prove_batch(&config, &instances, &prover_data);
     let bytes = postcard::to_allocvec(&proof)?;
     write_fixture(CIRCLE_FIXTURE, &bytes)?;
@@ -1815,7 +1696,6 @@ fn test_preprocessed_constraint_positive() -> Result<(), impl Debug> {
         air: &air,
         trace: &trace,
         public_values: pis.clone(),
-        lookups: vec![],
     }];
 
     let prover_data = ProverData::from_instances(&config, &instances);
@@ -1838,7 +1718,6 @@ fn test_preprocessed_constraint_negative() -> Result<(), Box<dyn std::error::Err
         air: &air_prove,
         trace: &trace,
         public_values: pis.clone(),
-        lookups: vec![],
     }];
 
     let prover_data = ProverData::from_instances(&config, &instances);
@@ -1849,9 +1728,9 @@ fn test_preprocessed_constraint_negative() -> Result<(), Box<dyn std::error::Err
         log_height: 4,
         multiplier: 3, // Wrong multiplier!
     });
-    let mut airs = vec![air_verify];
+    let airs = vec![air_verify];
     let degree_bits = proof.degree_bits.clone();
-    let prover_data_verify = ProverData::from_airs_and_degrees(&config, &mut airs, &degree_bits);
+    let prover_data_verify = ProverData::from_airs_and_degrees(&config, &airs, &degree_bits);
     let common_verify = &prover_data_verify.common;
 
     let res = verify_batch(&config, &airs, &proof, &[pis], common_verify);
@@ -1881,19 +1760,16 @@ fn test_mixed_preprocessed_constraints() -> Result<(), impl Debug> {
             air: &air_fib,
             trace: &fib_trace,
             public_values: fib_pis.clone(),
-            lookups: vec![],
         },
         StarkInstance {
             air: &air_mul,
             trace: &mul_trace,
             public_values: mul_pis.clone(),
-            lookups: vec![],
         },
         StarkInstance {
             air: &air_pp_mul,
             trace: &pp_mul_trace,
             public_values: pp_mul_pis.clone(),
-            lookups: vec![],
         },
     ];
 
@@ -1916,20 +1792,19 @@ fn test_batch_stark_one_instance_local_only() -> Result<(), impl Debug> {
     let reps = 1;
     // Create MulAir instance with local lookups configuration
     let mul_air = MulAir { reps };
-    let mul_air_lookups = MulAirLookups::new(mul_air, true, false, 0, vec![]); // local only
+    let mul_air_lookups = MulAirLookups::new(mul_air, true, false, vec![]); // local only
 
     let log_height = 3; // 8 rows
     let mul_trace = mul_trace::<Val>(1 << log_height, reps);
 
-    let mut airs = [DemoAirWithLookups::MulLookups(mul_air_lookups)];
+    let airs = [DemoAirWithLookups::MulLookups(mul_air_lookups)];
 
     // Get lookups from the lookup-enabled AIRs
-    let prover_data =
-        ProverData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_height]);
+    let prover_data = ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]);
     let common = &prover_data.common;
     let traces = [&mul_trace];
 
-    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![]], common);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![]]);
 
     let proof = prove_batch(&config, &instances, &prover_data);
 
@@ -1948,7 +1823,7 @@ fn test_batch_stark_one_instance_local_fails() {
     let reps = 2;
     // Create MulAir instance with local lookups configuration
     let mul_air = MulAir { reps };
-    let mul_air_lookups = MulAirLookups::new(mul_air, true, false, 0, vec![]); // local only
+    let mul_air_lookups = MulAirLookups::new(mul_air, true, false, vec![]); // local only
 
     let log_height = 3; // 8 rows
     let mut mul_trace = mul_trace::<Val>(1 << log_height, reps);
@@ -1956,15 +1831,14 @@ fn test_batch_stark_one_instance_local_fails() {
     // Tamper with the permutation column to cause lookup failure.
     mul_trace.values[reps * 3] = Val::from_u64(9999);
 
-    let mut airs = [DemoAirWithLookups::MulLookups(mul_air_lookups)];
+    let airs = [DemoAirWithLookups::MulLookups(mul_air_lookups)];
 
     // Get lookups from the lookup-enabled AIRs
-    let prover_data =
-        ProverData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_height]);
-    let common = &prover_data.common;
+    let prover_data = ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]);
+    let _common = &prover_data.common;
     let traces = [&mul_trace];
 
-    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![]], common);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![]]);
 
     prove_batch(&config, &instances, &prover_data);
 }
@@ -1981,22 +1855,21 @@ fn test_batch_stark_one_instance_local_fails() {
     let log_height = 3; // 8 rows
     // Create MulAir instance with local lookups configuration
     let mul_air = MulAir { reps };
-    let mul_air_lookups = MulAirLookups::new(mul_air, true, false, 0, vec![]); // local only
+    let mul_air_lookups = MulAirLookups::new(mul_air, true, false, vec![]); // local only
 
     let mut mul_trace = mul_trace::<Val>(1 << log_height, reps);
 
     // Tamper with the permutation column to cause lookup failure.
     mul_trace.values[reps * 3] = Val::from_u64(9999);
 
-    let mut airs = [DemoAirWithLookups::MulLookups(mul_air_lookups)];
+    let airs = [DemoAirWithLookups::MulLookups(mul_air_lookups)];
 
     // Get lookups from the lookup-enabled AIRs
-    let prover_data =
-        ProverData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_height]);
+    let prover_data = ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]);
     let common = &prover_data.common;
     let traces = [&mul_trace];
 
-    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![]], common);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![]]);
 
     let proof = prove_batch(&config, &instances, &prover_data);
 
@@ -2012,14 +1885,13 @@ fn test_batch_stark_local_lookups_only() -> Result<(), impl Debug> {
     let height = 1 << log_height;
     // Create MulAir instance with local lookups configuration
     let mul_air = MulAir { reps: 2 };
-    let mul_air_lookups = MulAirLookups::new(mul_air, true, false, 0, vec![]); // local only
+    let mul_air_lookups = MulAirLookups::new(mul_air, true, false, vec![]); // local only
     let fib_air_lookups = FibAirLookups::new(
         FibonacciAir {
             log_height,
             tamper_index: None,
         },
         false,
-        0,
         None,
     ); // no lookups
 
@@ -2031,18 +1903,15 @@ fn test_batch_stark_local_lookups_only() -> Result<(), impl Debug> {
     let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
     let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups);
 
-    let mut airs = [air1, air2];
+    let airs = [air1, air2];
 
     // Get lookups from the lookup-enabled AIRs
-    let prover_data = ProverData::<MyConfig>::from_airs_and_degrees(
-        &config,
-        &mut airs,
-        &[log_height, log_height],
-    );
+    let prover_data =
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height, log_height]);
     let common = &prover_data.common;
     let traces = [&mul_trace, &fib_trace];
 
-    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()], common);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()]);
 
     let proof = prove_batch(&config, &instances, &prover_data);
 
@@ -2050,7 +1919,7 @@ fn test_batch_stark_local_lookups_only() -> Result<(), impl Debug> {
     verify_batch(&config, &airs, &proof, &pvs, common)
 }
 
-/// Test with global lookups only using MulAirLookups and FibAirLookups  
+/// Test with global lookups only using MulAirLookups and FibAirLookups
 #[test]
 fn test_batch_stark_global_lookups_only() -> Result<(), impl Debug> {
     let config = make_config(2025);
@@ -2063,7 +1932,6 @@ fn test_batch_stark_global_lookups_only() -> Result<(), impl Debug> {
         mul_air,
         false,
         true,
-        0,
         vec!["MulFib".to_string(), "MulFib".to_string()],
     ); // global only
 
@@ -2074,7 +1942,7 @@ fn test_batch_stark_global_lookups_only() -> Result<(), impl Debug> {
         log_height: log_n,
         tamper_index: None,
     };
-    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, 0, None); // global lookups
+    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, None); // global lookups
 
     let mul_trace = mul_trace::<Val>(n, 2);
     let fib_trace = fib_trace::<Val>(0, 1, n);
@@ -2085,13 +1953,13 @@ fn test_batch_stark_global_lookups_only() -> Result<(), impl Debug> {
     let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups);
 
     // Get lookups from the lookup-enabled AIRs
-    let mut airs = [air1, air2];
+    let airs = [air1, air2];
     let prover_data =
-        ProverData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_n, log_n]);
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n]);
     let common = &prover_data.common;
     let traces = [&mul_trace, &fib_trace];
 
-    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()], common);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()]);
 
     let proof = prove_batch(&config, &instances, &prover_data);
 
@@ -2111,7 +1979,6 @@ fn test_batch_stark_both_lookups() -> Result<(), impl Debug> {
         mul_air,
         true,
         true,
-        0,
         vec!["MulFib".to_string(), "MulFib".to_string()],
     ); // both
 
@@ -2122,7 +1989,7 @@ fn test_batch_stark_both_lookups() -> Result<(), impl Debug> {
         log_height,
         tamper_index: None,
     };
-    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, 0, None); // global lookups
+    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, None); // global lookups
 
     let mul_trace = mul_trace::<Val>(height, 2);
     let fib_trace = fib_trace::<Val>(0, 1, height);
@@ -2132,17 +1999,14 @@ fn test_batch_stark_both_lookups() -> Result<(), impl Debug> {
     let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
     let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups);
 
-    let mut airs = [air1, air2];
+    let airs = [air1, air2];
     // Get lookups from the lookup-enabled AIRs
-    let prover_data = ProverData::<MyConfig>::from_airs_and_degrees(
-        &config,
-        &mut airs,
-        &[log_height, log_height],
-    );
+    let prover_data =
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height, log_height]);
     let common = &prover_data.common;
     let traces = [&mul_trace, &fib_trace];
 
-    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()], common);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()]);
 
     let proof = prove_batch(&config, &instances, &prover_data);
 
@@ -2162,7 +2026,6 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
         mul_air,
         true,
         true,
-        0,
         vec!["MulFib".to_string(), "MulFib".to_string()],
     ); // both
 
@@ -2173,7 +2036,7 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
         log_height,
         tamper_index: None,
     };
-    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, 0, None); // global lookups
+    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, None); // global lookups
 
     let mul_trace = mul_trace::<Val>(height, 2);
     let fib_trace = fib_trace::<Val>(0, 1, height);
@@ -2183,17 +2046,17 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
     let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
     let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups);
 
-    let mut airs = [air1, air2];
+    let airs = [air1, air2];
     // Get lookups from the lookup-enabled AIRs
     let prover_data = ProverData::<MyHidingConfig>::from_airs_and_degrees(
         &config,
-        &mut airs,
+        &airs,
         &[log_height + config.is_zk(), log_height + config.is_zk()],
     );
     let common = &prover_data.common;
     let traces = [&mul_trace, &fib_trace];
 
-    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()], common);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()]);
 
     let proof = prove_batch(&config, &instances, &prover_data);
 
@@ -2228,7 +2091,6 @@ fn test_batch_stark_failed_global_lookup_inner() {
         mul_air,
         false,
         true,
-        0,
         vec!["MulFib1".to_string(), "MulFib2".to_string()], // Different names!
     );
     // This creates a mismatch: MulAir sends to "MulFib1" and "MulFib2"
@@ -2239,8 +2101,7 @@ fn test_batch_stark_failed_global_lookup_inner() {
         log_height: log_n,
         tamper_index: None,
     };
-    let fib_air_lookups =
-        FibAirLookups::new(fibonacci_air, true, 0, Some(("MulFib1".to_string(), 1)));
+    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, Some(("MulFib1".to_string(), 1)));
 
     let mul_trace = mul_trace::<Val>(n, 2);
     let fib_trace = fib_trace::<Val>(0, 1, n);
@@ -2253,12 +2114,12 @@ fn test_batch_stark_failed_global_lookup_inner() {
     let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups);
 
     // Get lookups from the lookup-enabled AIRs
-    let mut airs = [air1, air2];
+    let airs = [air1, air2];
     let prover_data =
-        ProverData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_n, log_n]);
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n]);
     let common = &prover_data.common;
 
-    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, common);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs);
 
     let proof = prove_batch(&config, &instances, &prover_data);
 
@@ -2279,7 +2140,6 @@ fn test_batch_stark_rejects_truncated_global_lookup_data() {
         mul_air,
         false,
         true,
-        0,
         vec!["MulFib".to_string(), "MulFib".to_string()],
     );
 
@@ -2289,7 +2149,7 @@ fn test_batch_stark_rejects_truncated_global_lookup_data() {
         log_height: log_n,
         tamper_index: None,
     };
-    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, 0, None);
+    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, None);
 
     let mul_trace = mul_trace::<Val>(n, 2);
     let fib_trace = fib_trace::<Val>(0, 1, n);
@@ -2298,14 +2158,14 @@ fn test_batch_stark_rejects_truncated_global_lookup_data() {
     let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
     let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups);
 
-    let mut airs = [air1, air2];
+    let airs = [air1, air2];
     let prover_data =
-        ProverData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_n, log_n]);
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n]);
     let common = &prover_data.common;
     let traces = [&mul_trace, &fib_trace];
     let pvs = vec![vec![], fib_pis];
 
-    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, common);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs);
     let mut proof = prove_batch(&config, &instances, &prover_data);
 
     proof.global_lookup_data[0].pop();
@@ -2351,7 +2211,6 @@ fn make_global_lookup_proof() -> (
         mul_air,
         false,
         true,
-        0,
         vec!["MulFib1".to_string(), "MulFib2".to_string()],
     );
 
@@ -2363,9 +2222,9 @@ fn make_global_lookup_proof() -> (
         tamper_index: None,
     };
     let fib_air_lookups_1 =
-        FibAirLookups::new(fibonacci_air, true, 0, Some(("MulFib1".to_string(), 1)));
+        FibAirLookups::new(fibonacci_air, true, Some(("MulFib1".to_string(), 1)));
     let fib_air_lookups_2 =
-        FibAirLookups::new(fibonacci_air, true, 0, Some(("MulFib2".to_string(), 1)));
+        FibAirLookups::new(fibonacci_air, true, Some(("MulFib2".to_string(), 1)));
 
     let mul_trace = mul_trace::<Val>(n, 2);
     let fib_trace_1 = fib_trace::<Val>(0, 1, n);
@@ -2376,14 +2235,14 @@ fn make_global_lookup_proof() -> (
     let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups_1);
     let air3 = DemoAirWithLookups::FibLookups(fib_air_lookups_2);
 
-    let mut airs = [air1, air2, air3];
+    let airs = [air1, air2, air3];
     let prover_data =
-        ProverData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_n, log_n, log_n]);
-    let common = &prover_data.common;
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n, log_n]);
+    let _common = &prover_data.common;
     let traces = [&mul_trace, &fib_trace_1, &fib_trace_2];
     let pvs = vec![vec![], fib_pis.clone(), fib_pis];
 
-    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, common);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs);
     let proof = prove_batch(&config, &instances, &prover_data);
     (config, airs, proof, pvs, prover_data.common)
 }
@@ -2418,8 +2277,8 @@ fn test_batch_stark_rejects_tampered_global_lookup_metadata() {
     //   - lookup: 0                 — first global lookup within that AIR
     //   - expected_name: "MulFib1"  — what the AIR declares
     //   - got_name: "tampered"      — what the proof supplied
-    //   - expected_aux_idx: 0       — column index from the AIR
-    //   - got_aux_idx: 0            — unchanged, only name was tampered
+    //   - expected_aux_column: 0       — column index from the AIR
+    //   - got_aux_column: 0            — unchanged, only name was tampered
     match err {
         VerificationError::InvalidProofShape(
             InvalidProofShapeError::GlobalLookupDataMetadataMismatch {
@@ -2427,16 +2286,16 @@ fn test_batch_stark_rejects_tampered_global_lookup_metadata() {
                 lookup,
                 expected_name,
                 got_name,
-                expected_aux_idx,
-                got_aux_idx,
+                expected_aux_column,
+                got_aux_column,
             },
         ) => {
             assert_eq!(air, 0);
             assert_eq!(lookup, 0);
             assert_eq!(expected_name, "MulFib1");
             assert_eq!(got_name, "tampered");
-            assert_eq!(expected_aux_idx, 0);
-            assert_eq!(got_aux_idx, 0);
+            assert_eq!(expected_aux_column, 0);
+            assert_eq!(got_aux_column, 0);
         }
         _ => panic!("unexpected error: {err:?}"),
     }
@@ -2460,7 +2319,7 @@ fn test_batch_stark_rejects_tampered_global_lookup_aux_idx() {
     //     proof says:   aux_idx = 42
     //     AIR declares: aux_idx = 0
     //     → mismatch → error on AIR 0, lookup 0
-    proof.global_lookup_data[0][0].aux_idx = 42;
+    proof.global_lookup_data[0][0].aux_column = 42;
 
     let err = verify_batch(&config, &airs, &proof, &pvs, &common)
         .expect_err("Verifier should reject tampered global lookup aux index");
@@ -2470,8 +2329,8 @@ fn test_batch_stark_rejects_tampered_global_lookup_aux_idx() {
     //   - lookup: 0                 — first global lookup within that AIR
     //   - expected_name: "MulFib1"  — unchanged, only aux_idx was tampered
     //   - got_name: "MulFib1"       — matches (name is correct)
-    //   - expected_aux_idx: 0       — what the AIR declares
-    //   - got_aux_idx: 42           — the tampered value
+    //   - expected_aux_column: 0       — what the AIR declares
+    //   - got_aux_column: 42           — the tampered value
     match err {
         VerificationError::InvalidProofShape(
             InvalidProofShapeError::GlobalLookupDataMetadataMismatch {
@@ -2479,16 +2338,16 @@ fn test_batch_stark_rejects_tampered_global_lookup_aux_idx() {
                 lookup,
                 expected_name,
                 got_name,
-                expected_aux_idx,
-                got_aux_idx,
+                expected_aux_column,
+                got_aux_column,
             },
         ) => {
             assert_eq!(air, 0);
             assert_eq!(lookup, 0);
             assert_eq!(expected_name, "MulFib1");
             assert_eq!(got_name, "MulFib1");
-            assert_eq!(expected_aux_idx, 0);
-            assert_eq!(got_aux_idx, 42);
+            assert_eq!(expected_aux_column, 0);
+            assert_eq!(got_aux_column, 42);
         }
         _ => panic!("unexpected error: {err:?}"),
     }
@@ -2516,15 +2375,14 @@ macro_rules! run_batch_stark_mixed_lookups {
             mul_air_with_lookups,
             true,
             true,
-            0,
             vec!["MulFib1".to_string(), "MulFib2".to_string()],
         );
         // This AIR has no lookups.
         let mul_air_no_lookups =
-            MulAirLookups::new(mul_air_with_lookups, false, false, 0, vec![]);
+            MulAirLookups::new(mul_air_with_lookups, false, false, vec![]);
         // This AIR only has local lookups.
         let mul_air_local_lookups =
-            MulAirLookups::new(mul_air_with_lookups, true, false, 0, vec![]); // local lookups only
+            MulAirLookups::new(mul_air_with_lookups, true, false, vec![]); // local lookups only
 
         let log_n1 = 4; // 16 rows
         let log_n2 = 3; // 8 rows
@@ -2546,17 +2404,15 @@ macro_rules! run_batch_stark_mixed_lookups {
         let fib_air_with_lookups1 = FibAirLookups::new(
             fib_air_lookups,
             true,
-            0,
             Some(("MulFib1".to_string(), 1)),
         ); // global lookups
         let fib_air_with_lookups2 = FibAirLookups::new(
             fib_air_lookups,
             true,
-            0,
             Some(("MulFib2".to_string(), 1)),
         ); // global lookups
         let fib_air_no_lookups =
-            FibAirLookups::new(fib_air_no_lookups, false, 0, None); // global lookups
+            FibAirLookups::new(fib_air_no_lookups, false, None); // global lookups
 
         // Generate traces. The airs with and without lookups have different heights.
         let mul_with_lookups_trace = mul_trace::<Val>(n1, reps);
@@ -2611,7 +2467,7 @@ macro_rules! run_batch_stark_mixed_lookups {
         ];
 
         // Create instances - mixing lookup and non-lookup instances
-        let instances = StarkInstance::new_multiple(&all_airs, &traces, &all_pvs, common);
+        let instances = StarkInstance::new_multiple(&all_airs, &traces, &all_pvs);
 
         let proof = prove_batch(&config, &instances, &prover_data);
 
@@ -2633,116 +2489,51 @@ fn test_batch_stark_mixed_lookups_wide() -> Result<(), impl Debug> {
 // Single table with local lookup involving the Lagrange selectors. Since the selectors are not normalized,
 // we need to add multiplicity columns and multiply them by the selectors.
 #[derive(Debug, Clone, Copy)]
-struct SingleTableLocalLookupAir {
-    num_lookups: usize,
-}
-
-impl SingleTableLocalLookupAir {
-    const fn new() -> Self {
-        Self { num_lookups: 0 }
-    }
-}
+struct SingleTableLocalLookupAir;
 
 impl<F> BaseAir<F> for SingleTableLocalLookupAir {
     fn width(&self) -> usize {
-        7 // 7 columns: 3 sender columns (1 for each selector type), lookup table, 3 multiplicity columns (1 for each selector type)
+        7
     }
 }
 
 impl<AB> Air<AB> for SingleTableLocalLookupAir
 where
     AB::Var: Debug,
-    AB: AirBuilder + PermutationAirBuilder,
+    AB: AirBuilder + PermutationAirBuilder + InteractionBuilder,
 {
-    fn eval(&self, _builder: &mut AB) {
-        // No additional constraints needed for this simple table
-    }
-}
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let local = main.current_slice();
 
-impl<F: Field> LookupAir<F> for SingleTableLocalLookupAir {
-    fn add_lookup_columns(&mut self) -> Vec<usize> {
-        let new_idx = self.num_lookups;
-        self.num_lookups += 1;
-        vec![new_idx]
-    }
+        let sender1 = local[0];
+        let sender2 = local[1];
+        let sender3 = local[2];
+        let table = local[3];
+        let mul1 = local[4];
+        let mul2 = local[5];
+        let mul3 = local[6];
 
-    fn get_lookups(&mut self) -> Vec<Lookup<F>> {
-        let mut lookups = Vec::new();
-        self.num_lookups = 0;
+        let is_first = builder.is_first_row();
+        let is_trans = builder.is_transition();
+        let is_last = builder.is_last_row();
 
-        // Create symbolic air builder to access symbolic variables
-        let symbolic_air_builder = SymbolicAirBuilder::<F>::new(AirLayout {
-            main_width: BaseAir::<F>::width(self),
-            ..Default::default()
-        });
-        let symbolic_main = symbolic_air_builder.main();
-        let symbolic_main_local = symbolic_main.current_slice();
+        // Three independent local lookups, each with a different selector.
+        // Lagrange selectors are not normalized, so we multiply on both sides.
+        builder.push_local_interaction(vec![
+            (vec![sender1.into()], is_first.clone()),
+            (vec![table.into()], -(is_first * mul1.into())),
+        ]);
 
-        let sender_col1 = symbolic_main_local[0]; // Column that sends values
-        let sender_col2 = symbolic_main_local[1]; // Column that sends values
-        let sender_col3 = symbolic_main_local[2]; // Column that sends values
-        let lookup_table_col = symbolic_main_local[3]; // Column that receives lookups
-        let mul1 = symbolic_main_local[4]; // Multiplicity column for first selector
-        let mul2 = symbolic_main_local[5]; // Multiplicity column for second selector
-        let mul3 = symbolic_main_local[6]; // Multiplicity column for third selector
+        builder.push_local_interaction(vec![
+            (vec![sender2.into()], is_trans.clone()),
+            (vec![table.into()], -(is_trans * mul2.into())),
+        ]);
 
-        // Local lookup: sender column looks up into lookup table column.
-        let lookup_inputs1 = vec![
-            // Read values from the sender column with `is_first_row` multiplicity.
-            (
-                vec![sender_col1.into()],
-                symbolic_air_builder.is_first_row(),
-                Direction::Receive,
-            ),
-            // Provide values from the lookup table with `is_first_row * mul1` multiplicity.
-            // Note that we need to multiply by `is_first_row` here because the Lagrange selectors are not normalized.
-            (
-                vec![lookup_table_col.into()],
-                symbolic_air_builder.is_first_row() * mul1,
-                Direction::Send,
-            ),
-        ];
-
-        let lookup_inputs2 = vec![
-            // Read values from the sender column with `is_transition` multiplicity.
-            (
-                vec![sender_col2.into()],
-                symbolic_air_builder.is_transition(),
-                Direction::Receive,
-            ),
-            // Provide values from the lookup table with `is_transition * mul2` multiplicity.
-            // Note that we need to multiply by `is_transition` here because the Lagrange selectors are not normalized.
-            (
-                vec![lookup_table_col.into()],
-                symbolic_air_builder.is_transition() * mul2,
-                Direction::Send,
-            ),
-        ];
-
-        let lookup_inputs3 = vec![
-            // Read values from the sender column with `is_last_row` multiplicity.
-            (
-                vec![sender_col3.into()],
-                symbolic_air_builder.is_last_row(),
-                Direction::Receive,
-            ),
-            // Provide values from the lookup table with `is_last_row * mul3` multiplicity.
-            // Note that we need to multiply by `is_last_row` here because the Lagrange selectors are not normalized.
-            (
-                vec![lookup_table_col.into()],
-                symbolic_air_builder.is_last_row() * mul3,
-                Direction::Send,
-            ),
-        ];
-
-        let all_lookup_inputs = vec![lookup_inputs1, lookup_inputs2, lookup_inputs3];
-
-        for lookup_inputs in all_lookup_inputs {
-            let local_lookup = LookupAir::register_lookup(self, Kind::Local, &lookup_inputs);
-            lookups.push(local_lookup);
-        }
-
-        lookups
+        builder.push_local_interaction(vec![
+            (vec![sender3.into()], is_last.clone()),
+            (vec![table.into()], -(is_last * mul3.into())),
+        ]);
     }
 }
 
@@ -2794,14 +2585,11 @@ fn test_single_table_local_lookup() -> Result<(), impl Debug> {
     let log_height = 3;
     let height = 1 << log_height; // Single table with 8 rows
 
-    // Create instance
-    let air = SingleTableLocalLookupAir::new();
-
-    let mut airs = [air];
+    let air = SingleTableLocalLookupAir;
+    let airs = [air];
 
     // Get lookups from the lookup-enabled AIR
-    let prover_data =
-        ProverData::<MyConfig>::from_airs_and_degrees(&config, &mut airs, &[log_height]);
+    let prover_data = ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height]);
     let common = &prover_data.common;
 
     // Generate trace
@@ -2810,7 +2598,7 @@ fn test_single_table_local_lookup() -> Result<(), impl Debug> {
     let traces = [&trace];
     let pvs = vec![vec![]]; // No public values
 
-    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs, common);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs);
 
     let proof = prove_batch(&config, &instances, &prover_data);
 
@@ -2825,14 +2613,13 @@ fn test_invalid_permutation_opening_len_rejected() {
     let log_height = 4;
     let height = 1 << log_height;
     let mul_air = MulAir { reps: 2 };
-    let mul_air_lookups = MulAirLookups::new(mul_air, true, false, 0, vec![]);
+    let mul_air_lookups = MulAirLookups::new(mul_air, true, false, vec![]);
     let fib_air_lookups = FibAirLookups::new(
         FibonacciAir {
             log_height,
             tamper_index: None,
         },
         false,
-        0,
         None,
     );
 
@@ -2842,17 +2629,14 @@ fn test_invalid_permutation_opening_len_rejected() {
 
     let air1 = DemoAirWithLookups::MulLookups(mul_air_lookups);
     let air2 = DemoAirWithLookups::FibLookups(fib_air_lookups);
-    let mut airs = [air1, air2];
+    let airs = [air1, air2];
 
-    let prover_data = ProverData::<MyConfig>::from_airs_and_degrees(
-        &config,
-        &mut airs,
-        &[log_height, log_height],
-    );
+    let prover_data =
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_height, log_height]);
     let common = &prover_data.common;
     let traces = [&mul_trace, &fib_trace];
 
-    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()], common);
+    let instances = StarkInstance::new_multiple(&airs, &traces, &[vec![], fib_pis.clone()]);
     let mut proof = prove_batch(&config, &instances, &prover_data);
 
     // Find the instance with non-empty permutation openings and truncate it.

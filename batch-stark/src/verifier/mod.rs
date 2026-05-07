@@ -7,13 +7,12 @@ use alloc::{format, vec};
 pub use data::VerifierData;
 use hashbrown::HashMap;
 use p3_air::Air;
-use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpressionExt};
+use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
-use p3_lookup::Lookup;
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::lookup_traits::LookupGadget;
+use p3_lookup::{InteractionSymbolicBuilder, Kind, LookupProtocol};
 use p3_uni_stark::{
     InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks, validate_degree_bits,
 };
@@ -38,7 +37,7 @@ pub fn verify_batch<SC, A>(
 where
     SC: SGC,
     SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
-    A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>>
+    A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<VerifierConstraintFolderWithLookups<'a, SC>>,
     Challenge<SC>: BasedVectorSpace<Val<SC>>,
 {
@@ -227,8 +226,13 @@ where
             return Err(InvalidProofShapeError::PreprocessedWidthMismatch { air: i }.into());
         }
 
-        let expected_global_lookup_entries =
-            Lookup::global_entries(&all_lookups[i]).collect::<Vec<_>>();
+        let expected_global_lookup_entries: Vec<_> = all_lookups[i]
+            .iter()
+            .filter_map(|l| match &l.kind {
+                Kind::Global(name) => Some((name, l.column)),
+                Kind::Local => None,
+            })
+            .collect();
         let expected_global_lookup_data_len = expected_global_lookup_entries.len();
         let got_global_lookup_data_len = global_lookup_data[i].len();
         if got_global_lookup_data_len != expected_global_lookup_data_len {
@@ -239,20 +243,20 @@ where
             }
             .into());
         }
-        for (lookup_idx, ((expected_name, expected_aux_idx), data)) in
+        for (lookup_idx, ((expected_name, expected_aux_column), data)) in
             expected_global_lookup_entries
                 .into_iter()
                 .zip(global_lookup_data[i].iter())
                 .enumerate()
         {
-            if data.name != *expected_name || data.aux_idx != expected_aux_idx {
+            if data.name != *expected_name || data.aux_column != expected_aux_column {
                 return Err(InvalidProofShapeError::GlobalLookupDataMetadataMismatch {
                     air: i,
                     lookup: lookup_idx,
                     expected_name: expected_name.clone(),
                     got_name: data.name.clone(),
-                    expected_aux_idx,
-                    got_aux_idx: data.aux_idx,
+                    expected_aux_column,
+                    got_aux_column: data.aux_column,
                 }
                 .into());
             }
@@ -515,7 +519,7 @@ where
         // For constraint evaluation, we need an extension field matrix with width `aux_width``.
         let aux_width = all_lookups[i]
             .iter()
-            .flat_map(|ctx| ctx.columns.iter().cloned())
+            .map(|ctx| ctx.column)
             .max()
             .map(|m| m + 1)
             .unwrap_or(0);
@@ -580,7 +584,7 @@ where
         };
         let perm_vals: Vec<SC::Challenge> = global_lookup_data[i]
             .iter()
-            .map(|ld| ld.expected_cumulated)
+            .map(|ld| ld.cumulative_sum)
             .collect();
         let periodic_values: Vec<Challenge<SC>> = air
             .periodic_columns()
@@ -621,18 +625,23 @@ where
 
     let mut global_cumulative = HashMap::<&String, Vec<_>>::new();
     for (lookups, data_for_instance) in all_lookups.iter().zip(global_lookup_data.iter()) {
-        debug_assert_eq!(Lookup::global_count(lookups), data_for_instance.len());
-        for ((name, _), data) in Lookup::global_entries(lookups).zip(data_for_instance.iter()) {
+        let global_lookups = lookups.iter().filter(|l| matches!(l.kind, Kind::Global(_)));
+        debug_assert_eq!(global_lookups.clone().count(), data_for_instance.len());
+        for (lookup, data) in global_lookups.zip(data_for_instance.iter()) {
+            let name = match &lookup.kind {
+                Kind::Global(n) => n,
+                Kind::Local => unreachable!(),
+            };
             global_cumulative
                 .entry(name)
                 .or_default()
-                .push(data.expected_cumulated);
+                .push(data.cumulative_sum);
         }
     }
 
     for (name, all_expected_cumulative) in global_cumulative {
         lookup_gadget
-            .verify_global_final_value(&all_expected_cumulative)
+            .verify_global_sum(&all_expected_cumulative)
             .map_err(|e| VerificationError::LookupError(format!("{e:?}: {name}")))?;
     }
 

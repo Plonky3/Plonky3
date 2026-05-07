@@ -1,9 +1,8 @@
-//! Barycentric Lagrange interpolation over two-adic cosets.
+//! Lagrange interpolation over structured (two-adic coset) and arbitrary evaluation domains.
 //!
-//! Evaluates polynomials at out-of-domain points given their evaluations
-//! over a power-of-two multiplicative coset.
+//! Evaluates polynomials at out-of-domain points given their evaluations on the chosen domain.
 //!
-//! # Mathematical background
+//! # Mathematical background (two-adic coset path)
 //!
 //! Slight variation of this approach: <https://hackmd.io/@vbuterin/barycentric_evaluation>.
 //!
@@ -31,6 +30,14 @@
 //!
 //! Thus we define the **adjusted weights** to be `(1/(z - g*h^i) - 1/z)` and work with
 //! these instead.
+//!
+//! # Arbitrary-domain path
+//!
+//! For evaluation domains that are not a two-adic coset we fall back to the standard
+//! second-form barycentric formula with precomputed weights `w_i = 1/prod_{j != i}(x_i - x_j)`.
+//! See [`InterpolateArbitrary`] for the matrix-level entry points and
+//! [`interpolate_lagrange`] for a single-polynomial convenience helper.
+
 use alloc::vec::Vec;
 
 use p3_field::coset::TwoAdicMultiplicativeCoset;
@@ -42,6 +49,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 
 use crate::Matrix;
+use crate::dense::RowMajorMatrix;
 
 /// Subtract z^{-1} from each inverse denominator to produce adjusted barycentric weights.
 ///
@@ -184,6 +192,258 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
 
 impl<F: TwoAdicField, M: Matrix<F>> Interpolate<F> for M {}
 
+/// Computes barycentric weights w_i = 1 / prod_{j != i} (x_i - x_j).
+///
+/// These weights depend only on the domain points, not on polynomial values.
+/// Precompute them once and reuse across many evaluation targets.
+///
+/// # Performance
+///
+/// - n(n-1)/2 field subtractions (upper-triangle symmetry trick).
+/// - One batch inversion via Montgomery's trick.
+///
+/// # Returns
+///
+/// `None` if any two domain points coincide.
+pub fn barycentric_weights<F: Field>(x_coords: &[F]) -> Option<Vec<F>> {
+    let n = x_coords.len();
+    if n == 0 {
+        return Some(Vec::new());
+    }
+
+    // Accumulate denom_i = prod_{j != i} (x_i - x_j) for every point.
+    let mut denoms = alloc::vec![F::ONE; n];
+    for i in 0..n {
+        // Only iterate j < i (strict upper triangle).
+        //
+        // Antisymmetry: (x_i - x_j) = -(x_j - x_i);
+        // So one subtraction updates both denom_i and denom_j.
+        for j in 0..i {
+            let diff = x_coords[i] - x_coords[j];
+            // Zero difference means a duplicate domain point.
+            if diff.is_zero() {
+                return None;
+            }
+            denoms[i] *= diff;
+            denoms[j] *= -diff;
+        }
+    }
+
+    // Invert all n denominators in one shot: O(n) muls + 1 inversion.
+    Some(batch_multiplicative_inverse(&denoms))
+}
+
+/// Lagrange interpolation over arbitrary evaluation domains.
+///
+/// General-domain counterpart of the structured-domain trait.
+///
+/// Blanket-implemented for every matrix over a field — just import and call.
+pub trait InterpolateArbitrary<F: Field>: Matrix<F> {
+    /// Evaluates every column polynomial at `point` via barycentric interpolation.
+    ///
+    /// Each row holds evaluations at the corresponding domain point.
+    ///
+    /// # Performance
+    ///
+    /// O(n^2) weight computation + O(n * width) evaluation.
+    ///
+    /// # Returns
+    ///
+    /// - `None` if any domain points coincide.
+    /// - The matching row directly when the target equals a domain point.
+    fn interpolate_arbitrary_point<EF: ExtensionField<F>>(
+        &self,
+        x_coords: &[F],
+        point: EF,
+    ) -> Option<Vec<EF>> {
+        debug_assert_eq!(x_coords.len(), self.height());
+
+        // If the target matches a domain point, return that row directly.
+        // This also avoids a zero in the difference vector below.
+        for (i, &x) in x_coords.iter().enumerate() {
+            if point == EF::from(x) {
+                return Some(self.row(i).unwrap().into_iter().map(EF::from).collect());
+            }
+        }
+
+        // Compute barycentric weights (returns None on duplicate domain points).
+        let weights = barycentric_weights(x_coords)?;
+
+        // Batch-invert all (point - x_i). Safe: coincidence was ruled out above.
+        let diffs: Vec<EF> = x_coords.iter().map(|&x| point - x).collect();
+        let diff_invs = batch_multiplicative_inverse(&diffs);
+
+        Some(self.interpolate_arbitrary_with_precomputation(&weights, &diff_invs))
+    }
+
+    /// Evaluates every column polynomial at a target point with precomputed data.
+    ///
+    /// Hot path: O(n * width) per call when weights are reused across targets.
+    ///
+    /// # Safety
+    ///
+    /// - The evaluation point `z` must not equal any domain point `x_i`.
+    /// - `weights[i]` must be the barycentric weight for `x_i`,
+    ///   i.e. `1 / prod_{j != i} (x_i - x_j)`.
+    /// - `diff_invs[i]` must be `1 / (z - x_i)`.
+    ///
+    /// # Panics
+    ///
+    /// Debug-panics if the slices differ in length from the matrix height.
+    fn interpolate_arbitrary_with_precomputation<EF: ExtensionField<F>>(
+        &self,
+        weights: &[F],
+        diff_invs: &[EF],
+    ) -> Vec<EF> {
+        debug_assert_eq!(weights.len(), self.height());
+        debug_assert_eq!(diff_invs.len(), self.height());
+
+        // Barycentric second form:
+        //
+        //     s_i    = w_i / (z - x_i)
+        //     f_j(z) = [sum_i  s_i * M[i][j]]  /  [sum_i  s_i]
+        //
+        // The numerator vector is M^T * col_scale (one dot product per column).
+        // The denominator is a single scalar shared across all columns.
+
+        // Per-row scale factor: s_i = w_i * diff_inv_i.
+        let col_scale: Vec<EF> = weights
+            .iter()
+            .zip(diff_invs)
+            .map(|(&w, &d)| d * w)
+            .collect();
+
+        // Denominator: sum of all scale factors.
+        let denominator = col_scale.iter().copied().fold(EF::ZERO, |a, b| a + b);
+        let denom_inv = denominator.inverse();
+
+        // Numerator per column via SIMD-packed M^T * col_scale.
+        let mut evals = self.columnwise_dot_product(&col_scale);
+
+        // Divide every column result by the shared denominator.
+        scale_slice_in_place_single_core(&mut evals, denom_inv);
+        evals
+    }
+
+    /// Recovers coefficient vectors for every column via batched Newton interpolation.
+    ///
+    /// Each row of `self` holds evaluations at the corresponding domain point.
+    /// Returns an n * width matrix where row i holds degree-i coefficients.
+    ///
+    /// # Performance
+    ///
+    /// - O(n^2 * width) field operations.
+    /// - O(n + width) auxiliary memory, zero allocations inside the main loop.
+    ///
+    /// # Returns
+    ///
+    /// `None` if any domain points coincide.
+    fn recover_coefficients(&self, x_coords: &[F]) -> Option<RowMajorMatrix<F>> {
+        let n = self.height();
+        let w = self.width();
+        debug_assert_eq!(x_coords.len(), n);
+
+        if n == 0 {
+            return Some(RowMajorMatrix::new(Vec::new(), w.max(1)));
+        }
+
+        // Row i of result will hold the degree-i coefficients for all w polynomials.
+        let mut result = RowMajorMatrix::new(F::zero_vec(n * w), w);
+
+        // Shared Newton basis polynomial B_k(x) = prod_{i<k} (x - x_i).
+        // Stored in expanded coefficient form; starts as the constant 1.
+        let mut basis = F::zero_vec(n);
+        basis[0] = F::ONE;
+
+        // Per-column scratch buffer, reused every iteration to avoid allocations.
+        let mut scratch = F::zero_vec(w);
+
+        for k in 0..n {
+            let x_k = x_coords[k];
+
+            // Evaluate B_k(x_k) directly from the roots: prod_{i<k} (x_k - x_i).
+            // Cheaper than Horner on the expanded coefficients because it
+            // touches only the domain array (sequential access, no dependency
+            // chain on the basis coefficient array).
+            let mut b_xk = F::ONE;
+            for &x_i in &x_coords[..k] {
+                b_xk *= x_k - x_i;
+            }
+            // Zero means x_k duplicates an earlier domain point.
+            let b_xk_inv = b_xk.try_inverse()?;
+
+            // Horner-evaluate all w result polynomials at x_k.
+            // Process whole rows (= ascending degree) for row-major cache locality.
+            //
+            //     scratch_j = result[k-1][j] * x_k + result[k-2][j] * x_k + ...
+            //               = P_j(x_k)
+            scratch.fill(F::ZERO);
+            for i in (0..k).rev() {
+                let row = result.row_slice(i).unwrap();
+                for j in 0..w {
+                    scratch[j] = scratch[j] * x_k + row[j];
+                }
+            }
+
+            // Newton correction: c_j = (y_{k,j} - P_j(x_k)) / B_k(x_k).
+            // Stream the evaluation row via its iterator — no heap allocation.
+            for (j, y_kj) in self.row(k).unwrap().into_iter().enumerate() {
+                scratch[j] = (y_kj - scratch[j]) * b_xk_inv;
+            }
+
+            // Accumulate: result[i][j] += c_j * basis[i].
+            for (i, &b_i) in basis.iter().enumerate().take(k + 1) {
+                let row = result.row_mut(i);
+                for j in 0..w {
+                    row[j] += scratch[j] * b_i;
+                }
+            }
+
+            // Extend basis: B_{k+1}(x) = B_k(x) * (x - x_k).
+            // Process high-to-low so each coefficient is read before overwritten.
+            //
+            //     new[k+1] = b_k
+            //     new[i]   = b_{i-1} - x_k * b_i    for i = k, ..., 1
+            //     new[0]   = -x_k * b_0
+            if k + 1 < n {
+                basis[k + 1] = basis[k];
+            }
+            for i in (1..=k).rev() {
+                basis[i] = basis[i - 1] - x_k * basis[i];
+            }
+            basis[0] = -x_k * basis[0];
+        }
+
+        Some(result)
+    }
+}
+
+impl<F: Field, M: Matrix<F>> InterpolateArbitrary<F> for M {}
+
+/// Interpolates a single polynomial from (x, y) pairs.
+///
+/// Returns coefficients in ascending degree order (index i = coefficient of x^i).
+/// Convenience wrapper that builds a one-column matrix and delegates to the
+/// batched Newton implementation.
+///
+/// # Performance
+///
+/// O(n^2) field operations, O(n) auxiliary memory.
+///
+/// # Returns
+///
+/// `None` if any two x-coordinates coincide.
+pub fn interpolate_lagrange<F: Field>(points: &[(F, F)]) -> Option<Vec<F>> {
+    if points.is_empty() {
+        return Some(Vec::new());
+    }
+    // Split into separate domain and evaluation vectors.
+    let (xs, ys): (Vec<F>, Vec<F>) = points.iter().copied().unzip();
+    // Build a single-column matrix and recover coefficients via Newton.
+    let evals = RowMajorMatrix::new_col(ys);
+    Some(evals.recover_coefficients(&xs)?.values)
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;
@@ -192,12 +452,13 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{
-        ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField, batch_multiplicative_inverse,
+        BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField,
+        batch_multiplicative_inverse,
     };
     use p3_util::log2_strict_usize;
     use proptest::prelude::*;
 
-    use super::{Interpolate, compute_adjusted_weights};
+    use super::*;
     use crate::dense::RowMajorMatrix;
 
     type F = BabyBear;
@@ -214,7 +475,6 @@ mod tests {
             .fold(EF::ZERO, |acc, &c| acc * point + c)
     }
 
-    /// Evaluate a polynomial at all points of a coset, returning the evaluations.
     fn eval_poly_on_coset<EF: ExtensionField<F>>(coeffs: &[F], shift: F, log_n: usize) -> Vec<EF> {
         let n = 1 << log_n;
         // Build the coset {shift * h^0, shift * h^1, ..., shift * h^{n-1}}.
@@ -587,6 +847,343 @@ mod tests {
 
             prop_assert_eq!(batch_result[0], f_result);
             prop_assert_eq!(batch_result[1], g_result);
+        }
+    }
+
+    #[test]
+    fn test_barycentric_weights_empty() {
+        assert_eq!(barycentric_weights::<F>(&[]), Some(vec![]));
+    }
+
+    #[test]
+    fn test_barycentric_weights_duplicates() {
+        let xs = [F::from_u32(1), F::from_u32(2), F::from_u32(1)];
+        assert_eq!(barycentric_weights(&xs), None);
+    }
+
+    #[test]
+    fn test_barycentric_weights_known() {
+        // For x = {0, 1, 2}:
+        //   w_0 = 1/((0-1)(0-2)) = 1/2
+        //   w_1 = 1/((1-0)(1-2)) = -1
+        //   w_2 = 1/((2-0)(2-1)) = 1/2
+        let xs = [F::from_u32(0), F::from_u32(1), F::from_u32(2)];
+        let ws = barycentric_weights(&xs).unwrap();
+        let half = F::TWO.inverse();
+        assert_eq!(ws, vec![half, -F::ONE, half]);
+    }
+
+    #[test]
+    fn test_interpolate_arbitrary_known_quadratic() {
+        // f(x) = x^2 + 2x + 3.  Evaluate at x = 0, 1, 2 → y = 3, 6, 11.
+        // Then interpolate at x = 100 → f(100) = 10203.
+        let xs = [F::from_u32(0), F::from_u32(1), F::from_u32(2)];
+        let evals = RowMajorMatrix::new(vec![F::from_u32(3), F::from_u32(6), F::from_u32(11)], 1);
+        let result = evals.interpolate_arbitrary_point(&xs, F::from_u32(100));
+        assert_eq!(result, Some(vec![F::from_u32(10203)]));
+    }
+
+    #[test]
+    fn test_interpolate_arbitrary_point_on_domain() {
+        // If we evaluate at a domain point, should return that row directly.
+        let xs = [F::from_u32(0), F::from_u32(1), F::from_u32(2)];
+        let evals = RowMajorMatrix::new(vec![F::from_u32(3), F::from_u32(6), F::from_u32(11)], 1);
+        let result = evals.interpolate_arbitrary_point(&xs, F::from_u32(1));
+        assert_eq!(result, Some(vec![F::from_u32(6)]));
+    }
+
+    #[test]
+    fn test_interpolate_arbitrary_duplicates() {
+        let xs = [F::from_u32(1), F::from_u32(1)];
+        let evals = RowMajorMatrix::new(vec![F::from_u32(5), F::from_u32(7)], 1);
+        assert_eq!(
+            evals.interpolate_arbitrary_point(&xs, F::from_u32(42)),
+            None
+        );
+    }
+
+    #[test]
+    fn test_interpolate_arbitrary_multi_column() {
+        // f1(x) = x^2 + 2x + 3,  f2(x) = 4x^2 + 5x + 6.
+        // Evaluate both at x = 0, 1, 2.
+        let xs = [F::from_u32(0), F::from_u32(1), F::from_u32(2)];
+        let evals = RowMajorMatrix::new(
+            vec![
+                F::from_u32(3),
+                F::from_u32(6), // row 0: f1(0)=3, f2(0)=6
+                F::from_u32(6),
+                F::from_u32(15), // row 1: f1(1)=6, f2(1)=15
+                F::from_u32(11),
+                F::from_u32(32), // row 2: f1(2)=11, f2(2)=32
+            ],
+            2,
+        );
+        let result = evals
+            .interpolate_arbitrary_point(&xs, F::from_u32(100))
+            .unwrap();
+        // f1(100) = 10203, f2(100) = 40506
+        assert_eq!(result, vec![F::from_u32(10203), F::from_u32(40506)]);
+    }
+
+    #[test]
+    fn test_interpolate_arbitrary_with_precomputation_equivalence() {
+        let xs = [F::from_u32(0), F::from_u32(1), F::from_u32(2)];
+        let evals = RowMajorMatrix::new(vec![F::from_u32(3), F::from_u32(6), F::from_u32(11)], 1);
+
+        let point = F::from_u32(100);
+        let standard = evals.interpolate_arbitrary_point(&xs, point).unwrap();
+
+        let weights = barycentric_weights(&xs).unwrap();
+        let diffs: Vec<F> = xs.iter().map(|&x| point - x).collect();
+        let diff_invs = batch_multiplicative_inverse(&diffs);
+        let precomp = evals.interpolate_arbitrary_with_precomputation(&weights, &diff_invs);
+
+        assert_eq!(standard, precomp);
+    }
+
+    #[test]
+    fn test_interpolate_arbitrary_extension_point() {
+        // f(x) = x^2 + 2x + 3, evaluated at x = 0, 1, 2.
+        let xs = [F::from_u32(0), F::from_u32(1), F::from_u32(2)];
+        let evals = RowMajorMatrix::new(vec![F::from_u32(3), F::from_u32(6), F::from_u32(11)], 1);
+
+        // Evaluate at a non-trivial extension point and compare against direct Horner.
+        let point = EF4::GENERATOR;
+        let result = evals.interpolate_arbitrary_point(&xs, point).unwrap();
+
+        let expected = point * point + point * F::TWO + EF4::from(F::from_u32(3));
+        assert_eq!(result, vec![expected]);
+    }
+
+    #[test]
+    fn test_interpolate_arbitrary_extension_point_on_domain() {
+        // EF4 target lies in the base field domain. Must return the matching row directly.
+        let xs = [F::from_u32(0), F::from_u32(1), F::from_u32(2)];
+        let evals = RowMajorMatrix::new(vec![F::from_u32(3), F::from_u32(6), F::from_u32(11)], 1);
+
+        let point = EF4::from(F::from_u32(1));
+        let result = evals.interpolate_arbitrary_point(&xs, point).unwrap();
+        assert_eq!(result, vec![EF4::from(F::from_u32(6))]);
+    }
+
+    #[test]
+    fn test_recover_coefficients_known_quadratic() {
+        // f(x) = x^2 + 2x + 3 → coefficients [3, 2, 1].
+        let xs = [F::from_u32(0), F::from_u32(1), F::from_u32(2)];
+        let evals = RowMajorMatrix::new(vec![F::from_u32(3), F::from_u32(6), F::from_u32(11)], 1);
+        let coeffs = evals.recover_coefficients(&xs).unwrap();
+        assert_eq!(
+            coeffs.values,
+            vec![F::from_u32(3), F::from_u32(2), F::from_u32(1)]
+        );
+    }
+
+    #[test]
+    fn test_recover_coefficients_multi_column() {
+        // f1(x) = x^2 + 2x + 3,  f2(x) = 4x^2 + 5x + 6.
+        let xs = [F::from_u32(0), F::from_u32(1), F::from_u32(2)];
+        let evals = RowMajorMatrix::new(
+            vec![
+                F::from_u32(3),
+                F::from_u32(6), // x=0
+                F::from_u32(6),
+                F::from_u32(15), // x=1
+                F::from_u32(11),
+                F::from_u32(32), // x=2
+            ],
+            2,
+        );
+        let coeffs = evals.recover_coefficients(&xs).unwrap();
+        // Row 0 (constant): [3, 6], Row 1 (linear): [2, 5], Row 2 (quadratic): [1, 4]
+        assert_eq!(
+            coeffs.values,
+            vec![
+                F::from_u32(3),
+                F::from_u32(6),
+                F::from_u32(2),
+                F::from_u32(5),
+                F::from_u32(1),
+                F::from_u32(4),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_lagrange_empty() {
+        assert_eq!(interpolate_lagrange::<F>(&[]), Some(vec![]));
+    }
+
+    #[test]
+    fn test_lagrange_single_point() {
+        let points = [(F::from_u32(7), F::from_u32(42))];
+        assert_eq!(interpolate_lagrange(&points), Some(vec![F::from_u32(42)]));
+    }
+
+    #[test]
+    fn test_lagrange_known_quadratic() {
+        let points = [
+            (F::from_u32(0), F::from_u32(3)),
+            (F::from_u32(1), F::from_u32(6)),
+            (F::from_u32(2), F::from_u32(11)),
+        ];
+        let coeffs = interpolate_lagrange(&points).unwrap();
+        assert_eq!(coeffs, vec![F::from_u32(3), F::from_u32(2), F::from_u32(1)]);
+    }
+
+    #[test]
+    fn test_lagrange_duplicate_x_returns_none() {
+        let points = [
+            (F::from_u32(1), F::from_u32(5)),
+            (F::from_u32(1), F::from_u32(7)),
+        ];
+        assert_eq!(interpolate_lagrange(&points), None);
+    }
+
+    proptest! {
+        #[test]
+        fn prop_lagrange_roundtrip(
+            n in 1usize..=8,
+            coeffs_raw in prop::collection::vec(0u32..2013265921, 1..=8),
+        ) {
+            let mut coeffs: Vec<F> = coeffs_raw.iter().take(n).map(|&v| F::from_u32(v)).collect();
+            coeffs.resize(n, F::ZERO);
+
+            let points: Vec<(F, F)> = (0..n)
+                .map(|i| {
+                    let x = F::from_u32(i as u32);
+                    let y = eval_poly(&coeffs, x);
+                    (x, y)
+                })
+                .collect();
+
+            let recovered = interpolate_lagrange(&points).unwrap();
+            prop_assert_eq!(recovered, coeffs);
+        }
+
+        #[test]
+        fn prop_arbitrary_roundtrip(
+            n in 1usize..=8,
+            coeffs_raw in prop::collection::vec(0u32..2013265921, 1..=8),
+            point_raw in 1u32..2013265921u32,
+        ) {
+            // Evaluate polynomial at n distinct domain points.
+            //
+            // Then use the trait method to evaluate at a separate target point.
+            let mut coeffs: Vec<F> = coeffs_raw.iter().take(n).map(|&v| F::from_u32(v)).collect();
+            coeffs.resize(n, F::ZERO);
+
+            let xs: Vec<F> = (0..n).map(|i| F::from_u32(i as u32)).collect();
+            let ys: Vec<F> = xs.iter().map(|&x| eval_poly(&coeffs, x)).collect();
+            let evals = RowMajorMatrix::new(ys, 1);
+
+            let point = F::from_u32(point_raw);
+            let result = evals.interpolate_arbitrary_point(&xs, point).unwrap();
+            let expected = eval_poly(&coeffs, point);
+            prop_assert_eq!(result[0], expected);
+        }
+
+        #[test]
+        fn prop_recover_coefficients_roundtrip(
+            n in 1usize..=8,
+            coeffs_raw in prop::collection::vec(0u32..2013265921, 1..=8),
+        ) {
+            let mut coeffs: Vec<F> = coeffs_raw.iter().take(n).map(|&v| F::from_u32(v)).collect();
+            coeffs.resize(n, F::ZERO);
+
+            let xs: Vec<F> = (0..n).map(|i| F::from_u32(i as u32)).collect();
+            let ys: Vec<F> = xs.iter().map(|&x| eval_poly(&coeffs, x)).collect();
+            let evals = RowMajorMatrix::new(ys, 1);
+
+            let recovered = evals.recover_coefficients(&xs).unwrap();
+            prop_assert_eq!(recovered.values, coeffs);
+        }
+
+        #[test]
+        fn prop_arbitrary_batch_equals_individual(
+            n in 1usize..=6,
+            f_raw in prop::collection::vec(0u32..2013265921, 1..=6),
+            g_raw in prop::collection::vec(0u32..2013265921, 1..=6),
+            point_raw in 1u32..2013265921u32,
+        ) {
+            // A 2-column batch must agree with two 1-column evaluations.
+            let mut f_coeffs: Vec<F> = f_raw.iter().take(n).map(|&v| F::from_u32(v)).collect();
+            let mut g_coeffs: Vec<F> = g_raw.iter().take(n).map(|&v| F::from_u32(v)).collect();
+            f_coeffs.resize(n, F::ZERO);
+            g_coeffs.resize(n, F::ZERO);
+
+            let xs: Vec<F> = (0..n).map(|i| F::from_u32(i as u32)).collect();
+            let f_ys: Vec<F> = xs.iter().map(|&x| eval_poly(&f_coeffs, x)).collect();
+            let g_ys: Vec<F> = xs.iter().map(|&x| eval_poly(&g_coeffs, x)).collect();
+
+            // Build 2-column batch matrix.
+            let batch_vals: Vec<F> = f_ys.iter().zip(&g_ys)
+                .flat_map(|(&f, &g)| vec![f, g])
+                .collect();
+            let batch_mat = RowMajorMatrix::new(batch_vals, 2);
+            let f_mat = RowMajorMatrix::new(f_ys, 1);
+            let g_mat = RowMajorMatrix::new(g_ys, 1);
+
+            let point = F::from_u32(point_raw);
+            let batch_result = batch_mat.interpolate_arbitrary_point(&xs, point).unwrap();
+            let f_result = f_mat.interpolate_arbitrary_point(&xs, point).unwrap()[0];
+            let g_result = g_mat.interpolate_arbitrary_point(&xs, point).unwrap()[0];
+
+            prop_assert_eq!(batch_result[0], f_result);
+            prop_assert_eq!(batch_result[1], g_result);
+        }
+
+        #[test]
+        fn prop_precomputation_equivalence_arbitrary(
+            n in 1usize..=8,
+            coeffs_raw in prop::collection::vec(0u32..2013265921, 1..=8),
+            point_raw in 1u32..2013265921u32,
+        ) {
+            // Standard path and precomputation path must agree.
+            let mut coeffs: Vec<F> = coeffs_raw.iter().take(n).map(|&v| F::from_u32(v)).collect();
+            coeffs.resize(n, F::ZERO);
+
+            let xs: Vec<F> = (0..n).map(|i| F::from_u32(i as u32)).collect();
+            let ys: Vec<F> = xs.iter().map(|&x| eval_poly(&coeffs, x)).collect();
+            let evals = RowMajorMatrix::new(ys, 1);
+
+            let point = F::from_u32(point_raw);
+            let standard = evals.interpolate_arbitrary_point(&xs, point).unwrap();
+
+            let weights = barycentric_weights(&xs).unwrap();
+            let diffs: Vec<F> = xs.iter().map(|&x| point - x).collect();
+
+            // Skip if point coincides with a domain point (diff_invs would panic).
+            if diffs.iter().any(|d| d.is_zero()) {
+                return Ok(());
+            }
+
+            let diff_invs = batch_multiplicative_inverse(&diffs);
+            let precomp = evals.interpolate_arbitrary_with_precomputation(&weights, &diff_invs);
+            prop_assert_eq!(standard, precomp);
+        }
+
+        #[test]
+        fn prop_arbitrary_roundtrip_extension_point(
+            n in 1usize..=8,
+            coeffs_raw in prop::collection::vec(0u32..2013265921, 1..=8),
+            point_raw in prop::collection::vec(0u32..2013265921, 4..=4),
+        ) {
+            // Round-trip with the target point taken from EF4: evaluate over a base-field
+            // domain, interpolate at an extension-field point, and compare against direct
+            // Horner evaluation in the extension.
+            let mut coeffs: Vec<F> = coeffs_raw.iter().take(n).map(|&v| F::from_u32(v)).collect();
+            coeffs.resize(n, F::ZERO);
+
+            let xs: Vec<F> = (0..n).map(|i| F::from_u32(i as u32)).collect();
+            let ys: Vec<F> = xs.iter().map(|&x| eval_poly(&coeffs, x)).collect();
+            let evals = RowMajorMatrix::new(ys, 1);
+
+            let point = EF4::from_basis_coefficients_iter(
+                point_raw.iter().map(|&v| F::from_u32(v)),
+            ).unwrap();
+            let result = evals.interpolate_arbitrary_point(&xs, point).unwrap();
+            let expected: EF4 = eval_poly(&coeffs, point);
+            prop_assert_eq!(result[0], expected);
         }
     }
 }

@@ -52,16 +52,13 @@ where
     //   callers must use `setup_preprocessed` and pass the resulting data in.
     let preprocessed_width = preprocessed.map_or_else(
         || {
-            if let Some(preprocessed_trace) = air.preprocessed_trace() {
-                let width = preprocessed_trace.width();
-                if width > 0 {
-                    panic!(
-                        "AIR defines preprocessed columns (width = {}), \
-                         but no PreprocessedProverData was provided. \
-                         Call `setup_preprocessed` and pass it to `prove_with_preprocessed`.",
-                        width
-                    );
-                }
+            let width = air.preprocessed_width();
+            if width > 0 {
+                panic!(
+                    "AIR defines preprocessed columns (width = {width}), \
+                     but no PreprocessedProverData was provided. \
+                     Call `setup_preprocessed` and pass it to `prove_with_preprocessed`."
+                );
             }
             0
         },

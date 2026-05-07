@@ -10,8 +10,9 @@ use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
 use p3_fri::TwoAdicFriPcs;
+use p3_lookup::LookupProtocol;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::lookup_traits::{Direction, Kind, Lookup, LookupData, LookupGadget};
+use p3_lookup::traits::{Kind, Lookup, LookupData};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -66,34 +67,20 @@ fn build_lookups(num_lookups: usize, tuple_size: usize, trace_width: usize) -> V
             let provide_mult: SymbolicExpression<F> =
                 symbolic_main_local[base_col + 2 * tuple_size].into();
 
-            let lookup_inputs = [
-                (read_elements, read_mult, Direction::Receive),
-                (provide_elements, provide_mult, Direction::Send),
+            let elements = vec![read_elements, provide_elements];
+            let multiplicities = vec![
+                read_mult,
+                SymbolicExpression::Neg {
+                    x: Arc::new(provide_mult),
+                    degree_multiple: 1,
+                },
             ];
-
-            let element_exprs: Vec<Vec<SymbolicExpression<F>>> = lookup_inputs
-                .iter()
-                .map(|(elts, _, _): &(Vec<_>, _, _)| elts.clone())
-                .collect();
-            let multiplicities_exprs: Vec<SymbolicExpression<F>> = lookup_inputs
-                .iter()
-                .map(|(_, mult, dir): &(_, SymbolicExpression<F>, Direction)| {
-                    let m = mult.clone();
-                    match dir {
-                        Direction::Send => SymbolicExpression::Neg {
-                            x: Arc::new(m),
-                            degree_multiple: 1,
-                        },
-                        Direction::Receive => m,
-                    }
-                })
-                .collect();
 
             Lookup {
                 kind: Kind::Local,
-                element_exprs,
-                multiplicities_exprs,
-                columns: vec![lookup_idx],
+                elements,
+                multiplicities,
+                column: lookup_idx,
             }
         })
         .collect()

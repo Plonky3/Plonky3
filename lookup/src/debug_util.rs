@@ -15,7 +15,7 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::VerticalPair;
 
-use crate::lookup_traits::{Kind, Lookup, symbolic_to_expr};
+use crate::traits::{Kind, Lookup};
 
 /// All inputs required to replay lookup evaluations for one AIR instance.
 pub struct LookupDebugInstance<'a, F: Field> {
@@ -184,13 +184,13 @@ fn accumulate_lookup<F: Field>(
             height,
         };
 
-        for (tuple_idx, elements) in lookup.element_exprs.iter().enumerate() {
+        for (tuple_idx, elements) in lookup.elements.iter().enumerate() {
             let key = elements
                 .iter()
-                .map(|expr| symbolic_to_expr(&builder, expr))
+                .map(|expr| expr.resolve(&builder))
                 .collect::<Vec<_>>();
 
-            let multiplicity = symbolic_to_expr(&builder, &lookup.multiplicities_exprs[tuple_idx]);
+            let multiplicity = lookup.multiplicities[tuple_idx].resolve(&builder);
 
             multiset.add(
                 key,

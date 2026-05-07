@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::{BinomialExtensionField, binomial_mul, vector_add, vector_sub};
 use crate::extension::{BinomiallyExtendable, binomial_square};
 use crate::{
-    Algebra, BasedVectorSpace, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
+    Algebra, BasedVectorSpace, Dup, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
     PrimeCharacteristicRing, field_to_array,
 };
 
@@ -85,6 +85,30 @@ impl<F: BinomiallyExtendable<D>, PF: PackedField<Scalar = F>, const D: usize>
 impl<F: BinomiallyExtendable<D>, PF: PackedField<Scalar = F>, const D: usize> Algebra<PF>
     for PackedBinomialExtensionField<F, PF, D>
 {
+    #[inline]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[PF; N]) -> Self
+    where
+        PF: Dup,
+    {
+        // Output container; each coordinate is filled independently below.
+        let mut result = Self::default();
+
+        // One base-field dot product per output coordinate.
+        for k in 0..D {
+            // Strided gather of the k-th coordinate from each extension input:
+            //
+            //     coord_k = [ a_0[k], a_1[k], ..., a_{N-1}[k] ]
+            let coord_k: [PF; N] = core::array::from_fn(|i| a[i].value[k]);
+
+            // Base-level dot product.
+            //
+            // - For Monty-31 packings this is the delayed-reduction primitive;
+            // - For other packings it falls back to the eager default and the override is a no-op gain.
+            result.value[k] = PF::dot_product::<N>(&coord_k, f);
+        }
+
+        result
+    }
 }
 
 impl<F, PF, const D: usize> PrimeCharacteristicRing for PackedBinomialExtensionField<F, PF, D>

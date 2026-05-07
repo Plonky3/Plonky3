@@ -1076,16 +1076,13 @@ where
         // carry = -1 (all 1s) if c_lo wrapped, 0 otherwise.
         let carry = aarch64::vcltq_u32(c_lo, c_lo_a);
 
-        // Reduce c_hi_sum BEFORE incorporating carry for better ILP.
-        // c_hi_sum = c_hi_a' + c_hi_b ∈ [0, 2P-2] (both < P).
+        // c_hi_sum ∈ [0, 2P-2].
         let c_hi_sum = aarch64::vaddq_u32(c_hi_a_red, c_hi_b);
-        let c_hi_sub = aarch64::vsubq_u32(c_hi_sum, P::PACKED_P);
-        let c_hi_red = aarch64::vminq_u32(c_hi_sum, c_hi_sub);
-
-        // Now incorporate carry: c_hi_red ∈ [0, P-2] (max is 2P-2 reduced to P-2).
-        // Adding carry (0 or 1) gives at most P-1, so no further reduction needed.
-        // Subtracting -1 adds 1; subtracting 0 is a no-op.
-        let c_hi_prime = aarch64::vsubq_u32(c_hi_red, carry);
+        // Subtracting -1 adds 1; subtracting 0 is a no-op. c_hi ∈ [0, 2P-1].
+        let c_hi = aarch64::vsubq_u32(c_hi_sum, carry);
+        // Conditional subtract by P → c_hi_prime ∈ [0, P-1].
+        let c_hi_sub = aarch64::vsubq_u32(c_hi, P::PACKED_P);
+        let c_hi_prime = aarch64::vminq_u32(c_hi, c_hi_sub);
 
         // Montgomery reduction (identical to dot_product_4).
         //
