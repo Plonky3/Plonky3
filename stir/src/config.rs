@@ -220,23 +220,6 @@ where
         let algebraic_security_level = security_level - max_pow_bits;
         let num_ood_samples = params.soundness_type.stir_num_ood_samples();
 
-        // Convert algebraic-security bits to a PoW difficulty.
-        // PoW = ceil(security_level − algebraic_bits), capped to [0, max_pow_bits].
-        // A derived value > max_pow_bits is a hard misconfiguration: the user's parameters
-        // do not deliver `security_level` bits even after exhausting the PoW budget.
-        let derive_pow_bits = |label: &str, round: &str, algebraic_bits: f64| -> usize {
-            let gap = (security_level as f64 - algebraic_bits).max(0.0);
-            let needed = libm::ceil(gap) as usize;
-            assert!(
-                needed <= max_pow_bits,
-                "{round} {label} requires {needed} PoW bits to reach \
-                 security_level = {security_level} (algebraic bits = {algebraic_bits}), \
-                 but max_pow_bits = {max_pow_bits}. Increase max_pow_bits, log_blowup, \
-                 or use a larger field.",
-            );
-            needed
-        };
-
         // Determine number of intermediate rounds. We fold all the way down to a polynomial
         // of size `2^log_final_degree` (where log_final_degree < log_folding_factor) and
         // send it directly. Each round reduces log_degree by log_folding_factor.
@@ -249,6 +232,35 @@ where
         // Last fold produces the final polynomial; intermediate rounds = total_folds - 1.
         let num_rounds = total_folds.saturating_sub(1);
         let log_final_degree = log_starting_degree - total_folds * log_folding_factor;
+
+        // Per-round target adds a union-bound buffer of `ceil(log2(total_folds))` so that
+        // summing the per-round error over all folds is bounded by `2^{-security_level}`.
+        // The same buffer applies to every per-event term: query failure (via the query
+        // count below) and the auxiliary terms (folding / OOD / combination / shake) bridged
+        // by PoW. Without the buffer, summing N rounds at `2^{-security_level}` per round
+        // would lose `log2(total_folds)` bits.
+        let union_bound_buffer = libm::ceil(libm::log2(total_folds as f64)) as usize;
+        let buffered_security_level = security_level + union_bound_buffer;
+
+        // Convert algebraic-security bits to a PoW difficulty.
+        // PoW = ceil(buffered_security_level − algebraic_bits), capped at max_pow_bits.
+        // A derived value > max_pow_bits is a hard misconfiguration: the user's parameters
+        // do not deliver `security_level` bits over `total_folds` rounds even after
+        // exhausting the PoW budget.
+        let derive_pow_bits = |label: &str, round: &str, algebraic_bits: f64| -> usize {
+            let gap = (buffered_security_level as f64 - algebraic_bits).max(0.0);
+            let needed = libm::ceil(gap) as usize;
+            assert!(
+                needed <= max_pow_bits,
+                "{round} {label} requires {needed} PoW bits to reach \
+                 buffered security target = {buffered_security_level} \
+                 (security_level = {security_level} + union-bound buffer = {union_bound_buffer}, \
+                 algebraic bits = {algebraic_bits}), \
+                 but max_pow_bits = {max_pow_bits}. Increase max_pow_bits, log_blowup, \
+                 or use a larger field.",
+            );
+            needed
+        };
 
         // Initial domain shift: use the multiplicative generator so the
         // initial domain is disjoint from all subgroups of the base field.
@@ -265,19 +277,8 @@ where
         let mut log_inv_rate = log_blowup;
         let mut domain_shift = initial_shift;
 
-        // Per-round target_bits adds a union-bound buffer of `ceil(log2(total_folds))` bits
-        // to `algebraic_security_level`, so that summing the per-round error over all folds
-        // (intermediate rounds + the final fold) is bounded by `2^{-algebraic_security_level}`:
-        //
-        //   sum_{i=0}^{total_folds-1} 2^{-(algebraic_security_level + log2(total_folds))}
-        //     = total_folds · 2^{-algebraic_security_level} / total_folds
-        //     = 2^{-algebraic_security_level}.
-        //
-        // The same buffer applies to the final round; the asymmetric "+1 / +0" rule used in
-        // earlier revisions (and quoted in STIR §5.3) only delivers `algebraic_security_level`
-        // bits when `total_folds ≤ 2`. For deeper protocols it shaves up to `log2(total_folds)`
-        // bits — replacing it with the explicit log here makes the claimed security tight.
-        let union_bound_buffer = libm::ceil(libm::log2(total_folds as f64)) as usize;
+        // Query count uses the same buffered target so that summing the per-round query
+        // failure over all folds is bounded by `2^{-algebraic_security_level}`.
         let target_bits = algebraic_security_level + union_bound_buffer;
         let query_count = |stage_log_inv_rate: usize, eta: f64| {
             let failure_base = params

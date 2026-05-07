@@ -198,13 +198,20 @@ where
         let gamma: EF = challenger.sample_algebra_element();
         challenger.observe(rp.commitment.clone());
 
-        // Step 2: OOD sampling and answer observation.
+        // Step 2: query/OOD PoW. Placed BEFORE OOD sampling so PoW gates re-rolls of the
+        // OOD set; mirrors the prover order so the transcript stays in sync.
+        if !challenger.check_witness(rc.pow_bits, rp.pow_witness) {
+            return Err(StirError::InvalidPowWitness { round });
+        }
+
+        // Step 3: OOD sampling and answer observation.
         if rp.ood_answers.len() != rc.num_ood_samples {
             return Err(StirError::InvalidProofShape);
         }
 
         let current_domain_size = 1usize << current_log_domain;
         let next_domain_size = 1usize << next_log_domain;
+        let fold_domain_size = 1usize << fold_log_domain;
         let mut ood_points: Vec<EF> = Vec::with_capacity(rc.num_ood_samples);
         while ood_points.len() < rc.num_ood_samples {
             let z: EF = challenger.sample_algebra_element();
@@ -214,18 +221,18 @@ where
             let z_norm_next = z * EF::from(next_shift).inverse();
             let outside_next =
                 z_norm_next.exp_power_of_2(next_log_domain) != EF::ONE || next_domain_size == 1;
+            let z_norm_fold = z * EF::from(fold_shift).inverse();
+            let outside_fold =
+                z_norm_fold.exp_power_of_2(fold_log_domain) != EF::ONE || fold_domain_size == 1;
             let not_dup = ood_points.iter().all(|&existing| existing != z);
-            if outside_current && outside_next && not_dup {
+            if outside_current && outside_next && outside_fold && not_dup {
                 ood_points.push(z);
             }
         }
 
         challenger.observe_algebra_slice(&rp.ood_answers);
 
-        // Step 3: query PoW, combination challenge, query sampling, and fiber verification.
-        if !challenger.check_witness(rc.pow_bits, rp.pow_witness) {
-            return Err(StirError::InvalidPowWitness { round });
-        }
+        // Step 4: combination challenge, query sampling, and fiber verification.
 
         if rp.query_proofs.len() != rc.num_queries {
             return Err(StirError::InvalidProofShape);

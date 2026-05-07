@@ -112,10 +112,19 @@ where
         );
         challenger.observe(new_commit.clone());
 
-        // Step 2: OOD sampling.
-        // OOD points must be outside both the current witness domain and the next witness domain.
+        // Step 2: query/OOD PoW. Placed BEFORE OOD sampling so PoW gates re-rolls of
+        // the OOD set (the prover would otherwise have unbounded freedom to re-commit
+        // the next codeword and resample favorable OOD points without paying PoW).
+        let pow_witness = challenger.grind(rc.pow_bits);
+
+        // Step 3: OOD sampling.
+        // OOD points must be outside the current and next witness domains AND outside the
+        // fold-query domain. Excluding the fold domain prevents an honest-prover failure
+        // where an OOD point coincides with a sampled query point and the interpolation in
+        // step 4 hits duplicate roots.
         let current_domain_size = 1usize << current_log_domain;
         let next_domain_size = 1usize << next_log_domain;
+        let fold_domain_size = 1usize << fold_log_domain;
         let mut ood_points = Vec::with_capacity(rc.num_ood_samples);
         while ood_points.len() < rc.num_ood_samples {
             let z: EF = challenger.sample_algebra_element();
@@ -125,9 +134,12 @@ where
             let z_norm_next = z * EF::from(next_shift).inverse();
             let outside_next =
                 z_norm_next.exp_power_of_2(next_log_domain) != EF::ONE || next_domain_size == 1;
+            let z_norm_fold = z * EF::from(fold_shift).inverse();
+            let outside_fold =
+                z_norm_fold.exp_power_of_2(fold_log_domain) != EF::ONE || fold_domain_size == 1;
             // Deduplicate OOD points.
             let not_dup = ood_points.iter().all(|&existing| existing != z);
-            if outside_current && outside_next && not_dup {
+            if outside_current && outside_next && outside_fold && not_dup {
                 ood_points.push(z);
             }
         }
@@ -138,9 +150,7 @@ where
             .collect();
         challenger.observe_algebra_slice(&ood_answers);
 
-        // Step 3: Query phase PoW and query sampling.
-        let pow_witness = challenger.grind(rc.pow_bits);
-
+        // Step 4: Query sampling.
         let fold_gen = F::two_adic_generator(fold_log_domain);
 
         let mut query_proofs = Vec::with_capacity(rc.num_queries);

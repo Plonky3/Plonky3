@@ -541,8 +541,9 @@ impl SecurityAssumption {
     /// - Query failure: `t · log2(1/(rho + eta))` bits (calibrated by `eta` and the query count).
     /// - OOD soundness: see [`Self::ood_error`].
     /// - Random-linear-combination soundness: see [`Self::queries_combination_error`].
+    /// - Shake-check soundness: see [`Self::shake_check_error`].
     ///
-    /// Returns the minimum of the three (= the worst term, which dominates the per-round error).
+    /// Returns the minimum (= the worst term, which dominates the per-round error).
     #[must_use]
     pub fn stir_query_algebraic_bits(
         &self,
@@ -567,7 +568,36 @@ impl SecurityAssumption {
             num_ood_samples,
             num_queries,
         );
-        query_failure.min(ood).min(combination)
+        let shake = self.shake_check_error(field_size_bits, num_queries, num_ood_samples);
+        query_failure.min(ood).min(combination).min(shake)
+    }
+
+    /// Schwartz-Zippel error (in bits) of the prover-assisted Ans/shake polynomial check.
+    ///
+    /// This implementation has the prover send `Ans` and a shake polynomial; the verifier
+    /// then checks the rational identity
+    /// `shake(rho) · Q(rho) = sum_i (Ans(rho) - val_i) · prod_{j != i} (rho - y_j)`
+    /// at a transcript-derived random `rho`, where `Q = prod_i (X - y_i)` and the index `i`
+    /// ranges over the `num_queries + num_ood_samples` interpolation points. The polynomial
+    /// `shake · Q − sum_i (Ans − val_i) · prod_{j != i} (X − y_j)` has degree at most
+    /// `2 · (num_queries + num_ood_samples) − 2`, so a malicious prover succeeds with
+    /// probability at most that degree divided by `|F|`.
+    ///
+    /// This is an additional soundness term that the original STIR paper does not include
+    /// — the paper's verifier interpolates `Ans` itself rather than receiving it from the
+    /// prover. Including the shake-check error in [`Self::stir_query_algebraic_bits`] keeps
+    /// the parameter accounting honest.
+    #[must_use]
+    pub fn shake_check_error(
+        &self,
+        field_size_bits: usize,
+        num_queries: usize,
+        num_ood_samples: usize,
+    ) -> f64 {
+        let total = (num_queries + num_ood_samples) as f64;
+        // Conservative degree bound: 2 * num_points (covers the +O(1) slack).
+        let log_deg = libm::log2(2.0 * total).max(0.0);
+        field_size_bits as f64 - log_deg
     }
 
     /// Algebraic bits of security delivered by the STIR final query phase.

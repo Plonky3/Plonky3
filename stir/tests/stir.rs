@@ -789,6 +789,106 @@ mod babybear_pcs {
         .unwrap_or_else(|e| panic!("two-commitment PCS verification failed: {e:?}"));
     }
 
+    /// Two commitments at the **same** LDE height — both contributions land in the same
+    /// STIR bucket. The previous verifier compared the per-commit reduced-opening
+    /// contribution against STIR's combined fiber evaluation; multi-commit-per-bucket
+    /// would slip past the check unless the verifier accumulates across commitments.
+    #[test]
+    fn test_pcs_two_commitments_same_bucket() {
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+
+        let log_d = 6;
+        let width = 3;
+        let domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
+        let mat_a = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, width);
+        let mat_b = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, width);
+
+        let mut p_ch = challenger_template.clone();
+        let (commit_a, data_a) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_a)]);
+        p_ch.observe(commit_a.clone());
+        let (commit_b, data_b) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_b)]);
+        p_ch.observe(commit_b.clone());
+
+        let zeta: Challenge = p_ch.sample_algebra_element();
+
+        let data_and_points = vec![(&data_a, vec![vec![zeta]]), (&data_b, vec![vec![zeta]])];
+        let (opening_values, proof) =
+            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
+
+        let mut v_ch = challenger_template;
+        v_ch.observe(commit_a.clone());
+        v_ch.observe(commit_b.clone());
+        let v_zeta: Challenge = v_ch.sample_algebra_element();
+        assert_eq!(v_zeta, zeta);
+
+        let opening_a = opening_values[0][0][0].clone();
+        let opening_b = opening_values[1][0][0].clone();
+        let claims = vec![
+            (commit_a, vec![(domain, vec![(zeta, opening_a)])]),
+            (commit_b, vec![(domain, vec![(zeta, opening_b)])]),
+        ];
+        <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch)
+            .unwrap_or_else(|e| panic!("two-commitment same-bucket verification failed: {e:?}"));
+    }
+
+    /// A proof with the per-commitment input-openings vector dropped (truncated) must be
+    /// rejected. Without the up-front length check, `zip` would silently ignore the missing
+    /// commitments, letting a malicious proof omit input bindings entirely.
+    #[test]
+    fn test_pcs_truncated_input_openings_rejected() {
+        let (pcs, challenger_template) = get_pcs();
+        let mut rng = seeded_rng();
+
+        let log_d = 6;
+        let width = 3;
+        let domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_d);
+        let mat_a = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, width);
+        let mat_b = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_d, width);
+
+        let mut p_ch = challenger_template.clone();
+        let (commit_a, data_a) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_a)]);
+        p_ch.observe(commit_a.clone());
+        let (commit_b, data_b) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, vec![(domain, mat_b)]);
+        p_ch.observe(commit_b.clone());
+
+        let zeta: Challenge = p_ch.sample_algebra_element();
+        let data_and_points = vec![(&data_a, vec![vec![zeta]]), (&data_b, vec![vec![zeta]])];
+        let (opening_values, mut proof) =
+            <MyPcs as Pcs<Challenge, Challenger>>::open(&pcs, data_and_points, &mut p_ch);
+
+        // Drop the second commitment's input-opening vector. The verifier must reject:
+        // skipping a commit's openings would let the proof verify against a proper subset
+        // of the public input.
+        for (_stir_proof, input_openings) in proof.iter_mut() {
+            assert_eq!(input_openings.len(), 2);
+            input_openings.pop();
+        }
+
+        let mut v_ch = challenger_template;
+        v_ch.observe(commit_a.clone());
+        v_ch.observe(commit_b.clone());
+        let _v_zeta: Challenge = v_ch.sample_algebra_element();
+
+        let opening_a = opening_values[0][0][0].clone();
+        let opening_b = opening_values[1][0][0].clone();
+        let claims = vec![
+            (commit_a, vec![(domain, vec![(zeta, opening_a)])]),
+            (commit_b, vec![(domain, vec![(zeta, opening_b)])]),
+        ];
+        let res = <MyPcs as Pcs<Challenge, Challenger>>::verify(&pcs, claims, &proof, &mut v_ch);
+        assert!(
+            matches!(res, Err(p3_stir::StirError::InvalidProofShape)),
+            "truncated input_openings must be rejected as InvalidProofShape, got {res:?}"
+        );
+    }
+
     /// Tampering with the alpha-batched opening value (the claimed `f_i(z)`) should be
     /// rejected by the input-MMCS binding check inside `pcs::verify`.
     #[test]

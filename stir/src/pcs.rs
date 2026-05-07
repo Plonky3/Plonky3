@@ -508,6 +508,15 @@ where
             let bucket_height = 1usize << log_h;
             let (stir_proof, input_openings) = &proof[bucket_idx];
 
+            // SHAPE CHECK: input_openings has one slot per public commitment. Without this,
+            // a malicious proof could omit trailing commitments — a `zip` would silently
+            // drop them, their claimed values would still be observed into the transcript
+            // (above), but they'd never be MMCS-opened or included in the reduced-opening
+            // accumulation, so the proof would verify against a subset of the public input.
+            if input_openings.len() != commitments_with_opening_points.len() {
+                return Err(StirError::InvalidProofShape);
+            }
+
             let log_stir_degree = log_h.saturating_sub(self.stir.log_blowup).max(1);
             let stir_config = StirConfig::<Val, Challenge, StirMmcs, Challenger>::new(
                 log_stir_degree,
@@ -529,8 +538,25 @@ where
 
             let first_round_unique_js = stir_outputs.first_round_indices;
             let fiber_evals_per_query = stir_outputs.first_round_fiber_evals;
+            let n_q = first_round_unique_js.len();
 
-            // Verify input MMCS openings and check consistency with STIR fiber evals.
+            // Up-front fiber-shape check: each first-round fiber from STIR must have the
+            // expected width. Done once here so the inner accumulation loop can index without
+            // a bounds check on every iteration.
+            for row_evals in &fiber_evals_per_query {
+                if row_evals.len() != arity0 {
+                    return Err(StirError::InvalidProofShape);
+                }
+            }
+
+            // Accumulate the verifier-side expected reduced opening across ALL commitments.
+            // Comparing against `row_evals[l]` per commit was incorrect: when multiple
+            // commitments contribute matrices to the same height bucket, the prover's
+            // `ro[p]` is the sum across commitments, and the per-commit-equality check
+            // would fail (or, in the single-commit-per-bucket path that the existing tests
+            // happen to exercise, mask the multi-commit case entirely).
+            let mut expected_ro = vec![vec![Challenge::ZERO; arity0]; n_q];
+
             for (commit_idx, ((commitment, domain_claims), per_commit_openings)) in
                 commitments_with_opening_points
                     .iter()
@@ -542,10 +568,17 @@ where
                     .map(|(domain, _)| domain.size() << self.stir.log_blowup)
                     .collect();
 
-                if !mat_lde_heights.contains(&bucket_height) {
-                    if !per_commit_openings.is_empty() {
-                        return Err(StirError::InvalidProofShape);
-                    }
+                let has_at_bucket = mat_lde_heights.contains(&bucket_height);
+
+                // SHAPE CHECK: per-commit opening count is determined entirely by public
+                // input. Validating up-front turns any mismatch into a clean
+                // `InvalidProofShape` instead of an out-of-bounds panic on adversarial input.
+                let expected_openings_len = if has_at_bucket { n_q * arity0 } else { 0 };
+                if per_commit_openings.len() != expected_openings_len {
+                    return Err(StirError::InvalidProofShape);
+                }
+
+                if !has_at_bucket {
                     continue;
                 }
 
@@ -571,10 +604,6 @@ where
                 let mut opening_idx = 0usize;
 
                 for (q_idx, &j) in first_round_unique_js.iter().enumerate() {
-                    let row_evals = &fiber_evals_per_query[q_idx];
-                    if row_evals.len() != arity0 {
-                        return Err(StirError::InvalidProofShape);
-                    }
                     #[allow(clippy::needless_range_loop)]
                     for l in 0..arity0 {
                         let p = j + l * fold_height0;
@@ -591,8 +620,6 @@ where
                         self.input_mmcs
                             .verify_batch(commitment, &dimensions, q_global, batch_ref)
                             .map_err(StirError::InputError)?;
-
-                        let mut expected_ro = Challenge::ZERO;
 
                         for (mat_idx, (_, point_claims)) in domain_claims.iter().enumerate() {
                             if mat_lde_heights[mat_idx] != bucket_height {
@@ -619,13 +646,21 @@ where
                                 let inv_denom =
                                     (*point - Challenge::from(coset[q_local])).inverse();
 
-                                expected_ro += alpha_pow_offset * (p_x - y_combined) * inv_denom;
+                                expected_ro[q_idx][l] +=
+                                    alpha_pow_offset * (p_x - y_combined) * inv_denom;
                             }
                         }
+                    }
+                }
+            }
 
-                        if expected_ro != row_evals[l] {
-                            return Err(StirError::InvalidProofShape);
-                        }
+            // Final binding check: the cross-commitment accumulated reduced opening must
+            // match the first-round fiber evaluations the STIR verifier extracted.
+            for (q_idx, _) in first_round_unique_js.iter().enumerate() {
+                let row_evals = &fiber_evals_per_query[q_idx];
+                for l in 0..arity0 {
+                    if expected_ro[q_idx][l] != row_evals[l] {
+                        return Err(StirError::InvalidProofShape);
                     }
                 }
             }
