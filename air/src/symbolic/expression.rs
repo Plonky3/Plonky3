@@ -75,7 +75,7 @@ impl<F: Field, EF: ExtensionField<F>> From<F> for SymbolicExpression<EF> {
 }
 
 impl<F: Field> SymbolicExpression<F> {
-    /// Evaluate this symbolic expression against a concrete builder.
+    /// Evaluate this symbolic expression against a concrete [`AirBuilder`].
     ///
     /// # Overview
     ///
