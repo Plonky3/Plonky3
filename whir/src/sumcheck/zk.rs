@@ -553,9 +553,20 @@ impl ZkSumcheck {
         let eps: EF = challenger.sample_algebra_element();
 
         // Drive the rounds. The simulator's only job per round is to advance
-        // the challenger correctly: observe a uniform wire form, grind, sample
-        // γ_j. The wire form has no consistency constraint — the verifier's
-        // `c_1` reconstruction makes any wire automatically affine-valid.
+        // the challenger correctly: observe a wire form drawn from the same
+        // distribution the honest prover induces, grind, sample γ_j. The wire
+        // form has no consistency constraint — the verifier's `c_1`
+        // reconstruction makes any wire automatically affine-valid.
+        //
+        // Two-tier sampling, matching honest stratification of `ĥ_j`:
+        //   - wire[0], wire[1] (= c_0, c_2): receive an `ε · plain_c_*` term in
+        //     honest execution, so live in EF. Sample uniformly from EF.
+        //   - wire[j] for j ≥ 2 (= c_3, c_4, …, c_{ell_zk-1}): receive only the
+        //     live-mask contribution `2^{k-j} · s_j[i]` with `s_j[i] ∈ F`, so
+        //     live in the F-subspace of EF. Sample from F lifted via `EF::from`.
+        // Without this stratification, a distinguisher trivially separates real
+        // from simulated views by checking `wire[j].as_basis_coefficients_slice()[1..]`
+        // — see eprint 2026/391 §6.1; the paper proof generalises tier-by-tier.
         let h_size = core::cmp::max(ell_zk, 3);
         let wire_size = h_size - 1;
         let mut zk_data = ZkSumcheckData::<F, EF> {
@@ -570,7 +581,15 @@ impl ZkSumcheck {
         let mut target: EF = eps * mu + EF::from(mu_tilde);
 
         for _ in 0..k {
-            let wire: Vec<EF> = (0..wire_size).map(|_| rng.random::<EF>()).collect();
+            let wire: Vec<EF> = (0..wire_size)
+                .map(|j| {
+                    if j < 2 {
+                        rng.random::<EF>()
+                    } else {
+                        EF::from(rng.random::<F>())
+                    }
+                })
+                .collect();
 
             challenger.observe_algebra_slice(&wire);
 
@@ -961,7 +980,7 @@ mod tests {
     use p3_challenger::DuplexChallenger;
     use p3_dft::Radix2DFTSmallBatch;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::{Field, PrimeCharacteristicRing};
+    use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_multilinear_util::point::Point;
     use p3_multilinear_util::poly::Poly;
@@ -1265,6 +1284,106 @@ mod tests {
         )
     }
 
+    /// Distributional invariant for the F/EF hybrid HVZK sumcheck: each round
+    /// polynomial coefficient `c_i` for `i ≥ 3` receives only the live-mask
+    /// term `2^{k-j} · s_j[i]` with `s_j[i] ∈ F`, so the wire entries at index
+    /// `≥ 2` (which encode `c_3, c_4, …` since the wire skips `c_1`) must
+    /// land in the `F`-subspace of `EF` — i.e. their basis coefficients
+    /// beyond the first are zero. This test asserts the invariant on both
+    /// honest and simulated transcripts; without the simulator's two-tier
+    /// sampling fix it fails immediately at `ell_zk ≥ 4`.
+    fn run_f_subspace_invariant(
+        n_vars: usize,
+        folding_factor: usize,
+        ell_zk: usize,
+        num_eqs: usize,
+        seed: u64,
+    ) -> Result<(), &'static str> {
+        // Same setup pattern as the other runners.
+        let mut perm_rng = SmallRng::seed_from_u64(seed);
+        let perm = Perm::new_from_rng_128(&mut perm_rng);
+
+        let merkle_hash = MyHash::new(perm.clone());
+        let merkle_compress = MyCompress::new(perm.clone());
+        let mmcs: MyMmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
+
+        let m = (ell_zk + T).next_power_of_two();
+        let dft = MyDft::default();
+        let encoding = MyEnc::new(T, ell_zk, m, dft);
+
+        let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+        let evals: Vec<F> = (0..(1usize << n_vars)).map(|_| data_rng.random()).collect();
+        let poly = Poly::new(evals);
+
+        let mut eq_statement = EqStatement::initialize(n_vars);
+        for _ in 0..num_eqs {
+            let eq_point: Point<EF> = Point::new(
+                (0..n_vars)
+                    .map(|_| data_rng.random::<EF>())
+                    .collect::<Vec<EF>>(),
+            );
+            let eq_eval = poly.eval_base::<EF>(&eq_point);
+            eq_statement.add_evaluated_constraint(eq_point, eq_eval);
+        }
+
+        let pow_bits = 0;
+
+        // Honest prover transcript.
+        let mut prover_challenger = MyChallenger::new(perm.clone());
+        let mut zk_data_honest = ZkSumcheckData::<F, EF>::default();
+        let mut prover_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+        let (mut prover, _gamma_1) = ZkSumcheck::new_classic_unpacked::<F, EF, _, _, _, _>(
+            &poly,
+            &mut zk_data_honest,
+            &mut prover_challenger,
+            folding_factor,
+            pow_bits,
+            &eq_statement,
+            &encoding,
+            &mmcs,
+            &mut prover_rng,
+        );
+        for _ in 1..folding_factor {
+            let _ = prover.round(&mut zk_data_honest, &mut prover_challenger, pow_bits);
+        }
+
+        // Simulator transcript (independent challenger + RNG; we check the
+        // invariant on each side independently, not byte-equality of wires —
+        // wires depend on RNG state, only their distribution matters).
+        let mut sim_challenger = MyChallenger::new(perm.clone());
+        let mut sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(3));
+        let (zk_data_sim, _, _) = ZkSumcheck::simulate_classic_unpacked::<F, EF, _, _, _, _>(
+            &mut sim_challenger,
+            folding_factor,
+            pow_bits,
+            &eq_statement,
+            &encoding,
+            &mmcs,
+            &mut sim_rng,
+        );
+
+        // For wire indices ≥ 2 (= polynomial coefficients c_3, c_4, …), the
+        // basis coefficients of EF beyond index 0 must all be zero. The slice
+        // is empty when ell_zk ≤ 3, so the invariant is vacuously satisfied
+        // there — that's fine, the test still pins down the load-bearing
+        // ell_zk ≥ 4 regime.
+        let check = |zk_data: &ZkSumcheckData<F, EF>, label: &'static str| {
+            for wire in &zk_data.round_coefficients {
+                for coef in wire.iter().skip(2) {
+                    let basis: &[F] =
+                        <EF as BasedVectorSpace<F>>::as_basis_coefficients_slice(coef);
+                    if basis.iter().skip(1).any(|&x| x != F::ZERO) {
+                        return Err(label);
+                    }
+                }
+            }
+            Ok(())
+        };
+        check(&zk_data_honest, "honest wire outside F-subspace at index ≥ 2")?;
+        check(&zk_data_sim, "simulator wire outside F-subspace at index ≥ 2")?;
+        Ok(())
+    }
+
     /// Fixed-seed smoke test: a quick byte-level FS-agreement check that runs
     /// in milliseconds, separate from the broader proptest sweep below.
     #[test]
@@ -1371,6 +1490,25 @@ mod tests {
                 "tampering went undetected: n_vars={n_vars}, k={folding_factor}, \
                  ell_zk={ell_zk}, num_eqs={num_eqs}, seed={seed}, \
                  tamper_round={tamper_round}, tamper_pos={tamper_pos}",
+            );
+        }
+
+        /// Distributional check (Lemma 6.4 in the F/EF hybrid setting):
+        /// honest and simulated wire entries at index ≥ 2 (polynomial
+        /// coefficients `c_3, c_4, …`) must live in the F-subspace of EF.
+        /// The high `ell_zk` end (≥ 4) is where this is non-vacuous and
+        /// where a uniform-EF simulator gets caught.
+        #[test]
+        fn prop_simulator_f_subspace_invariant(
+            (n_vars, folding_factor) in (2usize..=6usize)
+                .prop_flat_map(|n| (Just(n), 1usize..=n)),
+            ell_zk in 2usize..=6usize,
+            num_eqs in 0usize..=3usize,
+            seed in any::<u64>(),
+        ) {
+            prop_assert!(
+                run_f_subspace_invariant(n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok(),
+                "n_vars={n_vars}, k={folding_factor}, ell_zk={ell_zk}, num_eqs={num_eqs}, seed={seed}",
             );
         }
     }
