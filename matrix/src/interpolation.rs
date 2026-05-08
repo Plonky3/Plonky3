@@ -258,6 +258,11 @@ pub trait InterpolateArbitrary<F: Field>: Matrix<F> {
     ) -> Option<Vec<EF>> {
         debug_assert_eq!(x_coords.len(), self.height());
 
+        // Reject duplicates first: the contract is "None if any domain points
+        // coincide", so we must not silently return a row from an ill-posed
+        // input even when the target happens to match the duplicate value.
+        let weights = barycentric_weights(x_coords)?;
+
         // If the target matches a domain point, return that row directly.
         // This also avoids a zero in the difference vector below.
         for (i, &x) in x_coords.iter().enumerate() {
@@ -265,9 +270,6 @@ pub trait InterpolateArbitrary<F: Field>: Matrix<F> {
                 return Some(self.row(i).unwrap().into_iter().map(EF::from).collect());
             }
         }
-
-        // Compute barycentric weights (returns None on duplicate domain points).
-        let weights = barycentric_weights(x_coords)?;
 
         // Batch-invert all (point - x_i). Safe: coincidence was ruled out above.
         let diffs: Vec<EF> = x_coords.iter().map(|&x| point - x).collect();
