@@ -109,7 +109,8 @@ pub const fn field_to_array<R: PrimeCharacteristicRing, const D: usize>(x: R) ->
 pub const fn halve_u32<const P: u32>(x: u32) -> u32 {
     let shift = (P + 1) >> 1;
     let half = x >> 1;
-    if x & 1 == 0 { half } else { half + shift }
+    let mask = 0u32.wrapping_sub(x & 1);
+    half.wrapping_add(mask & shift)
 }
 
 /// Given an element x from a 64 bit field F_P compute x/2.
@@ -118,7 +119,8 @@ pub const fn halve_u32<const P: u32>(x: u32) -> u32 {
 pub const fn halve_u64<const P: u64>(x: u64) -> u64 {
     let shift = (P + 1) >> 1;
     let half = x >> 1;
-    if x & 1 == 0 { half } else { half + shift }
+    let mask = 0u64.wrapping_sub(x & 1);
+    half.wrapping_add(mask & shift)
 }
 
 /// Reduce a slice of 32-bit field elements into a single element of a larger field.
