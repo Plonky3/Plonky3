@@ -209,5 +209,91 @@ where
     }
 }
 
-criterion_group!(benches, bench_fft);
+/// Baseline for the chunked-LDE pattern used by `Pcs::commit_quotient`.
+///
+/// Emulates the current PCS implementation: take a single tall matrix of
+/// height `N·D`, split it row-wise into `D` matrices of height `N`, and run
+/// `coset_lde_batch` separately on each.
+///
+/// The output is `D` matrices of height `N << added_bits`, mirroring what
+/// `TwoAdicFriPcs::get_quotient_ldes` produces today.
+fn coset_lde_chunked<F, Dft>(
+    c: &mut Criterion,
+    grid: &[(usize, usize, usize, usize)], // (log_n, log_d, ncols, added_bits)
+) where
+    F: TwoAdicField,
+    Dft: TwoAdicSubgroupDft<F>,
+    StandardUniform: Distribution<F>,
+{
+    let mut group = c.benchmark_group(format!(
+        "coset_lde_chunked/{}/{}",
+        pretty_name::<F>(),
+        pretty_name::<Dft>(),
+    ));
+    group.sample_size(10);
+
+    let mut rng = SmallRng::seed_from_u64(2);
+    for &(log_n, log_d, ncols, added_bits) in grid {
+        let n = 1 << log_n;
+        let d = 1 << log_d;
+        let nd = n * d;
+
+        // Generate one tall matrix of height N·D, width ncols.
+        let tall = RowMajorMatrix::<F>::rand(&mut rng, nd, ncols);
+
+        let dft = Dft::default();
+        let label = format!("logN={log_n}/D={d}/ncols={ncols}/B={}", 1 << added_bits);
+        group.bench_with_input(BenchmarkId::from_parameter(label), &dft, |b, dft| {
+            b.iter_batched(
+                || tall.clone(),
+                |tall_mat| {
+                    // Split into D matrices of height N (mirrors `split_evals`).
+                    let mut chunks: Vec<Vec<F>> =
+                        (0..d).map(|_| Vec::with_capacity(n * ncols)).collect();
+                    for r in 0..n {
+                        for t in 0..d {
+                            let src = (r * d + t) * ncols;
+                            chunks[t].extend_from_slice(&tall_mat.values[src..src + ncols]);
+                        }
+                    }
+
+                    // Run a coset LDE on each chunk.
+                    let ldes: Vec<_> = chunks
+                        .into_iter()
+                        .map(|values| {
+                            let m = RowMajorMatrix::new(values, ncols);
+                            dft.coset_lde_batch(m, added_bits, F::GENERATOR)
+                        })
+                        .collect();
+                    ldes
+                },
+                BatchSize::LargeInput,
+            );
+        });
+    }
+}
+
+fn bench_coset_lde_chunked(c: &mut Criterion) {
+    // Mirror the FRI commit_quotient bench grid in the realistic `D < B`
+    // regime: (log_n, log_d, ncols, added_bits).
+    // `added_bits` is `log_b`; we require `added_bits > log_d`.
+    // ncols matches Challenge::DIMENSION typical values (DIM=4 for BB, DIM=2 for GL).
+    let grid = &[
+        (16, 1, 4, 2), // logN=16, D=2, B=4
+        (16, 1, 4, 3), // logN=16, D=2, B=8
+        (18, 1, 4, 2), // logN=18, D=2, B=4
+        (18, 1, 4, 3), // logN=18, D=2, B=8
+    ];
+    coset_lde_chunked::<BabyBear, Radix2DitParallel<_>>(c, grid);
+
+    let grid_gl = &[
+        (16, 1, 2, 2),
+        (16, 1, 2, 3),
+        (18, 1, 2, 2),
+        (18, 1, 2, 3),
+    ];
+    coset_lde_chunked::<Goldilocks, Radix2DitParallel<_>>(c, grid_gl);
+}
+
+criterion_group!(benches, bench_fft, bench_coset_lde_chunked);
 criterion_main!(benches);
