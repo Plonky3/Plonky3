@@ -821,7 +821,15 @@ impl<EF: Field> NativeWarpWhirOracleStatement<EF> {
     }
 }
 
-/// Compiler helper for WARP over Plonky3's systematic Reed-Solomon code.
+/// Compiler helper for WARP over Plonky3's Reed-Solomon code.
+///
+/// WARP's RS specialization and WHIR's initial oracle are both statements
+/// about one smooth Reed-Solomon code. This compiler therefore works in the
+/// message coordinates of `C^{-1}` and uses [`ReedSolomonCode`] to express
+/// every WARP codeword query as an RS query over that same initial polynomial.
+/// In coefficient layout those weights are WHIR select/monomial weights; in
+/// systematic layout they are the corresponding Lagrange weights on the
+/// message subgroup. No second code is introduced.
 pub struct NativeWarpWhirCompiler<'a, F, Dft>
 where
     F: TwoAdicField,
@@ -942,7 +950,7 @@ where
         let mut eval_claims = Vec::new();
         for claim in claims.iter().filter(|claim| claim.oracle_id == oracle_id) {
             let point = match &claim.point {
-                RootIopOpeningPoint::Index(index) => {
+                RootIopOpeningPoint::Index(index) | RootIopOpeningPoint::RsCodewordIndex(index) => {
                     if *index >= self.code.codeword_len() {
                         return Err(NativeWarpWhirClaimCompileError::IndexOutOfBounds {
                             oracle_id,
@@ -983,20 +991,22 @@ where
         Ok(self.eval_claim_statement(&eval_claims))
     }
 
-    /// Compile base-field WARP codeword index claims into a linear-Sigma
-    /// statement over the original systematic RS message.
+    /// Compile base-field WARP codeword index claims into a constrained-RS
+    /// statement over the original RS message.
     ///
-    /// This is the single-RS path for fresh WARP inputs. WHIR commits to the
-    /// message `w` in its usual multilinear/RS form. Each WARP shift query
-    /// `C(w)[i] = v` is converted into
+    /// This is the single-RS path for fresh WARP inputs. WHIR commits to
+    /// `C^{-1}(u)` in its usual initial-polynomial form. Each WARP shift query
+    /// `u[i] = C(w)[i] = v` is converted into
     ///
     /// ```text
     ///     sum_j lambda_j(omega_n^i) * w[j] = v
     /// ```
     ///
-    /// where `lambda_j` are the systematic RS Lagrange weights. This removes
-    /// the previous `C(w)`-then-WHIR-encode-`C(w)` double encoding while keeping
-    /// the WARP verifier transcript bound to the same codeword claim.
+    /// where `lambda_j` are determined by the selected RS coordinates:
+    /// monomial/select weights in coefficient form, or subgroup Lagrange
+    /// weights in systematic form. This removes the previous
+    /// `C(w)`-then-WHIR-encode-`C(w)` double encoding while keeping the WARP
+    /// verifier transcript bound to the same RS codeword claim.
     pub fn root_iop_base_message_claim_statement<EF>(
         &self,
         claims: &[RootIopOpeningClaim<F, EF>],
@@ -1017,14 +1027,14 @@ where
                 }
             };
             match &claim.point {
-                RootIopOpeningPoint::Index(index) => {
+                RootIopOpeningPoint::Index(index) | RootIopOpeningPoint::RsCodewordIndex(index) => {
                     if *index >= self.code.codeword_len() {
                         return Err(NativeWarpWhirClaimCompileError::IndexOutOfBounds {
                             oracle_id,
                             index: *index,
                         });
                     }
-                    let weights = self.code.systematic_codeword_index_weights::<EF>(*index);
+                    let weights = self.code.codeword_index_weights::<EF>(*index);
                     statement.add_constraint(LinearSigmaConstraint::new(Poly::new(weights), value));
                     saw_claim = true;
                 }
@@ -1043,14 +1053,15 @@ where
         Ok(NativeWarpWhirOracleStatement::new(statement))
     }
 
-    /// Compile extension-field accumulator codeword claims into a linear-Sigma
-    /// statement over the original systematic accumulator message.
+    /// Compile extension-field accumulator codeword claims into a constrained-RS
+    /// statement over the original accumulator message.
     ///
     /// This is the extension-field analogue of
     /// [`Self::root_iop_base_message_claim_statement`]. Index openings use the
-    /// usual systematic RS Lagrange weights, while arbitrary codeword-MLE
-    /// openings use the adjoint RS map from
-    /// [`ReedSolomonCode::systematic_codeword_mle_weights`].
+    /// RS evaluation weights for the chosen coordinates, while arbitrary
+    /// codeword-MLE openings use the adjoint of the same RS encoder. This is
+    /// the WARP paper's `u in C` and `u_hat(alpha)=mu` relation expressed in
+    /// WHIR's constrained-RS/SumIOP form.
     pub fn root_iop_extension_message_claim_statement<EF>(
         &self,
         claims: &[RootIopOpeningClaim<F, EF>],
@@ -1071,14 +1082,14 @@ where
                 }
             };
             let weights = match &claim.point {
-                RootIopOpeningPoint::Index(index) => {
+                RootIopOpeningPoint::Index(index) | RootIopOpeningPoint::RsCodewordIndex(index) => {
                     if *index >= self.code.codeword_len() {
                         return Err(NativeWarpWhirClaimCompileError::IndexOutOfBounds {
                             oracle_id,
                             index: *index,
                         });
                     }
-                    self.code.systematic_codeword_index_weights::<EF>(*index)
+                    self.code.codeword_index_weights::<EF>(*index)
                 }
                 RootIopOpeningPoint::Mle(point) => {
                     if point.len() != self.code.log_codeword_len() {
@@ -1086,7 +1097,7 @@ where
                             oracle_id,
                         });
                     }
-                    self.code.systematic_codeword_mle_weights::<EF>(point)
+                    self.code.codeword_mle_weights::<EF>(point)
                 }
             };
             statement.add_constraint(LinearSigmaConstraint::new(Poly::new(weights), value));
@@ -1479,15 +1490,14 @@ where
         }
     }
 
-    /// Create a native WARP root proof system whose fresh base inputs are
-    /// committed in the WHIR message domain.
+    /// Create a native WARP root proof system whose WARP inputs are committed
+    /// as WHIR initial RS messages.
     ///
-    /// `pcs` remains the codeword-domain PCS used for extension accumulator
-    /// limbs. `base_message_pcs` must be configured with
-    /// `code.log_msg_len()` variables and the same RS rate/security settings.
-    /// This is the sound single-RS path for systematic WARP: WHIR commits to
-    /// the original fresh witness, and WARP codeword-index openings are compiled
-    /// into linear Sigma claims using the systematic RS Lagrange weights.
+    /// `pcs` remains available for legacy codeword-domain openings.
+    /// `base_message_pcs` must be configured with `code.log_msg_len()`
+    /// variables and the same RS rate/security settings. This is the sound
+    /// single-RS path: WHIR commits to `C^{-1}(u)`, and WARP codeword openings
+    /// are compiled using the same [`ReedSolomonCode`] generator.
     pub fn new_with_base_message_pcs(
         pcs: &'a WhirPcs<EF, F, MT, Challenger, Dft, DIGEST_ELEMS>,
         base_message_pcs: &'a WhirPcs<EF, F, MT, Challenger, Dft, DIGEST_ELEMS>,
@@ -1551,9 +1561,10 @@ where
     /// Commit a base-field fresh WARP input without RS double-encoding.
     ///
     /// The WARP verifier still sees and checks openings of `codeword = C(w)`,
-    /// but the WHIR commitment is to `w`. During proof generation those
-    /// codeword-index claims are transformed into linear Sigma claims over the
-    /// message by [`ReedSolomonCode::systematic_codeword_index_weights`].
+    /// but the WHIR commitment is to `w = C^{-1}(codeword)`. During proof
+    /// generation those codeword-index claims are transformed into
+    /// constrained-RS claims over the same message coordinates by
+    /// [`ReedSolomonCode::codeword_index_weights`].
     pub fn commit_base_message_oracle(
         &self,
         oracle_id: usize,
@@ -1723,34 +1734,13 @@ where
 
         let mut challenger = self.base_oracle_challenger(oracle_id);
         if let Some(message_pcs) = self.base_message_pcs {
-            if self.compiler.code().is_systematic() {
-                let message = self
-                    .compiler
-                    .code()
-                    .systematic_message_from_codeword(&codeword);
-                let encoded = message_pcs
-                    .encode_extension_initial_oracle(RowMajorMatrix::new(message.clone(), 1));
-                let (commitment, prover_data) =
-                    message_pcs.commit_extension_encoded_deferred(encoded, &mut challenger);
-                return Ok((
-                    RootIopBoundCommitment {
-                        oracle_id,
-                        log_len: self.compiler.code().log_codeword_len(),
-                        field: RootIopOracleField::Extension,
-                        commitment: NativeWarpWhirRootCommitment::ExtensionMessage(commitment),
-                    },
-                    NativeWarpWhirRootOracleProverData {
-                        oracle_id,
-                        data: NativeWarpWhirRootProverData::ExtensionNative(
-                            NativeWarpWhirRootExtensionProverData {
-                                prover_data,
-                                challenger,
-                                message: Some(message),
-                            },
-                        ),
-                    },
-                ));
-            }
+            let message = self.compiler.code().message_from_codeword(&codeword);
+            return self.commit_extension_message_oracle_with_challenger(
+                oracle_id,
+                message,
+                challenger,
+                message_pcs,
+            );
         }
 
         let (commitment, prover_data) = self
@@ -1770,6 +1760,83 @@ where
                         prover_data,
                         challenger,
                         message: None,
+                    },
+                ),
+            },
+        ))
+    }
+
+    /// Commit an extension-field accumulator through WHIR's initial-message
+    /// oracle path when the RS message is already available.
+    ///
+    /// This commits to the same WHIR polynomial as [`commit_extension_oracle`]
+    /// would after `message_from_codeword`, but avoids decoding/extracting the
+    /// message again in pipelines that already have the merged WARP witness.
+    pub fn commit_extension_message_oracle(
+        &self,
+        oracle_id: usize,
+        message: Vec<EF>,
+    ) -> Result<
+        (
+            RootIopBoundCommitment<NativeWarpWhirRootCommitment<MT::Commitment>>,
+            NativeWarpWhirRootOracleProverData<F, EF, MT, Challenger, DIGEST_ELEMS>,
+        ),
+        NativeWarpWhirRootProofError,
+    > {
+        let message_pcs = self
+            .base_message_pcs
+            .ok_or(NativeWarpWhirRootProofError::BaseMessagePcsRequired)?;
+        let challenger = self.base_oracle_challenger(oracle_id);
+        self.commit_extension_message_oracle_with_challenger(
+            oracle_id,
+            message,
+            challenger,
+            message_pcs,
+        )
+    }
+
+    fn commit_extension_message_oracle_with_challenger(
+        &self,
+        oracle_id: usize,
+        message: Vec<EF>,
+        mut challenger: Challenger,
+        message_pcs: &WhirPcs<EF, F, MT, Challenger, Dft, DIGEST_ELEMS>,
+    ) -> Result<
+        (
+            RootIopBoundCommitment<NativeWarpWhirRootCommitment<MT::Commitment>>,
+            NativeWarpWhirRootOracleProverData<F, EF, MT, Challenger, DIGEST_ELEMS>,
+        ),
+        NativeWarpWhirRootProofError,
+    > {
+        if message.len() != self.compiler.code().msg_len() {
+            return Err(
+                NativeWarpWhirRootReductionError::OracleValueLengthMismatch {
+                    oracle_id,
+                    expected: self.compiler.code().msg_len(),
+                    actual: message.len(),
+                }
+                .into(),
+            );
+        }
+
+        let encoded =
+            message_pcs.encode_extension_initial_oracle(RowMajorMatrix::new(message.clone(), 1));
+        let (commitment, prover_data) =
+            message_pcs.commit_extension_encoded_deferred(encoded, &mut challenger);
+        Ok((
+            RootIopBoundCommitment {
+                oracle_id,
+                log_len: self.compiler.code().log_codeword_len(),
+                field: RootIopOracleField::Extension,
+                commitment: NativeWarpWhirRootCommitment::ExtensionMessage(commitment),
+            },
+            NativeWarpWhirRootOracleProverData {
+                oracle_id,
+                data: NativeWarpWhirRootProverData::ExtensionNative(
+                    NativeWarpWhirRootExtensionProverData {
+                        prover_data,
+                        challenger,
+                        message: Some(message),
                     },
                 ),
             },
@@ -1928,9 +1995,6 @@ where
             None => return Ok(None),
         };
 
-        transcript
-            .verify_witnessed_claim_values()
-            .map_err(NativeWarpWhirRootReductionError::RootIop)?;
         self.compiler
             .check_unique_bound_oracle_ids(&transcript.oracles)?;
         self.compiler
@@ -1945,7 +2009,7 @@ where
                 continue;
             }
             self.compiler
-                .check_bound_oracle_shape(commitment, Some(values))?;
+                .check_bound_oracle_shape::<EF, _>(commitment, None)?;
 
             match (&commitment.commitment, values) {
                 (NativeWarpWhirRootCommitment::BaseMessage(_), RootIopOracleValues::Base(_)) => {
@@ -2344,7 +2408,7 @@ where
                 }
             };
             match &claim.point {
-                RootIopOpeningPoint::Index(index) => {
+                RootIopOpeningPoint::Index(index) | RootIopOpeningPoint::RsCodewordIndex(index) => {
                     if *index >= self.compiler.code().codeword_len() {
                         return Err(NativeWarpWhirClaimCompileError::IndexOutOfBounds {
                             oracle_id,
@@ -2384,7 +2448,7 @@ where
                 }
             };
             match &claim.point {
-                RootIopOpeningPoint::Index(index) => {
+                RootIopOpeningPoint::Index(index) | RootIopOpeningPoint::RsCodewordIndex(index) => {
                     if *index >= self.compiler.code().codeword_len() {
                         return Err(NativeWarpWhirClaimCompileError::IndexOutOfBounds {
                             oracle_id,
@@ -3292,6 +3356,9 @@ where
         F: TwoAdicField,
         Dft: TwoAdicSubgroupDft<F>,
     {
+        if !code.is_systematic() {
+            return None;
+        }
         let stride = 1 << code.log_inv_rate();
         let mut scale = EF::ONE;
         let mut value = EF::ZERO;
@@ -3353,12 +3420,13 @@ where
             });
         }
 
-        let all_systematic_indices = statement.constraints.iter().all(|constraint| {
-            matches!(
-                constraint.query,
-                NativeWarpCompactRootQuery::Index(index) if index.is_multiple_of(stride)
-            )
-        });
+        let all_systematic_indices = code.is_systematic()
+            && statement.constraints.iter().all(|constraint| {
+                matches!(
+                    constraint.query,
+                    NativeWarpCompactRootQuery::Index(index) if index.is_multiple_of(stride)
+                )
+            });
         if all_systematic_indices {
             let mut message_weights = EF::zero_vec(code.msg_len());
             let mut scale = EF::ONE;
@@ -3408,7 +3476,7 @@ where
             }
         }
         let message_weights =
-            code.systematic_codeword_query_weights_batch(RowMajorMatrix::new(matrix_values, width));
+            code.codeword_query_weights_batch(RowMajorMatrix::new(matrix_values, width));
         for (col, &statement_index) in dense_statement_indices.iter().enumerate() {
             let column = (0..code.msg_len())
                 .map(|row| message_weights.values[row * width + col])
@@ -3783,6 +3851,10 @@ mod tests {
         ReedSolomonCode::new_systematic(2, 1, Dft::default())
     }
 
+    fn coefficient_code() -> ReedSolomonCode<F, Dft> {
+        ReedSolomonCode::new_coefficient(2, 1, Dft::default())
+    }
+
     fn whir_pcs(num_variables: usize) -> TestWhirPcs {
         let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(3));
         let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
@@ -3882,6 +3954,43 @@ mod tests {
             err,
             LinearSigmaReductionError::UnsatisfiedStatement
         ));
+    }
+
+    #[test]
+    fn coefficient_rs_index_claim_uses_same_whir_initial_polynomial() {
+        let code = coefficient_code();
+        let compiler = NativeWarpWhirCompiler::new(&code);
+        let witness = vec![
+            F::from_u64(1),
+            F::from_u64(2),
+            F::from_u64(3),
+            F::from_u64(4),
+        ];
+        let codeword = code.encode(&witness);
+        let index = 5;
+        let claim = RootIopOpeningClaim {
+            claim_id: 0,
+            oracle_id: 0,
+            point: RootIopOpeningPoint::RsCodewordIndex(index),
+            value: RootIopOpeningValue::Base(codeword[index]),
+        };
+
+        let statement = compiler
+            .root_iop_base_message_claim_statement::<EF>(&[claim], 0)
+            .expect("coefficient RS index claim compiles");
+
+        let message_poly = Poly::new(witness);
+        let mut prover_challenger = challenger();
+        let mut verifier_challenger = challenger();
+        let (proof, opening) = statement
+            .prove_reduction_base::<F, _>(&message_poly, &mut prover_challenger, 0)
+            .expect("honest coefficient RS-index reduction");
+        let verified_opening = statement
+            .verify_reduction::<F, _>(&proof, &mut verifier_challenger, 0)
+            .expect("coefficient RS-index reduction verification");
+
+        assert_eq!(opening, verified_opening);
+        assert_eq!(opening.value, message_poly.eval_base(&opening.point));
     }
 
     #[test]
@@ -4370,6 +4479,96 @@ mod tests {
             .verify(&commitments, &claims, &proof, &mut challenger(), 0)
             .expect("batched WHIR-bound root proof verification");
         assert!(residuals.is_empty());
+    }
+
+    #[test]
+    fn message_domain_batched_root_proof_rejects_missing_claim_or_swapped_commitment() {
+        let code = systematic_code();
+        let pcs = whir_pcs(code.log_codeword_len());
+        let message_pcs = whir_pcs(code.log_msg_len());
+        let root_system = NativeWarpWhirRootProofSystem::new_with_base_message_pcs(
+            &pcs,
+            &message_pcs,
+            &code,
+            challenger(),
+        );
+        let base_message = vec![
+            F::from_u64(2),
+            F::from_u64(5),
+            F::from_u64(8),
+            F::from_u64(13),
+        ];
+        let base_codeword = code.encode(&base_message);
+        let extension_message = (0..code.msg_len())
+            .map(|i| EF::from_u64((17 * i + 19) as u64))
+            .collect::<Vec<_>>();
+        let extension_codeword = code.encode_algebra(&extension_message);
+
+        let (base_commitment, base_prover_data) = root_system
+            .commit_base_message_oracle(0, base_codeword.clone(), base_message)
+            .expect("base message root oracle commit");
+        let (extension_commitment, extension_prover_data) = root_system
+            .commit_extension_oracle(1, extension_codeword.clone())
+            .expect("extension message root oracle commit");
+        let commitments = vec![base_commitment.clone(), extension_commitment.clone()];
+        let claims = vec![
+            RootIopOpeningClaim {
+                claim_id: 0,
+                oracle_id: 0,
+                point: RootIopOpeningPoint::<EF>::Index(4),
+                value: RootIopOpeningValue::Base(base_codeword[4]),
+            },
+            RootIopOpeningClaim {
+                claim_id: 1,
+                oracle_id: 1,
+                point: RootIopOpeningPoint::<EF>::Index(5),
+                value: RootIopOpeningValue::Extension(extension_codeword[5]),
+            },
+        ];
+        let transcript = RootIopBoundTranscript {
+            oracles: vec![
+                (base_commitment, RootIopOracleValues::Base(base_codeword)),
+                (
+                    extension_commitment,
+                    RootIopOracleValues::Extension(extension_codeword),
+                ),
+            ],
+            claims: claims.clone(),
+        };
+        let proof = root_system
+            .prove(
+                &transcript,
+                &[base_prover_data, extension_prover_data],
+                &mut challenger(),
+                0,
+            )
+            .expect("batched WHIR-bound root proof");
+
+        let missing_claim = vec![claims[0].clone()];
+        assert!(
+            root_system
+                .verify(&commitments, &missing_claim, &proof, &mut challenger(), 0)
+                .is_err(),
+            "dropping one recorded WARP root claim must be rejected"
+        );
+
+        let mut swapped_commitments = commitments.clone();
+        swapped_commitments.swap(0, 1);
+        assert!(
+            root_system
+                .verify(&swapped_commitments, &claims, &proof, &mut challenger(), 0)
+                .is_err(),
+            "changing root commitment order must be rejected"
+        );
+
+        let mut wrong_challenger = challenger();
+        wrong_challenger.observe(F::ONE);
+        assert!(
+            root_system
+                .verify(&commitments, &claims, &proof, &mut wrong_challenger, 0)
+                .is_err(),
+            "root proof must be bound to the Fiat-Shamir state"
+        );
     }
 
     #[test]

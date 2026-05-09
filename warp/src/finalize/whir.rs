@@ -2767,6 +2767,67 @@ mod tests {
     }
 
     #[test]
+    fn whir_native_root_rejects_valid_fresh_commitment_substitution() {
+        let (code, pesat, mmcs, params, base_challenger, whir_pcs, _, mut root_proof) =
+            whir_native_root_fixture();
+        let fresh_backend = WhirCodewordBackend::<F, EF, _, TestChallenger<F>, Dft, 8>::new(
+            &whir_pcs,
+            TestChallenger::new(F::from_u64(23)),
+        );
+        let witness = (0..code.msg_len())
+            .map(|i| F::from_bool(i % 2 == 0))
+            .collect::<Vec<_>>();
+        let alternate = fresh_backend
+            .commit_codeword(code.encode(&witness), witness)
+            .expect("alternate WHIR fresh commit");
+
+        root_proof.steps[0].fresh_commitments[0] = alternate.commitment();
+
+        verify_whir_native_root(
+            &code,
+            &pesat,
+            &mmcs,
+            params,
+            &base_challenger,
+            &whir_pcs,
+            &root_proof,
+        )
+        .expect_err("substituting a different valid fresh WHIR commitment must be rejected");
+    }
+
+    #[test]
+    fn whir_native_root_rejects_dropped_or_reordered_steps() {
+        let (code, pesat, mmcs, params, base_challenger, whir_pcs, _, root_proof) =
+            whir_native_root_fixture();
+
+        let mut dropped = root_proof.clone();
+        dropped.steps.remove(0);
+        verify_whir_native_root(
+            &code,
+            &pesat,
+            &mmcs,
+            params,
+            &base_challenger,
+            &whir_pcs,
+            &dropped,
+        )
+        .expect_err("dropping a WHIR-native WARP root step must be rejected");
+
+        let mut reordered = root_proof;
+        reordered.steps.swap(0, 1);
+        verify_whir_native_root(
+            &code,
+            &pesat,
+            &mmcs,
+            params,
+            &base_challenger,
+            &whir_pcs,
+            &reordered,
+        )
+        .expect_err("reordering WHIR-native WARP root steps must be rejected");
+    }
+
+    #[test]
     fn whir_native_root_rejects_tampered_step_instance() {
         let (code, pesat, mmcs, params, base_challenger, whir_pcs, _, mut root_proof) =
             whir_native_root_fixture();

@@ -16,7 +16,7 @@
 use std::vec::Vec;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear, default_babybear_poseidon2_16};
-use p3_challenger::DuplexChallenger;
+use p3_challenger::{CanObserve, DuplexChallenger};
 use p3_commit::Mmcs;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
@@ -627,6 +627,189 @@ fn witness_root_proof_rejects_tampered_step_proof() {
 }
 
 #[test]
+fn witness_root_proof_rejects_removed_intermediate_step() {
+    let (mmcs, base_challenger, pesat, code) = make_components();
+    let params = make_params();
+    let root_prover = WarpRootProver::new(&mmcs, &code, &pesat, params);
+    let root_verifier = WarpRootVerifier::new(&mmcs, &code, &pesat, params);
+    let finalizer = WitnessFinalizer::new(&mmcs, &code, &pesat);
+
+    let step_witnesses = vec![
+        (0..NUM_FRESH)
+            .map(|i| make_satisfying_witness(2050 + i as u64))
+            .collect::<Vec<_>>(),
+        (0..3)
+            .map(|i| make_satisfying_witness(2150 + i as u64))
+            .collect::<Vec<_>>(),
+        (0..3)
+            .map(|i| make_satisfying_witness(2250 + i as u64))
+            .collect::<Vec<_>>(),
+    ];
+
+    let (_claimed_final, mut root_proof) = root_prover
+        .prove_linear_chain(&base_challenger, &step_witnesses, &finalizer)
+        .expect("root prove");
+
+    root_proof.steps.remove(1);
+
+    root_verifier
+        .verify_linear_chain(&base_challenger, &root_proof, &finalizer)
+        .expect_err("dropping a WARP root step must be rejected");
+}
+
+#[test]
+fn witness_root_proof_rejects_reordered_steps() {
+    let (mmcs, base_challenger, pesat, code) = make_components();
+    let params = make_params();
+    let root_prover = WarpRootProver::new(&mmcs, &code, &pesat, params);
+    let root_verifier = WarpRootVerifier::new(&mmcs, &code, &pesat, params);
+    let finalizer = WitnessFinalizer::new(&mmcs, &code, &pesat);
+
+    let step_witnesses = vec![
+        (0..NUM_FRESH)
+            .map(|i| make_satisfying_witness(2350 + i as u64))
+            .collect::<Vec<_>>(),
+        (0..3)
+            .map(|i| make_satisfying_witness(2450 + i as u64))
+            .collect::<Vec<_>>(),
+        (0..3)
+            .map(|i| make_satisfying_witness(2550 + i as u64))
+            .collect::<Vec<_>>(),
+    ];
+
+    let (_claimed_final, mut root_proof) = root_prover
+        .prove_linear_chain(&base_challenger, &step_witnesses, &finalizer)
+        .expect("root prove");
+
+    root_proof.steps.swap(0, 1);
+
+    root_verifier
+        .verify_linear_chain(&base_challenger, &root_proof, &finalizer)
+        .expect_err("reordering WARP root steps must be rejected");
+}
+
+#[test]
+fn witness_root_proof_rejects_wrong_fiat_shamir_state() {
+    let (mmcs, base_challenger, pesat, code) = make_components();
+    let params = make_params();
+    let root_prover = WarpRootProver::new(&mmcs, &code, &pesat, params);
+    let root_verifier = WarpRootVerifier::new(&mmcs, &code, &pesat, params);
+    let finalizer = WitnessFinalizer::new(&mmcs, &code, &pesat);
+
+    let step_witnesses = vec![
+        (0..NUM_FRESH)
+            .map(|i| make_satisfying_witness(2650 + i as u64))
+            .collect::<Vec<_>>(),
+        (0..3)
+            .map(|i| make_satisfying_witness(2750 + i as u64))
+            .collect::<Vec<_>>(),
+    ];
+
+    let (_claimed_final, root_proof) = root_prover
+        .prove_linear_chain(&base_challenger, &step_witnesses, &finalizer)
+        .expect("root prove");
+    let mut wrong_challenger = base_challenger.clone();
+    wrong_challenger.observe(F::ONE);
+
+    root_verifier
+        .verify_linear_chain(&wrong_challenger, &root_proof, &finalizer)
+        .expect_err("root proof must be bound to the initial Fiat-Shamir state");
+}
+
+#[test]
+fn witness_root_proof_rejects_wrong_warp_params() {
+    let (mmcs, base_challenger, pesat, code) = make_components();
+    let params = make_params();
+    let root_prover = WarpRootProver::new(&mmcs, &code, &pesat, params);
+    let wrong_params_verifier = WarpRootVerifier::new(&mmcs, &code, &pesat, WarpParams::new(2, 1));
+    let finalizer = WitnessFinalizer::new(&mmcs, &code, &pesat);
+
+    let step_witnesses = vec![
+        (0..NUM_FRESH)
+            .map(|i| make_satisfying_witness(2850 + i as u64))
+            .collect::<Vec<_>>(),
+        (0..3)
+            .map(|i| make_satisfying_witness(2950 + i as u64))
+            .collect::<Vec<_>>(),
+    ];
+
+    let (_claimed_final, root_proof) = root_prover
+        .prove_linear_chain(&base_challenger, &step_witnesses, &finalizer)
+        .expect("root prove");
+
+    wrong_params_verifier
+        .verify_linear_chain(&base_challenger, &root_proof, &finalizer)
+        .expect_err("root proof must be bound to the WARP soundness parameters");
+}
+
+#[test]
+fn witness_root_proof_rejects_valid_intermediate_accumulator_substitution() {
+    let (mmcs, base_challenger, pesat, code) = make_components();
+    let params = make_params();
+    let root_prover = WarpRootProver::new(&mmcs, &code, &pesat, params);
+    let root_verifier = WarpRootVerifier::new(&mmcs, &code, &pesat, params);
+    let finalizer = WitnessFinalizer::new(&mmcs, &code, &pesat);
+
+    let make_chain = |offset: u64| {
+        vec![
+            (0..NUM_FRESH)
+                .map(|i| make_satisfying_witness(offset + i as u64))
+                .collect::<Vec<_>>(),
+            (0..3)
+                .map(|i| make_satisfying_witness(offset + 100 + i as u64))
+                .collect::<Vec<_>>(),
+            (0..3)
+                .map(|i| make_satisfying_witness(offset + 200 + i as u64))
+                .collect::<Vec<_>>(),
+        ]
+    };
+    let (_final_a, mut proof_a) = root_prover
+        .prove_linear_chain(&base_challenger, &make_chain(3050), &finalizer)
+        .expect("root prove A");
+    let (_final_b, proof_b) = root_prover
+        .prove_linear_chain(&base_challenger, &make_chain(4050), &finalizer)
+        .expect("root prove B");
+
+    proof_a.steps[1].instance = proof_b.steps[1].instance.clone();
+
+    root_verifier
+        .verify_linear_chain(&base_challenger, &proof_a, &finalizer)
+        .expect_err("substituting another valid intermediate accumulator must be rejected");
+}
+
+#[test]
+fn witness_root_proof_rejects_valid_finalizer_replay_from_other_chain() {
+    let (mmcs, base_challenger, pesat, code) = make_components();
+    let params = make_params();
+    let root_prover = WarpRootProver::new(&mmcs, &code, &pesat, params);
+    let root_verifier = WarpRootVerifier::new(&mmcs, &code, &pesat, params);
+    let finalizer = WitnessFinalizer::new(&mmcs, &code, &pesat);
+
+    let make_chain = |offset: u64| {
+        vec![
+            (0..NUM_FRESH)
+                .map(|i| make_satisfying_witness(offset + i as u64))
+                .collect::<Vec<_>>(),
+            (0..3)
+                .map(|i| make_satisfying_witness(offset + 100 + i as u64))
+                .collect::<Vec<_>>(),
+        ]
+    };
+    let (_final_a, mut proof_a) = root_prover
+        .prove_linear_chain(&base_challenger, &make_chain(5050), &finalizer)
+        .expect("root prove A");
+    let (_final_b, proof_b) = root_prover
+        .prove_linear_chain(&base_challenger, &make_chain(6050), &finalizer)
+        .expect("root prove B");
+
+    proof_a.final_proof = proof_b.final_proof;
+
+    root_verifier
+        .verify_linear_chain(&base_challenger, &proof_a, &finalizer)
+        .expect_err("replaying another chain's valid finalizer proof must be rejected");
+}
+
+#[test]
 fn witness_root_proof_rejects_tampered_finalizer_proof() {
     let (mmcs, base_challenger, pesat, code) = make_components();
     let params = make_params();
@@ -742,6 +925,37 @@ fn external_root_proof_rejects_tampered_step_proof() {
         matches!(err, WarpError::Verifier(_)),
         "expected verifier error for tampered external step, got {err:?}"
     );
+}
+
+#[test]
+fn external_root_proof_rejects_valid_fresh_commitment_substitution() {
+    let (mmcs, base_challenger, pesat, code) = make_components();
+    let params = make_params();
+    let committer = WarpProver::new(&mmcs, &code, &pesat, params);
+    let root_prover = WarpRootProver::new(&mmcs, &code, &pesat, params);
+    let root_verifier = WarpRootVerifier::new(&mmcs, &code, &pesat, params);
+    let fresh_verifier = MmcsExternalOpeningVerifier::new(&mmcs);
+    let finalizer = WitnessFinalizer::new(&mmcs, &code, &pesat);
+
+    let alternate = committer.commit_witness(make_satisfying_witness(2800));
+    let step_fresh_committed = vec![
+        (0..NUM_FRESH)
+            .map(|i| committer.commit_witness(make_satisfying_witness(2900 + i as u64)))
+            .collect::<Vec<CommittedCodeword<F, MyMmcs>>>(),
+        (0..3)
+            .map(|i| committer.commit_witness(make_satisfying_witness(3000 + i as u64)))
+            .collect::<Vec<CommittedCodeword<F, MyMmcs>>>(),
+    ];
+
+    let (_claimed_final, mut root_proof) = root_prover
+        .prove_external_linear_chain(&base_challenger, &mmcs, step_fresh_committed, &finalizer)
+        .expect("external root prove");
+
+    root_proof.steps[0].fresh_commitments[0] = alternate.commitment;
+
+    root_verifier
+        .verify_external_linear_chain(&base_challenger, &fresh_verifier, &root_proof, &finalizer)
+        .expect_err("substituting a different valid fresh commitment must be rejected");
 }
 
 #[test]

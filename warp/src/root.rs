@@ -815,7 +815,7 @@ where
                     fresh_openings,
                     acc_backend,
                     fresh,
-                    &priors,
+                    priors,
                 );
 
             steps.push(WarpExternalRootStepBatched {

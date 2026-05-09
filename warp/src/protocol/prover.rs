@@ -43,7 +43,7 @@ use crate::relation::claim_6_5::{
     fold_claim_6_5_packed_round, fold_claim_6_5_scalar_round, packed_ext_scalar_with_scratch,
     unpack_packed_coeffs_to_scalar,
 };
-use crate::relation::{BundledPesat, Claim65Scratch, lagrange_interpolate_int_points};
+use crate::relation::{BundledPesat, Claim65Scratch};
 use crate::sumcheck::{SumcheckProof, observe_and_sample};
 use crate::transcript::{bind_protocol, sample_indices};
 
@@ -57,6 +57,13 @@ use super::{
 /// Match WHIR's sumcheck split threshold: below this, Rayon overhead usually
 /// dominates; above it, large linear folds benefit from parallel lanes.
 const PAR_THRESHOLD: usize = 1 << 14;
+
+struct OwnedPriorAccumulator<EF, Comm, ProverData> {
+    instance: AccumulatorInstance<EF, Comm>,
+    td: ProverData,
+    f: Vec<EF>,
+    w: Vec<EF>,
+}
 
 /// WARP prover bound to a specific PESAT, RS code, and Mmcs.
 pub struct WarpProver<'a, F, EF, MT, Dft, Pesat>
@@ -313,11 +320,11 @@ where
             let g = observe_and_sample::<F, EF, _>(&mut twin_proof, challenger, coeffs);
             gamma.push(g);
             // Fold all tables and current_eq at γ.
-            f_table = fold_table(&f_table, g);
-            w_table = fold_table(&w_table, g);
-            a_table = fold_table(&a_table, g);
-            b_table = fold_table(&b_table, g);
-            current_eq = fold_eq(&current_eq, g);
+            f_table = fold_table(f_table, g);
+            w_table = fold_table(w_table, g);
+            a_table = fold_table(a_table, g);
+            b_table = fold_table(b_table, g);
+            current_eq = fold_eq(current_eq, g);
         }
         debug_assert_eq!(f_table.len(), 1);
 
@@ -456,7 +463,7 @@ where
             let mut eq_star_remaining = eq_star;
             for _ in 0..log_n {
                 let evals = degree2_round_evals(&f_remaining, &eq_star_remaining);
-                let coeffs = lagrange_interpolate_int_points(&evals);
+                let coeffs = degree2_coeffs_from_evals(evals);
                 let alpha = observe_and_sample::<F, EF, _>(&mut batching_proof, challenger, coeffs);
                 alpha_challenges.push(alpha);
                 f_remaining.fix_prefix_var_mut(alpha);
@@ -511,7 +518,7 @@ where
 
         for _ in 0..n_packed_rounds {
             let evals = degree2_round_evals_packed::<F, EF>(&f_packed, &eq_packed);
-            let coeffs = lagrange_interpolate_int_points(&evals);
+            let coeffs = degree2_coeffs_from_evals(evals);
             let alpha = observe_and_sample::<F, EF, _>(&mut batching_proof, challenger, coeffs);
             alpha_challenges.push(alpha);
             fold_packed_in_place::<F, EF>(&mut f_packed, alpha);
@@ -530,7 +537,7 @@ where
 
         for _ in 0..log_pack {
             let evals = degree2_round_evals(&f_remaining, &eq_star_remaining);
-            let coeffs = lagrange_interpolate_int_points(&evals);
+            let coeffs = degree2_coeffs_from_evals(evals);
             let alpha = observe_and_sample::<F, EF, _>(&mut batching_proof, challenger, coeffs);
             alpha_challenges.push(alpha);
             f_remaining.fix_prefix_var_mut(alpha);
@@ -876,11 +883,11 @@ where
             );
             let g = observe_and_sample::<F, EF, _>(&mut twin_proof, challenger, coeffs);
             gamma.push(g);
-            f_table = fold_table(&f_table, g);
-            w_table = fold_table(&w_table, g);
-            a_table = fold_table(&a_table, g);
-            b_table = fold_table(&b_table, g);
-            current_eq = fold_eq(&current_eq, g);
+            f_table = fold_table(f_table, g);
+            w_table = fold_table(w_table, g);
+            a_table = fold_table(a_table, g);
+            b_table = fold_table(b_table, g);
+            current_eq = fold_eq(current_eq, g);
         }
         debug_assert_eq!(f_table.len(), 1);
 
@@ -907,7 +914,7 @@ where
         // ---------- 9. Commit the merged f over EF (this is the ONLY new
         //               accumulator commit per step in this variant). ----------
         let (rt_merged, td_merged) = acc_backend
-            .commit(f_merged.clone())
+            .commit_with_message(f_merged.clone(), &w_merged)
             .unwrap_or_else(|err| panic!("accumulator commitment failed: {err:?}"));
 
         acc_backend.observe_commitment(challenger, &rt_merged);
@@ -1014,7 +1021,7 @@ where
             let mut eq_star_remaining = eq_star;
             for _ in 0..log_n {
                 let evals = degree2_round_evals(&f_remaining, &eq_star_remaining);
-                let coeffs = lagrange_interpolate_int_points(&evals);
+                let coeffs = degree2_coeffs_from_evals(evals);
                 let alpha = observe_and_sample::<F, EF, _>(&mut batching_proof, challenger, coeffs);
                 alpha_challenges.push(alpha);
                 f_remaining.fix_prefix_var_mut(alpha);
@@ -1068,7 +1075,7 @@ where
 
         for _ in 0..n_packed_rounds {
             let evals = degree2_round_evals_packed::<F, EF>(&f_packed, &eq_packed);
-            let coeffs = lagrange_interpolate_int_points(&evals);
+            let coeffs = degree2_coeffs_from_evals(evals);
             let alpha = observe_and_sample::<F, EF, _>(&mut batching_proof, challenger, coeffs);
             alpha_challenges.push(alpha);
             fold_packed_in_place::<F, EF>(&mut f_packed, alpha);
@@ -1085,7 +1092,7 @@ where
 
         for _ in 0..log_pack {
             let evals = degree2_round_evals(&f_remaining, &eq_star_remaining);
-            let coeffs = lagrange_interpolate_int_points(&evals);
+            let coeffs = degree2_coeffs_from_evals(evals);
             let alpha = observe_and_sample::<F, EF, _>(&mut batching_proof, challenger, coeffs);
             alpha_challenges.push(alpha);
             f_remaining.fix_prefix_var_mut(alpha);
@@ -1157,7 +1164,7 @@ where
         fresh_openings: &FreshOpenings,
         acc_backend: &AccBackend,
         fresh_committed: Vec<Fresh>,
-        prior_accumulators: &[Accumulator<EF, AccBackend::Commitment, AccBackend::ProverData>],
+        prior_accumulators: Vec<Accumulator<EF, AccBackend::Commitment, AccBackend::ProverData>>,
     ) -> (
         Accumulator<EF, AccBackend::Commitment, AccBackend::ProverData>,
         WarpProofExternalBatched<
@@ -1175,6 +1182,15 @@ where
         AccBackend: AccumulatorBatchOpeningBackend<F, EF, Challenger>,
     {
         let l1 = fresh_committed.len();
+        let mut prior_accumulators = prior_accumulators
+            .into_iter()
+            .map(|acc| OwnedPriorAccumulator {
+                instance: acc.instance,
+                td: acc.witness.td,
+                f: acc.witness.f,
+                w: acc.witness.w,
+            })
+            .collect::<Vec<_>>();
         let l2 = prior_accumulators.len();
         let l = l1 + l2;
         assert!(
@@ -1223,7 +1239,7 @@ where
         for &mu_i in &mu_fresh {
             challenger.observe_algebra_element(mu_i);
         }
-        for acc in prior_accumulators {
+        for acc in &prior_accumulators {
             acc_backend.observe_commitment(challenger, &acc.instance.rt);
             for &a in &acc.instance.alpha {
                 challenger.observe_algebra_element(a);
@@ -1253,13 +1269,13 @@ where
             a_table.push(vec![EF::ZERO; log_n]);
             b_table.push(fresh_taus[i].clone());
         }
-        for acc in prior_accumulators {
-            assert_eq!(acc.witness.f.len(), n, "prior acc f has wrong length");
-            assert_eq!(acc.witness.w.len(), k, "prior acc w has wrong length");
+        for acc in &mut prior_accumulators {
+            assert_eq!(acc.f.len(), n, "prior acc f has wrong length");
+            assert_eq!(acc.w.len(), k, "prior acc w has wrong length");
             assert_eq!(acc.instance.alpha.len(), log_n, "prior α length");
             assert_eq!(acc.instance.beta.len(), beta_len, "prior β length");
-            f_table.push(acc.witness.f.clone());
-            w_table.push(acc.witness.w.clone());
+            f_table.push(core::mem::take(&mut acc.f));
+            w_table.push(core::mem::take(&mut acc.w));
             a_table.push(acc.instance.alpha.clone());
             b_table.push(acc.instance.beta.clone());
         }
@@ -1271,7 +1287,7 @@ where
 
         let mut all_mus: Vec<EF> = mu_fresh.clone();
         let mut all_etas: Vec<EF> = vec![EF::ZERO; l1];
-        for acc in prior_accumulators {
+        for acc in &prior_accumulators {
             all_mus.push(acc.instance.mu);
             all_etas.push(acc.instance.eta);
         }
@@ -1297,11 +1313,11 @@ where
             );
             let g = observe_and_sample::<F, EF, _>(&mut twin_proof, challenger, coeffs);
             gamma.push(g);
-            f_table = fold_table(&f_table, g);
-            w_table = fold_table(&w_table, g);
-            a_table = fold_table(&a_table, g);
-            b_table = fold_table(&b_table, g);
-            current_eq = fold_eq(&current_eq, g);
+            f_table = fold_table(f_table, g);
+            w_table = fold_table(w_table, g);
+            a_table = fold_table(a_table, g);
+            b_table = fold_table(b_table, g);
+            current_eq = fold_eq(current_eq, g);
         }
         debug_assert_eq!(f_table.len(), 1);
 
@@ -1325,7 +1341,7 @@ where
             .evaluate_bundled(beta_tau_eq.as_slice(), &z_for_eta);
 
         let (rt_merged, td_merged) = acc_backend
-            .commit(f_merged.clone())
+            .commit_with_message(f_merged.clone(), &w_merged)
             .unwrap_or_else(|err| panic!("accumulator commitment failed: {err:?}"));
 
         acc_backend.observe_commitment(challenger, &rt_merged);
@@ -1373,9 +1389,9 @@ where
 
         let mut acc_shift_answers: Vec<Vec<Vec<EF>>> = Vec::with_capacity(l2);
         let mut acc_merkle_proofs = Vec::with_capacity(l2);
-        for acc in prior_accumulators {
+        for acc in &prior_accumulators {
             let (cells, proof) = acc_backend
-                .open_batch(&acc.witness.td, &shift_indices)
+                .open_batch(&acc.td, &shift_indices)
                 .unwrap_or_else(|err| panic!("accumulator batch opening failed: {err:?}"));
             assert_eq!(
                 cells.len(),
@@ -1419,7 +1435,7 @@ where
             let mut eq_star_remaining = eq_star;
             for _ in 0..log_n {
                 let evals = degree2_round_evals(&f_remaining, &eq_star_remaining);
-                let coeffs = lagrange_interpolate_int_points(&evals);
+                let coeffs = degree2_coeffs_from_evals(evals);
                 let alpha = observe_and_sample::<F, EF, _>(&mut batching_proof, challenger, coeffs);
                 alpha_challenges.push(alpha);
                 f_remaining.fix_prefix_var_mut(alpha);
@@ -1472,7 +1488,7 @@ where
 
         for _ in 0..n_packed_rounds {
             let evals = degree2_round_evals_packed::<F, EF>(&f_packed, &eq_packed);
-            let coeffs = lagrange_interpolate_int_points(&evals);
+            let coeffs = degree2_coeffs_from_evals(evals);
             let alpha = observe_and_sample::<F, EF, _>(&mut batching_proof, challenger, coeffs);
             alpha_challenges.push(alpha);
             fold_packed_in_place::<F, EF>(&mut f_packed, alpha);
@@ -1489,7 +1505,7 @@ where
 
         for _ in 0..log_pack {
             let evals = degree2_round_evals(&f_remaining, &eq_star_remaining);
-            let coeffs = lagrange_interpolate_int_points(&evals);
+            let coeffs = degree2_coeffs_from_evals(evals);
             let alpha = observe_and_sample::<F, EF, _>(&mut batching_proof, challenger, coeffs);
             alpha_challenges.push(alpha);
             f_remaining.fix_prefix_var_mut(alpha);
@@ -1975,7 +1991,7 @@ fn codeword_claim_6_5_coeffs_packed_prefix_into<F, EF>(
 pub(crate) fn degree2_round_evals_packed<F, EF>(
     f: &[EF::ExtensionPacking],
     eq_star: &[EF::ExtensionPacking],
-) -> Vec<EF>
+) -> [EF; 3]
 where
     F: Field,
     EF: ExtensionField<F>,
@@ -1999,11 +2015,21 @@ where
         h_2 += f_two * eq_two;
     }
 
-    alloc::vec![
+    [
         EF::ExtensionPacking::to_ext_iter([h_0]).sum(),
         EF::ExtensionPacking::to_ext_iter([h_1]).sum(),
         EF::ExtensionPacking::to_ext_iter([h_2]).sum(),
     ]
+}
+
+#[inline]
+fn degree2_coeffs_from_evals<EF: Field>(evals: [EF; 3]) -> Vec<EF> {
+    let [h_0, h_1, h_2] = evals;
+    let inv_two = (EF::ONE + EF::ONE).inverse();
+    let c_0 = h_0;
+    let c_2 = (h_2 - h_1 - h_1 + h_0) * inv_two;
+    let c_1 = h_1 - h_0 - c_2;
+    alloc::vec![c_0, c_1, c_2]
 }
 
 /// In-place fold of a packed-extension table along its first variable
@@ -2019,11 +2045,9 @@ where
     EF: ExtensionField<F>,
 {
     let half = table.len() / 2;
-    // Broadcast scalar α into every SIMD lane.
-    let alpha_packed: EF::ExtensionPacking =
-        <EF::ExtensionPacking as PackedFieldExtension<F, EF>>::from_ext_slice(
-            &alloc::vec![alpha; F::Packing::WIDTH],
-        );
+    // Broadcast scalar α into every SIMD lane without allocating a temporary
+    // lane vector. `PackedFieldExtension` is an algebra over `EF`.
+    let alpha_packed: EF::ExtensionPacking = alpha.into();
     for i in 0..half {
         let lo = table[i];
         let hi = table[i + half];
@@ -2084,6 +2108,7 @@ mod tests {
     use p3_field::extension::BinomialExtensionField;
 
     use super::*;
+    use crate::relation::lagrange_interpolate_int_points;
 
     type TestF = BabyBear;
     type TestEF = BinomialExtensionField<TestF, 4>;
@@ -2178,45 +2203,50 @@ mod tests {
     }
 }
 
-/// Componentwise linear interpolation between two equal-length vectors.
+/// Componentwise linear interpolation into the left-hand vector.
 #[inline]
-fn lerp_vec<EF>(lo: &[EF], hi: &[EF], alpha: EF) -> Vec<EF>
+fn lerp_vec_in_place<EF>(lo: &mut [EF], hi: &[EF], alpha: EF)
 where
     EF: Field + Send + Sync,
 {
     debug_assert_eq!(lo.len(), hi.len());
     if lo.len() > PAR_THRESHOLD {
-        lo.par_iter()
+        lo.par_iter_mut()
             .zip(hi.par_iter())
-            .map(|(&l, &r)| lerp(l, r, alpha))
-            .collect()
+            .for_each(|(l, &r)| *l = lerp(*l, r, alpha));
     } else {
-        lo.iter()
-            .zip(hi.iter())
-            .map(|(&l, &r)| lerp(l, r, alpha))
-            .collect()
+        for (l, &r) in lo.iter_mut().zip(hi) {
+            *l = lerp(*l, r, alpha);
+        }
     }
 }
 
 /// Fold a `Vec<Vec<EF>>` table along its first axis at challenge `γ`,
 /// returning a half-length table whose `i`-th entry is
 /// `(1 − γ) · table[i] + γ · table[i + half]` componentwise.
-fn fold_table<EF>(table: &[Vec<EF>], gamma: EF) -> Vec<Vec<EF>>
+fn fold_table<EF>(mut table: Vec<Vec<EF>>, gamma: EF) -> Vec<Vec<EF>>
 where
     EF: Field + Send + Sync,
 {
     let half = table.len() / 2;
-    (0..half)
-        .map(|i| lerp_vec(&table[i], &table[i + half], gamma))
-        .collect()
+    {
+        let (lo_rows, hi_rows) = table.split_at_mut(half);
+        for (lo, hi) in lo_rows.iter_mut().zip(hi_rows.iter()) {
+            lerp_vec_in_place(lo, hi, gamma);
+        }
+    }
+    table.truncate(half);
+    table
 }
 
 /// Same as [`fold_table`] but for a flat `Vec<EF>` (the `eq` table).
-fn fold_eq<EF: Field>(eq: &[EF], gamma: EF) -> Vec<EF> {
+fn fold_eq<EF: Field>(mut eq: Vec<EF>, gamma: EF) -> Vec<EF> {
     let half = eq.len() / 2;
-    (0..half)
-        .map(|i| lerp(eq[i], eq[i + half], gamma))
-        .collect()
+    for i in 0..half {
+        eq[i] = lerp(eq[i], eq[i + half], gamma);
+    }
+    eq.truncate(half);
+    eq
 }
 
 /// Build the WARP §8.2 batching polynomial
@@ -2274,7 +2304,7 @@ pub(crate) fn boolean_point<EF: Field>(x: usize, log_n: usize) -> Vec<EF> {
 ///
 /// This is the same quadratic-sumcheck round computation used by WHIR's
 /// `sumcheck_coefficients_prefix` helper.
-pub(crate) fn degree2_round_evals<EF: Field>(f: &Poly<EF>, eq_star: &Poly<EF>) -> Vec<EF> {
+pub(crate) fn degree2_round_evals<EF: Field>(f: &Poly<EF>, eq_star: &Poly<EF>) -> [EF; 3] {
     debug_assert_eq!(f.num_evals(), eq_star.num_evals());
     debug_assert!(f.num_evals() >= 2);
     let half = f.num_evals() / 2;
@@ -2292,5 +2322,5 @@ pub(crate) fn degree2_round_evals<EF: Field>(f: &Poly<EF>, eq_star: &Poly<EF>) -
         .zip(eq_lo.iter().zip(eq_hi))
         .map(|((&fl, &fh), (&el, &eh))| (fh.double() - fl) * (eh.double() - el))
         .sum();
-    vec![h_0, h_1, h_2]
+    [h_0, h_1, h_2]
 }

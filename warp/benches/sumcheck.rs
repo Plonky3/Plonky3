@@ -756,10 +756,10 @@ impl<'a> BenchRootIopWhirProver<'a> {
         for ((codeword, witness), (commitment, prover_data)) in
             inputs.into_iter().zip(committed.into_iter())
         {
-            self.transcript.borrow_mut().oracles.push((
-                commitment.clone(),
-                RootIopOracleValues::Base(codeword.clone()),
-            ));
+            self.transcript
+                .borrow_mut()
+                .oracles
+                .push((commitment.clone(), RootIopOracleValues::Base(Vec::new())));
             self.prover_data.borrow_mut().push(prover_data);
             out.push(BenchRootFreshCodeword {
                 commitment: BenchRootCommitment(commitment),
@@ -807,7 +807,7 @@ impl<'a> ExternalCodewordOpeningProver<F, BenchRootFreshCodeword> for BenchRootI
             })?;
         let claim_id = self.push_claim(
             commitment.0.oracle_id,
-            RootIopOpeningPoint::Index(index),
+            RootIopOpeningPoint::RsCodewordIndex(index),
             RootIopOpeningValue::Base(value),
         );
         Ok((
@@ -842,7 +842,7 @@ impl<'a> ExternalCodewordBatchOpeningProver<F, BenchRootFreshCodeword>
                 })?;
             let claim_id = self.push_claim(
                 commitment.0.oracle_id,
-                RootIopOpeningPoint::Index(index),
+                RootIopOpeningPoint::RsCodewordIndex(index),
                 RootIopOpeningValue::Base(value),
             );
             values.push(value);
@@ -872,7 +872,38 @@ impl<'a> AccumulatorCommitmentBackend<F, EF, BenchChallenger> for BenchRootIopWh
             .map_err(|_| RootIopError::ShapeMismatch)?;
         self.transcript.borrow_mut().oracles.push((
             commitment.clone(),
-            RootIopOracleValues::Extension(codeword.clone()),
+            RootIopOracleValues::Extension(Vec::new()),
+        ));
+        self.prover_data.borrow_mut().push(prover_data);
+        let commitment = BenchRootCommitment(commitment);
+        Ok((
+            commitment.clone(),
+            BenchRootIopWhirAccumulatorData {
+                commitment,
+                codeword,
+            },
+        ))
+    }
+
+    fn commit_with_message(
+        &self,
+        codeword: Vec<EF>,
+        message: &[EF],
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::Error> {
+        if codeword.len() != (1 << self.log_codeword_len) {
+            return Err(RootIopError::ShapeMismatch);
+        }
+        if message.len() != (1 << (self.log_codeword_len - LOG_INV_RATE)) {
+            return Err(RootIopError::ShapeMismatch);
+        }
+        let oracle_id = self.next_oracle_id();
+        let (commitment, prover_data) = self
+            .root_system
+            .commit_extension_message_oracle(oracle_id, message.to_vec())
+            .map_err(|_| RootIopError::ShapeMismatch)?;
+        self.transcript.borrow_mut().oracles.push((
+            commitment.clone(),
+            RootIopOracleValues::Extension(Vec::new()),
         ));
         self.prover_data.borrow_mut().push(prover_data);
         let commitment = BenchRootCommitment(commitment);
@@ -899,7 +930,7 @@ impl<'a> AccumulatorCommitmentBackend<F, EF, BenchChallenger> for BenchRootIopWh
             })?;
         let claim_id = self.push_claim(
             prover_data.commitment.0.oracle_id,
-            RootIopOpeningPoint::Index(index),
+            RootIopOpeningPoint::RsCodewordIndex(index),
             RootIopOpeningValue::Extension(value),
         );
         Ok((
@@ -946,7 +977,7 @@ impl<'a> AccumulatorBatchOpeningBackend<F, EF, BenchChallenger> for BenchRootIop
                 })?;
             let claim_id = self.push_claim(
                 prover_data.commitment.0.oracle_id,
-                RootIopOpeningPoint::Index(index),
+                RootIopOpeningPoint::RsCodewordIndex(index),
                 RootIopOpeningValue::Extension(value),
             );
             values.push(value);
@@ -1096,7 +1127,7 @@ impl ExternalCodewordOpeningVerifier<F, BenchChallenger> for BenchRootIopWhirVer
         self.record_expected_claim(
             proof.claim_ids[0],
             commitment.0.oracle_id,
-            RootIopOpeningPoint::Index(index),
+            RootIopOpeningPoint::RsCodewordIndex(index),
             RootIopOpeningValue::Base(value),
         );
         Ok(())
@@ -1129,7 +1160,7 @@ impl ExternalCodewordBatchOpeningVerifier<F, BenchChallenger> for BenchRootIopWh
             self.record_expected_claim(
                 claim_id,
                 commitment.0.oracle_id,
-                RootIopOpeningPoint::Index(index),
+                RootIopOpeningPoint::RsCodewordIndex(index),
                 RootIopOpeningValue::Base(value),
             );
         }
@@ -1180,7 +1211,7 @@ impl AccumulatorCommitmentBackend<F, EF, BenchChallenger> for BenchRootIopWhirVe
         self.record_expected_claim(
             proof.claim_ids[0],
             commitment.0.oracle_id,
-            RootIopOpeningPoint::Index(index),
+            RootIopOpeningPoint::RsCodewordIndex(index),
             RootIopOpeningValue::Extension(value),
         );
         Ok(())
@@ -1221,7 +1252,7 @@ impl AccumulatorBatchOpeningBackend<F, EF, BenchChallenger> for BenchRootIopWhir
             self.record_expected_claim(
                 claim_id,
                 commitment.0.oracle_id,
-                RootIopOpeningPoint::Index(index),
+                RootIopOpeningPoint::RsCodewordIndex(index),
                 RootIopOpeningValue::Extension(value),
             );
         }
@@ -1312,7 +1343,7 @@ fn prove_warp_whir_root_chain_with_phase_times(
             root_iop_backend,
             root_iop_backend,
             fresh,
-            &priors,
+            priors,
         );
         step_times.push(step_start.elapsed());
         steps.push(WarpExternalRootStepBatched {
@@ -1516,7 +1547,7 @@ fn root_claim_shape(
     let mut shape = RootClaimShape::default();
     for claim in claims {
         match &claim.point {
-            RootIopOpeningPoint::Index(index) => {
+            RootIopOpeningPoint::Index(index) | RootIopOpeningPoint::RsCodewordIndex(index) => {
                 shape.index += 1;
                 if index.is_multiple_of(stride) {
                     shape.systematic_index += 1;

@@ -191,6 +191,20 @@ where
         codeword: Vec<EF>,
     ) -> Result<(Self::Commitment, Self::ProverData), Self::Error>;
 
+    /// Commit the merged accumulator codeword when the corresponding RS message
+    /// is already available to the prover.
+    ///
+    /// The default implementation preserves existing backends. WHIR-backed
+    /// single-RS root compilers can override this to avoid decoding a systematic
+    /// message from the same codeword again.
+    fn commit_with_message(
+        &self,
+        codeword: Vec<EF>,
+        _message: &[EF],
+    ) -> Result<(Self::Commitment, Self::ProverData), Self::Error> {
+        self.commit(codeword)
+    }
+
     /// Open the committed accumulator codeword at `index`.
     fn open(
         &self,

@@ -28,7 +28,7 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{BasedVectorSpace, ExtensionField, Field, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
@@ -287,6 +287,73 @@ where
         weights
     }
 
+    /// Return the RS-domain point used at a codeword index.
+    ///
+    /// The WHIR paper's smooth Reed-Solomon code evaluates one degree-`< k`
+    /// polynomial on the size-`n` two-adic domain. WARP's RS-specialized code
+    /// uses the same object for its codeword oracle. This helper exposes the
+    /// shared domain point `omega_n^index` so WARP codeword openings can be
+    /// compiled as constrained-RS claims, not as claims against a second code.
+    ///
+    /// # Panics
+    ///
+    /// - `codeword_index < codeword_len()`.
+    pub fn rs_domain_point(&self, codeword_index: usize) -> F {
+        assert!(
+            codeword_index < self.codeword_len(),
+            "codeword index out of range"
+        );
+        F::two_adic_generator(self.log_codeword_len()).exp_u64(codeword_index as u64)
+    }
+
+    /// Return the coefficient-form RS weights for one codeword entry.
+    ///
+    /// In coefficient layout, the message is the coefficient vector
+    /// `w = (w_0, ..., w_{k-1})` and the codeword entry at
+    /// `x = omega_n^index` is
+    ///
+    /// ```text
+    ///     C(w)[index] = sum_{j=0}^{k-1} w_j x^j.
+    /// ```
+    ///
+    /// These are exactly WHIR's select weights for the initial RS polynomial.
+    ///
+    /// # Panics
+    ///
+    /// - This code must use [`ReedSolomonEncoding::Coefficient`].
+    /// - `codeword_index < codeword_len()`.
+    pub fn coefficient_codeword_index_weights<EF: ExtensionField<F>>(
+        &self,
+        codeword_index: usize,
+    ) -> Vec<EF> {
+        assert!(
+            matches!(self.encoding, ReedSolomonEncoding::Coefficient),
+            "coefficient_codeword_index_weights requires coefficient encoding"
+        );
+        let x = EF::from(self.rs_domain_point(codeword_index));
+        x.powers().take(self.msg_len()).collect()
+    }
+
+    /// Return the RS-message weights for one codeword entry.
+    ///
+    /// This is the layout-polymorphic WARP/WHIR boundary:
+    ///
+    /// - coefficient RS uses WHIR select/monomial weights `x^j`;
+    /// - systematic RS uses the Lagrange basis on the size-`k` subgroup.
+    ///
+    /// Both cases are the same single RS code `C`; only the chosen coordinates
+    /// for `C^{-1}` differ.
+    pub fn codeword_index_weights<EF: ExtensionField<F>>(&self, codeword_index: usize) -> Vec<EF> {
+        match self.encoding {
+            ReedSolomonEncoding::Coefficient => {
+                self.coefficient_codeword_index_weights(codeword_index)
+            }
+            ReedSolomonEncoding::Systematic => {
+                self.systematic_codeword_index_weights(codeword_index)
+            }
+        }
+    }
+
     /// Return the linear weights expressing an arbitrary codeword-MLE opening
     /// as a weighted sum of the systematic message evaluations.
     ///
@@ -323,6 +390,26 @@ where
 
         let eq = Poly::<EF>::new_from_point(codeword_point, EF::ONE);
         self.systematic_codeword_query_weights(eq.as_slice())
+    }
+
+    /// Return the RS-message weights for an arbitrary codeword-MLE query.
+    ///
+    /// For a codeword-domain query vector `q`, this computes the adjoint
+    /// `C^T q` in the coordinates selected by [`ReedSolomonEncoding`]. This is
+    /// still one RS code: the operation is only the verifier-side way to
+    /// express WARP's `u in C` and `u_hat(alpha)=mu` obligations over the WHIR
+    /// initial polynomial committed to `C^{-1}(u)`.
+    pub fn codeword_mle_weights<EF>(&self, codeword_point: &[EF]) -> Vec<EF>
+    where
+        EF: ExtensionField<F> + Send + Sync,
+    {
+        assert_eq!(
+            codeword_point.len(),
+            self.log_codeword_len(),
+            "codeword MLE point dimension"
+        );
+        let eq = Poly::<EF>::new_from_point(codeword_point, EF::ONE);
+        self.codeword_query_weights(eq.as_slice())
     }
 
     /// Apply the adjoint of the systematic RS encoder to a codeword-domain
@@ -364,6 +451,31 @@ where
         self.dft.idft_algebra(spectral)
     }
 
+    /// Apply the adjoint of this RS encoder to a codeword-domain query.
+    ///
+    /// This generalizes [`Self::systematic_codeword_query_weights`] to both RS
+    /// coordinate layouts:
+    ///
+    /// - coefficient RS: `C = DFT_n · pad`, hence `C^T q = DFT_n(q)[..k]`;
+    /// - systematic RS: `C = DFT_n · pad · IDFT_k`, hence
+    ///   `C^T q = IDFT_k(DFT_n(q)[..k])`.
+    pub fn codeword_query_weights<EF>(&self, codeword_query: &[EF]) -> Vec<EF>
+    where
+        EF: ExtensionField<F> + Send + Sync,
+    {
+        assert_eq!(
+            codeword_query.len(),
+            self.codeword_len(),
+            "codeword query length mismatch"
+        );
+        let mut spectral = self.dft.dft_algebra(codeword_query.to_vec());
+        spectral.truncate(self.msg_len());
+        match self.encoding {
+            ReedSolomonEncoding::Coefficient => spectral,
+            ReedSolomonEncoding::Systematic => self.dft.idft_algebra(spectral),
+        }
+    }
+
     /// Batched version of [`Self::systematic_codeword_query_weights`].
     ///
     /// The input matrix has one codeword-domain query per column. The output
@@ -392,6 +504,30 @@ where
             .idft_algebra_batch(RowMajorMatrix::new(spectral.values, width))
     }
 
+    /// Batched version of [`Self::codeword_query_weights`].
+    pub fn codeword_query_weights_batch<EF>(
+        &self,
+        codeword_queries: RowMajorMatrix<EF>,
+    ) -> RowMajorMatrix<EF>
+    where
+        EF: ExtensionField<F> + Send + Sync,
+    {
+        assert_eq!(
+            codeword_queries.height(),
+            self.codeword_len(),
+            "codeword query height mismatch"
+        );
+        let width = codeword_queries.width();
+        let mut spectral = self.dft.dft_algebra_batch(codeword_queries);
+        spectral.values.truncate(self.msg_len() * width);
+        match self.encoding {
+            ReedSolomonEncoding::Coefficient => RowMajorMatrix::new(spectral.values, width),
+            ReedSolomonEncoding::Systematic => self
+                .dft
+                .idft_algebra_batch(RowMajorMatrix::new(spectral.values, width)),
+        }
+    }
+
     /// Extract the systematic message from a codeword.
     ///
     /// This is valid for systematic encoding because message entry `i` is stored
@@ -409,6 +545,35 @@ where
         (0..self.msg_len())
             .map(|i| codeword[self.systematic_codeword_index(i)].clone())
             .collect()
+    }
+
+    /// Recover the RS message coordinates from a codeword.
+    ///
+    /// For systematic RS this extracts the embedded subgroup evaluations. For
+    /// coefficient RS this performs one inverse DFT over the size-`n` domain
+    /// and truncates to the degree-`< k` coefficient vector. This is used by
+    /// the WHIR-backed WARP root proof to make the accumulator oracle and WHIR
+    /// oracle share one RS code instead of committing an already encoded
+    /// codeword as a fresh WHIR message.
+    pub fn message_from_codeword<V>(&self, codeword: &[V]) -> Vec<V>
+    where
+        V: BasedVectorSpace<F> + Clone + Send + Sync,
+    {
+        assert_eq!(
+            codeword.len(),
+            self.codeword_len(),
+            "codeword length mismatch"
+        );
+        match self.encoding {
+            ReedSolomonEncoding::Systematic => (0..self.msg_len())
+                .map(|i| codeword[self.systematic_codeword_index(i)].clone())
+                .collect(),
+            ReedSolomonEncoding::Coefficient => {
+                let mut message = self.dft.idft_algebra(codeword.to_vec());
+                message.truncate(self.msg_len());
+                message
+            }
+        }
     }
 
     /// Encode a base-field message `w ∈ F^k` into a codeword `f ∈ F^n`.
@@ -670,6 +835,29 @@ mod tests {
     }
 
     #[test]
+    fn coefficient_codeword_index_weights_match_dft() {
+        let code = rs::<4, 2>();
+        let w: Vec<F> = (0..code.msg_len())
+            .map(|i| F::from_u64(5 * i as u64 + 9))
+            .collect();
+        let codeword = code.encode(&w);
+
+        for (index, &expected) in codeword.iter().enumerate() {
+            let weights = code.codeword_index_weights::<EF>(index);
+            let actual: EF = weights
+                .iter()
+                .zip(&w)
+                .map(|(&weight, &value)| weight * EF::from(value))
+                .sum();
+            assert_eq!(
+                actual,
+                EF::from(expected),
+                "coefficient RS weights must reproduce codeword index {index}"
+            );
+        }
+    }
+
+    #[test]
     fn systematic_codeword_mle_weights_match_encoded_mle() {
         let code = systematic_rs::<4, 1>();
         let w: Vec<EF> = (0..code.msg_len())
@@ -692,6 +880,28 @@ mod tests {
     }
 
     #[test]
+    fn codeword_mle_weights_match_coefficient_encoded_mle() {
+        let code = rs::<4, 1>();
+        let w: Vec<EF> = (0..code.msg_len())
+            .map(|i| EF::from(F::from_u64(13 * i as u64 + 7)))
+            .collect();
+        let codeword = code.encode_algebra(&w);
+        let point: Vec<EF> = (0..code.log_codeword_len())
+            .map(|i| EF::from(F::from_u64(3 * i as u64 + 19)))
+            .collect();
+
+        let expected = Poly::new(codeword).eval_ext::<F>(&Point::new(point.clone()));
+        let weights = code.codeword_mle_weights::<EF>(&point);
+        let actual: EF = weights
+            .iter()
+            .zip(&w)
+            .map(|(&weight, &value)| weight * value)
+            .sum();
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn systematic_message_from_codeword_extracts_stride_entries() {
         let code = systematic_rs::<4, 2>();
         let w: Vec<EF> = (0..code.msg_len())
@@ -700,6 +910,18 @@ mod tests {
         let codeword = code.encode_algebra(&w);
 
         assert_eq!(code.systematic_message_from_codeword(&codeword), w);
+        assert_eq!(code.message_from_codeword(&codeword), w);
+    }
+
+    #[test]
+    fn coefficient_message_from_codeword_decodes_coefficients() {
+        let code = rs::<4, 2>();
+        let w: Vec<EF> = (0..code.msg_len())
+            .map(|i| EF::from(F::from_u64(i as u64 + 23)))
+            .collect();
+        let codeword = code.encode_algebra(&w);
+
+        assert_eq!(code.message_from_codeword(&codeword), w);
     }
 
     #[test]

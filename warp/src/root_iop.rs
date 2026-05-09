@@ -114,8 +114,16 @@ impl RootIopCommitment {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound = "EF: Serialize + serde::de::DeserializeOwned")]
 pub enum RootIopOpeningPoint<EF> {
-    /// Boolean-hypercube row index.
+    /// Boolean-hypercube row index for legacy generic linear-oracle claims.
     Index(usize),
+    /// Reed-Solomon codeword index.
+    ///
+    /// This is the WARP/WHIR-native claim kind. It records an opening of the
+    /// RS codeword `u = C(w)` at the smooth-domain position `omega_n^index`.
+    /// The WHIR compiler may then authenticate it with the same RS code used
+    /// by WHIR's initial oracle, rather than treating it as an unrelated
+    /// multilinear-table row claim.
+    RsCodewordIndex(usize),
     /// Multilinear extension point.
     Mle(Vec<EF>),
 }
@@ -560,7 +568,7 @@ where
     match (oracle, &claim.point, &claim.value) {
         (
             RootIopOracleValues::Base(values),
-            RootIopOpeningPoint::Index(index),
+            RootIopOpeningPoint::Index(index) | RootIopOpeningPoint::RsCodewordIndex(index),
             RootIopOpeningValue::Base(value),
         ) => {
             let actual = values.get(*index).ok_or(RootIopError::IndexOutOfBounds {
@@ -573,7 +581,7 @@ where
         }
         (
             RootIopOracleValues::Extension(values),
-            RootIopOpeningPoint::Index(index),
+            RootIopOpeningPoint::Index(index) | RootIopOpeningPoint::RsCodewordIndex(index),
             RootIopOpeningValue::Extension(value),
         ) => {
             let actual = values.get(*index).ok_or(RootIopError::IndexOutOfBounds {
@@ -994,7 +1002,7 @@ where
             })?;
         let claim_id = self.state.borrow_mut().push_claim(
             committed.commitment().oracle_id,
-            RootIopOpeningPoint::Index(index),
+            RootIopOpeningPoint::RsCodewordIndex(index),
             RootIopOpeningValue::Base(value),
         );
         Ok((
@@ -1031,7 +1039,7 @@ where
                 })?;
             let claim_id = self.state.borrow_mut().push_claim(
                 committed.commitment().oracle_id,
-                RootIopOpeningPoint::Index(index),
+                RootIopOpeningPoint::RsCodewordIndex(index),
                 RootIopOpeningValue::Base(value),
             );
             values.push(value);
@@ -1076,7 +1084,7 @@ where
         self.record_expected_claim(
             claim_id,
             commitment.oracle_id,
-            RootIopOpeningPoint::Index(index),
+            RootIopOpeningPoint::RsCodewordIndex(index),
             RootIopOpeningValue::Base(value),
         );
         Ok(())
@@ -1114,7 +1122,7 @@ where
             self.record_expected_claim(
                 claim_id,
                 commitment.oracle_id,
-                RootIopOpeningPoint::Index(index),
+                RootIopOpeningPoint::RsCodewordIndex(index),
                 RootIopOpeningValue::Base(value),
             );
         }
@@ -1167,7 +1175,7 @@ where
             })?;
         let claim_id = self.state.borrow_mut().push_claim(
             prover_data.commitment.oracle_id,
-            RootIopOpeningPoint::Index(index),
+            RootIopOpeningPoint::RsCodewordIndex(index),
             RootIopOpeningValue::Extension(value),
         );
         Ok((
@@ -1219,7 +1227,7 @@ where
                 })?;
             let claim_id = self.state.borrow_mut().push_claim(
                 prover_data.commitment.oracle_id,
-                RootIopOpeningPoint::Index(index),
+                RootIopOpeningPoint::RsCodewordIndex(index),
                 RootIopOpeningValue::Extension(value),
             );
             values.push(value);
@@ -1293,7 +1301,7 @@ where
         self.record_expected_claim(
             claim_id,
             commitment.oracle_id,
-            RootIopOpeningPoint::Index(index),
+            RootIopOpeningPoint::RsCodewordIndex(index),
             RootIopOpeningValue::Extension(value),
         );
         Ok(())
@@ -1340,7 +1348,7 @@ where
             self.record_expected_claim(
                 claim_id,
                 commitment.oracle_id,
-                RootIopOpeningPoint::Index(index),
+                RootIopOpeningPoint::RsCodewordIndex(index),
                 RootIopOpeningValue::Extension(value),
             );
         }
@@ -1461,7 +1469,7 @@ where
             })?;
         let claim_id = self.state.borrow_mut().push_claim(
             commitment.oracle_id,
-            RootIopOpeningPoint::Index(index),
+            RootIopOpeningPoint::RsCodewordIndex(index),
             RootIopOpeningValue::Base(value),
         );
         Ok((
@@ -1500,7 +1508,7 @@ where
                 })?;
             let claim_id = self.state.borrow_mut().push_claim(
                 commitment.oracle_id,
-                RootIopOpeningPoint::Index(index),
+                RootIopOpeningPoint::RsCodewordIndex(index),
                 RootIopOpeningValue::Base(value),
             );
             values.push(value);
@@ -1548,7 +1556,7 @@ where
         self.record_expected_claim(
             claim_id,
             commitment.oracle_id,
-            RootIopOpeningPoint::Index(index),
+            RootIopOpeningPoint::RsCodewordIndex(index),
             RootIopOpeningValue::Base(value),
         );
         Ok(())
@@ -1587,7 +1595,7 @@ where
             self.record_expected_claim(
                 claim_id,
                 commitment.oracle_id,
-                RootIopOpeningPoint::Index(index),
+                RootIopOpeningPoint::RsCodewordIndex(index),
                 RootIopOpeningValue::Base(value),
             );
         }
@@ -1646,7 +1654,7 @@ where
             })?;
         let claim_id = self.state.borrow_mut().push_claim(
             prover_data.commitment.oracle_id,
-            RootIopOpeningPoint::Index(index),
+            RootIopOpeningPoint::RsCodewordIndex(index),
             RootIopOpeningValue::Extension(value),
         );
         Ok((
@@ -1700,7 +1708,7 @@ where
                 })?;
             let claim_id = self.state.borrow_mut().push_claim(
                 prover_data.commitment.oracle_id,
-                RootIopOpeningPoint::Index(index),
+                RootIopOpeningPoint::RsCodewordIndex(index),
                 RootIopOpeningValue::Extension(value),
             );
             values.push(value);
@@ -1777,7 +1785,7 @@ where
         self.record_expected_claim(
             claim_id,
             commitment.oracle_id,
-            RootIopOpeningPoint::Index(index),
+            RootIopOpeningPoint::RsCodewordIndex(index),
             RootIopOpeningValue::Extension(value),
         );
         Ok(())
@@ -1826,7 +1834,7 @@ where
             self.record_expected_claim(
                 claim_id,
                 commitment.oracle_id,
-                RootIopOpeningPoint::Index(index),
+                RootIopOpeningPoint::RsCodewordIndex(index),
                 RootIopOpeningValue::Extension(value),
             );
         }

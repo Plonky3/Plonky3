@@ -136,15 +136,13 @@ pub fn poly_lerp_via_linear<EF: Field>(q_lo: &[EF], q_hi: &[EF], c: [EF; 2]) -> 
 #[inline]
 pub(crate) fn packed_ext_scalar_with_scratch<F, EF>(
     value: EF,
-    broadcast_buf: &mut Vec<EF>,
+    _broadcast_buf: &mut Vec<EF>,
 ) -> EF::ExtensionPacking
 where
     F: Field,
     EF: ExtensionField<F>,
 {
-    broadcast_buf.clear();
-    broadcast_buf.resize(F::Packing::WIDTH, value);
-    <EF::ExtensionPacking as PackedFieldExtension<F, EF>>::from_ext_slice(broadcast_buf)
+    value.into()
 }
 
 pub(crate) fn fold_claim_6_5_scalar_round<EF>(
@@ -159,18 +157,26 @@ pub(crate) fn fold_claim_6_5_scalar_round<EF>(
 {
     debug_assert_eq!(current.len(), len * width);
     debug_assert_eq!(next.len(), (len / 2) * (width + 1));
+    debug_assert!(width > 0);
     let half = len / 2;
     let next_width = width + 1;
     for b in 0..half {
         let lo_base = b * width;
         let hi_base = (b + half) * width;
         let out_base = b * next_width;
-        for k in 0..width {
+
+        let lo = current[lo_base];
+        let diff = current[hi_base] - lo;
+        next[out_base] = lo + diff * c0;
+        let mut carry = diff * c1;
+
+        for k in 1..width {
             let lo = current[lo_base + k];
             let diff = current[hi_base + k] - lo;
-            next[out_base + k] += lo + diff * c0;
-            next[out_base + k + 1] += diff * c1;
+            next[out_base + k] = carry + lo + diff * c0;
+            carry = diff * c1;
         }
+        next[out_base + width] = carry;
     }
 }
 
@@ -187,18 +193,26 @@ pub(crate) fn fold_claim_6_5_packed_round<F, EF>(
 {
     debug_assert_eq!(current.len(), len * width);
     debug_assert_eq!(next.len(), (len / 2) * (width + 1));
+    debug_assert!(width > 0);
     let half = len / 2;
     let next_width = width + 1;
     for b in 0..half {
         let lo_base = b * width;
         let hi_base = (b + half) * width;
         let out_base = b * next_width;
-        for k in 0..width {
+
+        let lo = current[lo_base];
+        let diff = current[hi_base] - lo;
+        next[out_base] = lo + diff * c0;
+        let mut carry = diff * c1;
+
+        for k in 1..width {
             let lo = current[lo_base + k];
             let diff = current[hi_base + k] - lo;
-            next[out_base + k] += lo + diff * c0;
-            next[out_base + k + 1] += diff * c1;
+            next[out_base + k] = carry + lo + diff * c0;
+            carry = diff * c1;
         }
+        next[out_base + width] = carry;
     }
 }
 
