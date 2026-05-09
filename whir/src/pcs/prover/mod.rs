@@ -15,7 +15,6 @@ use tracing::instrument;
 use crate::constraints::Constraint;
 use crate::constraints::statement::{EqStatement, SelectStatement};
 use crate::fiat_shamir::domain_separator::DomainSeparator;
-use crate::fiat_shamir::errors::FiatShamirError;
 use crate::parameters::WhirConfig;
 use crate::pcs::committer::writer::commit_extension;
 use crate::pcs::proof::{QueryOpening, SumcheckData, WhirProof};
@@ -149,8 +148,7 @@ where
         challenger: &mut Challenger,
         layout: L,
         prover_data: MT::ProverData<DenseMatrix<F>>,
-    ) -> Result<(), FiatShamirError>
-    where
+    ) where
         Dft: TwoAdicSubgroupDft<F>,
         Challenger: CanObserve<MT::Commitment>,
     {
@@ -171,10 +169,8 @@ where
 
         // Run each WHIR folding round.
         for round in 0..=self.n_rounds() {
-            self.round(round, proof, challenger, &mut round_state, variable_order)?;
+            self.round(round, proof, challenger, &mut round_state, variable_order);
         }
-
-        Ok(())
     }
 
     #[instrument(skip_all, fields(round_number = round_index, log_size = self.num_variables - self.params.folding_factor.total_number(round_index)))]
@@ -186,8 +182,7 @@ where
         challenger: &mut Challenger,
         round_state: &mut WhirRoundState<EF, F, MT>,
         variable_order: VariableOrder,
-    ) -> Result<(), FiatShamirError>
-    where
+    ) where
         Challenger: CanObserve<MT::Commitment>,
     {
         let folded_evaluations = &round_state.sumcheck_prover.evals();
@@ -244,7 +239,7 @@ where
             self.params.folding_factor.at_round(round_index),
             round_params.num_queries,
             challenger,
-        )?;
+        );
 
         let mut stir_statement = SelectStatement::initialize(num_variables);
         let mut queries = Vec::with_capacity(stir_challenges_indexes.len());
@@ -309,8 +304,6 @@ where
         // Update round state for next iteration.
         round_state.folding_randomness = folding_randomness;
         round_state.round_data = RoundData::Ext(prover_data);
-
-        Ok(())
     }
 
     #[instrument(skip_all)]
@@ -320,7 +313,7 @@ where
         proof: &mut WhirProof<F, EF, MT>,
         challenger: &mut Challenger,
         round_state: &mut WhirRoundState<EF, F, MT>,
-    ) -> Result<(), FiatShamirError> {
+    ) {
         // Send final polynomial coefficients in the clear.
         challenger.observe_algebra_slice(round_state.sumcheck_prover.evals().as_slice());
         proof.final_poly = Some(round_state.sumcheck_prover.evals());
@@ -336,7 +329,7 @@ where
             self.params.folding_factor.at_round(round_index),
             self.final_queries,
             challenger,
-        )?;
+        );
 
         // Open Merkle proofs at the queried positions.
         match &round_state.round_data {
@@ -374,7 +367,5 @@ where
             );
             proof.set_final_sumcheck_data(sumcheck_data);
         }
-
-        Ok(())
     }
 }

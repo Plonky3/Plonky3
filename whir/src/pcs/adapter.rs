@@ -110,8 +110,7 @@ where
             challenger,
             prover_data.layout,
             prover_data.merkle_data,
-        )
-        .expect("WHIR proving failed");
+        );
 
         PcsProof {
             whir: whir_proof,

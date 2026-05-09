@@ -255,7 +255,7 @@ where
             params.folding_factor,
             params.num_queries,
             challenger,
-        )?;
+        );
 
         let dimensions = vec![Dimensions {
             height: params.domain_size >> params.folding_factor,
