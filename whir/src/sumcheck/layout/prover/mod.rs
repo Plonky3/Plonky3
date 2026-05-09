@@ -522,27 +522,20 @@ pub(super) mod test_utils {
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
+
     use alloc::vec::Vec;
 
-    use p3_challenger::FieldChallenger;
-    use p3_field::PrimeCharacteristicRing;
-    use p3_multilinear_util::point::Point;
-    use p3_multilinear_util::poly::Poly;
     use proptest::prelude::*;
-    use rand::SeedableRng;
-    use rand::rngs::SmallRng;
 
     use super::test_utils::{
         ASCENDING_POLYS, NON_ASCENDING_POLYS, arb_opening_schedule, arb_witness_and_schedule,
         table_shapes_from,
     };
     use super::{PrefixProver, SuffixProver};
-    use crate::sumcheck::SumcheckData;
+    use crate::sumcheck::layout::Layout;
     use crate::sumcheck::layout::prover::test_utils::{
         FOLDING, build_tables, run_roundtrip_test, table_shapes, tables_from_shape,
     };
-    use crate::sumcheck::layout::{Layout, LayoutStrategy, Table, TableShape, Verifier, Witness};
     use crate::sumcheck::tests::*;
 
     #[test]
@@ -655,197 +648,5 @@ mod tests {
             run_shape_test::<PrefixProver<F, EF>>(&shape, &schedule);
             run_shape_test::<SuffixProver<F, EF>>(&shape, &schedule);
         }
-    }
-
-    #[allow(clippy::type_complexity)]
-    fn run_prover_schedule_benchmark<L>(
-        witness: Witness<F>,
-        schedule: &[(usize, Vec<usize>)],
-        virtual_evals: usize,
-    ) -> (
-        Vec<Vec<EF>>,
-        Vec<EF>,
-        SumcheckData<F, EF>,
-        Point<EF>,
-        LayoutStrategy,
-    )
-    where
-        L: Layout<F, EF>,
-    {
-        let folding = witness.folding;
-        let mut prover_challenger = challenger();
-
-        let mut prover = L::from_witness(witness);
-        let strategy = L::strategy();
-        let evals = schedule
-            .iter()
-            .map(|(table_idx, polys)| prover.eval(*table_idx, polys, &mut prover_challenger))
-            .collect();
-        let virtual_evals = (0..virtual_evals)
-            .map(|_| prover.add_virtual_eval(&mut prover_challenger))
-            .collect();
-
-        let mut sumcheck_data = SumcheckData::<F, EF>::default();
-        let (residual, randomness) =
-            prover.into_sumcheck(&mut sumcheck_data, 0, &mut prover_challenger);
-
-        assert_eq!(sumcheck_data.num_rounds(), folding);
-        assert_eq!(randomness.num_variables(), folding);
-        assert!(residual.num_variables() > 0);
-
-        (evals, virtual_evals, sumcheck_data, randomness, strategy)
-    }
-
-    fn init_tracing() {
-        use tracing_forest::ForestLayer;
-        use tracing_forest::util::LevelFilter;
-        use tracing_subscriber::layer::SubscriberExt;
-        use tracing_subscriber::util::SubscriberInitExt;
-        use tracing_subscriber::{EnvFilter, Registry};
-
-        let env_filter = EnvFilter::builder()
-            .with_default_directive(LevelFilter::INFO.into())
-            .from_env_lossy();
-
-        Registry::default()
-            .with(env_filter)
-            .with(ForestLayer::default())
-            .init();
-    }
-
-    fn benchmark_layout_schedule<L>(
-        witness: Witness<F>,
-        shapes: &[TableShape],
-        schedule: &[(usize, Vec<usize>)],
-        virtual_evals: usize,
-    ) where
-        L: Layout<F, EF>,
-    {
-        let (evals, virtual_evals, sumcheck_data, randomness, strategy) =
-            run_prover_schedule_benchmark::<L>(witness, schedule, virtual_evals);
-
-        let mut verifier_challenger = challenger();
-        let mut verifier: Verifier<F, EF> = Verifier::new(shapes, strategy);
-
-        for ((table_idx, polys), evals) in schedule.iter().zip(evals.iter()) {
-            verifier.add_claim(*table_idx, polys, evals, &mut verifier_challenger);
-        }
-        for &eval in &virtual_evals {
-            verifier.add_virtual_eval(eval, &mut verifier_challenger);
-        }
-
-        let alpha = verifier_challenger.sample_algebra_element();
-        let initial_constraint = verifier.constraint(alpha);
-        let mut sum = EF::ZERO;
-        initial_constraint.combine_evals(&mut sum);
-        assert_eq!(sum, verifier.sum(alpha));
-        let verifier_randomness = sumcheck_data
-            .verify_rounds(&mut verifier_challenger, &mut sum, 0)
-            .unwrap();
-        assert_eq!(verifier_randomness, randomness);
-    }
-
-    fn random_table(seed: u64, log_size: usize, num_polys: usize) -> Table<F> {
-        let mut rng = SmallRng::seed_from_u64(seed);
-        let polys = (0..num_polys)
-            .map(|_| Poly::<F>::rand(&mut rng, log_size))
-            .collect();
-        Table::new(polys)
-    }
-
-    #[test]
-    #[ignore = "large local benchmark; run with --ignored --nocapture"]
-    fn bench_layout_provers_one_poly_log25() {
-        init_tracing();
-
-        const LOG_SIZE: usize = 25;
-        const FOLDING: usize = 5;
-
-        let shapes = vec![TableShape::new(LOG_SIZE, 1)];
-
-        benchmark_layout_schedule::<PrefixProver<F, EF>>(
-            Witness::new_interleaved(vec![random_table(25, LOG_SIZE, 1)], FOLDING),
-            &shapes,
-            &[(0, vec![0])],
-            0,
-        );
-        benchmark_layout_schedule::<SuffixProver<F, EF>>(
-            Witness::new(vec![random_table(25, LOG_SIZE, 1)], FOLDING),
-            &shapes,
-            &[(0, vec![0])],
-            0,
-        );
-    }
-
-    #[test]
-    #[ignore = "large local benchmark; run with --ignored --nocapture"]
-    fn bench_layout_provers_two_polys_log24() {
-        init_tracing();
-
-        const LOG_SIZE: usize = 24;
-        const FOLDING: usize = 5;
-
-        let shapes = vec![TableShape::new(LOG_SIZE, 2)];
-
-        benchmark_layout_schedule::<PrefixProver<F, EF>>(
-            Witness::new_interleaved(vec![random_table(24, LOG_SIZE, 2)], FOLDING),
-            &shapes,
-            &[(0, vec![0, 1])],
-            0,
-        );
-        benchmark_layout_schedule::<SuffixProver<F, EF>>(
-            Witness::new(vec![random_table(24, LOG_SIZE, 2)], FOLDING),
-            &shapes,
-            &[(0, vec![0, 1])],
-            0,
-        );
-    }
-
-    #[test]
-    #[ignore = "large local benchmark; run with --ignored --nocapture"]
-    fn bench_vmlike_shape() {
-        init_tracing();
-
-        const FOLDING: usize = 7;
-        const VIRTUAL_EVALS: usize = 2;
-        let shapes = vec![
-            TableShape::new(20, 20),
-            TableShape::new(8, 29),
-            TableShape::new(8, 96),
-        ];
-        let schedule = vec![
-            (
-                0,
-                vec![
-                    0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
-                ],
-            ),
-            (0, vec![0, 1]),
-            (0, (0..20).collect()),
-            (1, (6..=23).collect()),
-            (1, (0..=7).chain(24..=28).collect()),
-            (1, (0..29).collect()),
-            (2, (1..=19).chain(88..=95).collect()),
-            (2, (0..96).collect()),
-        ];
-
-        let tables = vec![
-            random_table(1, 20, 20),
-            random_table(2, 8, 29),
-            random_table(3, 8, 96),
-        ];
-
-        benchmark_layout_schedule::<SuffixProver<F, EF>>(
-            Witness::new(tables.clone(), FOLDING),
-            &shapes,
-            &schedule,
-            VIRTUAL_EVALS,
-        );
-        benchmark_layout_schedule::<PrefixProver<F, EF>>(
-            Witness::new_interleaved(tables, FOLDING),
-            &shapes,
-            &schedule,
-            VIRTUAL_EVALS,
-        );
     }
 }
