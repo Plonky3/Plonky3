@@ -59,12 +59,6 @@ impl From<Goldilocks> for PackedGoldilocksNeon {
     }
 }
 
-// Add/Sub/Neg are emulated as two independent scalar Goldilocks operations.
-// On Apple Silicon's wide scalar pipeline, two pipelined scalar adds beat the
-// NEON modular-reduction sequence (XOR-shift + signed compare + conditional
-// add) per element. Storage stays as `[Goldilocks; 2]` (16 bytes) so the
-// compiler can keep elements in either GPRs or NEON regs as needed; only
-// `mul`/`square`/`cubic_*` use the dual-lane interleaved ASM.
 impl Add for PackedGoldilocksNeon {
     type Output = Self;
     #[inline]
