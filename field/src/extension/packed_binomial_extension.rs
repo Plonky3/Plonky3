@@ -223,11 +223,8 @@ where
     F: BinomiallyExtendable<D>,
 {
     #[inline]
-    fn from_ext_slice(ext_slice: &[BinomialExtensionField<F, D>]) -> Self {
-        let width = F::Packing::WIDTH;
-        assert_eq!(ext_slice.len(), width);
-
-        Self::new(F::Packing::pack_columns_fn(|lane| ext_slice[lane].value))
+    fn from_ext_fn(f: impl Fn(usize) -> BinomialExtensionField<F, D>) -> Self {
+        Self::new(F::Packing::pack_columns_fn(|lane| f(lane).value))
     }
 
     #[inline]
