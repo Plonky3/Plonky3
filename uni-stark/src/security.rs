@@ -15,22 +15,16 @@
 #![allow(clippy::too_many_arguments)]
 
 use alloc::vec::Vec;
-use core::cmp::min;
+use core::cmp::{max, min};
 
 use libm::{ceil, log2, pow, sqrt};
-use p3_air::{Air, AirLayout, BaseAir, get_all_symbolic_constraints};
-use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field};
 use p3_fri::FriParameters;
-use p3_matrix::Matrix;
-use p3_util::{log2_ceil_usize, log2_floor_usize};
-
-use crate::SymbolicAirBuilder;
+use p3_util::log2_floor_usize;
 
 /// Parameters required to compute STARK proof security level.
 ///
-/// All FRI-related fields come from the PCS FRI parameters; the rest from the
-/// AIR and proof (trace dimensions, constraint count, quotient chunks).
+/// All FRI-related fields come from the PCS FRI parameters; the remaining fields
+/// must be supplied by the caller.
 #[derive(Debug, Clone)]
 pub struct StarkSecurityParams {
     pub fri_log_blowup: usize,
@@ -40,81 +34,19 @@ pub struct StarkSecurityParams {
     pub fri_query_proof_of_work_bits: usize,
     pub num_modulus_bits: usize,
     pub collision_resistance: usize,
-    pub is_zk: usize,
-    pub trace_width: usize,
-    pub num_constraints: usize,
-    pub num_quotient_chunks: usize,
 }
 
 impl StarkSecurityParams {
-    /// Build security parameters from FRI parameters and the AIR.
+    /// Build security parameters from FRI parameters.
     ///
-    /// If the AIR has preprocessed columns or public values, use [`from_air`](Self::from_air) instead.
-    pub fn new<F, EF, A, M>(is_zk: bool, fri_params: &FriParameters<M>, air: &A) -> Self
-    where
-        F: Field,
-        EF: ExtensionField<F>,
-        A: Air<SymbolicAirBuilder<F>> + BaseAir<F>,
-        M: Mmcs<EF>,
-    {
-        let is_zk = is_zk as usize;
-        let trace_width = air.width();
-        let layout = AirLayout {
-            preprocessed_width: air.preprocessed_trace().map(|m| m.width()).unwrap_or(0),
-            main_width: trace_width,
-            num_public_values: air.num_public_values(),
-            ..Default::default()
-        };
-        let (num_constraints, log_num_quotient_chunks) =
-            compute_security_params_from_symbolic(air, layout, is_zk);
-        let num_quotient_chunks = 1 << (log_num_quotient_chunks + is_zk);
-
-        Self {
-            fri_log_blowup: fri_params.log_blowup,
-            fri_log_final_poly_len: fri_params.log_final_poly_len,
-            fri_max_log_arity: fri_params.max_log_arity,
-            fri_num_queries: fri_params.num_queries,
-            fri_query_proof_of_work_bits: fri_params.query_proof_of_work_bits,
-            num_modulus_bits: EF::bits(),
-            collision_resistance: 128,
-            is_zk,
-            trace_width,
-            num_constraints,
-            num_quotient_chunks,
-        }
-    }
-
-    /// Build security parameters.
-    ///
-    /// This is the preferred way to build [`StarkSecurityParams`] if
-    /// the AIR has preprocessed columns or public values.
-    pub fn from_air<F, EF, A, M>(
-        is_zk: bool,
+    /// `num_modulus_bits` is the bit-length of the field over which FRI operates
+    /// (typically the extension field). `collision_resistance` is the bit-strength
+    /// of the hash used to commit (e.g. 128 for typical 256-bit collision-resistant hashes).
+    pub const fn new<M>(
         fri_params: &FriParameters<M>,
         num_modulus_bits: usize,
         collision_resistance: usize,
-        air: &A,
-        preprocessed_width: usize,
-        num_public_values: usize,
-    ) -> Self
-    where
-        F: Field,
-        EF: ExtensionField<F>,
-        A: Air<SymbolicAirBuilder<F>> + BaseAir<F>,
-        M: Mmcs<EF>,
-    {
-        let is_zk = is_zk as usize;
-        let trace_width = air.width();
-        let layout = AirLayout {
-            preprocessed_width,
-            main_width: trace_width,
-            num_public_values,
-            ..Default::default()
-        };
-        let (num_constraints, log_num_quotient_chunks) =
-            compute_security_params_from_symbolic(air, layout, is_zk);
-        let num_quotient_chunks = 1 << (log_num_quotient_chunks + is_zk);
-
+    ) -> Self {
         Self {
             fri_log_blowup: fri_params.log_blowup,
             fri_log_final_poly_len: fri_params.log_final_poly_len,
@@ -123,93 +55,8 @@ impl StarkSecurityParams {
             fri_query_proof_of_work_bits: fri_params.query_proof_of_work_bits,
             num_modulus_bits,
             collision_resistance,
-            is_zk,
-            trace_width,
-            num_constraints,
-            num_quotient_chunks,
         }
     }
-}
-
-fn compute_security_params_from_symbolic<F, EF, A>(
-    air: &A,
-    layout: AirLayout,
-    is_zk: usize,
-) -> (usize, usize)
-where
-    F: Field,
-    EF: ExtensionField<F>,
-    A: Air<SymbolicAirBuilder<F, EF>> + BaseAir<F>,
-{
-    let (base_constraints, ext_constraints) = get_all_symbolic_constraints::<F, EF, A>(air, layout);
-
-    let num_constraints = base_constraints.len();
-
-    let base_deg = base_constraints
-        .iter()
-        .map(|c| c.degree_multiple())
-        .max()
-        .unwrap_or(0);
-    let ext_deg = ext_constraints
-        .iter()
-        .map(|c| c.degree_multiple())
-        .max()
-        .unwrap_or(0);
-    let max_deg = core::cmp::max(base_deg, ext_deg);
-
-    let constraint_degree = (max_deg + is_zk).max(2);
-    let log_num_quotient_chunks = log2_ceil_usize(constraint_degree - 1);
-
-    (num_constraints, log_num_quotient_chunks)
-}
-
-/// Computes conjectured FRI security bits from the random-words formula in
-/// [2025/2010](https://eprint.iacr.org/2025/2010) §1.5.
-///
-/// It is given by `num_queries = b · (−log₂(ρ + η))` with `η ≈ (log₂(e/ρ)·ρ) / log₂(q)`
-/// where `b` is the targeted security bits and `ρ` is the FRI rate.
-///
-/// Note that [2025/2010](https://eprint.iacr.org/2025/2010) recommends proven bounds for deployment,
-/// and advises those using the conjectured security to stay above the cutoff.
-const fn conjectured_fri_bits_random_words(
-    log_blowup: usize,
-    num_queries: usize,
-    num_modulus_bits: usize,
-) -> usize {
-    /// Scaling factor for fixed-point arithmetic.
-    const SCALING_FACTOR: u64 = 20;
-
-    /// log₂(e) ≈ 1.4427, scaled by 1<<SCALING_FACTOR.
-    const LOG2_E_SCALED: u64 = 1_513_561;
-
-    /// ln(2) ≈ 0.693, scaled by 1<<SCALING_FACTOR.
-    const LN2_SCALED: u64 = 726_817;
-
-    if log_blowup >= 64 || num_modulus_bits == 0 {
-        return 0;
-    }
-    let one: u64 = 1 << 63;
-    let rho = one >> log_blowup;
-    let log2_e_over_rho = LOG2_E_SCALED + ((log_blowup as u64) << SCALING_FACTOR);
-    let log2_q = num_modulus_bits as u64;
-    let divisor = (log2_q << SCALING_FACTOR) as u128;
-    let eta = ((log2_e_over_rho as u128 * rho as u128) / divisor) as u64;
-    let effective = rho + eta;
-    if effective == 0 || effective >= one {
-        return 0;
-    }
-    let int_bits = effective.leading_zeros() as usize;
-    let top = one >> int_bits;
-    let frac = effective - top;
-    let bits_per_query_fp: u64 = if frac == 0 {
-        (int_bits as u64) << SCALING_FACTOR
-    } else {
-        let denom = (top as u128) * (LN2_SCALED as u128);
-        let correction = ((frac as u128) << 40) / denom;
-        ((int_bits as u64) << SCALING_FACTOR).saturating_sub(correction as u64)
-    };
-    let total_fp = (num_queries as u128) * (bits_per_query_fp as u128);
-    (total_fp >> SCALING_FACTOR) as usize
 }
 
 /// Conjectured security level (in bits) using the "random words" regime.
@@ -256,10 +103,40 @@ impl ConjecturedSecurity {
     }
 }
 
+/// Computes conjectured FRI security bits from the random-words formula in
+/// [2025/2010](https://eprint.iacr.org/2025/2010) §1.5:
+///
+///     b = num_queries · (−log₂(ρ + η)),    η ≈ (log₂(e/ρ) · ρ) / log₂(q),
+///
+/// where `b` is the achieved security in bits, `ρ` is the FRI rate, and `q` is the field size.
+///
+/// Note that [2025/2010](https://eprint.iacr.org/2025/2010) recommends proven bounds for deployment,
+/// and advises those using the conjectured security to stay above the cutoff.
+fn conjectured_fri_bits_random_words(
+    log_blowup: usize,
+    num_queries: usize,
+    num_modulus_bits: usize,
+) -> usize {
+    if log_blowup == 0 || num_modulus_bits == 0 {
+        return 0;
+    }
+    let log_blowup_f = log_blowup as f64;
+    let rho = pow(2.0, -log_blowup_f);
+    let log2_e_over_rho = core::f64::consts::LOG2_E + log_blowup_f;
+    let eta = (log2_e_over_rho * rho) / num_modulus_bits as f64;
+    let effective = rho + eta;
+    if effective <= 0.0 || effective >= 1.0 {
+        return 0;
+    }
+    let bits_per_query = -log2(effective);
+    (num_queries as f64 * bits_per_query) as usize
+}
+
 /// Proven security level (in bits) of a STARK configuration.
 ///
 /// Follows Theorem 2 and Theorem 3 in [2024/1553](https://eprint.iacr.org/2024/1553)
-/// (round-by-round soundness; unique-decoding and list-decoding regimes).
+/// (round-by-round soundness; unique-decoding and list-decoding regimes), with the
+/// improved LDR FRI commit-phase bounds from [2025/2055](https://eprint.iacr.org/2025/2055).
 // The proven security calculation is inspired from Winterfell's implementation:
 // https://github.com/facebook/winterfell/blob/main/winterfell/src/security.rs
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -269,10 +146,13 @@ pub struct ProvenSecurity {
 }
 
 impl ProvenSecurity {
-    /// Minimum security level of the two regimes (unique-decoding and list-decoding).
+    /// Best of the two regimes (unique-decoding and list-decoding).
+    ///
+    /// Each regime is an independent valid lower bound on round-by-round soundness, so
+    /// their maximum is itself a valid (and tighter) lower bound on the proven security.
     #[inline]
     pub fn security_bits(&self) -> usize {
-        min(self.unique_decoding_bits, self.list_decoding_bits)
+        max(self.unique_decoding_bits, self.list_decoding_bits)
     }
 
     /// Compute proven security from protocol parameters (Theorem 2 & 3 in [2024/1553](https://eprint.iacr.org/2024/1553)).
@@ -287,7 +167,7 @@ impl ProvenSecurity {
         collision_resistance: usize,
     ) -> Self {
         let extension_field_bits = num_modulus_bits as f64;
-        let blowup_factor = 1 << log_blowup;
+        let blowup_factor = 1usize << log_blowup;
         let lde_domain_size = trace_length * blowup_factor;
         let trace_domain_size = trace_length as f64;
         let lde_domain_size_f = lde_domain_size as f64;
@@ -295,7 +175,7 @@ impl ProvenSecurity {
         let grinding_factor = query_proof_of_work_bits as f64;
         let num_openings = 2.0f64;
         let max_deg = blowup_factor as f64 + 1.0;
-        let folding_factor = (1 << max_log_arity) as f64;
+        let folding_factor = (1usize << max_log_arity) as f64;
 
         let unique_decoding = min(
             proven_security_unique_decoding(
@@ -303,10 +183,10 @@ impl ProvenSecurity {
                 num_fri_queries,
                 grinding_factor,
                 trace_domain_size,
+                lde_domain_size,
                 lde_domain_size_f,
                 max_deg,
                 num_openings,
-                trace_length,
                 log_final_poly_len,
                 folding_factor,
             ),
@@ -356,7 +236,9 @@ impl ProvenSecurity {
 
     /// Compute proven security using a parameter bundle and the proof's degree bits.
     pub fn compute_from_proof(degree_bits: usize, params: &StarkSecurityParams) -> Self {
-        let trace_length = 1 << degree_bits.saturating_sub(params.is_zk);
+        // `degree_bits` already reflects the committed-polynomial size (post-zk padding,
+        // when applicable), so the trace-domain size used for security analysis is `2^degree_bits`.
+        let trace_length = 1usize << degree_bits;
 
         Self::compute(
             params.fri_log_blowup,
@@ -378,18 +260,16 @@ impl ProvenSecurity {
 /// The bound on m in Theorem 2 in https://eprint.iacr.org/2024/1553 is sufficient but we can use
 /// the following to compute a better bound.
 fn compute_upper_m(trace_domain_size: usize) -> usize {
-    let h = trace_domain_size as f64;
-    if h <= 0.0 {
+    if trace_domain_size == 0 {
         return 3;
     }
+    let h = trace_domain_size as f64;
     let ratio = (h + 2.0) / h;
-    let m_max = ceil(1.0 / (2.0 * (sqrt(ratio) - 1.0)));
-    let m_max = if m_max >= h / 2.0 {
-        m_max as usize
-    } else {
-        (h / 2.0) as usize
-    };
-
+    let m_max = ceil(1.0 / (2.0 * (sqrt(ratio) - 1.0))) as usize;
+    debug_assert!(
+        (m_max as f64) >= h / 2.0,
+        "the bound in the theorem should be tighter"
+    );
     // We cap the range to 1000 as the optimal m value will be in the lower range of [m_min, m_max]
     // since increasing m too much will lead to a deterioration in the FRI commit soundness making
     // any benefit gained in the FRI query soundess mute.
@@ -401,14 +281,14 @@ fn proven_security_unique_decoding(
     num_fri_queries: f64,
     grinding_factor: f64,
     trace_domain_size: f64,
-    lde_domain_size: f64,
+    lde_domain_size: usize,
+    lde_domain_size_f: f64,
     max_deg: f64,
     num_openings: f64,
-    trace_length: usize,
     log_final_poly_len: usize,
     folding_factor: f64,
 ) -> u64 {
-    let rho_plus = (trace_domain_size + num_openings) / lde_domain_size;
+    let rho_plus = (trace_domain_size + num_openings) / lde_domain_size_f;
     let alpha = (1.0 + rho_plus) * 0.5;
     let constraint_batching = 1.0f64;
     let deep_batching = 1.0f64;
@@ -426,14 +306,15 @@ fn proven_security_unique_decoding(
     );
 
     // FRI commit-phase (i.e., pre-query) soundness error.
-    epsilons_bits_neg.push(extension_field_bits - log2(lde_domain_size * deep_batching));
+    epsilons_bits_neg.push(extension_field_bits - log2(lde_domain_size_f * deep_batching));
 
-    let num_fri_layers = log2_floor_usize(trace_length).saturating_sub(log_final_poly_len);
-    // epsilon_i for i in [3..(k-1)], where k is number of rounds
-    let epsilon_i_min = (0..num_fri_layers)
-        .map(|_| extension_field_bits - log2((folding_factor - 1.0) * (lde_domain_size + 1.0)))
-        .fold(f64::INFINITY, |a, b| if b < a { b } else { a });
-    epsilons_bits_neg.push(epsilon_i_min);
+    // Per-layer ε_i for i in [3..(k-1)]; each layer yields the same bound, so push it once
+    // when at least one fold occurs.
+    let num_fri_layers = log2_floor_usize(lde_domain_size).saturating_sub(log_final_poly_len);
+    if num_fri_layers > 0 {
+        epsilons_bits_neg
+            .push(extension_field_bits - log2((folding_factor - 1.0) * (lde_domain_size_f + 1.0)));
+    }
 
     // FRI query-phase soundness error.
     let epsilon_k = grinding_factor - log2(pow(alpha, num_fri_queries));
@@ -477,10 +358,13 @@ fn proven_security_list_decoding_m(
     // ALI related soundness error.
     epsilons_bits_neg.push(-log2(l) - log2(constraint_batching) + extension_field_bits);
 
-    // DEEP related soundness error.
+    // DEEP related soundness error. The list-decoding analysis carries an `l²` factor
+    // (see Theorem 2 in https://eprint.iacr.org/2024/1553).
     epsilons_bits_neg.push(
-        -log2(l * (max_deg * (trace_domain_size + num_openings - 1.0) + (trace_domain_size - 1.0)))
-            + extension_field_bits,
+        -log2(
+            l * l
+                * (max_deg * (trace_domain_size + num_openings - 1.0) + (trace_domain_size - 1.0)),
+        ) + extension_field_bits,
     );
 
     // FRI commit-phase (i.e., pre-query) soundness error, using the improved

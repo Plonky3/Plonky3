@@ -100,7 +100,7 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_params = FriParameters::new_benchmark_high_arity(challenge_mmcs);
 
-    let security_params = StarkSecurityParams::new(false /* is_zk */, &fri_params, proof_goal);
+    let security_params = StarkSecurityParams::new(&fri_params, EF::bits(), 128);
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
@@ -144,7 +144,7 @@ where
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_params = FriParameters::new_benchmark_high_arity(challenge_mmcs);
-    let security_params = StarkSecurityParams::new(false /* is_zk */, &fri_params, proof_goal);
+    let security_params = StarkSecurityParams::new(&fri_params, EF::bits(), 128);
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
@@ -183,7 +183,7 @@ pub fn prove_m31_keccak<
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
     let fri_params = FriParameters::new_benchmark(challenge_mmcs);
-    let security_params = StarkSecurityParams::new(false /* is_zk */, &fri_params, proof_goal);
+    let security_params = StarkSecurityParams::new(&fri_params, EF::bits(), 128);
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
@@ -226,7 +226,7 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
     let fri_params = FriParameters::new_benchmark(challenge_mmcs);
-    let security_params = StarkSecurityParams::new(false /* is_zk */, &fri_params, proof_goal);
+    let security_params = StarkSecurityParams::new(&fri_params, EF::bits(), 128);
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
