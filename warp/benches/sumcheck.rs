@@ -1802,7 +1802,7 @@ fn print_warp_whir_finalizer_comparison(num_variable_cases: &[usize], n_values: 
         "    WARP lane: native WARP accumulation steps, then direct Boolean WhirBooleanWarpFinalizerProtocol over ExtensionLimbPcs<WhirPcs>."
     );
     eprintln!(
-        "    Note: this plugs real p3-whir into the finalizer. It is not yet a per-step WHIR accumulator backend because WhirPcs registers opening points at commit time."
+        "    Note: this is the older finalizer-only lane; use P3_WARP_WHIR_ROOT_COMPARE=1 for the current root-proof comparison."
     );
     eprintln!(
         "    WARP arity: {arity} fresh inputs in the first step, then {} per chained step.",
