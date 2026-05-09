@@ -4,7 +4,9 @@ use p3_maybe_rayon::prelude::*;
 use tracing::instrument;
 
 use crate::field::Field;
-use crate::{FieldArray, PackedValue, PrimeCharacteristicRing};
+use crate::{
+    ExtensionField, FieldArray, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+};
 
 /// Compute the multiplicative inverse of every element in a slice via Montgomery's trick.
 ///
@@ -99,4 +101,44 @@ where
         result[i] *= inv;
         inv *= x[i];
     }
+}
+
+/// Per-lane inverse of a packed extension via Montgomery's trick. Allocation-free.
+///
+/// Dispatches on `F::Packing::WIDTH` to a const-generic body that materializes the `W`
+/// lanes via [`PackedFieldExtension::extract`], runs [`batch_multiplicative_inverse_general`]
+/// over a stack-sized `[EF; W]` buffer, and rebuilds the packed extension via
+/// [`PackedFieldExtension::from_ext_fn`]. After monomorphization the match folds to
+/// the single live arm.
+///
+/// All `PackedField` backends in this workspace use `WIDTH ∈ {1, 2, 4, 8, 16}`; the
+/// fallback arm panics if a future backend introduces a different width.
+#[inline]
+pub fn invert_packed_extension<F, EF>(packed: EF::ExtensionPacking) -> EF::ExtensionPacking
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    match F::Packing::WIDTH {
+        1 => invert_packed_extension_const::<F, EF, 1>(packed),
+        2 => invert_packed_extension_const::<F, EF, 2>(packed),
+        4 => invert_packed_extension_const::<F, EF, 4>(packed),
+        8 => invert_packed_extension_const::<F, EF, 8>(packed),
+        16 => invert_packed_extension_const::<F, EF, 16>(packed),
+        w => panic!("unsupported PackedField WIDTH = {w}"),
+    }
+}
+
+#[inline]
+fn invert_packed_extension_const<F, EF, const W: usize>(
+    packed: EF::ExtensionPacking,
+) -> EF::ExtensionPacking
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    let lanes: [EF; W] = core::array::from_fn(|i| packed.extract(i));
+    let mut invs = [EF::ZERO; W];
+    batch_multiplicative_inverse_general(&lanes, &mut invs, |x| x.inverse());
+    EF::ExtensionPacking::from_ext_fn(|i| invs[i])
 }
