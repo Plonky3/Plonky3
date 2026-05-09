@@ -691,9 +691,8 @@ proptest! {
 
 proptest! {
     /// A per-row scaling closure (whose factor depends on the natural-order
-    /// coefficient index) must agree between the trait default and the
-    /// `Radix2DitParallel` specialization, regardless of whether the closure
-    /// observes a natural- or bit-reversed-memory buffer.
+    /// coefficient index) must agree across all backends, regardless of
+    /// whether the closure observes a natural- or bit-reversed-memory buffer.
     ///
     /// Choosing factor = k+1 also exercises the no-op case (k=0 → factor=1).
     #[test]
@@ -724,10 +723,22 @@ proptest! {
         let naive = NaiveDft
             .coset_lde_batch_with_transform(mat.clone(), added_bits, shift, make_closure(log_h))
             .to_row_major_matrix();
+        let dit = Radix2Dit::default()
+            .coset_lde_batch_with_transform(mat.clone(), added_bits, shift, make_closure(log_h))
+            .to_row_major_matrix();
+        let bowers = Radix2Bowers
+            .coset_lde_batch_with_transform(mat.clone(), added_bits, shift, make_closure(log_h))
+            .to_row_major_matrix();
         let parallel = Radix2DitParallel::default()
+            .coset_lde_batch_with_transform(mat.clone(), added_bits, shift, make_closure(log_h))
+            .to_row_major_matrix();
+        let small_batch = Radix2DFTSmallBatch::default()
             .coset_lde_batch_with_transform(mat, added_bits, shift, make_closure(log_h))
             .to_row_major_matrix();
 
+        prop_assert_eq!(&naive, &dit);
+        prop_assert_eq!(&naive, &bowers);
         prop_assert_eq!(&naive, &parallel);
+        prop_assert_eq!(&naive, &small_batch);
     }
 }

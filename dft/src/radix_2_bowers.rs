@@ -8,9 +8,9 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::{flatten_to_base, log2_strict_usize, reverse_slice_index_bits};
 use tracing::instrument;
 
-use crate::TwoAdicSubgroupDft;
 use crate::butterflies::{Butterfly, DifButterfly, DitButterfly, TwiddleFreeButterfly};
 use crate::util::divide_by_height;
+use crate::{Layout, TwoAdicSubgroupDft};
 
 /// The Bowers G FFT algorithm.
 /// See: "Improved Twiddle Access for Fast Fourier Transforms"
@@ -73,6 +73,44 @@ impl<F: TwoAdicField> TwoAdicSubgroupDft<F> for Radix2Bowers {
 
         bowers_g(&mut mat.as_view_mut());
 
+        mat
+    }
+
+    #[instrument(skip_all, level = "debug", fields(dims = %mat.dimensions(), added_bits))]
+    fn coset_lde_batch_with_transform<T>(
+        &self,
+        mut mat: RowMajorMatrix<F>,
+        added_bits: usize,
+        shift: F,
+        transform: T,
+    ) -> RowMajorMatrix<F>
+    where
+        T: FnOnce(&mut RowMajorMatrixViewMut<'_, F>, Layout),
+    {
+        let h = mat.height();
+        let log_h = log2_strict_usize(h);
+        let h_inv_subfield = F::PrimeSubfield::ONE.div_2exp_u64(log_h as u64);
+        let h_inv = F::from_prime_subfield(h_inv_subfield);
+
+        // Inverse butterfly leaves coefficients in bit-reversed memory.
+        bowers_g_t(&mut mat.as_view_mut());
+
+        // Normalise to true polynomial coefficients before invoking the closure.
+        // (Costs one extra O(h) pass relative to the no-op `coset_lde_batch` path,
+        // which fuses normalisation with the coset-shift weights.)
+        mat.values.par_iter_mut().for_each(|v| *v *= h_inv);
+
+        transform(&mut mat.as_view_mut(), Layout::BitReversed);
+
+        // Apply coset-shift weights in bit-reversed order.
+        let mut shift_powers = shift.powers().collect_n(h);
+        reverse_slice_index_bits(&mut shift_powers);
+        mat.par_rows_mut()
+            .zip(shift_powers.into_par_iter())
+            .for_each(|(row, sp)| row.iter_mut().for_each(|e| *e *= sp));
+
+        mat = mat.bit_reversed_zero_pad(added_bits);
+        bowers_g(&mut mat.as_view_mut());
         mat
     }
 }
