@@ -24,15 +24,14 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{
     BatchOpening, BuildPeriodicLdeTableFast, Mmcs, OpenedValues, Pcs, PeriodicLdeTable,
 };
-use p3_dft::{Layout, TwoAdicSubgroupDft};
+use p3_dft::TwoAdicSubgroupDft;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
-    ExtensionField, Field, PackedFieldExtension, TwoAdicField, batch_multiplicative_inverse,
-    dot_product, scale_slice_in_place_single_core,
+    ExtensionField, PackedFieldExtension, TwoAdicField, batch_multiplicative_inverse, dot_product,
 };
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
-use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow, RowMajorMatrixViewMut};
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow};
 use p3_matrix::interpolation::{Interpolate, compute_adjusted_weights};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
@@ -348,62 +347,6 @@ where
 
     fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
         self.mmcs.commit(ldes)
-    }
-
-    /// The fused [`Self::commit_quotient`] below produces a single MMCS matrix
-    /// of width `num_chunks · W` (the concatenation of all per-chunk LDEs).
-    fn quotient_commit_matrix_count(&self, _num_chunks: usize) -> usize {
-        1
-    }
-
-    /// Fused quotient commitment: replace `D` separate `coset_lde_batch` calls
-    /// with one `coset_lde_batch_with_transform` whose closure folds the
-    /// per-chunk shift `ω_J^{-t}` into a single diagonal pass on the
-    /// bit-reversed coefficient buffer. The fused `(N·B, W·D)` LDE output is
-    /// committed directly as a single MMCS matrix; per-chunk values are
-    /// recovered by slicing the opened row in
-    /// [`Pcs::quotient_commit_matrix_count`]-aware callers.
-    #[allow(clippy::type_complexity)]
-    fn commit_quotient(
-        &self,
-        quotient_domain: Self::Domain,
-        quotient_evaluations: RowMajorMatrix<Val>,
-        num_chunks: usize,
-    ) -> (Self::Commitment, Self::ProverData) {
-        let n_d = quotient_evaluations.height();
-        let w = quotient_evaluations.width();
-        debug_assert_eq!(n_d, quotient_domain.size());
-        assert!(num_chunks.is_power_of_two());
-
-        let log_d = log2_strict_usize(num_chunks);
-        let n = n_d >> log_d;
-        let log_n = log2_strict_usize(n);
-        let log_b = self.fri.log_blowup;
-
-        // Metadata-only reshape from (N·D, W) to (N, W·D).
-        // Column block `t` (cols `t·W..(t+1)·W`) of the new matrix holds the
-        // evaluations of the t-th chunk on the H-coset `g · ω_J^t · H`.
-        let reshaped = RowMajorMatrix::new(quotient_evaluations.values, w * num_chunks);
-
-        let omega_j_inv = Val::two_adic_generator(log_n + log_d).inverse();
-
-        let lde = self.dft.coset_lde_batch_with_transform(
-            reshaped,
-            log_b,
-            // Pass `Val::ONE` here even though the target is `g·K`: the
-            // un-shifted iDFT below treats each column as if on `H` and
-            // therefore extracts coefficients of the form `a · (g·ω_J^t)^k`
-            // (i.e., `g^k` is already baked in). The closure cancels only the
-            // `ω_J^{tk}` factor, leaving `a · g^k`; the trailing plain DFT
-            // then lands directly on `g·K`.
-            Val::ONE,
-            |coeffs, layout| {
-                strip_chunk_coset_shifts(coeffs, layout, log_n, num_chunks, w, omega_j_inv);
-            },
-        );
-
-        let lde_mat = lde.bit_reverse_rows().to_row_major_matrix();
-        self.mmcs.commit(vec![lde_mat])
     }
 
     /// Given the evaluations on a domain `gH`, return the evaluations on a different domain `g'K`.
@@ -759,53 +702,6 @@ where
 
         Ok(())
     }
-}
-
-/// Strip the per-chunk coset shift `ω_J^t` from the un-shifted iDFT output of a
-/// fused quotient LDE.
-///
-/// An iDFT that treats each column block `t` (cols `t·W..(t+1)·W`) of the input
-/// as evaluations on `H` rather than its actual coset `g·ω_J^t·H` produces
-/// shifted coefficients of the form
-///
-/// ```text
-///     c_hat[k, t·W + c] = a_{t,c}[k] · (g · ω_J^t)^k
-/// ```
-///
-/// where `a_{t,c}[k]` are the true coefficients of chunk `t`'s polynomial.
-/// Multiplying column block `t`, row `k` by `(ω_J^{-k})^t` cancels the
-/// `ω_J^{tk}` factor and leaves `a_{t,c}[k] · g^k`. The global `g` is left
-/// implicit in the coefficients so that a trailing plain forward DFT (with
-/// `shift = ONE`) lands directly on `g·K`.
-///
-/// `coeffs` is a row-major `(N, W·D)` view of the iDFT output. `layout` reports
-/// whether memory rows are in natural or bit-reversed order; the natural-order
-/// coefficient index `k` is recovered accordingly.
-fn strip_chunk_coset_shifts<F: Field>(
-    coeffs: &mut RowMajorMatrixViewMut<'_, F>,
-    layout: Layout,
-    log_n: usize,
-    num_chunks: usize,
-    w: usize,
-    omega_j_inv: F,
-) {
-    let stride = coeffs.width;
-    coeffs
-        .values
-        .par_chunks_exact_mut(stride)
-        .enumerate()
-        .for_each(|(m, row)| {
-            let k = match layout {
-                Layout::Natural => m,
-                Layout::BitReversed => reverse_bits_len(m, log_n),
-            };
-            let omega_j_inv_k = omega_j_inv.exp_u64(k as u64);
-            let mut chunk_factor = F::ONE;
-            for t in 1..num_chunks {
-                chunk_factor *= omega_j_inv_k;
-                scale_slice_in_place_single_core(&mut row[t * w..(t + 1) * w], chunk_factor);
-            }
-        });
 }
 
 impl<Val, Dft, InputMmcs, FriMmcs> BuildPeriodicLdeTableFast

@@ -421,37 +421,21 @@ where
             vec![(trace_domain, trace_points)],
         )
     };
-    let num_quotient_matrices = pcs.quotient_commit_matrix_count(num_quotient_chunks);
-    let quotient_round = if num_quotient_matrices == num_quotient_chunks {
-        // Default shape: one matrix per chunk, each on its own randomized domain.
-        zip_eq(
-            randomized_quotient_chunks_domains.iter(),
-            &opened_values.quotient_chunks,
-            VerificationError::from(InvalidProofShapeError::QuotientDomainsCountMismatch {
-                air: 0,
-            }),
-        )?
-        .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
-        .collect_vec()
-    } else {
-        // Fused shape (e.g. `TwoAdicFriPcs`): a single matrix of width
-        // `num_quotient_chunks · DIMENSION` opened at `zeta` with all per-chunk
-        // values concatenated. FRI only consults `domain.size()`, so any
-        // randomized chunk domain (all the same size) suffices.
-        debug_assert_eq!(num_quotient_matrices, 1);
-        let concatenated: Vec<SC::Challenge> = opened_values
-            .quotient_chunks
-            .iter()
-            .flat_map(|chunk| chunk.iter().copied())
-            .collect();
-        vec![(
-            randomized_quotient_chunks_domains[0],
-            vec![(zeta, concatenated)],
-        )]
-    };
     coms_to_verify.extend(vec![
         trace_round,
-        (commitments.quotient_chunks.clone(), quotient_round),
+        (
+            commitments.quotient_chunks.clone(),
+            // Check the commitment on the randomized domains.
+            zip_eq(
+                randomized_quotient_chunks_domains.iter(),
+                &opened_values.quotient_chunks,
+                VerificationError::from(InvalidProofShapeError::QuotientDomainsCountMismatch {
+                    air: 0,
+                }),
+            )?
+            .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
+            .collect_vec(),
+        ),
     ]);
 
     // Add preprocessed commitment verification if present
