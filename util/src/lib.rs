@@ -25,9 +25,16 @@ pub const fn log2_ceil_usize(n: usize) -> usize {
     (usize::BITS - n.saturating_sub(1).leading_zeros()) as usize
 }
 
+/// Computes `floor(log_2(n))`.
+///
+/// Returns `0` for `n == 0` (matching `log2_ceil_usize(0) == 0`); `floor(log2(0))`
+/// is undefined mathematically and the saturating behaviour is the convention used
+/// elsewhere in the workspace.
 #[must_use]
 pub const fn log2_floor_usize(n: usize) -> usize {
-    assert!(n > 0, "log2(0) undefined");
+    if n == 0 {
+        return 0;
+    }
     (usize::BITS - 1 - n.leading_zeros()) as usize
 }
 

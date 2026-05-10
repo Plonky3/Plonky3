@@ -26,10 +26,12 @@ pub struct Proof<SC: StarkGenericConfig> {
 
 impl<SC: StarkGenericConfig> Proof<SC> {
     /// Conjectured security level (in bits).
-    /// Based on the random-words formula in [2025/2010](https://eprint.iacr.org/2025/2010) §1.5.
+    ///
+    /// This is a parameter-space property and does not depend on `self`; the method
+    /// is exposed on [`Proof`] for parity with [`Self::proven_security`].
     ///
     /// See [`ConjecturedSecurity`](crate::security::ConjecturedSecurity).
-    pub fn conjectured_security(&self, params: &StarkSecurityParams) -> ConjecturedSecurity {
+    pub fn conjectured_security(params: &StarkSecurityParams) -> ConjecturedSecurity {
         ConjecturedSecurity::compute_from_params(params)
     }
 
