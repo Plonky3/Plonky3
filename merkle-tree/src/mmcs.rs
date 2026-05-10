@@ -255,6 +255,126 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         })
     }
 
+    /// Per-level compression arity for an unpruned proof, derived without hashing.
+    ///
+    /// One entry per proof level, each either `N` or `2`.
+    ///
+    /// # Returns
+    ///
+    /// - One entry per proof level, from leaves up to just above the cap.
+    /// - Cap layers are excluded — the proof never traverses them.
+    ///
+    /// # Trust model
+    ///
+    /// - Built from verifier-known dimensions and cap height only.
+    /// - Nothing is read from the proof.
+    /// - Safe to feed into pruned-path restoration: a malicious proof cannot
+    ///   inflate the verifier's allocation budget.
+    pub fn proof_arity_schedule(
+        &self,
+        dimensions: &[Dimensions],
+    ) -> Result<Vec<usize>, MerkleTreeError>
+    where
+        P: PackedValue,
+        PW: PackedValue,
+    {
+        // No commitments → no tree → no schedule.
+        if dimensions.is_empty() {
+            return Err(EmptyBatch);
+        }
+
+        // Phase 1: order matrices tallest-first so the walk can peek ahead
+        // and consume each one at its injection layer.
+        let mut heights_tallest_first = dimensions
+            .iter()
+            .enumerate()
+            .sorted_by_key(|(_, dims)| Reverse(dims.height))
+            .peekable();
+
+        // Heights sharing the same next-power-of-two must match exactly.
+        //
+        //     [8, 5]   → both round to 8, differ → reject
+        //     [8, 8]   → identical at the same slot → OK
+        //     [8, 4]   → distinct slots → OK
+        if !heights_tallest_first
+            .clone()
+            .map(|(_, dims)| dims.height)
+            .tuple_windows()
+            .all(|(curr, next)| {
+                curr == next || curr.next_power_of_two() != next.next_power_of_two()
+            })
+        {
+            return Err(IncompatibleHeights);
+        }
+
+        // Phase 2: walk from leaves toward the root.
+        //
+        // Seed length is `padded_len(max_height, N)` — same padding the
+        // prover uses to round the leaf layer up to a full N-ary group.
+        let (max_height, mut curr_height_padded) = match heights_tallest_first.peek() {
+            Some((_, dims)) => {
+                let max_height = dims.height;
+                let curr_height_padded = padded_len(max_height, N);
+                (max_height, curr_height_padded)
+            }
+            None => return Err(EmptyBatch),
+        };
+
+        let leaf_height_npt = max_height.next_power_of_two();
+
+        // Drop matrices already hashed into the leaf layer.
+        //
+        // Only shorter ones still need an injection slot.
+        heights_tallest_first
+            .peeking_take_while(|(_, dims)| dims.height.next_power_of_two() == leaf_height_npt)
+            .for_each(|_| {});
+
+        // One schedule entry per non-root layer.
+        //
+        //     layer_len:  L_0 → L_1 → L_2 → ... → 1   (root)
+        //     step:        s_0   s_1   s_2  ...
+        //     schedule  = [s_0,  s_1,  s_2,  ...]
+        let mut schedule = Vec::new();
+        while curr_height_padded > 1 {
+            // Arity at this layer:
+            //   N → full N-ary compression
+            //   2 → binary bridge inserted to land on the next injection point
+            let step = select_arity_step::<N>(
+                curr_height_padded,
+                leaf_height_npt,
+                heights_tallest_first.clone().map(|(_, dims)| dims.height),
+            );
+            schedule.push(step);
+
+            // - Shrink by `step`,
+            // - Re-pad so the next layer can form complete N-ary groups for the compression after it.
+            let logical_next = curr_height_padded / step;
+            curr_height_padded = padded_len(logical_next, N);
+
+            // - Inject any matrix whose rounded height matches the next layer's pre-pad width,
+            // - Consume it so it stops driving arity below.
+            let logical_next_npt = logical_next.next_power_of_two();
+            let next_height = heights_tallest_first
+                .peek()
+                .map(|(_, dims)| dims.height)
+                .filter(|h| h.next_power_of_two() == logical_next_npt);
+            if let Some(next_height) = next_height {
+                heights_tallest_first
+                    .peeking_take_while(|(_, dims)| dims.height == next_height)
+                    .for_each(|_| {});
+            }
+        }
+
+        // Phase 3: strip the top `cap_height` entries
+        //
+        // Those layers live inside the verifier's cap, not in the proof.
+        let total_levels = schedule.len();
+        let effective_cap_height = self.cap_height.min(total_levels);
+        schedule.truncate(total_levels - effective_cap_height);
+
+        Ok(schedule)
+    }
+
     /// Create a new `MerkleTreeMmcs` with the given hash and compression functions.
     ///
     /// # Arguments
@@ -482,17 +602,29 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         PW::Value: Eq + Clone,
         [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
     {
-        // Phase 1: Restore the full (unpruned) authentication paths from
+        // Phase 1: Derive the expected full-path sibling count from the
+        // verifier-known dimensions, *not* from the proof.
+        //
+        // Each schedule entry contributes `step - 1` siblings: one of the
+        // step children is the queried node itself, the rest are siblings.
+        //
+        //   schedule = [4, 2]   → 3 + 1 = 4 expected siblings
+        //   schedule = [2, 2, 2] → 1 + 1 + 1 = 3 expected siblings
+        let proof_arity = self.proof_arity_schedule(dimensions)?;
+        let full_sibling_count: usize = proof_arity.iter().map(|step| step - 1).sum();
+
+        // Phase 2: Restore the full (unpruned) authentication paths from
         // the compact representation. This copies shared upper siblings
         // from each predecessor in a single forward pass.
-        let restored = restore_paths(&pruned_opening.pruned_proof).ok_or(MalformedPrunedProof)?;
+        let restored = restore_paths(&pruned_opening.pruned_proof, full_sibling_count)
+            .ok_or(MalformedPrunedProof)?;
 
         // The number of restored paths must match the number of query openings.
         if restored.len() != pruned_opening.opened_values.len() {
             return Err(WrongBatchSize);
         }
 
-        // Phase 2: Verify each restored path individually against the commitment.
+        // Phase 3: Verify each restored path individually against the commitment.
         //
         // Each path's flat sibling buffer is borrowed directly — no cloning.
         // The standard single-index verification hashes the opened values,
