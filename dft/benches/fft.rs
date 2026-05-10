@@ -1,13 +1,18 @@
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
-use p3_dft::{Radix2Bowers, Radix2DFTSmallBatch, Radix2Dit, Radix2DitParallel, TwoAdicSubgroupDft};
+use p3_dft::{
+    Layout, Radix2Bowers, Radix2DFTSmallBatch, Radix2Dit, Radix2DitParallel, TwoAdicSubgroupDft,
+};
 use p3_field::extension::{BinomialExtensionField, Complex};
-use p3_field::{Algebra, BasedVectorSpace, TwoAdicField};
+use p3_field::{Algebra, BasedVectorSpace, TwoAdicField, scale_slice_in_place_single_core};
 use p3_goldilocks::Goldilocks;
+use p3_matrix::Matrix;
+use p3_matrix::bitrev::BitReversibleMatrix;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_maybe_rayon::prelude::*;
 use p3_mersenne_31::{Mersenne31, Mersenne31ComplexRadix2Dit, Mersenne31Dft};
 use p3_monty_31::dft::RecursiveDft;
-use p3_util::pretty_name;
+use p3_util::{pretty_name, reverse_bits_len};
 use rand::SeedableRng;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
@@ -290,5 +295,104 @@ fn bench_coset_lde_chunked(c: &mut Criterion) {
     coset_lde_chunked::<Goldilocks, Radix2DitParallel<_>>(c, grid_gl);
 }
 
-criterion_group!(benches, bench_fft, bench_coset_lde_chunked);
+/// Fused counterpart to [`coset_lde_chunked`]: runs the LDE pipeline that
+/// `TwoAdicFriPcs::commit_quotient` uses internally — one
+/// `coset_lde_batch_with_transform` over a `(N, D·DIM)` matrix with the
+/// per-chunk shift-stripping closure.
+///
+/// **Workload model.** The actual quotient input is a `Vec<EF>` of length
+/// `N·D` (D chunks of N extension-field evaluations). Mirroring that here
+/// in the base field gives a `(N, D·DIM)` row-major matrix of `N·D·DIM`
+/// base elements, which is what the LDE pipeline operates on. The MMCS
+/// commit step is excluded so the win is attributed to the LDE pipeline
+/// alone, isolated from MMCS hashing variance.
+fn coset_lde_fused<F, Dft>(
+    c: &mut Criterion,
+    grid: &[(usize, usize, usize)], // (log_n, log_d, log_b)
+    dim: usize,                     // extension-field degree DIM
+) where
+    F: TwoAdicField,
+    Dft: TwoAdicSubgroupDft<F>,
+    StandardUniform: Distribution<F>,
+{
+    let mut group = c.benchmark_group(format!(
+        "coset_lde_fused/{}/{}",
+        pretty_name::<F>(),
+        pretty_name::<Dft>(),
+    ));
+    group.sample_size(10);
+
+    let mut rng = SmallRng::seed_from_u64(2);
+    for &(log_n, log_d, log_b) in grid {
+        let n = 1 << log_n;
+        let d = 1 << log_d;
+        let fat_w = d * dim;
+
+        // Input mirrors the post-`flatten_to_base` quotient buffer reshaped
+        // to (N, D·DIM): the EF column count D maps to D·DIM base columns.
+        let input = RowMajorMatrix::<F>::rand(&mut rng, n, fat_w);
+
+        let dft = Dft::default();
+        let label = format!("logN={log_n}/D={d}/dim={dim}/B={}", 1 << log_b);
+        group.bench_with_input(BenchmarkId::from_parameter(label), &dft, |b, dft| {
+            b.iter_batched(
+                || input.clone(),
+                |mat| {
+                    let omega_j_inv = F::two_adic_generator(log_n + log_d).inverse();
+
+                    // Same fused pipeline as `TwoAdicFriPcs::commit_quotient`,
+                    // minus the MMCS commit. Closure mirrors
+                    // `strip_chunk_coset_shifts` in `fri/src/two_adic_pcs.rs`.
+                    dft.coset_lde_batch_with_transform(mat, log_b, F::ONE, |coeffs, layout| {
+                        let stride = coeffs.width;
+                        coeffs
+                            .values
+                            .par_chunks_exact_mut(stride)
+                            .enumerate()
+                            .for_each(|(m, row)| {
+                                let k = match layout {
+                                    Layout::Natural => m,
+                                    Layout::BitReversed => reverse_bits_len(m, log_n),
+                                };
+                                let omega_j_inv_k = omega_j_inv.exp_u64(k as u64);
+                                let mut chunk_factor = F::ONE;
+                                for t in 1..d {
+                                    chunk_factor *= omega_j_inv_k;
+                                    scale_slice_in_place_single_core(
+                                        &mut row[t * dim..(t + 1) * dim],
+                                        chunk_factor,
+                                    );
+                                }
+                            });
+                    })
+                    .bit_reverse_rows()
+                    .to_row_major_matrix()
+                },
+                BatchSize::LargeInput,
+            );
+        });
+    }
+}
+
+fn bench_coset_lde_fused(c: &mut Criterion) {
+    // Mirror `fri/benches/commit_quotient.rs::PARAM_GRID` exactly so the
+    // LDE-only numbers line up with the full `commit_quotient` numbers.
+    let grid = &[
+        (16, 1, 2), // N=2^16, D=2, B=4
+        (16, 1, 3), // N=2^16, D=2, B=8
+        (18, 1, 2), // N=2^18, D=2, B=4
+        (18, 1, 3), // N=2^18, D=2, B=8
+    ];
+    // BabyBear quartic extension: DIM=4.
+    coset_lde_fused::<BabyBear, Radix2DitParallel<_>>(c, grid, 4);
+    // Goldilocks quadratic extension: DIM=2.
+    coset_lde_fused::<Goldilocks, Radix2DitParallel<_>>(c, grid, 2);
+}
+
+criterion_group!(
+    benches,
+    bench_fft,
+    bench_coset_lde_chunked,
+    bench_coset_lde_fused
+);
 criterion_main!(benches);
