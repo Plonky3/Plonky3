@@ -29,7 +29,11 @@ const WIDTH: usize = 2;
 /// Equal to `2^32 - 1 = 2^64 mod P`.
 const EPSILON: u64 = Goldilocks::ORDER_U64.wrapping_neg();
 
-/// Vectorized NEON implementation of `Goldilocks` arithmetic.
+/// Width-2 packed `Goldilocks` for aarch64.
+///
+/// `mul`, `square`, and the cubic-extension helpers use a dual-lane interleaved
+/// scalar ASM block (`mul_reduce_dual_asm`); `add`, `sub`, and `neg` operate on
+/// the underlying `[Goldilocks; 2]` storage directly in scalar `u64` space.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)]
 #[must_use]
