@@ -251,9 +251,9 @@ fn coset_lde_chunked<F, Dft>(
                     let mut chunks: Vec<Vec<F>> =
                         (0..d).map(|_| Vec::with_capacity(n * ncols)).collect();
                     for r in 0..n {
-                        for t in 0..d {
+                        for (t, chunk) in chunks.iter_mut().enumerate() {
                             let src = (r * d + t) * ncols;
-                            chunks[t].extend_from_slice(&tall_mat.values[src..src + ncols]);
+                            chunk.extend_from_slice(&tall_mat.values[src..src + ncols]);
                         }
                     }
 
@@ -286,12 +286,7 @@ fn bench_coset_lde_chunked(c: &mut Criterion) {
     ];
     coset_lde_chunked::<BabyBear, Radix2DitParallel<_>>(c, grid);
 
-    let grid_gl = &[
-        (16, 1, 2, 2),
-        (16, 1, 2, 3),
-        (18, 1, 2, 2),
-        (18, 1, 2, 3),
-    ];
+    let grid_gl = &[(16, 1, 2, 2), (16, 1, 2, 3), (18, 1, 2, 2), (18, 1, 2, 3)];
     coset_lde_chunked::<Goldilocks, Radix2DitParallel<_>>(c, grid_gl);
 }
 

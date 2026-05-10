@@ -99,6 +99,16 @@ where
         self.commit(evaluations)
     }
 
+    /// Number of MMCS matrices that [`Self::commit_quotient`] writes into its
+    /// prover data. Default: one MMCS matrix per quotient chunk (the
+    /// chunk-by-chunk LDE shape). A fused implementation that commits all
+    /// chunks as a single fat matrix of width `num_chunks · W` should override
+    /// this to return `1`. Callers ([`crate::Pcs::open`] / [`crate::Pcs::verify`])
+    /// use this to size per-matrix opening point lists.
+    fn quotient_commit_matrix_count(&self, num_chunks: usize) -> usize {
+        num_chunks
+    }
+
     /// Commit to the quotient polynomial. We first decompose the quotient polynomial into
     /// `num_chunks` many smaller polynomials each of degree `degree / num_chunks`.
     /// This can have minor performance benefits, but is not strictly necessary in the non `zk` case.

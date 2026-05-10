@@ -304,6 +304,9 @@ where
     let is_random = opt_r_data.is_some();
     let main_next = !air.main_next_row_columns().is_empty();
     let pre_next = !air.preprocessed_next_row_columns().is_empty();
+    // The PCS may commit the quotient as one MMCS matrix per chunk (default)
+    // or as a single fat matrix of width `num_quotient_chunks · DIM` (fused).
+    let num_quotient_matrices = pcs.quotient_commit_matrix_count(num_quotient_chunks);
     let (opened_values, opening_proof) = info_span!("open").in_scope(|| {
         let round0 = opt_r_data.as_ref().map(|r_data| (r_data, vec![vec![zeta]]));
         let round1_points = if main_next {
@@ -312,7 +315,7 @@ where
             vec![zeta]
         };
         let round1 = (&trace_data, vec![round1_points]);
-        let round2 = (&quotient_data, vec![vec![zeta]; num_quotient_chunks]); // open every chunk at zeta
+        let round2 = (&quotient_data, vec![vec![zeta]; num_quotient_matrices]);
         let round3 = preprocessed_data_ref.map(|data| {
             let pre_points = if pre_next {
                 vec![zeta, zeta_next]
@@ -338,10 +341,27 @@ where
     } else {
         None
     };
-    let quotient_chunks = opened_values[quotient_idx]
-        .iter()
-        .map(|v| v[0].clone())
-        .collect_vec();
+    // Reshape the quotient round openings into `num_quotient_chunks` groups of
+    // `Challenge::DIMENSION` values, regardless of how many MMCS matrices the
+    // PCS produced internally.
+    let quotient_chunks = if num_quotient_matrices == num_quotient_chunks {
+        // Default shape: one matrix per chunk, each opened at `zeta` with
+        // `DIMENSION` extension values.
+        opened_values[quotient_idx]
+            .iter()
+            .map(|v| v[0].clone())
+            .collect_vec()
+    } else {
+        // Fused shape (e.g. `TwoAdicFriPcs`): a single matrix of width
+        // `num_quotient_chunks · DIMENSION` opened at `zeta`; slice the row
+        // into per-chunk groups.
+        debug_assert_eq!(num_quotient_matrices, 1);
+        let dim = <SC::Challenge as p3_field::BasedVectorSpace<Val<SC>>>::DIMENSION;
+        opened_values[quotient_idx][0][0]
+            .chunks_exact(dim)
+            .map(<[SC::Challenge]>::to_vec)
+            .collect_vec()
+    };
     let random = if is_random {
         Some(opened_values[0][0][0].clone())
     } else {

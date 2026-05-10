@@ -50,7 +50,8 @@ type BbChallenge = BinomialExtensionField<BbVal, 4>;
 type BbPerm = Poseidon2BabyBear<16>;
 type BbHash = PaddingFreeSponge<BbPerm, 16, 8, 8>;
 type BbCompress = TruncatedPermutation<BbPerm, 2, 8, 16>;
-type BbValMmcs = MerkleTreeMmcs<<BbVal as Field>::Packing, <BbVal as Field>::Packing, BbHash, BbCompress, 2, 8>;
+type BbValMmcs =
+    MerkleTreeMmcs<<BbVal as Field>::Packing, <BbVal as Field>::Packing, BbHash, BbCompress, 2, 8>;
 type BbChallengeMmcs = ExtensionMmcs<BbVal, BbChallenge, BbValMmcs>;
 type BbDft = Radix2DitParallel<BbVal>;
 type BbPcs = TwoAdicFriPcs<BbVal, BbDft, BbValMmcs, BbChallengeMmcs>;
@@ -75,7 +76,8 @@ type GlChallenge = BinomialExtensionField<GlVal, 2>;
 type GlPerm = Poseidon2Goldilocks<8>;
 type GlHash = PaddingFreeSponge<GlPerm, 8, 4, 4>;
 type GlCompress = TruncatedPermutation<GlPerm, 2, 4, 8>;
-type GlValMmcs = MerkleTreeMmcs<<GlVal as Field>::Packing, <GlVal as Field>::Packing, GlHash, GlCompress, 2, 4>;
+type GlValMmcs =
+    MerkleTreeMmcs<<GlVal as Field>::Packing, <GlVal as Field>::Packing, GlHash, GlCompress, 2, 4>;
 type GlChallengeMmcs = ExtensionMmcs<GlVal, GlChallenge, GlValMmcs>;
 type GlDft = Radix2DitParallel<GlVal>;
 type GlPcs = TwoAdicFriPcs<GlVal, GlDft, GlValMmcs, GlChallengeMmcs>;
@@ -104,8 +106,7 @@ fn bench_commit_quotient_for<Val, Challenge, MyPcs, MyChallenger>(
     Challenge: p3_field::ExtensionField<Val>,
     MyPcs: Pcs<Challenge, MyChallenger>,
     StandardUniform: Distribution<Val>,
-    <MyPcs as Pcs<Challenge, MyChallenger>>::Domain:
-        PolynomialSpace<Val = Val>,
+    <MyPcs as Pcs<Challenge, MyChallenger>>::Domain: PolynomialSpace<Val = Val>,
 {
     let mut group = c.benchmark_group(format!("commit_quotient/{field_label}"));
     group.sample_size(10);
