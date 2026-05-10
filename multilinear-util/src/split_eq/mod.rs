@@ -152,17 +152,35 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
             return constant;
         }
 
+        self.eval_ext_slice(poly.as_slice())
+    }
+
+    /// Evaluates a borrowed extension-field evaluation table against the
+    /// factored eq table.
+    ///
+    /// This is the same computation as [`Self::eval_ext`], but it accepts a
+    /// slice instead of a [`Poly`]. Composed protocols can use it when the
+    /// evaluation table is already stored elsewhere and cloning it into a
+    /// temporary `Poly` would dominate verifier time.
+    pub fn eval_ext_slice(&self, evals: &[EF]) -> EF {
+        assert_eq!(evals.len(), 1 << self.num_variables());
+
+        // Short-circuit for constant polynomials.
+        if evals.len() == 1 {
+            return evals[0];
+        }
+
         let cs = self.eq1.scalar_chunk_size();
         if (1 << self.num_variables()) < PARALLEL_THRESHOLD {
             // Sequential outer loop: dot each chunk with eq1, weight by eq0.
-            poly.0
+            evals
                 .chunks(cs)
                 .zip_eq(self.eq0.iter())
                 .map(|(chunk, &w0)| self.eq1.dot_with_ext(chunk) * w0)
                 .sum::<EF>()
         } else {
             // Parallel path.
-            poly.0
+            evals
                 .par_chunks(cs)
                 .zip_eq(self.eq0.0.par_iter())
                 .map(|(chunk, &w0)| self.eq1.dot_with_ext(chunk) * w0)

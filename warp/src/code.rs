@@ -648,6 +648,45 @@ where
             .values
     }
 
+    /// Evaluate a systematic message on one codeword coset only.
+    ///
+    /// For systematic encoding, the length-`n` domain decomposes into
+    /// `n / k` cosets of the message subgroup:
+    ///
+    /// ```text
+    ///     H_n = ⋃_{r=0}^{n/k-1} ω_n^r H_k.
+    /// ```
+    ///
+    /// Full encoding computes every coset. Verifier reductions often need only
+    /// a few non-systematic codeword indices, so this helper reuses the same
+    /// Plonky3 coset-LDE primitive as the full encoder but returns only the
+    /// requested coset. Coset `0` is the systematic message itself.
+    ///
+    /// # Panics
+    ///
+    /// - This code must use [`ReedSolomonEncoding::Systematic`].
+    /// - `w.len() == msg_len()`.
+    /// - `coset_index < 2^log_inv_rate`.
+    pub fn encode_algebra_systematic_coset<EF>(&self, w: &[EF], coset_index: usize) -> Vec<EF>
+    where
+        EF: ExtensionField<F> + Send + Sync,
+    {
+        assert!(
+            self.is_systematic(),
+            "encode_algebra_systematic_coset requires systematic encoding"
+        );
+        assert_eq!(w.len(), self.msg_len(), "message length mismatch");
+        let stride = 1 << self.log_inv_rate();
+        assert!(coset_index < stride, "coset index out of range");
+
+        if coset_index == 0 {
+            return w.to_vec();
+        }
+
+        let shift = F::two_adic_generator(self.log_codeword_len()).exp_u64(coset_index as u64);
+        self.dft.coset_lde_algebra(w.to_vec(), 0, shift)
+    }
+
     /// Encode a batch of extension-field messages arranged as matrix columns.
     ///
     /// This is the extension-field analogue of [`Self::encode_batch_matrix`],
@@ -831,6 +870,28 @@ mod tests {
                 EF::from(expected),
                 "systematic Lagrange weights must reproduce codeword index {index}"
             );
+        }
+    }
+
+    #[test]
+    fn systematic_coset_encoding_matches_full_encoding() {
+        let code = systematic_rs::<5, 2>();
+        let w: Vec<EF> = (0..code.msg_len())
+            .map(|i| EF::from(F::from_u64(19 * i as u64 + 5)))
+            .collect();
+        let full = code.encode_algebra(&w);
+        let stride = 1 << code.log_inv_rate();
+
+        for residue in 0..stride {
+            let coset = code.encode_algebra_systematic_coset(&w, residue);
+            assert_eq!(coset.len(), code.msg_len());
+            for row in 0..code.msg_len() {
+                assert_eq!(
+                    coset[row],
+                    full[residue + row * stride],
+                    "coset {residue}, row {row}"
+                );
+            }
         }
     }
 

@@ -221,6 +221,103 @@ enum NativeWarpCompactRootQuery<EF> {
     Mle(Vec<EF>),
 }
 
+/// Lazy verifier cache for evaluating residual WARP weights at the final
+/// sumcheck point.
+///
+/// The verifier needs values of the form `a_q(r)`, where `a_q` is the
+/// message-domain linear functional obtained from a WARP codeword query `q`
+/// through the RS adjoint. By duality,
+///
+/// ```text
+///     a_q(r) = <C^T q, eq_r> = <q, C(eq_r)>.
+/// ```
+///
+/// Older code materialized the full encoded vector `C(eq_r)` as soon as any
+/// query left the systematic message subspace. This cache keeps that fallback
+/// for true codeword-MLE claims, but answers sparse index claims by evaluating
+/// only the required systematic RS cosets.
+struct EncodedMessageEqCache<'a, F, EF, Dft>
+where
+    F: TwoAdicField,
+    Dft: TwoAdicSubgroupDft<F>,
+{
+    code: &'a ReedSolomonCode<F, Dft>,
+    message_point: &'a [EF],
+    message_eq: Option<Vec<EF>>,
+    full_encoded: Option<Vec<EF>>,
+    systematic_cosets: Vec<Option<Vec<EF>>>,
+}
+
+impl<'a, F, EF, Dft> EncodedMessageEqCache<'a, F, EF, Dft>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + Send + Sync,
+    Dft: TwoAdicSubgroupDft<F>,
+{
+    fn new(code: &'a ReedSolomonCode<F, Dft>, message_point: &'a [EF]) -> Self {
+        let coset_count = if code.is_systematic() {
+            1 << code.log_inv_rate()
+        } else {
+            0
+        };
+        Self {
+            code,
+            message_point,
+            message_eq: None,
+            full_encoded: None,
+            systematic_cosets: (0..coset_count).map(|_| None).collect(),
+        }
+    }
+
+    fn message_eq(&mut self) -> &[EF] {
+        self.message_eq.get_or_insert_with(|| {
+            Poly::<EF>::new_from_point(self.message_point, EF::ONE).into_evals()
+        })
+    }
+
+    fn full_encoded(&mut self) -> &[EF] {
+        if self.full_encoded.is_none() {
+            let message_eq = self.message_eq().to_vec();
+            self.full_encoded = Some(self.code.encode_algebra(&message_eq));
+        }
+        self.full_encoded.as_ref().expect("encoded eq is set")
+    }
+
+    fn systematic_coset(&mut self, residue: usize) -> &[EF] {
+        debug_assert!(self.code.is_systematic());
+        if residue == 0 {
+            return self.message_eq();
+        }
+
+        if self.systematic_cosets[residue].is_none() {
+            let message_eq = self.message_eq().to_vec();
+            self.systematic_cosets[residue] = Some(
+                self.code
+                    .encode_algebra_systematic_coset(&message_eq, residue),
+            );
+        }
+        self.systematic_cosets[residue]
+            .as_ref()
+            .expect("systematic coset is set")
+    }
+
+    fn codeword_index_value(&mut self, index: usize) -> EF {
+        if self.code.is_systematic() {
+            let stride = 1 << self.code.log_inv_rate();
+            let residue = index & (stride - 1);
+            let row = index >> self.code.log_inv_rate();
+            self.systematic_coset(residue)[row]
+        } else {
+            self.full_encoded()[index]
+        }
+    }
+
+    fn codeword_mle_value(&mut self, point: &[EF]) -> EF {
+        let point = Point::new(point.to_vec());
+        Poly::<EF>::eval_ext_slice::<F>(self.full_encoded(), &point)
+    }
+}
+
 impl<EF> NativeWarpCompactRootStatement<EF>
 where
     EF: Field,
@@ -291,93 +388,60 @@ where
         target
     }
 
-    /// Evaluate the batched query weight at the final sumcheck point by using
-    /// an already-encoded equality vector.
+    /// Evaluate the batched query weight at the final sumcheck point.
     ///
-    /// If the query is over codeword coordinates, the linear functional is the
-    /// pullback of the codeword equality polynomial through the RS encoder:
+    /// Each constraint is handled independently:
     ///
-    /// ```text
-    ///     a_q = C^T eq_q,  so  <a_q, w> = <eq_q, C(w)>.
-    /// ```
-    ///
-    /// The caller supplies `encoded_message_eq = C(eq_r)`, where `r` is the
-    /// final message-domain sumcheck point. This lets the verifier compute the
-    /// coefficient for the final WHIR opening without reconstructing every
-    /// dense query weight independently.
-    fn batched_weight_eval_from_encoded_eq<F>(
-        &self,
-        encoded_message_eq: &[EF],
-        encoded_message_eq_poly: &Poly<EF>,
-        gamma: EF,
-    ) -> EF
-    where
-        F: Field,
-        EF: ExtensionField<F>,
-    {
-        let mut scale = EF::ONE;
-        let mut value = EF::ZERO;
-        for constraint in &self.constraints {
-            let local = match &constraint.query {
-                NativeWarpCompactRootQuery::Index(index) => encoded_message_eq[*index],
-                NativeWarpCompactRootQuery::Mle(point) => {
-                    encoded_message_eq_poly.eval_ext::<F>(&Point::new(point.clone()))
-                }
-            };
-            value += scale * local;
-            scale *= gamma;
-        }
-        value
-    }
-
-    /// Fast verifier path for systematic RS queries that land on the message
-    /// subspace.
-    ///
-    /// In systematic mode, a codeword index divisible by the blowup stride is
-    /// literally a message-coordinate query. For those WARP claims we avoid
-    /// encoding `eq_r` and use the multilinear equality value directly:
-    ///
-    /// ```text
-    ///     eq_r(b) = prod_i (r_i b_i + (1-r_i)(1-b_i)).
-    /// ```
-    fn batched_weight_eval_from_message_eq_point<F, Dft>(
+    /// - systematic message-subspace claims use the ordinary multilinear
+    ///   equality value `eq_r(b)`;
+    /// - sparse non-systematic index claims read only the needed systematic RS
+    ///   coset of `C(eq_r)`;
+    /// - full codeword-MLE claims fall back to the dense encoded equality
+    ///   vector, but evaluate it by borrowed slice instead of cloning it into
+    ///   a temporary polynomial.
+    fn batched_weight_eval_at_sumcheck_point<F, Dft>(
         &self,
         code: &ReedSolomonCode<F, Dft>,
         message_point: &[EF],
         gamma: EF,
-    ) -> Option<EF>
+        cache: &mut EncodedMessageEqCache<'_, F, EF, Dft>,
+    ) -> EF
     where
         F: TwoAdicField,
+        EF: ExtensionField<F> + Send + Sync,
         Dft: TwoAdicSubgroupDft<F>,
     {
-        if !code.is_systematic() {
-            return None;
-        }
         let stride = 1 << code.log_inv_rate();
         let mut scale = EF::ONE;
         let mut value = EF::ZERO;
         for constraint in &self.constraints {
             let local = match &constraint.query {
                 NativeWarpCompactRootQuery::Index(index) => {
-                    if !index.is_multiple_of(stride) {
-                        return None;
+                    if code.is_systematic() && index.is_multiple_of(stride) {
+                        eval_eq_at_hypercube_index(message_point, index / stride)
+                    } else {
+                        cache.codeword_index_value(*index)
                     }
-                    eval_eq_at_hypercube_index(message_point, index / stride)
                 }
                 NativeWarpCompactRootQuery::Mle(point) => {
-                    let (prefix, suffix) = point.split_at(code.log_msg_len());
-                    if point.len() != code.log_codeword_len()
-                        || suffix.iter().any(|&coord| coord != EF::ZERO)
-                    {
-                        return None;
+                    if code.is_systematic() && point.len() == code.log_codeword_len() {
+                        let (prefix, suffix) = point.split_at(code.log_msg_len());
+                        if suffix.iter().all(|&coord| coord == EF::ZERO) {
+                            eval_eq_point(message_point, prefix)
+                        } else {
+                            cache.codeword_mle_value(point)
+                        }
+                    } else if point.len() == code.log_msg_len() {
+                        eval_eq_point(message_point, point)
+                    } else {
+                        cache.codeword_mle_value(point)
                     }
-                    eval_eq_point(message_point, prefix)
                 }
             };
             value += scale * local;
             scale *= gamma;
         }
-        Some(value)
+        value
     }
 }
 
@@ -714,24 +778,18 @@ where
         return Err(LinearSigmaReductionError::FinalCheckFailed);
     }
 
-    let mut encoded_message_eq = None;
-    let mut encoded_message_eq_poly = None;
+    let mut eq_cache = EncodedMessageEqCache::new(code, point.as_slice());
     let coeffs = scales
         .iter()
         .zip(&gammas)
         .zip(statements)
         .map(|((&scale, &gamma), statement)| {
-            let local = statement
-                .batched_weight_eval_from_message_eq_point::<F, Dft>(code, point.as_slice(), gamma)
-                .unwrap_or_else(|| {
-                    let encoded = encoded_message_eq.get_or_insert_with(|| {
-                        let message_eq = Poly::<EF>::new_from_point(point.as_slice(), EF::ONE);
-                        code.encode_algebra(message_eq.as_slice())
-                    });
-                    let poly =
-                        encoded_message_eq_poly.get_or_insert_with(|| Poly::new(encoded.clone()));
-                    statement.batched_weight_eval_from_encoded_eq::<F>(encoded, poly, gamma)
-                });
+            let local = statement.batched_weight_eval_at_sumcheck_point::<F, Dft>(
+                code,
+                point.as_slice(),
+                gamma,
+                &mut eq_cache,
+            );
             scale * local
         })
         .collect::<Vec<_>>();
@@ -790,4 +848,65 @@ fn eval_eq_at_hypercube_index<EF: Field>(point: &[EF], index: usize) -> EF {
             }
         })
         .product()
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_baby_bear::BabyBear;
+    use p3_dft::Radix2DFTSmallBatch;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
+
+    use super::*;
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+    type Dft = Radix2DFTSmallBatch<F>;
+
+    #[test]
+    fn compact_root_verifier_weights_match_dense_rs_duality() {
+        let code = ReedSolomonCode::new_systematic(3, 2, Dft::default());
+        let mut statement = NativeWarpCompactRootStatement::initialize(code.log_msg_len());
+        statement.add_index(0, EF::from_u64(11));
+        statement.add_index(1, EF::from_u64(13));
+        statement.add_index(6, EF::from_u64(17));
+        let codeword_point = vec![
+            EF::from_u64(3),
+            EF::from_u64(5),
+            EF::from_u64(7),
+            EF::from_u64(11),
+            EF::from_u64(13),
+        ];
+        statement.add_mle(codeword_point.clone(), EF::from_u64(19));
+
+        let sumcheck_point = vec![EF::from_u64(23), EF::from_u64(29), EF::from_u64(31)];
+        let gamma = EF::from_u64(37);
+        let mut cache = EncodedMessageEqCache::new(&code, &sumcheck_point);
+        let actual = statement.batched_weight_eval_at_sumcheck_point::<F, Dft>(
+            &code,
+            &sumcheck_point,
+            gamma,
+            &mut cache,
+        );
+
+        let message_eq = Poly::<EF>::new_from_point(&sumcheck_point, EF::ONE);
+        let encoded_eq = code.encode_algebra(message_eq.as_slice());
+        let encoded_eq_poly = Poly::new(encoded_eq.clone());
+        let mut scale = EF::ONE;
+        let mut expected = EF::ZERO;
+        for constraint in &statement.constraints {
+            let local = match &constraint.query {
+                NativeWarpCompactRootQuery::Index(index) => encoded_eq[*index],
+                NativeWarpCompactRootQuery::Mle(point) => {
+                    encoded_eq_poly.eval_ext::<F>(&Point::new(point.clone()))
+                }
+            };
+            expected += scale * local;
+            scale *= gamma;
+        }
+
+        assert_eq!(actual, expected);
+    }
 }

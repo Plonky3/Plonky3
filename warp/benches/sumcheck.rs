@@ -90,7 +90,7 @@ type MyWarpWhirRootProof = WarpExternalRootProofBatched<
 >;
 const LOG_INV_RATE: usize = 1;
 const DEFAULT_WARP_FRESH_PER_STEP: usize = 4;
-const WHIR_FOLDING_FACTOR: usize = 4;
+const DEFAULT_WHIR_FOLDING_FACTOR: usize = 4;
 const WHIR_CONSTRAINTS: usize = 4;
 const WHIR_DIGEST_ELEMS: usize = 8;
 const DEFAULT_NUM_VARIABLES: &[usize] = &[14, 16, 18];
@@ -188,12 +188,37 @@ fn warp_fresh_per_step() -> usize {
     arity
 }
 
+fn whir_folding_factor() -> usize {
+    let factor = parse_usize_env("P3_WARP_WHIR_FOLDING_FACTOR", DEFAULT_WHIR_FOLDING_FACTOR);
+    assert!(factor > 0, "P3_WARP_WHIR_FOLDING_FACTOR must be non-zero");
+    factor
+}
+
+#[derive(Clone, Copy, Debug)]
+struct WhirRoundShape {
+    rounds: usize,
+    final_sumcheck_rounds: usize,
+    final_queries: usize,
+}
+
+fn whir_round_shape(mmcs: &MyMmcs, num_variables: usize) -> WhirRoundShape {
+    let config = WhirConfig::<EF, F, MyMmcs, MyChallenger>::new(
+        num_variables,
+        make_whir_protocol_params(mmcs),
+    );
+    WhirRoundShape {
+        rounds: config.n_rounds(),
+        final_sumcheck_rounds: config.final_sumcheck_rounds,
+        final_queries: config.final_queries,
+    }
+}
+
 fn make_whir_protocol_params(mmcs: &MyMmcs) -> ProtocolParameters<MyMmcs> {
     ProtocolParameters {
         security_level: 32,
         pow_bits: 0,
         rs_domain_initial_reduction_factor: 1,
-        folding_factor: FoldingFactor::Constant(WHIR_FOLDING_FACTOR),
+        folding_factor: FoldingFactor::Constant(whir_folding_factor()),
         mmcs: mmcs.clone(),
         soundness_type: SecurityAssumption::JohnsonBound,
         starting_log_inv_rate: LOG_INV_RATE,
@@ -237,7 +262,7 @@ fn make_whir_statements(
         .map(|i| {
             make_whir_statement(
                 num_variables,
-                WHIR_FOLDING_FACTOR,
+                whir_folding_factor(),
                 WHIR_CONSTRAINTS,
                 mode,
                 0x5750_0000 ^ ((num_variables as u64) << 16) ^ i as u64,
@@ -253,7 +278,7 @@ fn prove_n_whir_sumchecks(statements: &[InitialStatement<F, EF>]) {
         black_box(SingleSumcheck::new(
             &mut data,
             &mut challenger,
-            WHIR_FOLDING_FACTOR,
+            whir_folding_factor(),
             0,
             statement,
         ));
@@ -284,7 +309,7 @@ fn prove_n_whir_commit_sumchecks(
         black_box(SingleSumcheck::new(
             &mut data,
             &mut challenger,
-            WHIR_FOLDING_FACTOR,
+            whir_folding_factor(),
             0,
             &statement,
         ));
@@ -349,6 +374,12 @@ struct WhirFullBundle {
     commitments: Vec<MyCommitment>,
     claims: Vec<Vec<(Point<EF>, EF)>>,
     proofs: Vec<MyWhirProof>,
+}
+
+fn whir_full_bundle_bytes(bundle: &WhirFullBundle) -> usize {
+    postcard::to_stdvec(&(&bundle.commitments, &bundle.proofs))
+        .expect("serialize WHIR full bundle")
+        .len()
 }
 
 #[allow(dead_code)]
@@ -495,6 +526,12 @@ struct WarpWhirRootBundle {
     oracle_count: usize,
     claim_count: usize,
     whir_opening_count: usize,
+}
+
+fn warp_whir_root_bundle_bytes(bundle: &WarpWhirRootBundle) -> usize {
+    postcard::to_stdvec(&(&bundle.proof, &bundle.root_iop_proof))
+        .expect("serialize WARP root bundle")
+        .len()
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1571,6 +1608,7 @@ fn print_warp_whir_root_comparison(num_variable_cases: &[usize], n_values: &[usi
     let print_phases = env::var("P3_WARP_WHIR_ROOT_PHASES").as_deref() == Ok("1");
     let print_stats = iterations > 1 || env::var("P3_WARP_WHIR_ROOT_STATS").as_deref() == Ok("1");
     let arity = warp_fresh_per_step();
+    let folding_factor = whir_folding_factor();
     eprintln!();
     eprintln!("=== WHIR-backed WARP root vs N full WHIR PCS comparison ===");
     eprintln!("    WHIR lane: N full WhirPcs commit+open proofs and WhirPcs verifications.");
@@ -1581,6 +1619,7 @@ fn print_warp_whir_root_comparison(num_variable_cases: &[usize], n_values: &[usi
         "    WARP arity: {arity} fresh inputs in the first step, then {} per chained step.",
         arity - 1
     );
+    eprintln!("    WHIR folding factor: {folding_factor} variables per folding round.");
     eprintln!(
         "    Times are paired medians over {iterations} sample(s) after {warmup} warmup iteration(s)."
     );
@@ -1650,6 +1689,9 @@ fn print_warp_whir_root_comparison(num_variable_cases: &[usize], n_values: &[usi
             let whir_bundle = build_n_whir_full_pcs(&fixture, &warp_witnesses);
             let (bundle, warp_phases) =
                 build_warp_whir_root_bundle_with_phases(&fixture, &warp_witnesses);
+            let whir_shape = whir_round_shape(&fixture.mmcs, num_variables);
+            let whir_bytes = whir_full_bundle_bytes(&whir_bundle);
+            let warp_bytes = warp_whir_root_bundle_bytes(&bundle);
             let warp_verify_phases = if print_phases {
                 Some(verify_warp_whir_root_bundle_with_phases(&fixture, &bundle))
             } else {
@@ -1732,6 +1774,18 @@ fn print_warp_whir_root_comparison(num_variable_cases: &[usize], n_values: &[usi
                     verify_phases.claim_shape.mle,
                     verify_phases.claim_shape.message_subspace_mle,
                     verify_phases.claim_shape.codeword_mle,
+                );
+                eprintln!(
+                    "      WHIR shape: rounds={} final_sumcheck_rounds={} final_queries={}; payload bytes: WHIR={} WARP={} ({})",
+                    whir_shape.rounds,
+                    whir_shape.final_sumcheck_rounds,
+                    whir_shape.final_queries,
+                    whir_bytes,
+                    warp_bytes,
+                    format_warp_over_whir(
+                        Duration::from_nanos(warp_bytes as u64),
+                        Duration::from_nanos(whir_bytes as u64),
+                    ),
                 );
             }
         }

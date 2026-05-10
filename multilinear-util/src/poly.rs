@@ -76,6 +76,12 @@ impl<F> Poly<F> {
         Self(evals)
     }
 
+    /// Consumes the polynomial and returns its evaluation table.
+    #[inline]
+    pub fn into_evals(self) -> Vec<F> {
+        self.0
+    }
+
     /// Returns the total number of stored evaluations.
     #[must_use]
     #[inline]
@@ -328,6 +334,26 @@ impl<F: Field> Poly<F> {
             eval_multilinear_recursive(&self.0, point.as_slice())
         } else {
             SplitEq::new_packed(point, F::ONE).eval_ext(self)
+        }
+    }
+
+    /// Evaluate a borrowed multilinear evaluation table at `point`.
+    ///
+    /// This mirrors [`Self::eval_ext`] but avoids constructing a temporary
+    /// [`Poly`] when a composed verifier already owns the evaluations in a
+    /// different cache. The table length must be `2^point.len()`.
+    #[must_use]
+    #[inline]
+    pub fn eval_ext_slice<BaseField: Field>(evals: &[F], point: &Point<F>) -> F
+    where
+        F: ExtensionField<BaseField>,
+    {
+        assert!(evals.len().is_power_of_two());
+        assert_eq!(evals.len(), 1 << point.num_variables());
+        if point.num_variables() < MLE_RECURSION_THRESHOLD {
+            eval_multilinear_recursive(evals, point.as_slice())
+        } else {
+            SplitEq::new_packed(point, F::ONE).eval_ext_slice(evals)
         }
     }
 
@@ -1644,6 +1670,10 @@ pub(crate) mod test {
             assert_eq!(
                 eval_reference(poly.as_slice(), point.as_slice()),
                 poly.eval_ext::<F>(&point)
+            );
+            assert_eq!(
+                poly.eval_ext::<F>(&point),
+                Poly::<EF>::eval_ext_slice::<F>(poly.as_slice(), &point)
             );
 
             // base field eval should work
