@@ -1,0 +1,7745 @@
+WHIR: Reed–Solomon Proximity Testing
+with Super-Fast Verification
+Gal Arnon
+
+Alessandro Chiesa
+
+gal.arnon@weizmann.ac.il
+Weizmann Institute
+
+alessandro.chiesa@epfl.ch
+EPFL
+
+Giacomo Fenzi
+
+Eylon Yogev
+
+giacomo.fenzi@epfl.ch
+EPFL
+
+eylon.yogev@biu.ac.il
+Bar-Ilan University
+
+November 21, 2024
+
+Abstract
+We introduce WHIR, a new IOP of proximity that offers small query complexity and exceptionally fast verification time. The WHIR verifier typically runs in a few hundred microseconds,
+whereas other verifiers in the literature require several milli seconds (if not much more). This
+significantly improves the state of the art in verifier time for hash-based SNARGs (and beyond).
+Crucially, WHIR is an IOP of proximity for constrained Reed–Solomon codes, which can
+express a rich class of queries to multilinear polynomials and to univariate polynomials. In
+particular, WHIR serves as a direct replacement for protocols like FRI, STIR, BaseFold, and
+others. Leveraging the rich queries supported by WHIR and a new compiler for multilinear
+polynomial IOPs, we obtain a highly efficient SNARG for generalized R1CS.
+As a comparison point, our techniques also yield state-of-the-art constructions of hash-based
+(non-interactive) polynomial commitment schemes for both univariate and multivariate polynomials (since sumcheck queries naturally express polynomial evaluations). For example, if we
+use WHIR to construct a polynomial commitment scheme for degree 222 , with 100 bits of security, then the time to commit and open is 1.2 seconds, the sender communicates 63 KiB to the
+receiver, and the opening verification time is 360 microseconds.
+Keywords: interactive oracle proofs; Reed–Solomon proximity testing; multilinear sumcheck; polynomial commitment scheme
+
+1
+
+Contents
+1 Introduction
+1.1 Our contributions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+1.2 Mutual correlated agreement . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+4
+4
+8
+
+2 Technical overview
+2.1 WHIR protocol . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2.1.1 High-level overview of WHIR . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2.1.2 Folding Reed–Solomon codes and list preservation . . . . . . . . . . . . . . .
+2.1.3 WHIR protocol . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2.1.4 Verifier efficiency . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+2.2 Compiling Σ-IOPs into IOPs . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
+
+9
+9
+9
+10
+11
+15
+16
+
+3 Preliminaries
+18
+3.1 IOPs of proximity . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 18
+3.2 Error correcting codes . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 19
+3.3 Multilinear polynomials . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 20
+4 Tools for Reed–Solomon codes
+21
+4.1 Constrained Reed–Solomon codes . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 21
+4.2 Mutual correlated agreement for proximity generators . . . . . . . . . . . . . . . . . 22
+4.2.1 Mutual correlated agreement preserves list decoding . . . . . . . . . . . . . . 25
+4.3 Folding univariate functions . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 26
+4.3.1 Block relative distance . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 27
+4.3.2 Folding preserves list decoding . . . . . . . . . . . . . . . . . . . . . . . . . . 28
+4.4 Out of domain sampling . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 31
+5 WHIR
+32
+5.1 Round-by-round soundness . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 34
+5.2 Batching multiple constraints . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 40
+5.2.1 Round-by-round soundness . . . . . . . . . . . . . . . . . . . . . . . . . . . . 41
+6 Implementation and experiments
+43
+6.1 Implementation . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 43
+6.2 Parameter choices . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 43
+6.3 Benchmarks and Results . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 44
+6.3.1 Comparison with BaseFold . . . . . . . . . . . . . . . . . . . . . . . . . . . . 46
+6.3.2 Comparison with FRI and STIR . . . . . . . . . . . . . . . . . . . . . . . . . 49
+6.3.3 Comparison with polynomial commitment schemes . . . . . . . . . . . . . . . 52
+6.3.4 Comparison of UD, JB, CB . . . . . . . . . . . . . . . . . . . . . . . . . . . . 53
+7 Compiling Σ-IOP to IOPs
+56
+7.1 F-IOPs and Σ-IOPs . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 56
+7.2 Linear Σ-IOPs to IOPPs . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 57
+7.2.1 Round-by-round knowledge soundness . . . . . . . . . . . . . . . . . . . . . . 59
+7.3 d-Σ-IOPs to linear Σ-IOPs . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 65
+7.3.1 Round-by-round knowledge soundness . . . . . . . . . . . . . . . . . . . . . . 66
+2
+
+A Linear Σ-IOP for generalized R1CS
+70
+A.1 Round-by-round knowledge soundness . . . . . . . . . . . . . . . . . . . . . . . . . . 72
+B Additional experimental data
+
+74
+
+Acknowledgments
+
+80
+
+References
+
+80
+
+3
+
+1
+
+Introduction
+
+Succinct non-interactive arguments (SNARGs) are short cryptographic proofs that admit fast verification. SNARGs are widely deployed across different applications in blockchain technology, cloud
+computing, and decentralized systems. These applications demand highly efficient SNARGs, motivating the goal of reducing the computational costs of running a SNARG’s prover and verifier, as
+well as reducing the SNARG’s argument size.
+SNARGs from polynomial IOPs. A popular approach to constructing efficient SNARGs consists of two steps [CHMMVW20; BFS20]. First, design a poly-IOP (polynomial interactive oracle
+proof) for the desired computational statement; a poly-IOP is a specialized form of an interactive oracle proof (IOP) wherein the prover (honest or malicious) is restricted to sending messages
+that are evaluations of univariate or multivariate polynomials over a finite field F. Second, use a
+polynomial commitment scheme (PCS) [KZG10; PST13] to compile the poly-IOP into a SNARG
+(relying on a random oracle, non-falsifiable assumptions, or both). This approach has been widely
+adopted to construct efficient SNARGs [BCCGP16; AHIV17; WTSTW18; BBBPWM18; GWC19;
+MBKM19; CBBZ23; STW23].
+Another popular approach to construct efficient SNARGs also starts from a poly-IOP: many
+SNARGs are obtained via the BCS transformation [BCS16] starting from an IOP that is, in turn,
+obtained from an underlying poly-IOP. This alternate “compilation path” yields so-called hash-based
+SNARGs as it solely uses a random oracle and offers key advantages: a transparent setup (the choice
+of hash function to instantiate the random oracle), post-quantum security (in the quantum random
+oracle model), exceptionally fast SNARG provers (due to the use of small fields), and more.
+Improving the efficiency of hash-based SNARGs. Achieving highly efficient hash-based
+SNARGs from poly-IOPs demands highly efficient methods to “compile” the given poly-IOP into a
+corresponding IOP. Several works do this for univariate poly-IOPs by combining an IOP of proximity
+for the Reed–Solomon code (such as FRI [BBHR18] or STIR [ACFY24]) and a quotient enforcing
+technique [BBHR19]; this has led to state-of-the-art compilers for univariate poly-IOPs [ACY23;
+ACFY24]. Other works do this for multilinear poly-IOPs (e.g., [CBBZ23; STW23; GLSTW23;
+ZCF24]), which allows for particularly efficient prover algorithms thanks to the (highly-efficient)
+multilinear sumcheck protocol; in this setting, many compilation approaches are akin to constructing
+a multilinear PCS in the IOP model.
+The aforementioned constructions present trade-offs between prover efficiency, argument size,
+and verifier efficiency. Optimizing some of these often comes at the expense of the others. For
+instance, using a smaller rate for the underlying code can reduce argument size and verifier time
+but increases prover time. From a technical perspective, the main challenge in improving the
+efficiency of hash-based SNARGs typically lies in achieving compilers that improve one efficiency
+measure without compromising the others. In this paper, our focus is on reducing verifier time of
+hash-based SNARGs while maintaining state-of-the-art prover time and argument size.
+
+1.1
+
+Our contributions
+
+We introduce WHIR, a new IOP of proximity that offers small query complexity and exceptionally
+fast verification time; in particular, the WHIR verifier typically runs in a few hundred microseconds,
+whereas other verifiers in the literature require several milliseconds (if not much more). Crucially,
+WHIR is an IOP of proximity for constrained Reed–Solomon codes, which can express a rich
+class of queries to multilinear polynomials and to univariate polynomials. In particular, WHIR
+4
+
+serves as a direct replacement for protocols like FRI, STIR, BaseFold, and others. Leveraging the
+rich queries supported by WHIR, we obtain a highly efficient IOP for generalized R1CS (introduced
+in [DMS24]). We elaborate on these steps next.
+Constrained Reed–Solomon codes. The Reed–Solomon code with field F, evaluation domain
+L ⊆ F, and degree d ∈ N is the set of evaluations over L of univariate polynomials (over F) of degree
+(strictly) less than d. We restrict our attention to Reed–Solomon codes that are “smooth”: L is a
+multiplicative coset of F∗ whose order is a power of two and the degree bound d = 2m is also a
+power of two. Equivalently, such Reed–Solomon codes can be viewed as evaluations of multilinear
+polynomials in m variables [ZCF24]:
+
+m
+RS[F, L, m] := f : L → F : ∃ ĝ ∈ F<2 [X] s.t. ∀ x ∈ L , f (x) = ĝ(x)
+n
+o
+0
+1
+m−1
+= f : L → F : ∃ fˆ ∈ F<2 [X1 , . . . , Xm ] s.t. ∀ x ∈ L , f (x) = fˆ(x2 , x2 , . . . , x2
+) .
+We define a subcode that additionally considers a sumcheck-like constraint on the multilinear
+polynomial underlying the codeword.
+Definition 1. The constrained Reed–Solomon code with field F, smooth evaluation domain
+L ⊆ F, number of variables m ∈ N, weight polynomial ŵ ∈ F[Z, X1 , . . . , Xm ], and target σ ∈ F is
+
+
+
+
+X
+CRS[F, L, m, ŵ, σ] := f ∈ RS[F, L, m] :
+ŵ(fˆ(b), b) = σ .
+
+
+m
+b∈{0,1}
+
+These sumcheck-like constraints are highly versatile. For example, one can choose the weight
+polynomial ŵ in order to express an evaluation constraint of the
+form fˆ(z) = σ, for a given
+P
+ˆ
+evaluation point z ∈ Fm and target σ ∈ F. Indeed, fˆ(X) =
+b∈{0,1}m f (b) · eq(b, X) is the
+multilinear extension of f ∈ RS[F, L, m], where eq(Z, X) is the (unique) multilinear
+polynomial that
+P
+extends the equality function on the boolean hypercube.1 Hence, fˆ(z) = b∈{0,1}m fˆ(b) · eq(b, z) =
+P
+ˆ
+m ŵ(f (b), b), where the weight polynomial is ŵ(Z, X) = Z · eq(X, z).
+b∈{0,1}
+
+IOP of proximity for CRS codes. We construct WHIR, a concretely efficient IOP of proximity
+for constrained Reed–Solomon codes with small query complexity and a super fast verifier. The
+theorem below reports parameters of WHIR under a “list-decoding” conjecture on Reed–Solomon
+codes similar to those used in prior works (e.g., [BCIKS20; BGKS20; ACFY24]) that we discuss
+later in Section 1.2; less efficient parameters can be proved for WHIR without any conjectures.
+Theorem 1 (informal). Let C := CRS[F, L, m, ŵ, σ] be a constrained Reed–Solomon code with rate
+ρ := 2m /|L|, λ ∈ N be a security parameter, and k ∈ N be a folding parameter. Assuming Conjecture 1 and F is large enough, the code C has an IOPP with round-by-round soundness2 error 2−λ ,
+round complexity O(m/k), and the following properties.
+e
+• The prover sends O(|L|) field elements
+and makes
+field operations.
+
+ O(|L|) 
+
+k
+λ
+m
+λ
+• The verifier makes qWHIR := O log(1/ρ) + k · log k·log(1/ρ) + m
+queries over the alphabet F2 ,
+k
+
+and makes O qWHIR · (2k + m) field operations. (In fact, the verifier makes no divisions.)
+1
+2
+
+For every x, y ∈ {0, 1}m , eq(x, y) = 1 if x = y and eq(x, y) = 0 if x ̸= y.
+Round-by-round soundness is a strengthening of regular soundness that ensures Fiat–Shamir and BCS security.
+
+5
+
+The parameter k is a folding parameter that facilitates a tradeoff between the number of queries
+and the alphabet size. In a typical setting, where m ≤ λ and ρ = O(1), we set k ≈ log m. In
+this case, the WHIR verifier makes qWHIR = O(λ) queries, which is optimal.3 Moreover, the WHIR
+verifier makes O(λ · m) field operations, which is linear in the number of field elements it reads.
+We discuss the asymptotic efficiency of WHIR compared to relevant prior work; see Table 1.
+• BaseFold [ZCF24] is a polynomial commitment scheme for multilinear polynomials constructed
+from any foldable code. When applied to smooth Reed–Solomon codes, the core component of
+BaseFold can be viewed as an IOPP for a specific constrained Reed–Solomon code. In BaseFold,
+the verifier makes qBF := Oρ (λ · m) queries (over the alphabet F2 ), which is much larger than
+qWHIR . Notably, BaseFold is only proven sound for distances within the unique-decoding regime,
+meaning the number of queries per round approaches λ as ρ is set to a value close 0. In contrast,
+WHIR offers practical advantages by supporting distances beyond unique decoding, where the
+number of queries per round approaches 0 as ρ tends to 0. Additionally, WHIR has fewer rounds
+than BaseFold thanks to its use of a folding parameter k > 1.
+• FRI [BBHR18] is a low-degree test for Reed–Solomon codes. Since WHIR can be used as an
+IOPP for standard Reed–Solomon codes (univariate polynomials of degree < 2m ), the two can
+be compared. The FRI verifier for degree 2m makes qFRI := Oρ (λ + λ · m/k) queries over the
+
+k
+alphabet F2 and performs O qFRI · 2k field operations.
+• STIR [ACFY24] has
+ the same small
+query complexity as WHIR (qSTIR = qWHIR ) but the STIR
+λ2
+k
+k
+verifier performs O qSTIR · 2 + k · 2 field operations.
+
+Queries
+
+Verifier Time
+
+Alphabet
+
+qBF := O (λ · m)
+
+O(qBF )
+
+F2
+
+FRI
+
+
+qFRI := O λ + λk · m
+
+O qFRI · 2k
+
+STIR
+
+qSTIR := O λ + λk · log m
+k
+
+WHIR
+
+qWHIR := O λ + λk · log m
+k
+
+BaseFold
+
+
+
+
+
+2
+O qSTIR · 2k + λk · 2k
+
+O qWHIR · (2k + m)
+
+
+
+
+F2
+
+k
+
+F2
+
+k
+
+F2
+
+k
+
+Table 1: A comparison of WHIR with BaseFold, FRI, and STIR. Here, λ is the security parameter,
+k is the folding parameter, and m is the number of variables for the multilinear case or the logarithm
+of the degree for the univariate case. The dependence on the rate ρ is suppressed, and we assume that
+m ≤ λ.
+
+For each of the protocols above, the BCS transformation [BCS16] yields a non-interactive succinct argument. The argument verifier checks qX Merkle paths, where X ∈ {BF, FRI, STIR, WHIR},
+resulting in an additional O(qX · m) hash computations. Therefore, the WHIR verifier offers small
+hash complexity (due to its low query complexity) in addition to small arithmetic complexity.
+In many applications, a fast argument verifier is essential. We highlight two examples.
+3
+
+For a wide range of values of k, any IOPP must perform at least Ω(λ) queries. It is an open problem to design
+an IOPP with the efficiency of WHIR over an alphabet of size |F|O(1) .
+
+6
+
+• A verifier that is embedded in a blockchain smart contract such as Ethereum, where each operation
+performed by the verifier incurs gas fees, which directly affect the cost of executing the contract.
+• A recursive proof system, where the verified computation includes a proof verification. A fast
+verifier directly impacts the size and complexity of the verified computation, which leads to smaller
+argument size and prover time in each recursive step.
+IOPs (& SNARKs) from CRS codes. We introduce a powerful new variant of multilinear
+poly-IOPs, which we refer to as Σ-IOP. In this model, the verifier can make queries from a rich
+class of sumcheck-like queries: the verifier may select a weight polynomial ŵ ∈ F[Z, X1 , . . . , Xm ] to
+query a multilinear polynomial fˆ sent by the prover, and obtain as answer the sum
+X
+ŵ(fˆ(b), b) .
+b∈{0,1}m
+
+As previously noted, this query class includes, in particular, polynomial evaluation queries such as
+“evaluate fˆ at z ∈ Fm ”, by using the weight polynomial ŵ(Z, X) = Z · eq(X, z).
+We describe how to efficiently compile any Σ-IOP, using an IOPP for CRS codes (in particular, WHIR), into a standard IOP (see Section 7 for details). Moreover, we describe a Σ-IOP for
+generalized R1CS [DMS24] that achieves additional concrete efficiency by using sumcheck queries
+(see Appendix A). Via the BCS transformation [BCS16], we obtain a highly efficient SNARK for
+generalized R1CS.
+We believe that the sumcheck queries allowed in a Σ-IOP will enable others to design significantly
+more efficient IOPs for other languages (beyond generalized R1CS) by designing highly efficient
+Σ-IOPs for those languages and then applying our new compiler.
+Hash-based PCS from CRS codes. Polynomial commitment schemes (PCSs) [KZG10; PST13]
+are a cryptographic primitive that enables a sender to succinctly commit to a polynomial and then
+subsequently succinctly open desired evaluations of the committed polynomial. The aforementioned
+compiler can be adapted to directly yield (again via the BCS transformation) state-of-the-art hashbased PCS constructions for multilinear polynomials and for univariate polynomials. Indeed, the
+evaluation of a multilinear polynomial fˆ at z ∈ Fm corresponds to the sumcheck query with weight
+polynomial ŵ(Z, X) = Z · eq(X, z). Moreover, the evaluation of a univariate polynomial at z ∈ F
+0
+m−1
+can be reduced to the multilinear case by considering the evaluation point z = (z 2 , . . . , z 2
+) and
+0
+m−1
+using the weight polynomial ŵ(Z, X) = Z · eq(X, (z 2 , . . . , z 2
+)).
+Experimental results. We implement WHIR in Rust using the arkworks ecosystem [ark]. We
+compare WHIR with Basefold [ZCF24] as a proximity test for constrained Reed–Solomon codes,
+with FRI [BBHR19] and STIR [ACFY24] as a proximity test for (standard) Reed–Solomon codes.
+Also, WHIR yields a hash-based PCS, which we compare with other PCSs: Brakedown [GLSTW23],
+Ligero [AHIV17], Greyhound [NS24], Hyrax [WTSTW18], PST [PST13], and KZG [KZG10]. The
+details and results of our experiments are available in Section 6. We provide an open-source at
+github.com/WizardOfMenlo/whir, which we plan to upstream into arkworks.
+Our experiments show that WHIR achieves a significant improvement in verifier time. At the
+100-bit security level, WHIR verification with initial rate 1/2 takes between 400µs to 770µs for
+instances of size from 218 to 230 , and with rate 1/16 these times reduce to between 210µs to 360µs.
+At the 128-bit security level, for instances in the same range as above, with initial rate 1/2 the WHIR
+verifier runs in time between 0.9ms and 1.7ms, and with rate 1/16 these times reduce to between
+400µs and 800µs. Simultaneously, WHIR achieves state-of-the-art argument size and verifier hash
+7
+
+complexity for hash-based schemes, on par with STIR (and much better than FRI and BaseFold)
+while maintaining similar prover times. Fixing the initial rate to ρ = 1/2, at the 100-bit security
+level, WHIR arguments range from 76 KiB to 123 KiB, while at the 128-bit security level, they
+range from 120 KiB to 187 KiB. Decreasing the rate to ρ = 1/16, at the 100-bit security level, the
+argument size reduces to ranging from 36 KiB to 58 KiB, while at the 128-bit security level, the
+new range is from 56 KiB to 87 KiB.
+
+1.2
+
+Mutual correlated agreement
+
+The problem of testing the proximity of a batch of vectors f1 , . . . , fℓ to a linear code C arises in
+many settings, including probabilistic proofs and distributed storage systems, and is a fundamental
+problem in coding theory. This problem was first explored in [RVW13], where it was shown that the
+maximal distance of any of the vectors to C is related to the distance of a random line through the
+vectors. Subsequent works [AHIV17; BKS18] tightened this connection, culminating in [BCIKS20],
+which introduced the concept of correlated agreement for Reed–Solomon codes.
+Correlated agreement for Reed–Solomon codes is one of the main technical tools in the analysis
+of prior IOPPs such as FRI and STIR, and is also at the heart of the security proof of WHIR.
+Informally, it says that if a random curve that goes through functions f1 , . . . , fℓ is close to lowdegree with probability above a small error threshold, then f1 , . . . , fℓ share a subdomain where they
+all agree with the code C.
+In more detail, the code C := RS[F, L, m] has (δ, ε)-correlated agreement if for every f1 , . . . , fℓ ,
+with probability 1 − ε over a uniform P
+choice of α ← F the following holds: if there exists a set S ⊆ L
+∗
+with |S| ≥ (1−δ)·|L| on which fα := ℓi=1 αi−1 ·fi agrees with C,4 then there exists a set T ⊆ L with
+|T | ≥ (1 − δ) · |L| such that every fi agrees with C on T . [BCIKS20] show that Reed–Solomon codes
+m
+√
+with rate ρ have correlated agreement for δ ∈ (0, 1 − ρ) with error ε := poly(2|F| ,1/ρ) . In practice,
+when designing IOPPs for hash-based SNARKs, it is common to assume that Reed–Solomon codes
+have correlated agreement with small ε for δ ∈ (0, 1 − ρ) (see, e.g., [BGKS20; ACFY24]).
+In this work, we introduce a notion stronger than correlated agreement, which we call mutual
+correlated agreement. This notion equates the sets S and T , implying that f1 , . . . , fℓ agree with C
+on every set where fα∗ agrees with C. We apply this extended definition in the soundness analysis
+of WHIR and believe it has the potential to be useful for other protocols as well.
+Definition 2 (informal). C := RS[F, L, m] has (δ, ε)-mutual correlated agreement if for every
+f1 , . . . , fℓ : L → F, with probabilityP
+1 − ε over a uniform choice of α ← F: for every set S ⊆ L with
+|S| ≥ (1 − δ) · |L| on which fα∗ := ℓi=1 αi−1 · fi agrees with C, every fi agrees with C on S.
+See Definition 4.9 for a formal definition. We conjecture that mutual correlated agreement and
+(standard) correlated agreement hold for essentially the same parameters.
+Conjecture 1 (informal). Every Reed–Solomon code C := RS[F, L, m] that has (δ, ε)-correlated
+m
+m
+agreement for ε := poly(2|F| ,1/ρ) has (δ, ε′ )-mutual correlated agreement for ε′ := poly(2|F| ,1/ρ) .
+′
+In Section
+4.2
+
+ we show that Conjecture 1 holds with ε = ε for the unique decoding regime,
+1−ρ
+i.e., δ ∈ 0, 2 . We believe that the techniques of [BCIKS20] can be adapted to prove mutual
+correlated agreement beyond the unique decoding regime; however, as their proof is highly technical,
+we leave this for future work.
+4
+
+We say that a function f agrees with C on S if there exists a codeword u ∈ C with f (x) = u(x) for every x ∈ S.
+
+8
+
+2
+
+Technical overview
+
+We discuss the main ideas behind our results. In Section 2.1, we present the WHIR protocol, an
+IOPP for constrained Reed–Solomon codes. This includes an overview of the protocol and a sketch
+of its soundness. The analysis relies on a strengthening of the properties of folding for Reed–Solomon
+codes which we prove using mutual correlated agreement. In Section 2.2, we outline how to compile
+Σ-IOPs into IOPs by using such an IOPP for constrained Reed–Solomon codes.
+
+2.1
+
+WHIR protocol
+
+We present WHIR, an IOPP for constrained Reed–Solomon codes. WHIR takes inspiration from
+the use of sumcheck in Basefold [ZCF24] and the rate-improving ideas in STIR [ACFY24].
+WHIR is an IOPP for CRS[F, L, m, ŵ, σ], where F is a finite field,5 L is a “smooth” subset of L
+of size n (L ⊆ F∗ and n is a power of two), m specifies the number of variables, ŵ is a polynomial
+constraint (a polynomial in m+1 variables that, for simplicity in this section, we restrict to individual
+degree at most 1 in each variable), and σ ∈ F specifies the target value for the constraint. The
+rate of the code is ρ := 2m/n. For i ∈ N, we let L(i) := {xi | x ∈ L}. Since L is smooth, if i is a
+power of two then |L(i) | = |L|/i. For a codeword u ∈ CRS[F, L, m, ŵ, σ], we let û be the multilinear
+polynomial whose evaluation on L is equal to u (we use this also for standard Reed–Solomon codes).
+2.1.1
+
+High-level overview of WHIR
+
+A WHIR iteration is parameterized by a folding parameter k ≥ 1, and reduces the task of testing
+f ∈ C := CRS[F, L, m, ŵ, σ]
+to the task of testing that
+f ′ ∈ C ′ := CRS[F, L(2) , m − k, ŵ′ , σ ′ ]
+for a new function f ′ , related constraint polynomial ŵ′ , and target value σ ′ (where now ŵ′ has
+m − k + 1 variables, and is roughly as expensive to evaluate as ŵ). Inspired from STIR [ACFY24],
+the rate of the code decreases from ρ to ρ′ := 21−k · ρ: the size of the domain decreases from n to
+n/2, while the number of variables decreases by k. This makes C ′ easier to test and reduces the
+query complexity of the overall protocol. A WHIR iteration consists of k +2 rounds, where the proof
+length consists of roughly n/2 field elements, and the verifier performs t queries over the alphabet
+√
+√
+k
+F2 . For soundness, WHIR has the following property: letting δ ∈ (0, 1 − ρ) and δ ′ ∈ (0, 1 − ρ′ ),
+if the original function f is δ-far from C then, except with probability roughly (1 − δ)t , the new
+function f ′ is δ ′ -far from C ′ .
+The WHIR protocol has M := m/k such iterations, reducing testing proximity to C (0) := C
+M
+to testing proximity to C (M ) := CRS[F, L(2 ) , O(1), ŵ(M ) , σ (M ) ]. In iteration i ∈ {0, . . . , M − 1},
+i
+the protocol reduces testing proximity from C (i) := CRS[F, L(2 ) , m − i · k, ŵ(i) , σ (i) ] to C (i+1) via ti
+queries and by sending an oracle of size n/2i+1 . Finally, f (M ) is verified to be a constant degree
+constrained Reed–Solomon codeword as follows: the prover sends the coefficients of f (M ) as a
+message (of constant size), and the verifier checks that the constraint holds, either by directly
+5
+
+Throughout this paper we assume that char(F) ̸= 2. This in particular is required for the field to have a large
+2-smooth multiplicative subgroup and to define the folding operation that we use.
+
+9
+
+performing a constant number of evaluations of ŵ(M ) or by performing an additional sumcheck
+protocol to reduce this constraint checking to a single evaluation (which
+the option we chose in
+Pis −1
+our protocol). In total, WHIR has O(m/k) rounds, query complexity M
+i=0 ti , and proof length
+PM −1 (2i )
+√
+|/2 = O(n). If the initial function has distance δ ∈ (0, 1 − ρ) from C (0) , and we
+i=0 |L
+√
+set δi := 1 − ρi − ηi (for a small constant ηi that we ignore in this preliminary section) the
+round-by-round errors of each round are (roughly)
+t /2
+
+t
+
+−1
+(1 − δ)t0 , ρ11 , . . . , ρMM−1
+
+/2
+
+.
+
+(Above, for simplicity, we assume F to be large enough and omit errors that depend on 1/|F|.)
+The decrease in rate leads to small query complexity to achieve round-by-round soundness errors
+2−λ . Overall, the query complexity (input queries and proof queries combined) is the same as in
+STIR, namely (omitting factors that do not depend on λ):
+
+
+λ
+m
+qWHIR := O λ + · log
+.
+k
+k
+Compared to STIR, each verifier query demands less verifier time, leading to an overall verifier time
+(in field operations) of
+
+
+
+O qWHIR · 2k + m
+.
+Having concluded this high-level overview, we discuss certain properties of the folding operation for
+Reed–Solomon codes and then describe a WHIR iteration in more detail.
+2.1.2
+
+Folding Reed–Solomon codes and list preservation
+
+Folding of Reed–Solomon codes is a method for lowering the complexity of a code at a relatively
+small cost and lies at the core of IOPPs for Reed–Solomon codes, including WHIR. We review the
+folding of a Reed–Solomon code, discuss why folding preserves distance with high probability, and
+then describe a strengthening of the distance-preserving property via mutual correlated agreement.
+For α ∈ F we define Fold(f, α) : L(2) → F as follows. For y ∈ L(2) , letting x, −x ∈ L be the roots
+of y (i.e., x2 = (−x)2 = y):6
+Fold(f, α)(y) :=
+
+f (x) + f (−x)
+f (x) − f (−x)
++α·
+.
+2
+2·x
+k
+
+For a vector α = (α1 , . . . , αk ) ∈ Fk we denote Fold(f, α) : L(2 ) → F to be the function output
+by folding iteratively on each of the entries in α: let Fold(f, α) := fk where we recursively define
+fi := Fold(fi−1 , (αi , . . . , αk )) and f0 := f . Given the evaluation of f on the k-th roots of y (of which
+there are 2k since L is a multiplicative subgroup whose order is greater than 2k and is a power of
+two), the point Fold(f, α)(y) can be computed in time O(k · 2k ) by following the recursion.
+Distance preservation under folding. Folding preserves distance of functions to Reed–Solomon
+codes in the following sense: if f is δ-far from RS[F, L, m] then, with high probability over a uniformly
+random choice of α, Fold(f, α) is δ-far from RS[F, L(2) , m − 1]. This is a consequence of correlated
+agreement and a motivation for the main theorem in [BCIKS20], which shows that Reed–Solomon
+codes have correlated agreement with small error (see Section 1.2 for more on correlated agreement.)
+6
+
+Recall that L is a multiplicative subgroup of F whose order is a power of two, so x and −x both belong to L.
+
+10
+
+We sketch a proof of distance preservation assuming correlated agreement. Suppose that C ′ :=
+(−x)
+RS[F, L(2) , m − 1] has (δ, ε)-correlated agreement and consider the functions f0 (x2 ) := f (x)+f
+2
+(−x)
+and f1 (x2 ) := f (x)−f
+. Then, it holds that Fold(f, α)(x2 ) = f0 (x2 ) + α · f1 (x2 ). By correlated
+2·x
+agreement, except with probability 1 − ε if there is a set S with |S| ≥ (1 − δ) · |L(2) | such that
+Fold(f, α) is δ-close to C ′ then there is a set T with |T | ≥ (1 − δ) · |L(2) | such that f0 and f1 are both
+0
+m−2
+close to C ′ on T . Let û0 and û1 be the m − 1 variate polynomials where ûi (z 2 , . . . , z 2
+) = fi (z)
+for z ∈ T . Then the polynomial,
+w(X1 , . . . , Xm ) := u0 (X2 , . . . , Xm ) + X1 · u1 (X2 , . . . , Xm ) ,
+agrees with f on every x with x2 ∈ T as follows:
+0
+
+m−1
+
+w(x2 , . . . , x2
+
+1
+
+m−1
+
+1
+
+m−1
+
+) = û0 (x2 , . . . , x2
+) + x · û1 (x2 , . . . , x2
+)
+
+
+
+
+0
+m−2
+0
+m−2
+= û0 (x2 )2 , . . . , (x2 )2
++ x · û1 (x2 )2 , . . . , (x2 )2
+f (x) − f (−x)
+f (x) + f (−x)
++x·
+2
+2·x
+= f (x) .
+=
+
+Observe that T covers a 1 − δ fraction of the domain L(2) := {x2 | x ∈ L} and this agreement
+holds for every x with x2 ∈ T , so w agrees with f on a 1 − δ fraction of L. Since w is a m-variate
+multilinear polynomial, we conclude that f is δ-close to RS[F, L, m].
+Mutual correlated agreement and list preservation. We strengthen the distance preservation
+property of folding using mutual correlated agreement: we show that with high probability over α,
+every codeword close to Fold(f, α) is the result of folding a codeword close to f .
+Lemma 1 (informal). Suppose that RS[F, L(2) , m − 1] has (δ, ε)-mutual correlated agreement. For
+every f : L → F the following holds with probability 1 − ε over the choice of α ← F: for every
+u ∈ RS[F, L(2) , m − 1] with ∆(Fold(f, α), u) ≤ δ, there is w ∈ RS[F, L, m] with ∆(f, w) ≤ δ such
+that u = Fold(w, α).
+The proof of Lemma 1 closely follows the proof described above of the distance preservation
+lemma. The main difference is that, by mutual correlated agreement, for every set S on which
+Fold(f, α) is δ-close to C ′ , the functions f0 and f1 are also close to C ′ on S (rather than on some set
+T that is possibly unrelated to S). Thus we are able to conclude that w agrees with f on all of the
+roots of points in S. Moreover, notice that the folding of w agrees with Fold(f, α) on S. Thus, every
+set S on which Fold(f, α)(x2 ) is close to a polynomial can be explained by taking a polynomial w
+that is close to f and folding it, proving the lemma.
+Looking ahead, Lemma 1 will allow us to argue that if all of the codewords that are close to a
+function f do not satisfy a constraint, then with high probability all of the codewords that are close
+to the folding of f will not satisfy a “folding of the constraint”.
+2.1.3
+
+WHIR protocol
+
+We give a recursive description of the WHIR protocol, in which each step reduces testing proximity
+of f ∈ C := CRS[F, L, m, ŵ, σ] to testing that f ′ ∈ C ′ := CRS[F, L(2) , m − k, ŵ′ , σ ′ ]. In this overview,
+we assume that ŵ is multilinear. The full version of the protocol allows for a more general setting
+of evaluation domains, folding parameters, and constraint polynomial degrees.
+11
+
+1. Sumcheck rounds. The prover and the verifier engage in k rounds of the sumcheck protocol for
+the claim
+X
+ŵ(fˆ(b), b) = σ ,
+b∈{0,1}m
+
+where fˆ is the multilinear polynomial associated with f . At the end of the interaction, the
+prover will have sent polynomials (ĥ1 , . . . , ĥk ) while the verifier will have sampled randomness
+α = (α1 , . . . , αk ) ∈ Fk . This reduces the initial claim to the simpler claim
+X
+ŵ(fˆ(α, b), α, b) = ĥk (αk ) .
+b∈{0,1}m−k
+
+2. Send folded function. The prover sends a function g : L(2) → F. In the honest case, the prover
+defines the polynomial ĝ ≡ fˆ(α, ·), and g is defined as the evaluation of ĝ over the domain L(2) .
+0
+m−k−1
+3. Out-of-domain sample. The verifier samples and sends z0 ← F. We set z0 := (z02 , . . . , z02
+).
+4. Out-of-domain answers. The prover sends y ∈ F. In the honest case, y0 := ĝ(z0 ).
+5. Shift queries and combination randomness The verifier, for every i ∈ [t], samples and sends
+k
+0
+m−k−1
+zi ← L(2 ) , obtains yi := Fold(f, α)(zi ) by querying f , and sets zi := (zi2 , . . . , zi2
+). The
+verifier further samples and sends γ ← F.
+6. Recursive claim. The prover and verifier define the new weight polynomials and target
+ŵ′ (Z, X) := ŵ(Z, α, X) + Z ·
+
+t
+X
+
+γ i+1 · eq(zi , X) ,
+
+i=0
+
+σ ′ := ĥk (αk ) +
+
+t
+X
+
+γ i+1 · yi ,
+
+i=0
+
+Q
+and recurse on the claim that g ∈ CRS[F, L(2) , m − k, ŵ′ , σ ′ ]. Above, eq(b, z) := m
+i=1 bi · zi +
+m
+(1 − bi ) · (1 − zi ) is such that, for b, z ∈ {0, 1} , eq(b, z) = 1 if b = z and eq(b, z) = 0 if b ̸= z.
+We analyze the soundness of an iteration of WHIR. In the full proof in Section 5.1 we extend this
+analysis to showing round-by-round soundness.
+√
+Theorem 2 (informal). If f is δ-far from CRS[F, L, m, ŵ, σ], then g is (1− ρ′ )-far from CRS[F, L(2) , m−
+k, ŵ′ , σ ′ ], except with probability at most (1 − δ)t + poly(2m , 1/ρ)/|F|.
+Proof sketch. Throughout this proof we assume that the prover only sends sumcheck polynomials
+ĥ1 , . .P
+. , ĥk that satisfy verification of the
+Pintermediate rounds of the sumcheck protocol, i.e., such
+that b∈{0,1} ĥ1 (b) = σ and for i > 1, b∈{0,1} ĥi (b) = ĥi−1 (αi−1 ). Otherwise, the verifier rejects
+regardless of any other prover message. We rely on the following lemma.
+Lemma
+2 (informal). Let C := CRS[F, L, m, ŵ, σ] be a constrained Reed–Solomon code with σ :=
+P
+ĥ(b)
+for ĥ ∈ F<3 [X] with rate ρ := 2m /|L|. Assume Conjecture 1, and fix any proximity
+b∈{0,1}
+√
+parameter δ ∈ (0, 1 − ρ) and function f : L → F with ∆(f, C) > δ. Then
+Pr [∆(Fold(f, α), Cα ) ≤ δ] ≤
+
+α←F
+
+poly(2m , 1/ρ)
+,
+|F|
+
+where Cα := CRS[F, L(2) , m − 1, ŵα , σα ] for ŵα (Z, X) := ŵ(Z, α, X) and σα := ĥ(α).
+12
+
+Proof of lemma. We consider and bound two bad events (over the choice of α): (i) the event that an
+invalid constraint turns into a valid one; and (ii) the event that folding introduces new codewords
+that cannot be “explained” as foldings of codewords in the original code.
+• E1 is the event that there exists some codeword z ∈ RS[F, L, m] with ∆(f, z) ≤ δ such that
+X
+ŵα (ẑ(α, b), b) = σα .
+b∈{0,1}m−1
+
+Consider what it means for such a codeword z to exist. Since ∆(f, C) > δ, z being close
+to f asP
+a Reed–Solomon codeword means that z does not satisfy the
+P constraint laid out in
+C, i.e.,
+m ŵ(ẑ(b), b) ̸= σ. Then, since (by assumption) σ =
+b∈{0,1} ĥ(b) it must be
+P b∈{0,1}
+that {0,1}m−1 ŵ(ẑ(X, b), X, b) ̸≡ ĥ(X), and thus, by the polynomial identity lemma and since
+deg ŵ = 1, the probability that
+X
+X
+ŵα (ẑ(α, b), b) =
+ŵ(ẑ(α, b), α, b) = ĥ(α) = σα ,
+b∈{0,1}m−1
+
+b∈{0,1}m−1
+
+is at most 2/|F|.
+By the Johnson bound, the number of codewords of RS[F, L, m] that are δ-close to f is poly(2m , 1/ρ).
+By taking the union bound over all of these codewords, we conclude that E1 occurs with probability at most poly(2m , 1/ρ)/|F|.
+• E2 is the event that for some codeword u ∈ RS[F, L(2) , m − 1] with ∆(Fold(f, α), u) ≤ δ there
+exists no z ∈ RS[F, L, m] such that ∆(f, w) ≤ δ and u = Fold(z, α). Under Conjecture 1,
+RS[F, L(2) , m − 1] has (δ, ε)-mutual correlated agreement with ε := poly(2m , 1/ρ)/|F|. Thus, by
+Lemma 1, E2 occurs with probability at most ε.
+Fix any α for which E1 and E2 both do not hold. Suppose that ∆(Fold(f, α), Cα ) ≤ δ, implying
+that there exists some codeword u ∈ RS[F, L(2) , m − 1] with ∆(Fold(f, α), u) ≤ δ. Then, since
+¬E2 holds, there must exist z ∈ RS[F, L, m] with ∆(f, z) ≤ δ such that u = Fold(z, α). Since
+z ∈ RS[F, L, m] and ∆(f, z) ≤ δ, by ¬E1 it must be that the constraint on z is not satisfied, and as
+such:
+X
+X
+σα ̸=
+ŵα (ẑ(α, b), b) =
+ŵα (û(b), b) ,
+{0,1}m−1
+
+{0,1}m−1
+
+where the last equality follows since if u = Fold(z, α) then û(·) = ẑ(α, ·). A union bound over the
+probability of either E1 or E2 happening concludes the proof.
+With the above in place, we proceed with the analysis of the protocol. Denote f0 := f , ŵ0 := ŵ,
+σ0 := σ, for i ≥ 1 let fi := Fold(fi−1 , αi ), ŵi (Z, X) := ŵ(Z, (α1 , . . . , αi ), X), and σi := ĥi (αi ).
+1. Observe that ∆ (f0 , CRS[F, L, m, ŵ0 , σ0 ]) > δ. Supposing that
+
+
+i−1
+∆ fi−1 , CRS[F, L(2 ) , m − i + 1, ŵi−1 , σi−1 ] > δ ,
+and applying Lemma 2, we have that
+
+
+i
+∆ Fold(fi , CRS[F, L(2 ) , m − i, ŵi , σi ] ≤ δ ,
+13
+
+with probability at most poly(2m , 1/ρ)/|F|.
+Thus, by iteratively applying the above argument k times (and noting that fk = Fold(f, α)), we
+conclude that with probability at least 1 − k · poly(2m , 1/ρ)/|F| = 1 − poly(2m , 1/ρ)/|F| it holds
+that
+
+
+k
+∆ Fold(f, α), CRS[F, L(2 ) , m − k, ŵk , σk ] > δ .
+(1)
+2. The protocol continues with the prover sending an oracle g : L(2) → F, and the verifier then
+samples an out-of-domain sample z0 ← Fm−k , to which the prover replies with an out-of-domain
+m 1
+answer y0 ∈ F. As shown in [ACFY24, Lemma 4.5], with probability at least
+√ ′ 1−poly(2 , /ρ)/|F|,
+(2)
+there is at most one codeword u ∈ RS[F, L , m−k] with ∆(g, u) ≤ 1− ρ such that û(z0 ) = y0 .
+0
+
+k
+
+m−k−1
+
+3. The verifier proceeds by sampling z1 , . . . , zt ← L(2 ) , and sets zi := (zi2 , . . . , zi2
+). We
+t , for every u ∈ RS[F, L(2) , m − k] with
+show that, except
+with
+probability
+at
+most
+(1
+−
+δ)
+√
+∆(g, u) ≤ 1 − ρ′ at least one of the following does not hold.
+(a) Agreement with the out-of-domainPsample: û(z0 ) = y0 .
+(b) Agreement with sumcheck claim:
+b∈{0,1}m−k ŵk (û(b), b) = σk .
+(c) Agreement with the folded function: for every i ∈ [t], û(zi ) = yi .
+As previously argued, Item 3a holds for at most one codeword u. If all codewords do not satisfy
+Item 3a, we are done. Assuming this is not the case, let u be the unique
+P codeword satisfying the
+Item 3a out-of-domain sample. By Equation 1 it must be that either b∈{0,1}m−k ŵk (û(b), b) ̸=
+σk or ∆(Fold(f, α), u) > δ. In the first case, Item 3b does not hold for u, and we are done.
+Otherwise, except with probability at most (1 − δ)t , there is a sample zi that lands on a location
+where u and the folding of f disagree. In this case, Item 3c does not hold for u.
+4. Finally, the verifier selects randomness γ ← F, and combines the t + 2 constraints defined in
+Items 3a to 3c into a single one by taking a random linear combination
+of their respective
+√
+“weight polynomials”. Fix u ∈ RS[F, L(2) , m − k] with ∆(g, u) ≤ 1 − ρ′ . Following the previous
+paragraph, one of Items 3a to 3c does not hold for u. Then, the following polynomials in formal
+variable R must not be identical:
+X
+
+ŵk (û(b), b) +
+
+t
+X
+
+R
+
+i+1
+
+· û(zi ) ̸≡ σk +
+
+i=0
+
+b∈{0,1}m−k
+
+t
+X
+
+Ri+1 · yi .
+
+i=0
+
+By the polynomial identity lemma and expanding the definition of ŵ′ then, unless with probability
+at most (t + 2)/|F| = poly(2m , 1/ρ)/|F|, it must be that
+X
+b∈{0,1}m−k
+
+ŵ′ (û(b), b) =
+
+X
+
+ŵk (û(b), b) +
+
+b∈{0,1}m−k
+
+̸= σk +
+
+t
+X
+
+t
+X
+
+γ i+1 · û(b) · eq(b, zi )
+
+i=0
+
+γ i+1 · yi = σ ′ .
+
+i=0
+
+Taking a union bound over codewords in the list (which, according to the Johnson bound, is
+small) concludes the proof.
+
+14
+
+2.1.4
+
+Verifier efficiency
+
+We analyze the query complexity and running time of the verifier. Recall that the protocol is run
+over m/k iterations of the form described in the previous section, where in iteration i a function fi
+is being tested and the code being checked has mi := m − i · k variables and rate ρi := (2/k)i · ρ.
+i
+
+Proof length. For iteration i, the prover sends a single oracle message of length |L(2 ) |, and k + 1
+non oracle messages, which in total consist of 3 · k + 1 field elements. Overall, the total proof length
+(in field elements) is
+
+
+m/k
+X
+i
+O
+|L(2 ) | + 3 · k + 1 = O (|L| + m) .
+i=1
+
+Query complexity. For iteration
+i, the verifier tests proximity to fi and needs to evaluate
+
+λ
+Fold(fi , α) at ti := O log(1/ρi ) points. This requires making ti queries to fi over alphabet 2k . The
+
+
+
+
+P
+λ
+λ
+m
+m
+total query complexity of the protocol is qWHIR :=
+t
+=
+O
++
+·
+log
++
+i i
+k
+k .
+log(1/ρ)
+k·log(1/ρ)
+We remark that this is identical to the query complexity of STIR [ACFY24], but we make the
+dependency on k explicit, whereas k in [ACFY24] was regarded as constant in the big-O notation.
+Separetly, the verifier reads in full the non-oracle messages sent, which we do not count as part of
+the query complexity.
+Field operations. For iteration i, the verifier runs the sumcheck verification algorithm for eliminating k variables, making O(k) field operations. It then evaluates Fold(fi , α) at ti points. As
+explained in Section 2.1.2
+evaluating Fold(fi , α) on a single point means reading 2k evaluations
+
+of fi and doing O k · 2k field operations. Finally, the verifier must evaluate ŵ′ , which requires
+evaluating eq on ti different points, which can be done using O(mi ) field operations. Overall, the
+running time is
+
+
+m/k 
+
+
+
+
+X
+O
+k + ti · k · 2k + ti · mi  = O qWHIR · k · 2k + m
+.
+i=1
+
+Improving running time via alternate domain evaluation. Looking back to the descripk
+tion of a WHIR iteration, we observe that for every y ∈ L(2 ) , the function py (X1 , . . . , Xk ) :=
+Fold(f, X1 , . . . , Xk )(y) is a multilinear polynomial with 2k coefficients that depend only on y, and
+the evaluation of f on the k-th roots of y.
+In light of this view, we optimize the verifier in the following way. The prover sends f over
+k
+L encoded as follows; for each y ∈ L2 , the prover writes down the coefficients of the multilinear
+polynomial py . The verifier, upon choosing α and y, queries (the coefficients of) py and evaluates
+it on the point α.
+Observe that the size of the message sent by the prover and the alphabet size are identical
+to the standard evaluation-based encoding of f on L. Moreover, completeness and soundness are
+unaffected since the verifier’s checks already only depended on the evaluation of py ; the prover simply
+encodes py differently using the same number of bits. However, crucially, given the coefficients of
+py the verifier can compute py (α) in time O(2k ), as opposed to O(k · 2k ). We remark that this (and
+the rest of the verifier’s computations) can be done with no division of field elements.
+
+k
+Overall, this optimization
+improves
+the
+running
+time
+of
+the
+verifier
+from
+O
+q
+WHIR · k · 2 + m
+
+to O qWHIR · 2k + m , at no cost to proof length and minor overhead to the prover, who needs
+15
+
+to do the added work of computing the coefficients of each polynomial py . Experimentally, this
+optimization improves the verifier running time by more than 20%.
+
+2.2
+
+Compiling Σ-IOPs into IOPs
+
+We outline a compiler that constructs an IOP by combining two ingredients. The first ingredient is a
+Σ-IOP (Ppoly , Vpoly ) for the desired relation. Recall that a Σ-IOP is a variant of a multilinear poly-IOP
+where the verifier can make certain sumcheck queries: the verifier may query a multilinear polynomial fˆ ∈ F[X1 , . . . , Xm ] P
+sent by the prover with a weight polynomial ŵ ∈ F[Z, X1 , . . . , Xm ], and receive as answer the sum b∈{0,1}m ŵ(fˆ(b), b). The second ingredient is an IOPP (Pprx , Vprx ) for constrained Reed–Solomon codes (such as WHIR). In fact, we consider multi-constrained Reed–Solomon
+codes CRS[F, L, m, (ŵ1 , σ1 ), . . . , (ŵn , σn )] := ∩i∈[n] CRS[F, L, m, ŵi , σi ], which are constrained Reed–
+Solomon codes with multiple simultaneous constraints. An IOPP for constrained Reed–Solomon
+implies, in a black-box way, an IOPP for multi-constrained Reed–Solomon codes (see Section 5.2).
+Our compiler resembles the ones described in [ACY23; ACFY24] in that the prover sends Reed–
+Solomon encodings of the polynomials the Σ-IOP prover would have sent and uses out-of-domain
+samples to force the prover to “select a single polynomial” within a list of polynomials associated
+with the sent oracle. While prior compilers use quotients to both enforce the out-of-domain consistency checks and ensure that the answers sent by the prover are consistent with the committed
+polynomials, our compiler differs in that these constraints are directly enforced by the proximity
+test without the use of quotients.
+We describe the resulting IOP in terms of the above ingredients.
+1. For i = 1, . . . , kpoly :
+(a) The prover runs Ppoly to obtain a polynomial fˆi ∈ F<2 [X1 , . . . , Xm ] and sends fi : L → F,
+the evaluation of fˆi on L.
+0
+m−1
+(b) The verifier samples and sends zi ← F. Define zi := (zi2 , . . . , zi2
+).
+(c) The prover replies with yi := fˆi (zi ).
+(d) The verifier sends the message that Vpoly sends in the i-th round.
+2. For every i ∈ [kpoly ], the prover sets ŵi,0 := Z · eq(zi , ·), computes the sets of queries Q′i :=
+{ŵi,1 , . . . , ŵi,qi } that Vpoly would have made to fˆi and for every j ∈ [qi ] it sets
+X
+A(i) [j] :=
+ŵi,j (fˆi (b), b) .
+b∈{0,1}m
+
+The prover then sends A(1) , . . . , A(kpoly ) to the verifier.
+3. For i ∈ [kpoly ], the prover and the verifier use the (multi-)constrained Reed–Solomon proximity
+test (Pprx , Vprx ) to check that
+fi ∈ CRS[F, L, m, (ŵi,0 , yi ), . . . , (ŵi,qi , A(i) [j])] .
+The verifier accepts if all the proximity tests succeed, and further Vpoly accepts when answering
+queries with the corresponding entries of A(i) [j].
+Completeness of the compiler follows directly from the completeness of the Σ-IOP and of the multiconstrained Reed–Solomon IOPP. Moreover, we prove that if (Ppoly , Vpoly ) is round-by-round knowledge sound and (Pprx , Vprx ) is round-by-round sound, then the resulting IOP is round-by-round
+knowledge sound. This ensures that the IOP is suitable for the BCS transformation [BCS16].
+16
+
+Batching. As presented above, the compiler invokes the IOPP (Pprx , Vprx ) separately for each
+polynomial sent in (Ppoly , Vpoly ). For efficiency, it is desirable to batch these tests into a single
+one. In Section 7, we describe and analyze optimized versions of the previous compiler, which
+make a single invocation of (Pprx , Vprx ). In Section 7.2, we show that Σ-IOPs in which the verifier is
+restricted to queries ŵ with degZ ŵ ≤ 1 (linear Σ-IOPs) can be compiled into IOPs by using a single
+constrained Reed–Solomon test. Then, in Section 7.3, we show how to compile, via an additional
+invocation of the sumcheck protocol, a general Σ-IOP into a linear Σ-IOP. This shows that any
+Σ-IOP can be compiled into an IOP using a single invocation of (Pprx , Vprx ).
+
+17
+
+3
+
+Preliminaries
+
+We define objects and state results that we use in this paper. We use the following notation.
+• The “hat” symbol over a function (e.g., p̂) denotes that it is a polynomial.
+• For a polynomial p̂ ∈ F[X1 , . . . , Xm ], we write deg(p̂) for the individual degree of p̂.
+• For two functions f, g : L → F, ∆(f, g) is the fractional Hamming distance between f and g (the
+fraction of points in which they disagree). For a set S ⊆ FL , ∆(f, S) := minh∈S ∆(f, h).
+• For a set L ⊆ F and k ∈ N, L(k) := {xk : x ∈ L}.
+• A set L ⊆ F is smooth if it is a multiplicative coset of F∗ whose order is a power of 2.
+• For interactive (oracle) algorithms A and B, we denote by ⟨A(a), B(b)⟩(c) the random variable
+describing the output of B following the interaction between A and B, where A is given private
+input a, B is given private input b, and both parties are given joint input c.
+• For a ternary relation R = {( , , )}, let L(R) = {( , ) | ∃ , ( , , ) ∈ R} be the language
+induced by R.
+• For two functions f, g : L → F and a set S ⊆ L, we write f (S) = g(S) to mean that f (x) = g(x)
+for every x ∈ S. Conversely, if f (S) ̸= g(S), then there exists x ∈ S so that f (x) ̸= g(x).
+0
+m−1
+• We define pow(x, m) := (x2 , . . . , x2
+).
+
+xyw
+
+3.1
+
+xy
+
+w xyw
+
+IOPs of proximity
+
+Interactive Oracle Proofs (IOPs) [BCS16; RRR16] are information-theoretic proof systems that combine aspects of Interactive Proofs [Bab85; GMR89] and Probabilistically Checkable Proofs [BFLS91;
+FGLSS96; AS98; ALMSS98], and also generalize the notion of Interactive PCPs [KR08]. Below we
+describe public-coin IOPs of proximity (IOPPs).
+A k-round public-coin IOPP for a ternary relation R = {( , , )} works as follows. The honest
+prover receives as input ( , , ), while the verifier receives as input and oracle access to . In
+every round i ∈ [k], the verifier sends a uniformly random message αi to the prover; then the prover
+sends a proof string πi to the verifier. After k rounds of interaction, the verifier makes some queries
+to and proof strings π1 , . . . , πk sent by the prover, and then outputs a decision bit.
+In more detail, let IOP = (P, V) be a tuple where P is an interactive algorithm and V is an
+interactive oracle algorithm. We say that IOP is a public-coin IOP for a relation R with k rounds,
+perfect completeness, and soundness error β if the following holds.
+
+xyw
+
+xyw
+
+x
+
+y
+
+y
+
+x y w) ∈ R,
+
+• (Perfect) Completeness. For every ( , ,
+
+Pr
+
+α1 ,...,αk
+
+x
+
+ y,π1 ,...,πk
+( , α1 , . . . , αk ) = 1
+V
+
+x y w) 
+
+π1 ← P( , ,
+
+xyw
+
+πk ← P( , ,
+
+..  = 1 .
+. 
+, α1 , . . . , αk )
+
+xy
+
+• Soundness. For every ( , ) ∈
+/ L(R) and unbounded malicious prover P̃,
+
+
+π1 ← P̃(α1 )
+
+..  ≤ β( , ) .
+Pr  Vy,π1 ,...,πk ( , α1 , . . . , αk ) = 1
+. 
+α1 ,...,αk
+
+xy
+
+x
+
+πk ← P̃(α1 , . . . , αk )
+
+18
+
+y
+
+When the soundness error depends only on the lengths of the inputs and on the proximity δ of
+from the language Lx := { ′ : ∃ , ( , ′ , ) ∈ R}, we write β(| |, | |, δ) (and sometimes leave
+out | | and | |, writing β(δ), when the lengths are clear from context).
+
+x
+
+y
+
+y
+
+w xy w
+
+x y
+
+y
+
+x
+
+IOPs. An IOP is an IOPP where is the empty string (i.e., for a relation R = {( , ⊥,
+which case we generally omit ⊥ which results in R being a binary relation).
+
+w)}, in
+
+Efficiency measures. We study several efficiency measures. All of these complexity measures
+are implicitly functions of the instance .
+• Rounds k: The IOP has k rounds of interaction.
+• Alphabet Σ and alphabet size λ: the symbols of each πi come from the alphabet Σ, of size λ. In
+this paper, the alphabet is always a field F.
+• Proof length l: the total number of symbols in the proofs π1 , . . . , πk .
+• Input queries qy : the number of alphabet elements read by the verifier from .
+• Proof queries qπ : the number of alphabet elements read by the verifier
+P from π1 , . . . , πk .
+• Randomness r: the verifier’s i-th message αi has length ri and r := ki=1 ri is the total number of
+random bits sent by the verifier.
+• Verifier time vt: V runs in time vt measured in algebraic field operations.
+• Prover time pt: P runs in time pt measured in algebraic field operations.
+
+x
+
+y
+
+xyw
+xy
+
+State function. Let (P, V) be an IOPP for a relation R = {( , , )}. A state function for
+(P, V) is a (possibly inefficient) function State that receives as inputs , , and a transcript tr and
+outputs a bit, and has the following properties:
+
+xy
+
+xy
+
+• Empty transcript: if tr = ∅ is the empty transcript, then State( , , tr) = 1 if and only ( , ) ∈
+L(R).
+
+xy
+
+• The prover moves: if tr is a transcript where the prover is about to move, and State( , , tr) = 0
+then, for every prover message π, State( , , tr∥π) = 0.
+
+xy
+
+xy
+
+• Full transcript: if tr is a full transcript and State( , , tr) = 0, then V rejects given this interaction
+transcript.
+
+xyw
+
+Round-by-round knowledge soundness. A k-round IOPP (P, V) for a relation R = {( , , )}
+has round-by-round knowledge soundness with errors (ε1 , . . . , εk ) and extraction time et if the IOPP
+has a state function State and there exists a deterministic “extractor” E that runs in time at most
+et with the following property: for every , and transcript tr = (π1 , α1 , . . . , πi−1 , αi−1 , πi ), if
+
+xy
+
+xy
+
+• State( , , tr) = 0, and
+• Prαi [State( , , tr∥αi ) = 1] > εi ( , ),
+
+xy
+then ((x, y), E(x, y, tr)) ∈ R.
+
+xy
+
+As with standard soundness, we write εi as a function of proximity when appropriate. If et
+is unbounded, then we omit the word “knowledge” and say that the IOPP has round-by-round
+soundness.
+
+3.2
+
+Error correcting codes
+
+We define error correcting codes.
+19
+
+Definition 3.1. An error-correcting code of length n over an alphabet Σ is a subset C ⊆ Σn .
+The code C is a linear code if Σ = F is a field and C is a subspace of Fn .
+We define what it means for an error-correcting code to be list-decodable.
+Definition 3.2. For a code C ⊆ Σn , function f ∈ Σn , and proximity parameter δ we let
+Λ(C, f, δ) = {u ∈ C | ∆(f, u) ≤ δ} .
+We say that C is (δ, ℓ)-list decodable if |Λ(C, f, δ)| ≤ ℓ for every f ∈ Σn . We say that δ is “within
+unique decoding” if C is (δ, 1)–list decodable. Observe that, letting δC be the minimum distance of C,
+any δ ≤ δC is within unique decoding.
+We will further make use of code interleaving.
+Definition 3.3. For a code C ⊆ Σn , we define the m-interleaved code C m ⊆ (Σm )n .
+Note that the alphabet of the interleaved code is now Σm , and that the distance of interleaved
+codewords is with respect to this alphabet.
+
+3.3
+
+Multilinear polynomials
+
+We recall the definition of the equality polynomial, and that multilinear evaluations can be rewritten
+as a sumcheck claim with respect to such polynomials.
+Definition 3.4. We define the equality polynomial eq as follows:
+eq((X1 , . . . , Xm ), (Y1 , . . . , Ym )) =
+
+m
+Y
+
+(Xi · Yi + (1 − Xi ) · (1 − Yi )) .
+
+i=1
+
+Note that, for every fˆ ∈ F<2 [X1 , . . . , Xm ] and z ∈ Fm ,
+X
+fˆ(z) =
+fˆ(b) · eq(z, b) .
+b∈{0,1}m
+
+20
+
+4
+
+Tools for Reed–Solomon codes
+
+We present tools for Reed–Solomon codes that are useful for our protocols.
+• In Section 4.1 we define “constrained” Reed–Solomon codes, which are Reed–Solomon codes whose
+codewords must comply with a sumcheck-like constraint.
+• In Section 4.2 we introduce the new notion of mutual correlated agreement for Reed–Solomon
+codes and prove basic facts about it.
+• In Section 4.3 we present the folding of Reed–Solomon codewords, and use mutual correlated
+agreement to prove that folding preserves a list-decoding property.
+• In Section 4.4 we describe the technique of out-of-domain sampling, which, informally, helps to
+reduce the problem of proximity testing in the list-decoding regime into proximity testing with
+properties related to the unique-decoding regime.
+
+4.1
+
+Constrained Reed–Solomon codes
+
+The Reed–Solomon code consists of evaluations of low-degree univariate polynomials.
+Definition 4.1. The Reed–Solomon code with field F, evaluation domain L ⊆ F, and degree
+d ∈ N is the set of evaluations over L of univariate polynomials (over F) of degree (strictly) less
+than d. The rate of the code is ρ := d/|L|.
+In this paper we restrict our attention to Reed–Solomon codes that are “smooth”, i.e., L is a
+multiplicative coset of F∗ whose order is a power of two and the degree bound d is also a power of
+two. In this case we can equivalently view such Reed–Solomon codes as evaluations of multilinear
+polynomials with a certain number of variables.
+Definition 4.2. A Reed–Solomon code over field F, evaluation domain L ⊆ F, and degree d ∈ N is
+smooth if L is a multiplicative coset of F∗ whose order is a power of two, and where d := 2m is a
+power of two. We call m the number of variables and use the notation:
+
+m
+RS[F, L, m] := f : L → F : ∃ ĝ ∈ F<2 [X] s.t. ∀ x ∈ L , f (x) = ĝ(x)
+n
+o
+= f : L → F : ∃ fˆ ∈ F<2 [X1 , . . . , Xm ] s.t. ∀ x ∈ L , f (x) = fˆ(pow(x, m)) .
+0
+
+m−1
+
+Above, pow(x, m) := (x2 , . . . , x2
+
+). The rate of the code RS[F, L, m] is ρ := 2m /|L|.
+
+Given a code RS[F, L, m] and function f : L → F, we use fˆ ∈ F<2 [X1 , . . . , Xm ] to denote
+the multilinear polynomial whose matching codeword in RS[F, L, m] is closest to f (breaking ties
+arbitrarily).
+The Johnson bound bounds the list size of the Reed–Solomon code.
+√
+√
+Theorem 4.3 (Johnson bound). The Reed–Solomon code RS[F, L, m] is (1 − ρ − η, 1/(2η ρ))-list
+√
+decodable for every η ∈ (0, 1 − ρ).
+The interleaving of a list-decodable code was shown to be list-decodable in [GGR11] (where the
+bounds does not depend on how many times the code was interleaved). In the case of Reed–Solomon
+codes, a sharper bound can be obtained which shows that the size of the list of the interleaved code
+is the same as the list-size of the non-interleaved code (similar proofs of this fact were present
+in [Sta21]).
+21
+
+Lemma 4.4. Let k ≥ 1 and C := RS[F, L, m] be Reed–Solomon code with rate ρ. The k-wise
+√
+√
+√
+interleaved code C k is (1 − ρ − η, 1/(2η ρ))-list decodable for every η ∈ (0, 1 − ρ).
+Proof. Let K be an extension of F of degree k (i.e. so that |K| = |F|k ) obtained
+by adjoining an
+P
+k
+element α. Let ϕ : F → K be the bijection that maps (a1 , . . . , ak ) 7→ i∈[k] ai · αi−1 . For any
+function f : L → Fk we define f K : L → K by post-composing with ϕ (i.e. setting f K := ϕ ◦ f ).
+Note that the function ·K : (Fm )L → KL which maps f 7→ f K is a bijection. We show that ·K
+maps elements of C k to elements of RS[K, L, m]. This is is easy to see, as if (f1 , . . . , fk ) ∈ C m
+there exists
+Ppolynomials p̂1 , . . . , p̂k such that, for all i ∈ [k], fi (L) = p̂i (L). Define the polynomial
+p̂K (X) := i∈[k] αi−1 · p̂i (X). Then, for every x ∈ L
+X
+X
+αi−1 · fi (x) = ϕ(f1 (x), . . . , fm (x)) = (f1 , . . . , fm )K (x) ,
+αi−1 · p̂i (x) =
+p̂K (x) =
+i∈[k]
+
+i∈[k]
+
+and thus (f1 , . . . , fm )K ∈ RS[K, L, m]. Thus, the codes C k and RS[K, L, m] are equivalent (and in
+particular, will have the same list-decodability). Applying Theorem 4.3 to RS[K, L, m] (and noting
+that the bounds therein are independent of the size of the field, and that C k has the same rate ρ as
+C) concludes the result.
+We also use a new code that we call “constrained Reed–Solomon code”, which is a Reed–Solomon
+code where codewords are constrained to those consistent with a weight polynomial and sumcheck
+target.
+Definition 4.5. The constrained Reed–Solomon code with field F, smooth evaluation domain
+L ⊆ F, number of variables m ∈ N, weight polynomial ŵ ∈ F[Z, X1 , . . . , Xm ], and target σ ∈ F is
+
+
+
+
+X
+CRS[F, L, m, ŵ, σ] := f ∈ RS[F, L, m] :
+ŵ(fˆ(b), b) = σ .
+
+
+m
+b∈{0,1}
+
+Observe that CRS[F, L, m, 0, 0] = RS[F, L, m].
+We naturally extend this definition to multiple constraints.
+Definition 4.6. The multi-constrained Reed–Solomon code over field F, evaluation domain
+L ⊆ F, number of variables m ∈ N, weight polynomials ŵ1 , . . . , ŵt ∈ F[Z, X1 , . . . , Xm ], and point
+claims σ1 , . . . , σt ∈ F is
+\
+CRS[F, L, m, (ŵ1 , σ1 ), . . . , (ŵt , σt )] :=
+CRS[F, L, m, ŵi , σi ] .
+i∈[t]
+
+4.2
+
+Mutual correlated agreement for proximity generators
+
+We rely on mutual correlated agreement, a new notion for proximity generators. First we define
+proximity generators and cite known bounds for them, and then elaborate on the new property.
+Definition 4.7. Let C ⊆ Fn be a linear code. We say that Gen is a proximity generator for C
+with proximity bound B and error err if the following implication holds for every f1 . . . , fℓ : [n] → F
+and δ ∈ (0, 1 − B(C, ℓ)). If
+ 
+
+
+X
+∆ 
+Pr
+ri · fi , C  ≤ δ  > err(C, ℓ, δ) ,
+(r1 ,...rℓ )←Gen(ℓ)
+
+i∈[ℓ]
+
+22
+
+then there exists S ⊆ [n] with |S| ≥ (1 − δ) · n and
+∀ i ∈ [ℓ], ∃ u ∈ C, ∀ x ∈ S, fi (x) = u(x) .
+The following theorem shows that Reed–Solomon codes have good proximity generators.
+Theorem 4.8 ([BCIKS20]). Let C := RS[F, L, m] be a Reed–Solomon code with rate ρ := 2m /|L|.
+The function Gen(ℓ; α) = (1, α, . . . , αℓ−1 ) is a proximity generator for C with proximity bound
+√
+B(C, ℓ) := ρ and the error err(C, ℓ, δ) defined below.
+
+i
+• If δ ∈ 0, 1−ρ
+then
+2
+(ℓ − 1) · 2m
+.
+err(C, ℓ, δ) :=
+ρ · |F|
+
+
+• If δ ∈ 1−ρ
+,
+1
+−
+B(C,
+ℓ)
+then
+2
+err(C, ℓ, δ) :=
+
+(ℓ − 1) · 22m
+n
+√ o7 .
+√
+ρ
+|F| · 2 · min 1 − ρ − δ, 20
+
+
+A proximity generator has mutual correlated agreement if with high probability the set of agreement domains of the function resulting from the proximity generator is identical to the set of
+correlated agreement domains between the functions f1 , . . . , fℓ .
+Definition 4.9. Let C ⊆ Fn be a linear code. We say that Gen is a proximity generator for C with
+mutual correlated agreement with proximity bound B⋆ and error err⋆ if for every f1 . . . , fℓ : [n] →
+F and δ ∈ (0, 1 − B(C, ℓ)) the following holds:
+
+
+
+|S| ≥ (1 − δ) · n P
+∃ S ⊆ [n] s.t. ∧ ∃ u ∈ C, u(S) = j∈[ℓ] rj · fj (S)  ≤ err⋆ (C, ℓ, δ) .
+Pr
+(r1 ,...rℓ )←Gen(ℓ)
+∧ ∃ i ∈ [ℓ], ∀ u′ ∈ C, u′ (S) ̸= fi (S)
+We prove that, in the unique decoding regime, every proximity generator exhibits mutual correlated agreement. When combined with Theorem 4.8, this yields a result about mutual correlated
+agreement for Reed–Solomon codes.
+Lemma 4.10. Let C be a linear code with minimum distance δC and let Gen be a proximity generator
+for C with proximity bound B and error err. Then Gen has mutual correlated agreement with proximity
+bound B⋆ (C, ℓ) = min{1 − δC /2, B(C, ℓ)} and error err⋆ (C, ℓ, δ) := err(C, ℓ, δ).
+Corollary 4.11. Let C := RS[F, L, m] be a Reed–Solomon code with rate ρ. The function Gen(ℓ; α) =
+(1, α, . . . , αℓ−1 ) is a proximity generator for C with mutual correlated agreement with proximity bound
+(ℓ−1)·2m
+⋆
+B⋆ (C, ℓ) := 1+ρ
+2 and error err (C, ℓ, δ) =
+ρ·|F| .
+We now prove the lemma.
+Proof of Lemma 4.10. We omit inputs such as C, ℓ, δ when clear from context, writing Gen := Gen(ℓ),
+B⋆ := B⋆ (C, ℓ), and so on. Fix functions f1 , . . . , fℓ ∈ Fn and proximity parameter δ ∈ (0, 1 − B⋆ ).
+
+23
+
+Let T ⊆ [n] be a maximal set such that for every fi there exists ui ∈ C such that fi (T ) = ui (T ).
+Suppose towards contradiction of the maximality of T that
+
+
+|S| ≥ (1 − δ) · n P
+∃ S ⊆ [n] s.t. ∧ ∃ u ∈ C, u(S) = j∈[ℓ] rj · fj (S)  > err⋆ = err .
+Pr
+(r1 ,...rℓ )←Gen
+∧ ∃ i ∈ [ℓ], ∀ u′ ∈ C, u′ (S) ̸= fi (S)
+P
+
+Observe that ∆
+r
+·
+f
+,
+C
+≤ δ whenever the event above occurs. Since Gen is a proximity
+i
+i
+i∈[ℓ]
+generator with error err and δ < 1−B, we deduce that there exists a set A ⊆ [n] with |A| ≥ (1−δ)·n
+such that for every i ∈ [ℓ] there is a codeword u′i with u′i (A) = fi (A). Since T is maximal, we can
+use A to bound its size: |T | ≥ |A| ≥ (1 − δ) · n.
+P
+P
+Fix r = (r1 , . . . , rℓ ) in the image of Gen(ℓ) and define gr := i∈[ℓ] ri · fi and wr := i∈[ℓ] ri · ui .
+Since C is linear wr ∈ C. Note that
+X
+X
+ri · ui (x) = wr (x) ,
+ri · fi (x) =
+∀ x ∈ T , gr (x) =
+i∈[ℓ]
+
+i∈[ℓ]
+
+so wr ∈ Λ(C, gr , δ).
+Consider a set S ⊆ [n] such that |S| ≥ (1 − δ) · n and gr agrees with w′ ∈ C on S, but there
+exists fi such that fi does not agree on all of S with any codeword of C. Observe the following.
+• S \ T ̸= ∅: this follows since for every fi there is a codeword that agrees with fi on all of T .
+• w′ = wr : this holds since wr ∈ Λ(C, gr , δ) and w′ ∈ Λ(C, gr , δ) combined with the fact that,
+because δ < δC /2, we have |Λ(C, gr , δ)| ≤ 1.
+Combining these two observations we deduce that the set S \ T is nonempty and that, for every
+x ∈ S \ T , gr (x) = w′ (x) = wr (x). Recalling that gr (T ) = ur (T ), we conclude that
+∆(gr , C) ≤ ∆(gr , wr ) ≤ 1 −
+
+|S ∪ T |
+|T |
+<1−
+.
+n
+n
+
+Therefore,
+
+
+
+|S| ≥ (1 − δ) · n P
+∃ S ⊆ [n] s.t. ∧ ∃ u ∈ C, u(S) = j∈[ℓ] rj · fj (S) 
+err⋆ = err ≤
+Pr
+(r1 ,...rℓ )←Gen
+∧ ∃ i ∈ [ℓ], ∀ u′ ∈ C, u′ (S) ̸= fi (S)
+ 
+
+
+X
+∆ 
+≤
+Pr
+ri · fi , C  < 1 − |T |/n .
+(r1 ,...rℓ )←Gen
+
+i∈[ℓ]
+
+Again applying the fact that Gen is a proximity generator for C, which we can do since 1 − |Tn | ≤
+δ < 1 − B, we conclude that there exists a set W ⊆ [n] with |W | > |T | such that for every fi there
+exists ui with fi (W ) = ui (W ), which contradicts the maximality of T .
+Beyond unique decoding. We leave the question of proving mutual correlated agreement in the
+list-decoding regime for future work. We set up two conjectures, grouped in the following. The
+first relates to mutual correlated agreement up to the Johnson bound with error as in [BCIKS20],
+and the second refers to conjectured parameters up to capacity, matching those commonly used in
+practice for (standard) correlated agreement.
+24
+
+Conjecture 4.12. The function Gen(ℓ; α) := (1, α, . . . , αℓ−1 ) is a proximity generator with mutual
+correlated agreement for every smooth Reed–Solomon code C := RS[F, L, m] (with rate ρ := 2m /|L|).
+We give two conjectures, for the parameters of the proximity bound B⋆ and the error err⋆ :
+√
+1. Up to the Johnson bound: B⋆ (C, ℓ) := ρ, and
+err(C, ℓ, δ) :=
+
+(ℓ − 1) · 22m
+n
+√ o7 .
+√
+ρ
+|F| · 2 · min 1 − ρ − δ, 20
+
+
+2. Up to capacity: B⋆ (C, ℓ) := ρ, and there exist constants c1 , c2 , c3 ∈ N such that for every η > 0
+and 0 < δ < 1 − ρ − η:
+(ℓ − 1)c2 · dc2
+.
+err⋆ (C, ℓ, δ) := c1 c1 +c2
+· |F|
+η ·ρ
+4.2.1
+
+Mutual correlated agreement preserves list decoding
+
+We show that applying a proximity generator and then list decoding gives the same result as first
+list decoding, and then applying the proximity generator to all possible lists of results, so long as
+the proximity generator exhibits mutual correlated agreement.
+Lemma 4.13. Let C ⊆ Fn be a linear code with minimum distance δC , and let Gen be a proximity
+generator for C with mutual correlated agreement with proximity bound B⋆ and error err⋆ . Then, for
+every f1 , . . . , fℓ : [n] → F and δ ∈ (0, min{δC , 1 − B⋆ (C, ℓ)}):
+
+ 
+ 
+X
+
+X
+Pr w Λ C,
+rj · fj , δ  ̸=
+rj · uj : u ∈ Λ(C ℓ , (f1 , . . . , fℓ ), δ)  ≤ err⋆ (C, ℓ, δ) .
+
+
+α←{0,1} ⋆
+r:=Gen(ℓ;α)
+
+j∈[ℓ]
+
+j∈[ℓ]
+
+Proof. For r ∈ Fℓ , let
+
+Tr := Λ C,
+
+
+X
+
+rj · fj , δ 
+
+j∈[ℓ]
+
+Sr :=
+
+
+X
+
+rj · uj : u ∈ Λ(C ℓ , (f1 , . . . , fℓ ), δ)
+
+
+
+
+
+
+.
+
+
+
+j∈[ℓ]
+
+We prove each direction of the inclusion separately.
+P
+Sr ⊆ Tr . Let u ∈ Sr , which implies that u = j∈[ℓ] rj · uj for u ∈ Λ(C ℓ , (f1 , . . . , fℓ ), δ). Then,
+there exists a set S ⊆ [n] with |S| ≥ (1 − δ) · n such that, for every i ∈ [ℓ], fi (S) = ui (S). Then, for
+every x ∈ S, it must be that
+X
+X
+rj · fj (x) =
+rj · uj (x) = u(x) ,
+j∈[ℓ]
+
+j∈[ℓ]
+
+P
+and thus ∆(u, j∈[ℓ] rj · fj ) ≤ δ and u ∈ Tr .
+Tr ⊆ Sr with high probability. Fix a r ← Gen(ℓ; α) such that, for every W ⊆ [n] of size
+|W | ≥ (1 − δ) · n either hold:
+25
+
+P
+1. for every u ∈ C, u(W ) ̸= j∈[ℓ] rj · fj (W ), or
+2. for every i ∈ [ℓ], ∃ ui ∈ C s.t. ui (W ) = fi (W ).
+Since Gen is a proximity generator for C with mutual correlated agreement with error err⋆ , there are
+at least (1 − err⋆ (C, ℓ, δ)) · 2w⋆ choices of α that result in such a r.
+
+P
+Consider u ∈ Tr . By definition of Tr , u ∈ C and ∆ u, j∈[ℓ] rj · fj ≤ δ. Since Item 1 does not
+hold, it must be that Item 2 holds, meaning that there exist u1 , . . . , uℓ ∈ C with ui (x) = fi (x) for
+every x ∈ W . Let S ⊆ [n] be the maximal set for which ui (x) = fi (x) for every x ∈ S, and observe
+that by definition W ⊆ S, meaning that |S| ≥ |W | ≥ (1 − δ) · n.
+By definition, for every x ∈ S, we have
+X
+X
+rj · uj (x) ,
+u(x) =
+rj · fj (x) =
+j∈[ℓ]
+
+j∈[ℓ]
+
+ P
+
+P
+and so ∆ u, j∈[ℓ] rj · uj ≤ δ < δC . This implies that u ≡ j∈[ℓ] rj · uj , and as a result u ∈ Sr .
+Observe that the above analysis is true for every u ∈ Tr simultaneously, as long as r has the
+mutual correlated agreement property. As mentioned in the outset of this proof, there are at least
+1 − err⋆ (C, ℓ, δ) such choices. This concludes the proof.
+
+4.3
+
+Folding univariate functions
+
+For a finite field F, we define the k-wise folding operator for functions f : L → F at points α as
+follows.
+Definition 4.14. Let f : L → F be a function, and α ∈ F. We define Fold(f, α) : L(2) → F as
+follows:
+f (x) + f (−x)
+f (x) − f (−x)
+∀ x ∈ L , Fold(f, α)(x2 ) :=
++α·
+.
+2
+2·x
+In order to compute Fold(f, α)(x2 ) it suffices to query f at x and −x.
+k
+For k ≤ m and α = (α1 , . . . , αk ) ∈ Fk we define Fold(f, α) : L(2 ) → F to equal Fold(f, α) := fk
+where fk is defined recursively as follows: f0 := f , and fi := Fold(fi−1 , αi ). For a set S ⊆ FL we
+sometimes denote Fold(S, α) := {Fold(f, α) | f ∈ S}.
+A similar folding operation was defined in [ACFY24]. Our definition is equivalent to performing
+the 2-wise folding of [ACFY24] for k times, where the i-th folding is done at point αi .
+The following claim shows that the folding of a Reed–Solomon codeword at any set of points
+results in a Reed–Solomon codeword.
+Claim 4.15. Let f : L → F be a function, α ∈ Fk folding randomness and let g := Fold(f, α). If
+k
+f ∈ RS[F, L, m] and k ≤ m, then g ∈ RS[F, L(2 ) , m − k], and further the multilinear extension of g
+is given by ĝ(Xk , . . . , Xm ) := fˆ(α, Xk , . . . , Xm ) where fˆ is the multilinear extension of f .
+Proof. Consider a function f ′ ∈ RS[F, L′ , m′ ] and α ∈ F. First we show that g ′ := Fold(f ′ , α) ∈
+RS[F, L′(2) , m′ − 1] and that ĝ ′ := fˆ′ (α, X2 , . . . , Xm′ −1 ) where fˆ′ ∈ F<2 [X1 , . . . , Xm′ ] is the multilinear extension of f ′ , meaning that f ′ (x) = fˆ′ (pow(x, m′ )) for every x ∈ L′ . Let f0′ , f1′ ∈
+F<2 [X2 , . . . , Xm′ ] be the polynomials such that
+fˆ′ (X1 , . . . , Xm′ ) = fˆ0′ (X2 , . . . , Xm′ ) + X1 · fˆ1′ (X2 , . . . , Xm′ ) ,
+26
+
+and define ĝ ′ := fˆ0′ + α · fˆ1′ .
+Let x ∈ L′ and z = x2 ∈ L′(2) , define z := pow(z, m′ − 1), and observe that pow(x, m′ ) = (x, z)
+and pow(−x, m′ ) = (−x, z). Therefore
+f ′ (x) + f ′ (−x)
+f ′ (x) − f ′ (−x)
++α·
+2
+2·x
+fˆ′ (pow(x, m′ )) + fˆ′ (pow(−x, m′ ))
+fˆ(pow(x, m′ )) − fˆ(pow(−x, m′ ))
+=
++α·
+2
+2·x
+′
+′
+′
+′
+ˆ
+ˆ
+ˆ
+ˆ
+f (x, z) − f (−x, z)
+f (x, z) + f (−x, z)
++α·
+=
+2
+2·x
+′
+′
+′
+′
+ˆ
+ˆ
+ˆ
+ˆ
+f (z) + x · f1 (z) + f0 (z) − x · f1 (z)
+fˆ0 (z) − (−x) · fˆ1 (z) + fˆ0′ (z) − x · fˆ1′ (z)
+= 0
++α·
+2
+2·x
+= fˆ0′ (z) + α · fˆ1′ (z) = ĝ ′ (z) .
+
+g ′ (z) =
+
+Therefore, g ′ ∈ RS[F, L′(2) , m′ − 1] and its multilinear extension equals f ′ (α, X2 , . . . , Xm′ ).
+Finally, we prove the claim inductively since, by assumption, f ∈ RS[F, L, m].
+• The base case k = 1 follows by the previous argument.
+k−1
+• The inductive hypothesis posits that, for every α′ ∈ Fk−1 , fk−1 := Fold(f, α′ ) ∈ RS[F, L(2 ) , m−
+k − 1] and that fˆk−1 := fˆ(α′ , Xk−1 , . . . , Xm ). Thus, again invoking the argument above we
+conclude that for every (α′ , αk ) = α ∈ Fk it holds that
+k
+
+fk := Fold(f, α) = Fold(Fold(f, α′ ), αk ) = Fold(fk−1 , αk ) ∈ RS[F, L(2 ) , m − k] ,
+and that fˆk (Xk , . . . , Xm ) := fˆ(α, Xk , . . . , Xm ).
+
+4.3.1
+
+Block relative distance
+
+We define block relative distance and list sizes for constrained Reed–Solomon codes. The blocks
+that we consider are cosets, as these are the most relevant to folding of smooth Reed–Solomon codes.
+Definition 4.16. Let L ⊆ F be a smooth evaluation domain and k ∈ N be a folding parameter. For
+k
+k
+z ∈ L(2 ) , define Block(L, k, z) := {y ∈ L : y 2 = z}.
+Definition 4.17. Let C := CRS[F, L, m, ŵ, σ] be a constrained Reed–Solomon code and let f, g : L →
+F. We define the k-wise block relative distance as
+k
+
+|{z ∈ L(2 ) : ∃ y ∈ Block(L, k, z), f (y) ̸= g(y)}|
+∆b (C, k, f, g) =
+,
+|L(2k ) |
+and, for S ⊆ FL , we let ∆b (C, k, f, S) := ming∈S ∆b (C, k, f, g).
+Note that ∆b (C, 0, f, g) = ∆(f, g) for any C. We define the block list decoding of a codeword.
+Definition 4.18. For a constrained Reed–Solomon code C := CRS[F, L, m, ŵ, σ], proximity parameter δ ∈ [0, 1], and f : L → F, we let
+Λb (C, k, f, δ) := {u ∈ C | ∆b (C, k, f, u) ≤ δ} ,
+denote the list of codewords in C within relative block distance at most δ from f .
+27
+
+Block relative distance is bounded from below by Hamming distance.
+Claim 4.19. For any C := CRS[F, L, m, ŵ, σ], k ∈ N, and f, g : L → F, we have that ∆(f, g) ≤
+∆b (C, k, f, g). Consequently, Λb (C, k, f, δ) ⊆ Λ(C, f, δ) for every δ ∈ [0, 1].
+k
+
+Proof. Let S = {z ∈ L(2 ) : ∀ y ∈ Block(L, k, z), f (y) = g(y)} be the set of identifiers of
+|S|
+blocks where f and g agree on their entirety. By definition, ∆b (C, k, f, g) = 1 − |L
+Define
+k| .
+Z = ∪z∈S Block(C, k, z) to be the set of points in the agreement blocks of f and g. Since C is
+smooth, {Block(C, k, z)}z∈Z is a set of disjoint sets each of size 2k . Therefore |Z| = 2k · |S|. Observing that f (x) = g(x) for every x ∈ Block(L, k, z) and z ∈ Z. Thus,
+∆(f, g) ≤ 1 −
+
+4.3.2
+
+2k · |S|
+|S|
+|Z|
+=1−
+= 1 − (2k ) = ∆b (C, k, f, g) .
+|L|
+|L|
+|L |
+
+Folding preserves list decoding
+
+The following theorem shows that, if we have mutual correlated agreement, then the list-decoding
+of a function is preserved under folding in the sense that with high probability the folding of the
+list-decoding of f is equal to the list-decoding of the folding of f . In other words, any codeword in
+the list-decoding of the folding of f can be explained as the result of the folding of a codeword in
+the list-decoding of f .
+Theorem 4.20. Let C := RS[F, L, m] be a smooth Reed–Solomon code and k ≤ m. For 0 ≤ i ≤ k
+i
+let C (i) := RS[F, L(2 ) , m − i]. Let Gen(ℓ; α) = (1, α, . . . , αℓ−1 ) be a proximity generator with mutual
+correlated agreement for the codes C (1) , . . . , C (k) with proximity bound B⋆ and error err⋆ . Then for
+every f : L → F and δ ∈ (0, 1 − maxi∈[k] {B⋆ (C (i) , 2)}),
+
+
+
+Fold(Λb (C, k, f, δ), α)
+ < err(k) (C, δ) ,
+̸=
+Pr 
+k
+α←F
+Λ(C (k) , Fold(f, α), δ)
+where err(k) (C, δ) :=
+
+Pk
+
+i=1 err (C
+⋆
+
+(i) , 2, δ).
+
+Proof. We say that a vector (α1 , . . . , αi ) ∈ Fi is good if
+Fold(Λb (C, k, f, δ), (α1 , . . . , αi )) = Λb (C (i) , k − i, Fold(f, (α1 , . . . , αi )), δ) .
+The length 0 vector is good in the sense that by doing no folding the two sets above are identical.
+Suppose that (α1 , . . . , αi−1 ) ∈ Fi−1 is good for some 0 < i ≤ k, and let g := Fold(f, (α1 , . . . , αi−1 )).
+By Lemma 4.21 (further below), we have
+
+
+Fold(Λb (C (i−1) , k − i − 1, g, δ), αi )
+ < err⋆ (C (i) , 2, δ) .
+̸=
+Pr 
+αi ←F
+(i)
+Λb (C , k − i, Fold(g, αi ), δ)
+
+28
+
+Fix αi such that the sets in the above probability are equal. Then (α1 , . . . , αi ) is good since,
+Fold(Λb (C, k, f, δ), (α1 , . . . , αi ))
+= Fold(Fold(Λb (C, k, f, δ), (α1 , . . . , αi−1 )), αi )
+= Fold(Λb (C (i−1) , k − i − 1, Fold(f, (α1 , . . . , αi−1 )), δ), αi )
+= Λb (C (i) , k − i, Fold(Fold(f, (α1 , . . . , αi−1 )), αi ), δ)
+= Λb (C (i) , k − i, Fold(f, (α1 , . . . , αi )), δ) .
+Thus,
+
+Pr [(α1 , . . . , αi ) is not good | (α1 , . . . , αi−1 ) is good] < err⋆ (C (i) , 2, δ) .
+
+αi ←F
+
+We conclude that
+
+
+Fold(Λb (C, k, f, δ), α)
+=
+̸=
+Pr 
+Pr
+[(α1 , . . . , αk ) is not good]
+α←Fk
+α1 ,...,αk ←Fk
+(k)
+Λ(C , Fold(f, α), δ)
+≤
+
+<
+
+k
+X
+i=1
+k
+X
+
+Pr [(α1 , . . . , αi ) is not good | (α1 , . . . , αi−1 ) is good]
+
+αi ←F
+
+err⋆ (C (i) , 2, δ) .
+
+i=1
+
+We now prove the basis of the induction.
+Lemma 4.21. Let C := RS[F, L, m] be a Reed–Solomon code, and k ≤ m be a parameter. Denote
+C ′ := RS[F, L(2) , m − 1]. Then for every f : L → F and δ ∈ (0, 1 − B⋆ (C ′ , 2)),
+
+
+Fold(Λb (C, k, f, δ), α)
+ < err⋆ (C ′ , 2, δ) .
+̸=
+Pr 
+α←F
+′
+Λb (C , k − 1, Fold(f, α), δ)
+Proof. We prove the lemma by showing that the first set is contained within the second for every α
+(Claim 4.22), and that the second set is contained within the first except with probability err⋆ (C ′ , 2, δ)
+over the choice of α (Claim 4.23).
+Claim 4.22. For every α ∈ F, Fold(Λb (C, k, f, δ), α) ⊆ Λb (C ′ , k − 1, Fold(f, α), δ).
+Proof. Fix α ∈ F and consider u ∈ Λb (C, k, f, δ). Let
+n
+o
+Z := z ∈ L(2) | ∀ x ∈ Block(C, k − 1, z), u(x) = f (x) .
+Observe that, for every z, if x ∈ Block(C, k − 1, z) then −x ∈ Block(C, k − 1, z). Hence, if z ∈ Z and
+x2 = z for x ∈ L then f (x) = u(x) and f (−x) = u(x), so
+Fold(f, α)(z) =
+
+f (x) − f (−x)
+u(x) + u(−x)
+u(x) − u(−x)
+f (x) + f (−x)
++α·
+=
++α·
+= Fold(u, α)(z) .
+2
+2·x
+2
+2·x
+29
+
+Thus, for every z ∈ Z, Fold(f, α) agrees with Fold(u, α) on all of the elements in Block(L, k − 1, z),
+that is,
+∆b (L(2) , k − 1, Fold(f, α), Fold(u, α)) ≤ ∆b (L, k, f, u) ≤ δ .
+The proof concludes since, by Claim 4.15, Fold(u, α) ∈ RS[F, L(2) , m − 1] = C ′ , and so Fold(u, α) ∈
+Λb (C ′ , k − 1, Fold(f, α), δ).
+T1he following claim shows that, with high probability over α, every element in the (coset) listdecoding of the folding of f can be explained as the folding of a codeword in the (coset) list-decoding
+of f .
+
+
+Λb (C ′ , k − 1, Fold(f, α), δ)
+ < err⋆ (C ′ , 2, δ) .
+̸⊆
+Claim 4.23. Prα←F 
+Fold(Λb (C, k, f, δ), α)
+(−x)
+(−x)
+Proof. Let f0 , f1 : L(2) → F be defined as f0 (x2 ) := f (x)+f
+and f1 (x2 ) := f (x)−f
+and fix
+2
+2·x
+α ∈ F for which there is no set W ⊆ L2 for which the following conditions both hold:
+
+• there exists u ∈ C (ℓ) such that u(x) = f0 (x) + α · f1 (x) for every x ∈ W , and
+• there exists b ∈ {0, 1} where for every u ∈ C (ℓ) there exists x ∈ W such that u(x) ̸= fb (x).
+Since Gen(2; α) = (1, α) is a proximity generator for C ′ with mutual correlated agreement, error err⋆
+and bound B⋆ , there are at least (1 − err⋆ ) · |F| such choices of α.
+k−1
+k
+Suppose that v ∈ Λb (C ′ , k − 1, Fold(f, α), δ). Then noting that (L(2) )(2 ) = L(2 ) and, letting
+k
+
+Z := {z ∈ L(2 ) : ∀ y ∈ Block(L(2) , k − 1, z), f0 (y) + α · f1 (y) = v(y)}
+= {z ∈ (L(2) )(2
+
+k−1 )
+
+: ∀ y ∈ Block(L(2) , k − 1, z), f0 (y) + α · f1 (y) = v(y)} ,
+S
+k−1
+k
+we deduce that Z ≤ (1 − δ) · |(L(2) )(2 ) | = (1 − δ) · |L(2 ) |. Let Y := z∈Z Block(L(2) , k − 1, z)
+be the set of elements in the (k − 1)-cosets on which v agrees with f0 + α · f1 . By our choice of α,
+there exist u0 , u1 ∈ C ′ such that fb (y) = ub (y) = ûb (pow(y, m − 1)) for each y ∈ Y .
+Define the multilinear polynomial
+q̂(X1 , . . . , Xm ) = û0 (X2 , . . . , Xm ) + X1 · û1 (X2 , . . . , Xm ) .
+For y ∈ Y and x ∈ L with x2 = y:
+q(x) = q̂(pow(x, m)) = q̂(x, pow(y, m − 1))
+= û0 (pow(y, m − 1)) + x · û1 (pow(y, m − 1))
+= f0 (y) + x · f1 (y)
+f (x) + f (−x)
+f (x) − f (−x)
+=
++x·
+2
+2·x
+= f (x) .
+k
+
+k
+
+By the definition of Y , f and q agree on every x such that x2 ∈ Z. Since |Z| ≥ (1 − δ) · |L(2 ) |,
+we have q ∈ Λb (C, k, f, δ). Since v = Fold(q, α), we have that v ∈ Fold(Λb (C, k, f, δ), α). Since the
+above arguments hold for every v ∈ Λb (C ′ , k − 1, Fold(f, α), δ), we infer that for this choice of α,
+Λb (C ′ , k − 1, Fold(f, α), δ) ⊆ Fold(Λb (C, k, f, δ), α) .
+The claim holds by recalling that there are at least (1 − err⋆ ) · |F| such choices for α.
+30
+
+4.4
+
+Out of domain sampling
+
+We review results about the probability that there exist two distinct codewords in the list-decoding
+set of a function that agree at a random point. The results and proofs are adapted from [ACFY24],
+and we provide an equivalent formulation in the language of constrained Reed–Solomon codes.
+Lemma 4.24. Let f : L → F be a function, m ∈ N be a number of variables, s ∈ N be a repetition
+parameter, and let δ ∈ [0, 1] be a distance parameter. For every r1 , . . . , rs ∈ Fm , the following are
+equivalent statements.
+• There exist distinct u, u′ ∈ Λ(RS[F, L, m], f, δ) such that, for every i ∈ [s], û(ri ) = û′ (ri ).
+• There exists σ1 , . . . , σs ∈ F such that |Λ(CRS[F, L, m, ((Z·eq(r1 , ·), σ1 ), . . . , (Z·eq(rs , ·), σs ))], f, δ)| >
+1.
+Proof. We prove each direction.
+• For i ∈ [s], let σi := û(ri ). Then, u, u′ ∈ Λ(CRS[F, L, m, ((Z · eq(r1 , ·), σ1 ), . . . , (Z · eq(rs , ·), σs ))]
+since u, u′ ∈ Λ(RS[F, L, m]) and by Definition 3.4. Since u, u′ are distinct, this direction follows.
+• Let u, u′ ∈ Λ(CRS[F, L, m, ((Z ·eq(r1 , ·), σ1 ), . . . , (Z ·eq(rs , ·), σs ))], f, δ) be two distinct codewords
+(which exist by hypothesis). Then, u, u′ ∈ Λ(RS[F, L, m], f, δ), and, by Definition 3.4, it must be
+that, for every i ∈ [s], û(ri ) = û′ (ri ).
+
+Using Lemma 4.24, we can restate [ACFY24, Lemma 4.5] as follows.
+Lemma 4.25 ([ACFY24]). Let f : L → F be a function, m ∈ N be a number of variables, s ∈ N be
+a repetition parameter, and δ ∈ [0, 1] be a distance parameter. If RS[F, L, m] is (δ, ℓ)-list decodable
+then
+
+
+∃ σ1 , . . . , σs ∈ F s.t.
+Pr
+|Λ(CRS[F, L, m, ((Z · eq(pow(rs , m), ·), σs ))i∈[s] ], f, δ)| > 1
+r1 ,...,rs ←F
+
+
+∃ distinct u, u′ ∈ Λ(RS[F, L, m], f, δ)
+=
+Pr
+s.t. ∀ i ∈ [s], û(pow(ri , m)) = û′ (pow(ri , m))
+r1 ,...,rs ←F
+
+
+ℓ2
+2m s
+.
+·
+≤
+2
+|F|
+
+31
+
+5
+
+WHIR
+
+We describe WHIR, an IOP of proximity for constrained Reed–Solomon codes. We begin by describing the construction and analyzing its complexity parameters, and in Section 5.1 we prove bounds
+on the round-by-round soundness errors of the protocol. In Section 5.2 we show how to adapt
+any IOPP for constrained Reed–Solomon codes into an IOPP for multi-constrained Reed–Solomon
+codes, thus establishing WHIR for multi-constrained Reed–Solomon codes.
+Construction 5.1. Consider the following ingredients and notation.
+• a constrained Reed–Solomon code CRS[F, L0 , m0 , ŵ0 , σ0 ];
+• an iteration count M ∈ N;
+P −1
+• folding parameters k0 , . . . , kM −1 such that M
+i=0 ki ≤ m;
+• evaluation domains L1 , . . . , LM −1 ⊆ F where Li is a smooth coset of F∗ with order |Li | ≥ 2mi ;
+• repetition parameters t1 , . . . , tMPwith ti ≤ |Li |;
+• define m0 := m and mi := m − j<i kj ;
+• define d∗ := 1 + degZ (ŵ0 ) + maxi∈[m0 ] degXi (ŵ0 ) and d := max{d∗ , 3}.
+The protocol proceeds as follows:
+• Inputs. The verifier has oracle access to f0 : L0 → F. In the honest case,P
+f0 ∈ CRS[F, L0 , m0 , ŵ0 , σ0 ]
+and the prover receives fˆ0 ∈ F<2 [X1 , . . . , Xm ] such that f0 = fˆ0 (L0 ) and b∈{0,1}m0 ŵ0 (fˆ0 (b), b) =
+σ0 .
+• Interaction phase.
+1. Initial sumcheck: Set α0 := ∅. For ℓ = 1, . . . , k0 :
+∗
+
+(a) The prover sends ĥ0,ℓ ∈ F<d [X]. In the honest case,
+X
+ĥ0,ℓ (X) :=
+ŵ0 (fˆ0 (α0 , X, b), α0 , X, b) .
+b∈{0,1}m0 −ℓ−1
+
+(b) The verifier samples α0,ℓ ← F. Update α0 := (α0 ∥α0,ℓ ).
+2. Main loop: For i = 1, . . . , M − 1:
+(a) Send folded function: The prover sends fi : Li → F. In the honest case, fi is the
+evaluation of fˆi := fˆi−1 (αi−1 , ·) over Li .
+(b) Out-of-domain sample: The verifier sends zi,0 ← F. Set zi,0 := pow(zi,0 , mi ).
+(c) Out-of-domain reply: The prover sends yi,0 ∈ F. In the honest case, yi,0 := fˆi (zi,0 ).
+(2ki−1 )
+
+(d) Shift message: The verifier samples zi,1 , . . . , zi,ti−1 ← Li−1
+and γi ← F. Set zi,j :=
+pow(zi,j , mi ).
+(e) Sumcheck rounds: Set αi := ∅. For ℓ = 1, . . . , ki :
+i. The prover sends ĥi,ℓ ∈ F<d [X]. In the honest case,
+X
+ĥi,ℓ (X) :=
+ŵi (fˆi (αi , X, b), αi , X, b) ,
+b∈{0,1}mi −ℓ−1
+
+where
+ti−1
+X
+ŵi (Z, X1 , . . . , Xmi ) := ŵi−1 (Z, αi−1 , X1 , . . . , Xmi )+Z·
+γij+1 ·eq(zi,j , (X1 , . . . , Xmi )) .
+j=0
+
+32
+
+ii. The verifier samples αi,ℓ ← F. Update αi := (αi ∥αi,ℓ ).
+3. Send final polynomial: The prover sends fˆM ∈ F<2 [X1 , . . . , XmM ]. In the honest case
+fˆM := fˆM −1 (αM −1 , ·).
+(2kM −1 )
+
+4. Sample final randomness: The verifier samples r1fin , . . . , rtfinM −1 ← LM −1
+• Decision phase.
+1. Check initial sumcheck:
+P
+(a) Check that b∈{0,1} ĥ0,1 (b) = σ0 .
+P
+(b) Check that b∈{0,1} ĥ0,ℓ (b) = ĥ0,ℓ−1 (α0,ℓ−1 ) for ℓ ∈ {2, . . . , k0 }.
+2. Check main loop: For i = 1, . . . , M − 1:
+
+(a) Let gi−1 := Fold(fi−1 , αi−1 ).
+(b) Compute the points {gi−1 (zi,j )}j∈[ti−1 ] by querying fi−1 at the appropriate locations.
+(c) Check that
+X
+
+ĥi,1 (b) = ĥi−1,ki−1 (αi−1,ki−1 ) + γi · yi,0 +
+
+γij+1 · gi−1 (zi,j ) .
+
+j=1
+
+b∈{0,1}
+
+(d) Check that
+
+ti−1
+X
+
+b∈{0,1} ĥi,ℓ (b) = ĥi,ℓ−1 (αi,ℓ−1 ) for every ℓ ∈ {2, . . . , ki }.
+
+P
+
+3. Check final polynomial:
+(a) Check that, for every ℓ ∈ [tM −1 ], fˆM (rℓfin ) = gM −1 (rℓfin ) where rℓfin := pow(rℓfin , mM ).
+(b) For i = 1, . . . , M − 1 set
+ŵi (Z, X1 , . . . , Xmi ) := ŵi−1 (Z, αi−1 , X1 , . . . , Xmi ) + Z ·
+
+ti−1
+X
+
+γij+1 · eq(zi,j , (X1 , . . . , Xmi )) .
+
+j=0
+
+(c) Check that
+X
+b∈{0,1}mM
+
+ŵM −1 (fˆM (b), αM −1 , b) = ĥM −1,kM −1 (αM −1,kM −1 )
+
+Complexity parameters. We analyze the complexity measures of Construction 5.1.
+PM −1
+• Rounds. The protocol has O(M · i=0
+ki ) rounds.
+P −1
+• Proof length. The proof length is O( M
+i=1 (|Li | + ki )).
+• Input queries. The verifier reads 2k0 points t0 times. Since each set of 2k0 points are queried
+together, they can be grouped together into a single symbol. The input query complexity over
+this alphabet is t0 .
+• Proof queries. The verifier reads 2ki points ti times from fi . Since each set of 2ki points are
+queried together, they can be grouped together into a single symbol.
+The input query complexity
+P −1
+over this alphabet is ti . Thus, the proof query complexity is O( M
+i=1 ti ).
+33
+
+5.1
+
+Round-by-round soundness
+
+We analyze the round-by-round soundness of Construction 5.1.
+Theorem 5.2. Consider (F, M, (ki , mi , Li , ti )0≤i≤M −1 , ŵ0 , σ0 , mM , tM , d∗ , d) as in Construction 5.1.
+For every f ∈
+/ CRS[F, L0 , m0 , ŵ0 , σ0 ] and every δ0 , . . . , δM −1 and (ℓi,s )0≤i≤M −1 where
+0≤s≤ki
+
+• δ0 ∈ (0, ∆(f, CRS[F, L0 , m0 , ŵ0 , σ0 ]));
+• the function Gen(ℓ; α) = (1, α, . . . , αℓ−1 ) is a proximity generator with mutual correlated agreement
+(i,s)
+(i,s)
+(2s )
+for the codes (CRS )0≤i≤M −1 where CRS := RS[F, Li , mi − s] with bound B⋆ and error err⋆ ;
+0≤s≤ki
+
+(i,s)
+
+• for every 0 ≤ i < M , δi ∈ (0, 1 − B⋆ (CRS , 2));
+(i,s)
+• for every 0 ≤ i < M , CRS is (ℓi,s , δi )-list decodable.
+The WHIR protocol (Construction 5.1) is an IOPP for CRS[F, L0 , m0 , ŵ0 , σ0 ] with round-by-round
+soundness error
+fin
+out
+shift
+fold
+((εfold
+0,s )s≤k0 , (εi , εi , (εi,s )s≤ki )i≤M −1 , ε ) ,
+where:
+(0,s)
+d∗ ·ℓ0,s−1
++ err⋆ (CRS , 2, δ0 );
+|F|
+2mi ·ℓ2i,0
+• εout
+≤
+i
+2·|F| ;
+ℓ ·(ti−1 +1)
+• εshift
+≤ (1 − δi−1 )ti−1 + i,0 |F|
+;
+i
+d·ℓi,s−1
+(i,s)
+fold
+⋆
+• εi,s ≤ |F| + err (CRS , 2, δi );
+• εfin ≤ (1 − δM −1 )tM −1 .
+
+• εfold
+0,s ≤
+
+Proof. First we give notation, then describe a state function and finally we establish round-by-round
+soundness errors based on this state function.
+Notation. We say that a partial transcript is sumcheck-valid if the verifier’s checks in Item 1 and
+Item 2 all pass for those messages that can be derived from the partial transcript. Observe that if a
+partial transcript tr is not sumcheck-valid then (tr∥tr′ ) is not sumcheck-valid for any concatenation
+tr′ .
+A (full) transcript of the protocol has the form:
+
+
+(ĥ0,ℓ , α0,ℓ )ℓ≤k0 ,
+
+
+
+
+ fi , zi,0 , yi,0 , (zi,1 , . . . , zi,ti−1 , γi ), (ĥi,ℓ , αi,ℓ )ℓ≤ki
+
+,
+i<M 
+tr := 
+
+.
+
+
+fˆM ,
+r1fin , . . . , rtfinM −1
+
+We let f0 := f and, given a partial transcript, we denote the following (whenever they can be
+derived from the partial transcript):
+• fi,0 := fi and fi,ℓ := Fold(fi , αi,1 , . . . , αi,ℓ ) = Fold(fi,ℓ−1 , αi,ℓ ). Note that gi := fi,ki .
+• ŵi,ℓ (Z, X1 , . . . , Xmi −ℓ ) := ŵi (Z, X1 , . . . , Xmi −ℓ , αi,ℓ , . . . , αi,1 ).
+
+34
+
+• σ0,0 := σ0 ,
+σi,0 := ĥi−1,ki−1 (αi−1,ki−1 ) + γi · yi,0 +
+
+ti−1
+X
+
+γij+1 · gi−1 (zi,j ) ,
+
+j=1
+
+and σi,ℓ := ĥi,ℓ−1 (αi,ℓ−1 ).
+(i,ℓ)
+
+• CRS
+
+ℓ
+
+)
+:= RS[F, L(2
+, mi − ℓ].
+i
+ℓ
+
+(i,ℓ)
+(2 )
+• CCRS := CRS[F, Li , mi − ℓ, ŵi,ℓ , σi,ℓ ].
+
+Above, gi and ŵi are derived as in the protocol.
+The state function. We define a state function State for the protocol and describe when it
+outputs 1 for each partial transcript length. For simplicity, in the state function definition and later
+analysis we omit the initial inputs f0 , ŵ and σ, and consider only the transcript.
+(0,0)
+
+0. Initial transcript: For initial function f0 : L0 → F, we set State(∅) = 1 if and only if f0 ∈ CCRS .
+1. Initial sumcheck, round 1 ≤ s ≤ k0 (Item 1b): The transcript has the form
+
+
+tr := (ĥ0,ℓ , α0,ℓ )ℓ<s , ĥ0,s ,
+and the verifier chooses α0,s . We set State(tr∥α0,s ) = 1 if and only if the following both hold:
+(0,s)
+
+(a) Valid decoding of folded function. |Λ(CCRS , f0,s , δ0 )| > 0.
+(b) Sumcheck-validity. (tr∥α0,s ) is sumcheck-valid.
+2. Out-of-domain sample at iteration i (Item 2b): At this stage the transcript has the form
+
+
+(ĥ0,ℓ , α0,ℓ )ℓ≤k0 ,
+
+
+
+
+, ,
+tr :=  fj , zj,0 , yj,0 , (zj,1 , . . . , zj,tj−1 , γj ), (ĥj,ℓ , αj,ℓ )ℓ≤kℓ
+j<i
+
+fi
+and the verifier chooses zi,0 . State(tr∥zi,0 ) = 1 if and only if at least one of the following holds:
+(i,0)
+
+(a) Multiple consistent codewords. There exist distinct u, u′ ∈ Λ(CCRS , fi , δi ) for which û(zi,0 ) =
+û′ (zi,0 ) where zi,0 := pow(zi,0 , mi ).
+(b) Previous state function reverts. The following both hold:
+(i−1,k
+
+)
+
+i. Valid decoding of folded function. |Λ(CCRS i−1 , gi−1 , δi−1 )| > 0, and
+ii. Sumcheck-validity. (tr∥zi,0 ) is sumcheck-valid.
+3. Shift message at iteration i (Item 2d): At this stage the transcript has the form
+
+
+(ĥ0,ℓ , α0,ℓ )ℓ≤k0 ,
+
+
+
+
+, 
+tr :=  fj , zj,0 , yj,0 , (zj,1 , . . . , zj,tj−1 , γj ), (ĥj,ℓ , αj,ℓ )ℓ≤kℓ
+j<i
+
+fi , zi,0 , yi,0
+The verifier chooses zi,1 , . . . , zi,ti−1 and γi , and we set
+State(tr∥(zi,1 , . . . , zi,ti−1 , γi )) = 1 ,
+if and only if both of the following hold:
+35
+
+(i,0)
+
+(a) Valid decoding of folded function. |Λ(CCRS , fi , δi )| > 0.
+(b) Sumcheck-validity. tr∥(zi,1 , . . . , zi,ti−1 , γi ) is sumcheck-valid.
+4. Sumcheck randomness at round 1 ≤ s ≤ ki of iteration i (Item 2(e)ii): At this stage the
+transcript has the form
+(ĥ0,ℓ , α0,ℓ )ℓ≤k0 ,
+
+
+
+tr := 
+
+
+
+
+
+fj , zj,0 , yj,0 , (zj,1 , . . . , zj,tj−1 , γj ), (ĥj,ℓ , αj,ℓ )ℓ≤kℓ
+
+
+j<i
+
+, 
+.
+
+fi , zi,0 , yi,0 , (zi,1 , . . . , zi,ti−1 , γi ), (ĥi,ℓ , αi,ℓ )ℓ<s , ĥi,s
+The verifier chooses αi,s . State(tr∥αi,s ) = 1 if and only if the following hold:
+(i,s)
+
+(a) Valid decoding of folded function. |Λ(CCRS , fi,s , δi )| > 0.
+(b) Sumcheck-validity. tr∥αi,s is sumcheck-valid.
+5. Final randomness (Item 3): At this stage the transcript has the form
+
+
+tr := 
+
+
+
+(ĥ0,ℓ , α0,ℓ )ℓ≤k0 ,
+
+
+
+
+
+fi , zi,0 , yi,0 , (zi,1 , . . . , zi,ti−1 , γi ), (ĥi,ℓ , αi,ℓ )ℓ≤ki
+.
+i<M
+fˆM
+
+The verifier chooses r1fin , . . . , rtfinM . State(tr∥r1fin , . . . , rtfinM −1 ) = 1 if and only if the following all hold:
+(a) Fold agreement. For every ℓ ∈ [tM − 1], fˆM (rℓfin ) = gM −1 (rℓfin ).
+(b) Constraint validity.
+X
+
+ŵM −1 (αM −1 , b) · fˆM (b) = ĥM −1 (αM −1 ) .
+
+b∈{0,1}mM
+
+(c) Sumcheck-validity. (tr∥r1fin , . . . , rtfinM −1 ) is sumcheck-valid.
+Bounding the errors. We bound the round-by-round soundness errors based on the state function
+described above. As with the definition of the state function, we separately bound the probability
+of the state flipping for each partial transcript length.
+1. Initial sumcheck. We show that if State(tr) = 0 then
+εfold
+0,s =
+
+Pr [State(tr∥α0,s ) = 1] ≤
+
+α0,s ←F
+
+d∗ · ℓ0,s−1
+(0,s)
++ err⋆ (CRS , 2, δ0 ) .
+|F|
+
+We begin by noting that if State(tr) = 0 due to the fact that tr is not sumcheck-valid, then (tr∥α0,s )
+is also not sumcheck-valid for any α0,s , which implies that State(tr∥α0,s ) = 0. We therefore assume
+that tr is sumcheck-valid, from which follows that
+X
+ĥ0,s−1 (b) = σ0,s−1 .
+(2)
+b∈{0,1}
+
+36
+
+(0,0)
+
+As a result, we conclude that |Λ(CRS(0,s−1) , f0,s−1 ), δ0 )| = 0 (recall that δ0 < ∆(f0,0 , CCRS ), and
+(0,s)
+so this holds also for s = 1). In other words, every codeword in CRS is either δ0 -far from f0,s or
+(i,s)
+has a weighted sum that does not equal σ0,s . By Theorem 4.20, since δ0 < 1 − B⋆ (CRS , 2).
+h
+i
+(0,s−1)
+(0,s)
+(0,s)
+Pr Fold(Λb (CRS
+, 1, f0,s , δ0 ), α0,s ) ̸= Λ(CRS , Fold(f0,s , α0,s ), δ0 ) ≤ err⋆ (CRS , 2, δ0 ) . (3)
+α0,s ←F
+
+(0,s)
+
+In other words, the list of codewords that are δ0 -close to f0,s (with respect to CRS ) are (with
+high probability) exactly the folding of the list of codewords whose block-distance is at most δ0
+from f0,s−1 . In the following claim we show that with high probability, each codeword in the coset
+(0,s)
+(0,s)
+list-decoding of f0,s−1 will fold into a codeword of CRS that is not in CCRS (since it does not
+comply with the constraint).
+Claim 5.3.
+h
+i d∗ · ℓ
+0,s−1
+(0,s−1)
+(0,s)
+Pr ∃ u ∈ Λb (CRS
+, 1, f0,s−1 , δ0 ), Fold(u, α0,s ) ∈ Λ(CCRS , Fold(f0,s−1 , α0,s ), δ0 ) ≤
+.
+α0,s ←F
+|F|
+(0,s−1)
+
+Proof. Consider u ∈ Λb (CRS
+
+, 1, fi , δ) and the degree d∗ univariate polynomial
+X
+p̂(X) :=
+ŵs−1,i−1 (û(b, X), b, X) .
+b∈{0,1}m0 −s
+
+(0,s−1)
+
+Since |Λ(CCRS
+
+, 1, f0,s , δ0 )| = 0, it must be that:
+X
+X
+X
+p̂(b) =
+ŵs−1,i−1 (û(b), b) ̸= σ0,s−1 =
+ĥ0,s−1 (b) ,
+b∈{0,1}m0 −s+1
+
+b∈{0,1}
+
+b∈{0,1}
+
+where the final equality follows from Equation 2. We conclude that p̂ and ĥ0,s are not identical
+polynomials: p̂(X) ̸≡ ĥ0,s−1 (X). The polynomials are both univariate polynomials of degree
+smaller than d∗ , and so by the polynomial identity lemma,
+h
+i
+d∗
+.
+Pr p̂(α0,s ) = ĥ0,s−1 (α0,s ) ≤
+α0,s ←F
+|F|
+Whenever α0,s is chosen such that this is not the case, we have (by the definition of p̂)
+X
+ŵ0,s (û(α0,s , b, ), α0,s , b) ̸= ĥ0,s−1 (α0,s ) = σ0,s ,
+b∈{0,1}m0 −s
+(0,s)
+(0,s)
+Since CCRS := CRS[F, L(0,s) , m0 −s, ŵ0,s , σ0,s ], we have that Fold(u, α0,s ) ∈
+/ CCRS . Finally, the claim
+(0,s−1)
+(0,s−1)
+holds by taking a union bound over the |Λb (CRS
+, 1, f0,s−1 , δ0 )| ≤ |Λ(CRS
+, 1, f0,s−1 , δ0 )| ≤
+ℓ0,s−1 choices of u.
+
+The bound on the round-by-round soundness error comes by taking a union bound over the
+probabilities in Equation 3 and Claim 5.3, which together imply that except with probability
+(0,s)
+ℓ0,s−1
+⋆
+|F| + err (CRS , 1, δ0 ),
+(0,s)
+
+(0,s)
+
+Λ(CCRS , Fold(f0,s−1 , α0,s ), δ0 ) ∩ Λ(CRS , Fold(f0,s−1 , α0,s ), δ0 ) = ∅ ,
+37
+
+and so, since
+
+(0,s)
+
+(0,s)
+
+Λ(CCRS , Fold(f0,s−1 , α0,s ), δ0 ) ⊆ Λ(CRS , Fold(f0,s−1 , α0,s ), δ0 ) ,
+(0,s)
+
+and f0,s := Fold(f0,s−1 , α0,s ), we have |Λ(CCRS , Fold(f0,s−1 , α0,s ), δ0 )| = 0, so State(tr∥α0,s ) = 0.
+2. Out-of-domain sample at iteration i. We show that if State(f0 , tr) = 0 then
+εout
+i = Pr [State(tr∥zi,0 ) = 1] ≤
+zi,0 ←F
+
+2mi · ℓ2i,0
+.
+2 · |F|
+
+If State(tr) = 0, then Item 2b does not hold, since this is precisely what the state function
+checks in this step (note that zi,0 does not affect the sumcheck-validity of the transcript). Thus,
+in order to have State(f0 , tr∥zi,0 ) = 1, it must be that Item 2a holds, i.e., there exist distinct
+(i,0)
+u, u′ ∈ Λ(CCRS , fi , δi ) with û(zi,0 ) = û′ (zi,0 ). By Lemma 4.25 this happens with probability at
+most
+
+2mi ·ℓ2i,0
+2·|F| .
+
+3. Shift message at iteration i. We show that if State(f0 , tr) = 0 then
+εshift
+= Pr[State(tr∥(zi,1 , . . . , zi,ti , γi )) = 1] ≤ (1 − δi−1 )ti−1 +
+i
+
+ℓi,0 · (ti−1 + 1)
+.
+|F|
+
+Since State(f0 , tr) = 0, both of the following are true:
+(i)
+
+(a) there are no distinct u, u′ ∈ Λ(CRS , fi , δi ) for which û(zi,0 ) = û′ (zi,0 ).
+(i−1),k
+(b) at least one of the following holds: (a) |Λ(CCRS i−1 , gi−1 , δi−1 )| = 0, or (b) tr is not sumcheckvalid.
+We begin by showing that if all of the codewords that are within list-decoding of fi have some
+point in which they disagree with the required value, then with high probability the state will
+remain 0:
+(i,0)
+
+Claim 5.4. Fix zi,1 , . . . , zi,ti−1 such that for every u ∈ Λ(CRS , fi , δi ) one of the following hold:
+P
+•
+b ŵi−1 (û(b), b, αi−1 ) ̸= ĥi−1 (αi−1 ), or
+• û(zi,0 ) ̸= yi , or
+• there exists j ∈ [ti−1 ] for which û(zi,j ) ̸= gi−1 (zi,j ).
+Then Prγi ←F [State(tr∥(zi,1 , . . . , zi,ti−1 , γi )) = 1] ≤
+
+ℓi,0 ·(ti−1 +1)
+.
+|F|
+
+(i,0)
+Proof. Fix u ∈ Λ(CRS , fi , δi ), and denote yi,0 := yi and yi,j := gi−1 (zi,j ). Then by the claim setup,
+P
+either b ŵi−1 (û(b), b, αi−1 ) ̸= ĥi−1 (αi−1 ) or there exists j ∈ {0, . . . , ti−1 } for which
+X
+û(b) · eq(zi,j , b) = û(zi,j ) ̸= yi,j ,
+b∈{0,1}mi
+
+38
+
+Thus, by the polynomial identity lemma
+
+
+"
+#
+ti−1
+X
+X
+X
+Pr
+ŵi (û(b), b) = σi = Pr 
+ŵi (û(b), b) = ĥi−1 (αi−1 ) +
+γij+1 · yi,j 
+γi
+
+b
+
+j=0
+
+b
+
+ P
+
+b ŵi−1 (û(b), b, αi−1 ) +
+
+
+= Pr 
+γi
+
+≤
+
+Pti−1
+
+P
+j+1
+· ( b û(b) · eq(zi,j , b))
+j=0 γi
+
+
+
+=
+Pti−1
+
+
+
+
+ĥi−1 (αi−1 ) +
+
+j+1
+· yi,j
+j=0 γi
+
+ti−1 + 1
+.
+|F|
+(i,0)
+
+Taking the union bound over all (at most) ℓi,0 codewords in Λ(CRS , fi,0 , δi ), we have that except
+ℓ ·(ti−1 +1)
+(i,0)
+, there is no u ∈ Λ(CRS , fi , δi ) for which
+with probability i,0 |F|
+X
+
+ŵi (û(b), b) = ĥi−1 (αi−1 ) +
+
+ti−1
+X
+
+γij+1 · yi,j = σi,0 .
+
+j=0
+
+b
+(i,0)
+
+Recall that CCRS = CRS[F, Li , mi , ŵi , σi,0 ] and so we conclude that, except with probability
+ℓi,0 ·(ti−1 +1)
+(i,0)
+it is the case that |Λ(CCRS , fi , δi )| = 0, and so the state is 0.
+|F|
+We now complete the proof by showing that the requirements for Claim 5.4 hold except with probability (1−δi−1 )ti−1 over the choice of zi,1 , . . . , zi,ti−1 . Item 3b in the State function definition posits
+that in order to have State(f0 , tr∥(zi,1 , . . . , zi,ti−1 , γi )) = 1, it must be that tr∥(zi,1 , . . . , zi,ti−1 , γi ) is
+sumcheck-valid, meaning tr is also sumcheck-valid. Thus, the only chance for the state to switch to
+0 is in the case that tr is sumcheck-valid. The only way for State(tr) = 0 when tr is sumcheck-valid
+(i−1,k
+)
+is when |Λ(CCRS i−1 , gi−1 , δi−1 )| = 0. We consider the following cases:
+(i,0)
+
+• There is no u ∈ Λ(CRS , fi , δi ) for which û(zi,0 ) = yi,0 . In this case the requirements for
+Claim 5.4 hold trivially.
+(i−1,t
+
+(i,0)
+
+)
+
+• There is exactly one u ∈ Λ(CRS , fi , δi ) for which û(zi,0 ) = yi,0 . Recall that |Λ(CCRS i−1 , gi−1 , δi−1 )| =
+0. Thus, u either disagrees with the constraint defined by ŵi−1 or u is δ-far from gi−1 :
+P
+– if b ŵi−1 (û(b), b, αi−1 ) ̸= ĥi−1 (αi−1 ), then the requirements for Claim 5.4 hold trivially.
+– if ∆(û|L , gi−1 ) ≥ δi then the probability that there exists a point zi,j with û(zi,j ) = gi−1 (zi,j )
+(i)
+
+is at most (1 − δi−1 )tM −1 . Since ŵ(zi,0 ) ̸= yi,0 for every w ∈ Λ(CRS , fi , δi ) with w ̸= u, we
+conclude that except with probability (1 − δi−1 )t−1 , the requirements for Claim 5.4 hold.
+(i,0)
+
+• There are multiple codewords u ∈ Λ(CRS , fi , δi ) for which û(zi,0 ) = yi,0 . As discussed at the
+beginning of this analysis, this is ruled out by the fact that State(tr) = 0.
+4. Folding randomness at round s of iteration i. We show that if State(tr) = 0 then
+εfold
+i,s = Pr [State(tr∥αi ) = 1] ≤
+αi,s
+
+d · ℓi,s−1
+(i,s)
++ err⋆ (CRS , 2, δi ) .
+|F|
+
+The analysis is identical to that in Item 1 with index i in place of 0, and degree d in place of d∗ .
+39
+
+5. Final randomness. We show that if State(tr) = 0 then
+h
+i
+εfin = Pr
+State(tr∥(r1fin , . . . , rtfinM −1 )) = 1 ≤ (1 − δM −1 )tM −1 .
+r1fin ,...,rtfin
+
+M
+
+If tr is not sumcheck-valid (Item 4b does not hold), then (tr∥(r1fin , . . . , rtfinM −1 )) is also not sumcheckvalid and so Item 5c does not hold and State(tr∥(r1fin , . . . , rtfinM −1 )) = 0. Thus, we can assume
+that tr is sumcheck-valid. Then, it must be that Item 1a does not hold, and as such the list
+(M −1,,ki−1 )
+Λ(CCRS
+, gM −1 , δM −1 ) is empty. We consider two options:
+(M −1,k
+
+)
+
+M −1
+• ∆(fˆM , gM −1 ) ≤ δM −1 . Let fM be the restriction of fˆM to the domain of CCRS
+. Then
+(M −1,kM −1 )
+(M −1,,ki−1 )
+fM ∈ Λ(CRS
+, gM −1 , δM −1 ). Since |Λ(CCRS
+, gM −1 , δM −1 )| = 0, it must be that
+(M −1,kM −1 )
+fM ∈
+/ Λ(CCRS
+, gM −1 , δM −1 ), meaning that fM does not conform to the constraint of the
+(M −1,kM −1 )
+code CCRS
+, i.e.,
+X
+ŵM −1 (αM −1 , b) · fˆM (b) ̸= ĥM −1 (αM −1 ) .
+
+b∈{0,1}mM
+
+As a result, Item 5b does not hold, and so State(tr∥(r1fin , . . . , rtfinM −1 )) = 0.
+
+• ∆(fˆM , gM −1 ) > δM −1 . Then fˆM agrees with gM −1 at tM −1 randomly selected locations with
+probability at most (1 − δM −1 )tM −1 , and if this does not occur then Item 5a does not hold.
+6. Verifier decision. If State(tr) = 0, then the verifier rejects, since the verifier’s checks align
+precisely with the definition of the state function at Item 5.
+
+5.2
+
+Batching multiple constraints
+
+We show how to adapt proximity tests for constrained Reed–Solomon codes to handle Reed–Solomon
+codes with multiple constraints.
+Construction 5.5. Consider the following ingredients:
+• a k-round IOPP (Pprx , Vprx ) for constrained Reed–Solomon codes CRS[F, L, m, ·, ·].
+• a number of weights t ∈ N;
+• weight polynomials ŵ1 , . . . ŵt where, for every i ∈ [t], ŵi ∈ F[Z, X1 , . . . , Xm ];
+• answer points σ1 , . . . σt ∈ F;
+The protocol proceeds as follows:
+• Initial input: Let f : L → F be an oracle function. In the honest case,
+f ∈ CRS[F, L, m, (ŵ1 , σ1 ), . . . , (ŵt , σt )] ,
+and the prover is given fˆ ∈ F<2 [X1 , . . . , Xm ] whose restriction to L is f and for which, for every
+i ∈ [t],
+X
+ŵi (fˆ(b), b) = σi .
+b∈{0,1}m
+
+40
+
+• Interaction phase:
+1. Combination randomness: The verifier samples γ ← F and sends it to the prover.
+2. Proximity test interaction The prover and verifier jointly engage in the interaction phase
+of (Pprx , Vprx ) to check membership of f ∈ RS[F, L, m, ŵ, σ] where
+X
+γ i−1 · ŵi (Z, X1 , . . . , Xm ) ,
+ŵ(Z, X1 , . . . , Xm ) :=
+i∈[t]
+
+and σ :=
+
+P
+
+i∈[t] γ
+
+i−1 · σ .
+i
+
+• Decision phase: The verifier engages in the decision phase of (Pprx , Vprx ) with access to f .
+Complexity parameters. The protocol in Construction 5.5 has the same complexity parameters
+as one execution of (Pprx , Vprx ) with an added verifier message at the beginning and O(t) verifier
+computation in order to compute ŵ and σ.
+5.2.1
+
+Round-by-round soundness
+
+We show that the new protocol has round-by-round soundness:
+Theorem 5.6. Let (F, L, m, Pprx , Vprx , k, t, ŵ1 , . . . , ŵt , σ1 , . . . , σt ) be as in Construction 5.5. Suppose
+prx
+that (Pprx , Vprx ) has round-by-round soundness error (errprx
+1 , . . . , errk ) and that RS[F, L, m] is (δ, ℓ)list decodable.
+Then Construction 5.5 is an IOPP
+ for CRS[F, L, m, (ŵ1 , σ1 ),. . . , (ŵt , σt )] that, for proximity δ
+prx
+prx
+has round-by-round soundness error (t−1)·ℓ
+|F| , err1 (δ), . . . , errk (δ) .
+Proof. Let Stateprx be the state function of (Pprx , Vprx ). We first define a state function and then
+prove that it has the required round-by-round soundness error.
+0. Initial transcript. We set State(f, (ŵi , σi )i∈[t] , ∅) = 1 if and only if f ∈ CRS[F, L, m, (ŵ1 , σ1 ), . . . , (ŵt , σt )].
+1. Combination interaction. The verifier samples γ. We set State(f, (ŵi , σi )i∈[t] , γ) = 1 if and
+only if f ∈ CRS[F, L, m, ŵ, σ].
+2. Proximity test rounds. In round i of the proximity test, let tr = (γ, a1 , β1 , . . . , ai−1 , βi−1 , ai )
+and the verifier chooses βi . We set
+State(f, (ŵi , σi )i∈[t] , tr∥βi ) = Stateprx (f, ŵ, σ, a1 , β1 , . . . , ai−1 , βi−1 , ai , βi ) .
+We now analyze the round-by-round soundness error with respect to the above state function:
+1. Combination interaction. If State(f, (ŵi , σi )i∈[t] , ∅) = 0 then f ∈
+/ CRS[F, L, m, (ŵ1 , σ1 ), . . . , (ŵt , σt )].
+If ∆(f, RS[F, L, m]) ≥ δ then f ∈
+/ CRS[F, L, m, ŵ, σ], and so State(f, (ŵi , σi )i∈[t] , γ) = 0 regardless of γ. Suppose then that ∆(f, RS[F, L, m]) ≤ δ. Fix u ∈ Λ(RS[F, L, m], f, δ). Since
+∆(f, CRS[F, L, m, ŵ, σ]) ≥ δ, there exists i ∈ [t] so that
+X
+ŵi (û(b), b) ̸= σi .
+b∈{0,1}m
+
+41
+
+Thus, by the polynomial identity lemma:
+
+
+
+
+X
+X
+X
+Pr 
+ŵ(û(b), b) = σ  = Pr 
+γ i−1 · 
+γ
+
+γ
+
+b∈{0,1}m
+
+b∈{0,1}m
+
+i∈[t]
+
+
+ŵi (û(b), b) =
+
+
+X
+
+γ i−1 · σi  ≤
+
+i∈[t]
+
+t−1
+.
+|F|
+
+We get the bound (t−1)·ℓ
+by taking a union over the list-decoding of f over RS[F, L, m].
+|F|
+2. Proximity test rounds. If i = 1, then State(f, (ŵi , σi )i∈[t] , γ) = 0 implies that f ∈
+/ CRS[F, L, m, ŵ, σ],
+and so Stateprx (f, ŵ, σ, ∅) = 0. Otherwise, State(f, (ŵi , σi )i∈[t] , γ, a1 , β1 , . . . , ai−1 , βi−1 ) = 0 implies Stateprx (f, ŵ, σ, a1 , β1 , . . . , ai−1 , βi−1 ) = 0, and so
+
+
+Pr State(f, (ŵi , σi )i∈[t] , γ, a1 , β1 , . . . , ai−1 , βi−1 )ai , βi )
+βi
+
+= Pr [Stateprx (f, ŵ, σ, a1 , β1 , . . . , ai−1 , βi−1 , ai , βi )] ≤ errprx
+i (δ) .
+βi
+
+3. Verifier decision. The verifier rejects if Vprx rejects. If State(f, (ŵi , σi )i∈[t] , γ, a1 , β1 , . . . , ak , βk ) =
+0 then Stateprx (f, ŵ, σ, a1 , β1 , . . . , ak , βk ) = 0 and so Vprx rejects.
+
+42
+
+6
+
+Implementation and experiments
+
+We evaluate the performance of WHIR as a proximity test for constrained Reed–Solomon codes
+and also for (standard) Reed–Solomon codes. In the case of constrained Reed–Solomon codes,
+we compare WHIR with BaseFold [ZCF24]. In the case of (standard) Reed–Solomon codes, we
+compare WHIR with FRI [BBHR18] and STIR [ACFY24]. To do so, we compile the IOPPs into
+an argument system via the [BCS16] transformation, and evaluate the resulting arguments with
+regards to: (i) argument size; (ii) prover time; (iii) verifier time; and (iv) verifier hash complexity.
+Further, we compare the compiled argument resulting from WHIR with several (univariate and
+multilinear) polynomial commitment schemes.
+
+6.1
+
+Implementation
+
+We implemented WHIR in Rust, by leveraging the arkworks [ark] ecosystem for developing zkSNARKs. Our implementation and scripts are available at the repository https://github.com/
+WizardOfMenlo/whir/; later they will be integrated into arkworks.
+Organization. We implement WHIR as an IOPP for multi-constrained Reed–Solomon codes
+of the form CRS[F, L, m, (Z · eq(z1 , ·), σ1 ), . . . , (Z · eq(zt , ·), σt )], for t ∈ N, z1 , . . . , zt ∈ Fm , and
+σ1 , . . . , σt ∈ F. This is a more restricted class of constrained Reed–Solomon codes than those
+that our main protocol supports, but is sufficient for the comparisons that we consider. We leave
+extending the implementation to support more general constrained Reed–Solomon codes to future
+work. The IOPP is then compiled into an argument via the [BCS16] transformation.
+Cryptographic primitives. We use arkworks [ark] for several underlying cryptographic primitives. We use the crate ark-ff for field arithmetic, ark-poly for Fast Fourier Transforms, nimue
+for the Fiat–Shamir transformation (which uses keccak as sponge, and blake3 for the proof-ofwork), and ark-crypto-primitives for Merkle commitment schemes. We use the crates keccak
+and blake3 for the hash functions used in the Merkle commitment schemes.
+Optimizations. Our implementation of WHIR should be considered as a partial optimized reference implementation. We leveraged optimizations such as path pruning for Merkle commitment
+schemes (existing in arkworks) and sequential Lagrange evaluations (adapted from [CFFZ24]).
+Nonetheless, we believe that there is room for further performance gains (especially on the prover
+side) via additional optimizations (e.g., see [Rot24; DT24a; DT24b], which optimize multilinear
+polynomial evaluation and sumcheck proving). Further, we provide a performant parallel prover
+implementation.
+
+6.2
+
+Parameter choices
+
+In our experiments, given a starting number of variables m and a rate ρ, we select parameters to
+instantiate WHIR for a constrained Reed–Solomon code CRS[F, L, m, ŵ, σ]. We detail our parameter
+choice next.
+Field and evaluation domain choice. We consider two choices for the (base) field F in our
+benchmarks: a 192-bit smooth prime field7 and the 64-bit Goldilocks field.8 In both cases we let L
+be an arbitrary smooth domain in F with |L| = 2m/ρ.
+7
+8
+
+We selected F = Fp with p = 264 · 259536638529657107390708680683681617371 + 1 as in [ACFY24].
+That is, F = Fp with p = 232 · 4294967295 + 1.
+
+43
+
+Folding parameter. We select a constant folding parameter throughout the whole protocol, and
+set this folding parameter to be k = 4.
+Soundness. To target λ bits of security we set the round-by-round soundness error of the IOPP
+to be 2−λ and let the hash function output used in the BCS transformation to have length 256 bits.
+The round-by-round soundness error of the IOPP is computed in three different ways, depending
+on which proximity parameter is selected and which conjecture (if any) is used.
+• (WHIR-UD) Unique Decoding. In this configuration, we set δ := 1−ρ
+2 .√
+√
+• (WHIR-JB) Johnson Bound. In this configuration, we set δ := 1 − ρ − η for η := ρ/20 and
+assume Item 1 in Conjecture 4.12 holds.
+• (WHIR-CB) Capacity Bound. In this configuration, we set δ := 1 − ρ − η for η := ρ/2 and assume
+Item 2 in Conjecture 4.12 holds with c1 = c2 = c3 = 1.
+To achieve the desired round-by-round soundness error three types of errors have to be bound
+(see Section 5.1).
+• Errors due to out-of-domain samples. The argument verifier samples challenges from a sufficiently
+large extension of the base field, and asks more samples as required.
+• Errors due to proximity gaps. The verifier samples challenges from a sufficiently large extension
+of the base field, and, if required, performs a sufficiently large proof-of-work to achieve the desired
+security level.
+• Errors due to queries. The protocol is configured to perform m − log ρ − 3 bits of proof-of-work,
+and to perform a sufficient number of queries so that the overall security of this round is above
+the required threshold.
+Compilation to a SNARG. We compile the IOPP into a SNARG via the BCS transformation
+[BCS16]. This requires selecting a hash function for the Merkle commitment scheme and a hash
+function for the Fiat–Shamir transformation. We use Blake3 for the Merkle commitment scheme
+and SHA3 as the hash function for the Fiat–Shamir transformation.
+Comparison. When comparing with other protocols, we make different parameter choices in order
+to present fairer comparisons. We discuss these parameter choices in the respective comparison.
+
+6.3
+
+Benchmarks and Results
+
+We ran our benchmarks on an AWS r6a.24xlarge instance with 96 vCPU and 768 GiB of memory
+(AMD EPYC 7R13 Processor @ 2.65 GHz), and compiled using rustc 1.82.0-nightly. Our
+methodology is the following. First we select a variable-rate pair (m, ρ) with number of variables
+m ∈ {218 , 220 , 222 , 224 , 226 , 228 , 230 } and rate ρ ∈ {1/2, 1/4, 1/8, 1/16}. We ignore the rate-degree pair
+(m, ρ) = (230 , 1/16), as our instance ran out of memory while running the argument prover. Further,
+in the experiments with Goldilocks as the base field, we ignore pairs where m − log ρ > 32, as
+the field does not have a sufficiently large smooth evaluation domain. Having chosen (m, ρ), we
+select parameters as detailed in Section 6.2. Given those parameters, we benchmark the argument
+prover and argument verifier, collecting: (i) argument size; (ii) prover time; (iii) verifier time; and
+(iv) verifier hash complexity.
+We present our comparison in the following sections.
+• The data collected for comparison of WHIR-UD and WHIR-CB (targeting 100-bits of security)
+is presented in Table 2. A graph comparing with BaseFold can be found in Figure 1.
+44
+
+• The data collected for comparison of WHIR-UD, WHIR-JB, and WHIR-CB (targeting 128-bits
+of security) is presented in Table 5. A graph of the comparison can be found in Figure 3.
+• The data collected for comparison of FRI, STIR, and WHIR-CB (targeting 128-bits of security)
+is presented in Table 3. A graph of the comparison can be found in Figure 2.
+• The data collected for comparison of WHIR-CB with Brakedown, Ligero, Greyhound, Hyrax,
+PST, and KZG is presented in Table 4.
+Additional graphs are available in Appendix B. In all of our following comparisons, we focus on the
+case where (m, ρ) = (24, 1/2) and the case where (m, ρ) = (28, 1/2).
+
+45
+
+6.3.1
+
+Comparison with BaseFold
+
+We compare WHIR and BaseFold (instantiated with Reed–Solomon codes), as an IOPP for constrained Reed–Solomon codes. Both protocols use the Goldilocks field as the base field, targeting
+λ = 100 bits of security. In this case, WHIR samples challenges from a quadratic extension of
+the base field, and we collected data according to both the unique decoding and conjectured list
+soundness settings. We obtained the BaseFold experimental result from [ZCF24], and we remark
+that the BaseFold implementation was not optimized for argument size and verifier time. We run
+our experiment with 16 threads, to compare prover time to the BaseFold implementation (which
+also uses the same number of threads).
+WHIR (in both its WHIR-UD and WHIR-CB variants) significantly improves on argument size,
+verifier time and prover time compared to BaseFold for every number of variables and rate we
+considered.
+• On (m, ρ) = (24, 1/2), BaseFold’s arguments are 7.95 MiB, while WHIR-UD’s are 390 KiB and
+WHIR-CB’s are 101 KiB, respectively a 20× and 74× improvement. BaseFold verifier in this
+instance runs in 24 ms, while WHIR-UD’s runs in 2.39 ms and WHIR-CB’s in 0.61 ms, respectively
+a 10× and 39× improvement. BaseFold prover runs in 8.0s while both WHIR-UD and WHIR-CB
+run in 3.5s, a 2.3× improvement.
+• On (m, ρ) = (26, 1/2),9 BaseFold’s arguments are 9.26 MiB, while WHIR-UD’s are 441 KiB
+and WHIR-CB’s are 108 KiB, respectively a 21× and 86× improvement. BaseFold verifier in
+this instance runs in 27 ms, while WHIR-UD’s runs in 2.62 ms and WHIR-CB’s in 0.73 ms,
+respectively a 10× and 37× improvement. BaseFold prover runs in 32s while WHIR-UD and
+WHIR-CB run in 14s, a 2.3× improvement.
+We did not compare verifier hash complexity as the BaseFold data we had available did not include
+verifier hash complexity. We include a graph of the comparison in Figure 1. Table 2 contains the
+full data for WHIR-UD and WHIR-CB at this security level.
+
+9
+
+The largest instance on which we had data for BaseFold
+
+46
+
+d
+
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+230
+
+ρ
+Argument size (KiB)
+1/2
+
+(249, 76)
+
+(296, 86)
+
+(340, 93)
+
+(390, 101)
+
+(441, 108)
+
+(489, 116)
+
+(544, 123)
+
+1/4
+
+(217, 52)
+
+(260, 59)
+
+(302, 63)
+
+(346, 69)
+
+(394, 75)
+
+(438, 80)
+
+(492, 86)
+
+1/8
+
+(211, 42)
+
+(253, 47)
+
+(294, 51)
+
+(336, 57)
+
+(385, 62)
+
+(426, 63)
+
+-
+
+1/16
+
+(212, 36)
+
+(254, 41)
+
+(296, 44)
+
+(338, 48)
+
+(388, 54)
+
+(427, 58)
+
+-
+
+Verifier time (ms)
+1/2
+
+(1.44, 0.4)
+
+(1.78, 0.49)
+
+(2.01, 0.55)
+
+(2.39, 0.61)
+
+(2.62, 0.66)
+
+(3.02, 0.73)
+
+(3.22, 0.77)
+
+1/4
+
+(1.22, 0.28)
+
+(1.55, 0.33)
+
+(1.74, 0.36)
+
+(2.11, 0.41)
+
+(2.31, 0.43)
+
+(2.7, 0.5)
+
+(2.87, 0.52)
+
+1/8
+
+(1.18, 0.24)
+
+(1.51, 0.27)
+
+(1.67, 0.29)
+
+(2.06, 0.34)
+
+(2.23, 0.36)
+
+(2.61, 0.39)
+
+-
+
+1/16
+
+(1.16, 0.21)
+
+(1.53, 0.24)
+
+(1.69, 0.26)
+
+(2.05, 0.29)
+
+(2.2, 0.32)
+
+(2.59, 0.36)
+
+-
+
+Verifier hashes (×103 )
+1/2
+
+(3.8, 1.2)
+
+(5.2, 1.6)
+
+(6.1, 1.8)
+
+(7.9, 2.1)
+
+(8.9, 2.3)
+
+(11, 2.5)
+
+(12, 2.7)
+
+1/4
+
+(3.5, 0.92)
+
+(4.8, 1.1)
+
+(5.7, 1.2)
+
+(7.3, 1.5)
+
+(8.1, 1.6)
+
+(10, 1.8)
+
+(11, 1.9)
+
+1/8
+
+(3.6, 0.78)
+
+(5, 0.94)
+
+(5.7, 1)
+
+(7.3, 1.2)
+
+(8.1, 1.4)
+
+(9.9, 1.4)
+
+-
+
+1/16
+
+(3.7, 0.68)
+
+(5.2, 0.84)
+
+(5.9, 0.91)
+
+(7.5, 1.1)
+
+(8.3, 1.2)
+
+(10, 1.3)
+
+-
+
+Prover time (s)
+1/2
+
+(0.31, 0.31)
+
+(1.3, 1.3)
+
+(5.8, 5.9)
+
+(25, 26)
+
+(110, 110)
+
+(460, 470)
+
+(1900, 2000)
+
+1/4
+
+(0.49, 0.5)
+
+(2.2, 2.3)
+
+(9.6, 9.9)
+
+(42, 44)
+
+(180, 190)
+
+(790, 820)
+
+(3400, 3500)
+
+1/8
+
+(0.9, 0.91)
+
+(4.2, 4.3)
+
+(18, 18)
+
+(79, 80)
+
+(350, 360)
+
+(1500, 1500)
+
+-
+
+1/16
+
+(1.8, 1.8)
+
+(8.1, 8.2)
+
+(35, 35)
+
+(150, 160)
+
+(690, 700)
+
+(2900, 3000)
+
+-
+
+1/2
+
+(0.09, 0.07)
+
+(0.2, 0.21)
+
+(0.77, 0.74)
+
+(2.8, 2.8)
+
+(11, 11)
+
+(42, 42)
+
+(170, 170)
+
+1/4
+
+(0.11, 0.11)
+
+(0.38, 0.37)
+
+(1.2, 1.2)
+
+(4.7, 4.7)
+
+(18, 19)
+
+(74, 74)
+
+(290, 300)
+
+1/8
+
+(0.18, 0.16)
+
+(0.65, 0.62)
+
+(2.2, 2.3)
+
+(8.5, 8.6)
+
+(35, 35)
+
+(140, 140)
+
+-
+
+1/16
+
+(0.33, 0.33)
+
+(1.1, 1.2)
+
+(4.2, 4.2)
+
+(16, 16)
+
+(67, 67)
+
+(270, 270)
+
+-
+
+Table 2: Costs of WHIR-UD and WHIR-CB over a quadratic extensions of Goldilocks, targeting
+λ = 100 bits of security. Prover time includes single threaded (top) and multithreaded measurement
+(on 32 threads, bottom). For all metrics, lower is better.
+
+47
+
+Verifier time
+25
+
+8000
+
+Time (ms)
+
+Size (KiB)
+
+Argument size
+
+6000
+4000
+2000
+0
+
+20
+15
+10
+5
+0
+
+218
+
+220
+
+222
+
+224
+
+226
+
+218
+
+220
+
+Degree
+
+222
+
+224
+
+226
+
+Degree
+
+Prover time
+Time (s)
+
+25
+23
+21
+2−1
+2−3
+218
+
+220
+
+222
+
+224
+
+226
+
+Degree
+
+Figure 1: Comparison of BaseFold and WHIR for ρ = 1/2. BaseFold: ×, WHIR-UD: ▲, WHIR-CB:
+•. Prover time is displayed with logarithmic scaling. BaseFold’s implementation is unoptimized.
+
+48
+
+6.3.2
+
+Comparison with FRI and STIR
+
+We compare WHIR to STIR and FRI as an IOPP for (unconstrained) Reed–Solomon codes. In
+this case, the protocols run with an identical 192-bit prime field, targeting λ = 128 bits of security.
+WHIR is run with conjectured list soundness settings. We obtained the STIR and FRI benchmarks
+from [ACFY24, Table 2].10 Our experiments in this subsection are singlethreaded.
+WHIR significantly improves on FRI in argument size, verifier hash complexity, and verification
+time. Further, WHIR improves on STIR, slightly in argument size and significantly in verifier time
+(while maintaining the same hash complexity). WHIR’s prover is slightly slower than FRI and
+comparable to STIR.
+• On (m, ρ) = (24, 1/2):
+– Argument size. FRI’s arguments are 306 KiB, STIR’s are 160 KiB, and WHIR-CB’s are 157
+KiB. Thus, WHIR improves on FRI’s arguments by a factor of 1.95×, and on STIR’s by 1.01×.
+– Verifier time. FRI’s verifier runs in 3.9ms, STIR’s in 3.8ms, and WHIR-CB’s in 1.0ms. Thus,
+WHIR improves on FRI’s verifier by a factor of 3.9×, and on STIR’s by 3.8×.
+– Verifier hash complexity. FRI’s verifier performs 5.6 khashes, while STIR’s and WHIR-CB’s
+perform 2.7 khashes, a roughly 2.1× improvement.
+– Prover time. FRI’s prover runs in 28s, STIR’s in 36s and WHIR-CB’s in 34s. Thus, WHIR’s
+prover is slower than FRI’s by a factor of 1.21×, and faster than STIR’s by a factor of 1.05×.
+• On (m, ρ) = (28, 1/2):
+– Argument size. FRI’s arguments are 430 KiB, STIR’s are 189 KiB, and WHIR-CB’s are 178
+KiB. Thus, WHIR improves on FRI’s arguments by a factor of 2.42×, and on STIR’s by 1.06×.
+– Verifier time. FRI’s verifier runs in 5.5ms, STIR’s in 4.3ms, and WHIR-CB’s in 1.2ms. Thus,
+WHIR improves on FRI’s verifier by a factor of 4.6×, and on STIR’s by 3.6×.
+– Verifier hash complexity. FRI’s verifier performs 8.5 khashes, while STIR’s and WHIR-CB’s
+perform 3.4 khashes, a 2.5× improvement.
+– Prover time. FRI’s prover runs in 420s, STIR’s in 640s, and WHIR-CB’s in 660s. Thus,
+WHIR’s prover is slower than FRI’s by a factor of 1.57×, and slower than STIR’s by a factor
+of 1.03×.
+We include a graph of the comparison at Figure 2. Table 3 contains the full data for FRI, STIR,
+and WHIR-CB at this security level.
+
+10
+
+The previous experiments used a constant proof-of-work of 22 bits, while our implementation uses m − log ρ − 3
+bits of proof-of-work.
+
+49
+
+d
+
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+230
+
+ρ
+Argument size (KiB)
+1/2
+
+(163, 114, 119)
+
+(211, 131, 133)
+
+(257, 143, 143)
+
+(306, 160, 157)
+
+(371, 172, 165)
+
+(430, 189, 178)
+
+(494, 200, 187)
+
+1/4
+
+(99, 73, 81)
+
+(129, 87, 89)
+
+(154, 94, 98)
+
+(177, 107, 106)
+
+(211, 114, 114)
+
+(249, 128, 122)
+
+(277, 136, 128)
+
+1/8
+
+(76, 58, 65)
+
+(96, 69, 70)
+
+(118, 75, 79)
+
+(134, 86, 84)
+
+(157, 93, 91)
+
+(184, 104, 99)
+
+(204, 110, 105)
+
+1/16
+
+(62, 50, 55)
+
+(77, 61, 62)
+
+(95, 66, 68)
+
+(107, 76, 74)
+
+(127, 82, 80)
+
+(147, 92, 87)
+
+-
+
+Verifier time (ms)
+1/2
+
+(2.0, 2.9, 0.7)
+
+(2.6, 3.2, 0.8)
+
+(3.2, 3.4, 0.9)
+
+(3.9, 3.8, 1.0)
+
+(4.7, 3.9, 1.1)
+
+(5.5, 4.3, 1.2)
+
+(6.4, 4.4, 1.3)
+
+1/4
+
+(1.2, 1.7, 0.5)
+
+(1.6, 2.0, 0.6)
+
+(1.9, 2.1, 0.6)
+
+(2.3, 2.4, 0.7)
+
+(2.7, 2.5, 0.8)
+
+(3.2, 2.8, 0.9)
+
+(3.7, 2.9, 0.9)
+
+1/8
+
+(1.0, 1.2, 0.4)
+
+(1.2, 1.5, 0.5)
+
+(1.5, 1.6, 0.5)
+
+(1.8, 1.9, 0.6)
+
+(2.1, 2.0, 0.6)
+
+(2.4, 2.2, 0.7)
+
+(2.8, 2.3, 0.8)
+
+1/16
+
+(0.8, 1.0, 0.4)
+
+(1.0, 1.3, 0.4)
+
+(1.2, 1.4, 0.5)
+
+(1.4, 1.6, 0.5)
+
+(1.7, 1.7, 0.6)
+
+(2.0, 1.9, 0.6)
+
+-
+
+Verifier hashes (×103 )
+1/2
+
+(2.5, 1.4, 1.6)
+
+(3.5, 1.8, 2)
+
+(4.5, 2.2, 2.3)
+
+(5.6, 2.6, 2.7)
+
+(7.1, 3, 3)
+
+(8.5, 3.5, 3.4)
+
+(10, 3.8, 3.7)
+
+1/4
+
+(1.7, 1, 1.2)
+
+(2.3, 1.3, 1.5)
+
+(2.8, 1.5, 1.7)
+
+(3.5, 1.8, 1.9)
+
+(4.2, 2, 2.1)
+
+(5.1, 2.4, 2.4)
+
+(5.9, 2.6, 2.6)
+
+1/8
+
+(1.4, 0.84, 1)
+
+(1.8, 1.1, 1.2)
+
+(2.3, 1.3, 1.4)
+
+(2.7, 1.5, 1.6)
+
+(3.3, 1.7, 1.8)
+
+(3.9, 2, 2)
+
+(4.5, 2.2, 2.1)
+
+1/16
+
+(1.2, 0.76, 0.89)
+
+(1.5, 1, 1.1)
+
+(1.9, 1.1, 1.2)
+
+(2.2, 1.4, 1.4)
+
+(2.7, 1.5, 1.6)
+
+(3.2, 1.8, 1.8)
+
+-
+
+Prover time (s)
+1/2
+
+(1.2, 2.2, 0.42)
+
+(3.2, 2.4, 1.8)
+
+(9.3, 9.8, 7.8)
+
+(28, 36, 34)
+
+(97, 150, 150)
+
+(420, 640, 660)
+
+(1700, 2700, 3200)
+
+1/4
+
+(2.3, 1.1, 0.74)
+
+(2.7, 3.9, 3.4)
+
+(11, 14, 14)
+
+(47, 58, 62)
+
+(200, 250, 290)
+
+(860, 1100, 1200)
+
+(3600, 4800, 5900)
+
+1/8
+
+(1.4, 1.9, 1.5)
+
+(5.4, 6.1, 6.6)
+
+(22, 26, 28)
+
+(93, 110, 120)
+
+(400, 480, 560)
+
+(1700, 2100, 2500)
+
+(7000, 8900, 12000)
+
+1/16
+
+(2.7, 2.9, 2.9)
+
+(10, 11, 13)
+
+(44, 48, 56)
+
+(190, 210, 250)
+
+(780, 930, 1100)
+
+(3300, 4100, 4900)
+
+-
+
+Table 3: Costs of FRI, STIR, WHIR-CB, targeting λ = 128 bits of security over 192-bit prime field.
+Prover measurements are single threaded. For all metrics, lower is better.
+
+50
+
+Verifier hash complexity
+10000
+
+400
+
+8000
+
+Hashes
+
+Size (KiB)
+
+Argument size
+500
+
+300
+200
+
+6000
+4000
+2000
+
+100
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+230
+
+218
+
+220
+
+222
+
+224
+
+226
+
+Degree
+
+Degree
+
+Prover time
+
+Verifier time
+
+228
+
+230
+
+228
+
+230
+
+210
+
+6
+
+28
+
+5
+
+Time (ms)
+
+Time (s)
+
+212
+
+26
+24
+22
+20
+
+4
+3
+2
+1
+
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+230
+
+218
+
+Degree
+
+220
+
+222
+
+224
+
+226
+
+Degree
+
+Figure 2: Comparison of FRI, STIR and WHIR for ρ = 1/2. FRI: ×, STIR: •, WHIR-CB: ▲. Prover
+time is displayed with logarithmic scaling.
+
+51
+
+6.3.3
+
+Comparison with polynomial commitment schemes
+
+When instantiated as an IOPP for constrained Reed–Solomon codewords of the form CRS[F, L, m, Z ·
+eq(z, ·), σ], WHIR natively yields a multilinear polynomial commitment (and consequently, a univariate polynomial commitment). We compare WHIR (in this setting) with the following multilinear
+polynomial commitment schemes: Brakedown [GLSTW23], Ligero [AHIV17], Greyhound [NS24],
+Hyrax [WTSTW18], and PST [PST13]. Further, we chose to also compare with the univariate
+polynomial commitment KZG [KZG10]. We compared at both the λ = 100 and λ = 128 security levels. For the elliptic curve based schemes, we used the BN254 curve for the 100-bit security
+level, and the BLS12_381 curve for the 128-bit security level. We benchmark the implementations
+of Brakedown, Ligero, Hyrax and KZG present in arkworks, while the PST implementation used
+was in the jellyfish library [jel]. The Greyhound verifier times were provided by the authors of
+[NS24].
+We find that WHIR-CB achieves significantly faster verification times compared to every polynomial commitment scheme we considered. Notably this includes schemes such as PST and KZG,
+which both require a trusted setup and the latter of which only supports univariate polynomial
+evaluation queries.
+• At the λ = 100 security level, WHIR-CB verifier takes between 0.61ms to 0.29ms (depending
+on the selected rate), achieving a speedup of between 5700×-12000× against Brakedown, 1200×2500× against Ligero, 164×-345× against Hyrax, 13×-27× against PST and 4.0×-8.3× against
+KZG.
+• At the λ = 128 security level, WHIR-CB verifier takes between 1.4ms to 0.7ms (depending on
+the selected rate), achieving a speedup of between 2600×-5300× against Brakedown, 535×-1100×
+against Ligero, 93×-186× against Greyhound, 108×-216× against Hyrax, 7×-14× against PST
+and 2.6×-5.2× against KZG.
+Verifier time (ms)
+λ = 100
+λ = 128
+
+Brakedown
+3500
+3680
+
+Ligero
+733
+750
+
+Greyhound
+130
+
+Hyrax
+100
+151
+
+PST
+7.81
+9.92
+
+KZG
+2.42
+3.66
+
+WHIR-1/2
+0.61
+1.4
+
+WHIR-1/16
+0.29
+0.6
+
+Table 4: Comparison of WHIR-CB’s verifier time versus other polynomial commitment schemes, on
+24 variables. For the KZG degree 224 is used instead.
+
+52
+
+6.3.4
+
+Comparison of UD, JB, CB
+
+We also compared the three versions of WHIR (as an IOPP for constrained Reed–Solomon codes):
+WHIR-UD (Unique Decoding), WHIR-JB (Johnson Bound), WHIR-CB (Capacity Bound) to measure the impact of different security assumptions on the protocol’s efficiency. In this case, we use the
+Goldilocks field as the base field, targeting λ = 128 bits of security. The protocol samples challenges
+from a cubic extensions of the base field, and we run in all three mentioned soundness settings. As
+expected, stronger assumptions lead to a more efficient protocol.
+• On (m, ρ) = (24, 1/2):
+– Argument size. WHIR-UD’s argument are 621 KiB, WHIR-JB’s are 299 KiB, and WHIR-CB’s
+are 156 KiB.
+– Verifier time. WHIR-UD’s verifier runs in 4.8ms, WHIR-JB’s in 2.5ms, and WHIR-CB’s in
+1.4ms.
+– Verifier hash complexity. WHIR-UD’s verifier performs 10 khashes, while WHIR-JB’s performs
+5.1 khashes and WHIR-CB’s perform 2.7 khashes.
+– Prover time. When run on a single thread, WHIR-UD’s prover runs in 49s, WHIR-JB’s in
+50s and WHIR-CB’s in 47s. When running on 32 threads, WHIR-UD’s prover runs in 4s,
+WHIR-JB’s in 4.1s and WHIR-CB’s in 3.9s.
+• On (m, ρ) = (28, 1/2):
+– Argument size. WHIR-UD’s argument are 770 KiB, WHIR-JB’s are 339 KiB, and WHIR-CB’s
+are 177 KiB.
+– Verifier time. WHIR-UD’s verifier runs in 6.7ms, WHIR-JB’s in 2.9ms, and WHIR-CB’s in
+1.6ms.
+– Verifier hash complexity. WHIR-UD’s verifier performs 14 khashes, while WHIR-JB’s performs
+6.4 khashes and WHIR-CB’s perform 3.4 khashes.
+– Prover time. When run on a single thread, WHIR-UD’s prover runs in 860s, WHIR-JB’s in
+890s and WHIR-CB’s in 830s. When running on 32 threads, WHIR-UD’s prover runs in 62s,
+WHIR-JB’s in 63s and WHIR-CB’s in 61s.
+We include a graph of the comparison at Figure 3. Table 5 contains the full data for WHIR-UD,
+WHIR-JB, WHIR-CB at this security level.
+
+53
+
+d
+
+218
+
+220
+
+222
+
+1/2
+
+(399, 228, 120)
+
+(481, 252, 133)
+
+(541, 274, 144)
+
+1/4
+
+(345, 151, 80)
+
+(419, 168, 89)
+
+1/8
+
+(336, 120, 65)
+
+1/16
+
+(337, 104, 56)
+
+1/2
+
+224
+
+226
+
+228
+
+230
+
+(621, 299, 156)
+
+(689, 317, 165)
+
+(770, 339, 177)
+
+(848, 358, 187)
+
+(475, 184, 97)
+
+(548, 200, 106)
+
+(612, 215, 114)
+
+(692, 230, 123)
+
+(766, 244, 128)
+
+(408, 134, 71)
+
+(462, 150, 79)
+
+(534, 162, 86)
+
+(600, 174, 91)
+
+(675, 187, 99)
+
+-
+
+(407, 117, 62)
+
+(465, 128, 69)
+
+(535, 140, 74)
+
+(603, 150, 82)
+
+(677, 163, 87)
+
+-
+
+(3.0, 1.8, 0.9)
+
+(3.7, 2.1, 1.1)
+
+(4.1, 2.3, 1.2)
+
+(4.8, 2.5, 1.4)
+
+(5.4, 2.7, 1.4)
+
+(6.1, 2.9, 1.6)
+
+(6.6, 3.1, 1.7)
+
+1/4
+
+(2.5, 1.2, 0.6)
+
+(3.1, 1.3, 0.7)
+
+(3.5, 1.5, 0.8)
+
+(4.2, 1.6, 0.9)
+
+(4.6, 1.8, 1.0)
+
+(5.4, 2.0, 1.1)
+
+(5.8, 2.1, 1.2)
+
+1/8
+
+(2.4, 0.9, 0.4)
+
+(3.0, 1.1, 0.5)
+
+(3.4, 1.2, 0.6)
+
+(4.1, 1.3, 0.7)
+
+(4.4, 1.4, 0.8)
+
+(5.2, 1.6, 0.9)
+
+-
+
+1/16
+
+(2.4, 0.8, 0.4)
+
+(3.0, 0.9, 0.4)
+
+(3.3, 1.0, 0.5)
+
+(4.0, 1.1, 0.6)
+
+(4.4, 1.2, 0.6)
+
+(5.2, 1.4, 0.8)
+
+-
+
+(12, 5.6, 3)
+
+(14, 6.4, 3.4)
+
+(16, 7, 3.7)
+
+ρ
+Argument size (KiB)
+
+Verifier time (ms)
+
+Verifier hashes (×103 )
+1/2
+
+(4.8, 2.9, 1.6)
+
+(6.7, 3.6, 2)
+
+1/4
+
+(8, 4.3, 2.3)
+
+(10, 5.1, 2.7)
+
+(4.4, 2.1, 1.2)
+
+1/8
+
+(4.6, 1.8, 1)
+
+(6.3, 2.7, 1.5)
+
+(7.4, 3, 1.6)
+
+(9.6, 3.6, 1.9)
+
+(11, 4, 2.1)
+
+(13, 4.5, 2.4)
+
+(15, 4.9, 2.6)
+
+(6.5, 2.3, 1.2)
+
+(7.5, 2.6, 1.4)
+
+(9.7, 3, 1.6)
+
+(11, 3.3, 1.7)
+
+(14, 3.8, 2)
+
+-
+
+1/16
+
+(4.9, 1.6, 0.9)
+
+(6.8, 2.1, 1.1)
+
+(7.8, 2.3, 1.2)
+
+(10, 2.7, 1.4)
+
+(11, 2.9, 1.6)
+
+(14, 3.4, 1.8)
+
+-
+
+1/2
+
+(0.64, 0.66, 0.55)
+
+(2.7, 2.8, 2.6)
+
+(12, 12, 11)
+
+(49, 50, 47)
+
+(210, 210, 200)
+
+(860, 890, 830)
+
+(3700, 3800, 3600)
+
+1/4
+
+(0.88, 0.89, 0.84)
+
+(4, 4, 4)
+
+(17, 17, 17)
+
+(74, 75, 74)
+
+(320, 320, 320)
+
+(1400, 1400, 1400)
+
+(5900, 6000, 5900)
+
+1/8
+
+(1.5, 1.5, 1.6)
+
+(7.1, 7.1, 7.1)
+
+(30, 31, 31)
+
+(130, 130, 130)
+
+(590, 580, 580)
+
+(2500, 2500, 2500)
+
+-
+
+Prover time (s)
+
+1/16
+
+(2.9, 3, 3)
+
+(13, 13, 13)
+
+(58, 58, 58)
+
+(250, 250, 250)
+
+(1100, 1100, 1100)
+
+(4800, 4800, 4800)
+
+-
+
+1/2
+
+(0.15, 0.13, 0.11)
+
+(0.33, 0.32, 0.29)
+
+(1.1, 1.1, 1)
+
+(4, 4.1, 3.9)
+
+(16, 16, 15)
+
+(62, 63, 61)
+
+(250, 260, 250)
+
+1/4
+
+(0.17, 0.16, 0.14)
+
+(0.48, 0.5, 0.49)
+
+(1.7, 1.7, 1.7)
+
+(6.5, 6.5, 6.5)
+
+(26, 26, 26)
+
+(100, 100, 100)
+
+(420, 430, 420)
+
+1/8
+
+(0.24, 0.24, 0.21)
+
+(0.83, 0.82, 0.82)
+
+(3, 3, 3)
+
+(12, 12, 11)
+
+(47, 47, 47)
+
+(190, 190, 190)
+
+-
+
+1/16
+
+(0.44, 0.41, 0.4)
+
+(1.5, 1.5, 1.4)
+
+(5.6, 5.6, 5.6)
+
+(22, 22, 22)
+
+(90, 90, 90)
+
+(370, 360, 360)
+
+-
+
+Table 5: Costs of WHIR-UD, WHIR-JB and WHIR-CB over a cubic extension of the Goldilocks
+field, targeting λ = 128 bits of security. Prover time includes single threaded (top) and multithreaded
+measurement (on 32 threads, bottom). For all metrics, lower is better.
+
+54
+
+Argument size
+
+Verifier hash complexity
+
+600
+
+Hashes
+
+Size (KiB)
+
+800
+
+400
+200
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+16000
+14000
+12000
+10000
+8000
+6000
+4000
+2000
+
+230
+
+218
+
+220
+
+222
+
+224
+
+226
+
+Degree
+
+Degree
+
+Prover time
+
+Verifier time
+
+228
+
+230
+
+228
+
+230
+
+28
+6
+
+Time (ms)
+
+Time (s)
+
+26
+24
+22
+20
+2−2
+
+5
+4
+3
+2
+1
+
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+230
+
+218
+
+Degree
+
+220
+
+222
+
+224
+
+226
+
+Degree
+
+Figure 3: Comparison of WHIR for ρ = 1/2. WHIR-UD: ▲, WHIR-JB: ▲, WHIR-CB: ▲. Prover time
+is displayed with logarithmic scaling.
+
+55
+
+7
+
+Compiling Σ-IOP to IOPs
+
+We show how to compile a rich family generalizing polynomial IOPs into IOPs that support a certain
+“sumcheckable” structure into standard IOPs.
+• In Section 7.1 we define a general class of protocols that we call F-IOPs, and use it to define the
+class of Σ-IOPs.
+• In Section 7.2 we show how to transform any linear Σ-IOP into a (standard) IOP using a proximity
+test for multi-constrained Reed–Solomon tests (such as WHIR when adapted as in Section 5.2).
+• In Section 7.3 we show how to transform any d-Σ-IOP into a linear Σ-IOP, thus strengthening
+the above transformation to work for d-Σ-IOPs.
+
+7.1
+
+F-IOPs and Σ-IOPs
+
+We consider F-IOPs, which are IOPPs that support a rich class of queries, from which we recover
+poly-IOP as a special subclass. F-IOPs are a specialization of IOP with special queries as introduced
+in [BCG20], in which we restrict the verifier to be non-adaptive and we do not consider holography.
+Definition 7.1. Consider the following ingredients:
+• an alphabet Σ;
+• a number of rounds kpoly ;
+• for i ∈ [kpoly ] a number of oracles si ∈ N;
+• for i ∈ [kpoly ], j ∈ [si ]:
+– an oracle set Oi,j ;
+– a query set Wi,j ;
+– an answer function Fi,j : Oi,j × Wi,j → Σ.
+Let Spec := (Σ, kpoly , (si )i∈[kpoly ] , ((Oi,j , Wi,j , Fi,j )j∈[si ] )i∈[kpoly ] ). (PIOP , VIOP ) is a public-coin F-IOP
+with specification Spec for a relation R proximity error β if the following properties hold.
+
+x y w) ∈ R,
+
+• (Perfect) Completeness. For every ( , ,
+
+
+xyw
+
+
+(fˆ1,j )j∈[s1 ] ← PIOP ( , , )
+
+
+π1 := ((F1,j (fˆ1,j , ŵ))ŵ∈W1,j )j∈[ℓ1 ] 
+
+ y,π1 ,...,πk
+.. 
+Pr 
+VIOP
+( , α1 , . . . , αk ) = 1
+. 
+
+ = 1.
+α1 ,...,αk 
+
+ˆ
+(fk,j )j∈[sk ] ← PIOP ( , , , α1 , . . . , αk ) 
+
+πk := ((Fk,j (fˆk,j , ŵ))ŵ∈Wk,j )j∈[sk ]
+
+x
+
+xyw
+
+xy
+
+• Soundness. For every ( , ) ∈
+/ L(R) and unbounded malicious prover P̃,
+
+
+(fˆ1,j )j∈[s1 ] ← P̃
+
+
+π1 := ((F1,j (fˆ1,j , ŵ))ŵ∈W1,j )j∈[s1 ] 
+
+ y,π1 ,...,πk
+.. 
+( , α1 , . . . , αk ) = 1
+Pr  VIOP
+. 
+ ≤ β( , ) .
+α1 ,...,αk 
+
+
+ˆ
+(fk,j )j∈[ℓk ] ← P̃(α1 , . . . , αk ) 
+
+πk := ((Fk,j (fˆk,j , ŵ))ŵ∈W )j∈[s ]
+
+x
+
+xy
+
+k,j
+
+56
+
+k
+
+Specializing F-IOPs to the query sets that are of interest to us, we obtain Σ-IOPs.
+Definition 7.2. Let Spec := (Σ, kpoly , (si )i∈[kpoly ] , ((Oi,j , Wi,j , Fi,j )j∈[si ] )i∈[kpoly ] ). A d-Σ-IOP over a
+field F is a F-IOP with specification Spec where Σ = F and for i ∈ [k], j ∈ [si ], there exists mi,j
+such that:
+Oi,j = F<2 [X1 , . . . , Xmi,j ]
+Wi,j ⊆ {ŵ ∈ F[Z, X1 , . . . , Xmi,j ] : degZ ŵ < d} ,
+X
+Fi,j (fˆ, ŵ) =
+ŵ(fˆ(b), b) .
+b∈{0,1}mi,j
+
+We refer to 2-Σ-IOPs as linear Σ-IOPs.11
+Remark 7.3. A multilinear PIOPP, in the standard sense, is simply a linear Σ-IOP where the
+query set is restricted to be Wi,j := {Z · eq(r, ·) : r ∈ Fmi,j }. A univariate PIOPP instead is a
+further restriction where Wi,j := {Z · eq(pow(r, mi,j ), ·) : r ∈ F}.
+
+7.2
+
+Linear Σ-IOPs to IOPPs
+
+We show how to compile linear Σ-IOPs (Definition 7.2) into IOPPs using an IOPP for constrained
+Reed–Solomon codes (such as the WHIR protocol Construction 5.1). For simplicity, we assume
+that all the polynomials sent in the input linear Σ-IOP have the same number of variables. This
+is without loss of generality, as oracles with fewer variables can be corrected, see, for example,
+[CBBZ23, Remark 3.2].
+Construction 7.4. Consider the following ingredients and notation:
+• a field F
+• a number of variables m ∈ N;
+• a kpoly -round linear Σ-IOP (Ppoly ,P
+Vpoly ) for a relation R where in round i, the prover sends si
+polynomials for a total of spoly = i∈[kpoly ] si , and with query sets
+Wi,j ⊆ {ŵ : F[Z, X1 , . . . , Xm ] : degZ ŵ < 2} ;
+• let d := 1 + maxi,j,ŵ∈Wi,j deg ŵ;
+• an evaluation domain L ⊆ F with |L| ≥ 2m ;
+• a kprx -round IOPP of proximity (Pprx , Vprx ) for multi-constrained Reed–Solomon codes CRS[F, L, m, ·, ·]
+that accepts as input a list of pairs of the form (ŵ, σ) with degZ ŵ < 2 and deg ŵ < d.12
+The protocol proceeds as follows:
+
+x y w) ∈ R. The verifier receives x as
+
+• Initial inputs: The honest prover receives as input ( , ,
+input and oracle access to .
+
+y
+
+• Poly-IOP interaction phase: For i = 1, . . . , kpoly :
+11
+
+This is because in that case one can write any query ŵ(Z, X) = â(X) · Z + ĉ(X) for â, ĉ ∈ F[X].
+See Section 5.2 for how to transform WHIR (or any other IOPP for constrained Reed–Solomon codes) into an
+IOPP for multi-constrained Reed–Solomon codes.
+12
+
+57
+
+1. Poly-IOP prover message: The prover send fi,1 , . . . , fi,si , where fi,j : L → F. In the honest
+case, the prover derives fˆi,1 , . . . , fˆi,si ← Ppoly ( , , , α1 , . . . , αi−1 ), and, for j ∈ [si ], let fi,j be
+the evaluation of fˆi,j on L.
+2. Out-of-domain sample: The verifier sends zi ← F. Let zi := pow(zi , m).
+3. Out-of-domain reply: The prover sends field elements (yi,j )j∈[si ] . In the honest case, yi,j =
+fˆi,j (zi ).
+4. Poly-IOP verifier message: The verifier samples and sends αi ← {0, 1}ri where ri is the
+number of random bits sent by Vpoly in round i.
+
+xyw
+
+• Send query results: The prover sends arrays of field elements (Ai,j )i∈[kpoly ],j∈[si ] . In the honest
+case, the prover simulates the execution of
+y,(fˆi,j )i∈[kpoly ],j∈[si ]
+Vpoly
+( , α1 , . . . , αkpoly ) .
+
+x
+
+For every i ∈ [kpoly ], j ∈ [si ], the prover sets Qi,j ⊆ F<d [X1 , . . . , Xm ] for the set of queries made
+by Vpoly to fˆi,j . The prover defines Q := ∪i∈[kpoly ],j∈[si ] Qi,j ∪ {Z · eq(zi , ·)} and sets Ai,j [ŵ] :=
+P
+ˆ
+b∈{0,1}m ŵ(fi,j (b), b) for ŵ ∈ Q.
+• Constrained Reed–Solomon interaction phase:
+1. Combination randomness:
+The verifier samples and sends γ ← F. For i ∈ [kpoly ] and
+P
+j ∈ [si ], let γi,j := γ j−1+ ℓ<i si .
+2. Interaction phase: The verifier defines Q as the prover does in Construction 7.4, and parses
+Q := {ŵ1 , . . . , ŵq }. Note that we order Q so that, for i ∈ [kpoly ], ŵi = Z · eq(zi , ·) matches
+the out of domain samples sampled in Item 2. For k ∈ [q] the verifier parses ŵk (Z, X) =
+Z · âk (X) + b
+ck (X) (which is possible since degZ ŵk < 2), and the verifier sets
+X
+σk :=
+γi,j · Ai,j [ŵk ]
+i∈[kpoly ],j∈[si ]
+
+X
+
+ŵk′ (Z, X) := Z · âk (X) +
+
+γi,j · ĉk (X) .
+
+i∈[kpoly ],j∈[si ]
+
+Run the interaction phase of the constrained Reed–Solomon proximity test (Pprx , Vprx ) for
+the code CRS[F, L, m, ((ŵk′ , σk ))k∈[q] ]. The honest prover acts according to the polynomial ĝ
+defined as
+X
+ĝ(X) :=
+γi,j · fˆi,j (X) .
+i∈[kpoly ],j∈[si ]
+
+• Decision phase:
+1. Out-of-domain sample consistency: The verifier checks that Ai,j [ŵi ] = yi,j for every
+i ∈ [kpoly ] and j ∈ [si ].
+2. Constrained Reed–Solomon decision phase: The verifier checks that Vprx accepts in its
+decision phase, answering a query z ∈ L made by Vprx to its input codeword g : L → F by
+querying the virtual function
+X
+γi,j · fi,j (z) .
+g(z) :=
+i∈[kpoly ],j∈[si ]
+
+58
+
+y,(fˆi,j )i∈[kpoly ],j∈[si ]
+3. PIOP-Verifier decision: The verifier checks that Vpoly
+( , α1 , . . . , αkpoly ) = 1,
+answering queries to by querying directly, and answering a query ŵ ∈ Q to fˆi,j with Ai,j [ŵ]
+(and rejecting if any query ŵ ∈
+/ Q).
+
+y
+
+x
+
+y
+
+Complexity parameters. We analyze the complexity measures of Construction 7.4:
+• Rounds. The protocol has O(kpoly + kprx ) rounds.
+• Proof length. The oracle proof length (in elements of F) is O(lprx + spoly · |L|), while the non-oracle
+proof length is O(spoly · qpoly,π ). The total proof length is then O(lprx + spoly · (|L| + qpoly,π )).
+
+y
+
+• Input query complexity. The verifier makes qpoly,y queries to its oracle input .
+• Proof query complexity. The total proof query complexity is O(spoly · qprx,f + qprx,π ).
+• Verifier complexity. The verifier running time is O(vtpoly + vtprx ) where vtpoly is the running time
+of the PIOP verifier and vtprx is the running time of the IOPP verifier.
+7.2.1
+
+Round-by-round knowledge soundness
+
+We analyze the round-by-round knowledge soundness error of the IOPP resulting from Construction 7.4.
+Theorem 7.5. Consider (F, m, (Ppoly , Vpoly , R, kpoly , spoly , (si ), (Q)i,j ), d, L, (Pprx , Vprx , kprx )) as in Construction 7.4. Fix δ ∈ (0, 1) and suppose the following:
+poly
+• (Ppoly , Vpoly ) has round-by-round knowledge soundness error (errpoly
+1 , . . . , errkpoly ) with extraction
+time etpoly ;
+prx
+• (Pprx , Vprx ) has round-by-round soundness error (errprx
+1 , . . . , errkprx );
+• the function Gen(ℓ; α) = (1, α, . . . , αℓ−1 ) is a proximity generator with mutual correlated agreement
+for the code RS[F, L, m] with bound B⋆ and error err⋆ ;
+• δ < B⋆ ;
+• the code CRS := RS[F, L, m] is (ℓ, δ)-list decodable with list-decoding time etRS .
+s
+• the interleaved code CRSpoly is (ℓspoly , δ)-list decodable.
+
+The protocol derived from Construction 7.4 is an IOPP for R with extraction time O(etpoly + etRS +
+piop
+prx
+com
+ℓ · 2m ) and round-by-round knowledge soundness error ((εout
+i , εi )i∈[kpoly ] , ε , (εi )i∈[kprx ] ) where:
+m
+
+2
+
+si ·2 ·ℓ
+• εout
+i ≤ 2·|F| ;
+poly
+• εpiop
+i ≤ erri ( , );
+
+xy
+
+• εcom ≤ err⋆ (CRS , spoly , δ) +
+prx
+• εprx
+i ≤ erri (δ).
+
+(spoly −1)·ℓspoly
+;
+|F|
+
+Proof. Let Statepoly and Epoly be the state function and extractor of the PIOP scheme (Ppoly , Vpoly ),
+and Stateprx be the state function of the IOPP. We first prove a lemma showing that list-decoding
+algorithms for Reed–Solomon codes imply list-decoding algorithms for constrained Reed–Solomon
+codes. We then define the state function for our protocol and conclude by bounding the round-byround knowledge soundness errors derived using this state function.
+59
+
+Lemma 7.6. Let C := RS[F, L, m] be a Reed–Solomon code. Suppose that C is (δ, ℓ)-list decodable
+and that ERS is an extractor that list-decodes a codeword of distance at most δ from C in time at
+most etRS .
+For any z ∈ Fm , σ ∈ F, there exists an extractor ECRS that list-decodes a codeword of distance
+at most δ from CRS[F, L, m, Z · eq(z, ·), σ] in time etRS + O(ℓ · 2m ).
+Proof. Consider the following extractor:
+ECRS (f ):
+1. Compute Λ := ERS (f ).
+2. Return {u ∈ Λ : û(z) = σ}.
+The running time of the extractor is etRS + O(ℓ · 2m ) as claimed. It is also clear that the extractor
+only returns codewords in CRS[F, L, m, eq(z, ·), σ], and since for every f : L → F,
+Λ(CRS[F, L, m, eq(z, ·), σ], f, δ) ⊆ Λ(C, f, δ) ,
+the results follows.
+Remark 7.7. Lemma 7.6 can be generalized to an arbitrary constrained Reed–Solomon codes
+CRS[F, L, m, ŵ, σ] , at an increase of the extractor running time to etRS + O(ℓ · 2m · |ŵ|), where |ŵ|
+denotes the cost to evaluate ŵ at a point on the binary hypercube.
+The state function and the extractor. Define the following codes
+CRS := RS[F, L, m]
+(i,j)
+CCRS := CRS[F, L, m, Z · eq(zi , ·), yi,j ]
+CCRS := CRS[F, L, m, ((ŵk′ , σk ))k∈[q] ] .
+
+We now define the state function and extractor:
+0. Initial transcript: Given an instance
+Statepoly ( , , ∅).
+
+xy
+
+x and an implicit input y we set State(x, y, ∅) =
+
+1. Out-of-domain sample: At this stage the transcript has the form
+
+
+((fℓ,1 , . . . , fℓ,sℓ ), zℓ , (yℓ,1 , . . . , yℓ,sℓ ), αℓ )ℓ<i
+tr =
+.
+(fi,1 , . . . , fi,si )
+The verifier chooses zi ← F.
+
+xy
+
+• State function: We set State( , , tr∥zi ) = 1 if and only if at least one of the following holds:
+(i,j)
+
+(a) Multiple consistent codewords: There exist ℓ ≤ i and j ∈ [si ] with |Λ(CCRS , fi,j , δ)| > 1.
+(b) Previous rounds accepting: There exist codewords (uℓ,j )ℓ∈[i−1],j∈[sℓ ] such that:
+(ℓ,j)
+
+i. uℓ,j ∈ Λ(CCRS , fℓ,j , δ).
+ii. Statepoly ( , , ((uℓ,j )j∈[sℓ ] , αℓ )ℓ<i ) = 1.
+
+xy
+
+xy
+
+• Extractor: the extractor E( , , tr) outputs ⊥.
+60
+
+2. Poly-IOP verifier message: At this stage the transcript has the form
+
+
+((fℓ,1 , . . . , fℓ,sℓ ), zℓ , (yℓ,1 , . . . , yℓ,sℓ ), αℓ )ℓ<i
+tr =
+.
+(fi,1 , . . . , fi,si ), zi , (yi,1 , . . . , yi,si )
+The verifier chooses αi ← {0, 1}ri .
+
+xy
+
+• State function: We set State( , , tr∥αi ) = 1 if and only if either of the following hold:
+(ℓ,j)
+
+(a) Multiple consistent codewords: There exist ℓ ≤ i and j ∈ [sℓ ] with |Λ(CCRS , fℓ,j , δ)| > 1.
+(b) Rounds are accepting: There exist codewords (uℓ,j )ℓ∈[i],j∈[sℓ ] such that:
+(ℓ,j)
+
+i. uℓ,j ∈ Λ(CCRS , fℓ,j , δ).
+ii. Statepoly ( , , ((uℓ,j )j∈[sℓ ] , αℓ )ℓ∈[i] ) = 1.
+
+xy
+
+xy
+
+• Extractor: The extractor E( , , tr) proceeds as follows:
+(ℓ,j)
+
+(a) For ℓ ≤ i and j ∈ [sℓ ], the extractor computes Λℓ,j := Λ(CCRS , fℓ,j , δ) := ECRS (fℓ,j ), and
+let uℓ,j be an arbitrary codeword in Λℓ,j (the extractor outputs ⊥ if no such codeword
+exists).
+(b) Compute := Epoly ( , , ((ûℓ,j )j∈[sℓ ] , αℓ )ℓ<[i] , ûi,j ) and output .
+
+w
+
+xy
+
+w
+
+3. Combination randomness: At this stage the transcript has the form
+
+
+((fi,1 , . . . , fi,si ), zi , (yi,1 , . . . , yi,si ), αi )i≤kpoly
+tr =
+.
+(Ai,j )i∈[kpoly ],j∈[si ]
+P
+
+:= γ j−1+ ℓ<i si ,
+The verifier chooses γ ← F. Here, and
+P hereafter, for i ∈ [kpoly ] and j ∈ [si ], let γi,j
+let Q := {ŵ1 , . . . , ŵq }, and set g := i,j γi,j · fi,j . For k ∈ [q], we parse ŵk (Z, X) = Z · âk (X) +
+ĉk (X) and set:
+X
+ŵk′ (Z, X) := Z · âk (X) +
+γi,j · ĉk (X)
+i,j
+
+σk :=
+
+X
+
+γi,j · Ai,j [zk ] .
+
+i,j
+
+xy
+
+• State function: We set State( , , tr∥γ) = 1 if all of the following hold
+
+y
+
+(a) Rounds are accepting: Vpoly accepts given access to and given query answers according
+to (Ai,j ).
+(b) Out-of-domain consistency: For each i ∈ [kpoly ], j ∈ [si ] it holds that Ai,j [zi ] = yi,j .
+(c) Proximity claim: ∆(g, CCRS ) ≤ δ.
+
+xy
+
+• Extractor: The extractor E( , , tr) outputs ⊥.
+4. Proximity test: At this stage the transcript has the form
+
+
+((fi,1 , . . . , fi,si ), zi , (yi,1 , . . . , yi,si ), αi )i≤kpoly
+.
+tr =
+(Ai,j )i∈[kpoly ],j∈[si ] , γ, (πℓ , αprx,ℓ )ℓ<t , πt
+The verifier chooses αprx,i .
+61
+
+xy
+
+• State function: We set State( , , tr∥αprx,i ) = 1 if all of the following hold:
+
+y
+
+(a) Rounds are accepting: Vpoly accepts given access to and given query answers according
+to (Ai,j ).
+(b) Out-of-domain consistency: For each i ∈ [kpoly ], j ∈ [si ] it holds that Ai,j [zi ] = yi,j .
+(c) Proximity round-by-round: Stateprx (g, trprx ) = 1, where trprx = (πℓ , αprx,ℓ )ℓ<t ∥πi .
+
+xy
+
+• Extractor: The extractor E( , , tr) outputs ⊥.
+Bounding the errors. We now bound the round-by-round soundness errors based on the state
+function described above. As with the definition of the state function, we separately bound the
+probability of the state flipping for each partial transcript length.
+
+xy
+
+1. Out-of-domain sample: We show that if State( , , tr) = 0, then
+
+xy
+
+εout
+i = Pr [State( , , tr∥zi ) = 1] ≤
+
+si · 2m · ℓ2
+.
+2 · |F|
+
+Since the error is always bounded by above, we do not require the extractor to be able to extract.
+Since State( , , tr) = 0, it must be that Item 2b does not hold, and so it also must Item 1b must
+not hold. We are left then to bound the probability that Item 1a holds. This follows directly by
+Lemma 4.25, and taking a union-bound over the si functions sent by the prover.
+
+xy
+
+xy
+
+2. Poly-IOP verifier message: We show that if State( , , tr) = 0, and
+
+xy
+xy
+the extractor outputs a witness w := E(x, y, tr) such that (x, y, w) ∈ R. For every ℓ ≤ i and
+poly
+εpiop
+i = Pr [State( , , tr∥αi ) = 1] > erri ( , ) ,
+
+j ∈ [sℓ ], by Item 1a, there is at most one codeword uℓ,j ∈ Λ(CRSℓ,j , fℓ,j , δ), and there must be
+exactly one, as otherwise Item 2b cannot hold and State( , , tr∥αi ) = 0 for every αi . Thus, the
+extractor ECRS never outputs ⊥, and will return the codewords (uℓ,j )ℓ≤i,j∈[sℓ ] . By Item 1b, it
+must be that Statepoly ( , , ((ûℓ,j )j , αℓ )ℓ<i ) = 0. Now, for every αi , State( , , tr∥αi ) = 0 implies
+that Statepoly ( , , ((ûℓ,j )j∈[sℓ ] , αℓ )ℓ<i ∥ûi,j ) = 1, and thus, by our assumption
+
+xy
+
+xy
+
+xy
+
+xy
+
+xy
+
+xy
+
+xy
+
+Pr[Statepoly ( , , ((uℓ,j )j∈[sℓ ] , αℓ )ℓ≤i ) = 1] ≥ Pr[State( , , tr∥αi ) = 1] > errpoly
+i ( , ).
+Thus, by round-by-round knowledge soundness of the PIOP it follows that
+
+xy xy
+
+xy
+
+xy
+
+( , , E( , , tr)) = ( , , Epoly ( , , ((ûℓ,j )j∈[sℓ ] , αℓ )ℓ<i , (ûi,j )j∈[si ] )) ∈ R
+
+xy
+
+3. Combination randomness: We show that if State( , , tr) = 0, then
+
+xy
+
+εcom = Pr [State( , , tr∥γ) = 1] ≤ err⋆ (CRS , spoly , δ) +
+
+(spoly − 1) · ℓspoly
+.
+|F|
+
+Since the error is always bounded by above, we do not require the extractor to be able to extract.
+We assume that Items 3a and 3b both hold, as otherwise the state function will be 0. We are
+left to bound the probability of Item 3c occurring. We first show that there exists a function fi,j
+which is far from the constrained Reed–Solomon code.
+62
+
+Claim 7.8. There exists i∗ ∈ [kpoly ] and j ∗ ∈ [si ] with
+
+
+(i∗ ,j ∗ )
+∆ fi∗ ,j ∗ , CA
+> δ,
+(i∗ ,j ∗ )
+
+where CA
+
+
+
+:= CRS F, L, m, ((ŵk , Ai∗ ,j ∗ [ŵk ]))k∈[q] .
+(i,j)
+
+(i,j)
+
+(i,j)
+
+(i,j)
+
+Proof. Consider ui,j ∈ CA and observe that CA P
+⊆ CCRS . Thus, ui,j ∈ CCRS . Moreover, by
+definition, for every ŵ ∈ Qi,j it holds that Ai,j [ŵ] = b∈{0,1}m ŵ(ûi,j (b), b). Since the state is 0,
+for every (ui,j )i∈[kpoly ],j∈[si ] :
+∗
+
+∗
+
+i ,j
+• Either there is i∗ , j ∗ with ui∗ ,j ∗ ∈
+/ Λ(CCRS
+, fi∗ ,j ∗ , fi∗ ,j ∗ , δ), or
+• Otherwise, Statepoly ( , , ((ui,j )j∈[si ] , αi )i∈[kpoly ] ) = 0. However, since we are working under
+the assumption that Item 3a holds, Vpoly accepts given access to
+and the query answers
+∗
+∗
+according
+to
+(A
+).
+Therefore,
+there
+must
+be
+u
+and
+ŵ
+∈
+Q
+i,j
+i ,j
+i,j such that Ai∗ ,j ∗ [ŵ] ̸=
+P
+b∈{0,1}m ŵ(ûi∗ ,j ∗ (b), b).
+
+xy
+
+y
+
+This proves the claim, as otherwise there would exist (ui,j )i∈[kpoly ],j∈[si ] that contradict the above
+items.
+We show that the state will switch to 1 with probability at most err⋆ (CRS , spoly , δ) +
+over the choice of γ. For i ∈ [kpoly ], j ∈ [si ], let γi,j := γ
+
+P
+j−1+ ℓ<i si
+
+(spoly −1)·ℓspoly
+|F|
+
+and let f := (fi,j )i∈[kpoly ],j∈[si ] .
+
+According to Lemma 4.13 and from the fact that Gen(spoly ; γ) := (1, γ, . . . , γ spoly −1 ) is a proximity
+generator for CRS with bound B⋆ ≥ δ and error err⋆ , we have that the probability over γ that
+
+
+
+
+X
+s
+Λ (CRS , g, δ) ̸=
+γi,j · ui,j : u ∈ Λ(CRSpoly , f , δ) ,
+(4)
+
+
+i∈[kpoly ],j∈[si ]
+
+is at most err⋆ (CRS , spoly , δ). In other words, except with small probability, every Reed–Solomon
+codeword that is close to g can be explained as the linear combination of spoly codewors that
+are (jointly) close to the respective function fi,j . The following claim shows that with high
+probability over γ, there are no such codewords that comply with the summed constraint.
+s
+
+Claim 7.9. The probability over the choice of γ that there exist u ∈ Λ(CRSpoly , f , δ) such that, for
+every k ∈ [q],
+
+
+X
+X
+X
+ŵk′ 
+γi,j · ûi,j (b), b =
+γi,j · Ai,j [ŵk ]
+b∈{0,1}m
+
+is at most
+
+i∈[kpoly ],j∈[si ]
+
+i∈[kpoly ],j∈[si ]
+
+(spoly −1)·ℓspoly
+.
+|F|
+s
+
+Proof.
+Fix i∗ , j ∗ as in Claim 7.8 and u ∈ Λ(CRSpoly , f , δ) (recall that u ∈ (FL )spoly ). Since
+
+P
+(i∗ ,j ∗ )
+∆ fi∗ ,j ∗ , CA
+> δ, there exists ŵk for which b∈{0,1}m ŵk (ûi∗ ,j ∗ (b), b) ̸= Ai∗ ,j ∗ [ŵk ]. Thus,
+63
+
+defining the formal polynomials of degree spoly − 1:
+
+
+P
+X
+X
+Y j−1+ ℓ<i si · ûi,j (b), b
+ŵk′ 
+p̂(Y ) :=
+b∈{0,1}m
+
+X
+
+q̂(Y ) :=
+
+Y
+
+i∈[kpoly ],j∈[si ]
+P
+j−1+ ℓ<i si
+
+· Ai,j [ŵk ] ,
+
+i∈[kpoly ],j∈[si ]
+
+we have p̂ ̸≡ q̂. Hence
+Pr [p̂(γ) = q̂(γ)] ≤
+
+γ←F
+
+spoly − 1
+,
+|F|
+
+The claim follows by taking a union bound over the (at most) ℓspoly options of choosing u ∈
+s
+s
+Λ(CRSpoly , f , δ) (since CRSpoly is (ℓspoly , δ)-list decodable).
+By taking a union bound over the events that Equation 4 and Claim 7.8 hold, we have that
+
+(spoly −1)·ℓspoly
+, we have that for every u ∈ Λ(CRS , g, δ) it
+|F|
+
+except with probability err⋆ (CRS , spoly , δ) +
+holds that there exists k with
+X
+ŵk′ (û(b), b) ̸=
+b∈{0,1}m
+
+X
+
+γi,j · Ai,j [ŵk ] = σk .
+
+i∈[kpoly ],j∈[si ]
+
+As a result, u ∈
+/ CCRS = CRS[F, L, m, ((ŵk′ , σk ))k∈[q] ]. Since CCRS ⊆ CRS , we conclude that
+∆(g, CCRS ) > δ, which invalidates Item 3c, and so the state remains 0 except with probability
+err⋆ (CRS , spoly , δ) +
+
+(spoly −1)·ℓspoly
+.
+|F|
+
+xy
+Pr [State(x, y, tr∥α
+
+4. Proximity test: We show that if State( , , tr) = 0, then
+prx,i
+
+)] ≤ errprx
+i (δ) .
+
+Since the error is always bounded from above, we do not require that the extractor is able to
+extract. We consider two cases:
+• i = 1. Since Item 4a and Item 4b are independent of αprx,1 , we assume that they hold, or
+else the state function will be 0. Then, it must be that Item 3c does not hold, and thus
+Stateprx (g, ∅) = 0. Then,
+
+xy
+
+prx
+εprx
+1 = Pr [State( , , tr∥αprx,i )] = Pr [State(g, π1 ∥αprx,1 ) = 1|State(g, π1 ) = 0] ≤ err1 (δ) .
+
+• i > 1. Since Item 4a and Item 4b are independent of αprx,i , we assume that they hold, or
+else the state function will be 0. Then, it must be that Item 4c does not hold, and thus
+Stateprx (g, trprx ) = 0. Then,
+
+xy
+
+prx
+εprx
+i = Pr [State( , , tr∥αprx,i )] = Pr [State(g, trprx ∥αprx,i ) = 1|State(g, trprx ) = 0] ≤ erri (δ) .
+
+xy
+
+5. Verifier decision. If State( , , tr) = 0 for a full transcript, then the verifier rejects, as it checks
+each of the items of the state function.
+
+64
+
+7.3
+
+d-Σ-IOPs to linear Σ-IOPs
+
+We show how to compile d-Σ-IOPs to linear Σ-IOPs. Combining this with Construction 7.4 and an
+IOPP for constrained Reed–Solomon codes (such as WHIR Construction 5.1) this yields IOPPs for
+relations captured by d-Σ-IOPs. Alternatively, one could run Construction 7.4 while foregoing the
+batching step and running an individual instance of the IOPP for constrained Reed–Solomon codes
+for each tested oracle. Applying the chain of compilers that we present here can be significantly
+more efficient, as a single invocation of the proximity test is required.
+As in Construction 7.4, without loss of generality, we assume that each oracle sent in the input
+d-Σ-IOPs has the same number of variables m.
+Construction 7.10. Consider the following ingredients and notation:
+• a field F;
+• a number of variables m ∈ N;
+• a kpoly -round d-Σ-IOP (Ppoly , VpolyP
+) for a relation R with where in round i, the prover sends si
+polynomials for a total of spoly = i∈[kpoly ] si , and with query sets
+Wi,j ⊆ {ŵ : F[Z, X1 , . . . , Xm ] : degZ ŵ < d} ;
+• let d∗ := 1 + d + maxi,j,ŵ∈Wi,j deg ŵ;
+The protocol proceeds as follows:
+
+x y w) ∈ R. The verifier receives x as
+
+• Initial inputs: The honest prover receives as input ( , ,
+input and oracle access to .
+
+y
+
+• Poly-IOP interaction phase: For i = 1 to kpoly :
+1. Poly-IOP prover message: The prover send fˆi,1 , . . . , fˆi,si , where fˆi,j : F<2 [X1 , . . . , Xm ]. In
+the honest case, the prover derives fˆi,1 , . . . , fˆi,si ← Ppoly ( , , , α1 , . . . , αi−1 ).
+
+xyw
+
+2. Poly-IOP verifier message: The verifier samples and sends αi ← {0, 1}ri where ri is the
+number of random bits sent by Vpoly in round i.
+• Interaction phase:
+1. Send query results: The prover sends arrays of field elements (Ai,j )i∈[kpoly ],j∈[si ] . In the
+honest case, the prover simulates the execution of
+y,(fˆi,j )i∈[kpoly ],j∈[si ]
+Vpoly
+( , α1 , . . . , αkpoly ) .
+
+x
+
+For every i ∈ [kpoly ], j ∈ [si ], the prover sets Qi,j ⊆ F[Z, X1 , . . . , Xm ] for the set of queries made
+P
+by Vpoly to fˆi,j and sets Ai,j [ŵ] := b∈{0,1}m ŵ(fˆi,j (b), b) for ŵ ∈ Qi,j .
+2. Combination randomness: The verifier defines Q to be the set of (i, j, ŵ) entries in A, and
+samples and sends γ ← F|Q| . Fix an ordering ϕ : Q → [|Q|] of Q, and for q ∈ Q let γq := γϕ(q) .
+3. Set β := ∅. For i = 1 to m:
+∗
+
+(a) Sumcheck polynomial:
+The prover sends ĥi ∈ F<d [X]. In the honest case the prover
+P
+defines ĝ(X) := q=(i,j,ŵ)∈Q γq · ŵ(fˆi,j (X), X) and ĥi is defined as
+X
+ĥi (X) :=
+ĝ(β, X, b) .
+b∈{0,1}m−i−1
+
+65
+
+(b) Sumcheck randomness: The verifier samples and sends βi ← F. Update β := (β∥βi ).
+• Decision phase:
+y,(fˆi,j )i∈[kpoly ],j∈[si ]
+1. PIOP verifier decision: The verifier checks that Vpoly
+( , α1 , . . . , αkpoly ) = 1,
+rederiving Q and answering queries to
+by querying
+directly, and answering a query
+(i, j, ŵ) ∈ Q to fˆi,j with Ai,j [ŵ] (and rejecting any invalid query).
+
+y
+
+2. Sumcheck checks: Check that
+X
+
+X
+
+ĥ1 (b) =
+
+b∈{0,1}
+
+and, for 1 < i ≤ m,
+
+y
+
+x
+
+γq · Ai,j [ŵ] ,
+
+q=(i,j,ŵ)∈Q
+
+X
+
+ĥi (b) = ĥi−1 (βi−1 ) ,
+
+b∈{0,1}
+
+3. Consistency checks: For every i, j the verifier queries fˆi,j at ŵ∗ (Z, X) := Z · eq(β, X) to
+obtain vi,j . For every q = (i, j, ŵ) ∈ Q, set vq := vi,j . The verifier checks that
+X
+γq · ŵ(β, vq ) = ĥm (βm ) .
+q=(i,j,ŵ)∈Q
+
+Complexity parameters. We analyze the complexity measures of Construction 7.10:
+• Rounds. The protocol has O(kpoly + m) rounds.
+• Number of polynomials. The prover sends spoly functions.
+• Query degree. The queries ŵ∗ are multilinear.
+
+y
+
+• Input query complexity. The verifier makes qpoly,y queries to its oracle input .
+• Proof query complexity. The verifier makes O(spoly ) multilinear queries.
+• Verifier complexity. The verifier running time is O(vtpoly ) where vtpoly is the running time of the
+d-Σ-IOP verifier.
+7.3.1
+
+Round-by-round knowledge soundness
+
+We analyze the round-by-round knowledge soundness error of the linear-Σ-IOP resulting from Construction 7.10.
+Theorem 7.11. Consider (F, m, (Ppoly , Vpoly , R, kpoly , (si ), (Q)i,j ), d∗ ) as in Construction 7.10. Fix
+poly
+δ ∈ (0, 1) and suppose that (Ppoly , Vpoly ) has round-by-round knowledge soundness error (errpoly
+1 , . . . , errkpoly )
+with extraction time etpoly .
+The protocol derived from Construction 7.10 is a linear Σ-IOP for R with extraction time etpoly
+com
+sum
+and round-by-round knowledge soundness error ((εpiop
+i )i∈[kpoly ] , ε , (εi )i∈[m] ) where:
+
+xy
+
+poly
+• εpiop
+i ≤ erri ( , );
+1
+• εcom ≤ |F|
+;
+
+66
+
+∗
+
+d
+• εsum
+i ≤ |F| .
+
+Proof. Let Statepoly and Epoly be the state function and extractor of the d-Σ-IOP scheme (Ppoly , Vpoly ).
+We describe the state function and the extractor, and then prove knowledge-soundness errors for
+the protocol.
+The state function and the extractor.
+0. Initial transcript: Given an instance
+Statepoly ( , , ∅).
+
+xy
+
+x and an implicit input y we set State(x, y, ∅) =
+
+1. Poly-IOP verifier message: At this stage the transcript has the form
+
+
+((fℓ,1 , . . . , fℓ,sℓ ), αℓ )ℓ<i
+tr =
+.
+(fi,1 , . . . , fi,si )
+The verifier chooses αi ← {0, 1}ri .
+
+xy
+
+xy
+
+• State function: We set State( , , tr∥αi ) = 1 if and only if Statepoly ( , , tr∥αi ) = 1.
+
+xy
+
+xy
+
+• Extractor: The extractor is defined as E( , , tr) := Epoly ( , , tr).
+2. Combination randomness: At this stage the transcript has the form
+
+
+((fℓ,1 , . . . , fℓ,sℓ ), αℓ )ℓ∈[kpoly ]
+tr =
+.
+(Ai,j )i∈[kpoly ],j∈[si ]
+The verifier chooses γ ← F|Q| .
+
+xy
+
+• State function: We set State( , , tr∥αi ) = 1 if and only if the following both hold:
+
+y
+
+(a) Rounds are accepting: Vpoly accepts given access to and given query answers according
+to (Ai,j ).
+(b) True sumcheck claim:
+X
+X
+ĝ(b) =
+γq · Ai,j [ŵ] .
+b∈{0,1}m
+
+q=(i,j,ŵ)∈Q
+
+xy
+
+• Extractor: The extractor returns E( , , tr) := ⊥.
+3. Sumcheck message: At this stage the transcript has the form
+
+((fℓ,1 , . . . , fℓ,sℓ ), αℓ )ℓ∈[kpoly ]
+.
+(Ai,j )i∈[kpoly ],j∈[si ] , γ
+tr = 
+(ĥℓ , βℓ )ℓ<i , ĥi
+
+
+The verifier chooses βi ← F.
+
+xy
+
+• State function: We set State( , , tr∥βi ) = 1 if and only if the following all hold:
+(a) Rounds are accepting: Vpoly accepts given access to
+to (Ai,j ).
+67
+
+y and given query answers according
+
+P
+P
+(b) Sumcheck checks:
+b∈{0,1} ĥ1 (b) =
+q=(i,j,ŵ)∈Q γq · Ai,j [ŵ] and, if i > 1, then for 1 < ℓ ≤
+P
+i, b∈{0,1} ĥℓ (b) = ĥℓ−1 (βℓ−1 ).
+(c) True sumcheck claim:
+X
+ĝ(β1 , . . . , βi , b) = ĥi (βi ) .
+b∈{0,1}m−i
+
+xy
+
+• Extractor: the extractor returns E( , , tr) := ⊥.
+Bounding the errors. We now bound the round-by-round soundness errors based on the state
+function described above. As with the definition of the state function, we separately bound the
+probability of the state flipping for each partial transcript length.
+
+xy
+
+1. Poly-IOP verifier message: We show that if State( , , tr) = 0 and
+
+xy
+xy
+the extractor outputs a witness w := E(x, y, tr) such that (x, y, w) ∈ R. Since,
+Pr[State (x, y, tr∥αi ) = 1] = Pr[State(x, y, tr∥αi ) = 1] > erri (x, y) ,
+the extractor E outputs a valid witness, and thus (x, y, E(x, y, tr)) = (x, y, E (x, y, tr)) ∈ R.
+2. Combination randomness: We show that if State(x, y, tr) = 0 then
+poly
+εpiop
+i = Pr[State( , , tr∥αi ) = 1] > erri ( , ) ,
+
+poly
+
+poly
+
+poly
+
+poly
+
+xy
+
+εcom = Pr[State( , , tr∥αi ) = 1] ≤
+
+1
+.
+|F|
+
+Since the error probability is always bounded from above, we do not require the extractor to be
+able to extract.
+
+xy
+
+xy
+
+Since Statepoly ( , , tr) = State( , , tr) = 0, if for every (i, j, ŵ) ∈ Q we have that Ai,j [ŵ] =
+P
+∗ ∗
+∗
+ˆ
+b∈{0,1}m ŵ(fi,j (b), b), then Item 2a cannot hold. Then, there must be some index (i , j , ŵ ) ∈
+P
+∗ ˆ
+Q such that Ai∗ ,j ∗ [ŵ∗ ] ̸=
+m ŵ (fi∗ ,j ∗ (b), b). But then, by the polynomial identity lemma,
+b∈{0,1}
+
+the probability that Item 2b holds is bounded above by
+
+
+X
+X
+Pr 
+ĝ(b) =
+γq · Ai,j [ŵ]
+b∈{0,1}m
+
+q=(i,j,ŵ)∈Q
+
+
+=
+
+Pr
+
+γ←F|Q|
+
+
+
+
+X
+
+
+q=(i,j,ŵ)∈Q
+
+γq · 
+
+X
+
+
+
+ŵ(fˆi,j (b), b) =
+
+b∈{0,1}m
+
+X
+q=(i,j,ŵ)∈Q
+
+γq · Ai,j [ŵ] ≤
+
+1
+.
+|F|
+
+x
+
+3. Sumcheck randomness: We show that if State( , tr) = 0, then
+
+xy
+
+εsum
+i = Pr[State( , , tr∥βi ) = 1] ≤
+
+d∗
+.
+|F|
+
+Since the error is always bounded from above, we do not require the extractor to be able to
+extract. We handle the case where i > 0, the case where i = 0 is identical, apart from the
+values β0 , . . . , βi−1 not appearing. If Item 3a does not hold, it will continue not to hold as it
+68
+
+is independent of βi . Likewise, if Item 3b does not hold it will continue not to hold. Thus, we
+assume that Item 3c does not hold for round i − 1, that is that
+X
+ĝ(β1 , . . . , βi−1 , b) ̸= ĥi−1 (βi−1 ) .
+b∈{0,1}m−i+1
+
+Since Item 3b holds, we have
+
+b∈{0,1} ĥi (b) = ĥi−1 (βi−1 ), and so we conclude that
+
+P
+
+X
+b∈{0,1}m−i+1
+
+as a result of which,
+
+X
+
+ĝ(β1 , . . . , βi−1 , b) ̸=
+
+X
+
+ĥi (b) ,
+
+b∈{0,1}
+
+ĝ(β1 , . . . , βi−1 , X, b) ̸≡ ĥi (X) ,
+
+b∈{0,1}m−i
+
+and by the polynomial identity lemma and since the above polynomials have degree bounded by
+d∗ :
+
+
+X
+d∗
+.
+Pr[State( , tr∥βi ) = 1] = Pr ĥi (βi ) =
+ĝ(β1 , . . . , βi , b) ≤
+βi ←F
+|F|
+m−i
+
+x
+
+b∈{0,1}
+
+xy
+
+4. Verifier decision. If State( , , tr) = 0 for a full transcript, then the verifier rejects, as it checks
+each of the items of the state function: Item 3a and Item 3b are checked directly. If Item 3c does
+not hold for i = m then
+ĝ(β1 , . . . , βm ) ̸= ĥi (βm ) .
+P
+Letting β := (β1 , . . . , βm ) and opening up ĝ(β) := q=(i,j,ŵ)∈Q γq · ŵ(fˆi,j (β), β), we infer that
+X
+
+γq · ŵ(fˆi,j (β), β) ̸= ĥi (βm ) .
+
+q=(i,j,ŵ)∈Q
+
+Now, observe that for every q = (i, j, ŵ) ∈ Q,
+X
+fˆi,j (β) =
+fˆi,j (b) · eq(β, b) =
+b∈{0,1}m
+
+And so
+
+X
+
+ŵ∗ (fˆi,j (b), b) = vq .
+
+b∈{0,1}m
+
+X
+
+γq · ŵ(vq , β) ̸= ĥi (βm ) ,
+
+q=(i,j,ŵ)∈Q
+
+which is checked by the verifier, and it will reject.
+
+69
+
+A
+
+Linear Σ-IOP for generalized R1CS
+
+We describe a polynomial IOP for the generalized R1CS relation (GR1CS), as defined in [DMS24].
+Definition A.1. The relation RGR1CS is the set of all pairs ((F, k, n, c, t, v, C), w) where:
+• F is a finite field;
+• k ∈ N denotes the number of inputs of the constraint system;
+• n ∈ N denotes the number of variables of the constraint system (with k ≤ n);
+• c ∈ N denotes the number of constraint sets;
+• t ∈ N denotes the arity of the predicates;
+• v ∈ Fn−k is the input to the constraint system;
+• w ∈ Fk is the witness to the constraint system;
+• and C := ((di , Li , Mi , mi ))i∈[c] is a set of custom constraints, where, for every i ∈ [c]:
+– Mi := (Mi,1 , . . . , Mi,t ) are constraint matrices, where for j ∈ [t], Mi,j ∈ Fmi ×n ;
+– L̂i ∈ F<di [X1 , . . . , Xt ] is a local predicate;
+and, for every i ∈ [c], j ∈ [mi ]:
+L̂i ((Mi,1 z)[j], . . . , (Mi,t z)[j]) = 0 ,
+where z := (v, w) ∈ Fn .
+We present a Σ-IOP for GR1CS. The Σ-IOP is inspired by prior (univariate and multivariate)
+PIOPs for R1CS [BCRSVW19; Set19; STW23]. GR1CS instances of the form (F, k, n, 1, 3, v, (3, X1 ·
+X2 − X3 , (A, B, C), n)) exactly capture (non-generalized) R1CS instances. Moreover, GR1CS subsumes other constraint systems such as CCS and CCS+ [STW23]. Hence, our Σ-IOP directly
+supports a rich class of constraint systems.
+Construction A.2. Let F be a field. Consider the following ingredients and notation.
+• We assume that n is a power of two and n = 2m . Sometimes we refer to elements of {0, 1}m as
+elements in [n]. Implicitly, we assume a bijection between the two and use it as appropriate to
+translate between the two domains. For simplicity, we further assume that n = 2 · k.
+• We let fˆv ∈ F<2 [X1 , . . . , Xm−1 ] be the unique multilinear polynomials such that fˆv (b) = v(b) for
+every b ∈ {0, 1}m−1 .
+• For i ∈ [c], j ∈ [t], we let fˆi,j ∈ F<2 [X1 , . . . , X2m ] be the unique multilinear polynomial such that
+fˆi,j [a, b] = Mi,j [a, b] for a, b ∈ {0, 1}m .
+• We let d := maxi∈[c] di be the maximum degree in the constraint system.
+The IOP proceeds as follows.
+• Inputs: The honest prover receives ((F, k, n, c, t, v, C), w) ∈ RGR1CS , and the verifier receives
+(F, k, n, c, t, v, C).
+• Interaction phase:
+1. Commit to witness polynomial: The prover sends a polynomial fˆw ∈ F<2 [X1 , . . . , Xm−1 ].
+In the honest case, fˆw is the unique multilinear polynomial such that fˆw (b) = w(b) for every
+b ∈ {0, 1}m−1 .
+2. Combination randomness: The verifier samples and sends r ← Fm and γ ← F.
+
+70
+
+3. Sumcheck: The prover and verifier engage in a sumcheck protocol. In the honest case, the
+prover defines the polynomials
+fˆz (X1 , . . . , Xm ) := (1 − Xm ) · fˆv (X1 , . . . , Xm−1 ) + Xm · fˆw (X1 , . . . , Xm−1 ) ,
+
+
+X
+X
+∀ i ∈ [c], ĝi (X) := L̂i 
+fˆi,1 (X, b) · fˆz (b), . . . ,
+fˆi,t (X, b) · fˆz (b) ,
+b∈{0,1}m
+
+ĝγ (X) :=
+
+X
+
+b∈{0,1}m
+
+γ i−1 · ĝi (X) .
+
+i∈[c]
+
+(a) Set α := ∅. For i = 0, . . . , m − 1:
+i. The prover sends ĥi ∈ F<d+1 [X] (as a non-oracle message). In the honest case,
+X
+ĥi (X) =
+ĝγ (b, X, α) · eq(r, (b, X, α)) .
+b∈{0,1}m−(i+1)
+
+ii. The verifier samples and sends αi ← F. Update α := (αi ∥α)
+• Decision phase:
+1. First sumcheck checks: The verifier checks
+X
+
+b∈{0,1} ĥ0 (b) = 0 and that, for i ∈ [m − 1],
+
+P
+
+ĥi (b) = ĥi−1 (αi−1 ) .
+
+b∈{0,1}
+
+2. Query polynomial: For i ∈ [c], j ∈ [t] the verifier queries fˆw to compute
+X
+X
+vi,j :=
+fˆi,j (α, b) · fˆz (b) =
+fˆi,j (α, b, 0) · fˆv (b) + fˆi,j (α, b, 1) · fˆw (b)
+b∈{0,1}m
+
+b∈{0,1}m−1
+
+and checks that:
+
+
+
+X
+
+
+
+γ i−1 · L̂i (vi,1 , . . . , vi,t ) · eq(r, α) = ĥm−1 (αm−1 )
+
+i∈[c]
+
+Complexity parameters. We analyze the complexity measures of Construction A.2.
+• Rounds. The protocol has log n + 1 rounds.
+• Proof length. The prover sends a single multilinear polynomial over log n − 1 variables, and
+(d + 1) · log n field elements.
+• Query complexity. The verifier makes c · t linear sumcheck queries.
+
+71
+
+A.1
+
+Round-by-round knowledge soundness
+
+We analyze the round-by-round knowledge soundness of Construction A.2.
+Theorem A.3. Let (F, d, m, c) be as in Construction A.2. Then Construction A.2 is a Σ-IOP for
+RGR1CS with round-by-round knowledge soundness error
+
+
+(d − 1)m + c − 1 d
+d
+.
+,
+,...,
+|F|
+|F|
+|F|
+Proof. We define the state function and extractor.
+State function and extractor.
+1. The transcript so far has the form tr := (fˆw ). The verifier chooses r, γ.
+• State function. We set
+State(f0 , tr∥(r, γ)) = 1 ,
+if and only if
+
+P
+
+b∈{0,1}m ĝγ (b) · eq(r, b) = 0, where ĝγ is defined as in the protocol.
+
+• Extractor. The extractor Epoly returns w defined as w(b) = fˆw (b) for b ∈ {0, 1}m−1 .
+2. The transcript so far has the form tr := (r, γ, ĥ0 , (αℓ ∥ĥℓ+1 )ℓ<i ). The verifier chooses αi .
+• State function. We set
+State(f0 , tr∥αi ) = 1 ,
+if and only if the following hold:
+P
+P
+(a) Valid sumchecks. b∈{0,1} ĥ0 (b) = 0, and, for 0 < ℓ < i, b∈{0,1} ĥℓ (b) = ĥℓ−1 (αℓ−1 ).
+(b) Valid reduction.
+X
+ĥi−1 (αi ) =
+ĝγ (b, α) · eq(r, (b, α)) .
+b∈{0,1}m−(i+1)
+
+x
+
+(c) Extractor. The extractor returns Epoly ( , tr) = ⊥.
+Bounding the errors.
+
+x
+
+1. Suppose that State( , tr) = 0, and
+
+x
+
+Pr[State( , tr∥(r, γ)) = 1] >
+
+x
+
+x
+
+(d − 1)m + c − 1
+.
+|F|
+
+x
+
+We show that ( , Epoly ( , tr)) ∈ RGR1CS . Write w := Epoly ( , tr), and note that, by definition of fˆz ,
+for b ∈ {0, 1}m−1 , we have that fˆz (b, 0) = v(b) and fˆz (b, 1) = w(b), so letting z := (v, w), we
+have that for every b ∈ {0, 1}m , fˆz (b) = z(b). Let ĝγ be defined as in the main protocol. Then,
+
+x
+
+(d − 1)m + c − 1
+< Pr[State( , tr∥(r, γ)) = 1] = Pr[ĝγ (r) = 0]
+|F|
+Suppose that, for some i ∈ [c], ĝi ̸≡ 0. Then, unless with probability at most c−1
+|F| , ĝγ ̸≡ 0, and
+thus, since ĝγ ∈ F<d [X1 , . . . , Xm ], by the polynomial identity lemma, ĝγ (r) = 0 with probability
+72
+
+at most (d−1)m
+|F| . Thus, it must be that for every i ∈ [c], ĝi ≡ 0. Let i ∈ [c], j ∈ [mi ] and let
+∗
+m
+b ∈ {0, 1} be the corresponding element of the binary hypercube. Then,
+!
+n
+n
+X
+X
+L̂i ((Mi,1 z)[j], . . . , (Mi,t z)[j]) = L̂i
+Mi,1 [j, k] · zk , . . . ,
+Mi,t [j, k] · zk
+k=0
+
+k=0
+
+
+
+
+fˆi,1 (b∗ , b) · fˆz (b), . . . ,
+
+X
+
+= L̂i 
+
+b∈{0,1}m
+
+X
+
+fˆi,1 (b∗ , b) · fˆz (b)
+
+b∈{0,1}m
+
+∗
+
+= ĝi (b ) = 0 .
+This concludes the proof.
+2. We show that if State( , tr) = 0, then
+
+x
+
+x
+
+Pr[State( , tr∥αi ) = 1] ≤
+
+d
+.
+|F|
+
+Since the error is always bounded from above, we do not require the extractor to be able to
+extract. Since State( , tr) = 0, it must be that either Item 2a do not hold or Item 2b do not
+hold. Since Item 2a is independent of αi , it must hold or else State( , tr∥αi ) = 1. Thus, we
+assume that Item 2b does not hold. First, suppose that
+X
+ĥi (X) ≡
+ĝ(b, X, αi−1 , . . . , α0 ) · eq(r, (b, X, αi−1 , . . . , α0 )) .
+
+x
+
+x
+
+b∈{0,1}m−i
+
+Then,
+X
+
+ĥi (b) =
+
+b∈{0,1}
+
+X
+
+ĝ(b, αi−1 , . . . , α0 ) · eq(r, (b, αi−1 , . . . , α0 )) ̸= ĥi−1 (αi−1 ) ,
+
+b∈{0,1}m−(i−1)
+
+where the last inequality follows since Item 2b does not hold. Then, it must be that
+X
+ĥi (X) ̸≡
+ĝ(b, X, αi−1 , . . . , α0 ) · eq(b, X, αi−1 , . . . , α0 ) .
+b∈{0,1}m−i
+
+and by the polynomial identity lemma it holds that
+
+X
+Pr[State( , tr∥αi ) = 1] = Pr ĥi (αi ) =
+
+x
+
+
+
+d
+.
+ĝ(b, α) · eq(r, (b, α)) ≤
+|F|
+m−i
+
+b∈{0,1}
+
+x
+
+3. Verifier decision. Since State( , tr) = 0, it must be that either Item 2a do not hold or Item 2b
+do not hold. If Item 2a does not hold, the verifier rejects as desired. If Item 2b does not hold,
+this implies that
+ĥm (αm ) ̸= ĝ(α) · eq(r, α) ,
+P
+and, since ĝ(α) = i∈[c] γ i−1 · L̂i (vi,1 , . . . , vi,t ), the verifier rejects as desired.
+
+73
+
+B
+
+Additional experimental data
+
+This section contains additional experimental data and plots collected during the evaluation process.
+Argument size
+
+Verifier hash complexity
+12000
+10000
+
+400
+
+Hashes
+
+Size (KiB)
+
+500
+
+300
+200
+
+8000
+6000
+4000
+2000
+
+100
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+230
+
+218
+
+222
+
+224
+
+226
+
+Degree
+
+Prover time
+
+Verifier time
+
+27
+
+228
+
+230
+
+228
+
+230
+
+3.0
+
+25
+
+Time (ms)
+
+Time (s)
+
+220
+
+Degree
+
+23
+21
+2−1
+2−3
+
+2.5
+2.0
+1.5
+1.0
+0.5
+
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+230
+
+218
+
+220
+
+222
+
+Degree
+
+224
+
+226
+
+Degree
+
+(a) ρ = 1/2
+
+Argument size
+
+Verifier hash complexity
+
+500
+
+Hashes
+
+Size (KiB)
+
+10000
+400
+300
+200
+
+8000
+6000
+4000
+2000
+
+100
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+230
+
+218
+
+220
+
+222
+
+Degree
+
+Prover time
+
+226
+
+228
+
+230
+
+228
+
+230
+
+Verifier time
+
+28
+
+3.0
+
+26
+
+2.5
+
+Time (ms)
+
+Time (s)
+
+224
+
+Degree
+
+24
+22
+20
+2−2
+
+2.0
+1.5
+1.0
+0.5
+
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+230
+
+218
+
+Degree
+
+220
+
+222
+
+224
+
+226
+
+Degree
+
+(b) ρ = 1/4
+
+Figure 4: Comparison of WHIR for ρ = 1/2, 1/4. WHIR-UD: ▲, WHIR-CB: •. Note that prover time
+is displayed with logarithmic scaling.
+
+74
+
+Argument size
+
+Verifier hash complexity
+10000
+8000
+
+300
+
+Hashes
+
+Size (KiB)
+
+400
+
+200
+100
+
+6000
+4000
+2000
+
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+218
+
+222
+
+224
+
+Degree
+
+Prover time
+
+Verifier time
+
+226
+
+228
+
+226
+
+228
+
+2.5
+
+Time (ms)
+
+26
+
+Time (s)
+
+220
+
+Degree
+
+24
+22
+20
+
+2.0
+1.5
+1.0
+0.5
+
+2−2
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+218
+
+220
+
+Degree
+
+222
+
+224
+
+Degree
+
+(a) ρ = 1/8
+
+Argument size
+
+Verifier hash complexity
+10000
+8000
+
+300
+
+Hashes
+
+Size (KiB)
+
+400
+
+200
+100
+
+6000
+4000
+2000
+
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+218
+
+222
+
+224
+
+Degree
+
+Prover time
+
+Verifier time
+
+226
+
+228
+
+226
+
+228
+
+2.5
+
+Time (ms)
+
+27
+
+Time (s)
+
+220
+
+Degree
+
+25
+23
+21
+
+2.0
+1.5
+1.0
+0.5
+
+2−1
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+218
+
+Degree
+
+220
+
+222
+
+224
+
+Degree
+
+(b) ρ = 1/16
+
+Figure 5: Comparison of WHIR for ρ = 1/8, 1/16. WHIR-UD: ▲, WHIR-CB: •. Note that prover time
+is displayed with logarithmic scaling.
+
+75
+
+Verifier hash complexity
+10000
+
+400
+
+8000
+
+Hashes
+
+Size (KiB)
+
+Argument size
+500
+
+300
+
+6000
+4000
+
+200
+
+2000
+
+100
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+230
+
+218
+
+220
+
+222
+
+224
+
+226
+
+Degree
+
+Degree
+
+Prover time
+
+Verifier time
+
+228
+
+230
+
+228
+
+230
+
+210
+
+6
+
+28
+
+5
+
+Time (ms)
+
+Time (s)
+
+212
+
+26
+24
+22
+20
+
+4
+3
+2
+1
+
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+230
+
+218
+
+220
+
+222
+
+Degree
+
+224
+
+226
+
+Degree
+
+(a) ρ = 1/2
+
+Argument size
+
+Verifier hash complexity
+6000
+5000
+
+Hashes
+
+Size (KiB)
+
+250
+200
+150
+
+4000
+3000
+2000
+
+100
+
+1000
+220
+
+222
+
+224
+
+226
+
+228
+
+230
+
+218
+
+220
+
+222
+
+224
+
+226
+
+Degree
+
+Degree
+
+Prover time
+
+Verifier time
+
+212
+
+3.5
+
+210
+
+3.0
+
+Time (ms)
+
+Time (s)
+
+218
+
+28
+26
+24
+22
+
+228
+
+230
+
+228
+
+230
+
+2.5
+2.0
+1.5
+1.0
+
+20
+
+0.5
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+230
+
+218
+
+Degree
+
+220
+
+222
+
+224
+
+226
+
+Degree
+
+(b) ρ = 1/4
+
+Figure 6: Comparison of FRI, STIR and WHIR for ρ = 1/2, 1/4. FRI: ×, STIR: •, WHIR-CB: , ▲.
+Note that prover time is displayed with logarithmic scaling.
+
+76
+
+Argument size
+
+Verifier hash complexity
+
+175
+
+Hashes
+
+Size (KiB)
+
+200
+150
+125
+100
+75
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+4500
+4000
+3500
+3000
+2500
+2000
+1500
+1000
+
+230
+
+218
+
+222
+
+224
+
+226
+
+Degree
+
+Prover time
+
+Verifier time
+
+213
+
+228
+
+230
+
+228
+
+230
+
+2.5
+
+Time (ms)
+
+211
+
+Time (s)
+
+220
+
+Degree
+
+29
+27
+25
+23
+21
+
+2.0
+1.5
+1.0
+0.5
+
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+230
+
+218
+
+220
+
+Degree
+
+222
+
+224
+
+226
+
+Degree
+
+(a) ρ = 1/8
+
+Verifier hash complexity
+
+140
+
+3000
+
+120
+
+2500
+
+Hashes
+
+Size (KiB)
+
+Argument size
+
+100
+80
+60
+
+2000
+1500
+1000
+
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+218
+
+220
+
+Degree
+
+224
+
+226
+
+228
+
+226
+
+228
+
+Degree
+
+Prover time
+
+Verifier time
+2.00
+
+212
+
+1.75
+
+210
+
+Time (ms)
+
+Time (s)
+
+222
+
+28
+26
+24
+
+1.50
+1.25
+1.00
+0.75
+0.50
+
+22
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+218
+
+Degree
+
+220
+
+222
+
+224
+
+Degree
+
+(b) ρ = 1/16
+
+Figure 7: Comparison of FRI, STIR and WHIR for ρ = 1/8, 1/16. FRI: ×, STIR: •, WHIR-CB: , ▲.
+Note that prover time is displayed with logarithmic scaling.
+
+77
+
+Argument size
+
+Verifier hash complexity
+
+600
+
+Hashes
+
+Size (KiB)
+
+800
+
+400
+200
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+16000
+14000
+12000
+10000
+8000
+6000
+4000
+2000
+
+230
+
+218
+
+220
+
+222
+
+224
+
+226
+
+Degree
+
+Degree
+
+Prover time
+
+Verifier time
+
+228
+
+230
+
+228
+
+230
+
+28
+6
+
+Time (ms)
+
+Time (s)
+
+26
+24
+22
+20
+2−2
+
+5
+4
+3
+2
+1
+
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+230
+
+218
+
+220
+
+222
+
+Degree
+
+224
+
+226
+
+Degree
+
+Argument size
+
+800
+700
+600
+500
+400
+300
+200
+100
+
+Verifier hash complexity
+
+Hashes
+
+Size (KiB)
+
+(a) ρ = 1/2
+
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+14000
+12000
+10000
+8000
+6000
+4000
+2000
+
+230
+
+218
+
+220
+
+222
+
+Degree
+
+Prover time
+
+226
+
+228
+
+230
+
+228
+
+230
+
+Verifier time
+6
+
+28
+26
+
+Time (ms)
+
+Time (s)
+
+224
+
+Degree
+
+24
+22
+20
+2−2
+
+5
+4
+3
+2
+1
+
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+230
+
+218
+
+Degree
+
+220
+
+222
+
+224
+
+226
+
+Degree
+
+(b) ρ = 1/4
+
+Figure 8: Comparison of WHIR for ρ = 1/2, 1/4. WHIR-UD •, WHIR-JB: •, WHIR-CB: •. Note that
+prover time is displayed with logarithmic scaling.
+
+78
+
+Verifier hash complexity
+14000
+
+600
+
+12000
+
+500
+
+10000
+
+Hashes
+
+Size (KiB)
+
+Argument size
+700
+
+400
+300
+
+8000
+6000
+
+200
+
+4000
+
+100
+
+2000
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+218
+
+222
+
+224
+
+Degree
+
+Prover time
+
+Verifier time
+
+27
+
+226
+
+228
+
+226
+
+228
+
+5
+
+Time (ms)
+
+25
+
+Time (s)
+
+220
+
+Degree
+
+23
+21
+2−1
+
+4
+3
+2
+1
+
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+218
+
+220
+
+Degree
+
+222
+
+224
+
+Degree
+
+(a) ρ = 1/8
+
+Verifier hash complexity
+14000
+
+600
+
+12000
+
+500
+
+10000
+
+Hashes
+
+Size (KiB)
+
+Argument size
+700
+
+400
+300
+
+8000
+6000
+
+200
+
+4000
+
+100
+
+2000
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+218
+
+222
+
+224
+
+Degree
+
+Prover time
+
+Verifier time
+
+28
+
+226
+
+228
+
+226
+
+228
+
+5
+
+26
+
+Time (ms)
+
+Time (s)
+
+220
+
+Degree
+
+24
+22
+20
+
+4
+3
+2
+1
+
+218
+
+220
+
+222
+
+224
+
+226
+
+228
+
+218
+
+Degree
+
+220
+
+222
+
+224
+
+Degree
+
+(b) ρ = 1/16
+
+Figure 9: Comparison of WHIR for ρ = 1/8, 1/16. WHIR-UD •, WHIR-JB: •, WHIR-CB: •. Note that
+prover time is displayed with logarithmic scaling.
+
+79
+
+Acknowledgments
+We thank Kobi Gurkan and “William Wakes Up” for inspiring the name of this work. We thank
+Remco Bloemen for generous and invaluable help in optimizing the WHIR implementation. We
+thank Hadas Zeilberger for help in gathering and interpreting BaseFold’s experimental data. We
+thank Gregor Seiler for providing us data for comparison with Greyhound. We thank Ulrich Haböck
+for pointing us to the bound on the size of the interleaved Reed–Solomon code in [Sta21].
+Gal Arnon is supported in part by a grant from the Israel Science Foundation (Grant No.
+2686/20), by the Simons Foundation Collaboration on the Theory of Algorithmic Fairness, and by
+the Israeli Council for Higher Education (CHE) via the Weizmann Data Science Research Center.
+Alessandro Chiesa and Giacomo Fenzi are supported in part by the Ethereum Foundation and the
+Sui Foundation. Eylon Yogev is supported by the Israel Science Foundation (Grant No. 2302/22),
+European Research Union (ERC, CRYPTOPROOF, 101164375), and by an Alon Young Faculty
+Fellowship. Views and opinions expressed are however those of the author(s) only and do not
+necessarily reflect those of the European Union or the European Research Council. Neither the
+European Union nor the granting authority can be held responsible for them.
+
+References
+[ACFY24]
+
+Gal Arnon, Alessandro Chiesa, Giacomo Fenzi, and Eylon Yogev. “STIR: Reed–Solomon
+Proximity Testing with Fewer Queries”. In: Proceedings of the 44th Annual International
+Cryptology Conference. CRYPTO ’24. 2024, pp. 380–413.
+
+[ACY23]
+
+Gal Arnon, Alessandro Chiesa, and Eylon Yogev. “IOPs with Inverse Polynomial Soundness
+Error”. In: 64th IEEE Annual Symposium on Foundations of Computer Science, FOCS
+2023, Santa Cruz, CA, USA, November 6-9, 2023. IEEE, 2023, pp. 752–761.
+
+[AHIV17]
+
+Scott Ames, Carmit Hazay, Yuval Ishai, and Muthuramakrishnan Venkitasubramaniam.
+“Ligero: Lightweight Sublinear Arguments Without a Trusted Setup”. In: Proceedings of
+the 24th ACM Conference on Computer and Communications Security. CCS ’17. 2017,
+pp. 2087–2104.
+
+[ALMSS98]
+
+Sanjeev Arora, Carsten Lund, Rajeev Motwani, Madhu Sudan, and Mario Szegedy. “Proof
+verification and the hardness of approximation problems”. In: Journal of the ACM 45.3
+(1998). Preliminary version in FOCS ’92., pp. 501–555.
+
+[AS98]
+
+Sanjeev Arora and Shmuel Safra. “Probabilistic checking of proofs: a new characterization
+of NP”. In: Journal of the ACM 45.1 (1998). Preliminary version in FOCS ’92., pp. 70–122.
+
+[BBBPWM18]
+
+Benedikt Bünz, Jonathan Bootle, Dan Boneh, Andrew Poelstra, Pieter Wuille, and Greg
+Maxwell. “Bulletproofs: Short Proofs for Confidential Transactions and More”. In: Proceedings of the 39th IEEE Symposium on Security and Privacy. S&P ’18. 2018, pp. 315–
+334.
+
+[BBHR18]
+
+Eli Ben-Sasson, Iddo Bentov, Yinon Horesh, and Michael Riabzev. “Fast Reed–Solomon Interactive Oracle Proofs of Proximity”. In: Proceedings of the 45th International Colloquium
+on Automata, Languages and Programming. ICALP ’18. 2018, 14:1–14:17.
+
+[BBHR19]
+
+Eli Ben-Sasson, Iddo Bentov, Yinon Horesh, and Michael Riabzev. “Scalable Zero Knowledge with No Trusted Setup”. In: Proceedings of the 39th Annual International Cryptology
+Conference. CRYPTO ’19. 2019, pp. 733–764.
+
+80
+
+[BCCGP16]
+
+Jonathan Bootle, Andrea Cerulli, Pyrros Chaidos, Jens Groth, and Christophe Petit. “Efficient Zero-Knowledge Arguments for Arithmetic Circuits in the Discrete Log Setting”.
+In: Proceedings of the 35th Annual International Conference on Theory and Application of
+Cryptographic Techniques. EUROCRYPT ’16. 2016, pp. 327–357.
+
+[BCG20]
+
+Jonathan Bootle, Alessandro Chiesa, and Jens Groth. “Linear-Time Arguments with Sublinear Verification from Tensor Codes”. In: Proceedings of the 18th Theory of Cryptography
+Conference. TCC ’20. 2020, pp. 19–46.
+
+[BCIKS20]
+
+Eli Ben-Sasson, Dan Carmon, Yuval Ishai, Swastik Kopparty, and Shubhangi Saraf. “Proximity Gaps for Reed–Solomon Codes”. In: Proceedings of the 61st Annual IEEE Symposium
+on Foundations of Computer Science. FOCS ’20. 2020, pp. 900–909.
+
+[BCRSVW19]
+
+Eli Ben-Sasson, Alessandro Chiesa, Michael Riabzev, Nicholas Spooner, Madars Virza, and
+Nicholas P. Ward. “Aurora: Transparent Succinct Arguments for R1CS”. In: Proceedings of
+the 38th Annual International Conference on the Theory and Applications of Cryptographic
+Techniques. EUROCRYPT ’19. 2019, pp. 103–128.
+
+[BCS16]
+
+Eli Ben-Sasson, Alessandro Chiesa, and Nicholas Spooner. “Interactive Oracle Proofs”. In:
+Proceedings of the 14th Theory of Cryptography Conference. TCC ’16-B. 2016, pp. 31–60.
+
+[BFLS91]
+
+László Babai, Lance Fortnow, Leonid A. Levin, and Mario Szegedy. “Checking computations in polylogarithmic time”. In: Proceedings of the 23rd Annual ACM Symposium on
+Theory of Computing. STOC ’91. 1991, pp. 21–32.
+
+[BFS20]
+
+Benedikt Bünz, Ben Fisch, and Alan Szepieniec. “Transparent SNARKs from DARK Compilers”. In: Proceedings of the 39th Annual International Conference on the Theory and
+Applications of Cryptographic Techniques. EUROCRYPT ’20. 2020, pp. 677–706.
+
+[BGKS20]
+
+Eli Ben-Sasson, Lior Goldberg, Swastik Kopparty, and Shubhangi Saraf. “DEEP-FRI: Sampling Outside the Box Improves Soundness”. In: Proceedings of the 11th Innovations in
+Theoretical Computer Science Conference. ITCS ’20. 2020, 5:1–5:32.
+
+[BKS18]
+
+Eli Ben-Sasson, Swastik Kopparty, and Shubhangi Saraf. “Worst-Case to Average Case
+Reductions for the Distance to a Code”. In: Proceedings of the 33rd ACM Conference on
+Computer and Communications Security. CCS ’18. 2018, 24:1–24:23.
+
+[Bab85]
+
+László Babai. “Trading group theory for randomness”. In: Proceedings of the 17th Annual
+ACM Symposium on Theory of Computing. STOC ’85. 1985, pp. 421–429.
+
+[CBBZ23]
+
+Binyi Chen, Benedikt Bünz, Dan Boneh, and Zhenfei Zhang. “HyperPlonk: Plonk with
+Linear-Time Prover and High-Degree Custom Gates”. In: Proceedings of the 42nd Annual
+International Conference on the Theory and Applications of Cryptographic Techniques.
+EUROCRYPT ’23. 2023, pp. 499–530.
+
+[CFFZ24]
+
+Alessandro Chiesa, Elisabetta Fedele, Giacomo Fenzi, and Andrew Zitek-Estrada. A TimeSpace Tradeoff for the Sumcheck Prover. Cryptology ePrint Archive, Paper 2024/524. 2024.
+
+[CHMMVW20]
+
+Alessandro Chiesa, Yuncong Hu, Mary Maller, Pratyush Mishra, Noah Vesely, and Nicholas
+Ward. “Marlin: Preprocessing zkSNARKs with Universal and Updatable SRS”. In: Proceedings of the 39th Annual International Conference on the Theory and Applications of
+Cryptographic Techniques. EUROCRYPT ’20. 2020.
+
+[DMS24]
+
+Michel Dellepere, Pratyush Mishra, and Alireza Shirzad. Garuda and Pari: Faster and
+Smaller SNARKs via Equifficient Polynomial Commitments. Cryptology ePrint Archive,
+Paper 2024/1245. 2024.
+
+[DT24a]
+
+Quang Dao and Justin Thaler. Constraint-Packing and the Sum-Check Protocol over Binary Tower Fields. Cryptology ePrint Archive, Paper 2024/1038. 2024.
+
+81
+
+[DT24b]
+
+Quang Dao and Justin Thaler. More Optimizations to Sum-Check Proving. Cryptology
+ePrint Archive, Paper 2024/1210. 2024.
+
+[FGLSS96]
+
+Uriel Feige, Shafi Goldwasser, Laszlo Lovász, Shmuel Safra, and Mario Szegedy. “Interactive
+proofs and the hardness of approximating cliques”. In: Journal of the ACM 43.2 (1996).
+Preliminary version in FOCS ’91., pp. 268–292.
+
+[GGR11]
+
+Parikshit Gopalan, Venkatesan Guruswami, and Prasad Raghavendra. “List Decoding Tensor Products and Interleaved Codes”. In: SIAM Journal on Computing 40.5 (2011). Preliminary version appeared in STOC ’09., pp. 1432–1462.
+
+[GLSTW23]
+
+Alexander Golovnev, Jonathan Lee, Srinath T. V. Setty, Justin Thaler, and Riad S. Wahby.
+“Brakedown: Linear-time and field-agnostic SNARKs for R1CS”. In: Proceedings of the 43rd
+Annual International Cryptology Conference. CRYPTO ’23. 2023.
+
+[GMR89]
+
+Shafi Goldwasser, Silvio Micali, and Charles Rackoff. “The knowledge complexity of interactive proof systems”. In: SIAM Journal on Computing 18.1 (1989). Preliminary version
+appeared in STOC ’85., pp. 186–208.
+
+[GWC19]
+
+Ariel Gabizon, Zachary J. Williamson, and Oana Ciobotaru. PLONK: Permutations over
+Lagrange-bases for Oecumenical Noninteractive arguments of Knowledge. Cryptology ePrint
+Archive, Report 2019/953. 2019.
+
+[KR08]
+
+Yael Kalai and Ran Raz. “Interactive PCP”. In: Proceedings of the 35th International
+Colloquium on Automata, Languages and Programming. ICALP ’08. 2008, pp. 536–547.
+
+[KZG10]
+
+Aniket Kate, Gregory M. Zaverucha, and Ian Goldberg. “Constant-Size Commitments to
+Polynomials and Their Applications”. In: Proceedings of the 16th International Conference
+on the Theory and Application of Cryptology and Information Security. ASIACRYPT ’10.
+2010, pp. 177–194.
+
+[MBKM19]
+
+Mary Maller, Sean Bowe, Markulf Kohlweiss, and Sarah Meiklejohn. Sonic: Zero-Knowledge
+SNARKs from Linear-Size Universal and Updateable Structured Reference Strings. Cryptology ePrint Archive, Report 2019/099. 2019.
+
+[NS24]
+
+Ngoc Khanh Nguyen and Gregor Seiler. “Greyhound: Fast Polynomial Commitments from
+Lattices”. In: Proceedings of the 44th Annual International Cryptology Conference. CRYPTO ’24.
+2024, pp. 243–275.
+
+[PST13]
+
+Charalampos Papamanthou, Elaine Shi, and Roberto Tamassia. “Signatures of Correct
+Computation”. In: Proceedings of the 10th Theory of Cryptography Conference. TCC ’13.
+2013, pp. 222–242.
+
+[RRR16]
+
+Omer Reingold, Ron Rothblum, and Guy Rothblum. “Constant-Round Interactive Proofs
+for Delegating Computation”. In: Proceedings of the 48th ACM Symposium on the Theory
+of Computing. STOC ’16. 2016, pp. 49–62.
+
+[RVW13]
+
+Guy N. Rothblum, Salil P. Vadhan, and Avi Wigderson. “Interactive proofs of proximity:
+delegating computation in sublinear time”. In: Proceedings of the 45th ACM Symposium
+on the Theory of Computing. STOC ’13. 2013, pp. 793–802.
+
+[Rot24]
+
+Ron Rothblum. A Note on Efficient Computation of the Multilinear Extension. Cryptology
+ePrint Archive, Paper 2024/1103. 2024.
+
+[STW23]
+
+Srinath Setty, Justin Thaler, and Riad Wahby. “Customizable constraint systems for succinct arguments”. In: IACR Cryptol. ePrint Arch. (2023), p. 552.
+
+[Set19]
+
+Srinath Setty. Spartan: Efficient and general-purpose zkSNARKs without trusted setup.
+Cryptology ePrint Archive, Report 2019/550. 2019.
+
+[Sta21]
+
+StarkWare. ethSTARK Documentation. Cryptology ePrint Archive, Paper 2021/582. https:
+//eprint.iacr.org/2021/582. 2021. url: https://eprint.iacr.org/2021/582.
+
+82
+
+[WTSTW18]
+
+Riad S. Wahby, Ioanna Tzialla, Abhi Shelat, Justin Thaler, and Michael Walfish. “Doublyefficient zkSNARKs without trusted setup”. In: Proceedings of the 39th IEEE Symposium
+on Security and Privacy. S&P ’18. 2018, pp. 926–943.
+
+[ZCF24]
+
+Hadas Zeilberger, Binyi Chen, and Ben Fisch. “BaseFold: Efficient Field-Agnostic Polynomial Commitment Schemes from Foldable Codes”. In: Proceedings of the 44th Annual
+International Cryptology Conference. Vol. 14929. CRYPTO ’24. 2024, pp. 138–169.
+
+[ark]
+
+arkworks. An ecosystem for developing and programming with zkSNARKs. arkworks.rs.
+
+[jel]
+
+jellify. Jellyfish cryptographic library. https://github.com/EspressoSystems/jellyfish.
+
+83
+
+
