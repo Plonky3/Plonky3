@@ -22,6 +22,15 @@
 //! with one compact batched WHIR opening, or falls back to a two-stage path:
 //! first reduce each oracle's linear-Sigma claims to residual openings, then
 //! authenticate those residual openings with WHIR.
+//!
+//! Soundness note: "one compact batched WHIR opening" means one WHIR proof
+//! object after WARP has batched its claims. That proof still executes WHIR's
+//! ordinary constrained-RS protocol internally: initial folding, every
+//! configured intermediate STIR/proximity round, OOD/query-combination checks,
+//! and the final folding phase. The WARP root compiler relies on those WHIR
+//! round-by-round errors for proximity/opening soundness; the WARP-specific
+//! sumcheck only reduces the recorded `VACC`/`DACC` claims to the grouped
+//! residual statement proved by WHIR.
 
 use alloc::sync::Arc;
 use alloc::vec;
