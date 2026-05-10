@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::ops::Div;
 
 use p3_field::extension::{
     BinomialExtensionField, BinomiallyExtendable, PackedBinomialExtensionField,
@@ -325,6 +326,75 @@ where
             extract_lane(&quot_scalar_assign, lane),
             extract_lane(&quot_scalar, lane),
             "packed/scalar div_assign mismatch at lane {lane}"
+        );
+    }
+}
+
+/// Verify that packed divide agrees with scalar divide on every SIMD lane.
+///
+/// # Invariant
+///
+/// For every lane `i`:
+///
+/// ```text
+/// (a / b).lane(i) == a.lane(i) / b.lane(i)
+/// ```
+pub fn test_packed_extension_div_consistency<F, EF, PEF>()
+where
+    F: Field,
+    EF: ExtensionField<F, ExtensionPacking = PEF>,
+    PEF: PackedFieldExtension<F, EF> + Div<Output = PEF> + Copy,
+    StandardUniform: Distribution<EF>,
+{
+    // SIMD lane count.
+    // - Goldilocks NEON → 2.
+    // - KoalaBear NEON → 4.
+    // - Scalar → 1.
+    let width = F::Packing::WIDTH;
+
+    // Fixed seed → reproducible bytes on any failure.
+    let mut rng = SmallRng::seed_from_u64(0x_d1ef_d1ef_d1ef_d1ef);
+
+    // Numerator lane fixture: any value, zeros are fine.
+    //
+    //     lane:   0    1    …    W-1
+    //     nums:  [n0,  n1,  …,   n_{W-1}]
+    let nums: Vec<EF> = (0..width).map(|_| rng.random()).collect();
+
+    // Denominator lane fixture: reject-sample so every lane is invertible.
+    //
+    //     lane:   0       1       …    W-1
+    //     dens:  [d0 ≠ 0, d1 ≠ 0, …,   d_{W-1} ≠ 0]
+    let dens: Vec<EF> = (0..width)
+        .map(|_| {
+            loop {
+                let x: EF = rng.random();
+                if !x.is_zero() {
+                    break x;
+                }
+            }
+        })
+        .collect();
+
+    // Pack the per-lane scalars into one SIMD value each.
+    //
+    //     lanes [n0, n1, …, n_{W-1}]  →  one packed extension value
+    //     lanes [d0, d1, …, d_{W-1}]  →  one packed extension value
+    let pef_n: PEF = PEF::from_ext_slice(&nums);
+    let pef_d: PEF = PEF::from_ext_slice(&dens);
+
+    // Run the packed divide. Each lane must independently compute n_i / d_i.
+    let pef_q = pef_n / pef_d;
+
+    // Per-lane invariant:
+    //
+    //     packed quotient at lane i  ==  nums[i] / dens[i]
+    for lane in 0..width {
+        let expected = nums[lane] / dens[lane];
+        let got = pef_q.extract(lane);
+        assert_eq!(
+            got, expected,
+            "lane {lane}: packed Div disagrees with scalar Div (W = {width})"
         );
     }
 }
@@ -1007,6 +1077,14 @@ macro_rules! test_packed_extension_field {
             #[test]
             fn test_batched_linear_combination_ext() {
                 $crate::test_batched_linear_combination_ext::<
+                    $basefield,
+                    $extfield,
+                    $packedextfield,
+                >();
+            }
+            #[test]
+            fn test_packed_extension_div_consistency() {
+                $crate::test_packed_extension_div_consistency::<
                     $basefield,
                     $extfield,
                     $packedextfield,
