@@ -16,11 +16,7 @@ use rand::rngs::SmallRng;
 
 use super::*;
 use crate::code::ReedSolomonCode;
-use crate::finalize::WhirLimbAccumulatorBackend;
-use crate::protocol::AccumulatorCommitmentBackend;
-use crate::root_iop::{
-    RootIopOpeningClaim, RootIopOpeningPoint, RootIopOpeningValue, RootIopOracleField,
-};
+use crate::root_iop::{RootIopOpeningClaim, RootIopOpeningPoint, RootIopOpeningValue};
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -40,10 +36,6 @@ fn challenger() -> TestChallenger {
 
 fn systematic_code() -> ReedSolomonCode<F, Dft> {
     ReedSolomonCode::new_systematic(2, 1, Dft::default())
-}
-
-fn coefficient_code() -> ReedSolomonCode<F, Dft> {
-    ReedSolomonCode::new_coefficient(2, 1, Dft::default())
 }
 
 fn whir_pcs(num_variables: usize) -> TestWhirPcs {
@@ -148,43 +140,6 @@ fn compiled_wrong_eval_claim_does_not_prove() {
 }
 
 #[test]
-fn coefficient_rs_index_claim_uses_same_whir_initial_polynomial() {
-    let code = coefficient_code();
-    let compiler = NativeWarpWhirCompiler::new(&code);
-    let witness = vec![
-        F::from_u64(1),
-        F::from_u64(2),
-        F::from_u64(3),
-        F::from_u64(4),
-    ];
-    let codeword = code.encode(&witness);
-    let index = 5;
-    let claim = RootIopOpeningClaim {
-        claim_id: 0,
-        oracle_id: 0,
-        point: RootIopOpeningPoint::RsCodewordIndex(index),
-        value: RootIopOpeningValue::Base(codeword[index]),
-    };
-
-    let statement = compiler
-        .root_iop_base_message_claim_statement::<EF>(&[claim], 0)
-        .expect("coefficient RS index claim compiles");
-
-    let message_poly = Poly::new(witness);
-    let mut prover_challenger = challenger();
-    let mut verifier_challenger = challenger();
-    let (proof, opening) = statement
-        .prove_reduction_base::<F, _>(&message_poly, &mut prover_challenger, 0)
-        .expect("honest coefficient RS-index reduction");
-    let verified_opening = statement
-        .verify_reduction::<F, _>(&proof, &mut verifier_challenger, 0)
-        .expect("coefficient RS-index reduction verification");
-
-    assert_eq!(opening, verified_opening);
-    assert_eq!(opening.value, message_poly.eval_base(&opening.point));
-}
-
-#[test]
 fn compiled_eval_claims_bind_to_whir_commitment() {
     let code = systematic_code();
     let compiler = NativeWarpWhirCompiler::new(&code);
@@ -225,388 +180,10 @@ fn compiled_eval_claims_bind_to_whir_commitment() {
 }
 
 #[test]
-fn root_iop_index_claim_compiles_with_warp_bit_order() {
-    let code = systematic_code();
-    let compiler = NativeWarpWhirCompiler::new(&code);
-    let witness = vec![
-        F::from_u64(1),
-        F::from_u64(2),
-        F::from_u64(3),
-        F::from_u64(4),
-    ];
-    let codeword = code.encode(&witness);
-    let index = 5;
-    let claims: Vec<RootIopOpeningClaim<F, EF>> = vec![RootIopOpeningClaim {
-        claim_id: 0,
-        oracle_id: 9,
-        point: RootIopOpeningPoint::<EF>::Index(index),
-        value: RootIopOpeningValue::Base(codeword[index]),
-    }];
-
-    let statement = compiler
-        .root_iop_claim_statement(&claims, 9, RootIopOracleField::Base)
-        .expect("root-IOP base claim statement");
-
-    assert!(statement.constraints.verify_base(&Poly::new(codeword)));
-}
-
-#[test]
-fn root_iop_extension_mle_claim_compiles() {
-    let code = systematic_code();
-    let compiler = NativeWarpWhirCompiler::new(&code);
-    let oracle = (0..code.codeword_len())
-        .map(|i| EF::from_u64((3 * i + 5) as u64))
-        .collect::<Vec<_>>();
-    let poly = Poly::new(oracle.clone());
-    let point = Point::new(vec![EF::from_u64(2), EF::from_u64(3), EF::from_u64(5)]);
-    let value = poly.eval_ext::<F>(&point);
-    let claims: Vec<RootIopOpeningClaim<F, EF>> = vec![RootIopOpeningClaim {
-        claim_id: 0,
-        oracle_id: 3,
-        point: RootIopOpeningPoint::Mle(point.as_slice().to_vec()),
-        value: RootIopOpeningValue::Extension(value),
-    }];
-
-    let statement = compiler
-        .root_iop_claim_statement(&claims, 3, RootIopOracleField::Extension)
-        .expect("root-IOP extension claim statement");
-
-    assert!(statement.constraints.verify_ext(&poly));
-}
-
-#[test]
-fn compiled_extension_claims_bind_to_whir_limb_backend() {
-    let code = systematic_code();
-    let compiler = NativeWarpWhirCompiler::new(&code);
-    let oracle = (0..code.codeword_len())
-        .map(|i| EF::from_u64((11 * i + 7) as u64))
-        .collect::<Vec<_>>();
-    let poly = Poly::new(oracle.clone());
-    let point0 = Point::new(vec![EF::from_u64(2), EF::from_u64(3), EF::from_u64(5)]);
-    let point1 = Point::new(vec![EF::from_u64(7), EF::from_u64(11), EF::from_u64(13)]);
-    let claims = eval_claims_from_parts(
-        &[point0.clone(), point1.clone()],
-        &[poly.eval_ext::<F>(&point0), poly.eval_ext::<F>(&point1)],
-    );
-    let statement = compiler.eval_claim_statement(&claims);
-    let pcs = whir_pcs(code.log_codeword_len());
-    let backend =
-        WhirLimbAccumulatorBackend::<F, EF, _, TestChallenger, Dft, 8>::new(&pcs, challenger());
-    let (commitment, prover_data) = backend
-        .commit(oracle.clone())
-        .expect("WHIR limb accumulator commit");
-
-    let mut prover_challenger = challenger();
-    let (opening, proof) = statement
-        .prove_bound_extension_points::<F, _, _>(
-            &backend,
-            &commitment,
-            &prover_data,
-            &oracle,
-            &mut prover_challenger,
-            0,
-        )
-        .expect("bound extension WARP/WHIR proof");
-
-    let mut verifier_challenger = challenger();
-    let verified_opening = statement
-        .verify_bound_extension_points::<F, _, _>(
-            &backend,
-            &commitment,
-            &proof,
-            &mut verifier_challenger,
-            0,
-        )
-        .expect("bound extension WARP/WHIR verification");
-
-    assert_eq!(opening, verified_opening);
-    assert_eq!(opening.value, poly.eval_ext::<F>(&opening.point));
-}
-
-#[test]
-fn compiled_extension_claims_reject_tampered_reduction() {
-    let code = systematic_code();
-    let compiler = NativeWarpWhirCompiler::new(&code);
-    let oracle = (0..code.codeword_len())
-        .map(|i| EF::from_u64((13 * i + 17) as u64))
-        .collect::<Vec<_>>();
-    let poly = Poly::new(oracle.clone());
-    let point = Point::new(vec![EF::from_u64(2), EF::from_u64(3), EF::from_u64(5)]);
-    let statement = compiler.eval_claim_statement(&[NativeWarpWhirEvalClaim::new(
-        point.clone(),
-        poly.eval_ext::<F>(&point),
-    )]);
-    let pcs = whir_pcs(code.log_codeword_len());
-    let backend =
-        WhirLimbAccumulatorBackend::<F, EF, _, TestChallenger, Dft, 8>::new(&pcs, challenger());
-    let (commitment, prover_data) = backend
-        .commit(oracle.clone())
-        .expect("WHIR limb accumulator commit");
-    let (_, mut proof) = statement
-        .prove_bound_extension_points::<F, _, _>(
-            &backend,
-            &commitment,
-            &prover_data,
-            &oracle,
-            &mut challenger(),
-            0,
-        )
-        .expect("bound extension proof");
-    proof.reduction.oracle_eval += EF::ONE;
-
-    let err = statement
-        .verify_bound_extension_points::<F, _, _>(
-            &backend,
-            &commitment,
-            &proof,
-            &mut challenger(),
-            0,
-        )
-        .expect_err("tampered reduction should be rejected");
-    assert!(matches!(
-        err,
-        NativeWarpWhirCompilerError::Reduction(LinearSigmaReductionError::FinalCheckFailed)
-    ));
-}
-
-#[test]
-fn root_iop_transcript_claims_reduce_in_commitment_order() {
-    let code = systematic_code();
-    let compiler = NativeWarpWhirCompiler::new(&code);
-    let base_witness = vec![
-        F::from_u64(1),
-        F::from_u64(2),
-        F::from_u64(3),
-        F::from_u64(4),
-    ];
-    let base_oracle = code.encode(&base_witness);
-    let ext_oracle = (0..code.codeword_len())
-        .map(|i| EF::from_u64((19 * i + 23) as u64))
-        .collect::<Vec<_>>();
-    let ext_poly = Poly::new(ext_oracle.clone());
-    let ext_point = Point::new(vec![EF::from_u64(2), EF::from_u64(5), EF::from_u64(7)]);
-    let commitments = vec![
-        RootIopBoundCommitment {
-            oracle_id: 0,
-            log_len: code.log_codeword_len(),
-            field: RootIopOracleField::Base,
-            commitment: F::from_u64(101),
-        },
-        RootIopBoundCommitment {
-            oracle_id: 1,
-            log_len: code.log_codeword_len(),
-            field: RootIopOracleField::Extension,
-            commitment: F::from_u64(202),
-        },
-    ];
-    let claims = vec![
-        RootIopOpeningClaim {
-            claim_id: 0,
-            oracle_id: 0,
-            point: RootIopOpeningPoint::Index(5),
-            value: RootIopOpeningValue::Base(base_oracle[5]),
-        },
-        RootIopOpeningClaim {
-            claim_id: 1,
-            oracle_id: 1,
-            point: RootIopOpeningPoint::Mle(ext_point.as_slice().to_vec()),
-            value: RootIopOpeningValue::Extension(ext_poly.eval_ext::<F>(&ext_point)),
-        },
-    ];
-    let transcript = RootIopBoundTranscript {
-        oracles: vec![
-            (
-                commitments[0].clone(),
-                RootIopOracleValues::Base(base_oracle),
-            ),
-            (
-                commitments[1].clone(),
-                RootIopOracleValues::Extension(ext_oracle),
-            ),
-        ],
-        claims: claims.clone(),
-    };
-
-    let (prover_residuals, proof) = compiler
-        .prove_root_iop_reductions(&transcript, &mut challenger(), 0)
-        .expect("honest root-IOP reductions");
-    let verifier_residuals = compiler
-        .verify_root_iop_reductions(&commitments, &claims, &proof, &mut challenger(), 0)
-        .expect("root-IOP reduction verification");
-
-    assert_eq!(prover_residuals, verifier_residuals);
-    assert_eq!(proof.oracles.len(), 2);
-    assert_eq!(proof.oracles[0].oracle_id, 0);
-    assert_eq!(proof.oracles[1].oracle_id, 1);
-}
-
-#[test]
-fn root_iop_reductions_reject_tampered_public_claim() {
-    let code = systematic_code();
-    let compiler = NativeWarpWhirCompiler::new(&code);
-    let witness = vec![
-        F::from_u64(5),
-        F::from_u64(7),
-        F::from_u64(11),
-        F::from_u64(13),
-    ];
-    let oracle = code.encode(&witness);
-    let commitment = RootIopBoundCommitment {
-        oracle_id: 0,
-        log_len: code.log_codeword_len(),
-        field: RootIopOracleField::Base,
-        commitment: F::from_u64(303),
-    };
-    let claims = vec![RootIopOpeningClaim {
-        claim_id: 0,
-        oracle_id: 0,
-        point: RootIopOpeningPoint::<EF>::Index(6),
-        value: RootIopOpeningValue::Base(oracle[6]),
-    }];
-    let transcript = RootIopBoundTranscript {
-        oracles: vec![(commitment.clone(), RootIopOracleValues::Base(oracle))],
-        claims: claims.clone(),
-    };
-    let (_, proof) = compiler
-        .prove_root_iop_reductions(&transcript, &mut challenger(), 0)
-        .expect("honest root-IOP reduction");
-    let mut tampered_claims = claims;
-    tampered_claims[0].value = RootIopOpeningValue::Base(F::from_u64(999));
-
-    assert!(
-        compiler
-            .verify_root_iop_reductions(
-                &[commitment],
-                &tampered_claims,
-                &proof,
-                &mut challenger(),
-                0
-            )
-            .is_err()
-    );
-}
-
-#[test]
-fn root_iop_residuals_bind_to_whir_openings() {
-    let code = systematic_code();
-    let pcs = whir_pcs(code.log_codeword_len());
-    let root_system = NativeWarpWhirRootProofSystem::new(&pcs, &code, challenger());
-    let base_witness = vec![
-        F::from_u64(1),
-        F::from_u64(4),
-        F::from_u64(9),
-        F::from_u64(16),
-    ];
-    let base_oracle = code.encode(&base_witness);
-    let ext_oracle = (0..code.codeword_len())
-        .map(|i| EF::from_u64((29 * i + 31) as u64))
-        .collect::<Vec<_>>();
-    let ext_poly = Poly::new(ext_oracle.clone());
-    let ext_point = Point::new(vec![EF::from_u64(3), EF::from_u64(5), EF::from_u64(11)]);
-    let (base_commitment, base_prover_data) = root_system
-        .commit_base_oracle(0, base_oracle.clone())
-        .expect("base root oracle commit");
-    let (extension_commitment, extension_prover_data) = root_system
-        .commit_extension_oracle(1, ext_oracle.clone())
-        .expect("extension root oracle commit");
-    let commitments = vec![base_commitment.clone(), extension_commitment.clone()];
-    let claims = vec![
-        RootIopOpeningClaim {
-            claim_id: 0,
-            oracle_id: 0,
-            point: RootIopOpeningPoint::<EF>::Index(3),
-            value: RootIopOpeningValue::Base(base_oracle[3]),
-        },
-        RootIopOpeningClaim {
-            claim_id: 1,
-            oracle_id: 1,
-            point: RootIopOpeningPoint::Mle(ext_point.as_slice().to_vec()),
-            value: RootIopOpeningValue::Extension(ext_poly.eval_ext::<F>(&ext_point)),
-        },
-    ];
-    let transcript = RootIopBoundTranscript {
-        oracles: vec![
-            (base_commitment, RootIopOracleValues::Base(base_oracle)),
-            (
-                extension_commitment,
-                RootIopOracleValues::Extension(ext_oracle),
-            ),
-        ],
-        claims: claims.clone(),
-    };
-    let proof = root_system
-        .prove(
-            &transcript,
-            &[base_prover_data, extension_prover_data],
-            &mut challenger(),
-            0,
-        )
-        .expect("WHIR-bound root proof");
-
-    let residuals = root_system
-        .verify(&commitments, &claims, &proof, &mut challenger(), 0)
-        .expect("WHIR-bound root proof verification");
-
-    assert_eq!(residuals.len(), 2);
-    assert_eq!(proof.reductions.oracles.len(), 2);
-    assert_eq!(proof.openings.len(), 2);
-}
-
-#[test]
-fn root_iop_whir_bound_proof_rejects_tampered_claim() {
-    let code = systematic_code();
-    let pcs = whir_pcs(code.log_codeword_len());
-    let root_system = NativeWarpWhirRootProofSystem::new(&pcs, &code, challenger());
-    let witness = vec![
-        F::from_u64(2),
-        F::from_u64(3),
-        F::from_u64(5),
-        F::from_u64(7),
-    ];
-    let oracle = code.encode(&witness);
-    let (commitment, prover_data) = root_system
-        .commit_base_oracle(0, oracle.clone())
-        .expect("base root oracle commit");
-    let claims = vec![RootIopOpeningClaim {
-        claim_id: 0,
-        oracle_id: 0,
-        point: RootIopOpeningPoint::<EF>::Index(4),
-        value: RootIopOpeningValue::Base(oracle[4]),
-    }];
-    let transcript = RootIopBoundTranscript {
-        oracles: vec![(commitment.clone(), RootIopOracleValues::Base(oracle))],
-        claims: claims.clone(),
-    };
-    let proof = root_system
-        .prove(&transcript, &[prover_data], &mut challenger(), 0)
-        .expect("WHIR-bound root proof");
-    let mut tampered_claims = claims;
-    tampered_claims[0].value = RootIopOpeningValue::Base(F::from_u64(1234));
-
-    assert!(
-        root_system
-            .verify(
-                &[commitment],
-                &tampered_claims,
-                &proof,
-                &mut challenger(),
-                0
-            )
-            .is_err()
-    );
-}
-
-#[test]
 fn message_domain_root_proof_batches_residual_openings() {
     let code = systematic_code();
-    let pcs = whir_pcs(code.log_codeword_len());
     let message_pcs = whir_pcs(code.log_msg_len());
-    let root_system = NativeWarpWhirRootProofSystem::new_with_base_message_pcs(
-        &pcs,
-        &message_pcs,
-        &code,
-        challenger(),
-    );
+    let root_system = NativeWarpWhirRootProofSystem::new(&message_pcs, &code, challenger());
     let base_message = vec![
         F::from_u64(2),
         F::from_u64(5),
@@ -661,26 +238,16 @@ fn message_domain_root_proof_batches_residual_openings() {
         )
         .expect("batched WHIR-bound root proof");
 
-    assert!(proof.openings.is_empty());
-    assert!(proof.batched_opening.is_none());
-    assert!(proof.direct_batched_opening.is_some());
-    let residuals = root_system
+    root_system
         .verify(&commitments, &claims, &proof, &mut challenger(), 0)
         .expect("batched WHIR-bound root proof verification");
-    assert!(residuals.is_empty());
 }
 
 #[test]
 fn message_domain_batched_root_proof_rejects_missing_claim_or_swapped_commitment() {
     let code = systematic_code();
-    let pcs = whir_pcs(code.log_codeword_len());
     let message_pcs = whir_pcs(code.log_msg_len());
-    let root_system = NativeWarpWhirRootProofSystem::new_with_base_message_pcs(
-        &pcs,
-        &message_pcs,
-        &code,
-        challenger(),
-    );
+    let root_system = NativeWarpWhirRootProofSystem::new(&message_pcs, &code, challenger());
     let base_message = vec![
         F::from_u64(2),
         F::from_u64(5),
@@ -763,14 +330,8 @@ fn message_domain_batched_root_proof_rejects_missing_claim_or_swapped_commitment
 #[test]
 fn shared_message_root_proof_binds_columns() {
     let code = systematic_code();
-    let pcs = whir_pcs(code.log_codeword_len());
     let message_pcs = whir_pcs(code.log_msg_len());
-    let root_system = NativeWarpWhirRootProofSystem::new_with_base_message_pcs(
-        &pcs,
-        &message_pcs,
-        &code,
-        challenger(),
-    );
+    let root_system = NativeWarpWhirRootProofSystem::new(&message_pcs, &code, challenger());
     let message0 = vec![
         F::from_u64(2),
         F::from_u64(3),
@@ -828,9 +389,6 @@ fn shared_message_root_proof_binds_columns() {
         .prove(&transcript, &prover_data, &mut challenger(), 0)
         .expect("shared WHIR-bound root proof");
 
-    assert!(proof.openings.is_empty());
-    assert!(proof.batched_opening.is_none());
-    assert!(proof.direct_batched_opening.is_some());
     root_system
         .verify(&commitments, &claims, &proof, &mut challenger(), 0)
         .expect("shared WHIR-bound root proof verification");
@@ -859,14 +417,8 @@ fn shared_message_root_proof_binds_columns() {
 #[test]
 fn message_domain_batched_root_proof_rejects_tampered_virtual_eval() {
     let code = systematic_code();
-    let pcs = whir_pcs(code.log_codeword_len());
     let message_pcs = whir_pcs(code.log_msg_len());
-    let root_system = NativeWarpWhirRootProofSystem::new_with_base_message_pcs(
-        &pcs,
-        &message_pcs,
-        &code,
-        challenger(),
-    );
+    let root_system = NativeWarpWhirRootProofSystem::new(&message_pcs, &code, challenger());
     let base_message = vec![
         F::from_u64(3),
         F::from_u64(6),
@@ -917,12 +469,7 @@ fn message_domain_batched_root_proof_rejects_tampered_virtual_eval() {
             0,
         )
         .expect("batched WHIR-bound root proof");
-    proof
-        .direct_batched_opening
-        .as_mut()
-        .expect("batched opening")
-        .reduction
-        .virtual_eval += EF::ONE;
+    proof.opening.reduction.virtual_eval += EF::ONE;
 
     assert!(
         root_system

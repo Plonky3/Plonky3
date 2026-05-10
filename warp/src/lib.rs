@@ -41,13 +41,11 @@ pub use accumulator::{
 pub use code::{ReedSolomonCode, ReedSolomonEncoding};
 pub use error::{DeciderError, FinalizerError, VerifierError, WarpError};
 pub use finalize::{
-    AccumulatorFinalizer, AccumulatorPointOpeningBackend, ExtensionLimbPcs, ExtensionLimbPcsError,
-    ExtensionLimbPcsProof, ExtensionLimbPcsProverData, Finalizer, LocalDeciderFinalizer,
+    AccumulatorFinalizer, AccumulatorPointOpeningBackend, Finalizer, LocalDeciderFinalizer,
     PrecommittedAccumulatorPcs, WhirAccumulatorOpeningProof, WhirAccumulatorOpeningProtocol,
-    WhirBooleanPesatProtocol, WhirBooleanWarpFinalizerProtocol, WhirCodewordBackend,
-    WhirCommittedCodeword, WhirLimbAccumulatorBackend, WhirLimbAccumulatorOpeningProof,
-    WhirLimbAccumulatorProverData, WhirPesatProof, WhirPrecommittedBooleanWarpFinalizerProtocol,
-    WhirWarpFinalizerProof, WitnessFinalizer, WitnessProof,
+    WhirBooleanPesatProtocol, WhirBooleanWarpFinalizerProtocol, WhirPesatProof,
+    WhirPrecommittedBooleanWarpFinalizerProtocol, WhirWarpFinalizerProof, WitnessFinalizer,
+    WitnessProof,
 };
 pub use protocol::{
     AccumulatorBatchOpeningBackend, AccumulatorCommitmentBackend, CommittedCodeword,
@@ -72,11 +70,9 @@ pub use root_iop::{
     RootIopWarpFinalizerProof, RootIopWarpRootProof, WitnessRootIopBoundProof, WitnessRootIopProof,
 };
 pub use whir_compiler::{
-    NativeWarpWhirClaimCompileError, NativeWarpWhirCompiler, NativeWarpWhirCompilerError,
-    NativeWarpWhirEvalClaim, NativeWarpWhirOracleStatement, NativeWarpWhirPointProof,
-    NativeWarpWhirRootBaseProverData, NativeWarpWhirRootCommitment,
-    NativeWarpWhirRootOracleOpeningProof, NativeWarpWhirRootOracleProverData,
-    NativeWarpWhirRootOracleReductionProof, NativeWarpWhirRootProof, NativeWarpWhirRootProofError,
+    NativeWarpWhirClaimCompileError, NativeWarpWhirCompiler, NativeWarpWhirEvalClaim,
+    NativeWarpWhirOracleStatement, NativeWarpWhirRootBaseProverData, NativeWarpWhirRootCommitment,
+    NativeWarpWhirRootOracleProverData, NativeWarpWhirRootProof, NativeWarpWhirRootProofError,
     NativeWarpWhirRootProofSystem, NativeWarpWhirRootProverData, NativeWarpWhirRootReductionError,
-    NativeWarpWhirRootReductionProof, NativeWarpWhirRootResidualClaim, eval_claims_from_parts,
+    eval_claims_from_parts,
 };

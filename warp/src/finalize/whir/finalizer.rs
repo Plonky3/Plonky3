@@ -91,8 +91,6 @@ where
         Ok(WhirPesatProof {
             decider_sumcheck: sumcheck,
             terminal_values: vec![terminal_value],
-            next_terminal_values: Vec::new(),
-            next_opened_row_values: Vec::new(),
             pcs_proof,
         })
     }
@@ -104,10 +102,7 @@ where
         proof: &WhirPesatProof<EF, Pcs::Proof>,
     ) -> Result<(), FinalizerError> {
         self.validate_pesat_shape(instance)?;
-        if proof.terminal_values.len() != 1
-            || !proof.next_terminal_values.is_empty()
-            || !proof.next_opened_row_values.is_empty()
-        {
+        if proof.terminal_values.len() != 1 {
             return Err(FinalizerError::Decider(DeciderError::EncodingMismatch));
         }
 

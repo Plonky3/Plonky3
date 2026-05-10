@@ -22,12 +22,6 @@ pub struct WhirPesatProof<EF, PcsProof> {
     pub decider_sumcheck: SumcheckProof<EF>,
     /// Claimed terminal witness value at the sampled point.
     pub terminal_values: Vec<EF>,
-    /// Reserved for legacy serialization compatibility; always empty on the
-    /// direct Boolean path.
-    pub next_terminal_values: Vec<EF>,
-    /// Reserved for legacy serialization compatibility; always empty on the
-    /// direct Boolean path.
-    pub next_opened_row_values: Vec<EF>,
     /// PCS opening proof for terminal values on the systematic RS oracle.
     pub pcs_proof: PcsProof,
 }

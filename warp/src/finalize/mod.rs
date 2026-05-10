@@ -33,10 +33,10 @@
 //! - [`whir::WhirBooleanPesatProtocol`]: WHIR-native sumcheck plus
 //!   systematic-RS openings for the Boolean PESAT decider claim
 //!   `Pb(β, w) = η`.
-//! - [`whir::WhirBooleanWarpFinalizerProtocol`]: composed finalizer proof for
-//!   both decider claims. It is only sound with a PCS whose commitment layout is
-//!   the accumulator's existing `rt`; creating a fresh unrelated WHIR commitment
-//!   is not a sound WARP finalizer.
+//! - [`whir::WhirPrecommittedBooleanWarpFinalizerProtocol`]: composed finalizer
+//!   proof for both decider claims, using a caller-provided backend that opens
+//!   the accumulator's existing commitment `rt`. Creating a fresh unrelated
+//!   WHIR commitment is not a sound WARP finalizer.
 
 pub mod local;
 pub mod whir;
@@ -44,12 +44,9 @@ pub mod witness;
 
 pub use local::LocalDeciderFinalizer;
 pub use whir::{
-    AccumulatorPointOpeningBackend, ExtensionLimbPcs, ExtensionLimbPcsError, ExtensionLimbPcsProof,
-    ExtensionLimbPcsProverData, PrecommittedAccumulatorPcs, WhirAccumulatorOpeningProof,
+    AccumulatorPointOpeningBackend, PrecommittedAccumulatorPcs, WhirAccumulatorOpeningProof,
     WhirAccumulatorOpeningProtocol, WhirBooleanPesatProtocol, WhirBooleanWarpFinalizerProtocol,
-    WhirCodewordBackend, WhirCommittedCodeword, WhirLimbAccumulatorBackend,
-    WhirLimbAccumulatorOpeningProof, WhirLimbAccumulatorProverData, WhirPesatProof,
-    WhirPrecommittedBooleanWarpFinalizerProtocol, WhirWarpFinalizerProof,
+    WhirPesatProof, WhirPrecommittedBooleanWarpFinalizerProtocol, WhirWarpFinalizerProof,
 };
 pub use witness::{WitnessFinalizer, WitnessProof};
 

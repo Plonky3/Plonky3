@@ -36,15 +36,6 @@
 
 use super::*;
 
-/// Residual oracle material for the older per-oracle fallback path.
-///
-/// It stores an owned multilinear table after the generic linear-Sigma
-/// reduction has already reduced that oracle to one residual opening.
-pub(super) enum NativeWarpBatchedResidualPoly<F, EF> {
-    Base(Poly<F>),
-    Extension(Poly<EF>),
-}
-
 /// Borrowed message-domain oracle used by the compact root reduction.
 ///
 /// The important invariant is that these slices are message evaluations
@@ -750,24 +741,6 @@ where
         coeffs,
         value: proof.virtual_eval,
     })
-}
-
-/// Build a generic equality statement for an already-reduced residual claim.
-///
-/// This supports the fallback path where an oracle was reduced separately
-/// before the root compiler attempts to batch the remaining residual openings.
-pub(super) fn residual_eq_statement<F, EF>(
-    residual: &NativeWarpWhirRootResidualClaim<EF>,
-) -> LinearSigmaStatement<EF>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-{
-    let mut eq = EqStatement::initialize(residual.opening.point.num_variables());
-    eq.add_evaluated_constraint(residual.opening.point.clone(), residual.opening.value);
-    let mut statement = LinearSigmaStatement::initialize(residual.opening.point.num_variables());
-    statement.add_constraint(LinearSigmaConstraint::from_eq_statement::<F>(&eq, EF::ONE));
-    statement
 }
 
 /// Absorb the full typed WARP root commitment into Fiat-Shamir.

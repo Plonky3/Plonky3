@@ -36,18 +36,16 @@ use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_symmetric::{MerkleCap, PaddingFreeSponge, TruncatedPermutation};
 use p3_warp::{
-    Accumulator, AccumulatorBatchOpeningBackend, AccumulatorCommitmentBackend,
-    AccumulatorFinalizer, AccumulatorInstance, AccumulatorPointOpeningBackend, AccumulatorWitness,
-    BooleanPesat, ExtensionLimbPcs, ExtensionLimbPcsProof, ExternalCodewordBatchOpeningProver,
-    ExternalCodewordBatchOpeningVerifier, ExternalCodewordOpeningProver,
-    ExternalCodewordOpeningVerifier, ExternalCommittedCodeword, NativeWarpWhirRootCommitment,
-    NativeWarpWhirRootOracleOpeningProof, NativeWarpWhirRootOracleProverData,
-    NativeWarpWhirRootProof, NativeWarpWhirRootProofSystem, ReedSolomonCode,
-    RootIopBoundCommitment, RootIopBoundTranscript, RootIopError, RootIopOpeningClaim,
-    RootIopOpeningPoint, RootIopOpeningProof, RootIopOpeningValue, RootIopOracleField,
-    RootIopOracleValues, WarpExternalRootProofBatched, WarpExternalRootStepBatched, WarpParams,
-    WarpProver, WarpRootProver, WarpRootVerifier, WhirBooleanWarpFinalizerProtocol,
-    WhirPrecommittedBooleanWarpFinalizerProtocol, WhirWarpFinalizerProof, WitnessFinalizer,
+    AccumulatorBatchOpeningBackend, AccumulatorCommitmentBackend, AccumulatorFinalizer,
+    AccumulatorInstance, AccumulatorPointOpeningBackend, BooleanPesat,
+    ExternalCodewordBatchOpeningProver, ExternalCodewordBatchOpeningVerifier,
+    ExternalCodewordOpeningProver, ExternalCodewordOpeningVerifier, ExternalCommittedCodeword,
+    NativeWarpWhirRootCommitment, NativeWarpWhirRootOracleProverData, NativeWarpWhirRootProof,
+    NativeWarpWhirRootProofSystem, ReedSolomonCode, RootIopBoundCommitment, RootIopBoundTranscript,
+    RootIopError, RootIopOpeningClaim, RootIopOpeningPoint, RootIopOpeningProof,
+    RootIopOpeningValue, RootIopOracleField, RootIopOracleValues, WarpExternalRootProofBatched,
+    WarpExternalRootStepBatched, WarpParams, WarpProver, WarpRootVerifier,
+    WhirPrecommittedBooleanWarpFinalizerProtocol, WhirWarpFinalizerProof,
 };
 use p3_whir::constraints::statement::initial::InitialStatement;
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
@@ -76,8 +74,6 @@ type MyWhirConfig = WhirConfig<EF, F, MyMmcs, MyChallenger>;
 type MyWhirProof = WhirProof<F, EF, MyMmcs>;
 type MyCommitment = MerkleCap<F, [F; WHIR_DIGEST_ELEMS]>;
 type MyWhirPcs = WhirPcs<EF, F, MyMmcs, BenchChallenger, MyDft, WHIR_DIGEST_ELEMS>;
-type MyWhirLimbProof = ExtensionLimbPcsProof<EF, MyWhirProof>;
-type MyWarpWhirFinalizerProof = WhirWarpFinalizerProof<EF, MyWhirLimbProof>;
 type MyRootWhirCommitment = NativeWarpWhirRootCommitment<MyCommitment>;
 type MyRootWhirProof = NativeWarpWhirRootProof<F, EF, MyMmcs>;
 type MyRootWhirOracleProverData =
@@ -92,9 +88,6 @@ type MyWarpWhirRootProof = WarpExternalRootProofBatched<
     RootIopOpeningProof,
     MyRootWhirFinalizerProof,
 >;
-type NativeAccumulator =
-    Accumulator<EF, MyCommitment, p3_warp::protocol::prover::ExtProverData<F, EF, MyMmcs>>;
-
 const LOG_INV_RATE: usize = 1;
 const DEFAULT_WARP_FRESH_PER_STEP: usize = 4;
 const WHIR_FOLDING_FACTOR: usize = 4;
@@ -107,7 +100,6 @@ type NativeBenchPesat = BooleanPesat<F, EF>;
 
 struct WarpKernelFixture<P = NativeBenchPesat> {
     mmcs: MyMmcs,
-    base_challenger: MyChallenger,
     code: ReedSolomonCode<F, MyDft>,
     pesat: P,
     params: WarpParams,
@@ -175,14 +167,12 @@ impl GrindingChallenger for BenchChallenger {
 fn make_warp_fixture(num_variables: usize) -> WarpKernelFixture {
     let perm = make_permutation();
     let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm.clone()), 0);
-    let base_challenger = MyChallenger::new(perm);
     let dft = MyDft::default();
     let pesat = BooleanPesat::new(num_variables, b"BooleanPesat/warp-sumcheck-bench".to_vec());
     let code = ReedSolomonCode::<F, MyDft>::new_systematic(num_variables, LOG_INV_RATE, dft);
     let params = WarpParams::new(1, 2);
     WarpKernelFixture {
         mmcs,
-        base_challenger,
         code,
         pesat,
         params,
@@ -345,22 +335,6 @@ fn step_witness_groups(witnesses: &[Vec<F>], fresh_per_step: usize) -> Vec<Vec<V
     groups
 }
 
-fn prove_warp_native(fixture: &WarpKernelFixture, witnesses: &[Vec<F>]) {
-    let root_prover =
-        WarpRootProver::new(&fixture.mmcs, &fixture.code, &fixture.pesat, fixture.params);
-    let finalizer = WitnessFinalizer::new(&fixture.mmcs, &fixture.code, &fixture.pesat);
-    let step_witnesses = step_witness_groups(witnesses, warp_fresh_per_step());
-    black_box(
-        root_prover
-            .prove_linear_chain(&fixture.base_challenger, &step_witnesses, &finalizer)
-            .expect("native WARP prove"),
-    );
-}
-
-fn make_whir_pcs(fixture: &WarpKernelFixture) -> MyWhirPcs {
-    make_whir_pcs_for_num_vars(&fixture.mmcs, fixture.code.log_codeword_len())
-}
-
 fn make_whir_pcs_for_num_vars(mmcs: &MyMmcs, num_variables: usize) -> MyWhirPcs {
     WhirPcs::new(
         num_variables,
@@ -443,106 +417,6 @@ fn verify_n_whir_full_pcs_bundle(fixture: &WarpKernelFixture, bundle: &WhirFullB
     }
 }
 
-fn build_warp_native_accumulator(
-    fixture: &WarpKernelFixture,
-    witnesses: &[Vec<F>],
-) -> NativeAccumulator {
-    let step_prover = WarpProver::new(&fixture.mmcs, &fixture.code, &fixture.pesat, fixture.params);
-    let step_witnesses = step_witness_groups(witnesses, warp_fresh_per_step());
-    let mut current: Option<NativeAccumulator> = None;
-
-    for fresh in step_witnesses {
-        let priors = match current.take() {
-            Some(accumulator) => vec![accumulator],
-            None => Vec::new(),
-        };
-        let mut challenger = fixture.base_challenger.clone();
-        let (next, proof) = step_prover.prove(&mut challenger, &fresh, &priors);
-        black_box(proof);
-        current = Some(next);
-    }
-
-    current.expect("valid WARP benchmark plan has at least one step")
-}
-
-struct WarpWhirFinalizerBundle {
-    instance: AccumulatorInstance<EF, Vec<MyCommitment>>,
-    proof: MyWarpWhirFinalizerProof,
-}
-
-fn whir_limb_commitment_for_finalizer(
-    fixture: &WarpKernelFixture,
-    pcs: &ExtensionLimbPcs<'_, F, EF, MyWhirPcs>,
-    final_acc: &NativeAccumulator,
-) -> Vec<MyCommitment> {
-    let opening_points = [vec![Point::new(final_acc.instance.alpha.clone())]];
-    let (commitment, _) = pcs.commit(
-        RowMajorMatrix::new(final_acc.witness.f.clone(), 1),
-        &opening_points,
-        &mut BenchChallenger::new(),
-    );
-    assert_eq!(
-        pcs.num_vars(),
-        fixture.code.log_codeword_len(),
-        "WHIR PCS and WARP code must use the same MLE dimension",
-    );
-    commitment
-}
-
-fn build_warp_whir_finalizer_bundle(
-    fixture: &WarpKernelFixture,
-    witnesses: &[Vec<F>],
-) -> WarpWhirFinalizerBundle {
-    let final_acc = build_warp_native_accumulator(fixture, witnesses);
-    let whir_pcs = make_whir_pcs(fixture);
-    let limb_pcs = ExtensionLimbPcs::<F, EF, _>::new(&whir_pcs);
-    let rt = whir_limb_commitment_for_finalizer(fixture, &limb_pcs, &final_acc);
-    let instance = AccumulatorInstance {
-        rt,
-        alpha: final_acc.instance.alpha.clone(),
-        mu: final_acc.instance.mu,
-        beta: final_acc.instance.beta.clone(),
-        eta: final_acc.instance.eta,
-    };
-    let witness = AccumulatorWitness {
-        td: (),
-        f: final_acc.witness.f.clone(),
-        w: final_acc.witness.w.clone(),
-    };
-    let finalizer = WhirBooleanWarpFinalizerProtocol::<F, EF, _, BenchChallenger, MyDft>::new(
-        &limb_pcs,
-        &fixture.code,
-        &fixture.pesat,
-        BenchChallenger::new(),
-    );
-    let proof = finalizer
-        .prove(&instance, &witness)
-        .expect("WARP finalizer over WHIR limb PCS");
-
-    WarpWhirFinalizerBundle { instance, proof }
-}
-
-fn prove_warp_whir_finalizer(fixture: &WarpKernelFixture, witnesses: &[Vec<F>]) {
-    black_box(build_warp_whir_finalizer_bundle(fixture, witnesses));
-}
-
-fn verify_warp_whir_finalizer_bundle(
-    fixture: &WarpKernelFixture,
-    bundle: &WarpWhirFinalizerBundle,
-) {
-    let whir_pcs = make_whir_pcs(fixture);
-    let limb_pcs = ExtensionLimbPcs::<F, EF, _>::new(&whir_pcs);
-    let finalizer = WhirBooleanWarpFinalizerProtocol::<F, EF, _, BenchChallenger, MyDft>::new(
-        &limb_pcs,
-        &fixture.code,
-        &fixture.pesat,
-        BenchChallenger::new(),
-    );
-    finalizer
-        .verify(&bundle.instance, &bundle.proof)
-        .expect("WARP finalizer over WHIR limb PCS verification");
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct BenchRootCommitment(RootIopBoundCommitment<MyRootWhirCommitment>);
 
@@ -564,10 +438,6 @@ fn observe_bench_root_commitment(
         RootIopOracleField::Extension => 1,
     }));
     match &inner.commitment {
-        NativeWarpWhirRootCommitment::Base(root) => {
-            challenger.observe(F::ZERO);
-            challenger.observe(root.clone());
-        }
         NativeWarpWhirRootCommitment::BaseMessage(root) => {
             challenger.observe(F::from_u8(2));
             challenger.observe(root.clone());
@@ -581,17 +451,6 @@ fn observe_bench_root_commitment(
             challenger.observe(root.clone());
             challenger.observe(F::from_usize(*column));
             challenger.observe(F::from_usize(*width));
-        }
-        NativeWarpWhirRootCommitment::Extension(roots) => {
-            challenger.observe(F::ONE);
-            challenger.observe(F::from_usize(roots.len()));
-            for root in roots {
-                challenger.observe(root.clone());
-            }
-        }
-        NativeWarpWhirRootCommitment::ExtensionNative(root) => {
-            challenger.observe(F::from_u8(3));
-            challenger.observe(root.clone());
         }
         NativeWarpWhirRootCommitment::ExtensionMessage(root) => {
             challenger.observe(F::from_u8(4));
@@ -684,16 +543,11 @@ struct BenchRootIopWhirProver<'a> {
 }
 
 impl<'a> BenchRootIopWhirProver<'a> {
-    fn new(
-        whir_pcs: &'a MyWhirPcs,
-        base_message_pcs: &'a MyWhirPcs,
-        code: &'a ReedSolomonCode<F, MyDft>,
-    ) -> Self {
+    fn new(message_pcs: &'a MyWhirPcs, code: &'a ReedSolomonCode<F, MyDft>) -> Self {
         let log_codeword_len = code.log_codeword_len();
         Self {
-            root_system: NativeWarpWhirRootProofSystem::new_with_base_message_pcs(
-                whir_pcs,
-                base_message_pcs,
+            root_system: NativeWarpWhirRootProofSystem::new(
+                message_pcs,
                 code,
                 BenchChallenger::new(),
             ),
@@ -1374,9 +1228,8 @@ fn build_warp_whir_root_bundle_with_phases(
 ) -> (WarpWhirRootBundle, WarpWhirRootPhaseDurations) {
     let total_start = Instant::now();
     let phase_start = Instant::now();
-    let whir_pcs = make_whir_pcs(fixture);
     let base_message_pcs = make_whir_pcs_for_num_vars(&fixture.mmcs, fixture.code.log_msg_len());
-    let root_iop_backend = BenchRootIopWhirProver::new(&whir_pcs, &base_message_pcs, &fixture.code);
+    let root_iop_backend = BenchRootIopWhirProver::new(&base_message_pcs, &fixture.code);
     let finalizer =
         WhirPrecommittedBooleanWarpFinalizerProtocol::<F, EF, _, BenchChallenger, MyDft>::new(
             &root_iop_backend,
@@ -1449,20 +1302,8 @@ fn build_warp_whir_root_bundle_with_phases(
     )
 }
 
-fn count_root_whir_openings(proof: &MyRootWhirProof) -> usize {
-    let separate_openings = proof
-        .openings
-        .iter()
-        .map(|opening| match opening {
-            NativeWarpWhirRootOracleOpeningProof::Base(_) => 1,
-            NativeWarpWhirRootOracleOpeningProof::Extension(proof) => proof.limb_proofs.len(),
-            NativeWarpWhirRootOracleOpeningProof::ExtensionNative(_) => 1,
-            NativeWarpWhirRootOracleOpeningProof::ExtensionMessage(_) => 1,
-        })
-        .sum::<usize>();
-    separate_openings
-        + usize::from(proof.batched_opening.is_some())
-        + usize::from(proof.direct_batched_opening.is_some())
+fn count_root_whir_openings(_proof: &MyRootWhirProof) -> usize {
+    1
 }
 
 fn prove_warp_whir_root(fixture: &WarpKernelFixture, witnesses: &[Vec<F>]) {
@@ -1479,7 +1320,6 @@ fn verify_warp_whir_root_bundle_with_phases(
 ) -> WarpWhirRootVerifyPhaseDurations {
     let total_start = Instant::now();
     let phase_start = Instant::now();
-    let whir_pcs = make_whir_pcs(fixture);
     let base_message_pcs = make_whir_pcs_for_num_vars(&fixture.mmcs, fixture.code.log_msg_len());
     let root_iop_verifier = BenchRootIopWhirVerifier::new(fixture.code.log_codeword_len());
     let finalizer =
@@ -1510,8 +1350,7 @@ fn verify_warp_whir_root_bundle_with_phases(
     let chain = phase_start.elapsed();
 
     let phase_start = Instant::now();
-    let root_system = NativeWarpWhirRootProofSystem::new_with_base_message_pcs(
-        &whir_pcs,
+    let root_system = NativeWarpWhirRootProofSystem::new(
         &base_message_pcs,
         &fixture.code,
         BenchChallenger::new(),
@@ -1604,10 +1443,6 @@ fn parse_usize_env(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-fn average_duration(total: Duration, iterations: usize) -> Duration {
-    Duration::from_nanos((total.as_nanos() / iterations as u128) as u64)
-}
-
 #[derive(Clone, Copy, Debug)]
 struct DurationStats {
     min: Duration,
@@ -1615,14 +1450,6 @@ struct DurationStats {
     mean: Duration,
     max: Duration,
     stddev: Duration,
-}
-
-fn time_average(iterations: usize, mut f: impl FnMut()) -> Duration {
-    let start = Instant::now();
-    for _ in 0..iterations {
-        f();
-    }
-    average_duration(start.elapsed(), iterations)
 }
 
 fn duration_from_nanos(nanos: u128) -> Duration {
@@ -1736,125 +1563,6 @@ fn format_duration_stats(stats: DurationStats) -> String {
         format_duration(stats.max),
         format_duration(stats.stddev),
     )
-}
-
-fn print_sumcheck_comparison(num_variable_cases: &[usize], n_values: &[usize]) {
-    let iterations = parse_usize_env("P3_WARP_SUMCHECK_COMPARE_ITERS", 1).max(1);
-    let arity = warp_fresh_per_step();
-    eprintln!();
-    eprintln!("=== WARP native vs N WHIR commit+SVO kernel comparison ===");
-    eprintln!("    Comparison is warp_native / n_whir_commit_svo for the same k and N.");
-    eprintln!(
-        "    WARP arity: {arity} fresh inputs in the first step, then {} per chained step.",
-        arity - 1
-    );
-    eprintln!("    Times are single-process wall-clock averages over {iterations} iteration(s).");
-    eprintln!(
-        "{:<6}{:<8}{:<8}{:<16}{:<16}{:<18}",
-        "k", "N", "steps", "whir", "warp", "warp / whir"
-    );
-
-    for &num_variables in num_variable_cases {
-        for &n in n_values {
-            if n < arity || (n - arity) % (arity - 1) != 0 {
-                eprintln!(
-                    "{:<6}{:<8}{:<8}{:<16}{:<16}{:<18}",
-                    num_variables, n, "-", "skip", "skip", "invalid WARP N"
-                );
-                continue;
-            }
-
-            let warp_fixture = make_warp_fixture(num_variables);
-            let whir_config = make_whir_config(&warp_fixture.mmcs, num_variables);
-            let whir_protocol_params = make_whir_protocol_params(&warp_fixture.mmcs);
-            let svo_statements = make_whir_statements(num_variables, n, SumcheckStrategy::Svo);
-            let warp_witnesses = make_boolean_witnesses(num_variables, n);
-            let steps = step_plan(n, arity).len();
-
-            let whir_time = time_average(iterations, || {
-                prove_n_whir_commit_sumchecks(&whir_config, &whir_protocol_params, &svo_statements);
-            });
-            let warp_time = time_average(iterations, || {
-                prove_warp_native(&warp_fixture, &warp_witnesses);
-            });
-
-            eprintln!(
-                "{:<6}{:<8}{:<8}{:<16}{:<16}{:<18}",
-                num_variables,
-                n,
-                steps,
-                format_duration(whir_time),
-                format_duration(warp_time),
-                format_warp_over_whir(warp_time, whir_time)
-            );
-        }
-    }
-    eprintln!();
-}
-
-fn print_warp_whir_finalizer_comparison(num_variable_cases: &[usize], n_values: &[usize]) {
-    let iterations = parse_usize_env("P3_WARP_WHIR_FINALIZER_COMPARE_ITERS", 1).max(1);
-    let arity = warp_fresh_per_step();
-    eprintln!();
-    eprintln!("=== Native WARP steps + WHIR-limb finalizer comparison ===");
-    eprintln!("    WHIR lane: N WHIR commit+SVO kernels from this benchmark.");
-    eprintln!(
-        "    WARP lane: native WARP accumulation steps, then direct Boolean WhirBooleanWarpFinalizerProtocol over ExtensionLimbPcs<WhirPcs>."
-    );
-    eprintln!(
-        "    Note: this is the older finalizer-only lane; use P3_WARP_WHIR_ROOT_COMPARE=1 for the current root-proof comparison."
-    );
-    eprintln!(
-        "    WARP arity: {arity} fresh inputs in the first step, then {} per chained step.",
-        arity - 1
-    );
-    eprintln!("    Times are single-process wall-clock averages over {iterations} iteration(s).");
-    eprintln!(
-        "{:<6}{:<8}{:<8}{:<16}{:<16}{:<24}{:<16}",
-        "k", "N", "steps", "whir", "warp+whir", "warp / whir", "verify"
-    );
-
-    for &num_variables in num_variable_cases {
-        for &n in n_values {
-            if n < arity || (n - arity) % (arity - 1) != 0 {
-                eprintln!(
-                    "{:<6}{:<8}{:<8}{:<16}{:<16}{:<24}{:<16}",
-                    num_variables, n, "-", "skip", "skip", "-", "invalid WARP N"
-                );
-                continue;
-            }
-
-            let fixture = make_warp_fixture(num_variables);
-            let whir_config = make_whir_config(&fixture.mmcs, num_variables);
-            let whir_protocol_params = make_whir_protocol_params(&fixture.mmcs);
-            let svo_statements = make_whir_statements(num_variables, n, SumcheckStrategy::Svo);
-            let warp_witnesses = make_boolean_witnesses(num_variables, n);
-            let steps = step_plan(n, arity).len();
-
-            let whir_time = time_average(iterations, || {
-                prove_n_whir_commit_sumchecks(&whir_config, &whir_protocol_params, &svo_statements);
-            });
-            let warp_time = time_average(iterations, || {
-                prove_warp_whir_finalizer(&fixture, &warp_witnesses);
-            });
-            let bundle = build_warp_whir_finalizer_bundle(&fixture, &warp_witnesses);
-            let verify_time = time_average(iterations, || {
-                verify_warp_whir_finalizer_bundle(&fixture, &bundle);
-            });
-
-            eprintln!(
-                "{:<6}{:<8}{:<8}{:<16}{:<16}{:<24}{:<16}",
-                num_variables,
-                n,
-                steps,
-                format_duration(whir_time),
-                format_duration(warp_time),
-                format_warp_over_whir(warp_time, whir_time),
-                format_duration(verify_time),
-            );
-        }
-    }
-    eprintln!();
 }
 
 fn print_warp_whir_root_comparison(num_variable_cases: &[usize], n_values: &[usize]) {
@@ -2130,14 +1838,6 @@ fn bench_sumcheck_like_prover(c: &mut Criterion) {
     let num_variable_cases = parse_usize_list_env("P3_WARP_SUMCHECK_K", DEFAULT_NUM_VARIABLES);
     let n_values = parse_usize_list_env("P3_WARP_SUMCHECK_N", DEFAULT_N_VALUES);
 
-    if env::var("P3_WARP_SUMCHECK_COMPARE").as_deref() == Ok("1") {
-        print_sumcheck_comparison(&num_variable_cases, &n_values);
-        return;
-    }
-    if env::var("P3_WARP_WHIR_FINALIZER_COMPARE").as_deref() == Ok("1") {
-        print_warp_whir_finalizer_comparison(&num_variable_cases, &n_values);
-        return;
-    }
     if env::var("P3_WARP_WHIR_ROOT_COMPARE").as_deref() == Ok("1") {
         print_warp_whir_root_comparison(&num_variable_cases, &n_values);
         return;
@@ -2153,19 +1853,15 @@ fn bench_sumcheck_like_prover(c: &mut Criterion) {
         parse_usize_env("P3_WARP_SUMCHECK_SECONDS", 5) as u64,
     ));
 
-    let arity = warp_fresh_per_step();
     for &num_variables in &num_variable_cases {
         let label = format!("k{num_variables}");
-        let warp_label = format!("l{arity}_{label}");
         for &n in &n_values {
-            let valid_warp_n = n >= arity && (n - arity) % (arity - 1) == 0;
             let classic_statements =
                 make_whir_statements(num_variables, n, SumcheckStrategy::Classic);
             let svo_statements = make_whir_statements(num_variables, n, SumcheckStrategy::Svo);
             let warp_fixture = make_warp_fixture(num_variables);
             let whir_config = make_whir_config(&warp_fixture.mmcs, num_variables);
             let whir_protocol_params = make_whir_protocol_params(&warp_fixture.mmcs);
-            let warp_witnesses = make_boolean_witnesses(num_variables, n);
 
             group.bench_with_input(
                 BenchmarkId::new(format!("n_whir_classic_{label}"), n),
@@ -2203,31 +1899,6 @@ fn bench_sumcheck_like_prover(c: &mut Criterion) {
                     })
                 },
             );
-            if valid_warp_n {
-                group.bench_with_input(
-                    BenchmarkId::new(format!("warp_native_{warp_label}"), n),
-                    &n,
-                    |b, _| b.iter(|| prove_warp_native(&warp_fixture, &warp_witnesses)),
-                );
-            }
-            if valid_warp_n && env::var("P3_WARP_WHIR_FINALIZER_BENCH").as_deref() == Ok("1") {
-                let warp_whir_bundle =
-                    build_warp_whir_finalizer_bundle(&warp_fixture, &warp_witnesses);
-                group.bench_with_input(
-                    BenchmarkId::new(format!("warp_whir_finalizer_{warp_label}"), n),
-                    &n,
-                    |b, _| b.iter(|| prove_warp_whir_finalizer(&warp_fixture, &warp_witnesses)),
-                );
-                group.bench_with_input(
-                    BenchmarkId::new(format!("warp_whir_finalizer_verify_{warp_label}"), n),
-                    &n,
-                    |b, _| {
-                        b.iter(|| {
-                            verify_warp_whir_finalizer_bundle(&warp_fixture, &warp_whir_bundle)
-                        })
-                    },
-                );
-            }
         }
     }
 

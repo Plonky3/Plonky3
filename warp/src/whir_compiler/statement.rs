@@ -1,4 +1,6 @@
 use super::*;
+use p3_whir::constraints::statement::LinearSigmaOpeningClaim;
+use p3_whir::pcs::{WhirLinearSigmaError, WhirLinearSigmaProof};
 
 /// One WARP evaluation claim against the folded RS codeword oracle.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -151,106 +153,5 @@ impl<EF: Field> NativeWarpWhirOracleStatement<EF> {
             challenger,
             reduction_pow_bits,
         )
-    }
-
-    /// Prove this compiled statement against an already committed
-    /// extension-field WARP oracle.
-    ///
-    /// This is the extension-field counterpart to
-    /// [`prove_bound_deferred`](Self::prove_bound_deferred). It uses the
-    /// linear-Sigma sumcheck over the EF oracle itself, then asks the existing
-    /// WARP accumulator point-opening backend to authenticate the single
-    /// residual opening against the original commitment. With
-    /// [`WhirLimbAccumulatorBackend`](crate::WhirLimbAccumulatorBackend), that
-    /// backend is WHIR over base-field limbs; no verifier logic is reimplemented
-    /// here.
-    ///
-    /// Fiat-Shamir order in this helper is:
-    ///
-    /// 1. observe the committed oracle through `backend.observe_commitment`,
-    /// 2. bind the public linear-Sigma statement and run its reduction,
-    /// 3. prove the residual opening against the same commitment.
-    pub fn prove_bound_extension_points<F, Backend, Challenger>(
-        &self,
-        backend: &Backend,
-        commitment: &Backend::Commitment,
-        prover_data: &Backend::ProverData,
-        oracle_values: &[EF],
-        challenger: &mut Challenger,
-        reduction_pow_bits: usize,
-    ) -> Result<
-        (
-            LinearSigmaOpeningClaim<EF>,
-            NativeWarpWhirPointProof<F, EF, Backend::PointProof>,
-        ),
-        NativeWarpWhirCompilerError<Backend::PointError>,
-    >
-    where
-        F: TwoAdicField,
-        EF: ExtensionField<F> + TwoAdicField,
-        Backend: AccumulatorPointOpeningBackend<F, EF, Challenger>,
-        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
-    {
-        backend.observe_commitment(challenger, commitment);
-
-        let oracle = Poly::new(oracle_values.to_vec());
-        let (reduction, residual_claim) = self.constraints.prove_reduction_ext::<F, _>(
-            &oracle,
-            challenger,
-            reduction_pow_bits,
-        )?;
-
-        let opening_points = [vec![residual_claim.point.clone()]];
-        let (opened_values, opening) = backend
-            .prove_points(prover_data, &opening_points)
-            .map_err(NativeWarpWhirCompilerError::PointOpening)?;
-        let opened = opened_values
-            .first()
-            .and_then(|values| values.first())
-            .copied()
-            .ok_or(NativeWarpWhirCompilerError::OpeningShape)?;
-        if opened != residual_claim.value {
-            return Err(NativeWarpWhirCompilerError::ResidualOpeningMismatch);
-        }
-
-        Ok((
-            residual_claim,
-            NativeWarpWhirPointProof { reduction, opening },
-        ))
-    }
-
-    /// Verify a compiled extension-field statement against an existing WARP
-    /// accumulator commitment.
-    ///
-    /// Verification mirrors [`prove_bound_extension_points`](Self::prove_bound_extension_points):
-    /// the commitment is observed before the linear-Sigma challenges are sampled,
-    /// and the residual opening is checked by the caller-provided backend.
-    pub fn verify_bound_extension_points<F, Backend, Challenger>(
-        &self,
-        backend: &Backend,
-        commitment: &Backend::Commitment,
-        proof: &NativeWarpWhirPointProof<F, EF, Backend::PointProof>,
-        challenger: &mut Challenger,
-        reduction_pow_bits: usize,
-    ) -> Result<LinearSigmaOpeningClaim<EF>, NativeWarpWhirCompilerError<Backend::PointError>>
-    where
-        F: TwoAdicField,
-        EF: ExtensionField<F> + TwoAdicField,
-        Backend: AccumulatorPointOpeningBackend<F, EF, Challenger>,
-        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
-    {
-        backend.observe_commitment(challenger, commitment);
-
-        let residual_claim = self.constraints.verify_reduction::<F, _>(
-            &proof.reduction,
-            challenger,
-            reduction_pow_bits,
-        )?;
-        let opening_claims = [vec![(residual_claim.point.clone(), residual_claim.value)]];
-        backend
-            .verify_points(commitment, &opening_claims, &proof.opening)
-            .map_err(NativeWarpWhirCompilerError::PointOpening)?;
-
-        Ok(residual_claim)
     }
 }
