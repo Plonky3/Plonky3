@@ -4,8 +4,8 @@ use p3_baby_bear::{
     BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_24, BabyBear, MdsMatrixBabyBear, Poseidon1BabyBear,
 };
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_goldilocks::poseidon1::{default_goldilocks_poseidon1_8, default_goldilocks_poseidon1_12};
 use p3_goldilocks::Goldilocks;
+use p3_goldilocks::poseidon1::{default_goldilocks_poseidon1_8, default_goldilocks_poseidon1_12};
 use p3_koala_bear::{
     KOALABEAR_POSEIDON_HALF_FULL_ROUNDS, KOALABEAR_POSEIDON_PARTIAL_ROUNDS_16,
     KOALABEAR_POSEIDON_PARTIAL_ROUNDS_24, KoalaBear, MdsMatrixKoalaBear, Poseidon1KoalaBear,
