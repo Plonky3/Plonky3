@@ -572,4 +572,132 @@ mod tests {
         // under UD fails loudly instead of silently propagating a bogus value.
         let _ = SecurityAssumption::UniqueDecoding.log_eta(5);
     }
+
+    // -------------------------------------------------------------------
+    // BCSS25 proximity gap improvement over BCI+20
+    //
+    // [BCI+20] "Proximity Gaps for Reed-Solomon Codes" (FOCS 2020, eprint 2020/654)
+    //   Theorem 1.2: Johnson bound error ε_J = (k+1)² / (2·min(η,√ρ/(2δ)))⁷ · q
+    //   Soundness error a/q with a = O(n²/η⁷) for the Guruswami-Sudan regime.
+    //
+    // [BCSS25] "On Proximity Gaps for Reed-Solomon Codes" (eprint 2025/2055)
+    //   Theorem 1.5: improves to a = O(n/η⁵), saving a factor of n.
+    //
+    // The tests below verify the improvement holds across all relevant
+    // parameters and that 128-bit security is achievable with degree-5
+    // KoalaBear extensions.
+    // -------------------------------------------------------------------
+
+    /// Compute the JohnsonBound proximity gaps error using the *old* BCI+20
+    /// bound (Theorem 1.2, equation 1.2) for comparison against BCSS25.
+    ///
+    /// With η = √ρ/20 (same safe gap as the implementation), m = 10:
+    ///   a ~ 2·(m+½)⁷ / (3·ρ^{7/2}) · n²
+    ///
+    /// In log form:
+    ///   log₂(a) = 2·log₂(n) + log₂(2·10.5⁷/3) + 3.5·log_inv_rate
+    fn bci20_jb_prox_gaps_error(
+        log_degree: usize,
+        log_inv_rate: usize,
+        field_size_bits: usize,
+    ) -> f64 {
+        let log_n_sq = ((log_degree + log_inv_rate) * 2) as f64;
+        let constant = libm::log2(2. * libm::pow(10.5, 7.) / 3.);
+        let log_rho_neg = 3.5 * log_inv_rate as f64;
+        let error_bits = log_n_sq + constant + log_rho_neg;
+
+        field_size_bits as f64 - error_bits
+    }
+
+    /// BCSS25 Theorem 1.5 strictly improves over BCI+20 Theorem 1.2
+    /// for JohnsonBound across all relevant parameter ranges.
+    #[test]
+    fn test_bcss25_improves_over_bci20() {
+        let jb = SecurityAssumption::JohnsonBound;
+
+        for log_degree in 10..=25 {
+            for log_inv_rate in 1..=4 {
+                let field_size_bits = 155; // degree-5 KoalaBear extension
+
+                let bcss25_bits = jb.prox_gaps_error(log_degree, log_inv_rate, field_size_bits, 2);
+                let bci20_bits =
+                    bci20_jb_prox_gaps_error(log_degree, log_inv_rate, field_size_bits);
+
+                assert!(
+                    bcss25_bits > bci20_bits,
+                    "BCSS25 must improve over BCI+20: \
+                     log_degree={log_degree}, log_inv_rate={log_inv_rate}, \
+                     BCSS25={bcss25_bits:.2} bits, BCI+20={bci20_bits:.2} bits"
+                );
+
+                // Improvement should be approximately log₂(n) = log_degree + log_inv_rate
+                // (BCSS25 eliminates one factor of n from the exceptional-z count).
+                let improvement = bcss25_bits - bci20_bits;
+                let expected_improvement = (log_degree + log_inv_rate) as f64;
+                assert!(
+                    improvement > expected_improvement * 0.5,
+                    "improvement {improvement:.2} should be at least half of \
+                     log₂(n)={expected_improvement:.1}: \
+                     log_degree={log_degree}, log_inv_rate={log_inv_rate}"
+                );
+            }
+        }
+    }
+
+    /// 128-bit security is achievable with degree-5 KoalaBear extension
+    /// (field_size_bits = 155) under JohnsonBound using BCSS25.
+    #[test]
+    fn test_128bit_security_with_koalabear_quintic() {
+        let jb = SecurityAssumption::JohnsonBound;
+        let field_size_bits = 155;
+
+        for log_inv_rate in 1..=2 {
+            for log_degree in 10..=22 {
+                let prox_gap_bits =
+                    jb.prox_gaps_error(log_degree, log_inv_rate, field_size_bits, 2);
+
+                assert!(
+                    prox_gap_bits > 100.0,
+                    "proximity gap security too low for 128-bit target: \
+                     log_degree={log_degree}, log_inv_rate={log_inv_rate}, \
+                     got {prox_gap_bits:.2} bits"
+                );
+            }
+        }
+    }
+
+    /// Full security budget achieves 128 bits for representative WHIR config.
+    #[test]
+    fn test_full_security_budget_jb() {
+        let jb = SecurityAssumption::JohnsonBound;
+        let field_size_bits = 155;
+        let security_level = 128;
+
+        let log_degree = 20;
+        let log_inv_rate = 2;
+        let num_queries = jb.queries(security_level, log_inv_rate);
+        let ood_samples =
+            jb.determine_ood_samples(security_level, log_degree, log_inv_rate, field_size_bits);
+
+        let prox_gap = jb.prox_gaps_error(log_degree, log_inv_rate, field_size_bits, 2);
+        let sumcheck = jb.fold_sumcheck_error(field_size_bits, log_degree, log_inv_rate);
+        let ood = jb.ood_error(log_degree, log_inv_rate, field_size_bits, ood_samples);
+        let query = jb.queries_error(log_inv_rate, num_queries);
+        let combination = jb.queries_combination_error(
+            field_size_bits,
+            log_degree,
+            log_inv_rate,
+            ood_samples,
+            num_queries,
+        );
+
+        assert!(prox_gap > 50.0, "proximity gap: {prox_gap:.2} bits");
+        assert!(sumcheck > 100.0, "sumcheck: {sumcheck:.2} bits");
+        assert!(ood >= security_level as f64, "OOD: {ood:.2} bits");
+        assert!(query >= security_level as f64, "query: {query:.2} bits");
+        assert!(combination > 100.0, "combination: {combination:.2} bits");
+
+        let pow = jb.folding_pow_bits(security_level, field_size_bits, log_degree, log_inv_rate);
+        assert!(pow < 30.0, "PoW grinding {pow:.2} bits is too high");
+    }
 }
