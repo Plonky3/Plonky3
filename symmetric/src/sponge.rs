@@ -322,6 +322,11 @@ where
     where
         I: IntoIterator<Item = T>,
     {
+        const {
+            assert!(RATE > 0);
+            assert!(RATE < WIDTH);
+            assert!(OUT <= WIDTH);
+        }
         // Start from the all-zero state.
         let mut state = [T::default(); WIDTH];
 
@@ -537,6 +542,11 @@ where
     where
         I: IntoIterator<Item = F>,
     {
+        const {
+            assert!(RATE > 0);
+            assert!(RATE < WIDTH);
+            assert!(OUT <= WIDTH);
+        }
         // All-zero initial state in the large-field domain.
         let mut state = [PF::default(); WIDTH];
 
