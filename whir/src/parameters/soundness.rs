@@ -75,19 +75,19 @@ impl SecurityAssumption {
     /// Given a RS code (specified by the log of the degree and log inv of the rate), compute the list size at the specified distance delta.
     #[must_use]
     pub const fn list_size_bits(&self, log_degree: usize, log_inv_rate: usize) -> f64 {
-        let log_eta = self.log_eta(log_inv_rate);
         match self {
             // In UD the list size is 1
             Self::UniqueDecoding => 0.,
 
             // By the JB, RS codes are (1 - sqrt(rho) - eta, (2*eta*sqrt(rho))^-1)-list decodable.
             Self::JohnsonBound => {
+                let log_eta = self.log_eta(log_inv_rate);
                 let log_inv_sqrt_rate: f64 = log_inv_rate as f64 / 2.;
                 log_inv_sqrt_rate - (1. + log_eta)
             }
 
             // In CB we assume that RS codes are (1 - rho - eta, d/rho*eta)-list decodable (see Conjecture 5.6 in STIR).
-            Self::CapacityBound => (log_degree + log_inv_rate) as f64 - log_eta,
+            Self::CapacityBound => (log_degree + log_inv_rate) as f64 - self.log_eta(log_inv_rate),
         }
     }
 
@@ -132,8 +132,6 @@ impl SecurityAssumption {
             "num_functions must be >= 2 to compute proximity gaps error",
         );
 
-        let log_eta = self.log_eta(log_inv_rate);
-
         // Note that this does not include the field_size
         let error = match self {
             // In UD the error is |L|/|F| = d/(rho*|F|)
@@ -176,7 +174,9 @@ impl SecurityAssumption {
             }
 
             // In CB we assume the error is degree/(eta*rho^2)
-            Self::CapacityBound => (log_degree + 2 * log_inv_rate) as f64 - log_eta,
+            Self::CapacityBound => {
+                (log_degree + 2 * log_inv_rate) as f64 - self.log_eta(log_inv_rate)
+            }
         };
 
         // Error is (num_functions - 1) * error/|F|;
@@ -191,14 +191,12 @@ impl SecurityAssumption {
     /// - In CB, delta is (1 - rho - eta)
     #[must_use]
     pub fn log_1_delta(&self, log_inv_rate: usize) -> f64 {
-        let log_eta = self.log_eta(log_inv_rate);
-        let eta = libm::pow(2., log_eta);
         let rate = 1. / f64::from(1 << log_inv_rate);
 
         let delta = match self {
             Self::UniqueDecoding => 0.5 * (1. - rate),
-            Self::JohnsonBound => 1. - libm::sqrt(rate) - eta,
-            Self::CapacityBound => 1. - rate - eta,
+            Self::JohnsonBound => 1. - libm::sqrt(rate) - libm::pow(2., self.log_eta(log_inv_rate)),
+            Self::CapacityBound => 1. - rate - libm::pow(2., self.log_eta(log_inv_rate)),
         };
 
         libm::log2(1. - delta)
