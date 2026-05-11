@@ -258,9 +258,10 @@ pub trait InterpolateArbitrary<F: Field>: Matrix<F> {
     ) -> Option<Vec<EF>> {
         debug_assert_eq!(x_coords.len(), self.height());
 
-        // Reject duplicates first: the contract is "None if any domain points
-        // coincide", so we must not silently return a row from an ill-posed
-        // input even when the target happens to match the duplicate value.
+        // Order matters: reject duplicates BEFORE the on-domain shortcut.
+        //
+        // Otherwise the shortcut fires on ill-posed input whenever the
+        // target equals ANY domain point — duplicate value or not.
         let weights = barycentric_weights(x_coords)?;
 
         // If the target matches a domain point, return that row directly.
@@ -902,6 +903,48 @@ mod tests {
             evals.interpolate_arbitrary_point(&xs, F::from_u32(42)),
             None
         );
+    }
+
+    #[test]
+    fn test_interpolate_arbitrary_duplicates_target_on_duplicate() {
+        // Invariant:
+        // Barycentric Lagrange interpolation requires pairwise-distinct domain points.
+        // A duplicate makes the problem ill-posed → contract returns `None`.
+        //
+        // Fixture state: 3 evaluations, collision at indices 0 and 2.
+        //
+        //     i:    0     1     2
+        //     x:    1     2     1     ← duplicate at indices 0 and 2
+        //     y:    10    20    30    ← rows disagree at the duplicate
+        //
+        // Mutation: target = 1, hitting the duplicate value.
+        //
+        // The first-match-on-domain shortcut would return row 0 = [10];
+        // duplicate detection must beat the shortcut and yield `None`.
+        let xs = [F::ONE, F::TWO, F::ONE];
+        let evals = RowMajorMatrix::new(vec![F::from_u32(10), F::from_u32(20), F::from_u32(30)], 1);
+        assert_eq!(evals.interpolate_arbitrary_point(&xs, F::ONE), None);
+    }
+
+    #[test]
+    fn test_interpolate_arbitrary_duplicates_target_on_unique() {
+        // Invariant:
+        // Barycentric Lagrange interpolation requires pairwise-distinct domain points.
+        // A duplicate makes the problem ill-posed → contract returns `None`.
+        //
+        // Fixture state: 3 evaluations, collision at indices 0 and 2.
+        //
+        //     i:    0     1     2
+        //     x:    1     2     1     ← duplicate at indices 0 and 2
+        //     y:    10    20    30
+        //
+        // Mutation: target = 2, hitting the unique value at i=1.
+        //
+        // The first-match-on-domain shortcut would return row 1 = [20];
+        // duplicate detection must beat the shortcut and yield `None`.
+        let xs = [F::ONE, F::TWO, F::ONE];
+        let evals = RowMajorMatrix::new(vec![F::from_u32(10), F::from_u32(20), F::from_u32(30)], 1);
+        assert_eq!(evals.interpolate_arbitrary_point(&xs, F::TWO), None);
     }
 
     #[test]
