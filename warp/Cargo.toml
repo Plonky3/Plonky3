@@ -28,7 +28,14 @@ tracing.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+p3-batch-stark.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
+p3-circuit.workspace = true
+p3-circuit-prover.workspace = true
+p3-fri.workspace = true
+p3-poseidon2-circuit-air.workspace = true
+p3-recursion.workspace = true
+p3-uni-stark.workspace = true
 postcard = { workspace = true, features = ["use-std"] }
 proptest.workspace = true
 rand.workspace = true

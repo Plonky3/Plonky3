@@ -1,0 +1,66 @@
+[package]
+name = "p3-circuit"
+description.workspace = true
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+
+# Plonky3 dependencies
+p3-air.workspace = true
+p3-baby-bear.workspace = true
+p3-field.workspace = true
+p3-goldilocks.workspace = true
+p3-keccak.workspace = true
+p3-koala-bear.workspace = true
+p3-matrix.workspace = true
+p3-symmetric.workspace = true
+p3-uni-stark.workspace = true
+p3-util.workspace = true
+
+# Other common dependencies
+hashbrown.workspace = true
+itertools.workspace = true
+rand.workspace = true
+serde.workspace = true
+strum.workspace = true
+strum_macros.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+unroll.workspace = true
+
+[dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
+p3-air.workspace = true
+p3-baby-bear.workspace = true
+p3-batch-stark.workspace = true
+p3-challenger.workspace = true
+p3-commit.workspace = true
+p3-dft.workspace = true
+p3-fri.workspace = true
+p3-matrix.workspace = true
+p3-merkle-tree.workspace = true
+p3-poseidon2-circuit-air.workspace = true
+p3-symmetric.workspace = true
+p3-test-utils.workspace = true
+
+proptest.workspace = true
+rand.workspace = true
+tracing-forest = { workspace = true, features = ["smallvec"] }
+tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
+
+[features]
+debugging = []
+profiling = ["debugging"]
+
+[[bench]]
+name = "runner_traces"
+harness = false
+
+[lints]
+workspace = true

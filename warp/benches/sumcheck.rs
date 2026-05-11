@@ -11,6 +11,12 @@
 //! `n_whir_commit_*` lanes add WHIR's own PCS commitment phase first, including
 //! transpose/pad, DFT-based Reed-Solomon encoding, and Merkle commitment.
 //!
+//! The recursive-WHIR comparison builds one circuit that verifies the native
+//! `p3_whir::pcs::WhirProof` objects produced by the WHIR lane, then proves
+//! that verifier trace with a WHIR-native table proof. WARP is not part of that
+//! recursive circuit; it remains the separate accumulation pipeline being
+//! compared against recursive aggregation.
+//!
 //! This file exists so we can inspect the algebraic kernels without pulling in
 //! a full zkVM stack.
 
@@ -26,15 +32,28 @@ use p3_baby_bear::{BabyBear, Poseidon2BabyBear, default_babybear_poseidon2_16};
 use p3_challenger::{
     CanObserve, CanSample, CanSampleBits, DuplexChallenger, FieldChallenger, GrindingChallenger,
 };
+use p3_circuit::CircuitBuilder;
+use p3_circuit::ops::{Poseidon2Config, generate_poseidon2_trace, generate_recompose_trace};
+use p3_circuit_prover::{
+    WhirNativeCircuitError, WhirNativeCircuitOptions, WhirNativeCircuitProof,
+    prove_whir_native_circuit, verify_whir_native_circuit_proof,
+};
 use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
-use p3_symmetric::{MerkleCap, PaddingFreeSponge, TruncatedPermutation};
+use p3_poseidon2_circuit_air::BabyBearD4Width16;
+use p3_recursion::pcs::fri::{MerkleCapTargets, RecValMmcs};
+use p3_recursion::pcs::set_whir_mmcs_private_data;
+use p3_recursion::pcs::whir::{
+    WhirProofVerificationInput, WhirProofVerificationTargets, verify_native_whir_proof_circuit,
+};
+use p3_recursion::{CircuitChallenger, Recursive};
+use p3_symmetric::{MerkleCap, PaddingFreeSponge, Permutation, TruncatedPermutation};
 use p3_warp::{
     AccumulatorBatchOpeningBackend, AccumulatorCommitmentBackend, AccumulatorFinalizer,
     AccumulatorInstance, AccumulatorPointOpeningBackend, BooleanPesat,
@@ -72,8 +91,14 @@ type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
 type MyDft = Radix2DFTSmallBatch<F>;
 type MyWhirConfig = WhirConfig<EF, F, MyMmcs, MyChallenger>;
 type MyWhirProof = WhirProof<F, EF, MyMmcs>;
+type MyWhirNativeCircuitProof = WhirNativeCircuitProof<F, EF, MyMmcs>;
 type MyCommitment = MerkleCap<F, [F; WHIR_DIGEST_ELEMS]>;
 type MyWhirPcs = WhirPcs<EF, F, MyMmcs, BenchChallenger, MyDft, WHIR_DIGEST_ELEMS>;
+type RecursiveWhirMmcs = RecValMmcs<F, WHIR_DIGEST_ELEMS, MyHash, MyCompress>;
+type RecursiveWhirCommitment = MerkleCapTargets<F, WHIR_DIGEST_ELEMS>;
+type RecursiveWhirInput = WhirProofVerificationInput<F, EF, MyMmcs, MyCommitment>;
+type RecursiveWhirTargets =
+    WhirProofVerificationTargets<F, EF, RecursiveWhirCommitment, RecursiveWhirMmcs>;
 type MyRootWhirCommitment = NativeWarpWhirRootCommitment<MyCommitment>;
 type MyRootWhirProof = NativeWarpWhirRootProof<F, EF, MyMmcs>;
 type MyRootWhirOracleProverData =
@@ -95,6 +120,7 @@ const WHIR_CONSTRAINTS: usize = 4;
 const WHIR_DIGEST_ELEMS: usize = 8;
 const DEFAULT_NUM_VARIABLES: &[usize] = &[14, 16, 18];
 const DEFAULT_N_VALUES: &[usize] = &[4, 7, 13];
+const DEFAULT_WHIR_NATIVE_OUTER_OPENINGS: usize = 2;
 
 type NativeBenchPesat = BooleanPesat<F, EF>;
 
@@ -369,6 +395,44 @@ fn make_whir_pcs_for_num_vars(mmcs: &MyMmcs, num_variables: usize) -> MyWhirPcs 
     )
 }
 
+fn whir_native_circuit_options() -> WhirNativeCircuitOptions {
+    WhirNativeCircuitOptions {
+        openings_per_table: parse_usize_env(
+            "P3_WHIR_RECURSIVE_OUTER_OPENINGS",
+            DEFAULT_WHIR_NATIVE_OUTER_OPENINGS,
+        )
+        .max(1),
+        min_num_variables: whir_folding_factor().max(4),
+    }
+}
+
+fn eval_bench_poseidon2(config: Poseidon2Config, input: &[EF]) -> Option<Vec<EF>> {
+    if config != Poseidon2Config::BabyBearD4Width16 {
+        return None;
+    }
+    if input.len() != config.width_ext() {
+        return None;
+    }
+
+    let perm = make_permutation();
+    let mut base_input = [F::ZERO; 16];
+    for (i, ext_elem) in input.iter().enumerate() {
+        let coeffs = ext_elem.as_basis_coefficients_slice();
+        base_input[i * config.d()..(i + 1) * config.d()].copy_from_slice(coeffs);
+    }
+    let base_output = perm.permute(base_input);
+    Some(
+        (0..config.width_ext())
+            .map(|i| {
+                EF::from_basis_coefficients_slice(
+                    &base_output[i * config.d()..(i + 1) * config.d()],
+                )
+                .expect("Poseidon2 output coefficients must reconstruct an extension element")
+            })
+            .collect(),
+    )
+}
+
 #[allow(dead_code)]
 struct WhirFullBundle {
     commitments: Vec<MyCommitment>,
@@ -446,6 +510,384 @@ fn verify_n_whir_full_pcs_bundle(fixture: &WarpKernelFixture, bundle: &WhirFullB
         )
         .expect("N WHIR full PCS verify");
     }
+}
+
+#[allow(dead_code)]
+struct WhirRecursiveBundle {
+    native: WhirFullBundle,
+    outer_proof: MyWhirNativeCircuitProof,
+    outer_mmcs: MyMmcs,
+    outer_options: WhirNativeCircuitOptions,
+    verification_circuit: p3_circuit::Circuit<EF>,
+    recursive_public_input_values: Vec<EF>,
+    recursive_public_inputs: usize,
+    recursive_private_inputs: usize,
+    recursive_mmcs_ops: usize,
+}
+
+#[allow(dead_code)]
+fn query_index_bits(index: usize, bits: usize) -> Vec<EF> {
+    (0..bits)
+        .map(|bit| {
+            if (index >> bit) & 1 == 1 {
+                EF::ONE
+            } else {
+                EF::ZERO
+            }
+        })
+        .collect()
+}
+
+#[allow(dead_code)]
+fn make_recursive_whir_inputs(
+    bundle: &WhirFullBundle,
+    config: &MyWhirConfig,
+) -> Vec<RecursiveWhirInput> {
+    bundle
+        .commitments
+        .iter()
+        .cloned()
+        .zip(bundle.claims.iter().cloned())
+        .zip(bundle.proofs.iter().cloned())
+        .map(|((commitment, claims), proof)| {
+            let round_query_index_bits = proof
+                .rounds
+                .iter()
+                .zip(config.round_parameters.iter())
+                .map(|(round, params)| {
+                    let bits = (params.domain_size >> params.folding_factor).ilog2() as usize;
+                    round
+                        .query_indices
+                        .iter()
+                        .map(|&index| query_index_bits(index, bits))
+                        .collect()
+                })
+                .collect();
+            let final_round = config.final_round_config();
+            let final_bits =
+                (final_round.domain_size >> final_round.folding_factor).ilog2() as usize;
+            let final_query_index_bits = proof
+                .final_query_indices
+                .iter()
+                .map(|&index| query_index_bits(index, final_bits))
+                .collect();
+            WhirProofVerificationInput {
+                commitment,
+                opening_claims: vec![claims],
+                proof,
+                round_query_index_bits,
+                final_query_index_bits,
+            }
+        })
+        .collect()
+}
+
+#[allow(dead_code)]
+fn whir_query_opening_public_labels(
+    query: &p3_whir::pcs::proof::QueryOpening<F, EF, <MyMmcs as p3_commit::Mmcs<F>>::Proof>,
+    prefix: &str,
+) -> Vec<String> {
+    match query {
+        p3_whir::pcs::proof::QueryOpening::Base { values, proof: _ } => (0..values.len())
+            .map(|i| format!("{prefix}.base_value[{i}]"))
+            .chain((0..0).map(|i| format!("{prefix}.base_proof_public[{i}]")))
+            .collect(),
+        p3_whir::pcs::proof::QueryOpening::Extension { values, proof: _ } => (0..values.len())
+            .map(|i| format!("{prefix}.extension_value[{i}]"))
+            .chain((0..0).map(|i| format!("{prefix}.extension_proof_public[{i}]")))
+            .collect(),
+        p3_whir::pcs::proof::QueryOpening::SharedBase { values, proof: _ } => values
+            .iter()
+            .enumerate()
+            .flat_map(|(row, values)| {
+                (0..values.len()).map(move |i| format!("{prefix}.shared_row[{row}][{i}]"))
+            })
+            .chain((0..0).map(|i| format!("{prefix}.shared_proof_public[{i}]")))
+            .collect(),
+        p3_whir::pcs::proof::QueryOpening::Batched { openings } => openings
+            .iter()
+            .enumerate()
+            .flat_map(|(i, opening)| {
+                whir_query_opening_public_labels(opening, &format!("{prefix}.batched[{i}]"))
+            })
+            .collect(),
+    }
+}
+
+#[allow(dead_code)]
+fn recursive_whir_public_labels(input: &RecursiveWhirInput, proof_index: usize) -> Vec<String> {
+    let prefix = format!("proof[{proof_index}]");
+    let mut labels = Vec::new();
+    labels.extend(
+        (0..input.commitment.num_roots() * WHIR_DIGEST_ELEMS)
+            .map(|i| format!("{prefix}.statement_commitment[{i}]")),
+    );
+    for (poly_index, claims) in input.opening_claims.iter().enumerate() {
+        for (claim_index, (point, _)) in claims.iter().enumerate() {
+            labels.extend(
+                (0..point.num_variables())
+                    .map(|i| format!("{prefix}.claim[{poly_index}][{claim_index}].point[{i}]")),
+            );
+            labels.push(format!("{prefix}.claim[{poly_index}][{claim_index}].value"));
+        }
+    }
+
+    let proof = &input.proof;
+    labels.extend(
+        (0..proof.initial_ood_answers.len()).map(|i| format!("{prefix}.proof.initial_ood[{i}]")),
+    );
+    for (round, evals) in proof
+        .initial_sumcheck
+        .polynomial_evaluations
+        .iter()
+        .enumerate()
+    {
+        for i in 0..evals.len() {
+            labels.push(format!(
+                "{prefix}.proof.initial_sumcheck.eval[{round}][{i}]"
+            ));
+        }
+    }
+    labels.extend(
+        (0..proof.initial_sumcheck.pow_witnesses.len())
+            .map(|i| format!("{prefix}.proof.initial_sumcheck.pow[{i}]")),
+    );
+    for (round_index, round) in proof.rounds.iter().enumerate() {
+        if let Some(commitment) = &round.commitment {
+            labels.extend(
+                (0..commitment.num_roots() * WHIR_DIGEST_ELEMS)
+                    .map(|i| format!("{prefix}.proof.round[{round_index}].commitment[{i}]")),
+            );
+        }
+        labels.extend(
+            (0..round.ood_answers.len())
+                .map(|i| format!("{prefix}.proof.round[{round_index}].ood[{i}]")),
+        );
+        labels.push(format!("{prefix}.proof.round[{round_index}].pow"));
+        for (query_index, query) in round.queries.iter().enumerate() {
+            labels.extend(whir_query_opening_public_labels(
+                query,
+                &format!("{prefix}.proof.round[{round_index}].query[{query_index}]"),
+            ));
+        }
+        for (sumcheck_round, evals) in round.sumcheck.polynomial_evaluations.iter().enumerate() {
+            for i in 0..evals.len() {
+                labels.push(format!(
+                    "{prefix}.proof.round[{round_index}].sumcheck.eval[{sumcheck_round}][{i}]"
+                ));
+            }
+        }
+        labels.extend(
+            (0..round.sumcheck.pow_witnesses.len())
+                .map(|i| format!("{prefix}.proof.round[{round_index}].sumcheck.pow[{i}]")),
+        );
+    }
+    if let Some(final_poly) = &proof.final_poly {
+        labels
+            .extend((0..final_poly.num_evals()).map(|i| format!("{prefix}.proof.final_poly[{i}]")));
+    }
+    labels.push(format!("{prefix}.proof.final_pow"));
+    for (query_index, query) in proof.final_queries.iter().enumerate() {
+        labels.extend(whir_query_opening_public_labels(
+            query,
+            &format!("{prefix}.proof.final_query[{query_index}]"),
+        ));
+    }
+    if let Some(sumcheck) = &proof.final_sumcheck {
+        for (sumcheck_round, evals) in sumcheck.polynomial_evaluations.iter().enumerate() {
+            for i in 0..evals.len() {
+                labels.push(format!(
+                    "{prefix}.proof.final_sumcheck.eval[{sumcheck_round}][{i}]"
+                ));
+            }
+        }
+        labels.extend(
+            (0..sumcheck.pow_witnesses.len())
+                .map(|i| format!("{prefix}.proof.final_sumcheck.pow[{i}]")),
+        );
+    }
+    for (round_index, round) in input.round_query_index_bits.iter().enumerate() {
+        for (query_index, bits) in round.iter().enumerate() {
+            labels.extend(
+                (0..bits.len()).map(|i| {
+                    format!("{prefix}.round_query_bits[{round_index}][{query_index}][{i}]")
+                }),
+            );
+        }
+    }
+    for (query_index, bits) in input.final_query_index_bits.iter().enumerate() {
+        labels.extend(
+            (0..bits.len()).map(|i| format!("{prefix}.final_query_bits[{query_index}][{i}]")),
+        );
+    }
+    labels
+}
+
+#[allow(dead_code)]
+fn try_build_n_whir_recursive_bundle(
+    fixture: &WarpKernelFixture,
+    witnesses: &[Vec<F>],
+) -> Result<WhirRecursiveBundle, WhirNativeCircuitError> {
+    let native = build_n_whir_full_pcs(fixture, witnesses);
+    let whir_config = make_whir_config(&fixture.mmcs, fixture.code.log_msg_len());
+    let recursive_inputs = make_recursive_whir_inputs(&native, &whir_config);
+    let poseidon2_config = Poseidon2Config::BabyBearD4Width16;
+
+    let mut circuit_builder = CircuitBuilder::new();
+    circuit_builder.enable_poseidon2_perm::<BabyBearD4Width16, _>(
+        generate_poseidon2_trace::<EF, BabyBearD4Width16>,
+        make_permutation(),
+    );
+    circuit_builder.enable_recompose::<F>(generate_recompose_trace::<F, EF>);
+
+    let mut per_proof_op_ids = Vec::with_capacity(recursive_inputs.len());
+    for input in &recursive_inputs {
+        let targets = RecursiveWhirTargets::new(&mut circuit_builder, input);
+        let mut challenger = CircuitChallenger::<16, 8, Poseidon2Config>::new_babybear();
+        challenger.init::<F, EF>(&mut circuit_builder);
+        let op_ids = verify_native_whir_proof_circuit::<
+            F,
+            EF,
+            _,
+            RecursiveWhirMmcs,
+            MyChallenger,
+            WHIR_DIGEST_ELEMS,
+        >(
+            &mut circuit_builder,
+            &mut challenger,
+            poseidon2_config,
+            &whir_config,
+            &targets,
+        )
+        .expect("build recursive WHIR verifier circuit");
+        per_proof_op_ids.push(op_ids);
+    }
+
+    let verification_circuit = circuit_builder
+        .build()
+        .expect("build recursive WHIR verification circuit");
+    let public_inputs = recursive_inputs
+        .iter()
+        .flat_map(RecursiveWhirTargets::get_values)
+        .collect::<Vec<_>>();
+    let private_inputs = recursive_inputs
+        .iter()
+        .flat_map(RecursiveWhirTargets::get_private_values)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        public_inputs.len(),
+        verification_circuit.public_flat_len,
+        "recursive WHIR public input packing mismatch"
+    );
+    if env::var("P3_WHIR_RECURSIVE_DEBUG_PUBLIC_INPUTS").as_deref() == Ok("1") {
+        let public_labels = recursive_inputs
+            .iter()
+            .enumerate()
+            .flat_map(|(proof_index, input)| recursive_whir_public_labels(input, proof_index))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            public_labels.len(),
+            public_inputs.len(),
+            "recursive WHIR public input label mismatch"
+        );
+        let mut seen_public_rows = std::collections::HashMap::new();
+        for (pos, (&row, &value)) in verification_circuit
+            .public_rows
+            .iter()
+            .zip(&public_inputs)
+            .enumerate()
+        {
+            if let Some((prev_pos, prev_value)) = seen_public_rows.insert(row, (pos, value)) {
+                assert_eq!(
+                    prev_value, value,
+                    "recursive WHIR public inputs {prev_pos} ({}) and {pos} ({}) alias witness {row:?} with different values",
+                    public_labels[prev_pos], public_labels[pos]
+                );
+            }
+        }
+    }
+    assert_eq!(
+        private_inputs.len(),
+        verification_circuit.private_flat_len,
+        "recursive WHIR private input packing mismatch"
+    );
+
+    let mut runner = verification_circuit.runner();
+    runner
+        .set_public_inputs(&public_inputs)
+        .expect("set recursive WHIR public inputs");
+    runner
+        .set_private_inputs(&private_inputs)
+        .expect("set recursive WHIR private inputs");
+    for (input, op_ids) in recursive_inputs.iter().zip(&per_proof_op_ids) {
+        set_whir_mmcs_private_data::<F, EF, MyMmcs, MyHash, MyCompress, WHIR_DIGEST_ELEMS>(
+            &mut runner,
+            op_ids,
+            &input.proof,
+        )
+        .expect("set recursive WHIR MMCS private data");
+    }
+
+    let verification_traces = runner.run().expect("run recursive WHIR verifier circuit");
+    let outer_options = whir_native_circuit_options();
+    let outer_proof = prove_whir_native_circuit(
+        &verification_circuit,
+        &public_inputs,
+        &private_inputs,
+        &[],
+        &verification_traces,
+        outer_options,
+        |num_variables| make_whir_pcs_for_num_vars(&fixture.mmcs, num_variables),
+        BenchChallenger::new,
+        eval_bench_poseidon2,
+    )?;
+
+    Ok(WhirRecursiveBundle {
+        native,
+        outer_proof,
+        outer_mmcs: fixture.mmcs.clone(),
+        outer_options,
+        verification_circuit,
+        recursive_public_input_values: public_inputs.clone(),
+        recursive_public_inputs: public_inputs.len(),
+        recursive_private_inputs: private_inputs.len(),
+        recursive_mmcs_ops: per_proof_op_ids.iter().map(Vec::len).sum(),
+    })
+}
+
+#[allow(dead_code)]
+fn build_n_whir_recursive_bundle(
+    fixture: &WarpKernelFixture,
+    witnesses: &[Vec<F>],
+) -> WhirRecursiveBundle {
+    try_build_n_whir_recursive_bundle(fixture, witnesses)
+        .expect("sound WHIR-native recursive circuit proof")
+}
+
+#[allow(dead_code)]
+fn prove_n_whir_recursive(fixture: &WarpKernelFixture, witnesses: &[Vec<F>]) {
+    black_box(build_n_whir_recursive_bundle(fixture, witnesses));
+}
+
+#[allow(dead_code)]
+fn verify_n_whir_recursive_bundle(bundle: &WhirRecursiveBundle) {
+    verify_whir_native_circuit_proof(
+        &bundle.verification_circuit,
+        &bundle.recursive_public_input_values,
+        bundle.outer_options,
+        &bundle.outer_proof,
+        |num_variables| make_whir_pcs_for_num_vars(&bundle.outer_mmcs, num_variables),
+        BenchChallenger::new,
+        eval_bench_poseidon2,
+    )
+    .expect("verify sound WHIR-native recursive circuit proof");
+}
+
+#[allow(dead_code)]
+fn whir_recursive_bundle_bytes(bundle: &WhirRecursiveBundle) -> usize {
+    postcard::to_stdvec(&bundle.outer_proof)
+        .expect("serialize WHIR-native recursive outer proof")
+        .len()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1888,12 +2330,166 @@ fn print_warp_whir_root_verify_profile(num_variable_cases: &[usize], n_values: &
     eprintln!();
 }
 
+fn print_recursive_whir_vs_warp_comparison(num_variable_cases: &[usize], n_values: &[usize]) {
+    let iterations = parse_usize_env("P3_WHIR_RECURSIVE_COMPARE_ITERS", 1).max(1);
+    let warmup = parse_usize_env("P3_WHIR_RECURSIVE_COMPARE_WARMUP", 0);
+    let arity = warp_fresh_per_step();
+    eprintln!();
+    eprintln!("=== Recursive N-WHIR aggregate proof vs WHIR-backed WARP root comparison ===");
+    eprintln!(
+        "    Recursive lane: build N native WHIR proofs, run one verifier circuit for those N proofs, then use the WHIR-native outer path for its trace."
+    );
+    eprintln!(
+        "    Outer recursive proof: oracle-only WHIR-native table proof with table commitments, local sumchecks, WHIR openings, and public/shape binding."
+    );
+    eprintln!("    WARP lane: existing WARP VACC/DACC root proof, kept outside recursion.");
+    eprintln!(
+        "    Recursive prove samples include native WHIR proofs, verifier-circuit witness generation, and the outer WHIR-native proof."
+    );
+    eprintln!(
+        "    Times are medians over {iterations} sample(s) after {warmup} warmup iteration(s); verifier timings are paired."
+    );
+    eprintln!(
+        "{:<6}{:<8}{:<8}{:<18}{:<18}{:<24}{:<18}{:<18}{:<24}{:<14}{:<14}{:<14}",
+        "k",
+        "N",
+        "steps",
+        "recursive prove",
+        "warp prove",
+        "prove Δ",
+        "recursive verify",
+        "warp verify",
+        "verify Δ",
+        "rec bytes",
+        "warp bytes",
+        "mmcs ops",
+    );
+
+    for &num_variables in num_variable_cases {
+        for &n in n_values {
+            if n < arity || (n - arity) % (arity - 1) != 0 {
+                eprintln!(
+                    "{:<6}{:<8}{:<8}{:<18}{:<18}{:<24}{:<18}{:<18}{:<24}{:<14}{:<14}{:<14}",
+                    num_variables,
+                    n,
+                    "-",
+                    "skip",
+                    "skip",
+                    "-",
+                    "skip",
+                    "skip",
+                    "invalid WARP N",
+                    "-",
+                    "-",
+                    "-",
+                );
+                continue;
+            }
+
+            let fixture = make_warp_fixture(num_variables);
+            let warp_witnesses = make_boolean_witnesses(num_variables, n);
+            let steps = step_plan(n, arity).len();
+
+            print_progress(format!(
+                "    running k={num_variables}, N={n}: recursive verifier setup..."
+            ));
+            let recursive_bundle =
+                match try_build_n_whir_recursive_bundle(&fixture, &warp_witnesses) {
+                    Ok(bundle) => bundle,
+                    Err(WhirNativeCircuitError::UnsupportedSoundComponent(message)) => {
+                        eprintln!(
+                            "{:<6}{:<8}{:<8}{:<18}{:<18}{:<24}{:<18}{:<18}{:<24}{:<14}{:<14}{:<14}",
+                            num_variables,
+                            n,
+                            steps,
+                            "unsupported",
+                            "not run",
+                            "-",
+                            "unsupported",
+                            "not run",
+                            "see below",
+                            "-",
+                            "-",
+                            "-",
+                        );
+                        eprintln!("      Recursive lane unsupported: {message}");
+                        continue;
+                    }
+                    Err(err) => panic!("build WHIR-native recursive circuit proof failed: {err}"),
+                };
+
+            print_progress(format!(
+                "    running k={num_variables}, N={n}: paired recursive-WHIR/WARP prover samples..."
+            ));
+            let (recursive_prove_stats, warp_prove_stats) = time_paired_stats(
+                iterations,
+                warmup,
+                || {
+                    prove_n_whir_recursive(&fixture, &warp_witnesses);
+                },
+                || {
+                    prove_warp_whir_root(&fixture, &warp_witnesses);
+                },
+            );
+
+            print_progress(format!(
+                "    running k={num_variables}, N={n}: WARP verifier setup..."
+            ));
+            let (warp_bundle, _warp_phases) =
+                build_warp_whir_root_bundle_with_phases(&fixture, &warp_witnesses);
+            let recursive_bytes = whir_recursive_bundle_bytes(&recursive_bundle);
+            let warp_bytes = warp_whir_root_bundle_bytes(&warp_bundle);
+
+            print_progress(format!(
+                "    running k={num_variables}, N={n}: paired recursive-WHIR/WARP verifier samples..."
+            ));
+            let (recursive_verify_stats, warp_verify_stats) = time_paired_stats(
+                iterations,
+                warmup,
+                || {
+                    verify_n_whir_recursive_bundle(&recursive_bundle);
+                },
+                || {
+                    verify_warp_whir_root_bundle(&fixture, &warp_bundle);
+                },
+            );
+
+            eprintln!(
+                "{:<6}{:<8}{:<8}{:<18}{:<18}{:<24}{:<18}{:<18}{:<24}{:<14}{:<14}{:<14}",
+                num_variables,
+                n,
+                steps,
+                format_duration(recursive_prove_stats.median),
+                format_duration(warp_prove_stats.median),
+                format_warp_over_whir(warp_prove_stats.median, recursive_prove_stats.median),
+                format_duration(recursive_verify_stats.median),
+                format_duration(warp_verify_stats.median),
+                format_warp_over_whir(warp_verify_stats.median, recursive_verify_stats.median),
+                recursive_bytes,
+                warp_bytes,
+                recursive_bundle.recursive_mmcs_ops,
+            );
+            eprintln!(
+                "      Recursive stats: public_inputs={} private_inputs={} native_whir_proofs={}",
+                recursive_bundle.recursive_public_inputs,
+                recursive_bundle.recursive_private_inputs,
+                recursive_bundle.native.proofs.len(),
+            );
+        }
+    }
+    eprintln!();
+}
+
 fn bench_sumcheck_like_prover(c: &mut Criterion) {
     let num_variable_cases = parse_usize_list_env("P3_WARP_SUMCHECK_K", DEFAULT_NUM_VARIABLES);
     let n_values = parse_usize_list_env("P3_WARP_SUMCHECK_N", DEFAULT_N_VALUES);
 
     if env::var("P3_WARP_WHIR_ROOT_COMPARE").as_deref() == Ok("1") {
         print_warp_whir_root_comparison(&num_variable_cases, &n_values);
+        return;
+    }
+    if env::var("P3_WHIR_RECURSIVE_COMPARE").as_deref() == Ok("1") {
+        print_recursive_whir_vs_warp_comparison(&num_variable_cases, &n_values);
         return;
     }
     if env::var("P3_WARP_WHIR_ROOT_VERIFY_PROFILE").as_deref() == Ok("1") {
