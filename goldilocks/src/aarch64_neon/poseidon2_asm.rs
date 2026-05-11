@@ -134,7 +134,6 @@ unsafe fn sub_asm(a: u64, b: u64) -> u64 {
 
 /// Split-state generic internal permute: s0 stays in a register across all rounds.
 #[inline]
-#[allow(clippy::needless_range_loop)]
 pub fn internal_permute_state_asm<const WIDTH: usize>(
     state: &mut [u64; WIDTH],
     diag: &[u64; WIDTH],
@@ -150,20 +149,23 @@ pub fn internal_permute_state_asm<const WIDTH: usize>(
             s0 = mul_asm(s0_3, s0_4);
 
             let mut sum_hi: u64 = 0;
-            for i in 1..WIDTH {
-                sum_hi = add_asm(sum_hi, state[i]);
+            for &s in &state[1..] {
+                sum_hi = add_asm(sum_hi, s);
             }
 
             let mut diag_muls: [u64; WIDTH] = [0; WIDTH];
-            for i in 1..WIDTH {
-                diag_muls[i] = mul_asm(state[i], diag[i]);
+            for (m, (&s, &d)) in diag_muls[1..]
+                .iter_mut()
+                .zip(state[1..].iter().zip(&diag[1..]))
+            {
+                *m = mul_asm(s, d);
             }
 
             let sum = add_asm(sum_hi, s0);
             s0 = mul_add_asm(s0, diag[0], sum);
 
-            for i in 1..WIDTH {
-                state[i] = add_asm(diag_muls[i], sum);
+            for (s, &m) in state[1..].iter_mut().zip(&diag_muls[1..]) {
+                *s = add_asm(m, sum);
             }
         }
     }
@@ -172,7 +174,6 @@ pub fn internal_permute_state_asm<const WIDTH: usize>(
 
 /// Split-state generic dual-lane internal permute for packed processing.
 #[inline]
-#[allow(clippy::needless_range_loop)]
 pub fn internal_permute_split_dual<const WIDTH: usize>(
     lane0: &mut [u64; WIDTH],
     lane1: &mut [u64; WIDTH],
@@ -196,9 +197,9 @@ pub fn internal_permute_split_dual<const WIDTH: usize>(
 
             let mut sum_hi_a: u64 = 0;
             let mut sum_hi_b: u64 = 0;
-            for i in 1..WIDTH {
-                sum_hi_a = add_asm(sum_hi_a, lane0[i]);
-                sum_hi_b = add_asm(sum_hi_b, lane1[i]);
+            for (&a, &b) in lane0[1..].iter().zip(&lane1[1..]) {
+                sum_hi_a = add_asm(sum_hi_a, a);
+                sum_hi_b = add_asm(sum_hi_b, b);
             }
 
             let mut diag_muls_a: [u64; WIDTH] = [0; WIDTH];

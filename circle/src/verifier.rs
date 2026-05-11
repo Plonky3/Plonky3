@@ -278,10 +278,9 @@ where
 
         // Fill in siblings at every position except the queried one.
         let mut sibling_idx = 0;
-        #[allow(clippy::needless_range_loop)]
-        for j in 0..arity {
+        for (j, eval) in evals.iter_mut().enumerate() {
             if j != index_in_group {
-                evals[j] = opening.sibling_values[sibling_idx];
+                *eval = opening.sibling_values[sibling_idx];
                 sibling_idx += 1;
             }
         }

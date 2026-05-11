@@ -281,7 +281,6 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
     if lb_n <= 6 {
         // BIT_REVERSE_6BIT holds 6-bit reverses. This shift makes them lb_n-bit reverses.
         let dst_shr_amt = 6 - lb_n as u32;
-        #[allow(clippy::needless_range_loop)]
         for src in 0..vals.len() {
             let dst = (BIT_REVERSE_6BIT[src] as usize).wrapping_shr(dst_shr_amt);
             if src < dst {
@@ -297,7 +296,6 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
         for src_chunk in 0..(vals.len() >> 6) {
             let src_hi = src_chunk << 6;
             let dst_lo = src_chunk.reverse_bits().wrapping_shr(dst_lo_shr_amt);
-            #[allow(clippy::needless_range_loop)]
             for src_lo in 0..(1 << 6) {
                 let dst_hi = (BIT_REVERSE_6BIT[src_lo] as usize) << dst_hi_shl_amt;
                 let src = src_hi + src_lo;
