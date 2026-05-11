@@ -42,6 +42,12 @@ rand.workspace = true
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
+recursive-parallel = [
+    "parallel",
+    "p3-whir/parallel",
+    "p3-circuit-prover/parallel",
+    "p3-poseidon2-circuit-air/parallel",
+]
 
 [[bench]]
 name = "sumcheck"

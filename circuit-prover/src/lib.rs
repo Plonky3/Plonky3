@@ -44,16 +44,10 @@ pub mod config;
 pub mod constraint_profile;
 pub mod field_params;
 pub mod whir_native;
-pub mod whir_native_air;
-pub mod whir_native_bus;
-pub mod whir_native_poseidon2;
 pub mod whir_native_sumcheck;
 
 // Re-export main API
 pub use batch_stark_prover::*;
 pub use constraint_profile::ConstraintProfile;
 pub use whir_native::*;
-pub use whir_native_air::*;
-pub use whir_native_bus::*;
-pub use whir_native_poseidon2::*;
 pub use whir_native_sumcheck::*;

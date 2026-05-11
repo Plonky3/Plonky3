@@ -9,6 +9,8 @@ members = [
     "bn254",
     "challenger",
     "circle",
+    "circuit",
+    "circuit-prover",
     "commit",
     "dft",
     "examples",
@@ -32,9 +34,12 @@ members = [
     "poseidon1-air",
     "poseidon2",
     "poseidon2-air",
+    "poseidon2-circuit-air",
+    "recursion",
     "rescue",
     "sha256",
     "symmetric",
+    "test-utils",
     "uni-stark",
     "util",
     "warp",
@@ -83,21 +88,27 @@ serde_json = "1.0.149"
 sha2 = { version = "0.11.0", default-features = false }
 sha3 = { version = "0.11.0", default-features = false }
 spin = "0.10.0"
+strum = { version = "0.28.0", default-features = false }
+strum_macros = "0.28.0"
 thiserror = { version = "2.0", default-features = false }
 tiny-keccak = "2.0.2"
 tracing = { version = "0.1.44", default-features = false, features = ["attributes"] }
 tracing-forest = "0.3.1"
 tracing-subscriber = { version = "0.3.22", default-features = false, features = ["alloc"] }
 transpose = "0.2.3"
+unroll = { version = "0.1.5", default-features = false }
 
 # Local dependencies
 p3-air = { path = "air", version = "0.5.1" }
 p3-baby-bear = { path = "baby-bear", version = "0.5.1" }
+p3-batch-stark = { path = "batch-stark", version = "0.5.1" }
 p3-blake3 = { path = "blake3", version = "0.5.1" }
 p3-blake3-air = { path = "blake3-air", version = "0.5.1" }
 p3-bn254 = { path = "bn254", version = "0.5.1" }
 p3-challenger = { path = "challenger", version = "0.5.1" }
 p3-circle = { path = "circle", version = "0.5.1" }
+p3-circuit = { path = "circuit", version = "0.5.1" }
+p3-circuit-prover = { path = "circuit-prover", version = "0.5.1" }
 p3-commit = { path = "commit", version = "0.5.1" }
 p3-dft = { path = "dft", version = "0.5.1" }
 p3-examples = { path = "examples", version = "0.3.0" }
@@ -120,9 +131,12 @@ p3-poseidon1 = { path = "poseidon1", version = "0.5.1" }
 p3-poseidon1-air = { path = "poseidon1-air", version = "0.5.1" }
 p3-poseidon2 = { path = "poseidon2", version = "0.5.1" }
 p3-poseidon2-air = { path = "poseidon2-air", version = "0.5.1" }
+p3-poseidon2-circuit-air = { path = "poseidon2-circuit-air", version = "0.5.1" }
+p3-recursion = { path = "recursion", version = "0.5.1" }
 p3-rescue = { path = "rescue", version = "0.5.1" }
 p3-sha256 = { path = "sha256", version = "0.5.1" }
 p3-symmetric = { path = "symmetric", version = "0.5.1" }
+p3-test-utils = { path = "test-utils", version = "0.5.1" }
 p3-uni-stark = { path = "uni-stark", version = "0.5.1" }
 p3-util = { path = "util", version = "0.5.1" }
 p3-warp = { path = "warp", version = "0.5.1" }

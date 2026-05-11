@@ -43,6 +43,7 @@ use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrix;
+use p3_maybe_rayon::prelude::current_num_threads;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
@@ -73,7 +74,7 @@ use p3_whir::parameters::{
 };
 use p3_whir::pcs::WhirPcs;
 use p3_whir::pcs::committer::writer::CommitmentWriter;
-use p3_whir::pcs::proof::WhirProof;
+use p3_whir::pcs::proof::{QueryOpening, WhirProof};
 use p3_whir::sumcheck::SumcheckData;
 use p3_whir::sumcheck::single::SingleSumcheck;
 use rand::rngs::SmallRng;
@@ -220,6 +221,10 @@ fn whir_folding_factor() -> usize {
     factor
 }
 
+fn effective_whir_folding_factor(num_variables: usize) -> usize {
+    whir_folding_factor().min(num_variables.max(1))
+}
+
 #[derive(Clone, Copy, Debug)]
 struct WhirRoundShape {
     rounds: usize,
@@ -230,7 +235,7 @@ struct WhirRoundShape {
 fn whir_round_shape(mmcs: &MyMmcs, num_variables: usize) -> WhirRoundShape {
     let config = WhirConfig::<EF, F, MyMmcs, MyChallenger>::new(
         num_variables,
-        make_whir_protocol_params(mmcs),
+        make_whir_protocol_params(mmcs, num_variables),
     );
     WhirRoundShape {
         rounds: config.n_rounds(),
@@ -239,12 +244,12 @@ fn whir_round_shape(mmcs: &MyMmcs, num_variables: usize) -> WhirRoundShape {
     }
 }
 
-fn make_whir_protocol_params(mmcs: &MyMmcs) -> ProtocolParameters<MyMmcs> {
+fn make_whir_protocol_params(mmcs: &MyMmcs, num_variables: usize) -> ProtocolParameters<MyMmcs> {
     ProtocolParameters {
         security_level: 32,
         pow_bits: 0,
         rs_domain_initial_reduction_factor: 1,
-        folding_factor: FoldingFactor::Constant(whir_folding_factor()),
+        folding_factor: FoldingFactor::Constant(effective_whir_folding_factor(num_variables)),
         mmcs: mmcs.clone(),
         soundness_type: SecurityAssumption::JohnsonBound,
         starting_log_inv_rate: LOG_INV_RATE,
@@ -252,7 +257,10 @@ fn make_whir_protocol_params(mmcs: &MyMmcs) -> ProtocolParameters<MyMmcs> {
 }
 
 fn make_whir_config(mmcs: &MyMmcs, num_variables: usize) -> MyWhirConfig {
-    WhirConfig::new(num_variables, make_whir_protocol_params(mmcs))
+    WhirConfig::new(
+        num_variables,
+        make_whir_protocol_params(mmcs, num_variables),
+    )
 }
 
 fn make_whir_domain_separator(config: &MyWhirConfig) -> DomainSeparator<EF, F> {
@@ -288,7 +296,7 @@ fn make_whir_statements(
         .map(|i| {
             make_whir_statement(
                 num_variables,
-                whir_folding_factor(),
+                effective_whir_folding_factor(num_variables),
                 WHIR_CONSTRAINTS,
                 mode,
                 0x5750_0000 ^ ((num_variables as u64) << 16) ^ i as u64,
@@ -304,7 +312,7 @@ fn prove_n_whir_sumchecks(statements: &[InitialStatement<F, EF>]) {
         black_box(SingleSumcheck::new(
             &mut data,
             &mut challenger,
-            whir_folding_factor(),
+            effective_whir_folding_factor(statement.num_variables()),
             0,
             statement,
         ));
@@ -335,7 +343,7 @@ fn prove_n_whir_commit_sumchecks(
         black_box(SingleSumcheck::new(
             &mut data,
             &mut challenger,
-            whir_folding_factor(),
+            effective_whir_folding_factor(statement.num_variables()),
             0,
             &statement,
         ));
@@ -389,7 +397,7 @@ fn step_witness_groups(witnesses: &[Vec<F>], fresh_per_step: usize) -> Vec<Vec<V
 fn make_whir_pcs_for_num_vars(mmcs: &MyMmcs, num_variables: usize) -> MyWhirPcs {
     WhirPcs::new(
         num_variables,
-        make_whir_protocol_params(mmcs),
+        make_whir_protocol_params(mmcs, num_variables),
         MyDft::default(),
         SumcheckStrategy::Svo,
     )
@@ -861,7 +869,7 @@ fn build_n_whir_recursive_bundle(
     witnesses: &[Vec<F>],
 ) -> WhirRecursiveBundle {
     try_build_n_whir_recursive_bundle(fixture, witnesses)
-        .expect("sound WHIR-native recursive circuit proof")
+        .expect("build WHIR-native recursive circuit proof")
 }
 
 #[allow(dead_code)]
@@ -880,14 +888,150 @@ fn verify_n_whir_recursive_bundle(bundle: &WhirRecursiveBundle) {
         BenchChallenger::new,
         eval_bench_poseidon2,
     )
-    .expect("verify sound WHIR-native recursive circuit proof");
+    .expect("verify WHIR-native recursive circuit proof");
 }
 
-#[allow(dead_code)]
-fn whir_recursive_bundle_bytes(bundle: &WhirRecursiveBundle) -> usize {
-    postcard::to_stdvec(&bundle.outer_proof)
-        .expect("serialize WHIR-native recursive outer proof")
+#[derive(Clone, Copy, Debug, Default)]
+struct LaneMetrics {
+    proof_bytes: usize,
+    verifier_payload_bytes: usize,
+    total_artifact_bytes: usize,
+    commitments: usize,
+    opening_claims: usize,
+    whir_queries: usize,
+    sumcheck_rounds: usize,
+    table_count: usize,
+    max_table_height: usize,
+    total_table_cells: usize,
+}
+
+fn serialized_len<T: Serialize>(value: &T, label: &str) -> usize {
+    postcard::to_stdvec(value)
+        .unwrap_or_else(|err| panic!("serialize {label}: {err}"))
         .len()
+}
+
+fn whir_proof_query_count<F, EF, MT>(proof: &WhirProof<F, EF, MT>) -> usize
+where
+    F: Send + Sync + Clone,
+    MT: p3_commit::Mmcs<F>,
+{
+    proof
+        .rounds
+        .iter()
+        .map(|round| {
+            round
+                .queries
+                .iter()
+                .map(query_opening_count::<F, EF, MT::Proof>)
+                .sum::<usize>()
+        })
+        .sum::<usize>()
+        + proof
+            .final_queries
+            .iter()
+            .map(query_opening_count::<F, EF, MT::Proof>)
+            .sum::<usize>()
+}
+
+fn query_opening_count<F, EF, Proof>(query: &QueryOpening<F, EF, Proof>) -> usize {
+    match query {
+        QueryOpening::Base { .. }
+        | QueryOpening::Extension { .. }
+        | QueryOpening::SharedBase { .. } => 1,
+        QueryOpening::Batched { openings } => openings.iter().map(query_opening_count).sum(),
+    }
+}
+
+fn whir_proof_sumcheck_rounds<F, EF, MT>(proof: &WhirProof<F, EF, MT>) -> usize
+where
+    F: Send + Sync + Clone,
+    MT: p3_commit::Mmcs<F>,
+{
+    proof.initial_sumcheck.num_rounds()
+        + proof
+            .rounds
+            .iter()
+            .map(|round| round.sumcheck.num_rounds())
+            .sum::<usize>()
+        + proof
+            .final_sumcheck
+            .as_ref()
+            .map_or(0, SumcheckData::num_rounds)
+}
+
+fn recursive_lane_metrics(bundle: &WhirRecursiveBundle) -> LaneMetrics {
+    let table_count = bundle.outer_proof.table_commitments.len();
+    let max_table_height = bundle
+        .outer_proof
+        .table_commitments
+        .iter()
+        .map(|table| table.metadata.padded_height)
+        .max()
+        .unwrap_or(0);
+    let total_table_cells = bundle
+        .outer_proof
+        .table_commitments
+        .iter()
+        .map(|table| table.metadata.padded_height * table.metadata.padded_width)
+        .sum();
+    LaneMetrics {
+        proof_bytes: serialized_len(&bundle.outer_proof, "recursive outer proof"),
+        verifier_payload_bytes: serialized_len(
+            &(&bundle.outer_proof, &bundle.recursive_public_input_values),
+            "recursive verifier payload",
+        ),
+        total_artifact_bytes: serialized_len(
+            &(
+                &bundle.native.commitments,
+                &bundle.native.proofs,
+                &bundle.outer_proof,
+            ),
+            "recursive total artifact",
+        ),
+        commitments: bundle.native.commitments.len() + bundle.outer_proof.table_commitments.len(),
+        opening_claims: bundle.native.claims.iter().map(Vec::len).sum::<usize>()
+            + bundle
+                .outer_proof
+                .opening_proofs
+                .iter()
+                .map(|proof| proof.opening_claims.len())
+                .sum::<usize>(),
+        whir_queries: bundle
+            .native
+            .proofs
+            .iter()
+            .map(whir_proof_query_count)
+            .sum::<usize>()
+            + bundle
+                .outer_proof
+                .opening_proofs
+                .iter()
+                .map(|proof| whir_proof_query_count(&proof.proof))
+                .sum::<usize>(),
+        sumcheck_rounds: bundle
+            .native
+            .proofs
+            .iter()
+            .map(whir_proof_sumcheck_rounds)
+            .sum::<usize>()
+            + bundle
+                .outer_proof
+                .opening_proofs
+                .iter()
+                .map(|proof| whir_proof_sumcheck_rounds(&proof.proof))
+                .sum::<usize>()
+            + bundle
+                .outer_proof
+                .constraint_sumcheck_proofs
+                .iter()
+                .filter_map(|proof| proof.local_proof.as_ref())
+                .map(|proof| proof.sumcheck.num_rounds())
+                .sum::<usize>(),
+        table_count,
+        max_table_height,
+        total_table_cells,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -974,6 +1118,37 @@ fn warp_whir_root_bundle_bytes(bundle: &WarpWhirRootBundle) -> usize {
     postcard::to_stdvec(&(&bundle.proof, &bundle.root_iop_proof))
         .expect("serialize WARP root bundle")
         .len()
+}
+
+fn warp_lane_metrics(bundle: &WarpWhirRootBundle) -> LaneMetrics {
+    LaneMetrics {
+        proof_bytes: serialized_len(&(&bundle.proof, &bundle.root_iop_proof), "WARP proof bytes"),
+        verifier_payload_bytes: serialized_len(
+            &(&bundle.instance, &bundle.proof, &bundle.root_iop_proof),
+            "WARP verifier payload",
+        ),
+        total_artifact_bytes: serialized_len(
+            &(&bundle.instance, &bundle.proof, &bundle.root_iop_proof),
+            "WARP total artifact",
+        ),
+        commitments: bundle.oracle_count,
+        opening_claims: bundle.claim_count,
+        whir_queries: whir_proof_query_count(&bundle.root_iop_proof.opening.opening),
+        sumcheck_rounds: bundle
+            .proof
+            .steps
+            .iter()
+            .map(|step| {
+                step.proof.twin_constraint_sumcheck.num_rounds()
+                    + step.proof.batching_sumcheck.num_rounds()
+            })
+            .sum::<usize>()
+            + bundle.proof.final_proof.pesat.decider_sumcheck.num_rounds()
+            + whir_proof_sumcheck_rounds(&bundle.root_iop_proof.opening.opening),
+        table_count: 0,
+        max_table_height: 0,
+        total_table_cells: 0,
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -2218,7 +2393,7 @@ fn print_warp_whir_root_comparison(num_variable_cases: &[usize], n_values: &[usi
                     verify_phases.claim_shape.codeword_mle,
                 );
                 eprintln!(
-                    "      WHIR shape: rounds={} final_sumcheck_rounds={} final_queries={}; payload bytes: WHIR={} WARP={} ({})",
+                    "      WHIR shape: rounds={} final_sumcheck_rounds={} final_queries={}; serialized bytes: WHIR_artifact={} WARP_proof={} ({})",
                     whir_shape.rounds,
                     whir_shape.final_sumcheck_rounds,
                     whir_shape.final_queries,
@@ -2334,15 +2509,36 @@ fn print_recursive_whir_vs_warp_comparison(num_variable_cases: &[usize], n_value
     let iterations = parse_usize_env("P3_WHIR_RECURSIVE_COMPARE_ITERS", 1).max(1);
     let warmup = parse_usize_env("P3_WHIR_RECURSIVE_COMPARE_WARMUP", 0);
     let arity = warp_fresh_per_step();
+    let folding_factor = whir_folding_factor();
+    let outer_openings = whir_native_circuit_options().openings_per_table;
+    let cpu_parallelism = std::thread::available_parallelism().map_or(1, usize::from);
+    let require_full_soundness = env::var("P3_WHIR_REQUIRE_FULL_SOUNDNESS").as_deref() == Ok("1");
     eprintln!();
     eprintln!("=== Recursive N-WHIR aggregate proof vs WHIR-backed WARP root comparison ===");
     eprintln!(
         "    Recursive lane: build N native WHIR proofs, run one verifier circuit for those N proofs, then use the WHIR-native outer path for its trace."
     );
     eprintln!(
-        "    Outer recursive proof: oracle-only WHIR-native table proof with table commitments, local sumchecks, WHIR openings, and public/shape binding."
+        "    Outer recursive proof: WHIR-native table proof with table commitments, shifted Poseidon2 next-row columns, direct witness-table openings, local sumchecks, WHIR openings, and public/shape binding."
     );
     eprintln!("    WARP lane: existing WARP VACC/DACC root proof, kept outside recursion.");
+    eprintln!(
+        "    Soundness: full benchmark path; no count-only WitnessChecks summary is accepted{}.",
+        if require_full_soundness {
+            " (required by P3_WHIR_REQUIRE_FULL_SOUNDNESS=1)"
+        } else {
+            ""
+        }
+    );
+    eprintln!(
+        "    WHIR folding factor: configured {folding_factor}, clamped to k for tiny smoke cases; recursive outer openings per table: {outer_openings}."
+    );
+    eprintln!(
+        "    parallel_feature={} rayon_threads={} cpu_available_parallelism={}",
+        cfg!(feature = "parallel"),
+        current_num_threads(),
+        cpu_parallelism,
+    );
     eprintln!(
         "    Recursive prove samples include native WHIR proofs, verifier-circuit witness generation, and the outer WHIR-native proof."
     );
@@ -2360,8 +2556,8 @@ fn print_recursive_whir_vs_warp_comparison(num_variable_cases: &[usize], n_value
         "recursive verify",
         "warp verify",
         "verify Δ",
-        "rec bytes",
-        "warp bytes",
+        "rec proof B",
+        "warp proof B",
         "mmcs ops",
     );
 
@@ -2437,8 +2633,8 @@ fn print_recursive_whir_vs_warp_comparison(num_variable_cases: &[usize], n_value
             ));
             let (warp_bundle, _warp_phases) =
                 build_warp_whir_root_bundle_with_phases(&fixture, &warp_witnesses);
-            let recursive_bytes = whir_recursive_bundle_bytes(&recursive_bundle);
-            let warp_bytes = warp_whir_root_bundle_bytes(&warp_bundle);
+            let recursive_metrics = recursive_lane_metrics(&recursive_bundle);
+            let warp_metrics = warp_lane_metrics(&warp_bundle);
 
             print_progress(format!(
                 "    running k={num_variables}, N={n}: paired recursive-WHIR/WARP verifier samples..."
@@ -2465,8 +2661,8 @@ fn print_recursive_whir_vs_warp_comparison(num_variable_cases: &[usize], n_value
                 format_duration(recursive_verify_stats.median),
                 format_duration(warp_verify_stats.median),
                 format_warp_over_whir(warp_verify_stats.median, recursive_verify_stats.median),
-                recursive_bytes,
-                warp_bytes,
+                recursive_metrics.proof_bytes,
+                warp_metrics.proof_bytes,
                 recursive_bundle.recursive_mmcs_ops,
             );
             eprintln!(
@@ -2474,6 +2670,29 @@ fn print_recursive_whir_vs_warp_comparison(num_variable_cases: &[usize], n_value
                 recursive_bundle.recursive_public_inputs,
                 recursive_bundle.recursive_private_inputs,
                 recursive_bundle.native.proofs.len(),
+            );
+            eprintln!(
+                "      Recursive metrics: proof_bytes={} verifier_payload_bytes={} total_artifact_bytes={} commitments={} opening_claims={} whir_queries={} sumcheck_rounds={} table_count={} max_table_height={} total_table_cells={}",
+                recursive_metrics.proof_bytes,
+                recursive_metrics.verifier_payload_bytes,
+                recursive_metrics.total_artifact_bytes,
+                recursive_metrics.commitments,
+                recursive_metrics.opening_claims,
+                recursive_metrics.whir_queries,
+                recursive_metrics.sumcheck_rounds,
+                recursive_metrics.table_count,
+                recursive_metrics.max_table_height,
+                recursive_metrics.total_table_cells,
+            );
+            eprintln!(
+                "      WARP metrics: proof_bytes={} verifier_payload_bytes={} total_artifact_bytes={} commitments={} opening_claims={} whir_queries={} sumcheck_rounds={}",
+                warp_metrics.proof_bytes,
+                warp_metrics.verifier_payload_bytes,
+                warp_metrics.total_artifact_bytes,
+                warp_metrics.commitments,
+                warp_metrics.opening_claims,
+                warp_metrics.whir_queries,
+                warp_metrics.sumcheck_rounds,
             );
         }
     }
@@ -2511,7 +2730,7 @@ fn bench_sumcheck_like_prover(c: &mut Criterion) {
             let svo_statements = make_whir_statements(num_variables, n, SumcheckStrategy::Svo);
             let warp_fixture = make_warp_fixture(num_variables);
             let whir_config = make_whir_config(&warp_fixture.mmcs, num_variables);
-            let whir_protocol_params = make_whir_protocol_params(&warp_fixture.mmcs);
+            let whir_protocol_params = make_whir_protocol_params(&warp_fixture.mmcs, num_variables);
 
             group.bench_with_input(
                 BenchmarkId::new(format!("n_whir_classic_{label}"), n),
