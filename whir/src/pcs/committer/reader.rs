@@ -9,6 +9,7 @@ use p3_multilinear_util::point::Point;
 use crate::constraints::statement::EqStatement;
 use crate::parameters::WhirConfig;
 use crate::pcs::proof::WhirProof;
+use crate::pcs::verifier::errors::VerifierError;
 
 /// Parsed commitment extracted from the verifier's transcript.
 ///
@@ -26,23 +27,33 @@ impl<F, D> ParsedCommitment<F, D>
 where
     F: Field,
 {
-    /// Parse a commitment for a specific round (or initial if `None`).
+    /// Parse a commitment for a specific round.
+    ///
+    /// # Errors
+    ///
+    /// - Round index is past the last round carried by the proof.
+    /// - Round entry is present but its Merkle-root slot is empty.
     pub fn parse_with_round<EF, MT: Mmcs<F>, Challenger>(
         proof: &WhirProof<F, EF, MT>,
         challenger: &mut Challenger,
         num_variables: usize,
         ood_samples: usize,
         round_index: usize,
-    ) -> ParsedCommitment<EF, MT::Commitment>
+    ) -> Result<ParsedCommitment<EF, MT::Commitment>, VerifierError>
     where
         F: TwoAdicField,
         EF: ExtensionField<F> + TwoAdicField,
         Challenger:
             FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<MT::Commitment>,
     {
-        // Extract root and OOD answers from either the initial commitment or a round.
-        let round_proof = &proof.rounds[round_index];
-        let root = round_proof.commitment.clone().unwrap();
+        let round_proof = proof
+            .rounds
+            .get(round_index)
+            .ok_or(VerifierError::InvalidRoundIndex { index: round_index })?;
+        let root = round_proof
+            .commitment
+            .clone()
+            .ok_or(VerifierError::MissingRoundCommitment { round: round_index })?;
         let ood_answers = round_proof.ood_answers.clone();
 
         // Observe the Merkle root in the transcript.
@@ -58,10 +69,10 @@ where
             ood_statement.add_evaluated_constraint(point, eval);
         });
 
-        ParsedCommitment {
+        Ok(ParsedCommitment {
             root,
             ood_statement,
-        }
+        })
     }
 }
 

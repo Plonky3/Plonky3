@@ -9,7 +9,7 @@ use hashbrown::HashMap;
 use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{Algebra, BasedVectorSpace, PrimeCharacteristicRing};
+use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::{InteractionSymbolicBuilder, Kind, LookupProtocol};
@@ -540,20 +540,13 @@ where
             if aux_width == 0 {
                 return vec![];
             }
-            // Chunk the flattened coefficients into groups of size `dim`.
-            // Each chunk represents the coefficients of one extension field element.
+            // Each `ext_degree`-chunk holds the basis coefficients (in EF) of one EF element.
+            // chunks_exact yields chunks of exactly `ext_degree` = DIMENSION, so the unwrap
+            // below cannot panic.
             flat.chunks_exact(ext_degree)
-                .map(|coeffs| {
-                    // Dot product: sum(coeff_j * basis_j)
-                    coeffs
-                        .iter()
-                        .enumerate()
-                        .map(|(j, &coeff)| {
-                            coeff
-                                * Challenge::<SC>::ith_basis_element(j)
-                                    .expect("Basis element should exist")
-                        })
-                        .sum()
+                .map(|chunk| {
+                    Challenge::<SC>::from_ext_basis_coefficients(chunk)
+                        .expect("chunk length matches DIMENSION by construction")
                 })
                 .collect()
         };

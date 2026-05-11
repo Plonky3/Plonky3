@@ -372,6 +372,83 @@ mod error_variant_tests {
             other => panic!("expected OpeningBatchSizeMismatch, got {other:?}"),
         }
     }
+
+    #[test]
+    fn rejects_with_round_count_mismatch_when_a_round_is_dropped() {
+        // Invariant: round count is fixed by the protocol config.
+        //
+        // Fixture state: N honest rounds → expected = N.
+        //
+        // Mutation: drop the trailing round.
+        //
+        //     proof.whir.rounds:  [r_0, r_1, ..., r_{N-1}]  ->  [r_0, ..., r_{N-2}]
+        //     expected:           N
+        //     actual:             N - 1
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        assert!(
+            !proof.whir.rounds.is_empty(),
+            "fixture should produce at least one WHIR round"
+        );
+        let expected = proof.whir.rounds.len();
+        proof.whir.rounds.pop();
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::RoundCountMismatch {
+                expected: e,
+                actual: a,
+            } => {
+                assert_eq!(e, expected);
+                assert_eq!(a, expected - 1);
+            }
+            other => panic!("expected RoundCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_with_missing_round_commitment_when_a_root_is_cleared() {
+        // Invariant: every round must expose a Merkle root.
+        //
+        // Fixture state: round 0 carries Some(root).
+        //
+        // Mutation: clear the slot.
+        //
+        //     proof.whir.rounds[0].commitment:  Some(root)  ->  None
+        //     -> error identifies round = 0
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        assert!(
+            !proof.whir.rounds.is_empty(),
+            "fixture should produce at least one WHIR round"
+        );
+        proof.whir.rounds[0].commitment = None;
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::MissingRoundCommitment { round } => {
+                assert_eq!(round, 0);
+            }
+            other => panic!("expected MissingRoundCommitment, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_with_missing_final_poly_when_cleared() {
+        // Invariant: the tail polynomial is required for the final identity check.
+        //
+        // Fixture state: final_poly = Some(tail).
+        //
+        // Mutation: clear the slot.
+        //
+        //     proof.whir.final_poly:  Some(tail)  ->  None
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        proof.whir.final_poly = None;
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        assert!(
+            matches!(err, VerifierError::MissingFinalPoly),
+            "expected MissingFinalPoly, got {err:?}"
+        );
+    }
 }
 
 mod keccak_tests {

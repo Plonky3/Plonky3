@@ -8,7 +8,7 @@ use p3_air::symbolic::SymbolicAirBuilder;
 use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_util::zip_eq::zip_eq;
@@ -73,18 +73,15 @@ where
         })
         .collect_vec();
 
+    // valid_shape checks each ch has length <SC::Challenge as BasedVectorSpace<Val<SC>>>::DIMENSION,
+    // so from_ext_basis_coefficients won't return None.
     quotient_chunks
         .iter()
         .enumerate()
         .map(|(ch_i, ch)| {
-            // We checked in valid_shape the length of "ch" is equal to
-            // <SC::Challenge as BasedVectorSpace<Val<SC>>>::DIMENSION. Hence
-            // the unwrap() will never panic.
             zps[ch_i]
-                * ch.iter()
-                    .enumerate()
-                    .map(|(e_i, &c)| SC::Challenge::ith_basis_element(e_i).unwrap() * c)
-                    .sum::<SC::Challenge>()
+                * SC::Challenge::from_ext_basis_coefficients(ch)
+                    .expect("quotient chunk length checked in valid_shape")
         })
         .sum::<SC::Challenge>()
 }
