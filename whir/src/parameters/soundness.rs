@@ -54,12 +54,16 @@ impl SecurityAssumption {
     /// E.g. in JB proximity gaps holds for every delta in (0, 1 - sqrt(rho)).
     /// eta is the distance between the chosen proximity parameter and the bound.
     /// I.e. in JB delta = 1 - sqrt(rho) - eta and in CB delta = 1 - rho - eta.
-    // TODO: Maybe it makes more sense to be multiplicative. I think this can be set in a better way.
     #[must_use]
     pub const fn log_eta(&self, log_inv_rate: usize) -> f64 {
         match self {
-            // We don't use eta in UD
-            Self::UniqueDecoding => 0., // TODO: Maybe just panic and avoid calling it in UD?
+            // eta is undefined in UD: delta is (1 - rho) / 2, with no eta term.
+            // Return INFINITY so any accidental future caller that reads this in
+            // the UD branch fails visibly (NaN / overflow propagation) instead
+            // of silently treating eta as 2^0 = 1, which is "impossibly large"
+            // and would produce a wrong delta. All current callers special-case
+            // UD before reaching the eta-dependent arithmetic.
+            Self::UniqueDecoding => f64::INFINITY,
             // Set as sqrt(rho)/20
             Self::JohnsonBound => -(0.5 * log_inv_rate as f64 + LOG2_10 + 1.),
             // Set as rho/20
@@ -558,5 +562,20 @@ mod tests {
 
         // PoW bits should never be negative
         assert!(pow_bits >= 0.);
+    }
+
+    #[test]
+    fn log_eta_undefined_in_unique_decoding() {
+        // eta does not appear in the UD distance formula `delta = (1 - rho) / 2`.
+        // Returning INFINITY locks down the invariant: if a future refactor
+        // accidentally reads this value in the UD branch, downstream arithmetic
+        // turns into NaN / overflow rather than silently treating eta as
+        // 2^0 = 1 and producing a wrong delta.
+        for log_inv_rate in [1, 2, 5, 10, 20] {
+            assert_eq!(
+                SecurityAssumption::UniqueDecoding.log_eta(log_inv_rate),
+                f64::INFINITY,
+            );
+        }
     }
 }
