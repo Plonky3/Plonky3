@@ -895,13 +895,13 @@ fn test_inconsistent_witness_fails_transition() {
     }
 }
 
-// AIR doing tuple lookups: each row carries the read tuple, the table tuple
-// and a multiplicity.
+// AIR doing tuple lookups:
+// Each row carries the read tuple, the table tuple and a multiplicity.
 //
 // Main trace layout per row: `[in1, in2, sum, t_in1, t_in2, t_sum, mult]`.
 //
-// Used by `test_tuple_lookup` to exercise the Horner combiner: tuples of
-// size > 1 force the `β` challenge to participate meaningfully.
+// Tuples of size > 1 force the Horner combiner's `β` challenge to participate meaningfully;
+// Single-element tuples leave it inactive.
 struct AddAir;
 
 impl AddAir {
