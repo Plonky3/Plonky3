@@ -279,10 +279,6 @@ impl MockAirBuilder {
     }
 
     // A mock windowed view for the trace matrices.
-    //
-    // Cyclic wrap:
-    // - the accumulator transition reads acc_next on every row,
-    // - the last row's `next` must wrap to row 0.
     fn window<T: Clone + Send + Sync + Field>(
         &self,
         trace: &RowMajorMatrix<T>,
@@ -290,9 +286,13 @@ impl MockAirBuilder {
         let mut view = Vec::with_capacity(2 * trace.width());
         // local row
         view.extend(trace.row(self.current_row).unwrap());
-        // next row (cyclic wrap-around at the last row)
-        let next_row_idx = (self.current_row + 1) % self.height;
-        view.extend(trace.row(next_row_idx).unwrap());
+        // next row (if it exists)
+        if self.current_row + 1 < self.height {
+            view.extend(trace.row(self.current_row + 1).unwrap());
+        } else {
+            // pad with zeros if we are on the last row
+            view.extend(vec![T::ZERO; trace.width()]);
+        }
         RowMajorMatrix::new(view, trace.width())
     }
 }
@@ -659,4 +659,350 @@ fn empty_lookups_produce_no_permutation_trace() {
     assert_eq!(aux.width(), 0);
     assert_eq!(aux.values.len(), 0);
     assert!(terminal.is_none());
+}
+
+// `SymbolicExpression::resolve` against a concrete row evaluator.
+//
+// Independent of the lookup logic: exercises symbolic-to-concrete
+// expression evaluation with first-row / transition / last-row selectors.
+#[test]
+fn test_symbolic_to_expr() {
+    let mut builder = SymbolicAirBuilder::<F>::new(AirLayout {
+        main_width: 2,
+        ..Default::default()
+    });
+
+    let main = builder.main();
+    let (local, next) = (main.current_slice(), main.next_slice());
+
+    let mul = local[0] * next[1];
+    let add = local[0] + next[1];
+    let sub = local[0] - next[1];
+    builder.when_first_row().assert_zero(mul.clone() * add);
+    builder.when_transition().assert_zero(sub - local[0]);
+    builder.when_last_row().assert_zero(mul - local[0]);
+
+    let constraints = builder.base_constraints();
+
+    let main_flat = vec![
+        F::new(10),
+        F::new(10),
+        F::new(256),
+        F::new(255),
+        F::new(42),
+        F::new(42),
+    ];
+
+    let main_trace = RowMajorMatrix::new(main_flat, 2);
+
+    let perm = RowMajorMatrix::new(vec![], 0);
+    let mut builder = MockAirBuilder::new(main_trace.clone(), perm, vec![], vec![]);
+
+    for i in 0..builder.height {
+        // Define the Lagrange selectors.
+        builder.for_row(i);
+        let is_first_row = if i == 0 { EF::ONE } else { EF::ZERO };
+        let is_last_row = if i == builder.height - 1 {
+            EF::ONE
+        } else {
+            EF::ZERO
+        };
+        let is_transition = if i < builder.height - 1 {
+            EF::ONE
+        } else {
+            EF::ZERO
+        };
+
+        // Get the local and next values for row `i`.
+        let cloned_trace = main_trace.clone();
+        let local = cloned_trace.row(i).unwrap().into_iter().collect::<Vec<F>>();
+        let next = cloned_trace.row(i + 1).map_or_else(
+            || vec![F::ZERO; 2],
+            |row| row.into_iter().collect::<Vec<F>>(),
+        );
+
+        // Compute the expected constraint values at row `i`.
+        let mul = EF::from(local[0]) * EF::from(next[1]);
+        let add = EF::from(local[0]) + EF::from(next[1]);
+        let sub = EF::from(local[0]) - EF::from(next[1]);
+
+        let first_expected_val = is_first_row * (mul * add);
+        let transition_expected_val = is_transition * (sub - EF::from(local[0]));
+        let last_expected_val = is_last_row * (mul - EF::from(local[0]));
+
+        // Evaluate the constraints at row `i`.
+        let first_eval = constraints[0].resolve(&builder);
+        let transition_eval = constraints[1].resolve(&builder);
+        let last_eval = constraints[2].resolve(&builder);
+
+        // Assert that the evaluated constraints are correct.
+        assert_eq!(first_expected_val, first_eval.into());
+        assert_eq!(transition_expected_val, transition_eval.into());
+        assert_eq!(last_expected_val, last_eval.into());
+    }
+}
+
+// Multiset with a non-identity permutation of values across rows.
+//
+// Reads {3×2, 5×4, 7×2} are spread across rows in a different order than
+// the table rows that provide them. The single-terminal must still come
+// out to zero — exercises the LogUp identity beyond the trivial case
+// where `read[r] == provide[r]` on every row.
+//
+//     row | read | provide | mult | contribution
+//      0  |   7  |    3    |   2  | 1/(α-7) - 2/(α-3)
+//      1  |   3  |    5    |   4  | 1/(α-3) - 4/(α-5)
+//      2  |   5  |    7    |   2  | 1/(α-5) - 2/(α-7)
+//      3  |   3  |    3    |   0  | 1/(α-3) - 0
+//      4  |   7  |    5    |   0  | 1/(α-7) - 0
+//      5  |   5  |    5    |   0  | 1/(α-5) - 0
+//      6  |   5  |    7    |   0  | 1/(α-5) - 0
+//      7  |   5  |    5    |   0  | 1/(α-5) - 0
+//
+// Read multiset:  {3×2, 5×4, 7×2}
+// Table multiset: {3×2, 5×4, 7×2}  (provides weighted by mult)
+// Difference:     0  →  terminal must be zero.
+#[test]
+fn test_nontrivial_permutation() {
+    let main_flat = vec![
+        F::new(7),
+        F::new(3),
+        F::TWO,
+        F::new(3),
+        F::new(5),
+        F::from_u8(4),
+        F::new(5),
+        F::new(7),
+        F::TWO,
+        F::new(3),
+        F::new(3),
+        F::ZERO,
+        F::new(7),
+        F::new(5),
+        F::ZERO,
+        F::new(5),
+        F::new(5),
+        F::ZERO,
+        F::new(5),
+        F::new(7),
+        F::ZERO,
+        F::new(5),
+        F::new(5),
+        F::ZERO,
+    ];
+    let main_trace = RowMajorMatrix::new(main_flat, 3);
+
+    let air = RangeCheckAir::new();
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air);
+    let gadget = LogUpGadget::new();
+    let challenges = vec![EF::from_u32(0x1234_5678), EF::from_u32(0x9abc_def0)];
+
+    let (aux, terminal) =
+        gadget.generate_permutation::<TestConfig>(&main_trace, &None, &[], &lookups, &challenges);
+    let terminal = terminal.unwrap();
+
+    // Balanced multiset → terminal is zero with overwhelming probability.
+    assert_eq!(terminal.0, EF::ZERO);
+
+    // Per-row constraints all hold.
+    let mut builder = MockAirBuilder::new(main_trace, aux, challenges, vec![terminal.0]);
+    for r in 0..builder.height {
+        builder.for_row(r);
+        gadget.eval_all(&mut builder, &lookups);
+    }
+}
+
+// Imbalance via a zero-multiplicity row.
+//
+// Row 0 reads `10` but the table provides `10` with multiplicity 0 — i.e.
+// the prover never provides `10`. The multiset is therefore unbalanced
+// and the AIR's terminal is non-zero, so the cross-AIR check rejects.
+#[test]
+fn test_zero_multiplicity_is_not_counted() {
+    let main_flat = vec![
+        // Read 10, provide 10 with mult 0 — the read has no provider.
+        F::new(10),
+        F::new(10),
+        F::ZERO,
+        // A valid row to make the imbalance survive past row 0.
+        F::new(20),
+        F::new(20),
+        F::ONE,
+    ];
+    let main_trace = RowMajorMatrix::new(main_flat, 3);
+
+    let air = RangeCheckAir::new();
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air);
+    let gadget = LogUpGadget::new();
+    let challenges = vec![EF::from_u8(123), EF::from_u8(111)];
+
+    let (_aux, terminal) =
+        gadget.generate_permutation::<TestConfig>(&main_trace, &None, &[], &lookups, &challenges);
+    let terminal = terminal.unwrap();
+
+    // The unread `10` survives into the terminal.
+    assert_ne!(terminal.0, EF::ZERO);
+
+    // Cross-AIR check rejects.
+    match gadget.verify_terminal_sum(&[Some(terminal)]) {
+        Err(LookupError::TerminalSumNonZero) => {}
+        other => panic!("expected TerminalSumNonZero, got {other:?}"),
+    }
+}
+
+// Corruption of the accumulator column breaks the transition constraint.
+//
+// The prover generates a valid aux trace, then we tamper with one cell of
+// the shared accumulator column. The transition `acc[r+1] - acc[r] - Σ frac_c[r] = 0`
+// fails at the row immediately before the tampered cell.
+#[test]
+#[should_panic(expected = "Extension constraint failed")]
+fn test_inconsistent_witness_fails_transition() {
+    let main_flat = vec![
+        F::new(10),
+        F::new(10),
+        F::ONE,
+        F::new(20),
+        F::new(20),
+        F::ONE,
+        F::new(30),
+        F::new(30),
+        F::ONE,
+        F::new(40),
+        F::new(40),
+        F::ONE,
+    ];
+    let main_trace = RowMajorMatrix::new(main_flat, 3);
+
+    let air = RangeCheckAir::new();
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air);
+    let gadget = LogUpGadget::new();
+    let challenges = vec![EF::from_u32(31), EF::from_u32(41)];
+
+    let (mut aux, terminal) =
+        gadget.generate_permutation::<TestConfig>(&main_trace, &None, &[], &lookups, &challenges);
+
+    // Corrupt acc[2] (accumulator column, row 2) by injecting a non-zero delta.
+    //
+    // - The transition r=1 → r=2 reads acc[2] as `acc_next`, so it fails first.
+    let aux_width = aux.width();
+    aux.values[2 * aux_width] += EF::from_u8(99);
+
+    let mut builder = MockAirBuilder::new(main_trace, aux, challenges, vec![terminal.unwrap().0]);
+    for r in 0..builder.height {
+        builder.for_row(r);
+        gadget.eval_all(&mut builder, &lookups);
+    }
+}
+
+// AIR doing tuple lookups: each row carries the read tuple, the table tuple
+// and a multiplicity.
+//
+// Main trace layout per row: `[in1, in2, sum, t_in1, t_in2, t_sum, mult]`.
+//
+// Used by `test_tuple_lookup` to exercise the Horner combiner: tuples of
+// size > 1 force the `β` challenge to participate meaningfully.
+struct AddAir;
+
+impl AddAir {
+    /// Build the AIR for a 3-element tuple lookup over binary additions.
+    const fn new() -> Self {
+        Self
+    }
+}
+
+impl<F: Field> BaseAir<F> for AddAir {
+    fn width(&self) -> usize {
+        7
+    }
+}
+
+impl<AB> Air<AB> for AddAir
+where
+    AB: AirBuilder<F: Field> + InteractionBuilder,
+{
+    fn eval(&self, builder: &mut AB) {
+        let main = builder.main();
+        let local = main.current_slice();
+
+        let in1 = local[0];
+        let in2 = local[1];
+        let sum = local[2];
+        let t_in1 = local[3];
+        let t_in2 = local[4];
+        let t_sum = local[5];
+        let mult = local[6];
+
+        builder.push_local_interaction(vec![
+            // Read side: (in1, in2, sum) with multiplicity +1.
+            (vec![in1.into(), in2.into(), sum.into()], AB::Expr::ONE),
+            // Table side: (t_in1, t_in2, t_sum) with multiplicity -mult.
+            (
+                vec![t_in1.into(), t_in2.into(), t_sum.into()],
+                -(mult.into()),
+            ),
+        ]);
+    }
+}
+
+// Lookup over 3-element tuples.
+//
+// Read multiset: { (0,1,1) ×2, (1,1,2) ×1, (0,0,0) ×1 }
+// Table provides (weighted by `mult`): same multiset reordered.
+//
+// The 3-element payload forces the Horner combiner to actually use the
+// `β` challenge — single-element tuples leave `β` inactive.
+#[test]
+fn test_tuple_lookup() {
+    let main_flat = vec![
+        // [in1, in2, sum, t_in1, t_in2, t_sum, mult]
+        F::new(0),
+        F::new(1),
+        F::new(1),
+        F::new(0),
+        F::new(1),
+        F::new(1),
+        F::TWO,
+        F::new(0),
+        F::new(1),
+        F::new(1),
+        F::new(0),
+        F::new(0),
+        F::new(0),
+        F::ONE,
+        F::new(1),
+        F::new(1),
+        F::TWO,
+        F::new(1),
+        F::new(0),
+        F::new(1),
+        F::ZERO,
+        F::new(0),
+        F::new(0),
+        F::new(0),
+        F::new(1),
+        F::new(1),
+        F::TWO,
+        F::ONE,
+    ];
+    let main_trace = RowMajorMatrix::new(main_flat, 7);
+
+    let air = AddAir::new();
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air);
+    let gadget = LogUpGadget::new();
+    let challenges = vec![EF::from_u32(31), EF::from_u32(41)];
+
+    let (aux, terminal) =
+        gadget.generate_permutation::<TestConfig>(&main_trace, &None, &[], &lookups, &challenges);
+    let terminal = terminal.unwrap();
+
+    // Balanced multiset → terminal zero.
+    assert_eq!(terminal.0, EF::ZERO);
+
+    // Per-row constraints all hold.
+    let mut builder = MockAirBuilder::new(main_trace, aux, challenges, vec![terminal.0]);
+    for r in 0..builder.height {
+        builder.for_row(r);
+        gadget.eval_all(&mut builder, &lookups);
+    }
 }
