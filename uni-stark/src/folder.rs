@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_air::{AirBuilder, ExtensionBuilder, PeriodicAirBuilder, RowWindow};
+use p3_air::{AirBuilder, ExtensionBuilder, RowWindow};
 use p3_field::{Algebra, BasedVectorSpace};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::ViewPair;
@@ -117,6 +117,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     type PreprocessedWindow = RowWindow<'a, PackedVal<SC>>;
     type MainWindow = RowWindow<'a, PackedVal<SC>>;
     type PublicVar = Val<SC>;
+    type PeriodicVar = PackedVal<SC>;
 
     #[inline]
     fn main(&self) -> Self::MainWindow {
@@ -160,6 +161,11 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolder<'a, SC> {
     fn public_values(&self) -> &[Self::PublicVar] {
         self.public_values
     }
+
+    #[inline]
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.periodic_values
+    }
 }
 
 impl<SC: StarkGenericConfig> ExtensionBuilder for ProverConstraintFolder<'_, SC> {
@@ -176,15 +182,6 @@ impl<SC: StarkGenericConfig> ExtensionBuilder for ProverConstraintFolder<'_, SC>
     }
 }
 
-impl<SC: StarkGenericConfig> PeriodicAirBuilder for ProverConstraintFolder<'_, SC> {
-    type PeriodicVar = PackedVal<SC>;
-
-    #[inline]
-    fn periodic_values(&self) -> &[Self::PeriodicVar] {
-        self.periodic_values
-    }
-}
-
 impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC> {
     type F = Val<SC>;
     type Expr = SC::Challenge;
@@ -192,6 +189,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
     type PreprocessedWindow = RowWindow<'a, SC::Challenge>;
     type MainWindow = RowWindow<'a, SC::Challenge>;
     type PublicVar = Val<SC>;
+    type PeriodicVar = SC::Challenge;
 
     fn main(&self) -> Self::MainWindow {
         RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
@@ -222,10 +220,6 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolder<'a, SC>
     fn public_values(&self) -> &[Self::PublicVar] {
         self.public_values
     }
-}
-
-impl<SC: StarkGenericConfig> PeriodicAirBuilder for VerifierConstraintFolder<'_, SC> {
-    type PeriodicVar = SC::Challenge;
 
     #[inline]
     fn periodic_values(&self) -> &[Self::PeriodicVar] {

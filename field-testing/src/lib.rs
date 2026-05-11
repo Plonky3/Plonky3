@@ -21,7 +21,7 @@ use num_bigint::BigUint;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
     ExtensionField, Field, PackedValue, PrimeCharacteristicRing, PrimeField32, PrimeField64,
-    TwoAdicField,
+    TwoAdicField, batch_multiplicative_inverse,
 };
 use p3_util::iter_array_chunks_padded;
 pub use packedfield_testing::*;
@@ -343,6 +343,51 @@ where
             let z = x.inverse();
             assert_ne!(x, z);
             assert_eq!(x * z, F::ONE);
+        }
+    }
+}
+
+/// Verify [`batch_multiplicative_inverse`] against the naive per-element inverse
+/// across a range of input lengths.
+///
+/// Sizes are chosen to exercise:
+/// - the empty input,
+/// - lengths below the packing width (tail-only path),
+/// - lengths whose remainder mod the packing width is 1, 2, or 3
+///   (mixed prefix-packed + tail-serial path),
+/// - lengths that straddle the internal `par_chunks` boundary (1024)
+///   so the trailing chunk receives a non-aligned tail.
+pub fn test_batch_multiplicative_inverse<F: Field>()
+where
+    StandardUniform: Distribution<F>,
+{
+    let mut rng = SmallRng::seed_from_u64(0xBA7C);
+
+    let lengths = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 15, 16, 17, 63, 64, 65, 1023, 1024, 1025, 1027, 2049, 4099,
+    ];
+
+    for &n in &lengths {
+        let xs: Vec<F> = (0..n)
+            .map(|_| {
+                // Reject zero so every input is invertible.
+                let mut x = rng.random::<F>();
+                while x.is_zero() {
+                    x = rng.random::<F>();
+                }
+                x
+            })
+            .collect();
+
+        let got = batch_multiplicative_inverse(&xs);
+        assert_eq!(got.len(), n, "result length mismatch for n = {n}");
+
+        for (i, (x, inv)) in xs.iter().zip(&got).enumerate() {
+            assert_eq!(
+                *x * *inv,
+                F::ONE,
+                "x[{i}] * inv[{i}] != 1 for input length {n}"
+            );
         }
     }
 }
@@ -1008,6 +1053,10 @@ macro_rules! test_field {
             #[test]
             fn test_inverse() {
                 $crate::test_inverse::<$field>();
+            }
+            #[test]
+            fn test_batch_multiplicative_inverse() {
+                $crate::test_batch_multiplicative_inverse::<$field>();
             }
             #[test]
             fn test_generator() {

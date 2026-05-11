@@ -5,7 +5,9 @@ use crate::{Algebra, ExtensionField};
 
 mod binomial_extension;
 mod complex;
+mod cubic_extension;
 mod packed_binomial_extension;
+mod packed_cubic_extension;
 mod packed_quintic_extension;
 mod quintic_extension;
 
@@ -13,7 +15,9 @@ use alloc::vec::Vec;
 
 pub use binomial_extension::*;
 pub use complex::*;
+pub use cubic_extension::{CubicTrinomialExtensionField, trinomial_cubic_mul};
 pub use packed_binomial_extension::*;
+pub use packed_cubic_extension::PackedCubicTrinomialExtensionField;
 pub use packed_quintic_extension::PackedQuinticTrinomialExtensionField;
 pub use quintic_extension::{QuinticTrinomialExtensionField, trinomial_quintic_mul};
 
@@ -133,6 +137,74 @@ pub trait HasTwoAdicBinomialExtension<const D: usize>: BinomiallyExtendable<D> {
     /// Behavior is undefined if `bits > EXT_TWO_ADICITY`.
     #[must_use]
     fn ext_two_adic_generator(bits: usize) -> [Self; D];
+}
+
+/// Trait for fields that support a degree-3 extension using the trinomial `X^3 - X - 1`.
+///
+/// Implement only when `X^3 - X - 1` is irreducible over the base field.
+pub trait CubicTrinomialExtendable: Field + CubicExtendableAlgebra<Self> {
+    /// Linear map for the Frobenius automorphism on `Σ a_i X^i` in the power basis `(1, X, X^2)`.
+    ///
+    /// Row `i` contains the coefficients of the image of `X^i` under Frobenius (the first row
+    /// includes the fixed contribution from `a_0`).
+    const FROBENIUS_MATRIX: [[Self; 3]; 3];
+
+    /// A generator of the multiplicative group of `F_{p^3}^*`, as polynomial coefficients.
+    const EXT_GENERATOR: [Self; 3];
+}
+
+/// Trait for algebras supporting cubic extension arithmetic over `A[X]/(X^3 - X - 1)`.
+pub trait CubicExtendableAlgebra<F: Field>: Algebra<F> {
+    /// Multiply two elements in the cubic extension ring.
+    ///
+    /// Computes `a * b mod (X^3 - X - 1)` and stores the result in `res`.
+    #[inline]
+    fn cubic_mul(a: &[Self; 3], b: &[Self; 3], res: &mut [Self; 3]) {
+        cubic_extension::trinomial_cubic_mul(a, b, res);
+    }
+
+    /// Square an element in the cubic extension ring.
+    ///
+    /// Computes `a^2 mod (X^3 - X - 1)` and stores the result in `res`.
+    /// Uses optimized formulas exploiting the symmetry `a_i * a_j = a_j * a_i`.
+    #[inline]
+    fn cubic_square(a: &[Self; 3], res: &mut [Self; 3]) {
+        cubic_extension::cubic_square(a, res);
+    }
+
+    /// Add two elements in the cubic extension ring.
+    ///
+    /// Addition is coefficient-wise and independent of the modulus polynomial.
+    #[inline]
+    #[must_use]
+    fn cubic_add(a: &[Self; 3], b: &[Self; 3]) -> [Self; 3] {
+        vector_add(a, b)
+    }
+
+    /// Subtract two elements in the cubic extension ring.
+    ///
+    /// Subtraction is coefficient-wise and independent of the modulus polynomial.
+    #[inline]
+    #[must_use]
+    fn cubic_sub(a: &[Self; 3], b: &[Self; 3]) -> [Self; 3] {
+        vector_sub(a, b)
+    }
+
+    /// Multiply a cubic extension element by a base field scalar.
+    #[inline]
+    fn cubic_base_mul(lhs: [Self; 3], rhs: Self) -> [Self; 3] {
+        lhs.map(|x| x * rhs.dup())
+    }
+}
+
+/// Trait for cubic trinomial extensions that expose two-adic subgroup generators.
+pub trait HasTwoAdicCubicExtension: CubicTrinomialExtendable {
+    /// Two-adicity of `p^3 - 1`.
+    const EXT_TWO_ADICITY: usize;
+
+    /// Two-adic generator for the extension field; `bits` must be at most `EXT_TWO_ADICITY`.
+    #[must_use]
+    fn ext_two_adic_generator(bits: usize) -> [Self; 3];
 }
 
 /// Trait for fields that support a degree-5 extension using the trinomial `X^5 + X^2 - 1`.

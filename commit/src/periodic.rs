@@ -102,10 +102,9 @@ impl<F: Clone + Send + Sync> PeriodicLdeTable<F> {
 
     /// Height of the compact table (max_period × blowup).
     pub const fn height(&self) -> usize {
-        if self.values.width == 0 {
-            0
-        } else {
-            self.values.values.len() / self.values.width
+        match self.values.values.len().checked_div(self.values.width) {
+            Some(h) => h,
+            None => 0,
         }
     }
 

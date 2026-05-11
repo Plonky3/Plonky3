@@ -33,9 +33,11 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::MerkleTreeError::{
-    CapMismatch, EmptyBatch, IncompatibleHeights, IndexOutOfBounds, WrongBatchSize, WrongHeight,
+    CapMismatch, EmptyBatch, IncompatibleHeights, IndexOutOfBounds, MalformedPrunedProof,
+    WrongBatchSize, WrongHeight,
 };
 use crate::merkle_tree::{padded_len, select_arity_step};
+use crate::pruning::{MerkleAuthPath, prune_paths, restore_paths};
 use crate::{MerkleCap, MerkleTree};
 
 /// A Merkle Tree-based commitment scheme for multiple matrices of potentially differing heights.
@@ -121,6 +123,10 @@ pub enum MerkleTreeError {
         /// The actual tree depth.
         tree_depth: usize,
     },
+
+    /// A pruned batch opening could not be restored (malformed proof).
+    #[error("malformed pruned proof: cannot restore full authentication paths")]
+    MalformedPrunedProof,
 }
 
 /// The arity schedule and query positions for a given Merkle path.
@@ -249,6 +255,126 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         })
     }
 
+    /// Per-level compression arity for an unpruned proof, derived without hashing.
+    ///
+    /// One entry per proof level, each either `N` or `2`.
+    ///
+    /// # Returns
+    ///
+    /// - One entry per proof level, from leaves up to just above the cap.
+    /// - Cap layers are excluded — the proof never traverses them.
+    ///
+    /// # Trust model
+    ///
+    /// - Built from verifier-known dimensions and cap height only.
+    /// - Nothing is read from the proof.
+    /// - Safe to feed into pruned-path restoration: a malicious proof cannot
+    ///   inflate the verifier's allocation budget.
+    pub fn proof_arity_schedule(
+        &self,
+        dimensions: &[Dimensions],
+    ) -> Result<Vec<usize>, MerkleTreeError>
+    where
+        P: PackedValue,
+        PW: PackedValue,
+    {
+        // No commitments → no tree → no schedule.
+        if dimensions.is_empty() {
+            return Err(EmptyBatch);
+        }
+
+        // Phase 1: order matrices tallest-first so the walk can peek ahead
+        // and consume each one at its injection layer.
+        let mut heights_tallest_first = dimensions
+            .iter()
+            .enumerate()
+            .sorted_by_key(|(_, dims)| Reverse(dims.height))
+            .peekable();
+
+        // Heights sharing the same next-power-of-two must match exactly.
+        //
+        //     [8, 5]   → both round to 8, differ → reject
+        //     [8, 8]   → identical at the same slot → OK
+        //     [8, 4]   → distinct slots → OK
+        if !heights_tallest_first
+            .clone()
+            .map(|(_, dims)| dims.height)
+            .tuple_windows()
+            .all(|(curr, next)| {
+                curr == next || curr.next_power_of_two() != next.next_power_of_two()
+            })
+        {
+            return Err(IncompatibleHeights);
+        }
+
+        // Phase 2: walk from leaves toward the root.
+        //
+        // Seed length is `padded_len(max_height, N)` — same padding the
+        // prover uses to round the leaf layer up to a full N-ary group.
+        let (max_height, mut curr_height_padded) = match heights_tallest_first.peek() {
+            Some((_, dims)) => {
+                let max_height = dims.height;
+                let curr_height_padded = padded_len(max_height, N);
+                (max_height, curr_height_padded)
+            }
+            None => return Err(EmptyBatch),
+        };
+
+        let leaf_height_npt = max_height.next_power_of_two();
+
+        // Drop matrices already hashed into the leaf layer.
+        //
+        // Only shorter ones still need an injection slot.
+        heights_tallest_first
+            .peeking_take_while(|(_, dims)| dims.height.next_power_of_two() == leaf_height_npt)
+            .for_each(|_| {});
+
+        // One schedule entry per non-root layer.
+        //
+        //     layer_len:  L_0 → L_1 → L_2 → ... → 1   (root)
+        //     step:        s_0   s_1   s_2  ...
+        //     schedule  = [s_0,  s_1,  s_2,  ...]
+        let mut schedule = Vec::new();
+        while curr_height_padded > 1 {
+            // Arity at this layer:
+            //   N → full N-ary compression
+            //   2 → binary bridge inserted to land on the next injection point
+            let step = select_arity_step::<N>(
+                curr_height_padded,
+                leaf_height_npt,
+                heights_tallest_first.clone().map(|(_, dims)| dims.height),
+            );
+            schedule.push(step);
+
+            // - Shrink by `step`,
+            // - Re-pad so the next layer can form complete N-ary groups for the compression after it.
+            let logical_next = curr_height_padded / step;
+            curr_height_padded = padded_len(logical_next, N);
+
+            // - Inject any matrix whose rounded height matches the next layer's pre-pad width,
+            // - Consume it so it stops driving arity below.
+            let logical_next_npt = logical_next.next_power_of_two();
+            let next_height = heights_tallest_first
+                .peek()
+                .map(|(_, dims)| dims.height)
+                .filter(|h| h.next_power_of_two() == logical_next_npt);
+            if let Some(next_height) = next_height {
+                heights_tallest_first
+                    .peeking_take_while(|(_, dims)| dims.height == next_height)
+                    .for_each(|_| {});
+            }
+        }
+
+        // Phase 3: strip the top `cap_height` entries
+        //
+        // Those layers live inside the verifier's cap, not in the proof.
+        let total_levels = schedule.len();
+        let effective_cap_height = self.cap_height.min(total_levels);
+        schedule.truncate(total_levels - effective_cap_height);
+
+        Ok(schedule)
+    }
+
     /// Create a new `MerkleTreeMmcs` with the given hash and compression functions.
     ///
     /// # Arguments
@@ -272,6 +398,267 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
     pub const fn cap_height(&self) -> usize {
         self.cap_height
     }
+
+    /// Opens multiple leaf indices at once and returns a pruned proof.
+    ///
+    /// Equivalent to opening each index individually and then pruning the
+    /// resulting authentication paths, but avoids redundant allocations.
+    ///
+    /// The returned value contains:
+    /// - The opened matrix rows for each query (in input order).
+    /// - A compact pruned proof with shared siblings deduplicated.
+    ///
+    /// Use the pruned-verification method on the verifier side.
+    pub fn open_batch_pruned<M: Matrix<P::Value>>(
+        &self,
+        indices: &[usize],
+        prover_data: &MerkleTree<P::Value, PW::Value, M, N, DIGEST_ELEMS>,
+    ) -> PrunedBatchOpening<P::Value, PW::Value, DIGEST_ELEMS>
+    where
+        P: PackedValue,
+        PW: PackedValue,
+        H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
+            + CryptographicHasher<P, [PW; DIGEST_ELEMS]>,
+        C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>
+            + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>,
+        PW::Value: Eq + Clone,
+        [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
+    {
+        // Phase 1: Derive tree geometry from the committed data.
+        //
+        // The tree has multiple digest layers. The "cap" is a configurable
+        // number of layers cut from the top — the commitment is those top
+        // digests rather than just the single root.
+        // The proof only needs to cover levels below the cap.
+        //
+        //   Example: 5 digest layers, cap_height = 1
+        //     layers:          [0] [1] [2] [3] [4]
+        //     cap covers:                      [4]   (1 layer from the top)
+        //     proof covers:    [0] [1] [2] [3]       (4 proof levels)
+        let max_height = prover_data
+            .leaves
+            .iter()
+            .map(|m| m.height())
+            .max()
+            .expect("No committed matrices?");
+        let num_layers = prover_data.digest_layers.len();
+        let effective_cap_height = self.cap_height.min(num_layers.saturating_sub(1));
+        let proof_levels = num_layers
+            .saturating_sub(1)
+            .saturating_sub(effective_cap_height);
+        // Used to compute the bit-shift from global leaf index to a shorter
+        // matrix's row index. Smaller matrices have fewer rows, so their
+        // row index is the global index right-shifted by the height difference.
+        let log_max_height = log2_ceil_usize(max_height);
+
+        // Phase 2: Build the shift schedule for the pruning algorithm.
+        //
+        // The arity schedule stores the branching factor at each level
+        // (2 for binary, 4 for quad, etc.). The pruning LCA computation
+        // needs log_2(arity) at each level so it can use bit-shifts instead
+        // of integer division. trailing_zeros gives log_2 for powers of two.
+        let shift_schedule: Vec<u32> = prover_data.arity_schedule[..proof_levels]
+            .iter()
+            .map(|&step| step.trailing_zeros())
+            .collect();
+
+        // Pre-compute the exact total number of sibling digests in a full
+        // (unpruned) proof. At each level, the sibling count is arity - 1
+        // (one child is ours, the rest are siblings).
+        // This lets us allocate the flat sibling buffer exactly once per
+        // query with no dynamic resizing.
+        //
+        //   Example: 3 binary levels → 1 + 1 + 1 = 3 siblings total
+        //   Example: 2 quad levels   → 3 + 3     = 6 siblings total
+        let expected_siblings: usize = prover_data.arity_schedule[..proof_levels]
+            .iter()
+            .map(|&step| step - 1)
+            .sum();
+
+        // Phase 3: For each queried leaf index, collect its opened rows
+        // and full authentication path.
+        //
+        // Each query is independent: it reads one row from each committed
+        // matrix (at the appropriate bit-shifted index) and walks down the
+        // digest layers to collect all sibling digests.
+        //
+        // The result is unzipped into two parallel vectors:
+        //   - one with the opened matrix rows (for the verifier)
+        //   - one with the flat sibling arrays (for pruning)
+        let (all_opened_values, auth_paths): (Vec<_>, Vec<_>) = indices
+            .iter()
+            .map(|&index| {
+                assert!(
+                    index < max_height,
+                    "index {index} out of bounds for height {max_height}"
+                );
+
+                // Gather the row from each committed matrix at this leaf index.
+                //
+                // Shorter matrices cover fewer rows. The bit-shift
+                // (log_max_height - log_height) maps the global leaf index
+                // down to the row index in that shorter matrix.
+                //
+                //   Example: max_height = 32 (5 bits), matrix height = 8 (3 bits)
+                //     bits_reduced = 5 - 3 = 2
+                //     leaf index 20 → row 20 >> 2 = 5
+                let openings: Vec<Vec<P::Value>> = prover_data
+                    .leaves
+                    .iter()
+                    .map(|matrix| {
+                        let log2_height = log2_ceil_usize(matrix.height());
+                        let bits_reduced = log_max_height - log2_height;
+                        let reduced_index = index >> bits_reduced;
+                        matrix.row(reduced_index).unwrap().into_iter().collect()
+                    })
+                    .collect();
+
+                // Walk up the digest layers collecting sibling digests.
+                //
+                // At each level, the queried leaf belongs to a group of
+                // `step` children under one parent. We emit all children
+                // in that group except the queried one — those are the
+                // siblings the verifier needs to recompute the parent hash.
+                //
+                //   Example (binary, step = 2):
+                //     group = [child_0, child_1], queried = child_0
+                //     → emit child_1 (1 sibling)
+                //
+                //   Example (4-ary, step = 4):
+                //     group = [c0, c1, c2, c3], queried = c2
+                //     → emit c0, c1, c3 (3 siblings)
+                //
+                // After collecting siblings at this level, divide the index
+                // by the step to move up to the parent level.
+                let mut siblings = Vec::with_capacity(expected_siblings);
+                let mut idx = index;
+                for layer_idx in 0..proof_levels {
+                    let step = prover_data.arity_schedule[layer_idx];
+                    // Start of the N-child group containing this index.
+                    let group_start = (idx / step) * step;
+                    // Position of the queried child within the group.
+                    let pos_in_group = idx % step;
+                    // Emit every child in the group except the queried one.
+                    for k in 0..step {
+                        if k != pos_in_group {
+                            siblings.push(prover_data.digest_layers[layer_idx][group_start + k]);
+                        }
+                    }
+                    // Move to the parent index for the next level.
+                    idx /= step;
+                }
+
+                (
+                    openings,
+                    MerkleAuthPath {
+                        leaf_index: index,
+                        siblings,
+                    },
+                )
+            })
+            .unzip();
+
+        // Phase 4: Prune the authentication paths.
+        //
+        // This sorts paths by leaf index, deduplicates, computes the LCA
+        // between each consecutive pair, and strips the shared upper siblings.
+        // The result is a compact proof that can be restored on the verifier
+        // side with zero information loss.
+        let pruned = prune_paths(proof_levels, &shift_schedule, &auth_paths);
+
+        PrunedBatchOpening {
+            opened_values: all_opened_values,
+            pruned_proof: pruned,
+        }
+    }
+
+    /// Verifies a pruned batch opening against the commitment.
+    ///
+    /// Restores full authentication paths from the pruned proof, then verifies
+    /// each one individually using the standard single-index verification logic.
+    ///
+    /// Takes the opening **by value** to avoid deep-cloning the three-level
+    /// nested opened-values structure on return.
+    ///
+    /// # Returns
+    ///
+    /// On success, the opened matrix rows for each query (moved, not cloned).
+    /// On failure, a verification error.
+    pub fn verify_batch_pruned(
+        &self,
+        commit: &<Self as Mmcs<P::Value>>::Commitment,
+        dimensions: &[Dimensions],
+        pruned_opening: PrunedBatchOpening<P::Value, PW::Value, DIGEST_ELEMS>,
+    ) -> Result<Vec<Vec<Vec<P::Value>>>, MerkleTreeError>
+    where
+        P: PackedValue,
+        PW: PackedValue,
+        H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
+            + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+            + Sync,
+        C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>
+            + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>
+            + Sync,
+        PW::Value: Eq + Clone,
+        [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
+    {
+        // Phase 1: Derive the expected full-path sibling count from the
+        // verifier-known dimensions, *not* from the proof.
+        //
+        // Each schedule entry contributes `step - 1` siblings: one of the
+        // step children is the queried node itself, the rest are siblings.
+        //
+        //   schedule = [4, 2]   → 3 + 1 = 4 expected siblings
+        //   schedule = [2, 2, 2] → 1 + 1 + 1 = 3 expected siblings
+        let proof_arity = self.proof_arity_schedule(dimensions)?;
+        let full_sibling_count: usize = proof_arity.iter().map(|step| step - 1).sum();
+
+        // Phase 2: Restore the full (unpruned) authentication paths from
+        // the compact representation. This copies shared upper siblings
+        // from each predecessor in a single forward pass.
+        let restored = restore_paths(&pruned_opening.pruned_proof, full_sibling_count)
+            .ok_or(MalformedPrunedProof)?;
+
+        // The number of restored paths must match the number of query openings.
+        if restored.len() != pruned_opening.opened_values.len() {
+            return Err(WrongBatchSize);
+        }
+
+        // Phase 3: Verify each restored path individually against the commitment.
+        //
+        // Each path's flat sibling buffer is borrowed directly — no cloning.
+        // The standard single-index verification hashes the opened values,
+        // replays the arity schedule, and checks the result against the cap.
+        //
+        // TODO: amortize verifier cost across paths the same way the proof
+        // is amortized — shared upper-level compressions are recomputed once
+        // per path instead of once per shared subtree.
+        for (auth_path, opened) in restored.iter().zip(&pruned_opening.opened_values) {
+            let batch_ref = BatchOpeningRef::new(opened.as_slice(), &auth_path.siblings);
+            self.verify_batch(commit, dimensions, auth_path.leaf_index, batch_ref)?;
+        }
+
+        // Move the opened values out of the consumed struct — zero-copy return.
+        Ok(pruned_opening.opened_values)
+    }
+}
+
+/// A batch opening with pruned Merkle authentication paths.
+///
+/// The pruned equivalent of opening multiple indices individually.
+/// Shared sibling digests between queries are removed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound(serialize = "T: Serialize, [D; DIGEST_ELEMS]: Serialize"))]
+#[serde(bound(
+    deserialize = "T: serde::de::DeserializeOwned, [D; DIGEST_ELEMS]: serde::de::DeserializeOwned"
+))]
+pub struct PrunedBatchOpening<T, D, const DIGEST_ELEMS: usize> {
+    /// Opened matrix rows for each query, in original input order.
+    /// Outer index = query, middle index = matrix, inner = row elements.
+    pub opened_values: Vec<Vec<Vec<T>>>,
+
+    /// Compact authentication paths with redundant siblings removed.
+    pub pruned_proof: crate::pruning::PrunedMerklePaths<D, DIGEST_ELEMS>,
 }
 
 impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize> Mmcs<P::Value>
@@ -554,7 +941,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
+    use alloc::vec::Vec;
+    use alloc::{format, vec};
 
     use itertools::Itertools;
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
@@ -565,6 +953,7 @@ mod tests {
     use p3_symmetric::{
         CryptographicHasher, PaddingFreeSponge, PseudoCompressionFunction, TruncatedPermutation,
     };
+    use proptest::prelude::*;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -1537,6 +1926,340 @@ mod tests {
                     prop_assert_eq!(&opened_values[0], &expected);
                 }
             }
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Pruned opening integration tests
+    // ----------------------------------------------------------------
+
+    fn make_binary_mmcs(seed: u64) -> MyMmcs {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        MyMmcs::new(hash, compress, 0)
+    }
+
+    fn make_4ary_mmcs_pruning(seed: u64) -> MyMmcs4 {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let perm16 = Perm::new_from_rng_128(&mut rng);
+        let perm32 = PermWide::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm16);
+        let compress = MyCompress4::new(perm32);
+        MyMmcs4::new(hash, compress, 0)
+    }
+
+    #[test]
+    fn pruned_opening_matches_individual_binary() {
+        let seed = 42u64;
+        let mmcs = make_binary_mmcs(seed);
+
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 32, 4);
+        let dims = vec![mat.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        let indices: Vec<usize> = vec![0, 5, 7, 12, 15, 20, 31];
+
+        // Open individually.
+        let individual_openings: Vec<_> = indices
+            .iter()
+            .map(|&i| mmcs.open_batch(i, &prover_data))
+            .collect();
+
+        // Open pruned.
+        let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
+
+        // Check opened values match.
+        for (i, individual) in individual_openings.iter().enumerate() {
+            assert_eq!(
+                pruned_opening.opened_values[i], individual.opened_values,
+                "opened values mismatch at query {i}"
+            );
+        }
+
+        // Verify pruned opening (consumed by value — zero deep-clone).
+        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        assert!(result.is_ok(), "pruned verification should succeed");
+    }
+
+    #[test]
+    fn pruned_opening_4ary_roundtrip() {
+        let seed = 99u64;
+        let mmcs = make_4ary_mmcs_pruning(seed);
+
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 64, 8);
+        let dims = vec![mat.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        let indices: Vec<usize> = vec![0, 1, 10, 20, 30, 40, 50, 63];
+        let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
+
+        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        assert!(result.is_ok(), "4-ary pruned verification should succeed");
+    }
+
+    #[test]
+    fn pruned_opening_rejects_tampered_proof() {
+        let seed = 77u64;
+        let mmcs = make_binary_mmcs(seed);
+
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 16, 4);
+        let dims = vec![mat.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        let indices: Vec<usize> = vec![0, 3, 7, 15];
+        let mut pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
+
+        // Tamper with a sibling digest in the first path.
+        if let Some(first_path) = pruned_opening.pruned_proof.paths.first_mut()
+            && let Some(sibling) = first_path.siblings.first_mut()
+        {
+            sibling[0] = F::from_u32(999999);
+        }
+
+        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        assert!(result.is_err(), "tampered proof should fail verification");
+    }
+
+    #[test]
+    fn pruned_proof_is_smaller_than_individual() {
+        let seed = 55u64;
+        let mmcs = make_binary_mmcs(seed);
+
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 256, 4);
+        let (_, prover_data) = mmcs.commit(vec![mat]);
+
+        let indices: Vec<usize> = vec![0, 1, 2, 3, 10, 11, 100, 101, 200, 201, 254, 255];
+
+        // Count total siblings in individual proofs.
+        let individual_total: usize = indices
+            .iter()
+            .map(|&i| mmcs.open_batch(i, &prover_data).opening_proof.len())
+            .sum();
+
+        // Count total siblings in pruned proof.
+        let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
+        let pruned_total: usize = pruned_opening
+            .pruned_proof
+            .paths
+            .iter()
+            .map(|p| p.siblings.len())
+            .sum();
+
+        assert!(
+            pruned_total < individual_total,
+            "pruned {pruned_total} should be < individual {individual_total}"
+        );
+    }
+
+    #[test]
+    fn pruned_opening_with_duplicate_indices() {
+        let seed = 33u64;
+        let mmcs = make_binary_mmcs(seed);
+
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 16, 4);
+        let dims = vec![mat.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        // Duplicate index 5.
+        let indices: Vec<usize> = vec![5, 10, 5];
+        let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
+
+        // Should have 3 entries in opened_values (preserving duplicates).
+        assert_eq!(pruned_opening.opened_values.len(), 3);
+        assert_eq!(
+            pruned_opening.opened_values[0], pruned_opening.opened_values[2],
+            "duplicate queries should have identical values"
+        );
+
+        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn pruned_opening_mixed_heights() {
+        let seed = 44u64;
+        let mmcs = make_binary_mmcs(seed);
+
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mat1 = RowMajorMatrix::<F>::rand(&mut rng, 32, 4);
+        let mat2 = RowMajorMatrix::<F>::rand(&mut rng, 8, 6);
+        let dims = vec![mat1.dimensions(), mat2.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat1, mat2]);
+
+        let indices: Vec<usize> = vec![0, 7, 15, 31];
+        let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
+
+        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        assert!(
+            result.is_ok(),
+            "mixed-height pruned verification should succeed"
+        );
+    }
+
+    #[test]
+    fn pruned_opening_4ary_mixed_heights() {
+        // 4-ary MMCS with matrices at heights that don't align to the same
+        // power of 4 — the schedule mixes 4-ary steps with binary bridges.
+        let seed = 88u64;
+        let mmcs = make_4ary_mmcs_pruning(seed);
+
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mat1 = RowMajorMatrix::<F>::rand(&mut rng, 64, 4);
+        let mat2 = RowMajorMatrix::<F>::rand(&mut rng, 8, 6);
+        let dims = vec![mat1.dimensions(), mat2.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat1, mat2]);
+
+        let indices: Vec<usize> = vec![0, 5, 17, 33, 50, 63];
+        let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
+
+        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        assert!(
+            result.is_ok(),
+            "4-ary mixed-height pruned verification should succeed"
+        );
+    }
+
+    // Pruned-opening proptests
+
+    proptest! {
+        #[test]
+        fn proptest_pruned_binary_roundtrip(
+            height in 2..128usize,
+            width in 1..16usize,
+            seed in 0u64..=u64::MAX,
+            num_queries in 1..20usize,
+        ) {
+            // Invariant: pruned opening must produce the same opened values
+            // and pass verification identically to individual openings.
+            //
+            // Fixture state: random binary tree (height x width) committed
+            // with a seeded Poseidon2 permutation.
+
+            // Build a binary MMCS and commit a random matrix.
+            let mmcs = make_binary_mmcs(seed);
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let mat = RowMajorMatrix::<F>::rand(&mut rng, height, width);
+            let dims = vec![mat.dimensions()];
+            let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+            // Deterministic pseudo-random query indices (mod height).
+            // Uses a large prime stride (7919) to spread queries across the tree.
+            let indices: Vec<usize> = (0..num_queries)
+                .map(|i| (seed as usize).wrapping_add(i * 7919) % height)
+                .collect();
+
+            // Reference: open each index individually (standard unpruned path).
+            let individual: Vec<_> = indices
+                .iter()
+                .map(|&i| mmcs.open_batch(i, &prover_data))
+                .collect();
+
+            // Test subject: open all indices at once via pruning.
+            let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
+
+            // Check: opened values must be identical for every query.
+            for (i, ind) in individual.iter().enumerate() {
+                prop_assert_eq!(
+                    &pruned_opening.opened_values[i],
+                    &ind.opened_values,
+                );
+            }
+
+            // Check: the pruned proof must verify against the commitment.
+            mmcs.verify_batch_pruned(&commit, &dims, pruned_opening)
+                .map_err(|e| TestCaseError::fail(format!("{e:?}")))?;
+        }
+
+        #[test]
+        fn proptest_pruned_4ary_roundtrip(
+            height in 2..128usize,
+            width in 1..16usize,
+            seed in 0u64..=u64::MAX,
+            num_queries in 1..20usize,
+        ) {
+            // Same invariant as the binary test, but for 4-ary compression.
+            // The arity schedule may include both 4-ary and binary bridge
+            // steps depending on the matrix height.
+
+            let mmcs = make_4ary_mmcs_pruning(seed);
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let mat = RowMajorMatrix::<F>::rand(&mut rng, height, width);
+            let dims = vec![mat.dimensions()];
+            let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+            let indices: Vec<usize> = (0..num_queries)
+                .map(|i| (seed as usize).wrapping_add(i * 7919) % height)
+                .collect();
+
+            // Reference: individual openings.
+            let individual: Vec<_> = indices
+                .iter()
+                .map(|&i| mmcs.open_batch(i, &prover_data))
+                .collect();
+
+            // Test subject: pruned opening.
+            let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
+
+            // Check: identical opened values.
+            for (i, ind) in individual.iter().enumerate() {
+                prop_assert_eq!(
+                    &pruned_opening.opened_values[i],
+                    &ind.opened_values,
+                );
+            }
+
+            // Check: pruned proof verifies.
+            mmcs.verify_batch_pruned(&commit, &dims, pruned_opening)
+                .map_err(|e| TestCaseError::fail(format!("{e:?}")))?;
+        }
+
+        #[test]
+        fn proptest_pruned_proof_size_leq_individual(
+            height in 2..256usize,
+            seed in 0u64..=u64::MAX,
+            num_queries in 2..30usize,
+        ) {
+            // Invariant: the pruned proof must never contain more sibling
+            // digests than the sum of all individual proofs.
+            //
+            // This should hold for any query pattern — clustered queries
+            // save more, spread queries save less, but never go negative.
+
+            let mmcs = make_binary_mmcs(seed);
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let mat = RowMajorMatrix::<F>::rand(&mut rng, height, 4);
+            let (_, prover_data) = mmcs.commit(vec![mat]);
+
+            let indices: Vec<usize> = (0..num_queries)
+                .map(|i| (seed as usize).wrapping_add(i * 7919) % height)
+                .collect();
+
+            // Sum of individual proof sizes (unpruned baseline).
+            let individual_total: usize = indices
+                .iter()
+                .map(|&i| mmcs.open_batch(i, &prover_data).opening_proof.len())
+                .sum();
+
+            // Pruned proof total.
+            let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
+            let pruned_total: usize = pruned_opening
+                .pruned_proof
+                .paths
+                .iter()
+                .map(|p| p.siblings.len())
+                .sum();
+
+            prop_assert!(
+                pruned_total <= individual_total,
+                "pruned {} > individual {}", pruned_total, individual_total
+            );
         }
     }
 }

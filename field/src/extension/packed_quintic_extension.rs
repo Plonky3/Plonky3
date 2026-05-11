@@ -195,73 +195,12 @@ where
     }
 }
 
-// SAFETY: Memory layout is compatible with `[QuinticTrinomialExtensionField<F>; WIDTH]`.
-unsafe impl<F, PF> PackedValue for PackedQuinticTrinomialExtensionField<F, PF>
-where
-    F: QuinticTrinomialExtendable,
-    PF: PackedField<Scalar = F>,
-{
-    type Value = QuinticTrinomialExtensionField<F>;
-
-    const WIDTH: usize = PF::WIDTH;
-
-    #[inline]
-    fn from_slice(slice: &[Self::Value]) -> &Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe { &*slice.as_ptr().cast() }
-    }
-
-    #[inline]
-    fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe { &mut *slice.as_mut_ptr().cast() }
-    }
-
-    #[inline]
-    fn from_fn<Fn: FnMut(usize) -> Self::Value>(mut f: Fn) -> Self {
-        let mut result = Self::default();
-        for i in 0..Self::WIDTH {
-            let val = f(i);
-            for j in 0..5 {
-                result.value[j].as_slice_mut()[i] = val.value[j];
-            }
-        }
-        result
-    }
-
-    #[inline]
-    fn as_slice(&self) -> &[Self::Value] {
-        unsafe {
-            core::slice::from_raw_parts(self as *const Self as *const Self::Value, Self::WIDTH)
-        }
-    }
-
-    #[inline]
-    fn as_slice_mut(&mut self) -> &mut [Self::Value] {
-        unsafe {
-            core::slice::from_raw_parts_mut(self as *mut Self as *mut Self::Value, Self::WIDTH)
-        }
-    }
-}
-
-// SAFETY: Implements all required trait bounds.
-unsafe impl<F, PF> PackedField for PackedQuinticTrinomialExtensionField<F, PF>
-where
-    F: QuinticTrinomialExtendable,
-    PF: PackedField<Scalar = F>,
-{
-    type Scalar = QuinticTrinomialExtensionField<F>;
-}
-
 impl<F: QuinticTrinomialExtendable> PackedFieldExtension<F, QuinticTrinomialExtensionField<F>>
     for PackedQuinticTrinomialExtensionField<F, F::Packing>
 {
     #[inline]
-    fn from_ext_slice(ext_slice: &[QuinticTrinomialExtensionField<F>]) -> Self {
-        let width = F::Packing::WIDTH;
-        assert_eq!(ext_slice.len(), width);
-
-        Self::new(F::Packing::pack_columns_fn(|lane| ext_slice[lane].value))
+    fn from_ext_fn(f: impl Fn(usize) -> QuinticTrinomialExtensionField<F>) -> Self {
+        Self::new(F::Packing::pack_columns_fn(|lane| f(lane).value))
     }
 
     #[inline]
@@ -598,28 +537,18 @@ where
     }
 }
 
-impl<F, PF> Div for PackedQuinticTrinomialExtensionField<F, PF>
-where
-    F: QuinticTrinomialExtendable,
-    PF: PackedField<Scalar = F>,
-{
+impl<F: QuinticTrinomialExtendable> Div for PackedQuinticTrinomialExtensionField<F, F::Packing> {
     type Output = Self;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
     #[inline]
     fn div(self, rhs: Self) -> Self {
-        let mut rhs_inv = Self::broadcast(QuinticTrinomialExtensionField::<F>::ZERO);
-        crate::batch_multiplicative_inverse_general(rhs.as_slice(), rhs_inv.as_slice_mut(), |x| {
-            x.inverse()
-        });
-        self * rhs_inv
+        self * crate::invert_packed_extension::<F, QuinticTrinomialExtensionField<F>>(rhs)
     }
 }
 
-impl<F, PF> DivAssign for PackedQuinticTrinomialExtensionField<F, PF>
-where
-    F: QuinticTrinomialExtendable,
-    PF: PackedField<Scalar = F>,
+impl<F: QuinticTrinomialExtendable> DivAssign
+    for PackedQuinticTrinomialExtensionField<F, F::Packing>
 {
     #[inline]
     fn div_assign(&mut self, rhs: Self) {

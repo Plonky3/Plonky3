@@ -23,6 +23,7 @@ pub mod bitrev;
 pub mod dense;
 pub mod extension;
 pub mod horizontally_truncated;
+pub mod interpolation;
 pub mod row_index_mapped;
 pub mod stack;
 pub mod strided;

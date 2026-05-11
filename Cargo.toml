@@ -16,7 +16,6 @@ members = [
     "field-testing",
     "fri",
     "goldilocks",
-    "interpolation",
     "keccak",
     "keccak-air",
     "koala-bear",
@@ -40,6 +39,7 @@ members = [
     "uni-stark",
     "util",
     "whir",
+    "zk-codes",
 ]
 
 [workspace.lints]
@@ -68,7 +68,7 @@ cognitive_complexity = "allow"
 blake3 = { version = "1.8", default-features = false }
 clap = { version = "4.5.60", features = ["derive"] }
 criterion = "0.8"
-hashbrown = "0.16.1"
+hashbrown = "0.17.0"
 hex-literal = "1.1.0"
 itertools = { version = "0.14.0", default-features = false, features = ["use_alloc"] }
 libm = "0.2"
@@ -106,7 +106,6 @@ p3-field = { path = "field", version = "0.5.1" }
 p3-field-testing = { path = "field-testing", version = "0.5.1" }
 p3-fri = { path = "fri", version = "0.5.1" }
 p3-goldilocks = { path = "goldilocks", version = "0.5.1" }
-p3-interpolation = { path = "interpolation", version = "0.5.1" }
 p3-keccak = { path = "keccak", version = "0.5.1" }
 p3-keccak-air = { path = "keccak-air", version = "0.5.1" }
 p3-koala-bear = { path = "koala-bear", version = "0.5.1" }
@@ -130,6 +129,7 @@ p3-symmetric = { path = "symmetric", version = "0.5.1" }
 p3-uni-stark = { path = "uni-stark", version = "0.5.1" }
 p3-util = { path = "util", version = "0.5.1" }
 p3-whir = { path = "whir", version = "0.5.1" }
+p3-zk-codes = { path = "zk-codes", version = "0.5.1" }
 
 [workspace.package]
 # General description field used for the sub-crates that are currently missing a description.

@@ -182,6 +182,135 @@ impl<F: Field> Butterfly<F> for DitButterfly<F> {
         let x_2_twiddle = x_2 * self.0;
         (x_1 + x_2_twiddle, x_1 - x_2_twiddle)
     }
+
+    /// Override `apply_to_rows` to pre-broadcast the twiddle factor into a packed field
+    /// once before the inner loop, avoiding a scalar-to-vector broadcast on each packed
+    /// multiplication. For wide rows (e.g., 256 columns with AVX512 width=16, giving 16
+    /// packed iterations per row-pair), this eliminates 15 redundant broadcasts per call.
+    #[inline]
+    fn apply_to_rows(&self, row_1: &mut [F], row_2: &mut [F]) {
+        let (shorts_1, suffix_1) = F::Packing::pack_slice_with_suffix_mut(row_1);
+        let (shorts_2, suffix_2) = F::Packing::pack_slice_with_suffix_mut(row_2);
+        debug_assert_eq!(shorts_1.len(), shorts_2.len());
+        debug_assert_eq!(suffix_1.len(), suffix_2.len());
+        // Pre-broadcast the scalar twiddle into a packed field once outside the loop.
+        let twiddle_packed = F::Packing::from(self.0);
+        for (x_1, x_2) in shorts_1.iter_mut().zip(shorts_2.iter_mut()) {
+            let x_2_twiddle = *x_2 * twiddle_packed;
+            let new_x1 = *x_1 + x_2_twiddle;
+            *x_2 = *x_1 - x_2_twiddle;
+            *x_1 = new_x1;
+        }
+        for (x_1, x_2) in suffix_1.iter_mut().zip(suffix_2.iter_mut()) {
+            self.apply_in_place(x_1, x_2);
+        }
+    }
+
+    /// Override `apply_to_rows_oop` similarly, pre-broadcasting the twiddle once.
+    #[inline]
+    fn apply_to_rows_oop(
+        &self,
+        src_1: &[F],
+        dst_1: &mut [MaybeUninit<F>],
+        src_2: &[F],
+        dst_2: &mut [MaybeUninit<F>],
+    ) {
+        let (src_shorts_1, src_suffix_1) = F::Packing::pack_slice_with_suffix(src_1);
+        let (src_shorts_2, src_suffix_2) = F::Packing::pack_slice_with_suffix(src_2);
+        let (dst_shorts_1, dst_suffix_1) =
+            F::Packing::pack_maybe_uninit_slice_with_suffix_mut(dst_1);
+        let (dst_shorts_2, dst_suffix_2) =
+            F::Packing::pack_maybe_uninit_slice_with_suffix_mut(dst_2);
+        debug_assert_eq!(src_shorts_1.len(), src_shorts_2.len());
+        debug_assert_eq!(src_suffix_1.len(), src_suffix_2.len());
+        debug_assert_eq!(dst_shorts_1.len(), dst_shorts_2.len());
+        debug_assert_eq!(dst_suffix_1.len(), dst_suffix_2.len());
+        // Pre-broadcast the scalar twiddle into a packed field once outside the loop.
+        let twiddle_packed = F::Packing::from(self.0);
+        for (s_1, s_2, d_1, d_2) in izip!(src_shorts_1, src_shorts_2, dst_shorts_1, dst_shorts_2) {
+            let x_2_twiddle = *s_2 * twiddle_packed;
+            d_1.write(*s_1 + x_2_twiddle);
+            d_2.write(*s_1 - x_2_twiddle);
+        }
+        for (s_1, s_2, d_1, d_2) in izip!(src_suffix_1, src_suffix_2, dst_suffix_1, dst_suffix_2) {
+            let (res_1, res_2) = self.apply(*s_1, *s_2);
+            d_1.write(res_1);
+            d_2.write(res_2);
+        }
+    }
+}
+
+/// DIT (Decimation-In-Time) butterfly operation with a post-multiplication scale factor.
+///
+/// This butterfly computes:
+/// ```text
+///   output_1 = (x1 + x2 * twiddle) * scale
+///   output_2 = (x1 - x2 * twiddle) * scale
+/// ```
+/// which is equivalent to:
+/// ```text
+///   output_1 = x1 * scale + x2 * (twiddle * scale)
+///   output_2 = x1 * scale - x2 * (twiddle * scale)
+/// ```
+///
+/// This is used to merge a uniform scaling step (e.g., 1/N normalization in inverse DFT)
+/// into a butterfly pass, avoiding a separate memory pass over the data.
+///
+/// The struct stores `scale` and `twiddle_times_scale = twiddle * scale` so that the
+/// `apply` method only needs 2 multiplications instead of 3.
+#[derive(Copy, Clone)]
+pub struct ScaledDitButterfly<F> {
+    pub twiddle: F,
+    pub scale: F,
+    /// Precomputed product `twiddle * scale` to reduce multiplications in the hot loop.
+    pub twiddle_times_scale: F,
+}
+
+impl<F: Field> ScaledDitButterfly<F> {
+    /// Construct a `ScaledDitButterfly`, precomputing `twiddle * scale`.
+    #[inline]
+    pub fn new(twiddle: F, scale: F) -> Self {
+        Self {
+            twiddle,
+            scale,
+            twiddle_times_scale: twiddle * scale,
+        }
+    }
+}
+
+impl<F: Field> Butterfly<F> for ScaledDitButterfly<F> {
+    #[inline]
+    fn apply<PF: PackedField<Scalar = F>>(&self, x_1: PF, x_2: PF) -> (PF, PF) {
+        // 2 multiplications instead of 3:
+        //   x1_s   = x1 * scale
+        //   x2_ts  = x2 * (twiddle * scale)   [precomputed]
+        //   out1   = x1_s + x2_ts
+        //   out2   = x1_s - x2_ts
+        let x_1_scale = x_1 * self.scale;
+        let x_2_twiddle_scale = x_2 * self.twiddle_times_scale;
+        (x_1_scale + x_2_twiddle_scale, x_1_scale - x_2_twiddle_scale)
+    }
+
+    /// Override `apply_to_rows` to pre-broadcast both `scale` and `twiddle_times_scale`
+    /// into packed fields once before the inner loop.
+    #[inline]
+    fn apply_to_rows(&self, row_1: &mut [F], row_2: &mut [F]) {
+        let (shorts_1, suffix_1) = F::Packing::pack_slice_with_suffix_mut(row_1);
+        let (shorts_2, suffix_2) = F::Packing::pack_slice_with_suffix_mut(row_2);
+        debug_assert_eq!(shorts_1.len(), shorts_2.len());
+        debug_assert_eq!(suffix_1.len(), suffix_2.len());
+        let scale_packed = F::Packing::from(self.scale);
+        let twiddle_times_scale_packed = F::Packing::from(self.twiddle_times_scale);
+        for (x_1, x_2) in shorts_1.iter_mut().zip(shorts_2.iter_mut()) {
+            let x_1_scale = *x_1 * scale_packed;
+            let x_2_twiddle_scale = *x_2 * twiddle_times_scale_packed;
+            *x_1 = x_1_scale + x_2_twiddle_scale;
+            *x_2 = x_1_scale - x_2_twiddle_scale;
+        }
+        for (x_1, x_2) in suffix_1.iter_mut().zip(suffix_2.iter_mut()) {
+            self.apply_in_place(x_1, x_2);
+        }
+    }
 }
 
 /// Butterfly with no twiddle factor (`twiddle = 1`).

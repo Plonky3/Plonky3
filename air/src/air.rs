@@ -15,6 +15,16 @@ pub trait BaseAir<F>: Sync {
         None
     }
 
+    /// Width of the preprocessed trace, in columns.
+    ///
+    /// Defaults to `0`, matching the default [`Self::preprocessed_trace`] of
+    /// `None`. Implementors that override [`Self::preprocessed_trace`] **must**
+    /// also override this method to return a matching width — callers use this
+    /// to size symbolic builders without materializing the preprocessed matrix.
+    fn preprocessed_width(&self) -> usize {
+        0
+    }
+
     /// Return the number of periodic columns.
     ///
     /// Override when this AIR uses periodic columns; see [`Self::periodic_columns`].
@@ -123,9 +133,7 @@ pub trait BaseAir<F>: Sync {
     /// access an offset-1 preprocessed entry) can override this to return an
     /// empty vector to allow the prover and verifier to open only at `zeta`.
     fn preprocessed_next_row_columns(&self) -> Vec<usize> {
-        self.preprocessed_trace()
-            .map(|t| (0..t.width).collect())
-            .unwrap_or_default()
+        (0..self.preprocessed_width()).collect()
     }
 
     /// Optional hint for the number of constraints in this AIR.

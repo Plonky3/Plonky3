@@ -219,7 +219,7 @@ impl<F: Field> EqStatement<F> {
     /// # Panics
     /// Panics if the number of variables in the `point` does not match the statement.
     pub fn add_evaluated_constraint(&mut self, point: Point<F>, eval: F) {
-        assert_eq!(point.num_vars(), self.num_variables());
+        assert_eq!(point.num_variables(), self.num_variables());
         self.points.push(point);
         self.evaluations.push(eval);
     }
@@ -305,7 +305,7 @@ impl<F: Field> EqStatement<F> {
         let k = self.num_variables();
         let k_pack = log2_strict_usize(Base::Packing::WIDTH);
         assert!(k >= k_pack);
-        assert_eq!(weights.num_vars() + k_pack, k);
+        assert_eq!(weights.num_variables() + k_pack, k);
 
         // Combine expected evaluations: S = ∑_i γ^i * s_i
         self.combine_evals(sum, challenge);
@@ -402,7 +402,7 @@ mod tests {
             // Validate that each point has the correct number of variables.
             let num_variables = points
                 .iter()
-                .map(Point::num_vars)
+                .map(Point::num_variables)
                 .all_equal_value()
                 .unwrap();
             Self {
@@ -635,7 +635,7 @@ mod tests {
             statement.combine_hypercube::<_, false>(&mut combined_poly, &mut combined_sum, gamma);
 
             // Combined polynomial should have same number of variables
-            prop_assert_eq!(combined_poly.num_vars(), 4);
+            prop_assert_eq!(combined_poly.num_variables(), 4);
 
             // Combined evaluations should match combine result
             let mut claimed_eval = F::ZERO;

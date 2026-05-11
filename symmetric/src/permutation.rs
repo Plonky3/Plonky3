@@ -19,3 +19,8 @@ pub trait Permutation<T: Clone>: Clone + Sync {
 /// A permutation thought to be cryptographically secure, in the sense that it is thought to be
 /// difficult to distinguish (in a nontrivial way) from a random permutation.
 pub trait CryptographicPermutation<T: Clone>: Permutation<T> {}
+
+/// A derangement: a permutation with no fixed points (d(x) != x for all x).
+///
+/// The standard choice is d(x) = x + 1 (via `Increment`).
+pub trait Derangement<T: Clone>: Permutation<T> {}

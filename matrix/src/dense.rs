@@ -545,6 +545,90 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
         Self::new(values, cols)
     }
 
+    /// Return a copy of this matrix with additional columns filled with random
+    /// values appended on the right.
+    ///
+    /// The original columns are preserved unchanged and the new trailing
+    /// columns in each row are populated independently from the provided
+    /// random number generator.
+    ///
+    /// # Memory Layout
+    ///
+    /// ```text
+    ///     Original (h × w):          Result (h × (w + num_cols)):
+    ///     [ a00  a01  …  a0w ]  →    [ a00  a01  …  a0w | r0  r1  …  rN ]
+    ///     [ a10  a11  …  a1w ]       [ a10  a11  …  a1w | r0  r1  …  rN ]
+    ///     …                          …
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// - `num_cols`: number of random columns to append.
+    /// - `rng`: random number generator used to sample each new element.
+    ///
+    /// # Returns
+    ///
+    /// A new matrix with width equal to `self.width() + num_cols`.
+    #[instrument(level = "debug", skip_all)]
+    pub fn with_random_cols<R>(&self, num_cols: usize, mut rng: R) -> Self
+    where
+        T: Field,
+        R: Rng + Send + Sync,
+        StandardUniform: Distribution<T>,
+    {
+        // Record the original width so we know where to split each row.
+        let old_w = self.width();
+        let new_w = old_w + num_cols;
+
+        // Allocate a zero-initialized buffer for the widened matrix.
+        let new_values = T::zero_vec(new_w * self.height());
+        let mut result = Self::new(new_values, new_w);
+
+        // - Copy original data into the left portion of each row,
+        // - Then fill the right portion with independent random samples.
+        result
+            .rows_mut()
+            .zip(self.row_slices())
+            .for_each(|(new_row, old_row)| {
+                new_row[..old_w].copy_from_slice(old_row);
+                new_row[old_w..].iter_mut().for_each(|v| *v = rng.random());
+            });
+        result
+    }
+
+    /// Return a copy of this matrix with additional zero-filled columns
+    /// appended on the right.
+    ///
+    /// Delegates to cloning the matrix and calling the in-place widening
+    /// method with a zero fill value.
+    ///
+    /// # Memory Layout
+    ///
+    /// ```text
+    ///     Original (h × w):          Result (h × (w + num_cols)):
+    ///     [ a00  a01  …  a0w ]  →    [ a00  a01  …  a0w | 0  0  …  0 ]
+    ///     [ a10  a11  …  a1w ]       [ a10  a11  …  a1w | 0  0  …  0 ]
+    ///     …                          …
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// - `num_cols`: number of zero columns to append.
+    ///
+    /// # Returns
+    ///
+    /// A new matrix with width equal to `self.width() + num_cols`.
+    #[instrument(level = "debug", skip_all)]
+    pub fn with_zero_cols(&self, num_cols: usize) -> Self
+    where
+        T: Field,
+    {
+        // Clone the original matrix and widen it in-place with zero fill.
+        let mut result = self.clone();
+        result.widen_right(num_cols, T::ZERO);
+        result
+    }
+
     pub fn pad_to_height(&mut self, new_height: usize, fill: T) {
         assert!(new_height >= self.height());
         self.values.resize(self.width * new_height, fill);
@@ -757,7 +841,9 @@ impl<'a, T: Clone + Default + Send + Sync> RowMajorMatrixView<'a, T> {
 #[cfg(test)]
 mod tests {
     use p3_baby_bear::BabyBear;
-    use p3_field::FieldArray;
+    use p3_field::{FieldArray, PrimeCharacteristicRing};
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
 
     use super::*;
 
@@ -1730,5 +1816,205 @@ mod tests {
                 Packed::from([BabyBear::new(16), BabyBear::new(4)]),
             ]
         );
+    }
+
+    #[test]
+    fn test_with_zero_cols() {
+        // Test 1: Append 2 zero columns to a 2×3 matrix.
+        //
+        //     Original:             Result:
+        //     [ 1  2  3 ]    →      [ 1  2  3  0  0 ]
+        //     [ 4  5  6 ]           [ 4  5  6  0  0 ]
+        let mat: RowMajorMatrix<BabyBear> =
+            RowMajorMatrix::new((1..=6).map(BabyBear::new).collect(), 3);
+        let widened = mat.with_zero_cols(2);
+
+        // Verify the new dimensions: width grows by 2, height stays the same.
+        assert_eq!(widened.width(), 5);
+        assert_eq!(widened.height(), 2);
+
+        // Row 0: original values followed by zeros.
+        assert_eq!(
+            widened.row_slices().next().unwrap(),
+            &[
+                BabyBear::new(1),
+                BabyBear::new(2),
+                BabyBear::new(3),
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+            ]
+        );
+
+        // Row 1: original values followed by zeros.
+        assert_eq!(
+            widened.row_slices().nth(1).unwrap(),
+            &[
+                BabyBear::new(4),
+                BabyBear::new(5),
+                BabyBear::new(6),
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+            ]
+        );
+
+        // Test 2: Appending 0 columns returns an identical copy.
+        let same = mat.with_zero_cols(0);
+        assert_eq!(same.width(), mat.width());
+        assert_eq!(same.values, mat.values);
+
+        // Test 3: Single-row matrix.
+        //
+        //     [ 7  8 ]  →  [ 7  8  0  0  0 ]
+        let single_row: RowMajorMatrix<BabyBear> =
+            RowMajorMatrix::new(vec![BabyBear::new(7), BabyBear::new(8)], 2);
+        let widened = single_row.with_zero_cols(3);
+        assert_eq!(widened.width(), 5);
+        assert_eq!(widened.height(), 1);
+        assert_eq!(
+            widened.row_slices().next().unwrap(),
+            &[
+                BabyBear::new(7),
+                BabyBear::new(8),
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+                BabyBear::ZERO,
+            ]
+        );
+
+        // Test 4: Single-column matrix widened to 3 columns.
+        //
+        //     [ 1 ]        [ 1  0  0 ]
+        //     [ 2 ]   →    [ 2  0  0 ]
+        //     [ 3 ]        [ 3  0  0 ]
+        let single_col: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(
+            vec![BabyBear::new(1), BabyBear::new(2), BabyBear::new(3)],
+            1,
+        );
+        let widened = single_col.with_zero_cols(2);
+        assert_eq!(widened.width(), 3);
+        assert_eq!(widened.height(), 3);
+        for (i, row) in widened.row_slices().enumerate() {
+            // Each row has the original value followed by two zeros.
+            assert_eq!(row[0], BabyBear::new((i + 1) as u32));
+            assert_eq!(row[1], BabyBear::ZERO);
+            assert_eq!(row[2], BabyBear::ZERO);
+        }
+
+        // Test 5: Empty matrix stays empty with updated width.
+        let empty: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(vec![], 3);
+        let widened = empty.with_zero_cols(2);
+        assert_eq!(widened.width(), 5);
+        assert_eq!(widened.height(), 0);
+        assert!(widened.values.is_empty());
+    }
+
+    #[test]
+    fn test_with_zero_cols_matches_widen_right() {
+        // Both paths must produce identical results: cloning + in-place widen
+        // with zero fill versus the dedicated method.
+        //
+        //     Original (3×4):
+        //     [  1   2   3   4 ]
+        //     [  5   6   7   8 ]
+        //     [  9  10  11  12 ]
+        let mat: RowMajorMatrix<BabyBear> =
+            RowMajorMatrix::new((1..=12).map(BabyBear::new).collect(), 4);
+
+        // Produce the result via the functional method.
+        let via_method = mat.with_zero_cols(3);
+
+        // Produce the result via move + in-place widen.
+        let mut via_widen = mat;
+        via_widen.widen_right(3, BabyBear::ZERO);
+
+        // Both matrices must be identical in dimensions and content.
+        assert_eq!(via_method.width(), via_widen.width());
+        assert_eq!(via_method.height(), via_widen.height());
+        assert_eq!(via_method.values, via_widen.values);
+    }
+
+    #[test]
+    fn test_with_random_cols() {
+        // Append 3 random columns to a 2×2 matrix using a seeded RNG.
+        // We replay the same seed independently to build the exact expected
+        // matrix, so the assertion is fully deterministic.
+        //
+        //     Original:          Result:
+        //     [ 1  2 ]    →      [ 1  2  r00  r01  r02 ]
+        //     [ 3  4 ]           [ 3  4  r10  r11  r12 ]
+        let mat: RowMajorMatrix<BabyBear> =
+            RowMajorMatrix::new((1..=4).map(BabyBear::new).collect(), 2);
+
+        let seed = 42u64;
+        let widened = mat.with_random_cols(3, SmallRng::seed_from_u64(seed));
+
+        // Verify dimensions: width grows by 3, height unchanged.
+        assert_eq!(widened.width(), 5);
+        assert_eq!(widened.height(), 2);
+
+        // Replay the same seed to produce the expected random values in the
+        // exact same order the method consumes them: row-by-row, left to right
+        // within the appended portion.
+        let mut reference_rng = SmallRng::seed_from_u64(seed);
+        for (new_row, old_row) in widened.row_slices().zip(mat.row_slices()) {
+            // Left portion must be the original data, unchanged.
+            assert_eq!(&new_row[..2], old_row);
+
+            // Right portion must match the reference RNG output exactly.
+            for val in &new_row[2..] {
+                let expected: BabyBear = reference_rng.random();
+                assert_eq!(*val, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn test_with_random_cols_zero_extra() {
+        // Appending 0 random columns returns an exact copy of the original.
+        let mat: RowMajorMatrix<BabyBear> =
+            RowMajorMatrix::new((1..=6).map(BabyBear::new).collect(), 3);
+        let same = mat.with_random_cols(0, SmallRng::seed_from_u64(0));
+        assert_eq!(same.width(), mat.width());
+        assert_eq!(same.values, mat.values);
+    }
+
+    #[test]
+    fn test_with_random_cols_empty_matrix() {
+        // An empty matrix (0 rows) remains empty with updated width.
+        let empty: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(vec![], 3);
+        let widened = empty.with_random_cols(2, SmallRng::seed_from_u64(0));
+        assert_eq!(widened.width(), 5);
+        assert_eq!(widened.height(), 0);
+        assert!(widened.values.is_empty());
+    }
+
+    #[test]
+    fn test_with_random_cols_different_seeds() {
+        // Verify that two different seeds each produce the correct output by
+        // replaying both seeds independently. This is fully deterministic.
+        let mat: RowMajorMatrix<BabyBear> =
+            RowMajorMatrix::new((1..=4).map(BabyBear::new).collect(), 2);
+
+        let num_random = 4;
+        let seed_a = 1u64;
+        let seed_b = 2u64;
+
+        let result_a = mat.with_random_cols(num_random, SmallRng::seed_from_u64(seed_a));
+        let result_b = mat.with_random_cols(num_random, SmallRng::seed_from_u64(seed_b));
+
+        // Replay each seed and verify every element exactly.
+        for (seed, result) in [(seed_a, &result_a), (seed_b, &result_b)] {
+            let mut reference_rng = SmallRng::seed_from_u64(seed);
+            for (new_row, old_row) in result.row_slices().zip(mat.row_slices()) {
+                // Left portion must be the original data, unchanged.
+                assert_eq!(&new_row[..2], old_row);
+
+                // Right portion must match the reference RNG output exactly.
+                for val in &new_row[2..] {
+                    let expected: BabyBear = reference_rng.random();
+                    assert_eq!(*val, expected);
+                }
+            }
+        }
     }
 }
