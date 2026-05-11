@@ -29,10 +29,7 @@ fn duplicate_domain_with_matching_target_should_return_none() {
     // Three rows, with x_coords[0] == x_coords[2] but different values
     // in those rows — the interpolation problem is ill-posed.
     let xs = [F::ONE, F::TWO, F::ONE];
-    let evals = RowMajorMatrix::new(
-        vec![F::from_u32(10), F::from_u32(20), F::from_u32(30)],
-        1,
-    );
+    let evals = RowMajorMatrix::new(vec![F::from_u32(10), F::from_u32(20), F::from_u32(30)], 1);
 
     // Per the docstring, duplicate domain → None.
     let result = evals.interpolate_arbitrary_point(&xs, F::ONE);
@@ -49,10 +46,7 @@ fn duplicate_domain_with_non_matching_target_returns_none() {
     // catches the duplicate. This is the working path; included for
     // contrast.
     let xs = [F::ONE, F::TWO, F::ONE];
-    let evals = RowMajorMatrix::new(
-        vec![F::from_u32(10), F::from_u32(20), F::from_u32(30)],
-        1,
-    );
+    let evals = RowMajorMatrix::new(vec![F::from_u32(10), F::from_u32(20), F::from_u32(30)], 1);
 
     let result = evals.interpolate_arbitrary_point(&xs, F::from_u32(99));
     assert_eq!(result, None, "non-matching target on duplicate domain");
