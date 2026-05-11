@@ -1,4 +1,3 @@
-use alloc::vec::Vec;
 use core::borrow::BorrowMut;
 
 use p3_field::{Field, PrimeCharacteristicRing, scale_slice_in_place_single_core};
@@ -28,16 +27,28 @@ pub fn divide_by_height<F: Field, S: DenseStorage<F> + BorrowMut<[F]>>(
 
 /// Multiply each element of row `i` of `mat` by `shift**i`.
 ///
-/// Precomputes all powers of `shift` up front so rows can be scaled in parallel.
+/// Scales row chunks in parallel, computing one starting power per chunk and
+/// then advancing it row-by-row inside the chunk.
 pub(crate) fn coset_shift_cols<F: Field>(mat: &mut RowMajorMatrix<F>, shift: F) {
     if shift == F::ONE {
         return;
     }
 
-    let weights: Vec<F> = shift.powers().collect_n(mat.height());
-    mat.par_rows_mut()
-        .zip(weights.into_par_iter())
-        .for_each(|(row, weight)| scale_slice_in_place_single_core(row, weight));
+    // Keep chunks large enough to amortize the starting-power exponentiation,
+    // but small enough to avoid allocating one weight per row.
+    const TARGET_CHUNK_VALUES: usize = 1 << 15;
+    let width = mat.width();
+    let chunk_rows = (TARGET_CHUNK_VALUES / width).max(1);
+
+    mat.par_row_chunks_mut(chunk_rows)
+        .enumerate()
+        .for_each(|(chunk_idx, mut rows)| {
+            let mut weight = shift.exp_u64((chunk_idx * chunk_rows) as u64);
+            for row in rows.rows_mut() {
+                scale_slice_in_place_single_core(row, weight);
+                weight *= shift;
+            }
+        });
 }
 
 #[cfg(test)]
@@ -143,18 +154,17 @@ mod tests {
     }
 
     #[test]
-    fn test_coset_shift_cols_identity_shift() {
-        // shift = 1 → all weights = 1 → matrix should remain unchanged
+    fn test_coset_shift_cols_early_return_for_one_shift() {
+        // shift = 1 takes the early-return path and leaves the matrix unchanged.
         let mut mat = RowMajorMatrix::new(
             vec![F::from_u8(7), F::from_u8(8), F::from_u8(9), F::from_u8(10)],
             2,
         );
+        let expected = mat.clone();
 
-        coset_shift_cols(&mut mat, F::from_u8(1));
+        coset_shift_cols(&mut mat, F::ONE);
 
-        let expected = vec![F::from_u8(7), F::from_u8(8), F::from_u8(9), F::from_u8(10)];
-
-        assert_eq!(mat.values, expected);
+        assert_eq!(mat, expected);
     }
 
     #[test]

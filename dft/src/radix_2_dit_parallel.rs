@@ -173,14 +173,7 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
 
     fn coset_idft_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
         let mut coeffs = self.idft_batch(mat);
-        let shift_inv = shift.inverse();
-        if shift_inv != F::ONE {
-            let weights: Vec<F> = shift_inv.powers().take(coeffs.height()).collect();
-            coeffs
-                .par_rows_mut()
-                .zip(weights.into_par_iter())
-                .for_each(|(row, weight)| p3_field::scale_slice_in_place_single_core(row, weight));
-        }
+        crate::util::coset_shift_cols(&mut coeffs, shift.inverse());
         coeffs
     }
 
