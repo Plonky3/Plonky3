@@ -52,13 +52,13 @@ fn bench_compress_suffix_dot(c: &mut Criterion) {
 
         // Packed-eq path: hits the SIMD kernel from PR #1574.
         group.bench_with_input(BenchmarkId::new("packed", label), &label, |b, _| {
-            let mut out = vec![EF::ZERO; 1 << (k_total - split_packed.num_variables())];
+            let mut out = EF::zero_vec(1 << (k_total - split_packed.num_variables()));
             b.iter(|| split_packed.compress_suffix_into(&mut out, &poly));
         });
 
         // Unpacked-eq path: scalar reference for the same operation.
         group.bench_with_input(BenchmarkId::new("unpacked", label), &label, |b, _| {
-            let mut out = vec![EF::ZERO; 1 << (k_total - split_unpacked.num_variables())];
+            let mut out = EF::zero_vec(1 << (k_total - split_unpacked.num_variables()));
             b.iter(|| split_unpacked.compress_suffix_into(&mut out, &poly));
         });
     }

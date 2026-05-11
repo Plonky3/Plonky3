@@ -233,8 +233,6 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
-
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
     use p3_matrix::dense::RowMajorMatrix;
@@ -316,7 +314,7 @@ mod tests {
         let zeta: Point<EF> = Point::from_projective_line(rng.random());
 
         let mut alpha_offset = EF::ONE;
-        let mut ros = vec![EF::ZERO; 1 << lde_domain.log_n];
+        let mut ros = EF::zero_vec(1 << lde_domain.log_n);
 
         for _ in 0..4 {
             let evals = CircleEvaluations::from_cfft_order(

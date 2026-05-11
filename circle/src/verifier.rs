@@ -1,4 +1,3 @@
-use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
@@ -273,7 +272,7 @@ where
         //     arity = 4, index_in_group = 1:
         //     evals = [sibling_0, folded_eval, sibling_1, sibling_2]
         let index_in_group = index % arity;
-        let mut evals = vec![EF::ZERO; arity];
+        let mut evals = EF::zero_vec(arity);
         evals[index_in_group] = folded_eval;
 
         // Fill in siblings at every position except the queried one.

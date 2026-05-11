@@ -162,7 +162,7 @@ impl MockAirBuilder {
             view.extend_from_slice(&next_row);
         } else {
             // pad with zeros if we are on the last row
-            view.extend(vec![T::ZERO; trace.width()]);
+            view.extend(T::zero_vec(trace.width()));
         }
         RowMajorMatrix::new(view, trace.width())
     }
@@ -534,10 +534,9 @@ fn test_resolve() {
         // Get the local and next values for row `i`.
         let cloned_trace = main_trace.clone();
         let local = cloned_trace.row(i).unwrap().into_iter().collect::<Vec<F>>();
-        let next = cloned_trace.row(i + 1).map_or_else(
-            || vec![F::ZERO; 2],
-            |row| row.into_iter().collect::<Vec<F>>(),
-        );
+        let next = cloned_trace
+            .row(i + 1)
+            .map_or_else(|| F::zero_vec(2), |row| row.into_iter().collect::<Vec<F>>());
 
         // Compute the expected constraint values at row `i`.
         let mul = EF::from(local[0]) * EF::from(next[1]);

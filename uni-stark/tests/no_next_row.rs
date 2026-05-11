@@ -105,7 +105,7 @@ fn test_no_next_row_rejects_present_trace_next() {
     // Tamper: set trace_next to Some(zeros) — verifier should reject
     let mut tampered = proof;
     let air_width = <SquareAir as BaseAir<Val>>::width(&SquareAir);
-    tampered.opened_values.trace_next = Some(vec![Challenge::ZERO; air_width]);
+    tampered.opened_values.trace_next = Some(Challenge::zero_vec(air_width));
 
     let result = verify(&config, &SquareAir, &tampered, &[]);
     assert!(

@@ -208,7 +208,7 @@ proptest! {
         let mut rng = SmallRng::seed_from_u64(seed);
         let mut row1: Vec<F> = (0..w).map(|_| rng.random()).collect();
         // Second row is all zeros, matching the zero-padded precondition.
-        let mut row2: Vec<F> = vec![F::ZERO; w];
+        let mut row2: Vec<F> = F::zero_vec(w);
         let orig1 = row1.clone();
 
         DifButterflyZeros(twiddle).apply_to_rows(&mut row1, &mut row2);
@@ -514,7 +514,7 @@ fn dft_all_zeros() {
     for log_h in 0..=6 {
         let h = 1 << log_h;
         // Build a zero matrix with 3 columns.
-        let mat = RowMajorMatrix::new(vec![F::ZERO; h * 3], 3);
+        let mat = RowMajorMatrix::new(F::zero_vec(h * 3), 3);
 
         // Check two backends as representative (the cross-impl tests
         // cover all five with randomized inputs).
@@ -532,7 +532,7 @@ fn idft_all_zeros() {
     // coefficient vector.
     for log_h in 0..=6 {
         let h = 1 << log_h;
-        let mat = RowMajorMatrix::new(vec![F::ZERO; h * 3], 3);
+        let mat = RowMajorMatrix::new(F::zero_vec(h * 3), 3);
 
         let dit = Radix2Dit::default().idft_batch(mat.clone());
         assert!(dit.values.iter().all(|x| x.is_zero()), "log_h={log_h}");
@@ -552,7 +552,7 @@ fn dft_constant_polynomial() {
         let h = 1 << log_h;
 
         // Coefficient vector: c followed by zeros.
-        let mut vals = vec![F::ZERO; h];
+        let mut vals = F::zero_vec(h);
         vals[0] = c;
         let mat = RowMajorMatrix::new(vals, 1);
 

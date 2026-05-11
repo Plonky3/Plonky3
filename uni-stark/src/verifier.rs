@@ -460,7 +460,7 @@ where
     let trace_next_slice = match &opened_values.trace_next {
         Some(v) => v.as_slice(),
         None => {
-            zeros = vec![SC::Challenge::ZERO; air_width];
+            zeros = SC::Challenge::zero_vec(air_width);
             &zeros
         }
     };
@@ -468,7 +468,7 @@ where
     let preprocessed_next_for_verify = match &opened_values.preprocessed_next {
         Some(v) => Some(v.as_slice()),
         None if preprocessed_width > 0 => {
-            pre_next_zeros = vec![SC::Challenge::ZERO; preprocessed_width];
+            pre_next_zeros = SC::Challenge::zero_vec(preprocessed_width);
             Some(pre_next_zeros.as_slice())
         }
         None => None,

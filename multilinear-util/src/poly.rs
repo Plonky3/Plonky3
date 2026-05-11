@@ -1219,13 +1219,13 @@ pub(crate) mod test {
             evals_raw in prop::collection::vec(0u64..F::ORDER_U64, 5),
         ) {
             let evals: Vec<F> = evals_raw[..n].iter().map(|&x| F::from_u64(x)).collect();
-            let mut out = vec![F::ZERO; 1 << n];
+            let mut out = F::zero_vec(1 << n);
             eval_eq_batch::<F, F, false>(
                 RowMajorMatrixView::new_col(&evals),
                 &mut out,
                 &[F::ONE],
             );
-            let mut expected = vec![F::ZERO; 1 << n];
+            let mut expected = F::zero_vec(1 << n);
             for (i, e) in expected.iter_mut().enumerate().take(1 << n) {
                 let mut weight = F::ONE;
                 for (j, &val) in evals.iter().enumerate() {

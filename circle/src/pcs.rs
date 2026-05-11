@@ -265,10 +265,9 @@ where
                         mat.as_view(),
                     );
 
-                    let (alpha_offset, reduced_opening_for_log_height) =
-                        reduced_openings.entry(log_height).or_insert_with(|| {
-                            (Challenge::ONE, vec![Challenge::ZERO; 1 << log_height])
-                        });
+                    let (alpha_offset, reduced_opening_for_log_height) = reduced_openings
+                        .entry(log_height)
+                        .or_insert_with(|| (Challenge::ONE, Challenge::zero_vec(1 << log_height)));
 
                     points_for_mat
                         .iter()

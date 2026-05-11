@@ -709,8 +709,8 @@ mod test {
     fn evals_01inf_grid(boolean_evals: &[EF]) -> Vec<EF> {
         let num_variables = log2_strict_usize(boolean_evals.len());
         let output_len = 3usize.pow(num_variables as u32);
-        let mut output = vec![EF::ZERO; output_len];
-        let mut scratch = vec![EF::ZERO; output_len];
+        let mut output = EF::zero_vec(output_len);
+        let mut scratch = EF::zero_vec(output_len);
         evals_01inf_grid_into(boolean_evals, &mut output, &mut scratch);
         output
     }
@@ -824,9 +824,9 @@ mod test {
             let output_len = 3usize.pow(num_variables as u32);
 
             // Use all-zero input; we only care about sizes here.
-            let input = vec![EF::ZERO; input_len];
-            let mut output = vec![EF::ZERO; output_len];
-            let mut scratch = vec![EF::ZERO; output_len];
+            let input = EF::zero_vec(input_len);
+            let mut output = EF::zero_vec(output_len);
+            let mut scratch = EF::zero_vec(output_len);
 
             // Should not panic.
             evals_01inf_grid_into(&input, &mut output, &mut scratch);
@@ -843,8 +843,8 @@ mod test {
         for num_variables in 1..=4 {
             let input: Vec<EF> = (0..1 << num_variables).map(|_| rng.random()).collect();
             let output_len = 3usize.pow(num_variables as u32);
-            let mut output = vec![EF::ZERO; output_len];
-            let mut scratch = vec![EF::ZERO; output_len];
+            let mut output = EF::zero_vec(output_len);
+            let mut scratch = EF::zero_vec(output_len);
 
             evals_01inf_grid_into(&input, &mut output, &mut scratch);
 
@@ -909,8 +909,8 @@ mod test {
         for num_variables in 0..=4 {
             let input = vec![c; 1 << num_variables];
             let output_len = 3usize.pow(num_variables as u32);
-            let mut output = vec![EF::ZERO; output_len];
-            let mut scratch = vec![EF::ZERO; output_len];
+            let mut output = EF::zero_vec(output_len);
+            let mut scratch = EF::zero_vec(output_len);
 
             evals_01inf_grid_into(&input, &mut output, &mut scratch);
 

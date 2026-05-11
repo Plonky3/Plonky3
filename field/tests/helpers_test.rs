@@ -134,7 +134,7 @@ mod helpers {
         let val = BabyBear::ZERO;
         let parts = split_32::<BabyBear, BabyBear>(val, 3);
 
-        assert_eq!(parts, vec![BabyBear::ZERO; 3]);
+        assert_eq!(parts, BabyBear::zero_vec(3));
     }
 
     #[test]

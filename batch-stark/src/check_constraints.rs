@@ -140,8 +140,6 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
-
     use p3_air::{Air, BaseAir, DebugConstraintBuilder};
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
@@ -166,7 +164,7 @@ mod tests {
 
     impl<F: Field> BaseAir<F> for ShapeProbeAir {
         fn width(&self) -> usize {
-            // Single column; every fixture is `vec![F::ZERO; height]`.
+            // Single column; every fixture is `F::zero_vec(height)`.
             1
         }
 
@@ -183,7 +181,7 @@ mod tests {
             //       row 1: [ 0, 0, 0 ]
             //       flat : [ 0, 0, 0, 0, 0, 0 ]
             let total = self.prep_height * self.prep_width;
-            Some(RowMajorMatrix::new(vec![F::ZERO; total], self.prep_width))
+            Some(RowMajorMatrix::new(F::zero_vec(total), self.prep_width))
         }
     }
 
@@ -217,9 +215,9 @@ mod tests {
         };
 
         // Zero-valued traces; content is irrelevant because eval reads nothing.
-        let main: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 1);
+        let main: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(BabyBear::zero_vec(4), 1);
         let preprocessed = <ShapeProbeAir as BaseAir<BabyBear>>::preprocessed_trace(&air);
-        let permutation: RowMajorMatrix<EF> = RowMajorMatrix::new(vec![EF::ZERO; 4], 1);
+        let permutation: RowMajorMatrix<EF> = RowMajorMatrix::new(EF::zero_vec(4), 1);
 
         // Must return cleanly. A panic here would mean a guard rejected a well-shaped input.
         check_constraints::<BabyBear, EF, _, LogUpGadget>(
@@ -254,9 +252,9 @@ mod tests {
             prep_height: 8,
             prep_width: 1,
         };
-        let main: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 1);
+        let main: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(BabyBear::zero_vec(4), 1);
         let preprocessed = <ShapeProbeAir as BaseAir<BabyBear>>::preprocessed_trace(&air);
-        let permutation: RowMajorMatrix<EF> = RowMajorMatrix::new(vec![EF::ZERO; 4], 1);
+        let permutation: RowMajorMatrix<EF> = RowMajorMatrix::new(EF::zero_vec(4), 1);
 
         // Expected: panic on entry, before any row is dereferenced.
         check_constraints::<BabyBear, EF, _, LogUpGadget>(
@@ -290,9 +288,9 @@ mod tests {
             prep_height: 0,
             prep_width: 0,
         };
-        let main: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 1);
+        let main: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(BabyBear::zero_vec(4), 1);
         let preprocessed: Option<RowMajorMatrix<BabyBear>> = None;
-        let permutation: RowMajorMatrix<EF> = RowMajorMatrix::new(vec![EF::ZERO; 8], 1);
+        let permutation: RowMajorMatrix<EF> = RowMajorMatrix::new(EF::zero_vec(8), 1);
 
         // Expected: panic on entry, before any row is dereferenced.
         check_constraints::<BabyBear, EF, _, LogUpGadget>(

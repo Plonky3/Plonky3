@@ -906,7 +906,7 @@ mod tests {
     #[test]
     fn test_check_all_constraints_no_failures() {
         let air = AllZeroAir::<2>;
-        let values = vec![BabyBear::ZERO; 4]; // 2 rows × 2 cols, all zero
+        let values = BabyBear::zero_vec(4); // 2 rows × 2 cols, all zero
         let main = RowMajorMatrix::new(values, 2);
         let report = check_all_constraints(&air, &main, &[], None);
         assert!(report.is_ok());
@@ -1072,7 +1072,7 @@ mod tests {
 
     impl<F: Field> BaseAir<F> for ShapeProbeAir {
         fn width(&self) -> usize {
-            // Single column; every fixture is `vec![F::ZERO; height]`.
+            // Single column; every fixture is `F::zero_vec(height)`.
             1
         }
 
@@ -1089,7 +1089,7 @@ mod tests {
             //       row 1: [ 0, 0, 0 ]
             //       flat : [ 0, 0, 0, 0, 0, 0 ]
             let total = self.prep_height * self.prep_width;
-            Some(RowMajorMatrix::new(vec![F::ZERO; total], self.prep_width))
+            Some(RowMajorMatrix::new(F::zero_vec(total), self.prep_width))
         }
     }
 
@@ -1116,7 +1116,7 @@ mod tests {
         };
 
         // Zero-valued rows; content is irrelevant because no constraint reads it.
-        let main = RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 1);
+        let main = RowMajorMatrix::new(BabyBear::zero_vec(4), 1);
 
         // Must return cleanly. A panic here would mean the guard rejected a well-shaped input.
         check_constraints(&air, &main, &[]);
@@ -1141,7 +1141,7 @@ mod tests {
         };
 
         // Main deliberately shorter than the advertised preprocessed trace.
-        let main = RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 1);
+        let main = RowMajorMatrix::new(BabyBear::zero_vec(4), 1);
 
         // Expected: panic before row 0 is ever dereferenced.
         check_constraints(&air, &main, &[]);
@@ -1158,7 +1158,7 @@ mod tests {
             prep_height: 4,
             prep_width: 1,
         };
-        let main = RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 1);
+        let main = RowMajorMatrix::new(BabyBear::zero_vec(4), 1);
 
         // No failure cap; we expect no failures anyway.
         let report = check_all_constraints(&air, &main, &[], None);
@@ -1182,7 +1182,7 @@ mod tests {
             prep_height: 8,
             prep_width: 1,
         };
-        let main = RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 1);
+        let main = RowMajorMatrix::new(BabyBear::zero_vec(4), 1);
 
         // Expected: panic on entry. The would-be report is unreachable → bound to `_`.
         let _ = check_all_constraints(&air, &main, &[], None);
