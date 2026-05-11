@@ -95,6 +95,16 @@ where
         }
     }
 
+    /// Return the field-element encoding of this transcript pattern.
+    ///
+    /// Recursive verifiers use this to absorb the exact same domain separator
+    /// constants as the native verifier, while routing the absorption through
+    /// circuit targets instead of a native challenger.
+    #[must_use]
+    pub fn pattern(&self) -> &[F] {
+        &self.pattern
+    }
+
     /// Record that the prover observes `count` field elements into the sponge.
     pub fn observe(&mut self, count: usize, pattern: Observe) {
         self.pattern.push(

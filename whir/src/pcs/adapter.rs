@@ -1281,7 +1281,13 @@ where
         Ok(residual_claim)
     }
 
-    fn parse_initial_commitment(
+    /// Replay the initial WHIR commitment transcript and return the parsed
+    /// commitment state.
+    ///
+    /// Composed protocols use this when they need to sample additional
+    /// Fiat-Shamir challenges after the initial commitment but before verifying
+    /// deferred opening claims.
+    pub fn parse_initial_commitment(
         &self,
         commitment: &MT::Commitment,
         proof: &WhirProof<F, EF, MT>,

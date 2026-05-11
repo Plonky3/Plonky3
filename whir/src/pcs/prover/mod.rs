@@ -632,6 +632,7 @@ where
             }
         }
 
+        proof.rounds[round_index].query_indices = stir_challenges_indexes;
         proof.rounds[round_index].queries = queries;
 
         let constraint = Constraint::new(
@@ -683,6 +684,7 @@ where
             self.final_queries,
             challenger,
         )?;
+        proof.final_query_indices = final_challenge_indexes.clone();
 
         // Open Merkle proofs at the queried positions.
         match &round_state.merkle_prover_data {
