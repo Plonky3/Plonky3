@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use p3_lookup::traits::LookupData;
+use p3_lookup::LookupTerminal;
 use p3_uni_stark::OpenedValues;
 use serde::{Deserialize, Serialize};
 
@@ -16,8 +16,10 @@ pub struct BatchProof<SC: StarkGenericConfig> {
     pub opened_values: BatchOpenedValues<Challenge<SC>>,
     /// PCS opening proof for all commitments.
     pub opening_proof: PcsProof<SC>,
-    /// Data necessary to verify the global lookup arguments across all instances.
-    pub global_lookup_data: Vec<Vec<LookupData<Challenge<SC>>>>,
+    /// One terminal per AIR; `None` when the AIR declares no lookups.
+    ///
+    /// The verifier rejects when the sum of present terminals is non-zero.
+    pub lookup_terminals: Vec<Option<LookupTerminal<Challenge<SC>>>>,
     /// Per-instance log2 of the extended trace domain size.
     /// For instance i, this stores `log2(|extended trace domain|) = log2(N_i) + is_zk()`.
     pub degree_bits: Vec<usize>,

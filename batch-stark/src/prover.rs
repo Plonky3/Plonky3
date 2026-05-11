@@ -14,7 +14,7 @@ use p3_field::{
 };
 use p3_lookup::folder::ProverConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::{InteractionSymbolicBuilder, Kind, Lookup, LookupData, LookupProtocol};
+use p3_lookup::{InteractionSymbolicBuilder, Lookup, LookupProtocol, LookupTerminal};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::DisjointMutPtr;
@@ -118,23 +118,9 @@ where
 
     // Read lookups from the keygen-cached CommonData (not from instances).
     let all_lookups: Vec<&[Lookup<Val<SC>>]> = common.lookups.iter().map(|l| &**l).collect();
-    let mut lookup_data: Vec<Vec<_>> = all_lookups
-        .iter()
-        .map(|lookups| {
-            // Only global lookups produce cumulated values that enter the transcript.
-            lookups
-                .iter()
-                .filter_map(|lookup| match &lookup.kind {
-                    Kind::Global(name) => Some(LookupData {
-                        name: name.clone(),
-                        aux_column: lookup.column,
-                        cumulative_sum: SC::Challenge::ZERO,
-                    }),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect();
+    // Per-AIR lookup terminal: `Some(terminal)` once filled, `None` for AIRs with no lookups.
+    let mut lookup_terminals: Vec<Option<LookupTerminal<SC::Challenge>>> =
+        all_lookups.iter().map(|_| None).collect();
 
     // Base and extended domains for every instance.
     let (trace_domains, ext_trace_domains): (Vec<Domain<SC>>, Vec<Domain<SC>>) = degrees
@@ -234,15 +220,17 @@ where
         .zip(ext_trace_domains.iter().cloned())
         .for_each(|((i, inst), ext_domain)| {
             if !all_lookups[i].is_empty() {
-                // Compute the permutation argument trace from lookups and challenges.
-                let generated_perm = lookup_gadget.generate_permutation::<SC>(
+                // Compute the permutation argument trace and the AIR's single terminal.
+                let (generated_perm, terminal) = lookup_gadget.generate_permutation::<SC>(
                     inst.trace,
                     &inst.air.preprocessed_trace(),
                     &inst.public_values,
                     all_lookups[i],
-                    &mut lookup_data[i],
                     &challenges_per_instance[i],
                 );
+
+                // Record the AIR's terminal for transcript observation and proof emission.
+                lookup_terminals[i] = terminal;
 
                 #[cfg(debug_assertions)]
                 {
@@ -250,8 +238,7 @@ where
 
                     let preprocessed_trace = inst.air.preprocessed_trace();
 
-                    let perm_vals: Vec<SC::Challenge> =
-                        lookup_data[i].iter().map(|ld| ld.cumulative_sum).collect();
+                    let perm_vals: Vec<SC::Challenge> = terminal.iter().map(|t| t.0).collect();
                     let lookup_constraints_inputs = (all_lookups[i], &lookup_gadget);
                     check_constraints(
                         inst.air,
@@ -301,10 +288,10 @@ where
         None
     };
 
-    // Transcript: observe permutation commitment + lookup data, sample alpha.
+    // Transcript: observe permutation commitment + per-AIR terminals, sample alpha.
     let alpha: Challenge<SC> = transcript.observe_perm_and_sample_alpha(
         permutation_commit_and_data.as_ref().map(|(c, _)| c),
-        &lookup_data,
+        &lookup_terminals,
     );
 
     // Accumulators for quotient chunk domains / matrices / per-instance ranges.
@@ -381,7 +368,7 @@ where
             });
 
         // Compute quotient(x) = constraints(x) / Z_H(x) on the quotient domain.
-        let perm_vals: Vec<_> = lookup_data[i].iter().map(|ld| ld.cumulative_sum).collect();
+        let perm_vals: Vec<_> = lookup_terminals[i].iter().map(|t| t.0).collect();
         let q_values = quotient_values(
             pcs,
             airs[i],
@@ -664,7 +651,7 @@ where
             instances: per_instance,
         },
         opening_proof,
-        global_lookup_data: lookup_data,
+        lookup_terminals,
         degree_bits: log_ext_degrees,
     }
 }

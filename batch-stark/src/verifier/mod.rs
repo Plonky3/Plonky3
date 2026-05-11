@@ -1,18 +1,16 @@
 mod data;
 
-use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 
 pub use data::VerifierData;
-use hashbrown::HashMap;
 use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::{InteractionSymbolicBuilder, Kind, LookupProtocol};
+use p3_lookup::{InteractionSymbolicBuilder, LookupProtocol};
 use p3_uni_stark::{
     InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks, validate_degree_bits,
 };
@@ -48,7 +46,7 @@ where
         commitments,
         opened_values,
         opening_proof,
-        global_lookup_data,
+        lookup_terminals,
         degree_bits,
     } = proof;
 
@@ -61,7 +59,7 @@ where
     if airs.len() != opened_values.instances.len()
         || airs.len() != public_values.len()
         || airs.len() != degree_bits.len()
-        || airs.len() != global_lookup_data.len()
+        || airs.len() != lookup_terminals.len()
         || airs.len() != all_lookups.len()
         || common
             .preprocessed
@@ -226,40 +224,16 @@ where
             return Err(InvalidProofShapeError::PreprocessedWidthMismatch { air: i }.into());
         }
 
-        let expected_global_lookup_entries: Vec<_> = all_lookups[i]
-            .iter()
-            .filter_map(|l| match &l.kind {
-                Kind::Global(name) => Some((name, l.column)),
-                Kind::Local => None,
-            })
-            .collect();
-        let expected_global_lookup_data_len = expected_global_lookup_entries.len();
-        let got_global_lookup_data_len = global_lookup_data[i].len();
-        if got_global_lookup_data_len != expected_global_lookup_data_len {
-            return Err(InvalidProofShapeError::GlobalLookupDataCountMismatch {
+        // One terminal per AIR with lookups; none otherwise.
+        let expected_present = !all_lookups[i].is_empty();
+        let got_present = lookup_terminals[i].is_some();
+        if expected_present != got_present {
+            return Err(InvalidProofShapeError::LookupTerminalPresenceMismatch {
                 air: i,
-                expected: expected_global_lookup_data_len,
-                got: got_global_lookup_data_len,
+                expected_present,
+                got_present,
             }
             .into());
-        }
-        for (lookup_idx, ((expected_name, expected_aux_column), data)) in
-            expected_global_lookup_entries
-                .into_iter()
-                .zip(global_lookup_data[i].iter())
-                .enumerate()
-        {
-            if data.name != *expected_name || data.aux_column != expected_aux_column {
-                return Err(InvalidProofShapeError::GlobalLookupDataMetadataMismatch {
-                    air: i,
-                    lookup: lookup_idx,
-                    expected_name: expected_name.clone(),
-                    got_name: data.name.clone(),
-                    expected_aux_column,
-                    got_aux_column: data.aux_column,
-                }
-                .into());
-            }
         }
 
         // Observe per-instance binding data.
@@ -284,7 +258,7 @@ where
     // Sample permutation challenges and alpha.
     let challenges_per_instance = transcript.sample_perm_challenges(all_lookups, &lookup_gadget);
     let alpha: Challenge<SC> = transcript
-        .observe_perm_and_sample_alpha(commitments.permutation.as_ref(), global_lookup_data);
+        .observe_perm_and_sample_alpha(commitments.permutation.as_ref(), lookup_terminals);
 
     // Observe quotient chunks and optional random commitment.
     transcript.observe_quotient_commitment(&commitments.quotient_chunks);
@@ -514,15 +488,21 @@ where
             zeta,
         );
 
-        // Recompose permutation openings from base-flattened columns into extension field columns.
-        // The permutation commitment is a base-flattened matrix with `width = aux_width * DIMENSION`.
-        // For constraint evaluation, we need an extension field matrix with width `aux_width``.
-        let aux_width = all_lookups[i]
-            .iter()
-            .map(|ctx| ctx.column)
-            .max()
-            .map(|m| m + 1)
-            .unwrap_or(0);
+        // Recompose permutation openings into extension-field columns.
+        //
+        // Shapes:
+        // - commitment           — base-flattened matrix, width = aux_width * DIMENSION.
+        // - constraint evaluator — extension-field matrix, width = aux_width.
+        //
+        // aux_width under the single-terminal layout:
+        // - col 0:      shared accumulator
+        // - col i + 1:  fraction column for lookup i
+        // - so aux_width = num_lookups + 1, or 0 when the AIR declares no lookup.
+        let aux_width = if all_lookups[i].is_empty() {
+            0
+        } else {
+            all_lookups[i].len() + 1
+        };
 
         let ext_degree = Challenge::<SC>::DIMENSION;
         let expected_perm_len = aux_width * ext_degree;
@@ -575,10 +555,7 @@ where
                 &pre_next_zeros
             }
         };
-        let perm_vals: Vec<SC::Challenge> = global_lookup_data[i]
-            .iter()
-            .map(|ld| ld.cumulative_sum)
-            .collect();
+        let perm_vals: Vec<SC::Challenge> = lookup_terminals[i].iter().map(|t| t.0).collect();
         let periodic_values: Vec<Challenge<SC>> = air
             .periodic_columns()
             .iter()
@@ -616,27 +593,18 @@ where
             })?;
     }
 
-    let mut global_cumulative = HashMap::<&String, Vec<_>>::new();
-    for (lookups, data_for_instance) in all_lookups.iter().zip(global_lookup_data.iter()) {
-        let global_lookups = lookups.iter().filter(|l| matches!(l.kind, Kind::Global(_)));
-        debug_assert_eq!(global_lookups.clone().count(), data_for_instance.len());
-        for (lookup, data) in global_lookups.zip(data_for_instance.iter()) {
-            let name = match &lookup.kind {
-                Kind::Global(n) => n,
-                Kind::Local => unreachable!(),
-            };
-            global_cumulative
-                .entry(name)
-                .or_default()
-                .push(data.cumulative_sum);
-        }
-    }
-
-    for (name, all_expected_cumulative) in global_cumulative {
-        lookup_gadget
-            .verify_global_sum(&all_expected_cumulative)
-            .map_err(|e| VerificationError::LookupError(format!("{e:?}: {name}")))?;
-    }
+    // Single-terminal LogUp cross-AIR check.
+    //
+    // Each AIR with lookups commits one terminal: the sum of every per-row
+    // rational contribution across its trace.
+    //
+    // Soundness:
+    // - The total across the batch must be zero.
+    // - Bus challenges are sampled after the main commitment, so any
+    //   per-bus imbalance survives the collapse with overwhelming probability.
+    lookup_gadget
+        .verify_terminal_sum(lookup_terminals)
+        .map_err(|e| VerificationError::LookupError(format!("{e}")))?;
 
     Ok(())
 }

@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use hashbrown::HashMap;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_field::PrimeCharacteristicRing;
-use p3_lookup::{Kind, Lookup, LookupData, LookupProtocol};
+use p3_lookup::{Kind, Lookup, LookupProtocol, LookupTerminal};
 
 use crate::common::GlobalPreprocessed;
 use crate::config::{Challenge, Commitment, StarkGenericConfig as SGC, Val};
@@ -101,18 +101,18 @@ impl<SC: SGC> BatchTranscript<SC> {
             .collect()
     }
 
-    /// Observe the permutation commitment and cumulated lookup data, then
-    /// sample the constraint-folding challenge alpha.
+    /// Observe the permutation commitment and per-AIR lookup terminals,
+    /// then sample the constraint-folding challenge alpha.
     pub fn observe_perm_and_sample_alpha(
         &mut self,
         perm_commitment: Option<&Commitment<SC>>,
-        lookup_data: &[Vec<LookupData<Challenge<SC>>>],
+        lookup_terminals: &[Option<LookupTerminal<Challenge<SC>>>],
     ) -> Challenge<SC> {
         if let Some(commit) = perm_commitment {
             self.challenger.observe(commit.clone());
-            // Observe cumulated lookup sums so the verifier can check them.
-            for data in lookup_data.iter().flatten() {
-                self.challenger.observe_algebra_element(data.cumulative_sum);
+            // Observe per-AIR lookup terminals so the verifier can check the cross-AIR sum.
+            for terminal in lookup_terminals.iter().flatten() {
+                self.challenger.observe_algebra_element(terminal.0);
             }
         }
         self.challenger.sample_algebra_element()

@@ -106,24 +106,17 @@ pub enum InvalidProofShapeError {
     /// Lookup commitment presence doesn't match lookup configuration.
     #[error("lookup commitment presence does not match lookup configuration")]
     LookupCommitmentMismatch,
-    /// Global lookup data count doesn't match the number of global lookups for an AIR.
-    #[error("air {air}: global lookup data count mismatch: expected {expected}, got {got}")]
-    GlobalLookupDataCountMismatch {
-        air: usize,
-        expected: usize,
-        got: usize,
-    },
-    /// Global lookup proof metadata doesn't match the AIR's declared interactions.
+    /// Lookup terminal presence does not match the AIR's declared lookups.
+    ///
+    /// Each AIR commits exactly one terminal when it declares any lookup,
+    /// and none otherwise.
     #[error(
-        "air {air}: global lookup data metadata mismatch at index {lookup}: expected name={expected_name}, aux_column={expected_aux_column}; got name={got_name}, aux_column={got_aux_column}"
+        "air {air}: lookup terminal presence mismatch: expected_present={expected_present}, got_present={got_present}"
     )]
-    GlobalLookupDataMetadataMismatch {
+    LookupTerminalPresenceMismatch {
         air: usize,
-        lookup: usize,
-        expected_name: String,
-        got_name: String,
-        expected_aux_column: usize,
-        got_aux_column: usize,
+        expected_present: bool,
+        got_present: bool,
     },
     /// Permutation local and next have different lengths.
     #[error("air {air}: permutation local/next length mismatch")]

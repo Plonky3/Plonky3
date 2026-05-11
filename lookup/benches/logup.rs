@@ -12,7 +12,7 @@ use p3_field::{Field, PrimeCharacteristicRing};
 use p3_fri::TwoAdicFriPcs;
 use p3_lookup::LookupProtocol;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::traits::{Kind, Lookup, LookupData};
+use p3_lookup::traits::{Kind, Lookup};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -156,13 +156,11 @@ fn bench_generate_permutation(c: &mut Criterion) {
             ),
             |b| {
                 b.iter(|| {
-                    let mut lookup_data: Vec<LookupData<EF>> = Vec::new();
                     gadget.generate_permutation::<SC>(
                         &main_trace,
                         &None,
                         &[],
                         &lookups,
-                        &mut lookup_data,
                         &challenges,
                     );
                 });

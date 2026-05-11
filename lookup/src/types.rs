@@ -9,6 +9,7 @@ use p3_air::symbolic::AirLayout;
 use p3_air::{Air, SymbolicExpression};
 use p3_field::{ExtensionField, Field};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::builder::{SymbolicInteraction, SymbolicLocalInteraction};
 use crate::symbolic::InteractionSymbolicBuilder;
@@ -32,7 +33,11 @@ pub struct Lookup<F: Field> {
     pub elements: Vec<Vec<SymbolicExpression<F>>>,
     /// Signed multiplicity per element tuple. Same length as `elements`.
     pub multiplicities: Vec<SymbolicExpression<F>>,
-    /// Auxiliary column index in the permutation trace.
+    /// Slot index for this lookup within the AIR.
+    ///
+    /// - Selects the challenge pair at offsets `2*column` and `2*column + 1`.
+    /// - Owns fraction column `column + 1` of the permutation trace.
+    /// - Column `0` of the permutation trace is the shared accumulator.
     pub column: usize,
 }
 
@@ -103,20 +108,29 @@ impl<F: Field> AsRef<[Lookup<F>]> for Lookups<F> {
     }
 }
 
-/// Prover-provided data for one global lookup interaction.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct LookupData<F> {
-    /// Bus name.
-    pub name: String,
-    /// Auxiliary column index.
-    pub aux_column: usize,
-    /// Cumulative sum computed by the prover.
-    pub cumulative_sum: F,
-}
+/// Single committed scalar summarising one AIR's lookup contribution.
+///
+/// # Semantics
+///
+/// - Holds the row-wise sum of every lookup's rational contribution.
+/// - Committed once per AIR that declares at least one lookup.
+/// - Absent (no commitment) when the AIR declares no lookup.
+///
+/// # Verification
+///
+/// - The verifier sums the present terminals across every AIR in a batch.
+/// - A non-zero total signals an unbalanced lookup somewhere in the proof.
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct LookupTerminal<F>(pub F);
 
 /// Lookup verification error.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum LookupError {
-    /// Global cumulative sums do not balance to zero.
-    GlobalCumulativeMismatch(Option<String>),
+    /// Cross-AIR sum of committed lookup terminals is non-zero.
+    ///
+    /// Any unbalanced lookup in the batch produces a non-zero terminal sum
+    /// with overwhelming probability over the random permutation challenges.
+    #[error("cross-AIR lookup terminal sum is non-zero")]
+    TerminalSumNonZero,
 }
