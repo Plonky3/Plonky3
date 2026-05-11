@@ -4,7 +4,6 @@ use alloc::string::String;
 
 use thiserror::Error;
 
-use crate::fiat_shamir::errors::FiatShamirError;
 use crate::sumcheck::SumcheckError;
 
 /// Errors during WHIR proof verification.
@@ -48,10 +47,6 @@ pub enum VerifierError {
     /// Sumcheck verification error.
     #[error(transparent)]
     Sumcheck(#[from] SumcheckError),
-
-    /// Fiat-Shamir transcript error.
-    #[error(transparent)]
-    FiatShamir(#[from] FiatShamirError),
 
     /// Invalid round index.
     #[error("Invalid round index: {index}")]

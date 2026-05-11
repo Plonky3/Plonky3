@@ -17,7 +17,10 @@ use crate::constraints::statement::{EqStatement, SelectStatement};
 use crate::parameters::FoldingFactor;
 use crate::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table, TableShape, Verifier};
 use crate::sumcheck::strategy::VariableOrder;
-use crate::sumcheck::{OpeningProtocol, PointSchedule, SumcheckData, TableSpec};
+use crate::sumcheck::{
+    OpeningProtocol, PointSchedule, SumcheckData, SumcheckError, TableSpec,
+    verify_final_sumcheck_rounds,
+};
 
 // Base field: BabyBear (a 31-bit prime field suitable for fast arithmetic).
 pub(crate) type F = BabyBear;
@@ -447,4 +450,93 @@ proptest! {
         run_multi_table_sumcheck_test::<PrefixProver<F, EF>>(&specs);
         run_multi_table_sumcheck_test::<SuffixProver<F, EF>>(&specs);
     }
+}
+
+#[test]
+fn test_zero_rounds_returns_empty_point() {
+    // Invariant: 0 rounds short-circuits — proof data is never inspected.
+
+    // Case 1: no data.
+    let mut chal = challenger();
+    let mut sum = EF::ZERO;
+    let point = verify_final_sumcheck_rounds::<F, EF, _>(None, &mut chal, &mut sum, 0, 0)
+        .expect("0 rounds + None must succeed");
+    assert!(point.as_slice().is_empty());
+
+    // Case 2: data supplied but ignored.
+    let data = SumcheckData::<F, EF> {
+        polynomial_evaluations: vec![[EF::ONE, EF::ONE]],
+        pow_witnesses: vec![],
+    };
+    let mut chal = challenger();
+    let mut sum = EF::ZERO;
+    let point = verify_final_sumcheck_rounds(Some(&data), &mut chal, &mut sum, 0, 0)
+        .expect("0 rounds + Some must succeed");
+    assert!(point.as_slice().is_empty());
+}
+
+#[test]
+fn test_missing_sumcheck_data() {
+    // Invariant: rounds > 0 with no data must error out.
+    let mut chal = challenger();
+    let mut sum = EF::ZERO;
+    let rounds = 3;
+
+    let err = verify_final_sumcheck_rounds::<F, EF, _>(None, &mut chal, &mut sum, rounds, 0)
+        .expect_err("None + rounds > 0 must error");
+
+    match err {
+        // Inner field must echo the requested round count.
+        SumcheckError::MissingSumcheckData { expected_rounds } => {
+            assert_eq!(expected_rounds, rounds);
+        }
+        other => panic!("expected MissingSumcheckData, got: {other}"),
+    }
+}
+
+#[test]
+fn test_round_count_mismatch() {
+    // Invariant: evaluation count must equal requested rounds.
+    //
+    //     evaluations: 2     requested: 5     -> expected=5, actual=2
+    let mut chal = challenger();
+    let mut sum = EF::ZERO;
+    let expected_rounds = 5;
+    let actual_rounds = 2;
+    let data = SumcheckData::<F, EF> {
+        // Values are unread; the length check fires first.
+        polynomial_evaluations: vec![[EF::ZERO, EF::ZERO]; actual_rounds],
+        pow_witnesses: vec![],
+    };
+
+    let err = verify_final_sumcheck_rounds(Some(&data), &mut chal, &mut sum, expected_rounds, 0)
+        .expect_err("length mismatch must error");
+
+    match err {
+        SumcheckError::RoundCountMismatch { expected, actual } => {
+            assert_eq!(expected, expected_rounds);
+            assert_eq!(actual, actual_rounds);
+        }
+        other => panic!("expected RoundCountMismatch, got: {other}"),
+    }
+}
+
+#[test]
+fn test_invalid_pow_witness() {
+    // Invariant: a tampered PoW witness must fail the grinding check.
+    let mut chal = challenger();
+    let mut sum = EF::ONE;
+    let pow_bits = 20;
+    let data = SumcheckData::<F, EF> {
+        // Polynomial coefficients are arbitrary; the PoW check fires first.
+        polynomial_evaluations: vec![[EF::ZERO, EF::ZERO]],
+        // Mutation: zero replaces the honest ground witness.
+        pow_witnesses: vec![F::ZERO],
+    };
+
+    let err = data
+        .verify_rounds(&mut chal, &mut sum, pow_bits)
+        .expect_err("zeroed witness must fail");
+
+    assert!(matches!(err, SumcheckError::InvalidPowWitness));
 }
