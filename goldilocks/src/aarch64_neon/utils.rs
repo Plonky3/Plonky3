@@ -173,11 +173,11 @@ pub(super) unsafe fn add_asm(a: u64, b: u64) -> u64 {
 /// Safe call sites are those where `b` is provably canonical:
 /// - the output of `add_asm` / `sub_asm` / `mul_asm` / `mul_add_asm`
 ///   (each performs a final `subs/csel` reduction to `[0, P)`);
-/// - a Poseidon2 round constant — the published
-///   `GOLDILOCKS_POSEIDON2_RC_*` const tables are canonical (asserted by
-///   `test_goldilocks_poseidon2_rc_tables_canonical`) and
-///   `Distribution<Goldilocks> for StandardUniform` uses rejection
-///   sampling to skip `>= P` draws.
+/// - a Poseidon2 round constant reaching the ASM via
+///   `Poseidon2GoldilocksFused::new` — that constructor applies
+///   `to_canonical_u64` to every `Goldilocks::value`, so every RC entering
+///   the permute functions is canonical regardless of how the caller
+///   constructed the `Goldilocks` constants.
 #[inline(always)]
 pub(super) unsafe fn add_canonical_asm(a: u64, b: u64) -> u64 {
     debug_assert!(
