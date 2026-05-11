@@ -303,6 +303,11 @@ impl<T, P, D, const WIDTH: usize, const RATE: usize, const OUT: usize>
     Pad10Sponge<T, P, D, WIDTH, RATE, OUT>
 {
     pub const fn new(permutation: P, padding_derangement: D) -> Self {
+        const {
+            assert!(RATE > 0);
+            assert!(RATE < WIDTH);
+            assert!(OUT <= WIDTH);
+        }
         Self {
             permutation,
             padding_derangement,
@@ -322,11 +327,6 @@ where
     where
         I: IntoIterator<Item = T>,
     {
-        const {
-            assert!(RATE > 0);
-            assert!(RATE < WIDTH);
-            assert!(OUT <= WIDTH);
-        }
         // Start from the all-zero state.
         let mut state = [T::default(); WIDTH];
 
@@ -413,6 +413,11 @@ where
     PF: Field,
 {
     pub fn new(permutation: P) -> Result<Self, String> {
+        const {
+            assert!(RATE > 0);
+            assert!(RATE < WIDTH);
+            assert!(OUT <= WIDTH);
+        }
         if F::order() >= PF::order() {
             return Err(String::from("F::order() must be less than PF::order()"));
         }
@@ -542,11 +547,6 @@ where
     where
         I: IntoIterator<Item = F>,
     {
-        const {
-            assert!(RATE > 0);
-            assert!(RATE < WIDTH);
-            assert!(OUT <= WIDTH);
-        }
         // All-zero initial state in the large-field domain.
         let mut state = [PF::default(); WIDTH];
 
