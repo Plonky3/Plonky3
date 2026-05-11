@@ -233,13 +233,19 @@ where
         let num_rounds = total_folds.saturating_sub(1);
         let log_final_degree = log_starting_degree - total_folds * log_folding_factor;
 
-        // Per-round target adds a union-bound buffer of `ceil(log2(total_folds))` so that
-        // summing the per-round error over all folds is bounded by `2^{-security_level}`.
-        // The same buffer applies to every per-event term: query failure (via the query
-        // count below) and the auxiliary terms (folding / OOD / combination / shake) bridged
-        // by PoW. Without the buffer, summing N rounds at `2^{-security_level}` per round
-        // would lose `log2(total_folds)` bits.
-        let union_bound_buffer = libm::ceil(libm::log2(total_folds as f64)) as usize;
+        // Per-round target adds a union-bound buffer of `ceil(log2(NUM_ALG_TERMS_PER_ROUND
+        // * total_folds))` so that summing every algebraic failure mode across every round is
+        // bounded by `2^{-security_level}`. Each intermediate round has six independently
+        // bridged terms (query tier: query failure, OOD, random-combination, shake-check;
+        // folding tier: proximity-gaps, sumcheck) and the final round has three (folding tier
+        // + final query failure); `6 * total_folds` is the tight upper bound on the term
+        // count. The buffer applies to every per-event term: query failure (via the query
+        // count below) and the auxiliary terms bridged by PoW. Without it, summing
+        // `6 * total_folds` per-round errors at `2^{-security_level}` apiece would lose
+        // `log2(6 * total_folds)` bits.
+        const NUM_ALG_TERMS_PER_ROUND: usize = 6;
+        let union_bound_buffer =
+            libm::ceil(libm::log2((NUM_ALG_TERMS_PER_ROUND * total_folds) as f64)) as usize;
         let buffered_security_level = security_level + union_bound_buffer;
 
         // Convert algebraic-security bits to a PoW difficulty.
@@ -666,8 +672,8 @@ mod tests {
             )
         };
 
-        // Shallow: log_starting_degree=4 ⇒ total_folds = 2 ⇒ buffer = ceil(log2(2)) = 1.
-        // Deep:    log_starting_degree=16 ⇒ total_folds = 8 ⇒ buffer = ceil(log2(8)) = 3.
+        // Shallow: log_starting_degree=4  ⇒ total_folds = 2 ⇒ buffer = ceil(log2(6·2))  = 4.
+        // Deep:    log_starting_degree=16 ⇒ total_folds = 8 ⇒ buffer = ceil(log2(6·8))  = 6.
         let shallow = make(4);
         let deep = make(16);
 
@@ -679,9 +685,9 @@ mod tests {
         // buffer, so for comparable rates final_queries must be ≥ the shallow one's.
         // (Eta differs across configurations, so we can only assert a soft inequality here.)
         // The strict invariant we can check: per-round target_bits is monotone in total_folds.
-        let buffer = |n: usize| libm::ceil(libm::log2(n as f64)) as usize;
-        assert_eq!(buffer(2), 1);
-        assert_eq!(buffer(8), 3);
+        let buffer = |n: usize| libm::ceil(libm::log2((6 * n) as f64)) as usize;
+        assert_eq!(buffer(2), 4);
+        assert_eq!(buffer(8), 6);
         assert!(buffer(8) > buffer(2));
 
         // Sanity: non-empty rounds; deep > shallow in number of fold steps.

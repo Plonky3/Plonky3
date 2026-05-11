@@ -660,7 +660,10 @@ where
                 let row_evals = &fiber_evals_per_query[q_idx];
                 for l in 0..arity0 {
                     if expected_ro[q_idx][l] != row_evals[l] {
-                        return Err(StirError::InvalidProofShape);
+                        return Err(StirError::PcsBindingMismatch {
+                            query: q_idx,
+                            column: l,
+                        });
                     }
                 }
             }

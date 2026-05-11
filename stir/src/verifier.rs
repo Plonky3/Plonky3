@@ -92,6 +92,12 @@ pub enum StirError<MmcsError, InputError = ()> {
     #[error("Invalid proof shape")]
     InvalidProofShape,
 
+    /// The PCS layer's cross-commitment accumulated reduced opening did not match the STIR
+    /// first-round fiber evaluations. Indicates the input commitments and the STIR oracle are
+    /// not consistent (e.g. a claimed evaluation was tampered with).
+    #[error("PCS reduced-opening binding mismatch at query {query}, column {column}")]
+    PcsBindingMismatch { query: usize, column: usize },
+
     /// An error propagated from the input polynomial commitment scheme.
     #[error("Input error")]
     InputError(InputError),
@@ -117,6 +123,9 @@ impl<E1, IE1> StirError<E1, IE1> {
             }
             Self::FinalPolyMismatch => StirError::FinalPolyMismatch,
             Self::InvalidProofShape => StirError::InvalidProofShape,
+            Self::PcsBindingMismatch { query, column } => {
+                StirError::PcsBindingMismatch { query, column }
+            }
             Self::InputError(e) => StirError::InputError(f(e)),
         }
     }

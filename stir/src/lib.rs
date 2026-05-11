@@ -35,9 +35,13 @@
 //!   tighter \[BCSS25\] bound rather than \[BCI+20\]; see
 //!   [`p3_commit::SecurityAssumption::prox_gaps_error`].
 //! - **Union-bound buffer.** [`config::StirConfig::new`] adds an explicit
-//!   `ceil(log2(total_folds))` buffer to every per-round error term (query failure plus
-//!   the auxiliary terms bridged by PoW). The paper's "+1 / +0" rule only delivers the
-//!   claimed bits when `total_folds ≤ 2`; the explicit log makes deeper protocols tight.
+//!   `ceil(log2(6 · total_folds))` buffer to every per-round error term (query failure plus
+//!   the auxiliary terms bridged by PoW). Each round contributes up to six independently
+//!   bridged algebraic failure modes (query tier: query failure, OOD, random-combination,
+//!   shake-check; folding tier: proximity-gaps, sumcheck), so the union bound over the full
+//!   protocol is `≤ 6 · total_folds · 2^{-buffered_security_level}`. The paper's "+1 / +0"
+//!   rule only delivers the claimed bits when `total_folds ≤ 2` and per-round terms are
+//!   collapsed; the explicit log keeps deeper protocols tight across every term.
 //! - **PoW placement.** Each round's query/OOD PoW grind is placed BEFORE OOD sampling, so
 //!   it gates re-rolls of the OOD set via re-commitment (the paper's high-level protocol
 //!   does not specify PoW). The folding PoW gates the fold challenge as in the paper.
