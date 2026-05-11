@@ -54,16 +54,17 @@ impl SecurityAssumption {
     /// E.g. in JB proximity gaps holds for every delta in (0, 1 - sqrt(rho)).
     /// eta is the distance between the chosen proximity parameter and the bound.
     /// I.e. in JB delta = 1 - sqrt(rho) - eta and in CB delta = 1 - rho - eta.
+    /// # Panics
+    ///
+    /// Panics when called with [`SecurityAssumption::UniqueDecoding`]: eta is
+    /// undefined in UD (`delta = (1 - rho) / 2`, with no eta term). All
+    /// current callers special-case the UD branch before reaching the
+    /// eta-dependent arithmetic; the panic locks down that invariant so a
+    /// future refactor that strays into the eta path under UD fails loudly.
     #[must_use]
     pub const fn log_eta(&self, log_inv_rate: usize) -> f64 {
         match self {
-            // eta is undefined in UD: delta is (1 - rho) / 2, with no eta term.
-            // Return INFINITY so any accidental future caller that reads this in
-            // the UD branch fails visibly (NaN / overflow propagation) instead
-            // of silently treating eta as 2^0 = 1, which is "impossibly large"
-            // and would produce a wrong delta. All current callers special-case
-            // UD before reaching the eta-dependent arithmetic.
-            Self::UniqueDecoding => f64::INFINITY,
+            Self::UniqueDecoding => panic!("log_eta is undefined for UniqueDecoding"),
             // Set as sqrt(rho)/20
             Self::JohnsonBound => -(0.5 * log_inv_rate as f64 + LOG2_10 + 1.),
             // Set as rho/20
@@ -565,17 +566,12 @@ mod tests {
     }
 
     #[test]
-    fn log_eta_undefined_in_unique_decoding() {
+    #[should_panic(expected = "log_eta is undefined for UniqueDecoding")]
+    fn log_eta_panics_for_unique_decoding() {
         // eta does not appear in the UD distance formula `delta = (1 - rho) / 2`.
-        // Returning INFINITY locks down the invariant: if a future refactor
-        // accidentally reads this value in the UD branch, downstream arithmetic
-        // turns into NaN / overflow rather than silently treating eta as
-        // 2^0 = 1 and producing a wrong delta.
-        for log_inv_rate in [1, 2, 5, 10, 20] {
-            assert_eq!(
-                SecurityAssumption::UniqueDecoding.log_eta(log_inv_rate),
-                f64::INFINITY,
-            );
-        }
+        // Reading log_eta in the UD branch is a programmer error; the panic
+        // locks that down so a future refactor that strays into the eta path
+        // under UD fails loudly instead of silently propagating a bogus value.
+        let _ = SecurityAssumption::UniqueDecoding.log_eta(5);
     }
 }
