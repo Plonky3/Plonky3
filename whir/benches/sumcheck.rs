@@ -188,7 +188,7 @@ fn bench_sumcheck_prover(c: &mut Criterion) {
             b.iter_batched(
                 || setup_zk(table, folding, &zk_encoding, &zk_mmcs),
                 |(prover, mut challenger, mut rng)| {
-                    run_zk_sumcheck(prover, &mut challenger, &mut rng, folding)
+                    run_zk_sumcheck(prover, &mut challenger, &mut rng, folding);
                 },
                 BatchSize::SmallInput,
             );

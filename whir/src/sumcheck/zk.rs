@@ -190,12 +190,12 @@ where
     }
 
     /// Returns the folding factor of the wrapped `PrefixProver`.
-    pub fn folding(&self) -> usize {
+    pub const fn folding(&self) -> usize {
         self.inner.folding
     }
 
     /// Returns the number of variables of the stacked polynomial.
-    pub fn num_variables(&self) -> usize {
+    pub const fn num_variables(&self) -> usize {
         self.inner.num_variables
     }
 
@@ -254,6 +254,7 @@ where
     /// - If `self.folding() == 0` or `> self.num_variables()`.
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_lines)]
+    #[allow(clippy::type_complexity)]
     #[tracing::instrument(skip_all)]
     pub fn into_sumcheck<R, Ch>(
         self,
@@ -702,7 +703,7 @@ where
 /// Free function rather than `PrefixProver::<F, EF>::strategy()` because the
 /// trait-bound `Layout` requires `F: TwoAdicField`, which the verifier doesn't
 /// inherit. The value is fixed by construction.
-pub fn prefix_strategy() -> LayoutStrategy {
+pub const fn prefix_strategy() -> LayoutStrategy {
     LayoutStrategy::new(true, VariableOrder::Prefix)
 }
 
