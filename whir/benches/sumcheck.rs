@@ -26,8 +26,14 @@ type EFPacked = <EF as ExtensionField<F>>::ExtensionPacking;
 
 // Mask commitment MMCS and mask encoding consumed by the HVZK arm
 // (Construction 6.3, eprint 2026/391).
-type MaskMmcs =
-    MerkleTreeMmcs<FP, FP, PaddingFreeSponge<Perm, 16, 8, 8>, TruncatedPermutation<Perm, 2, 8, 16>, 2, 8>;
+type MaskMmcs = MerkleTreeMmcs<
+    FP,
+    FP,
+    PaddingFreeSponge<Perm, 16, 8, 8>,
+    TruncatedPermutation<Perm, 2, 8, 16>,
+    2,
+    8,
+>;
 type MaskEnc = ReedSolomonZkEncoding<F, Radix2DFTSmallBatch<F>>;
 
 /// ZK code message length. Bound by Lemma 6.4 (`ℓ_zk ≥ 2`). `ℓ_zk = 4` sits at
@@ -115,7 +121,11 @@ fn setup_zk(
     folding: usize,
     encoding: &MaskEnc,
     mmcs: &MaskMmcs,
-) -> (ZkPrefixProver<F, EF, MaskEnc, MaskMmcs>, Challenger, SmallRng) {
+) -> (
+    ZkPrefixProver<F, EF, MaskEnc, MaskMmcs>,
+    Challenger,
+    SmallRng,
+) {
     let witness = PrefixProver::<F, EF>::new_witness(vec![table.clone()], folding);
     let inner = PrefixProver::<F, EF>::from_witness(witness);
     let mut prover = ZkPrefixProver::new(inner, encoding.clone(), mmcs.clone());

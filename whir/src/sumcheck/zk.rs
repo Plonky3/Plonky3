@@ -671,9 +671,7 @@ where
 
             challenger.observe_algebra_slice(wire);
 
-            if pow_bits > 0
-                && !challenger.check_witness(pow_bits, zk_data.pow_witnesses[j_idx])
-            {
+            if pow_bits > 0 && !challenger.check_witness(pow_bits, zk_data.pow_witnesses[j_idx]) {
                 return Err(SumcheckError::InvalidPowWitness);
             }
 
@@ -1074,14 +1072,9 @@ mod tests {
         let pow_bits = 0;
         let mut zk_data_real = ZkSumcheckData::<F, EF>::default();
         let mut real_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
-        let (_residual_real, _gammas_real, mask_oracles_real) = prover.into_sumcheck(
-            &mut zk_data_real,
-            pow_bits,
-            &mut prover_ch,
-            &mut real_rng,
-        );
-        let mask_commits_real: Vec<_> =
-            mask_oracles_real.iter().map(|(c, _)| c.clone()).collect();
+        let (_residual_real, _gammas_real, mask_oracles_real) =
+            prover.into_sumcheck(&mut zk_data_real, pow_bits, &mut prover_ch, &mut real_rng);
+        let mask_commits_real: Vec<_> = mask_oracles_real.iter().map(|(c, _)| c.clone()).collect();
 
         let (_real_rand, _real_target) = verifier_real
             .into_sumcheck::<MyMmcs, _>(
@@ -1108,8 +1101,7 @@ mod tests {
             verifier_sim.add_virtual_eval(eval, &mut sim_ch);
         }
         for &eval in &virtual_evals {
-            let mut tmp_verifier =
-                ZkVerifier::<F, EF>::new(&[TableShape::new(n_vars, 1)]);
+            let mut tmp_verifier = ZkVerifier::<F, EF>::new(&[TableShape::new(n_vars, 1)]);
             tmp_verifier.add_virtual_eval(eval, &mut verifier_sim_ch);
         }
 
