@@ -170,6 +170,15 @@ pub const fn indices_arr<const N: usize>() -> [usize; N] {
     indices_arr
 }
 
+/// Statically asserts that `T` implements [`Clone`].
+pub const fn assert_clone<T: Clone>() {}
+
+/// Statically asserts that `T` implements [`Send`].
+pub const fn assert_send<T: Send>() {}
+
+/// Statically asserts that `T` implements [`Sync`].
+pub const fn assert_sync<T: Sync>() {}
+
 #[inline]
 pub const fn reverse_bits(x: usize, n: usize) -> usize {
     // Assert that n is a power of 2

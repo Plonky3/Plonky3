@@ -27,7 +27,7 @@ use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
 use p3_uni_stark::{InvalidProofShapeError, StarkConfig};
-use p3_util::log2_strict_usize;
+use p3_util::{assert_clone, assert_send, assert_sync, log2_strict_usize};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
@@ -601,6 +601,12 @@ fn make_two_adic_compat_config(seed: u64) -> MyConfig {
 }
 
 fn make_config_zk(seed: u64) -> MyHidingConfig {
+    assert_clone::<HidingValMmcs>();
+    assert_sync::<HidingValMmcs>();
+    assert_send::<HidingPcs>();
+    assert_sync::<HidingPcs>();
+    assert_sync::<MyHidingConfig>();
+
     let mut rng = SmallRng::seed_from_u64(seed);
     let perm = Perm::new_from_rng_128(&mut rng);
     let hash = MyHash::new(perm.clone());
