@@ -869,7 +869,7 @@ mod tests {
     use p3_challenger::DuplexChallenger;
     use p3_dft::Radix2DFTSmallBatch;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
+    use p3_field::{BasedVectorSpace, Field, PackedValue, PrimeCharacteristicRing};
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_multilinear_util::poly::Poly;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -1021,8 +1021,13 @@ mod tests {
             num_eqs in 1usize..=3,
             seed in 0u64..1024,
         ) {
-            // `k ≤ n_vars` is the protocol precondition; pick `k` in range.
-            let folding_factor = 1 + (seed as usize % n_vars);
+            // `compress_prefix_to_packed` (called in `into_sumcheck`) requires
+            // `n_vars - folding >= log2(F::Packing::WIDTH)` to produce at least
+            // one full packed element. WIDTH varies per architecture (NEON=4,
+            // AVX2=8, AVX512=16); pick `folding` within that bound.
+            let k_pack = p3_util::log2_strict_usize(<F as Field>::Packing::WIDTH);
+            prop_assume!(n_vars > k_pack);
+            let folding_factor = 1 + (seed as usize % (n_vars - k_pack));
             prop_assert!(run_roundtrip(n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok());
         }
     }
@@ -1212,7 +1217,11 @@ mod tests {
             num_eqs in 1usize..=3,
             seed in 0u64..1024,
         ) {
-            let folding_factor = 1 + (seed as usize % n_vars);
+            // See `prop_completeness_classic_unpacked` for the packing-width
+            // precondition `compress_prefix_to_packed` imposes on `folding`.
+            let k_pack = p3_util::log2_strict_usize(<F as Field>::Packing::WIDTH);
+            prop_assume!(n_vars > k_pack);
+            let folding_factor = 1 + (seed as usize % (n_vars - k_pack));
             prop_assert!(
                 run_view_match_rs(n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok()
             );
@@ -1257,7 +1266,11 @@ mod tests {
             tamper_round_seed in 0usize..16,
             tamper_pos_seed in 0usize..8,
         ) {
-            let folding_factor = 1 + (seed as usize % n_vars);
+            // See `prop_completeness_classic_unpacked` for the packing-width
+            // precondition `compress_prefix_to_packed` imposes on `folding`.
+            let k_pack = p3_util::log2_strict_usize(<F as Field>::Packing::WIDTH);
+            prop_assume!(n_vars > k_pack);
+            let folding_factor = 1 + (seed as usize % (n_vars - k_pack));
 
             let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
 
