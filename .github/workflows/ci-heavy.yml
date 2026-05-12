@@ -1,0 +1,50 @@
+name: CI (heavy)
+
+# Heavy / exhaustive tests that are too slow for per-PR CI.
+# Triggered nightly and on demand.
+#
+# Currently this runs the `#[ignore]`d exhaustive WHIR sweep (and any future
+# `#[ignore]`d exhaustive tests).
+on:
+  schedule:
+    # Every day at 03:17 UTC. Off-peak to avoid colliding with PR runs.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: -C debuginfo=0
+
+jobs:
+  ignored_tests:
+    name: Run ignored / exhaustive tests
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: ubuntu-latest
+            features: "+avx2"
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        id: rs-stable
+
+      - name: Set flags
+        if: ${{ matrix.features }}
+        run: |
+          echo "RUSTFLAGS=$RUSTFLAGS -C target-feature=${{ matrix.features }}" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `--ignored` runs only the heavy tests
+      - name: Test (ignored) with parallel
+        run: cargo test --features parallel -- --ignored

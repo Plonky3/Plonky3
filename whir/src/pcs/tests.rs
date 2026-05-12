@@ -137,8 +137,93 @@ fn run_whir_pcs_lifecycle_with_witness<L: Layout<F, EF>>(
     }
 }
 
+// See `test_whir_end_to_end_exhaustive` for more exhaustive coverage.
 #[test]
 fn test_whir_end_to_end() {
+    // (folding_factor, soundness_type, pow_bits, rs_domain_initial_reduction_factor)
+    let configs: &[(FoldingFactor, SecurityAssumption, usize, usize)] = &[
+        (
+            FoldingFactor::Constant(1),
+            SecurityAssumption::JohnsonBound,
+            0,
+            1,
+        ),
+        (
+            FoldingFactor::Constant(2),
+            SecurityAssumption::CapacityBound,
+            5,
+            1,
+        ),
+        (
+            FoldingFactor::Constant(3),
+            SecurityAssumption::UniqueDecoding,
+            0,
+            2,
+        ),
+        (
+            FoldingFactor::Constant(4),
+            SecurityAssumption::JohnsonBound,
+            10,
+            3,
+        ),
+        (
+            FoldingFactor::ConstantFromSecondRound(2, 1),
+            SecurityAssumption::CapacityBound,
+            5,
+            1,
+        ),
+        (
+            FoldingFactor::ConstantFromSecondRound(3, 1),
+            SecurityAssumption::UniqueDecoding,
+            0,
+            1,
+        ),
+        (
+            FoldingFactor::ConstantFromSecondRound(3, 2),
+            SecurityAssumption::JohnsonBound,
+            5,
+            2,
+        ),
+        (
+            FoldingFactor::ConstantFromSecondRound(5, 2),
+            SecurityAssumption::CapacityBound,
+            10,
+            2,
+        ),
+    ];
+
+    let mut rng = SmallRng::seed_from_u64(7);
+    for &(folding_factor, soundness_type, pow_bits, rs_domain_initial_reduction_factor) in configs {
+        // Same well-formedness invariant the exhaustive sweep enforces by skipping.
+        assert!(
+            folding_factor.at_round(0) >= rs_domain_initial_reduction_factor,
+            "smoke config must satisfy first-round folding >= RS-domain reduction",
+        );
+        let specs = random_table_specs(&mut rng, folding_factor.at_round(0));
+        run_whir_pcs::<PrefixProver<F, EF>>(
+            &specs,
+            folding_factor,
+            soundness_type,
+            pow_bits,
+            rs_domain_initial_reduction_factor,
+        );
+        run_whir_pcs::<SuffixProver<F, EF>>(
+            &specs,
+            folding_factor,
+            soundness_type,
+            pow_bits,
+            rs_domain_initial_reduction_factor,
+        );
+    }
+}
+
+/// Exhaustive WHIR sweep over the full parameter cross-product.
+///
+/// Too slow for per-PR CI (~1,800 commit/open/verify lifecycles); run via the
+/// scheduled `heavy` workflow or locally with `cargo test -- --ignored`.
+#[test]
+#[ignore = "exhaustive WHIR sweep — run via scheduled CI or `cargo test -- --ignored`"]
+fn test_whir_end_to_end_exhaustive() {
     const N: usize = 5;
 
     let folding_factors = [
