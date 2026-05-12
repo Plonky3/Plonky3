@@ -1205,11 +1205,18 @@ impl<R: PrimeCharacteristicRing> Powers<R> {
             .zip(self)
             .for_each(|(out, next)| *out = next);
     }
+}
 
+impl<F: Field> Powers<F> {
     /// Wrapper for `self.take(n).collect()`.
+    ///
+    /// Bounded to `F: Field` on purpose: the body resolves `.collect()` to the inherent
+    /// [`BoundedPowers::collect`] SIMD fast path, which only exists under `F: Field`.
+    /// Defining this method under a wider bound (e.g. `PrimeCharacteristicRing`) would
+    /// silently fall back to `Iterator::collect` and bypass packed-field acceleration.
     #[inline]
     #[must_use]
-    pub fn collect_n(self, n: usize) -> Vec<R> {
+    pub fn collect_n(self, n: usize) -> Vec<F> {
         self.take(n).collect()
     }
 }
