@@ -1215,15 +1215,32 @@ mod tests {
         }
     }
 
-    // Tampering propagation: flipping a single field element in any round's
-    // wire form yields a different verifier-computed `target = ĥ_k(γ_k)`.
-    // The exact value isn't important; what matters is that *any* byte change
-    // drives the verifier off the honest path.
+    // Tampering-propagation flavour of RBR soundness: flipping a single field
+    // element in any round's wire form yields a different verifier-computed
+    // `target = ĥ_k(γ_k)`. The exact value isn't important; what matters is
+    // that *any* byte change drives the verifier off the honest path.
     //
-    // Implements the Round-by-Round (RBR) soundness flavour: even though the
-    // affine-reconstruction makes the wire trivially "consistent" with the
-    // running target, the next sampled `γ_{j+1}` and the residual target
+    // The affine reconstruction of `c_1` makes a tampered wire trivially
+    // satisfy round `j`'s identity `ĥ_j(0) + ĥ_j(1) = ĥ_{j-1}(γ_{j-1})`. RBR
+    // soundness still needs the cheat to be caught; this test asserts the
+    // cheat *propagates* — the next sampled `γ_{j+1}` and the residual target
     // follow a different trajectory once a byte changes.
+    //
+    // Coverage role. Lemma 6.5 of eprint 2026/391 proves the worst-case
+    // probability that a random `γ_j` rehabilitates a bad witness is
+    // `ε_j ≤ ε_mca + ℓ_zk · |Λ|² / |F|`. That bound is a theorem about the
+    // abstract protocol; what an implementation can test is conformance to
+    // the protocol the lemma analyses. That conformance is covered jointly
+    // by `prop_completeness_classic_unpacked` (honest case accepts),
+    // `prop_simulator_view_matches_real_rs` (Lemma 6.4 simulator-real
+    // bit-equivalence, the HVZK structure Lemma 6.5 builds on), and this
+    // test (any cheat propagates through Fiat-Shamir).
+    //
+    // Not tested here: the quantitative `empirical_rate ≤ ε_j` match. With
+    // `γ_j` sampled from `EF ≈ 2^124` (frozen design decision: ε ∈ EF for
+    // soundness margin), the bound is ~2^-110 for any feasible params —
+    // unobservable at any trial count CI can host without a sub-2^31
+    // test-only field type, which `p3-field` doesn't ship.
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(8))]
 
