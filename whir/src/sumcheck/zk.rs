@@ -1,14 +1,16 @@
 //! HVZK variant of the WHIR sumcheck (Construction 6.3, eprint 2026/391).
 //!
-//! Companion to [`super::single`]: same sumcheck reduction, but with `k` random
-//! univariate masks committed under a ZK encoding so that the prover's `k`
-//! round-polynomials no longer leak linear functions of the secret message.
+//! Sits as an overlay on top of [`PrefixProver`]: per round the plain piece
+//! `(c_0, c_∞)` is sourced the same way `PrefixProver::into_sumcheck` produces
+//! it — Lagrange-weighted dot products against per-claim partial-evaluation
+//! accumulators — and the HVZK side wraps that output with mask sampling +
+//! commitment, μ̃, ε, and the per-round mask polynomial contributions.
 //!
 //! # Protocol overview
 //!
-//! 1. **Masks.** Prover samples `s_1, …, s_k ∈ F^{<ℓ_zk}[X]` and commits
-//!    each encoded codeword `Enc_{C_zk}(s_j)` under MMCS, observing each
-//!    commitment on the transcript.
+//! 1. **Masks.** Prover samples `s_1, …, s_k ∈ F^{<ℓ_zk}[X]` and commits each
+//!    encoded codeword `Enc_{C_zk}(s_j)` under MMCS, observing each commitment
+//!    on the transcript.
 //! 2. **New target.** Prover sends `μ̃ := Σ_{b ∈ {0,1}^k} (s_1(b_1) + … + s_k(b_k))`.
 //! 3. **Combination randomness.** Verifier samples `ε`.
 //! 4. **Sumcheck.** For `j = 1, …, k`: prover sends `ĥ_j` (formula below),
@@ -57,9 +59,6 @@
 //! transcripts `(μ̃, ĥ_1, …, ĥ_k)` has dimension `1 + k(ℓ_zk - 1)`, so the `k`
 //! linear coefficients are exactly the redundant degrees of freedom.
 //!
-//! Mirrors the same convention used by [`super::single`] for the plain
-//! (degree-2) round polynomial.
-//!
 //! # Field constraints (Lemma 6.4)
 //!
 //! - `char(F) ≠ 2` — required by the rank-nullity argument that drives the
@@ -67,6 +66,15 @@
 //! - `ℓ_zk ≥ 2` — needed for the mask piece to carry non-trivial information.
 //!
 //! Both are enforced at constructor entry.
+//!
+//! # Residual sumcheck handoff
+//!
+//! After `k` HVZK rounds, [`ZkPrefixProver::into_sumcheck`] returns a residual
+//! [`SumcheckProver`] over the partially-folded product polynomial, **scaled
+//! by `ε`** so that `prod_poly.dot_product() == ε · plain_residual_sum`. The
+//! `ε` factor is absorbed into the folded base polynomial via the `scale`
+//! argument of `compress_prefix_to_packed`. Mirrors how
+//! [`PrefixProver::into_sumcheck`] hands off its residual.
 //!
 //! # References
 //!
@@ -77,18 +85,21 @@ use alloc::vec::Vec;
 
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, TwoAdicField, dot_product};
 use p3_matrix::Matrix;
 use p3_multilinear_util::point::Point;
-use p3_multilinear_util::poly::Poly;
 use p3_zk_codes::ZkEncoding;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
-use crate::constraints::statement::EqStatement;
 use crate::sumcheck::error::SumcheckError;
 use crate::sumcheck::extrapolate_01inf;
-use crate::sumcheck::strategy::VariableOrder;
+use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
+use crate::sumcheck::layout::{LayoutStrategy, PrefixProver, Verifier};
+use crate::sumcheck::product_polynomial::ProductPolynomial;
+use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
+use crate::sumcheck::svo::calculate_accumulators_batch;
+use crate::sumcheck::table::TableShape;
 
 /// Per-round transcript records for the HVZK sumcheck.
 ///
@@ -119,144 +130,149 @@ impl<F: Field, EF> Default for ZkSumcheckData<F, EF> {
     }
 }
 
-/// Namespace for the HVZK variant of the WHIR sumcheck.
-///
-/// Mirrors [`super::single::SingleSumcheck`]: a unit struct hosting the static
-/// constructors for each sumcheck strategy.
-pub struct ZkSumcheck;
-
 /// `(MMCS commitment, MMCS prover data)` for one encoded mask codeword.
 ///
-/// Held by [`ZkSumcheckProver`] so downstream consumers (committed sumcheck
-/// relation, §2.4 / §5 of eprint 2026/391) can produce opening proofs for
-/// queries to the mask oracles. Bounds on the type parameters are inferred at
-/// each use site from the surrounding `where` clauses.
-type MaskOracle<F, Enc, M> = (
+/// Returned by [`ZkPrefixProver::into_sumcheck`] so downstream consumers
+/// (committed sumcheck relation, §5 of eprint 2026/391) can produce opening
+/// proofs against the mask oracles.
+pub type MaskOracle<F, Enc, M> = (
     <M as Mmcs<F>>::Commitment,
     <M as Mmcs<F>>::ProverData<<Enc as ZkEncoding<F>>::Codeword>,
 );
 
-/// Stateful prover for the HVZK sumcheck (Construction 6.3).
+/// HVZK overlay over [`PrefixProver`]: same plain-piece arithmetic, plus mask
+/// sampling/commitment and the per-round `ĥ_j` formula from Construction 6.3.
 ///
-/// Carries the plain-piece polynomial pair (`evals`, `weights`) and its running
-/// sum — folded at each `γ_j` exactly like the non-ZK path — plus the mask
-/// bookkeeping required to build `ĥ_j` per the per-round formula in the module
-/// docs.
-#[allow(dead_code)]
-pub struct ZkSumcheckProver<F, EF, Enc, M>
+/// # Composition
+///
+/// - `inner` carries the same state PrefixProver does: tables, placements,
+///   stacked polynomial, recorded claims.
+/// - `encoding` and `mmcs` are HVZK-specific; they are consumed when
+///   `into_sumcheck` samples and commits the masks.
+///
+/// # Lifecycle
+///
+/// 1. Build a [`crate::sumcheck::layout::Witness`] from source tables.
+/// 2. Wrap into a [`PrefixProver`] via `PrefixProver::from_witness`.
+/// 3. Wrap into [`ZkPrefixProver`] via [`ZkPrefixProver::new`].
+/// 4. Register opening claims via [`Self::eval`] / [`Self::add_virtual_eval`]
+///    (both delegate to the inner `PrefixProver`).
+/// 5. Drive the HVZK sumcheck via [`Self::into_sumcheck`].
+pub struct ZkPrefixProver<F, EF, Enc, M>
 where
     F: Field,
     EF: ExtensionField<F>,
-    Enc: ZkEncoding<F>,
-    Enc::Codeword: Matrix<F>,
+    Enc: ZkEncoding<F> + Clone,
     M: Mmcs<F>,
 {
-    /// Folded evaluations of the witness polynomial — the first factor of the
-    /// `Ĝ(X_1, …, X_k)` plain piece in Construction 6.3 step 4. Promoted to EF
-    /// after round 1's fold and refolded at each `γ_j`.
-    evals: Poly<EF>,
-    /// Folded weights polynomial — the second factor of `Ĝ`, derived from the
-    /// `EqStatement` plus the `α` batching challenge. Refolded in lockstep with
-    /// `evals`.
-    weights: Poly<EF>,
-    /// Plain-piece sum: `Σ_{x ∈ {0,1}^{k-rounds_done}} evals(x) · weights(x)`,
-    /// the residual hypercube sum tracked by the standard sumcheck invariant
-    /// (matches `SumcheckProver::sum` in `single.rs`). Updated to
-    /// `plain_h_{j-1}(γ_{j-1})` after each round-{j-1} fold.
-    plain_sum: EF,
-    /// ZK encoding `Enc_{C_zk}` used for the masks (Theorem 6.2 ingredient `C_zk`).
+    inner: PrefixProver<F, EF>,
     encoding: Enc,
-    /// The `k` mask polynomials `s_1, …, s_k ∈ F^{<ℓ_zk}[X]` as coefficient
-    /// vectors of length `ℓ_zk` (Construction 6.3 step 1).
-    masks: Vec<Vec<F>>,
-    /// MMCS commitment + prover data for each encoded mask codeword.
-    ///
-    /// - The commitment is observed on the challenger, binding the masks to
-    ///   the `ε` challenge sampled later.
-    /// - The prover data is kept so downstream consumers (committed sumcheck
-    ///   relation, §2.4 / §5 of the paper) can produce opening proofs for
-    ///   queries to the mask oracles.
-    mask_oracles: Vec<MaskOracle<F, Enc, M>>,
-    /// Combination challenge `ε` sampled after `μ̃`; multiplies the plain
-    /// piece in every round polynomial. Widened to the extension field for
-    /// soundness margin (the paper writes `ε ← F`).
-    eps: EF,
-    /// Running future-mask endpoint sum.
-    ///
-    /// At the start of round `j`, before that round's start-of-round
-    /// decrement, this field holds
-    ///
-    /// ```text
-    /// Σ_{l ≥ j} (s_l(0) + s_l(1)).
-    /// ```
-    ///
-    /// Each round subtracts `s_j(0) + s_j(1)` first, leaving `Σ_{l > j}`,
-    /// which is the future-mask term in `ĥ_j`'s formula. The same quantity at
-    /// `j = 1` drives the closed-form `μ̃ = 2^{k-1} · Σ_{l=1}^k (s_l(0) + s_l(1))`.
-    sum_future_endpoints: F,
-    /// `s_l(γ_l)` for `l < current_round`, accumulated as rounds progress.
-    /// Drives the past-mask term `Σ_{l < j} s_l(γ_l)` of `ĥ_j`.
-    mask_evals_at_gamma: Vec<EF>,
-    /// Number of rounds remaining; decremented per `round()` call.
-    rounds_left: usize,
+    mmcs: M,
 }
 
-impl ZkSumcheck {
-    /// HVZK sumcheck via the classic unpacked (scalar) strategy.
+impl<F, EF, Enc, M> ZkPrefixProver<F, EF, Enc, M>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    Enc: ZkEncoding<F> + Clone,
+    M: Mmcs<F>,
+{
+    /// Wraps a `PrefixProver` with the HVZK trio (encoding + MMCS).
     ///
-    /// Mirrors [`super::single::SingleSumcheck::new_classic_unpacked`] in
-    /// shape. Runs Construction 6.3 steps 1–3 (sample and commit masks, send
-    /// `μ̃`, sample `ε`) plus round 1 of step 4 (build `ĥ_1`, sample `γ_1`,
-    /// fold the base polynomial).
+    /// The wrapped prover retains all of `PrefixProver`'s claim-recording API
+    /// via the delegating methods below.
+    pub const fn new(inner: PrefixProver<F, EF>, encoding: Enc, mmcs: M) -> Self {
+        Self {
+            inner,
+            encoding,
+            mmcs,
+        }
+    }
+
+    /// Returns the folding factor of the wrapped `PrefixProver`.
+    pub fn folding(&self) -> usize {
+        self.inner.folding
+    }
+
+    /// Returns the number of variables of the stacked polynomial.
+    pub fn num_variables(&self) -> usize {
+        self.inner.num_variables
+    }
+
+    /// Records concrete opening claims; delegates to `PrefixProver::eval`.
+    pub fn eval<Ch>(&mut self, table_idx: usize, polys: &[usize], challenger: &mut Ch) -> Vec<EF>
+    where
+        F: TwoAdicField,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        use crate::sumcheck::layout::Layout;
+        self.inner.eval(table_idx, polys, challenger)
+    }
+
+    /// Records a virtual opening claim; delegates to `PrefixProver::add_virtual_eval`.
+    pub fn add_virtual_eval<Ch>(&mut self, challenger: &mut Ch) -> EF
+    where
+        F: TwoAdicField,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        use crate::sumcheck::layout::Layout;
+        self.inner.add_virtual_eval(challenger)
+    }
+
+    /// Runs the HVZK sumcheck: Construction 6.3 steps 1–3 (mask commit, μ̃, ε)
+    /// followed by `folding` rounds of step 4. Returns a residual sumcheck
+    /// prover scaled by `ε` (see module docs).
     ///
     /// # Algorithm
     ///
-    /// 1. Sample a batching challenge `α` and combine multiple `EqStatement`
-    ///    constraints into a single weight polynomial.
-    /// 2. Sample masks `s_1, …, s_k ∈ F^{<ℓ_zk}[X]`; for each, encode under
-    ///    `Enc_{C_zk}`, MMCS-commit the codeword, and observe the commitment.
+    /// 1. Sample `α` and build the per-claim partial-evaluation accumulators
+    ///    (same as `PrefixProver::into_sumcheck`).
+    /// 2. Sample masks `s_1, …, s_k`, encode + MMCS-commit + observe each.
     /// 3. Compute and observe `μ̃ = 2^{k-1} · Σ_l (s_l(0) + s_l(1))`.
     /// 4. Sample `ε`.
-    /// 5. Build `ĥ_1` per the per-round formula; observe its non-linear
-    ///    coefficients on the transcript; grind; sample `γ_1`.
-    /// 6. Cache `s_1(γ_1)` and fold the base polynomial at `γ_1`.
+    /// 5. For `round_idx = 0..folding`:
+    ///    - Compute `(plain_c_0, plain_c_∞)` from accumulators via Lagrange
+    ///      weights, summed across concrete + virtual claims.
+    ///    - Build `ĥ_j` (mask + past + future + ε·plain) and emit
+    ///      `[c_0, c_2, …, c_d]` on the wire.
+    ///    - Grind PoW, sample `γ_j`, cache `s_j(γ_j)`, update running plain
+    ///      sum + future-endpoint state.
+    /// 6. Build the residual `ProductPolynomial`: base polynomial folded at
+    ///    all `γ` and scaled by `ε`, times the residual equality-weight
+    ///    polynomial. Residual sum equals `ε · plain_residual_sum`.
     ///
     /// # Returns
     ///
-    /// - The HVZK prover state, ready for rounds 2..=k via [`ZkSumcheckProver::round`].
-    /// - The first verifier challenge `γ_1`.
+    /// - Residual sumcheck prover over the packed product polynomial.
+    /// - Folding challenges `(γ_1, …, γ_k)`.
+    /// - Mask oracles (commitment + prover data per mask), in mask order.
     ///
     /// # Panics
     ///
-    /// - If `char(F) == 2` (Lemma 6.4 requires `char(F) ≠ 2`).
-    /// - If `encoding.message_len() < 2` (Lemma 6.4 requires `ℓ_zk ≥ 2`).
-    /// - If `folding_factor` is 0 or exceeds `poly.num_variables()`.
+    /// - If `char(F) == 2` (Lemma 6.4).
+    /// - If `encoding.message_len() < 2` (Lemma 6.4).
+    /// - If `self.folding() == 0` or `> self.num_variables()`.
     #[allow(clippy::too_many_arguments)]
-    pub fn new_classic_unpacked<F, EF, Enc, M, Challenger, R>(
-        poly: &Poly<F>,
+    #[allow(clippy::too_many_lines)]
+    #[tracing::instrument(skip_all)]
+    pub fn into_sumcheck<R, Ch>(
+        self,
         zk_data: &mut ZkSumcheckData<F, EF>,
-        challenger: &mut Challenger,
-        folding_factor: usize,
         pow_bits: usize,
-        statement: &EqStatement<EF>,
-        encoding: &Enc,
-        mmcs: &M,
+        challenger: &mut Ch,
         rng: &mut R,
-    ) -> (ZkSumcheckProver<F, EF, Enc, M>, Point<EF>)
+    ) -> (SumcheckProver<F, EF>, Point<EF>, Vec<MaskOracle<F, Enc, M>>)
     where
-        F: Field,
-        EF: ExtensionField<F>,
-        Enc: ZkEncoding<F> + Clone,
+        F: TwoAdicField,
+        EF: ExtensionField<F> + TwoAdicField,
         Enc::Codeword: Matrix<F>,
-        M: Mmcs<F>,
-        Challenger:
-            FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
         R: Rng,
         StandardUniform: Distribution<F>,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     {
-        let k = folding_factor;
-        let ell_zk = encoding.message_len();
-        let n_vars = poly.num_variables();
+        let k = self.inner.folding;
+        let ell_zk = self.encoding.message_len();
+        let n_vars = self.inner.num_variables;
 
         assert!(
             F::TWO != F::ZERO,
@@ -272,21 +288,31 @@ impl ZkSumcheck {
             "folding_factor must be <= poly.num_variables()",
         );
 
-        // Sample a batching challenge for combining multiple equality
-        // constraints into a single weight polynomial. Construction 6.3
-        // assumes a single-claim input (relation `R_{C, C_zk, sl}`,
-        // Definition 5.8); we collapse here before proceeding.
+        let Self {
+            inner,
+            encoding,
+            mmcs,
+        } = self;
+
+        // --- Plain-piece preamble (mirrors PrefixProver::into_sumcheck) ---
         let alpha: EF = challenger.sample_algebra_element();
-        let mut weights = Poly::zero(n_vars);
-        let mut sum = EF::ZERO;
-        statement.combine_hypercube::<F, false>(&mut weights, &mut sum, alpha);
+        let n_claims = {
+            use crate::sumcheck::layout::Layout;
+            inner.num_claims()
+        };
+        let mut alphas = alpha.powers();
+        let accumulators: Vec<_> = inner
+            .placements
+            .iter()
+            .flat_map(|placement| inner.claim_map[placement.idx()].iter())
+            .map(|claim| {
+                let per_claim: Vec<EF> = alphas.by_ref().take(claim.len()).collect();
+                calculate_accumulators_batch(claim, &per_claim)
+            })
+            .collect();
+        let mut plain_sum = inner.sum(alpha);
 
         // --- Construction 6.3 step 1: sample, encode, commit, observe ---
-        // Sample masks `s_1, …, s_k ∈ F^{<ell_zk}[X]` as coefficient vectors;
-        // for each, encode the codeword under `Enc_{C_zk}`, MMCS-commit, and
-        // observe the commitment. The commitment is what binds the masks to
-        // the `ε` challenge sampled later. Encoding randomness is consumed
-        // inside `Enc::encode` and not stored.
         let masks: Vec<Vec<F>> = (0..k)
             .map(|_| (0..ell_zk).map(|_| rng.random()).collect())
             .collect();
@@ -300,18 +326,14 @@ impl ZkSumcheck {
             })
             .collect();
 
-        // --- Construction 6.3 step 2: send μ̃ ---
-        // μ̃ = Σ_{b ∈ {0,1}^k} ŝ(b) = 2^{k-1} · Σ_l (s_l(0) + s_l(1))
-        // where s_l(0) + s_l(1) = c_0 + Σ c_i = mask[0] + Σ mask
-        // for s_l(X) = c_0 + c_1·X + … + c_{ell_zk-1}·X^{ell_zk-1}.
-        let sum_future_endpoints: F = masks
+        // --- Construction 6.3 step 2: μ̃ ---
+        let sum_endpoints_init: F = masks
             .iter()
             .map(|mask| mask[0] + mask.iter().copied().sum::<F>())
             .sum();
         let two_to_k_minus_1 = F::TWO.exp_u64((k - 1) as u64);
-        let mu_tilde: F = two_to_k_minus_1 * sum_future_endpoints;
+        let mu_tilde: F = two_to_k_minus_1 * sum_endpoints_init;
 
-        // Cross-check the closed form against the naive 2^k-term sum.
         #[cfg(debug_assertions)]
         {
             let mut naive = F::ZERO;
@@ -332,331 +354,235 @@ impl ZkSumcheck {
             );
         }
 
-        // Lift `μ̃` to EF for transcript observation (codebase convention).
         challenger.observe_algebra_element(EF::from(mu_tilde));
-        // Record `μ̃` in the proof so the verifier can re-observe it in the
-        // same position before sampling `ε`.
         zk_data.mu_tilde = mu_tilde;
 
-        // --- Construction 6.3 step 3: sample ε ---
+        // --- Construction 6.3 step 3: ε ---
         let eps: EF = challenger.sample_algebra_element();
 
-        // --- Construction 6.3 step 4, round 1: build ĥ_1, fold base ---
+        // --- Per-round loop (Construction 6.3 step 4) ---
+        let mut rs: Vec<EF> = Vec::with_capacity(k);
+        let mut mask_evals_at_gamma: Vec<EF> = Vec::with_capacity(k);
+        // Running future-endpoint state: at the start of round `j` (1-indexed)
+        // this holds `Σ_{l ≥ j}(s_l(0) + s_l(1))`. Initialised to the full sum
+        // so round 1's start-of-round decrement leaves `Σ_{l ≥ 2}`.
+        let mut sum_future_endpoints = sum_endpoints_init;
 
-        // Start-of-round decrement: subtract `s_1`'s endpoints so the running
-        // future-mask sum holds `Σ_{l > 1} (s_l(0) + s_l(1))`, the value the
-        // per-round formula uses at `j = 1`.
-        let s_1_endpoints = masks[0][0] + masks[0].iter().copied().sum::<F>();
-        let sum_future_endpoints_state = sum_future_endpoints - s_1_endpoints;
+        for round_idx in 0..k {
+            let j = round_idx + 1;
+            let s_j = &masks[round_idx];
 
-        // Plain piece (degree-2): returns (c_0, c_∞); derive c_1 from the
-        // affine constraint h(0) + h(1) = sum, i.e. c_1 = sum - 2·c_0 - c_∞.
-        let (plain_c0, plain_c_inf) =
-            VariableOrder::Prefix.sumcheck_coefficients(poly.as_slice(), weights.as_slice());
-        let plain_c1 = sum - plain_c0.double() - plain_c_inf;
+            // Start-of-round decrement: drop `s_j`'s endpoints so the running
+            // sum is `Σ_{l > j}(s_l(0)+s_l(1))`, the value the per-round
+            // formula uses for the future-mask term at this `j`.
+            let s_j_endpoints = s_j[0] + s_j.iter().copied().sum::<F>();
+            sum_future_endpoints -= s_j_endpoints;
 
-        // Build `ĥ_1` of length `max(ell_zk, 3)`:
-        //   indices 0..ell_zk : live-mask piece           = 2^{k-1} · s_1(X)
-        //   index 0           : future-mask contribution += 2^{k-2} · Σ_{l>1}(s_l(0)+s_l(1))
-        //   indices 0..3      : plain piece              += ε · (c_0 + c_1·X + c_∞·X²)
-        // The future-mask term is only present when `k ≥ 2`.
-        let h1_size = core::cmp::max(ell_zk, 3);
-        let mut h1: Vec<EF> = vec![EF::ZERO; h1_size];
-
-        let two_pow_k_minus_1 = F::TWO.exp_u64((k - 1) as u64);
-        for (i, &c) in masks[0].iter().enumerate() {
-            h1[i] += EF::from(two_pow_k_minus_1 * c);
-        }
-        if k >= 2 {
-            let two_pow_k_minus_2 = F::TWO.exp_u64((k - 2) as u64);
-            h1[0] += EF::from(two_pow_k_minus_2 * sum_future_endpoints_state);
-        }
-
-        h1[0] += eps * plain_c0;
-        h1[1] += eps * plain_c1;
-        h1[2] += eps * plain_c_inf;
-
-        // Round-1 affine consistency check:
-        //   h(0) + h(1) = c_0 + (c_0 + c_1 + … + c_d) = 2·c_0 + Σ_{i ≥ 1} c_i,
-        // which must equal μ̃ + ε·μ.
-        debug_assert_eq!(
-            h1[0].double() + h1[1..].iter().copied().sum::<EF>(),
-            EF::from(mu_tilde) + eps * sum,
-            "ĥ_1 should satisfy h(0) + h(1) = μ̃ + ε·μ",
-        );
-
-        // Wire format: send (c_0, c_2, c_3, …, c_d), skipping c_1; verifier
-        // reconstructs c_1 from the affine consistency check above.
-        let mut h1_wire: Vec<EF> = Vec::with_capacity(h1_size - 1);
-        h1_wire.push(h1[0]);
-        h1_wire.extend_from_slice(&h1[2..]);
-
-        challenger.observe_algebra_slice(&h1_wire);
-        zk_data.round_coefficients.push(h1_wire);
-
-        // Proof-of-work grind, then sample γ_1.
-        if pow_bits > 0 {
-            zk_data.pow_witnesses.push(challenger.grind(pow_bits));
-        }
-        let gamma_1: EF = challenger.sample_algebra_element();
-
-        // Cache `s_1(γ_1)` via Horner for the past-mask term in future rounds.
-        let s1_at_gamma1: EF = masks[0]
-            .iter()
-            .rev()
-            .copied()
-            .fold(EF::ZERO, |acc, c| acc * gamma_1 + EF::from(c));
-        let mask_evals_at_gamma: Vec<EF> = vec![s1_at_gamma1];
-
-        // Fold base polynomial and weights at γ_1; update plain sum to
-        // plain_h(γ_1) via quadratic extrapolation. `plain_sum` tracks the
-        // plain-piece sum only — mask-side bookkeeping lives in this struct's
-        // other fields, multiplied by `ε` when assembled into `ĥ_j`.
-        weights.fix_prefix_var_mut(gamma_1);
-        let folded_poly = poly.fix_prefix_var(gamma_1);
-        let new_sum = extrapolate_01inf(plain_c0, sum - plain_c0, plain_c_inf, gamma_1);
-
-        // Sanity: the folded pair's hypercube dot product equals the updated
-        // plain sum (mirrors `ProductPolynomial::dot_product` ↔ `sum` invariant
-        // in `single.rs`). Catches fold/extrapolate mismatches before round 2.
-        debug_assert_eq!(
-            folded_poly
+            // Plain (c_0, c_∞) from the per-claim partial-evaluation
+            // accumulators, summed across concrete + virtual claims and
+            // Lagrange-weighted by the challenges sampled so far. This is
+            // exactly what `PrefixProver::into_sumcheck` does, just lifted
+            // out so we can mix in the HVZK overlay.
+            let weights_lag = lagrange_weights_01inf_multi(&rs);
+            let mut plain_c0 = EF::ZERO;
+            let mut plain_c_inf = EF::ZERO;
+            for accs in &accumulators {
+                plain_c0 += dot_product::<EF, _, _>(
+                    accs[round_idx][0].iter().copied(),
+                    weights_lag.iter().copied(),
+                );
+                plain_c_inf += dot_product::<EF, _, _>(
+                    accs[round_idx][1].iter().copied(),
+                    weights_lag.iter().copied(),
+                );
+            }
+            for (vc, alpha_i) in inner
+                .virtual_claims
                 .iter()
-                .zip(weights.iter())
-                .map(|(&e, &w)| e * w)
-                .sum::<EF>(),
-            new_sum,
-            "round-1 fold should preserve plain sumcheck invariant",
-        );
+                .zip(alpha.powers().skip(n_claims))
+            {
+                let vc_accs = &vc.data;
+                plain_c0 += alpha_i
+                    * dot_product::<EF, _, _>(
+                        vc_accs[round_idx][0].iter().copied(),
+                        weights_lag.iter().copied(),
+                    );
+                plain_c_inf += alpha_i
+                    * dot_product::<EF, _, _>(
+                        vc_accs[round_idx][1].iter().copied(),
+                        weights_lag.iter().copied(),
+                    );
+            }
+            // Recover c_1 of the plain piece from the affine constraint
+            //   plain_h(0) + plain_h(1) = plain_sum
+            // ⇒ c_1 = plain_sum - 2·c_0 - c_∞.
+            let plain_c1 = plain_sum - plain_c0.double() - plain_c_inf;
 
-        let prover = ZkSumcheckProver {
-            evals: folded_poly,
-            weights,
-            plain_sum: new_sum,
-            encoding: encoding.clone(),
-            masks,
-            mask_oracles,
-            eps,
-            // After round 1's start-decrement, this holds Σ_{l ≥ 2}, which is
-            // the state round 2 expects at its start (before its own decrement).
-            sum_future_endpoints: sum_future_endpoints_state,
-            mask_evals_at_gamma,
-            rounds_left: k - 1,
-        };
+            // Build `ĥ_j` of length `max(ell_zk, 3)`:
+            //   indices 0..ell_zk : live-mask piece           = 2^{k-j} · s_j(X)
+            //   index 0           : past-mask contribution   += 2^{k-j} · Σ_{l<j} s_l(γ_l)
+            //   index 0           : future-mask contribution += 2^{k-j-1} · Σ_{l>j}(s_l(0)+s_l(1))
+            //   indices 0..3      : plain piece              += ε · (c_0 + c_1·X + c_∞·X²)
+            let h_size = core::cmp::max(ell_zk, 3);
+            let mut h: Vec<EF> = vec![EF::ZERO; h_size];
 
-        (prover, Point::new(vec![gamma_1]))
-    }
+            let mult_live = F::TWO.exp_u64((k - j) as u64);
+            for (i, &c) in s_j.iter().enumerate() {
+                h[i] += EF::from(mult_live * c);
+            }
+            let past_mask_sum: EF = mask_evals_at_gamma.iter().copied().sum();
+            h[0] += EF::from(mult_live) * past_mask_sum;
+            if j < k {
+                let mult_future = F::TWO.exp_u64((k - j - 1) as u64);
+                h[0] += EF::from(mult_future * sum_future_endpoints);
+            }
+            h[0] += eps * plain_c0;
+            h[1] += eps * plain_c1;
+            h[2] += eps * plain_c_inf;
 
-    /// HVZK simulator for the classic-unpacked HVZK sumcheck (Lemma 6.4).
-    ///
-    /// Runs the prover's Fiat-Shamir actions *without ever consulting the
-    /// witness polynomial* `f`. Instead of computing each round polynomial
-    /// `ĥ_j` from the masks plus the plain piece, the simulator samples each
-    /// round's wire form uniformly at random from `EF^{max(ℓ_zk-1, 2)}` —
-    /// since the verifier reconstructs `c_1` from the affine constraint
-    /// `target = 2·c_0 + c_1 + Σ_{i ≥ 2} c_i`, every uniform wire form is
-    /// trivially "consistent" with the running target. The mask commitments
-    /// are indistinguishable from the real prover's because the simulator
-    /// samples real masks itself (the witness `f` enters only the plain
-    /// piece, which the simulator skips).
-    ///
-    /// # Distributional match (Lemma 6.4)
-    ///
-    /// For Reed-Solomon `Enc_{C_zk}` (encoding error `ζ_RS = 0`) the affine
-    /// subspace of valid `(μ̃, ĥ_1, …, ĥ_k)` tuples has dimension
-    /// `1 + k·max(ℓ_zk - 1, 2)` and the honest-prover formulas are surjective
-    /// onto it (proven via rank-nullity in §6.1 of eprint 2026/391). The
-    /// simulator produces an identically-distributed `(μ̃, wire forms)` by
-    /// sampling each coordinate uniformly. The proof is the paper's; this
-    /// implementation just realises the construction.
-    ///
-    /// # Returns
-    ///
-    /// - The simulated `ZkSumcheckData` artefact (μ̃, per-round wire forms,
-    ///   PoW witnesses).
-    /// - The mask commitments (so the test caller can pass them to the
-    ///   verifier alongside the simulated `ZkSumcheckData`).
-    /// - The `(γ_1, …, γ_k)` randomness vector — useful for round-trip
-    ///   assertions but redundant with the verifier's own output.
-    ///
-    /// # Panics
-    ///
-    /// Same precondition asserts as [`Self::new_classic_unpacked`] (char ≠ 2,
-    /// `ell_zk ≥ 2`, `k ≥ 1`).
-    #[allow(clippy::too_many_arguments)]
-    pub fn simulate_classic_unpacked<F, EF, Enc, M, Challenger, R>(
-        challenger: &mut Challenger,
-        folding_factor: usize,
-        pow_bits: usize,
-        statement: &EqStatement<EF>,
-        encoding: &Enc,
-        mmcs: &M,
-        rng: &mut R,
-    ) -> (ZkSumcheckData<F, EF>, Vec<M::Commitment>, Point<EF>)
-    where
-        F: Field,
-        EF: ExtensionField<F>,
-        Enc: ZkEncoding<F>,
-        Enc::Codeword: Matrix<F>,
-        M: Mmcs<F>,
-        Challenger:
-            FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
-        R: Rng,
-        StandardUniform: Distribution<F> + Distribution<EF>,
-    {
-        let k = folding_factor;
-        let ell_zk = encoding.message_len();
+            // Affine consistency check.
+            //
+            // Per-term contribution to `h(0) + h(1) = 2·h[0] + Σ_{i≥1} h[i]`,
+            // grouped by where each term writes into `h`:
+            //   live (writes h[i] for i in 0..ell_zk, coefficient 2^{k-j}·s_j[i]):
+            //     contributes 2^{k-j} · (s_j(0) + s_j(1)) = 2^{k-j} · s_j_endpoints
+            //   past (writes h[0] only, coefficient 2^{k-j}·past_mask_sum):
+            //     contributes 2^{k-j+1} · past_mask_sum
+            //   future (writes h[0] only, coefficient 2^{k-j-1}·sum_future):
+            //     contributes 2^{k-j} · sum_future   (zero in round j = k)
+            //   plain (writes h[0,1,2], coefficients ε·c_0, ε·c_1, ε·c_∞):
+            //     contributes ε · (2·c_0 + c_1 + c_∞) = ε · plain_sum
+            //
+            // The two anchor cases:
+            //   j = 1: sum collapses to `μ̃ + ε·μ`  (round-1 target).
+            //   j > 1: sum equals `ĥ_{j-1}(γ_{j-1})` by induction.
+            #[cfg(debug_assertions)]
+            {
+                let mult_live = F::TWO.exp_u64((k - j) as u64);
+                let mult_past = F::TWO.exp_u64((k - j + 1) as u64);
+                let mut expected = EF::from(mult_live * s_j_endpoints)
+                    + EF::from(mult_past) * past_mask_sum
+                    + eps * plain_sum;
+                if j < k {
+                    expected += EF::from(mult_live * sum_future_endpoints);
+                }
+                debug_assert_eq!(
+                    h[0].double() + h[1..].iter().copied().sum::<EF>(),
+                    expected,
+                    "ĥ_j affine consistency check failed at round {j}",
+                );
+            }
 
-        assert!(
-            F::TWO != F::ZERO,
-            "Construction 6.3 (Lemma 6.4) requires char(F) != 2",
-        );
-        assert!(
-            ell_zk >= 2,
-            "Construction 6.3 (Lemma 6.4) requires ell_zk >= 2",
-        );
-        assert!(k >= 1, "sumcheck requires at least one round");
-
-        // Mirror the prover's α-sampling step and derive μ from the public
-        // claims. The simulator never touches `f`; the eq-statement evals are
-        // public, so this is information the simulator legitimately has.
-        let alpha: EF = challenger.sample_algebra_element();
-        let mut mu = EF::ZERO;
-        statement.combine_evals(&mut mu, alpha);
-
-        // Sample fresh masks + commit + observe (identical distribution to
-        // the real prover: for RS the codewords are uniform, so simulator
-        // codewords are indistinguishable from real ones).
-        let masks: Vec<Vec<F>> = (0..k)
-            .map(|_| (0..ell_zk).map(|_| rng.random()).collect())
-            .collect();
-        let mut mask_commits: Vec<M::Commitment> = Vec::with_capacity(k);
-        for mask in &masks {
-            let codeword = encoding.encode(mask, rng);
-            let (commit, _prover_data) = mmcs.commit_matrix(codeword);
-            challenger.observe(commit.clone());
-            mask_commits.push(commit);
-        }
-
-        // Compute μ̃ from the masks (closed form, identical to prover). For
-        // distributional purposes we could equivalently sample `μ̃` uniform in
-        // `F`; computing it here keeps the simulator byte-equivalent to the
-        // prover when both are seeded identically.
-        let two_to_k_minus_1 = F::TWO.exp_u64((k - 1) as u64);
-        let mu_tilde: F = two_to_k_minus_1
-            * masks
-                .iter()
-                .map(|m| m[0] + m.iter().copied().sum::<F>())
-                .sum::<F>();
-
-        challenger.observe_algebra_element(EF::from(mu_tilde));
-        let eps: EF = challenger.sample_algebra_element();
-
-        // Drive the rounds. The simulator's only job per round is to advance
-        // the challenger correctly: observe a wire form drawn from the same
-        // distribution the honest prover induces, grind, sample γ_j. The wire
-        // form has no consistency constraint — the verifier's `c_1`
-        // reconstruction makes any wire automatically affine-valid.
-        //
-        // Two-tier sampling, matching honest stratification of `ĥ_j`:
-        //   - wire[0], wire[1] (= c_0, c_2): receive an `ε · plain_c_*` term in
-        //     honest execution, so live in EF. Sample uniformly from EF.
-        //   - wire[j] for j ≥ 2 (= c_3, c_4, …, c_{ell_zk-1}): receive only the
-        //     live-mask contribution `2^{k-j} · s_j[i]` with `s_j[i] ∈ F`, so
-        //     live in the F-subspace of EF. Sample from F lifted via `EF::from`.
-        // Without this stratification, a distinguisher trivially separates real
-        // from simulated views by checking `wire[j].as_basis_coefficients_slice()[1..]`
-        // — see eprint 2026/391 §6.1; the paper proof generalises tier-by-tier.
-        let h_size = core::cmp::max(ell_zk, 3);
-        let wire_size = h_size - 1;
-        let mut zk_data = ZkSumcheckData::<F, EF> {
-            mu_tilde,
-            round_coefficients: Vec::with_capacity(k),
-            pow_witnesses: Vec::with_capacity(if pow_bits > 0 { k } else { 0 }),
-        };
-        let mut randomness: Vec<EF> = Vec::with_capacity(k);
-        // Track the running affine target only to confirm (in debug) that the
-        // verifier's reconstruction will land on a well-formed Horner eval —
-        // not a soundness check, just a self-consistency sanity.
-        let mut target: EF = eps * mu + EF::from(mu_tilde);
-
-        for _ in 0..k {
-            let wire: Vec<EF> = (0..wire_size)
-                .map(|j| {
-                    if j < 2 {
-                        rng.random::<EF>()
-                    } else {
-                        EF::from(rng.random::<F>())
-                    }
-                })
-                .collect();
+            // Wire format: send `(c_0, c_2, c_3, …, c_d)`, skipping `c_1`.
+            let mut wire: Vec<EF> = Vec::with_capacity(h_size - 1);
+            wire.push(h[0]);
+            wire.extend_from_slice(&h[2..]);
 
             challenger.observe_algebra_slice(&wire);
+            zk_data.round_coefficients.push(wire);
 
             if pow_bits > 0 {
                 zk_data.pow_witnesses.push(challenger.grind(pow_bits));
             }
-
             let gamma_j: EF = challenger.sample_algebra_element();
 
-            // Reconstruct `c_1` and Horner-evaluate `ĥ_j(γ_j)` to advance
-            // `target`. Mirrors the verifier exactly so the debug invariant
-            // below corresponds to what the verifier will compute.
-            let c0 = wire[0];
-            let high_sum: EF = wire[1..].iter().copied().sum();
-            let c1 = target - c0.double() - high_sum;
-            let mut coeffs: Vec<EF> = Vec::with_capacity(h_size);
-            coeffs.push(c0);
-            coeffs.push(c1);
-            coeffs.extend_from_slice(&wire[1..]);
-            target = coeffs
+            // Cache `s_j(γ_j)` via Horner for the past-mask term in future rounds.
+            let s_j_at_gamma_j: EF = s_j
                 .iter()
                 .rev()
                 .copied()
-                .fold(EF::ZERO, |acc, c| acc * gamma_j + c);
+                .fold(EF::ZERO, |acc, c| acc * gamma_j + EF::from(c));
+            mask_evals_at_gamma.push(s_j_at_gamma_j);
 
-            zk_data.round_coefficients.push(wire);
-            randomness.push(gamma_j);
+            // Update plain_sum via quadratic extrapolation.
+            plain_sum = extrapolate_01inf(plain_c0, plain_sum - plain_c0, plain_c_inf, gamma_j);
+            rs.push(gamma_j);
         }
 
-        (zk_data, mask_commits, Point::new(randomness))
+        // --- Residual hand-off (mirrors PrefixProver::into_sumcheck) ---
+        let rs = Point::new(rs);
+        // Absorb `ε` into the folded base polynomial by passing it as the
+        // `scale` argument; the residual product polynomial then satisfies
+        // `dot_product() == ε · plain_residual_sum`.
+        let compressed = tracing::info_span!("compress_prefix_to_packed")
+            .in_scope(|| inner.poly.compress_prefix_to_packed(&rs, eps));
+        let weights = inner.combine_eqs(&rs, alpha).pack::<F, EF>();
+        let prod_poly =
+            ProductPolynomial::<F, EF>::new_packed(VariableOrder::Prefix, compressed, weights);
+
+        let residual_sum = eps * plain_sum;
+        debug_assert_eq!(
+            prod_poly.dot_product(),
+            residual_sum,
+            "residual product polynomial dot product must equal ε · plain_residual_sum",
+        );
+
+        (
+            SumcheckProver::new(prod_poly, residual_sum),
+            rs,
+            mask_oracles,
+        )
+    }
+}
+
+/// HVZK verifier wrapping the layout [`Verifier`] with the affine-chain check.
+pub struct ZkVerifier<F, EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    inner: Verifier<F, EF>,
+}
+
+impl<F, EF> ZkVerifier<F, EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    /// Builds the verifier-side registry mirroring [`PrefixProver`]'s strategy.
+    pub fn new(table_shapes: &[TableShape]) -> Self {
+        Self {
+            inner: Verifier::new(table_shapes, prefix_strategy()),
+        }
     }
 
-    /// Verifier counterpart of [`Self::new_classic_unpacked`].
+    /// Records concrete opening claims; delegates to `Verifier::add_claim`.
+    pub fn add_claim<Ch>(
+        &mut self,
+        table_idx: usize,
+        polys: &[usize],
+        evals: &[EF],
+        challenger: &mut Ch,
+    ) where
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        self.inner.add_claim(table_idx, polys, evals, challenger);
+    }
+
+    /// Records a virtual opening claim; delegates to `Verifier::add_virtual_eval`.
+    pub fn add_virtual_eval<Ch>(&mut self, eval: EF, challenger: &mut Ch)
+    where
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        self.inner.add_virtual_eval(eval, challenger);
+    }
+
+    /// Verifier counterpart of [`ZkPrefixProver::into_sumcheck`].
     ///
     /// Replays the prover's transcript actions from `zk_data` and the supplied
     /// `mask_commits`, reconstructs the dropped linear coefficient `c_1` of
     /// each round polynomial via the affine consistency check, verifies any
     /// proof-of-work witnesses, and samples `(γ_1, …, γ_k)` from the
-    /// challenger. Returns the challenge point and the residual claim
-    /// `ĥ_k(γ_k)` that downstream protocols (e.g. the committed sumcheck
-    /// relation, §5 of eprint 2026/391) must check against the mask oracles +
-    /// the witness polynomial.
-    ///
-    /// # Inputs
-    ///
-    /// - `zk_data` — the prover's `ZkSumcheckData` proof artefact (μ̃, per-round
-    ///   wire forms, PoW witnesses).
-    /// - `challenger` — Fiat-Shamir transcript, must be in the same state the
-    ///   prover's transcript was in at the start of `new_classic_unpacked`.
-    /// - `folding_factor` — `k`.
-    /// - `pow_bits` — proof-of-work difficulty (must match the prover).
-    /// - `statement` — same `EqStatement` the prover used; the verifier uses
-    ///   it to derive `μ` from the claimed evaluations and `α` (without ever
-    ///   building the weight polynomial).
-    /// - `mask_commits` — the `k` MMCS mask commitments, in mask order; the
-    ///   verifier observes them on the transcript exactly as the prover did.
-    /// - `ell_zk` — `encoding.message_len()`. Used to re-derive the wire size
-    ///   `max(ℓ_zk - 1, 2)`.
+    /// challenger. Returns `(γs, target)` where `target = ĥ_k(γ_k)` — the
+    /// residual claim the downstream committed-sumcheck relation must close
+    /// against the mask oracles and the witness polynomial.
     ///
     /// # Errors
     ///
-    /// - [`SumcheckError::RoundCountMismatch`] if `zk_data.round_coefficients`
-    ///   does not have exactly `folding_factor` entries.
-    /// - [`SumcheckError::MaskCommitmentCountMismatch`] if `mask_commits.len()
-    ///   != folding_factor`.
-    /// - [`SumcheckError::WireSizeMismatch`] if any round's wire form has the
-    ///   wrong length.
+    /// - [`SumcheckError::RoundCountMismatch`] on `zk_data` shape mismatch.
+    /// - [`SumcheckError::MaskCommitmentCountMismatch`] on mask-count mismatch.
+    /// - [`SumcheckError::PowWitnessCountMismatch`] on PoW-shape mismatch.
+    /// - [`SumcheckError::WireSizeMismatch`] on per-round wire shape mismatch.
     /// - [`SumcheckError::InvalidPowWitness`] on a failed PoW check.
     ///
     /// # Panics
@@ -664,21 +590,18 @@ impl ZkSumcheck {
     /// - If `char(F) == 2` or `ell_zk < 2` (Lemma 6.4 hypotheses).
     /// - If `folding_factor == 0`.
     #[allow(clippy::too_many_arguments)]
-    pub fn verify_classic_unpacked<F, EF, M, Challenger>(
+    pub fn into_sumcheck<M, Ch>(
+        self,
         zk_data: &ZkSumcheckData<F, EF>,
-        challenger: &mut Challenger,
-        folding_factor: usize,
-        pow_bits: usize,
-        statement: &EqStatement<EF>,
         mask_commits: &[M::Commitment],
         ell_zk: usize,
+        folding_factor: usize,
+        pow_bits: usize,
+        challenger: &mut Ch,
     ) -> Result<(Point<EF>, EF), SumcheckError>
     where
-        F: Field,
-        EF: ExtensionField<F>,
         M: Mmcs<F>,
-        Challenger:
-            FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     {
         let k = folding_factor;
 
@@ -692,8 +615,6 @@ impl ZkSumcheck {
         );
         assert!(k >= 1, "sumcheck requires at least one round");
 
-        // Proof-shape checks: each must hold or the proof is malformed,
-        // independent of any field arithmetic.
         if zk_data.round_coefficients.len() != k {
             return Err(SumcheckError::RoundCountMismatch {
                 expected: k,
@@ -706,10 +627,6 @@ impl ZkSumcheck {
                 actual: mask_commits.len(),
             });
         }
-        // The honest prover writes one PoW witness per round when `pow_bits > 0`
-        // and none otherwise. Reject any other shape so the proof remains
-        // canonical (no trailing junk in the no-PoW path) and the round-loop
-        // indexing stays panic-free on adversarial input.
         let expected_pow = if pow_bits > 0 { k } else { 0 };
         if zk_data.pow_witnesses.len() != expected_pow {
             return Err(SumcheckError::PowWitnessCountMismatch {
@@ -717,9 +634,6 @@ impl ZkSumcheck {
                 actual: zk_data.pow_witnesses.len(),
             });
         }
-
-        // Wire form is `[c_0, c_2, …, c_d]` of length `max(ℓ_zk, 3) - 1` =
-        // `max(ℓ_zk - 1, 2)`.
         let h_size = core::cmp::max(ell_zk, 3);
         let wire_size = h_size - 1;
         for (idx, wire) in zk_data.round_coefficients.iter().enumerate() {
@@ -732,60 +646,43 @@ impl ZkSumcheck {
             }
         }
 
-        // === Prelude: mirror the prover's transcript actions before round 1. ===
-
-        // Sample α and accumulate μ from the EqStatement directly. Equivalent
-        // to the prover's `combine_hypercube` accumulation but without
-        // materialising the weight polynomial.
+        // Sample α, then build μ from the layout verifier (which has been
+        // pre-loaded with the public claims via add_claim / add_virtual_eval).
         let alpha: EF = challenger.sample_algebra_element();
-        let mut mu = EF::ZERO;
-        statement.combine_evals(&mut mu, alpha);
+        let mu = self.inner.sum(alpha);
 
-        // Observe each mask commitment in the same order the prover did.
+        // Observe the mask commitments in mask order, then μ̃ (lifted to EF),
+        // then sample ε. Matches the prover's prelude byte-for-byte.
         for commit in mask_commits {
             challenger.observe(commit.clone());
         }
-
-        // Observe μ̃ (lifted to EF — codebase convention; matches prover).
         challenger.observe_algebra_element(EF::from(zk_data.mu_tilde));
-
-        // Sample ε.
         let eps: EF = challenger.sample_algebra_element();
 
-        // === Sumcheck rounds ===
-
         // Round-1 affine target: ĥ_1(0) + ĥ_1(1) = ε·μ + μ̃.
-        // For round j ≥ 2 the target gets overwritten with ĥ_{j-1}(γ_{j-1}).
         let mut target: EF = eps * mu + EF::from(zk_data.mu_tilde);
         let mut randomness: Vec<EF> = Vec::with_capacity(k);
 
         for (j_idx, wire) in zk_data.round_coefficients.iter().enumerate() {
-            // Reconstruct the dropped `c_1` from
-            //   target = ĥ_j(0) + ĥ_j(1) = 2·c_0 + c_1 + Σ_{i ≥ 2} c_i.
             let c0 = wire[0];
             let high_sum: EF = wire[1..].iter().copied().sum();
             let c1 = target - c0.double() - high_sum;
 
-            // Observe the wire form on the transcript (same bytes the prover
-            // pushed). Subsequent grind / sample reproduces the prover's flow.
             challenger.observe_algebra_slice(wire);
 
-            // Verify PoW (only when prover grinded).
-            if pow_bits > 0 && !challenger.check_witness(pow_bits, zk_data.pow_witnesses[j_idx]) {
+            if pow_bits > 0
+                && !challenger.check_witness(pow_bits, zk_data.pow_witnesses[j_idx])
+            {
                 return Err(SumcheckError::InvalidPowWitness);
             }
 
             let gamma_j: EF = challenger.sample_algebra_element();
 
-            // Reassemble [c_0, c_1, c_2, …, c_d] and Horner-evaluate at γ_j.
-            // Iterate via chained iterators to avoid the allocation.
-            let coeffs = core::iter::once(c0)
-                .chain(core::iter::once(c1))
-                .chain(wire[1..].iter().copied());
-            // Horner needs highest-degree first; collect into a small stack
-            // buffer via Vec then iterate reversed (bounded length, ≤ ell_zk).
+            // Horner-evaluate `[c_0, c_1, c_2, …, c_d]` at γ_j.
             let mut coeffs_vec: Vec<EF> = Vec::with_capacity(h_size);
-            coeffs_vec.extend(coeffs);
+            coeffs_vec.push(c0);
+            coeffs_vec.push(c1);
+            coeffs_vec.extend_from_slice(&wire[1..]);
             let h_at_gamma_j: EF = coeffs_vec
                 .iter()
                 .rev()
@@ -796,180 +693,169 @@ impl ZkSumcheck {
             randomness.push(gamma_j);
         }
 
-        // After the round-k iteration `target = ĥ_k(γ_k)`, the residual claim
-        // the next protocol layer (committed sumcheck relation) must verify.
         Ok((Point::new(randomness), target))
     }
 }
 
-impl<F, EF, Enc, M> ZkSumcheckProver<F, EF, Enc, M>
+/// Returns the layout strategy `PrefixProver` uses.
+///
+/// Free function rather than `PrefixProver::<F, EF>::strategy()` because the
+/// trait-bound `Layout` requires `F: TwoAdicField`, which the verifier doesn't
+/// inherit. The value is fixed by construction.
+pub fn prefix_strategy() -> LayoutStrategy {
+    LayoutStrategy::new(true, VariableOrder::Prefix)
+}
+
+/// HVZK simulator for the classic-unpacked HVZK sumcheck (Lemma 6.4).
+///
+/// Runs the prover's Fiat-Shamir actions *without ever consulting the witness
+/// polynomial*. The simulator samples fresh masks (so the mask commitments are
+/// distributed identically to the real prover's for Reed–Solomon encoding,
+/// `ζ_RS = 0`) and per round samples each wire form coordinate uniformly with
+/// the F/EF stratification documented inline. The verifier's `c_1`
+/// reconstruction makes every wire automatically affine-consistent, so no
+/// further per-round consistency is needed.
+///
+/// # Distributional match (Lemma 6.4)
+///
+/// For Reed-Solomon `Enc_{C_zk}` the affine subspace of valid
+/// `(μ̃, ĥ_1, …, ĥ_k)` tuples has dimension `1 + k·max(ℓ_zk - 1, 2)` and the
+/// honest-prover formulas are surjective onto it (rank-nullity, §6.1 of
+/// eprint 2026/391). The simulator produces an identically-distributed
+/// `(μ̃, wire forms)` by sampling each coordinate uniformly within the
+/// stratification.
+///
+/// # Returns
+///
+/// - The simulated `ZkSumcheckData`.
+/// - The mask commitments.
+/// - The `(γ_1, …, γ_k)` randomness vector — useful for round-trip assertions.
+///
+/// # Panics
+///
+/// Same precondition asserts as [`ZkPrefixProver::into_sumcheck`].
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_lines)]
+pub fn simulate_classic_unpacked<F, EF, Enc, M, Challenger, R>(
+    challenger: &mut Challenger,
+    folding_factor: usize,
+    pow_bits: usize,
+    mu: EF,
+    encoding: &Enc,
+    mmcs: &M,
+    rng: &mut R,
+) -> (ZkSumcheckData<F, EF>, Vec<M::Commitment>, Point<EF>)
 where
     F: Field,
     EF: ExtensionField<F>,
     Enc: ZkEncoding<F>,
     Enc::Codeword: Matrix<F>,
     M: Mmcs<F>,
+    Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
+    R: Rng,
+    StandardUniform: Distribution<F> + Distribution<EF>,
 {
-    /// Runs one masked sumcheck round for `j ∈ 2..=k`.
-    ///
-    /// Computes `ĥ_j` per the per-round formula in the module docs, observes
-    /// its `max(ell_zk - 1, 2)` non-linear coefficients on the transcript,
-    /// grinds, samples `γ_j`, folds `(evals, weights)`, and updates the running
-    /// mask bookkeeping. Returns `γ_j`.
-    ///
-    /// # Panics
-    ///
-    /// - If no rounds remain (caller must invoke at most `k-1` times after
-    ///   construction).
-    pub fn round<Challenger>(
-        &mut self,
-        zk_data: &mut ZkSumcheckData<F, EF>,
-        challenger: &mut Challenger,
-        pow_bits: usize,
-    ) -> EF
-    where
-        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
-    {
-        assert!(self.rounds_left > 0, "HVZK sumcheck has no rounds left");
+    let k = folding_factor;
+    let ell_zk = encoding.message_len();
 
-        let k = self.masks.len();
-        // 1-indexed round number: at the start of `round()` we have
-        // `rounds_left = k - j + 1`, so `j = k - rounds_left + 1`.
-        let j = k - self.rounds_left + 1;
-        // 0-indexed mask slot for s_j.
-        let s_j = &self.masks[j - 1];
-        let ell_zk = s_j.len();
+    assert!(
+        F::TWO != F::ZERO,
+        "Construction 6.3 (Lemma 6.4) requires char(F) != 2",
+    );
+    assert!(
+        ell_zk >= 2,
+        "Construction 6.3 (Lemma 6.4) requires ell_zk >= 2",
+    );
+    assert!(k >= 1, "sumcheck requires at least one round");
 
-        // Snapshot ĥ_{j-1}(γ_{j-1}) for the affine-consistency debug check.
-        // At this point `mask_evals_at_gamma` has length `j-1` and contains
-        // `s_1(γ_1), …, s_{j-1}(γ_{j-1})`; `sum_future_endpoints` is in its
-        // pre-decrement state, holding `Σ_{l ≥ j}(s_l(0)+s_l(1))`. Then
-        //
-        //   ĥ_{j-1}(γ_{j-1})
-        //     = 2^{k-(j-1)} · (live + past mask sum at γ_<j)        // = Σ mask_evals_at_gamma
-        //     + 2^{k-j}     · Σ_{l > j-1}(s_l(0)+s_l(1))            // = sum_future_endpoints
-        //     + ε           · plain_h_{j-1}(γ_{j-1}).               // = plain_sum
-        //
-        // The future-mask term is non-empty for all `j ∈ 2..=k` because there
-        // is always at least one mask with index `≥ j` (namely `s_j`).
-        // (Computed unconditionally — `debug_assert_eq!` references it in
-        // release-mode dead code, so the binding must always exist; the
-        // compiler eliminates the actual computation when `debug_assertions`
-        // is off.)
-        let prev_h_at_gamma_prev: EF = {
-            let mult_live_past = F::TWO.exp_u64(self.rounds_left as u64);
-            let mult_future = F::TWO.exp_u64((self.rounds_left - 1) as u64);
-            let past_mask_sum: EF = self.mask_evals_at_gamma.iter().copied().sum();
-            EF::from(mult_live_past) * past_mask_sum
-                + EF::from(mult_future * self.sum_future_endpoints)
-                + self.eps * self.plain_sum
-        };
+    // The caller has pre-loaded the challenger with claim observations
+    // identical to the real prover's; `α` is the next thing sampled.
+    let _alpha: EF = challenger.sample_algebra_element();
 
-        // Start-of-round decrement: subtract `s_j`'s endpoints so the running
-        // sum holds `Σ_{l > j}(s_l(0)+s_l(1))` — the future-mask term the
-        // per-round formula expects. Mirrors the same step inlined for round 1
-        // in `new_classic_unpacked`.
-        let s_j_endpoints = s_j[0] + s_j.iter().copied().sum::<F>();
-        self.sum_future_endpoints -= s_j_endpoints;
+    // Sample masks + commit + observe (identical distribution to real prover
+    // for Reed–Solomon encoding: codewords uniform ⇒ commits indistinguishable).
+    let masks: Vec<Vec<F>> = (0..k)
+        .map(|_| (0..ell_zk).map(|_| rng.random()).collect())
+        .collect();
+    let mut mask_commits: Vec<M::Commitment> = Vec::with_capacity(k);
+    for mask in &masks {
+        let codeword = encoding.encode(mask, rng);
+        let (commit, _prover_data) = mmcs.commit_matrix(codeword);
+        challenger.observe(commit.clone());
+        mask_commits.push(commit);
+    }
 
-        // Plain piece (degree-2): returns (c_0, c_∞); derive c_1 from the
-        // affine constraint h(0) + h(1) = plain_sum.
-        let (plain_c0, plain_c_inf) = VariableOrder::Prefix
-            .sumcheck_coefficients(self.evals.as_slice(), self.weights.as_slice());
-        let plain_c1 = self.plain_sum - plain_c0.double() - plain_c_inf;
+    // Closed-form `μ̃` from masks; byte-equivalent to the prover under matched
+    // seeds (distributionally we could equivalently sample uniform in `F`).
+    let two_to_k_minus_1 = F::TWO.exp_u64((k - 1) as u64);
+    let mu_tilde: F = two_to_k_minus_1
+        * masks
+            .iter()
+            .map(|m| m[0] + m.iter().copied().sum::<F>())
+            .sum::<F>();
 
-        // Build `ĥ_j` of length `max(ell_zk, 3)`:
-        //   indices 0..ell_zk : live-mask piece           = 2^{k-j} · s_j(X)
-        //   index 0           : past-mask contribution   += 2^{k-j} · Σ_{l<j} s_l(γ_l)
-        //   index 0           : future-mask contribution += 2^{k-j-1} · Σ_{l>j}(s_l(0)+s_l(1))
-        //   indices 0..3      : plain piece              += ε · (c_0 + c_1·X + c_∞·X²)
-        // The future-mask term is only present when `j < k`.
-        let h_size = core::cmp::max(ell_zk, 3);
-        let mut h: Vec<EF> = vec![EF::ZERO; h_size];
+    challenger.observe_algebra_element(EF::from(mu_tilde));
+    let eps: EF = challenger.sample_algebra_element();
 
-        // Live mask: 2^{k-j} = 2^{rounds_left - 1}.
-        let mult_live = F::TWO.exp_u64((self.rounds_left - 1) as u64);
-        for (i, &c) in s_j.iter().enumerate() {
-            h[i] += EF::from(mult_live * c);
-        }
+    // Two-tier sampling, matching honest stratification of `ĥ_j`:
+    //   - wire[0], wire[1] (= c_0, c_2): receive an `ε · plain_c_*` term in
+    //     honest execution, so live in EF. Sample uniformly from EF.
+    //   - wire[j] for j ≥ 2 (= c_3, …, c_{ell_zk-1}): receive only the
+    //     live-mask contribution `2^{k-j} · s_j[i]` with `s_j[i] ∈ F`, so
+    //     live in the F-subspace of EF. Sample from F lifted via `EF::from`.
+    // Without this stratification a distinguisher trivially separates real
+    // from simulated views by checking the EF coordinates `[1..]` of each
+    // `c_i` for `i ≥ 3` (paper §6.1).
+    let h_size = core::cmp::max(ell_zk, 3);
+    let wire_size = h_size - 1;
+    let mut zk_data = ZkSumcheckData::<F, EF> {
+        mu_tilde,
+        round_coefficients: Vec::with_capacity(k),
+        pow_witnesses: Vec::with_capacity(if pow_bits > 0 { k } else { 0 }),
+    };
+    let mut randomness: Vec<EF> = Vec::with_capacity(k);
+    let mut target: EF = eps * mu + EF::from(mu_tilde);
 
-        // Past masks: same multiplier as live; constant in X (added to c_0).
-        let past_mask_sum: EF = self.mask_evals_at_gamma.iter().copied().sum();
-        h[0] += EF::from(mult_live) * past_mask_sum;
+    for _ in 0..k {
+        let wire: Vec<EF> = (0..wire_size)
+            .map(|j| {
+                if j < 2 {
+                    rng.random::<EF>()
+                } else {
+                    EF::from(rng.random::<F>())
+                }
+            })
+            .collect();
 
-        // Future masks: 2^{k-j-1} = 2^{rounds_left - 2}; only when `j < k`.
-        if j < k {
-            let mult_future = F::TWO.exp_u64((self.rounds_left - 2) as u64);
-            h[0] += EF::from(mult_future * self.sum_future_endpoints);
-        }
+        challenger.observe_algebra_slice(&wire);
 
-        // Plain piece: ε · (c_0 + c_1·X + c_∞·X²).
-        h[0] += self.eps * plain_c0;
-        h[1] += self.eps * plain_c1;
-        h[2] += self.eps * plain_c_inf;
-
-        // Affine consistency check (cheap: O(ell_zk) sum):
-        //   h(0) + h(1) = 2·c_0 + Σ_{i ≥ 1} c_i  must equal  ĥ_{j-1}(γ_{j-1}).
-        debug_assert_eq!(
-            h[0].double() + h[1..].iter().copied().sum::<EF>(),
-            prev_h_at_gamma_prev,
-            "ĥ_j should satisfy h(0) + h(1) = ĥ_{{j-1}}(γ_{{j-1}})",
-        );
-
-        // Wire format: send (c_0, c_2, c_3, …, c_d), skipping c_1; verifier
-        // reconstructs c_1 from the affine consistency check above.
-        let mut h_wire: Vec<EF> = Vec::with_capacity(h_size - 1);
-        h_wire.push(h[0]);
-        h_wire.extend_from_slice(&h[2..]);
-
-        challenger.observe_algebra_slice(&h_wire);
-        zk_data.round_coefficients.push(h_wire);
-
-        // Proof-of-work grind, then sample γ_j.
         if pow_bits > 0 {
             zk_data.pow_witnesses.push(challenger.grind(pow_bits));
         }
+
         let gamma_j: EF = challenger.sample_algebra_element();
 
-        // Cache `s_j(γ_j)` via Horner for the past-mask term in future rounds.
-        let sj_at_gamma_j: EF = s_j
+        // Reconstruct `c_1` and Horner-evaluate `ĥ_j(γ_j)` to advance target.
+        // Mirrors the verifier so the running target matches what it will
+        // compute, keeping the debug invariant tight.
+        let c0 = wire[0];
+        let high_sum: EF = wire[1..].iter().copied().sum();
+        let c1 = target - c0.double() - high_sum;
+        let mut coeffs: Vec<EF> = Vec::with_capacity(h_size);
+        coeffs.push(c0);
+        coeffs.push(c1);
+        coeffs.extend_from_slice(&wire[1..]);
+        target = coeffs
             .iter()
             .rev()
             .copied()
-            .fold(EF::ZERO, |acc, c| acc * gamma_j + EF::from(c));
-        self.mask_evals_at_gamma.push(sj_at_gamma_j);
+            .fold(EF::ZERO, |acc, c| acc * gamma_j + c);
 
-        // Fold both polynomials at γ_j and update the plain sum to
-        // plain_h_j(γ_j) via quadratic extrapolation.
-        self.evals.fix_prefix_var_mut(gamma_j);
-        self.weights.fix_prefix_var_mut(gamma_j);
-        self.plain_sum =
-            extrapolate_01inf(plain_c0, self.plain_sum - plain_c0, plain_c_inf, gamma_j);
-
-        // Sanity: hypercube dot-product still matches the running plain sum.
-        debug_assert_eq!(
-            self.evals
-                .iter()
-                .zip(self.weights.iter())
-                .map(|(&e, &w)| e * w)
-                .sum::<EF>(),
-            self.plain_sum,
-            "fold should preserve plain sumcheck invariant after round j",
-        );
-
-        self.rounds_left -= 1;
-        gamma_j
+        zk_data.round_coefficients.push(wire);
+        randomness.push(gamma_j);
     }
 
-    /// Read-only access to the encoded mask oracles for downstream protocols
-    /// (committed sumcheck relation; §2.4 / §5 of eprint 2026/391).
-    ///
-    /// Returns `(MMCS commitment, prover data)` per mask. Callers produce
-    /// opening proofs by passing the prover data back into the same MMCS
-    /// instance.
-    pub fn mask_oracles(&self) -> &[MaskOracle<F, Enc, M>] {
-        &self.mask_oracles
-    }
+    (zk_data, mask_commits, Point::new(randomness))
 }
 
 #[cfg(test)]
@@ -982,7 +868,6 @@ mod tests {
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
     use p3_merkle_tree::MerkleTreeMmcs;
-    use p3_multilinear_util::point::Point;
     use p3_multilinear_util::poly::Poly;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
     use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
@@ -991,7 +876,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::constraints::statement::EqStatement;
+    use crate::sumcheck::layout::{Layout, PrefixProver, Table, Witness};
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
@@ -1004,17 +889,57 @@ mod tests {
     type MyDft = Radix2DFTSmallBatch<F>;
     type MyEnc = ReedSolomonZkEncoding<F, MyDft>;
 
-    /// Reed-Solomon ZK encoding parameters: `t = 2` randomness symbols, `m`
-    /// the smallest power of two `≥ ell_zk + t`. Keeping `t` constant isolates
-    /// the proptest dimensions to `(n_vars, k, ell_zk, num_eqs)`.
+    /// Reed-Solomon ZK encoding parameter: `t = 2` randomness symbols.
     const T: usize = 2;
 
-    /// One end-to-end honest-prover ↔ honest-verifier run.
+    /// Builds the proper setup (perm, mmcs, encoding) shared by every test
+    /// from a `seed`. Permutation seeded from `seed`; both challengers receive
+    /// an identical permutation state by re-instantiating from the same seed.
+    fn make_setup(seed: u64, ell_zk: usize) -> (Perm, MyMmcs, MyEnc) {
+        let mut perm_rng = SmallRng::seed_from_u64(seed);
+        let perm = Perm::new_from_rng_128(&mut perm_rng);
+
+        let merkle_hash = MyHash::new(perm.clone());
+        let merkle_compress = MyCompress::new(perm.clone());
+        let mmcs: MyMmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
+
+        let m = (ell_zk + T).next_power_of_two();
+        let dft = MyDft::default();
+        let encoding = MyEnc::new(T, ell_zk, m, dft);
+
+        (perm, mmcs, encoding)
+    }
+
+    /// Builds a fresh `(ZkPrefixProver, ZkVerifier)` pair from the given
+    /// witness polynomial. The two will be driven side-by-side; the test
+    /// fixture mirrors prover-side `add_virtual_eval` calls with verifier-side
+    /// `add_virtual_eval(eval, …)` calls, so the challenger states stay in
+    /// lockstep.
+    fn build_prover_verifier(
+        evals: Vec<F>,
+        folding_factor: usize,
+        encoding: MyEnc,
+        mmcs: MyMmcs,
+    ) -> (
+        ZkPrefixProver<F, EF, MyEnc, MyMmcs>,
+        ZkVerifier<F, EF>,
+        usize, // n_vars (for shape recording)
+    ) {
+        let n_vars = p3_util::log2_strict_usize(evals.len());
+        let poly = Poly::new(evals);
+        let table = Table::new(alloc::vec![poly]);
+        let witness: Witness<F> = Witness::new_interleaved(alloc::vec![table], folding_factor);
+        let inner = PrefixProver::<F, EF>::from_witness(witness);
+        let prover = ZkPrefixProver::new(inner, encoding, mmcs);
+        let verifier = ZkVerifier::<F, EF>::new(&[TableShape::new(n_vars, 1)]);
+        (prover, verifier, n_vars)
+    }
+
+    /// End-to-end honest-prover ↔ honest-verifier run.
     ///
     /// Returns `Ok(())` on a successful match between the prover's challenges
     /// and the verifier's Fiat-Shamir replay; returns an error string carrying
     /// enough context to read in a proptest failure report.
-    #[allow(clippy::too_many_lines)]
     fn run_roundtrip(
         n_vars: usize,
         folding_factor: usize,
@@ -1022,98 +947,87 @@ mod tests {
         num_eqs: usize,
         seed: u64,
     ) -> Result<(), &'static str> {
-        // Permutation seeded from the proptest seed; both challengers receive
-        // an identical permutation state below by re-instantiating from the
-        // same RNG seed (matches the pattern in `pcs/tests.rs`).
-        let mut perm_rng = SmallRng::seed_from_u64(seed);
-        let perm = Perm::new_from_rng_128(&mut perm_rng);
+        let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
 
-        let merkle_hash = MyHash::new(perm.clone());
-        let merkle_compress = MyCompress::new(perm.clone());
-        let mmcs: MyMmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
-
-        // RS codeword length: smallest power of two accommodating `ell_zk + T`.
-        let m = (ell_zk + T).next_power_of_two();
-        let dft = MyDft::default();
-        let encoding = MyEnc::new(T, ell_zk, m, dft);
-
-        // Distinct sub-seeds keep poly evals and eq points uncorrelated across
-        // proptest cases.
         let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
         let evals: Vec<F> = (0..(1usize << n_vars)).map(|_| data_rng.random()).collect();
-        let poly = Poly::new(evals);
 
-        let mut eq_statement = EqStatement::initialize(n_vars);
+        let (mut prover, mut verifier, _n_vars) =
+            build_prover_verifier(evals, folding_factor, encoding, mmcs);
+
+        // Drive prover and verifier challengers in lockstep: each
+        // `add_virtual_eval` on the prover side returns an eval; the verifier
+        // absorbs it with the matching `add_virtual_eval(eval, …)`.
+        let mut prover_challenger = MyChallenger::new(perm.clone());
+        let mut verifier_challenger = MyChallenger::new(perm);
+
         for _ in 0..num_eqs {
-            let eq_point: Point<EF> = Point::new(
-                (0..n_vars)
-                    .map(|_| data_rng.random::<EF>())
-                    .collect::<Vec<EF>>(),
-            );
-            // Eval the base poly at the extension point so the claim is
-            // consistent: μ matches the hypercube sum the prover would
-            // compute against the eq-derived weights.
-            let eq_eval = poly.eval_base::<EF>(&eq_point);
-            eq_statement.add_evaluated_constraint(eq_point, eq_eval);
+            let eval = prover.add_virtual_eval(&mut prover_challenger);
+            verifier.add_virtual_eval(eval, &mut verifier_challenger);
         }
 
         let pow_bits = 0;
-
-        let mut prover_challenger = MyChallenger::new(perm.clone());
         let mut zk_data = ZkSumcheckData::<F, EF>::default();
         let mut prover_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
 
-        let (mut prover, gamma_1_point) = ZkSumcheck::new_classic_unpacked::<F, EF, _, _, _, _>(
-            &poly,
+        let (_residual_prover, prover_randomness, mask_oracles) = prover.into_sumcheck(
             &mut zk_data,
-            &mut prover_challenger,
-            folding_factor,
             pow_bits,
-            &eq_statement,
-            &encoding,
-            &mmcs,
+            &mut prover_challenger,
             &mut prover_rng,
         );
 
-        let mut prover_randomness: Vec<EF> = gamma_1_point.iter().copied().collect();
-        for _ in 1..folding_factor {
-            let gamma_j = prover.round(&mut zk_data, &mut prover_challenger, pow_bits);
-            prover_randomness.push(gamma_j);
-        }
+        let mask_commits: Vec<_> = mask_oracles.iter().map(|(c, _)| c.clone()).collect();
 
-        let mask_commits: Vec<_> = prover
-            .mask_oracles()
-            .iter()
-            .map(|(c, _)| c.clone())
-            .collect();
-
-        let mut verifier_challenger = MyChallenger::new(perm);
-        let (verifier_point, _final_target) =
-            ZkSumcheck::verify_classic_unpacked::<F, EF, MyMmcs, _>(
+        let (verifier_point, _final_target) = verifier
+            .into_sumcheck::<MyMmcs, _>(
                 &zk_data,
-                &mut verifier_challenger,
-                folding_factor,
-                pow_bits,
-                &eq_statement,
                 &mask_commits,
                 ell_zk,
+                folding_factor,
+                pow_bits,
+                &mut verifier_challenger,
             )
-            .map_err(|_| "HVZK verifier rejected an honest proof")?;
+            .map_err(|_| "verifier rejected honest prover output")?;
 
-        if prover_randomness != verifier_point.iter().copied().collect::<Vec<EF>>() {
+        let prover_randomness_vec: Vec<EF> = prover_randomness.iter().copied().collect();
+        let verifier_randomness_vec: Vec<EF> = verifier_point.iter().copied().collect();
+        if prover_randomness_vec != verifier_randomness_vec {
             return Err("prover/verifier disagreed on sumcheck randomness");
         }
         Ok(())
     }
 
-    /// One end-to-end simulator → verifier run (no witness `f` involved).
-    ///
-    /// The simulator advances the Fiat-Shamir transcript identically to the
-    /// real prover except it samples each round's wire form uniformly. The
-    /// verifier reconstructs `c_1` from the running affine target so any
-    /// uniform wire is "consistent" by construction. Returns `Ok(())` when
-    /// the verifier accepts and the simulator's `(γ_1, …, γ_k)` matches the
-    /// verifier's; an error string otherwise.
+    #[test]
+    fn prover_verifier_roundtrip_classic_unpacked() {
+        // One concrete run with non-tiny parameters: small enough to be fast,
+        // big enough to exercise the per-round Lagrange-weighted accumulator
+        // loop across multiple rounds.
+        run_roundtrip(8, 3, 4, 2, 0).expect("honest roundtrip should accept");
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(16))]
+
+        /// Completeness: every honest prover output must verify across the
+        /// `(n_vars, k, ell_zk, num_eqs)` cube.
+        #[test]
+        fn prop_completeness_classic_unpacked(
+            n_vars in 3usize..=8,
+            ell_zk in 2usize..=5,
+            num_eqs in 1usize..=3,
+            seed in 0u64..1024,
+        ) {
+            // `k ≤ n_vars` is the protocol precondition; pick `k` in range.
+            let folding_factor = 1 + (seed as usize % n_vars);
+            prop_assert!(run_roundtrip(n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok());
+        }
+    }
+
+    /// Drives the simulator end-to-end and checks the layout verifier accepts
+    /// the simulated transcript. The verifier never knows whether it is
+    /// looking at the real prover or the simulator — Lemma 6.4's
+    /// indistinguishability claim.
     fn run_simulator_roundtrip(
         n_vars: usize,
         folding_factor: usize,
@@ -1121,60 +1035,82 @@ mod tests {
         num_eqs: usize,
         seed: u64,
     ) -> Result<(), &'static str> {
-        let mut perm_rng = SmallRng::seed_from_u64(seed);
-        let perm = Perm::new_from_rng_128(&mut perm_rng);
+        let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
 
-        let merkle_hash = MyHash::new(perm.clone());
-        let merkle_compress = MyCompress::new(perm.clone());
-        let mmcs: MyMmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
-
-        let m = (ell_zk + T).next_power_of_two();
-        let dft = MyDft::default();
-        let encoding = MyEnc::new(T, ell_zk, m, dft);
-
-        // The simulator does not need `f`, but it does derive μ from the
-        // public eq-statement evaluations. Build a syntactically valid
-        // statement with arbitrary claimed evals — the simulator ignores
-        // their relationship to any concrete polynomial.
+        // The simulator never touches `f`. Build a dummy witness just to feed
+        // the verifier its claim shape; the eval values are sampled fresh and
+        // bear no relationship to any real polynomial — the simulator argues
+        // indistinguishability against an arbitrary `(public claim, eval)` set.
         let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
-        let mut eq_statement = EqStatement::initialize(n_vars);
-        for _ in 0..num_eqs {
-            let eq_point: Point<EF> = Point::new(
-                (0..n_vars)
-                    .map(|_| data_rng.random::<EF>())
-                    .collect::<Vec<EF>>(),
-            );
-            // The simulator never checks consistency of these evals against
-            // any polynomial, so a freshly-sampled eval is fine.
-            eq_statement.add_evaluated_constraint(eq_point, data_rng.random::<EF>());
-        }
-
-        let pow_bits = 0;
+        let evals: Vec<F> = (0..(1usize << n_vars)).map(|_| data_rng.random()).collect();
+        let (_dummy_prover, mut verifier, _n_vars) =
+            build_prover_verifier(evals, folding_factor, encoding.clone(), mmcs.clone());
 
         let mut sim_challenger = MyChallenger::new(perm.clone());
+        let mut verifier_challenger = MyChallenger::new(perm);
+
+        // Synthesise public eval observations on both transcripts: the
+        // simulator's prelude requires the challenger be in the same state
+        // the real prover would reach by the time `α` is sampled. The verifier
+        // mirrors with `add_virtual_eval(eval, ch)` so its `Verifier::sum(α)`
+        // computes `μ` consistently with the simulator's mu-input below.
+        let mut virtual_evals: Vec<EF> = Vec::with_capacity(num_eqs);
+        for _ in 0..num_eqs {
+            let eval: EF = data_rng.random();
+            // Use the layout verifier's add_virtual_eval to advance both
+            // transcripts identically.
+            verifier.add_virtual_eval(eval, &mut sim_challenger);
+            virtual_evals.push(eval);
+        }
+        // Now mirror the same observations on the verifier challenger.
+        for &eval in &virtual_evals {
+            // Build a transient verifier instance to advance only the
+            // challenger; the data side already lives in `verifier`.
+            let mut tmp_verifier =
+                ZkVerifier::<F, EF>::new(&[TableShape::new(n_vars, 1)]);
+            tmp_verifier.add_virtual_eval(eval, &mut verifier_challenger);
+        }
+
+        // Compute μ exactly the way the verifier will (after sampling α).
+        // We can't peek into `sim_challenger` for α, but the simulator does
+        // the sampling itself — so we recompute α from a forked challenger
+        // immediately before calling `simulate_classic_unpacked`.
+        let mut alpha_peek = sim_challenger.clone();
+        let alpha: EF = alpha_peek.sample_algebra_element();
+        let mu: EF = virtual_evals
+            .iter()
+            .zip(alpha.powers())
+            .map(|(&e, a)| e * a)
+            .sum();
+
+        let pow_bits = 0;
         let mut sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
 
-        let (sim_zk_data, sim_mask_commits, sim_randomness) =
-            ZkSumcheck::simulate_classic_unpacked::<F, EF, _, _, _, _>(
-                &mut sim_challenger,
-                folding_factor,
-                pow_bits,
-                &eq_statement,
-                &encoding,
-                &mmcs,
-                &mut sim_rng,
-            );
+        let (sim_zk_data, sim_mask_commits, sim_randomness) = simulate_classic_unpacked::<
+            F,
+            EF,
+            _,
+            _,
+            _,
+            _,
+        >(
+            &mut sim_challenger,
+            folding_factor,
+            pow_bits,
+            mu,
+            &encoding,
+            &mmcs,
+            &mut sim_rng,
+        );
 
-        let mut verifier_challenger = MyChallenger::new(perm);
-        let (verifier_point, _final_target) =
-            ZkSumcheck::verify_classic_unpacked::<F, EF, MyMmcs, _>(
+        let (verifier_point, _final_target) = verifier
+            .into_sumcheck::<MyMmcs, _>(
                 &sim_zk_data,
-                &mut verifier_challenger,
-                folding_factor,
-                pow_bits,
-                &eq_statement,
                 &sim_mask_commits,
                 ell_zk,
+                folding_factor,
+                pow_bits,
+                &mut verifier_challenger,
             )
             .map_err(|_| "verifier rejected simulator output")?;
 
@@ -1186,336 +1122,207 @@ mod tests {
         Ok(())
     }
 
-    /// Run the simulator, then re-run the verifier on a transcript with a
-    /// single field element flipped in some round's wire form. Returns
-    /// `(honest_target, tampered_target, honest_randomness, tampered_randomness)`.
-    ///
-    /// `tamper_round` is 0-indexed into `zk_data.round_coefficients`.
-    /// `tamper_pos` is 0-indexed into the wire form of that round.
-    ///
-    /// Used by the RBR-flavored proptest below.
-    fn run_tampering_propagation(
-        n_vars: usize,
-        folding_factor: usize,
-        ell_zk: usize,
-        num_eqs: usize,
-        seed: u64,
-        tamper_round: usize,
-        tamper_pos: usize,
-    ) -> (EF, EF, Vec<EF>, Vec<EF>) {
-        let mut perm_rng = SmallRng::seed_from_u64(seed);
-        let perm = Perm::new_from_rng_128(&mut perm_rng);
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(16))]
 
-        let merkle_hash = MyHash::new(perm.clone());
-        let merkle_compress = MyCompress::new(perm.clone());
-        let mmcs: MyMmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
-
-        let m = (ell_zk + T).next_power_of_two();
-        let dft = MyDft::default();
-        let encoding = MyEnc::new(T, ell_zk, m, dft);
-
-        let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
-        let mut eq_statement = EqStatement::initialize(n_vars);
-        for _ in 0..num_eqs {
-            let eq_point: Point<EF> = Point::new(
-                (0..n_vars)
-                    .map(|_| data_rng.random::<EF>())
-                    .collect::<Vec<EF>>(),
-            );
-            eq_statement.add_evaluated_constraint(eq_point, data_rng.random::<EF>());
+        #[test]
+        fn prop_simulator_classic_unpacked_verifies(
+            n_vars in 3usize..=8,
+            ell_zk in 2usize..=5,
+            num_eqs in 1usize..=3,
+            seed in 0u64..1024,
+        ) {
+            let folding_factor = 1 + (seed as usize % n_vars);
+            prop_assert!(run_simulator_roundtrip(n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok());
         }
+    }
 
-        let pow_bits = 0;
+    // Tampering propagation: flipping a single field element in any round's
+    // wire form yields a different verifier-computed `target = ĥ_k(γ_k)`.
+    // The exact value isn't important; what matters is that *any* byte change
+    // drives the verifier off the honest path.
+    //
+    // Implements the Round-by-Round (RBR) soundness flavour: even though the
+    // affine-reconstruction makes the wire trivially "consistent" with the
+    // running target, the next sampled `γ_{j+1}` and the residual target
+    // follow a different trajectory once a byte changes.
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(8))]
 
-        let mut sim_challenger = MyChallenger::new(perm.clone());
-        let mut sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+        #[test]
+        fn prop_rbr_tampering_changes_verifier_output(
+            n_vars in 3usize..=6,
+            ell_zk in 2usize..=4,
+            num_eqs in 1usize..=2,
+            seed in 0u64..512,
+            tamper_round_seed in 0usize..16,
+            tamper_pos_seed in 0usize..8,
+        ) {
+            let folding_factor = 1 + (seed as usize % n_vars);
 
-        let (sim_zk_data, sim_mask_commits, _sim_randomness) =
-            ZkSumcheck::simulate_classic_unpacked::<F, EF, _, _, _, _>(
+            let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
+
+            let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+            let evals: Vec<F> = (0..(1usize << n_vars)).map(|_| data_rng.random()).collect();
+
+            let (mut prover, mut verifier, _n_vars) =
+                build_prover_verifier(evals, folding_factor, encoding, mmcs);
+
+            let mut prover_challenger = MyChallenger::new(perm.clone());
+            let mut verifier_challenger = MyChallenger::new(perm.clone());
+            for _ in 0..num_eqs {
+                let eval = prover.add_virtual_eval(&mut prover_challenger);
+                verifier.add_virtual_eval(eval, &mut verifier_challenger);
+            }
+
+            let pow_bits = 0;
+            let mut zk_data = ZkSumcheckData::<F, EF>::default();
+            let mut prover_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+
+            let (_residual_prover, _gammas, mask_oracles) = prover.into_sumcheck(
+                &mut zk_data,
+                pow_bits,
+                &mut prover_challenger,
+                &mut prover_rng,
+            );
+            let mask_commits: Vec<_> = mask_oracles.iter().map(|(c, _)| c.clone()).collect();
+
+            // Tamper one wire coordinate.
+            let tamper_round = tamper_round_seed % zk_data.round_coefficients.len();
+            let wire_len = zk_data.round_coefficients[tamper_round].len();
+            let tamper_pos = tamper_pos_seed % wire_len;
+            let mut tampered_zk_data = zk_data.clone();
+            tampered_zk_data.round_coefficients[tamper_round][tamper_pos] +=
+                EF::from_u64(1);
+
+            // Honest verifier replay.
+            let mut honest_v_challenger = MyChallenger::new(perm.clone());
+            let mut honest_verifier =
+                ZkVerifier::<F, EF>::new(&[TableShape::new(n_vars, 1)]);
+            // Mirror the prover's eq absorptions: we need the verifier in the
+            // same transcript state and with the same claims.
+            let mut prover_replay = MyChallenger::new(perm.clone());
+            let mut replay_evals = Vec::with_capacity(num_eqs);
+            let (mut replay_prover, _, _) = {
+                let mut replay_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+                let evals: Vec<F> =
+                    (0..(1usize << n_vars)).map(|_| replay_rng.random()).collect();
+                let (perm2, mmcs2, encoding2) = make_setup(seed, ell_zk);
+                let _ = perm2; // already used via outer `perm`
+                build_prover_verifier(evals, folding_factor, encoding2, mmcs2)
+            };
+            for _ in 0..num_eqs {
+                let e = replay_prover.add_virtual_eval(&mut prover_replay);
+                honest_verifier.add_virtual_eval(e, &mut honest_v_challenger);
+                replay_evals.push(e);
+            }
+            let honest_result = honest_verifier.into_sumcheck::<MyMmcs, _>(
+                &zk_data,
+                &mask_commits,
+                ell_zk,
+                folding_factor,
+                pow_bits,
+                &mut honest_v_challenger,
+            );
+            prop_assert!(honest_result.is_ok());
+            let (_honest_rand, honest_target) = honest_result.unwrap();
+
+            // Tampered replay: same setup, tampered wire.
+            let mut tampered_v_challenger = MyChallenger::new(perm);
+            let mut tampered_verifier =
+                ZkVerifier::<F, EF>::new(&[TableShape::new(n_vars, 1)]);
+            for &e in &replay_evals {
+                tampered_verifier.add_virtual_eval(e, &mut tampered_v_challenger);
+            }
+            let tampered_result = tampered_verifier.into_sumcheck::<MyMmcs, _>(
+                &tampered_zk_data,
+                &mask_commits,
+                ell_zk,
+                folding_factor,
+                pow_bits,
+                &mut tampered_v_challenger,
+            );
+            prop_assert!(tampered_result.is_ok());
+            let (_tampered_rand, tampered_target) = tampered_result.unwrap();
+
+            prop_assert_ne!(
+                honest_target, tampered_target,
+                "tampering with wire coordinate ({}, {}) must change target",
+                tamper_round, tamper_pos,
+            );
+        }
+    }
+
+    /// F-subspace invariant for the simulator: per round, `wire[i]` for
+    /// `i ≥ 2` must live in the F-subspace of EF (i.e. its coefficients
+    /// `[1..]` against the extension basis are all zero). Matches the
+    /// stratification documented in `simulate_classic_unpacked`'s body.
+    ///
+    /// Without this check, a distinguisher trivially separates real from
+    /// simulated views by inspecting `wire[i]` for `i ≥ 2` (paper §6.1).
+    fn ef_in_f_subspace(x: EF) -> bool {
+        let coeffs = <EF as BasedVectorSpace<F>>::as_basis_coefficients_slice(&x);
+        coeffs[1..].iter().all(|c| *c == F::ZERO)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(8))]
+
+        #[test]
+        fn prop_simulator_f_subspace_invariant(
+            n_vars in 3usize..=6,
+            ell_zk in 4usize..=6,  // need ell_zk ≥ 4 for wire[2..] to be non-empty
+            num_eqs in 1usize..=2,
+            seed in 0u64..256,
+        ) {
+            let folding_factor = 1 + (seed as usize % n_vars);
+
+            let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
+
+            let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+            let mut sim_challenger = MyChallenger::new(perm);
+
+            // Build verifier-side claims to advance the challenger; the
+            // simulator only cares about the post-claim transcript state.
+            let mut verifier = ZkVerifier::<F, EF>::new(&[TableShape::new(n_vars, 1)]);
+            let mut virtual_evals = Vec::with_capacity(num_eqs);
+            for _ in 0..num_eqs {
+                let eval: EF = data_rng.random();
+                verifier.add_virtual_eval(eval, &mut sim_challenger);
+                virtual_evals.push(eval);
+            }
+
+            let mut alpha_peek = sim_challenger.clone();
+            let alpha: EF = alpha_peek.sample_algebra_element();
+            let mu: EF = virtual_evals
+                .iter()
+                .zip(alpha.powers())
+                .map(|(&e, a)| e * a)
+                .sum();
+
+            let pow_bits = 0;
+            let mut sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+
+            let (sim_zk_data, _commits, _gammas) = simulate_classic_unpacked::<
+                F, EF, _, _, _, _,
+            >(
                 &mut sim_challenger,
                 folding_factor,
                 pow_bits,
-                &eq_statement,
+                mu,
                 &encoding,
                 &mmcs,
                 &mut sim_rng,
             );
 
-        // Honest verification of the simulator's transcript.
-        let mut honest_ch = MyChallenger::new(perm.clone());
-        let (honest_point, honest_target) =
-            ZkSumcheck::verify_classic_unpacked::<F, EF, MyMmcs, _>(
-                &sim_zk_data,
-                &mut honest_ch,
-                folding_factor,
-                pow_bits,
-                &eq_statement,
-                &sim_mask_commits,
-                ell_zk,
-            )
-            .expect("honest verification of simulator output should succeed");
-
-        // Tamper a single field element. The tamper indices are caller-
-        // supplied modulo dimensions to keep the proptest strategy simple.
-        let mut tampered_zk_data = sim_zk_data.clone();
-        let r_idx = tamper_round % tampered_zk_data.round_coefficients.len();
-        let wire = &mut tampered_zk_data.round_coefficients[r_idx];
-        let p_idx = tamper_pos % wire.len();
-        wire[p_idx] += EF::ONE;
-
-        let mut tampered_ch = MyChallenger::new(perm);
-        let (tampered_point, tampered_target) =
-            ZkSumcheck::verify_classic_unpacked::<F, EF, MyMmcs, _>(
-                &tampered_zk_data,
-                &mut tampered_ch,
-                folding_factor,
-                pow_bits,
-                &eq_statement,
-                &sim_mask_commits,
-                ell_zk,
-            )
-            .expect("verifier shape checks pass on a single-byte tamper");
-
-        (
-            honest_target,
-            tampered_target,
-            honest_point.iter().copied().collect(),
-            tampered_point.iter().copied().collect(),
-        )
-    }
-
-    /// Distributional invariant for the F/EF hybrid HVZK sumcheck: each round
-    /// polynomial coefficient `c_i` for `i ≥ 3` receives only the live-mask
-    /// term `2^{k-j} · s_j[i]` with `s_j[i] ∈ F`, so the wire entries at index
-    /// `≥ 2` (which encode `c_3, c_4, …` since the wire skips `c_1`) must
-    /// land in the `F`-subspace of `EF` — i.e. their basis coefficients
-    /// beyond the first are zero. This test asserts the invariant on both
-    /// honest and simulated transcripts; without the simulator's two-tier
-    /// sampling fix it fails immediately at `ell_zk ≥ 4`.
-    fn run_f_subspace_invariant(
-        n_vars: usize,
-        folding_factor: usize,
-        ell_zk: usize,
-        num_eqs: usize,
-        seed: u64,
-    ) -> Result<(), &'static str> {
-        // Same setup pattern as the other runners.
-        let mut perm_rng = SmallRng::seed_from_u64(seed);
-        let perm = Perm::new_from_rng_128(&mut perm_rng);
-
-        let merkle_hash = MyHash::new(perm.clone());
-        let merkle_compress = MyCompress::new(perm.clone());
-        let mmcs: MyMmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
-
-        let m = (ell_zk + T).next_power_of_two();
-        let dft = MyDft::default();
-        let encoding = MyEnc::new(T, ell_zk, m, dft);
-
-        let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
-        let evals: Vec<F> = (0..(1usize << n_vars)).map(|_| data_rng.random()).collect();
-        let poly = Poly::new(evals);
-
-        let mut eq_statement = EqStatement::initialize(n_vars);
-        for _ in 0..num_eqs {
-            let eq_point: Point<EF> = Point::new(
-                (0..n_vars)
-                    .map(|_| data_rng.random::<EF>())
-                    .collect::<Vec<EF>>(),
-            );
-            let eq_eval = poly.eval_base::<EF>(&eq_point);
-            eq_statement.add_evaluated_constraint(eq_point, eq_eval);
-        }
-
-        let pow_bits = 0;
-
-        // Honest prover transcript.
-        let mut prover_challenger = MyChallenger::new(perm.clone());
-        let mut zk_data_honest = ZkSumcheckData::<F, EF>::default();
-        let mut prover_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
-        let (mut prover, _gamma_1) = ZkSumcheck::new_classic_unpacked::<F, EF, _, _, _, _>(
-            &poly,
-            &mut zk_data_honest,
-            &mut prover_challenger,
-            folding_factor,
-            pow_bits,
-            &eq_statement,
-            &encoding,
-            &mmcs,
-            &mut prover_rng,
-        );
-        for _ in 1..folding_factor {
-            let _ = prover.round(&mut zk_data_honest, &mut prover_challenger, pow_bits);
-        }
-
-        // Simulator transcript (independent challenger + RNG; we check the
-        // invariant on each side independently, not byte-equality of wires —
-        // wires depend on RNG state, only their distribution matters).
-        let mut sim_challenger = MyChallenger::new(perm);
-        let mut sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(3));
-        let (zk_data_sim, _, _) = ZkSumcheck::simulate_classic_unpacked::<F, EF, _, _, _, _>(
-            &mut sim_challenger,
-            folding_factor,
-            pow_bits,
-            &eq_statement,
-            &encoding,
-            &mmcs,
-            &mut sim_rng,
-        );
-
-        // For wire indices ≥ 2 (= polynomial coefficients c_3, c_4, …), the
-        // basis coefficients of EF beyond index 0 must all be zero. The slice
-        // is empty when ell_zk ≤ 3, so the invariant is vacuously satisfied
-        // there — that's fine, the test still pins down the load-bearing
-        // ell_zk ≥ 4 regime.
-        let check = |zk_data: &ZkSumcheckData<F, EF>, label: &'static str| {
-            for wire in &zk_data.round_coefficients {
-                for coef in wire.iter().skip(2) {
-                    let basis: &[F] =
-                        <EF as BasedVectorSpace<F>>::as_basis_coefficients_slice(coef);
-                    if basis.iter().skip(1).any(|&x| x != F::ZERO) {
-                        return Err(label);
-                    }
+            for (round_idx, wire) in sim_zk_data.round_coefficients.iter().enumerate() {
+                for (pos, &coeff) in wire.iter().enumerate().skip(2) {
+                    prop_assert!(
+                        ef_in_f_subspace(coeff),
+                        "simulator wire[{pos}] in round {round_idx} must live in F-subspace",
+                    );
                 }
             }
-            Ok(())
-        };
-        check(
-            &zk_data_honest,
-            "honest wire outside F-subspace at index ≥ 2",
-        )?;
-        check(
-            &zk_data_sim,
-            "simulator wire outside F-subspace at index ≥ 2",
-        )?;
-        Ok(())
-    }
-
-    /// Fixed-seed smoke test: a quick byte-level FS-agreement check that runs
-    /// in milliseconds, separate from the broader proptest sweep below.
-    #[test]
-    fn prover_verifier_roundtrip_classic_unpacked() {
-        run_roundtrip(4, 3, 2, 1, 42).expect("smoke roundtrip should succeed");
-    }
-
-    proptest! {
-        // 32 cases keep the suite fast (each case runs full prover + verifier).
-        #![proptest_config(ProptestConfig::with_cases(32))]
-
-        /// Completeness across the parameter space:
-        /// - `n_vars ∈ 2..=6`, polynomial size up to `2^6 = 64`.
-        /// - `folding_factor ∈ 1..=n_vars` (correlated via `prop_flat_map`).
-        /// - `ell_zk ∈ 2..=4` covers the `ℓ_zk = 2` paper-undercount edge and
-        ///   two larger values where the wire format matches the paper.
-        /// - `num_eqs ∈ 0..=3` covers the empty-statement (`μ = 0`) base case
-        ///   and small batched-claim cases.
-        ///
-        /// Each case asserts the verifier accepts and that the prover and
-        /// verifier sample the same `(γ_1, …, γ_k)`.
-        #[test]
-        fn prop_completeness_classic_unpacked(
-            (n_vars, folding_factor) in (2usize..=6usize)
-                .prop_flat_map(|n| (Just(n), 1usize..=n)),
-            ell_zk in 2usize..=4usize,
-            num_eqs in 0usize..=3usize,
-            seed in any::<u64>(),
-        ) {
-            prop_assert!(
-                run_roundtrip(n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok(),
-                "n_vars={n_vars}, k={folding_factor}, ell_zk={ell_zk}, num_eqs={num_eqs}, seed={seed}",
-            );
-        }
-
-        /// Simulator-match for Reed-Solomon (Lemma 6.4). The simulator runs
-        /// without the witness `f`, sampling each round's wire form uniformly;
-        /// the verifier's `c_1` reconstruction makes any wire form
-        /// affine-consistent. For `ζ_RS = 0` the simulator's distribution is
-        /// identical to the real prover's (paper proof).
-        ///
-        /// Pointwise distributional equality is not testable; this proptest
-        /// instead checks the operational consequence — the simulator's
-        /// transcript is verifier-accepted across the same parameter sweep as
-        /// the completeness test.
-        #[test]
-        fn prop_simulator_classic_unpacked_verifies(
-            (n_vars, folding_factor) in (2usize..=6usize)
-                .prop_flat_map(|n| (Just(n), 1usize..=n)),
-            ell_zk in 2usize..=4usize,
-            num_eqs in 0usize..=3usize,
-            seed in any::<u64>(),
-        ) {
-            prop_assert!(
-                run_simulator_roundtrip(n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok(),
-                "n_vars={n_vars}, k={folding_factor}, ell_zk={ell_zk}, num_eqs={num_eqs}, seed={seed}",
-            );
-        }
-
-        /// Empirical RBR-flavored soundness (Lemma 6.5).
-        ///
-        /// Lemma 6.5's RBR statement is a probabilistic bound: the residual
-        /// claim a malicious prover lands on after a tamper is, with
-        /// overwhelming probability over the verifier's coins, distinct from
-        /// the residual an honest party would have computed — so the
-        /// downstream protocol layer rejects.
-        ///
-        /// We test the operational consequence at the sumcheck-verifier
-        /// boundary: a single field-element flip in one round's wire form
-        /// must produce a different `(γ, residual)` from the honest run.
-        /// Equality across `EF^4` happens only on a `1 / |F|^4 ≈ 2^{-124}`
-        /// collision — proptest never reaches it.
-        #[test]
-        fn prop_rbr_tampering_changes_verifier_output(
-            (n_vars, folding_factor) in (2usize..=6usize)
-                .prop_flat_map(|n| (Just(n), 1usize..=n)),
-            ell_zk in 2usize..=4usize,
-            num_eqs in 0usize..=3usize,
-            seed in any::<u64>(),
-            tamper_round in 0usize..32,
-            tamper_pos in 0usize..32,
-        ) {
-            let (honest_target, tampered_target, honest_rand, tampered_rand) =
-                run_tampering_propagation(
-                    n_vars,
-                    folding_factor,
-                    ell_zk,
-                    num_eqs,
-                    seed,
-                    tamper_round,
-                    tamper_pos,
-                );
-
-            // Either the verifier's randomness diverges (FS picked up the
-            // tamper at the offending round) or the residual target diverges
-            // (the affine-reconstruction at γ_k landed on a different point).
-            // In honest runs both equal; under any tamper at least one must
-            // differ — otherwise the verifier is blind to the tamper, which
-            // would break Lemma 6.5.
-            let randomness_differs = honest_rand != tampered_rand;
-            let target_differs = honest_target != tampered_target;
-            prop_assert!(
-                randomness_differs || target_differs,
-                "tampering went undetected: n_vars={n_vars}, k={folding_factor}, \
-                 ell_zk={ell_zk}, num_eqs={num_eqs}, seed={seed}, \
-                 tamper_round={tamper_round}, tamper_pos={tamper_pos}",
-            );
-        }
-
-        /// Distributional check (Lemma 6.4 in the F/EF hybrid setting):
-        /// honest and simulated wire entries at index ≥ 2 (polynomial
-        /// coefficients `c_3, c_4, …`) must live in the F-subspace of EF.
-        /// The high `ell_zk` end (≥ 4) is where this is non-vacuous and
-        /// where a uniform-EF simulator gets caught.
-        #[test]
-        fn prop_simulator_f_subspace_invariant(
-            (n_vars, folding_factor) in (2usize..=6usize)
-                .prop_flat_map(|n| (Just(n), 1usize..=n)),
-            ell_zk in 2usize..=6usize,
-            num_eqs in 0usize..=3usize,
-            seed in any::<u64>(),
-        ) {
-            prop_assert!(
-                run_f_subspace_invariant(n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok(),
-                "n_vars={n_vars}, k={folding_factor}, ell_zk={ell_zk}, num_eqs={num_eqs}, seed={seed}",
-            );
         }
     }
 }
