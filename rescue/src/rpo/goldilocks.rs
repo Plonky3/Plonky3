@@ -113,7 +113,7 @@ impl CryptographicPermutation<[Goldilocks; RPO_GOLDILOCKS_WIDTH]> for RpoGoldilo
 /// [`p3_field::exponentiation::exp_10540996611094048183`], but applied
 /// across all 12 lanes step-by-step.
 #[inline]
-fn apply_inv_sbox_x7(state: &mut [Goldilocks; RPO_GOLDILOCKS_WIDTH]) {
+pub(crate) fn apply_inv_sbox_x7(state: &mut [Goldilocks; RPO_GOLDILOCKS_WIDTH]) {
     // Binary expansion of 10540996611094048183 (63 squares + 8 mults):
     //   1001001001001001001001001001000110110110110110110110110110110111
     let mut t1 = *state;

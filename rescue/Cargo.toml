@@ -33,5 +33,9 @@ harness = false
 name = "rpo"
 harness = false
 
+[[bench]]
+name = "rpx"
+harness = false
+
 [lints]
 workspace = true

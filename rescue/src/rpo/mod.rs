@@ -13,6 +13,7 @@ use crate::util::shake256_hash;
 mod goldilocks;
 mod mersenne_31;
 
+pub(crate) use goldilocks::apply_inv_sbox_x7;
 pub use goldilocks::*;
 pub use mersenne_31::*;
 
