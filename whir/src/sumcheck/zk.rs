@@ -796,12 +796,16 @@ where
     challenger.observe_algebra_element(EF::from(mu_tilde));
     let eps: EF = challenger.sample_algebra_element();
 
-    // Two-tier sampling, matching honest stratification of `ĥ_j`:
+    // Wire-to-coefficient index map (wire skips `c_1`):
+    //   wire[0] = c_0, wire[1] = c_2, wire[i] = c_{i+1} for i ≥ 1.
+    //
+    // Two-tier sampling, matching honest stratification of `ĥ_j` (round index
+    // `j ∈ [1, k]`; wire position `i ∈ [0, wire_size)`):
     //   - wire[0], wire[1] (= c_0, c_2): receive an `ε · plain_c_*` term in
     //     honest execution, so live in EF. Sample uniformly from EF.
-    //   - wire[j] for j ≥ 2 (= c_3, …, c_{ell_zk-1}): receive only the
-    //     live-mask contribution `2^{k-j} · s_j[i]` with `s_j[i] ∈ F`, so
-    //     live in the F-subspace of EF. Sample from F lifted via `EF::from`.
+    //   - wire[i] for i ≥ 2 (= c_3, …, c_{ell_zk-1}): receive only the
+    //     live-mask contribution `2^{k-j} · s_j[i+1]` with `s_j[i+1] ∈ F`,
+    //     so live in the F-subspace of EF. Sample from F lifted via `EF::from`.
     // Without this stratification a distinguisher trivially separates real
     // from simulated views by checking the EF coordinates `[1..]` of each
     // `c_i` for `i ≥ 3` (paper §6.1).
@@ -817,8 +821,8 @@ where
 
     for _ in 0..k {
         let wire: Vec<EF> = (0..wire_size)
-            .map(|j| {
-                if j < 2 {
+            .map(|i| {
+                if i < 2 {
                     rng.random::<EF>()
                 } else {
                     EF::from(rng.random::<F>())
