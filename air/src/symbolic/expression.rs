@@ -77,12 +77,26 @@ impl<F: Field, EF: ExtensionField<F>> From<F> for SymbolicExpression<EF> {
 impl<F: Field> SymbolicExpression<F> {
     /// Evaluate this symbolic expression against a concrete [`AirBuilder`].
     ///
-    /// Leaves resolve from the builder's trace windows, public values,
-    /// and selectors. Arithmetic nodes recurse into children.
+    /// # Overview
+    ///
+    /// - Walk the expression tree top-down.
+    /// - Replace each leaf with the builder's concrete value.
+    /// - Recurse into arithmetic nodes; combine in the builder's algebra.
+    ///
+    /// # Algorithm
+    ///
+    /// ```text
+    ///     leaf   → builder lookup (main / preprocessed / public / periodic / selector / constant)
+    ///     x + y  → resolve(x) + resolve(y)
+    ///     x - y  → resolve(x) - resolve(y)
+    ///     x * y  → resolve(x) * resolve(y)
+    ///     -x     → -resolve(x)
+    /// ```
     ///
     /// # Panics
     ///
-    /// Panics on periodic columns and row offsets beyond 1.
+    /// - Row offset other than 0 or 1.
+    /// - Column index out of bounds.
     pub fn resolve<AB>(&self, builder: &AB) -> AB::Expr
     where
         AB: AirBuilder<F = F>,
@@ -90,6 +104,8 @@ impl<F: Field> SymbolicExpression<F> {
         match self {
             Self::Leaf(leaf) => match leaf {
                 BaseLeaf::Variable(v) => match v.entry {
+                    // Main trace: offset 0 = current row, offset 1 = next row.
+                    // Symbolic builders only emit two-row windows.
                     BaseEntry::Main { offset } => {
                         let main = builder.main();
                         match offset {
@@ -104,6 +120,7 @@ impl<F: Field> SymbolicExpression<F> {
                             _ => panic!("expressions cannot span more than two rows"),
                         }
                     }
+                    // Preprocessed trace: same shape, commitment-free trace.
                     BaseEntry::Preprocessed { offset } => {
                         let prep = builder.preprocessed();
                         match offset {
@@ -118,16 +135,20 @@ impl<F: Field> SymbolicExpression<F> {
                             _ => panic!("expressions cannot span more than two rows"),
                         }
                     }
+                    // Public input: direct slice lookup.
                     BaseEntry::Public => builder.public_values()[v.index].into(),
-                    BaseEntry::Periodic => {
-                        panic!("periodic columns cannot be resolved in this context")
-                    }
+                    // Periodic column at the current row.
+                    // Empty default slice → out-of-bounds panic on stray emissions.
+                    BaseEntry::Periodic => builder.periodic_values()[v.index].into(),
                 },
+                // Boundary and transition selectors come straight from the builder.
                 BaseLeaf::IsFirstRow => builder.is_first_row(),
                 BaseLeaf::IsLastRow => builder.is_last_row(),
                 BaseLeaf::IsTransition => builder.is_transition_window(2),
+                // Lift the field constant into the builder's expression algebra.
                 BaseLeaf::Constant(c) => AB::Expr::from(*c),
             },
+            // Arithmetic: recurse on operands, combine in the builder's algebra.
             Self::Add { x, y, .. } => x.resolve(builder) + y.resolve(builder),
             Self::Sub { x, y, .. } => x.resolve(builder) - y.resolve(builder),
             Self::Neg { x, .. } => -x.resolve(builder),
@@ -791,10 +812,17 @@ mod tests {
         assert_eq!(result.degree_multiple(), 0);
     }
 
-    /// Two-row trace builder.
+    /// Minimal builder used to drive symbolic-expression resolution.
+    ///
+    /// Carries:
+    /// - a 2-row main trace,
+    /// - a public-value slice,
+    /// - precomputed selector values for the current row,
+    /// - a periodic-column row evaluated at the current step.
     struct ResolveTestBuilder {
         main: RowMajorMatrix<BabyBear>,
         public_values: Vec<BabyBear>,
+        periodic_row: Vec<BabyBear>,
         is_first: BabyBear,
         is_last: BabyBear,
         is_transition: BabyBear,
@@ -807,6 +835,7 @@ mod tests {
         type PreprocessedWindow = RowMajorMatrix<BabyBear>;
         type MainWindow = RowMajorMatrix<BabyBear>;
         type PublicVar = BabyBear;
+        type PeriodicVar = BabyBear;
 
         fn main(&self) -> Self::MainWindow {
             self.main.clone()
@@ -833,13 +862,18 @@ mod tests {
         fn public_values(&self) -> &[Self::PublicVar] {
             &self.public_values
         }
+
+        fn periodic_values(&self) -> &[Self::PeriodicVar] {
+            &self.periodic_row
+        }
     }
 
-    /// 2-row × 2-column trace:
+    /// 2-row × 2-column trace, plus a 2-cell periodic row at the current step:
     ///
     /// ```text
-    ///     row 0 (current): [10, 20]
-    ///     row 1 (next):    [30, 40]
+    ///     main row 0 (current): [10, 20]
+    ///     main row 1 (next):    [30, 40]
+    ///     periodic_row (curr):  [7, 13]
     /// ```
     fn test_builder() -> ResolveTestBuilder {
         ResolveTestBuilder {
@@ -853,6 +887,9 @@ mod tests {
                 2, // width
             ),
             public_values: vec![BabyBear::new(99)],
+            // Two periodic columns at the current row.
+            // Distinct primes so any cross-stream mix-up is visible.
+            periodic_row: vec![BabyBear::new(7), BabyBear::new(13)],
             is_first: BabyBear::ONE,
             is_last: BabyBear::ZERO,
             is_transition: BabyBear::ONE,
@@ -934,11 +971,51 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "periodic columns cannot be resolved")]
-    fn resolve_periodic_panics() {
+    fn resolve_periodic_columns() {
+        // Invariant: a periodic leaf reads from the builder's
+        // periodic-value slice, in declared column order.
+        //
+        // Fixture:
+        //
+        //     periodic row (current step) : [7, 13]
+        //     index 0 →  7
+        //     index 1 → 13
         let b = test_builder();
-        let expr =
+
+        // Column 0 → 7.
+        let p0 =
             SymbolicExpression::from(SymbolicVariable::<BabyBear>::new(BaseEntry::Periodic, 0));
-        let _ = expr.resolve(&b);
+        assert_eq!(p0.resolve(&b), BabyBear::new(7));
+
+        // Column 1 → 13.
+        let p1 =
+            SymbolicExpression::from(SymbolicVariable::<BabyBear>::new(BaseEntry::Periodic, 1));
+        assert_eq!(p1.resolve(&b), BabyBear::new(13));
+    }
+
+    #[test]
+    fn resolve_periodic_combines_with_arithmetic() {
+        // Invariant: periodic leaves compose under the same algebra
+        // as main, public, and preprocessed leaves.
+        //
+        // Fixture:
+        //
+        //     periodic row : [7, 13]
+        //     main row 0   : [10, 20]
+        //
+        //     expression   : main[0] * periodic[0] + periodic[1]
+        //                  = 10 * 7 + 13
+        //                  = 83
+        let b = test_builder();
+
+        let col0 =
+            SymbolicExpression::from(SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0));
+        let p0 =
+            SymbolicExpression::from(SymbolicVariable::<BabyBear>::new(BaseEntry::Periodic, 0));
+        let p1 =
+            SymbolicExpression::from(SymbolicVariable::<BabyBear>::new(BaseEntry::Periodic, 1));
+
+        let expr = col0 * p0 + p1;
+        assert_eq!(expr.resolve(&b), BabyBear::new(83));
     }
 }

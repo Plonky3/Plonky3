@@ -9,9 +9,6 @@
 /// Equality-based evaluation constraints with batched eq-polynomial combination.
 pub mod eq;
 
-/// Initial statement builder for the commitment phase.
-pub mod initial;
-
 /// Selection-based evaluation constraints using the power-map expansion.
 pub mod select;
 

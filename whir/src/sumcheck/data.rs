@@ -106,6 +106,16 @@ impl<F, EF> SumcheckData<F, EF> {
     {
         let mut randomness = Vec::with_capacity(self.polynomial_evaluations.len());
 
+        // Grinding pushes one witness per round;
+        //
+        // Reject upfront if the proof is short so the loop below cannot panic on out-of-bounds indexing.
+        if pow_bits > 0 && self.pow_witnesses.len() != self.polynomial_evaluations.len() {
+            return Err(SumcheckError::PowWitnessCountMismatch {
+                expected: self.polynomial_evaluations.len(),
+                actual: self.pow_witnesses.len(),
+            });
+        }
+
         for (i, &[c0, c_inf]) in self.polynomial_evaluations.iter().enumerate() {
             // Observe only the sent polynomial evaluations (h(0) and h(inf)).
             challenger.observe_algebra_slice(&[c0, c_inf]);

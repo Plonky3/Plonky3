@@ -1,5 +1,4 @@
 use alloc::collections::btree_map::BTreeMap;
-use alloc::vec;
 use alloc::vec::Vec;
 
 use itertools::Itertools;
@@ -393,14 +392,13 @@ where
 
         // Reconstruct the full evaluation row from self + siblings
         let index_in_group = *start_index % arity;
-        let mut evals = vec![EF::ZERO; arity];
+        let mut evals = EF::zero_vec(arity);
         evals[index_in_group] = folded_eval;
 
         let mut sibling_idx = 0;
-        #[allow(clippy::needless_range_loop)]
-        for j in 0..arity {
+        for (j, eval) in evals.iter_mut().enumerate() {
             if j != index_in_group {
-                evals[j] = opening.sibling_values[sibling_idx];
+                *eval = opening.sibling_values[sibling_idx];
                 sibling_idx += 1;
             }
         }
@@ -634,6 +632,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
     use core::marker::PhantomData;
 
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};

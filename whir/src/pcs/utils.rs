@@ -4,8 +4,6 @@ use p3_challenger::{CanSampleUniformBits, FieldChallenger};
 use p3_field::{ExtensionField, Field};
 use p3_util::log2_strict_usize;
 
-use crate::fiat_shamir::errors::FiatShamirError;
-
 /// Sample `t` distinct STIR query indices uniformly from the transcript.
 ///
 /// # Pipeline
@@ -74,7 +72,7 @@ pub fn get_challenge_stir_queries<Challenger, F, EF>(
     folding_factor: usize,
     num_queries: usize,
     challenger: &mut Challenger,
-) -> Result<Vec<usize>, FiatShamirError>
+) -> Vec<usize>
 where
     Challenger: FieldChallenger<F> + CanSampleUniformBits<F>,
     F: Field,
@@ -118,7 +116,7 @@ where
 
     // Phase 4: verifier and Merkle-proof code consume ascending indices.
     queries.sort_unstable();
-    Ok(queries)
+    queries
 }
 
 #[cfg(test)]
@@ -201,8 +199,7 @@ mod tests {
                 folding_factor,
                 num_queries,
                 &mut challenger_a,
-            )
-            .expect("RESAMPLE = true cannot fail");
+            );
 
             // (1) length == request.
             prop_assert_eq!(queries_a.len(), num_queries);
@@ -234,8 +231,7 @@ mod tests {
                 folding_factor,
                 num_queries,
                 &mut challenger_b,
-            )
-            .expect("RESAMPLE = true cannot fail");
+            );
             prop_assert_eq!(queries_a, queries_b);
         }
     }
@@ -258,8 +254,7 @@ mod tests {
             folding_factor,
             num_queries,
             &mut challenger,
-        )
-        .expect("RESAMPLE = true cannot fail");
+        );
 
         // Length capped at the domain; output is the full domain ascending.
         assert_eq!(queries.len(), folded_domain_size);
@@ -302,8 +297,7 @@ mod tests {
                 folding_factor,
                 1,
                 &mut challenger,
-            )
-            .expect("RESAMPLE = true cannot fail");
+            );
             assert_eq!(q.len(), 1);
             counts[q[0]] += 1;
         }

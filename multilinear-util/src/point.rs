@@ -308,7 +308,7 @@ mod tests {
         let expanded = Point::expand_from_univariate(point, 4);
 
         // Since 0^k = 0 for all k, the result should be [0, 0, 0, 0]
-        let expected = vec![F::ZERO; 4];
+        let expected = F::zero_vec(4);
         assert_eq!(expanded.0, expected);
     }
 
@@ -340,8 +340,8 @@ mod tests {
 
     #[test]
     fn test_eq_poly_outside_all_zeros() {
-        let ml_point1 = Point(vec![F::ZERO; 4]);
-        let ml_point2 = Point(vec![F::ZERO; 4]);
+        let ml_point1 = Point(F::zero_vec(4));
+        let ml_point2 = Point(F::zero_vec(4));
 
         assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
     }

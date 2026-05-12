@@ -74,6 +74,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
     type PreprocessedWindow = RowWindow<'a, Val<SC>>;
     type MainWindow = RowWindow<'a, Val<SC>>;
     type PublicVar = Val<SC>;
+    type PeriodicVar = Val<SC>;
 
     #[inline]
     fn main(&self) -> Self::MainWindow {

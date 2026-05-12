@@ -3,15 +3,21 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, Field, dot_product};
+use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+use p3_commit::Mmcs;
+use p3_dft::TwoAdicSubgroupDft;
+use p3_field::{ExtensionField, Field, TwoAdicField, dot_product};
+use p3_matrix::dense::DenseMatrix;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 
+use crate::pcs::committer::writer::commit_base;
 use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
-use crate::sumcheck::layout::opening::{MultiClaim, Opening, SuffixMultiClaim, SuffixVirtualClaim};
+use crate::sumcheck::layout::opening::{Opening, ProverMultiClaim, ProverVirtualClaim};
+use crate::sumcheck::layout::prover::Layout;
 use crate::sumcheck::layout::witness::{Table, TablePlacement};
+use crate::sumcheck::layout::{LayoutStrategy, Witness};
 use crate::sumcheck::product_polynomial::ProductPolynomial;
 use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
 use crate::sumcheck::svo::{SvoPoint, calculate_accumulators_batch};
@@ -34,8 +40,6 @@ pub struct SuffixProver<F: Field, EF: ExtensionField<F>> {
     pub(crate) num_variables: usize,
     /// Number of preprocessing rounds consumed before residual sumcheck.
     pub(crate) folding: usize,
-    /// Stacked committed polynomial.
-    pub(crate) poly: Poly<F>,
     /// Concrete claims recorded per source table (carries per-round SVO partials).
     ///
     /// # Invariants
@@ -43,25 +47,71 @@ pub struct SuffixProver<F: Field, EF: ExtensionField<F>> {
     /// - Every opening stored here is tied to a concrete source column.
     /// - Virtual openings never enter this map.
     /// - Claims are appended in insertion order.
-    pub(crate) claim_map: Vec<Vec<SuffixMultiClaim<F, EF>>>,
+    pub(crate) claim_map: Vec<Vec<ProverMultiClaim<F, EF>>>,
     /// Virtual claims carrying precomputed SVO accumulators.
-    pub(crate) virtual_claims: Vec<SuffixVirtualClaim<EF>>,
+    pub(crate) virtual_claims: Vec<ProverVirtualClaim<EF>>,
 }
 
-impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
+impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, EF> {
+    fn from_witness(witness: Witness<F>) -> Self {
+        // Move the witness fields out so the prover owns them outright.
+        // The stacked polynomial is intentionally discarded: every suffix-mode
+        // primitive walks the per-table data instead.
+        let parts = witness.into_parts();
+        // One claim list per source table; virtual claims live in their own bucket.
+        let num_tables = parts.tables.len();
+        Self {
+            tables: parts.tables,
+            placements: parts.placements,
+            num_variables: parts.num_variables,
+            folding: parts.folding,
+            claim_map: (0..num_tables).map(|_| Vec::new()).collect(),
+            virtual_claims: Vec::new(),
+        }
+    }
+
+    fn new_witness(tables: Vec<Table<F>>, folding: usize) -> Witness<F> {
+        Witness::new(tables, folding)
+    }
+
+    fn commit<Dft, MT, Challenger>(
+        dft: &Dft,
+        mmcs: &MT,
+        challenger: &mut Challenger,
+        witness: Witness<F>,
+        folding: usize,
+        starting_log_inv_rate: usize,
+    ) -> (Self, MT::Commitment, MT::ProverData<DenseMatrix<F>>)
+    where
+        Dft: TwoAdicSubgroupDft<F>,
+        MT: Mmcs<F>,
+        Challenger: CanObserve<MT::Commitment>,
+    {
+        let (root, prover_data) = commit_base(
+            Self::variable_order(),
+            dft,
+            mmcs,
+            challenger,
+            &witness.poly,
+            folding,
+            starting_log_inv_rate,
+        );
+
+        (Self::from_witness(witness), root, prover_data)
+    }
+
+    fn folding(&self) -> usize {
+        self.folding
+    }
+
     /// Returns the number of variables of the stacked polynomial.
-    pub const fn num_variables(&self) -> usize {
+    fn num_variables(&self) -> usize {
         self.num_variables
     }
 
     /// Returns the number of variables of table `id`.
-    pub fn num_variables_table(&self, id: usize) -> usize {
+    fn num_variables_table(&self, id: usize) -> usize {
         self.tables[id].num_variables()
-    }
-
-    /// Returns the stacked committed polynomial.
-    pub const fn poly(&self) -> &Poly<F> {
-        &self.poly
     }
 
     /// Records opening claims for the selected columns of `table_idx`.
@@ -82,11 +132,11 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     ///
     /// - Columns list must be non-empty.
     #[tracing::instrument(skip_all)]
-    pub fn eval<Ch>(&mut self, table_idx: usize, polys: &[usize], challenger: &mut Ch) -> Vec<EF>
+    fn eval<Ch>(&mut self, table_idx: usize, polys: &[usize], challenger: &mut Ch) -> Vec<EF>
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        // Precondition: opening nothing would silently push an empty MultiClaim.
+        // Precondition: opening nothing would silently push an empty ProverMultiClaim.
         assert!(
             !polys.is_empty(),
             "opening schedule must name at least one column"
@@ -122,7 +172,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         challenger.observe_algebra_slice(&evals);
 
         // Store the batch with its shared SVO point.
-        self.claim_map[table_idx].push(SuffixMultiClaim::new(point, openings));
+        self.claim_map[table_idx].push(ProverMultiClaim::new(point, openings));
 
         evals
     }
@@ -144,7 +194,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     /// - Per-column partials are collected on the fly.
     /// - Those partials feed the SVO accumulator batcher.
     #[tracing::instrument(skip_all)]
-    pub fn add_virtual_eval<Ch>(&mut self, challenger: &mut Ch) -> EF
+    fn add_virtual_eval<Ch>(&mut self, challenger: &mut Ch) -> EF
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
@@ -196,7 +246,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
 
         // Batch every per-column opening into per-round SVO accumulators.
         let accumulators = calculate_accumulators_batch(
-            &SuffixMultiClaim::new(
+            &ProverMultiClaim::new(
                 SvoPoint::new_unpacked(self.folding, &point, VariableOrder::Suffix),
                 openings,
             ),
@@ -229,7 +279,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
             assert_eq!(
                 accumulators,
                 calculate_accumulators_batch(
-                    &SuffixMultiClaim::new(
+                    &ProverMultiClaim::new(
                         SvoPoint::new_unpacked(self.folding, &point, VariableOrder::Suffix),
                         vec![opening],
                     ),
@@ -269,7 +319,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     ///       4   | Compose the residual product polynomial from compressed slots.
     /// ```
     #[tracing::instrument(skip_all)]
-    pub fn into_sumcheck<Ch>(
+    fn into_sumcheck<Ch>(
         self,
         sumcheck_data: &mut SumcheckData<F, EF>,
         pow_bits: usize,
@@ -380,10 +430,16 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     fn num_claims(&self) -> usize {
         self.claim_map
             .iter()
-            .flat_map(|claims| claims.iter().map(MultiClaim::len))
+            .flat_map(|claims| claims.iter().map(ProverMultiClaim::len))
             .sum()
     }
 
+    fn strategy() -> LayoutStrategy {
+        LayoutStrategy::new(false, VariableOrder::Suffix)
+    }
+}
+
+impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
     /// Computes the batched claimed sum from concrete and virtual openings.
     ///
     /// # Identity
@@ -441,6 +497,7 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
     ///
     /// - One output slot per column; writes never overlap.
     /// - Output arity is the stacked arity minus the number of challenges.
+    #[tracing::instrument(skip_all)]
     fn compress_stacked(&self, rs: &Point<EF>) -> Poly<EF> {
         assert!(rs.num_variables() <= self.num_variables);
         // Output: residual stacked space of size 2^(num_variables - |rs|).
@@ -516,137 +573,5 @@ impl<F: Field, EF: ExtensionField<F>> SuffixProver<F, EF> {
         }
 
         out
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use alloc::vec::Vec;
-
-    use proptest::prelude::*;
-    use rand::rngs::SmallRng;
-    use rand::{RngExt, SeedableRng};
-
-    use super::SuffixProver;
-    use crate::sumcheck::layout::prover::test_utils::{
-        ASCENDING_POLYS, NON_ASCENDING_POLYS, arb_opening_schedule, arb_witness_and_schedule,
-        build_witness, build_witness_from_shape, run_suffix_roundtrip, run_suffix_roundtrip_with,
-        table_shapes_from,
-    };
-    use crate::sumcheck::tests::*;
-
-    #[test]
-    fn suffix_num_claims_counts_every_recorded_opening() {
-        // Invariant:
-        //     Concrete opening count equals the sum over every (table, claim).
-        //
-        // Fixture state:
-        //     fresh prover:                  0 concrete openings
-        //     after eval(table 0, [0, 1]):   2 concrete openings
-        //     after eval(table 1, [0]):      3 concrete openings
-        let witness = build_witness();
-        let mut prover: SuffixProver<F, EF> = witness.as_suffix_prover();
-        // Fresh prover: no claims recorded yet.
-        assert_eq!(prover.num_claims(), 0);
-
-        // Fresh Fiat-Shamir transcript; eval samples its own point and absorbs.
-        let mut ch = challenger();
-
-        // Record two openings on table 0 → count advances from 0 to 2.
-        prover.eval(0, &[0, 1], &mut ch);
-        assert_eq!(prover.num_claims(), 2);
-
-        // Record one more opening on table 1 → count advances from 2 to 3.
-        prover.eval(1, &[0], &mut ch);
-        assert_eq!(prover.num_claims(), 3);
-    }
-
-    #[test]
-    fn suffix_sum_matches_weighted_eval_sum() {
-        // Invariant:
-        //     sum(alpha) = eval_0 * alpha^0 + eval_1 * alpha^1
-        //     for a single claim opening two columns in traversal order.
-        //
-        // Fixture state:
-        //     one eval call recording two openings on one claim.
-        //     traversal order: column 0 before column 1.
-        let witness = build_witness();
-        let mut prover: SuffixProver<F, EF> = witness.as_suffix_prover();
-
-        // Fresh Fiat-Shamir transcript.
-        let mut ch = challenger();
-
-        // Record two openings; evals[0], evals[1] line up with columns 0, 1.
-        let evals = prover.eval(0, &[0, 1], &mut ch);
-
-        // Deterministic alpha for hand-rolled comparison.
-        let mut rng = SmallRng::seed_from_u64(7);
-        let alpha: EF = rng.random();
-        let expected = evals[0] + alpha * evals[1];
-
-        // Check: the prover's sum helper matches the hand-rolled formula.
-        assert_eq!(prover.sum(alpha), expected);
-    }
-
-    #[test]
-    fn suffix_roundtrip_ascending_polys() {
-        // Baseline: columns opened in ascending order inside each claim.
-        run_suffix_roundtrip(ASCENDING_POLYS);
-    }
-
-    #[test]
-    fn suffix_roundtrip_non_ascending_polys() {
-        // Regression:
-        //     Alphas and partial evals used to desync when opening order
-        //     within a claim was not sorted ascending.
-        run_suffix_roundtrip(NON_ASCENDING_POLYS);
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig { cases: 16, ..ProptestConfig::default() })]
-
-        // Invariant:
-        //     Every valid opening schedule roundtrips through the protocol
-        //     without the prover and verifier diverging.
-        //
-        // Coverage: includes non-ascending column orders that previously
-        // exposed the alpha / partial-eval alignment bug.
-        #[test]
-        fn suffix_roundtrip_proptest(schedule in arb_opening_schedule()) {
-            // Adapt the owned schedule to the slice-pair shape the runner expects.
-            let borrowed: Vec<(usize, &[usize])> = schedule
-                .iter()
-                .map(|(t, polys)| (*t, polys.as_slice()))
-                .collect();
-            // Drive both sides; the runner asserts agreement internally.
-            run_suffix_roundtrip(&borrowed);
-        }
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig { cases: 8, ..ProptestConfig::default() })]
-
-        // Invariant:
-        //     Roundtrip agreement holds for ANY valid witness shape, not just
-        //     the fixed two-table fixture.
-        //
-        // Strategy:
-        //     Random witness shape (1..=3 tables, arity in [5, 8], 1..=3 cols per
-        //     table) paired with a matching opening schedule over that shape.
-        #[test]
-        fn suffix_roundtrip_shape_proptest(
-            (shape, schedule) in arb_witness_and_schedule(),
-        ) {
-            // Build a matching witness and verifier-side shapes for this case.
-            let witness = build_witness_from_shape(&shape);
-            let shapes = table_shapes_from(&shape);
-            // Adapt the owned schedule to the slice-pair shape the runner expects.
-            let borrowed: Vec<(usize, &[usize])> = schedule
-                .iter()
-                .map(|(t, polys)| (*t, polys.as_slice()))
-                .collect();
-            // Drive both sides on the generated shape; runner asserts agreement.
-            run_suffix_roundtrip_with(witness, &shapes, &borrowed);
-        }
     }
 }

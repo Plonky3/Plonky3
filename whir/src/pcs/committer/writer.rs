@@ -1,112 +1,120 @@
-use core::ops::Deref;
-
-use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::Mmcs;
+use p3_challenger::CanObserve;
+use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, TwoAdicField};
 use p3_matrix::Matrix;
-use p3_matrix::dense::RowMajorMatrixView;
-use p3_multilinear_util::point::Point;
-use tracing::{info_span, instrument};
+use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView};
+use p3_matrix::extension::FlatMatrixView;
+use p3_multilinear_util::poly::Poly;
+use tracing::info_span;
 
-use crate::constraints::statement::initial::InitialStatement;
-use crate::fiat_shamir::errors::FiatShamirError;
-use crate::parameters::WhirConfig;
-use crate::pcs::committer::DenseMatrix;
-use crate::pcs::proof::WhirProof;
+use crate::sumcheck::strategy::VariableOrder;
 
-/// Commits polynomials using a Merkle-based scheme.
+/// Encodes and commits the initial base-field polynomial.
 ///
-/// Expands and folds evaluations via DFT, then builds a Merkle tree
-/// over the resulting codeword.
-#[derive(Debug)]
-pub struct CommitmentWriter<'a, EF, F, MT: Mmcs<F>, Challenger>(
-    &'a WhirConfig<EF, F, MT, Challenger>,
-)
+/// This is the first WHIR commitment. It lays out the polynomial according to
+/// the residual variable order, applies the Reed-Solomon expansion with `dft`,
+/// commits the resulting codeword matrix with `mmcs`, and observes the Merkle
+/// root in the transcript.
+///
+/// Prefix order transposes the local folding block before padding so the first
+/// folded variables become columns. Suffix order keeps the folding block as the
+/// row width and only zero-pads the row count.
+pub(crate) fn commit_base<F, Dft, MT, Challenger>(
+    order: VariableOrder,
+    dft: &Dft,
+    mmcs: &MT,
+    challenger: &mut Challenger,
+    poly: &Poly<F>,
+    folding: usize,
+    starting_log_inv_rate: usize,
+) -> (MT::Commitment, MT::ProverData<DenseMatrix<F>>)
 where
-    F: Field,
-    EF: ExtensionField<F>;
+    F: TwoAdicField,
+    Dft: TwoAdicSubgroupDft<F>,
+    MT: Mmcs<F>,
+    Challenger: CanObserve<MT::Commitment>,
+{
+    let num_variables = poly.num_variables();
+    let height = 1 << (num_variables + starting_log_inv_rate - folding);
 
-impl<'a, EF, F, MT, Challenger> CommitmentWriter<'a, EF, F, MT, Challenger>
+    let encoded = match order {
+        VariableOrder::Prefix => {
+            let padded = info_span!("transpose & pad").in_scope(|| {
+                let mut mat =
+                    RowMajorMatrixView::new(poly.as_slice(), 1 << (num_variables - folding))
+                        .transpose();
+                mat.pad_to_height(height, F::ZERO);
+                mat
+            });
+            info_span!("dft", height = padded.height(), width = padded.width())
+                .in_scope(|| dft.dft_batch(padded).to_row_major_matrix())
+        }
+        VariableOrder::Suffix => {
+            let padded = info_span!("pad").in_scope(|| {
+                let mut mat = RowMajorMatrix::new(poly.as_slice().to_vec(), 1 << folding);
+                mat.pad_to_height(height, F::ZERO);
+                mat
+            });
+            info_span!("dft", height = padded.height(), width = padded.width())
+                .in_scope(|| dft.dft_batch(padded).to_row_major_matrix())
+        }
+    };
+
+    let (root, prover_data) = info_span!("commit_matrix").in_scope(|| mmcs.commit_matrix(encoded));
+    challenger.observe(root.clone());
+    (root, prover_data)
+}
+
+/// Encodes and commits a folded extension-field polynomial.
+///
+/// This is used after each non-final WHIR folding round. The layout mirrors
+/// the base-field path, but the DFT runs over extension-field values and the
+/// commitment is made through an extension MMCS that views extension rows as
+/// base-field data for the underlying Merkle tree.
+#[allow(clippy::type_complexity)]
+pub(crate) fn commit_extension<F, EF, Dft, MT>(
+    order: VariableOrder,
+    dft: &Dft,
+    extension_mmcs: &ExtensionMmcs<F, EF, MT>,
+    poly: &Poly<EF>,
+    folding: usize,
+    inv_rate: usize,
+) -> (
+    MT::Commitment,
+    <MT as Mmcs<F>>::ProverData<FlatMatrixView<F, EF, DenseMatrix<EF>>>,
+)
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
-    Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    Dft: TwoAdicSubgroupDft<F>,
     MT: Mmcs<F>,
 {
-    pub const fn new(params: &'a WhirConfig<EF, F, MT, Challenger>) -> Self {
-        Self(params)
-    }
+    let num_variables = poly.num_variables();
+    let height = inv_rate * (1 << (num_variables - folding));
 
-    /// Commits a polynomial via DFT expansion and Merkle tree construction.
-    ///
-    /// # Algorithm
-    ///
-    /// 1. Transpose evaluations for reverse variable order, then zero-pad.
-    /// 2. Apply DFT to produce the codeword matrix.
-    /// 3. Commit the matrix into a Merkle tree.
-    /// 4. Sample OOD challenge points and record evaluations in the transcript.
-    #[instrument(skip_all)]
-    pub fn commit<Dft>(
-        &self,
-        dft: &Dft,
-        proof: &mut WhirProof<F, EF, MT>,
-        challenger: &mut Challenger,
-        statement: &mut InitialStatement<F, EF>,
-    ) -> Result<MT::ProverData<DenseMatrix<F>>, FiatShamirError>
-    where
-        Dft: TwoAdicSubgroupDft<F>,
-        Challenger: CanObserve<MT::Commitment>,
-    {
-        // Transpose for reverse variable order, then zero-pad to the expanded domain.
-        let padded = info_span!("transpose & pad").in_scope(|| {
-            let num_vars = statement.num_variables();
-            let mut mat = RowMajorMatrixView::new(
-                statement.poly.as_slice(),
-                1 << (num_vars - self.folding_factor.at_round(0)),
-            )
-            .transpose();
-            mat.pad_to_height(
-                1 << (num_vars + self.starting_log_inv_rate - self.folding_factor.at_round(0)),
-                F::ZERO,
-            );
-            mat
-        });
+    let encoded = match order {
+        VariableOrder::Prefix => {
+            let padded = info_span!("transpose & pad").in_scope(|| {
+                let mut mat =
+                    RowMajorMatrixView::new(poly.as_slice(), 1 << (num_variables - folding))
+                        .transpose();
+                mat.pad_to_height(height, EF::ZERO);
+                mat
+            });
+            info_span!("dft", height = padded.height(), width = padded.width())
+                .in_scope(|| dft.dft_algebra_batch(padded).to_row_major_matrix())
+        }
+        VariableOrder::Suffix => {
+            let padded = info_span!("pad").in_scope(|| {
+                let mut mat = RowMajorMatrix::new(poly.as_slice().to_vec(), 1 << folding);
+                mat.pad_to_height(height, EF::ZERO);
+                mat
+            });
+            info_span!("dft", height = padded.height(), width = padded.width())
+                .in_scope(|| dft.dft_algebra_batch(padded).to_row_major_matrix())
+        }
+    };
 
-        // Apply DFT to produce the Reed-Solomon codeword.
-        let folded_matrix = info_span!("dft", height = padded.height(), width = padded.width())
-            .in_scope(|| dft.dft_batch(padded).to_row_major_matrix());
-
-        // Build Merkle tree and extract commitment root.
-        let (root, prover_data) =
-            info_span!("commit_matrix").in_scope(|| self.mmcs.commit_matrix(folded_matrix));
-
-        proof.initial_commitment = Some(root.clone());
-        challenger.observe(root);
-
-        // Sample and evaluate out-of-domain challenge points.
-        (0..self.0.commitment_ood_samples).for_each(|_| {
-            let point = Point::expand_from_univariate(
-                challenger.sample_algebra_element(),
-                self.num_variables,
-            );
-            let eval = info_span!("ood evaluation").in_scope(|| statement.evaluate(&point));
-            proof.initial_ood_answers.push(eval);
-            challenger.observe_algebra_element(eval);
-        });
-
-        Ok(prover_data)
-    }
-}
-
-impl<EF, F, MT: Mmcs<F>, Challenger> Deref for CommitmentWriter<'_, EF, F, MT, Challenger>
-where
-    F: Field,
-    EF: ExtensionField<F>,
-{
-    type Target = WhirConfig<EF, F, MT, Challenger>;
-
-    fn deref(&self) -> &Self::Target {
-        self.0
-    }
+    info_span!("commit_matrix").in_scope(|| extension_mmcs.commit_matrix(encoded))
 }

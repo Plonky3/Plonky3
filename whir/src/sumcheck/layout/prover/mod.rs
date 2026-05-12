@@ -8,8 +8,97 @@
 mod prefix;
 mod suffix;
 
+use alloc::vec::Vec;
+
+use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+use p3_commit::Mmcs;
+use p3_dft::TwoAdicSubgroupDft;
+use p3_field::{ExtensionField, TwoAdicField};
+use p3_matrix::dense::DenseMatrix;
+use p3_multilinear_util::point::Point;
 pub use prefix::PrefixProver;
 pub use suffix::SuffixProver;
+
+use crate::sumcheck::SumcheckData;
+use crate::sumcheck::layout::{LayoutStrategy, Table, Witness};
+use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
+
+/// Stacked-sumcheck prover layout
+pub trait Layout<F: TwoAdicField, EF: ExtensionField<F>>: Sized {
+    /// Builds this layout from a committed witness.
+    fn from_witness(witness: Witness<F>) -> Self;
+
+    /// Builds a witness structure for this layout from source tables.
+    fn new_witness(tables: Vec<Table<F>>, folding: usize) -> Witness<F>;
+
+    /// Commits to the witness and returns the layout.
+    ///
+    /// # Arguments
+    ///
+    /// - `dft`                    — base-field DFT used to encode the codeword.
+    /// - `mmcs`                   — Merkle commitment scheme over the base field.
+    /// - `challenger`             — Fiat–Shamir transcript; absorbs the Merkle root.
+    /// - `witness`                — stacked committed polynomial plus its tables.
+    /// - `folding`                — folding factor consumed by the first WHIR round.
+    /// - `starting_log_inv_rate`  — initial log-inverse rate of the RS code.
+    fn commit<Dft, MT, Challenger>(
+        dft: &Dft,
+        mmcs: &MT,
+        challenger: &mut Challenger,
+        witness: Witness<F>,
+        folding: usize,
+        starting_log_inv_rate: usize,
+    ) -> (Self, MT::Commitment, MT::ProverData<DenseMatrix<F>>)
+    where
+        Dft: TwoAdicSubgroupDft<F>,
+        MT: Mmcs<F>,
+        Challenger: CanObserve<MT::Commitment>;
+
+    /// Returns the total number of concrete openings recorded so far.
+    fn num_claims(&self) -> usize;
+
+    /// Returns the verifier strategy required to replay this committed layout.
+    fn strategy() -> LayoutStrategy;
+
+    /// Returns the variable order.
+    fn variable_order() -> VariableOrder {
+        Self::strategy().variable_order
+    }
+
+    /// Returns the number of variables of first round
+    fn folding(&self) -> usize;
+
+    /// Returns the number of variables of the stacked polynomial.
+    fn num_variables(&self) -> usize;
+
+    /// Returns the number of variables of table `id`.
+    fn num_variables_table(&self, id: usize) -> usize;
+
+    /// Records opening claims for the selected columns of `table_idx`.
+    fn eval<Ch>(&mut self, table_idx: usize, polys: &[usize], challenger: &mut Ch) -> Vec<EF>
+    where
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>;
+
+    /// Samples a virtual evaluation on the full stacked polynomial.
+    fn add_virtual_eval<Ch>(&mut self, challenger: &mut Ch) -> EF
+    where
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>;
+
+    /// Processes initial rounds of sumcheck and returns the residual sumcheck prover.
+    ///
+    /// # Returns
+    ///
+    /// - Residual sumcheck prover over the unpacked product polynomial.
+    /// - Folding challenges sampled during preprocessing.
+    fn into_sumcheck<Ch>(
+        self,
+        sumcheck_data: &mut SumcheckData<F, EF>,
+        pow_bits: usize,
+        challenger: &mut Ch,
+    ) -> (SumcheckProver<F, EF>, Point<EF>)
+    where
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>;
+}
 
 #[cfg(test)]
 pub(super) mod test_utils {
@@ -30,9 +119,8 @@ pub(super) mod test_utils {
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
-    use super::{PrefixProver, SuffixProver};
     use crate::sumcheck::SumcheckData;
-    use crate::sumcheck::layout::{Table, TableShape, Verifier, Witness};
+    use crate::sumcheck::layout::{Layout, LayoutStrategy, Table, TableShape, Verifier, Witness};
     use crate::sumcheck::strategy::VariableOrder;
     use crate::sumcheck::tests::*;
 
@@ -61,7 +149,7 @@ pub(super) mod test_utils {
     ///
     /// - Table 0: arity 9, two columns.
     /// - Table 1: arity 10, two columns.
-    pub(crate) fn build_witness() -> Witness<F> {
+    pub(crate) fn build_tables() -> Vec<Table<F>> {
         let mut rng = SmallRng::seed_from_u64(1);
         // Table at index 1 in the insertion order: arity 10, two columns.
         let a0 = Poly::<F>::rand(&mut rng, 10);
@@ -69,10 +157,7 @@ pub(super) mod test_utils {
         // Table at index 0 in the insertion order: arity 9, two columns.
         let b0 = Poly::<F>::rand(&mut rng, 9);
         let b1 = Poly::<F>::rand(&mut rng, 9);
-        Witness::new(
-            vec![Table::new(vec![b0, b1]), Table::new(vec![a0, a1])],
-            FOLDING,
-        )
+        vec![Table::new(vec![b0, b1]), Table::new(vec![a0, a1])]
     }
 
     /// Returns the per-table shape used by the verifier side.
@@ -114,7 +199,7 @@ pub(super) mod test_utils {
     /// value comes straight from the prover side.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn verify_roundtrip(
-        order: VariableOrder,
+        strategy: LayoutStrategy,
         shapes: &[TableShape],
         stacked_num_variables: usize,
         opening_claims: Vec<(usize, Vec<usize>, Vec<EF>)>,
@@ -128,7 +213,7 @@ pub(super) mod test_utils {
     ) {
         // Fresh challenger: verifier must stay in lockstep with the prover transcript.
         let mut verifier_challenger = challenger();
-        let mut verifier: Verifier<F, EF> = Verifier::new(shapes);
+        let mut verifier: Verifier<F, EF> = Verifier::new(shapes, strategy);
 
         // Re-sample the same opening points and record the claimed evaluations.
         // `add_claim` samples the point + absorbs the evals internally, mirroring
@@ -180,7 +265,9 @@ pub(super) mod test_utils {
         //     - Prover and verifier agreed on the same randomness.
         //     - Batched sum equals the final folded value times the batched weights.
         assert_eq!(expected_randomness, &verifier_challenge);
-        let weights = order.eval_constraints_poly(&constraints, &verifier_challenge);
+        let weights = strategy
+            .variable_order
+            .eval_constraints_poly(&constraints, &verifier_challenge);
         assert_eq!(sum, final_folded_value * weights);
     }
 
@@ -203,7 +290,7 @@ pub(super) mod test_utils {
             prover.num_variables(),
             ROUND_EQ_POINTS,
             ROUND_SEL_POINTS,
-            &prover.poly(),
+            &prover.evals(),
         );
 
         let mut proof1 = SumcheckData::<F, EF>::default();
@@ -230,7 +317,7 @@ pub(super) mod test_utils {
         assert_eq!(proof2.num_rounds(), remaining_vars);
         assert_eq!(prover.num_variables(), 0);
 
-        let final_folded_value = prover.poly().as_constant().unwrap();
+        let final_folded_value = prover.evals().as_constant().unwrap();
         (proof1, proof2, intermediate_evals, final_folded_value)
     }
 
@@ -253,18 +340,23 @@ pub(super) mod test_utils {
             .collect()
     }
 
-    /// Runs the full prefix-mode roundtrip against a caller-supplied witness.
-    pub(crate) fn run_prefix_roundtrip_with(
+    /// Runs the full mode-generic roundtrip with verifier metadata from the layout.
+    pub(crate) fn run_roundtrip_test<L>(
         witness: Witness<F>,
         shapes: &[TableShape],
         calls: &[(usize, &[usize])],
-    ) {
+    ) where
+        L: Layout<F, EF>,
+    {
         let mut prover_challenger = challenger();
         let stacked_num_variables = witness.num_variables();
+        // Snapshot the stacked polynomial before the witness is consumed.
+        let stacked_poly = witness.poly().clone();
 
-        // Prover: build prefix mode, record openings, add a virtual claim.
-        let mut prover_state: PrefixProver<F, EF> = witness.as_prefix_prover();
-        let stacked_poly = prover_state.poly().clone();
+        // Prover: build the selected layout, record openings, add a virtual claim.
+        let mut prover_state = L::from_witness(witness);
+        let strategy = L::strategy();
+        let order = strategy.variable_order;
         let opening_claims = replay_schedule(calls, |t, polys| {
             prover_state.eval(t, polys, &mut prover_challenger)
         });
@@ -285,14 +377,14 @@ pub(super) mod test_utils {
             stacked_num_variables,
         );
 
-        // Prefix mode binds variables in order: evaluate directly at the folded point.
-        assert_eq!(
-            stacked_poly.eval_base(&prover_randomness),
-            final_folded_value,
-        );
+        let final_eval = match order {
+            VariableOrder::Prefix => stacked_poly.eval_base(&prover_randomness),
+            VariableOrder::Suffix => stacked_poly.eval_base(&prover_randomness.reversed()),
+        };
+        assert_eq!(final_eval, final_folded_value);
 
         verify_roundtrip(
-            VariableOrder::Prefix,
+            strategy,
             shapes,
             stacked_num_variables,
             opening_claims,
@@ -304,76 +396,16 @@ pub(super) mod test_utils {
             &prover_randomness,
             final_folded_value,
         );
-    }
-
-    /// Runs the full suffix-mode roundtrip against a caller-supplied witness.
-    pub(crate) fn run_suffix_roundtrip_with(
-        witness: Witness<F>,
-        shapes: &[TableShape],
-        calls: &[(usize, &[usize])],
-    ) {
-        let mut prover_challenger = challenger();
-        let stacked_num_variables = witness.num_variables();
-
-        let mut prover_state: SuffixProver<F, EF> = witness.as_suffix_prover();
-        let stacked_poly = prover_state.poly().clone();
-        let opening_claims = replay_schedule(calls, |t, polys| {
-            prover_state.eval(t, polys, &mut prover_challenger)
-        });
-        let virtual_eval = prover_state.add_virtual_eval(&mut prover_challenger);
-
-        let mut proof0 = SumcheckData::<F, EF>::default();
-        let (mut prover, mut prover_randomness) =
-            prover_state.into_sumcheck(&mut proof0, 0, &mut prover_challenger);
-        assert_eq!(proof0.num_rounds(), FOLDING);
-        assert_eq!(prover.num_variables(), stacked_num_variables - FOLDING);
-
-        let (proof1, proof2, intermediate_evals, final_folded_value) = drive_intermediate_and_final(
-            &mut prover,
-            &mut prover_challenger,
-            &mut prover_randomness,
-            stacked_num_variables,
-        );
-
-        // Suffix mode binds variables in reverse: evaluate at the reversed folded point.
-        assert_eq!(
-            stacked_poly.eval_base(&prover_randomness.reversed()),
-            final_folded_value,
-        );
-
-        verify_roundtrip(
-            VariableOrder::Suffix,
-            shapes,
-            stacked_num_variables,
-            opening_claims,
-            virtual_eval,
-            &proof0,
-            &proof1,
-            &proof2,
-            &intermediate_evals,
-            &prover_randomness,
-            final_folded_value,
-        );
-    }
-
-    /// Thin shim: runs the prefix-mode roundtrip on the shared fixed-shape witness.
-    pub(crate) fn run_prefix_roundtrip(calls: &[(usize, &[usize])]) {
-        run_prefix_roundtrip_with(build_witness(), &table_shapes(), calls);
-    }
-
-    /// Thin shim: runs the suffix-mode roundtrip on the shared fixed-shape witness.
-    pub(crate) fn run_suffix_roundtrip(calls: &[(usize, &[usize])]) {
-        run_suffix_roundtrip_with(build_witness(), &table_shapes(), calls);
     }
 
     /// Minimum source-table arity used by the shape proptest.
     ///
     /// # Constraints
     ///
-    /// - Must exceed the preprocessing depth (every table arity > FOLDING).
+    /// - Must be at least the preprocessing depth (every table arity >= FOLDING).
     /// - Must be at least `log2(packing_width)` so prefix mode accepts it.
     ///   BabyBear packing widths on current targets peak at 16, giving `k_pack = 4`.
-    const SHAPE_MIN_ARITY: usize = 5;
+    const SHAPE_MIN_ARITY: usize = 4;
 
     /// Upper bound on per-table arity in the shape proptest.
     const SHAPE_MAX_ARITY: usize = 8;
@@ -398,12 +430,12 @@ pub(super) mod test_utils {
     /// # Arguments
     ///
     /// - `shape` — one `(arity, column_count)` pair per source table.
-    pub(crate) fn build_witness_from_shape(shape: &[(usize, usize)]) -> Witness<F> {
+    pub(crate) fn tables_from_shape(shape: &[(usize, usize)]) -> Vec<Table<F>> {
         // Fixed seed: every proptest case gets reproducible polynomial evaluations.
         let mut rng = SmallRng::seed_from_u64(42);
 
         // One table per (arity, column_count) pair; each column is a random polynomial.
-        let tables: Vec<Table<F>> = shape
+        shape
             .iter()
             .map(|&(arity, num_cols)| {
                 let polys: Vec<Poly<F>> = (0..num_cols)
@@ -411,9 +443,7 @@ pub(super) mod test_utils {
                     .collect();
                 Table::new(polys)
             })
-            .collect();
-
-        Witness::new(tables, FOLDING)
+            .collect()
     }
 
     /// Mirrors a `(arity, column_count)` shape onto the verifier-side table shapes.
@@ -487,5 +517,136 @@ pub(super) mod test_utils {
             prop::collection::vec(one_call, 1..=SHAPE_MAX_CALLS)
                 .prop_map(move |sched| (shape.clone(), sched))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use alloc::vec::Vec;
+
+    use proptest::prelude::*;
+
+    use super::test_utils::{
+        ASCENDING_POLYS, NON_ASCENDING_POLYS, arb_opening_schedule, arb_witness_and_schedule,
+        table_shapes_from,
+    };
+    use super::{PrefixProver, SuffixProver};
+    use crate::sumcheck::layout::Layout;
+    use crate::sumcheck::layout::prover::test_utils::{
+        FOLDING, build_tables, run_roundtrip_test, table_shapes, tables_from_shape,
+    };
+    use crate::sumcheck::tests::*;
+
+    #[test]
+    fn num_claims_counts_every_recorded_opening() {
+        fn run_num_claims_test_with<L>(witness: crate::sumcheck::layout::Witness<F>)
+        where
+            L: Layout<F, EF>,
+        {
+            let mut prover = L::from_witness(witness);
+            assert_eq!(prover.num_claims(), 0);
+
+            let mut ch = challenger();
+            prover.eval(0, &[0, 1], &mut ch);
+            assert_eq!(prover.num_claims(), 2);
+
+            prover.eval(1, &[0], &mut ch);
+            assert_eq!(prover.num_claims(), 3);
+        }
+
+        run_num_claims_test_with::<SuffixProver<F, EF>>(SuffixProver::<F, EF>::new_witness(
+            build_tables(),
+            FOLDING,
+        ));
+        run_num_claims_test_with::<PrefixProver<F, EF>>(PrefixProver::<F, EF>::new_witness(
+            build_tables(),
+            FOLDING,
+        ));
+    }
+
+    #[test]
+    fn roundtrip_ascending_polys() {
+        run_roundtrip_test::<PrefixProver<F, EF>>(
+            PrefixProver::<F, EF>::new_witness(build_tables(), FOLDING),
+            &table_shapes(),
+            ASCENDING_POLYS,
+        );
+
+        run_roundtrip_test::<SuffixProver<F, EF>>(
+            SuffixProver::<F, EF>::new_witness(build_tables(), FOLDING),
+            &table_shapes(),
+            ASCENDING_POLYS,
+        );
+    }
+
+    #[test]
+    fn roundtrip_non_ascending_polys() {
+        run_roundtrip_test::<PrefixProver<F, EF>>(
+            PrefixProver::<F, EF>::new_witness(build_tables(), FOLDING),
+            &table_shapes(),
+            NON_ASCENDING_POLYS,
+        );
+
+        run_roundtrip_test::<SuffixProver<F, EF>>(
+            SuffixProver::<F, EF>::new_witness(build_tables(), FOLDING),
+            &table_shapes(),
+            NON_ASCENDING_POLYS,
+        );
+    }
+
+    fn run_shape_test<L>(shape: &[(usize, usize)], schedule: &[(usize, Vec<usize>)])
+    where
+        L: Layout<F, EF>,
+    {
+        let witness = L::new_witness(tables_from_shape(shape), FOLDING);
+        let shapes = table_shapes_from(shape);
+        let borrowed: Vec<(usize, &[usize])> = schedule
+            .iter()
+            .map(|(t, polys)| (*t, polys.as_slice()))
+            .collect();
+        run_roundtrip_test::<L>(witness, &shapes, &borrowed);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 16, ..ProptestConfig::default() })]
+
+        // Invariant:
+        //     Every valid opening schedule over the fixed two-table witness
+        //     roundtrips through the protocol without prover/verifier divergence.
+        //
+        // Coverage: includes non-ascending column orders that previously exposed
+        // alpha / partial-eval alignment bugs.
+        #[test]
+        fn roundtrip_proptest(schedule in arb_opening_schedule()) {
+            let borrowed: Vec<(usize, &[usize])> = schedule
+                .iter()
+                .map(|(t, polys)| (*t, polys.as_slice()))
+                .collect();
+
+            run_roundtrip_test::<PrefixProver<F, EF>>(
+                PrefixProver::<F, EF>::new_witness(build_tables(), FOLDING),
+                &table_shapes(),
+                &borrowed,
+            );
+            run_roundtrip_test::<SuffixProver<F, EF>>(
+                SuffixProver::<F, EF>::new_witness(build_tables(), FOLDING),
+                &table_shapes(),
+                &borrowed,
+            );
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 8, ..ProptestConfig::default() })]
+
+        // Invariant:
+        //     Roundtrip agreement holds for valid generated witness shapes, not
+        //     only the fixed two-table fixture.
+        #[test]
+        fn roundtrip_shape_proptest((shape, schedule) in arb_witness_and_schedule()) {
+            run_shape_test::<PrefixProver<F, EF>>(&shape, &schedule);
+            run_shape_test::<SuffixProver<F, EF>>(&shape, &schedule);
+        }
     }
 }

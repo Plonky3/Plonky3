@@ -12,8 +12,8 @@ use crate::symbolic::expression::BaseLeaf;
 use crate::symbolic::expression_ext::SymbolicExpressionExt;
 use crate::symbolic::variable::{BaseEntry, ExtEntry, SymbolicVariableExt};
 use crate::{
-    Air, AirBuilder, BaseAir, ExtensionBuilder, PeriodicAirBuilder, PermutationAirBuilder,
-    SymbolicExpression, SymbolicVariable, WindowAccess,
+    Air, AirBuilder, BaseAir, ExtensionBuilder, PermutationAirBuilder, SymbolicExpression,
+    SymbolicVariable, WindowAccess,
 };
 
 /// Describes the shape of an AIR for symbolic constraint evaluation.
@@ -34,7 +34,7 @@ pub struct AirLayout {
     pub num_permutation_challenges: usize,
     /// Length of [`PermutationAirBuilder::permutation_values`].
     pub num_permutation_values: usize,
-    /// Length of [`PeriodicAirBuilder::periodic_values`].
+    /// Length of [`AirBuilder::periodic_values`].
     pub num_periodic_columns: usize,
 }
 
@@ -281,6 +281,7 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
     type PreprocessedWindow = RowMajorMatrix<Self::Var>;
     type MainWindow = RowMajorMatrix<Self::Var>;
     type PublicVar = SymbolicVariable<F>;
+    type PeriodicVar = SymbolicVariable<F>;
 
     fn main(&self) -> Self::MainWindow {
         self.main.clone()
@@ -315,6 +316,10 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
 
     fn public_values(&self) -> &[Self::PublicVar] {
         &self.public_values
+    }
+
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        &self.periodic
     }
 }
 
@@ -355,14 +360,6 @@ where
 
     fn permutation_values(&self) -> &[Self::PermutationVar] {
         &self.permutation_values
-    }
-}
-
-impl<F: Field, EF: ExtensionField<F>> PeriodicAirBuilder for SymbolicAirBuilder<F, EF> {
-    type PeriodicVar = SymbolicVariable<F>;
-
-    fn periodic_values(&self) -> &[Self::PeriodicVar] {
-        &self.periodic
     }
 }
 

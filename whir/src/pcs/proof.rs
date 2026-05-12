@@ -8,14 +8,12 @@ use crate::parameters::ProtocolParameters;
 pub use crate::sumcheck::SumcheckData;
 
 /// Complete WHIR proof.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
-    serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::Proof: Serialize",
-    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::Proof: Deserialize<'de>"
+    serialize = "F: Serialize, EF: Serialize, MT::Proof: Serialize",
+    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Proof: Deserialize<'de>"
 ))]
 pub struct WhirProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
-    /// Initial polynomial commitment (Merkle root).
-    pub initial_commitment: Option<MT::Commitment>,
     /// Initial OOD evaluations.
     pub initial_ood_answers: Vec<EF>,
     /// Initial sumcheck data.
@@ -35,7 +33,6 @@ pub struct WhirProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
 impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> Default for WhirProof<F, EF, MT> {
     fn default() -> Self {
         Self {
-            initial_commitment: None,
             initial_ood_answers: Vec::new(),
             initial_sumcheck: SumcheckData::default(),
             rounds: Vec::new(),
@@ -45,6 +42,41 @@ impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> Default for Whi
             final_sumcheck: None,
         }
     }
+}
+
+/// Public opening proof produced by the WHIR PCS adapter.
+///
+/// # Layout
+///
+/// Two pieces travel together so the verifier can replay the protocol from
+/// a single proof object:
+///
+/// - The proximity transcript: sumcheck rounds, intermediate commitments,
+///   STIR query openings, and the final polynomial sent in the clear.
+/// - The public opening evaluations indexed by batch then by column:
+///
+/// ```text
+///     evals[i][j]  =  value of the j-th opened column in the i-th batch
+/// ```
+///
+/// # Ordering invariant
+///
+/// The batches appear in the same order as the public opening schedule, so
+/// the verifier can walk both side-by-side without re-sorting. A length
+/// mismatch on either axis causes the adapter to reject before any Merkle
+/// or sumcheck check runs.
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(bound(
+    serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::Proof: Serialize",
+    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::Proof: Deserialize<'de>"
+))]
+pub struct PcsProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
+    /// Proximity transcript: initial commitment, sumcheck rounds, per-round
+    /// commitments, STIR query openings, and the final polynomial.
+    pub whir: WhirProof<F, EF, MT>,
+    /// Outer index walks opening batches in schedule order; inner index walks
+    /// the columns opened inside each batch in their requested order.
+    pub evals: Vec<Vec<EF>>,
 }
 
 /// Per-round proof data.
@@ -100,7 +132,7 @@ pub enum QueryOpening<F, EF, Proof> {
 
 impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> WhirProof<F, EF, MT> {
     /// Allocate a proof structure sized for the given protocol parameters.
-    pub fn from_protocol_parameters(params: &ProtocolParameters<MT>, num_variables: usize) -> Self {
+    pub fn from_protocol_parameters(params: &ProtocolParameters, num_variables: usize) -> Self {
         let (num_rounds, _final_sumcheck_rounds) = params
             .folding_factor
             .compute_number_of_rounds(num_variables);
@@ -112,7 +144,6 @@ impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> WhirProof<F, EF
             .queries(protocol_security_level, params.starting_log_inv_rate);
 
         Self {
-            initial_commitment: None,
             initial_ood_answers: Vec::new(),
             initial_sumcheck: SumcheckData::default(),
             rounds: (0..num_rounds).map(|_| WhirRoundProof::default()).collect(),

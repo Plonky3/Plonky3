@@ -431,7 +431,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
         assert!(self.num_variables() <= poly.num_variables());
         assert_eq!(out.len(), poly.num_evals() >> self.num_variables());
 
-        if (1 << self.num_variables()) < PARALLEL_THRESHOLD {
+        if (1 << poly.num_variables()) < PARALLEL_THRESHOLD {
             // Sequential: each output element is a full dot product of one row
             // against the factored eq tables.
             out.iter_mut()

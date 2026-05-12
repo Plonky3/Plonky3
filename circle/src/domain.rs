@@ -436,7 +436,7 @@ mod tests {
             );
             let coeffs = evals.interpolate().to_row_major_matrix();
             let (lo, hi) = coeffs.split_rows(n);
-            assert_eq!(hi.values, vec![F::ZERO; n]);
+            assert_eq!(hi.values, F::zero_vec(n));
             CircleEvaluations::evaluate(d, lo.to_row_major_matrix())
                 .to_natural_order()
                 .to_row_major_matrix()
@@ -446,16 +446,16 @@ mod tests {
         // Nonzero at first point, zero everywhere else on domain
         let is_first_row = coset_to_d(&sels.is_first_row);
         assert_ne!(is_first_row[0], F::ZERO);
-        assert_eq!(&is_first_row[1..], &vec![F::ZERO; n - 1]);
+        assert_eq!(&is_first_row[1..], &F::zero_vec(n - 1));
 
         // Nonzero at last point, zero everywhere else on domain
         let is_last_row = coset_to_d(&sels.is_last_row);
-        assert_eq!(&is_last_row[..n - 1], &vec![F::ZERO; n - 1]);
+        assert_eq!(&is_last_row[..n - 1], &F::zero_vec(n - 1));
         assert_ne!(is_last_row[n - 1], F::ZERO);
 
         // Nonzero everywhere on domain but last point
         let is_transition = coset_to_d(&sels.is_transition);
-        assert_ne!(&is_transition[..n - 1], &vec![F::ZERO; n - 1]);
+        assert_ne!(&is_transition[..n - 1], &F::zero_vec(n - 1));
         assert_eq!(is_transition[n - 1], F::ZERO);
 
         // Vanishing polynomial coefficients look like [0.. (n times), 1, 0.. (n-1 times)]

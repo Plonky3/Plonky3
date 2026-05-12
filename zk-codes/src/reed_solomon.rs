@@ -244,7 +244,7 @@ mod tests {
         let msg = vec![F::new(1), F::new(2), F::new(3), F::new(4)];
 
         // Eval with zero randomness.
-        let encoded = encoding.encode_with_randomness(&msg, &vec![F::ZERO; t]);
+        let encoded = encoding.encode_with_randomness(&msg, &F::zero_vec(t));
 
         // Plain RS encodes by padding the message with zeros.
         let mut plain_coeffs = msg;

@@ -1120,6 +1120,24 @@ pub trait ExtensionField<Base: Field>: Field + Algebra<Base> + BasedVectorSpace<
     /// Otherwise return None.
     #[must_use]
     fn as_base(&self) -> Option<Base>;
+
+    /// Reassemble an element of `Self` from `D = DIMENSION` coefficients in `Self`
+    /// via `Σⱼ basisⱼ · coeffsⱼ`. Returns `None` if `coeffs.len() != Self::DIMENSION`.
+    ///
+    /// This is the `Self`-coefficient counterpart to
+    /// [`BasedVectorSpace::from_basis_coefficients_slice`], which takes coefficients
+    /// in `Base`. It is the natural "lifting" operation in commit-and-open protocols:
+    /// if an extension polynomial decomposes as `f(X) = Σⱼ basisⱼ · fⱼ(X)` with
+    /// `fⱼ` over `Base`, then `f(z) = Σⱼ basisⱼ · fⱼ(z)` for any `z ∈ Self`.
+    #[inline]
+    #[must_use]
+    fn from_ext_basis_coefficients(coeffs: &[Self]) -> Option<Self> {
+        (coeffs.len() == Self::DIMENSION).then(|| {
+            (0..Self::DIMENSION)
+                .map(|j| Self::ith_basis_element(j).unwrap() * coeffs[j])
+                .sum()
+        })
+    }
 }
 
 // Every field is trivially a one dimensional extension over itself.
@@ -1134,6 +1152,11 @@ impl<F: Field> ExtensionField<F> for F {
     #[inline]
     fn as_base(&self) -> Option<F> {
         Some(*self)
+    }
+
+    #[inline]
+    fn from_ext_basis_coefficients(coeffs: &[Self]) -> Option<Self> {
+        (coeffs.len() == 1).then(|| coeffs[0])
     }
 }
 

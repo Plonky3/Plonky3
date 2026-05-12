@@ -221,6 +221,7 @@ impl<'a, F: Field> AirBuilder for MiniLookupBuilder<'a, F> {
     type PreprocessedWindow = RowWindow<'a, F>;
     type MainWindow = RowWindow<'a, F>;
     type PublicVar = F;
+    type PeriodicVar = F;
 
     fn main(&self) -> Self::MainWindow {
         RowWindow::from_two_rows(self.main.top.values, self.main.bottom.values)
