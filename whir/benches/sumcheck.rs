@@ -3,12 +3,17 @@ use std::hint::black_box;
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
+use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
+use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::poly::Poly;
+use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::sumcheck::SumcheckData;
 use p3_whir::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_whir::sumcheck::strategy::sumcheck_coefficients_prefix;
+use p3_whir::sumcheck::zk::{ZkPrefixProver, ZkSumcheckData};
+use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
@@ -18,6 +23,19 @@ type Perm = Poseidon2BabyBear<16>;
 type Challenger = DuplexChallenger<F, Perm, 16, 8>;
 type FP = <F as Field>::Packing;
 type EFPacked = <EF as ExtensionField<F>>::ExtensionPacking;
+
+// Mask commitment MMCS and mask encoding consumed by the HVZK arm
+// (Construction 6.3, eprint 2026/391).
+type MaskMmcs =
+    MerkleTreeMmcs<FP, FP, PaddingFreeSponge<Perm, 16, 8, 8>, TruncatedPermutation<Perm, 2, 8, 16>, 2, 8>;
+type MaskEnc = ReedSolomonZkEncoding<F, Radix2DFTSmallBatch<F>>;
+
+/// ZK code message length. Bound by Lemma 6.4 (`ℓ_zk ≥ 2`). `ℓ_zk = 4` sits at
+/// paper-minimum-plus-margin; the precise `λ → ℓ_zk` mapping depends on the
+/// outer code's list size (see Lemma 6.5), not on this parameter alone.
+const ELL_ZK: usize = 4;
+/// Reed-Solomon randomness symbols appended to each mask before encoding.
+const T_RAND: usize = 2;
 
 /// Random packed input pair sized to `2^num_variables` evaluations.
 ///
@@ -78,6 +96,36 @@ fn setup_suffix(table: &Table<F>, folding: usize) -> (SuffixProver<F, EF>, Chall
     (prover, challenger)
 }
 
+/// Builds the per-process MMCS + Reed-Solomon ZK encoding the HVZK arm reuses.
+///
+/// Construction cost (Poseidon2 permutation, DFT plan) is non-trivial, so the
+/// bench builds these once and clones into each iteration.
+fn make_zk_setup() -> (MaskMmcs, MaskEnc) {
+    let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(0xfeed));
+    let merkle_hash = PaddingFreeSponge::new(perm.clone());
+    let merkle_compress = TruncatedPermutation::new(perm);
+    let mmcs = MaskMmcs::new(merkle_hash, merkle_compress, 0);
+    let m = (ELL_ZK + T_RAND).next_power_of_two();
+    let encoding = MaskEnc::new(T_RAND, ELL_ZK, m, Radix2DFTSmallBatch::default());
+    (mmcs, encoding)
+}
+
+fn setup_zk(
+    table: &Table<F>,
+    folding: usize,
+    encoding: &MaskEnc,
+    mmcs: &MaskMmcs,
+) -> (ZkPrefixProver<F, EF, MaskEnc, MaskMmcs>, Challenger, SmallRng) {
+    let witness = PrefixProver::<F, EF>::new_witness(vec![table.clone()], folding);
+    let inner = PrefixProver::<F, EF>::from_witness(witness);
+    let mut prover = ZkPrefixProver::new(inner, encoding.clone(), mmcs.clone());
+    let mut challenger = make_challenger();
+    let evals = prover.eval(0, &[0], &mut challenger);
+    assert_eq!(evals.len(), 1);
+    let rng = SmallRng::seed_from_u64(0xbeef);
+    (prover, challenger, rng)
+}
+
 fn run_sumcheck<L: Layout<F, EF>>(prover: L, challenger: &mut Challenger, folding: usize) {
     let mut data = SumcheckData::default();
     let (residual, randomness) = prover.into_sumcheck(&mut data, 0, challenger);
@@ -87,10 +135,35 @@ fn run_sumcheck<L: Layout<F, EF>>(prover: L, challenger: &mut Challenger, foldin
     black_box((data, residual, randomness));
 }
 
+fn run_zk_sumcheck(
+    prover: ZkPrefixProver<F, EF, MaskEnc, MaskMmcs>,
+    challenger: &mut Challenger,
+    rng: &mut SmallRng,
+    folding: usize,
+) {
+    let mut data = ZkSumcheckData::<F, EF>::default();
+    let (residual, randomness, mask_oracles) = prover.into_sumcheck(&mut data, 0, challenger, rng);
+    assert_eq!(data.round_coefficients.len(), folding);
+    assert_eq!(randomness.num_variables(), folding);
+    assert!(residual.num_variables() > 0);
+    black_box((data, residual, randomness, mask_oracles));
+}
+
 fn bench_sumcheck_prover(c: &mut Criterion) {
     let mut group = c.benchmark_group("whir/layout_sumcheck");
 
-    let cases = [(14, 4, "log14"), (18, 4, "log18"), (22, 4, "log22")];
+    // `log20` is the issue #1586 acceptance-criterion point for the HVZK
+    // overhead bench (`2^20 rows, k = 4, λ = 100`); the criterion target is
+    // `zk / prefix ≤ 1.05×` at that label. `log14/18/22` give the scaling
+    // curve for prefix vs suffix vs zk.
+    let cases = [
+        (14, 4, "log14"),
+        (18, 4, "log18"),
+        (20, 4, "log20"),
+        (22, 4, "log22"),
+    ];
+
+    let (zk_mmcs, zk_encoding) = make_zk_setup();
 
     for &(num_variables, folding, label) in &cases {
         let table = make_table(num_variables);
@@ -107,6 +180,16 @@ fn bench_sumcheck_prover(c: &mut Criterion) {
             b.iter_batched(
                 || setup_suffix(table, folding),
                 |(prover, mut challenger)| run_sumcheck(prover, &mut challenger, folding),
+                BatchSize::SmallInput,
+            );
+        });
+
+        group.bench_with_input(BenchmarkId::new("zk", label), &table, |b, table| {
+            b.iter_batched(
+                || setup_zk(table, folding, &zk_encoding, &zk_mmcs),
+                |(prover, mut challenger, mut rng)| {
+                    run_zk_sumcheck(prover, &mut challenger, &mut rng, folding)
+                },
                 BatchSize::SmallInput,
             );
         });
