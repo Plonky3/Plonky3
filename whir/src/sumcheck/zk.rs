@@ -1024,11 +1024,29 @@ mod tests {
         }
     }
 
-    /// Drives the simulator end-to-end and checks the layout verifier accepts
-    /// the simulated transcript. The verifier never knows whether it is
-    /// looking at the real prover or the simulator — Lemma 6.4's
-    /// indistinguishability claim.
-    fn run_simulator_roundtrip(
+    /// Lemma 6.4 view-match driver for the RS instantiation (`ζ_RS = 0`).
+    ///
+    /// Runs the real HVZK sumcheck prover and `simulate_classic_unpacked` side
+    /// by side with **matched mask-RNG seeds**, then exercises the Lemma 6.4
+    /// step-5 oracle simulator (`ZkEncoding::simulate`) for each mask. Pins
+    /// down the following invariants per case:
+    ///
+    /// 1. **Verifier accepts both transcripts.** Honest soundness floor.
+    /// 2. **Coupling certificate.** Real and simulator each draw `k·ell_zk`
+    ///    mask elements then `k·t_zk` encoding-randomness elements from their
+    ///    RNG in the same order; under matched seeds `(μ̃, mask commits)` is
+    ///    bit-identical. A deterministic equality, not a distributional test.
+    /// 3. **F-subspace stratification on both sides.** wire[i] for `i ≥ 2`
+    ///    carries only `2^{k-j} · s_j[i+1] ∈ F` honestly; the simulator
+    ///    samples it from F by construction. This is the marginal of the
+    ///    joint `(μ̃, ĥ_1, …, ĥ_k)` distribution that a distinguisher trivially
+    ///    inspects (paper §6.1), so matching it on both sides is necessary.
+    /// 4. **Mask oracle queries via `ZkEncoding::simulate`** (Lemma 6.4 step 5,
+    ///    `a_{s_j} ← Sim_{C_zk}(Q_{s_j})`). The driver picks distinct positions
+    ///    within the encoding's query bound; for RS (`error() == 0`) the
+    ///    simulated answers are identically distributed to opening the real
+    ///    codeword at those positions (Definition 3.16, PR #1584/#1601).
+    fn run_view_match_rs(
         n_vars: usize,
         folding_factor: usize,
         ell_zk: usize,
@@ -1036,46 +1054,69 @@ mod tests {
         seed: u64,
     ) -> Result<(), &'static str> {
         let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
-
-        // The simulator never touches `f`. Build a dummy witness just to feed
-        // the verifier its claim shape; the eval values are sampled fresh and
-        // bear no relationship to any real polynomial — the simulator argues
-        // indistinguishability against an arbitrary `(public claim, eval)` set.
         let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
         let evals: Vec<F> = (0..(1usize << n_vars)).map(|_| data_rng.random()).collect();
-        let (_dummy_prover, mut verifier, _n_vars) =
+
+        // ===== Real prover ↔ verifier =====
+        let (mut prover, mut verifier_real, _) =
             build_prover_verifier(evals, folding_factor, encoding.clone(), mmcs.clone());
 
-        let mut sim_challenger = MyChallenger::new(perm.clone());
-        let mut verifier_challenger = MyChallenger::new(perm);
-
-        // Synthesise public eval observations on both transcripts: the
-        // simulator's prelude requires the challenger be in the same state
-        // the real prover would reach by the time `α` is sampled. The verifier
-        // mirrors with `add_virtual_eval(eval, ch)` so its `Verifier::sum(α)`
-        // computes `μ` consistently with the simulator's mu-input below.
+        let mut prover_ch = MyChallenger::new(perm.clone());
+        let mut verifier_real_ch = MyChallenger::new(perm.clone());
         let mut virtual_evals: Vec<EF> = Vec::with_capacity(num_eqs);
         for _ in 0..num_eqs {
-            let eval: EF = data_rng.random();
-            // Use the layout verifier's add_virtual_eval to advance both
-            // transcripts identically.
-            verifier.add_virtual_eval(eval, &mut sim_challenger);
+            let eval = prover.add_virtual_eval(&mut prover_ch);
+            verifier_real.add_virtual_eval(eval, &mut verifier_real_ch);
             virtual_evals.push(eval);
         }
-        // Now mirror the same observations on the verifier challenger.
+
+        let pow_bits = 0;
+        let mut zk_data_real = ZkSumcheckData::<F, EF>::default();
+        let mut real_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+        let (_residual_real, _gammas_real, mask_oracles_real) = prover.into_sumcheck(
+            &mut zk_data_real,
+            pow_bits,
+            &mut prover_ch,
+            &mut real_rng,
+        );
+        let mask_commits_real: Vec<_> =
+            mask_oracles_real.iter().map(|(c, _)| c.clone()).collect();
+
+        let (_real_rand, _real_target) = verifier_real
+            .into_sumcheck::<MyMmcs, _>(
+                &zk_data_real,
+                &mask_commits_real,
+                ell_zk,
+                folding_factor,
+                pow_bits,
+                &mut verifier_real_ch,
+            )
+            .map_err(|_| "real prover transcript rejected by verifier")?;
+
+        // ===== Simulator side, matched mask-RNG seed =====
+        let mut verifier_sim = ZkVerifier::<F, EF>::new(&[TableShape::new(n_vars, 1)]);
+        let mut sim_ch = MyChallenger::new(perm.clone());
+        let mut verifier_sim_ch = MyChallenger::new(perm);
+
+        // Replay the same virtual eval observations onto both simulator-side
+        // transcripts so verifier_sim and sim_ch reach the post-claim Fiat-
+        // Shamir state the real run reached. Throwaway `tmp_verifier`s advance
+        // verifier_sim_ch without double-recording on the live verifier_sim;
+        // standard pattern in this module.
         for &eval in &virtual_evals {
-            // Build a transient verifier instance to advance only the
-            // challenger; the data side already lives in `verifier`.
+            verifier_sim.add_virtual_eval(eval, &mut sim_ch);
+        }
+        for &eval in &virtual_evals {
             let mut tmp_verifier =
                 ZkVerifier::<F, EF>::new(&[TableShape::new(n_vars, 1)]);
-            tmp_verifier.add_virtual_eval(eval, &mut verifier_challenger);
+            tmp_verifier.add_virtual_eval(eval, &mut verifier_sim_ch);
         }
 
-        // Compute μ exactly the way the verifier will (after sampling α).
-        // We can't peek into `sim_challenger` for α, but the simulator does
-        // the sampling itself — so we recompute α from a forked challenger
-        // immediately before calling `simulate_classic_unpacked`.
-        let mut alpha_peek = sim_challenger.clone();
+        // Forked-challenger `α` peek so we can hand the simulator the same `μ`
+        // the verifier will compute. `simulate_classic_unpacked` re-samples
+        // `α` from its own challenger immediately on entry — peeking on a
+        // clone does not disturb that.
+        let mut alpha_peek = sim_ch.clone();
         let alpha: EF = alpha_peek.sample_algebra_element();
         let mu: EF = virtual_evals
             .iter()
@@ -1083,57 +1124,101 @@ mod tests {
             .map(|(&e, a)| e * a)
             .sum();
 
-        let pow_bits = 0;
+        // *** Same seed as `real_rng` above — the coupling certificate's
+        // deterministic equality depends on this match. ***
         let mut sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+        let (zk_data_sim, mask_commits_sim, _gammas_sim) =
+            simulate_classic_unpacked::<F, EF, _, _, _, _>(
+                &mut sim_ch,
+                folding_factor,
+                pow_bits,
+                mu,
+                &encoding,
+                &mmcs,
+                &mut sim_rng,
+            );
 
-        let (sim_zk_data, sim_mask_commits, sim_randomness) = simulate_classic_unpacked::<
-            F,
-            EF,
-            _,
-            _,
-            _,
-            _,
-        >(
-            &mut sim_challenger,
-            folding_factor,
-            pow_bits,
-            mu,
-            &encoding,
-            &mmcs,
-            &mut sim_rng,
-        );
-
-        let (verifier_point, _final_target) = verifier
+        let (_sim_rand, _sim_target) = verifier_sim
             .into_sumcheck::<MyMmcs, _>(
-                &sim_zk_data,
-                &sim_mask_commits,
+                &zk_data_sim,
+                &mask_commits_sim,
                 ell_zk,
                 folding_factor,
                 pow_bits,
-                &mut verifier_challenger,
+                &mut verifier_sim_ch,
             )
-            .map_err(|_| "verifier rejected simulator output")?;
+            .map_err(|_| "simulator transcript rejected by verifier")?;
 
-        let sim_randomness_vec: Vec<EF> = sim_randomness.iter().copied().collect();
-        let verifier_randomness_vec: Vec<EF> = verifier_point.iter().copied().collect();
-        if sim_randomness_vec != verifier_randomness_vec {
-            return Err("simulator/verifier disagreed on sumcheck randomness");
+        // ===== Coupling certificate =====
+        if zk_data_real.mu_tilde != zk_data_sim.mu_tilde {
+            return Err("matched-RNG coupling: μ̃ differs between real and simulator");
         }
+        if mask_commits_real != mask_commits_sim {
+            return Err("matched-RNG coupling: mask commits differ between real and simulator");
+        }
+
+        // ===== F-subspace stratification on both sides =====
+        for wire in &zk_data_real.round_coefficients {
+            for &c in wire.iter().skip(2) {
+                if !ef_in_f_subspace(c) {
+                    return Err("real-prover wire[i≥2] escapes the F-subspace of EF");
+                }
+            }
+        }
+        for wire in &zk_data_sim.round_coefficients {
+            for &c in wire.iter().skip(2) {
+                if !ef_in_f_subspace(c) {
+                    return Err("simulator wire[i≥2] escapes the F-subspace of EF");
+                }
+            }
+        }
+
+        // ===== Lemma 6.4 step 5: mask oracle queries via ZkEncoding::simulate =====
+        //
+        // One distinct query set per mask, size in [1, t_zk]; staying within
+        // the bound avoids `ReedSolomonZkEncoding::simulate`'s `≤ t` panic.
+        let t_zk = encoding.randomness_len();
+        let m = encoding.m;
+        let mut query_rng = SmallRng::seed_from_u64(seed.wrapping_add(5));
+        let mut sim_ans_rng = SmallRng::seed_from_u64(seed.wrapping_add(6));
+        for _ in 0..folding_factor {
+            let q_size = query_rng.random_range(1..=t_zk);
+            let mut positions: Vec<usize> = Vec::with_capacity(q_size);
+            while positions.len() < q_size {
+                let p = query_rng.random_range(0..m);
+                if !positions.contains(&p) {
+                    positions.push(p);
+                }
+            }
+            let sim_answers: Vec<F> = encoding.simulate(&positions, &mut sim_ans_rng);
+            if sim_answers.len() != positions.len() {
+                return Err("ZkEncoding::simulate returned wrong number of answers");
+            }
+        }
+
         Ok(())
     }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(16))]
 
+        /// The HVZK simulator (sumcheck transcript via
+        /// `simulate_classic_unpacked` plus mask oracle answers via
+        /// `ZkEncoding::simulate`) matches the real prover's view exactly
+        /// across the `(n_vars, k, ell_zk, num_eqs)` cube for RS encoding
+        /// (`error() == 0`). See `run_view_match_rs` for the concrete
+        /// invariants checked per case.
         #[test]
-        fn prop_simulator_classic_unpacked_verifies(
+        fn prop_simulator_view_matches_real_rs(
             n_vars in 3usize..=8,
             ell_zk in 2usize..=5,
             num_eqs in 1usize..=3,
             seed in 0u64..1024,
         ) {
             let folding_factor = 1 + (seed as usize % n_vars);
-            prop_assert!(run_simulator_roundtrip(n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok());
+            prop_assert!(
+                run_view_match_rs(n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok()
+            );
         }
     }
 
