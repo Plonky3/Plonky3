@@ -304,13 +304,8 @@ pub struct Poseidon2GoldilocksFused<const WIDTH: usize> {
     terminal_constants_raw: Vec<[u64; WIDTH]>,
 }
 
-/// Reduce a `u64` representation of a Goldilocks element to canonical form (`< P`).
-///
-/// `Goldilocks::value` is documented as "not necessarily canonical", so we canonicalize
-/// once at fused-permuter construction time. This makes the `b < P` precondition of
-/// `add_canonical_asm` statically guaranteed at every downstream RC-addition site,
-/// independent of how the caller obtained their `Goldilocks` constants. Single
-/// subtraction is sufficient because `u64::MAX < 2P`.
+/// Reduce a `Goldilocks::value` to canonical form. One subtraction suffices because
+/// `u64::MAX < 2P`.
 #[inline]
 const fn to_canonical_u64(v: u64) -> u64 {
     if v >= P { v - P } else { v }

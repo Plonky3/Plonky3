@@ -229,7 +229,6 @@ pub fn internal_permute_state_asm_w8(state: &mut [u64; 8], constants: &[u64]) {
     let mut s0 = state[0];
     for &rc in constants {
         unsafe {
-            // `rc` canonical by `Poseidon2GoldilocksFused::new` canonicalization.
             s0 = add_canonical_asm(s0, rc);
             let s0_2 = mul_asm(s0, s0);
 
@@ -888,11 +887,6 @@ pub unsafe fn external_round_dual_asm<const WIDTH: usize>(
 }
 
 /// Fully unrolled and fused external round for W8.
-///
-/// All `rc[i]` are canonical (`< P`) by `Poseidon2GoldilocksFused::new`
-/// canonicalization; this is required by `add_canonical_asm` at each RC-add
-/// site and additionally enforced at call time by the `debug_assert!` inside
-/// it.
 #[inline(always)]
 pub unsafe fn external_round_fused_w8(state: &mut [u64; 8], rc: &[u64; 8]) {
     unsafe {
@@ -947,11 +941,6 @@ pub unsafe fn external_round_fused_w8(state: &mut [u64; 8], rc: &[u64; 8]) {
 }
 
 /// Fully unrolled and fused dual-lane external round for W8.
-///
-/// All `rc[i]` are canonical (`< P`) by `Poseidon2GoldilocksFused::new`
-/// canonicalization; this is required by `add_canonical_asm` at each RC-add
-/// site and additionally enforced at call time by the `debug_assert!` inside
-/// it.
 #[inline(always)]
 pub unsafe fn external_round_fused_dual_w8(
     state0: &mut [u64; 8],
@@ -1959,8 +1948,6 @@ mod tests {
         #[test]
         fn test_external_round_fused_w8(
             vals in prop::array::uniform8(any::<u64>()),
-            // `rc` is constrained to `< P` because `external_round_fused_w8`
-            // requires canonical round constants (precondition of `add_canonical_asm`).
             rc in prop::array::uniform8(0u64..P),
         ) {
             // The generic external round is the reference.
@@ -1980,7 +1967,6 @@ mod tests {
         fn test_external_round_fused_dual_w8(
             vals0 in prop::array::uniform8(any::<u64>()),
             vals1 in prop::array::uniform8(any::<u64>()),
-            // Same precondition as the single-lane variant: `rc < P`.
             rc in prop::array::uniform8(0u64..P),
         ) {
             // Run the fused round on each lane independently as reference.
@@ -2065,8 +2051,6 @@ mod tests {
     ) {
         let mut rng = SmallRng::seed_from_u64(42);
 
-        // Canonical `rc` only: both `specialized_fn` and `internal_permute_state_asm`
-        // (used below as reference) require `rc[i] < P`.
         let internal_constants: Vec<u64> = (0..22).map(|_| rng.random::<u64>() % P).collect();
         let diag_raw: [u64; WIDTH] = core::array::from_fn(|i| diag[i].value);
 
@@ -2108,8 +2092,6 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(77);
 
         let diag_raw: [u64; WIDTH] = core::array::from_fn(|i| diag[i].value);
-        // Canonical `rc` only: the converted internal-permute functions require
-        // `rc[i] < P`. `rng.random::<u64>() % P` is biased but adequate for testing.
         let constants: Vec<u64> = (0..22).map(|_| rng.random::<u64>() % P).collect();
 
         // Run single-lane on each lane independently.
@@ -2209,11 +2191,6 @@ mod tests {
 
     fn make_round_constants<const WIDTH: usize>(seed: u64, num_rounds: usize) -> Vec<[u64; WIDTH]> {
         let mut rng = SmallRng::seed_from_u64(seed);
-        // Canonical entries only: callers include W8-specialized permute tests whose
-        // converted RC-add sites require `rc[i] < P`. The non-W8 generic tests
-        // (`external_round_asm`-backed) still tolerate non-canonical, but lower-level
-        // tests (`test_external_round_asm` / `test_external_round_dual_asm`) cover
-        // that axis explicitly, so canonicalizing the shared helper is acceptable.
         (0..num_rounds)
             .map(|_| core::array::from_fn(|_| rng.random::<u64>() % P))
             .collect()
@@ -2665,8 +2642,6 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(55);
 
         let diag_raw: [u64; WIDTH] = core::array::from_fn(|i| diag[i].value);
-        // Canonical `rc` only: the converted internal-permute functions require
-        // `rc[i] < P`. `rng.random::<u64>() % P` is biased but adequate for testing.
         let constants: Vec<u64> = (0..22).map(|_| rng.random::<u64>() % P).collect();
 
         let lane_a: [u64; WIDTH] = rng.random();
@@ -2714,8 +2689,6 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(66);
 
         let diag_raw: [u64; WIDTH] = core::array::from_fn(|i| diag[i].value);
-        // Canonical `rc` only: the converted internal-permute functions require
-        // `rc[i] < P`. `rng.random::<u64>() % P` is biased but adequate for testing.
         let constants: Vec<u64> = (0..22).map(|_| rng.random::<u64>() % P).collect();
 
         let lane_a: [u64; WIDTH] = rng.random();
@@ -2885,9 +2858,6 @@ mod tests {
         #[test]
         fn test_external_round_fused_w8_danger(
             state in danger_array::<8>(),
-            // `rc` constrained to canonical: `external_round_fused_w8` now
-            // requires `rc[i] < P`. The danger-state coverage is preserved
-            // (the `state` strategy is unchanged and still full-u64).
             rc in prop::array::uniform8(0u64..P),
         ) {
             let mut ref_state = state;
@@ -2943,11 +2913,6 @@ mod tests {
     /// (a) all canonical max, (b) all non-canonical max, (c) alternating canonical/non,
     /// (d) `P + i` (just-above-canonical), (e) all-zero. Repeated rounds compound
     /// any latent reduction bug in the *state* pipeline.
-    ///
-    /// `consts` are constrained to canonical (`< P`) because the converted internal-
-    /// permute functions require `rc[i] < P`. We preserve `consts` diversity along
-    /// the canonical range (max-canonical, zero, alternating zero/max-canonical) so
-    /// the RC-add still hits both endpoints of `[0, P)`.
     fn adversarial_states<const WIDTH: usize>() -> Vec<([u64; WIDTH], Vec<u64>)> {
         let max_canonical = [P - 1; WIDTH];
         let max_noncanonical = [u64::MAX; WIDTH];
@@ -3076,9 +3041,6 @@ mod tests {
     #[test]
     fn test_external_round_fused_w8_stress() {
         for (state, _) in adversarial_states::<8>() {
-            // `external_round_fused_w8` now requires `rc[i] < P`; use the
-            // canonical max instead of `u64::MAX`. The interesting axis here
-            // is the adversarial `state`, not the `rc`.
             let rc = [P - 1; 8];
 
             let mut expected = state;
