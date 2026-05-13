@@ -336,6 +336,14 @@ where
                 .queries
         };
 
+        if queries.len() != indices.len() {
+            return Err(VerifierError::StirQueryCountMismatch {
+                round_index,
+                expected: indices.len(),
+                actual: queries.len(),
+            });
+        }
+
         let mut results = Vec::with_capacity(indices.len());
 
         for (&index, query) in indices.iter().zip(queries.iter()) {

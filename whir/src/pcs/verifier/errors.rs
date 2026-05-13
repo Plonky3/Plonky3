@@ -28,6 +28,14 @@ pub enum VerifierError {
         details: String,
     },
 
+    /// STIR query count does not match the sampled challenge count.
+    #[error("STIR query count mismatch at round {round_index}: expected {expected}, got {actual}")]
+    StirQueryCountMismatch {
+        round_index: usize,
+        expected: usize,
+        actual: usize,
+    },
+
     /// The proof carries the wrong number of opening evaluation batches.
     ///
     /// Raised by the adapter before any sumcheck or Merkle work.
