@@ -287,10 +287,10 @@ where
         let ell_zk = self.encoding.message_len();
         let n_vars = self.inner.num_variables;
 
-        const { assert!(
+        assert!(
             F::TWO != F::ZERO,
             "Construction 6.3 (Lemma 6.4) requires char(F) != 2",
-        ); }
+        );
         assert!(
             ell_zk >= 2,
             "Construction 6.3 (Lemma 6.4) requires ell_zk >= 2",
@@ -309,7 +309,7 @@ where
 
         // --- Plain-piece preamble (mirrors PrefixProver::into_sumcheck) ---
         let alpha: EF = challenger.sample_algebra_element();
-        let n_claims = inner.num_claims()
+        let n_claims = inner.num_claims();
         let mut alphas = alpha.powers();
         let accumulators: Vec<_> = inner
             .placements
@@ -618,30 +618,30 @@ where
     where
         M: Mmcs<F>,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
-    {        
-        const { assert!(
+    {
+        assert!(
             F::TWO != F::ZERO,
             "Construction 6.3 (Lemma 6.4) requires char(F) != 2",
-        ); }
+        );
         assert!(
             ell_zk >= 2,
             "Construction 6.3 (Lemma 6.4) requires ell_zk >= 2",
         );
-        assert!(k >= 1, "sumcheck requires at least one round");
+        assert!(folding_factor >= 1, "sumcheck requires at least one round");
 
-        if zk_data.round_coefficients.len() != k {
+        if zk_data.round_coefficients.len() != folding_factor {
             return Err(SumcheckError::RoundCountMismatch {
                 expected: folding_factor,
                 actual: zk_data.round_coefficients.len(),
             });
         }
-        if mask_commits.len() != k {
+        if mask_commits.len() != folding_factor {
             return Err(SumcheckError::MaskCommitmentCountMismatch {
                 expected: folding_factor,
                 actual: mask_commits.len(),
             });
         }
-        let expected_pow = if pow_bits > 0 { k } else { 0 };
+        let expected_pow = if pow_bits > 0 { folding_factor } else { 0 };
         if zk_data.pow_witnesses.len() != expected_pow {
             return Err(SumcheckError::PowWitnessCountMismatch {
                 expected: expected_pow,
@@ -675,7 +675,7 @@ where
 
         // Round-1 affine target: ĥ_1(0) + ĥ_1(1) = ε·μ + μ̃.
         let mut target: EF = eps * mu + EF::from(zk_data.mu_tilde);
-        let mut randomness: Vec<EF> = Vec::with_capacity(k);
+        let mut randomness: Vec<EF> = Vec::with_capacity(folding_factor);
 
         for (j_idx, wire) in zk_data.round_coefficients.iter().enumerate() {
             let c0 = wire[0];
