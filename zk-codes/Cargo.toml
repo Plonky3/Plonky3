@@ -1,0 +1,33 @@
+[package]
+name = "p3-zk-codes"
+description = "Zero-knowledge codes, including Reed-Solomon ZK encoding."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+itertools.workspace = true
+p3-dft.workspace = true
+p3-field.workspace = true
+p3-matrix.workspace = true
+p3-util.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+p3-baby-bear = { path = "../baby-bear" }
+p3-goldilocks = { path = "../goldilocks" }
+p3-koala-bear = { path = "../koala-bear" }
+proptest.workspace = true
+rand_xoshiro.workspace = true
+
+[[bench]]
+name = "rs_encoding"
+harness = false
+
+[lints]
+workspace = true

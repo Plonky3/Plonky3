@@ -5,58 +5,16 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_field::{ExtensionField, Field, dot_product};
-use p3_matrix::Dimensions;
 use p3_multilinear_util::point::Point;
-use p3_util::log2_ceil_usize;
 
 use crate::constraints::Constraint;
 use crate::constraints::statement::EqStatement;
 use crate::sumcheck::Claim;
-use crate::sumcheck::layout::opening::{
-    VerifierMultiClaim as MultiClaim, VerifierOpening as Opening,
-    VerifierVirtualClaim as VirtualClaim,
-};
+use crate::sumcheck::layout::LayoutStrategy;
+use crate::sumcheck::layout::opening::{VerifierMultiClaim, VerifierOpening, VerifierVirtualClaim};
 use crate::sumcheck::layout::plan::{LayoutShape, plan_layout};
 use crate::sumcheck::layout::witness::{Selector, TablePlacement};
-
-/// Shape-only description of one verifier table.
-///
-/// # Contents
-///
-/// - Row count, always a power of two.
-/// - Column count, strictly positive.
-#[derive(Debug, Clone)]
-pub struct TableShape(Dimensions);
-
-impl TableShape {
-    /// Builds a table shape of `2^k` rows and `width` columns.
-    ///
-    /// # Panics
-    ///
-    /// - Column count must be at least one.
-    /// - Log row count must fit in the target's pointer width.
-    pub const fn new(k: usize, width: usize) -> Self {
-        // Positive column count.
-        assert!(width > 0);
-        // Bound on the shift to rule out `1 << k` overflow on the current target.
-        assert!(k < usize::BITS as usize);
-        // Expand the log row count to the concrete row count.
-        Self(Dimensions {
-            width,
-            height: 1 << k,
-        })
-    }
-
-    /// Returns the number of variables per column.
-    const fn k(&self) -> usize {
-        log2_ceil_usize(self.0.height)
-    }
-
-    /// Returns the number of columns.
-    const fn width(&self) -> usize {
-        self.0.width
-    }
-}
+use crate::sumcheck::table::TableShape;
 
 /// Verifier-side layout and claim registry.
 #[derive(Debug, Clone)]
@@ -70,9 +28,11 @@ pub struct Verifier<F: Field, EF: ExtensionField<F>> {
     /// Number of variables of the stacked polynomial.
     k: usize,
     /// Concrete claims recorded per source table.
-    claim_map: Vec<Vec<MultiClaim<EF>>>,
+    claim_map: Vec<Vec<VerifierMultiClaim<EF>>>,
     /// Virtual claims sampled directly on the stacked polynomial.
-    virtual_claims: Vec<VirtualClaim<EF>>,
+    virtual_claims: Vec<VerifierVirtualClaim<EF>>,
+    /// Whether selector bitstrings are reversed and laid out after local bits.
+    strategy: LayoutStrategy,
     /// Marker to tie the challenger's field type
     _marker: PhantomData<F>,
 }
@@ -86,16 +46,21 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     /// - Iterate reversed, so largest tables get placed first.
     /// - Each column occupies one slot of size `2^arity`.
     /// - Stacked arity equals `log2` of total stacked size, rounded up.
-    pub fn new(tables: &[TableShape]) -> Self {
+    pub fn new(tables: &[TableShape], strategy: LayoutStrategy) -> Self {
         // Delegate slot assignment to the shared planner (same routine as the prover).
         let shapes: Vec<LayoutShape> = tables
             .iter()
             .map(|t| LayoutShape {
-                arity: t.k(),
+                arity: t.num_variables(),
                 width: t.width(),
             })
             .collect();
-        let (k, placements) = plan_layout(&shapes);
+        let (k, mut placements) = plan_layout(&shapes);
+        if strategy.reverse_selectors {
+            placements
+                .iter_mut()
+                .for_each(TablePlacement::reverse_selectors);
+        }
 
         // Build the side-map: source-table index → index into `placements`.
         let mut placement_by_table = vec![0usize; tables.len()];
@@ -111,6 +76,7 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
             claim_map: (0..tables.len()).map(|_| Vec::new()).collect(),
             // No virtual claims recorded yet.
             virtual_claims: Vec::new(),
+            strategy,
             _marker: PhantomData,
         }
     }
@@ -179,11 +145,11 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         let openings = polys
             .iter()
             .zip(evals.iter())
-            .map(|(&poly_idx, &eval)| Opening::new(poly_idx, eval))
+            .map(|(&poly_idx, &eval)| VerifierOpening::new(poly_idx, eval))
             .collect();
 
         // Store the batch under this table's claim list.
-        self.claim_map[table_idx].push(MultiClaim::new(point, openings));
+        self.claim_map[table_idx].push(VerifierMultiClaim::new(point, openings));
     }
 
     /// Records a virtual evaluation claim on the full stacked polynomial.
@@ -234,7 +200,7 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
 
         // Virtual claims: continue the alpha sequence right after the concrete ones.
         sum += dot_product::<EF, _, _>(
-            self.virtual_claims.iter().map(VirtualClaim::eval),
+            self.virtual_claims.iter().map(VerifierVirtualClaim::eval),
             alpha.powers().skip(self.num_claims()),
         );
 
@@ -258,7 +224,11 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
                 for opening in claim.openings() {
                     // The opening's column tells us which selector to lift through.
                     let col = opening.poly_idx().unwrap();
-                    let lifted = placement.selectors()[col].lift(claim.point());
+                    let lifted = if self.strategy.reverse_selectors {
+                        placement.selectors()[col].lift_suffix(claim.point())
+                    } else {
+                        placement.selectors()[col].lift_prefix(claim.point())
+                    };
                     eq_statement.add_evaluated_constraint(lifted, opening.eval());
                 }
             }
@@ -284,7 +254,7 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     fn num_claims(&self) -> usize {
         self.claim_map
             .iter()
-            .flat_map(|claims| claims.iter().map(MultiClaim::len))
+            .flat_map(|claims| claims.iter().map(VerifierMultiClaim::len))
             .sum()
     }
 }
@@ -296,7 +266,12 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
 
     use super::*;
+    use crate::sumcheck::strategy::VariableOrder;
     use crate::sumcheck::tests::{EF, F, challenger};
+
+    const fn prefix_strategy() -> LayoutStrategy {
+        LayoutStrategy::new(false, VariableOrder::Prefix)
+    }
 
     #[test]
     fn table_shape_new_stores_dimensions_and_derives_getters() {
@@ -310,7 +285,7 @@ mod tests {
         let shape = TableShape::new(3, 2);
 
         // Check each derived quantity.
-        assert_eq!(shape.k(), 3);
+        assert_eq!(shape.num_variables(), 3);
         assert_eq!(shape.width(), 2);
     }
 
@@ -332,7 +307,7 @@ mod tests {
         //     shapes: [arity 9 (t0), arity 10 (t1)]
         //     expected placement order: [t1 (arity 10), t0 (arity 9)]
         let shapes = vec![TableShape::new(9, 2), TableShape::new(10, 2)];
-        let verifier: Verifier<F, EF> = Verifier::new(&shapes);
+        let verifier: Verifier<F, EF> = Verifier::new(&shapes, prefix_strategy());
 
         // First placement must point back at the larger table.
         assert_eq!(verifier.placements[0].idx(), 1);
@@ -351,7 +326,7 @@ mod tests {
         //     table 0 (arity 9) → selector bits = 2 → num_variables_table = 9
         //     table 1 (arity 10) → selector bits = 1 → num_variables_table = 10
         let shapes = vec![TableShape::new(9, 2), TableShape::new(10, 2)];
-        let verifier: Verifier<F, EF> = Verifier::new(&shapes);
+        let verifier: Verifier<F, EF> = Verifier::new(&shapes, prefix_strategy());
 
         // Check derivation per table.
         assert_eq!(verifier.num_variables_table(0), 9);
@@ -368,7 +343,7 @@ mod tests {
         //     after add_claim(table 0, [0, 1]):    2 openings
         //     after add_claim(table 1, [0]):       3 openings
         let shapes = vec![TableShape::new(9, 2), TableShape::new(10, 2)];
-        let mut verifier: Verifier<F, EF> = Verifier::new(&shapes);
+        let mut verifier: Verifier<F, EF> = Verifier::new(&shapes, prefix_strategy());
         assert_eq!(verifier.num_claims(), 0);
 
         // Fresh Fiat-Shamir transcript; add_claim samples the point and absorbs.
@@ -394,7 +369,7 @@ mod tests {
         //     virtual claim:     value 13
         //     alpha:             5
         let shapes = vec![TableShape::new(9, 2)];
-        let mut verifier: Verifier<F, EF> = Verifier::new(&shapes);
+        let mut verifier: Verifier<F, EF> = Verifier::new(&shapes, prefix_strategy());
 
         // Fresh transcript; points are sampled inside add_claim / add_virtual_eval.
         let mut ch = challenger();
@@ -419,7 +394,7 @@ mod tests {
         // Invariant:
         //     With no claims recorded, sum(alpha) is zero for any alpha.
         let shapes = vec![TableShape::new(9, 1)];
-        let verifier: Verifier<F, EF> = Verifier::new(&shapes);
+        let verifier: Verifier<F, EF> = Verifier::new(&shapes, prefix_strategy());
 
         // Pick a non-trivial alpha to rule out accidental zero cancellation.
         let alpha = EF::from_u64(42);
@@ -436,7 +411,7 @@ mod tests {
         //     two tables; only table 1 records an opening.
         //     alpha: 3, eval: 9 → expected sum = 9 (alpha^0 only).
         let shapes = vec![TableShape::new(9, 2), TableShape::new(10, 2)];
-        let mut verifier: Verifier<F, EF> = Verifier::new(&shapes);
+        let mut verifier: Verifier<F, EF> = Verifier::new(&shapes, prefix_strategy());
 
         // Record a single opening on table 1; table 0 stays empty.
         let mut ch = challenger();

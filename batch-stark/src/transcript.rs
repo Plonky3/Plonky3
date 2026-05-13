@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use hashbrown::HashMap;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_field::PrimeCharacteristicRing;
-use p3_lookup::lookup_traits::{Kind, Lookup, LookupData, LookupGadget};
+use p3_lookup::{Kind, Lookup, LookupData, LookupProtocol};
 
 use crate::common::GlobalPreprocessed;
 use crate::config::{Challenge, Commitment, StarkGenericConfig as SGC, Val};
@@ -77,7 +77,7 @@ impl<SC: SGC> BatchTranscript<SC> {
         lookup_gadget: &LG,
     ) -> Vec<Vec<SC::Challenge>>
     where
-        LG: LookupGadget,
+        LG: LookupProtocol,
         L: AsRef<[Lookup<Val<SC>>]>,
     {
         let n = lookup_gadget.num_challenges();
@@ -112,8 +112,7 @@ impl<SC: SGC> BatchTranscript<SC> {
             self.challenger.observe(commit.clone());
             // Observe cumulated lookup sums so the verifier can check them.
             for data in lookup_data.iter().flatten() {
-                self.challenger
-                    .observe_algebra_element(data.expected_cumulated);
+                self.challenger.observe_algebra_element(data.cumulative_sum);
             }
         }
         self.challenger.sample_algebra_element()

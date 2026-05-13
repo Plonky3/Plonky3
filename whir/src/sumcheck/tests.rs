@@ -4,19 +4,23 @@ use alloc::vec::Vec;
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{DuplexChallenger, FieldChallenger, GrindingChallenger};
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{PrimeCharacteristicRing, TwoAdicField};
+use p3_field::{Field, PackedValue, PrimeCharacteristicRing, TwoAdicField};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use p3_util::{log2_ceil_usize, log2_strict_usize};
+use proptest::prelude::*;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use crate::constraints::Constraint;
-use crate::constraints::statement::initial::InitialStatement;
 use crate::constraints::statement::{EqStatement, SelectStatement};
-use crate::parameters::{FoldingFactor, SumcheckStrategy};
-use crate::sumcheck::SumcheckData;
-use crate::sumcheck::single::SingleSumcheck;
+use crate::parameters::FoldingFactor;
+use crate::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table, TableShape, Verifier};
 use crate::sumcheck::strategy::VariableOrder;
+use crate::sumcheck::{
+    OpeningProtocol, PointSchedule, SumcheckData, SumcheckError, TableSpec,
+    verify_final_sumcheck_rounds,
+};
 
 // Base field: BabyBear (a 31-bit prime field suitable for fast arithmetic).
 pub(crate) type F = BabyBear;
@@ -195,149 +199,160 @@ where
     )
 }
 
-/// Runs an end-to-end prover-verifier test for the `SumcheckSingle` protocol with nested folding.
-/// This test:
-/// - Initializes a random multilinear polynomial over `F`.
-/// - Runs the prover through several rounds of sumcheck folding.
-/// - Verifies the transcript using the verifier.
-/// - Checks that all reconstructed constraints match the original ones.
-/// - Verifies that the final sum satisfies:
-///   \begin{equation}
-///   \text{sum} = f(r) \cdot \text{eq}(z, r)
-///   \end{equation}
-///
-/// # Panics
-/// Panics if:
-/// - Any intermediate or final round does not produce expected sizes.
-/// - Any constraint mismatches.
-/// - The verifier-side evaluation differs from the expected one.
-///
-/// # Arguments
-/// - `num_variables`: Number of variables of the initial polynomial.
-/// - `folding_factors`: List of how many variables to fold per round.
-/// - `num_eqs`: Number of equality statements to apply at each stage.
-/// - `num_sels`: Number of select statements to apply at each stage.
-#[allow(clippy::too_many_lines)]
-fn run_sumcheck_test(
-    num_variables: usize,
-    folding_factor: FoldingFactor,
-    num_eqs: &[usize],
-    num_sels: &[usize],
-    mode: SumcheckStrategy,
-) -> Point<EF> {
-    // Compute how many intermediate folding rounds there are, plus the size of the final round.
-    // For example, with num_variables=6 and folding_factor=2: num_rounds=2, final_rounds=2.
-    let (num_rounds, final_rounds) = folding_factor.compute_number_of_rounds(num_variables);
+pub(crate) fn table_specs_strategy() -> impl Strategy<Value = Vec<TableSpec>> {
+    (1usize..=5, 1usize..=5).prop_flat_map(|(num_points, num_tables)| {
+        proptest::collection::vec(
+            (1usize..=12, 1usize..=5).prop_flat_map(move |(num_variables, width)| {
+                proptest::collection::vec(poly_subset_strategy(width), num_points - 1).prop_map(
+                    move |extra_points| {
+                        TableSpec::new(
+                            TableShape::new(num_variables, width),
+                            table_point_schedule(width, extra_points),
+                        )
+                    },
+                )
+            }),
+            num_tables,
+        )
+    })
+}
 
-    // We need num_rounds+1 eq constraint counts (one for the initial round, one per intermediate),
-    // and num_rounds sel constraint counts (one per intermediate round; the initial has no sels).
-    assert_eq!(num_eqs.len(), num_rounds + 1);
-    assert_eq!(num_sels.len(), num_rounds);
+fn poly_subset_strategy(width: usize) -> impl Strategy<Value = Vec<usize>> {
+    proptest::collection::vec(any::<bool>(), width).prop_map(|bits| {
+        let polys = bits
+            .into_iter()
+            .enumerate()
+            .filter_map(|(poly_idx, selected)| selected.then_some(poly_idx))
+            .collect::<Vec<_>>();
+        if polys.is_empty() { vec![0] } else { polys }
+    })
+}
+
+fn table_point_schedule(width: usize, extra_points: PointSchedule) -> PointSchedule {
+    let mut point_schedule = Vec::with_capacity(extra_points.len() + 1);
+    point_schedule.push((0..width).collect());
+    point_schedule.extend(extra_points);
+    point_schedule
+}
+
+fn random_point_schedule(rng: &mut SmallRng, width: usize, num_points: usize) -> PointSchedule {
+    table_point_schedule(
+        width,
+        (1..num_points)
+            .map(|_| {
+                let polys = (0..width)
+                    .filter(|_| rng.random_bool(0.5))
+                    .collect::<Vec<_>>();
+                if polys.is_empty() { vec![0] } else { polys }
+            })
+            .collect(),
+    )
+}
+
+pub(crate) fn random_table_specs(rng: &mut SmallRng, folding: usize) -> Vec<TableSpec> {
+    let packing_log = log2_strict_usize(<F as Field>::Packing::WIDTH);
+    loop {
+        let num_points = rng.random_range(1..=5);
+        let num_tables = rng.random_range(1..=5);
+        let specs = (0..num_tables)
+            .map(|_| {
+                let num_variables = rng.random_range(1..=12);
+                let width = rng.random_range(1..=5);
+                TableSpec::new(
+                    TableShape::new(num_variables, width),
+                    random_point_schedule(rng, width, num_points),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        if stacked_num_variables(&specs, folding) >= folding + packing_log {
+            return specs;
+        }
+    }
+}
+
+pub(crate) fn stacked_num_variables(specs: &[TableSpec], folding: usize) -> usize {
+    let total_evals = specs
+        .iter()
+        .map(|spec| spec.shape().width() << spec.shape().num_variables().max(folding))
+        .sum::<usize>();
+    log2_ceil_usize(total_evals)
+}
+
+pub(crate) fn table_specs_to_tables(specs: &[TableSpec]) -> Vec<Table<F>> {
+    let mut rng = SmallRng::seed_from_u64(3);
+    specs
+        .iter()
+        .map(|spec| {
+            let polys = (0..spec.shape().width())
+                .map(|_| Poly::<F>::rand(&mut rng, spec.shape().num_variables()))
+                .collect();
+            Table::new(polys)
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_lines)]
+fn run_multi_table_sumcheck_test<L>(specs: &[TableSpec])
+where
+    L: Layout<F, EF>,
+{
+    const FOLDING: usize = 4;
+    const NUM_EQS: usize = 5;
+    const NUM_SELS: usize = 10;
+
+    let folding_factor = FoldingFactor::Constant(FOLDING);
+    let num_variables = stacked_num_variables(specs, FOLDING);
+    let (num_rounds, final_rounds) = folding_factor.compute_number_of_rounds(num_variables);
     folding_factor.check_validity(num_variables).unwrap();
 
-    // Initialize a random multilinear polynomial with 2^num_variables evaluations.
-    let mut rng = SmallRng::seed_from_u64(1);
-    let poly = Poly::new((0..1 << num_variables).map(|_| rng.random()).collect());
+    let protocol = OpeningProtocol::new(specs.to_vec()).pad_to_min_num_variables(FOLDING);
+    let witness = L::new_witness(table_specs_to_tables(specs), FOLDING);
 
-    // ==================== PROVER PHASE ====================
-    // The prover has access to the full polynomial and produces a proof transcript.
-    // The challenger is cloned so that prover and verifier start from the same state
-    // but evolve independently (they must stay synchronized via Fiat-Shamir).
     let challenger = challenger();
     let mut prover_challenger = challenger.clone();
-
-    // Crate empty proof for each round
     let mut proof = vec![SumcheckData::<F, EF>::default(); num_rounds + 2];
-
-    // Store constraint evaluations for each round (prover writes, verifier reads)
     let mut all_constraint_evals: Vec<Vec<EF>> = Vec::new();
 
-    // Build the initial statement from the polynomial. The initial statement wraps
-    // the raw evaluations and supports constraint evaluation before the first fold.
-    let folding0 = folding_factor.at_round(0);
-    let mut initial_statement = InitialStatement::new(poly.clone(), folding0, mode);
+    // Snapshot the stacked polynomial before the witness is consumed.
+    let stacked_poly = witness.poly().clone();
+    let mut layout = L::from_witness(witness);
+    let strategy = L::strategy();
 
-    // Sample eq constraints for the initial round: for each constraint, draw a random
-    // univariate challenge, expand it to a multilinear point, evaluate the polynomial
-    // there, and commit the evaluation to the transcript.
-    let constaint_evals = (0..num_eqs[0])
-        .map(|_| {
-            let point: EF = prover_challenger.sample_algebra_element();
-            let point = Point::expand_from_univariate(point, num_variables);
-            let eval = initial_statement.evaluate(&point);
-            prover_challenger.observe_algebra_element(eval);
-            eval
-        })
+    let opening_evals: Vec<Vec<EF>> = protocol
+        .iter_openings()
+        .map(|(table_idx, polys)| layout.eval(table_idx, polys, &mut prover_challenger))
         .collect();
-    all_constraint_evals.push(constaint_evals);
 
-    // ROUND 0: Initialize the sumcheck prover from the base evaluations.
-    // This performs the first folding round: it computes the sumcheck polynomials
-    // h(X) = c + b*X + a*X^2 for each variable being folded, writes them into
-    // the proof, and returns the partially folded state along with the verifier's
-    // random challenges (prover_randomness) accumulated so far.
+    let (mut sumcheck, mut prover_randomness) =
+        layout.into_sumcheck(proof.first_mut().unwrap(), 0, &mut prover_challenger);
+    let mut num_variables_inter = num_variables - FOLDING;
 
-    let (mut sumcheck, mut prover_randomness) = SingleSumcheck::new(
-        proof.first_mut().unwrap(),
-        &mut prover_challenger,
-        folding0,
-        0,
-        &initial_statement,
-    );
-
-    // Track how many variables remain to fold
-    let mut num_variables_inter = num_variables - folding0;
-
-    // INTERMEDIATE ROUNDS (rounds 1..num_rounds):
-    // Each round simulates the STIR interaction: the verifier asks for evaluations at
-    // random points (eq + select constraints), the prover responds, and then a new
-    // sumcheck folding step reduces the number of variables by `folding`.
-    for (round, (&num_eq_points, &num_sel_points)) in
-        num_eqs.iter().skip(1).zip(num_sels.iter()).enumerate()
-    {
-        // Adjust index since enumerate starts at 0 but we skip the initial round.
-        let round = round + 1;
-        let folding = folding_factor.at_round(round);
-
-        // Build STIR constraints for this round: sample random evaluation points,
-        // compute polynomial evaluations, and assemble them into a Constraint.
-        let mut constraint_evals: Vec<EF> = Vec::new();
+    for (round, sumcheck_data) in proof.iter_mut().enumerate().take(num_rounds + 1).skip(1) {
+        let mut constraint_evals = Vec::new();
         let constraint = make_constraint_ext(
             &mut prover_challenger,
             &mut constraint_evals,
             num_variables_inter,
-            num_eq_points,
-            num_sel_points,
+            NUM_EQS,
+            NUM_SELS,
             &sumcheck.evals(),
         );
         all_constraint_evals.push(constraint_evals);
 
-        // Compute the sumcheck polynomials for this folding round.
-        // Each step produces a univariate polynomial h(X) whose values at 0 and 1
-        // sum to the claimed round sum. The verifier's random challenge r is drawn
-        // from the transcript and used to fold the polynomial: the new claimed sum
-        // becomes h(r). The constraint is folded into the sumcheck via `Some(constraint)`.
+        let folding = folding_factor.at_round(round);
         prover_randomness.extend(&sumcheck.compute_sumcheck_polynomials(
-            &mut proof[round],
+            sumcheck_data,
             &mut prover_challenger,
             folding,
             0,
             Some(constraint),
         ));
-
-        // After folding, the polynomial has `folding` fewer variables.
         num_variables_inter -= folding;
-
-        // Sanity check: the sumcheck state should track the correct variable count.
         assert_eq!(sumcheck.num_variables(), num_variables_inter);
     }
 
-    // After all intermediate rounds, the remaining variables should equal final_rounds.
     assert_eq!(num_variables_inter, final_rounds);
-
-    // FINAL ROUND: fold the remaining `final_rounds` variables down to a constant (0 variables).
-    // No constraint is passed (None) because there are no more STIR queries after this point.
-
     prover_randomness.extend(&sumcheck.compute_sumcheck_polynomials(
         proof.last_mut().unwrap(),
         &mut prover_challenger,
@@ -346,103 +361,59 @@ fn run_sumcheck_test(
         None,
     ));
 
-    // After folding all variables, the polynomial is a constant: f(r) for the full
-    // random point r = (r_0, r_1, ..., r_{n-1}) accumulated across all rounds.
     let final_folded_value = sumcheck.evals().as_constant().unwrap();
-
-    // All variables have been folded away.
     assert_eq!(sumcheck.num_variables(), 0);
-
-    // Core correctness check: the final folded value must equal the polynomial
-    // evaluated at the full random point r that was built from all verifier challenges.
-    assert_eq!(poly.eval_base(&prover_randomness), final_folded_value);
-
-    // Commit the final evaluation to the Fiat-Shamir transcript.
+    let expected_final_eval = match strategy.variable_order {
+        VariableOrder::Prefix => stacked_poly.eval_base(&prover_randomness),
+        VariableOrder::Suffix => stacked_poly.eval_base(&prover_randomness.reversed()),
+    };
+    assert_eq!(expected_final_eval, final_folded_value);
     prover_challenger.observe_algebra_element(final_folded_value);
 
-    // ==================== VERIFIER PHASE ====================
-    // The verifier processes the proof transcript, reconstructing each round’s constraints
-    // from the committed evaluations, verifying the sumcheck polynomials h(X), and
-    // accumulating the random evaluation point r. At the end it checks:
-    //   sum == f(r) * weights(z, r)
-    // where weights(z, r) encodes the aggregated constraint polynomial.
     let mut verifier_challenger = challenger;
-
-    // Running accumulated sum: starts at 0, gets updated each round by combine_evals
-    // (which adds the weighted constraint evaluations) and verify_sumcheck_rounds
-    // (which checks h(0)+h(1)==sum and updates sum := h(r) for the round’s challenge r).
     let mut sum = EF::ZERO;
-
-    // The verifier builds up the same random point r as the prover, one chunk per round.
     let mut verifier_randomness = Point::new(vec![]);
-
-    // Collect all constraints for the final weights check.
     let mut constraints = vec![];
-
-    // Track remaining variables, mirroring the prover’s count.
     let mut num_variables_inter = num_variables;
 
-    // VERIFY INITIAL ROUND (round 0):
-    // The initial round only has eq constraints (no select constraints, hence 0 for num_sels).
     {
-        // Reconstruct the initial round's constraint from the proof evaluations.
-        let constraint = read_constraint(
-            &mut verifier_challenger,
-            &all_constraint_evals[0],
-            num_variables_inter,
-            num_eqs[0],
-            0,
-        );
-        // Accumulate the weighted sum of constraint values
+        let mut layout_verifier = Verifier::<F, EF>::new(&protocol.table_shapes(), strategy);
+        for ((table_idx, polys), evals) in protocol.iter_openings().zip(&opening_evals) {
+            layout_verifier.add_claim(table_idx, polys, evals, &mut verifier_challenger);
+        }
+        let alpha = verifier_challenger.sample_algebra_element();
+        let constraint = layout_verifier.constraint(alpha);
         constraint.combine_evals(&mut sum);
-        // Save constraints for later equality check
+        assert_eq!(sum, layout_verifier.sum(alpha));
         constraints.push(constraint);
 
-        // Verify the initial sumcheck polynomials: for each folded variable, check that
-        // h(0) + h(1) == claimed_sum, then update sum := h(r) with the challenge r.
-        // The returned challenges are appended to the verifier's random point.
         verifier_randomness.extend(
             &proof[0]
                 .verify_rounds(&mut verifier_challenger, &mut sum, 0)
                 .unwrap(),
         );
-
-        num_variables_inter -= folding_factor.at_round(0);
+        num_variables_inter -= FOLDING;
     }
 
-    // VERIFY INTERMEDIATE ROUNDS (rounds 1..num_rounds):
-    // For each round, reconstruct constraints from the proof, add their weighted sum,
-    // then verify the sumcheck polynomials and collect the random challenges.
-    for (round, (&num_eq_points, &num_sel_points)) in
-        num_eqs.iter().skip(1).zip(num_sels.iter()).enumerate()
-    {
-        let round = round + 1;
-        // Reconstruct round constraint from transcript
+    for round in 1..=num_rounds {
         let constraint = read_constraint(
             &mut verifier_challenger,
-            &all_constraint_evals[round],
+            &all_constraint_evals[round - 1],
             num_variables_inter,
-            num_eq_points,
-            num_sel_points,
+            NUM_EQS,
+            NUM_SELS,
         );
-        // Accumulate the weighted sum of constraint values
         constraint.combine_evals(&mut sum);
-        // Save constraints for later equality check
         constraints.push(constraint);
 
-        // Extend r with verifier's folding challenges
-        // Note: proof.rounds[round - 1] because rounds are 0-indexed but we start at round 1
-        let folding = folding_factor.at_round(round);
         verifier_randomness.extend(
             &proof[round]
                 .verify_rounds(&mut verifier_challenger, &mut sum, 0)
                 .unwrap(),
         );
-
-        num_variables_inter -= folding;
+        num_variables_inter -= folding_factor.at_round(round);
     }
 
-    // VERIFY FINAL ROUND: fold the last remaining variables and finalize the sum.
     verifier_randomness.extend(
         &proof
             .last()
@@ -451,79 +422,121 @@ fn run_sumcheck_test(
             .unwrap(),
     );
 
-    // ==================== FINAL CHECKS ====================
-
-    // The prover and verifier must have derived the exact same random point r.
-    // If they differ, the Fiat-Shamir transcripts diverged (a bug in the protocol).
     assert_eq!(prover_randomness, verifier_randomness);
-
-    // Evaluate the aggregated constraint weight polynomial at the full random point.
-    // Single-sumcheck follows the prefix-order strategy.
-    let weights = VariableOrder::Prefix.eval_constraints_poly(&constraints, &verifier_randomness);
-
-    // The fundamental sumcheck identity: the accumulated sum from all rounds must equal
-    // the final folded polynomial value f(r) multiplied by the constraint weights.
-    // This confirms that the sumcheck protocol correctly reduced the multilinear claim
-    // down to a single-point evaluation.
+    let weights = strategy
+        .variable_order
+        .eval_constraints_poly(&constraints, &verifier_randomness);
     assert_eq!(sum, final_folded_value * weights);
-
-    verifier_randomness
 }
 
 #[test]
 fn test_single_sumcheck() {
-    // Brute-force test over all valid (num_variables, folding_factor) combinations.
-    // For each configuration, 100 random constraint setups are tested to cover
-    // a wide variety of eq/sel constraint counts (0, 1, or 2 each).
-    //
-    // Two sumcheck strategies are tested -- Classic and SVO (Shifted Virtual Oracle) --
-    // and the test asserts they produce identical verifier randomness, confirming
-    // that both strategies implement the same protocol semantics.
-    let mut rng = SmallRng::seed_from_u64(0);
+    let specs = [TableSpec::new(TableShape::new(20, 1), vec![vec![0]])];
 
-    // Iterate over polynomial sizes from 0 to 10 variables (1 to 1024 evaluations).
-    for num_variables in 0..=10 {
-        // Try every valid folding factor: fold 1..num_variables variables per round.
-        for folding_factor in 1..=num_variables {
-            // Run 100 random trials per configuration for statistical coverage.
-            for _ in 0..1 {
-                let folding_factor = FoldingFactor::Constant(folding_factor);
+    run_multi_table_sumcheck_test::<PrefixProver<F, EF>>(&specs);
+    run_multi_table_sumcheck_test::<SuffixProver<F, EF>>(&specs);
+}
 
-                // Compute total rounds (+1 because num_eqs includes the initial round).
-                let num_rounds = folding_factor.compute_number_of_rounds(num_variables).0 + 1;
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 16, ..ProptestConfig::default() })]
 
-                // Randomly choose 0, 1, or 2 eq constraints per round.
-                let num_eq_points = (0..num_rounds)
-                    .map(|_| rng.random_range(0..=2))
-                    .collect::<Vec<_>>();
+    #[test]
+    fn multi_table_layout_sumcheck_prop(specs in table_specs_strategy()) {
+        const FOLDING: usize = 4;
 
-                // Randomly choose 0, 1, or 2 select constraints per intermediate round.
-                // (num_rounds - 1 because the initial round has no select constraints.)
-                let num_sel_points = (0..num_rounds - 1)
-                    .map(|_| rng.random_range(0..=2))
-                    .collect::<Vec<_>>();
+        let packing_log = log2_strict_usize(<F as Field>::Packing::WIDTH);
+        prop_assume!(stacked_num_variables(&specs, FOLDING) >= FOLDING + packing_log);
 
-                // Classic path.
-                let randomness_classic = run_sumcheck_test(
-                    num_variables,
-                    folding_factor,
-                    &num_eq_points,
-                    &num_sel_points,
-                    SumcheckStrategy::Classic,
-                );
-
-                // SVO path (falls back to Classic for small polynomials).
-                let randomness_svo = run_sumcheck_test(
-                    num_variables,
-                    folding_factor,
-                    &num_eq_points,
-                    &num_sel_points,
-                    SumcheckStrategy::Svo,
-                );
-
-                // Both modes must derive the same verifier randomness.
-                assert_eq!(randomness_classic, randomness_svo);
-            }
-        }
+        run_multi_table_sumcheck_test::<PrefixProver<F, EF>>(&specs);
+        run_multi_table_sumcheck_test::<SuffixProver<F, EF>>(&specs);
     }
+}
+
+#[test]
+fn test_zero_rounds_returns_empty_point() {
+    // Invariant: 0 rounds short-circuits — proof data is never inspected.
+
+    // Case 1: no data.
+    let mut chal = challenger();
+    let mut sum = EF::ZERO;
+    let point = verify_final_sumcheck_rounds::<F, EF, _>(None, &mut chal, &mut sum, 0, 0)
+        .expect("0 rounds + None must succeed");
+    assert!(point.as_slice().is_empty());
+
+    // Case 2: data supplied but ignored.
+    let data = SumcheckData::<F, EF> {
+        polynomial_evaluations: vec![[EF::ONE, EF::ONE]],
+        pow_witnesses: vec![],
+    };
+    let mut chal = challenger();
+    let mut sum = EF::ZERO;
+    let point = verify_final_sumcheck_rounds(Some(&data), &mut chal, &mut sum, 0, 0)
+        .expect("0 rounds + Some must succeed");
+    assert!(point.as_slice().is_empty());
+}
+
+#[test]
+fn test_missing_sumcheck_data() {
+    // Invariant: rounds > 0 with no data must error out.
+    let mut chal = challenger();
+    let mut sum = EF::ZERO;
+    let rounds = 3;
+
+    let err = verify_final_sumcheck_rounds::<F, EF, _>(None, &mut chal, &mut sum, rounds, 0)
+        .expect_err("None + rounds > 0 must error");
+
+    match err {
+        // Inner field must echo the requested round count.
+        SumcheckError::MissingSumcheckData { expected_rounds } => {
+            assert_eq!(expected_rounds, rounds);
+        }
+        other => panic!("expected MissingSumcheckData, got: {other}"),
+    }
+}
+
+#[test]
+fn test_round_count_mismatch() {
+    // Invariant: evaluation count must equal requested rounds.
+    //
+    //     evaluations: 2     requested: 5     -> expected=5, actual=2
+    let mut chal = challenger();
+    let mut sum = EF::ZERO;
+    let expected_rounds = 5;
+    let actual_rounds = 2;
+    let data = SumcheckData::<F, EF> {
+        // Values are unread; the length check fires first.
+        polynomial_evaluations: vec![[EF::ZERO, EF::ZERO]; actual_rounds],
+        pow_witnesses: vec![],
+    };
+
+    let err = verify_final_sumcheck_rounds(Some(&data), &mut chal, &mut sum, expected_rounds, 0)
+        .expect_err("length mismatch must error");
+
+    match err {
+        SumcheckError::RoundCountMismatch { expected, actual } => {
+            assert_eq!(expected, expected_rounds);
+            assert_eq!(actual, actual_rounds);
+        }
+        other => panic!("expected RoundCountMismatch, got: {other}"),
+    }
+}
+
+#[test]
+fn test_invalid_pow_witness() {
+    // Invariant: a tampered PoW witness must fail the grinding check.
+    let mut chal = challenger();
+    let mut sum = EF::ONE;
+    let pow_bits = 20;
+    let data = SumcheckData::<F, EF> {
+        // Polynomial coefficients are arbitrary; the PoW check fires first.
+        polynomial_evaluations: vec![[EF::ZERO, EF::ZERO]],
+        // Mutation: zero replaces the honest ground witness.
+        pow_witnesses: vec![F::ZERO],
+    };
+
+    let err = data
+        .verify_rounds(&mut chal, &mut sum, pow_bits)
+        .expect_err("zeroed witness must fail");
+
+    assert!(matches!(err, SumcheckError::InvalidPowWitness));
 }

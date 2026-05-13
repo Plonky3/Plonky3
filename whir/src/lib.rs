@@ -14,3 +14,4 @@ pub mod fiat_shamir;
 pub mod parameters;
 pub mod pcs;
 pub mod sumcheck;
+pub(crate) mod utils;

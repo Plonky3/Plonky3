@@ -170,6 +170,15 @@ pub const fn indices_arr<const N: usize>() -> [usize; N] {
     indices_arr
 }
 
+/// Statically asserts that `T` implements [`Clone`].
+pub const fn assert_clone<T: Clone>() {}
+
+/// Statically asserts that `T` implements [`Send`].
+pub const fn assert_send<T: Send>() {}
+
+/// Statically asserts that `T` implements [`Sync`].
+pub const fn assert_sync<T: Sync>() {}
+
 #[inline]
 pub const fn reverse_bits(x: usize, n: usize) -> usize {
     // Assert that n is a power of 2
@@ -281,9 +290,8 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
     if lb_n <= 6 {
         // BIT_REVERSE_6BIT holds 6-bit reverses. This shift makes them lb_n-bit reverses.
         let dst_shr_amt = 6 - lb_n as u32;
-        #[allow(clippy::needless_range_loop)]
-        for src in 0..vals.len() {
-            let dst = (BIT_REVERSE_6BIT[src] as usize).wrapping_shr(dst_shr_amt);
+        for (src, &br) in BIT_REVERSE_6BIT.iter().enumerate().take(vals.len()) {
+            let dst = (br as usize).wrapping_shr(dst_shr_amt);
             if src < dst {
                 vals.swap(src, dst);
             }
@@ -297,9 +305,8 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
         for src_chunk in 0..(vals.len() >> 6) {
             let src_hi = src_chunk << 6;
             let dst_lo = src_chunk.reverse_bits().wrapping_shr(dst_lo_shr_amt);
-            #[allow(clippy::needless_range_loop)]
-            for src_lo in 0..(1 << 6) {
-                let dst_hi = (BIT_REVERSE_6BIT[src_lo] as usize) << dst_hi_shl_amt;
+            for (src_lo, &br) in BIT_REVERSE_6BIT.iter().enumerate() {
+                let dst_hi = (br as usize) << dst_hi_shl_amt;
                 let src = src_hi + src_lo;
                 let dst = dst_hi + dst_lo;
                 if src < dst {

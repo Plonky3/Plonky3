@@ -9,24 +9,21 @@ use std::time::Instant;
 
 use clap::Parser;
 use p3_challenger::DuplexChallenger;
+use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{
-    DEFAULT_MAX_POW, FoldingFactor, ProtocolParameters, SecurityAssumption, SumcheckStrategy,
-    WhirConfig,
+    DEFAULT_MAX_POW, FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig,
 };
-use p3_whir::pcs::committer::reader::CommitmentReader;
-use p3_whir::pcs::committer::writer::CommitmentWriter;
-use p3_whir::pcs::proof::WhirProof;
 use p3_whir::pcs::prover::WhirProver;
-use p3_whir::pcs::verifier::WhirVerifier;
+use p3_whir::sumcheck::layout::{Layout as _, SuffixProver, Table};
+use p3_whir::sumcheck::{OpeningProtocol, PointSchedule, TableShape, TableSpec};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 use tracing::{info, warn};
@@ -52,6 +49,9 @@ type MerkleCompress = TruncatedPermutation<Poseidon16, 2, 8, 16>;
 type MyChallenger = DuplexChallenger<F, Poseidon16, 16, 8>;
 type PackedF = <F as Field>::Packing;
 type MyMmcs = MerkleTreeMmcs<PackedF, PackedF, MerkleHash, MerkleCompress, 2, 8>;
+type MyDft = Radix2DFTSmallBatch<F>;
+type Layout = SuffixProver<F, EF>;
+type MyPcs = WhirProver<EF, F, MyDft, MyMmcs, MyChallenger, Layout>;
 
 /// Command-line arguments for the WHIR benchmark.
 #[derive(Parser, Debug)]
@@ -69,7 +69,7 @@ struct Args {
     #[arg(short = 'd', long, default_value = "25")]
     num_variables: usize,
 
-    /// Number of evaluation claims to prove (0 = proximity test only).
+    /// Number of opening points for the single committed polynomial.
     #[arg(short = 'e', long = "evaluations", default_value = "1")]
     num_evaluations: usize,
 
@@ -119,10 +119,6 @@ fn main() {
     let soundness_type = args.soundness_type;
     let num_evaluations = args.num_evaluations;
 
-    if num_evaluations == 0 {
-        warn!("running as proximity test only — no evaluation claims specified");
-    }
-
     // Initialize Poseidon2 permutations from a deterministic seed.
     let mut rng = SmallRng::seed_from_u64(1);
     let poseidon16 = Poseidon16::new_from_rng_128(&mut rng);
@@ -134,22 +130,15 @@ fn main() {
     let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
 
     let rs_domain_initial_reduction_factor = args.rs_domain_initial_reduction_factor;
-    // Polynomial has 2^m evaluations on the Boolean hypercube.
-    let num_coeffs = 1 << num_variables;
-
     // Assemble the WHIR protocol parameters.
     let whir_params = ProtocolParameters {
         security_level,
         pow_bits,
         folding_factor,
-        mmcs,
         soundness_type,
         starting_log_inv_rate: starting_rate,
         rs_domain_initial_reduction_factor,
     };
-
-    // Derive the full round-by-round configuration.
-    let params = WhirConfig::<EF, F, MyMmcs, MyChallenger>::new(num_variables, whir_params.clone());
 
     info!(
         num_variables,
@@ -160,92 +149,70 @@ fn main() {
         "WHIR PCS"
     );
 
-    if !params.check_pow_bits() {
+    // Generate one random multilinear polynomial f: {0,1}^m -> F and expose it
+    // as a single-column table.
+    let mut rng = SmallRng::seed_from_u64(0);
+    let polynomial = Poly::<F>::new((0..1 << num_variables).map(|_| rng.random()).collect());
+    let table = Table::new(vec![polynomial]);
+    let witness = Layout::new_witness(vec![table], folding_factor.at_round(0));
+
+    let point_schedule: PointSchedule = (0..num_evaluations).map(|_| vec![0]).collect();
+    let protocol = OpeningProtocol::new(vec![TableSpec::new(
+        TableShape::new(num_variables, 1),
+        point_schedule,
+    )])
+    .pad_to_min_num_variables(folding_factor.at_round(0));
+    assert_eq!(witness.table_shapes(), protocol.table_shapes());
+
+    // Derive the full round-by-round configuration from the committed witness.
+    let config = WhirConfig::<EF, F, MyChallenger>::new(witness.num_variables(), whir_params);
+    if !config.check_pow_bits() {
         warn!("more PoW bits required than what was specified");
     }
-
-    // Generate a random multilinear polynomial f: {0,1}^m -> F.
-    let mut rng = SmallRng::seed_from_u64(0);
-    let polynomial = Poly::<F>::new((0..num_coeffs).map(|_| rng.random()).collect());
-
-    // Build the initial statement and add evaluation constraints.
-    // Each constraint asserts f(z_i) = v_i for a random point z_i.
-    let mut initial_statement = params.initial_statement(polynomial, SumcheckStrategy::default());
-    (0..num_evaluations).for_each(|_| {
-        let _ = initial_statement.evaluate(&Point::rand(&mut rng, num_variables));
-    });
-
-    // Normalize the statement into an equality form for the verifier.
-    let verifier_statement = initial_statement.normalize();
-
-    // Build the Fiat-Shamir domain separator.
-    // This encodes the protocol parameters and proof structure into the
-    // transcript so challenges are bound to this specific configuration.
-    let mut domainsep = DomainSeparator::new(vec![]);
-    domainsep.commit_statement::<_, _, 32>(&params);
-    domainsep.add_whir_proof::<_, _, 32>(&params);
 
     // Create the base challenger from the Poseidon2 permutation.
     let challenger = MyChallenger::new(poseidon16);
 
-    // Prover: initialize transcript and commit.
-    let mut prover_challenger = challenger.clone();
-    domainsep.observe_domain_separator(&mut prover_challenger);
-
-    let committer = CommitmentWriter::new(&params);
     // Pre-allocate DFT twiddle factors up to the maximum FFT size.
-    let dft = Radix2DFTSmallBatch::<F>::new(1 << params.max_fft_size());
-
-    let mut proof =
-        WhirProof::<F, EF, MyMmcs>::from_protocol_parameters(&whir_params, num_variables);
+    let dft = Radix2DFTSmallBatch::<F>::new(1 << config.max_fft_size());
+    let pcs = MyPcs::new(config, dft, mmcs);
 
     // Phase 1: Commitment (DFT encoding + Merkle tree + OOD sampling).
+    let mut prover_challenger = challenger.clone();
+    let mut domainsep = DomainSeparator::new(vec![]);
+    pcs.add_domain_separator::<8>(&mut domainsep);
+    domainsep.observe_domain_separator(&mut prover_challenger);
     let time = Instant::now();
-    let prover_data = committer
-        .commit(
-            &dft,
-            &mut proof,
-            &mut prover_challenger,
-            &mut initial_statement,
-        )
-        .unwrap();
+    let (commitment, prover_data) =
+        <MyPcs as MultilinearPcs<EF, MyChallenger>>::commit(&pcs, witness, &mut prover_challenger);
     let commit_time = time.elapsed();
 
     // Phase 2: Opening proof (multi-round sumcheck + STIR queries + PoW).
-    let prover = WhirProver(&params);
     let time = Instant::now();
-    prover
-        .prove(
-            &dft,
-            &mut proof,
-            &mut prover_challenger,
-            &initial_statement,
-            prover_data,
-        )
-        .unwrap();
+    let proof = <MyPcs as MultilinearPcs<EF, MyChallenger>>::open(
+        &pcs,
+        prover_data,
+        protocol.clone(),
+        &mut prover_challenger,
+    );
     let opening_time = time.elapsed();
 
     // Verifier: independent transcript from the same domain separator.
-    let commitment_reader = CommitmentReader::new(&params);
-    let verifier = WhirVerifier::new(&params);
-
     let mut verifier_challenger = challenger;
+    let mut domainsep = DomainSeparator::new(vec![]);
+    pcs.add_domain_separator::<8>(&mut domainsep);
     domainsep.observe_domain_separator(&mut verifier_challenger);
-
-    // Parse the commitment from the proof (replays OOD transcript interactions).
-    let parsed_commitment =
-        commitment_reader.parse_commitment::<F, 8>(&proof, &mut verifier_challenger);
 
     // Phase 3: Verification (sumcheck checks + Merkle proof verification).
     let verif_time = Instant::now();
-    verifier
-        .verify(
-            &proof,
-            &mut verifier_challenger,
-            &parsed_commitment,
-            verifier_statement,
-        )
-        .unwrap();
+    <MyPcs as MultilinearPcs<EF, MyChallenger>>::verify(
+        &pcs,
+        &commitment,
+        &proof,
+        &mut verifier_challenger,
+        protocol,
+    )
+    .expect("verification failed");
     let verify_time = verif_time.elapsed();
 
     // Report results via structured logging.

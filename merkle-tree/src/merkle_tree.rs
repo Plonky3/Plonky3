@@ -310,12 +310,15 @@ where
         });
 
     // Handle leftover rows that do not form a full SIMD batch (if any).
-    #[allow(clippy::needless_range_loop)]
-    for i in ((max_height / width) * width)..max_height {
+    // `digests` is padded to `max_height_padded`, so cap the slice at `max_height`
+    // to leave the padding tail untouched.
+    let leftover_start = (max_height / width) * width;
+    for (offset, digest) in digests[leftover_start..max_height].iter_mut().enumerate() {
+        let i = leftover_start + offset;
         unsafe {
-            // Safety: The loop guarantees i < max_height == matrix height.
+            // Safety: i < max_height == matrix height.
             // Use `row_unchecked` to avoid bounds checks for performance.
-            digests[i] = h.hash_iter(tallest_matrices.iter().flat_map(|m| m.row_unchecked(i)));
+            *digest = h.hash_iter(tallest_matrices.iter().flat_map(|m| m.row_unchecked(i)));
         }
     }
 

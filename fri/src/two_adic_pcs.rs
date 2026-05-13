@@ -14,7 +14,6 @@
 //! If we changed our domain construction (e.g., using multiple cosets), we would need to carefully reconsider these assumptions.
 
 use alloc::borrow::Cow;
-use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::marker::PhantomData;
@@ -606,7 +605,7 @@ where
                 // If this is our first matrix at this height, initialise reduced_openings to zero.
                 // Otherwise, get a mutable reference to it.
                 let reduced_opening_for_log_height = reduced_openings[log_height]
-                    .get_or_insert_with(|| vec![Challenge::ZERO; mat.height()]);
+                    .get_or_insert_with(|| Challenge::zero_vec(mat.height()));
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
                 // Treating our matrix M as the evaluations of functions f_0, f_1, ...

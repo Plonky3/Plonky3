@@ -8,7 +8,7 @@ use p3_air::symbolic::SymbolicAirBuilder;
 use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_util::zip_eq::zip_eq;
@@ -73,18 +73,15 @@ where
         })
         .collect_vec();
 
+    // valid_shape checks each ch has length <SC::Challenge as BasedVectorSpace<Val<SC>>>::DIMENSION,
+    // so from_ext_basis_coefficients won't return None.
     quotient_chunks
         .iter()
         .enumerate()
         .map(|(ch_i, ch)| {
-            // We checked in valid_shape the length of "ch" is equal to
-            // <SC::Challenge as BasedVectorSpace<Val<SC>>>::DIMENSION. Hence
-            // the unwrap() will never panic.
             zps[ch_i]
-                * ch.iter()
-                    .enumerate()
-                    .map(|(e_i, &c)| SC::Challenge::ith_basis_element(e_i).unwrap() * c)
-                    .sum::<SC::Challenge>()
+                * SC::Challenge::from_ext_basis_coefficients(ch)
+                    .expect("quotient chunk length checked in valid_shape")
         })
         .sum::<SC::Challenge>()
 }
@@ -178,8 +175,7 @@ where
     // - Otherwise, derive width from the AIR's preprocessed trace (if any).
     let preprocessed_width = preprocessed_vk
         .map(|vk| vk.width)
-        .or_else(|| air.preprocessed_trace().as_ref().map(|m| m.width))
-        .unwrap_or(0);
+        .unwrap_or_else(|| air.preprocessed_width());
 
     // Check that the proof's opened preprocessed values match the expected width.
     let preprocessed_local_len = opened_values
@@ -464,7 +460,7 @@ where
     let trace_next_slice = match &opened_values.trace_next {
         Some(v) => v.as_slice(),
         None => {
-            zeros = vec![SC::Challenge::ZERO; air_width];
+            zeros = SC::Challenge::zero_vec(air_width);
             &zeros
         }
     };
@@ -472,7 +468,7 @@ where
     let preprocessed_next_for_verify = match &opened_values.preprocessed_next {
         Some(v) => Some(v.as_slice()),
         None if preprocessed_width > 0 => {
-            pre_next_zeros = vec![SC::Challenge::ZERO; preprocessed_width];
+            pre_next_zeros = SC::Challenge::zero_vec(preprocessed_width);
             Some(pre_next_zeros.as_slice())
         }
         None => None,

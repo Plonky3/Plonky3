@@ -575,7 +575,7 @@ mod tests {
         let m = RowMajorMatrix::<F>::rand(&mut rng, 1 << 8, 1 << 4);
         let v = RowMajorMatrix::<EF>::rand(&mut rng, 1 << 8, 1).values;
 
-        let mut expected = vec![EF::ZERO; m.width()];
+        let mut expected = EF::zero_vec(m.width());
         for (row, &scale) in izip!(m.rows(), &v) {
             for (l, r) in izip!(&mut expected, row) {
                 *l += scale * r;
@@ -836,7 +836,7 @@ mod tests {
             let packed_v: Vec<EFPacked> = v
                 .chunks(<PF as PackedValue>::WIDTH)
                 .map(|chunk| {
-                    let mut padded = vec![EF::ZERO; <PF as PackedValue>::WIDTH];
+                    let mut padded = EF::zero_vec(<PF as PackedValue>::WIDTH);
                     padded[..chunk.len()].copy_from_slice(chunk);
                     EFPacked::from_ext_slice(&padded)
                 })

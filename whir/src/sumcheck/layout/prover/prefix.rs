@@ -2,17 +2,24 @@
 
 use alloc::vec::Vec;
 
-use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, dot_product};
+use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+use p3_commit::Mmcs;
+use p3_dft::TwoAdicSubgroupDft;
+use p3_field::{ExtensionField, Field, TwoAdicField, dot_product};
+use p3_matrix::dense::DenseMatrix;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
-use p3_util::log2_strict_usize;
 
-use crate::sumcheck::layout::opening::{MultiClaim, Opening, PrefixMultiClaim, PrefixVirtualClaim};
+use crate::pcs::committer::writer::commit_base;
+use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
+use crate::sumcheck::layout::opening::Opening;
+use crate::sumcheck::layout::prover::Layout;
 use crate::sumcheck::layout::witness::{Table, TablePlacement};
+use crate::sumcheck::layout::{LayoutStrategy, ProverMultiClaim, ProverVirtualClaim, Witness};
 use crate::sumcheck::product_polynomial::ProductPolynomial;
 use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
+use crate::sumcheck::svo::{SvoPoint, calculate_accumulators_batch};
 use crate::sumcheck::{Claim, SumcheckData, extrapolate_01inf};
 
 /// Stacked-sumcheck prover with prefix-first variable binding.
@@ -40,25 +47,70 @@ pub struct PrefixProver<F: Field, EF: ExtensionField<F>> {
     /// - Every opening stored here is tied to a concrete source column.
     /// - Virtual openings never enter this map.
     /// - Claims are appended in insertion order.
-    pub(crate) claim_map: Vec<Vec<PrefixMultiClaim<F, EF>>>,
+    pub(crate) claim_map: Vec<Vec<ProverMultiClaim<F, EF>>>,
     /// Virtual claims sampled directly on the stacked polynomial.
-    pub(crate) virtual_claims: Vec<PrefixVirtualClaim<EF>>,
+    pub(crate) virtual_claims: Vec<ProverVirtualClaim<EF>>,
 }
 
-impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
+impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
+    fn from_witness(witness: Witness<F>) -> Self {
+        // Move the witness fields out so the prover owns them outright.
+        let parts = witness.into_parts();
+        // One claim list per source table; virtual claims live in their own bucket.
+        let num_tables = parts.tables.len();
+        Self {
+            tables: parts.tables,
+            placements: parts.placements,
+            num_variables: parts.num_variables,
+            folding: parts.folding,
+            poly: parts.poly,
+            claim_map: (0..num_tables).map(|_| Vec::new()).collect(),
+            virtual_claims: Vec::new(),
+        }
+    }
+
+    fn new_witness(tables: Vec<Table<F>>, folding: usize) -> Witness<F> {
+        Witness::new_interleaved(tables, folding)
+    }
+
+    fn commit<Dft, MT, Challenger>(
+        dft: &Dft,
+        mmcs: &MT,
+        challenger: &mut Challenger,
+        witness: Witness<F>,
+        folding: usize,
+        starting_log_inv_rate: usize,
+    ) -> (Self, MT::Commitment, MT::ProverData<DenseMatrix<F>>)
+    where
+        Dft: TwoAdicSubgroupDft<F>,
+        MT: Mmcs<F>,
+        Challenger: CanObserve<MT::Commitment>,
+    {
+        let (root, prover_data) = commit_base(
+            Self::variable_order(),
+            dft,
+            mmcs,
+            challenger,
+            &witness.poly,
+            folding,
+            starting_log_inv_rate,
+        );
+
+        (Self::from_witness(witness), root, prover_data)
+    }
+
+    fn folding(&self) -> usize {
+        self.folding
+    }
+
     /// Returns the number of variables of the stacked polynomial.
-    pub const fn num_variables(&self) -> usize {
+    fn num_variables(&self) -> usize {
         self.num_variables
     }
 
     /// Returns the number of variables of table `id`.
-    pub fn num_variables_table(&self, id: usize) -> usize {
+    fn num_variables_table(&self, id: usize) -> usize {
         self.tables[id].num_variables()
-    }
-
-    /// Returns the stacked committed polynomial.
-    pub const fn poly(&self) -> &Poly<F> {
-        &self.poly
     }
 
     /// Records opening claims for the selected columns of `table_idx`.
@@ -79,11 +131,11 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
     ///
     /// - Columns list must be non-empty.
     #[tracing::instrument(skip_all)]
-    pub fn eval<Ch>(&mut self, table_idx: usize, polys: &[usize], challenger: &mut Ch) -> Vec<EF>
+    fn eval<Ch>(&mut self, table_idx: usize, polys: &[usize], challenger: &mut Ch) -> Vec<EF>
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        // Precondition: opening nothing would silently push an empty MultiClaim.
+        // Precondition: opening nothing would silently push an empty ProverMultiClaim.
         assert!(
             !polys.is_empty(),
             "opening schedule must name at least one column"
@@ -97,17 +149,17 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
         );
 
         // Factorise the point once; every selected column reuses it.
-        let point = SplitEq::new_packed(&point, EF::ONE);
+        let point = SvoPoint::new_packed(self.folding, &point);
 
-        // Evaluate each column at the factored point; split into (opening, eval).
+        // Evaluate each column at the SVO point; split into (opening, eval).
         let (openings, evals): (Vec<_>, Vec<EF>) = polys
             .iter()
             .map(|&poly_idx| {
-                let eval = point.eval_base(table.poly(poly_idx));
+                let (eval, partial_evals) = point.eval(table.poly(poly_idx));
                 let opening = Opening {
                     poly_idx: Some(poly_idx),
                     eval,
-                    data: (),
+                    data: partial_evals,
                 };
                 (opening, eval)
             })
@@ -117,7 +169,7 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
         challenger.observe_algebra_slice(&evals);
 
         // Store the batch for the later sumcheck reduction.
-        self.claim_map[table_idx].push(PrefixMultiClaim::new(point, openings));
+        self.claim_map[table_idx].push(ProverMultiClaim::new(point, openings));
 
         evals
     }
@@ -130,7 +182,7 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
     /// random point for soundness amplification. Prefix mode evaluates the
     /// stacked polynomial directly — no per-column weighting needed.
     #[tracing::instrument(skip_all)]
-    pub fn add_virtual_eval<Ch>(&mut self, challenger: &mut Ch) -> EF
+    fn add_virtual_eval<Ch>(&mut self, challenger: &mut Ch) -> EF
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
@@ -138,17 +190,47 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
         let point =
             Point::expand_from_univariate(challenger.sample_algebra_element(), self.num_variables);
 
-        // Evaluate the stacked polynomial directly.
-        let eval = self.poly.eval_base(&point);
+        let mut eval = EF::ZERO;
+        let mut openings = Vec::new();
+        let mut weights = Vec::new();
+
+        for placement in &self.placements {
+            let table = &self.tables[placement.idx()];
+            for (poly_idx, selector) in placement.selectors().iter().enumerate() {
+                let poly = table.poly(poly_idx);
+
+                let (local_part, selector_part) = point.split_at(table.num_variables());
+
+                let weight =
+                    Point::eval_eq::<EF>(selector.point().as_slice(), selector_part.as_slice());
+
+                let local_svo = SvoPoint::new_packed(self.folding, &local_part);
+                let (column_eval, partial_evals) = local_svo.eval(poly);
+
+                eval += weight * column_eval;
+                openings.push(Opening {
+                    poly_idx: None,
+                    eval: column_eval,
+                    data: partial_evals,
+                });
+                weights.push(weight);
+            }
+        }
+
+        let accumulators = calculate_accumulators_batch(
+            &ProverMultiClaim::new(
+                SvoPoint::new_unpacked(self.folding, &point, VariableOrder::Prefix),
+                openings,
+            ),
+            &weights,
+        );
 
         // Commit the evaluation to the transcript.
         challenger.observe_algebra_element(eval);
-
-        // Record the claim; data payload is unit in prefix mode.
         self.virtual_claims.push(Claim {
             point,
             eval,
-            data: (),
+            data: accumulators,
         });
 
         eval
@@ -178,7 +260,7 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
     /// - Each table's arity is at least  log_2(W), with W the packing width.
     /// - Guarantees every per-slot packed accumulation spans a whole packed element.
     #[tracing::instrument(skip_all)]
-    pub fn into_sumcheck<Ch>(
+    fn into_sumcheck<Ch>(
         self,
         sumcheck_data: &mut SumcheckData<F, EF>,
         pow_bits: usize,
@@ -190,60 +272,89 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
         // Sanity: preprocessing cannot consume more rounds than the stacked arity.
         assert!(self.folding <= self.num_variables);
 
-        // Precondition for packed per-slot accumulation.
-        let k_pack = log2_strict_usize(F::Packing::WIDTH);
-        assert!(
-            self.placements
-                .iter()
-                .all(|p| self.num_variables_table(p.idx()) >= k_pack),
-            "prefix mode requires num_variables_table >= log2(packing width) for every table",
-        );
-
-        // Batching challenge for combining every recorded claim.
-        let folding = self.folding;
         let alpha: EF = challenger.sample_algebra_element();
+        let n_claims = self.num_claims();
 
-        // Phase 1: build the initial (sum, weights, poly) triple.
-        let mut sum = self.sum(alpha);
-        let mut weights = self.combine_eqs(alpha);
-        let poly = F::Packing::pack_slice(self.poly.as_slice());
-
-        // First-round coefficients in packed arithmetic.
-        let (c0, c_inf) = VariableOrder::Prefix.sumcheck_coefficients(poly, weights.as_slice());
-        // Horizontal reduction across SIMD lanes.
-        let c0 = EF::ExtensionPacking::to_ext_iter([c0]).sum();
-        let c_inf = EF::ExtensionPacking::to_ext_iter([c_inf]).sum();
-
-        // Phase 2: run round 1 (observe coefficients, sample r, fold everything).
-        let r = sumcheck_data.observe_and_sample(challenger, c0, c_inf, pow_bits);
-        weights.fix_prefix_var_mut(r);
-        let poly = self.poly.fix_prefix_var_to_packed(r);
-        sum = extrapolate_01inf(c0, sum - c0, c_inf, r);
-
-        // Phase 3: pack (poly, weights) into a product polynomial for the residual rounds.
-        let mut prod_poly =
-            ProductPolynomial::<F, EF>::new_packed(VariableOrder::Prefix, poly, weights);
-        debug_assert_eq!(prod_poly.dot_product(), sum);
-
-        // Phase 4: rounds 2..folding run on the product polynomial directly.
-        let rs = core::iter::once(r)
-            .chain(
-                (1..folding)
-                    .map(|_| prod_poly.round(sumcheck_data, challenger, &mut sum, pow_bits)),
-            )
+        let mut alphas = alpha.powers();
+        let accumulators: Vec<_> = self
+            .placements
+            .iter()
+            .flat_map(|placement| self.claim_map[placement.idx()].iter())
+            .map(|claim| {
+                let per_claim: Vec<EF> = alphas.by_ref().take(claim.len()).collect();
+                calculate_accumulators_batch(claim, &per_claim)
+            })
             .collect();
 
-        (SumcheckProver::new(prod_poly, sum), Point::new(rs))
+        let mut sum = self.sum(alpha);
+        let mut rs = Vec::new();
+
+        for round_idx in 0..self.folding {
+            let weights = lagrange_weights_01inf_multi(&rs);
+
+            let mut c0 = EF::ZERO;
+            let mut c_inf = EF::ZERO;
+
+            for accs in &accumulators {
+                c0 += dot_product::<EF, _, _>(
+                    accs[round_idx][0].iter().copied(),
+                    weights.iter().copied(),
+                );
+                c_inf += dot_product::<EF, _, _>(
+                    accs[round_idx][1].iter().copied(),
+                    weights.iter().copied(),
+                );
+            }
+
+            for (vc, alpha_i) in self
+                .virtual_claims
+                .iter()
+                .zip(alpha.powers().skip(n_claims))
+            {
+                let vc_accs = &vc.data;
+                c0 += alpha_i
+                    * dot_product::<EF, _, _>(
+                        vc_accs[round_idx][0].iter().copied(),
+                        weights.iter().copied(),
+                    );
+                c_inf += alpha_i
+                    * dot_product::<EF, _, _>(
+                        vc_accs[round_idx][1].iter().copied(),
+                        weights.iter().copied(),
+                    );
+            }
+
+            let r = sumcheck_data.observe_and_sample(challenger, c0, c_inf, pow_bits);
+            sum = extrapolate_01inf(c0, sum - c0, c_inf, r);
+            rs.push(r);
+        }
+
+        let rs = Point::new(rs);
+        let compressed = tracing::info_span!("compress_prefix_to_packed")
+            .in_scope(|| self.poly.compress_prefix_to_packed(&rs, EF::ONE));
+
+        let weights = self.combine_eqs(&rs, alpha).pack::<F, EF>();
+        let prod_poly =
+            ProductPolynomial::<F, EF>::new_packed(VariableOrder::Prefix, compressed, weights);
+        debug_assert_eq!(prod_poly.dot_product(), sum);
+
+        (SumcheckProver::new(prod_poly, sum), rs)
     }
 
     /// Returns the total number of concrete openings recorded so far.
     fn num_claims(&self) -> usize {
         self.claim_map
             .iter()
-            .flat_map(|claims| claims.iter().map(MultiClaim::len))
+            .flat_map(|claims| claims.iter().map(ProverMultiClaim::len))
             .sum()
     }
 
+    fn strategy() -> LayoutStrategy {
+        LayoutStrategy::new(true, VariableOrder::Prefix)
+    }
+}
+
+impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
     /// Computes the batched claimed sum from concrete and virtual openings.
     ///
     /// # Identity
@@ -291,179 +402,42 @@ impl<F: Field, EF: ExtensionField<F>> PrefixProver<F, EF> {
         sum
     }
 
-    /// Builds the packed equality-weight polynomial for the first packed round.
-    ///
-    /// ```text
-    ///     out(x) = sum_{i}  alpha^i * eq(z_i, x)
-    /// ```
-    ///
-    /// - Concrete openings write into their owning slot, found via the
-    ///   selector for the opening's column.
-    /// - Virtual claims span the entire stacked output buffer.
+    /// Builds the residual equality-weight polynomial after the prefix SVO rounds.
     #[tracing::instrument(skip_all)]
-    fn combine_eqs(&self, alpha: EF) -> Poly<EF::ExtensionPacking> {
-        // Packed output has 2^(num_variables - k_pack) entries; each holds WIDTH scalars.
-        let k_pack = log2_strict_usize(F::Packing::WIDTH);
-        let mut out = Poly::<EF::ExtensionPacking>::zero(self.num_variables - k_pack);
+    fn combine_eqs(&self, rs: &Point<EF>, alpha: EF) -> Poly<EF> {
+        assert_eq!(rs.num_variables(), self.folding);
+        let mut out = Poly::<EF>::zero(self.num_variables - rs.num_variables());
 
         let mut alphas = alpha.powers();
 
-        // Concrete openings: write each into the slot its column's selector addresses.
         for placement in &self.placements {
-            let num_variables_table = self.num_variables_table(placement.idx());
-            let slot_size = 1usize << num_variables_table;
+            let local_rest_variables =
+                self.num_variables_table(placement.idx()) - rs.num_variables();
             for claim in &self.claim_map[placement.idx()] {
                 for opening in claim.openings() {
-                    // The opening's column tells us which selector picks the slot.
                     let col = opening.poly_idx().unwrap();
-                    let off = placement.selectors()[col].index() << num_variables_table;
-                    let packed_range = (off >> k_pack)..((off + slot_size) >> k_pack);
-                    claim.point().accumulate_into_packed(
-                        &mut out.as_mut_slice()[packed_range],
-                        Some(alphas.next().unwrap()),
-                    );
+                    let selector = &placement.selectors()[col];
+                    let mut local = Poly::<EF>::zero(local_rest_variables);
+                    claim
+                        .point()
+                        .accumulate_into(local.as_mut_slice(), rs, alphas.next().unwrap());
+
+                    for (local_idx, &value) in local.as_slice().iter().enumerate() {
+                        let dst = (local_idx << selector.num_variables()) | selector.index();
+                        out.as_mut_slice()[dst] += value;
+                    }
                 }
             }
         }
 
-        // Virtual claims contribute across the whole output.
-        // Start alpha where the concrete openings stopped.
         let mut alpha_i = alpha.exp_u64(self.num_claims() as u64);
         for claim in &self.virtual_claims {
-            SplitEq::new_packed(&claim.point, alpha_i)
-                .accumulate_into_packed(out.as_mut_slice(), None);
+            let (svo, rest) = claim.point.split_at(rs.num_variables());
+            let scale = alpha_i * Point::eval_eq(svo.as_slice(), rs.as_slice());
+            SplitEq::new_unpacked(&rest, scale).accumulate_into(out.as_mut_slice(), None);
             alpha_i *= alpha;
         }
 
         out
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use alloc::vec::Vec;
-
-    use proptest::prelude::*;
-    use rand::rngs::SmallRng;
-    use rand::{RngExt, SeedableRng};
-
-    use super::PrefixProver;
-    use crate::sumcheck::layout::prover::test_utils::{
-        ASCENDING_POLYS, NON_ASCENDING_POLYS, arb_opening_schedule, arb_witness_and_schedule,
-        build_witness, build_witness_from_shape, run_prefix_roundtrip, run_prefix_roundtrip_with,
-        table_shapes_from,
-    };
-    use crate::sumcheck::tests::*;
-
-    #[test]
-    fn prefix_num_claims_counts_every_recorded_opening() {
-        // Invariant:
-        //     Concrete opening count equals the sum over every (table, claim).
-        //
-        // Fixture state:
-        //     fresh prover:                  0 concrete openings
-        //     after eval(table 0, [0, 1]):   2 concrete openings
-        //     after eval(table 1, [0]):      3 concrete openings
-        let witness = build_witness();
-        let mut prover: PrefixProver<F, EF> = witness.as_prefix_prover();
-        // Fresh prover: no claims recorded yet.
-        assert_eq!(prover.num_claims(), 0);
-
-        // Fresh Fiat-Shamir transcript; eval samples its own point and absorbs.
-        let mut ch = challenger();
-
-        // Record two openings on table 0 → count advances from 0 to 2.
-        prover.eval(0, &[0, 1], &mut ch);
-        assert_eq!(prover.num_claims(), 2);
-
-        // Record one more opening on table 1 → count advances from 2 to 3.
-        prover.eval(1, &[0], &mut ch);
-        assert_eq!(prover.num_claims(), 3);
-    }
-
-    #[test]
-    fn prefix_sum_matches_weighted_eval_sum() {
-        // Invariant:
-        //     sum(alpha) = eval_0 * alpha^0 + eval_1 * alpha^1
-        //     for a single claim opening two columns in traversal order.
-        //
-        // Fixture state:
-        //     one eval call recording two openings on one claim.
-        //     traversal order: column 0 before column 1.
-        let witness = build_witness();
-        let mut prover: PrefixProver<F, EF> = witness.as_prefix_prover();
-
-        // Fresh Fiat-Shamir transcript.
-        let mut ch = challenger();
-
-        // Record two openings; evals[0], evals[1] line up with columns 0, 1.
-        let evals = prover.eval(0, &[0, 1], &mut ch);
-
-        // Deterministic alpha for hand-rolled comparison.
-        let mut rng = SmallRng::seed_from_u64(7);
-        let alpha: EF = rng.random();
-        let expected = evals[0] + alpha * evals[1];
-
-        // Check: the prover's sum helper matches the hand-rolled formula.
-        assert_eq!(prover.sum(alpha), expected);
-    }
-
-    #[test]
-    fn prefix_roundtrip_ascending_polys() {
-        // Baseline: columns opened in ascending order inside each claim.
-        run_prefix_roundtrip(ASCENDING_POLYS);
-    }
-
-    #[test]
-    fn prefix_roundtrip_non_ascending_polys() {
-        // Opening order within a claim must not affect correctness.
-        run_prefix_roundtrip(NON_ASCENDING_POLYS);
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig { cases: 16, ..ProptestConfig::default() })]
-
-        // Invariant:
-        //     Every valid opening schedule roundtrips through the protocol
-        //     without the prover and verifier diverging.
-        //
-        // Strategy: 1..=6 random calls over the fixed two-table witness.
-        #[test]
-        fn prefix_roundtrip_proptest(schedule in arb_opening_schedule()) {
-            // Adapt the owned schedule to the slice-pair shape the runner expects.
-            let borrowed: Vec<(usize, &[usize])> = schedule
-                .iter()
-                .map(|(t, polys)| (*t, polys.as_slice()))
-                .collect();
-            // Drive both sides; the runner asserts agreement internally.
-            run_prefix_roundtrip(&borrowed);
-        }
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig { cases: 8, ..ProptestConfig::default() })]
-
-        // Invariant:
-        //     Roundtrip agreement holds for ANY valid witness shape, not just
-        //     the fixed two-table fixture.
-        //
-        // Strategy:
-        //     Random witness shape (1..=3 tables, arity in [5, 8], 1..=3 cols per
-        //     table) paired with a matching opening schedule over that shape.
-        #[test]
-        fn prefix_roundtrip_shape_proptest(
-            (shape, schedule) in arb_witness_and_schedule(),
-        ) {
-            // Build a matching witness and verifier-side shapes for this case.
-            let witness = build_witness_from_shape(&shape);
-            let shapes = table_shapes_from(&shape);
-            // Adapt the owned schedule to the slice-pair shape the runner expects.
-            let borrowed: Vec<(usize, &[usize])> = schedule
-                .iter()
-                .map(|(t, polys)| (*t, polys.as_slice()))
-                .collect();
-            // Drive both sides on the generated shape; runner asserts agreement.
-            run_prefix_roundtrip_with(witness, &shapes, &borrowed);
-        }
     }
 }

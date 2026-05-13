@@ -75,6 +75,7 @@ impl<AB: AirBuilder, SubAir: BaseAir<AB::F>, F> AirBuilder for SubAirBuilder<'_,
     type PreprocessedWindow = AB::PreprocessedWindow;
     type MainWindow = SubSliced<AB::MainWindow, AB::Var>;
     type PublicVar = AB::PublicVar;
+    type PeriodicVar = AB::PeriodicVar;
 
     fn main(&self) -> Self::MainWindow {
         SubSliced {
@@ -107,5 +108,9 @@ impl<AB: AirBuilder, SubAir: BaseAir<AB::F>, F> AirBuilder for SubAirBuilder<'_,
 
     fn public_values(&self) -> &[Self::PublicVar] {
         self.inner.public_values()
+    }
+
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.inner.periodic_values()
     }
 }

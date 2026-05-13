@@ -14,4 +14,8 @@ pub enum SumcheckError {
     /// Proof-of-work witness verification failed.
     #[error("Invalid proof-of-work witness")]
     InvalidPowWitness,
+
+    /// The proof carries fewer PoW witnesses than sumcheck rounds.
+    #[error("Sumcheck PoW witness count mismatch: expected {expected}, got {actual}")]
+    PowWitnessCountMismatch { expected: usize, actual: usize },
 }
