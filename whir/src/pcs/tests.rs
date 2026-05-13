@@ -356,6 +356,67 @@ fn test_whir_shared_base_batched_deferred_end_to_end() {
 }
 
 #[test]
+fn test_whir_shared_extension_batched_deferred_end_to_end() {
+    let num_variables = 4;
+    let (pcs, mut rng) = test_pcs(num_variables);
+    let evaluations0: Vec<EF> = (0..(1 << num_variables)).map(|_| rng.random()).collect();
+    let evaluations1: Vec<EF> = (0..(1 << num_variables)).map(|_| rng.random()).collect();
+    let poly0 = Poly::new(evaluations0.clone());
+    let poly1 = Poly::new(evaluations1.clone());
+    let coeffs = vec![EF::from_u64(7), EF::from_u64(11)];
+    let point = Point::expand_from_univariate(rng.random(), num_variables);
+    let value = coeffs[0] * poly0.eval_ext::<F>(&point) + coeffs[1] * poly1.eval_ext::<F>(&point);
+
+    let mut prover_challenger = challenger();
+    let (commitment, shared) = pcs.commit_extension_batch_deferred(
+        vec![
+            RowMajorMatrix::new(evaluations0, 1),
+            RowMajorMatrix::new(evaluations1, 1),
+        ],
+        &mut prover_challenger,
+    );
+    let proof = pcs
+        .open_grouped_batched_deferred(
+            vec![WhirBatchedDeferredProverOracle::SharedExtension {
+                coeffs: coeffs.clone(),
+                data: shared,
+            }],
+            point.clone(),
+            value,
+            &mut prover_challenger,
+        )
+        .expect("shared extension batched proof");
+
+    let mut verifier_challenger = challenger();
+    pcs.verify_batched_deferred(
+        &[WhirBatchedDeferredVerifierOracle::SharedExtension {
+            coeffs: coeffs.clone(),
+            commitment: commitment.clone(),
+        }],
+        point.clone(),
+        value,
+        &proof,
+        &mut verifier_challenger,
+    )
+    .expect("shared extension batched verification");
+
+    let mut verifier_challenger = challenger();
+    let mut wrong_coeffs = coeffs;
+    wrong_coeffs[1] += EF::ONE;
+    pcs.verify_batched_deferred(
+        &[WhirBatchedDeferredVerifierOracle::SharedExtension {
+            coeffs: wrong_coeffs,
+            commitment,
+        }],
+        point,
+        value,
+        &proof,
+        &mut verifier_challenger,
+    )
+    .expect_err("wrong shared extension coefficients must fail");
+}
+
+#[test]
 fn test_whir_batched_deferred_with_initial_select_end_to_end() {
     let num_variables = 4;
     let (pcs, mut rng) = test_pcs(num_variables);

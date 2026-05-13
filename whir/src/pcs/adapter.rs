@@ -132,6 +132,22 @@ where
     _phantom: core::marker::PhantomData<EF>,
 }
 
+/// Prover-side data for one shared extension-field root that commits several
+/// initial polynomials as an MMCS matrix batch.
+pub struct WhirSharedExtensionDeferredProverData<F, EF, MT, const DIGEST_ELEMS: usize>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    MT: Mmcs<F>,
+{
+    /// Merkle tree produced by committing all extension initial matrices under one root.
+    merkle_data: Arc<<ExtensionMmcs<F, EF, MT> as Mmcs<EF>>::ProverData<DenseMatrix<EF>>>,
+    /// Extension polynomials committed under the shared root, in matrix-batch order.
+    polys: Vec<Poly<EF>>,
+    /// Shared commitment root.
+    commitment: MT::Commitment,
+}
+
 impl<F, EF, MT, const DIGEST_ELEMS: usize> Clone
     for WhirSharedBaseDeferredProverData<F, EF, MT, DIGEST_ELEMS>
 where
@@ -145,6 +161,22 @@ where
             polys: self.polys.clone(),
             commitment: self.commitment.clone(),
             _phantom: core::marker::PhantomData,
+        }
+    }
+}
+
+impl<F, EF, MT, const DIGEST_ELEMS: usize> Clone
+    for WhirSharedExtensionDeferredProverData<F, EF, MT, DIGEST_ELEMS>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    MT: Mmcs<F>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            merkle_data: self.merkle_data.clone(),
+            polys: self.polys.clone(),
+            commitment: self.commitment.clone(),
         }
     }
 }
@@ -285,6 +317,10 @@ where
         coeffs: Vec<EF>,
         data: Arc<WhirSharedBaseDeferredProverData<F, EF, MT, DIGEST_ELEMS>>,
     },
+    SharedExtension {
+        coeffs: Vec<EF>,
+        data: Arc<WhirSharedExtensionDeferredProverData<F, EF, MT, DIGEST_ELEMS>>,
+    },
 }
 
 /// Verifier metadata for one oracle participating in a batched WHIR initial
@@ -294,6 +330,7 @@ pub enum WhirBatchedDeferredVerifierOracle<EF, Comm> {
     Base { coeff: EF, commitment: Comm },
     Extension { coeff: EF, commitment: Comm },
     SharedBase { coeffs: Vec<EF>, commitment: Comm },
+    SharedExtension { coeffs: Vec<EF>, commitment: Comm },
 }
 
 const VIRTUAL_POLY_PAR_THRESHOLD: usize = 1 << 15;
@@ -376,6 +413,44 @@ where
         for (poly, coeff) in active {
             for (slot, &value) in virtual_values.iter_mut().zip(poly.as_slice().iter()) {
                 *slot += coeff * EF::from(value);
+            }
+        }
+    }
+}
+
+#[inline]
+fn add_scaled_shared_extension_polys<F, EF>(
+    virtual_values: &mut [EF],
+    coeffs: &[EF],
+    polys: &[Poly<EF>],
+) where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    let active = polys
+        .iter()
+        .zip(coeffs.iter().copied())
+        .filter(|(_, coeff)| !coeff.is_zero())
+        .collect::<Vec<_>>();
+    if active.is_empty() {
+        return;
+    }
+
+    if virtual_values.len() >= VIRTUAL_POLY_PAR_THRESHOLD && active.len() > 1 {
+        virtual_values
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(row, slot)| {
+                let mut value = EF::ZERO;
+                for (poly, coeff) in active.iter().copied() {
+                    value += coeff * poly.as_slice()[row];
+                }
+                *slot += value;
+            });
+    } else {
+        for (poly, coeff) in active {
+            for (slot, &value) in virtual_values.iter_mut().zip(poly.as_slice().iter()) {
+                *slot += coeff * value;
             }
         }
     }
@@ -678,6 +753,71 @@ where
                 polys,
                 commitment,
                 _phantom: core::marker::PhantomData,
+            }),
+        )
+    }
+
+    /// Commit several extension-field initial polynomials under one MMCS root.
+    ///
+    /// This is the extension-field analogue of
+    /// [`commit_base_batch_deferred`](Self::commit_base_batch_deferred). It is
+    /// intended for table-column style batching where many extension-valued
+    /// multilinear oracles share the same arity and WHIR RS layout.
+    pub fn commit_extension_batch_deferred(
+        &self,
+        evaluations: Vec<RowMajorMatrix<EF>>,
+        _challenger: &mut Challenger,
+    ) -> (
+        MT::Commitment,
+        Arc<WhirSharedExtensionDeferredProverData<F, EF, MT, DIGEST_ELEMS>>,
+    )
+    where
+        MT::Commitment: Clone,
+        Challenger: CanObserve<MT::Commitment> + Clone,
+        Dft: TwoAdicSubgroupDft<F>,
+    {
+        let encoded = evaluations
+            .into_iter()
+            .map(|evaluations| self.encode_extension_initial_oracle(evaluations))
+            .collect();
+        self.commit_extension_batch_encoded_deferred(encoded, _challenger)
+    }
+
+    /// Commit several extension-field initial polynomials that were already
+    /// encoded through [`Self::encode_extension_initial_oracle`].
+    pub fn commit_extension_batch_encoded_deferred(
+        &self,
+        encoded: Vec<WhirEncodedExtensionOracle<EF>>,
+        _challenger: &mut Challenger,
+    ) -> (
+        MT::Commitment,
+        Arc<WhirSharedExtensionDeferredProverData<F, EF, MT, DIGEST_ELEMS>>,
+    )
+    where
+        MT::Commitment: Clone,
+        Challenger: CanObserve<MT::Commitment> + Clone,
+    {
+        assert!(
+            !encoded.is_empty(),
+            "shared extension WHIR commitment requires at least one polynomial",
+        );
+
+        let mut polys = Vec::with_capacity(encoded.len());
+        let mut folded_matrices = Vec::with_capacity(encoded.len());
+        for encoded in encoded {
+            polys.push(encoded.poly);
+            folded_matrices.push(encoded.matrix);
+        }
+
+        let extension_mmcs = ExtensionMmcs::new(self.config.mmcs.clone());
+        let (commitment, merkle_data) = extension_mmcs.commit(folded_matrices);
+
+        (
+            commitment.clone(),
+            Arc::new(WhirSharedExtensionDeferredProverData {
+                merkle_data: Arc::new(merkle_data),
+                polys,
+                commitment,
             }),
         )
     }
@@ -1015,6 +1155,32 @@ where
                         data: data.merkle_data.clone(),
                     });
                 }
+                WhirBatchedDeferredProverOracle::SharedExtension { coeffs, data } => {
+                    if data.polys.len() != coeffs.len() {
+                        return Err(LinearSigmaReductionError::ArityMismatch {
+                            expected: data.polys.len(),
+                            actual: coeffs.len(),
+                        });
+                    }
+                    for poly in data.polys.iter() {
+                        if poly.num_variables() != self.config.num_variables {
+                            return Err(LinearSigmaReductionError::ArityMismatch {
+                                expected: self.config.num_variables,
+                                actual: poly.num_variables(),
+                            });
+                        }
+                    }
+                    add_scaled_shared_extension_polys::<F, EF>(
+                        &mut virtual_values,
+                        &coeffs,
+                        &data.polys,
+                    );
+                    challenger.observe(data.commitment.clone());
+                    prover_data.push(WhirBatchedInitialMerkleProverData::SharedExtension {
+                        coeffs,
+                        data: data.merkle_data.clone(),
+                    });
+                }
             }
         }
 
@@ -1231,6 +1397,12 @@ where
                 }
                 WhirBatchedDeferredVerifierOracle::SharedBase { coeffs, commitment } => {
                     WhirBatchedInitialVerifierOracle::SharedBase {
+                        coeffs: coeffs.clone(),
+                        root: commitment.clone(),
+                    }
+                }
+                WhirBatchedDeferredVerifierOracle::SharedExtension { coeffs, commitment } => {
+                    WhirBatchedInitialVerifierOracle::SharedExtension {
                         coeffs: coeffs.clone(),
                         root: commitment.clone(),
                     }

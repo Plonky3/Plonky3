@@ -718,6 +718,11 @@ fn touch_query_targets<BF, EF, RecMmcs>(
                 touch_private_targets(circuit, row);
             }
         }
+        WhirQueryOpeningTargets::SharedExtension { values, .. } => {
+            for row in values {
+                touch_private_targets(circuit, row);
+            }
+        }
         WhirQueryOpeningTargets::Batched { openings } => {
             for opening in openings {
                 touch_query_targets::<BF, EF, RecMmcs>(circuit, opening);
@@ -987,11 +992,11 @@ where
             )?;
             Ok((values.clone(), op_ids))
         }
-        WhirQueryOpeningTargets::SharedBase { .. } | WhirQueryOpeningTargets::Batched { .. } => {
-            Err(VerificationError::InvalidProofShape(
-                "single-root WHIR verifier received a batched/shared query opening".to_string(),
-            ))
-        }
+        WhirQueryOpeningTargets::SharedBase { .. }
+        | WhirQueryOpeningTargets::SharedExtension { .. }
+        | WhirQueryOpeningTargets::Batched { .. } => Err(VerificationError::InvalidProofShape(
+            "single-root WHIR verifier received a batched/shared query opening".to_string(),
+        )),
     }
 }
 

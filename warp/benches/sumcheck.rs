@@ -72,6 +72,7 @@ use p3_circuit::ops::{Poseidon2Config, generate_poseidon2_trace, generate_recomp
 use p3_circuit_prover::{
     WhirNativeCircuitError, WhirNativeCircuitOptions, WhirNativeCircuitProof,
     WhirNativeLocalConstraintKind, prove_whir_native_circuit, verify_whir_native_circuit_proof,
+    whir_native_expected_table_metadata,
 };
 use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
@@ -683,6 +684,14 @@ fn whir_query_opening_public_labels(
             })
             .chain((0..0).map(|i| format!("{prefix}.shared_proof_public[{i}]")))
             .collect(),
+        p3_whir::pcs::proof::QueryOpening::SharedExtension { values, proof: _ } => values
+            .iter()
+            .enumerate()
+            .flat_map(|(row, values)| {
+                (0..values.len()).map(move |i| format!("{prefix}.shared_ext_row[{row}][{i}]"))
+            })
+            .chain((0..0).map(|i| format!("{prefix}.shared_ext_proof_public[{i}]")))
+            .collect(),
         p3_whir::pcs::proof::QueryOpening::Batched { openings } => openings
             .iter()
             .enumerate()
@@ -1032,7 +1041,8 @@ fn query_opening_count<F, EF, Proof>(query: &QueryOpening<F, EF, Proof>) -> usiz
     match query {
         QueryOpening::Base { .. }
         | QueryOpening::Extension { .. }
-        | QueryOpening::SharedBase { .. } => 1,
+        | QueryOpening::SharedBase { .. }
+        | QueryOpening::SharedExtension { .. } => 1,
         QueryOpening::Batched { openings } => openings.iter().map(query_opening_count).sum(),
     }
 }
@@ -1056,22 +1066,34 @@ where
 
 fn recursive_lane_metrics(bundle: &WhirRecursiveBundle) -> LaneMetrics {
     let outer_proof = &bundle.proof.outer_proof;
-    let table_count = outer_proof.table_commitments.len();
-    let max_table_height = bundle
-        .proof
-        .outer_proof
-        .table_commitments
+    let expected_metadata = whir_native_expected_table_metadata::<F, EF>(
+        &bundle.verifier_key.verification_circuit,
+        &bundle.proof.public_statement,
+        bundle.verifier_key.outer_options,
+    )
+    .expect("recursive outer metadata");
+    let table_count = expected_metadata.len();
+    let max_table_height = expected_metadata
         .iter()
-        .map(|table| table.metadata.padded_height)
+        .map(|metadata| metadata.padded_height)
         .max()
         .unwrap_or(0);
-    let total_table_cells = bundle
-        .proof
-        .outer_proof
-        .table_commitments
+    let total_table_cells = expected_metadata
         .iter()
-        .map(|table| table.metadata.padded_height * table.metadata.padded_width)
+        .map(|metadata| metadata.padded_height * metadata.padded_width)
         .sum();
+    let outer_column_batch_random_claims = outer_proof
+        .column_batch_opening_proofs
+        .iter()
+        .flat_map(|proof| &proof.random_opening_values)
+        .map(Vec::len)
+        .sum::<usize>();
+    let outer_terminal_claims = outer_proof
+        .constraint_sumcheck_proofs
+        .iter()
+        .filter_map(|proof| proof.local_proof.as_ref())
+        .map(|proof| proof.terminal_openings.len())
+        .sum::<usize>();
     LaneMetrics {
         proof_bytes: serialized_len(outer_proof, "recursive outer proof"),
         verifier_payload_bytes: serialized_len(
@@ -1086,13 +1108,17 @@ fn recursive_lane_metrics(bundle: &WhirRecursiveBundle) -> LaneMetrics {
             ),
             "recursive total artifact",
         ),
-        commitments: bundle.native.commitments.len() + outer_proof.table_commitments.len(),
+        commitments: bundle.native.commitments.len()
+            + outer_proof.table_commitments.len()
+            + outer_proof.column_batch_commitments.len(),
         opening_claims: bundle.native.claims.iter().map(Vec::len).sum::<usize>()
             + outer_proof
                 .opening_proofs
                 .iter()
                 .map(|proof| proof.opening_claims.len())
-                .sum::<usize>(),
+                .sum::<usize>()
+            + outer_column_batch_random_claims
+            + outer_terminal_claims,
         whir_queries: bundle
             .native
             .proofs
@@ -1101,6 +1127,11 @@ fn recursive_lane_metrics(bundle: &WhirRecursiveBundle) -> LaneMetrics {
             .sum::<usize>()
             + outer_proof
                 .opening_proofs
+                .iter()
+                .map(|proof| whir_proof_query_count(&proof.proof))
+                .sum::<usize>()
+            + outer_proof
+                .column_batch_opening_proofs
                 .iter()
                 .map(|proof| whir_proof_query_count(&proof.proof))
                 .sum::<usize>(),
@@ -1114,6 +1145,14 @@ fn recursive_lane_metrics(bundle: &WhirRecursiveBundle) -> LaneMetrics {
                 .opening_proofs
                 .iter()
                 .map(|proof| whir_proof_sumcheck_rounds(&proof.proof))
+                .sum::<usize>()
+            + outer_proof
+                .column_batch_opening_proofs
+                .iter()
+                .map(|proof| {
+                    whir_proof_sumcheck_rounds(&proof.proof)
+                        + proof.reduction_proof.sumcheck.num_rounds()
+                })
                 .sum::<usize>()
             + outer_proof
                 .constraint_sumcheck_proofs
@@ -2285,6 +2324,14 @@ fn tamper_first_query_opening_value(
         QueryOpening::SharedBase { values, .. } => {
             if let Some(value) = values.iter_mut().find_map(|row| row.first_mut()) {
                 *value += F::ONE;
+                true
+            } else {
+                false
+            }
+        }
+        QueryOpening::SharedExtension { values, .. } => {
+            if let Some(value) = values.iter_mut().find_map(|row| row.first_mut()) {
+                *value += EF::ONE;
                 true
             } else {
                 false

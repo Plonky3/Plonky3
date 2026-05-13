@@ -105,6 +105,10 @@ where
         coeffs: Vec<EF>,
         data: Arc<<MT as Mmcs<F>>::ProverData<DenseMatrix<F>>>,
     },
+    SharedExtension {
+        coeffs: Vec<EF>,
+        data: Arc<<ExtensionMmcs<F, EF, MT> as Mmcs<EF>>::ProverData<DenseMatrix<EF>>>,
+    },
 }
 
 type WhirRoundState<EF, F, MT> =
@@ -601,6 +605,27 @@ where
                                         proof: commitment.opening_proof,
                                     });
                                 }
+                                WhirBatchedInitialMerkleProverData::SharedExtension {
+                                    coeffs,
+                                    data,
+                                } => {
+                                    let commitment =
+                                        extension_mmcs.open_batch(challenge, data.as_ref());
+                                    assert_eq!(
+                                        commitment.opened_values.len(),
+                                        coeffs.len(),
+                                        "shared extension opening arity mismatch"
+                                    );
+                                    for (coeff, answer) in
+                                        coeffs.iter().zip(commitment.opened_values.iter())
+                                    {
+                                        accumulate_scaled(&mut combined, *coeff, answer);
+                                    }
+                                    openings.push(QueryOpening::SharedExtension {
+                                        values: commitment.opened_values,
+                                        proof: commitment.opening_proof,
+                                    });
+                                }
                             }
                         }
                         let answer = combined.unwrap_or_default();
@@ -736,6 +761,22 @@ where
                                         "shared base opening arity mismatch"
                                     );
                                     openings.push(QueryOpening::SharedBase {
+                                        values: commitment.opened_values,
+                                        proof: commitment.opening_proof,
+                                    });
+                                }
+                                WhirBatchedInitialMerkleProverData::SharedExtension {
+                                    coeffs,
+                                    data,
+                                } => {
+                                    let commitment =
+                                        extension_mmcs.open_batch(challenge, data.as_ref());
+                                    assert_eq!(
+                                        commitment.opened_values.len(),
+                                        coeffs.len(),
+                                        "shared extension opening arity mismatch"
+                                    );
+                                    openings.push(QueryOpening::SharedExtension {
                                         values: commitment.opened_values,
                                         proof: commitment.opening_proof,
                                     });

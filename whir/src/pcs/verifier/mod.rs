@@ -67,6 +67,7 @@ pub enum WhirBatchedInitialVerifierOracle<EF, D> {
     Base { coeff: EF, root: D },
     Extension { coeff: EF, root: D },
     SharedBase { coeffs: Vec<EF>, root: D },
+    SharedExtension { coeffs: Vec<EF>, root: D },
 }
 
 /// WHIR protocol verifier.
@@ -287,7 +288,8 @@ where
             match oracle {
                 WhirBatchedInitialVerifierOracle::Base { root, .. }
                 | WhirBatchedInitialVerifierOracle::Extension { root, .. }
-                | WhirBatchedInitialVerifierOracle::SharedBase { root, .. } => {
+                | WhirBatchedInitialVerifierOracle::SharedBase { root, .. }
+                | WhirBatchedInitialVerifierOracle::SharedExtension { root, .. } => {
                     challenger.observe(root.clone());
                 }
             }
@@ -673,6 +675,35 @@ where
                             accumulate_scaled_base::<F, EF>(&mut combined, *coeff, values);
                         }
                     }
+                    (
+                        WhirBatchedInitialVerifierOracle::SharedExtension { coeffs, root },
+                        QueryOpening::SharedExtension { values, proof },
+                    ) => {
+                        if values.len() != coeffs.len() {
+                            return Err(VerifierError::MerkleProofInvalid {
+                                position: index,
+                                reason: "shared extension opening arity mismatch".to_string(),
+                            });
+                        }
+                        let shared_dimensions = vec![dimensions[0]; values.len()];
+                        extension_mmcs
+                            .verify_batch(
+                                root,
+                                &shared_dimensions,
+                                index,
+                                BatchOpeningRef {
+                                    opened_values: values,
+                                    opening_proof: proof,
+                                },
+                            )
+                            .map_err(|_| VerifierError::MerkleProofInvalid {
+                                position: index,
+                                reason: "shared extension Merkle proof failed".to_string(),
+                            })?;
+                        for (coeff, values) in coeffs.iter().zip(values.iter()) {
+                            accumulate_scaled(&mut combined, *coeff, values);
+                        }
+                    }
                     _ => {
                         return Err(VerifierError::MerkleProofInvalid {
                             position: index,
@@ -763,6 +794,14 @@ where
                         position: index,
                         reason: "unexpected shared-base Merkle opening for single-root verifier"
                             .to_string(),
+                    });
+                }
+                QueryOpening::SharedExtension { .. } => {
+                    return Err(VerifierError::MerkleProofInvalid {
+                        position: index,
+                        reason:
+                            "unexpected shared-extension Merkle opening for single-root verifier"
+                                .to_string(),
                     });
                 }
             };

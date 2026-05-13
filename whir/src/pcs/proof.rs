@@ -112,6 +112,10 @@ pub enum QueryOpening<F, EF, Proof> {
     /// polynomials as an MMCS matrix batch.
     #[serde(rename = "shared_base")]
     SharedBase { values: Vec<Vec<F>>, proof: Proof },
+    /// Opening of one shared extension-field root that commits several initial
+    /// polynomials as an MMCS matrix batch.
+    #[serde(rename = "shared_extension")]
+    SharedExtension { values: Vec<Vec<EF>>, proof: Proof },
     /// Batched initial opening against multiple independently committed
     /// oracles.
     #[serde(rename = "batched")]

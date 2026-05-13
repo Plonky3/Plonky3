@@ -629,7 +629,8 @@ where
     match query {
         QueryOpening::Base { proof, .. }
         | QueryOpening::Extension { proof, .. }
-        | QueryOpening::SharedBase { proof, .. } => {
+        | QueryOpening::SharedBase { proof, .. }
+        | QueryOpening::SharedExtension { proof, .. } => {
             let siblings = convert_merkle_proof_to_siblings::<F, EF, DIGEST_ELEMS>(proof);
             for sibling in siblings {
                 if *op_idx >= op_ids.len() {

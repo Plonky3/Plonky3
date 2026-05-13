@@ -340,6 +340,8 @@ pub enum WhirBatchedInitialOracleTargets<Comm> {
     Extension { coeff: Target, root: Comm },
     /// Several base-field columns committed under one shared root.
     SharedBase { coeffs: Vec<Target>, root: Comm },
+    /// Several extension-field columns committed under one shared root.
+    SharedExtension { coeffs: Vec<Target>, root: Comm },
 }
 
 impl<EF, Comm> Recursive<EF> for WhirBatchedInitialOracleTargets<Comm>
@@ -364,6 +366,15 @@ where
                     .alloc_public_inputs(coeffs.len(), "WHIR batched shared-base coefficients"),
                 root: Comm::new(circuit, root),
             },
+            WhirBatchedInitialVerifierOracle::SharedExtension { coeffs, root } => {
+                Self::SharedExtension {
+                    coeffs: circuit.alloc_public_inputs(
+                        coeffs.len(),
+                        "WHIR batched shared-extension coefficients",
+                    ),
+                    root: Comm::new(circuit, root),
+                }
+            }
         }
     }
 
@@ -380,6 +391,11 @@ where
                 .copied()
                 .chain(Comm::get_values(root))
                 .collect(),
+            WhirBatchedInitialVerifierOracle::SharedExtension { coeffs, root } => coeffs
+                .iter()
+                .copied()
+                .chain(Comm::get_values(root))
+                .collect(),
         }
     }
 
@@ -387,7 +403,8 @@ where
         match input {
             WhirBatchedInitialVerifierOracle::Base { root, .. }
             | WhirBatchedInitialVerifierOracle::Extension { root, .. }
-            | WhirBatchedInitialVerifierOracle::SharedBase { root, .. } => {
+            | WhirBatchedInitialVerifierOracle::SharedBase { root, .. }
+            | WhirBatchedInitialVerifierOracle::SharedExtension { root, .. } => {
                 Comm::get_private_values(root)
             }
         }
@@ -490,6 +507,13 @@ pub enum WhirQueryOpeningTargets<F: Field, EF: ExtensionField<F>, RecMmcs: Recur
         /// Recursive MMCS proof for the shared opened row.
         proof: RecMmcs::Proof,
     },
+    /// Opening of several extension-field rows under one shared MMCS root.
+    SharedExtension {
+        /// Opened extension rows.
+        values: Vec<Vec<Target>>,
+        /// Recursive MMCS proof for the shared opened row.
+        proof: RecMmcs::Proof,
+    },
     /// Batched openings against several initial commitments.
     Batched {
         /// Inner openings in native proof order.
@@ -522,6 +546,15 @@ where
                     .collect(),
                 proof: RecMmcs::Proof::new(circuit, proof),
             },
+            QueryOpening::SharedExtension { values, proof } => Self::SharedExtension {
+                values: values
+                    .iter()
+                    .map(|row| {
+                        circuit.alloc_public_inputs(row.len(), "WHIR shared extension query row")
+                    })
+                    .collect(),
+                proof: RecMmcs::Proof::new(circuit, proof),
+            },
             QueryOpening::Batched { openings } => Self::Batched {
                 openings: openings
                     .iter()
@@ -548,6 +581,11 @@ where
                 .flat_map(|row| row.iter().map(|v| EF::from(*v)))
                 .chain(RecMmcs::Proof::get_values(proof))
                 .collect(),
+            QueryOpening::SharedExtension { values, proof } => values
+                .iter()
+                .flat_map(|row| row.iter().copied())
+                .chain(RecMmcs::Proof::get_values(proof))
+                .collect(),
             QueryOpening::Batched { openings } => {
                 openings.iter().flat_map(Self::get_values).collect()
             }
@@ -558,7 +596,10 @@ where
         match input {
             QueryOpening::Base { proof, .. }
             | QueryOpening::Extension { proof, .. }
-            | QueryOpening::SharedBase { proof, .. } => RecMmcs::Proof::get_private_values(proof),
+            | QueryOpening::SharedBase { proof, .. }
+            | QueryOpening::SharedExtension { proof, .. } => {
+                RecMmcs::Proof::get_private_values(proof)
+            }
             QueryOpening::Batched { openings } => {
                 openings.iter().flat_map(Self::get_private_values).collect()
             }
@@ -595,6 +636,15 @@ where
                     .collect(),
                 proof: RecMmcs::Proof::new_private_input(circuit, proof),
             },
+            QueryOpening::SharedExtension { values, proof } => Self::SharedExtension {
+                values: values
+                    .iter()
+                    .map(|row| {
+                        circuit.alloc_private_inputs(row.len(), "WHIR shared extension query row")
+                    })
+                    .collect(),
+                proof: RecMmcs::Proof::new_private_input(circuit, proof),
+            },
             QueryOpening::Batched { openings } => Self::Batched {
                 openings: openings
                     .iter()
@@ -621,6 +671,11 @@ where
             QueryOpening::SharedBase { values, proof } => values
                 .iter()
                 .flat_map(|row| row.iter().map(|v| EF::from(*v)))
+                .chain(RecMmcs::Proof::get_private_input_values(proof))
+                .collect(),
+            QueryOpening::SharedExtension { values, proof } => values
+                .iter()
+                .flat_map(|row| row.iter().copied())
                 .chain(RecMmcs::Proof::get_private_input_values(proof))
                 .collect(),
             QueryOpening::Batched { openings } => openings
