@@ -653,7 +653,7 @@ where
                 actual: zk_data.pow_witnesses.len(),
             });
         }
-        let h_size = core::cmp::max(ell_zk, 3);
+        let h_size = ell_zk.max(3);
         let wire_size = h_size - 1;
         for (idx, wire) in zk_data.round_coefficients.iter().enumerate() {
             if wire.len() != wire_size {
