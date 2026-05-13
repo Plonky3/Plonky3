@@ -4,6 +4,10 @@ on:
   workflow_dispatch:
   schedule:
     - cron: "0 3 * * *"
+  pull_request:
+    branches: [ "*" ]
+    paths:
+      - "whir/src/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
