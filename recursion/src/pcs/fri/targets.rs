@@ -23,7 +23,7 @@ use crate::Target;
 use crate::challenger::CircuitChallenger;
 use crate::traits::{
     ComsWithOpeningsTargets, Recursive, RecursiveChallenger, RecursiveExtensionMmcs, RecursiveMmcs,
-    RecursivePcs,
+    RecursivePcs, RecursivePrivateInput,
 };
 use crate::types::{OpenedValuesTargetsWithLookups, RecursiveLagrangeSelectors};
 use crate::verifier::{ObservableCommitment, VerificationError};
@@ -392,6 +392,24 @@ impl<F: Field, EF: ExtensionField<F>, const DIGEST_ELEMS: usize> Recursive<EF>
     }
 }
 
+impl<F: Field, EF: ExtensionField<F>, const DIGEST_ELEMS: usize> RecursivePrivateInput<EF>
+    for MerkleCapTargets<F, DIGEST_ELEMS>
+{
+    fn new_private_input(circuit: &mut CircuitBuilder<EF>, input: &Self::Input) -> Self {
+        let cap_targets = (0..input.num_roots())
+            .map(|_| circuit.alloc_private_input_array("MMCS commitment cap entry"))
+            .collect();
+        Self {
+            cap_targets,
+            _phantom: PhantomData,
+        }
+    }
+
+    fn get_private_input_values(input: &Self::Input) -> Vec<EF> {
+        Self::get_values(input)
+    }
+}
+
 /// `HashProofTargets` corresponds to a Merkle tree `Proof` in the form of a vector of hashes with `DIGEST_ELEMS` digest elements.
 // TODO: This could be fully removed?
 pub struct HashProofTargets<F, const DIGEST_ELEMS: usize> {
@@ -415,6 +433,21 @@ impl<F: Field, EF: ExtensionField<F>, const DIGEST_ELEMS: usize> Recursive<EF>
     }
 
     fn get_values(_input: &Self::Input) -> Vec<EF> {
+        vec![]
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>, const DIGEST_ELEMS: usize> RecursivePrivateInput<EF>
+    for HashProofTargets<F, DIGEST_ELEMS>
+{
+    fn new_private_input(_circuit: &mut CircuitBuilder<EF>, _input: &Self::Input) -> Self {
+        Self {
+            hash_proof_targets: vec![],
+            _phantom: PhantomData,
+        }
+    }
+
+    fn get_private_input_values(_input: &Self::Input) -> Vec<EF> {
         vec![]
     }
 }

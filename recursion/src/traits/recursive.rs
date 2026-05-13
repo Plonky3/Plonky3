@@ -47,6 +47,16 @@ pub trait Recursive<F: Field> {
     fn get_values(input: &Self::Input) -> Vec<F>;
 }
 
+/// Variant of [`Recursive`] for witness data that should not be exposed as
+/// public input.
+pub trait RecursivePrivateInput<F: Field>: Recursive<F> {
+    /// Allocate the input as private witness targets.
+    fn new_private_input(circuit: &mut CircuitBuilder<F>, input: &Self::Input) -> Self;
+
+    /// Extract values for targets allocated by [`Self::new_private_input`].
+    fn get_private_input_values(input: &Self::Input) -> Vec<F>;
+}
+
 pub trait RecursiveLookupGadget<F: Field>: LookupGadget {
     fn verify_global_final_value_circuit(
         &self,

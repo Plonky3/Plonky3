@@ -40,6 +40,7 @@ p3-symmetric.workspace = true
 p3-uni-stark.workspace = true
 p3-util.workspace = true
 p3-whir.workspace = true
+postcard = { workspace = true, features = ["alloc"] }
 rand.workspace = true
 serde.workspace = true
 strum.workspace = true
@@ -51,13 +52,13 @@ unroll.workspace = true
 criterion = { version = "0.8", features = ["html_reports"] }
 p3-batch-stark.workspace = true
 p3-test-utils.workspace = true
-postcard = { version = "1.1", default-features = false, features = ["alloc"] }
 rand.workspace = true
 tracing-forest = { workspace = true, features = ["smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
+std = []
 
 [[bench]]
 name = "prover"

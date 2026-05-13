@@ -31,7 +31,7 @@ criterion.workspace = true
 p3-batch-stark.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-circuit.workspace = true
-p3-circuit-prover.workspace = true
+p3-circuit-prover = { workspace = true, features = ["std"] }
 p3-fri.workspace = true
 p3-poseidon2-circuit-air.workspace = true
 p3-recursion.workspace = true
@@ -46,6 +46,7 @@ recursive-parallel = [
     "parallel",
     "p3-whir/parallel",
     "p3-circuit-prover/parallel",
+    "p3-circuit-prover/std",
     "p3-poseidon2-circuit-air/parallel",
 ]
 

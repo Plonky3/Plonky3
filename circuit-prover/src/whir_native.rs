@@ -13,6 +13,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
+#[cfg(feature = "std")]
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+
 use p3_air::{Air, AirBuilder, BaseAir, RowWindow};
 use p3_baby_bear::BabyBear;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
@@ -26,6 +29,7 @@ use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, Field, PrimeCharacteristicRing, PrimeField64, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_poseidon2_circuit_air::{BabyBearD4Width16, extract_preprocessed_from_operations};
@@ -312,6 +316,468 @@ fn unsupported_poseidon2_component(op_type: &str) -> WhirNativeCircuitError {
     ))
 }
 
+#[cfg(feature = "std")]
+type WhirNativeDiagnosticInstant = Option<std::time::Instant>;
+#[cfg(not(feature = "std"))]
+type WhirNativeDiagnosticInstant = ();
+
+#[derive(Clone, Debug)]
+struct WhirNativeDiagnostics {
+    #[cfg(feature = "std")]
+    print_phases: bool,
+    #[cfg(feature = "std")]
+    json_path: Option<String>,
+    #[cfg(feature = "std")]
+    context: WhirNativeDiagnosticContext,
+}
+
+#[cfg(feature = "std")]
+#[derive(Clone, Debug)]
+struct WhirNativeDiagnosticContext {
+    k: Option<usize>,
+    n: Option<usize>,
+    arity: Option<usize>,
+}
+
+impl WhirNativeDiagnostics {
+    fn from_env() -> Self {
+        #[cfg(feature = "std")]
+        {
+            Self {
+                print_phases: std::env::var("P3_WHIR_NATIVE_PHASES").as_deref() == Ok("1"),
+                json_path: std::env::var("P3_WHIR_NATIVE_JSON")
+                    .ok()
+                    .filter(|path| !path.trim().is_empty()),
+                context: WhirNativeDiagnosticContext {
+                    k: read_usize_env("P3_WARP_SUMCHECK_K"),
+                    n: read_usize_env("P3_WARP_SUMCHECK_N"),
+                    arity: read_usize_env("P3_WARP_ARITY"),
+                },
+            }
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            Self {}
+        }
+    }
+
+    #[cfg(feature = "std")]
+    fn active(&self) -> bool {
+        self.print_phases || self.json_path.is_some()
+    }
+
+    fn start(&self) -> WhirNativeDiagnosticInstant {
+        #[cfg(feature = "std")]
+        {
+            self.active().then(std::time::Instant::now)
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            let _ = self;
+        }
+    }
+
+    fn record_phase(
+        &self,
+        phase: &str,
+        start: WhirNativeDiagnosticInstant,
+        table_count: Option<usize>,
+        opening_claim_count: Option<usize>,
+        proof_byte_count: Option<usize>,
+    ) {
+        #[cfg(feature = "std")]
+        {
+            let Some(start) = start else {
+                return;
+            };
+            let elapsed = start.elapsed();
+            if self.print_phases {
+                eprintln!(
+                    "[whir-native] phase={phase} elapsed={elapsed:?} table_count={} opening_claims={} proof_bytes={}",
+                    text_optional_usize(table_count),
+                    text_optional_usize(opening_claim_count),
+                    text_optional_usize(proof_byte_count),
+                );
+            }
+            if self.json_path.is_some() {
+                self.append_jsonl(&format!(
+                    concat!(
+                        "{{",
+                        "\"component\":\"whir_native_outer_proof\",",
+                        "\"event\":\"phase\",",
+                        "\"k\":{},",
+                        "\"n\":{},",
+                        "\"arity\":{},",
+                        "\"phase\":{},",
+                        "\"duration_nanos\":{},",
+                        "\"table_count\":{},",
+                        "\"opening_claim_count\":{},",
+                        "\"proof_byte_count\":{}",
+                        "}}"
+                    ),
+                    json_optional_usize(self.context.k),
+                    json_optional_usize(self.context.n),
+                    json_optional_usize(self.context.arity),
+                    json_string(phase),
+                    elapsed.as_nanos(),
+                    json_optional_usize(table_count),
+                    json_optional_usize(opening_claim_count),
+                    json_optional_usize(proof_byte_count),
+                ));
+            }
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            let _ = (
+                phase,
+                start,
+                table_count,
+                opening_claim_count,
+                proof_byte_count,
+            );
+        }
+    }
+
+    fn record_table(
+        &self,
+        phase: &str,
+        start: WhirNativeDiagnosticInstant,
+        table_index: usize,
+        metadata: &WhirNativeTableMetadata,
+        opening_claim_count: usize,
+    ) {
+        #[cfg(feature = "std")]
+        {
+            let Some(start) = start else {
+                return;
+            };
+            let elapsed = start.elapsed();
+            let op_type = if metadata.op_type.is_empty() {
+                "-"
+            } else {
+                metadata.op_type.as_str()
+            };
+            if self.print_phases {
+                eprintln!(
+                    "[whir-native] table phase={phase} table_index={table_index} kind={:?} op_type={} active_rows={} padded_height={} padded_width={} num_variables={} opening_claims={} elapsed={elapsed:?}",
+                    metadata.kind,
+                    op_type,
+                    metadata.active_rows,
+                    metadata.padded_height,
+                    metadata.padded_width,
+                    metadata.num_variables,
+                    opening_claim_count,
+                );
+            }
+            if self.json_path.is_some() {
+                self.append_jsonl(&format!(
+                    concat!(
+                        "{{",
+                        "\"component\":\"whir_native_outer_proof\",",
+                        "\"event\":\"table_subphase\",",
+                        "\"k\":{},",
+                        "\"n\":{},",
+                        "\"arity\":{},",
+                        "\"phase\":{},",
+                        "\"duration_nanos\":{},",
+                        "\"table_index\":{},",
+                        "\"kind\":{},",
+                        "\"op_type\":{},",
+                        "\"active_rows\":{},",
+                        "\"padded_height\":{},",
+                        "\"padded_width\":{},",
+                        "\"width\":{},",
+                        "\"num_variables\":{},",
+                        "\"opening_claim_count\":{}",
+                        "}}"
+                    ),
+                    json_optional_usize(self.context.k),
+                    json_optional_usize(self.context.n),
+                    json_optional_usize(self.context.arity),
+                    json_string(phase),
+                    elapsed.as_nanos(),
+                    table_index,
+                    json_string(&format!("{:?}", metadata.kind)),
+                    json_string(&metadata.op_type),
+                    metadata.active_rows,
+                    metadata.padded_height,
+                    metadata.padded_width,
+                    metadata.width,
+                    metadata.num_variables,
+                    opening_claim_count,
+                ));
+            }
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            let _ = (phase, start, table_index, metadata, opening_claim_count);
+        }
+    }
+
+    #[cfg(feature = "std")]
+    fn append_jsonl(&self, line: &str) {
+        let Some(path) = &self.json_path else {
+            return;
+        };
+        use std::io::Write as _;
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            Ok(mut file) => {
+                if let Err(err) = writeln!(file, "{line}") {
+                    eprintln!("[whir-native] failed to write JSONL `{path}`: {err}");
+                }
+            }
+            Err(err) => eprintln!("[whir-native] failed to open JSONL `{path}`: {err}"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum WhirNativeLocalDiagMetric {
+    TableColumn,
+    StaticSelector,
+    WitnessAddress,
+    WitnessValue,
+    Poseidon2NextRow,
+    ConstraintBatch,
+}
+
+#[derive(Debug)]
+struct WhirNativeLocalProofDiagnostics {
+    kind: WhirNativeLocalConstraintKind,
+    table_index: usize,
+    #[cfg(feature = "std")]
+    op_type: String,
+    #[cfg(feature = "std")]
+    enabled: bool,
+    #[cfg(feature = "std")]
+    table_column_calls: AtomicUsize,
+    #[cfg(feature = "std")]
+    table_column_nanos: AtomicU64,
+    #[cfg(feature = "std")]
+    static_selector_calls: AtomicUsize,
+    #[cfg(feature = "std")]
+    static_selector_nanos: AtomicU64,
+    #[cfg(feature = "std")]
+    witness_address_calls: AtomicUsize,
+    #[cfg(feature = "std")]
+    witness_address_nanos: AtomicU64,
+    #[cfg(feature = "std")]
+    witness_value_calls: AtomicUsize,
+    #[cfg(feature = "std")]
+    witness_value_nanos: AtomicU64,
+    #[cfg(feature = "std")]
+    poseidon2_next_row_calls: AtomicUsize,
+    #[cfg(feature = "std")]
+    poseidon2_next_row_nanos: AtomicU64,
+    #[cfg(feature = "std")]
+    constraint_batch_calls: AtomicUsize,
+    #[cfg(feature = "std")]
+    constraint_batch_nanos: AtomicU64,
+}
+
+impl WhirNativeLocalProofDiagnostics {
+    fn new(
+        kind: WhirNativeLocalConstraintKind,
+        table_index: usize,
+        metadata: &WhirNativeTableMetadata,
+    ) -> Self {
+        #[cfg(feature = "std")]
+        {
+            Self {
+                kind,
+                table_index,
+                op_type: metadata.op_type.clone(),
+                enabled: std::env::var("P3_WHIR_NATIVE_PHASES").as_deref() == Ok("1"),
+                table_column_calls: AtomicUsize::new(0),
+                table_column_nanos: AtomicU64::new(0),
+                static_selector_calls: AtomicUsize::new(0),
+                static_selector_nanos: AtomicU64::new(0),
+                witness_address_calls: AtomicUsize::new(0),
+                witness_address_nanos: AtomicU64::new(0),
+                witness_value_calls: AtomicUsize::new(0),
+                witness_value_nanos: AtomicU64::new(0),
+                poseidon2_next_row_calls: AtomicUsize::new(0),
+                poseidon2_next_row_nanos: AtomicU64::new(0),
+                constraint_batch_calls: AtomicUsize::new(0),
+                constraint_batch_nanos: AtomicU64::new(0),
+            }
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            let _ = metadata;
+            Self { kind, table_index }
+        }
+    }
+
+    #[cfg(feature = "std")]
+    fn record_count(&self, metric: WhirNativeLocalDiagMetric, calls: usize) {
+        if !self.enabled || calls == 0 {
+            return;
+        }
+        match metric {
+            WhirNativeLocalDiagMetric::TableColumn => {
+                self.table_column_calls.fetch_add(calls, Ordering::Relaxed);
+            }
+            WhirNativeLocalDiagMetric::StaticSelector => {
+                self.static_selector_calls
+                    .fetch_add(calls, Ordering::Relaxed);
+            }
+            WhirNativeLocalDiagMetric::WitnessAddress => {
+                self.witness_address_calls
+                    .fetch_add(calls, Ordering::Relaxed);
+            }
+            WhirNativeLocalDiagMetric::WitnessValue => {
+                self.witness_value_calls.fetch_add(calls, Ordering::Relaxed);
+            }
+            WhirNativeLocalDiagMetric::Poseidon2NextRow => {
+                self.poseidon2_next_row_calls
+                    .fetch_add(calls, Ordering::Relaxed);
+            }
+            WhirNativeLocalDiagMetric::ConstraintBatch => {
+                self.constraint_batch_calls
+                    .fetch_add(calls, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn time<T>(&self, metric: WhirNativeLocalDiagMetric, calls: usize, f: impl FnOnce() -> T) -> T {
+        #[cfg(feature = "std")]
+        {
+            if !self.enabled {
+                return f();
+            }
+            let start = std::time::Instant::now();
+            let result = f();
+            let nanos = start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+            self.record_count(metric, calls);
+            match metric {
+                WhirNativeLocalDiagMetric::TableColumn => {
+                    self.table_column_nanos.fetch_add(nanos, Ordering::Relaxed)
+                }
+                WhirNativeLocalDiagMetric::StaticSelector => self
+                    .static_selector_nanos
+                    .fetch_add(nanos, Ordering::Relaxed),
+                WhirNativeLocalDiagMetric::WitnessAddress => self
+                    .witness_address_nanos
+                    .fetch_add(nanos, Ordering::Relaxed),
+                WhirNativeLocalDiagMetric::WitnessValue => {
+                    self.witness_value_nanos.fetch_add(nanos, Ordering::Relaxed)
+                }
+                WhirNativeLocalDiagMetric::Poseidon2NextRow => self
+                    .poseidon2_next_row_nanos
+                    .fetch_add(nanos, Ordering::Relaxed),
+                WhirNativeLocalDiagMetric::ConstraintBatch => self
+                    .constraint_batch_nanos
+                    .fetch_add(nanos, Ordering::Relaxed),
+            };
+            result
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            let _ = (metric, calls);
+            f()
+        }
+    }
+
+    fn finish(&self) {
+        #[cfg(feature = "std")]
+        {
+            if !self.enabled {
+                return;
+            }
+            let op_type = if self.op_type.is_empty() {
+                "-"
+            } else {
+                self.op_type.as_str()
+            };
+            eprintln!(
+                "[whir-native] local-detail table_index={} kind={:?} op_type={} table_column_evals={} table_column_elapsed_ns={} static_selector_evals={} static_selector_elapsed_ns={} witness_address_evals={} witness_address_elapsed_ns={} witness_value_mles={} witness_value_elapsed_ns={} poseidon2_next_row_evals={} poseidon2_next_row_elapsed_ns={} constraint_batches={} constraint_batch_elapsed_ns={}",
+                self.table_index,
+                self.kind,
+                op_type,
+                self.table_column_calls.load(Ordering::Relaxed),
+                self.table_column_nanos.load(Ordering::Relaxed),
+                self.static_selector_calls.load(Ordering::Relaxed),
+                self.static_selector_nanos.load(Ordering::Relaxed),
+                self.witness_address_calls.load(Ordering::Relaxed),
+                self.witness_address_nanos.load(Ordering::Relaxed),
+                self.witness_value_calls.load(Ordering::Relaxed),
+                self.witness_value_nanos.load(Ordering::Relaxed),
+                self.poseidon2_next_row_calls.load(Ordering::Relaxed),
+                self.poseidon2_next_row_nanos.load(Ordering::Relaxed),
+                self.constraint_batch_calls.load(Ordering::Relaxed),
+                self.constraint_batch_nanos.load(Ordering::Relaxed),
+            );
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            let _ = (self.kind, self.table_index);
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+fn read_usize_env(name: &str) -> Option<usize> {
+    std::env::var(name).ok()?.parse().ok()
+}
+
+#[cfg(feature = "std")]
+fn text_optional_usize(value: Option<usize>) -> String {
+    value.map_or_else(|| "-".to_string(), |value| value.to_string())
+}
+
+#[cfg(feature = "std")]
+fn json_optional_usize(value: Option<usize>) -> String {
+    value.map_or_else(|| "null".to_string(), |value| value.to_string())
+}
+
+#[cfg(feature = "std")]
+fn json_string(value: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch.is_control() => out.push_str(&format!("\\u{:04x}", ch as u32)),
+            ch => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
+#[cfg(feature = "std")]
+fn whir_native_proof_byte_count<F, EF, MT>(
+    proof: &WhirNativeCircuitProof<F, EF, MT>,
+) -> Option<usize>
+where
+    F: Send + Sync + Clone + Serialize,
+    EF: Serialize,
+    MT: Mmcs<F>,
+    MT::Commitment: Serialize,
+    MT::Proof: Serialize,
+{
+    postcard::to_allocvec(proof).ok().map(|bytes| bytes.len())
+}
+
+#[cfg(not(feature = "std"))]
+fn whir_native_proof_byte_count<F, EF, MT>(
+    _proof: &WhirNativeCircuitProof<F, EF, MT>,
+) -> Option<usize>
+where
+    F: Send + Sync + Clone,
+    MT: Mmcs<F>,
+{
+    None
+}
+
 /// Build and prove a WHIR-native circuit table proof.
 #[allow(clippy::too_many_arguments)]
 pub fn prove_whir_native_circuit<
@@ -366,12 +832,27 @@ where
     }
     ensure_oracle_only_supported(circuit)?;
 
+    let diagnostics = WhirNativeDiagnostics::from_env();
+    let total_start = diagnostics.start();
+
+    let phase_start = diagnostics.start();
     let payload = trace_payload_from_traces::<F, EF>(circuit, traces)?;
+    diagnostics.record_phase("trace_payload_from_traces", phase_start, None, None, None);
     let public_io_digest = compute_public_io_digest::<F, EF>(public_inputs);
     let shape_digest = compute_shape_digest::<F, EF>(circuit);
 
+    let phase_start = diagnostics.start();
     let tables = build_tables(&payload, options)?;
+    diagnostics.record_phase("build_tables", phase_start, Some(tables.len()), None, None);
+    let phase_start = diagnostics.start();
     let expected_metadata = expected_table_metadata::<F, EF>(circuit, public_inputs, options)?;
+    diagnostics.record_phase(
+        "expected_table_metadata",
+        phase_start,
+        Some(expected_metadata.len()),
+        None,
+        None,
+    );
     if tables.len() != expected_metadata.len() {
         return Err(WhirNativeCircuitError::TableCountMismatch {
             expected: expected_metadata.len(),
@@ -388,7 +869,9 @@ where
     let mut table_prover_data = Vec::with_capacity(tables.len());
     let mut table_challengers = Vec::with_capacity(tables.len());
 
+    let phase_start = diagnostics.start();
     for (table_index, table) in tables.iter().enumerate() {
+        let table_start = diagnostics.start();
         let pcs = make_pcs(table.metadata.num_variables);
         let mut challenger = make_challenger();
         observe_table_context(
@@ -409,11 +892,28 @@ where
         });
         table_prover_data.push(prover_data);
         table_challengers.push(challenger);
+        diagnostics.record_table(
+            "table_commitment",
+            table_start,
+            table_index,
+            &table.metadata,
+            0,
+        );
     }
+    diagnostics.record_phase(
+        "table_commitments",
+        phase_start,
+        Some(tables.len()),
+        None,
+        None,
+    );
 
     let mut constraint_sumcheck_proofs = Vec::with_capacity(tables.len());
     let mut terminal_claims_by_table = vec![Vec::new(); tables.len()];
+    let mut total_terminal_claims = 0usize;
+    let phase_start = diagnostics.start();
     for (table_index, table) in tables.iter().enumerate() {
+        let table_start = diagnostics.start();
         let local_proof = prove_table_local_constraints::<F, EF, MT, Challenger, MakeChallenger>(
             circuit,
             public_inputs,
@@ -431,9 +931,11 @@ where
                 table.metadata.kind, table.metadata.op_type
             ))
         })?;
-        for (claim_table_index, point, value) in
-            local_proof_terminal_claims::<EF>(local_proof.as_ref(), &expected_metadata)?
-        {
+        let terminal_claims =
+            local_proof_terminal_claims::<EF>(local_proof.as_ref(), &expected_metadata)?;
+        let table_terminal_claim_count = terminal_claims.len();
+        total_terminal_claims += table_terminal_claim_count;
+        for (claim_table_index, point, value) in terminal_claims {
             terminal_claims_by_table[claim_table_index].push((point, value));
         }
         constraint_sumcheck_proofs.push(WhirNativeConstraintSumcheckProof {
@@ -442,15 +944,32 @@ where
             claimed_zero_sum: EF::ZERO,
             local_proof,
         });
+        diagnostics.record_table(
+            "local_constraint_proof",
+            table_start,
+            table_index,
+            &table.metadata,
+            table_terminal_claim_count,
+        );
     }
+    diagnostics.record_phase(
+        "local_constraint_proofs",
+        phase_start,
+        Some(tables.len()),
+        Some(total_terminal_claims),
+        None,
+    );
 
     let mut opening_proofs = Vec::with_capacity(tables.len());
+    let mut total_opening_claims = 0usize;
+    let phase_start = diagnostics.start();
     for (table_index, ((table, prover_data), mut challenger)) in tables
         .iter()
         .zip(table_prover_data)
         .zip(table_challengers)
         .enumerate()
     {
+        let table_start = diagnostics.start();
         let pcs = make_pcs(table.metadata.num_variables);
         let mut points = sample_table_opening_points(
             &mut challenger,
@@ -468,19 +987,36 @@ where
             core::slice::from_ref(&points),
             &mut challenger,
         );
-        let opening_claims = points
+        let opening_claims: Vec<(Vec<EF>, EF)> = points
             .into_iter()
             .zip(opened_values[0].iter().copied())
             .map(|(point, value)| (point.as_slice().to_vec(), value))
             .collect();
+        let opening_claim_count = opening_claims.len();
+        total_opening_claims += opening_claim_count;
 
         opening_proofs.push(WhirNativeTableOpeningProof {
             table_index,
             opening_claims,
             proof,
         });
+        diagnostics.record_table(
+            "whir_opening",
+            table_start,
+            table_index,
+            &table.metadata,
+            opening_claim_count,
+        );
     }
+    diagnostics.record_phase(
+        "whir_openings",
+        phase_start,
+        Some(tables.len()),
+        Some(total_opening_claims),
+        None,
+    );
 
+    let phase_start = diagnostics.start();
     let proof = WhirNativeCircuitProof {
         table_commitments,
         constraint_sumcheck_proofs,
@@ -488,7 +1024,16 @@ where
         public_io_digest,
         shape_digest,
     };
+    let proof_byte_count = whir_native_proof_byte_count(&proof);
+    diagnostics.record_phase(
+        "final_proof_assembly",
+        phase_start,
+        Some(tables.len()),
+        Some(total_opening_claims),
+        proof_byte_count,
+    );
 
+    let phase_start = diagnostics.start();
     verify_whir_native_circuit_proof::<
         F,
         EF,
@@ -508,6 +1053,20 @@ where
         make_challenger,
         _poseidon_eval,
     )?;
+    diagnostics.record_phase(
+        "verify_whir_native_circuit_proof",
+        phase_start,
+        Some(tables.len()),
+        Some(total_opening_claims),
+        None,
+    );
+    diagnostics.record_phase(
+        "total",
+        total_start,
+        Some(tables.len()),
+        Some(total_opening_claims),
+        proof_byte_count,
+    );
 
     Ok(proof)
 }
@@ -1978,8 +2537,110 @@ where
     F: Field,
     EF: ExtensionField<F>,
 {
-    let point = whir_native_table_column_point::<F, EF>(&table.metadata, row_point, column)?;
-    Ok(Poly::new(table.values.clone()).eval_ext::<F>(&point))
+    validate_row_point(table.metadata.padded_height, row_point)?;
+    let column_values = table_column_values(table, column)?;
+    Ok(Poly::eval_ext_slice::<F>(&column_values, row_point))
+}
+
+fn table_column_values<EF>(
+    table: &WhirNativeTableData<EF>,
+    column: usize,
+) -> Result<Vec<EF>, WhirNativeCircuitError>
+where
+    EF: Field,
+{
+    if column >= table.metadata.padded_width {
+        return Err(WhirNativeCircuitError::ConstraintViolation(format!(
+            "column {column} out of range for padded width {}",
+            table.metadata.padded_width
+        )));
+    }
+    Ok((0..table.metadata.padded_height)
+        .map(|row| table.values[row * table.metadata.padded_width + column])
+        .collect())
+}
+
+fn active_selector_values<EF>(
+    active_rows: usize,
+    padded_height: usize,
+) -> Result<Vec<EF>, WhirNativeCircuitError>
+where
+    EF: Field,
+{
+    if active_rows > padded_height {
+        return Err(WhirNativeCircuitError::ConstraintViolation(format!(
+            "active row count {active_rows} exceeds padded height {padded_height}"
+        )));
+    }
+    let mut evals = EF::zero_vec(padded_height);
+    for value in evals.iter_mut().take(active_rows) {
+        *value = EF::ONE;
+    }
+    Ok(evals)
+}
+
+fn row_index_values<F, EF>(padded_height: usize) -> Vec<EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    (0..padded_height)
+        .map(|row| ef_from_u64::<F, EF>(row as u64))
+        .collect()
+}
+
+fn static_u32_column_values<F, EF>(
+    padded_height: usize,
+    values: &[u32],
+) -> Result<Vec<EF>, WhirNativeCircuitError>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    if values.len() > padded_height {
+        return Err(WhirNativeCircuitError::ConstraintViolation(format!(
+            "too many static values: {} for padded height {padded_height}",
+            values.len()
+        )));
+    }
+    let mut evals = EF::zero_vec(padded_height);
+    for (row, &value) in values.iter().enumerate() {
+        evals[row] = ef_from_u64::<F, EF>(value as u64);
+    }
+    Ok(evals)
+}
+
+fn witness_address_bit_columns<F, EF>(
+    witness_metadata: &WhirNativeTableMetadata,
+    source_padded_height: usize,
+    witness_ids_by_source_row: &[u32],
+) -> Result<Vec<Vec<EF>>, WhirNativeCircuitError>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    if witness_metadata.kind != WhirNativeTableKind::Witness {
+        return Err(WhirNativeCircuitError::ConstraintViolation(
+            "witness address point requires witness table metadata".to_string(),
+        ));
+    }
+    if witness_ids_by_source_row.len() > source_padded_height {
+        return Err(WhirNativeCircuitError::ConstraintViolation(format!(
+            "too many witness ids: {} for source height {source_padded_height}",
+            witness_ids_by_source_row.len()
+        )));
+    }
+    let witness_row_vars = whir_native_table_row_variables(witness_metadata);
+    let mut columns = Vec::with_capacity(witness_row_vars);
+    for bit_index in 0..witness_row_vars {
+        let shift = witness_row_vars - 1 - bit_index;
+        let mut bit_evals = EF::zero_vec(source_padded_height);
+        for (row, &wid) in witness_ids_by_source_row.iter().enumerate() {
+            bit_evals[row] = ef_from_bool::<F, EF>((wid >> shift) & 1 == 1);
+        }
+        columns.push(bit_evals);
+    }
+    Ok(columns)
 }
 
 /// Compose static per-row witness identifiers into a witness-table row point.
@@ -2022,17 +2683,15 @@ where
         )));
     }
 
-    let witness_row_vars = whir_native_table_row_variables(witness_metadata);
-    let mut coords = Vec::with_capacity(witness_row_vars);
-    for bit_index in 0..witness_row_vars {
-        let shift = witness_row_vars - 1 - bit_index;
-        let mut bit_evals = EF::zero_vec(source_padded_height);
-        for (row, &wid) in witness_ids_by_source_row.iter().enumerate() {
-            let bit = (wid >> shift) & 1 == 1;
-            bit_evals[row] = ef_from_bool::<F, EF>(bit);
-        }
-        coords.push(Poly::new(bit_evals).eval_ext::<F>(source_row_point));
-    }
+    let bit_columns = witness_address_bit_columns::<F, EF>(
+        witness_metadata,
+        source_padded_height,
+        witness_ids_by_source_row,
+    )?;
+    let coords = bit_columns
+        .iter()
+        .map(|bit_evals| Poly::eval_ext_slice::<F>(bit_evals, source_row_point))
+        .collect();
     Ok(Point::new(coords))
 }
 
@@ -2054,6 +2713,284 @@ where
         witness_ids_by_source_row,
     )?;
     whir_native_table_column_point::<F, EF>(witness_metadata, &address, 1)
+}
+
+#[derive(Clone, Debug)]
+struct FoldedColumn<EF> {
+    values: Vec<EF>,
+}
+
+impl<EF> FoldedColumn<EF>
+where
+    EF: Field,
+{
+    fn new(values: Vec<EF>) -> Self {
+        debug_assert!(values.len().is_power_of_two());
+        Self { values }
+    }
+
+    fn line_evals<F>(&self, suffix: usize, degree: usize) -> Vec<EF>
+    where
+        F: Field,
+        EF: ExtensionField<F>,
+    {
+        if self.values.len() == 1 {
+            return vec![self.values[0]; degree + 1];
+        }
+        let half = self.values.len() / 2;
+        debug_assert!(suffix < half);
+        line_evals_zero_to_degree::<F, EF>(self.values[suffix], self.values[half + suffix], degree)
+    }
+
+    fn fold(&mut self, challenge: EF) {
+        if self.values.len() == 1 {
+            return;
+        }
+        let half = self.values.len() / 2;
+        let (lo, hi) = self.values.split_at_mut(half);
+        for (lo, &hi) in lo.iter_mut().zip(hi.iter()) {
+            *lo += (hi - *lo) * challenge;
+        }
+        self.values.truncate(half);
+    }
+}
+
+#[derive(Clone, Debug)]
+struct FoldedWitnessPort<EF> {
+    address_bits: Vec<FoldedColumn<EF>>,
+}
+
+impl<EF> FoldedWitnessPort<EF>
+where
+    EF: Field,
+{
+    fn fold(&mut self, challenge: EF) {
+        for bit in &mut self.address_bits {
+            bit.fold(challenge);
+        }
+    }
+
+    fn line_endpoints(&self, suffix: usize) -> (Vec<EF>, Vec<EF>) {
+        let mut low = Vec::with_capacity(self.address_bits.len());
+        let mut high = Vec::with_capacity(self.address_bits.len());
+        for bit in &self.address_bits {
+            if bit.values.len() == 1 {
+                low.push(bit.values[0]);
+                high.push(bit.values[0]);
+            } else {
+                let half = bit.values.len() / 2;
+                debug_assert!(suffix < half);
+                low.push(bit.values[suffix]);
+                high.push(bit.values[half + suffix]);
+            }
+        }
+        (low, high)
+    }
+}
+
+#[allow(dead_code)]
+fn prove_row_folded_sumcheck_by_suffix<F, EF, Challenger, State, Eval, Fold>(
+    num_variables: usize,
+    degree: usize,
+    initial_claim: EF,
+    challenger: &mut Challenger,
+    state: &mut State,
+    mut suffix_evals: Eval,
+    mut fold_state: Fold,
+) -> Result<(WhirNativeSumcheckProof<EF>, Point<EF>, EF), WhirNativeCircuitError>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    Eval: FnMut(&State, usize, usize, usize) -> Result<Vec<EF>, WhirNativeCircuitError>,
+    Fold: FnMut(&mut State, EF),
+{
+    let mut proof = WhirNativeSumcheckProof::new(degree);
+    let mut claim = initial_claim;
+    let mut point = Vec::with_capacity(num_variables);
+
+    for round in 0..num_variables {
+        let suffix_vars = num_variables - round - 1;
+        let suffix_count = 1usize << suffix_vars;
+        let mut evals = EF::zero_vec(degree + 1);
+
+        for suffix in 0..suffix_count {
+            let values = suffix_evals(state, round, suffix, degree)?;
+            if values.len() != degree + 1 {
+                return Err(WhirNativeCircuitError::ConstraintViolation(format!(
+                    "sumcheck round {round} suffix evaluator returned {} points, expected {}",
+                    values.len(),
+                    degree + 1
+                )));
+            }
+            for (acc, value) in evals.iter_mut().zip(values) {
+                *acc += value;
+            }
+        }
+
+        if evals[0] + evals[1] != claim {
+            return Err(WhirNativeCircuitError::ConstraintViolation(format!(
+                "sumcheck round {round} inconsistent with claimed sum"
+            )));
+        }
+
+        challenger.observe_algebra_slice(&evals);
+        let challenge = challenger.sample_algebra_element();
+        claim = crate::whir_native_sumcheck::lagrange_eval_on_zero_to_degree::<F, EF>(
+            &evals, challenge,
+        );
+        point.push(challenge);
+        proof.round_evals.push(evals);
+        fold_state(state, challenge);
+    }
+
+    Ok((proof, Point::new(point), claim))
+}
+
+fn prove_row_folded_sumcheck_by_suffix_parallel<F, EF, Challenger, State, Eval, Fold>(
+    num_variables: usize,
+    degree: usize,
+    initial_claim: EF,
+    challenger: &mut Challenger,
+    state: &mut State,
+    suffix_evals: Eval,
+    mut fold_state: Fold,
+) -> Result<(WhirNativeSumcheckProof<EF>, Point<EF>, EF), WhirNativeCircuitError>
+where
+    F: Field,
+    EF: ExtensionField<F> + Send + Sync,
+    Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    State: Sync,
+    Eval: Fn(&State, usize, usize, usize) -> Result<Vec<EF>, WhirNativeCircuitError> + Sync,
+    Fold: FnMut(&mut State, EF),
+{
+    let mut proof = WhirNativeSumcheckProof::new(degree);
+    let mut claim = initial_claim;
+    let mut point = Vec::with_capacity(num_variables);
+
+    for round in 0..num_variables {
+        let suffix_vars = num_variables - round - 1;
+        let suffix_count = 1usize << suffix_vars;
+        let suffix_results = (0..suffix_count)
+            .into_par_iter()
+            .map(|suffix| suffix_evals(state, round, suffix, degree))
+            .collect::<Vec<_>>();
+        let mut evals = EF::zero_vec(degree + 1);
+
+        for values in suffix_results {
+            let values = values?;
+            if values.len() != degree + 1 {
+                return Err(WhirNativeCircuitError::ConstraintViolation(format!(
+                    "sumcheck round {round} suffix evaluator returned {} points, expected {}",
+                    values.len(),
+                    degree + 1
+                )));
+            }
+            for (acc, value) in evals.iter_mut().zip(values) {
+                *acc += value;
+            }
+        }
+
+        if evals[0] + evals[1] != claim {
+            return Err(WhirNativeCircuitError::ConstraintViolation(format!(
+                "sumcheck round {round} inconsistent with claimed sum"
+            )));
+        }
+
+        challenger.observe_algebra_slice(&evals);
+        let challenge = challenger.sample_algebra_element();
+        claim = crate::whir_native_sumcheck::lagrange_eval_on_zero_to_degree::<F, EF>(
+            &evals, challenge,
+        );
+        point.push(challenge);
+        proof.round_evals.push(evals);
+        fold_state(state, challenge);
+    }
+
+    Ok((proof, Point::new(point), claim))
+}
+
+fn line_evals_zero_to_degree<F, EF>(low: EF, high: EF, degree: usize) -> Vec<EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    let delta = high - low;
+    (0..=degree)
+        .map(|point| low + delta * EF::from(F::from_u64(point as u64)))
+        .collect()
+}
+
+fn eval_mle_on_line_zero_to_degree<F, EF>(
+    evals: &[EF],
+    low_point: &[EF],
+    high_point: &[EF],
+    degree: usize,
+) -> Vec<EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    const MAX_BATCHED_LINE_ELEMENTS: usize = 1 << 20;
+
+    debug_assert_eq!(low_point.len(), high_point.len());
+    debug_assert_eq!(evals.len(), 1 << low_point.len());
+
+    let lanes = degree + 1;
+    if evals.len().saturating_mul(lanes) > MAX_BATCHED_LINE_ELEMENTS {
+        return (0..=degree)
+            .map(|point| {
+                let t = EF::from(F::from_u64(point as u64));
+                let line_point = low_point
+                    .iter()
+                    .zip(high_point)
+                    .map(|(&low, &high)| low + (high - low) * t)
+                    .collect();
+                Poly::eval_ext_slice::<F>(evals, &Point::new(line_point))
+            })
+            .collect();
+    }
+
+    let mut work = Vec::with_capacity(evals.len() * lanes);
+    for &value in evals {
+        for _ in 0..lanes {
+            work.push(value);
+        }
+    }
+    let line_coords = low_point
+        .iter()
+        .zip(high_point)
+        .map(|(&low, &high)| line_evals_zero_to_degree::<F, EF>(low, high, degree))
+        .collect::<Vec<_>>();
+
+    let mut current_len = evals.len();
+    for coords in line_coords {
+        if current_len == 1 {
+            break;
+        }
+        let half = current_len / 2;
+        for row in 0..half {
+            let lo_base = row * lanes;
+            let hi_base = (row + half) * lanes;
+            for lane in 0..lanes {
+                let low = work[lo_base + lane];
+                let high = work[hi_base + lane];
+                work[lo_base + lane] = low + (high - low) * coords[lane];
+            }
+        }
+        current_len = half;
+    }
+    work.truncate(lanes);
+    work
+}
+
+fn fold_columns<EF>(columns: &mut [FoldedColumn<EF>], challenge: EF)
+where
+    EF: Field,
+{
+    for column in columns {
+        column.fold(challenge);
+    }
 }
 
 const WITNESS_TABLE_INDEX: usize = 0;
@@ -2753,7 +3690,7 @@ fn prove_witness_local_constraints<F, EF, Challenger>(
 ) -> Result<WhirNativeLocalConstraintProof<EF>, WhirNativeCircuitError>
 where
     F: Field,
-    EF: ExtensionField<F>,
+    EF: ExtensionField<F> + Send + Sync,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<F>,
 {
     validate_witness_metadata(&table.metadata)?;
@@ -2832,7 +3769,7 @@ fn verify_witness_local_constraints<F, EF, Challenger>(
 ) -> Result<Vec<(usize, Point<EF>, EF)>, WhirNativeCircuitError>
 where
     F: Field,
-    EF: ExtensionField<F>,
+    EF: ExtensionField<F> + Send + Sync,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<F>,
 {
     validate_witness_metadata(metadata)?;
@@ -3114,6 +4051,270 @@ where
     Ok(all_claims)
 }
 
+#[derive(Clone, Debug)]
+struct AluFoldedSumcheckState<EF> {
+    eq: FoldedColumn<EF>,
+    active: FoldedColumn<EF>,
+    table_columns: Vec<FoldedColumn<EF>>,
+    shape_columns: Vec<FoldedColumn<EF>>,
+    selectors: Vec<FoldedColumn<EF>>,
+    witness_ports: Vec<FoldedWitnessPort<EF>>,
+    witness_value_column: Vec<EF>,
+    alpha: EF,
+}
+
+impl<EF> AluFoldedSumcheckState<EF>
+where
+    EF: Field,
+{
+    fn fold(&mut self, challenge: EF) {
+        self.eq.fold(challenge);
+        self.active.fold(challenge);
+        fold_columns(&mut self.table_columns, challenge);
+        fold_columns(&mut self.shape_columns, challenge);
+        fold_columns(&mut self.selectors, challenge);
+        for port in &mut self.witness_ports {
+            port.fold(challenge);
+        }
+    }
+}
+
+fn build_alu_folded_sumcheck_state<F, EF>(
+    table: &WhirNativeTableData<EF>,
+    witness_table: &WhirNativeTableData<EF>,
+    expected_rows: &[WhirNativeExpectedAluRow],
+    zerocheck_point: &Point<EF>,
+    alpha: EF,
+) -> Result<AluFoldedSumcheckState<EF>, WhirNativeCircuitError>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    let eq = FoldedColumn::new(
+        Poly::<EF>::new_from_point(zerocheck_point.as_slice(), EF::ONE).into_evals(),
+    );
+    let active = FoldedColumn::new(active_selector_values::<EF>(
+        table.metadata.active_rows,
+        table.metadata.padded_height,
+    )?);
+    let table_columns = ALU_COLUMNS
+        .iter()
+        .map(|&column| table_column_values(table, column).map(FoldedColumn::new))
+        .collect::<Result<Vec<_>, _>>()?;
+    let shape_columns = (0..ALU_SHAPE_WIDTH)
+        .map(|column| {
+            expected_alu_column_values::<F, EF>(table.metadata.padded_height, expected_rows, column)
+                .map(FoldedColumn::new)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let selector_kinds = [
+        AluOpKind::Add,
+        AluOpKind::Mul,
+        AluOpKind::BoolCheck,
+        AluOpKind::MulAdd,
+        AluOpKind::HornerAcc,
+    ];
+    let selectors = selector_kinds
+        .iter()
+        .map(|&kind| {
+            expected_alu_selector_values::<F, EF>(table.metadata.padded_height, expected_rows, kind)
+                .map(FoldedColumn::new)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let witness_ports = ALU_WITNESS_PORTS
+        .iter()
+        .map(|&port| {
+            let bit_columns = witness_address_bit_columns::<F, EF>(
+                &witness_table.metadata,
+                table.metadata.padded_height,
+                &alu_port_witness_ids(expected_rows, port),
+            )?;
+            Ok(FoldedWitnessPort {
+                address_bits: bit_columns.into_iter().map(FoldedColumn::new).collect(),
+            })
+        })
+        .collect::<Result<Vec<_>, WhirNativeCircuitError>>()?;
+    let witness_value_column = table_column_values(witness_table, 1)?;
+
+    Ok(AluFoldedSumcheckState {
+        eq,
+        active,
+        table_columns,
+        shape_columns,
+        selectors,
+        witness_ports,
+        witness_value_column,
+        alpha,
+    })
+}
+
+fn alu_folded_suffix_evals<F, EF>(
+    state: &AluFoldedSumcheckState<EF>,
+    suffix: usize,
+    degree: usize,
+    diagnostics: &WhirNativeLocalProofDiagnostics,
+) -> Result<Vec<EF>, WhirNativeCircuitError>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    let eq_evals = state.eq.line_evals::<F>(suffix, degree);
+    let active_evals = diagnostics.time(
+        WhirNativeLocalDiagMetric::StaticSelector,
+        degree + 1,
+        || state.active.line_evals::<F>(suffix, degree),
+    );
+    let table_column_evals = diagnostics.time(
+        WhirNativeLocalDiagMetric::TableColumn,
+        state.table_columns.len() * (degree + 1),
+        || {
+            state
+                .table_columns
+                .iter()
+                .map(|column| column.line_evals::<F>(suffix, degree))
+                .collect::<Vec<_>>()
+        },
+    );
+    let shape_evals = diagnostics.time(
+        WhirNativeLocalDiagMetric::StaticSelector,
+        state.shape_columns.len() * (degree + 1),
+        || {
+            state
+                .shape_columns
+                .iter()
+                .map(|column| column.line_evals::<F>(suffix, degree))
+                .collect::<Vec<_>>()
+        },
+    );
+    let selector_evals = diagnostics.time(
+        WhirNativeLocalDiagMetric::StaticSelector,
+        state.selectors.len() * (degree + 1),
+        || {
+            state
+                .selectors
+                .iter()
+                .map(|column| column.line_evals::<F>(suffix, degree))
+                .collect::<Vec<_>>()
+        },
+    );
+    let witness_values = diagnostics.time(
+        WhirNativeLocalDiagMetric::WitnessValue,
+        state.witness_ports.len(),
+        || {
+            state
+                .witness_ports
+                .iter()
+                .map(|port| {
+                    let (low, high) = diagnostics.time(
+                        WhirNativeLocalDiagMetric::WitnessAddress,
+                        port.address_bits.len() * 2,
+                        || port.line_endpoints(suffix),
+                    );
+                    eval_mle_on_line_zero_to_degree::<F, EF>(
+                        &state.witness_value_column,
+                        &low,
+                        &high,
+                        degree,
+                    )
+                })
+                .collect::<Vec<_>>()
+        },
+    );
+
+    diagnostics.time(
+        WhirNativeLocalDiagMetric::ConstraintBatch,
+        degree + 1,
+        || {
+            let mut evals = Vec::with_capacity(degree + 1);
+            for point in 0..=degree {
+                let values = table_column_evals
+                    .iter()
+                    .map(|column| column[point])
+                    .collect::<Vec<_>>();
+                let shape_values = shape_evals
+                    .iter()
+                    .map(|column| column[point])
+                    .collect::<Vec<_>>();
+                let selectors = selector_evals
+                    .iter()
+                    .map(|column| column[point])
+                    .collect::<Vec<_>>();
+                let witness_values_at_point = witness_values
+                    .iter()
+                    .map(|port| port[point])
+                    .collect::<Vec<_>>();
+                let constraint = eval_alu_constraint_from_folded_values(
+                    active_evals[point],
+                    &values,
+                    &shape_values,
+                    &selectors,
+                    &witness_values_at_point,
+                    state.alpha,
+                )?;
+                evals.push(eq_evals[point] * constraint);
+            }
+            Ok(evals)
+        },
+    )
+}
+
+fn eval_alu_constraint_from_folded_values<EF>(
+    active: EF,
+    values: &[EF],
+    shape_values: &[EF],
+    selectors: &[EF],
+    witness_values: &[EF],
+    alpha: EF,
+) -> Result<EF, WhirNativeCircuitError>
+where
+    EF: Field,
+{
+    if values.len() != ALU_WIDTH
+        || shape_values.len() != ALU_SHAPE_WIDTH
+        || selectors.len() != 5
+        || witness_values.len() != ALU_WITNESS_PORTS.len()
+    {
+        return Err(WhirNativeCircuitError::ConstraintViolation(
+            "ALU folded evaluator width mismatch".to_string(),
+        ));
+    }
+    let inactive = EF::ONE - active;
+    let mut constraints = Vec::with_capacity(24);
+
+    for (column, &expected) in shape_values.iter().enumerate() {
+        constraints.push(active * (values[column] - expected));
+    }
+    for &value in values {
+        constraints.push(inactive * value);
+    }
+
+    let a = values[5];
+    let b = values[6];
+    let c = values[7];
+    let out = values[8];
+    let sel_add = selectors[0];
+    let sel_mul = selectors[1];
+    let sel_bool = selectors[2];
+    let sel_muladd = selectors[3];
+    let sel_horner = selectors[4];
+
+    constraints.push(sel_add * (a + b - out));
+    constraints.push(sel_add * c);
+    constraints.push(sel_mul * (a * b - out));
+    constraints.push(sel_mul * c);
+    constraints.push(sel_bool * a * (a - EF::ONE));
+    constraints.push(sel_bool * (out - a));
+    constraints.push(sel_bool * (c - a));
+    constraints.push(sel_muladd * (a * b + c - out));
+    constraints.push(sel_horner * (witness_values[ALU_ACC_WITNESS_PORT] * b + c - a - out));
+    constraints.push(active * (a - witness_values[0]));
+    constraints.push(active * (b - witness_values[1]));
+    constraints.push((sel_muladd + sel_horner) * (c - witness_values[2]));
+    constraints.push(active * (out - witness_values[3]));
+
+    Ok(batch_constraints(constraints, alpha))
+}
+
 #[allow(dead_code)]
 fn prove_alu_local_constraints<F, EF, Challenger>(
     table_index: usize,
@@ -3124,7 +4325,7 @@ fn prove_alu_local_constraints<F, EF, Challenger>(
 ) -> Result<WhirNativeLocalConstraintProof<EF>, WhirNativeCircuitError>
 where
     F: Field,
-    EF: ExtensionField<F>,
+    EF: ExtensionField<F> + Send + Sync,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<F>,
 {
     validate_alu_local_inputs(table, expected_rows)?;
@@ -3145,29 +4346,31 @@ where
             whir_native_table_row_variables(&table.metadata),
         );
 
-    let (sumcheck, terminal_row_point, terminal_claim) = prove_sumcheck::<F, EF, Challenger, _>(
-        whir_native_table_row_variables(&table.metadata),
-        degree,
-        EF::ZERO,
-        challenger,
-        |round, prefix, t, suffix| {
-            let row_point = point_from_prefix_current_suffix::<F, EF>(
-                prefix,
-                t,
-                suffix,
-                whir_native_table_row_variables(&table.metadata) - round - 1,
-            );
-            let constraint = eval_alu_constraint_from_table::<F, EF>(
-                table,
-                witness_table,
-                expected_rows,
-                &row_point,
-                constraint_challenge,
-            )
-            .expect("ALU local constraint inputs were validated");
-            eq_eval_ext(&zerocheck_point, &row_point) * constraint
-        },
+    let diagnostics = WhirNativeLocalProofDiagnostics::new(
+        WhirNativeLocalConstraintKind::Alu,
+        table_index,
+        &table.metadata,
+    );
+    let mut folded_state = build_alu_folded_sumcheck_state::<F, EF>(
+        table,
+        witness_table,
+        expected_rows,
+        &zerocheck_point,
+        constraint_challenge,
     )?;
+    let (sumcheck, terminal_row_point, terminal_claim) =
+        prove_row_folded_sumcheck_by_suffix_parallel::<F, EF, Challenger, _, _, _>(
+            whir_native_table_row_variables(&table.metadata),
+            degree,
+            EF::ZERO,
+            challenger,
+            &mut folded_state,
+            |state, _round, suffix, degree| {
+                alu_folded_suffix_evals::<F, EF>(state, suffix, degree, &diagnostics)
+            },
+            |state, challenge| state.fold(challenge),
+        )?;
+    diagnostics.finish();
     let terminal_constraint = eval_alu_constraint_from_table::<F, EF>(
         table,
         witness_table,
@@ -3589,6 +4792,19 @@ where
             challenger,
             whir_native_table_row_variables(&table.metadata),
         );
+    let diagnostics = WhirNativeLocalProofDiagnostics::new(
+        WhirNativeLocalConstraintKind::Poseidon2Air,
+        table_index,
+        &table.metadata,
+    );
+    let eval_cache = build_poseidon2_air_eval_cache::<F, EF>(
+        table,
+        witness_table,
+        expected_rows,
+        direction_bit_witness_ids,
+        &preprocessed,
+        &shifted_preprocessed,
+    )?;
 
     let (sumcheck, terminal_row_point, terminal_claim) = prove_sumcheck::<F, EF, Challenger, _>(
         whir_native_table_row_variables(&table.metadata),
@@ -3602,20 +4818,19 @@ where
                 suffix,
                 whir_native_table_row_variables(&table.metadata) - round - 1,
             );
-            let constraint = eval_poseidon2_air_constraint_from_table::<F, EF>(
-                table,
-                witness_table,
+            let constraint = eval_poseidon2_air_constraint_from_cache::<F, EF>(
+                &table.metadata,
                 expected_rows,
-                direction_bit_witness_ids,
-                &preprocessed,
-                &shifted_preprocessed,
+                &eval_cache,
                 &row_point,
                 constraint_challenge,
+                &diagnostics,
             )
             .expect("Poseidon2 AIR local constraint inputs were validated");
             eq_eval_ext(&zerocheck_point, &row_point) * constraint
         },
     )?;
+    diagnostics.finish();
     let terminal_constraint = eval_poseidon2_air_constraint_from_table::<F, EF>(
         table,
         witness_table,
@@ -3859,6 +5074,99 @@ fn validate_poseidon2_direction_bit_witness_ids(
     Ok(())
 }
 
+#[derive(Clone, Debug)]
+struct Poseidon2AirEvalCache<EF> {
+    table_columns: Vec<Vec<EF>>,
+    preprocessed_columns: Vec<Vec<EF>>,
+    shifted_preprocessed_columns: Vec<Vec<EF>>,
+    witness_value_column: Vec<EF>,
+    witness_address_columns: Vec<Vec<Vec<EF>>>,
+}
+
+fn build_poseidon2_air_eval_cache<F, EF>(
+    table: &WhirNativeTableData<EF>,
+    witness_table: &WhirNativeTableData<EF>,
+    expected_rows: &[Poseidon2CircuitRow<BabyBear>],
+    direction_bit_witness_ids: &[u32],
+    preprocessed: &[EF],
+    shifted_preprocessed: &[EF],
+) -> Result<Poseidon2AirEvalCache<EF>, WhirNativeCircuitError>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    let table_columns = (0..P2_BB_D4_WIDTH16_TABLE_WIDTH)
+        .map(|column| table_column_values(table, column))
+        .collect::<Result<Vec<_>, _>>()?;
+    let preprocessed_columns = (0..P2_BB_D4_WIDTH16_PREPROCESSED_WIDTH)
+        .map(|column| {
+            row_major_column_values(preprocessed, P2_BB_D4_WIDTH16_PREPROCESSED_WIDTH, column)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let shifted_preprocessed_columns = (0..P2_BB_D4_WIDTH16_PREPROCESSED_WIDTH)
+        .map(|column| {
+            row_major_column_values(
+                shifted_preprocessed,
+                P2_BB_D4_WIDTH16_PREPROCESSED_WIDTH,
+                column,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let witness_value_column = table_column_values(witness_table, 1)?;
+    let witness_address_columns =
+        poseidon2_witness_port_ids(expected_rows, direction_bit_witness_ids)
+            .into_iter()
+            .map(|witness_ids| {
+                witness_address_bit_columns::<F, EF>(
+                    &witness_table.metadata,
+                    table.metadata.padded_height,
+                    &witness_ids,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(Poseidon2AirEvalCache {
+        table_columns,
+        preprocessed_columns,
+        shifted_preprocessed_columns,
+        witness_value_column,
+        witness_address_columns,
+    })
+}
+
+fn eval_cached_column_at_row_point<F, EF>(column_values: &[EF], row_point: &Point<EF>) -> EF
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    Poly::eval_ext_slice::<F>(column_values, row_point)
+}
+
+fn eval_cached_witness_value_for_source_port<F, EF>(
+    witness_value_column: &[EF],
+    address_columns: &[Vec<EF>],
+    row_point: &Point<EF>,
+    diagnostics: &WhirNativeLocalProofDiagnostics,
+) -> EF
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    let address = diagnostics.time(
+        WhirNativeLocalDiagMetric::WitnessAddress,
+        address_columns.len(),
+        || {
+            address_columns
+                .iter()
+                .map(|column| Poly::eval_ext_slice::<F>(column, row_point))
+                .collect()
+        },
+    );
+    diagnostics.time(WhirNativeLocalDiagMetric::WitnessValue, 1, || {
+        Poly::eval_ext_slice::<F>(witness_value_column, &Point::new(address))
+    })
+}
+
 fn poseidon2_air_local_degree(
     metadata: &WhirNativeTableMetadata,
     witness_metadata: &WhirNativeTableMetadata,
@@ -4063,6 +5371,112 @@ where
         &witness_values,
         alpha,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn eval_poseidon2_air_constraint_from_cache<F, EF>(
+    metadata: &WhirNativeTableMetadata,
+    expected_rows: &[Poseidon2CircuitRow<BabyBear>],
+    cache: &Poseidon2AirEvalCache<EF>,
+    row_point: &Point<EF>,
+    alpha: EF,
+    diagnostics: &WhirNativeLocalProofDiagnostics,
+) -> Result<EF, WhirNativeCircuitError>
+where
+    F: Field,
+    EF: ExtensionField<F> + ExtensionField<BabyBear> + Send + Sync,
+{
+    let local_values = diagnostics.time(
+        WhirNativeLocalDiagMetric::TableColumn,
+        P2_BB_D4_WIDTH16_AIR_WIDTH,
+        || {
+            (0..P2_BB_D4_WIDTH16_AIR_WIDTH)
+                .map(|column| {
+                    eval_cached_column_at_row_point::<F, EF>(
+                        &cache.table_columns[column],
+                        row_point,
+                    )
+                })
+                .collect::<Vec<_>>()
+        },
+    );
+    let shifted_values = diagnostics.time(
+        WhirNativeLocalDiagMetric::TableColumn,
+        P2_BB_D4_WIDTH16_AIR_WIDTH,
+        || {
+            (0..P2_BB_D4_WIDTH16_AIR_WIDTH)
+                .map(|column| {
+                    eval_cached_column_at_row_point::<F, EF>(
+                        &cache.table_columns[P2_BB_D4_WIDTH16_SHIFTED_OFFSET + column],
+                        row_point,
+                    )
+                })
+                .collect::<Vec<_>>()
+        },
+    );
+    let next_row_point = cyclic_next_row_point::<EF>(row_point);
+    let original_next_values = diagnostics.time(
+        WhirNativeLocalDiagMetric::Poseidon2NextRow,
+        P2_BB_D4_WIDTH16_AIR_WIDTH,
+        || {
+            (0..P2_BB_D4_WIDTH16_AIR_WIDTH)
+                .map(|column| {
+                    eval_cached_column_at_row_point::<F, EF>(
+                        &cache.table_columns[column],
+                        &next_row_point,
+                    )
+                })
+                .collect::<Vec<_>>()
+        },
+    );
+    let prep_local = diagnostics.time(
+        WhirNativeLocalDiagMetric::StaticSelector,
+        P2_BB_D4_WIDTH16_PREPROCESSED_WIDTH,
+        || {
+            cache
+                .preprocessed_columns
+                .iter()
+                .map(|column| eval_cached_column_at_row_point::<F, EF>(column, row_point))
+                .collect::<Vec<_>>()
+        },
+    );
+    let prep_next = diagnostics.time(
+        WhirNativeLocalDiagMetric::StaticSelector,
+        P2_BB_D4_WIDTH16_PREPROCESSED_WIDTH,
+        || {
+            cache
+                .shifted_preprocessed_columns
+                .iter()
+                .map(|column| eval_cached_column_at_row_point::<F, EF>(column, row_point))
+                .collect::<Vec<_>>()
+        },
+    );
+    let witness_values = cache
+        .witness_address_columns
+        .iter()
+        .map(|address_columns| {
+            eval_cached_witness_value_for_source_port::<F, EF>(
+                &cache.witness_value_column,
+                address_columns,
+                row_point,
+                diagnostics,
+            )
+        })
+        .collect::<Vec<_>>();
+    diagnostics.time(WhirNativeLocalDiagMetric::ConstraintBatch, 1, || {
+        eval_poseidon2_air_constraint_from_values::<F, EF>(
+            metadata,
+            expected_rows,
+            row_point,
+            &local_values,
+            &shifted_values,
+            &original_next_values,
+            &prep_local,
+            &prep_next,
+            &witness_values,
+            alpha,
+        )
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4403,11 +5817,32 @@ where
     }
     let height = values.len() / width;
     validate_row_point(height, row_point)?;
-    let column_values = values
+    let column_values = row_major_column_values(values, width, column)?;
+    Ok(Poly::eval_ext_slice::<F>(&column_values, row_point))
+}
+
+fn row_major_column_values<EF>(
+    values: &[EF],
+    width: usize,
+    column: usize,
+) -> Result<Vec<EF>, WhirNativeCircuitError>
+where
+    EF: Field,
+{
+    if column >= width {
+        return Err(WhirNativeCircuitError::ConstraintViolation(format!(
+            "column {column} out of row-major width {width}"
+        )));
+    }
+    if !values.len().is_multiple_of(width) {
+        return Err(WhirNativeCircuitError::ConstraintViolation(
+            "row-major values length is not divisible by width".to_string(),
+        ));
+    }
+    Ok(values
         .chunks_exact(width)
         .map(|row| row[column])
-        .collect::<Vec<_>>();
-    Ok(Poly::new(column_values).eval_ext::<F>(row_point))
+        .collect::<Vec<_>>())
 }
 
 fn cyclic_next_row_point<EF>(row_point: &Point<EF>) -> Point<EF>
@@ -5188,11 +6623,8 @@ where
             "active row count {active_rows} exceeds padded height {padded_height}"
         )));
     }
-    let mut evals = vec![EF::ZERO; padded_height];
-    for value in evals.iter_mut().take(active_rows) {
-        *value = EF::ONE;
-    }
-    Ok(Poly::new(evals).eval_ext::<F>(row_point))
+    let evals = active_selector_values::<EF>(active_rows, padded_height)?;
+    Ok(Poly::eval_ext_slice::<F>(&evals, row_point))
 }
 
 fn known_rows_column_eval<F, EF>(
@@ -5221,7 +6653,7 @@ where
         };
         evals[row_index] = value;
     }
-    Ok(Poly::new(evals).eval_ext::<F>(row_point))
+    Ok(Poly::eval_ext_slice::<F>(&evals, row_point))
 }
 
 fn row_index_eval<F, EF>(
@@ -5233,10 +6665,8 @@ where
     EF: ExtensionField<F>,
 {
     validate_row_point(padded_height, row_point)?;
-    let evals = (0..padded_height)
-        .map(|row| ef_from_u64::<F, EF>(row as u64))
-        .collect::<Vec<_>>();
-    Ok(Poly::new(evals).eval_ext::<F>(row_point))
+    let evals = row_index_values::<F, EF>(padded_height);
+    Ok(Poly::eval_ext_slice::<F>(&evals, row_point))
 }
 
 fn static_u32_column_eval<F, EF>(
@@ -5255,11 +6685,8 @@ where
             values.len()
         )));
     }
-    let mut evals = vec![EF::ZERO; padded_height];
-    for (row, &value) in values.iter().enumerate() {
-        evals[row] = ef_from_u64::<F, EF>(value as u64);
-    }
-    Ok(Poly::new(evals).eval_ext::<F>(row_point))
+    let evals = static_u32_column_values::<F, EF>(padded_height, values)?;
+    Ok(Poly::eval_ext_slice::<F>(&evals, row_point))
 }
 
 fn expected_alu_column_eval<F, EF>(
@@ -5273,6 +6700,19 @@ where
     EF: ExtensionField<F>,
 {
     validate_row_point(padded_height, row_point)?;
+    let evals = expected_alu_column_values::<F, EF>(padded_height, expected_rows, column)?;
+    Ok(Poly::eval_ext_slice::<F>(&evals, row_point))
+}
+
+fn expected_alu_column_values<F, EF>(
+    padded_height: usize,
+    expected_rows: &[WhirNativeExpectedAluRow],
+    column: usize,
+) -> Result<Vec<EF>, WhirNativeCircuitError>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
     if column >= ALU_SHAPE_WIDTH {
         return Err(WhirNativeCircuitError::ConstraintViolation(format!(
             "ALU expected shape column {column} out of range"
@@ -5293,7 +6733,7 @@ where
         };
         evals[row_index] = ef_from_u64::<F, EF>(value);
     }
-    Ok(Poly::new(evals).eval_ext::<F>(row_point))
+    Ok(evals)
 }
 
 fn expected_alu_selector_eval<F, EF>(
@@ -5307,6 +6747,19 @@ where
     EF: ExtensionField<F>,
 {
     validate_row_point(padded_height, row_point)?;
+    let evals = expected_alu_selector_values::<F, EF>(padded_height, expected_rows, kind)?;
+    Ok(Poly::eval_ext_slice::<F>(&evals, row_point))
+}
+
+fn expected_alu_selector_values<F, EF>(
+    padded_height: usize,
+    expected_rows: &[WhirNativeExpectedAluRow],
+    kind: AluOpKind,
+) -> Result<Vec<EF>, WhirNativeCircuitError>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
     if expected_rows.len() > padded_height {
         return Err(WhirNativeCircuitError::ConstraintViolation(format!(
             "too many ALU expected rows: {} for padded height {padded_height}",
@@ -5317,7 +6770,7 @@ where
     for (row_index, row) in expected_rows.iter().enumerate() {
         evals[row_index] = ef_from_bool::<F, EF>(row.kind == kind);
     }
-    Ok(Poly::new(evals).eval_ext::<F>(row_point))
+    Ok(evals)
 }
 
 fn expected_recompose_shape_column_eval<F, EF>(
@@ -5353,7 +6806,7 @@ where
         };
         evals[row_index] = ef_from_u64::<F, EF>(value);
     }
-    Ok(Poly::new(evals).eval_ext::<F>(row_point))
+    Ok(Poly::eval_ext_slice::<F>(&evals, row_point))
 }
 
 fn terminal_column_claims_for_table<F, EF>(
@@ -5399,7 +6852,14 @@ where
         source_row_point,
         witness_ids_by_source_row,
     )?;
-    let value = Poly::new(witness_table.values.clone()).eval_ext::<F>(&point);
+    let address = whir_native_witness_address_point::<F, EF>(
+        &witness_table.metadata,
+        source_padded_height,
+        source_row_point,
+        witness_ids_by_source_row,
+    )?;
+    let witness_value_column = table_column_values(witness_table, 1)?;
+    let value = Poly::eval_ext_slice::<F>(&witness_value_column, &address);
     Ok(WhirNativeTerminalColumnClaim {
         table_index: witness_table_index,
         column: 1,
@@ -5424,7 +6884,10 @@ where
         source_row_point,
         witness_ids_by_source_row,
     )?;
-    Ok(Poly::new(witness_table.values.clone()).eval_ext::<F>(&point))
+    let witness_row_vars = whir_native_table_row_variables(&witness_table.metadata);
+    let address = Point::new(point.as_slice()[..witness_row_vars].to_vec());
+    let witness_value_column = table_column_values(witness_table, 1)?;
+    Ok(Poly::eval_ext_slice::<F>(&witness_value_column, &address))
 }
 
 fn extract_terminal_column_values<F, EF>(

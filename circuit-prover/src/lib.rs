@@ -33,7 +33,7 @@
 //! let proof = prover.prove_all_tables(&traces).unwrap();
 //! prover.verify_all_tables(&proof).unwrap();
 //! ```
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
 

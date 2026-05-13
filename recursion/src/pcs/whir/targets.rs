@@ -21,7 +21,7 @@ use p3_whir::pcs::verifier::WhirBatchedInitialVerifierOracle;
 use p3_whir::sumcheck::SumcheckData;
 
 use crate::Target;
-use crate::traits::{Recursive, RecursiveMmcs};
+use crate::traits::{Recursive, RecursiveMmcs, RecursivePrivateInput};
 
 /// Native input consumed by one recursive WHIR verifier instance.
 ///
@@ -217,6 +217,114 @@ where
     }
 }
 
+impl<F, EF, RecMmcs> WhirProofVerificationTargets<F, EF, RecMmcs::Commitment, RecMmcs>
+where
+    F: Field + Send + Sync + Clone,
+    EF: ExtensionField<F>,
+    RecMmcs: RecursiveMmcs<F, EF>,
+    RecMmcs::Commitment: Clone + RecursivePrivateInput<EF>,
+    RecMmcs::Proof: RecursivePrivateInput<EF>,
+{
+    pub fn new_private_proof(
+        circuit: &mut CircuitBuilder<EF>,
+        input: &WhirProofVerificationInput<
+            F,
+            EF,
+            RecMmcs::Input,
+            <RecMmcs::Commitment as Recursive<EF>>::Input,
+        >,
+    ) -> Self {
+        let commitment = RecMmcs::Commitment::new(circuit, &input.commitment);
+        let opening_claims = input
+            .opening_claims
+            .iter()
+            .map(|claims| {
+                claims
+                    .iter()
+                    .map(|claim| WhirOpeningClaimTargets::new(circuit, claim))
+                    .collect()
+            })
+            .collect();
+        let proof = WhirProofTargets::new_with_initial_commitment_private_witness(
+            circuit,
+            &input.proof,
+            input
+                .proof
+                .initial_commitment
+                .as_ref()
+                .map(|_| commitment.clone()),
+        );
+        Self {
+            commitment,
+            opening_claims,
+            proof,
+            round_query_index_bits: input
+                .round_query_index_bits
+                .iter()
+                .map(|round| {
+                    round
+                        .iter()
+                        .map(|bits| {
+                            circuit.alloc_private_inputs(bits.len(), "WHIR query index bits")
+                        })
+                        .collect()
+                })
+                .collect(),
+            final_query_index_bits: input
+                .final_query_index_bits
+                .iter()
+                .map(|bits| circuit.alloc_private_inputs(bits.len(), "WHIR final query index bits"))
+                .collect(),
+        }
+    }
+
+    pub fn public_values_for_private_proof(
+        input: &WhirProofVerificationInput<
+            F,
+            EF,
+            RecMmcs::Input,
+            <RecMmcs::Commitment as Recursive<EF>>::Input,
+        >,
+    ) -> Vec<EF> {
+        RecMmcs::Commitment::get_values(&input.commitment)
+            .into_iter()
+            .chain(
+                input
+                    .opening_claims
+                    .iter()
+                    .flat_map(|claims| claims.iter().flat_map(WhirOpeningClaimTargets::get_values)),
+            )
+            .collect()
+    }
+
+    pub fn private_values_for_private_proof(
+        input: &WhirProofVerificationInput<
+            F,
+            EF,
+            RecMmcs::Input,
+            <RecMmcs::Commitment as Recursive<EF>>::Input,
+        >,
+    ) -> Vec<EF> {
+        RecMmcs::Commitment::get_private_values(&input.commitment)
+            .into_iter()
+            .chain(
+                WhirProofTargets::<F, EF, RecMmcs>::private_witness_values_without_initial_commitment(
+                    &input.proof,
+                ),
+            )
+            .chain(
+                input
+                    .round_query_index_bits
+                    .iter()
+                    .flatten()
+                    .flatten()
+                    .copied(),
+            )
+            .chain(input.final_query_index_bits.iter().flatten().copied())
+            .collect()
+    }
+}
+
 /// Recursive target representation of one initial oracle participating in a
 /// batched WHIR proof.
 ///
@@ -324,6 +432,29 @@ impl<F: Field, EF: ExtensionField<F>> Recursive<EF> for WhirSumcheckDataTargets<
             .flat_map(|[c0, c_inf]| [*c0, *c_inf])
             .chain(input.pow_witnesses.iter().map(|w| EF::from(*w)))
             .collect()
+    }
+}
+
+impl<F: Field, EF: ExtensionField<F>> WhirSumcheckDataTargets<F, EF> {
+    pub fn new_private_witness(
+        circuit: &mut CircuitBuilder<EF>,
+        input: &SumcheckData<F, EF>,
+    ) -> Self {
+        let polynomial_evaluations = (0..input.polynomial_evaluations.len())
+            .map(|_| circuit.alloc_private_input_array("WHIR sumcheck evaluations"))
+            .collect();
+        let pow_witnesses =
+            circuit.alloc_private_inputs(input.pow_witnesses.len(), "WHIR sumcheck PoW witnesses");
+
+        Self {
+            polynomial_evaluations,
+            pow_witnesses,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn private_witness_values(input: &SumcheckData<F, EF>) -> Vec<EF> {
+        Self::get_values(input)
     }
 }
 
@@ -435,6 +566,71 @@ where
     }
 }
 
+impl<F, EF, RecMmcs> WhirQueryOpeningTargets<F, EF, RecMmcs>
+where
+    F: Field + Send + Sync + Clone,
+    EF: ExtensionField<F>,
+    RecMmcs: RecursiveMmcs<F, EF>,
+    RecMmcs::Proof: RecursivePrivateInput<EF>,
+{
+    pub fn new_private_witness(
+        circuit: &mut CircuitBuilder<EF>,
+        input: &QueryOpening<F, EF, <RecMmcs::Input as Mmcs<F>>::Proof>,
+    ) -> Self {
+        match input {
+            QueryOpening::Base { values, proof } => Self::Base {
+                values: circuit.alloc_private_inputs(values.len(), "WHIR base query values"),
+                proof: RecMmcs::Proof::new_private_input(circuit, proof),
+            },
+            QueryOpening::Extension { values, proof } => Self::Extension {
+                values: circuit.alloc_private_inputs(values.len(), "WHIR extension query values"),
+                proof: RecMmcs::Proof::new_private_input(circuit, proof),
+            },
+            QueryOpening::SharedBase { values, proof } => Self::SharedBase {
+                values: values
+                    .iter()
+                    .map(|row| {
+                        circuit.alloc_private_inputs(row.len(), "WHIR shared base query row")
+                    })
+                    .collect(),
+                proof: RecMmcs::Proof::new_private_input(circuit, proof),
+            },
+            QueryOpening::Batched { openings } => Self::Batched {
+                openings: openings
+                    .iter()
+                    .map(|opening| Self::new_private_witness(circuit, opening))
+                    .collect(),
+            },
+        }
+    }
+
+    pub fn private_witness_values(
+        input: &QueryOpening<F, EF, <RecMmcs::Input as Mmcs<F>>::Proof>,
+    ) -> Vec<EF> {
+        match input {
+            QueryOpening::Base { values, proof } => values
+                .iter()
+                .map(|v| EF::from(*v))
+                .chain(RecMmcs::Proof::get_private_input_values(proof))
+                .collect(),
+            QueryOpening::Extension { values, proof } => values
+                .iter()
+                .copied()
+                .chain(RecMmcs::Proof::get_private_input_values(proof))
+                .collect(),
+            QueryOpening::SharedBase { values, proof } => values
+                .iter()
+                .flat_map(|row| row.iter().map(|v| EF::from(*v)))
+                .chain(RecMmcs::Proof::get_private_input_values(proof))
+                .collect(),
+            QueryOpening::Batched { openings } => openings
+                .iter()
+                .flat_map(Self::private_witness_values)
+                .collect(),
+        }
+    }
+}
+
 /// Recursive target representation of one WHIR folding round.
 pub struct WhirRoundProofTargets<F: Field, EF: ExtensionField<F>, RecMmcs: RecursiveMmcs<F, EF>> {
     /// Optional round commitment. It is present for rounds that commit a folded
@@ -514,6 +710,61 @@ where
                     .flat_map(WhirQueryOpeningTargets::<F, EF, RecMmcs>::get_private_values),
             )
             .chain(WhirSumcheckDataTargets::<F, EF>::get_private_values(
+                &input.sumcheck,
+            ))
+            .collect()
+    }
+}
+
+impl<F, EF, RecMmcs> WhirRoundProofTargets<F, EF, RecMmcs>
+where
+    F: Field + Send + Sync + Clone,
+    EF: ExtensionField<F>,
+    RecMmcs: RecursiveMmcs<F, EF>,
+    RecMmcs::Commitment: Clone + RecursivePrivateInput<EF>,
+    RecMmcs::Proof: RecursivePrivateInput<EF>,
+{
+    pub fn new_private_witness(
+        circuit: &mut CircuitBuilder<EF>,
+        input: &WhirRoundProof<F, EF, RecMmcs::Input>,
+    ) -> Self {
+        let commitment = input
+            .commitment
+            .as_ref()
+            .map(|commitment| RecMmcs::Commitment::new_private_input(circuit, commitment));
+        let ood_answers =
+            circuit.alloc_private_inputs(input.ood_answers.len(), "WHIR round OOD answers");
+        let pow_witness = circuit.alloc_private_input("WHIR round PoW witness");
+        let queries = input
+            .queries
+            .iter()
+            .map(|query| WhirQueryOpeningTargets::new_private_witness(circuit, query))
+            .collect();
+        let sumcheck = WhirSumcheckDataTargets::new_private_witness(circuit, &input.sumcheck);
+
+        Self {
+            commitment,
+            ood_answers,
+            pow_witness,
+            queries,
+            sumcheck,
+        }
+    }
+
+    pub fn private_witness_values(input: &WhirRoundProof<F, EF, RecMmcs::Input>) -> Vec<EF> {
+        input
+            .commitment
+            .iter()
+            .flat_map(RecMmcs::Commitment::get_private_input_values)
+            .chain(input.ood_answers.iter().copied())
+            .chain([EF::from(input.pow_witness)])
+            .chain(
+                input
+                    .queries
+                    .iter()
+                    .flat_map(WhirQueryOpeningTargets::<F, EF, RecMmcs>::private_witness_values),
+            )
+            .chain(WhirSumcheckDataTargets::<F, EF>::private_witness_values(
                 &input.sumcheck,
             ))
             .collect()
@@ -687,6 +938,100 @@ where
                     .final_sumcheck
                     .iter()
                     .flat_map(WhirSumcheckDataTargets::<F, EF>::get_private_values),
+            )
+            .collect()
+    }
+}
+
+impl<F, EF, RecMmcs> WhirProofTargets<F, EF, RecMmcs>
+where
+    F: Field + Send + Sync + Clone,
+    EF: ExtensionField<F>,
+    RecMmcs: RecursiveMmcs<F, EF>,
+    RecMmcs::Commitment: Clone + RecursivePrivateInput<EF>,
+    RecMmcs::Proof: RecursivePrivateInput<EF>,
+{
+    /// Allocate a WHIR proof transcript as private witness data, optionally
+    /// reusing a caller-owned public target for the initial commitment.
+    pub fn new_with_initial_commitment_private_witness(
+        circuit: &mut CircuitBuilder<EF>,
+        input: &WhirProof<F, EF, RecMmcs::Input>,
+        initial_commitment_override: Option<RecMmcs::Commitment>,
+    ) -> Self {
+        let initial_commitment = input.initial_commitment.as_ref().map(|commitment| {
+            initial_commitment_override
+                .clone()
+                .unwrap_or_else(|| RecMmcs::Commitment::new_private_input(circuit, commitment))
+        });
+        let initial_ood_answers = circuit
+            .alloc_private_inputs(input.initial_ood_answers.len(), "WHIR initial OOD answers");
+        let initial_sumcheck =
+            WhirSumcheckDataTargets::new_private_witness(circuit, &input.initial_sumcheck);
+        let rounds = input
+            .rounds
+            .iter()
+            .map(|round| WhirRoundProofTargets::new_private_witness(circuit, round))
+            .collect();
+        let final_poly = input.final_poly.as_ref().map(|poly| {
+            circuit.alloc_private_inputs(poly.num_evals(), "WHIR final polynomial evaluations")
+        });
+        let final_pow_witness = circuit.alloc_private_input("WHIR final PoW witness");
+        let final_queries = input
+            .final_queries
+            .iter()
+            .map(|query| WhirQueryOpeningTargets::new_private_witness(circuit, query))
+            .collect();
+        let final_sumcheck = input
+            .final_sumcheck
+            .as_ref()
+            .map(|sumcheck| WhirSumcheckDataTargets::new_private_witness(circuit, sumcheck));
+
+        Self {
+            initial_commitment,
+            initial_ood_answers,
+            initial_sumcheck,
+            rounds,
+            final_poly,
+            final_pow_witness,
+            final_queries,
+            final_sumcheck,
+        }
+    }
+
+    pub fn private_witness_values_without_initial_commitment(
+        input: &WhirProof<F, EF, RecMmcs::Input>,
+    ) -> Vec<EF> {
+        input
+            .initial_ood_answers
+            .iter()
+            .copied()
+            .chain(WhirSumcheckDataTargets::<F, EF>::private_witness_values(
+                &input.initial_sumcheck,
+            ))
+            .chain(
+                input
+                    .rounds
+                    .iter()
+                    .flat_map(WhirRoundProofTargets::<F, EF, RecMmcs>::private_witness_values),
+            )
+            .chain(
+                input
+                    .final_poly
+                    .iter()
+                    .flat_map(|poly| poly.as_slice().iter().copied()),
+            )
+            .chain([EF::from(input.final_pow_witness)])
+            .chain(
+                input
+                    .final_queries
+                    .iter()
+                    .flat_map(WhirQueryOpeningTargets::<F, EF, RecMmcs>::private_witness_values),
+            )
+            .chain(
+                input
+                    .final_sumcheck
+                    .iter()
+                    .flat_map(WhirSumcheckDataTargets::<F, EF>::private_witness_values),
             )
             .collect()
     }
