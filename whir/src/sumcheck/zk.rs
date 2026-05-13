@@ -618,9 +618,7 @@ where
     where
         M: Mmcs<F>,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
-    {
-        let k = folding_factor;
-
+    {        
         const { assert!(
             F::TWO != F::ZERO,
             "Construction 6.3 (Lemma 6.4) requires char(F) != 2",
@@ -633,13 +631,13 @@ where
 
         if zk_data.round_coefficients.len() != k {
             return Err(SumcheckError::RoundCountMismatch {
-                expected: k,
+                expected: folding_factor,
                 actual: zk_data.round_coefficients.len(),
             });
         }
         if mask_commits.len() != k {
             return Err(SumcheckError::MaskCommitmentCountMismatch {
-                expected: k,
+                expected: folding_factor,
                 actual: mask_commits.len(),
             });
         }
