@@ -6,6 +6,18 @@
 //! accumulators — and the HVZK side wraps that output with mask sampling +
 //! commitment, μ̃, ε, and the per-round mask polynomial contributions.
 //!
+//! # Layout coverage
+//!
+//! This module only ships the HVZK overlay for the **prefix-binding** layout
+//! ([`PrefixProver`]). The suffix-binding layout ([`SuffixProver`]) has no
+//! HVZK counterpart yet: driving the WHIR PCS through that layout produces a
+//! non-private proof. Construction 6.3 itself is binding-order agnostic, so
+//! the missing `ZkSuffixProver` is a symmetric overlay on top of
+//! `SuffixProver` rather than a new protocol. Tracked in
+//! [Plonky3#1649](https://github.com/Plonky3/Plonky3/issues/1649).
+//!
+//! [`SuffixProver`]: crate::sumcheck::layout::SuffixProver
+//!
 //! # Protocol overview
 //!
 //! 1. **Masks.** Prover samples `s_1, …, s_k ∈ F^{<ℓ_zk}[X]` and commits each
