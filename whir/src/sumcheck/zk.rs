@@ -309,7 +309,6 @@ where
 
         // --- Plain-piece preamble (mirrors PrefixProver::into_sumcheck) ---
         let alpha: EF = challenger.sample_algebra_element();
-        let n_claims = inner.num_claims();
         let mut alphas = alpha.powers();
         let accumulators: Vec<_> = inner
             .placements
@@ -319,6 +318,14 @@ where
                 let per_claim: Vec<EF> = alphas.by_ref().take(claim.len()).collect();
                 calculate_accumulators_batch(claim, &per_claim)
             })
+            .collect();
+        // Continue the same `alphas` stream into virtual-claim powers, picking
+        // up where the concrete-claim collects left off. Materialising them
+        // once here lets every round of the loop below read them by slice
+        // instead of rebuilding the powers iterator each round.
+        let virtual_alphas: Vec<EF> = alphas
+            .by_ref()
+            .take(inner.virtual_claims.len())
             .collect();
         let mut plain_sum = inner.sum(alpha);
 
@@ -415,7 +422,7 @@ where
             for (vc, alpha_i) in inner
                 .virtual_claims
                 .iter()
-                .zip(alpha.powers().skip(n_claims))
+                .zip(virtual_alphas.iter().copied())
             {
                 let vc_accs = &vc.data;
                 plain_c0 += alpha_i
