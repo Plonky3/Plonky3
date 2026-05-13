@@ -162,6 +162,15 @@ impl PrimeCharacteristicRing for PackedGoldilocksWasmSimd128 {
         // SAFETY: this is a repr(transparent) wrapper around an array.
         unsafe { reconstitute_from_base(Goldilocks::zero_vec(len * WIDTH)) }
     }
+
+    #[inline]
+    fn dot_product<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
+        Self::from_fn(|lane| {
+            let lhs_lane: [Goldilocks; N] = core::array::from_fn(|i| lhs[i].as_slice()[lane]);
+            let rhs_lane: [Goldilocks; N] = core::array::from_fn(|i| rhs[i].as_slice()[lane]);
+            Goldilocks::dot_product(&lhs_lane, &rhs_lane)
+        })
+    }
 }
 
 impl InjectiveMonomial<7> for PackedGoldilocksWasmSimd128 {}
@@ -185,6 +194,14 @@ impl_sum_prod_base_field!(PackedGoldilocksWasmSimd128, Goldilocks);
 impl Algebra<Goldilocks> for PackedGoldilocksWasmSimd128 {
     // Matches the aarch64 NEON chunk for the same WIDTH=2 lane layout.
     const BATCHED_LC_CHUNK: usize = 2;
+
+    #[inline]
+    fn mixed_dot_product<const N: usize>(a: &[Self; N], f: &[Goldilocks; N]) -> Self {
+        Self::from_fn(|lane| {
+            let a_lane: [Goldilocks; N] = core::array::from_fn(|i| a[i].as_slice()[lane]);
+            Goldilocks::dot_product(&a_lane, f)
+        })
+    }
 }
 
 impl_packed_value!(PackedGoldilocksWasmSimd128, Goldilocks, WIDTH);
@@ -412,12 +429,29 @@ fn mul(x: v128, y: v128) -> v128 {
     reduce128(hi, lo)
 }
 
-/// Goldilocks modular square. Computes `x^2 mod FIELD_ORDER`.
-///
-/// No specialized squaring path on simd128 — falls through to `mul`.
-#[inline(always)]
+/// Full 64×64 → 128 squaring.
+/// Exploits `lh = hl` so only three 32×32 products are needed instead of four.
+#[inline]
+fn square64(x: v128) -> (v128, v128) {
+    let x_lo = lo32(x);
+    let x_hi = hi32(x);
+    let ll = mul_u32_lanes(x_lo, x_lo);
+    let lh = mul_u32_lanes(x_lo, x_hi);
+    let hh = mul_u32_lanes(x_hi, x_hi);
+    // 128-bit product = ll + lh·2^33 + hh·2^64.
+    let ll_hi = u64x2_shr(ll, 33);
+    let t0 = i64x2_add(lh, ll_hi);
+    let t0_hi = u64x2_shr(t0, 31);
+    let res_hi = i64x2_add(hh, t0_hi);
+    let lh_shifted = i64x2_shl(lh, 33);
+    let res_lo = i64x2_add(ll, lh_shifted);
+    (res_hi, res_lo)
+}
+
+#[inline]
 fn square(x: v128) -> v128 {
-    mul(x, x)
+    let (hi, lo) = square64(x);
+    reduce128(hi, lo)
 }
 
 /// Goldilocks modular doubling, falls back to `add`.
