@@ -18,7 +18,7 @@ use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, W
 use crate::pcs::prover::WhirProver;
 use crate::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Witness};
 use crate::sumcheck::tests::{random_table_specs, table_specs_to_tables};
-use crate::sumcheck::{OpeningProtocol, TableSpec};
+use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -137,8 +137,113 @@ fn run_whir_pcs_lifecycle_with_witness<L: Layout<F, EF>>(
     }
 }
 
+/// Smoke matrix covering each WHIR parameter axis at least once.
+///
+/// The full randomized sweep lives in [`test_whir_end_to_end_exhaustive`] and
+/// runs from the Heavy CI workflow.
 #[test]
 fn test_whir_end_to_end() {
+    let table_spec_sets = [
+        vec![
+            TableSpec::new(
+                TableShape::new(12, 3),
+                vec![vec![0, 1, 2], vec![0, 2], vec![1]],
+            ),
+            TableSpec::new(TableShape::new(10, 2), vec![vec![0, 1], vec![1]]),
+        ],
+        vec![TableSpec::new(
+            TableShape::new(14, 4),
+            vec![vec![0, 1, 2, 3], vec![0, 3]],
+        )],
+    ];
+
+    let smoke_cases = [
+        (
+            FoldingFactor::Constant(1),
+            SecurityAssumption::JohnsonBound,
+            0,
+            1,
+        ),
+        (
+            FoldingFactor::Constant(2),
+            SecurityAssumption::CapacityBound,
+            5,
+            2,
+        ),
+        (
+            FoldingFactor::Constant(3),
+            SecurityAssumption::UniqueDecoding,
+            10,
+            3,
+        ),
+        (
+            FoldingFactor::Constant(4),
+            SecurityAssumption::JohnsonBound,
+            5,
+            3,
+        ),
+        (
+            FoldingFactor::ConstantFromSecondRound(2, 1),
+            SecurityAssumption::CapacityBound,
+            10,
+            2,
+        ),
+        (
+            FoldingFactor::ConstantFromSecondRound(3, 1),
+            SecurityAssumption::UniqueDecoding,
+            0,
+            3,
+        ),
+        (
+            FoldingFactor::ConstantFromSecondRound(3, 2),
+            SecurityAssumption::JohnsonBound,
+            10,
+            3,
+        ),
+        (
+            FoldingFactor::ConstantFromSecondRound(5, 2),
+            SecurityAssumption::CapacityBound,
+            5,
+            3,
+        ),
+        (
+            FoldingFactor::Constant(2),
+            SecurityAssumption::UniqueDecoding,
+            0,
+            1,
+        ),
+        (
+            FoldingFactor::ConstantFromSecondRound(5, 2),
+            SecurityAssumption::JohnsonBound,
+            10,
+            1,
+        ),
+    ];
+
+    for (i, (folding_factor, soundness_type, pow_bits, rs_domain_initial_reduction_factor)) in
+        smoke_cases.into_iter().enumerate()
+    {
+        let specs = &table_spec_sets[i % table_spec_sets.len()];
+        run_whir_pcs::<PrefixProver<F, EF>>(
+            specs,
+            folding_factor,
+            soundness_type,
+            pow_bits,
+            rs_domain_initial_reduction_factor,
+        );
+        run_whir_pcs::<SuffixProver<F, EF>>(
+            specs,
+            folding_factor,
+            soundness_type,
+            pow_bits,
+            rs_domain_initial_reduction_factor,
+        );
+    }
+}
+
+#[test]
+#[ignore = "exhaustive WHIR configuration sweep; run from heavy CI"]
+fn test_whir_end_to_end_exhaustive() {
     const N: usize = 5;
 
     let folding_factors = [
