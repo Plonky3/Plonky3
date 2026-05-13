@@ -769,7 +769,9 @@ where
 
     // The caller has pre-loaded the challenger with claim observations
     // identical to the real prover's; `α` is the next thing sampled.
-    let _alpha: EF = challenger.sample_algebra_element();
+    // !!CRITICAL!! not a piece of dead code. This is needed for
+    // challenger-state sync.
+    let _: EF = challenger.sample_algebra_element();
 
     // Sample masks + commit + observe (identical distribution to real prover
     // for Reed–Solomon encoding: codewords uniform ⇒ commits indistinguishable).
