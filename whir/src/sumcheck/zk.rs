@@ -287,10 +287,10 @@ where
         let ell_zk = self.encoding.message_len();
         let n_vars = self.inner.num_variables;
 
-        assert!(
+        const { assert!(
             F::TWO != F::ZERO,
             "Construction 6.3 (Lemma 6.4) requires char(F) != 2",
-        );
+        ); }
         assert!(
             ell_zk >= 2,
             "Construction 6.3 (Lemma 6.4) requires ell_zk >= 2",
