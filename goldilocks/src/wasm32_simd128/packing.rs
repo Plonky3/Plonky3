@@ -43,7 +43,7 @@ const WIDTH: usize = 2;
 /// Equal to `2^32 - 1 = 2^64 mod P`.
 const EPSILON: u64 = Goldilocks::ORDER_U64.wrapping_neg();
 
-// Compile-time guard: `PackedGoldilocksWasm` is only sound to transmute to/from `v128` if
+// Compile-time guard: `PackedGoldilocksWasmSimd128` is only sound to transmute to/from `v128` if
 // its byte layout matches. `[Goldilocks; 2]` === `[u64; 2]` === `v128` (16 bytes total).
 const _LAYOUT_INVARIANTS: () = {
     assert!(size_of::<[Goldilocks; WIDTH]>() == size_of::<v128>());
@@ -57,9 +57,9 @@ const _LAYOUT_INVARIANTS: () = {
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)]
 #[must_use]
-pub struct PackedGoldilocksWasm(pub [Goldilocks; WIDTH]);
+pub struct PackedGoldilocksWasmSimd128(pub [Goldilocks; WIDTH]);
 
-impl PackedGoldilocksWasm {
+impl PackedGoldilocksWasmSimd128 {
     #[inline]
     #[must_use]
     pub(crate) fn to_vector(self) -> v128 {
@@ -85,13 +85,13 @@ impl PackedGoldilocksWasm {
     }
 }
 
-impl From<Goldilocks> for PackedGoldilocksWasm {
+impl From<Goldilocks> for PackedGoldilocksWasmSimd128 {
     fn from(x: Goldilocks) -> Self {
         Self::broadcast(x)
     }
 }
 
-impl Add for PackedGoldilocksWasm {
+impl Add for PackedGoldilocksWasmSimd128 {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
@@ -99,7 +99,7 @@ impl Add for PackedGoldilocksWasm {
     }
 }
 
-impl Sub for PackedGoldilocksWasm {
+impl Sub for PackedGoldilocksWasmSimd128 {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
@@ -107,7 +107,7 @@ impl Sub for PackedGoldilocksWasm {
     }
 }
 
-impl Neg for PackedGoldilocksWasm {
+impl Neg for PackedGoldilocksWasmSimd128 {
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
@@ -115,7 +115,7 @@ impl Neg for PackedGoldilocksWasm {
     }
 }
 
-impl Mul for PackedGoldilocksWasm {
+impl Mul for PackedGoldilocksWasmSimd128 {
     type Output = Self;
     #[inline]
     fn mul(self, rhs: Self) -> Self {
@@ -123,13 +123,13 @@ impl Mul for PackedGoldilocksWasm {
     }
 }
 
-impl_add_assign!(PackedGoldilocksWasm);
-impl_sub_assign!(PackedGoldilocksWasm);
-impl_mul_methods!(PackedGoldilocksWasm);
-ring_sum!(PackedGoldilocksWasm);
-impl_rng!(PackedGoldilocksWasm);
+impl_add_assign!(PackedGoldilocksWasmSimd128);
+impl_sub_assign!(PackedGoldilocksWasmSimd128);
+impl_mul_methods!(PackedGoldilocksWasmSimd128);
+ring_sum!(PackedGoldilocksWasmSimd128);
+impl_rng!(PackedGoldilocksWasmSimd128);
 
-impl PrimeCharacteristicRing for PackedGoldilocksWasm {
+impl PrimeCharacteristicRing for PackedGoldilocksWasmSimd128 {
     type PrimeSubfield = Goldilocks;
 
     const ZERO: Self = Self::broadcast(Goldilocks::ZERO);
@@ -164,9 +164,9 @@ impl PrimeCharacteristicRing for PackedGoldilocksWasm {
     }
 }
 
-impl InjectiveMonomial<7> for PackedGoldilocksWasm {}
+impl InjectiveMonomial<7> for PackedGoldilocksWasmSimd128 {}
 
-impl PermutationMonomial<7> for PackedGoldilocksWasm {
+impl PermutationMonomial<7> for PackedGoldilocksWasmSimd128 {
     /// In the field `Goldilocks`, `a^{1/7}` is equal to a^{10540996611094048183}.
     ///
     /// This follows from the calculation `7*10540996611094048183 = 4*(2^64 - 2**32) + 1 = 1 mod (p - 1)`.
@@ -175,21 +175,21 @@ impl PermutationMonomial<7> for PackedGoldilocksWasm {
     }
 }
 
-impl_add_base_field!(PackedGoldilocksWasm, Goldilocks);
-impl_sub_base_field!(PackedGoldilocksWasm, Goldilocks);
-impl_mul_base_field!(PackedGoldilocksWasm, Goldilocks);
-impl_div_methods!(PackedGoldilocksWasm, Goldilocks);
-impl_packed_field_div!(PackedGoldilocksWasm);
-impl_sum_prod_base_field!(PackedGoldilocksWasm, Goldilocks);
+impl_add_base_field!(PackedGoldilocksWasmSimd128, Goldilocks);
+impl_sub_base_field!(PackedGoldilocksWasmSimd128, Goldilocks);
+impl_mul_base_field!(PackedGoldilocksWasmSimd128, Goldilocks);
+impl_div_methods!(PackedGoldilocksWasmSimd128, Goldilocks);
+impl_packed_field_div!(PackedGoldilocksWasmSimd128);
+impl_sum_prod_base_field!(PackedGoldilocksWasmSimd128, Goldilocks);
 
-impl Algebra<Goldilocks> for PackedGoldilocksWasm {
+impl Algebra<Goldilocks> for PackedGoldilocksWasmSimd128 {
     // Matches the aarch64 NEON chunk for the same WIDTH=2 lane layout.
     const BATCHED_LC_CHUNK: usize = 2;
 }
 
-impl_packed_value!(PackedGoldilocksWasm, Goldilocks, WIDTH);
+impl_packed_value!(PackedGoldilocksWasmSimd128, Goldilocks, WIDTH);
 
-unsafe impl PackedField for PackedGoldilocksWasm {
+unsafe impl PackedField for PackedGoldilocksWasmSimd128 {
     type Scalar = Goldilocks;
 }
 
@@ -204,7 +204,7 @@ pub fn interleave_u64(v0: v128, v1: v128) -> (v128, v128) {
     (r0, r1)
 }
 
-unsafe impl PackedFieldPow2 for PackedGoldilocksWasm {
+unsafe impl PackedFieldPow2 for PackedGoldilocksWasmSimd128 {
     fn interleave(&self, other: Self, block_len: usize) -> (Self, Self) {
         let (v0, v1) = (self.to_vector(), other.to_vector());
         let (res0, res1) = match block_len {
@@ -430,25 +430,26 @@ fn double(x: v128) -> v128 {
 mod tests {
     use p3_field_testing::test_packed_field;
 
-    use super::{Goldilocks, PackedGoldilocksWasm, WIDTH};
+    use super::{Goldilocks, PackedGoldilocksWasmSimd128, WIDTH};
 
     const SPECIAL_VALS: [Goldilocks; WIDTH] =
         Goldilocks::new_array([0xFFFF_FFFF_0000_0000, 0xFFFF_FFFF_FFFF_FFFF]);
 
-    const ZEROS: PackedGoldilocksWasm = PackedGoldilocksWasm(Goldilocks::new_array([
-        0x0000_0000_0000_0000,
-        0xFFFF_FFFF_0000_0001, // = P, canonicalizes to 0
-    ]));
+    const ZEROS: PackedGoldilocksWasmSimd128 =
+        PackedGoldilocksWasmSimd128(Goldilocks::new_array([
+            0x0000_0000_0000_0000,
+            0xFFFF_FFFF_0000_0001, // = P, canonicalizes to 0
+        ]));
 
-    const ONES: PackedGoldilocksWasm = PackedGoldilocksWasm(Goldilocks::new_array([
+    const ONES: PackedGoldilocksWasmSimd128 = PackedGoldilocksWasmSimd128(Goldilocks::new_array([
         0x0000_0000_0000_0001,
         0xFFFF_FFFF_0000_0002, // = P + 1, canonicalizes to 1
     ]));
 
     test_packed_field!(
-        crate::PackedGoldilocksWasm,
+        crate::PackedGoldilocksWasmSimd128,
         &[super::ZEROS],
         &[super::ONES],
-        crate::PackedGoldilocksWasm(super::SPECIAL_VALS)
+        crate::PackedGoldilocksWasmSimd128(super::SPECIAL_VALS)
     );
 }

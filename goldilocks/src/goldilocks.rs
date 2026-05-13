@@ -376,7 +376,7 @@ impl Field for Goldilocks {
     type Packing = crate::PackedGoldilocksNeon;
 
     #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
-    type Packing = crate::PackedGoldilocksWasm;
+    type Packing = crate::PackedGoldilocksWasmSimd128;
 
     #[cfg(not(any(
         all(
