@@ -359,6 +359,12 @@ where
         zk_data.mu_tilde = mu_tilde;
 
         // --- Construction 6.3 step 3: ε ---
+        // Note: this is the load-bearing differnece from the reference
+        // Plonky3 samples ε ∈ EF (not ∈ F as in paper Construction 6.3 step 3) for
+        // the soundness margin. Masks remain in F to keep the proof size sublinear,
+        // so the per-round h_j(X) is a hybrid F/EF object — see the F-subspace
+        // stratification in simulate_classic_unpacked for the simulator-side
+        // implication of this divergence.
         let eps: EF = challenger.sample_algebra_element();
 
         // --- Per-round loop (Construction 6.3 step 4) ---
