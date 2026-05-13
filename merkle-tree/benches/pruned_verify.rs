@@ -87,8 +87,10 @@ fn bench_pruned_verify(c: &mut Criterion) {
                 |b, (commit, dims)| {
                     b.iter(|| {
                         for (idx, opening) in indices.iter().zip(&individual) {
-                            let bref =
-                                BatchOpeningRef::new(&opening.opened_values, &opening.opening_proof);
+                            let bref = BatchOpeningRef::new(
+                                &opening.opened_values,
+                                &opening.opening_proof,
+                            );
                             mmcs.verify_batch(commit, dims, *idx, bref).unwrap();
                         }
                     });
