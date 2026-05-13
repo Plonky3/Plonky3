@@ -1,3 +1,4 @@
+use p3_field::PrimeCharacteristicRing;
 use p3_mds::MdsPermutation;
 use p3_mds::karatsuba_convolution::{
     mds_circulant_karatsuba_8, mds_circulant_karatsuba_12, mds_circulant_karatsuba_16,
