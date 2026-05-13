@@ -107,7 +107,7 @@ use rand::{Rng, RngExt};
 use crate::sumcheck::error::SumcheckError;
 use crate::sumcheck::extrapolate_01inf;
 use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
-use crate::sumcheck::layout::{LayoutStrategy, PrefixProver, Verifier};
+use crate::sumcheck::layout::{Layout, LayoutStrategy, PrefixProver, Verifier};
 use crate::sumcheck::product_polynomial::ProductPolynomial;
 use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
 use crate::sumcheck::svo::calculate_accumulators_batch;
@@ -217,7 +217,6 @@ where
         F: TwoAdicField,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        use crate::sumcheck::layout::Layout;
         self.inner.eval(table_idx, polys, challenger)
     }
 
@@ -227,7 +226,6 @@ where
         F: TwoAdicField,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        use crate::sumcheck::layout::Layout;
         self.inner.add_virtual_eval(challenger)
     }
 
@@ -264,9 +262,11 @@ where
     /// - If `char(F) == 2` (Lemma 6.4).
     /// - If `encoding.message_len() < 2` (Lemma 6.4).
     /// - If `self.folding() == 0` or `> self.num_variables()`.
-    #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_lines)]
-    #[allow(clippy::type_complexity)]
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        clippy::type_complexity
+    )]
     #[tracing::instrument(skip_all)]
     pub fn into_sumcheck<R, Ch>(
         self,
