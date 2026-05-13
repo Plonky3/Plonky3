@@ -104,21 +104,36 @@ jobs:
           cargo build --verbose --target ${{ env.target }} -p p3-util
 
   check_wasm32_simd128:
-    name: Build wasm32 simd128
+    name: Test wasm32 simd128
     runs-on: ubuntu-latest
     if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
     env:
-      target: wasm32-unknown-unknown
+      # Compile-coverage target for browser-style consumers.
+      build_target: wasm32-unknown-unknown
+      # Runtime target — wasi exposes the syscalls (clock, write) wasmtime needs
+      # to actually execute the SIMD tests and the smoke/bench binaries.
+      run_target: wasm32-wasip1
+      RUSTFLAGS: -C debuginfo=0 -C target-feature=+simd128
+      # Tell cargo to invoke the built `.wasm` via wasmtime.
+      CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ env.target }}
+          targets: ${{ env.build_target }}, ${{ env.run_target }}
       - uses: Swatinem/rust-cache@v2
-      - name: Build p3-goldilocks with +simd128
-        run: cargo build --verbose --target ${{ env.target }} -p p3-goldilocks
-        env:
-          RUSTFLAGS: -C debuginfo=0 -C target-feature=+simd128
+      - name: Install wasmtime
+        run: |
+          curl https://wasmtime.dev/install.sh -sSf | bash
+          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+      - name: Build p3-goldilocks for wasm32-unknown-unknown
+        run: cargo build --verbose --target ${{ env.build_target }} -p p3-goldilocks
+      - name: Run wasm32+simd128 SIMD tests under wasmtime
+        run: cargo test --release --target ${{ env.run_target }} -p p3-goldilocks --lib wasm32_simd128
+      - name: Run wasm_smoke under wasmtime
+        run: cargo run --release --target ${{ env.run_target }} --bin wasm_smoke -p p3-goldilocks
+      - name: Run wasm_bench under wasmtime
+        run: cargo run --release --target ${{ env.run_target }} --bin wasm_bench -p p3-goldilocks
 
   lint:
     name: Formatting and Clippy
