@@ -16,7 +16,7 @@ use crate::{
 /// to feed the Karatsuba helpers.
 const fn sml_row_to_goldilocks_col<const N: usize>(row: &[i64; N]) -> [Goldilocks; N] {
     let col_i64 = first_row_to_first_col(row);
-    let mut col = [Goldilocks::new(0); N];
+    let mut col = [Goldilocks::ZERO; N];
     let mut i = 0;
     while i < N {
         col[i] = Goldilocks::new(col_i64[i] as u64);
