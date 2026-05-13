@@ -309,10 +309,7 @@ where
 
         // --- Plain-piece preamble (mirrors PrefixProver::into_sumcheck) ---
         let alpha: EF = challenger.sample_algebra_element();
-        let n_claims = {
-            use crate::sumcheck::layout::Layout;
-            inner.num_claims()
-        };
+        let n_claims = inner.num_claims()
         let mut alphas = alpha.powers();
         let accumulators: Vec<_> = inner
             .placements
