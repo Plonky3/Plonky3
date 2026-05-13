@@ -100,6 +100,23 @@ jobs:
           cargo build --verbose --target ${{ env.target }} -p p3-uni-stark
           cargo build --verbose --target ${{ env.target }} -p p3-util
 
+  check_wasm32_simd128:
+    name: Build wasm32 simd128
+    runs-on: ubuntu-latest
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
+    env:
+      target: wasm32-unknown-unknown
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build p3-goldilocks with +simd128
+        run: cargo build --verbose --target ${{ env.target }} -p p3-goldilocks
+        env:
+          RUSTFLAGS: -C debuginfo=0 -C target-feature=+simd128
+
   lint:
     name: Formatting and Clippy
     runs-on: ubuntu-latest
