@@ -522,6 +522,11 @@ where
     PF: Field,
 {
     pub fn new(permutation: P) -> Result<Self, String> {
+        const {
+            assert!(RATE > 0);
+            assert!(RATE < WIDTH);
+            assert!(OUT <= WIDTH);
+        }
         if F::order() >= PF::order() {
             return Err(String::from("F::order() must be less than PF::order()"));
         }
