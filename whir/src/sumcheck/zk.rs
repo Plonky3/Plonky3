@@ -621,10 +621,10 @@ where
     {
         let k = folding_factor;
 
-        assert!(
+        const { assert!(
             F::TWO != F::ZERO,
             "Construction 6.3 (Lemma 6.4) requires char(F) != 2",
-        );
+        ); }
         assert!(
             ell_zk >= 2,
             "Construction 6.3 (Lemma 6.4) requires ell_zk >= 2",
