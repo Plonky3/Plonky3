@@ -83,7 +83,8 @@ jobs:
           cargo build --verbose --target ${{ env.target }} -p p3-dft
           cargo build --verbose --target ${{ env.target }} -p p3-field
           cargo build --verbose --target ${{ env.target }} -p p3-fri
-          cargo build --verbose --target ${{ env.target }} -p p3-goldilocks
+          # `--lib` here because p3-goldilocks has host-only bins that require std and would otherwise fail
+          cargo build --verbose --target ${{ env.target }} -p p3-goldilocks --lib
           cargo build --verbose --target ${{ env.target }} -p p3-keccak
           cargo build --verbose --target ${{ env.target }} -p p3-keccak-air
           cargo build --verbose --target ${{ env.target }} -p p3-koala-bear
