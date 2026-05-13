@@ -36,10 +36,14 @@ type MaskMmcs = MerkleTreeMmcs<
 >;
 type MaskEnc = ReedSolomonZkEncoding<F, Radix2DFTSmallBatch<F>>;
 
-/// ZK code message length. Bound by Lemma 6.4 (`ℓ_zk ≥ 2`). `ℓ_zk = 4` sits at
-/// paper-minimum-plus-margin; the precise `λ → ℓ_zk` mapping depends on the
-/// outer code's list size (see Lemma 6.5), not on this parameter alone.
-const ELL_ZK: usize = 4;
+/// ZK code message length. Bound by Lemma 6.4 (`ℓ_zk ≥ 2`).
+///
+/// Theorem 1 of eprint 2026/391 (§2.7) instantiates the mask code as a
+/// Reed-Solomon code with message length `O(λ / log log λ)`. For `λ = 100`
+/// that gives `ℓ_zk ≈ 100 / log₂(log₂(100)) ≈ 37`, which is the value used
+/// here so the overhead bench is measured against a soundness-realistic
+/// mask size rather than the toy `ℓ_zk = 4` that minimises mask-side work.
+const ELL_ZK: usize = 37;
 /// Reed-Solomon randomness symbols appended to each mask before encoding.
 const T_RAND: usize = 2;
 
