@@ -1,3 +1,17 @@
+/// Resources:
+/// 1. WebAssembly SIMD proposal: https://github.com/WebAssembly/simd/blob/main/proposals/simd/SIMD.md
+/// 2. The arithmetic recipes are the standard Goldilocks SIMD recipes, mimicking the existing
+///    `aarch64_neon` and `x86_64_avx2` backends with the following intrinsic correspondence:
+///
+///      uint64x2_t                 → v128
+///      veorq_u64(a, b)            → v128_xor(a, b)
+///      vaddq_u64(a, b)            → i64x2_add(a, b)
+///      vsubq_u64(a, b)            → i64x2_sub(a, b)
+///      vcgtq_s64(a, b)            → i64x2_gt(a, b)
+///      vbicq_u64(a, b)            → v128_andnot(a, b)  (= a & !b)
+///      vshrq_n_u64::<32>(a)       → u64x2_shr(a, 32)
+///      vdupq_n_u64(x)             → u64x2_splat(x)
+///      vreinterpretq_s64_u64(x)   → identity (v128 is type-erased)
 use alloc::vec::Vec;
 use core::arch::wasm32::{
     i32x4_shuffle, i64x2_add, i64x2_extmul_low_u32x4, i64x2_gt, i64x2_shl, i64x2_shuffle,
@@ -134,6 +148,11 @@ impl PrimeCharacteristicRing for PackedGoldilocksWasm {
     }
 
     #[inline]
+    fn double(&self) -> Self {
+        Self::from_vector(double(self.to_vector()))
+    }
+
+    #[inline]
     fn square(&self) -> Self {
         Self::from_vector(square(self.to_vector()))
     }
@@ -197,21 +216,6 @@ unsafe impl PackedFieldPow2 for PackedGoldilocksWasm {
     }
 }
 
-// Resources:
-// 1. WebAssembly SIMD proposal: https://github.com/WebAssembly/simd/blob/main/proposals/simd/SIMD.md
-// 2. The arithmetic recipes are the standard Goldilocks SIMD recipes, modeled on Plonky3's existing
-//    `aarch64_neon` and `x86_64_avx2` backends with the following intrinsic correspondence:
-//
-//      uint64x2_t                 → v128
-//      veorq_u64(a, b)            → v128_xor(a, b)
-//      vaddq_u64(a, b)            → i64x2_add(a, b)
-//      vsubq_u64(a, b)            → i64x2_sub(a, b)
-//      vcgtq_s64(a, b)            → i64x2_gt(a, b)
-//      vbicq_u64(a, b)            → v128_andnot(a, b)  (= a & !b)
-//      vshrq_n_u64::<32>(a)       → u64x2_shr(a, 32)
-//      vdupq_n_u64(x)             → u64x2_splat(x)
-//      vreinterpretq_s64_u64(x)   → identity (v128 is type-erased)
-
 const SIGN_BIT: v128 =
     unsafe { transmute::<[u64; WIDTH], v128>([0x8000_0000_0000_0000u64; WIDTH]) };
 const SHIFTED_FIELD_ORDER: v128 = unsafe {
@@ -225,9 +229,9 @@ fn shift(x: v128) -> v128 {
     v128_xor(x, SIGN_BIT)
 }
 
-/// If `x_s < SHIFTED_FIELD_ORDER` (signed comparison), add `EPSILON` to canonicalize.
-/// The neon impl uses `vbicq_u64(EPSILON_VEC, mask) = EPSILON_VEC & !mask`. wasm32's
-/// `v128_andnot(a, b) = a & !b` matches.
+// If `x_s < SHIFTED_FIELD_ORDER` (signed comparison), add `EPSILON` to canonicalize.
+// The neon impl uses `vbicq_u64(EPSILON_VEC, mask) = EPSILON_VEC & !mask`. wasm32's
+// `v128_andnot(a, b) = a & !b` matches.
 #[inline(always)]
 fn canonicalize_s(x_s: v128) -> v128 {
     let mask = i64x2_gt(SHIFTED_FIELD_ORDER, x_s);
@@ -414,6 +418,12 @@ fn mul(x: v128, y: v128) -> v128 {
 #[inline(always)]
 fn square(x: v128) -> v128 {
     mul(x, x)
+}
+
+/// Goldilocks modular doubling, falls back to `add`.
+#[inline(always)]
+fn double(x: v128) -> v128 {
+    add(x, x)
 }
 
 #[cfg(test)]
