@@ -162,7 +162,7 @@ pub struct ZkPrefixProver<F, EF, Enc, M>
 where
     F: Field,
     EF: ExtensionField<F>,
-    Enc: ZkEncoding<F> + Clone,
+    Enc: ZkEncoding<F>,
     M: Mmcs<F>,
 {
     inner: PrefixProver<F, EF>,
@@ -174,7 +174,7 @@ impl<F, EF, Enc, M> ZkPrefixProver<F, EF, Enc, M>
 where
     F: Field,
     EF: ExtensionField<F>,
-    Enc: ZkEncoding<F> + Clone,
+    Enc: ZkEncoding<F>,
     M: Mmcs<F>,
 {
     /// Wraps a `PrefixProver` with the HVZK trio (encoding + MMCS).
@@ -969,7 +969,7 @@ mod tests {
             verifier.add_virtual_eval(eval, &mut verifier_challenger);
         }
 
-        let pow_bits = 0;
+        let pow_bits = 4;
         let mut zk_data = ZkSumcheckData::<F, EF>::default();
         let mut prover_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
 
@@ -1007,6 +1007,68 @@ mod tests {
         // big enough to exercise the per-round Lagrange-weighted accumulator
         // loop across multiple rounds.
         run_roundtrip(8, 3, 4, 2, 0).expect("honest roundtrip should accept");
+    }
+
+    /// Negative-path coverage for the verifier's PoW check at zk.rs:674.
+    ///
+    /// `run_roundtrip` exercises the OK arm of `if pow_bits > 0 &&
+    /// !challenger.check_witness(...)` — wiring catch only. This test pins
+    /// down the rejection arm: mutating any single PoW witness must produce
+    /// `SumcheckError::InvalidPowWitness`.
+    ///
+    /// Uses `pow_bits = 16` so the false-positive probability of a forged
+    /// witness accidentally passing the difficulty check is `2^-16`,
+    /// effectively zero for any concrete seed.
+    #[test]
+    fn forged_pow_witness_rejected() {
+        let n_vars = 6;
+        let folding_factor = 2;
+        let ell_zk = 4;
+        let num_eqs = 1;
+        let seed = 0u64;
+        let pow_bits = 16;
+
+        let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
+        let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+        let evals: Vec<F> = (0..(1usize << n_vars)).map(|_| data_rng.random()).collect();
+
+        let (mut prover, mut verifier, _) =
+            build_prover_verifier(evals, folding_factor, encoding, mmcs);
+
+        let mut prover_ch = MyChallenger::new(perm.clone());
+        let mut verifier_ch = MyChallenger::new(perm);
+
+        for _ in 0..num_eqs {
+            let eval = prover.add_virtual_eval(&mut prover_ch);
+            verifier.add_virtual_eval(eval, &mut verifier_ch);
+        }
+
+        let mut zk_data = ZkSumcheckData::<F, EF>::default();
+        let mut prover_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+        let (_residual, _rand, mask_oracles) =
+            prover.into_sumcheck(&mut zk_data, pow_bits, &mut prover_ch, &mut prover_rng);
+
+        // Tamper with the first round's PoW witness. Adding `F::ONE` is a
+        // sufficient mutation: `check_witness` re-derives the difficulty bound
+        // from challenger state and rejects unless the witness happens to be
+        // one of the `2^{32-pow_bits}` valid preimages — a `2^-16` event here.
+        assert_eq!(zk_data.pow_witnesses.len(), folding_factor);
+        zk_data.pow_witnesses[0] += F::ONE;
+
+        let mask_commits: Vec<_> = mask_oracles.iter().map(|(c, _)| c.clone()).collect();
+        let result = verifier.into_sumcheck::<MyMmcs, _>(
+            &zk_data,
+            &mask_commits,
+            ell_zk,
+            folding_factor,
+            pow_bits,
+            &mut verifier_ch,
+        );
+
+        assert!(
+            matches!(result, Err(SumcheckError::InvalidPowWitness)),
+            "verifier accepted a forged PoW witness; got {result:?}",
+        );
     }
 
     proptest! {
