@@ -323,10 +323,7 @@ where
         // up where the concrete-claim collects left off. Materialising them
         // once here lets every round of the loop below read them by slice
         // instead of rebuilding the powers iterator each round.
-        let virtual_alphas: Vec<EF> = alphas
-            .by_ref()
-            .take(inner.virtual_claims.len())
-            .collect();
+        let virtual_alphas: Vec<EF> = alphas.by_ref().take(inner.virtual_claims.len()).collect();
         let mut plain_sum = inner.sum(alpha);
 
         // --- Construction 6.3 step 1: sample, encode, commit, observe ---
