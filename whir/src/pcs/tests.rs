@@ -945,6 +945,82 @@ mod zk_prefix_api_tests {
     }
 
     #[test]
+    #[should_panic(expected = "nonzero source randomness needs an explicit randomness-row handoff")]
+    fn round_zk_prefix_rejects_nonzero_source_randomness_for_first_target_oracle() {
+        let (pcs, witness, protocol, required_query_bound, expected_mask_domain) = setup();
+
+        let mut prover_challenger = challenger();
+        let mut domain_separator = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<8>(&mut domain_separator);
+        domain_separator.observe_domain_separator(&mut prover_challenger);
+
+        let (_commitment, prover_data) =
+            <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
+                &pcs,
+                witness,
+                &mut prover_challenger,
+            );
+        let initial_mask_encoding = ReedSolomonZkEncoding::new(
+            required_query_bound,
+            ZK_MESSAGE_LEN,
+            expected_mask_domain,
+            MyDft::default(),
+        );
+        let mut zk_rng = SmallRng::seed_from_u64(7);
+        let state = pcs.begin_zk_prefix_open(
+            prover_data,
+            &protocol,
+            &mut prover_challenger,
+            initial_mask_encoding,
+            &mut zk_rng,
+        );
+        let source_message = state
+            .initial_handoff
+            .residual_prover
+            .evals()
+            .as_slice()
+            .to_vec();
+        let inherited_claim = state.initial_handoff.residual_prover.claimed_sum();
+        let source_claim = inherited_claim / state.initial_handoff.eps;
+        let (pivot, &pivot_value) = source_message
+            .iter()
+            .enumerate()
+            .find(|(_, value)| !value.is_zero())
+            .expect("test source message should contain a nonzero entry");
+        let mut source_covector = EF::zero_vec(source_message.len());
+        source_covector[pivot] = source_claim / pivot_value;
+        let target_num_variables =
+            pcs.config.num_variables - pcs.config.folding_factor.total_number(0);
+        let target_domain_size = pcs.config.inv_rate(0) * (1usize << target_num_variables);
+        let target_folding = pcs.config.folding_factor.at_round(1);
+
+        let source = ZkCodeSwitchProverSource {
+            message: source_message,
+            covector: source_covector,
+            inherited_claim,
+            randomness_len: 1,
+            domain_size: target_domain_size,
+            folding_factor: target_folding,
+        };
+        let round_zk = pcs.config.round_parameters[0].zk.as_ref().unwrap();
+        let round_mask_encoding = ReedSolomonZkEncoding::new(
+            round_zk.mask_query_budget,
+            round_zk.mask_message_len,
+            round_zk.mask_domain_size,
+            MyDft::default(),
+        );
+
+        let _ = pcs.round_zk_prefix(
+            state,
+            0,
+            &source,
+            &round_mask_encoding,
+            &mut prover_challenger,
+            &mut zk_rng,
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "ZK encoding codeword length must match the derived mask domain")]
     fn begin_zk_prefix_open_rejects_encoding_domain_mismatch() {
         let (pcs, witness, protocol, required_query_bound, expected_mask_domain) = setup();

@@ -513,6 +513,11 @@ where
         assert_eq!(source.domain_size, target_domain_size);
         assert_eq!(source.folding_factor, folding_factor_next);
         assert_eq!(
+            source.randomness_len, 0,
+            "first ZK code-switch round only supports the target extension oracle; \
+             nonzero source randomness needs an explicit randomness-row handoff",
+        );
+        assert_eq!(
             source.message.as_slice(),
             folded_evaluations.as_slice(),
             "code-switch source message must match the committed target oracle",
@@ -803,6 +808,11 @@ where
         assert_eq!(
             source.folding_factor,
             self.params.folding_factor.at_round(round_index + 1),
+        );
+        assert_eq!(
+            source.randomness_len, 0,
+            "first ZK code-switch round only supports the target extension oracle; \
+             nonzero source randomness needs an explicit randomness-row handoff",
         );
         let round = proof
             .whir
