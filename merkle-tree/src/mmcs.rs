@@ -2392,6 +2392,188 @@ mod tests {
     }
 
     #[test]
+    fn pruned_amortized_cap_height_nonzero_binary() {
+        // Invariant: surviving group digests land in cap[idx >> 4], not the root.
+        //
+        // Fixture state: binary tree, height 64, cap_height = 2.
+        //
+        //     schedule levels = 6 - 2 = 4
+        //     cap entries     = 2^2   = 4
+        let seed = 100u64;
+        let mut rng = SmallRng::seed_from_u64(seed);
+
+        // Hash + 2-to-1 compression for a binary tree.
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+
+        // 4-entry cap → schedule truncated by 2 layers.
+        let mmcs = MyMmcs::new(hash, compress, 2);
+
+        // Single matrix → fully binary schedule, no injections.
+        let mut rng_mat = SmallRng::seed_from_u64(seed);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng_mat, 64, 4);
+        let dims = vec![mat.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        // Hit every cap slot:
+        //
+        //     3, 7   → cap[0]    (0..16)
+        //     23, 31 → cap[1]    (16..32)
+        //     47     → cap[2]    (32..48)
+        //     55, 63 → cap[3]    (48..64)
+        let indices: Vec<usize> = vec![3, 7, 15, 23, 31, 47, 55, 63];
+
+        let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
+        mmcs.verify_batch_pruned(&commit, &dims, pruned).unwrap();
+    }
+
+    #[test]
+    fn pruned_amortized_cap_height_with_mixed_heights() {
+        // Invariant: cap truncation + matrix injection cooperate.
+        //
+        // Fixture state: binary, cap_height = 1, two matrices.
+        //
+        //     mat1: 32 rows × 4 cols   (injected at the leaf layer)
+        //     mat2:  8 rows × 6 cols   (injected when padded height == 8)
+        //     schedule levels = 5 - 1 = 4
+        //     cap entries     = 2^1   = 2
+        let seed = 200u64;
+        let mut rng = SmallRng::seed_from_u64(seed);
+
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+
+        // 2-entry cap → schedule truncated by 1 layer.
+        let mmcs = MyMmcs::new(hash, compress, 1);
+
+        // Height ratio 32 / 8 = 4 → 2 binary folds separate the injections.
+        let mut rng_mat = SmallRng::seed_from_u64(seed);
+        let mat1 = RowMajorMatrix::<F>::rand(&mut rng_mat, 32, 4);
+        let mat2 = RowMajorMatrix::<F>::rand(&mut rng_mat, 8, 6);
+        let dims = vec![mat1.dimensions(), mat2.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat1, mat2]);
+
+        // Span the half-tree boundary (15 vs 16) to hit both cap entries.
+        let indices: Vec<usize> = vec![0, 7, 15, 31];
+
+        let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
+        mmcs.verify_batch_pruned(&commit, &dims, pruned).unwrap();
+    }
+
+    #[test]
+    fn pruned_amortized_4ary_cap_height_nonzero() {
+        // Invariant: same as the binary cap test, but under 4-ary arity.
+        //
+        // Fixture state: 4-ary tree, height 64, cap_height = 1.
+        //
+        //     schedule levels = 3 - 1 = 2   (schedule = [4, 4])
+        //     cap entries     = 4
+        let seed = 300u64;
+        let mut rng = SmallRng::seed_from_u64(seed);
+
+        // Width-16 leaf hash + width-32 4-to-1 compression.
+        let perm16 = Perm::new_from_rng_128(&mut rng);
+        let perm32 = PermWide::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm16);
+        let compress = MyCompress4::new(perm32);
+
+        // 4-entry cap one layer below the root.
+        let mmcs = MyMmcs4::new(hash, compress, 1);
+
+        // Single 64-row matrix → pure 4-ary schedule, no injection.
+        let mut rng_mat = SmallRng::seed_from_u64(seed);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng_mat, 64, 4);
+        let dims = vec![mat.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        // Hit every cap slot:
+        //
+        //      1, 5  → cap[0]    ( 0..16)
+        //     17     → cap[1]    (16..32)
+        //     33     → cap[2]    (32..48)
+        //     50, 63 → cap[3]    (48..64)
+        let indices: Vec<usize> = vec![1, 5, 17, 33, 50, 63];
+
+        let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
+        mmcs.verify_batch_pruned(&commit, &dims, pruned).unwrap();
+    }
+
+    #[test]
+    fn pruned_amortized_exhaustive_cap_height_sweep() {
+        // Invariant: amortized verifier ≡ per-path verifier across every
+        // (height, cap_height, query subset) cell in the sweep.
+        //
+        // Sweep:
+        //
+        //     height     ∈ {4, 8, 16, 32}
+        //     cap_height ∈ 0..=log2(height)
+        //     trials     = 32 per (height, cap_height)
+        //
+        // Failures carry (height, cap_height, trial) for localization.
+
+        // Single RNG → seed alone reproduces any failure.
+        let seed = 7777u64;
+        let mut rng = SmallRng::seed_from_u64(seed);
+
+        // Heights of 4 / 8 / 16 / 32 → schedules of 2 / 3 / 4 / 5 levels.
+        for height in [4usize, 8, 16, 32] {
+            // Walk cap heights from 0 (single root) up to log2(height) (empty schedule).
+            for cap_height in 0..=p3_util::log2_ceil_usize(height) {
+                // Fresh permutation per cell → no state leaks across cases.
+                let perm = Perm::new_from_rng_128(&mut rng);
+                let hash = MyHash::new(perm.clone());
+                let compress = MyCompress::new(perm);
+                let mmcs = MyMmcs::new(hash, compress, cap_height);
+
+                // Pure binary schedule; only the cap shape varies per cell.
+                let mat = RowMajorMatrix::<F>::rand(&mut rng, height, 3);
+                let dims = vec![mat.dimensions()];
+                let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+                // 32 trials → mix of scattered, clustered, dense, sparse subsets.
+                for trial in 0..32 {
+                    // num_queries ∈ [1, height-1] (never height, so the
+                    // schedule still has work to do).
+                    let num_queries = (trial % (height - 1)) + 1;
+
+                    // Deterministic pseudo-random indices:
+                    //
+                    //     trial t, slot i  →  (i*13 + t*7) mod height
+                    let indices: Vec<usize> = (0..num_queries)
+                        .map(|i| (i * 13 + trial * 7) % height)
+                        .collect();
+
+                    // Oracle: per-path verifier on each index.
+                    // Failure here = broken test setup, not amortized code.
+                    for &i in &indices {
+                        let ind = mmcs.open_batch(i, &prover_data);
+                        let bref =
+                            BatchOpeningRef::new(&ind.opened_values, &ind.opening_proof);
+                        mmcs.verify_batch(&commit, &dims, i, bref).unwrap_or_else(|e| {
+                            panic!(
+                                "per-path oracle failed: \
+                                 height={height} cap={cap_height} trial={trial} index={i}: {e:?}"
+                            )
+                        });
+                    }
+
+                    // Subject: amortized verifier on the same set.
+                    // Must accept (oracle just did).
+                    let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
+                    mmcs.verify_batch_pruned(&commit, &dims, pruned).unwrap_or_else(|e| {
+                        panic!(
+                            "amortized pruned verifier failed: \
+                             height={height} cap={cap_height} trial={trial}: {e:?}"
+                        )
+                    });
+                }
+            }
+        }
+    }
+
+    #[test]
     fn pruned_opening_with_duplicate_indices() {
         let seed = 33u64;
         let mmcs = make_binary_mmcs(seed);
