@@ -151,6 +151,11 @@ impl<P, const WIDTH: usize, const RATE: usize, const OUT: usize>
     PaddingFreeSponge<P, WIDTH, RATE, OUT>
 {
     pub const fn new(permutation: P) -> Self {
+        const {
+            assert!(RATE > 0);
+            assert!(RATE < WIDTH);
+            assert!(OUT <= WIDTH);
+        }
         Self { permutation }
     }
 }
@@ -165,11 +170,6 @@ where
     where
         I: IntoIterator<Item = T>,
     {
-        const {
-            assert!(RATE > 0);
-            assert!(RATE < WIDTH);
-            assert!(OUT <= WIDTH);
-        }
         // Start from the all-zero state.
         let mut state = [T::default(); WIDTH];
         let mut input = input.into_iter();
