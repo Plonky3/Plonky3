@@ -742,6 +742,7 @@ mod zk_prefix_api_tests {
     use crate::pcs::adapter::{
         ZkCodeSwitchProverSource, ZkCodeSwitchVerifierSource, evaluate_zk_mask_residual,
     };
+    use crate::pcs::proof::QueryOpening;
     use crate::sumcheck::layout::{Layout, PrefixProver, Table};
     use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
 
@@ -798,7 +799,6 @@ mod zk_prefix_api_tests {
     #[test]
     fn round_zk_prefix_populates_first_round_payload() {
         let (pcs, witness, protocol, required_query_bound, expected_mask_domain) = setup();
-        let source_message = witness.poly().as_slice().to_vec();
 
         let mut prover_challenger = challenger();
         let mut domain_separator = DomainSeparator::new(vec![]);
@@ -825,6 +825,12 @@ mod zk_prefix_api_tests {
             initial_mask_encoding,
             &mut zk_rng,
         );
+        let source_message = state
+            .initial_handoff
+            .residual_prover
+            .evals()
+            .as_slice()
+            .to_vec();
         let inherited_claim = state.initial_handoff.residual_prover.claimed_sum();
         let source_claim = inherited_claim / state.initial_handoff.eps;
         let (pivot, &pivot_value) = source_message
@@ -833,15 +839,19 @@ mod zk_prefix_api_tests {
             .find(|(_, value)| !value.is_zero())
             .expect("test source message should contain a nonzero entry");
         let mut source_covector = EF::zero_vec(source_message.len());
-        source_covector[pivot] = source_claim / EF::from(pivot_value);
+        source_covector[pivot] = source_claim / pivot_value;
+        let target_num_variables =
+            pcs.config.num_variables - pcs.config.folding_factor.total_number(0);
+        let target_domain_size = pcs.config.inv_rate(0) * (1usize << target_num_variables);
+        let target_folding = pcs.config.folding_factor.at_round(1);
 
         let source = ZkCodeSwitchProverSource {
             message: source_message.clone(),
             covector: source_covector.clone(),
             inherited_claim,
             randomness_len: 0,
-            domain_size: pcs.config.round_parameters[0].domain_size,
-            folding_factor: pcs.config.round_parameters[0].folding_factor,
+            domain_size: target_domain_size,
+            folding_factor: target_folding,
         };
         let round_zk = pcs.config.round_parameters[0].zk.as_ref().unwrap();
         let round_mask_encoding = ReedSolomonZkEncoding::new(
@@ -874,6 +884,13 @@ mod zk_prefix_api_tests {
             round_zk_proof.source_queries.len(),
             round_zk.mask_query_budget
         );
+        assert!(
+            round_zk_proof
+                .source_queries
+                .iter()
+                .all(|query| matches!(query, QueryOpening::Extension { .. })),
+            "code-switch source openings must be tied to the committed target oracle",
+        );
         assert_eq!(
             round_zk_proof.mask_queries.len(),
             round_zk.mask_query_budget
@@ -897,10 +914,9 @@ mod zk_prefix_api_tests {
             commitment,
             message_len: source_message.len(),
             covector: source_covector,
-            inherited_claim,
             randomness_len: 0,
-            domain_size: pcs.config.round_parameters[0].domain_size,
-            folding_factor: pcs.config.round_parameters[0].folding_factor,
+            domain_size: target_domain_size,
+            folding_factor: target_folding,
         };
         let verifier_handoff = pcs
             .verify_round_zk_prefix(
