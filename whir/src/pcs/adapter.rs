@@ -8,25 +8,29 @@ use core::slice::from_ref;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{BatchOpeningRef, Mmcs, MultilinearPcs};
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{ExtensionField, TwoAdicField};
+use p3_field::{ExtensionField, TwoAdicField, dot_product};
 use p3_matrix::dense::DenseMatrix;
 use p3_matrix::extension::FlatMatrixView;
 use p3_matrix::{Dimensions, Matrix};
-use p3_zk_codes::{LinearZkEncoding, ZkEncoding};
-use rand::Rng;
+use p3_multilinear_util::poly::Poly;
+use p3_zk_codes::ZkEncoding;
 use rand::distr::{Distribution, StandardUniform};
+use rand::{Rng, RngExt};
 
 use super::prover::WhirProver;
 use super::verifier::WhirVerifier;
 use super::verifier::errors::VerifierError;
 use crate::pcs::code_switch::{
-    ZkMaskClaim, batched_claim, batching_coefficients, output_relation, private_ood_answers,
+    CodeSwitchOutputRelation, ZkMaskClaim, batched_claim, batching_coefficients,
+    private_ood_answers,
 };
 use crate::pcs::committer::writer::commit_extension;
 use crate::pcs::proof::{PcsProof, QueryOpening, WhirInitialZkProof, WhirRoundZkProof};
 use crate::pcs::utils::get_challenge_stir_queries;
 use crate::sumcheck::OpeningProtocol;
 use crate::sumcheck::layout::{Layout, PrefixProver, Verifier, Witness};
+use crate::sumcheck::product_polynomial::ProductPolynomial;
+use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
 use crate::sumcheck::zk::{
     ZkPrefixProver, ZkSumcheckData, ZkSumcheckHandoff, ZkVerifier, ZkVerifierHandoff,
 };
@@ -74,6 +78,57 @@ where
     pub source_merkle_data: MT::ProverData<DenseMatrix<F>>,
 }
 
+/// Prover-side source relation consumed by one code-switch round.
+///
+/// The fields deliberately describe one coherent source object: the message
+/// behind the source commitment, the covector defining the inherited linear
+/// claim, and the row layout used to turn queried Merkle positions into
+/// generator-matrix rows.
+pub struct ZkCodeSwitchProverSource<F, EF>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F>,
+{
+    /// Source oracle message before encoding.
+    pub message: Vec<F>,
+    /// Covector for the inherited source claim.
+    pub covector: Vec<EF>,
+    /// Inherited scalar claim handed off by the previous IOR.
+    ///
+    /// For the #1605 HVZK sumcheck this is `eps * <message, covector>` in
+    /// the no-auxiliary case.
+    pub inherited_claim: EF,
+    /// Randomness segment length of the source encoding.
+    pub randomness_len: usize,
+    /// Full encoded codeword domain size.
+    pub domain_size: usize,
+    /// Row width exponent used by the WHIR Merkle layout.
+    pub folding_factor: usize,
+}
+
+/// Verifier-side source relation consumed by one code-switch round.
+pub struct ZkCodeSwitchVerifierSource<F, EF, MT>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F>,
+    MT: Mmcs<F>,
+{
+    /// Source oracle commitment already bound in the transcript.
+    pub commitment: MT::Commitment,
+    /// Message length before encoding.
+    pub message_len: usize,
+    /// Covector for the inherited source claim.
+    pub covector: Vec<EF>,
+    /// Inherited scalar claim handed off by the previous IOR.
+    pub inherited_claim: EF,
+    /// Randomness segment length of the source encoding.
+    pub randomness_len: usize,
+    /// Full encoded codeword domain size.
+    pub domain_size: usize,
+    /// Row width exponent used by the WHIR Merkle layout.
+    pub folding_factor: usize,
+}
+
 /// Prefix-ZK state after one code-switch round.
 pub struct WhirZkPrefixRoundState<F, EF, Enc, MT>
 where
@@ -88,6 +143,198 @@ where
     pub handoff: ZkSumcheckHandoff<F, EF, Enc, MT>,
     /// Merkle prover data for the newly committed folded oracle.
     pub target_merkle_data: <MT as Mmcs<F>>::ProverData<FlatMatrixView<F, EF, DenseMatrix<EF>>>,
+}
+
+fn source_message_row<F: TwoAdicField>(
+    message_len: usize,
+    domain_size: usize,
+    folding_factor: usize,
+    position: usize,
+) -> Vec<F> {
+    let row_width = 1usize << folding_factor;
+    assert!(
+        message_len.is_multiple_of(row_width),
+        "source message length must be divisible by the WHIR row width",
+    );
+    let folded_domain_size = domain_size >> folding_factor;
+    let row = position / row_width;
+    let limb = position % row_width;
+    assert!(row < folded_domain_size, "source query row out of range");
+
+    let coeffs_per_limb = message_len / row_width;
+    let point = F::two_adic_generator(folded_domain_size.ilog2() as usize).exp_u64(row as u64);
+    let mut out = F::zero_vec(message_len);
+    let mut power = F::ONE;
+    for coeff in 0..coeffs_per_limb {
+        out[limb * coeffs_per_limb + coeff] = power;
+        power *= point;
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn code_switch_output_relation_from_rows<F, EF>(
+    source_message_len: usize,
+    source_covector: &[EF],
+    auxiliary_covectors: &[Vec<EF>],
+    source_randomness_len: usize,
+    pad_len: usize,
+    rho_ood_points: &[EF],
+    query_positions: &[usize],
+    source_rows: &[Vec<F>],
+    claim: &ZkMaskClaim<EF>,
+) -> CodeSwitchOutputRelation<EF>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F>,
+{
+    assert_eq!(source_covector.len(), source_message_len);
+    assert_eq!(rho_ood_points.len(), claim.ood_coeffs.len());
+    assert_eq!(query_positions.len(), claim.in_domain_coeffs.len());
+    assert_eq!(source_rows.len(), query_positions.len());
+    assert!(claim.source_randomness_weights.is_empty());
+    assert!(claim.pad_weights.is_empty());
+
+    let mut source_covector_out = source_covector
+        .iter()
+        .map(|&x| claim.base_claim_coeff * claim.residual_sumcheck_scale * x)
+        .collect::<Vec<_>>();
+    let auxiliary_covectors_out = auxiliary_covectors
+        .iter()
+        .map(|covector| {
+            covector
+                .iter()
+                .map(|&x| claim.base_claim_coeff * x)
+                .collect()
+        })
+        .collect();
+    let mut mask_covector = EF::zero_vec(source_randomness_len + pad_len);
+
+    for (&rho, &coeff) in rho_ood_points.iter().zip(&claim.ood_coeffs) {
+        let mut power = EF::ONE;
+        for dst in &mut source_covector_out {
+            *dst += coeff * power;
+            power *= rho;
+        }
+        for dst in &mut mask_covector {
+            *dst += coeff * power;
+            power *= rho;
+        }
+    }
+
+    for (row, &coeff) in source_rows.iter().zip(&claim.in_domain_coeffs) {
+        assert_eq!(row.len(), source_message_len);
+        for (dst, &entry) in source_covector_out.iter_mut().zip(row) {
+            *dst += coeff * EF::from(entry);
+        }
+    }
+
+    CodeSwitchOutputRelation {
+        source_covector: source_covector_out,
+        auxiliary_covectors: auxiliary_covectors_out,
+        mask_covector,
+    }
+}
+
+pub(crate) fn evaluate_zk_mask_residual<F, EF>(masks: &[Vec<F>], gammas: &[EF]) -> EF
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F>,
+{
+    assert_eq!(masks.len(), gammas.len());
+    let k = masks.len();
+    if k == 0 {
+        return EF::ZERO;
+    }
+
+    let mut pow2 = Vec::with_capacity(k + 1);
+    let mut power = F::ONE;
+    for _ in 0..=k {
+        pow2.push(power);
+        power *= F::TWO;
+    }
+
+    let mut mask_evals_at_gamma = Vec::with_capacity(k);
+    let mut sum_future_endpoints: F = masks
+        .iter()
+        .map(|mask| mask[0].double() + mask[1..].iter().copied().sum::<F>())
+        .sum();
+    let mut target = EF::ZERO;
+
+    for (round_idx, (s_j, &gamma_j)) in masks.iter().zip(gammas).enumerate() {
+        let j = round_idx + 1;
+        let s_j_endpoints = s_j[0].double() + s_j[1..].iter().copied().sum::<F>();
+        sum_future_endpoints -= s_j_endpoints;
+
+        let h_size = s_j.len().max(3);
+        let mut h = EF::zero_vec(h_size);
+        let mult_live = pow2[k - j];
+        for (i, &c) in s_j.iter().enumerate() {
+            h[i] += mult_live * c;
+        }
+
+        let past_mask_sum: EF = mask_evals_at_gamma.iter().copied().sum();
+        h[0] += past_mask_sum * mult_live;
+        if j < k {
+            h[0] += EF::from(pow2[k - j - 1] * sum_future_endpoints);
+        }
+
+        target = h
+            .iter()
+            .rev()
+            .copied()
+            .fold(EF::ZERO, |acc, coeff| acc * gamma_j + coeff);
+
+        let s_j_at_gamma = s_j
+            .iter()
+            .rev()
+            .copied()
+            .map(EF::from)
+            .fold(EF::ZERO, |acc, coeff| acc * gamma_j + coeff);
+        mask_evals_at_gamma.push(s_j_at_gamma);
+    }
+
+    target
+}
+
+fn zk_mask_residual_covectors<F, EF>(masks: &[Vec<F>], gammas: &[EF]) -> Vec<Vec<EF>>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F>,
+{
+    assert!(
+        masks
+            .iter()
+            .all(|mask| mask.len() == masks.first().map_or(0, Vec::len))
+    );
+    zk_mask_residual_covectors_from_shape(masks.len(), masks.first().map_or(0, Vec::len), gammas)
+}
+
+fn zk_mask_residual_covectors_from_shape<F, EF>(
+    mask_count: usize,
+    mask_len: usize,
+    gammas: &[EF],
+) -> Vec<Vec<EF>>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F>,
+{
+    let mut basis_masks = (0..mask_count)
+        .map(|_| F::zero_vec(mask_len))
+        .collect::<Vec<_>>();
+    let mut covectors = (0..mask_count)
+        .map(|_| EF::zero_vec(mask_len))
+        .collect::<Vec<_>>();
+
+    for mask_idx in 0..mask_count {
+        for coeff_idx in 0..mask_len {
+            basis_masks[mask_idx][coeff_idx] = F::ONE;
+            covectors[mask_idx][coeff_idx] = evaluate_zk_mask_residual(&basis_masks, gammas);
+            basis_masks[mask_idx][coeff_idx] = F::ZERO;
+        }
+    }
+
+    covectors
 }
 
 impl<EF, F, Dft, MT, Challenger> WhirProver<EF, F, Dft, MT, Challenger, PrefixProver<F, EF>>
@@ -201,17 +448,16 @@ where
     /// a fresh mask oracle, records private OOD answers and source/mask openings,
     /// derives the `mu'` relation, and runs the next HVZK residual sumcheck.
     #[allow(clippy::too_many_lines)]
-    pub fn round_zk_prefix<SourceEnc, Enc, R>(
+    pub fn round_zk_prefix<Enc, R>(
         &self,
         state: WhirZkPrefixOpenState<F, EF, Enc, MT>,
         round_index: usize,
-        source_encoding: &SourceEnc,
+        source: &ZkCodeSwitchProverSource<F, EF>,
         mask_encoding: &Enc,
         challenger: &mut Challenger,
         rng: &mut R,
     ) -> WhirZkPrefixRoundState<F, EF, Enc, MT>
     where
-        SourceEnc: LinearZkEncoding<F>,
         Enc: ZkEncoding<F>,
         Enc::Codeword: Matrix<F>,
         R: Rng,
@@ -232,6 +478,8 @@ where
             .zk
             .as_ref()
             .expect("round_zk_prefix requires RoundConfig::zk");
+        assert_eq!(source.domain_size, round_params.domain_size);
+        assert_eq!(source.folding_factor, round_params.folding_factor);
         assert_eq!(
             mask_encoding.message_len(),
             round_zk.mask_message_len,
@@ -253,9 +501,23 @@ where
             self.num_variables - self.params.folding_factor.total_number(round_index);
         assert_eq!(num_variables, folded_evaluations.num_variables());
         assert_eq!(
-            source_encoding.message_len(),
-            folded_evaluations.as_slice().len(),
-            "source encoding message length must match the residual polynomial",
+            source.message.len(),
+            source.covector.len(),
+            "source message and covector length must match",
+        );
+        assert_eq!(
+            source.inherited_claim,
+            handoff.residual_prover.claimed_sum(),
+            "source handoff inherited claim must match the #1605 residual prover claim",
+        );
+        assert_eq!(
+            source.inherited_claim,
+            handoff.eps
+                * dot_product::<EF, _, _>(
+                    source.message.iter().copied().map(EF::from),
+                    source.covector.iter().copied(),
+                ),
+            "source handoff inherited claim must match the eps-scaled source message/covector",
         );
 
         let folding_factor_next = self.params.folding_factor.at_round(round_index + 1);
@@ -271,7 +533,14 @@ where
         challenger.observe(target_root.clone());
         proof.whir.rounds[round_index].commitment = Some(target_root);
 
-        let mask_message = F::zero_vec(round_zk.mask_message_len);
+        assert!(
+            source.randomness_len <= round_zk.mask_message_len,
+            "source randomness must fit in the round mask message",
+        );
+        let pad_len = round_zk.mask_message_len - source.randomness_len;
+        let mask_message = (0..round_zk.mask_message_len)
+            .map(|_| rng.random())
+            .collect::<Vec<F>>();
         let mask_codeword = mask_encoding.encode(&mask_message, rng);
         let (mask_commitment, mask_prover_data) = self.mmcs.commit_matrix(mask_codeword);
         challenger.observe(mask_commitment.clone());
@@ -279,14 +548,19 @@ where
         let rho_ood_points = (0..round_zk.ood_samples)
             .map(|_| challenger.sample_algebra_element())
             .collect::<Vec<EF>>();
-        let source_message = folded_evaluations.as_slice();
+        let source_message = source
+            .message
+            .iter()
+            .copied()
+            .map(EF::from)
+            .collect::<Vec<_>>();
         let mask_message_ext = mask_message
             .iter()
             .copied()
             .map(EF::from)
             .collect::<Vec<_>>();
         let private_ood_answers =
-            private_ood_answers(&rho_ood_points, source_message, &mask_message_ext);
+            private_ood_answers(&rho_ood_points, &source_message, &mask_message_ext);
         challenger.observe_algebra_slice(&private_ood_answers);
 
         if round_params.pow_bits > 0 {
@@ -304,12 +578,20 @@ where
         let mut source_queries = Vec::with_capacity(row_indices.len());
         let mut source_openings = Vec::with_capacity(row_indices.len() * row_width);
         let mut query_positions = Vec::with_capacity(row_indices.len() * row_width);
+        let mut source_rows = Vec::with_capacity(row_indices.len() * row_width);
         for &row in &row_indices {
             let opening = self.mmcs.open_batch(row, &state.source_merkle_data);
             let values = opening.opened_values[0].clone();
             for (limb, &value) in values.iter().enumerate() {
                 source_openings.push(EF::from(value));
-                query_positions.push(row * row_width + limb);
+                let position = row * row_width + limb;
+                query_positions.push(position);
+                source_rows.push(source_message_row(
+                    source.message.len(),
+                    source.domain_size,
+                    source.folding_factor,
+                    position,
+                ));
             }
             source_queries.push(QueryOpening::Base {
                 values,
@@ -343,33 +625,73 @@ where
             source_randomness_weights: Vec::new(),
             pad_weights: Vec::new(),
         };
-        let _mu_prime = batched_claim(
-            handoff
-                .residual_prover
-                .evals()
-                .as_slice()
-                .iter()
-                .copied()
-                .sum(),
+        let initial_gammas = handoff.randomness.iter().copied().collect::<Vec<_>>();
+        let auxiliary_covectors =
+            zk_mask_residual_covectors::<F, EF>(&handoff.mask_messages, &initial_gammas);
+        let auxiliary_claim = handoff
+            .mask_messages
+            .iter()
+            .zip(&auxiliary_covectors)
+            .map(|(message, covector)| {
+                dot_product::<EF, _, _>(
+                    message.iter().copied().map(EF::from),
+                    covector.iter().copied(),
+                )
+            })
+            .sum::<EF>();
+        let inherited_claim = handoff.residual_prover.claimed_sum() + auxiliary_claim;
+        let mu_prime = batched_claim(
+            inherited_claim,
             &private_ood_answers,
             &source_openings,
             &claim,
         )
         .expect("honest code-switch batching dimensions should match");
-        let _output_relation = output_relation(
-            source_encoding,
-            &EF::zero_vec(source_encoding.message_len()),
-            &[],
-            0,
-            round_zk.mask_message_len,
+        let output_relation = code_switch_output_relation_from_rows(
+            source.message.len(),
+            &source.covector,
+            &auxiliary_covectors,
+            source.randomness_len,
+            pad_len,
             &rho_ood_points,
             &query_positions,
+            &source_rows,
             &claim,
-        )
-        .expect("honest code-switch relation dimensions should match");
+        );
+
+        let mut relation_evals = source_message;
+        for message in &handoff.mask_messages {
+            relation_evals.extend(message.iter().copied().map(EF::from));
+        }
+        relation_evals.extend(mask_message_ext.iter().copied());
+        let mut relation_weights = output_relation.source_covector;
+        for covector in output_relation.auxiliary_covectors {
+            relation_weights.extend(covector);
+        }
+        relation_weights.extend(output_relation.mask_covector);
+        let relation_len = relation_evals
+            .len()
+            .next_power_of_two()
+            .max(1usize << folding_factor_next);
+        relation_evals.resize(relation_len, EF::ZERO);
+        relation_weights.resize(relation_len, EF::ZERO);
+        debug_assert_eq!(
+            dot_product::<EF, _, _>(
+                relation_evals.iter().copied(),
+                relation_weights.iter().copied(),
+            ),
+            mu_prime,
+            "code-switch output relation must evaluate to mu'",
+        );
+        let relation_poly = ProductPolynomial::new_unpacked(
+            VariableOrder::Prefix,
+            Poly::new(relation_evals),
+            Poly::new(relation_weights),
+        );
+        let relation_prover = SumcheckProver::new(relation_poly, mu_prime);
 
         let mut zk_sumcheck = ZkSumcheckData::default();
-        let next_handoff = handoff.residual_prover.into_zk_sumcheck(
+        let next_handoff = relation_prover.into_zk_sumcheck(
             &mut zk_sumcheck,
             mask_encoding,
             &self.mmcs,
@@ -404,17 +726,13 @@ where
     /// does not route through the plain PCS verifier, and it checks the source
     /// and mask openings carried by `WhirRoundZkProof`.
     #[allow(clippy::too_many_lines)]
-    pub fn verify_round_zk_prefix<SourceEnc>(
+    pub fn verify_round_zk_prefix(
         &self,
-        commitment: &MT::Commitment,
         proof: &PcsProof<F, EF, MT>,
         protocol: &OpeningProtocol,
-        source_encoding: &SourceEnc,
+        source: &ZkCodeSwitchVerifierSource<F, EF, MT>,
         challenger: &mut Challenger,
-    ) -> Result<ZkVerifierHandoff<EF>, VerifierError>
-    where
-        SourceEnc: LinearZkEncoding<F>,
-    {
+    ) -> Result<ZkVerifierHandoff<EF>, VerifierError> {
         let zk_config = self
             .config
             .zk
@@ -425,7 +743,7 @@ where
             "ZK WHIR currently supports only prefix layout"
         );
 
-        challenger.observe(commitment.clone());
+        challenger.observe(source.commitment.clone());
 
         let mut initial_verifier = ZkVerifier::<F, EF>::new(&protocol.table_shapes());
         for &eval in &proof.whir.initial_ood_answers {
@@ -468,6 +786,8 @@ where
             .zk
             .as_ref()
             .expect("verify_round_zk_prefix requires RoundConfig::zk");
+        assert_eq!(source.domain_size, round_params.domain_size);
+        assert_eq!(source.folding_factor, round_params.folding_factor);
         let round = proof
             .whir
             .rounds
@@ -533,7 +853,7 @@ where
             };
             self.mmcs
                 .verify_batch(
-                    commitment,
+                    &source.commitment,
                     &source_dimensions,
                     row,
                     BatchOpeningRef {
@@ -602,7 +922,7 @@ where
             source_randomness_weights: Vec::new(),
             pad_weights: Vec::new(),
         };
-        let _ = batched_claim(
+        let mu_prime = batched_claim(
             initial_handoff.claimed_residual,
             &round_zk_proof.private_ood_answers,
             &source_openings,
@@ -612,32 +932,56 @@ where
             position: 0,
             reason: err.to_string(),
         })?;
-        let _ = output_relation(
-            source_encoding,
-            &EF::zero_vec(source_encoding.message_len()),
-            &[],
-            0,
-            round_zk.mask_message_len,
+        let pad_len = round_zk
+            .mask_message_len
+            .checked_sub(source.randomness_len)
+            .ok_or_else(|| VerifierError::MerkleProofInvalid {
+                position: 0,
+                reason: "source encoding randomness exceeds round mask message length".into(),
+            })?;
+        let source_rows = query_positions
+            .iter()
+            .map(|&position| {
+                source_message_row(
+                    source.message_len,
+                    source.domain_size,
+                    source.folding_factor,
+                    position,
+                )
+            })
+            .collect::<Vec<_>>();
+        let initial_gammas = initial_handoff
+            .randomness
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        let auxiliary_covectors = zk_mask_residual_covectors_from_shape::<F, EF>(
+            initial_gammas.len(),
+            initial_zk.zk_sumcheck.ell_zk,
+            &initial_gammas,
+        );
+        let _ = code_switch_output_relation_from_rows(
+            source.message_len,
+            &source.covector,
+            &auxiliary_covectors,
+            source.randomness_len,
+            pad_len,
             &rho_ood_points,
             &query_positions,
+            &source_rows,
             &claim,
-        )
-        .map_err(|err| VerifierError::MerkleProofInvalid {
-            position: 0,
-            reason: err.to_string(),
-        })?;
+        );
 
-        let nested_verifier = ZkVerifier::<F, EF>::new(&[]);
-        nested_verifier
-            .into_sumcheck::<MT, _>(
-                &round_zk_proof.zk_sumcheck,
-                &round_zk_proof.zk_sumcheck_mask_commitments,
-                round_zk.mask_message_len,
-                self.params.folding_factor.at_round(round_index + 1),
-                round_params.folding_pow_bits,
-                challenger,
-            )
-            .map_err(VerifierError::from)
+        ZkVerifier::<F, EF>::verify_claim::<MT, _>(
+            &round_zk_proof.zk_sumcheck,
+            &round_zk_proof.zk_sumcheck_mask_commitments,
+            round_zk.mask_message_len,
+            self.params.folding_factor.at_round(round_index + 1),
+            round_params.folding_pow_bits,
+            mu_prime,
+            challenger,
+        )
+        .map_err(VerifierError::from)
     }
 }
 

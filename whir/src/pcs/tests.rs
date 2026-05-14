@@ -723,8 +723,10 @@ mod zk_prefix_api_tests {
     //! Prefix-only ZK opening entrypoint tests.
 
     use alloc::vec;
+    use alloc::vec::Vec;
 
     use p3_commit::MultilinearPcs;
+    use p3_field::{Field, PrimeCharacteristicRing};
     use p3_multilinear_util::poly::Poly;
     use p3_zk_codes::ReedSolomonZkEncoding;
     use rand::SeedableRng;
@@ -736,6 +738,9 @@ mod zk_prefix_api_tests {
     use crate::fiat_shamir::domain_separator::DomainSeparator;
     use crate::parameters::{
         FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirZkConfig,
+    };
+    use crate::pcs::adapter::{
+        ZkCodeSwitchProverSource, ZkCodeSwitchVerifierSource, evaluate_zk_mask_residual,
     };
     use crate::sumcheck::layout::{Layout, PrefixProver, Table};
     use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
@@ -793,6 +798,7 @@ mod zk_prefix_api_tests {
     #[test]
     fn round_zk_prefix_populates_first_round_payload() {
         let (pcs, witness, protocol, required_query_bound, expected_mask_domain) = setup();
+        let source_message = witness.poly().as_slice().to_vec();
 
         let mut prover_challenger = challenger();
         let mut domain_separator = DomainSeparator::new(vec![]);
@@ -819,19 +825,24 @@ mod zk_prefix_api_tests {
             initial_mask_encoding,
             &mut zk_rng,
         );
+        let inherited_claim = state.initial_handoff.residual_prover.claimed_sum();
+        let source_claim = inherited_claim / state.initial_handoff.eps;
+        let (pivot, &pivot_value) = source_message
+            .iter()
+            .enumerate()
+            .find(|(_, value)| !value.is_zero())
+            .expect("test source message should contain a nonzero entry");
+        let mut source_covector = EF::zero_vec(source_message.len());
+        source_covector[pivot] = source_claim / EF::from(pivot_value);
 
-        let source_message_len = state
-            .initial_handoff
-            .residual_prover
-            .evals()
-            .as_slice()
-            .len();
-        let source_encoding = ReedSolomonZkEncoding::new(
-            0,
-            source_message_len,
-            pcs.config.round_parameters[0].domain_size,
-            MyDft::default(),
-        );
+        let source = ZkCodeSwitchProverSource {
+            message: source_message.clone(),
+            covector: source_covector.clone(),
+            inherited_claim,
+            randomness_len: 0,
+            domain_size: pcs.config.round_parameters[0].domain_size,
+            folding_factor: pcs.config.round_parameters[0].folding_factor,
+        };
         let round_zk = pcs.config.round_parameters[0].zk.as_ref().unwrap();
         let round_mask_encoding = ReedSolomonZkEncoding::new(
             round_zk.mask_query_budget,
@@ -843,7 +854,7 @@ mod zk_prefix_api_tests {
         let round_state = pcs.round_zk_prefix(
             state,
             0,
-            &source_encoding,
+            &source,
             &round_mask_encoding,
             &mut prover_challenger,
             &mut zk_rng,
@@ -882,18 +893,38 @@ mod zk_prefix_api_tests {
 
         let mut verifier_challenger = challenger();
         domain_separator.observe_domain_separator(&mut verifier_challenger);
+        let verifier_source = ZkCodeSwitchVerifierSource {
+            commitment,
+            message_len: source_message.len(),
+            covector: source_covector,
+            inherited_claim,
+            randomness_len: 0,
+            domain_size: pcs.config.round_parameters[0].domain_size,
+            folding_factor: pcs.config.round_parameters[0].folding_factor,
+        };
         let verifier_handoff = pcs
             .verify_round_zk_prefix(
-                &commitment,
                 &round_state.proof,
                 &protocol,
-                &source_encoding,
+                &verifier_source,
                 &mut verifier_challenger,
             )
             .expect("verifier should replay the first ZK round");
         assert_eq!(
             verifier_handoff.randomness.num_variables(),
             pcs.config.folding_factor.at_round(1),
+        );
+        let nested_gammas = round_state
+            .handoff
+            .randomness
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        let nested_mask_residual =
+            evaluate_zk_mask_residual::<F, EF>(&round_state.handoff.mask_messages, &nested_gammas);
+        assert_eq!(
+            verifier_handoff.claimed_residual,
+            round_state.handoff.residual_prover.claimed_sum() + nested_mask_residual,
         );
     }
 

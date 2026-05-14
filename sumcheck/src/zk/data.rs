@@ -108,6 +108,11 @@ where
     pub randomness: Point<EF>,
     /// Construction 6.3 combining challenge.
     pub eps: EF,
+    /// Plain mask messages sampled by the prover, in round order.
+    ///
+    /// These are prover-only witnesses. Code-switch composition uses them to
+    /// carry the verifier-visible masked residual as auxiliary linear claims.
+    pub mask_messages: Vec<Vec<EF>>,
     /// Encoded mask oracles, in round order.
     pub mask_oracles: Vec<MaskOracle<F, Enc, M>>,
 }
