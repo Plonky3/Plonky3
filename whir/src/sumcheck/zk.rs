@@ -387,6 +387,11 @@ where
         // this holds `Σ_{l ≥ j}(s_l(0) + s_l(1))`. Initialised to the full sum
         // so round 1's start-of-round decrement leaves `Σ_{l ≥ 2}`.
         let mut sum_future_endpoints = sum_endpoints_init;
+        // Precomputed `2^i` for `i ∈ 0..=k`. Used for the per-round multipliers
+        // `mult_live = pow2[k-j]`, `mult_past = pow2[k-j+1]`, and
+        // `mult_future = pow2[k-j-1]`; precomputing once kills the duplicated
+        // `F::TWO.exp_u64(...)` calls inside the loop and the debug block.
+        let pow2: Vec<F> = (0..=k).map(|i| F::TWO.exp_u64(i as u64)).collect();
 
         for round_idx in 0..k {
             let j = round_idx + 1;
@@ -446,14 +451,14 @@ where
             let h_size = core::cmp::max(ell_zk, 3);
             let mut h: Vec<EF> = vec![EF::ZERO; h_size];
 
-            let mult_live = F::TWO.exp_u64((k - j) as u64);
+            let mult_live = pow2[k - j];
             for (i, &c) in s_j.iter().enumerate() {
                 h[i] += EF::from(mult_live * c);
             }
             let past_mask_sum: EF = mask_evals_at_gamma.iter().copied().sum();
             h[0] += EF::from(mult_live) * past_mask_sum;
             if j < k {
-                let mult_future = F::TWO.exp_u64((k - j - 1) as u64);
+                let mult_future = pow2[k - j - 1];
                 h[0] += EF::from(mult_future * sum_future_endpoints);
             }
             h[0] += eps * plain_c0;
@@ -478,8 +483,7 @@ where
             //   j > 1: sum equals `ĥ_{j-1}(γ_{j-1})` by induction.
             #[cfg(debug_assertions)]
             {
-                let mult_live = F::TWO.exp_u64((k - j) as u64);
-                let mult_past = F::TWO.exp_u64((k - j + 1) as u64);
+                let mult_past = pow2[k - j + 1];
                 let mut expected = EF::from(mult_live * s_j_endpoints)
                     + EF::from(mult_past) * past_mask_sum
                     + eps * plain_sum;
