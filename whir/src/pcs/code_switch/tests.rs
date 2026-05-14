@@ -3,9 +3,8 @@
 //! These tests validate the mathematical invariants of Construction 9.7
 //! from eprint 2026/391 using hand-constructed data over BabyBear.
 //!
-//! As of #1584/#1585 merging, these tests use the real `p3-zk-codes`
-//! (`LinearZkEncoding`) and `whir::utils` (`eval_ze_star_n`, `padded_ood_t1`)
-//! APIs instead of hand-rolled stubs.
+//! These tests use the real `p3-zk-codes` (`LinearZkEncoding`) and
+//! `whir::utils` zero-evader APIs instead of hand-rolled stubs.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -16,7 +15,8 @@ use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::BinomialExtensionField;
 use p3_zk_codes::{LinearZkEncoding, ReedSolomonZkEncoding, ZkEncodingWithRandomness};
 
-use crate::utils::{eval_ze_star_n, padded_ood_t1};
+use super::{ZkMaskClaim, batched_claim, batching_coefficients, private_ood_answer};
+use crate::utils::eval_ze_star_n;
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -27,17 +27,6 @@ fn ef(v: u64) -> EF {
 
 fn inner_product(a: &[EF], b: &[EF]) -> EF {
     a.iter().zip(b.iter()).map(|(x, y)| *x * *y).sum()
-}
-
-/// Returns `(1, rho, rho^2, ..., rho^{dim-1})`.
-fn batching_zero_evader(rho: EF, dim: usize) -> Vec<EF> {
-    let mut nu = Vec::with_capacity(dim);
-    let mut power = EF::ONE;
-    for _ in 0..dim {
-        nu.push(power);
-        power *= rho;
-    }
-    nu
 }
 
 fn make_rs_encoding(msg_len: usize, t: usize, m: usize) -> ReedSolomonZkEncoding<F, Radix2Dit<F>> {
@@ -98,7 +87,7 @@ fn test_construction_9_7_mu_prime_identity_n0() {
 
     let nu_dim = 1 + t_ood + t * iota;
     let rho_batch = ef(77);
-    let nu = batching_zero_evader(rho_batch, nu_dim);
+    let nu = batching_coefficients(rho_batch, nu_dim);
 
     let mut mu_prime = nu[0] * mu;
     for i in 0..t_ood {
@@ -151,7 +140,7 @@ fn test_construction_9_7_mu_prime_identity_n0() {
         }
     }
 
-    let mut r_s_pad = r.clone();
+    let mut r_s_pad = r;
     r_s_pad.extend_from_slice(&s_pad);
 
     let mu_prime_from_relation = inner_product(&f, &sl_prime) + inner_product(&r_s_pad, &sl_mask);
@@ -223,7 +212,7 @@ fn test_construction_9_7_mu_prime_identity_n2() {
 
     let nu_dim = 1 + t_ood + t * iota;
     let rho_batch = ef(55);
-    let nu = batching_zero_evader(rho_batch, nu_dim);
+    let nu = batching_coefficients(rho_batch, nu_dim);
 
     let mut mu_prime = nu[0] * mu;
     for i in 0..t_ood {
@@ -340,7 +329,7 @@ fn test_construction_9_7_mu_prime_identity_iota2() {
     }
 
     let nu_dim = 1 + t_ood + t * iota;
-    let nu = batching_zero_evader(ef(13), nu_dim);
+    let nu = batching_coefficients(ef(13), nu_dim);
 
     let mut mu_prime = nu[0] * mu;
     for i in 0..t_ood {
@@ -405,6 +394,103 @@ fn test_construction_9_7_mu_prime_identity_iota2() {
     );
 }
 
+/// Same identity when the inherited sumcheck claim has already been scaled
+/// by the #1605 HVZK sumcheck challenge `eps`.
+///
+/// `ZkPrefixProver::into_sumcheck` folds `eps` into its residual handoff, so
+/// the code-switch output relation must scale only the inherited source
+/// covector. The fresh OOD and in-domain terms are batched by Construction 9.7
+/// independently.
+#[test]
+fn test_construction_9_7_mu_prime_identity_eps_scaled_handoff() {
+    let ell = 3;
+    let r_len = 1;
+    let s_pad_len = 1;
+    let t_ood = 1;
+    let t = 1;
+    let iota = 1;
+    let m = 8;
+
+    let source_enc = make_rs_encoding(ell, r_len, m);
+
+    let f: Vec<EF> = vec![ef(2), ef(5), ef(9)];
+    let r: Vec<EF> = vec![ef(12)];
+    let s_pad: Vec<EF> = vec![ef(20)];
+
+    let f_base: Vec<F> = [2, 5, 9].into_iter().map(F::from_u64).collect();
+    let r_base = vec![F::from_u64(12)];
+    let cw = source_enc.encode_with_randomness(&f_base, &r_base);
+    let f_codeword: Vec<EF> = cw.values.iter().map(|&v| EF::from(v)).collect();
+
+    let sl: Vec<EF> = vec![ef(4), ef(7), ef(11)];
+    let mu = inner_product(&f, &sl);
+    let eps = ef(19);
+
+    let rho_ood_points = [ef(31)];
+    let y = [private_ood_answer(
+        rho_ood_points[0],
+        &f,
+        &[r.clone(), s_pad.clone()].concat(),
+    )];
+
+    let query_position = 2;
+    let source_opening = f_codeword[query_position];
+
+    let nu = batching_coefficients(ef(17), 1 + t_ood + t * iota);
+
+    let claim = ZkMaskClaim {
+        base_claim_coeff: nu[0],
+        residual_sumcheck_scale: eps,
+        ood_coeffs: vec![nu[1]],
+        in_domain_coeffs: vec![nu[2]],
+        source_randomness_weights: Vec::new(),
+        pad_weights: Vec::new(),
+    };
+    let mu_prime = batched_claim(mu, &y, &[source_opening], &claim);
+
+    let mut sl_prime = vec![EF::ZERO; ell];
+    for (sp, s) in sl_prime.iter_mut().zip(&sl) {
+        *sp += eps * nu[0] * *s;
+    }
+
+    let mut power = EF::ONE;
+    for sp in sl_prime.iter_mut() {
+        *sp += nu[1] * power;
+        power *= rho_ood_points[0];
+    }
+
+    let g_sharp = lift_row(&source_enc.message_row(query_position));
+    for (sp, gs) in sl_prime.iter_mut().zip(&g_sharp) {
+        *sp += nu[2] * *gs;
+    }
+
+    let mask_msg_len = r_len + s_pad_len;
+    let mut sl_mask = vec![EF::ZERO; mask_msg_len];
+    let mut power = EF::ONE;
+    for _ in 0..ell {
+        power *= rho_ood_points[0];
+    }
+    for sm in sl_mask.iter_mut() {
+        *sm += nu[1] * power;
+        power *= rho_ood_points[0];
+    }
+
+    let g_dollar = lift_row(&source_enc.randomness_row(query_position));
+    for (sm, gd) in sl_mask.iter_mut().zip(&g_dollar) {
+        *sm += nu[2] * *gd;
+    }
+
+    let mut r_s_pad = r;
+    r_s_pad.extend_from_slice(&s_pad);
+
+    let mu_prime_from_relation = inner_product(&f, &sl_prime) + inner_product(&r_s_pad, &sl_mask);
+
+    assert_eq!(
+        mu_prime, mu_prime_from_relation,
+        "Construction 9.7 must preserve the #1605 eps-scaled residual handoff"
+    );
+}
+
 /// Verify private zero-evader OOD answer via `padded_ood_t1` matches
 /// the manual `eval_ze_star_n` on the concatenated vector.
 #[test]
@@ -421,7 +507,7 @@ fn test_private_ood_answer_consistency() {
     let rho = ef(17);
 
     let from_concat = eval_ze_star_n(rho, &concat);
-    let from_padded = padded_ood_t1(rho, &f, &[r.clone(), s_pad.clone()].concat());
+    let from_padded = private_ood_answer(rho, &f, &[r.clone(), s_pad.clone()].concat());
 
     assert_eq!(
         from_concat, from_padded,
@@ -443,7 +529,7 @@ fn test_private_ood_answer_consistency() {
 #[test]
 fn test_batching_zero_evader_powers() {
     let rho = ef(5);
-    let nu = batching_zero_evader(rho, 4);
+    let nu = batching_coefficients(rho, 4);
 
     assert_eq!(nu[0], EF::ONE);
     assert_eq!(nu[1], rho);
