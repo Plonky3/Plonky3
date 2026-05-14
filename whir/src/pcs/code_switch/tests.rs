@@ -16,8 +16,8 @@ use p3_field::extension::BinomialExtensionField;
 use p3_zk_codes::{LinearZkEncoding, ReedSolomonZkEncoding, ZkEncodingWithRandomness};
 
 use super::{
-    CodeSwitchError, ZkMaskClaim, batched_claim, batching_coefficients, output_relation,
-    private_ood_answer, private_ood_answers,
+    CodeSwitchError, RoundZkConfig, ZkMaskClaim, batched_claim, batching_coefficients,
+    output_relation, private_ood_answer, private_ood_answers, simulated_verifier_view,
 };
 use crate::utils::eval_ze_star_n;
 
@@ -461,6 +461,142 @@ fn test_private_ood_answers_matches_single_answer_helper() {
         .collect();
 
     assert_eq!(answers, expected);
+}
+
+#[test]
+fn test_round_zk_config_proof_field_overhead_matches_issue_bound() {
+    let config = RoundZkConfig {
+        target_query_budget: 4,
+        mask_query_budget: 7,
+        mask_message_len: 6,
+        mask_randomness_len: 2,
+        ood_samples: 5,
+        mask_domain_size: 16,
+        mask_width: 3,
+        folded_mask_domain_gen: F::from_u64(11),
+    };
+
+    assert_eq!(
+        config.mask_codeword_field_elements(),
+        48,
+        "mask codeword contribution should be m_zk * iota_zk"
+    );
+    assert_eq!(
+        config.proof_field_overhead(),
+        53,
+        "Construction 9.7 proof overhead should be m_zk * iota_zk + t_ood"
+    );
+}
+
+#[test]
+fn test_simulated_verifier_view_matches_code_switch_relation() {
+    let ell = 3;
+    let r_len = 2;
+    let s_pad_len = 1;
+    let t_ood = 2;
+    let t = 2;
+    let iota = 1;
+    let m = 8;
+
+    let source_enc = make_rs_encoding(ell, r_len, m);
+
+    let f: Vec<EF> = vec![ef(4), ef(6), ef(10)];
+    let r: Vec<EF> = vec![ef(13), ef(17)];
+    let s_pad: Vec<EF> = vec![ef(19)];
+    let mut mask_message = r;
+    mask_message.extend_from_slice(&s_pad);
+
+    let f_base: Vec<F> = [4, 6, 10].into_iter().map(F::from_u64).collect();
+    let r_base: Vec<F> = [13, 17].into_iter().map(F::from_u64).collect();
+    let cw = source_enc.encode_with_randomness(&f_base, &r_base);
+    let f_codeword: Vec<EF> = cw.values.iter().map(|&v| EF::from(v)).collect();
+
+    let source_covector = vec![ef(23), ef(29), ef(31)];
+    let inherited_claim = inner_product(&f, &source_covector);
+
+    let rho_ood_points = [ef(37), ef(41)];
+    let private_ood = private_ood_answers(&rho_ood_points, &f, &mask_message);
+
+    let query_positions = [1_usize, 4_usize];
+    let source_openings: Vec<EF> = query_positions
+        .iter()
+        .map(|&position| f_codeword[position])
+        .collect();
+
+    let nu = batching_coefficients(ef(43), 1 + t_ood + t * iota);
+    let claim = ZkMaskClaim {
+        base_claim_coeff: nu[0],
+        residual_sumcheck_scale: ef(47),
+        ood_coeffs: nu[1..1 + t_ood].to_vec(),
+        in_domain_coeffs: nu[1 + t_ood..].to_vec(),
+        source_randomness_weights: Vec::new(),
+        pad_weights: Vec::new(),
+    };
+
+    let view = simulated_verifier_view::<F, EF, _>(
+        &source_enc,
+        inherited_claim,
+        &source_covector,
+        &[],
+        r_len,
+        s_pad_len,
+        &rho_ood_points,
+        &query_positions,
+        &private_ood,
+        &source_openings,
+        &claim,
+    )
+    .unwrap();
+    let expected_mu = batched_claim(inherited_claim, &private_ood, &source_openings, &claim)
+        .expect("valid simulated transcript dimensions");
+    let relation_value = view
+        .output_relation
+        .evaluate(&f, &[], &mask_message)
+        .unwrap();
+
+    assert_eq!(view.private_ood_answers, private_ood);
+    assert_eq!(view.source_openings, source_openings);
+    assert_eq!(view.mu_prime, expected_mu);
+    assert_eq!(
+        relation_value, view.mu_prime,
+        "deterministic simulator view must derive the same relation as the honest code-switch path"
+    );
+}
+
+#[test]
+fn test_simulated_verifier_view_rejects_private_ood_count_mismatch() {
+    let enc = make_rs_encoding(3, 2, 8);
+    let claim = ZkMaskClaim {
+        base_claim_coeff: ef(1),
+        residual_sumcheck_scale: ef(1),
+        ood_coeffs: vec![ef(2), ef(3)],
+        in_domain_coeffs: vec![ef(4)],
+        source_randomness_weights: Vec::new(),
+        pad_weights: Vec::new(),
+    };
+
+    let err = simulated_verifier_view::<F, EF, _>(
+        &enc,
+        ef(9),
+        &[ef(1), ef(2), ef(3)],
+        &[],
+        2,
+        1,
+        &[ef(7), ef(8)],
+        &[0],
+        &[ef(10)],
+        &[ef(11)],
+        &claim,
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err,
+        CodeSwitchError::PrivateOodAnswerCountMismatch {
+            expected: 2,
+            actual: 1
+        }
+    );
 }
 
 #[test]
