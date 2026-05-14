@@ -740,8 +740,7 @@ mod zk_prefix_api_tests {
         FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirZkConfig,
     };
     use crate::pcs::adapter::{
-        WhirFoldedSourceLayout, ZkCodeSwitchProverSource, ZkCodeSwitchVerifierSource,
-        evaluate_zk_mask_residual,
+        ZkCodeSwitchProverSource, ZkCodeSwitchVerifierSource, evaluate_zk_mask_residual,
     };
     use crate::pcs::proof::QueryOpening;
     use crate::sumcheck::layout::{Layout, PrefixProver, Table};
@@ -1024,11 +1023,6 @@ mod zk_prefix_api_tests {
             domain_size: target_domain_size,
             folding_factor: target_folding,
         };
-        let source_layout = WhirFoldedSourceLayout {
-            message_len: source.message.len(),
-            domain_size: source.domain_size,
-            folding_factor: source.folding_factor,
-        };
         let round_zk = pcs.config.round_parameters[0].zk.as_ref().unwrap();
         let round_mask_encoding = ReedSolomonZkEncoding::new(
             round_zk.mask_query_budget,
@@ -1037,12 +1031,10 @@ mod zk_prefix_api_tests {
             MyDft::default(),
         );
 
-        let _ = pcs.round_zk_prefix_from_source(
+        let _ = pcs.round0_zk_prefix_from_folded_source(
             state.proof,
             &state.initial_handoff,
-            0,
             &source,
-            &source_layout,
             &round_mask_encoding,
             &mut prover_challenger,
             &mut zk_rng,

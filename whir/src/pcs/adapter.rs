@@ -633,38 +633,29 @@ where
             domain_size: target_domain_size,
             folding_factor: folding_factor_next,
         };
-        let source_layout = WhirFoldedSourceLayout {
-            message_len: source.message.len(),
-            domain_size: source.domain_size,
-            folding_factor: source.folding_factor,
-        };
-
-        self.round_zk_prefix_from_source(
+        self.round0_zk_prefix_from_folded_source(
             state.proof,
             &handoff,
-            round_index,
             &source,
-            &source_layout,
             mask_encoding,
             challenger,
             rng,
         )
     }
 
-    /// Prove one prefix-only ZK code-switching round from an explicit source.
+    /// Prove one prefix-only ZK code-switching round from a folded WHIR source.
     ///
-    /// This is the shared Construction 9.7 consumer. The round-0 adapter builds
-    /// a folded WHIR source and delegates here; later rounds should pass a
-    /// source object whose layout exposes the appropriate `G_C^#` / `G_C^$`
-    /// rows for the committed source oracle.
+    /// This is the shared first folded-source Construction 9.7 consumer. It is
+    /// intentionally not the later multi-round source consumer yet: the source
+    /// commitment and in-domain openings below are still the freshly committed
+    /// WHIR extension oracle, so accepting a linear-ZK source layout here would
+    /// mix row semantics with the wrong Merkle opening semantics.
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
-    pub fn round_zk_prefix_from_source<Enc, R, SourceLayout>(
+    pub fn round0_zk_prefix_from_folded_source<Enc, R>(
         &self,
         mut proof: PcsProof<F, EF, MT>,
         handoff: &ZkSumcheckHandoff<F, EF, Enc, MT>,
-        round_index: usize,
         source: &ZkCodeSwitchProverSource<EF>,
-        source_layout: &SourceLayout,
         mask_encoding: &Enc,
         challenger: &mut Challenger,
         rng: &mut R,
@@ -672,14 +663,10 @@ where
     where
         Enc: ZkEncoding<F>,
         Enc::Codeword: Matrix<F>,
-        SourceLayout: ZkCodeSwitchSourceLayout<F>,
         R: Rng,
         StandardUniform: Distribution<F>,
     {
-        assert_eq!(
-            round_index, 0,
-            "first ZK round helper currently handles round 0"
-        );
+        let round_index = 0;
         assert!(
             self.config.zk.as_ref().is_some_and(|zk| zk.only_prefix),
             "ZK WHIR currently supports only prefix layout",
@@ -689,7 +676,7 @@ where
         let round_zk = round_params
             .zk
             .as_ref()
-            .expect("round_zk_prefix_from_source requires RoundConfig::zk");
+            .expect("round0_zk_prefix_from_folded_source requires RoundConfig::zk");
         assert_eq!(
             mask_encoding.message_len(),
             round_zk.mask_message_len,
@@ -711,14 +698,15 @@ where
         assert_eq!(source.domain_size % (1usize << num_variables), 0);
         let inv_rate = source.domain_size >> num_variables;
         assert!(inv_rate > 0, "source domain must cover the source message");
-        assert_eq!(source_layout.message_len(), source.message.len());
         assert_eq!(
             source.randomness_len, 0,
             "ZK code-switch source randomness needs a source-oracle randomness handoff",
         );
-        assert_eq!(source_layout.randomness_len(), source.randomness_len);
-        assert_eq!(source_layout.domain_size(), source.domain_size);
-        assert_eq!(source_layout.folding_factor(), source.folding_factor);
+        let source_layout = WhirFoldedSourceLayout {
+            message_len: source.message.len(),
+            domain_size: source.domain_size,
+            folding_factor: source.folding_factor,
+        };
         assert_eq!(
             source.message.len(),
             source.covector.len(),
@@ -852,7 +840,7 @@ where
         )
         .expect("honest code-switch batching dimensions should match");
         let (source_rows, source_randomness_rows) =
-            source_rows_for_positions::<F, SourceLayout>(source_layout, &query_positions);
+            source_rows_for_positions::<F, _>(&source_layout, &query_positions);
         let output_relation = code_switch_output_relation_from_rows(
             source.message.len(),
             &source.covector,
