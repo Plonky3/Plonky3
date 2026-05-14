@@ -33,6 +33,7 @@ members = [
     "poseidon2",
     "poseidon2-air",
     "rescue",
+    "rpo-xhash",
     "sha256",
     "symmetric",
     "uni-stark",

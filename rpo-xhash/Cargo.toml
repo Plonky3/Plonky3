@@ -1,0 +1,32 @@
+[package]
+name = "p3-rpo-xhash"
+description = "RPO and xHash permutations for small-prime fields."
+version.workspace = true
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+p3-baby-bear.workspace = true
+p3-field.workspace = true
+p3-goldilocks.workspace = true
+p3-koala-bear.workspace = true
+p3-mds.workspace = true
+p3-mersenne-31.workspace = true
+p3-symmetric.workspace = true
+
+rand.workspace = true
+
+[dev-dependencies]
+rand = { version = "0.10.0", features = ["std_rng"] }
+criterion.workspace = true
+
+[[bench]]
+name = "hashes"
+harness = false
+
+[lints]
+workspace = true
