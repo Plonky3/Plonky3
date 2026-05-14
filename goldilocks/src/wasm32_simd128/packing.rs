@@ -1,17 +1,18 @@
-/// Resources:
-/// 1. WebAssembly SIMD proposal: https://github.com/WebAssembly/simd/blob/main/proposals/simd/SIMD.md
-/// 2. The arithmetic recipes are the standard Goldilocks SIMD recipes, mimicking the existing
-///    `aarch64_neon` and `x86_64_avx2` backends with the following intrinsic correspondence:
-///
-///      uint64x2_t                 → v128
-///      veorq_u64(a, b)            → v128_xor(a, b)
-///      vaddq_u64(a, b)            → i64x2_add(a, b)
-///      vsubq_u64(a, b)            → i64x2_sub(a, b)
-///      vcgtq_s64(a, b)            → i64x2_gt(a, b)
-///      vbicq_u64(a, b)            → v128_andnot(a, b)  (= a & !b)
-///      vshrq_n_u64::<32>(a)       → u64x2_shr(a, 32)
-///      vdupq_n_u64(x)             → u64x2_splat(x)
-///      vreinterpretq_s64_u64(x)   → identity (v128 is type-erased)
+//! Resources:
+//! 1. WebAssembly SIMD proposal: https://github.com/WebAssembly/simd/blob/main/proposals/simd/SIMD.md
+//! 2. The arithmetic recipes are the standard Goldilocks SIMD recipes, mimicking the existing
+//!    `aarch64_neon` and `x86_64_avx2` backends with the following intrinsic correspondence:
+//!
+//!      uint64x2_t                 → v128
+//!      veorq_u64(a, b)            → v128_xor(a, b)
+//!      vaddq_u64(a, b)            → i64x2_add(a, b)
+//!      vsubq_u64(a, b)            → i64x2_sub(a, b)
+//!      vcgtq_s64(a, b)            → i64x2_gt(a, b)
+//!      vbicq_u64(a, b)            → v128_andnot(a, b)  (= a & !b)
+//!      vshrq_n_u64::<32>(a)       → u64x2_shr(a, 32)
+//!      vdupq_n_u64(x)             → u64x2_splat(x)
+//!      vreinterpretq_s64_u64(x)   → identity (v128 is type-erased)
+
 use alloc::vec::Vec;
 use core::arch::wasm32::{
     i32x4_shuffle, i64x2_add, i64x2_extmul_low_u32x4, i64x2_gt, i64x2_shl, i64x2_shuffle,
