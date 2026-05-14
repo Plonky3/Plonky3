@@ -42,6 +42,7 @@ use p3_zk_codes::LinearZkEncoding;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub use crate::parameters::RoundZkConfig;
 use crate::utils::padded_ood_t1;
 
 /// Errors in the standalone Construction 9.7 code-switching reduction.
@@ -102,63 +103,6 @@ pub enum CodeSwitchError {
     /// Reserved precomputed padding weights were supplied to a builder that recomputes them.
     #[error("pad weights must be empty in the standalone builder, got {actual}")]
     NonEmptyPadWeights { actual: usize },
-}
-
-/// ZK-specific per-round configuration, derived from protocol parameters.
-///
-/// Nested inside `RoundConfig::zk` as `Option<RoundZkConfig<F>>`.
-/// When `None`, the round uses the non-ZK path with no transcript changes.
-///
-/// The issue asks for `zk: bool`, but a boolean alone cannot drive the
-/// simulator query bounds or proof-size accounting. This struct carries
-/// all derived dimensions so they stay explicit.
-///
-/// This is intentionally configuration-only for now. The non-ZK proof shape
-/// must stay byte-compatible with today's WHIR proofs; ZK-only transcript data
-/// belongs behind `Option` fields on the round proof once the round flow is
-/// wired.
-#[derive(Debug, Clone)]
-pub struct RoundZkConfig<F> {
-    /// Number of target-oracle queries the simulator may make.
-    pub target_query_budget: usize,
-    /// Number of mask-oracle queries the simulator may make.
-    ///
-    /// This is a composed-protocol budget, not a benchmark placeholder. It
-    /// must cover every opening the next IOR makes to the fresh mask oracle.
-    pub mask_query_budget: usize,
-    /// Message length of the mask code (`ell_zk`).
-    ///
-    /// Must match `ZkSumcheckData::ell_zk`; the #1605 verifier rejects
-    /// mismatches before replaying the round transcript.
-    pub mask_message_len: usize,
-    /// Randomness length of the mask code.
-    pub mask_randomness_len: usize,
-    /// Number of private OOD samples (`t_ood`).
-    pub ood_samples: usize,
-    /// Evaluation domain size for the mask code.
-    pub mask_domain_size: usize,
-    /// Interleaving width of the mask code (`iota_zk`).
-    pub mask_width: usize,
-    /// Generator of the folded mask evaluation domain.
-    pub folded_mask_domain_gen: F,
-}
-
-impl<F> RoundZkConfig<F> {
-    /// Number of mask codeword field elements added to the round proof.
-    ///
-    /// This is `m_zk * iota_zk` in the notation of #1587.
-    #[must_use]
-    pub const fn mask_codeword_field_elements(&self) -> usize {
-        self.mask_domain_size * self.mask_width
-    }
-
-    /// Total ZK field-element overhead for Construction 9.7 in one round.
-    ///
-    /// The issue's proof-size target is `m_zk * iota_zk + t_ood`.
-    #[must_use]
-    pub const fn proof_field_overhead(&self) -> usize {
-        self.mask_codeword_field_elements() + self.ood_samples
-    }
 }
 
 /// Per-round ZK mask coefficient carrier.

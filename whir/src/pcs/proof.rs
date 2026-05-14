@@ -5,6 +5,7 @@ use p3_multilinear_util::poly::Poly;
 use serde::{Deserialize, Serialize};
 
 use crate::parameters::ProtocolParameters;
+use crate::pcs::code_switch::WhirRoundZkProof;
 pub use crate::sumcheck::SumcheckData;
 
 /// Complete WHIR proof.
@@ -96,6 +97,12 @@ pub struct WhirRoundProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     pub queries: Vec<QueryOpening<F, EF, MT::Proof>>,
     /// Sumcheck data for this round.
     pub sumcheck: SumcheckData<F, EF>,
+    /// Optional ZK code-switch payload.
+    ///
+    /// This field is skipped when absent so non-ZK proof serialization remains
+    /// unchanged for serde formats that honor `skip_serializing_if`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zk: Option<WhirRoundZkProof<F, EF, MT>>,
 }
 
 impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> Default
@@ -108,6 +115,7 @@ impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> Default
             pow_witness: F::default(),
             queries: Vec::new(),
             sumcheck: SumcheckData::default(),
+            zk: None,
         }
     }
 }

@@ -11,6 +11,95 @@ use p3_field::{ExtensionField, Field, TwoAdicField};
 use super::{FoldingFactor, ProtocolParameters};
 use crate::pcs::proof::WhirProof;
 
+/// User-facing HVZK WHIR configuration.
+///
+/// This is intentionally opt-in on the derived [`WhirConfig`], not a field on
+/// [`ProtocolParameters`], so existing non-ZK callers keep the same API and
+/// proof transcript shape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WhirZkConfig {
+    /// Optional cap for mask-oracle queries.
+    ///
+    /// When `None`, each round derives the budget from the next verifier that
+    /// consumes the fresh mask oracle. If set, it must be at least that derived
+    /// value; this prevents accidentally reintroducing a hardcoded tiny budget.
+    pub mask_query_budget: Option<usize>,
+    /// Message length of the mask code (`ell_zk`).
+    pub mask_message_len: usize,
+    /// Randomness length of the mask code.
+    pub mask_randomness_len: usize,
+    /// Logarithmic inverse rate used to size the mask code domain.
+    pub mask_rate_log_inv: usize,
+    /// Restrict ZK proving to prefix-binding layouts.
+    pub only_prefix: bool,
+}
+
+impl WhirZkConfig {
+    /// Constructs a prefix-only HVZK configuration.
+    #[must_use]
+    pub const fn prefix_only(
+        mask_message_len: usize,
+        mask_randomness_len: usize,
+        mask_rate_log_inv: usize,
+    ) -> Self {
+        Self {
+            mask_query_budget: None,
+            mask_message_len,
+            mask_randomness_len,
+            mask_rate_log_inv,
+            only_prefix: true,
+        }
+    }
+}
+
+/// ZK-specific per-round configuration, derived from protocol parameters.
+///
+/// Nested inside `RoundConfig::zk` as `Option<RoundZkConfig<F>>`.
+/// When `None`, the round uses the non-ZK path with no transcript changes.
+#[derive(Debug, Clone)]
+pub struct RoundZkConfig<F> {
+    /// Number of target-oracle queries the simulator may make.
+    pub target_query_budget: usize,
+    /// Number of mask-oracle queries the simulator may make.
+    ///
+    /// This is a composed-protocol budget, not a benchmark placeholder. It
+    /// must cover every opening the next IOR makes to the fresh mask oracle.
+    pub mask_query_budget: usize,
+    /// Message length of the mask code (`ell_zk`).
+    ///
+    /// Must match `ZkSumcheckData::ell_zk`; the #1605 verifier rejects
+    /// mismatches before replaying the round transcript.
+    pub mask_message_len: usize,
+    /// Randomness length of the mask code.
+    pub mask_randomness_len: usize,
+    /// Number of private OOD samples (`t_ood`).
+    pub ood_samples: usize,
+    /// Evaluation domain size for the mask code.
+    pub mask_domain_size: usize,
+    /// Interleaving width of the mask code (`iota_zk`).
+    pub mask_width: usize,
+    /// Generator of the folded mask evaluation domain.
+    pub folded_mask_domain_gen: F,
+}
+
+impl<F> RoundZkConfig<F> {
+    /// Number of mask codeword field elements added to the round proof.
+    ///
+    /// This is `m_zk * iota_zk` in the notation of #1587.
+    #[must_use]
+    pub const fn mask_codeword_field_elements(&self) -> usize {
+        self.mask_domain_size * self.mask_width
+    }
+
+    /// Total ZK field-element overhead for Construction 9.7 in one round.
+    ///
+    /// The issue's proof-size target is `m_zk * iota_zk + t_ood`.
+    #[must_use]
+    pub const fn proof_field_overhead(&self) -> usize {
+        self.mask_codeword_field_elements() + self.ood_samples
+    }
+}
+
 /// Derived configuration for a single intermediate WHIR round.
 ///
 /// All values are computed from the user-facing protocol parameters
@@ -35,6 +124,8 @@ pub struct RoundConfig<F> {
     pub domain_size: usize,
     /// Generator of the folded evaluation domain after this round's fold.
     pub folded_domain_gen: F,
+    /// Optional per-round HVZK configuration.
+    pub zk: Option<RoundZkConfig<F>>,
 }
 
 /// Fully derived WHIR protocol configuration.
@@ -54,6 +145,8 @@ where
     pub params: ProtocolParameters,
     /// Per-round derived configuration for each intermediate STIR round.
     pub round_parameters: Vec<RoundConfig<F>>,
+    /// Optional global HVZK configuration used to derive `RoundConfig::zk`.
+    pub zk: Option<WhirZkConfig>,
     /// Number of out-of-domain samples during the commitment phase.
     pub commitment_ood_samples: usize,
     /// PoW bits for the initial folding sumcheck (before any STIR rounds).
@@ -279,6 +372,7 @@ where
                 log_inv_rate: next_rate,
                 domain_size,
                 folded_domain_gen,
+                zk: None,
             });
 
             // Advance mutable state for the next iteration.
@@ -325,6 +419,7 @@ where
             num_variables: initial_num_variables,
             starting_folding_pow_bits: starting_folding_pow_bits as usize,
             round_parameters,
+            zk: None,
             final_queries,
             final_pow_bits: final_pow_bits as usize,
             final_sumcheck_rounds,
@@ -332,6 +427,65 @@ where
             _extension_field: PhantomData,
             _challenger: PhantomData,
         }
+    }
+
+    /// Enables HVZK configuration and derives per-round code-switch settings.
+    ///
+    /// The plain `new` constructor deliberately leaves ZK disabled so existing
+    /// WHIR proofs stay byte-identical. Callers that want Construction 9.7 use
+    /// this opt-in method and then route proving through the prefix-only ZK
+    /// path.
+    #[must_use]
+    pub fn with_zk_config(mut self, zk: WhirZkConfig) -> Self {
+        assert!(
+            zk.only_prefix,
+            "HVZK WHIR currently supports prefix mode only"
+        );
+        assert!(
+            zk.mask_message_len >= 2,
+            "Lemma 6.4 requires mask_message_len >= 2",
+        );
+        assert!(
+            zk.mask_randomness_len > 0,
+            "mask_randomness_len must be positive",
+        );
+
+        let mask_domain_size_unrounded =
+            (zk.mask_message_len + zk.mask_randomness_len) << zk.mask_rate_log_inv;
+        let mask_domain_size = mask_domain_size_unrounded.next_power_of_two();
+        assert!(
+            mask_domain_size.ilog2() as usize <= F::TWO_ADICITY,
+            "mask code domain exceeds base-field two-adicity",
+        );
+
+        let round_count = self.round_parameters.len();
+        for round_index in 0..round_count {
+            let target_query_budget = if round_index + 1 < round_count {
+                self.round_parameters[round_index + 1].num_queries
+            } else {
+                self.final_queries
+            };
+            let mask_query_budget = zk.mask_query_budget.unwrap_or(target_query_budget);
+            assert!(
+                mask_query_budget >= target_query_budget,
+                "mask_query_budget must cover all downstream target queries",
+            );
+            let ood_samples = self.round_parameters[round_index].ood_samples;
+
+            self.round_parameters[round_index].zk = Some(RoundZkConfig {
+                target_query_budget,
+                mask_query_budget,
+                mask_message_len: zk.mask_message_len,
+                mask_randomness_len: zk.mask_randomness_len,
+                ood_samples,
+                mask_domain_size,
+                mask_width: 1,
+                folded_mask_domain_gen: F::two_adic_generator(mask_domain_size.ilog2() as usize),
+            });
+        }
+
+        self.zk = Some(zk);
+        self
     }
 
     /// Returns the size of the initial evaluation domain.
@@ -429,6 +583,7 @@ where
                 ),
                 ood_samples: 0,
                 folding_pow_bits: self.final_folding_pow_bits,
+                zk: None,
             }
         } else {
             // Apply the last round's domain reduction to get the domain
@@ -458,6 +613,7 @@ where
                 // Inherit OOD count from the last intermediate round.
                 ood_samples: last.ood_samples,
                 folding_pow_bits: self.final_folding_pow_bits,
+                zk: None,
             }
         }
     }
@@ -532,6 +688,54 @@ mod tests {
     }
 
     #[test]
+    fn test_zk_config_derives_round_budgets_from_downstream_queries() {
+        let params = default_whir_params();
+        let config = WhirConfig::<F, F, MyChallenger>::new(10, params)
+            .with_zk_config(WhirZkConfig::prefix_only(4, 2, 1));
+
+        assert_eq!(config.zk, Some(WhirZkConfig::prefix_only(4, 2, 1)));
+        assert!(
+            config
+                .round_parameters
+                .iter()
+                .all(|round| round.zk.is_some()),
+            "ZK opt-in should derive per-round ZK configs",
+        );
+
+        for round_index in 0..config.round_parameters.len() {
+            let round = &config.round_parameters[round_index];
+            let zk = round.zk.as_ref().unwrap();
+            let expected_target_queries = if round_index + 1 < config.round_parameters.len() {
+                config.round_parameters[round_index + 1].num_queries
+            } else {
+                config.final_queries
+            };
+
+            assert_eq!(zk.target_query_budget, expected_target_queries);
+            assert_eq!(zk.mask_query_budget, expected_target_queries);
+            assert_eq!(zk.mask_message_len, 4);
+            assert_eq!(zk.mask_randomness_len, 2);
+            assert_eq!(zk.ood_samples, round.ood_samples);
+            assert_eq!(zk.mask_domain_size, 16);
+            assert_eq!(zk.mask_width, 1);
+            assert_eq!(zk.proof_field_overhead(), 16 + round.ood_samples);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "mask_query_budget must cover all downstream target queries")]
+    fn test_zk_config_rejects_too_small_mask_query_budget() {
+        let params = default_whir_params();
+        let mut config = WhirConfig::<F, F, MyChallenger>::new(20, params);
+        config.final_queries = 2;
+
+        let mut zk = WhirZkConfig::prefix_only(4, 2, 1);
+        zk.mask_query_budget = Some(1);
+
+        let _ = config.with_zk_config(zk);
+    }
+
+    #[test]
     fn test_check_pow_bits_within_limits() {
         let params = default_whir_params();
         let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params);
@@ -554,6 +758,7 @@ mod tests {
                 log_inv_rate: 1,
                 domain_size: 10,
                 folded_domain_gen: F::from_u64(2),
+                zk: None,
             },
             RoundConfig {
                 pow_bits: 18,
@@ -565,6 +770,7 @@ mod tests {
                 log_inv_rate: 1,
                 domain_size: 10,
                 folded_domain_gen: F::from_u64(2),
+                zk: None,
             },
         ];
 
@@ -627,6 +833,7 @@ mod tests {
             log_inv_rate: 1,
             domain_size: 10,
             folded_domain_gen: F::from_u64(2),
+            zk: None,
         }];
 
         assert!(
@@ -656,6 +863,7 @@ mod tests {
             log_inv_rate: 1,
             domain_size: 10,
             folded_domain_gen: F::from_u64(2),
+            zk: None,
         }];
 
         assert!(
@@ -684,6 +892,7 @@ mod tests {
             log_inv_rate: 1,
             domain_size: 10,
             folded_domain_gen: F::from_u64(2),
+            zk: None,
         }];
 
         assert!(
@@ -712,6 +921,7 @@ mod tests {
             log_inv_rate: 1,
             domain_size: 10,
             folded_domain_gen: F::from_u64(2),
+            zk: None,
         }];
 
         assert!(
