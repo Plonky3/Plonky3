@@ -104,6 +104,15 @@ where
             return Err(VerifierError::ZkVerifierRequiresPrefixPath);
         }
 
+        if let Some((round, _)) = proof
+            .rounds
+            .iter()
+            .enumerate()
+            .find(|(_, round)| round.zk.is_some())
+        {
+            return Err(VerifierError::UnexpectedZkPayloadInPlainProof { round });
+        }
+
         // Reject a proof that carries the wrong number of rounds before any
         // transcript work. The per-round commitment slot is checked further
         // down, where each round is parsed.

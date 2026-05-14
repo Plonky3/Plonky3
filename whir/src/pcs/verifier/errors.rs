@@ -60,6 +60,10 @@ pub enum VerifierError {
     #[error("ZK WHIR config requires the prefix-only ZK verifier path")]
     ZkVerifierRequiresPrefixPath,
 
+    /// Plain WHIR proofs must not carry ZK-only round payloads.
+    #[error("Plain WHIR proof carries unexpected ZK payload at round {round}")]
+    UnexpectedZkPayloadInPlainProof { round: usize },
+
     /// Invalid round index.
     #[error("Invalid round index: {index}")]
     InvalidRoundIndex { index: usize },

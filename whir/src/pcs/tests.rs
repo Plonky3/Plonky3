@@ -293,7 +293,7 @@ mod error_variant_tests {
     use crate::parameters::{
         FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirZkConfig,
     };
-    use crate::pcs::proof::PcsProof;
+    use crate::pcs::proof::{PcsProof, WhirRoundZkProof};
     use crate::pcs::verifier::errors::VerifierError;
     use crate::sumcheck::layout::{Layout, SuffixProver, Table};
     use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
@@ -440,6 +440,31 @@ mod error_variant_tests {
             matches!(err, VerifierError::ZkVerifierRequiresPrefixPath),
             "expected ZkVerifierRequiresPrefixPath, got {err:?}"
         );
+    }
+
+    #[test]
+    fn plain_verifier_rejects_unexpected_zk_payload() {
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        assert!(
+            !proof.whir.rounds.is_empty(),
+            "fixture should produce at least one WHIR round"
+        );
+        proof.whir.rounds[0].zk = Some(WhirRoundZkProof {
+            mask_commitment: commitment.clone(),
+            private_ood_answers: vec![],
+            source_queries: vec![],
+            mask_queries: vec![],
+            zk_sumcheck: Default::default(),
+            zk_sumcheck_mask_commitments: vec![],
+        });
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::UnexpectedZkPayloadInPlainProof { round } => {
+                assert_eq!(round, 0);
+            }
+            other => panic!("expected UnexpectedZkPayloadInPlainProof, got {other:?}"),
+        }
     }
 
     #[test]
