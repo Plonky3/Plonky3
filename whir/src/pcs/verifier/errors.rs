@@ -64,6 +64,10 @@ pub enum VerifierError {
     #[error("Plain WHIR proof carries unexpected ZK payload at round {round}")]
     UnexpectedZkPayloadInPlainProof { round: usize },
 
+    /// Plain WHIR proofs must not carry an initial ZK sumcheck payload.
+    #[error("Plain WHIR proof carries unexpected initial ZK payload")]
+    UnexpectedInitialZkPayloadInPlainProof,
+
     /// Invalid round index.
     #[error("Invalid round index: {index}")]
     InvalidRoundIndex { index: usize },

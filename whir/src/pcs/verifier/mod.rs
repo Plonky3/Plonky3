@@ -104,6 +104,10 @@ where
             return Err(VerifierError::ZkVerifierRequiresPrefixPath);
         }
 
+        if proof.initial_zk.is_some() {
+            return Err(VerifierError::UnexpectedInitialZkPayloadInPlainProof);
+        }
+
         if let Some((round, _)) = proof
             .rounds
             .iter()

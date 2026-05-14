@@ -293,7 +293,7 @@ mod error_variant_tests {
     use crate::parameters::{
         FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirZkConfig,
     };
-    use crate::pcs::proof::{PcsProof, WhirRoundZkProof};
+    use crate::pcs::proof::{PcsProof, WhirInitialZkProof, WhirRoundZkProof};
     use crate::pcs::verifier::errors::VerifierError;
     use crate::sumcheck::layout::{Layout, SuffixProver, Table};
     use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
@@ -465,6 +465,21 @@ mod error_variant_tests {
             }
             other => panic!("expected UnexpectedZkPayloadInPlainProof, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn plain_verifier_rejects_unexpected_initial_zk_payload() {
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        proof.whir.initial_zk = Some(WhirInitialZkProof {
+            zk_sumcheck: Default::default(),
+            zk_sumcheck_mask_commitments: vec![commitment.clone()],
+        });
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        assert!(
+            matches!(err, VerifierError::UnexpectedInitialZkPayloadInPlainProof),
+            "expected UnexpectedInitialZkPayloadInPlainProof, got {err:?}"
+        );
     }
 
     #[test]
@@ -701,6 +716,110 @@ mod error_variant_tests {
             }
             other => panic!("expected StirQueryCountMismatch, got {other:?}"),
         }
+    }
+}
+
+mod zk_prefix_api_tests {
+    //! Prefix-only ZK opening entrypoint tests.
+
+    use alloc::vec;
+
+    use p3_commit::MultilinearPcs;
+    use p3_multilinear_util::poly::Poly;
+    use p3_zk_codes::ReedSolomonZkEncoding;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use super::{
+        EF, F, MyChallenger, MyCompress, MyDft, MyHash, MyMmcs, Perm, TestWhirPcs, challenger,
+    };
+    use crate::fiat_shamir::domain_separator::DomainSeparator;
+    use crate::parameters::{
+        FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirZkConfig,
+    };
+    use crate::sumcheck::layout::{Layout, PrefixProver, Table};
+    use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
+
+    type L = PrefixProver<F, EF>;
+
+    const NUM_VARIABLES: usize = 12;
+    const FOLDING: usize = 4;
+    const ZK_MESSAGE_LEN: usize = 4;
+
+    #[test]
+    fn begin_zk_prefix_open_records_initial_handoff() {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let table = Table::new(vec![
+            Poly::<F>::rand(&mut rng, NUM_VARIABLES),
+            Poly::<F>::rand(&mut rng, NUM_VARIABLES),
+        ]);
+        let witness = L::new_witness(vec![table], FOLDING);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            TableShape::new(NUM_VARIABLES, 2),
+            vec![vec![0, 1], vec![0]],
+        )]);
+
+        let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(1));
+        let merkle_hash = MyHash::new(perm.clone());
+        let merkle_compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
+
+        let params = ProtocolParameters {
+            security_level: 32,
+            pow_bits: 0,
+            rs_domain_initial_reduction_factor: 1,
+            folding_factor: FoldingFactor::Constant(FOLDING),
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        };
+        let config = WhirConfig::new(witness.num_variables(), params)
+            .with_zk_config(WhirZkConfig::prefix_only(ZK_MESSAGE_LEN, 2, 1));
+        let required_query_bound = config
+            .round_parameters
+            .iter()
+            .filter_map(|round| round.zk.as_ref().map(|zk| zk.mask_query_budget))
+            .max()
+            .unwrap_or(2);
+        let encoding = ReedSolomonZkEncoding::new(
+            required_query_bound,
+            ZK_MESSAGE_LEN,
+            (ZK_MESSAGE_LEN + required_query_bound).next_power_of_two(),
+            MyDft::default(),
+        );
+        let pcs = TestWhirPcs::<L>::new(config, MyDft::default(), mmcs);
+
+        let mut prover_challenger = challenger();
+        let mut domain_separator = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<8>(&mut domain_separator);
+        domain_separator.observe_domain_separator(&mut prover_challenger);
+
+        let (_commitment, prover_data) =
+            <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
+                &pcs,
+                witness,
+                &mut prover_challenger,
+            );
+        let mut zk_rng = SmallRng::seed_from_u64(7);
+        let state = pcs.begin_zk_prefix_open(
+            prover_data,
+            &protocol,
+            &mut prover_challenger,
+            encoding,
+            &mut zk_rng,
+        );
+
+        let initial_zk = state
+            .proof
+            .whir
+            .initial_zk
+            .as_ref()
+            .expect("ZK prefix entrypoint must record the initial ZK transcript");
+        assert_eq!(state.proof.evals.len(), protocol.num_openings());
+        assert_eq!(initial_zk.zk_sumcheck.ell_zk, ZK_MESSAGE_LEN);
+        assert_eq!(initial_zk.zk_sumcheck.round_coefficients.len(), FOLDING);
+        assert_eq!(initial_zk.zk_sumcheck_mask_commitments.len(), FOLDING);
+        assert_eq!(state.initial_handoff.randomness.num_variables(), FOLDING);
+        assert_eq!(state.initial_handoff.mask_oracles.len(), FOLDING);
     }
 }
 

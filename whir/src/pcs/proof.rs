@@ -11,14 +11,21 @@ use crate::sumcheck::zk::ZkSumcheckData;
 /// Complete WHIR proof.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
-    serialize = "F: Serialize, EF: Serialize, MT::Proof: Serialize",
-    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Proof: Deserialize<'de>"
+    serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::Proof: Serialize",
+    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::Proof: Deserialize<'de>"
 ))]
 pub struct WhirProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     /// Initial OOD evaluations.
     pub initial_ood_answers: Vec<EF>,
     /// Initial sumcheck data.
     pub initial_sumcheck: SumcheckData<F, EF>,
+    /// Initial ZK sumcheck payload for the prefix-only ZK entrypoint.
+    ///
+    /// This is absent for plain WHIR. It is skipped when absent so non-ZK
+    /// serialization remains unchanged for serde formats that honor
+    /// `skip_serializing_if`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_zk: Option<WhirInitialZkProof<F, EF, MT>>,
     /// Per-round proofs.
     pub rounds: Vec<WhirRoundProof<F, EF, MT>>,
     /// Final polynomial coefficients (sent in the clear).
@@ -36,6 +43,7 @@ impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> Default for Whi
         Self {
             initial_ood_answers: Vec::new(),
             initial_sumcheck: SumcheckData::default(),
+            initial_zk: None,
             rounds: Vec::new(),
             final_poly: None,
             final_pow_witness: F::default(),
@@ -78,6 +86,23 @@ pub struct PcsProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     /// Outer index walks opening batches in schedule order; inner index walks
     /// the columns opened inside each batch in their requested order.
     pub evals: Vec<Vec<EF>>,
+}
+
+/// Initial ZK sumcheck payload produced before the WHIR code-switch rounds.
+///
+/// Construction 6.3 runs before Construction 9.7 can consume its residual
+/// handoff. The prover stores the transcript data here and keeps the typed
+/// handoff locally for the first ZK code-switch round.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(bound(
+    serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize",
+    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>"
+))]
+pub struct WhirInitialZkProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
+    /// HVZK sumcheck transcript for the initial opening relation.
+    pub zk_sumcheck: ZkSumcheckData<F, EF>,
+    /// Mask commitments emitted by the initial HVZK sumcheck.
+    pub zk_sumcheck_mask_commitments: Vec<MT::Commitment>,
 }
 
 /// Per-round proof data.
@@ -187,6 +212,7 @@ impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> WhirProof<F, EF
         Self {
             initial_ood_answers: Vec::new(),
             initial_sumcheck: SumcheckData::default(),
+            initial_zk: None,
             rounds: (0..num_rounds).map(|_| WhirRoundProof::default()).collect(),
             final_poly: None,
             final_pow_witness: F::default(),
