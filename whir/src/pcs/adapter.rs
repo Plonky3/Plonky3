@@ -122,6 +122,20 @@ where
             encoding.query_bound() >= required_query_bound,
             "ZK encoding query bound must cover the derived mask query budget",
         );
+        let expected_domain_size = self
+            .round_parameters
+            .iter()
+            .filter_map(|round| round.zk.as_ref().map(|zk| zk.mask_domain_size))
+            .max()
+            .unwrap_or_else(|| {
+                ((zk_config.mask_message_len + required_query_bound) << zk_config.mask_rate_log_inv)
+                    .next_power_of_two()
+            });
+        assert_eq!(
+            encoding.codeword_len(),
+            expected_domain_size,
+            "ZK encoding codeword length must match the derived mask domain",
+        );
 
         let mut whir_proof = self.config.empty_proof();
         tracing::info_span!("zk prefix ood claims").in_scope(|| {

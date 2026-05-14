@@ -113,6 +113,10 @@ where
         self.t
     }
 
+    fn codeword_len(&self) -> usize {
+        self.m
+    }
+
     fn error(&self) -> f64 {
         // Reed-Solomon encoding provides perfect zero-knowledge (0 error).
         0.0

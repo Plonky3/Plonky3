@@ -26,7 +26,7 @@ pub(crate) struct SumcheckParams {
 
 /// Configuration for an HVZK sumcheck phase in the protocol.
 #[derive(Debug)]
-pub struct ZkSumcheckParams {
+pub(crate) struct ZkSumcheckParams {
     /// Number of sumcheck rounds.
     pub rounds: usize,
 
@@ -225,6 +225,35 @@ where
             }
         }
 
+        match &config.zk {
+            None => self.protocol_param(0),
+            Some(zk) => {
+                self.protocol_param(1);
+                self.protocol_param(zk.mask_query_budget.unwrap_or(0));
+                self.protocol_param(zk.mask_message_len);
+                self.protocol_param(zk.mask_randomness_len);
+                self.protocol_param(zk.mask_rate_log_inv);
+                self.protocol_param(usize::from(zk.only_prefix));
+
+                self.protocol_param(config.round_parameters.len());
+                for round in &config.round_parameters {
+                    match &round.zk {
+                        None => self.protocol_param(0),
+                        Some(round_zk) => {
+                            self.protocol_param(1);
+                            self.protocol_param(round_zk.target_query_budget);
+                            self.protocol_param(round_zk.mask_query_budget);
+                            self.protocol_param(round_zk.mask_message_len);
+                            self.protocol_param(round_zk.mask_randomness_len);
+                            self.protocol_param(round_zk.ood_samples);
+                            self.protocol_param(round_zk.mask_domain_size);
+                            self.protocol_param(round_zk.mask_width);
+                        }
+                    }
+                }
+            }
+        }
+
         self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
         self.add_ood(config.commitment_ood_samples);
     }
@@ -260,12 +289,22 @@ where
         EF: TwoAdicField,
         F: TwoAdicField,
     {
+        let zk_ell = config.zk.as_ref().map(|zk| zk.mask_message_len);
+
         // Initial combination randomness and first sumcheck phase.
         self.sample(1, Sample::InitialCombinationRandomness);
-        self.add_sumcheck(&SumcheckParams {
-            rounds: config.folding_factor.at_round(0),
-            pow_bits: config.starting_folding_pow_bits,
-        });
+        if let Some(ell_zk) = zk_ell {
+            self.add_zk_sumcheck::<DIGEST_ELEMS>(&ZkSumcheckParams {
+                rounds: config.folding_factor.at_round(0),
+                pow_bits: config.starting_folding_pow_bits,
+                ell_zk,
+            });
+        } else {
+            self.add_sumcheck(&SumcheckParams {
+                rounds: config.folding_factor.at_round(0),
+                pow_bits: config.starting_folding_pow_bits,
+            });
+        }
 
         // Intermediate rounds: commitment → OOD → PoW → checkpoint → queries → sumcheck.
         let mut domain_size = config.starting_domain_size();
@@ -276,6 +315,9 @@ where
 
             // Observe the new Merkle root and optional OOD evaluations.
             self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
+            if r.zk.is_some() {
+                self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
+            }
             self.add_ood(r.ood_samples);
 
             // PoW must precede query generation to prevent commitment shopping.
@@ -294,10 +336,18 @@ where
             // Combination randomness for the next polynomial, then sumcheck.
             self.sample(1, Sample::CombinationRandomness);
 
-            self.add_sumcheck(&SumcheckParams {
-                rounds: config.folding_factor.at_round(round + 1),
-                pow_bits: r.folding_pow_bits,
-            });
+            if let Some(round_zk) = &r.zk {
+                self.add_zk_sumcheck::<DIGEST_ELEMS>(&ZkSumcheckParams {
+                    rounds: config.folding_factor.at_round(round + 1),
+                    pow_bits: r.folding_pow_bits,
+                    ell_zk: round_zk.mask_message_len,
+                });
+            } else {
+                self.add_sumcheck(&SumcheckParams {
+                    rounds: config.folding_factor.at_round(round + 1),
+                    pow_bits: r.folding_pow_bits,
+                });
+            }
             domain_size >>= config.rs_reduction_factor(round);
         }
 
@@ -359,7 +409,7 @@ where
     /// 3. Sample the combining challenge `eps`.
     /// 4. For each round, observe the wire polynomial coefficients, optionally
     ///    grind, then sample the folding challenge.
-    pub fn add_zk_sumcheck<const DIGEST_ELEMS: usize>(&mut self, params: &ZkSumcheckParams) {
+    pub(crate) fn add_zk_sumcheck<const DIGEST_ELEMS: usize>(&mut self, params: &ZkSumcheckParams) {
         let ZkSumcheckParams {
             rounds,
             pow_bits,

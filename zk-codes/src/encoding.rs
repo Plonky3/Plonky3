@@ -14,6 +14,9 @@ pub trait ZkEncoding<F: Field> {
     /// The length of the randomness used for the encoding.
     fn randomness_len(&self) -> usize;
 
+    /// The number of positions in the encoded codeword domain.
+    fn codeword_len(&self) -> usize;
+
     /// The maximum number of queries that can be perfectly simulated.
     fn query_bound(&self) -> usize;
 
