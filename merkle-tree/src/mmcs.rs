@@ -2549,25 +2549,26 @@ mod tests {
                     // Failure here = broken test setup, not amortized code.
                     for &i in &indices {
                         let ind = mmcs.open_batch(i, &prover_data);
-                        let bref =
-                            BatchOpeningRef::new(&ind.opened_values, &ind.opening_proof);
-                        mmcs.verify_batch(&commit, &dims, i, bref).unwrap_or_else(|e| {
-                            panic!(
-                                "per-path oracle failed: \
+                        let bref = BatchOpeningRef::new(&ind.opened_values, &ind.opening_proof);
+                        mmcs.verify_batch(&commit, &dims, i, bref)
+                            .unwrap_or_else(|e| {
+                                panic!(
+                                    "per-path oracle failed: \
                                  height={height} cap={cap_height} trial={trial} index={i}: {e:?}"
-                            )
-                        });
+                                )
+                            });
                     }
 
                     // Subject: amortized verifier on the same set.
                     // Must accept (oracle just did).
                     let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
-                    mmcs.verify_batch_pruned(&commit, &dims, pruned).unwrap_or_else(|e| {
-                        panic!(
-                            "amortized pruned verifier failed: \
+                    mmcs.verify_batch_pruned(&commit, &dims, pruned)
+                        .unwrap_or_else(|e| {
+                            panic!(
+                                "amortized pruned verifier failed: \
                              height={height} cap={cap_height} trial={trial}: {e:?}"
-                        )
-                    });
+                            )
+                        });
                 }
             }
         }
