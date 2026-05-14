@@ -112,25 +112,17 @@ where
             zk_config.mask_message_len,
             "ZK encoding message length must match WhirZkConfig",
         );
-        let required_query_bound = self
+        let first_round_zk = self
             .round_parameters
-            .iter()
-            .filter_map(|round| round.zk.as_ref().map(|zk| zk.mask_query_budget))
-            .max()
-            .unwrap_or(zk_config.mask_randomness_len);
+            .first()
+            .and_then(|round| round.zk.as_ref())
+            .expect("ZK prefix opening requires at least one ZK code-switch round");
+        let required_query_bound = first_round_zk.mask_query_budget;
         assert!(
             encoding.query_bound() >= required_query_bound,
             "ZK encoding query bound must cover the derived mask query budget",
         );
-        let expected_domain_size = self
-            .round_parameters
-            .iter()
-            .filter_map(|round| round.zk.as_ref().map(|zk| zk.mask_domain_size))
-            .max()
-            .unwrap_or_else(|| {
-                ((zk_config.mask_message_len + required_query_bound) << zk_config.mask_rate_log_inv)
-                    .next_power_of_two()
-            });
+        let expected_domain_size = first_round_zk.mask_domain_size;
         assert_eq!(
             encoding.codeword_len(),
             expected_domain_size,

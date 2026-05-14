@@ -742,7 +742,7 @@ mod zk_prefix_api_tests {
 
     type L = PrefixProver<F, EF>;
 
-    const NUM_VARIABLES: usize = 12;
+    const NUM_VARIABLES: usize = 16;
     const FOLDING: usize = 4;
     const ZK_MESSAGE_LEN: usize = 4;
 
@@ -827,6 +827,48 @@ mod zk_prefix_api_tests {
         );
     }
 
+    #[test]
+    #[should_panic(expected = "ZK encoding codeword length must match the derived mask domain")]
+    fn begin_zk_prefix_open_rejects_later_round_domain_for_initial_handoff() {
+        let (mut pcs, witness, protocol, required_query_bound, expected_mask_domain) = setup();
+        assert!(
+            pcs.config.round_parameters.len() > 1,
+            "fixture should contain a later round to distinguish first-consumer and max domains",
+        );
+        let later_domain = expected_mask_domain * 2;
+        pcs.config.round_parameters[1]
+            .zk
+            .as_mut()
+            .expect("ZK config should be derived for the later round")
+            .mask_domain_size = later_domain;
+
+        let mut prover_challenger = challenger();
+        let mut domain_separator = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<8>(&mut domain_separator);
+        domain_separator.observe_domain_separator(&mut prover_challenger);
+
+        let (_commitment, prover_data) =
+            <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
+                &pcs,
+                witness,
+                &mut prover_challenger,
+            );
+        let encoding = ReedSolomonZkEncoding::new(
+            required_query_bound,
+            ZK_MESSAGE_LEN,
+            later_domain,
+            MyDft::default(),
+        );
+        let mut zk_rng = SmallRng::seed_from_u64(7);
+        let _ = pcs.begin_zk_prefix_open(
+            prover_data,
+            &protocol,
+            &mut prover_challenger,
+            encoding,
+            &mut zk_rng,
+        );
+    }
+
     fn setup() -> (
         TestWhirPcs<L>,
         crate::sumcheck::layout::Witness<F>,
@@ -862,16 +904,16 @@ mod zk_prefix_api_tests {
             .with_zk_config(WhirZkConfig::prefix_only(ZK_MESSAGE_LEN, 2, 1));
         let required_query_bound = config
             .round_parameters
-            .iter()
-            .filter_map(|round| round.zk.as_ref().map(|zk| zk.mask_query_budget))
-            .max()
-            .unwrap_or(2);
+            .first()
+            .and_then(|round| round.zk.as_ref())
+            .map(|zk| zk.mask_query_budget)
+            .expect("ZK config should derive a first-round mask query budget");
         let expected_mask_domain = config
             .round_parameters
-            .iter()
-            .filter_map(|round| round.zk.as_ref().map(|zk| zk.mask_domain_size))
-            .max()
-            .expect("ZK config should derive per-round mask domains");
+            .first()
+            .and_then(|round| round.zk.as_ref())
+            .map(|zk| zk.mask_domain_size)
+            .expect("ZK config should derive a first-round mask domain");
         let pcs = TestWhirPcs::<L>::new(config, MyDft::default(), mmcs);
 
         (
