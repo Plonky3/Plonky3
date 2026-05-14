@@ -1047,6 +1047,20 @@ mod tests {
         run_roundtrip(8, 3, 4, 2, 0).expect("honest roundtrip should accept");
     }
 
+    /// Drift guard: `prefix_strategy()` (free `const fn`, used by `ZkVerifier`
+    /// because the verifier doesn't have `F: TwoAdicField`) must stay in sync
+    /// with `<PrefixProver as Layout>::strategy()` (the prover's source of
+    /// truth). If the two ever drift, the verifier silently reads claims with
+    /// the wrong selector lift and the bug only surfaces at the round-trip
+    /// level.
+    #[test]
+    fn prefix_strategy_matches_prefix_prover() {
+        assert_eq!(
+            prefix_strategy(),
+            <PrefixProver<F, EF> as Layout<F, EF>>::strategy(),
+        );
+    }
+
     /// Negative-path coverage for the verifier's PoW check at zk.rs:674.
     ///
     /// `run_roundtrip` exercises the OK arm of `if pow_bits > 0 &&
