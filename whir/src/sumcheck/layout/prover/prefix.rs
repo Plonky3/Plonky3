@@ -380,7 +380,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
     ///
     /// The verifier walks its claim registry with the same three-loop order,
     /// so both sides assign the same `alpha^i` to the same claim point.
-    fn sum(&self, alpha: EF) -> EF {
+    pub(crate) fn sum(&self, alpha: EF) -> EF {
         let mut sum = EF::ZERO;
         let mut alphas = alpha.powers();
 
@@ -404,7 +404,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
 
     /// Builds the residual equality-weight polynomial after the prefix SVO rounds.
     #[tracing::instrument(skip_all)]
-    fn combine_eqs(&self, rs: &Point<EF>, alpha: EF) -> Poly<EF> {
+    pub(crate) fn combine_eqs(&self, rs: &Point<EF>, alpha: EF) -> Poly<EF> {
         assert_eq!(rs.num_variables(), self.folding);
         let mut out = Poly::<EF>::zero(self.num_variables - rs.num_variables());
 
