@@ -56,6 +56,10 @@ pub enum VerifierError {
     #[error(transparent)]
     Sumcheck(#[from] SumcheckError),
 
+    /// ZK WHIR is enabled on a verifier path that only supports plain WHIR.
+    #[error("ZK WHIR config requires the prefix-only ZK verifier path")]
+    ZkVerifierRequiresPrefixPath,
+
     /// Invalid round index.
     #[error("Invalid round index: {index}")]
     InvalidRoundIndex { index: usize },

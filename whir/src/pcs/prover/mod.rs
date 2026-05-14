@@ -152,6 +152,10 @@ where
         Dft: TwoAdicSubgroupDft<F>,
         Challenger: CanObserve<MT::Commitment>,
     {
+        assert!(
+            self.config.zk.is_none(),
+            "ZK WHIR config requires the prefix-only ZK prover path"
+        );
         assert_eq!(self.folding_factor.at_round(0), layout.folding());
         let variable_order = L::variable_order();
 

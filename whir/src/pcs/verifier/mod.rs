@@ -100,6 +100,10 @@ where
     where
         Challenger: CanObserve<MT::Commitment>,
     {
+        if self.config.zk.is_some() {
+            return Err(VerifierError::ZkVerifierRequiresPrefixPath);
+        }
+
         // Reject a proof that carries the wrong number of rounds before any
         // transcript work. The per-round commitment slot is checked further
         // down, where each round is parsed.

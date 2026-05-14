@@ -290,7 +290,9 @@ mod error_variant_tests {
         EF, F, MyChallenger, MyCompress, MyDft, MyHash, MyMmcs, Perm, TestWhirPcs, challenger,
     };
     use crate::fiat_shamir::domain_separator::DomainSeparator;
-    use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
+    use crate::parameters::{
+        FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirZkConfig,
+    };
     use crate::pcs::proof::PcsProof;
     use crate::pcs::verifier::errors::VerifierError;
     use crate::sumcheck::layout::{Layout, SuffixProver, Table};
@@ -422,6 +424,22 @@ mod error_variant_tests {
             }
             other => panic!("expected OpeningBatchCountMismatch, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn plain_verifier_rejects_zk_config_before_plain_round_checks() {
+        let (mut pcs, commitment, mut proof, protocol) = commit_and_open();
+        proof.whir.rounds.pop();
+        pcs.config = pcs
+            .config
+            .clone()
+            .with_zk_config(WhirZkConfig::prefix_only(4, 2, 1));
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        assert!(
+            matches!(err, VerifierError::ZkVerifierRequiresPrefixPath),
+            "expected ZkVerifierRequiresPrefixPath, got {err:?}"
+        );
     }
 
     #[test]
