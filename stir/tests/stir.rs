@@ -4,7 +4,9 @@
 //! that the proof verifies. Tests cover BabyBear (quartic extension), KoalaBear (quartic
 //! extension), and Goldilocks (quadratic extension).
 
-use p3_challenger::{CanObserve, DuplexChallenger, FieldChallenger, GrindingChallenger};
+use p3_challenger::{
+    CanObserve, CanSampleUniformBits, DuplexChallenger, FieldChallenger, GrindingChallenger,
+};
 use p3_commit::{ExtensionMmcs, Mmcs, Pcs, SecurityAssumption};
 use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
@@ -38,8 +40,11 @@ fn do_test_stir_prove_verify<F, EF, Dft, M, Challenger>(
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
     M: Mmcs<EF> + Clone,
-    Challenger:
-        FieldChallenger<F> + CanObserve<M::Commitment> + GrindingChallenger<Witness = F> + Clone,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>
+        + Clone,
     StandardUniform: Distribution<EF>,
 {
     let mut rng = seeded_rng();

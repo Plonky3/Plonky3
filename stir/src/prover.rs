@@ -8,7 +8,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{BasedVectorSpace, ExtensionField, Field, TwoAdicField};
@@ -45,7 +45,10 @@ where
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     Dft: TwoAdicSubgroupDft<F>,
     M: Mmcs<EF>,
-    Challenger: FieldChallenger<F> + CanObserve<M::Commitment> + GrindingChallenger<Witness = F>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
 {
     let num_rounds = config.num_rounds();
 
@@ -165,7 +168,13 @@ where
         let current_opening_data = &current_commit_data;
 
         for _ in 0..rc.num_queries {
-            let j = challenger.sample_bits(fold_log_domain);
+            // `RESAMPLE = true`: the challenger loops on field-side rejection internally,
+            // so this `expect` is unreachable for every challenger in this workspace.
+            // Unbiased sampling is required because `sample_bits` carries a per-draw modular
+            // bias of `2^fold_log_domain / |F|`, which is non-negligible over 31-bit fields.
+            let j = challenger
+                .sample_uniform_bits::<true>(fold_log_domain)
+                .expect("RESAMPLE = true: rejection loops internally, never errors");
             let fold_point = EF::from(fold_shift) * EF::from(fold_gen.exp_u64(j as u64));
 
             let opening = config.mmcs.open_batch(j, current_opening_data);
@@ -265,7 +274,9 @@ where
     let mut final_query_proofs = Vec::with_capacity(config.final_queries);
     let mut final_seen: alloc::collections::BTreeSet<usize> = alloc::collections::BTreeSet::new();
     for _ in 0..config.final_queries {
-        let j = challenger.sample_bits(final_new_log_domain);
+        let j = challenger
+            .sample_uniform_bits::<true>(final_new_log_domain)
+            .expect("RESAMPLE = true: rejection loops internally, never errors");
         final_seen.insert(j);
         let opening = config.mmcs.open_batch(j, &current_commit_data);
         let row_evals = (0..final_arity)

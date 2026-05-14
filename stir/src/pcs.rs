@@ -26,7 +26,7 @@ use core::fmt::Debug;
 use core::marker::PhantomData;
 
 use itertools::{Itertools, izip};
-use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{
     BatchOpening, BatchOpeningRef, BuildPeriodicLdeTableFast, Mmcs, OpenedValues, Pcs,
 };
@@ -89,6 +89,7 @@ where
         + CanObserve<InputMmcs::Commitment>
         + CanObserve<StirMmcs::Commitment>
         + GrindingChallenger<Witness = Val>
+        + CanSampleUniformBits<Val>
         + Clone,
 {
     type Domain = TwoAdicMultiplicativeCoset<Val>;

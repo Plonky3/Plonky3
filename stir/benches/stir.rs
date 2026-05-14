@@ -15,7 +15,9 @@
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
-use p3_challenger::{CanObserve, DuplexChallenger, FieldChallenger, GrindingChallenger};
+use p3_challenger::{
+    CanObserve, CanSampleUniformBits, DuplexChallenger, FieldChallenger, GrindingChallenger,
+};
 use p3_commit::{ExtensionMmcs, Mmcs, SecurityAssumption};
 use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
 use p3_field::extension::BinomialExtensionField;
@@ -89,7 +91,11 @@ fn bench_prove<F, EF, M, D, C>(
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     M: Mmcs<EF> + Clone,
     D: TwoAdicSubgroupDft<F>,
-    C: FieldChallenger<F> + CanObserve<M::Commitment> + GrindingChallenger<Witness = F> + Clone,
+    C: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>
+        + Clone,
     StandardUniform: Distribution<EF>,
 {
     let mut group = c.benchmark_group(format!("{group_name}/prove"));
@@ -125,7 +131,11 @@ fn bench_verify<F, EF, M, D, C>(
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     M: Mmcs<EF> + Clone,
     D: TwoAdicSubgroupDft<F>,
-    C: FieldChallenger<F> + CanObserve<M::Commitment> + GrindingChallenger<Witness = F> + Clone,
+    C: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>
+        + Clone,
     StandardUniform: Distribution<EF>,
 {
     let mut group = c.benchmark_group(format!("{group_name}/verify"));

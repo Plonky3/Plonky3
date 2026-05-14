@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{BatchOpeningRef, Mmcs};
 use p3_field::{BasedVectorSpace, ExtensionField, TwoAdicField};
 use p3_matrix::Dimensions;
@@ -159,7 +159,10 @@ where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField + BasedVectorSpace<F>,
     M: Mmcs<EF>,
-    Challenger: FieldChallenger<F> + CanObserve<M::Commitment> + GrindingChallenger<Witness = F>,
+    Challenger: FieldChallenger<F>
+        + CanObserve<M::Commitment>
+        + GrindingChallenger<Witness = F>
+        + CanSampleUniformBits<F>,
 {
     let num_rounds = config.num_rounds();
 
@@ -264,7 +267,11 @@ where
         let r_comb: EF = challenger.sample_algebra_element();
 
         for (q, qp) in rp.query_proofs.iter().enumerate() {
-            let j = challenger.sample_bits(fold_log_domain);
+            // See `prover.rs` for the unbiased-sampling rationale; the verifier must mirror
+            // the prover's draw policy exactly to keep the Fiat-Shamir transcript in sync.
+            let j = challenger
+                .sample_uniform_bits::<true>(fold_log_domain)
+                .expect("RESAMPLE = true: rejection loops internally, never errors");
             if qp.row_evals.len() != arity {
                 return Err(StirError::InvalidProofShape);
             }
@@ -404,7 +411,9 @@ where
     let mut final_seen: alloc::collections::BTreeSet<usize> = alloc::collections::BTreeSet::new();
 
     for (q, fqp) in proof.final_query_proofs.iter().enumerate() {
-        let j = challenger.sample_bits(final_new_log_domain);
+        let j = challenger
+            .sample_uniform_bits::<true>(final_new_log_domain)
+            .expect("RESAMPLE = true: rejection loops internally, never errors");
 
         if fqp.row_evals.len() != final_arity {
             return Err(StirError::InvalidProofShape);
