@@ -7,7 +7,7 @@ use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, HornerIter};
 use p3_multilinear_util::point::Point;
 
-use super::data::ZkSumcheckData;
+use super::data::{ZkSumcheckData, ZkVerifierHandoff};
 use crate::error::SumcheckError;
 use crate::layout::{LayoutStrategy, Verifier};
 use crate::strategy::VariableOrder;
@@ -146,7 +146,7 @@ where
         folding_factor: usize,
         pow_bits: usize,
         challenger: &mut Ch,
-    ) -> Result<(Point<EF>, EF), SumcheckError>
+    ) -> Result<ZkVerifierHandoff<EF>, SumcheckError>
     where
         M: Mmcs<EF>,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
@@ -262,7 +262,11 @@ where
             randomness.push(gamma_j);
         }
 
-        Ok((Point::new(randomness), target))
+        Ok(ZkVerifierHandoff {
+            randomness: Point::new(randomness),
+            claimed_residual: target,
+            eps,
+        })
     }
 }
 
@@ -580,7 +584,7 @@ mod tests {
             &mut honest_v_challenger,
         );
         prop_assert!(honest_result.is_ok());
-        let (_honest_rand, honest_target) = honest_result.unwrap();
+        let honest_target = honest_result.unwrap().claimed_residual;
 
         // Tampered verifier replay from the same starting state.
         let tampered_verifier = run.verifier.clone();
@@ -594,7 +598,7 @@ mod tests {
             &mut tampered_v_challenger,
         );
         prop_assert!(tampered_result.is_ok());
-        let (_tampered_rand, tampered_target) = tampered_result.unwrap();
+        let tampered_target = tampered_result.unwrap().claimed_residual;
 
         // The two targets must differ.
         // Accidental coincidence is bounded by Lemma 6.5's negligible soundness error.

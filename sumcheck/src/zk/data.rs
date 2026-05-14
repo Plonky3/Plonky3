@@ -3,8 +3,11 @@
 use alloc::vec::Vec;
 
 use p3_commit::Mmcs;
-use p3_field::Field;
+use p3_field::{ExtensionField, Field};
+use p3_multilinear_util::point::Point;
 use p3_zk_codes::ZkEncoding;
+
+use crate::sumcheck::strategy::SumcheckProver;
 
 /// Per-round prover output of the HVZK sumcheck protocol.
 ///
@@ -85,3 +88,38 @@ pub type MaskOracle<EF, Enc, M> = (
     <M as Mmcs<EF>>::Commitment,
     <M as Mmcs<EF>>::ProverData<<Enc as ZkEncoding<EF>>::Codeword>,
 );
+
+/// Typed prover handoff produced by the HVZK sumcheck.
+///
+/// Downstream code-switching needs both the residual prover and the sampled
+/// `eps` scale. Carrying them in a named type makes the Construction 6.3 to
+/// Construction 9.7 boundary explicit.
+pub struct ZkSumcheckHandoff<F, EF, Enc, M>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    Enc: ZkEncoding<F>,
+    M: Mmcs<F>,
+{
+    /// Residual sumcheck prover whose claim is scaled by `eps`.
+    pub residual_prover: SumcheckProver<F, EF>,
+    /// Per-round sumcheck challenges.
+    pub randomness: Point<EF>,
+    /// Construction 6.3 combining challenge.
+    pub eps: EF,
+    /// Encoded mask oracles, in round order.
+    pub mask_oracles: Vec<MaskOracle<F, Enc, M>>,
+}
+
+/// Typed verifier handoff produced by replaying an HVZK sumcheck transcript.
+///
+/// This mirrors [`ZkSumcheckHandoff`] without prover-only mask data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZkVerifierHandoff<EF> {
+    /// Per-round sumcheck challenges.
+    pub randomness: Point<EF>,
+    /// Residual claim after replay.
+    pub claimed_residual: EF,
+    /// Construction 6.3 combining challenge.
+    pub eps: EF,
+}

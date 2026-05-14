@@ -264,20 +264,24 @@ where
     }
 
     // Prover-side sumcheck; consumes `prover`.
-    let (_residual_prover, prover_randomness, mask_oracles) = prover.into_sumcheck(
+    let prover_handoff = prover.into_sumcheck(
         &mut zk_data,
         pow_bits,
         &mut prover_challenger,
         &mut prover_rng,
     );
-    let mask_commits: Vec<_> = mask_oracles.iter().map(|(c, _)| c.clone()).collect();
+    let mask_commits: Vec<_> = prover_handoff
+        .mask_oracles
+        .iter()
+        .map(|(c, _)| c.clone())
+        .collect();
 
     ProverRun {
         verifier,
         verifier_challenger,
         zk_data,
         mask_commits,
-        prover_randomness,
+        prover_randomness: prover_handoff.randomness,
         virtual_evals,
     }
 }
@@ -289,7 +293,7 @@ pub fn replay_verifier(
     folding_factor: usize,
     pow_bits: usize,
 ) -> Result<p3_multilinear_util::point::Point<EF>, &'static str> {
-    let (verifier_point, _final_target) = run
+    let verifier_handoff = run
         .verifier
         .into_sumcheck::<MyMmcs, _>(
             &run.zk_data,
@@ -300,7 +304,7 @@ pub fn replay_verifier(
             &mut run.verifier_challenger,
         )
         .map_err(|_| "verifier rejected honest prover output")?;
-    Ok(verifier_point)
+    Ok(verifier_handoff.randomness)
 }
 
 /// End-to-end honest prover/verifier driver, parameterised by binding direction.
