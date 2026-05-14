@@ -741,8 +741,7 @@ mod zk_prefix_api_tests {
         FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirZkConfig,
     };
     use crate::pcs::adapter::{
-        ZkCodeSwitchProverSource, ZkCodeSwitchVerifierSource, ZkEncodedCodeSwitchVerifierSource,
-        evaluate_zk_mask_residual,
+        ZkCodeSwitchProverSource, ZkCodeSwitchVerifierSource, evaluate_zk_mask_residual,
     };
     use crate::pcs::proof::QueryOpening;
     use crate::sumcheck::layout::{Layout, PrefixProver, Table};
@@ -926,7 +925,13 @@ mod zk_prefix_api_tests {
             ),
         );
         assert_eq!(next_source.residual_sumcheck_scale, EF::ONE);
-        assert_eq!(next_source.randomness_len, 0);
+        let round1_zk = pcs.config.round_parameters[1].zk.as_ref().unwrap();
+        assert_eq!(next_source.randomness_len, round1_zk.mask_query_budget);
+        assert_eq!(
+            next_source.domain_size,
+            (next_source.message.len() + next_source.randomness_len).next_power_of_two(),
+        );
+        assert_eq!(next_source.folding_factor, 0);
 
         let mut verifier_challenger = challenger();
         domain_separator.observe_domain_separator(&mut verifier_challenger);
@@ -939,7 +944,7 @@ mod zk_prefix_api_tests {
             domain_size: target_domain_size,
             folding_factor: target_folding,
         };
-        let verifier_handoff = pcs
+        let verifier_state = pcs
             .verify_round_zk_prefix(
                 &round_state.proof,
                 &protocol,
@@ -948,7 +953,7 @@ mod zk_prefix_api_tests {
             )
             .expect("verifier should replay the first ZK round");
         assert_eq!(
-            verifier_handoff.randomness.num_variables(),
+            verifier_state.handoff.randomness.num_variables(),
             pcs.config.folding_factor.at_round(1),
         );
         let nested_gammas = round_state
@@ -960,26 +965,32 @@ mod zk_prefix_api_tests {
         let nested_mask_residual =
             evaluate_zk_mask_residual::<F, EF>(&round_state.handoff.mask_messages, &nested_gammas);
         assert_eq!(
-            verifier_handoff.claimed_residual,
+            verifier_state.handoff.claimed_residual,
             round_state.handoff.residual_prover.claimed_sum() + nested_mask_residual,
         );
+        let verifier_next_source = verifier_state
+            .next_source
+            .as_ref()
+            .expect("verifier should carry the next encoded source relation");
+        assert_eq!(verifier_next_source.message_len, next_source.message.len());
+        assert_eq!(
+            verifier_next_source.covector.as_slice(),
+            next_source.covector.as_slice(),
+        );
+        assert_eq!(
+            verifier_next_source.residual_sumcheck_scale,
+            next_source.residual_sumcheck_scale,
+        );
+        assert_eq!(verifier_next_source.domain_size, next_source.domain_size);
+        assert_eq!(
+            verifier_next_source.randomness_len,
+            next_source.randomness_len
+        );
 
-        let round1_zk = pcs.config.round_parameters[1].zk.as_ref().unwrap();
-        let source_domain =
-            (next_source.message.len() + round1_zk.mask_query_budget).next_power_of_two();
-        let encoded_source = ZkCodeSwitchProverSource {
-            message: next_source.message.clone(),
-            covector: next_source.covector.clone(),
-            inherited_claim: next_source.inherited_claim,
-            residual_sumcheck_scale: next_source.residual_sumcheck_scale,
-            randomness_len: 0,
-            domain_size: source_domain,
-            folding_factor: 0,
-        };
         let source_encoding = ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
-            round1_zk.mask_query_budget,
-            encoded_source.message.len(),
-            source_domain,
+            next_source.randomness_len,
+            next_source.message.len(),
+            next_source.domain_size,
             Radix2Dit::default(),
         );
         let code_switch_mask_encoding = ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
@@ -998,7 +1009,7 @@ mod zk_prefix_api_tests {
             round_state.proof.clone(),
             &round_state.handoff,
             1,
-            &encoded_source,
+            next_source,
             &source_encoding,
             &code_switch_mask_encoding,
             &sumcheck_mask_encoding,
@@ -1031,26 +1042,29 @@ mod zk_prefix_api_tests {
             round1_state.handoff.randomness.num_variables(),
             pcs.config.folding_factor.at_round(2),
         );
-        let round1_verifier_source = ZkEncodedCodeSwitchVerifierSource {
-            message_len: encoded_source.message.len(),
-            covector: encoded_source.covector,
-            residual_sumcheck_scale: encoded_source.residual_sumcheck_scale,
-            domain_size: source_domain,
-            randomness_len: round1_zk.mask_query_budget,
-        };
-        let round1_verifier_handoff = pcs
+        let round1_verifier_state = pcs
             .verify_round_zk_prefix_from_encoded_source(
                 &round1_state.proof,
-                &verifier_handoff,
+                &verifier_state.handoff,
                 1,
-                &round1_verifier_source,
+                verifier_next_source,
                 &source_encoding,
                 &mut verifier_challenger,
             )
             .expect("verifier should replay the encoded-source ZK round");
         assert_eq!(
-            round1_verifier_handoff.randomness.num_variables(),
+            round1_verifier_state.handoff.randomness.num_variables(),
             pcs.config.folding_factor.at_round(2),
+        );
+        assert_eq!(
+            round1_verifier_state
+                .next_source
+                .as_ref()
+                .map(|source| source.covector.as_slice()),
+            round1_state
+                .next_source
+                .as_ref()
+                .map(|source| source.covector.as_slice()),
         );
     }
 

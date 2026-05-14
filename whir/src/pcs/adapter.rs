@@ -12,6 +12,7 @@ use p3_field::{ExtensionField, Field, TwoAdicField, dot_product};
 use p3_matrix::dense::DenseMatrix;
 use p3_matrix::extension::FlatMatrixView;
 use p3_matrix::{Dimensions, Matrix};
+use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_zk_codes::{LinearZkEncoding, ZkEncoding, ZkEncodingWithRandomness};
 use rand::distr::{Distribution, StandardUniform};
@@ -153,6 +154,17 @@ where
     pub domain_size: usize,
     /// Source encoding randomness length carried in the code-switch mask message.
     pub randomness_len: usize,
+}
+
+/// Verifier-side state after replaying one prefix-ZK code-switch round.
+pub struct WhirZkPrefixVerifierRoundState<EF>
+where
+    EF: Field,
+{
+    /// Typed nested ZK sumcheck handoff for the next round.
+    pub handoff: ZkVerifierHandoff<EF>,
+    /// Verifier-side source relation for the next ZK code-switch round, if one exists.
+    pub next_source: Option<ZkEncodedCodeSwitchVerifierSource<EF>>,
 }
 
 /// Prefix-ZK state after one code-switch round.
@@ -317,6 +329,49 @@ where
         })
         .collect::<Vec<_>>();
     (source_rows, source_randomness_rows)
+}
+
+fn encoded_source_domain_size<EF>(message_len: usize, randomness_len: usize) -> usize
+where
+    EF: TwoAdicField,
+{
+    let domain_size = (message_len + randomness_len).next_power_of_two();
+    assert!(
+        domain_size.ilog2() as usize <= EF::TWO_ADICITY,
+        "encoded ZK source domain must fit the extension field two-adicity",
+    );
+    domain_size
+}
+
+fn code_switch_relation_weights<EF>(
+    output_relation: CodeSwitchOutputRelation<EF>,
+    folding_factor_next: usize,
+) -> Vec<EF>
+where
+    EF: Field,
+{
+    let mut relation_weights = output_relation.source_covector;
+    for covector in output_relation.auxiliary_covectors {
+        relation_weights.extend(covector);
+    }
+    relation_weights.extend(output_relation.mask_covector);
+    let relation_len = relation_weights
+        .len()
+        .next_power_of_two()
+        .max(1usize << folding_factor_next);
+    relation_weights.resize(relation_len, EF::ZERO);
+    relation_weights
+}
+
+fn fold_prefix_covector<EF>(relation_weights: Vec<EF>, randomness: &Point<EF>) -> Vec<EF>
+where
+    EF: Field,
+{
+    let mut poly = Poly::new(relation_weights);
+    for &gamma in randomness {
+        poly.fix_prefix_var_mut(gamma);
+    }
+    poly.as_slice().to_vec()
 }
 
 fn source_message_row<F: TwoAdicField>(
@@ -1006,18 +1061,25 @@ where
         );
         let next_source = if round_index + 1 < self.n_rounds() {
             let next_round_index = round_index + 1;
-            let next_num_variables = next_handoff.residual_prover.num_variables();
+            let next_round_zk = self.round_parameters[next_round_index]
+                .zk
+                .as_ref()
+                .expect("next ZK round source requires RoundConfig::zk");
             let next_message = next_handoff.residual_prover.evals().as_slice().to_vec();
             let next_covector = next_handoff.residual_prover.weights().as_slice().to_vec();
             assert_eq!(next_message.len(), next_covector.len());
+            let next_randomness_len = next_round_zk.mask_query_budget;
             Some(ZkCodeSwitchProverSource {
+                domain_size: encoded_source_domain_size::<EF>(
+                    next_message.len(),
+                    next_randomness_len,
+                ),
                 message: next_message,
                 covector: next_covector,
                 inherited_claim: next_handoff.residual_prover.claimed_sum(),
                 residual_sumcheck_scale: EF::ONE,
-                randomness_len: 0,
-                domain_size: self.inv_rate(next_round_index) * (1usize << next_num_variables),
-                folding_factor: self.params.folding_factor.at_round(next_round_index + 1),
+                randomness_len: next_randomness_len,
+                folding_factor: 0,
             })
         } else {
             None
@@ -1107,9 +1169,9 @@ where
             "linearly ZK-encoded source openings are single-position rows",
         );
         let source_randomness_len = source_encoding.randomness_len();
-        assert!(
-            source.randomness_len == 0 || source.randomness_len == source_randomness_len,
-            "carried source randomness length must be unset or match the source encoding",
+        assert_eq!(
+            source.randomness_len, source_randomness_len,
+            "carried source randomness length must match the source encoding",
         );
         assert_eq!(
             code_switch_mask_encoding.message_len(),
@@ -1324,16 +1386,24 @@ where
         );
         let next_source = if round_index + 1 < self.n_rounds() {
             let next_round_index = round_index + 1;
-            let next_num_variables = next_handoff.residual_prover.num_variables();
+            let next_round_zk = self.round_parameters[next_round_index]
+                .zk
+                .as_ref()
+                .expect("next ZK round source requires RoundConfig::zk");
             let next_message = next_handoff.residual_prover.evals().as_slice().to_vec();
             let next_covector = next_handoff.residual_prover.weights().as_slice().to_vec();
+            assert_eq!(next_message.len(), next_covector.len());
+            let next_randomness_len = next_round_zk.mask_query_budget;
             Some(ZkCodeSwitchProverSource {
+                domain_size: encoded_source_domain_size::<EF>(
+                    next_message.len(),
+                    next_randomness_len,
+                ),
                 message: next_message,
                 covector: next_covector,
                 inherited_claim: next_handoff.residual_prover.claimed_sum(),
                 residual_sumcheck_scale: EF::ONE,
-                randomness_len: 0,
-                domain_size: self.inv_rate(next_round_index) * (1usize << next_num_variables),
+                randomness_len: next_randomness_len,
                 folding_factor: 0,
             })
         } else {
@@ -1372,7 +1442,7 @@ where
         protocol: &OpeningProtocol,
         source: &ZkCodeSwitchVerifierSource<F, EF, MT>,
         challenger: &mut Challenger,
-    ) -> Result<ZkVerifierHandoff<EF>, VerifierError> {
+    ) -> Result<WhirZkPrefixVerifierRoundState<EF>, VerifierError> {
         let zk_config = self
             .config
             .zk
@@ -1607,7 +1677,7 @@ where
             initial_zk.zk_sumcheck.ell_zk,
             &initial_gammas,
         );
-        let _ = code_switch_output_relation_from_rows(
+        let output_relation = code_switch_output_relation_from_rows(
             source.message_len,
             &source.covector,
             &auxiliary_covectors,
@@ -1619,16 +1689,44 @@ where
             &claim,
         );
 
-        ZkVerifier::<F, EF>::verify_claim::<MT, _>(
+        let folding_factor_next = self.params.folding_factor.at_round(round_index + 1);
+        let relation_weights = code_switch_relation_weights(output_relation, folding_factor_next);
+        let handoff = ZkVerifier::<F, EF>::verify_claim::<MT, _>(
             &round_zk_proof.zk_sumcheck,
             &round_zk_proof.zk_sumcheck_mask_commitments,
             round_zk.mask_message_len,
-            self.params.folding_factor.at_round(round_index + 1),
+            folding_factor_next,
             round_params.folding_pow_bits,
             mu_prime,
             challenger,
         )
-        .map_err(VerifierError::from)
+        .map_err(VerifierError::from)?;
+        let next_source = if round_index + 1 < self.n_rounds() {
+            let next_round_index = round_index + 1;
+            let next_round_zk = self.round_parameters[next_round_index]
+                .zk
+                .as_ref()
+                .expect("next ZK round source requires RoundConfig::zk");
+            let next_covector = fold_prefix_covector(relation_weights, &handoff.randomness);
+            let next_randomness_len = next_round_zk.mask_query_budget;
+            Some(ZkEncodedCodeSwitchVerifierSource {
+                domain_size: encoded_source_domain_size::<EF>(
+                    next_covector.len(),
+                    next_randomness_len,
+                ),
+                message_len: next_covector.len(),
+                covector: next_covector,
+                residual_sumcheck_scale: EF::ONE,
+                randomness_len: next_randomness_len,
+            })
+        } else {
+            None
+        };
+
+        Ok(WhirZkPrefixVerifierRoundState {
+            handoff,
+            next_source,
+        })
     }
 
     /// Replay one encoded-source prefix-only ZK code-switch round.
@@ -1647,7 +1745,7 @@ where
         source: &ZkEncodedCodeSwitchVerifierSource<EF>,
         source_encoding: &SourceEnc,
         challenger: &mut Challenger,
-    ) -> Result<ZkVerifierHandoff<EF>, VerifierError>
+    ) -> Result<WhirZkPrefixVerifierRoundState<EF>, VerifierError>
     where
         SourceEnc: LinearZkEncoding<EF>,
     {
@@ -1857,7 +1955,7 @@ where
             prior_round_zk.zk_sumcheck.ell_zk,
             &gammas,
         );
-        let _ = code_switch_output_relation_from_ext_rows(
+        let output_relation = code_switch_output_relation_from_ext_rows(
             source.message_len,
             &source.covector,
             &auxiliary_covectors,
@@ -1869,16 +1967,44 @@ where
             &claim,
         );
 
-        ZkVerifier::<F, EF>::verify_claim::<MT, _>(
+        let folding_factor_next = self.params.folding_factor.at_round(round_index + 1);
+        let relation_weights = code_switch_relation_weights(output_relation, folding_factor_next);
+        let handoff = ZkVerifier::<F, EF>::verify_claim::<MT, _>(
             &round_zk_proof.zk_sumcheck,
             &round_zk_proof.zk_sumcheck_mask_commitments,
             round_zk.mask_message_len,
-            self.params.folding_factor.at_round(round_index + 1),
+            folding_factor_next,
             round_params.folding_pow_bits,
             mu_prime,
             challenger,
         )
-        .map_err(VerifierError::from)
+        .map_err(VerifierError::from)?;
+        let next_source = if round_index + 1 < self.n_rounds() {
+            let next_round_index = round_index + 1;
+            let next_round_zk = self.round_parameters[next_round_index]
+                .zk
+                .as_ref()
+                .expect("next ZK round source requires RoundConfig::zk");
+            let next_covector = fold_prefix_covector(relation_weights, &handoff.randomness);
+            let next_randomness_len = next_round_zk.mask_query_budget;
+            Some(ZkEncodedCodeSwitchVerifierSource {
+                domain_size: encoded_source_domain_size::<EF>(
+                    next_covector.len(),
+                    next_randomness_len,
+                ),
+                message_len: next_covector.len(),
+                covector: next_covector,
+                residual_sumcheck_scale: EF::ONE,
+                randomness_len: next_randomness_len,
+            })
+        } else {
+            None
+        };
+
+        Ok(WhirZkPrefixVerifierRoundState {
+            handoff,
+            next_source,
+        })
     }
 }
 
