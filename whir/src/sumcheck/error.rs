@@ -33,4 +33,11 @@ pub enum SumcheckError {
     /// the folding factor `k`.
     #[error("HVZK mask commitment count mismatch: expected {expected}, got {actual}")]
     MaskCommitmentCountMismatch { expected: usize, actual: usize },
+
+    /// HVZK sumcheck: the proof's claimed `ell_zk` (mask code message length)
+    /// does not match the verifier's expected value. Catches caller-side
+    /// configuration mismatch between prover and verifier before the wire
+    /// shape check.
+    #[error("HVZK ell_zk mismatch: expected {expected}, got {actual}")]
+    EllZkMismatch { expected: usize, actual: usize },
 }

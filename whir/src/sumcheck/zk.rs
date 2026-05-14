@@ -125,6 +125,10 @@ pub struct ZkSumcheckData<F, EF> {
     /// of Construction 6.3. Observed on the transcript before the verifier
     /// samples `ε`; lifted to `EF` at observation time.
     pub mu_tilde: F,
+    /// Mask code message length `ℓ_zk` the prover used. The verifier checks
+    /// this against its own expected value to pin the protocol shape before
+    /// any wire-level reasoning.
+    pub ell_zk: usize,
     /// Per-round wire coefficients of `ĥ_j` with the linear term skipped.
     /// Layout per entry: `[c_0, c_2, c_3, …, c_d]` where `d = max(ℓ_zk - 1, 2)`.
     pub round_coefficients: Vec<Vec<EF>>,
@@ -136,6 +140,7 @@ impl<F: Field, EF> Default for ZkSumcheckData<F, EF> {
     fn default() -> Self {
         Self {
             mu_tilde: F::ZERO,
+            ell_zk: 0,
             round_coefficients: Vec::new(),
             pow_witnesses: Vec::new(),
         }
@@ -370,6 +375,7 @@ where
 
         challenger.observe_algebra_element(EF::from(mu_tilde));
         zk_data.mu_tilde = mu_tilde;
+        zk_data.ell_zk = ell_zk;
 
         // --- Construction 6.3 step 3: ε ---
         // Note: this is the load-bearing differnece from the reference
@@ -603,6 +609,8 @@ where
     ///
     /// # Errors
     ///
+    /// - [`SumcheckError::EllZkMismatch`] if `zk_data.ell_zk` disagrees with
+    ///   the verifier-side `ell_zk` parameter.
     /// - [`SumcheckError::RoundCountMismatch`] on `zk_data` shape mismatch.
     /// - [`SumcheckError::MaskCommitmentCountMismatch`] on mask-count mismatch.
     /// - [`SumcheckError::PowWitnessCountMismatch`] on PoW-shape mismatch.
@@ -637,6 +645,12 @@ where
         );
         assert!(folding_factor >= 1, "sumcheck requires at least one round");
 
+        if zk_data.ell_zk != ell_zk {
+            return Err(SumcheckError::EllZkMismatch {
+                expected: ell_zk,
+                actual: zk_data.ell_zk,
+            });
+        }
         if zk_data.round_coefficients.len() != folding_factor {
             return Err(SumcheckError::RoundCountMismatch {
                 expected: folding_factor,
@@ -836,6 +850,7 @@ where
     let wire_size = h_size - 1;
     let mut zk_data = ZkSumcheckData::<F, EF> {
         mu_tilde,
+        ell_zk,
         round_coefficients: Vec::with_capacity(k),
         pow_witnesses: Vec::with_capacity(if pow_bits > 0 { k } else { 0 }),
     };
@@ -1091,6 +1106,59 @@ mod tests {
         assert!(
             matches!(result, Err(SumcheckError::InvalidPowWitness)),
             "verifier accepted a forged PoW witness; got {result:?}",
+        );
+    }
+
+    /// Prover/verifier `ell_zk` mismatch must be rejected up front with
+    /// `EllZkMismatch`, not silently accepted via the (non-injective in
+    /// `{2, 3}`) wire-shape check.
+    #[test]
+    fn ell_zk_mismatch_rejected() {
+        let n_vars = 6;
+        let folding_factor = 2;
+        let ell_zk = 4;
+        let num_eqs = 1;
+        let seed = 0u64;
+        let pow_bits = 0;
+
+        let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
+        let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+        let evals: Vec<F> = (0..(1usize << n_vars)).map(|_| data_rng.random()).collect();
+
+        let (mut prover, mut verifier, _) =
+            build_prover_verifier(evals, folding_factor, encoding, mmcs);
+
+        let mut prover_ch = MyChallenger::new(perm.clone());
+        let mut verifier_ch = MyChallenger::new(perm);
+        for _ in 0..num_eqs {
+            let eval = prover.add_virtual_eval(&mut prover_ch);
+            verifier.add_virtual_eval(eval, &mut verifier_ch);
+        }
+
+        let mut zk_data = ZkSumcheckData::<F, EF>::default();
+        let mut prover_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+        let (_residual, _rand, mask_oracles) =
+            prover.into_sumcheck(&mut zk_data, pow_bits, &mut prover_ch, &mut prover_rng);
+
+        // Verifier expects a different `ell_zk` than what the proof claims.
+        let wrong_ell_zk = ell_zk + 1;
+        let mask_commits: Vec<_> = mask_oracles.iter().map(|(c, _)| c.clone()).collect();
+        let result = verifier.into_sumcheck::<MyMmcs, _>(
+            &zk_data,
+            &mask_commits,
+            wrong_ell_zk,
+            folding_factor,
+            pow_bits,
+            &mut verifier_ch,
+        );
+
+        assert!(
+            matches!(
+                result,
+                Err(SumcheckError::EllZkMismatch { expected, actual })
+                    if expected == wrong_ell_zk && actual == ell_zk
+            ),
+            "verifier should have rejected ell_zk mismatch; got {result:?}",
         );
     }
 
