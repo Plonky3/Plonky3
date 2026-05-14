@@ -26,7 +26,10 @@ pub struct WhirZkConfig {
     pub mask_query_budget: Option<usize>,
     /// Message length of the mask code (`ell_zk`).
     pub mask_message_len: usize,
-    /// Randomness length of the mask code.
+    /// Minimum randomness length of the mask code.
+    ///
+    /// Each round raises the effective value to at least its derived
+    /// `mask_query_budget`, matching the ZK encoding query bound.
     pub mask_randomness_len: usize,
     /// Logarithmic inverse rate used to size the mask code domain.
     pub mask_rate_log_inv: usize,
@@ -450,14 +453,6 @@ where
             "mask_randomness_len must be positive",
         );
 
-        let mask_domain_size_unrounded =
-            (zk.mask_message_len + zk.mask_randomness_len) << zk.mask_rate_log_inv;
-        let mask_domain_size = mask_domain_size_unrounded.next_power_of_two();
-        assert!(
-            mask_domain_size.ilog2() as usize <= F::TWO_ADICITY,
-            "mask code domain exceeds base-field two-adicity",
-        );
-
         let round_count = self.round_parameters.len();
         for round_index in 0..round_count {
             let target_query_budget = if round_index + 1 < round_count {
@@ -470,13 +465,21 @@ where
                 mask_query_budget >= target_query_budget,
                 "mask_query_budget must cover all downstream target queries",
             );
+            let mask_randomness_len = zk.mask_randomness_len.max(mask_query_budget);
+            let mask_domain_size = ((zk.mask_message_len + mask_randomness_len)
+                << zk.mask_rate_log_inv)
+                .next_power_of_two();
+            assert!(
+                mask_domain_size.ilog2() as usize <= F::TWO_ADICITY,
+                "mask code domain exceeds base-field two-adicity",
+            );
             let ood_samples = self.round_parameters[round_index].ood_samples;
 
             self.round_parameters[round_index].zk = Some(RoundZkConfig {
                 target_query_budget,
                 mask_query_budget,
                 mask_message_len: zk.mask_message_len,
-                mask_randomness_len: zk.mask_randomness_len,
+                mask_randomness_len,
                 ood_samples,
                 mask_domain_size,
                 mask_width: 1,
@@ -720,6 +723,28 @@ mod tests {
             assert_eq!(zk.mask_width, 1);
             assert_eq!(zk.proof_field_overhead(), 16 + round.ood_samples);
         }
+    }
+
+    #[test]
+    fn test_zk_config_raises_mask_randomness_to_query_budget() {
+        let params = default_whir_params();
+        let mut config = WhirConfig::<F, F, MyChallenger>::new(20, params);
+        config.final_queries = 5;
+
+        let config = config.with_zk_config(WhirZkConfig::prefix_only(4, 2, 1));
+        let final_intermediate_round = config.round_parameters.last().unwrap();
+        let zk = final_intermediate_round.zk.as_ref().unwrap();
+
+        assert_eq!(zk.target_query_budget, 5);
+        assert_eq!(zk.mask_query_budget, 5);
+        assert_eq!(
+            zk.mask_randomness_len, 5,
+            "effective mask randomness must cover the encoding query bound",
+        );
+        assert_eq!(
+            zk.mask_domain_size, 32,
+            "mask domain should be sized from the effective randomness length",
+        );
     }
 
     #[test]
