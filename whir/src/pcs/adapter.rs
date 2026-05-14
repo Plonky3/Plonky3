@@ -167,6 +167,23 @@ where
     pub next_source: Option<ZkEncodedCodeSwitchVerifierSource<EF>>,
 }
 
+/// Prover-side state after running the prefix-ZK code-switch round loop.
+pub struct WhirZkPrefixRoundsState<F, EF, Enc, MT>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField,
+    Enc: ZkEncoding<F>,
+    MT: Mmcs<F>,
+{
+    /// Partial proof with every intermediate ZK round populated.
+    pub proof: PcsProof<F, EF, MT>,
+    /// Typed nested ZK sumcheck handoff after the last code-switch round.
+    pub handoff: ZkSumcheckHandoff<F, EF, Enc, MT>,
+    /// Carried source for a further code-switch round. This is `None` once all
+    /// intermediate rounds have been consumed.
+    pub next_source: Option<ZkCodeSwitchProverSource<EF>>,
+}
+
 /// Prefix-ZK state after one code-switch round.
 pub struct WhirZkPrefixRoundState<F, EF, Enc, MT>
 where
@@ -1430,6 +1447,91 @@ where
         }
     }
 
+    /// Run all prefix-only ZK code-switching rounds and stop at the final ZK handoff.
+    ///
+    /// This is the loop-level Construction 9.7 driver. It deliberately stops
+    /// before the final WHIR tail check because the ZK final handoff is not yet
+    /// connected to the final-polynomial protocol surface.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prove_zk_prefix_rounds<
+        SumcheckEnc,
+        SourceEnc,
+        CodeSwitchMaskEnc,
+        MakeSumcheckEnc,
+        MakeSourceEnc,
+        MakeCodeSwitchMaskEnc,
+        R,
+    >(
+        &self,
+        state: WhirZkPrefixOpenState<F, EF, SumcheckEnc, MT>,
+        source_covector: &[EF],
+        mut sumcheck_mask_encoding_for: MakeSumcheckEnc,
+        mut source_encoding_for: MakeSourceEnc,
+        mut code_switch_mask_encoding_for: MakeCodeSwitchMaskEnc,
+        challenger: &mut Challenger,
+        rng: &mut R,
+    ) -> WhirZkPrefixRoundsState<F, EF, SumcheckEnc, MT>
+    where
+        SumcheckEnc: ZkEncoding<F>,
+        SumcheckEnc::Codeword: Matrix<F>,
+        SourceEnc: LinearZkEncoding<EF> + ZkEncodingWithRandomness<EF>,
+        SourceEnc::Codeword: Matrix<EF>,
+        CodeSwitchMaskEnc: ZkEncoding<EF>,
+        CodeSwitchMaskEnc::Codeword: Matrix<EF>,
+        MakeSumcheckEnc: FnMut(usize) -> SumcheckEnc,
+        MakeSourceEnc: FnMut(usize, &ZkCodeSwitchProverSource<EF>) -> SourceEnc,
+        MakeCodeSwitchMaskEnc: FnMut(usize) -> CodeSwitchMaskEnc,
+        R: Rng,
+        StandardUniform: Distribution<F> + Distribution<EF>,
+    {
+        assert!(
+            self.n_rounds() > 0,
+            "ZK prefix round loop requires at least one code-switch round",
+        );
+
+        let round0_sumcheck_mask_encoding = sumcheck_mask_encoding_for(0);
+        let first_round = self.round_zk_prefix(
+            state,
+            0,
+            source_covector,
+            &round0_sumcheck_mask_encoding,
+            challenger,
+            rng,
+        );
+        let mut proof = first_round.proof;
+        let mut handoff = first_round.handoff;
+        let mut next_source = first_round.next_source;
+
+        for round_index in 1..self.n_rounds() {
+            let source = next_source
+                .take()
+                .expect("previous ZK round must carry the next encoded source");
+            let source_encoding = source_encoding_for(round_index, &source);
+            let sumcheck_mask_encoding = sumcheck_mask_encoding_for(round_index);
+            let code_switch_mask_encoding = code_switch_mask_encoding_for(round_index);
+            let round_state = self.round_zk_prefix_from_encoded_source(
+                proof,
+                &handoff,
+                round_index,
+                &source,
+                &source_encoding,
+                &code_switch_mask_encoding,
+                &sumcheck_mask_encoding,
+                challenger,
+                rng,
+            );
+            proof = round_state.proof;
+            handoff = round_state.handoff;
+            next_source = round_state.next_source;
+        }
+
+        WhirZkPrefixRoundsState {
+            proof,
+            handoff,
+            next_source,
+        }
+    }
+
     /// Replay the initial ZK handoff and the first prefix-only ZK code-switch round.
     ///
     /// This verifier helper is intentionally scoped to the dedicated ZK API. It
@@ -1722,6 +1824,57 @@ where
         } else {
             None
         };
+
+        Ok(WhirZkPrefixVerifierRoundState {
+            handoff,
+            next_source,
+        })
+    }
+
+    /// Replay all prefix-only ZK code-switching rounds and return the final ZK handoff.
+    ///
+    /// The verifier derives each carried source from the previous public
+    /// code-switch relation, so callers do not provide prover-side covectors for
+    /// rounds `1..`.
+    pub fn verify_zk_prefix_rounds<SourceEnc, MakeSourceEnc>(
+        &self,
+        proof: &PcsProof<F, EF, MT>,
+        protocol: &OpeningProtocol,
+        source: &ZkCodeSwitchVerifierSource<F, EF, MT>,
+        mut source_encoding_for: MakeSourceEnc,
+        challenger: &mut Challenger,
+    ) -> Result<WhirZkPrefixVerifierRoundState<EF>, VerifierError>
+    where
+        SourceEnc: LinearZkEncoding<EF>,
+        MakeSourceEnc: FnMut(usize, &ZkEncodedCodeSwitchVerifierSource<EF>) -> SourceEnc,
+    {
+        if self.n_rounds() == 0 {
+            return Err(VerifierError::ZkVerifierRequiresPrefixPath);
+        }
+
+        let first_round = self.verify_round_zk_prefix(proof, protocol, source, challenger)?;
+        let mut handoff = first_round.handoff;
+        let mut next_source = first_round.next_source;
+
+        for round_index in 1..self.n_rounds() {
+            let source = next_source
+                .take()
+                .ok_or_else(|| VerifierError::MerkleProofInvalid {
+                    position: 0,
+                    reason: "previous ZK round did not carry the next encoded source".into(),
+                })?;
+            let source_encoding = source_encoding_for(round_index, &source);
+            let round_state = self.verify_round_zk_prefix_from_encoded_source(
+                proof,
+                &handoff,
+                round_index,
+                &source,
+                &source_encoding,
+                challenger,
+            )?;
+            handoff = round_state.handoff;
+            next_source = round_state.next_source;
+        }
 
         Ok(WhirZkPrefixVerifierRoundState {
             handoff,
