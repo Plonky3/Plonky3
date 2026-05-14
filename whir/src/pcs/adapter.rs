@@ -124,6 +124,12 @@ where
     pub message_len: usize,
     /// Covector for the inherited source claim.
     pub covector: Vec<EF>,
+    /// Extra residual scale to apply when this source enters Construction 9.7.
+    ///
+    /// This mirrors the prover-side source convention. The round-0 verifier
+    /// uses the initial #1605 `eps`; later sources built from an already scaled
+    /// residual handoff should use `1`.
+    pub residual_sumcheck_scale: EF,
     /// Randomness segment length of the source encoding.
     pub randomness_len: usize,
     /// Full encoded codeword domain size.
@@ -1101,7 +1107,7 @@ where
         let coeffs = batching_coefficients(batching_challenge, batching_dim);
         let claim = ZkMaskClaim {
             base_claim_coeff: coeffs[0],
-            residual_sumcheck_scale: initial_handoff.eps,
+            residual_sumcheck_scale: source.residual_sumcheck_scale,
             ood_coeffs: coeffs[1..1 + round_zk_proof.private_ood_answers.len()].to_vec(),
             in_domain_coeffs: coeffs[1 + round_zk_proof.private_ood_answers.len()..].to_vec(),
             source_randomness_weights: Vec::new(),

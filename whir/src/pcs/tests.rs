@@ -940,6 +940,7 @@ mod zk_prefix_api_tests {
             commitment,
             message_len: source_message.len(),
             covector: source_covector,
+            residual_sumcheck_scale: source.residual_sumcheck_scale,
             randomness_len: 0,
             domain_size: target_domain_size,
             folding_factor: target_folding,
