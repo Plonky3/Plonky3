@@ -13,7 +13,7 @@ use p3_matrix::dense::DenseMatrix;
 use p3_matrix::extension::FlatMatrixView;
 use p3_matrix::{Dimensions, Matrix};
 use p3_multilinear_util::poly::Poly;
-use p3_zk_codes::ZkEncoding;
+use p3_zk_codes::{LinearZkEncoding, ZkEncoding};
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
@@ -140,6 +140,134 @@ where
     pub handoff: ZkSumcheckHandoff<F, EF, Enc, MT>,
     /// Merkle prover data for the newly committed folded oracle.
     pub target_merkle_data: <MT as Mmcs<F>>::ProverData<FlatMatrixView<F, EF, DenseMatrix<EF>>>,
+}
+
+/// Source-row provider for Construction 9.7 in-domain openings.
+///
+/// The row provider is the typed boundary that decides how a flattened
+/// codeword position becomes `G_C^#` and `G_C^$`. First-round WHIR folded
+/// targets have no encoding randomness, while later ZK-encoded sources must
+/// provide real randomness rows through `LinearZkEncoding`.
+pub trait ZkCodeSwitchSourceLayout<F: Field> {
+    /// Message length before source encoding.
+    fn message_len(&self) -> usize;
+
+    /// Randomness segment length of the source encoding.
+    fn randomness_len(&self) -> usize;
+
+    /// Full source codeword domain size.
+    fn domain_size(&self) -> usize;
+
+    /// Row width exponent used by the Merkle layout.
+    fn folding_factor(&self) -> usize;
+
+    /// `G_C^#` row at the flattened codeword position.
+    fn message_row(&self, position: usize) -> Vec<F>;
+
+    /// `G_C^$` row at the flattened codeword position.
+    fn randomness_row(&self, position: usize) -> Vec<F>;
+}
+
+/// Row provider for the folded extension oracle committed by WHIR itself.
+#[derive(Debug, Clone, Copy)]
+pub struct WhirFoldedSourceLayout {
+    /// Message length before WHIR row packing.
+    pub message_len: usize,
+    /// Full encoded domain size.
+    pub domain_size: usize,
+    /// Row width exponent used by WHIR's Merkle layout.
+    pub folding_factor: usize,
+}
+
+impl<F: TwoAdicField> ZkCodeSwitchSourceLayout<F> for WhirFoldedSourceLayout {
+    fn message_len(&self) -> usize {
+        self.message_len
+    }
+
+    fn randomness_len(&self) -> usize {
+        0
+    }
+
+    fn domain_size(&self) -> usize {
+        self.domain_size
+    }
+
+    fn folding_factor(&self) -> usize {
+        self.folding_factor
+    }
+
+    fn message_row(&self, position: usize) -> Vec<F> {
+        source_message_row(
+            self.message_len,
+            self.domain_size,
+            self.folding_factor,
+            position,
+        )
+    }
+
+    fn randomness_row(&self, _position: usize) -> Vec<F> {
+        Vec::new()
+    }
+}
+
+/// Row provider for a source committed through a linear ZK encoding.
+pub struct LinearZkSourceLayout<'a, Enc> {
+    /// Source encoding whose generator rows are used for `G_C^#` / `G_C^$`.
+    pub encoding: &'a Enc,
+}
+
+impl<F, Enc> ZkCodeSwitchSourceLayout<F> for LinearZkSourceLayout<'_, Enc>
+where
+    F: Field,
+    Enc: LinearZkEncoding<F>,
+{
+    fn message_len(&self) -> usize {
+        self.encoding.message_len()
+    }
+
+    fn randomness_len(&self) -> usize {
+        self.encoding.randomness_len()
+    }
+
+    fn domain_size(&self) -> usize {
+        self.encoding.codeword_len()
+    }
+
+    fn folding_factor(&self) -> usize {
+        0
+    }
+
+    fn message_row(&self, position: usize) -> Vec<F> {
+        self.encoding.message_row(position)
+    }
+
+    fn randomness_row(&self, position: usize) -> Vec<F> {
+        self.encoding.randomness_row(position)
+    }
+}
+
+fn source_rows_for_positions<F, L>(layout: &L, positions: &[usize]) -> (Vec<Vec<F>>, Vec<Vec<F>>)
+where
+    F: Field,
+    L: ZkCodeSwitchSourceLayout<F>,
+{
+    let source_rows = positions
+        .iter()
+        .map(|&position| {
+            let row = layout.message_row(position);
+            assert_eq!(row.len(), layout.message_len());
+            row
+        })
+        .collect::<Vec<_>>();
+    let source_randomness_rows = positions
+        .iter()
+        .map(|&position| {
+            let row = layout.randomness_row(position);
+            assert_eq!(row.len(), layout.randomness_len());
+            row
+        })
+        .collect::<Vec<_>>();
+    (source_rows, source_randomness_rows)
 }
 
 fn source_message_row<F: TwoAdicField>(
@@ -541,6 +669,11 @@ where
                 ),
             "source handoff inherited claim must match the eps-scaled source message/covector",
         );
+        let source_layout = WhirFoldedSourceLayout {
+            message_len: source.message.len(),
+            domain_size: source.domain_size,
+            folding_factor: source.folding_factor,
+        };
 
         let (target_root, target_merkle_data) = commit_extension(
             crate::sumcheck::strategy::VariableOrder::Prefix,
@@ -592,21 +725,13 @@ where
         let row_width = 1usize << source.folding_factor;
         let mut source_queries = Vec::with_capacity(row_indices.len());
         let mut source_openings = Vec::with_capacity(row_indices.len() * row_width);
-        let mut source_rows = Vec::with_capacity(row_indices.len() * row_width);
-        let mut source_randomness_rows = Vec::with_capacity(row_indices.len() * row_width);
+        let mut query_positions = Vec::with_capacity(row_indices.len() * row_width);
         for &row in &row_indices {
             let opening = self.extension_mmcs.open_batch(row, &target_merkle_data);
             let values = opening.opened_values[0].clone();
             for (limb, &value) in values.iter().enumerate() {
                 source_openings.push(value);
-                let position = row * row_width + limb;
-                source_rows.push(source_message_row(
-                    source.message.len(),
-                    source.domain_size,
-                    source.folding_factor,
-                    position,
-                ));
-                source_randomness_rows.push(F::zero_vec(source.randomness_len));
+                query_positions.push(row * row_width + limb);
             }
             source_queries.push(QueryOpening::Extension {
                 values,
@@ -662,6 +787,8 @@ where
             &claim,
         )
         .expect("honest code-switch batching dimensions should match");
+        let (source_rows, source_randomness_rows) =
+            source_rows_for_positions::<F, _>(&source_layout, &query_positions);
         let output_relation = code_switch_output_relation_from_rows(
             source.message.len(),
             &source.covector,
@@ -814,6 +941,11 @@ where
             "first ZK code-switch round only supports the target extension oracle; \
              nonzero source randomness needs an explicit randomness-row handoff",
         );
+        let source_layout = WhirFoldedSourceLayout {
+            message_len: source.message_len,
+            domain_size: source.domain_size,
+            folding_factor: source.folding_factor,
+        };
         let round = proof
             .whir
             .rounds
@@ -965,21 +1097,8 @@ where
                 position: 0,
                 reason: "source encoding randomness exceeds round mask message length".into(),
             })?;
-        let source_rows = query_positions
-            .iter()
-            .map(|&position| {
-                source_message_row(
-                    source.message_len,
-                    source.domain_size,
-                    source.folding_factor,
-                    position,
-                )
-            })
-            .collect::<Vec<_>>();
-        let source_randomness_rows = query_positions
-            .iter()
-            .map(|_| F::zero_vec(source.randomness_len))
-            .collect::<Vec<_>>();
+        let (source_rows, source_randomness_rows) =
+            source_rows_for_positions::<F, _>(&source_layout, &query_positions);
         let initial_gammas = initial_handoff
             .randomness
             .iter()
@@ -1148,8 +1267,10 @@ mod tests {
     use alloc::vec;
 
     use p3_baby_bear::BabyBear;
+    use p3_dft::Radix2Dit;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_zk_codes::{LinearZkEncoding, ReedSolomonZkEncoding};
 
     use super::*;
 
@@ -1196,5 +1317,26 @@ mod tests {
         let expected_query =
             claim.in_domain_coeffs[0] * (ef(29 * 11 + 31 * 13) + ef(37 * 17 + 41 * 19));
         assert_eq!(value, expected_inherited + expected_query);
+    }
+
+    #[test]
+    fn linear_zk_source_layout_uses_encoding_rows() {
+        let encoding = ReedSolomonZkEncoding::<F, Radix2Dit<F>>::new(2, 3, 8, Radix2Dit::default());
+        let layout = LinearZkSourceLayout {
+            encoding: &encoding,
+        };
+        let positions = vec![0, 5];
+
+        assert_eq!(layout.message_len(), encoding.message_len());
+        assert_eq!(layout.randomness_len(), encoding.randomness_len());
+        assert_eq!(layout.domain_size(), encoding.codeword_len());
+        assert_eq!(layout.folding_factor(), 0);
+
+        let (message_rows, randomness_rows) =
+            source_rows_for_positions::<F, _>(&layout, &positions);
+        assert_eq!(message_rows[0], encoding.message_row(positions[0]));
+        assert_eq!(message_rows[1], encoding.message_row(positions[1]));
+        assert_eq!(randomness_rows[0], encoding.randomness_row(positions[0]));
+        assert_eq!(randomness_rows[1], encoding.randomness_row(positions[1]));
     }
 }
