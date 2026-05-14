@@ -38,5 +38,9 @@ criterion.workspace = true
 name = "merkle_tree"
 harness = false
 
+[[bench]]
+name = "pruned_verify"
+harness = false
+
 [lints]
 workspace = true
