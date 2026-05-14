@@ -395,6 +395,12 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
         self.poly.evals()
     }
 
+    /// Extracts the current weight polynomial as scalar extension-field elements.
+    #[tracing::instrument(skip_all)]
+    pub fn weights(&self) -> Poly<EF> {
+        self.poly.weights()
+    }
+
     /// Evaluates `f` at a given multilinear point via interpolation.
     pub fn eval(&self, point: &Point<EF>) -> EF {
         self.poly.eval(point)

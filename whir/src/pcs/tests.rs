@@ -726,7 +726,7 @@ mod zk_prefix_api_tests {
     use alloc::vec::Vec;
 
     use p3_commit::MultilinearPcs;
-    use p3_field::{Field, PrimeCharacteristicRing};
+    use p3_field::{Field, PrimeCharacteristicRing, dot_product};
     use p3_multilinear_util::poly::Poly;
     use p3_zk_codes::ReedSolomonZkEncoding;
     use rand::SeedableRng;
@@ -907,6 +907,30 @@ mod zk_prefix_api_tests {
             round_state.handoff.randomness.num_variables(),
             pcs.config.folding_factor.at_round(1),
         );
+        let next_source = round_state
+            .next_source
+            .as_ref()
+            .expect("multi-round fixture should carry a source for the next ZK round");
+        assert_eq!(
+            next_source.message.as_slice(),
+            round_state.handoff.residual_prover.evals().as_slice(),
+        );
+        assert_eq!(
+            next_source.covector.as_slice(),
+            round_state.handoff.residual_prover.weights().as_slice(),
+        );
+        assert_eq!(
+            next_source.inherited_claim,
+            round_state.handoff.residual_prover.claimed_sum(),
+        );
+        assert_eq!(
+            next_source.inherited_claim,
+            dot_product::<EF, _, _>(
+                next_source.message.iter().copied(),
+                next_source.covector.iter().copied(),
+            ),
+        );
+        assert_eq!(next_source.randomness_len, 0);
 
         let mut verifier_challenger = challenger();
         domain_separator.observe_domain_separator(&mut verifier_challenger);

@@ -140,6 +140,8 @@ where
     pub handoff: ZkSumcheckHandoff<F, EF, Enc, MT>,
     /// Merkle prover data for the newly committed folded oracle.
     pub target_merkle_data: <MT as Mmcs<F>>::ProverData<FlatMatrixView<F, EF, DenseMatrix<EF>>>,
+    /// Typed source relation for the next ZK code-switch round, if one exists.
+    pub next_source: Option<ZkCodeSwitchProverSource<EF>>,
 }
 
 /// Source-row provider for Construction 9.7 in-domain openings.
@@ -842,6 +844,23 @@ where
             challenger,
             rng,
         );
+        let next_source = if round_index + 1 < self.n_rounds() {
+            let next_round_index = round_index + 1;
+            let next_num_variables = next_handoff.residual_prover.num_variables();
+            let next_message = next_handoff.residual_prover.evals().as_slice().to_vec();
+            let next_covector = next_handoff.residual_prover.weights().as_slice().to_vec();
+            assert_eq!(next_message.len(), next_covector.len());
+            Some(ZkCodeSwitchProverSource {
+                message: next_message,
+                covector: next_covector,
+                inherited_claim: next_handoff.residual_prover.claimed_sum(),
+                randomness_len: 0,
+                domain_size: self.inv_rate(next_round_index) * (1usize << next_num_variables),
+                folding_factor: self.params.folding_factor.at_round(next_round_index + 1),
+            })
+        } else {
+            None
+        };
         proof.whir.rounds[round_index].zk = Some(WhirRoundZkProof {
             mask_commitment,
             private_ood_answers,
@@ -859,6 +878,7 @@ where
             proof,
             handoff: next_handoff,
             target_merkle_data,
+            next_source,
         }
     }
 

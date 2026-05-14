@@ -443,6 +443,22 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         }
     }
 
+    /// Extracts the weight polynomial as a scalar [`Poly`].
+    ///
+    /// This unpacks the weights if in packed mode.
+    ///
+    /// # Returns
+    ///
+    /// A copy of the weights in scalar extension field format.
+    pub fn weights(&self) -> Poly<EF> {
+        match &self.inner {
+            MaybePacked::Packed { weights, .. } => Poly::new(
+                EF::ExtensionPacking::to_ext_iter(weights.as_slice().iter().copied()).collect(),
+            ),
+            MaybePacked::Unpacked { weights, .. } => weights.clone(),
+        }
+    }
+
     /// Incorporates new constraints into the weight polynomial.
     ///
     /// This is used when additional constraints need to be folded into the sumcheck
