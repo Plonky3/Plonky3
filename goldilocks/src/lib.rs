@@ -40,3 +40,9 @@ mod x86_64_avx512;
 
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 pub use x86_64_avx512::*;
+
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+mod wasm32_simd128;
+
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+pub use wasm32_simd128::*;
