@@ -549,7 +549,7 @@ fn test_round_zk_config_proof_field_overhead_matches_issue_bound() {
         target_query_budget: 4,
         mask_query_budget: 7,
         mask_message_len: 6,
-        mask_randomness_len: 2,
+        mask_randomness_len: 7,
         ood_samples: 5,
         mask_domain_size: 16,
         mask_width: 3,
