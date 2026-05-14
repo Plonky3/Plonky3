@@ -94,6 +94,14 @@ pub enum CodeSwitchError {
     /// A generator row from the source code has the wrong randomness length.
     #[error("source-code randomness row length mismatch: expected {expected}, got {actual}")]
     SourceRandomnessRowLengthMismatch { expected: usize, actual: usize },
+
+    /// Reserved precomputed source-randomness weights were supplied to a builder that recomputes them.
+    #[error("source randomness weights must be empty in the standalone builder, got {actual}")]
+    NonEmptySourceRandomnessWeights { actual: usize },
+
+    /// Reserved precomputed padding weights were supplied to a builder that recomputes them.
+    #[error("pad weights must be empty in the standalone builder, got {actual}")]
+    NonEmptyPadWeights { actual: usize },
 }
 
 /// ZK-specific per-round configuration, derived from protocol parameters.
@@ -162,20 +170,28 @@ impl<F> RoundZkConfig<F> {
 pub struct ZkMaskClaim<EF> {
     /// Coefficient on the inherited source claim (`nu_1`).
     pub base_claim_coeff: EF,
-    /// Scale already applied to the inherited residual sumcheck claim.
+    /// Scale applied by the HVZK sumcheck to the source residual.
     ///
-    /// For the #1605 HVZK sumcheck this is the sampled `eps`. The value is
-    /// tracked separately from `base_claim_coeff` so the output relation can
-    /// distinguish Construction 9.7 batching randomness from Construction 6.3
-    /// masking randomness.
+    /// For the #1605 HVZK sumcheck this is the sampled `eps`. The incoming
+    /// scalar claim must already include this scale on the source part. This
+    /// value is kept separately so the output relation can apply `eps` only to
+    /// the source covector, not to carried auxiliary mask covectors.
     pub residual_sumcheck_scale: EF,
     /// Batching coefficients for OOD answers (`nu_{1+i}` for `i in [t_ood]`).
     pub ood_coeffs: Vec<EF>,
     /// Batching coefficients for in-domain openings.
     pub in_domain_coeffs: Vec<EF>,
-    /// `G^$_C` rows (source randomness part) weighted by batching coefficients.
+    /// Reserved for precomputed `G^$_C` row weights.
+    ///
+    /// The standalone builder recomputes these from `query_positions` and
+    /// rejects non-empty values so integration code cannot silently assume this
+    /// field drives the relation.
     pub source_randomness_weights: Vec<EF>,
-    /// Zero-padded mask weights for `s_pad` portion.
+    /// Reserved for precomputed zero-padded mask weights.
+    ///
+    /// The standalone builder recomputes these from private OOD points and
+    /// rejects non-empty values so integration code cannot silently assume this
+    /// field drives the relation.
     pub pad_weights: Vec<EF>,
 }
 
@@ -309,12 +325,15 @@ pub fn private_ood_answers<EF: Field>(
 
 /// Computes the verifier-side batched claim `mu'`.
 ///
-/// The inherited claim is passed in before the #1605 sumcheck scale is
-/// applied. `claim.residual_sumcheck_scale` is therefore part of the first
-/// term:
+/// The inherited claim is the scalar already handed off by the previous IOR.
+/// In the #1605 HVZK sumcheck composition that means its source residual has
+/// already been scaled by `eps`, while carried auxiliary mask claims remain in
+/// the relation with their own coefficients. Consequently this function does
+/// not apply `claim.residual_sumcheck_scale`; that scale is used only when
+/// constructing the output source covector.
 ///
 /// ```text
-/// mu' = nu_1 * eps * mu
+/// mu' = nu_1 * mu
 ///     + sum_i nu_{1+i} * y_i
 ///     + sum_j nu_{1+t_ood+j} * f(x_j)
 /// ```
@@ -350,11 +369,7 @@ pub fn batched_claim<EF: Field>(
         .map(|(&coeff, &opening)| coeff * opening)
         .sum();
 
-    Ok(
-        claim.base_claim_coeff * claim.residual_sumcheck_scale * inherited_claim
-            + ood_sum
-            + in_domain_sum,
-    )
+    Ok(claim.base_claim_coeff * inherited_claim + ood_sum + in_domain_sum)
 }
 
 /// Builds the output relation covectors for Construction 9.7.
@@ -389,6 +404,16 @@ where
             actual: query_positions.len(),
         });
     }
+    if !claim.source_randomness_weights.is_empty() {
+        return Err(CodeSwitchError::NonEmptySourceRandomnessWeights {
+            actual: claim.source_randomness_weights.len(),
+        });
+    }
+    if !claim.pad_weights.is_empty() {
+        return Err(CodeSwitchError::NonEmptyPadWeights {
+            actual: claim.pad_weights.len(),
+        });
+    }
 
     let source_len = source_encoding.message_len();
     if source_covector.len() != source_len {
@@ -399,15 +424,21 @@ where
     }
 
     let mask_len = source_randomness_len + pad_len;
-    let inherited_scale = claim.base_claim_coeff * claim.residual_sumcheck_scale;
+    let source_inherited_scale = claim.base_claim_coeff * claim.residual_sumcheck_scale;
+    let auxiliary_inherited_scale = claim.base_claim_coeff;
 
     let mut next_source_covector: Vec<EF> = source_covector
         .iter()
-        .map(|&x| inherited_scale * x)
+        .map(|&x| source_inherited_scale * x)
         .collect();
     let next_auxiliary_covectors: Vec<Vec<EF>> = auxiliary_covectors
         .iter()
-        .map(|covector| covector.iter().map(|&x| inherited_scale * x).collect())
+        .map(|covector| {
+            covector
+                .iter()
+                .map(|&x| auxiliary_inherited_scale * x)
+                .collect()
+        })
         .collect();
     let mut mask_covector = vec![EF::ZERO; mask_len];
 

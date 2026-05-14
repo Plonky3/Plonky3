@@ -333,9 +333,9 @@ fn test_construction_9_7_mu_prime_identity_eps_scaled_handoff() {
     let cw = source_enc.encode_with_randomness(&f_base, &r_base);
     let f_codeword: Vec<EF> = cw.values.iter().map(|&v| EF::from(v)).collect();
 
-    let sl: Vec<EF> = vec![ef(4), ef(7), ef(11)];
-    let mu = inner_product(&f, &sl);
     let eps = ef(19);
+    let sl: Vec<EF> = vec![ef(4), ef(7), ef(11)];
+    let mu = eps * inner_product(&f, &sl);
 
     let rho_ood_points = [ef(31)];
     let y = [private_ood_answer(
@@ -399,6 +399,86 @@ fn test_construction_9_7_mu_prime_identity_eps_scaled_handoff() {
     assert_eq!(
         mu_prime, mu_prime_from_relation,
         "Construction 9.7 must preserve the #1605 eps-scaled residual handoff"
+    );
+}
+
+/// Same handoff as above, but with a prior auxiliary mask oracle.
+///
+/// The #1605 `eps` scale belongs to the source residual only. Carried mask
+/// auxiliary covectors must be batched by `nu_1`, not by `nu_1 * eps`.
+#[test]
+fn test_eps_scaled_handoff_does_not_scale_auxiliary_covectors() {
+    let ell = 3;
+    let r_len = 1;
+    let s_pad_len = 1;
+    let t_ood = 1;
+    let t = 1;
+    let iota = 1;
+    let m = 8;
+
+    let source_enc = make_rs_encoding(ell, r_len, m);
+
+    let f: Vec<EF> = vec![ef(3), ef(8), ef(13)];
+    let r: Vec<EF> = vec![ef(21)];
+    let s_pad: Vec<EF> = vec![ef(34)];
+
+    let f_base: Vec<F> = [3, 8, 13].into_iter().map(F::from_u64).collect();
+    let r_base = vec![F::from_u64(21)];
+    let cw = source_enc.encode_with_randomness(&f_base, &r_base);
+    let f_codeword: Vec<EF> = cw.values.iter().map(|&v| EF::from(v)).collect();
+
+    let source_covector = vec![ef(5), ef(7), ef(11)];
+    let auxiliary_witness = vec![ef(17), ef(19)];
+    let auxiliary_covector = vec![ef(23), ef(29)];
+
+    let eps = ef(31);
+    let source_claim = inner_product(&f, &source_covector);
+    let auxiliary_claim = inner_product(&auxiliary_witness, &auxiliary_covector);
+    let inherited_claim = eps * source_claim + auxiliary_claim;
+
+    let rho_ood_points = [ef(37)];
+    let mut mask_message = r;
+    mask_message.extend_from_slice(&s_pad);
+    let y = private_ood_answers(&rho_ood_points, &f, &mask_message);
+
+    let query_position = 4;
+    let source_opening = f_codeword[query_position];
+    let nu = batching_coefficients(ef(41), 1 + t_ood + t * iota);
+    let claim = ZkMaskClaim {
+        base_claim_coeff: nu[0],
+        residual_sumcheck_scale: eps,
+        ood_coeffs: vec![nu[1]],
+        in_domain_coeffs: vec![nu[2]],
+        source_randomness_weights: Vec::new(),
+        pad_weights: Vec::new(),
+    };
+
+    let mu_prime = batched_claim(inherited_claim, &y, &[source_opening], &claim).unwrap();
+    let relation = output_relation::<F, EF, _>(
+        &source_enc,
+        &source_covector,
+        &[&auxiliary_covector],
+        r_len,
+        s_pad_len,
+        &rho_ood_points,
+        &[query_position],
+        &claim,
+    )
+    .unwrap();
+    let mu_prime_from_relation = relation
+        .evaluate(&f, &[&auxiliary_witness], &mask_message)
+        .unwrap();
+
+    let expected_auxiliary_covector: Vec<EF> =
+        auxiliary_covector.iter().map(|&x| nu[0] * x).collect();
+
+    assert_eq!(
+        relation.auxiliary_covectors[0], expected_auxiliary_covector,
+        "auxiliary covectors must not inherit the #1605 eps scale"
+    );
+    assert_eq!(
+        mu_prime, mu_prime_from_relation,
+        "eps-scaled source handoff must compose with unscaled auxiliary masks"
     );
 }
 
@@ -512,7 +592,8 @@ fn test_simulated_verifier_view_matches_code_switch_relation() {
     let f_codeword: Vec<EF> = cw.values.iter().map(|&v| EF::from(v)).collect();
 
     let source_covector = vec![ef(23), ef(29), ef(31)];
-    let inherited_claim = inner_product(&f, &source_covector);
+    let eps = ef(47);
+    let inherited_claim = eps * inner_product(&f, &source_covector);
 
     let rho_ood_points = [ef(37), ef(41)];
     let private_ood = private_ood_answers(&rho_ood_points, &f, &mask_message);
@@ -526,7 +607,7 @@ fn test_simulated_verifier_view_matches_code_switch_relation() {
     let nu = batching_coefficients(ef(43), 1 + t_ood + t * iota);
     let claim = ZkMaskClaim {
         base_claim_coeff: nu[0],
-        residual_sumcheck_scale: ef(47),
+        residual_sumcheck_scale: eps,
         ood_coeffs: nu[1..1 + t_ood].to_vec(),
         in_domain_coeffs: nu[1 + t_ood..].to_vec(),
         source_randomness_weights: Vec::new(),
@@ -676,6 +757,63 @@ fn test_output_relation_rejects_source_covector_length_mismatch() {
             actual: 2
         }
     );
+}
+
+#[test]
+fn test_output_relation_rejects_reserved_source_randomness_weights() {
+    let enc = make_rs_encoding(3, 2, 8);
+    let claim = ZkMaskClaim {
+        base_claim_coeff: ef(1),
+        residual_sumcheck_scale: ef(1),
+        ood_coeffs: vec![ef(2)],
+        in_domain_coeffs: vec![ef(3)],
+        source_randomness_weights: vec![ef(4)],
+        pad_weights: Vec::new(),
+    };
+
+    let err = output_relation::<F, EF, _>(
+        &enc,
+        &[ef(1), ef(2), ef(3)],
+        &[],
+        2,
+        1,
+        &[ef(9)],
+        &[0],
+        &claim,
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err,
+        CodeSwitchError::NonEmptySourceRandomnessWeights { actual: 1 }
+    );
+}
+
+#[test]
+fn test_output_relation_rejects_reserved_pad_weights() {
+    let enc = make_rs_encoding(3, 2, 8);
+    let claim = ZkMaskClaim {
+        base_claim_coeff: ef(1),
+        residual_sumcheck_scale: ef(1),
+        ood_coeffs: vec![ef(2)],
+        in_domain_coeffs: vec![ef(3)],
+        source_randomness_weights: Vec::new(),
+        pad_weights: vec![ef(4)],
+    };
+
+    let err = output_relation::<F, EF, _>(
+        &enc,
+        &[ef(1), ef(2), ef(3)],
+        &[],
+        2,
+        1,
+        &[ef(9)],
+        &[0],
+        &claim,
+    )
+    .unwrap_err();
+
+    assert_eq!(err, CodeSwitchError::NonEmptyPadWeights { actual: 1 });
 }
 
 /// Verify that `ReedSolomonZkEncoding::message_row` / `randomness_row`
