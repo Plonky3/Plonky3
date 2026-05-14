@@ -565,7 +565,10 @@ mod error_variant_tests {
         //     -> round_index = 0, expected = n, actual = n - 1
         let (pcs, commitment, mut proof, protocol) = commit_and_open();
         let expected = proof.whir.rounds[0].queries.len();
-        assert!(expected > 0, "fixture should produce at least one STIR query");
+        assert!(
+            expected > 0,
+            "fixture should produce at least one STIR query"
+        );
         proof.whir.rounds[0].queries.pop();
 
         let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
@@ -594,7 +597,10 @@ mod error_variant_tests {
         let (pcs, commitment, mut proof, protocol) = commit_and_open();
         let n_rounds = pcs.n_rounds();
         let expected = proof.whir.final_queries.len();
-        assert!(expected > 0, "fixture should produce at least one final query");
+        assert!(
+            expected > 0,
+            "fixture should produce at least one final query"
+        );
         proof.whir.final_queries.pop();
 
         let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
