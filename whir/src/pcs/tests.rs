@@ -726,6 +726,7 @@ mod zk_prefix_api_tests {
     use alloc::vec::Vec;
 
     use p3_commit::MultilinearPcs;
+    use p3_dft::Radix2Dit;
     use p3_field::{Field, PrimeCharacteristicRing, dot_product};
     use p3_multilinear_util::poly::Poly;
     use p3_zk_codes::ReedSolomonZkEncoding;
@@ -740,7 +741,8 @@ mod zk_prefix_api_tests {
         FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirZkConfig,
     };
     use crate::pcs::adapter::{
-        ZkCodeSwitchProverSource, ZkCodeSwitchVerifierSource, evaluate_zk_mask_residual,
+        ZkCodeSwitchProverSource, ZkCodeSwitchVerifierSource, ZkEncodedCodeSwitchVerifierSource,
+        evaluate_zk_mask_residual,
     };
     use crate::pcs::proof::QueryOpening;
     use crate::sumcheck::layout::{Layout, PrefixProver, Table};
@@ -960,6 +962,95 @@ mod zk_prefix_api_tests {
         assert_eq!(
             verifier_handoff.claimed_residual,
             round_state.handoff.residual_prover.claimed_sum() + nested_mask_residual,
+        );
+
+        let round1_zk = pcs.config.round_parameters[1].zk.as_ref().unwrap();
+        let source_domain =
+            (next_source.message.len() + round1_zk.mask_query_budget).next_power_of_two();
+        let encoded_source = ZkCodeSwitchProverSource {
+            message: next_source.message.clone(),
+            covector: next_source.covector.clone(),
+            inherited_claim: next_source.inherited_claim,
+            residual_sumcheck_scale: next_source.residual_sumcheck_scale,
+            randomness_len: 0,
+            domain_size: source_domain,
+            folding_factor: 0,
+        };
+        let source_encoding = ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
+            round1_zk.mask_query_budget,
+            encoded_source.message.len(),
+            source_domain,
+            Radix2Dit::default(),
+        );
+        let code_switch_mask_encoding = ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
+            round1_zk.mask_query_budget,
+            round1_zk.mask_message_len,
+            round1_zk.mask_domain_size,
+            Radix2Dit::default(),
+        );
+        let sumcheck_mask_encoding = ReedSolomonZkEncoding::new(
+            round1_zk.mask_query_budget,
+            round1_zk.mask_message_len,
+            round1_zk.mask_domain_size,
+            MyDft::default(),
+        );
+        let round1_state = pcs.round_zk_prefix_from_encoded_source(
+            round_state.proof.clone(),
+            &round_state.handoff,
+            1,
+            &encoded_source,
+            &source_encoding,
+            &code_switch_mask_encoding,
+            &sumcheck_mask_encoding,
+            &mut prover_challenger,
+            &mut zk_rng,
+        );
+        let round1 = &round1_state.proof.whir.rounds[1];
+        let round1_zk_proof = round1
+            .zk
+            .as_ref()
+            .expect("encoded source consumer must populate the second ZK round");
+        assert!(round1.commitment.is_some());
+        assert_eq!(
+            round1.commitment.as_ref(),
+            Some(&round1_state.source_commitment)
+        );
+        assert!(
+            round1_zk_proof.source_queries.iter().all(
+                |query| matches!(query, QueryOpening::Extension { values, .. } if values.len() == 1)
+            ),
+            "encoded source openings must be single extension-field positions",
+        );
+        assert!(
+            round1_zk_proof.mask_queries.iter().all(
+                |query| matches!(query, QueryOpening::Extension { values, .. } if values.len() == 1)
+            ),
+            "encoded source rounds carry EF code-switch mask openings",
+        );
+        assert_eq!(
+            round1_state.handoff.randomness.num_variables(),
+            pcs.config.folding_factor.at_round(2),
+        );
+        let round1_verifier_source = ZkEncodedCodeSwitchVerifierSource {
+            message_len: encoded_source.message.len(),
+            covector: encoded_source.covector,
+            residual_sumcheck_scale: encoded_source.residual_sumcheck_scale,
+            domain_size: source_domain,
+            randomness_len: round1_zk.mask_query_budget,
+        };
+        let round1_verifier_handoff = pcs
+            .verify_round_zk_prefix_from_encoded_source(
+                &round1_state.proof,
+                &verifier_handoff,
+                1,
+                &round1_verifier_source,
+                &source_encoding,
+                &mut verifier_challenger,
+            )
+            .expect("verifier should replay the encoded-source ZK round");
+        assert_eq!(
+            round1_verifier_handoff.randomness.num_variables(),
+            pcs.config.folding_factor.at_round(2),
         );
     }
 

@@ -465,8 +465,9 @@ where
                 mask_query_budget >= target_query_budget,
                 "mask_query_budget must cover all downstream target queries",
             );
+            let mask_message_len = zk.mask_message_len.max(mask_query_budget);
             let mask_randomness_len = zk.mask_randomness_len.max(mask_query_budget);
-            let mask_domain_size = ((zk.mask_message_len + mask_randomness_len)
+            let mask_domain_size = ((mask_message_len + mask_randomness_len)
                 << zk.mask_rate_log_inv)
                 .next_power_of_two();
             assert!(
@@ -478,7 +479,7 @@ where
             self.round_parameters[round_index].zk = Some(RoundZkConfig {
                 target_query_budget,
                 mask_query_budget,
-                mask_message_len: zk.mask_message_len,
+                mask_message_len,
                 mask_randomness_len,
                 ood_samples,
                 mask_domain_size,
@@ -737,6 +738,10 @@ mod tests {
 
         assert_eq!(zk.target_query_budget, 5);
         assert_eq!(zk.mask_query_budget, 5);
+        assert_eq!(
+            zk.mask_message_len, 5,
+            "effective code-switch mask message must carry source encoding randomness",
+        );
         assert_eq!(
             zk.mask_randomness_len, 5,
             "effective mask randomness must cover the encoding query bound",
