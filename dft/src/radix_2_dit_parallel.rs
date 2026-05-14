@@ -16,8 +16,8 @@ use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
 use spin::RwLock;
 use tracing::{debug_span, instrument};
 
-use crate::TwoAdicSubgroupDft;
 use crate::butterflies::{Butterfly, DitButterfly, ScaledDitButterfly, TwiddleFreeButterfly};
+use crate::{Layout, TwoAdicSubgroupDft};
 
 /// A parallel FFT algorithm which divides a butterfly network's layers into two halves.
 ///
@@ -166,12 +166,16 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
     }
 
     #[instrument(skip_all, level = "debug", fields(dims = %mat.dimensions(), added_bits = added_bits))]
-    fn coset_lde_batch(
+    fn coset_lde_batch_with_transform<T>(
         &self,
         mut mat: RowMajorMatrix<F>,
         added_bits: usize,
         shift: F,
-    ) -> Self::Evaluations {
+        transform: T,
+    ) -> Self::Evaluations
+    where
+        T: FnOnce(&mut RowMajorMatrixViewMut<'_, F>, Layout),
+    {
         let w = mat.width;
         let h = mat.height();
         let log_h = log2_strict_usize(h);
@@ -192,6 +196,8 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         let scale = h_inv_subfield.map(F::from_prime_subfield);
         second_half(&mut mat, mid, &inverse_twiddles.bitrev_twiddles, scale);
         // We skip the final bit-reversal, since the next FFT expects bit-reversed input.
+
+        transform(&mut mat.as_view_mut(), Layout::BitReversed);
 
         let lde_elems = w * (h << added_bits);
         let elems_to_add = lde_elems - w * h;

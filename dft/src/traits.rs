@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use p3_field::{BasedVectorSpace, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::BitReversibleMatrix;
-use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_matrix::util::swap_rows;
 
 use crate::util::{coset_shift_cols, divide_by_height};
@@ -229,13 +229,27 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
         added_bits: usize,
         shift: F,
     ) -> Self::Evaluations {
-        // To briefly explain the additional interpretation, start with the evaluations of the polynomial
-        // `f(x)` over `gH`. If we reinterpret the evaluations as being over the subgroup `H`, this is equivalent to
-        // switching our polynomial to `f1(x) = f(g x)`. The output of the iDFT will be the coefficients of
-        // `f1`. Next, when we scale by shift, we are effectively switching to the polynomial
-        // `f2(x) = f1(shift * x) = f(shift * g x)`. Applying the DFT to this, we get the evaluations of `f2` over
-        // `K` which is the evaluations of `f1` over `shift * K` which is the evaluations of `f` over `g * shift * K`.
+        self.coset_lde_batch_with_transform(mat, added_bits, shift, |_, _| {})
+    }
+
+    /// Like [`coset_lde_batch`](Self::coset_lde_batch), but with a closure
+    /// invoked on the intermediate coefficient buffer between the iDFT and
+    /// the forward DFT phases. The [`Layout`] argument tells the closure
+    /// whether the buffer is in natural or bit-reversed memory order, so the
+    /// closure can translate memory positions to natural-order coefficient
+    /// indices when relevant.
+    fn coset_lde_batch_with_transform<T>(
+        &self,
+        mat: RowMajorMatrix<F>,
+        added_bits: usize,
+        shift: F,
+        transform: T,
+    ) -> Self::Evaluations
+    where
+        T: FnOnce(&mut RowMajorMatrixViewMut<'_, F>, Layout),
+    {
         let mut coeffs = self.idft_batch(mat);
+        transform(&mut coeffs.as_view_mut(), Layout::Natural);
         // PANICS: possible panic if the new resized length overflows
         coeffs.values.resize(
             coeffs
@@ -495,4 +509,15 @@ pub trait TwoAdicSubgroupDft<F: TwoAdicField>: Clone + Default {
             init_width,
         )
     }
+}
+
+/// Memory layout of the coefficient buffer passed to a transform closure in
+/// [`TwoAdicSubgroupDft::coset_lde_batch_with_transform`].
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Layout {
+    /// Memory row `m` corresponds to natural-order index `m`.
+    Natural,
+    /// Memory row `m` corresponds to natural-order index
+    /// `reverse_bits_len(m, log2_strict_usize(buf.height()))`.
+    BitReversed,
 }
