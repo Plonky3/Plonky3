@@ -791,6 +791,113 @@ mod zk_prefix_api_tests {
     }
 
     #[test]
+    fn round_zk_prefix_populates_first_round_payload() {
+        let (pcs, witness, protocol, required_query_bound, expected_mask_domain) = setup();
+
+        let mut prover_challenger = challenger();
+        let mut domain_separator = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<8>(&mut domain_separator);
+        domain_separator.observe_domain_separator(&mut prover_challenger);
+
+        let (commitment, prover_data) =
+            <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
+                &pcs,
+                witness,
+                &mut prover_challenger,
+            );
+        let initial_mask_encoding = ReedSolomonZkEncoding::new(
+            required_query_bound,
+            ZK_MESSAGE_LEN,
+            expected_mask_domain,
+            MyDft::default(),
+        );
+        let mut zk_rng = SmallRng::seed_from_u64(7);
+        let state = pcs.begin_zk_prefix_open(
+            prover_data,
+            &protocol,
+            &mut prover_challenger,
+            initial_mask_encoding,
+            &mut zk_rng,
+        );
+
+        let source_message_len = state
+            .initial_handoff
+            .residual_prover
+            .evals()
+            .as_slice()
+            .len();
+        let source_encoding = ReedSolomonZkEncoding::new(
+            0,
+            source_message_len,
+            pcs.config.round_parameters[0].domain_size,
+            MyDft::default(),
+        );
+        let round_zk = pcs.config.round_parameters[0].zk.as_ref().unwrap();
+        let round_mask_encoding = ReedSolomonZkEncoding::new(
+            round_zk.mask_query_budget,
+            round_zk.mask_message_len,
+            round_zk.mask_domain_size,
+            MyDft::default(),
+        );
+
+        let round_state = pcs.round_zk_prefix(
+            state,
+            0,
+            &source_encoding,
+            &round_mask_encoding,
+            &mut prover_challenger,
+            &mut zk_rng,
+        );
+        let round = &round_state.proof.whir.rounds[0];
+        let round_zk_proof = round
+            .zk
+            .as_ref()
+            .expect("round_zk_prefix must populate the first ZK round payload");
+
+        assert!(round.commitment.is_some());
+        assert_eq!(
+            round_zk_proof.private_ood_answers.len(),
+            round_zk.ood_samples
+        );
+        assert_eq!(
+            round_zk_proof.source_queries.len(),
+            round_zk.mask_query_budget
+        );
+        assert_eq!(
+            round_zk_proof.mask_queries.len(),
+            round_zk.mask_query_budget
+        );
+        assert_eq!(
+            round_zk_proof.zk_sumcheck.round_coefficients.len(),
+            pcs.config.folding_factor.at_round(1),
+        );
+        assert_eq!(
+            round_zk_proof.zk_sumcheck_mask_commitments.len(),
+            pcs.config.folding_factor.at_round(1),
+        );
+        assert_eq!(
+            round_state.handoff.randomness.num_variables(),
+            pcs.config.folding_factor.at_round(1),
+        );
+
+        let mut verifier_challenger = challenger();
+        domain_separator.observe_domain_separator(&mut verifier_challenger);
+        let verifier_handoff = pcs
+            .verify_round_zk_prefix(
+                &commitment,
+                &round_state.proof,
+                &protocol,
+                &source_encoding,
+                &mut verifier_challenger,
+            )
+            .expect("verifier should replay the first ZK round");
+        assert_eq!(
+            verifier_handoff.randomness.num_variables(),
+            pcs.config.folding_factor.at_round(1),
+        );
+    }
+
+    #[test]
     #[should_panic(expected = "ZK encoding codeword length must match the derived mask domain")]
     fn begin_zk_prefix_open_rejects_encoding_domain_mismatch() {
         let (pcs, witness, protocol, required_query_bound, expected_mask_domain) = setup();

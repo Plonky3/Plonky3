@@ -6,15 +6,24 @@
 //! - `VariableOrder`: tag enum carrying inherent methods that dispatch to either routine.
 //! - `SumcheckProver`: drives rounds over a paired product polynomial.
 
-use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
+use alloc::vec::Vec;
+
+use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+use p3_commit::Mmcs;
+use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField};
+use p3_matrix::Matrix;
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use p3_zk_codes::ZkEncoding;
+use rand::distr::{Distribution, StandardUniform};
+use rand::{Rng, RngExt};
 
 use crate::SumcheckData;
 use crate::constraints::Constraint;
+use crate::extrapolate_01inf;
 use crate::product_polynomial::ProductPolynomial;
+use crate::zk::{ZkSumcheckData, ZkSumcheckHandoff};
 
 /// Input size at which the round-coefficient routines switch from serial to parallel execution.
 ///
@@ -428,6 +437,142 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
             .collect();
 
         Point::new(res)
+    }
+
+    /// Runs the HVZK sumcheck overlay on an already-derived residual product
+    /// polynomial.
+    ///
+    /// This is the post-code-switch analogue of `ZkPrefixProver::into_sumcheck`:
+    /// the caller has already reduced the layout-specific opening relation to a
+    /// product polynomial, and this method applies Construction 6.3's mask
+    /// transcript to the next batch of sumcheck rounds.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    #[tracing::instrument(skip_all)]
+    pub fn into_zk_sumcheck<Enc, M, R, Ch>(
+        mut self,
+        zk_data: &mut ZkSumcheckData<F, EF>,
+        encoding: &Enc,
+        mmcs: &M,
+        folding_factor: usize,
+        pow_bits: usize,
+        challenger: &mut Ch,
+        rng: &mut R,
+    ) -> ZkSumcheckHandoff<F, EF, Enc, M>
+    where
+        F: TwoAdicField,
+        EF: ExtensionField<F> + TwoAdicField,
+        Enc: ZkEncoding<EF>,
+        Enc::Codeword: Matrix<EF>,
+        M: Mmcs<EF>,
+        R: Rng,
+        StandardUniform: Distribution<EF>,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
+    {
+        assert!(F::TWO != F::ZERO, "Lemma 6.4 requires char(F) != 2");
+        assert!(folding_factor >= 1, "sumcheck requires at least one round");
+        assert!(
+            folding_factor <= self.num_variables(),
+            "folding_factor must be <= residual prover arity",
+        );
+
+        let ell_zk = encoding.message_len();
+        assert!(
+            ell_zk >= 3,
+            "mask degree ell_zk - 1 must cover the degree-2 plain piece (ell_zk >= 3)",
+        );
+
+        let masks: Vec<Vec<EF>> = (0..folding_factor)
+            .map(|_| (0..ell_zk).map(|_| rng.random()).collect())
+            .collect();
+        let mask_oracles = masks
+            .iter()
+            .map(|mask| {
+                let codeword = encoding.encode(mask, rng);
+                let (commitment, prover_data) = mmcs.commit_matrix(codeword);
+                challenger.observe(commitment.clone());
+                (commitment, prover_data)
+            })
+            .collect::<Vec<_>>();
+
+        let sum_endpoints_init: EF = masks
+            .iter()
+            .map(|mask| mask[0].double() + mask[1..].iter().copied().sum::<EF>())
+            .sum();
+        let two_to_k_minus_1 = EF::TWO.exp_u64((folding_factor - 1) as u64);
+        let mu_tilde = two_to_k_minus_1 * sum_endpoints_init;
+
+        challenger.observe_algebra_element(mu_tilde);
+        zk_data.mu_tilde = mu_tilde;
+        zk_data.ell_zk = ell_zk;
+
+        let eps: EF = challenger.sample_algebra_element();
+        let mut rs = Vec::with_capacity(folding_factor);
+        let mut mask_evals_at_gamma = Vec::with_capacity(folding_factor);
+        let mut sum_future_endpoints = sum_endpoints_init;
+        let pow2: Vec<EF> = EF::TWO.powers().collect_n(folding_factor + 1);
+
+        for (round_idx, mask) in masks.iter().enumerate().take(folding_factor) {
+            let j = round_idx + 1;
+            let mask_endpoints = mask[0].double() + mask[1..].iter().copied().sum::<EF>();
+            sum_future_endpoints -= mask_endpoints;
+
+            let (plain_c0, plain_c_inf) = self.poly.round_coefficients();
+            let plain_c1 = self.sum - plain_c0.double() - plain_c_inf;
+
+            let h_size = ell_zk.max(3);
+            let mut h = EF::zero_vec(h_size);
+
+            let mult_live = pow2[folding_factor - j];
+            for (i, &coeff) in mask.iter().enumerate() {
+                h[i] += mult_live * coeff;
+            }
+
+            let past_mask_sum: EF = mask_evals_at_gamma.iter().copied().sum();
+            h[0] += past_mask_sum * mult_live;
+
+            if j < folding_factor {
+                let mult_future = pow2[folding_factor - j - 1];
+                h[0] += mult_future * sum_future_endpoints;
+            }
+
+            h[0] += eps * plain_c0;
+            h[1] += eps * plain_c1;
+            h[2] += eps * plain_c_inf;
+
+            let mut wire = Vec::with_capacity(h_size - 1);
+            wire.push(h[0]);
+            wire.extend_from_slice(&h[2..]);
+            challenger.observe_algebra_slice(&wire);
+            zk_data.round_coefficients.push(wire);
+
+            if pow_bits > 0 {
+                zk_data.pow_witnesses.push(challenger.grind(pow_bits));
+            }
+
+            let gamma: EF = challenger.sample_algebra_element();
+            let mask_at_gamma = mask
+                .iter()
+                .rev()
+                .copied()
+                .fold(EF::ZERO, |acc, coeff| acc * gamma + coeff);
+            mask_evals_at_gamma.push(mask_at_gamma);
+
+            self.sum = extrapolate_01inf(plain_c0, self.sum - plain_c0, plain_c_inf, gamma);
+            self.poly.fold_round(gamma);
+            debug_assert_eq!(self.sum, self.poly.dot_product());
+            rs.push(gamma);
+        }
+
+        self.poly.scale_evals(eps);
+        self.sum *= eps;
+
+        ZkSumcheckHandoff {
+            residual_prover: self,
+            randomness: Point::new(rs),
+            eps,
+            mask_messages: masks,
+            mask_oracles,
+        }
     }
 }
 
