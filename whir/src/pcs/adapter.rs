@@ -603,7 +603,7 @@ where
         &self,
         state: WhirZkPrefixOpenState<F, EF, Enc, MT>,
         round_index: usize,
-        source: &ZkCodeSwitchProverSource<EF>,
+        source_covector: &[EF],
         mask_encoding: &Enc,
         challenger: &mut Challenger,
         rng: &mut R,
@@ -618,17 +618,78 @@ where
             round_index, 0,
             "first ZK round helper currently handles round 0"
         );
+        let handoff = state.initial_handoff;
+        let source_message = handoff.residual_prover.evals().as_slice().to_vec();
+        let num_variables =
+            self.num_variables - self.params.folding_factor.total_number(round_index);
+        let folding_factor_next = self.params.folding_factor.at_round(round_index + 1);
+        let target_domain_size = self.inv_rate(round_index) * (1usize << num_variables);
+        let source = ZkCodeSwitchProverSource {
+            message: source_message,
+            covector: source_covector.to_vec(),
+            inherited_claim: handoff.residual_prover.claimed_sum(),
+            residual_sumcheck_scale: handoff.eps,
+            randomness_len: 0,
+            domain_size: target_domain_size,
+            folding_factor: folding_factor_next,
+        };
+        let source_layout = WhirFoldedSourceLayout {
+            message_len: source.message.len(),
+            domain_size: source.domain_size,
+            folding_factor: source.folding_factor,
+        };
+
+        self.round_zk_prefix_from_source(
+            state.proof,
+            &handoff,
+            round_index,
+            &source,
+            &source_layout,
+            mask_encoding,
+            challenger,
+            rng,
+        )
+    }
+
+    /// Prove one prefix-only ZK code-switching round from an explicit source.
+    ///
+    /// This is the shared Construction 9.7 consumer. The round-0 adapter builds
+    /// a folded WHIR source and delegates here; later rounds should pass a
+    /// source object whose layout exposes the appropriate `G_C^#` / `G_C^$`
+    /// rows for the committed source oracle.
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+    pub fn round_zk_prefix_from_source<Enc, R, SourceLayout>(
+        &self,
+        mut proof: PcsProof<F, EF, MT>,
+        handoff: &ZkSumcheckHandoff<F, EF, Enc, MT>,
+        round_index: usize,
+        source: &ZkCodeSwitchProverSource<EF>,
+        source_layout: &SourceLayout,
+        mask_encoding: &Enc,
+        challenger: &mut Challenger,
+        rng: &mut R,
+    ) -> WhirZkPrefixRoundState<F, EF, Enc, MT>
+    where
+        Enc: ZkEncoding<F>,
+        Enc::Codeword: Matrix<F>,
+        SourceLayout: ZkCodeSwitchSourceLayout<F>,
+        R: Rng,
+        StandardUniform: Distribution<F>,
+    {
+        assert_eq!(
+            round_index, 0,
+            "first ZK round helper currently handles round 0"
+        );
         assert!(
             self.config.zk.as_ref().is_some_and(|zk| zk.only_prefix),
             "ZK WHIR currently supports only prefix layout",
         );
 
-        let mut proof = state.proof;
         let round_params = &self.round_parameters[round_index];
         let round_zk = round_params
             .zk
             .as_ref()
-            .expect("round_zk_prefix requires RoundConfig::zk");
+            .expect("round_zk_prefix_from_source requires RoundConfig::zk");
         assert_eq!(
             mask_encoding.message_len(),
             round_zk.mask_message_len,
@@ -644,26 +705,20 @@ where
             "mask encoding domain must match the round ZK config",
         );
 
-        let handoff = state.initial_handoff;
-        let folded_evaluations = handoff.residual_prover.evals();
-        let num_variables =
-            self.num_variables - self.params.folding_factor.total_number(round_index);
-        assert_eq!(num_variables, folded_evaluations.num_variables());
-        let folding_factor_next = self.params.folding_factor.at_round(round_index + 1);
-        let inv_rate = self.inv_rate(round_index);
-        let target_domain_size = inv_rate * (1usize << num_variables);
-        assert_eq!(source.domain_size, target_domain_size);
-        assert_eq!(source.folding_factor, folding_factor_next);
+        let folded_evaluations = Poly::new(source.message.clone());
+        let num_variables = folded_evaluations.num_variables();
+        let folding_factor_next = source.folding_factor;
+        assert_eq!(source.domain_size % (1usize << num_variables), 0);
+        let inv_rate = source.domain_size >> num_variables;
+        assert!(inv_rate > 0, "source domain must cover the source message");
+        assert_eq!(source_layout.message_len(), source.message.len());
         assert_eq!(
             source.randomness_len, 0,
-            "first ZK code-switch round only supports the target extension oracle; \
-             nonzero source randomness needs an explicit randomness-row handoff",
+            "ZK code-switch source randomness needs a source-oracle randomness handoff",
         );
-        assert_eq!(
-            source.message.as_slice(),
-            folded_evaluations.as_slice(),
-            "code-switch source message must match the committed target oracle",
-        );
+        assert_eq!(source_layout.randomness_len(), source.randomness_len);
+        assert_eq!(source_layout.domain_size(), source.domain_size);
+        assert_eq!(source_layout.folding_factor(), source.folding_factor);
         assert_eq!(
             source.message.len(),
             source.covector.len(),
@@ -683,11 +738,6 @@ where
                 ),
             "source handoff inherited claim must match the configured residual scale",
         );
-        let source_layout = WhirFoldedSourceLayout {
-            message_len: source.message.len(),
-            domain_size: source.domain_size,
-            folding_factor: source.folding_factor,
-        };
 
         let (target_root, target_merkle_data) = commit_extension(
             crate::sumcheck::strategy::VariableOrder::Prefix,
@@ -802,7 +852,7 @@ where
         )
         .expect("honest code-switch batching dimensions should match");
         let (source_rows, source_randomness_rows) =
-            source_rows_for_positions::<F, _>(&source_layout, &query_positions);
+            source_rows_for_positions::<F, SourceLayout>(source_layout, &query_positions);
         let output_relation = code_switch_output_relation_from_rows(
             source.message.len(),
             &source.covector,

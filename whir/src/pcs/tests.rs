@@ -740,7 +740,8 @@ mod zk_prefix_api_tests {
         FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirZkConfig,
     };
     use crate::pcs::adapter::{
-        ZkCodeSwitchProverSource, ZkCodeSwitchVerifierSource, evaluate_zk_mask_residual,
+        WhirFoldedSourceLayout, ZkCodeSwitchProverSource, ZkCodeSwitchVerifierSource,
+        evaluate_zk_mask_residual,
     };
     use crate::pcs::proof::QueryOpening;
     use crate::sumcheck::layout::{Layout, PrefixProver, Table};
@@ -832,7 +833,8 @@ mod zk_prefix_api_tests {
             .as_slice()
             .to_vec();
         let inherited_claim = state.initial_handoff.residual_prover.claimed_sum();
-        let source_claim = inherited_claim / state.initial_handoff.eps;
+        let source_scale = state.initial_handoff.eps;
+        let source_claim = inherited_claim / source_scale;
         let (pivot, &pivot_value) = source_message
             .iter()
             .enumerate()
@@ -845,15 +847,6 @@ mod zk_prefix_api_tests {
         let target_domain_size = pcs.config.inv_rate(0) * (1usize << target_num_variables);
         let target_folding = pcs.config.folding_factor.at_round(1);
 
-        let source = ZkCodeSwitchProverSource {
-            message: source_message.clone(),
-            covector: source_covector.clone(),
-            inherited_claim,
-            residual_sumcheck_scale: state.initial_handoff.eps,
-            randomness_len: 0,
-            domain_size: target_domain_size,
-            folding_factor: target_folding,
-        };
         let round_zk = pcs.config.round_parameters[0].zk.as_ref().unwrap();
         let round_mask_encoding = ReedSolomonZkEncoding::new(
             round_zk.mask_query_budget,
@@ -865,7 +858,7 @@ mod zk_prefix_api_tests {
         let round_state = pcs.round_zk_prefix(
             state,
             0,
-            &source,
+            &source_covector,
             &round_mask_encoding,
             &mut prover_challenger,
             &mut zk_rng,
@@ -940,7 +933,7 @@ mod zk_prefix_api_tests {
             commitment,
             message_len: source_message.len(),
             covector: source_covector,
-            residual_sumcheck_scale: source.residual_sumcheck_scale,
+            residual_sumcheck_scale: source_scale,
             randomness_len: 0,
             domain_size: target_domain_size,
             folding_factor: target_folding,
@@ -972,7 +965,7 @@ mod zk_prefix_api_tests {
     }
 
     #[test]
-    #[should_panic(expected = "nonzero source randomness needs an explicit randomness-row handoff")]
+    #[should_panic(expected = "source randomness needs a source-oracle randomness handoff")]
     fn round_zk_prefix_rejects_nonzero_source_randomness_for_first_target_oracle() {
         let (pcs, witness, protocol, required_query_bound, expected_mask_domain) = setup();
 
@@ -1008,7 +1001,8 @@ mod zk_prefix_api_tests {
             .as_slice()
             .to_vec();
         let inherited_claim = state.initial_handoff.residual_prover.claimed_sum();
-        let source_claim = inherited_claim / state.initial_handoff.eps;
+        let source_scale = state.initial_handoff.eps;
+        let source_claim = inherited_claim / source_scale;
         let (pivot, &pivot_value) = source_message
             .iter()
             .enumerate()
@@ -1025,10 +1019,15 @@ mod zk_prefix_api_tests {
             message: source_message,
             covector: source_covector,
             inherited_claim,
-            residual_sumcheck_scale: state.initial_handoff.eps,
+            residual_sumcheck_scale: source_scale,
             randomness_len: 1,
             domain_size: target_domain_size,
             folding_factor: target_folding,
+        };
+        let source_layout = WhirFoldedSourceLayout {
+            message_len: source.message.len(),
+            domain_size: source.domain_size,
+            folding_factor: source.folding_factor,
         };
         let round_zk = pcs.config.round_parameters[0].zk.as_ref().unwrap();
         let round_mask_encoding = ReedSolomonZkEncoding::new(
@@ -1038,10 +1037,12 @@ mod zk_prefix_api_tests {
             MyDft::default(),
         );
 
-        let _ = pcs.round_zk_prefix(
-            state,
+        let _ = pcs.round_zk_prefix_from_source(
+            state.proof,
+            &state.initial_handoff,
             0,
             &source,
+            &source_layout,
             &round_mask_encoding,
             &mut prover_challenger,
             &mut zk_rng,
