@@ -11,12 +11,12 @@ use alloc::vec::Vec;
 
 use p3_baby_bear::BabyBear;
 use p3_dft::Radix2Dit;
-use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::BinomialExtensionField;
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_zk_codes::{LinearZkEncoding, ReedSolomonZkEncoding, ZkEncodingWithRandomness};
 
-use super::{ZkMaskClaim, batched_claim, batching_coefficients, private_ood_answer};
-use crate::utils::eval_ze_star_n;
+use super::ZkMaskClaim;
+use crate::utils::{eval_ze_star_n, padded_ood_t1};
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -27,6 +27,48 @@ fn ef(v: u64) -> EF {
 
 fn inner_product(a: &[EF], b: &[EF]) -> EF {
     a.iter().zip(b.iter()).map(|(x, y)| *x * *y).sum()
+}
+
+/// Returns `(1, rho, rho^2, ..., rho^{dim - 1})`.
+fn batching_coefficients<EF: Field>(rho: EF, dim: usize) -> Vec<EF> {
+    let mut coeffs = Vec::with_capacity(dim);
+    let mut power = EF::ONE;
+    for _ in 0..dim {
+        coeffs.push(power);
+        power *= rho;
+    }
+    coeffs
+}
+
+fn private_ood_answer<EF: Field>(rho: EF, source_message: &[EF], mask_message: &[EF]) -> EF {
+    padded_ood_t1(rho, source_message, mask_message)
+}
+
+fn batched_claim<EF: Field>(
+    inherited_claim: EF,
+    private_ood_answers: &[EF],
+    source_openings: &[EF],
+    claim: &ZkMaskClaim<EF>,
+) -> EF {
+    assert_eq!(private_ood_answers.len(), claim.ood_coeffs.len());
+    assert_eq!(source_openings.len(), claim.in_domain_coeffs.len());
+
+    let ood_sum: EF = claim
+        .ood_coeffs
+        .iter()
+        .zip(private_ood_answers)
+        .map(|(&coeff, &answer)| coeff * answer)
+        .sum();
+    let in_domain_sum: EF = claim
+        .in_domain_coeffs
+        .iter()
+        .zip(source_openings)
+        .map(|(&coeff, &opening)| coeff * opening)
+        .sum();
+
+    claim.base_claim_coeff * claim.residual_sumcheck_scale * inherited_claim
+        + ood_sum
+        + in_domain_sum
 }
 
 fn make_rs_encoding(msg_len: usize, t: usize, m: usize) -> ReedSolomonZkEncoding<F, Radix2Dit<F>> {

@@ -18,14 +18,15 @@
 //! scaled by the sumcheck challenge `eps`; the code-switch relation must carry
 //! that scale on the inherited source claim when composing Construction 9.7
 //! after Construction 6.3.
+//!
+//! The suffix-binding WHIR path must remain non-ZK until #1649 lands a
+//! corresponding `ZkSuffixProver`; silently routing a ZK proof through suffix
+//! mode would produce a non-private transcript.
 
 use alloc::vec::Vec;
 
 use p3_commit::Mmcs;
-use p3_field::Field;
 use serde::{Deserialize, Serialize};
-
-use crate::utils::padded_ood_t1;
 
 /// ZK-specific per-round configuration, derived from protocol parameters.
 ///
@@ -35,11 +36,19 @@ use crate::utils::padded_ood_t1;
 /// The issue asks for `zk: bool`, but a boolean alone cannot drive the
 /// simulator query bounds or proof-size accounting. This struct carries
 /// all derived dimensions so they stay explicit.
+///
+/// This is intentionally configuration-only for now. The non-ZK proof shape
+/// must stay byte-compatible with today's WHIR proofs; ZK-only transcript data
+/// belongs behind `Option` fields on the round proof once the round flow is
+/// wired.
 #[derive(Debug, Clone)]
 pub struct RoundZkConfig<F> {
     /// Number of target-oracle queries the simulator may make.
     pub target_query_budget: usize,
     /// Number of mask-oracle queries the simulator may make.
+    ///
+    /// This is a composed-protocol budget, not a benchmark placeholder. It
+    /// must cover every opening the next IOR makes to the fresh mask oracle.
     pub mask_query_budget: usize,
     /// Message length of the mask code (`ell_zk`).
     ///
@@ -84,90 +93,6 @@ pub struct ZkMaskClaim<EF> {
     pub pad_weights: Vec<EF>,
 }
 
-/// Returns `(1, rho, rho^2, ..., rho^{dim - 1})`.
-///
-/// Construction 9.7 uses these coefficients to batch the inherited claim,
-/// private OOD answers, and in-domain source openings into a single output
-/// relation.
-#[inline]
-#[must_use]
-#[allow(dead_code)]
-pub(crate) fn batching_coefficients<EF: Field>(rho: EF, dim: usize) -> Vec<EF> {
-    let mut coeffs = Vec::with_capacity(dim);
-    let mut power = EF::ONE;
-    for _ in 0..dim {
-        coeffs.push(power);
-        power *= rho;
-    }
-    coeffs
-}
-
-/// Computes the private OOD answer from Construction 9.7.
-///
-/// This is `ze_ood(rho) · (f, r, s_pad)^T`, represented as a padded
-/// zero-evader evaluation of `(source_message || mask_message)`.
-#[inline]
-#[allow(dead_code)]
-pub(crate) fn private_ood_answer<EF: Field>(
-    rho: EF,
-    source_message: &[EF],
-    mask_message: &[EF],
-) -> EF {
-    padded_ood_t1(rho, source_message, mask_message)
-}
-
-/// Computes the verifier-side batched claim `mu'`.
-///
-/// The inherited claim is passed in before the #1605 sumcheck scale is
-/// applied. `claim.residual_sumcheck_scale` is therefore part of the first
-/// term:
-///
-/// ```text
-/// mu' = nu_1 * eps * mu
-///     + sum_i nu_{1+i} * y_i
-///     + sum_j nu_{1+t_ood+j} * f(x_j)
-/// ```
-///
-/// The caller is responsible for using the same coefficient order when
-/// constructing the output covectors for `f`, previous mask messages, and the
-/// fresh code-switch mask.
-#[inline]
-#[allow(dead_code)]
-pub(crate) fn batched_claim<EF: Field>(
-    inherited_claim: EF,
-    private_ood_answers: &[EF],
-    source_openings: &[EF],
-    claim: &ZkMaskClaim<EF>,
-) -> EF {
-    assert_eq!(
-        private_ood_answers.len(),
-        claim.ood_coeffs.len(),
-        "private OOD answer count must match batching coefficients",
-    );
-    assert_eq!(
-        source_openings.len(),
-        claim.in_domain_coeffs.len(),
-        "source opening count must match batching coefficients",
-    );
-
-    let ood_sum: EF = claim
-        .ood_coeffs
-        .iter()
-        .zip(private_ood_answers)
-        .map(|(&coeff, &answer)| coeff * answer)
-        .sum();
-    let in_domain_sum: EF = claim
-        .in_domain_coeffs
-        .iter()
-        .zip(source_openings)
-        .map(|(&coeff, &opening)| coeff * opening)
-        .sum();
-
-    claim.base_claim_coeff * claim.residual_sumcheck_scale * inherited_claim
-        + ood_sum
-        + in_domain_sum
-}
-
 /// Additional per-round proof data for the ZK code-switching path.
 ///
 /// Intended to be held as `Option<WhirRoundZkProof<...>>` inside
@@ -182,6 +107,10 @@ pub(crate) fn batched_claim<EF: Field>(
 ))]
 pub struct WhirRoundZkProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     /// Mask oracle commitment (Merkle root for `s = Enc_{C_zk}((r, s_pad), r'')`).
+    ///
+    /// The verifier must absorb this commitment before sampling private OOD
+    /// points and must verify any later mask openings against this root. Merely
+    /// storing the root is not enough for Construction 9.7.
     pub mask_commitment: MT::Commitment,
     /// Private OOD answers: `y = ze_ood(rho_ood) * [f; r; s_pad]`.
     ///
