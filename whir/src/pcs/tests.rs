@@ -849,6 +849,7 @@ mod zk_prefix_api_tests {
             message: source_message.clone(),
             covector: source_covector.clone(),
             inherited_claim,
+            residual_sumcheck_scale: state.initial_handoff.eps,
             randomness_len: 0,
             domain_size: target_domain_size,
             folding_factor: target_folding,
@@ -930,6 +931,7 @@ mod zk_prefix_api_tests {
                 next_source.covector.iter().copied(),
             ),
         );
+        assert_eq!(next_source.residual_sumcheck_scale, EF::ONE);
         assert_eq!(next_source.randomness_len, 0);
 
         let mut verifier_challenger = challenger();
@@ -1022,6 +1024,7 @@ mod zk_prefix_api_tests {
             message: source_message,
             covector: source_covector,
             inherited_claim,
+            residual_sumcheck_scale: state.initial_handoff.eps,
             randomness_len: 1,
             domain_size: target_domain_size,
             folding_factor: target_folding,

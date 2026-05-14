@@ -97,6 +97,12 @@ where
     /// For the #1605 HVZK sumcheck this is `eps * <message, covector>` in
     /// the no-auxiliary case.
     pub inherited_claim: EF,
+    /// Extra residual scale to apply when this source enters Construction 9.7.
+    ///
+    /// Use `eps` when carrying an unscaled residual relation into code-switch.
+    /// Use `1` when `message` / `covector` already include the HVZK residual
+    /// scaling, as with a source built from `ZkSumcheckHandoff::residual_prover`.
+    pub residual_sumcheck_scale: EF,
     /// Randomness segment length of the source encoding.
     pub randomness_len: usize,
     /// Full encoded codeword domain size.
@@ -664,12 +670,12 @@ where
         );
         assert_eq!(
             source.inherited_claim,
-            handoff.eps
+            source.residual_sumcheck_scale
                 * dot_product::<EF, _, _>(
                     source.message.iter().copied(),
                     source.covector.iter().copied(),
                 ),
-            "source handoff inherited claim must match the eps-scaled source message/covector",
+            "source handoff inherited claim must match the configured residual scale",
         );
         let source_layout = WhirFoldedSourceLayout {
             message_len: source.message.len(),
@@ -761,7 +767,7 @@ where
         let coeffs = batching_coefficients(batching_challenge, batching_dim);
         let claim = ZkMaskClaim {
             base_claim_coeff: coeffs[0],
-            residual_sumcheck_scale: handoff.eps,
+            residual_sumcheck_scale: source.residual_sumcheck_scale,
             ood_coeffs: coeffs[1..1 + private_ood_answers.len()].to_vec(),
             in_domain_coeffs: coeffs[1 + private_ood_answers.len()..].to_vec(),
             source_randomness_weights: Vec::new(),
@@ -854,6 +860,7 @@ where
                 message: next_message,
                 covector: next_covector,
                 inherited_claim: next_handoff.residual_prover.claimed_sum(),
+                residual_sumcheck_scale: EF::ONE,
                 randomness_len: 0,
                 domain_size: self.inv_rate(next_round_index) * (1usize << next_num_variables),
                 folding_factor: self.params.folding_factor.at_round(next_round_index + 1),
