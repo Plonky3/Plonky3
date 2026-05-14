@@ -6,6 +6,7 @@ use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use p3_zk_codes::ZkEncoding;
+use serde::{Deserialize, Serialize};
 
 use crate::sumcheck::strategy::SumcheckProver;
 
@@ -38,7 +39,7 @@ use crate::sumcheck::strategy::SumcheckProver;
 ///
 /// Valid transcripts form an affine subspace of dimension `1 + k * (ell_zk - 1)`.
 /// The `k` dropped linear coefficients are exactly the redundant degrees of freedom of the rank-nullity argument.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ZkSumcheckData<F, EF> {
     /// Sum of all mask polynomial evaluations across the boolean hypercube `{0,1}^k`.
     ///

@@ -36,10 +36,8 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_commit::Mmcs;
 use p3_field::Field;
 use p3_zk_codes::LinearZkEncoding;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub use crate::parameters::RoundZkConfig;
@@ -481,32 +479,6 @@ where
         mu_prime,
         output_relation,
     })
-}
-
-/// Additional per-round proof data for the ZK code-switching path.
-///
-/// Intended to be held as `Option<WhirRoundZkProof<...>>` inside
-/// `WhirRoundProof` once the prover/verifier round flow is wired.
-///
-/// Keeping this separate from `WhirRoundProof` for now lets the standalone
-/// math tests define the ZK proof shape without changing non-ZK serialization.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(bound(
-    serialize = "EF: Serialize, MT::Commitment: Serialize, MT::Proof: Serialize",
-    deserialize = "EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::Proof: Deserialize<'de>"
-))]
-pub struct WhirRoundZkProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
-    /// Mask oracle commitment (Merkle root for `s = Enc_{C_zk}((r, s_pad), r'')`).
-    ///
-    /// The verifier must absorb this commitment before sampling private OOD
-    /// points and must verify any later mask openings against this root. Merely
-    /// storing the root is not enough for Construction 9.7.
-    pub mask_commitment: MT::Commitment,
-    /// Private OOD answers: `y = ze_ood(rho_ood) * [f; r; s_pad]`.
-    ///
-    /// Distinct from `WhirRoundProof::ood_answers` which are public
-    /// folded-polynomial evaluations.
-    pub private_ood_answers: Vec<EF>,
 }
 
 #[cfg(test)]

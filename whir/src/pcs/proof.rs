@@ -5,8 +5,8 @@ use p3_multilinear_util::poly::Poly;
 use serde::{Deserialize, Serialize};
 
 use crate::parameters::ProtocolParameters;
-use crate::pcs::code_switch::WhirRoundZkProof;
 pub use crate::sumcheck::SumcheckData;
+use crate::sumcheck::zk::ZkSumcheckData;
 
 /// Complete WHIR proof.
 #[derive(Serialize, Deserialize, Clone)]
@@ -118,6 +118,39 @@ impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> Default
             zk: None,
         }
     }
+}
+
+/// Additional per-round proof data for the ZK code-switching path.
+///
+/// Kept under `WhirRoundProof::zk` so plain WHIR proof serialization stays
+/// byte-identical when ZK is disabled. The payload is intentionally complete
+/// enough for Construction 9.7: a mask root alone is not binding unless the
+/// verifier also receives and checks the mask/source openings and the next
+/// ZK sumcheck transcript derived from `mu'`.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(bound(
+    serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::Proof: Serialize",
+    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::Proof: Deserialize<'de>"
+))]
+pub struct WhirRoundZkProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
+    /// Mask oracle commitment (Merkle root for `s = Enc_{C_zk}((r, s_pad), r'')`).
+    ///
+    /// The verifier must absorb this commitment before sampling private OOD
+    /// points and must verify later mask openings against this root.
+    pub mask_commitment: MT::Commitment,
+    /// Private OOD answers: `y = ze_ood(rho_ood) * [f; r; s_pad]`.
+    ///
+    /// Distinct from `WhirRoundProof::ood_answers`, which are public
+    /// folded-polynomial evaluations in the plain WHIR path.
+    pub private_ood_answers: Vec<EF>,
+    /// Openings against the inherited source oracle at the code-switch query positions.
+    pub source_queries: Vec<QueryOpening<F, EF, MT::Proof>>,
+    /// Openings against the mask oracle at the same code-switch query positions.
+    pub mask_queries: Vec<QueryOpening<F, EF, MT::Proof>>,
+    /// HVZK sumcheck transcript for the output relation carrying `mu'`.
+    pub zk_sumcheck: ZkSumcheckData<F, EF>,
+    /// Mask commitments emitted by the nested HVZK sumcheck.
+    pub zk_sumcheck_mask_commitments: Vec<MT::Commitment>,
 }
 
 /// Merkle opening for a single query position.
