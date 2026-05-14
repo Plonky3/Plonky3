@@ -11,12 +11,15 @@ use alloc::vec::Vec;
 
 use p3_baby_bear::BabyBear;
 use p3_dft::Radix2Dit;
+use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PrimeCharacteristicRing};
 use p3_zk_codes::{LinearZkEncoding, ReedSolomonZkEncoding, ZkEncodingWithRandomness};
 
-use super::ZkMaskClaim;
-use crate::utils::{eval_ze_star_n, padded_ood_t1};
+use super::{
+    CodeSwitchError, ZkMaskClaim, batched_claim, batching_coefficients, output_relation,
+    private_ood_answer, private_ood_answers,
+};
+use crate::utils::eval_ze_star_n;
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -27,48 +30,6 @@ fn ef(v: u64) -> EF {
 
 fn inner_product(a: &[EF], b: &[EF]) -> EF {
     a.iter().zip(b.iter()).map(|(x, y)| *x * *y).sum()
-}
-
-/// Returns `(1, rho, rho^2, ..., rho^{dim - 1})`.
-fn batching_coefficients<EF: Field>(rho: EF, dim: usize) -> Vec<EF> {
-    let mut coeffs = Vec::with_capacity(dim);
-    let mut power = EF::ONE;
-    for _ in 0..dim {
-        coeffs.push(power);
-        power *= rho;
-    }
-    coeffs
-}
-
-fn private_ood_answer<EF: Field>(rho: EF, source_message: &[EF], mask_message: &[EF]) -> EF {
-    padded_ood_t1(rho, source_message, mask_message)
-}
-
-fn batched_claim<EF: Field>(
-    inherited_claim: EF,
-    private_ood_answers: &[EF],
-    source_openings: &[EF],
-    claim: &ZkMaskClaim<EF>,
-) -> EF {
-    assert_eq!(private_ood_answers.len(), claim.ood_coeffs.len());
-    assert_eq!(source_openings.len(), claim.in_domain_coeffs.len());
-
-    let ood_sum: EF = claim
-        .ood_coeffs
-        .iter()
-        .zip(private_ood_answers)
-        .map(|(&coeff, &answer)| coeff * answer)
-        .sum();
-    let in_domain_sum: EF = claim
-        .in_domain_coeffs
-        .iter()
-        .zip(source_openings)
-        .map(|(&coeff, &opening)| coeff * opening)
-        .sum();
-
-    claim.base_claim_coeff * claim.residual_sumcheck_scale * inherited_claim
-        + ood_sum
-        + in_domain_sum
 }
 
 fn make_rs_encoding(msg_len: usize, t: usize, m: usize) -> ReedSolomonZkEncoding<F, Radix2Dit<F>> {
@@ -130,62 +91,32 @@ fn test_construction_9_7_mu_prime_identity_n0() {
     let nu_dim = 1 + t_ood + t * iota;
     let rho_batch = ef(77);
     let nu = batching_coefficients(rho_batch, nu_dim);
+    let claim = ZkMaskClaim {
+        base_claim_coeff: nu[0],
+        residual_sumcheck_scale: EF::ONE,
+        ood_coeffs: nu[1..1 + t_ood].to_vec(),
+        in_domain_coeffs: nu[1 + t_ood..].to_vec(),
+        source_randomness_weights: Vec::new(),
+        pad_weights: Vec::new(),
+    };
 
-    let mut mu_prime = nu[0] * mu;
-    for i in 0..t_ood {
-        mu_prime += nu[1 + i] * y[i];
-    }
-    for i in 0..t {
-        for l in 0..iota {
-            mu_prime += nu[1 + t_ood + i * iota + l] * source_openings[i * iota + l];
-        }
-    }
-
-    let mut sl_prime = vec![EF::ZERO; ell];
-    for j in 0..ell {
-        sl_prime[j] += nu[0] * sl[j];
-    }
-    for i in 0..t_ood {
-        let mut power = EF::ONE;
-        for sp in sl_prime.iter_mut() {
-            *sp += nu[1 + i] * power;
-            power *= rho_ood_points[i];
-        }
-    }
-    for i in 0..t {
-        for l in 0..iota {
-            let g_sharp = lift_row(&source_enc.message_row(query_positions[i] + l));
-            for (sp, gs) in sl_prime.iter_mut().zip(&g_sharp) {
-                *sp += nu[1 + t_ood + i * iota + l] * *gs;
-            }
-        }
-    }
-
-    let mask_msg_len = r_len + s_pad_len;
-    let mut sl_mask = vec![EF::ZERO; mask_msg_len];
-    for i in 0..t_ood {
-        let mut power = EF::ONE;
-        for _ in 0..ell {
-            power *= rho_ood_points[i];
-        }
-        for sm in sl_mask.iter_mut() {
-            *sm += nu[1 + i] * power;
-            power *= rho_ood_points[i];
-        }
-    }
-    for i in 0..t {
-        for l in 0..iota {
-            let g_dollar = lift_row(&source_enc.randomness_row(query_positions[i] + l));
-            for (sm, gd) in sl_mask.iter_mut().zip(&g_dollar) {
-                *sm += nu[1 + t_ood + i * iota + l] * *gd;
-            }
-        }
-    }
+    let mu_prime = batched_claim(mu, &y, &source_openings, &claim).unwrap();
+    let relation = output_relation::<F, EF, _>(
+        &source_enc,
+        &sl,
+        &[],
+        r_len,
+        s_pad_len,
+        &rho_ood_points,
+        &query_positions,
+        &claim,
+    )
+    .unwrap();
 
     let mut r_s_pad = r;
     r_s_pad.extend_from_slice(&s_pad);
 
-    let mu_prime_from_relation = inner_product(&f, &sl_prime) + inner_product(&r_s_pad, &sl_mask);
+    let mu_prime_from_relation = relation.evaluate(&f, &[], &r_s_pad).unwrap();
 
     assert_eq!(
         mu_prime, mu_prime_from_relation,
@@ -255,68 +186,34 @@ fn test_construction_9_7_mu_prime_identity_n2() {
     let nu_dim = 1 + t_ood + t * iota;
     let rho_batch = ef(55);
     let nu = batching_coefficients(rho_batch, nu_dim);
+    let claim = ZkMaskClaim {
+        base_claim_coeff: nu[0],
+        residual_sumcheck_scale: EF::ONE,
+        ood_coeffs: nu[1..1 + t_ood].to_vec(),
+        in_domain_coeffs: nu[1 + t_ood..].to_vec(),
+        source_randomness_weights: Vec::new(),
+        pad_weights: Vec::new(),
+    };
 
-    let mut mu_prime = nu[0] * mu;
-    for i in 0..t_ood {
-        mu_prime += nu[1 + i] * y[i];
-    }
-    for i in 0..t {
-        for l in 0..iota {
-            mu_prime += nu[1 + t_ood + i * iota + l] * source_openings[i * iota + l];
-        }
-    }
-
-    let mut sl_prime = vec![EF::ZERO; ell];
-    for (sp, s) in sl_prime.iter_mut().zip(&sl) {
-        *sp += nu[0] * *s;
-    }
-    for i in 0..t_ood {
-        let mut power = EF::ONE;
-        for sp in sl_prime.iter_mut() {
-            *sp += nu[1 + i] * power;
-            power *= rho_ood_points[i];
-        }
-    }
-    for i in 0..t {
-        for l in 0..iota {
-            let g_sharp = lift_row(&source_enc.message_row(query_positions[i] + l));
-            for (sp, gs) in sl_prime.iter_mut().zip(&g_sharp) {
-                *sp += nu[1 + t_ood + i * iota + l] * *gs;
-            }
-        }
-    }
-
-    let mut aux_contribution = EF::ZERO;
-    for i in 0..n {
-        aux_contribution += nu[0] * inner_product(&xi[i], &sl_aux[i]);
-    }
-
-    let mask_msg_len = r_len + s_pad_len;
-    let mut sl_mask = vec![EF::ZERO; mask_msg_len];
-    for i in 0..t_ood {
-        let mut power = EF::ONE;
-        for _ in 0..ell {
-            power *= rho_ood_points[i];
-        }
-        for sm in sl_mask.iter_mut() {
-            *sm += nu[1 + i] * power;
-            power *= rho_ood_points[i];
-        }
-    }
-    for i in 0..t {
-        for l in 0..iota {
-            let g_dollar = lift_row(&source_enc.randomness_row(query_positions[i] + l));
-            for (sm, gd) in sl_mask.iter_mut().zip(&g_dollar) {
-                *sm += nu[1 + t_ood + i * iota + l] * *gd;
-            }
-        }
-    }
+    let mu_prime = batched_claim(mu, &y, &source_openings, &claim).unwrap();
+    let aux_refs: Vec<&[EF]> = sl_aux.iter().map(Vec::as_slice).collect();
+    let relation = output_relation::<F, EF, _>(
+        &source_enc,
+        &sl,
+        &aux_refs,
+        r_len,
+        s_pad_len,
+        &rho_ood_points,
+        &query_positions,
+        &claim,
+    )
+    .unwrap();
 
     let mut r_s_pad = r.clone();
     r_s_pad.extend_from_slice(&s_pad);
+    let xi_refs: Vec<&[EF]> = xi.iter().map(Vec::as_slice).collect();
 
-    let mu_prime_from_relation =
-        inner_product(&f, &sl_prime) + aux_contribution + inner_product(&r_s_pad, &sl_mask);
+    let mu_prime_from_relation = relation.evaluate(&f, &xi_refs, &r_s_pad).unwrap();
 
     assert_eq!(
         mu_prime, mu_prime_from_relation,
@@ -372,63 +269,35 @@ fn test_construction_9_7_mu_prime_identity_iota2() {
 
     let nu_dim = 1 + t_ood + t * iota;
     let nu = batching_coefficients(ef(13), nu_dim);
+    let claim = ZkMaskClaim {
+        base_claim_coeff: nu[0],
+        residual_sumcheck_scale: EF::ONE,
+        ood_coeffs: nu[1..1 + t_ood].to_vec(),
+        in_domain_coeffs: nu[1 + t_ood..].to_vec(),
+        source_randomness_weights: Vec::new(),
+        pad_weights: Vec::new(),
+    };
 
-    let mut mu_prime = nu[0] * mu;
-    for i in 0..t_ood {
-        mu_prime += nu[1 + i] * y[i];
-    }
-    for i in 0..t {
-        for l in 0..iota {
-            mu_prime += nu[1 + t_ood + i * iota + l] * source_openings[i * iota + l];
-        }
-    }
-
-    let mut sl_prime = vec![EF::ZERO; ell];
-    for (sp, s) in sl_prime.iter_mut().zip(&sl) {
-        *sp += nu[0] * *s;
-    }
-    for i in 0..t_ood {
-        let mut power = EF::ONE;
-        for sp in sl_prime.iter_mut() {
-            *sp += nu[1 + i] * power;
-            power *= rho_ood_points[i];
-        }
-    }
-    for i in 0..t {
-        for l in 0..iota {
-            let flat_index = query_symbols[i] * iota + l;
-            let g_sharp = lift_row(&source_enc.message_row(flat_index));
-            for (sp, gs) in sl_prime.iter_mut().zip(&g_sharp) {
-                *sp += nu[1 + t_ood + i * iota + l] * *gs;
-            }
-        }
-    }
-
-    let mask_msg_len = r_len + s_pad_len;
-    let mut sl_mask = vec![EF::ZERO; mask_msg_len];
-    for i in 0..t_ood {
-        let mut power = EF::ONE;
-        for _ in 0..ell {
-            power *= rho_ood_points[i];
-        }
-        for sm in sl_mask.iter_mut() {
-            *sm += nu[1 + i] * power;
-            power *= rho_ood_points[i];
-        }
-    }
-    for i in 0..t {
-        for l in 0..iota {
-            let flat_index = query_symbols[i] * iota + l;
-            let g_dollar = lift_row(&source_enc.randomness_row(flat_index));
-            for (sm, gd) in sl_mask.iter_mut().zip(&g_dollar) {
-                *sm += nu[1 + t_ood + i * iota + l] * *gd;
-            }
-        }
-    }
+    let mu_prime = batched_claim(mu, &y, &source_openings, &claim).unwrap();
+    let query_positions: Vec<usize> = query_symbols
+        .iter()
+        .flat_map(|&symbol| (0..iota).map(move |limb| symbol * iota + limb))
+        .collect();
+    let relation = output_relation::<F, EF, _>(
+        &source_enc,
+        &sl,
+        &[],
+        r_len,
+        s_pad_len,
+        &rho_ood_points,
+        &query_positions,
+        &claim,
+    )
+    .unwrap();
 
     let mut r_s_pad = r.clone();
     r_s_pad.extend_from_slice(&s_pad);
-    let mu_prime_from_relation = inner_product(&f, &sl_prime) + inner_product(&r_s_pad, &sl_mask);
+    let mu_prime_from_relation = relation.evaluate(&f, &[], &r_s_pad).unwrap();
 
     assert_eq!(
         mu_prime, mu_prime_from_relation,
@@ -488,7 +357,7 @@ fn test_construction_9_7_mu_prime_identity_eps_scaled_handoff() {
         source_randomness_weights: Vec::new(),
         pad_weights: Vec::new(),
     };
-    let mu_prime = batched_claim(mu, &y, &[source_opening], &claim);
+    let mu_prime = batched_claim(mu, &y, &[source_opening], &claim).unwrap();
 
     let mut sl_prime = vec![EF::ZERO; ell];
     for (sp, s) in sl_prime.iter_mut().zip(&sl) {
@@ -577,6 +446,100 @@ fn test_batching_zero_evader_powers() {
     assert_eq!(nu[1], rho);
     assert_eq!(nu[2], rho * rho);
     assert_eq!(nu[3], rho * rho * rho);
+}
+
+#[test]
+fn test_private_ood_answers_matches_single_answer_helper() {
+    let f = vec![ef(2), ef(4)];
+    let mask = vec![ef(8), ef(16), ef(32)];
+    let points = [ef(3), ef(5), ef(7)];
+
+    let answers = private_ood_answers(&points, &f, &mask);
+    let expected: Vec<EF> = points
+        .iter()
+        .map(|&rho| private_ood_answer(rho, &f, &mask))
+        .collect();
+
+    assert_eq!(answers, expected);
+}
+
+#[test]
+fn test_batched_claim_rejects_ood_count_mismatch() {
+    let claim = ZkMaskClaim {
+        base_claim_coeff: ef(1),
+        residual_sumcheck_scale: ef(1),
+        ood_coeffs: vec![ef(2), ef(3)],
+        in_domain_coeffs: vec![ef(4)],
+        source_randomness_weights: Vec::new(),
+        pad_weights: Vec::new(),
+    };
+
+    let err = batched_claim(ef(9), &[ef(10)], &[ef(11)], &claim).unwrap_err();
+
+    assert_eq!(
+        err,
+        CodeSwitchError::PrivateOodAnswerCountMismatch {
+            expected: 2,
+            actual: 1
+        }
+    );
+}
+
+#[test]
+fn test_output_relation_rejects_query_count_mismatch() {
+    let enc = make_rs_encoding(3, 2, 8);
+    let claim = ZkMaskClaim {
+        base_claim_coeff: ef(1),
+        residual_sumcheck_scale: ef(1),
+        ood_coeffs: vec![ef(2)],
+        in_domain_coeffs: vec![ef(3), ef(4)],
+        source_randomness_weights: Vec::new(),
+        pad_weights: Vec::new(),
+    };
+
+    let err = output_relation::<F, EF, _>(
+        &enc,
+        &[ef(1), ef(2), ef(3)],
+        &[],
+        2,
+        1,
+        &[ef(9)],
+        &[0],
+        &claim,
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        err,
+        CodeSwitchError::QueryPositionCountMismatch {
+            expected: 2,
+            actual: 1
+        }
+    );
+}
+
+#[test]
+fn test_output_relation_rejects_source_covector_length_mismatch() {
+    let enc = make_rs_encoding(3, 2, 8);
+    let claim = ZkMaskClaim {
+        base_claim_coeff: ef(1),
+        residual_sumcheck_scale: ef(1),
+        ood_coeffs: vec![ef(2)],
+        in_domain_coeffs: vec![ef(3)],
+        source_randomness_weights: Vec::new(),
+        pad_weights: Vec::new(),
+    };
+
+    let err = output_relation::<F, EF, _>(&enc, &[ef(1), ef(2)], &[], 2, 1, &[ef(9)], &[0], &claim)
+        .unwrap_err();
+
+    assert_eq!(
+        err,
+        CodeSwitchError::SourceCovectorLengthMismatch {
+            expected: 3,
+            actual: 2
+        }
+    );
 }
 
 /// Verify that `ReedSolomonZkEncoding::message_row` / `randomness_row`
