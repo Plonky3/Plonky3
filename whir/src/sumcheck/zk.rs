@@ -978,6 +978,15 @@ mod tests {
 
     /// End-to-end honest-prover ↔ honest-verifier run.
     ///
+    /// Records `num_concrete` concrete-opening claims (via `prover.eval(0,
+    /// &[0], …)` mirrored by `verifier.add_claim(0, &[0], &evals, …)`) and
+    /// `num_virtual` virtual-evaluation claims. Concrete claims feed the
+    /// `inner.claim_map` accumulator branch of `into_sumcheck` (zk.rs:305-313)
+    /// while virtual claims feed the `inner.virtual_claims` branch
+    /// (zk.rs:390-399). The α-power split between the two
+    /// (`alpha.powers().skip(n_claims)`) is only exercised when both kinds
+    /// are present, so cover that case in callers.
+    ///
     /// Returns `Ok(())` on a successful match between the prover's challenges
     /// and the verifier's Fiat-Shamir replay; returns an error string carrying
     /// enough context to read in a proptest failure report.
@@ -985,7 +994,8 @@ mod tests {
         n_vars: usize,
         folding_factor: usize,
         ell_zk: usize,
-        num_eqs: usize,
+        num_concrete: usize,
+        num_virtual: usize,
         seed: u64,
     ) -> Result<(), &'static str> {
         let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
@@ -996,13 +1006,20 @@ mod tests {
         let (mut prover, mut verifier, _n_vars) =
             build_prover_verifier(evals, folding_factor, encoding, mmcs);
 
-        // Drive prover and verifier challengers in lockstep: each
-        // `add_virtual_eval` on the prover side returns an eval; the verifier
-        // absorbs it with the matching `add_virtual_eval(eval, …)`.
+        // Drive prover and verifier challengers in lockstep. Concrete openings:
+        // `prover.eval` samples the opening point from the transcript, returns
+        // the openings, and the verifier mirrors with `add_claim`. Virtual
+        // evals: `prover.add_virtual_eval` returns an eval the verifier
+        // absorbs via `add_virtual_eval(eval, …)`.
         let mut prover_challenger = MyChallenger::new(perm.clone());
         let mut verifier_challenger = MyChallenger::new(perm);
 
-        for _ in 0..num_eqs {
+        for _ in 0..num_concrete {
+            let openings = prover.eval(0, &[0], &mut prover_challenger);
+            verifier.add_claim(0, &[0], &openings, &mut verifier_challenger);
+        }
+
+        for _ in 0..num_virtual {
             let eval = prover.add_virtual_eval(&mut prover_challenger);
             verifier.add_virtual_eval(eval, &mut verifier_challenger);
         }
@@ -1043,8 +1060,19 @@ mod tests {
     fn prover_verifier_roundtrip_classic_unpacked() {
         // One concrete run with non-tiny parameters: small enough to be fast,
         // big enough to exercise the per-round Lagrange-weighted accumulator
-        // loop across multiple rounds.
-        run_roundtrip(8, 3, 4, 2, 0).expect("honest roundtrip should accept");
+        // loop across multiple rounds. `num_concrete = 1` + `num_virtual = 1`
+        // forces both branches of the α-power split (`skip(n_claims)`) to do
+        // real work in every round.
+        run_roundtrip(8, 3, 4, 1, 1, 0).expect("honest roundtrip should accept");
+    }
+
+    /// Long mask Horner path: real HVZK-WHIR uses `ℓ_zk` in the 30-60 range
+    /// (per §2.7's `O(λ / log log λ)` mapping for `λ ≈ 100`). The proptest
+    /// sweep below caps at `ℓ_zk = 5` for runtime; this fixed-large case
+    /// exercises the longer per-round Horner over the mask polynomial.
+    #[test]
+    fn long_mask_horner_path() {
+        run_roundtrip(8, 3, 32, 1, 1, 0).expect("honest roundtrip should accept");
     }
 
     /// Drift guard: `prefix_strategy()` (free `const fn`, used by `ZkVerifier`
@@ -1180,14 +1208,20 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(16))]
 
         /// Completeness: every honest prover output must verify across the
-        /// `(n_vars, k, ell_zk, num_eqs)` cube.
+        /// `(n_vars, k, ell_zk, num_concrete, num_virtual)` cube. Sweeping
+        /// concrete and virtual independently ensures both branches of the
+        /// `into_sumcheck` accumulator loop and the α-power split between
+        /// them are exercised.
         #[test]
         fn prop_completeness_classic_unpacked(
             n_vars in 3usize..=8,
             ell_zk in 2usize..=5,
-            num_eqs in 1usize..=3,
+            num_concrete in 0usize..=2,
+            num_virtual in 0usize..=2,
             seed in 0u64..1024,
         ) {
+            // The protocol needs at least one claim to have a non-trivial μ.
+            prop_assume!(num_concrete + num_virtual >= 1);
             // `compress_prefix_to_packed` (called in `into_sumcheck`) requires
             // `n_vars - folding >= log2(F::Packing::WIDTH)` to produce at least
             // one full packed element. WIDTH varies per architecture (NEON=4,
@@ -1195,7 +1229,10 @@ mod tests {
             let k_pack = p3_util::log2_strict_usize(<F as Field>::Packing::WIDTH);
             prop_assume!(n_vars > k_pack);
             let folding_factor = 1 + (seed as usize % (n_vars - k_pack));
-            prop_assert!(run_roundtrip(n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok());
+            prop_assert!(
+                run_roundtrip(n_vars, folding_factor, ell_zk, num_concrete, num_virtual, seed)
+                    .is_ok()
+            );
         }
     }
 
