@@ -131,6 +131,13 @@ impl SecurityAssumption {
     }
 
     /// Initial `eta_0` from §5.3's recommended STIR schedule.
+    ///
+    /// **Deviation from the paper.** The paper's formula solves only the prox-gap
+    /// constraint; under eta-aware accounting that leaves `queries_combination_error`
+    /// at round 0 below `target_bits` by `~log_2(t_0)` bits. We extend the formula to
+    /// `max(prox_gap_term, joint_combination_term)`, mirroring `stir_recursive_eta`'s
+    /// shape with `t_{-1}` replaced by a closed-form upper bound on `t_0` (computed at
+    /// `eta = eta_upper_bound`, where `failure_base` and thus `t_0` are maximized).
     #[must_use]
     pub fn stir_initial_eta(
         &self,
@@ -143,20 +150,48 @@ impl SecurityAssumption {
         let k = 1usize << log_folding_factor;
         let log_k_minus_1 = libm::log2((k - 1) as f64);
         let log_d_over_k = (log_degree - log_folding_factor) as f64;
+        let rho = Self::rate_from_log_inv_rate(log_inv_rate);
 
         let log_eta = match self {
             // η₀ := (2^λ (k - 1) (d/k)^2 / (2^7 |F|))^(1/7)
             Self::JohnsonBound => {
-                ((security_bits as f64) + log_k_minus_1 + 2. * log_d_over_k
+                let log_eta_proxgap = ((security_bits as f64) + log_k_minus_1 + 2. * log_d_over_k
                     - 7.
                     - field_size_bits as f64)
-                    / 7.
+                    / 7.;
+
+                // Round-0 analogue of `stir_recursive_eta`'s 7th-root term.
+                // `failure_base_max = √ρ · 1.05` at the JB eta upper bound `√ρ/20`.
+                let log_failure_base_max = libm::log2(1.05 * libm::sqrt(rho));
+                let t_0_max = libm::ceil(security_bits as f64 / -log_failure_base_max);
+                let log_t_term = libm::log2(t_0_max) + 2. * log_degree as f64;
+                let log_k_term = log_k_minus_1 + 2. * log_d_over_k;
+                let log_sum = Self::log2_sum(log_t_term, log_k_term);
+                let log_eta_combination =
+                    ((security_bits as f64) + 1. + log_sum - 7. - field_size_bits as f64) / 7.;
+
+                log_eta_proxgap.max(log_eta_combination)
             }
             // With c₁ = c₂ = 1:
             // η₀ := 2^λ (k - 1) (d/k) / (ρ² |F|)
             Self::CapacityBound => {
-                (security_bits as f64) + log_k_minus_1 + log_d_over_k + 2. * (log_inv_rate as f64)
-                    - field_size_bits as f64
+                let log_eta_proxgap = (security_bits as f64)
+                    + log_k_minus_1
+                    + log_d_over_k
+                    + 2. * (log_inv_rate as f64)
+                    - field_size_bits as f64;
+
+                // Round-0 analogue of `stir_recursive_eta`'s third term.
+                // `failure_base_max = 1.5·ρ` at the CB eta upper bound `ρ/2`.
+                let log_failure_base_max = libm::log2(1.5 * rho);
+                let t_0_max = libm::ceil(security_bits as f64 / -log_failure_base_max);
+                let third_factor = (t_0_max + 1.) + (k - 1) as f64 / k as f64;
+                let log_eta_combination =
+                    (security_bits as f64) + 1. + log_degree as f64 + 2. * (log_inv_rate as f64)
+                        - field_size_bits as f64
+                        + libm::log2(third_factor);
+
+                log_eta_proxgap.max(log_eta_combination)
             }
             Self::UniqueDecoding => {
                 panic!("STIR's paper-backed parameter schedule does not support UniqueDecoding")
@@ -289,6 +324,29 @@ impl SecurityAssumption {
         }
     }
 
+    /// Like [`Self::list_size_bits`] but evaluated at an explicit `log_eta` rather than the
+    /// appendix-level safe gap returned by [`Self::log_eta`].
+    ///
+    /// Use this when the protocol commits to a specific per-round `eta_i` (e.g. STIR §5.3's
+    /// recommended schedule). The UD branch ignores `log_eta` because UD's `delta = (1 - rho) / 2`
+    /// has no eta term — list size is always 1.
+    #[must_use]
+    pub const fn list_size_bits_at_log_eta(
+        &self,
+        log_degree: usize,
+        log_inv_rate: usize,
+        log_eta: f64,
+    ) -> f64 {
+        match self {
+            Self::UniqueDecoding => 0.,
+            Self::JohnsonBound => {
+                let log_inv_sqrt_rate: f64 = log_inv_rate as f64 / 2.;
+                log_inv_sqrt_rate - (1. + log_eta)
+            }
+            Self::CapacityBound => (log_degree + log_inv_rate) as f64 - log_eta,
+        }
+    }
+
     /// Given a RS code (specified by the log of the degree and log inv of the rate) a field_size
     /// and an arity, compute the proximity gaps error (in bits) at the specified distance.
     #[must_use]
@@ -356,6 +414,49 @@ impl SecurityAssumption {
         field_size_bits as f64 - (error + num_functions_1_log)
     }
 
+    /// Like [`Self::prox_gaps_error`] but evaluated at an explicit `log_eta`.
+    ///
+    /// For Johnson bound, the BCSS25 multiplicity is recomputed from the actual eta:
+    /// `m = max(ceil(sqrt(rho) / (2 * eta)), 3)`. At `log_eta = log2(sqrt(rho) / 20)` this
+    /// collapses to `m = 10`, matching the constant baked into [`Self::prox_gaps_error`].
+    /// Smaller `eta` yields larger `m` and thus a larger exceptional-set lower bound (fewer
+    /// bits of security).
+    #[must_use]
+    pub fn prox_gaps_error_at_log_eta(
+        &self,
+        log_degree: usize,
+        log_inv_rate: usize,
+        field_size_bits: usize,
+        num_functions: usize,
+        log_eta: f64,
+    ) -> f64 {
+        assert!(
+            num_functions >= 2,
+            "num_functions must be >= 2 to compute proximity gaps error",
+        );
+
+        let error = match self {
+            Self::UniqueDecoding => (log_degree + log_inv_rate) as f64,
+            Self::JohnsonBound => {
+                // m = max(ceil(sqrt(rho) / (2 * eta)), 3).
+                // log2(sqrt(rho) / (2 * eta)) = -log_inv_rate/2 - 1 - log_eta.
+                let log_sqrt_rho_over_2eta = -(log_inv_rate as f64) / 2. - 1. - log_eta;
+                let m_candidate = libm::ceil(libm::pow(2., log_sqrt_rho_over_2eta));
+                let m = m_candidate.max(3.);
+                let m_plus_half = m + 0.5;
+
+                let log_n = (log_degree + log_inv_rate) as f64;
+                let constant = libm::log2(2. * libm::pow(m_plus_half, 5.) / 3.);
+                let log_rho_neg_3_2 = 1.5 * log_inv_rate as f64;
+                log_n + constant + log_rho_neg_3_2
+            }
+            Self::CapacityBound => (log_degree + 2 * log_inv_rate) as f64 - log_eta,
+        };
+
+        let num_functions_1_log = libm::log2(num_functions as f64 - 1.);
+        field_size_bits as f64 - (error + num_functions_1_log)
+    }
+
     /// The query error is (1 - delta)^t where t is the number of queries.
     /// This computes log(1 - delta).
     /// - In UD, delta is (1 - rho)/2
@@ -413,6 +514,26 @@ impl SecurityAssumption {
         (ood_samples * field_size_bits) as f64 + 1. - error
     }
 
+    /// Like [`Self::ood_error`] but evaluated at an explicit `log_eta`.
+    #[must_use]
+    pub const fn ood_error_at_log_eta(
+        &self,
+        log_degree: usize,
+        log_inv_rate: usize,
+        field_size_bits: usize,
+        ood_samples: usize,
+        log_eta: f64,
+    ) -> f64 {
+        if matches!(self, Self::UniqueDecoding) {
+            return 0.;
+        }
+
+        let list_size_bits = self.list_size_bits_at_log_eta(log_degree, log_inv_rate, log_eta);
+
+        let error = 2. * list_size_bits + (log_degree * ood_samples) as f64;
+        (ood_samples * field_size_bits) as f64 + 1. - error
+    }
+
     /// Computes the number of OOD samples required to achieve `security_level` bits of security.
     #[must_use]
     pub fn determine_ood_samples(
@@ -462,6 +583,20 @@ impl SecurityAssumption {
         field_size_bits as f64 - (list_size + 1.)
     }
 
+    /// Like [`Self::fold_sumcheck_error`] but evaluated at an explicit `log_eta`.
+    #[must_use]
+    pub const fn fold_sumcheck_error_at_log_eta(
+        &self,
+        field_size_bits: usize,
+        num_variables: usize,
+        log_inv_rate: usize,
+        log_eta: f64,
+    ) -> f64 {
+        let list_size = self.list_size_bits_at_log_eta(num_variables, log_inv_rate, log_eta);
+
+        field_size_bits as f64 - (list_size + 1.)
+    }
+
     /// Compute the soundness error (in bits) of the query-combination step.
     ///
     /// After STIR queries and OOD samples, the verifier takes a random
@@ -489,6 +624,24 @@ impl SecurityAssumption {
         num_queries: usize,
     ) -> f64 {
         let list_size = self.list_size_bits(num_variables, log_inv_rate);
+
+        let log_combination = libm::log2((ood_samples + num_queries) as f64);
+
+        field_size_bits as f64 - (log_combination + list_size + 1.)
+    }
+
+    /// Like [`Self::queries_combination_error`] but evaluated at an explicit `log_eta`.
+    #[must_use]
+    pub fn queries_combination_error_at_log_eta(
+        &self,
+        field_size_bits: usize,
+        num_variables: usize,
+        log_inv_rate: usize,
+        ood_samples: usize,
+        num_queries: usize,
+        log_eta: f64,
+    ) -> f64 {
+        let list_size = self.list_size_bits_at_log_eta(num_variables, log_inv_rate, log_eta);
 
         let log_combination = libm::log2((ood_samples + num_queries) as f64);
 
@@ -540,6 +693,36 @@ impl SecurityAssumption {
         prox_gaps.min(sumcheck)
     }
 
+    /// Like [`Self::fold_algebraic_bits`] but evaluated at an explicit `log_eta`.
+    ///
+    /// Use this when the protocol's per-round `eta_i` differs from [`Self::log_eta`] (STIR's
+    /// §5.3 schedule does this; WHIR does not). Both children — proximity gaps and the
+    /// fold-sumcheck list-size bound — are sensitive to `eta_i`, and using a fixed eta when the
+    /// protocol commits to a smaller `eta_i` overstates security.
+    #[must_use]
+    pub fn fold_algebraic_bits_at_log_eta(
+        &self,
+        field_size_bits: usize,
+        num_variables: usize,
+        log_inv_rate: usize,
+        log_eta: f64,
+    ) -> f64 {
+        let prox_gaps = self.prox_gaps_error_at_log_eta(
+            num_variables,
+            log_inv_rate,
+            field_size_bits,
+            2,
+            log_eta,
+        );
+        let sumcheck = self.fold_sumcheck_error_at_log_eta(
+            field_size_bits,
+            num_variables,
+            log_inv_rate,
+            log_eta,
+        );
+        prox_gaps.min(sumcheck)
+    }
+
     /// Algebraic bits of security delivered by an intermediate STIR query phase.
     ///
     /// Combines:
@@ -565,13 +748,25 @@ impl SecurityAssumption {
             "STIR query failure base must lie in (0, 1)"
         );
         let query_failure = -(num_queries as f64) * libm::log2(failure_base);
-        let ood = self.ood_error(log_degree, log_inv_rate, field_size_bits, num_ood_samples);
-        let combination = self.queries_combination_error(
+        // The OOD and combination terms must be evaluated at the same per-round eta the
+        // protocol commits to (`stir_initial_eta` / `stir_recursive_eta`), not the appendix
+        // safe gap. Using the safe gap when the protocol uses a much smaller `eta_i`
+        // understates the list size and thus overstates security.
+        let log_eta = libm::log2(eta);
+        let ood = self.ood_error_at_log_eta(
+            log_degree,
+            log_inv_rate,
+            field_size_bits,
+            num_ood_samples,
+            log_eta,
+        );
+        let combination = self.queries_combination_error_at_log_eta(
             field_size_bits,
             log_degree,
             log_inv_rate,
             num_ood_samples,
             num_queries,
+            log_eta,
         );
         let shake = self.shake_check_error(field_size_bits, num_queries, num_ood_samples);
         query_failure.min(ood).min(combination).min(shake)
@@ -1115,5 +1310,170 @@ mod tests {
                 num_functions - 1
             );
         }
+    }
+
+    // ----- eta-parameterized variants ----------------------------------
+    //
+    // These tests pin two invariants of the `_at_log_eta` methods:
+    //   (1) at the fixed safe-gap eta they must agree with the fixed-eta methods
+    //       to within floating-point noise (callers must be free to migrate);
+    //   (2) at a deliberately smaller eta they must report strictly fewer bits of
+    //       security on every list-size-driven term (Codex flagged the missing
+    //       sensitivity to per-round eta_i in STIR's parameter schedule).
+
+    #[test]
+    fn at_log_eta_collapses_to_fixed_at_safe_gap() {
+        let log_degree = 20;
+        let log_inv_rate = 2;
+        let field = KOALABEAR_QUINTIC_BITS;
+        let ood_samples = 2;
+        let num_queries = 100;
+
+        for assumption in [
+            SecurityAssumption::JohnsonBound,
+            SecurityAssumption::CapacityBound,
+        ] {
+            let safe = assumption.log_eta(log_inv_rate);
+
+            let list_fixed = assumption.list_size_bits(log_degree, log_inv_rate);
+            let list_eta = assumption.list_size_bits_at_log_eta(log_degree, log_inv_rate, safe);
+            assert!(
+                (list_fixed - list_eta).abs() < 1e-9,
+                "{assumption}: list_size_bits mismatch at safe eta: fixed={list_fixed}, eta={list_eta}",
+            );
+
+            let prox_fixed = assumption.prox_gaps_error(log_degree, log_inv_rate, field, 2);
+            let prox_eta =
+                assumption.prox_gaps_error_at_log_eta(log_degree, log_inv_rate, field, 2, safe);
+            assert!(
+                (prox_fixed - prox_eta).abs() < 1e-9,
+                "{assumption}: prox_gaps_error mismatch at safe eta: fixed={prox_fixed}, eta={prox_eta}",
+            );
+
+            let ood_fixed = assumption.ood_error(log_degree, log_inv_rate, field, ood_samples);
+            let ood_eta =
+                assumption.ood_error_at_log_eta(log_degree, log_inv_rate, field, ood_samples, safe);
+            assert!(
+                (ood_fixed - ood_eta).abs() < 1e-9,
+                "{assumption}: ood_error mismatch at safe eta: fixed={ood_fixed}, eta={ood_eta}",
+            );
+
+            let comb_fixed = assumption.queries_combination_error(
+                field,
+                log_degree,
+                log_inv_rate,
+                ood_samples,
+                num_queries,
+            );
+            let comb_eta = assumption.queries_combination_error_at_log_eta(
+                field,
+                log_degree,
+                log_inv_rate,
+                ood_samples,
+                num_queries,
+                safe,
+            );
+            assert!(
+                (comb_fixed - comb_eta).abs() < 1e-9,
+                "{assumption}: queries_combination_error mismatch at safe eta: fixed={comb_fixed}, eta={comb_eta}",
+            );
+
+            let sum_fixed = assumption.fold_sumcheck_error(field, log_degree, log_inv_rate);
+            let sum_eta =
+                assumption.fold_sumcheck_error_at_log_eta(field, log_degree, log_inv_rate, safe);
+            assert!(
+                (sum_fixed - sum_eta).abs() < 1e-9,
+                "{assumption}: fold_sumcheck_error mismatch at safe eta: fixed={sum_fixed}, eta={sum_eta}",
+            );
+
+            let fold_fixed = assumption.fold_algebraic_bits(field, log_degree, log_inv_rate);
+            let fold_eta =
+                assumption.fold_algebraic_bits_at_log_eta(field, log_degree, log_inv_rate, safe);
+            assert!(
+                (fold_fixed - fold_eta).abs() < 1e-9,
+                "{assumption}: fold_algebraic_bits mismatch at safe eta: fixed={fold_fixed}, eta={fold_eta}",
+            );
+        }
+    }
+
+    #[test]
+    fn at_log_eta_shrinks_security_when_eta_is_smaller_cb() {
+        // CB STIR §5.3 with KoalaBear quintic, log_degree=20, log_inv_rate=1, lambda=108.
+        //
+        //   stir_initial_eta(CB) = 2^(lambda + log(k-1) + log(d/k) + 2*log_inv_rate - field)
+        //                        = 2^(108 + 1.585 + 18 + 2 - 155)  ≈  2^-25.4
+        //
+        // vs. the fixed safe gap log_eta = -(log_inv_rate + LOG2_10 + 1) ≈ -5.32.
+        //
+        // Codex's blocking finding: the fixed-eta accounting overstates security on
+        // every list-size-driven term when the protocol commits to eta ≈ 2^-25.4.
+        let cb = SecurityAssumption::CapacityBound;
+        let log_degree = 20;
+        let log_inv_rate = 1;
+        let field = KOALABEAR_QUINTIC_BITS;
+        let ood_samples = 2;
+        let num_queries = 115;
+
+        let safe = cb.log_eta(log_inv_rate);
+        let small: f64 = -25.4;
+        assert!(small < safe, "test premise: small eta must be < safe eta");
+
+        // list_size grows linearly with -log_eta. The two numbers must straddle the
+        // arithmetic gap quoted in the audit (~20 bits between log_eta values).
+        let list_safe = cb.list_size_bits_at_log_eta(log_degree, log_inv_rate, safe);
+        let list_small = cb.list_size_bits_at_log_eta(log_degree, log_inv_rate, small);
+        assert!(
+            list_small > list_safe + 19.,
+            "list_size at small eta ({list_small}) should be > safe ({list_safe}) + 19",
+        );
+        assert!(
+            list_small < list_safe + 21.,
+            "list_size at small eta ({list_small}) should be < safe ({list_safe}) + 21",
+        );
+
+        // Every list-size-driven term must report fewer bits of security at the
+        // smaller eta. This is the invariant the soundness accounting must preserve.
+        let prox_safe = cb.prox_gaps_error_at_log_eta(log_degree, log_inv_rate, field, 2, safe);
+        let prox_small = cb.prox_gaps_error_at_log_eta(log_degree, log_inv_rate, field, 2, small);
+        assert!(
+            prox_small < prox_safe,
+            "prox_gaps_error must decrease when eta shrinks: safe={prox_safe}, small={prox_small}",
+        );
+
+        let ood_safe = cb.ood_error_at_log_eta(log_degree, log_inv_rate, field, ood_samples, safe);
+        let ood_small =
+            cb.ood_error_at_log_eta(log_degree, log_inv_rate, field, ood_samples, small);
+        assert!(
+            ood_small < ood_safe,
+            "ood_error must decrease when eta shrinks: safe={ood_safe}, small={ood_small}",
+        );
+
+        let comb_safe = cb.queries_combination_error_at_log_eta(
+            field,
+            log_degree,
+            log_inv_rate,
+            ood_samples,
+            num_queries,
+            safe,
+        );
+        let comb_small = cb.queries_combination_error_at_log_eta(
+            field,
+            log_degree,
+            log_inv_rate,
+            ood_samples,
+            num_queries,
+            small,
+        );
+        assert!(
+            comb_small < comb_safe,
+            "queries_combination_error must decrease when eta shrinks: safe={comb_safe}, small={comb_small}",
+        );
+
+        let sum_safe = cb.fold_sumcheck_error_at_log_eta(field, log_degree, log_inv_rate, safe);
+        let sum_small = cb.fold_sumcheck_error_at_log_eta(field, log_degree, log_inv_rate, small);
+        assert!(
+            sum_small < sum_safe,
+            "fold_sumcheck_error must decrease when eta shrinks: safe={sum_safe}, small={sum_small}",
+        );
     }
 }

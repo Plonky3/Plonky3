@@ -324,8 +324,13 @@ where
             );
         };
 
+        // Size eta for the *buffered* algebraic target — the same number that drives the query
+        // count and the PoW gate. The old code used `algebraic_security_level` here, which made
+        // prox_gaps land at `algebraic` instead of `target_bits`; the PoW shortfall was then
+        // always `max_pow_bits + buffer`, exceeding the cap by `buffer` bits. The eta-aware
+        // accounting fix surfaces this; passing `target_bits` re-aligns eta with the gate.
         let mut final_eta = params.soundness_type.stir_initial_eta(
-            algebraic_security_level,
+            target_bits,
             log_degree,
             log_inv_rate,
             log_folding_factor,
@@ -337,10 +342,11 @@ where
             let num_queries = query_count(log_inv_rate, final_eta);
             assert_disjoint_cosets(0, log_domain_size);
 
-            let fold_alg = params.soundness_type.fold_algebraic_bits(
+            let fold_alg = params.soundness_type.fold_algebraic_bits_at_log_eta(
                 field_size_bits,
                 log_degree,
                 log_inv_rate,
+                libm::log2(final_eta),
             );
             let query_alg = params.soundness_type.stir_query_algebraic_bits(
                 field_size_bits,
@@ -374,7 +380,7 @@ where
 
             for round in 1..num_rounds {
                 final_eta = params.soundness_type.stir_recursive_eta(
-                    algebraic_security_level,
+                    target_bits,
                     log_degree,
                     log_inv_rate,
                     log_domain_size,
@@ -387,10 +393,11 @@ where
                 let num_queries = query_count(log_inv_rate, final_eta);
                 assert_disjoint_cosets(round, log_domain_size);
 
-                let fold_alg = params.soundness_type.fold_algebraic_bits(
+                let fold_alg = params.soundness_type.fold_algebraic_bits_at_log_eta(
                     field_size_bits,
                     log_degree,
                     log_inv_rate,
+                    libm::log2(final_eta),
                 );
                 let query_alg = params.soundness_type.stir_query_algebraic_bits(
                     field_size_bits,
@@ -425,7 +432,7 @@ where
             }
 
             final_eta = params.soundness_type.stir_recursive_eta(
-                algebraic_security_level,
+                target_bits,
                 log_degree,
                 log_inv_rate,
                 log_domain_size,
@@ -440,10 +447,12 @@ where
         // Final-round PoW: the final fold uses (log_degree, log_inv_rate) at the protocol
         // tail (after all intermediate increments). The final query phase has no OOD or
         // combination — just the query failure.
-        let final_fold_alg =
-            params
-                .soundness_type
-                .fold_algebraic_bits(field_size_bits, log_degree, log_inv_rate);
+        let final_fold_alg = params.soundness_type.fold_algebraic_bits_at_log_eta(
+            field_size_bits,
+            log_degree,
+            log_inv_rate,
+            libm::log2(final_eta),
+        );
         let final_query_alg = params.soundness_type.stir_final_query_algebraic_bits(
             log_inv_rate,
             final_eta,
