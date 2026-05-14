@@ -17,7 +17,20 @@
 //! recursive circuit; it remains the separate accumulation pipeline being
 //! compared against recursive aggregation.
 //!
-//! Minimal recursive WHIR outer-proof profiler recipe:
+//! Publication-grade recursive comparison runs should be generated through:
+//!
+//! ```bash
+//! CARGO_PROFILE_BENCH_DEBUG=1 \
+//! RUSTFLAGS="-C force-frame-pointers=yes" \
+//! scripts/run_recursive_whir_warp_bench.sh
+//! ```
+//!
+//! The runner records metadata, low-noise headline rows with
+//! `P3_WHIR_RECURSIVE_COMPARE_ITERS >= 5` and
+//! `P3_WHIR_RECURSIVE_COMPARE_WARMUP >= 1`, phase-instrumented attribution
+//! rows, WARP arity sweep rows, raw JSONL, logs, and generated figures.
+//!
+//! Minimal recursive WHIR outer-proof profiler smoke recipe:
 //!
 //! ```bash
 //! CARGO_PROFILE_BENCH_DEBUG=1 \
@@ -2866,6 +2879,12 @@ fn write_recursive_compare_jsonl(
                 "\"recursive_verify_median\":{},",
                 "\"warp_verify_median\":{}",
                 "}},",
+                "\"timing_stats_nanos\":{{",
+                "\"recursive_prove\":{{\"min\":{},\"median\":{},\"mean\":{},\"max\":{},\"stddev\":{}}},",
+                "\"warp_prove\":{{\"min\":{},\"median\":{},\"mean\":{},\"max\":{},\"stddev\":{}}},",
+                "\"recursive_verify\":{{\"min\":{},\"median\":{},\"mean\":{},\"max\":{},\"stddev\":{}}},",
+                "\"warp_verify\":{{\"min\":{},\"median\":{},\"mean\":{},\"max\":{},\"stddev\":{}}}",
+                "}},",
                 "\"recursive_phases_nanos\":{{",
                 "\"native_whir\":{},",
                 "\"circuit_build\":{},",
@@ -2926,6 +2945,26 @@ fn write_recursive_compare_jsonl(
             duration_nanos(warp_prove_stats.median),
             duration_nanos(recursive_verify_stats.median),
             duration_nanos(warp_verify_stats.median),
+            duration_nanos(recursive_prove_stats.min),
+            duration_nanos(recursive_prove_stats.median),
+            duration_nanos(recursive_prove_stats.mean),
+            duration_nanos(recursive_prove_stats.max),
+            duration_nanos(recursive_prove_stats.stddev),
+            duration_nanos(warp_prove_stats.min),
+            duration_nanos(warp_prove_stats.median),
+            duration_nanos(warp_prove_stats.mean),
+            duration_nanos(warp_prove_stats.max),
+            duration_nanos(warp_prove_stats.stddev),
+            duration_nanos(recursive_verify_stats.min),
+            duration_nanos(recursive_verify_stats.median),
+            duration_nanos(recursive_verify_stats.mean),
+            duration_nanos(recursive_verify_stats.max),
+            duration_nanos(recursive_verify_stats.stddev),
+            duration_nanos(warp_verify_stats.min),
+            duration_nanos(warp_verify_stats.median),
+            duration_nanos(warp_verify_stats.mean),
+            duration_nanos(warp_verify_stats.max),
+            duration_nanos(warp_verify_stats.stddev),
             duration_nanos(recursive_phases.native_whir),
             duration_nanos(recursive_phases.circuit_build),
             duration_nanos(recursive_phases.trace_generation),
@@ -3272,7 +3311,7 @@ fn print_recursive_whir_vs_warp_comparison(num_variable_cases: &[usize], n_value
         "    Recursive lane: build N native WHIR proofs, run one verifier circuit for those N proofs, then use the WHIR-native outer path for its trace."
     );
     eprintln!(
-        "    Outer recursive proof: WHIR-native table proof with table commitments, shifted Poseidon2 next-row columns, direct witness-table openings, local sumchecks, WHIR openings, and public/shape binding."
+        "    Outer recursive proof: WHIR-native table proof with committed read columns, a witness read bus, shifted Poseidon2 next-row columns, local sumchecks, WHIR openings, and public/shape binding."
     );
     eprintln!("    WARP lane: existing WARP VACC/DACC root proof, kept outside recursion.");
     eprintln!(
