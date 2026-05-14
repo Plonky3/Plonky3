@@ -9,6 +9,7 @@ use crate::fs::codecs::Codec;
 use crate::fs::codecs::decode_field::{
     decode_field_be_canonical, encode_field_be, field_byte_size,
 };
+use crate::fs::codecs::length_prefix::{bound_byte_width, decode_len_be};
 use crate::fs::domain_separator::DomainSeparator;
 use crate::fs::error::TranscriptError;
 use crate::fs::pattern::{Hierarchy, Interaction, Kind, Label, Length, Pattern, PatternPlayer};
@@ -189,6 +190,68 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
         Ok(out)
     }
 
+    /// Replay a bounded scalar-slice step.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. Read the length prefix from the wire.
+    /// 2. Reject any actual length above `max`.
+    /// 3. Absorb the prefix bytes into the sponge, matching the prover.
+    /// 4. Read and absorb that many scalars through the codec.
+    ///
+    /// # Errors
+    ///
+    /// - The length prefix runs past the end of the wire.
+    /// - Any scalar runs past the end of the wire.
+    /// - The decoded length exceeds `max`.
+    /// - Any scalar encoding is non-canonical.
+    pub fn next_scalars_bounded<F, Cdc>(
+        &mut self,
+        label: Label,
+        max: usize,
+    ) -> Result<Vec<TranscriptBound<F>>, TranscriptError>
+    where
+        F: PrimeField,
+        C: CanObserve<u8>,
+        Cdc: Codec<C, F>,
+    {
+        // Validate against the recorded pattern step so shape divergence panics here.
+        self.player.interact(Interaction::new::<F>(
+            Hierarchy::Atomic,
+            Kind::Message,
+            label,
+            Length::Bounded(max),
+        ));
+        // Prefix width is deterministic on both sides from the recorded bound.
+        let width = bound_byte_width(max);
+        // Copy the prefix out of the wire so the absorb call below does not borrow `self.narg`.
+        let len_bytes: alloc::vec::Vec<u8> = self.take_bytes(width)?.to_vec();
+        let actual = decode_len_be(&len_bytes, width);
+        // A wire length above the cap is malformed input, not a panic-worthy bug.
+        if actual > max {
+            return Err(TranscriptError::BadProofShape {
+                reason: "message length exceeds declared maximum",
+            });
+        }
+        // Bind the count into the sponge before any value enters it.
+        //
+        // This keeps the transcript prefix-free, matching CO25 §6.2.
+        self.challenger.observe_slice(&len_bytes);
+        // One canonical field encoding per scalar.
+        let need = field_byte_size::<F>();
+        let mut out = Vec::with_capacity(actual);
+        for _ in 0..actual {
+            // Pull one scalar's bytes off the wire and reject non-canonical encodings.
+            let raw = self.take_bytes(need)?;
+            let v = decode_field_be_canonical::<F>(raw)?;
+            // Absorb through the same codec the prover used so both sides agree.
+            Cdc::observe(&mut self.challenger, &v);
+            // Hand back a binding witness alongside the decoded value.
+            out.push(TranscriptBound::wrap(v));
+        }
+        Ok(out)
+    }
+
     /// Replay an `add_extension` step from the prover.
     pub fn next_extension<F, EF, Cdc>(
         &mut self,
@@ -240,6 +303,48 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
             Length::Fixed(byte_len),
         ));
         self.take_bytes(byte_len)
+    }
+
+    /// Replay a bounded hint step.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. Read the length prefix from the wire.
+    /// 2. Reject any actual length above `max`.
+    /// 3. Return the payload bytes as a borrowed slice.
+    ///
+    /// Nothing is absorbed into the sponge.
+    ///
+    /// # Errors
+    ///
+    /// - The length prefix runs past the end of the wire.
+    /// - The payload runs past the end of the wire.
+    /// - The decoded length exceeds `max`.
+    pub fn next_hint_bounded(
+        &mut self,
+        label: Label,
+        max: usize,
+    ) -> Result<&'a [u8], TranscriptError> {
+        // Validate against the recorded pattern step so shape divergence panics here.
+        self.player.interact(Interaction::new::<u8>(
+            Hierarchy::Atomic,
+            Kind::Hint,
+            label,
+            Length::Bounded(max),
+        ));
+        // Prefix width is deterministic on both sides from the recorded bound.
+        let width = bound_byte_width(max);
+        // Pull the prefix off the wire and decode it.
+        let len_bytes = self.take_bytes(width)?;
+        let actual = decode_len_be(len_bytes, width);
+        // A wire length above the cap is malformed input, not a panic-worthy bug.
+        if actual > max {
+            return Err(TranscriptError::BadProofShape {
+                reason: "hint length exceeds declared maximum",
+            });
+        }
+        // Hand back the payload as a borrowed slice — no sponge absorption.
+        self.take_bytes(actual)
     }
 
     /// Sample one challenge scalar in lockstep with the prover.
@@ -439,6 +544,119 @@ mod tests {
             err,
             TranscriptError::BadProofShape {
                 reason: "trailing NARG bytes after final verifier step",
+            }
+        );
+    }
+
+    #[test]
+    fn bounded_hint_rejects_length_above_max() {
+        // Invariant: a wire length above the recorded cap is malformed input.
+        //
+        // The verifier rejects it with a structured error rather than panicking.
+
+        // Fixture state: hint cap of 4 bytes.
+        let pat = InteractionPattern::new(vec![Interaction::new::<u8>(
+            Hierarchy::Atomic,
+            Kind::Hint,
+            "auth",
+            Length::Bounded(4),
+        )])
+        .unwrap();
+        let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"hint-oob", pat);
+        ds.bind_pattern_hash();
+
+        // Mutation: hand-craft a wire frame whose prefix declares 5 bytes.
+        //
+        // ```text
+        //     cap = 4 → prefix width = 1 byte
+        //     wire   = [0x05, .., .., .., .., .., ..]
+        //                ^^^^ declared count above cap
+        // ```
+        let narg = [5u8, 0, 0, 0, 0, 0, 0];
+
+        // The verifier sees the over-cap prefix and surfaces a structured error.
+        let mut v = VerifierState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds, &narg);
+        let err = v
+            .next_hint_bounded("auth", 4)
+            .expect_err("length above max must be rejected");
+        assert_eq!(
+            err,
+            TranscriptError::BadProofShape {
+                reason: "hint length exceeds declared maximum",
+            }
+        );
+    }
+
+    #[test]
+    fn bounded_hint_rejects_truncated_payload() {
+        // Invariant: a wire frame that promises more bytes than it carries is malformed.
+
+        // Fixture state: hint cap of 8 bytes.
+        let pat = InteractionPattern::new(vec![Interaction::new::<u8>(
+            Hierarchy::Atomic,
+            Kind::Hint,
+            "auth",
+            Length::Bounded(8),
+        )])
+        .unwrap();
+        let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"hint-trunc", pat);
+        ds.bind_pattern_hash();
+
+        // Mutation: declare 7 payload bytes but supply only 2.
+        //
+        // ```text
+        //     wire = [0x07, 0xaa, 0xbb]
+        //              ^^^^ declared
+        //                    ^^^^^^^^^^ only 2 bytes follow
+        // ```
+        let narg = [7u8, 0xaa, 0xbb];
+
+        // The verifier runs out of bytes mid-payload and reports a malformed wire.
+        let mut v = VerifierState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds, &narg);
+        let err = v
+            .next_hint_bounded("auth", 8)
+            .expect_err("truncated payload must be rejected");
+        assert_eq!(
+            err,
+            TranscriptError::BadProofShape {
+                reason: "NARG ended before all expected bytes were read",
+            }
+        );
+    }
+
+    #[test]
+    fn bounded_scalars_rejects_length_above_max() {
+        // Invariant: a wire length above the cap is malformed for messages too.
+
+        // Fixture state: scalar slice with cap of 2.
+        let pat = InteractionPattern::new(vec![Interaction::new::<F>(
+            Hierarchy::Atomic,
+            Kind::Message,
+            "msgs",
+            Length::Bounded(2),
+        )])
+        .unwrap();
+        let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"msg-oob", pat);
+        ds.bind_pattern_hash();
+
+        // Mutation: declare 3 scalars where the cap is 2.
+        //
+        // ```text
+        //     cap = 2 → prefix width = 1 byte
+        //     wire   = [0x03]
+        //               ^^^^ declared count above cap
+        // ```
+        let narg = [3u8];
+
+        // The verifier surfaces a structured error before touching the sponge.
+        let mut v = VerifierState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds, &narg);
+        let err = v
+            .next_scalars_bounded::<F, BytesToFieldCodec<F>>("msgs", 2)
+            .expect_err("length above max must be rejected");
+        assert_eq!(
+            err,
+            TranscriptError::BadProofShape {
+                reason: "message length exceeds declared maximum",
             }
         );
     }

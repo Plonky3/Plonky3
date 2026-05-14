@@ -70,6 +70,15 @@ pub enum Length {
     Scalar,
     /// A statically-known number of values.
     Fixed(usize),
+    /// At most `max` values.
+    /// The actual count travels on the wire as a big-endian length prefix.
+    ///
+    /// The prefix width is the minimum number of bytes that can hold every value in `0..=max`.
+    ///
+    /// This is distinct from a fixed length because the bound is part of the pattern hash.
+    ///
+    /// Two protocols differing only in their capacity get distinct seeds and cannot be confused.
+    Bounded(usize),
     /// A dynamically-known number of values.
     Dynamic,
 }
@@ -220,6 +229,7 @@ impl Display for Length {
             Self::None => write!(f, "None"),
             Self::Scalar => write!(f, "Scalar"),
             Self::Fixed(n) => write!(f, "Fixed({n})"),
+            Self::Bounded(n) => write!(f, "Bounded({n})"),
             Self::Dynamic => write!(f, "Dynamic"),
         }
     }
@@ -250,6 +260,27 @@ mod tests {
         let i =
             Interaction::new::<u64>(Hierarchy::Atomic, Kind::Challenge, "alpha", Length::Scalar);
         assert_eq!(format!("{i}"), "Atomic Challenge alpha Scalar u64");
+    }
+
+    #[test]
+    fn bounded_length_renders_with_max() {
+        // Invariant: the bound appears in both display modes.
+        //
+        // The alternate form feeds the pattern fingerprint, so the cap must be visible there too.
+
+        // Fixture state: an atomic hint step with a cap of 64.
+        let i = Interaction::new::<u8>(
+            Hierarchy::Atomic,
+            Kind::Hint,
+            "auth-path",
+            Length::Bounded(64),
+        );
+
+        // Default form carries the type name and prints the bound at the end.
+        assert_eq!(format!("{i}"), "Atomic Hint auth-path Bounded(64) u8");
+
+        // Alternate form drops the type name and length-prefixes the label.
+        assert_eq!(format!("{i:#}"), "Atomic Hint 9 auth-path Bounded(64)");
     }
 
     #[test]

@@ -6,6 +6,7 @@ pub mod decode_field;
 pub mod extension;
 pub mod field_to_bytes;
 pub mod field_to_field;
+pub mod length_prefix;
 
 pub use bytes_to_field::BytesToFieldCodec;
 pub use codec::Codec;
