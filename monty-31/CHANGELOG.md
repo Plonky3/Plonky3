@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.4.3] - 2026-05-15
+### Merged PRs
+- Transpose: use p3-util rectangular transposition everywhere (#1256)
+- Field: implement quintic extension for KoalaBear (#1293)
+- SIMD for koala-bear extension 5 (#1305)
+- Fix: dead code removal and twiddle table race condition (#1318)
+- Fix: add range check in MontyField31 deserialization (#1399)
+- Monty 31: faster forward dft (#1418)
+- Fix compilation on aarch64 without neon (RUSTFLAGS="-C target-feature=-neon" cargo check) (#1514)
+
 ## [0.4.2] - 2026-01-05
 ### Merged PRs
 - Refactor: add public const `new` and `new_array` for all fields (#1222) (Adrian Hamelink)

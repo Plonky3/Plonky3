@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.4.3] - 2026-05-15
+### Merged PRs
+- Chore: minor fixes (#1246)
+- Fix: avoid unnecessary clone of quotient chunk matrices in batch-stark prover (#1341)
+- Fix: add lookup expected_cumulated value in FS transcript (#1385)
+
 ## [0.4.2] - 2026-01-05
 ### Merged PRs
 - Refactor(field): Add packed field extraction helpers and FieldArray utilities (#1211) (Adrian Hamelink)
