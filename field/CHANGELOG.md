@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.4.3] - 2026-05-15
+### Merged PRs
+- Field: relax redundant bounds in From<[A; D]> for BinomialExtensionField (#1231)
+- Chore(field): Remove deprecated scale_slice_in_place wrapper (#1264)
+- Fix(field): return ONE for empty Product iterator (#1272)
+- Field: small touchup for binomial extension (#1300)
+- Field: implement quintic extension for KoalaBear (#1293)
+- Field: faster `quintic_mul` and `quintic_square` (#1301)
+- SIMD for koala-bear extension 5 (#1305)
+- Field: add missing extension degree for `packed_mod_add` and `packed_mod_sub` (#1421)
+
 ## [0.4.2] - 2026-01-05
 ### Merged PRs
 - Chore(field): Make `BinomialExtensionField::new` public (#1209) (Adrian Hamelink)
