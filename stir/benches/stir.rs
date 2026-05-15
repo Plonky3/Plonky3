@@ -1,7 +1,7 @@
 //! Benchmarks for the STIR polynomial commitment scheme.
 //!
 //! Covers commit (codeword evaluation + Merkle commit), prove, and verify phases
-//! for polynomial degrees 2^14 through 2^22 over BabyBear with its quartic extension.
+//! for polynomial degrees 2^14 through 2^22 over KoalaBear with its quintic extension.
 //!
 //! # Benchmark parameters
 //!
@@ -14,14 +14,14 @@
 //!   - `fold3`: arity 8 per round (k=8); rate improves by 2 bits per round (fewest queries)
 
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
-use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{
     CanObserve, CanSampleUniformBits, DuplexChallenger, FieldChallenger, GrindingChallenger,
 };
 use p3_commit::{ExtensionMmcs, Mmcs, SecurityAssumption};
 use p3_dft::{Radix2DitParallel, TwoAdicSubgroupDft};
-use p3_field::extension::BinomialExtensionField;
+use p3_field::extension::QuinticTrinomialExtensionField;
 use p3_field::{BasedVectorSpace, ExtensionField, Field, TwoAdicField};
+use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_stir::config::{StirConfig, StirParameters};
 use p3_stir::prover::prove_stir;
@@ -31,9 +31,9 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
-type Val = BabyBear;
-type Challenge = BinomialExtensionField<Val, 4>;
-type Perm = Poseidon2BabyBear<16>;
+type Val = KoalaBear;
+type Challenge = QuinticTrinomialExtensionField<Val>;
+type Perm = Poseidon2KoalaBear<16>;
 type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
 type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 type ValMmcs =
@@ -59,7 +59,6 @@ fn make_stir_env(log_folding_factor: usize) -> (StirParameters<MyMmcs>, Dft, Cha
         log_blowup: 1,
         log_folding_factor,
         soundness_type: SecurityAssumption::CapacityBound,
-        // Use a reasonable security level, disable PoW.
         security_level: 100,
         max_pow_bits: 0,
         mmcs,
@@ -167,7 +166,7 @@ fn bench_verify<F, EF, M, D, C>(
     }
 }
 
-fn bench_stir_babybear_fold2(c: &mut Criterion) {
+fn bench_stir_koalabear_fold2(c: &mut Criterion) {
     let log_degrees: Vec<usize> = (14..=22).collect();
     let (params, dft, challenger) = make_stir_env(2);
 
@@ -177,7 +176,7 @@ fn bench_stir_babybear_fold2(c: &mut Criterion) {
         &dft,
         &challenger,
         &log_degrees,
-        "stir_babybear_blowup1_fold2",
+        "stir_koalabear_blowup1_fold2",
     );
     bench_verify::<Val, Challenge, MyMmcs, Dft, Challenger>(
         c,
@@ -185,11 +184,11 @@ fn bench_stir_babybear_fold2(c: &mut Criterion) {
         &dft,
         &challenger,
         &log_degrees,
-        "stir_babybear_blowup1_fold2",
+        "stir_koalabear_blowup1_fold2",
     );
 }
 
-fn bench_stir_babybear_fold3(c: &mut Criterion) {
+fn bench_stir_koalabear_fold3(c: &mut Criterion) {
     let log_degrees: Vec<usize> = (14..=22).collect();
     let (params, dft, challenger) = make_stir_env(3);
 
@@ -199,7 +198,7 @@ fn bench_stir_babybear_fold3(c: &mut Criterion) {
         &dft,
         &challenger,
         &log_degrees,
-        "stir_babybear_blowup1_fold3",
+        "stir_koalabear_blowup1_fold3",
     );
     bench_verify::<Val, Challenge, MyMmcs, Dft, Challenger>(
         c,
@@ -207,13 +206,13 @@ fn bench_stir_babybear_fold3(c: &mut Criterion) {
         &dft,
         &challenger,
         &log_degrees,
-        "stir_babybear_blowup1_fold3",
+        "stir_koalabear_blowup1_fold3",
     );
 }
 
 criterion_group!(
     benches,
-    bench_stir_babybear_fold2,
-    bench_stir_babybear_fold3,
+    bench_stir_koalabear_fold2,
+    bench_stir_koalabear_fold3,
 );
 criterion_main!(benches);
