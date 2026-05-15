@@ -726,11 +726,9 @@ mod zk_prefix_api_tests {
     use alloc::vec::Vec;
 
     use p3_commit::MultilinearPcs;
-    use p3_dft::Radix2Dit;
-    use p3_field::{Field, PrimeCharacteristicRing, dot_product};
+    use p3_field::{Field, PrimeCharacteristicRing};
     use p3_multilinear_util::poly::Poly;
     use p3_zk_codes::ReedSolomonZkEncoding;
-    use proptest::prelude::*;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -909,38 +907,6 @@ mod zk_prefix_api_tests {
             round_state.handoff.randomness.num_variables(),
             pcs.config.folding_factor.at_round(1),
         );
-        let next_source = round_state
-            .next_source
-            .as_ref()
-            .expect("multi-round fixture should carry a source for the next ZK round");
-        assert_eq!(
-            next_source.message.as_slice(),
-            round_state.handoff.residual_prover.evals().as_slice(),
-        );
-        assert_eq!(
-            next_source.covector.as_slice(),
-            round_state.handoff.residual_prover.weights().as_slice(),
-        );
-        assert_eq!(
-            next_source.inherited_claim,
-            round_state.handoff.residual_prover.claimed_sum(),
-        );
-        assert_eq!(
-            next_source.inherited_claim,
-            dot_product::<EF, _, _>(
-                next_source.message.iter().copied(),
-                next_source.covector.iter().copied(),
-            ),
-        );
-        assert_eq!(next_source.residual_sumcheck_scale, EF::ONE);
-        let round1_zk = pcs.config.round_parameters[1].zk.as_ref().unwrap();
-        assert_eq!(next_source.randomness_len, round1_zk.mask_query_budget);
-        assert_eq!(
-            next_source.domain_size,
-            (next_source.message.len() + next_source.randomness_len).next_power_of_two(),
-        );
-        assert_eq!(next_source.folding_factor, 0);
-
         let mut verifier_challenger = challenger();
         domain_separator.observe_domain_separator(&mut verifier_challenger);
         let verifier_source = ZkCodeSwitchVerifierSource {
@@ -975,278 +941,6 @@ mod zk_prefix_api_tests {
         assert_eq!(
             verifier_state.handoff.claimed_residual,
             round_state.handoff.residual_prover.claimed_sum() + nested_mask_residual,
-        );
-        let verifier_next_source = verifier_state
-            .next_source
-            .as_ref()
-            .expect("verifier should carry the next encoded source relation");
-        assert_eq!(verifier_next_source.message_len, next_source.message.len());
-        assert_eq!(
-            verifier_next_source.covector.as_slice(),
-            next_source.covector.as_slice(),
-        );
-        assert_eq!(
-            verifier_next_source.residual_sumcheck_scale,
-            next_source.residual_sumcheck_scale,
-        );
-        assert_eq!(verifier_next_source.domain_size, next_source.domain_size);
-        assert_eq!(
-            verifier_next_source.randomness_len,
-            next_source.randomness_len
-        );
-
-        let source_encoding = ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
-            next_source.randomness_len,
-            next_source.message.len(),
-            next_source.domain_size,
-            Radix2Dit::default(),
-        );
-        let code_switch_mask_encoding = ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
-            round1_zk.mask_query_budget,
-            round1_zk.mask_message_len,
-            round1_zk.mask_domain_size,
-            Radix2Dit::default(),
-        );
-        let sumcheck_mask_encoding = ReedSolomonZkEncoding::new(
-            round1_zk.mask_query_budget,
-            round1_zk.mask_message_len,
-            round1_zk.mask_domain_size,
-            MyDft::default(),
-        );
-        let round1_state = pcs.round_zk_prefix_from_encoded_source(
-            round_state.proof.clone(),
-            &round_state.handoff,
-            1,
-            next_source,
-            &source_encoding,
-            &code_switch_mask_encoding,
-            &sumcheck_mask_encoding,
-            &mut prover_challenger,
-            &mut zk_rng,
-        );
-        let round1 = &round1_state.proof.whir.rounds[1];
-        let round1_zk_proof = round1
-            .zk
-            .as_ref()
-            .expect("encoded source consumer must populate the second ZK round");
-        assert!(round1.commitment.is_some());
-        assert_eq!(
-            round1.commitment.as_ref(),
-            Some(&round1_state.source_commitment)
-        );
-        assert!(
-            round1_zk_proof.source_queries.iter().all(
-                |query| matches!(query, QueryOpening::Extension { values, .. } if values.len() == 1)
-            ),
-            "encoded source openings must be single extension-field positions",
-        );
-        assert!(
-            round1_zk_proof.mask_queries.iter().all(
-                |query| matches!(query, QueryOpening::Extension { values, .. } if values.len() == 1)
-            ),
-            "encoded source rounds carry EF code-switch mask openings",
-        );
-        assert_eq!(
-            round1_state.handoff.randomness.num_variables(),
-            pcs.config.folding_factor.at_round(2),
-        );
-        let round1_verifier_state = pcs
-            .verify_round_zk_prefix_from_encoded_source(
-                &round1_state.proof,
-                &verifier_state.handoff,
-                1,
-                verifier_next_source,
-                &source_encoding,
-                &mut verifier_challenger,
-            )
-            .expect("verifier should replay the encoded-source ZK round");
-        assert_eq!(
-            round1_verifier_state.handoff.randomness.num_variables(),
-            pcs.config.folding_factor.at_round(2),
-        );
-        assert_eq!(
-            round1_verifier_state
-                .next_source
-                .as_ref()
-                .map(|source| source.covector.as_slice()),
-            round1_state
-                .next_source
-                .as_ref()
-                .map(|source| source.covector.as_slice()),
-        );
-    }
-
-    #[test]
-    fn zk_prefix_round_loop_reaches_final_handoff() {
-        assert_zk_prefix_round_loop_accepts(7);
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(3))]
-
-        #[test]
-        fn zk_prefix_round_loop_accepts_across_seeds(seed in 0_u64..64) {
-            assert_zk_prefix_round_loop_accepts(seed);
-        }
-    }
-
-    fn assert_zk_prefix_round_loop_accepts(seed: u64) {
-        let (pcs, witness, protocol, required_query_bound, expected_mask_domain) = setup();
-
-        let mut prover_challenger = challenger();
-        let mut domain_separator = DomainSeparator::new(vec![]);
-        pcs.add_domain_separator::<8>(&mut domain_separator);
-        domain_separator.observe_domain_separator(&mut prover_challenger);
-
-        let (commitment, prover_data) =
-            <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
-                &pcs,
-                witness,
-                &mut prover_challenger,
-            );
-        let initial_mask_encoding = ReedSolomonZkEncoding::new(
-            required_query_bound,
-            ZK_MESSAGE_LEN,
-            expected_mask_domain,
-            MyDft::default(),
-        );
-        let mut zk_rng = SmallRng::seed_from_u64(seed);
-        let state = pcs.begin_zk_prefix_open(
-            prover_data,
-            &protocol,
-            &mut prover_challenger,
-            initial_mask_encoding,
-            &mut zk_rng,
-        );
-
-        let source_message = state
-            .initial_handoff
-            .residual_prover
-            .evals()
-            .as_slice()
-            .to_vec();
-        let inherited_claim = state.initial_handoff.residual_prover.claimed_sum();
-        let source_scale = state.initial_handoff.eps;
-        let source_claim = inherited_claim / source_scale;
-        let (pivot, &pivot_value) = source_message
-            .iter()
-            .enumerate()
-            .find(|(_, value)| !value.is_zero())
-            .expect("test source message should contain a nonzero entry");
-        let mut source_covector = EF::zero_vec(source_message.len());
-        source_covector[pivot] = source_claim / pivot_value;
-
-        let round_zk_configs = pcs
-            .config
-            .round_parameters
-            .iter()
-            .map(|round| {
-                round
-                    .zk
-                    .clone()
-                    .expect("ZK config should populate every round")
-            })
-            .collect::<Vec<_>>();
-        let loop_state = pcs.prove_zk_prefix_rounds(
-            state,
-            &source_covector,
-            |round_index| {
-                let round_zk = &round_zk_configs[round_index];
-                ReedSolomonZkEncoding::new(
-                    round_zk.mask_query_budget,
-                    round_zk.mask_message_len,
-                    round_zk.mask_domain_size,
-                    MyDft::default(),
-                )
-            },
-            |_round_index, source| {
-                ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
-                    source.randomness_len,
-                    source.message.len(),
-                    source.domain_size,
-                    Radix2Dit::default(),
-                )
-            },
-            |round_index| {
-                let round_zk = &round_zk_configs[round_index];
-                ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
-                    round_zk.mask_query_budget,
-                    round_zk.mask_message_len,
-                    round_zk.mask_domain_size,
-                    Radix2Dit::default(),
-                )
-            },
-            &mut prover_challenger,
-            &mut zk_rng,
-        );
-
-        assert_eq!(
-            loop_state
-                .proof
-                .whir
-                .rounds
-                .iter()
-                .filter(|round| round.zk.is_some())
-                .count(),
-            pcs.config.n_rounds(),
-        );
-        assert!(
-            loop_state.next_source.is_none(),
-            "the loop should consume every intermediate carried source",
-        );
-        assert_eq!(
-            loop_state.handoff.randomness.num_variables(),
-            pcs.config.folding_factor.at_round(pcs.config.n_rounds()),
-        );
-
-        let mut verifier_challenger = challenger();
-        domain_separator.observe_domain_separator(&mut verifier_challenger);
-        let target_num_variables =
-            pcs.config.num_variables - pcs.config.folding_factor.total_number(0);
-        let verifier_source = ZkCodeSwitchVerifierSource {
-            commitment,
-            message_len: source_message.len(),
-            covector: source_covector,
-            residual_sumcheck_scale: source_scale,
-            randomness_len: 0,
-            domain_size: pcs.config.inv_rate(0) * (1usize << target_num_variables),
-            folding_factor: pcs.config.folding_factor.at_round(1),
-        };
-        let verifier_state = pcs
-            .verify_zk_prefix_rounds(
-                &loop_state.proof,
-                &protocol,
-                &verifier_source,
-                |_round_index, source| {
-                    ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
-                        source.randomness_len,
-                        source.message_len,
-                        source.domain_size,
-                        Radix2Dit::default(),
-                    )
-                },
-                &mut verifier_challenger,
-            )
-            .expect("verifier should replay every ZK code-switch round");
-        assert_eq!(
-            verifier_state.handoff.randomness.num_variables(),
-            loop_state.handoff.randomness.num_variables(),
-        );
-        let final_gammas = loop_state
-            .handoff
-            .randomness
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
-        let final_mask_residual =
-            evaluate_zk_mask_residual::<F, EF>(&loop_state.handoff.mask_messages, &final_gammas);
-        assert_eq!(
-            verifier_state.handoff.claimed_residual,
-            loop_state.handoff.residual_prover.claimed_sum() + final_mask_residual,
-        );
-        assert!(
-            verifier_state.next_source.is_none(),
-            "verifier loop should also consume every carried source",
         );
     }
 
@@ -1465,14 +1159,14 @@ mod zk_prefix_api_tests {
 }
 
 mod zk_prefix_acceptance_tests {
-    //! Acceptance tests matching #1587's requested field family and multi-round shape.
+    //! Acceptance tests matching #1587's requested field family for one Construction 9.7 round.
 
     use alloc::vec;
     use alloc::vec::Vec;
 
     use p3_challenger::DuplexChallenger;
     use p3_commit::MultilinearPcs;
-    use p3_dft::{Radix2DFTSmallBatch, Radix2Dit};
+    use p3_dft::Radix2DFTSmallBatch;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{Field, PrimeCharacteristicRing};
     use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
@@ -1507,11 +1201,11 @@ mod zk_prefix_acceptance_tests {
     type MyDft = Radix2DFTSmallBatch<F>;
     type TestWhirPcs = WhirProver<EF, F, MyDft, MyMmcs, MyChallenger, PrefixProver<F, EF>>;
 
-    // Issue #1587 gives `n = 4` as an example. This fixture uses a larger
-    // multilinear dimension so the selected folding factors produce at least
-    // two code-switch rounds while preserving the requested KoalaBear EF and
-    // lambda = 20 setting.
-    const NUM_VARIABLES: usize = 16;
+    // Issue #1587 gives n = 4 as an example, but that parameter set has no
+    // intermediate WHIR round in the current configuration. This fixture uses
+    // the smallest dimension here that exercises one Construction 9.7 round;
+    // the full multi-round `HidingWhirPcs` composition is tracked separately.
+    const NUM_VARIABLES: usize = 8;
     const ZK_MESSAGE_LEN: usize = 4;
 
     fn challenger() -> MyChallenger {
@@ -1526,13 +1220,13 @@ mod zk_prefix_acceptance_tests {
         #[test]
         fn whir_zk_prefix_honest_prover_accepts_koalabear(
             seed in 0_u64..64,
-            folding in 3_usize..5,
+            folding in 2_usize..3,
         ) {
-            assert_koalabear_zk_prefix_loop_accepts(seed, folding);
+            assert_koalabear_zk_prefix_first_round_accepts(seed, folding);
         }
     }
 
-    fn assert_koalabear_zk_prefix_loop_accepts(seed: u64, folding: usize) {
+    fn assert_koalabear_zk_prefix_first_round_accepts(seed: u64, folding: usize) {
         let mut rng = SmallRng::seed_from_u64(seed);
         let table = Table::new(vec![
             Poly::<F>::rand(&mut rng, NUM_VARIABLES),
@@ -1562,19 +1256,13 @@ mod zk_prefix_acceptance_tests {
         let config = WhirConfig::new(witness.num_variables(), params)
             .with_zk_config(WhirZkConfig::prefix_only(ZK_MESSAGE_LEN, 2, 1));
         assert!(
-            config.n_rounds() >= 2,
-            "acceptance fixture must exercise multiple code-switch rounds",
+            config.n_rounds() >= 1,
+            "acceptance fixture must exercise the code-switch round",
         );
-        let round_zk_configs = config
-            .round_parameters
-            .iter()
-            .map(|round| {
-                round
-                    .zk
-                    .clone()
-                    .expect("ZK config should populate every round")
-            })
-            .collect::<Vec<_>>();
+        let round_zk = config.round_parameters[0]
+            .zk
+            .clone()
+            .expect("ZK config should populate the first round");
         let pcs = TestWhirPcs::new(config, MyDft::default(), mmcs);
 
         let mut prover_challenger = challenger();
@@ -1587,11 +1275,10 @@ mod zk_prefix_acceptance_tests {
             witness,
             &mut prover_challenger,
         );
-        let first_round_zk = &round_zk_configs[0];
         let initial_mask_encoding = ReedSolomonZkEncoding::new(
-            first_round_zk.mask_query_budget,
+            round_zk.mask_query_budget,
             ZK_MESSAGE_LEN,
-            first_round_zk.mask_domain_size,
+            round_zk.mask_domain_size,
             MyDft::default(),
         );
         let mut zk_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
@@ -1624,35 +1311,17 @@ mod zk_prefix_acceptance_tests {
             source_covector[pivot] = source_claim / pivot_value;
         }
 
-        let loop_state = pcs.prove_zk_prefix_rounds(
+        let round_mask_encoding = ReedSolomonZkEncoding::new(
+            round_zk.mask_query_budget,
+            round_zk.mask_message_len,
+            round_zk.mask_domain_size,
+            MyDft::default(),
+        );
+        let round_state = pcs.round_zk_prefix(
             state,
+            0,
             &source_covector,
-            |round_index| {
-                let round_zk = &round_zk_configs[round_index];
-                ReedSolomonZkEncoding::new(
-                    round_zk.mask_query_budget,
-                    round_zk.mask_message_len,
-                    round_zk.mask_domain_size,
-                    MyDft::default(),
-                )
-            },
-            |_round_index, source| {
-                ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
-                    source.randomness_len,
-                    source.message.len(),
-                    source.domain_size,
-                    Radix2Dit::default(),
-                )
-            },
-            |round_index| {
-                let round_zk = &round_zk_configs[round_index];
-                ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
-                    round_zk.mask_query_budget,
-                    round_zk.mask_message_len,
-                    round_zk.mask_domain_size,
-                    Radix2Dit::default(),
-                )
-            },
+            &round_mask_encoding,
             &mut prover_challenger,
             &mut zk_rng,
         );
@@ -1671,35 +1340,26 @@ mod zk_prefix_acceptance_tests {
             folding_factor: pcs.config.folding_factor.at_round(1),
         };
         let verifier_state = pcs
-            .verify_zk_prefix_rounds(
-                &loop_state.proof,
+            .verify_round_zk_prefix(
+                &round_state.proof,
                 &protocol,
                 &verifier_source,
-                |_round_index, source| {
-                    ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
-                        source.randomness_len,
-                        source.message_len,
-                        source.domain_size,
-                        Radix2Dit::default(),
-                    )
-                },
                 &mut verifier_challenger,
             )
-            .expect("honest KoalaBear prefix-ZK code-switch loop should verify");
+            .expect("honest KoalaBear prefix-ZK code-switch round should verify");
 
-        let final_gammas = loop_state
+        let final_gammas = round_state
             .handoff
             .randomness
             .iter()
             .copied()
             .collect::<Vec<_>>();
         let final_mask_residual =
-            evaluate_zk_mask_residual::<F, EF>(&loop_state.handoff.mask_messages, &final_gammas);
+            evaluate_zk_mask_residual::<F, EF>(&round_state.handoff.mask_messages, &final_gammas);
         assert_eq!(
             verifier_state.handoff.claimed_residual,
-            loop_state.handoff.residual_prover.claimed_sum() + final_mask_residual,
+            round_state.handoff.residual_prover.claimed_sum() + final_mask_residual,
         );
-        assert!(verifier_state.next_source.is_none());
     }
 }
 
