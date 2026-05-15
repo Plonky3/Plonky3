@@ -20,7 +20,8 @@ use super::prover::WhirProver;
 use super::verifier::WhirVerifier;
 use super::verifier::errors::VerifierError;
 use crate::pcs::code_switch::{
-    CodeSwitchOutputRelation, ZkMaskClaim, batched_claim, private_ood_answers,
+    CodeSwitchOutputRelation, ZkMaskClaim, batched_claim, output_relation_from_rows,
+    private_ood_answers,
 };
 use crate::pcs::committer::writer::commit_extension;
 use crate::pcs::proof::{PcsProof, QueryOpening, WhirInitialZkProof, WhirRoundZkProof};
@@ -225,80 +226,6 @@ fn source_message_row<F: TwoAdicField>(
         power *= point;
     }
     out
-}
-
-#[allow(clippy::too_many_arguments)]
-fn code_switch_output_relation_from_rows<Row, EF>(
-    source_message_len: usize,
-    source_covector: &[EF],
-    auxiliary_covectors: &[Vec<EF>],
-    source_randomness_len: usize,
-    pad_len: usize,
-    rho_ood_points: &[EF],
-    source_rows: &[Vec<Row>],
-    source_randomness_rows: &[Vec<Row>],
-    claim: &ZkMaskClaim<EF>,
-) -> CodeSwitchOutputRelation<EF>
-where
-    Row: Copy,
-    EF: Field + From<Row>,
-{
-    assert_eq!(source_covector.len(), source_message_len);
-    assert_eq!(rho_ood_points.len(), claim.ood_coeffs.len());
-    assert_eq!(source_rows.len(), claim.in_domain_coeffs.len());
-    assert_eq!(source_randomness_rows.len(), claim.in_domain_coeffs.len());
-
-    let mut source_covector_out = source_covector
-        .iter()
-        .map(|&x| claim.base_claim_coeff * claim.residual_sumcheck_scale * x)
-        .collect::<Vec<_>>();
-    let auxiliary_covectors_out = auxiliary_covectors
-        .iter()
-        .map(|covector| {
-            covector
-                .iter()
-                .map(|&x| claim.base_claim_coeff * x)
-                .collect()
-        })
-        .collect();
-    let mut mask_covector = EF::zero_vec(source_randomness_len + pad_len);
-
-    for (&rho, &coeff) in rho_ood_points.iter().zip(&claim.ood_coeffs) {
-        let mut power = EF::ONE;
-        for dst in &mut source_covector_out {
-            *dst += coeff * power;
-            power *= rho;
-        }
-        for dst in &mut mask_covector {
-            *dst += coeff * power;
-            power *= rho;
-        }
-    }
-
-    for ((message_row, randomness_row), &coeff) in source_rows
-        .iter()
-        .zip(source_randomness_rows)
-        .zip(&claim.in_domain_coeffs)
-    {
-        assert_eq!(message_row.len(), source_message_len);
-        assert_eq!(randomness_row.len(), source_randomness_len);
-        for (dst, &entry) in source_covector_out.iter_mut().zip(message_row) {
-            *dst += coeff * EF::from(entry);
-        }
-        for (dst, &entry) in mask_covector
-            .iter_mut()
-            .take(source_randomness_len)
-            .zip(randomness_row)
-        {
-            *dst += coeff * EF::from(entry);
-        }
-    }
-
-    CodeSwitchOutputRelation {
-        source_covector: source_covector_out,
-        auxiliary_covectors: auxiliary_covectors_out,
-        mask_covector,
-    }
 }
 
 pub(crate) fn evaluate_zk_mask_residual<F, EF>(masks: &[Vec<F>], gammas: &[EF]) -> EF
@@ -756,17 +683,27 @@ where
         .expect("honest code-switch batching dimensions should match");
         let (source_rows, source_randomness_rows) =
             folded_source_rows_for_positions::<F>(&source_layout, &query_positions);
-        let output_relation = code_switch_output_relation_from_rows(
+        let auxiliary_covector_refs = auxiliary_covectors
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        let source_row_refs = source_rows.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let source_randomness_row_refs = source_randomness_rows
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        let output_relation = output_relation_from_rows(
             source.message.len(),
             &source.covector,
-            &auxiliary_covectors,
+            &auxiliary_covector_refs,
             source.randomness_len,
             pad_len,
             &rho_ood_points,
-            &source_rows,
-            &source_randomness_rows,
+            &source_row_refs,
+            &source_randomness_row_refs,
             &claim,
-        );
+        )
+        .expect("honest code-switch output relation dimensions should match");
 
         let mut relation_evals = source_message;
         for message in &handoff.mask_messages {
@@ -1078,17 +1015,30 @@ where
             initial_zk.zk_sumcheck.ell_zk,
             &initial_gammas,
         );
-        let output_relation = code_switch_output_relation_from_rows(
+        let auxiliary_covector_refs = auxiliary_covectors
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        let source_row_refs = source_rows.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let source_randomness_row_refs = source_randomness_rows
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+        let output_relation = output_relation_from_rows(
             source.message_len,
             &source.covector,
-            &auxiliary_covectors,
+            &auxiliary_covector_refs,
             source.randomness_len,
             pad_len,
             &rho_ood_points,
-            &source_rows,
-            &source_randomness_rows,
+            &source_row_refs,
+            &source_randomness_row_refs,
             &claim,
-        );
+        )
+        .map_err(|err| VerifierError::MerkleProofInvalid {
+            position: 0,
+            reason: err.to_string(),
+        })?;
 
         let folding_factor_next = self.params.folding_factor.at_round(round_index + 1);
         let handoff = ZkVerifier::<F, EF>::verify_claim::<MT, _>(
@@ -1268,17 +1218,18 @@ mod tests {
             in_domain_coeffs: vec![ef(7)],
         };
 
-        let relation = code_switch_output_relation_from_rows::<F, EF>(
+        let relation = output_relation_from_rows::<F, EF>(
             source_message.len(),
             &source_covector,
             &[],
             2,
             1,
             &[],
-            core::slice::from_ref(&source_row),
-            core::slice::from_ref(&randomness_row),
+            &[source_row.as_slice()],
+            &[randomness_row.as_slice()],
             &claim,
-        );
+        )
+        .unwrap();
         let value = relation
             .evaluate(&source_message, &[], &mask_message)
             .unwrap();

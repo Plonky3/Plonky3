@@ -310,6 +310,79 @@ where
         });
     }
 
+    let source_rows = query_positions
+        .iter()
+        .map(|&position| source_encoding.message_row(position))
+        .collect::<Vec<_>>();
+    let source_randomness_rows = query_positions
+        .iter()
+        .map(|&position| source_encoding.randomness_row(position))
+        .collect::<Vec<_>>();
+    let source_row_refs = source_rows.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let source_randomness_row_refs = source_randomness_rows
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+
+    output_relation_from_rows(
+        source_len,
+        source_covector,
+        auxiliary_covectors,
+        source_randomness_len,
+        pad_len,
+        rho_ood_points,
+        &source_row_refs,
+        &source_randomness_row_refs,
+        claim,
+    )
+}
+
+/// Builds the output relation covectors from explicit source-code rows.
+///
+/// This is the row-level form of Construction 9.7 used by the WHIR adapter,
+/// where the source rows come from the folded WHIR target oracle rather than a
+/// standalone [`LinearZkEncoding`].
+#[allow(clippy::too_many_arguments)]
+pub fn output_relation_from_rows<Row, EF>(
+    source_message_len: usize,
+    source_covector: &[EF],
+    auxiliary_covectors: &[&[EF]],
+    source_randomness_len: usize,
+    pad_len: usize,
+    rho_ood_points: &[EF],
+    source_rows: &[&[Row]],
+    source_randomness_rows: &[&[Row]],
+    claim: &ZkMaskClaim<EF>,
+) -> Result<CodeSwitchOutputRelation<EF>, CodeSwitchError>
+where
+    Row: Copy,
+    EF: Field + From<Row>,
+{
+    if rho_ood_points.len() != claim.ood_coeffs.len() {
+        return Err(CodeSwitchError::OodPointCountMismatch {
+            expected: claim.ood_coeffs.len(),
+            actual: rho_ood_points.len(),
+        });
+    }
+    if source_rows.len() != claim.in_domain_coeffs.len() {
+        return Err(CodeSwitchError::QueryPositionCountMismatch {
+            expected: claim.in_domain_coeffs.len(),
+            actual: source_rows.len(),
+        });
+    }
+    if source_randomness_rows.len() != claim.in_domain_coeffs.len() {
+        return Err(CodeSwitchError::QueryPositionCountMismatch {
+            expected: claim.in_domain_coeffs.len(),
+            actual: source_randomness_rows.len(),
+        });
+    }
+    if source_covector.len() != source_message_len {
+        return Err(CodeSwitchError::SourceCovectorLengthMismatch {
+            expected: source_message_len,
+            actual: source_covector.len(),
+        });
+    }
+
     let mask_len = source_randomness_len + pad_len;
     let source_inherited_scale = claim.base_claim_coeff * claim.residual_sumcheck_scale;
     let auxiliary_inherited_scale = claim.base_claim_coeff;
@@ -341,19 +414,21 @@ where
         }
     }
 
-    for (&position, &coeff) in query_positions.iter().zip(&claim.in_domain_coeffs) {
-        let message_row = source_encoding.message_row(position);
-        if message_row.len() != source_len {
+    for ((message_row, randomness_row), &coeff) in source_rows
+        .iter()
+        .zip(source_randomness_rows)
+        .zip(&claim.in_domain_coeffs)
+    {
+        if message_row.len() != source_message_len {
             return Err(CodeSwitchError::SourceMessageRowLengthMismatch {
-                expected: source_len,
+                expected: source_message_len,
                 actual: message_row.len(),
             });
         }
-        for (dst, row) in next_source_covector.iter_mut().zip(message_row) {
+        for (dst, &row) in next_source_covector.iter_mut().zip(*message_row) {
             *dst += coeff * EF::from(row);
         }
 
-        let randomness_row = source_encoding.randomness_row(position);
         if randomness_row.len() != source_randomness_len {
             return Err(CodeSwitchError::SourceRandomnessRowLengthMismatch {
                 expected: source_randomness_len,
@@ -363,9 +438,9 @@ where
         for (dst, row) in mask_covector
             .iter_mut()
             .take(source_randomness_len)
-            .zip(randomness_row)
+            .zip(*randomness_row)
         {
-            *dst += coeff * EF::from(row);
+            *dst += coeff * EF::from(*row);
         }
     }
 
