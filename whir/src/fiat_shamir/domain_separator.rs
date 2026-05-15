@@ -329,7 +329,23 @@ where
             self.sample(1, Sample::TranscriptCheckpoint);
 
             // Draw STIR query positions and provide opening data.
-            self.sample(r.num_queries * domain_size_bytes, Sample::StirQueries);
+            if let Some(round_zk) = &r.zk {
+                self.sample(
+                    round_zk.mask_query_budget * domain_size_bytes,
+                    Sample::StirQueries,
+                );
+                self.hint(Hint::StirQueries);
+                self.hint(Hint::MerkleProof);
+
+                let mask_domain_size_bytes =
+                    ((round_zk.mask_domain_size * 2 - 1).ilog2() as usize).div_ceil(8);
+                self.sample(
+                    round_zk.mask_query_budget * mask_domain_size_bytes,
+                    Sample::StirQueries,
+                );
+            } else {
+                self.sample(r.num_queries * domain_size_bytes, Sample::StirQueries);
+            }
             self.hint(Hint::StirQueries);
             self.hint(Hint::MerkleProof);
 
