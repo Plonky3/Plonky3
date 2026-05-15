@@ -739,11 +739,10 @@ mod zk_prefix_api_tests {
     use crate::parameters::{
         FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirZkConfig,
     };
-    use crate::pcs::adapter::{
-        ZkCodeSwitchProverSource, ZkCodeSwitchVerifierSource, evaluate_zk_mask_residual,
-    };
+    use crate::pcs::adapter::{ZkCodeSwitchProverSource, ZkCodeSwitchVerifierSource};
     use crate::pcs::proof::QueryOpening;
     use crate::sumcheck::layout::{Layout, PrefixProver, Table};
+    use crate::sumcheck::zk::mask_residual;
     use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
 
     type L = PrefixProver<F, EF>;
@@ -938,7 +937,7 @@ mod zk_prefix_api_tests {
             .copied()
             .collect::<Vec<_>>();
         let nested_mask_residual =
-            evaluate_zk_mask_residual::<F, EF>(&round_state.handoff.mask_messages, &nested_gammas);
+            mask_residual::<EF>(&round_state.handoff.mask_messages, &nested_gammas);
         assert_eq!(
             verifier_state.handoff.claimed_residual,
             round_state.handoff.residual_prover.claimed_sum() + nested_mask_residual,
@@ -1155,9 +1154,10 @@ mod zk_prefix_acceptance_tests {
     use crate::parameters::{
         FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirZkConfig,
     };
-    use crate::pcs::adapter::{ZkCodeSwitchVerifierSource, evaluate_zk_mask_residual};
+    use crate::pcs::adapter::ZkCodeSwitchVerifierSource;
     use crate::pcs::prover::WhirProver;
     use crate::sumcheck::layout::{Layout, PrefixProver, Table};
+    use crate::sumcheck::zk::mask_residual;
     use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
 
     type F = KoalaBear;
@@ -1327,7 +1327,7 @@ mod zk_prefix_acceptance_tests {
             .copied()
             .collect::<Vec<_>>();
         let final_mask_residual =
-            evaluate_zk_mask_residual::<F, EF>(&round_state.handoff.mask_messages, &final_gammas);
+            mask_residual::<EF>(&round_state.handoff.mask_messages, &final_gammas);
         assert_eq!(
             verifier_state.handoff.claimed_residual,
             round_state.handoff.residual_prover.claimed_sum() + final_mask_residual,

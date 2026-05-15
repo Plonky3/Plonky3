@@ -129,3 +129,186 @@ pub struct ZkVerifierHandoff<EF> {
     /// Construction 6.3 combining challenge.
     pub eps: EF,
 }
+
+/// Evaluates the final verifier-visible mask residual after all HVZK sumcheck rounds.
+///
+/// For masks `s_j(X)` and verifier challenges `gamma_j`, the mask part of the
+/// final Construction 6.3 target is:
+///
+/// ```text
+///     sum_j s_j(gamma_j)
+/// ```
+///
+/// This is the closed form of the live/past/future mask recurrence used while
+/// assembling the round polynomials.
+#[must_use]
+pub fn mask_residual<EF>(masks: &[Vec<EF>], gammas: &[EF]) -> EF
+where
+    EF: Field,
+{
+    assert_eq!(masks.len(), gammas.len());
+    masks
+        .iter()
+        .zip(gammas)
+        .map(|(mask, &gamma)| {
+            mask.iter()
+                .rev()
+                .copied()
+                .fold(EF::ZERO, |acc, coeff| acc * gamma + coeff)
+        })
+        .sum()
+}
+
+/// Linear covectors whose dot products with the masks equal [`mask_residual`].
+#[must_use]
+pub fn mask_residual_covectors<EF>(masks: &[Vec<EF>], gammas: &[EF]) -> Vec<Vec<EF>>
+where
+    EF: Field,
+{
+    assert!(
+        masks
+            .iter()
+            .all(|mask| mask.len() == masks.first().map_or(0, Vec::len))
+    );
+    mask_residual_covectors_from_shape(masks.len(), masks.first().map_or(0, Vec::len), gammas)
+}
+
+/// Linear covectors for masks with a known rectangular shape.
+///
+/// The covector for mask `s_j` is `[1, gamma_j, gamma_j^2, ...]`.
+#[must_use]
+pub fn mask_residual_covectors_from_shape<EF: Field>(
+    mask_count: usize,
+    mask_len: usize,
+    gammas: &[EF],
+) -> Vec<Vec<EF>> {
+    assert_eq!(mask_count, gammas.len());
+    gammas
+        .iter()
+        .map(|gamma| gamma.powers().collect_n(mask_len))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    use p3_baby_bear::BabyBear;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{Field, PrimeCharacteristicRing, dot_product};
+
+    use super::{mask_residual, mask_residual_covectors};
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+
+    fn ef(x: u64) -> EF {
+        EF::from_u64(x)
+    }
+
+    fn reference_mask_recurrence<EF>(masks: &[Vec<EF>], gammas: &[EF]) -> EF
+    where
+        EF: Field,
+    {
+        assert_eq!(masks.len(), gammas.len());
+        let k = masks.len();
+        if k == 0 {
+            return EF::ZERO;
+        }
+
+        let pow2: Vec<EF> = EF::TWO.powers().collect_n(k + 1);
+        let mut mask_evals_at_gamma = Vec::with_capacity(k);
+        let mut sum_future_endpoints: EF = masks
+            .iter()
+            .map(|mask| mask[0].double() + mask[1..].iter().copied().sum::<EF>())
+            .sum();
+        let mut target = EF::ZERO;
+
+        for (round_idx, (s_j, &gamma_j)) in masks.iter().zip(gammas).enumerate() {
+            let j = round_idx + 1;
+            let s_j_endpoints = s_j[0].double() + s_j[1..].iter().copied().sum::<EF>();
+            sum_future_endpoints -= s_j_endpoints;
+
+            let h_size = s_j.len().max(3);
+            let mut h = EF::zero_vec(h_size);
+            let mult_live = pow2[k - j];
+            for (i, &c) in s_j.iter().enumerate() {
+                h[i] += mult_live * c;
+            }
+
+            let past_mask_sum: EF = mask_evals_at_gamma.iter().copied().sum();
+            h[0] += past_mask_sum * mult_live;
+            if j < k {
+                h[0] += pow2[k - j - 1] * sum_future_endpoints;
+            }
+
+            target = h
+                .iter()
+                .rev()
+                .copied()
+                .fold(EF::ZERO, |acc, coeff| acc * gamma_j + coeff);
+
+            let s_j_at_gamma = s_j
+                .iter()
+                .rev()
+                .copied()
+                .fold(EF::ZERO, |acc, coeff| acc * gamma_j + coeff);
+            mask_evals_at_gamma.push(s_j_at_gamma);
+        }
+
+        target
+    }
+
+    #[test]
+    fn mask_residual_closed_form_matches_round_recurrence() {
+        let masks = vec![
+            vec![
+                ef(3),
+                ef(5),
+                ef(7),
+                ef(11),
+            ],
+            vec![
+                ef(13),
+                ef(17),
+                ef(19),
+                ef(23),
+            ],
+            vec![
+                ef(29),
+                ef(31),
+                ef(37),
+                ef(41),
+            ],
+        ];
+        let gammas = vec![ef(43), ef(47), ef(53)];
+
+        assert_eq!(
+            mask_residual::<EF>(&masks, &gammas),
+            reference_mask_recurrence::<EF>(&masks, &gammas),
+        );
+    }
+
+    #[test]
+    fn mask_residual_covectors_evaluate_closed_form() {
+        let masks = vec![
+            vec![ef(2), ef(3), ef(5)],
+            vec![ef(7), ef(11), ef(13)],
+        ];
+        let gammas = vec![ef(17), ef(19)];
+        let covectors = mask_residual_covectors::<EF>(&masks, &gammas);
+        let by_covectors = masks
+            .iter()
+            .zip(&covectors)
+            .map(|(mask, covector)| {
+                dot_product::<EF, _, _>(
+                    mask.iter().copied(),
+                    covector.iter().copied(),
+                )
+            })
+            .sum::<EF>();
+
+        assert_eq!(by_covectors, mask_residual::<EF>(&masks, &gammas));
+    }
+}

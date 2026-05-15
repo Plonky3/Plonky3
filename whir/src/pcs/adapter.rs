@@ -32,6 +32,7 @@ use crate::sumcheck::product_polynomial::ProductPolynomial;
 use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
 use crate::sumcheck::zk::{
     ZkPrefixProver, ZkSumcheckData, ZkSumcheckHandoff, ZkVerifier, ZkVerifierHandoff,
+    mask_residual_covectors, mask_residual_covectors_from_shape,
 };
 
 /// Prover-side handoff between the commit and open phases of the PCS.
@@ -226,107 +227,6 @@ fn source_message_row<F: TwoAdicField>(
         power *= point;
     }
     out
-}
-
-pub(crate) fn evaluate_zk_mask_residual<F, EF>(masks: &[Vec<F>], gammas: &[EF]) -> EF
-where
-    F: TwoAdicField,
-    EF: ExtensionField<F>,
-{
-    assert_eq!(masks.len(), gammas.len());
-    let k = masks.len();
-    if k == 0 {
-        return EF::ZERO;
-    }
-
-    let mut pow2 = Vec::with_capacity(k + 1);
-    let mut power = F::ONE;
-    for _ in 0..=k {
-        pow2.push(power);
-        power *= F::TWO;
-    }
-
-    let mut mask_evals_at_gamma = Vec::with_capacity(k);
-    let mut sum_future_endpoints: F = masks
-        .iter()
-        .map(|mask| mask[0].double() + mask[1..].iter().copied().sum::<F>())
-        .sum();
-    let mut target = EF::ZERO;
-
-    for (round_idx, (s_j, &gamma_j)) in masks.iter().zip(gammas).enumerate() {
-        let j = round_idx + 1;
-        let s_j_endpoints = s_j[0].double() + s_j[1..].iter().copied().sum::<F>();
-        sum_future_endpoints -= s_j_endpoints;
-
-        let h_size = s_j.len().max(3);
-        let mut h = EF::zero_vec(h_size);
-        let mult_live = pow2[k - j];
-        for (i, &c) in s_j.iter().enumerate() {
-            h[i] += mult_live * c;
-        }
-
-        let past_mask_sum: EF = mask_evals_at_gamma.iter().copied().sum();
-        h[0] += past_mask_sum * mult_live;
-        if j < k {
-            h[0] += EF::from(pow2[k - j - 1] * sum_future_endpoints);
-        }
-
-        target = h
-            .iter()
-            .rev()
-            .copied()
-            .fold(EF::ZERO, |acc, coeff| acc * gamma_j + coeff);
-
-        let s_j_at_gamma = s_j
-            .iter()
-            .rev()
-            .copied()
-            .map(EF::from)
-            .fold(EF::ZERO, |acc, coeff| acc * gamma_j + coeff);
-        mask_evals_at_gamma.push(s_j_at_gamma);
-    }
-
-    target
-}
-
-fn zk_mask_residual_covectors<F, EF>(masks: &[Vec<F>], gammas: &[EF]) -> Vec<Vec<EF>>
-where
-    F: TwoAdicField,
-    EF: ExtensionField<F>,
-{
-    assert!(
-        masks
-            .iter()
-            .all(|mask| mask.len() == masks.first().map_or(0, Vec::len))
-    );
-    zk_mask_residual_covectors_from_shape(masks.len(), masks.first().map_or(0, Vec::len), gammas)
-}
-
-fn zk_mask_residual_covectors_from_shape<F, EF>(
-    mask_count: usize,
-    mask_len: usize,
-    gammas: &[EF],
-) -> Vec<Vec<EF>>
-where
-    F: TwoAdicField,
-    EF: ExtensionField<F>,
-{
-    let mut basis_masks = (0..mask_count)
-        .map(|_| F::zero_vec(mask_len))
-        .collect::<Vec<_>>();
-    let mut covectors = (0..mask_count)
-        .map(|_| EF::zero_vec(mask_len))
-        .collect::<Vec<_>>();
-
-    for mask_idx in 0..mask_count {
-        for coeff_idx in 0..mask_len {
-            basis_masks[mask_idx][coeff_idx] = F::ONE;
-            covectors[mask_idx][coeff_idx] = evaluate_zk_mask_residual(&basis_masks, gammas);
-            basis_masks[mask_idx][coeff_idx] = F::ZERO;
-        }
-    }
-
-    covectors
 }
 
 impl<EF, F, Dft, MT, Challenger> WhirProver<EF, F, Dft, MT, Challenger, PrefixProver<F, EF>>
@@ -661,7 +561,7 @@ where
         };
         let initial_gammas = handoff.randomness.iter().copied().collect::<Vec<_>>();
         let auxiliary_covectors =
-            zk_mask_residual_covectors::<F, EF>(&handoff.mask_messages, &initial_gammas);
+            mask_residual_covectors::<EF>(&handoff.mask_messages, &initial_gammas);
         let auxiliary_claim = handoff
             .mask_messages
             .iter()
@@ -1010,7 +910,7 @@ where
             .iter()
             .copied()
             .collect::<Vec<_>>();
-        let auxiliary_covectors = zk_mask_residual_covectors_from_shape::<F, EF>(
+        let auxiliary_covectors = mask_residual_covectors_from_shape::<EF>(
             initial_gammas.len(),
             initial_zk.zk_sumcheck.ell_zk,
             &initial_gammas,
