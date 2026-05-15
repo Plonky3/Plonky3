@@ -1,4 +1,9 @@
 //! Adapter implementing the multilinear PCS trait for the WHIR protocol.
+//!
+//! The prefix-ZK helpers in this module are intentionally round-0 scoped. They
+//! implement the Construction 9.7 code-switching boundary after the initial
+//! HVZK sumcheck; the full in-loop `HidingWhirPcs` composition is tracked
+//! separately in #1589.
 
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -56,10 +61,10 @@ where
 
 /// Prefix-only ZK opening state after the initial HVZK sumcheck.
 ///
-/// This is the dedicated API boundary for the ZK path. It deliberately does
-/// not implement `MultilinearPcs::open`, because the ZK protocol needs an RNG
-/// and an explicit mask encoding. The `round0_zk_prefix` flow consumes the
-/// typed initial handoff and commits the folded target oracle for Construction 9.7.
+/// This narrow boundary deliberately does not implement `MultilinearPcs::open`,
+/// because the round-0 ZK code-switch needs an RNG, an explicit mask encoding,
+/// and the typed #1605 handoff. The full public PCS composition belongs to
+/// #1589.
 pub struct WhirZkPrefixOpenState<F, EF, Enc, MT>
 where
     F: TwoAdicField,
@@ -237,15 +242,15 @@ where
         + CanSampleUniformBits<F>
         + CanObserve<MT::Commitment>,
 {
-    /// Start the prefix-only ZK WHIR opening flow.
+    /// Start the round-0 prefix-ZK WHIR opening flow.
     ///
     /// This records the same initial public opening claims as the plain
     /// `MultilinearPcs::open` path, then runs the #1605 HVZK sumcheck overlay
     /// and returns the typed handoff needed by Construction 9.7.
     ///
-    /// The method intentionally stops before the WHIR round loop. The next
-    /// implementation step is `round0_zk_prefix`, which consumes the returned
-    /// handoff and fills the first `WhirRoundProof::zk` payload.
+    /// The method intentionally stops before the WHIR round loop. It prepares
+    /// the Construction 6.3 handoff consumed by `round0_zk_prefix`; the full
+    /// public `HidingWhirPcs` composition is #1589.
     pub fn begin_zk_prefix_open<Enc, R>(
         &self,
         mut prover_data: WhirProverData<F, EF, MT, PrefixProver<F, EF>>,
@@ -329,7 +334,7 @@ where
         }
     }
 
-    /// Prove one prefix-only ZK code-switching round.
+    /// Prove the round-0 prefix-only ZK code-switching boundary.
     ///
     /// This is the first real Construction 9.7 wiring point: it consumes the
     /// typed Construction 6.3 handoff, commits the folded target oracle, commits
@@ -658,7 +663,7 @@ where
         }
     }
 
-    /// Replay the initial ZK handoff and the first prefix-only ZK code-switch round.
+    /// Replay the initial ZK handoff and round-0 prefix-only ZK code-switch.
     ///
     /// This verifier helper is intentionally scoped to the dedicated ZK API. It
     /// does not route through the plain PCS verifier, and it checks the source
