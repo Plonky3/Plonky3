@@ -93,14 +93,6 @@ pub enum CodeSwitchError {
     /// A generator row from the source code has the wrong randomness length.
     #[error("source-code randomness row length mismatch: expected {expected}, got {actual}")]
     SourceRandomnessRowLengthMismatch { expected: usize, actual: usize },
-
-    /// Reserved precomputed source-randomness weights were supplied to a builder that recomputes them.
-    #[error("source randomness weights must be empty in the standalone builder, got {actual}")]
-    NonEmptySourceRandomnessWeights { actual: usize },
-
-    /// Reserved precomputed padding weights were supplied to a builder that recomputes them.
-    #[error("pad weights must be empty in the standalone builder, got {actual}")]
-    NonEmptyPadWeights { actual: usize },
 }
 
 /// Per-round ZK mask coefficient carrier.
@@ -123,18 +115,6 @@ pub struct ZkMaskClaim<EF> {
     pub ood_coeffs: Vec<EF>,
     /// Batching coefficients for in-domain openings.
     pub in_domain_coeffs: Vec<EF>,
-    /// Reserved for precomputed `G^$_C` row weights.
-    ///
-    /// The standalone builder recomputes these from `query_positions` and
-    /// rejects non-empty values so integration code cannot silently assume this
-    /// field drives the relation.
-    pub source_randomness_weights: Vec<EF>,
-    /// Reserved for precomputed zero-padded mask weights.
-    ///
-    /// The standalone builder recomputes these from private OOD points and
-    /// rejects non-empty values so integration code cannot silently assume this
-    /// field drives the relation.
-    pub pad_weights: Vec<EF>,
 }
 
 /// Output linear relation produced by Construction 9.7.
@@ -346,17 +326,6 @@ where
             actual: query_positions.len(),
         });
     }
-    if !claim.source_randomness_weights.is_empty() {
-        return Err(CodeSwitchError::NonEmptySourceRandomnessWeights {
-            actual: claim.source_randomness_weights.len(),
-        });
-    }
-    if !claim.pad_weights.is_empty() {
-        return Err(CodeSwitchError::NonEmptyPadWeights {
-            actual: claim.pad_weights.len(),
-        });
-    }
-
     let source_len = source_encoding.message_len();
     if source_covector.len() != source_len {
         return Err(CodeSwitchError::SourceCovectorLengthMismatch {

@@ -425,27 +425,25 @@ fn source_message_row<F: TwoAdicField>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn code_switch_output_relation_from_rows<F, EF>(
+fn code_switch_output_relation_from_rows<Row, EF>(
     source_message_len: usize,
     source_covector: &[EF],
     auxiliary_covectors: &[Vec<EF>],
     source_randomness_len: usize,
     pad_len: usize,
     rho_ood_points: &[EF],
-    source_rows: &[Vec<F>],
-    source_randomness_rows: &[Vec<F>],
+    source_rows: &[Vec<Row>],
+    source_randomness_rows: &[Vec<Row>],
     claim: &ZkMaskClaim<EF>,
 ) -> CodeSwitchOutputRelation<EF>
 where
-    F: TwoAdicField,
-    EF: ExtensionField<F>,
+    Row: Copy,
+    EF: Field + From<Row>,
 {
     assert_eq!(source_covector.len(), source_message_len);
     assert_eq!(rho_ood_points.len(), claim.ood_coeffs.len());
     assert_eq!(source_rows.len(), claim.in_domain_coeffs.len());
     assert_eq!(source_randomness_rows.len(), claim.in_domain_coeffs.len());
-    assert!(claim.source_randomness_weights.is_empty());
-    assert!(claim.pad_weights.is_empty());
 
     let mut source_covector_out = source_covector
         .iter()
@@ -490,81 +488,6 @@ where
             .zip(randomness_row)
         {
             *dst += coeff * EF::from(entry);
-        }
-    }
-
-    CodeSwitchOutputRelation {
-        source_covector: source_covector_out,
-        auxiliary_covectors: auxiliary_covectors_out,
-        mask_covector,
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn code_switch_output_relation_from_ext_rows<EF>(
-    source_message_len: usize,
-    source_covector: &[EF],
-    auxiliary_covectors: &[Vec<EF>],
-    source_randomness_len: usize,
-    pad_len: usize,
-    rho_ood_points: &[EF],
-    source_rows: &[Vec<EF>],
-    source_randomness_rows: &[Vec<EF>],
-    claim: &ZkMaskClaim<EF>,
-) -> CodeSwitchOutputRelation<EF>
-where
-    EF: Field,
-{
-    assert_eq!(source_covector.len(), source_message_len);
-    assert_eq!(rho_ood_points.len(), claim.ood_coeffs.len());
-    assert_eq!(source_rows.len(), claim.in_domain_coeffs.len());
-    assert_eq!(source_randomness_rows.len(), claim.in_domain_coeffs.len());
-    assert!(claim.source_randomness_weights.is_empty());
-    assert!(claim.pad_weights.is_empty());
-
-    let mut source_covector_out = source_covector
-        .iter()
-        .map(|&x| claim.base_claim_coeff * claim.residual_sumcheck_scale * x)
-        .collect::<Vec<_>>();
-    let auxiliary_covectors_out = auxiliary_covectors
-        .iter()
-        .map(|covector| {
-            covector
-                .iter()
-                .map(|&x| claim.base_claim_coeff * x)
-                .collect()
-        })
-        .collect();
-    let mut mask_covector = EF::zero_vec(source_randomness_len + pad_len);
-
-    for (&rho, &coeff) in rho_ood_points.iter().zip(&claim.ood_coeffs) {
-        let mut power = EF::ONE;
-        for dst in &mut source_covector_out {
-            *dst += coeff * power;
-            power *= rho;
-        }
-        for dst in &mut mask_covector {
-            *dst += coeff * power;
-            power *= rho;
-        }
-    }
-
-    for ((message_row, randomness_row), &coeff) in source_rows
-        .iter()
-        .zip(source_randomness_rows)
-        .zip(&claim.in_domain_coeffs)
-    {
-        assert_eq!(message_row.len(), source_message_len);
-        assert_eq!(randomness_row.len(), source_randomness_len);
-        for (dst, &entry) in source_covector_out.iter_mut().zip(message_row) {
-            *dst += coeff * entry;
-        }
-        for (dst, &entry) in mask_covector
-            .iter_mut()
-            .take(source_randomness_len)
-            .zip(randomness_row)
-        {
-            *dst += coeff * entry;
         }
     }
 
@@ -1002,8 +925,6 @@ where
             residual_sumcheck_scale: source.residual_sumcheck_scale,
             ood_coeffs: coeffs[1..1 + private_ood_answers.len()].to_vec(),
             in_domain_coeffs: coeffs[1 + private_ood_answers.len()..].to_vec(),
-            source_randomness_weights: Vec::new(),
-            pad_weights: Vec::new(),
         };
         let initial_gammas = handoff.randomness.iter().copied().collect::<Vec<_>>();
         let auxiliary_covectors =
@@ -1322,8 +1243,6 @@ where
             residual_sumcheck_scale: source.residual_sumcheck_scale,
             ood_coeffs: coeffs[1..1 + private_ood_answers.len()].to_vec(),
             in_domain_coeffs: coeffs[1 + private_ood_answers.len()..].to_vec(),
-            source_randomness_weights: Vec::new(),
-            pad_weights: Vec::new(),
         };
         let gammas = handoff.randomness.iter().copied().collect::<Vec<_>>();
         let auxiliary_covectors =
@@ -1353,7 +1272,7 @@ where
         };
         let (source_rows, source_randomness_rows) =
             source_rows_for_positions::<EF, _>(&source_layout, &source_positions);
-        let output_relation = code_switch_output_relation_from_ext_rows(
+        let output_relation = code_switch_output_relation_from_rows(
             source.message.len(),
             &source.covector,
             &auxiliary_covectors,
@@ -1755,8 +1674,6 @@ where
             residual_sumcheck_scale: source.residual_sumcheck_scale,
             ood_coeffs: coeffs[1..1 + round_zk_proof.private_ood_answers.len()].to_vec(),
             in_domain_coeffs: coeffs[1 + round_zk_proof.private_ood_answers.len()..].to_vec(),
-            source_randomness_weights: Vec::new(),
-            pad_weights: Vec::new(),
         };
         let mu_prime = batched_claim(
             initial_handoff.claimed_residual,
@@ -2077,8 +1994,6 @@ where
             residual_sumcheck_scale: source.residual_sumcheck_scale,
             ood_coeffs: coeffs[1..1 + round_zk_proof.private_ood_answers.len()].to_vec(),
             in_domain_coeffs: coeffs[1 + round_zk_proof.private_ood_answers.len()..].to_vec(),
-            source_randomness_weights: Vec::new(),
-            pad_weights: Vec::new(),
         };
         let mu_prime = batched_claim(
             prior_handoff.claimed_residual,
@@ -2117,7 +2032,7 @@ where
             prior_round_zk.zk_sumcheck.ell_zk,
             &gammas,
         );
-        let output_relation = code_switch_output_relation_from_ext_rows(
+        let output_relation = code_switch_output_relation_from_rows(
             source.message_len,
             &source.covector,
             &auxiliary_covectors,
@@ -2329,8 +2244,6 @@ mod tests {
             residual_sumcheck_scale: ef(23),
             ood_coeffs: Vec::new(),
             in_domain_coeffs: vec![ef(7)],
-            source_randomness_weights: Vec::new(),
-            pad_weights: Vec::new(),
         };
 
         let relation = code_switch_output_relation_from_rows::<F, EF>(
