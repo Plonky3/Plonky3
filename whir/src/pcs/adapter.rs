@@ -144,6 +144,8 @@ where
 {
     /// Typed nested ZK sumcheck handoff for the next round.
     pub handoff: ZkVerifierHandoff<EF>,
+    /// Construction 9.7 output relation produced by the verified round.
+    pub output_relation: CodeSwitchOutputRelation<EF>,
 }
 
 /// Prefix-ZK state after one code-switch round.
@@ -421,8 +423,8 @@ where
     /// and returns the typed handoff needed by Construction 9.7.
     ///
     /// The method intentionally stops before the WHIR round loop. The next
-    /// implementation step is `round_zk_prefix`, which consumes the returned
-    /// handoff and fills each `WhirRoundProof::zk` payload.
+    /// implementation step is `round0_zk_prefix`, which consumes the returned
+    /// handoff and fills the first `WhirRoundProof::zk` payload.
     pub fn begin_zk_prefix_open<Enc, R>(
         &self,
         mut prover_data: WhirProverData<F, EF, MT, PrefixProver<F, EF>>,
@@ -446,16 +448,16 @@ where
             zk_config.only_prefix,
             "ZK WHIR currently supports only prefix layout"
         );
-        assert_eq!(
-            encoding.message_len(),
-            zk_config.mask_message_len,
-            "ZK encoding message length must match WhirZkConfig",
-        );
         let first_round_zk = self
             .round_parameters
             .first()
             .and_then(|round| round.zk.as_ref())
             .expect("ZK prefix opening requires at least one ZK code-switch round");
+        assert_eq!(
+            encoding.message_len(),
+            first_round_zk.mask_message_len,
+            "ZK encoding message length must match the derived round-0 mask length",
+        );
         let required_query_bound = first_round_zk.mask_query_budget;
         assert!(
             encoding.query_bound() >= required_query_bound,
@@ -514,10 +516,9 @@ where
     /// a fresh mask oracle, records private OOD answers and source/mask openings,
     /// derives the `mu'` relation, and runs the next HVZK residual sumcheck.
     #[allow(clippy::too_many_lines)]
-    pub fn round_zk_prefix<Enc, R>(
+    pub fn round0_zk_prefix<Enc, R>(
         &self,
         state: WhirZkPrefixOpenState<F, EF, Enc, MT>,
-        round_index: usize,
         source_covector: &[EF],
         mask_encoding: &Enc,
         challenger: &mut Challenger,
@@ -529,10 +530,7 @@ where
         R: Rng,
         StandardUniform: Distribution<F>,
     {
-        assert_eq!(
-            round_index, 0,
-            "first ZK round helper currently handles round 0"
-        );
+        let round_index = 0;
         let handoff = state.initial_handoff;
         let source_message = handoff.residual_prover.evals().as_slice().to_vec();
         let num_variables =
@@ -871,6 +869,11 @@ where
             }
             initial_verifier.add_claim(table_idx, polys, evals, challenger);
         }
+        let first_round_zk = self
+            .round_parameters
+            .first()
+            .and_then(|round| round.zk.as_ref())
+            .ok_or(VerifierError::ZkVerifierRequiresPrefixPath)?;
 
         let initial_zk = proof
             .whir
@@ -880,7 +883,7 @@ where
         let initial_handoff = initial_verifier.into_sumcheck::<MT, _>(
             &initial_zk.zk_sumcheck,
             &initial_zk.zk_sumcheck_mask_commitments,
-            zk_config.mask_message_len,
+            first_round_zk.mask_message_len,
             self.params.folding_factor.at_round(0),
             self.starting_folding_pow_bits,
             challenger,
@@ -1071,7 +1074,7 @@ where
             initial_zk.zk_sumcheck.ell_zk,
             &initial_gammas,
         );
-        let _output_relation = code_switch_output_relation_from_rows(
+        let output_relation = code_switch_output_relation_from_rows(
             source.message_len,
             &source.covector,
             &auxiliary_covectors,
@@ -1095,7 +1098,10 @@ where
         )
         .map_err(VerifierError::from)?;
 
-        Ok(WhirZkPrefixVerifierRoundState { handoff })
+        Ok(WhirZkPrefixVerifierRoundState {
+            handoff,
+            output_relation,
+        })
     }
 }
 

@@ -453,40 +453,41 @@ where
             "mask_randomness_len must be positive",
         );
 
-        let round_count = self.round_parameters.len();
-        for round_index in 0..round_count {
-            let target_query_budget = if round_index + 1 < round_count {
-                self.round_parameters[round_index + 1].num_queries
-            } else {
-                self.final_queries
-            };
-            let mask_query_budget = zk.mask_query_budget.unwrap_or(target_query_budget);
-            assert!(
-                mask_query_budget >= target_query_budget,
-                "mask_query_budget must cover all downstream target queries",
-            );
-            let mask_message_len = zk.mask_message_len.max(mask_query_budget);
-            let mask_randomness_len = zk.mask_randomness_len.max(mask_query_budget);
-            let mask_domain_size = ((mask_message_len + mask_randomness_len)
-                << zk.mask_rate_log_inv)
-                .next_power_of_two();
-            assert!(
-                mask_domain_size.ilog2() as usize <= F::TWO_ADICITY,
-                "mask code domain exceeds base-field two-adicity",
-            );
-            let ood_samples = self.round_parameters[round_index].ood_samples;
+        assert!(
+            !self.round_parameters.is_empty(),
+            "Construction 9.7 requires at least one WHIR code-switch round",
+        );
 
-            self.round_parameters[round_index].zk = Some(RoundZkConfig {
-                target_query_budget,
-                mask_query_budget,
-                mask_message_len,
-                mask_randomness_len,
-                ood_samples,
-                mask_domain_size,
-                mask_width: 1,
-                folded_mask_domain_gen: F::two_adic_generator(mask_domain_size.ilog2() as usize),
-            });
-        }
+        let target_query_budget = if self.round_parameters.len() > 1 {
+            self.round_parameters[1].num_queries
+        } else {
+            self.final_queries
+        };
+        let mask_query_budget = zk.mask_query_budget.unwrap_or(target_query_budget);
+        assert!(
+            mask_query_budget >= target_query_budget,
+            "mask_query_budget must cover all downstream target queries",
+        );
+        let mask_message_len = zk.mask_message_len.max(mask_query_budget);
+        let mask_randomness_len = zk.mask_randomness_len.max(mask_query_budget);
+        let mask_domain_size =
+            ((mask_message_len + mask_randomness_len) << zk.mask_rate_log_inv).next_power_of_two();
+        assert!(
+            mask_domain_size.ilog2() as usize <= F::TWO_ADICITY,
+            "mask code domain exceeds base-field two-adicity",
+        );
+        let ood_samples = self.round_parameters[0].ood_samples;
+
+        self.round_parameters[0].zk = Some(RoundZkConfig {
+            target_query_budget,
+            mask_query_budget,
+            mask_message_len,
+            mask_randomness_len,
+            ood_samples,
+            mask_domain_size,
+            mask_width: 1,
+            folded_mask_domain_gen: F::two_adic_generator(mask_domain_size.ilog2() as usize),
+        });
 
         self.zk = Some(zk);
         self
@@ -694,36 +695,46 @@ mod tests {
     #[test]
     fn test_zk_config_derives_round_budgets_from_downstream_queries() {
         let params = default_whir_params();
-        let config = WhirConfig::<F, F, MyChallenger>::new(10, params)
+        let config = WhirConfig::<F, F, MyChallenger>::new(20, params)
             .with_zk_config(WhirZkConfig::prefix_only(4, 2, 1));
 
         assert_eq!(config.zk, Some(WhirZkConfig::prefix_only(4, 2, 1)));
         assert!(
+            config.round_parameters[0].zk.is_some(),
+            "ZK opt-in should derive the first code-switch round config",
+        );
+        assert!(
             config
                 .round_parameters
                 .iter()
-                .all(|round| round.zk.is_some()),
-            "ZK opt-in should derive per-round ZK configs",
+                .skip(1)
+                .all(|round| round.zk.is_none()),
+            "Construction 9.7 PR intentionally scopes ZK config to round 0",
         );
 
-        for round_index in 0..config.round_parameters.len() {
-            let round = &config.round_parameters[round_index];
-            let zk = round.zk.as_ref().unwrap();
-            let expected_target_queries = if round_index + 1 < config.round_parameters.len() {
-                config.round_parameters[round_index + 1].num_queries
-            } else {
-                config.final_queries
-            };
+        let round = &config.round_parameters[0];
+        let zk = round.zk.as_ref().unwrap();
+        let expected_target_queries = if config.round_parameters.len() > 1 {
+            config.round_parameters[1].num_queries
+        } else {
+            config.final_queries
+        };
 
-            assert_eq!(zk.target_query_budget, expected_target_queries);
-            assert_eq!(zk.mask_query_budget, expected_target_queries);
-            assert_eq!(zk.mask_message_len, 4);
-            assert_eq!(zk.mask_randomness_len, 2);
-            assert_eq!(zk.ood_samples, round.ood_samples);
-            assert_eq!(zk.mask_domain_size, 16);
-            assert_eq!(zk.mask_width, 1);
-            assert_eq!(zk.proof_field_overhead(), 16 + round.ood_samples);
-        }
+        assert_eq!(zk.target_query_budget, expected_target_queries);
+        assert_eq!(zk.mask_query_budget, expected_target_queries);
+        let expected_mask_message_len = 4.max(expected_target_queries);
+        let expected_mask_randomness_len = 2.max(expected_target_queries);
+        let expected_mask_domain_size =
+            ((expected_mask_message_len + expected_mask_randomness_len) << 1).next_power_of_two();
+        assert_eq!(zk.mask_message_len, expected_mask_message_len);
+        assert_eq!(zk.mask_randomness_len, expected_mask_randomness_len);
+        assert_eq!(zk.ood_samples, round.ood_samples);
+        assert_eq!(zk.mask_domain_size, expected_mask_domain_size);
+        assert_eq!(zk.mask_width, 1);
+        assert_eq!(
+            zk.proof_field_overhead(),
+            expected_mask_domain_size + round.ood_samples,
+        );
     }
 
     #[test]
@@ -731,10 +742,11 @@ mod tests {
         let params = default_whir_params();
         let mut config = WhirConfig::<F, F, MyChallenger>::new(20, params);
         config.final_queries = 5;
+        config.round_parameters.truncate(1);
 
         let config = config.with_zk_config(WhirZkConfig::prefix_only(4, 2, 1));
-        let final_intermediate_round = config.round_parameters.last().unwrap();
-        let zk = final_intermediate_round.zk.as_ref().unwrap();
+        let first_round = config.round_parameters.first().unwrap();
+        let zk = first_round.zk.as_ref().unwrap();
 
         assert_eq!(zk.target_query_budget, 5);
         assert_eq!(zk.mask_query_budget, 5);

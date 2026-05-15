@@ -289,7 +289,11 @@ where
         EF: TwoAdicField,
         F: TwoAdicField,
     {
-        let zk_ell = config.zk.as_ref().map(|zk| zk.mask_message_len);
+        let zk_ell = config
+            .round_parameters
+            .first()
+            .and_then(|round| round.zk.as_ref())
+            .map(|round_zk| round_zk.mask_message_len);
 
         // Initial combination randomness and first sumcheck phase.
         self.sample(1, Sample::InitialCombinationRandomness);
@@ -330,8 +334,12 @@ where
 
             // Draw STIR query positions and provide opening data.
             if let Some(round_zk) = &r.zk {
+                let source_domain_size = (r.domain_size >> config.rs_reduction_factor(round))
+                    >> config.folding_factor.at_round(round + 1);
+                let source_domain_size_bytes =
+                    ((source_domain_size * 2 - 1).ilog2() as usize).div_ceil(8);
                 self.sample(
-                    round_zk.mask_query_budget * domain_size_bytes,
+                    round_zk.mask_query_budget * source_domain_size_bytes,
                     Sample::StirQueries,
                 );
                 self.hint(Hint::StirQueries);

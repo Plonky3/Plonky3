@@ -754,7 +754,8 @@ mod zk_prefix_api_tests {
 
     #[test]
     fn begin_zk_prefix_open_records_initial_handoff() {
-        let (pcs, witness, protocol, required_query_bound, expected_mask_domain) = setup();
+        let (pcs, witness, protocol, required_query_bound, mask_message_len, expected_mask_domain) =
+            setup();
 
         let mut prover_challenger = challenger();
         let mut domain_separator = DomainSeparator::new(vec![]);
@@ -769,7 +770,7 @@ mod zk_prefix_api_tests {
             );
         let encoding = ReedSolomonZkEncoding::new(
             required_query_bound,
-            ZK_MESSAGE_LEN,
+            mask_message_len,
             expected_mask_domain,
             MyDft::default(),
         );
@@ -789,7 +790,7 @@ mod zk_prefix_api_tests {
             .as_ref()
             .expect("ZK prefix entrypoint must record the initial ZK transcript");
         assert_eq!(state.proof.evals.len(), protocol.num_openings());
-        assert_eq!(initial_zk.zk_sumcheck.ell_zk, ZK_MESSAGE_LEN);
+        assert_eq!(initial_zk.zk_sumcheck.ell_zk, mask_message_len);
         assert_eq!(initial_zk.zk_sumcheck.round_coefficients.len(), FOLDING);
         assert_eq!(initial_zk.zk_sumcheck_mask_commitments.len(), FOLDING);
         assert_eq!(state.initial_handoff.randomness.num_variables(), FOLDING);
@@ -797,8 +798,9 @@ mod zk_prefix_api_tests {
     }
 
     #[test]
-    fn round_zk_prefix_populates_first_round_payload() {
-        let (pcs, witness, protocol, required_query_bound, expected_mask_domain) = setup();
+    fn round0_zk_prefix_populates_first_round_payload() {
+        let (pcs, witness, protocol, required_query_bound, mask_message_len, expected_mask_domain) =
+            setup();
 
         let mut prover_challenger = challenger();
         let mut domain_separator = DomainSeparator::new(vec![]);
@@ -813,7 +815,7 @@ mod zk_prefix_api_tests {
             );
         let initial_mask_encoding = ReedSolomonZkEncoding::new(
             required_query_bound,
-            ZK_MESSAGE_LEN,
+            mask_message_len,
             expected_mask_domain,
             MyDft::default(),
         );
@@ -854,9 +856,8 @@ mod zk_prefix_api_tests {
             MyDft::default(),
         );
 
-        let round_state = pcs.round_zk_prefix(
+        let round_state = pcs.round0_zk_prefix(
             state,
-            0,
             &source_covector,
             &round_mask_encoding,
             &mut prover_challenger,
@@ -942,12 +943,17 @@ mod zk_prefix_api_tests {
             verifier_state.handoff.claimed_residual,
             round_state.handoff.residual_prover.claimed_sum() + nested_mask_residual,
         );
+        assert_eq!(
+            verifier_state.output_relation.source_covector.len(),
+            source_message.len(),
+        );
     }
 
     #[test]
     #[should_panic(expected = "source randomness needs a source-oracle randomness handoff")]
-    fn round_zk_prefix_rejects_nonzero_source_randomness_for_first_target_oracle() {
-        let (pcs, witness, protocol, required_query_bound, expected_mask_domain) = setup();
+    fn round0_zk_prefix_rejects_nonzero_source_randomness_for_first_target_oracle() {
+        let (pcs, witness, protocol, required_query_bound, mask_message_len, expected_mask_domain) =
+            setup();
 
         let mut prover_challenger = challenger();
         let mut domain_separator = DomainSeparator::new(vec![]);
@@ -962,7 +968,7 @@ mod zk_prefix_api_tests {
             );
         let initial_mask_encoding = ReedSolomonZkEncoding::new(
             required_query_bound,
-            ZK_MESSAGE_LEN,
+            mask_message_len,
             expected_mask_domain,
             MyDft::default(),
         );
@@ -1025,8 +1031,9 @@ mod zk_prefix_api_tests {
     #[test]
     #[should_panic(expected = "ZK encoding codeword length must match the derived mask domain")]
     fn begin_zk_prefix_open_rejects_encoding_domain_mismatch() {
-        let (pcs, witness, protocol, required_query_bound, expected_mask_domain) = setup();
-        let too_small_domain = (ZK_MESSAGE_LEN + required_query_bound).next_power_of_two();
+        let (pcs, witness, protocol, required_query_bound, mask_message_len, expected_mask_domain) =
+            setup();
+        let too_small_domain = (mask_message_len + required_query_bound).next_power_of_two();
         assert!(
             too_small_domain < expected_mask_domain,
             "fixture should reproduce the old undersized encoding domain",
@@ -1045,50 +1052,8 @@ mod zk_prefix_api_tests {
             );
         let encoding = ReedSolomonZkEncoding::new(
             required_query_bound,
-            ZK_MESSAGE_LEN,
+            mask_message_len,
             too_small_domain,
-            MyDft::default(),
-        );
-        let mut zk_rng = SmallRng::seed_from_u64(7);
-        let _ = pcs.begin_zk_prefix_open(
-            prover_data,
-            &protocol,
-            &mut prover_challenger,
-            encoding,
-            &mut zk_rng,
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "ZK encoding codeword length must match the derived mask domain")]
-    fn begin_zk_prefix_open_rejects_later_round_domain_for_initial_handoff() {
-        let (mut pcs, witness, protocol, required_query_bound, expected_mask_domain) = setup();
-        assert!(
-            pcs.config.round_parameters.len() > 1,
-            "fixture should contain a later round to distinguish first-consumer and max domains",
-        );
-        let later_domain = expected_mask_domain * 2;
-        pcs.config.round_parameters[1]
-            .zk
-            .as_mut()
-            .expect("ZK config should be derived for the later round")
-            .mask_domain_size = later_domain;
-
-        let mut prover_challenger = challenger();
-        let mut domain_separator = DomainSeparator::new(vec![]);
-        pcs.add_domain_separator::<8>(&mut domain_separator);
-        domain_separator.observe_domain_separator(&mut prover_challenger);
-
-        let (_commitment, prover_data) =
-            <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
-                &pcs,
-                witness,
-                &mut prover_challenger,
-            );
-        let encoding = ReedSolomonZkEncoding::new(
-            required_query_bound,
-            ZK_MESSAGE_LEN,
-            later_domain,
             MyDft::default(),
         );
         let mut zk_rng = SmallRng::seed_from_u64(7);
@@ -1105,6 +1070,7 @@ mod zk_prefix_api_tests {
         TestWhirPcs<L>,
         crate::sumcheck::layout::Witness<F>,
         OpeningProtocol,
+        usize,
         usize,
         usize,
     ) {
@@ -1140,6 +1106,12 @@ mod zk_prefix_api_tests {
             .and_then(|round| round.zk.as_ref())
             .map(|zk| zk.mask_query_budget)
             .expect("ZK config should derive a first-round mask query budget");
+        let mask_message_len = config
+            .round_parameters
+            .first()
+            .and_then(|round| round.zk.as_ref())
+            .map(|zk| zk.mask_message_len)
+            .expect("ZK config should derive a first-round mask message length");
         let expected_mask_domain = config
             .round_parameters
             .first()
@@ -1153,6 +1125,7 @@ mod zk_prefix_api_tests {
             witness,
             protocol,
             required_query_bound,
+            mask_message_len,
             expected_mask_domain,
         )
     }
@@ -1277,7 +1250,7 @@ mod zk_prefix_acceptance_tests {
         );
         let initial_mask_encoding = ReedSolomonZkEncoding::new(
             round_zk.mask_query_budget,
-            ZK_MESSAGE_LEN,
+            round_zk.mask_message_len,
             round_zk.mask_domain_size,
             MyDft::default(),
         );
@@ -1317,9 +1290,8 @@ mod zk_prefix_acceptance_tests {
             round_zk.mask_domain_size,
             MyDft::default(),
         );
-        let round_state = pcs.round_zk_prefix(
+        let round_state = pcs.round0_zk_prefix(
             state,
-            0,
             &source_covector,
             &round_mask_encoding,
             &mut prover_challenger,
