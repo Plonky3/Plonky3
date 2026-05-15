@@ -16,9 +16,9 @@ transpose = "0.2"
 
 [dev-dependencies]
 criterion.workspace = true
-p3-baby-bear.workspace = true
-p3-field.workspace = true
-p3-goldilocks.workspace = true
+p3-baby-bear = { path = "../baby-bear" }
+p3-field = { path = "../field" }
+p3-goldilocks = { path = "../goldilocks" }
 proptest.workspace = true
 rand.workspace = true
 serde_json.workspace = true
