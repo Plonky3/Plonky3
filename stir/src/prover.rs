@@ -98,9 +98,13 @@ where
         let folding_pow_witness = challenger.grind(rc.folding_pow_bits);
         let gamma: EF = challenger.sample_algebra_element();
 
+        // `fold_codeword` interpolates at subgroup coordinates `g^{·}`. The codeword
+        // lives on the coset `current_shift · <g>`, so passing `gamma / current_shift`
+        // yields exactly Construction 4.5's coset fold at challenge `gamma`.
+        let fold_beta = gamma * EF::from(current_shift.inverse());
         let folded_codeword = fold_codeword::<F, EF>(
             &current_oracle_codeword,
-            gamma,
+            fold_beta,
             log_arity,
             current_log_domain,
         );
@@ -257,9 +261,12 @@ where
     let final_folding_pow_witness = challenger.grind(config.final_folding_pow_bits);
     let final_gamma: EF = challenger.sample_algebra_element();
 
+    // See the round-fold note: `gamma / current_shift` over subgroup coordinates is
+    // the paper's coset fold at challenge `gamma`.
+    let final_fold_beta = final_gamma * EF::from(current_shift.inverse());
     let final_codeword = fold_codeword::<F, EF>(
         &current_oracle_codeword,
-        final_gamma,
+        final_fold_beta,
         final_log_arity,
         current_log_domain,
     );

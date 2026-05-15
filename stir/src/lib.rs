@@ -19,10 +19,6 @@
 //! Several deliberate implementation choices differ from the construction stated in
 //! the paper:
 //!
-//! - **Subgroup-coordinate folding.** [`utils::fold_codeword`] uses subgroup x-coordinates
-//!   `g^{j + l·new_height}` rather than the paper's coset coordinates `α·g^{j + l·new_height}`.
-//!   Both prover and verifier follow the same convention end-to-end; soundness is preserved
-//!   because the fold challenge is uniform.
 //! - **Prover-assisted Ans/shake check.** The paper's verifier interpolates `Ans` itself.
 //!   Here the prover sends `Ans` and a shake polynomial, and the verifier checks the
 //!   identity at a transcript-derived random point. The Schwartz–Zippel error of this check

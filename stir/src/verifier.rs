@@ -210,6 +210,10 @@ where
         let gamma: EF = challenger.sample_algebra_element();
         challenger.observe(rp.commitment.clone());
 
+        // Mirror the prover: fold at coset coordinates via `gamma / current_shift`
+        // (`fold_fiber` interpolates at subgroup coordinates).
+        let fold_beta = gamma * EF::from(current_shift.inverse());
+
         // Step 2: query/OOD PoW. Placed BEFORE OOD sampling so PoW gates re-rolls of the
         // OOD set; mirrors the prover order so the transcript stays in sync.
         if !challenger.check_witness(rc.pow_bits, rp.pow_witness) {
@@ -302,7 +306,7 @@ where
             .ok_or(StirError::InvalidRoundConsistency { round, query: q })?;
 
             let fold_val =
-                fold_fiber::<F, EF>(&current_fiber, j, fold_log_domain, log_arity, gamma);
+                fold_fiber::<F, EF>(&current_fiber, j, fold_log_domain, log_arity, fold_beta);
 
             if seen_query_indices.insert(j) {
                 query_points.push(fold_point);
@@ -378,6 +382,8 @@ where
     }
 
     let final_gamma: EF = challenger.sample_algebra_element();
+    // See the round-fold note: coset fold at `final_gamma` via `final_gamma / current_shift`.
+    let final_fold_beta = final_gamma * EF::from(current_shift.inverse());
 
     let expected_final_len = config.final_poly_len();
     if proof.final_polynomial.len() != expected_final_len {
@@ -449,7 +455,7 @@ where
             j,
             final_new_log_domain,
             final_log_arity,
-            final_gamma,
+            final_fold_beta,
         );
 
         let x_j = EF::from(final_new_shift) * EF::from(final_gen.exp_u64(j as u64));

@@ -320,32 +320,17 @@ pub fn check_shake_consistency<F: Field>(
 /// x_l = g^{j + l * new_height}   (l = 0, …, k-1)
 /// ```
 ///
-/// # Convention vs the STIR paper (eprint 2024/390)
+/// # Subgroup coordinates are an internal optimization
 ///
-/// Construction 4.5 of the paper defines `Fold(f, β)(y)` as the Lagrange interpolation of
-/// `(x, f(x))` for `x ∈ q⁻¹(y)` evaluated at `β`, where `q(x) = x^k`. With **natural** coset
-/// coordinates (i.e. including the shift `α`), the preimages of `y = (α·g^j)^k` are
-/// `α·g^{j + l·new_height}`. The polynomial implemented here uses **subgroup** coordinates
-/// (`g^{j + l·new_height}` without the shift `α`), which by linearity of Lagrange
-/// interpolation in the challenge corresponds to the natural-coset fold at challenge
-/// `β · α^{-1}` (for arity 2 — the algebraic relation generalises to higher arity via
-/// `α^{(k-1)}` scaling that cancels in barycentric form).
+/// Construction 4.5 defines `Fold(f, β)(y)` over **coset** preimages
+/// `α·g^{j + l·new_height}` (`α` = domain shift). Interpolating at subgroup
+/// coordinates instead (no `α`) lets the barycentric weights be precomputed once
+/// and reused across all `j` (the `α^{j·(k-1)}` factor cancels in the ratio).
 ///
-/// Soundness is preserved because `β` is uniformly random in the challenge field and so is
-/// the rescaled challenge. Both prover and verifier follow the same convention end-to-end
-/// (`fold_codeword`, `fold_fiber`, `coeffs_from_codeword(_, _, fold_shift)`,
-/// `materialize_virtual_fiber`), so the polynomial recovered from `fold_coeffs` is
-/// well-defined and consistent across the protocol.
-///
-/// # Optimisation for arity 2
-///
-/// When `log_arity == 1`, the Lagrange formula simplifies to:
-///
-/// ```text
-/// fold(j) = (lo + hi) / 2 + beta * (lo - hi) / (2 * g^j)
-/// ```
-///
-/// which is computed via `halve_inv_powers[j] = (1/2) * g^{-j}`.
+/// Because the y-values are identical and the x-nodes scale by `α`,
+/// `P_coset(X) = P_subgroup(X/α)` exactly for any arity. Callers therefore pass
+/// `β = γ/α` to obtain Construction 4.5's coset fold at challenge `γ`; this crate's
+/// prover and verifier both do so, so the realized fold matches the paper literally.
 pub fn fold_codeword<F: TwoAdicField, EF: ExtensionField<F>>(
     codeword: &[EF],
     beta: EF,
