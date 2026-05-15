@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 
 use p3_poseidon2::{
     ExternalLayer, ExternalLayerConstants, ExternalLayerConstructor, InternalLayer,
-    InternalLayerConstructor, poseidon2_round_numbers_128,
+    InternalLayerConstructor, Poseidon2, poseidon2_round_numbers_128,
 };
 use p3_symmetric::{CryptographicPermutation, Permutation};
 use rand::distr::{Distribution, StandardUniform};
@@ -21,7 +21,10 @@ use rand::{Rng, RngExt};
 use super::packing::PackedGoldilocksNeon;
 use super::poseidon2_asm::*;
 use super::utils::{pack_lanes, unpack_lanes};
-use crate::{Goldilocks, MATRIX_DIAG_20_GOLDILOCKS, P};
+use crate::{
+    Goldilocks, MATRIX_DIAG_20_GOLDILOCKS, P, Poseidon2ExternalLayerGoldilocks,
+    Poseidon2InternalLayerGoldilocks,
+};
 
 /// Degree of the chosen permutation polynomial for Goldilocks.
 const GOLDILOCKS_S_BOX_DEGREE: u64 = 7;
@@ -302,6 +305,13 @@ pub struct Poseidon2GoldilocksFused<const WIDTH: usize> {
     internal_constants_raw: Vec<u64>,
     initial_constants_raw: Vec<[u64; WIDTH]>,
     terminal_constants_raw: Vec<[u64; WIDTH]>,
+    generic: Poseidon2<
+        Goldilocks,
+        Poseidon2ExternalLayerGoldilocks<WIDTH>,
+        Poseidon2InternalLayerGoldilocks,
+        WIDTH,
+        GOLDILOCKS_S_BOX_DEGREE,
+    >,
 }
 
 /// Reduce a `Goldilocks::value` to canonical form. One subtraction suffices because
@@ -330,10 +340,12 @@ impl<const WIDTH: usize> Poseidon2GoldilocksFused<WIDTH> {
             .iter()
             .map(|rc| core::array::from_fn(|i| to_canonical_u64(rc[i].value)))
             .collect();
+        let generic = Poseidon2::new(external_constants.clone(), internal_constants.to_vec());
         Self {
             internal_constants_raw,
             initial_constants_raw,
             terminal_constants_raw,
+            generic,
         }
     }
 
@@ -409,12 +421,9 @@ impl Permutation<[Goldilocks; 20]> for Poseidon2GoldilocksFused<20> {
 impl CryptographicPermutation<[Goldilocks; 20]> for Poseidon2GoldilocksFused<20> {}
 
 impl Permutation<[PackedGoldilocksNeon; 8]> for Poseidon2GoldilocksFused<8> {
+    #[inline]
     fn permute_mut(&self, state: &mut [PackedGoldilocksNeon; 8]) {
-        let (mut lane0, mut lane1) = unpack_lanes(state);
-        external_initial_permute_dual_w8(&mut lane0, &mut lane1, &self.initial_constants_raw);
-        internal_permute_split_dual_w8(&mut lane0, &mut lane1, &self.internal_constants_raw);
-        external_terminal_permute_dual_w8(&mut lane0, &mut lane1, &self.terminal_constants_raw);
-        pack_lanes(state, &lane0, &lane1);
+        self.generic.permute_mut(state);
     }
 }
 

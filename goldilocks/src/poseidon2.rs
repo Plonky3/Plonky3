@@ -959,7 +959,7 @@ impl<A: Algebra<Goldilocks> + InjectiveMonomial<GOLDILOCKS_S_BOX_DEGREE>>
 }
 
 /// The external layers of the Poseidon2 permutation.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Poseidon2ExternalLayerGoldilocks<const WIDTH: usize> {
     pub(crate) external_constants: ExternalLayerConstants<Goldilocks, WIDTH>,
 }
