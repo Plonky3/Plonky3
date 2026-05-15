@@ -20,12 +20,12 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use super::{
-    CodeSwitchError, RoundZkConfig, ZkMaskClaim, batched_claim, batching_coefficients,
-    output_relation, private_ood_answer, private_ood_answers, simulated_verifier_view,
+    CodeSwitchError, RoundZkConfig, ZkMaskClaim, batched_claim, output_relation,
+    private_ood_answers, simulated_verifier_view,
 };
 use crate::sumcheck::zk::test_helpers::{MyChallenger, MyMmcs, make_setup};
 use crate::sumcheck::zk::{ZkVerifier, simulate_classic_unpacked};
-use crate::utils::eval_ze_star_n;
+use crate::utils::{eval_ze_star_n, padded_ood_t1};
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -140,7 +140,7 @@ fn test_construction_9_7_mu_prime_identity_n0() {
 
     let nu_dim = 1 + t_ood + t * iota;
     let rho_batch = ef(77);
-    let nu = batching_coefficients(rho_batch, nu_dim);
+    let nu = rho_batch.powers().collect_n(nu_dim);
     let claim = ZkMaskClaim {
         base_claim_coeff: nu[0],
         residual_sumcheck_scale: EF::ONE,
@@ -233,7 +233,7 @@ fn test_construction_9_7_mu_prime_identity_n2() {
 
     let nu_dim = 1 + t_ood + t * iota;
     let rho_batch = ef(55);
-    let nu = batching_coefficients(rho_batch, nu_dim);
+    let nu = rho_batch.powers().collect_n(nu_dim);
     let claim = ZkMaskClaim {
         base_claim_coeff: nu[0],
         residual_sumcheck_scale: EF::ONE,
@@ -314,7 +314,7 @@ fn test_construction_9_7_mu_prime_identity_iota2() {
     }
 
     let nu_dim = 1 + t_ood + t * iota;
-    let nu = batching_coefficients(ef(13), nu_dim);
+    let nu = ef(13).powers().collect_n(nu_dim);
     let claim = ZkMaskClaim {
         base_claim_coeff: nu[0],
         residual_sumcheck_scale: EF::ONE,
@@ -382,7 +382,7 @@ fn test_construction_9_7_mu_prime_identity_eps_scaled_handoff() {
     let mu = eps * inner_product(&f, &sl);
 
     let rho_ood_points = [ef(31)];
-    let y = [private_ood_answer(
+    let y = [padded_ood_t1(
         rho_ood_points[0],
         &f,
         &[r.clone(), s_pad.clone()].concat(),
@@ -391,7 +391,7 @@ fn test_construction_9_7_mu_prime_identity_eps_scaled_handoff() {
     let query_position = 2;
     let source_opening = f_codeword[query_position];
 
-    let nu = batching_coefficients(ef(17), 1 + t_ood + t * iota);
+    let nu = ef(17).powers().collect_n(1 + t_ood + t * iota);
 
     let claim = ZkMaskClaim {
         base_claim_coeff: nu[0],
@@ -485,7 +485,7 @@ fn test_eps_scaled_handoff_does_not_scale_auxiliary_covectors() {
 
     let query_position = 4;
     let source_opening = f_codeword[query_position];
-    let nu = batching_coefficients(ef(41), 1 + t_ood + t * iota);
+    let nu = ef(41).powers().collect_n(1 + t_ood + t * iota);
     let claim = ZkMaskClaim {
         base_claim_coeff: nu[0],
         residual_sumcheck_scale: eps,
@@ -538,7 +538,7 @@ fn test_private_ood_answer_consistency() {
     let rho = ef(17);
 
     let from_concat = eval_ze_star_n(rho, &concat);
-    let from_padded = private_ood_answer(rho, &f, &[r.clone(), s_pad.clone()].concat());
+    let from_padded = padded_ood_t1(rho, &f, &[r.clone(), s_pad.clone()].concat());
 
     assert_eq!(
         from_concat, from_padded,
@@ -560,7 +560,7 @@ fn test_private_ood_answer_consistency() {
 #[test]
 fn test_batching_zero_evader_powers() {
     let rho = ef(5);
-    let nu = batching_coefficients(rho, 4);
+    let nu = rho.powers().collect_n(4);
 
     assert_eq!(nu[0], EF::ONE);
     assert_eq!(nu[1], rho);
@@ -577,7 +577,7 @@ fn test_private_ood_answers_matches_single_answer_helper() {
     let answers = private_ood_answers(&points, &f, &mask);
     let expected: Vec<EF> = points
         .iter()
-        .map(|&rho| private_ood_answer(rho, &f, &mask))
+        .map(|&rho| padded_ood_t1(rho, &f, &mask))
         .collect();
 
     assert_eq!(answers, expected);
@@ -644,7 +644,7 @@ fn test_simulated_verifier_view_matches_code_switch_relation() {
         .map(|&position| f_codeword[position])
         .collect();
 
-    let nu = batching_coefficients(ef(43), 1 + t_ood + t * iota);
+    let nu = ef(43).powers().collect_n(1 + t_ood + t * iota);
     let claim = ZkMaskClaim {
         base_claim_coeff: nu[0],
         residual_sumcheck_scale: eps,
@@ -747,7 +747,9 @@ fn test_zk_sumcheck_simulator_eps_handoff_to_code_switch_view() {
 
     let rho_ood_points = [ef(37), ef(41)];
     let private_ood = private_ood_answers(&rho_ood_points, &source_message, &mask_message);
-    let nu = batching_coefficients(ef(43), 1 + rho_ood_points.len() + source_openings.len());
+    let nu = ef(43)
+        .powers()
+        .collect_n(1 + rho_ood_points.len() + source_openings.len());
     let claim = ZkMaskClaim {
         base_claim_coeff: nu[0],
         residual_sumcheck_scale: verifier_handoff.eps,
@@ -788,22 +790,24 @@ fn test_zk_sumcheck_simulator_eps_handoff_to_code_switch_view() {
 }
 
 #[test]
-fn test_composed_simulator_components_program_code_switch_view() {
-    assert!(assert_composed_simulator_components_program_code_switch_view(101));
+fn test_programmable_simulator_components_for_zk_source_view() {
+    assert!(assert_programmable_simulator_components_for_zk_source_view(
+        101
+    ));
 }
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(8))]
 
     #[test]
-    fn prop_composed_simulator_components_program_code_switch_view(seed in 0_u64..64) {
-        prop_assume!(assert_composed_simulator_components_program_code_switch_view(
+    fn prop_programmable_simulator_components_for_zk_source_view(seed in 0_u64..64) {
+        prop_assume!(assert_programmable_simulator_components_for_zk_source_view(
             seed.wrapping_add(101),
         ));
     }
 }
 
-fn assert_composed_simulator_components_program_code_switch_view(seed: u64) -> bool {
+fn assert_programmable_simulator_components_for_zk_source_view(seed: u64) -> bool {
     let ell_zk = 4;
     let folding_factor = 2;
     let (perm, mmcs, sumcheck_encoding) = make_setup(seed, ell_zk);
@@ -947,7 +951,9 @@ fn assert_composed_simulator_components_program_code_switch_view(seed: u64) -> b
         "witness-independent code-switch masks should couple under matched RNG",
     );
 
-    let nu = batching_coefficients(ef(43), 1 + rho_ood_points.len() + query_positions.len());
+    let nu = ef(43)
+        .powers()
+        .collect_n(1 + rho_ood_points.len() + query_positions.len());
     let claim = ZkMaskClaim {
         base_claim_coeff: nu[0],
         residual_sumcheck_scale: verifier_handoff.eps,
@@ -979,6 +985,77 @@ fn assert_composed_simulator_components_program_code_switch_view(seed: u64) -> b
     );
 
     true
+}
+
+#[test]
+fn test_round0_zero_randomness_source_view_is_deterministic() {
+    let source_randomness_len = 0;
+    let pad_len = 1;
+    let source_enc = ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
+        source_randomness_len,
+        3,
+        8,
+        Radix2Dit::default(),
+    );
+    let source_message = vec![ef(4), ef(6), ef(10)];
+    let source_randomness = Vec::new();
+    let source_codeword = source_enc.encode_with_randomness(&source_message, &source_randomness);
+    let query_positions = [1_usize, 4_usize];
+    let source_openings = query_positions
+        .iter()
+        .map(|&position| source_codeword.values[position])
+        .collect::<Vec<_>>();
+
+    let source_covector = vec![ef(7), ef(11), ef(13)];
+    let inherited_claim = inner_product(&source_message, &source_covector);
+    let rho_ood_points = [ef(37)];
+    let target_ood = ef(91);
+    let s_pad = vec![solve_pad_for_private_ood(
+        rho_ood_points[0],
+        &source_message,
+        &source_randomness,
+        target_ood,
+    )];
+    let mask_message = s_pad;
+    assert_eq!(mask_message.len(), pad_len);
+    let private_ood = private_ood_answers(&rho_ood_points, &source_message, &mask_message);
+    assert_eq!(private_ood, vec![target_ood]);
+
+    let nu = ef(43)
+        .powers()
+        .collect_n(1 + rho_ood_points.len() + query_positions.len());
+    let claim = ZkMaskClaim {
+        base_claim_coeff: nu[0],
+        residual_sumcheck_scale: EF::ONE,
+        ood_coeffs: nu[1..1 + rho_ood_points.len()].to_vec(),
+        in_domain_coeffs: nu[1 + rho_ood_points.len()..].to_vec(),
+    };
+
+    // This mirrors the actual round-0 source shape: the source oracle has no
+    // encoding randomness, so source openings are deterministic rather than
+    // simulated via `ZkEncoding::simulate`. The only programmable randomized
+    // part at this boundary is the private OOD mask contribution.
+    let view = simulated_verifier_view::<EF, EF, _>(
+        &source_enc,
+        inherited_claim,
+        &source_covector,
+        &[],
+        source_randomness_len,
+        pad_len,
+        &rho_ood_points,
+        &query_positions,
+        &private_ood,
+        &source_openings,
+        &claim,
+    )
+    .expect("round-0 zero-randomness view should have valid dimensions");
+
+    assert_eq!(
+        view.output_relation
+            .evaluate(&source_message, &[], &mask_message)
+            .expect("round-0 witness should satisfy the output relation"),
+        view.mu_prime,
+    );
 }
 
 #[test]

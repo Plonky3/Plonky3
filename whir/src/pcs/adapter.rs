@@ -20,8 +20,7 @@ use super::prover::WhirProver;
 use super::verifier::WhirVerifier;
 use super::verifier::errors::VerifierError;
 use crate::pcs::code_switch::{
-    CodeSwitchOutputRelation, ZkMaskClaim, batched_claim, batching_coefficients,
-    private_ood_answers,
+    CodeSwitchOutputRelation, ZkMaskClaim, batched_claim, private_ood_answers,
 };
 use crate::pcs::committer::writer::commit_extension;
 use crate::pcs::proof::{PcsProof, QueryOpening, WhirInitialZkProof, WhirRoundZkProof};
@@ -610,6 +609,11 @@ where
             source.randomness_len, 0,
             "ZK code-switch source randomness needs a source-oracle randomness handoff",
         );
+        // Round 0 consumes Plonky3's existing folded WHIR target oracle, which is
+        // committed plainly via `commit_extension` and therefore has no encoding
+        // randomness. Later rounds need a ZK-aware source/target commitment and
+        // randomness handoff; that belongs to the full HidingWhirPcs composition
+        // tracked in #1589.
         let source_layout = WhirFoldedSourceLayout {
             message_len: source.message.len(),
             domain_size: source.domain_size,
@@ -643,6 +647,11 @@ where
             folding_factor_next,
             inv_rate,
         );
+        // This target oracle is the existing plain WHIR folded commitment. The
+        // fresh Construction 9.7 mask hides the private OOD answer, but in-domain
+        // source openings remain deterministic in this round-0 boundary. A fully
+        // hiding target oracle needs a future `commit_extension_zk`-style path as
+        // part of #1589's end-to-end HidingWhirPcs composition.
         challenger.observe(target_root.clone());
         proof.whir.rounds[round_index].commitment = Some(target_root);
 
@@ -715,8 +724,8 @@ where
         }
 
         let batching_dim = 1 + private_ood_answers.len() + source_openings.len();
-        let batching_challenge = challenger.sample_algebra_element();
-        let coeffs = batching_coefficients(batching_challenge, batching_dim);
+        let batching_challenge: EF = challenger.sample_algebra_element();
+        let coeffs = batching_challenge.powers().collect_n(batching_dim);
         let claim = ZkMaskClaim {
             base_claim_coeff: coeffs[0],
             residual_sumcheck_scale: source.residual_sumcheck_scale,
@@ -1032,8 +1041,8 @@ where
         }
 
         let batching_dim = 1 + round_zk_proof.private_ood_answers.len() + source_openings.len();
-        let batching_challenge = challenger.sample_algebra_element();
-        let coeffs = batching_coefficients(batching_challenge, batching_dim);
+        let batching_challenge: EF = challenger.sample_algebra_element();
+        let coeffs = batching_challenge.powers().collect_n(batching_dim);
         let claim = ZkMaskClaim {
             base_claim_coeff: coeffs[0],
             residual_sumcheck_scale: source.residual_sumcheck_scale,

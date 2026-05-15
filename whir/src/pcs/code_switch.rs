@@ -36,7 +36,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_field::Field;
+use p3_field::{Field, dot_product};
 use p3_zk_codes::LinearZkEncoding;
 use thiserror::Error;
 
@@ -181,7 +181,10 @@ impl<EF: Field> CodeSwitchOutputRelation<EF> {
             });
         }
 
-        let mut value = inner_product(source_message, &self.source_covector);
+        let mut value = dot_product::<EF, _, _>(
+            source_message.iter().copied(),
+            self.source_covector.iter().copied(),
+        );
         for (index, (witness, covector)) in auxiliary_witnesses
             .iter()
             .zip(&self.auxiliary_covectors)
@@ -194,42 +197,15 @@ impl<EF: Field> CodeSwitchOutputRelation<EF> {
                     actual: witness.len(),
                 });
             }
-            value += inner_product(witness, covector);
+            value += dot_product::<EF, _, _>(witness.iter().copied(), covector.iter().copied());
         }
-        value += inner_product(mask_message, &self.mask_covector);
+        value += dot_product::<EF, _, _>(
+            mask_message.iter().copied(),
+            self.mask_covector.iter().copied(),
+        );
 
         Ok(value)
     }
-}
-
-#[inline]
-fn inner_product<EF: Field>(a: &[EF], b: &[EF]) -> EF {
-    a.iter().zip(b).map(|(&x, &y)| x * y).sum()
-}
-
-/// Returns `(1, rho, rho^2, ..., rho^{dim - 1})`.
-///
-/// Construction 9.7 uses these coefficients to batch the inherited claim,
-/// private OOD answers, and in-domain source openings into a single output
-/// relation.
-#[must_use]
-pub fn batching_coefficients<EF: Field>(rho: EF, dim: usize) -> Vec<EF> {
-    let mut coeffs = Vec::with_capacity(dim);
-    let mut power = EF::ONE;
-    for _ in 0..dim {
-        coeffs.push(power);
-        power *= rho;
-    }
-    coeffs
-}
-
-/// Computes one private OOD answer from Construction 9.7.
-///
-/// This is `ze_ood(rho) · (f, r, s_pad)^T`, represented as a padded
-/// zero-evader evaluation of `(source_message || mask_message)`.
-#[inline]
-pub fn private_ood_answer<EF: Field>(rho: EF, source_message: &[EF], mask_message: &[EF]) -> EF {
-    padded_ood_t1(rho, source_message, mask_message)
 }
 
 /// Computes all private OOD answers for one code-switching round.
@@ -241,7 +217,7 @@ pub fn private_ood_answers<EF: Field>(
 ) -> Vec<EF> {
     rho_ood_points
         .iter()
-        .map(|&rho| private_ood_answer(rho, source_message, mask_message))
+        .map(|&rho| padded_ood_t1(rho, source_message, mask_message))
         .collect()
 }
 
