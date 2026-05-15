@@ -522,6 +522,34 @@ fn test_round_count_mismatch() {
 }
 
 #[test]
+fn test_pow_witness_count_mismatch() {
+    // Invariant: when PoW is enabled, witness count must match round count.
+    let mut chal = challenger();
+    let mut sum = EF::ONE;
+    let expected = 2;
+    let actual = 1;
+    let data = SumcheckData::<F, EF> {
+        polynomial_evaluations: vec![[EF::ZERO, EF::ZERO]; expected],
+        pow_witnesses: vec![F::ZERO; actual],
+    };
+
+    let err = data
+        .verify_rounds(&mut chal, &mut sum, 20)
+        .expect_err("witness-count mismatch must error before indexing");
+
+    match err {
+        SumcheckError::PowWitnessCountMismatch {
+            expected: got_expected,
+            actual: got_actual,
+        } => {
+            assert_eq!(got_expected, expected);
+            assert_eq!(got_actual, actual);
+        }
+        other => panic!("expected PowWitnessCountMismatch, got: {other}"),
+    }
+}
+
+#[test]
 fn test_invalid_pow_witness() {
     // Invariant: a tampered PoW witness must fail the grinding check.
     let mut chal = challenger();
