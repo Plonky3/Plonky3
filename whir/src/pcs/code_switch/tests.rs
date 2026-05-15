@@ -20,8 +20,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use super::{
-    CodeSwitchError, RoundZkConfig, ZkMaskClaim, batched_claim, output_relation,
-    private_ood_answers, simulated_verifier_view,
+    CodeSwitchError, RoundZkConfig, ZkMaskClaim, private_ood_answers, simulated_verifier_view,
 };
 use crate::sumcheck::zk::test_helpers::{MyChallenger, MyMmcs, make_setup};
 use crate::sumcheck::zk::{ZkVerifier, simulate_classic_unpacked};
@@ -148,18 +147,18 @@ fn test_construction_9_7_mu_prime_identity_n0() {
         in_domain_coeffs: nu[1 + t_ood..].to_vec(),
     };
 
-    let mu_prime = batched_claim(mu, &y, &source_openings, &claim).unwrap();
-    let relation = output_relation::<F, EF, _>(
-        &source_enc,
-        &sl,
-        &[],
-        r_len,
-        s_pad_len,
-        &rho_ood_points,
-        &query_positions,
-        &claim,
-    )
-    .unwrap();
+    let mu_prime = claim.batched_claim(mu, &y, &source_openings).unwrap();
+    let relation = claim
+        .output_relation::<F, _>(
+            &source_enc,
+            &sl,
+            &[],
+            r_len,
+            s_pad_len,
+            &rho_ood_points,
+            &query_positions,
+        )
+        .unwrap();
 
     let mut r_s_pad = r;
     r_s_pad.extend_from_slice(&s_pad);
@@ -241,19 +240,19 @@ fn test_construction_9_7_mu_prime_identity_n2() {
         in_domain_coeffs: nu[1 + t_ood..].to_vec(),
     };
 
-    let mu_prime = batched_claim(mu, &y, &source_openings, &claim).unwrap();
+    let mu_prime = claim.batched_claim(mu, &y, &source_openings).unwrap();
     let aux_refs: Vec<&[EF]> = sl_aux.iter().map(Vec::as_slice).collect();
-    let relation = output_relation::<F, EF, _>(
-        &source_enc,
-        &sl,
-        &aux_refs,
-        r_len,
-        s_pad_len,
-        &rho_ood_points,
-        &query_positions,
-        &claim,
-    )
-    .unwrap();
+    let relation = claim
+        .output_relation::<F, _>(
+            &source_enc,
+            &sl,
+            &aux_refs,
+            r_len,
+            s_pad_len,
+            &rho_ood_points,
+            &query_positions,
+        )
+        .unwrap();
 
     let mut r_s_pad = r.clone();
     r_s_pad.extend_from_slice(&s_pad);
@@ -322,22 +321,22 @@ fn test_construction_9_7_mu_prime_identity_iota2() {
         in_domain_coeffs: nu[1 + t_ood..].to_vec(),
     };
 
-    let mu_prime = batched_claim(mu, &y, &source_openings, &claim).unwrap();
+    let mu_prime = claim.batched_claim(mu, &y, &source_openings).unwrap();
     let query_positions: Vec<usize> = query_symbols
         .iter()
         .flat_map(|&symbol| (0..iota).map(move |limb| symbol * iota + limb))
         .collect();
-    let relation = output_relation::<F, EF, _>(
-        &source_enc,
-        &sl,
-        &[],
-        r_len,
-        s_pad_len,
-        &rho_ood_points,
-        &query_positions,
-        &claim,
-    )
-    .unwrap();
+    let relation = claim
+        .output_relation::<F, _>(
+            &source_enc,
+            &sl,
+            &[],
+            r_len,
+            s_pad_len,
+            &rho_ood_points,
+            &query_positions,
+        )
+        .unwrap();
 
     let mut r_s_pad = r.clone();
     r_s_pad.extend_from_slice(&s_pad);
@@ -399,7 +398,7 @@ fn test_construction_9_7_mu_prime_identity_eps_scaled_handoff() {
         ood_coeffs: vec![nu[1]],
         in_domain_coeffs: vec![nu[2]],
     };
-    let mu_prime = batched_claim(mu, &y, &[source_opening], &claim).unwrap();
+    let mu_prime = claim.batched_claim(mu, &y, &[source_opening]).unwrap();
 
     let mut sl_prime = vec![EF::ZERO; ell];
     for (sp, s) in sl_prime.iter_mut().zip(&sl) {
@@ -493,18 +492,20 @@ fn test_eps_scaled_handoff_does_not_scale_auxiliary_covectors() {
         in_domain_coeffs: vec![nu[2]],
     };
 
-    let mu_prime = batched_claim(inherited_claim, &y, &[source_opening], &claim).unwrap();
-    let relation = output_relation::<F, EF, _>(
-        &source_enc,
-        &source_covector,
-        &[&auxiliary_covector],
-        r_len,
-        s_pad_len,
-        &rho_ood_points,
-        &[query_position],
-        &claim,
-    )
-    .unwrap();
+    let mu_prime = claim
+        .batched_claim(inherited_claim, &y, &[source_opening])
+        .unwrap();
+    let relation = claim
+        .output_relation::<F, _>(
+            &source_enc,
+            &source_covector,
+            &[&auxiliary_covector],
+            r_len,
+            s_pad_len,
+            &rho_ood_points,
+            &[query_position],
+        )
+        .unwrap();
     let mu_prime_from_relation = relation
         .evaluate(&f, &[&auxiliary_witness], &mask_message)
         .unwrap();
@@ -569,7 +570,7 @@ fn test_batching_zero_evader_powers() {
 }
 
 #[test]
-fn test_private_ood_answers_matches_single_answer_helper() {
+fn test_private_ood_answers_matches_padded_ood_t1() {
     let f = vec![ef(2), ef(4)];
     let mask = vec![ef(8), ef(16), ef(32)];
     let points = [ef(3), ef(5), ef(7)];
@@ -666,7 +667,8 @@ fn test_simulated_verifier_view_matches_code_switch_relation() {
         &claim,
     )
     .unwrap();
-    let expected_mu = batched_claim(inherited_claim, &private_ood, &source_openings, &claim)
+    let expected_mu = claim
+        .batched_claim(inherited_claim, &private_ood, &source_openings)
         .expect("valid simulated transcript dimensions");
     let relation_value = view
         .output_relation
@@ -771,13 +773,13 @@ fn test_zk_sumcheck_simulator_eps_handoff_to_code_switch_view() {
         &claim,
     )
     .expect("composed simulator view should have valid dimensions");
-    let expected_mu = batched_claim(
-        verifier_handoff.claimed_residual,
-        &private_ood,
-        &source_openings,
-        &claim,
-    )
-    .expect("valid batched claim dimensions");
+    let expected_mu = claim
+        .batched_claim(
+            verifier_handoff.claimed_residual,
+            &private_ood,
+            &source_openings,
+        )
+        .expect("valid batched claim dimensions");
     let relation_value = view
         .output_relation
         .evaluate(&source_message, &[], &mask_message)
@@ -1101,7 +1103,9 @@ fn test_batched_claim_rejects_ood_count_mismatch() {
         in_domain_coeffs: vec![ef(4)],
     };
 
-    let err = batched_claim(ef(9), &[ef(10)], &[ef(11)], &claim).unwrap_err();
+    let err = claim
+        .batched_claim(ef(9), &[ef(10)], &[ef(11)])
+        .unwrap_err();
 
     assert_eq!(
         err,
@@ -1122,17 +1126,9 @@ fn test_output_relation_rejects_query_count_mismatch() {
         in_domain_coeffs: vec![ef(3), ef(4)],
     };
 
-    let err = output_relation::<F, EF, _>(
-        &enc,
-        &[ef(1), ef(2), ef(3)],
-        &[],
-        2,
-        1,
-        &[ef(9)],
-        &[0],
-        &claim,
-    )
-    .unwrap_err();
+    let err = claim
+        .output_relation::<F, _>(&enc, &[ef(1), ef(2), ef(3)], &[], 2, 1, &[ef(9)], &[0])
+        .unwrap_err();
 
     assert_eq!(
         err,
@@ -1153,7 +1149,8 @@ fn test_output_relation_rejects_source_covector_length_mismatch() {
         in_domain_coeffs: vec![ef(3)],
     };
 
-    let err = output_relation::<F, EF, _>(&enc, &[ef(1), ef(2)], &[], 2, 1, &[ef(9)], &[0], &claim)
+    let err = claim
+        .output_relation::<F, _>(&enc, &[ef(1), ef(2)], &[], 2, 1, &[ef(9)], &[0])
         .unwrap_err();
 
     assert_eq!(

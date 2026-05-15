@@ -19,10 +19,7 @@ use rand::{Rng, RngExt};
 use super::prover::WhirProver;
 use super::verifier::WhirVerifier;
 use super::verifier::errors::VerifierError;
-use crate::pcs::code_switch::{
-    CodeSwitchOutputRelation, ZkMaskClaim, batched_claim, output_relation_from_rows,
-    private_ood_answers,
-};
+use crate::pcs::code_switch::{CodeSwitchOutputRelation, ZkMaskClaim, private_ood_answers};
 use crate::pcs::committer::writer::commit_extension;
 use crate::pcs::proof::{PcsProof, QueryOpening, WhirInitialZkProof, WhirRoundZkProof};
 use crate::pcs::utils::get_challenge_stir_queries;
@@ -574,13 +571,9 @@ where
             })
             .sum::<EF>();
         let inherited_claim = handoff.residual_prover.claimed_sum() + auxiliary_claim;
-        let mu_prime = batched_claim(
-            inherited_claim,
-            &private_ood_answers,
-            &source_openings,
-            &claim,
-        )
-        .expect("honest code-switch batching dimensions should match");
+        let mu_prime = claim
+            .batched_claim(inherited_claim, &private_ood_answers, &source_openings)
+            .expect("honest code-switch batching dimensions should match");
         let (source_rows, source_randomness_rows) =
             folded_source_rows_for_positions::<F>(&source_layout, &query_positions);
         let auxiliary_covector_refs = auxiliary_covectors
@@ -592,18 +585,18 @@ where
             .iter()
             .map(Vec::as_slice)
             .collect::<Vec<_>>();
-        let output_relation = output_relation_from_rows(
-            source.message.len(),
-            &source.covector,
-            &auxiliary_covector_refs,
-            source.randomness_len,
-            pad_len,
-            &rho_ood_points,
-            &source_row_refs,
-            &source_randomness_row_refs,
-            &claim,
-        )
-        .expect("honest code-switch output relation dimensions should match");
+        let output_relation = claim
+            .output_relation_from_rows(
+                source.message.len(),
+                &source.covector,
+                &auxiliary_covector_refs,
+                source.randomness_len,
+                pad_len,
+                &rho_ood_points,
+                &source_row_refs,
+                &source_randomness_row_refs,
+            )
+            .expect("honest code-switch output relation dimensions should match");
 
         let mut relation_evals = source_message;
         for message in &handoff.mask_messages {
@@ -886,16 +879,16 @@ where
             ood_coeffs: coeffs[1..1 + round_zk_proof.private_ood_answers.len()].to_vec(),
             in_domain_coeffs: coeffs[1 + round_zk_proof.private_ood_answers.len()..].to_vec(),
         };
-        let mu_prime = batched_claim(
-            initial_handoff.claimed_residual,
-            &round_zk_proof.private_ood_answers,
-            &source_openings,
-            &claim,
-        )
-        .map_err(|err| VerifierError::MerkleProofInvalid {
-            position: 0,
-            reason: err.to_string(),
-        })?;
+        let mu_prime = claim
+            .batched_claim(
+                initial_handoff.claimed_residual,
+                &round_zk_proof.private_ood_answers,
+                &source_openings,
+            )
+            .map_err(|err| VerifierError::MerkleProofInvalid {
+                position: 0,
+                reason: err.to_string(),
+            })?;
         let pad_len = round_zk
             .mask_message_len
             .checked_sub(source.randomness_len)
@@ -924,21 +917,21 @@ where
             .iter()
             .map(Vec::as_slice)
             .collect::<Vec<_>>();
-        let output_relation = output_relation_from_rows(
-            source.message_len,
-            &source.covector,
-            &auxiliary_covector_refs,
-            source.randomness_len,
-            pad_len,
-            &rho_ood_points,
-            &source_row_refs,
-            &source_randomness_row_refs,
-            &claim,
-        )
-        .map_err(|err| VerifierError::MerkleProofInvalid {
-            position: 0,
-            reason: err.to_string(),
-        })?;
+        let output_relation = claim
+            .output_relation_from_rows(
+                source.message_len,
+                &source.covector,
+                &auxiliary_covector_refs,
+                source.randomness_len,
+                pad_len,
+                &rho_ood_points,
+                &source_row_refs,
+                &source_randomness_row_refs,
+            )
+            .map_err(|err| VerifierError::MerkleProofInvalid {
+                position: 0,
+                reason: err.to_string(),
+            })?;
 
         let folding_factor_next = self.params.folding_factor.at_round(round_index + 1);
         let handoff = ZkVerifier::<F, EF>::verify_claim::<MT, _>(
@@ -1118,18 +1111,18 @@ mod tests {
             in_domain_coeffs: vec![ef(7)],
         };
 
-        let relation = output_relation_from_rows::<F, EF>(
-            source_message.len(),
-            &source_covector,
-            &[],
-            2,
-            1,
-            &[],
-            &[source_row.as_slice()],
-            &[randomness_row.as_slice()],
-            &claim,
-        )
-        .unwrap();
+        let relation = claim
+            .output_relation_from_rows::<F>(
+                source_message.len(),
+                &source_covector,
+                &[],
+                2,
+                1,
+                &[],
+                &[source_row.as_slice()],
+                &[randomness_row.as_slice()],
+            )
+            .unwrap();
         let value = relation
             .evaluate(&source_message, &[], &mask_message)
             .unwrap();

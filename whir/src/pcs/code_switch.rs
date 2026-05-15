@@ -117,6 +117,239 @@ pub struct ZkMaskClaim<EF> {
     pub in_domain_coeffs: Vec<EF>,
 }
 
+impl<EF: Field> ZkMaskClaim<EF> {
+    /// Computes the verifier-side batched claim `mu'`.
+    ///
+    /// The inherited claim is the scalar already handed off by the previous
+    /// IOR. In the #1605 HVZK sumcheck composition that means its source
+    /// residual has already been scaled by `eps`, while carried auxiliary mask
+    /// claims remain in the relation with their own coefficients.
+    /// Consequently this function does not apply
+    /// [`Self::residual_sumcheck_scale`]; that scale is used only when
+    /// constructing the output source covector.
+    ///
+    /// ```text
+    /// mu' = nu_1 * mu
+    ///     + sum_i nu_{1+i} * y_i
+    ///     + sum_j nu_{1+t_ood+j} * f(x_j)
+    /// ```
+    pub fn batched_claim(
+        &self,
+        inherited_claim: EF,
+        private_ood_answers: &[EF],
+        source_openings: &[EF],
+    ) -> Result<EF, CodeSwitchError> {
+        if private_ood_answers.len() != self.ood_coeffs.len() {
+            return Err(CodeSwitchError::PrivateOodAnswerCountMismatch {
+                expected: self.ood_coeffs.len(),
+                actual: private_ood_answers.len(),
+            });
+        }
+        if source_openings.len() != self.in_domain_coeffs.len() {
+            return Err(CodeSwitchError::SourceOpeningCountMismatch {
+                expected: self.in_domain_coeffs.len(),
+                actual: source_openings.len(),
+            });
+        }
+
+        let ood_sum: EF = self
+            .ood_coeffs
+            .iter()
+            .zip(private_ood_answers)
+            .map(|(&coeff, &answer)| coeff * answer)
+            .sum();
+        let in_domain_sum: EF = self
+            .in_domain_coeffs
+            .iter()
+            .zip(source_openings)
+            .map(|(&coeff, &opening)| coeff * opening)
+            .sum();
+
+        Ok(self.base_claim_coeff * inherited_claim + ood_sum + in_domain_sum)
+    }
+
+    /// Builds the output relation covectors for Construction 9.7.
+    ///
+    /// `query_positions` are flattened codeword positions. For interleaving
+    /// depth `iota`, callers should pass `iota * x_i + limb` for every queried
+    /// limb.
+    #[allow(clippy::too_many_arguments)]
+    pub fn output_relation<F, Enc>(
+        &self,
+        source_encoding: &Enc,
+        source_covector: &[EF],
+        auxiliary_covectors: &[&[EF]],
+        source_randomness_len: usize,
+        pad_len: usize,
+        rho_ood_points: &[EF],
+        query_positions: &[usize],
+    ) -> Result<CodeSwitchOutputRelation<EF>, CodeSwitchError>
+    where
+        F: Field,
+        EF: From<F>,
+        Enc: LinearZkEncoding<F>,
+    {
+        if rho_ood_points.len() != self.ood_coeffs.len() {
+            return Err(CodeSwitchError::OodPointCountMismatch {
+                expected: self.ood_coeffs.len(),
+                actual: rho_ood_points.len(),
+            });
+        }
+        if query_positions.len() != self.in_domain_coeffs.len() {
+            return Err(CodeSwitchError::QueryPositionCountMismatch {
+                expected: self.in_domain_coeffs.len(),
+                actual: query_positions.len(),
+            });
+        }
+        let source_len = source_encoding.message_len();
+        if source_covector.len() != source_len {
+            return Err(CodeSwitchError::SourceCovectorLengthMismatch {
+                expected: source_len,
+                actual: source_covector.len(),
+            });
+        }
+
+        let source_rows = query_positions
+            .iter()
+            .map(|&position| source_encoding.message_row(position))
+            .collect::<Vec<_>>();
+        let source_randomness_rows = query_positions
+            .iter()
+            .map(|&position| source_encoding.randomness_row(position))
+            .collect::<Vec<_>>();
+        let source_row_refs = source_rows.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let source_randomness_row_refs = source_randomness_rows
+            .iter()
+            .map(Vec::as_slice)
+            .collect::<Vec<_>>();
+
+        self.output_relation_from_rows(
+            source_len,
+            source_covector,
+            auxiliary_covectors,
+            source_randomness_len,
+            pad_len,
+            rho_ood_points,
+            &source_row_refs,
+            &source_randomness_row_refs,
+        )
+    }
+
+    /// Builds the output relation covectors from explicit source-code rows.
+    ///
+    /// This is the row-level form of Construction 9.7 used by the WHIR
+    /// adapter, where the source rows come from the folded WHIR target oracle
+    /// rather than a standalone [`LinearZkEncoding`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn output_relation_from_rows<Row>(
+        &self,
+        source_message_len: usize,
+        source_covector: &[EF],
+        auxiliary_covectors: &[&[EF]],
+        source_randomness_len: usize,
+        pad_len: usize,
+        rho_ood_points: &[EF],
+        source_rows: &[&[Row]],
+        source_randomness_rows: &[&[Row]],
+    ) -> Result<CodeSwitchOutputRelation<EF>, CodeSwitchError>
+    where
+        Row: Copy,
+        EF: From<Row>,
+    {
+        if rho_ood_points.len() != self.ood_coeffs.len() {
+            return Err(CodeSwitchError::OodPointCountMismatch {
+                expected: self.ood_coeffs.len(),
+                actual: rho_ood_points.len(),
+            });
+        }
+        if source_rows.len() != self.in_domain_coeffs.len() {
+            return Err(CodeSwitchError::QueryPositionCountMismatch {
+                expected: self.in_domain_coeffs.len(),
+                actual: source_rows.len(),
+            });
+        }
+        if source_randomness_rows.len() != self.in_domain_coeffs.len() {
+            return Err(CodeSwitchError::QueryPositionCountMismatch {
+                expected: self.in_domain_coeffs.len(),
+                actual: source_randomness_rows.len(),
+            });
+        }
+        if source_covector.len() != source_message_len {
+            return Err(CodeSwitchError::SourceCovectorLengthMismatch {
+                expected: source_message_len,
+                actual: source_covector.len(),
+            });
+        }
+
+        let mask_len = source_randomness_len + pad_len;
+        let source_inherited_scale = self.base_claim_coeff * self.residual_sumcheck_scale;
+        let auxiliary_inherited_scale = self.base_claim_coeff;
+
+        let mut next_source_covector: Vec<EF> = source_covector
+            .iter()
+            .map(|&x| source_inherited_scale * x)
+            .collect();
+        let next_auxiliary_covectors: Vec<Vec<EF>> = auxiliary_covectors
+            .iter()
+            .map(|covector| {
+                covector
+                    .iter()
+                    .map(|&x| auxiliary_inherited_scale * x)
+                    .collect()
+            })
+            .collect();
+        let mut mask_covector = vec![EF::ZERO; mask_len];
+
+        for (&rho, &coeff) in rho_ood_points.iter().zip(&self.ood_coeffs) {
+            let mut power = EF::ONE;
+            for dst in &mut next_source_covector {
+                *dst += coeff * power;
+                power *= rho;
+            }
+            for dst in &mut mask_covector {
+                *dst += coeff * power;
+                power *= rho;
+            }
+        }
+
+        for ((message_row, randomness_row), &coeff) in source_rows
+            .iter()
+            .zip(source_randomness_rows)
+            .zip(&self.in_domain_coeffs)
+        {
+            if message_row.len() != source_message_len {
+                return Err(CodeSwitchError::SourceMessageRowLengthMismatch {
+                    expected: source_message_len,
+                    actual: message_row.len(),
+                });
+            }
+            for (dst, &row) in next_source_covector.iter_mut().zip(*message_row) {
+                *dst += coeff * EF::from(row);
+            }
+
+            if randomness_row.len() != source_randomness_len {
+                return Err(CodeSwitchError::SourceRandomnessRowLengthMismatch {
+                    expected: source_randomness_len,
+                    actual: randomness_row.len(),
+                });
+            }
+            for (dst, row) in mask_covector
+                .iter_mut()
+                .take(source_randomness_len)
+                .zip(*randomness_row)
+            {
+                *dst += coeff * EF::from(*row);
+            }
+        }
+
+        Ok(CodeSwitchOutputRelation {
+            source_covector: next_source_covector,
+            auxiliary_covectors: next_auxiliary_covectors,
+            mask_covector,
+        })
+    }
+}
+
 /// Output linear relation produced by Construction 9.7.
 ///
 /// The relation is evaluated as:
@@ -221,236 +454,6 @@ pub fn private_ood_answers<EF: Field>(
         .collect()
 }
 
-/// Computes the verifier-side batched claim `mu'`.
-///
-/// The inherited claim is the scalar already handed off by the previous IOR.
-/// In the #1605 HVZK sumcheck composition that means its source residual has
-/// already been scaled by `eps`, while carried auxiliary mask claims remain in
-/// the relation with their own coefficients. Consequently this function does
-/// not apply `claim.residual_sumcheck_scale`; that scale is used only when
-/// constructing the output source covector.
-///
-/// ```text
-/// mu' = nu_1 * mu
-///     + sum_i nu_{1+i} * y_i
-///     + sum_j nu_{1+t_ood+j} * f(x_j)
-/// ```
-pub fn batched_claim<EF: Field>(
-    inherited_claim: EF,
-    private_ood_answers: &[EF],
-    source_openings: &[EF],
-    claim: &ZkMaskClaim<EF>,
-) -> Result<EF, CodeSwitchError> {
-    if private_ood_answers.len() != claim.ood_coeffs.len() {
-        return Err(CodeSwitchError::PrivateOodAnswerCountMismatch {
-            expected: claim.ood_coeffs.len(),
-            actual: private_ood_answers.len(),
-        });
-    }
-    if source_openings.len() != claim.in_domain_coeffs.len() {
-        return Err(CodeSwitchError::SourceOpeningCountMismatch {
-            expected: claim.in_domain_coeffs.len(),
-            actual: source_openings.len(),
-        });
-    }
-
-    let ood_sum: EF = claim
-        .ood_coeffs
-        .iter()
-        .zip(private_ood_answers)
-        .map(|(&coeff, &answer)| coeff * answer)
-        .sum();
-    let in_domain_sum: EF = claim
-        .in_domain_coeffs
-        .iter()
-        .zip(source_openings)
-        .map(|(&coeff, &opening)| coeff * opening)
-        .sum();
-
-    Ok(claim.base_claim_coeff * inherited_claim + ood_sum + in_domain_sum)
-}
-
-/// Builds the output relation covectors for Construction 9.7.
-///
-/// `query_positions` are flattened codeword positions. For interleaving depth
-/// `iota`, callers should pass `iota * x_i + limb` for every queried limb.
-#[allow(clippy::too_many_arguments)]
-pub fn output_relation<F, EF, Enc>(
-    source_encoding: &Enc,
-    source_covector: &[EF],
-    auxiliary_covectors: &[&[EF]],
-    source_randomness_len: usize,
-    pad_len: usize,
-    rho_ood_points: &[EF],
-    query_positions: &[usize],
-    claim: &ZkMaskClaim<EF>,
-) -> Result<CodeSwitchOutputRelation<EF>, CodeSwitchError>
-where
-    F: Field,
-    EF: Field + From<F>,
-    Enc: LinearZkEncoding<F>,
-{
-    if rho_ood_points.len() != claim.ood_coeffs.len() {
-        return Err(CodeSwitchError::OodPointCountMismatch {
-            expected: claim.ood_coeffs.len(),
-            actual: rho_ood_points.len(),
-        });
-    }
-    if query_positions.len() != claim.in_domain_coeffs.len() {
-        return Err(CodeSwitchError::QueryPositionCountMismatch {
-            expected: claim.in_domain_coeffs.len(),
-            actual: query_positions.len(),
-        });
-    }
-    let source_len = source_encoding.message_len();
-    if source_covector.len() != source_len {
-        return Err(CodeSwitchError::SourceCovectorLengthMismatch {
-            expected: source_len,
-            actual: source_covector.len(),
-        });
-    }
-
-    let source_rows = query_positions
-        .iter()
-        .map(|&position| source_encoding.message_row(position))
-        .collect::<Vec<_>>();
-    let source_randomness_rows = query_positions
-        .iter()
-        .map(|&position| source_encoding.randomness_row(position))
-        .collect::<Vec<_>>();
-    let source_row_refs = source_rows.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    let source_randomness_row_refs = source_randomness_rows
-        .iter()
-        .map(Vec::as_slice)
-        .collect::<Vec<_>>();
-
-    output_relation_from_rows(
-        source_len,
-        source_covector,
-        auxiliary_covectors,
-        source_randomness_len,
-        pad_len,
-        rho_ood_points,
-        &source_row_refs,
-        &source_randomness_row_refs,
-        claim,
-    )
-}
-
-/// Builds the output relation covectors from explicit source-code rows.
-///
-/// This is the row-level form of Construction 9.7 used by the WHIR adapter,
-/// where the source rows come from the folded WHIR target oracle rather than a
-/// standalone [`LinearZkEncoding`].
-#[allow(clippy::too_many_arguments)]
-pub fn output_relation_from_rows<Row, EF>(
-    source_message_len: usize,
-    source_covector: &[EF],
-    auxiliary_covectors: &[&[EF]],
-    source_randomness_len: usize,
-    pad_len: usize,
-    rho_ood_points: &[EF],
-    source_rows: &[&[Row]],
-    source_randomness_rows: &[&[Row]],
-    claim: &ZkMaskClaim<EF>,
-) -> Result<CodeSwitchOutputRelation<EF>, CodeSwitchError>
-where
-    Row: Copy,
-    EF: Field + From<Row>,
-{
-    if rho_ood_points.len() != claim.ood_coeffs.len() {
-        return Err(CodeSwitchError::OodPointCountMismatch {
-            expected: claim.ood_coeffs.len(),
-            actual: rho_ood_points.len(),
-        });
-    }
-    if source_rows.len() != claim.in_domain_coeffs.len() {
-        return Err(CodeSwitchError::QueryPositionCountMismatch {
-            expected: claim.in_domain_coeffs.len(),
-            actual: source_rows.len(),
-        });
-    }
-    if source_randomness_rows.len() != claim.in_domain_coeffs.len() {
-        return Err(CodeSwitchError::QueryPositionCountMismatch {
-            expected: claim.in_domain_coeffs.len(),
-            actual: source_randomness_rows.len(),
-        });
-    }
-    if source_covector.len() != source_message_len {
-        return Err(CodeSwitchError::SourceCovectorLengthMismatch {
-            expected: source_message_len,
-            actual: source_covector.len(),
-        });
-    }
-
-    let mask_len = source_randomness_len + pad_len;
-    let source_inherited_scale = claim.base_claim_coeff * claim.residual_sumcheck_scale;
-    let auxiliary_inherited_scale = claim.base_claim_coeff;
-
-    let mut next_source_covector: Vec<EF> = source_covector
-        .iter()
-        .map(|&x| source_inherited_scale * x)
-        .collect();
-    let next_auxiliary_covectors: Vec<Vec<EF>> = auxiliary_covectors
-        .iter()
-        .map(|covector| {
-            covector
-                .iter()
-                .map(|&x| auxiliary_inherited_scale * x)
-                .collect()
-        })
-        .collect();
-    let mut mask_covector = vec![EF::ZERO; mask_len];
-
-    for (&rho, &coeff) in rho_ood_points.iter().zip(&claim.ood_coeffs) {
-        let mut power = EF::ONE;
-        for dst in &mut next_source_covector {
-            *dst += coeff * power;
-            power *= rho;
-        }
-        for dst in &mut mask_covector {
-            *dst += coeff * power;
-            power *= rho;
-        }
-    }
-
-    for ((message_row, randomness_row), &coeff) in source_rows
-        .iter()
-        .zip(source_randomness_rows)
-        .zip(&claim.in_domain_coeffs)
-    {
-        if message_row.len() != source_message_len {
-            return Err(CodeSwitchError::SourceMessageRowLengthMismatch {
-                expected: source_message_len,
-                actual: message_row.len(),
-            });
-        }
-        for (dst, &row) in next_source_covector.iter_mut().zip(*message_row) {
-            *dst += coeff * EF::from(row);
-        }
-
-        if randomness_row.len() != source_randomness_len {
-            return Err(CodeSwitchError::SourceRandomnessRowLengthMismatch {
-                expected: source_randomness_len,
-                actual: randomness_row.len(),
-            });
-        }
-        for (dst, row) in mask_covector
-            .iter_mut()
-            .take(source_randomness_len)
-            .zip(*randomness_row)
-        {
-            *dst += coeff * EF::from(*row);
-        }
-    }
-
-    Ok(CodeSwitchOutputRelation {
-        source_covector: next_source_covector,
-        auxiliary_covectors: next_auxiliary_covectors,
-        mask_covector,
-    })
-}
-
 /// Builds the deterministic part of the Lemma 9.8 verifier view.
 ///
 /// The private OOD answers and source openings may be honestly computed or
@@ -476,13 +479,12 @@ where
     EF: Field + From<F>,
     Enc: LinearZkEncoding<F>,
 {
-    let mu_prime = batched_claim(
+    let mu_prime = claim.batched_claim(
         inherited_claim,
         simulated_private_ood_answers,
         simulated_source_openings,
-        claim,
     )?;
-    let output_relation = output_relation(
+    let output_relation = claim.output_relation(
         source_encoding,
         source_covector,
         auxiliary_covectors,
@@ -490,7 +492,6 @@ where
         pad_len,
         rho_ood_points,
         query_positions,
-        claim,
     )?;
 
     Ok(CodeSwitchVerifierView {
