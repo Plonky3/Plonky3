@@ -55,6 +55,8 @@ pub enum Sample {
     /// to keep the domain separator synchronized with the actual prover/verifier
     /// transcript.
     TranscriptCheckpoint,
+    /// Combining challenge `eps` in the HVZK sumcheck overlay.
+    ZkSumcheckCombinationRandomness,
 }
 
 impl Sample {
@@ -92,6 +94,13 @@ pub enum Observe {
     /// to the specific protocol configuration. Each parameter is
     /// encoded as a (marker, value) pair.
     ProtocolParam,
+    /// Sum of all mask evaluations in the HVZK sumcheck overlay.
+    ZkSumcheckMuTilde,
+    /// Coefficients sent by one HVZK sumcheck round.
+    ///
+    /// The wire skips the linear coefficient and has
+    /// `max(ell_zk, 3) - 1` extension-field elements.
+    ZkSumcheckPoly,
 }
 
 impl Observe {
