@@ -1507,6 +1507,10 @@ mod zk_prefix_acceptance_tests {
     type MyDft = Radix2DFTSmallBatch<F>;
     type TestWhirPcs = WhirProver<EF, F, MyDft, MyMmcs, MyChallenger, PrefixProver<F, EF>>;
 
+    // Issue #1587 gives `n = 4` as an example. This fixture uses a larger
+    // multilinear dimension so the selected folding factors produce at least
+    // two code-switch rounds while preserving the requested KoalaBear EF and
+    // lambda = 20 setting.
     const NUM_VARIABLES: usize = 16;
     const ZK_MESSAGE_LEN: usize = 4;
 

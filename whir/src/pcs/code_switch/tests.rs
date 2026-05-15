@@ -13,9 +13,10 @@ use p3_baby_bear::BabyBear;
 use p3_dft::Radix2Dit;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
-use p3_zk_codes::{LinearZkEncoding, ReedSolomonZkEncoding, ZkEncodingWithRandomness};
-use rand::SeedableRng;
+use p3_zk_codes::{LinearZkEncoding, ReedSolomonZkEncoding, ZkEncoding, ZkEncodingWithRandomness};
+use proptest::prelude::*;
 use rand::rngs::SmallRng;
+use rand::{RngExt, SeedableRng};
 
 use super::{
     CodeSwitchError, RoundZkConfig, ZkMaskClaim, batched_claim, batching_coefficients,
@@ -38,6 +39,50 @@ fn inner_product(a: &[EF], b: &[EF]) -> EF {
 
 fn make_rs_encoding(msg_len: usize, t: usize, m: usize) -> ReedSolomonZkEncoding<F, Radix2Dit<F>> {
     ReedSolomonZkEncoding::new(t, msg_len, m, Radix2Dit::default())
+}
+
+fn solve_two_randomness_for_openings(
+    encoding: &ReedSolomonZkEncoding<EF, Radix2Dit<EF>>,
+    message: &[EF],
+    positions: &[usize; 2],
+    openings: &[EF],
+) -> Vec<EF> {
+    assert_eq!(openings.len(), 2);
+
+    let delta = |index: usize| {
+        let position = positions[index];
+        let message_row = encoding.message_row(position);
+        let message_value = inner_product(message, &message_row);
+        let randomness_row = encoding.randomness_row(position);
+        assert_eq!(randomness_row.len(), 2);
+        (randomness_row, openings[index] - message_value)
+    };
+    let (row0, rhs0) = delta(0);
+    let (row1, rhs1) = delta(1);
+
+    let a = row0[0];
+    let b = row0[1];
+    let c = row1[0];
+    let d = row1[1];
+    let det = a * d - b * c;
+    assert!(!det.is_zero(), "RS query rows should be independent");
+
+    vec![(rhs0 * d - b * rhs1) / det, (a * rhs1 - rhs0 * c) / det]
+}
+
+fn solve_pad_for_private_ood(rho: EF, message: &[EF], source_randomness: &[EF], target: EF) -> EF {
+    assert!(!rho.is_zero(), "programming formula requires nonzero rho");
+
+    let message_eval = eval_ze_star_n(rho, message);
+    let source_randomness_eval = eval_ze_star_n(rho, source_randomness);
+    let shift = rho.exp_u64(message.len() as u64);
+    let pad_scale = shift * rho.exp_u64(source_randomness.len() as u64);
+    assert!(
+        !pad_scale.is_zero(),
+        "programming formula requires a nonzero pad coefficient",
+    );
+
+    (target - message_eval - shift * source_randomness_eval) / pad_scale
 }
 
 /// Lift a base-field row into extension-field elements for inner products.
@@ -649,7 +694,7 @@ fn test_simulated_verifier_view_matches_code_switch_relation() {
 }
 
 #[test]
-fn test_simulated_verifier_view_composes_with_zk_sumcheck_simulator_shape() {
+fn test_zk_sumcheck_simulator_eps_handoff_to_code_switch_view() {
     let ell_zk = 4;
     let folding_factor = 2;
     let (perm, mmcs, sumcheck_encoding) = make_setup(91, ell_zk);
@@ -753,6 +798,183 @@ fn test_simulated_verifier_view_composes_with_zk_sumcheck_simulator_shape() {
     assert_eq!(relation_value, view.mu_prime);
     assert_eq!(view.private_ood_answers.len(), rho_ood_points.len());
     assert_eq!(view.source_openings.len(), query_positions.len());
+}
+
+#[test]
+fn test_composed_simulator_view_matches_programmed_real_code_switch_view() {
+    assert_composed_simulator_view_matches_programmed_real_code_switch_view(101);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(8))]
+
+    #[test]
+    fn prop_composed_simulator_view_matches_programmed_real_code_switch_view(seed in 0_u64..64) {
+        assert_composed_simulator_view_matches_programmed_real_code_switch_view(seed.wrapping_add(101));
+    }
+}
+
+fn assert_composed_simulator_view_matches_programmed_real_code_switch_view(seed: u64) {
+    let ell_zk = 4;
+    let folding_factor = 2;
+    let (perm, mmcs, sumcheck_encoding) = make_setup(seed, ell_zk);
+    let mut simulator_challenger = MyChallenger::new(perm.clone());
+    let mut replay_challenger = MyChallenger::new(perm);
+    let simulator_verifier = ZkVerifier::<F, EF>::new(&[]);
+    let mut simulator_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+    let (zk_data, mask_commits, simulator_randomness) = simulate_classic_unpacked(
+        &mut simulator_challenger,
+        &simulator_verifier,
+        folding_factor,
+        0,
+        &sumcheck_encoding,
+        &mmcs,
+        &mut simulator_rng,
+    );
+    let verifier_handoff = ZkVerifier::<F, EF>::new(&[])
+        .into_sumcheck::<MyMmcs, _>(
+            &zk_data,
+            &mask_commits,
+            ell_zk,
+            folding_factor,
+            0,
+            &mut replay_challenger,
+        )
+        .expect("simulated #1605 transcript should verify");
+    assert_eq!(verifier_handoff.randomness, simulator_randomness);
+    if verifier_handoff.eps.is_zero() {
+        return;
+    }
+
+    let ell = 3;
+    let source_randomness_len = 2;
+    let pad_len = 1;
+    let source_enc = ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
+        source_randomness_len,
+        ell,
+        8,
+        Radix2Dit::default(),
+    );
+    let source_message = vec![ef(4), ef(6), ef(10)];
+    let mut source_covector = EF::zero_vec(source_message.len());
+    let (pivot, &pivot_value) = source_message
+        .iter()
+        .enumerate()
+        .find(|(_, value)| !value.is_zero())
+        .expect("fixture source message should contain a nonzero entry");
+    source_covector[pivot] = verifier_handoff.claimed_residual / verifier_handoff.eps / pivot_value;
+
+    let query_positions = [1_usize, 4_usize];
+    let mut code_sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+    let simulated_source_openings = source_enc.simulate(&query_positions, &mut code_sim_rng);
+    let source_randomness = solve_two_randomness_for_openings(
+        &source_enc,
+        &source_message,
+        &query_positions,
+        &simulated_source_openings,
+    );
+    let source_codeword = source_enc.encode_with_randomness(&source_message, &source_randomness);
+    let honest_source_openings = query_positions
+        .iter()
+        .map(|&position| source_codeword.values[position])
+        .collect::<Vec<_>>();
+    assert_eq!(
+        honest_source_openings, simulated_source_openings,
+        "Sim_C' openings must be explainable by an honest RS randomness witness",
+    );
+
+    let rho_ood_points = [ef(37)];
+    let mut ze_sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(3));
+    let simulated_private_ood = vec![ze_sim_rng.random::<EF>()];
+    let s_pad = vec![solve_pad_for_private_ood(
+        rho_ood_points[0],
+        &source_message,
+        &source_randomness,
+        simulated_private_ood[0],
+    )];
+    let mut mask_message = source_randomness;
+    mask_message.extend_from_slice(&s_pad);
+    let honest_private_ood = private_ood_answers(&rho_ood_points, &source_message, &mask_message);
+    assert_eq!(
+        honest_private_ood, simulated_private_ood,
+        "S_ze_ood output must be explainable by the Lemma 9.3 programmed pad witness",
+    );
+
+    let mask_enc = ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
+        source_randomness_len,
+        mask_message.len(),
+        8,
+        Radix2Dit::default(),
+    );
+    let simulated_mask_openings = mask_enc.simulate(&query_positions, &mut code_sim_rng);
+    assert_eq!(
+        simulated_mask_openings.len(),
+        query_positions.len(),
+        "Sim_C_zk must produce one opening per mask query",
+    );
+    let mask_randomness = solve_two_randomness_for_openings(
+        &mask_enc,
+        &mask_message,
+        &query_positions,
+        &simulated_mask_openings,
+    );
+    let mask_codeword = mask_enc.encode_with_randomness(&mask_message, &mask_randomness);
+    let honest_mask_openings = query_positions
+        .iter()
+        .map(|&position| mask_codeword.values[position])
+        .collect::<Vec<_>>();
+    assert_eq!(
+        honest_mask_openings, simulated_mask_openings,
+        "Sim_C_zk openings must be explainable by an honest RS randomness witness",
+    );
+
+    let nu = batching_coefficients(ef(43), 1 + rho_ood_points.len() + query_positions.len());
+    let claim = ZkMaskClaim {
+        base_claim_coeff: nu[0],
+        residual_sumcheck_scale: verifier_handoff.eps,
+        ood_coeffs: nu[1..1 + rho_ood_points.len()].to_vec(),
+        in_domain_coeffs: nu[1 + rho_ood_points.len()..].to_vec(),
+        source_randomness_weights: Vec::new(),
+        pad_weights: Vec::new(),
+    };
+
+    let simulated_view = simulated_verifier_view::<EF, EF, _>(
+        &source_enc,
+        verifier_handoff.claimed_residual,
+        &source_covector,
+        &[],
+        source_randomness_len,
+        pad_len,
+        &rho_ood_points,
+        &query_positions,
+        &simulated_private_ood,
+        &simulated_source_openings,
+        &claim,
+    )
+    .expect("composed simulator view should have valid dimensions");
+    let real_view = simulated_verifier_view::<EF, EF, _>(
+        &source_enc,
+        verifier_handoff.claimed_residual,
+        &source_covector,
+        &[],
+        source_randomness_len,
+        pad_len,
+        &rho_ood_points,
+        &query_positions,
+        &honest_private_ood,
+        &honest_source_openings,
+        &claim,
+    )
+    .expect("programmed honest view should have valid dimensions");
+
+    assert_eq!(simulated_view, real_view);
+    assert_eq!(
+        simulated_view
+            .output_relation
+            .evaluate(&source_message, &[], &mask_message)
+            .expect("programmed witness should satisfy the output relation"),
+        simulated_view.mu_prime,
+    );
 }
 
 #[test]
