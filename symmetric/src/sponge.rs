@@ -93,7 +93,10 @@ use core::marker::PhantomData;
 use core::ops::Add;
 
 use itertools::Itertools;
-use p3_field::{Field, PrimeField, PrimeField32, reduce_32};
+use p3_field::{
+    PrimeField, PrimeField32, absorb_radix_bits, max_shifted_absorb_injective_limbs,
+    reduce_packed_shifted,
+};
 
 use crate::Permutation;
 use crate::hasher::CryptographicHasher;
@@ -403,6 +406,8 @@ pub struct MultiField32PaddingFreeSponge<
     permutation: P,
     /// How many small-field elements fit inside one large-field element.
     num_f_elms: usize,
+    /// Radix used for shifted packing into the large field.
+    radix_bits: u32,
     _phantom: PhantomData<(F, PF)>,
 }
 
@@ -410,7 +415,7 @@ impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
     MultiField32PaddingFreeSponge<F, PF, P, WIDTH, RATE, OUT>
 where
     F: PrimeField32,
-    PF: Field,
+    PF: PrimeField,
 {
     pub fn new(permutation: P) -> Result<Self, String> {
         const {
@@ -422,11 +427,13 @@ where
             return Err(String::from("F::order() must be less than PF::order()"));
         }
 
-        // Compute packing ratio: how many 32-bit field elements pack into one native field element.
-        let num_f_elms = PF::bits() / F::bits();
+        // Use shifted-radix injective packing for robust absorb encoding.
+        let num_f_elms = max_shifted_absorb_injective_limbs::<F, PF>();
+        let radix_bits = absorb_radix_bits::<F>();
         Ok(Self {
             permutation,
             num_f_elms,
+            radix_bits,
             _phantom: PhantomData,
         })
     }
@@ -461,14 +468,14 @@ where
         //   block_chunk = [f6, f7]  (partial)
         //     chunk 0: [f6, f7] -> pack into PF -> state[0]
         //   -> permute
-        for block_chunk in &input.into_iter().chunks(RATE) {
+        for block_chunk in &input.into_iter().chunks(RATE * self.num_f_elms) {
             for (chunk_id, chunk) in (&block_chunk.chunks(self.num_f_elms))
                 .into_iter()
                 .enumerate()
             {
-                // Pack num_f_elms small-field elements into one
-                // large-field element via mixed-radix reduction.
-                state[chunk_id] = reduce_32(&chunk.collect_vec());
+                // Pack num_f_elms small-field elements into one large-field
+                // element via shifted-radix reduction.
+                state[chunk_id] = reduce_packed_shifted(&chunk.collect_vec(), self.radix_bits);
             }
             state = self.permutation.permute(state);
         }
@@ -512,6 +519,8 @@ pub struct MultiField32Pad10Sponge<
     ///
     /// E.g. 64-bit field / 32-bit field = 2.
     num_f_elms: usize,
+    /// Radix used for shifted packing into the large field.
+    radix_bits: u32,
     _phantom: PhantomData<(F, PF)>,
 }
 
@@ -519,7 +528,7 @@ impl<F, PF, P, const WIDTH: usize, const RATE: usize, const OUT: usize>
     MultiField32Pad10Sponge<F, PF, P, WIDTH, RATE, OUT>
 where
     F: PrimeField32,
-    PF: Field,
+    PF: PrimeField,
 {
     pub fn new(permutation: P) -> Result<Self, String> {
         const {
@@ -531,11 +540,13 @@ where
             return Err(String::from("F::order() must be less than PF::order()"));
         }
 
-        // E.g. PF has 64 bits, F has 32 bits -> 2 small elems per large elem.
-        let num_f_elms = PF::bits() / F::bits();
+        // Use shifted-radix injective packing for robust absorb encoding.
+        let num_f_elms = max_shifted_absorb_injective_limbs::<F, PF>();
+        let radix_bits = absorb_radix_bits::<F>();
         Ok(Self {
             permutation,
             num_f_elms,
+            radix_bits,
             _phantom: PhantomData,
         })
     }
@@ -589,8 +600,8 @@ where
                 .into_iter()
                 .enumerate()
             {
-                // Mixed-radix reduction: num_f_elms small -> 1 large.
-                state[chunk_id] = reduce_32(&chunk.collect_vec());
+                // Shifted-radix reduction: num_f_elms small -> 1 large.
+                state[chunk_id] = reduce_packed_shifted(&chunk.collect_vec(), self.radix_bits);
 
                 // Record how far we got (1-indexed).
                 last_chunk_len = chunk_id + 1;
