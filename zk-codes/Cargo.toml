@@ -18,10 +18,11 @@ p3-util.workspace = true
 rand.workspace = true
 
 [dev-dependencies]
-criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-goldilocks = { path = "../goldilocks" }
 p3-koala-bear = { path = "../koala-bear" }
+
+criterion.workspace = true
 proptest.workspace = true
 rand_xoshiro.workspace = true
 

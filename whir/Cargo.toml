@@ -30,11 +30,12 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-clap.workspace = true
-criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-keccak = { path = "../keccak" }
 p3-koala-bear = { path = "../koala-bear" }
+
+clap.workspace = true
+criterion.workspace = true
 proptest.workspace = true
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
