@@ -162,7 +162,7 @@ where
 
 /// Row provider for the folded extension oracle committed by WHIR itself.
 #[derive(Debug, Clone, Copy)]
-pub struct WhirFoldedSourceLayout {
+pub(crate) struct WhirFoldedSourceLayout {
     /// Message length before WHIR row packing.
     pub message_len: usize,
     /// Full encoded domain size.
@@ -559,7 +559,7 @@ where
     /// source commitment and in-domain openings below are the freshly committed
     /// WHIR extension oracle, matching the round-0 scope of this PR.
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
-    pub fn round0_zk_prefix_from_folded_source<Enc, R>(
+    pub(crate) fn round0_zk_prefix_from_folded_source<Enc, R>(
         &self,
         mut proof: PcsProof<F, EF, MT>,
         handoff: &ZkSumcheckHandoff<F, EF, Enc, MT>,
