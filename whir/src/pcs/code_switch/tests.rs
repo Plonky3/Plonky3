@@ -10,6 +10,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_baby_bear::BabyBear;
+use p3_commit::Mmcs;
 use p3_dft::Radix2Dit;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
@@ -914,6 +915,36 @@ fn assert_composed_simulator_components_program_code_switch_view(seed: u64) -> b
     assert_eq!(
         honest_mask_openings, simulated_mask_openings,
         "Sim_C_zk openings must be explainable by an honest RS randomness witness",
+    );
+
+    // Witness-independent coupling certificate, mirroring #1605's matched-RNG
+    // simulator test where byte equality is meaningful. Construction 9.7's
+    // fresh round mask is sampled independently of the source witness, so equal
+    // RNG streams produce equal mask commitments. Source commitments, source
+    // openings, and private OOD answers are witness-dependent; those are covered
+    // by the programmability checks above instead of a fake byte-equality claim.
+    let round_mask_encoding = ReedSolomonZkEncoding::<F, Radix2Dit<F>>::new(
+        source_randomness_len,
+        mask_message.len(),
+        8,
+        Radix2Dit::default(),
+    );
+    let mut real_mask_rng = SmallRng::seed_from_u64(seed.wrapping_add(4));
+    let mut sim_mask_rng = SmallRng::seed_from_u64(seed.wrapping_add(4));
+    let real_round_mask = (0..mask_message.len())
+        .map(|_| real_mask_rng.random::<F>())
+        .collect::<Vec<_>>();
+    let sim_round_mask = (0..mask_message.len())
+        .map(|_| sim_mask_rng.random::<F>())
+        .collect::<Vec<_>>();
+    let real_mask_codeword = round_mask_encoding.encode(&real_round_mask, &mut real_mask_rng);
+    let sim_mask_codeword = round_mask_encoding.encode(&sim_round_mask, &mut sim_mask_rng);
+    let (real_mask_commitment, _) = mmcs.commit_matrix(real_mask_codeword);
+    let (sim_mask_commitment, _) = mmcs.commit_matrix(sim_mask_codeword);
+    assert_eq!(real_round_mask, sim_round_mask);
+    assert_eq!(
+        real_mask_commitment, sim_mask_commitment,
+        "witness-independent code-switch masks should couple under matched RNG",
     );
 
     let nu = batching_coefficients(ef(43), 1 + rho_ood_points.len() + query_positions.len());
