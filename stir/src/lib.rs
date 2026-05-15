@@ -34,12 +34,13 @@
 //! - **Proximity-gaps formulas from later work.** Johnson-bound proximity gaps use the
 //!   tighter \[BCSS25\] bound rather than \[BCI+20\]; see
 //!   [`p3_commit::SecurityAssumption::prox_gaps_error`].
-//! - **Round-0 joint queries-combination bound.**
+//! - **Round-0 joint queries-combination bound (CB only).**
 //!   [`p3_commit::SecurityAssumption::stir_initial_eta`] extends the paper's prox-gap
-//!   formula with a joint queries-combination × prox-gap term mirroring
-//!   [`p3_commit::SecurityAssumption::stir_recursive_eta`]'s shape, using a closed-form
-//!   upper bound on `t_0` in place of the missing `t_{-1}`. Without it,
-//!   `queries_combination_error` at round 0 sags ~`log₂(t_0)` bits below `target_bits`.
+//!   formula for capacity bound with a joint queries-combination × prox-gap term
+//!   mirroring [`p3_commit::SecurityAssumption::stir_recursive_eta`]'s third term,
+//!   using a closed-form upper bound on `t_0` in place of the missing `t_{-1}`.
+//!   Without it, CB `queries_combination_error` at round 0 sags ~`log₂(t_0)` bits
+//!   below `target_bits`. JB needs no such term — its list size stays small.
 //! - **Union-bound buffer.** [`config::StirConfig::new`] adds an explicit
 //!   `ceil(log2(6 · total_folds))` buffer to every per-round error term (query failure plus
 //!   the auxiliary terms bridged by PoW). Each round contributes up to six independently

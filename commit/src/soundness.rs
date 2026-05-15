@@ -132,12 +132,15 @@ impl SecurityAssumption {
 
     /// Initial `eta_0` from §5.3's recommended STIR schedule.
     ///
-    /// **Deviation from the paper.** The paper's formula solves only the prox-gap
-    /// constraint; under eta-aware accounting that leaves `queries_combination_error`
-    /// at round 0 below `target_bits` by `~log_2(t_0)` bits. We extend the formula to
-    /// `max(prox_gap_term, joint_combination_term)`, mirroring `stir_recursive_eta`'s
-    /// shape with `t_{-1}` replaced by a closed-form upper bound on `t_0` (computed at
-    /// `eta = eta_upper_bound`, where `failure_base` and thus `t_0` are maximized).
+    /// **Deviation from the paper (CB only).** The paper's formula solves only the
+    /// prox-gap constraint; under eta-aware accounting that leaves
+    /// `queries_combination_error` at round 0 below `target_bits` by `~log_2(t_0)`
+    /// bits for CB (whose list size `d/(ρ·eta)` blows up as eta shrinks).
+    /// For CB we extend the formula to `max(prox_gap_term, joint_combination_term)`,
+    /// mirroring `stir_recursive_eta`'s third term with `t_{-1}` replaced by a
+    /// closed-form upper bound on `t_0` (computed at `eta = eta_upper_bound`, where
+    /// `failure_base` and thus `t_0` are maximized). JB needs no such term — its list
+    /// size stays small.
     #[must_use]
     pub fn stir_initial_eta(
         &self,
@@ -154,23 +157,16 @@ impl SecurityAssumption {
 
         let log_eta = match self {
             // η₀ := (2^λ (k - 1) (d/k)^2 / (2^7 |F|))^(1/7)
+            //
+            // JB needs no round-0 combination term: its list size
+            // `~1/(2·eta·√ρ)` stays small, so `queries_combination_error` is
+            // satisfied with a large margin at the prox-gap eta (unlike CB,
+            // where `list_size = d/(ρ·eta)` blows up as eta shrinks).
             Self::JohnsonBound => {
-                let log_eta_proxgap = ((security_bits as f64) + log_k_minus_1 + 2. * log_d_over_k
+                ((security_bits as f64) + log_k_minus_1 + 2. * log_d_over_k
                     - 7.
                     - field_size_bits as f64)
-                    / 7.;
-
-                // Round-0 analogue of `stir_recursive_eta`'s 7th-root term.
-                // `failure_base_max = √ρ · 1.05` at the JB eta upper bound `√ρ/20`.
-                let log_failure_base_max = libm::log2(1.05 * libm::sqrt(rho));
-                let t_0_max = libm::ceil(security_bits as f64 / -log_failure_base_max);
-                let log_t_term = libm::log2(t_0_max) + 2. * log_degree as f64;
-                let log_k_term = log_k_minus_1 + 2. * log_d_over_k;
-                let log_sum = Self::log2_sum(log_t_term, log_k_term);
-                let log_eta_combination =
-                    ((security_bits as f64) + 1. + log_sum - 7. - field_size_bits as f64) / 7.;
-
-                log_eta_proxgap.max(log_eta_combination)
+                    / 7.
             }
             // With c₁ = c₂ = 1:
             // η₀ := 2^λ (k - 1) (d/k) / (ρ² |F|)

@@ -640,7 +640,7 @@ mod tests {
 
     #[test]
     fn test_stir_config_union_bound_buffer_scales_with_rounds() {
-        // The per-round target_bits adds ceil(log2(total_folds)) to algebraic_security_level
+        // The per-round target_bits adds ceil(log2(6 * total_folds)) to algebraic_security_level
         // so the per-round error sums to <= 2^{-algebraic_security_level} across all folds.
         // A deeper protocol (more folds) must request more queries per round than a shallow
         // one at the same security level / rate / eta, since the union-bound buffer is larger.
@@ -701,5 +701,151 @@ mod tests {
 
         // Sanity: non-empty rounds; deep > shallow in number of fold steps.
         assert!(deep.num_rounds() + 1 > shallow.num_rounds() + 1);
+    }
+
+    /// Whole-pipeline invariant: for every derived stage, the algebraic bits the
+    /// *stored* schedule parameters actually deliver, plus the stored PoW bits, must
+    /// reach `buffered_security_level`.
+    #[test]
+    fn test_stir_config_every_stage_meets_buffered_target() {
+        use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+        use p3_challenger::DuplexChallenger;
+        use p3_commit::ExtensionMmcs;
+        use p3_field::Field;
+        use p3_field::extension::BinomialExtensionField;
+        use p3_merkle_tree::MerkleTreeMmcs;
+        use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+        use rand::SeedableRng;
+
+        type F = BabyBear;
+        type EF = BinomialExtensionField<F, 4>;
+        type Perm = Poseidon2BabyBear<16>;
+        type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+        type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+        type PackedF = <F as Field>::Packing;
+        type ValMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
+        type MyMmcs = ExtensionMmcs<F, EF, ValMmcs>;
+        type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
+
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(99);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let val_mmcs = ValMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+        let field_size_bits = EF::bits();
+
+        // (log_starting_degree, log_blowup, log_folding_factor, security_level, max_pow_bits, soundness_type).
+        let cb = SecurityAssumption::CapacityBound;
+        let jb = SecurityAssumption::JohnsonBound;
+        let cases = [
+            (8, 1, 2, 80, 20, cb),
+            (8, 2, 2, 80, 20, cb),
+            (8, 2, 2, 80, 20, jb),
+            (16, 1, 2, 80, 20, cb),
+            (4, 1, 2, 80, 20, cb),
+            (8, 1, 2, 16, 0, cb),
+            (12, 1, 3, 16, 0, cb),
+            (4, 1, 2, 16, 0, cb),
+        ];
+
+        {
+            for &(log_deg, log_blowup, log_fold, sec, max_pow, soundness_type) in &cases {
+                let config = StirConfig::<F, EF, MyMmcs, MyChallenger>::new(
+                    log_deg,
+                    StirParameters {
+                        log_blowup,
+                        log_folding_factor: log_fold,
+                        soundness_type,
+                        security_level: sec,
+                        max_pow_bits: max_pow,
+                        mmcs: MyMmcs::new(val_mmcs.clone()),
+                    },
+                );
+
+                // Mirror `StirConfig::new`'s buffered target.
+                let total_folds = log_deg / log_fold;
+                let buffer = libm::ceil(libm::log2((6 * total_folds) as f64)) as usize;
+                let buffered = (sec + buffer) as f64;
+                // Recomputed algebraic bits use the same `libm` math as the config, so
+                // the only slack is float rounding in the comparison itself.
+                let eps = 1e-9;
+
+                let label = |stage: &str| {
+                    format!(
+                        "{soundness_type} {stage} below buffered target \
+                         (log_deg={log_deg}, log_blowup={log_blowup}, \
+                         log_fold={log_fold}, sec={sec}, max_pow={max_pow})"
+                    )
+                };
+
+                for rc in &config.round_configs {
+                    let log_inv_rate = rc.log_domain_size - rc.log_degree;
+
+                    let query_alg = soundness_type.stir_query_algebraic_bits(
+                        field_size_bits,
+                        rc.log_degree,
+                        log_inv_rate,
+                        rc.eta,
+                        rc.num_queries,
+                        rc.num_ood_samples,
+                    );
+                    assert!(
+                        query_alg + rc.pow_bits as f64 >= buffered - eps,
+                        "{}: query_alg={query_alg:.4} + pow={} < {buffered:.4}",
+                        label("intermediate-query"),
+                        rc.pow_bits,
+                    );
+
+                    let fold_alg = soundness_type.fold_algebraic_bits_at_log_eta(
+                        field_size_bits,
+                        rc.log_degree,
+                        log_inv_rate,
+                        libm::log2(rc.eta),
+                    );
+                    assert!(
+                        fold_alg + rc.folding_pow_bits as f64 >= buffered - eps,
+                        "{}: fold_alg={fold_alg:.4} + pow={} < {buffered:.4}",
+                        label("intermediate-fold"),
+                        rc.folding_pow_bits,
+                    );
+                }
+
+                // Final stage: reconstruct its (log_degree, log_inv_rate) by stepping
+                // one fold past the last intermediate round, or from the starting
+                // parameters when there are no intermediate rounds (total_folds == 1).
+                let (final_log_degree, final_log_inv_rate) =
+                    config
+                        .round_configs
+                        .last()
+                        .map_or((log_deg, log_blowup), |last| {
+                            let fd = last.log_degree - log_fold;
+                            let fdom = last.log_domain_size - 1;
+                            (fd, fdom - fd)
+                        });
+
+                let final_query_alg = soundness_type.stir_final_query_algebraic_bits(
+                    final_log_inv_rate,
+                    config.final_eta,
+                    config.final_queries,
+                );
+                assert!(
+                    final_query_alg + config.final_pow_bits as f64 >= buffered - eps,
+                    "{}: final_query_alg={final_query_alg:.4} + pow={} < {buffered:.4}",
+                    label("final-query"),
+                    config.final_pow_bits,
+                );
+
+                let final_fold_alg = soundness_type.fold_algebraic_bits_at_log_eta(
+                    field_size_bits,
+                    final_log_degree,
+                    final_log_inv_rate,
+                    libm::log2(config.final_eta),
+                );
+                assert!(
+                    final_fold_alg + config.final_folding_pow_bits as f64 >= buffered - eps,
+                    "{}: final_fold_alg={final_fold_alg:.4} + pow={} < {buffered:.4}",
+                    label("final-fold"),
+                    config.final_folding_pow_bits,
+                );
+            }
+        }
     }
 }
