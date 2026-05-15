@@ -1211,6 +1211,18 @@ mod zk_prefix_api_tests {
             verifier_state.handoff.randomness.num_variables(),
             loop_state.handoff.randomness.num_variables(),
         );
+        let final_gammas = loop_state
+            .handoff
+            .randomness
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        let final_mask_residual =
+            evaluate_zk_mask_residual::<F, EF>(&loop_state.handoff.mask_messages, &final_gammas);
+        assert_eq!(
+            verifier_state.handoff.claimed_residual,
+            loop_state.handoff.residual_prover.claimed_sum() + final_mask_residual,
+        );
         assert!(
             verifier_state.next_source.is_none(),
             "verifier loop should also consume every carried source",
