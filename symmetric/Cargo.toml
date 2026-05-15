@@ -17,7 +17,7 @@ itertools.workspace = true
 serde = { workspace = true, features = ["alloc"] }
 
 [dev-dependencies]
-p3-goldilocks.workspace = true
+p3-goldilocks = { path = "../goldilocks" }
 p3-koala-bear = { path = "../koala-bear" }
 
 [lints]
