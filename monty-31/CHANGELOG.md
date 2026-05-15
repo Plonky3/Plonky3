@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.5.3] - 2026-05-15
+### Merged PRs
+- Monty-31: improve `monty_reduce_u128` speed (#1483)
+- Fix compilation on aarch64 without neon (RUSTFLAGS="-C target-feature=-neon" cargo check) (#1514)
+- Core: couple more compile time assertions (#1525)
+- Perf(monty-31/neon): specialized exp_4 skipping intermediate reduction (#1558)
+- Add carry-critical NEON dot product regression tests (#1600)
+
 ## [0.5.2] - 2026-03-27
 ### Merged PRs
 - Poseidon1: speedup monty-31 packed version on avx (#1420)

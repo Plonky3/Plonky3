@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.5.3] - 2026-05-15
+### Merged PRs
+- Fix(batch-stark): correct misleading degree_bits documentation (#1437)
+
 ## [0.5.2] - 2026-03-27
 ### Merged PRs
 - Perf(batch-stark): avoid cloning generated_perm (#1473)

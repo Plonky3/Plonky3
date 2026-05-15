@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.5.3] - 2026-05-15
+### Merged PRs
+- Perf: faster `GoldilocksPackedNeon` field operations (#1515)
+- Field: specialize packed mixed_dot_product by chunk strategy (#1573)
+- Fix: proper reduction in goldilocks NEON add computation (#1580)
+- Fix(goldilocks): canonicalize sub_asm and harden NEON ASM tests (#1591)
+- Perf: halve goldilocks optimizations (#1606)
+- Perf: use Neon Goldilocks only for hash operations (#1517)
+- Perf(goldilocks): scalar add/sub for PackedGoldilocksNeon (#1619)
+
 ## [0.5.2] - 2026-03-27
 ### Merged PRs
 - Make batched_linear_combination chunk size per-impl tunable (#1451)
