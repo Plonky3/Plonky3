@@ -168,6 +168,12 @@ where
 }
 
 /// Prover-side state after running the prefix-ZK code-switch round loop.
+///
+/// This is the Construction 9.7 output boundary for the dedicated ZK path.
+/// The final handoff is still masked by the nested Construction 6.3 sumcheck,
+/// so it must be composed with a ZK-aware downstream/base-case protocol. It is
+/// intentionally not fed into the plain WHIR final-polynomial tail, which would
+/// require unmasking data that the verifier should not learn.
 pub struct WhirZkPrefixRoundsState<F, EF, Enc, MT>
 where
     F: TwoAdicField,
@@ -1447,11 +1453,13 @@ where
         }
     }
 
-    /// Run all prefix-only ZK code-switching rounds and stop at the final ZK handoff.
+    /// Run all prefix-only ZK code-switching rounds and return the final ZK handoff.
     ///
-    /// This is the loop-level Construction 9.7 driver. It deliberately stops
-    /// before the final WHIR tail check because the ZK final handoff is not yet
-    /// connected to the final-polynomial protocol surface.
+    /// This is the loop-level Construction 9.7 driver. The returned handoff is
+    /// the output implicit relation that the paper composes into the base-case
+    /// IOPP. It deliberately does not route through the existing plain WHIR
+    /// final-polynomial tail, because that tail checks an unmasked residual
+    /// polynomial while the ZK handoff remains masked by Construction 6.3.
     #[allow(clippy::too_many_arguments)]
     pub fn prove_zk_prefix_rounds<
         SumcheckEnc,
@@ -1835,7 +1843,8 @@ where
     ///
     /// The verifier derives each carried source from the previous public
     /// code-switch relation, so callers do not provide prover-side covectors for
-    /// rounds `1..`.
+    /// rounds `1..`. The returned claim is the masked Construction 6.3 handoff
+    /// for the final code-switch output relation.
     pub fn verify_zk_prefix_rounds<SourceEnc, MakeSourceEnc>(
         &self,
         proof: &PcsProof<F, EF, MT>,

@@ -730,6 +730,7 @@ mod zk_prefix_api_tests {
     use p3_field::{Field, PrimeCharacteristicRing, dot_product};
     use p3_multilinear_util::poly::Poly;
     use p3_zk_codes::ReedSolomonZkEncoding;
+    use proptest::prelude::*;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -1070,6 +1071,19 @@ mod zk_prefix_api_tests {
 
     #[test]
     fn zk_prefix_round_loop_reaches_final_handoff() {
+        assert_zk_prefix_round_loop_accepts(7);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(3))]
+
+        #[test]
+        fn zk_prefix_round_loop_accepts_across_seeds(seed in 0_u64..64) {
+            assert_zk_prefix_round_loop_accepts(seed);
+        }
+    }
+
+    fn assert_zk_prefix_round_loop_accepts(seed: u64) {
         let (pcs, witness, protocol, required_query_bound, expected_mask_domain) = setup();
 
         let mut prover_challenger = challenger();
@@ -1089,7 +1103,7 @@ mod zk_prefix_api_tests {
             expected_mask_domain,
             MyDft::default(),
         );
-        let mut zk_rng = SmallRng::seed_from_u64(7);
+        let mut zk_rng = SmallRng::seed_from_u64(seed);
         let state = pcs.begin_zk_prefix_open(
             prover_data,
             &protocol,
