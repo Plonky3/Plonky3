@@ -869,11 +869,18 @@ mod zk_prefix_api_tests {
             .zk
             .as_ref()
             .expect("round_zk_prefix must populate the first ZK round payload");
+        let logical_code_switch_overhead =
+            round_zk.mask_codeword_field_elements() + round_zk_proof.private_ood_answers.len();
 
         assert!(round.commitment.is_some());
         assert_eq!(
             round_zk_proof.private_ood_answers.len(),
             round_zk.ood_samples
+        );
+        assert_eq!(
+            logical_code_switch_overhead,
+            round_zk.proof_field_overhead(),
+            "Construction 9.7 overhead counts only the fresh mask oracle plus private OOD answers",
         );
         assert_eq!(
             round_zk_proof.source_queries.len(),
@@ -1454,6 +1461,241 @@ mod zk_prefix_api_tests {
             required_query_bound,
             expected_mask_domain,
         )
+    }
+}
+
+mod zk_prefix_acceptance_tests {
+    //! Acceptance tests matching #1587's requested field family and multi-round shape.
+
+    use alloc::vec;
+    use alloc::vec::Vec;
+
+    use p3_challenger::DuplexChallenger;
+    use p3_commit::MultilinearPcs;
+    use p3_dft::{Radix2DFTSmallBatch, Radix2Dit};
+    use p3_field::extension::BinomialExtensionField;
+    use p3_field::{Field, PrimeCharacteristicRing};
+    use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
+    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_multilinear_util::poly::Poly;
+    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use p3_zk_codes::ReedSolomonZkEncoding;
+    use proptest::prelude::*;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use crate::fiat_shamir::domain_separator::DomainSeparator;
+    use crate::parameters::{
+        FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, WhirZkConfig,
+    };
+    use crate::pcs::adapter::{ZkCodeSwitchVerifierSource, evaluate_zk_mask_residual};
+    use crate::pcs::prover::WhirProver;
+    use crate::sumcheck::layout::{Layout, PrefixProver, Table};
+    use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
+
+    type F = KoalaBear;
+    type EF = BinomialExtensionField<F, 4>;
+    type Perm = Poseidon2KoalaBear<16>;
+
+    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+    type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
+
+    type PackedF = <F as Field>::Packing;
+    type MyMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
+
+    type MyDft = Radix2DFTSmallBatch<F>;
+    type TestWhirPcs = WhirProver<EF, F, MyDft, MyMmcs, MyChallenger, PrefixProver<F, EF>>;
+
+    const NUM_VARIABLES: usize = 16;
+    const ZK_MESSAGE_LEN: usize = 4;
+
+    fn challenger() -> MyChallenger {
+        let mut rng = SmallRng::seed_from_u64(11);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        MyChallenger::new(perm)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4))]
+
+        #[test]
+        fn whir_zk_prefix_honest_prover_accepts_koalabear(
+            seed in 0_u64..64,
+            folding in 3_usize..5,
+        ) {
+            assert_koalabear_zk_prefix_loop_accepts(seed, folding);
+        }
+    }
+
+    fn assert_koalabear_zk_prefix_loop_accepts(seed: u64, folding: usize) {
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let table = Table::new(vec![
+            Poly::<F>::rand(&mut rng, NUM_VARIABLES),
+            Poly::<F>::rand(&mut rng, NUM_VARIABLES),
+        ]);
+        let witness = PrefixProver::<F, EF>::new_witness(vec![table], folding);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            TableShape::new(NUM_VARIABLES, 2),
+            vec![vec![0, 1], vec![0]],
+        )]);
+        assert_eq!(witness.table_shapes(), protocol.table_shapes());
+
+        let mut perm_rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut perm_rng);
+        let merkle_hash = MyHash::new(perm.clone());
+        let merkle_compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
+
+        let params = ProtocolParameters {
+            security_level: 20,
+            pow_bits: 0,
+            rs_domain_initial_reduction_factor: 1,
+            folding_factor: FoldingFactor::Constant(folding),
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        };
+        let config = WhirConfig::new(witness.num_variables(), params)
+            .with_zk_config(WhirZkConfig::prefix_only(ZK_MESSAGE_LEN, 2, 1));
+        assert!(
+            config.n_rounds() >= 2,
+            "acceptance fixture must exercise multiple code-switch rounds",
+        );
+        let round_zk_configs = config
+            .round_parameters
+            .iter()
+            .map(|round| {
+                round
+                    .zk
+                    .clone()
+                    .expect("ZK config should populate every round")
+            })
+            .collect::<Vec<_>>();
+        let pcs = TestWhirPcs::new(config, MyDft::default(), mmcs);
+
+        let mut prover_challenger = challenger();
+        let mut domain_separator = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<8>(&mut domain_separator);
+        domain_separator.observe_domain_separator(&mut prover_challenger);
+
+        let (commitment, prover_data) = <TestWhirPcs as MultilinearPcs<EF, MyChallenger>>::commit(
+            &pcs,
+            witness,
+            &mut prover_challenger,
+        );
+        let first_round_zk = &round_zk_configs[0];
+        let initial_mask_encoding = ReedSolomonZkEncoding::new(
+            first_round_zk.mask_query_budget,
+            ZK_MESSAGE_LEN,
+            first_round_zk.mask_domain_size,
+            MyDft::default(),
+        );
+        let mut zk_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+        let state = pcs.begin_zk_prefix_open(
+            prover_data,
+            &protocol,
+            &mut prover_challenger,
+            initial_mask_encoding,
+            &mut zk_rng,
+        );
+
+        let source_message = state
+            .initial_handoff
+            .residual_prover
+            .evals()
+            .as_slice()
+            .to_vec();
+        let inherited_claim = state.initial_handoff.residual_prover.claimed_sum();
+        let source_scale = state.initial_handoff.eps;
+        let mut source_covector = EF::zero_vec(source_message.len());
+        if source_scale.is_zero() {
+            assert!(inherited_claim.is_zero());
+        } else {
+            let source_claim = inherited_claim / source_scale;
+            let (pivot, &pivot_value) = source_message
+                .iter()
+                .enumerate()
+                .find(|(_, value)| !value.is_zero())
+                .expect("acceptance fixture should contain a nonzero residual entry");
+            source_covector[pivot] = source_claim / pivot_value;
+        }
+
+        let loop_state = pcs.prove_zk_prefix_rounds(
+            state,
+            &source_covector,
+            |round_index| {
+                let round_zk = &round_zk_configs[round_index];
+                ReedSolomonZkEncoding::new(
+                    round_zk.mask_query_budget,
+                    round_zk.mask_message_len,
+                    round_zk.mask_domain_size,
+                    MyDft::default(),
+                )
+            },
+            |_round_index, source| {
+                ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
+                    source.randomness_len,
+                    source.message.len(),
+                    source.domain_size,
+                    Radix2Dit::default(),
+                )
+            },
+            |round_index| {
+                let round_zk = &round_zk_configs[round_index];
+                ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
+                    round_zk.mask_query_budget,
+                    round_zk.mask_message_len,
+                    round_zk.mask_domain_size,
+                    Radix2Dit::default(),
+                )
+            },
+            &mut prover_challenger,
+            &mut zk_rng,
+        );
+
+        let mut verifier_challenger = challenger();
+        domain_separator.observe_domain_separator(&mut verifier_challenger);
+        let target_num_variables =
+            pcs.config.num_variables - pcs.config.folding_factor.total_number(0);
+        let verifier_source = ZkCodeSwitchVerifierSource {
+            commitment,
+            message_len: source_message.len(),
+            covector: source_covector,
+            residual_sumcheck_scale: source_scale,
+            randomness_len: 0,
+            domain_size: pcs.config.inv_rate(0) * (1usize << target_num_variables),
+            folding_factor: pcs.config.folding_factor.at_round(1),
+        };
+        let verifier_state = pcs
+            .verify_zk_prefix_rounds(
+                &loop_state.proof,
+                &protocol,
+                &verifier_source,
+                |_round_index, source| {
+                    ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
+                        source.randomness_len,
+                        source.message_len,
+                        source.domain_size,
+                        Radix2Dit::default(),
+                    )
+                },
+                &mut verifier_challenger,
+            )
+            .expect("honest KoalaBear prefix-ZK code-switch loop should verify");
+
+        let final_gammas = loop_state
+            .handoff
+            .randomness
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        let final_mask_residual =
+            evaluate_zk_mask_residual::<F, EF>(&loop_state.handoff.mask_messages, &final_gammas);
+        assert_eq!(
+            verifier_state.handoff.claimed_residual,
+            loop_state.handoff.residual_prover.claimed_sum() + final_mask_residual,
+        );
+        assert!(verifier_state.next_source.is_none());
     }
 }
 

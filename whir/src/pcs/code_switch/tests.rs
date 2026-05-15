@@ -11,14 +11,18 @@ use alloc::vec::Vec;
 
 use p3_baby_bear::BabyBear;
 use p3_dft::Radix2Dit;
-use p3_field::PrimeCharacteristicRing;
 use p3_field::extension::BinomialExtensionField;
+use p3_field::{Field, PrimeCharacteristicRing};
 use p3_zk_codes::{LinearZkEncoding, ReedSolomonZkEncoding, ZkEncodingWithRandomness};
+use rand::SeedableRng;
+use rand::rngs::SmallRng;
 
 use super::{
     CodeSwitchError, RoundZkConfig, ZkMaskClaim, batched_claim, batching_coefficients,
     output_relation, private_ood_answer, private_ood_answers, simulated_verifier_view,
 };
+use crate::sumcheck::zk::test_helpers::{MyChallenger, MyMmcs, make_setup};
+use crate::sumcheck::zk::{ZkVerifier, simulate_classic_unpacked};
 use crate::utils::eval_ze_star_n;
 
 type F = BabyBear;
@@ -642,6 +646,113 @@ fn test_simulated_verifier_view_matches_code_switch_relation() {
         relation_value, view.mu_prime,
         "deterministic simulator view must derive the same relation as the honest code-switch path"
     );
+}
+
+#[test]
+fn test_simulated_verifier_view_composes_with_zk_sumcheck_simulator_shape() {
+    let ell_zk = 4;
+    let folding_factor = 2;
+    let (perm, mmcs, sumcheck_encoding) = make_setup(91, ell_zk);
+    let mut simulator_challenger = MyChallenger::new(perm.clone());
+    let mut replay_challenger = MyChallenger::new(perm);
+    let simulator_verifier = ZkVerifier::<F, EF>::new(&[]);
+    let mut simulator_rng = SmallRng::seed_from_u64(92);
+    let (zk_data, mask_commits, simulator_randomness) = simulate_classic_unpacked(
+        &mut simulator_challenger,
+        &simulator_verifier,
+        folding_factor,
+        0,
+        &sumcheck_encoding,
+        &mmcs,
+        &mut simulator_rng,
+    );
+    let verifier_handoff = ZkVerifier::<F, EF>::new(&[])
+        .into_sumcheck::<MyMmcs, _>(
+            &zk_data,
+            &mask_commits,
+            ell_zk,
+            folding_factor,
+            0,
+            &mut replay_challenger,
+        )
+        .expect("simulated #1605 transcript should verify");
+    assert_eq!(verifier_handoff.randomness, simulator_randomness);
+    assert!(
+        !verifier_handoff.eps.is_zero(),
+        "fixture seed should produce a nonzero eps for the code-switch source scale",
+    );
+
+    let ell = 3;
+    let source_randomness_len = 2;
+    let pad_len = 1;
+    let source_enc = ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
+        source_randomness_len,
+        ell,
+        8,
+        Radix2Dit::default(),
+    );
+    let source_message = vec![ef(4), ef(6), ef(10)];
+    let source_randomness = vec![ef(13), ef(17)];
+    let s_pad = vec![ef(19)];
+    let mut mask_message = source_randomness.clone();
+    mask_message.extend_from_slice(&s_pad);
+    let source_codeword = source_enc.encode_with_randomness(&source_message, &source_randomness);
+    let query_positions = [1_usize, 4_usize];
+    let source_openings = query_positions
+        .iter()
+        .map(|&position| source_codeword.values[position])
+        .collect::<Vec<_>>();
+
+    let mut source_covector = EF::zero_vec(source_message.len());
+    let (pivot, &pivot_value) = source_message
+        .iter()
+        .enumerate()
+        .find(|(_, value)| !value.is_zero())
+        .expect("fixture source message should contain a nonzero entry");
+    source_covector[pivot] = verifier_handoff.claimed_residual / verifier_handoff.eps / pivot_value;
+
+    let rho_ood_points = [ef(37), ef(41)];
+    let private_ood = private_ood_answers(&rho_ood_points, &source_message, &mask_message);
+    let nu = batching_coefficients(ef(43), 1 + rho_ood_points.len() + source_openings.len());
+    let claim = ZkMaskClaim {
+        base_claim_coeff: nu[0],
+        residual_sumcheck_scale: verifier_handoff.eps,
+        ood_coeffs: nu[1..1 + rho_ood_points.len()].to_vec(),
+        in_domain_coeffs: nu[1 + rho_ood_points.len()..].to_vec(),
+        source_randomness_weights: Vec::new(),
+        pad_weights: Vec::new(),
+    };
+
+    let view = simulated_verifier_view::<EF, EF, _>(
+        &source_enc,
+        verifier_handoff.claimed_residual,
+        &source_covector,
+        &[],
+        source_randomness_len,
+        pad_len,
+        &rho_ood_points,
+        &query_positions,
+        &private_ood,
+        &source_openings,
+        &claim,
+    )
+    .expect("composed simulator view should have valid dimensions");
+    let expected_mu = batched_claim(
+        verifier_handoff.claimed_residual,
+        &private_ood,
+        &source_openings,
+        &claim,
+    )
+    .expect("valid batched claim dimensions");
+    let relation_value = view
+        .output_relation
+        .evaluate(&source_message, &[], &mask_message)
+        .expect("composed simulator relation should evaluate");
+
+    assert_eq!(view.mu_prime, expected_mu);
+    assert_eq!(relation_value, view.mu_prime);
+    assert_eq!(view.private_ood_answers.len(), rho_ood_points.len());
+    assert_eq!(view.source_openings.len(), query_positions.len());
 }
 
 #[test]
