@@ -867,7 +867,7 @@ mod zk_prefix_api_tests {
         let round_zk_proof = round
             .zk
             .as_ref()
-            .expect("round_zk_prefix must populate the first ZK round payload");
+            .expect("round0_zk_prefix must populate the first ZK round payload");
         let logical_code_switch_overhead =
             round_zk.mask_codeword_field_elements() + round_zk_proof.private_ood_answers.len();
 

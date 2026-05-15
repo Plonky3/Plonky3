@@ -60,8 +60,8 @@ where
 ///
 /// This is the dedicated API boundary for the ZK path. It deliberately does
 /// not implement `MultilinearPcs::open`, because the ZK protocol needs an RNG
-/// and an explicit mask encoding. The future `round_zk_prefix` flow consumes
-/// `initial_handoff` together with `source_merkle_data`.
+/// and an explicit mask encoding. The `round0_zk_prefix` flow consumes the
+/// typed initial handoff and commits the folded target oracle for Construction 9.7.
 pub struct WhirZkPrefixOpenState<F, EF, Enc, MT>
 where
     F: TwoAdicField,
@@ -73,8 +73,6 @@ where
     pub proof: PcsProof<F, EF, MT>,
     /// Typed Construction 6.3 handoff consumed by the first code-switch round.
     pub initial_handoff: ZkSumcheckHandoff<F, EF, Enc, MT>,
-    /// Merkle prover data for the inherited source oracle queried by the first code-switch round.
-    pub source_merkle_data: MT::ProverData<DenseMatrix<F>>,
 }
 
 /// Prover-side source relation consumed by one code-switch round.
@@ -125,9 +123,9 @@ where
     pub covector: Vec<EF>,
     /// Extra residual scale to apply when this source enters Construction 9.7.
     ///
-    /// This mirrors the prover-side source convention. The round-0 verifier
-    /// uses the initial #1605 `eps`; later sources built from an already scaled
-    /// residual handoff should use `1`.
+    /// This mirrors the prover-side source convention. The round-0 verifier uses
+    /// the initial #1605 `eps` because the residual relation has not yet been
+    /// materialized as a code-switch output relation.
     pub residual_sumcheck_scale: EF,
     /// Randomness segment length of the source encoding.
     pub randomness_len: usize,
@@ -505,7 +503,6 @@ where
                 evals,
             },
             initial_handoff,
-            source_merkle_data: prover_data.merkle_data,
         }
     }
 
@@ -558,11 +555,9 @@ where
 
     /// Prove one prefix-only ZK code-switching round from a folded WHIR source.
     ///
-    /// This is the shared first folded-source Construction 9.7 consumer. It is
-    /// intentionally not the later multi-round source consumer yet: the source
-    /// commitment and in-domain openings below are still the freshly committed
-    /// WHIR extension oracle, so accepting a linear-ZK source layout here would
-    /// mix row semantics with the wrong Merkle opening semantics.
+    /// This is the shared first folded-source Construction 9.7 consumer. The
+    /// source commitment and in-domain openings below are the freshly committed
+    /// WHIR extension oracle, matching the round-0 scope of this PR.
     #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     pub fn round0_zk_prefix_from_folded_source<Enc, R>(
         &self,
