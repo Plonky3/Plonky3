@@ -96,9 +96,7 @@ where
     // Uniform messages produce uniform Reed-Solomon codewords.
     // Their Merkle commits are indistinguishable from the honest prover's (zero simulator error for RS).
 
-    let masks: Vec<Vec<F>> = (0..k)
-        .map(|_| (0..ell_zk).map(|_| rng.random()).collect())
-        .collect();
+    let masks: Vec<Vec<F>> = (0..k).map(|_| encoding.sample_message(rng)).collect();
 
     let mut mask_commits: Vec<M::Commitment> = Vec::with_capacity(k);
     for mask in &masks {
@@ -214,73 +212,78 @@ mod tests {
 
     use super::*;
     use crate::sumcheck::layout::TableShape;
+    use crate::sumcheck::zk::ZkVerifier;
     use crate::sumcheck::zk::test_helpers::{
-        EF, F, MyChallenger, MyMmcs, build_prover_verifier, ef_in_f_subspace, make_setup,
+        EF, F, Mode, MyChallenger, MyMmcs, ef_in_f_subspace, make_setup, run_prover,
     };
-    use crate::sumcheck::zk::{ZkSumcheckData, ZkVerifier};
 
     /// Lemma 6.4 view-match driver for Reed-Solomon mask encoding.
     ///
-    /// # Invariants per `(n_vars, folding, ell_zk, num_eqs)` case
+    /// # Invariants per `(mode, n_vars, folding, ell_zk, num_eqs)` case
     ///
     /// 1. Verifier accepts both transcripts (soundness floor).
     /// 2. `mu_tilde` and mask commits match bit-for-bit under matched seeds (deterministic equality, not a distributional test).
     /// 3. Wire coordinates with index `>= 2` lie in the base-field subspace on both sides (closes paper §6.1's distinguisher).
     /// 4. The mask encoding's own simulator returns the correct shape (RS simulator error = 0).
+    ///
+    /// The `mode` parameter only affects the real run; the simulator output depends only on the wire schema, which both binding modes share.
     fn run_view_match_rs(
+        mode: Mode,
         n_vars: usize,
         folding_factor: usize,
         ell_zk: usize,
         num_eqs: usize,
         seed: u64,
     ) -> Result<(), &'static str> {
-        // Deterministic setup so both runs reach the same MMCS state.
-        let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
-        let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
-        let evals: Vec<F> = (0..(1usize << n_vars)).map(|_| data_rng.random()).collect();
-
-        // === Real run ===
-
-        let (mut prover, mut verifier_real, _) =
-            build_prover_verifier(evals, folding_factor, encoding.clone(), mmcs.clone());
-
-        let mut prover_ch = MyChallenger::new(perm.clone());
-        let mut verifier_real_ch = MyChallenger::new(perm.clone());
-
-        // Claim phase, kept for later replay on the simulator side.
-        let mut virtual_evals: Vec<EF> = Vec::with_capacity(num_eqs);
-        for _ in 0..num_eqs {
-            let eval = prover.add_virtual_eval(&mut prover_ch);
-            verifier_real.add_virtual_eval(eval, &mut verifier_real_ch);
-            virtual_evals.push(eval);
-        }
-
-        // Honest prover sumcheck.
+        // Real run via the mode-parameterised helper.
+        //
+        // Internally, `run_prover` reuses the same `seed.wrapping_add(2)`
+        // RNG seed we re-create below for the simulator, which is what
+        // makes the mu_tilde / mask-commits coupling certificate exact.
         let pow_bits = 0;
-        let mut zk_data_real = ZkSumcheckData::<F, EF>::default();
-        let mut real_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
-        let (_residual_real, _gammas_real, mask_oracles_real) =
-            prover.into_sumcheck(&mut zk_data_real, pow_bits, &mut prover_ch, &mut real_rng);
-        let mask_commits_real: Vec<_> = mask_oracles_real.iter().map(|(c, _)| c.clone()).collect();
+        let mut real_run = run_prover(
+            mode,
+            n_vars,
+            folding_factor,
+            ell_zk,
+            0,
+            num_eqs,
+            pow_bits,
+            seed,
+        );
+
+        // Snapshot virtual evals so the simulator-side verifier can mirror
+        // the same claim phase before being handed to the simulator.
+        let virtual_evals = real_run.virtual_evals.clone();
+        let zk_data_real = real_run.zk_data.clone();
+        let mask_commits_real = real_run.mask_commits.clone();
 
         // Honest verifier replay.
-        let _ = verifier_real
+        let _ = real_run
+            .verifier
             .into_sumcheck::<MyMmcs, _>(
                 &zk_data_real,
                 &mask_commits_real,
                 ell_zk,
                 folding_factor,
                 pow_bits,
-                &mut verifier_real_ch,
+                &mut real_run.verifier_challenger,
             )
             .map_err(|_| "real prover transcript rejected by verifier")?;
 
         // === Simulator run (matched mask-RNG seed) ===
+        //
+        // Re-derive the setup from the same seed so both runs reach the
+        // same MMCS state and the matched-RNG coupling is meaningful.
+        let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
 
-        // One verifier; one challenger. Record claims, then clone the
-        // challenger so the simulator and the verifier-side replay each
-        // run on their own copy from the post-claim state.
-        let mut verifier_sim = ZkVerifier::<F, EF>::new(&[TableShape::new(n_vars, 1)]);
+        // The simulator is binding-mode-agnostic, so the verifier we hand
+        // it carries the strategy of the real prover for symmetric
+        // selector lifting.
+        let mut verifier_sim = match mode {
+            Mode::Prefix => ZkVerifier::<F, EF>::new_prefix(&[TableShape::new(n_vars, 1)]),
+            Mode::Suffix => ZkVerifier::<F, EF>::new_suffix(&[TableShape::new(n_vars, 1)]),
+        };
         let mut sim_ch = MyChallenger::new(perm);
         for &eval in &virtual_evals {
             verifier_sim.add_virtual_eval(eval, &mut sim_ch);
@@ -367,24 +370,43 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(16))]
 
         #[test]
-        fn prop_simulator_view_matches_real_rs(
+        fn prop_simulator_view_matches_real_rs_prefix(
             n_vars in 3usize..=8,
             ell_zk in 2usize..=5,
             num_eqs in 1usize..=3,
             seed in 0u64..1024,
         ) {
-            // Invariant: simulator view matches honest view across the (n_vars, folding, ell_zk, num_eqs) cube for RS mask encoding.
+            // Invariant: simulator view matches honest view across the
+            //            (n_vars, folding, ell_zk, num_eqs) cube for RS mask
+            //            encoding on the prefix path.
             //
             // Per-case invariants pinned by run_view_match_rs (see docstring).
 
-            // Compression step requires the folded polynomial to retain at least one full packed lane.
-            // Packing width depends on the ISA.
+            // Compression step requires the folded polynomial to retain at
+            // least one full packed lane. Packing width depends on the ISA.
             let k_pack = p3_util::log2_strict_usize(<F as Field>::Packing::WIDTH);
             prop_assume!(n_vars > k_pack);
             let folding_factor = 1 + (seed as usize % (n_vars - k_pack));
 
             prop_assert!(
-                run_view_match_rs(n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok()
+                run_view_match_rs(Mode::Prefix, n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok()
+            );
+        }
+
+        #[test]
+        fn prop_simulator_view_matches_real_rs_suffix(
+            n_vars in 3usize..=8,
+            ell_zk in 2usize..=5,
+            num_eqs in 1usize..=3,
+            seed in 0u64..1024,
+        ) {
+            // Same invariant on the suffix path. Suffix mode never packs
+            // the residual factor, so the parameter window is wider:
+            // folding can go up to `n_vars - 1` instead of `n_vars - k_pack`.
+            let folding_factor = 1 + (seed as usize % (n_vars - 1).max(1));
+
+            prop_assert!(
+                run_view_match_rs(Mode::Suffix, n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok()
             );
         }
     }
@@ -426,8 +448,16 @@ mod tests {
             let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
             let mut sim_challenger = MyChallenger::new(perm);
 
-            // Claim phase drives the simulator-side challenger to the same post-claim state a real verifier would reach.
-            let mut verifier = ZkVerifier::<F, EF>::new(&[TableShape::new(n_vars, 1)]);
+            // Claim phase drives the simulator-side challenger to the same
+            // post-claim state a real verifier would reach.
+            //
+            // We use the prefix strategy here because the simulator itself
+            // is binding-mode-agnostic — its output depends only on the
+            // wire schema. The `prop_simulator_view_matches_real_rs_*`
+            // proptests above cover both binding modes via coupling
+            // certificates; this lighter-weight test only needs one mode
+            // to drive the shape and stratification invariants.
+            let mut verifier = ZkVerifier::<F, EF>::new_prefix(&[TableShape::new(n_vars, 1)]);
             for _ in 0..num_eqs {
                 let eval: EF = data_rng.random();
                 verifier.add_virtual_eval(eval, &mut sim_challenger);

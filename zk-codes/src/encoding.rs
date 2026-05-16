@@ -27,6 +27,19 @@ pub trait ZkEncoding<F: Field> {
     /// - Otherwise an upper bound.
     fn error(&self) -> f64;
 
+    /// Samples a uniformly random message from this encoding's message space.
+    ///
+    /// # Returns
+    ///
+    /// A vector of length `message_len`.
+    ///
+    /// # Why on the encoding
+    ///
+    /// - The message space is an encoding invariant.
+    /// - Constrained message spaces (e.g. punctured codes) need a non-trivial draw.
+    /// - Callers stay agnostic to the field's sampling bound.
+    fn sample_message<R: Rng>(&self, rng: &mut R) -> Vec<F>;
+
     /// Encodes a message with random masking.
     fn encode<R: Rng>(&self, msg: &[F], rng: &mut R) -> Self::Codeword;
 

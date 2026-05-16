@@ -260,7 +260,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
         #[cfg(debug_assertions)]
         {
             // Materialise the stacked polynomial with no challenges applied.
-            let poly = &self.compress_stacked(&Point::default());
+            let poly = &self.compress_stacked(&Point::default(), EF::ONE);
             // Check 1: weighted sum equals the direct evaluation.
             assert_eq!(eval, poly.eval_base(&point));
 
@@ -414,7 +414,8 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
         // Reverse the challenges before handing them to the compressors.
         let reversed = rs.reversed();
         // Factor 1 of the product: the compressed stacked poly at rs.
-        let compressed = self.compress_stacked(&reversed);
+        // No external scaling here; the plain path keeps the running sum unchanged.
+        let compressed = self.compress_stacked(&reversed, EF::ONE);
         // Factor 2 of the product: the batched equality-weight poly.
         let weights = self.combine_eqs(&reversed, alpha);
         // Pair them; the product polynomial drives the remaining rounds.
@@ -465,7 +466,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
     ///
     /// The verifier walks its claim registry with the same three-loop order,
     /// so both sides assign the same `alpha^i` to the same claim point.
-    fn sum(&self, alpha: EF) -> EF {
+    pub(crate) fn sum(&self, alpha: EF) -> EF {
         let mut sum = EF::ZERO;
         let mut alphas = alpha.powers();
 
@@ -487,22 +488,35 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
         sum
     }
 
-    /// Compresses every stacked-table slot by fixing the suffix challenges.
+    /// Compress every stacked-table slot by fixing the suffix challenges.
     ///
     /// ```text
-    ///     out[slot_idx, x_rest] = sum_{y in {0,1}^|rs|}  eq(rs, y) * col(x_rest, y)
+    ///     out[slot, x_rest] = sum_{y in {0,1}^|r|}  s * eq(r, y) * col(x_rest, y)
     /// ```
     ///
-    /// # Layout
+    /// One output slot per column.
+    /// Writes never overlap.
+    /// Output arity equals the stacked arity minus the challenge count.
     ///
-    /// - One output slot per column; writes never overlap.
-    /// - Output arity is the stacked arity minus the number of challenges.
+    /// # Arguments
+    ///
+    /// - `rs` — suffix challenges already sampled.
+    /// - `scale` — extra factor folded into the equality table.
+    ///
+    /// # Why a scale parameter
+    ///
+    /// - A unit scale leaves the residual sum unchanged.
+    /// - A non-unit scale lets the caller absorb a combining challenge into
+    ///   the residual factor without a second pass.
     #[tracing::instrument(skip_all)]
-    fn compress_stacked(&self, rs: &Point<EF>) -> Poly<EF> {
+    pub(crate) fn compress_stacked(&self, rs: &Point<EF>, scale: EF) -> Poly<EF> {
         assert!(rs.num_variables() <= self.num_variables);
-        // Output: residual stacked space of size 2^(num_variables - |rs|).
+        // Output spans the residual stacked space.
+        // Size is 2^(num_variables - |rs|).
         let mut out = Poly::<EF>::zero(self.num_variables - rs.num_variables());
-        let rs = SplitEq::new_unpacked(rs, EF::ONE);
+        // Bake the scalar into the prefix-half equality table.
+        // Each slot compression then returns scale * eq(r, y) * col(...) in one pass.
+        let rs = SplitEq::new_unpacked(rs, scale);
 
         for placement in &self.placements {
             for (poly_idx, selector) in placement.selectors().iter().enumerate() {
@@ -529,7 +543,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
     ///   `alpha^i * eq(svo_part, rs)`, written into the owning slot only.
     /// - Virtual claim: scaled equality table written across the full output.
     #[tracing::instrument(skip_all)]
-    fn combine_eqs(&self, rs: &Point<EF>, alpha: EF) -> Poly<EF> {
+    pub(crate) fn combine_eqs(&self, rs: &Point<EF>, alpha: EF) -> Poly<EF> {
         // Preconditions: challenge count matches the folding depth.
         assert_eq!(rs.num_variables(), self.folding);
         // Output arity: stacked arity minus the folded challenges.

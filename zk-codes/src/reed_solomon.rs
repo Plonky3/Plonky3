@@ -118,6 +118,12 @@ where
         0.0
     }
 
+    fn sample_message<R: Rng>(&self, rng: &mut R) -> Vec<F> {
+        // Reed-Solomon's message space is unrestricted: any vector in `F^msg_len`
+        // is a valid message, so a uniform draw coordinate-by-coordinate is correct.
+        (0..self.msg_len).map(|_| rng.random()).collect()
+    }
+
     fn encode<R: Rng>(&self, msg: &[F], rng: &mut R) -> Self::Codeword {
         let randomness: Vec<F> = (0..self.t).map(|_| rng.random()).collect();
         self.encode_with_randomness(msg, &randomness)

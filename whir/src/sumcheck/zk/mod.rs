@@ -1,6 +1,7 @@
 //! Honest-verifier zero-knowledge sumcheck for WHIR.
 //!
-//! Implements Construction 6.3 of eprint 2026/391 on top of the prefix-binding sumcheck layout.
+//! Implements Construction 6.3 of eprint 2026/391 on top of both
+//! stacked-binding modes — prefix and suffix.
 //!
 //! # Overview
 //!
@@ -51,9 +52,9 @@
 //!
 //! # Layout coverage
 //!
-//! Only the prefix-binding layout is supported.
-//! Routing the PCS through the suffix-binding layout produces a non-private proof.
-//! Tracked in [Plonky3#1649](https://github.com/Plonky3/Plonky3/issues/1649).
+//! Both stacked-binding modes are supported.
+//! The masking layer is binding-agnostic; only the residual handoff differs between modes.
+//! Resolves [Plonky3#1649](https://github.com/Plonky3/Plonky3/issues/1649).
 //!
 //! # Field constraints (Lemma 6.4)
 //!
@@ -75,6 +76,6 @@ pub mod verifier;
 pub(crate) mod test_helpers;
 
 pub use data::{MaskOracle, ZkSumcheckData};
-pub use prover::ZkPrefixProver;
+pub use prover::{ZkPrefixProver, ZkSuffixProver};
 pub use simulator::simulate_classic_unpacked;
 pub use verifier::ZkVerifier;
