@@ -166,6 +166,10 @@ where
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
         num_chunks: usize,
     ) -> Vec<RowMajorMatrix<Val>> {
+        assert!(
+            num_chunks > 1,
+            "num_chunks must be > 1 to preserve hiding (got {num_chunks})"
+        );
         let (domains, evaluations): (Vec<_>, Vec<_>) = evaluations.into_iter().unzip();
         let cis = get_zp_cis(&domains);
         let last_chunk = num_chunks - 1;
