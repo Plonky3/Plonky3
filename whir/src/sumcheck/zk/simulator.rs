@@ -449,15 +449,17 @@ mod tests {
             let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
             let mut sim_challenger = MyChallenger::new(perm);
 
-            // Claim phase drives the simulator-side challenger to the same
-            // post-claim state a real verifier would reach.
+            // Phase: claim absorption.
             //
-            // We use the prefix strategy here because the simulator itself
-            // is binding-mode-agnostic — its output depends only on the
-            // wire schema. The `prop_simulator_view_matches_real_rs_*`
-            // proptests above cover both binding modes via coupling
-            // certificates; this lighter-weight test only needs one mode
-            // to drive the shape and stratification invariants.
+            // - Drives the simulator-side challenger to the same post-claim state a real verifier would reach.
+            // - Strategy: prefix (arbitrary — simulator output depends only on the wire schema).
+            //
+            // Why one binding is enough here:
+            //
+            //     coverage source                 | what it pins
+            //     --------------------------------+----------------------------------
+            //     view-match proptests (both)     | prefix + suffix coupling
+            //     this test (prefix only)         | shape + stratification invariants
             let mut verifier = ZkVerifier::<F, EF>::new_prefix(&[TableShape::new(n_vars, 1)]);
             for _ in 0..num_eqs {
                 let eval: EF = data_rng.random();
