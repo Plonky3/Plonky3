@@ -19,10 +19,11 @@ p3-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-num-bigint.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-bn254 = { path = "../bn254" }
 p3-goldilocks = { path = "../goldilocks" }
+
+num-bigint.workspace = true
 
 [lints]
 workspace = true

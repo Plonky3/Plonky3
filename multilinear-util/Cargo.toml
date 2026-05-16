@@ -21,9 +21,9 @@ tracing.workspace = true
 rand.workspace = true
 
 [dev-dependencies]
-criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 
+criterion.workspace = true
 proptest.workspace = true
 
 [features]
