@@ -143,11 +143,6 @@ pub struct ProverRun {
     pub verifier: ZkVerifier<F, EF>,
     /// Verifier-side challenger paired with the prover one.
     pub verifier_challenger: MyChallenger,
-    /// Prover-side challenger, advanced through the sumcheck.
-    ///
-    /// Kept on the public surface so composition tests can continue the transcript.
-    #[allow(dead_code)]
-    pub prover_challenger: MyChallenger,
     /// Per-round zero-knowledge transcript artefacts.
     pub zk_data: ZkSumcheckData<F, EF>,
     /// Mask commitments forwarded to the verifier.
@@ -275,7 +270,6 @@ where
     ProverRun {
         verifier,
         verifier_challenger,
-        prover_challenger,
         zk_data,
         mask_commits,
         prover_randomness,
