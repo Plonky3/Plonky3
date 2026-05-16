@@ -268,7 +268,7 @@ mod tests {
     use super::*;
     use crate::sumcheck::layout::{Layout, PrefixProver, SuffixProver, TableShape};
     use crate::sumcheck::strategy::VariableOrder;
-    use crate::sumcheck::zk::test_helpers::{EF, F, Mode, MyMmcs, run_prover};
+    use crate::sumcheck::zk::test_helpers::{EF, F, MyMmcs, run_prover};
 
     #[test]
     fn verifier_strategy_matches_non_private_layouts() {
@@ -309,7 +309,7 @@ mod tests {
     /// - Runs an honest prover with grinding enabled.
     /// - Bumps the first round's PoW witness by one.
     /// - Asserts the verifier rejects with [`SumcheckError::InvalidPowWitness`].
-    fn forged_pow_witness_rejected_case(mode: Mode) {
+    fn forged_pow_witness_rejected_case(binding: VariableOrder) {
         // Fixture state:
         //
         //     n_vars       = 6        (witness has 2^6 = 64 evaluations)
@@ -332,9 +332,9 @@ mod tests {
         let seed = 0u64;
         let pow_bits = 16;
 
-        // Honest run via the mode-parameterised helper.
+        // Honest run via the binding-parameterised helper.
         let mut run = run_prover(
-            mode,
+            binding,
             n_vars,
             folding_factor,
             ell_zk,
@@ -370,14 +370,14 @@ mod tests {
 
         assert!(
             matches!(result, Err(SumcheckError::InvalidPowWitness)),
-            "verifier accepted a forged PoW witness in mode {mode:?}; got {result:?}",
+            "verifier accepted a forged PoW witness in binding {binding:?}; got {result:?}",
         );
     }
 
     #[test]
     fn forged_pow_witness_rejected_prefix() {
         // Prefix path: a tampered PoW witness must be rejected with `InvalidPowWitness`.
-        forged_pow_witness_rejected_case(Mode::Prefix);
+        forged_pow_witness_rejected_case(VariableOrder::Prefix);
     }
 
     #[test]
@@ -387,7 +387,7 @@ mod tests {
         // PoW handling lives in the wire schema, which both binding modes
         // share byte-for-byte; this case pins that fact against the
         // binding-mode dispatch.
-        forged_pow_witness_rejected_case(Mode::Suffix);
+        forged_pow_witness_rejected_case(VariableOrder::Suffix);
     }
 
     /// Drives the `ell_zk` mismatch invariant for one binding mode.
@@ -407,7 +407,7 @@ mod tests {
     ///
     /// A swapped mask length would slip past the shape check.
     /// The dedicated mismatch error closes that gap.
-    fn ell_zk_mismatch_rejected_case(mode: Mode) {
+    fn ell_zk_mismatch_rejected_case(binding: VariableOrder) {
         // Fixture state:
         //
         //     n_vars       = 6
@@ -426,7 +426,7 @@ mod tests {
         let pow_bits = 0;
 
         let mut run = run_prover(
-            mode,
+            binding,
             n_vars,
             folding_factor,
             ell_zk,
@@ -454,20 +454,20 @@ mod tests {
                 Err(SumcheckError::EllZkMismatch { expected, actual })
                     if expected == wrong_ell_zk && actual == ell_zk
             ),
-            "verifier should have rejected ell_zk mismatch in mode {mode:?}; got {result:?}",
+            "verifier should have rejected ell_zk mismatch in binding {binding:?}; got {result:?}",
         );
     }
 
     #[test]
     fn ell_zk_mismatch_rejected_prefix() {
         // Prefix path: verifier rejects when its `ell_zk` disagrees with the proof.
-        ell_zk_mismatch_rejected_case(Mode::Prefix);
+        ell_zk_mismatch_rejected_case(VariableOrder::Prefix);
     }
 
     #[test]
     fn ell_zk_mismatch_rejected_suffix() {
         // Suffix path: same invariant, exercised through the suffix dispatch.
-        ell_zk_mismatch_rejected_case(Mode::Suffix);
+        ell_zk_mismatch_rejected_case(VariableOrder::Suffix);
     }
 
     /// Drives the wire-tampering invariant for one binding mode.
@@ -505,7 +505,7 @@ mod tests {
     /// - With `gamma_j` sampled from `EF ~ 2^124`, the bound is approx `2^-110`.
     /// - CI cannot host the trial count needed to observe it.
     fn rbr_tampering_changes_verifier_output_case(
-        mode: Mode,
+        binding: VariableOrder,
         n_vars: usize,
         ell_zk: usize,
         num_eqs: usize,
@@ -515,20 +515,20 @@ mod tests {
     ) -> Result<(), TestCaseError> {
         // Per-mode folding-factor window:
         //
-        //     mode    | precondition         | folding range
+        //     binding | precondition         | folding range
         //     --------+----------------------+--------------------
         //     prefix  | n_vars > k_pack      | 1 ..= n_vars - k_pack
         //     suffix  | folding <= n_vars    | 1 ..= n_vars - 1
         //
         // The prefix reservation keeps at least one full SIMD lane after the
         // first packed round; suffix has no such constraint.
-        let folding_factor = match mode {
-            Mode::Prefix => {
+        let folding_factor = match binding {
+            VariableOrder::Prefix => {
                 let k_pack = p3_util::log2_strict_usize(<F as Field>::Packing::WIDTH);
                 prop_assume!(n_vars > k_pack);
                 1 + (seed as usize % (n_vars - k_pack))
             }
-            Mode::Suffix => 1 + (seed as usize % (n_vars - 1).max(1)),
+            VariableOrder::Suffix => 1 + (seed as usize % (n_vars - 1).max(1)),
         };
 
         let pow_bits = 0;
@@ -537,7 +537,7 @@ mod tests {
         // Both verifier replays clone its state so they observe the same
         // Fiat–Shamir history up to (but not including) the tamper.
         let run = run_prover(
-            mode,
+            binding,
             n_vars,
             folding_factor,
             ell_zk,
@@ -595,10 +595,10 @@ mod tests {
         prop_assert_ne!(
             honest_target,
             tampered_target,
-            "tampering with wire coordinate ({}, {}) must change target in mode {:?}",
+            "tampering with wire coordinate ({}, {}) must change target in binding {:?}",
             tamper_round,
             tamper_pos,
-            mode,
+            binding,
         );
 
         Ok(())
@@ -618,7 +618,7 @@ mod tests {
         ) {
             // Prefix path; see the driver docstring for the soundness story.
             rbr_tampering_changes_verifier_output_case(
-                Mode::Prefix,
+                VariableOrder::Prefix,
                 n_vars,
                 ell_zk,
                 num_eqs,
@@ -641,7 +641,7 @@ mod tests {
             // Running on both binding modes pins that the divergence
             // invariant does not rely on prefix's packed compression.
             rbr_tampering_changes_verifier_output_case(
-                Mode::Suffix,
+                VariableOrder::Suffix,
                 n_vars,
                 ell_zk,
                 num_eqs,

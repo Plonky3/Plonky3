@@ -15,8 +15,9 @@ use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
-use crate::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table, TableShape, Witness};
-use crate::sumcheck::zk::{ZkPrefixProver, ZkSuffixProver, ZkSumcheckData, ZkVerifier};
+use crate::sumcheck::layout::{PrefixProver, SuffixProver, Table, TableShape};
+use crate::sumcheck::strategy::VariableOrder;
+use crate::sumcheck::zk::{ZkLayout, ZkProver, ZkSumcheckData, ZkVerifier};
 
 /// Base field used across the test suite.
 pub type F = BabyBear;
@@ -47,19 +48,6 @@ pub type MyEnc = ReedSolomonZkEncoding<F, MyDft>;
 /// - Sumcheck itself opens zero positions, so any `t >= 0` is sound.
 /// - `t = 2` keeps the codeword small (cheap setup) and still covers one even + one odd slot for downstream composition tests.
 pub const T: usize = 2;
-
-/// Stacked-sumcheck binding direction.
-///
-/// Mirrors the non-private split between prefix- and suffix-binding provers.
-/// Every fixture branches on the tag once at the top of the helper.
-/// The branches then delegate to the matching HVZK prover.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    /// Prefix-binding HVZK prover over an interleaved stacked witness.
-    Prefix,
-    /// Suffix-binding HVZK prover over a non-interleaved stacked witness.
-    Suffix,
-}
 
 /// Builds the per-test setup triple from a single seed.
 ///
@@ -96,25 +84,29 @@ pub fn make_setup(seed: u64, ell_zk: usize) -> (Perm, MyMmcs, MyEnc) {
     (perm, mmcs, encoding)
 }
 
-/// Builds a prefix-binding HVZK prover and a matching verifier.
+/// Builds an HVZK prover and a matching verifier for the given binding mode.
 ///
-/// The witness is laid out in the interleaved-stacked form, with column-local bits ahead of selector bits.
+/// The binding mode is selected by the layout type parameter.
+/// The witness shape is delivered by the layout's own factory:
+///
+/// - prefix layout  ⇒  interleaved-stacked witness  (local bits first)
+/// - suffix layout  ⇒  contiguous stacked witness   (selector bits first)
 ///
 /// # Returns
 ///
-/// - HVZK prover wrapping a fresh prefix-binding inner prover.
-/// - Verifier registered with the prefix layout strategy.
+/// - HVZK prover wrapping a fresh inner prover of the chosen binding mode.
+/// - Verifier registered with the matching layout strategy.
 /// - Variable count of the polynomial, useful for shape checks.
-pub fn build_prover_verifier_prefix(
+#[allow(clippy::type_complexity)]
+pub fn build_prover_verifier<L>(
     evals: Vec<F>,
     folding_factor: usize,
     encoding: MyEnc,
     mmcs: MyMmcs,
-) -> (
-    ZkPrefixProver<F, EF, MyEnc, MyMmcs>,
-    ZkVerifier<F, EF>,
-    usize,
-) {
+) -> (ZkProver<F, EF, MyEnc, MyMmcs, L>, ZkVerifier<F, EF>, usize)
+where
+    L: ZkLayout<F, EF>,
+{
     // Table arity:
     //
     //     |evals| = 2^n_vars
@@ -124,50 +116,21 @@ pub fn build_prover_verifier_prefix(
     let poly = Poly::new(evals);
     let table = Table::new(vec![poly]);
 
-    // Interleave into the stacked layout the inner prover expects.
-    let witness: Witness<F> = Witness::new_interleaved(vec![table], folding_factor);
+    // Witness shape comes from the layout factory; binding mode is encoded
+    // in the layout type itself.
+    let witness = L::new_witness(vec![table], folding_factor);
 
-    // Prefix-binding inner prover + HVZK overlay.
-    let inner = PrefixProver::<F, EF>::from_witness(witness);
-    let prover = ZkPrefixProver::new(inner, encoding, mmcs);
+    // Layout-binding inner prover + HVZK overlay.
+    let inner = L::from_witness(witness);
+    let prover = ZkProver::new(inner, encoding, mmcs);
 
-    // Verifier registered with the matching table shape and layout strategy.
-    let verifier = ZkVerifier::<F, EF>::new_prefix(&[TableShape::new(n_vars, 1)]);
-    (prover, verifier, n_vars)
-}
+    // Verifier strategy must match the layout binding mode.
+    let shapes = [TableShape::new(n_vars, 1)];
+    let verifier = match L::strategy().variable_order {
+        VariableOrder::Prefix => ZkVerifier::<F, EF>::new_prefix(&shapes),
+        VariableOrder::Suffix => ZkVerifier::<F, EF>::new_suffix(&shapes),
+    };
 
-/// Builds a suffix-binding HVZK prover and a matching verifier.
-///
-/// The witness is laid out in the non-interleaved stacked form.
-/// Selector bits come ahead of column-local bits.
-///
-/// # Returns
-///
-/// - HVZK prover wrapping a fresh suffix-binding inner prover.
-/// - Verifier registered with the suffix layout strategy.
-/// - Variable count of the polynomial, useful for shape checks.
-pub fn build_prover_verifier_suffix(
-    evals: Vec<F>,
-    folding_factor: usize,
-    encoding: MyEnc,
-    mmcs: MyMmcs,
-) -> (
-    ZkSuffixProver<F, EF, MyEnc, MyMmcs>,
-    ZkVerifier<F, EF>,
-    usize,
-) {
-    let n_vars = p3_util::log2_strict_usize(evals.len());
-
-    let poly = Poly::new(evals);
-    let table = Table::new(vec![poly]);
-
-    // Suffix layout: no selector interleaving, columns contiguous.
-    let witness: Witness<F> = Witness::new(vec![table], folding_factor);
-
-    let inner = SuffixProver::<F, EF>::from_witness(witness);
-    let prover = ZkSuffixProver::new(inner, encoding, mmcs);
-
-    let verifier = ZkVerifier::<F, EF>::new_suffix(&[TableShape::new(n_vars, 1)]);
     (prover, verifier, n_vars)
 }
 
@@ -199,11 +162,11 @@ pub struct ProverRun {
 
 /// Runs the prover side of a roundtrip and returns the proof artefacts.
 ///
-/// Branches on the binding mode internally.
+/// Branches on the binding direction internally.
 /// The post-prover verifier replay is shared across modes and lives in [`replay_verifier`].
 #[allow(clippy::too_many_arguments)]
 pub fn run_prover(
-    mode: Mode,
+    binding: VariableOrder,
     n_vars: usize,
     folding_factor: usize,
     ell_zk: usize,
@@ -222,75 +185,101 @@ pub fn run_prover(
     let evals: Vec<F> = (0..(1usize << n_vars)).map(|_| data_rng.random()).collect();
 
     // Phase 3: parallel challengers from the same permutation state.
-    let mut prover_challenger = MyChallenger::new(perm.clone());
-    let mut verifier_challenger = MyChallenger::new(perm);
+    let prover_challenger = MyChallenger::new(perm.clone());
+    let verifier_challenger = MyChallenger::new(perm);
 
     // Phase 4: matched prover + verifier on this witness, dispatching on the
-    //          binding mode.
-    let mut zk_data = ZkSumcheckData::<F, EF>::default();
-    let mut prover_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+    //          binding direction.
+    let zk_data = ZkSumcheckData::<F, EF>::default();
+    let prover_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
 
-    match mode {
-        Mode::Prefix => {
-            let (mut prover, mut verifier, _n_vars) =
-                build_prover_verifier_prefix(evals, folding_factor, encoding, mmcs);
-            for _ in 0..num_concrete {
-                let openings = prover.eval(0, &[0], &mut prover_challenger);
-                verifier.add_claim(0, &[0], &openings, &mut verifier_challenger);
-            }
-            let mut virtual_evals = Vec::with_capacity(num_virtual);
-            for _ in 0..num_virtual {
-                let eval = prover.add_virtual_eval(&mut prover_challenger);
-                verifier.add_virtual_eval(eval, &mut verifier_challenger);
-                virtual_evals.push(eval);
-            }
-            let (_residual_prover, prover_randomness, mask_oracles) = prover.into_sumcheck(
-                &mut zk_data,
-                pow_bits,
-                &mut prover_challenger,
-                &mut prover_rng,
-            );
-            let mask_commits: Vec<_> = mask_oracles.iter().map(|(c, _)| c.clone()).collect();
-            ProverRun {
-                verifier,
-                verifier_challenger,
-                prover_challenger,
-                zk_data,
-                mask_commits,
-                prover_randomness,
-                virtual_evals,
-            }
-        }
-        Mode::Suffix => {
-            let (mut prover, mut verifier, _n_vars) =
-                build_prover_verifier_suffix(evals, folding_factor, encoding, mmcs);
-            for _ in 0..num_concrete {
-                let openings = prover.eval(0, &[0], &mut prover_challenger);
-                verifier.add_claim(0, &[0], &openings, &mut verifier_challenger);
-            }
-            let mut virtual_evals = Vec::with_capacity(num_virtual);
-            for _ in 0..num_virtual {
-                let eval = prover.add_virtual_eval(&mut prover_challenger);
-                verifier.add_virtual_eval(eval, &mut verifier_challenger);
-                virtual_evals.push(eval);
-            }
-            let (_residual_prover, prover_randomness, mask_oracles) = prover.into_sumcheck(
-                &mut zk_data,
-                pow_bits,
-                &mut prover_challenger,
-                &mut prover_rng,
-            );
-            let mask_commits: Vec<_> = mask_oracles.iter().map(|(c, _)| c.clone()).collect();
-            ProverRun {
-                verifier,
-                verifier_challenger,
-                prover_challenger,
-                zk_data,
-                mask_commits,
-                prover_randomness,
-                virtual_evals,
-            }
-        }
+    // The per-mode body is identical once the prover and verifier are typed.
+    // Dispatch once on `binding` to pick the layout type; the rest is shared.
+    match binding {
+        VariableOrder::Prefix => drive_prover_run::<PrefixProver<F, EF>>(
+            evals,
+            folding_factor,
+            encoding,
+            mmcs,
+            num_concrete,
+            num_virtual,
+            pow_bits,
+            prover_challenger,
+            verifier_challenger,
+            zk_data,
+            prover_rng,
+        ),
+        VariableOrder::Suffix => drive_prover_run::<SuffixProver<F, EF>>(
+            evals,
+            folding_factor,
+            encoding,
+            mmcs,
+            num_concrete,
+            num_virtual,
+            pow_bits,
+            prover_challenger,
+            verifier_challenger,
+            zk_data,
+            prover_rng,
+        ),
+    }
+}
+
+/// Builds the prover/verifier pair and drives a full claim-recording roundtrip.
+///
+/// Generic over the binding-mode layout.
+/// The body is identical for both binding modes; only the type parameter changes.
+#[allow(clippy::too_many_arguments)]
+fn drive_prover_run<L>(
+    evals: Vec<F>,
+    folding_factor: usize,
+    encoding: MyEnc,
+    mmcs: MyMmcs,
+    num_concrete: usize,
+    num_virtual: usize,
+    pow_bits: usize,
+    mut prover_challenger: MyChallenger,
+    mut verifier_challenger: MyChallenger,
+    mut zk_data: ZkSumcheckData<F, EF>,
+    mut prover_rng: SmallRng,
+) -> ProverRun
+where
+    L: ZkLayout<F, EF>,
+{
+    let (mut prover, mut verifier, _n_vars) =
+        build_prover_verifier::<L>(evals, folding_factor, encoding, mmcs);
+
+    // Concrete opening claims.
+    for _ in 0..num_concrete {
+        let openings = prover.eval(0, &[0], &mut prover_challenger);
+        verifier.add_claim(0, &[0], &openings, &mut verifier_challenger);
+    }
+
+    // Virtual evaluation claims.
+    let mut virtual_evals = Vec::with_capacity(num_virtual);
+    for _ in 0..num_virtual {
+        let eval = prover.add_virtual_eval(&mut prover_challenger);
+        verifier.add_virtual_eval(eval, &mut verifier_challenger);
+        virtual_evals.push(eval);
+    }
+
+    // Prover-side sumcheck; consumes `prover`.
+    let (_residual_prover, prover_randomness, mask_oracles) = prover.into_sumcheck(
+        &mut zk_data,
+        pow_bits,
+        &mut prover_challenger,
+        &mut prover_rng,
+    );
+    let mask_commits: Vec<_> = mask_oracles.iter().map(|(c, _)| c.clone()).collect();
+
+    ProverRun {
+        verifier,
+        verifier_challenger,
+        prover_challenger,
+        zk_data,
+        mask_commits,
+        prover_randomness,
+        virtual_evals,
     }
 }
 
@@ -332,7 +321,7 @@ pub fn replay_verifier(
 /// - `Ok(())` when prover and verifier derive the same per-round challenges.
 /// - `Err(msg)` otherwise, with context for a proptest failure report.
 pub fn run_roundtrip(
-    mode: Mode,
+    binding: VariableOrder,
     n_vars: usize,
     folding_factor: usize,
     ell_zk: usize,
@@ -344,7 +333,7 @@ pub fn run_roundtrip(
     let pow_bits = 4;
 
     let run = run_prover(
-        mode,
+        binding,
         n_vars,
         folding_factor,
         ell_zk,

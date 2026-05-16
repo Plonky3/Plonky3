@@ -76,6 +76,6 @@ pub mod verifier;
 pub(crate) mod test_helpers;
 
 pub use data::{MaskOracle, ZkSumcheckData};
-pub use prover::{ZkPrefixProver, ZkSuffixProver};
+pub use prover::{ZkLayout, ZkPrefixProver, ZkProver, ZkSuffixProver};
 pub use simulator::simulate_classic_unpacked;
 pub use verifier::ZkVerifier;

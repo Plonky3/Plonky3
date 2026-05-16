@@ -212,37 +212,38 @@ mod tests {
 
     use super::*;
     use crate::sumcheck::layout::TableShape;
+    use crate::sumcheck::strategy::VariableOrder;
     use crate::sumcheck::zk::ZkVerifier;
     use crate::sumcheck::zk::test_helpers::{
-        EF, F, Mode, MyChallenger, MyMmcs, ef_in_f_subspace, make_setup, run_prover,
+        EF, F, MyChallenger, MyMmcs, ef_in_f_subspace, make_setup, run_prover,
     };
 
     /// Lemma 6.4 view-match driver for Reed-Solomon mask encoding.
     ///
-    /// # Invariants per `(mode, n_vars, folding, ell_zk, num_eqs)` case
+    /// # Invariants per `(binding, n_vars, folding, ell_zk, num_eqs)` case
     ///
     /// 1. Verifier accepts both transcripts (soundness floor).
     /// 2. `mu_tilde` and mask commits match bit-for-bit under matched seeds (deterministic equality, not a distributional test).
     /// 3. Wire coordinates with index `>= 2` lie in the base-field subspace on both sides (closes paper §6.1's distinguisher).
     /// 4. The mask encoding's own simulator returns the correct shape (RS simulator error = 0).
     ///
-    /// The `mode` parameter only affects the real run; the simulator output depends only on the wire schema, which both binding modes share.
+    /// The binding parameter only affects the real run; the simulator output depends only on the wire schema, which both binding modes share.
     fn run_view_match_rs(
-        mode: Mode,
+        binding: VariableOrder,
         n_vars: usize,
         folding_factor: usize,
         ell_zk: usize,
         num_eqs: usize,
         seed: u64,
     ) -> Result<(), &'static str> {
-        // Real run via the mode-parameterised helper.
+        // Real run via the binding-parameterised helper.
         //
         // Internally, `run_prover` reuses the same `seed.wrapping_add(2)`
         // RNG seed we re-create below for the simulator, which is what
         // makes the mu_tilde / mask-commits coupling certificate exact.
         let pow_bits = 0;
         let mut real_run = run_prover(
-            mode,
+            binding,
             n_vars,
             folding_factor,
             ell_zk,
@@ -280,9 +281,9 @@ mod tests {
         // The simulator is binding-mode-agnostic, so the verifier we hand
         // it carries the strategy of the real prover for symmetric
         // selector lifting.
-        let mut verifier_sim = match mode {
-            Mode::Prefix => ZkVerifier::<F, EF>::new_prefix(&[TableShape::new(n_vars, 1)]),
-            Mode::Suffix => ZkVerifier::<F, EF>::new_suffix(&[TableShape::new(n_vars, 1)]),
+        let mut verifier_sim = match binding {
+            VariableOrder::Prefix => ZkVerifier::<F, EF>::new_prefix(&[TableShape::new(n_vars, 1)]),
+            VariableOrder::Suffix => ZkVerifier::<F, EF>::new_suffix(&[TableShape::new(n_vars, 1)]),
         };
         let mut sim_ch = MyChallenger::new(perm);
         for &eval in &virtual_evals {
@@ -389,7 +390,7 @@ mod tests {
             let folding_factor = 1 + (seed as usize % (n_vars - k_pack));
 
             prop_assert!(
-                run_view_match_rs(Mode::Prefix, n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok()
+                run_view_match_rs(VariableOrder::Prefix, n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok()
             );
         }
 
@@ -406,7 +407,7 @@ mod tests {
             let folding_factor = 1 + (seed as usize % (n_vars - 1).max(1));
 
             prop_assert!(
-                run_view_match_rs(Mode::Suffix, n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok()
+                run_view_match_rs(VariableOrder::Suffix, n_vars, folding_factor, ell_zk, num_eqs, seed).is_ok()
             );
         }
     }

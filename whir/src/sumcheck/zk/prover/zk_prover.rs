@@ -373,7 +373,8 @@ mod tests {
     use p3_util::log2_strict_usize;
     use proptest::prelude::*;
 
-    use crate::sumcheck::zk::test_helpers::{F, Mode, run_roundtrip};
+    use crate::sumcheck::strategy::VariableOrder;
+    use crate::sumcheck::zk::test_helpers::{F, run_roundtrip};
 
     #[test]
     fn prover_verifier_roundtrip_prefix() {
@@ -389,7 +390,8 @@ mod tests {
         //
         // Both claim kinds force the alpha-power split to do real work in both branches.
         // This catches a wrong skip count in the per-round accumulator assembly.
-        run_roundtrip(Mode::Prefix, 8, 3, 4, 1, 1, 0).expect("honest roundtrip should accept");
+        run_roundtrip(VariableOrder::Prefix, 8, 3, 4, 1, 1, 0)
+            .expect("honest roundtrip should accept");
     }
 
     #[test]
@@ -398,7 +400,8 @@ mod tests {
         //
         // Fixture mirrors the prefix-mode pin so a regression in one mode surfaces with the same fingerprint as the other.
         // The residual handoff routes the combining challenge through suffix-specific compression that the prefix overlay does not exercise.
-        run_roundtrip(Mode::Suffix, 8, 3, 4, 1, 1, 0).expect("honest roundtrip should accept");
+        run_roundtrip(VariableOrder::Suffix, 8, 3, 4, 1, 1, 0)
+            .expect("honest roundtrip should accept");
     }
 
     #[test]
@@ -408,7 +411,8 @@ mod tests {
         // Fixture state: ell_zk = 32, matching a soundness-realistic mask setup.
         // The proptests below cap ell_zk at 5 to keep runtime small.
         // This case pins the long-mask arithmetic path the proptests never reach.
-        run_roundtrip(Mode::Prefix, 8, 3, 32, 1, 1, 0).expect("honest roundtrip should accept");
+        run_roundtrip(VariableOrder::Prefix, 8, 3, 32, 1, 1, 0)
+            .expect("honest roundtrip should accept");
     }
 
     #[test]
@@ -417,7 +421,8 @@ mod tests {
         //
         // Mirrors the prefix long-mask pin.
         // A regression that mishandles the combining factor on a long mask passes the prefix pin and trips here.
-        run_roundtrip(Mode::Suffix, 8, 3, 32, 1, 1, 0).expect("honest roundtrip should accept");
+        run_roundtrip(VariableOrder::Suffix, 8, 3, 32, 1, 1, 0)
+            .expect("honest roundtrip should accept");
     }
 
     proptest! {
@@ -447,7 +452,7 @@ mod tests {
             let folding_factor = 1 + (seed as usize % (n_vars - k_pack));
 
             prop_assert!(
-                run_roundtrip(Mode::Prefix, n_vars, folding_factor, ell_zk, num_concrete, num_virtual, seed)
+                run_roundtrip(VariableOrder::Prefix, n_vars, folding_factor, ell_zk, num_concrete, num_virtual, seed)
                     .is_ok()
             );
         }
@@ -470,7 +475,7 @@ mod tests {
             let folding_factor = 1 + (seed as usize % (n_vars - 1));
 
             prop_assert!(
-                run_roundtrip(Mode::Suffix, n_vars, folding_factor, ell_zk, num_concrete, num_virtual, seed)
+                run_roundtrip(VariableOrder::Suffix, n_vars, folding_factor, ell_zk, num_concrete, num_virtual, seed)
                     .is_ok()
             );
         }
