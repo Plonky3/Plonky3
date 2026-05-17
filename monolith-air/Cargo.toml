@@ -16,7 +16,6 @@ p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-mds.workspace = true
 p3-monolith.workspace = true
-p3-poseidon1.workspace = true
 p3-symmetric.workspace = true
 
 rand.workspace = true

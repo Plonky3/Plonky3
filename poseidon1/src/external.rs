@@ -28,6 +28,7 @@
 use alloc::vec::Vec;
 
 use p3_field::{Algebra, Field, InjectiveMonomial, PrimeCharacteristicRing};
+pub use p3_mds::util::mds_multiply;
 use p3_symmetric::Permutation;
 
 /// Pre-computed constants for the full (external) rounds.
@@ -83,25 +84,6 @@ where
 
     /// Apply the RF/2 terminal full rounds.
     fn permute_state_terminal(&self, state: &mut [R; WIDTH]);
-}
-
-/// Dense matrix-vector multiplication in O(t^2).
-///
-/// Only used for the non-circulant transition matrix in partial rounds, which
-/// is applied once per permutation call. The circulant MDS multiply in full
-/// rounds uses the MDS crate via the permutation trait instead.
-#[inline]
-pub fn mds_multiply<F: PrimeCharacteristicRing, A: Algebra<F>, const WIDTH: usize>(
-    state: &mut [A; WIDTH],
-    mds: &[[F; WIDTH]; WIDTH],
-) {
-    // Snapshot the current state before overwriting.
-    let input = state.clone();
-
-    // Compute each output element as a dot product of one MDS row with the input.
-    for (out, row) in state.iter_mut().zip(mds.iter()) {
-        *out = A::mixed_dot_product(&input, row);
-    }
 }
 
 /// Apply the initial full rounds (generic implementation).

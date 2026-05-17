@@ -23,7 +23,7 @@ pub use generation::*;
 #[cfg(test)]
 mod tests {
     use alloc::vec;
-    use core::borrow::Borrow;
+    use core::borrow::{Borrow, BorrowMut};
     use core::mem::size_of;
 
     use p3_air::symbolic::{AirLayout, get_max_constraint_degree};
@@ -80,10 +80,15 @@ mod tests {
 
     #[test]
     fn test_column_count_mersenne31_16() {
-        // Manually compute the expected column count for Mersenne31 WIDTH=16.
+        // Per round (Mersenne31, width 16):
         //
-        // Per round: FIELD_BITS * NUM_BARS (bits) + NUM_BARS (bar outputs) + WIDTH (post)
-        let expected = WIDTH + (NUM_FULL_ROUNDS + 1) * (FIELD_BITS * NUM_BARS + NUM_BARS + WIDTH);
+        //     FIELD_BITS * NUM_BARS  (input bits)
+        //   + FIELD_BITS * NUM_BARS  (chi AND-product witnesses)
+        //   + NUM_BARS               (canonical-pattern inverses)
+        //   + NUM_BARS               (Bar outputs)
+        //   + WIDTH                  (post-state)
+        let per_round = 2 * FIELD_BITS * NUM_BARS + 2 * NUM_BARS + WIDTH;
+        let expected = WIDTH + (NUM_FULL_ROUNDS + 1) * per_round;
         let actual = num_cols::<WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>();
         assert_eq!(expected, actual);
     }
@@ -98,11 +103,9 @@ mod tests {
         };
         let degree = get_max_constraint_degree::<F, _>(&air, layout);
 
-        // The maximum constraint degree is 4, from the chi S-box XOR formula:
-        //   out = in + prod - 2 * in * prod
-        // where prod = (1 - in_{i+1}) * in_{i+2} * in_{i+3} has degree 3,
-        // and in * prod has degree 4.
-        assert_eq!(degree, 4, "Expected constraint degree 4 for Monolith-31");
+        // Cap set by the chi AND product binding (degree 3); all other
+        // constraints are degree ≤ 2.
+        assert_eq!(degree, 3, "Expected constraint degree 3 for Monolith-31");
     }
 
     #[test]
@@ -205,6 +208,54 @@ mod tests {
             inputs, &air, &bars, 0,
         );
 
+        check_constraints(&air, &trace, &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "constraints not satisfied")]
+    fn test_canonical_constraint_rejects_all_ones_forgery() {
+        // Invariant:
+        //
+        //     canonical 0  : bits = 0...0  ->  integer 0
+        //     forged 0     : bits = 1...1  ->  integer p = 0 (mod p)
+        //
+        // Without the canonical constraint, both encodings pass every other
+        // Bar check, breaking decomposition uniqueness.
+        //
+        // Fixture: honest trace over a 16-word all-zero input.
+        let (air, bars) = build_monolith_air();
+        let input: [F; WIDTH] = [F::ZERO; WIDTH];
+        let mut trace = generate_trace_rows::<_, _, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>(
+            vec![input],
+            &air,
+            &bars,
+            0,
+        );
+
+        // Mutation on the first Bar of the first round:
+        //
+        //     bits           : 0...0  -->  1...1
+        //     chi[j]         : 0      -->  0     ((1 - 1) * 1 * 1 = 0)
+        //     canonical inv  : valid  -->  0     (no inverse exists for 0)
+        //
+        // chi fixed points keep the S-box equation satisfied:
+        //
+        //     chi(0xFF) = 0xFF   (8-bit limb)
+        //     chi(0x7F) = 0x7F   (7-bit limb)
+        //     packed    = p = 0  (mod p)
+        let row_slice = trace.row_mut(0);
+        let row: &mut MonolithCols<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS> =
+            row_slice.borrow_mut();
+        let bar = &mut row.full_rounds[0];
+        for b in bar.bars_input_bits[0].iter_mut() {
+            *b = F::ONE;
+        }
+        for c in bar.bars_chi_products[0].iter_mut() {
+            *c = F::ZERO;
+        }
+        bar.bars_not_all_ones_inv[0] = F::ZERO;
+
+        // Only the canonical-pattern constraint should fail, but it must.
         check_constraints(&air, &trace, &[]);
     }
 

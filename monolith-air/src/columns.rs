@@ -82,6 +82,33 @@ pub struct MonolithRoundCols<T, const WIDTH: usize, const NUM_BARS: usize, const
     /// Each bit is constrained to be boolean: `b * (1 - b) = 0`.
     pub bars_input_bits: [[T; FIELD_BITS]; NUM_BARS],
 
+    /// Committed chi AND product, one cell per output bit.
+    ///
+    /// # Binding equation (limb of width n)
+    ///
+    /// - Width 8: `chi[j] = (1 - x_{j-2}) * x_{j-3} * x_{j-4}` — degree 3.
+    /// - Width 7: `chi[j] = (1 - x_{j-2}) * x_{j-3}`           — degree 2.
+    ///
+    /// All indices are taken mod n.
+    ///
+    /// # Why this column exists
+    ///
+    /// - Inlining the chi XOR makes the limb output degree 4.
+    /// - Committing the AND product splits it into a degree-3 binding
+    ///   and a degree-2 XOR, capping the AIR at degree 3.
+    pub bars_chi_products: [[T; FIELD_BITS]; NUM_BARS],
+
+    /// Multiplicative inverse of `n - popcount`, one cell per Bar.
+    ///
+    /// # Why this column exists
+    ///
+    /// - For a Mersenne prime `p = 2^n - 1`, the all-ones n-bit string
+    ///   also encodes 0 (its integer value equals p).
+    /// - `n - popcount` is zero only on that string.
+    /// - With no inverse available, the constraint
+    ///   `inv * (n - popcount) = 1` rejects the forgery.
+    pub bars_not_all_ones_inv: [T; NUM_BARS],
+
     /// Committed output of each Bar (S-box) application.
     ///
     /// These values reset the expression degree to 1 before the Bricks layer,

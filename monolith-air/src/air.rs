@@ -2,43 +2,29 @@
 //!
 //! # Overview
 //!
-//! This module defines `MonolithAir`, the AIR that constrains the Monolith permutation.
-//!
-//! The constraints ensure that each trace row represents a valid execution of the full permutation.
-//!
-//! # Constraint Structure
-//!
-//! The constraints mirror the round structure of the permutation:
+//! Each trace row encodes one full permutation:
 //!
 //! ```text
-//!   inputs ──▶ initial Concrete ──▶ R rounds of (Bars → Bricks → Concrete → RC)
-//!                               ──▶ final round (Bars → Bricks → Concrete)
+//!   inputs --> initial Concrete --> R rounds of (Bars -> Bricks -> Concrete -> RC)
+//!                              --> final round    (Bars -> Bricks -> Concrete)
 //! ```
 //!
-//! Each round produces constraints that verify:
+//! Per-round checks:
 //!
-//! 1. **Bit decomposition**: The committed bits are boolean and reconstruct
-//!    the Bar input element.
+//! - Bits: boolean and reconstruct the Bar input.
+//! - S-box: committed Bar output equals chi(bits).
+//! - Bricks: each position adds the square of its predecessor.
+//! - Concrete + RC: post-state = MDS(Bricks state) + RC (no RC on the final round).
 //!
-//! 2. **S-box correctness**: The committed `bars_output` values match the
-//!    chi-like S-box applied to the bit-decomposed limbs.
+//! # Constraint Degree
 //!
-//! 3. **Bricks correctness**: The Feistel Type-3 layer `state[i] += state[i-1]^2`
-//!    is applied correctly (degree-2 constraints).
+//! All constraints are degree ≤ 3.
 //!
-//! 4. **Concrete + RC correctness**: The committed `post` values equal the MDS
-//!    matrix applied to the post-Bricks state, plus round constants.
-//!
-//! # Maximum Constraint Degree
-//!
-//! The maximum constraint degree is **4**, arising from the chi S-box formula:
-//!
-//! ```text
-//!   out_j = in_{j+1} XOR ((NOT in_{j+2}) AND in_{j+3} AND in_{j+4})
-//! ```
-//!
-//! where the XOR of a bit and a degree-3 AND product yields degree 4 over Fp.
-//! All other constraints (boolean, reconstruction, Bricks, Concrete) are degree 2 or less.
+//! - A `log_blowup = 1` prover accepts at most degree 3.
+//! - Chi natively reaches degree 4 (`bit XOR triple_AND`).
+//! - The AND product gets its own committed column: a degree-3 binding plus
+//!   a degree-2 XOR replace the degree-4 step.
+//! - Boolean, reconstruction, Bricks, Concrete constraints stay ≤ 2.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -48,8 +34,8 @@ use p3_air::utils::pack_bits_le;
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_field::{PrimeCharacteristicRing, PrimeField64};
 use p3_matrix::dense::RowMajorMatrix;
+use p3_mds::util::mds_multiply;
 use p3_monolith::MonolithBars;
-use p3_poseidon1::external::mds_multiply;
 use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -57,44 +43,32 @@ use rand::{RngExt, SeedableRng};
 use crate::columns::{MonolithCols, MonolithRoundCols, num_cols};
 use crate::generation::generate_trace_rows;
 
-/// Limb bit widths for Mersenne31 (p = 2^31 - 1).
+/// Limb widths for the Mersenne31 prime, summing to 31 bits.
 ///
-/// A 31-bit field element is decomposed into 4 limbs.
-/// - The first three (8-bit limbs) use the 3-input AND chi S-box,
-/// - The last (one 7-bit limb) uses the 2-input AND chi S-box.
+/// - Three leading 8-bit limbs use the 3-input AND chi S-box.
+/// - One trailing 7-bit limb uses the 2-input AND chi S-box.
 pub const MERSENNE31_LIMB_BITS: &[usize] = &[8, 8, 8, 7];
 
-/// Limb bit widths for Goldilocks (p = 2^64 - 2^32 + 1) with 8-bit lookups.
+/// Limb widths for the Goldilocks prime, summing to 64 bits.
 ///
-/// A 64-bit field element is decomposed into 8 limbs of 8 bits each.
-/// All limbs use the 3-input AND chi S-box.
+/// All eight limbs are 8 bits wide and use the 3-input AND chi S-box.
 pub const GOLDILOCKS_8_LIMB_BITS: &[usize] = &[8, 8, 8, 8, 8, 8, 8, 8];
 
-/// The Monolith AIR.
+/// Algebraic constraints that pin one full Monolith permutation per trace row.
 ///
-/// Constrains one Monolith permutation per trace row.
-/// The AIR evaluates polynomial constraints that verify every round of the permutation.
+/// # Per-constraint degree
 ///
-/// # Type Parameters
+/// - Bit boolean check: 2.
+/// - Bit reconstruction: 1.
+/// - Chi AND product witness: 3 (8-bit limbs) / 2 (7-bit limb).
+/// - Chi output equality: 2.
+/// - Canonical bit pattern: 2.
+/// - Bricks (Feistel squaring): 2.
+/// - Concrete (dense MDS): 2.
+/// - Round constant addition: 1.
 ///
-/// - `F`: The prime field.
-/// - `WIDTH`: Permutation state width.
-/// - `NUM_FULL_ROUNDS`: Number of rounds with round-constant addition (5).
-/// - `NUM_BARS`: Number of Bar (S-box) applications per round (8 for M31, 4 for GL).
-/// - `FIELD_BITS`: Bits per field element (31 for M31, 64 for GL).
-///
-/// # Constraint Degrees
-///
-/// - Boolean constraints on bits: degree 2.
-/// - Bit reconstruction: degree 1.
-/// - Chi S-box output verification: degree 4.
-/// - Bricks (Feistel Type-3): degree 2.
-/// - Concrete (MDS multiply): degree 2 (linear layer on degree-2 expressions
-///   from Bricks, but applied to committed degree-1 values via post-Bars output).
-/// - Round constant addition: degree 1.
-///
-/// Maximum constraint degree: **4** (from the chi S-box).
-#[derive(Debug)]
+/// Overall max: 3, set by the chi AND product.
+#[derive(Debug, Clone)]
 pub struct MonolithAir<
     F: PrimeCharacteristicRing,
     const WIDTH: usize,
@@ -128,49 +102,69 @@ impl<
     const NUM_FULL_ROUNDS: usize,
     const NUM_BARS: usize,
     const FIELD_BITS: usize,
-> Clone for MonolithAir<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>
-{
-    fn clone(&self) -> Self {
-        Self {
-            round_constants: self.round_constants.clone(),
-            mds_matrix: self.mds_matrix.clone(),
-            limb_bits: self.limb_bits,
-        }
-    }
-}
-
-impl<
-    F: PrimeCharacteristicRing,
-    const WIDTH: usize,
-    const NUM_FULL_ROUNDS: usize,
-    const NUM_BARS: usize,
-    const FIELD_BITS: usize,
 > MonolithAir<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>
 {
-    /// Construct a `MonolithAir` from explicit parameters.
+    /// Build the AIR from a permutation's parameters.
     ///
     /// # Arguments
     ///
-    /// - `round_constants`: The `NUM_FULL_ROUNDS` round constant vectors.
-    /// - `mds_matrix`: The dense MDS matrix (`mds_matrix[row][col]`).
-    /// - `limb_bits`: Bit widths of each limb. Sum must equal `FIELD_BITS`.
+    /// - Round constants, one vector per round that adds them.
+    /// - Dense MDS matrix indexed row-first.
+    /// - Limb widths driving the chi decomposition.
+    ///
+    /// # Limb width invariants
+    ///
+    /// - Sum to the field-bit parameter.
+    /// - Every non-trailing entry equals 8.
+    /// - Trailing entry lies in `3..=8`.
     ///
     /// # Panics
     ///
-    /// Panics if `limb_bits` does not sum to `FIELD_BITS`, or if `NUM_BARS > WIDTH`.
+    /// - Limb widths do not sum to the field-bit parameter.
+    /// - Bar applications exceed the state width.
+    /// - Any non-trailing limb is not 8.
+    /// - Trailing limb is outside `3..=8`.
     pub fn new(
         round_constants: [[F; WIDTH]; NUM_FULL_ROUNDS],
         mds_matrix: [[F; WIDTH]; WIDTH],
         limb_bits: &'static [usize],
     ) -> Self {
+        // Bit budget:  sum(limbs) == FIELD_BITS  (e.g. 8+8+8+7 = 31 for M31).
         assert_eq!(
             limb_bits.iter().sum::<usize>(),
             FIELD_BITS,
             "limb_bits must sum to FIELD_BITS"
         );
+
+        // Bars touches the first u of t state words; u > t leaves nothing to feed.
         const {
             assert!(NUM_BARS <= WIDTH, "NUM_BARS must not exceed WIDTH");
         }
+
+        // Short limb must come last.
+        //
+        // - Chi code: non-trailing limbs are hard-wired to 3-input AND.
+        // - Chi code: the trailing limb may use 2-input AND instead.
+        // - Any other order silently applies the wrong S-box.
+        let (last, leading) = limb_bits
+            .split_last()
+            .expect("limb_bits must contain at least one limb");
+        assert!(
+            leading.iter().all(|&n| n == 8),
+            "all limbs except the last must be exactly 8 bits wide"
+        );
+
+        // Trailing limb width in `3..=8`.
+        //
+        // - Chi is invertible only when `gcd(n, 2) = 1` (and `gcd(n, 3) = 1`
+        //   for the 3-input variant).
+        // - `3..=8` covers every Monolith parameter set and matches the
+        //   precomputed S-box tables.
+        assert!(
+            (3..=8).contains(last),
+            "last limb width must lie in 3..=8 bits, got {last}"
+        );
+
         Self {
             round_constants,
             mds_matrix,
@@ -286,16 +280,15 @@ impl<
 
 /// Evaluate constraints for one Monolith round.
 ///
-/// A round applies four operations in sequence:
+/// Layers applied in order:
 ///
-/// 1. **Bars**: Verify bit decomposition and S-box for each of the `NUM_BARS`
-///    elements. The remaining elements pass through unchanged.
-/// 2. **Bricks**: Feistel Type-3 layer: `state[i] += state[i-1]^2` (degree 2).
-/// 3. **Concrete**: Dense MDS matrix multiplication (linear, degree unchanged).
-/// 4. **AddRoundConstants** (optional): Add field constants to the state.
+/// - Bars
+/// - Bricks
+/// - Concrete
+/// - Round constants (skipped on the final round)
 ///
-/// After computing the result, constrain it against the committed `post` values,
-/// then reset the running state to those committed values (degree 1).
+/// The running state is reset to the committed post-state on exit so the next
+/// round restarts from a degree-1 expression.
 #[inline]
 fn eval_round<
     AB: AirBuilder,
@@ -310,48 +303,64 @@ fn eval_round<
     limb_bits: &[usize],
     builder: &mut AB,
 ) {
-    // Bars layer constraints
+    // Phase 1: Bars constraints (per Bar slot):
     //
-    // For each of the NUM_BARS elements:
-    // 1. Verify bits are boolean: b * (1 - b) = 0.
-    // 2. Verify reconstruction: sum(bits[i] * 2^i) == state[bar_idx].
-    // 3. Verify S-box: bars_output == chi_sbox(bits) reconstructed.
-    for (bar_idx, (input_bits, &bar_out)) in round
+    //     - boolean checks on each bit
+    //     - linear reconstruction back to the Bar input
+    //     - chi AND product witness equation (delegated to `eval_bar_sbox`)
+    //     - chi S-box output equality
+    //     - canonical bit pattern check (rules out the all-ones alias)
+    for (bar_idx, ((input_bits, chi_products), &bar_out)) in round
         .bars_input_bits
         .iter()
+        .zip(round.bars_chi_products.iter())
         .zip(round.bars_output.iter())
         .enumerate()
     {
-        // Boolean constraints: each bit must be 0 or 1.
+        // Boolean: every committed bit is 0 or 1.
         builder.assert_bools(*input_bits);
 
-        // Convert committed Var bits to Expr for algebraic evaluation.
+        // Lift committed cells to expressions for symbolic algebra.
         let bits: [AB::Expr; FIELD_BITS] = input_bits.map(|b| b.into());
+        let chi: [AB::Expr; FIELD_BITS] = chi_products.map(|b| b.into());
 
-        // Reconstruction constraint: the bits must reconstruct the Bar input.
-        // sum(bits[i] * 2^i) == state[bar_idx]
+        // Reconstruction:  sum_i bits[i] * 2^i  ==  state[bar_idx].
         let reconstructed: AB::Expr = pack_bits_le(bits.iter().cloned());
         builder.assert_eq(reconstructed, state[bar_idx].clone());
 
-        // S-box constraint: the committed bars_output must equal the chi S-box
-        // applied to the bit-decomposed limbs.
-        let sbox_output = eval_bar_sbox::<AB, FIELD_BITS>(&bits, limb_bits);
+        // S-box: committed Bar output == chi(bits), degree 2 thanks to the
+        // committed AND product witnesses.
+        let sbox_output = eval_bar_sbox::<AB, FIELD_BITS>(&bits, &chi, limb_bits, builder);
         builder.assert_eq(AB::Expr::from(bar_out), sbox_output);
+
+        // Canonical bit pattern check.
+        //
+        //     bits = 0...0  ->  integer 0   (canonical)
+        //     bits = 1...1  ->  integer p   (alias of 0 mod p)  <- forbidden
+        //
+        // The inverse of `n - popcount` exists for every encoding except
+        // the all-ones one, so the equation rejects only that alias.
+        //
+        // TODO: Goldilocks-style primes forbid a range, not one pattern.
+        // A bit-by-bit "less than p" check is needed there.
+        let popcount: AB::Expr = bits.iter().cloned().sum();
+        let diff = AB::Expr::from_usize(FIELD_BITS) - popcount;
+        builder.assert_one(diff * AB::Expr::from(round.bars_not_all_ones_inv[bar_idx]));
     }
 
-    // Build the post-Bars state:
-    // - First NUM_BARS elements come from the committed bars_output (degree 1).
-    // - Remaining elements are unchanged from the previous state.
+    // Phase 2: Build the post-Bars state.
+    //
+    //     positions 0..u   : committed Bar outputs (degree 1)
+    //     positions u..t   : pass through unchanged (degree 1)
     let mut post_bars = state.clone();
     for (bar_idx, &bar_out) in round.bars_output.iter().enumerate() {
         post_bars[bar_idx] = bar_out.into();
     }
 
-    // Bricks layer
+    // Phase 3: Bricks (Feistel Type-3 squaring).
     //
-    // Feistel Type-3:
-    // - state'[0] = state[0],
-    // - state'[i] = state[i] + state[i-1]^2.
+    //     post[0] = bars[0]
+    //     post[i] = bars[i] + bars[i-1]^2   for i >= 1
     let mut post_bricks = core::array::from_fn(|i| {
         if i == 0 {
             post_bars[0].clone()
@@ -360,88 +369,84 @@ fn eval_round<
         }
     });
 
-    // Concrete layer
-    //
-    // Dense MDS matrix multiply. The post_bricks state has degree 2
-    // (from the squaring in Bricks). MDS is linear, preserving degree 2.
+    // Phase 4: Concrete (linear, keeps degree 2).
     mds_multiply::<_, _, WIDTH>(&mut post_bricks, mds_matrix);
 
-    // Round constants (if not the final round)
+    // Phase 5: Round constants (skipped on the final round).
     if let Some(rc) = round_constants {
         for (s, c) in post_bricks.iter_mut().zip(rc.iter()) {
             *s += AB::Expr::from(c.clone());
         }
     }
 
-    // Constrain post-state
-    //
-    // The computed state must equal the committed post values.
-    // Then reset the running state to the committed values (degree 1).
+    // Phase 6: Bind to committed post-state (caps degree across rounds).
     for (computed, &committed) in post_bricks.into_iter().zip(round.post.iter()) {
         builder.assert_eq(computed, committed);
     }
 
-    // Reset state to committed values for the next round.
+    // Reset the running expressions to the freshly-bound committed values.
     *state = round.post.map(|x| x.into());
 }
 
-/// Evaluate the full Bar S-box on a bit-decomposed field element.
+/// Evaluate the chi S-box of one Bar on its bit decomposition.
 ///
-/// Applies the chi-like S-box independently to each limb (determined by
-/// `limb_bits`), then reconstructs the output as a single field expression
-/// using [`pack_bits_le`].
+/// # Overview
 ///
-/// # Chi S-box Formula (per limb)
+/// - Apply chi independently to each limb (widths from the input slice).
+/// - Recombine output bits via little-endian packing.
+/// - Use the committed AND product witnesses to cap degree at 3.
 ///
-/// Rust's `u8::rotate_left(k)` maps bit position `i` in the result to bit
-/// `(i - k) mod n` of the input. Combining with the final rotation:
+/// # Chi per limb (width n, indices mod n)
 ///
 /// ```text
-///   // 8-bit: out[j] = x[(j-1)%n] XOR (andn(x[(j-2)%n], x[(j-3)%n]) * x[(j-4)%n])
-///   // 7-bit: out[j] = x[(j-1)%n] XOR andn(x[(j-2)%n], x[(j-3)%n])
+///   8-bit:  out[j] = x[j-1] XOR ((NOT x[j-2]) AND x[j-3] AND x[j-4])
+///   7-bit:  out[j] = x[j-1] XOR ((NOT x[j-2]) AND x[j-3])
 /// ```
-///
-/// Uses the `andn` and `xor` methods from [`PrimeCharacteristicRing`], matching
-/// the same pattern used by the keccak-air for its chi step.
-///
-/// Maximum degree: 4 (XOR of degree-1 bit with degree-3 AND-NOT product).
 fn eval_bar_sbox<AB: AirBuilder, const FIELD_BITS: usize>(
     bits: &[AB::Expr; FIELD_BITS],
+    chi_products: &[AB::Expr; FIELD_BITS],
     limb_bits: &[usize],
+    builder: &mut AB,
 ) -> AB::Expr {
+    // Accumulator for the recombined field element.
     let mut result = AB::Expr::ZERO;
+
+    // Running offset into the global bit array; advances by limb width.
     let mut bit_offset = 0;
 
     for (limb_idx, &n) in limb_bits.iter().enumerate() {
+        // Slice the input bits and committed AND products for this limb.
         let x = &bits[bit_offset..bit_offset + n];
+        let chi = &chi_products[bit_offset..bit_offset + n];
 
-        // Last limb with < 8 bits uses 2-input AND (7-bit chi variant).
+        // Only the trailing limb may be narrower than 8 bits; it uses the
+        // 2-input AND variant of chi.
         let is_last_reduced = limb_idx == limb_bits.len() - 1 && n < 8;
 
-        // Modular index subtraction within the limb.
+        //     sub(j, k) = (j - k) mod n
         let sub = |base: usize, offset: usize| (base + n - (offset % n)) % n;
 
-        // Compute each output bit using andn/xor, then pack into a field element.
+        // Bind each AND product witness:
         //
-        // out[j] = x[sub(j,1)].xor(andn(x[sub(j,2)], x[sub(j,3)]) [* x[sub(j,4)]])
-        let get_out_bit = |j: usize| -> AB::Expr {
-            // andn(a, b) = (1 - a) * b  (degree 2)
+        //     8-bit:  chi[j] = (1 - x[j-2]) * x[j-3] * x[j-4]
+        //     7-bit:  chi[j] = (1 - x[j-2]) * x[j-3]
+        for j in 0..n {
             let andn = x[sub(j, 2)].clone().andn(&x[sub(j, 3)].clone());
-
-            let chi_product = if is_last_reduced {
-                andn // degree 2
+            let expected = if is_last_reduced {
+                andn
             } else {
-                andn * x[sub(j, 4)].clone() // degree 3
+                andn * x[sub(j, 4)].clone()
             };
+            builder.assert_eq(chi[j].clone(), expected);
+        }
 
-            // xor(a, b) = a + b - 2ab  (degree += 1)
-            x[sub(j, 1)].clone().xor(&chi_product)
-        };
+        // Output bit:  out[j] = x[j-1] XOR chi[j]  (degree 2).
+        let get_out_bit = |j: usize| -> AB::Expr { x[sub(j, 1)].clone().xor(&chi[j].clone()) };
 
-        // Pack limb output bits into a field element using Horner evaluation.
+        // Pack the limb's bits into one field element (Horner).
         let limb_value: AB::Expr = pack_bits_le((0..n).map(get_out_bit));
 
-        // Shift limb value to its position and accumulate.
+        // Shift into global position and accumulate:  result += limb * 2^offset.
         let limb_shift = AB::F::from_u64(1u64 << bit_offset);
         result += limb_value * limb_shift;
 

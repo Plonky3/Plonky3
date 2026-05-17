@@ -29,8 +29,8 @@ use core::mem::MaybeUninit;
 use p3_field::PrimeField64;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixViewMut};
 use p3_maybe_rayon::prelude::*;
+use p3_mds::util::mds_multiply;
 use p3_monolith::MonolithBars;
-use p3_poseidon1::external::mds_multiply;
 use tracing::instrument;
 
 use crate::MonolithAir;
@@ -158,6 +158,7 @@ pub fn generate_trace_rows_for_perm<
             round_cols,
             &air.mds_matrix,
             Some(&air.round_constants[round_idx]),
+            air.limb_bits,
             bars,
         );
     }
@@ -168,6 +169,7 @@ pub fn generate_trace_rows_for_perm<
         &mut perm.final_round,
         &air.mds_matrix,
         None,
+        air.limb_bits,
         bars,
     );
 }
@@ -190,45 +192,90 @@ fn generate_round<
     round: &mut MonolithRoundCols<MaybeUninit<F>, WIDTH, NUM_BARS, FIELD_BITS>,
     mds_matrix: &[[F; WIDTH]; WIDTH],
     round_constants: Option<&[F; WIDTH]>,
+    limb_bits: &[usize],
     bars: &B,
 ) {
-    // Bars layer
-
-    // Decompose each of the NUM_BARS elements into bits (before applying Bars).
-    for (bar_bits, &el) in round.bars_input_bits.iter_mut().zip(state.iter()) {
-        let bits = decompose_to_bits::<F, FIELD_BITS>(el);
+    // Phase 1: Bars witnesses (per Bar slot):
+    //
+    //     - little-endian bit decomposition of the input
+    //     - per-bit chi AND product (splits the S-box into degree-3 pieces)
+    //     - canonical-pattern inverse (rules out the all-ones alias of 0)
+    for (bar_idx, (bar_bits, bar_chi)) in round
+        .bars_input_bits
+        .iter_mut()
+        .zip(round.bars_chi_products.iter_mut())
+        .enumerate()
+    {
+        // Snapshot bits before Bars overwrites the state.
+        let bits = decompose_to_bits::<F, FIELD_BITS>(state[bar_idx]);
         for (bit_col, &bit_val) in bar_bits.iter_mut().zip(bits.iter()) {
             bit_col.write(bit_val);
         }
+
+        // Per-bit AND products, walking limbs left to right.
+        let mut bit_offset = 0;
+        for (limb_idx, &n) in limb_bits.iter().enumerate() {
+            // Only the trailing limb may be narrower than 8 bits.
+            let is_last_reduced = limb_idx == limb_bits.len() - 1 && n < 8;
+            let limb = &bits[bit_offset..bit_offset + n];
+
+            //     sub(k) = (j - k) mod n
+            for j in 0..n {
+                let sub = |offset: usize| (j + n - (offset % n)) % n;
+
+                //     andn   = (1 - x[j-2]) * x[j-3]
+                //     8-bit  : chi = andn * x[j-4]
+                //     7-bit  : chi = andn
+                let andn = (F::ONE - limb[sub(2)]) * limb[sub(3)];
+                let chi_product = if is_last_reduced {
+                    andn
+                } else {
+                    andn * limb[sub(4)]
+                };
+                bar_chi[bit_offset + j].write(chi_product);
+            }
+            bit_offset += n;
+        }
+
+        // Canonical-pattern inverse:
+        //
+        //     popcount = sum of input bits   (as a field element)
+        //     diff     = n - popcount        (zero iff every bit is one)
+        //     inv      = 1 / diff            (placeholder 0 when diff = 0)
+        //
+        // The verifier checks `inv * diff = 1`, rejecting the all-ones alias.
+        let popcount: F = bits.iter().copied().sum();
+        let diff = F::from_usize(FIELD_BITS) - popcount;
+        let inv = diff.try_inverse().unwrap_or(F::ZERO);
+        round.bars_not_all_ones_inv[bar_idx].write(inv);
     }
 
-    // Apply the Bars S-box (modifies the first NUM_BARS elements in place).
+    // Phase 2: Bars S-box (overwrites positions 0..u; u..t pass through).
     bars.bars(state);
-
-    // Write the committed Bar outputs.
     for (bar_out, &el) in round.bars_output.iter_mut().zip(state.iter()) {
         bar_out.write(el);
     }
 
-    // Bricks layer
+    // Phase 3: Bricks (Feistel squaring).
     //
-    // Feistel Type-3: state[i] += state[i-1]^2 for i = WIDTH-1 down to 1.
-    // Reverse iteration avoids reading already-modified values.
+    //     state[i] += state[i-1]^2   for i = t-1 down to 1
+    //
+    // Reverse order keeps each step reading the pre-update predecessor.
     for i in (1..WIDTH).rev() {
         state[i] += state[i - 1].square();
     }
 
-    // Concrete layer
+    // Phase 4: Concrete (dense MDS image).
     mds_multiply(state, mds_matrix);
 
-    // Round constants (if not the final round)
+    // Phase 5: Round constants (skipped on the final round).
     if let Some(rc) = round_constants {
         for (s, &c) in state.iter_mut().zip(rc.iter()) {
             *s += c;
         }
     }
 
-    // Write post-state
+    // Phase 6: Persist the post-state.
     round
         .post
         .iter_mut()
@@ -238,22 +285,23 @@ fn generate_round<
         });
 }
 
-/// Decompose a prime field element into `FIELD_BITS` bits (LSB first).
+/// Little-endian bit decomposition of a prime-field element.
 ///
-/// Each bit is a field element equal to 0 or 1. Uses the canonical `u64`
-/// representative (sufficient for Monolith-31 and Monolith-64).
+/// Each output cell carries a field element equal to 0 or 1.
+///
+/// # Panics
+///
+/// Compile-time panic when the requested bit length exceeds 64.
 #[inline]
 pub(crate) fn decompose_to_bits<F: PrimeField64, const FIELD_BITS: usize>(
     element: F,
 ) -> [F; FIELD_BITS] {
+    // Cap: bits past 63 don't exist in the canonical 64-bit form.
+    const { assert!(FIELD_BITS <= 64, "FIELD_BITS must fit in a u64") };
+
+    // Canonical integer image; bit i sits at position i.
     let val = element.as_canonical_u64();
-    core::array::from_fn(|i| {
-        if i < FIELD_BITS && i < 64 {
-            F::from_bool(((val >> i) & 1) != 0)
-        } else {
-            F::ZERO
-        }
-    })
+    core::array::from_fn(|i| F::from_bool(((val >> i) & 1) != 0))
 }
 
 #[cfg(test)]
