@@ -98,16 +98,24 @@ pub struct MonolithRoundCols<T, const WIDTH: usize, const NUM_BARS: usize, const
     ///   and a degree-2 XOR, capping the AIR at degree 3.
     pub bars_chi_products: [[T; FIELD_BITS]; NUM_BARS],
 
-    /// Multiplicative inverse of `n - popcount`, one cell per Bar.
+    /// Running "still matches the modulus prefix" flag, one cell per input bit.
+    ///
+    /// # Walk (MSB to LSB)
+    ///
+    /// - Start with `m = 1` above the most significant bit.
+    /// - For each bit position i from MSB down to LSB:
+    ///   - If the modulus has 1 at i: `m_i = m_{i+1} * x_i`.
+    ///   - If the modulus has 0 at i: `m_i = m_{i+1}` plus the side constraint
+    ///     `m_{i+1} * x_i = 0` (any 1 in x while still matching means `x > p`).
+    /// - Final: `m_0 = 0`, ruling out the encoding `x == p`.
     ///
     /// # Why this column exists
     ///
-    /// - For a Mersenne prime `p = 2^n - 1`, the all-ones n-bit string
-    ///   also encodes 0 (its integer value equals p).
-    /// - `n - popcount` is zero only on that string.
-    /// - With no inverse available, the constraint
-    ///   `inv * (n - popcount) = 1` rejects the forgery.
-    pub bars_not_all_ones_inv: [T; NUM_BARS],
+    /// - Without it, integers in `[p, 2^FIELD_BITS - 1]` would forge a second
+    ///   bit encoding for field elements already represented canonically.
+    /// - The walk works for any prime, including those whose forbidden range
+    ///   covers many bit patterns (e.g. Goldilocks).
+    pub bars_match_flags: [[T; FIELD_BITS]; NUM_BARS],
 
     /// Committed output of each Bar (S-box) application.
     ///

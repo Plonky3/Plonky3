@@ -62,7 +62,7 @@ pub const GOLDILOCKS_8_LIMB_BITS: &[usize] = &[8, 8, 8, 8, 8, 8, 8, 8];
 /// - Bit reconstruction: 1.
 /// - Chi AND product witness: 3 (8-bit limbs) / 2 (7-bit limb).
 /// - Chi output equality: 2.
-/// - Canonical bit pattern: 2.
+/// - Canonical-pattern walk step: 2 (or 1 for "modulus-zero" positions).
 /// - Bricks (Feistel squaring): 2.
 /// - Concrete (dense MDS): 2.
 /// - Round constant addition: 1.
@@ -94,6 +94,11 @@ pub struct MonolithAir<
     ///
     /// The sum of all limb widths must equal `FIELD_BITS`.
     pub(crate) limb_bits: &'static [usize],
+
+    /// Bits of the field modulus, least-significant first.
+    ///
+    /// Drives the bit-by-bit `< p` walk that enforces canonical bit encodings.
+    pub(crate) modulus_lsb_to_msb: [bool; FIELD_BITS],
 }
 
 impl<
@@ -112,6 +117,10 @@ impl<
     /// - Dense MDS matrix indexed row-first.
     /// - Limb widths driving the chi decomposition.
     ///
+    /// # Field invariant
+    ///
+    /// - The field order must fit in a `u64` (top bit unset).
+    ///
     /// # Limb width invariants
     ///
     /// - Sum to the field-bit parameter.
@@ -120,6 +129,7 @@ impl<
     ///
     /// # Panics
     ///
+    /// - Field-bit parameter exceeds 63.
     /// - Limb widths do not sum to the field-bit parameter.
     /// - Bar applications exceed the state width.
     /// - Any non-trailing limb is not 8.
@@ -128,7 +138,23 @@ impl<
         round_constants: [[F; WIDTH]; NUM_FULL_ROUNDS],
         mds_matrix: [[F; WIDTH]; WIDTH],
         limb_bits: &'static [usize],
-    ) -> Self {
+    ) -> Self
+    where
+        F: PrimeField64,
+    {
+        // Modulus must fit in `FIELD_BITS` bits.
+        //
+        //     M31         : 0x7FFFFFFF                  fits in 31 bits
+        //     Goldilocks  : 0xFFFFFFFF00000001          fits in 64 bits
+        //
+        // The canonical-bit walk reads bit i of the modulus for i in 0..FIELD_BITS;
+        // a higher set bit would never satisfy `X < p` after truncation.
+        const { assert!(FIELD_BITS <= 64, "FIELD_BITS must fit in a u64") };
+        assert!(
+            FIELD_BITS == 64 || F::ORDER_U64 < (1u64 << FIELD_BITS),
+            "field modulus does not fit in FIELD_BITS bits"
+        );
+
         // Bit budget:  sum(limbs) == FIELD_BITS  (e.g. 8+8+8+7 = 31 for M31).
         assert_eq!(
             limb_bits.iter().sum::<usize>(),
@@ -165,10 +191,17 @@ impl<
             "last limb width must lie in 3..=8 bits, got {last}"
         );
 
+        // Cache the modulus bits LSB-first to align with the bit-decomposition layout.
+        //
+        //     modulus_lsb_to_msb[i] = (ORDER >> i) & 1 == 1
+        let modulus = F::ORDER_U64;
+        let modulus_lsb_to_msb = core::array::from_fn(|i| (modulus >> i) & 1 == 1);
+
         Self {
             round_constants,
             mds_matrix,
             limb_bits,
+            modulus_lsb_to_msb,
         }
     }
 
@@ -262,6 +295,7 @@ impl<
                 &self.mds_matrix,
                 Some(&self.round_constants[round_idx]),
                 self.limb_bits,
+                &self.modulus_lsb_to_msb,
                 builder,
             );
         }
@@ -273,6 +307,7 @@ impl<
             &self.mds_matrix,
             None,
             self.limb_bits,
+            &self.modulus_lsb_to_msb,
             builder,
         );
     }
@@ -301,6 +336,7 @@ fn eval_round<
     mds_matrix: &[[AB::F; WIDTH]; WIDTH],
     round_constants: Option<&[AB::F; WIDTH]>,
     limb_bits: &[usize],
+    modulus_lsb_to_msb: &[bool; FIELD_BITS],
     builder: &mut AB,
 ) {
     // Phase 1: Bars constraints (per Bar slot):
@@ -309,12 +345,13 @@ fn eval_round<
     //     - linear reconstruction back to the Bar input
     //     - chi AND product witness equation (delegated to `eval_bar_sbox`)
     //     - chi S-box output equality
-    //     - canonical bit pattern check (rules out the all-ones alias)
-    for (bar_idx, ((input_bits, chi_products), &bar_out)) in round
+    //     - canonical bit-pattern walk (rules out any encoding `>= p`)
+    for (bar_idx, (((input_bits, chi_products), &bar_out), match_flags)) in round
         .bars_input_bits
         .iter()
         .zip(round.bars_chi_products.iter())
         .zip(round.bars_output.iter())
+        .zip(round.bars_match_flags.iter())
         .enumerate()
     {
         // Boolean: every committed bit is 0 or 1.
@@ -323,6 +360,7 @@ fn eval_round<
         // Lift committed cells to expressions for symbolic algebra.
         let bits: [AB::Expr; FIELD_BITS] = input_bits.map(|b| b.into());
         let chi: [AB::Expr; FIELD_BITS] = chi_products.map(|b| b.into());
+        let mflag: [AB::Expr; FIELD_BITS] = match_flags.map(|b| b.into());
 
         // Reconstruction:  sum_i bits[i] * 2^i  ==  state[bar_idx].
         let reconstructed: AB::Expr = pack_bits_le(bits.iter().cloned());
@@ -333,19 +371,31 @@ fn eval_round<
         let sbox_output = eval_bar_sbox::<AB, FIELD_BITS>(&bits, &chi, limb_bits, builder);
         builder.assert_eq(AB::Expr::from(bar_out), sbox_output);
 
-        // Canonical bit pattern check.
+        // Canonical bit-pattern walk (MSB → LSB).
         //
-        //     bits = 0...0  ->  integer 0   (canonical)
-        //     bits = 1...1  ->  integer p   (alias of 0 mod p)  <- forbidden
+        // Define `m_i` = "bits[i..FIELD_BITS] still match the modulus prefix".
+        // Start above the MSB with `m_top = 1` (no info yet):
         //
-        // The inverse of `n - popcount` exists for every encoding except
-        // the all-ones one, so the equation rejects only that alias.
+        //     p_i = 1 : m_i = m_{i+1} * bits[i]
+        //     p_i = 0 : m_i = m_{i+1}                  (linear pass-through)
+        //               assert m_{i+1} * bits[i] = 0   (a 1 here would force X > p)
         //
-        // TODO: Goldilocks-style primes forbid a range, not one pattern.
-        // A bit-by-bit "less than p" check is needed there.
-        let popcount: AB::Expr = bits.iter().cloned().sum();
-        let diff = AB::Expr::from_usize(FIELD_BITS) - popcount;
-        builder.assert_one(diff * AB::Expr::from(round.bars_not_all_ones_inv[bar_idx]));
+        // Final assertion `m_0 = 0` rejects the encoding `bits == p`, which
+        // is the only forbidden one in `[p, 2^FIELD_BITS - 1]` that survives
+        // the side-constraints above.
+        let mut prev = AB::Expr::ONE;
+        for i in (0..FIELD_BITS).rev() {
+            let m_i = mflag[i].clone();
+            let x_i = bits[i].clone();
+            if modulus_lsb_to_msb[i] {
+                builder.assert_eq(m_i.clone(), prev.clone() * x_i);
+            } else {
+                builder.assert_eq(m_i.clone(), prev.clone());
+                builder.assert_zero(prev.clone() * x_i);
+            }
+            prev = m_i;
+        }
+        builder.assert_zero(prev);
     }
 
     // Phase 2: Build the post-Bars state.

@@ -159,6 +159,7 @@ pub fn generate_trace_rows_for_perm<
             &air.mds_matrix,
             Some(&air.round_constants[round_idx]),
             air.limb_bits,
+            &air.modulus_lsb_to_msb,
             bars,
         );
     }
@@ -170,6 +171,7 @@ pub fn generate_trace_rows_for_perm<
         &air.mds_matrix,
         None,
         air.limb_bits,
+        &air.modulus_lsb_to_msb,
         bars,
     );
 }
@@ -193,17 +195,19 @@ fn generate_round<
     mds_matrix: &[[F; WIDTH]; WIDTH],
     round_constants: Option<&[F; WIDTH]>,
     limb_bits: &[usize],
+    modulus_lsb_to_msb: &[bool; FIELD_BITS],
     bars: &B,
 ) {
     // Phase 1: Bars witnesses (per Bar slot):
     //
     //     - little-endian bit decomposition of the input
     //     - per-bit chi AND product (splits the S-box into degree-3 pieces)
-    //     - canonical-pattern inverse (rules out the all-ones alias of 0)
-    for (bar_idx, (bar_bits, bar_chi)) in round
+    //     - canonical-pattern walk flags (rules out any encoding `>= p`)
+    for (bar_idx, ((bar_bits, bar_chi), bar_mflag)) in round
         .bars_input_bits
         .iter_mut()
         .zip(round.bars_chi_products.iter_mut())
+        .zip(round.bars_match_flags.iter_mut())
         .enumerate()
     {
         // Snapshot bits before Bars overwrites the state.
@@ -237,17 +241,23 @@ fn generate_round<
             bit_offset += n;
         }
 
-        // Canonical-pattern inverse:
+        // Canonical-pattern walk (MSB → LSB):
         //
-        //     popcount = sum of input bits   (as a field element)
-        //     diff     = n - popcount        (zero iff every bit is one)
-        //     inv      = 1 / diff            (placeholder 0 when diff = 0)
+        //     prev = 1
+        //     for i from FIELD_BITS-1 down to 0:
+        //         if p_bit[i]: prev *= bits[i]
+        //         else       : prev stays                 (and prev * bits[i] must be 0)
+        //         match_flag[i] = prev
         //
-        // The verifier checks `inv * diff = 1`, rejecting the all-ones alias.
-        let popcount: F = bits.iter().copied().sum();
-        let diff = F::from_usize(FIELD_BITS) - popcount;
-        let inv = diff.try_inverse().unwrap_or(F::ZERO);
-        round.bars_not_all_ones_inv[bar_idx].write(inv);
+        // Canonical inputs always end with prev = 0 (some bit position must
+        // make them strictly less than p).
+        let mut prev = F::ONE;
+        for i in (0..FIELD_BITS).rev() {
+            if modulus_lsb_to_msb[i] {
+                prev *= bits[i];
+            }
+            bar_mflag[i].write(prev);
+        }
     }
 
     // Phase 2: Bars S-box (overwrites positions 0..u; u..t pass through).

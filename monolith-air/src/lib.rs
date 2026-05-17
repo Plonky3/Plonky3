@@ -29,11 +29,14 @@ mod tests {
     use p3_air::symbolic::{AirLayout, get_max_constraint_degree};
     use p3_air::{BaseAir, check_constraints};
     use p3_field::{PrimeCharacteristicRing, PrimeField32};
+    use p3_goldilocks::Goldilocks;
     use p3_matrix::Matrix;
     use p3_mersenne_31::Mersenne31;
-    use p3_monolith::MonolithMersenne31;
+    use p3_monolith::bars::goldilocks::MonolithBarsGoldilocks;
     use p3_monolith::bars::mersenne31::MonolithBarsM31;
+    use p3_monolith::mds::goldilocks::MonolithMdsMatrixGoldilocks;
     use p3_monolith::mds::mersenne31::MonolithMdsMatrixMersenne31;
+    use p3_monolith::{MonolithGoldilocks8, MonolithMersenne31};
     use p3_symmetric::Permutation;
     use proptest::prelude::*;
 
@@ -84,10 +87,10 @@ mod tests {
         //
         //     FIELD_BITS * NUM_BARS  (input bits)
         //   + FIELD_BITS * NUM_BARS  (chi AND-product witnesses)
-        //   + NUM_BARS               (canonical-pattern inverses)
+        //   + FIELD_BITS * NUM_BARS  (canonical-pattern match flags)
         //   + NUM_BARS               (Bar outputs)
         //   + WIDTH                  (post-state)
-        let per_round = 2 * FIELD_BITS * NUM_BARS + 2 * NUM_BARS + WIDTH;
+        let per_round = 3 * FIELD_BITS * NUM_BARS + NUM_BARS + WIDTH;
         let expected = WIDTH + (NUM_FULL_ROUNDS + 1) * per_round;
         let actual = num_cols::<WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS>();
         assert_eq!(expected, actual);
@@ -219,7 +222,7 @@ mod tests {
         //     canonical 0  : bits = 0...0  ->  integer 0
         //     forged 0     : bits = 1...1  ->  integer p = 0 (mod p)
         //
-        // Without the canonical constraint, both encodings pass every other
+        // Without the canonical-pattern walk, both encodings pass every other
         // Bar check, breaking decomposition uniqueness.
         //
         // Fixture: honest trace over a 16-word all-zero input.
@@ -236,13 +239,16 @@ mod tests {
         //
         //     bits           : 0...0  -->  1...1
         //     chi[j]         : 0      -->  0     ((1 - 1) * 1 * 1 = 0)
-        //     canonical inv  : valid  -->  0     (no inverse exists for 0)
+        //     match_flag[i]  : 0      -->  1     (forced by walk:  m *= 1)
         //
         // chi fixed points keep the S-box equation satisfied:
         //
         //     chi(0xFF) = 0xFF   (8-bit limb)
         //     chi(0x7F) = 0x7F   (7-bit limb)
         //     packed    = p = 0  (mod p)
+        //
+        // But the walk now ends with match_flag[0] = 1, which the
+        // `assert_zero(match_flag[0])` constraint rejects.
         let row_slice = trace.row_mut(0);
         let row: &mut MonolithCols<F, WIDTH, NUM_FULL_ROUNDS, NUM_BARS, FIELD_BITS> =
             row_slice.borrow_mut();
@@ -253,9 +259,11 @@ mod tests {
         for c in bar.bars_chi_products[0].iter_mut() {
             *c = F::ZERO;
         }
-        bar.bars_not_all_ones_inv[0] = F::ZERO;
+        for m in bar.bars_match_flags[0].iter_mut() {
+            *m = F::ONE;
+        }
 
-        // Only the canonical-pattern constraint should fail, but it must.
+        // The canonical-pattern walk's final assertion fires.
         check_constraints(&air, &trace, &[]);
     }
 
@@ -292,5 +300,76 @@ mod tests {
 
             check_constraints(&air, &trace, &[]);
         }
+    }
+
+    // Monolith-64 (Goldilocks) parameters: WIDTH=8 compression-size state.
+    type G = Goldilocks;
+    const G_WIDTH: usize = 8;
+    const G_FULL: usize = 5;
+    const G_BARS: usize = 4;
+    const G_BITS: usize = 64;
+
+    fn build_goldilocks_air() -> (
+        MonolithAir<G, G_WIDTH, G_FULL, G_BARS, G_BITS>,
+        MonolithBarsGoldilocks<8>,
+    ) {
+        let bars = MonolithBarsGoldilocks::<8>;
+        let mds = MonolithMdsMatrixGoldilocks;
+        let mds_matrix =
+            MonolithAir::<G, G_WIDTH, G_FULL, G_BARS, G_BITS>::extract_mds_matrix(&mds);
+        let monolith = MonolithGoldilocks8::new(bars, mds);
+        let air = MonolithAir::new(monolith.round_constants, mds_matrix, GOLDILOCKS_8_LIMB_BITS);
+        (air, bars)
+    }
+
+    #[test]
+    fn test_goldilocks_constraint_satisfaction_zero_input() {
+        // All-zero input exercises the chi fixed point and a walk with no
+        // high-bit activity.
+        let (air, bars) = build_goldilocks_air();
+        let inputs = vec![[G::ZERO; G_WIDTH]];
+        let trace =
+            generate_trace_rows::<_, _, G_WIDTH, G_FULL, G_BARS, G_BITS>(inputs, &air, &bars, 0);
+        check_constraints(&air, &trace, &[]);
+    }
+
+    #[test]
+    fn test_goldilocks_constraint_satisfaction_random_input() {
+        // A non-trivial input touches every walk branch:
+        //
+        //     modulus high 32 bits   = 1...1   ->  multiplicative steps
+        //     modulus middle 31 bits = 0...0   ->  pass-through + side-asserts
+        //     modulus bit 0          = 1       ->  final multiplicative step
+        let (air, bars) = build_goldilocks_air();
+        let input: [G; G_WIDTH] = core::array::from_fn(|i| G::from_u64(i as u64 * 0x9E37));
+        let trace = generate_trace_rows::<_, _, G_WIDTH, G_FULL, G_BARS, G_BITS>(
+            vec![input],
+            &air,
+            &bars,
+            0,
+        );
+        check_constraints(&air, &trace, &[]);
+    }
+
+    #[test]
+    fn test_goldilocks_trace_matches_reference_permutation() {
+        // AIR trace's final post-state must match the reference permutation.
+        let (air, bars) = build_goldilocks_air();
+        let input: [G; G_WIDTH] = core::array::from_fn(G::from_usize);
+        let trace = generate_trace_rows::<_, _, G_WIDTH, G_FULL, G_BARS, G_BITS>(
+            vec![input],
+            &air,
+            &bars,
+            0,
+        );
+
+        let monolith: MonolithGoldilocks8<_, G_WIDTH, G_FULL> =
+            MonolithGoldilocks8::new(MonolithBarsGoldilocks::<8>, MonolithMdsMatrixGoldilocks);
+        let mut expected = input;
+        monolith.permute_mut(&mut expected);
+
+        let local = trace.row_slice(0).expect("Trace is empty");
+        let row: &MonolithCols<G, G_WIDTH, G_FULL, G_BARS, G_BITS> = (*local).borrow();
+        assert_eq!(row.final_round.post, expected);
     }
 }
