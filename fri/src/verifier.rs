@@ -545,28 +545,6 @@ where
         .zip(commitments_with_opening_points.iter())
         .enumerate()
     {
-        // Find the height of each matrix in the batch.
-        // Currently we only check domain.size() as the shift is
-        // assumed to always be Val::GENERATOR.
-        let batch_heights = mats
-            .iter()
-            .map(|(domain, _)| domain.size() << params.log_blowup)
-            .collect_vec();
-        let batch_dims = batch_heights
-            .iter()
-            // TODO: MMCS doesn't really need width; we put 0 for now.
-            .map(|&height| Dimensions { width: 0, height })
-            .collect_vec();
-
-        // If the maximum height of the batch is smaller than the global max height,
-        // we need to correct the index by right shifting it.
-        // If the batch is empty, we set the index to 0.
-        let reduced_index = batch_heights
-            .iter()
-            .max()
-            .map(|&h| index >> (log_global_max_height - log2_strict_usize(h)))
-            .unwrap_or(0);
-
         if batch_opening.opened_values.len() != mats.len() {
             return Err(FriError::BatchOpenedValuesCountMismatch {
                 batch,
@@ -574,6 +552,62 @@ where
                 got: batch_opening.opened_values.len(),
             });
         }
+
+        // Reconstruct per-matrix dimensions from verifier-known opening metadata.
+        // Width is the number of claimed polynomial evaluations per point.
+        // (If no points are requested for a matrix, fall back to the opened row width.)
+        let mut batch_dims = Vec::with_capacity(mats.len());
+        for (matrix, (mat_opening, (mat_domain, mat_points_and_values))) in batch_opening
+            .opened_values
+            .iter()
+            .zip(mats.iter())
+            .enumerate()
+        {
+            let height = mat_domain.size() << params.log_blowup;
+            let claimed_width = match mat_points_and_values.first() {
+                Some((_, first_values)) => {
+                    let expected = first_values.len();
+                    for (point, (_, ps_at_z)) in mat_points_and_values.iter().enumerate().skip(1) {
+                        if ps_at_z.len() != expected {
+                            return Err(FriError::PointEvaluationCountMismatch {
+                                batch,
+                                matrix,
+                                point,
+                                expected,
+                                got: ps_at_z.len(),
+                            });
+                        }
+                    }
+                    expected
+                }
+                None => mat_opening.len(),
+            };
+
+            if mat_opening.len() != claimed_width {
+                return Err(FriError::PointEvaluationCountMismatch {
+                    batch,
+                    matrix,
+                    point: 0,
+                    expected: claimed_width,
+                    got: mat_opening.len(),
+                });
+            }
+
+            batch_dims.push(Dimensions {
+                width: claimed_width,
+                height,
+            });
+        }
+
+        // If the maximum height of the batch is smaller than the global max height,
+        // we need to correct the index by right shifting it.
+        // If the batch is empty, we set the index to 0.
+        let reduced_index = batch_dims
+            .iter()
+            .map(|dim| dim.height)
+            .max()
+            .map(|h| index >> (log_global_max_height - log2_strict_usize(h)))
+            .unwrap_or(0);
 
         input_mmcs
             .verify_batch(
@@ -1275,9 +1309,9 @@ mod tests {
                 assert_eq!(batch, 0);
                 assert_eq!(matrix, 0);
                 assert_eq!(point, 0);
-                // 2 trace columns opened, but 3 claimed evaluations.
-                assert_eq!(expected, 2);
-                assert_eq!(got, 3);
+                // Claimed width is 3, but the opened row has width 2.
+                assert_eq!(expected, 3);
+                assert_eq!(got, 2);
             }
             other => panic!("wrong error variant: {other:?}"),
         }

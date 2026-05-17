@@ -86,7 +86,8 @@ pub type CommitmentWithOpeningPoints<Challenge, Commitment, Domain> = (
     Vec<(
         // The domain of the matrix
         Domain,
-        // A vector of (point, claimed_evaluation) pairs
+        // A vector of (point, claimed_evaluation) pairs.
+        // `claimed_evaluation.len()` is the matrix width metadata used by verification.
         Vec<(Challenge, Vec<Challenge>)>,
     )>,
 );
