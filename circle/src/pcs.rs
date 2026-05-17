@@ -121,6 +121,10 @@ where
         CircleDomain::standard(log2_strict_usize(degree))
     }
 
+    fn log_max_lde_height(&self) -> usize {
+        Val::CIRCLE_TWO_ADICITY
+    }
+
     fn commit(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,

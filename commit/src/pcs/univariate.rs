@@ -74,6 +74,11 @@ where
     /// This should return a domain such that `Domain::next_point` returns `Some`.
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain;
 
+    /// The base-2 logarithm of the largest evaluation domain this PCS can construct.
+    fn log_max_lde_height(&self) -> usize {
+        usize::BITS as usize - 1
+    }
+
     /// Given a collection of evaluation matrices, produce a binding commitment to
     /// the polynomials defined by those evaluations. If `zk` is enabled, the evaluations are
     /// first randomized as explained in Section 3 of https://eprint.iacr.org/2024/1037.pdf .
