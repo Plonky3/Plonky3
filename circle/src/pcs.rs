@@ -492,6 +492,11 @@ where
                         let alpha_pow_width_2 = alpha.exp_u64(ps_at_x.len() as u64).square();
 
                         for (zeta_uni, ps_at_zeta) in mat_points_and_values {
+                            // The claimed opening must have exactly as many
+                            // values as the committed row has columns.
+                            if ps_at_zeta.len() != ps_at_x.len() {
+                                return Err(InputError::InputShapeError);
+                            }
                             let zeta = Point::from_projective_line(*zeta_uni);
 
                             *ro += *alpha_offset
