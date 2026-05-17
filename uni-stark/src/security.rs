@@ -25,10 +25,7 @@ use core::cmp::{max, min};
 
 use libm::{ceil, log2, pow, sqrt};
 use p3_air::Air;
-use p3_air::symbolic::{
-    AirLayout, SymbolicAirBuilder, get_all_symbolic_constraints,
-    get_max_constraint_degree_extension,
-};
+use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, get_all_symbolic_constraints};
 use p3_field::{ExtensionField, Field};
 use p3_fri::FriParameters;
 use p3_util::log2_floor_usize;
@@ -100,6 +97,11 @@ impl StarkSecurityParams {
     /// Build security parameters by inspecting the AIR's symbolic constraints to derive
     /// `num_constraints` and `air_max_constraint_degree`. The caller supplies `max_combo`
     /// (typically `2` for a uni-STARK that uses `local`/`next`, `1` if no transition).
+    ///
+    /// `layout` must reflect any permutation/lookup columns: a base-only layout (e.g.
+    /// `AirLayout::from_air`, which fills only the `BaseAir` widths) leaves the
+    /// permutation fields at `0`, so permutation-argument constraints are not counted
+    /// and security is overstated.
     pub fn from_air<F, EF, A, M>(
         fri_params: &FriParameters<M>,
         air: &A,
@@ -116,8 +118,9 @@ impl StarkSecurityParams {
         let (base, ext) = get_all_symbolic_constraints::<F, EF, A>(air, layout);
         let num_constraints = base.len() + ext.len();
         // Clamp to 1 so log2(·) stays finite when the AIR has no constraints.
-        let air_max_constraint_degree =
-            get_max_constraint_degree_extension::<F, EF, A>(air, layout).max(1);
+        let base_deg = base.iter().map(|c| c.degree_multiple()).max().unwrap_or(0);
+        let ext_deg = ext.iter().map(|c| c.degree_multiple()).max().unwrap_or(0);
+        let air_max_constraint_degree = base_deg.max(ext_deg).max(1);
         Self::new(
             fri_params,
             num_modulus_bits,
@@ -268,7 +271,7 @@ impl ProvenSecurity {
 
         // Theorem 4.2 of [2025/2055] requires η > 0; bracket m and search for the optimum.
         let m_min: usize = 3;
-        let m_max = compute_upper_m(trace_length);
+        let m_max = min(compute_upper_m(trace_length), LDR_M_CAP);
         let list_decoding = if m_max < m_min {
             // No valid m in range (e.g. trivially small traces); LDR is vacuous.
             0
@@ -291,12 +294,6 @@ impl ProvenSecurity {
                     )
                 })
                 .expect("non-empty range");
-            // The 1000-cap is heuristic; if the optimum sits at the cap the monotonic-decay
-            // assumption may not hold past it.
-            debug_assert!(
-                m_optimal != 1000 || m_max == 1000,
-                "LDR m_optimal hit the cap (1000); assumed monotonic decay may not hold"
-            );
 
             min(
                 proven_security_list_decoding_m(
@@ -333,13 +330,14 @@ impl ProvenSecurity {
     }
 }
 
+/// Performance bound on the searched proximity parameter `m`.
+const LDR_M_CAP: usize = 1000;
+
 /// Computes the largest proximity parameter `m` such that the η > 0 precondition of
 /// the proof of Theorem 1 in [2021/582](https://eprint.iacr.org/2021/582) holds.
 /// See also Theorem 2 and its proof in [2024/1553](https://eprint.iacr.org/2024/1553).
 ///
-/// Capped at `1000`: empirically the optimum lies in the lower part of `[m_min, m_max]`
-/// since increasing `m` deteriorates the FRI commit soundness faster than it improves
-/// the FRI query soundness.
+/// Returns the raw theorem-derived bound; the caller applies [`LDR_M_CAP`].
 fn compute_upper_m(trace_domain_size: usize) -> usize {
     if trace_domain_size == 0 {
         return 0;
@@ -354,7 +352,7 @@ fn compute_upper_m(trace_domain_size: usize) -> usize {
         m_max,
         h / 2.0,
     );
-    min(m_max, 1000)
+    m_max
 }
 
 /// Round-by-round soundness in the unique-decoding regime (Theorem 3 of [2024/1553]).
@@ -381,8 +379,9 @@ fn proven_security_unique_decoding(
     let rho_plus = (trace_domain_size + max_combo) / lde_domain_size_f;
     let alpha = (1.0 + rho_plus) * 0.5;
 
-    // Multi-point quotient soundness precondition from [2020/654] §4.1.3:
-    // `k + max_combo < α · D`. Violation makes the DEEP-ALI bound vacuous.
+    // Multi-point quotient soundness precondition from [2020/654] §4.1.3, written
+    // against the UDR agreement parameter α used below (i.e. θ = 1 − α) rather than
+    // the raw rate `soundcalc` uses; both hold for any blowup ≥ 2.
     if trace_domain_size + max_combo >= alpha * lde_domain_size_f {
         return 0;
     }
@@ -399,7 +398,9 @@ fn proven_security_unique_decoding(
     epsilons_bits_neg.push(extension_field_bits - log2(deep_factor.max(1.0)));
 
     // FRI commit phase: per round, ε ≤ (folding_factor − 1)·(n + 1)/|F|. Each layer
-    // yields the same bound, so push once when at least one fold occurs.
+    // yields the same bound, so push once when at least one fold occurs. We use the
+    // plain `(n + 1)`; `soundcalc` uses the tighter `(γn + 1)` with γ = (1 − ρ)/2 ≤ 1,
+    // so this is a conservative simplification (~1–2 bits).
     let num_fri_layers = log2_floor_usize(lde_domain_size).saturating_sub(log_final_poly_len);
     if num_fri_layers > 0 {
         let folding_minus_one = (folding_factor - 1.0).max(1.0);
@@ -474,8 +475,9 @@ fn proven_security_list_decoding_m(
     // FRI commit phase, per round (BCHKS25 Theorem 4.2 / `error_powers`):
     //   ε_lin   = ((2·m'⁵ + 3·m'·γρ)·n / (3·ρ^{3/2}) + m'/√ρ) / |F|
     //   ε_round = ε_lin · (folding_factor − 1)
-    // We use the round-0 LDE size `n = lde_domain_size` (largest across rounds, hence
-    // conservative).
+    // We use the round-0 LDE size `n = lde_domain_size` for every round. `soundcalc`
+    // shrinks `n` per round, but RbR soundness is the max over rounds and the worst
+    // round is round 0 (largest `n`), so this is exact for RbR — not a loosening.
     let n = lde_domain_size;
     let num = (2.0 * pow(m_shifted, 5.0) + 3.0 * m_shifted * pp * rho) * n;
     let den = 3.0 * rho * sqrt_rho;
