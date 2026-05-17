@@ -18,6 +18,9 @@ where
         let constraint_degree = (degree_hint + is_zk).max(2);
         let result = log2_ceil_usize(constraint_degree - 1);
 
+        // This check remains at the `debug` level, as the AIR is known by both
+        // prover and verifier, i.e. a malicious prover cannot feed the verifier
+        // a different hint than the verifier computes for itself.
         debug_assert!(
             {
                 let symbolic = get_log_quotient_degree_extension::<F, F, A>(air, layout, is_zk);
