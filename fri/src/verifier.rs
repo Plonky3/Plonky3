@@ -53,6 +53,12 @@ where
         expected: usize,
         got: usize,
     },
+    #[error("round {round}: invalid log-arity {log_arity}: must be in 1..={max}")]
+    InvalidLogArity {
+        round: usize,
+        log_arity: usize,
+        max: usize,
+    },
     #[error("final folded height mismatch: expected {expected}, got {got}")]
     FinalFoldHeightMismatch { expected: usize, got: usize },
     #[error(
@@ -172,6 +178,17 @@ where
                 query,
                 expected: log_arities,
                 got: got_log_arities,
+            });
+        }
+    }
+
+    // Bound the prover-supplied folding arities.
+    for (round, &log_arity) in log_arities.iter().enumerate() {
+        if log_arity == 0 || log_arity > params.max_log_arity {
+            return Err(FriError::InvalidLogArity {
+                round,
+                log_arity,
+                max: params.max_log_arity,
             });
         }
     }
