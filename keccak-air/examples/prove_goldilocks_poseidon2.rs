@@ -3,9 +3,10 @@ use core::fmt::Debug;
 use p3_challenger::DuplexChallenger;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
+use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
 use p3_fri::{FriParameters, TwoAdicFriPcs};
-use p3_goldilocks::{Goldilocks, HashPackedGoldilocks, Poseidon2Goldilocks};
+use p3_goldilocks::{Goldilocks, Poseidon2Goldilocks};
 use p3_keccak_air::{KeccakAir, generate_trace_rows};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -43,8 +44,8 @@ fn main() -> Result<(), impl Debug> {
     type MyCompress = TruncatedPermutation<Perm, 2, 4, 8>;
     let compress = MyCompress::new(perm.clone());
 
-    type ValMmcs =
-        MerkleTreeMmcs<HashPackedGoldilocks, HashPackedGoldilocks, MyHash, MyCompress, 2, 4>;
+    type ValPacking = <Val as Field>::Packing;
+    type ValMmcs = MerkleTreeMmcs<ValPacking, ValPacking, MyHash, MyCompress, 2, 4>;
     let val_mmcs = ValMmcs::new(hash, compress, 0);
 
     type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;

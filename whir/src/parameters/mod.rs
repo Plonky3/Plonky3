@@ -8,7 +8,7 @@ pub mod whir;
 
 pub use folding::{FoldingFactor, FoldingFactorError};
 pub use soundness::SecurityAssumption;
-pub use whir::{RoundConfig, SumcheckStrategy, WhirConfig};
+pub use whir::{RoundConfig, WhirConfig};
 
 /// Fallback proof-of-work difficulty when the user does not specify one.
 ///
@@ -19,7 +19,7 @@ pub const DEFAULT_MAX_POW: usize = 16;
 
 /// Configuration parameters for WHIR proofs.
 #[derive(Clone, Debug)]
-pub struct ProtocolParameters<MT> {
+pub struct ProtocolParameters {
     /// The logarithmic inverse rate for sampling.
     pub starting_log_inv_rate: usize,
     /// The value v such that that the size of the Reed Solomon domain on which
@@ -36,11 +36,9 @@ pub struct ProtocolParameters<MT> {
     pub security_level: usize,
     /// The number of bits required for proof-of-work (PoW).
     pub pow_bits: usize,
-    /// Merkle tree configuration.
-    pub mmcs: MT,
 }
 
-impl<MT> Display for ProtocolParameters<MT> {
+impl Display for ProtocolParameters {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         writeln!(
             f,

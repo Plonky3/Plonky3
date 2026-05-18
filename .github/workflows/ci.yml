@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ "*" ]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
@@ -31,15 +35,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         id: rs-stable
 
-      # Smarter cache for Rust builds; avoids overfilling the runner disk.
-      - uses: Swatinem/rust-cache@v2
-
       - name: Set flags
         if: ${{ matrix.features }}
         run: |
           # Append AVX2 to existing flags so we keep -C debuginfo=0.
           echo "RUSTFLAGS=$RUSTFLAGS -C target-feature=${{ matrix.features }}" >> "$GITHUB_ENV"
 
+      # Smarter cache for Rust builds; avoids overfilling the runner disk.
+      - uses: Swatinem/rust-cache@v2
 
       - name: Test
         run: cargo test
@@ -80,8 +83,8 @@ jobs:
           cargo build --verbose --target ${{ env.target }} -p p3-dft
           cargo build --verbose --target ${{ env.target }} -p p3-field
           cargo build --verbose --target ${{ env.target }} -p p3-fri
-          cargo build --verbose --target ${{ env.target }} -p p3-goldilocks
-          cargo build --verbose --target ${{ env.target }} -p p3-interpolation
+          # `--lib` here because p3-goldilocks has host-only bins that require std and would otherwise fail
+          cargo build --verbose --target ${{ env.target }} -p p3-goldilocks --lib
           cargo build --verbose --target ${{ env.target }} -p p3-keccak
           cargo build --verbose --target ${{ env.target }} -p p3-keccak-air
           cargo build --verbose --target ${{ env.target }} -p p3-koala-bear
@@ -100,6 +103,38 @@ jobs:
           cargo build --verbose --target ${{ env.target }} -p p3-symmetric
           cargo build --verbose --target ${{ env.target }} -p p3-uni-stark
           cargo build --verbose --target ${{ env.target }} -p p3-util
+
+  check_wasm32_simd128:
+    name: Test wasm32 simd128
+    runs-on: ubuntu-latest
+    if: "! contains(toJSON(github.event.commits.*.message), '[skip-ci]')"
+    env:
+      # Compile-coverage target for browser-style consumers.
+      build_target: wasm32-unknown-unknown
+      # Runtime target — wasi exposes the syscalls (clock, write) wasmtime needs
+      # to actually execute the SIMD tests and the smoke/bench binaries.
+      run_target: wasm32-wasip1
+      RUSTFLAGS: -C debuginfo=0 -C target-feature=+simd128
+      # Tell cargo to invoke the built `.wasm` via wasmtime.
+      CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ env.build_target }}, ${{ env.run_target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install wasmtime
+        run: |
+          curl https://wasmtime.dev/install.sh -sSf | bash
+          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+      - name: Build p3-goldilocks for wasm32-unknown-unknown
+        run: cargo build --verbose --target ${{ env.build_target }} -p p3-goldilocks
+      - name: Run wasm32+simd128 SIMD tests under wasmtime
+        run: cargo test --release --target ${{ env.run_target }} -p p3-goldilocks --lib wasm32_simd128
+      - name: Run wasm_smoke under wasmtime
+        run: cargo run --release --target ${{ env.run_target }} --bin wasm_smoke -p p3-goldilocks
+      - name: Run wasm_bench under wasmtime
+        run: cargo run --release --target ${{ env.run_target }} --bin wasm_bench -p p3-goldilocks
 
   lint:
     name: Formatting and Clippy

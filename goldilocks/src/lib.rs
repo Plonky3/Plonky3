@@ -41,14 +41,8 @@ mod x86_64_avx512;
 #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
 pub use x86_64_avx512::*;
 
-/// Packed scalar type intended for Merkle trees and sponge hashes (e.g. Poseidon2 leaf batching).
-///
-/// On **aarch64** this is always [`PackedGoldilocksNeon`], even if [`Goldilocks::Packing`] is
-/// set to [`Goldilocks`] for arithmetic.
-///
-/// On **other targets** this is [`Goldilocks::Packing`] (AVX2, AVX-512, or scalar).
-#[cfg(target_arch = "aarch64")]
-pub type HashPackedGoldilocks = PackedGoldilocksNeon;
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+mod wasm32_simd128;
 
-#[cfg(not(target_arch = "aarch64"))]
-pub type HashPackedGoldilocks = <Goldilocks as p3_field::Field>::Packing;
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+pub use wasm32_simd128::*;

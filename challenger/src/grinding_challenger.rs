@@ -294,6 +294,12 @@ where
     fn grind(&mut self, bits: usize) -> Self::Witness {
         assert!(bits < (usize::BITS as usize), "bit count must be valid");
         assert!((1 << bits) < F::ORDER_U32);
+
+        // Trivial case: 0 bits mean no PoW is required and any witness is valid.
+        if bits == 0 {
+            return F::ZERO;
+        }
+
         let witness = (0..F::ORDER_U32)
             .into_par_iter()
             .map(|i| unsafe {

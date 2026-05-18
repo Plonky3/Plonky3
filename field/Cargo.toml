@@ -23,7 +23,14 @@ tracing.workspace = true
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
 p3-goldilocks = { path = "../goldilocks" }
+
+criterion.workspace = true
 proptest.workspace = true
+
+[[bench]]
+name = "batch_inverse"
+path = "benches/batch_inverse.rs"
+harness = false
 
 [lints]
 workspace = true

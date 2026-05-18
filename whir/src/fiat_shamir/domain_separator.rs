@@ -4,7 +4,6 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 
 use crate::fiat_shamir::pattern::{Hint, Observe, Pattern, Sample};
@@ -176,23 +175,21 @@ where
     /// The caller must observe these public inputs into the challenger
     /// before any challenges are sampled.
     /// See the struct-level documentation for the rationale.
-    pub fn commit_statement<MT: Mmcs<F>, Challenger, const DIGEST_ELEMS: usize>(
+    pub fn commit_statement<Challenger, const DIGEST_ELEMS: usize>(
         &mut self,
-        params: &WhirConfig<EF, F, MT, Challenger>,
-    ) where
-        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
-    {
+        config: &WhirConfig<EF, F, Challenger>,
+    ) {
         // Bind the transcript to the protocol configuration.
-        self.protocol_param(params.num_variables);
-        self.protocol_param(params.security_level);
-        self.protocol_param(params.starting_log_inv_rate);
-        self.protocol_param(params.max_pow_bits);
+        self.protocol_param(config.num_variables);
+        self.protocol_param(config.security_level);
+        self.protocol_param(config.starting_log_inv_rate);
+        self.protocol_param(config.pow_bits);
 
         // Encode the soundness assumption as its discriminant.
-        self.protocol_param(params.soundness_type as usize);
+        self.protocol_param(config.soundness_type as usize);
 
         // Encode the folding strategy: discriminant followed by inner values.
-        match params.folding_factor {
+        match config.folding_factor {
             FoldingFactor::Constant(f) => {
                 self.protocol_param(0);
                 self.protocol_param(f);
@@ -205,7 +202,7 @@ where
         }
 
         self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
-        self.add_ood(params.commitment_ood_samples);
+        self.add_ood(config.commitment_ood_samples);
     }
 
     /// Append the full WHIR proof transcript to the domain separator.
@@ -231,9 +228,9 @@ where
     ///    - Perform PoW, then draw final query positions.
     ///    - Record hints and run the final sumcheck.
     ///    - Record deferred weight evaluation hints.
-    pub fn add_whir_proof<MT: Mmcs<F>, Challenger, const DIGEST_ELEMS: usize>(
+    pub fn add_whir_proof<Challenger, const DIGEST_ELEMS: usize>(
         &mut self,
-        params: &WhirConfig<EF, F, MT, Challenger>,
+        config: &WhirConfig<EF, F, Challenger>,
     ) where
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
         EF: TwoAdicField,
@@ -242,14 +239,14 @@ where
         // Initial combination randomness and first sumcheck phase.
         self.sample(1, Sample::InitialCombinationRandomness);
         self.add_sumcheck(&SumcheckParams {
-            rounds: params.folding_factor.at_round(0),
-            pow_bits: params.starting_folding_pow_bits,
+            rounds: config.folding_factor.at_round(0),
+            pow_bits: config.starting_folding_pow_bits,
         });
 
         // Intermediate rounds: commitment → OOD → PoW → checkpoint → queries → sumcheck.
-        let mut domain_size = params.starting_domain_size();
-        for (round, r) in params.round_parameters.iter().enumerate() {
-            let folded_domain_size = domain_size >> params.folding_factor.at_round(round);
+        let mut domain_size = config.starting_domain_size();
+        for (round, r) in config.round_parameters.iter().enumerate() {
+            let folded_domain_size = domain_size >> config.folding_factor.at_round(round);
             // Byte length needed to encode a position in the folded domain.
             let domain_size_bytes = ((folded_domain_size * 2 - 1).ilog2() as usize).div_ceil(8);
 
@@ -274,26 +271,26 @@ where
             self.sample(1, Sample::CombinationRandomness);
 
             self.add_sumcheck(&SumcheckParams {
-                rounds: params.folding_factor.at_round(round + 1),
+                rounds: config.folding_factor.at_round(round + 1),
                 pow_bits: r.folding_pow_bits,
             });
-            domain_size >>= params.rs_reduction_factor(round);
+            domain_size >>= config.rs_reduction_factor(round);
         }
 
         // Final round: coefficients → PoW → queries → sumcheck → deferred hints.
         let folded_domain_size = domain_size
-            >> params
+            >> config
                 .folding_factor
-                .at_round(params.round_parameters.len());
+                .at_round(config.round_parameters.len());
         let domain_size_bytes = ((folded_domain_size * 2 - 1).ilog2() as usize).div_ceil(8);
 
         // Observe all coefficients of the final folded polynomial.
-        self.observe(1 << params.final_sumcheck_rounds, Observe::FinalCoeffs);
+        self.observe(1 << config.final_sumcheck_rounds, Observe::FinalCoeffs);
 
         // PoW before final query generation (no transcript checkpoint in final round).
-        self.pow(params.final_pow_bits);
+        self.pow(config.final_pow_bits);
         self.sample(
-            domain_size_bytes * params.final_queries,
+            domain_size_bytes * config.final_queries,
             Sample::FinalQueries,
         );
         self.hint(Hint::StirAnswers);
@@ -301,8 +298,8 @@ where
 
         // Final sumcheck and deferred weight evaluations.
         self.add_sumcheck(&SumcheckParams {
-            rounds: params.final_sumcheck_rounds,
-            pow_bits: params.final_folding_pow_bits,
+            rounds: config.final_sumcheck_rounds,
+            pow_bits: config.final_folding_pow_bits,
         });
         self.hint(Hint::DeferredWeightEvaluations);
     }

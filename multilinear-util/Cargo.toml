@@ -21,9 +21,9 @@ tracing.workspace = true
 rand.workspace = true
 
 [dev-dependencies]
-criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 
+criterion.workspace = true
 proptest.workspace = true
 
 [features]
@@ -31,6 +31,10 @@ parallel = ["p3-maybe-rayon/parallel"]
 
 [[bench]]
 name = "evaleq_batched"
+harness = false
+
+[[bench]]
+name = "compress_kernels"
 harness = false
 
 [lints]

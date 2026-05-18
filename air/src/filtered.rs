@@ -1,8 +1,6 @@
 use p3_field::Dup;
 
-use crate::builder::{
-    AirBuilder, AirBuilderWithContext, ExtensionBuilder, PeriodicAirBuilder, PermutationAirBuilder,
-};
+use crate::builder::{AirBuilder, AirBuilderWithContext, ExtensionBuilder, PermutationAirBuilder};
 
 /// A wrapper around an [`AirBuilder`] that enforces constraints only when a specified condition is met.
 ///
@@ -33,6 +31,7 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
     type PreprocessedWindow = AB::PreprocessedWindow;
     type MainWindow = AB::MainWindow;
     type PublicVar = AB::PublicVar;
+    type PeriodicVar = AB::PeriodicVar;
 
     fn main(&self) -> Self::MainWindow {
         self.inner.main()
@@ -65,10 +64,6 @@ impl<AB: AirBuilder> AirBuilder for FilteredAirBuilder<'_, AB> {
     fn public_values(&self) -> &[Self::PublicVar] {
         self.inner.public_values()
     }
-}
-
-impl<AB: PeriodicAirBuilder> PeriodicAirBuilder for FilteredAirBuilder<'_, AB> {
-    type PeriodicVar = AB::PeriodicVar;
 
     fn periodic_values(&self) -> &[Self::PeriodicVar] {
         self.inner.periodic_values()

@@ -1,0 +1,352 @@
+//! Traits for univariate polynomial commitment schemes.
+
+use alloc::vec::Vec;
+use core::fmt::Debug;
+
+use p3_field::ExtensionField;
+use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+
+use crate::{PeriodicLdeTable, PolynomialSpace};
+
+pub type Val<D> = <D as PolynomialSpace>::Val;
+
+/// Optional fast path for building the periodic LDE table (e.g. via coset LDE).
+/// Implement for PCS backends that can avoid evaluating at every quotient point.
+pub trait BuildPeriodicLdeTableFast {
+    type PeriodicDomain: PolynomialSpace;
+
+    fn maybe_build_periodic_lde_table_fast(
+        &self,
+        _periodic_cols: &[Vec<Val<Self::PeriodicDomain>>],
+        _trace_domain: Self::PeriodicDomain,
+        _quotient_domain: Self::PeriodicDomain,
+    ) -> Option<PeriodicLdeTable<Val<Self::PeriodicDomain>>>
+    where
+        Val<Self::PeriodicDomain>: Clone,
+    {
+        None
+    }
+}
+
+/// A polynomial commitment scheme, for committing to batches of polynomials defined by their evaluations
+/// over some domain.
+///
+/// In general this does not have to be a hiding commitment scheme but it might be for some implementations.
+// TODO: Should we have a super-trait for weakly-binding PCSs, like FRI outside unique decoding radius?
+pub trait Pcs<Challenge, Challenger>:
+    BuildPeriodicLdeTableFast<PeriodicDomain = Self::Domain>
+where
+    Challenge: ExtensionField<Val<Self::Domain>>,
+{
+    /// The class of evaluation domains that this commitment scheme works over.
+    type Domain: PolynomialSpace;
+
+    /// The commitment that's sent to the verifier.
+    type Commitment: Clone + Serialize + DeserializeOwned;
+
+    /// Data that the prover stores for committed polynomials, to help the prover with opening.
+    type ProverData;
+
+    /// Type of the output of `get_evaluations_on_domain`.
+    type EvaluationsOnDomain<'a>: Matrix<Val<Self::Domain>> + 'a;
+
+    /// The opening argument.
+    type Proof: Clone + Serialize + DeserializeOwned;
+
+    /// The type of a proof verification error.
+    type Error: Debug;
+
+    /// Set to true to activate randomization and achieve zero-knowledge.
+    const ZK: bool;
+
+    /// Index of the trace commitment in the computed opened values.
+    const TRACE_IDX: usize = Self::ZK as usize;
+
+    /// Index of the quotient commitments in the computed opened values.
+    const QUOTIENT_IDX: usize = Self::TRACE_IDX + 1;
+
+    /// Index of the preprocessed trace commitment in the computed opened values.
+    const PREPROCESSED_TRACE_IDX: usize = Self::QUOTIENT_IDX + 1; // Note: not always present
+
+    /// This should return a domain such that `Domain::next_point` returns `Some`.
+    fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain;
+
+    /// The base-2 logarithm of the largest evaluation domain this PCS can construct.
+    fn log_max_lde_height(&self) -> usize {
+        usize::BITS as usize - 1
+    }
+
+    /// Given a collection of evaluation matrices, produce a binding commitment to
+    /// the polynomials defined by those evaluations. If `zk` is enabled, the evaluations are
+    /// first randomized as explained in Section 3 of https://eprint.iacr.org/2024/1037.pdf .
+    ///
+    /// Returns both the commitment which should be sent to the verifier
+    /// and the prover data which can be used to produce opening proofs.
+    #[allow(clippy::type_complexity)]
+    fn commit(
+        &self,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
+    ) -> (Self::Commitment, Self::ProverData);
+
+    /// Same as `commit` but without randomization. This is used for preprocessed columns
+    /// which do not have to be randomized even when ZK is enabled. Note that the preprocessed columns still
+    /// need to be padded to the extended domain height.
+    ///
+    /// Returns both the commitment which should be sent to the verifier
+    /// and the prover data which can be used to produce opening proofs.
+    fn commit_preprocessing(
+        &self,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
+    ) -> (Self::Commitment, Self::ProverData) {
+        self.commit(evaluations)
+    }
+
+    /// Commit to the quotient polynomial. We first decompose the quotient polynomial into
+    /// `num_chunks` many smaller polynomials each of degree `degree / num_chunks`.
+    /// This can have minor performance benefits, but is not strictly necessary in the non `zk` case.
+    /// When `zk` is enabled, this commitment will additionally include some randomization process
+    /// to hide the inputs.
+    ///
+    /// ### Arguments
+    /// - `quotient_domain` the domain of the quotient polynomial.
+    /// - `quotient_evaluations` the evaluations of the quotient polynomial over the domain. This should be in
+    ///   standard (not bit-reversed) order.
+    /// - `num_chunks` the number of smaller polynomials to decompose the quotient polynomial into.
+    #[allow(clippy::type_complexity)]
+    fn commit_quotient(
+        &self,
+        quotient_domain: Self::Domain,
+        quotient_evaluations: RowMajorMatrix<Val<Self::Domain>>,
+        num_chunks: usize,
+    ) -> (Self::Commitment, Self::ProverData) {
+        // Given the evaluation vector of `Q_i(x)` over a domain, split it into evaluation vectors
+        // of `q_{i0}(x), ...` over subdomains and commit to these `q`'s.
+        // TODO: Currently, split_evals involves copying the data to a new matrix.
+        //       We may be able to avoid this copy making use of bit-reversals.
+        let quotient_sub_evaluations =
+            quotient_domain.split_evals(num_chunks, quotient_evaluations);
+        let quotient_sub_domains = quotient_domain.split_domains(num_chunks);
+
+        let ldes = self.get_quotient_ldes(
+            quotient_sub_domains
+                .into_iter()
+                .zip(quotient_sub_evaluations),
+            num_chunks,
+        );
+        self.commit_ldes(ldes)
+    }
+
+    /// When committing to quotient polynomials in batch-STARK,
+    /// it is simpler to first compute the LDE evaluations before batch-committing to them.
+    ///
+    /// This corresponds to the first step of `commit_quotient`. When `zk` is enabled,
+    /// this will additionally add randomization.
+    fn get_quotient_ldes(
+        &self,
+        evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val<Self::Domain>>)>,
+        num_chunks: usize,
+    ) -> Vec<RowMajorMatrix<Val<Self::Domain>>>;
+
+    /// Commits to a collection of LDE evaluation matrices.
+    fn commit_ldes(
+        &self,
+        ldes: Vec<RowMajorMatrix<Val<Self::Domain>>>,
+    ) -> (Self::Commitment, Self::ProverData);
+
+    /// Given prover data corresponding to a commitment to a collection of evaluation matrices,
+    /// return the evaluations of those matrices on the given domain.
+    ///
+    /// This is essentially a no-op when called with a `domain` which is a subset of the evaluation domain
+    /// on which the evaluation matrices are defined.
+    fn get_evaluations_on_domain<'a>(
+        &self,
+        prover_data: &'a Self::ProverData,
+        idx: usize,
+        domain: Self::Domain,
+    ) -> Self::EvaluationsOnDomain<'a>;
+
+    /// This is the same as `get_evaluations_on_domain` but without randomization.
+    /// This is used for preprocessed columns which do not have to be randomized even when ZK is enabled.
+    fn get_evaluations_on_domain_no_random<'a>(
+        &self,
+        prover_data: &'a Self::ProverData,
+        idx: usize,
+        domain: Self::Domain,
+    ) -> Self::EvaluationsOnDomain<'a> {
+        self.get_evaluations_on_domain(prover_data, idx, domain)
+    }
+
+    /// Open a collection of polynomial commitments at a set of points. Produce the values at those points along with a proof
+    /// of correctness.
+    ///
+    /// Arguments:
+    /// - `commitment_data_with_opening_points`: A vector whose elements are a pair:
+    ///     - `data`: The prover data corresponding to a multi-matrix commitment.
+    ///     - `opening_points`: A vector containing, for each matrix committed to, a vector of opening points.
+    /// - `fiat_shamir_challenger`: The challenger that will be used to generate the proof.
+    ///
+    /// Unwrapping the arguments further, each `data` contains a vector of the committed matrices (`matrices = Vec<M>`).
+    /// If the length of `matrices` is not equal to the length of `opening_points` the function will error. Otherwise, for
+    /// each index `i`, the matrix `M = matrices[i]` will be opened at the points `opening_points[i]`.
+    ///
+    /// This means that each column of `M` will be interpreted as the evaluation vector of some polynomial
+    /// and we will compute the value of all of those polynomials at `opening_points[i]`.
+    ///
+    /// The domains on which the evaluation vectors are defined is not part of the arguments here
+    /// but should be public information known to both the prover and verifier.
+    fn open(
+        &self,
+        // For each multi-matrix commitment,
+        commitment_data_with_opening_points: Vec<(
+            // The matrices and auxiliary prover data
+            &Self::ProverData,
+            // for each matrix,
+            Vec<
+                // the points to open
+                Vec<Challenge>,
+            >,
+        )>,
+        fiat_shamir_challenger: &mut Challenger,
+    ) -> (OpenedValues<Challenge>, Self::Proof);
+
+    /// Open a collection of polynomial commitments at a set of points, when there is preprocessing data.
+    /// It is the same as `open` when `ZK` is disabled.
+    /// Produce the values at those points along with a proof of correctness.
+    ///
+    /// Arguments:
+    /// - `commitment_data_with_opening_points`: A vector whose elements are a pair:
+    ///     - `data`: The prover data corresponding to a multi-matrix commitment.
+    ///     - `opening_points`: A vector containing, for each matrix committed to, a vector of opening points.
+    /// - `fiat_shamir_challenger`: The challenger that will be used to generate the proof.
+    /// - `is_preprocessing`: If one of the committed matrices corresponds to preprocessed columns, this is the index of that matrix.
+    ///
+    /// Unwrapping the arguments further, each `data` contains a vector of the committed matrices (`matrices = Vec<M>`).
+    /// If the length of `matrices` is not equal to the length of `opening_points` the function will error. Otherwise, for
+    /// each index `i`, the matrix `M = matrices[i]` will be opened at the points `opening_points[i]`.
+    ///
+    /// This means that each column of `M` will be interpreted as the evaluation vector of some polynomial
+    /// and we will compute the value of all of those polynomials at `opening_points[i]`.
+    ///
+    /// The domains on which the evaluation vectors are defined is not part of the arguments here
+    /// but should be public information known to both the prover and verifier.
+    fn open_with_preprocessing(
+        &self,
+        // For each multi-matrix commitment,
+        commitment_data_with_opening_points: Vec<(
+            // The matrices and auxiliary prover data
+            &Self::ProverData,
+            // for each matrix,
+            Vec<
+                // the points to open
+                Vec<Challenge>,
+            >,
+        )>,
+        fiat_shamir_challenger: &mut Challenger,
+        _is_preprocessing: bool,
+    ) -> (OpenedValues<Challenge>, Self::Proof) {
+        debug_assert!(
+            !Self::ZK,
+            "open_with_preprocessing should have a different implementation when ZK is enabled"
+        );
+        self.open(commitment_data_with_opening_points, fiat_shamir_challenger)
+    }
+
+    /// Verify that a collection of opened values is correct.
+    ///
+    /// Arguments:
+    /// - `commitments_with_opening_points`: A vector whose elements are a pair:
+    ///     - `commitment`: A multi matrix commitment.
+    ///     - `opening_points`: A vector containing, for each matrix committed to, a vector of opening points and claimed evaluations.
+    /// - `proof`: A claimed proof of correctness for the opened values.
+    /// - `fiat_shamir_challenger`: The challenger that will be used to generate the proof.
+    #[allow(clippy::type_complexity)]
+    fn verify(
+        &self,
+        // For each commitment:
+        commitments_with_opening_points: Vec<(
+            // The commitment
+            Self::Commitment,
+            // for each matrix in the commitment:
+            Vec<(
+                // its domain,
+                Self::Domain,
+                // A vector of (point, claimed_evaluation) pairs
+                Vec<(
+                    // the point the matrix was opened at,
+                    Challenge,
+                    // the claimed evaluations at that point
+                    Vec<Challenge>,
+                )>,
+            )>,
+        )>,
+        // The opening proof for all claimed evaluations.
+        proof: &Self::Proof,
+        fiat_shamir_challenger: &mut Challenger,
+    ) -> Result<(), Self::Error>;
+
+    fn get_opt_randomization_poly_commitment(
+        &self,
+        _domain: impl IntoIterator<Item = Self::Domain>,
+    ) -> Option<(Self::Commitment, Self::ProverData)> {
+        None
+    }
+
+    /// Build the compact periodic LDE table (height = max_period × blowup, width = num periodic columns).
+    ///
+    /// Default: try fast path (e.g. coset LDE), else evaluate each column at the first `extended_height` quotient points.
+    fn build_periodic_lde_table(
+        &self,
+        periodic_cols: &[Vec<Val<Self::Domain>>],
+        trace_domain: Self::Domain,
+        quotient_domain: Self::Domain,
+    ) -> PeriodicLdeTable<Val<Self::Domain>>
+    where
+        Self::Domain: Clone,
+        Val<Self::Domain>: Clone,
+    {
+        if let Some(table) =
+            self.maybe_build_periodic_lde_table_fast(periodic_cols, trace_domain, quotient_domain)
+        {
+            return table;
+        }
+        if periodic_cols.is_empty() {
+            return PeriodicLdeTable::empty();
+        }
+        let trace_size = trace_domain.size();
+        let quotient_size = quotient_domain.size();
+        let blowup = quotient_size / trace_size;
+        let max_period = periodic_cols.iter().map(|c| c.len()).max().unwrap();
+        let extended_height = max_period * blowup;
+        let num_cols = periodic_cols.len();
+
+        let mut quotient_pts = Vec::with_capacity(extended_height);
+        let mut pt = quotient_domain.first_point();
+        for _ in 0..extended_height {
+            quotient_pts.push(pt);
+            pt = quotient_domain
+                .next_point(pt)
+                .expect("quotient domain must support next_point");
+        }
+
+        let padded_cols: Vec<Vec<Val<Self::Domain>>> = periodic_cols
+            .iter()
+            .map(|col| (0..max_period).map(|i| col[i % col.len()]).collect())
+            .collect();
+
+        let mut row_major = Vec::with_capacity(extended_height * num_cols);
+        for point in quotient_pts.iter().take(extended_height) {
+            for padded in &padded_cols {
+                row_major.push(trace_domain.evaluate_periodic_column_at(padded, *point));
+            }
+        }
+        PeriodicLdeTable::new(RowMajorMatrix::new(row_major, num_cols))
+    }
+}
+
+pub type OpenedValues<F> = Vec<OpenedValuesForRound<F>>;
+pub type OpenedValuesForRound<F> = Vec<OpenedValuesForMatrix<F>>;
+pub type OpenedValuesForMatrix<F> = Vec<OpenedValuesForPoint<F>>;
+pub type OpenedValuesForPoint<F> = Vec<F>;

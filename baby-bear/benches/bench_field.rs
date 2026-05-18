@@ -70,6 +70,7 @@ fn bench_packedfield(c: &mut Criterion) {
 
     const EXP_REPS: usize = 1000;
     benchmark_exp_const::<<F as Field>::Packing, 3, EXP_REPS>(c, &name);
+    benchmark_exp_const::<<F as Field>::Packing, 4, EXP_REPS>(c, &name);
     benchmark_exp_const::<<F as Field>::Packing, 5, EXP_REPS>(c, &name);
     benchmark_exp_const::<<F as Field>::Packing, 7, EXP_REPS>(c, &name);
 
