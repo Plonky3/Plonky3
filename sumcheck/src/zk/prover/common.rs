@@ -13,7 +13,7 @@ use p3_matrix::Matrix;
 use p3_zk_codes::ZkEncoding;
 use rand::Rng;
 
-use crate::sumcheck::zk::data::{MaskOracle, ZkSumcheckData};
+use crate::zk::data::{MaskOracle, ZkSumcheckData};
 
 /// Sample `k` mask polynomials, encode each, commit, and observe.
 ///
@@ -153,7 +153,7 @@ mod tests {
     use rand::rngs::SmallRng;
 
     use super::*;
-    use crate::sumcheck::zk::test_helpers::{EF, F, MyChallenger, make_setup};
+    use crate::zk::test_helpers::{EF, F, MyChallenger, make_setup};
 
     #[test]
     fn observe_masks_and_mu_tilde_matches_hand_computed_value() {

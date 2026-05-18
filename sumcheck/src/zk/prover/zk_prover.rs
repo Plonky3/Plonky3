@@ -14,12 +14,12 @@ use rand::Rng;
 use super::common::{observe_masks_and_mu_tilde, sample_masks};
 use super::layout::ZkLayout;
 use super::round::{PlainPiece, RoundContext, RoundState, round_poly_to_wire};
-use crate::sumcheck::extrapolate_01inf;
-use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
-use crate::sumcheck::layout::{PrefixProver, SuffixProver};
-use crate::sumcheck::strategy::SumcheckProver;
-use crate::sumcheck::svo::calculate_accumulators_batch;
-use crate::sumcheck::zk::data::{MaskOracle, ZkSumcheckData};
+use crate::extrapolate_01inf;
+use crate::lagrange::lagrange_weights_01inf_multi;
+use crate::layout::{PrefixProver, SuffixProver};
+use crate::strategy::SumcheckProver;
+use crate::svo::calculate_accumulators_batch;
+use crate::zk::data::{MaskOracle, ZkSumcheckData};
 
 /// Honest-verifier zero-knowledge sumcheck prover.
 ///
@@ -373,8 +373,8 @@ mod tests {
     use p3_util::log2_strict_usize;
     use proptest::prelude::*;
 
-    use crate::sumcheck::strategy::VariableOrder;
-    use crate::sumcheck::zk::test_helpers::{F, run_roundtrip};
+    use crate::strategy::VariableOrder;
+    use crate::zk::test_helpers::{F, run_roundtrip};
 
     #[test]
     fn prover_verifier_roundtrip_prefix() {

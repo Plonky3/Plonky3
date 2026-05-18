@@ -8,10 +8,10 @@ use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 
 use super::data::ZkSumcheckData;
-use crate::sumcheck::error::SumcheckError;
-use crate::sumcheck::layout::{LayoutStrategy, Verifier};
-use crate::sumcheck::strategy::VariableOrder;
-use crate::sumcheck::table::TableShape;
+use crate::error::SumcheckError;
+use crate::layout::{LayoutStrategy, Verifier};
+use crate::strategy::VariableOrder;
+use crate::table::TableShape;
 
 /// HVZK verifier for the stacked sumcheck.
 ///
@@ -266,9 +266,9 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::sumcheck::layout::{Layout, PrefixProver, SuffixProver, TableShape};
-    use crate::sumcheck::strategy::VariableOrder;
-    use crate::sumcheck::zk::test_helpers::{EF, F, MyMmcs, run_prover};
+    use crate::layout::{Layout, PrefixProver, SuffixProver, TableShape};
+    use crate::strategy::VariableOrder;
+    use crate::zk::test_helpers::{EF, F, MyMmcs, run_prover};
 
     #[test]
     fn verifier_strategy_matches_non_private_layouts() {

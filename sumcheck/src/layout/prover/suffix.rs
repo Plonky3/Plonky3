@@ -12,16 +12,16 @@ use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 
-use crate::pcs::committer::writer::commit_base;
-use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
-use crate::sumcheck::layout::opening::{Opening, ProverMultiClaim, ProverVirtualClaim};
-use crate::sumcheck::layout::prover::Layout;
-use crate::sumcheck::layout::witness::{Table, TablePlacement};
-use crate::sumcheck::layout::{LayoutStrategy, Witness};
-use crate::sumcheck::product_polynomial::ProductPolynomial;
-use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
-use crate::sumcheck::svo::{SvoPoint, calculate_accumulators_batch};
-use crate::sumcheck::{Claim, SumcheckData, extrapolate_01inf};
+use crate::commit::commit_base;
+use crate::lagrange::lagrange_weights_01inf_multi;
+use crate::layout::opening::{Opening, ProverMultiClaim, ProverVirtualClaim};
+use crate::layout::prover::Layout;
+use crate::layout::witness::{Table, TablePlacement};
+use crate::layout::{LayoutStrategy, Witness};
+use crate::product_polynomial::ProductPolynomial;
+use crate::strategy::{SumcheckProver, VariableOrder};
+use crate::svo::{SvoPoint, calculate_accumulators_batch};
+use crate::{Claim, SumcheckData, extrapolate_01inf};
 
 /// Stacked-sumcheck prover with suffix-first variable binding.
 ///

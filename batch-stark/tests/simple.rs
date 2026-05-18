@@ -15,7 +15,7 @@ use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DitParallel;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
+use p3_field::{Field, PrimeCharacteristicRing, PrimeField64, TwoAdicField};
 use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
 use p3_lookup::InteractionBuilder;
@@ -1027,7 +1027,7 @@ fn test_degree_bits_too_large_rejected() -> Result<(), Box<dyn std::error::Error
 
     // Verify the error carries the correct diagnostic fields:
     //   - air: Some(0)          — first (and only) AIR instance
-    //   - maximum: BITS - 1     — largest safe exponent (63 on 64-bit)
+    //   - maximum: TWO_ADICITY  — largest degree supported by the PCS
     //   - got: BITS             — the tampered value we injected (64)
     match err {
         VerificationError::InvalidProofShape(InvalidProofShapeError::DegreeBitsTooLarge {
@@ -1036,7 +1036,7 @@ fn test_degree_bits_too_large_rejected() -> Result<(), Box<dyn std::error::Error
             got,
         }) => {
             assert_eq!(air, Some(0));
-            assert_eq!(maximum, usize::BITS as usize - 1);
+            assert_eq!(maximum, Val::TWO_ADICITY);
             assert_eq!(got, usize::BITS as usize);
         }
         _ => panic!("unexpected error: {err:?}"),

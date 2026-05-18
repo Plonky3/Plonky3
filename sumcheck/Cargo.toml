@@ -1,6 +1,6 @@
 [package]
-name = "p3-uni-stark"
-description = "A minimal univariate STARK framework providing core components for proof generation and verification."
+name = "p3-sumcheck"
+description = "Sumcheck protocol engine (product polynomials, SVO, HVZK masks)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,38 +10,34 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-libm.workspace = true
-p3-air.workspace = true
+p3-baby-bear = { workspace = true, optional = true }
 p3-challenger.workspace = true
 p3-commit.workspace = true
+p3-dft.workspace = true
 p3-field.workspace = true
-p3-fri.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
+p3-multilinear-util.workspace = true
 p3-util.workspace = true
+p3-zk-codes.workspace = true
 
 itertools.workspace = true
+rand.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
 thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
-p3-challenger = { path = "../challenger" }
-p3-circle = { path = "../circle" }
-p3-commit = { path = "../commit", features = ["test-utils"] }
-p3-dft = { path = "../dft" }
-p3-keccak = { path = "../keccak" }
-p3-matrix = { path = "../matrix" }
+p3-koala-bear = { path = "../koala-bear" }
 p3-merkle-tree = { path = "../merkle-tree" }
-p3-mersenne-31 = { path = "../mersenne-31" }
 p3-symmetric = { path = "../symmetric" }
 
-postcard = { workspace = true, features = ["alloc"] }
-rand.workspace = true
+proptest.workspace = true
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
+test-util = ["dep:p3-baby-bear"]
 
 [lints]
 workspace = true

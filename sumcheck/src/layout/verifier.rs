@@ -7,14 +7,14 @@ use core::marker::PhantomData;
 use p3_field::{ExtensionField, Field, dot_product};
 use p3_multilinear_util::point::Point;
 
+use crate::Claim;
 use crate::constraints::Constraint;
 use crate::constraints::statement::EqStatement;
-use crate::sumcheck::Claim;
-use crate::sumcheck::layout::LayoutStrategy;
-use crate::sumcheck::layout::opening::{VerifierMultiClaim, VerifierOpening, VerifierVirtualClaim};
-use crate::sumcheck::layout::plan::{LayoutShape, plan_layout};
-use crate::sumcheck::layout::witness::{Selector, TablePlacement};
-use crate::sumcheck::table::TableShape;
+use crate::layout::LayoutStrategy;
+use crate::layout::opening::{VerifierMultiClaim, VerifierOpening, VerifierVirtualClaim};
+use crate::layout::plan::{LayoutShape, plan_layout};
+use crate::layout::witness::{Selector, TablePlacement};
+use crate::table::TableShape;
 
 /// Verifier-side layout and claim registry.
 #[derive(Debug, Clone)]
@@ -274,8 +274,8 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
 
     use super::*;
-    use crate::sumcheck::strategy::VariableOrder;
-    use crate::sumcheck::tests::{EF, F, challenger};
+    use crate::strategy::VariableOrder;
+    use crate::tests::{EF, F, challenger};
 
     const fn prefix_strategy() -> LayoutStrategy {
         LayoutStrategy::new(false, VariableOrder::Prefix)

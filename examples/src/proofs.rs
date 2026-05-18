@@ -10,7 +10,10 @@ use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher};
-use p3_uni_stark::{PcsError, Proof, StarkGenericConfig, VerificationError, prove, verify};
+use p3_uni_stark::{
+    AirLayout, PcsError, Proof, StarkGenericConfig, StarkSecurityParams, VerificationError, prove,
+    verify,
+};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 
@@ -98,6 +101,15 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_params = FriParameters::new_benchmark_high_arity(challenge_mmcs);
 
+    let security_params = StarkSecurityParams::from_air::<F, F, _, _>(
+        &fri_params,
+        proof_goal,
+        AirLayout::from_air(proof_goal),
+        EF::bits(),
+        128,
+        2,
+    );
+
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
     let pcs = TwoAdicFriPcs::new(dft, val_mmcs, fri_params);
@@ -108,7 +120,11 @@ where
     let proof = prove(&config, proof_goal, trace, &[]);
     report_proof_size(&proof);
 
-    verify(&config, proof_goal, &proof, &[])
+    let result = verify(&config, proof_goal, &proof, &[]);
+    if result.is_ok() {
+        report_parameter_security(&proof, &security_params);
+    }
+    result
 }
 
 /// Prove the given ProofGoal using the Poseidon2 hash function to build the merkle tree.
@@ -139,6 +155,14 @@ where
 
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     let fri_params = FriParameters::new_benchmark_high_arity(challenge_mmcs);
+    let security_params = StarkSecurityParams::from_air::<F, F, _, _>(
+        &fri_params,
+        proof_goal,
+        AirLayout::from_air(proof_goal),
+        EF::bits(),
+        128,
+        2,
+    );
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
@@ -150,7 +174,11 @@ where
     let proof = prove(&config, proof_goal, trace, &[]);
     report_proof_size(&proof);
 
-    verify(&config, proof_goal, &proof, &[])
+    let result = verify(&config, proof_goal, &proof, &[]);
+    if result.is_ok() {
+        report_parameter_security(&proof, &security_params);
+    }
+    result
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
@@ -176,6 +204,14 @@ pub fn prove_m31_keccak<
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
     let fri_params = FriParameters::new_benchmark(challenge_mmcs);
+    let security_params = StarkSecurityParams::from_air::<F, F, _, _>(
+        &fri_params,
+        proof_goal,
+        AirLayout::from_air(proof_goal),
+        EF::bits(),
+        128,
+        2,
+    );
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
@@ -187,7 +223,11 @@ pub fn prove_m31_keccak<
     let proof = prove(&config, proof_goal, trace, &[]);
     report_proof_size(&proof);
 
-    verify(&config, proof_goal, &proof, &[])
+    let result = verify(&config, proof_goal, &proof, &[]);
+    if result.is_ok() {
+        report_parameter_security(&proof, &security_params);
+    }
+    result
 }
 
 /// Prove the given ProofGoal using the Keccak hash function to build the merkle tree.
@@ -217,6 +257,14 @@ where
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());
     // Circle PCS only supports arity 2 (max_log_arity = 1)
     let fri_params = FriParameters::new_benchmark(challenge_mmcs);
+    let security_params = StarkSecurityParams::from_air::<F, F, _, _>(
+        &fri_params,
+        proof_goal,
+        AirLayout::from_air(proof_goal),
+        EF::bits(),
+        128,
+        2,
+    );
 
     let trace = proof_goal.generate_trace_rows(num_hashes, fri_params.log_blowup);
 
@@ -228,7 +276,11 @@ where
     let proof = prove(&config, proof_goal, trace, &[]);
     report_proof_size(&proof);
 
-    verify(&config, proof_goal, &proof, &[])
+    let result = verify(&config, proof_goal, &proof, &[]);
+    if result.is_ok() {
+        report_parameter_security(&proof, &security_params);
+    }
+    result
 }
 
 /// Report the result of the proof.
@@ -254,4 +306,25 @@ where
 {
     let proof_bytes = postcard::to_allocvec(proof).expect("Failed to serialize proof");
     println!("Proof size: {} bytes", proof_bytes.len());
+}
+
+/// Report the security parameter of the proof.
+///
+/// Prints the conjectured and proven security levels.
+#[inline]
+pub fn report_parameter_security<SC>(proof: &Proof<SC>, security_params: &StarkSecurityParams)
+where
+    SC: StarkGenericConfig,
+{
+    println!(
+        "Conjectured security: {} bits",
+        Proof::<SC>::conjectured_security(security_params).security_bits
+    );
+    let proven = proof.proven_security(security_params);
+    println!(
+        "Proven security: {} bits (UDR: {}, LDR: {})",
+        proven.security_bits(),
+        proven.unique_decoding_bits,
+        proven.list_decoding_bits
+    );
 }

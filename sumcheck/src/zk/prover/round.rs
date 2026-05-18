@@ -171,7 +171,7 @@ mod tests {
     use p3_field::PrimeCharacteristicRing;
 
     use super::*;
-    use crate::sumcheck::zk::test_helpers::{EF, F};
+    use crate::zk::test_helpers::{EF, F};
 
     /// Pre-builds the powers-of-two table the assembly helper expects.
     fn pow2_table(k: usize) -> Vec<F> {

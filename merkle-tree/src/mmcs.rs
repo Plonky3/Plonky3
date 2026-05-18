@@ -1105,25 +1105,20 @@ where
 
         let default_digest = [PW::Value::default(); DIGEST_ELEMS];
 
-        // Replay the arity schedule that the prover computed during tree
-        // construction. We use the remaining matrix heights to decide at
-        // each level whether this was an N-ary or a binary step.
+        // Derive the arity schedule from verifier-known dimensions and the configured cap height.
+        let arity_schedule = self.proof_arity_schedule(dimensions)?;
+        let expected_proof_len: usize = arity_schedule.iter().map(|step| step - 1).sum();
+        if opening_proof.len() != expected_proof_len {
+            return Err(WrongHeight {
+                expected_proof_len,
+                num_siblings: opening_proof.len(),
+            });
+        }
+
         let mut proof_pos: usize = 0;
 
-        while proof_pos < opening_proof.len() {
-            let step = select_arity_step::<N>(
-                curr_height_padded,
-                leaf_height_npt,
-                heights_tallest_first.clone().map(|(_, dims)| dims.height),
-            );
-
+        for &step in &arity_schedule {
             let num_siblings = step - 1;
-            if proof_pos + num_siblings > opening_proof.len() {
-                return Err(WrongHeight {
-                    expected_proof_len: proof_pos + num_siblings,
-                    num_siblings: opening_proof.len(),
-                });
-            }
             let siblings = &opening_proof[proof_pos..proof_pos + num_siblings];
             proof_pos += num_siblings;
 

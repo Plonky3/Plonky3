@@ -15,9 +15,9 @@ use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
-use crate::sumcheck::layout::{PrefixProver, SuffixProver, Table, TableShape};
-use crate::sumcheck::strategy::VariableOrder;
-use crate::sumcheck::zk::{ZkLayout, ZkProver, ZkSumcheckData, ZkVerifier};
+use crate::layout::{PrefixProver, SuffixProver, Table, TableShape};
+use crate::strategy::VariableOrder;
+use crate::zk::{ZkLayout, ZkProver, ZkSumcheckData, ZkVerifier};
 
 /// Base field used across the test suite.
 pub type F = BabyBear;

@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 
 use p3_util::log2_ceil_usize;
 
-use crate::sumcheck::layout::witness::{Selector, TablePlacement};
+use crate::layout::witness::{Selector, TablePlacement};
 
 /// Per-table shape input to the layout planner.
 ///

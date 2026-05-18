@@ -22,6 +22,12 @@
 //!
 //! After `l` rounds, the verifier holds `(r_1, ..., r_l)` and queries `g` directly.
 
+#![no_std]
+
+extern crate alloc;
+
+pub mod commit;
+pub mod constraints;
 pub mod data;
 pub mod error;
 pub mod lagrange;
@@ -30,8 +36,10 @@ pub mod product_polynomial;
 pub mod strategy;
 pub mod svo;
 pub mod table;
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_util;
 #[cfg(test)]
-pub(crate) mod tests;
+mod tests;
 pub mod zk;
 
 pub use data::{SumcheckData, verify_final_sumcheck_rounds};

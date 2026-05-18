@@ -6,11 +6,9 @@
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_multilinear_util::point::Point;
 
-use crate::sumcheck::layout::{
-    Layout, PrefixProver, ProverMultiClaim, ProverVirtualClaim, SuffixProver,
-};
-use crate::sumcheck::product_polynomial::ProductPolynomial;
-use crate::sumcheck::strategy::VariableOrder;
+use crate::layout::{Layout, PrefixProver, ProverMultiClaim, ProverVirtualClaim, SuffixProver};
+use crate::product_polynomial::ProductPolynomial;
+use crate::strategy::VariableOrder;
 
 /// Per-mode hooks consumed by the zero-knowledge prover.
 ///

@@ -6,8 +6,8 @@ use p3_mds::karatsuba_convolution::Convolve;
 use p3_mds::util::{dot_product, first_row_to_first_col};
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::Permutation;
-use sha3::digest::{ExtendableOutput, Update};
-use sha3::{Shake128, Shake128Reader};
+use shake::digest::{ExtendableOutput, Update};
+use shake::{Shake128, Shake128Reader};
 
 use crate::util::get_random_u32;
 
