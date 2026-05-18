@@ -83,7 +83,7 @@ serde = { version = "1.0", default-features = false }
 serde_json = "1.0.149"
 sha2 = { version = "0.11.0", default-features = false }
 sha3 = { version = "0.11.0", default-features = false }
-spin = "0.10.0"
+spin = "0.11.0"
 thiserror = { version = "2.0", default-features = false }
 tiny-keccak = "2.0.2"
 tracing = { version = "0.1.44", default-features = false, features = ["attributes"] }
