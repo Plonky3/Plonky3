@@ -213,10 +213,10 @@ mod tests {
     use super::*;
     use crate::layout::TableShape;
     use crate::strategy::VariableOrder;
+    use crate::zk::ZkVerifier;
     use crate::zk::test_helpers::{
         EF, F, MyChallenger, MyMmcs, ef_in_f_subspace, make_setup, run_prover,
     };
-    use crate::zk::ZkVerifier;
 
     /// Lemma 6.4 view-match driver for Reed-Solomon mask encoding.
     ///
