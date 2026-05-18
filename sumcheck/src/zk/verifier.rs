@@ -8,10 +8,10 @@ use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 
 use super::data::ZkSumcheckData;
-use crate::sumcheck::error::SumcheckError;
-use crate::sumcheck::layout::{LayoutStrategy, Verifier};
-use crate::sumcheck::strategy::VariableOrder;
-use crate::sumcheck::table::TableShape;
+use crate::error::SumcheckError;
+use crate::layout::{LayoutStrategy, Verifier};
+use crate::strategy::VariableOrder;
+use crate::table::TableShape;
 
 /// HVZK verifier for the prefix-binding sumcheck.
 ///
@@ -245,11 +245,9 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::sumcheck::layout::TableShape;
-    use crate::sumcheck::zk::test_helpers::{
-        EF, F, MyChallenger, MyMmcs, build_prover_verifier, make_setup,
-    };
-    use crate::sumcheck::zk::{ZkSumcheckData, ZkVerifier};
+    use crate::layout::TableShape;
+    use crate::zk::test_helpers::{EF, F, MyChallenger, MyMmcs, build_prover_verifier, make_setup};
+    use crate::zk::{ZkSumcheckData, ZkVerifier};
 
     #[test]
     fn forged_pow_witness_rejected() {

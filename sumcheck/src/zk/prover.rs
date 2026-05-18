@@ -12,12 +12,12 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
 use super::data::{MaskOracle, ZkSumcheckData};
-use crate::sumcheck::extrapolate_01inf;
-use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
-use crate::sumcheck::layout::{Layout, PrefixProver};
-use crate::sumcheck::product_polynomial::ProductPolynomial;
-use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
-use crate::sumcheck::svo::calculate_accumulators_batch;
+use crate::extrapolate_01inf;
+use crate::lagrange::lagrange_weights_01inf_multi;
+use crate::layout::{Layout, PrefixProver};
+use crate::product_polynomial::ProductPolynomial;
+use crate::strategy::{SumcheckProver, VariableOrder};
+use crate::svo::calculate_accumulators_batch;
 
 /// HVZK prover for the prefix-binding sumcheck.
 ///
@@ -473,7 +473,7 @@ mod tests {
     use p3_util::log2_strict_usize;
     use proptest::prelude::*;
 
-    use crate::sumcheck::zk::test_helpers::{F, run_roundtrip};
+    use crate::zk::test_helpers::{F, run_roundtrip};
 
     #[test]
     fn prover_verifier_roundtrip_classic_unpacked() {
