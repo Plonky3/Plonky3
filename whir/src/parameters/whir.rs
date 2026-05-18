@@ -493,6 +493,7 @@ mod tests {
             folding_factor: FoldingFactor::ConstantFromSecondRound(4, 4),
             soundness_type: SecurityAssumption::CapacityBound,
             starting_log_inv_rate: 1,
+            zk: false,
         }
     }
 

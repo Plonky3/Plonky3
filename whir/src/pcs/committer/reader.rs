@@ -62,18 +62,34 @@ where
                 actual: ood_answers.len(),
             });
         }
+        let ood_corrections = &round_proof.zk_ood_corrections;
 
         // Observe the Merkle root in the transcript.
         challenger.observe(root.clone());
 
+        // When ZK is active, the mask commitment is observed immediately after
+        // the round commitment and before the OOD challenges (Construction 9.7,
+        // step 1b). This keeps the transcript order consistent with the prover.
+        if let Some(ref mask_root) = round_proof.mask_commitment {
+            challenger.observe(mask_root.clone());
+        }
+
         // Reconstruct equality constraints from OOD challenge points and answers.
+        // The transcript observes the padded OOD values, but the sumcheck
+        // constraint uses the plain (unpadded) evals. When ZK corrections are
+        // present, subtract them to recover the plain eval.
         let mut ood_statement = EqStatement::initialize(num_variables);
         (0..ood_samples).for_each(|i| {
             let point = challenger.sample_algebra_element();
             let point = Point::expand_from_univariate(point, num_variables);
-            let eval = ood_answers[i];
-            challenger.observe_algebra_element(eval);
-            ood_statement.add_evaluated_constraint(point, eval);
+            let transcript_eval = ood_answers[i];
+            challenger.observe_algebra_element(transcript_eval);
+            let constraint_eval = if let Some(&correction) = ood_corrections.get(i) {
+                transcript_eval - correction
+            } else {
+                transcript_eval
+            };
+            ood_statement.add_evaluated_constraint(point, constraint_eval);
         });
 
         Ok(ParsedCommitment {

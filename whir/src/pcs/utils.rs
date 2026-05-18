@@ -2,6 +2,8 @@ use alloc::vec::Vec;
 
 use p3_challenger::{CanSampleUniformBits, FieldChallenger};
 use p3_field::{ExtensionField, Field};
+use p3_multilinear_util::point::Point;
+use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
 
 /// Sample `t` distinct STIR query indices uniformly from the transcript.
@@ -119,6 +121,49 @@ where
     queries
 }
 
+/// Compute the r' correction to a STIR opening at position `challenge_idx`.
+///
+/// When the committed codeword is `Enc(f ∥ r')` (ZK padded, Suffix order),
+/// the opened row at `challenge_idx` includes the r' contribution. This
+/// function computes that contribution so the prover can subtract it before
+/// adding the eval to the sumcheck constraint.
+///
+/// `dft_root` must be the primitive `height`-th root of unity used by
+/// `dft_algebra_batch` when encoding the committed matrix. This is
+/// `F::two_adic_generator(log2(height))`, NOT `folded_domain_gen`.
+///
+/// Layout (Suffix, `commit_extension_zk`): coefficient `i` goes to
+/// row `i / width`, column `i % width`. DFT applied column-wise.
+/// r' starts at global index `msg_len`.
+pub(crate) fn zk_stir_correction<F, EF>(
+    r_prime: &[EF],
+    msg_len: usize,
+    width: usize,
+    height: usize,
+    challenge_idx: usize,
+    dft_root: F,
+    query_randomness: &[EF],
+) -> EF
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    let omega = dft_root;
+    let mut correction_row = alloc::vec![EF::ZERO; width];
+
+    for (k, &r_k) in r_prime.iter().enumerate() {
+        let global_idx = msg_len + k;
+        let col = global_idx % width;
+        let row = global_idx / width;
+        if row >= height {
+            break;
+        }
+        correction_row[col] += r_k * omega.exp_u64((challenge_idx * row) as u64);
+    }
+
+    Poly::new(correction_row).eval_ext::<F>(&Point::new(query_randomness.to_vec()))
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::collections::BTreeSet;
@@ -126,6 +171,7 @@ mod tests {
 
     use p3_challenger::{CanObserve, DuplexChallenger};
     use p3_field::extension::BinomialExtensionField;
+    use p3_field::{PrimeCharacteristicRing, TwoAdicField};
     use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
@@ -259,6 +305,85 @@ mod tests {
         // Length capped at the domain; output is the full domain ascending.
         assert_eq!(queries.len(), folded_domain_size);
         assert_eq!(queries, (0..folded_domain_size).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn zk_stir_correction_matches_dft_ground_truth() {
+        use p3_dft::{Radix2Dit, TwoAdicSubgroupDft};
+        use p3_matrix::Matrix;
+        use p3_matrix::dense::RowMajorMatrix;
+
+        // Small polynomial: 4 variables = 16 coefficients.
+        // Folding factor 2: width=4, msg rows = 4.
+        // inv_rate 2: height = 2 * 4 = 8.
+        let num_vars = 4usize;
+        let folding = 2usize;
+        let inv_rate = 2usize;
+        let width = 1 << folding; // 4
+        let msg_len = 1 << num_vars; // 16
+        let height = inv_rate * (msg_len / width); // 8
+        let total = height * width; // 32
+
+        // Deterministic polynomial coefficients.
+        let f_coeffs: Vec<EF> = (0..msg_len)
+            .map(|i| EF::from(F::from_u64((i as u64 + 1) * 7)))
+            .collect();
+
+        // r' randomness: num_queries worth. Use 5 for a small test.
+        let num_r_prime = 5;
+        let r_prime: Vec<EF> = (0..num_r_prime)
+            .map(|i| EF::from(F::from_u64((i as u64 + 1) * 13 + 3)))
+            .collect();
+
+        // Build padded coefficients: f ∥ r' ∥ zeros
+        let mut padded_coeffs = Vec::with_capacity(total);
+        padded_coeffs.extend_from_slice(&f_coeffs);
+        padded_coeffs.extend_from_slice(&r_prime);
+        padded_coeffs.resize(total, EF::ZERO);
+
+        // Build unpadded coefficients: f ∥ zeros
+        let mut plain_coeffs = Vec::with_capacity(total);
+        plain_coeffs.extend_from_slice(&f_coeffs);
+        plain_coeffs.resize(total, EF::ZERO);
+
+        // DFT both column-wise.
+        let dft: Radix2Dit<F> = Radix2Dit::default();
+        let padded_mat = RowMajorMatrix::new(padded_coeffs, width);
+        let plain_mat = RowMajorMatrix::new(plain_coeffs, width);
+        let padded_encoded = dft.dft_algebra_batch(padded_mat);
+        let plain_encoded = dft.dft_algebra_batch(plain_mat);
+
+        // Query randomness (folding_factor many elements).
+        let query_rand: Vec<EF> = (0..folding)
+            .map(|i| EF::from(F::from_u64(i as u64 * 11 + 5)))
+            .collect();
+
+        let dft_root = F::two_adic_generator(p3_util::log2_strict_usize(height));
+
+        // Test several challenge indices.
+        for challenge_idx in [0, 1, 3, 7] {
+            let padded_row: Vec<EF> = padded_encoded.row_slice(challenge_idx).unwrap().to_vec();
+            let plain_row: Vec<EF> = plain_encoded.row_slice(challenge_idx).unwrap().to_vec();
+
+            let padded_eval = Poly::new(padded_row).eval_ext::<F>(&Point::new(query_rand.clone()));
+            let plain_eval = Poly::new(plain_row).eval_ext::<F>(&Point::new(query_rand.clone()));
+            let ground_truth = padded_eval - plain_eval;
+
+            let correction = super::zk_stir_correction(
+                &r_prime,
+                msg_len,
+                width,
+                height,
+                challenge_idx,
+                dft_root,
+                &query_rand,
+            );
+
+            assert_eq!(
+                correction, ground_truth,
+                "correction mismatch at challenge_idx={challenge_idx}"
+            );
+        }
     }
 
     #[test]
