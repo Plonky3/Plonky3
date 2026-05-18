@@ -155,6 +155,10 @@ pub fn compute_log_arity_for_round(
     log_final_height: usize,
     max_log_arity: usize,
 ) -> usize {
+    assert!(
+        max_log_arity > 0,
+        "max_log_arity must be at least 1 to guarantee folding progress"
+    );
     debug_assert!(
         log_current_height > log_final_height,
         "should only be called when above final height"

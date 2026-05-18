@@ -21,9 +21,10 @@ serde = { workspace = true, features = ["derive"] }
 tracing.workspace = true
 
 [dev-dependencies]
-criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-goldilocks = { path = "../goldilocks" }
+
+criterion.workspace = true
 proptest.workspace = true
 
 [[bench]]

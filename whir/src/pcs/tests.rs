@@ -554,6 +554,69 @@ mod error_variant_tests {
             "expected MissingFinalPoly, got {err:?}"
         );
     }
+
+    #[test]
+    fn rejects_with_stir_query_count_mismatch_when_intermediate_query_is_dropped() {
+        // Invariant: queries.len() == verifier-sampled indices for the round.
+        //
+        // Mutation: drop the trailing query from round 0.
+        //
+        //     proof.whir.rounds[0].queries:  n  ->  n - 1
+        //     -> round_index = 0, expected = n, actual = n - 1
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        let expected = proof.whir.rounds[0].queries.len();
+        assert!(
+            expected > 0,
+            "fixture should produce at least one STIR query"
+        );
+        proof.whir.rounds[0].queries.pop();
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::StirQueryCountMismatch {
+                round_index,
+                expected: e,
+                actual: a,
+            } => {
+                assert_eq!(round_index, 0);
+                assert_eq!(e, expected);
+                assert_eq!(a, expected - 1);
+            }
+            other => panic!("expected StirQueryCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_with_stir_query_count_mismatch_when_final_query_is_dropped() {
+        // Invariant: final_queries.len() == verifier-sampled indices for the final round.
+        //
+        // Mutation: drop the trailing query from final_queries.
+        //
+        //     proof.whir.final_queries:  n  ->  n - 1
+        //     -> round_index = n_rounds, expected = n, actual = n - 1
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        let n_rounds = pcs.n_rounds();
+        let expected = proof.whir.final_queries.len();
+        assert!(
+            expected > 0,
+            "fixture should produce at least one final query"
+        );
+        proof.whir.final_queries.pop();
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::StirQueryCountMismatch {
+                round_index,
+                expected: e,
+                actual: a,
+            } => {
+                assert_eq!(round_index, n_rounds);
+                assert_eq!(e, expected);
+                assert_eq!(a, expected - 1);
+            }
+            other => panic!("expected StirQueryCountMismatch, got {other:?}"),
+        }
+    }
 }
 
 mod keccak_tests {

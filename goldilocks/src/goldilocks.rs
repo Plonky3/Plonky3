@@ -246,12 +246,18 @@ impl PrimeCharacteristicRing for Goldilocks {
     #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
         // In the Goldilocks field, 2^96 = -1 mod P and 2^192 = 1 mod P.
-        if exp < 96 {
-            *self * Self::POWERS_OF_TWO[exp as usize]
-        } else if exp < 192 {
-            -*self * Self::POWERS_OF_TWO[(exp - 96) as usize]
-        } else {
-            self.mul_2exp_u64(exp % 192)
+        match exp {
+            0 => *self,
+            1 => *self + *self,
+            _ => {
+                if exp < 96 {
+                    *self * Self::POWERS_OF_TWO[exp as usize]
+                } else if exp < 192 {
+                    -*self * Self::POWERS_OF_TWO[(exp - 96) as usize]
+                } else {
+                    self.mul_2exp_u64(exp % 192)
+                }
+            }
         }
     }
 
@@ -375,6 +381,9 @@ impl Field for Goldilocks {
     #[cfg(target_arch = "aarch64")]
     type Packing = crate::PackedGoldilocksNeon;
 
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    type Packing = crate::PackedGoldilocksWasmSimd128;
+
     #[cfg(not(any(
         all(
             target_arch = "x86_64",
@@ -383,6 +392,7 @@ impl Field for Goldilocks {
         ),
         all(target_arch = "x86_64", target_feature = "avx512f"),
         target_arch = "aarch64",
+        all(target_arch = "wasm32", target_feature = "simd128"),
     )))]
     type Packing = Self;
 

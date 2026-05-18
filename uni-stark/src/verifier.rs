@@ -26,11 +26,20 @@ pub fn validate_degree_bits(
     air: Option<usize>,
     degree_bits: usize,
     is_zk: usize,
+    max_log_degree: usize,
 ) -> Result<(usize, usize), InvalidProofShapeError> {
     if degree_bits < is_zk {
         return Err(InvalidProofShapeError::DegreeBitsTooSmall {
             air,
             minimum: is_zk,
+            got: degree_bits,
+        });
+    }
+
+    if degree_bits > max_log_degree {
+        return Err(InvalidProofShapeError::DegreeBitsTooLarge {
+            air,
+            maximum: max_log_degree,
             got: degree_bits,
         });
     }
@@ -256,7 +265,8 @@ where
     let degree_bits = *degree_bits;
 
     let pcs = config.pcs();
-    let (base_degree_bits, degree) = validate_degree_bits(None, degree_bits, config.is_zk())?;
+    let (base_degree_bits, degree) =
+        validate_degree_bits(None, degree_bits, config.is_zk(), pcs.log_max_lde_height())?;
     let trace_domain = pcs.natural_domain_for_degree(degree);
     // TODO: allow moving preprocessed commitment to preprocess time, if known in advance
     let (preprocessed_width, preprocessed_commit) =

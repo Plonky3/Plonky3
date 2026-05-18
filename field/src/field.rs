@@ -548,6 +548,33 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     }
 }
 
+/// Values that can act as sponge lanes for delimiter padding.
+///
+/// This is used by symmetric sponge adapters that need canonical `0` and `1` symbols while
+/// supporting both field/ring-based lanes and `u64`-based Keccak lanes behind one API.
+pub trait SpongePaddingValue: Copy {
+    /// The empty-lane value.
+    const PAD_ZERO: Self;
+
+    /// The delimiter value injected after the final absorbed element.
+    const PAD_ONE: Self;
+}
+
+impl<T: PrimeCharacteristicRing + Copy> SpongePaddingValue for T {
+    const PAD_ZERO: Self = Self::ZERO;
+    const PAD_ONE: Self = Self::ONE;
+}
+
+impl SpongePaddingValue for u64 {
+    const PAD_ZERO: Self = 0;
+    const PAD_ONE: Self = 1;
+}
+
+impl<const N: usize> SpongePaddingValue for [u64; N] {
+    const PAD_ZERO: Self = [0; N];
+    const PAD_ONE: Self = [1; N];
+}
+
 impl<F: PrimeCharacteristicRing> BasedVectorSpace<F> for F {
     const DIMENSION: usize = 1;
 

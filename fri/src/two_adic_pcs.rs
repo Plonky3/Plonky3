@@ -286,6 +286,10 @@ where
         TwoAdicMultiplicativeCoset::new(Val::ONE, log2_strict_usize(degree)).unwrap()
     }
 
+    fn log_max_lde_height(&self) -> usize {
+        Val::TWO_ADICITY
+    }
+
     /// Commit to a collection of evaluation matrices.
     ///
     /// Each element of `evaluations` contains a coset `shift * H` and a matrix `mat` with `mat.height() = |H|`.

@@ -32,6 +32,7 @@ pub mod svo;
 pub mod table;
 #[cfg(test)]
 pub(crate) mod tests;
+pub mod zk;
 
 pub use data::{SumcheckData, verify_final_sumcheck_rounds};
 pub use error::SumcheckError;
