@@ -8,7 +8,7 @@ use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 
-use super::ProtocolParameters;
+use super::{FoldingFactor, ProtocolParameters};
 use crate::pcs::proof::WhirProof;
 
 /// Derived configuration for a single intermediate WHIR round.
@@ -29,6 +29,8 @@ pub struct RoundConfig<F> {
     pub num_variables: usize,
     /// Number of variables folded in this round.
     pub folding_factor: usize,
+    /// Log-inverse rate of the codeword committed after this round.
+    pub log_inv_rate: usize,
     /// Size of the evaluation domain before folding in this round.
     pub domain_size: usize,
     /// Generator of the folded evaluation domain after this round's fold.
@@ -110,14 +112,6 @@ where
             .check_validity(num_variables)
             .unwrap();
 
-        // The domain reduction at round 0 must not exceed the folding factor,
-        // otherwise the code rate would *increase*, weakening soundness.
-        assert!(
-            whir_parameters.rs_domain_initial_reduction_factor
-                <= whir_parameters.folding_factor.at_round(0),
-            "Increasing the code rate is not a good idea"
-        );
-
         // PoW contributes an independent additive term to security,
         // so the algebraic protocol only needs to cover the remainder.
         let protocol_security_level = whir_parameters
@@ -162,6 +156,30 @@ where
             .folding_factor
             .compute_number_of_rounds(num_variables);
 
+        let round_log_inv_rates = if whir_parameters.round_log_inv_rates.is_empty() {
+            let mut rates = Vec::with_capacity(num_rounds);
+            let mut rate = whir_parameters.starting_log_inv_rate;
+            for round in 0..num_rounds {
+                rate += whir_parameters.folding_factor.at_round(round) - 1;
+                rates.push(rate);
+            }
+            rates
+        } else {
+            assert_eq!(
+                whir_parameters.round_log_inv_rates.len(),
+                num_rounds,
+                "Explicit codeword rates must have one entry per intermediate WHIR round"
+            );
+            whir_parameters.round_log_inv_rates.clone()
+        };
+        if let FoldingFactor::PerRound(factors) = &whir_parameters.folding_factor {
+            assert_eq!(
+                factors.len(),
+                num_rounds + 1,
+                "Explicit folding factors must have one entry per folding phase"
+            );
+        }
+
         // OOD samples for the commitment phase (before any folding).
         let commitment_ood_samples = whir_parameters.soundness_type.determine_ood_samples(
             whir_parameters.security_level,
@@ -183,7 +201,7 @@ where
         // ---------------------------------------------------------------
         //
         // After the initial fold, each round i:
-        //   1. Computes the new code rate after folding.
+        //   1. Reads the configured/derived code rate after folding.
         //   2. Determines query count from the old rate (queries test
         //      proximity to the code *before* this round's fold).
         //   3. Determines OOD sample count from the new rate.
@@ -196,20 +214,15 @@ where
         // handles subsequent rounds.
         num_variables -= whir_parameters.folding_factor.at_round(0);
 
-        for round in 0..num_rounds {
-            // Only round 0 applies the user-configured domain reduction;
-            // all later rounds halve the domain (reduction factor = 1).
-            let rs_reduction_factor = if round == 0 {
-                whir_parameters.rs_domain_initial_reduction_factor
-            } else {
-                1
-            };
+        for (round, &next_rate) in round_log_inv_rates.iter().enumerate() {
+            let folding_factor = whir_parameters.folding_factor.at_round(round);
+            assert!(
+                next_rate <= log_inv_rate + folding_factor,
+                "Codeword rate would require growing the RS domain"
+            );
+            let rs_reduction_factor = log_inv_rate + folding_factor - next_rate;
 
-            // The code rate increases by (folding_factor - rs_reduction_factor) bits.
             // Queries use the *old* rate; OOD and folding use the *new* rate.
-            let next_rate = log_inv_rate
-                + (whir_parameters.folding_factor.at_round(round) - rs_reduction_factor);
-
             // Number of STIR proximity queries at the current (old) rate.
             let num_queries = whir_parameters
                 .soundness_type
@@ -250,7 +263,6 @@ where
                 next_rate,
             );
 
-            let folding_factor = whir_parameters.folding_factor.at_round(round);
             let next_folding_factor = whir_parameters.folding_factor.at_round(round + 1);
 
             // Generator of the two-adic subgroup for the folded domain.
@@ -264,6 +276,7 @@ where
                 ood_samples,
                 num_variables,
                 folding_factor,
+                log_inv_rate: next_rate,
                 domain_size,
                 folded_domain_gen,
             });
@@ -348,20 +361,19 @@ where
     }
 
     /// Returns how many bits the RS domain shrinks by at the given round.
-    ///
-    /// The first round uses the user-configured initial reduction factor.
-    /// All subsequent rounds halve the domain (factor = 1).
-    pub const fn rs_reduction_factor(&self, round: usize) -> usize {
-        if round == 0 {
-            self.params.rs_domain_initial_reduction_factor
+    pub fn rs_reduction_factor(&self, round: usize) -> usize {
+        let previous_log_inv_rate = if round == 0 {
+            self.params.starting_log_inv_rate
         } else {
-            1
-        }
+            self.round_parameters[round - 1].log_inv_rate
+        };
+        previous_log_inv_rate + self.folding_factor(round)
+            - self.round_parameters[round].log_inv_rate
     }
 
     /// Returns the log2 size of the largest FFT
     /// (At commitment we perform 2^folding_factor FFT of size 2^max_fft_size)
-    pub const fn max_fft_size(&self) -> usize {
+    pub fn max_fft_size(&self) -> usize {
         self.num_variables + self.params.starting_log_inv_rate - self.folding_factor(0)
     }
 
@@ -387,7 +399,7 @@ where
     }
 
     /// Retrieves the folding factor for a given round.
-    pub const fn folding_factor(&self, round: usize) -> usize {
+    pub fn folding_factor(&self, round: usize) -> usize {
         self.params.folding_factor.at_round(round)
     }
 
@@ -410,6 +422,7 @@ where
                 folding_factor: self.folding_factor(self.n_rounds()),
                 num_queries: self.final_queries,
                 pow_bits: self.final_pow_bits,
+                log_inv_rate: self.params.starting_log_inv_rate,
                 domain_size: self.starting_domain_size(),
                 folded_domain_gen: F::two_adic_generator(
                     self.starting_domain_size().ilog2() as usize - self.folding_factor(0),
@@ -439,6 +452,7 @@ where
                 folding_factor,
                 num_queries: self.final_queries,
                 pow_bits: self.final_pow_bits,
+                log_inv_rate: last.log_inv_rate,
                 domain_size,
                 folded_domain_gen,
                 // Inherit OOD count from the last intermediate round.
@@ -448,25 +462,10 @@ where
         }
     }
 
-    /// Returns the inverse rate of the RS code at the given round.
-    ///
-    /// The inverse rate is `domain_size / degree`, where:
-    /// - `domain_size` is the evaluation domain after the round's reduction.
-    /// - `degree` is 2^(remaining variables after all folds up to this round).
-    ///
-    /// ```text
-    /// inv_rate = (round_domain_size >> rs_reduction) / 2^(num_variables - total_folded)
-    /// ```
+    /// Returns the inverse rate of the codeword committed after an
+    /// intermediate round.
     pub fn inv_rate(&self, round: usize) -> usize {
-        // Shrink the domain by this round's reduction factor.
-        let domain_reduction = 1 << self.rs_reduction_factor(round);
-        let new_domain_size = self.round_parameters[round].domain_size / domain_reduction;
-
-        // Number of polynomial evaluations (= degree) after all folds so far.
-        let num_evals = 1 << (self.num_variables - self.params.folding_factor.total_number(round));
-
-        // Ratio gives the inverse rate.
-        new_domain_size / num_evals
+        1 << self.round_parameters[round].log_inv_rate
     }
 }
 
@@ -490,7 +489,7 @@ mod tests {
         ProtocolParameters {
             security_level: 100,
             pow_bits: 20,
-            rs_domain_initial_reduction_factor: 1,
+            round_log_inv_rates: vec![],
             folding_factor: FoldingFactor::ConstantFromSecondRound(4, 4),
             soundness_type: SecurityAssumption::CapacityBound,
             starting_log_inv_rate: 1,
@@ -517,6 +516,22 @@ mod tests {
     }
 
     #[test]
+    fn test_explicit_round_log_inv_rates() {
+        let mut params = default_whir_params();
+        params.folding_factor = FoldingFactor::Constant(4);
+        params.round_log_inv_rates = vec![3, 2];
+
+        let config = WhirConfig::<F, F, MyChallenger>::new(16, params);
+
+        assert_eq!(config.round_parameters[0].log_inv_rate, 3);
+        assert_eq!(config.round_parameters[1].log_inv_rate, 2);
+        assert_eq!(config.rs_reduction_factor(0), 2);
+        assert_eq!(config.rs_reduction_factor(1), 5);
+        assert_eq!(config.inv_rate(0), 1 << 3);
+        assert_eq!(config.inv_rate(1), 1 << 2);
+    }
+
+    #[test]
     fn test_check_pow_bits_within_limits() {
         let params = default_whir_params();
         let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params);
@@ -536,6 +551,7 @@ mod tests {
                 ood_samples: 2,
                 num_variables: 10,
                 folding_factor: 2,
+                log_inv_rate: 1,
                 domain_size: 10,
                 folded_domain_gen: F::from_u64(2),
             },
@@ -546,6 +562,7 @@ mod tests {
                 ood_samples: 2,
                 num_variables: 10,
                 folding_factor: 2,
+                log_inv_rate: 1,
                 domain_size: 10,
                 folded_domain_gen: F::from_u64(2),
             },
@@ -607,6 +624,7 @@ mod tests {
             ood_samples: 2,
             num_variables: 10,
             folding_factor: 2,
+            log_inv_rate: 1,
             domain_size: 10,
             folded_domain_gen: F::from_u64(2),
         }];
@@ -635,6 +653,7 @@ mod tests {
             ood_samples: 2,
             num_variables: 10,
             folding_factor: 2,
+            log_inv_rate: 1,
             domain_size: 10,
             folded_domain_gen: F::from_u64(2),
         }];
@@ -662,6 +681,7 @@ mod tests {
             ood_samples: 2,
             num_variables: 10,
             folding_factor: 2,
+            log_inv_rate: 1,
             domain_size: 10,
             folded_domain_gen: F::from_u64(2),
         }];
@@ -689,6 +709,7 @@ mod tests {
             ood_samples: 2,
             num_variables: 10,
             folding_factor: 2,
+            log_inv_rate: 1,
             domain_size: 10,
             folded_domain_gen: F::from_u64(2),
         }];
