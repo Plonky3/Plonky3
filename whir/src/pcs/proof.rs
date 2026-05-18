@@ -88,12 +88,28 @@ pub struct PcsProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
 pub struct WhirRoundProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     /// Round commitment (Merkle root).
     pub commitment: Option<MT::Commitment>,
-    /// OOD evaluations for this round.
+    /// ZK mask oracle commitment (Construction 9.7, step 1b).
+    ///
+    /// Present only when `zk == true`. Commits the encoding
+    /// `s = Enc_{C_zk}((r ∥ s̃), r'')` that hides the previous round's
+    /// encoding randomness `r`.
+    pub mask_commitment: Option<MT::Commitment>,
+    /// OOD evaluations for this round (transcript values, padded when ZK).
     pub ood_answers: Vec<EF>,
+    /// Per-OOD corrections: `ood_answers[i] - plain_eval[i]`.
+    /// The verifier subtracts these to recover the plain evals for the
+    /// sumcheck constraint while the transcript observes padded values.
+    pub zk_ood_corrections: Vec<EF>,
     /// PoW witness after commitment.
     pub pow_witness: F,
     /// STIR query openings.
     pub queries: Vec<QueryOpening<F, EF, MT::Proof>>,
+    /// Per-STIR-query corrections for the r' contribution (W4b).
+    /// When the previous round committed a ZK-padded codeword, each
+    /// STIR opening includes r' twiddle factors that the sumcheck
+    /// polynomial doesn't know about. The prover computes the
+    /// correction and the verifier subtracts it before checking.
+    pub zk_stir_corrections: Vec<EF>,
     /// Sumcheck data for this round.
     pub sumcheck: SumcheckData<F, EF>,
 }
@@ -104,9 +120,12 @@ impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> Default
     fn default() -> Self {
         Self {
             commitment: None,
+            mask_commitment: None,
             ood_answers: Vec::new(),
+            zk_ood_corrections: Vec::new(),
             pow_witness: F::default(),
             queries: Vec::new(),
+            zk_stir_corrections: Vec::new(),
             sumcheck: SumcheckData::default(),
         }
     }

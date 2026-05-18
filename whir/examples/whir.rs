@@ -157,6 +157,7 @@ fn main() {
         soundness_type,
         starting_log_inv_rate: starting_rate,
         round_log_inv_rates,
+        zk: false,
     };
 
     info!(

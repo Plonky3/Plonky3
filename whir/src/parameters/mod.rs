@@ -34,6 +34,18 @@ pub struct ProtocolParameters {
     pub security_level: usize,
     /// The number of bits required for proof-of-work (PoW).
     pub pow_bits: usize,
+    /// Enable HVZK code-switching (Construction 9.7, eprint 2026/391 §9.4).
+    ///
+    /// When `true`, each non-final intermediate round:
+    /// - Commits the target polynomial with ZK randomness (`Enc(f ∥ r')`).
+    /// - Commits a mask oracle hiding the previous round's encoding randomness.
+    /// - Uses a private zero-evader for OOD answers (Lemma 9.3).
+    /// - Stores per-query STIR and OOD corrections in the proof so the
+    ///   verifier can recover plain evaluations for the sumcheck constraint.
+    ///
+    /// The composed protocol is HVZK with error `ζ_{C'} + ζ_ze + ζ_{C_zk}`
+    /// per round (Lemma 9.8), composing via Theorem 4.5.
+    pub zk: bool,
 }
 
 impl Display for ProtocolParameters {

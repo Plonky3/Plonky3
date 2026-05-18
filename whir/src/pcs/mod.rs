@@ -1,6 +1,7 @@
 //! WHIR polynomial commitment scheme: commit, prove, and verify.
 
 mod adapter;
+pub mod code_switch_zk;
 pub mod committer;
 pub mod proof;
 pub mod prover;

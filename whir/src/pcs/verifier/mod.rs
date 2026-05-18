@@ -302,10 +302,23 @@ where
             VariableOrder::Suffix => folding_randomness.reversed(),
         };
 
-        // Evaluate folded polynomial at each queried position.
+        // Evaluate folded polynomial at each queried position, applying
+        // ZK STIR corrections when the previous round used padded encoding.
+        let zk_corrections = if round_index > 0 && round_index < self.n_rounds() {
+            &proof.rounds[round_index].zk_stir_corrections
+        } else {
+            &[][..]
+        };
         let folds: Vec<_> = answers
             .into_iter()
-            .map(|answer| Poly::new(answer).eval_ext::<F>(&query_randomness))
+            .enumerate()
+            .map(|(i, answer)| {
+                let mut eval = Poly::new(answer).eval_ext::<F>(&query_randomness);
+                if let Some(&correction) = zk_corrections.get(i) {
+                    eval -= correction;
+                }
+                eval
+            })
             .collect();
 
         let stir_constraints = stir_challenges_indexes

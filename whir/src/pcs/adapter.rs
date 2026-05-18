@@ -8,6 +8,9 @@ use p3_commit::{Mmcs, MultilinearPcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_matrix::dense::DenseMatrix;
+use rand::SeedableRng;
+use rand::distr::{Distribution, StandardUniform};
+use rand::rngs::SmallRng;
 
 use super::prover::WhirProver;
 use super::verifier::WhirVerifier;
@@ -50,6 +53,7 @@ where
         + CanSampleUniformBits<F>
         + CanObserve<MT::Commitment>,
     L: Layout<F, EF>,
+    StandardUniform: Distribution<EF>,
 {
     type Commitment = MT::Commitment;
     type Val = F;
@@ -105,11 +109,17 @@ where
             .map(|(table_idx, polys)| prover_data.layout.eval(table_idx, polys, challenger))
             .collect::<Vec<_>>();
 
+        // Stub RNG for the ZK randomness parameter. When zk == false this
+        // is never sampled. When zk == true the mask commitment draws from
+        // it — deterministic here, which is NOT private. Production ZK
+        // usage requires HidingWhirPcs with caller-provided entropy.
+        let mut rng = SmallRng::seed_from_u64(0);
         self.prove(
             &mut whir_proof,
             challenger,
             prover_data.layout,
             prover_data.merkle_data,
+            &mut rng,
         );
 
         PcsProof {
