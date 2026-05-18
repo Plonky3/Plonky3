@@ -306,7 +306,7 @@ fn generate_round<
 pub(crate) fn decompose_to_bits<F: PrimeField64, const FIELD_BITS: usize>(
     element: F,
 ) -> [F; FIELD_BITS] {
-    // Cap: bits past 63 don't exist in the canonical 64-bit form.
+    // Cap: the canonical form is a `u64`, so it has at most 64 bit positions.
     const { assert!(FIELD_BITS <= 64, "FIELD_BITS must fit in a u64") };
 
     // Canonical integer image; bit i sits at position i.

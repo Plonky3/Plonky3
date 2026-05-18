@@ -99,7 +99,7 @@ fn make_stark_config_m31() -> (
     );
 
     let mut fri_params = FriParameters::new_benchmark(challenge_mmcs);
-    fri_params.log_blowup = 2;
+    fri_params.log_blowup = 1;
     let log_blowup = fri_params.log_blowup;
 
     let pcs = CirclePcs::new(val_mmcs, fri_params);
@@ -266,7 +266,7 @@ fn make_stark_config_goldilocks() -> (
         SerializingChallenger64::<GlVal, HashChallenger<u8, _, 32>>::from_hasher(vec![], byte_hash);
 
     let mut fri_params = FriParameters::new_benchmark(challenge_mmcs);
-    fri_params.log_blowup = 2;
+    fri_params.log_blowup = 1;
     let log_blowup = fri_params.log_blowup;
 
     let pcs = TwoAdicFriPcs::new(Radix2Bowers, val_mmcs, fri_params);
