@@ -184,20 +184,31 @@ where
         self.protocol_param(config.security_level);
         self.protocol_param(config.starting_log_inv_rate);
         self.protocol_param(config.pow_bits);
+        self.protocol_param(config.round_parameters.len());
+        for round in &config.round_parameters {
+            self.protocol_param(round.log_inv_rate);
+        }
 
         // Encode the soundness assumption as its discriminant.
         self.protocol_param(config.soundness_type as usize);
 
         // Encode the folding strategy: discriminant followed by inner values.
-        match config.folding_factor {
+        match &config.folding_factor {
             FoldingFactor::Constant(f) => {
                 self.protocol_param(0);
-                self.protocol_param(f);
+                self.protocol_param(*f);
             }
             FoldingFactor::ConstantFromSecondRound(first, rest) => {
                 self.protocol_param(1);
-                self.protocol_param(first);
-                self.protocol_param(rest);
+                self.protocol_param(*first);
+                self.protocol_param(*rest);
+            }
+            FoldingFactor::PerRound(factors) => {
+                self.protocol_param(2);
+                self.protocol_param(factors.len());
+                for &factor in factors {
+                    self.protocol_param(factor);
+                }
             }
         }
 
