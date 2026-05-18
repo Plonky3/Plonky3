@@ -867,7 +867,7 @@ where
                         })
                     }));
                 }
-                let permutation = RowMajorMatrix::new(core::mem::take(perm_buf), perm_cols);
+                let permutation = RowMajorMatrixView::new(perm_buf.as_slice(), perm_cols);
 
                 let preprocessed_view = preprocessed
                     .as_ref()
@@ -913,7 +913,6 @@ where
                 // Reclaim buffers for reuse in the next iteration.
                 *base_buf = folder.inner.base_constraints;
                 *ext_buf = folder.inner.ext_constraints;
-                *perm_buf = folder.permutation.to_row_major_matrix().values;
 
                 // Unpack the SIMD quotient into individual extension-field values
                 // and write them directly into the pre-allocated output buffer.
