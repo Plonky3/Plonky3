@@ -26,14 +26,16 @@ tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
+p3-dft = { path = "../dft" }
+p3-fri = { path = "../fri" }
 p3-goldilocks = { path = "../goldilocks" }
 p3-koala-bear = { path = "../koala-bear" }
 p3-keccak = { path = "../keccak" }
 p3-merkle-tree = { path = "../merkle-tree" }
 p3-symmetric = { path = "../symmetric" }
-p3-dft = { path = "../dft" }
 
 criterion.workspace = true
+postcard = { workspace = true, features = ["alloc"] }
 rand = { workspace = true, features = ["std"] }
 
 [[bench]]
