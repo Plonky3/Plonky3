@@ -83,8 +83,8 @@ pub use prover::{Layout, PrefixProver, SuffixProver};
 pub use verifier::Verifier;
 pub use witness::{Selector, Table, TablePlacement, Witness};
 
-use crate::sumcheck::strategy::VariableOrder;
-pub use crate::sumcheck::table::TableShape;
+use crate::strategy::VariableOrder;
+pub use crate::table::TableShape;
 
 /// Verifier-side metadata required to replay a committed layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

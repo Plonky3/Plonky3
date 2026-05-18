@@ -12,9 +12,9 @@ use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 
+use crate::SumcheckData;
 use crate::constraints::Constraint;
-use crate::sumcheck::SumcheckData;
-use crate::sumcheck::product_polynomial::ProductPolynomial;
+use crate::product_polynomial::ProductPolynomial;
 
 /// Input size at which the round-coefficient routines switch from serial to parallel execution.
 ///

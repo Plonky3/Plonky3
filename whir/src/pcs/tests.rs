@@ -17,7 +17,7 @@ use crate::fiat_shamir::domain_separator::DomainSeparator;
 use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use crate::pcs::prover::WhirProver;
 use crate::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Witness};
-use crate::sumcheck::tests::{random_table_specs, table_specs_to_tables};
+use crate::sumcheck::test_util::{random_table_specs, table_specs_to_tables};
 use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
 
 type F = BabyBear;

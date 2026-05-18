@@ -27,8 +27,8 @@ use p3_util::log2_strict_usize;
 use tracing::instrument;
 
 use crate::constraints::Constraint;
-use crate::sumcheck::strategy::VariableOrder;
-use crate::sumcheck::{SumcheckData, extrapolate_01inf};
+use crate::strategy::VariableOrder;
+use crate::{SumcheckData, extrapolate_01inf};
 
 /// A paired representation of evaluation and weight polynomials for quadratic sumcheck.
 ///
@@ -467,7 +467,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::sumcheck::strategy::sumcheck_coefficients_prefix;
+    use crate::strategy::sumcheck_coefficients_prefix;
 
     type F = BabyBear;
     type EF = BinomialExtensionField<BabyBear, 4>;

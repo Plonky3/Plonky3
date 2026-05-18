@@ -19,9 +19,9 @@ use p3_multilinear_util::point::Point;
 pub use prefix::PrefixProver;
 pub use suffix::SuffixProver;
 
-use crate::sumcheck::SumcheckData;
-use crate::sumcheck::layout::{LayoutStrategy, Table, Witness};
-use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
+use crate::SumcheckData;
+use crate::layout::{LayoutStrategy, Table, Witness};
+use crate::strategy::{SumcheckProver, VariableOrder};
 
 /// Stacked-sumcheck prover layout
 pub trait Layout<F: TwoAdicField, EF: ExtensionField<F>>: Sized {
@@ -119,10 +119,10 @@ pub(super) mod test_utils {
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
-    use crate::sumcheck::SumcheckData;
-    use crate::sumcheck::layout::{Layout, LayoutStrategy, Table, TableShape, Verifier, Witness};
-    use crate::sumcheck::strategy::VariableOrder;
-    use crate::sumcheck::tests::*;
+    use crate::SumcheckData;
+    use crate::layout::{Layout, LayoutStrategy, Table, TableShape, Verifier, Witness};
+    use crate::strategy::VariableOrder;
+    use crate::tests::*;
 
     /// Preprocessing rounds each end-to-end test consumes on both sides.
     pub(crate) const FOLDING: usize = 4;
@@ -277,7 +277,7 @@ pub(super) mod test_utils {
     /// the final folded value. Extends `prover_randomness` with every
     /// challenge sampled during these two phases.
     pub(crate) fn drive_intermediate_and_final(
-        prover: &mut crate::sumcheck::strategy::SumcheckProver<F, EF>,
+        prover: &mut crate::strategy::SumcheckProver<F, EF>,
         prover_challenger: &mut MyChallenger,
         prover_randomness: &mut Point<EF>,
         stacked_num_variables: usize,
@@ -532,15 +532,15 @@ mod tests {
         table_shapes_from,
     };
     use super::{PrefixProver, SuffixProver};
-    use crate::sumcheck::layout::Layout;
-    use crate::sumcheck::layout::prover::test_utils::{
+    use crate::layout::Layout;
+    use crate::layout::prover::test_utils::{
         FOLDING, build_tables, run_roundtrip_test, table_shapes, tables_from_shape,
     };
-    use crate::sumcheck::tests::*;
+    use crate::tests::*;
 
     #[test]
     fn num_claims_counts_every_recorded_opening() {
-        fn run_num_claims_test_with<L>(witness: crate::sumcheck::layout::Witness<F>)
+        fn run_num_claims_test_with<L>(witness: crate::layout::Witness<F>)
         where
             L: Layout<F, EF>,
         {

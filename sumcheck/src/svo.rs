@@ -28,8 +28,8 @@ use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 use p3_util::log2_strict_usize;
 
-use crate::sumcheck::layout::ProverMultiClaim;
-use crate::sumcheck::strategy::VariableOrder;
+use crate::layout::ProverMultiClaim;
+use crate::strategy::VariableOrder;
 
 /// Expand `2^l` Boolean-hypercube evaluations to `3^l` evaluations on `{0,1,inf}^l`.
 ///
@@ -698,9 +698,9 @@ mod test {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::sumcheck::lagrange::lagrange_weights_01inf_multi;
-    use crate::sumcheck::layout::Opening;
-    use crate::sumcheck::strategy::VariableOrder;
+    use crate::lagrange::lagrange_weights_01inf_multi;
+    use crate::layout::Opening;
+    use crate::strategy::VariableOrder;
 
     type F = KoalaBear;
     type EF = BinomialExtensionField<F, 4>;
