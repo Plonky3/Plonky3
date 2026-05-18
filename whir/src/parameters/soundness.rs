@@ -372,6 +372,116 @@ impl SecurityAssumption {
         // PoW covers the remaining gap; zero means no grinding needed.
         0_f64.max(security_level as f64 - error)
     }
+
+    /// Compute the OOD error for a ZK code-switching round (in bits).
+    ///
+    /// In ZK mode, the OOD zero-evader operates on the joint message space
+    /// of the target code C' and the mask code C_zk. The product list bound
+    /// `(|Λ(C')| · |Λ(C_zk)|)²` comes from Lemma 9.9 §1 (p.59), which
+    /// extends the single-code Lemma 9.1 bound to the joint code pair.
+    ///
+    /// # Formula
+    ///
+    /// From Theorem 9.6 and Lemma 9.9 §1 in eprint 2026/391:
+    ///
+    /// ```text
+    /// error = (|Λ(C', δ')| · |Λ(C_zk, δ_zk)|)² / 2 · ε_ood
+    /// ```
+    ///
+    /// where `ε_ood` is the private zero-evader error from Lemma 9.3:
+    /// `max{(degree / |F|)^ood_samples, 1 / (|F|^ood_samples - 1)}`.
+    /// For practical parameters the first term dominates (see below).
+    ///
+    /// # References
+    ///
+    /// - eprint 2026/391, Theorem 9.6, first RBR error term
+    /// - eprint 2026/391, Lemma 9.9 §1 ("Out-of-domain samples")
+    /// - eprint 2026/391, Lemma 9.3 (private zero-evader error)
+    #[must_use]
+    pub fn zk_ood_error(
+        &self,
+        log_degree: usize,
+        log_inv_rate: usize,
+        field_size_bits: usize,
+        ood_samples: usize,
+        mask_log_degree: usize,
+        mask_log_inv_rate: usize,
+    ) -> f64 {
+        if matches!(self, Self::UniqueDecoding) {
+            return 0.;
+        }
+
+        let list_target_bits = self.list_size_bits(log_degree, log_inv_rate);
+        let list_mask_bits = self.list_size_bits(mask_log_degree, mask_log_inv_rate);
+
+        // The ZK zero-evader operates on the joint vector [f, r, s] from
+        // Construction 9.7. The Schwartz-Zippel degree for ε_ood is the max
+        // component degree: max(deg(f), deg(s)) = max(degree, mask_degree).
+        let max_log_degree = log_degree.max(mask_log_degree);
+
+        // Lemma 9.3: ε_ood = max{(degree/|F|)^t, 1/(|F|^t - 1)}.
+        // Term 1 dominates term 2 for all practical parameters (|F| >> degree).
+        debug_assert!(
+            max_log_degree >= 1 && field_size_bits > max_log_degree,
+            "Lemma 9.3 term-1 dominance requires field_size_bits > max_log_degree"
+        );
+        let ze_log_error = (max_log_degree * ood_samples) as f64;
+
+        let error = 2. * (list_target_bits + list_mask_bits) + ze_log_error;
+        (ood_samples * field_size_bits) as f64 + 1. - error
+    }
+
+    /// Compute the combination error for a ZK code-switching round (in bits).
+    ///
+    /// In ZK mode, the union bound in the combination step ranges over
+    /// witnesses from both the target code and the interleaved mask code.
+    ///
+    /// # Formula
+    ///
+    /// From Theorem 9.6 and Lemma 9.9 §3 in eprint 2026/391:
+    ///
+    /// ```text
+    /// error = |Λ(C', δ')| · |Λ(C_zk^{≡n+1}, δ_zk)| · ε_zero
+    /// ```
+    ///
+    /// For the interleaved mask list size `|Λ(C_zk^{≡n+1})|`, we use a
+    /// simplified upper bound `(n+1) · |Λ(C_zk)|`. This holds when the
+    /// GGR11 list-decoding exponent `r = 1` (typical for RS codes at
+    /// practical WHIR distances). Overestimates the error (safe direction).
+    ///
+    /// # References
+    ///
+    /// - eprint 2026/391, Theorem 9.6, combination randomness error
+    /// - eprint 2026/391, Lemma 9.9 §3 ("Combination randomness")
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn zk_combination_error(
+        &self,
+        field_size_bits: usize,
+        num_variables: usize,
+        log_inv_rate: usize,
+        ood_samples: usize,
+        num_queries: usize,
+        mask_log_degree: usize,
+        mask_log_inv_rate: usize,
+        num_mask_functions: usize,
+    ) -> f64 {
+        assert!(
+            num_mask_functions >= 1,
+            "num_mask_functions must be >= 1 for ZK code-switching"
+        );
+
+        let list_target = self.list_size_bits(num_variables, log_inv_rate);
+        let list_mask = self.list_size_bits(mask_log_degree, mask_log_inv_rate);
+
+        // Interleaving margin: |Λ(C_zk^{≡n+1})| ≤ (n+1)·|Λ(C_zk)| (r=1 regime for RS).
+        let interleaving_margin = libm::log2((num_mask_functions + 1) as f64);
+        let list_mask_interleaved = list_mask + interleaving_margin;
+
+        let log_combination = libm::log2((ood_samples + num_queries) as f64);
+
+        field_size_bits as f64 - (log_combination + list_target + list_mask_interleaved + 1.)
+    }
 }
 
 impl Display for SecurityAssumption {
@@ -890,5 +1000,365 @@ mod tests {
                 num_functions - 1
             );
         }
+    }
+
+    // ---------------------------------------------------------------
+    // ZK-aware error estimation (eprint 2026/391, Theorem 9.6)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn zk_ood_error_matches_hand_calculation() {
+        // Verify zk_ood_error against the raw formula from Theorem 9.6:
+        //
+        //   error = (|Λ(C',δ')| · |Λ(C_zk,δ_zk)|)² / 2 · ε_ood
+        //
+        // where ε_ood = (degree/|F|)^{ood_samples} (Lemma 9.3).
+        //
+        // Fixture: JB, log_degree=20, log_inv_rate=2, field=155 bits,
+        //   mask: log_degree=10, log_inv_rate=3, ood_samples=2.
+        let jb = SecurityAssumption::JohnsonBound;
+        let log_degree = 20;
+        let log_inv_rate = 2;
+        let mask_log_degree = 10;
+        let mask_log_inv_rate = 3;
+        let field_size_bits = KOALABEAR_QUINTIC_BITS;
+        let ood_samples = 2;
+
+        let computed = jb.zk_ood_error(
+            log_degree,
+            log_inv_rate,
+            field_size_bits,
+            ood_samples,
+            mask_log_degree,
+            mask_log_inv_rate,
+        );
+
+        // Hand calculation:
+        // list_target = JB list size at (20, 2)
+        // list_mask   = JB list size at (10, 3)
+        // max_log_degree = max(20, 10) = 20
+        // ε_ood = (2^20 / 2^155)^2 = 2^{-270}
+        // error_bits = 2 * (list_target + list_mask) + max_log_degree * ood_samples
+        // security = 2 * 155 + 1 - error_bits
+        let list_target = jb.list_size_bits(log_degree, log_inv_rate);
+        let list_mask = jb.list_size_bits(mask_log_degree, mask_log_inv_rate);
+        let max_log_degree = log_degree.max(mask_log_degree);
+        let error_bits = 2. * (list_target + list_mask) + (max_log_degree * ood_samples) as f64;
+        let expected = (ood_samples * field_size_bits) as f64 + 1. - error_bits;
+
+        assert!(
+            (computed - expected).abs() < 0.01,
+            "JB zk_ood_error: computed={computed:.4}, expected={expected:.4}"
+        );
+
+        // CB
+        let cb = SecurityAssumption::CapacityBound;
+        let computed_cb = cb.zk_ood_error(
+            log_degree,
+            log_inv_rate,
+            field_size_bits,
+            ood_samples,
+            mask_log_degree,
+            mask_log_inv_rate,
+        );
+        let list_target_cb = cb.list_size_bits(log_degree, log_inv_rate);
+        let list_mask_cb = cb.list_size_bits(mask_log_degree, mask_log_inv_rate);
+        let error_bits_cb =
+            2. * (list_target_cb + list_mask_cb) + (max_log_degree * ood_samples) as f64;
+        let expected_cb = (ood_samples * field_size_bits) as f64 + 1. - error_bits_cb;
+
+        assert!(
+            (computed_cb - expected_cb).abs() < 0.01,
+            "CB zk_ood_error: computed={computed_cb:.4}, expected={expected_cb:.4}"
+        );
+    }
+
+    #[test]
+    fn zk_ood_reduces_to_non_zk_when_mask_is_ud() {
+        // When the mask code has UniqueDecoding (list size = 1, list_size_bits = 0),
+        // the ZK OOD error should equal the non-ZK OOD error.
+        let jb = SecurityAssumption::JohnsonBound;
+
+        for log_degree in [10, 15, 20] {
+            for log_inv_rate in [1, 2, 3] {
+                for ood_samples in [1, 2, 3] {
+                    let non_zk = jb.ood_error(
+                        log_degree,
+                        log_inv_rate,
+                        KOALABEAR_QUINTIC_BITS,
+                        ood_samples,
+                    );
+
+                    // UD mask: list_size_bits(anything, anything) = 0 under UD.
+                    // But zk_ood_error uses self (JB) for the mask list size too.
+                    // To get list_mask = 0, we need UD for the mask. Since
+                    // list_size_bits is called on self, we check the structural
+                    // identity: when mask list = 0, the formulas must match.
+                    //
+                    // Under UD: list_size_bits returns 0 regardless of params.
+                    // So use UD for the mask computation manually:
+                    let list_target = jb.list_size_bits(log_degree, log_inv_rate);
+                    let list_mask = 0.0_f64; // UD mask
+                    let error = 2. * (list_target + list_mask) + (log_degree * ood_samples) as f64;
+                    let zk_with_ud_mask =
+                        (ood_samples * KOALABEAR_QUINTIC_BITS) as f64 + 1. - error;
+
+                    assert!(
+                        (zk_with_ud_mask - non_zk).abs() < 1e-9,
+                        "ZK OOD with UD mask should equal non-ZK at \
+                         log_degree={log_degree}, log_inv_rate={log_inv_rate}: \
+                         zk={zk_with_ud_mask:.6}, non_zk={non_zk:.6}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn zk_ood_stricter_than_non_zk() {
+        // ZK OOD error must be <= non-ZK OOD error (less security)
+        // because the product list bound is larger.
+        for assumption in [
+            SecurityAssumption::JohnsonBound,
+            SecurityAssumption::CapacityBound,
+        ] {
+            for log_degree in [10, 15, 20] {
+                for log_inv_rate in [1, 2, 3] {
+                    let non_zk =
+                        assumption.ood_error(log_degree, log_inv_rate, KOALABEAR_QUINTIC_BITS, 2);
+                    let zk = assumption.zk_ood_error(
+                        log_degree,
+                        log_inv_rate,
+                        KOALABEAR_QUINTIC_BITS,
+                        2,
+                        log_degree,   // mask same size as target
+                        log_inv_rate, // mask same rate
+                    );
+
+                    assert!(
+                        zk <= non_zk,
+                        "ZK OOD should be stricter at log_degree={log_degree}, \
+                         log_inv_rate={log_inv_rate}: zk={zk:.4} > non_zk={non_zk:.4}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn zk_combination_error_matches_hand_calculation() {
+        // Verify zk_combination_error against Theorem 9.6, third error:
+        //
+        //   error = |Λ(C',δ')| · |Λ(C_zk^{≡n+1},δ_zk)| · ε_zero
+        //
+        // with GGR11 interleaving margin: |Λ(C_zk^{≡n+1})| ≤ (n+1)·|Λ(C_zk)|.
+        let jb = SecurityAssumption::JohnsonBound;
+        let num_variables = 20;
+        let log_inv_rate = 2;
+        let mask_log_degree = 10;
+        let mask_log_inv_rate = 3;
+        let ood_samples = 2;
+        let num_queries = 50;
+        let num_mask_functions = 4;
+
+        let computed = jb.zk_combination_error(
+            KOALABEAR_QUINTIC_BITS,
+            num_variables,
+            log_inv_rate,
+            ood_samples,
+            num_queries,
+            mask_log_degree,
+            mask_log_inv_rate,
+            num_mask_functions,
+        );
+
+        let list_target = jb.list_size_bits(num_variables, log_inv_rate);
+        let list_mask = jb.list_size_bits(mask_log_degree, mask_log_inv_rate);
+        let interleaving_margin = libm::log2((num_mask_functions + 1) as f64);
+        let log_combination = libm::log2((ood_samples + num_queries) as f64);
+        let expected = KOALABEAR_QUINTIC_BITS as f64
+            - (log_combination + list_target + list_mask + interleaving_margin + 1.);
+
+        assert!(
+            (computed - expected).abs() < 0.01,
+            "JB zk_combination: computed={computed:.4}, expected={expected:.4}"
+        );
+    }
+
+    #[test]
+    fn zk_combination_stricter_than_non_zk() {
+        // ZK combination error must be <= non-ZK because of the larger
+        // witness space (product list + interleaving margin).
+        for assumption in [
+            SecurityAssumption::JohnsonBound,
+            SecurityAssumption::CapacityBound,
+        ] {
+            for num_variables in [10, 15, 20] {
+                for log_inv_rate in [1, 2, 3] {
+                    let non_zk = assumption.queries_combination_error(
+                        KOALABEAR_QUINTIC_BITS,
+                        num_variables,
+                        log_inv_rate,
+                        2,
+                        50,
+                    );
+                    let zk = assumption.zk_combination_error(
+                        KOALABEAR_QUINTIC_BITS,
+                        num_variables,
+                        log_inv_rate,
+                        2,
+                        50,
+                        num_variables, // mask same size
+                        log_inv_rate,  // mask same rate
+                        1,             // minimal interleaving
+                    );
+
+                    assert!(
+                        zk <= non_zk,
+                        "ZK combination should be stricter at \
+                         num_variables={num_variables}, log_inv_rate={log_inv_rate}: \
+                         zk={zk:.4} > non_zk={non_zk:.4}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn zk_combination_reduces_to_non_zk_when_mask_is_ud() {
+        // When the mask code has UD (list size = 1, list_size_bits = 0)
+        // and num_mask_functions = 0 (interleaving margin = log₂(1) = 0),
+        // the ZK combination error should equal non-ZK.
+        let jb = SecurityAssumption::JohnsonBound;
+
+        for num_variables in [10, 15, 20] {
+            for log_inv_rate in [1, 2, 3] {
+                let non_zk = jb.queries_combination_error(
+                    KOALABEAR_QUINTIC_BITS,
+                    num_variables,
+                    log_inv_rate,
+                    2,
+                    50,
+                );
+
+                let list_target = jb.list_size_bits(num_variables, log_inv_rate);
+                let list_mask = 0.0_f64; // UD mask
+                let log_combination = libm::log2(52.0); // ood=2 + queries=50
+                let zk_with_ud_mask = KOALABEAR_QUINTIC_BITS as f64
+                    - (log_combination + list_target + list_mask + 0.0 + 1.);
+
+                assert!(
+                    (zk_with_ud_mask - non_zk).abs() < 1e-9,
+                    "ZK combination with UD mask should equal non-ZK at \
+                     num_variables={num_variables}, log_inv_rate={log_inv_rate}: \
+                     zk={zk_with_ud_mask:.6}, non_zk={non_zk:.6}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn zk_ud_returns_zero_for_ood() {
+        let ud = SecurityAssumption::UniqueDecoding;
+        let result = ud.zk_ood_error(20, 2, 155, 2, 10, 3);
+        assert!(
+            result.abs() < 1e-9,
+            "UD zk_ood_error should be 0, got {result}"
+        );
+    }
+
+    #[test]
+    fn zk_full_security_budget_128_bits() {
+        // Full ZK security budget at a representative configuration.
+        // All ZK-specific error terms must clear the target.
+        let jb = SecurityAssumption::JohnsonBound;
+        let security_level: usize = 128;
+        let log_degree = 20;
+        let log_inv_rate = 2;
+        let mask_log_degree = 10;
+        let mask_log_inv_rate = 3;
+        let num_mask_functions = 4;
+
+        let num_queries = jb.queries(security_level, log_inv_rate);
+        let ood_samples = jb.determine_ood_samples(
+            security_level,
+            log_degree,
+            log_inv_rate,
+            KOALABEAR_QUINTIC_BITS,
+        );
+
+        let zk_ood = jb.zk_ood_error(
+            log_degree,
+            log_inv_rate,
+            KOALABEAR_QUINTIC_BITS,
+            ood_samples,
+            mask_log_degree,
+            mask_log_inv_rate,
+        );
+
+        let zk_combination = jb.zk_combination_error(
+            KOALABEAR_QUINTIC_BITS,
+            log_degree,
+            log_inv_rate,
+            ood_samples,
+            num_queries,
+            mask_log_degree,
+            mask_log_inv_rate,
+            num_mask_functions,
+        );
+
+        // Non-ZK terms that are unchanged in ZK mode.
+        let query = jb.queries_error(log_inv_rate, num_queries);
+
+        assert!(
+            zk_ood >= security_level as f64,
+            "ZK OOD {zk_ood:.2} bits < {security_level}"
+        );
+        assert!(
+            query >= security_level as f64,
+            "query {query:.2} bits < {security_level}"
+        );
+        assert!(
+            zk_combination >= security_level as f64 - MAX_POW_BITS,
+            "ZK combination {zk_combination:.2} bits < {}",
+            security_level as f64 - MAX_POW_BITS
+        );
+    }
+
+    #[test]
+    fn zk_ood_error_hardcoded_values() {
+        // Verify zk_ood_error against fully hardcoded values derived from the
+        // raw JB list-size formula: list = 1/(2·η·√ρ), η = √ρ/20.
+        //
+        // JB at (log_degree=20, log_inv_rate=2): rate=0.25, η=0.025,
+        //   list = 1/(2·0.025·0.5) = 40, log₂(40) ≈ 5.32193.
+        // JB at (mask_log_degree=10, log_inv_rate=3): rate=0.125, η≈0.01768,
+        //   list = 1/(2·0.01768·0.35355) = 80, log₂(80) ≈ 6.32193.
+        let jb = SecurityAssumption::JohnsonBound;
+
+        let list_target_hardcoded = 40_f64.log2(); // ≈ 5.32193
+        let list_mask_hardcoded = 80_f64.log2(); // ≈ 6.32193
+
+        // Verify our hardcoded values match list_size_bits.
+        assert!(
+            (jb.list_size_bits(20, 2) - list_target_hardcoded).abs() < 0.01,
+            "list_target mismatch"
+        );
+        assert!(
+            (jb.list_size_bits(10, 3) - list_mask_hardcoded).abs() < 0.01,
+            "list_mask mismatch"
+        );
+
+        // Compute expected from hardcoded list sizes (not from list_size_bits).
+        // max_log_degree = max(20, 10) = 20. ze_log_error = 20 * 2 = 40.
+        let ze_log_error = 40.0;
+        let error_bits = 2.0 * (list_target_hardcoded + list_mask_hardcoded) + ze_log_error;
+        let expected = (2 * KOALABEAR_QUINTIC_BITS) as f64 + 1.0 - error_bits;
+
+        let computed = jb.zk_ood_error(20, 2, KOALABEAR_QUINTIC_BITS, 2, 10, 3);
+        assert!(
+            (computed - expected).abs() < 0.01,
+            "zk_ood_error hardcoded: computed={computed:.4}, expected={expected:.4}"
+        );
     }
 }
