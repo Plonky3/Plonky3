@@ -274,27 +274,26 @@ mod babybear_stir {
 
     #[test]
     fn test_grinding_proof_verifies_under_replay() {
-        // Two prove runs from the same FS state must produce identical proofs even with
-        // grinding active (grind is deterministic given the transcript).
+        // With `parallel` enabled, grinding may choose any valid witness found by
+        // `find_any`, so two proving runs from the same FS state need not produce
+        // byte-identical proofs. The invariant STIR needs is that each proof's
+        // witness-driven transcript replays through the verifier, including the
+        // first-round query indices returned for PCS binding.
         let (config, dft, challenger, poly) = pow_proof_setup();
 
         let mut p_ch_a = challenger.clone();
         let (proof_a, idx_a) = prove_stir(&config, poly.clone(), &dft, &mut p_ch_a);
-        let mut p_ch_b = challenger;
-        let (proof_b, idx_b) = prove_stir(&config, poly, &dft, &mut p_ch_b);
+        let mut v_ch_a = challenger.clone();
+        let outputs_a = verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof_a, &mut v_ch_a)
+            .expect("first proof should verify under transcript replay");
+        assert_eq!(idx_a, outputs_a.first_round_indices);
 
-        assert_eq!(idx_a, idx_b);
-        assert_eq!(proof_a.final_polynomial, proof_b.final_polynomial);
-        assert_eq!(proof_a.final_pow_witness, proof_b.final_pow_witness);
-        assert_eq!(
-            proof_a.final_folding_pow_witness,
-            proof_b.final_folding_pow_witness
-        );
-        assert_eq!(proof_a.round_proofs.len(), proof_b.round_proofs.len());
-        for (a, b) in proof_a.round_proofs.iter().zip(proof_b.round_proofs.iter()) {
-            assert_eq!(a.pow_witness, b.pow_witness);
-            assert_eq!(a.folding_pow_witness, b.folding_pow_witness);
-        }
+        let mut p_ch_b = challenger.clone();
+        let (proof_b, idx_b) = prove_stir(&config, poly, &dft, &mut p_ch_b);
+        let mut v_ch_b = challenger;
+        let outputs_b = verify_stir::<F, EF, MyMmcs, Challenger>(&config, &proof_b, &mut v_ch_b)
+            .expect("second proof should verify under transcript replay");
+        assert_eq!(idx_b, outputs_b.first_round_indices);
     }
 
     #[test]
