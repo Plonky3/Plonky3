@@ -48,6 +48,63 @@ pub struct ProtocolParameters {
     pub zk: bool,
 }
 
+impl ProtocolParameters {
+    /// Testing parameters with ZK enabled.
+    ///
+    /// Security level 32 keeps tests fast. Suffix variable ordering required.
+    pub fn new_testing_zk(num_variables: usize) -> Self {
+        let folding_factor = FoldingFactor::Constant(4);
+        Self {
+            security_level: 32,
+            pow_bits: 0,
+            round_log_inv_rates: Self::default_round_log_inv_rates(
+                num_variables,
+                &folding_factor,
+                1,
+            ),
+            folding_factor,
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+            zk: true,
+        }
+    }
+
+    /// Benchmark parameters with ZK enabled.
+    ///
+    /// Security level 100 with PoW for realistic overhead measurement.
+    pub fn new_benchmark_zk(num_variables: usize) -> Self {
+        let folding_factor = FoldingFactor::ConstantFromSecondRound(4, 4);
+        Self {
+            security_level: 100,
+            pow_bits: 20,
+            round_log_inv_rates: Self::default_round_log_inv_rates(
+                num_variables,
+                &folding_factor,
+                1,
+            ),
+            folding_factor,
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+            zk: true,
+        }
+    }
+
+    fn default_round_log_inv_rates(
+        num_variables: usize,
+        folding_factor: &FoldingFactor,
+        starting_log_inv_rate: usize,
+    ) -> alloc::vec::Vec<usize> {
+        let (num_rounds, _) = folding_factor.compute_number_of_rounds(num_variables);
+        let mut rates = alloc::vec::Vec::with_capacity(num_rounds);
+        let mut rate = starting_log_inv_rate;
+        for round in 0..num_rounds {
+            rate += folding_factor.at_round(round) - 1;
+            rates.push(rate);
+        }
+        rates
+    }
+}
+
 impl Display for ProtocolParameters {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         writeln!(

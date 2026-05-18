@@ -1,9 +1,12 @@
 //! WHIR: Reed-Solomon proximity testing with super-fast verification.
 //!
 //! An IOP of proximity for constrained Reed-Solomon codes that serves as
-//! a multilinear polynomial commitment scheme.
+//! a multilinear polynomial commitment scheme, with optional honest-verifier
+//! zero-knowledge (HVZK) via code-switching.
 //!
-//! Reference: <https://eprint.iacr.org/2024/1586>
+//! References:
+//! - WHIR: <https://eprint.iacr.org/2024/1586>
+//! - HVZK-WHIR: <https://eprint.iacr.org/2026/391>
 
 #![no_std]
 

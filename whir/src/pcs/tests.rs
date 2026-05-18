@@ -901,6 +901,86 @@ mod zk_tests {
     }
 
     #[test]
+    fn test_hiding_whir_pcs_end_to_end() {
+        // Exercise HidingWhirPcs through the MultilinearPcs trait.
+        use crate::pcs::HidingWhirPcs;
+
+        let num_variables = 12;
+        let folding_factor = FoldingFactor::Constant(4);
+        let folding = folding_factor.at_round(0);
+
+        let mut rng = SmallRng::seed_from_u64(77);
+        let table = Table::new(vec![Poly::<F>::rand(&mut rng, num_variables)]);
+        let witness = L::new_witness(vec![table], folding);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            TableShape::new(num_variables, 1),
+            vec![vec![0]],
+        )]);
+        assert_eq!(witness.table_shapes(), protocol.table_shapes());
+
+        let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(1));
+        let merkle_hash = MyHash::new(perm.clone());
+        let merkle_compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
+
+        let params = ProtocolParameters {
+            security_level: 32,
+            pow_bits: 0,
+            round_log_inv_rates: default_round_log_inv_rates(num_variables, &folding_factor),
+            folding_factor,
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+            zk: true,
+        };
+        let inner = TestWhirPcs::<L>::new(
+            WhirConfig::new(witness.num_variables(), params),
+            MyDft::default(),
+            mmcs,
+        );
+        let pcs = HidingWhirPcs::new(inner, SmallRng::seed_from_u64(42));
+
+        // Prover
+        let (commitment, proof) = {
+            let mut challenger = challenger();
+            let mut domain_separator = DomainSeparator::new(vec![]);
+            pcs.add_domain_separator::<8>(&mut domain_separator);
+            domain_separator.observe_domain_separator(&mut challenger);
+
+            let (commitment, prover_data) = <HidingWhirPcs<
+                EF,
+                F,
+                MyDft,
+                MyMmcs,
+                MyChallenger,
+                L,
+                SmallRng,
+            > as MultilinearPcs<EF, MyChallenger>>::commit(
+                &pcs, witness, &mut challenger
+            );
+            let proof =
+                <HidingWhirPcs<EF, F, MyDft, MyMmcs, MyChallenger, L, SmallRng> as MultilinearPcs<
+                    EF,
+                    MyChallenger,
+                >>::open(&pcs, prover_data, protocol.clone(), &mut challenger);
+            (commitment, proof)
+        };
+
+        // Verifier
+        {
+            let mut challenger = challenger();
+            let mut domain_separator = DomainSeparator::new(vec![]);
+            pcs.add_domain_separator::<8>(&mut domain_separator);
+            domain_separator.observe_domain_separator(&mut challenger);
+
+            <HidingWhirPcs<EF, F, MyDft, MyMmcs, MyChallenger, L, SmallRng> as MultilinearPcs<
+                EF,
+                MyChallenger,
+            >>::verify(&pcs, &commitment, &proof, &mut challenger, protocol)
+            .expect("HidingWhirPcs verification failed");
+        }
+    }
+
+    #[test]
     fn test_zk_false_is_byte_identical() {
         // Verify that zk: false produces the exact same proof as the non-ZK code path.
         // This confirms the ZK branch is only entered when zk == true.
