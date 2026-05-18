@@ -732,116 +732,137 @@ mod babybear_pcs {
 
     #[test]
     fn test_pcs_proof_size_vs_binary_fri_equivalent_input() {
-        const LOG_DEGREE: usize = 14;
         const WIDTH: usize = 3;
-        const SECURITY_BITS: usize = 32;
 
-        let mut perm_rng = seeded_rng();
-        let perm = Perm::new_from_rng_128(&mut perm_rng);
+        for (log_degree, log_folding_factor) in [(14, 2), (16, 2)] {
+            assert_stir_proof_smaller_than_binary_fri(log_degree, log_folding_factor, WIDTH);
+        }
 
-        let (fri_val_mmcs, fri_challenge_mmcs) = make_mmcs(&perm);
-        let fri_params = FriParameters {
-            log_blowup: 1,
-            log_final_poly_len: 0,
-            max_log_arity: 1,
-            num_queries: SECURITY_BITS,
-            commit_proof_of_work_bits: 0,
-            query_proof_of_work_bits: 0,
-            mmcs: fri_challenge_mmcs,
-        };
-        assert_eq!(fri_params.conjectured_soundness_bits(), SECURITY_BITS);
-        let fri_pcs = FriPcs::new(Dft::default(), fri_val_mmcs, fri_params);
+        fn assert_stir_proof_smaller_than_binary_fri(
+            log_degree: usize,
+            log_folding_factor: usize,
+            width: usize,
+        ) {
+            const SECURITY_BITS: usize = 32;
 
-        let (stir_val_mmcs, stir_challenge_mmcs) = make_mmcs(&perm);
-        let stir_params = StirParameters {
-            log_blowup: 1,
-            log_folding_factor: 2,
-            soundness_type: SecurityAssumption::CapacityBound,
-            security_level: SECURITY_BITS,
-            max_pow_bits: 0,
-            mmcs: stir_challenge_mmcs,
-        };
-        let stir_pcs = MyPcs::new(Dft::default(), stir_val_mmcs, stir_params);
+            let mut perm_rng = seeded_rng();
+            let perm = Perm::new_from_rng_128(&mut perm_rng);
 
-        let mut rng = seeded_rng();
-        let degree = 1 << LOG_DEGREE;
-        let mat = RowMajorMatrix::<Val>::rand(&mut rng, degree, WIDTH);
+            let (fri_val_mmcs, fri_challenge_mmcs) = make_mmcs(&perm);
+            let fri_params = FriParameters {
+                log_blowup: 1,
+                log_final_poly_len: 0,
+                max_log_arity: 1,
+                num_queries: SECURITY_BITS,
+                commit_proof_of_work_bits: 0,
+                query_proof_of_work_bits: 0,
+                mmcs: fri_challenge_mmcs,
+            };
+            assert_eq!(fri_params.conjectured_soundness_bits(), SECURITY_BITS);
+            let fri_pcs = FriPcs::new(Dft::default(), fri_val_mmcs, fri_params);
 
-        let fri_domain =
-            <FriPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&fri_pcs, degree);
-        let stir_domain =
-            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&stir_pcs, degree);
-        assert_eq!(fri_domain.size(), stir_domain.size());
-        assert_eq!(fri_domain.shift(), stir_domain.shift());
+            let (stir_val_mmcs, stir_challenge_mmcs) = make_mmcs(&perm);
+            let stir_params = StirParameters {
+                log_blowup: 1,
+                log_folding_factor,
+                soundness_type: SecurityAssumption::CapacityBound,
+                security_level: SECURITY_BITS,
+                max_pow_bits: 0,
+                mmcs: stir_challenge_mmcs,
+            };
+            let stir_pcs = MyPcs::new(Dft::default(), stir_val_mmcs, stir_params);
 
-        let mut fri_p_ch = Challenger::new(perm.clone());
-        let (fri_commit, fri_data) =
-            <FriPcs as Pcs<Challenge, Challenger>>::commit(&fri_pcs, [(fri_domain, mat.clone())]);
-        fri_p_ch.observe(fri_commit.clone());
-        let zeta: Challenge = fri_p_ch.sample_algebra_element();
-        let (fri_openings, fri_proof) = <FriPcs as Pcs<Challenge, Challenger>>::open(
-            &fri_pcs,
-            vec![(&fri_data, vec![vec![zeta]])],
-            &mut fri_p_ch,
-        );
+            let mut rng = seeded_rng();
+            let degree = 1 << log_degree;
+            let mat = RowMajorMatrix::<Val>::rand(&mut rng, degree, width);
 
-        let mut fri_v_ch = Challenger::new(perm.clone());
-        fri_v_ch.observe(fri_commit.clone());
-        let fri_v_zeta: Challenge = fri_v_ch.sample_algebra_element();
-        assert_eq!(fri_v_zeta, zeta);
-        let fri_claims = vec![(fri_domain, vec![(zeta, fri_openings[0][0][0].clone())])];
-        <FriPcs as Pcs<Challenge, Challenger>>::verify(
-            &fri_pcs,
-            vec![(fri_commit, fri_claims)],
-            &fri_proof,
-            &mut fri_v_ch,
-        )
-        .expect("binary FRI proof should verify");
-        let fri_bytes =
-            postcard::to_allocvec(&fri_proof).expect("binary FRI proof should serialize");
+            let fri_domain =
+                <FriPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&fri_pcs, degree);
+            let stir_domain =
+                <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&stir_pcs, degree);
+            assert_eq!(fri_domain.size(), stir_domain.size());
+            assert_eq!(fri_domain.shift(), stir_domain.shift());
 
-        let mut stir_p_ch = Challenger::new(perm.clone());
-        let (stir_commit, stir_data) =
-            <MyPcs as Pcs<Challenge, Challenger>>::commit(&stir_pcs, [(stir_domain, mat)]);
-        stir_p_ch.observe(stir_commit.clone());
-        let stir_zeta: Challenge = stir_p_ch.sample_algebra_element();
-        assert_eq!(
-            stir_zeta, zeta,
-            "same input commitment and challenger seed should give the same opening point"
-        );
-        let (stir_openings, stir_proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
-            &stir_pcs,
-            vec![(&stir_data, vec![vec![stir_zeta]])],
-            &mut stir_p_ch,
-        );
+            let mut fri_p_ch = Challenger::new(perm.clone());
+            let (fri_commit, fri_data) = <FriPcs as Pcs<Challenge, Challenger>>::commit(
+                &fri_pcs,
+                [(fri_domain, mat.clone())],
+            );
+            fri_p_ch.observe(fri_commit.clone());
+            let zeta: Challenge = fri_p_ch.sample_algebra_element();
+            let (fri_openings, fri_proof) = <FriPcs as Pcs<Challenge, Challenger>>::open(
+                &fri_pcs,
+                vec![(&fri_data, vec![vec![zeta]])],
+                &mut fri_p_ch,
+            );
 
-        let mut stir_v_ch = Challenger::new(perm);
-        stir_v_ch.observe(stir_commit.clone());
-        let stir_v_zeta: Challenge = stir_v_ch.sample_algebra_element();
-        assert_eq!(stir_v_zeta, stir_zeta);
-        let stir_claims = vec![(
-            stir_domain,
-            vec![(stir_zeta, stir_openings[0][0][0].clone())],
-        )];
-        <MyPcs as Pcs<Challenge, Challenger>>::verify(
-            &stir_pcs,
-            vec![(stir_commit, stir_claims)],
-            &stir_proof,
-            &mut stir_v_ch,
-        )
-        .expect("STIR proof should verify");
-        let stir_bytes = postcard::to_allocvec(&stir_proof).expect("STIR proof should serialize");
+            let mut fri_v_ch = Challenger::new(perm.clone());
+            fri_v_ch.observe(fri_commit.clone());
+            let fri_v_zeta: Challenge = fri_v_ch.sample_algebra_element();
+            assert_eq!(fri_v_zeta, zeta);
+            let fri_claims = vec![(fri_domain, vec![(zeta, fri_openings[0][0][0].clone())])];
+            <FriPcs as Pcs<Challenge, Challenger>>::verify(
+                &fri_pcs,
+                vec![(fri_commit, fri_claims)],
+                &fri_proof,
+                &mut fri_v_ch,
+            )
+            .expect("binary FRI proof should verify");
+            let fri_bytes =
+                postcard::to_allocvec(&fri_proof).expect("binary FRI proof should serialize");
 
-        // This intentionally compares the serialized PCS proof objects for binary FRI
-        // and STIR. Opened values are excluded because both proofs open the same point
-        // with the same matrix width.
-        assert!(
-            stir_bytes.len() < fri_bytes.len(),
-            "STIR proof should be smaller than binary FRI on the same input/opening \
+            let mut stir_p_ch = Challenger::new(perm.clone());
+            let (stir_commit, stir_data) =
+                <MyPcs as Pcs<Challenge, Challenger>>::commit(&stir_pcs, [(stir_domain, mat)]);
+            stir_p_ch.observe(stir_commit.clone());
+            let stir_zeta: Challenge = stir_p_ch.sample_algebra_element();
+            assert_eq!(
+                stir_zeta, zeta,
+                "same input commitment and challenger seed should give the same opening point"
+            );
+            let (stir_openings, stir_proof) = <MyPcs as Pcs<Challenge, Challenger>>::open(
+                &stir_pcs,
+                vec![(&stir_data, vec![vec![stir_zeta]])],
+                &mut stir_p_ch,
+            );
+
+            let mut stir_v_ch = Challenger::new(perm);
+            stir_v_ch.observe(stir_commit.clone());
+            let stir_v_zeta: Challenge = stir_v_ch.sample_algebra_element();
+            assert_eq!(stir_v_zeta, stir_zeta);
+            let stir_claims = vec![(
+                stir_domain,
+                vec![(stir_zeta, stir_openings[0][0][0].clone())],
+            )];
+            <MyPcs as Pcs<Challenge, Challenger>>::verify(
+                &stir_pcs,
+                vec![(stir_commit, stir_claims)],
+                &stir_proof,
+                &mut stir_v_ch,
+            )
+            .expect("STIR proof should verify");
+            let stir_bytes =
+                postcard::to_allocvec(&stir_proof).expect("STIR proof should serialize");
+            let proof_ratio = fri_bytes.len() as f64 / stir_bytes.len() as f64;
+
+            println!(
+                "proof-size: log_degree={log_degree}, log_folding_factor={log_folding_factor}, \
+             STIR={} bytes, binary FRI={} bytes, FRI/STIR={proof_ratio:.2}x",
+                stir_bytes.len(),
+                fri_bytes.len()
+            );
+
+            // This intentionally compares the serialized PCS proof objects for binary FRI
+            // and STIR. Opened values are excluded because both proofs open the same point
+            // with the same matrix width.
+            assert!(
+                stir_bytes.len() < fri_bytes.len(),
+                "STIR proof should be smaller than binary FRI on the same input/opening \
              at {SECURITY_BITS} bits without PoW (STIR={} bytes, FRI={} bytes)",
-            stir_bytes.len(),
-            fri_bytes.len()
-        );
+                stir_bytes.len(),
+                fri_bytes.len()
+            );
+        }
     }
 
     #[test]
