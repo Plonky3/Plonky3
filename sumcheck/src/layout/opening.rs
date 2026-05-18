@@ -6,8 +6,8 @@ use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 
-use crate::sumcheck::Claim;
-use crate::sumcheck::svo::{SvoAccumulators, SvoPoint};
+use crate::Claim;
+use crate::svo::{SvoAccumulators, SvoPoint};
 
 /// Multi-opening claim over an SVO point.
 pub type ProverMultiClaim<F, EF> = MultiClaim<EF, SvoPoint<F, EF>, Vec<Poly<EF>>>;

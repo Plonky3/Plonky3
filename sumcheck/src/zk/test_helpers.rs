@@ -15,8 +15,8 @@ use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
-use crate::sumcheck::layout::{Layout, PrefixProver, Table, TableShape, Witness};
-use crate::sumcheck::zk::{ZkPrefixProver, ZkSumcheckData, ZkVerifier};
+use crate::layout::{Layout, PrefixProver, Table, TableShape, Witness};
+use crate::zk::{ZkPrefixProver, ZkSumcheckData, ZkVerifier};
 
 /// Base field used across the test suite.
 pub type F = BabyBear;

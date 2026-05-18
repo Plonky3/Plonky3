@@ -35,6 +35,7 @@ members = [
     "rescue",
     "sha256",
     "stir",
+    "sumcheck",
     "symmetric",
     "uni-stark",
     "util",
@@ -82,7 +83,7 @@ rayon = "1.11.0"
 serde = { version = "1.0", default-features = false }
 serde_json = "1.0.149"
 sha2 = { version = "0.11.0", default-features = false }
-sha3 = { version = "0.11.0", default-features = false }
+shake = { version = "0.1.0", default-features = false }
 spin = "0.11.0"
 thiserror = { version = "2.0", default-features = false }
 tiny-keccak = "2.0.2"
@@ -124,6 +125,7 @@ p3-poseidon2-air = { path = "poseidon2-air", version = "0.5.1" }
 p3-rescue = { path = "rescue", version = "0.5.1" }
 p3-sha256 = { path = "sha256", version = "0.5.1" }
 p3-stir = { path = "stir", version = "0.5.1" }
+p3-sumcheck = { path = "sumcheck", version = "0.5.1" }
 p3-symmetric = { path = "symmetric", version = "0.5.1" }
 p3-uni-stark = { path = "uni-stark", version = "0.5.1" }
 p3-util = { path = "util", version = "0.5.1" }

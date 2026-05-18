@@ -1,6 +1,6 @@
 [package]
-name = "p3-whir"
-description = "WHIR polynomial commitment scheme"
+name = "p3-sumcheck"
+description = "Sumcheck protocol engine (product polynomials, SVO, HVZK masks)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,21 +10,18 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-hashbrown.workspace = true
-itertools.workspace = true
-libm.workspace = true
+p3-baby-bear = { workspace = true, optional = true }
 p3-challenger.workspace = true
 p3-commit.workspace = true
 p3-dft.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
-p3-merkle-tree.workspace = true
 p3-multilinear-util.workspace = true
-p3-sumcheck.workspace = true
-p3-symmetric.workspace = true
 p3-util.workspace = true
 p3-zk-codes.workspace = true
+
+itertools.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
 thiserror.workspace = true
@@ -32,26 +29,15 @@ tracing.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
-p3-keccak = { path = "../keccak" }
 p3-koala-bear = { path = "../koala-bear" }
-p3-sumcheck = { workspace = true, features = ["test-util"] }
+p3-merkle-tree = { path = "../merkle-tree" }
+p3-symmetric = { path = "../symmetric" }
 
-clap.workspace = true
-criterion.workspace = true
 proptest.workspace = true
-tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
-tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
-
-[[bench]]
-name = "sumcheck"
-harness = false
-
-[[example]]
-name = "whir"
-required-features = []
+test-util = ["dep:p3-baby-bear"]
 
 [lints]
 workspace = true

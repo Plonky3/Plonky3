@@ -8,8 +8,8 @@ use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_util::reverse_bits_len;
 
-use crate::sumcheck::layout::plan::{LayoutShape, plan_layout};
-use crate::sumcheck::table::TableShape;
+use crate::layout::plan::{LayoutShape, plan_layout};
+use crate::table::TableShape;
 
 /// Identifies one slot inside the stacked polynomial.
 #[derive(Debug, Clone, Copy)]
@@ -369,7 +369,7 @@ mod tests {
     use rand::rngs::SmallRng;
 
     use super::*;
-    use crate::sumcheck::layout::{Layout, PrefixProver, SuffixProver};
+    use crate::layout::{Layout, PrefixProver, SuffixProver};
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;

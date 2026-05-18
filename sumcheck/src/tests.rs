@@ -7,19 +7,18 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PackedValue, PrimeCharacteristicRing, TwoAdicField};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
-use p3_util::{log2_ceil_usize, log2_strict_usize};
+use p3_util::log2_strict_usize;
 use proptest::prelude::*;
+use rand::SeedableRng;
 use rand::rngs::SmallRng;
-use rand::{RngExt, SeedableRng};
 
 use crate::constraints::Constraint;
 use crate::constraints::statement::{EqStatement, SelectStatement};
-use crate::parameters::FoldingFactor;
-use crate::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table, TableShape, Verifier};
-use crate::sumcheck::strategy::VariableOrder;
-use crate::sumcheck::{
-    OpeningProtocol, PointSchedule, SumcheckData, SumcheckError, TableSpec,
-    verify_final_sumcheck_rounds,
+use crate::layout::{Layout, PrefixProver, SuffixProver, TableShape, Verifier};
+use crate::strategy::VariableOrder;
+use crate::test_util::{stacked_num_variables, table_point_schedule, table_specs_to_tables};
+use crate::{
+    OpeningProtocol, SumcheckData, SumcheckError, TableSpec, verify_final_sumcheck_rounds,
 };
 
 // Base field: BabyBear (a 31-bit prime field suitable for fast arithmetic).
@@ -228,70 +227,6 @@ fn poly_subset_strategy(width: usize) -> impl Strategy<Value = Vec<usize>> {
     })
 }
 
-fn table_point_schedule(width: usize, extra_points: PointSchedule) -> PointSchedule {
-    let mut point_schedule = Vec::with_capacity(extra_points.len() + 1);
-    point_schedule.push((0..width).collect());
-    point_schedule.extend(extra_points);
-    point_schedule
-}
-
-fn random_point_schedule(rng: &mut SmallRng, width: usize, num_points: usize) -> PointSchedule {
-    table_point_schedule(
-        width,
-        (1..num_points)
-            .map(|_| {
-                let polys = (0..width)
-                    .filter(|_| rng.random_bool(0.5))
-                    .collect::<Vec<_>>();
-                if polys.is_empty() { vec![0] } else { polys }
-            })
-            .collect(),
-    )
-}
-
-pub(crate) fn random_table_specs(rng: &mut SmallRng, folding: usize) -> Vec<TableSpec> {
-    let packing_log = log2_strict_usize(<F as Field>::Packing::WIDTH);
-    loop {
-        let num_points = rng.random_range(1..=5);
-        let num_tables = rng.random_range(1..=5);
-        let specs = (0..num_tables)
-            .map(|_| {
-                let num_variables = rng.random_range(1..=12);
-                let width = rng.random_range(1..=5);
-                TableSpec::new(
-                    TableShape::new(num_variables, width),
-                    random_point_schedule(rng, width, num_points),
-                )
-            })
-            .collect::<Vec<_>>();
-
-        if stacked_num_variables(&specs, folding) >= folding + packing_log {
-            return specs;
-        }
-    }
-}
-
-pub(crate) fn stacked_num_variables(specs: &[TableSpec], folding: usize) -> usize {
-    let total_evals = specs
-        .iter()
-        .map(|spec| spec.shape().width() << spec.shape().num_variables().max(folding))
-        .sum::<usize>();
-    log2_ceil_usize(total_evals)
-}
-
-pub(crate) fn table_specs_to_tables(specs: &[TableSpec]) -> Vec<Table<F>> {
-    let mut rng = SmallRng::seed_from_u64(3);
-    specs
-        .iter()
-        .map(|spec| {
-            let polys = (0..spec.shape().width())
-                .map(|_| Poly::<F>::rand(&mut rng, spec.shape().num_variables()))
-                .collect();
-            Table::new(polys)
-        })
-        .collect()
-}
-
 #[allow(clippy::too_many_lines)]
 fn run_multi_table_sumcheck_test<L>(specs: &[TableSpec])
 where
@@ -301,10 +236,19 @@ where
     const NUM_EQS: usize = 5;
     const NUM_SELS: usize = 10;
 
-    let folding_factor = FoldingFactor::Constant(FOLDING);
+    // Round schedule for a constant folding factor `FOLDING`.
+    const MAX_NUM_VARIABLES_TO_SEND_COEFFS: usize = 6;
     let num_variables = stacked_num_variables(specs, FOLDING);
-    let (num_rounds, final_rounds) = folding_factor.compute_number_of_rounds(num_variables);
-    folding_factor.check_validity(num_variables).unwrap();
+    assert!(
+        FOLDING != 0 && FOLDING <= num_variables,
+        "invalid folding factor"
+    );
+    let (num_rounds, final_rounds) = if num_variables <= MAX_NUM_VARIABLES_TO_SEND_COEFFS {
+        (0, num_variables - FOLDING)
+    } else {
+        let rounds = (num_variables - MAX_NUM_VARIABLES_TO_SEND_COEFFS).div_ceil(FOLDING);
+        (rounds - 1, num_variables - rounds * FOLDING)
+    };
 
     let protocol = OpeningProtocol::new(specs.to_vec()).pad_to_min_num_variables(FOLDING);
     let witness = L::new_witness(table_specs_to_tables(specs), FOLDING);
@@ -328,7 +272,7 @@ where
         layout.into_sumcheck(proof.first_mut().unwrap(), 0, &mut prover_challenger);
     let mut num_variables_inter = num_variables - FOLDING;
 
-    for (round, sumcheck_data) in proof.iter_mut().enumerate().take(num_rounds + 1).skip(1) {
+    for sumcheck_data in proof.iter_mut().take(num_rounds + 1).skip(1) {
         let mut constraint_evals = Vec::new();
         let constraint = make_constraint_ext(
             &mut prover_challenger,
@@ -340,7 +284,7 @@ where
         );
         all_constraint_evals.push(constraint_evals);
 
-        let folding = folding_factor.at_round(round);
+        let folding = FOLDING;
         prover_randomness.extend(&sumcheck.compute_sumcheck_polynomials(
             sumcheck_data,
             &mut prover_challenger,
@@ -411,7 +355,7 @@ where
                 .verify_rounds(&mut verifier_challenger, &mut sum, 0)
                 .unwrap(),
         );
-        num_variables_inter -= folding_factor.at_round(round);
+        num_variables_inter -= FOLDING;
     }
 
     verifier_randomness.extend(

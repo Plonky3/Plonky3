@@ -213,11 +213,11 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
-    use crate::sumcheck::layout::TableShape;
-    use crate::sumcheck::zk::test_helpers::{
+    use crate::layout::TableShape;
+    use crate::zk::test_helpers::{
         EF, F, MyChallenger, MyMmcs, build_prover_verifier, ef_in_f_subspace, make_setup,
     };
-    use crate::sumcheck::zk::{ZkSumcheckData, ZkVerifier};
+    use crate::zk::{ZkSumcheckData, ZkVerifier};
 
     /// Lemma 6.4 view-match driver for Reed-Solomon mask encoding.
     ///

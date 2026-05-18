@@ -5,7 +5,7 @@ use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_multilinear_util::point::Point;
 use serde::{Deserialize, Serialize};
 
-use crate::sumcheck::{SumcheckError, extrapolate_01inf};
+use crate::{SumcheckError, extrapolate_01inf};
 
 /// Sumcheck polynomial data
 ///
