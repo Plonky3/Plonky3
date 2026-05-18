@@ -214,9 +214,8 @@ where
         // handles subsequent rounds.
         num_variables -= whir_parameters.folding_factor.at_round(0);
 
-        for round in 0..num_rounds {
+        for (round, &next_rate) in round_log_inv_rates.iter().enumerate() {
             let folding_factor = whir_parameters.folding_factor.at_round(round);
-            let next_rate = round_log_inv_rates[round];
             assert!(
                 next_rate <= log_inv_rate + folding_factor,
                 "Codeword rate would require growing the RS domain"
