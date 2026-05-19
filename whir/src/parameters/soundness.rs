@@ -372,6 +372,164 @@ impl SecurityAssumption {
         // PoW covers the remaining gap; zero means no grinding needed.
         0_f64.max(security_level as f64 - error)
     }
+
+    /// Compute the full security budget for a single WHIR round.
+    ///
+    /// Composes all per-component error terms into a single report.
+    /// Uses a two-tier assessment matching the WHIR soundness structure:
+    ///
+    /// - **Self-sustaining** (must reach `security_level` alone):
+    ///   OOD samples and FRI queries. Skipped for [`UniqueDecoding`],
+    ///   which uses no OOD samples by design.
+    /// - **PoW-assisted** (must reach `security_level - pow_bits`):
+    ///   proximity gaps, fold sumcheck, and query combination.
+    ///   Note: `pow` is derived from `min(prox_gaps, fold_sumcheck)`,
+    ///   so only the `combination` term is independently checked here.
+    ///
+    /// `num_variables` is the log₂ polynomial degree (= number of
+    /// multilinear variables in WHIR). Used for all per-component
+    /// error methods.
+    ///
+    /// # References
+    ///
+    /// - STIR §4, per-round soundness (union bound over error components)
+    /// - [BCSS25] Theorem 1.5 (improved proximity gaps)
+    #[must_use]
+    pub fn security_budget(
+        &self,
+        security_level: usize,
+        field_size_bits: usize,
+        num_variables: usize,
+        log_inv_rate: usize,
+        ood_samples: usize,
+        num_queries: usize,
+    ) -> SecurityBudget {
+        let prox_gaps = self.prox_gaps_error(num_variables, log_inv_rate, field_size_bits, 2);
+        let fold_sumcheck = self.fold_sumcheck_error(field_size_bits, num_variables, log_inv_rate);
+        let ood = self.ood_error(num_variables, log_inv_rate, field_size_bits, ood_samples);
+        let queries = self.queries_error(log_inv_rate, num_queries);
+        let combination = self.queries_combination_error(
+            field_size_bits,
+            num_variables,
+            log_inv_rate,
+            ood_samples,
+            num_queries,
+        );
+        let pow =
+            self.folding_pow_bits(security_level, field_size_bits, num_variables, log_inv_rate);
+
+        let target_f = security_level as f64;
+        let ood_ok = matches!(self, Self::UniqueDecoding) || ood >= target_f;
+        let self_sustaining_ok = ood_ok && queries >= target_f;
+        let pow_assisted_ok = prox_gaps.min(fold_sumcheck).min(combination) >= target_f - pow;
+        let pow_within_budget = pow <= SecurityBudget::MAX_POW_BITS;
+
+        SecurityBudget {
+            prox_gaps,
+            fold_sumcheck,
+            ood,
+            ood_ok,
+            queries,
+            combination,
+            pow,
+            target: security_level,
+            self_sustaining_ok,
+            pow_assisted_ok,
+            pow_within_budget,
+            meets_target: self_sustaining_ok && pow_assisted_ok && pow_within_budget,
+        }
+    }
+}
+
+/// Per-component security breakdown for a single WHIR round.
+///
+/// Each field reports bits of security provided by that component.
+/// The `meets_target` verdict uses a two-tier structure:
+/// OOD and query errors must reach the target alone, while proximity
+/// gaps, fold sumcheck, and combination may lean on proof-of-work.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct SecurityBudget {
+    /// Bits of security from the proximity gaps bound (folding).
+    pub prox_gaps: f64,
+    /// Bits of security from the fold sumcheck challenge.
+    pub fold_sumcheck: f64,
+    /// Bits of security from out-of-domain samples.
+    pub ood: f64,
+    /// Whether the OOD check passes (true for UniqueDecoding, which
+    /// needs no OOD samples; otherwise `ood >= target`).
+    pub ood_ok: bool,
+    /// Bits of security from FRI query repetitions.
+    pub queries: f64,
+    /// Bits of security from the random linear combination.
+    pub combination: f64,
+    /// Proof-of-work bits bridging the folding gap.
+    pub pow: f64,
+    /// Target security level in bits.
+    pub target: usize,
+    /// Whether OOD and query errors each reach `target` alone.
+    pub self_sustaining_ok: bool,
+    /// Whether min(prox_gaps, fold_sumcheck, combination) >= target - pow.
+    pub pow_assisted_ok: bool,
+    /// Whether pow <= MAX_POW_BITS.
+    pub pow_within_budget: bool,
+    /// Overall verdict: all three conditions hold.
+    pub meets_target: bool,
+}
+
+impl SecurityBudget {
+    /// Conventional ceiling for proof-of-work grinding (bits).
+    pub const MAX_POW_BITS: f64 = 30.0;
+}
+
+impl Display for SecurityBudget {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let check = |ok: bool| if ok { "ok" } else { "FAIL" };
+        writeln!(f, "WHIR Security Budget (target: {} bits)", self.target)?;
+        writeln!(f, "  Self-sustaining:")?;
+        writeln!(
+            f,
+            "    OOD samples:      {:>7.2} bits  [{}]",
+            self.ood,
+            check(self.ood_ok)
+        )?;
+        writeln!(
+            f,
+            "    FRI queries:      {:>7.2} bits  [{}]",
+            self.queries,
+            check(self.queries >= self.target as f64)
+        )?;
+        let floor = self.target as f64 - self.pow;
+        writeln!(f, "  PoW-assisted (floor: {floor:.2} bits):")?;
+        writeln!(
+            f,
+            "    Proximity gaps:   {:>7.2} bits  [{}]",
+            self.prox_gaps,
+            check(self.prox_gaps >= floor)
+        )?;
+        writeln!(
+            f,
+            "    Fold sumcheck:    {:>7.2} bits  [{}]",
+            self.fold_sumcheck,
+            check(self.fold_sumcheck >= floor)
+        )?;
+        writeln!(
+            f,
+            "    Combination:      {:>7.2} bits  [{}]",
+            self.combination,
+            check(self.combination >= floor)
+        )?;
+        writeln!(
+            f,
+            "  PoW grinding:       {:>7.2} bits  (max {:.2})",
+            self.pow,
+            Self::MAX_POW_BITS
+        )?;
+        if self.meets_target {
+            write!(f, "  Verdict:            MEETS {}-bit TARGET", self.target)
+        } else {
+            write!(f, "  Verdict:            FAILS {}-bit TARGET", self.target)
+        }
+    }
 }
 
 impl Display for SecurityAssumption {
@@ -609,7 +767,7 @@ mod tests {
     ///
     /// Every algebraic bound contributing to the folding error must clear
     /// `security_level - MAX_POW_BITS` on its own.
-    const MAX_POW_BITS: f64 = 30.0;
+    const MAX_POW_BITS: f64 = SecurityBudget::MAX_POW_BITS;
 
     /// Old prox-gap baseline used by the improvement test.
     ///
@@ -890,5 +1048,195 @@ mod tests {
                 num_functions - 1
             );
         }
+    }
+
+    // ---------------------------------------------------------------
+    // SecurityBudget (per-round soundness composition)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn security_budget_matches_manual_computation() {
+        let jb = SecurityAssumption::JohnsonBound;
+        let security_level: usize = 128;
+        let num_variables = 20;
+        let log_inv_rate = 2;
+
+        let num_queries = jb.queries(security_level, log_inv_rate);
+        let ood_samples = jb.determine_ood_samples(
+            security_level,
+            num_variables,
+            log_inv_rate,
+            KOALABEAR_QUINTIC_BITS,
+        );
+
+        let budget = jb.security_budget(
+            security_level,
+            KOALABEAR_QUINTIC_BITS,
+            num_variables,
+            log_inv_rate,
+            ood_samples,
+            num_queries,
+        );
+
+        let expected_prox =
+            jb.prox_gaps_error(num_variables, log_inv_rate, KOALABEAR_QUINTIC_BITS, 2);
+        let expected_sumcheck =
+            jb.fold_sumcheck_error(KOALABEAR_QUINTIC_BITS, num_variables, log_inv_rate);
+        let expected_ood = jb.ood_error(
+            num_variables,
+            log_inv_rate,
+            KOALABEAR_QUINTIC_BITS,
+            ood_samples,
+        );
+        let expected_queries = jb.queries_error(log_inv_rate, num_queries);
+        let expected_combination = jb.queries_combination_error(
+            KOALABEAR_QUINTIC_BITS,
+            num_variables,
+            log_inv_rate,
+            ood_samples,
+            num_queries,
+        );
+        let expected_pow = jb.folding_pow_bits(
+            security_level,
+            KOALABEAR_QUINTIC_BITS,
+            num_variables,
+            log_inv_rate,
+        );
+
+        assert!(
+            (budget.prox_gaps - expected_prox).abs() < 0.01,
+            "prox_gaps: {:.4} != {expected_prox:.4}",
+            budget.prox_gaps
+        );
+        assert!(
+            (budget.fold_sumcheck - expected_sumcheck).abs() < 0.01,
+            "fold_sumcheck: {:.4} != {expected_sumcheck:.4}",
+            budget.fold_sumcheck
+        );
+        assert!(
+            (budget.ood - expected_ood).abs() < 0.01,
+            "ood: {:.4} != {expected_ood:.4}",
+            budget.ood
+        );
+        assert!(
+            (budget.queries - expected_queries).abs() < 0.01,
+            "queries: {:.4} != {expected_queries:.4}",
+            budget.queries
+        );
+        assert!(
+            (budget.combination - expected_combination).abs() < 0.01,
+            "combination: {:.4} != {expected_combination:.4}",
+            budget.combination
+        );
+        assert!(
+            (budget.pow - expected_pow).abs() < 0.01,
+            "pow: {:.4} != {expected_pow:.4}",
+            budget.pow
+        );
+    }
+
+    #[test]
+    fn security_budget_two_tier_logic() {
+        let jb = SecurityAssumption::JohnsonBound;
+
+        // Case 1: Valid config — both tiers pass.
+        let budget_ok = jb.security_budget(128, KOALABEAR_QUINTIC_BITS, 20, 2, 2, 200);
+        assert!(budget_ok.self_sustaining_ok);
+        assert!(budget_ok.pow_assisted_ok);
+        assert!(budget_ok.pow_within_budget);
+        assert!(budget_ok.meets_target);
+
+        // Case 2: Impossible target — self-sustaining fails.
+        let budget_high = jb.security_budget(500, KOALABEAR_QUINTIC_BITS, 20, 2, 2, 200);
+        assert!(!budget_high.self_sustaining_ok);
+        assert!(!budget_high.meets_target);
+
+        // Case 3: PoW ceiling — 32-bit field needs >30 bits PoW.
+        let budget_small = jb.security_budget(128, 32, 20, 2, 2, 200);
+        assert!(!budget_small.pow_within_budget);
+        assert!(!budget_small.meets_target);
+
+        // Case 4: UniqueDecoding — OOD returns 0 but should not block.
+        let ud = SecurityAssumption::UniqueDecoding;
+        let budget_ud = ud.security_budget(50, 64, 10, 2, 0, 100);
+        assert!(
+            budget_ud.self_sustaining_ok,
+            "UD should skip OOD check; queries alone determine self-sustaining"
+        );
+        assert!(
+            budget_ud.ood_ok,
+            "UD ood_ok must be true regardless of ood bits"
+        );
+
+        // Case 5: pow_assisted_ok independently false via combination.
+        // prox_gaps and fold_sumcheck are tautologically >= target - pow,
+        // so only combination can independently fail the PoW-assisted
+        // floor. Inflating ood_samples bloats the union bound in
+        // queries_combination_error (log₂(ood+queries) subtracted from
+        // field size), driving combination below the floor while OOD
+        // security stays high (more Schwartz-Zippel repetitions).
+        let budget_combo = jb.security_budget(128, KOALABEAR_QUINTIC_BITS, 20, 2, 1 << 44, 200);
+        assert!(
+            budget_combo.self_sustaining_ok,
+            "self-sustaining should pass with massive OOD"
+        );
+        assert!(
+            budget_combo.pow_within_budget,
+            "PoW should be within budget for 155-bit field"
+        );
+        assert!(
+            !budget_combo.pow_assisted_ok,
+            "combination should fail the PoW-assisted floor: combination={:.2}, floor={:.2}",
+            budget_combo.combination,
+            budget_combo.target as f64 - budget_combo.pow
+        );
+        assert!(!budget_combo.meets_target);
+    }
+
+    #[test]
+    fn security_budget_cross_validates_existing_test() {
+        let jb = SecurityAssumption::JohnsonBound;
+        let security_level: usize = 128;
+        let num_variables = 20;
+        let log_inv_rate = 2;
+
+        let num_queries = jb.queries(security_level, log_inv_rate);
+        let ood_samples = jb.determine_ood_samples(
+            security_level,
+            num_variables,
+            log_inv_rate,
+            KOALABEAR_QUINTIC_BITS,
+        );
+
+        let budget = jb.security_budget(
+            security_level,
+            KOALABEAR_QUINTIC_BITS,
+            num_variables,
+            log_inv_rate,
+            ood_samples,
+            num_queries,
+        );
+
+        // Cross-validate against jb_full_security_budget_reaches_128_bits.
+        let min_with_pow = security_level as f64 - SecurityBudget::MAX_POW_BITS;
+
+        assert!(budget.prox_gaps >= min_with_pow, "prox_gaps");
+        assert!(budget.fold_sumcheck >= min_with_pow, "fold_sumcheck");
+        assert!(budget.combination >= min_with_pow, "combination");
+        assert!(budget.ood >= security_level as f64, "ood");
+        assert!(budget.queries >= security_level as f64, "queries");
+        assert!(budget.pow <= SecurityBudget::MAX_POW_BITS, "pow");
+        assert!(budget.meets_target, "meets_target");
+    }
+
+    #[test]
+    fn security_budget_display() {
+        let jb = SecurityAssumption::JohnsonBound;
+        let budget = jb.security_budget(128, KOALABEAR_QUINTIC_BITS, 20, 2, 2, 200);
+        let output = alloc::format!("{budget}");
+
+        assert!(output.contains("WHIR Security Budget"));
+        assert!(output.contains("Self-sustaining"));
+        assert!(output.contains("PoW-assisted"));
     }
 }

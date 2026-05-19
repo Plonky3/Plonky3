@@ -8,7 +8,7 @@ pub mod soundness;
 pub mod whir;
 
 pub use folding::{FoldingFactor, FoldingFactorError};
-pub use soundness::SecurityAssumption;
+pub use soundness::{SecurityAssumption, SecurityBudget};
 pub use whir::{RoundConfig, WhirConfig};
 
 /// Fallback proof-of-work difficulty when the user does not specify one.
