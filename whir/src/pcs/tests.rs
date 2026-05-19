@@ -534,6 +534,38 @@ mod error_variant_tests {
     }
 
     #[test]
+    fn rejects_with_round_ood_answer_count_mismatch_when_answer_is_dropped() {
+        // Invariant: each round carries exactly the verifier-expected OOD answers.
+        //
+        // Fixture state: round 0 has N OOD answers.
+        //
+        // Mutation: drop one answer.
+        //
+        //     proof.whir.rounds[0].ood_answers:  N  ->  N - 1
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        let expected = proof.whir.rounds[0].ood_answers.len();
+        assert!(
+            expected > 0,
+            "fixture should produce at least one round-0 OOD answer"
+        );
+        proof.whir.rounds[0].ood_answers.pop();
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::RoundOodAnswerCountMismatch {
+                round,
+                expected: e,
+                actual: a,
+            } => {
+                assert_eq!(round, 0);
+                assert_eq!(e, expected);
+                assert_eq!(a, expected - 1);
+            }
+            other => panic!("expected RoundOodAnswerCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn rejects_with_stir_query_count_mismatch_when_intermediate_query_is_dropped() {
         // Invariant: queries.len() == verifier-sampled indices for the round.
         //

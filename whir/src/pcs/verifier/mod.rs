@@ -148,12 +148,15 @@ where
             )?;
 
             // Verify STIR in-domain challenges against the previous commitment.
+            let current_folding_randomness = round_folding_randomness
+                .last()
+                .ok_or(VerifierError::MissingFoldingRandomness { round: round_index })?;
             let stir_statement = self.verify_stir_challenges(
                 proof,
                 challenger,
                 round_params,
                 &prev_commitment,
-                round_folding_randomness.last().unwrap(),
+                current_folding_randomness,
                 round_index,
             )?;
 
@@ -183,12 +186,17 @@ where
         challenger.observe_algebra_slice(final_evaluations.as_slice());
 
         // Verify final STIR challenges.
+        let final_round_folding_randomness = round_folding_randomness.last().ok_or_else(|| {
+            VerifierError::MissingFoldingRandomness {
+                round: self.n_rounds(),
+            }
+        })?;
         let stir_statement = self.verify_stir_challenges(
             proof,
             challenger,
             &self.final_round_config(),
             &prev_commitment,
-            round_folding_randomness.last().unwrap(),
+            final_round_folding_randomness,
             self.n_rounds(),
         )?;
 
