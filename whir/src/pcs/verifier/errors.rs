@@ -68,6 +68,18 @@ pub enum VerifierError {
     #[error("Proof is missing the Merkle commitment for round {round}")]
     MissingRoundCommitment { round: usize },
 
+    /// Round OOD answers do not match the verifier's expected count.
+    #[error("Round {round} OOD answer count mismatch: expected {expected}, got {actual}")]
+    RoundOodAnswerCountMismatch {
+        round: usize,
+        expected: usize,
+        actual: usize,
+    },
+
+    /// Folding randomness is unexpectedly absent before a STIR check.
+    #[error("Missing folding randomness before STIR verification at round {round}")]
+    MissingFoldingRandomness { round: usize },
+
     /// Proof contains an unexpected number of rounds.
     #[error("Proof has {actual} rounds, expected {expected}")]
     RoundCountMismatch { expected: usize, actual: usize },
