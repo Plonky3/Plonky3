@@ -168,39 +168,44 @@ where
     }
 
     // Extract the per-round folding arities from the proof and ensure they are consistent.
-    let log_arities: Vec<usize> = proof
-        .query_proofs
-        .first()
-        .map(|qp| {
-            qp.commit_phase_openings
-                .iter()
-                .map(|o| o.log_arity as usize)
-                .collect()
-        })
-        .unwrap_or_default();
+    let log_arities: Vec<usize> = if let Some(qp) = proof.query_proofs.first() {
+        qp.commit_phase_openings
+            .iter()
+            .enumerate()
+            .map(|(round, opening)| {
+                opening
+                    .checked_log_arity(params.max_log_arity)
+                    .ok_or(FriError::InvalidLogArity {
+                        round,
+                        log_arity: opening.log_arity as usize,
+                        max: params.max_log_arity,
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
 
     for (query, qp) in proof.query_proofs.iter().enumerate().skip(1) {
         let got_log_arities = qp
             .commit_phase_openings
             .iter()
-            .map(|o| o.log_arity as usize)
-            .collect::<Vec<_>>();
+            .enumerate()
+            .map(|(round, opening)| {
+                opening
+                    .checked_log_arity(params.max_log_arity)
+                    .ok_or(FriError::InvalidLogArity {
+                        round,
+                        log_arity: opening.log_arity as usize,
+                        max: params.max_log_arity,
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         if got_log_arities != log_arities {
             return Err(FriError::QueryLogAritiesMismatch {
                 query,
                 expected: log_arities,
                 got: got_log_arities,
-            });
-        }
-    }
-
-    // Bound the prover-supplied folding arities.
-    for (round, &log_arity) in log_arities.iter().enumerate() {
-        if log_arity == 0 || log_arity > params.max_log_arity {
-            return Err(FriError::InvalidLogArity {
-                round,
-                log_arity,
-                max: params.max_log_arity,
             });
         }
     }
@@ -294,16 +299,6 @@ where
     if !challenger.check_witness(params.query_proof_of_work_bits, proof.query_pow_witness) {
         return Err(FriError::InvalidPowWitness);
     }
-
-    for (
-        query,
-        QueryProof {
-            input_proof,
-            commit_phase_openings,
-        },
-    ) in proof.query_proofs.iter().enumerate()
-    // The log of the final domain size.
-    let log_final_height = params.log_blowup + params.log_final_poly_len;
 
     for QueryProof {
         input_proof,
@@ -446,10 +441,14 @@ where
     // We start with evaluations over a domain of size (1 << log_global_max_height). We fold
     // using FRI until the domain size reaches (1 << log_final_height).
     for (round, ((&beta, comm), opening)) in fold_data_iter.enumerate() {
-        let log_arity = opening.log_arity as usize;
-        if log_arity > params.max_log_arity {
-            return Err(FriError::InvalidProofShape);
-        }
+        let max_log_arity = core::cmp::min(params.max_log_arity, log_current_height);
+        let Some(log_arity) = opening.checked_log_arity(max_log_arity) else {
+            return Err(FriError::InvalidLogArity {
+                round,
+                log_arity: opening.log_arity as usize,
+                max: max_log_arity,
+            });
+        };
         let arity = checked_shl_usize(1, log_arity).ok_or(FriError::InvalidProofShape)?;
 
         // Validate that sibling_values has the expected length (arity - 1)
@@ -984,6 +983,10 @@ mod tests {
     fn query_log_arities_mismatch() {
         let f = make_test_fixture();
         let mut proof = f.proof.clone();
+        let mut params = f.fri_params.clone();
+        // Allow arity 2 so this mutation remains "shape mismatch" instead of
+        // being rejected as an out-of-range arity.
+        params.max_log_arity = 2;
 
         // The folding schedule is the sequence of log-arities that
         // controls how much the domain shrinks each round. In this fixture,
@@ -1016,7 +1019,7 @@ mod tests {
 
         let mut challenger = f.challenger.clone();
         let err = run_verify_fri(
-            &f.fri_params,
+            &params,
             &proof,
             &mut challenger,
             &f.commitments_with_opening_points,
@@ -1219,6 +1222,38 @@ mod tests {
                 assert_eq!(round, 0);
                 assert_eq!(expected, 1);
                 assert_eq!(got, 2);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_log_arity_rejected() {
+        let f = make_test_fixture();
+        let mut proof = f.proof.clone();
+
+        // Mutation: set the first round arity to zero (invalid).
+        proof.query_proofs[0].commit_phase_openings[0].log_arity = 0;
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject invalid log_arity");
+
+        match err {
+            FriError::InvalidLogArity {
+                round,
+                log_arity,
+                max,
+            } => {
+                assert_eq!(round, 0);
+                assert_eq!(log_arity, 0);
+                assert_eq!(max, f.fri_params.max_log_arity);
             }
             other => panic!("wrong error variant: {other:?}"),
         }

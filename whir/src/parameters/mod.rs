@@ -1,5 +1,6 @@
 //! Protocol configuration for WHIR polynomial commitments.
 
+use alloc::vec::Vec;
 use core::fmt::Display;
 
 mod folding;
@@ -20,14 +21,11 @@ pub const DEFAULT_MAX_POW: usize = 16;
 /// Configuration parameters for WHIR proofs.
 #[derive(Clone, Debug)]
 pub struct ProtocolParameters {
-    /// The logarithmic inverse rate for sampling.
+    /// Initial logarithmic inverse rate for the first committed codeword.
     pub starting_log_inv_rate: usize,
-    /// The value v such that that the size of the Reed Solomon domain on which
-    /// our polynomial is evaluated gets divided by `2^v` at the first round.
-    /// RS domain size at commitment = 2^(num_variables + starting_log_inv_rate)
-    /// RS domain size after the first round = 2^(num_variables + starting_log_inv_rate - v)
-    /// The default value is 1 (halving the domain size, which is the behavior of the consecutive rounds).
-    pub rs_domain_initial_reduction_factor: usize,
+    /// Log-inverse rates for the codewords committed after each intermediate
+    /// WHIR round.
+    pub round_log_inv_rates: Vec<usize>,
     /// The folding factor strategy.
     pub folding_factor: FoldingFactor,
     /// The type of soundness guarantee.
@@ -47,8 +45,8 @@ impl Display for ProtocolParameters {
         )?;
         writeln!(
             f,
-            "Starting rate: 2^-{}, folding_factor: {:?}",
-            self.starting_log_inv_rate, self.folding_factor,
+            "Starting rate: 2^-{}, round_log_inv_rates: {:?}, folding_factor: {:?}",
+            self.starting_log_inv_rate, self.round_log_inv_rates, self.folding_factor,
         )
     }
 }
