@@ -19,7 +19,16 @@ use crate::{
     get_log_num_quotient_chunks,
 };
 
-#[instrument(skip_all)]
+#[instrument(
+    skip_all,
+    fields(
+        is_zk = config.is_zk(),
+        trace_height = trace.height(),
+        trace_width = trace.width(),
+        public_values_len = public_values.len(),
+        has_preprocessed = preprocessed.is_some()
+    )
+)]
 #[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds)] // cfg not supported in where clauses?
 pub fn prove_with_preprocessed<
     SC,
@@ -374,7 +383,16 @@ where
     }
 }
 
-#[instrument(skip_all)]
+#[instrument(
+    skip_all,
+    fields(
+        is_zk = config.is_zk(),
+        trace_height = trace.height(),
+        trace_width = trace.width(),
+        public_values_len = public_values.len(),
+        has_preprocessed = false
+    )
+)]
 #[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds)] // cfg not supported in where clauses?
 pub fn prove<
     SC,
@@ -393,7 +411,18 @@ where
     prove_with_preprocessed::<SC, A>(config, air, trace, public_values, None)
 }
 
-#[instrument(skip_all, level = "debug")]
+#[instrument(
+    skip_all,
+    level = "debug",
+    fields(
+        is_zk = SC::Pcs::ZK,
+        trace_domain_size = trace_domain.size(),
+        quotient_domain_size = quotient_domain.size(),
+        trace_width = trace_on_quotient_domain.width(),
+        has_preprocessed = preprocessed_on_quotient_domain.is_some(),
+        public_values_len = public_values.len()
+    )
+)]
 // TODO: Group some arguments to remove the `allow`?
 #[allow(clippy::too_many_arguments)]
 pub fn quotient_values<SC, A, Mat>(

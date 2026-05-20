@@ -39,7 +39,20 @@ use crate::{
 /// - `log_global_max_height`: The log of the maximum height of the input matrices.
 /// - `prover_data_with_opening_points`: A list of pairs of a batch commitment to a collection
 ///   of matrices and a list of points to open those matrices at.
-#[instrument(name = "FRI prover", skip_all)]
+#[instrument(
+    name = "FRI prover",
+    skip_all,
+    fields(
+        num_inputs = inputs.len(),
+        num_queries = params.num_queries,
+        log_blowup = params.log_blowup,
+        log_final_poly_len = params.log_final_poly_len,
+        max_log_arity = params.max_log_arity,
+        commit_pow_bits = params.commit_proof_of_work_bits,
+        query_pow_bits = params.query_proof_of_work_bits,
+        log_global_max_height = log_global_max_height
+    )
+)]
 pub fn prove_fri<Folding, Val, Challenge, InputMmcs, FriMmcs, Challenger>(
     folding: &Folding,
     params: &FriParameters<FriMmcs>,
@@ -168,7 +181,17 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>, Witness> {
 ///   evaluation vector must be in bit reversed order. This function assumes that commitments to these vectors
 ///   have already been produced and observed by the challenger.
 /// - `challenger`: The Fiat-Shamir challenger to use for sampling challenges.
-#[instrument(name = "commit phase", skip_all)]
+#[instrument(
+    name = "commit phase",
+    skip_all,
+    fields(
+        num_inputs = inputs.len(),
+        log_blowup = params.log_blowup,
+        log_final_poly_len = params.log_final_poly_len,
+        max_log_arity = params.max_log_arity,
+        commit_pow_bits = params.commit_proof_of_work_bits
+    )
+)]
 fn commit_phase<Folding, Val, Challenge, M, Challenger>(
     folding: &Folding,
     params: &FriParameters<M>,

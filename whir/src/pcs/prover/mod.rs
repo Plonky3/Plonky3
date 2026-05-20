@@ -141,7 +141,18 @@ where
     ///
     /// Performs multi-round sumcheck-based polynomial folding,
     /// producing Merkle authentication paths and constraint evaluations.
-    #[instrument(skip_all)]
+    #[instrument(
+        skip_all,
+        fields(
+            n_rounds = self.n_rounds(),
+            final_queries = self.final_queries,
+            starting_folding_pow_bits = self.starting_folding_pow_bits,
+            final_pow_bits = self.final_pow_bits,
+            final_folding_pow_bits = self.final_folding_pow_bits,
+            folding_strategy = ?self.params.folding_factor,
+            variable_order = ?L::variable_order()
+        )
+    )]
     pub fn prove(
         &self,
         proof: &mut WhirProof<F, EF, MT>,
@@ -173,7 +184,31 @@ where
         }
     }
 
-    #[instrument(skip_all, fields(round_number = round_index, log_size = self.num_variables - self.params.folding_factor.total_number(round_index)))]
+    #[instrument(
+        skip_all,
+        fields(
+            round_number = round_index,
+            is_final_round = round_index == self.n_rounds(),
+            log_size = self.num_variables - self.params.folding_factor.total_number(round_index),
+            folding_factor = self.folding_factor(round_index),
+            round_queries = if round_index < self.n_rounds() {
+                self.round_parameters[round_index].num_queries
+            } else {
+                self.final_queries
+            },
+            round_pow_bits = if round_index < self.n_rounds() {
+                self.round_parameters[round_index].pow_bits
+            } else {
+                self.final_pow_bits
+            },
+            round_folding_pow_bits = if round_index < self.n_rounds() {
+                self.round_parameters[round_index].folding_pow_bits
+            } else {
+                self.final_folding_pow_bits
+            },
+            variable_order = ?variable_order
+        )
+    )]
     #[allow(clippy::too_many_lines)]
     fn round(
         &self,
@@ -306,7 +341,16 @@ where
         round_state.round_data = RoundData::Ext(prover_data);
     }
 
-    #[instrument(skip_all)]
+    #[instrument(
+        skip_all,
+        fields(
+            round_number = round_index,
+            final_queries = self.final_queries,
+            final_pow_bits = self.final_pow_bits,
+            final_sumcheck_rounds = self.final_sumcheck_rounds,
+            folding_factor = self.params.folding_factor.at_round(round_index)
+        )
+    )]
     fn final_round(
         &self,
         round_index: usize,

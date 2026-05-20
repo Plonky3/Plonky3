@@ -13,7 +13,17 @@ use tracing::{info_span, instrument};
 
 use crate::{CircleCommitPhaseProofStep, CircleFriProof, CircleQueryProof};
 
-#[instrument(name = "FRI prover", skip_all)]
+#[instrument(
+    name = "FRI prover",
+    skip_all,
+    fields(
+        num_inputs = inputs.len(),
+        num_queries = params.num_queries,
+        log_blowup = params.log_blowup,
+        max_log_arity = params.max_log_arity,
+        query_pow_bits = params.query_proof_of_work_bits
+    )
+)]
 pub fn prove<Folding, Val, Challenge, M, Challenger>(
     folding: &Folding,
     params: &FriParameters<M>,
@@ -80,7 +90,15 @@ struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
     final_poly: F,
 }
 
-#[instrument(name = "commit phase", skip_all)]
+#[instrument(
+    name = "commit phase",
+    skip_all,
+    fields(
+        num_inputs = inputs.len(),
+        log_blowup = params.log_blowup,
+        max_log_arity = params.max_log_arity
+    )
+)]
 fn commit_phase<Folding, Val, Challenge, M, Challenger>(
     folding: &Folding,
     params: &FriParameters<M>,
