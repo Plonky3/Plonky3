@@ -284,7 +284,8 @@ impl<Val: TwoAdicField> PolynomialSpace for TwoAdicMultiplicativeCoset<Val> {
         // evals of Z_H(X) = X^n - 1
         let evals = Val::two_adic_generator(rate_bits)
             .powers()
-            .take(1 << rate_bits)
+            .collect_n(1 << rate_bits)
+            .into_iter()
             .map(|x| s_pow_n * x - Val::ONE)
             .collect_vec();
 

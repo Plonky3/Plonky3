@@ -496,7 +496,7 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         if k_pack * 2 > k {
             self.vars
                 .iter()
-                .zip(challenge.powers().skip(shift))
+                .zip(challenge.shifted_powers(challenge.exp_u64(shift as u64)))
                 .for_each(|(&var, challenge)| {
                     // gamma^{shift+i} * [1, z, z^2, ..., z^{2^k - 1}]
                     let pow = EF::from(var).shifted_powers(challenge).collect_n(1 << k);
@@ -575,7 +575,9 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         // This is equivalent to dot_product(evaluations, [γ^shift, γ^{shift+1}, ...])
         *claimed_eval += dot_product::<EF, _, _>(
             self.evaluations.iter().copied(),
-            challenge.powers().skip(shift).take(self.len()),
+            challenge
+                .shifted_powers(challenge.exp_u64(shift as u64))
+                .take(self.len()),
         );
     }
 }
