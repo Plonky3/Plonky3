@@ -4,7 +4,6 @@ use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use itertools::Itertools;
 use p3_util::{flatten_to_base, reconstitute_from_base};
 use rand::distr::{Distribution, StandardUniform};
 use serde::{Deserialize, Serialize};
@@ -230,7 +229,7 @@ where
     #[inline]
     fn packed_ext_powers(base: BinomialExtensionField<F, D>) -> crate::Powers<Self> {
         let width = F::Packing::WIDTH;
-        let powers = base.powers().take(width + 1).collect_vec();
+        let powers = base.powers().collect_n(width + 1);
         // Transpose first WIDTH powers
         let current = Self::from_ext_slice(&powers[..width]);
 

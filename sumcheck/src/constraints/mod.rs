@@ -355,10 +355,10 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
     pub fn iter_sels(&self) -> impl Iterator<Item = (&F, EF)> {
         // Pair each select variable with its corresponding challenge power.
         // Powers start at γ^{n_eq} to avoid overlap with equality constraints.
-        self.sel_statement
-            .vars
-            .iter()
-            .zip(self.challenge.powers().skip(self.eq_statement.len()))
+        self.sel_statement.vars.iter().zip(
+            self.challenge
+                .shifted_powers(self.challenge.exp_u64(self.eq_statement.len() as u64)),
+        )
     }
 }
 
