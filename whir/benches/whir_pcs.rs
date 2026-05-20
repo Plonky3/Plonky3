@@ -64,6 +64,9 @@ const LOG_INV_RATE: usize = 1;
 const SOUNDNESS: SecurityAssumption = SecurityAssumption::CapacityBound;
 const SUMCHECK: SumcheckStrategy = SumcheckStrategy::Svo;
 const SECURITY_LEVEL: usize = 128;
+// One claim is enough to exercise the full pipeline.
+//
+// We can add more if we want to stress test sumcheck things.
 const NUM_EVALUATIONS: usize = 1;
 const RS_INITIAL_REDUCTION: usize = 3;
 
@@ -176,10 +179,6 @@ impl Bench {
         );
 
         // Evaluation claims to prove.
-        //
-        // One claim is enough to exercise the full pipeline.
-        //
-        // We can add more if we want to stress test sumcheck things.
         let eval_points = (0..NUM_EVALUATIONS)
             .map(|_| Point::rand(&mut data_rng, opts.num_variables))
             .collect();
@@ -267,7 +266,7 @@ impl Bench {
                         .commit(&self.dft, &mut proof, &mut challenger, &mut statement)
                         .unwrap()
                 },
-                BatchSize::LargeInput,
+                BatchSize::PerIteration,
             );
         });
     }
@@ -290,7 +289,7 @@ impl Bench {
                         )
                         .unwrap();
                 },
-                BatchSize::LargeInput,
+                BatchSize::PerIteration,
             );
         });
     }
@@ -315,7 +314,7 @@ impl Bench {
                         .verify(&proof, &mut challenger, &parsed, verifier_statement)
                         .unwrap();
                 },
-                BatchSize::LargeInput,
+                BatchSize::PerIteration,
             );
         });
     }
