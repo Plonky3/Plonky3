@@ -243,9 +243,11 @@ where
                 BenchmarkId::new(format!("ncols={width}"), n),
                 &dft,
                 |b, dft| {
-                    b.iter(|| {
-                        dft.coset_dft_batch(messages.clone(), shift);
-                    });
+                    b.iter_batched(
+                        || messages.clone(),
+                        |m| dft.coset_dft_batch(m, shift),
+                        BatchSize::LargeInput,
+                    );
                 },
             );
         }
@@ -280,9 +282,11 @@ where
                 BenchmarkId::new(format!("ncols={width}"), n),
                 &dft,
                 |b, dft| {
-                    b.iter(|| {
-                        dft.coset_idft_batch(messages.clone(), shift);
-                    });
+                    b.iter_batched(
+                        || messages.clone(),
+                        |m| dft.coset_idft_batch(m, shift),
+                        BatchSize::LargeInput,
+                    );
                 },
             );
         }
