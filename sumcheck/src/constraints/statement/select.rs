@@ -528,9 +528,9 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
 
         // Broadcast challenge powers into packed form for dot products.
         let alphas = challenge
-            .powers()
-            .skip(shift)
-            .take(n)
+            .shifted_powers(challenge.exp_u64(shift as u64))
+            .collect_n(n)
+            .into_iter()
             .map(EF::ExtensionPacking::from)
             .collect::<Vec<_>>();
 
