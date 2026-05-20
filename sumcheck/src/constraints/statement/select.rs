@@ -432,7 +432,9 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         // ---------------------------------------------------------------
 
         // Precompute [gamma^shift, gamma^{shift+1}, ..., gamma^{shift+n-1}].
-        let challenges = challenge.powers().skip(shift).take(n).collect::<Vec<_>>();
+        let challenges = challenge
+            .shifted_powers(challenge.exp_u64(shift as u64))
+            .collect_n(n);
 
         // W(b) += sum_i gamma^{i+shift} * z_i^b
         acc.par_chunks(n)
