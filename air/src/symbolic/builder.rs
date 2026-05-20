@@ -12,8 +12,8 @@ use crate::symbolic::expression::BaseLeaf;
 use crate::symbolic::expression_ext::SymbolicExpressionExt;
 use crate::symbolic::variable::{BaseEntry, ExtEntry, SymbolicVariableExt};
 use crate::{
-    Air, AirBuilder, ExtensionBuilder, PeriodicAirBuilder, PermutationAirBuilder,
-    SymbolicExpression, SymbolicVariable, WindowAccess,
+    Air, AirBuilder, BaseAir, ExtensionBuilder, PermutationAirBuilder, SymbolicExpression,
+    SymbolicVariable, WindowAccess,
 };
 
 /// Describes the shape of an AIR for symbolic constraint evaluation.
@@ -34,8 +34,21 @@ pub struct AirLayout {
     pub num_permutation_challenges: usize,
     /// Length of [`PermutationAirBuilder::permutation_values`].
     pub num_permutation_values: usize,
-    /// Length of [`PeriodicAirBuilder::periodic_values`].
+    /// Length of [`AirBuilder::periodic_values`].
     pub num_periodic_columns: usize,
+}
+
+impl AirLayout {
+    /// Derive layout from an AIR's metadata.
+    pub fn from_air<F: Clone + Send + Sync>(air: &impl BaseAir<F>) -> Self {
+        Self {
+            preprocessed_width: air.preprocessed_width(),
+            main_width: air.width(),
+            num_public_values: air.num_public_values(),
+            num_periodic_columns: air.num_periodic_columns(),
+            ..Default::default()
+        }
+    }
 }
 
 #[instrument(skip_all, level = "debug")]
@@ -130,7 +143,7 @@ where
     (builder.base_constraints(), builder.extension_constraints())
 }
 
-/// An [`AirBuilder`] for evaluating constraints symbolically, and recording them for later use.
+/// Symbolic AIR builder that records constraints.
 #[derive(Debug)]
 pub struct SymbolicAirBuilder<F: Field, EF: ExtensionField<F> = F> {
     preprocessed: RowMajorMatrix<SymbolicVariable<F>>,
@@ -268,6 +281,7 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
     type PreprocessedWindow = RowMajorMatrix<Self::Var>;
     type MainWindow = RowMajorMatrix<Self::Var>;
     type PublicVar = SymbolicVariable<F>;
+    type PeriodicVar = SymbolicVariable<F>;
 
     fn main(&self) -> Self::MainWindow {
         self.main.clone()
@@ -302,6 +316,10 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
 
     fn public_values(&self) -> &[Self::PublicVar] {
         &self.public_values
+    }
+
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        &self.periodic
     }
 }
 
@@ -342,14 +360,6 @@ where
 
     fn permutation_values(&self) -> &[Self::PermutationVar] {
         &self.permutation_values
-    }
-}
-
-impl<F: Field, EF: ExtensionField<F>> PeriodicAirBuilder for SymbolicAirBuilder<F, EF> {
-    type PeriodicVar = SymbolicVariable<F>;
-
-    fn periodic_values(&self) -> &[Self::PeriodicVar] {
-        &self.periodic
     }
 }
 

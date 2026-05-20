@@ -32,8 +32,10 @@ Usage:
 
 import argparse
 import json
+import re
 import sys
 from math import ceil, floor, gcd, log, log2, inf
+from pathlib import Path
 
 # =============================================================================
 # Field Definitions
@@ -56,6 +58,16 @@ FIELDS = {
         "prime": (1 << 31) - 1,
         "valid_widths": [16, 32],
     },
+}
+
+# Round-constant locations for in-tree reproducibility checks.
+RUST_ROUND_CONSTANTS = {
+    ("babybear", 16): ("baby-bear/src/poseidon1.rs", "BABYBEAR_POSEIDON1_RC_16"),
+    ("babybear", 24): ("baby-bear/src/poseidon1.rs", "BABYBEAR_POSEIDON1_RC_24"),
+    ("koalabear", 16): ("koala-bear/src/poseidon1.rs", "KOALABEAR_POSEIDON1_RC_16"),
+    ("koalabear", 24): ("koala-bear/src/poseidon1.rs", "KOALABEAR_POSEIDON1_RC_24"),
+    ("goldilocks", 8): ("goldilocks/src/poseidon1.rs", "GOLDILOCKS_POSEIDON1_RC_8"),
+    ("goldilocks", 12): ("goldilocks/src/poseidon1.rs", "GOLDILOCKS_POSEIDON1_RC_12"),
 }
 
 
@@ -1194,6 +1206,86 @@ def format_json_poseidon1(
 
 
 # =============================================================================
+# Rust Constant Verification
+# =============================================================================
+
+
+_NUMBER_RE = re.compile(r"0x[0-9a-fA-F_]+|\d+")
+
+
+def _parse_int(token):
+    token = token.replace("_", "")
+    return int(token, 16) if token.lower().startswith("0x") else int(token)
+
+
+def _parse_rust_round_constants(rust_path, const_name, width):
+    """
+    Parse a Poseidon1 2D round-constant array from a Rust source file.
+
+    Expects a declaration of the form:
+
+        pub const NAME: [[T; W]; R] = ...::new_2d_array([ <body> ]);
+
+    Returns a list of `R` rows, each a list of `W` ints.
+    """
+    source = rust_path.read_text(encoding="utf-8")
+    pattern = re.compile(
+        rf"pub const {re.escape(const_name)}\s*:\s*\[\s*\[[^;]+;\s*{width}\s*\]\s*;\s*(\d+)\s*\]"
+        rf".*?new_2d_array\(\s*\[(.*?)\]\s*\)\s*;",
+        re.S,
+    )
+    match = pattern.search(source)
+    if not match:
+        raise ValueError(f"Could not find {const_name} (width {width}) in {rust_path}")
+
+    rounds = int(match.group(1))
+    # Strip `// ...` line comments before extracting numeric literals.
+    body = "\n".join(line.split("//", 1)[0] for line in match.group(2).splitlines())
+    values = [_parse_int(tok) for tok in _NUMBER_RE.findall(body)]
+
+    expected = rounds * width
+    if len(values) != expected:
+        raise ValueError(
+            f"{const_name}: expected {expected} values ({rounds}×{width}), found {len(values)}"
+        )
+    return [values[r * width : (r + 1) * width] for r in range(rounds)]
+
+
+def verify_generated_constants_against_rust(field_name, width, generated, repo_root=None):
+    """
+    Compare freshly generated constants against in-tree Rust constants.
+
+    Returns (ok, message).
+    """
+    key = (field_name, width)
+    if key not in RUST_ROUND_CONSTANTS:
+        return False, f"No mapping for field={field_name}, width={width}"
+
+    root = Path(repo_root) if repo_root else Path(__file__).resolve().parent.parent
+    rel_path, const_name = RUST_ROUND_CONSTANTS[key]
+    rust_path = root / rel_path
+    if not rust_path.exists():
+        return False, f"Rust file not found: {rust_path}"
+
+    rust = _parse_rust_round_constants(rust_path, const_name, width)
+    if rust == generated:
+        return True, f"Rust constants match generated values: {const_name}"
+
+    # Find the first divergence to report.
+    for r, (rust_row, gen_row) in enumerate(zip(rust, generated)):
+        for c, (rv, gv) in enumerate(zip(rust_row, gen_row)):
+            if rv != gv:
+                return False, (
+                    f"{const_name}: mismatch at round {r}, col {c}: "
+                    f"rust={hex(rv)} generated={hex(gv)}"
+                )
+    return False, (
+        f"{const_name}: shape mismatch (rust {len(rust)} rounds, "
+        f"generated {len(generated)} rounds)"
+    )
+
+
+# =============================================================================
 # CLI
 # =============================================================================
 
@@ -1237,7 +1329,21 @@ def main():
         "--test-vector", action="store_true",
         help="Compute and print a test vector using the reference permutation",
     )
+    parser.add_argument(
+        "--check-rust", action="store_true",
+        help="Verify generated round constants against in-tree Rust constants for this field/width",
+    )
+    parser.add_argument(
+        "--check-rust-only", action="store_true",
+        help="Run --check-rust and suppress formatted constant output",
+    )
+    parser.add_argument(
+        "--repo-root", default=None,
+        help="Repository root to use for --check-rust (defaults to script-relative root)",
+    )
     args = parser.parse_args()
+    if args.check_rust_only:
+        args.check_rust = True
 
     field_info = FIELDS[args.field]
     p = field_info["prime"]
@@ -1275,6 +1381,17 @@ def main():
         print("Generating round constants...", flush=True)
     round_constants = generate_round_constants_poseidon1(grain, p, n, t, R_F, R_P)
 
+    # --- Optional in-tree Rust constant verification ---
+    if args.check_rust:
+        ok, msg = verify_generated_constants_against_rust(
+            args.field, t, round_constants, repo_root=args.repo_root,
+        )
+        if not ok:
+            print(f"Rust constant verification failed: {msg}", file=sys.stderr)
+            sys.exit(1)
+        if args.verbose:
+            print(msg)
+
     # --- Generate MDS matrix ---
     if not args.skip_mds:
         if args.verbose:
@@ -1292,10 +1409,11 @@ def main():
     fmt_args = (
         args.field, t, round_constants, mds, p, n, alpha, R_F, R_P, args.skip_mds,
     )
-    if args.format == "default":
-        print(format_default_poseidon1(*fmt_args))
-    elif args.format == "json":
-        print(format_json_poseidon1(*fmt_args))
+    if not args.check_rust_only:
+        if args.format == "default":
+            print(format_default_poseidon1(*fmt_args))
+        elif args.format == "json":
+            print(format_json_poseidon1(*fmt_args))
 
     # --- Test vector ---
     if args.test_vector:

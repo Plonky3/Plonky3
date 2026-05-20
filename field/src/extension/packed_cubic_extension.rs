@@ -191,73 +191,12 @@ where
     }
 }
 
-// SAFETY: Memory layout is compatible with `[CubicTrinomialExtensionField<F>; WIDTH]`.
-unsafe impl<F, PF> PackedValue for PackedCubicTrinomialExtensionField<F, PF>
-where
-    F: CubicTrinomialExtendable,
-    PF: PackedField<Scalar = F>,
-{
-    type Value = CubicTrinomialExtensionField<F>;
-
-    const WIDTH: usize = PF::WIDTH;
-
-    #[inline]
-    fn from_slice(slice: &[Self::Value]) -> &Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe { &*slice.as_ptr().cast() }
-    }
-
-    #[inline]
-    fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe { &mut *slice.as_mut_ptr().cast() }
-    }
-
-    #[inline]
-    fn from_fn<Fn: FnMut(usize) -> Self::Value>(mut f: Fn) -> Self {
-        let mut result = Self::default();
-        for i in 0..Self::WIDTH {
-            let val = f(i);
-            for j in 0..3 {
-                result.value[j].as_slice_mut()[i] = val.value[j];
-            }
-        }
-        result
-    }
-
-    #[inline]
-    fn as_slice(&self) -> &[Self::Value] {
-        unsafe {
-            core::slice::from_raw_parts(self as *const Self as *const Self::Value, Self::WIDTH)
-        }
-    }
-
-    #[inline]
-    fn as_slice_mut(&mut self) -> &mut [Self::Value] {
-        unsafe {
-            core::slice::from_raw_parts_mut(self as *mut Self as *mut Self::Value, Self::WIDTH)
-        }
-    }
-}
-
-// SAFETY: Implements all required trait bounds.
-unsafe impl<F, PF> PackedField for PackedCubicTrinomialExtensionField<F, PF>
-where
-    F: CubicTrinomialExtendable,
-    PF: PackedField<Scalar = F>,
-{
-    type Scalar = CubicTrinomialExtensionField<F>;
-}
-
 impl<F: CubicTrinomialExtendable> PackedFieldExtension<F, CubicTrinomialExtensionField<F>>
     for PackedCubicTrinomialExtensionField<F, F::Packing>
 {
     #[inline]
-    fn from_ext_slice(ext_slice: &[CubicTrinomialExtensionField<F>]) -> Self {
-        let width = F::Packing::WIDTH;
-        assert_eq!(ext_slice.len(), width);
-
-        Self::new(F::Packing::pack_columns_fn(|lane| ext_slice[lane].value))
+    fn from_ext_fn(f: impl Fn(usize) -> CubicTrinomialExtensionField<F>) -> Self {
+        Self::new(F::Packing::pack_columns_fn(|lane| f(lane).value))
     }
 
     #[inline]
@@ -589,26 +528,17 @@ where
     }
 }
 
-impl<F, PF> Div for PackedCubicTrinomialExtensionField<F, PF>
-where
-    F: CubicTrinomialExtendable,
-    PF: PackedField<Scalar = F>,
-{
+impl<F: CubicTrinomialExtendable> Div for PackedCubicTrinomialExtensionField<F, F::Packing> {
     type Output = Self;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
     #[inline]
     fn div(self, rhs: Self) -> Self {
-        let rhs_inv = Self::from_fn(|i| rhs.as_slice()[i].inverse());
-        self * rhs_inv
+        self * crate::invert_packed_extension::<F, CubicTrinomialExtensionField<F>>(rhs)
     }
 }
 
-impl<F, PF> DivAssign for PackedCubicTrinomialExtensionField<F, PF>
-where
-    F: CubicTrinomialExtendable,
-    PF: PackedField<Scalar = F>,
-{
+impl<F: CubicTrinomialExtendable> DivAssign for PackedCubicTrinomialExtensionField<F, F::Packing> {
     #[inline]
     fn div_assign(&mut self, rhs: Self) {
         *self = *self / rhs;

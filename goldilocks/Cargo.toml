@@ -9,6 +9,10 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+# criterion pulls rayon transitively and rayon does not build on wasi.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion.workspace = true
+
 [dependencies]
 p3-challenger.workspace = true
 p3-dft.workspace = true
@@ -27,7 +31,6 @@ serde = { workspace = true, features = ["derive"] }
 [dev-dependencies]
 p3-field-testing = { path = "../field-testing" }
 
-criterion.workspace = true
 proptest.workspace = true
 rand.workspace = true
 

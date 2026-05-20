@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use core::error::Error;
 use core::fmt::{Display, Formatter};
 
-use p3_field::{BasedVectorSpace, Field, PrimeField64};
+use p3_field::{BasedVectorSpace, Field, PrimeField, PrimeField64};
 use p3_monty_31::{MontyField31, MontyParameters};
 use p3_symmetric::{CryptographicPermutation, Hash, MerkleCap};
 
@@ -83,7 +83,7 @@ where
         }
     }
 
-    fn duplexing(&mut self) {
+    pub(crate) fn duplexing(&mut self) {
         assert!(self.input_buffer.len() <= RATE);
 
         // Overwrite the first r elements with the inputs.
@@ -96,6 +96,38 @@ where
 
         self.output_buffer.clear();
         self.output_buffer.extend(&self.sponge_state[..RATE]);
+    }
+}
+
+impl<F, P, const WIDTH: usize, const RATE: usize> DuplexChallenger<F, P, WIDTH, RATE>
+where
+    F: Copy + Default + PrimeField,
+    P: CryptographicPermutation<[F; WIDTH]>,
+{
+    /// Absorb `values.len()` elements into the rate, zero remaining rate slots, add `length_tag`
+    /// to `sponge_state[RATE]`, permute, and refill `output_buffer`.
+    ///
+    /// Clears `input_buffer` and `output_buffer` before absorbing. Used by
+    /// [`MultiField32Challenger`](crate::MultiField32Challenger) so packed scalar and native-digest
+    /// absorbs share this [`DuplexChallenger`]'s sponge state without queuing through `observe`.
+    pub fn absorb_rate_padded_with_tag(&mut self, values: &[F], length_tag: u8) {
+        const {
+            assert!(
+                RATE < WIDTH,
+                "RATE must be less than WIDTH for capacity length slot"
+            );
+        }
+        assert!(values.len() <= RATE);
+        self.input_buffer.clear();
+        self.output_buffer.clear();
+        for (i, &v) in values.iter().enumerate() {
+            self.sponge_state[i] = v;
+        }
+        self.sponge_state[values.len()..RATE].fill(F::ZERO);
+        self.sponge_state[RATE] += F::from_u8(length_tag);
+        self.permutation.permute_mut(&mut self.sponge_state);
+        self.output_buffer
+            .extend_from_slice(&self.sponge_state[..RATE]);
     }
 }
 

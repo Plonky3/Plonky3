@@ -1891,7 +1891,7 @@ mod tests {
                 .collect();
 
             // Allocate output buffer.
-            let mut output = vec![BabyBear::ZERO; width * height];
+            let mut output = BabyBear::zero_vec(width * height);
 
             // Run optimized transpose.
             transpose(&input, &mut output, width, height);
@@ -1967,7 +1967,7 @@ mod tests {
                 .collect();
 
             // Allocate output buffer.
-            let mut output = vec![Goldilocks::ZERO; width * height];
+            let mut output = Goldilocks::zero_vec(width * height);
 
             // Run optimized transpose.
             transpose(&input, &mut output, width, height);

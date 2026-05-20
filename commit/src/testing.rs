@@ -1,4 +1,3 @@
-use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
@@ -27,7 +26,7 @@ pub fn eval_coeffs_at_pt<F: Field, EF: ExtensionField<F>>(
     coeffs: &RowMajorMatrix<F>,
     x: EF,
 ) -> Vec<EF> {
-    let mut acc = vec![EF::ZERO; coeffs.width()];
+    let mut acc = EF::zero_vec(coeffs.width());
     for r in (0..coeffs.height()).rev() {
         let row = coeffs.row_slice(r).unwrap();
         for (acc_c, row_c) in acc.iter_mut().zip(row.iter()) {

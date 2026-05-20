@@ -146,9 +146,11 @@ fn generate_trace_row_for_round<F: PrimeField64>(
 mod tests {
     use alloc::vec;
 
+    use p3_field::PrimeCharacteristicRing;
     use p3_goldilocks::Goldilocks;
     use p3_keccak::KeccakF;
     use p3_symmetric::Permutation;
+    use proptest::prelude::*;
 
     use super::*;
 
@@ -324,6 +326,84 @@ mod tests {
                 "preimage[{}][{}] should equal input[{}]",
                 y, x, i_u64
             );
+        }
+    }
+
+    /// Reinterpret the flat trace buffer as typed column structs.
+    fn trace_to_rows<F: PrimeField64>(trace: &RowMajorMatrix<F>) -> &[KeccakCols<F>] {
+        let (prefix, rows, suffix) = unsafe { trace.values.align_to::<KeccakCols<F>>() };
+        assert!(prefix.is_empty(), "Alignment should match");
+        assert!(suffix.is_empty(), "Alignment should match");
+        rows
+    }
+
+    proptest! {
+        #[test]
+        fn prop_trace_output_matches_keccak_f(input in any::<[u64; 25]>()) {
+            let mut expected = input;
+            KeccakF.permute_mut(&mut expected);
+
+            let trace = generate_trace_rows::<Goldilocks>(vec![input], 0);
+            let rows = trace_to_rows(&trace);
+            let output = extract_output_from_trace(&rows[..NUM_ROUNDS]);
+            prop_assert_eq!(output, expected);
+        }
+
+        #[test]
+        fn prop_preimage_persists_across_rounds(input in any::<[u64; 25]>()) {
+            let trace = generate_trace_rows::<Goldilocks>(vec![input], 0);
+            let rows = trace_to_rows(&trace);
+
+            // Preimage must be identical in all 24 rows.
+            let first = rows[0].preimage;
+            for (round, row) in rows.iter().enumerate().take(NUM_ROUNDS).skip(1) {
+                prop_assert_eq!(row.preimage, first,
+                    "preimage changed at round {}", round);
+            }
+        }
+
+        #[test]
+        fn prop_step_flags_rotation(input in any::<[u64; 25]>()) {
+            let trace = generate_trace_rows::<Goldilocks>(vec![input], 0);
+            let rows = trace_to_rows(&trace);
+
+            // Row r: step_flags[r] = 1, all others = 0.
+            //
+            //     round  0: [1, 0, 0, …, 0]
+            //     round  1: [0, 1, 0, …, 0]
+            //     round 23: [0, 0, 0, …, 1]
+            for (round, row) in rows.iter().enumerate().take(NUM_ROUNDS) {
+                for flag in 0..NUM_ROUNDS {
+                    let expected = if flag == round { Goldilocks::ONE } else { Goldilocks::ZERO };
+                    prop_assert_eq!(row.step_flags[flag], expected,
+                        "step_flags[{}] wrong at round {}", flag, round);
+                }
+            }
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(50))]
+
+        #[test]
+        fn prop_batch_matches_individual(
+            a in any::<[u64; 25]>(),
+            b in any::<[u64; 25]>(),
+        ) {
+            // Individual.
+            let trace_a = generate_trace_rows::<Goldilocks>(vec![a], 0);
+            let trace_b = generate_trace_rows::<Goldilocks>(vec![b], 0);
+            let out_a = extract_output_from_trace(&trace_to_rows(&trace_a)[..NUM_ROUNDS]);
+            let out_b = extract_output_from_trace(&trace_to_rows(&trace_b)[..NUM_ROUNDS]);
+
+            // Batch: rows [0..24) = perm(a), rows [24..48) = perm(b).
+            let batch = generate_trace_rows::<Goldilocks>(vec![a, b], 0);
+            let rows = trace_to_rows(&batch);
+            let batch_a = extract_output_from_trace(&rows[..NUM_ROUNDS]);
+            let batch_b = extract_output_from_trace(&rows[NUM_ROUNDS..2 * NUM_ROUNDS]);
+
+            prop_assert_eq!(out_a, batch_a);
+            prop_assert_eq!(out_b, batch_b);
         }
     }
 }

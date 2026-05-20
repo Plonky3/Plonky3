@@ -105,6 +105,20 @@ impl<F> Poly<F> {
         &mut self.0
     }
 
+    /// Pads the evaluation vector with zeros up to `num_variables`.
+    ///
+    /// # Panics
+    ///
+    /// - `num_variables` must be at least the current number of variables.
+    #[inline]
+    pub fn pad_zeros(&mut self, num_variables: usize)
+    where
+        F: PrimeCharacteristicRing,
+    {
+        assert!(num_variables >= self.num_variables());
+        self.0.resize(1 << num_variables, F::ZERO);
+    }
+
     /// Returns an iterator over the evaluations.
     #[inline]
     pub fn iter(&self) -> core::slice::Iter<'_, F> {
@@ -1205,13 +1219,13 @@ pub(crate) mod test {
             evals_raw in prop::collection::vec(0u64..F::ORDER_U64, 5),
         ) {
             let evals: Vec<F> = evals_raw[..n].iter().map(|&x| F::from_u64(x)).collect();
-            let mut out = vec![F::ZERO; 1 << n];
+            let mut out = F::zero_vec(1 << n);
             eval_eq_batch::<F, F, false>(
                 RowMajorMatrixView::new_col(&evals),
                 &mut out,
                 &[F::ONE],
             );
-            let mut expected = vec![F::ZERO; 1 << n];
+            let mut expected = F::zero_vec(1 << n);
             for (i, e) in expected.iter_mut().enumerate().take(1 << n) {
                 let mut weight = F::ONE;
                 for (j, &val) in evals.iter().enumerate() {
@@ -1864,5 +1878,96 @@ pub(crate) mod test {
                 assert_eq!(compressed0, compressed1);
             }
         }
+    }
+
+    #[test]
+    fn pad_zeros_to_same_arity_is_a_no_op() {
+        // Invariant:
+        //     Padding to the current arity must leave the buffer unchanged.
+        //
+        // Fixture state:
+        //     2-variable polynomial → 4 evaluations.
+        let mut poly = Poly::new(vec![
+            F::from_u64(1),
+            F::from_u64(2),
+            F::from_u64(3),
+            F::from_u64(4),
+        ]);
+        let original = poly.as_slice().to_vec();
+
+        // Pad to the same arity.
+        poly.pad_zeros(2);
+
+        // Check: arity and contents are identical to the input.
+        assert_eq!(poly.num_variables(), 2);
+        assert_eq!(poly.as_slice(), original.as_slice());
+    }
+
+    #[test]
+    fn pad_zeros_extends_with_zeros_and_preserves_prefix() {
+        // Invariant:
+        //     Padding to a strictly larger arity grows the buffer to 2^k entries,
+        //     keeps every original evaluation in place, and zero-fills the tail.
+        //
+        // Fixture state:
+        //     1-variable polynomial → 2 evaluations.
+        //     pad to 3 variables → 8 entries; entries [2..8] must be zero.
+        let mut poly = Poly::new(vec![F::from_u64(7), F::from_u64(11)]);
+
+        poly.pad_zeros(3);
+
+        // Check: arity matches the requested target.
+        assert_eq!(poly.num_variables(), 3);
+        // Check: entry count equals 2^arity.
+        assert_eq!(poly.as_slice().len(), 8);
+        // Check: original evaluations sit at the head of the buffer.
+        assert_eq!(poly.as_slice()[0], F::from_u64(7));
+        assert_eq!(poly.as_slice()[1], F::from_u64(11));
+        // Check: every padded slot is zero.
+        for &value in &poly.as_slice()[2..] {
+            assert_eq!(value, F::ZERO);
+        }
+    }
+
+    #[test]
+    fn pad_zeros_idempotent_when_called_twice() {
+        // Invariant:
+        //     Calling pad_zeros twice with the same target is the same as once.
+        //
+        // Fixture state:
+        //     2-variable polynomial padded twice to arity 4.
+        let mut once = Poly::new(vec![
+            F::from_u64(5),
+            F::from_u64(6),
+            F::from_u64(7),
+            F::from_u64(8),
+        ]);
+        once.pad_zeros(4);
+
+        let mut twice = Poly::new(vec![
+            F::from_u64(5),
+            F::from_u64(6),
+            F::from_u64(7),
+            F::from_u64(8),
+        ]);
+        twice.pad_zeros(4);
+        twice.pad_zeros(4);
+
+        // Check: the two paths produce identical buffers.
+        assert_eq!(once.num_variables(), twice.num_variables());
+        assert_eq!(once.as_slice(), twice.as_slice());
+    }
+
+    #[test]
+    #[should_panic]
+    fn pad_zeros_panics_when_target_is_smaller_than_current() {
+        // Invariant:
+        //     pad_zeros refuses to shrink the polynomial — it is strictly an
+        //     upward-padding helper.
+        //
+        // Fixture state:
+        //     3-variable polynomial; ask to pad to arity 2 → must panic.
+        let mut poly = Poly::<F>::zero(3);
+        poly.pad_zeros(2);
     }
 }

@@ -691,15 +691,13 @@ pub(super) fn binomial_mul<
         4 => quartic_mul(a, b, res, w),
         5 => quintic_mul(a, b, res, w),
         8 => octic_mul(a, b, res, w),
-        _ =>
-        {
-            #[allow(clippy::needless_range_loop)]
-            for i in 0..D {
-                for j in 0..D {
+        _ => {
+            for (i, a_i) in a.iter().enumerate() {
+                for (j, b_j) in b.iter().enumerate() {
                     if i + j >= D {
-                        res[i + j - D] += a[i].dup() * w * b[j].dup();
+                        res[i + j - D] += a_i.dup() * w * b_j.dup();
                     } else {
-                        res[i + j] += a[i].dup() * b[j].dup();
+                        res[i + j] += a_i.dup() * b_j.dup();
                     }
                 }
             }
