@@ -7,28 +7,23 @@ use criterion::{
     BatchSize, BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main,
 };
 use p3_challenger::DuplexChallenger;
+use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
-use p3_matrix::dense::DenseMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_whir::constraints::statement::initial::InitialStatement;
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{
-    DEFAULT_MAX_POW, FoldingFactor, ProtocolParameters, SecurityAssumption, SumcheckStrategy,
-    WhirConfig,
+    DEFAULT_MAX_POW, FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig,
 };
-use p3_whir::pcs::committer::reader::CommitmentReader;
-use p3_whir::pcs::committer::writer::CommitmentWriter;
-use p3_whir::pcs::proof::WhirProof;
 use p3_whir::pcs::prover::WhirProver;
-use p3_whir::pcs::verifier::WhirVerifier;
+use p3_whir::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
+use p3_whir::sumcheck::{OpeningProtocol, TableShape, TableSpec};
+use rand::SeedableRng;
 use rand::rngs::SmallRng;
-use rand::{RngExt, SeedableRng};
 
 type F = KoalaBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -41,17 +36,10 @@ type MerkleCompress = TruncatedPermutation<Poseidon16, 2, 8, 16>;
 type Challenger = DuplexChallenger<F, Poseidon16, 16, 8>;
 type PackedF = <F as Field>::Packing;
 type Mmcs = MerkleTreeMmcs<PackedF, PackedF, MerkleHash, MerkleCompress, 2, 8>;
+type Dft = Radix2DFTSmallBatch<F>;
 
-/// Prover-side state retained between commit and prove.
-type ProverData = <Mmcs as p3_commit::Mmcs<F>>::ProverData<DenseMatrix<F>>;
-
-/// Per-iteration mutable inputs produced by the commit phase.
-type CommitOutput = (
-    WhirProof<F, EF, Mmcs>,
-    InitialStatement<F, EF>,
-    Challenger,
-    ProverData,
-);
+/// Concrete PCS instantiation parameterized by the sumcheck layout mode.
+type Pcs<L> = WhirProver<EF, F, Dft, Mmcs, Challenger, L>;
 
 // Polynomial sizes (log_2 of coefficient count).
 const SMALL: usize = 14;
@@ -62,13 +50,11 @@ const LARGE: usize = 20;
 const FOLDING: usize = 4;
 const LOG_INV_RATE: usize = 1;
 const SOUNDNESS: SecurityAssumption = SecurityAssumption::CapacityBound;
-const SUMCHECK: SumcheckStrategy = SumcheckStrategy::Svo;
 const SECURITY_LEVEL: usize = 128;
-// One claim is enough to exercise the full pipeline.
+// One opening claim is enough to exercise the full pipeline.
 //
 // We can add more if we want to stress test sumcheck things.
 const NUM_EVALUATIONS: usize = 1;
-const RS_INITIAL_REDUCTION: usize = 3;
 
 /// One benchmark configuration.
 #[derive(Clone, Copy)]
@@ -81,8 +67,6 @@ struct Options {
     log_inv_rate: usize,
     /// Soundness assumption driving query counts and PoW.
     soundness: SecurityAssumption,
-    /// Initial-round sumcheck variant.
-    sumcheck: SumcheckStrategy,
 }
 
 impl Options {
@@ -93,19 +77,12 @@ impl Options {
             folding: FOLDING,
             log_inv_rate: LOG_INV_RATE,
             soundness: SOUNDNESS,
-            sumcheck: SUMCHECK,
         }
     }
 
     /// Override the soundness assumption.
     const fn with_soundness(mut self, soundness: SecurityAssumption) -> Self {
         self.soundness = soundness;
-        self
-    }
-
-    /// Override the sumcheck strategy.
-    const fn with_sumcheck(mut self, sumcheck: SumcheckStrategy) -> Self {
-        self.sumcheck = sumcheck;
         self
     }
 
@@ -116,27 +93,37 @@ impl Options {
     }
 }
 
-/// Pre-built benchmark fixture.
-struct Bench {
-    /// Derived per-round protocol configuration.
-    config: WhirConfig<EF, F, Mmcs, Challenger>,
-    /// User-facing protocol parameters retained for proof allocation.
-    proto: ProtocolParameters<Mmcs>,
-    /// DFT engine pre-loaded with twiddles up to the largest commit FFT.
-    dft: Radix2DFTSmallBatch<F>,
-    /// Random multilinear polynomial committed by every iteration.
-    polynomial: Poly<F>,
-    /// Evaluation points whose claims drive the prover's sumcheck rounds.
-    eval_points: Vec<Point<EF>>,
+/// Per-round inverse-rate schedule matching the default protocol parameters.
+///
+/// Each entry is the log-2 inverse rate of the Reed-Solomon code used in that
+/// round. Round 0 starts at rate 1 and each subsequent round absorbs one fewer
+/// rate halving per folded variable.
+fn default_round_log_inv_rates(num_variables: usize, folding_factor: &FoldingFactor) -> Vec<usize> {
+    let (num_rounds, _) = folding_factor.compute_number_of_rounds(num_variables);
+    let mut rates = Vec::with_capacity(num_rounds);
+    let mut rate = 1;
+    for round in 0..num_rounds {
+        rate += folding_factor.at_round(round) - 1;
+        rates.push(rate);
+    }
+    rates
+}
+
+/// Pre-built benchmark fixture parameterized by the sumcheck layout mode.
+struct Bench<L: Layout<F, EF>> {
+    /// Fully-instantiated WHIR PCS.
+    pcs: Pcs<L>,
+    /// Pre-built witness; cloned at the start of each iteration.
+    witness: <Pcs<L> as MultilinearPcs<EF, Challenger>>::Witness,
+    /// Public opening protocol matching the witness shape.
+    protocol: OpeningProtocol,
     /// Fiat-Shamir domain separator binding the protocol structure.
     domain_separator: DomainSeparator<EF, F>,
     /// Pristine challenger cloned at the start of each iteration.
     base_challenger: Challenger,
-    /// Initial-round sumcheck variant under test.
-    sumcheck: SumcheckStrategy,
 }
 
-impl Bench {
+impl<L: Layout<F, EF>> Bench<L> {
     /// Build a fresh fixture from user-facing options.
     fn new(opts: Options) -> Self {
         // Deterministic Poseidon2 instances;
@@ -154,70 +141,43 @@ impl Bench {
         );
 
         // Translate user options into the protocol's parameter struct.
-        let proto = ProtocolParameters {
+        let folding_factor = FoldingFactor::Constant(opts.folding);
+        let params = ProtocolParameters {
             security_level: SECURITY_LEVEL,
             pow_bits: DEFAULT_MAX_POW,
-            folding_factor: FoldingFactor::Constant(opts.folding),
-            mmcs,
+            round_log_inv_rates: default_round_log_inv_rates(opts.num_variables, &folding_factor),
+            folding_factor,
             soundness_type: opts.soundness,
             starting_log_inv_rate: opts.log_inv_rate,
-            rs_domain_initial_reduction_factor: RS_INITIAL_REDUCTION,
         };
 
-        // Derive the per-round configuration.
-        let config = WhirConfig::<EF, F, Mmcs, Challenger>::new(opts.num_variables, proto.clone());
+        // Derive the per-round configuration and pre-allocate FFT twiddles.
+        let config = WhirConfig::<EF, F, Challenger>::new(opts.num_variables, params);
+        let dft = Dft::new(1 << config.max_fft_size());
+        let pcs = Pcs::<L>::new(config, dft, mmcs);
 
-        // Pre-allocate twiddles up to the largest FFT performed at commit.
-        let dft = Radix2DFTSmallBatch::<F>::new(1 << config.max_fft_size());
-
-        // Random polynomial of 2^m coefficients; same seed across runs.
+        // Single random table of one column committed by every iteration.
         let mut data_rng = SmallRng::seed_from_u64(0xD157A1B);
-        let polynomial = Poly::<F>::new(
-            (0..1 << opts.num_variables)
-                .map(|_| data_rng.random())
-                .collect(),
-        );
+        let table = Table::new(vec![Poly::<F>::rand(&mut data_rng, opts.num_variables)]);
+        let witness = L::new_witness(vec![table], opts.folding);
 
-        // Evaluation claims to prove.
-        let eval_points = (0..NUM_EVALUATIONS)
-            .map(|_| Point::rand(&mut data_rng, opts.num_variables))
-            .collect();
+        // Open the single column NUM_EVALUATIONS times at fresh sampled points.
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            TableShape::new(opts.num_variables, 1),
+            vec![vec![0]; NUM_EVALUATIONS],
+        )]);
 
         // Bind the protocol structure into the Fiat-Shamir transcript.
         let mut domain_separator = DomainSeparator::<EF, F>::new(vec![]);
-        domain_separator.commit_statement::<_, _, 32>(&config);
-        domain_separator.add_whir_proof::<_, _, 32>(&config);
+        pcs.add_domain_separator::<8>(&mut domain_separator);
 
         Self {
-            config,
-            proto,
-            dft,
-            polynomial,
-            eval_points,
+            pcs,
+            witness,
+            protocol,
             domain_separator,
             base_challenger: Challenger::new(poseidon16),
-            sumcheck: opts.sumcheck,
         }
-    }
-
-    /// Initial statement seeded with the cached evaluation claims.
-    ///
-    /// A new statement is allocated per iteration:
-    /// - commit mutates it by appending OOD constraints,
-    /// - the verifier-side claim must come from a pre-OOD copy.
-    fn statement(&self) -> InitialStatement<F, EF> {
-        let mut statement = self
-            .config
-            .initial_statement(self.polynomial.clone(), self.sumcheck);
-        for point in &self.eval_points {
-            let _ = statement.evaluate(point);
-        }
-        statement
-    }
-
-    /// Empty proof container shaped for this configuration.
-    fn proof(&self) -> WhirProof<F, EF, Mmcs> {
-        WhirProof::<F, EF, Mmcs>::from_protocol_parameters(&self.proto, self.config.num_variables)
     }
 
     /// Pristine challenger with the domain separator already absorbed.
@@ -228,66 +188,45 @@ impl Bench {
         challenger
     }
 
-    /// Run the commit phase and return the per-iteration mutable inputs.
-    ///
-    /// Used to seed both the prove benchmark and the verify-side proof construction.
-    fn commit(&self) -> CommitOutput {
-        let mut proof = self.proof();
-        let mut statement = self.statement();
-        let mut challenger = self.challenger();
-        let prover_data = CommitmentWriter::new(&self.config)
-            .commit(&self.dft, &mut proof, &mut challenger, &mut statement)
-            .unwrap();
-        (proof, statement, challenger, prover_data)
-    }
-
-    /// Build a complete proof outside any timed region.
-    fn full_proof(&self) -> WhirProof<F, EF, Mmcs> {
-        let (mut proof, statement, mut challenger, prover_data) = self.commit();
-        WhirProver(&self.config)
-            .prove(
-                &self.dft,
-                &mut proof,
-                &mut challenger,
-                &statement,
-                prover_data,
-            )
-            .unwrap();
-        proof
-    }
-
     /// Time the commit phase under the given criterion group.
     fn bench_commit(&self, group: &mut BenchmarkGroup<'_, WallTime>, label: &str) {
         group.bench_function(BenchmarkId::from_parameter(label), |b| {
             b.iter_batched(
-                || (self.proof(), self.statement(), self.challenger()),
-                |(mut proof, mut statement, mut challenger)| {
-                    CommitmentWriter::new(&self.config)
-                        .commit(&self.dft, &mut proof, &mut challenger, &mut statement)
-                        .unwrap()
+                || (self.witness.clone(), self.challenger()),
+                |(witness, mut challenger)| {
+                    <Pcs<L> as MultilinearPcs<EF, Challenger>>::commit(
+                        &self.pcs,
+                        witness,
+                        &mut challenger,
+                    )
                 },
                 BatchSize::PerIteration,
             );
         });
     }
 
-    /// Time the prove phase.
+    /// Time the open phase.
     ///
-    /// Commit is run during setup and excluded from the measurement window.
+    /// Commit runs in setup and is excluded from the measurement window.
     fn bench_prove(&self, group: &mut BenchmarkGroup<'_, WallTime>, label: &str) {
         group.bench_function(BenchmarkId::from_parameter(label), |b| {
             b.iter_batched(
-                || self.commit(),
-                |(mut proof, statement, mut challenger, prover_data)| {
-                    WhirProver(&self.config)
-                        .prove(
-                            &self.dft,
-                            &mut proof,
-                            &mut challenger,
-                            &statement,
-                            prover_data,
-                        )
-                        .unwrap();
+                || {
+                    let mut challenger = self.challenger();
+                    let (_, prover_data) = <Pcs<L> as MultilinearPcs<EF, Challenger>>::commit(
+                        &self.pcs,
+                        self.witness.clone(),
+                        &mut challenger,
+                    );
+                    (prover_data, challenger)
+                },
+                |(prover_data, mut challenger)| {
+                    <Pcs<L> as MultilinearPcs<EF, Challenger>>::open(
+                        &self.pcs,
+                        prover_data,
+                        self.protocol.clone(),
+                        &mut challenger,
+                    )
                 },
                 BatchSize::PerIteration,
             );
@@ -298,21 +237,31 @@ impl Bench {
     ///
     /// The proof is built once outside the measurement window; only verification is timed.
     fn bench_verify(&self, group: &mut BenchmarkGroup<'_, WallTime>, label: &str) {
-        let proof = self.full_proof();
+        let mut challenger = self.challenger();
+        let (commitment, prover_data) = <Pcs<L> as MultilinearPcs<EF, Challenger>>::commit(
+            &self.pcs,
+            self.witness.clone(),
+            &mut challenger,
+        );
+        let proof = <Pcs<L> as MultilinearPcs<EF, Challenger>>::open(
+            &self.pcs,
+            prover_data,
+            self.protocol.clone(),
+            &mut challenger,
+        );
+
         group.bench_function(BenchmarkId::from_parameter(label), |b| {
             b.iter_batched(
-                || {
-                    // Re-derive verifier-side state per iteration.
-                    let verifier_statement = self.statement().normalize();
-                    let mut challenger = self.challenger();
-                    let parsed = CommitmentReader::new(&self.config)
-                        .parse_commitment::<F, 8>(&proof, &mut challenger);
-                    (challenger, parsed, verifier_statement)
-                },
-                |(mut challenger, parsed, verifier_statement)| {
-                    WhirVerifier::new(&self.config)
-                        .verify(&proof, &mut challenger, &parsed, verifier_statement)
-                        .unwrap();
+                || self.challenger(),
+                |mut challenger| {
+                    <Pcs<L> as MultilinearPcs<EF, Challenger>>::verify(
+                        &self.pcs,
+                        &commitment,
+                        &proof,
+                        &mut challenger,
+                        self.protocol.clone(),
+                    )
+                    .unwrap();
                 },
                 BatchSize::PerIteration,
             );
@@ -332,7 +281,8 @@ fn configure_heavy(group: &mut BenchmarkGroup<'_, WallTime>) {
 
 /// Scaling sweep across small / medium / large at the default options.
 fn bench_scaling(c: &mut Criterion) {
-    let cases: [(&str, Bench); 3] = [
+    type L = SuffixProver<F, EF>;
+    let cases: [(&str, Bench<L>); 3] = [
         ("small", Bench::new(Options::sized(SMALL))),
         ("medium", Bench::new(Options::sized(MEDIUM))),
         ("large", Bench::new(Options::sized(LARGE))),
@@ -374,16 +324,14 @@ fn bench_scaling(c: &mut Criterion) {
 fn bench_options(c: &mut Criterion) {
     let base = Options::sized(MEDIUM);
 
-    // Sumcheck strategy: classic vs SVO. The user-requested axis.
+    // Layout: SVO suffix vs prefix binding order.
+    //
+    // Replaces the legacy SumcheckStrategy axis after the sumcheck refactor.
     {
-        let mut group = c.benchmark_group("whir_pcs/options/sumcheck");
+        let mut group = c.benchmark_group("whir_pcs/options/layout");
         configure_heavy(&mut group);
-        for (label, mode) in [
-            ("classic", SumcheckStrategy::Classic),
-            ("svo", SumcheckStrategy::Svo),
-        ] {
-            Bench::new(base.with_sumcheck(mode)).bench_prove(&mut group, label);
-        }
+        Bench::<SuffixProver<F, EF>>::new(base).bench_prove(&mut group, "suffix");
+        Bench::<PrefixProver<F, EF>>::new(base).bench_prove(&mut group, "prefix");
         group.finish();
     }
 
@@ -396,22 +344,19 @@ fn bench_options(c: &mut Criterion) {
             ("jb", SecurityAssumption::JohnsonBound),
             ("cb", SecurityAssumption::CapacityBound),
         ] {
-            Bench::new(base.with_soundness(assumption)).bench_prove(&mut group, label);
+            Bench::<SuffixProver<F, EF>>::new(base.with_soundness(assumption))
+                .bench_prove(&mut group, label);
         }
         group.finish();
     }
 
     // Folding factor: trades round count against per-round work.
-    //
-    // The lower bound k = 3 matches `RS_INITIAL_REDUCTION`.
-    //
-    // A smaller k would violate the protocol invariant that the first-round
-    // domain reduction never exceeds the folding factor.
     {
         let mut group = c.benchmark_group("whir_pcs/options/folding");
         configure_heavy(&mut group);
         for k in [3_usize, 4, 5] {
-            Bench::new(base.with_folding(k)).bench_prove(&mut group, &format!("k{k}"));
+            Bench::<SuffixProver<F, EF>>::new(base.with_folding(k))
+                .bench_prove(&mut group, &format!("k{k}"));
         }
         group.finish();
     }
