@@ -378,7 +378,7 @@ impl Field for Goldilocks {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
     type Packing = crate::PackedGoldilocksAVX512;
 
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     type Packing = crate::PackedGoldilocksNeon;
 
     #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]

@@ -330,7 +330,7 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 const fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
     // Aarch64 can reverse bits in one instruction, so the trivial version works best.
     // use manual `while` loop to enable `const`
