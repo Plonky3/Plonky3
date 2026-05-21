@@ -93,7 +93,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
 
     /// Returns the element at the given row and column.
     ///
-    /// For a safe alternative, see [`get`].
+    /// For a safe alternative, see [`Self::get`].
     ///
     /// # Safety
     /// The caller must ensure that `r < self.height()` and `c < self.width()`.
@@ -123,7 +123,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
     ///
     /// The iterator will have `self.width()` elements.
     ///
-    /// For a safe alternative, see [`row`].
+    /// For a safe alternative, see [`Self::row`].
     ///
     /// # Safety
     /// The caller must ensure that `r < self.height()`.
@@ -138,9 +138,9 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
 
     /// Returns an iterator over the elements of the `r`-th row from position `start` to `end`.
     ///
-    /// When `start = 0` and `end = width()`, this is equivalent to [`row_unchecked`].
+    /// When `start = 0` and `end = width()`, this is equivalent to [`Self::row_unchecked`].
     ///
-    /// For a safe alternative, use [`row`], along with the `skip` and `take` iterator methods.
+    /// For a safe alternative, use [`Self::row`], along with the `skip` and `take` iterator methods.
     ///
     /// # Safety
     /// The caller must ensure that `r < self.height()` and `start <= end <= self.width()`.
@@ -173,7 +173,7 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
 
     /// Returns the elements of the `r`-th row as something which can be coerced to a slice.
     ///
-    /// For a safe alternative, see [`row_slice`].
+    /// For a safe alternative, see [`Self::row_slice`].
     ///
     /// # Safety
     /// The caller must ensure that `r < self.height()`.
@@ -185,9 +185,9 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
 
     /// Returns a subset of elements of the `r`-th row as something which can be coerced to a slice.
     ///
-    /// When `start = 0` and `end = width()`, this is equivalent to [`row_slice_unchecked`].
+    /// When `start = 0` and `end = width()`, this is equivalent to [`Self::row_slice_unchecked`].
     ///
-    /// For a safe alternative, see [`row_slice`].
+    /// For a safe alternative, see [`Self::row_slice`].
     ///
     /// # Safety
     /// The caller must ensure that `r < self.height()` and `start <= end <= self.width()`.

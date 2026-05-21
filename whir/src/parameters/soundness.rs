@@ -15,10 +15,10 @@ use serde::Serialize;
 /// The proximity gaps analysis is based on:
 /// - **[BCI+20]**: Ben-Sasson, Carmon, Ishai, Kopparty, Saraf. "Proximity Gaps for Reed-Solomon Codes".
 ///   FOCS 2020. <https://eprint.iacr.org/2020/654>
-/// - **[BCSS25]**: Ben-Sasson, Carmon, Haboeck, Kopparty, Saraf. "On Proximity Gaps for Reed-Solomon Codes".
+/// - **\[BCSS25\]**: Ben-Sasson, Carmon, Haboeck, Kopparty, Saraf. "On Proximity Gaps for Reed-Solomon Codes".
 ///   <https://eprint.iacr.org/2025/2055>
 ///
-/// The [BCSS25] paper significantly improves the Johnson bound proximity gaps from `O(n^2/eta^7)` to `O(n/eta^5)`,
+/// The \[BCSS25\] paper significantly improves the Johnson bound proximity gaps from `O(n^2/eta^7)` to `O(n/eta^5)`,
 /// enabling provable 128-bit security with smaller extension fields (e.g., degree-5 extension of KoalaBear).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum SecurityAssumption {
@@ -34,9 +34,9 @@ pub enum SecurityAssumption {
     ///
     /// # Proximity Gaps Improvement
     ///
-    /// The error bound uses Theorem 1.5 from [BCSS25]:
+    /// The error bound uses Theorem 1.5 from \[BCSS25\]:
     /// - **Old [BCI+20]**: `a = O(n^2/eta^7)` exceptional z's
-    /// - **New [BCSS25]**: `a = O(n/eta^5)` exceptional z's
+    /// - **New \[BCSS25\]**: `a = O(n/eta^5)` exceptional z's
     ///
     /// This improvement of factor `n*eta^2` translates to approximately `log_2(n)` additional bits of security,
     /// making provable 128-bit security achievable with degree-5 extensions of small prime fields.
@@ -96,7 +96,7 @@ impl SecurityAssumption {
     ///
     /// # Johnson Bound Improvement
     ///
-    /// For the Johnson bound case, this uses the improved Theorem 1.5 from [BCSS25]:
+    /// For the Johnson bound case, this uses the improved Theorem 1.5 from \[BCSS25\]:
     ///
     /// > "On Proximity Gaps for Reed-Solomon Codes" (eprint 2025/2055)
     /// > Ben-Sasson, Carmon, Haboeck, Kopparty, Saraf
@@ -115,7 +115,7 @@ impl SecurityAssumption {
     /// | Reference | Bound on exceptional z's | Proximity loss |
     /// |-----------|--------------------------|----------------|
     /// | [BCI+20]  | `O(n^2/eta^7)`             | 0              |
-    /// | [BCSS25]  | `O(n/eta^5)`               | 0              |
+    /// | \[BCSS25\]  | `O(n/eta^5)`               | 0              |
     ///
     /// The improvement factor of `n*eta^2` translates to approximately `log_2(n)` additional bits
     /// of provable security, enabling 128-bit security with degree-5 extensions of KoalaBear.
@@ -137,7 +137,7 @@ impl SecurityAssumption {
             // In UD the error is |L|/|F| = d/(rho*|F|)
             Self::UniqueDecoding => (log_degree + log_inv_rate) as f64,
 
-            // From Theorem 1.5 in [BCSS25] "On Proximity Gaps for Reed-Solomon Codes":
+            // From Theorem 1.5 in \[BCSS25\] "On Proximity Gaps for Reed-Solomon Codes":
             //
             // For gamma < J(delta) - eta, the number of exceptional z's is bounded by:
             //   a > (2(m + 1/2)^5 + 3(m + 1/2)*gamma*rho) / (3*rho^(3/2)) * n + (m + 1/2) / sqrt(rho)
@@ -493,7 +493,7 @@ mod tests {
         let computed_list_size = assumption.list_size_bits(log_degree, log_inv_rate);
         assert!((real_list_size.log2() - computed_list_size).abs() < 0.01);
 
-        // Prox gaps - Updated to use Theorem 1.5 from [BCSS25]
+        // Prox gaps - Updated to use Theorem 1.5 from \[BCSS25\]
         //
         // From "On Proximity Gaps for Reed-Solomon Codes" (eprint 2025/2055):
         // With eta = sqrt(rho)/20, m = 10, the error bound is:
@@ -578,7 +578,7 @@ mod tests {
     // Bounds on the size of the exceptional set |S|:
     //
     //     [BCI+20] Thm 5.1 :  |S| > (m + 1/2)^7 / 3      * n^2 / rho^{3/2}
-    //     [BCSS25] Thm 1.5 :  |S| > 2 * (m + 1/2)^5 / 3  * n   / rho^{3/2}
+    //     \[BCSS25\] Thm 1.5 :  |S| > 2 * (m + 1/2)^5 / 3  * n   / rho^{3/2}
     //
     // Safety choice eta = sqrt(rho) / 20  =>  multiplicity m = 10.
     //
@@ -592,14 +592,14 @@ mod tests {
     // - strict improvement, with the exact analytical gap pinned;
     // - new bound clears `security_level - MAX_POW_BITS` over a 155-bit field;
     // - full WHIR security budget hits 128 bits at a reference config;
-    // - curve folding costs log_2(M) bits per [BCSS25] Thm 4.2.
+    // - curve folding costs log_2(M) bits per \[BCSS25\] Thm 4.2.
 
     /// Field size in bits used by every test in this section.
     ///
     /// Equals `5 * ceil(log_2(p_KoalaBear))` with `p_KoalaBear = 2^31 - 2^24 + 1`,
     /// i.e. a degree-5 extension of the KoalaBear prime field.
     ///
-    /// Chosen because it is the smallest extension that gives the [BCSS25]
+    /// Chosen because it is the smallest extension that gives the \[BCSS25\]
     /// bound enough headroom for 128-bit WHIR soundness in the regimes tested.
     const KOALABEAR_QUINTIC_BITS: usize = 155;
 
@@ -622,7 +622,7 @@ mod tests {
     ///     |S| > (m + 1/2)^7 / 3 * n^2 / rho^{3/2}.
     /// ```
     ///
-    /// No leading factor of `2`: that factor belongs to the [BCSS25]
+    /// No leading factor of `2`: that factor belongs to the \[BCSS25\]
     /// statement only and would inflate this baseline.
     ///
     /// # Equivalence with [BCI+20] Theorem 1.2
@@ -853,7 +853,7 @@ mod tests {
     #[test]
     fn jb_prox_gap_scales_by_log_curve_degree() {
         // Invariant: combining `M + 1` functions costs exactly `log_2(M)`
-        // bits of prox-gap vs. the line case (M = 1), per [BCSS25] Thm 4.2.
+        // bits of prox-gap vs. the line case (M = 1), per \[BCSS25\] Thm 4.2.
         //
         // Fixture state:  log_degree=20, log_inv_rate=2, field=155.
         //

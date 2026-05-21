@@ -39,7 +39,7 @@ pub trait WindowAccess<T> {
 /// Stores two `&[T]` slices — one for the current row and one for
 /// the next — without carrying any matrix metadata.  This is cheaper
 /// than a full `ViewPair` and is the concrete type used by most
-/// [`AirBuilder`] implementations for `type MainWindow` / `type PreprocessedWindow`.
+/// [`AirBuilder`](crate::AirBuilder) implementations for `type MainWindow` / `type PreprocessedWindow`.
 #[derive(Debug, Clone, Copy)]
 pub struct RowWindow<'a, T> {
     /// The current row.

@@ -8,6 +8,10 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+default = []
+parallel = ["p3-maybe-rayon/parallel"]
+
 [dependencies]
 hashbrown = { workspace = true }
 p3-air = { workspace = true }
@@ -30,10 +34,6 @@ p3-symmetric = { path = "../symmetric" }
 
 criterion.workspace = true
 rand.workspace = true
-
-[features]
-default = []
-parallel = ["p3-maybe-rayon/parallel"]
 
 [[bench]]
 name = "logup"

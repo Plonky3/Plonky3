@@ -313,7 +313,7 @@ fn coset_dft_oop<F: TwoAdicField + Ord>(
 /// For layer 0, all twiddle factors are 1 (root^0 = 1), so we use `TwiddleFreeButterfly`
 /// to avoid a Montgomery multiply by 1 across the entire matrix.
 ///
-/// For layers 1 to mid-1 included, the first twiddle in each block is also always 1 (twiddles[0] = 1),
+/// For layers 1 to mid-1 included, the first twiddle in each block is also always 1 (`twiddles[0] = 1`),
 /// so we special-case the first row-pair of each block to use `TwiddleFreeButterfly` as well.
 #[instrument(level = "debug", skip_all)]
 fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F]) {
@@ -370,7 +370,9 @@ fn first_half_general<F: Field>(
 /// Like `first_half_general`, except out-of-place.
 ///
 /// Assumes there's at least one layer in the network, i.e. `src.height() > 1`.
-/// Undefined behavior otherwise.
+///
+/// # Panics
+/// Panics (via `log2_strict_usize` and arithmetic underflow) if `src.height() < 2`.
 #[instrument(level = "debug", skip_all)]
 fn first_half_general_oop<F: Field>(
     src: &RowMajorMatrixView<'_, F>,

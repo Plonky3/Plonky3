@@ -214,7 +214,7 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
     }
 }
 
-/// Lagrange interpolation: given points (xs[i], ys[i]), evaluate at z.
+/// Lagrange interpolation: given points `(xs[i], ys[i])`, evaluate at z.
 ///
 /// Uses the barycentric formula for efficiency when xs are roots of unity.
 fn lagrange_interpolate_at<F: TwoAdicField, EF: ExtensionField<F>>(

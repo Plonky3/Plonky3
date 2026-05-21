@@ -91,7 +91,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
 
     /// Inner product of this eq table with a base-field slice.
     ///
-    /// Computes sum_{i} eq1[i] * chunk[i].
+    /// Computes `sum_{i} eq1[i] * chunk[i]`.
     ///
     /// For packed tables, reinterprets the input slice as packed elements
     /// and reduces the SIMD lanes via horizontal sum at the end.
@@ -114,7 +114,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
 
     /// Inner product of this eq table with an extension-field slice.
     ///
-    /// Computes sum_{i} eq1[i] * chunk[i].
+    /// Computes `sum_{i} eq1[i] * chunk[i]`.
     ///
     /// For packed tables, groups the input into W-element sub-slices,
     /// converts each group to a packed element, then reduces at the end.
@@ -139,7 +139,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
 
     /// Inner product of this eq table with a pre-packed extension-field slice.
     ///
-    /// Computes sum_{i} eq1[i] * chunk[i] where both sides are already packed.
+    /// Computes `sum_{i} eq1[i] * chunk[i]` where both sides are already packed.
     ///
     /// # Panics
     ///
@@ -155,7 +155,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         }
     }
 
-    /// Adds weight * eq1[i] to each element of a scalar output buffer.
+    /// Adds `weight * eq1[i]` to each element of a scalar output buffer.
     ///
     /// ```text
     /// out[i] += weight * eq1[i]   for all i
@@ -185,7 +185,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         }
     }
 
-    /// Adds weight * eq1[i] to each element of a packed output buffer.
+    /// Adds `weight * eq1[i]` to each element of a packed output buffer.
     ///
     /// ```text
     /// out[i] += weight * eq1[i]   for all i (packed elements)
@@ -208,7 +208,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
 
     /// Weighted accumulation for prefix-variable compression.
     ///
-    /// For each eq1 entry, accumulates w0 * eq1[i] * chunk_row[j] into out[j].
+    /// For each eq1 entry, accumulates `w0 * eq1[i] * chunk_row[j]` into `out[j]`.
     ///
     /// The input chunk contains data for all eq1 entries interleaved
     /// with the inner (output) dimension. The output buffer has one entry

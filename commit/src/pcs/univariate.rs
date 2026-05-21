@@ -81,7 +81,7 @@ where
 
     /// Given a collection of evaluation matrices, produce a binding commitment to
     /// the polynomials defined by those evaluations. If `zk` is enabled, the evaluations are
-    /// first randomized as explained in Section 3 of https://eprint.iacr.org/2024/1037.pdf .
+    /// first randomized as explained in Section 3 of <https://eprint.iacr.org/2024/1037.pdf>.
     ///
     /// Returns both the commitment which should be sent to the verifier
     /// and the prover data which can be used to produce opening proofs.
