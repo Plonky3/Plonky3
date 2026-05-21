@@ -29,15 +29,6 @@ pub struct MerkleCap<F, Digest> {
     _marker: PhantomData<F>,
 }
 
-impl<F, Digest: Default> Default for MerkleCap<F, Digest> {
-    fn default() -> Self {
-        Self {
-            cap: vec![Digest::default()],
-            _marker: PhantomData,
-        }
-    }
-}
-
 impl<F, Digest> MerkleCap<F, Digest> {
     /// Create a new `MerkleCap` from a vector of digests.
     pub fn new(cap: Vec<Digest>) -> Self {
