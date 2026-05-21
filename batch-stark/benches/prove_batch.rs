@@ -1,4 +1,5 @@
 use core::borrow::Borrow;
+use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
@@ -156,15 +157,22 @@ fn bench_prove_batch(c: &mut Criterion) {
             .collect();
 
         let prover_data = ProverData::from_instances(&config, &instances);
+        let airs: Vec<_> = instances_data.iter().map(|(air, _, _)| *air).collect();
+        let pvs: Vec<_> = instances_data
+            .iter()
+            .map(|(_, _, pis)| pis.clone())
+            .collect();
 
-        group.bench_function(BenchmarkId::new("fib", n_instances), |b| {
+        group.bench_function(BenchmarkId::new("fib_prove_only", n_instances), |b| {
             b.iter(|| {
                 let proof = prove_batch(&config, &instances, &prover_data);
+                black_box(proof);
+            });
+        });
 
-                // Lightweight sanity check — only on the first iteration would be
-                // enough, but verify is cheap relative to prove so we keep it.
-                let airs: Vec<_> = instances_data.iter().map(|(a, _, _)| *a).collect();
-                let pvs: Vec<_> = instances_data.iter().map(|(_, _, p)| p.clone()).collect();
+        group.bench_function(BenchmarkId::new("fib_prove_verify", n_instances), |b| {
+            b.iter(|| {
+                let proof = prove_batch(&config, &instances, &prover_data);
                 verify_batch(&config, &airs, &proof, &pvs, &prover_data.common).unwrap();
             });
         });
