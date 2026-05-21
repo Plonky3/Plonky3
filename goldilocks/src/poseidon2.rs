@@ -1,4 +1,4 @@
-//! Implementation of Poseidon2, see: https://eprint.iacr.org/2023/323
+//! Implementation of Poseidon2, see: <https://eprint.iacr.org/2023/323>
 
 use alloc::vec::Vec;
 

@@ -337,7 +337,7 @@ type CommitStep<'a, F, M> = (
 );
 
 /// Verifies a single query chain in the FRI proof. This is the verifier complement
-/// to the prover's [`answer_query`] function.
+/// to the prover's `answer_query` function.
 ///
 /// Given an initial `index` corresponding to a point in the initial domain
 /// and a series of `reduced_openings` corresponding to evaluations of

@@ -173,7 +173,8 @@ jobs:
         run: cargo +stable clippy --all-targets -- -D warnings
 
       - name: Docs
-        # TODO: promote to `rustdoc::broken_intra_doc_links`
+        env:
+          RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
         run: cargo +stable doc --no-deps --workspace --document-private-items
 
       - name: Format
