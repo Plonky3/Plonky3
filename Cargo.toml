@@ -34,6 +34,7 @@ members = [
     "poseidon2",
     "poseidon2-air",
     "rescue",
+    "security",
     "sha256",
     "sumcheck",
     "symmetric",
@@ -125,6 +126,7 @@ p3-poseidon1-air = { path = "poseidon1-air", version = "0.5.1" }
 p3-poseidon2 = { path = "poseidon2", version = "0.5.1" }
 p3-poseidon2-air = { path = "poseidon2-air", version = "0.5.1" }
 p3-rescue = { path = "rescue", version = "0.5.1" }
+p3-security = { path = "security", version = "0.5.1" }
 p3-sha256 = { path = "sha256", version = "0.5.1" }
 p3-sumcheck = { path = "sumcheck", version = "0.5.1" }
 p3-symmetric = { path = "symmetric", version = "0.5.1" }
