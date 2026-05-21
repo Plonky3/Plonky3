@@ -161,13 +161,18 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Install cargo-sort
-        run: cargo install cargo-sort
+      - name: Install cargo-sort and taplo
+        run: |
+          cargo install cargo-sort
+          cargo install taplo-cli
 
       - uses: Swatinem/rust-cache@v2
-        
+
       - name: Sort Cargo.toml
         run: cargo +stable sort --workspace --grouped --check
+
+      - name: Check TOML formatting
+        run: taplo fmt --check
 
       - name: Clippy
         run: cargo +stable clippy --all-targets -- -D warnings

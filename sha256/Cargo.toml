@@ -9,6 +9,9 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+default = []
+
 [dependencies]
 p3-symmetric.workspace = true
 p3-util.workspace = true
@@ -17,9 +20,6 @@ sha2.workspace = true
 
 [dev-dependencies]
 hex-literal.workspace = true
-
-[features]
-default = []
 
 [lints]
 workspace = true
