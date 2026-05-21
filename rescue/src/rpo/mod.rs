@@ -19,7 +19,6 @@ mod koala_bear;
 mod mersenne_31;
 
 pub use baby_bear::*;
-pub(crate) use goldilocks::apply_inv_sbox_x7;
 pub use goldilocks::*;
 pub use koala_bear::*;
 pub use mersenne_31::*;

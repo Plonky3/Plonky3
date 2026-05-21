@@ -5,9 +5,7 @@ extern crate alloc;
 
 mod rescue;
 mod rpo;
-mod rpx;
 mod util;
 
 pub use rescue::*;
 pub use rpo::*;
-pub use rpx::*;
