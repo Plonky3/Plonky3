@@ -134,7 +134,9 @@ pub trait HasTwoAdicBinomialExtension<const D: usize>: BinomiallyExtendable<D> {
     /// Returns a two-adic generator for the extension field.
     ///
     /// This is used to generate the 2^bits-th roots of unity in the extension field.
-    /// Behavior is undefined if `bits > EXT_TWO_ADICITY`.
+    ///
+    /// # Panics
+    /// Panics if `bits > EXT_TWO_ADICITY`.
     #[must_use]
     fn ext_two_adic_generator(bits: usize) -> [Self; D];
 }
