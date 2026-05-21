@@ -176,7 +176,7 @@ pub fn reduce_packed<SF: PrimeField32, TF: PrimeField>(vals: &[SF], radix_bits: 
     })
 }
 
-/// Largest `b` such that every integer in `[0, 2^b)` maps injectively into `F` via [`PrimeField32::from_int`].
+/// Largest `b` such that every integer in `[0, 2^b)` maps injectively into `F` via `PrimeField32::from_int`.
 ///
 /// Equivalently `b = floor(log2(p-1))` for prime `p = F::ORDER_U32`.
 #[inline]
@@ -231,14 +231,14 @@ pub fn max_shifted_packed_injective_limbs<F: PrimeField32, PF: PrimeField>(
 }
 
 /// Maximum limbs per [`PrimeField`] rate slot when absorbing with radix
-/// $2^{\texttt{absorb\_radix\_bits::<F>()}}$ (see [`reduce_packed`]).
+/// $2^{\texttt{absorb\\_radix\\_bits::\<F\>()}}$ (see [`reduce_packed`]).
 #[must_use]
 pub fn max_absorb_injective_limbs<F: PrimeField32, PF: PrimeField>() -> usize {
     max_packed_injective_limbs::<F, PF>(absorb_radix_bits::<F>())
 }
 
 /// Maximum shifted limbs per [`PrimeField`] rate slot when absorbing with radix
-/// $2^{\texttt{absorb\_radix\_bits::<F>()}}$ (see [`reduce_packed_shifted`]).
+/// $2^{\texttt{absorb\\_radix\\_bits::\<F\>()}}$ (see [`reduce_packed_shifted`]).
 #[must_use]
 pub fn max_shifted_absorb_injective_limbs<F: PrimeField32, PF: PrimeField>() -> usize {
     max_shifted_packed_injective_limbs::<F, PF>(absorb_radix_bits::<F>())
@@ -262,7 +262,7 @@ pub fn pf_packed_limbs_cover_order<SF: PrimeField>(num_limbs: usize, radix_bits:
 /// **Parameter requirements**
 ///
 /// - `radix_bits ≤ injective_pack_bits::<TF>()` so each limb maps injectively into `TF` via
-///   [`PrimeField32::from_int`]. If `radix_bits` is too large, distinct limbs can collide after
+///   `PrimeField32::from_int`. If `radix_bits` is too large, distinct limbs can collide after
 ///   reduction modulo `TF::ORDER`.
 /// - For a **lossless** transcript binding of arbitrary `SF` values, also require
 ///   `pf_packed_limbs_cover_order::<SF>(num_limbs, radix_bits)`. Deliberately truncated

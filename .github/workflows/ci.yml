@@ -172,5 +172,9 @@ jobs:
       - name: Clippy
         run: cargo +stable clippy --all-targets -- -D warnings
 
+      - name: Docs
+        # TODO: promote to `rustdoc::broken_intra_doc_links`
+        run: cargo +stable doc --no-deps --workspace --document-private-items
+
       - name: Format
         run: cargo +nightly fmt --all -- --check
