@@ -3,6 +3,9 @@
 //! - Goldilocks (width 12): [eprint 2022/1577](https://eprint.iacr.org/2022/1577).
 //! - Mersenne-31 (width 24, with concluding linear layer):
 //!   [eprint 2024/1635](https://eprint.iacr.org/2024/1635).
+//! - BabyBear and KoalaBear (width 24, with concluding linear layer): no published
+//!   spec; layout mirrors RPO-M31 with each field's native S-box exponent
+//!   (BabyBear: alpha=7, KoalaBear: alpha=3).
 
 use alloc::vec::Vec;
 
@@ -10,11 +13,15 @@ use p3_field::{PermutationMonomial, PrimeField};
 
 use crate::util::shake256_hash;
 
+mod baby_bear;
 mod goldilocks;
+mod koala_bear;
 mod mersenne_31;
 
+pub use baby_bear::*;
 pub(crate) use goldilocks::apply_inv_sbox_x7;
 pub use goldilocks::*;
+pub use koala_bear::*;
 pub use mersenne_31::*;
 
 /// The Rescue-Prime Optimized permutation.
