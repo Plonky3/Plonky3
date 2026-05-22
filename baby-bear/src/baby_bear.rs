@@ -173,26 +173,17 @@ impl AbstractField for BabyBear {
 }
 
 impl Field for BabyBear {
-    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-    type Packing = crate::PackedBabyBearNeon;
-    #[cfg(all(
-        target_arch = "x86_64",
-        target_feature = "avx2",
-        not(target_feature = "avx512f")
-    ))]
-    type Packing = crate::PackedBabyBearAVX2;
-    #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
-    type Packing = crate::PackedBabyBearAVX512;
-    #[cfg(not(any(
-        all(target_arch = "aarch64", target_feature = "neon"),
-        all(
-            target_arch = "x86_64",
-            target_feature = "avx2",
-            not(target_feature = "avx512f")
-        ),
-        all(target_arch = "x86_64", target_feature = "avx512f"),
-    )))]
-    type Packing = Self;
+    cfg_if::cfg_if! {
+        if #[cfg(all(target_arch = "aarch64", target_feature = "neon"))] {
+            type Packing = crate::PackedBabyBearNeon;
+        } else if #[cfg(all(target_arch = "x86_64", target_feature = "avx512f", rustc_version_1_89_or_later))] {
+            type Packing = crate::PackedBabyBearAVX512;
+        } else if #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))] {
+            type Packing = crate::PackedBabyBearAVX2;
+        } else {
+            type Packing = Self;
+        }
+    }
 
     #[inline]
     fn mul_2exp_u64(&self, exp: u64) -> Self {
