@@ -310,20 +310,13 @@ fn compute_logup_contribution(
     let beta = challenges.beta;
     let vals_read_len = vals_read.len();
     let val_read: EF = vals_read.iter().rev().copied().horner(beta);
-
-    let val_provided: EF = vals_provided
-        .iter()
-        .rev()
-        .copied()
-        .map(EF::from)
-        .horner(beta);
+    let val_provided: EF = vals_provided.iter().rev().copied().horner(beta);
 
     if vals_read_len == 0 {
         // Then we're only computing the contribution for the provided value.
-        (alpha - EF::from(val_provided)).inverse() * EF::from(mult)
+        (alpha - val_provided).inverse() * EF::from(mult)
     } else {
-        (alpha - EF::from(val_read)).inverse()
-            - (alpha - EF::from(val_provided)).inverse() * EF::from(mult)
+        (alpha - val_read).inverse() - (alpha - val_provided).inverse() * EF::from(mult)
     }
 }
 

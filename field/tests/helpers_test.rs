@@ -154,9 +154,10 @@ mod helpers {
         // via the original reduce_32 (which uses base 2^32) only when values are small.
         // Instead, manually reconstruct with the matching radix.
         let base = Goldilocks::from_u64(1u64 << pb);
-        let recomposed: Goldilocks = limbs.iter().rev().fold(Goldilocks::ZERO, |acc, &limb| {
-            acc * base + Goldilocks::from_u64(limb.as_canonical_u32() as u64)
-        });
+        let recomposed: Goldilocks = limbs
+            .iter()
+            .map(|limb| Goldilocks::from_u64(limb.as_canonical_u32() as u64))
+            .horner(base);
         assert_eq!(recomposed, g);
     }
 
@@ -228,9 +229,10 @@ mod helpers {
         }
         // Recompose in base p_F and verify.
         let p = BigUint::from(BabyBear::ORDER_U32);
-        let recomposed: BigUint = limbs.iter().rev().fold(BigUint::from(0u32), |acc, limb| {
-            acc * &p + BigUint::from(limb.as_canonical_u32())
-        });
+        let recomposed: BigUint = limbs
+            .iter()
+            .map(|limb| BigUint::from(limb.as_canonical_u32()))
+            .horner(&p);
         assert_eq!(
             recomposed,
             g.as_canonical_biguint() % p.pow(num_limbs as u32)
@@ -590,5 +592,39 @@ mod helpers {
         let high_eval: BabyBear = high.iter().copied().horner(x);
         let combined: BabyBear = low.iter().copied().horner_acc(high_eval, x);
         assert_eq!(combined, one_shot);
+    }
+
+    #[test]
+    fn horner_with_extension_accumulator_over_base_coefficients() {
+        // Production call sites have Acc = EF (extension) and Item = F (base);
+        // the bound `Acc: Add<Self::Item, Output = Acc>` is satisfied via the
+        // `Algebra<F>` supertrait of `ExtensionField`. Pin that contract here
+        // with an `x` that exercises all extension coordinates (not just the
+        // base embedding).
+        use p3_field::BasedVectorSpace;
+        type EF = p3_field::extension::BinomialExtensionField<BabyBear, 4>;
+        let coeffs: [BabyBear; 4] = [
+            BabyBear::from_u32(1),
+            BabyBear::from_u32(2),
+            BabyBear::from_u32(3),
+            BabyBear::from_u32(4),
+        ];
+        let x = EF::from_basis_coefficients_slice(&[
+            BabyBear::from_u32(5),
+            BabyBear::from_u32(6),
+            BabyBear::from_u32(7),
+            BabyBear::from_u32(8),
+        ])
+        .unwrap();
+
+        let horner: EF = coeffs.iter().copied().horner(x);
+
+        let mut expected = EF::ZERO;
+        let mut power = EF::ONE;
+        for &c in &coeffs {
+            expected += power * c;
+            power *= x;
+        }
+        assert_eq!(horner, expected);
     }
 }

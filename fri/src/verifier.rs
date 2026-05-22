@@ -1588,11 +1588,7 @@ mod tests {
         proof.final_poly[0] += Challenge::ONE;
 
         // Evaluate the corrupted polynomial at the same point.
-        let corrupted_eval = proof
-            .final_poly
-            .iter()
-            .rev()
-            .fold(Challenge::ZERO, |acc, &c| acc * x + c);
+        let corrupted_eval: Challenge = proof.final_poly.iter().copied().horner(x);
 
         // The two must differ — this is what the verifier would catch.
         assert_ne!(honest_eval, corrupted_eval);
