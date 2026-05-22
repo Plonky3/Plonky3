@@ -669,7 +669,7 @@ mod tests {
     use p3_commit::{BatchOpening, ExtensionMmcs, Mmcs, Pcs};
     use p3_dft::Radix2Dit;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::{Field, PrimeCharacteristicRing};
+    use p3_field::{Field, HornerIter, PrimeCharacteristicRing};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -1582,11 +1582,7 @@ mod tests {
 
         // Evaluate the honest polynomial at an arbitrary point.
         let x = Val::TWO;
-        let honest_eval = proof
-            .final_poly
-            .iter()
-            .rev()
-            .fold(Challenge::ZERO, |acc, &c| acc * x + c);
+        let honest_eval: Challenge = proof.final_poly.iter().copied().horner(x);
 
         // Corrupt the constant coefficient.
         proof.final_poly[0] += Challenge::ONE;

@@ -9,7 +9,7 @@ use p3_air::{
 };
 use p3_baby_bear::BabyBear;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PrimeCharacteristicRing};
+use p3_field::{Field, HornerIter, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use rand::rngs::SmallRng;
@@ -309,13 +309,14 @@ fn compute_logup_contribution(
     let alpha = challenges.alpha;
     let beta = challenges.beta;
     let vals_read_len = vals_read.len();
-    let val_read = vals_read
-        .iter()
-        .fold(EF::ZERO, |acc, &v| acc * beta + EF::from(v));
+    let val_read: EF = vals_read.iter().rev().copied().map(EF::from).horner(beta);
 
-    let val_provided = vals_provided
+    let val_provided: EF = vals_provided
         .iter()
-        .fold(EF::ZERO, |acc, &v| acc * beta + EF::from(v));
+        .rev()
+        .copied()
+        .map(EF::from)
+        .horner(beta);
 
     if vals_read_len == 0 {
         // Then we're only computing the contribution for the provided value.

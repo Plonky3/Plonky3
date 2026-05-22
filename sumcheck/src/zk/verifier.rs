@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, HornerIter};
 use p3_multilinear_util::point::Point;
 
 use super::data::ZkSumcheckData;
@@ -221,11 +221,7 @@ where
             coeffs_vec.push(c0);
             coeffs_vec.push(c1);
             coeffs_vec.extend_from_slice(&wire[1..]);
-            let h_at_gamma_j: EF = coeffs_vec
-                .iter()
-                .rev()
-                .copied()
-                .fold(EF::ZERO, |acc, c| acc * gamma_j + c);
+            let h_at_gamma_j: EF = coeffs_vec.iter().copied().horner(gamma_j);
 
             target = h_at_gamma_j;
             randomness.push(gamma_j);
