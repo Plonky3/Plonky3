@@ -1,7 +1,7 @@
 mod helpers {
     use p3_baby_bear::BabyBear;
     use p3_field::{
-        Field, PrimeCharacteristicRing, PrimeField, PrimeField32, absorb_radix_bits,
+        Field, HornerIter, PrimeCharacteristicRing, PrimeField, PrimeField32, absorb_radix_bits,
         add_scaled_slice_in_place, chunked_mixed_dot_product, dispatch_chunked_mixed_dot_product,
         dot_product, field_to_array, injective_pack_bits, max_absorb_injective_limbs,
         max_packed_injective_limbs, max_shifted_absorb_injective_limbs,
@@ -508,5 +508,87 @@ mod helpers {
         let f = [BabyBear::ONE; 4];
 
         let _ = dispatch_chunked_mixed_dot_product::<BabyBear, BabyBear, 4>(&a, &f, 3);
+    }
+
+    #[test]
+    fn horner_empty_iterator_is_zero() {
+        // Empty iterator → empty sum, both forms return ZERO.
+        let coeffs: [BabyBear; 0] = [];
+        let x = BabyBear::from_u32(7);
+        assert_eq!(
+            coeffs.iter().copied().horner::<BabyBear, _>(x),
+            BabyBear::ZERO
+        );
+        assert_eq!(
+            coeffs.iter().copied().horner_acc(BabyBear::ZERO, x),
+            BabyBear::ZERO,
+        );
+    }
+
+    #[test]
+    fn horner_single_coefficient_is_constant() {
+        // [c] is a degree-0 polynomial; the result is c regardless of x.
+        let c = BabyBear::from_u32(42);
+        let coeffs = [c];
+        assert_eq!(
+            coeffs
+                .iter()
+                .copied()
+                .horner::<BabyBear, _>(BabyBear::from_u32(7)),
+            c
+        );
+        assert_eq!(
+            coeffs.iter().copied().horner::<BabyBear, _>(BabyBear::ZERO),
+            c
+        );
+    }
+
+    #[test]
+    fn horner_matches_running_power_loop() {
+        // Coefficients are ascending: result = Σ c_i · x^i.
+        let coeffs: [BabyBear; 5] = [
+            BabyBear::from_u32(3),
+            BabyBear::from_u32(5),
+            BabyBear::from_u32(7),
+            BabyBear::from_u32(11),
+            BabyBear::from_u32(13),
+        ];
+        let x = BabyBear::from_u32(4);
+
+        let horner: BabyBear = coeffs.iter().copied().horner(x);
+
+        let mut expected = BabyBear::ZERO;
+        let mut power = BabyBear::ONE;
+        for &c in &coeffs {
+            expected += c * power;
+            power *= x;
+        }
+        assert_eq!(horner, expected);
+    }
+
+    #[test]
+    fn horner_acc_composes_over_concatenated_coefficients() {
+        // For ascending coefficients [low ‖ high] (low covers degrees 0..l,
+        // high covers degrees l..l+h):
+        //
+        //     P(x) = (Σ_i low_i x^i) + x^l · (Σ_j high_j x^j).
+        //
+        // `horner_acc(seed, x)` on `low` returns `seed · x^l + Σ_i low_i x^i`,
+        // so passing the standalone `high` evaluation as the seed reconstructs P.
+        let low: [BabyBear; 3] = [
+            BabyBear::from_u32(2),
+            BabyBear::from_u32(3),
+            BabyBear::from_u32(5),
+        ];
+        let high: [BabyBear; 2] = [BabyBear::from_u32(7), BabyBear::from_u32(11)];
+        let x = BabyBear::from_u32(6);
+
+        let mut concat = low.to_vec();
+        concat.extend_from_slice(&high);
+        let one_shot: BabyBear = concat.iter().copied().horner(x);
+
+        let high_eval: BabyBear = high.iter().copied().horner(x);
+        let combined: BabyBear = low.iter().copied().horner_acc(high_eval, x);
+        assert_eq!(combined, one_shot);
     }
 }
