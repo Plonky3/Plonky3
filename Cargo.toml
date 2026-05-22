@@ -66,6 +66,7 @@ transmute_undefined_repr = "allow"
 cognitive_complexity = "allow"
 
 [workspace.dependencies]
+bincode = "1.3"
 blake3 = { version = "1.8", default-features = false }
 clap = { version = "4.5.60", features = ["derive"] }
 criterion = "0.8"

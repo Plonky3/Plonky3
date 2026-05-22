@@ -39,12 +39,12 @@ p3-keccak = { path = "../keccak" }
 p3-koala-bear = { path = "../koala-bear" }
 p3-sumcheck = { workspace = true, features = ["test-util"] }
 
+bincode.workspace = true
 clap.workspace = true
 criterion.workspace = true
 proptest.workspace = true
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
-bincode = "1.3"
 
 [[bench]]
 name = "sumcheck"
