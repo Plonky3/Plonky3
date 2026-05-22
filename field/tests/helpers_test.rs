@@ -1,10 +1,10 @@
 mod helpers {
     use p3_baby_bear::BabyBear;
     use p3_field::{
-        Field, HornerIter, PrimeCharacteristicRing, PrimeField, PrimeField32, absorb_radix_bits,
-        add_scaled_slice_in_place, chunked_mixed_dot_product, dispatch_chunked_mixed_dot_product,
-        dot_product, field_to_array, injective_pack_bits, max_absorb_injective_limbs,
-        max_packed_injective_limbs, max_shifted_absorb_injective_limbs,
+        BasedVectorSpace, Field, HornerIter, PrimeCharacteristicRing, PrimeField, PrimeField32,
+        absorb_radix_bits, add_scaled_slice_in_place, chunked_mixed_dot_product,
+        dispatch_chunked_mixed_dot_product, dot_product, field_to_array, injective_pack_bits,
+        max_absorb_injective_limbs, max_packed_injective_limbs, max_shifted_absorb_injective_limbs,
         max_shifted_packed_injective_limbs, par_add_scaled_slice_in_place,
         pf_packed_limbs_cover_order, reduce_32, reduce_packed, reduce_packed_shifted, split_32,
         split_pf_to_field_order_limbs, split_pf_to_packed_limbs, squeeze_field_order_num_limbs,
@@ -596,19 +596,19 @@ mod helpers {
 
     #[test]
     fn horner_with_extension_accumulator_over_base_coefficients() {
-        // Production call sites have Acc = EF (extension) and Item = F (base);
-        // the bound `Acc: Add<Self::Item, Output = Acc>` is satisfied via the
-        // `Algebra<F>` supertrait of `ExtensionField`. Pin that contract here
-        // with an `x` that exercises all extension coordinates (not just the
-        // base embedding).
-        use p3_field::BasedVectorSpace;
+        // Cross-type Horner: base-field coefficients, extension-field point.
+        // The other Horner tests in this file use the same field on both sides.
         type EF = p3_field::extension::BinomialExtensionField<BabyBear, 4>;
+
         let coeffs: [BabyBear; 4] = [
             BabyBear::from_u32(1),
             BabyBear::from_u32(2),
             BabyBear::from_u32(3),
             BabyBear::from_u32(4),
         ];
+
+        // All coordinates non-zero so the evaluation exercises every extension
+        // component, not just the base-field embedding.
         let x = EF::from_basis_coefficients_slice(&[
             BabyBear::from_u32(5),
             BabyBear::from_u32(6),
@@ -619,6 +619,7 @@ mod helpers {
 
         let horner: EF = coeffs.iter().copied().horner(x);
 
+        // Reference: explicit sum_{i} c_i * x^i.
         let mut expected = EF::ZERO;
         let mut power = EF::ONE;
         for &c in &coeffs {
