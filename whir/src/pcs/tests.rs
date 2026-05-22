@@ -7,12 +7,12 @@ use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
-use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
+use p3_field::Field;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use rand::SeedableRng;
 use rand::rngs::SmallRng;
+use rand::SeedableRng;
 
 use crate::fiat_shamir::domain_separator::DomainSeparator;
 use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
@@ -283,11 +283,11 @@ mod error_variant_tests {
 
     use p3_commit::MultilinearPcs;
     use p3_multilinear_util::poly::Poly;
-    use rand::SeedableRng;
     use rand::rngs::SmallRng;
+    use rand::SeedableRng;
 
     use super::{
-        EF, F, MyChallenger, MyCompress, MyDft, MyHash, MyMmcs, Perm, TestWhirPcs, challenger,
+        challenger, MyChallenger, MyCompress, MyDft, MyHash, MyMmcs, Perm, TestWhirPcs, EF, F,
     };
     use crate::fiat_shamir::domain_separator::DomainSeparator;
     use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
@@ -534,6 +534,38 @@ mod error_variant_tests {
     }
 
     #[test]
+    fn rejects_with_final_poly_length_mismatch_when_tail_has_extra_evals() {
+        // Invariant: the final polynomial must have exactly the verifier-expected
+        // number of evaluations before it is absorbed into the transcript.
+        //
+        // Mutation: duplicate the honest tail, preserving Poly's power-of-two
+        // shape but changing the WHIR-level final length.
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        let final_poly = proof
+            .whir
+            .final_poly
+            .as_ref()
+            .expect("honest fixture should contain final_poly");
+        let expected = final_poly.num_evals();
+        let mut evals = final_poly.as_slice().to_vec();
+        let duplicate = evals.clone();
+        evals.extend_from_slice(&duplicate);
+        proof.whir.final_poly = Some(Poly::new(evals));
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::FinalPolyLengthMismatch {
+                expected: e,
+                actual,
+            } => {
+                assert_eq!(e, expected);
+                assert_eq!(actual, expected * 2);
+            }
+            other => panic!("expected FinalPolyLengthMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn rejects_with_round_ood_answer_count_mismatch_when_answer_is_dropped() {
         // Invariant: each round carries exactly the verifier-expected OOD answers.
         //
@@ -643,8 +675,8 @@ mod keccak_tests {
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_multilinear_util::poly::Poly;
     use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
-    use rand::SeedableRng;
     use rand::rngs::SmallRng;
+    use rand::SeedableRng;
 
     use crate::fiat_shamir::domain_separator::DomainSeparator;
     use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};

@@ -16,12 +16,12 @@ use tracing::instrument;
 use super::committer::reader::ParsedCommitment;
 use super::utils::get_challenge_stir_queries;
 use crate::alloc::string::ToString;
-use crate::constraints::Constraint;
 use crate::constraints::statement::SelectStatement;
+use crate::constraints::Constraint;
 use crate::parameters::{RoundConfig, WhirConfig};
 use crate::pcs::proof::{QueryOpening, WhirProof};
 use crate::sumcheck::strategy::VariableOrder;
-use crate::sumcheck::{SumcheckError, verify_final_sumcheck_rounds};
+use crate::sumcheck::{verify_final_sumcheck_rounds, SumcheckError};
 
 pub mod errors;
 
@@ -183,6 +183,15 @@ where
             .final_poly
             .clone()
             .ok_or(VerifierError::MissingFinalPoly)?;
+        let final_round_config = self.final_round_config();
+        let expected_final_poly_len = 1usize << final_round_config.num_variables;
+        let actual_final_poly_len = final_evaluations.num_evals();
+        if actual_final_poly_len != expected_final_poly_len {
+            return Err(VerifierError::FinalPolyLengthMismatch {
+                expected: expected_final_poly_len,
+                actual: actual_final_poly_len,
+            });
+        }
         challenger.observe_algebra_slice(final_evaluations.as_slice());
 
         // Verify final STIR challenges.
@@ -194,7 +203,7 @@ where
         let stir_statement = self.verify_stir_challenges(
             proof,
             challenger,
-            &self.final_round_config(),
+            &final_round_config,
             &prev_commitment,
             final_round_folding_randomness,
             self.n_rounds(),
