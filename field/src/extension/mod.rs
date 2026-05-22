@@ -1,4 +1,5 @@
 use core::iter;
+use core::marker::PhantomData;
 
 use crate::field::Field;
 use crate::{Algebra, ExtensionField};
@@ -15,11 +16,97 @@ use alloc::vec::Vec;
 
 pub use binomial_extension::*;
 pub use complex::*;
-pub use cubic_extension::{CubicTrinomialExtensionField, trinomial_cubic_mul};
+pub use cubic_extension::{CubicTrinomialExtensionField, cubic_square, trinomial_cubic_mul};
 pub use packed_binomial_extension::*;
 pub use packed_cubic_extension::PackedCubicTrinomialExtensionField;
 pub use packed_quintic_extension::PackedQuinticTrinomialExtensionField;
-pub use quintic_extension::{QuinticTrinomialExtensionField, trinomial_quintic_mul};
+pub use quintic_extension::{QuinticTrinomialExtensionField, quintic_square, trinomial_quintic_mul};
+
+// ---------------------------------------------------------------------------
+// Shape-parameterized algebra for extension fields
+// ---------------------------------------------------------------------------
+//
+// Extension-ring arithmetic (mul / square / add / sub / base_mul) is exposed
+// via a single trait `ExtensionAlgebra<F, D, Shape>`, parameterized by:
+//   - the base field `F`,
+//   - the extension degree `D`,
+//   - a marker `Shape: ExtensionShape` selecting the reducing polynomial.
+//
+// The three supported shapes are:
+//   - `Binomial<F>`     — `F[X] / (X^D - W)`, degree-generic, `W = F::W`.
+//   - `CubicTrinomial`  — `F[X] / (X^3 - X - 1)`.
+//   - `QuinticTrinomial`— `F[X] / (X^5 + X^2 - 1)`.
+//
+// SIMD-packed types override `ext_mul` / `ext_square` with optimized kernels;
+// the other three methods have sensible coefficient-wise defaults.
+
+/// Sealed marker for the reducing polynomial shape of an extension field.
+///
+/// The three concrete shapes — [`Binomial`], [`CubicTrinomial`], and
+/// [`QuinticTrinomial`] — correspond to the reducers
+/// `X^D - W`, `X^3 - X - 1`, and `X^5 + X^2 - 1` respectively.
+pub trait ExtensionShape: 'static + sealed::Sealed {}
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+/// Marker for the binomial reducer `X^D - W` (degree-generic).
+#[derive(Debug)]
+pub struct Binomial<F>(PhantomData<F>);
+
+/// Marker for the trinomial reducer `X^3 - X - 1`.
+#[derive(Debug)]
+pub struct CubicTrinomial;
+
+/// Marker for the trinomial reducer `X^5 + X^2 - 1`.
+#[derive(Debug)]
+pub struct QuinticTrinomial;
+
+impl<F: Field> sealed::Sealed for Binomial<F> {}
+impl sealed::Sealed for CubicTrinomial {}
+impl sealed::Sealed for QuinticTrinomial {}
+
+impl<F: Field> ExtensionShape for Binomial<F> {}
+impl ExtensionShape for CubicTrinomial {}
+impl ExtensionShape for QuinticTrinomial {}
+
+/// Algebra over `F` that supports degree-`D` extension arithmetic with a given reducer `Shape`.
+///
+/// Of the five methods, `ext_add`/`ext_sub`/`ext_base_mul` are shape-agnostic and
+/// come with sensible default impls. `ext_mul`/`ext_square` are shape-dependent
+/// and must be supplied by each impl (typically a one-line delegation to the
+/// shape's free helper: `binomial_mul`/`binomial_square` for `Binomial<F>`,
+/// `trinomial_cubic_mul`/`cubic_square` for `CubicTrinomial`, and
+/// `trinomial_quintic_mul`/`quintic_square` for `QuinticTrinomial`).
+pub trait ExtensionAlgebra<F: Field, const D: usize, Shape: ExtensionShape>: Algebra<F> {
+    /// Multiplication in the algebra extension ring.
+    fn ext_mul(a: &[Self; D], b: &[Self; D], res: &mut [Self; D]);
+
+    /// Squaring in the algebra extension ring.
+    fn ext_square(a: &[Self; D], res: &mut [Self; D]);
+
+    /// Coefficient-wise addition.
+    #[inline]
+    #[must_use]
+    fn ext_add(a: &[Self; D], b: &[Self; D]) -> [Self; D] {
+        vector_add(a, b)
+    }
+
+    /// Coefficient-wise subtraction.
+    #[inline]
+    #[must_use]
+    fn ext_sub(a: &[Self; D], b: &[Self; D]) -> [Self; D] {
+        vector_sub(a, b)
+    }
+
+    /// Multiply an extension element by a base-field scalar.
+    #[inline]
+    #[must_use]
+    fn ext_base_mul(lhs: [Self; D], rhs: Self) -> [Self; D] {
+        lhs.map(|x| x * rhs.dup())
+    }
+}
 
 /// Trait for fields that support binomial extension of the form `F[X]/(X^D - W)`.
 ///
@@ -28,7 +115,7 @@ pub use quintic_extension::{QuinticTrinomialExtensionField, trinomial_quintic_mu
 ///
 /// This is used to construct extension fields with efficient arithmetic.
 pub trait BinomiallyExtendable<const D: usize>:
-    Field + BinomiallyExtendableAlgebra<Self, D>
+    Field + ExtensionAlgebra<Self, D, Binomial<Self>>
 {
     /// The constant coefficient `W` in the binomial `X^D - W`.
     const W: Self;
@@ -43,47 +130,6 @@ pub trait BinomiallyExtendable<const D: usize>:
     ///
     /// This is an array of size `D`, where each entry is a base field element.
     const EXT_GENERATOR: [Self; D];
-}
-
-/// Trait for algebras which support binomial extensions of the form `A[X]/(X^D - W)`
-/// with `W` in the base field `F`.
-pub trait BinomiallyExtendableAlgebra<F: Field, const D: usize>: Algebra<F> {
-    /// Multiplication in the algebra extension ring `A<X> / (X^D - W)`.
-    ///
-    /// Some algebras may want to reimplement this with faster methods.
-    #[inline]
-    fn binomial_mul(a: &[Self; D], b: &[Self; D], res: &mut [Self; D], w: F) {
-        binomial_mul::<F, Self, Self, D>(a, b, res, w);
-    }
-
-    /// Addition of elements in the algebra extension ring `A<X> / (X^D - W)`.
-    ///
-    /// As addition has no dependence on `W` so this is equivalent
-    /// to an algorithm for adding arrays of elements of `A`.
-    ///
-    /// Some algebras may want to reimplement this with faster methods.
-    #[inline]
-    #[must_use]
-    fn binomial_add(a: &[Self; D], b: &[Self; D]) -> [Self; D] {
-        vector_add(a, b)
-    }
-
-    /// Subtraction of elements in the algebra extension ring `A<X> / (X^D - W)`.
-    ///
-    /// As subtraction has no dependence on `W` so this is equivalent
-    /// to an algorithm for subtracting arrays of elements of `A`.
-    ///
-    /// Some algebras may want to reimplement this with faster methods.
-    #[inline]
-    #[must_use]
-    fn binomial_sub(a: &[Self; D], b: &[Self; D]) -> [Self; D] {
-        vector_sub(a, b)
-    }
-
-    #[inline]
-    fn binomial_base_mul(lhs: [Self; D], rhs: Self) -> [Self; D] {
-        lhs.map(|x| x * rhs.dup())
-    }
 }
 
 /// Trait for extension fields that support Frobenius automorphisms.
@@ -144,7 +190,7 @@ pub trait HasTwoAdicBinomialExtension<const D: usize>: BinomiallyExtendable<D> {
 /// Trait for fields that support a degree-3 extension using the trinomial `X^3 - X - 1`.
 ///
 /// Implement only when `X^3 - X - 1` is irreducible over the base field.
-pub trait CubicTrinomialExtendable: Field + CubicExtendableAlgebra<Self> {
+pub trait CubicTrinomialExtendable: Field + ExtensionAlgebra<Self, 3, CubicTrinomial> {
     /// Linear map for the Frobenius automorphism on `Σ a_i X^i` in the power basis `(1, X, X^2)`.
     ///
     /// Row `i` contains the coefficients of the image of `X^i` under Frobenius (the first row
@@ -153,50 +199,6 @@ pub trait CubicTrinomialExtendable: Field + CubicExtendableAlgebra<Self> {
 
     /// A generator of the multiplicative group of `F_{p^3}^*`, as polynomial coefficients.
     const EXT_GENERATOR: [Self; 3];
-}
-
-/// Trait for algebras supporting cubic extension arithmetic over `A[X]/(X^3 - X - 1)`.
-pub trait CubicExtendableAlgebra<F: Field>: Algebra<F> {
-    /// Multiply two elements in the cubic extension ring.
-    ///
-    /// Computes `a * b mod (X^3 - X - 1)` and stores the result in `res`.
-    #[inline]
-    fn cubic_mul(a: &[Self; 3], b: &[Self; 3], res: &mut [Self; 3]) {
-        cubic_extension::trinomial_cubic_mul(a, b, res);
-    }
-
-    /// Square an element in the cubic extension ring.
-    ///
-    /// Computes `a^2 mod (X^3 - X - 1)` and stores the result in `res`.
-    /// Uses optimized formulas exploiting the symmetry `a_i * a_j = a_j * a_i`.
-    #[inline]
-    fn cubic_square(a: &[Self; 3], res: &mut [Self; 3]) {
-        cubic_extension::cubic_square(a, res);
-    }
-
-    /// Add two elements in the cubic extension ring.
-    ///
-    /// Addition is coefficient-wise and independent of the modulus polynomial.
-    #[inline]
-    #[must_use]
-    fn cubic_add(a: &[Self; 3], b: &[Self; 3]) -> [Self; 3] {
-        vector_add(a, b)
-    }
-
-    /// Subtract two elements in the cubic extension ring.
-    ///
-    /// Subtraction is coefficient-wise and independent of the modulus polynomial.
-    #[inline]
-    #[must_use]
-    fn cubic_sub(a: &[Self; 3], b: &[Self; 3]) -> [Self; 3] {
-        vector_sub(a, b)
-    }
-
-    /// Multiply a cubic extension element by a base field scalar.
-    #[inline]
-    fn cubic_base_mul(lhs: [Self; 3], rhs: Self) -> [Self; 3] {
-        lhs.map(|x| x * rhs.dup())
-    }
 }
 
 /// Trait for cubic trinomial extensions that expose two-adic subgroup generators.
@@ -213,7 +215,7 @@ pub trait HasTwoAdicCubicExtension: CubicTrinomialExtendable {
 ///
 /// This trait should only be implemented for fields where `X^5 + X^2 - 1` is irreducible.
 /// The implementor must verify irreducibility for their specific field.
-pub trait QuinticTrinomialExtendable: Field + QuinticExtendableAlgebra<Self> {
+pub trait QuinticTrinomialExtendable: Field + ExtensionAlgebra<Self, 5, QuinticTrinomial> {
     /// Frobenius coefficients for the quintic extension.
     ///
     /// `FROBENIUS_COEFFS[k]` represents `X^{(k+1)*p} mod (X^5 + X^2 - 1)` as a polynomial
@@ -226,53 +228,6 @@ pub trait QuinticTrinomialExtendable: Field + QuinticExtendableAlgebra<Self> {
     ///
     /// Represented as polynomial coefficients `[g_0, g_1, g_2, g_3, g_4]`.
     const EXT_GENERATOR: [Self; 5];
-}
-
-/// Trait for algebras supporting quintic extension arithmetic over `A[X]/(X^5 + X^2 - 1)`.
-///
-/// Implementors may override the default methods with optimized versions
-/// (e.g., SIMD implementations for packed fields).
-pub trait QuinticExtendableAlgebra<F: Field>: Algebra<F> {
-    /// Multiply two elements in the quintic extension ring.
-    ///
-    /// Computes `a * b mod (X^5 + X^2 - 1)` and stores the result in `res`.
-    #[inline]
-    fn quintic_mul(a: &[Self; 5], b: &[Self; 5], res: &mut [Self; 5]) {
-        quintic_extension::trinomial_quintic_mul(a, b, res);
-    }
-
-    /// Square an element in the quintic extension ring.
-    ///
-    /// Computes `a^2 mod (X^5 + X^2 - 1)` and stores the result in `res`.
-    /// Uses optimized formulas exploiting the symmetry `a_i * a_j = a_j * a_i`.
-    #[inline]
-    fn quintic_square(a: &[Self; 5], res: &mut [Self; 5]) {
-        quintic_extension::quintic_square(a, res);
-    }
-
-    /// Add two elements in the quintic extension ring.
-    ///
-    /// Addition is coefficient-wise and independent of the modulus polynomial.
-    #[inline]
-    #[must_use]
-    fn quintic_add(a: &[Self; 5], b: &[Self; 5]) -> [Self; 5] {
-        vector_add(a, b)
-    }
-
-    /// Subtract two elements in the quintic extension ring.
-    ///
-    /// Subtraction is coefficient-wise and independent of the modulus polynomial.
-    #[inline]
-    #[must_use]
-    fn quintic_sub(a: &[Self; 5], b: &[Self; 5]) -> [Self; 5] {
-        vector_sub(a, b)
-    }
-
-    /// Multiply a quintic extension element by a base field scalar.
-    #[inline]
-    fn quintic_base_mul(lhs: [Self; 5], rhs: Self) -> [Self; 5] {
-        lhs.map(|x| x * rhs.dup())
-    }
 }
 
 /// Trait for quintic extensions that support two-adic subgroup generators.

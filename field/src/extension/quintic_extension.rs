@@ -23,7 +23,9 @@ use serde::{Deserialize, Serialize};
 
 use super::packed_quintic_extension::PackedQuinticTrinomialExtensionField;
 use super::{HasFrobenius, HasTwoAdicQuinticExtension};
-use crate::extension::{QuinticExtendableAlgebra, QuinticTrinomialExtendable};
+use crate::extension::{
+    ExtensionAlgebra, QuinticTrinomial, QuinticTrinomialExtendable,
+};
 use crate::field::Field;
 use crate::{
     Algebra, BasedVectorSpace, ExtensionField, Packable, PackedFieldExtension,
@@ -233,7 +235,7 @@ impl<F: QuinticTrinomialExtendable> QuinticTrinomialExtensionField<F> {
 impl<F, A> PrimeCharacteristicRing for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
-    A: QuinticExtendableAlgebra<F> + Copy,
+    A: ExtensionAlgebra<F, 5, QuinticTrinomial> + Copy,
 {
     type PrimeSubfield = <A as PrimeCharacteristicRing>::PrimeSubfield;
 
@@ -255,7 +257,7 @@ where
     #[inline(always)]
     fn square(&self) -> Self {
         let mut res = Self::default();
-        A::quintic_square(&self.value, &mut res.value);
+        <A as ExtensionAlgebra<F, 5, QuinticTrinomial>>::ext_square(&self.value, &mut res.value);
         res
     }
 
@@ -403,13 +405,13 @@ where
 impl<F, A> Add for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
-    A: QuinticExtendableAlgebra<F>,
+    A: ExtensionAlgebra<F, 5, QuinticTrinomial>,
 {
     type Output = Self;
 
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        Self::new(A::quintic_add(&self.value, &rhs.value))
+        Self::new(<A as ExtensionAlgebra<F, 5, QuinticTrinomial>>::ext_add(&self.value, &rhs.value))
     }
 }
 
@@ -430,11 +432,11 @@ where
 impl<F, A> AddAssign for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
-    A: QuinticExtendableAlgebra<F>,
+    A: ExtensionAlgebra<F, 5, QuinticTrinomial>,
 {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
-        self.value = A::quintic_add(&self.value, &rhs.value);
+        self.value = <A as ExtensionAlgebra<F, 5, QuinticTrinomial>>::ext_add(&self.value, &rhs.value);
     }
 }
 
@@ -452,7 +454,7 @@ where
 impl<F, A> Sum for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
-    A: QuinticExtendableAlgebra<F> + Copy,
+    A: ExtensionAlgebra<F, 5, QuinticTrinomial> + Copy,
 {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
@@ -463,13 +465,13 @@ where
 impl<F, A> Sub for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
-    A: QuinticExtendableAlgebra<F>,
+    A: ExtensionAlgebra<F, 5, QuinticTrinomial>,
 {
     type Output = Self;
 
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        Self::new(A::quintic_sub(&self.value, &rhs.value))
+        Self::new(<A as ExtensionAlgebra<F, 5, QuinticTrinomial>>::ext_sub(&self.value, &rhs.value))
     }
 }
 
@@ -491,11 +493,11 @@ where
 impl<F, A> SubAssign for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
-    A: QuinticExtendableAlgebra<F>,
+    A: ExtensionAlgebra<F, 5, QuinticTrinomial>,
 {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
-        self.value = A::quintic_sub(&self.value, &rhs.value);
+        self.value = <A as ExtensionAlgebra<F, 5, QuinticTrinomial>>::ext_sub(&self.value, &rhs.value);
     }
 }
 
@@ -513,14 +515,14 @@ where
 impl<F, A> Mul for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
-    A: QuinticExtendableAlgebra<F>,
+    A: ExtensionAlgebra<F, 5, QuinticTrinomial>,
 {
     type Output = Self;
 
     #[inline]
     fn mul(self, rhs: Self) -> Self {
         let mut res = Self::default();
-        A::quintic_mul(&self.value, &rhs.value, &mut res.value);
+        <A as ExtensionAlgebra<F, 5, QuinticTrinomial>>::ext_mul(&self.value, &rhs.value, &mut res.value);
         res
     }
 }
@@ -528,20 +530,20 @@ where
 impl<F, A> Mul<A> for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
-    A: QuinticExtendableAlgebra<F>,
+    A: ExtensionAlgebra<F, 5, QuinticTrinomial>,
 {
     type Output = Self;
 
     #[inline]
     fn mul(self, rhs: A) -> Self {
-        Self::new(A::quintic_base_mul(self.value, rhs))
+        Self::new(<A as ExtensionAlgebra<F, 5, QuinticTrinomial>>::ext_base_mul(self.value, rhs))
     }
 }
 
 impl<F, A> MulAssign for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
-    A: QuinticExtendableAlgebra<F>,
+    A: ExtensionAlgebra<F, 5, QuinticTrinomial>,
 {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
@@ -552,7 +554,7 @@ where
 impl<F, A> MulAssign<A> for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
-    A: QuinticExtendableAlgebra<F>,
+    A: ExtensionAlgebra<F, 5, QuinticTrinomial>,
 {
     #[inline]
     fn mul_assign(&mut self, rhs: A) {
@@ -563,7 +565,7 @@ where
 impl<F, A> Product for QuinticTrinomialExtensionField<F, A>
 where
     F: QuinticTrinomialExtendable,
-    A: QuinticExtendableAlgebra<F> + Copy,
+    A: ExtensionAlgebra<F, 5, QuinticTrinomial> + Copy,
 {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
@@ -660,7 +662,7 @@ pub fn trinomial_quintic_mul<R: PrimeCharacteristicRing>(a: &[R; 5], b: &[R; 5],
 
 /// Square an element in the quintic extension field.
 #[inline]
-pub(super) fn quintic_square<R: PrimeCharacteristicRing>(a: &[R; 5], res: &mut [R; 5]) {
+pub fn quintic_square<R: PrimeCharacteristicRing>(a: &[R; 5], res: &mut [R; 5]) {
     // Precompute doubled coefficients for cross terms
     let a0_2 = a[0].double();
     let a1_2 = a[1].double();

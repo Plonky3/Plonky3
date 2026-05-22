@@ -15,7 +15,9 @@ use rand::prelude::Distribution;
 use serde::{Deserialize, Serialize};
 
 use super::{HasFrobenius, HasTwoAdicBinomialExtension, PackedBinomialExtensionField};
-use crate::extension::{BinomiallyExtendable, BinomiallyExtendableAlgebra};
+use crate::extension::{
+    Binomial, BinomiallyExtendable, ExtensionAlgebra,
+};
 use crate::field::Field;
 use crate::{
     Algebra, BasedVectorSpace, Dup, ExtensionField, Packable, PrimeCharacteristicRing,
@@ -233,7 +235,7 @@ impl<F: BinomiallyExtendable<D>, const D: usize> HasFrobenius<F> for BinomialExt
 impl<F, A, const D: usize> PrimeCharacteristicRing for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: BinomiallyExtendableAlgebra<F, D> + Copy,
+    A: ExtensionAlgebra<F, D, Binomial<F>> + Copy,
 {
     type PrimeSubfield = <A as PrimeCharacteristicRing>::PrimeSubfield;
 
@@ -430,13 +432,13 @@ where
 impl<F, A, const D: usize> Add for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: BinomiallyExtendableAlgebra<F, D>,
+    A: ExtensionAlgebra<F, D, Binomial<F>>,
 {
     type Output = Self;
 
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        let value = A::binomial_add(&self.value, &rhs.value);
+        let value = <A as ExtensionAlgebra<F, D, Binomial<F>>>::ext_add(&self.value, &rhs.value);
         Self::new(value)
     }
 }
@@ -458,11 +460,11 @@ where
 impl<F, A, const D: usize> AddAssign for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: BinomiallyExtendableAlgebra<F, D>,
+    A: ExtensionAlgebra<F, D, Binomial<F>>,
 {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
-        self.value = A::binomial_add(&self.value, &rhs.value);
+        self.value = <A as ExtensionAlgebra<F, D, Binomial<F>>>::ext_add(&self.value, &rhs.value);
     }
 }
 
@@ -480,7 +482,7 @@ where
 impl<F, A, const D: usize> Sum for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: BinomiallyExtendableAlgebra<F, D> + Copy,
+    A: ExtensionAlgebra<F, D, Binomial<F>> + Copy,
 {
     #[inline]
     fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
@@ -491,13 +493,13 @@ where
 impl<F, A, const D: usize> Sub for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: BinomiallyExtendableAlgebra<F, D>,
+    A: ExtensionAlgebra<F, D, Binomial<F>>,
 {
     type Output = Self;
 
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        let value = A::binomial_sub(&self.value, &rhs.value);
+        let value = <A as ExtensionAlgebra<F, D, Binomial<F>>>::ext_sub(&self.value, &rhs.value);
         Self::new(value)
     }
 }
@@ -520,11 +522,11 @@ where
 impl<F, A, const D: usize> SubAssign for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: BinomiallyExtendableAlgebra<F, D>,
+    A: ExtensionAlgebra<F, D, Binomial<F>>,
 {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
-        self.value = A::binomial_sub(&self.value, &rhs.value);
+        self.value = <A as ExtensionAlgebra<F, D, Binomial<F>>>::ext_sub(&self.value, &rhs.value);
     }
 }
 
@@ -542,7 +544,7 @@ where
 impl<F, A, const D: usize> Mul for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: BinomiallyExtendableAlgebra<F, D>,
+    A: ExtensionAlgebra<F, D, Binomial<F>>,
 {
     type Output = Self;
 
@@ -551,9 +553,11 @@ where
         let a = self.value;
         let b = rhs.value;
         let mut res = Self::default();
-        let w = F::W;
 
-        A::binomial_mul(&a, &b, &mut res.value, w);
+        // Migrated to the unified shape-parameterized `ExtensionAlgebra` trait.
+        // `W` is now reached through the bridge impl (which projects `F::W`),
+        // so callers no longer pass it explicitly.
+        <A as ExtensionAlgebra<F, D, Binomial<F>>>::ext_mul(&a, &b, &mut res.value);
 
         res
     }
@@ -562,20 +566,20 @@ where
 impl<F, A, const D: usize> Mul<A> for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: BinomiallyExtendableAlgebra<F, D>,
+    A: ExtensionAlgebra<F, D, Binomial<F>>,
 {
     type Output = Self;
 
     #[inline]
     fn mul(self, rhs: A) -> Self {
-        Self::new(A::binomial_base_mul(self.value, rhs))
+        Self::new(<A as ExtensionAlgebra<F, D, Binomial<F>>>::ext_base_mul(self.value, rhs))
     }
 }
 
 impl<F, A, const D: usize> MulAssign for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: BinomiallyExtendableAlgebra<F, D>,
+    A: ExtensionAlgebra<F, D, Binomial<F>>,
 {
     #[inline]
     fn mul_assign(&mut self, rhs: Self) {
@@ -586,7 +590,7 @@ where
 impl<F, A, const D: usize> MulAssign<A> for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: BinomiallyExtendableAlgebra<F, D>,
+    A: ExtensionAlgebra<F, D, Binomial<F>>,
 {
     #[inline]
     fn mul_assign(&mut self, rhs: A) {
@@ -597,7 +601,7 @@ where
 impl<F, A, const D: usize> Product for BinomialExtensionField<F, D, A>
 where
     F: BinomiallyExtendable<D>,
-    A: BinomiallyExtendableAlgebra<F, D> + Copy,
+    A: ExtensionAlgebra<F, D, Binomial<F>> + Copy,
 {
     #[inline]
     fn product<I: Iterator<Item = Self>>(iter: I) -> Self {
@@ -661,7 +665,7 @@ pub fn vector_add<R: PrimeCharacteristicRing + Add<R2, Output = R>, R2: Dup, con
 
 /// Subtract two vectors element wise.
 #[inline]
-pub(crate) fn vector_sub<
+pub fn vector_sub<
     R: PrimeCharacteristicRing + Sub<R2, Output = R>,
     R2: Dup,
     const D: usize,
@@ -674,7 +678,7 @@ pub(crate) fn vector_sub<
 
 /// Multiply two vectors representing elements in a binomial extension.
 #[inline]
-pub(super) fn binomial_mul<
+pub fn binomial_mul<
     F: Field,
     R: Algebra<F> + Algebra<R2>,
     R2: Algebra<F>,
@@ -709,7 +713,7 @@ pub(super) fn binomial_mul<
 ///
 /// This is optimized for the case that R is a prime field or its packing.
 #[inline]
-pub(super) fn binomial_square<F: Field, R: Algebra<F>, const D: usize>(
+pub fn binomial_square<F: Field, R: Algebra<F>, const D: usize>(
     a: &[R; D],
     res: &mut [R; D],
     w: F,
