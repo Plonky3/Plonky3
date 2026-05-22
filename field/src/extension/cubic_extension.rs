@@ -8,7 +8,6 @@ use alloc::vec::Vec;
 use core::array;
 use core::fmt::{self, Display, Formatter};
 use core::iter::{Product, Sum};
-use core::marker::PhantomData;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use itertools::Itertools;
@@ -16,13 +15,10 @@ use num_bigint::BigUint;
 use p3_util::{as_base_slice, as_base_slice_mut, flatten_to_base, reconstitute_from_base};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
-use serde::{Deserialize, Serialize};
 
 use super::packed_cubic_extension::PackedCubicTrinomialExtensionField;
-use super::{HasFrobenius, HasTwoAdicCubicExtension};
-use crate::extension::{
-    CubicTrinomial, CubicTrinomialExtendable, ExtensionAlgebra,
-};
+use super::{ExtField, HasFrobenius, HasTwoAdicCubicExtension};
+use crate::extension::{CubicTrinomial, CubicTrinomialExtendable, ExtensionAlgebra};
 use crate::field::Field;
 use crate::{
     Algebra, BasedVectorSpace, ExtensionField, Packable, PackedFieldExtension,
@@ -32,31 +28,9 @@ use crate::{
 /// A degree-3 extension field using `X^3 - X - 1`.
 ///
 /// Elements are `a_0 + a_1 X + a_2 X^2` with coefficients in the base field.
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
-#[repr(transparent)] // Needed to make various casts safe.
-#[must_use]
-pub struct CubicTrinomialExtensionField<F, A = F> {
-    #[serde(
-        with = "p3_util::array_serialization",
-        bound(serialize = "A: Serialize", deserialize = "A: Deserialize<'de>")
-    )]
-    pub(crate) value: [A; 3],
-    _phantom: PhantomData<F>,
-}
-
-impl<F, A> CubicTrinomialExtensionField<F, A> {
-    /// Create an extension field element from an array of base elements.
-    ///
-    /// Any array is accepted. No reduction is required since
-    /// base elements are already valid field elements.
-    #[inline]
-    pub const fn new(value: [A; 3]) -> Self {
-        Self {
-            value,
-            _phantom: PhantomData,
-        }
-    }
-}
+///
+/// Type alias for the unified [`ExtField`] with `Shape = CubicTrinomial`.
+pub type CubicTrinomialExtensionField<F, A = F> = ExtField<F, 3, CubicTrinomial, A>;
 
 impl<F: Copy> CubicTrinomialExtensionField<F, F> {
     /// Convert a `[[F; D]; N]` array to an array of extension field elements.

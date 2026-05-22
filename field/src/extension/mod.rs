@@ -52,15 +52,15 @@ mod sealed {
 }
 
 /// Marker for the binomial reducer `X^D - W` (degree-generic).
-#[derive(Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, PartialOrd, Ord)]
 pub struct Binomial<F>(PhantomData<F>);
 
 /// Marker for the trinomial reducer `X^3 - X - 1`.
-#[derive(Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, PartialOrd, Ord)]
 pub struct CubicTrinomial;
 
 /// Marker for the trinomial reducer `X^5 + X^2 - 1`.
-#[derive(Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, PartialOrd, Ord)]
 pub struct QuinticTrinomial;
 
 impl<F: Field> sealed::Sealed for Binomial<F> {}
@@ -70,6 +70,48 @@ impl sealed::Sealed for QuinticTrinomial {}
 impl<F: Field> ExtensionShape for Binomial<F> {}
 impl ExtensionShape for CubicTrinomial {}
 impl ExtensionShape for QuinticTrinomial {}
+
+/// Unified extension-field representation.
+///
+/// An `ExtField<F, D, Shape, A>` represents an element of a degree-`D` extension
+/// of the base field `F`, with the reducing polynomial determined by `Shape`.
+/// The `A` parameter is the algebra over `F` storing each coefficient — usually
+/// `F` itself for scalar elements, or `F::Packing` for SIMD-packed elements.
+///
+/// The three public-facing extension types — [`BinomialExtensionField`],
+/// [`CubicTrinomialExtensionField`], [`QuinticTrinomialExtensionField`] — are
+/// type aliases over this struct with their respective `Shape`s.
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, serde::Serialize, serde::Deserialize, PartialOrd, Ord)]
+#[repr(transparent)] // Needed to make various casts safe.
+#[must_use]
+pub struct ExtField<F, const D: usize, Shape, A = F> {
+    #[serde(
+        with = "p3_util::array_serialization",
+        bound(serialize = "A: serde::Serialize", deserialize = "A: serde::Deserialize<'de>")
+    )]
+    pub(crate) value: [A; D],
+
+    _phantom: PhantomData<(F, Shape)>,
+}
+
+impl<F, const D: usize, Shape, A> ExtField<F, D, Shape, A> {
+    /// Create an extension field element from an array of base/algebra elements.
+    ///
+    /// Any array is accepted. No reduction is required since each entry is
+    /// already a valid element of the algebra over `F`.
+    ///
+    /// # Panics
+    /// Panics (at compile time) if `D <= 1`. A degree-0 or degree-1 "extension"
+    /// is degenerate — use `F` directly instead.
+    #[inline]
+    pub const fn new(value: [A; D]) -> Self {
+        const { assert!(D > 1) }
+        Self {
+            value,
+            _phantom: PhantomData,
+        }
+    }
+}
 
 /// Algebra over `F` that supports degree-`D` extension arithmetic with a given reducer `Shape`.
 ///

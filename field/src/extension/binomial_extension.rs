@@ -2,9 +2,8 @@ use alloc::format;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::array;
-use core::fmt::{self, Debug, Display, Formatter};
+use core::fmt::{self, Display, Formatter};
 use core::iter::{Product, Sum};
-use core::marker::PhantomData;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use itertools::Itertools;
@@ -12,44 +11,19 @@ use num_bigint::BigUint;
 use p3_util::{as_base_slice, as_base_slice_mut, flatten_to_base, reconstitute_from_base};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
-use serde::{Deserialize, Serialize};
 
-use super::{HasFrobenius, HasTwoAdicBinomialExtension, PackedBinomialExtensionField};
-use crate::extension::{
-    Binomial, BinomiallyExtendable, ExtensionAlgebra,
-};
+use super::{ExtField, HasFrobenius, HasTwoAdicBinomialExtension, PackedBinomialExtensionField};
+use crate::extension::{Binomial, BinomiallyExtendable, ExtensionAlgebra};
 use crate::field::Field;
 use crate::{
     Algebra, BasedVectorSpace, Dup, ExtensionField, Packable, PrimeCharacteristicRing,
     RawDataSerializable, TwoAdicField, field_to_array,
 };
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
-#[repr(transparent)] // Needed to make various casts safe.
-#[must_use]
-pub struct BinomialExtensionField<F, const D: usize, A = F> {
-    #[serde(
-        with = "p3_util::array_serialization",
-        bound(serialize = "A: Serialize", deserialize = "A: Deserialize<'de>")
-    )]
-    pub(crate) value: [A; D],
-    _phantom: PhantomData<F>,
-}
-
-impl<F, A, const D: usize> BinomialExtensionField<F, D, A> {
-    /// Create an extension field element from an array of base elements.
-    ///
-    /// Any array is accepted. No reduction is required since
-    /// base elements are already valid field elements.
-    #[inline]
-    pub const fn new(value: [A; D]) -> Self {
-        const { assert!(D > 1) }
-        Self {
-            value,
-            _phantom: PhantomData,
-        }
-    }
-}
+/// Binomial extension field `F[X] / (X^D - W)`.
+///
+/// Type alias for the unified [`ExtField`] with `Shape = Binomial<F>`.
+pub type BinomialExtensionField<F, const D: usize, A = F> = ExtField<F, D, Binomial<F>, A>;
 
 impl<F: Copy, const D: usize> BinomialExtensionField<F, D, F> {
     /// Convert a `[[F; D]; N]` array to an array of extension field elements.
@@ -86,10 +60,7 @@ impl<F: Field, A: Algebra<F>, const D: usize> From<A> for BinomialExtensionField
 impl<F, A, const D: usize> From<[A; D]> for BinomialExtensionField<F, D, A> {
     #[inline]
     fn from(x: [A; D]) -> Self {
-        Self {
-            value: x,
-            _phantom: PhantomData,
-        }
+        Self::new(x)
     }
 }
 

@@ -9,7 +9,7 @@ use alloc::format;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::array;
-use core::fmt::{self, Debug, Display, Formatter};
+use core::fmt::{self, Display, Formatter};
 use core::iter::{Product, Sum};
 use core::marker::PhantomData;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -19,10 +19,9 @@ use num_bigint::BigUint;
 use p3_util::{as_base_slice, as_base_slice_mut, flatten_to_base, reconstitute_from_base};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
-use serde::{Deserialize, Serialize};
 
 use super::packed_quintic_extension::PackedQuinticTrinomialExtensionField;
-use super::{HasFrobenius, HasTwoAdicQuinticExtension};
+use super::{ExtField, HasFrobenius, HasTwoAdicQuinticExtension};
 use crate::extension::{
     ExtensionAlgebra, QuinticTrinomial, QuinticTrinomialExtendable,
 };
@@ -35,30 +34,9 @@ use crate::{
 /// A degree-5 extension field using the trinomial `X^5 + X^2 - 1`.
 ///
 /// Elements are represented as `a_0 + a_1*X + a_2*X^2 + a_3*X^3 + a_4*X^4`.
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
-#[repr(transparent)] // Required for safe memory layout casts.
-#[must_use]
-pub struct QuinticTrinomialExtensionField<F, A = F> {
-    #[serde(
-        with = "p3_util::array_serialization",
-        bound(serialize = "A: Serialize", deserialize = "A: Deserialize<'de>")
-    )]
-    pub(crate) value: [A; 5],
-    _phantom: PhantomData<F>,
-}
-
-impl<F, A> QuinticTrinomialExtensionField<F, A> {
-    /// Create an extension field element from coefficient array.
-    ///
-    /// The coefficients represent the polynomial `value[0] + value[1]*X + ... + value[4]*X^4`.
-    #[inline]
-    pub const fn new(value: [A; 5]) -> Self {
-        Self {
-            value,
-            _phantom: PhantomData,
-        }
-    }
-}
+///
+/// Type alias for the unified [`ExtField`] with `Shape = QuinticTrinomial`.
+pub type QuinticTrinomialExtensionField<F, A = F> = ExtField<F, 5, QuinticTrinomial, A>;
 
 impl<F: Copy> QuinticTrinomialExtensionField<F, F> {
     /// Convert a `[[F; 5]; N]` array to an array of extension field elements.
