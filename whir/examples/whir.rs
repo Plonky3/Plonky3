@@ -11,15 +11,15 @@ use clap::Parser;
 use p3_challenger::DuplexChallenger;
 use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
-use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
+use p3_field::extension::BinomialExtensionField;
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::poly::Poly;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{
-    FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig, DEFAULT_MAX_POW,
+    DEFAULT_MAX_POW, FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig,
 };
 use p3_whir::pcs::prover::WhirProver;
 use p3_whir::sumcheck::layout::{Layout as _, SuffixProver, Table};
@@ -27,8 +27,8 @@ use p3_whir::sumcheck::{OpeningProtocol, PointSchedule, TableShape, TableSpec};
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 use tracing::{info, warn};
-use tracing_forest::util::LevelFilter;
 use tracing_forest::ForestLayer;
+use tracing_forest::util::LevelFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Registry};
