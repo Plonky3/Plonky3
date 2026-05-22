@@ -309,7 +309,7 @@ fn compute_logup_contribution(
     let alpha = challenges.alpha;
     let beta = challenges.beta;
     let vals_read_len = vals_read.len();
-    let val_read: EF = vals_read.iter().rev().copied().map(EF::from).horner(beta);
+    let val_read: EF = vals_read.iter().rev().copied().horner(beta);
 
     let val_provided: EF = vals_provided
         .iter()
