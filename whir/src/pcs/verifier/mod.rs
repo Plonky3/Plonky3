@@ -16,12 +16,12 @@ use tracing::instrument;
 use super::committer::reader::ParsedCommitment;
 use super::utils::get_challenge_stir_queries;
 use crate::alloc::string::ToString;
-use crate::constraints::statement::SelectStatement;
 use crate::constraints::Constraint;
+use crate::constraints::statement::SelectStatement;
 use crate::parameters::{RoundConfig, WhirConfig};
 use crate::pcs::proof::{QueryOpening, WhirProof};
 use crate::sumcheck::strategy::VariableOrder;
-use crate::sumcheck::{verify_final_sumcheck_rounds, SumcheckError};
+use crate::sumcheck::{SumcheckError, verify_final_sumcheck_rounds};
 
 pub mod errors;
 

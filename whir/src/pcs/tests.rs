@@ -7,12 +7,12 @@ use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
 use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
-use p3_field::extension::BinomialExtensionField;
 use p3_field::Field;
+use p3_field::extension::BinomialExtensionField;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use rand::rngs::SmallRng;
 use rand::SeedableRng;
+use rand::rngs::SmallRng;
 
 use crate::fiat_shamir::domain_separator::DomainSeparator;
 use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
@@ -283,11 +283,11 @@ mod error_variant_tests {
 
     use p3_commit::MultilinearPcs;
     use p3_multilinear_util::poly::Poly;
-    use rand::rngs::SmallRng;
     use rand::SeedableRng;
+    use rand::rngs::SmallRng;
 
     use super::{
-        challenger, MyChallenger, MyCompress, MyDft, MyHash, MyMmcs, Perm, TestWhirPcs, EF, F,
+        EF, F, MyChallenger, MyCompress, MyDft, MyHash, MyMmcs, Perm, TestWhirPcs, challenger,
     };
     use crate::fiat_shamir::domain_separator::DomainSeparator;
     use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
@@ -675,8 +675,8 @@ mod keccak_tests {
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_multilinear_util::poly::Poly;
     use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
-    use rand::rngs::SmallRng;
     use rand::SeedableRng;
+    use rand::rngs::SmallRng;
 
     use crate::fiat_shamir::domain_separator::DomainSeparator;
     use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
