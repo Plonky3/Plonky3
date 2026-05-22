@@ -11,24 +11,19 @@ use alloc::vec::Vec;
 use core::array;
 use core::fmt::{self, Display, Formatter};
 use core::iter::{Product, Sum};
-use core::marker::PhantomData;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use itertools::Itertools;
 use num_bigint::BigUint;
-use p3_util::{as_base_slice, as_base_slice_mut, flatten_to_base, reconstitute_from_base};
-use rand::distr::StandardUniform;
-use rand::prelude::Distribution;
+use p3_util::{as_base_slice, as_base_slice_mut, reconstitute_from_base};
 
 use super::packed_quintic_extension::PackedQuinticTrinomialExtensionField;
 use super::{ExtField, HasFrobenius, HasTwoAdicQuinticExtension};
-use crate::extension::{
-    ExtensionAlgebra, QuinticTrinomial, QuinticTrinomialExtendable,
-};
+use crate::extension::{ExtensionAlgebra, QuinticTrinomial, QuinticTrinomialExtendable};
 use crate::field::Field;
 use crate::{
-    Algebra, BasedVectorSpace, ExtensionField, Packable, PackedFieldExtension,
-    PrimeCharacteristicRing, RawDataSerializable, TwoAdicField, field_to_array,
+    Algebra, ExtensionField, PackedFieldExtension, PrimeCharacteristicRing, RawDataSerializable,
+    TwoAdicField, field_to_array,
 };
 
 /// A degree-5 extension field using the trinomial `X^5 + X^2 - 1`.
@@ -53,63 +48,6 @@ impl<F: Copy> QuinticTrinomialExtensionField<F, F> {
             i += 1;
         }
         output
-    }
-}
-
-impl<F: Field, A: Algebra<F>> Default for QuinticTrinomialExtensionField<F, A> {
-    fn default() -> Self {
-        Self::new(array::from_fn(|_| A::ZERO))
-    }
-}
-
-impl<F: Field, A: Algebra<F>> From<A> for QuinticTrinomialExtensionField<F, A> {
-    fn from(x: A) -> Self {
-        Self::new(field_to_array(x))
-    }
-}
-
-impl<F, A> From<[A; 5]> for QuinticTrinomialExtensionField<F, A> {
-    #[inline]
-    fn from(x: [A; 5]) -> Self {
-        Self {
-            value: x,
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<F: QuinticTrinomialExtendable> Packable for QuinticTrinomialExtensionField<F> {}
-
-impl<F: QuinticTrinomialExtendable, A: Algebra<F>> BasedVectorSpace<A>
-    for QuinticTrinomialExtensionField<F, A>
-{
-    const DIMENSION: usize = 5;
-
-    #[inline]
-    fn as_basis_coefficients_slice(&self) -> &[A] {
-        &self.value
-    }
-
-    #[inline]
-    fn from_basis_coefficients_fn<Fn: FnMut(usize) -> A>(f: Fn) -> Self {
-        Self::new(array::from_fn(f))
-    }
-
-    #[inline]
-    fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = A>>(mut iter: I) -> Option<Self> {
-        (iter.len() == 5).then(|| Self::new(array::from_fn(|_| iter.next().unwrap())))
-    }
-
-    #[inline]
-    fn flatten_to_base(vec: Vec<Self>) -> Vec<A> {
-        // SAFETY: `Self` is `repr(transparent)` over `[A; 5]`.
-        unsafe { flatten_to_base::<A, Self>(vec) }
-    }
-
-    #[inline]
-    fn reconstitute_from_base(vec: Vec<A>) -> Vec<Self> {
-        // SAFETY: `Self` is `repr(transparent)` over `[A; 5]`.
-        unsafe { reconstitute_from_base::<A, Self>(vec) }
     }
 }
 
@@ -389,7 +327,10 @@ where
 
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        Self::new(<A as ExtensionAlgebra<F, 5, QuinticTrinomial>>::ext_add(&self.value, &rhs.value))
+        Self::new(<A as ExtensionAlgebra<F, 5, QuinticTrinomial>>::ext_add(
+            &self.value,
+            &rhs.value,
+        ))
     }
 }
 
@@ -414,7 +355,8 @@ where
 {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
-        self.value = <A as ExtensionAlgebra<F, 5, QuinticTrinomial>>::ext_add(&self.value, &rhs.value);
+        self.value =
+            <A as ExtensionAlgebra<F, 5, QuinticTrinomial>>::ext_add(&self.value, &rhs.value);
     }
 }
 
@@ -449,7 +391,10 @@ where
 
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        Self::new(<A as ExtensionAlgebra<F, 5, QuinticTrinomial>>::ext_sub(&self.value, &rhs.value))
+        Self::new(<A as ExtensionAlgebra<F, 5, QuinticTrinomial>>::ext_sub(
+            &self.value,
+            &rhs.value,
+        ))
     }
 }
 
@@ -475,7 +420,8 @@ where
 {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
-        self.value = <A as ExtensionAlgebra<F, 5, QuinticTrinomial>>::ext_sub(&self.value, &rhs.value);
+        self.value =
+            <A as ExtensionAlgebra<F, 5, QuinticTrinomial>>::ext_sub(&self.value, &rhs.value);
     }
 }
 
@@ -500,7 +446,11 @@ where
     #[inline]
     fn mul(self, rhs: Self) -> Self {
         let mut res = Self::default();
-        <A as ExtensionAlgebra<F, 5, QuinticTrinomial>>::ext_mul(&self.value, &rhs.value, &mut res.value);
+        <A as ExtensionAlgebra<F, 5, QuinticTrinomial>>::ext_mul(
+            &self.value,
+            &rhs.value,
+            &mut res.value,
+        );
         res
     }
 }
@@ -571,17 +521,6 @@ where
     #[inline]
     fn div_assign(&mut self, rhs: Self) {
         *self = *self / rhs;
-    }
-}
-
-impl<F: QuinticTrinomialExtendable> Distribution<QuinticTrinomialExtensionField<F>>
-    for StandardUniform
-where
-    Self: Distribution<F>,
-{
-    #[inline]
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> QuinticTrinomialExtensionField<F> {
-        QuinticTrinomialExtensionField::new(array::from_fn(|_| self.sample(rng)))
     }
 }
 

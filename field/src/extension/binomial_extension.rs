@@ -8,16 +8,14 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use itertools::Itertools;
 use num_bigint::BigUint;
-use p3_util::{as_base_slice, as_base_slice_mut, flatten_to_base, reconstitute_from_base};
-use rand::distr::StandardUniform;
-use rand::prelude::Distribution;
+use p3_util::{as_base_slice, as_base_slice_mut, reconstitute_from_base};
 
 use super::{ExtField, HasFrobenius, HasTwoAdicBinomialExtension, PackedBinomialExtensionField};
 use crate::extension::{Binomial, BinomiallyExtendable, ExtensionAlgebra};
 use crate::field::Field;
 use crate::{
-    Algebra, BasedVectorSpace, Dup, ExtensionField, Packable, PrimeCharacteristicRing,
-    RawDataSerializable, TwoAdicField, field_to_array,
+    Algebra, Dup, ExtensionField, PrimeCharacteristicRing, RawDataSerializable, TwoAdicField,
+    field_to_array,
 };
 
 /// Binomial extension field `F[X] / (X^D - W)`.
@@ -42,66 +40,6 @@ impl<F: Copy, const D: usize> BinomialExtensionField<F, D, F> {
             i += 1;
         }
         output
-    }
-}
-
-impl<F: Field, A: Algebra<F>, const D: usize> Default for BinomialExtensionField<F, D, A> {
-    fn default() -> Self {
-        Self::new(array::from_fn(|_| A::ZERO))
-    }
-}
-
-impl<F: Field, A: Algebra<F>, const D: usize> From<A> for BinomialExtensionField<F, D, A> {
-    fn from(x: A) -> Self {
-        Self::new(field_to_array(x))
-    }
-}
-
-impl<F, A, const D: usize> From<[A; D]> for BinomialExtensionField<F, D, A> {
-    #[inline]
-    fn from(x: [A; D]) -> Self {
-        Self::new(x)
-    }
-}
-
-impl<F: BinomiallyExtendable<D>, const D: usize> Packable for BinomialExtensionField<F, D> {}
-
-impl<F: BinomiallyExtendable<D>, A: Algebra<F>, const D: usize> BasedVectorSpace<A>
-    for BinomialExtensionField<F, D, A>
-{
-    const DIMENSION: usize = D;
-
-    #[inline]
-    fn as_basis_coefficients_slice(&self) -> &[A] {
-        &self.value
-    }
-
-    #[inline]
-    fn from_basis_coefficients_fn<Fn: FnMut(usize) -> A>(f: Fn) -> Self {
-        Self::new(array::from_fn(f))
-    }
-
-    #[inline]
-    fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = A>>(mut iter: I) -> Option<Self> {
-        (iter.len() == D).then(|| Self::new(array::from_fn(|_| iter.next().unwrap()))) // The unwrap is safe as we just checked the length of iter.
-    }
-
-    #[inline]
-    fn flatten_to_base(vec: Vec<Self>) -> Vec<A> {
-        unsafe {
-            // Safety:
-            // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[A; D]`
-            flatten_to_base::<A, Self>(vec)
-        }
-    }
-
-    #[inline]
-    fn reconstitute_from_base(vec: Vec<A>) -> Vec<Self> {
-        unsafe {
-            // Safety:
-            // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[A; D]`
-            reconstitute_from_base::<A, Self>(vec)
-        }
     }
 }
 
@@ -543,7 +481,9 @@ where
 
     #[inline]
     fn mul(self, rhs: A) -> Self {
-        Self::new(<A as ExtensionAlgebra<F, D, Binomial<F>>>::ext_base_mul(self.value, rhs))
+        Self::new(<A as ExtensionAlgebra<F, D, Binomial<F>>>::ext_base_mul(
+            self.value, rhs,
+        ))
     }
 }
 
@@ -603,17 +543,6 @@ where
     }
 }
 
-impl<F: BinomiallyExtendable<D>, const D: usize> Distribution<BinomialExtensionField<F, D>>
-    for StandardUniform
-where
-    Self: Distribution<F>,
-{
-    #[inline]
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> BinomialExtensionField<F, D> {
-        BinomialExtensionField::new(array::from_fn(|_| self.sample(rng)))
-    }
-}
-
 impl<F: Field + HasTwoAdicBinomialExtension<D>, const D: usize> TwoAdicField
     for BinomialExtensionField<F, D>
 {
@@ -636,11 +565,7 @@ pub fn vector_add<R: PrimeCharacteristicRing + Add<R2, Output = R>, R2: Dup, con
 
 /// Subtract two vectors element wise.
 #[inline]
-pub fn vector_sub<
-    R: PrimeCharacteristicRing + Sub<R2, Output = R>,
-    R2: Dup,
-    const D: usize,
->(
+pub fn vector_sub<R: PrimeCharacteristicRing + Sub<R2, Output = R>, R2: Dup, const D: usize>(
     a: &[R; D],
     b: &[R2; D],
 ) -> [R; D] {
@@ -649,12 +574,7 @@ pub fn vector_sub<
 
 /// Multiply two vectors representing elements in a binomial extension.
 #[inline]
-pub fn binomial_mul<
-    F: Field,
-    R: Algebra<F> + Algebra<R2>,
-    R2: Algebra<F>,
-    const D: usize,
->(
+pub fn binomial_mul<F: Field, R: Algebra<F> + Algebra<R2>, R2: Algebra<F>, const D: usize>(
     a: &[R; D],
     b: &[R2; D],
     res: &mut [R; D],

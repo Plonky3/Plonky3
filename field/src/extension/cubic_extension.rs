@@ -12,17 +12,15 @@ use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAss
 
 use itertools::Itertools;
 use num_bigint::BigUint;
-use p3_util::{as_base_slice, as_base_slice_mut, flatten_to_base, reconstitute_from_base};
-use rand::distr::StandardUniform;
-use rand::prelude::Distribution;
+use p3_util::{as_base_slice, as_base_slice_mut, reconstitute_from_base};
 
 use super::packed_cubic_extension::PackedCubicTrinomialExtensionField;
 use super::{ExtField, HasFrobenius, HasTwoAdicCubicExtension};
 use crate::extension::{CubicTrinomial, CubicTrinomialExtendable, ExtensionAlgebra};
 use crate::field::Field;
 use crate::{
-    Algebra, BasedVectorSpace, ExtensionField, Packable, PackedFieldExtension,
-    PrimeCharacteristicRing, RawDataSerializable, TwoAdicField, field_to_array,
+    Algebra, ExtensionField, PackedFieldExtension, PrimeCharacteristicRing, RawDataSerializable,
+    TwoAdicField, field_to_array,
 };
 
 /// A degree-3 extension field using `X^3 - X - 1`.
@@ -49,64 +47,6 @@ impl<F: Copy> CubicTrinomialExtensionField<F, F> {
             i += 1;
         }
         output
-    }
-}
-
-impl<F: Field, A: Algebra<F>> Default for CubicTrinomialExtensionField<F, A> {
-    fn default() -> Self {
-        Self::new([A::ZERO, A::ZERO, A::ZERO])
-    }
-}
-
-impl<F: Field, A: Algebra<F>> From<A> for CubicTrinomialExtensionField<F, A> {
-    fn from(x: A) -> Self {
-        Self::new([x, A::ZERO, A::ZERO])
-    }
-}
-
-impl<F, A> From<[A; 3]> for CubicTrinomialExtensionField<F, A> {
-    #[inline]
-    fn from(x: [A; 3]) -> Self {
-        Self::new(x)
-    }
-}
-
-impl<F: CubicTrinomialExtendable> Packable for CubicTrinomialExtensionField<F> {}
-
-impl<F: CubicTrinomialExtendable, A: Algebra<F>> BasedVectorSpace<A>
-    for CubicTrinomialExtensionField<F, A>
-{
-    const DIMENSION: usize = 3;
-
-    #[inline]
-    fn as_basis_coefficients_slice(&self) -> &[A] {
-        &self.value
-    }
-
-    #[inline]
-    fn from_basis_coefficients_fn<Fn: FnMut(usize) -> A>(f: Fn) -> Self {
-        Self::new(array::from_fn(f))
-    }
-
-    #[inline]
-    fn from_basis_coefficients_iter<I: ExactSizeIterator<Item = A>>(mut iter: I) -> Option<Self> {
-        (iter.len() == 3).then(|| Self::new(array::from_fn(|_| iter.next().unwrap())))
-    }
-
-    #[inline]
-    fn flatten_to_base(vec: Vec<Self>) -> Vec<A> {
-        // Safety:
-        // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[A; D]`
-        unsafe { flatten_to_base::<A, Self>(vec) }
-    }
-
-    #[inline]
-    fn reconstitute_from_base(vec: Vec<A>) -> Vec<Self> {
-        unsafe {
-            // Safety:
-            // As `Self` is a `repr(transparent)`, it is stored identically in memory to `[A; D]`
-            reconstitute_from_base::<A, Self>(vec)
-        }
     }
 }
 
@@ -368,7 +308,10 @@ where
 
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        Self::new(<A as ExtensionAlgebra<F, 3, CubicTrinomial>>::ext_add(&self.value, &rhs.value))
+        Self::new(<A as ExtensionAlgebra<F, 3, CubicTrinomial>>::ext_add(
+            &self.value,
+            &rhs.value,
+        ))
     }
 }
 
@@ -393,7 +336,8 @@ where
 {
     #[inline]
     fn add_assign(&mut self, rhs: Self) {
-        self.value = <A as ExtensionAlgebra<F, 3, CubicTrinomial>>::ext_add(&self.value, &rhs.value);
+        self.value =
+            <A as ExtensionAlgebra<F, 3, CubicTrinomial>>::ext_add(&self.value, &rhs.value);
     }
 }
 
@@ -428,7 +372,10 @@ where
 
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        Self::new(<A as ExtensionAlgebra<F, 3, CubicTrinomial>>::ext_sub(&self.value, &rhs.value))
+        Self::new(<A as ExtensionAlgebra<F, 3, CubicTrinomial>>::ext_sub(
+            &self.value,
+            &rhs.value,
+        ))
     }
 }
 
@@ -454,7 +401,8 @@ where
 {
     #[inline]
     fn sub_assign(&mut self, rhs: Self) {
-        self.value = <A as ExtensionAlgebra<F, 3, CubicTrinomial>>::ext_sub(&self.value, &rhs.value);
+        self.value =
+            <A as ExtensionAlgebra<F, 3, CubicTrinomial>>::ext_sub(&self.value, &rhs.value);
     }
 }
 
@@ -479,7 +427,11 @@ where
     #[inline]
     fn mul(self, rhs: Self) -> Self {
         let mut res = Self::default();
-        <A as ExtensionAlgebra<F, 3, CubicTrinomial>>::ext_mul(&self.value, &rhs.value, &mut res.value);
+        <A as ExtensionAlgebra<F, 3, CubicTrinomial>>::ext_mul(
+            &self.value,
+            &rhs.value,
+            &mut res.value,
+        );
         res
     }
 }
@@ -493,7 +445,9 @@ where
 
     #[inline]
     fn mul(self, rhs: A) -> Self {
-        Self::new(<A as ExtensionAlgebra<F, 3, CubicTrinomial>>::ext_base_mul(self.value, rhs))
+        Self::new(<A as ExtensionAlgebra<F, 3, CubicTrinomial>>::ext_base_mul(
+            self.value, rhs,
+        ))
     }
 }
 
@@ -550,16 +504,6 @@ where
     #[inline]
     fn div_assign(&mut self, rhs: Self) {
         *self = *self / rhs;
-    }
-}
-
-impl<F: CubicTrinomialExtendable> Distribution<CubicTrinomialExtensionField<F>> for StandardUniform
-where
-    Self: Distribution<F>,
-{
-    #[inline]
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> CubicTrinomialExtensionField<F> {
-        CubicTrinomialExtensionField::new(array::from_fn(|_| self.sample(rng)))
     }
 }
 
