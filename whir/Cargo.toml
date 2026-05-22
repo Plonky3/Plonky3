@@ -44,6 +44,7 @@ criterion.workspace = true
 proptest.workspace = true
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
+bincode = "1.3"
 
 [[bench]]
 name = "sumcheck"
