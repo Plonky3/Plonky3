@@ -3,7 +3,7 @@
 //! Wraps the standard [`WhirProver`] with `zk: true` enforced and a
 //! caller-provided RNG for ZK randomness generation.
 //!
-//! Mirrors the design of [`HidingFriPcs`](p3_fri::HidingFriPcs).
+//! Mirrors the design of `HidingFriPcs` in the `p3-fri` crate.
 
 use alloc::vec::Vec;
 
