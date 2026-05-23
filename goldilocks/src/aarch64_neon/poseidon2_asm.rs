@@ -727,7 +727,7 @@ unsafe fn double_asm(a: u64) -> u64 {
     unsafe { add_asm(a, a) }
 }
 
-/// 4x4 circulant MDS with coefficients [2,3,1,1].
+/// 4x4 circulant MDS with coefficients `[2,3,1,1]`.
 ///
 /// Function contract is preserved: inputs may be non-canonical (see
 /// `test_apply_mat4_asm_danger`). Sites whose `b` operand is `x[i]`

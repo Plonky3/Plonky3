@@ -205,9 +205,8 @@ impl<F: QuinticTrinomialExtendable> PackedFieldExtension<F, QuinticTrinomialExte
 
     #[inline]
     fn packed_ext_powers(base: QuinticTrinomialExtensionField<F>) -> Powers<Self> {
-        use itertools::Itertools;
         let width = F::Packing::WIDTH;
-        let powers = base.powers().take(width + 1).collect_vec();
+        let powers = base.powers().collect_n(width + 1);
         // Transpose first WIDTH powers
         let current = Self::from_ext_slice(&powers[..width]);
 

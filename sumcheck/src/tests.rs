@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::{DuplexChallenger, FieldChallenger, GrindingChallenger};
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PackedValue, PrimeCharacteristicRing, TwoAdicField};
+use p3_field::{Field, HornerIter, PackedValue, PrimeCharacteristicRing, TwoAdicField};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
@@ -110,9 +110,7 @@ where
         // Evaluate the polynomial as a univariate at `var` using Horner's method.
         // This treats the evaluation vector as coefficients of a univariate polynomial
         // and computes f(var) = c_0 + c_1*var + c_2*var^2 + ... by folding from the right.
-        let eval = poly
-            .iter()
-            .rfold(EF::ZERO, |result, &coeff| result * var + coeff);
+        let eval: EF = poly.iter().copied().horner(var);
 
         // Store evaluation for verifier to read later.
         constraint_evals.push(eval);

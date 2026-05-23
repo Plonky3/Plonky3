@@ -378,7 +378,7 @@ impl Field for Goldilocks {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
     type Packing = crate::PackedGoldilocksAVX512;
 
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     type Packing = crate::PackedGoldilocksNeon;
 
     #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
@@ -697,7 +697,7 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
 
 /// Compute the inverse of a Goldilocks element `a` using the binary GCD algorithm.
 ///
-/// Instead of applying the standard algorithm this uses a variant inspired by https://eprint.iacr.org/2020/972.pdf.
+/// Instead of applying the standard algorithm this uses a variant inspired by <https://eprint.iacr.org/2020/972.pdf>.
 /// The key idea is to compute update factors which are incorrect by a known power of 2 which
 /// can be corrected at the end. These update factors can then be used to construct the inverse
 /// via a simple linear combination.

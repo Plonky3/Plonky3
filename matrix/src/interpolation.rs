@@ -455,7 +455,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{
-        BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField,
+        BasedVectorSpace, ExtensionField, Field, HornerIter, PrimeCharacteristicRing, TwoAdicField,
         batch_multiplicative_inverse,
     };
     use p3_util::log2_strict_usize;
@@ -472,10 +472,7 @@ mod tests {
     /// Horner's method: `f(z) = c_0 + z*(c_1 + z*(c_2 + ...))`.
     /// Processes coefficients from highest degree down to constant term.
     fn eval_poly<EF: ExtensionField<F>>(coeffs: &[F], point: EF) -> EF {
-        coeffs
-            .iter()
-            .rev()
-            .fold(EF::ZERO, |acc, &c| acc * point + c)
+        coeffs.iter().copied().horner(point)
     }
 
     fn eval_poly_on_coset<EF: ExtensionField<F>>(coeffs: &[F], shift: F, log_n: usize) -> Vec<EF> {

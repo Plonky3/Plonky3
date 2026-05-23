@@ -67,9 +67,9 @@
 //! - **Medium (<`MEDIUM_LEN` elements)**: `TILE_SIZE`×`TILE_SIZE` Tiled - L2-friendly tiles
 //! - **Large (≥`MEDIUM_LEN` elements)**: Recursive + Tiled - Cache-oblivious
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 use core::arch::aarch64::*;
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 use core::mem::MaybeUninit;
 #[cfg(all(target_arch = "aarch64", feature = "parallel"))]
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -79,7 +79,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 /// Brings the cache line containing `ptr` into the L1 data cache in exclusive
 /// state, preparing for a subsequent store. This avoids Read-For-Ownership
 /// (RFO) stalls when writing to memory not already in L1.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline(always)]
 unsafe fn prefetch_write(ptr: *const u8) {
     // PRFM PSTL1KEEP: Prefetch for Store, L1 cache, temporal (keep in cache).
@@ -132,7 +132,7 @@ const TILE_SIZE: usize = 16;
 ///
 /// At this point, the sub-matrix (up to `RECURSIVE_LIMIT`×`RECURSIVE_LIMIT` elements)
 /// fits in L2 cache, so we switch to tiled transpose.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 const RECURSIVE_LIMIT: usize = 128;
 
 /// Minimum number of elements before enabling parallel processing.
@@ -212,7 +212,7 @@ pub fn transpose<T: Copy + Send + Sync>(
     }
 
     // Architecture dispatch
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     {
         // Use NEON-optimized path for 4-byte elements.
         //
@@ -287,7 +287,7 @@ pub fn transpose<T: Copy + Send + Sync>(
 ///
 /// Caller must ensure `input` and `output` point to valid memory regions
 /// of at least `width * height` elements each.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline]
 unsafe fn transpose_neon_4b(input: *const u32, output: *mut u32, width: usize, height: usize) {
     // Total number of elements in the matrix.
@@ -435,7 +435,7 @@ unsafe fn transpose_neon_4b_parallel(
 /// # Safety
 ///
 /// Caller must ensure valid pointers for `width * height` elements.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline]
 unsafe fn transpose_small_4b(input: *const u32, output: *mut u32, width: usize, height: usize) {
     // Outer loop over columns (output rows).
@@ -485,7 +485,7 @@ unsafe fn transpose_small_4b(input: *const u32, output: *mut u32, width: usize, 
 /// # Safety
 ///
 /// Caller must ensure valid pointers for `width * height` elements.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline]
 unsafe fn transpose_tiled_4b(input: *const u32, output: *mut u32, width: usize, height: usize) {
     // Compute tile counts and remainders
@@ -626,7 +626,7 @@ unsafe fn transpose_tiled_4b(input: *const u32, output: *mut u32, width: usize, 
 /// # Safety
 ///
 /// Caller must ensure valid pointers and that coordinate ranges are within bounds.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[allow(clippy::too_many_arguments)]
 unsafe fn transpose_recursive_4b(
     input: *const u32,
@@ -736,7 +736,7 @@ unsafe fn transpose_recursive_4b(
 /// - Valid pointers for `total_cols * total_rows` elements
 /// - `row_start < row_end <= total_rows`
 /// - `col_start < col_end <= total_cols`
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline]
 #[allow(clippy::too_many_arguments)]
 unsafe fn transpose_region_tiled_4b(
@@ -846,9 +846,9 @@ unsafe fn transpose_region_tiled_4b(
 ///
 /// Caller must ensure:
 /// - Valid pointers for the full matrix
-/// - `x_start + 16 <= width`
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 /// - `y_start + 16 <= height`
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline]
 unsafe fn transpose_tile_16x16_neon(
     input: *const u32,
@@ -908,7 +908,7 @@ unsafe fn transpose_tile_16x16_neon(
 /// - Valid pointers for the full matrix
 /// - `x_start + 16 <= width`
 /// - `y_start + 16 <= height`
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline]
 unsafe fn transpose_tile_16x16_neon_buffered(
     input: *const u32,
@@ -988,11 +988,11 @@ unsafe fn transpose_tile_16x16_neon_buffered(
 ///
 /// # Safety
 ///
-/// Caller must ensure:
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 /// - Valid pointers for the full matrix
 /// - `x_start + block_width <= width`
 /// - `y_start + block_height <= height`
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline]
 #[allow(clippy::too_many_arguments)]
 unsafe fn transpose_block_scalar(
@@ -1095,12 +1095,12 @@ unsafe fn transpose_block_scalar(
 /// - **Total**: ~16 cycles for 16 elements = **1 cycle/element**
 ///
 /// # Safety
-///
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 /// Caller must ensure:
 /// - `src` is valid for reading 4 rows of `src_stride` elements each
 /// - `dst` is valid for writing 4 rows of `dst_stride` elements each
 /// - The first 4 elements of each row are accessible
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline(always)]
 unsafe fn transpose_4x4_neon(src: *const u32, dst: *mut u32, src_stride: usize, dst_stride: usize) {
     unsafe {
@@ -1195,7 +1195,7 @@ unsafe fn transpose_4x4_neon(src: *const u32, dst: *mut u32, src_stride: usize, 
 ///
 /// Caller must ensure `input` and `output` point to valid memory regions
 /// of at least `width * height` elements each.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline]
 unsafe fn transpose_neon_8b(input: *const u64, output: *mut u64, width: usize, height: usize) {
     let len = width * height;
@@ -1270,7 +1270,7 @@ unsafe fn transpose_neon_8b_parallel(
 /// # Safety
 ///
 /// Caller must ensure valid pointers for `width * height` elements.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline]
 unsafe fn transpose_small_8b(input: *const u64, output: *mut u64, width: usize, height: usize) {
     for x in 0..width {
@@ -1290,7 +1290,7 @@ unsafe fn transpose_small_8b(input: *const u64, output: *mut u64, width: usize, 
 /// # Safety
 ///
 /// Caller must ensure valid pointers for `width * height` elements.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline]
 unsafe fn transpose_tiled_8b(input: *const u64, output: *mut u64, width: usize, height: usize) {
     let x_tile_count = width / TILE_SIZE;
@@ -1367,7 +1367,7 @@ unsafe fn transpose_tiled_8b(input: *const u64, output: *mut u64, width: usize, 
 /// # Safety
 ///
 /// Caller must ensure valid pointers and that coordinate ranges are within bounds.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[allow(clippy::too_many_arguments)]
 unsafe fn transpose_recursive_8b(
     input: *const u64,
@@ -1435,7 +1435,7 @@ unsafe fn transpose_recursive_8b(
 /// - Valid pointers for `total_cols * total_rows` elements
 /// - `row_start < row_end <= total_rows`
 /// - `col_start < col_end <= total_cols`
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline]
 #[allow(clippy::too_many_arguments)]
 unsafe fn transpose_region_tiled_8b(
@@ -1535,7 +1535,7 @@ unsafe fn transpose_region_tiled_8b(
 /// - Valid pointers for the full matrix
 /// - `x_start + 16 <= width`
 /// - `y_start + 16 <= height`
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline]
 unsafe fn transpose_tile_16x16_neon_8b(
     input: *const u64,
@@ -1591,7 +1591,7 @@ unsafe fn transpose_tile_16x16_neon_8b(
 /// - Valid pointers for the full matrix
 /// - `x_start + 16 <= width`
 /// - `y_start + 16 <= height`
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline]
 unsafe fn transpose_tile_16x16_neon_8b_buffered(
     input: *const u64,
@@ -1661,7 +1661,7 @@ unsafe fn transpose_tile_16x16_neon_8b_buffered(
 /// - Valid pointers for the full matrix
 /// - `x_start + block_width <= width`
 /// - `y_start + block_height <= height`
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline]
 #[allow(clippy::too_many_arguments)]
 unsafe fn transpose_block_scalar_8b(
@@ -1724,7 +1724,7 @@ unsafe fn transpose_block_scalar_8b(
 /// - `src` is valid for reading 4 rows of `src_stride` elements each
 /// - `dst` is valid for writing 4 rows of `dst_stride` elements each
 /// - The first 4 elements of each row are accessible
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 #[inline(always)]
 unsafe fn transpose_4x4_neon_8b(
     src: *const u64,

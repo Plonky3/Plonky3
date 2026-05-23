@@ -9,6 +9,10 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+test-util = ["dep:p3-baby-bear"]
+
 [dependencies]
 p3-baby-bear = { workspace = true, optional = true }
 p3-challenger.workspace = true
@@ -34,10 +38,6 @@ p3-merkle-tree = { path = "../merkle-tree" }
 p3-symmetric = { path = "../symmetric" }
 
 proptest.workspace = true
-
-[features]
-parallel = ["p3-maybe-rayon/parallel"]
-test-util = ["dep:p3-baby-bear"]
 
 [lints]
 workspace = true

@@ -568,7 +568,7 @@ where
     );
 }
 
-/// Test that [`PackedField::broadcast`] sets all lanes to the same scalar.
+/// Test that [`PackedValue::broadcast`] sets all lanes to the same scalar.
 pub fn test_broadcast<PF>()
 where
     PF: PackedField + Eq,

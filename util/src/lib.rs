@@ -330,7 +330,7 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 const fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
     // Aarch64 can reverse bits in one instruction, so the trivial version works best.
     // use manual `while` loop to enable `const`
@@ -466,7 +466,7 @@ where
 /// the slice really is in an initialized state.
 ///
 /// Copied from:
-/// https://doc.rust-lang.org/std/primitive.slice.html#method.assume_init_ref
+/// <https://doc.rust-lang.org/std/primitive.slice.html#method.assume_init_ref>
 /// Once that is stabilized, this should be removed.
 #[inline(always)]
 pub const unsafe fn assume_init_ref<T>(slice: &[MaybeUninit<T>]) -> &[T] {
@@ -527,7 +527,7 @@ fn iter_next_chunk_padded<T: Copy, const N: usize>(
 /// iterator, then the last `N-1` elements will be padded with the given default value.
 ///
 /// This is essentially a copy pasted version of the nightly `array_chunks` function.
-/// https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.array_chunks
+/// <https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.array_chunks>
 /// Once that is stabilized this and the functions above it should be removed.
 #[inline]
 pub fn iter_array_chunks_padded<T: Copy, const N: usize>(
@@ -771,7 +771,7 @@ pub const fn relatively_prime_u64(mut u: u64, mut v: u64) -> bool {
 
 /// Inner loop of the deferred GCD algorithm.
 ///
-/// See: https://eprint.iacr.org/2020/972.pdf for more information.
+/// See: <https://eprint.iacr.org/2020/972.pdf> for more information.
 ///
 /// This is basically a mini GCD algorithm which builds up a transformation to apply to the larger
 /// numbers in the main loop. The key point is that this small loop only uses u64s, subtractions and

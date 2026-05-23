@@ -536,6 +536,38 @@ mod error_variant_tests {
     }
 
     #[test]
+    fn rejects_with_final_poly_length_mismatch_when_tail_has_extra_evals() {
+        // Invariant: the final polynomial must have exactly the verifier-expected
+        // number of evaluations before it is absorbed into the transcript.
+        //
+        // Mutation: duplicate the honest tail, preserving Poly's power-of-two
+        // shape but changing the WHIR-level final length.
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        let final_poly = proof
+            .whir
+            .final_poly
+            .as_ref()
+            .expect("honest fixture should contain final_poly");
+        let expected = final_poly.num_evals();
+        let mut evals = final_poly.as_slice().to_vec();
+        let duplicate = evals.clone();
+        evals.extend_from_slice(&duplicate);
+        proof.whir.final_poly = Some(Poly::new(evals));
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::FinalPolyLengthMismatch {
+                expected: e,
+                actual,
+            } => {
+                assert_eq!(e, expected);
+                assert_eq!(actual, expected * 2);
+            }
+            other => panic!("expected FinalPolyLengthMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn rejects_with_round_ood_answer_count_mismatch_when_answer_is_dropped() {
         // Invariant: each round carries exactly the verifier-expected OOD answers.
         //
