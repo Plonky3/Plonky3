@@ -10,14 +10,13 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+p3-air.workspace = true
 p3-field.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
+p3-matrix = { path = "../matrix" }
 p3-multilinear-util = { path = "../multilinear-util" }
-
-proptest.workspace = true
-rand.workspace = true
 
 [lints]
 workspace = true

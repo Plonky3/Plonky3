@@ -1,0 +1,398 @@
+//! AIR constraint folder for the multilinear prover.
+//!
+//! - Implements the standard AIR builder interface, so any AIR runs unchanged through the folder.
+//! - Drives both directions of the protocol with the same evaluator:
+//!   - the prover walks the boolean hypercube row by row,
+//!   - the verifier evaluates at the random sumcheck challenge.
+
+use core::marker::PhantomData;
+
+use p3_air::{Air, AirBuilder, RowWindow};
+use p3_field::{ExtensionField, Field};
+
+use crate::selectors::BoundaryEvals;
+
+/// Folder shared by the prover and the verifier.
+#[derive(Debug)]
+pub struct MultilinearFolder<'a, F, EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    /// Column values at the current row.
+    pub local: &'a [EF],
+    /// Column values at the shifted-by-one row, with zero in the last position.
+    pub next: &'a [EF],
+    /// Boundary-selector values shared by all selector accessors.
+    pub boundary: BoundaryEvals<EF>,
+    /// Public inputs forwarded to the AIR.
+    pub public_values: &'a [F],
+    /// Random scalar driving alpha-batching of constraints.
+    pub alpha: EF,
+    /// Running alpha-batched accumulator capturing every asserted-zero constraint.
+    pub accumulator: EF,
+    /// Two-row preprocessed window; zero-width when the AIR has no preprocessed columns.
+    pub preprocessed_window: RowWindow<'a, EF>,
+    /// Type witness for the base field; no runtime storage.
+    pub _phantom: PhantomData<F>,
+}
+
+impl<'a, F, EF> MultilinearFolder<'a, F, EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    /// Build a folder for a single AIR evaluation.
+    ///
+    /// # Arguments
+    ///
+    /// - `local`: column values at the current row.
+    /// - `next`: column values at the shifted-by-one row.
+    /// - `boundary`: selector values at the same evaluation point.
+    /// - `public_values`: public inputs forwarded to the AIR.
+    /// - `alpha`: random scalar driving constraint batching.
+    #[inline]
+    pub fn new(
+        local: &'a [EF],
+        next: &'a [EF],
+        boundary: BoundaryEvals<EF>,
+        public_values: &'a [F],
+        alpha: EF,
+    ) -> Self {
+        Self {
+            local,
+            next,
+            boundary,
+            public_values,
+            alpha,
+            accumulator: EF::ZERO,
+            // Zero-width preprocessed window covers AIRs without a preprocessed trace.
+            preprocessed_window: RowWindow::from_two_rows(&[], &[]),
+            _phantom: PhantomData,
+        }
+    }
+
+    /// Consume the folder and return the alpha-batched accumulator.
+    ///
+    /// # Returns
+    ///
+    /// The Horner fold `sum_{i=0}^{n-1} alpha^(n - 1 - i) * C_i`, where:
+    ///
+    /// - `C_0, ..., C_{n-1}` are the constraints asserted by the AIR in declaration order.
+    /// - `n` is the total number of asserted constraints.
+    #[inline]
+    #[must_use]
+    pub const fn into_accumulator(self) -> EF {
+        self.accumulator
+    }
+}
+
+impl<'a, F, EF> AirBuilder for MultilinearFolder<'a, F, EF>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+{
+    type F = F;
+    type Expr = EF;
+    type Var = EF;
+    type MainWindow = RowWindow<'a, EF>;
+    type PreprocessedWindow = RowWindow<'a, EF>;
+    type PublicVar = F;
+    type PeriodicVar = EF;
+
+    #[inline]
+    fn main(&self) -> Self::MainWindow {
+        // Build a fresh two-row window from the borrowed slices.
+        RowWindow::from_two_rows(self.local, self.next)
+    }
+
+    #[inline]
+    fn preprocessed(&self) -> &Self::PreprocessedWindow {
+        &self.preprocessed_window
+    }
+
+    #[inline]
+    fn is_first_row(&self) -> Self::Expr {
+        self.boundary.first
+    }
+
+    #[inline]
+    fn is_last_row(&self) -> Self::Expr {
+        self.boundary.last
+    }
+
+    #[inline]
+    fn is_transition_window(&self, size: usize) -> Self::Expr {
+        // Only two-row windows are supported in this prover.
+        assert!(size <= 2, "only two-row windows are supported, got {size}");
+        self.boundary.transition
+    }
+
+    #[inline]
+    fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
+        // Horner alpha-batching: each push updates
+        //
+        //     accumulator := alpha * accumulator + C_i
+        //
+        // After `n` pushes the accumulator collapses to
+        //
+        //     C_0 * alpha^(n-1) + C_1 * alpha^(n-2) + ... + C_{n-1}.
+        self.accumulator = self.accumulator * self.alpha + x.into();
+    }
+
+    #[inline]
+    fn public_values(&self) -> &[Self::PublicVar] {
+        self.public_values
+    }
+}
+
+/// Run the AIR at one row and return the alpha-batched constraint value.
+///
+/// # Arguments
+///
+/// - `air`: AIR whose constraints should be evaluated.
+/// - `local`: column values at the current row.
+/// - `next`: column values at the shifted-by-one row.
+/// - `boundary`: selector values at the same evaluation point.
+/// - `public_values`: public inputs forwarded to the AIR.
+/// - `alpha`: random scalar driving constraint batching.
+///
+/// # Returns
+///
+/// The Horner-folded value `sum_i alpha^(n - 1 - i) * C_i(local, next, ...)`.
+#[inline]
+pub fn evaluate_at_row<A, F, EF>(
+    air: &A,
+    local: &[EF],
+    next: &[EF],
+    boundary: BoundaryEvals<EF>,
+    public_values: &[F],
+    alpha: EF,
+) -> EF
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: for<'b> Air<MultilinearFolder<'b, F, EF>>,
+{
+    let mut folder = MultilinearFolder::new(local, next, boundary, public_values, alpha);
+    air.eval(&mut folder);
+    folder.into_accumulator()
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+    use core::borrow::Borrow;
+
+    use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_matrix::dense::RowMajorMatrix;
+
+    use super::*;
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+
+    /// Mini Fibonacci AIR used to exercise every selector path.
+    ///
+    /// Constraints:
+    ///
+    /// - first row:
+    ///   - `left == public[0]`
+    ///   - `right == public[1]`
+    /// - transition:
+    ///   - `next.left == local.right`
+    ///   - `next.right == local.left + local.right`
+    /// - last row: `right == public[2]`
+    struct FibAir;
+
+    const NUM_COLS: usize = 2;
+
+    struct FibRow<T> {
+        left: T,
+        right: T,
+    }
+
+    impl<T> Borrow<FibRow<T>> for [T] {
+        fn borrow(&self) -> &FibRow<T> {
+            // Safety: two fields of type T in declaration order match the layout of [T; 2].
+            debug_assert_eq!(self.len(), NUM_COLS);
+            let ptr = self.as_ptr() as *const FibRow<T>;
+            unsafe { &*ptr }
+        }
+    }
+
+    impl<X> BaseAir<X> for FibAir {
+        fn width(&self) -> usize {
+            NUM_COLS
+        }
+        fn num_public_values(&self) -> usize {
+            3
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for FibAir {
+        fn eval(&self, builder: &mut AB) {
+            // Pull the two-row window and the public inputs into local bindings.
+            let main = builder.main();
+            let pis = builder.public_values();
+            let a = pis[0];
+            let b = pis[1];
+            let x = pis[2];
+
+            let local: &FibRow<AB::Var> = main.current_slice().borrow();
+            let next: &FibRow<AB::Var> = main.next_slice().borrow();
+
+            let mut when_first = builder.when_first_row();
+            when_first.assert_eq(local.left, a);
+            when_first.assert_eq(local.right, b);
+
+            let mut when_trans = builder.when_transition();
+            when_trans.assert_eq(local.right, next.left);
+            when_trans.assert_eq(local.left + local.right, next.right);
+
+            builder.when_last_row().assert_eq(local.right, x);
+        }
+    }
+
+    /// Build a length-`n` Fibonacci trace seeded with `(0, 1)`.
+    fn fib_trace(n: usize) -> RowMajorMatrix<F> {
+        assert!(n.is_power_of_two());
+        let mut left = F::ZERO;
+        let mut right = F::ONE;
+        let mut values = Vec::with_capacity(NUM_COLS * n);
+        for _ in 0..n {
+            // Each row records `(left, right)` before the step.
+            values.push(left);
+            values.push(right);
+            let next_left = right;
+            let next_right = left + right;
+            left = next_left;
+            right = next_right;
+        }
+        RowMajorMatrix::new(values, NUM_COLS)
+    }
+
+    /// Build the boundary selectors as on-cube indicators for row `i` of an `m`-row trace.
+    fn boundary_at_row(i: usize, m: usize) -> BoundaryEvals<EF> {
+        BoundaryEvals {
+            first: if i == 0 { EF::ONE } else { EF::ZERO },
+            last: if i == m - 1 { EF::ONE } else { EF::ZERO },
+            transition: if i == m - 1 { EF::ZERO } else { EF::ONE },
+        }
+    }
+
+    /// Slice row `i` of the trace and lift its entries into the extension field.
+    fn row_in_ef(trace: &RowMajorMatrix<F>, i: usize) -> Vec<EF> {
+        let w = trace.width;
+        trace.values[i * w..(i + 1) * w]
+            .iter()
+            .copied()
+            .map(EF::from)
+            .collect()
+    }
+
+    #[test]
+    fn folder_accumulator_is_zero_on_satisfied_rows() {
+        // Fixture state: an 8-row Fibonacci trace with public inputs (F_0, F_1, F_8) = (0, 1, 21).
+        //
+        // Invariant: at every row the folder accumulator must equal zero.
+        // Every constraint either evaluates to zero or is multiplied by a zero selector.
+        let n = 8usize;
+        let trace = fib_trace(n);
+        let pis = [F::ZERO, F::ONE, F::from_u64(21)];
+        let alpha = EF::from_u64(7);
+
+        // Walk every row and check the accumulator.
+        for i in 0..n {
+            let local = row_in_ef(&trace, i);
+            // Convention: the shifted "next" of the last row is all zeros (no successor).
+            let next: Vec<EF> = if i == n - 1 {
+                EF::zero_vec(NUM_COLS)
+            } else {
+                row_in_ef(&trace, i + 1)
+            };
+            let boundary = boundary_at_row(i, n);
+
+            let value =
+                evaluate_at_row::<FibAir, F, EF>(&FibAir, &local, &next, boundary, &pis, alpha);
+            assert_eq!(value, EF::ZERO, "row {i}: folder returned {value:?}");
+        }
+    }
+
+    #[test]
+    fn folder_detects_a_bad_first_row() {
+        // Fixture state: valid Fibonacci trace;
+        // The verifier is told the first public input is 99 instead of 0.
+        //
+        // Mutation: substitute `public[0]` with 99.
+        //
+        //     row 0:   left = 0, right = 1
+        //     claim:   left = 99  ->  constraint `local.left - 99` is non-zero
+        //     ----->   folder accumulator must be non-zero
+        let n = 8usize;
+        let trace = fib_trace(n);
+        let bad_pis = [F::from_u64(99), F::ONE, F::from_u64(21)];
+        let alpha = EF::from_u64(7);
+
+        let local = row_in_ef(&trace, 0);
+        let next = row_in_ef(&trace, 1);
+        let boundary = boundary_at_row(0, n);
+
+        let value =
+            evaluate_at_row::<FibAir, F, EF>(&FibAir, &local, &next, boundary, &bad_pis, alpha);
+        assert_ne!(value, EF::ZERO);
+    }
+
+    #[test]
+    fn folder_alpha_batching_matches_horner_fold() {
+        // Invariant: assertions accumulate as `acc = alpha * acc + C_i`.
+        //
+        // The AIR has five `assert_eq` calls in declaration order:
+        //
+        //     0: when_first_row.assert_eq(local.left,            a)          - C_0
+        //     1: when_first_row.assert_eq(local.right,           b)          - C_1
+        //     2: when_trans.assert_eq(local.right,               next.left)  - C_2
+        //     3: when_trans.assert_eq(local.left + local.right,  next.right) - C_3
+        //     4: when_last_row.assert_eq(local.right,            x)          - C_4
+        //
+        // After all five pushes the accumulator must equal
+        //
+        //     C_0 * alpha^4 + C_1 * alpha^3 + C_2 * alpha^2 + C_3 * alpha + C_4.
+        //
+        // Fixture state: synthetic row hitting only the transition constraints.
+        //
+        //     selectors: first = 0, last = 0, transition = 1
+        //     -----> only C_2 and C_3 contribute; C_0, C_1, C_4 vanish
+        let local = [EF::from_u64(2), EF::from_u64(3)];
+        let next = [EF::from_u64(5), EF::from_u64(7)];
+        let pis = [F::from_u64(2), F::from_u64(3), F::from_u64(7)];
+        let alpha = EF::from_u64(11);
+        let boundary = BoundaryEvals {
+            first: EF::ZERO,
+            last: EF::ZERO,
+            transition: EF::ONE,
+        };
+
+        let value = evaluate_at_row::<FibAir, F, EF>(&FibAir, &local, &next, boundary, &pis, alpha);
+
+        // Active constraints (the two transition checks), in declaration order:
+        //
+        //     C_2 = local.right - next.left               = 3 - 5     = -2
+        //     C_3 = local.left + local.right - next.right = 2 + 3 - 7 = -2
+        //
+        // Gated constraints C_0, C_1, C_4 vanish because their selectors are zero.
+        let c2 = EF::from(local[1]) - EF::from(next[0]);
+        let c3 = EF::from(local[0]) + EF::from(local[1]) - EF::from(next[1]);
+        let gated = [EF::ZERO, EF::ZERO, c2, c3, EF::ZERO];
+
+        // Hand-fold the same Horner pattern the folder uses.
+        let mut expected = EF::ZERO;
+        for g in gated {
+            expected = expected * alpha + g;
+        }
+        assert_eq!(value, expected);
+    }
+}
