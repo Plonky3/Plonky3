@@ -47,6 +47,8 @@ where
     MissingInitialReducedOpening { expected: usize },
     #[error("initial reduced opening height mismatch: expected {expected}, got {got}")]
     InitialReducedOpeningHeightMismatch { expected: usize, got: usize },
+    #[error("global max height mismatch: expected {expected}, got {got}")]
+    GlobalMaxHeightMismatch { expected: usize, got: usize },
     #[error("round {round}: sibling values length mismatch: expected {expected}, got {got}")]
     SiblingValuesLengthMismatch {
         round: usize,
@@ -202,6 +204,22 @@ where
     // Each round reduces the domain size by its log_arity.
     let total_log_reduction: usize = log_arities.iter().sum();
     let log_global_max_height = total_log_reduction + params.log_blowup + params.log_final_poly_len;
+
+    let expected_log_global_max_height = commitments_with_opening_points
+        .iter()
+        .flat_map(|(_, mats)| {
+            mats.iter()
+                .map(|(domain, _)| log2_strict_usize(domain.size()) + params.log_blowup)
+        })
+        .max();
+    if let Some(expected) = expected_log_global_max_height
+        && log_global_max_height != expected
+    {
+        return Err(FriError::GlobalMaxHeightMismatch {
+            expected,
+            got: log_global_max_height,
+        });
+    }
 
     if proof.commit_pow_witnesses.len() != proof.commit_phase_commits.len() {
         return Err(FriError::CommitPowWitnessCountMismatch {
@@ -1196,6 +1214,36 @@ mod tests {
                 assert_eq!(round, 0);
                 assert_eq!(log_arity, 0);
                 assert_eq!(max, f.fri_params.max_log_arity);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn global_max_height_mismatch() {
+        let f = make_test_fixture();
+        let mut proof = f.proof.clone();
+
+        proof.commit_phase_commits.pop();
+        proof.commit_pow_witnesses.pop();
+        for query_proof in &mut proof.query_proofs {
+            query_proof.commit_phase_openings.pop();
+        }
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject proof whose fold schedule undershoots the input height");
+
+        match err {
+            FriError::GlobalMaxHeightMismatch { expected, got } => {
+                assert_eq!(expected, 4);
+                assert_eq!(got, 3);
             }
             other => panic!("wrong error variant: {other:?}"),
         }
