@@ -3,6 +3,7 @@
 #[cfg(test)]
 extern crate alloc;
 
+mod cubic_ext;
 #[cfg(test)]
 mod extension_test;
 mod koala_bear;
@@ -10,6 +11,7 @@ mod mds;
 mod poseidon1;
 mod poseidon2;
 
+pub use cubic_ext::*;
 pub use koala_bear::*;
 pub use mds::*;
 pub use poseidon1::*;

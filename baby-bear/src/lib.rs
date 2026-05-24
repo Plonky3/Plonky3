@@ -9,11 +9,13 @@ mod extension_test;
 mod mds;
 mod poseidon1;
 mod poseidon2;
+mod quadratic_ext;
 
 pub use baby_bear::*;
 pub use mds::*;
 pub use poseidon1::*;
 pub use poseidon2::*;
+pub use quadratic_ext::*;
 
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 mod aarch64_neon;

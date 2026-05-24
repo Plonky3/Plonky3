@@ -110,6 +110,7 @@ jobs:
           cargo build --verbose --target ${{ env.target }} -p p3-uni-stark
           cargo build --verbose --target ${{ env.target }} -p p3-util
           cargo build --verbose --target ${{ env.target }} -p p3-whir
+          cargo build --verbose --target ${{ env.target }} -p p3-xhash
           cargo build --verbose --target ${{ env.target }} -p p3-zk-codes
 
   check_wasm32_simd128:

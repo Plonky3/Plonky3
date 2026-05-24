@@ -157,5 +157,9 @@ name = "p3-whir"
 version_group = "plonky3"
 
 [[package]]
+name = "p3-xhash"
+version_group = "plonky3"
+
+[[package]]
 name = "p3-zk-codes"
 version_group = "plonky3"

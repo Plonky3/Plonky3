@@ -1,0 +1,31 @@
+[package]
+name = "p3-xhash"
+description = "Implementation of the XHash hash function family."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+p3-baby-bear.workspace = true
+p3-field.workspace = true
+p3-goldilocks.workspace = true
+p3-koala-bear.workspace = true
+p3-mds.workspace = true
+p3-mersenne-31.workspace = true
+p3-symmetric.workspace = true
+
+shake.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "xhash"
+harness = false
+
+[lints]
+workspace = true
