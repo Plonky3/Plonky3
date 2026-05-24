@@ -38,6 +38,7 @@ p3-merkle-tree = { path = "../merkle-tree" }
 p3-symmetric = { path = "../symmetric" }
 
 proptest.workspace = true
+rand.workspace = true
 
 [lints]
 workspace = true
