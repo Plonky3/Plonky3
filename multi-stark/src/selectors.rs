@@ -1,66 +1,54 @@
 //! Closed-form multilinear extensions used by the multilinear AIR prover.
-//!
-//! # Overview
-//!
-//! - The verifier needs to evaluate selector and shift multilinears at the
-//!   random sumcheck point.
-//! - The prover never needs them at the cube as multilinears, only as
-//!   per-row constants (`0` or `1`); the cube case is exposed for completeness.
-//! - Every formula evaluates in `O(k)` field operations, where `k` is the
-//!   number of binary trace variables.
-//!
-//! # Endianness
-//!
-//! - This crate follows the `p3_multilinear_util` convention.
-//! - Coordinate `0` is the high-order bit and coordinate `k - 1` is the low-order bit.
-//! - A polynomial of `k` variables stored in lexicographic order evaluates at
-//!   integer index `i` to the hypercube point whose coordinate `j` is bit `k - 1 - j` of `i`.
 
 use alloc::vec::Vec;
 
 use p3_field::{Field, PrimeCharacteristicRing};
 
-/// First-row selector at a challenge point.
-///
-/// # Returns
-///
-/// The product `prod_j (1 - rs[j])`, which is `eq(rs, bin(0))` specialized to
-/// the all-zeros boolean pattern.
-#[inline]
-#[must_use]
-pub fn is_first_row_eval<EF: Field>(rs: &[EF]) -> EF {
-    rs.iter().map(|&r| EF::ONE - r).product()
+/// Boundary selectors evaluated at a sumcheck challenge.
+#[derive(Copy, Clone, Debug)]
+pub struct BoundaryEvals<EF> {
+    /// First-row selector: `1` at row `0`, `0` elsewhere.
+    pub first: EF,
+    /// Last-row selector: `1` at row `m - 1`, `0` elsewhere.
+    pub last: EF,
+    /// Transition selector: `0` at row `m - 1`, `1` elsewhere.
+    pub transition: EF,
 }
 
-/// Last-row selector at a challenge point, for a trace of `m = 2^k` rows.
-///
-/// # Returns
-///
-/// The product `prod_j rs[j]`, which is `eq(rs, bin(m - 1))` specialized to
-/// the all-ones boolean pattern.
-#[inline]
-#[must_use]
-pub fn is_last_row_eval<EF: Field>(rs: &[EF]) -> EF {
-    rs.iter().copied().product()
+impl<EF: Field> BoundaryEvals<EF> {
+    /// Evaluate all three boundary selectors at the same challenge point.
+    ///
+    /// # Arguments
+    ///
+    /// - `rs`: challenge coordinates, one per binary trace variable.
+    ///
+    /// # Performance
+    ///
+    /// One pass over `rs` accumulates `first` and `last` in lockstep.
+    /// `transition` falls out as a single subtraction.
+    pub fn at(rs: &[EF]) -> Self {
+        // Thread both running products through the same loop:
+        //
+        //     first := first * (1 - r)
+        //     last  := last  * r
+        let mut first = EF::ONE;
+        let mut last = EF::ONE;
+        for &r in rs {
+            first *= EF::ONE - r;
+            last *= r;
+        }
+        Self {
+            first,
+            last,
+            transition: EF::ONE - last,
+        }
+    }
 }
 
-/// Transition selector at a challenge point.
+/// Multilinear extension of the "add one in binary" relation on pairs of `k`-bit boolean points.
 ///
-/// Equal to `1 - is_last_row_eval(rs)`.
-#[inline]
-#[must_use]
-pub fn is_transition_eval<EF: Field>(rs: &[EF]) -> EF {
-    EF::ONE - is_last_row_eval(rs)
-}
-
-/// Multilinear extension of the "add one in binary" relation.
-///
-/// # Definition
-///
-/// On the boolean cube `{0, 1}^k x {0, 1}^k` the relation outputs `1`
-/// exactly when the integer encoded by `ry` is the integer encoded by
-/// `rx` plus one, and `0` otherwise. The relation does not wrap: the
-/// last hypercube vertex has no successor.
+/// The relation is `1` when `to_int(ry) = to_int(rx) + 1` and `0` otherwise.
+/// The last hypercube vertex has no successor: the relation does not wrap.
 ///
 /// # Arguments
 ///
@@ -73,30 +61,22 @@ pub fn is_transition_eval<EF: Field>(rs: &[EF]) -> EF {
 ///
 /// # Algorithm
 ///
-/// Adding one in binary toggles a run of trailing one-bits to zero and
-/// the bit just above to one. The polynomial is the sum of one term
-/// per possible carry depth:
+/// Adding one in binary flips a run of trailing one-bits to zero and the bit just above to one.
+/// The polynomial sums one term per *carry depth* `d` in `0..k`:
 ///
-/// ```text
-///     depth 0:           x = ...?0   ->   y = ...?1
-///     depth 1:           x = ...?01  ->   y = ...?10
-///     depth d:           x = ...?0 11..1   ->   y = ...?1 00..0
-///                                    \--d--/        \--d--/
-/// ```
+/// - The trailing `d` bits of `rx` are all `1`; in `ry` they are all `0`.
+/// - The bit at offset `d` from the low end flips from `0` in `rx` to `1` in `ry`.
+/// - Every position above that flip matches between `rx` and `ry`.
 ///
-/// The depth-zero term costs `O(k)`; each higher depth extends a
-/// running carry product by one more position so the total cost stays
-/// `O(k)`.
+/// Prefix products of "high bits match" are precomputed once up front, so each depth costs `O(1)`.
 ///
 /// # Performance
 ///
-/// - One pre-pass builds prefix products of the high-bits equality factors.
-/// - The depth loop reuses those prefix products in `O(1)` per depth.
-/// - Total cost is `O(k)` field operations and one `Vec` of length `k`.
+/// `O(k)` field operations and one `Vec` of length `k`.
 ///
 /// # Panics
 ///
-/// Panics if the two argument slices have different lengths.
+/// Panics if `rx` and `ry` have different lengths.
 #[inline]
 #[must_use]
 pub fn next_eval<EF: Field>(rx: &[EF], ry: &[EF]) -> EF {
@@ -107,16 +87,14 @@ pub fn next_eval<EF: Field>(rx: &[EF], ry: &[EF]) -> EF {
     );
     let k = rx.len();
 
-    // Edge case: a single-row trace has no successor.
+    // A single-row trace has no successor; the relation vanishes everywhere.
     if k == 0 {
         return EF::ZERO;
     }
 
-    // Precompute prefix products of "high coordinates match".
+    // Prefix products of "high coordinates match" up to index j:
     //
-    //     eq_prefix[j] = product over i in 0..j of (rx[i]*ry[i] + (1-rx[i])*(1-ry[i]))
-    //
-    // The single-variable equality factor is degree 2 in (rx[i], ry[i]).
+    //     eq_prefix[j] = prod_{i < j} (rx[i]*ry[i] + (1-rx[i])*(1-ry[i]))
     let mut eq_prefix: Vec<EF> = Vec::with_capacity(k);
     let mut acc = EF::ONE;
     eq_prefix.push(acc);
@@ -126,30 +104,20 @@ pub fn next_eval<EF: Field>(rx: &[EF], ry: &[EF]) -> EF {
         eq_prefix.push(acc);
     }
 
-    // Depth-zero term:
+    // Depth-zero term: low bit of rx is 0, low bit of ry is 1, higher bits match.
     //
     //     (1 - rx[k-1]) * ry[k-1] * eq_prefix[k-1]
-    //
-    // It encodes "low bit of x is 0, low bit of y is 1, higher bits match".
     let mut total = (EF::ONE - rx[k - 1]) * ry[k - 1] * eq_prefix[k - 1];
 
-    // Higher-depth terms: extend a running carry across the trailing bits.
+    // Higher-depth terms: each adds `carry_d * flip * eq_prefix[k-1-d]`.
     //
-    //     carry_d = product over i in 0..d of rx[k-1-i] * (1 - ry[k-1-i])
-    //
-    // For each depth d we accumulate:
-    //
-    //     carry_d * flip * eq_prefix[k-1-d]
-    //
-    // where `flip` encodes the position just above the carry that flips
-    // from 0 in x to 1 in y.
+    //     carry_d = prod_{i < d} rx[k-1-i] * (1 - ry[k-1-i])   // carry chain
+    //     flip    = (1 - rx[k-1-d]) * ry[k-1-d]                // bit that flips
+    //     eq_prefix[k-1-d]                                     // high bits match
     let mut carry = EF::ONE;
     for d in 1..k {
-        // Grow the carry by one more trailing position.
         carry *= rx[k - d] * (EF::ONE - ry[k - d]);
-        // The "flip" position: 0 in x, 1 in y.
         let flip = (EF::ONE - rx[k - 1 - d]) * ry[k - 1 - d];
-        // Bits above the flip position must match between x and y.
         let high_match = eq_prefix[k - 1 - d];
         total += carry * flip * high_match;
     }
@@ -157,22 +125,22 @@ pub fn next_eval<EF: Field>(rx: &[EF], ry: &[EF]) -> EF {
     total
 }
 
-/// Build the dense next-row rotation of a length-`m` column.
+/// Dense next-row rotation of a length-`m` column.
 ///
 /// # Arguments
 ///
-/// - `column`: column values in row order, length must be a power of two.
+/// - `column`: column values in row order; length must be a power of two.
 ///
 /// # Returns
 ///
-/// A new vector where entry `i` holds the original entry at row `i + 1`
-/// and the last entry is zero. The convention matches `next_eval`: the
-/// last row has no successor, so its shifted value is zero rather than
-/// wrapping around.
+/// A length-`m` vector where:
+///
+/// - entry `i` (for `i < m - 1`) holds `column[i + 1]`,
+/// - the last entry is zero — the last row has no successor (no wrap).
 ///
 /// # Performance
 ///
-/// - `O(m)` field operations dominated by the memcpy of `m - 1` elements.
+/// - `O(m)` field operations dominated by a `memcpy` of `m - 1` elements.
 /// - One allocation of length `m`.
 ///
 /// # Panics
@@ -186,9 +154,9 @@ pub fn shift_column<F: PrimeCharacteristicRing + Copy>(column: &[F]) -> Vec<F> {
         column.len(),
     );
     let m = column.len();
-    // Allocate the output and pre-fill it with zeros.
+    // Pre-fill the output with zeros; the tail entry will stay zero.
     let mut out: Vec<F> = F::zero_vec(m);
-    // Copy original entries 1..m into output positions 0..m-1; the last entry stays zero.
+    // Copy entries 1..m into output positions 0..m-1.
     if m > 1 {
         out[..m - 1].copy_from_slice(&column[1..]);
     }
@@ -246,32 +214,32 @@ mod tests {
     }
 
     #[test]
-    fn first_last_transition_at_corners() {
+    fn boundary_evals_at_corners() {
         // Fixture state: k = 3, so the cube has 8 vertices.
         //
         // Invariant per vertex:
         //
-        //     idx == 0     -> first row selector returns 1
-        //     idx == 2^k-1 -> last row selector returns 1
-        //     idx != 2^k-1 -> transition selector returns 1
+        //     idx == 0     -> first      = 1, others 0
+        //     idx == 2^k-1 -> last       = 1, others 0
+        //     idx != 2^k-1 -> transition = 1
         let k = 3usize;
-        let last = (1usize << k) - 1;
+        let last_idx = (1usize << k) - 1;
         for idx in 0..(1usize << k) {
             let rs = Point::<EF>::hypercube(idx, k);
-            let rs = rs.as_slice();
+            let evals = BoundaryEvals::at(rs.as_slice());
             assert_eq!(
-                is_first_row_eval(rs),
+                evals.first,
                 if idx == 0 { EF::ONE } else { EF::ZERO },
                 "first idx={idx}"
             );
             assert_eq!(
-                is_last_row_eval(rs),
-                if idx == last { EF::ONE } else { EF::ZERO },
+                evals.last,
+                if idx == last_idx { EF::ONE } else { EF::ZERO },
                 "last idx={idx}"
             );
             assert_eq!(
-                is_transition_eval(rs),
-                if idx == last { EF::ZERO } else { EF::ONE },
+                evals.transition,
+                if idx == last_idx { EF::ZERO } else { EF::ONE },
                 "transition idx={idx}"
             );
         }
