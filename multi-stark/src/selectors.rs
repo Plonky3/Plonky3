@@ -18,82 +18,30 @@
 
 use alloc::vec::Vec;
 
-use p3_field::{Algebra, Field, PrimeCharacteristicRing};
-
-/// Evaluate the multilinear equality indicator at the boolean encoding of an index.
-///
-/// # Arguments
-///
-/// - `rs`: challenge coordinates, one per binary trace variable.
-/// - `idx`: integer in `0..2^k`, with `k = rs.len()`, encoded big-endian.
-///
-/// # Returns
-///
-/// The product `prod_j (rs[j] * b_j + (1 - rs[j]) * (1 - b_j))` where
-/// `b_j` is bit `k - 1 - j` of `idx`.
-///
-/// # Use
-///
-/// - With `idx = 0`, this is the first-row selector.
-/// - With `idx = m - 1`, this is the last-row selector.
-/// - At boolean inputs it agrees with the discrete equality predicate.
-///
-/// # Panics
-///
-/// Panics in debug mode if `idx >= 2^k`.
-///
-/// # Examples
-///
-/// ```
-/// use p3_baby_bear::BabyBear;
-/// use p3_field::PrimeCharacteristicRing;
-/// use p3_multi_stark::selectors::eq_eval;
-///
-/// // Big-endian: rs = (0, 1) encodes the integer 1.
-/// let rs = [BabyBear::ZERO, BabyBear::ONE];
-/// assert_eq!(eq_eval(&rs, 1), BabyBear::ONE);
-/// assert_eq!(eq_eval(&rs, 0), BabyBear::ZERO);
-/// ```
-#[inline]
-#[must_use]
-pub fn eq_eval<EF: Field>(rs: &[EF], idx: usize) -> EF {
-    let k = rs.len();
-    debug_assert!(
-        k == 0 || idx < (1usize << k),
-        "eq_eval: idx ({idx}) must be < 2^k ({})",
-        1usize << k,
-    );
-
-    // Initialize the running product at 1; the empty product evaluates to 1.
-    let mut acc = EF::ONE;
-    for (j, &r) in rs.iter().enumerate() {
-        // Big-endian: coordinate j holds bit (k - 1 - j) of idx.
-        let bit_is_one = (idx >> (k - 1 - j)) & 1 == 1;
-        // Multiply by r when the bit is 1, by (1 - r) when the bit is 0.
-        acc *= if bit_is_one { r } else { EF::ONE - r };
-    }
-    acc
-}
+use p3_field::{Field, PrimeCharacteristicRing};
 
 /// First-row selector at a challenge point.
 ///
-/// Equivalent to `eq_eval` against the integer `0`.
+/// # Returns
+///
+/// The product `prod_j (1 - rs[j])`, which is `eq(rs, bin(0))` specialized to
+/// the all-zeros boolean pattern.
 #[inline]
 #[must_use]
 pub fn is_first_row_eval<EF: Field>(rs: &[EF]) -> EF {
-    eq_eval(rs, 0)
+    rs.iter().map(|&r| EF::ONE - r).product()
 }
 
-/// Last-row selector at a challenge point.
+/// Last-row selector at a challenge point, for a trace of `m = 2^k` rows.
 ///
-/// Equivalent to `eq_eval` against the integer `2^k - 1`.
+/// # Returns
+///
+/// The product `prod_j rs[j]`, which is `eq(rs, bin(m - 1))` specialized to
+/// the all-ones boolean pattern.
 #[inline]
 #[must_use]
 pub fn is_last_row_eval<EF: Field>(rs: &[EF]) -> EF {
-    let k = rs.len();
-    // Last hypercube index; an empty `rs` collapses to 0.
-    let last = if k == 0 { 0 } else { (1usize << k) - 1 };
-    eq_eval(rs, last)
+    rs.iter().copied().product()
 }
 
 /// Transition selector at a challenge point.
@@ -103,29 +51,6 @@ pub fn is_last_row_eval<EF: Field>(rs: &[EF]) -> EF {
 #[must_use]
 pub fn is_transition_eval<EF: Field>(rs: &[EF]) -> EF {
     EF::ONE - is_last_row_eval(rs)
-}
-
-/// First-row Lagrange basis polynomial at a challenge point.
-///
-/// # Why
-///
-/// - First-row public inputs are *spliced* into a committed column.
-/// - The verifier recovers the original column evaluation as
-///   `committed(r) + p * lagrange_zero(r)`.
-/// - That makes this a basis vector, distinct in role from a selector.
-#[inline]
-#[must_use]
-pub fn lagrange_zero<EF: Field>(rs: &[EF]) -> EF {
-    is_first_row_eval(rs)
-}
-
-/// Last-row Lagrange basis polynomial at a challenge point.
-///
-/// Mirrors `lagrange_zero` for boundary values at the last row.
-#[inline]
-#[must_use]
-pub fn lagrange_last<EF: Field>(rs: &[EF]) -> EF {
-    is_last_row_eval(rs)
 }
 
 /// Multilinear extension of the "add one in binary" relation.
@@ -270,39 +195,6 @@ pub fn shift_column<F: PrimeCharacteristicRing + Copy>(column: &[F]) -> Vec<F> {
     out
 }
 
-/// Multilinear equality indicator with base-field challenges.
-///
-/// # Arguments
-///
-/// - `rs`: base-field challenge coordinates.
-/// - `idx`: target hypercube index.
-///
-/// # Returns
-///
-/// Same closed form as `eq_eval`, but accepts base-field challenges and
-/// returns an extension-field result. Useful where part of the prover's
-/// transcript has been narrowed back into the base field.
-#[inline]
-#[must_use]
-pub fn eq_eval_base<F, EF>(rs: &[F], idx: usize) -> EF
-where
-    F: PrimeCharacteristicRing + Copy,
-    EF: Algebra<F> + Copy + PrimeCharacteristicRing,
-{
-    let k = rs.len();
-    debug_assert!(k == 0 || idx < (1usize << k));
-    // Initialize the running product at 1.
-    let mut acc = EF::ONE;
-    for (j, &r) in rs.iter().enumerate() {
-        // Same big-endian bit selection as the extension-field variant.
-        let bit = (idx >> (k - 1 - j)) & 1 == 1;
-        // Lift the base challenge into the extension before multiplying.
-        let r_ef: EF = r.into();
-        acc *= if bit { r_ef } else { EF::ONE - r_ef };
-    }
-    acc
-}
-
 #[cfg(test)]
 mod tests {
     use alloc::vec;
@@ -321,14 +213,6 @@ mod tests {
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
-
-    fn eq_eval_reference(rs: &[EF], idx: usize) -> EF {
-        // Reference: build the full eq table and read off entry `idx`.
-        if rs.is_empty() {
-            return EF::ONE;
-        }
-        Poly::new_from_point(rs, EF::ONE).as_slice()[idx]
-    }
 
     fn next_eval_reference(rx: &[EF], ry: &[EF]) -> EF {
         // Reference: materialize the explicit indicator on the cube and evaluate it.
@@ -362,45 +246,6 @@ mod tests {
     }
 
     #[test]
-    fn eq_eval_zero_vars_is_one() {
-        // Invariant: the empty product evaluates to ONE.
-        assert_eq!(eq_eval::<EF>(&[], 0), EF::ONE);
-    }
-
-    #[test]
-    fn eq_eval_at_boolean_inputs_is_indicator() {
-        // Invariant: at hypercube inputs the polynomial returns the discrete indicator.
-        //
-        //     for every k in 0..=4 and every idx in 0..2^k:
-        //         eq_eval(hypercube(idx), query) == 1 iff idx == query
-        for k in 0..=4 {
-            for idx in 0..(1usize << k) {
-                let rs = Point::<EF>::hypercube(idx, k);
-                for query in 0..(1usize << k) {
-                    let v = eq_eval(rs.as_slice(), query);
-                    let expected = if idx == query { EF::ONE } else { EF::ZERO };
-                    assert_eq!(v, expected, "k={k} idx={idx} query={query}");
-                }
-            }
-        }
-    }
-
-    proptest! {
-        #[test]
-        fn eq_eval_matches_reference(k in 0usize..6, seed: u64, idx_seed: u64) {
-            // Build random challenges in EF and a random target hypercube index.
-            let mut rng = SmallRng::seed_from_u64(seed);
-            let rs: Vec<EF> = (0..k).map(|_| rng.random()).collect();
-            let idx = if k == 0 { 0 } else { idx_seed as usize % (1usize << k) };
-
-            // Closed-form result must agree with the dense reference.
-            let got = eq_eval(&rs, idx);
-            let want = eq_eval_reference(&rs, idx);
-            prop_assert_eq!(got, want);
-        }
-    }
-
-    #[test]
     fn first_last_transition_at_corners() {
         // Fixture state: k = 3, so the cube has 8 vertices.
         //
@@ -414,27 +259,21 @@ mod tests {
         for idx in 0..(1usize << k) {
             let rs = Point::<EF>::hypercube(idx, k);
             let rs = rs.as_slice();
-            // First-row selector must vanish off the first row.
             assert_eq!(
                 is_first_row_eval(rs),
                 if idx == 0 { EF::ONE } else { EF::ZERO },
                 "first idx={idx}"
             );
-            // Last-row selector must vanish off the last row.
             assert_eq!(
                 is_last_row_eval(rs),
                 if idx == last { EF::ONE } else { EF::ZERO },
                 "last idx={idx}"
             );
-            // Transition selector must vanish exactly on the last row.
             assert_eq!(
                 is_transition_eval(rs),
                 if idx == last { EF::ZERO } else { EF::ONE },
                 "transition idx={idx}"
             );
-            // The Lagrange aliases must be bit-identical to the selector functions.
-            assert_eq!(lagrange_zero(rs), is_first_row_eval(rs));
-            assert_eq!(lagrange_last(rs), is_last_row_eval(rs));
         }
     }
 
