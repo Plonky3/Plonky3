@@ -73,8 +73,10 @@ impl<F, EF> MultiRoundProof<F, EF> {
         EF: ExtensionField<F>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        // A degree-zero round polynomial carries no information; the Lagrange
-        // helper would later index out of bounds on the empty evaluation slice.
+        // A degree-zero round polynomial carries no information;
+        //
+        // The Lagrange helper would later index out of bounds on the empty evaluation slice.
+        //
         // Catch it here with a typed error rather than a panic.
         if degree == 0 {
             return Err(MultiRoundError::InvalidDegree { degree });
@@ -177,8 +179,7 @@ mod tests {
 
     #[test]
     fn verify_rejects_zero_degree() {
-        // Invariant: a degree-zero round polynomial carries no information
-        // and would later index out of bounds inside the Lagrange helper.
+        // Invariant: a degree-zero round polynomial carries no information.
         // The verifier must reject up front with a typed error.
         //
         // Fixture state: empty proof, but degree set to zero.
@@ -191,17 +192,13 @@ mod tests {
         let mut ch = fresh_challenger();
         let proof: MultiRoundProof<F, EF> = MultiRoundProof::default();
         let err = proof.verify(&mut ch, 0, 0, 0, EF::ZERO).unwrap_err();
-        assert!(matches!(
-            err,
-            MultiRoundError::InvalidDegree { degree: 0 }
-        ));
+        assert!(matches!(err, MultiRoundError::InvalidDegree { degree: 0 }));
     }
 
     #[test]
     fn verify_rejects_unexpected_pow_witnesses() {
-        // Invariant: with grinding disabled (pow_bits == 0) the canonical
-        // proof shape requires an empty pow_witnesses vector. Two distinct
-        // proofs would otherwise verify for the same statement.
+        // Invariant: with `pow_bits == 0` the canonical proof shape requires `pow_witnesses` to be empty.
+        // Without this rule two distinct proofs would verify for the same statement (malleability).
         //
         // Fixture state: a one-round proof with an extra PoW witness attached.
         //
