@@ -33,12 +33,6 @@ where
     }
 
     #[inline(always)]
-    fn ext_square(a: &[Self; WIDTH], res: &mut [Self; WIDTH]) {
-        // No specialized SIMD square kernel; reuse the mul path with a=b.
-        Self::ext_mul(a, a, res);
-    }
-
-    #[inline(always)]
     fn ext_add(a: &[Self; WIDTH], b: &[Self; WIDTH]) -> [Self; WIDTH] {
         let mut res = [Self::ZERO; WIDTH];
         unsafe {
@@ -111,12 +105,6 @@ where
     #[inline(always)]
     fn ext_mul(a: &[Self; 5], b: &[Self; 5], res: &mut [Self; 5]) {
         quintic_mul_packed_trinomial(a, b, res);
-    }
-
-    #[inline(always)]
-    fn ext_square(a: &[Self; 5], res: &mut [Self; 5]) {
-        // No specialized SIMD square kernel for the trinomial reducer; reuse mul.
-        Self::ext_mul(a, a, res);
     }
 
     #[inline(always)]

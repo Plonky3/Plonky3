@@ -1,6 +1,6 @@
 use p3_field::extension::{
     Binomial, BinomiallyExtendable, Complex, ExtensionAlgebra, HasComplexBinomialExtension,
-    HasTwoAdicComplexBinomialExtension, binomial_mul, binomial_square,
+    HasTwoAdicComplexBinomialExtension, binomial_mul,
 };
 use p3_field::{PrimeCharacteristicRing, TwoAdicField, field_to_array};
 
@@ -10,11 +10,6 @@ impl ExtensionAlgebra<Self, 3, Binomial<Self>> for Mersenne31 {
     #[inline]
     fn ext_mul(a: &[Self; 3], b: &[Self; 3], res: &mut [Self; 3]) {
         binomial_mul::<Self, Self, Self, 3>(a, b, res, <Self as BinomiallyExtendable<3>>::W);
-    }
-
-    #[inline]
-    fn ext_square(a: &[Self; 3], res: &mut [Self; 3]) {
-        binomial_square::<Self, Self, 3>(a, res, <Self as BinomiallyExtendable<3>>::W);
     }
 }
 

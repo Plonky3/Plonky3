@@ -1,6 +1,6 @@
 use super::{
     Binomial, BinomialExtensionField, BinomiallyExtendable, ExtensionAlgebra,
-    HasTwoAdicBinomialExtension, binomial_mul, binomial_square,
+    HasTwoAdicBinomialExtension, binomial_mul,
 };
 use crate::{Algebra, Field, PrimeCharacteristicRing};
 
@@ -21,11 +21,6 @@ impl<F: ComplexExtendable> ExtensionAlgebra<F, 2, Binomial<F>> for F {
     #[inline]
     fn ext_mul(a: &[Self; 2], b: &[Self; 2], res: &mut [Self; 2]) {
         binomial_mul::<F, Self, Self, 2>(a, b, res, <F as BinomiallyExtendable<2>>::W);
-    }
-
-    #[inline]
-    fn ext_square(a: &[Self; 2], res: &mut [Self; 2]) {
-        binomial_square::<F, Self, 2>(a, res, <F as BinomiallyExtendable<2>>::W);
     }
 }
 
@@ -118,11 +113,6 @@ where
     #[inline]
     fn ext_mul(a: &[Self; D], b: &[Self; D], res: &mut [Self; D]) {
         binomial_mul::<Self, Self, Self, D>(a, b, res, <Self as BinomiallyExtendable<D>>::W);
-    }
-
-    #[inline]
-    fn ext_square(a: &[Self; D], res: &mut [Self; D]) {
-        binomial_square::<Self, Self, D>(a, res, <Self as BinomiallyExtendable<D>>::W);
     }
 }
 

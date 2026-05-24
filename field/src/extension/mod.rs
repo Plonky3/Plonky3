@@ -161,9 +161,10 @@ impl<F: Field, PF: PackedField<Scalar = F>, const D: usize, Shape> PackedExtFiel
 // Shape-agnostic impls on the unified struct
 // ---------------------------------------------------------------------------
 //
-// These three traits — `Default`, `From<A>`, `From<[A; D]>` — have the same
-// implementation across every shape. They live here on the unified struct
-// rather than being triplicated across the per-shape files.
+// These traits — `Default`, `From<A>`, `From<[A; D]>`, `BasedVectorSpace`,
+// `Packable`, `Distribution` — have the same implementation across every
+// shape. They live here on the unified struct rather than being triplicated
+// across the per-shape files.
 
 impl<F: Field, A: Algebra<F>, const D: usize, Shape: ExtensionShape> Default
     for ExtField<F, D, Shape, A>
@@ -246,19 +247,17 @@ where
 }
 
 /// Algebra over `F` that supports degree-`D` extension arithmetic with a given reducer `Shape`.
-///
-/// Of the five methods, `ext_add`/`ext_sub`/`ext_base_mul` are shape-agnostic and
-/// come with sensible default impls. `ext_mul`/`ext_square` are shape-dependent
-/// and must be supplied by each impl (typically a one-line delegation to the
-/// shape's free helper: `binomial_mul`/`binomial_square` for `Binomial<F>`,
-/// `trinomial_cubic_mul`/`cubic_square` for `CubicTrinomial`, and
-/// `trinomial_quintic_mul`/`quintic_square` for `QuinticTrinomial`).
 pub trait ExtensionAlgebra<F: Field, const D: usize, Shape: ExtensionShape>: Algebra<F> {
     /// Multiplication in the algebra extension ring.
     fn ext_mul(a: &[Self; D], b: &[Self; D], res: &mut [Self; D]);
 
     /// Squaring in the algebra extension ring.
-    fn ext_square(a: &[Self; D], res: &mut [Self; D]);
+    ///
+    /// Override when a dedicated symmetry-exploiting kernel beats a general multiply.
+    #[inline]
+    fn ext_square(a: &[Self; D], res: &mut [Self; D]) {
+        Self::ext_mul(a, a, res);
+    }
 
     /// Coefficient-wise addition.
     #[inline]
