@@ -37,4 +37,10 @@ pub enum MultiRoundError {
         /// Round in which validation failed.
         round: usize,
     },
+    /// Per-variable degree must be at least one to carry any information.
+    #[error("sumcheck degree must be at least one, got {degree}")]
+    InvalidDegree {
+        /// Rejected degree value.
+        degree: usize,
+    },
 }

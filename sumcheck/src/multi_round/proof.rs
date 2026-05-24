@@ -5,7 +5,7 @@
 use alloc::vec::Vec;
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{ExtensionField, TwoAdicField};
+use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use serde::{Deserialize, Serialize};
 
@@ -69,10 +69,17 @@ impl<F, EF> MultiRoundProof<F, EF> {
         mut claimed_sum: EF,
     ) -> Result<(Point<EF>, EF), MultiRoundError>
     where
-        F: TwoAdicField,
-        EF: ExtensionField<F> + TwoAdicField,
+        F: Field,
+        EF: ExtensionField<F>,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
+        // A degree-zero round polynomial carries no information; the Lagrange
+        // helper would later index out of bounds on the empty evaluation slice.
+        // Catch it here with a typed error rather than a panic.
+        if degree == 0 {
+            return Err(MultiRoundError::InvalidDegree { degree });
+        }
+
         // Reject up front if the proof has the wrong round count.
         if self.round_polys.len() != num_rounds {
             return Err(MultiRoundError::RoundCountMismatch {
@@ -81,10 +88,13 @@ impl<F, EF> MultiRoundProof<F, EF> {
             });
         }
 
-        // Reject up front if grinding witness count is wrong.
-        if pow_bits > 0 && self.pow_witnesses.len() != num_rounds {
+        // Canonical proof shape — every accepting proof has a unique form:
+        // - `pow_bits == 0` requires an empty `pow_witnesses` vector,
+        // - `pow_bits > 0`  requires exactly `num_rounds` witnesses.
+        let expected_pow_witnesses = if pow_bits > 0 { num_rounds } else { 0 };
+        if self.pow_witnesses.len() != expected_pow_witnesses {
             return Err(MultiRoundError::PowWitnessCountMismatch {
-                expected: num_rounds,
+                expected: expected_pow_witnesses,
                 actual: self.pow_witnesses.len(),
             });
         }
@@ -161,6 +171,54 @@ mod tests {
             MultiRoundError::RoundCountMismatch {
                 expected: 2,
                 actual: 0
+            }
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_zero_degree() {
+        // Invariant: a degree-zero round polynomial carries no information
+        // and would later index out of bounds inside the Lagrange helper.
+        // The verifier must reject up front with a typed error.
+        //
+        // Fixture state: empty proof, but degree set to zero.
+        //
+        // Mutation: pass degree = 0.
+        //
+        //     proof rounds: 0
+        //     num_rounds:   0
+        //     degree:       0       ← rejected
+        let mut ch = fresh_challenger();
+        let proof: MultiRoundProof<F, EF> = MultiRoundProof::default();
+        let err = proof.verify(&mut ch, 0, 0, 0, EF::ZERO).unwrap_err();
+        assert!(matches!(
+            err,
+            MultiRoundError::InvalidDegree { degree: 0 }
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_unexpected_pow_witnesses() {
+        // Invariant: with grinding disabled (pow_bits == 0) the canonical
+        // proof shape requires an empty pow_witnesses vector. Two distinct
+        // proofs would otherwise verify for the same statement.
+        //
+        // Fixture state: a one-round proof with an extra PoW witness attached.
+        //
+        //     round_polys.len() = 1      → matches num_rounds = 1
+        //     pow_bits = 0
+        //     pow_witnesses.len() = 1    ← spurious, must be rejected
+        let mut ch = fresh_challenger();
+        let proof = MultiRoundProof::<F, EF> {
+            round_polys: alloc::vec![alloc::vec![EF::ZERO; 1]],
+            pow_witnesses: alloc::vec![F::ZERO],
+        };
+        let err = proof.verify(&mut ch, 1, 1, 0, EF::ZERO).unwrap_err();
+        assert!(matches!(
+            err,
+            MultiRoundError::PowWitnessCountMismatch {
+                expected: 0,
+                actual: 1
             }
         ));
     }
