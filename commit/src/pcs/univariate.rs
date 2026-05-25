@@ -316,44 +316,31 @@ where
             quotient_size >= trace_size,
             "quotient domain size ({quotient_size}) must be >= trace domain size ({trace_size})",
         );
-        assert_eq!(
-            quotient_size % trace_size,
-            0,
+        assert!(
+            quotient_size.is_multiple_of(trace_size),
             "quotient domain size ({quotient_size}) must be divisible by trace domain size ({trace_size})",
         );
         let blowup = quotient_size / trace_size;
-        assert!(
-            blowup.is_power_of_two(),
-            "blowup factor ({blowup}) must be a power of two",
-        );
-        let max_period = periodic_cols
-            .iter()
-            .map(|col| {
-                let period = col.len();
-                assert!(
-                    period > 0,
-                    "periodic column length must be > 0, got {period}",
-                );
-                assert!(
-                    period.is_power_of_two(),
-                    "periodic column length must be a power of 2"
-                );
-                assert_eq!(
-                    trace_size % period,
-                    0,
-                    "trace domain size ({trace_size}) must be divisible by periodic column length ({period})",
-                );
-                period
-            })
-            .max()
-            .unwrap();
+
+        for col in periodic_cols {
+            let period = col.len();
+            assert!(
+                period > 0 && period.is_power_of_two(),
+                "periodic column length must be a non-zero power of 2, got {period}",
+            );
+            assert!(
+                trace_size.is_multiple_of(period),
+                "trace domain size ({trace_size}) must be divisible by periodic column length ({period})",
+            );
+        }
+        let max_period = periodic_cols.iter().map(|c| c.len()).max().unwrap();
         let extended_height = max_period
             .checked_mul(blowup)
             .expect("extended height overflow when computing max_period * blowup");
-        assert!(
-            extended_height <= quotient_size,
-            "extended periodic height ({extended_height}) must be <= quotient domain size ({quotient_size})",
-        );
+        // Implied by the column checks above.
+        // Each period divides the trace size, so max_period <= trace_size.
+        // Therefore extended_height = max_period * blowup <= trace_size * blowup = quotient_size.
+        debug_assert!(extended_height <= quotient_size);
         let num_cols = periodic_cols.len();
         let row_major_capacity = extended_height
             .checked_mul(num_cols)

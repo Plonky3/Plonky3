@@ -28,7 +28,6 @@
 //! same period.
 
 use alloc::vec::Vec;
-use core::convert::TryFrom;
 
 use p3_commit::{PeriodicEvaluator, PeriodicLdeTable, PolynomialSpace};
 use p3_field::ExtensionField;
@@ -77,33 +76,22 @@ impl<F: ComplexExtendable> PeriodicEvaluator<F, CircleDomain<F>> for CirclePerio
             .log_n
             .checked_sub(trace_domain.log_n)
             .expect("LDE domain log_n must be >= trace domain log_n");
-        let log_blowup_u32 = u32::try_from(log_blowup).expect("log_blowup does not fit into u32");
         let blowup = 1usize
-            .checked_shl(log_blowup_u32)
+            .checked_shl(log_blowup as u32)
             .expect("blowup overflow when computing 1 << log_blowup");
 
-        // Find the maximum period and validate all columns
-        let max_period = periodic_table
-            .iter()
-            .map(|col| {
-                let period = col.len();
-                assert!(
-                    period > 0,
-                    "periodic column length must be > 0, got {period}",
-                );
-                assert!(
-                    period.is_power_of_two(),
-                    "periodic column length must be a power of 2"
-                );
-                assert_eq!(
-                    trace_len % period,
-                    0,
-                    "trace domain size ({trace_len}) must be divisible by periodic column length ({period})",
-                );
-                period
-            })
-            .max()
-            .unwrap();
+        for col in periodic_table {
+            let period = col.len();
+            assert!(
+                period > 0 && period.is_power_of_two(),
+                "periodic column length must be a non-zero power of 2, got {period}",
+            );
+            assert!(
+                trace_len.is_multiple_of(period),
+                "trace domain size ({trace_len}) must be divisible by periodic column length ({period})",
+            );
+        }
+        let max_period = periodic_table.iter().map(|c| c.len()).max().unwrap();
 
         let log_max_period = log2_strict_usize(max_period);
         let log_repetitions = log2_strict_usize(trace_len / max_period);
@@ -166,9 +154,21 @@ impl<F: ComplexExtendable> PeriodicEvaluator<F, CircleDomain<F>> for CirclePerio
         trace_domain: &CircleDomain<F>,
         point: EF,
     ) -> Vec<EF> {
+        let trace_len = trace_domain.size();
         periodic_table
             .iter()
-            .map(|col| PolynomialSpace::evaluate_periodic_column_at(trace_domain, col, point))
+            .map(|col| {
+                let period = col.len();
+                assert!(
+                    period > 0 && period.is_power_of_two(),
+                    "periodic column length must be a non-zero power of 2, got {period}",
+                );
+                assert!(
+                    trace_len.is_multiple_of(period),
+                    "trace domain size ({trace_len}) must be divisible by periodic column length ({period})",
+                );
+                PolynomialSpace::evaluate_periodic_column_at(trace_domain, col, point)
+            })
             .collect()
     }
 }
