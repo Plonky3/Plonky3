@@ -130,25 +130,35 @@ where
     }
 }
 
-/// Absorb remaining iterator elements into the rate region, right-to-left.
+/// Absorb the remainder of an input stream into the rate window, one block at a time.
 ///
-/// Shared helper used by the right-to-left sponge's hash and initial-state methods.
+/// # Overview
 ///
-/// # Algorithm
+/// - Shared by the full hashing path and the precomputed-state path.
+/// - Each iteration consumes `RATE` elements.
+/// - Each iteration runs one permutation.
+/// - The first element of a block lands at the topmost state index.
+/// - The remaining elements fill the rate window downward.
+/// - The capacity is left untouched between blocks.
+/// - The capacity carries the chaining variable forward.
 ///
-/// Each block overwrites positions `[WIDTH-RATE .. WIDTH-1]` in descending
-/// index order, then applies the permutation:
+/// # Per-block diagram
 ///
 /// ```text
-///   state = [ cap_0 .. cap_{c-1} | rate_{r-1} .. rate_0 ]
-///                                   ←←←←←←←←←←←←←←←←←←
-///                                   filled right-to-left
+///     WIDTH=4, RATE=2, input = [a, b, c, d]
+///
+///         block 1                            block 2
+///         -------                            -------
+///         state[3] = a                       state[3] = c
+///         state[2] = b                       state[2] = d
+///         permute(state)                     permute(state)
 /// ```
 ///
 /// # Panics
 ///
-/// Panics if the iterator yields a number of elements that is not a multiple of RATE.
-#[inline(always)]
+/// - The iterator length must be a multiple of `RATE`.
+/// - The helper panics if a block starts but cannot complete.
+#[inline]
 fn absorb_rtl_chunks<T, P, I, const WIDTH: usize, const RATE: usize, const OUT: usize>(
     permutation: &P,
     state: &mut [T; WIDTH],
@@ -159,76 +169,114 @@ where
     P: CryptographicPermutation<[T; WIDTH]>,
     I: Iterator<Item = T>,
 {
-    // Consume RATE elements per iteration.
+    // Shape constraints checked at compile time.
     //
-    // The first element lands at the highest rate index; the rest fill downward.
+    // - `RATE > 0`     — at least one element per block.
+    // - `RATE < WIDTH` — at least one slot reserved for the capacity.
+    // - `OUT <= WIDTH` — digest cannot exceed the state size.
+    const {
+        assert!(RATE > 0);
+        assert!(RATE < WIDTH);
+        assert!(OUT <= WIDTH);
+    }
+
+    // Each outer iteration processes one rate-sized block.
     //
-    // Example with WIDTH=4, RATE=2, input = [a, b, c, d]:
+    //     1. write the topmost slot from the starting element
+    //     2. fill the remaining rate slots downward
+    //     3. permute the full state
     //
-    //   Block 1:
-    //     state[3] = a     ← highest rate index
-    //     state[2] = b     ← next rate index down
-    //     permute(state)
-    //
-    //   Block 2:
-    //     state[3] = c
-    //     state[2] = d
-    //     permute(state)
+    // The loop exits when no more starting element arrives.
+    // That means the stream ended cleanly on a block boundary.
     while let Some(elem) = iter.next() {
-        // Place the first element at the highest rate index.
+        // Starting element of a block always lands at the topmost slot.
         state[WIDTH - 1] = elem;
 
-        // Fill the remaining rate slots in descending order.
-        // Panics if the iterator runs dry mid-block (non-multiple of RATE).
+        // Remaining rate slots, descending from `WIDTH - 2` to `WIDTH - RATE`.
+        //
+        // A drained iterator here means the input length is not a multiple of `RATE` — a programmer error.
         for pos in (WIDTH - RATE..WIDTH - 1).rev() {
-            state[pos] = iter.next().unwrap();
+            state[pos] = iter
+                .next()
+                .expect("iterator length must be a multiple of RATE");
         }
 
-        // Apply the permutation to diffuse absorbed data across the full state.
+        // Diffuse the new rate slots into the capacity for the next block.
         permutation.permute_mut(state);
     }
 
-    // Extract the digest from the first OUT positions.
-    state[..OUT].try_into().unwrap()
+    // Squeeze: return the first `OUT` positions of the final state.
+    //
+    // - Positions `0..(WIDTH - RATE)` form the capacity window.
+    // - For `OUT <= WIDTH - RATE` the digest sits entirely in the capacity.
+    // - For larger `OUT` it crosses into the rate.
+    // - Both choices are sound in the random-permutation model.
+    // - Any contiguous truncation is indifferentiable from random output.
+    state[..OUT]
+        .try_into()
+        .expect("OUT is at most WIDTH by the const assertion above")
 }
 
-/// A padding-free, overwrite-mode sponge with right-to-left absorption.
+/// A padding-free hash that absorbs input into the state right-to-left.
 ///
 /// # Overview
 ///
-/// Standard sponges (Bertoni et al., 2007) absorb left-to-right into
-/// `[0..RATE)`. This variant absorbs from `[WIDTH-1]` downward, so
-/// elements are placed as they arrive without buffering a full block.
+/// - Walks the state from the highest index downward, one element per slot.
+/// - Streams elements that arrive in reverse order with no pre-buffering.
+/// - Typical use: Merkle tree construction over FRI/WHIR evaluations.
 ///
-/// Useful in FRI/WHIR where evaluations arrive in reverse order during
-/// Merkle tree construction — avoids collecting and reversing.
+/// # Differences from a strict sponge
 ///
-/// # Two-phase Absorption
+/// Reference: Bertoni, Daemen, Peeters, Van Assche, *"Sponge Functions"*, ECRYPT Hash Workshop 2007.
 ///
-/// - **Phase 1** — first block fills all WIDTH positions (capacity + rate).
-///   Injects real data into the capacity for full-width diffusion.
-/// - **Phase 2** — subsequent blocks overwrite only the last RATE positions.
-///   Capacity retains accumulated entropy from prior permutations.
+/// Paper: <https://keccak.team/files/SpongeFunctions.pdf>.
+///
+/// - Absorption walks the state top-down, not left-to-right.
+/// - The first block writes the whole state, capacity included.
+/// - Later blocks chain through the capacity as in a standard sponge.
+///
+/// # Soundness model
+///
+/// - The first-block pattern matches the truncated permutation compression of this crate.
+/// - That compression is applied iteratively here.
+/// - The construction reduces to an iterated truncated permutation.
+/// - It is not a strict sponge, so the Bertoni indifferentiability proof does not apply verbatim.
+/// - Soundness rests on the permutation behaving as a public random permutation.
+///
+/// # State layout
 ///
 /// ```text
-///   Phase 1 (WIDTH=4, input = [a, b, c, d, ...]):
-///
-///     idx:    3    2    1    0
-///           +----+----+----+----+
-///           | a  | b  | c  | d  |   ← all WIDTH slots
-///           +----+----+----+----+
-///             rate      capacity
-///
-///   Phase 2 (RATE=2, next = [e, f]):
-///
-///     idx:    3    2    1    0
-///           +----+----+----+----+
-///           | e  | f  |  (kept) |   ← only RATE slots
-///           +----+----+----+----+
-///             rate      capacity
+///     index:  0 .. WIDTH-RATE       ← capacity (chaining variable)
+///     index:  WIDTH-RATE .. WIDTH   ← rate    (absorption window)
 /// ```
 ///
-/// `WIDTH` is the sponge's rate plus the sponge's capacity.
+/// - The rate sits at the high indices because that is the side absorption writes to.
+/// - The digest is the first `OUT` positions of the final state.
+/// - In this layout the digest lives in the capacity half.
+/// - Truncating any contiguous window is indifferentiable from random output.
+/// - That holds as long as the capacity is large enough.
+///
+/// # Absorption phases
+///
+/// ```text
+///     Phase 1 — first block, WIDTH=4, input prefix = [a, b, c, d]
+///
+///         index:    0    1    2    3
+///                 +----+----+----+----+
+///                 | d  | c  | b  | a  |   ← write order: a→3, b→2, c→1, d→0
+///                 +----+----+----+----+
+///                   capacity     rate
+///
+///     Phase 2 — every subsequent block, RATE=2, next = [e, f]
+///
+///         index:    0    1    2    3
+///                 +----+----+----+----+
+///                 |   kept  | f  | e  |   ← only the rate window is rewritten
+///                 +----+----+----+----+
+///                   capacity     rate
+/// ```
+///
+/// `WIDTH` is the sum of the rate and capacity sizes.
 #[derive(Copy, Clone, Debug)]
 pub struct RtlPaddingFreeSponge<P, const WIDTH: usize, const RATE: usize, const OUT: usize> {
     /// The cryptographic permutation applied after each absorption block.
@@ -243,33 +291,44 @@ impl<P, const WIDTH: usize, const RATE: usize, const OUT: usize>
         Self { permutation }
     }
 
-    /// Precompute the sponge state after absorbing N all-zero rate-sized chunks.
+    /// Precompute the state that results from absorbing an all-zero prefix.
     ///
     /// # Overview
     ///
-    /// A midstate caching optimization.
+    /// - Midstate caching for inputs whose first chunks are known zero.
+    /// - In FRI/WHIR many Merkle leaves are zero.
+    /// - Their leading zeros feed identical permutation calls every time.
+    /// - Reusing the post-zero state saves work, like SHA-256 midstate caching in Bitcoin mining.
     ///
-    /// In FRI/WHIR, polynomials of degree d evaluated over domains of size
-    /// N >> d produce many all-zero Merkle leaves. This precomputes the
-    /// sponge state for those zeros once, avoiding redundant permutations.
+    /// # Returned state
     ///
-    /// Pass the returned state to the initial-state hashing method to
-    /// continue absorption with real data.
+    /// - The first chunk is a full-width zero block.
+    /// - The next `n_zero_chunks - 2` chunks are rate-sized zero blocks.
+    /// - All are permuted in turn.
+    /// - The rate window of the returned state is left as the last permutation produced it.
+    /// - The caller overwrites that window with the first non-zero block.
     ///
-    /// # Algorithm
+    /// # Why at least two chunks
+    ///
+    /// - The first chunk fills the whole state with zeros and runs one boundary permutation.
+    /// - The last chunk is intentionally not permuted.
+    /// - The caller then rewrites its rate window with real data.
+    /// - Below two chunks there is nothing meaningful to precompute.
+    ///
+    /// # Diagram
     ///
     /// ```text
-    ///   n_zero_chunks = 4, WIDTH = 4, RATE = 2:
+    ///     n_zero_chunks = 4, WIDTH = 4, RATE = 2
     ///
-    ///   Chunk 1:  [0,0,0,0] → permute → s_1
-    ///   Chunk 2:  s_1, rate zeroed → permute → s_2
-    ///   Chunk 3:  s_2, rate zeroed → permute → s_3  ← returned
-    ///             (chunk 4's rate will be overwritten by real data)
+    ///         chunk 1 : state filled with zeros        → permute → s_1
+    ///         chunk 2 : rate of s_1 zeroed             → permute → s_2
+    ///         chunk 3 : rate of s_2 zeroed             → permute → s_3  ← returned
+    ///         chunk 4 : caller overwrites rate of s_3 with real data
     /// ```
     ///
     /// # Panics
     ///
-    /// Panics if `n_zero_chunks < 2`.
+    /// Panics when fewer than two zero chunks are requested.
     pub fn precompute_zero_suffix_state<T>(&self, n_zero_chunks: usize) -> [T; WIDTH]
     where
         T: Default + Copy,
@@ -281,22 +340,25 @@ impl<P, const WIDTH: usize, const RATE: usize, const OUT: usize>
             assert!(OUT <= WIDTH);
         }
 
-        // Minimum 2 chunks: one for the initial permutation, one whose rate
-        // region is left for the caller to overwrite with real data.
+        // Minimum two chunks.
+        //
+        // - One chunk runs the initial boundary permutation.
+        // - One chunk is reserved for the caller's first real data block.
         assert!(n_zero_chunks >= 2);
 
-        // Chunk 1: all-zero state, permute once.
+        // Chunk 1: permute the all-zero state once.
         let mut state = [T::default(); WIDTH];
         self.permutation.permute_mut(&mut state);
 
-        // Chunks 2 .. (n_zero_chunks - 1): zero the rate region and permute.
+        // Chunks 2 through `n_zero_chunks - 1`: zero the rate and permute.
         //
-        // Why n_zero_chunks - 2?
-        // - Chunk 1 handled above,
-        // - The final chunk's rate region is left as-is: the caller overwrites it with real data.
+        // The loop count is `n_zero_chunks - 2` because:
+        //
+        // - Chunk 1 was handled above.
+        // - The final chunk is left untouched for the caller's real data.
         for _ in 0..n_zero_chunks - 2 {
-            // Reset only the rate portion (positions [WIDTH-RATE .. WIDTH-1]).
-            // The capacity portion retains accumulated permutation entropy.
+            // Reset only the rate window.
+            // The capacity retains entropy from the previous permutation.
             state[WIDTH - RATE..].fill(T::default());
             self.permutation.permute_mut(&mut state);
         }
@@ -306,17 +368,19 @@ impl<P, const WIDTH: usize, const RATE: usize, const OUT: usize>
 
     /// Continue right-to-left absorption from a precomputed initial state.
     ///
-    /// Companion to the zero-suffix precomputation method:
-    /// precompute the state for known zero-padding, then call this
-    /// to hash the remaining non-zero data.
+    /// # Overview
     ///
-    /// # Panics
-    ///
-    /// Panics if the iterator length is not a multiple of RATE.
+    /// - Companion to the zero-suffix precomputation.
+    /// - The caller passes the cached state and the remaining non-zero elements.
+    /// - Absorption resumes block-by-block from that state.
     ///
     /// # Returns
     ///
-    /// The first OUT elements of the final sponge state.
+    /// The first `OUT` positions of the final state.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the iterator length is not a multiple of `RATE`.
     pub fn hash_with_initial_state<T, I>(&self, initial_state: &[T; WIDTH], iter: I) -> [T; OUT]
     where
         T: Default + Copy,
@@ -329,10 +393,11 @@ impl<P, const WIDTH: usize, const RATE: usize, const OUT: usize>
             assert!(OUT <= WIDTH);
         }
 
-        // Copy the precomputed state — the caller's data stays immutable.
+        // Copy the precomputed state.
+        // The caller's array stays immutable.
         let mut state = *initial_state;
 
-        // Delegate to the shared RTL chunk absorber for the remaining elements.
+        // Hand the remaining elements to the shared per-block absorber.
         let mut iter = iter.into_iter();
         absorb_rtl_chunks::<T, P, _, WIDTH, RATE, OUT>(&self.permutation, &mut state, &mut iter)
     }
@@ -348,9 +413,11 @@ where
     where
         I: IntoIterator<Item = T>,
     {
-        // - RATE > 0: at least one element per block.
-        // - RATE < WIDTH: capacity must be non-zero for security.
-        // - OUT <= WIDTH: output cannot exceed the state size.
+        // Shape constraints checked at compile time:
+        //
+        // - RATE > 0       — at least one input element per block.
+        // - RATE < WIDTH   — at least one slot reserved for the capacity.
+        // - OUT <= WIDTH   — digest cannot exceed the state size.
         const {
             assert!(RATE > 0);
             assert!(RATE < WIDTH);
@@ -361,39 +428,49 @@ where
         let mut state = [T::default(); WIDTH];
         let mut iter = input.into_iter();
 
-        // Phase 1: First block — fill the entire WIDTH right-to-left.
+        // Phase 1 — the first block writes the entire state.
         //
-        // Why the full WIDTH? The capacity region must receive direct
-        // input for collision resistance. If it only ever held zeros or
-        // permutation outputs, an attacker could exploit the reduced
-        // entropy in the capacity to find collisions.
+        // - The all-zero state acts as a fixed IV.
+        // - The permutation that follows acts as a compression function.
+        // - Its input is `IV` concatenated with the first `WIDTH` input elements.
+        // - Later blocks chain through the capacity as a standard sponge.
         //
-        // Example with WIDTH=4, input = [a, b, c, d, ...]:
+        //     WIDTH=4, input prefix = [a, b, c, d, ...]
         //
-        //   idx:    3    2    1    0
-        //         +----+----+----+----+
-        //   fill: | a  | b  | c  | d  |   ← all WIDTH slots written
-        //         +----+----+----+----+
-        //           rate      capacity
-        //   permute(state)
+        //         index:    0    1    2    3
+        //                 +----+----+----+----+
+        //                 | d  | c  | b  | a  |   ← a→3, b→2, c→1, d→0
+        //                 +----+----+----+----+
+        //                   capacity     rate
+        //         permute(state)
         for pos in (0..WIDTH).rev() {
             if let Some(x) = iter.next() {
+                // Place this input element at the current top-down slot.
                 state[pos] = x;
             } else {
-                // Input shorter than WIDTH — permute only if we absorbed
-                // at least one element (pos < WIDTH-1 means we did).
+                // The iterator drained before the first block completed.
+                //
+                // - If `pos == WIDTH - 1` no element was absorbed.
+                // - In that case the state is still all-zero, so no permutation runs.
+                // - Otherwise some elements were absorbed.
+                // - Permute once so they appear in the squeeze.
                 if pos < WIDTH - 1 {
                     self.permutation.permute_mut(&mut state);
                 }
-                return state[..OUT].try_into().unwrap();
+
+                // Squeeze the partial-block state and return early.
+                return state[..OUT]
+                    .try_into()
+                    .expect("OUT is at most WIDTH by the const assertion above");
             }
         }
 
-        // Permute after the first full-WIDTH block.
+        // The first block was fully absorbed.
+        // Run the boundary permutation before handing off to Phase 2.
         self.permutation.permute_mut(&mut state);
 
-        // Phase 2: Subsequent blocks — only the last RATE positions change.
-        // Delegate to the shared RTL chunk absorber.
+        // Phase 2 — every following block rewrites only the rate window.
+        // The shared helper handles that loop.
         absorb_rtl_chunks::<T, P, _, WIDTH, RATE, OUT>(&self.permutation, &mut state, &mut iter)
     }
 }
@@ -422,6 +499,34 @@ mod tests {
     }
 
     impl<T, const WIDTH: usize> CryptographicPermutation<[T; WIDTH]> for MockPermutation where
+        T: Copy + core::ops::Add<Output = T> + Default
+    {
+    }
+
+    // Position-sensitive mock for detecting *order* differences.
+    //
+    // - The plain mock collapses the state to a single sum.
+    // - States sharing the same multiset collapse to the same vector.
+    // - This mock replaces slot `i` with the prefix sum over `0..=i`.
+    // - Different positions for the same multiset now yield different states.
+    #[derive(Clone)]
+    struct PrefixSumPermutation;
+
+    impl<T, const WIDTH: usize> Permutation<[T; WIDTH]> for PrefixSumPermutation
+    where
+        T: Copy + core::ops::Add<Output = T> + Default,
+    {
+        fn permute_mut(&self, input: &mut [T; WIDTH]) {
+            // Walk left-to-right and write back the running prefix sum.
+            let mut acc = T::default();
+            for slot in input.iter_mut() {
+                acc = acc + *slot;
+                *slot = acc;
+            }
+        }
+    }
+
+    impl<T, const WIDTH: usize> CryptographicPermutation<[T; WIDTH]> for PrefixSumPermutation where
         T: Copy + core::ops::Add<Output = T> + Default
     {
     }
@@ -549,22 +654,29 @@ mod tests {
 
     #[test]
     fn test_rtl_vs_ltr_different_outputs() {
-        // The same input must produce different outputs for RTL vs LTR sponges,
-        // confirming they are semantically distinct constructions.
+        // Invariant: the two absorption strategies must yield distinct digests on the same input.
+        //
+        // - Left-to-right writes `input[i]` into `state[i mod RATE]`.
+        // - Right-to-left writes `input[i]` into `state[WIDTH - 1 - (i mod RATE)]`.
+        // - A sum-and-broadcast mock would hide this difference.
+        // - A position-aware mock makes slot order observable in the digest.
 
         let input = [1u64, 2, 3, 4, 5, 6];
 
+        // Left-to-right path: `input[0..2]` goes into `state[0..2]`, then permute, then repeat.
         let ltr_sponge =
-            PaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
+            PaddingFreeSponge::<PrefixSumPermutation, WIDTH, RATE, OUT>::new(PrefixSumPermutation);
         let ltr_output = ltr_sponge.hash_iter(input);
 
-        let rtl_sponge =
-            RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
+        // Right-to-left path: the first block fills `state[3..0]` top-down.
+        // Every later block rewrites only `state[3..2]` from the iterator head.
+        let rtl_sponge = RtlPaddingFreeSponge::<PrefixSumPermutation, WIDTH, RATE, OUT>::new(
+            PrefixSumPermutation,
+        );
         let rtl_output = rtl_sponge.hash_iter(input);
 
-        // LTR absorbs into state[0..RATE], RTL absorbs into state[WIDTH-1] downward.
-        // The different absorption patterns cause different intermediate states
-        // and therefore different final digests.
+        // Under a position-aware permutation the two routes never share an intermediate state.
+        // Their digests must therefore differ.
         assert_ne!(
             ltr_output, rtl_output,
             "RTL and LTR sponges must produce different outputs for the same input"
