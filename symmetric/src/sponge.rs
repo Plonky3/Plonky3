@@ -2,7 +2,7 @@
 //!
 //! # Background
 //!
-//! A sponge [BDPV07] hashes an input using a fixed-width permutation P.
+//! A sponge \[BDPV07\] hashes an input using a fixed-width permutation P.
 //! The b-element state has two regions:
 //!
 //! ```text
@@ -14,11 +14,11 @@
 //!
 //! - **Rate (r)** -- absorbs input, produces output.
 //! - **Capacity (c = b - r)** -- never exposed directly.
-//!   Provides collision resistance up to |F|^{c/2} queries [BDPA08].
+//!   Provides collision resistance up to |F|^{c/2} queries \[BDPA08\].
 //!
 //! This module uses the **overwrite** variant: each input block
 //! overwrites (rather than XORs into) the rate portion.
-//! Security carries over from the standard sponge [BDPA08, AMP10].
+//! Security carries over from the standard sponge \[BDPA08, AMP10\].
 //!
 //! # Variants
 //!
@@ -270,7 +270,7 @@ where
 ///
 /// Indifferentiable from a random oracle up to |F|^{c/2} queries (c = WIDTH - RATE).
 ///
-/// Implies collision resistance, preimage resistance, etc. [BDPA08] + [LBM25, Section 3.1].
+/// Implies collision resistance, preimage resistance, etc. \[BDPA08\] + \[LBM25, Section 3.1\].
 #[derive(Debug)]
 pub struct Pad10Sponge<T, P, D, const WIDTH: usize, const RATE: usize, const OUT: usize> {
     /// The cryptographic permutation applied after each absorbed block.
@@ -278,8 +278,8 @@ pub struct Pad10Sponge<T, P, D, const WIDTH: usize, const RATE: usize, const OUT
 
     /// A derangement (permutation with no fixed points) used for padding.
     ///
-    /// - Rate-domain:    state[i]    = d(T::default())
-    /// - Capacity-domain: state[RATE] = d(state[RATE])
+    /// - Rate-domain:    `state[i]    = d(T::default())`
+    /// - Capacity-domain: `state[RATE] = d(state[RATE])`
     padding_derangement: D,
 
     _phantom: PhantomData<T>,

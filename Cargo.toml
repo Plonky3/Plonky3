@@ -72,7 +72,9 @@ clap = { version = "4.5.60", features = ["derive"] }
 criterion = "0.8"
 hashbrown = "0.17.0"
 hex-literal = "1.1.0"
-itertools = { version = "0.14.0", default-features = false, features = ["use_alloc"] }
+itertools = { version = "0.14.0", default-features = false, features = [
+    "use_alloc",
+] }
 libm = "0.2"
 num-bigint = { version = "0.4.6", default-features = false }
 paste = "1.0.15"
@@ -88,9 +90,13 @@ shake = { version = "0.1.0", default-features = false }
 spin = "0.11.0"
 thiserror = { version = "2.0", default-features = false }
 tiny-keccak = "2.0.2"
-tracing = { version = "0.1.44", default-features = false, features = ["attributes"] }
+tracing = { version = "0.1.44", default-features = false, features = [
+    "attributes",
+] }
 tracing-forest = "0.3.1"
-tracing-subscriber = { version = "0.3.22", default-features = false, features = ["alloc"] }
+tracing-subscriber = { version = "0.3.22", default-features = false, features = [
+    "alloc",
+] }
 transpose = "0.2.3"
 
 # Local dependencies

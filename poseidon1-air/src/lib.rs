@@ -10,7 +10,7 @@
 //! # Poseidon1 Permutation Structure
 //!
 //! Poseidon1 is a substitution-permutation network (SPN) over `GF(p)^t` using the
-//! [HADES] design strategy. Each permutation consists of three phases:
+//! \[HADES\] design strategy. Each permutation consists of three phases:
 //!
 //! ```text
 //!   ┌──────────────────────┐   ┌──────────────────────┐   ┌──────────────────────┐

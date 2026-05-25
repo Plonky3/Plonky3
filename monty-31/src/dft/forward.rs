@@ -4,7 +4,7 @@
 //!
 //! Straightforward recursive algorithm, "unrolled" up to size 256.
 //!
-//! Inspired by Bernstein's djbfft: https://cr.yp.to/djbfft.html
+//! Inspired by Bernstein's djbfft: <https://cr.yp.to/djbfft.html>.
 
 extern crate alloc;
 
@@ -19,7 +19,7 @@ use crate::{FieldParameters, MontyField31, TwoAdicData};
 
 impl<MP: FieldParameters + TwoAdicData> MontyField31<MP> {
     /// Given a field element `gen` of order n where `n = 2^lg_n`,
-    /// return a vector of vectors `table` where table[i] is the
+    /// return a vector of vectors `table` where `table[i]` is the
     /// vector of twiddle factors for an fft of length n/2^i. The
     /// values g_i^k for k >= i/2 are skipped as these are just the
     /// negatives of the other roots (using g_i^{i/2} = -1).  The

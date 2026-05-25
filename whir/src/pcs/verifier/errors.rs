@@ -87,4 +87,8 @@ pub enum VerifierError {
     /// Proof is missing the final polynomial evaluations.
     #[error("Proof is missing the final polynomial evaluations")]
     MissingFinalPoly,
+
+    /// Final polynomial has the wrong number of evaluations.
+    #[error("Final polynomial length mismatch: expected {expected}, got {actual}")]
+    FinalPolyLengthMismatch { expected: usize, actual: usize },
 }

@@ -9,11 +9,11 @@
 //! - **[BCI+20]** Ben-Sasson, Carmon, Ishai, Kopparty, Saraf.
 //!   *Proximity Gaps for Reed-Solomon Codes*. FOCS 2020.
 //!   <https://eprint.iacr.org/2020/654>
-//! - **[BCSS25]** Ben-Sasson, Carmon, Haboeck, Kopparty, Saraf.
+//! - **\[BCSS25\]** Ben-Sasson, Carmon, Haboeck, Kopparty, Saraf.
 //!   *On Proximity Gaps for Reed-Solomon Codes*.
 //!   <https://eprint.iacr.org/2025/2055>
 //!
-//! [BCSS25] improves the Johnson-bound proximity gap from `O(n²/η⁷)` to
+//! \[BCSS25\] improves the Johnson-bound proximity gap from `O(n²/η⁷)` to
 //! `O(n/η⁵)`, enabling 128-bit provable security with degree-5 extensions
 //! of small prime fields (e.g. KoalaBear).
 
@@ -34,7 +34,7 @@ pub enum SecurityAssumption {
     /// Johnson bound at `δ = 1 − √ρ − η`, with `η = √ρ / 20`. Requires
     /// mutual correlated agreement up to the Johnson bound.
     ///
-    /// The proximity-gap error uses [BCSS25] Theorem 1.5:
+    /// The proximity-gap error uses \[BCSS25\] Theorem 1.5:
     /// `a > (2(m + 1/2)⁵ + 3(m + 1/2)γρ) / (3ρ^{3/2}) · n + (m + 1/2)/√ρ`,
     /// asymptotically `O(n/η⁵)` — a `n·η²` improvement over [BCI+20].
     JohnsonBound,
@@ -85,7 +85,7 @@ impl SecurityAssumption {
     /// Proximity-gap error in bits for combining `num_functions` functions
     /// at the regime's distance.
     ///
-    /// The Johnson-bound branch uses [BCSS25] Theorem 1.5. Only the
+    /// The Johnson-bound branch uses \[BCSS25\] Theorem 1.5. Only the
     /// dominant term `2·(m + 1/2)⁵ / (3·ρ^{3/2}) · n` is kept; the
     /// additive `(m + 1/2)/√ρ` and sub-dominant `3·(m + 1/2)·γ·ρ` terms
     /// are negligible at `m = 10` (the safety choice η = √ρ/20).
@@ -179,7 +179,7 @@ impl SecurityAssumption {
         libm::ceil(num_queries_f) as usize
     }
 
-    /// Bits of security from `num_queries` queries (the inverse of [`queries`]).
+    /// Bits of security from `num_queries` queries.
     #[must_use]
     pub fn queries_error(&self, log_inv_rate: usize, num_queries: usize) -> f64 {
         let num_queries = num_queries as f64;

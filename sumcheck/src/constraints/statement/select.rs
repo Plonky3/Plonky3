@@ -2,7 +2,8 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_field::{
-    ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, dot_product,
+    ExtensionField, Field, HornerIter, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+    dot_product,
 };
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -295,9 +296,7 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         self.iter().all(|(&var, &expected_eval)| {
             // Evaluate the polynomial at `var` using Horner's method.
             // This computes: p(var) = c_0 + var(c_1 + var(c_2 + ...))
-            poly.iter()
-                .rfold(EF::ZERO, |result, coeff| result * var + *coeff)
-                == expected_eval
+            poly.iter().copied().horner::<EF, _>(var) == expected_eval
         })
     }
 
@@ -991,9 +990,7 @@ mod tests {
 
         // Evaluate p(z) at z using Horner's method.
         let z = F::from_u64(2);
-        let expected_eval = poly
-            .iter()
-            .rfold(F::ZERO, |result, &coeff| result * z + coeff);
+        let expected_eval: F = poly.iter().copied().horner(z);
         statement.add_constraint(z, expected_eval);
 
         // Verify should pass.
@@ -1079,9 +1076,7 @@ mod tests {
 
             // Compute expected evaluation using Horner's method.
             let z_field = F::from_u32(z);
-            let expected_eval = poly
-                .iter()
-                .rfold(F::ZERO, |result, &coeff| result * z_field + coeff);
+            let expected_eval: F = poly.iter().copied().horner(z_field);
 
             // Create statement with correct constraint.
             let mut statement = SelectStatement::<F, F>::initialize(k);

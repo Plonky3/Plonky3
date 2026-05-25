@@ -6,7 +6,7 @@
 //! - `<https://cr.yp.to/lineartime/multapps-20080515.pdf>`
 //! - `<https://2π.com/23/convolution/>`
 //!
-//! Given a vector v \in F^N, let v(x) \in F[x] denote the polynomial
+//! Given a vector `v \in F^N`, let `v(x) \in F[x]` denote the polynomial
 //! v_0 + v_1 x + ... + v_{N - 1} x^{N - 1}.  Then w is equal to the
 //! convolution v * u if and only if w(x) = v(x)u(x) mod x^N - 1.
 //! Additionally, define the negacyclic convolution by w(x) = v(x)u(x)

@@ -9,15 +9,15 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+neon = ["blake3/neon"]
+parallel = ["blake3/rayon"]
+
 [dependencies]
 p3-symmetric.workspace = true
 p3-util.workspace = true
 
 blake3.workspace = true
-
-[features]
-neon = ["blake3/neon"]
-parallel = ["blake3/rayon"]
 
 [lints]
 workspace = true
