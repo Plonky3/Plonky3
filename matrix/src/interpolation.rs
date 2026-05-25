@@ -1060,7 +1060,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_interpolate_arbitrary_empty_matrix() {
         // height=0 -> col_scale is empty -> denominator folds to EF::ZERO
