@@ -47,6 +47,8 @@ where
     MissingInitialReducedOpening { expected: usize },
     #[error("initial reduced opening height mismatch: expected {expected}, got {got}")]
     InitialReducedOpeningHeightMismatch { expected: usize, got: usize },
+    #[error("global max height mismatch: expected {expected}, got {got}")]
+    GlobalMaxHeightMismatch { expected: usize, got: usize },
     #[error("round {round}: sibling values length mismatch: expected {expected}, got {got}")]
     SiblingValuesLengthMismatch {
         round: usize,
@@ -202,6 +204,27 @@ where
     // Each round reduces the domain size by its log_arity.
     let total_log_reduction: usize = log_arities.iter().sum();
     let log_global_max_height = total_log_reduction + params.log_blowup + params.log_final_poly_len;
+
+    // Cross-check: the global log-height has two independent derivations which must agree.
+    // Ref: Ben-Sasson et al., "Fast RS IOPP", ICALP 2018, §2.1.1.
+    //
+    //     H_in   = max committed log_2(domain.size) + log_blowup
+    //     H_fold = sum(per-round log-arities) + log_blowup + log_final_poly_len
+    let expected_log_global_max_height = commitments_with_opening_points
+        .iter()
+        .flat_map(|(_, mats)| {
+            mats.iter()
+                .map(|(domain, _)| log2_strict_usize(domain.size()) + params.log_blowup)
+        })
+        .max();
+    if let Some(expected) = expected_log_global_max_height
+        && log_global_max_height != expected
+    {
+        return Err(FriError::GlobalMaxHeightMismatch {
+            expected,
+            got: log_global_max_height,
+        });
+    }
 
     if proof.commit_pow_witnesses.len() != proof.commit_phase_commits.len() {
         return Err(FriError::CommitPowWitnessCountMismatch {
@@ -1196,6 +1219,124 @@ mod tests {
                 assert_eq!(round, 0);
                 assert_eq!(log_arity, 0);
                 assert_eq!(max, f.fri_params.max_log_arity);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    /// Recompute `(H_in, H_fold)` from fixture and (mutated) proof state, so that
+    /// the assertions stay valid if the fixture's degree, blowup, or arity changes.
+    fn derive_heights(f: &TestFixture, proof: &Proof) -> (usize, usize) {
+        let log_blowup = f.fri_params.log_blowup;
+        let log_final_poly_len = f.fri_params.log_final_poly_len;
+
+        // H_in: max committed log_2(domain.size) + log_blowup. Verifier's source of truth.
+        let h_in = f
+            .commitments_with_opening_points
+            .iter()
+            .flat_map(|(_, mats)| mats.iter().map(|(d, _)| log2_strict_usize(d.size())))
+            .max()
+            .expect("fixture commits at least one matrix")
+            + log_blowup;
+
+        // H_fold: sum of per-round log-arities + log_blowup + log_final_poly_len.
+        let log_arities_sum: usize = proof.query_proofs[0]
+            .commit_phase_openings
+            .iter()
+            .map(|step| step.log_arity as usize)
+            .sum();
+        let h_fold = log_arities_sum + log_blowup + log_final_poly_len;
+
+        (h_in, h_fold)
+    }
+
+    #[test]
+    fn global_max_height_mismatch_undershoot() {
+        let f = make_test_fixture();
+        let mut proof = f.proof.clone();
+
+        // Undershoot: H_fold < H_in. Without this rejection, a downstream `usize`
+        // subtraction in input opening would wrap in release builds.
+        //
+        // Fixture state: input matrix log_height = 4, honest schedule = 3 rounds of arity 1.
+        //
+        // Mutation: drop the last fold round (commit, PoW witness, opening per query).
+        //
+        //     before:  schedule [r_0, r_1, r_2]   → H_fold = 4 == H_in ✓
+        //     after:   schedule [r_0, r_1]        → H_fold = 3 != H_in = 4
+        //     → error
+        proof.commit_phase_commits.pop();
+        proof.commit_pow_witnesses.pop();
+        for query_proof in &mut proof.query_proofs {
+            query_proof.commit_phase_openings.pop();
+        }
+
+        let (h_in, h_fold) = derive_heights(&f, &proof);
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("undershoot must be rejected before input opening");
+
+        match err {
+            FriError::GlobalMaxHeightMismatch { expected, got } => {
+                assert_eq!(expected, h_in);
+                assert_eq!(got, h_fold);
+                assert!(got < expected, "test must actually undershoot");
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn global_max_height_mismatch_overshoot() {
+        let f = make_test_fixture();
+        let mut proof = f.proof.clone();
+
+        // Overshoot: H_fold > H_in. The later fold-chain seed peek would also reject;
+        // this test pins down that the cross-check fires first.
+        //
+        // Fixture state: input matrix log_height = 4, honest schedule = 3 rounds of arity 1.
+        //
+        // Mutation: clone the last fold round (commit, PoW witness, opening per query).
+        // The clones need not validate — this check runs before commit-phase verification.
+        //
+        //     before:  schedule [r_0, r_1, r_2]          → H_fold = 4 == H_in ✓
+        //     after:   schedule [r_0, r_1, r_2, r_2']    → H_fold = 5 != H_in = 4
+        //     → error
+        let extra_commit = proof.commit_phase_commits.last().unwrap().clone();
+        proof.commit_phase_commits.push(extra_commit);
+
+        let extra_witness = *proof.commit_pow_witnesses.last().unwrap();
+        proof.commit_pow_witnesses.push(extra_witness);
+
+        for query_proof in &mut proof.query_proofs {
+            let extra_opening = query_proof.commit_phase_openings.last().unwrap().clone();
+            query_proof.commit_phase_openings.push(extra_opening);
+        }
+
+        let (h_in, h_fold) = derive_heights(&f, &proof);
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("overshoot must be rejected before commit-phase verification");
+
+        match err {
+            FriError::GlobalMaxHeightMismatch { expected, got } => {
+                assert_eq!(expected, h_in);
+                assert_eq!(got, h_fold);
+                assert!(got > expected, "test must actually overshoot");
             }
             other => panic!("wrong error variant: {other:?}"),
         }
