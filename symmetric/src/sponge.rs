@@ -1330,6 +1330,99 @@ mod tests {
     }
 
     #[test]
+    fn test_rtl_sponge_partial_first_block_one_elem() {
+        // Exercises the partial first-block branch with `pos < WIDTH - 1`.
+        //
+        //   Initial state:            [0, 0, 0, 0]
+        //
+        //   pos = 3: state[3] = 7     [0, 0, 0, 7]
+        //   pos = 2: iter drained, pos < WIDTH - 1 → permute once
+        //   sum = 7, broadcast        [7, 7, 7, 7]
+        //
+        //   Squeeze OUT = 2:          [7, 7]
+        const WIDTH: usize = 4;
+        const RATE: usize = 2;
+        const OUT: usize = 2;
+
+        let sponge =
+            RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
+        let output = sponge.hash_iter([7u64]);
+
+        assert_eq!(output, [7; OUT]);
+    }
+
+    #[test]
+    fn test_rtl_sponge_partial_first_block_width_minus_one() {
+        // Boundary of the partial first-block branch: exactly `WIDTH - 1` elements.
+        //
+        //   Initial state:            [0, 0, 0, 0]
+        //
+        //   pos = 3: state[3] = 1     [0, 0, 0, 1]
+        //   pos = 2: state[2] = 2     [0, 0, 2, 1]
+        //   pos = 1: state[1] = 3     [0, 3, 2, 1]
+        //   pos = 0: iter drained, pos < WIDTH - 1 → permute once
+        //   sum = 6, broadcast        [6, 6, 6, 6]
+        //
+        //   Squeeze OUT = 2:          [6, 6]
+        const WIDTH: usize = 4;
+        const RATE: usize = 2;
+        const OUT: usize = 2;
+
+        let sponge =
+            RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
+        let output = sponge.hash_iter([1u64, 2, 3]);
+
+        assert_eq!(output, [6; OUT]);
+    }
+
+    #[test]
+    #[should_panic(expected = "iterator length must be a multiple of RATE")]
+    fn test_rtl_sponge_non_multiple_of_rate_panics() {
+        // Phase 2 must consume `RATE` elements per block.
+        //
+        // Input length is `WIDTH + 1 = 5`, so after Phase 1 (`WIDTH` consumed)
+        // Phase 2 starts a block with one element and then runs dry.
+        //
+        // The helper's expect carries a descriptive panic message.
+        const WIDTH: usize = 4;
+        const RATE: usize = 2;
+        const OUT: usize = 2;
+
+        let sponge =
+            RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
+        let _ = sponge.hash_iter([1u64, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_rtl_sponge_out_larger_than_capacity() {
+        // Boundary case `OUT > WIDTH - RATE`: the squeeze window crosses
+        // from capacity into the rate region.
+        //
+        //   WIDTH = 4, RATE = 2  →  capacity is positions [0..2]
+        //   OUT = 3              →  digest = state[0..3]
+        //                              positions 0, 1 are capacity
+        //                              position 2 is the lowest rate slot
+        //
+        // Input [1, 2, 3, 4] fills exactly the first block right-to-left.
+        //
+        //   Initial state:            [0, 0, 0, 0]
+        //
+        //   Phase 1 fills WIDTH=4 RTL: [4, 3, 2, 1]
+        //   permute (sum = 10):        [10, 10, 10, 10]
+        //
+        //   Squeeze OUT = 3:           [10, 10, 10]
+        const WIDTH: usize = 4;
+        const RATE: usize = 2;
+        const OUT: usize = 3;
+
+        let sponge =
+            RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
+        let output = sponge.hash_iter([1u64, 2, 3, 4]);
+
+        assert_eq!(output, [10; OUT]);
+    }
+
+    #[test]
     fn test_rtl_vs_ltr_different_outputs() {
         // Invariant: the two absorption strategies must yield distinct digests on the same input.
         //
@@ -1464,6 +1557,24 @@ mod tests {
         let output = sponge.hash_with_initial_state(&initial_state, core::iter::empty::<u64>());
 
         assert_eq!(output, [10, 20]);
+    }
+
+    #[test]
+    #[should_panic(expected = "iterator length must be a multiple of RATE")]
+    fn test_hash_with_initial_state_non_multiple_of_rate_panics() {
+        // The continuation path also requires the iterator length to be
+        // a multiple of `RATE`: starting a block and running dry mid-way
+        // is a programmer error and must panic.
+        const WIDTH: usize = 4;
+        const RATE: usize = 2;
+        const OUT: usize = 2;
+
+        let sponge =
+            RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
+
+        let initial_state = [0u64; WIDTH];
+        // `RATE = 2`, supplying a single element starts a block but cannot complete it.
+        let _ = sponge.hash_with_initial_state(&initial_state, [5u64]);
     }
 
     // Arbitrary field element from any u32.
