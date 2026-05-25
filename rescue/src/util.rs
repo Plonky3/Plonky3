@@ -2,8 +2,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_util::log2_ceil_u64;
-use sha3::Shake256;
-use sha3::digest::{ExtendableOutput, Update, XofReader};
+use shake::Shake256;
+use shake::digest::{ExtendableOutput, Update, XofReader};
 
 /// Compute the SHAKE256 variant of SHA-3.
 /// This is used to generate the round constants from a seed string.

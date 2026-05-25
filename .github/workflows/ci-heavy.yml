@@ -1,0 +1,50 @@
+name: Heavy CI
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+  pull_request:
+    branches: [ "*" ]
+    paths:
+      - "whir/src/**"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: -C debuginfo=0
+
+jobs:
+  whir_exhaustive:
+    name: WHIR exhaustive tests
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: ubuntu-latest
+            features: "+avx2"
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        id: rs-stable
+
+      - name: Set flags
+        if: ${{ matrix.features }}
+        run: |
+          # Append AVX2 to existing flags so we keep -C debuginfo=0.
+          echo "RUSTFLAGS=$RUSTFLAGS -C target-feature=${{ matrix.features }}" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test WHIR exhaustive sweep
+        run: cargo test -p p3-whir pcs::tests::test_whir_end_to_end_exhaustive -- --ignored --exact
+
+      - name: Test WHIR exhaustive sweep with parallel
+        run: cargo test -p p3-whir --features parallel pcs::tests::test_whir_end_to_end_exhaustive -- --ignored --exact

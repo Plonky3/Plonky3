@@ -1,6 +1,6 @@
 //! Diffusion matrix for Bn254
 //!
-//! Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_bn256.rs
+//! Reference: <https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_bn256.rs>.
 
 use alloc::vec::Vec;
 
@@ -18,6 +18,32 @@ use crate::Bn254;
 /// Since `p - 1` is divisible by 2 and 3, the smallest valid exponent
 /// satisfying `gcd(α, p - 1) = 1` is 5.
 pub const BN254_S_BOX_DEGREE: u64 = 5;
+
+/// Half the number of full rounds for BN254 Poseidon2.
+///
+/// Full rounds run at the beginning and at the end of the schedule.
+/// This constant is the per-side count, so the total is `R_F = 8`.
+///
+/// Of those 8 rounds:
+/// - 6 are required by the wide-trail differential bound,
+/// - 2 are kept as a statistical security margin.
+///
+/// # Reference
+///
+/// Poseidon2 paper, Table 1, instance `(n, t, d) = (256, 3, 5)`:
+/// <https://eprint.iacr.org/2023/323>.
+pub const BN254_POSEIDON2_HALF_FULL_ROUNDS: usize = 4;
+
+/// Number of partial rounds for BN254 Poseidon2 at state width 3.
+///
+/// Partial rounds apply the S-box to a single state element and carry
+/// most of the algebraic security of the permutation.
+///
+/// # Reference
+///
+/// Poseidon2 paper, Table 1, instance `(n, t, d) = (256, 3, 5)` at the
+/// 128-bit security level: <https://eprint.iacr.org/2023/323>.
+pub const BN254_POSEIDON2_PARTIAL_ROUNDS_3: usize = 56;
 
 /// An implementation of the Poseidon2 hash function for the Bn254Fr field.
 ///
@@ -147,8 +173,8 @@ mod tests {
     #[test]
     fn test_poseidon2_bn254() {
         const WIDTH: usize = 3;
-        const ROUNDS_F: usize = 8;
-        const ROUNDS_P: usize = 56;
+        const ROUNDS_F: usize = 2 * BN254_POSEIDON2_HALF_FULL_ROUNDS;
+        const ROUNDS_P: usize = BN254_POSEIDON2_PARTIAL_ROUNDS_3;
 
         type F = Bn254;
 

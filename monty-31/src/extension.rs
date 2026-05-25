@@ -1,6 +1,6 @@
 use p3_field::extension::{
-    BinomiallyExtendable, BinomiallyExtendableAlgebra, HasTwoAdicBinomialExtension,
-    HasTwoAdicQuinticExtension, QuinticExtendableAlgebra, QuinticTrinomialExtendable,
+    Binomial, BinomiallyExtendable, ExtensionAlgebra, HasTwoAdicBinomialExtension,
+    HasTwoAdicQuinticExtension, QuinticTrinomial, QuinticTrinomialExtendable,
 };
 use p3_field::{
     PrimeCharacteristicRing, TwoAdicField, field_to_array, packed_mod_add, packed_mod_sub,
@@ -18,12 +18,12 @@ use crate::{
 // We perform no checks to make sure the data given in BinomialExtensionData<WIDTH> is valid and
 // corresponds to an actual field extension. Ensuring that is left to the implementer.
 
-impl<const WIDTH: usize, FP> BinomiallyExtendableAlgebra<Self, WIDTH> for MontyField31<FP>
+impl<const WIDTH: usize, FP> ExtensionAlgebra<Self, WIDTH, Binomial<Self>> for MontyField31<FP>
 where
     FP: BinomialExtensionData<WIDTH> + FieldParameters,
 {
     #[inline(always)]
-    fn binomial_mul(a: &[Self; WIDTH], b: &[Self; WIDTH], res: &mut [Self; WIDTH], _w: Self) {
+    fn ext_mul(a: &[Self; WIDTH], b: &[Self; WIDTH], res: &mut [Self; WIDTH]) {
         match WIDTH {
             4 => quartic_mul_packed(a, b, res),
             5 => quintic_mul_packed(a, b, res),
@@ -33,7 +33,7 @@ where
     }
 
     #[inline(always)]
-    fn binomial_add(a: &[Self; WIDTH], b: &[Self; WIDTH]) -> [Self; WIDTH] {
+    fn ext_add(a: &[Self; WIDTH], b: &[Self; WIDTH]) -> [Self; WIDTH] {
         let mut res = [Self::ZERO; WIDTH];
         unsafe {
             // Safe as Self is repr(transparent) and stores a single u32.
@@ -47,7 +47,7 @@ where
     }
 
     #[inline(always)]
-    fn binomial_sub(a: &[Self; WIDTH], b: &[Self; WIDTH]) -> [Self; WIDTH] {
+    fn ext_sub(a: &[Self; WIDTH], b: &[Self; WIDTH]) -> [Self; WIDTH] {
         let mut res = [Self::ZERO; WIDTH];
         unsafe {
             // Safe as Self is repr(transparent) and stores a single u32.
@@ -61,7 +61,7 @@ where
     }
 
     #[inline(always)]
-    fn binomial_base_mul(lhs: [Self; WIDTH], rhs: Self) -> [Self; WIDTH] {
+    fn ext_base_mul(lhs: [Self; WIDTH], rhs: Self) -> [Self; WIDTH] {
         let mut res = [Self::ZERO; WIDTH];
         base_mul_packed(lhs, rhs, &mut res);
         res
@@ -98,13 +98,44 @@ where
     }
 }
 
-impl<FP> QuinticExtendableAlgebra<Self> for MontyField31<FP>
+impl<FP> ExtensionAlgebra<Self, 5, QuinticTrinomial> for MontyField31<FP>
 where
     FP: TrinomialQuinticData + FieldParameters,
 {
     #[inline(always)]
-    fn quintic_mul(a: &[Self; 5], b: &[Self; 5], res: &mut [Self; 5]) {
+    fn ext_mul(a: &[Self; 5], b: &[Self; 5], res: &mut [Self; 5]) {
         quintic_mul_packed_trinomial(a, b, res);
+    }
+
+    #[inline(always)]
+    fn ext_add(a: &[Self; 5], b: &[Self; 5]) -> [Self; 5] {
+        let mut res = [Self::ZERO; 5];
+        unsafe {
+            let a: &[u32; 5] = &*(a.as_ptr() as *const [u32; 5]);
+            let b: &[u32; 5] = &*(b.as_ptr() as *const [u32; 5]);
+            let res: &mut [u32; 5] = &mut *(res.as_mut_ptr() as *mut [u32; 5]);
+            packed_mod_add(a, b, res, FP::PRIME, add::<FP>);
+        }
+        res
+    }
+
+    #[inline(always)]
+    fn ext_sub(a: &[Self; 5], b: &[Self; 5]) -> [Self; 5] {
+        let mut res = [Self::ZERO; 5];
+        unsafe {
+            let a: &[u32; 5] = &*(a.as_ptr() as *const [u32; 5]);
+            let b: &[u32; 5] = &*(b.as_ptr() as *const [u32; 5]);
+            let res: &mut [u32; 5] = &mut *(res.as_mut_ptr() as *mut [u32; 5]);
+            packed_mod_sub(a, b, res, FP::PRIME, sub::<FP>);
+        }
+        res
+    }
+
+    #[inline(always)]
+    fn ext_base_mul(lhs: [Self; 5], rhs: Self) -> [Self; 5] {
+        let mut res = [Self::ZERO; 5];
+        base_mul_packed(lhs, rhs, &mut res);
+        res
     }
 }
 

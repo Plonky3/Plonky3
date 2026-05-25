@@ -98,6 +98,11 @@ where
             &self.inner, degree)
     }
 
+    fn log_max_lde_height(&self) -> usize {
+        <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as Pcs<Challenge, Challenger>>::log_max_lde_height(
+            &self.inner)
+    }
+
     fn commit(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
@@ -150,7 +155,7 @@ where
     /// Get the quotient polynomial LDEs. We first decompose the quotient polynomial into
     /// `num_chunks` many smaller polynomials each of degree `degree / num_chunks`.
     /// These quotient polynomials are then randomized as explained in Section 4.2 of
-    /// https://eprint.iacr.org/2024/1037.pdf .
+    /// <https://eprint.iacr.org/2024/1037.pdf>.
     ///
     /// ### Arguments
     /// - `quotient_domain` the domain of the quotient polynomial.
@@ -166,6 +171,10 @@ where
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
         num_chunks: usize,
     ) -> Vec<RowMajorMatrix<Val>> {
+        assert!(
+            num_chunks > 1,
+            "num_chunks must be > 1 to preserve hiding (got {num_chunks})"
+        );
         let (domains, evaluations): (Vec<_>, Vec<_>) = evaluations.into_iter().unzip();
         let cis = get_zp_cis(&domains);
         let last_chunk = num_chunks - 1;
@@ -439,7 +448,7 @@ where
 }
 
 /// Compute the normalizing constants for the Langrange selectors of the provided domains.
-/// See Section 4.2 of https://eprint.iacr.org/2024/1037.pdf for more details.
+/// See Section 4.2 of <https://eprint.iacr.org/2024/1037.pdf> for more details.
 fn get_zp_cis<D: PolynomialSpace>(qc_domains: &[D]) -> Vec<p3_commit::Val<D>> {
     batch_multiplicative_inverse(
         &qc_domains

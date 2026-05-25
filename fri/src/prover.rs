@@ -23,7 +23,7 @@ use crate::{
 /// Polynomials of equal degree can be combined using randomness before calling this function.
 ///
 /// The Soundness error from prove_fri comes from the paper:
-/// Proximity Gaps for Reed-Solomon Codes (https://eprint.iacr.org/2020/654)
+/// Proximity Gaps for Reed-Solomon Codes (<https://eprint.iacr.org/2020/654>)
 /// and is either `rate^{num_queries}` or `rate^{num_queries/2}` depending on if you rely on conjectured or
 /// proven soundness. Particularly safety conscious users may want to set `num_queries` slightly higher than
 /// this to account for the fact that most implementations batch inputs using a single random challenge
@@ -62,6 +62,10 @@ where
     Folding: FriFoldingStrategy<Val, Challenge, InputProof = Vec<BatchOpening<Val, InputMmcs>>>,
 {
     assert!(!inputs.is_empty());
+    assert!(
+        params.max_log_arity > 0,
+        "max_log_arity must be at least 1 to guarantee folding progress"
+    );
     assert!(
         inputs
             .iter()
@@ -178,6 +182,11 @@ where
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     Folding: FriFoldingStrategy<Val, Challenge>,
 {
+    assert!(
+        params.max_log_arity > 0,
+        "max_log_arity must be at least 1 to guarantee folding progress"
+    );
+
     let mut inputs_iter = inputs.into_iter().peekable();
     let mut folded = inputs_iter.next().unwrap();
     let mut commits = vec![];
@@ -257,7 +266,7 @@ where
 }
 
 /// Given an `index` produce a proof that the chain of folds are correct.
-/// This is the prover's complement to the verifier's [`verify_query`] function.
+/// This is the prover's complement to the verifier's `verify_query` function.
 ///
 /// In addition to the output of this function, the prover must also supply the verifier with the input values
 /// (with associated opening proofs). These are produced by the `open_input` function passed into `prove_fri`.

@@ -29,19 +29,10 @@ pub struct MerkleCap<F, Digest> {
     _marker: PhantomData<F>,
 }
 
-impl<F, Digest: Default> Default for MerkleCap<F, Digest> {
-    fn default() -> Self {
-        Self {
-            cap: vec![Digest::default()],
-            _marker: PhantomData,
-        }
-    }
-}
-
 impl<F, Digest> MerkleCap<F, Digest> {
     /// Create a new `MerkleCap` from a vector of digests.
     pub fn new(cap: Vec<Digest>) -> Self {
-        assert!(cap.len().is_power_of_two() || cap.is_empty());
+        assert!(cap.len().is_power_of_two());
         Self {
             cap,
             _marker: PhantomData,
@@ -155,5 +146,58 @@ impl<F, W, const DIGEST_ELEMS: usize> Borrow<[W; DIGEST_ELEMS]> for Hash<F, W, D
 impl<F, W, const DIGEST_ELEMS: usize> AsRef<[W; DIGEST_ELEMS]> for Hash<F, W, DIGEST_ELEMS> {
     fn as_ref(&self) -> &[W; DIGEST_ELEMS] {
         &self.value
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_goldilocks::Goldilocks;
+
+    use super::*;
+
+    type F = Goldilocks;
+    type Digest = [u8; 4];
+
+    #[test]
+    fn test_merkle_cap_new_with_power_of_two_sizes() {
+        let cap = MerkleCap::<F, Digest>::new(vec![[7u8; 4]]);
+        assert_eq!(cap.num_roots(), 1);
+        assert_eq!(cap.height(), 0);
+
+        let cap = MerkleCap::<F, Digest>::new(vec![[0u8; 4]; 2]);
+        assert_eq!(cap.num_roots(), 2);
+        assert_eq!(cap.height(), 1);
+
+        let cap = MerkleCap::<F, Digest>::new(vec![[0u8; 4]; 8]);
+        assert_eq!(cap.num_roots(), 8);
+        assert_eq!(cap.height(), 3);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_merkle_cap_new_panics_on_empty() {
+        let _ = MerkleCap::<F, Digest>::new(vec![]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_merkle_cap_new_panics_on_three() {
+        let _ = MerkleCap::<F, Digest>::new(vec![[0u8; 4]; 3]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_merkle_cap_from_vec_panics_on_empty() {
+        let _: MerkleCap<F, Digest> = vec![].into();
+    }
+
+    #[test]
+    fn test_merkle_cap_from_hash() {
+        let hash = Hash::<F, u8, 4>::from([1u8, 2, 3, 4]);
+        let cap: MerkleCap<F, [u8; 4]> = hash.into();
+        assert_eq!(cap.num_roots(), 1);
+        assert_eq!(cap.height(), 0);
     }
 }

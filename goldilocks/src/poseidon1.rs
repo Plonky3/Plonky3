@@ -91,7 +91,7 @@ pub type Poseidon1GoldilocksGeneric<const WIDTH: usize> = Poseidon1<
 /// Karatsuba MDS convolution.
 ///
 /// Supports both scalar and packed state representations transparently.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub type Poseidon1Goldilocks<const WIDTH: usize> = crate::Poseidon1GoldilocksDispatch<WIDTH>;
 
 /// Unified Poseidon1 permutation for Goldilocks.
@@ -859,7 +859,7 @@ pub const GOLDILOCKS_POSEIDON1_RC_12: [[Goldilocks; 12]; 30] = Goldilocks::new_2
 /// Returns the platform-optimal implementation: dual-dispatch on aarch64
 /// (generic for scalar, fused ASM for packed), generic Karatsuba on all
 /// other platforms.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub fn default_goldilocks_poseidon1_8() -> Poseidon1Goldilocks<8> {
     let constants = Poseidon1Constants {
         rounds_f: 2 * GOLDILOCKS_POSEIDON_HALF_FULL_ROUNDS,
@@ -891,7 +891,7 @@ pub fn default_goldilocks_poseidon1_8() -> Poseidon1Goldilocks<8> {
 /// Returns the platform-optimal implementation: dual-dispatch on aarch64
 /// (generic for scalar, fused ASM for packed), generic Karatsuba on all
 /// other platforms.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub fn default_goldilocks_poseidon1_12() -> Poseidon1Goldilocks<12> {
     let constants = Poseidon1Constants {
         rounds_f: 2 * GOLDILOCKS_POSEIDON_HALF_FULL_ROUNDS,
@@ -920,6 +920,14 @@ pub fn default_goldilocks_poseidon1_12() -> Poseidon1Goldilocks<12> {
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
+    use alloc::format;
+    use alloc::string::{String, ToString};
+    use alloc::vec::Vec;
+    use std::path::PathBuf;
+    use std::process::Command;
+
     use p3_symmetric::Permutation;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
@@ -927,6 +935,43 @@ mod tests {
     use super::*;
 
     type F = Goldilocks;
+
+    /// Run `generate_constants.py --check-rust-only` for `(field, width)` and panic on mismatch.
+    ///
+    /// Tries `python3`, `python`, then `py -3` to cover Linux, macOS, and Windows.
+    fn assert_constants_match_generator(field: &str, width: usize) {
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let script = manifest.join("../poseidon1/generate_constants.py");
+        let repo_root = manifest.join("..");
+        let width_str = width.to_string();
+
+        let launchers: &[(&str, &[&str])] = &[("python3", &[]), ("python", &[]), ("py", &["-3"])];
+        let mut errors = Vec::new();
+
+        for &(bin, prefix) in launchers {
+            let result = Command::new(bin)
+                .args(prefix)
+                .arg(&script)
+                .args(["--field", field, "--width", &width_str])
+                .args(["--skip-mds", "--check-rust-only", "--repo-root"])
+                .arg(&repo_root)
+                .output();
+            match result {
+                Ok(out) if out.status.success() => return,
+                Ok(out) => errors.push(format!(
+                    "{bin}: exit {:?}\nstdout: {}\nstderr: {}",
+                    out.status.code(),
+                    String::from_utf8_lossy(&out.stdout),
+                    String::from_utf8_lossy(&out.stderr),
+                )),
+                Err(e) => errors.push(format!("{bin}: {e}")),
+            }
+        }
+        panic!(
+            "Failed to verify {field} Poseidon1 width {width}:\n{}",
+            errors.join("\n")
+        );
+    }
 
     /// Known-answer test for width 8 (sequential 0..7 input).
     #[test]
@@ -972,6 +1017,16 @@ mod tests {
             18181291031484020550,
         ]);
         assert_eq!(input, expected);
+    }
+
+    #[test]
+    fn test_poseidon_constants_match_generator_width_8() {
+        assert_constants_match_generator("goldilocks", 8);
+    }
+
+    #[test]
+    fn test_poseidon_constants_match_generator_width_12() {
+        assert_constants_match_generator("goldilocks", 12);
     }
 
     /// Smoke test for width 16 with random constants.
@@ -1105,7 +1160,7 @@ mod tests {
         }
     }
 
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     mod neon {
         use super::*;
         use crate::PackedGoldilocksNeon;

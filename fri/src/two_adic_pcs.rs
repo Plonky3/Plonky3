@@ -14,7 +14,6 @@
 //! If we changed our domain construction (e.g., using multiple cosets), we would need to carefully reconsider these assumptions.
 
 use alloc::borrow::Cow;
-use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Debug;
 use core::marker::PhantomData;
@@ -29,10 +28,10 @@ use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
     ExtensionField, PackedFieldExtension, TwoAdicField, batch_multiplicative_inverse, dot_product,
 };
-use p3_interpolation::interpolate_coset_with_precomputation;
 use p3_matrix::Matrix;
 use p3_matrix::bitrev::{BitReversedMatrixView, BitReversibleMatrix};
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow};
+use p3_matrix::interpolation::{Interpolate, compute_adjusted_weights};
 use p3_maybe_rayon::prelude::*;
 use p3_util::linear_map::LinearMap;
 use p3_util::{log2_strict_usize, reverse_bits_len, reverse_slice_index_bits};
@@ -215,7 +214,7 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
     }
 }
 
-/// Lagrange interpolation: given points (xs[i], ys[i]), evaluate at z.
+/// Lagrange interpolation: given points `(xs[i], ys[i])`, evaluate at z.
 ///
 /// Uses the barycentric formula for efficiency when xs are roots of unity.
 fn lagrange_interpolate_at<F: TwoAdicField, EF: ExtensionField<F>>(
@@ -285,6 +284,10 @@ where
     /// This function will panic if `degree` is not a power of 2 or `degree > (1 << Val::TWO_ADICITY)`.
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         TwoAdicMultiplicativeCoset::new(Val::ONE, log2_strict_usize(degree)).unwrap()
+    }
+
+    fn log_max_lde_height(&self) -> usize {
+        Val::TWO_ADICITY
     }
 
     /// Commit to a collection of evaluation matrices.
@@ -491,6 +494,13 @@ where
         // for that point, and precompute 1/(z - X) for the largest subgroup (in bitrev order).
         let inv_denoms = compute_inverse_denominators(&mats_and_points, &coset);
 
+        // Precompute adjusted barycentric weights once per opening point.
+        // adjusted[i] = 1/(z - x_i) - 1/z, reused across all matrices opened at z.
+        let adjusted_weights: LinearMap<Challenge, Vec<Challenge>> = inv_denoms
+            .iter()
+            .map(|(point, denoms)| (*point, compute_adjusted_weights(*point, denoms)))
+            .collect();
+
         // Evaluate coset representations and write openings to the challenger
         let all_opened_values = mats_and_points
             .iter()
@@ -510,7 +520,6 @@ where
 
                         // `subgroup` and `mat` are both in bit-reversed order, so we can truncate.
                         let (low_coset, _) = mat.split_rows(h);
-                        let coset_h = &coset[..h];
 
                         points_for_mat
                             .iter()
@@ -524,16 +533,13 @@ where
                                     "compute opened values with Lagrange interpolation"
                                 )
                                 .in_scope(|| {
-                                    // Get the relevant inverse denominators for this point and use these to
-                                    // interpolate to get the evaluation of each polynomial in the matrix
-                                    // at the desired point.
-                                    let inv_denoms = &inv_denoms.get(&point).unwrap()[..h];
-                                    interpolate_coset_with_precomputation(
-                                        &low_coset,
+                                    // Slice the precomputed adjusted weights to match this matrix's height.
+                                    // Zero-allocation hot path: straight to the SIMD dot product.
+                                    let adj = &adjusted_weights.get(&point).unwrap()[..h];
+                                    low_coset.interpolate_coset_with_precomputation(
                                         Val::GENERATOR,
                                         point,
-                                        coset_h,
-                                        inv_denoms,
+                                        adj,
                                     )
                                 });
 
@@ -603,7 +609,7 @@ where
                 // If this is our first matrix at this height, initialise reduced_openings to zero.
                 // Otherwise, get a mutable reference to it.
                 let reduced_opening_for_log_height = reduced_openings[log_height]
-                    .get_or_insert_with(|| vec![Challenge::ZERO; mat.height()]);
+                    .get_or_insert_with(|| Challenge::zero_vec(mat.height()));
                 debug_assert_eq!(reduced_opening_for_log_height.len(), mat.height());
 
                 // Treating our matrix M as the evaluations of functions f_0, f_1, ...

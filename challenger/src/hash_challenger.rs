@@ -63,10 +63,6 @@ where
     H: CryptographicHasher<T, [T; OUT_LEN]>,
 {
     fn observe(&mut self, values: [T; N]) {
-        if N == 0 {
-            return;
-        }
-
         self.output_buffer.clear();
         self.input_buffer.extend(values);
     }
@@ -410,5 +406,24 @@ mod tests {
 
         // Verify that the output buffer is cleared after observing
         assert!(hash_challenger.output_buffer.is_empty());
+    }
+
+    #[test]
+    fn test_observe_empty_array_clears_output_buffer() {
+        let test_hasher = TestHasher {};
+        let initial_state = vec![F::from_u8(1), F::from_u8(2)];
+        let mut hash_challenger = HashChallenger::new(initial_state.clone(), test_hasher);
+
+        // Populate artificially the output buffer
+        hash_challenger.output_buffer.push(F::from_u8(42));
+        assert!(!hash_challenger.output_buffer.is_empty());
+
+        // Observing an empty array still invalidates the output buffer
+        let values: [F; 0] = [];
+        hash_challenger.observe(values);
+
+        assert!(hash_challenger.output_buffer.is_empty());
+        // Input buffer is unchanged because no values were appended
+        assert_eq!(hash_challenger.input_buffer, initial_state);
     }
 }
