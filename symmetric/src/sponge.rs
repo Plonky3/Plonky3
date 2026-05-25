@@ -365,6 +365,75 @@ impl<P, const WIDTH: usize, const RATE: usize, const OUT: usize>
         Self { permutation }
     }
 
+    /// Slice-based reference form of the RTL hash.
+    ///
+    /// # Overview
+    ///
+    /// - Same construction as the streaming hash, expressed over a slice.
+    /// - Walks the input backward chunk-by-chunk in the natural reference form.
+    /// - Acts as the canonical algorithm for security analysis.
+    /// - The streaming form is the optimisation of this slice form.
+    ///
+    /// # Equivalence
+    ///
+    /// For every valid `data`, the slice form equals the streaming form
+    /// applied to the reversed input.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. Initialise the state from the last `WIDTH` elements of `data`.
+    /// 2. Permute.
+    /// 3. For each earlier `RATE`-sized chunk, in reverse order: overwrite
+    ///    the rate window with the chunk, then permute.
+    /// 4. Squeeze the first `OUT` positions.
+    ///
+    /// # Panics
+    ///
+    /// - `data.len()` must be at least `WIDTH`.
+    /// - `data.len() - WIDTH` must be a multiple of `RATE`.
+    pub fn hash_slice<T>(&self, data: &[T]) -> [T; OUT]
+    where
+        T: Default + Copy,
+        P: CryptographicPermutation<[T; WIDTH]>,
+    {
+        const {
+            assert!(RATE > 0);
+            assert!(RATE < WIDTH);
+            assert!(OUT <= WIDTH);
+        }
+
+        // The first `WIDTH` elements of the state come from the slice's tail.
+        // Anything shorter cannot fill the state on its own.
+        assert!(
+            data.len() >= WIDTH,
+            "input must contain at least WIDTH elements",
+        );
+
+        // Every chunk after the initial WIDTH-sized one must be RATE-aligned.
+        assert!(
+            (data.len() - WIDTH).is_multiple_of(RATE),
+            "input length must equal WIDTH + k*RATE for some k >= 0",
+        );
+
+        // Initial state: the last `WIDTH` elements of the slice.
+        let mut state: [T; WIDTH] = data[data.len() - WIDTH..]
+            .try_into()
+            .expect("slice of length WIDTH converts into [T; WIDTH]");
+        self.permutation.permute_mut(&mut state);
+
+        // Walk earlier chunks backward, rewriting only the rate window each time.
+        let n_extra = (data.len() - WIDTH) / RATE;
+        for chunk_idx in (0..n_extra).rev() {
+            let offset = chunk_idx * RATE;
+            state[WIDTH - RATE..].copy_from_slice(&data[offset..offset + RATE]);
+            self.permutation.permute_mut(&mut state);
+        }
+
+        state[..OUT]
+            .try_into()
+            .expect("OUT is at most WIDTH by the const assertion above")
+    }
+
     /// Precompute the state that results from absorbing an all-zero prefix.
     ///
     /// # Overview
@@ -1577,6 +1646,38 @@ mod tests {
         let _ = sponge.hash_with_initial_state(&initial_state, [5u64]);
     }
 
+    #[test]
+    #[should_panic(expected = "input must contain at least WIDTH elements")]
+    fn test_rtl_slice_panics_on_short_input() {
+        // Invariant: the slice form needs at least `WIDTH` elements to seed the initial state.
+        // A shorter slice is a programmer error.
+        const WIDTH: usize = 4;
+        const RATE: usize = 2;
+        const OUT: usize = 2;
+
+        let sponge =
+            RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
+
+        let _ = sponge.hash_slice(&[1u64, 2, 3]);
+    }
+
+    #[test]
+    #[should_panic(expected = "input length must equal WIDTH + k*RATE")]
+    fn test_rtl_slice_panics_on_misaligned_input() {
+        // Invariant: every chunk after the initial `WIDTH` elements must be exactly `RATE` wide.
+        // A misaligned slice is a programmer error.
+        const WIDTH: usize = 4;
+        const RATE: usize = 2;
+        const OUT: usize = 2;
+
+        let sponge =
+            RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
+
+        // Fixture: length 5 = WIDTH + 1.
+        // This is not of the form `WIDTH + k*RATE` for any integer `k`.
+        let _ = sponge.hash_slice(&[1u64, 2, 3, 4, 5]);
+    }
+
     // Arbitrary field element from any u32.
     fn arb_koala_bear() -> impl Strategy<Value = KoalaBear> {
         any::<u32>().prop_map(KoalaBear::new)
@@ -1717,6 +1818,36 @@ mod tests {
             let output_1 = sponge.hash_iter(input.iter().copied());
             let output_2 = sponge.hash_iter(input.iter().copied());
             prop_assert_eq!(output_1, output_2);
+        }
+
+        #[test]
+        fn proptest_rtl_slice_iter_equivalence(
+            // Number of `RATE`-sized blocks after the initial `WIDTH`-sized block.
+            n_extra_blocks in 0..=6usize,
+            vals in proptest::collection::vec(0..1000u64, 16..=16),
+        ) {
+            // Invariant: the slice form and the streaming form on the reversed input compute the same digest.
+            //
+            // - Reduces collision resistance of the streaming form to that of the slice form.
+            // - Uses the position-aware mock so equality reflects algorithmic agreement.
+            // - A symmetric permutation would let the equality hold by coincidence.
+            const WIDTH: usize = 4;
+            const RATE: usize = 2;
+            const OUT: usize = 2;
+
+            let data: Vec<u64> = vals
+                .into_iter()
+                .take(WIDTH + n_extra_blocks * RATE)
+                .collect();
+
+            let sponge = RtlPaddingFreeSponge::<PrefixSumPermutation, WIDTH, RATE, OUT>::new(
+                PrefixSumPermutation,
+            );
+
+            let slice_digest = sponge.hash_slice(&data);
+            let iter_digest = sponge.hash_iter(data.iter().rev().copied());
+
+            prop_assert_eq!(slice_digest, iter_digest);
         }
     }
 }
