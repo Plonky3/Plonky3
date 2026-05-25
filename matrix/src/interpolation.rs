@@ -107,6 +107,14 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
             .iter()
             .collect();
 
+        // If point lies on the coset, return that row directly.
+        // Mirrors the arbitrary-domain shortcut and avoids 0.inverse().
+        for (i, &x) in coset.iter().enumerate() {
+            if point == EF::from(x) {
+                return self.row(i).unwrap().into_iter().map(EF::from).collect();
+            }
+        }
+
         // Compute z - x_i in parallel, then batch-invert in one shot
         // (Montgomery's trick: single field inversion + O(N) multiplications).
         let diffs: Vec<EF> = coset.par_iter().map(|&g| point - g).collect();
@@ -318,7 +326,9 @@ pub trait InterpolateArbitrary<F: Field>: Matrix<F> {
 
         // Denominator: sum of all scale factors.
         let denominator = col_scale.iter().copied().fold(EF::ZERO, |a, b| a + b);
-        let denom_inv = denominator.inverse();
+        let Some(denom_inv) = denominator.try_inverse() else {
+            return alloc::vec![EF::ZERO; self.width()];
+        };
 
         // Numerator per column via SIMD-packed M^T * col_scale.
         let mut evals = self.columnwise_dot_product(&col_scale);
@@ -1048,6 +1058,17 @@ mod tests {
                 F::from_u32(4),
             ]
         );
+    }
+
+
+    #[test]
+    fn test_interpolate_arbitrary_empty_matrix() {
+        // height=0 -> col_scale is empty -> denominator folds to EF::ZERO
+        // must NOT panic, must return a zero vector of length == width
+        let xs: Vec<F> = vec![];
+        let evals = RowMajorMatrix::<F>::new(vec![], 3);
+        let result = evals.interpolate_arbitrary_point(&xs, F::from_u32(42));
+        assert_eq!(result, Some(vec![F::ZERO, F::ZERO, F::ZERO]));
     }
 
     #[test]
