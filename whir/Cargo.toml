@@ -41,6 +41,7 @@ p3-sumcheck = { workspace = true, features = ["test-util"] }
 
 clap.workspace = true
 criterion.workspace = true
+postcard = { workspace = true, features = ["alloc"] }
 proptest.workspace = true
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
