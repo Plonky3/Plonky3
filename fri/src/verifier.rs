@@ -88,6 +88,25 @@ where
         expected: usize,
         got: usize,
     },
+    #[error("hiding PCS random opening round count mismatch: expected {expected}, got {got}")]
+    HidingRandomOpeningRoundCountMismatch { expected: usize, got: usize },
+    #[error(
+        "hiding PCS round {round}: random opening matrix count mismatch: expected {expected}, got {got}"
+    )]
+    HidingRandomOpeningMatrixCountMismatch {
+        round: usize,
+        expected: usize,
+        got: usize,
+    },
+    #[error(
+        "hiding PCS round {round}, matrix {matrix}: random opening point count mismatch: expected {expected}, got {got}"
+    )]
+    HidingRandomOpeningPointCountMismatch {
+        round: usize,
+        matrix: usize,
+        expected: usize,
+        got: usize,
+    },
     #[error("commit phase MMCS error: {0:?}")]
     CommitPhaseMmcsError(CommitMmcsErr),
     #[error("input error: {0:?}")]

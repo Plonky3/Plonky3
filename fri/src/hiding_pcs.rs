@@ -13,7 +13,6 @@ use p3_matrix::bitrev::{BitReversalPerm, BitReversibleMatrix};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixCow};
 use p3_matrix::horizontally_truncated::HorizontallyTruncated;
 use p3_matrix::row_index_mapped::RowIndexMappedView;
-use p3_util::zip_eq::zip_eq;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 use spin::Mutex;
@@ -383,17 +382,36 @@ where
         // Now we merge `opened_values_for_rand_cws` into the opened values in `rounds`, undoing
         // the split that we did in `open`, to get a complete set of opened values for the inner PCS
         // to check.
-        for (round, rand_round) in zip_eq(
-            rounds.iter_mut(),
-            opened_values_for_rand_cws,
-            FriError::InvalidProofShape,
-        )? {
-            for (mat, rand_mat) in
-                zip_eq(round.1.iter_mut(), rand_round, FriError::InvalidProofShape)?
+        if opened_values_for_rand_cws.len() != rounds.len() {
+            return Err(FriError::HidingRandomOpeningRoundCountMismatch {
+                expected: rounds.len(),
+                got: opened_values_for_rand_cws.len(),
+            });
+        }
+        for (round_idx, (round, rand_round)) in rounds
+            .iter_mut()
+            .zip(opened_values_for_rand_cws.iter())
+            .enumerate()
+        {
+            if rand_round.len() != round.1.len() {
+                return Err(FriError::HidingRandomOpeningMatrixCountMismatch {
+                    round: round_idx,
+                    expected: round.1.len(),
+                    got: rand_round.len(),
+                });
+            }
+            for (matrix_idx, (mat, rand_mat)) in
+                round.1.iter_mut().zip(rand_round.iter()).enumerate()
             {
-                for (point, rand_point) in
-                    zip_eq(mat.1.iter_mut(), rand_mat, FriError::InvalidProofShape)?
-                {
+                if rand_mat.len() != mat.1.len() {
+                    return Err(FriError::HidingRandomOpeningPointCountMismatch {
+                        round: round_idx,
+                        matrix: matrix_idx,
+                        expected: mat.1.len(),
+                        got: rand_mat.len(),
+                    });
+                }
+                for (point, rand_point) in mat.1.iter_mut().zip(rand_mat.iter()) {
                     point.1.extend(rand_point);
                 }
             }
