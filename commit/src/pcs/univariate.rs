@@ -83,6 +83,10 @@ where
     /// the polynomials defined by those evaluations. If `zk` is enabled, the evaluations are
     /// first randomized as explained in Section 3 of <https://eprint.iacr.org/2024/1037.pdf>.
     ///
+    /// Method-call syntax like `pcs.commit(...)` works when Rust can infer the
+    /// `Pcs<Challenge, Challenger>` parameters. Otherwise use explicit UFCS, e.g.
+    /// `<MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, ...)`.
+    ///
     /// Returns both the commitment which should be sent to the verifier
     /// and the prover data which can be used to produce opening proofs.
     #[allow(clippy::type_complexity)]

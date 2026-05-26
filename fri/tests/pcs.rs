@@ -256,6 +256,70 @@ mod babybear_fri_pcs {
 
         assert_eq!(evals, expected);
     }
+
+    #[test]
+    fn commit_call_styles_match() {
+        use p3_matrix::Matrix;
+
+        fn commit_with_method_syntax<P>(
+            pcs: &P,
+            domain: <MyPcs as Pcs<Challenge, Challenger>>::Domain,
+            trace: RowMajorMatrix<Val>,
+        ) -> (
+            <MyPcs as Pcs<Challenge, Challenger>>::Commitment,
+            <MyPcs as Pcs<Challenge, Challenger>>::ProverData,
+        )
+        where
+            P: Pcs<
+                Challenge,
+                Challenger,
+                Domain = <MyPcs as Pcs<Challenge, Challenger>>::Domain,
+                Commitment = <MyPcs as Pcs<Challenge, Challenger>>::Commitment,
+                ProverData = <MyPcs as Pcs<Challenge, Challenger>>::ProverData,
+            >,
+        {
+            pcs.commit([(domain, trace)])
+        }
+
+        let (pcs, _) = get_pcs(1);
+        let mut rng = seeded_rng();
+
+        let degree = 1 << 4;
+        let width = 3;
+        let trace = RowMajorMatrix::<Val>::rand(&mut rng, degree, width);
+
+        let method_domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, degree);
+        let (method_commitment, method_data) =
+            commit_with_method_syntax(&pcs, method_domain, trace.clone());
+
+        let ufcs_domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, degree);
+        let (ufcs_commitment, ufcs_data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(ufcs_domain, trace.clone())]);
+
+        assert_eq!(method_commitment, ufcs_commitment);
+
+        let disjoint_domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, degree)
+                .create_disjoint_domain(degree);
+        let method_evals = <MyPcs as Pcs<Challenge, Challenger>>::get_evaluations_on_domain(
+            &pcs,
+            &method_data,
+            0,
+            disjoint_domain,
+        )
+        .to_row_major_matrix();
+        let ufcs_evals = <MyPcs as Pcs<Challenge, Challenger>>::get_evaluations_on_domain(
+            &pcs,
+            &ufcs_data,
+            0,
+            disjoint_domain,
+        )
+        .to_row_major_matrix();
+
+        assert_eq!(method_evals, ufcs_evals);
+    }
 }
 
 mod m31_fri_pcs {
