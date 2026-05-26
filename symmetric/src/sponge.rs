@@ -291,61 +291,41 @@ where
         .expect("OUT is at most WIDTH by the const assertion above")
 }
 
-/// A padding-free hash that absorbs input into the state right-to-left.
+/// A padding-free sponge that absorbs input into the state right-to-left.
 ///
 /// # Overview
 ///
-/// - Walks the state from the highest index downward, one element per slot.
-/// - Streams elements that arrive in reverse order with no pre-buffering.
+/// - Standard sponge construction with the rate window at the high state indices.
+/// - Streams reverse-ordered iterators with no pre-buffering.
 /// - Typical use: Merkle tree construction over FRI/WHIR evaluations.
 ///
-/// # Differences from a strict sponge
+/// # Reference
 ///
-/// Reference: Bertoni, Daemen, Peeters, Van Assche, *"Sponge Functions"*, ECRYPT Hash Workshop 2007.
+/// Bertoni, Daemen, Peeters, Van Assche, *"Sponge Functions"*, ECRYPT Hash Workshop 2007.
 ///
 /// Paper: <https://keccak.team/files/SpongeFunctions.pdf>.
-///
-/// - Absorption walks the state top-down, not left-to-right.
-/// - The first block writes the whole state, capacity included.
-/// - Later blocks chain through the capacity as in a standard sponge.
-///
-/// # Soundness model
-///
-/// - The first-block pattern matches the truncated permutation compression of this crate.
-/// - That compression is applied iteratively here.
-/// - The construction reduces to an iterated truncated permutation.
-/// - It is not a strict sponge, so the Bertoni indifferentiability proof does not apply verbatim.
-/// - Soundness rests on the permutation behaving as a public random permutation.
 ///
 /// # State layout
 ///
 /// ```text
-///     index:  0 .. WIDTH-RATE       ← capacity (chaining variable)
-///     index:  WIDTH-RATE .. WIDTH   ← rate    (absorption window)
+///     index:  0                       ← length IV slot
+///     index:  1 .. WIDTH-RATE         ← rest of capacity (chaining variable)
+///     index:  WIDTH-RATE .. WIDTH     ← rate (absorption window)
 /// ```
 ///
+/// - The capacity is **never directly overwritten by input** — it acts as a barrier.
+/// - The first capacity slot is initialised with the input length to defeat length-extension attacks.
 /// - The rate sits at the high indices because that is the side absorption writes to.
 /// - The digest is the first `OUT` positions of the final state.
-/// - In this layout the digest lives in the capacity half.
-/// - Truncating any contiguous window is indifferentiable from random output.
-/// - That holds as long as the capacity is large enough.
 ///
-/// # Absorption phases
+/// # Absorption
 ///
 /// ```text
-///     Phase 1 — first block, WIDTH=4, input prefix = [a, b, c, d]
+///     WIDTH=4, RATE=2, length-IV = L, next block = [e, f]
 ///
 ///         index:    0    1    2    3
 ///                 +----+----+----+----+
-///                 | d  | c  | b  | a  |   ← write order: a→3, b→2, c→1, d→0
-///                 +----+----+----+----+
-///                   capacity     rate
-///
-///     Phase 2 — every subsequent block, RATE=2, next = [e, f]
-///
-///         index:    0    1    2    3
-///                 +----+----+----+----+
-///                 |   kept  | f  | e  |   ← only the rate window is rewritten
+///                 | L  |  ?  | f  | e  |   ← only the rate window is rewritten
 ///                 +----+----+----+----+
 ///                   capacity     rate
 /// ```
@@ -369,29 +349,22 @@ impl<P, const WIDTH: usize, const RATE: usize, const OUT: usize>
     ///
     /// # Overview
     ///
-    /// - Same construction as the streaming hash, expressed over a slice.
-    /// - Walks the input backward chunk-by-chunk in the natural reference form.
-    /// - Acts as the canonical algorithm for security analysis.
+    /// - Canonical algorithm for the construction.
     /// - The streaming form is the optimisation of this slice form.
-    ///
-    /// # Equivalence
-    ///
-    /// For every valid `data`, the slice form equals the streaming form
-    /// applied to the reversed input.
+    /// - The caller supplies the length-IV; passing `data.len()` (or its
+    ///   field-element image) is the conventional choice.
     ///
     /// # Algorithm
     ///
-    /// 1. Initialise the state from the last `WIDTH` elements of `data`.
-    /// 2. Permute.
-    /// 3. For each earlier `RATE`-sized chunk, in reverse order: overwrite
-    ///    the rate window with the chunk, then permute.
-    /// 4. Squeeze the first `OUT` positions.
+    /// 1. Initialise the state as `[length_iv, 0, …, 0]`.
+    /// 2. For each `RATE`-sized chunk of `data`, in reverse order:
+    ///    overwrite the rate window with the chunk, then permute.
+    /// 3. Squeeze the first `OUT` positions.
     ///
     /// # Panics
     ///
-    /// - `data.len()` must be at least `WIDTH`.
-    /// - `data.len() - WIDTH` must be a multiple of `RATE`.
-    pub fn hash_slice<T>(&self, data: &[T]) -> [T; OUT]
+    /// `data.len()` must be a multiple of `RATE`.
+    pub fn hash_slice<T>(&self, data: &[T], length_iv: T) -> [T; OUT]
     where
         T: Default + Copy,
         P: CryptographicPermutation<[T; WIDTH]>,
@@ -402,30 +375,19 @@ impl<P, const WIDTH: usize, const RATE: usize, const OUT: usize>
             assert!(OUT <= WIDTH);
         }
 
-        // The first `WIDTH` elements of the state come from the slice's tail.
-        // Anything shorter cannot fill the state on its own.
+        // Every chunk must be `RATE` elements wide.
         assert!(
-            data.len() >= WIDTH,
-            "input must contain at least WIDTH elements",
+            data.len().is_multiple_of(RATE),
+            "input length must be a multiple of RATE",
         );
 
-        // Every chunk after the initial WIDTH-sized one must be RATE-aligned.
-        assert!(
-            (data.len() - WIDTH).is_multiple_of(RATE),
-            "input length must equal WIDTH + k*RATE for some k >= 0",
-        );
+        // Initial state: length-IV in the first capacity slot, rest zero.
+        let mut state = [T::default(); WIDTH];
+        state[0] = length_iv;
 
-        // Initial state: the last `WIDTH` elements of the slice.
-        let mut state: [T; WIDTH] = data[data.len() - WIDTH..]
-            .try_into()
-            .expect("slice of length WIDTH converts into [T; WIDTH]");
-        self.permutation.permute_mut(&mut state);
-
-        // Walk earlier chunks backward, rewriting only the rate window each time.
-        let n_extra = (data.len() - WIDTH) / RATE;
-        for chunk_idx in (0..n_extra).rev() {
-            let offset = chunk_idx * RATE;
-            state[WIDTH - RATE..].copy_from_slice(&data[offset..offset + RATE]);
+        // Walk chunks of `data` backward, rewriting only the rate window each time.
+        for chunk in data.chunks_exact(RATE).rev() {
+            state[WIDTH - RATE..].copy_from_slice(chunk);
             self.permutation.permute_mut(&mut state);
         }
 
@@ -443,36 +405,23 @@ impl<P, const WIDTH: usize, const RATE: usize, const OUT: usize>
     /// - Their leading zeros feed identical permutation calls every time.
     /// - Reusing the post-zero state saves work, like SHA-256 midstate caching in Bitcoin mining.
     ///
-    /// # Returned state
+    /// # Algorithm
     ///
-    /// - The first chunk is a full-width zero block.
-    /// - The next `n_zero_chunks - 2` chunks are rate-sized zero blocks.
-    /// - All are permuted in turn.
-    /// - The rate window of the returned state is left as the last permutation produced it.
-    /// - The caller overwrites that window with the first non-zero block.
-    ///
-    /// # Why at least two chunks
-    ///
-    /// - The first chunk fills the whole state with zeros and runs one boundary permutation.
-    /// - The last chunk is intentionally not permuted.
-    /// - The caller then rewrites its rate window with real data.
-    /// - Below two chunks there is nothing meaningful to precompute.
+    /// 1. Initialise the state as `[iv_first, 0, …, 0]`.
+    /// 2. For each of `n_zero_chunks` iterations: zero the rate window, then permute.
+    /// 3. Return the resulting state.
     ///
     /// # Diagram
     ///
     /// ```text
-    ///     n_zero_chunks = 4, WIDTH = 4, RATE = 2
+    ///     iv_first = L, n_zero_chunks = 3, WIDTH = 4, RATE = 2
     ///
-    ///         chunk 1 : state filled with zeros        → permute → s_1
-    ///         chunk 2 : rate of s_1 zeroed             → permute → s_2
-    ///         chunk 3 : rate of s_2 zeroed             → permute → s_3  ← returned
-    ///         chunk 4 : caller overwrites rate of s_3 with real data
+    ///         start    : state = [ L  0  0  0 ]
+    ///         zero rate, permute → s_1
+    ///         zero rate, permute → s_2
+    ///         zero rate, permute → s_3  ← returned
     /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics when fewer than two zero chunks are requested.
-    pub fn precompute_zero_suffix_state<T>(&self, n_zero_chunks: usize) -> [T; WIDTH]
+    pub fn precompute_zero_suffix_state<T>(&self, iv_first: T, n_zero_chunks: usize) -> [T; WIDTH]
     where
         T: Default + Copy,
         P: CryptographicPermutation<[T; WIDTH]>,
@@ -483,25 +432,13 @@ impl<P, const WIDTH: usize, const RATE: usize, const OUT: usize>
             assert!(OUT <= WIDTH);
         }
 
-        // Minimum two chunks.
-        //
-        // - One chunk runs the initial boundary permutation.
-        // - One chunk is reserved for the caller's first real data block.
-        assert!(n_zero_chunks >= 2);
-
-        // Chunk 1: permute the all-zero state once.
+        // Initial state: caller-supplied IV in the first capacity slot, rest zero.
         let mut state = [T::default(); WIDTH];
-        self.permutation.permute_mut(&mut state);
+        state[0] = iv_first;
 
-        // Chunks 2 through `n_zero_chunks - 1`: zero the rate and permute.
-        //
-        // The loop count is `n_zero_chunks - 2` because:
-        //
-        // - Chunk 1 was handled above.
-        // - The final chunk is left untouched for the caller's real data.
-        for _ in 0..n_zero_chunks - 2 {
-            // Reset only the rate window.
-            // The capacity retains entropy from the previous permutation.
+        // Each iteration absorbs one all-zero rate block.
+        // The rate is re-zeroed before each permutation so capacity carries forward.
+        for _ in 0..n_zero_chunks {
             state[WIDTH - RATE..].fill(T::default());
             self.permutation.permute_mut(&mut state);
         }
@@ -542,78 +479,6 @@ impl<P, const WIDTH: usize, const RATE: usize, const OUT: usize>
 
         // Hand the remaining elements to the shared per-block absorber.
         let mut iter = iter.into_iter();
-        absorb_rtl_chunks::<T, P, _, WIDTH, RATE, OUT>(&self.permutation, &mut state, &mut iter)
-    }
-}
-
-impl<T, P, const WIDTH: usize, const RATE: usize, const OUT: usize> CryptographicHasher<T, [T; OUT]>
-    for RtlPaddingFreeSponge<P, WIDTH, RATE, OUT>
-where
-    T: Default + Copy,
-    P: CryptographicPermutation<[T; WIDTH]>,
-{
-    fn hash_iter<I>(&self, input: I) -> [T; OUT]
-    where
-        I: IntoIterator<Item = T>,
-    {
-        // Shape constraints checked at compile time:
-        //
-        // - RATE > 0       — at least one input element per block.
-        // - RATE < WIDTH   — at least one slot reserved for the capacity.
-        // - OUT <= WIDTH   — digest cannot exceed the state size.
-        const {
-            assert!(RATE > 0);
-            assert!(RATE < WIDTH);
-            assert!(OUT <= WIDTH);
-        }
-
-        // Start from the all-zero initialization vector.
-        let mut state = [T::default(); WIDTH];
-        let mut iter = input.into_iter();
-
-        // Phase 1 — the first block writes the entire state.
-        //
-        // - The all-zero state acts as a fixed IV.
-        // - The permutation that follows acts as a compression function.
-        // - Its input is `IV` concatenated with the first `WIDTH` input elements.
-        // - Later blocks chain through the capacity as a standard sponge.
-        //
-        //     WIDTH=4, input prefix = [a, b, c, d, ...]
-        //
-        //         index:    0    1    2    3
-        //                 +----+----+----+----+
-        //                 | d  | c  | b  | a  |   ← a→3, b→2, c→1, d→0
-        //                 +----+----+----+----+
-        //                   capacity     rate
-        //         permute(state)
-        for pos in (0..WIDTH).rev() {
-            if let Some(x) = iter.next() {
-                // Place this input element at the current top-down slot.
-                state[pos] = x;
-            } else {
-                // The iterator drained before the first block completed.
-                //
-                // - If `pos == WIDTH - 1` no element was absorbed.
-                // - In that case the state is still all-zero, so no permutation runs.
-                // - Otherwise some elements were absorbed.
-                // - Permute once so they appear in the squeeze.
-                if pos < WIDTH - 1 {
-                    self.permutation.permute_mut(&mut state);
-                }
-
-                // Squeeze the partial-block state and return early.
-                return state[..OUT]
-                    .try_into()
-                    .expect("OUT is at most WIDTH by the const assertion above");
-            }
-        }
-
-        // The first block was fully absorbed.
-        // Run the boundary permutation before handing off to Phase 2.
-        self.permutation.permute_mut(&mut state);
-
-        // Phase 2 — every following block rewrites only the rate window.
-        // The shared helper handles that loop.
         absorb_rtl_chunks::<T, P, _, WIDTH, RATE, OUT>(&self.permutation, &mut state, &mut iter)
     }
 }
@@ -1333,192 +1198,136 @@ mod tests {
 
     #[test]
     fn test_rtl_sponge_basic() {
-        // Fixture: WIDTH = 4, RATE = 2, OUT = 2, plain-sum mock.
+        // Hand-traced state transitions for `data = [1, 2, 3, 4, 5, 6]`, `length_iv = 6`.
         //
-        // Hand-traced state transitions for input [1, 2, 3, 4, 5, 6]:
+        //   Initial state (length-IV in capacity slot 0):  [6, 0, 0, 0]
         //
-        //   Initial state:                        [0, 0, 0, 0]
+        //   Chunks of `data` are processed in reverse:
         //
-        //   Phase 1: first block fills WIDTH=4 positions RTL.
-        //     state[3] = 1, state[2] = 2, state[1] = 3, state[0] = 4
-        //                                         [4, 3, 2, 1]
-        //     permute (sum = 10):                 [10, 10, 10, 10]
+        //   chunk [5, 6]: state[2..4] = [5, 6]     [6, 0, 5, 6]
+        //   permute (sum = 17):                    [17, 17, 17, 17]
         //
-        //   Phase 2: second block fills RATE=2 positions RTL.
-        //     state[3] = 5, state[2] = 6
-        //                                         [10, 10, 6, 5]
-        //     permute (sum = 31):                 [31, 31, 31, 31]
+        //   chunk [3, 4]: state[2..4] = [3, 4]     [17, 17, 3, 4]
+        //   permute (sum = 41):                    [41, 41, 41, 41]
         //
-        //   Squeeze OUT = 2:                      [31, 31]
+        //   chunk [1, 2]: state[2..4] = [1, 2]     [41, 41, 1, 2]
+        //   permute (sum = 85):                    [85, 85, 85, 85]
+        //
+        //   Squeeze OUT = 2:                       [85, 85]
         const WIDTH: usize = 4;
         const RATE: usize = 2;
         const OUT: usize = 2;
 
         let sponge =
             RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
-        let output = sponge.hash_iter([1u64, 2, 3, 4, 5, 6]);
+        let data = [1u64, 2, 3, 4, 5, 6];
+        let output = sponge.hash_slice(&data, data.len() as u64);
 
-        assert_eq!(output, [31; OUT]);
+        assert_eq!(output, [85; OUT]);
     }
 
     #[test]
-    fn test_rtl_sponge_single_full_block() {
-        // Input has exactly WIDTH elements: one full first-block, no Phase 2.
+    fn test_rtl_sponge_single_block() {
+        // `data` is exactly one RATE-sized chunk; one permutation runs.
         //
-        //   Initial state:                        [0, 0, 0, 0]
+        //   Initial state:                          [2, 0, 0, 0]
         //
-        //   Phase 1: state[3]=10, state[2]=20, state[1]=30, state[0]=40
-        //                                         [40, 30, 20, 10]
-        //   permute (sum = 100):                  [100, 100, 100, 100]
+        //   chunk [10, 20]: state[2..4] = [10, 20]  [2, 0, 10, 20]
+        //   permute (sum = 32):                     [32, 32, 32, 32]
         //
-        //   Squeeze OUT = 2:                      [100, 100]
+        //   Squeeze OUT = 2:                        [32, 32]
         const WIDTH: usize = 4;
         const RATE: usize = 2;
         const OUT: usize = 2;
 
         let sponge =
             RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
-        let output = sponge.hash_iter([10u64, 20, 30, 40]);
+        let data = [10u64, 20];
+        let output = sponge.hash_slice(&data, data.len() as u64);
 
-        assert_eq!(output, [100; OUT]);
+        assert_eq!(output, [32; OUT]);
     }
 
     #[test]
     fn test_rtl_sponge_empty_input() {
-        // Empty input: pos stays at WIDTH-1, no permutation runs.
-        // State remains all-zero and the squeeze is all-zero.
+        // Empty input: no chunks, no permutation.
+        // State stays `[length_iv, 0, ..., 0]` and the squeeze reads from it directly.
         const WIDTH: usize = 4;
         const RATE: usize = 2;
         const OUT: usize = 2;
 
         let sponge =
             RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
-        let output = sponge.hash_iter(core::iter::empty::<u64>());
+        let output = sponge.hash_slice::<u64>(&[], 0);
 
         assert_eq!(output, [0; OUT]);
     }
 
     #[test]
-    fn test_rtl_sponge_partial_first_block_one_elem() {
-        // Exercises the partial first-block branch with `pos < WIDTH - 1`.
-        //
-        //   Initial state:            [0, 0, 0, 0]
-        //
-        //   pos = 3: state[3] = 7     [0, 0, 0, 7]
-        //   pos = 2: iter drained, pos < WIDTH - 1 → permute once
-        //   sum = 7, broadcast        [7, 7, 7, 7]
-        //
-        //   Squeeze OUT = 2:          [7, 7]
+    #[should_panic(expected = "input length must be a multiple of RATE")]
+    fn test_rtl_sponge_misaligned_panics() {
+        // Slice length must be a multiple of `RATE`. Length 5 with `RATE = 2` is rejected.
         const WIDTH: usize = 4;
         const RATE: usize = 2;
         const OUT: usize = 2;
 
         let sponge =
             RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
-        let output = sponge.hash_iter([7u64]);
-
-        assert_eq!(output, [7; OUT]);
-    }
-
-    #[test]
-    fn test_rtl_sponge_partial_first_block_width_minus_one() {
-        // Boundary of the partial first-block branch: exactly `WIDTH - 1` elements.
-        //
-        //   Initial state:            [0, 0, 0, 0]
-        //
-        //   pos = 3: state[3] = 1     [0, 0, 0, 1]
-        //   pos = 2: state[2] = 2     [0, 0, 2, 1]
-        //   pos = 1: state[1] = 3     [0, 3, 2, 1]
-        //   pos = 0: iter drained, pos < WIDTH - 1 → permute once
-        //   sum = 6, broadcast        [6, 6, 6, 6]
-        //
-        //   Squeeze OUT = 2:          [6, 6]
-        const WIDTH: usize = 4;
-        const RATE: usize = 2;
-        const OUT: usize = 2;
-
-        let sponge =
-            RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
-        let output = sponge.hash_iter([1u64, 2, 3]);
-
-        assert_eq!(output, [6; OUT]);
-    }
-
-    #[test]
-    #[should_panic(expected = "iterator length must be a multiple of RATE")]
-    fn test_rtl_sponge_non_multiple_of_rate_panics() {
-        // Phase 2 must consume `RATE` elements per block.
-        //
-        // Input length is `WIDTH + 1 = 5`, so after Phase 1 (`WIDTH` consumed)
-        // Phase 2 starts a block with one element and then runs dry.
-        //
-        // The helper's expect carries a descriptive panic message.
-        const WIDTH: usize = 4;
-        const RATE: usize = 2;
-        const OUT: usize = 2;
-
-        let sponge =
-            RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
-        let _ = sponge.hash_iter([1u64, 2, 3, 4, 5]);
+        let _ = sponge.hash_slice(&[1u64, 2, 3, 4, 5], 5);
     }
 
     #[test]
     fn test_rtl_sponge_out_larger_than_capacity() {
-        // Boundary case `OUT > WIDTH - RATE`: the squeeze window crosses
-        // from capacity into the rate region.
+        // `OUT > WIDTH - RATE`: the squeeze crosses from capacity into rate.
         //
         //   WIDTH = 4, RATE = 2  →  capacity is positions [0..2]
         //   OUT = 3              →  digest = state[0..3]
-        //                              positions 0, 1 are capacity
-        //                              position 2 is the lowest rate slot
         //
-        // Input [1, 2, 3, 4] fills exactly the first block right-to-left.
+        //   data = [1, 2, 3, 4], length_iv = 4. Chunks reversed: [[3,4], [1,2]].
         //
-        //   Initial state:            [0, 0, 0, 0]
+        //   Initial state:                       [4, 0, 0, 0]
+        //   chunk [3, 4]:  state[2..4] = [3, 4]  [4, 0, 3, 4]
+        //   permute (sum = 11):                  [11; 4]
+        //   chunk [1, 2]:  state[2..4] = [1, 2]  [11, 11, 1, 2]
+        //   permute (sum = 25):                  [25; 4]
         //
-        //   Phase 1 fills WIDTH=4 RTL: [4, 3, 2, 1]
-        //   permute (sum = 10):        [10, 10, 10, 10]
-        //
-        //   Squeeze OUT = 3:           [10, 10, 10]
+        //   Squeeze OUT = 3:                     [25, 25, 25]
         const WIDTH: usize = 4;
         const RATE: usize = 2;
         const OUT: usize = 3;
 
         let sponge =
             RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
-        let output = sponge.hash_iter([1u64, 2, 3, 4]);
+        let data = [1u64, 2, 3, 4];
+        let output = sponge.hash_slice(&data, data.len() as u64);
 
-        assert_eq!(output, [10; OUT]);
+        assert_eq!(output, [25; OUT]);
     }
 
     #[test]
     fn test_rtl_vs_ltr_different_outputs() {
-        // Invariant: the two absorption strategies must yield distinct digests on the same input.
+        // The RTL and LTR sponges are different constructions:
         //
-        // - Left-to-right writes `input[i]` into `state[i mod RATE]`.
-        // - Right-to-left writes `input[i]` into `state[WIDTH - 1 - (i mod RATE)]`.
-        // - A sum-and-broadcast mock would hide this difference.
-        // - A position-aware mock makes slot order observable in the digest.
+        // - The RTL sponge encodes the input length in the first capacity slot.
+        // - The LTR sponge uses an all-zero IV.
+        // - Rate sits at opposite ends of the state.
+        //
+        // For any non-trivial input the digests must differ.
         const WIDTH: usize = 4;
         const RATE: usize = 2;
         const OUT: usize = 2;
 
-        let input = [1u64, 2, 3, 4, 5, 6];
+        let data = [1u64, 2, 3, 4, 5, 6];
 
-        // Left-to-right path: `input[0..2]` goes into `state[0..2]`, then permute, then repeat.
         let ltr_sponge =
             PaddingFreeSponge::<PrefixSumPermutation, WIDTH, RATE, OUT>::new(PrefixSumPermutation);
-        let ltr_output = ltr_sponge.hash_iter(input);
+        let ltr_output = ltr_sponge.hash_iter(data);
 
-        // Right-to-left path: the first block fills `state[3..0]` top-down.
-        // Every later block rewrites only `state[3..2]` from the iterator head.
         let rtl_sponge = RtlPaddingFreeSponge::<PrefixSumPermutation, WIDTH, RATE, OUT>::new(
             PrefixSumPermutation,
         );
-        let rtl_output = rtl_sponge.hash_iter(input);
+        let rtl_output = rtl_sponge.hash_slice(&data, data.len() as u64);
 
-        // Under a position-aware permutation the two routes never share an intermediate state.
-        // Their digests must therefore differ.
         assert_ne!(
             ltr_output, rtl_output,
             "RTL and LTR sponges must produce different outputs for the same input"
@@ -1526,75 +1335,63 @@ mod tests {
     }
 
     #[test]
-    fn test_precompute_zero_suffix_basic() {
-        // Precompute the state after absorbing three all-zero RATE-sized chunks.
-        //
-        // - With sum-and-broadcast and an all-zero state every permutation is identity-on-zero.
-        // - The check verifies the method does not panic and returns a WIDTH-sized state.
+    fn test_precompute_zero_suffix_all_zero() {
+        // `iv_first = 0`, all-zero capacity, sum-broadcast mock: every state stays zero.
         const WIDTH: usize = 4;
         const RATE: usize = 2;
         const OUT: usize = 2;
 
         let sponge =
             RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
-        let state: [u64; WIDTH] = sponge.precompute_zero_suffix_state(3);
+        let state: [u64; WIDTH] = sponge.precompute_zero_suffix_state(0u64, 3);
 
         assert_eq!(state, [0u64; WIDTH]);
     }
 
     #[test]
-    fn test_precompute_zero_suffix_with_nonzero_permutation() {
-        // The precomputed state for N zero chunks must match the state obtained by running
-        // the full sponge over N rate-sized zero blocks.
+    fn test_precompute_zero_suffix_with_iv() {
+        // Non-zero IV drives a non-trivial trajectory.
         //
-        // Under the sum-and-broadcast mock the result is trivially all-zero.
+        //   Initial:                       [5, 0, 0, 0]
+        //   zero rate, permute (sum=5):    [5, 5, 5, 5]
+        //   zero rate, permute (sum=10):   [10, 10, 10, 10]
+        //   zero rate, permute (sum=20):   [20, 20, 20, 20]
         const WIDTH: usize = 4;
         const RATE: usize = 2;
         const OUT: usize = 2;
 
         let sponge =
             RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
-        let precomputed: [u64; WIDTH] = sponge.precompute_zero_suffix_state(3);
+        let state: [u64; WIDTH] = sponge.precompute_zero_suffix_state(5u64, 3);
 
-        assert_eq!(precomputed, [0u64; WIDTH]);
+        assert_eq!(state, [20u64; WIDTH]);
     }
 
     #[test]
-    #[should_panic]
-    fn test_precompute_zero_suffix_panics_on_one() {
-        // The precomputation requires at least two chunks; one must panic.
+    fn test_precompute_zero_suffix_no_chunks() {
+        // Zero chunks: no permutation runs, state stays at `[iv_first, 0, ..., 0]`.
         const WIDTH: usize = 4;
         const RATE: usize = 2;
         const OUT: usize = 2;
 
         let sponge =
             RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
-        let _: [u64; WIDTH] = sponge.precompute_zero_suffix_state(1);
-    }
+        let state: [u64; WIDTH] = sponge.precompute_zero_suffix_state(7u64, 0);
 
-    #[test]
-    #[should_panic]
-    fn test_precompute_zero_suffix_panics_on_zero() {
-        // Zero chunks must also panic.
-        const WIDTH: usize = 4;
-        const RATE: usize = 2;
-        const OUT: usize = 2;
-
-        let sponge =
-            RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
-        let _: [u64; WIDTH] = sponge.precompute_zero_suffix_state(0);
+        assert_eq!(state, [7, 0, 0, 0]);
     }
 
     #[test]
     fn test_hash_with_initial_state_matches_full_hash() {
-        // Invariant: hashing K zero-chunks followed by M non-zero chunks via the full RTL
-        // sponge must equal precomputing K zero-chunks and then hashing only the M
-        // non-zero chunks from that initial state.
+        // Invariant: hashing `[non_zero_prefix ‖ zero_suffix]` in one shot via the
+        // slice form must equal precomputing the zero suffix and then continuing
+        // from that midstate with the reverse-iterator form on the non-zero prefix.
         //
-        // Layout for K = 3 zero-equivalents + one non-zero block [5, 6]:
+        //   data = [5, 6, 0, 0, 0, 0]   (one non-zero block followed by two zero blocks)
+        //   length_iv = 6
         //
-        //   Full input: WIDTH zeros + RATE zeros + [5, 6]
-        //             = [0, 0, 0, 0, 0, 0, 5, 6]
+        //   Path A: hash_slice(data, 6).
+        //   Path B: precompute(6, 2) → midstate; hash_with_initial_state(midstate, [6, 5]).
         const WIDTH: usize = 4;
         const RATE: usize = 2;
         const OUT: usize = 2;
@@ -1602,19 +1399,20 @@ mod tests {
         let sponge =
             RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
 
-        let full_input = [0u64, 0, 0, 0, 0, 0, 5, 6];
-        let full_output = sponge.hash_iter(full_input);
+        let data = [5u64, 6, 0, 0, 0, 0];
+        let length_iv = data.len() as u64;
 
-        let initial_state: [u64; WIDTH] = sponge.precompute_zero_suffix_state(3);
-        let partial_output = sponge.hash_with_initial_state(&initial_state, [5u64, 6]);
+        let full_output = sponge.hash_slice(&data, length_iv);
+
+        let initial_state: [u64; WIDTH] = sponge.precompute_zero_suffix_state(length_iv, 2);
+        let partial_output = sponge.hash_with_initial_state(&initial_state, [6u64, 5]);
 
         assert_eq!(full_output, partial_output);
     }
 
     #[test]
     fn test_hash_with_initial_state_empty_remaining() {
-        // With an empty iterator no permutation runs; the output is the first OUT
-        // elements of the initial state itself.
+        // Empty iterator: no permutation runs, the squeeze reads from `initial_state[..OUT]`.
         const WIDTH: usize = 4;
         const RATE: usize = 2;
         const OUT: usize = 2;
@@ -1631,9 +1429,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "iterator length must be a multiple of RATE")]
     fn test_hash_with_initial_state_non_multiple_of_rate_panics() {
-        // The continuation path also requires the iterator length to be
-        // a multiple of `RATE`: starting a block and running dry mid-way
-        // is a programmer error and must panic.
+        // Iterator length must be a multiple of `RATE`.
+        // Supplying a single element with `RATE = 2` starts a block that cannot complete.
         const WIDTH: usize = 4;
         const RATE: usize = 2;
         const OUT: usize = 2;
@@ -1642,40 +1439,7 @@ mod tests {
             RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
 
         let initial_state = [0u64; WIDTH];
-        // `RATE = 2`, supplying a single element starts a block but cannot complete it.
         let _ = sponge.hash_with_initial_state(&initial_state, [5u64]);
-    }
-
-    #[test]
-    #[should_panic(expected = "input must contain at least WIDTH elements")]
-    fn test_rtl_slice_panics_on_short_input() {
-        // Invariant: the slice form needs at least `WIDTH` elements to seed the initial state.
-        // A shorter slice is a programmer error.
-        const WIDTH: usize = 4;
-        const RATE: usize = 2;
-        const OUT: usize = 2;
-
-        let sponge =
-            RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
-
-        let _ = sponge.hash_slice(&[1u64, 2, 3]);
-    }
-
-    #[test]
-    #[should_panic(expected = "input length must equal WIDTH + k*RATE")]
-    fn test_rtl_slice_panics_on_misaligned_input() {
-        // Invariant: every chunk after the initial `WIDTH` elements must be exactly `RATE` wide.
-        // A misaligned slice is a programmer error.
-        const WIDTH: usize = 4;
-        const RATE: usize = 2;
-        const OUT: usize = 2;
-
-        let sponge =
-            RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
-
-        // Fixture: length 5 = WIDTH + 1.
-        // This is not of the form `WIDTH + k*RATE` for any integer `k`.
-        let _ = sponge.hash_slice(&[1u64, 2, 3, 4, 5]);
     }
 
     // Arbitrary field element from any u32.
@@ -1764,66 +1528,69 @@ mod tests {
 
         #[test]
         fn proptest_rtl_precompute_equivalence(
-            n_zero_chunks in 2..=8usize,
-            n_suffix_blocks in 0..=4usize,
-            suffix_vals in proptest::collection::vec(0..1000u64, 0..=8),
+            n_zero_blocks in 0..=8usize,
+            n_nonzero_blocks in 0..=4usize,
+            nonzero_vals in proptest::collection::vec(0..1000u64, 0..=8),
         ) {
-            // Invariant: hash(zeros ++ suffix) == precompute(N) + hash_with_initial_state(suffix).
+            // Invariant: hash_slice(nonzero ‖ zeros, len) equals
+            // precompute(len, n_zero_blocks) followed by
+            // hash_with_initial_state on the reversed non-zero prefix.
             const WIDTH: usize = 4;
             const RATE: usize = 2;
             const OUT: usize = 2;
 
-            // Trim the suffix to an exact multiple of RATE for Phase 2.
-            let suffix: Vec<u64> = suffix_vals
+            // Non-zero prefix, exact multiple of RATE.
+            let nonzero: Vec<u64> = nonzero_vals
                 .into_iter()
                 .chain(core::iter::repeat(0))
-                .take(n_suffix_blocks * RATE)
+                .take(n_nonzero_blocks * RATE)
                 .collect();
 
-            // Full input layout: WIDTH zeros (Phase 1) + (n-2)*RATE zeros + suffix.
-            let total_zeros = WIDTH + (n_zero_chunks - 2) * RATE;
-            let full_input: Vec<u64> = core::iter::repeat_n(0u64, total_zeros)
-                .chain(suffix.iter().copied())
-                .collect();
+            // Full data layout: `[nonzero ‖ zeros]`.
+            let mut data: Vec<u64> = nonzero.clone();
+            data.extend(core::iter::repeat_n(0u64, n_zero_blocks * RATE));
+            let length_iv = data.len() as u64;
 
             let sponge =
                 RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
 
-            // Path A: one-shot hash over the full input.
-            let full_output = sponge.hash_iter(full_input);
+            // Path A: one-shot slice hash.
+            let full_output = sponge.hash_slice(&data, length_iv);
 
-            // Path B: precompute the zero prefix, then hash the suffix from that state.
-            let initial_state: [u64; WIDTH] = sponge.precompute_zero_suffix_state(n_zero_chunks);
-            let partial_output = sponge.hash_with_initial_state(&initial_state, suffix);
+            // Path B: precompute the zero suffix midstate, then continue on the reversed prefix.
+            let initial_state: [u64; WIDTH] =
+                sponge.precompute_zero_suffix_state(length_iv, n_zero_blocks);
+            let nonzero_rev: Vec<u64> = nonzero.iter().rev().copied().collect();
+            let partial_output = sponge.hash_with_initial_state(&initial_state, nonzero_rev);
 
             prop_assert_eq!(full_output, partial_output);
         }
 
         #[test]
         fn proptest_rtl_determinism(
-            // Valid lengths: WIDTH + k*RATE so the post-Phase-1 remainder is a multiple of RATE.
-            n_suffix_blocks in 0..=4usize,
+            // Number of `RATE`-sized blocks in the input.
+            n_blocks in 0..=6usize,
             vals in proptest::collection::vec(0..1000u64, 12..=12),
         ) {
             const WIDTH: usize = 4;
             const RATE: usize = 2;
             const OUT: usize = 2;
 
-            let input: Vec<u64> = vals.into_iter().take(WIDTH + n_suffix_blocks * RATE).collect();
+            let data: Vec<u64> = vals.into_iter().take(n_blocks * RATE).collect();
+            let length_iv = data.len() as u64;
 
             let sponge =
                 RtlPaddingFreeSponge::<MockPermutation, WIDTH, RATE, OUT>::new(MockPermutation);
 
             // Same input twice must produce the same output.
-            let output_1 = sponge.hash_iter(input.iter().copied());
-            let output_2 = sponge.hash_iter(input.iter().copied());
+            let output_1 = sponge.hash_slice(&data, length_iv);
+            let output_2 = sponge.hash_slice(&data, length_iv);
             prop_assert_eq!(output_1, output_2);
         }
 
         #[test]
         fn proptest_rtl_slice_iter_equivalence(
-            // Number of `RATE`-sized blocks after the initial `WIDTH`-sized block.
-            n_extra_blocks in 0..=6usize,
+            n_blocks in 0..=6usize,
             vals in proptest::collection::vec(0..1000u64, 16..=16),
         ) {
             // Invariant: the slice form and the streaming form on the reversed input compute the same digest.
@@ -1837,15 +1604,21 @@ mod tests {
 
             let data: Vec<u64> = vals
                 .into_iter()
-                .take(WIDTH + n_extra_blocks * RATE)
+                .take(n_blocks * RATE)
                 .collect();
+            let length_iv = data.len() as u64;
 
             let sponge = RtlPaddingFreeSponge::<PrefixSumPermutation, WIDTH, RATE, OUT>::new(
                 PrefixSumPermutation,
             );
 
-            let slice_digest = sponge.hash_slice(&data);
-            let iter_digest = sponge.hash_iter(data.iter().rev().copied());
+            // Both paths use the same initial state `[length_iv, 0, ..., 0]`.
+            let mut initial_state = [0u64; WIDTH];
+            initial_state[0] = length_iv;
+
+            let slice_digest = sponge.hash_slice(&data, length_iv);
+            let iter_digest =
+                sponge.hash_with_initial_state(&initial_state, data.iter().rev().copied());
 
             prop_assert_eq!(slice_digest, iter_digest);
         }
