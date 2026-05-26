@@ -16,6 +16,11 @@ use serde::{Deserialize, Serialize};
 /// with the largest height. For matrices with smaller heights, some bits of the row index are
 /// removed (from the least-significant side) to get the effective row index. These semantics are
 /// useful in the FRI protocol. See the documentation for `open_batch` for more details.
+///
+/// # Protocol invariant
+/// All committed matrix heights must be powers of two. The bit-shift index mapping is only
+/// correct when heights form a power-of-two divisibility chain. Implementations should assert
+/// this on entry to `commit`.
 pub trait Mmcs<T: Send + Sync + Clone>: Clone {
     type ProverData<M>;
     type Commitment: Clone + Serialize + DeserializeOwned;
@@ -33,6 +38,13 @@ pub trait Mmcs<T: Send + Sync + Clone>: Clone {
     /// A tuple `(commitment, prover_data)` where:
     /// - `commitment` is a compact representation of all matrix elements and will be sent to the verifier.
     /// - `prover_data` is auxiliary data used by the prover open the commitment.
+    ///
+    /// # Invariants
+    /// All committed matrix heights MUST be powers of two. Non-power-of-two heights cause
+    /// index aliasing in [`Self::open_batch`]: the bit-shift
+    /// `index >> (log2(max_h) - log2(h))` is only well-defined when `h` divides
+    /// `max_h` as a power of two. Violating this breaks the intended FRI
+    /// row-index mapping semantics.
     fn commit<M: Matrix<T>>(&self, inputs: Vec<M>) -> (Self::Commitment, Self::ProverData<M>);
 
     /// Convenience method to commit to a single matrix.
