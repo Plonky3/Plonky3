@@ -2,7 +2,9 @@ use alloc::vec::Vec;
 use core::ops::{Add, AddAssign, Mul, Neg, Sub};
 
 use p3_field::extension::ComplexExtendable;
-use p3_field::{ExtensionField, Field, batch_multiplicative_inverse};
+use p3_field::{
+    ExtensionField, Field, PackedValue, PrimeCharacteristicRing, batch_multiplicative_inverse,
+};
 
 /// Affine representation of a point on the circle.
 /// x^2 + y^2 == 1
@@ -119,6 +121,56 @@ impl<F: Field> Point<F> {
     }
 }
 
+/// Batched [`Point::s_p_at_p`] over base-field points.
+///
+/// Equivalent to `points.iter().map(|p| p.s_p_at_p(log_n))`, but shares the
+/// `v_n_prod` iterated-squaring chain across SIMD lanes. That chain is pure
+/// base-field work and dominates the per-point cost, so packing it is the bulk
+/// of the speedup in [`compute_lagrange_den_batched`].
+fn s_p_at_p_batched<F: Field>(points: &[Point<F>], log_n: usize) -> Vec<F> {
+    // The packed chain assumes the `v_n_prod` product loop runs (`log_n >= 2`);
+    // smaller domains are rare and cheap, so defer them to the scalar path.
+    if log_n < 2 {
+        return points.iter().map(|p| p.s_p_at_p(log_n)).collect();
+    }
+
+    let exp = (2 * log_n - 1) as u64;
+    let iters = log_n - 2;
+    let width = <F::Packing as PackedValue>::WIDTH;
+
+    let mut result = F::zero_vec(points.len());
+
+    let mut chunks = points.chunks_exact(width);
+    let mut offset = 0;
+    for chunk in &mut chunks {
+        // `v_n_prod` starts its product at `x`, then folds in each step of the
+        // squaring chain `x -> 2x² - 1`.
+        let mut cur = F::Packing::from_fn(|l| chunk[l].x);
+
+        let mut output = cur;
+
+        for _ in 0..iters {
+            cur = cur.square().double() - F::Packing::ONE;
+
+            output *= cur;
+        }
+
+        let ys = F::Packing::from_fn(|l| chunk[l].y);
+
+        let s_p = -(output.mul_2exp_u64(exp) * ys);
+
+        result[offset..offset + width].copy_from_slice(s_p.as_slice());
+
+        offset += width;
+    }
+
+    for (slot, &pt) in result[offset..].iter_mut().zip(chunks.remainder()) {
+        *slot = pt.s_p_at_p(log_n);
+    }
+
+    result
+}
+
 /// Compute (ṽ_P(x,y) * s_p)^{-1} for each element in the list.
 /// This takes advantage of batched inversion.
 pub fn compute_lagrange_den_batched<F: Field, EF: ExtensionField<F>>(
@@ -126,15 +178,15 @@ pub fn compute_lagrange_den_batched<F: Field, EF: ExtensionField<F>>(
     at: Point<EF>,
     log_n: usize,
 ) -> Vec<EF> {
-    // This following line costs about 2% of the runtime for example prove_poseidon2_m31_keccak.
-    // Would be nice to find further speedups.
-    // Maybe modify to use packed fields here?
+    let s_p = s_p_at_p_batched(points, log_n);
+
     let (numer, denom): (Vec<_>, Vec<_>) = points
         .iter()
-        .map(|&pt| {
+        .zip(&s_p)
+        .map(|(&pt, &s_p)| {
             let diff = at - pt;
             let numer = diff.x + F::ONE;
-            let denom = diff.y * pt.s_p_at_p(log_n);
+            let denom = diff.y * s_p;
             (numer, denom)
         })
         .unzip();
@@ -244,5 +296,22 @@ mod tests {
     fn test_s_p_at_p_underflow_log_n_0() {
         let p = Pt::generator(3);
         let _ = p.s_p_at_p(0);
+    }
+
+    #[test]
+    fn s_p_at_p_batched_matches_scalar() {
+        // Cover the scalar fallback (log_n < 2), full packed chunks, and the
+        // sub-width remainder by sweeping a range of domain sizes.
+        for log_n in 1..9 {
+            let points: Vec<Pt> = crate::CircleDomain::standard(log_n).points().collect();
+
+            let batched = s_p_at_p_batched(&points, log_n);
+
+            assert_eq!(batched.len(), points.len());
+
+            for (p, &b) in points.iter().zip(&batched) {
+                assert_eq!(p.s_p_at_p(log_n), b);
+            }
+        }
     }
 }
