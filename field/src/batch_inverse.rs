@@ -71,6 +71,43 @@ pub fn batch_multiplicative_inverse<F: Field>(x: &[F]) -> Vec<F> {
     result
 }
 
+/// Compute `scale / x_i` for every element of a slice via Montgomery's trick.
+///
+/// This folds one uniform post-scaling into the single inversion of the full product,
+/// avoiding a separate pass of per-element multiplications after batch inversion.
+///
+/// # Panics
+///
+/// Panics if any input is zero.
+#[instrument(level = "debug", skip_all)]
+#[must_use]
+pub fn batch_multiplicative_inverse_scaled<F: Field>(x: &[F], scale: F) -> Vec<F> {
+    const CHUNK_SIZE: usize = 1024;
+    const WIDTH: usize = 4;
+
+    let mut result = F::zero_vec(x.len());
+
+    x.par_chunks(CHUNK_SIZE)
+        .zip(result.par_chunks_mut(CHUNK_SIZE))
+        .for_each(|(x_chunk, result_chunk)| {
+            let (x_packed, x_tail) = FieldArray::<F, WIDTH>::pack_slice_with_suffix(x_chunk);
+            let (result_packed, result_tail) =
+                FieldArray::<F, WIDTH>::pack_slice_with_suffix_mut(result_chunk);
+
+            batch_multiplicative_inverse_general_scaled(
+                x_packed,
+                result_packed,
+                scale.into(),
+                |y| y.inverse(),
+            );
+            batch_multiplicative_inverse_general_scaled(x_tail, result_tail, scale, |y| {
+                y.inverse()
+            });
+        });
+
+    result
+}
+
 /// A simple single-threaded implementation of Montgomery's trick. Since not all `PrimeCharacteristicRing`s
 /// support inversion, this takes a custom inversion function.
 ///
@@ -96,6 +133,37 @@ where
 
     let product = result[n - 1] * x[n - 1];
     let mut inv = inv(product);
+
+    for i in (0..n).rev() {
+        result[i] *= inv;
+        inv *= x[i];
+    }
+}
+
+/// Allocation-free Montgomery inversion that writes `scale / x_i` into `result`.
+#[inline]
+pub fn batch_multiplicative_inverse_general_scaled<F, Inv>(
+    x: &[F],
+    result: &mut [F],
+    scale: F,
+    inv: Inv,
+) where
+    F: PrimeCharacteristicRing + Copy,
+    Inv: Fn(F) -> F,
+{
+    let n = x.len();
+    assert_eq!(result.len(), n);
+    if n == 0 {
+        return;
+    }
+
+    result[0] = F::ONE;
+    for i in 1..n {
+        result[i] = result[i - 1] * x[i - 1];
+    }
+
+    let product = result[n - 1] * x[n - 1];
+    let mut inv = scale * inv(product);
 
     for i in (0..n).rev() {
         result[i] *= inv;
