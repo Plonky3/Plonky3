@@ -40,6 +40,18 @@ fn coset_shift_and_scale_rows<F: Field>(
         });
 }
 
+/// Scale each row of `mat` by `scale`, leaving the zero-padded tail untouched.
+#[instrument(level = "debug", skip_all)]
+fn scale_rows<F: Field>(out: &mut [F], out_ncols: usize, mat: &[F], ncols: usize, scale: F) {
+    out.par_chunks_exact_mut(out_ncols)
+        .zip(mat.par_chunks_exact(ncols))
+        .for_each(|(out_row, in_row)| {
+            izip!(out_row.iter_mut(), in_row).for_each(|(out, &coeff)| {
+                *out = coeff * scale;
+            });
+        });
+}
+
 /// Paired twiddle and inverse-twiddle tables, always updated atomically
 /// under a single lock to prevent concurrent observers from seeing a
 /// half-updated state.
@@ -318,7 +330,11 @@ impl<MP: MontyParameters + FieldParameters + TwoAdicData> TwoAdicSubgroupDft<Mon
         // Normalise inverse DFT and coset shift in one go.
         let log_rows = log2_ceil_usize(nrows);
         let inv_len = MontyField31::ONE.div_2exp_u64(log_rows as u64);
-        coset_shift_and_scale_rows(&mut padded, result_nrows, coeffs, nrows, shift, inv_len);
+        if shift == MontyField31::ONE {
+            scale_rows(&mut padded, result_nrows, coeffs, nrows, inv_len);
+        } else {
+            coset_shift_and_scale_rows(&mut padded, result_nrows, coeffs, nrows, shift, inv_len);
+        }
 
         // `padded` is implicitly zero padded since it was initialised
         // to zeros when declared above.

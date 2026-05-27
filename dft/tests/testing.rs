@@ -12,6 +12,7 @@ use p3_dft::{
 use p3_field::{Field, PrimeCharacteristicRing, TwoAdicField};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_monty_31::dft::RecursiveDft;
 use proptest::prelude::*;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -616,6 +617,20 @@ fn coset_lde_with_shift_one_equals_lde() {
         let lde = dft.lde_batch(mat.clone(), 2);
         // Coset LDE with trivial shift.
         let coset_lde = dft.coset_lde_batch(mat, 2, F::ONE);
+
+        assert_eq!(lde, coset_lde, "log_h={log_h}");
+    }
+}
+
+#[test]
+fn recursive_coset_lde_with_shift_one_equals_lde() {
+    let dft = RecursiveDft::<F>::default();
+    for log_h in 1..=6 {
+        let h = 1 << log_h;
+        let mat = rand_matrix(456, h, 4);
+
+        let lde = dft.lde_batch(mat.clone(), 2).to_row_major_matrix();
+        let coset_lde = dft.coset_lde_batch(mat, 2, F::ONE).to_row_major_matrix();
 
         assert_eq!(lde, coset_lde, "log_h={log_h}");
     }
