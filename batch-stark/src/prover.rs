@@ -31,6 +31,9 @@ use crate::symbolic::{
 };
 use crate::transcript::BatchTranscript;
 
+/// Per-instance quotient output: the chunk domains and their committed LDE matrices.
+type InstanceQuotient<SC> = (Vec<Domain<SC>>, Vec<RowMajorMatrix<Val<SC>>>);
+
 /// A single AIR instance bundled with its execution trace, public inputs,
 /// and lookup declarations.
 ///
@@ -102,6 +105,10 @@ pub fn prove_batch<
 where
     SC: SGC,
     SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
+    Domain<SC>: Send + Sync,
+    SC::Pcs: Sync,
+    <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::ProverData: Sync,
+    <SC::Pcs as p3_commit::Pcs<SC::Challenge, SC::Challenger>>::Commitment: Sync,
 {
     let common = &prover_data.common;
     // TODO: Extend if additional lookup gadgets are added.
@@ -307,108 +314,134 @@ where
         &lookup_data,
     );
 
-    // Accumulators for quotient chunk domains / matrices / per-instance ranges.
+    // Borrow only the permutation prover data (not the commitment) so the
+    // parallel closure below stays free of the `Commitment: Sync` requirement.
+    let permutation_data = permutation_commit_and_data.as_ref().map(|(_, data)| data);
+
+    // Permutation-matrix index per instance: the prefix count of prior instances
+    // that contribute a permutation trace. Precomputing this removes the only
+    // cross-iteration dependency, so each instance's quotient is independent.
+    let perm_indices: Vec<usize> = all_lookups
+        .iter()
+        .scan(0usize, |next, lookups| {
+            let idx = *next;
+            if !lookups.is_empty() {
+                *next += 1;
+            }
+            Some(idx)
+        })
+        .collect();
+
+    // Each instance's quotient chunks are independent, so compute them in
+    // parallel. `quotient_values` already parallelises over rows; with many
+    // instances this fills the cores that a single instance leaves idle.
+    let per_instance: Vec<InstanceQuotient<SC>> = (0..n_instances)
+        .into_par_iter()
+        .map(|i| {
+            let _air_span = info_span!("compute quotient", air_idx = i).entered();
+
+            let log_chunks = log_num_quotient_chunks[i];
+            let n_chunks = num_quotient_chunks[i];
+            // Build the quotient domain: disjoint from the trace domain,
+            // with size = ext_degree * num_quotient_chunks.
+            let quotient_domain =
+                ext_trace_domains[i].create_disjoint_domain(1 << (log_ext_degrees[i] + log_chunks));
+
+            let sym_layout = AirLayout {
+                preprocessed_width: preprocessed_widths[i],
+                main_width: airs[i].width(),
+                num_public_values: airs[i].num_public_values(),
+                num_periodic_columns: airs[i].num_periodic_columns(),
+                ..Default::default()
+            };
+
+            // Debug-only: verify the static constraint-count hint matches symbolic analysis.
+            debug_assert!(
+                airs[i].num_constraints().is_none_or(|n| {
+                    n == get_symbolic_constraints(
+                        airs[i],
+                        sym_layout,
+                        all_lookups[i],
+                        &lookup_gadget,
+                    )
+                    .0
+                    .len()
+                }),
+                "num_constraints() = {} but symbolic evaluation found {} base constraints",
+                airs[i].num_constraints().unwrap(),
+                get_symbolic_constraints(airs[i], sym_layout, all_lookups[i], &lookup_gadget,)
+                    .0
+                    .len(),
+            );
+
+            // Evaluate the committed main trace on the quotient domain via LDE.
+            let trace_on_quotient_domain =
+                pcs.get_evaluations_on_domain(&main_data, i, quotient_domain);
+
+            // Evaluate the permutation trace on the quotient domain (if lookups exist).
+            let permutation_on_quotient_domain = permutation_data
+                .filter(|_| !all_lookups[i].is_empty())
+                .map(|perm_data| {
+                    pcs.get_evaluations_on_domain(perm_data, perm_indices[i], quotient_domain)
+                });
+
+            // Evaluate preprocessed columns on the quotient domain (if present).
+            let preprocessed_on_quotient_domain = common
+                .preprocessed
+                .as_ref()
+                .and_then(|g| g.instances[i].as_ref())
+                .map(|meta| {
+                    let preprocessed_prover_data = prover_data
+                        .prover_only
+                        .preprocessed_prover_data
+                        .as_ref()
+                        .expect(
+                            "preprocessed_prover_data must exist when preprocessed columns exist",
+                        );
+                    pcs.get_evaluations_on_domain_no_random(
+                        preprocessed_prover_data,
+                        meta.matrix_index,
+                        quotient_domain,
+                    )
+                });
+
+            // Compute quotient(x) = constraints(x) / Z_H(x) on the quotient domain.
+            let perm_vals: Vec<_> = lookup_data[i].iter().map(|ld| ld.cumulative_sum).collect();
+            let q_values = quotient_values(
+                pcs,
+                airs[i],
+                pub_vals[i],
+                sym_layout,
+                trace_domains[i],
+                quotient_domain,
+                &trace_on_quotient_domain,
+                permutation_on_quotient_domain.as_ref(),
+                all_lookups[i],
+                &perm_vals,
+                &lookup_gadget,
+                &challenges_per_instance[i],
+                preprocessed_on_quotient_domain.as_ref(),
+                alpha,
+            );
+
+            // Flatten extension values to base field and split into degree-bounded chunks.
+            let q_flat = RowMajorMatrix::new_col(q_values).flatten_to_base();
+            let chunk_mats = quotient_domain.split_evals(n_chunks, q_flat);
+            let chunk_domains = quotient_domain.split_domains(n_chunks);
+
+            // Compute low-degree extensions of each chunk for commitment.
+            let evals = chunk_domains.iter().zip(chunk_mats).map(|(d, m)| (*d, m));
+            let ldes = pcs.get_quotient_ldes(evals, n_chunks);
+
+            (chunk_domains, ldes)
+        })
+        .collect();
+
+    // Concatenate in instance order so the commit layout stays deterministic.
     let mut quotient_chunk_domains = Vec::new();
     let mut quotient_chunk_mats = Vec::new();
     let mut quotient_chunk_ranges = Vec::with_capacity(n_instances);
-
-    // Tracks which permutation matrix index corresponds to each instance.
-    let mut perm_counter = 0;
-
-    // TODO: Parallelize this loop for better performance with many instances.
-    for (i, trace_domain) in trace_domains.iter().enumerate() {
-        let _air_span = info_span!("compute quotient", air_idx = i).entered();
-
-        let log_chunks = log_num_quotient_chunks[i];
-        let n_chunks = num_quotient_chunks[i];
-        // Build the quotient domain: disjoint from the trace domain,
-        // with size = ext_degree * num_quotient_chunks.
-        let quotient_domain =
-            ext_trace_domains[i].create_disjoint_domain(1 << (log_ext_degrees[i] + log_chunks));
-
-        let sym_layout = AirLayout {
-            preprocessed_width: preprocessed_widths[i],
-            main_width: airs[i].width(),
-            num_public_values: airs[i].num_public_values(),
-            num_periodic_columns: airs[i].num_periodic_columns(),
-            ..Default::default()
-        };
-
-        // Debug-only: verify the static constraint-count hint matches symbolic analysis.
-        debug_assert!(
-            airs[i].num_constraints().is_none_or(|n| {
-                n == get_symbolic_constraints(airs[i], sym_layout, all_lookups[i], &lookup_gadget)
-                    .0
-                    .len()
-            }),
-            "num_constraints() = {} but symbolic evaluation found {} base constraints",
-            airs[i].num_constraints().unwrap(),
-            get_symbolic_constraints(airs[i], sym_layout, all_lookups[i], &lookup_gadget,)
-                .0
-                .len(),
-        );
-
-        // Evaluate the committed main trace on the quotient domain via LDE.
-        let trace_on_quotient_domain =
-            pcs.get_evaluations_on_domain(&main_data, i, quotient_domain);
-
-        // Evaluate the permutation trace on the quotient domain (if lookups exist).
-        let permutation_on_quotient_domain = permutation_commit_and_data
-            .as_ref()
-            .filter(|_| !all_lookups[i].is_empty())
-            .map(|(_, perm_data)| {
-                let evals = pcs.get_evaluations_on_domain(perm_data, perm_counter, quotient_domain);
-                perm_counter += 1;
-                evals
-            });
-
-        // Evaluate preprocessed columns on the quotient domain (if present).
-        let preprocessed_on_quotient_domain = common
-            .preprocessed
-            .as_ref()
-            .and_then(|g| g.instances[i].as_ref())
-            .map(|meta| {
-                let preprocessed_prover_data = prover_data
-                    .prover_only
-                    .preprocessed_prover_data
-                    .as_ref()
-                    .expect("preprocessed_prover_data must exist when preprocessed columns exist");
-                pcs.get_evaluations_on_domain_no_random(
-                    preprocessed_prover_data,
-                    meta.matrix_index,
-                    quotient_domain,
-                )
-            });
-
-        // Compute quotient(x) = constraints(x) / Z_H(x) on the quotient domain.
-        let perm_vals: Vec<_> = lookup_data[i].iter().map(|ld| ld.cumulative_sum).collect();
-        let q_values = quotient_values(
-            pcs,
-            airs[i],
-            pub_vals[i],
-            sym_layout,
-            *trace_domain,
-            quotient_domain,
-            &trace_on_quotient_domain,
-            permutation_on_quotient_domain.as_ref(),
-            all_lookups[i],
-            &perm_vals,
-            &lookup_gadget,
-            &challenges_per_instance[i],
-            preprocessed_on_quotient_domain.as_ref(),
-            alpha,
-        );
-
-        // Flatten extension values to base field and split into degree-bounded chunks.
-        let q_flat = RowMajorMatrix::new_col(q_values).flatten_to_base();
-        let chunk_mats = quotient_domain.split_evals(n_chunks, q_flat);
-        let chunk_domains = quotient_domain.split_domains(n_chunks);
-
-        // Compute low-degree extensions of each chunk for commitment.
-        let evals = chunk_domains.iter().zip(chunk_mats).map(|(d, m)| (*d, m));
-        let ldes = pcs.get_quotient_ldes(evals, n_chunks);
-
-        // Record the range of chunks belonging to this instance.
+    for (chunk_domains, ldes) in per_instance {
         let start = quotient_chunk_domains.len();
         quotient_chunk_domains.extend(chunk_domains);
         quotient_chunk_mats.extend(ldes);
