@@ -451,4 +451,15 @@ mod tests {
 
         assert_eq!(log_chunks, 2);
     }
+
+    #[test]
+    fn test_period_8_columns_stay_in_same_chunk_bucket() {
+        let air = PeriodicProductAir {
+            periods: vec![8, 8, 8, 8, 8, 8, 8, 8, 8],
+        };
+
+        let log_chunks = get_log_num_quotient_chunks(&air, air_layout(&air, 0), TRACE_DEGREE, 0);
+
+        assert_eq!(log_chunks, 3);
+    }
 }
