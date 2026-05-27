@@ -3,7 +3,10 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::borrow::{Borrow, BorrowMut};
 use core::marker::PhantomData;
+use core::mem::ManuallyDrop;
+use core::mem::MaybeUninit;
 use core::ops::Deref;
+use core::slice;
 
 use p3_field::{
     ExtensionField, Field, PackedValue, par_scale_slice_in_place, scale_slice_in_place_single_core,
@@ -804,18 +807,26 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
     }
 }
 
-impl<T: Copy + Default + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
+impl<T: Copy + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
     /// Return the transpose of this matrix.
     pub fn transpose(&self) -> RowMajorMatrix<T> {
         let nelts = self.height() * self.width();
-        let mut values = vec![T::default(); nelts];
-        p3_util::transpose::transpose(
-            self.values.borrow(),
-            &mut values,
-            self.width(),
-            self.height(),
-        );
-        RowMajorMatrix::new(values, self.height())
+        let mut values = Vec::<MaybeUninit<T>>::with_capacity(nelts);
+        unsafe {
+            values.set_len(nelts);
+            let output = slice::from_raw_parts_mut(values.as_mut_ptr().cast::<T>(), nelts);
+            p3_util::transpose::transpose(
+                self.values.borrow(),
+                output,
+                self.width(),
+                self.height(),
+            );
+            let mut values = ManuallyDrop::new(values);
+            RowMajorMatrix::new(
+                Vec::from_raw_parts(values.as_mut_ptr().cast::<T>(), nelts, values.capacity()),
+                self.height(),
+            )
+        }
     }
 
     /// Transpose the matrix returning the result in `other` without intermediate allocation.
