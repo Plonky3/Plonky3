@@ -530,12 +530,14 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         let width = self.width;
         let height = self.height();
         let row = r % height;
+        let rows = (P::WIDTH != 1).then(|| self.wrapping_row_slices(r, P::WIDTH));
 
         (0..width).map(move |c| {
             if P::WIDTH == 1 {
                 unsafe { P::broadcast(*values.get_unchecked(row * width + c)) }
             } else {
-                P::from_fn(|i| unsafe { *values.get_unchecked(((row + i) % height) * width + c) })
+                let rows = rows.as_ref().unwrap();
+                P::from_fn(|i| rows[i][c])
             }
         })
     }
@@ -546,15 +548,14 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         T: Copy,
         P: PackedValue<Value = T>,
     {
-        let values = self.values.borrow();
-        let width = self.width;
-        let height = self.height();
-        let row = r % height;
-        let next_row = (r + step) % height;
-
-        let mut out = Vec::with_capacity(width * 2);
-
         if P::WIDTH == 1 {
+            let values = self.values.borrow();
+            let width = self.width;
+            let height = self.height();
+            let row = r % height;
+            let next_row = (r + step) % height;
+            let mut out = Vec::with_capacity(width * 2);
+
             out.extend(
                 (0..width).map(|c| unsafe { P::broadcast(*values.get_unchecked(row * width + c)) }),
             );
@@ -562,18 +563,16 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
                 (0..width)
                     .map(|c| unsafe { P::broadcast(*values.get_unchecked(next_row * width + c)) }),
             );
+            out
         } else {
-            out.extend((0..width).map(|c| {
-                P::from_fn(|i| unsafe { *values.get_unchecked(((row + i) % height) * width + c) })
-            }));
-            out.extend((0..width).map(|c| {
-                P::from_fn(|i| unsafe {
-                    *values.get_unchecked(((next_row + i) % height) * width + c)
-                })
-            }));
-        }
+            let rows = self.wrapping_row_slices(r, P::WIDTH);
+            let next_rows = self.wrapping_row_slices(r + step, P::WIDTH);
 
-        out
+            (0..self.width())
+                .map(|c| P::from_fn(|i| rows[i][c]))
+                .chain((0..self.width()).map(|c| P::from_fn(|i| next_rows[i][c])))
+                .collect::<Vec<_>>()
+        }
     }
 }
 
