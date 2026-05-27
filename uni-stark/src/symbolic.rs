@@ -1,13 +1,24 @@
 //! STARK-specific quotient polynomial degree calculations.
 
+use alloc::vec::Vec;
+
 use p3_air::Air;
-use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, get_max_constraint_degree_extension};
+use p3_air::symbolic::{
+    AirLayout, BaseEntry, BaseLeaf, ExtEntry, ExtLeaf, SymbolicAirBuilder, SymbolicExpr,
+    SymbolicExpression, SymbolicExpressionExt, get_all_symbolic_constraints,
+    get_max_constraint_degree_extension,
+};
 use p3_field::{ExtensionField, Field};
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
 #[instrument(skip_all, level = "debug")]
-pub fn get_log_num_quotient_chunks<F, A>(air: &A, layout: AirLayout, is_zk: usize) -> usize
+pub fn get_log_num_quotient_chunks<F, A>(
+    air: &A,
+    layout: AirLayout,
+    trace_degree: usize,
+    is_zk: usize,
+) -> usize
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
@@ -18,22 +29,18 @@ where
         let constraint_degree = (degree_hint + is_zk).max(2);
         let result = log2_ceil_usize(constraint_degree - 1);
 
-        // This check remains at the `debug` level, as the AIR is known by both
-        // prover and verifier, i.e. a malicious prover cannot feed the verifier
-        // a different hint than the verifier computes for itself.
+        // Keep the hint-path assertion cheap: the trace-aware quotient inference
+        // below is only needed on the no-hint path.
         debug_assert!(
-            {
-                let symbolic = get_log_quotient_degree_extension::<F, F, A>(air, layout, is_zk);
-                result >= symbolic
-            },
-            "max_constraint_degree() hint {} is too small; actual log quotient degree is larger",
+            degree_hint >= get_max_constraint_degree_extension::<F, F, A>(air, layout),
+            "max_constraint_degree() hint {} is too small",
             degree_hint
         );
 
         return result;
     }
 
-    get_log_quotient_degree_extension(air, layout, is_zk)
+    get_log_quotient_degree_extension(air, layout, trace_degree, is_zk)
 }
 
 #[instrument(
@@ -44,6 +51,7 @@ where
 pub fn get_log_quotient_degree_extension<F, EF, A>(
     air: &A,
     layout: AirLayout,
+    trace_degree: usize,
     is_zk: usize,
 ) -> usize
 where
@@ -58,25 +66,164 @@ where
         let result = log2_ceil_usize(constraint_degree - 1);
 
         debug_assert!(
-            {
-                let actual = get_max_constraint_degree_extension::<F, EF, A>(air, layout);
-                degree_hint >= actual
-            },
-            "max_constraint_degree() hint {} is too small; symbolic evaluation found a larger degree",
+            degree_hint >= get_max_constraint_degree_extension::<F, EF, A>(air, layout),
+            "max_constraint_degree() hint {} is too small",
             degree_hint
         );
 
         return result;
     }
 
-    // We pad to at least degree 2, since a quotient argument doesn't make sense with smaller degrees.
-    let constraint_degree =
-        (get_max_constraint_degree_extension::<F, EF, A>(air, layout) + is_zk).max(2);
+    get_log_quotient_degree_extension_symbolic(air, layout, trace_degree, is_zk)
+}
 
-    // We bound the degree of the quotient polynomial by constraint_degree - 1,
-    // then choose the number of quotient chunks as the smallest power of two
-    // >= (constraint_degree - 1). This function returns log2(#chunks).
-    log2_ceil_usize(constraint_degree - 1)
+fn get_log_quotient_degree_extension_symbolic<F, EF, A>(
+    air: &A,
+    layout: AirLayout,
+    trace_degree: usize,
+    is_zk: usize,
+) -> usize
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    A: Air<SymbolicAirBuilder<F, EF>>,
+{
+    let periodic_column_degrees = air
+        .periodic_columns()
+        .into_iter()
+        .map(|column| {
+            debug_assert!(
+                trace_degree.is_multiple_of(column.len()),
+                "periodic column period must divide the trace degree"
+            );
+            trace_degree - trace_degree / column.len()
+        })
+        .collect::<Vec<_>>();
+
+    let (base_constraints, extension_constraints) =
+        get_all_symbolic_constraints::<F, EF, _>(air, layout);
+
+    let base_degree = base_constraints
+        .iter()
+        .map(|constraint| {
+            symbolic_expression_degree(
+                constraint,
+                trace_degree,
+                is_zk,
+                periodic_column_degrees.as_slice(),
+            )
+        })
+        .max()
+        .unwrap_or(0);
+
+    let extension_degree = extension_constraints
+        .iter()
+        .map(|constraint| {
+            symbolic_expression_ext_degree(
+                constraint,
+                trace_degree,
+                is_zk,
+                periodic_column_degrees.as_slice(),
+            )
+        })
+        .max()
+        .unwrap_or(0);
+
+    let constraint_degree = base_degree.max(extension_degree);
+    log_chunks_from_constraint_degree(constraint_degree, trace_degree, is_zk)
+}
+
+fn symbolic_expression_degree<F: Field>(
+    expr: &SymbolicExpression<F>,
+    trace_degree: usize,
+    is_zk: usize,
+    periodic_column_degrees: &[usize],
+) -> usize {
+    match expr {
+        SymbolicExpr::Leaf(leaf) => {
+            base_leaf_degree(leaf, trace_degree, is_zk, periodic_column_degrees)
+        }
+        SymbolicExpr::Add { x, y, .. } | SymbolicExpr::Sub { x, y, .. } => {
+            symbolic_expression_degree(x, trace_degree, is_zk, periodic_column_degrees).max(
+                symbolic_expression_degree(y, trace_degree, is_zk, periodic_column_degrees),
+            )
+        }
+        SymbolicExpr::Neg { x, .. } => {
+            symbolic_expression_degree(x, trace_degree, is_zk, periodic_column_degrees)
+        }
+        SymbolicExpr::Mul { x, y, .. } => {
+            symbolic_expression_degree(x, trace_degree, is_zk, periodic_column_degrees)
+                + symbolic_expression_degree(y, trace_degree, is_zk, periodic_column_degrees)
+        }
+    }
+}
+
+fn symbolic_expression_ext_degree<F: Field, EF: ExtensionField<F>>(
+    expr: &SymbolicExpressionExt<F, EF>,
+    trace_degree: usize,
+    is_zk: usize,
+    periodic_column_degrees: &[usize],
+) -> usize {
+    match expr {
+        SymbolicExpr::Leaf(leaf) => match leaf {
+            ExtLeaf::Base(base_expr) => {
+                symbolic_expression_degree(base_expr, trace_degree, is_zk, periodic_column_degrees)
+            }
+            ExtLeaf::ExtVariable(variable) => match variable.entry {
+                ExtEntry::Permutation { .. } => (trace_degree << is_zk) - 1,
+                ExtEntry::Challenge | ExtEntry::PermutationValue => 0,
+            },
+            ExtLeaf::ExtConstant(_) => 0,
+        },
+        SymbolicExpr::Add { x, y, .. } | SymbolicExpr::Sub { x, y, .. } => {
+            symbolic_expression_ext_degree(x, trace_degree, is_zk, periodic_column_degrees).max(
+                symbolic_expression_ext_degree(y, trace_degree, is_zk, periodic_column_degrees),
+            )
+        }
+        SymbolicExpr::Neg { x, .. } => {
+            symbolic_expression_ext_degree(x, trace_degree, is_zk, periodic_column_degrees)
+        }
+        SymbolicExpr::Mul { x, y, .. } => {
+            symbolic_expression_ext_degree(x, trace_degree, is_zk, periodic_column_degrees)
+                + symbolic_expression_ext_degree(y, trace_degree, is_zk, periodic_column_degrees)
+        }
+    }
+}
+
+fn base_leaf_degree<F: Field>(
+    leaf: &BaseLeaf<F>,
+    trace_degree: usize,
+    is_zk: usize,
+    periodic_column_degrees: &[usize],
+) -> usize {
+    match leaf {
+        BaseLeaf::Variable(variable) => match variable.entry {
+            BaseEntry::Preprocessed { .. } | BaseEntry::Main { .. } => (trace_degree << is_zk) - 1,
+            BaseEntry::Periodic => periodic_column_degrees[variable.index],
+            BaseEntry::Public => 0,
+        },
+        BaseLeaf::IsFirstRow | BaseLeaf::IsLastRow => trace_degree - 1,
+        BaseLeaf::IsTransition | BaseLeaf::Constant(_) => 0,
+    }
+}
+
+fn log_chunks_from_constraint_degree(
+    constraint_degree: usize,
+    trace_degree: usize,
+    is_zk: usize,
+) -> usize {
+    if constraint_degree == 0 {
+        return 0;
+    }
+
+    let quotient_chunk_degree = trace_degree << is_zk;
+    let chunk_count = constraint_degree
+        .saturating_sub(trace_degree)
+        .saturating_add(1)
+        .div_ceil(quotient_chunk_degree)
+        .max(1);
+
+    log2_ceil_usize(chunk_count)
 }
 
 #[cfg(test)]
@@ -84,11 +231,14 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicVariable};
+    use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicExpression, SymbolicVariable};
     use p3_air::{AirBuilder, BaseAir, BaseEntry};
     use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
 
     use super::*;
+
+    const TRACE_DEGREE: usize = 1 << 6;
 
     #[derive(Debug)]
     struct MockAir {
@@ -115,6 +265,7 @@ mod tests {
             preprocessed_width,
             main_width: air.width(),
             num_public_values: air.num_public_values(),
+            num_periodic_columns: air.num_periodic_columns(),
             ..Default::default()
         }
     }
@@ -125,7 +276,7 @@ mod tests {
             constraints: vec![],
             width: 4,
         };
-        let log_degree = get_log_num_quotient_chunks(&air, air_layout(&air, 3), 0);
+        let log_degree = get_log_num_quotient_chunks(&air, air_layout(&air, 3), TRACE_DEGREE, 0);
         assert_eq!(log_degree, 0);
     }
 
@@ -135,7 +286,7 @@ mod tests {
             constraints: vec![SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0)],
             width: 4,
         };
-        let log_degree = get_log_num_quotient_chunks(&air, air_layout(&air, 3), 0);
+        let log_degree = get_log_num_quotient_chunks(&air, air_layout(&air, 3), TRACE_DEGREE, 0);
         assert_eq!(log_degree, log2_ceil_usize(1));
     }
 
@@ -149,7 +300,7 @@ mod tests {
             ],
             width: 4,
         };
-        let log_degree = get_log_num_quotient_chunks(&air, air_layout(&air, 3), 0);
+        let log_degree = get_log_num_quotient_chunks(&air, air_layout(&air, 3), TRACE_DEGREE, 0);
         assert_eq!(log_degree, log2_ceil_usize(1));
     }
 
@@ -188,7 +339,7 @@ mod tests {
             width: 4,
             degree_hint: Some(3),
         };
-        let log_chunks = get_log_num_quotient_chunks(&air, air_layout(&air, 0), 0);
+        let log_chunks = get_log_num_quotient_chunks(&air, air_layout(&air, 0), TRACE_DEGREE, 0);
         assert_eq!(log_chunks, log2_ceil_usize(2));
     }
 
@@ -201,7 +352,7 @@ mod tests {
             width: 4,
             degree_hint: None,
         };
-        let log_chunks = get_log_num_quotient_chunks(&air, air_layout(&air, 0), 0);
+        let log_chunks = get_log_num_quotient_chunks(&air, air_layout(&air, 0), TRACE_DEGREE, 0);
         assert_eq!(log_chunks, 0);
     }
 
@@ -213,7 +364,7 @@ mod tests {
             width: 4,
             degree_hint: Some(1),
         };
-        let with_hint = get_log_num_quotient_chunks(&air, air_layout(&air, 0), 0);
+        let with_hint = get_log_num_quotient_chunks(&air, air_layout(&air, 0), TRACE_DEGREE, 0);
 
         let air_no_hint = HintedMockAir {
             constraints: vec![SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0)],
@@ -221,7 +372,7 @@ mod tests {
             degree_hint: None,
         };
         let without_hint =
-            get_log_num_quotient_chunks(&air_no_hint, air_layout(&air_no_hint, 0), 0);
+            get_log_num_quotient_chunks(&air_no_hint, air_layout(&air_no_hint, 0), TRACE_DEGREE, 0);
 
         assert_eq!(with_hint, without_hint);
     }
@@ -236,6 +387,68 @@ mod tests {
             width: 4,
             degree_hint: Some(0),
         };
-        let _ = get_log_num_quotient_chunks(&air, air_layout(&air, 0), 0);
+        let _ = get_log_num_quotient_chunks(&air, air_layout(&air, 0), TRACE_DEGREE, 0);
+    }
+
+    #[derive(Clone, Debug)]
+    struct PeriodicProductAir {
+        periods: Vec<usize>,
+    }
+
+    impl BaseAir<BabyBear> for PeriodicProductAir {
+        fn width(&self) -> usize {
+            0
+        }
+
+        fn num_periodic_columns(&self) -> usize {
+            self.periods.len()
+        }
+
+        fn periodic_columns(&self) -> Vec<Vec<BabyBear>> {
+            self.periods
+                .iter()
+                .enumerate()
+                .map(|(column_index, period)| {
+                    (0..*period)
+                        .map(|row| BabyBear::from_usize(column_index + row + 1))
+                        .collect()
+                })
+                .collect()
+        }
+    }
+
+    impl Air<SymbolicAirBuilder<BabyBear>> for PeriodicProductAir {
+        fn eval(&self, builder: &mut SymbolicAirBuilder<BabyBear>) {
+            let product = builder
+                .periodic_values()
+                .iter()
+                .copied()
+                .map(SymbolicExpression::from)
+                .reduce(|acc, value| acc * value)
+                .expect("test AIR must define at least one periodic column");
+            builder.assert_zero(product);
+        }
+    }
+
+    #[test]
+    fn test_period_2_columns_reduce_inferred_chunk_count() {
+        let air = PeriodicProductAir {
+            periods: vec![2, 2, 2, 2, 2],
+        };
+
+        let log_chunks = get_log_num_quotient_chunks(&air, air_layout(&air, 0), TRACE_DEGREE, 0);
+
+        assert_eq!(log_chunks, 1);
+    }
+
+    #[test]
+    fn test_period_4_columns_reduce_inferred_chunk_count() {
+        let air = PeriodicProductAir {
+            periods: vec![4, 4, 4, 4, 4, 4],
+        };
+
+        let log_chunks = get_log_num_quotient_chunks(&air, air_layout(&air, 0), TRACE_DEGREE, 0);
+
+        assert_eq!(log_chunks, 2);
     }
 }
