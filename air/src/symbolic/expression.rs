@@ -43,8 +43,8 @@ impl<F: Field> SymLeaf for BaseLeaf<F> {
     fn degree_multiple(&self) -> usize {
         match self {
             Self::Variable(v) => v.degree_multiple(),
-            Self::IsFirstRow | Self::IsLastRow => 1,
-            Self::IsTransition | Self::Constant(_) => 0,
+            Self::IsFirstRow | Self::IsLastRow | Self::IsTransition => 1,
+            Self::Constant(_) => 0,
         }
     }
 
@@ -234,8 +234,8 @@ mod tests {
         let is_transition = SymbolicExpression::<BabyBear>::Leaf(BaseLeaf::IsTransition);
         assert_eq!(
             is_transition.degree_multiple(),
-            0,
-            "IsTransition should have degree 0"
+            1,
+            "IsTransition should have degree 1"
         );
 
         let add_expr = SymbolicExpr::<BaseLeaf<BabyBear>>::Add {

@@ -179,6 +179,28 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct TransitionSelectorAir {
+        width: usize,
+        degree_hint: Option<usize>,
+    }
+
+    impl BaseAir<BabyBear> for TransitionSelectorAir {
+        fn width(&self) -> usize {
+            self.width
+        }
+
+        fn max_constraint_degree(&self) -> Option<usize> {
+            self.degree_hint
+        }
+    }
+
+    impl Air<SymbolicAirBuilder<BabyBear>> for TransitionSelectorAir {
+        fn eval(&self, builder: &mut SymbolicAirBuilder<BabyBear>) {
+            builder.assert_zero(builder.is_transition_window(2));
+        }
+    }
+
     #[test]
     fn test_max_constraint_degree_hint_is_used() {
         // Actual degree is 1 (single variable), hint says 3.
@@ -234,6 +256,17 @@ mod tests {
         let air = HintedMockAir {
             constraints: vec![SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0)],
             width: 4,
+            degree_hint: Some(0),
+        };
+        let _ = get_log_num_quotient_chunks(&air, air_layout(&air, 0), 0);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "max_constraint_degree() hint")]
+    fn test_transition_selector_hint_too_small_panics() {
+        let air = TransitionSelectorAir {
+            width: 1,
             degree_hint: Some(0),
         };
         let _ = get_log_num_quotient_chunks(&air, air_layout(&air, 0), 0);
