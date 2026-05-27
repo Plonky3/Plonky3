@@ -122,6 +122,28 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
             .iter()
             .collect();
 
+        if let Some(point_base) = <EF as ExtensionField<F>>::as_base(&point) {
+            // Base-field points can stay on the cheaper F-weight path all the way
+            // through the SIMD dot product, then lift the final column results back into EF.
+            let diffs: Vec<F> = coset.par_iter().map(|&g| point_base - g).collect();
+
+            if let Some(i) = diffs.iter().position(|d| d.is_zero()) {
+                return self.row(i).unwrap().into_iter().map(EF::from).collect();
+            }
+
+            let scaling_factor = interpolation_scaling_factor(shift, point_base, log_height);
+            let scaled_diff_invs = batch_multiplicative_inverse_scaled(&diffs, scaling_factor);
+            let scaled_point_inv = scaling_factor * point_base.inverse();
+            let scaled_adjusted =
+                compute_adjusted_weights_with_point_inv(scaled_point_inv, &scaled_diff_invs);
+
+            return self
+                .columnwise_dot_product(&scaled_adjusted)
+                .into_iter()
+                .map(EF::from)
+                .collect();
+        }
+
         // Compute z - x_i in parallel, then batch-invert in one shot
         // (Montgomery's trick: single field inversion + O(N) multiplications).
         let diffs: Vec<EF> = coset.par_iter().map(|&g| point - g).collect();
@@ -576,6 +598,28 @@ mod tests {
         // The precomputation variant must produce the same result.
         let result = evals_mat.interpolate_coset_with_precomputation(shift, point, &adjusted);
         assert_eq!(result, vec![F::from_u16(10203)]);
+    }
+
+    #[test]
+    fn test_interpolate_coset_genuine_extension_point() {
+        let shift = F::GENERATOR;
+        let coeffs = [F::from_u32(3), F::from_u32(2), F::from_u32(1)];
+        let evals: Vec<F> = eval_poly_on_coset(&coeffs, shift, 3);
+        let evals_mat = RowMajorMatrix::new(evals, 1);
+        let point =
+            EF4::from_basis_coefficients_slice(&[F::from_u32(100), F::ONE, F::ZERO, F::ZERO])
+                .unwrap();
+
+        let result = evals_mat.interpolate_coset(shift, point);
+        let expected = eval_poly(&coeffs, point);
+        assert_eq!(result, vec![expected]);
+
+        let coset = F::two_adic_generator(3).shifted_powers(shift).collect_n(8);
+        let diffs: Vec<EF4> = coset.iter().map(|&x| point - x).collect();
+        let diff_invs = batch_multiplicative_inverse(&diffs);
+        let adjusted = compute_adjusted_weights(point, &diff_invs);
+        let precomputed = evals_mat.interpolate_coset_with_precomputation(shift, point, &adjusted);
+        assert_eq!(result, precomputed);
     }
 
     #[test]
