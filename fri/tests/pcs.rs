@@ -271,12 +271,12 @@ mod babybear_fri_pcs {
         )
         where
             P: Pcs<
-                Challenge,
-                Challenger,
-                Domain = <MyPcs as Pcs<Challenge, Challenger>>::Domain,
-                Commitment = <MyPcs as Pcs<Challenge, Challenger>>::Commitment,
-                ProverData = <MyPcs as Pcs<Challenge, Challenger>>::ProverData,
-            >,
+                    Challenge,
+                    Challenger,
+                    Domain = <MyPcs as Pcs<Challenge, Challenger>>::Domain,
+                    Commitment = <MyPcs as Pcs<Challenge, Challenger>>::Commitment,
+                    ProverData = <MyPcs as Pcs<Challenge, Challenger>>::ProverData,
+                >,
         {
             pcs.commit([(domain, trace)])
         }
