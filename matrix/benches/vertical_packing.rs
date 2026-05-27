@@ -2,14 +2,14 @@ use core::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
-use p3_field::FieldArray;
+use p3_field::Field;
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
 type F = BabyBear;
-type Packed = FieldArray<F, 8>;
+type Packed = <F as Field>::Packing;
 
 const CONFIGS: &[(usize, usize)] = &[(10, 32), (14, 32), (18, 32), (14, 256)];
 
@@ -55,7 +55,7 @@ fn vertically_packed_row_pair_scalar(c: &mut Criterion) {
 }
 
 fn vertically_packed_row_packed(c: &mut Criterion) {
-    let mut group = c.benchmark_group("vertically_packed_row_packed8");
+    let mut group = c.benchmark_group("vertically_packed_row_packed");
     group.sample_size(20);
 
     for &(log_rows, width) in CONFIGS {
@@ -78,7 +78,7 @@ fn vertically_packed_row_packed(c: &mut Criterion) {
 }
 
 fn vertically_packed_row_pair_packed(c: &mut Criterion) {
-    let mut group = c.benchmark_group("vertically_packed_row_pair_packed8");
+    let mut group = c.benchmark_group("vertically_packed_row_pair_packed");
     group.sample_size(20);
 
     for &(log_rows, width) in CONFIGS {
