@@ -5,5 +5,5 @@
 mod rectangular;
 mod square;
 
-pub use rectangular::transpose;
+pub use rectangular::{transpose, transpose_uninit};
 pub(crate) use square::transpose_in_place_square;

@@ -256,7 +256,103 @@ pub fn transpose<T: Copy + Send + Sync>(
     }
 
     // Fallback for non-ARM64 or unsupported element sizes.
-    transpose::transpose(input, output, width, height);
+    // SAFETY:
+    // - output length verified above
+    // - output.as_mut_ptr() valid for output.len() writes
+    // - transpose_scalar_uninit never reads from output
+    unsafe {
+        transpose_scalar_uninit(input, output.as_mut_ptr(), width, height);
+    }
+}
+
+/// Transpose into an uninitialized output buffer.
+///
+/// # Safety
+///
+/// - `output` must be valid for `width * height` writes
+/// - `output` must not alias `input`
+/// - every output element is initialized before this function returns
+/// - this function never reads from `output`
+#[inline]
+pub unsafe fn transpose_uninit<T: Copy + Send + Sync>(
+    input: &[T],
+    output: *mut T,
+    width: usize,
+    height: usize,
+) {
+    assert_eq!(
+        input.len(),
+        width.checked_mul(height).expect("matrix size overflow"),
+        "Input length {} doesn't match width*height",
+        input.len(),
+    );
+
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    {
+        if core::mem::size_of::<T>() == 4 {
+            // SAFETY: caller guarantees valid output pointer; T is 4 bytes.
+            transpose_neon_4b(
+                input.as_ptr().cast::<u32>(),
+                output.cast::<u32>(),
+                width,
+                height,
+            );
+            return;
+        }
+
+        if core::mem::size_of::<T>() == 8 {
+            // SAFETY: caller guarantees valid output pointer; T is 8 bytes.
+            transpose_neon_8b(
+                input.as_ptr().cast::<u64>(),
+                output.cast::<u64>(),
+                width,
+                height,
+            );
+            return;
+        }
+    }
+
+    // Scalar fallback: write-only, never reads from output.
+    // SAFETY: caller guarantees output is valid for width*height writes.
+    unsafe {
+        transpose_scalar_uninit(input, output, width, height);
+    }
+}
+
+/// Write-only scalar transpose kernel.
+///
+/// # Safety
+///
+/// - `output` must be valid for `width * height` writes
+/// - `output` must not alias `input`
+/// - `input.len()` must equal `width * height`
+unsafe fn transpose_scalar_uninit<T: Copy>(
+    input: &[T],
+    output: *mut T,
+    width: usize,
+    height: usize,
+) {
+    let nelts = width.checked_mul(height).unwrap();
+    debug_assert_eq!(input.len(), nelts);
+
+    for row in 0..height {
+        for col in 0..width {
+            let src = row * width + col;
+            let dst = col * height + row;
+            // SAFETY:
+            // - output points to a writable allocation of at least `width * height`
+            //   elements per function contract
+            // - dst is within bounds by construction
+            // - src is within bounds per debug_assert above
+            unsafe {
+                output.add(dst).write(*input.get_unchecked(src));
+            }
+        }
+    }
 }
 
 /// Top-level NEON transpose dispatcher for 4-byte elements.

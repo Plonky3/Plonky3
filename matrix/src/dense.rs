@@ -807,14 +807,28 @@ impl<T: Clone + Default + Send + Sync> DenseMatrix<T> {
 impl<T: Copy + Default + Send + Sync, V: DenseStorage<T>> DenseMatrix<T, V> {
     /// Return the transpose of this matrix.
     pub fn transpose(&self) -> RowMajorMatrix<T> {
-        let nelts = self.height() * self.width();
-        let mut values = vec![T::default(); nelts];
-        p3_util::transpose::transpose(
-            self.values.borrow(),
-            &mut values,
-            self.width(),
-            self.height(),
-        );
+        let nelts = self
+            .width()
+            .checked_mul(self.height())
+            .expect("matrix size overflow");
+
+        let mut values: Vec<T> = Vec::with_capacity(nelts);
+
+        unsafe {
+            let spare = &mut values.spare_capacity_mut()[..nelts];
+
+            p3_util::transpose::transpose_uninit(
+                self.values.borrow(),
+                spare.as_mut_ptr().cast(),
+                self.width(),
+                self.height(),
+            );
+
+            // SAFETY: transpose_uninit initialized the first `nelts`
+            // elements before length is updated.
+            values.set_len(nelts);
+        }
+
         RowMajorMatrix::new(values, self.height())
     }
 
