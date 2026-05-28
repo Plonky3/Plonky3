@@ -53,16 +53,37 @@ pub struct SplitEq<F: Field, EF: ExtensionField<F>> {
 }
 
 impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
+    /// Creates a factored eq table with a scalar (unpacked) suffix-half using an explicit split.
+    ///
+    /// The point is split as `(point[..split], point[split..])`.
+    /// The scale factor is absorbed into the prefix-half table.
+    pub fn new_unpacked_at(point: &Point<EF>, split: usize, scale: EF) -> Self {
+        assert!(split <= point.num_variables());
+        let (z0, z1) = point.split_at(split);
+        let eq0 = Poly::new_from_point(z0.as_slice(), scale);
+        let eq1 = EqMaybePacked::new_unpacked(&z1);
+        Self { eq0, eq1 }
+    }
+
     /// Creates a factored eq table with a scalar (unpacked) suffix-half.
     ///
     /// The evaluation point is split at the midpoint.
     /// The scale factor is absorbed into the prefix-half table.
     pub fn new_unpacked(point: &Point<EF>, scale: EF) -> Self {
-        // Split z into (z_prefix, z_suffix) at the midpoint.
-        let (z0, z1) = point.split_at(point.num_variables() / 2);
-        // Build eq0 = scale * eq(z_prefix, .) and eq1 = eq(z_suffix, .).
+        Self::new_unpacked_at(point, point.num_variables() / 2, scale)
+    }
+
+    /// Creates a factored eq table, using SIMD packing for the suffix-half when possible,
+    /// with an explicit split.
+    ///
+    /// Falls back to scalar if the suffix-half has fewer variables than log_2(W).
+    /// The point is split as `(point[..split], point[split..])`.
+    /// The scale factor is absorbed into the prefix-half table.
+    pub fn new_packed_at(point: &Point<EF>, split: usize, scale: EF) -> Self {
+        assert!(split <= point.num_variables());
+        let (z0, z1) = point.split_at(split);
         let eq0 = Poly::new_from_point(z0.as_slice(), scale);
-        let eq1 = EqMaybePacked::new_unpacked(&z1);
+        let eq1 = EqMaybePacked::new_packed(&z1);
         Self { eq0, eq1 }
     }
 
@@ -71,12 +92,7 @@ impl<F: Field, EF: ExtensionField<F>> SplitEq<F, EF> {
     /// Falls back to scalar if the suffix-half has fewer variables than log_2(W).
     /// The scale factor is absorbed into the prefix-half table.
     pub fn new_packed(point: &Point<EF>, scale: EF) -> Self {
-        // Split z into (z_prefix, z_suffix) at the midpoint.
-        let (z0, z1) = point.split_at(point.num_variables() / 2);
-        // Build eq0 with scale, and attempt SIMD packing for eq1.
-        let eq0 = Poly::new_from_point(z0.as_slice(), scale);
-        let eq1 = EqMaybePacked::new_packed(&z1);
-        Self { eq0, eq1 }
+        Self::new_packed_at(point, point.num_variables() / 2, scale)
     }
 
     /// Total number of variables: k = k_prefix + k_suffix.
@@ -668,6 +684,21 @@ mod tests {
             // Compress suffix variables, then evaluate in the other direction.
             let compressed = split_hi.compress_suffix(&poly);
             prop_assert_eq!(expected, split_lo.eval_ext(&compressed));
+        }
+
+        #[test]
+        fn prop_explicit_split_matches_default_suffix_compress(
+            k in 0usize..=14,
+            seed in any::<u64>(),
+        ) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let poly = Poly::<F>::rand(&mut rng, k);
+            let point = Point::<EF>::rand(&mut rng, k);
+
+            let default = SplitEq::<F, EF>::new_packed(&point, EF::ONE).compress_suffix(&poly);
+            let all_suffix = SplitEq::<F, EF>::new_packed_at(&point, 0, EF::ONE).compress_suffix(&poly);
+
+            prop_assert_eq!(default, all_suffix);
         }
     }
 

@@ -502,7 +502,9 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
         assert!(rs.num_variables() <= self.num_variables);
         // Output: residual stacked space of size 2^(num_variables - |rs|).
         let mut out = Poly::<EF>::zero(self.num_variables - rs.num_variables());
-        let rs = SplitEq::new_unpacked(rs, scale);
+        // Keep all residual challenges in the suffix half so the compression kernel
+        // can use the packed suffix dot path whenever the field backend supports it.
+        let rs = SplitEq::new_packed_at(rs, 0, scale);
 
         for placement in &self.placements {
             for (poly_idx, selector) in placement.selectors().iter().enumerate() {

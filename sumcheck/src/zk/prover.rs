@@ -7,6 +7,7 @@ use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, HornerIter, TwoAdicField, dot_product};
 use p3_matrix::Matrix;
 use p3_multilinear_util::point::Point;
+use p3_multilinear_util::poly::Poly;
 use p3_zk_codes::ZkEncoding;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
@@ -99,6 +100,42 @@ where
 
     /// Merkle commitment scheme used to commit each encoded mask.
     mmcs: M,
+}
+
+#[doc(hidden)]
+pub struct ZkSuffixBenchState<F, EF, Enc, M>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    Enc: ZkEncoding<F>,
+    M: Mmcs<F>,
+{
+    inner: SuffixProver<F, EF>,
+    alpha: EF,
+    virtual_alphas: Vec<EF>,
+    accumulators: Vec<Vec<[Vec<EF>; 2]>>,
+    plain_sum: EF,
+    masks: Vec<Vec<F>>,
+    mask_oracles: Vec<MaskOracle<F, Enc, M>>,
+    mu_tilde: F,
+    ell_zk: usize,
+    eps: EF,
+}
+
+#[doc(hidden)]
+pub struct ZkSuffixAfterRoundsState<F, EF, Enc, M>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    Enc: ZkEncoding<F>,
+    M: Mmcs<F>,
+{
+    inner: SuffixProver<F, EF>,
+    alpha: EF,
+    plain_sum: EF,
+    eps: EF,
+    rs: Point<EF>,
+    mask_oracles: Vec<MaskOracle<F, Enc, M>>,
 }
 
 impl<F, EF, Enc, M> ZkPrefixProver<F, EF, Enc, M>
@@ -530,16 +567,11 @@ where
         self.inner.add_virtual_eval(challenger)
     }
 
-    /// Runs the HVZK sumcheck and returns the residual claim plus the mask oracles.
-    #[allow(clippy::too_many_lines, clippy::type_complexity)]
-    #[tracing::instrument(skip_all)]
-    pub fn into_sumcheck<R, Ch>(
+    fn prepare_mask_phase<R, Ch>(
         self,
-        zk_data: &mut ZkSumcheckData<F, EF>,
-        pow_bits: usize,
         challenger: &mut Ch,
         rng: &mut R,
-    ) -> (SumcheckProver<F, EF>, Point<EF>, Vec<MaskOracle<F, Enc, M>>)
+    ) -> ZkSuffixBenchState<F, EF, Enc, M>
     where
         F: TwoAdicField,
         EF: ExtensionField<F> + TwoAdicField,
@@ -586,7 +618,7 @@ where
             })
             .collect();
 
-        let mut plain_sum = self.inner.sum(alpha);
+        let plain_sum = self.inner.sum(alpha);
 
         let masks: Vec<Vec<F>> = (0..k)
             .map(|_| (0..ell_zk).map(|_| rng.random()).collect())
@@ -629,14 +661,56 @@ where
         }
 
         challenger.observe_algebra_element(EF::from(mu_tilde));
+        let eps: EF = challenger.sample_algebra_element();
+
+        ZkSuffixBenchState {
+            inner: self.inner,
+            alpha,
+            virtual_alphas: virtual_alphas.to_vec(),
+            accumulators,
+            plain_sum,
+            masks,
+            mask_oracles,
+            mu_tilde,
+            ell_zk,
+            eps,
+        }
+    }
+
+    fn finish_from_mask_phase<Ch>(
+        state: ZkSuffixBenchState<F, EF, Enc, M>,
+        zk_data: &mut ZkSumcheckData<F, EF>,
+        pow_bits: usize,
+        challenger: &mut Ch,
+    ) -> ZkSuffixAfterRoundsState<F, EF, Enc, M>
+    where
+        F: TwoAdicField,
+        EF: ExtensionField<F> + TwoAdicField,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        let ZkSuffixBenchState {
+            inner,
+            alpha,
+            virtual_alphas,
+            accumulators,
+            mut plain_sum,
+            masks,
+            mask_oracles,
+            mu_tilde,
+            ell_zk,
+            eps,
+        } = state;
+
+        let k = inner.folding;
         zk_data.mu_tilde = mu_tilde;
         zk_data.ell_zk = ell_zk;
 
-        let eps: EF = challenger.sample_algebra_element();
-
         let mut rs: Vec<EF> = Vec::with_capacity(k);
         let mut mask_evals_at_gamma: Vec<EF> = Vec::with_capacity(k);
-        let mut sum_future_endpoints = sum_endpoints_init;
+        let mut sum_future_endpoints: F = masks
+            .iter()
+            .map(|mask| mask[0].double() + mask[1..].iter().copied().sum::<F>())
+            .sum();
         let pow2: Vec<F> = F::TWO.powers().collect_n(k + 1);
 
         for round_idx in 0..k {
@@ -654,12 +728,7 @@ where
             let mut plain_c0: EF = accumulators.iter().map(|a| dot(&a[round_idx][0])).sum();
             let mut plain_c_inf: EF = accumulators.iter().map(|a| dot(&a[round_idx][1])).sum();
 
-            for (vc, alpha_i) in self
-                .inner
-                .virtual_claims
-                .iter()
-                .zip(virtual_alphas.iter().copied())
-            {
+            for (vc, alpha_i) in inner.virtual_claims.iter().zip(virtual_alphas.iter().copied()) {
                 plain_c0 += alpha_i * dot(&vc.data[round_idx][0]);
                 plain_c_inf += alpha_i * dot(&vc.data[round_idx][1]);
             }
@@ -720,10 +789,35 @@ where
             rs.push(gamma_j);
         }
 
-        let rs = Point::new(rs);
+        ZkSuffixAfterRoundsState {
+            inner,
+            alpha,
+            plain_sum,
+            eps,
+            rs: Point::new(rs),
+            mask_oracles,
+        }
+    }
+
+    fn finalize_residual_from_after_rounds(
+        state: ZkSuffixAfterRoundsState<F, EF, Enc, M>,
+    ) -> (SumcheckProver<F, EF>, Point<EF>, Vec<MaskOracle<F, Enc, M>>)
+    where
+        F: TwoAdicField,
+        EF: ExtensionField<F> + TwoAdicField,
+    {
+        let ZkSuffixAfterRoundsState {
+            inner,
+            alpha,
+            plain_sum,
+            eps,
+            rs,
+            mask_oracles,
+        } = state;
+
         let reversed = rs.reversed();
-        let compressed = self.inner.compress_stacked(&reversed, eps);
-        let weights = self.inner.combine_eqs(&reversed, alpha);
+        let compressed = inner.compress_stacked(&reversed, eps);
+        let weights = inner.combine_eqs(&reversed, alpha);
         let prod_poly = ProductPolynomial::new_unpacked(VariableOrder::Suffix, compressed, weights);
 
         let residual_sum = eps * plain_sum;
@@ -733,11 +827,109 @@ where
             "residual product polynomial dot product must equal eps * plain_residual_sum",
         );
 
-        (
-            SumcheckProver::new(prod_poly, residual_sum),
-            rs,
-            mask_oracles,
-        )
+        (SumcheckProver::new(prod_poly, residual_sum), rs, mask_oracles)
+    }
+
+    #[doc(hidden)]
+    pub fn bench_prepare_mask_phase<R, Ch>(
+        self,
+        challenger: &mut Ch,
+        rng: &mut R,
+    ) -> ZkSuffixBenchState<F, EF, Enc, M>
+    where
+        F: TwoAdicField,
+        EF: ExtensionField<F> + TwoAdicField,
+        Enc::Codeword: Matrix<F>,
+        R: Rng,
+        StandardUniform: Distribution<F>,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
+    {
+        self.prepare_mask_phase(challenger, rng)
+    }
+
+    #[doc(hidden)]
+    pub fn bench_finish_rounds_and_residual<Ch>(
+        state: ZkSuffixBenchState<F, EF, Enc, M>,
+        zk_data: &mut ZkSumcheckData<F, EF>,
+        pow_bits: usize,
+        challenger: &mut Ch,
+    ) -> (SumcheckProver<F, EF>, Point<EF>, Vec<MaskOracle<F, Enc, M>>)
+    where
+        F: TwoAdicField,
+        EF: ExtensionField<F> + TwoAdicField,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        let after_rounds = Self::finish_from_mask_phase(state, zk_data, pow_bits, challenger);
+        Self::finalize_residual_from_after_rounds(after_rounds)
+    }
+
+    #[doc(hidden)]
+    pub fn bench_finish_rounds_only<Ch>(
+        state: ZkSuffixBenchState<F, EF, Enc, M>,
+        zk_data: &mut ZkSumcheckData<F, EF>,
+        pow_bits: usize,
+        challenger: &mut Ch,
+    ) -> ZkSuffixAfterRoundsState<F, EF, Enc, M>
+    where
+        F: TwoAdicField,
+        EF: ExtensionField<F> + TwoAdicField,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        Self::finish_from_mask_phase(state, zk_data, pow_bits, challenger)
+    }
+
+    #[doc(hidden)]
+    pub fn bench_finalize_residual_only(
+        state: ZkSuffixAfterRoundsState<F, EF, Enc, M>,
+    ) -> (SumcheckProver<F, EF>, Point<EF>, Vec<MaskOracle<F, Enc, M>>)
+    where
+        F: TwoAdicField,
+        EF: ExtensionField<F> + TwoAdicField,
+    {
+        Self::finalize_residual_from_after_rounds(state)
+    }
+
+    /// Runs the HVZK sumcheck and returns the residual claim plus the mask oracles.
+    #[allow(clippy::too_many_lines, clippy::type_complexity)]
+    #[tracing::instrument(skip_all)]
+    pub fn into_sumcheck<R, Ch>(
+        self,
+        zk_data: &mut ZkSumcheckData<F, EF>,
+        pow_bits: usize,
+        challenger: &mut Ch,
+        rng: &mut R,
+    ) -> (SumcheckProver<F, EF>, Point<EF>, Vec<MaskOracle<F, Enc, M>>)
+    where
+        F: TwoAdicField,
+        EF: ExtensionField<F> + TwoAdicField,
+        Enc::Codeword: Matrix<F>,
+        R: Rng,
+        StandardUniform: Distribution<F>,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
+    {
+        let state = self.prepare_mask_phase(challenger, rng);
+        let after_rounds = Self::finish_from_mask_phase(state, zk_data, pow_bits, challenger);
+        Self::finalize_residual_from_after_rounds(after_rounds)
+    }
+}
+
+impl<F, EF, Enc, M> ZkSuffixAfterRoundsState<F, EF, Enc, M>
+where
+    F: TwoAdicField,
+    EF: ExtensionField<F> + TwoAdicField,
+    Enc: ZkEncoding<F>,
+    M: Mmcs<F>,
+{
+    #[doc(hidden)]
+    pub fn bench_compress_stacked_only(&self) -> Poly<EF> {
+        let reversed = self.rs.reversed();
+        self.inner.compress_stacked(&reversed, self.eps)
+    }
+
+    #[doc(hidden)]
+    pub fn bench_combine_eqs_only(&self) -> Poly<EF> {
+        let reversed = self.rs.reversed();
+        self.inner.combine_eqs(&reversed, self.alpha)
     }
 }
 

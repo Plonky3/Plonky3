@@ -13,6 +13,7 @@ use p3_whir::sumcheck::SumcheckData;
 use p3_whir::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_whir::sumcheck::strategy::sumcheck_coefficients_prefix;
 use p3_whir::sumcheck::zk::{ZkPrefixProver, ZkSuffixProver, ZkSumcheckData};
+use p3_whir::sumcheck::zk::prover::{ZkSuffixAfterRoundsState, ZkSuffixBenchState};
 use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -197,6 +198,267 @@ fn run_zk_suffix_sumcheck(
     black_box((data, residual, randomness, mask_oracles));
 }
 
+fn run_zk_suffix_mask_phase(
+    prover: ZkSuffixProver<F, EF, MaskEnc, MaskMmcs>,
+    challenger: &mut Challenger,
+    rng: &mut SmallRng,
+) {
+    let state = prover.bench_prepare_mask_phase(challenger, rng);
+    black_box(state);
+}
+
+fn run_zk_suffix_rounds_and_residual_only(
+    prover: ZkSuffixProver<F, EF, MaskEnc, MaskMmcs>,
+    challenger: &mut Challenger,
+    rng: &mut SmallRng,
+    folding: usize,
+) {
+    let state = prover.bench_prepare_mask_phase(challenger, rng);
+    let mut data = ZkSumcheckData::<F, EF>::default();
+    let (residual, randomness, mask_oracles) =
+        ZkSuffixProver::bench_finish_rounds_and_residual(state, &mut data, 0, challenger);
+    assert_eq!(data.round_coefficients.len(), folding);
+    assert_eq!(randomness.num_variables(), folding);
+    assert!(residual.num_variables() > 0);
+    black_box((data, residual, randomness, mask_oracles));
+}
+
+fn run_zk_suffix_rounds_only(
+    state: ZkSuffixBenchState<F, EF, MaskEnc, MaskMmcs>,
+    challenger: &mut Challenger,
+    folding: usize,
+) {
+    let mut data = ZkSumcheckData::<F, EF>::default();
+    let after_rounds = ZkSuffixProver::bench_finish_rounds_only(state, &mut data, 0, challenger);
+    assert_eq!(data.round_coefficients.len(), folding);
+    black_box((data, after_rounds));
+}
+
+fn run_zk_suffix_residual_only(
+    state: ZkSuffixAfterRoundsState<F, EF, MaskEnc, MaskMmcs>,
+    folding: usize,
+) {
+    let (residual, randomness, mask_oracles) =
+        ZkSuffixProver::bench_finalize_residual_only(state);
+    assert_eq!(randomness.num_variables(), folding);
+    assert!(residual.num_variables() > 0);
+    black_box((residual, randomness, mask_oracles));
+}
+
+fn run_zk_suffix_compress_stacked_only(
+    state: ZkSuffixAfterRoundsState<F, EF, MaskEnc, MaskMmcs>,
+) {
+    let compressed = state.bench_compress_stacked_only();
+    let _ = black_box(compressed);
+}
+
+fn run_zk_suffix_combine_eqs_only(
+    state: ZkSuffixAfterRoundsState<F, EF, MaskEnc, MaskMmcs>,
+) {
+    let weights = state.bench_combine_eqs_only();
+    let _ = black_box(weights);
+}
+
+fn bench_sumcheck_phases(c: &mut Criterion) {
+    let mut group = c.benchmark_group("whir/layout_sumcheck_phases");
+
+    let cases = [
+        (14, 4, "log14"),
+        (18, 4, "log18"),
+        (20, 4, "log20"),
+        (22, 4, "log22"),
+    ];
+
+    let (zk_mmcs, zk_encoding) = make_zk_setup();
+
+    for &(num_variables, folding, label) in &cases {
+        let table = make_table(num_variables);
+
+        group.bench_with_input(
+            BenchmarkId::new("suffix_setup_only", label),
+            &table,
+            |b, table| {
+                b.iter(|| {
+                    let setup = setup_suffix(black_box(table), black_box(folding));
+                    black_box(setup);
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("zk_suffix_setup_only", label),
+            &table,
+            |b, table| {
+                b.iter(|| {
+                    let setup = setup_zk_suffix(
+                        black_box(table),
+                        black_box(folding),
+                        black_box(&zk_encoding),
+                        black_box(&zk_mmcs),
+                    );
+                    black_box(setup);
+                });
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("suffix_prove_only", label),
+            &table,
+            |b, table| {
+                let setup = setup_suffix(table, folding);
+                b.iter_batched(
+                    || setup.clone(),
+                    |(prover, mut challenger)| run_sumcheck(prover, &mut challenger, folding),
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("zk_suffix_prove_only", label),
+            &table,
+            |b, table| {
+                b.iter_batched(
+                    || setup_zk_suffix(table, folding, &zk_encoding, &zk_mmcs),
+                    |(prover, mut challenger, mut rng)| {
+                        run_zk_suffix_sumcheck(prover, &mut challenger, &mut rng, folding);
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("zk_suffix_mask_phase_only", label),
+            &table,
+            |b, table| {
+                b.iter_batched(
+                    || setup_zk_suffix(table, folding, &zk_encoding, &zk_mmcs),
+                    |(prover, mut challenger, mut rng)| {
+                        run_zk_suffix_mask_phase(prover, &mut challenger, &mut rng);
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("zk_suffix_rounds_residual_only", label),
+            &table,
+            |b, table| {
+                b.iter_batched(
+                    || setup_zk_suffix(table, folding, &zk_encoding, &zk_mmcs),
+                    |(prover, mut challenger, mut rng)| {
+                        run_zk_suffix_rounds_and_residual_only(
+                            prover,
+                            &mut challenger,
+                            &mut rng,
+                            folding,
+                        );
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("zk_suffix_rounds_only", label),
+            &table,
+            |b, table| {
+                b.iter_batched(
+                    || {
+                        let (prover, mut challenger, mut rng) =
+                            setup_zk_suffix(table, folding, &zk_encoding, &zk_mmcs);
+                        prover.bench_prepare_mask_phase(&mut challenger, &mut rng)
+                    },
+                    |state| {
+                        let mut challenger = make_challenger();
+                        run_zk_suffix_rounds_only(state, &mut challenger, folding);
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("zk_suffix_residual_only", label),
+            &table,
+            |b, table| {
+                b.iter_batched(
+                    || {
+                        let (prover, mut challenger, mut rng) =
+                            setup_zk_suffix(table, folding, &zk_encoding, &zk_mmcs);
+                        let state = prover.bench_prepare_mask_phase(&mut challenger, &mut rng);
+                        let mut data = ZkSumcheckData::<F, EF>::default();
+                        ZkSuffixProver::bench_finish_rounds_only(
+                            state,
+                            &mut data,
+                            0,
+                            &mut challenger,
+                        )
+                    },
+                    |state| {
+                        run_zk_suffix_residual_only(state, folding);
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("zk_suffix_compress_stacked_only", label),
+            &table,
+            |b, table| {
+                b.iter_batched(
+                    || {
+                        let (prover, mut challenger, mut rng) =
+                            setup_zk_suffix(table, folding, &zk_encoding, &zk_mmcs);
+                        let state = prover.bench_prepare_mask_phase(&mut challenger, &mut rng);
+                        let mut data = ZkSumcheckData::<F, EF>::default();
+                        ZkSuffixProver::bench_finish_rounds_only(
+                            state,
+                            &mut data,
+                            0,
+                            &mut challenger,
+                        )
+                    },
+                    |state| {
+                        run_zk_suffix_compress_stacked_only(state);
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("zk_suffix_combine_eqs_only", label),
+            &table,
+            |b, table| {
+                b.iter_batched(
+                    || {
+                        let (prover, mut challenger, mut rng) =
+                            setup_zk_suffix(table, folding, &zk_encoding, &zk_mmcs);
+                        let state = prover.bench_prepare_mask_phase(&mut challenger, &mut rng);
+                        let mut data = ZkSumcheckData::<F, EF>::default();
+                        ZkSuffixProver::bench_finish_rounds_only(
+                            state,
+                            &mut data,
+                            0,
+                            &mut challenger,
+                        )
+                    },
+                    |state| {
+                        run_zk_suffix_combine_eqs_only(state);
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
 fn bench_sumcheck_prover(c: &mut Criterion) {
     let mut group = c.benchmark_group("whir/layout_sumcheck");
 
@@ -329,6 +591,7 @@ fn bench_fix_prefix_var_mut(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_sumcheck_prover,
+    bench_sumcheck_phases,
     bench_round_coefficients,
     bench_fix_prefix_var_mut,
 );
