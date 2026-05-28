@@ -1,4 +1,4 @@
-//! HVZK prover overlay on top of the prefix-binding sumcheck.
+//! HVZK prover overlays on top of the plain sumcheck layouts.
 
 use alloc::vec::Vec;
 
@@ -14,7 +14,7 @@ use rand::{Rng, RngExt};
 use super::data::{MaskOracle, ZkSumcheckData};
 use crate::extrapolate_01inf;
 use crate::lagrange::lagrange_weights_01inf_multi;
-use crate::layout::{Layout, PrefixProver};
+use crate::layout::{Layout, PrefixProver, SuffixProver};
 use crate::product_polynomial::ProductPolynomial;
 use crate::strategy::{SumcheckProver, VariableOrder};
 use crate::svo::calculate_accumulators_batch;
@@ -70,6 +70,29 @@ where
     /// Plain prefix-binding prover that supplies the unmasked per-round
     /// arithmetic and the residual product polynomial.
     inner: PrefixProver<F, EF>,
+
+    /// Zero-knowledge code used to encode the mask polynomials.
+    encoding: Enc,
+
+    /// Merkle commitment scheme used to commit each encoded mask.
+    mmcs: M,
+}
+
+/// HVZK prover for the suffix-binding sumcheck.
+///
+/// Shares the same Construction 6.3 mask flow as [`ZkPrefixProver`], but reads
+/// the plain piece from the suffix layout's accumulator structure and scales
+/// the residual polynomial through `SuffixProver::compress_stacked`.
+pub struct ZkSuffixProver<F, EF, Enc, M>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    Enc: ZkEncoding<F>,
+    M: Mmcs<F>,
+{
+    /// Plain suffix-binding prover that supplies the unmasked per-round
+    /// arithmetic and the residual product polynomial.
+    inner: SuffixProver<F, EF>,
 
     /// Zero-knowledge code used to encode the mask polynomials.
     encoding: Enc,
@@ -463,13 +486,268 @@ where
     }
 }
 
+impl<F, EF, Enc, M> ZkSuffixProver<F, EF, Enc, M>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    Enc: ZkEncoding<F>,
+    M: Mmcs<F>,
+{
+    /// Wraps a plain suffix-binding prover with the HVZK ingredients.
+    pub const fn new(inner: SuffixProver<F, EF>, encoding: Enc, mmcs: M) -> Self {
+        Self {
+            inner,
+            encoding,
+            mmcs,
+        }
+    }
+
+    /// Returns the folding factor of the wrapped inner prover.
+    pub const fn folding(&self) -> usize {
+        self.inner.folding
+    }
+
+    /// Returns the variable count of the stacked polynomial.
+    pub const fn num_variables(&self) -> usize {
+        self.inner.num_variables
+    }
+
+    /// Records concrete opening claims on the inner prover.
+    pub fn eval<Ch>(&mut self, table_idx: usize, polys: &[usize], challenger: &mut Ch) -> Vec<EF>
+    where
+        F: TwoAdicField,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        self.inner.eval(table_idx, polys, challenger)
+    }
+
+    /// Records a virtual opening claim on the inner prover.
+    pub fn add_virtual_eval<Ch>(&mut self, challenger: &mut Ch) -> EF
+    where
+        F: TwoAdicField,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+    {
+        self.inner.add_virtual_eval(challenger)
+    }
+
+    /// Runs the HVZK sumcheck and returns the residual claim plus the mask oracles.
+    #[allow(clippy::too_many_lines, clippy::type_complexity)]
+    #[tracing::instrument(skip_all)]
+    pub fn into_sumcheck<R, Ch>(
+        self,
+        zk_data: &mut ZkSumcheckData<F, EF>,
+        pow_bits: usize,
+        challenger: &mut Ch,
+        rng: &mut R,
+    ) -> (SumcheckProver<F, EF>, Point<EF>, Vec<MaskOracle<F, Enc, M>>)
+    where
+        F: TwoAdicField,
+        EF: ExtensionField<F> + TwoAdicField,
+        Enc::Codeword: Matrix<F>,
+        R: Rng,
+        StandardUniform: Distribution<F>,
+        Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
+    {
+        let k = self.inner.folding;
+        let ell_zk = self.encoding.message_len();
+        let n_vars = self.inner.num_variables;
+
+        assert!(F::TWO != F::ZERO, "Lemma 6.4 requires char(F) != 2");
+        assert!(ell_zk >= 2, "Lemma 6.4 requires ell_zk >= 2");
+        assert!(k >= 1, "sumcheck requires at least one round");
+        assert!(
+            k <= n_vars,
+            "folding_factor must be <= poly.num_variables()",
+        );
+
+        let alpha: EF = challenger.sample_algebra_element();
+
+        let n_concrete: usize = self
+            .inner
+            .placements
+            .iter()
+            .flat_map(|placement| self.inner.claim_map[placement.idx()].iter())
+            .map(|claim| claim.len())
+            .sum();
+        let n_virtual = self.inner.virtual_claims.len();
+        let all_alphas: Vec<EF> = alpha.powers().collect_n(n_concrete + n_virtual);
+        let (concrete_alphas, virtual_alphas) = all_alphas.split_at(n_concrete);
+
+        let mut offset = 0;
+        let accumulators: Vec<_> = self
+            .inner
+            .placements
+            .iter()
+            .flat_map(|placement| self.inner.claim_map[placement.idx()].iter())
+            .map(|claim| {
+                let slice = &concrete_alphas[offset..offset + claim.len()];
+                offset += claim.len();
+                calculate_accumulators_batch(claim, slice)
+            })
+            .collect();
+
+        let mut plain_sum = self.inner.sum(alpha);
+
+        let masks: Vec<Vec<F>> = (0..k)
+            .map(|_| (0..ell_zk).map(|_| rng.random()).collect())
+            .collect();
+        let mask_oracles: Vec<MaskOracle<F, Enc, M>> = masks
+            .iter()
+            .map(|mask| {
+                let codeword = self.encoding.encode(mask, rng);
+                let (commit, prover_data) = self.mmcs.commit_matrix(codeword);
+                challenger.observe(commit.clone());
+                (commit, prover_data)
+            })
+            .collect();
+
+        let sum_endpoints_init: F = masks
+            .iter()
+            .map(|mask| mask[0].double() + mask[1..].iter().copied().sum::<F>())
+            .sum();
+        let two_to_k_minus_1 = F::TWO.exp_u64((k - 1) as u64);
+        let mu_tilde: F = two_to_k_minus_1 * sum_endpoints_init;
+
+        #[cfg(debug_assertions)]
+        {
+            let mut naive = F::ZERO;
+            for bits in 0..(1u64 << k) {
+                for (l, mask) in masks.iter().enumerate() {
+                    let b_l = (bits >> l) & 1;
+                    let s_l_eval = if b_l == 0 {
+                        mask[0]
+                    } else {
+                        mask.iter().copied().sum::<F>()
+                    };
+                    naive += s_l_eval;
+                }
+            }
+            debug_assert_eq!(
+                mu_tilde, naive,
+                "mu_tilde closed form does not match naive sum over {{0,1}}^k",
+            );
+        }
+
+        challenger.observe_algebra_element(EF::from(mu_tilde));
+        zk_data.mu_tilde = mu_tilde;
+        zk_data.ell_zk = ell_zk;
+
+        let eps: EF = challenger.sample_algebra_element();
+
+        let mut rs: Vec<EF> = Vec::with_capacity(k);
+        let mut mask_evals_at_gamma: Vec<EF> = Vec::with_capacity(k);
+        let mut sum_future_endpoints = sum_endpoints_init;
+        let pow2: Vec<F> = F::TWO.powers().collect_n(k + 1);
+
+        for round_idx in 0..k {
+            let j = round_idx + 1;
+            let s_j = &masks[round_idx];
+
+            let s_j_endpoints = s_j[0].double() + s_j[1..].iter().copied().sum::<F>();
+            sum_future_endpoints -= s_j_endpoints;
+
+            let weights_lag = lagrange_weights_01inf_multi(&rs);
+            let dot = |row: &[EF]| {
+                dot_product::<EF, _, _>(row.iter().copied(), weights_lag.iter().copied())
+            };
+
+            let mut plain_c0: EF = accumulators.iter().map(|a| dot(&a[round_idx][0])).sum();
+            let mut plain_c_inf: EF = accumulators.iter().map(|a| dot(&a[round_idx][1])).sum();
+
+            for (vc, alpha_i) in self
+                .inner
+                .virtual_claims
+                .iter()
+                .zip(virtual_alphas.iter().copied())
+            {
+                plain_c0 += alpha_i * dot(&vc.data[round_idx][0]);
+                plain_c_inf += alpha_i * dot(&vc.data[round_idx][1]);
+            }
+
+            let plain_c1 = plain_sum - plain_c0.double() - plain_c_inf;
+
+            let h_size = ell_zk.max(3);
+            let mut h: Vec<EF> = EF::zero_vec(h_size);
+
+            let mult_live = pow2[k - j];
+            for (i, &c) in s_j.iter().enumerate() {
+                h[i] += mult_live * c;
+            }
+
+            let past_mask_sum: EF = mask_evals_at_gamma.iter().copied().sum();
+            h[0] += past_mask_sum * mult_live;
+
+            if j < k {
+                let mult_future = pow2[k - j - 1];
+                h[0] += mult_future * sum_future_endpoints;
+            }
+
+            h[0] += eps * plain_c0;
+            h[1] += eps * plain_c1;
+            h[2] += eps * plain_c_inf;
+
+            #[cfg(debug_assertions)]
+            {
+                let mult_past = pow2[k - j + 1];
+                let mut expected: EF =
+                    eps * plain_sum + past_mask_sum * mult_past + mult_live * s_j_endpoints;
+                if j < k {
+                    expected += mult_live * sum_future_endpoints;
+                }
+                debug_assert_eq!(
+                    h[0].double() + h[1..].iter().copied().sum::<EF>(),
+                    expected,
+                    "h_j affine consistency check failed at round {j}",
+                );
+            }
+
+            let mut wire: Vec<EF> = Vec::with_capacity(h_size - 1);
+            wire.push(h[0]);
+            wire.extend_from_slice(&h[2..]);
+
+            challenger.observe_algebra_slice(&wire);
+            zk_data.round_coefficients.push(wire);
+
+            if pow_bits > 0 {
+                zk_data.pow_witnesses.push(challenger.grind(pow_bits));
+            }
+
+            let gamma_j: EF = challenger.sample_algebra_element();
+            let s_j_at_gamma_j: EF = s_j.iter().copied().horner(gamma_j);
+            mask_evals_at_gamma.push(s_j_at_gamma_j);
+
+            plain_sum = extrapolate_01inf(plain_c0, plain_sum - plain_c0, plain_c_inf, gamma_j);
+            rs.push(gamma_j);
+        }
+
+        let rs = Point::new(rs);
+        let reversed = rs.reversed();
+        let compressed = self.inner.compress_stacked(&reversed, eps);
+        let weights = self.inner.combine_eqs(&reversed, alpha);
+        let prod_poly = ProductPolynomial::new_unpacked(VariableOrder::Suffix, compressed, weights);
+
+        let residual_sum = eps * plain_sum;
+        debug_assert_eq!(
+            prod_poly.dot_product(),
+            residual_sum,
+            "residual product polynomial dot product must equal eps * plain_residual_sum",
+        );
+
+        (
+            SumcheckProver::new(prod_poly, residual_sum),
+            rs,
+            mask_oracles,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use p3_field::{Field, PackedValue};
     use p3_util::log2_strict_usize;
     use proptest::prelude::*;
 
-    use crate::zk::test_helpers::{F, run_roundtrip};
+    use crate::zk::test_helpers::{F, run_roundtrip, run_suffix_roundtrip};
 
     #[test]
     fn prover_verifier_roundtrip_classic_unpacked() {
@@ -501,6 +779,16 @@ mod tests {
         run_roundtrip(8, 3, 32, 1, 1, 0).expect("honest roundtrip should accept");
     }
 
+    #[test]
+    fn suffix_prover_verifier_roundtrip_classic_unpacked() {
+        run_suffix_roundtrip(8, 3, 4, 1, 1, 0).expect("honest suffix roundtrip should accept");
+    }
+
+    #[test]
+    fn suffix_long_mask_horner_path() {
+        run_suffix_roundtrip(8, 3, 32, 1, 1, 0).expect("honest suffix roundtrip should accept");
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(16))]
 
@@ -530,6 +818,38 @@ mod tests {
             prop_assert!(
                 run_roundtrip(n_vars, folding_factor, ell_zk, num_concrete, num_virtual, seed)
                     .is_ok()
+            );
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(16))]
+
+        #[test]
+        fn prop_suffix_completeness_classic_unpacked(
+            n_vars in 3usize..=8,
+            ell_zk in 2usize..=5,
+            num_concrete in 0usize..=2,
+            num_virtual in 0usize..=2,
+            seed in 0u64..1024,
+        ) {
+            prop_assume!(num_concrete + num_virtual >= 1);
+
+            let k_pack = log2_strict_usize(<F as Field>::Packing::WIDTH);
+            prop_assume!(n_vars > k_pack);
+
+            let folding_factor = 1 + (seed as usize % (n_vars - k_pack));
+
+            prop_assert!(
+                run_suffix_roundtrip(
+                    n_vars,
+                    folding_factor,
+                    ell_zk,
+                    num_concrete,
+                    num_virtual,
+                    seed,
+                )
+                .is_ok()
             );
         }
     }

@@ -1,4 +1,4 @@
-//! HVZK verifier with affine-chain replay over the prefix-binding layout.
+//! HVZK verifier with affine-chain replay over a layout-matched plain verifier.
 
 use alloc::vec::Vec;
 
@@ -13,7 +13,7 @@ use crate::layout::{LayoutStrategy, Verifier};
 use crate::strategy::VariableOrder;
 use crate::table::TableShape;
 
-/// HVZK verifier for the prefix-binding sumcheck.
+/// HVZK verifier for a layout-matched sumcheck.
 ///
 /// Per round, the verifier:
 ///
@@ -26,7 +26,7 @@ where
     F: Field,
     EF: ExtensionField<F>,
 {
-    /// Plain prefix-binding verifier holding the claims that fix `mu`.
+    /// Plain verifier holding the claims that fix `mu`.
     inner: Verifier<F, EF>,
 }
 
@@ -35,15 +35,20 @@ where
     F: Field,
     EF: ExtensionField<F>,
 {
-    /// Builds the verifier registry.
+    /// Builds the prefix-layout verifier registry.
     pub fn new(table_shapes: &[TableShape]) -> Self {
+        Self::with_strategy(
+            table_shapes,
+            LayoutStrategy::new(true, VariableOrder::Prefix),
+        )
+    }
+
+    /// Builds the verifier registry for the given plain-layout strategy.
+    pub fn with_strategy(table_shapes: &[TableShape], strategy: LayoutStrategy) -> Self {
         // Layout must match the prover's, otherwise claim points are lifted under the wrong selector.
         // Pinned by the drift-guard test in this module.
         Self {
-            inner: Verifier::new(
-                table_shapes,
-                LayoutStrategy::new(true, VariableOrder::Prefix),
-            ),
+            inner: Verifier::new(table_shapes, strategy),
         }
     }
 
@@ -242,7 +247,10 @@ mod tests {
 
     use super::*;
     use crate::layout::TableShape;
-    use crate::zk::test_helpers::{EF, F, MyChallenger, MyMmcs, build_prover_verifier, make_setup};
+    use crate::zk::test_helpers::{
+        EF, F, MyChallenger, MyMmcs, build_prover_verifier, build_suffix_prover_verifier,
+        build_verifier_for_single_column, make_setup,
+    };
     use crate::zk::{ZkSumcheckData, ZkVerifier};
 
     #[test]
@@ -527,6 +535,107 @@ mod tests {
                 "tampering with wire coordinate ({}, {}) must change target",
                 tamper_round, tamper_pos,
             );
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(8))]
+
+        #[test]
+        fn prop_suffix_rbr_tampering_changes_verifier_output(
+            n_vars in 3usize..=6,
+            ell_zk in 2usize..=4,
+            num_eqs in 1usize..=2,
+            seed in 0u64..512,
+            tamper_round_seed in 0usize..16,
+            tamper_pos_seed in 0usize..8,
+        ) {
+            let k_pack = p3_util::log2_strict_usize(<F as Field>::Packing::WIDTH);
+            prop_assume!(n_vars > k_pack);
+            let folding_factor = 1 + (seed as usize % (n_vars - k_pack));
+
+            let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
+
+            let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+            let evals: Vec<F> = (0..(1usize << n_vars)).map(|_| data_rng.random()).collect();
+
+            let (mut prover, mut verifier, _n_vars) =
+                build_suffix_prover_verifier(evals, folding_factor, encoding, mmcs);
+
+            let mut prover_challenger = MyChallenger::new(perm.clone());
+            let mut verifier_challenger = MyChallenger::new(perm.clone());
+            for _ in 0..num_eqs {
+                let eval = prover.add_virtual_eval(&mut prover_challenger);
+                verifier.add_virtual_eval(eval, &mut verifier_challenger);
+            }
+
+            let pow_bits = 0;
+            let mut zk_data = ZkSumcheckData::<F, EF>::default();
+            let mut prover_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+            let (_residual_prover, _gammas, mask_oracles) = prover.into_sumcheck(
+                &mut zk_data,
+                pow_bits,
+                &mut prover_challenger,
+                &mut prover_rng,
+            );
+            let mask_commits: Vec<_> = mask_oracles.iter().map(|(c, _)| c.clone()).collect();
+
+            let tamper_round = tamper_round_seed % zk_data.round_coefficients.len();
+            let wire_len = zk_data.round_coefficients[tamper_round].len();
+            let tamper_pos = tamper_pos_seed % wire_len;
+            let mut tampered_zk_data = zk_data.clone();
+            tampered_zk_data.round_coefficients[tamper_round][tamper_pos] += F::ONE;
+
+            let mut honest_v_challenger = MyChallenger::new(perm.clone());
+            let mut honest_verifier =
+                build_verifier_for_single_column(n_vars, LayoutStrategy::new(true, VariableOrder::Suffix));
+
+            let mut prover_replay = MyChallenger::new(perm.clone());
+            let mut replay_evals = Vec::with_capacity(num_eqs);
+            let (mut replay_prover, _, _) = {
+                let mut replay_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+                let evals: Vec<F> =
+                    (0..(1usize << n_vars)).map(|_| replay_rng.random()).collect();
+                let (perm2, mmcs2, encoding2) = make_setup(seed, ell_zk);
+                let _ = perm2;
+                build_suffix_prover_verifier(evals, folding_factor, encoding2, mmcs2)
+            };
+            for _ in 0..num_eqs {
+                let e = replay_prover.add_virtual_eval(&mut prover_replay);
+                honest_verifier.add_virtual_eval(e, &mut honest_v_challenger);
+                replay_evals.push(e);
+            }
+
+            let honest = verifier.into_sumcheck::<MyMmcs, _>(
+                &zk_data,
+                &mask_commits,
+                ell_zk,
+                folding_factor,
+                pow_bits,
+                &mut verifier_challenger,
+            );
+
+            let mut tampered_v_challenger = MyChallenger::new(perm);
+            let mut tampered_verifier =
+                build_verifier_for_single_column(n_vars, LayoutStrategy::new(true, VariableOrder::Suffix));
+            for &e in &replay_evals {
+                tampered_verifier.add_virtual_eval(e, &mut tampered_v_challenger);
+            }
+
+            let tampered = tampered_verifier.into_sumcheck::<MyMmcs, _>(
+                &tampered_zk_data,
+                &mask_commits,
+                ell_zk,
+                folding_factor,
+                pow_bits,
+                &mut tampered_v_challenger,
+            );
+
+            prop_assert!(honest.is_ok());
+            prop_assert!(tampered.is_ok());
+            let (_, honest_target) = honest.unwrap();
+            let (_, tampered_target) = tampered.unwrap();
+            prop_assert_ne!(honest_target, tampered_target);
         }
     }
 }

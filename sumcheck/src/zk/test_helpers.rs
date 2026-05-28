@@ -15,8 +15,11 @@ use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
-use crate::layout::{Layout, PrefixProver, Table, TableShape, Witness};
-use crate::zk::{ZkPrefixProver, ZkSumcheckData, ZkVerifier};
+use crate::layout::{
+    Layout, LayoutStrategy, PrefixProver, SuffixProver, Table, TableShape, Witness,
+};
+use crate::strategy::VariableOrder;
+use crate::zk::{ZkPrefixProver, ZkSuffixProver, ZkSumcheckData, ZkVerifier};
 
 /// Base field used across the test suite.
 pub type F = BabyBear;
@@ -47,6 +50,11 @@ pub type MyEnc = ReedSolomonZkEncoding<F, MyDft>;
 /// - Sumcheck itself opens zero positions, so any `t >= 0` is sound.
 /// - `t = 2` keeps the codeword small (cheap setup) and still covers one even + one odd slot for downstream composition tests.
 pub const T: usize = 2;
+
+/// Strategy used by the current HVZK tests: selector reversal paired with prefix binding.
+pub const PREFIX_ZK_STRATEGY: LayoutStrategy = LayoutStrategy::new(true, VariableOrder::Prefix);
+/// Strategy used by the suffix HVZK tests: selector reversal paired with suffix binding.
+pub const SUFFIX_ZK_STRATEGY: LayoutStrategy = LayoutStrategy::new(true, VariableOrder::Suffix);
 
 /// Builds the per-test setup triple from a single seed.
 ///
@@ -83,14 +91,22 @@ pub fn make_setup(seed: u64, ell_zk: usize) -> (Perm, MyMmcs, MyEnc) {
     (perm, mmcs, encoding)
 }
 
-/// Builds a prover and matching verifier on the same witness.
+/// Builds a verifier registered for a single-column table under the given layout strategy.
+pub fn build_verifier_for_single_column(
+    n_vars: usize,
+    strategy: LayoutStrategy,
+) -> ZkVerifier<F, EF> {
+    ZkVerifier::<F, EF>::with_strategy(&[TableShape::new(n_vars, 1)], strategy)
+}
+
+/// Builds a prefix prover and matching verifier on the same witness.
 ///
 /// # Returns
 ///
 /// - HVZK prover wrapping a freshly built prefix-binding inner prover.
 /// - Verifier registered with the matching table shape.
 /// - The polynomial's variable count, useful for downstream shape checks.
-pub fn build_prover_verifier(
+pub fn build_prefix_prover_verifier(
     evals: Vec<F>,
     folding_factor: usize,
     encoding: MyEnc,
@@ -117,8 +133,107 @@ pub fn build_prover_verifier(
     let prover = ZkPrefixProver::new(inner, encoding, mmcs);
 
     // Verifier registered with the matching table shape (keeps claim recording in sync).
-    let verifier = ZkVerifier::<F, EF>::new(&[TableShape::new(n_vars, 1)]);
+    let verifier = build_verifier_for_single_column(n_vars, PREFIX_ZK_STRATEGY);
     (prover, verifier, n_vars)
+}
+
+/// Builds a suffix prover and matching verifier on the same witness.
+pub fn build_suffix_prover_verifier(
+    evals: Vec<F>,
+    folding_factor: usize,
+    encoding: MyEnc,
+    mmcs: MyMmcs,
+) -> (
+    ZkSuffixProver<F, EF, MyEnc, MyMmcs>,
+    ZkVerifier<F, EF>,
+    usize,
+) {
+    let n_vars = p3_util::log2_strict_usize(evals.len());
+
+    let poly = Poly::new(evals);
+    let table = Table::new(vec![poly]);
+
+    let witness: Witness<F> = SuffixProver::<F, EF>::new_witness(vec![table], folding_factor);
+
+    let inner = SuffixProver::<F, EF>::from_witness(witness);
+    let prover = ZkSuffixProver::new(inner, encoding, mmcs);
+
+    let verifier = build_verifier_for_single_column(n_vars, SUFFIX_ZK_STRATEGY);
+    (prover, verifier, n_vars)
+}
+
+/// Backward-compatible alias for the current prefix-only helper.
+pub fn build_prover_verifier(
+    evals: Vec<F>,
+    folding_factor: usize,
+    encoding: MyEnc,
+    mmcs: MyMmcs,
+) -> (
+    ZkPrefixProver<F, EF, MyEnc, MyMmcs>,
+    ZkVerifier<F, EF>,
+    usize,
+) {
+    build_prefix_prover_verifier(evals, folding_factor, encoding, mmcs)
+}
+
+/// End-to-end honest suffix prover -- verifier driver.
+pub fn run_suffix_roundtrip(
+    n_vars: usize,
+    folding_factor: usize,
+    ell_zk: usize,
+    num_concrete: usize,
+    num_virtual: usize,
+    seed: u64,
+) -> Result<(), &'static str> {
+    let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
+
+    let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
+    let evals: Vec<F> = (0..(1usize << n_vars)).map(|_| data_rng.random()).collect();
+
+    let (mut prover, mut verifier, _n_vars) =
+        build_suffix_prover_verifier(evals, folding_factor, encoding, mmcs);
+
+    let mut prover_challenger = MyChallenger::new(perm.clone());
+    let mut verifier_challenger = MyChallenger::new(perm);
+
+    for _ in 0..num_concrete {
+        let openings = prover.eval(0, &[0], &mut prover_challenger);
+        verifier.add_claim(0, &[0], &openings, &mut verifier_challenger);
+    }
+
+    for _ in 0..num_virtual {
+        let eval = prover.add_virtual_eval(&mut prover_challenger);
+        verifier.add_virtual_eval(eval, &mut verifier_challenger);
+    }
+
+    let pow_bits = 4;
+    let mut zk_data = ZkSumcheckData::<F, EF>::default();
+    let mut prover_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+    let (_residual_prover, prover_randomness, mask_oracles) = prover.into_sumcheck(
+        &mut zk_data,
+        pow_bits,
+        &mut prover_challenger,
+        &mut prover_rng,
+    );
+
+    let mask_commits: Vec<_> = mask_oracles.iter().map(|(c, _)| c.clone()).collect();
+
+    let (verifier_point, _final_target) = verifier
+        .into_sumcheck::<MyMmcs, _>(
+            &zk_data,
+            &mask_commits,
+            ell_zk,
+            folding_factor,
+            pow_bits,
+            &mut verifier_challenger,
+        )
+        .map_err(|_| "verifier rejected honest prover output")?;
+
+    if prover_randomness != verifier_point {
+        return Err("prover/verifier randomness mismatch");
+    }
+
+    Ok(())
 }
 
 /// End-to-end honest prover -- verifier driver.

@@ -12,7 +12,7 @@ use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::sumcheck::SumcheckData;
 use p3_whir::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_whir::sumcheck::strategy::sumcheck_coefficients_prefix;
-use p3_whir::sumcheck::zk::{ZkPrefixProver, ZkSumcheckData};
+use p3_whir::sumcheck::zk::{ZkPrefixProver, ZkSuffixProver, ZkSumcheckData};
 use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -140,6 +140,26 @@ fn setup_zk(
     (prover, challenger, rng)
 }
 
+fn setup_zk_suffix(
+    table: &Table<F>,
+    folding: usize,
+    encoding: &MaskEnc,
+    mmcs: &MaskMmcs,
+) -> (
+    ZkSuffixProver<F, EF, MaskEnc, MaskMmcs>,
+    Challenger,
+    SmallRng,
+) {
+    let witness = SuffixProver::<F, EF>::new_witness(vec![table.clone()], folding);
+    let inner = SuffixProver::<F, EF>::from_witness(witness);
+    let mut prover = ZkSuffixProver::new(inner, encoding.clone(), mmcs.clone());
+    let mut challenger = make_challenger();
+    let evals = prover.eval(0, &[0], &mut challenger);
+    assert_eq!(evals.len(), 1);
+    let rng = SmallRng::seed_from_u64(0xbeef);
+    (prover, challenger, rng)
+}
+
 fn run_sumcheck<L: Layout<F, EF>>(prover: L, challenger: &mut Challenger, folding: usize) {
     let mut data = SumcheckData::default();
     let (residual, randomness) = prover.into_sumcheck(&mut data, 0, challenger);
@@ -151,6 +171,20 @@ fn run_sumcheck<L: Layout<F, EF>>(prover: L, challenger: &mut Challenger, foldin
 
 fn run_zk_sumcheck(
     prover: ZkPrefixProver<F, EF, MaskEnc, MaskMmcs>,
+    challenger: &mut Challenger,
+    rng: &mut SmallRng,
+    folding: usize,
+) {
+    let mut data = ZkSumcheckData::<F, EF>::default();
+    let (residual, randomness, mask_oracles) = prover.into_sumcheck(&mut data, 0, challenger, rng);
+    assert_eq!(data.round_coefficients.len(), folding);
+    assert_eq!(randomness.num_variables(), folding);
+    assert!(residual.num_variables() > 0);
+    black_box((data, residual, randomness, mask_oracles));
+}
+
+fn run_zk_suffix_sumcheck(
+    prover: ZkSuffixProver<F, EF, MaskEnc, MaskMmcs>,
     challenger: &mut Challenger,
     rng: &mut SmallRng,
     folding: usize,
@@ -203,6 +237,16 @@ fn bench_sumcheck_prover(c: &mut Criterion) {
                 || setup_zk(table, folding, &zk_encoding, &zk_mmcs),
                 |(prover, mut challenger, mut rng)| {
                     run_zk_sumcheck(prover, &mut challenger, &mut rng, folding);
+                },
+                BatchSize::SmallInput,
+            );
+        });
+
+        group.bench_with_input(BenchmarkId::new("zk_suffix", label), &table, |b, table| {
+            b.iter_batched(
+                || setup_zk_suffix(table, folding, &zk_encoding, &zk_mmcs),
+                |(prover, mut challenger, mut rng)| {
+                    run_zk_suffix_sumcheck(prover, &mut challenger, &mut rng, folding);
                 },
                 BatchSize::SmallInput,
             );
