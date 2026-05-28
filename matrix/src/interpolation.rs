@@ -86,6 +86,28 @@ fn interpolation_scaling_factor<F: TwoAdicField, EF: ExtensionField<F>>(
     point * (z_pow_n - g_pow_n) * denom_inv
 }
 
+fn interpolate_coset_base_point<F: TwoAdicField, M: Matrix<F> + ?Sized>(
+    matrix: &M,
+    shift: F,
+    point: F,
+    log_height: usize,
+    coset: &[F],
+) -> Vec<F> {
+    let diffs: Vec<F> = coset.par_iter().map(|&g| point - g).collect();
+
+    if let Some(i) = diffs.iter().position(|d| d.is_zero()) {
+        return matrix.row(i).unwrap().into_iter().collect();
+    }
+
+    let scaling_factor = interpolation_scaling_factor(shift, point, log_height);
+    let scaled_diff_invs = batch_multiplicative_inverse_scaled(&diffs, scaling_factor);
+    let scaled_point_inv = scaling_factor * point.inverse();
+    let scaled_adjusted =
+        compute_adjusted_weights_with_point_inv(scaled_point_inv, &scaled_diff_invs);
+
+    matrix.columnwise_dot_product(&scaled_adjusted)
+}
+
 /// Barycentric Lagrange interpolation over two-adic cosets.
 ///
 /// Blanket-implemented for every matrix over a two-adic field.
@@ -123,22 +145,7 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
             .collect();
 
         if let Some(point_base) = <EF as ExtensionField<F>>::as_base(&point) {
-            // Base-field points can stay on the cheaper F-weight path all the way
-            // through the SIMD dot product, then lift the final column results back into EF.
-            let diffs: Vec<F> = coset.par_iter().map(|&g| point_base - g).collect();
-
-            if let Some(i) = diffs.iter().position(|d| d.is_zero()) {
-                return self.row(i).unwrap().into_iter().map(EF::from).collect();
-            }
-
-            let scaling_factor = interpolation_scaling_factor(shift, point_base, log_height);
-            let scaled_diff_invs = batch_multiplicative_inverse_scaled(&diffs, scaling_factor);
-            let scaled_point_inv = scaling_factor * point_base.inverse();
-            let scaled_adjusted =
-                compute_adjusted_weights_with_point_inv(scaled_point_inv, &scaled_diff_invs);
-
-            return self
-                .columnwise_dot_product(&scaled_adjusted)
+            return interpolate_coset_base_point(self, shift, point_base, log_height, &coset)
                 .into_iter()
                 .map(EF::from)
                 .collect();
