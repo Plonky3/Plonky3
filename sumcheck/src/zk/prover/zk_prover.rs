@@ -289,18 +289,11 @@ where
                 plain_c_inf += alpha_i * dot(&vc.data[round_idx][1]);
             }
 
-            // Recover c_1 from the plain affine identity:
-            //
-            //     plain_h(0) + plain_h(1) = plain_sum
-            //     => c_1 = plain_sum - 2 c_0 - c_inf
-            let plain_c1 = plain_sum - plain_c0.double() - plain_c_inf;
-            // s_j_endpoints is consumed by the assembly helper via the mask
-            // vector; tag it as used so the decrement above stays linked to
-            // its derivation.
-            let _ = s_j_endpoints;
-
             // Assemble h_j; see the round module for the formula and the
             // in-place affine-consistency cross-check.
+            //
+            // The linear coefficient is not passed: it is dropped from the wire
+            // and reconstructed by the verifier from the affine identity.
             let h = round_ctx.assemble(
                 RoundState {
                     j,
@@ -310,7 +303,6 @@ where
                 },
                 PlainPiece {
                     c0: plain_c0,
-                    c1: plain_c1,
                     c_inf: plain_c_inf,
                 },
             );

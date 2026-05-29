@@ -6,7 +6,7 @@
 
 use alloc::vec::Vec;
 
-use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
+use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
@@ -47,7 +47,7 @@ where
     Enc: ZkEncoding<F>,
     Enc::Codeword: Matrix<F>,
     M: Mmcs<F>,
-    Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
+    Ch: CanObserve<M::Commitment>,
     R: Rng,
 {
     // One uniform sample per round, drawn through the encoding so the message
@@ -107,6 +107,10 @@ where
         .sum();
 
     // Leading coefficient of the closed form.
+    //
+    // Guard the exponent: `k = 0` would underflow `k - 1` (usize) into a huge exponent.
+    // The caller already enforces one round, so this is a local sanity net.
+    debug_assert!(k >= 1, "auxiliary target requires at least one round");
     let two_to_k_minus_1 = F::TWO.exp_u64((k - 1) as u64);
     let mu_tilde: F = two_to_k_minus_1 * sum_endpoints_init;
 
