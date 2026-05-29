@@ -148,12 +148,15 @@ where
             )?;
 
             // Verify STIR in-domain challenges against the previous commitment.
+            let current_folding_randomness = round_folding_randomness
+                .last()
+                .ok_or(VerifierError::MissingFoldingRandomness { round: round_index })?;
             let stir_statement = self.verify_stir_challenges(
                 proof,
                 challenger,
                 round_params,
                 &prev_commitment,
-                round_folding_randomness.last().unwrap(),
+                current_folding_randomness,
                 round_index,
             )?;
 
@@ -180,15 +183,29 @@ where
             .final_poly
             .clone()
             .ok_or(VerifierError::MissingFinalPoly)?;
+        let final_round_config = self.final_round_config();
+        let expected_final_poly_len = 1usize << final_round_config.num_variables;
+        let actual_final_poly_len = final_evaluations.num_evals();
+        if actual_final_poly_len != expected_final_poly_len {
+            return Err(VerifierError::FinalPolyLengthMismatch {
+                expected: expected_final_poly_len,
+                actual: actual_final_poly_len,
+            });
+        }
         challenger.observe_algebra_slice(final_evaluations.as_slice());
 
         // Verify final STIR challenges.
+        let final_round_folding_randomness = round_folding_randomness.last().ok_or_else(|| {
+            VerifierError::MissingFoldingRandomness {
+                round: self.n_rounds(),
+            }
+        })?;
         let stir_statement = self.verify_stir_challenges(
             proof,
             challenger,
-            &self.final_round_config(),
+            &final_round_config,
             &prev_commitment,
-            round_folding_randomness.last().unwrap(),
+            final_round_folding_randomness,
             self.n_rounds(),
         )?;
 

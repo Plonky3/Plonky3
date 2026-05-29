@@ -24,7 +24,7 @@ use tracing::instrument;
 /// Leaf matrices may have arbitrary heights as long as any two heights
 /// that round **up** to the same power-of-two are equal.
 ///
-/// Use [`root`] to fetch the final digest once the tree is built.
+/// Use [`Self::root`] to fetch the final digest once the tree is built.
 ///
 /// This generally shouldn't be used directly. If you're using a Merkle tree as an MMCS,
 /// see `MerkleTreeMmcs`.

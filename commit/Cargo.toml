@@ -9,6 +9,10 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+default = ["test-utils"]
+test-utils = ["p3-challenger", "p3-dft"]
+
 [dependencies]
 p3-field.workspace = true
 p3-matrix.workspace = true
@@ -25,10 +29,6 @@ p3-dft = { workspace = true, optional = true }
 [dev-dependencies]
 p3-challenger = { path = "../challenger" }
 p3-dft = { path = "../dft" }
-
-[features]
-default = ["test-utils"]
-test-utils = ["p3-challenger", "p3-dft"]
 
 [lints]
 workspace = true

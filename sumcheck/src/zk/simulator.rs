@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, HornerIter};
 use p3_matrix::Matrix;
 use p3_multilinear_util::point::Point;
 use p3_zk_codes::ZkEncoding;
@@ -187,11 +187,7 @@ where
         coeffs.push(c0);
         coeffs.push(c1);
         coeffs.extend_from_slice(&wire[1..]);
-        target = coeffs
-            .iter()
-            .rev()
-            .copied()
-            .fold(EF::ZERO, |acc, c| acc * gamma_j + c);
+        target = coeffs.iter().copied().horner(gamma_j);
 
         // Record wire and challenge.
         zk_data.round_coefficients.push(wire);

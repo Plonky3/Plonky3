@@ -74,6 +74,7 @@ jobs:
         run: |
           cargo build --verbose --target ${{ env.target }} -p p3-air
           cargo build --verbose --target ${{ env.target }} -p p3-baby-bear
+          cargo build --verbose --target ${{ env.target }} -p p3-batch-stark
           cargo build --verbose --target ${{ env.target }} -p p3-blake3
           cargo build --verbose --target ${{ env.target }} -p p3-blake3-air
           cargo build --verbose --target ${{ env.target }} -p p3-bn254
@@ -88,21 +89,28 @@ jobs:
           cargo build --verbose --target ${{ env.target }} -p p3-keccak
           cargo build --verbose --target ${{ env.target }} -p p3-keccak-air
           cargo build --verbose --target ${{ env.target }} -p p3-koala-bear
+          cargo build --verbose --target ${{ env.target }} -p p3-lookup
           cargo build --verbose --target ${{ env.target }} -p p3-matrix
           cargo build --verbose --target ${{ env.target }} -p p3-maybe-rayon
           cargo build --verbose --target ${{ env.target }} -p p3-mds
           cargo build --verbose --target ${{ env.target }} -p p3-merkle-tree
           cargo build --verbose --target ${{ env.target }} -p p3-mersenne-31
           cargo build --verbose --target ${{ env.target }} -p p3-monolith
+          cargo build --verbose --target ${{ env.target }} -p p3-monolith-air
           cargo build --verbose --target ${{ env.target }} -p p3-monty-31
+          cargo build --verbose --target ${{ env.target }} -p p3-multilinear-util
           cargo build --verbose --target ${{ env.target }} -p p3-poseidon1
+          cargo build --verbose --target ${{ env.target }} -p p3-poseidon1-air
           cargo build --verbose --target ${{ env.target }} -p p3-poseidon2
           cargo build --verbose --target ${{ env.target }} -p p3-poseidon2-air
           cargo build --verbose --target ${{ env.target }} -p p3-rescue
           cargo build --verbose --target ${{ env.target }} -p p3-sha256
+          cargo build --verbose --target ${{ env.target }} -p p3-sumcheck
           cargo build --verbose --target ${{ env.target }} -p p3-symmetric
           cargo build --verbose --target ${{ env.target }} -p p3-uni-stark
           cargo build --verbose --target ${{ env.target }} -p p3-util
+          cargo build --verbose --target ${{ env.target }} -p p3-whir
+          cargo build --verbose --target ${{ env.target }} -p p3-zk-codes
 
   check_wasm32_simd128:
     name: Test wasm32 simd128
@@ -153,16 +161,26 @@ jobs:
         with:
           components: rustfmt
 
-      - name: Install cargo-sort
-        run: cargo install cargo-sort
+      - name: Install cargo-sort and taplo
+        run: |
+          cargo install cargo-sort
+          cargo install taplo-cli
 
       - uses: Swatinem/rust-cache@v2
-        
+
       - name: Sort Cargo.toml
         run: cargo +stable sort --workspace --grouped --check
 
+      - name: Check TOML formatting
+        run: taplo fmt --check
+
       - name: Clippy
         run: cargo +stable clippy --all-targets -- -D warnings
+
+      - name: Docs
+        env:
+          RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links
+        run: cargo +stable doc --no-deps --workspace --document-private-items
 
       - name: Format
         run: cargo +nightly fmt --all -- --check

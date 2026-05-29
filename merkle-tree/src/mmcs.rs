@@ -1,5 +1,5 @@
 //! A MerkleTreeMmcs is a generalization of the standard MerkleTree commitment scheme which supports
-//! committing to several matrices of different dimensions.
+//! committing to several matrices of different dimensions, with arbitrary arity N (binary by default).
 //!
 //! Say we wish to commit to 2 matrices M and N with dimensions (8, i) and (2, j) respectively.
 //! Let H denote the hash function and C the compression function for our tree.
@@ -81,10 +81,6 @@ pub enum MerkleTreeError {
     #[error("wrong batch size: number of openings does not match expected")]
     WrongBatchSize,
 
-    /// A matrix has a different width than expected.
-    #[error("wrong width: matrix has a different width than expected")]
-    WrongWidth,
-
     /// The number of proof nodes does not match the expected tree height.
     #[error("wrong height: expected {expected_proof_len} siblings, got {num_siblings}")]
     WrongHeight {
@@ -115,15 +111,6 @@ pub enum MerkleTreeError {
     /// The computed Merkle digest does not match any entry in the cap.
     #[error("cap mismatch: computed digest does not match any entry in the Merkle cap")]
     CapMismatch,
-
-    /// The cap height is too large for the tree.
-    #[error("cap height {cap_height} exceeds tree depth {tree_depth}")]
-    WrongCapHeight {
-        /// The configured cap height.
-        cap_height: usize,
-        /// The actual tree depth.
-        tree_depth: usize,
-    },
 
     /// A pruned batch opening could not be restored (malformed proof).
     #[error("malformed pruned proof: cannot restore full authentication paths")]

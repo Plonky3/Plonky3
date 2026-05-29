@@ -54,7 +54,14 @@ where
             .commitment
             .clone()
             .ok_or(VerifierError::MissingRoundCommitment { round: round_index })?;
-        let ood_answers = round_proof.ood_answers.clone();
+        let ood_answers = &round_proof.ood_answers;
+        if ood_answers.len() != ood_samples {
+            return Err(VerifierError::RoundOodAnswerCountMismatch {
+                round: round_index,
+                expected: ood_samples,
+                actual: ood_answers.len(),
+            });
+        }
 
         // Observe the Merkle root in the transcript.
         challenger.observe(root.clone());

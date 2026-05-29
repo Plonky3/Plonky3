@@ -9,6 +9,9 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
 [dependencies]
 hashbrown.workspace = true
 itertools.workspace = true
@@ -38,15 +41,17 @@ p3-sumcheck = { workspace = true, features = ["test-util"] }
 
 clap.workspace = true
 criterion.workspace = true
+postcard = { workspace = true, features = ["alloc"] }
 proptest.workspace = true
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
-[features]
-parallel = ["p3-maybe-rayon/parallel"]
-
 [[bench]]
 name = "sumcheck"
+harness = false
+
+[[bench]]
+name = "whir_pcs"
 harness = false
 
 [[example]]

@@ -209,7 +209,7 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         // Virtual claims: continue the alpha sequence right after the concrete ones.
         sum += dot_product::<EF, _, _>(
             self.virtual_claims.iter().map(VerifierVirtualClaim::eval),
-            alpha.powers().skip(self.num_claims()),
+            alpha.shifted_powers(alpha.exp_u64(self.num_claims() as u64)),
         );
 
         sum

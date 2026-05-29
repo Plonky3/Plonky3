@@ -17,8 +17,24 @@ use crate::split_eq::SplitEq;
 
 pub(crate) const PARALLEL_THRESHOLD: usize = 4096;
 
-/// Number of variables at which we switch from recursive to chunk-based MLE evaluation.
-const MLE_RECURSION_THRESHOLD: usize = 10;
+/// Number of variables at which we switch from recursive scalar evaluation to the
+/// SIMD-packed `SplitEq` path.
+///
+/// Crossover depends on the base-field byte width (smaller base ⇒ wider packing
+/// ⇒ `SplitEq` wins earlier), measured on aarch64 (NEON) and x86-64 (AVX2):
+///
+/// - 4-byte bases (BabyBear, KoalaBear, Mersenne31): `SplitEq` wins from n=9.
+/// - 8-byte bases (Goldilocks): recursive still wins at n=9, crosses at n=10.
+///
+/// Wider bases (e.g. BN254) keep the default 10.
+#[inline]
+const fn mle_recursion_threshold<B>() -> usize {
+    if core::mem::size_of::<B>() <= 4 {
+        9
+    } else {
+        10
+    }
+}
 
 /// Returns a vector of uninitialized elements of type `A` with the specified length.
 ///
@@ -315,7 +331,7 @@ impl<F: Field> Poly<F> {
     #[must_use]
     #[inline]
     pub fn eval_base<EF: ExtensionField<F>>(&self, point: &Point<EF>) -> EF {
-        if point.num_variables() < MLE_RECURSION_THRESHOLD {
+        if point.num_variables() < mle_recursion_threshold::<F>() {
             eval_multilinear_recursive(&self.0, point.as_slice())
         } else {
             SplitEq::new_packed(point, EF::ONE).eval_base(self)
@@ -338,7 +354,7 @@ impl<F: Field> Poly<F> {
     where
         F: ExtensionField<BaseField>,
     {
-        if point.num_variables() < MLE_RECURSION_THRESHOLD {
+        if point.num_variables() < mle_recursion_threshold::<BaseField>() {
             eval_multilinear_recursive(&self.0, point.as_slice())
         } else {
             SplitEq::new_packed(point, F::ONE).eval_ext(self)
@@ -703,24 +719,12 @@ where
             // Split the evaluations into two halves, corresponding to the first variable being 0 or 1.
             let (f0, f1) = evals.split_at(evals.len() / 2);
 
-            // Recursively evaluate on the two smaller hypercubes.
-            let (f0_eval, f1_eval) = {
-                // Only spawn parallel tasks if the subproblem is large enough to overcome
-                // the overhead of threading.
-                let work_size: usize = (1 << 15) / core::mem::size_of::<F>();
-                if evals.len() > work_size {
-                    join(
-                        || eval_multilinear_recursive(f0, sub_point),
-                        || eval_multilinear_recursive(f1, sub_point),
-                    )
-                } else {
-                    // For smaller subproblems, execute sequentially.
-                    (
-                        eval_multilinear_recursive(f0, sub_point),
-                        eval_multilinear_recursive(f1, sub_point),
-                    )
-                }
-            };
+            // Sequential recurse: callers gate this function with `num_variables <
+            // mle_recursion_threshold`, so `evals.len()` is always small enough that
+            // Rayon `join` overhead would dominate.
+            let f0_eval = eval_multilinear_recursive(f0, sub_point);
+            let f1_eval = eval_multilinear_recursive(f1, sub_point);
+
             // Perform the final linear interpolation for the first variable `x`.
             f0_eval + (f1_eval - f0_eval) * *x
         }

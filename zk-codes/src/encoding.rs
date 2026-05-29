@@ -15,16 +15,9 @@ pub trait ZkEncoding<F: Field> {
     fn randomness_len(&self) -> usize;
 
     /// The maximum number of queries that can be perfectly simulated.
-    ///
-    /// - The default is correct for Reed-Solomon;
-    /// - Other encodings should override.
-    fn query_bound(&self) -> usize {
-        self.randomness_len()
-    }
+    fn query_bound(&self) -> usize;
 
     /// Statistical simulation error:
-    /// - `0` for Reed-Solomon,
-    /// - Otherwise an upper bound.
     fn error(&self) -> f64;
 
     /// Samples a uniformly random message from this encoding's message space.

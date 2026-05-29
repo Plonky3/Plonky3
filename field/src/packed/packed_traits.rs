@@ -481,7 +481,7 @@ pub trait PackedFieldExtension<
     }
 
     /// Convert an iterator of packed extension field elements to an iterator of
-    /// extension field elements (flat — one [`ExtField`] per lane per packed value).
+    /// extension field elements (flat — one `ExtField` per lane per packed value).
     #[inline]
     #[must_use]
     fn to_ext_iter(iter: impl IntoIterator<Item = Self>) -> impl Iterator<Item = ExtField> {

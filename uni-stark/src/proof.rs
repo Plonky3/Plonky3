@@ -30,14 +30,14 @@ impl<SC: StarkGenericConfig> Proof<SC> {
     /// This is a parameter-space property and does not depend on `self`; the method
     /// is exposed on [`Proof`] for parity with [`Self::proven_security`].
     ///
-    /// See [`ConjecturedSecurity`](crate::security::ConjecturedSecurity).
+    /// See [`ConjecturedSecurity`].
     pub fn conjectured_security(params: &StarkSecurityParams) -> ConjecturedSecurity {
         ConjecturedSecurity::compute_from_params(params)
     }
 
     /// Proven security level (in bits).
     ///
-    /// See [`ProvenSecurity`](crate::security::ProvenSecurity).
+    /// See [`ProvenSecurity`].
     pub fn proven_security(&self, params: &StarkSecurityParams) -> ProvenSecurity {
         ProvenSecurity::compute_from_proof(self.degree_bits, params)
     }

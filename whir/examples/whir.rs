@@ -81,13 +81,17 @@ struct Args {
     #[arg(short = 'k', long = "fold", default_value = "5")]
     folding_factor: usize,
 
+    /// Explicit comma-separated folding factors, including initial and final folds.
+    #[arg(long = "folding-factors", value_delimiter = ',')]
+    folding_factors: Vec<usize>,
+
     /// Soundness assumption: UniqueDecoding, JohnsonBound, or CapacityBound.
     #[arg(long = "sec", default_value = "CapacityBound")]
     soundness_type: SecurityAssumption,
 
-    /// Initial Reed-Solomon domain reduction factor before the first fold.
-    #[arg(long = "initial-rs-reduction", default_value = "3")]
-    rs_domain_initial_reduction_factor: usize,
+    /// Explicit comma-separated log-inverse rates for intermediate codewords.
+    #[arg(long = "round-log-inv-rates", value_delimiter = ',')]
+    round_log_inv_rates: Vec<usize>,
 }
 
 fn main() {
@@ -115,7 +119,11 @@ fn main() {
     let pow_bits = args.pow_bits.unwrap();
     let num_variables = args.num_variables;
     let starting_rate = args.rate;
-    let folding_factor = FoldingFactor::Constant(args.folding_factor);
+    let folding_factor = if args.folding_factors.is_empty() {
+        FoldingFactor::Constant(args.folding_factor)
+    } else {
+        FoldingFactor::PerRound(args.folding_factors)
+    };
     let soundness_type = args.soundness_type;
     let num_evaluations = args.num_evaluations;
 
@@ -129,15 +137,26 @@ fn main() {
     let merkle_compress = MerkleCompress::new(poseidon16.clone());
     let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
 
-    let rs_domain_initial_reduction_factor = args.rs_domain_initial_reduction_factor;
+    let round_log_inv_rates = if args.round_log_inv_rates.is_empty() {
+        let (num_rounds, _) = folding_factor.compute_number_of_rounds(num_variables);
+        let mut rates = Vec::with_capacity(num_rounds);
+        let mut rate = starting_rate;
+        for round in 0..num_rounds {
+            rate += folding_factor.at_round(round) - 1;
+            rates.push(rate);
+        }
+        rates
+    } else {
+        args.round_log_inv_rates
+    };
     // Assemble the WHIR protocol parameters.
     let whir_params = ProtocolParameters {
         security_level,
         pow_bits,
-        folding_factor,
+        folding_factor: folding_factor.clone(),
         soundness_type,
         starting_log_inv_rate: starting_rate,
-        rs_domain_initial_reduction_factor,
+        round_log_inv_rates,
     };
 
     info!(
@@ -196,6 +215,14 @@ fn main() {
         &mut prover_challenger,
     );
     let opening_time = time.elapsed();
+    // Why this is an upper bound, not the optimal wire size:
+    //   - Postcard encodes integers as LEB128 varints.
+    //   - A field element near 2^31 takes 5 bytes on the wire.
+    //   - A fixed-int encoder would emit 4 bytes for the same value.
+    let proof_size_kib = postcard::to_allocvec(&proof)
+        .expect("proof serialization failed")
+        .len() as f64
+        / 1024.0;
 
     // Verifier: independent transcript from the same domain separator.
     let mut verifier_challenger = challenger;
@@ -222,6 +249,7 @@ fn main() {
         commit_ms = commit_time.as_millis(),
         opening_ms = opening_time.as_millis(),
         verification_us = verify_time.as_micros(),
+        proof_size_kib,
         "done"
     );
 }

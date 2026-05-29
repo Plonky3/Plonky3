@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
-use p3_field::{ExtensionField, Field, TwoAdicField, dot_product};
+use p3_field::{ExtensionField, Field, HornerIter, TwoAdicField, dot_product};
 use p3_matrix::Matrix;
 use p3_multilinear_util::point::Point;
 use p3_zk_codes::ZkEncoding;
@@ -333,11 +333,7 @@ where
             let gamma_j: EF = challenger.sample_algebra_element();
 
             // Cache s_j(gamma_j) via Horner for the past-mask term in future rounds.
-            let s_j_at_gamma_j: EF = s_j
-                .iter()
-                .rev()
-                .copied()
-                .fold(EF::ZERO, |acc, c| acc * gamma_j + c);
+            let s_j_at_gamma_j: EF = s_j.iter().copied().horner(gamma_j);
             mask_evals_at_gamma.push(s_j_at_gamma_j);
 
             // Advance the plain sumcheck claim via quadratic extrapolation through (0, 1, inf).

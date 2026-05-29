@@ -124,6 +124,10 @@ where
         (0..self.msg_len).map(|_| rng.random()).collect()
     }
 
+    fn query_bound(&self) -> usize {
+        self.t
+    }
+
     fn encode<R: Rng>(&self, msg: &[F], rng: &mut R) -> Self::Codeword {
         let randomness: Vec<F> = (0..self.t).map(|_| rng.random()).collect();
         self.encode_with_randomness(msg, &randomness)

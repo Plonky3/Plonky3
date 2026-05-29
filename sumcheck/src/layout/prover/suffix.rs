@@ -385,7 +385,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
             for (vc, alpha_i) in self
                 .virtual_claims
                 .iter()
-                .zip(alpha.powers().skip(n_claims))
+                .zip(alpha.shifted_powers(alpha.exp_u64(n_claims as u64)))
             {
                 let vc_accs = &vc.data;
                 c0 += alpha_i
@@ -482,7 +482,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
         // Virtual claims continue the alpha sequence right after the concrete ones.
         sum += dot_product::<EF, _, _>(
             self.virtual_claims.iter().map(Claim::eval),
-            alpha.powers().skip(self.num_claims()),
+            alpha.shifted_powers(alpha.exp_u64(self.num_claims() as u64)),
         );
 
         sum
