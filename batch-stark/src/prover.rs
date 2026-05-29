@@ -314,8 +314,9 @@ where
         &lookup_data,
     );
 
-    // Borrow only the permutation prover data (not the commitment) so the
-    // parallel closure below stays free of the `Commitment: Sync` requirement.
+    // Capture only the permutation prover data;
+    //
+    // The commitment isn't read in the parallel closure below.
     let permutation_data = permutation_commit_and_data.as_ref().map(|(_, data)| data);
 
     // Permutation-matrix index per instance: the prefix count of prior instances
