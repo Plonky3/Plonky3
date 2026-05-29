@@ -312,7 +312,6 @@ where
                     c0: plain_c0,
                     c1: plain_c1,
                     c_inf: plain_c_inf,
-                    sum: plain_sum,
                 },
             );
 

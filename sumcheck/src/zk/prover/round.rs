@@ -93,12 +93,18 @@ where
         {
             let mult_past = self.pow2[self.k - state.j + 1];
             let s_j_endpoints = state.mask[0].double() + state.mask[1..].iter().copied().sum::<F>();
+            // Plain sumcheck sum reconstructed from the round coefficients:
+            //
+            //     plain_h(0) + plain_h(1) = 2 c_0 + c_1 + c_inf
+            //
+            // (this is the identity from which the prover derives `c_1`).
+            let plain_sum = plain.c0.double() + plain.c1 + plain.c_inf;
             // The first term is the combining challenge times the running plain sum.
             // Clippy's nursery lint flags it as if `eps * sum` should be `eps * eps`.
             // That rewrite would silently break the identity.
             #[allow(clippy::suspicious_operation_groupings)]
             let mut expected: EF =
-                self.eps * plain.sum + past_mask_sum * mult_past + mult_live * s_j_endpoints;
+                self.eps * plain_sum + past_mask_sum * mult_past + mult_live * s_j_endpoints;
             if state.j < self.k {
                 expected += mult_live * state.future_endpoints;
             }
@@ -132,7 +138,8 @@ pub(super) struct RoundState<'a, F, EF> {
 /// Plain-piece contribution at the current round.
 ///
 /// The three coefficients come from the plain sumcheck quadratic.
-/// The running sum is carried solely for the debug-only consistency check.
+/// The plain sum used by the debug-only affine consistency check is `2 c_0 + c_1 + c_inf`.
+/// That sum is reconstructed from the coefficients on the fly, so it is not carried here.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PlainPiece<EF> {
     /// Constant coefficient.
@@ -141,8 +148,6 @@ pub(super) struct PlainPiece<EF> {
     pub c1: EF,
     /// Leading coefficient.
     pub c_inf: EF,
-    /// Running plain sumcheck sum, anchored against the affine identity.
-    pub sum: EF,
 }
 
 /// Drop the linear coefficient from a round polynomial and return the wire form.
@@ -184,7 +189,6 @@ mod tests {
             c0: EF::ZERO,
             c1: EF::ZERO,
             c_inf: EF::ZERO,
-            sum: EF::ZERO,
         }
     }
 
@@ -406,7 +410,7 @@ mod tests {
         //     plain.c0    = 7
         //     plain.c1    = 11
         //     plain.c_inf = 13
-        //     plain.sum   = 2 * c_0 + c_1 + c_inf = 38
+        //     plain_sum   = 2 * c_0 + c_1 + c_inf = 38  (reconstructed in assemble)
         //     eps         = 31
         //     ell_zk      = 3  ⇒  h_size = 3
         //     mult_live   = 2^{k - j} = 1
@@ -422,7 +426,7 @@ mod tests {
         //     h(0) + h(1) = 2 * h[0] + h[1] + h[2]
         //                 = 2 * 219 + 344 + 408 = 1190
         //
-        //     eps * plain.sum + mult_live * ( s_j(0) + s_j(1) )
+        //     eps * plain_sum + mult_live * ( s_j(0) + s_j(1) )
         //                 = 31 * 38 + 1 * (2*2 + 3 + 5)
         //                 = 1178 + 12 = 1190
         let k = 1;
@@ -432,7 +436,6 @@ mod tests {
             c0: EF::from_u32(7),
             c1: EF::from_u32(11),
             c_inf: EF::from_u32(13),
-            sum: EF::from_u32(38),
         };
         let eps = EF::from_u32(31);
 
@@ -459,7 +462,8 @@ mod tests {
         // Wire identity cross-check.
         let actual_target = h[0].double() + h[1..].iter().copied().sum::<EF>();
         let live = EF::from_u32(2).double() + EF::from_u32(3) + EF::from_u32(5);
-        let expected_target = eps * plain.sum + live;
+        let plain_sum = plain.c0.double() + plain.c1 + plain.c_inf;
+        let expected_target = eps * plain_sum + live;
         assert_eq!(actual_target, expected_target);
         assert_eq!(actual_target, EF::from_u32(1190));
     }

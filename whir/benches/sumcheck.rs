@@ -12,7 +12,7 @@ use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::sumcheck::SumcheckData;
 use p3_whir::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_whir::sumcheck::strategy::sumcheck_coefficients_prefix;
-use p3_whir::sumcheck::zk::{ZkPrefixProver, ZkSumcheckData};
+use p3_whir::sumcheck::zk::{ZkLayout, ZkProver, ZkSumcheckData};
 use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
@@ -120,19 +120,18 @@ fn make_zk_setup() -> (MaskMmcs, MaskEnc) {
     (mmcs, encoding)
 }
 
-fn setup_zk(
+fn setup_zk<L>(
     table: &Table<F>,
     folding: usize,
     encoding: &MaskEnc,
     mmcs: &MaskMmcs,
-) -> (
-    ZkPrefixProver<F, EF, MaskEnc, MaskMmcs>,
-    Challenger,
-    SmallRng,
-) {
-    let witness = PrefixProver::<F, EF>::new_witness(vec![table.clone()], folding);
-    let inner = PrefixProver::<F, EF>::from_witness(witness);
-    let mut prover = ZkPrefixProver::new(inner, encoding.clone(), mmcs.clone());
+) -> (ZkProver<F, EF, MaskEnc, MaskMmcs, L>, Challenger, SmallRng)
+where
+    L: ZkLayout<F, EF>,
+{
+    let witness = L::new_witness(vec![table.clone()], folding);
+    let inner = L::from_witness(witness);
+    let mut prover = ZkProver::new(inner, encoding.clone(), mmcs.clone());
     let mut challenger = make_challenger();
     let evals = prover.eval(0, &[0], &mut challenger);
     assert_eq!(evals.len(), 1);
@@ -149,12 +148,14 @@ fn run_sumcheck<L: Layout<F, EF>>(prover: L, challenger: &mut Challenger, foldin
     black_box((data, residual, randomness));
 }
 
-fn run_zk_sumcheck(
-    prover: ZkPrefixProver<F, EF, MaskEnc, MaskMmcs>,
+fn run_zk_sumcheck<L>(
+    prover: ZkProver<F, EF, MaskEnc, MaskMmcs, L>,
     challenger: &mut Challenger,
     rng: &mut SmallRng,
     folding: usize,
-) {
+) where
+    L: ZkLayout<F, EF>,
+{
     let mut data = ZkSumcheckData::<F, EF>::default();
     let (residual, randomness, mask_oracles) = prover.into_sumcheck(&mut data, 0, challenger, rng);
     assert_eq!(data.round_coefficients.len(), folding);
@@ -166,10 +167,9 @@ fn run_zk_sumcheck(
 fn bench_sumcheck_prover(c: &mut Criterion) {
     let mut group = c.benchmark_group("whir/layout_sumcheck");
 
-    // `log20` is the issue #1586 acceptance-criterion point for the HVZK
-    // overhead bench (`2^20 rows, k = 4, λ = 100`); the criterion target is
-    // `zk / prefix ≤ 1.05×` at that label. `log14/18/22` give the scaling
-    // curve for prefix vs suffix vs zk.
+    // `log20` is the issue #1586 acceptance-criterion point for the HVZK overhead bench (2^20 rows, k = 4, lambda = 100).
+    // The criterion target is `zk_prefix / prefix <= 1.05x` at that label.
+    // `log14/18/22` give the scaling curve for prefix vs suffix vs zk_prefix vs zk_suffix.
     let cases = [
         (14, 4, "log14"),
         (18, 4, "log18"),
@@ -198,9 +198,19 @@ fn bench_sumcheck_prover(c: &mut Criterion) {
             );
         });
 
-        group.bench_with_input(BenchmarkId::new("zk", label), &table, |b, table| {
+        group.bench_with_input(BenchmarkId::new("zk_prefix", label), &table, |b, table| {
             b.iter_batched(
-                || setup_zk(table, folding, &zk_encoding, &zk_mmcs),
+                || setup_zk::<PrefixProver<F, EF>>(table, folding, &zk_encoding, &zk_mmcs),
+                |(prover, mut challenger, mut rng)| {
+                    run_zk_sumcheck(prover, &mut challenger, &mut rng, folding);
+                },
+                BatchSize::SmallInput,
+            );
+        });
+
+        group.bench_with_input(BenchmarkId::new("zk_suffix", label), &table, |b, table| {
+            b.iter_batched(
+                || setup_zk::<SuffixProver<F, EF>>(table, folding, &zk_encoding, &zk_mmcs),
                 |(prover, mut challenger, mut rng)| {
                     run_zk_sumcheck(prover, &mut challenger, &mut rng, folding);
                 },
