@@ -60,7 +60,7 @@ const MDS_FIRST_ROW_32: [u32; 32] = [
 ];
 
 /// RPO-M31 MDS: the 24x24 top-left sub-block of the 32x32 circulant defined
-/// by [`MDS_FIRST_ROW_32`].
+/// by `MDS_FIRST_ROW_32`.
 ///
 /// Not itself circulant, so applied as a dense matrix-vector product. Inputs
 /// and coefficients fit in `u32`; their products in `u64`; the row sum of 24

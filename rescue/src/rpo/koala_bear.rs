@@ -14,8 +14,8 @@ pub const RPO_KB_NUM_ROUNDS: usize = 7;
 
 /// Plonky3-internal seed (no published RPO-KoalaBear reference exists). Round
 /// constants derived from this string will not interop with any external
-/// implementation; the format mirrors the [`crate::RPO_M31_SEED`] shape (the
-/// 31-bit RPO paper, eprint 2024/1635).
+/// implementation; the format mirrors the M31 seed shape (see the 31-bit
+/// RPO paper, eprint 2024/1635).
 const RPO_KB_SEED: &str = "RPO-KB:p=2130706433,m=24,c=8,n=7";
 
 /// `ceil(log2(p) / 8) + 1` with `p = 2^31 - 2^24 + 1`.
