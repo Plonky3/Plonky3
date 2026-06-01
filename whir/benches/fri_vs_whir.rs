@@ -9,7 +9,7 @@
 //! # Substrate (matched on both sides)
 //!
 //! - Field            : KoalaBear, with quartic extension `EF`.
-//! - Merkle hash      : Poseidon1 (arithmetic, field-element digests).
+//! - Merkle hash      : swept over Poseidon1, Poseidon2 (field-element digests), Blake3 (byte digests).
 //! - Message          : `2^22` base-field elements.
 //! - Code rate        : `ρ = 2^-1` (`log_blowup = 1`).
 //! - Soundness target : 100 bits, capacity-regime conjecture.
@@ -129,11 +129,17 @@ type Dft = Radix2DFTSmallBatch<F>;
 /// Interpreted under the capacity-regime conjecture (see security framing above).
 const SECURITY_LEVEL: usize = 100;
 
-/// Proof-of-work grinding bits.
+/// Proof-of-work grinding bits, shared by both protocols.
 ///
-/// Smallest budget that lets WHIR's summed per-round PoW reach the target soundness
-/// across the full message-size sweep. Shared by both protocols.
-const POW_BITS: usize = 22;
+/// # Why this value
+///
+/// - At `m = 22`, folding factor `4`, and an initial domain reduction of `2`, the binding
+///   constraint is the last folding round.
+/// - That round needs `17` bits of grinding to reach the 100-bit target.
+/// - `18` clears the floor with one bit of slack.
+/// - Kept small so the per-iteration grind stays cheap and grinding noise does not dominate
+///   the wall-clock comparison.
+const POW_BITS: usize = 18;
 
 /// log_2 of the inverse code rate.
 ///
@@ -149,9 +155,14 @@ const WHIR_FOLDING_FACTOR: usize = 4;
 
 /// Initial WHIR domain reduction factor before the first fold.
 ///
-/// `1` halves the domain on the first round, matching the steady-state behaviour
-/// of subsequent rounds.
-const WHIR_RS_INITIAL_REDUCTION: usize = 1;
+/// # Why this value
+///
+/// - `2` shrinks the starting evaluation domain by an extra factor of two before the first fold.
+/// - It must not exceed the folding factor.
+/// - It lowers the last round's folding-PoW requirement.
+/// - That lets the protocol reach the 100-bit target with a grinding budget of `18` instead of `20`.
+/// - The cost is a few extra query openings per round.
+const WHIR_RS_INITIAL_REDUCTION: usize = 2;
 
 /// FRI folding arity log.
 ///
@@ -174,7 +185,7 @@ const FRI_QUERY_POW_BITS: usize = POW_BITS;
 /// Minimum FRI query count that reaches the target soundness under the ethSTARK conjecture.
 ///
 /// Solves `log_blowup * queries + query_pow_bits >= security_level` for `queries`.
-const FRI_NUM_QUERIES: usize = SECURITY_LEVEL.div_ceil(LOG_BLOWUP) - FRI_QUERY_POW_BITS;
+const FRI_NUM_QUERIES: usize = (SECURITY_LEVEL - FRI_QUERY_POW_BITS).div_ceil(LOG_BLOWUP);
 
 /// Common batching log for both protocols.
 ///
@@ -729,6 +740,95 @@ mod poseidon1 {
     }
 }
 
+/// Poseidon2-backed Merkle + duplex challenger.
+mod poseidon2 {
+    use p3_koala_bear::Poseidon2KoalaBear;
+
+    use super::*;
+
+    pub const NAME: &str = "poseidon2";
+
+    pub type Perm16 = Poseidon2KoalaBear<16>;
+    pub type Perm24 = Poseidon2KoalaBear<24>;
+    pub type MerkleHash = PaddingFreeSponge<Perm24, 24, 16, 8>;
+    pub type MerkleCompress = TruncatedPermutation<Perm16, 2, 8, 16>;
+    pub type PackedF = <F as Field>::Packing;
+    pub type ValMmcs = MerkleTreeMmcs<PackedF, PackedF, MerkleHash, MerkleCompress, 2, 8>;
+    pub type ChallengeMmcs = ExtensionMmcs<F, EF, ValMmcs>;
+    pub type Challenger = DuplexChallenger<F, Perm16, 16, 8>;
+
+    /// Digest element type.
+    /// For arithmetic hashes the digest lives in the base field.
+    pub type DigestW = F;
+    /// Number of base-field elements per digest.
+    pub const DIGEST_ELEMS: usize = 8;
+
+    /// Build the Merkle backend, the lifted challenge MMCS, and a base challenger.
+    pub fn build_kit() -> (Challenger, ValMmcs, ChallengeMmcs) {
+        // Unlike Poseidon1 there are no shipped constants, so draw them from a fixed seed.
+        // The fixed seed keeps the sampled round constants identical on every run.
+        let mut rng = SmallRng::seed_from_u64(BENCH_SEED);
+        // Width-16 permutation drives both 2-to-1 compression and the duplex challenger.
+        let perm16 = Perm16::new_from_rng_128(&mut rng);
+        // Width-24 permutation hashes the Merkle leaves through a padding-free sponge.
+        let perm24 = Perm24::new_from_rng_128(&mut rng);
+        // Leaf hasher: absorb a row, squeeze an 8-element field digest.
+        let merkle_hash = MerkleHash::new(perm24);
+        // Internal-node hasher: compress two child digests into one.
+        let merkle_compress = MerkleCompress::new(perm16.clone());
+        // Base-field Merkle commitment scheme over the message matrix.
+        let val_mmcs = ValMmcs::new(merkle_hash, merkle_compress, 0);
+        // Extension-field commitment scheme, reusing the base-field one for the FRI rounds.
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+        // Duplex sponge challenger seeded with the same width-16 permutation.
+        let challenger = Challenger::new(perm16);
+        (challenger, val_mmcs, challenge_mmcs)
+    }
+}
+
+/// Blake3-backed Merkle + byte-serialising challenger.
+mod blake3 {
+    use p3_blake3::Blake3;
+    use p3_challenger::{HashChallenger, SerializingChallenger32};
+    use p3_symmetric::{CompressionFunctionFromHasher, SerializingHasher};
+
+    use super::*;
+
+    pub const NAME: &str = "blake3";
+
+    /// Raw byte hash: `[u8; 32]` digests.
+    pub type ByteHash = Blake3;
+    /// Field-element hasher: serialise to bytes, then Blake3.
+    pub type FieldHash = SerializingHasher<Blake3>;
+    /// 2-to-1 compression over 32-byte digests.
+    pub type Compress = CompressionFunctionFromHasher<Blake3, 2, 32>;
+    pub type ValMmcs = MerkleTreeMmcs<F, u8, FieldHash, Compress, 2, 32>;
+    pub type ChallengeMmcs = ExtensionMmcs<F, EF, ValMmcs>;
+    pub type Challenger = SerializingChallenger32<F, HashChallenger<u8, Blake3, 32>>;
+
+    /// Digest element type.
+    /// For byte hashes the digest is a string of bytes rather than field elements.
+    pub type DigestW = u8;
+    /// Number of bytes per digest.
+    pub const DIGEST_ELEMS: usize = 32;
+
+    /// Build the Merkle backend, the lifted challenge MMCS, and a base challenger.
+    pub fn build_kit() -> (Challenger, ValMmcs, ChallengeMmcs) {
+        // Blake3 is stateless, so no RNG or round constants are needed.
+        // Leaf hasher: serialise a row to bytes, then Blake3 it into a 32-byte digest.
+        let field_hash = FieldHash::new(ByteHash {});
+        // Internal-node hasher: Blake3-compress two child digests into one.
+        let compress = Compress::new(ByteHash {});
+        // Base-field Merkle commitment scheme over the message matrix.
+        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+        // Extension-field commitment scheme, reusing the base-field one for the FRI rounds.
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+        // Byte-stream challenger: an empty Blake3 sponge feeding the Fiat-Shamir transcript.
+        let challenger = Challenger::new(HashChallenger::new(vec![], ByteHash {}));
+        (challenger, val_mmcs, challenge_mmcs)
+    }
+}
+
 /// Diagnostic table: per-phase timings and proof bytes for every (hash, m, protocol) triple.
 fn print_diagnostic_table() {
     println!();
@@ -844,6 +944,8 @@ fn print_diagnostic_table() {
     }
 
     diag_block!(poseidon1);
+    diag_block!(poseidon2);
+    diag_block!(blake3);
 
     println!();
 }
@@ -902,6 +1004,8 @@ fn bench_prove(c: &mut Criterion) {
     }
 
     prove_block!(poseidon1);
+    prove_block!(poseidon2);
+    prove_block!(blake3);
 
     group.finish();
 }
@@ -955,6 +1059,8 @@ fn bench_verify(c: &mut Criterion) {
     }
 
     verify_block!(poseidon1);
+    verify_block!(poseidon2);
+    verify_block!(blake3);
 
     group.finish();
 }

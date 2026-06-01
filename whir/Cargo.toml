@@ -31,6 +31,7 @@ tracing.workspace = true
 clap.workspace = true
 criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
+p3-blake3 = { path = "../blake3" }
 p3-fri = { path = "../fri" }
 p3-keccak = { path = "../keccak" }
 p3-koala-bear = { path = "../koala-bear" }
