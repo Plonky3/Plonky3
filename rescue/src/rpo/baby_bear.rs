@@ -12,6 +12,10 @@ pub const RPO_BB_WIDTH: usize = 24;
 pub const RPO_BB_CAPACITY: usize = 8;
 pub const RPO_BB_NUM_ROUNDS: usize = 7;
 
+/// Plonky3-internal seed (no published RPO-BabyBear reference exists). Round
+/// constants derived from this string will not interop with any external
+/// implementation; the format mirrors the [`crate::RPO_M31_SEED`] shape (the
+/// 31-bit RPO paper, eprint 2024/1635).
 const RPO_BB_SEED: &str = "RPO-BB:p=2013265921,m=24,c=8,n=7";
 
 /// `ceil(log2(p) / 8) + 1` with `p = 15 * 2^27 + 1`.

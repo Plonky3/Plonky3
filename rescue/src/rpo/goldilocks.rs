@@ -57,6 +57,12 @@ pub struct RpoGoldilocks {
 impl RpoGoldilocks {
     /// Uses the paper's `(capacity = 4, security = 128)` parameter choice.
     pub fn from_standard_constants() -> Self {
+        // Seed format `"RPO(p,m,c,λ)"` follows the original RPO paper
+        // (eprint 2022/1577 §2.2). This matches Miden-crypto's RPO over
+        // Goldilocks, so the test vector below is interoperable. The 31-bit
+        // RPO variants use a different seed shape because the later paper
+        // (eprint 2024/1635) and its reference implementation use the
+        // `"RPO‑<field>:p=…,m=…,c=…,n=…"` form.
         let seed = format!(
             "RPO({},{},{},{})",
             Goldilocks::ORDER_U64,
