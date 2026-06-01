@@ -127,12 +127,7 @@ const SECURITY_LEVEL: usize = 100;
 ///
 /// # Why this value
 ///
-/// - The WHIR side needs every per-round grinding requirement to fit under this budget.
-/// - At `m = 22`, folding factor `4`, and the default per-round rate schedule, the last
-///   folding round fixes the floor at `20`.
-/// - `20` is the smallest budget that clears that floor.
-/// - Still four times less grinding than a `22`-bit budget, so the per-iteration grind stays
-///   cheap and grinding noise does not dominate the wall-clock comparison.
+/// - The WHIR side needs every per-round grinding requirement to fit under this budget. `20` is the smallest budget that clears that floor.
 const POW_BITS: usize = 20;
 
 /// log_2 of the inverse code rate.
