@@ -54,33 +54,27 @@ use itertools::Itertools;
 use p3_challenger::{
     CanObserve, CanSampleUniformBits, DuplexChallenger, FieldChallenger, GrindingChallenger,
 };
-use p3_commit::{BatchOpening, ExtensionMmcs, Mmcs, Pcs};
+use p3_commit::{BatchOpening, ExtensionMmcs, Mmcs, MultilinearPcs, Pcs};
 use p3_dft::Radix2DFTSmallBatch;
+use p3_field::Field;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PackedValue, PrimeCharacteristicRing};
 use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_koala_bear::{
     KoalaBear, Poseidon1KoalaBear, default_koalabear_poseidon1_16, default_koalabear_poseidon1_24,
 };
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_whir::constraints::statement::EqStatement;
-use p3_whir::constraints::statement::initial::InitialStatement;
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
-use p3_whir::parameters::{
-    FoldingFactor, ProtocolParameters, SecurityAssumption, SumcheckStrategy, WhirConfig,
-};
-use p3_whir::pcs::committer::reader::CommitmentReader;
-use p3_whir::pcs::committer::writer::CommitmentWriter;
-use p3_whir::pcs::proof::WhirProof;
+use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
+use p3_whir::pcs::proof::PcsProof;
 use p3_whir::pcs::prover::WhirProver;
-use p3_whir::pcs::verifier::WhirVerifier;
+use p3_whir::sumcheck::layout::{Layout, SuffixProver, Table, Witness};
+use p3_whir::sumcheck::{OpeningProtocol, TableShape, TableSpec};
+use rand::SeedableRng;
 use rand::rngs::SmallRng;
-use rand::{RngExt, SeedableRng};
 
 // Shared substrate that does not depend on the hash function.
 
@@ -133,13 +127,13 @@ const SECURITY_LEVEL: usize = 100;
 ///
 /// # Why this value
 ///
-/// - At `m = 22`, folding factor `4`, and an initial domain reduction of `2`, the binding
-///   constraint is the last folding round.
-/// - That round needs `17` bits of grinding to reach the 100-bit target.
-/// - `18` clears the floor with one bit of slack.
-/// - Kept small so the per-iteration grind stays cheap and grinding noise does not dominate
-///   the wall-clock comparison.
-const POW_BITS: usize = 18;
+/// - The WHIR side needs every per-round grinding requirement to fit under this budget.
+/// - At `m = 22`, folding factor `4`, and the default per-round rate schedule, the last
+///   folding round fixes the floor at `20`.
+/// - `20` is the smallest budget that clears that floor.
+/// - Still four times less grinding than a `22`-bit budget, so the per-iteration grind stays
+///   cheap and grinding noise does not dominate the wall-clock comparison.
+const POW_BITS: usize = 20;
 
 /// log_2 of the inverse code rate.
 ///
@@ -152,17 +146,6 @@ const LOG_BLOWUP: usize = 1;
 ///
 /// The paper recommends `k = 4` as a good trade-off between query count and per-round cost.
 const WHIR_FOLDING_FACTOR: usize = 4;
-
-/// Initial WHIR domain reduction factor before the first fold.
-///
-/// # Why this value
-///
-/// - `2` shrinks the starting evaluation domain by an extra factor of two before the first fold.
-/// - It must not exceed the folding factor.
-/// - It lowers the last round's folding-PoW requirement.
-/// - That lets the protocol reach the 100-bit target with a grinding budget of `18` instead of `20`.
-/// - The cost is a few extra query openings per round.
-const WHIR_RS_INITIAL_REDUCTION: usize = 2;
 
 /// FRI folding arity log.
 ///
@@ -197,8 +180,8 @@ const FRI_NUM_QUERIES: usize = (SECURITY_LEVEL - FRI_QUERY_POW_BITS).div_ceil(LO
 ///     FRI    2^k univariate columns of degree < 2^(22 - k)
 ///            opened at one common z ∈ EF
 ///
-///     WHIR   1 multilinear in 22 variables, with 2^k evaluation
-///            constraints sharing the last (22 - k) coordinates
+///     WHIR   2^k stacked columns of 2^(22 - k) evaluations each,
+///            all opened at one common point
 /// ```
 ///
 /// # Why `8` (width 256)
@@ -246,26 +229,57 @@ impl<MT: Mmcs<F>, T> WhirChallenger<MT> for T where
 {
 }
 
+/// Layout binding mode for the WHIR stacked polynomial.
+///
+/// The suffix variant binds the trailing variables first, which matches the way the
+/// benchmark's single common opening point is shared across all columns.
+type WhirLayout = SuffixProver<F, EF>;
+
+/// Concrete WHIR PCS for a given Merkle backend and challenger.
+type WhirPcsTy<MT, Ch> = WhirProver<EF, F, Dft, MT, Ch, WhirLayout>;
+
+/// WHIR opening proof for a given Merkle backend.
+type WhirProofTy<MT> = PcsProof<F, EF, MT>;
+
+/// WHIR commitment for a given Merkle backend.
+type WhirCommitTy<MT> = <MT as Mmcs<F>>::Commitment;
+
+/// Per-round inverse-rate schedule matching the default protocol parameters.
+///
+/// # Returns
+///
+/// - One log-2 inverse rate per intermediate WHIR round.
+/// - Round zero starts at inverse rate one.
+/// - Each round adds the count of variables it folds away, minus one.
+fn default_round_log_inv_rates(num_variables: usize, folding_factor: &FoldingFactor) -> Vec<usize> {
+    // One entry per intermediate round; the trailing direct-send round has no entry.
+    let (num_rounds, _) = folding_factor.compute_number_of_rounds(num_variables);
+    let mut rates = Vec::with_capacity(num_rounds);
+    // Start at the base rate of the first committed codeword.
+    let mut rate = 1;
+    for round in 0..num_rounds {
+        // Each folded variable beyond the first raises the inverse rate by one.
+        rate += folding_factor.at_round(round) - 1;
+        rates.push(rate);
+    }
+    rates
+}
+
 /// Carrier for one fully-prepared WHIR setup.
 ///
 /// # Shape
 ///
-/// - 1 multilinear in `num_variables` variables.
-/// - `2^log_width` evaluation constraints, all sharing the last `num_variables - log_width` coordinates.
+/// - One table of `2^log_width` columns, each a multilinear in `num_variables - log_width` variables.
+/// - The columns stack into one committed multilinear in `num_variables` variables.
+/// - One opening point opens all `2^log_width` columns at once.
 /// - Mirrors batched FRI's "open `2^log_width` univariates at one common point".
 struct WhirRig<MT: Mmcs<F>, Ch> {
-    /// Logarithm of the message length.
-    num_variables: usize,
-    /// Derived per-round protocol configuration.
-    config: WhirConfig<EF, F, MT, Ch>,
-    /// Protocol parameters retained because the proof builder takes them by reference.
-    params: ProtocolParameters<MT>,
-    /// Pre-allocated DFT with twiddle factors for the maximum FFT size used by this rig.
-    dft: Dft,
-    /// Initial statement: holds the random message and its evaluation constraints.
-    statement: InitialStatement<F, EF>,
-    /// Equality-form statement consumed by the verifier.
-    verifier_statement: EqStatement<EF>,
+    /// Fully-instantiated WHIR PCS: derived config, FFT engine, and Merkle backend.
+    pcs: WhirPcsTy<MT, Ch>,
+    /// Stacked committed witness built from the table of columns.
+    witness: Witness<F>,
+    /// Public opening schedule: one common point opening every column.
+    protocol: OpeningProtocol,
     /// Domain separator used for both prover and verifier transcripts.
     domain_separator: DomainSeparator<EF, F>,
     /// Base challenger; both prover and verifier clone from this.
@@ -277,33 +291,26 @@ struct WhirRig<MT: Mmcs<F>, Ch> {
 /// # Arguments
 ///
 /// - `num_variables` — total log-size of the committed multilinear (`m`).
-/// - `log_width` — log of the number of polynomials opened.
+/// - `log_width` — log of the number of columns opened.
 ///
-/// # Layout at the bench's standard `(m, k) = (22, 8)`
+/// # Layout at the bench's standard `(m, log_width) = (22, 8)`
 ///
 /// Committed:
-/// - 1 multilinear, 22 variables, `2^22` evaluations on `{0,1}^22`.
+/// - 256 columns, each a 14-variable multilinear.
+/// - Stacked into one 22-variable multilinear, `2^22` evaluations total.
 ///
 /// Opening:
-/// - 256 evaluation constraints.
-/// - Each constraint point is the concatenation of two parts:
-///   - first 8 coords  : column-index bits, walks `{0,1}^8`.
-///   - last  14 coords : shared row vector `ζ`, sampled once in `EF^14`.
+/// - One sampled point opens all 256 columns at once.
+/// - Reveals 256 extension-field evaluations at one common point.
 ///
 /// # Equivalence with batched FRI
 ///
 /// `fri-batch` opens `2^log_width` univariates at one common `z ∈ EF`.
 ///
-/// `whir` opens the multilinear at `2^log_width` points sharing the
-/// trailing `ζ ∈ EF^(m - log_width)` coordinates.
+/// `whir` opens `2^log_width` stacked columns at one common point.
 ///
-/// The WHIR §1.1 bridge identifies the two:
-///
-/// ```text
-///     ζ = (z, z^2, z^4, …, z^{2^(m - log_width - 1)})
-///     ⇒  f_i(z)  =  p̃(i_binary, ζ)        for every i ∈ {0..256}
-/// ```
-fn whir_setup<MT, Ch>(
+/// Both reveal `2^log_width` extension-field evaluations of the same committed data.
+fn whir_setup<MT, Ch, const DIGEST_ELEMS: usize>(
     num_variables: usize,
     log_width: usize,
     mmcs: MT,
@@ -318,19 +325,26 @@ where
         "log_width = {log_width} cannot exceed num_variables = {num_variables}"
     );
 
+    // Per-column arity: each column is a multilinear in this many variables.
+    let log_height = num_variables - log_width;
+    // Column count, equal to batched FRI's matrix width.
+    let width = 1 << log_width;
+    // Variables folded away per WHIR round.
+    let folding = WHIR_FOLDING_FACTOR;
+    let folding_factor = FoldingFactor::Constant(folding);
+
     // WHIR protocol knobs collected into one struct.
     let params = ProtocolParameters {
         security_level: SECURITY_LEVEL,
         pow_bits: POW_BITS,
-        folding_factor: FoldingFactor::Constant(WHIR_FOLDING_FACTOR),
-        mmcs,
+        round_log_inv_rates: default_round_log_inv_rates(num_variables, &folding_factor),
+        folding_factor,
         soundness_type: SecurityAssumption::CapacityBound,
         starting_log_inv_rate: LOG_BLOWUP,
-        rs_domain_initial_reduction_factor: WHIR_RS_INITIAL_REDUCTION,
     };
 
     // Per-round protocol layout: query counts, OOD samples, PoW bits per round.
-    let config = WhirConfig::<EF, F, MT, Ch>::new(num_variables, params.clone());
+    let config = WhirConfig::<EF, F, Ch>::new(num_variables, params);
 
     // Per-rig RNG: distinct seed per `(num_variables, log_width)` so two rigs
     // cannot accidentally collide on polynomial samples.
@@ -338,75 +352,50 @@ where
         BENCH_SEED ^ ((num_variables as u64) << 16) ^ ((log_width as u64) << 8),
     );
 
-    // Random multilinear polynomial laid out as one coefficient per Boolean cube point.
-    let polynomial = Poly::<F>::new((0..(1 << num_variables)).map(|_| rng.random()).collect());
+    // One table of `width` random columns, each a `log_height`-variable multilinear.
+    let columns = (0..width)
+        .map(|_| Poly::<F>::rand(&mut rng, log_height))
+        .collect();
+    let table = Table::new(columns);
+    // Stack the columns into the single committed multilinear in `num_variables` variables.
+    let witness = WhirLayout::new_witness(vec![table], folding);
 
-    // Build the initial statement that will accumulate evaluation constraints.
-    let mut statement = config.initial_statement(polynomial, SumcheckStrategy::default());
-
-    // Shared row vector ζ ∈ EF^(num_variables - log_width):
-    //   - sampled once and reused across all 2^log_width constraints;
-    //   - mirrors fri-batch's single z ∈ EF shared across 2^log_width columns;
-    //   - kept as a Vec so we can splice it onto each per-column point.
-    let row_dim = num_variables - log_width;
-    let zeta: Vec<EF> = Point::<EF>::rand(&mut rng, row_dim).into_iter().collect();
-    let num_polys = 1usize << log_width;
-
-    // Walk the boolean cube on the first `log_width` coordinates.
-    // Each walk produces one (point, eval) constraint added to the statement.
-    //
-    // Per constraint, the point has two parts:
-    //   - first  log_width coords : column-index bits, varies per constraint
-    //   - last   row_dim   coords : shared row vector ζ, fixed across all constraints
-    //
-    // Concretely at log_width = 8, row_dim = 14:
-    //   - constraint   0 : column bits = 00000000, then ζ
-    //   - constraint   1 : column bits = 10000000, then ζ
-    //   - constraint   2 : column bits = 01000000, then ζ
-    //   - …
-    //   - constraint 255 : column bits = 11111111, then ζ
-    //
-    // `statement.evaluate(&point)` computes p̃(point) and registers the
-    // constraint internally.
-    for column in 0..num_polys {
-        let mut coords = Vec::with_capacity(num_variables);
-        // Pack the column index as little-endian boolean coordinates.
-        for bit_index in 0..log_width {
-            let bit = (column >> bit_index) & 1;
-            coords.push(if bit == 0 { EF::ZERO } else { EF::ONE });
-        }
-        // Append the shared row vector ζ once per column.
-        coords.extend_from_slice(&zeta);
-        let point = Point::<EF>::new(coords);
-        let _ = statement.evaluate(&point);
-    }
-
-    // Equality-form statement consumed by the verifier (same data, normalised layout).
-    let verifier_statement = statement.clone().normalize();
+    // Opening schedule: a single point that opens every one of the `width` columns.
+    // This is the multilinear analogue of batched FRI's single common opening point.
+    let protocol = OpeningProtocol::new(vec![TableSpec::new(
+        TableShape::new(log_height, width),
+        vec![(0..width).collect()],
+    )])
+    .pad_to_min_num_variables(folding);
 
     // Pre-allocate twiddle factors up to the largest FFT size used by this rig.
     let dft = Dft::new(1 << config.max_fft_size());
+    // Bundle config, FFT engine, and Merkle backend into the PCS.
+    let pcs = WhirPcsTy::<MT, Ch>::new(config, dft, mmcs);
 
     // Domain separator: encodes the protocol shape into the transcript so challenges
     // are bound to this exact configuration.
     let mut domain_separator = DomainSeparator::new(vec![]);
-    domain_separator.commit_statement::<_, _, 32>(&config);
-    domain_separator.add_whir_proof::<_, _, 32>(&config);
+    pcs.add_domain_separator::<DIGEST_ELEMS>(&mut domain_separator);
 
     WhirRig {
-        num_variables,
-        config,
-        params,
-        dft,
-        statement,
-        verifier_statement,
+        pcs,
+        witness,
+        protocol,
         domain_separator,
         challenger: base_challenger,
     }
 }
 
 /// Run one full WHIR proving cycle (commit + open).
-fn whir_prove_full<MT, Ch>(rig: &WhirRig<MT, Ch>) -> (WhirProof<F, EF, MT>, u128, u128)
+///
+/// # Returns
+///
+/// - the Merkle-root commitment;
+/// - the opening proof, which carries the claimed evaluations;
+/// - the commit-phase wall-clock in milliseconds;
+/// - the open-phase wall-clock in milliseconds.
+fn whir_prove_full<MT, Ch>(rig: &WhirRig<MT, Ch>) -> (WhirCommitTy<MT>, WhirProofTy<MT>, u128, u128)
 where
     MT: WhirMmcs,
     Ch: WhirChallenger<MT>,
@@ -416,68 +405,52 @@ where
     rig.domain_separator
         .observe_domain_separator(&mut prover_challenger);
 
-    // Each iteration mutates a fresh statement and proof.
-    let mut statement = rig.statement.clone();
-    let mut proof =
-        WhirProof::<F, EF, MT>::from_protocol_parameters(&rig.params, rig.num_variables);
-
     // Phase 1: commit (DFT + Merkle + OOD samples).
-    let committer = CommitmentWriter::new(&rig.config);
     let t = Instant::now();
-    let prover_data = committer
-        .commit(&rig.dft, &mut proof, &mut prover_challenger, &mut statement)
-        .expect("WHIR commit failed");
+    let (commitment, prover_data) = <WhirPcsTy<MT, Ch> as MultilinearPcs<EF, Ch>>::commit(
+        &rig.pcs,
+        rig.witness.clone(),
+        &mut prover_challenger,
+    );
     let commit_ms = t.elapsed().as_millis();
 
     // Phase 2: open (multi-round sumcheck + STIR queries + PoW).
-    let prover = WhirProver(&rig.config);
     let t = Instant::now();
-    prover
-        .prove(
-            &rig.dft,
-            &mut proof,
-            &mut prover_challenger,
-            &statement,
-            prover_data,
-        )
-        .expect("WHIR prove failed");
+    let proof = <WhirPcsTy<MT, Ch> as MultilinearPcs<EF, Ch>>::open(
+        &rig.pcs,
+        prover_data,
+        rig.protocol.clone(),
+        &mut prover_challenger,
+    );
     let open_ms = t.elapsed().as_millis();
 
-    (proof, commit_ms, open_ms)
+    (commitment, proof, commit_ms, open_ms)
 }
 
 /// Run one full WHIR verification cycle and assert it accepts.
-///
-/// `W` is the digest element type and `DIG` the count, both decided by the MMCS:
-/// - for arithmetic hashes `(W = F, DIG = 8)`,
-/// - for byte hashes `(W = u8, DIG = 32)`.
-fn whir_verify_full<MT, Ch, W, const DIG: usize>(
+fn whir_verify_full<MT, Ch>(
     rig: &WhirRig<MT, Ch>,
-    proof: &WhirProof<F, EF, MT>,
+    commitment: &WhirCommitTy<MT>,
+    proof: &WhirProofTy<MT>,
 ) -> u128
 where
     MT: WhirMmcs,
     Ch: WhirChallenger<MT>,
-    W: PackedValue<Value = W> + Eq + Copy,
 {
+    // Each verification call starts from a fresh transcript clone.
     let mut verifier_challenger = rig.challenger.clone();
     rig.domain_separator
         .observe_domain_separator(&mut verifier_challenger);
 
-    let commitment_reader = CommitmentReader::new(&rig.config);
-    let parsed_commitment =
-        commitment_reader.parse_commitment::<W, DIG>(proof, &mut verifier_challenger);
-
-    let verifier = WhirVerifier::new(&rig.config);
     let t = Instant::now();
-    verifier
-        .verify(
-            proof,
-            &mut verifier_challenger,
-            &parsed_commitment,
-            rig.verifier_statement.clone(),
-        )
-        .expect("WHIR verify failed");
+    <WhirPcsTy<MT, Ch> as MultilinearPcs<EF, Ch>>::verify(
+        &rig.pcs,
+        commitment,
+        proof,
+        &mut verifier_challenger,
+        rig.protocol.clone(),
+    )
+    .expect("WHIR verify failed");
     t.elapsed().as_micros()
 }
 
@@ -721,9 +694,7 @@ mod poseidon1 {
     pub type ChallengeMmcs = ExtensionMmcs<F, EF, ValMmcs>;
     pub type Challenger = DuplexChallenger<F, Perm16, 16, 8>;
 
-    /// Digest element type; for arithmetic hashes the digest is in the base field.
-    pub type DigestW = F;
-    /// Number of base-field elements per digest.
+    /// Number of base-field elements per digest, used to size the domain separator.
     pub const DIGEST_ELEMS: usize = 8;
 
     /// Build the Merkle backend, the lifted challenge MMCS, and a base challenger.
@@ -757,10 +728,7 @@ mod poseidon2 {
     pub type ChallengeMmcs = ExtensionMmcs<F, EF, ValMmcs>;
     pub type Challenger = DuplexChallenger<F, Perm16, 16, 8>;
 
-    /// Digest element type.
-    /// For arithmetic hashes the digest lives in the base field.
-    pub type DigestW = F;
-    /// Number of base-field elements per digest.
+    /// Number of base-field elements per digest, used to size the domain separator.
     pub const DIGEST_ELEMS: usize = 8;
 
     /// Build the Merkle backend, the lifted challenge MMCS, and a base challenger.
@@ -806,10 +774,7 @@ mod blake3 {
     pub type ChallengeMmcs = ExtensionMmcs<F, EF, ValMmcs>;
     pub type Challenger = SerializingChallenger32<F, HashChallenger<u8, Blake3, 32>>;
 
-    /// Digest element type.
-    /// For byte hashes the digest is a string of bytes rather than field elements.
-    pub type DigestW = u8;
-    /// Number of bytes per digest.
+    /// Number of bytes per digest, used to size the domain separator.
     pub const DIGEST_ELEMS: usize = 32;
 
     /// Build the Merkle backend, the lifted challenge MMCS, and a base challenger.
@@ -849,8 +814,8 @@ fn print_diagnostic_table() {
     //   - opened at one common z ∈ EF
     //
     // whir:
-    //   - 1 multilinear in 22 variables
-    //   - 256 evaluation constraints sharing 14 coordinates
+    //   - 256 columns of 2^14 evaluations, stacked into one 22-variable multilinear
+    //   - all 256 columns opened at one common point
     //     (the same `z` lifted via the WHIR §1.1 univariate-multilinear bridge)
     macro_rules! diag_block {
         ($module:ident) => {{
@@ -900,20 +865,23 @@ fn print_diagnostic_table() {
                 drop(frib_proof);
                 drop(frib_rig);
 
-                // WHIR with 256 evaluation constraints on one 22-var multilinear,
+                // WHIR with 256 stacked columns opened at one common point,
                 // matching fri-batch's claim shape.
-                let whir_rig = whir_setup(m, LOG_FRI_BATCH_WIDTH, val_mmcs, challenger);
-                let (whir_proof, whir_commit_ms, whir_open_ms) = whir_prove_full(&whir_rig);
-                let whir_verify_us =
-                    whir_verify_full::<_, _, $module::DigestW, { $module::DIGEST_ELEMS }>(
-                        &whir_rig,
-                        &whir_proof,
-                    );
+                let whir_rig = whir_setup::<_, _, { $module::DIGEST_ELEMS }>(
+                    m,
+                    LOG_FRI_BATCH_WIDTH,
+                    val_mmcs,
+                    challenger,
+                );
+                let (whir_commit, whir_proof, whir_commit_ms, whir_open_ms) =
+                    whir_prove_full(&whir_rig);
+                let whir_verify_us = whir_verify_full(&whir_rig, &whir_commit, &whir_proof);
                 let whir_bytes = postcard::to_allocvec(&whir_proof)
                     .expect("postcard WHIR")
                     .len();
 
                 let whir_queries = whir_rig
+                    .pcs
                     .config
                     .round_parameters
                     .iter()
@@ -921,7 +889,7 @@ fn print_diagnostic_table() {
                     .join(",");
 
                 println!(
-                    " {:<10} | {:>2} | whir  | {:>9} | {:>7} | {:>9} | {:>11} | [{}] ({} constraints)",
+                    " {:<10} | {:>2} | whir  | {:>9} | {:>7} | {:>9} | {:>11} | [{}] ({} columns)",
                     $module::NAME,
                     m,
                     whir_commit_ms,
@@ -933,7 +901,7 @@ fn print_diagnostic_table() {
                 );
 
                 assert!(
-                    whir_rig.config.check_pow_bits(),
+                    whir_rig.pcs.config.check_pow_bits(),
                     "WHIR PoW budget below {SECURITY_LEVEL}-bit target at m = {m}"
                 );
 
@@ -986,9 +954,14 @@ fn bench_prove(c: &mut Criterion) {
                     );
                 });
 
-                // WHIR with 256 evaluation constraints sharing 14 coordinates,
-                // mirroring fri-batch's claim shape via the §1.1 bridge.
-                let whir_rig = whir_setup(m, LOG_FRI_BATCH_WIDTH, val_mmcs, challenger);
+                // WHIR with 256 stacked columns opened at one common point,
+                // mirroring fri-batch's claim shape.
+                let whir_rig = whir_setup::<_, _, { $module::DIGEST_ELEMS }>(
+                    m,
+                    LOG_FRI_BATCH_WIDTH,
+                    val_mmcs,
+                    challenger,
+                );
                 let label_whir = format!("whir/{}", $module::NAME);
                 group.bench_with_input(BenchmarkId::new(label_whir, m), &m, |b, _| {
                     b.iter_batched(
@@ -1043,15 +1016,17 @@ fn bench_verify(c: &mut Criterion) {
                 });
 
                 // Same for WHIR: prove once, then time the verifier in isolation.
-                let whir_rig = whir_setup(m, LOG_FRI_BATCH_WIDTH, val_mmcs, challenger);
-                let (whir_proof, _, _) = whir_prove_full(&whir_rig);
+                let whir_rig = whir_setup::<_, _, { $module::DIGEST_ELEMS }>(
+                    m,
+                    LOG_FRI_BATCH_WIDTH,
+                    val_mmcs,
+                    challenger,
+                );
+                let (whir_commit, whir_proof, _, _) = whir_prove_full(&whir_rig);
                 let label_whir = format!("whir/{}", $module::NAME);
                 group.bench_with_input(BenchmarkId::new(label_whir, m), &m, |b, _| {
                     b.iter(|| {
-                        whir_verify_full::<_, _, $module::DigestW, { $module::DIGEST_ELEMS }>(
-                            &whir_rig,
-                            &whir_proof,
-                        );
+                        whir_verify_full(&whir_rig, &whir_commit, &whir_proof);
                     });
                 });
             }
