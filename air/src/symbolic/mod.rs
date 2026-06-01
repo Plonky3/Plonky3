@@ -17,8 +17,8 @@ pub use variable::{BaseEntry, ExtEntry, SymbolicVariable, SymbolicVariableExt};
 
 /// Properties that leaf nodes must provide for the generic expression tree.
 ///
-/// Both [`BaseLeaf`](expression::BaseLeaf) (base-field) and
-/// [`ExtLeaf`](expression_ext::ExtLeaf) (extension-field) implement this trait,
+/// Both [`BaseLeaf`] (base-field) and
+/// [`ExtLeaf`] (extension-field) implement this trait,
 /// enabling [`SymbolicExpr`] to handle constant folding, degree tracking, and
 /// arithmetic generically.
 pub trait SymLeaf: Clone + core::fmt::Debug {

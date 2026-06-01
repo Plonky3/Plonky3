@@ -6,7 +6,7 @@
 //! - `<https://cr.yp.to/lineartime/multapps-20080515.pdf>`
 //! - `<https://2π.com/23/convolution/>`
 //!
-//! Given a vector v \in F^N, let v(x) \in F[x] denote the polynomial
+//! Given a vector `v \in F^N`, let `v(x) \in F[x]` denote the polynomial
 //! v_0 + v_1 x + ... + v_{N - 1} x^{N - 1}.  Then w is equal to the
 //! convolution v * u if and only if w(x) = v(x)u(x) mod x^N - 1.
 //! Additionally, define the negacyclic convolution by w(x) = v(x)u(x)
@@ -386,6 +386,23 @@ impl<F: Field, A: Algebra<F> + Copy> Convolve<A, A, F> for FieldConvolve<F, A> {
     fn reduce(z: A) -> A {
         z
     }
+}
+
+/// Circulant matrix-vector multiply for width 8 via Karatsuba convolution.
+#[inline]
+pub fn mds_circulant_karatsuba_8<F: Field, A: Algebra<F> + Copy>(state: &mut [A; 8], col: &[F; 8]) {
+    let input = *state;
+    FieldConvolve::<F, A>::conv8(input, *col, state.as_mut_slice());
+}
+
+/// Circulant matrix-vector multiply for width 12 via Karatsuba convolution.
+#[inline]
+pub fn mds_circulant_karatsuba_12<F: Field, A: Algebra<F> + Copy>(
+    state: &mut [A; 12],
+    col: &[F; 12],
+) {
+    let input = *state;
+    FieldConvolve::<F, A>::conv12(input, *col, state.as_mut_slice());
 }
 
 /// Circulant matrix-vector multiply for width 16 via Karatsuba convolution.

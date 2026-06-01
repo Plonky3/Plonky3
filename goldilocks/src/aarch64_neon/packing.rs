@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use core::arch::aarch64::{
-    uint64x2_t, vaddq_u64, vandq_u64, vbicq_u64, vcgtq_s64, vdupq_n_u64, veorq_u64, vgetq_lane_u64,
-    vreinterpretq_s64_u64, vsetq_lane_u64, vshrq_n_u64, vsubq_u64,
+    uint64x2_t, vaddq_u64, vandq_u64, vdupq_n_u64, vgetq_lane_u64, vsetq_lane_u64, vshrq_n_u64,
+    vsubq_u64,
 };
 use core::fmt::Debug;
 use core::iter::{Product, Sum};
@@ -29,7 +29,11 @@ const WIDTH: usize = 2;
 /// Equal to `2^32 - 1 = 2^64 mod P`.
 const EPSILON: u64 = Goldilocks::ORDER_U64.wrapping_neg();
 
-/// Vectorized NEON implementation of `Goldilocks` arithmetic.
+/// Width-2 packed `Goldilocks` for aarch64.
+///
+/// `mul`, `square`, and the cubic-extension helpers use a dual-lane interleaved
+/// scalar ASM block (`mul_reduce_dual_asm`); `add`, `sub`, and `neg` operate on
+/// the underlying `[Goldilocks; 2]` storage directly in scalar `u64` space.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 #[repr(transparent)]
 #[must_use]
@@ -63,7 +67,7 @@ impl Add for PackedGoldilocksNeon {
     type Output = Self;
     #[inline]
     fn add(self, rhs: Self) -> Self {
-        Self::from_vector(add(self.to_vector(), rhs.to_vector()))
+        Self([self.0[0] + rhs.0[0], self.0[1] + rhs.0[1]])
     }
 }
 
@@ -71,7 +75,7 @@ impl Sub for PackedGoldilocksNeon {
     type Output = Self;
     #[inline]
     fn sub(self, rhs: Self) -> Self {
-        Self::from_vector(sub(self.to_vector(), rhs.to_vector()))
+        Self([self.0[0] - rhs.0[0], self.0[1] - rhs.0[1]])
     }
 }
 
@@ -79,7 +83,7 @@ impl Neg for PackedGoldilocksNeon {
     type Output = Self;
     #[inline]
     fn neg(self) -> Self {
-        Self::from_vector(neg(self.to_vector()))
+        Self([-self.0[0], -self.0[1]])
     }
 }
 
@@ -196,80 +200,6 @@ unsafe impl PackedFieldPow2 for PackedGoldilocksNeon {
             _ => panic!("unsupported block length"),
         };
         (Self::from_vector(res0), Self::from_vector(res1))
-    }
-}
-
-// NEON arithmetic uses shifted representation (XOR with 2^63) for unsigned comparison.
-
-const SIGN_BIT: uint64x2_t = unsafe { transmute([i64::MIN as u64; WIDTH]) };
-const SHIFTED_FIELD_ORDER: uint64x2_t =
-    unsafe { transmute([Goldilocks::ORDER_U64 ^ (i64::MIN as u64); WIDTH]) };
-const EPSILON_VEC: uint64x2_t = unsafe { transmute([EPSILON; WIDTH]) };
-
-#[inline(always)]
-fn shift(x: uint64x2_t) -> uint64x2_t {
-    unsafe { veorq_u64(x, SIGN_BIT) }
-}
-
-#[inline(always)]
-unsafe fn canonicalize_s(x_s: uint64x2_t) -> uint64x2_t {
-    unsafe {
-        let x_s_signed = vreinterpretq_s64_u64(x_s);
-        let order_s_signed = vreinterpretq_s64_u64(SHIFTED_FIELD_ORDER);
-        let mask = vcgtq_s64(order_s_signed, x_s_signed);
-        let wrapback_amt = vbicq_u64(EPSILON_VEC, mask);
-        vaddq_u64(x_s, wrapback_amt)
-    }
-}
-
-#[inline(always)]
-unsafe fn add_no_double_overflow_64_64s_s(x: uint64x2_t, y_s: uint64x2_t) -> uint64x2_t {
-    unsafe {
-        let res_wrapped_s = vaddq_u64(x, y_s);
-        // After XOR shift, signed comparison correctly detects overflow.
-        // Overflow occurred iff y_s > res_wrapped_s (as signed, due to shift semantics)
-        let y_s_signed = vreinterpretq_s64_u64(y_s);
-        let res_s_signed = vreinterpretq_s64_u64(res_wrapped_s);
-        let mask = vcgtq_s64(y_s_signed, res_s_signed);
-        // wrapback_amt is EPSILON on overflow
-        let wrapback_amt = vshrq_n_u64::<32>(mask);
-        vaddq_u64(res_wrapped_s, wrapback_amt)
-    }
-}
-
-/// Goldilocks modular addition.
-#[inline]
-fn add(x: uint64x2_t, y: uint64x2_t) -> uint64x2_t {
-    unsafe {
-        let y_s = shift(y);
-        let res_s = add_no_double_overflow_64_64s_s(x, canonicalize_s(y_s));
-        shift(res_s)
-    }
-}
-
-/// Goldilocks modular subtraction.
-#[inline]
-fn sub(x: uint64x2_t, y: uint64x2_t) -> uint64x2_t {
-    unsafe {
-        let mut y_s = shift(y);
-        y_s = canonicalize_s(y_s);
-        let x_s = shift(x);
-        let y_s_signed = vreinterpretq_s64_u64(y_s);
-        let x_s_signed = vreinterpretq_s64_u64(x_s);
-        // -1 if underflow (y > x)
-        let mask = vcgtq_s64(y_s_signed, x_s_signed);
-        let wrapback_amt = vshrq_n_u64::<32>(mask);
-        let res_wrapped = vsubq_u64(x_s, y_s);
-        vsubq_u64(res_wrapped, wrapback_amt)
-    }
-}
-
-/// Goldilocks modular negation.
-#[inline]
-fn neg(y: uint64x2_t) -> uint64x2_t {
-    unsafe {
-        let y_s = shift(y);
-        vsubq_u64(SHIFTED_FIELD_ORDER, canonicalize_s(y_s))
     }
 }
 

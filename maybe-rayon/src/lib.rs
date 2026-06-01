@@ -1,3 +1,6 @@
+//! Thin compatibility layer that re-exports either `rayon` or a sequential
+//! fallback under a unified prelude, gated by the `parallel` feature.
+
 #![no_std]
 
 #[cfg(not(feature = "parallel"))]
@@ -61,7 +64,7 @@ pub mod iter {
 /// A raw mutable pointer wrapper that implements [`Send`] and [`Sync`].
 ///
 /// Used to enable parallel writes to disjoint slices of a pre-allocated buffer
-/// from within closures that require `Send + Sync` (e.g. [`rayon::ParallelIterator::for_each_init`]).
+/// from within closures that require `Send + Sync` (e.g. `rayon::ParallelIterator::for_each_init`).
 ///
 /// # Safety
 ///

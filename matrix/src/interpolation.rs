@@ -110,6 +110,13 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
         // Compute z - x_i in parallel, then batch-invert in one shot
         // (Montgomery's trick: single field inversion + O(N) multiplications).
         let diffs: Vec<EF> = coset.par_iter().map(|&g| point - g).collect();
+
+        // If point lies on the coset, return that row directly.
+        // Detected by scanning the already-computed diffs to keep the off-domain path parallel.
+        if let Some(i) = diffs.iter().position(|d| d.is_zero()) {
+            return self.row(i).unwrap().into_iter().map(EF::from).collect();
+        }
+
         let diff_invs = batch_multiplicative_inverse(&diffs);
 
         // Convert to adjusted weights and delegate to the zero-allocation hot path.
@@ -258,6 +265,12 @@ pub trait InterpolateArbitrary<F: Field>: Matrix<F> {
     ) -> Option<Vec<EF>> {
         debug_assert_eq!(x_coords.len(), self.height());
 
+        // Order matters: reject duplicates BEFORE the on-domain shortcut.
+        //
+        // Otherwise the shortcut fires on ill-posed input whenever the
+        // target equals ANY domain point — duplicate value or not.
+        let weights = barycentric_weights(x_coords)?;
+
         // If the target matches a domain point, return that row directly.
         // This also avoids a zero in the difference vector below.
         for (i, &x) in x_coords.iter().enumerate() {
@@ -265,9 +278,6 @@ pub trait InterpolateArbitrary<F: Field>: Matrix<F> {
                 return Some(self.row(i).unwrap().into_iter().map(EF::from).collect());
             }
         }
-
-        // Compute barycentric weights (returns None on duplicate domain points).
-        let weights = barycentric_weights(x_coords)?;
 
         // Batch-invert all (point - x_i). Safe: coincidence was ruled out above.
         let diffs: Vec<EF> = x_coords.iter().map(|&x| point - x).collect();
@@ -297,6 +307,12 @@ pub trait InterpolateArbitrary<F: Field>: Matrix<F> {
     ) -> Vec<EF> {
         debug_assert_eq!(weights.len(), self.height());
         debug_assert_eq!(diff_invs.len(), self.height());
+
+        // Empty domain -> undetermined polynomial. Return zero per column.
+        // Handling this explicitly keeps the loud panic on the standard path for caller-side contract violations.
+        if self.height() == 0 {
+            return EF::zero_vec(self.width());
+        }
 
         // Barycentric second form:
         //
@@ -452,7 +468,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{
-        BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing, TwoAdicField,
+        BasedVectorSpace, ExtensionField, Field, HornerIter, PrimeCharacteristicRing, TwoAdicField,
         batch_multiplicative_inverse,
     };
     use p3_util::log2_strict_usize;
@@ -469,10 +485,7 @@ mod tests {
     /// Horner's method: `f(z) = c_0 + z*(c_1 + z*(c_2 + ...))`.
     /// Processes coefficients from highest degree down to constant term.
     fn eval_poly<EF: ExtensionField<F>>(coeffs: &[F], point: EF) -> EF {
-        coeffs
-            .iter()
-            .rev()
-            .fold(EF::ZERO, |acc, &c| acc * point + c)
+        coeffs.iter().copied().horner(point)
     }
 
     fn eval_poly_on_coset<EF: ExtensionField<F>>(coeffs: &[F], shift: F, log_n: usize) -> Vec<EF> {
@@ -567,6 +580,70 @@ mod tests {
 
         let result = evals_mat.interpolate_coset(shift, point);
         assert_eq!(result, vec![c]);
+    }
+
+    #[test]
+    fn test_interpolate_coset_point_on_coset() {
+        // On-domain target must return the matching row, never panic on 0.inverse().
+        let log_n = 3;
+        let n = 1usize << log_n;
+        let shift = F::GENERATOR;
+        let h = F::two_adic_generator(log_n);
+
+        let coset: Vec<F> = (0..n).map(|i| shift * h.exp_u64(i as u64)).collect();
+        let evals: Vec<F> = (0..n as u32).map(|i| F::from_u32(100 + i)).collect();
+        let m = RowMajorMatrix::new(evals.clone(), 1);
+
+        // Sweep every coset element so off-by-one in the index would surface.
+        for (i, &x) in coset.iter().enumerate() {
+            let result = m.interpolate_coset(shift, x);
+            assert_eq!(result, vec![evals[i]]);
+        }
+    }
+
+    #[test]
+    fn test_interpolate_coset_point_on_coset_extension() {
+        // Same shortcut, but the target is a coset element lifted into EF4.
+        // Two columns to verify the lift covers every column entry of the row.
+        let log_n = 3;
+        let n = 1usize << log_n;
+        let shift = F::GENERATOR;
+        let h = F::two_adic_generator(log_n);
+
+        let coset: Vec<F> = (0..n).map(|i| shift * h.exp_u64(i as u64)).collect();
+
+        let mut evals: Vec<F> = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            evals.push(F::from_u32(200 + i as u32));
+            evals.push(F::from_u32(300 + i as u32));
+        }
+        let m = RowMajorMatrix::new(evals, 2);
+
+        // Non-zero index avoids hitting the i=0 corner.
+        let i = 3;
+        let result = m.interpolate_coset(shift, EF4::from(coset[i]));
+        assert_eq!(
+            result,
+            vec![
+                EF4::from(F::from_u32(200 + i as u32)),
+                EF4::from(F::from_u32(300 + i as u32)),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_interpolate_subgroup_point_on_subgroup() {
+        // Subgroup wrapper is the shift=1 coset; on-subgroup target must short-circuit too.
+        let log_n = 2;
+        let n = 1usize << log_n;
+        let h = F::two_adic_generator(log_n);
+
+        let evals: Vec<F> = (0..n as u32).map(|i| F::from_u32(10 + i)).collect();
+        let m = RowMajorMatrix::new(evals.clone(), 1);
+
+        // h^2 is non-identity, so the test also exercises a non-trivial coset element.
+        let result = m.interpolate_subgroup(h.exp_u64(2));
+        assert_eq!(result, vec![evals[2]]);
     }
 
     #[test]
@@ -903,6 +980,48 @@ mod tests {
     }
 
     #[test]
+    fn test_interpolate_arbitrary_duplicates_target_on_duplicate() {
+        // Invariant:
+        // Barycentric Lagrange interpolation requires pairwise-distinct domain points.
+        // A duplicate makes the problem ill-posed → contract returns `None`.
+        //
+        // Fixture state: 3 evaluations, collision at indices 0 and 2.
+        //
+        //     i:    0     1     2
+        //     x:    1     2     1     ← duplicate at indices 0 and 2
+        //     y:    10    20    30    ← rows disagree at the duplicate
+        //
+        // Mutation: target = 1, hitting the duplicate value.
+        //
+        // The first-match-on-domain shortcut would return row 0 = [10];
+        // duplicate detection must beat the shortcut and yield `None`.
+        let xs = [F::ONE, F::TWO, F::ONE];
+        let evals = RowMajorMatrix::new(vec![F::from_u32(10), F::from_u32(20), F::from_u32(30)], 1);
+        assert_eq!(evals.interpolate_arbitrary_point(&xs, F::ONE), None);
+    }
+
+    #[test]
+    fn test_interpolate_arbitrary_duplicates_target_on_unique() {
+        // Invariant:
+        // Barycentric Lagrange interpolation requires pairwise-distinct domain points.
+        // A duplicate makes the problem ill-posed → contract returns `None`.
+        //
+        // Fixture state: 3 evaluations, collision at indices 0 and 2.
+        //
+        //     i:    0     1     2
+        //     x:    1     2     1     ← duplicate at indices 0 and 2
+        //     y:    10    20    30
+        //
+        // Mutation: target = 2, hitting the unique value at i=1.
+        //
+        // The first-match-on-domain shortcut would return row 1 = [20];
+        // duplicate detection must beat the shortcut and yield `None`.
+        let xs = [F::ONE, F::TWO, F::ONE];
+        let evals = RowMajorMatrix::new(vec![F::from_u32(10), F::from_u32(20), F::from_u32(30)], 1);
+        assert_eq!(evals.interpolate_arbitrary_point(&xs, F::TWO), None);
+    }
+
+    #[test]
     fn test_interpolate_arbitrary_multi_column() {
         // f1(x) = x^2 + 2x + 3,  f2(x) = 4x^2 + 5x + 6.
         // Evaluate both at x = 0, 1, 2.
@@ -1006,6 +1125,26 @@ mod tests {
                 F::from_u32(4),
             ]
         );
+    }
+
+    #[test]
+    fn test_interpolate_arbitrary_empty_matrix() {
+        // height=0 -> col_scale is empty -> denominator folds to EF::ZERO
+        // must NOT panic, must return a zero vector of length == width
+        let xs: Vec<F> = vec![];
+        let evals = RowMajorMatrix::<F>::new(vec![], 3);
+        let result = evals.interpolate_arbitrary_point(&xs, F::from_u32(42));
+        assert_eq!(result, Some(vec![F::ZERO, F::ZERO, F::ZERO]));
+    }
+
+    #[test]
+    fn test_interpolate_arbitrary_with_precomputation_empty_direct() {
+        // Precomputed hot path is on the public trait surface; empty domain must not panic.
+        let weights: Vec<F> = vec![];
+        let diff_invs: Vec<F> = vec![];
+        let evals = RowMajorMatrix::<F>::new(vec![], 5);
+        let result = evals.interpolate_arbitrary_with_precomputation(&weights, &diff_invs);
+        assert_eq!(result, vec![F::ZERO; 5]);
     }
 
     #[test]

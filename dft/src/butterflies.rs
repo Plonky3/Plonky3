@@ -187,15 +187,44 @@ impl<F: Field> Butterfly<F> for DitButterfly<F> {
     /// once before the inner loop, avoiding a scalar-to-vector broadcast on each packed
     /// multiplication. For wide rows (e.g., 256 columns with AVX512 width=16, giving 16
     /// packed iterations per row-pair), this eliminates 15 redundant broadcasts per call.
+    /// Manually unroll the inner packed loop to expose multiple independent mul chains
+    /// to the compiler's scheduler, hiding the ~12–15 cyc Montgomery mul latency.
     #[inline]
     fn apply_to_rows(&self, row_1: &mut [F], row_2: &mut [F]) {
         let (shorts_1, suffix_1) = F::Packing::pack_slice_with_suffix_mut(row_1);
         let (shorts_2, suffix_2) = F::Packing::pack_slice_with_suffix_mut(row_2);
         debug_assert_eq!(shorts_1.len(), shorts_2.len());
         debug_assert_eq!(suffix_1.len(), suffix_2.len());
-        // Pre-broadcast the scalar twiddle into a packed field once outside the loop.
         let twiddle_packed = F::Packing::from(self.0);
-        for (x_1, x_2) in shorts_1.iter_mut().zip(shorts_2.iter_mut()) {
+        let mut c1 = shorts_1.chunks_exact_mut(4);
+        let mut c2 = shorts_2.chunks_exact_mut(4);
+        for (p1, p2) in (&mut c1).zip(&mut c2) {
+            let a1 = p1[0];
+            let b1 = p1[1];
+            let c1_ = p1[2];
+            let d1 = p1[3];
+            let a2 = p2[0];
+            let b2 = p2[1];
+            let c2_ = p2[2];
+            let d2 = p2[3];
+            let a2t = a2 * twiddle_packed;
+            let b2t = b2 * twiddle_packed;
+            let c2t = c2_ * twiddle_packed;
+            let d2t = d2 * twiddle_packed;
+            p1[0] = a1 + a2t;
+            p2[0] = a1 - a2t;
+            p1[1] = b1 + b2t;
+            p2[1] = b1 - b2t;
+            p1[2] = c1_ + c2t;
+            p2[2] = c1_ - c2t;
+            p1[3] = d1 + d2t;
+            p2[3] = d1 - d2t;
+        }
+        for (x_1, x_2) in c1
+            .into_remainder()
+            .iter_mut()
+            .zip(c2.into_remainder().iter_mut())
+        {
             let x_2_twiddle = *x_2 * twiddle_packed;
             let new_x1 = *x_1 + x_2_twiddle;
             *x_2 = *x_1 - x_2_twiddle;
@@ -206,7 +235,7 @@ impl<F: Field> Butterfly<F> for DitButterfly<F> {
         }
     }
 
-    /// Override `apply_to_rows_oop` similarly, pre-broadcasting the twiddle once.
+    /// Out-of-place variant with matching unroll factor.
     #[inline]
     fn apply_to_rows_oop(
         &self,
@@ -225,12 +254,40 @@ impl<F: Field> Butterfly<F> for DitButterfly<F> {
         debug_assert_eq!(src_suffix_1.len(), src_suffix_2.len());
         debug_assert_eq!(dst_shorts_1.len(), dst_shorts_2.len());
         debug_assert_eq!(dst_suffix_1.len(), dst_suffix_2.len());
-        // Pre-broadcast the scalar twiddle into a packed field once outside the loop.
         let twiddle_packed = F::Packing::from(self.0);
-        for (s_1, s_2, d_1, d_2) in izip!(src_shorts_1, src_shorts_2, dst_shorts_1, dst_shorts_2) {
-            let x_2_twiddle = *s_2 * twiddle_packed;
-            d_1.write(*s_1 + x_2_twiddle);
-            d_2.write(*s_1 - x_2_twiddle);
+        let n = src_shorts_1.len();
+        let n4 = n - (n & 3);
+        let mut i = 0;
+        while i < n4 {
+            let a1 = src_shorts_1[i];
+            let b1 = src_shorts_1[i + 1];
+            let c1 = src_shorts_1[i + 2];
+            let d1 = src_shorts_1[i + 3];
+            let a2 = src_shorts_2[i];
+            let b2 = src_shorts_2[i + 1];
+            let c2 = src_shorts_2[i + 2];
+            let d2 = src_shorts_2[i + 3];
+            let a2t = a2 * twiddle_packed;
+            let b2t = b2 * twiddle_packed;
+            let c2t = c2 * twiddle_packed;
+            let d2t = d2 * twiddle_packed;
+            dst_shorts_1[i].write(a1 + a2t);
+            dst_shorts_2[i].write(a1 - a2t);
+            dst_shorts_1[i + 1].write(b1 + b2t);
+            dst_shorts_2[i + 1].write(b1 - b2t);
+            dst_shorts_1[i + 2].write(c1 + c2t);
+            dst_shorts_2[i + 2].write(c1 - c2t);
+            dst_shorts_1[i + 3].write(d1 + d2t);
+            dst_shorts_2[i + 3].write(d1 - d2t);
+            i += 4;
+        }
+        while i < n {
+            let s1 = src_shorts_1[i];
+            let s2 = src_shorts_2[i];
+            let x_2_twiddle = s2 * twiddle_packed;
+            dst_shorts_1[i].write(s1 + x_2_twiddle);
+            dst_shorts_2[i].write(s1 - x_2_twiddle);
+            i += 1;
         }
         for (s_1, s_2, d_1, d_2) in izip!(src_suffix_1, src_suffix_2, dst_suffix_1, dst_suffix_2) {
             let (res_1, res_2) = self.apply(*s_1, *s_2);
@@ -301,7 +358,41 @@ impl<F: Field> Butterfly<F> for ScaledDitButterfly<F> {
         debug_assert_eq!(suffix_1.len(), suffix_2.len());
         let scale_packed = F::Packing::from(self.scale);
         let twiddle_times_scale_packed = F::Packing::from(self.twiddle_times_scale);
-        for (x_1, x_2) in shorts_1.iter_mut().zip(shorts_2.iter_mut()) {
+        // ScaledDitButterfly has 2 muls per butterfly (scale + twiddle_scale), so unroll-4
+        // exposes 8 independent mul chains — better ILP than unroll-2's 4 chains.
+        let mut c1 = shorts_1.chunks_exact_mut(4);
+        let mut c2 = shorts_2.chunks_exact_mut(4);
+        for (p1, p2) in (&mut c1).zip(&mut c2) {
+            let a1 = p1[0];
+            let b1 = p1[1];
+            let c1_ = p1[2];
+            let d1 = p1[3];
+            let a2 = p2[0];
+            let b2 = p2[1];
+            let c2_ = p2[2];
+            let d2 = p2[3];
+            let a1s = a1 * scale_packed;
+            let b1s = b1 * scale_packed;
+            let c1s = c1_ * scale_packed;
+            let d1s = d1 * scale_packed;
+            let a2t = a2 * twiddle_times_scale_packed;
+            let b2t = b2 * twiddle_times_scale_packed;
+            let c2t = c2_ * twiddle_times_scale_packed;
+            let d2t = d2 * twiddle_times_scale_packed;
+            p1[0] = a1s + a2t;
+            p2[0] = a1s - a2t;
+            p1[1] = b1s + b2t;
+            p2[1] = b1s - b2t;
+            p1[2] = c1s + c2t;
+            p2[2] = c1s - c2t;
+            p1[3] = d1s + d2t;
+            p2[3] = d1s - d2t;
+        }
+        for (x_1, x_2) in c1
+            .into_remainder()
+            .iter_mut()
+            .zip(c2.into_remainder().iter_mut())
+        {
             let x_1_scale = *x_1 * scale_packed;
             let x_2_twiddle_scale = *x_2 * twiddle_times_scale_packed;
             *x_1 = x_1_scale + x_2_twiddle_scale;

@@ -1,5 +1,7 @@
 //! Folding factor strategies for variable reduction across WHIR rounds.
 
+use alloc::vec::Vec;
+
 use thiserror::Error;
 
 /// Each WHIR step folds the polynomial, reducing the number of variables.
@@ -22,18 +24,21 @@ pub enum FoldingFactorError {
 }
 
 /// Defines the folding factor for polynomial commitments.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum FoldingFactor {
     /// A fixed folding factor used in all rounds.
     Constant(usize),
     /// Uses a different folding factor for the first round and a fixed one for the rest.
     ConstantFromSecondRound(usize, usize),
+    /// Explicit folding factors for each folding phase, including the initial
+    /// fold and the final sumcheck fold.
+    PerRound(Vec<usize>),
 }
 
 impl FoldingFactor {
     /// Retrieves the folding factor for a given round.
     #[must_use]
-    pub const fn at_round(&self, round: usize) -> usize {
+    pub fn at_round(&self, round: usize) -> usize {
         match self {
             Self::Constant(factor) => *factor,
             Self::ConstantFromSecondRound(first_round_factor, factor) => {
@@ -43,11 +48,12 @@ impl FoldingFactor {
                     *factor
                 }
             }
+            Self::PerRound(factors) => factors[round],
         }
     }
 
     /// Checks the validity of the folding factor against the number of variables.
-    pub const fn check_validity(&self, num_variables: usize) -> Result<(), FoldingFactorError> {
+    pub fn check_validity(&self, num_variables: usize) -> Result<(), FoldingFactorError> {
         match self {
             Self::Constant(factor) => {
                 if *factor > num_variables {
@@ -77,6 +83,17 @@ impl FoldingFactor {
                 } else {
                     Ok(())
                 }
+            }
+            Self::PerRound(factors) => {
+                for &factor in factors {
+                    if factor > num_variables {
+                        return Err(FoldingFactorError::TooLarge(factor, num_variables));
+                    }
+                    if factor == 0 {
+                        return Err(FoldingFactorError::ZeroFactor);
+                    }
+                }
+                Ok(())
             }
         }
     }
@@ -116,12 +133,22 @@ impl FoldingFactor {
                 // No need to minus 1 because the initial round is already excepted out
                 (num_rounds, final_sumcheck_rounds)
             }
+            Self::PerRound(factors) => {
+                let mut remaining = num_variables;
+                for (i, &factor) in factors.iter().enumerate() {
+                    remaining -= factor;
+                    if remaining <= MAX_NUM_VARIABLES_TO_SEND_COEFFS {
+                        return (i, remaining);
+                    }
+                }
+                panic!("Per-round folding factors do not reduce to the final coefficient threshold")
+            }
         }
     }
 
     /// Computes the total number of folding rounds over `n_rounds` iterations.
     #[must_use]
-    pub const fn total_number(&self, n_rounds: usize) -> usize {
+    pub fn total_number(&self, n_rounds: usize) -> usize {
         match self {
             Self::Constant(factor) => {
                 // - Each round folds `factor` variables,
@@ -133,12 +160,15 @@ impl FoldingFactor {
                 // - Subsequent rounds fold `factor` variables each.
                 *first_round_factor + *factor * n_rounds
             }
+            Self::PerRound(factors) => factors.iter().take(n_rounds + 1).sum(),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+
     use super::*;
 
     #[test]
@@ -151,6 +181,11 @@ mod tests {
         assert_eq!(variable_factor.at_round(0), 3); // First round uses 3
         assert_eq!(variable_factor.at_round(1), 5); // Subsequent rounds use 5
         assert_eq!(variable_factor.at_round(10), 5);
+
+        let per_round = FoldingFactor::PerRound(vec![3, 2, 1]);
+        assert_eq!(per_round.at_round(0), 3);
+        assert_eq!(per_round.at_round(1), 2);
+        assert_eq!(per_round.at_round(2), 1);
     }
 
     #[test]
@@ -187,6 +222,10 @@ mod tests {
         // First round zero
         assert_eq!(
             FoldingFactor::ConstantFromSecondRound(0, 3).check_validity(4),
+            Err(FoldingFactorError::ZeroFactor)
+        );
+        assert_eq!(
+            FoldingFactor::PerRound(vec![2, 0]).check_validity(4),
             Err(FoldingFactorError::ZeroFactor)
         );
     }
@@ -253,6 +292,11 @@ mod tests {
             ),
             (2, MAX_NUM_VARIABLES_TO_SEND_COEFFS - next_factor + 1)
         );
+
+        assert_eq!(
+            FoldingFactor::PerRound(vec![3, 2]).compute_number_of_rounds(10),
+            (1, 5)
+        );
     }
 
     #[test]
@@ -262,5 +306,8 @@ mod tests {
 
         let variable_factor = FoldingFactor::ConstantFromSecondRound(3, 2);
         assert_eq!(variable_factor.total_number(3), 9); // 3 + 2 * 3
+
+        let per_round = FoldingFactor::PerRound(vec![3, 2, 1]);
+        assert_eq!(per_round.total_number(1), 5);
     }
 }

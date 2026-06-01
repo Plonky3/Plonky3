@@ -4,8 +4,8 @@ use p3_baby_bear::{
     BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_24, BabyBear, MdsMatrixBabyBear, Poseidon1BabyBear,
 };
 use p3_field::{Field, PrimeCharacteristicRing};
+use p3_goldilocks::Goldilocks;
 use p3_goldilocks::poseidon1::{default_goldilocks_poseidon1_8, default_goldilocks_poseidon1_12};
-use p3_goldilocks::{Goldilocks, HashPackedGoldilocks};
 use p3_koala_bear::{
     KOALABEAR_POSEIDON_HALF_FULL_ROUNDS, KOALABEAR_POSEIDON_PARTIAL_ROUNDS_16,
     KOALABEAR_POSEIDON_PARTIAL_ROUNDS_24, KoalaBear, MdsMatrixKoalaBear, Poseidon1KoalaBear,
@@ -68,12 +68,12 @@ fn bench_poseidon1(c: &mut Criterion) {
     // Goldilocks width 8.
     let gl_8 = default_goldilocks_poseidon1_8();
     poseidon1_scalar::<Goldilocks, _, 8>(c, &gl_8);
-    poseidon1_goldilocks_packed::<_, 8>(c, &gl_8);
+    poseidon1_packed::<Goldilocks, _, 8>(c, &gl_8);
 
     // Goldilocks width 12.
     let gl_12 = default_goldilocks_poseidon1_12();
     poseidon1_scalar::<Goldilocks, _, 12>(c, &gl_12);
-    poseidon1_goldilocks_packed::<_, 12>(c, &gl_12);
+    poseidon1_packed::<Goldilocks, _, 12>(c, &gl_12);
 
     // Mersenne31 width 16.
     let m31_16 = default_mersenne31_poseidon1_16();
@@ -108,24 +108,6 @@ where
     let name = format!(
         "poseidon-packed::<{}, {}>",
         pretty_name::<F::Packing>(),
-        WIDTH
-    );
-    let id = BenchmarkId::new(name, WIDTH);
-    c.bench_with_input(id, &input, |b, &input| b.iter(|| poseidon.permute(input)));
-}
-
-/// Goldilocks packed benchmark target.
-///
-/// On aarch64 this is [`PackedGoldilocksNeon`] via [`HashPackedGoldilocks`],
-/// while on other targets it resolves to `<Goldilocks as Field>::Packing`.
-fn poseidon1_goldilocks_packed<Perm, const WIDTH: usize>(c: &mut Criterion, poseidon: &Perm)
-where
-    Perm: Permutation<[HashPackedGoldilocks; WIDTH]>,
-{
-    let input = [HashPackedGoldilocks::ZERO; WIDTH];
-    let name = format!(
-        "poseidon-packed::<{}, {}>",
-        pretty_name::<HashPackedGoldilocks>(),
         WIDTH
     );
     let id = BenchmarkId::new(name, WIDTH);

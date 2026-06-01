@@ -11,11 +11,9 @@ fn bench_reverse_slice_index_bits(c: &mut Criterion) {
     for log_size in [1, 3, 5, 8, 16, 24, 26] {
         let size = 1 << log_size;
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, &size| {
-            let data: Vec<u64> = (0..size).map(|_| rng.random()).collect();
+            let mut data: Vec<u64> = (0..size).map(|_| rng.random()).collect();
             b.iter(|| {
-                let mut test_data = data.clone();
-                reverse_slice_index_bits(black_box(&mut test_data));
-                black_box(test_data)
+                reverse_slice_index_bits(black_box(&mut data));
             });
         });
     }

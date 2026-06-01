@@ -4,7 +4,7 @@
 //!
 //! Straightforward recursive algorithm, "unrolled" up to size 256.
 //!
-//! Inspired by Bernstein's djbfft: https://cr.yp.to/djbfft.html
+//! Inspired by Bernstein's djbfft: <https://cr.yp.to/djbfft.html>.
 
 extern crate alloc;
 use alloc::vec::Vec;

@@ -131,7 +131,7 @@ pub(crate) fn mul_2exp_i<const I: i32, const I_PRIME: i32>(
 /// `[-2] + 1 << [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14, 15, 16]`
 ///
 /// i.e., the first entry is -2 and all other entries are powers of 2.
-/// Note: state[0] is handled by the calling code (multiplied by -2).
+/// Note: `state[0]` is handled by the calling code (multiplied by -2).
 #[inline(always)]
 fn diagonal_mul_16(state: &mut [PackedMersenne31Neon; 16]) {
     // state[0] -> -2*state[0] is handled by the calling code.
@@ -160,7 +160,7 @@ fn diagonal_mul_16(state: &mut [PackedMersenne31Neon; 16]) {
 /// `[-2] + 1 << [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]`
 ///
 /// i.e., the first entry is -2 and all other entries are powers of 2.
-/// Note: state[0] is handled by the calling code (multiplied by -2).
+/// Note: `state[0]` is handled by the calling code (multiplied by -2).
 #[inline(always)]
 fn diagonal_mul_24(state: &mut [PackedMersenne31Neon; 24]) {
     // state[0] -> -2*state[0] is handled by the calling code.
@@ -194,7 +194,7 @@ fn diagonal_mul_24(state: &mut [PackedMersenne31Neon; 24]) {
 /// Compute a single Poseidon2 internal layer on a state of width 16.
 ///
 /// The internal layer consists of:
-/// 1. Add round constant to state[0] and apply S-box: `s0 -> (s0 + rc)^5`
+/// 1. Add round constant to `state[0]` and apply S-box: `s0 -> (s0 + rc)^5`
 /// 2. Apply linear layer: `s -> (1 + Diag(V)) * s`
 ///
 /// The linear layer can be decomposed as:

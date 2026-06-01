@@ -1,275 +1,122 @@
-//! Core lookup types and traits.
-//!
-//! These types define the data structures for lookup arguments in STARKs.
-//! They were previously in `p3-air` but live here to keep the `Air` trait
-//! free of lookup concerns.
+//! Core data types for lookup arguments.
 
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
-use core::ops::Neg;
+use core::ops::Deref;
 
-use p3_air::{Air, PermutationAirBuilder, SymbolicExpression};
-use p3_field::Field;
+use p3_air::symbolic::AirLayout;
+use p3_air::{Air, SymbolicExpression};
+use p3_field::{ExtensionField, Field};
 use serde::{Deserialize, Serialize};
 
-/// Defines errors that can occur during lookup verification.
-#[derive(Debug)]
-pub enum LookupError {
-    /// Error indicating that the global cumulative sum is incorrect.
-    GlobalCumulativeMismatch(Option<String>),
-}
+use crate::builder::{SymbolicInteraction, SymbolicLocalInteraction};
+use crate::symbolic::InteractionSymbolicBuilder;
 
-/// Specifies whether a lookup is local to an AIR or part of a global interaction.
+/// Whether a lookup is local to one AIR or shared across AIRs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
-    /// A lookup where all entries are contained within a single AIR.
+    /// Intra-AIR lookup. Running sum must return to zero.
     Local,
-    /// A lookup that spans multiple AIRs, identified by a unique interaction name.
-    ///
-    /// The interaction name is used to identify all elements that are part of the same interaction.
+    /// Cross-AIR lookup on a named bus. Running sums are verified globally.
     Global(String),
 }
 
-/// Indicates the direction of data flow in a lookup interaction.
-#[derive(Clone, Copy)]
-pub enum Direction {
-    /// Indicates that elements are being sent (contributed) to the lookup.
-    Send,
-    /// Indicates that elements are being received (removed) from the lookup.
-    Receive,
-}
-
-impl Direction {
-    /// Helper method to compute the signed multiplicity based on the direction.
-    pub fn multiplicity<T: Neg<Output = T>>(&self, mult: T) -> T {
-        match self {
-            Self::Send => -mult,
-            Self::Receive => mult,
-        }
-    }
-}
-
-/// Data required for global lookup arguments in a multi-STARK proof.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct LookupData<F> {
-    /// Name of the global lookup interaction.
-    pub name: String,
-    /// Index of the auxiliary column (if there are multiple auxiliary columns, this is the first one)
-    pub aux_idx: usize,
-    /// Expected cumulated value for a global lookup argument.
-    pub expected_cumulated: F,
-}
-
-/// A type alias for a lookup input tuple.
-///
-/// The tuple contains:
-/// - a vector of symbolic expressions representing the elements involved in the lookup,
-/// - a symbolic expression representing the multiplicity of the lookup,
-/// - a direction indicating whether the elements are being sent or received.
-///
-/// # Example
-/// ```ignored
-/// use p3_lookup::{LookupInput, Direction};
-/// use p3_air::SymbolicExpression;
-///
-/// let lookup_input: LookupInput<F> = (
-///     vec![SymbolicExpression::Constant(F::ONE)],
-///     SymbolicExpression::Constant(F::ONE),
-///     Direction::Send
-/// );
-/// ```
-pub type LookupInput<F> = (Vec<SymbolicExpression<F>>, SymbolicExpression<F>, Direction);
-
-/// A structure that holds the lookup data necessary to generate lookup contexts.
-/// It is shared between the prover and the verifier.
+/// A single lookup argument: element tuples, multiplicities, and one
+/// auxiliary column in the permutation trace.
 #[derive(Clone, Debug)]
 pub struct Lookup<F: Field> {
-    /// Type of lookup: local or global
+    /// Local or global (with bus name).
     pub kind: Kind,
-    /// Elements being read (consumed from the table). Each `Vec<SymbolicExpression<F>>`
-    /// actually represents a tuple of elements that are bundled together to make one lookup.
-    pub element_exprs: Vec<Vec<SymbolicExpression<F>>>,
-    /// Multiplicities for the elements.
-    /// Note that Lagrange selectors may not be normalized, so they cannot be used as proper
-    /// boolean filters in the multiplicities.
-    pub multiplicities_exprs: Vec<SymbolicExpression<F>>,
-    /// The column index in the permutation trace for this lookup's running sum
-    pub columns: Vec<usize>,
+    /// Element tuples. Each inner `Vec` is one `(key0, key1, ...)` tuple.
+    pub elements: Vec<Vec<SymbolicExpression<F>>>,
+    /// Signed multiplicity per element tuple. Same length as `elements`.
+    pub multiplicities: Vec<SymbolicExpression<F>>,
+    /// Auxiliary column index in the permutation trace.
+    pub column: usize,
 }
 
-impl<F: Field> Lookup<F> {
-    /// Creates a new lookup with the specified column.
-    ///
-    /// # Arguments
-    /// * `elements` - Elements from either the main execution trace or a lookup table.
-    /// * `multiplicities` - How many times each `element` should appear
-    /// * `column` - The column index in the permutation trace for this lookup
-    pub const fn new(
-        kind: Kind,
-        element_exprs: Vec<Vec<SymbolicExpression<F>>>,
-        multiplicities_exprs: Vec<SymbolicExpression<F>>,
-        columns: Vec<usize>,
-    ) -> Self {
-        Self {
-            kind,
-            element_exprs,
-            multiplicities_exprs,
-            columns,
-        }
-    }
+/// All lookups for one AIR, with column indices assigned.
+#[derive(Clone, Debug, Default)]
+pub struct Lookups<F: Field>(Vec<Lookup<F>>);
 
-    /// Iterates over the global lookup interactions in declaration order.
-    /// Panics if any global lookup has an empty columns vec.
-    pub fn global_entries(lookups: &[Self]) -> impl Iterator<Item = (&String, usize)> + '_ {
-        lookups.iter().filter_map(|lookup| match &lookup.kind {
-            Kind::Global(name) => Some((name, lookup.columns[0])),
-            Kind::Local => None,
-        })
-    }
-
-    /// Counts how many global lookup interactions are present in `lookups`.
-    pub fn global_count(lookups: &[Self]) -> usize {
-        Self::global_entries(lookups).count()
-    }
-}
-
-/// Trait for evaluating lookup constraints.
-pub trait LookupEvaluator {
-    /// Returns the number of auxiliary columns needed by this lookup protocol.
-    ///
-    /// For example:
-    /// - LogUp needs 1 column (running sum)
-    fn num_aux_cols(&self) -> usize;
-
-    /// Returns the number of challenges for each lookup argument.
-    ///
-    /// For example, for LogUp, this is 2:
-    /// - one challenge for combining the lookup tuples,
-    /// - one challenge for the running sum.
-    fn num_challenges(&self) -> usize;
-
-    /// Evaluates a local lookup argument based on the provided context.
-    ///
-    /// For example, in LogUp:
-    /// - this checks that the running sum is updated correctly.
-    /// - it checks that the final value of the running sum is 0.
-    fn eval_local_lookup<AB>(&self, builder: &mut AB, context: &Lookup<AB::F>)
+impl<F: Field> Lookups<F> {
+    /// Extract lookups from an AIR by running symbolic evaluation.
+    pub fn from_air<EF, A>(air: &A) -> Self
     where
-        AB: PermutationAirBuilder;
-
-    /// Evaluates a global lookup update based on the provided context, and the expected cumulated value.
-    /// This evaluation is carried out at the AIR level. We still need to check that the permutation argument holds
-    /// over all AIRs involved in the interaction.
-    ///
-    /// For example, in LogUp:
-    /// - this checks that the running sum is updated correctly.
-    /// - it checks that the local final value of the running sum is equal to the value provided by the prover.
-    fn eval_global_update<AB>(
-        &self,
-        builder: &mut AB,
-        context: &Lookup<AB::F>,
-        expected_cumulated: AB::ExprEF,
-    ) where
-        AB: PermutationAirBuilder;
-
-    /// Evaluates the lookup constraints for all provided contexts.
-    ///
-    /// For each context:
-    /// - if it is a local lookup, evaluates it with `eval_local_lookup`.
-    /// - if it is a global lookup, evaluates it with `eval_global_update`, reading the expected
-    ///   cumulated value from the builder's `permutation_values()`.
-    fn eval_lookups<AB>(&self, builder: &mut AB, contexts: &[Lookup<AB::F>])
-    where
-        AB: PermutationAirBuilder,
+        EF: ExtensionField<F>,
+        A: Air<InteractionSymbolicBuilder<F, EF>>,
+        F: Clone + Send + Sync,
     {
-        let mut pv_idx = 0;
-        for context in contexts.iter() {
-            match &context.kind {
-                Kind::Local => {
-                    self.eval_local_lookup(builder, context);
-                }
-                Kind::Global(_) => {
-                    let expected = builder.permutation_values()[pv_idx].clone();
-                    pv_idx += 1;
-                    self.eval_global_update(builder, context, expected.into());
-                }
-            }
+        let mut builder = InteractionSymbolicBuilder::<F, EF>::new(AirLayout::from_air(air));
+        air.eval(&mut builder);
+        Self::from_interactions(builder.global_interactions(), builder.local_interactions())
+    }
+
+    /// Build from raw symbolic interactions.
+    ///
+    /// Local interactions first, then global — matching the LogUp column order.
+    fn from_interactions(
+        global: &[SymbolicInteraction<F>],
+        local: &[SymbolicLocalInteraction<F>],
+    ) -> Self {
+        let mut lookups = Vec::with_capacity(local.len() + global.len());
+        let mut col = 0;
+
+        for i in local {
+            let (elements, multiplicities) =
+                i.tuples.iter().map(|(f, c)| (f.clone(), c.clone())).unzip();
+            lookups.push(Lookup {
+                kind: Kind::Local,
+                elements,
+                multiplicities,
+                column: col,
+            });
+            col += 1;
         }
-        assert_eq!(
-            pv_idx,
-            builder.permutation_values().len(),
-            "permutation values count mismatch"
-        );
+
+        for i in global {
+            lookups.push(Lookup {
+                kind: Kind::Global(i.bus_name.clone()),
+                elements: vec![i.fields.clone()],
+                multiplicities: vec![i.count.clone()],
+                column: col,
+            });
+            col += 1;
+        }
+
+        Self(lookups)
     }
 }
 
-/// Extension trait for AIRs that use lookups.
-///
-/// This decouples lookup definition from the core [`Air`] trait, so AIRs
-/// that don't use lookups don't need to know about lookup types at all.
-pub trait LookupAir<F: Field> {
-    /// Allocate auxiliary columns for a new lookup and return their indices.
-    ///
-    /// Default implementation returns an empty vector, indicating no lookup columns.
-    fn add_lookup_columns(&mut self) -> Vec<usize> {
-        Vec::new()
-    }
+impl<F: Field> Deref for Lookups<F> {
+    type Target = [Lookup<F>];
 
-    /// Return all lookups registered by this AIR.
-    ///
-    /// Default implementation returns an empty vector, indicating no lookups.
-    fn get_lookups(&mut self) -> Vec<Lookup<F>> {
-        Vec::new()
-    }
-
-    /// Register a lookup to be used in this AIR.
-    ///
-    /// This is a convenience method that constructs a [`Lookup`] from inputs
-    /// and allocates auxiliary columns via [`add_lookup_columns`](Self::add_lookup_columns).
-    fn register_lookup(&mut self, kind: Kind, lookup_inputs: &[LookupInput<F>]) -> Lookup<F> {
-        let (element_exprs, multiplicities_exprs) = lookup_inputs
-            .iter()
-            .map(|(elems, mult, dir)| {
-                let multiplicity = dir.multiplicity(mult.clone());
-                (elems.clone(), multiplicity)
-            })
-            .unzip();
-
-        Lookup {
-            kind,
-            element_exprs,
-            multiplicities_exprs,
-            columns: self.add_lookup_columns(),
-        }
+    fn deref(&self) -> &[Lookup<F>] {
+        &self.0
     }
 }
 
-/// Extension of [`Air`] that adds lookup constraint evaluation.
-///
-/// This trait is blanket-implemented for every type that implements [`Air`],
-/// so any AIR automatically supports `eval_with_lookups`. It lives in
-/// `p3-lookup` (rather than `p3-air`) to keep the core `Air` trait free of
-/// lookup concerns.
-pub trait AirWithLookups<AB: PermutationAirBuilder>: Air<AB> {
-    /// Evaluate both AIR constraints and lookup constraints.
-    ///
-    /// First evaluates the core AIR constraints via [`Air::eval`], then
-    /// evaluates any lookup constraints via the provided [`LookupEvaluator`].
-    ///
-    /// For AIRs without lookups, pass an empty `lookups` slice and the
-    /// evaluator will be skipped entirely.
-    fn eval_with_lookups(
-        &self,
-        builder: &mut AB,
-        lookups: &[Lookup<AB::F>],
-        lookup_evaluator: &impl LookupEvaluator,
-    ) {
-        self.eval(builder);
-
-        if !lookups.is_empty() {
-            lookup_evaluator.eval_lookups(builder, lookups);
-        }
+impl<F: Field> AsRef<[Lookup<F>]> for Lookups<F> {
+    fn as_ref(&self) -> &[Lookup<F>] {
+        &self.0
     }
 }
 
-impl<AB: PermutationAirBuilder, A: Air<AB>> AirWithLookups<AB> for A {}
+/// Prover-provided data for one global lookup interaction.
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct LookupData<F> {
+    /// Bus name.
+    pub name: String,
+    /// Auxiliary column index.
+    pub aux_column: usize,
+    /// Cumulative sum computed by the prover.
+    pub cumulative_sum: F,
+}
+
+/// Lookup verification error.
+#[derive(Debug)]
+pub enum LookupError {
+    /// Global cumulative sums do not balance to zero.
+    GlobalCumulativeMismatch(Option<String>),
+}

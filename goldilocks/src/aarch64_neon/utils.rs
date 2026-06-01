@@ -162,6 +162,54 @@ pub(super) unsafe fn add_asm(a: u64, b: u64) -> u64 {
     result
 }
 
+/// Add two Goldilocks elements where `b` is already canonical (`b < P`).
+///
+/// Drops the leading `subs/csel` canonicalize-b pair from `add_asm`,
+/// saving 2 ALU instructions per call. Caller is responsible for the
+/// `b < P` precondition; checked in debug builds via `debug_assert!`,
+/// in release builds misuse silently produces a non-canonical output
+/// that may corrupt downstream proofs.
+///
+/// Safe call sites are those where `b` is provably canonical:
+/// - the output of `add_asm` / `sub_asm` / `mul_asm` / `mul_add_asm`
+///   (each performs a final `subs/csel` reduction to `[0, P)`);
+/// - an RC stored on `Poseidon2GoldilocksFused`, canonicalized at
+///   construction time by `to_canonical_u64`.
+#[inline(always)]
+pub(super) unsafe fn add_canonical_asm(a: u64, b: u64) -> u64 {
+    debug_assert!(
+        b < P,
+        "add_canonical_asm precondition violated: b = {b} >= P"
+    );
+
+    let result: u64;
+    let _t1: u64;
+    let _adj: u64;
+
+    unsafe {
+        asm!(
+            // Add, folding 2^64 overflow via EPSILON.
+            // (b is canonical by precondition; canonicalize-b pair dropped.)
+            "adds  {result}, {a}, {b}",
+            "csetm {adj:w}, cs",
+            "add   {result}, {result}, {adj}",
+
+            // Final reduction: if result >= P, subtract P.
+            "subs  {t1}, {result}, {p}",
+            "csel  {result}, {t1}, {result}, cs",
+            a = in(reg) a,
+            b = in(reg) b,
+            p = in(reg) P,
+            result = out(reg) result,
+            t1 = out(reg) _t1,
+            adj = out(reg) _adj,
+            options(pure, nomem, nostack),
+        );
+    }
+
+    result
+}
+
 // ---------------------------------------------------------------------------
 // Lane conversion (packed NEON <-> raw u64 arrays)
 // ---------------------------------------------------------------------------
@@ -291,6 +339,22 @@ pub(super) mod tests {
         }
     }
 
+    /// Variant of `test_add_asm_edge_pairs` filtered to canonical `b`
+    /// (the precondition of `add_canonical_asm`).
+    #[test]
+    fn test_add_canonical_asm_edge_pairs() {
+        for &a in EDGE_VALUES {
+            for &b in EDGE_VALUES {
+                if b >= P {
+                    continue;
+                }
+                let expected = (F::new(a) + F::new(b)).as_canonical_u64();
+                let got = canon(unsafe { add_canonical_asm(a, b) });
+                assert_eq!(got, expected, "add_canonical({a}, {b})");
+            }
+        }
+    }
+
     #[test]
     fn test_mul_asm_edge_pairs() {
         for &a in EDGE_VALUES {
@@ -339,6 +403,15 @@ pub(super) mod tests {
         fn test_add_asm(a: u64, b: u64) {
             let expected = (F::new(a) + F::new(b)).as_canonical_u64();
             let got = canon(unsafe { add_asm(a, b) });
+            prop_assert_eq!(got, expected);
+        }
+
+        /// Verify ASM canonical-b addition against field addition.
+        /// `b` is constrained to `[0, P)` per the precondition.
+        #[test]
+        fn test_add_canonical_asm(a: u64, b in 0u64..P) {
+            let expected = (F::new(a) + F::new(b)).as_canonical_u64();
+            let got = canon(unsafe { add_canonical_asm(a, b) });
             prop_assert_eq!(got, expected);
         }
 

@@ -31,7 +31,7 @@ pub const U64_LIMBS: usize = 64 / BITS_PER_LIMB;
 
 /// Number of rate bits in Keccak-f.
 ///
-/// In Keccak-f[1600], the "rate" parameter for absorbing and squeezing is 1088 bits.
+/// In `Keccak-f[1600]`, the "rate" parameter for absorbing and squeezing is 1088 bits.
 const RATE_BITS: usize = 1088;
 
 /// Number of limbs needed to represent the rate portion of the state.

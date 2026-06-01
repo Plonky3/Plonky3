@@ -30,6 +30,10 @@ fn coset_shift_and_scale_rows<F: Field>(
     shift: F,
     scale: F,
 ) {
+    debug_assert!(out.len().is_multiple_of(out_ncols));
+    debug_assert!(mat.len().is_multiple_of(ncols));
+    debug_assert!(out_ncols >= ncols);
+    debug_assert_eq!(out.len() / out_ncols, mat.len() / ncols);
     let powers = shift.shifted_powers(scale).collect_n(ncols);
     out.par_chunks_exact_mut(out_ncols)
         .zip(mat.par_chunks_exact(ncols))

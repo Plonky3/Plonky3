@@ -28,6 +28,11 @@ where
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     Folding: FriFoldingStrategy<Val, Challenge>,
 {
+    assert!(
+        params.max_log_arity > 0,
+        "max_log_arity must be at least 1 to guarantee folding progress"
+    );
+
     // check sorted descending
     assert!(
         inputs
@@ -89,6 +94,11 @@ where
     Challenger: FieldChallenger<Val> + CanObserve<M::Commitment>,
     Folding: FriFoldingStrategy<Val, Challenge>,
 {
+    assert!(
+        params.max_log_arity > 0,
+        "max_log_arity must be at least 1 to guarantee folding progress"
+    );
+
     let mut inputs_iter = inputs.into_iter().peekable();
     let mut folded = inputs_iter.next().unwrap();
     let mut commits = vec![];

@@ -548,6 +548,33 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     }
 }
 
+/// Values that can act as sponge lanes for delimiter padding.
+///
+/// This is used by symmetric sponge adapters that need canonical `0` and `1` symbols while
+/// supporting both field/ring-based lanes and `u64`-based Keccak lanes behind one API.
+pub trait SpongePaddingValue: Copy {
+    /// The empty-lane value.
+    const PAD_ZERO: Self;
+
+    /// The delimiter value injected after the final absorbed element.
+    const PAD_ONE: Self;
+}
+
+impl<T: PrimeCharacteristicRing + Copy> SpongePaddingValue for T {
+    const PAD_ZERO: Self = Self::ZERO;
+    const PAD_ONE: Self = Self::ONE;
+}
+
+impl SpongePaddingValue for u64 {
+    const PAD_ZERO: Self = 0;
+    const PAD_ONE: Self = 1;
+}
+
+impl<const N: usize> SpongePaddingValue for [u64; N] {
+    const PAD_ZERO: Self = [0; N];
+    const PAD_ONE: Self = [1; N];
+}
+
 impl<F: PrimeCharacteristicRing> BasedVectorSpace<F> for F {
     const DIMENSION: usize = 1;
 
@@ -1120,6 +1147,24 @@ pub trait ExtensionField<Base: Field>: Field + Algebra<Base> + BasedVectorSpace<
     /// Otherwise return None.
     #[must_use]
     fn as_base(&self) -> Option<Base>;
+
+    /// Reassemble an element of `Self` from `D = DIMENSION` coefficients in `Self`
+    /// via `Σⱼ basisⱼ · coeffsⱼ`. Returns `None` if `coeffs.len() != Self::DIMENSION`.
+    ///
+    /// This is the `Self`-coefficient counterpart to
+    /// [`BasedVectorSpace::from_basis_coefficients_slice`], which takes coefficients
+    /// in `Base`. It is the natural "lifting" operation in commit-and-open protocols:
+    /// if an extension polynomial decomposes as `f(X) = Σⱼ basisⱼ · fⱼ(X)` with
+    /// `fⱼ` over `Base`, then `f(z) = Σⱼ basisⱼ · fⱼ(z)` for any `z ∈ Self`.
+    #[inline]
+    #[must_use]
+    fn from_ext_basis_coefficients(coeffs: &[Self]) -> Option<Self> {
+        (coeffs.len() == Self::DIMENSION).then(|| {
+            (0..Self::DIMENSION)
+                .map(|j| Self::ith_basis_element(j).unwrap() * coeffs[j])
+                .sum()
+        })
+    }
 }
 
 // Every field is trivially a one dimensional extension over itself.
@@ -1134,6 +1179,11 @@ impl<F: Field> ExtensionField<F> for F {
     #[inline]
     fn as_base(&self) -> Option<F> {
         Some(*self)
+    }
+
+    #[inline]
+    fn from_ext_basis_coefficients(coeffs: &[Self]) -> Option<Self> {
+        (coeffs.len() == 1).then(|| coeffs[0])
     }
 }
 
@@ -1182,11 +1232,18 @@ impl<R: PrimeCharacteristicRing> Powers<R> {
             .zip(self)
             .for_each(|(out, next)| *out = next);
     }
+}
 
+impl<F: Field> Powers<F> {
     /// Wrapper for `self.take(n).collect()`.
+    ///
+    /// Bounded to `F: Field` on purpose: the body resolves `.collect()` to the inherent
+    /// [`BoundedPowers::collect`] SIMD fast path, which only exists under `F: Field`.
+    /// Defining this method under a wider bound (e.g. `PrimeCharacteristicRing`) would
+    /// silently fall back to `Iterator::collect` and bypass packed-field acceleration.
     #[inline]
     #[must_use]
-    pub fn collect_n(self, n: usize) -> Vec<R> {
+    pub fn collect_n(self, n: usize) -> Vec<F> {
         self.take(n).collect()
     }
 }

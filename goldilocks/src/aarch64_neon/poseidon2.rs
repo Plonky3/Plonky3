@@ -21,7 +21,7 @@ use rand::{Rng, RngExt};
 use super::packing::PackedGoldilocksNeon;
 use super::poseidon2_asm::*;
 use super::utils::{pack_lanes, unpack_lanes};
-use crate::{Goldilocks, MATRIX_DIAG_20_GOLDILOCKS};
+use crate::{Goldilocks, MATRIX_DIAG_20_GOLDILOCKS, P};
 
 /// Degree of the chosen permutation polynomial for Goldilocks.
 const GOLDILOCKS_S_BOX_DEGREE: u64 = 7;
@@ -304,21 +304,31 @@ pub struct Poseidon2GoldilocksFused<const WIDTH: usize> {
     terminal_constants_raw: Vec<[u64; WIDTH]>,
 }
 
+/// Reduce a `Goldilocks::value` to canonical form. One subtraction suffices because
+/// `u64::MAX < 2P`.
+#[inline]
+const fn to_canonical_u64(v: u64) -> u64 {
+    if v >= P { v - P } else { v }
+}
+
 impl<const WIDTH: usize> Poseidon2GoldilocksFused<WIDTH> {
     pub fn new(
         external_constants: &ExternalLayerConstants<Goldilocks, WIDTH>,
         internal_constants: &[Goldilocks],
     ) -> Self {
-        let internal_constants_raw = internal_constants.iter().map(|c| c.value).collect();
+        let internal_constants_raw = internal_constants
+            .iter()
+            .map(|c| to_canonical_u64(c.value))
+            .collect();
         let initial_constants_raw = external_constants
             .get_initial_constants()
             .iter()
-            .map(|rc| core::array::from_fn(|i| rc[i].value))
+            .map(|rc| core::array::from_fn(|i| to_canonical_u64(rc[i].value)))
             .collect();
         let terminal_constants_raw = external_constants
             .get_terminal_constants()
             .iter()
-            .map(|rc| core::array::from_fn(|i| rc[i].value))
+            .map(|rc| core::array::from_fn(|i| to_canonical_u64(rc[i].value)))
             .collect();
         Self {
             internal_constants_raw,

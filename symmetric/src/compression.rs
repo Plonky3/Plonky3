@@ -22,6 +22,11 @@ impl<InnerP, const N: usize, const CHUNK: usize, const WIDTH: usize>
     TruncatedPermutation<InnerP, N, CHUNK, WIDTH>
 {
     pub const fn new(inner_permutation: InnerP) -> Self {
+        const {
+            assert!(N > 0);
+            assert!(CHUNK > 0);
+            assert!(CHUNK * N <= WIDTH);
+        }
         Self { inner_permutation }
     }
 }
@@ -33,11 +38,6 @@ where
     InnerP: CryptographicPermutation<[T; WIDTH]>,
 {
     fn compress(&self, input: [[T; CHUNK]; N]) -> [T; CHUNK] {
-        const {
-            assert!(N > 0);
-            assert!(CHUNK > 0);
-            assert!(CHUNK * N <= WIDTH);
-        }
         let mut pre = [T::default(); WIDTH];
         for i in 0..N {
             pre[i * CHUNK..(i + 1) * CHUNK].copy_from_slice(&input[i]);

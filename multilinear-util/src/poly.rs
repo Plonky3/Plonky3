@@ -17,8 +17,24 @@ use crate::split_eq::SplitEq;
 
 pub(crate) const PARALLEL_THRESHOLD: usize = 4096;
 
-/// Number of variables at which we switch from recursive to chunk-based MLE evaluation.
-const MLE_RECURSION_THRESHOLD: usize = 10;
+/// Number of variables at which we switch from recursive scalar evaluation to the
+/// SIMD-packed `SplitEq` path.
+///
+/// Crossover depends on the base-field byte width (smaller base ⇒ wider packing
+/// ⇒ `SplitEq` wins earlier), measured on aarch64 (NEON) and x86-64 (AVX2):
+///
+/// - 4-byte bases (BabyBear, KoalaBear, Mersenne31): `SplitEq` wins from n=9.
+/// - 8-byte bases (Goldilocks): recursive still wins at n=9, crosses at n=10.
+///
+/// Wider bases (e.g. BN254) keep the default 10.
+#[inline]
+const fn mle_recursion_threshold<B>() -> usize {
+    if core::mem::size_of::<B>() <= 4 {
+        9
+    } else {
+        10
+    }
+}
 
 /// Returns a vector of uninitialized elements of type `A` with the specified length.
 ///
@@ -103,6 +119,20 @@ impl<F> Poly<F> {
     #[must_use]
     pub fn as_mut_slice(&mut self) -> &mut [F] {
         &mut self.0
+    }
+
+    /// Pads the evaluation vector with zeros up to `num_variables`.
+    ///
+    /// # Panics
+    ///
+    /// - `num_variables` must be at least the current number of variables.
+    #[inline]
+    pub fn pad_zeros(&mut self, num_variables: usize)
+    where
+        F: PrimeCharacteristicRing,
+    {
+        assert!(num_variables >= self.num_variables());
+        self.0.resize(1 << num_variables, F::ZERO);
     }
 
     /// Returns an iterator over the evaluations.
@@ -301,7 +331,7 @@ impl<F: Field> Poly<F> {
     #[must_use]
     #[inline]
     pub fn eval_base<EF: ExtensionField<F>>(&self, point: &Point<EF>) -> EF {
-        if point.num_variables() < MLE_RECURSION_THRESHOLD {
+        if point.num_variables() < mle_recursion_threshold::<F>() {
             eval_multilinear_recursive(&self.0, point.as_slice())
         } else {
             SplitEq::new_packed(point, EF::ONE).eval_base(self)
@@ -324,7 +354,7 @@ impl<F: Field> Poly<F> {
     where
         F: ExtensionField<BaseField>,
     {
-        if point.num_variables() < MLE_RECURSION_THRESHOLD {
+        if point.num_variables() < mle_recursion_threshold::<BaseField>() {
             eval_multilinear_recursive(&self.0, point.as_slice())
         } else {
             SplitEq::new_packed(point, F::ONE).eval_ext(self)
@@ -689,24 +719,12 @@ where
             // Split the evaluations into two halves, corresponding to the first variable being 0 or 1.
             let (f0, f1) = evals.split_at(evals.len() / 2);
 
-            // Recursively evaluate on the two smaller hypercubes.
-            let (f0_eval, f1_eval) = {
-                // Only spawn parallel tasks if the subproblem is large enough to overcome
-                // the overhead of threading.
-                let work_size: usize = (1 << 15) / core::mem::size_of::<F>();
-                if evals.len() > work_size {
-                    join(
-                        || eval_multilinear_recursive(f0, sub_point),
-                        || eval_multilinear_recursive(f1, sub_point),
-                    )
-                } else {
-                    // For smaller subproblems, execute sequentially.
-                    (
-                        eval_multilinear_recursive(f0, sub_point),
-                        eval_multilinear_recursive(f1, sub_point),
-                    )
-                }
-            };
+            // Sequential recurse: callers gate this function with `num_variables <
+            // mle_recursion_threshold`, so `evals.len()` is always small enough that
+            // Rayon `join` overhead would dominate.
+            let f0_eval = eval_multilinear_recursive(f0, sub_point);
+            let f1_eval = eval_multilinear_recursive(f1, sub_point);
+
             // Perform the final linear interpolation for the first variable `x`.
             f0_eval + (f1_eval - f0_eval) * *x
         }
@@ -1205,13 +1223,13 @@ pub(crate) mod test {
             evals_raw in prop::collection::vec(0u64..F::ORDER_U64, 5),
         ) {
             let evals: Vec<F> = evals_raw[..n].iter().map(|&x| F::from_u64(x)).collect();
-            let mut out = vec![F::ZERO; 1 << n];
+            let mut out = F::zero_vec(1 << n);
             eval_eq_batch::<F, F, false>(
                 RowMajorMatrixView::new_col(&evals),
                 &mut out,
                 &[F::ONE],
             );
-            let mut expected = vec![F::ZERO; 1 << n];
+            let mut expected = F::zero_vec(1 << n);
             for (i, e) in expected.iter_mut().enumerate().take(1 << n) {
                 let mut weight = F::ONE;
                 for (j, &val) in evals.iter().enumerate() {
@@ -1864,5 +1882,96 @@ pub(crate) mod test {
                 assert_eq!(compressed0, compressed1);
             }
         }
+    }
+
+    #[test]
+    fn pad_zeros_to_same_arity_is_a_no_op() {
+        // Invariant:
+        //     Padding to the current arity must leave the buffer unchanged.
+        //
+        // Fixture state:
+        //     2-variable polynomial → 4 evaluations.
+        let mut poly = Poly::new(vec![
+            F::from_u64(1),
+            F::from_u64(2),
+            F::from_u64(3),
+            F::from_u64(4),
+        ]);
+        let original = poly.as_slice().to_vec();
+
+        // Pad to the same arity.
+        poly.pad_zeros(2);
+
+        // Check: arity and contents are identical to the input.
+        assert_eq!(poly.num_variables(), 2);
+        assert_eq!(poly.as_slice(), original.as_slice());
+    }
+
+    #[test]
+    fn pad_zeros_extends_with_zeros_and_preserves_prefix() {
+        // Invariant:
+        //     Padding to a strictly larger arity grows the buffer to 2^k entries,
+        //     keeps every original evaluation in place, and zero-fills the tail.
+        //
+        // Fixture state:
+        //     1-variable polynomial → 2 evaluations.
+        //     pad to 3 variables → 8 entries; entries [2..8] must be zero.
+        let mut poly = Poly::new(vec![F::from_u64(7), F::from_u64(11)]);
+
+        poly.pad_zeros(3);
+
+        // Check: arity matches the requested target.
+        assert_eq!(poly.num_variables(), 3);
+        // Check: entry count equals 2^arity.
+        assert_eq!(poly.as_slice().len(), 8);
+        // Check: original evaluations sit at the head of the buffer.
+        assert_eq!(poly.as_slice()[0], F::from_u64(7));
+        assert_eq!(poly.as_slice()[1], F::from_u64(11));
+        // Check: every padded slot is zero.
+        for &value in &poly.as_slice()[2..] {
+            assert_eq!(value, F::ZERO);
+        }
+    }
+
+    #[test]
+    fn pad_zeros_idempotent_when_called_twice() {
+        // Invariant:
+        //     Calling pad_zeros twice with the same target is the same as once.
+        //
+        // Fixture state:
+        //     2-variable polynomial padded twice to arity 4.
+        let mut once = Poly::new(vec![
+            F::from_u64(5),
+            F::from_u64(6),
+            F::from_u64(7),
+            F::from_u64(8),
+        ]);
+        once.pad_zeros(4);
+
+        let mut twice = Poly::new(vec![
+            F::from_u64(5),
+            F::from_u64(6),
+            F::from_u64(7),
+            F::from_u64(8),
+        ]);
+        twice.pad_zeros(4);
+        twice.pad_zeros(4);
+
+        // Check: the two paths produce identical buffers.
+        assert_eq!(once.num_variables(), twice.num_variables());
+        assert_eq!(once.as_slice(), twice.as_slice());
+    }
+
+    #[test]
+    #[should_panic]
+    fn pad_zeros_panics_when_target_is_smaller_than_current() {
+        // Invariant:
+        //     pad_zeros refuses to shrink the polynomial — it is strictly an
+        //     upward-padding helper.
+        //
+        // Fixture state:
+        //     3-variable polynomial; ask to pad to arity 2 → must panic.
+        let mut poly = Poly::<F>::zero(3);
+        poly.pad_zeros(2);
     }
 }

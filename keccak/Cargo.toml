@@ -16,9 +16,10 @@ p3-util.workspace = true
 tiny-keccak = { workspace = true, features = ["keccak"] }
 
 [dev-dependencies]
-criterion.workspace = true
-p3-field.workspace = true
+p3-field = { path = "../field" }
 p3-mersenne-31 = { path = "../mersenne-31" }
+
+criterion.workspace = true
 
 [[bench]]
 name = "bench_keccak"
