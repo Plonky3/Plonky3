@@ -23,11 +23,11 @@ pub(crate) fn shake256_hash(seed_bytes: &[u8], num_bytes: usize) -> Vec<u8> {
 /// advancing, exposing `N`-way ILP within a step so the CPU can hide
 /// per-multiplication latency. Used by the RPO inverse S-boxes.
 #[inline]
-pub(crate) fn square_n<R, const N: usize>(mut state: [R; N], m: usize) -> [R; N]
+pub(crate) fn square_n<R, const N: usize, const M: usize>(mut state: [R; N]) -> [R; N]
 where
     R: PrimeCharacteristicRing + Copy,
 {
-    for _ in 0..m {
+    for _ in 0..M {
         state.iter_mut().for_each(|x| *x = x.square());
     }
     state
@@ -42,7 +42,7 @@ pub(crate) fn exp_acc<R, const N: usize, const M: usize>(base: [R; N], tail: [R;
 where
     R: PrimeCharacteristicRing + Copy,
 {
-    let mut r = square_n(base, M);
+    let mut r = square_n::<_, N, M>(base);
     r.iter_mut().zip(tail).for_each(|(x, t)| *x *= t);
     r
 }

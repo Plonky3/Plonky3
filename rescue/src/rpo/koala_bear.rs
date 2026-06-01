@@ -90,17 +90,17 @@ fn apply_inv_sbox_x3(state: &mut [KoalaBear; RPO_KB_WIDTH]) {
     //   1010100101010101010101010101011
     let p1 = *state;
 
-    let p100 = square_n(p1, 2);
+    let p100 = square_n::<_, RPO_KB_WIDTH, 2>(p1);
 
     let mut p101 = p100;
     p101.iter_mut().zip(p1).for_each(|(t, x)| *t *= x);
 
-    let p10000 = square_n(p100, 2);
+    let p10000 = square_n::<_, RPO_KB_WIDTH, 2>(p100);
 
     let mut p10101 = p10000;
     p10101.iter_mut().zip(p101).for_each(|(t, x)| *t *= x);
 
-    let p10101000000 = square_n(p10101, 6);
+    let p10101000000 = square_n::<_, RPO_KB_WIDTH, 6>(p10101);
 
     let mut p10101010101 = p10101000000;
     p10101010101
@@ -117,7 +117,8 @@ fn apply_inv_sbox_x3(state: &mut [KoalaBear; RPO_KB_WIDTH]) {
     let p101010010101010101010101 = exp_acc::<_, RPO_KB_WIDTH, 12>(p101010010101, p10101010101);
     let p101010010101010101010101010101 =
         exp_acc::<_, RPO_KB_WIDTH, 6>(p101010010101010101010101, p10101);
-    let p1010100101010101010101010101010 = square_n(p101010010101010101010101010101, 1);
+    let p1010100101010101010101010101010 =
+        square_n::<_, RPO_KB_WIDTH, 1>(p101010010101010101010101010101);
 
     state
         .iter_mut()
@@ -130,6 +131,7 @@ fn apply_inv_sbox_x3(state: &mut [KoalaBear; RPO_KB_WIDTH]) {
 mod tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_symmetric::Permutation;
+    use proptest::prelude::*;
 
     use super::*;
 
@@ -183,5 +185,17 @@ mod tests {
         state.iter_mut().for_each(|s| *s = s.injective_exp_n());
         apply_inv_sbox_x3(&mut state);
         assert_eq!(state, original);
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_inv_sbox_x3_round_trips(seeds in prop::array::uniform24(any::<u32>())) {
+            let mut state: [KoalaBear; RPO_KB_WIDTH] =
+                core::array::from_fn(|i| KoalaBear::from_u32(seeds[i]));
+            let original = state;
+            state.iter_mut().for_each(|s| *s = s.injective_exp_n());
+            apply_inv_sbox_x3(&mut state);
+            prop_assert_eq!(state, original);
+        }
     }
 }

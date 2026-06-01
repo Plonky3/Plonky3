@@ -90,22 +90,22 @@ fn apply_inv_sbox_x7(state: &mut [BabyBear; RPO_BB_WIDTH]) {
     //   1100110110110110110110110110111
     let p1 = *state;
 
-    let p10 = square_n(p1, 1);
+    let p10 = square_n::<_, RPO_BB_WIDTH, 1>(p1);
 
     let mut p11 = p10;
     p11.iter_mut().zip(p1).for_each(|(t, x)| *t *= x);
 
-    let p110 = square_n(p11, 1);
+    let p110 = square_n::<_, RPO_BB_WIDTH, 1>(p11);
 
     let mut p111 = p110;
     p111.iter_mut().zip(p1).for_each(|(t, x)| *t *= x);
 
-    let p11000 = square_n(p110, 2);
+    let p11000 = square_n::<_, RPO_BB_WIDTH, 2>(p110);
 
     let mut p11011 = p11000;
     p11011.iter_mut().zip(p11).for_each(|(t, x)| *t *= x);
 
-    let p11000000 = square_n(p11000, 3);
+    let p11000000 = square_n::<_, RPO_BB_WIDTH, 3>(p11000);
 
     let mut p11011011 = p11000000;
     p11011011.iter_mut().zip(p11011).for_each(|(t, x)| *t *= x);
@@ -119,7 +119,8 @@ fn apply_inv_sbox_x7(state: &mut [BabyBear; RPO_BB_WIDTH]) {
     let p110011011011011011 = exp_acc::<_, RPO_BB_WIDTH, 9>(p110011011, p11011011);
     let p110011011011011011011011011 =
         exp_acc::<_, RPO_BB_WIDTH, 9>(p110011011011011011, p11011011);
-    let p1100110110110110110110110110000 = square_n(p110011011011011011011011011, 4);
+    let p1100110110110110110110110110000 =
+        square_n::<_, RPO_BB_WIDTH, 4>(p110011011011011011011011011);
 
     state
         .iter_mut()
@@ -132,6 +133,7 @@ fn apply_inv_sbox_x7(state: &mut [BabyBear; RPO_BB_WIDTH]) {
 mod tests {
     use p3_field::PrimeCharacteristicRing;
     use p3_symmetric::Permutation;
+    use proptest::prelude::*;
 
     use super::*;
 
@@ -185,5 +187,17 @@ mod tests {
         state.iter_mut().for_each(|s| *s = s.injective_exp_n());
         apply_inv_sbox_x7(&mut state);
         assert_eq!(state, original);
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_inv_sbox_x7_round_trips(seeds in prop::array::uniform24(any::<u32>())) {
+            let mut state: [BabyBear; RPO_BB_WIDTH] =
+                core::array::from_fn(|i| BabyBear::from_u32(seeds[i]));
+            let original = state;
+            state.iter_mut().for_each(|s| *s = s.injective_exp_n());
+            apply_inv_sbox_x7(&mut state);
+            prop_assert_eq!(state, original);
+        }
     }
 }

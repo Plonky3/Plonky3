@@ -10,7 +10,7 @@ use p3_rescue::{RpoBabyBear, RpoGoldilocks, RpoKoalaBear, RpoMersenne31};
 use p3_symmetric::Permutation;
 
 fn bench_rpo_goldilocks_12(c: &mut Criterion) {
-    let rpo = RpoGoldilocks::from_standard_constants(4, 128);
+    let rpo = RpoGoldilocks::from_standard_constants();
     let input: [Goldilocks; 12] = array::from_fn(|_| Goldilocks::ZERO);
     let id = BenchmarkId::new("rpo::<Goldilocks, alpha=7>", 12);
     c.bench_with_input(id, &input, |b, input| b.iter(|| rpo.permute(*input)));

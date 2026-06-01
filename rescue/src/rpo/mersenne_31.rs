@@ -192,7 +192,7 @@ fn apply_inv_sbox_x5(state: &mut [Mersenne31; RPO_M31_WIDTH]) {
     p101.iter_mut().zip(p11).for_each(|(t, x)| *t *= x);
 
     let p110011 = exp_acc::<_, RPO_M31_WIDTH, 4>(p11, p11);
-    let p11001100000000 = square_n(p110011, 8);
+    let p11001100000000 = square_n::<_, RPO_M31_WIDTH, 8>(p110011);
 
     let mut p11001100110011 = p11001100000000;
     p11001100110011
@@ -202,7 +202,8 @@ fn apply_inv_sbox_x5(state: &mut [Mersenne31; RPO_M31_WIDTH]) {
 
     let p1100110011001100110011 = exp_acc::<_, RPO_M31_WIDTH, 8>(p11001100000000, p11001100110011);
     let p11001100110011001100110011 = exp_acc::<_, RPO_M31_WIDTH, 4>(p1100110011001100110011, p11);
-    let p1100110011001100110011001100000 = square_n(p11001100110011001100110011, 5);
+    let p1100110011001100110011001100000 =
+        square_n::<_, RPO_M31_WIDTH, 5>(p11001100110011001100110011);
 
     state
         .iter_mut()
@@ -256,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn mds_rpo_mersenne31_first_column_matches_paper() {
+    fn mds_rpo_mersenne31_first_column_matches_first_row_constant() {
         // MDS * e_0 must equal the first column of the underlying 32x32
         // circulant, restricted to the first 24 rows.
         let mut state: [Mersenne31; RPO_M31_WIDTH] = [Mersenne31::ZERO; RPO_M31_WIDTH];
