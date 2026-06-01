@@ -40,7 +40,7 @@ tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
 [target.'cfg(target_family = "unix")'.dev-dependencies]
-tikv-jemallocator = "0.6"
+tikv-jemallocator = "0.7"
 
 [[bench]]
 name = "poseidon1-air"
