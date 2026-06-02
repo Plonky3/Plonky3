@@ -40,8 +40,8 @@ pub struct ZkSumcheckData<F, EF> {
     /// Sum of all mask polynomial evaluations across the boolean hypercube `{0,1}^k`.
     ///
     /// Observed on the transcript before the verifier samples the combining challenge.
-    /// Lives in the base field because the mask coefficients do.
-    pub mu_tilde: F,
+    /// Lives in the extension field because the mask coefficients do.
+    pub mu_tilde: EF,
 
     /// Message length of the zero-knowledge mask code.
     ///
@@ -62,11 +62,11 @@ pub struct ZkSumcheckData<F, EF> {
     pub pow_witnesses: Vec<F>,
 }
 
-impl<F: Field, EF> Default for ZkSumcheckData<F, EF> {
+impl<F, EF: Field> Default for ZkSumcheckData<F, EF> {
     fn default() -> Self {
         Self {
             // Real runs overwrite this in step 2 once the prover has summed the masks.
-            mu_tilde: F::ZERO,
+            mu_tilde: EF::ZERO,
             // Sentinel: honest runs set this to the encoding's message length; the verifier rejects 0.
             ell_zk: 0,
             // Filled with one wire entry per sumcheck round.
@@ -81,7 +81,7 @@ impl<F: Field, EF> Default for ZkSumcheckData<F, EF> {
 ///
 /// Pairs the public Merkle root with the prover-side data needed to open the codeword at requested positions.
 /// Downstream consumers use this during the codeswitch step to produce opening proofs against the mask oracles.
-pub type MaskOracle<F, Enc, M> = (
-    <M as Mmcs<F>>::Commitment,
-    <M as Mmcs<F>>::ProverData<<Enc as ZkEncoding<F>>::Codeword>,
+pub type MaskOracle<EF, Enc, M> = (
+    <M as Mmcs<EF>>::Commitment,
+    <M as Mmcs<EF>>::ProverData<<Enc as ZkEncoding<EF>>::Codeword>,
 );

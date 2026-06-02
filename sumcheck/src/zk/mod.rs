@@ -14,7 +14,7 @@
 //!
 //! Let `k` be the folding factor and `ell_zk` the mask code message length.
 //!
-//! 1. Prover samples `k` univariate masks of degree `ell_zk - 1` over the base field.
+//! 1. Prover samples `k` univariate masks of degree `ell_zk - 1` over the extension field.
 //! 2. Each mask is encoded under a zero-knowledge code, MMCS-committed, and absorbed into the Fiat-Shamir transcript.
 //! 3. Prover sends `mu_tilde`, the sum of all mask evaluations over `{0,1}^k`.
 //! 4. Verifier samples a combining challenge `eps` in the extension field.

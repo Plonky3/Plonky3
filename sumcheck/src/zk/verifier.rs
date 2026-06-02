@@ -115,7 +115,7 @@ where
         challenger: &mut Ch,
     ) -> Result<(Point<EF>, EF), SumcheckError>
     where
-        M: Mmcs<F>,
+        M: Mmcs<EF>,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     {
         // Lemma 6.4 hypotheses on the verifier-side parameters.
@@ -181,7 +181,7 @@ where
         for commit in mask_commits {
             challenger.observe(commit.clone());
         }
-        challenger.observe_algebra_element(EF::from(zk_data.mu_tilde));
+        challenger.observe_algebra_element(zk_data.mu_tilde);
         let eps: EF = challenger.sample_algebra_element();
 
         // Phase 4: walk the round chain (Construction 6.3 step 4 verifier replay).

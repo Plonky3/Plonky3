@@ -22,26 +22,16 @@ use super::verifier::ZkVerifier;
 ///
 /// - Sample alpha and derive `mu` from the verifier's claim batching.
 /// - Sample and commit fresh masks just like the prover.
-/// - Sample each wire coordinate at the tier matching the honest joint distribution.
+/// - Sample each wire coordinate uniformly over `EF` (the honest joint distribution).
 /// - Reconstruct the dropped `c_1` from the affine identity, so every simulated wire verifies by construction.
 ///
-/// # Wire stratification
+/// # Wire distribution
 ///
-/// Honest layout per round (`d = max(ell_zk - 1, 2)`):
-///
-/// ```text
-///     wire[0] = c_0       in EF             (eps-scaled plain)
-///     wire[1] = c_2       in EF             (eps-scaled plain)
-///     wire[i] = c_{i+1}   in F-subspace     for i >= 2 (mask-only)
-/// ```
-///
-/// Sampling tiers:
-///
-/// - `wire[0..2]`: uniform in EF.
-/// - `wire[2..]`: uniform in F, lifted into EF.
-///
-/// Without the split, a distinguisher could check whether `c_3, c_4, ...`
-/// fall in the base-field subspace and separate the views (paper §6.1).
+/// The construction is instantiated over `EF`, so every wire coordinate is
+/// uniform over the full extension field (Lemma 6.4 with `F := EF`). Each sent
+/// wire `[c_0, c_2, c_3, ..., c_d]` (`d = max(ell_zk - 1, 2)`) is drawn
+/// uniformly from `EF`; the dropped linear coefficient `c_1` is recovered from
+/// the affine identity.
 ///
 /// # Returns
 ///
@@ -65,12 +55,12 @@ pub fn simulate_classic_unpacked<F, EF, Enc, M, Challenger, R>(
 where
     F: Field,
     EF: ExtensionField<F>,
-    Enc: ZkEncoding<F>,
-    Enc::Codeword: Matrix<F>,
-    M: Mmcs<F>,
+    Enc: ZkEncoding<EF>,
+    Enc::Codeword: Matrix<EF>,
+    M: Mmcs<EF>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     R: Rng,
-    StandardUniform: Distribution<F> + Distribution<EF>,
+    StandardUniform: Distribution<EF>,
 {
     // Protocol shape.
     let k = folding_factor;
@@ -96,7 +86,7 @@ where
     // Uniform messages produce uniform Reed-Solomon codewords.
     // Their Merkle commits are indistinguishable from the honest prover's (zero simulator error for RS).
 
-    let masks: Vec<Vec<F>> = (0..k)
+    let masks: Vec<Vec<EF>> = (0..k)
         .map(|_| (0..ell_zk).map(|_| rng.random()).collect())
         .collect();
 
@@ -114,18 +104,18 @@ where
     //              = 2^{k-1} * sum_l ( mask[0].double() + sum(mask[1..]) )
     //
     // Byte-equivalent to the honest prover under matched RNG seeds.
-    let two_to_k_minus_1 = F::TWO.exp_u64((k - 1) as u64);
-    let mu_tilde: F = two_to_k_minus_1
+    let two_to_k_minus_1 = EF::TWO.exp_u64((k - 1) as u64);
+    let mu_tilde: EF = two_to_k_minus_1
         * masks
             .iter()
-            .map(|m| m[0].double() + m[1..].iter().copied().sum::<F>())
-            .sum::<F>();
+            .map(|m| m[0].double() + m[1..].iter().copied().sum::<EF>())
+            .sum::<EF>();
 
-    // Observe mu_tilde (lifted to EF) and sample the combining challenge.
-    challenger.observe_algebra_element(EF::from(mu_tilde));
+    // Observe mu_tilde and sample the combining challenge.
+    challenger.observe_algebra_element(mu_tilde);
     let eps: EF = challenger.sample_algebra_element();
 
-    // Phase 4: per-round wire sampling (Construction 6.3 step 4 simulated; Lemma 6.4 stratification below).
+    // Phase 4: per-round wire sampling (Construction 6.3 step 4 simulated; every coordinate uniform over EF).
     //
     // Wire shape (linear coefficient c_1 dropped):
     //
@@ -149,19 +139,9 @@ where
     let mut target: EF = eps * mu + mu_tilde;
 
     for _ in 0..k {
-        // Stratified wire sample:
-        //
-        //     wire[0..2] in EF             (eps-scaled plain in honest)
-        //     wire[2..]  in F-subspace     (mask-only in honest)
-        let wire: Vec<EF> = (0..wire_size)
-            .map(|i| {
-                if i < 2 {
-                    rng.random::<EF>()
-                } else {
-                    EF::from(rng.random::<F>())
-                }
-            })
-            .collect();
+        // Every wire coordinate is uniform over the full extension field
+        // (Lemma 6.4 with `F := EF`).
+        let wire: Vec<EF> = (0..wire_size).map(|_| rng.random::<EF>()).collect();
 
         // Absorb the wire on the transcript.
         challenger.observe_algebra_slice(&wire);
@@ -203,17 +183,25 @@ where
 mod tests {
     use alloc::vec::Vec;
 
-    use p3_field::{Field, PackedValue};
+    use p3_field::{BasedVectorSpace, Field, PackedValue, PrimeCharacteristicRing};
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
     use super::*;
     use crate::layout::TableShape;
-    use crate::zk::test_helpers::{
-        EF, F, MyChallenger, MyMmcs, build_prover_verifier, ef_in_f_subspace, make_setup,
-    };
+    use crate::zk::test_helpers::{EF, F, MyChallenger, MyMmcs, build_prover_verifier, make_setup};
     use crate::zk::{ZkSumcheckData, ZkVerifier};
+
+    /// True when an extension element has a non-zero coordinate above the base slot.
+    ///
+    /// Every honest and simulated wire coordinate is uniform over `EF` (the
+    /// construction is instantiated over `EF`), so each coordinate escapes the
+    /// base-field subspace except with probability `|F|^{-(D-1)}`.
+    fn escapes_f_subspace(x: EF) -> bool {
+        let coeffs: &[F] = EF::as_basis_coefficients_slice(&x);
+        coeffs[1..].iter().any(|c| *c != F::ZERO)
+    }
 
     /// Lemma 6.4 view-match driver for Reed-Solomon mask encoding.
     ///
@@ -221,7 +209,7 @@ mod tests {
     ///
     /// 1. Verifier accepts both transcripts (soundness floor).
     /// 2. `mu_tilde` and mask commits match bit-for-bit under matched seeds (deterministic equality, not a distributional test).
-    /// 3. Wire coordinates with index `>= 2` lie in the base-field subspace on both sides (closes paper §6.1's distinguisher).
+    /// 3. Wire coordinates with index `>= 2` escape the base-field subspace on both sides (the masks are extension-valued, so the witness leak of an `F`-valued mask is absent).
     /// 4. The mask encoding's own simulator returns the correct shape (RS simulator error = 0).
     fn run_view_match_rs(
         n_vars: usize,
@@ -317,19 +305,24 @@ mod tests {
             return Err("matched-RNG coupling: mask commits differ");
         }
 
-        // === F-subspace stratification on both sides ===
-
+        // === Extension-valued wires on both sides ===
+        //
+        // The masks are extension-valued, so every wire coordinate is uniform
+        // over EF. We check the index-`>= 2` coordinates (mask-only, no plain
+        // piece) escape the base-field subspace on both the real and simulated
+        // sides; an `F`-valued mask would pin them to the base field and
+        // reintroduce the witness leak.
         for wire in &zk_data_real.round_coefficients {
             for &c in wire.iter().skip(2) {
-                if !ef_in_f_subspace(c) {
-                    return Err("real-prover wire[i >= 2] escapes the F-subspace");
+                if !escapes_f_subspace(c) {
+                    return Err("real-prover wire[i >= 2] collapsed into the F-subspace");
                 }
             }
         }
         for wire in &zk_data_sim.round_coefficients {
             for &c in wire.iter().skip(2) {
-                if !ef_in_f_subspace(c) {
-                    return Err("simulator wire[i >= 2] escapes the F-subspace");
+                if !escapes_f_subspace(c) {
+                    return Err("simulator wire[i >= 2] collapsed into the F-subspace");
                 }
             }
         }
@@ -350,7 +343,7 @@ mod tests {
                     positions.push(p);
                 }
             }
-            let sim_answers: Vec<F> = encoding.simulate(&positions, &mut sim_ans_rng);
+            let sim_answers: Vec<EF> = encoding.simulate(&positions, &mut sim_ans_rng);
             if sim_answers.len() != positions.len() {
                 return Err("ZkEncoding::simulate returned wrong number of answers");
             }
@@ -397,24 +390,21 @@ mod tests {
         ) {
             // Invariants asserted on every (n_vars, folding, ell_zk, num_eqs) draw:
             //
-            //   1. Shape   - output sizes match `folding_factor`, `ell_zk`, and `pow_bits = 0`.
-            //   2. Stratification (+) - every wire coordinate with index >= 2 lies in the F-subspace.
-            //   3. Stratification (-) - at least one wire[0..2] coordinate escapes the F-subspace.
-            //   4. Acceptance  - a fresh verifier replay accepts the simulated transcript (Lemma 6.4).
+            //   1. Shape      - output sizes match `folding_factor`, `ell_zk`, and `pow_bits = 0`.
+            //   2. EF wires   - every wire coordinate with index >= 2 escapes the base-field subspace.
+            //   3. Acceptance - a fresh verifier replay accepts the simulated transcript (Lemma 6.4).
             //
-            // Wire layout (linear coefficient c_1 dropped):
+            // The construction is instantiated over EF, so the wire (linear
+            // coefficient c_1 dropped) has all coordinates uniform over EF:
             //
-            //     wire[0] = c_0    in EF (eps-scaled plain piece)
-            //     wire[1] = c_2    in EF (eps-scaled plain piece)
-            //     wire[2] = c_3    in F-subspace (mask-only)
-            //     wire[3] = c_4    in F-subspace (mask-only)
-            //     ...
+            //     wire[0] = c_0, wire[1] = c_2, wire[2] = c_3, ...
             //
             // Why ell_zk >= 4: lengths 2 and 3 produce a 2-coordinate wire and wire[2..] is empty, so check 2 has no work to do.
             //
-            // Without check 2 a distinguisher trivially separates real from simulated views (paper §6.1).
-            // Without check 3 a regression that collapses both tiers to F would still pass check 2.
-            // Without check 4 a shape-correct but verifier-rejected transcript would slip through.
+            // Check 2 is the regression guard for the witness leak: an F-valued
+            // mask would pin the mask-only coordinates (index >= 2) to the base
+            // field, and the plain-bearing coordinates wire[0], wire[1] to a
+            // base-field coset, which a distinguisher separates (paper §6.1).
             let folding_factor = 1 + (seed as usize % n_vars);
 
             let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
@@ -480,40 +470,22 @@ mod tests {
                 "one challenge per round",
             );
 
-            // Check 2: positive stratification.
+            // Check 2: extension-valued wires (witness-leak regression guard).
             //
-            // wire[i] for i >= 2 must lie in the F-subspace.
+            // Each mask-only coordinate (index >= 2) is uniform over EF, so it
+            // escapes the base-field subspace except with probability
+            // `|F|^{-(D-1)}`. An F-valued mask would pin these to the base
+            // field and leak the witness; this check rejects that regression.
             for (round_idx, wire) in sim_zk_data.round_coefficients.iter().enumerate() {
                 for (pos, &coeff) in wire.iter().enumerate().skip(2) {
                     prop_assert!(
-                        ef_in_f_subspace(coeff),
-                        "simulator wire[{pos}] in round {round_idx} must live in F-subspace",
+                        escapes_f_subspace(coeff),
+                        "simulator wire[{pos}] in round {round_idx} collapsed into the F-subspace",
                     );
                 }
             }
 
-            // Check 3: negative stratification.
-            //
-            // Per coord, expected escape probability:
-            //
-            //     P[wire[0..2] not in F] = 1 - |F|^{-3}
-            //
-            // Aggregated false-negative bound:
-            //
-            //     <= 2^{-32 * folding_factor}
-            //
-            // Catches a regression that collapses both tiers to F.
-            let any_ef_coord_escapes = sim_zk_data
-                .round_coefficients
-                .iter()
-                .flat_map(|wire| wire.iter().take(2))
-                .any(|&c| !ef_in_f_subspace(c));
-            prop_assert!(
-                any_ef_coord_escapes,
-                "EF-tier samples collapsed into F-subspace across all rounds",
-            );
-
-            // Check 4: verifier accepts the simulated transcript.
+            // Check 3: verifier accepts the simulated transcript.
             //
             // Test form of Lemma 6.4:
             //
