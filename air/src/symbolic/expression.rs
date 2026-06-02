@@ -853,7 +853,7 @@ mod tests {
             self.is_last
         }
 
-        fn is_transition_window(&self, _: usize) -> Self::Expr {
+        fn is_transition(&self) -> Self::Expr {
             self.is_transition
         }
 

@@ -88,8 +88,8 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for InteractionSymbolicBuilder<
         self.inner.is_last_row()
     }
 
-    fn is_transition_window(&self, size: usize) -> Self::Expr {
-        self.inner.is_transition_window(size)
+    fn is_transition(&self) -> Self::Expr {
+        self.inner.is_transition()
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {

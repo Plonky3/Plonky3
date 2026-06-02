@@ -299,14 +299,8 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
         SymbolicExpr::Leaf(BaseLeaf::IsLastRow)
     }
 
-    /// # Panics
-    /// This function panics if `size` is not `2`.
-    fn is_transition_window(&self, size: usize) -> Self::Expr {
-        if size == 2 {
-            SymbolicExpr::Leaf(BaseLeaf::IsTransition)
-        } else {
-            panic!("uni-stark only supports a window size of 2")
-        }
+    fn is_transition(&self) -> Self::Expr {
+        SymbolicExpr::Leaf(BaseLeaf::IsTransition)
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
@@ -670,7 +664,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "uni-stark only supports a window size of 2")]
+    #[should_panic(expected = "exceeds supported arity")]
     fn test_is_transition_window_size_3_panics() {
         // Window size 3 is not supported and should panic.
         let builder = SymbolicAirBuilder::<F>::new(layout(0, 2, 0, 0));
