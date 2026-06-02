@@ -71,10 +71,6 @@ pub fn compute_adjusted_weights<EF: Field>(point: EF, diff_invs: &[EF]) -> Vec<E
     diff_invs.par_iter().map(|&d| d - point_inv).collect()
 }
 
-fn compute_adjusted_weights_with_point_inv<EF: Field>(point_inv: EF, diff_invs: &[EF]) -> Vec<EF> {
-    diff_invs.par_iter().map(|&d| d - point_inv).collect()
-}
-
 fn interpolation_scaling_factor<F: TwoAdicField, EF: ExtensionField<F>>(
     shift: F,
     point: EF,
@@ -101,9 +97,13 @@ fn interpolate_coset_base_point<F: TwoAdicField, M: Matrix<F> + ?Sized>(
 
     let scaling_factor = interpolation_scaling_factor(shift, point, log_height);
     let scaled_diff_invs = batch_multiplicative_inverse_scaled(&diffs, scaling_factor);
+    // Pre-scaled z^{-1}: the global factor s rides along for free in the subtraction.
     let scaled_point_inv = scaling_factor * point.inverse();
-    let scaled_adjusted =
-        compute_adjusted_weights_with_point_inv(scaled_point_inv, &scaled_diff_invs);
+    // Adjusted weights s * (1/(z - x_i) - 1/z), still entirely in the base field.
+    let scaled_adjusted: Vec<F> = scaled_diff_invs
+        .par_iter()
+        .map(|&d| d - scaled_point_inv)
+        .collect();
 
     matrix.columnwise_dot_product(&scaled_adjusted)
 }
@@ -163,12 +163,15 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
 
         let scaling_factor = interpolation_scaling_factor(shift, point, log_height);
         let scaled_diff_invs = batch_multiplicative_inverse_scaled(&diffs, scaling_factor);
+        // Pre-scaled z^{-1}: the global factor s rides along for free in the subtraction.
         let scaled_point_inv = scaling_factor * point.inverse();
 
         // Fold the global post-scaling into the batch inversion, so the hot path
         // only needs the SIMD dot product over pre-scaled adjusted weights.
-        let scaled_adjusted =
-            compute_adjusted_weights_with_point_inv(scaled_point_inv, &scaled_diff_invs);
+        let scaled_adjusted: Vec<EF> = scaled_diff_invs
+            .par_iter()
+            .map(|&d| d - scaled_point_inv)
+            .collect();
         self.columnwise_dot_product(&scaled_adjusted)
     }
 
@@ -850,6 +853,111 @@ mod tests {
             let result = evals_mat.interpolate_coset(shift, point);
             let expected = eval_poly(&coeffs, point);
             prop_assert_eq!(result[0], expected);
+        }
+
+        // Invariant: interpolating f at a genuine (non-base) point recovers f(point).
+        //
+        // Coverage gap this closes:
+        //   - the base-field branch diverts every base point away from the generic path,
+        //   - so the other proptests never exercise the generic extension branch,
+        //   - a nonzero degree-1 coordinate keeps this point off the base field.
+        //
+        // It also checks the generic path agrees with the precomputation entry point.
+        #[test]
+        fn prop_roundtrip_coset_extension_point(
+            log_n in 1usize..=4,
+            width in 1usize..=4,
+            coeffs_raw in prop::collection::vec(0u32..2013265921, 1..=64),
+            c0 in 0u32..2013265921u32,
+            c1 in 1u32..2013265921u32,
+            c2 in 0u32..2013265921u32,
+            c3 in 0u32..2013265921u32,
+        ) {
+            // N = 2^log_n coset points; shift moves the subgroup off the origin.
+            let n = 1usize << log_n;
+            let shift = F::GENERATOR;
+
+            // Degree-1 coordinate `c1 >= 1` guarantees the point is not in the base field.
+            let point = EF4::from_basis_coefficients_slice(&[
+                F::from_u32(c0), F::from_u32(c1), F::from_u32(c2), F::from_u32(c3),
+            ]).unwrap();
+            // Guard the precondition: a base point here would silently test the wrong branch.
+            prop_assert!(<EF4 as ExtensionField<F>>::as_base(&point).is_none());
+
+            // One polynomial per column, each of degree < n.
+            // Column c reads a rotated window of the shared coefficient pool.
+            let polys: Vec<Vec<F>> = (0..width)
+                .map(|c| (0..n).map(|i| F::from_u32(coeffs_raw[(c + i) % coeffs_raw.len()])).collect())
+                .collect();
+
+            // Lay out evaluations row-major.
+            //   row i = [f_0(coset_i), ..., f_{width-1}(coset_i)]
+            let subgroup_gen = F::two_adic_generator(log_n);
+            let coset: Vec<F> = subgroup_gen.shifted_powers(shift).collect_n(n);
+            let mut evals = Vec::with_capacity(n * width);
+            for &x in &coset {
+                for poly in &polys {
+                    evals.push(eval_poly(poly, x));
+                }
+            }
+            let evals_mat = RowMajorMatrix::new(evals, width);
+
+            // Interpolated column c must equal direct Horner evaluation of f_c.
+            let result = evals_mat.interpolate_coset(shift, point);
+            for (c, poly) in polys.iter().enumerate() {
+                prop_assert_eq!(result[c], eval_poly(poly, point));
+            }
+
+            // Re-derive the adjusted weights by hand and feed the precomputation path.
+            // Both paths must agree bit-for-bit.
+            let diffs: Vec<EF4> = coset.iter().map(|&x| point - x).collect();
+            let diff_invs = batch_multiplicative_inverse(&diffs);
+            let adjusted = compute_adjusted_weights(point, &diff_invs);
+            let precomputed = evals_mat.interpolate_coset_with_precomputation(shift, point, &adjusted);
+            prop_assert_eq!(result, precomputed);
+        }
+
+        // Invariant: the base-field branch recovers f(point) for every column.
+        //
+        // Why width > 1: it drives the packed column dot product this branch optimizes.
+        // The single-column proptests never exercise that packed path.
+        #[test]
+        fn prop_roundtrip_coset_base_point_multicol(
+            log_n in 1usize..=4,
+            width in 2usize..=5,
+            coeffs_raw in prop::collection::vec(0u32..2013265921, 1..=64),
+            point_raw in 1u32..2013265921u32,
+        ) {
+            // N = 2^log_n coset points; shift moves the subgroup off the origin.
+            let n = 1usize << log_n;
+            let shift = F::GENERATOR;
+
+            // A scalar lifted into the extension stays in the base field.
+            let point = EF4::from_u32(point_raw);
+            // Guard the precondition: this must reach the base-field specialization.
+            prop_assert!(<EF4 as ExtensionField<F>>::as_base(&point).is_some());
+
+            // One polynomial per column, each of degree < n (rotated coefficient window).
+            let polys: Vec<Vec<F>> = (0..width)
+                .map(|c| (0..n).map(|i| F::from_u32(coeffs_raw[(c + i) % coeffs_raw.len()])).collect())
+                .collect();
+
+            // Row-major evaluations: row i = [f_0(coset_i), ..., f_{width-1}(coset_i)].
+            let subgroup_gen = F::two_adic_generator(log_n);
+            let coset: Vec<F> = subgroup_gen.shifted_powers(shift).collect_n(n);
+            let mut evals = Vec::with_capacity(n * width);
+            for &x in &coset {
+                for poly in &polys {
+                    evals.push(eval_poly(poly, x));
+                }
+            }
+            let evals_mat = RowMajorMatrix::new(evals, width);
+
+            // Interpolated column c must equal direct Horner evaluation of f_c.
+            let result = evals_mat.interpolate_coset(shift, point);
+            for (c, poly) in polys.iter().enumerate() {
+                prop_assert_eq!(result[c], eval_poly(poly, point));
+            }
         }
 
         // Path equivalence: standard vs precomputation

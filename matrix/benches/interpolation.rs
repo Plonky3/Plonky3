@@ -3,7 +3,9 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::BabyBear;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{Field, PrimeCharacteristicRing, TwoAdicField, batch_multiplicative_inverse};
+use p3_field::{
+    BasedVectorSpace, Field, PrimeCharacteristicRing, TwoAdicField, batch_multiplicative_inverse,
+};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::interpolation::{Interpolate, compute_adjusted_weights};
 use rand::SeedableRng;
@@ -36,15 +38,29 @@ fn interpolate_coset(c: &mut Criterion) {
 
     let shift = F::GENERATOR;
 
+    // Two opening-point regimes drive two different code paths:
+    //   - a base-field point        → specialized base-only branch,
+    //   - a genuine extension point → generic extension branch.
+    // Bench both so neither path regresses unobserved.
+
+    // A scalar lifted into the extension stays in the base field.
+    let base_point = EF::from_u32(123456789);
+    // A nonzero degree-1 coordinate forces a genuine extension point.
+    let ext_point =
+        EF::from_basis_coefficients_slice(&[F::from_u32(123456789), F::ONE, F::ZERO, F::ZERO])
+            .unwrap();
+
     for &(log_rows, width) in CONFIGS {
         let rows = 1usize << log_rows;
         let mut rng = SmallRng::seed_from_u64(0);
         let m = RowMajorMatrix::<F>::rand_nonzero(&mut rng, rows, width);
-        let point = EF::from_u32(123456789);
 
         let param = format!("2^{log_rows}x{width}");
-        group.bench_with_input(BenchmarkId::new("full", &param), &(), |b, _| {
-            b.iter(|| m.interpolate_coset(shift, point));
+        group.bench_with_input(BenchmarkId::new("full_base", &param), &(), |b, _| {
+            b.iter(|| m.interpolate_coset(shift, base_point));
+        });
+        group.bench_with_input(BenchmarkId::new("full_ext", &param), &(), |b, _| {
+            b.iter(|| m.interpolate_coset(shift, ext_point));
         });
     }
 

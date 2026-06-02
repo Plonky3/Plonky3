@@ -23,7 +23,7 @@ use num_bigint::BigUint;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
     ExtensionField, Field, PackedValue, PrimeCharacteristicRing, PrimeField32, PrimeField64,
-    TwoAdicField, batch_multiplicative_inverse,
+    TwoAdicField, batch_multiplicative_inverse, batch_multiplicative_inverse_scaled,
 };
 use p3_util::iter_array_chunks_padded;
 pub use packedfield_testing::*;
@@ -391,6 +391,64 @@ where
                 "x[{i}] * inv[{i}] != 1 for input length {n}"
             );
         }
+    }
+}
+
+/// Verify [`batch_multiplicative_inverse_scaled`] against the naive `scale / x_i`,
+/// and confirm that `scale = 1` reproduces the plain batch inverse.
+///
+/// Sizes mirror the unscaled test: empty, sub-packing-width, every remainder mod the
+/// packing width, and lengths straddling the internal `par_chunks` boundary (1024).
+pub fn test_batch_multiplicative_inverse_scaled<F: Field>()
+where
+    StandardUniform: Distribution<F>,
+{
+    let mut rng = SmallRng::seed_from_u64(0x5CA1);
+
+    let lengths = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 15, 16, 17, 63, 64, 65, 1023, 1024, 1025, 1027, 2049, 4099,
+    ];
+
+    for &n in &lengths {
+        // Reject zero so every input is invertible.
+        let xs: Vec<F> = (0..n)
+            .map(|_| {
+                let mut x = rng.random::<F>();
+                while x.is_zero() {
+                    x = rng.random::<F>();
+                }
+                x
+            })
+            .collect();
+
+        // A nonzero scale exercises the fold; zero would collapse every output.
+        let scale = {
+            let mut s = rng.random::<F>();
+            while s.is_zero() {
+                s = rng.random::<F>();
+            }
+            s
+        };
+
+        let got = batch_multiplicative_inverse_scaled(&xs, scale);
+        assert_eq!(got.len(), n, "result length mismatch for n = {n}");
+
+        // Each output must equal scale times the true inverse of the input.
+        for (i, (x, out)) in xs.iter().zip(&got).enumerate() {
+            assert_eq!(
+                *x * *out,
+                scale,
+                "x[{i}] * out[{i}] != scale for input length {n}"
+            );
+        }
+
+        // scale = 1 must match the plain batch inverse element for element.
+        let unscaled = batch_multiplicative_inverse_scaled(&xs, F::ONE);
+        assert_eq!(
+            unscaled,
+            batch_multiplicative_inverse(&xs),
+            "scale = 1 diverged from the plain batch inverse for n = {n}"
+        );
     }
 }
 
@@ -1059,6 +1117,10 @@ macro_rules! test_field {
             #[test]
             fn test_batch_multiplicative_inverse() {
                 $crate::test_batch_multiplicative_inverse::<$field>();
+            }
+            #[test]
+            fn test_batch_multiplicative_inverse_scaled() {
+                $crate::test_batch_multiplicative_inverse_scaled::<$field>();
             }
             #[test]
             fn test_generator() {

@@ -47,6 +47,70 @@ pub fn batch_multiplicative_inverse<F: Field>(x: &[F]) -> Vec<F> {
     x.par_chunks(CHUNK_SIZE)
         .zip(result.par_chunks_mut(CHUNK_SIZE))
         .for_each(|(x_chunk, result_chunk)| {
+            // Phase 1 — split the chunk into a 4-aligned packed prefix and a 0..=3 scalar tail.
+            //
+            //     x_chunk:  [ x_0 .. x_{m-1} | x_m .. x_{n-1} ]
+            //               └──── packed ────┘└──── tail ────┘
+            let (x_packed, x_tail) = FieldArray::<F, WIDTH>::pack_slice_with_suffix(x_chunk);
+            let (result_packed, result_tail) =
+                FieldArray::<F, WIDTH>::pack_slice_with_suffix_mut(result_chunk);
+
+            // Phase 2 — packed pass: 4 independent Montgomery chains, one per lane.
+            batch_multiplicative_inverse_general(x_packed, result_packed, |y| y.inverse());
+
+            // Phase 3 — tail pass: 0..=3 leftover scalars (empty when n % 4 == 0).
+            batch_multiplicative_inverse_general(x_tail, result_tail, |y| y.inverse());
+        });
+
+    result
+}
+
+/// Compute `scale / x_i` for every element of a slice via Montgomery's trick.
+///
+/// # Overview
+///
+/// The post-scaling is folded into the one inversion of the full product.
+/// This removes the separate `O(n)` pass that would otherwise scale each inverse.
+/// With `scale = 1` the result is a plain batch inverse.
+///
+/// # Algorithm
+///
+/// - Forward pass: build the prefix products of the inputs.
+/// - Invert the full product once, then pre-multiply that inverse by `scale`.
+/// - Reverse pass: peel `scale / x_i` off the prefix products, one element at a time.
+///
+/// The forward pass is a long dependency chain, parallelised on two axes:
+/// - 4-lane packed arrays run four independent chains side by side,
+/// - 1024-element chunks are dispatched across Rayon workers.
+///
+/// Lengths not a multiple of 4 finish with a scalar pass on the trailing `1..=3` elements.
+///
+/// # Panics
+///
+/// Panics if any input is zero.
+#[instrument(level = "debug", skip_all)]
+#[must_use]
+pub fn batch_multiplicative_inverse_scaled<F: Field>(x: &[F], scale: F) -> Vec<F> {
+    // 1024-element chunks per Rayon task.
+    //
+    // Why 1024:
+    //   - amortizes the one field inversion per chunk over many multiplies,
+    //   - leaves enough chunks for work-stealing on long slices.
+    const CHUNK_SIZE: usize = 1024;
+
+    // 4-lane packing.
+    //
+    // Why 4:
+    //   - smallest packed-field width on every backend,
+    //   - wider lanes risk register spills in the per-lane dependency chains.
+    const WIDTH: usize = 4;
+
+    // Pre-allocate the output: each Rayon task writes a disjoint sub-slice.
+    let mut result = F::zero_vec(x.len());
+
+    x.par_chunks(CHUNK_SIZE)
+        .zip(result.par_chunks_mut(CHUNK_SIZE))
+        .for_each(|(x_chunk, result_chunk)| {
             // Phase 1 — split the chunk:
             //   - packed: 4-aligned prefix viewed as 4-lane arrays,
             //   - tail:   0..=3 trailing scalars (m = n - n%4).
@@ -60,46 +124,17 @@ pub fn batch_multiplicative_inverse<F: Field>(x: &[F]) -> Vec<F> {
             // Phase 2 — packed pass: 4 independent Montgomery chains, one per lane.
             //
             // Final inversion lands on a 4-lane array → one scalar inversion per chunk.
-            batch_multiplicative_inverse_general(x_packed, result_packed, |y| y.inverse());
-
-            // Phase 3 — tail pass: 0..=3 leftover scalars.
-            //
-            // Empty when n % 4 == 0; this call then returns immediately.
-            batch_multiplicative_inverse_general(x_tail, result_tail, |y| y.inverse());
-        });
-
-    result
-}
-
-/// Compute `scale / x_i` for every element of a slice via Montgomery's trick.
-///
-/// This folds one uniform post-scaling into the single inversion of the full product,
-/// avoiding a separate pass of per-element multiplications after batch inversion.
-///
-/// # Panics
-///
-/// Panics if any input is zero.
-#[instrument(level = "debug", skip_all)]
-#[must_use]
-pub fn batch_multiplicative_inverse_scaled<F: Field>(x: &[F], scale: F) -> Vec<F> {
-    const CHUNK_SIZE: usize = 1024;
-    const WIDTH: usize = 4;
-
-    let mut result = F::zero_vec(x.len());
-
-    x.par_chunks(CHUNK_SIZE)
-        .zip(result.par_chunks_mut(CHUNK_SIZE))
-        .for_each(|(x_chunk, result_chunk)| {
-            let (x_packed, x_tail) = FieldArray::<F, WIDTH>::pack_slice_with_suffix(x_chunk);
-            let (result_packed, result_tail) =
-                FieldArray::<F, WIDTH>::pack_slice_with_suffix_mut(result_chunk);
-
+            // `scale` broadcasts across all lanes via `FieldArray: From<F>` (`[scale; 4]`).
             batch_multiplicative_inverse_general_scaled(
                 x_packed,
                 result_packed,
                 scale.into(),
                 |y| y.inverse(),
             );
+
+            // Phase 3 — tail pass: 0..=3 leftover scalars.
+            //
+            // Empty when n % 4 == 0, in which case this call returns immediately.
             batch_multiplicative_inverse_general_scaled(x_tail, result_tail, scale, |y| {
                 y.inverse()
             });
@@ -141,6 +176,10 @@ where
 }
 
 /// Allocation-free Montgomery inversion that writes `scale / x_i` into `result`.
+///
+/// Single-threaded, writing into a caller-provided buffer.
+/// Suited to small fixed-size inputs such as packed-field lanes.
+/// The unscaled variant is the `scale = 1` case.
 #[inline]
 pub fn batch_multiplicative_inverse_general_scaled<F, Inv>(
     x: &[F],
@@ -163,6 +202,8 @@ pub fn batch_multiplicative_inverse_general_scaled<F, Inv>(
     }
 
     let product = result[n - 1] * x[n - 1];
+    // Fold the global scaling into this one inversion.
+    // Every value peeled off below is then `scale / x_i`, not `1 / x_i`.
     let mut inv = scale * inv(product);
 
     for i in (0..n).rev() {
