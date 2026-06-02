@@ -15,7 +15,7 @@ parallel = ["rayon"]
 [dependencies]
 rayon = { workspace = true, optional = true }
 serde.workspace = true
-transpose = "0.2"
+transpose.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }

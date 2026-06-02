@@ -17,10 +17,9 @@ use p3_lookup::logup::LogUpGadget;
 use p3_lookup::{InteractionSymbolicBuilder, Kind, Lookup, LookupData, LookupProtocol};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
-use p3_maybe_rayon::DisjointMutPtr;
 use p3_maybe_rayon::prelude::*;
 use p3_uni_stark::{OpenedValues, PackedChallenge, PackedVal, ProverConstraintFolder};
-use p3_util::log2_strict_usize;
+use p3_util::{DisjointMutPtr, log2_strict_usize};
 use tracing::{debug_span, info_span, instrument};
 
 use crate::common::ProverData;
