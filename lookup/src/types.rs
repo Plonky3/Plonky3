@@ -14,12 +14,19 @@ use thiserror::Error;
 use crate::builder::{SymbolicInteraction, SymbolicLocalInteraction};
 use crate::symbolic::InteractionSymbolicBuilder;
 
-/// Whether a lookup is local to one AIR or shared across AIRs.
+/// Whether a lookup is confined to one AIR or shared across AIRs on a named bus.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kind {
-    /// Intra-AIR lookup. Running sum must return to zero.
+    /// Intra-AIR lookup.
+    ///
+    /// - Draws a fresh challenge pair, shared with no other lookup.
+    /// - So its terminal contribution cannot cancel against another lookup.
+    /// - The cross-AIR terminal sum forces it to balance on its own.
     Local,
-    /// Cross-AIR lookup on a named bus. Running sums are verified globally.
+    /// Cross-AIR lookup on a named bus.
+    ///
+    /// - Lookups sharing a bus name share one challenge pair.
+    /// - Senders and receivers cancel only in the cross-AIR terminal sum.
     Global(String),
 }
 
@@ -129,8 +136,9 @@ pub struct LookupTerminal<F>(pub F);
 pub enum LookupError {
     /// Cross-AIR sum of committed lookup terminals is non-zero.
     ///
-    /// Any unbalanced lookup in the batch produces a non-zero terminal sum
-    /// with overwhelming probability over the random permutation challenges.
+    /// - Any imbalance makes the sum non-zero with overwhelming probability.
+    /// - The collapsed terminal names no bus on its own.
+    /// - Debug builds pinpoint the bus, tuple, and row via the prover's replay.
     #[error("cross-AIR lookup terminal sum is non-zero")]
     TerminalSumNonZero,
 }

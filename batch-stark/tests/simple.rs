@@ -17,7 +17,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64};
 use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
-use p3_lookup::InteractionBuilder;
+use p3_lookup::{InteractionBuilder, LookupTerminal};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
@@ -2127,10 +2127,10 @@ fn test_batch_stark_failed_global_lookup_inner() {
 
     let proof = prove_batch(&config, &instances, &prover_data);
 
-    // This should panic with GlobalCumulativeMismatch because:
-    // - MulAir sends values to "MulFib1" and "MulFib2" lookups
-    // - FibAir only receives from "MulFib" lookup
-    // - The global cumulative sums won't match
+    // Imbalance: MulAir sends on "MulFib1" and "MulFib2"; only "MulFib1" is received.
+    //
+    // - Debug:   the prover's lookup checker panics first, naming the bus.
+    // - Release: the cross-AIR terminal sum is non-zero, so the verifier rejects.
     verify_batch(&config, &airs, &proof, &pvs, common).unwrap();
 }
 
@@ -2193,6 +2193,142 @@ fn test_batch_stark_rejects_missing_lookup_terminal() {
         }
         _ => panic!("unexpected error: {err:?}"),
     }
+}
+
+#[test]
+fn test_batch_stark_rejects_spurious_lookup_terminal() {
+    // Invariant: a lookup-less AIR commits `None`, never a terminal.
+    // Attack:    inject `Some(_)` there to skew the cross-AIR terminal sum.
+    // Defense:   the presence check rejects the shape before any value is read.
+    let config = make_config(2025);
+
+    // Fixture state — a balanced batch with one genuinely lookup-less AIR:
+    //
+    //     AIR 0  MulAir  sends twice on bus "MulFib"  → terminal Some(_)
+    //     AIR 1  FibAir  receives on bus "MulFib"     → terminal Some(_)
+    //     AIR 2  FibAir  no lookups                   → terminal None
+    let reps = 2;
+    let mul_air = MulAir { reps };
+    let mul_air_lookups = MulAirLookups::new(
+        mul_air,
+        false,
+        true,
+        vec!["MulFib".to_string(), "MulFib".to_string()],
+    );
+
+    let log_n = 3;
+    let n = 1 << log_n;
+    let fibonacci_air = FibonacciAir {
+        log_height: log_n,
+        tamper_index: None,
+    };
+    // Second arg `true` makes this AIR receive on the shared bus.
+    let fib_air_receiver = FibAirLookups::new(fibonacci_air, true, None);
+    // Second arg `false` leaves this AIR with no interactions at all.
+    let fib_air_no_lookups = FibAirLookups::new(fibonacci_air, false, None);
+
+    let mul_trace = mul_trace::<Val>(n, 2);
+    let fib_trace = fib_trace::<Val>(0, 1, n);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
+
+    let airs = [
+        DemoAirWithLookups::MulLookups(mul_air_lookups),
+        DemoAirWithLookups::FibLookups(fib_air_receiver),
+        DemoAirWithLookups::FibLookups(fib_air_no_lookups),
+    ];
+    let prover_data =
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n, log_n]);
+    let common = &prover_data.common;
+    let traces = [&mul_trace, &fib_trace, &fib_trace];
+    let pvs = vec![vec![], fib_pis.clone(), fib_pis];
+
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs);
+    let mut proof = prove_batch(&config, &instances, &prover_data);
+
+    // Mutation: AIR 2 declares no lookups, yet we attach an arbitrary terminal.
+    //
+    //     lookup_terminals: [Some(t0), Some(t1), None ]
+    //                                              ↓ should stay None
+    //                       [Some(t0), Some(t1), Some(42)]
+    proof.lookup_terminals[2] = Some(LookupTerminal(Challenge::from_u64(42)));
+
+    let err = verify_batch(&config, &airs, &proof, &pvs, common)
+        .expect_err("Verifier should reject a spurious terminal on a lookup-less AIR");
+    match err {
+        VerificationError::InvalidProofShape(
+            InvalidProofShapeError::LookupTerminalPresenceMismatch {
+                air,
+                expected_present,
+                got_present,
+            },
+        ) => {
+            // AIR 2 is the lookup-less instance: expected absent, got present.
+            assert_eq!(air, 2);
+            assert!(!expected_present);
+            assert!(got_present);
+        }
+        _ => panic!("unexpected error: {err:?}"),
+    }
+}
+
+#[test]
+fn test_batch_stark_rejects_tampered_lookup_terminal_value() {
+    // Invariant: every committed terminal is bound by the proof.
+    //
+    // It feeds the transcript before the folding challenge and OOD point.
+    // Rewriting it desyncs the verifier and breaks the out-of-domain identity.
+    let config = make_config(2025);
+
+    // Fixture state — a balanced two-AIR bus:
+    //
+    //     AIR 0  MulAir  sends twice on bus "MulFib"  → genuine terminal
+    //     AIR 1  FibAir  receives on bus "MulFib"
+    let reps = 2;
+    let mul_air = MulAir { reps };
+    let mul_air_lookups = MulAirLookups::new(
+        mul_air,
+        false,
+        true,
+        vec!["MulFib".to_string(), "MulFib".to_string()],
+    );
+
+    let log_n = 3;
+    let n = 1 << log_n;
+    let fibonacci_air = FibonacciAir {
+        log_height: log_n,
+        tamper_index: None,
+    };
+    let fib_air_lookups = FibAirLookups::new(fibonacci_air, true, None);
+
+    let mul_trace = mul_trace::<Val>(n, 2);
+    let fib_trace = fib_trace::<Val>(0, 1, n);
+    let fib_pis = vec![Val::from_u64(0), Val::from_u64(1), Val::from_u64(fib_n(n))];
+
+    let airs = [
+        DemoAirWithLookups::MulLookups(mul_air_lookups),
+        DemoAirWithLookups::FibLookups(fib_air_lookups),
+    ];
+    let prover_data =
+        ProverData::<MyConfig>::from_airs_and_degrees(&config, &airs, &[log_n, log_n]);
+    let common = &prover_data.common;
+    let traces = [&mul_trace, &fib_trace];
+    let pvs = vec![vec![], fib_pis];
+
+    let instances = StarkInstance::new_multiple(&airs, &traces, &pvs);
+    let mut proof = prove_batch(&config, &instances, &prover_data);
+
+    // Mutation: bump AIR 0's terminal by one field element.
+    //
+    //     terminal[0]: t  →  t + 1
+    //
+    // Shape stays `Some(_)`, so this tests value binding, not presence.
+    let original = proof.lookup_terminals[0]
+        .expect("AIR 0 declares lookups, so its terminal is present")
+        .0;
+    proof.lookup_terminals[0] = Some(LookupTerminal(original + Challenge::ONE));
+
+    verify_batch(&config, &airs, &proof, &pvs, common)
+        .expect_err("Verifier should reject a tampered terminal value");
 }
 
 /// Test mixing instances with lookups and instances without lookups.

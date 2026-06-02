@@ -8,7 +8,7 @@ use tracing::instrument;
 
 /// Type alias for the inputs to lookup constraint checking.
 /// - The first element is a slice of [`Lookup`] values (generic over a field `F`) representing the symbolic lookups to be performed.
-/// - The second element is a reference to the [`LookupGadget`] implementation.
+/// - The second element is a reference to the [`LookupProtocol`] implementation.
 #[allow(unused)]
 type LookupConstraintsInputs<'a, F, LG> = (&'a [Lookup<F>], &'a LG);
 
@@ -29,8 +29,7 @@ type LookupConstraintsInputs<'a, F, LG> = (&'a [Lookup<F>], &'a LG);
 /// - `public_values`: Public values provided to the builder.
 /// - `lookup_constraints_inputs`: Inputs necessary to check lookup constraints:
 ///     - the symbolic representation of the [`Lookup`] values,
-///     - the [`LookupData`] for global lookups,
-///     - the [`LookupGadget`] implementation.
+///     - the [`LookupProtocol`] implementation.
 #[instrument(name = "check constraints", skip_all)]
 #[allow(unused)] // Do not remove, or this will trigger warnings in release mode.
 #[allow(clippy::too_many_arguments)]

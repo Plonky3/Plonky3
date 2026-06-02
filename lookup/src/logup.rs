@@ -386,18 +386,21 @@ impl LookupProtocol for LogUpGadget {
             "perm challenge count must be per-lookup"
         );
 
-        // Enforce uniqueness of lookup slot indices across lookups.
-        #[cfg(debug_assertions)]
-        {
-            use alloc::collections::btree_set::BTreeSet;
-
-            let mut seen = BTreeSet::new();
-            for ctx in lookups {
-                let a = ctx.column;
-                if !seen.insert(a) {
-                    panic!("duplicate lookup slot index {a} across lookups");
-                }
-            }
+        // Slot `i` owns fraction column `i + 1`, so indices must be contiguous.
+        // Contiguity also implies uniqueness, replacing the old duplicate check.
+        //
+        // A gap is an out-of-bounds write on untrusted data, e.g. a width-3 trace:
+        //
+        //     slots [0, 5] → writes col 2 here, but the constraint reads col 6
+        //
+        // Kept on in release: the scan is O(N) over a handful of lookups.
+        for (i, lookup) in lookups.iter().enumerate() {
+            assert_eq!(
+                lookup.column, i,
+                "lookup slot index must match slice position: \
+                 lookups[{i}].column = {} (expected {i})",
+                lookup.column,
+            );
         }
 
         // 1. PRE-COMPUTE DENOMINATORS
