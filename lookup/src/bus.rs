@@ -193,7 +193,7 @@ mod tests {
         fn is_last_row(&self) -> Self::Expr {
             unimplemented!()
         }
-        fn is_transition_window(&self, _: usize) -> Self::Expr {
+        fn is_transition(&self) -> Self::Expr {
             unimplemented!()
         }
         fn assert_zero<I: Into<Self::Expr>>(&mut self, _: I) {}

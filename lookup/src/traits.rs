@@ -96,8 +96,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for LookupTraceBuilder<'a, SC> {
     }
 
     #[inline]
-    fn is_transition_window(&self, size: usize) -> Self::Expr {
-        assert!(size <= 2, "only two-row windows are supported, got {size}");
+    fn is_transition(&self) -> Self::Expr {
         Self::F::from_bool(self.row + 1 < self.height)
     }
 
