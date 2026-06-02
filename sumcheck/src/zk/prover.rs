@@ -144,7 +144,7 @@ where
     /// # Panics
     ///
     /// - Base field characteristic is `2` (violates Lemma 6.4).
-    /// - Mask code message length is below `2` (Lemma 6.4 floor).
+    /// - Mask code message length is below `3` (mask must cover the degree-2 plain piece).
     /// - Folding factor is `0` or exceeds the polynomial's arity.
     #[allow(clippy::too_many_lines, clippy::type_complexity)]
     #[tracing::instrument(skip_all)]
@@ -174,7 +174,10 @@ where
 
         // Lemma 6.4 hypotheses + sanity bounds on the folding factor.
         assert!(F::TWO != F::ZERO, "Lemma 6.4 requires char(F) != 2");
-        assert!(ell_zk >= 2, "Lemma 6.4 requires ell_zk >= 2");
+        assert!(
+            ell_zk >= 3,
+            "mask degree ell_zk - 1 must cover the degree-2 plain piece (ell_zk >= 3)",
+        );
         assert!(k >= 1, "sumcheck requires at least one round");
         assert!(
             k <= n_vars,
@@ -511,7 +514,7 @@ mod tests {
         #[test]
         fn prop_completeness_classic_unpacked(
             n_vars in 3usize..=8,
-            ell_zk in 2usize..=5,
+            ell_zk in 3usize..=5,
             num_concrete in 0usize..=2,
             num_virtual in 0usize..=2,
             seed in 0u64..1024,

@@ -58,7 +58,7 @@
 //! # Field constraints (Lemma 6.4)
 //!
 //! - Base field characteristic must not be `2`.
-//! - Mask message length `ell_zk` must be at least `2`.
+//! - Mask message length `ell_zk` must be at least `3`, so the mask (degree `ell_zk - 1`) covers the degree-2 plain round polynomial.
 //!
 //! Both are checked at constructor entry.
 //!
