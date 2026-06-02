@@ -457,26 +457,6 @@ where
     (buf, i)
 }
 
-/// Gets a shared reference to the contained value.
-///
-/// # Safety
-///
-/// Calling this when the content is not yet fully initialized causes undefined
-/// behavior: it is up to the caller to guarantee that every `MaybeUninit<T>` in
-/// the slice really is in an initialized state.
-///
-/// Copied from:
-/// <https://doc.rust-lang.org/std/primitive.slice.html#method.assume_init_ref>
-/// Once that is stabilized, this should be removed.
-#[inline(always)]
-pub const unsafe fn assume_init_ref<T>(slice: &[MaybeUninit<T>]) -> &[T] {
-    // SAFETY: casting `slice` to a `*const [T]` is safe since the caller guarantees that
-    // `slice` is initialized, and `MaybeUninit` is guaranteed to have the same layout as `T`.
-    // The pointer obtained is valid since it refers to memory owned by `slice` which is a
-    // reference and thus guaranteed to be valid for reads.
-    unsafe { &*(slice as *const [MaybeUninit<T>] as *const [T]) }
-}
-
 /// Split an iterator into small arrays and apply `func` to each.
 ///
 /// Repeatedly read `BUFLEN` elements from `input` into an array and
@@ -495,7 +475,7 @@ where
         if n == 0 {
             break;
         }
-        func(unsafe { assume_init_ref(buf.get_unchecked(..n)) });
+        func(unsafe { buf.get_unchecked(..n).assume_init_ref() });
     }
 }
 
