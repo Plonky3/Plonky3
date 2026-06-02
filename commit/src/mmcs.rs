@@ -151,6 +151,52 @@ pub trait Mmcs<T: Send + Sync + Clone>: Clone {
     ) -> Result<(), Self::Error>;
 }
 
+/// Lets a shared reference be used wherever an owned [`Mmcs`] is expected.
+impl<T: Send + Sync + Clone, M: Mmcs<T>> Mmcs<T> for &M {
+    type ProverData<Mat> = M::ProverData<Mat>;
+    type Commitment = M::Commitment;
+    type Proof = M::Proof;
+    type Error = M::Error;
+
+    fn commit<Mat: Matrix<T>>(
+        &self,
+        inputs: Vec<Mat>,
+    ) -> (Self::Commitment, Self::ProverData<Mat>) {
+        (**self).commit(inputs)
+    }
+
+    fn open_batch<Mat: Matrix<T>>(
+        &self,
+        index: usize,
+        prover_data: &Self::ProverData<Mat>,
+    ) -> BatchOpening<T, Self> {
+        let (opened_values, opening_proof) = (**self).open_batch(index, prover_data).unpack();
+        BatchOpening::new(opened_values, opening_proof)
+    }
+
+    fn get_matrices<'a, Mat: Matrix<T>>(
+        &self,
+        prover_data: &'a Self::ProverData<Mat>,
+    ) -> Vec<&'a Mat> {
+        (**self).get_matrices(prover_data)
+    }
+
+    fn verify_batch(
+        &self,
+        commit: &Self::Commitment,
+        dimensions: &[Dimensions],
+        index: usize,
+        batch_opening: BatchOpeningRef<'_, T, Self>,
+    ) -> Result<(), Self::Error> {
+        (**self).verify_batch(
+            commit,
+            dimensions,
+            index,
+            BatchOpeningRef::new(batch_opening.opened_values, batch_opening.opening_proof),
+        )
+    }
+}
+
 /// A Batched opening proof.
 ///
 /// Contains a collection of opened values at a Merkle proof for those openings.

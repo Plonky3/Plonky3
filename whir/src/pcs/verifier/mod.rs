@@ -338,7 +338,7 @@ where
         dimensions: &[Dimensions],
         round_index: usize,
     ) -> Result<Vec<Vec<EF>>, VerifierError> {
-        let extension_mmcs = ExtensionMmcs::new((*self.mmcs).clone());
+        let extension_mmcs = ExtensionMmcs::new(self.mmcs);
 
         let queries = if round_index == self.n_rounds() {
             &proof.final_queries
