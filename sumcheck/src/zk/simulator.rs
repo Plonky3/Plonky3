@@ -68,7 +68,10 @@ where
 
     // Lemma 6.4 hypotheses.
     assert!(F::TWO != F::ZERO, "Lemma 6.4 requires char(F) != 2");
-    assert!(ell_zk >= 2, "Lemma 6.4 requires ell_zk >= 2");
+    assert!(
+        ell_zk >= 3,
+        "mask degree ell_zk - 1 must cover the degree-2 plain piece (ell_zk >= 3)",
+    );
     assert!(k >= 1, "sumcheck requires at least one round");
 
     // Phase 1: sample alpha and derive mu (replays Construction 6.3 prelude).
@@ -358,7 +361,7 @@ mod tests {
         #[test]
         fn prop_simulator_view_matches_real_rs(
             n_vars in 3usize..=8,
-            ell_zk in 2usize..=5,
+            ell_zk in 3usize..=5,
             num_eqs in 1usize..=3,
             seed in 0u64..1024,
         ) {
