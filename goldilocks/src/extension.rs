@@ -1,12 +1,18 @@
 use p3_field::extension::{
-    BinomiallyExtendable, BinomiallyExtendableAlgebra, CubicExtendableAlgebra,
-    CubicTrinomialExtendable, HasTwoAdicBinomialExtension, HasTwoAdicCubicExtension,
+    Binomial, BinomiallyExtendable, CubicTrinomial, CubicTrinomialExtendable, ExtensionAlgebra,
+    HasTwoAdicBinomialExtension, HasTwoAdicCubicExtension, binomial_mul, cubic_square,
+    trinomial_cubic_mul,
 };
 use p3_field::{PrimeCharacteristicRing, TwoAdicField, field_to_array};
 
 use crate::Goldilocks;
 
-impl BinomiallyExtendableAlgebra<Self, 2> for Goldilocks {}
+impl ExtensionAlgebra<Self, 2, Binomial<Self>> for Goldilocks {
+    #[inline]
+    fn ext_mul(a: &[Self; 2], b: &[Self; 2], res: &mut [Self; 2]) {
+        binomial_mul::<Self, Self, Self, 2>(a, b, res, <Self as BinomiallyExtendable<2>>::W);
+    }
+}
 
 impl BinomiallyExtendable<2> for Goldilocks {
     // Verifiable in Sage with
@@ -36,7 +42,17 @@ impl HasTwoAdicBinomialExtension<2> for Goldilocks {
     }
 }
 
-impl CubicExtendableAlgebra<Self> for Goldilocks {}
+impl ExtensionAlgebra<Self, 3, CubicTrinomial> for Goldilocks {
+    #[inline]
+    fn ext_mul(a: &[Self; 3], b: &[Self; 3], res: &mut [Self; 3]) {
+        trinomial_cubic_mul::<Self>(a, b, res);
+    }
+
+    #[inline]
+    fn ext_square(a: &[Self; 3], res: &mut [Self; 3]) {
+        cubic_square::<Self>(a, res);
+    }
+}
 
 impl CubicTrinomialExtendable for Goldilocks {
     // Verifiable via:
@@ -86,7 +102,12 @@ impl HasTwoAdicCubicExtension for Goldilocks {
     }
 }
 
-impl BinomiallyExtendableAlgebra<Self, 5> for Goldilocks {}
+impl ExtensionAlgebra<Self, 5, Binomial<Self>> for Goldilocks {
+    #[inline]
+    fn ext_mul(a: &[Self; 5], b: &[Self; 5], res: &mut [Self; 5]) {
+        binomial_mul::<Self, Self, Self, 5>(a, b, res, <Self as BinomiallyExtendable<5>>::W);
+    }
+}
 
 impl BinomiallyExtendable<5> for Goldilocks {
     // Verifiable via:

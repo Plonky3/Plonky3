@@ -218,9 +218,8 @@ pub unsafe trait PackedValue: 'static + Copy + Send + Sync {
     #[inline]
     fn unpack_into<const N: usize>(packed: &[Self; N], rows: &mut [[Self::Value; N]]) {
         assert_eq!(rows.len(), Self::WIDTH);
-        #[allow(clippy::needless_range_loop)]
-        for lane in 0..Self::WIDTH {
-            rows[lane] = array::from_fn(|col| packed[col].extract(lane));
+        for (lane, row) in rows.iter_mut().enumerate() {
+            *row = array::from_fn(|col| packed[col].extract(lane));
         }
     }
 
@@ -457,9 +456,8 @@ pub trait PackedFieldExtension<
     #[inline]
     fn unpack_ext_into<const N: usize>(packed: &[Self; N], rows: &mut [[ExtField; N]]) {
         assert_eq!(rows.len(), BaseField::Packing::WIDTH);
-        #[allow(clippy::needless_range_loop)]
-        for lane in 0..BaseField::Packing::WIDTH {
-            rows[lane] = array::from_fn(|col| {
+        for (lane, row) in rows.iter_mut().enumerate() {
+            *row = array::from_fn(|col| {
                 ExtField::from_basis_coefficients_fn(|d| {
                     packed[col].as_basis_coefficients_slice()[d].as_slice()[lane]
                 })
@@ -483,7 +481,7 @@ pub trait PackedFieldExtension<
     }
 
     /// Convert an iterator of packed extension field elements to an iterator of
-    /// extension field elements (flat — one [`ExtField`] per lane per packed value).
+    /// extension field elements (flat — one `ExtField` per lane per packed value).
     #[inline]
     #[must_use]
     fn to_ext_iter(iter: impl IntoIterator<Item = Self>) -> impl Iterator<Item = ExtField> {

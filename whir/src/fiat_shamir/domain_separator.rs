@@ -24,6 +24,19 @@ pub(crate) struct SumcheckParams {
     pub pow_bits: usize,
 }
 
+/// Configuration for an HVZK sumcheck phase in the protocol.
+#[derive(Debug)]
+pub struct ZkSumcheckParams {
+    /// Number of sumcheck rounds.
+    pub rounds: usize,
+
+    /// Proof-of-work difficulty in bits.
+    pub pow_bits: usize,
+
+    /// Mask-code message length `ell_zk`.
+    pub ell_zk: usize,
+}
+
 /// Encodes the structure of an interactive protocol as a sequence of field elements.
 ///
 /// # Overview
@@ -184,20 +197,31 @@ where
         self.protocol_param(config.security_level);
         self.protocol_param(config.starting_log_inv_rate);
         self.protocol_param(config.pow_bits);
+        self.protocol_param(config.round_parameters.len());
+        for round in &config.round_parameters {
+            self.protocol_param(round.log_inv_rate);
+        }
 
         // Encode the soundness assumption as its discriminant.
         self.protocol_param(config.soundness_type as usize);
 
         // Encode the folding strategy: discriminant followed by inner values.
-        match config.folding_factor {
+        match &config.folding_factor {
             FoldingFactor::Constant(f) => {
                 self.protocol_param(0);
-                self.protocol_param(f);
+                self.protocol_param(*f);
             }
             FoldingFactor::ConstantFromSecondRound(first, rest) => {
                 self.protocol_param(1);
-                self.protocol_param(first);
-                self.protocol_param(rest);
+                self.protocol_param(*first);
+                self.protocol_param(*rest);
+            }
+            FoldingFactor::PerRound(factors) => {
+                self.protocol_param(2);
+                self.protocol_param(factors.len());
+                for &factor in factors {
+                    self.protocol_param(factor);
+                }
             }
         }
 
@@ -326,6 +350,36 @@ where
         }
     }
 
+    /// Append a Construction 6.3 HVZK sumcheck sub-protocol.
+    ///
+    /// # Transcript shape
+    ///
+    /// 1. Observe one mask commitment per sumcheck round.
+    /// 2. Observe `mu_tilde`.
+    /// 3. Sample the combining challenge `eps`.
+    /// 4. For each round, observe the wire polynomial coefficients, optionally
+    ///    grind, then sample the folding challenge.
+    pub fn add_zk_sumcheck<const DIGEST_ELEMS: usize>(&mut self, params: &ZkSumcheckParams) {
+        let ZkSumcheckParams {
+            rounds,
+            pow_bits,
+            ell_zk,
+        } = *params;
+
+        for _ in 0..rounds {
+            self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
+        }
+        self.observe(1, Observe::ZkSumcheckMuTilde);
+        self.sample(1, Sample::ZkSumcheckCombinationRandomness);
+
+        let wire_coefficients = ell_zk.max(3) - 1;
+        for _ in 0..rounds {
+            self.observe(wire_coefficients, Observe::ZkSumcheckPoly);
+            self.pow(pow_bits);
+            self.sample(1, Sample::FoldingRandomness);
+        }
+    }
+
     /// Optionally append a proof-of-work challenge.
     ///
     /// When `bits` is positive, encodes:
@@ -340,5 +394,74 @@ where
             // Observe the nonce that solves the challenge.
             self.observe(8, Observe::PowNonce);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
+
+    use super::*;
+
+    type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
+
+    fn observe_entry(count: usize, observe: Observe) -> F {
+        observe.as_field_element::<F>()
+            + F::from_usize(count)
+            + Pattern::Observe.as_field_element::<F>()
+    }
+
+    fn sample_entry(count: usize, sample: Sample) -> F {
+        sample.as_field_element::<F>()
+            + F::from_usize(count)
+            + Pattern::Sample.as_field_element::<F>()
+    }
+
+    #[test]
+    fn zk_sumcheck_domain_separator_shape_matches_transcript() {
+        let mut separator = DomainSeparator::<EF, F>::new(Vec::new());
+
+        separator.add_zk_sumcheck::<8>(&ZkSumcheckParams {
+            rounds: 2,
+            pow_bits: 0,
+            ell_zk: 4,
+        });
+
+        assert_eq!(
+            separator.pattern,
+            vec![
+                observe_entry(8, Observe::MerkleDigest),
+                observe_entry(8, Observe::MerkleDigest),
+                observe_entry(1, Observe::ZkSumcheckMuTilde),
+                sample_entry(1, Sample::ZkSumcheckCombinationRandomness),
+                observe_entry(3, Observe::ZkSumcheckPoly),
+                sample_entry(1, Sample::FoldingRandomness),
+                observe_entry(3, Observe::ZkSumcheckPoly),
+                sample_entry(1, Sample::FoldingRandomness),
+            ],
+        );
+    }
+
+    #[test]
+    fn zk_sumcheck_domain_separator_uses_minimum_wire_width() {
+        let mut separator = DomainSeparator::<EF, F>::new(Vec::new());
+
+        separator.add_zk_sumcheck::<8>(&ZkSumcheckParams {
+            rounds: 1,
+            pow_bits: 0,
+            ell_zk: 2,
+        });
+
+        assert!(
+            separator
+                .pattern
+                .contains(&observe_entry(2, Observe::ZkSumcheckPoly)),
+            "ell_zk < 3 still sends max(ell_zk, 3) - 1 wire coefficients",
+        );
     }
 }

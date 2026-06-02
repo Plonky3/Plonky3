@@ -1,5 +1,7 @@
-use super::{BinomialExtensionField, BinomiallyExtendable, HasTwoAdicBinomialExtension};
-use crate::extension::BinomiallyExtendableAlgebra;
+use super::{
+    Binomial, BinomialExtensionField, BinomiallyExtendable, ExtensionAlgebra,
+    HasTwoAdicBinomialExtension, binomial_mul,
+};
 use crate::{Algebra, Field, PrimeCharacteristicRing};
 
 pub type Complex<F> = BinomialExtensionField<F, 2>;
@@ -15,7 +17,12 @@ pub trait ComplexExtendable: Field {
     fn circle_two_adic_generator(bits: usize) -> Complex<Self>;
 }
 
-impl<F: ComplexExtendable> BinomiallyExtendableAlgebra<F, 2> for F {}
+impl<F: ComplexExtendable> ExtensionAlgebra<F, 2, Binomial<F>> for F {
+    #[inline]
+    fn ext_mul(a: &[Self; 2], b: &[Self; 2], res: &mut [Self; 2]) {
+        binomial_mul::<F, Self, Self, 2>(a, b, res, <F as BinomiallyExtendable<2>>::W);
+    }
+}
 
 impl<F: ComplexExtendable> BinomiallyExtendable<2> for F {
     const W: Self = F::NEG_ONE;
@@ -99,9 +106,14 @@ pub trait HasComplexBinomialExtension<const D: usize>: ComplexExtendable {
     const EXT_GENERATOR: [Complex<Self>; D];
 }
 
-impl<F, const D: usize> BinomiallyExtendableAlgebra<Self, D> for Complex<F> where
-    F: HasComplexBinomialExtension<D>
+impl<F, const D: usize> ExtensionAlgebra<Self, D, Binomial<Self>> for Complex<F>
+where
+    F: HasComplexBinomialExtension<D>,
 {
+    #[inline]
+    fn ext_mul(a: &[Self; D], b: &[Self; D], res: &mut [Self; D]) {
+        binomial_mul::<Self, Self, Self, D>(a, b, res, <Self as BinomiallyExtendable<D>>::W);
+    }
 }
 
 impl<F, const D: usize> BinomiallyExtendable<D> for Complex<F>

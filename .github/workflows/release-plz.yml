@@ -22,12 +22,50 @@ jobs:
       }}
     permissions:
       contents: write
+      # Allow the "Verify CI passed" step to query workflow runs via `gh`.
+      actions: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
+      - name: Verify CI passed on merge commit
+        # Refuses to publish if the merge commit's CI run never finished `success`.
+        # The CI workflow itself is gated on `cancel-in-progress`, so a regression
+        # between PR-merge and release-plz firing is a real failure mode.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          echo "Waiting for CI workflow on $SHA"
+          for i in $(seq 1 60); do
+            data=$(gh run list --workflow CI --commit "$SHA" --json status,conclusion --limit 1 --jq '.[0] // {}')
+            status=$(echo "$data" | jq -r '.status // "missing"')
+            conclusion=$(echo "$data" | jq -r '.conclusion // ""')
+            echo "Attempt $i: status=$status conclusion=$conclusion"
+            case "$status" in
+              completed)
+                if [ "$conclusion" = "success" ]; then
+                  echo "CI succeeded on $SHA — proceeding with release."
+                  exit 0
+                fi
+                echo "::error::CI on $SHA concluded with '$conclusion'. Refusing to release."
+                exit 1
+                ;;
+              missing)
+                # Allow 5 min for the CI workflow to actually start.
+                if [ "$i" -gt 10 ]; then
+                  echo "::error::No CI run found for $SHA after 5 min. Refusing to release."
+                  exit 1
+                fi
+                ;;
+            esac
+            sleep 30
+          done
+          echo "::error::Timed out (30 min) waiting for CI on $SHA."
+          exit 1
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Run release-plz

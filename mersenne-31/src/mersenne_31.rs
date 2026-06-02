@@ -671,7 +671,10 @@ mod tests {
     }
 
     // Mersenne31 has a redundant representation of Zero but no redundant representation of One.
-    const ZEROS: [Mersenne31; 2] = [Mersenne31::ZERO, Mersenne31::new((1_u32 << 31) - 1)];
+    // The second entry deliberately uses `new_reduced` to *preserve* the `value == P` encoding:
+    // the public `new` constructor reduces modulo P and would silently collapse it to 0,
+    // making the redundant-representation tests no-ops (cf. #1684).
+    const ZEROS: [Mersenne31; 2] = [Mersenne31::ZERO, Mersenne31::new_reduced((1_u32 << 31) - 1)];
     const ONES: [Mersenne31; 1] = [Mersenne31::ONE];
 
     // Get the prime factorization of the order of the multiplicative group.

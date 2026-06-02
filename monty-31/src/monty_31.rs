@@ -208,11 +208,17 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
         // The array FP::MONTY_POWERS_OF_TWO contains the powers of 2
         // from 2^0 to 2^63 in monty form. We can use this to quickly
         // compute 2^exp.
-        if exp < 64 {
-            *self * Self::MONTY_POWERS_OF_TWO[exp as usize]
-        } else {
-            // For larger values we use the default method.
-            *self * Self::TWO.exp_u64(exp)
+        match exp {
+            0 => *self,
+            1 => *self + *self,
+            _ => {
+                if exp < 64 {
+                    *self * Self::MONTY_POWERS_OF_TWO[exp as usize]
+                } else {
+                    // For larger values we use the default method.
+                    *self * Self::TWO.exp_u64(exp)
+                }
+            }
         }
     }
 

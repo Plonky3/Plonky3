@@ -4,51 +4,31 @@
 
 use alloc::vec::Vec;
 use core::array;
-use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_util::{flatten_to_base, reconstitute_from_base};
 use rand::distr::{Distribution, StandardUniform};
-use serde::{Deserialize, Serialize};
 
 use super::quintic_extension::{quintic_square, trinomial_quintic_mul};
-use super::{QuinticTrinomialExtensionField, vector_add, vector_sub};
-use crate::extension::QuinticTrinomialExtendable;
+use super::{PackedExtField, QuinticTrinomialExtensionField, vector_add, vector_sub};
+use crate::extension::{QuinticTrinomial, QuinticTrinomialExtendable};
 use crate::{
     Algebra, BasedVectorSpace, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
     PrimeCharacteristicRing, field_to_array,
 };
 
-/// Packed quintic extension field.
+/// Packed quintic extension field, one element per SIMD lane.
 ///
-/// This is a wrapper around `[PF; 5]` where `PF` is a packed field type.
-/// It enables SIMD-style operations on multiple quintic extension field elements.
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
-#[repr(transparent)]
-#[must_use]
-pub struct PackedQuinticTrinomialExtensionField<F: Field, PF: PackedField<Scalar = F>> {
-    #[serde(
-        with = "p3_util::array_serialization",
-        bound(serialize = "PF: Serialize", deserialize = "PF: Deserialize<'de>")
-    )]
-    pub(crate) value: [PF; 5],
-}
-
-impl<F: Field, PF: PackedField<Scalar = F>> PackedQuinticTrinomialExtensionField<F, PF> {
-    const fn new(value: [PF; 5]) -> Self {
-        Self { value }
-    }
-}
+/// Type alias for the unified [`PackedExtField`] with `Shape = QuinticTrinomial`.
+pub type PackedQuinticTrinomialExtensionField<F, PF> = PackedExtField<F, PF, 5, QuinticTrinomial>;
 
 impl<F: Field, PF: PackedField<Scalar = F>> Default
     for PackedQuinticTrinomialExtensionField<F, PF>
 {
     #[inline]
     fn default() -> Self {
-        Self {
-            value: array::from_fn(|_| PF::ZERO),
-        }
+        Self::new(array::from_fn(|_| PF::ZERO))
     }
 }
 
@@ -57,9 +37,7 @@ impl<F: Field, PF: PackedField<Scalar = F>> From<QuinticTrinomialExtensionField<
 {
     #[inline]
     fn from(x: QuinticTrinomialExtensionField<F>) -> Self {
-        Self {
-            value: x.value.map(Into::into),
-        }
+        Self::new(x.value.map(Into::into))
     }
 }
 
@@ -68,9 +46,7 @@ impl<F: Field, PF: PackedField<Scalar = F>> From<PF>
 {
     #[inline]
     fn from(x: PF) -> Self {
-        Self {
-            value: field_to_array(x),
-        }
+        Self::new(field_to_array(x))
     }
 }
 
@@ -105,21 +81,13 @@ where
 {
     type PrimeSubfield = PF::PrimeSubfield;
 
-    const ZERO: Self = Self {
-        value: [PF::ZERO; 5],
-    };
+    const ZERO: Self = Self::new([PF::ZERO; 5]);
 
-    const ONE: Self = Self {
-        value: field_to_array(PF::ONE),
-    };
+    const ONE: Self = Self::new(field_to_array(PF::ONE));
 
-    const TWO: Self = Self {
-        value: field_to_array(PF::TWO),
-    };
+    const TWO: Self = Self::new(field_to_array(PF::TWO));
 
-    const NEG_ONE: Self = Self {
-        value: field_to_array(PF::NEG_ONE),
-    };
+    const NEG_ONE: Self = Self::new(field_to_array(PF::NEG_ONE));
 
     #[inline]
     fn from_prime_subfield(val: Self::PrimeSubfield) -> Self {
@@ -205,9 +173,8 @@ impl<F: QuinticTrinomialExtendable> PackedFieldExtension<F, QuinticTrinomialExte
 
     #[inline]
     fn packed_ext_powers(base: QuinticTrinomialExtensionField<F>) -> Powers<Self> {
-        use itertools::Itertools;
         let width = F::Packing::WIDTH;
-        let powers = base.powers().take(width + 1).collect_vec();
+        let powers = base.powers().collect_n(width + 1);
         // Transpose first WIDTH powers
         let current = Self::from_ext_slice(&powers[..width]);
 
@@ -257,7 +224,7 @@ where
     #[inline]
     fn add(self, rhs: QuinticTrinomialExtensionField<F>) -> Self {
         let value = vector_add(&self.value, &rhs.value);
-        Self { value }
+        Self::new(value)
     }
 }
 
@@ -347,7 +314,7 @@ where
     #[inline]
     fn sub(self, rhs: QuinticTrinomialExtensionField<F>) -> Self {
         let value = vector_sub(&self.value, &rhs.value);
-        Self { value }
+        Self::new(value)
     }
 }
 
@@ -362,7 +329,7 @@ where
     fn sub(self, rhs: PF) -> Self {
         let mut res = self.value;
         res[0] -= rhs;
-        Self { value: res }
+        Self::new(res)
     }
 }
 
@@ -437,9 +404,7 @@ where
 
     #[inline]
     fn mul(self, rhs: PF) -> Self {
-        Self {
-            value: self.value.map(|x| x * rhs),
-        }
+        Self::new(self.value.map(|x| x * rhs))
     }
 }
 

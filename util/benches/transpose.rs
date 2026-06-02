@@ -21,8 +21,8 @@ fn bench_transpose_babybear(c: &mut Criterion) {
         let size = width * height;
 
         let input: Vec<_> = (0..size as u64).map(BabyBear::from_u64).collect();
-        let mut output_neon = vec![BabyBear::ZERO; size];
-        let mut output_crate = vec![BabyBear::ZERO; size];
+        let mut output_neon = BabyBear::zero_vec(size);
+        let mut output_crate = BabyBear::zero_vec(size);
 
         group.bench_with_input(BenchmarkId::new("transpose_util", name), &size, |b, _| {
             b.iter(|| {
@@ -49,8 +49,8 @@ fn bench_transpose_goldilocks(c: &mut Criterion) {
         let size = width * height;
 
         let input: Vec<_> = (0..size as u64).map(Goldilocks::from_u64).collect();
-        let mut output_neon = vec![Goldilocks::ZERO; size];
-        let mut output_crate = vec![Goldilocks::ZERO; size];
+        let mut output_neon = Goldilocks::zero_vec(size);
+        let mut output_crate = Goldilocks::zero_vec(size);
 
         group.bench_with_input(BenchmarkId::new("transpose_util", name), &size, |b, _| {
             b.iter(|| {

@@ -30,14 +30,10 @@ filter_unconventional = false
 split_commits = false
 
 # Take every commit and truncate all but the first line
-commit_preprocessors = [
-    { pattern = '(.*)(.|\n)*', replace = "$1" }
-]
+commit_preprocessors = [{ pattern = '(.*)(.|\n)*', replace = "$1" }]
 
 # Filter for PR merge commits
-commit_parsers = [
-    { message = '.*\(#[\d]+\).*', group = "Merged PRs" },
-]
+commit_parsers = [{ message = '.*\(#[\d]+\).*', group = "Merged PRs" }]
 
 # filter out the commits that are not matched by commit parsers
 filter_commits = false

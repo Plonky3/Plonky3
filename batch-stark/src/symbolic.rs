@@ -72,6 +72,9 @@ where
         let constraint_degree = (max_degree + is_zk).max(2);
         let result = log2_ceil_usize(constraint_degree - 1);
 
+        // This check remains at the `debug` level, as the AIR is known by both
+        // prover and verifier, i.e. a malicious prover cannot feed the verifier
+        // a different hint than the verifier computes for itself.
         debug_assert!(
             {
                 let actual = get_max_constraint_degree(air, layout, contexts, lookup_gadget);

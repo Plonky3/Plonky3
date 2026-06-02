@@ -91,7 +91,7 @@ pub type Poseidon1GoldilocksGeneric<const WIDTH: usize> = Poseidon1<
 /// Karatsuba MDS convolution.
 ///
 /// Supports both scalar and packed state representations transparently.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub type Poseidon1Goldilocks<const WIDTH: usize> = crate::Poseidon1GoldilocksDispatch<WIDTH>;
 
 /// Unified Poseidon1 permutation for Goldilocks.
@@ -859,7 +859,7 @@ pub const GOLDILOCKS_POSEIDON1_RC_12: [[Goldilocks; 12]; 30] = Goldilocks::new_2
 /// Returns the platform-optimal implementation: dual-dispatch on aarch64
 /// (generic for scalar, fused ASM for packed), generic Karatsuba on all
 /// other platforms.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub fn default_goldilocks_poseidon1_8() -> Poseidon1Goldilocks<8> {
     let constants = Poseidon1Constants {
         rounds_f: 2 * GOLDILOCKS_POSEIDON_HALF_FULL_ROUNDS,
@@ -891,7 +891,7 @@ pub fn default_goldilocks_poseidon1_8() -> Poseidon1Goldilocks<8> {
 /// Returns the platform-optimal implementation: dual-dispatch on aarch64
 /// (generic for scalar, fused ASM for packed), generic Karatsuba on all
 /// other platforms.
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub fn default_goldilocks_poseidon1_12() -> Poseidon1Goldilocks<12> {
     let constants = Poseidon1Constants {
         rounds_f: 2 * GOLDILOCKS_POSEIDON_HALF_FULL_ROUNDS,
@@ -1160,7 +1160,7 @@ mod tests {
         }
     }
 
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     mod neon {
         use super::*;
         use crate::PackedGoldilocksNeon;

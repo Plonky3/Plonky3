@@ -4,6 +4,7 @@ use p3_commit::Pcs;
 use serde::{Deserialize, Serialize};
 
 use crate::StarkGenericConfig;
+use crate::security::{ConjecturedSecurity, ProvenSecurity, StarkSecurityParams};
 
 type Com<SC> = <<SC as StarkGenericConfig>::Pcs as Pcs<
     <SC as StarkGenericConfig>::Challenge,
@@ -21,6 +22,25 @@ pub struct Proof<SC: StarkGenericConfig> {
     pub opened_values: OpenedValues<SC::Challenge>,
     pub opening_proof: PcsProof<SC>,
     pub degree_bits: usize,
+}
+
+impl<SC: StarkGenericConfig> Proof<SC> {
+    /// Conjectured security level (in bits).
+    ///
+    /// This is a parameter-space property and does not depend on `self`; the method
+    /// is exposed on [`Proof`] for parity with [`Self::proven_security`].
+    ///
+    /// See [`ConjecturedSecurity`].
+    pub fn conjectured_security(params: &StarkSecurityParams) -> ConjecturedSecurity {
+        ConjecturedSecurity::compute_from_params(params)
+    }
+
+    /// Proven security level (in bits).
+    ///
+    /// See [`ProvenSecurity`].
+    pub fn proven_security(&self, params: &StarkSecurityParams) -> ProvenSecurity {
+        ProvenSecurity::compute_from_proof(self.degree_bits, params)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]

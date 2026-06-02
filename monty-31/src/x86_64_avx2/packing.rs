@@ -1305,7 +1305,7 @@ pub(crate) fn base_mul_packed<FP, const WIDTH: usize>(
     b: MontyField31<FP>,
     res: &mut [MontyField31<FP>; WIDTH],
 ) where
-    FP: FieldParameters + BinomialExtensionData<WIDTH>,
+    FP: FieldParameters,
 {
     match WIDTH {
         1 => res[0] = a[0] * b,

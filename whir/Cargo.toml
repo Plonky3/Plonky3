@@ -9,6 +9,9 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
 [dependencies]
 hashbrown.workspace = true
 itertools.workspace = true
@@ -21,28 +24,40 @@ p3-matrix.workspace = true
 p3-maybe-rayon.workspace = true
 p3-merkle-tree.workspace = true
 p3-multilinear-util.workspace = true
+p3-sumcheck.workspace = true
 p3-symmetric.workspace = true
 p3-util.workspace = true
+p3-zk-codes.workspace = true
+rand.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
 thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-clap.workspace = true
-criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
+p3-blake3 = { path = "../blake3" }
+p3-fri = { path = "../fri" }
 p3-keccak = { path = "../keccak" }
 p3-koala-bear = { path = "../koala-bear" }
+p3-sumcheck = { workspace = true, features = ["test-util"] }
+
+clap.workspace = true
+criterion.workspace = true
+postcard = { workspace = true, features = ["alloc"] }
 proptest.workspace = true
-rand.workspace = true
 tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
-[features]
-parallel = ["p3-maybe-rayon/parallel"]
-
 [[bench]]
 name = "sumcheck"
+harness = false
+
+[[bench]]
+name = "fri_vs_whir"
+harness = false
+
+[[bench]]
+name = "whir_pcs"
 harness = false
 
 [[example]]

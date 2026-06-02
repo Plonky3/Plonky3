@@ -9,22 +9,23 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+parallel = ["rayon"]
+
 [dependencies]
 rayon = { workspace = true, optional = true }
 serde.workspace = true
-transpose = "0.2"
+transpose.workspace = true
 
 [dev-dependencies]
-criterion.workspace = true
 p3-baby-bear = { path = "../baby-bear" }
 p3-field = { path = "../field" }
 p3-goldilocks = { path = "../goldilocks" }
+
+criterion.workspace = true
 proptest.workspace = true
 rand.workspace = true
 serde_json.workspace = true
-
-[features]
-parallel = ["rayon"]
 
 [[bench]]
 name = "bit_reverse"

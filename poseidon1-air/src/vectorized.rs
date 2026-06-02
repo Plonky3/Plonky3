@@ -41,7 +41,7 @@ use rand::{RngExt, SeedableRng};
 use crate::air::eval;
 use crate::{
     FullRoundConstants, PartialRoundConstants, Poseidon1Air, Poseidon1Cols,
-    generate_vectorized_trace_rows,
+    generate_vectorized_trace_rows, sbox_constraint_degree,
 };
 
 /// Column layout for a vectorized Poseidon1 row.
@@ -272,6 +272,10 @@ impl<
     /// No next-row columns. All permutations are fully constrained within one row.
     fn main_next_row_columns(&self) -> Vec<usize> {
         vec![]
+    }
+
+    fn max_constraint_degree(&self) -> Option<usize> {
+        Some(sbox_constraint_degree(SBOX_DEGREE, SBOX_REGISTERS))
     }
 }
 

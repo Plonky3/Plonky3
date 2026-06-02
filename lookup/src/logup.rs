@@ -101,7 +101,7 @@ impl LogUpGadget {
 
     /// Computes the numerator and denominator of the fraction:
     /// `∑(m_i / (α - combined_elements[i]))`, where
-    /// `combined_elements[i] = ∑elements[i][n-j] * β^j
+    /// `combined_elements[i] = ∑elements[i][n-j] * β^j`
     pub(crate) fn compute_combined_sum_terms<AB, E, M>(
         &self,
         elements: &[Vec<E>],

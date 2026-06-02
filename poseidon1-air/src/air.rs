@@ -117,7 +117,7 @@ impl<
 {
     /// Construct a `Poseidon1Air` from pre-computed round constants.
     ///
-    /// Use [`Poseidon1Constants::to_optimized`] to produce the two constant
+    /// Use [`p3_poseidon1::Poseidon1Constants::to_optimized`] to produce the two constant
     /// structs from raw Poseidon1 parameters.
     pub const fn new(
         full_constants: FullRoundConstants<F, WIDTH>,
@@ -174,6 +174,22 @@ impl<
     /// No next-row columns. Each permutation is fully constrained within one row.
     fn main_next_row_columns(&self) -> Vec<usize> {
         vec![]
+    }
+
+    fn max_constraint_degree(&self) -> Option<usize> {
+        Some(sbox_constraint_degree(SBOX_DEGREE, SBOX_REGISTERS))
+    }
+}
+
+/// The maximum degree among the constraints emitted by [`eval_sbox`] for a given
+/// `(DEGREE, REGISTERS)` configuration.
+pub(crate) const fn sbox_constraint_degree(degree: u64, registers: usize) -> usize {
+    match (degree, registers) {
+        (3, 0) => 3,
+        (5, 0) => 5,
+        (7, 0) => 7,
+        (5, 1) | (7, 1) | (11, 2) => 3,
+        _ => panic!("Unexpected (DEGREE, REGISTERS)"),
     }
 }
 
@@ -340,10 +356,10 @@ fn eval_full_round<
 
 /// Evaluate constraints for one **sparse partial** round.
 ///
-/// 1. S-box on state[0].
+/// 1. S-box on `state[0]`.
 /// 2. Commit the S-box output and reset degree.
 /// 3. Add scalar round constant (except last round).
-/// 4. Sparse matrix multiply: dot product for new state[0], rank-1 update for rest.
+/// 4. Sparse matrix multiply: dot product for new `state[0]`, rank-1 update for rest.
 #[inline]
 fn eval_sparse_partial_round<
     AB: AirBuilder,

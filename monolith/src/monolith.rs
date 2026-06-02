@@ -29,8 +29,8 @@ use p3_goldilocks::Goldilocks;
 use p3_mds::MdsPermutation;
 use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{CryptographicPermutation, Permutation};
-use sha3::Shake128;
-use sha3::digest::{ExtendableOutput, Update};
+use shake::Shake128;
+use shake::digest::{ExtendableOutput, Update};
 
 use crate::bars::MonolithBars;
 use crate::bars::goldilocks::MonolithBarsGoldilocks;

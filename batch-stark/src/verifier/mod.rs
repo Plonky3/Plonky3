@@ -92,8 +92,12 @@ where
     let mut ext_domain_sizes = Vec::with_capacity(airs.len());
 
     for (i, air) in airs.iter().enumerate() {
-        let (base_db, ext_domain_size) =
-            validate_degree_bits(Some(i), degree_bits[i], config.is_zk())?;
+        let (base_db, ext_domain_size) = validate_degree_bits(
+            Some(i),
+            degree_bits[i],
+            config.is_zk(),
+            pcs.log_max_lde_height(),
+        )?;
         base_degree_bits.push(base_db);
         ext_domain_sizes.push(ext_domain_size);
 
@@ -540,7 +544,7 @@ where
         let trace_next_ref = match &opened_values.instances[i].base_opened_values.trace_next {
             Some(v) => v.as_slice(),
             None => {
-                trace_next_zeros = vec![SC::Challenge::ZERO; A::width(air)];
+                trace_next_zeros = SC::Challenge::zero_vec(A::width(air));
                 &trace_next_zeros
             }
         };
@@ -551,7 +555,7 @@ where
         {
             Some(v) => v.as_slice(),
             None => {
-                pre_next_zeros = vec![SC::Challenge::ZERO; preprocessed_widths[i]];
+                pre_next_zeros = SC::Challenge::zero_vec(preprocessed_widths[i]);
                 &pre_next_zeros
             }
         };

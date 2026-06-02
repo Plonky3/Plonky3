@@ -25,6 +25,19 @@ pub const fn log2_ceil_usize(n: usize) -> usize {
     (usize::BITS - n.saturating_sub(1).leading_zeros()) as usize
 }
 
+/// Computes `floor(log_2(n))`.
+///
+/// Returns `0` for `n == 0` (matching `log2_ceil_usize(0) == 0`); `floor(log2(0))`
+/// is undefined mathematically and the saturating behaviour is the convention used
+/// elsewhere in the workspace.
+#[must_use]
+pub const fn log2_floor_usize(n: usize) -> usize {
+    if n == 0 {
+        return 0;
+    }
+    (usize::BITS - 1 - n.leading_zeros()) as usize
+}
+
 #[must_use]
 pub const fn log2_ceil_u64(n: u64) -> u64 {
     (u64::BITS - n.saturating_sub(1).leading_zeros()) as u64
@@ -170,6 +183,15 @@ pub const fn indices_arr<const N: usize>() -> [usize; N] {
     indices_arr
 }
 
+/// Statically asserts that `T` implements [`Clone`].
+pub const fn assert_clone<T: Clone>() {}
+
+/// Statically asserts that `T` implements [`Send`].
+pub const fn assert_send<T: Send>() {}
+
+/// Statically asserts that `T` implements [`Sync`].
+pub const fn assert_sync<T: Sync>() {}
+
 #[inline]
 pub const fn reverse_bits(x: usize, n: usize) -> usize {
     // Assert that n is a power of 2
@@ -281,9 +303,8 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
     if lb_n <= 6 {
         // BIT_REVERSE_6BIT holds 6-bit reverses. This shift makes them lb_n-bit reverses.
         let dst_shr_amt = 6 - lb_n as u32;
-        #[allow(clippy::needless_range_loop)]
-        for src in 0..vals.len() {
-            let dst = (BIT_REVERSE_6BIT[src] as usize).wrapping_shr(dst_shr_amt);
+        for (src, &br) in BIT_REVERSE_6BIT.iter().enumerate().take(vals.len()) {
+            let dst = (br as usize).wrapping_shr(dst_shr_amt);
             if src < dst {
                 vals.swap(src, dst);
             }
@@ -297,9 +318,8 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
         for src_chunk in 0..(vals.len() >> 6) {
             let src_hi = src_chunk << 6;
             let dst_lo = src_chunk.reverse_bits().wrapping_shr(dst_lo_shr_amt);
-            #[allow(clippy::needless_range_loop)]
-            for src_lo in 0..(1 << 6) {
-                let dst_hi = (BIT_REVERSE_6BIT[src_lo] as usize) << dst_hi_shl_amt;
+            for (src_lo, &br) in BIT_REVERSE_6BIT.iter().enumerate() {
+                let dst_hi = (br as usize) << dst_hi_shl_amt;
                 let src = src_hi + src_lo;
                 let dst = dst_hi + dst_lo;
                 if src < dst {
@@ -310,7 +330,7 @@ fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
     }
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 const fn reverse_slice_index_bits_small<F>(vals: &mut [F], lb_n: usize) {
     // Aarch64 can reverse bits in one instruction, so the trivial version works best.
     // use manual `while` loop to enable `const`
@@ -437,26 +457,6 @@ where
     (buf, i)
 }
 
-/// Gets a shared reference to the contained value.
-///
-/// # Safety
-///
-/// Calling this when the content is not yet fully initialized causes undefined
-/// behavior: it is up to the caller to guarantee that every `MaybeUninit<T>` in
-/// the slice really is in an initialized state.
-///
-/// Copied from:
-/// https://doc.rust-lang.org/std/primitive.slice.html#method.assume_init_ref
-/// Once that is stabilized, this should be removed.
-#[inline(always)]
-pub const unsafe fn assume_init_ref<T>(slice: &[MaybeUninit<T>]) -> &[T] {
-    // SAFETY: casting `slice` to a `*const [T]` is safe since the caller guarantees that
-    // `slice` is initialized, and `MaybeUninit` is guaranteed to have the same layout as `T`.
-    // The pointer obtained is valid since it refers to memory owned by `slice` which is a
-    // reference and thus guaranteed to be valid for reads.
-    unsafe { &*(slice as *const [MaybeUninit<T>] as *const [T]) }
-}
-
 /// Split an iterator into small arrays and apply `func` to each.
 ///
 /// Repeatedly read `BUFLEN` elements from `input` into an array and
@@ -475,7 +475,7 @@ where
         if n == 0 {
             break;
         }
-        func(unsafe { assume_init_ref(buf.get_unchecked(..n)) });
+        func(unsafe { buf.get_unchecked(..n).assume_init_ref() });
     }
 }
 
@@ -507,7 +507,7 @@ fn iter_next_chunk_padded<T: Copy, const N: usize>(
 /// iterator, then the last `N-1` elements will be padded with the given default value.
 ///
 /// This is essentially a copy pasted version of the nightly `array_chunks` function.
-/// https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.array_chunks
+/// <https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.array_chunks>
 /// Once that is stabilized this and the functions above it should be removed.
 #[inline]
 pub fn iter_array_chunks_padded<T: Copy, const N: usize>(
@@ -751,7 +751,7 @@ pub const fn relatively_prime_u64(mut u: u64, mut v: u64) -> bool {
 
 /// Inner loop of the deferred GCD algorithm.
 ///
-/// See: https://eprint.iacr.org/2020/972.pdf for more information.
+/// See: <https://eprint.iacr.org/2020/972.pdf> for more information.
 ///
 /// This is basically a mini GCD algorithm which builds up a transformation to apply to the larger
 /// numbers in the main loop. The key point is that this small loop only uses u64s, subtractions and
@@ -872,6 +872,42 @@ pub const fn gcd_inversion_prime_field_32<const FIELD_BITS: u32>(mut a: u32, mut
     // `len(a) + len(b) <= 2` with `gcd(a, b) = 1` and `b` odd.
     // This implies that `b` must be `1` and so `v = 2^{2 * FIELD_BITS - 2} a0^{-1} mod P` as desired.
     v
+}
+
+/// A raw mutable pointer wrapper that implements [`Send`] and [`Sync`].
+///
+/// Used to enable parallel writes to disjoint slices of a pre-allocated buffer
+/// from within closures that require `Send + Sync` (e.g. `rayon::ParallelIterator::for_each_init`).
+///
+/// # Safety
+///
+/// The caller must ensure that concurrent accesses through this pointer always
+/// target **non-overlapping** memory regions.
+#[derive(Clone, Copy)]
+pub struct DisjointMutPtr<T>(*mut T);
+
+// SAFETY: The contract of DisjointMutPtr guarantees that each thread writes to
+// a disjoint region, so sharing the pointer across threads is safe.
+unsafe impl<T> Send for DisjointMutPtr<T> {}
+unsafe impl<T> Sync for DisjointMutPtr<T> {}
+
+impl<T> DisjointMutPtr<T> {
+    /// Create a new `DisjointMutPtr` from a mutable slice.
+    #[inline]
+    pub const fn new(slice: &mut [T]) -> Self {
+        Self(slice.as_mut_ptr())
+    }
+
+    /// Get a mutable slice starting at `offset` with `len` elements.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the range `[offset, offset+len)` is within bounds
+    /// and does not overlap with any other concurrent access.
+    #[inline]
+    pub const unsafe fn slice_mut(self, offset: usize, len: usize) -> &'static mut [T] {
+        unsafe { core::slice::from_raw_parts_mut(self.0.add(offset), len) }
+    }
 }
 
 #[cfg(test)]

@@ -26,11 +26,20 @@ pub fn validate_degree_bits(
     air: Option<usize>,
     degree_bits: usize,
     is_zk: usize,
+    max_log_degree: usize,
 ) -> Result<(usize, usize), InvalidProofShapeError> {
     if degree_bits < is_zk {
         return Err(InvalidProofShapeError::DegreeBitsTooSmall {
             air,
             minimum: is_zk,
+            got: degree_bits,
+        });
+    }
+
+    if degree_bits > max_log_degree {
+        return Err(InvalidProofShapeError::DegreeBitsTooLarge {
+            air,
+            maximum: max_log_degree,
             got: degree_bits,
         });
     }
@@ -256,7 +265,8 @@ where
     let degree_bits = *degree_bits;
 
     let pcs = config.pcs();
-    let (base_degree_bits, degree) = validate_degree_bits(None, degree_bits, config.is_zk())?;
+    let (base_degree_bits, degree) =
+        validate_degree_bits(None, degree_bits, config.is_zk(), pcs.log_max_lde_height())?;
     let trace_domain = pcs.natural_domain_for_degree(degree);
     // TODO: allow moving preprocessed commitment to preprocess time, if known in advance
     let (preprocessed_width, preprocessed_commit) =
@@ -460,7 +470,7 @@ where
     let trace_next_slice = match &opened_values.trace_next {
         Some(v) => v.as_slice(),
         None => {
-            zeros = vec![SC::Challenge::ZERO; air_width];
+            zeros = SC::Challenge::zero_vec(air_width);
             &zeros
         }
     };
@@ -468,7 +478,7 @@ where
     let preprocessed_next_for_verify = match &opened_values.preprocessed_next {
         Some(v) => Some(v.as_slice()),
         None if preprocessed_width > 0 => {
-            pre_next_zeros = vec![SC::Challenge::ZERO; preprocessed_width];
+            pre_next_zeros = SC::Challenge::zero_vec(preprocessed_width);
             Some(pre_next_zeros.as_slice())
         }
         None => None,

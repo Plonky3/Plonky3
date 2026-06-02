@@ -91,7 +91,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
 
     /// Inner product of this eq table with a base-field slice.
     ///
-    /// Computes sum_{i} eq1[i] * chunk[i].
+    /// Computes `sum_{i} eq1[i] * chunk[i]`.
     ///
     /// For packed tables, reinterprets the input slice as packed elements
     /// and reduces the SIMD lanes via horizontal sum at the end.
@@ -114,7 +114,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
 
     /// Inner product of this eq table with an extension-field slice.
     ///
-    /// Computes sum_{i} eq1[i] * chunk[i].
+    /// Computes `sum_{i} eq1[i] * chunk[i]`.
     ///
     /// For packed tables, groups the input into W-element sub-slices,
     /// converts each group to a packed element, then reduces at the end.
@@ -139,7 +139,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
 
     /// Inner product of this eq table with a pre-packed extension-field slice.
     ///
-    /// Computes sum_{i} eq1[i] * chunk[i] where both sides are already packed.
+    /// Computes `sum_{i} eq1[i] * chunk[i]` where both sides are already packed.
     ///
     /// # Panics
     ///
@@ -155,7 +155,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         }
     }
 
-    /// Adds weight * eq1[i] to each element of a scalar output buffer.
+    /// Adds `weight * eq1[i]` to each element of a scalar output buffer.
     ///
     /// ```text
     /// out[i] += weight * eq1[i]   for all i
@@ -185,7 +185,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         }
     }
 
-    /// Adds weight * eq1[i] to each element of a packed output buffer.
+    /// Adds `weight * eq1[i]` to each element of a packed output buffer.
     ///
     /// ```text
     /// out[i] += weight * eq1[i]   for all i (packed elements)
@@ -208,7 +208,7 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
 
     /// Weighted accumulation for prefix-variable compression.
     ///
-    /// For each eq1 entry, accumulates w0 * eq1[i] * chunk_row[j] into out[j].
+    /// For each eq1 entry, accumulates `w0 * eq1[i] * chunk_row[j]` into `out[j]`.
     ///
     /// The input chunk contains data for all eq1 entries interleaved
     /// with the inner (output) dimension. The output buffer has one entry
@@ -522,8 +522,8 @@ mod tests {
             let packed = EqMaybePacked::<F, EF>::new_packed(&point);
 
             // Both variants must produce identical output buffers.
-            let mut out_unpacked = vec![EF::ZERO; 1 << k];
-            let mut out_packed = vec![EF::ZERO; 1 << k];
+            let mut out_unpacked = EF::zero_vec(1 << k);
+            let mut out_packed = EF::zero_vec(1 << k);
 
             unpacked.accumulate_scalar_into(&mut out_unpacked, weight);
             packed.accumulate_scalar_into(&mut out_packed, weight);
@@ -543,7 +543,7 @@ mod tests {
 
             // Accumulation into a zero buffer should match.
             let unpacked = EqMaybePacked::<F, EF>::new_unpacked(&point);
-            let mut out = vec![EF::ZERO; 1 << k];
+            let mut out = EF::zero_vec(1 << k);
             unpacked.accumulate_scalar_into(&mut out, weight);
 
             prop_assert_eq!(expected, out);
@@ -562,11 +562,11 @@ mod tests {
             let packed = EqMaybePacked::<F, EF>::new_packed(&point);
 
             // Scalar reference accumulation.
-            let mut out_scalar = vec![EF::ZERO; 1 << k];
+            let mut out_scalar = EF::zero_vec(1 << k);
             packed.accumulate_scalar_into(&mut out_scalar, weight);
 
             // Packed accumulation, then unpack for comparison.
-            let mut out_packed = vec![EP::ZERO; (1 << k) / PackedF::WIDTH];
+            let mut out_packed = EP::zero_vec((1 << k) / PackedF::WIDTH);
             packed.accumulate_packed_into(&mut out_packed, weight);
             let out_unpacked: Vec<EF> =
                 <EP as PackedFieldExtension<F, EF>>::to_ext_iter(out_packed.iter().copied())
@@ -596,8 +596,8 @@ mod tests {
             let packed = EqMaybePacked::<F, EF>::new_packed(&point);
 
             // Accumulate into separate buffers; both must match.
-            let mut out_u = vec![EF::ZERO; 1 << inner_k];
-            let mut out_p = vec![EF::ZERO; 1 << inner_k];
+            let mut out_u = EF::zero_vec(1 << inner_k);
+            let mut out_p = EF::zero_vec(1 << inner_k);
 
             unpacked.compress_prefix_into(&mut out_u, &chunk, w0);
             packed.compress_prefix_into(&mut out_p, &chunk, w0);
@@ -624,12 +624,12 @@ mod tests {
             let eq = EqMaybePacked::<F, EF>::new_packed(&point);
 
             // Scalar reference compression.
-            let mut out_scalar = vec![EF::ZERO; 1 << inner_k];
+            let mut out_scalar = EF::zero_vec(1 << inner_k);
             eq.compress_prefix_into(&mut out_scalar, &chunk, w0);
 
             // Packed compression, then unpack for comparison.
             let packed_inner = (1 << inner_k) / PackedF::WIDTH;
-            let mut out_packed = vec![EP::ZERO; packed_inner];
+            let mut out_packed = EP::zero_vec(packed_inner);
             eq.compress_prefix_to_packed_into(&mut out_packed, &chunk, w0);
             let out_unpacked: Vec<EF> =
                 <EP as PackedFieldExtension<F, EF>>::to_ext_iter(out_packed.iter().copied())
