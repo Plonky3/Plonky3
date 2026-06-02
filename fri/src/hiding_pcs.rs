@@ -90,6 +90,9 @@ where
     );
     type Error = FriError<FriMmcs::Error, InputMmcs::Error>;
 
+    /// Provides statistical zero-knowledge via randomization polynomials.
+    ///
+    /// The current construction does not provide perfect zero-knowledge.
     const ZK: bool = true;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {

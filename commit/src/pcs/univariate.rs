@@ -60,6 +60,8 @@ where
     type Error: Debug;
 
     /// Set to true to activate randomization and achieve zero-knowledge.
+    ///
+    /// The exact zero-knowledge guarantees depend on the PCS implementation.
     const ZK: bool;
 
     /// Index of the trace commitment in the computed opened values.
