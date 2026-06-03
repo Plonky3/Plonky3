@@ -29,7 +29,6 @@ type LookupConstraintsInputs<'a, F, LG> = (&'a [Lookup<F>], &'a LG);
 /// - `public_values`: Public values provided to the builder.
 /// - `lookup_constraints_inputs`: Inputs necessary to check lookup constraints:
 ///     - the symbolic representation of the [`Lookup`] values,
-///     - the `LookupData` for global lookups,
 ///     - the [`LookupProtocol`] implementation.
 #[instrument(name = "check constraints", skip_all)]
 #[allow(unused)] // Do not remove, or this will trigger warnings in release mode.

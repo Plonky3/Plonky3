@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use p3_air::Air;
 use p3_air::symbolic::{AirLayout, ConstraintLayout, SymbolicExpression, SymbolicExpressionExt};
 use p3_field::{Algebra, ExtensionField, Field};
-use p3_lookup::{InteractionSymbolicBuilder, Kind, Lookup, LookupProtocol};
+use p3_lookup::{InteractionSymbolicBuilder, Lookup, LookupProtocol};
 use p3_util::log2_ceil_usize;
 use tracing::instrument;
 
@@ -25,13 +25,18 @@ where
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
     LG: LookupProtocol,
 {
+    // Permutation trace: accumulator column plus one fraction column per
+    // lookup, or empty when the AIR declares no lookup.
+    //
+    // Each AIR with lookups commits exactly one terminal extension value.
+    let (permutation_width, num_permutation_values) = if contexts.is_empty() {
+        (0, 0)
+    } else {
+        (contexts.len() + 1, 1)
+    };
     let num_challenges = contexts.len() * lookup_gadget.num_challenges();
-    let num_permutation_values = contexts
-        .iter()
-        .filter(|c| matches!(&c.kind, Kind::Global(_)))
-        .count();
     let layout = AirLayout {
-        permutation_width: contexts.len(),
+        permutation_width,
         num_permutation_challenges: num_challenges,
         num_permutation_values,
         ..layout
@@ -137,12 +142,17 @@ where
 {
     let num_lookups = contexts.len();
     let num_challenges = num_lookups * lookup_gadget.num_challenges();
-    let num_permutation_values = contexts
-        .iter()
-        .filter(|c| matches!(&c.kind, Kind::Global(_)))
-        .count();
+    // Permutation trace: accumulator column plus one fraction column per
+    // lookup, or empty when the AIR declares no lookup.
+    //
+    // Each AIR with lookups commits exactly one terminal extension value.
+    let (permutation_width, num_permutation_values) = if num_lookups == 0 {
+        (0, 0)
+    } else {
+        (num_lookups + 1, 1)
+    };
     let layout = AirLayout {
-        permutation_width: num_lookups,
+        permutation_width,
         num_permutation_challenges: num_challenges,
         num_permutation_values,
         ..layout

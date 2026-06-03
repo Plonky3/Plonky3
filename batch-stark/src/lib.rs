@@ -22,6 +22,7 @@ extern crate alloc;
 mod check_constraints;
 pub mod common;
 pub mod config;
+pub mod error;
 pub mod proof;
 pub mod prover;
 pub mod symbolic;
@@ -34,6 +35,7 @@ pub use config::{
     Challenge, Commitment, Domain, PackedChallenge, PackedVal, PcsError, PcsProof,
     StarkGenericConfig, Val,
 };
+pub use error::BatchVerificationError;
 pub use p3_uni_stark::{OpenedValues, VerificationError};
 pub use proof::{BatchCommitments, BatchOpenedValues, BatchProof};
 pub use prover::{StarkInstance, prove_batch};
