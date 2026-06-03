@@ -103,27 +103,6 @@ pub enum InvalidProofShapeError {
     /// Public values length doesn't match what the AIR expects.
     #[error("public values length mismatch: expected {expected}, got {got}")]
     PublicValuesLengthMismatch { expected: usize, got: usize },
-    /// Lookup commitment presence doesn't match lookup configuration.
-    #[error("lookup commitment presence does not match lookup configuration")]
-    LookupCommitmentMismatch,
-    /// Lookup terminal presence does not match the AIR's declared lookups.
-    ///
-    /// Each AIR commits exactly one terminal when it declares any lookup,
-    /// and none otherwise.
-    #[error(
-        "air {air}: lookup terminal presence mismatch: expected_present={expected_present}, got_present={got_present}"
-    )]
-    LookupTerminalPresenceMismatch {
-        air: usize,
-        expected_present: bool,
-        got_present: bool,
-    },
-    /// Permutation local and next have different lengths.
-    #[error("air {air}: permutation local/next length mismatch")]
-    PermutationLengthMismatch { air: usize },
-    /// Permutation width doesn't match expected.
-    #[error("air {air}: permutation width mismatch: expected {expected}")]
-    PermutationWidthMismatch { air: usize, expected: usize },
     /// Opened values (trace, quotient, random) don't match expected dimensions.
     #[error("opened values do not match expected dimensions")]
     OpenedValuesDimensionMismatch,
@@ -153,7 +132,4 @@ where
         "next point unavailable: domain does not support computing the next point algebraically"
     )]
     NextPointUnavailable,
-    /// Lookup related error.
-    #[error("lookup error: {0}")]
-    LookupError(String),
 }

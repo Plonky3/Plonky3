@@ -1,7 +1,7 @@
 mod data;
 
+use alloc::vec;
 use alloc::vec::Vec;
-use alloc::{format, vec};
 
 pub use data::VerifierData;
 use p3_air::Air;
@@ -10,7 +10,7 @@ use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::{InteractionSymbolicBuilder, LookupProtocol};
+use p3_lookup::{InteractionSymbolicBuilder, LookupError, LookupProtocol};
 use p3_uni_stark::{
     InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks, validate_degree_bits,
 };
@@ -20,6 +20,7 @@ use tracing::{info_span, instrument};
 
 use crate::common::CommonData;
 use crate::config::{Challenge, Domain, PcsError, StarkGenericConfig as SGC, Val};
+use crate::error::BatchVerificationError;
 use crate::proof::BatchProof;
 use crate::symbolic::get_log_num_quotient_chunks;
 use crate::transcript::BatchTranscript;
@@ -31,7 +32,7 @@ pub fn verify_batch<SC, A>(
     proof: &BatchProof<SC>,
     public_values: &[Vec<Val<SC>>],
     common: &CommonData<SC>,
-) -> Result<(), VerificationError<PcsError<SC>>>
+) -> Result<(), BatchVerificationError<PcsError<SC>>>
 where
     SC: SGC,
     SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
@@ -78,7 +79,7 @@ where
         .any(|ov| ov.base_opened_values.random.is_some() != SC::Pcs::ZK))
         || (commitments.random.is_some() != SC::Pcs::ZK)
     {
-        return Err(VerificationError::RandomizationError);
+        return Err(VerificationError::RandomizationError.into());
     }
 
     // Validate opened values shape per instance and observe per-instance binding data.
@@ -203,7 +204,7 @@ where
             .as_ref()
             .is_some_and(|r_comm| r_comm.len() != SC::Challenge::DIMENSION)
         {
-            return Err(VerificationError::RandomizationError);
+            return Err(VerificationError::RandomizationError.into());
         }
 
         // Validate that any preprocessed width implied by CommonData matches the opened shapes.
@@ -232,7 +233,7 @@ where
         let expected_present = !all_lookups[i].is_empty();
         let got_present = lookup_terminals[i].is_some();
         if expected_present != got_present {
-            return Err(InvalidProofShapeError::LookupTerminalPresenceMismatch {
+            return Err(LookupError::TerminalPresenceMismatch {
                 air: i,
                 expected_present,
                 got_present,
@@ -256,7 +257,7 @@ where
     let is_lookup = commitments.permutation.is_some();
 
     if is_lookup != all_lookups.iter().any(|c| !c.is_empty()) {
-        return Err(InvalidProofShapeError::LookupCommitmentMismatch.into());
+        return Err(LookupError::CommitmentMismatch.into());
     }
 
     // Sample permutation challenges and alpha.
@@ -454,7 +455,7 @@ where
             .enumerate()
         {
             if inst_opened_vals.permutation_local.len() != inst_opened_vals.permutation_next.len() {
-                return Err(InvalidProofShapeError::PermutationLengthMismatch { air: i }.into());
+                return Err(LookupError::PermutationLengthMismatch { air: i }.into());
             }
             if !inst_opened_vals.permutation_local.is_empty() {
                 let zeta_next = trace_domains[i]
@@ -513,7 +514,7 @@ where
         if opened_values.instances[i].permutation_local.len() != expected_perm_len
             || opened_values.instances[i].permutation_next.len() != expected_perm_len
         {
-            return Err(InvalidProofShapeError::PermutationWidthMismatch {
+            return Err(LookupError::PermutationWidthMismatch {
                 air: i,
                 expected: expected_perm_len,
             }
@@ -606,9 +607,7 @@ where
     // - The total across the batch must be zero.
     // - Bus challenges are sampled after the main commitment, so any
     //   per-bus imbalance survives the collapse with overwhelming probability.
-    lookup_gadget
-        .verify_terminal_sum(lookup_terminals)
-        .map_err(|e| VerificationError::LookupError(format!("{e}")))?;
+    lookup_gadget.verify_terminal_sum(lookup_terminals)?;
 
     Ok(())
 }

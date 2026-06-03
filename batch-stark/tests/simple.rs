@@ -7,7 +7,8 @@ use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_batch_stark::proof::{BatchProof, OpenedValuesWithLookups};
 use p3_batch_stark::{
-    ProverData, StarkGenericConfig, StarkInstance, VerificationError, prove_batch, verify_batch,
+    BatchVerificationError, ProverData, StarkGenericConfig, StarkInstance, VerificationError,
+    prove_batch, verify_batch,
 };
 use p3_challenger::{DuplexChallenger, HashChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
@@ -17,7 +18,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64, TwoAdicField};
 use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
-use p3_lookup::{InteractionBuilder, LookupTerminal};
+use p3_lookup::{InteractionBuilder, LookupError, LookupTerminal};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
@@ -979,9 +980,9 @@ fn test_short_public_values_rejected() -> Result<(), Box<dyn std::error::Error>>
     let err = verify_batch(&config, &airs, &proof, &short_pvs, common)
         .expect_err("Should reject short public values");
     match err {
-        VerificationError::InvalidProofShape(
+        BatchVerificationError::Verification(VerificationError::InvalidProofShape(
             InvalidProofShapeError::PublicValuesLengthMismatch { expected, got },
-        ) => {
+        )) => {
             assert_eq!(expected, 3);
             assert_eq!(got, 2);
         }
@@ -1029,11 +1030,9 @@ fn test_degree_bits_too_large_rejected() -> Result<(), Box<dyn std::error::Error
     //   - maximum: TWO_ADICITY  — largest degree supported by the PCS
     //   - got: BITS             — the tampered value we injected (64)
     match err {
-        VerificationError::InvalidProofShape(InvalidProofShapeError::DegreeBitsTooLarge {
-            air,
-            maximum,
-            got,
-        }) => {
+        BatchVerificationError::Verification(VerificationError::InvalidProofShape(
+            InvalidProofShapeError::DegreeBitsTooLarge { air, maximum, got },
+        )) => {
             assert_eq!(air, Some(0));
             assert_eq!(maximum, Val::TWO_ADICITY);
             assert_eq!(got, usize::BITS as usize);
@@ -1082,11 +1081,9 @@ fn test_degree_bits_too_small_for_zk_rejected() -> Result<(), Box<dyn std::error
     //   - minimum: 1     — is_zk, the smallest acceptable degree_bits
     //   - got: 0         — the tampered value we injected
     match err {
-        VerificationError::InvalidProofShape(InvalidProofShapeError::DegreeBitsTooSmall {
-            air,
-            minimum,
-            got,
-        }) => {
+        BatchVerificationError::Verification(VerificationError::InvalidProofShape(
+            InvalidProofShapeError::DegreeBitsTooSmall { air, minimum, got },
+        )) => {
             assert_eq!(air, Some(0));
             assert_eq!(minimum, 1);
             assert_eq!(got, 0);
@@ -1743,7 +1740,9 @@ fn test_preprocessed_constraint_negative() -> Result<(), Box<dyn std::error::Err
         "Verification should fail when preprocessed constraint multiplier doesn't match",
     );
     match err {
-        VerificationError::OodEvaluationMismatch { .. } => (),
+        BatchVerificationError::Verification(VerificationError::OodEvaluationMismatch {
+            ..
+        }) => (),
         _ => panic!("unexpected error: {err:?}"),
     }
     Ok(())
@@ -2076,7 +2075,7 @@ fn test_batch_stark_both_lookups_zk() -> Result<(), impl Debug> {
 
 #[cfg(not(debug_assertions))]
 #[test]
-#[should_panic(expected = "LookupError(\"cross-AIR lookup terminal sum is non-zero\")")]
+#[should_panic(expected = "Lookup(TerminalSumNonZero)")]
 fn test_batch_stark_failed_global_lookup() {
     test_batch_stark_failed_global_lookup_inner();
 }
@@ -2186,13 +2185,11 @@ fn test_batch_stark_rejects_missing_lookup_terminal() {
     let err = verify_batch(&config, &airs, &proof, &pvs, common)
         .expect_err("Verifier should reject a missing per-AIR lookup terminal");
     match err {
-        VerificationError::InvalidProofShape(
-            InvalidProofShapeError::LookupTerminalPresenceMismatch {
-                air,
-                expected_present,
-                got_present,
-            },
-        ) => {
+        BatchVerificationError::Lookup(LookupError::TerminalPresenceMismatch {
+            air,
+            expected_present,
+            got_present,
+        }) => {
             assert_eq!(air, 0);
             assert!(expected_present);
             assert!(!got_present);
@@ -2261,13 +2258,11 @@ fn test_batch_stark_rejects_spurious_lookup_terminal() {
     let err = verify_batch(&config, &airs, &proof, &pvs, common)
         .expect_err("Verifier should reject a spurious terminal on a lookup-less AIR");
     match err {
-        VerificationError::InvalidProofShape(
-            InvalidProofShapeError::LookupTerminalPresenceMismatch {
-                air,
-                expected_present,
-                got_present,
-            },
-        ) => {
+        BatchVerificationError::Lookup(LookupError::TerminalPresenceMismatch {
+            air,
+            expected_present,
+            got_present,
+        }) => {
             // AIR 2 is the lookup-less instance: expected absent, got present.
             assert_eq!(air, 2);
             assert!(!expected_present);

@@ -141,4 +141,27 @@ pub enum LookupError {
     /// - Debug builds pinpoint the bus, tuple, and row via the prover's replay.
     #[error("cross-AIR lookup terminal sum is non-zero")]
     TerminalSumNonZero,
+    /// The auxiliary lookup commitment is present when no AIR declares a lookup, or absent when one does.
+    ///
+    /// - The commitment must be present exactly when some AIR declares a lookup.
+    #[error("lookup commitment presence does not match lookup configuration")]
+    CommitmentMismatch,
+    /// An AIR's committed terminal presence disagrees with whether it declares a lookup.
+    ///
+    /// - An AIR with at least one lookup commits exactly one terminal.
+    /// - An AIR with no lookup commits none.
+    #[error(
+        "air {air}: lookup terminal presence mismatch: expected_present={expected_present}, got_present={got_present}"
+    )]
+    TerminalPresenceMismatch {
+        air: usize,
+        expected_present: bool,
+        got_present: bool,
+    },
+    /// The auxiliary local and next openings of an AIR have different lengths.
+    #[error("air {air}: permutation local/next length mismatch")]
+    PermutationLengthMismatch { air: usize },
+    /// The auxiliary opening width of an AIR does not match the expected width.
+    #[error("air {air}: permutation width mismatch: expected {expected}")]
+    PermutationWidthMismatch { air: usize, expected: usize },
 }
