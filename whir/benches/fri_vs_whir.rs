@@ -339,7 +339,7 @@ where
     };
 
     // Per-round protocol layout: query counts, OOD samples, PoW bits per round.
-    let config = WhirConfig::<EF, F, Ch>::new(num_variables, params);
+    let config = WhirConfig::<EF, F, Ch>::new(num_variables, params).unwrap();
 
     // Per-rig RNG: distinct seed per `(num_variables, log_width)` so two rigs
     // cannot accidentally collide on polynomial samples.
