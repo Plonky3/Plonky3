@@ -349,6 +349,17 @@ where
     }
 
     fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
+        // Opening assumes every committed matrix is an LDE at `self.fri.log_blowup` and recovers the
+        // underlying polynomial degree as `height >> log_blowup`. A matrix shorter than the blowup
+        // factor would silently yield a zero-height degree and a malformed proof, so reject it here.
+        let min_height = 1 << self.fri.log_blowup;
+        for lde in &ldes {
+            assert!(
+                lde.height() >= min_height,
+                "committed LDE height {} is smaller than the blowup factor {min_height}",
+                lde.height()
+            );
+        }
         self.mmcs.commit(ldes)
     }
 
@@ -508,10 +519,10 @@ where
                 // For each collection of matrices
                 izip!(mats.iter(), points.iter())
                     .map(|(mat, points_for_mat)| {
-                        // TODO: This assumes that every input matrix has a blowup of at least self.fri.log_blowup.
-                        // If the blow_up factor is smaller than self.fri.log_blowup, this will lead to errors.
-                        // If it is bigger, we shouldn't get any errors but it will be slightly slower.
-                        // Ideally, polynomials could be passed in with their blow_up factors known.
+                        // Every committed matrix is assumed to be an LDE at `self.fri.log_blowup`;
+                        // `commit`/`commit_ldes` enforce `height >= 1 << log_blowup`. A larger actual
+                        // blowup is still sound, just slightly slower.
+                        // Ideally, polynomials would be passed in with their blow-up factors known.
 
                         // The point of this correction is that each column of the matrix corresponds to a low degree polynomial.
                         // Hence we can save time by restricting the height of the matrix to be the minimal height which
