@@ -489,9 +489,6 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
     }
 
     /// Compress every stacked-table slot by fixing the suffix challenges.
-    ///
-    /// Unit-scale shorthand for [`Self::compress_stacked_scaled`]: leaves the
-    /// residual sum unchanged.
     #[tracing::instrument(skip_all)]
     pub(crate) fn compress_stacked(&self, rs: &Point<EF>) -> Poly<EF> {
         self.compress_stacked_scaled(rs, EF::ONE)
@@ -516,11 +513,14 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
     ///
     /// - A non-unit `scale` lets the caller absorb a combining challenge into
     ///   the residual factor without a second pass.
-    /// - The unit-scale case has the dedicated [`Self::compress_stacked`] wrapper,
-    ///   so callers never pass `EF::ONE` (nor an accidental `EF::ZERO`) explicitly.
+    ///
+    /// # Panics
+    ///
+    /// - `scale` is zero: a zero scale silently zeroes the residual.
     #[tracing::instrument(skip_all)]
     pub(crate) fn compress_stacked_scaled(&self, rs: &Point<EF>, scale: EF) -> Poly<EF> {
         assert!(rs.num_variables() <= self.num_variables);
+        assert!(scale != EF::ZERO, "compress scale must be non-zero");
         // Output spans the residual stacked space.
         // Size is 2^(num_variables - |rs|).
         let mut out = Poly::<EF>::zero(self.num_variables - rs.num_variables());
