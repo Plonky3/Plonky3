@@ -64,8 +64,8 @@ pub struct ZkPrefixProver<F, EF, Enc, M>
 where
     F: Field,
     EF: ExtensionField<F>,
-    Enc: ZkEncoding<F>,
-    M: Mmcs<F>,
+    Enc: ZkEncoding<EF>,
+    M: Mmcs<EF>,
 {
     /// Plain prefix-binding prover that supplies the unmasked per-round
     /// arithmetic and the residual product polynomial.
@@ -82,8 +82,8 @@ impl<F, EF, Enc, M> ZkPrefixProver<F, EF, Enc, M>
 where
     F: Field,
     EF: ExtensionField<F>,
-    Enc: ZkEncoding<F>,
-    M: Mmcs<F>,
+    Enc: ZkEncoding<EF>,
+    M: Mmcs<EF>,
 {
     /// Wraps a plain prefix-binding prover with the HVZK ingredients.
     pub const fn new(inner: PrefixProver<F, EF>, encoding: Enc, mmcs: M) -> Self {
@@ -144,7 +144,7 @@ where
     /// # Panics
     ///
     /// - Base field characteristic is `2` (violates Lemma 6.4).
-    /// - Mask code message length is below `2` (Lemma 6.4 floor).
+    /// - Mask code message length is below `3` (mask must cover the degree-2 plain piece).
     /// - Folding factor is `0` or exceeds the polynomial's arity.
     #[allow(clippy::too_many_lines, clippy::type_complexity)]
     #[tracing::instrument(skip_all)]
@@ -154,13 +154,17 @@ where
         pow_bits: usize,
         challenger: &mut Ch,
         rng: &mut R,
-    ) -> (SumcheckProver<F, EF>, Point<EF>, Vec<MaskOracle<F, Enc, M>>)
+    ) -> (
+        SumcheckProver<F, EF>,
+        Point<EF>,
+        Vec<MaskOracle<EF, Enc, M>>,
+    )
     where
         F: TwoAdicField,
         EF: ExtensionField<F> + TwoAdicField,
-        Enc::Codeword: Matrix<F>,
+        Enc::Codeword: Matrix<EF>,
         R: Rng,
-        StandardUniform: Distribution<F>,
+        StandardUniform: Distribution<EF>,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     {
         // Protocol shape resolved from the inner prover + mask encoding.
@@ -170,7 +174,10 @@ where
 
         // Lemma 6.4 hypotheses + sanity bounds on the folding factor.
         assert!(F::TWO != F::ZERO, "Lemma 6.4 requires char(F) != 2");
-        assert!(ell_zk >= 2, "Lemma 6.4 requires ell_zk >= 2");
+        assert!(
+            ell_zk >= 3,
+            "mask degree ell_zk - 1 must cover the degree-2 plain piece (ell_zk >= 3)",
+        );
         assert!(k >= 1, "sumcheck requires at least one round");
         assert!(
             k <= n_vars,
@@ -221,10 +228,10 @@ where
         //     s_j(X) = c_0 + c_1 X + ... + c_{ell_zk - 1} X^{ell_zk - 1}
         //
         // The encoder draws zero-knowledge padding randomness, so it needs the mutable rng.
-        let masks: Vec<Vec<F>> = (0..k)
+        let masks: Vec<Vec<EF>> = (0..k)
             .map(|_| (0..ell_zk).map(|_| rng.random()).collect())
             .collect();
-        let mask_oracles: Vec<MaskOracle<F, Enc, M>> = masks
+        let mask_oracles: Vec<MaskOracle<EF, Enc, M>> = masks
             .iter()
             .map(|mask| {
                 let codeword = self.encoding.encode(mask, rng);
@@ -240,17 +247,17 @@ where
         //                 = mask[0].double() + sum(mask[1..])
         //
         //     mu_tilde    = 2^{k - 1} * sum_l ( s_l(0) + s_l(1) )
-        let sum_endpoints_init: F = masks
+        let sum_endpoints_init: EF = masks
             .iter()
-            .map(|mask| mask[0].double() + mask[1..].iter().copied().sum::<F>())
+            .map(|mask| mask[0].double() + mask[1..].iter().copied().sum::<EF>())
             .sum();
-        let two_to_k_minus_1 = F::TWO.exp_u64((k - 1) as u64);
-        let mu_tilde: F = two_to_k_minus_1 * sum_endpoints_init;
+        let two_to_k_minus_1 = EF::TWO.exp_u64((k - 1) as u64);
+        let mu_tilde: EF = two_to_k_minus_1 * sum_endpoints_init;
 
         // Cross-check the closed form against the naive 2^k-term sum.
         #[cfg(debug_assertions)]
         {
-            let mut naive = F::ZERO;
+            let mut naive = EF::ZERO;
             for bits in 0..(1u64 << k) {
                 for (l, mask) in masks.iter().enumerate() {
                     let b_l = (bits >> l) & 1;
@@ -260,7 +267,7 @@ where
                     let s_l_eval = if b_l == 0 {
                         mask[0]
                     } else {
-                        mask.iter().copied().sum::<F>()
+                        mask.iter().copied().sum::<EF>()
                     };
                     naive += s_l_eval;
                 }
@@ -271,16 +278,16 @@ where
             );
         }
 
-        // Observe mu_tilde (lifted to EF) and stash on the transcript record.
-        challenger.observe_algebra_element(EF::from(mu_tilde));
+        // Observe mu_tilde and stash on the transcript record.
+        challenger.observe_algebra_element(mu_tilde);
         zk_data.mu_tilde = mu_tilde;
         zk_data.ell_zk = ell_zk;
 
         // Phase 4: combining challenge `eps` (Construction 6.3 step 3).
         //
-        // `eps` lives in EF; the paper samples in F.
-        // Masks stay in F to preserve sublinear proof size.
-        // The resulting hybrid F/EF `h_j` is handled by the simulator's F-subspace stratification.
+        // The construction is instantiated over `EF`: the masks, `eps`, and the
+        // round polynomials all live in `EF`, so Lemma 6.4 applies with `F := EF`
+        // and the per-round polynomial is uniform over the full extension field.
         let eps: EF = challenger.sample_algebra_element();
 
         // Phase 5: per-round sumcheck (Construction 6.3 step 4).
@@ -300,7 +307,7 @@ where
         //     mult_live   = pow2[k - j]
         //     mult_past   = pow2[k - j + 1]
         //     mult_future = pow2[k - j - 1]
-        let pow2: Vec<F> = F::TWO.powers().collect_n(k + 1);
+        let pow2: Vec<EF> = EF::TWO.powers().collect_n(k + 1);
 
         for round_idx in 0..k {
             // 1-indexed round used by the formulas.
@@ -308,7 +315,7 @@ where
             let s_j = &masks[round_idx];
 
             // Update the running future-endpoint sum: drop s_j's contribution so the round-j formula reads only sum_{l > j}.
-            let s_j_endpoints = s_j[0].double() + s_j[1..].iter().copied().sum::<F>();
+            let s_j_endpoints = s_j[0].double() + s_j[1..].iter().copied().sum::<EF>();
             sum_future_endpoints -= s_j_endpoints;
 
             // Lagrange weights at `(gamma_1, ..., gamma_{j-1})`, used by every accumulator dot product below.
@@ -507,7 +514,7 @@ mod tests {
         #[test]
         fn prop_completeness_classic_unpacked(
             n_vars in 3usize..=8,
-            ell_zk in 2usize..=5,
+            ell_zk in 3usize..=5,
             num_concrete in 0usize..=2,
             num_virtual in 0usize..=2,
             seed in 0u64..1024,

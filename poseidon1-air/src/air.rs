@@ -175,6 +175,22 @@ impl<
     fn main_next_row_columns(&self) -> Vec<usize> {
         vec![]
     }
+
+    fn max_constraint_degree(&self) -> Option<usize> {
+        Some(sbox_constraint_degree(SBOX_DEGREE, SBOX_REGISTERS))
+    }
+}
+
+/// The maximum degree among the constraints emitted by [`eval_sbox`] for a given
+/// `(DEGREE, REGISTERS)` configuration.
+pub(crate) const fn sbox_constraint_degree(degree: u64, registers: usize) -> usize {
+    match (degree, registers) {
+        (3, 0) => 3,
+        (5, 0) => 5,
+        (7, 0) => 7,
+        (5, 1) | (7, 1) | (11, 2) => 3,
+        _ => panic!("Unexpected (DEGREE, REGISTERS)"),
+    }
 }
 
 /// Evaluate all Poseidon1 constraints for one trace row.

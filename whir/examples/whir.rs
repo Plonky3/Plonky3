@@ -215,6 +215,14 @@ fn main() {
         &mut prover_challenger,
     );
     let opening_time = time.elapsed();
+    // Why this is an upper bound, not the optimal wire size:
+    //   - Postcard encodes integers as LEB128 varints.
+    //   - A field element near 2^31 takes 5 bytes on the wire.
+    //   - A fixed-int encoder would emit 4 bytes for the same value.
+    let proof_size_kib = postcard::to_allocvec(&proof)
+        .expect("proof serialization failed")
+        .len() as f64
+        / 1024.0;
 
     // Verifier: independent transcript from the same domain separator.
     let mut verifier_challenger = challenger;
@@ -241,6 +249,7 @@ fn main() {
         commit_ms = commit_time.as_millis(),
         opening_ms = opening_time.as_millis(),
         verification_us = verify_time.as_micros(),
+        proof_size_kib,
         "done"
     );
 }

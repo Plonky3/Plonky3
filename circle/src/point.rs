@@ -2,7 +2,9 @@ use alloc::vec::Vec;
 use core::ops::{Add, AddAssign, Mul, Neg, Sub};
 
 use p3_field::extension::ComplexExtendable;
-use p3_field::{ExtensionField, Field, batch_multiplicative_inverse};
+use p3_field::{
+    ExtensionField, Field, PackedValue, PrimeCharacteristicRing, batch_multiplicative_inverse,
+};
 
 /// Affine representation of a point on the circle.
 /// x^2 + y^2 == 1
@@ -120,27 +122,73 @@ impl<F: Field> Point<F> {
 }
 
 /// Compute (ṽ_P(x,y) * s_p)^{-1} for each element in the list.
-/// This takes advantage of batched inversion.
+///
+/// All denominators share a single batch inversion instead of one inversion per point.
 pub fn compute_lagrange_den_batched<F: Field, EF: ExtensionField<F>>(
     points: &[Point<F>],
     at: Point<EF>,
     log_n: usize,
 ) -> Vec<EF> {
-    // This following line costs about 2% of the runtime for example prove_poseidon2_m31_keccak.
-    // Would be nice to find further speedups.
-    // Maybe modify to use packed fields here?
+    // Selector normalization `s_p` for every point, computed packed.
+    let s_p = {
+        let mut s_p = F::zero_vec(points.len());
+
+        if log_n < 2 {
+            // The squaring chain is empty, so the packed path buys nothing.
+            for (slot, p) in s_p.iter_mut().zip(points) {
+                *slot = p.s_p_at_p(log_n);
+            }
+        } else {
+            // Power-of-two scaling and chain length, shared by every lane.
+            let exp = (2 * log_n - 1) as u64;
+            let iters = log_n - 2;
+            let width = F::Packing::WIDTH;
+
+            let mut chunks = points.chunks_exact(width);
+            let mut offset = 0;
+            for chunk in &mut chunks {
+                // Seed the running product with the x-coordinates of the lane.
+                let mut cur = F::Packing::from_fn(|l| chunk[l].x);
+                let mut output = cur;
+
+                // Fold in each squaring-chain step `x -> 2 x^2 - 1`.
+                for _ in 0..iters {
+                    cur = cur.square().double() - F::Packing::ONE;
+                    output *= cur;
+                }
+
+                // Close the formula: scale by the power of two and the y-coordinate.
+                let ys = F::Packing::from_fn(|l| chunk[l].y);
+                let packed_s_p = -(output.mul_2exp_u64(exp) * ys);
+
+                s_p[offset..offset + width].copy_from_slice(packed_s_p.as_slice());
+                offset += width;
+            }
+
+            // Trailing points below one full lane fall back to the scalar formula.
+            for (slot, &pt) in s_p[offset..].iter_mut().zip(chunks.remainder()) {
+                *slot = pt.s_p_at_p(log_n);
+            }
+        }
+        s_p
+    };
+
+    // Pair each numerator with its denominator before inverting.
     let (numer, denom): (Vec<_>, Vec<_>) = points
         .iter()
-        .map(|&pt| {
+        .zip(&s_p)
+        .map(|(&pt, &s_p)| {
             let diff = at - pt;
             let numer = diff.x + F::ONE;
-            let denom = diff.y * pt.s_p_at_p(log_n);
+            let denom = diff.y * s_p;
             (numer, denom)
         })
         .unzip();
 
+    // One inversion covers the whole batch via Montgomery's trick.
     let inv_d = batch_multiplicative_inverse(&denom);
 
+    // Recombine each numerator with its inverted denominator.
     numer
         .iter()
         .zip(inv_d.iter())
@@ -208,11 +256,16 @@ impl<F: Field> Mul<usize> for Point<F> {
 
 #[cfg(test)]
 mod tests {
+    use p3_field::extension::BinomialExtensionField;
     use p3_mersenne_31::Mersenne31;
+    use proptest::prelude::*;
+    use rand::rngs::SmallRng;
+    use rand::{RngExt, SeedableRng};
 
     use super::*;
 
     type F = Mersenne31;
+    type EF = BinomialExtensionField<F, 3>;
     type Pt = Point<F>;
 
     #[test]
@@ -244,5 +297,46 @@ mod tests {
     fn test_s_p_at_p_underflow_log_n_0() {
         let p = Pt::generator(3);
         let _ = p.s_p_at_p(0);
+    }
+
+    /// Independent reference: the pre-batched formulation, one inversion per point.
+    fn lagrange_den_scalar(points: &[Pt], at: Point<EF>, log_n: usize) -> Vec<EF> {
+        points
+            .iter()
+            .map(|&pt| {
+                let diff = at - pt;
+                let numer = diff.x + F::ONE;
+                let denom = diff.y * pt.s_p_at_p(log_n);
+                numer * denom.inverse()
+            })
+            .collect()
+    }
+
+    proptest! {
+        #[test]
+        fn compute_lagrange_den_batched_matches_scalar(
+            log_n in 1usize..19,
+            len in 0usize..40,
+            at_seed in any::<u64>(),
+        ) {
+            // A small prefix of real domain points keeps every `s_p` nonzero.
+            let prefix: Vec<Pt> = crate::CircleDomain::standard(log_n).points().take(40).collect();
+            let points = &prefix[..len.min(prefix.len())];
+
+            // A pseudo-random extension point stands in for the out-of-domain query.
+            let mut rng = SmallRng::seed_from_u64(at_seed);
+            let at = Point::<EF>::from_projective_line(rng.random());
+
+            // Discard the measure-zero draws that would invert a zero denominator.
+            let all_invertible = points
+                .iter()
+                .all(|&pt| (at - pt).y * pt.s_p_at_p(log_n) != EF::ZERO);
+            prop_assume!(all_invertible);
+
+            prop_assert_eq!(
+                compute_lagrange_den_batched(points, at, log_n),
+                lagrange_den_scalar(points, at, log_n)
+            );
+        }
     }
 }

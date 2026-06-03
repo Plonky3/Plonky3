@@ -121,9 +121,7 @@ where
     }
 
     #[inline]
-    fn is_transition_window(&self, size: usize) -> Self::Expr {
-        // Only two-row windows are supported in this prover.
-        assert!(size <= 2, "only two-row windows are supported, got {size}");
+    fn is_transition(&self) -> Self::Expr {
         self.boundary.transition
     }
 

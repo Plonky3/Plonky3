@@ -744,6 +744,24 @@ mod tests {
     }
 
     #[test]
+    fn reject_commit_pow_witness_count_mismatch() {
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        let num_rounds = proof.fri_proof.commit_phase_commits.len();
+
+        // Drop one witness so the per-round count falls short.
+        proof.fri_proof.commit_pow_witnesses.pop();
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("expected CommitPowWitnessCountMismatch");
+
+        let FriError::CommitPowWitnessCountMismatch { expected, got } = err else {
+            panic!("expected CommitPowWitnessCountMismatch, got {err:?}");
+        };
+        assert_eq!(expected, num_rounds);
+        assert_eq!(got, num_rounds - 1);
+    }
+
+    #[test]
     fn reject_query_commit_phase_openings_count_mismatch() {
         // Invariant: each query proof must carry exactly one opening per
         // commit-phase round. If a query has fewer (or more) openings than

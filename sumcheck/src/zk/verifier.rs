@@ -102,7 +102,7 @@ where
     /// # Panics
     ///
     /// - Base field characteristic is `2`.
-    /// - Mask code message length is below `2`.
+    /// - Mask code message length is below `3`.
     /// - Folding factor is `0`.
     #[allow(clippy::too_many_arguments)]
     pub fn into_sumcheck<M, Ch>(
@@ -115,12 +115,15 @@ where
         challenger: &mut Ch,
     ) -> Result<(Point<EF>, EF), SumcheckError>
     where
-        M: Mmcs<F>,
+        M: Mmcs<EF>,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     {
         // Lemma 6.4 hypotheses on the verifier-side parameters.
         assert!(F::TWO != F::ZERO, "Lemma 6.4 requires char(F) != 2");
-        assert!(ell_zk >= 2, "Lemma 6.4 requires ell_zk >= 2");
+        assert!(
+            ell_zk >= 3,
+            "mask degree ell_zk - 1 must cover the degree-2 plain piece (ell_zk >= 3)",
+        );
         assert!(folding_factor >= 1, "sumcheck requires at least one round");
 
         // Phase 1: shape checks (input validation before Construction 6.3 replay).
@@ -181,7 +184,7 @@ where
         for commit in mask_commits {
             challenger.observe(commit.clone());
         }
-        challenger.observe_algebra_element(EF::from(zk_data.mu_tilde));
+        challenger.observe_algebra_element(zk_data.mu_tilde);
         let eps: EF = challenger.sample_algebra_element();
 
         // Phase 4: walk the round chain (Construction 6.3 step 4 verifier replay).
@@ -394,7 +397,7 @@ mod tests {
         #[test]
         fn prop_rbr_tampering_changes_verifier_output(
             n_vars in 3usize..=6,
-            ell_zk in 2usize..=4,
+            ell_zk in 3usize..=4,
             num_eqs in 1usize..=2,
             seed in 0u64..512,
             tamper_round_seed in 0usize..16,
