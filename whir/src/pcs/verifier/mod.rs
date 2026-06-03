@@ -181,7 +181,7 @@ where
         // Final round: receive the polynomial in the clear.
         let final_evaluations = proof
             .final_poly
-            .clone()
+            .as_ref()
             .ok_or(VerifierError::MissingFinalPoly)?;
         let final_round_config = self.final_round_config();
         let expected_final_poly_len = 1usize << final_round_config.num_variables;
@@ -210,7 +210,7 @@ where
         )?;
 
         stir_statement
-            .verify(&final_evaluations)
+            .verify(final_evaluations)
             .then_some(())
             .ok_or_else(|| VerifierError::StirChallengeFailed {
                 challenge_id: 0,
