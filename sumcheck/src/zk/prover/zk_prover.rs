@@ -1,6 +1,7 @@
-//! HVZK prover overlay on top of the prefix-binding sumcheck.
+//! Honest-verifier zero-knowledge sumcheck prover, generic over the binding mode.
 
 use alloc::vec::Vec;
+use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
@@ -8,18 +9,19 @@ use p3_field::{ExtensionField, Field, HornerIter, TwoAdicField, dot_product};
 use p3_matrix::Matrix;
 use p3_multilinear_util::point::Point;
 use p3_zk_codes::ZkEncoding;
-use rand::distr::{Distribution, StandardUniform};
-use rand::{Rng, RngExt};
+use rand::Rng;
 
-use super::data::{MaskOracle, ZkSumcheckData};
+use super::common::{observe_masks_and_mu_tilde, sample_masks};
+use super::layout::ZkLayout;
+use super::round::{PlainPiece, RoundContext, RoundState, round_poly_to_wire};
 use crate::extrapolate_01inf;
 use crate::lagrange::lagrange_weights_01inf_multi;
-use crate::layout::{Layout, PrefixProver};
-use crate::product_polynomial::ProductPolynomial;
-use crate::strategy::{SumcheckProver, VariableOrder};
+use crate::layout::{PrefixProver, SuffixProver};
+use crate::strategy::SumcheckProver;
 use crate::svo::calculate_accumulators_batch;
+use crate::zk::data::{MaskOracle, ZkSumcheckData};
 
-/// HVZK prover for the prefix-binding sumcheck.
+/// Honest-verifier zero-knowledge sumcheck prover.
 ///
 /// Plain accumulator math is unchanged.
 /// The overlay adds mask sampling, mask commits, and the round formula below.
@@ -35,7 +37,8 @@ use crate::svo::calculate_accumulators_batch;
 ///            + eps       * plain_j(X)                    (plain piece)
 /// ```
 ///
-/// Combined degree is `max(ell_zk - 1, 2)`: mask piece is degree `ell_zk - 1`, plain piece is degree `2`.
+/// Combined degree is `max(ell_zk - 1, 2)`.
+/// The mask piece is degree `ell_zk - 1`, the plain piece is degree `2`.
 ///
 /// # `mu_tilde` closed form
 ///
@@ -44,70 +47,72 @@ use crate::svo::calculate_accumulators_batch;
 ///              = 2^{k-1} * sum_l ( s_l(0) + s_l(1) )
 /// ```
 ///
-/// For `s(X) = c_0 + c_1 X + ... + c_{ell_zk - 1} X^{ell_zk - 1}`:
-///
-/// ```text
-///     s(0) + s(1) = 2 c_0 + sum_{i>=1} c_i
-///                 = mask[0].double() + sum(mask[1..])
-/// ```
-///
 /// # Residual handoff
 ///
-/// After `k` rounds the residual claim is scaled by `eps`:
+/// After `k` rounds the residual claim is scaled by `eps`.
+/// The factor is folded into the residual polynomial during compression, so downstream consumers see the scaling automatically.
 ///
-/// ```text
-///     residual_sum = eps * plain_residual_sum
-/// ```
+/// # Binding mode
 ///
-/// The factor is folded into the base polynomial via the compression step, so downstream consumers see the scaling automatically.
-pub struct ZkPrefixProver<F, EF, Enc, M>
+/// The generic layout type selects the binding direction.
+/// Two ready-made aliases cover the two supported modes; see [`ZkPrefixProver`] and [`ZkSuffixProver`].
+pub struct ZkProver<F, EF, Enc, M, L>
 where
     F: Field,
     EF: ExtensionField<F>,
     Enc: ZkEncoding<EF>,
     M: Mmcs<EF>,
 {
-    /// Plain prefix-binding prover that supplies the unmasked per-round
-    /// arithmetic and the residual product polynomial.
-    inner: PrefixProver<F, EF>,
+    /// Plain stacked-layout prover.
+    inner: L,
 
     /// Zero-knowledge code used to encode the mask polynomials.
     encoding: Enc,
 
     /// Merkle commitment scheme used to commit each encoded mask.
     mmcs: M,
+
+    /// Marker tying `F`/`EF` to the storage type without inflating the runtime layout.
+    _marker: PhantomData<(F, EF)>,
 }
 
-impl<F, EF, Enc, M> ZkPrefixProver<F, EF, Enc, M>
+/// HVZK prover for the prefix-binding sumcheck.
+pub type ZkPrefixProver<F, EF, Enc, M> = ZkProver<F, EF, Enc, M, PrefixProver<F, EF>>;
+
+/// HVZK prover for the suffix-binding sumcheck.
+pub type ZkSuffixProver<F, EF, Enc, M> = ZkProver<F, EF, Enc, M, SuffixProver<F, EF>>;
+
+impl<F, EF, Enc, M, L> ZkProver<F, EF, Enc, M, L>
 where
-    F: Field,
+    F: TwoAdicField,
     EF: ExtensionField<F>,
     Enc: ZkEncoding<EF>,
     M: Mmcs<EF>,
+    L: ZkLayout<F, EF>,
 {
-    /// Wraps a plain prefix-binding prover with the HVZK ingredients.
-    pub const fn new(inner: PrefixProver<F, EF>, encoding: Enc, mmcs: M) -> Self {
+    /// Wraps a plain layout with the HVZK ingredients.
+    pub const fn new(inner: L, encoding: Enc, mmcs: M) -> Self {
         Self {
             inner,
             encoding,
             mmcs,
+            _marker: PhantomData,
         }
     }
 
     /// Returns the folding factor of the wrapped inner prover.
-    pub const fn folding(&self) -> usize {
-        self.inner.folding
+    pub fn folding(&self) -> usize {
+        self.inner.folding()
     }
 
     /// Returns the variable count of the stacked polynomial.
-    pub const fn num_variables(&self) -> usize {
-        self.inner.num_variables
+    pub fn num_variables(&self) -> usize {
+        self.inner.num_variables()
     }
 
     /// Records concrete opening claims on the inner prover.
     pub fn eval<Ch>(&mut self, table_idx: usize, polys: &[usize], challenger: &mut Ch) -> Vec<EF>
     where
-        F: TwoAdicField,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Delegate; the HVZK overlay carries no extra state at claim time.
@@ -117,7 +122,6 @@ where
     /// Records a virtual opening claim on the inner prover.
     pub fn add_virtual_eval<Ch>(&mut self, challenger: &mut Ch) -> EF
     where
-        F: TwoAdicField,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Same delegation pattern as concrete openings.
@@ -133,11 +137,11 @@ where
     /// 3. Compute and observe `mu_tilde` (step 2).
     /// 4. Sample the combining challenge `eps` (step 3).
     /// 5. Per-round sumcheck (step 4).
-    /// 6. Residual handoff scaled by `eps`.
+    /// 6. Residual handoff scaled by `eps` (mode-specific compression).
     ///
     /// # Returns
     ///
-    /// - Residual sumcheck prover over the packed product polynomial, scaled by `eps`.
+    /// - Residual sumcheck prover over the mode-specific product polynomial, scaled by `eps`.
     /// - Vector of per-round challenges `gamma_1, ..., gamma_k`.
     /// - One mask oracle per round, in round order.
     ///
@@ -160,17 +164,15 @@ where
         Vec<MaskOracle<EF, Enc, M>>,
     )
     where
-        F: TwoAdicField,
-        EF: ExtensionField<F> + TwoAdicField,
+        EF: TwoAdicField,
         Enc::Codeword: Matrix<EF>,
         R: Rng,
-        StandardUniform: Distribution<EF>,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     {
         // Protocol shape resolved from the inner prover + mask encoding.
-        let k = self.inner.folding;
+        let k = self.inner.folding();
         let ell_zk = self.encoding.message_len();
-        let n_vars = self.inner.num_variables;
+        let n_vars = self.inner.num_variables();
 
         // Lemma 6.4 hypotheses + sanity bounds on the folding factor.
         assert!(F::TWO != F::ZERO, "Lemma 6.4 requires char(F) != 2");
@@ -195,14 +197,8 @@ where
         //
         //     [ a^0, ..., a^{n_concrete - 1} | a^{n_concrete}, ..., a^{N - 1} ]
         //      \____ concrete-claim block __/  \___ virtual-claim block ___/
-        let n_concrete: usize = self
-            .inner
-            .placements
-            .iter()
-            .flat_map(|placement| self.inner.claim_map[placement.idx()].iter())
-            .map(|claim| claim.len())
-            .sum();
-        let n_virtual = self.inner.virtual_claims.len();
+        let n_concrete: usize = self.inner.concrete_claims().map(|claim| claim.len()).sum();
+        let n_virtual = self.inner.virtual_claims().len();
         let all_alphas: Vec<EF> = alpha.powers().collect_n(n_concrete + n_virtual);
         let (concrete_alphas, virtual_alphas) = all_alphas.split_at(n_concrete);
 
@@ -210,9 +206,7 @@ where
         let mut offset = 0;
         let accumulators: Vec<_> = self
             .inner
-            .placements
-            .iter()
-            .flat_map(|placement| self.inner.claim_map[placement.idx()].iter())
+            .concrete_claims()
             .map(|claim| {
                 let slice = &concrete_alphas[offset..offset + claim.len()];
                 offset += claim.len();
@@ -221,67 +215,20 @@ where
             .collect();
 
         // Plain sumcheck claim `mu`, batched by the alphas.
-        let mut plain_sum = self.inner.sum(alpha);
+        let mut plain_sum = self.inner.batched_sum(alpha);
 
         // Phase 2: sample, encode, commit, observe masks (Construction 6.3 step 1).
         //
-        //     s_j(X) = c_0 + c_1 X + ... + c_{ell_zk - 1} X^{ell_zk - 1}
-        //
-        // The encoder draws zero-knowledge padding randomness, so it needs the mutable rng.
-        let masks: Vec<Vec<EF>> = (0..k)
-            .map(|_| (0..ell_zk).map(|_| rng.random()).collect())
-            .collect();
-        let mask_oracles: Vec<MaskOracle<EF, Enc, M>> = masks
-            .iter()
-            .map(|mask| {
-                let codeword = self.encoding.encode(mask, rng);
-                let (commit, prover_data) = self.mmcs.commit_matrix(codeword);
-                challenger.observe(commit.clone());
-                (commit, prover_data)
-            })
-            .collect();
+        // The encoder draws zero-knowledge padding randomness from the same rng.
+        let (masks, mask_oracles) =
+            sample_masks::<EF, _, _, _, _>(k, &self.encoding, &self.mmcs, challenger, rng);
 
         // Phase 3: mu_tilde via the closed form (Construction 6.3 step 2).
         //
-        //     s(0) + s(1) = 2 c_0 + sum_{i >= 1} c_i
-        //                 = mask[0].double() + sum(mask[1..])
-        //
-        //     mu_tilde    = 2^{k - 1} * sum_l ( s_l(0) + s_l(1) )
-        let sum_endpoints_init: EF = masks
-            .iter()
-            .map(|mask| mask[0].double() + mask[1..].iter().copied().sum::<EF>())
-            .sum();
-        let two_to_k_minus_1 = EF::TWO.exp_u64((k - 1) as u64);
-        let mu_tilde: EF = two_to_k_minus_1 * sum_endpoints_init;
-
-        // Cross-check the closed form against the naive 2^k-term sum.
-        #[cfg(debug_assertions)]
-        {
-            let mut naive = EF::ZERO;
-            for bits in 0..(1u64 << k) {
-                for (l, mask) in masks.iter().enumerate() {
-                    let b_l = (bits >> l) & 1;
-                    // Separable mask:
-                    // - s_l(0) = c_0;
-                    // - s_l(1) = c_0 + c_1 + ... + c_{ell_zk - 1}.
-                    let s_l_eval = if b_l == 0 {
-                        mask[0]
-                    } else {
-                        mask.iter().copied().sum::<EF>()
-                    };
-                    naive += s_l_eval;
-                }
-            }
-            debug_assert_eq!(
-                mu_tilde, naive,
-                "mu_tilde closed form does not match naive sum over {{0,1}}^k",
-            );
-        }
-
-        // Observe mu_tilde and stash on the transcript record.
-        challenger.observe_algebra_element(mu_tilde);
-        zk_data.mu_tilde = mu_tilde;
-        zk_data.ell_zk = ell_zk;
+        // The helper also seeds `zk_data` and returns the running future-mask
+        // endpoint budget for the per-round loop.
+        let sum_endpoints_init =
+            observe_masks_and_mu_tilde::<F, EF, _>(&masks, k, ell_zk, challenger, zk_data);
 
         // Phase 4: combining challenge `eps` (Construction 6.3 step 3).
         //
@@ -309,6 +256,14 @@ where
         //     mult_future = pow2[k - j - 1]
         let pow2: Vec<EF> = EF::TWO.powers().collect_n(k + 1);
 
+        // Round-invariant context shared by every per-round assembly call.
+        let round_ctx = RoundContext {
+            k,
+            ell_zk,
+            pow2: &pow2,
+            eps,
+        };
+
         for round_idx in 0..k {
             // 1-indexed round used by the formulas.
             let j = round_idx + 1;
@@ -333,7 +288,7 @@ where
             // Virtual-claim branch.
             for (vc, alpha_i) in self
                 .inner
-                .virtual_claims
+                .virtual_claims()
                 .iter()
                 .zip(virtual_alphas.iter().copied())
             {
@@ -341,79 +296,27 @@ where
                 plain_c_inf += alpha_i * dot(&vc.data[round_idx][1]);
             }
 
-            // Recover c_1 from the plain affine identity:
+            // Assemble h_j; see the round module for the formula and the
+            // in-place affine-consistency cross-check.
             //
-            //     plain_h(0) + plain_h(1) = plain_sum
-            //     => c_1 = plain_sum - 2 c_0 - c_inf
-            let plain_c1 = plain_sum - plain_c0.double() - plain_c_inf;
+            // The linear coefficient is not passed: it is dropped from the wire
+            // and reconstructed by the verifier from the affine identity.
+            let h = round_ctx.assemble(
+                RoundState {
+                    j,
+                    mask: s_j,
+                    past_mask_evals: &mask_evals_at_gamma,
+                    future_endpoints: sum_future_endpoints,
+                },
+                PlainPiece {
+                    c0: plain_c0,
+                    c_inf: plain_c_inf,
+                },
+            );
 
-            // Assemble h_j of length max(ell_zk, 3) (Construction 6.3 step 4, round-j polynomial):
-            //
-            //     h[0..ell_zk] += 2^{k-j}     * s_j[i]
-            //     h[0]         += 2^{k-j}     * sum_{l<j} s_l(gamma_l)
-            //     h[0]         += 2^{k-j-1}   * sum_{l>j} ( s_l(0)+s_l(1) )
-            //     h[0]         += eps * c_0
-            //     h[1]         += eps * c_1
-            //     h[2]         += eps * c_inf
-            let h_size = ell_zk.max(3);
-            let mut h: Vec<EF> = EF::zero_vec(h_size);
-
-            // Live-mask contribution at every slot the mask occupies.
-            let mult_live = pow2[k - j];
-            for (i, &c) in s_j.iter().enumerate() {
-                h[i] += mult_live * c;
-            }
-
-            // Past-mask contribution: scalar landing on the constant slot.
-            let past_mask_sum: EF = mask_evals_at_gamma.iter().copied().sum();
-            h[0] += past_mask_sum * mult_live;
-
-            // Future-mask contribution: zero in the last round, present otherwise.
-            if j < k {
-                let mult_future = pow2[k - j - 1];
-                h[0] += mult_future * sum_future_endpoints;
-            }
-
-            // Plain piece, scaled by the combining challenge.
-            h[0] += eps * plain_c0;
-            h[1] += eps * plain_c1;
-            h[2] += eps * plain_c_inf;
-
-            // Affine consistency invariant (Construction 6.3 verifier identity, sanity-checked on the prover side).
-            //
-            //     h(0) + h(1) = 2 h[0] + sum_{i >= 1} h[i]
-            //
-            // Per-term contribution to that sum:
-            //
-            //     live   : 2^{k-j} * ( s_j(0) + s_j(1) )    = 2^{k-j} * s_j_endpoints
-            //     past   : 2^{k-j+1} * past_mask_sum        (h[0] only)
-            //     future : 2^{k-j} * sum_future             (h[0] only, zero at j=k)
-            //     plain  : eps * ( 2 c_0 + c_1 + c_inf )    = eps * plain_sum
-            //
-            // Anchors:
-            //
-            //     j = 1 -> mu_tilde + eps * mu     (round-1 target)
-            //     j > 1 -> h_{j - 1}(gamma_{j - 1}) (by induction)
-            #[cfg(debug_assertions)]
-            {
-                let mult_past = pow2[k - j + 1];
-                let mut expected: EF =
-                    eps * plain_sum + past_mask_sum * mult_past + mult_live * s_j_endpoints;
-                if j < k {
-                    expected += mult_live * sum_future_endpoints;
-                }
-                debug_assert_eq!(
-                    h[0].double() + h[1..].iter().copied().sum::<EF>(),
-                    expected,
-                    "h_j affine consistency check failed at round {j}",
-                );
-            }
-
-            // Wire format: send ( c_0, c_2, c_3, ..., c_d ), skipping c_1.
-            // The verifier reconstructs c_1 from the affine identity.
-            let mut wire: Vec<EF> = Vec::with_capacity(h_size - 1);
-            wire.push(h[0]);
-            wire.extend_from_slice(&h[2..]);
+            // Wire format: drop the linear coefficient — the verifier
+            // reconstructs it from the affine identity.
+            let wire = round_poly_to_wire(&h);
 
             // Absorb the wire on the transcript and stash it.
             challenger.observe_algebra_slice(&wire);
@@ -436,25 +339,13 @@ where
             rs.push(gamma_j);
         }
 
-        // Phase 6: residual handoff scaled by eps (post-Construction 6.3 reduction; feeds the next protocol step).
-
-        // Wrap the per-round challenges into a structured point.
-        let rs = Point::new(rs);
-
-        // Fold the base polynomial along the sumcheck challenges and absorb eps as the scaling factor:
+        // Phase 6: residual handoff scaled by eps.
         //
-        //     prod_poly.dot_product() = eps * plain_residual_sum
-        let compressed = tracing::info_span!("compress_prefix_to_packed")
-            .in_scope(|| self.inner.poly.compress_prefix_to_packed(&rs, eps));
+        // The mode-specific compression lives behind the layout trait.
+        // The shared invariant is `prod_poly.dot_product() == eps * plain_residual_sum`.
+        let rs = Point::new(rs);
+        let prod_poly = self.inner.zk_residual_handoff(&rs, alpha, eps);
 
-        // Equality weights for the residual product polynomial.
-        // No eps scaling here; the factor lives entirely on the base side.
-        let weights = self.inner.combine_eqs(&rs, alpha).pack::<F, EF>();
-        let prod_poly =
-            ProductPolynomial::<F, EF>::new_packed(VariableOrder::Prefix, compressed, weights);
-
-        // Cross-check residual sum against the directly-evaluated dot product.
-        // Catches scaling bugs in compress_prefix_to_packed.
         let residual_sum = eps * plain_sum;
         debug_assert_eq!(
             prod_poly.dot_product(),
@@ -476,11 +367,12 @@ mod tests {
     use p3_util::log2_strict_usize;
     use proptest::prelude::*;
 
+    use crate::strategy::VariableOrder;
     use crate::zk::test_helpers::{F, run_roundtrip};
 
     #[test]
-    fn prover_verifier_roundtrip_classic_unpacked() {
-        // Invariant: honest prover-verifier roundtrip with both claim kinds present accepts and produces matching challenge sequences.
+    fn prover_verifier_roundtrip_prefix() {
+        // Invariant: honest prover-verifier roundtrip on the prefix path with both claim kinds present accepts.
         //
         // Fixture state:
         //
@@ -490,36 +382,55 @@ mod tests {
         //     num_concrete = 1       (drives the inner accumulator branch)
         //     num_virtual  = 1       (drives the virtual accumulator branch)
         //
-        // Why both kinds: the alpha-power split must do real work in both branches.
+        // Both claim kinds force the alpha-power split to do real work in both branches.
         // This catches a wrong skip count in the per-round accumulator assembly.
-        run_roundtrip(8, 3, 4, 1, 1, 0).expect("honest roundtrip should accept");
+        run_roundtrip(VariableOrder::Prefix, 8, 3, 4, 1, 1, 0)
+            .expect("honest roundtrip should accept");
     }
 
     #[test]
-    fn long_mask_horner_path() {
-        // Invariant: per-round Horner handles long masks identically to short ones.
+    fn prover_verifier_roundtrip_suffix() {
+        // Invariant: honest prover-verifier roundtrip on the suffix path with both claim kinds present accepts.
         //
-        // Fixture state:
+        // Fixture mirrors the prefix-mode pin so a regression in one mode surfaces with the same fingerprint as the other.
+        // The residual handoff routes the combining challenge through suffix-specific compression that the prefix overlay does not exercise.
+        run_roundtrip(VariableOrder::Suffix, 8, 3, 4, 1, 1, 0)
+            .expect("honest roundtrip should accept");
+    }
+
+    #[test]
+    fn long_mask_horner_path_prefix() {
+        // Invariant: per-round Horner handles long masks identically to short ones on the prefix path.
         //
-        //     ell_zk = 32 (matches an HVZK-WHIR soundness-realistic setup)
+        // Fixture state: ell_zk = 32, matching a soundness-realistic mask setup.
+        // The proptests below cap ell_zk at 5 to keep runtime small.
+        // This case pins the long-mask arithmetic path the proptests never reach.
+        run_roundtrip(VariableOrder::Prefix, 8, 3, 32, 1, 1, 0)
+            .expect("honest roundtrip should accept");
+    }
+
+    #[test]
+    fn long_mask_horner_path_suffix() {
+        // Invariant: per-round Horner handles long masks identically to short ones on the suffix path.
         //
-        // The proptest below caps ell_zk at 5 to keep runtime small.
-        // This case pins the long-mask arithmetic path the proptest never reaches.
-        run_roundtrip(8, 3, 32, 1, 1, 0).expect("honest roundtrip should accept");
+        // Mirrors the prefix long-mask pin.
+        // A regression that mishandles the combining factor on a long mask passes the prefix pin and trips here.
+        run_roundtrip(VariableOrder::Suffix, 8, 3, 32, 1, 1, 0)
+            .expect("honest roundtrip should accept");
     }
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(16))]
 
         #[test]
-        fn prop_completeness_classic_unpacked(
+        fn prop_completeness_prefix(
             n_vars in 3usize..=8,
             ell_zk in 3usize..=5,
             num_concrete in 0usize..=2,
             num_virtual in 0usize..=2,
             seed in 0u64..1024,
         ) {
-            // Invariant: every honest prover output verifies across the (n_vars, folding, ell_zk, num_concrete, num_virtual) cube.
+            // Invariant: every honest prover output verifies across the parameter cube on the prefix path.
             //
             // Sweeping concrete and virtual independently exercises both accumulator branches and the alpha-power split between them.
 
@@ -535,7 +446,30 @@ mod tests {
             let folding_factor = 1 + (seed as usize % (n_vars - k_pack));
 
             prop_assert!(
-                run_roundtrip(n_vars, folding_factor, ell_zk, num_concrete, num_virtual, seed)
+                run_roundtrip(VariableOrder::Prefix, n_vars, folding_factor, ell_zk, num_concrete, num_virtual, seed)
+                    .is_ok()
+            );
+        }
+
+        #[test]
+        fn prop_completeness_suffix(
+            n_vars in 3usize..=8,
+            ell_zk in 3usize..=5,
+            num_concrete in 0usize..=2,
+            num_virtual in 0usize..=2,
+            seed in 0u64..1024,
+        ) {
+            // Invariant: every honest prover output verifies across the parameter cube on the suffix path.
+
+            // The protocol needs at least one claim for a meaningful mu.
+            prop_assume!(num_concrete + num_virtual >= 1);
+
+            // Suffix mode has no packed-lane reservation, so folding goes up to n_vars - 1.
+            // One variable stays for the residual sumcheck.
+            let folding_factor = 1 + (seed as usize % (n_vars - 1));
+
+            prop_assert!(
+                run_roundtrip(VariableOrder::Suffix, n_vars, folding_factor, ell_zk, num_concrete, num_virtual, seed)
                     .is_ok()
             );
         }

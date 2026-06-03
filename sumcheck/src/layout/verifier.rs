@@ -81,6 +81,14 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         }
     }
 
+    /// Return the layout strategy this verifier was constructed with.
+    ///
+    /// Downstream protocols read it to dispatch on the binding direction
+    /// without threading the strategy through their own state.
+    pub const fn strategy(&self) -> LayoutStrategy {
+        self.strategy
+    }
+
     /// Returns the arity of the source table at the given index.
     pub fn num_variables_table(&self, table_idx: usize) -> usize {
         // Look up this table's placement; every column shares the same selector bit-width.
