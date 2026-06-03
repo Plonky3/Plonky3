@@ -19,10 +19,10 @@ where
     F: Field,
     EF: ExtensionField<F>,
 {
-    /// Column values at the current row.
-    pub local: &'a [EF],
-    /// Column values at the shifted-by-one row, with zero in the last position.
-    pub next: &'a [EF],
+    /// Two-row main window holding the current and shifted-by-one rows.
+    ///
+    /// The shifted row carries zero in its last position.
+    pub main_window: RowWindow<'a, EF>,
     /// Boundary-selector values shared by all selector accessors.
     pub boundary: BoundaryEvals<EF>,
     /// Public inputs forwarded to the AIR.
@@ -60,8 +60,8 @@ where
         alpha: EF,
     ) -> Self {
         Self {
-            local,
-            next,
+            // Pair the two borrowed rows into the window the AIR reads from.
+            main_window: RowWindow::from_two_rows(local, next),
             boundary,
             public_values,
             alpha,
@@ -102,8 +102,7 @@ where
 
     #[inline]
     fn main(&self) -> Self::MainWindow {
-        // Build a fresh two-row window from the borrowed slices.
-        RowWindow::from_two_rows(self.local, self.next)
+        self.main_window
     }
 
     #[inline]
