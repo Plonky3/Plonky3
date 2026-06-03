@@ -41,6 +41,12 @@ where
     FinalPolyLengthMismatch { expected: usize, got: usize },
     #[error("query proof count mismatch: expected {expected}, got {got}")]
     QueryProofCountMismatch { expected: usize, got: usize },
+    /// The instance is configured with zero queries.
+    ///
+    /// - The query loop never runs, so any final polynomial would be accepted.
+    /// - At least one query is required for the protocol to prove anything.
+    #[error("FRI instance has zero queries; at least one is required for soundness")]
+    ZeroQueries,
     #[error("missing initial reduced opening at log height {expected}")]
     MissingInitialReducedOpening { expected: usize },
     #[error("initial reduced opening height mismatch: expected {expected}, got {got}")]
@@ -154,6 +160,13 @@ where
             InputProof = Vec<BatchOpening<Val, InputMmcs>>,
         >,
 {
+    // Reject a vacuous instance before any transcript work.
+    // With zero queries the per-query loop never runs.
+    // Any final polynomial would then pass.
+    if params.num_queries == 0 {
+        return Err(FriError::ZeroQueries);
+    }
+
     // Generate the Batch combination challenge
     // Soundness Error: `|f|/|EF|` where `|f|` is the number of different functions of the form
     // `(f(zeta) - fi(x))/(zeta - x)` which need to be checked.
@@ -1750,5 +1763,77 @@ mod tests {
 
         // The two must differ — this is what the verifier would catch.
         assert_ne!(honest_eval, corrupted_eval);
+    }
+
+    #[test]
+    fn rejects_with_zero_queries() {
+        // Invariant: a zero-query FRI instance proves nothing.
+        // The per-query loop never runs.
+        // Without the guard the verifier returns Ok for any final polynomial.
+        //
+        // Fixture state: an honest proof built with 2 queries.
+        //
+        // Mutation: verify it under params with num_queries = 0.
+        let f = make_test_fixture();
+        let mut params = f.fri_params.clone();
+        params.num_queries = 0;
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &params,
+            &f.proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("zero-query instance must be rejected");
+
+        assert!(
+            matches!(err, FriError::ZeroQueries),
+            "expected ZeroQueries, got {err:?}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "num_queries must be at least 1")]
+    fn prover_rejects_zero_queries() {
+        // The prover must refuse to build a vacuous proof.
+        // The verifier guards the same config, so the failure is symmetric.
+        let mut rng = SmallRng::seed_from_u64(42);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm.clone());
+        let input_mmcs = ValMmcs::new(hash.clone(), compress.clone(), 0);
+        let challenge_mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress, 0));
+
+        // Zero queries; every other parameter is otherwise valid.
+        let fri_params = FriParameters {
+            log_blowup: 1,
+            log_final_poly_len: 0,
+            max_log_arity: 1,
+            num_queries: 0,
+            commit_proof_of_work_bits: 0,
+            query_proof_of_work_bits: 0,
+            mmcs: challenge_mmcs,
+        };
+        let pcs = TwoAdicFriPcs::new(Radix2Dit::default(), input_mmcs, fri_params);
+
+        // Commit succeeds; the assert fires inside the opening (FRI prover).
+        let log_degree = 3;
+        let domain = <TwoAdicFriPcs<Val, Radix2Dit<Val>, ValMmcs, ChallengeMmcs> as Pcs<
+            Challenge,
+            Challenger,
+        >>::natural_domain_for_degree(&pcs, 1 << log_degree);
+        let trace = RowMajorMatrix::<Val>::rand_nonzero(&mut rng, 1 << log_degree, 2);
+        let (commitment, prover_data) =
+            <TwoAdicFriPcs<Val, Radix2Dit<Val>, ValMmcs, ChallengeMmcs> as Pcs<
+                Challenge,
+                Challenger,
+            >>::commit(&pcs, [(domain, trace)]);
+
+        let mut challenger = Challenger::new(perm);
+        challenger.observe(&commitment);
+        let zeta: Challenge = challenger.sample_algebra_element();
+        let _ = pcs.open(vec![(&prover_data, vec![vec![zeta]])], &mut challenger);
     }
 }
