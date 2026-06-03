@@ -220,11 +220,10 @@ where
             // Next target via Horner (Construction 6.3 round chaining: target_{j+1} = h_j(gamma_j)):
             //
             //     h_j(gamma) = c_0 + gamma * (c_1 + gamma * (c_2 + ... + gamma * c_d))
-            let mut coeffs_vec: Vec<EF> = Vec::with_capacity(h_size);
-            coeffs_vec.push(c0);
-            coeffs_vec.push(c1);
-            coeffs_vec.extend_from_slice(&wire[1..]);
-            let h_at_gamma_j: EF = coeffs_vec.iter().copied().horner(gamma_j);
+            let h_at_gamma_j: EF = core::iter::once(c0)
+                .chain(core::iter::once(c1))
+                .chain(wire[1..].iter().copied())
+                .horner(gamma_j);
 
             target = h_at_gamma_j;
             randomness.push(gamma_j);
