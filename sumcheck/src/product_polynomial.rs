@@ -387,6 +387,46 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         r
     }
 
+    /// Computes the plain quadratic coefficients for the current round without
+    /// touching the transcript or folding the polynomial.
+    pub(crate) fn round_coefficients(&self) -> (EF, EF) {
+        let order = self.order;
+        match &self.inner {
+            MaybePacked::Packed { evals, weights } => {
+                let (c0, c_inf) = order.sumcheck_coefficients(evals.as_slice(), weights.as_slice());
+                (
+                    EF::ExtensionPacking::to_ext_iter([c0]).sum(),
+                    EF::ExtensionPacking::to_ext_iter([c_inf]).sum(),
+                )
+            }
+            MaybePacked::Unpacked { evals, weights } => {
+                order.sumcheck_coefficients(evals.as_slice(), weights.as_slice())
+            }
+        }
+    }
+
+    /// Folds both product-polynomial sides by one verifier challenge.
+    pub(crate) fn fold_round(&mut self, r: EF) {
+        self.compress(r);
+        self.transition();
+    }
+
+    /// Scales the evaluation side of the product polynomial.
+    pub(crate) fn scale_evals(&mut self, scale: EF) {
+        match &mut self.inner {
+            MaybePacked::Packed { evals, .. } => {
+                for value in evals.as_mut_slice() {
+                    *value *= scale;
+                }
+            }
+            MaybePacked::Unpacked { evals, .. } => {
+                for value in evals.as_mut_slice() {
+                    *value *= scale;
+                }
+            }
+        }
+    }
+
     /// Extracts the evaluation polynomial as a scalar [`Poly`].
     ///
     /// This unpacks the evaluations if in packed mode.
