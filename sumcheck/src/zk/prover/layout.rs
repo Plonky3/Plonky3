@@ -3,8 +3,9 @@
 //! Captures the data the masking layer needs from any layout, and the one
 //! piece of arithmetic that genuinely branches on the binding direction.
 
-use p3_field::{ExtensionField, TwoAdicField};
+use p3_field::{ExtensionField, Field, PackedValue, TwoAdicField};
 use p3_multilinear_util::point::Point;
+use p3_util::log2_strict_usize;
 
 use crate::layout::{Layout, PrefixProver, ProverMultiClaim, ProverVirtualClaim, SuffixProver};
 use crate::product_polynomial::ProductPolynomial;
@@ -60,6 +61,16 @@ where
     where
         EF: TwoAdicField,
     {
+        // Prefix packs the residual weights: one full SIMD lane must survive the fold.
+        // `Poly::pack` requires `num_variables - k >= k_pack`, else it panics.
+        // Suffix is unpacked and unconstrained, so this guard is prefix-only.
+        // Phrased as `k + k_pack <= num_variables` to avoid `usize` underflow.
+        let k_pack = log2_strict_usize(<F as Field>::Packing::WIDTH);
+        assert!(
+            rs.num_variables() + k_pack <= self.num_variables(),
+            "prefix packed residual needs num_variables - folding >= k_pack",
+        );
+
         // Fold the stacked polynomial low-to-high.
         // The combining challenge is baked into the compression scale.
         let compressed = tracing::info_span!("compress_prefix_to_packed")
@@ -98,7 +109,7 @@ where
         let reversed = rs.reversed();
         // Walk per-table slots; the combining challenge rides on the slot compression.
         let compressed = tracing::info_span!("compress_stacked_with_eps")
-            .in_scope(|| self.compress_stacked(&reversed, eps));
+            .in_scope(|| self.compress_stacked_scaled(&reversed, eps));
         // The SVO preprocessing covers what packing would help; no packing here.
         let weights = self.combine_eqs(&reversed, alpha);
         ProductPolynomial::new_unpacked(VariableOrder::Suffix, compressed, weights)

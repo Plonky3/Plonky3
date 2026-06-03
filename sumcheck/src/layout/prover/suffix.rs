@@ -260,7 +260,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
         #[cfg(debug_assertions)]
         {
             // Materialise the stacked polynomial with no challenges applied.
-            let poly = &self.compress_stacked(&Point::default(), EF::ONE);
+            let poly = &self.compress_stacked(&Point::default());
             // Check 1: weighted sum equals the direct evaluation.
             assert_eq!(eval, poly.eval_base(&point));
 
@@ -415,7 +415,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
         let reversed = rs.reversed();
         // Factor 1 of the product: the compressed stacked poly at rs.
         // No external scaling here; the plain path keeps the running sum unchanged.
-        let compressed = self.compress_stacked(&reversed, EF::ONE);
+        let compressed = self.compress_stacked(&reversed);
         // Factor 2 of the product: the batched equality-weight poly.
         let weights = self.combine_eqs(&reversed, alpha);
         // Pair them; the product polynomial drives the remaining rounds.
@@ -490,8 +490,17 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
 
     /// Compress every stacked-table slot by fixing the suffix challenges.
     ///
+    /// Unit-scale shorthand for [`Self::compress_stacked_scaled`]: leaves the
+    /// residual sum unchanged.
+    #[tracing::instrument(skip_all)]
+    pub(crate) fn compress_stacked(&self, rs: &Point<EF>) -> Poly<EF> {
+        self.compress_stacked_scaled(rs, EF::ONE)
+    }
+
+    /// Compress every stacked-table slot, folding `scale` into the equality table.
+    ///
     /// ```text
-    ///     out[slot, x_rest] = sum_{y in {0,1}^|r|}  s * eq(r, y) * col(x_rest, y)
+    ///     out[slot, x_rest] = sum_{y in {0,1}^|r|}  scale * eq(r, y) * col(x_rest, y)
     /// ```
     ///
     /// One output slot per column.
@@ -505,11 +514,12 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
     ///
     /// # Why a scale parameter
     ///
-    /// - A unit scale leaves the residual sum unchanged.
-    /// - A non-unit scale lets the caller absorb a combining challenge into
+    /// - A non-unit `scale` lets the caller absorb a combining challenge into
     ///   the residual factor without a second pass.
+    /// - The unit-scale case has the dedicated [`Self::compress_stacked`] wrapper,
+    ///   so callers never pass `EF::ONE` (nor an accidental `EF::ZERO`) explicitly.
     #[tracing::instrument(skip_all)]
-    pub(crate) fn compress_stacked(&self, rs: &Point<EF>, scale: EF) -> Poly<EF> {
+    pub(crate) fn compress_stacked_scaled(&self, rs: &Point<EF>, scale: EF) -> Poly<EF> {
         assert!(rs.num_variables() <= self.num_variables);
         // Output spans the residual stacked space.
         // Size is 2^(num_variables - |rs|).

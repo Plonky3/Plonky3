@@ -117,6 +117,14 @@ where
     /// - Vector of per-round challenges `gamma_1, ..., gamma_k`.
     /// - Residual claim `target = h_k(gamma_k)`, fed to the downstream committed-sumcheck reduction.
     ///
+    /// # Round-by-round soundness
+    ///
+    /// Each round rebuilds `c_1` from the affine identity `h(0) + h(1) = target`.
+    /// A wire tampered in one coordinate still satisfies the per-round check.
+    /// So this method does **not** reject it locally and may return `Ok`.
+    /// The rebuilt `c_1` shifts `gamma_j`, diverging the final `target` through Fiat-Shamir.
+    /// Treat the returned `target`, not the absence of an error, as the soundness-bearing output.
+    ///
     /// # Errors
     ///
     /// - Mismatch between the verifier-side and proof-side mask code length.
