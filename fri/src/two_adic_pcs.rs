@@ -574,15 +574,12 @@ where
         // In our setup, k is two times the trace width plus the number of quotient polynomials.
         let alpha: Challenge = challenger.sample_algebra_element();
 
-        // We precompute powers of alpha as we need the same powers for each matrix.
-        // We compute both a vector of unpacked powers and a vector of packed powers.
-        // TODO: It should be possible to refactor this to only use the packed powers but
-        // this is not a bottleneck so is not a priority.
+        // We precompute the packed powers of alpha as we need the same powers for each matrix.
+        // The hot per-matrix reduction (`rowwise_packed_dot_product`) consumes these directly; the
+        // per-opening combination below unpacks `alpha`'s powers lazily via `alpha.powers()`, so we
+        // never materialize a full unpacked copy.
         let packed_alpha_powers =
             Challenge::ExtensionPacking::packed_ext_powers_capped(alpha, global_max_width)
-                .collect_vec();
-        let alpha_powers =
-            Challenge::ExtensionPacking::to_ext_iter(packed_alpha_powers.iter().copied())
                 .collect_vec();
 
         // Now that we have sent the openings to the verifier, it remains to prove
@@ -641,7 +638,7 @@ where
                     // As we have all the openings `f_i(z)`, we can combine them using `alpha`
                     // in an identical way to before to compute `Mred(z)`.
                     let reduced_openings: Challenge =
-                        dot_product(alpha_powers.iter().copied(), openings.iter().copied());
+                        dot_product(alpha.powers(), openings.iter().copied());
 
                     mat_compressed
                         .par_iter()
