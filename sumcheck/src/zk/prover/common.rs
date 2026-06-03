@@ -86,12 +86,12 @@ where
 /// The running endpoint sum across all rounds.
 /// The auxiliary target itself is written directly to the transcript record.
 pub(super) fn observe_masks_and_mu_tilde<F, EF, Ch>(
-    masks: &[Vec<F>],
+    masks: &[Vec<EF>],
     k: usize,
     ell_zk: usize,
     challenger: &mut Ch,
     zk_data: &mut ZkSumcheckData<F, EF>,
-) -> F
+) -> EF
 where
     F: Field,
     EF: ExtensionField<F>,
@@ -101,9 +101,9 @@ where
     //
     //     s_l(0)        = c_0
     //     s_l(0)+s_l(1) = 2 * c_0 + sum_{i>=1} c_i
-    let sum_endpoints_init: F = masks
+    let sum_endpoints_init: EF = masks
         .iter()
-        .map(|mask| mask[0].double() + mask[1..].iter().copied().sum::<F>())
+        .map(|mask| mask[0].double() + mask[1..].iter().copied().sum::<EF>())
         .sum();
 
     // Leading coefficient of the closed form.
@@ -111,8 +111,8 @@ where
     // Guard the exponent: `k = 0` would underflow `k - 1` (usize) into a huge exponent.
     // The caller already enforces one round, so this is a local sanity net.
     debug_assert!(k >= 1, "auxiliary target requires at least one round");
-    let two_to_k_minus_1 = F::TWO.exp_u64((k - 1) as u64);
-    let mu_tilde: F = two_to_k_minus_1 * sum_endpoints_init;
+    let two_to_k_minus_1 = EF::TWO.exp_u64((k - 1) as u64);
+    let mu_tilde: EF = two_to_k_minus_1 * sum_endpoints_init;
 
     // Cross-check against the naive sum over the boolean cube.
     //
@@ -120,7 +120,7 @@ where
     // earlier external reference (eprint 2026/391 review thread).
     #[cfg(debug_assertions)]
     {
-        let mut naive = F::ZERO;
+        let mut naive = EF::ZERO;
         for bits in 0..(1u64 << k) {
             for (l, mask) in masks.iter().enumerate() {
                 let b_l = (bits >> l) & 1;
@@ -128,7 +128,7 @@ where
                 let s_l_eval = if b_l == 0 {
                     mask[0]
                 } else {
-                    mask.iter().copied().sum::<F>()
+                    mask.iter().copied().sum::<EF>()
                 };
                 naive += s_l_eval;
             }
@@ -139,8 +139,8 @@ where
         );
     }
 
-    // Observe the auxiliary target lifted into the extension field.
-    challenger.observe_algebra_element(EF::from(mu_tilde));
+    // Observe the auxiliary target.
+    challenger.observe_algebra_element(mu_tilde);
     // Pin the transcript record so the verifier reads the same metadata.
     zk_data.mu_tilde = mu_tilde;
     zk_data.ell_zk = ell_zk;
@@ -178,8 +178,8 @@ mod tests {
         //     sum_endpoints = 7 + 19           = 26
         //     mu_tilde      = 2^{k-1} * 26     = 52
         let masks = vec![
-            vec![F::from_u32(1), F::from_u32(2), F::from_u32(3)],
-            vec![F::from_u32(4), F::from_u32(5), F::from_u32(6)],
+            vec![EF::from_u32(1), EF::from_u32(2), EF::from_u32(3)],
+            vec![EF::from_u32(4), EF::from_u32(5), EF::from_u32(6)],
         ];
         let k = 2;
         let ell_zk = 3;
@@ -196,8 +196,8 @@ mod tests {
         );
 
         // Returned endpoint sum and transcript record fields.
-        assert_eq!(endpoints, F::from_u32(26));
-        assert_eq!(zk_data.mu_tilde, F::from_u32(52));
+        assert_eq!(endpoints, EF::from_u32(26));
+        assert_eq!(zk_data.mu_tilde, EF::from_u32(52));
         assert_eq!(zk_data.ell_zk, ell_zk);
     }
 
@@ -209,7 +209,7 @@ mod tests {
         //                           one a fresh challenger would have produced.
         //
         // Fixture: single mask of length 2; mu_tilde value is irrelevant.
-        let masks = vec![vec![F::from_u32(1), F::from_u32(2)]];
+        let masks = vec![vec![EF::from_u32(1), EF::from_u32(2)]];
         let k = 1;
         let ell_zk = 2;
 
@@ -249,7 +249,7 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(seed);
 
         let (masks, oracles) =
-            sample_masks::<F, _, _, _, _>(k, &encoding, &mmcs, &mut challenger, &mut rng);
+            sample_masks::<EF, _, _, _, _>(k, &encoding, &mmcs, &mut challenger, &mut rng);
 
         assert_eq!(masks.len(), k);
         assert_eq!(oracles.len(), k);
@@ -272,12 +272,12 @@ mod tests {
         let mut ch1 = MyChallenger::new(perm.clone());
         let mut rng1 = SmallRng::seed_from_u64(seed);
         let (masks1, oracles1) =
-            sample_masks::<F, _, _, _, _>(k, &encoding, &mmcs, &mut ch1, &mut rng1);
+            sample_masks::<EF, _, _, _, _>(k, &encoding, &mmcs, &mut ch1, &mut rng1);
 
         let mut ch2 = MyChallenger::new(perm);
         let mut rng2 = SmallRng::seed_from_u64(seed);
         let (masks2, oracles2) =
-            sample_masks::<F, _, _, _, _>(k, &encoding, &mmcs, &mut ch2, &mut rng2);
+            sample_masks::<EF, _, _, _, _>(k, &encoding, &mmcs, &mut ch2, &mut rng2);
 
         assert_eq!(masks1, masks2);
         // Compare commitments only; prover-side data is not value-comparable.

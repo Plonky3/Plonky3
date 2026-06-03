@@ -3,6 +3,7 @@ use std::hint::black_box;
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
+use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
@@ -26,7 +27,7 @@ type EFPacked = <EF as ExtensionField<F>>::ExtensionPacking;
 
 // Mask commitment MMCS and mask encoding consumed by the HVZK arm
 // (Construction 6.3, eprint 2026/391).
-type MaskMmcs = MerkleTreeMmcs<
+type BaseMaskMmcs = MerkleTreeMmcs<
     FP,
     FP,
     PaddingFreeSponge<Perm, 16, 8, 8>,
@@ -34,7 +35,8 @@ type MaskMmcs = MerkleTreeMmcs<
     2,
     8,
 >;
-type MaskEnc = ReedSolomonZkEncoding<F, Radix2DFTSmallBatch<F>>;
+type MaskMmcs = ExtensionMmcs<F, EF, BaseMaskMmcs>;
+type MaskEnc = ReedSolomonZkEncoding<EF, Radix2DFTSmallBatch<EF>>;
 
 /// ZK code message length. Bound by Lemma 6.4 (`ℓ_zk ≥ 2`).
 ///
@@ -114,7 +116,8 @@ fn make_zk_setup() -> (MaskMmcs, MaskEnc) {
     let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(0xfeed));
     let merkle_hash = PaddingFreeSponge::new(perm.clone());
     let merkle_compress = TruncatedPermutation::new(perm);
-    let mmcs = MaskMmcs::new(merkle_hash, merkle_compress, 0);
+    let base_mmcs = BaseMaskMmcs::new(merkle_hash, merkle_compress, 0);
+    let mmcs = MaskMmcs::new(base_mmcs);
     let m = (ELL_ZK + T_RAND).next_power_of_two();
     let encoding = MaskEnc::new(T_RAND, ELL_ZK, m, Radix2DFTSmallBatch::default());
     (mmcs, encoding)

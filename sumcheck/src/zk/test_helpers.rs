@@ -5,9 +5,10 @@ use alloc::vec::Vec;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
+use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DFTSmallBatch;
+use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::poly::Poly;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -33,12 +34,14 @@ pub type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 pub type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
 /// Packed flavour of the base field, used for SIMD Merkle leaves.
 pub type PackedF = <F as Field>::Packing;
-/// Merkle commitment scheme used for the mask oracles.
-pub type MyMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
+/// Base-field Merkle commitment scheme backing the mask oracles.
+pub type BaseMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
+/// Extension-field Merkle commitment scheme used for the mask oracles.
+pub type MyMmcs = ExtensionMmcs<F, EF, BaseMmcs>;
 /// Two-adic DFT backing the Reed-Solomon encoding.
-pub type MyDft = Radix2DFTSmallBatch<F>;
+pub type MyDft = Radix2DFTSmallBatch<EF>;
 /// Reed-Solomon zero-knowledge encoding driving the mask code.
-pub type MyEnc = ReedSolomonZkEncoding<F, MyDft>;
+pub type MyEnc = ReedSolomonZkEncoding<EF, MyDft>;
 
 /// Randomness symbols appended to each mask before encoding.
 ///
@@ -72,7 +75,9 @@ pub fn make_setup(seed: u64, ell_zk: usize) -> (Perm, MyMmcs, MyEnc) {
     let merkle_hash = MyHash::new(perm.clone());
     let merkle_compress = MyCompress::new(perm.clone());
     // Zero salt: deterministic commitments for reproducibility.
-    let mmcs: MyMmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
+    let base_mmcs = BaseMmcs::new(merkle_hash, merkle_compress, 0);
+    // Lift the base-field MMCS to commit extension-field mask codewords.
+    let mmcs: MyMmcs = ExtensionMmcs::new(base_mmcs);
 
     // Codeword length, rounded up to a power of two for the butterfly schedule:
     //
@@ -146,7 +151,7 @@ pub struct ProverRun {
     /// Per-round zero-knowledge transcript artefacts.
     pub zk_data: ZkSumcheckData<F, EF>,
     /// Mask commitments forwarded to the verifier.
-    pub mask_commits: Vec<<MyMmcs as p3_commit::Mmcs<F>>::Commitment>,
+    pub mask_commits: Vec<<MyMmcs as p3_commit::Mmcs<EF>>::Commitment>,
     /// Per-round folding randomness emitted by the prover.
     pub prover_randomness: p3_multilinear_util::point::Point<EF>,
     /// Virtual evaluations sampled during the claim phase.
@@ -349,30 +354,4 @@ pub fn run_roundtrip(
         return Err("prover/verifier disagreed on sumcheck randomness");
     }
     Ok(())
-}
-
-/// True when an extension-field element lifts a single base-field element.
-///
-/// # Why this check exists
-///
-/// Honest and simulated wire coordinates with index `>= 2` are produced as
-///
-/// ```text
-///     2^{k - j} * mask_coeff
-/// ```
-///
-/// lifted from F into EF, so both views land in the F-subspace.
-///
-/// Without enforcing this on the simulator, a distinguisher could read off the basis decomposition and separate the two views.
-///
-/// # Encoding
-///
-/// ```text
-///     x in F  <=>  basis_coeffs(x) = [ x_0, 0, 0, ..., 0 ]
-/// ```
-pub fn ef_in_f_subspace(x: EF) -> bool {
-    // Decompose into the EF basis.
-    let coeffs: &[F] = EF::as_basis_coefficients_slice(&x);
-    // First slot carries the lifted base value; all higher slots must be zero.
-    coeffs[1..].iter().all(|c| *c == F::ZERO)
 }

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 ))]
 pub struct CircleFriProof<F: Field, M: Mmcs<F>, Witness, InputProof> {
     pub commit_phase_commits: Vec<M::Commitment>,
+    pub commit_pow_witnesses: Vec<Witness>,
     pub query_proofs: Vec<CircleQueryProof<F, M, InputProof>>,
     // This could become Vec<FC::Challenge> if this library was generalized to support non-constant
     // final polynomials.

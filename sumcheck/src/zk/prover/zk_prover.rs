@@ -60,8 +60,8 @@ pub struct ZkProver<F, EF, Enc, M, L>
 where
     F: Field,
     EF: ExtensionField<F>,
-    Enc: ZkEncoding<F>,
-    M: Mmcs<F>,
+    Enc: ZkEncoding<EF>,
+    M: Mmcs<EF>,
 {
     /// Plain stacked-layout prover.
     inner: L,
@@ -86,8 +86,8 @@ impl<F, EF, Enc, M, L> ZkProver<F, EF, Enc, M, L>
 where
     F: TwoAdicField,
     EF: ExtensionField<F>,
-    Enc: ZkEncoding<F>,
-    M: Mmcs<F>,
+    Enc: ZkEncoding<EF>,
+    M: Mmcs<EF>,
     L: ZkLayout<F, EF>,
 {
     /// Wraps a plain layout with the HVZK ingredients.
@@ -148,7 +148,7 @@ where
     /// # Panics
     ///
     /// - Base field characteristic is `2` (violates Lemma 6.4).
-    /// - Mask code message length is below `2` (Lemma 6.4 floor).
+    /// - Mask code message length is below `3` (mask must cover the degree-2 plain piece).
     /// - Folding factor is `0` or exceeds the polynomial's arity.
     #[allow(clippy::too_many_lines, clippy::type_complexity)]
     #[tracing::instrument(skip_all)]
@@ -158,10 +158,14 @@ where
         pow_bits: usize,
         challenger: &mut Ch,
         rng: &mut R,
-    ) -> (SumcheckProver<F, EF>, Point<EF>, Vec<MaskOracle<F, Enc, M>>)
+    ) -> (
+        SumcheckProver<F, EF>,
+        Point<EF>,
+        Vec<MaskOracle<EF, Enc, M>>,
+    )
     where
         EF: TwoAdicField,
-        Enc::Codeword: Matrix<F>,
+        Enc::Codeword: Matrix<EF>,
         R: Rng,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     {
@@ -172,7 +176,10 @@ where
 
         // Lemma 6.4 hypotheses + sanity bounds on the folding factor.
         assert!(F::TWO != F::ZERO, "Lemma 6.4 requires char(F) != 2");
-        assert!(ell_zk >= 2, "Lemma 6.4 requires ell_zk >= 2");
+        assert!(
+            ell_zk >= 3,
+            "mask degree ell_zk - 1 must cover the degree-2 plain piece (ell_zk >= 3)",
+        );
         assert!(k >= 1, "sumcheck requires at least one round");
         assert!(
             k <= n_vars,
@@ -214,7 +221,7 @@ where
         //
         // The encoder draws zero-knowledge padding randomness from the same rng.
         let (masks, mask_oracles) =
-            sample_masks::<F, _, _, _, _>(k, &self.encoding, &self.mmcs, challenger, rng);
+            sample_masks::<EF, _, _, _, _>(k, &self.encoding, &self.mmcs, challenger, rng);
 
         // Phase 3: mu_tilde via the closed form (Construction 6.3 step 2).
         //
@@ -225,9 +232,9 @@ where
 
         // Phase 4: combining challenge `eps` (Construction 6.3 step 3).
         //
-        // `eps` lives in EF; the paper samples in F.
-        // Masks stay in F to preserve sublinear proof size.
-        // The resulting hybrid F/EF `h_j` is handled by the simulator's F-subspace stratification.
+        // The construction is instantiated over `EF`: the masks, `eps`, and the
+        // round polynomials all live in `EF`, so Lemma 6.4 applies with `F := EF`
+        // and the per-round polynomial is uniform over the full extension field.
         let eps: EF = challenger.sample_algebra_element();
 
         // Phase 5: per-round sumcheck (Construction 6.3 step 4).
@@ -247,7 +254,7 @@ where
         //     mult_live   = pow2[k - j]
         //     mult_past   = pow2[k - j + 1]
         //     mult_future = pow2[k - j - 1]
-        let pow2: Vec<F> = F::TWO.powers().collect_n(k + 1);
+        let pow2: Vec<EF> = EF::TWO.powers().collect_n(k + 1);
 
         // Round-invariant context shared by every per-round assembly call.
         let round_ctx = RoundContext {
@@ -263,7 +270,7 @@ where
             let s_j = &masks[round_idx];
 
             // Update the running future-endpoint sum: drop s_j's contribution so the round-j formula reads only sum_{l > j}.
-            let s_j_endpoints = s_j[0].double() + s_j[1..].iter().copied().sum::<F>();
+            let s_j_endpoints = s_j[0].double() + s_j[1..].iter().copied().sum::<EF>();
             sum_future_endpoints -= s_j_endpoints;
 
             // Lagrange weights at `(gamma_1, ..., gamma_{j-1})`, used by every accumulator dot product below.
@@ -418,7 +425,7 @@ mod tests {
         #[test]
         fn prop_completeness_prefix(
             n_vars in 3usize..=8,
-            ell_zk in 2usize..=5,
+            ell_zk in 3usize..=5,
             num_concrete in 0usize..=2,
             num_virtual in 0usize..=2,
             seed in 0u64..1024,
@@ -447,7 +454,7 @@ mod tests {
         #[test]
         fn prop_completeness_suffix(
             n_vars in 3usize..=8,
-            ell_zk in 2usize..=5,
+            ell_zk in 3usize..=5,
             num_concrete in 0usize..=2,
             num_virtual in 0usize..=2,
             seed in 0u64..1024,

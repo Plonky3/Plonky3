@@ -13,7 +13,7 @@ use rand::{RngExt, SeedableRng};
 
 use crate::air::eval;
 use crate::constants::RoundConstants;
-use crate::{Poseidon2Air, Poseidon2Cols, generate_vectorized_trace_rows};
+use crate::{Poseidon2Air, Poseidon2Cols, generate_vectorized_trace_rows, sbox_constraint_degree};
 
 /// A "vectorized" version of Poseidon2Cols, for computing multiple Poseidon2 permutations per row.
 #[repr(C)]
@@ -236,6 +236,10 @@ impl<
 
     fn main_next_row_columns(&self) -> Vec<usize> {
         vec![]
+    }
+
+    fn max_constraint_degree(&self) -> Option<usize> {
+        Some(sbox_constraint_degree(SBOX_DEGREE, SBOX_REGISTERS))
     }
 }
 

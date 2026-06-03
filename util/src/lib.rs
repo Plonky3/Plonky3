@@ -457,26 +457,6 @@ where
     (buf, i)
 }
 
-/// Gets a shared reference to the contained value.
-///
-/// # Safety
-///
-/// Calling this when the content is not yet fully initialized causes undefined
-/// behavior: it is up to the caller to guarantee that every `MaybeUninit<T>` in
-/// the slice really is in an initialized state.
-///
-/// Copied from:
-/// <https://doc.rust-lang.org/std/primitive.slice.html#method.assume_init_ref>
-/// Once that is stabilized, this should be removed.
-#[inline(always)]
-pub const unsafe fn assume_init_ref<T>(slice: &[MaybeUninit<T>]) -> &[T] {
-    // SAFETY: casting `slice` to a `*const [T]` is safe since the caller guarantees that
-    // `slice` is initialized, and `MaybeUninit` is guaranteed to have the same layout as `T`.
-    // The pointer obtained is valid since it refers to memory owned by `slice` which is a
-    // reference and thus guaranteed to be valid for reads.
-    unsafe { &*(slice as *const [MaybeUninit<T>] as *const [T]) }
-}
-
 /// Split an iterator into small arrays and apply `func` to each.
 ///
 /// Repeatedly read `BUFLEN` elements from `input` into an array and
@@ -495,7 +475,7 @@ where
         if n == 0 {
             break;
         }
-        func(unsafe { assume_init_ref(buf.get_unchecked(..n)) });
+        func(unsafe { buf.get_unchecked(..n).assume_init_ref() });
     }
 }
 
@@ -892,6 +872,42 @@ pub const fn gcd_inversion_prime_field_32<const FIELD_BITS: u32>(mut a: u32, mut
     // `len(a) + len(b) <= 2` with `gcd(a, b) = 1` and `b` odd.
     // This implies that `b` must be `1` and so `v = 2^{2 * FIELD_BITS - 2} a0^{-1} mod P` as desired.
     v
+}
+
+/// A raw mutable pointer wrapper that implements [`Send`] and [`Sync`].
+///
+/// Used to enable parallel writes to disjoint slices of a pre-allocated buffer
+/// from within closures that require `Send + Sync` (e.g. `rayon::ParallelIterator::for_each_init`).
+///
+/// # Safety
+///
+/// The caller must ensure that concurrent accesses through this pointer always
+/// target **non-overlapping** memory regions.
+#[derive(Clone, Copy)]
+pub struct DisjointMutPtr<T>(*mut T);
+
+// SAFETY: The contract of DisjointMutPtr guarantees that each thread writes to
+// a disjoint region, so sharing the pointer across threads is safe.
+unsafe impl<T> Send for DisjointMutPtr<T> {}
+unsafe impl<T> Sync for DisjointMutPtr<T> {}
+
+impl<T> DisjointMutPtr<T> {
+    /// Create a new `DisjointMutPtr` from a mutable slice.
+    #[inline]
+    pub const fn new(slice: &mut [T]) -> Self {
+        Self(slice.as_mut_ptr())
+    }
+
+    /// Get a mutable slice starting at `offset` with `len` elements.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure the range `[offset, offset+len)` is within bounds
+    /// and does not overlap with any other concurrent access.
+    #[inline]
+    pub const unsafe fn slice_mut(self, offset: usize, len: usize) -> &'static mut [T] {
+        unsafe { core::slice::from_raw_parts_mut(self.0.add(offset), len) }
+    }
 }
 
 #[cfg(test)]
