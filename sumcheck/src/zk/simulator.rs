@@ -166,11 +166,10 @@ where
         // Horner-evaluate h_j at gamma_j to derive the next target:
         //
         //     h_j(gamma) = c_0 + gamma * (c_1 + gamma * (c_2 + ... + gamma * c_d))
-        let mut coeffs: Vec<EF> = Vec::with_capacity(h_size);
-        coeffs.push(c0);
-        coeffs.push(c1);
-        coeffs.extend_from_slice(&wire[1..]);
-        target = coeffs.iter().copied().horner(gamma_j);
+        target = core::iter::once(c0)
+            .chain(core::iter::once(c1))
+            .chain(wire[1..].iter().copied())
+            .horner(gamma_j);
 
         // Record wire and challenge.
         zk_data.round_coefficients.push(wire);
