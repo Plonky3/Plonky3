@@ -2,10 +2,8 @@ use alloc::format;
 use alloc::vec::Vec;
 
 use p3_field::{InjectiveMonomial, PrimeCharacteristicRing, PrimeField64};
-use p3_goldilocks::{Goldilocks, SmallConvolveGoldilocks};
+use p3_goldilocks::Goldilocks;
 use p3_mds::MdsPermutation;
-use p3_mds::karatsuba_convolution::Convolve;
-use p3_mds::util::first_row_to_first_col;
 use p3_symmetric::{CryptographicPermutation, Permutation};
 
 use super::Rpo;
