@@ -50,9 +50,12 @@ where
         }
         VariableOrder::Suffix => {
             let padded = info_span!("pad").in_scope(|| {
-                let mut mat = RowMajorMatrix::new(poly.as_slice().to_vec(), 1 << folding);
-                mat.pad_to_height(height, EF::ZERO);
-                mat
+                let width = 1 << folding;
+                let src = poly.as_slice();
+
+                let mut values = EF::zero_vec(height * width);
+                values[..src.len()].copy_from_slice(src);
+                RowMajorMatrix::new(values, width)
             });
             info_span!("dft", height = padded.height(), width = padded.width())
                 .in_scope(|| dft.dft_algebra_batch(padded).to_row_major_matrix())
