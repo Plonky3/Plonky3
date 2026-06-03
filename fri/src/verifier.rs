@@ -21,8 +21,6 @@ where
     CommitMmcsErr: core::fmt::Debug,
     InputError: core::fmt::Debug,
 {
-    #[error("invalid proof shape")]
-    InvalidProofShape,
     #[error("query {query}: commit phase opening count mismatch: expected {expected}, got {got}")]
     QueryCommitPhaseOpeningsCountMismatch {
         query: usize,

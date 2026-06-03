@@ -349,6 +349,17 @@ where
     }
 
     fn commit_ldes(&self, ldes: Vec<RowMajorMatrix<Val>>) -> (Self::Commitment, Self::ProverData) {
+        // Opening assumes every committed matrix is an LDE at `self.fri.log_blowup` and recovers the
+        // underlying polynomial degree as `height >> log_blowup`. A matrix shorter than the blowup
+        // factor would silently yield a zero-height degree and a malformed proof, so reject it here.
+        let min_height = 1 << self.fri.log_blowup;
+        for lde in &ldes {
+            assert!(
+                lde.height() >= min_height,
+                "committed LDE height {} is smaller than the blowup factor {min_height}",
+                lde.height()
+            );
+        }
         self.mmcs.commit(ldes)
     }
 
@@ -508,10 +519,10 @@ where
                 // For each collection of matrices
                 izip!(mats.iter(), points.iter())
                     .map(|(mat, points_for_mat)| {
-                        // TODO: This assumes that every input matrix has a blowup of at least self.fri.log_blowup.
-                        // If the blow_up factor is smaller than self.fri.log_blowup, this will lead to errors.
-                        // If it is bigger, we shouldn't get any errors but it will be slightly slower.
-                        // Ideally, polynomials could be passed in with their blow_up factors known.
+                        // Every committed matrix is assumed to be an LDE at `self.fri.log_blowup`;
+                        // `commit`/`commit_ldes` enforce `height >= 1 << log_blowup`. A larger actual
+                        // blowup is still sound, just slightly slower.
+                        // Ideally, polynomials would be passed in with their blow-up factors known.
 
                         // The point of this correction is that each column of the matrix corresponds to a low degree polynomial.
                         // Hence we can save time by restricting the height of the matrix to be the minimal height which
@@ -563,15 +574,12 @@ where
         // In our setup, k is two times the trace width plus the number of quotient polynomials.
         let alpha: Challenge = challenger.sample_algebra_element();
 
-        // We precompute powers of alpha as we need the same powers for each matrix.
-        // We compute both a vector of unpacked powers and a vector of packed powers.
-        // TODO: It should be possible to refactor this to only use the packed powers but
-        // this is not a bottleneck so is not a priority.
+        // We precompute the packed powers of alpha as we need the same powers for each matrix.
+        // The hot per-matrix reduction (`rowwise_packed_dot_product`) consumes these directly; the
+        // per-opening combination below unpacks `alpha`'s powers lazily via `alpha.powers()`, so we
+        // never materialize a full unpacked copy.
         let packed_alpha_powers =
             Challenge::ExtensionPacking::packed_ext_powers_capped(alpha, global_max_width)
-                .collect_vec();
-        let alpha_powers =
-            Challenge::ExtensionPacking::to_ext_iter(packed_alpha_powers.iter().copied())
                 .collect_vec();
 
         // Now that we have sent the openings to the verifier, it remains to prove
@@ -630,7 +638,7 @@ where
                     // As we have all the openings `f_i(z)`, we can combine them using `alpha`
                     // in an identical way to before to compute `Mred(z)`.
                     let reduced_openings: Challenge =
-                        dot_product(alpha_powers.iter().copied(), openings.iter().copied());
+                        dot_product(alpha.powers(), openings.iter().copied());
 
                     mat_compressed
                         .par_iter()
