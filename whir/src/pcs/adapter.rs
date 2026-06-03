@@ -11,7 +11,7 @@ use core::marker::PhantomData;
 use core::slice::from_ref;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpeningRef, Mmcs, MultilinearPcs};
+use p3_commit::{BatchOpeningRef, ExtensionMmcs, Mmcs, MultilinearPcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, Field, TwoAdicField, dot_product};
 use p3_matrix::dense::DenseMatrix;
@@ -69,13 +69,13 @@ pub struct WhirZkPrefixOpenState<F, EF, Enc, MT>
 where
     F: TwoAdicField,
     EF: ExtensionField<F>,
-    Enc: ZkEncoding<F>,
+    Enc: ZkEncoding<EF>,
     MT: Mmcs<F>,
 {
     /// Partial proof containing public opening evaluations and the initial ZK sumcheck transcript.
     pub proof: PcsProof<F, EF, MT>,
     /// Typed Construction 6.3 handoff consumed by the first code-switch round.
-    pub initial_handoff: ZkSumcheckHandoff<F, EF, Enc, MT>,
+    pub initial_handoff: ZkSumcheckHandoff<F, EF, Enc, ExtensionMmcs<F, EF, MT>>,
 }
 
 /// Prover-side source relation consumed by one code-switch round.
@@ -154,13 +154,13 @@ pub struct WhirZkPrefixRoundState<F, EF, Enc, MT>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
-    Enc: ZkEncoding<F>,
+    Enc: ZkEncoding<EF>,
     MT: Mmcs<F>,
 {
     /// Partial proof with `rounds[round_index].zk` populated.
     pub proof: PcsProof<F, EF, MT>,
     /// Typed nested ZK sumcheck handoff for the next round.
-    pub handoff: ZkSumcheckHandoff<F, EF, Enc, MT>,
+    pub handoff: ZkSumcheckHandoff<F, EF, Enc, ExtensionMmcs<F, EF, MT>>,
 }
 
 /// Row provider for the folded extension oracle committed by WHIR itself.
@@ -260,10 +260,10 @@ where
         rng: &mut R,
     ) -> WhirZkPrefixOpenState<F, EF, Enc, MT>
     where
-        Enc: ZkEncoding<F>,
-        Enc::Codeword: Matrix<F>,
+        Enc: ZkEncoding<EF>,
+        Enc::Codeword: Matrix<EF>,
         R: Rng,
-        StandardUniform: Distribution<F>,
+        StandardUniform: Distribution<EF>,
     {
         let zk_config = self
             .config
@@ -309,7 +309,8 @@ where
             .collect::<Vec<_>>();
 
         let mut zk_sumcheck = ZkSumcheckData::<F, EF>::default();
-        let zk_prover = ZkPrefixProver::new(prover_data.layout, encoding, self.mmcs.clone());
+        let zk_prover =
+            ZkPrefixProver::new(prover_data.layout, encoding, self.extension_mmcs.clone());
         let initial_handoff = zk_prover.into_sumcheck(
             &mut zk_sumcheck,
             self.starting_folding_pow_bits,
@@ -350,10 +351,10 @@ where
         rng: &mut R,
     ) -> WhirZkPrefixRoundState<F, EF, Enc, MT>
     where
-        Enc: ZkEncoding<F>,
-        Enc::Codeword: Matrix<F>,
+        Enc: ZkEncoding<EF>,
+        Enc::Codeword: Matrix<EF>,
         R: Rng,
-        StandardUniform: Distribution<F>,
+        StandardUniform: Distribution<EF>,
     {
         let round_index = 0;
         let handoff = state.initial_handoff;
@@ -390,17 +391,17 @@ where
     pub(crate) fn round0_zk_prefix_from_folded_source<Enc, R>(
         &self,
         mut proof: PcsProof<F, EF, MT>,
-        handoff: &ZkSumcheckHandoff<F, EF, Enc, MT>,
+        handoff: &ZkSumcheckHandoff<F, EF, Enc, ExtensionMmcs<F, EF, MT>>,
         source: &ZkCodeSwitchProverSource<EF>,
         mask_encoding: &Enc,
         challenger: &mut Challenger,
         rng: &mut R,
     ) -> WhirZkPrefixRoundState<F, EF, Enc, MT>
     where
-        Enc: ZkEncoding<F>,
-        Enc::Codeword: Matrix<F>,
+        Enc: ZkEncoding<EF>,
+        Enc::Codeword: Matrix<EF>,
         R: Rng,
-        StandardUniform: Distribution<F>,
+        StandardUniform: Distribution<EF>,
     {
         let round_index = 0;
         assert!(
@@ -491,22 +492,17 @@ where
         let pad_len = round_zk.mask_message_len - source.randomness_len;
         let mask_message = (0..round_zk.mask_message_len)
             .map(|_| rng.random())
-            .collect::<Vec<F>>();
+            .collect::<Vec<EF>>();
         let mask_codeword = mask_encoding.encode(&mask_message, rng);
-        let (mask_commitment, mask_prover_data) = self.mmcs.commit_matrix(mask_codeword);
+        let (mask_commitment, mask_prover_data) = self.extension_mmcs.commit_matrix(mask_codeword);
         challenger.observe(mask_commitment.clone());
 
         let rho_ood_points = (0..round_zk.ood_samples)
             .map(|_| challenger.sample_algebra_element())
             .collect::<Vec<EF>>();
         let source_message = source.message.clone();
-        let mask_message_ext = mask_message
-            .iter()
-            .copied()
-            .map(EF::from)
-            .collect::<Vec<_>>();
         let private_ood_answers =
-            private_ood_answers(&rho_ood_points, &source_message, &mask_message_ext);
+            private_ood_answers(&rho_ood_points, &source_message, &mask_message);
         challenger.observe_algebra_slice(&private_ood_answers);
 
         if round_params.pow_bits > 0 {
@@ -545,8 +541,8 @@ where
         );
         let mut mask_queries = Vec::with_capacity(mask_indices.len());
         for &position in &mask_indices {
-            let opening = self.mmcs.open_batch(position, &mask_prover_data);
-            mask_queries.push(QueryOpening::Base {
+            let opening = self.extension_mmcs.open_batch(position, &mask_prover_data);
+            mask_queries.push(QueryOpening::Extension {
                 values: opening.opened_values[0].clone(),
                 proof: opening.opening_proof,
             });
@@ -569,10 +565,7 @@ where
             .iter()
             .zip(&auxiliary_covectors)
             .map(|(message, covector)| {
-                dot_product::<EF, _, _>(
-                    message.iter().copied().map(EF::from),
-                    covector.iter().copied(),
-                )
+                dot_product::<EF, _, _>(message.iter().copied(), covector.iter().copied())
             })
             .sum::<EF>();
         let inherited_claim = handoff.residual_prover.claimed_sum() + auxiliary_claim;
@@ -605,9 +598,9 @@ where
 
         let mut relation_evals = source_message;
         for message in &handoff.mask_messages {
-            relation_evals.extend(message.iter().copied().map(EF::from));
+            relation_evals.extend(message.iter().copied());
         }
-        relation_evals.extend(mask_message_ext.iter().copied());
+        relation_evals.extend(mask_message.iter().copied());
         let mut relation_weights = output_relation.source_covector;
         for covector in output_relation.auxiliary_covectors {
             relation_weights.extend(covector);
@@ -638,7 +631,7 @@ where
         let next_handoff = relation_prover.into_zk_sumcheck(
             &mut zk_sumcheck,
             mask_encoding,
-            &self.mmcs,
+            &self.extension_mmcs,
             folding_factor_next,
             round_params.folding_pow_bits,
             challenger,
@@ -688,7 +681,7 @@ where
 
         challenger.observe(source.commitment.clone());
 
-        let mut initial_verifier = ZkVerifier::<F, EF>::new(&protocol.table_shapes());
+        let mut initial_verifier = ZkVerifier::<F, EF>::new_prefix(&protocol.table_shapes());
         for &eval in &proof.whir.initial_ood_answers {
             initial_verifier.add_virtual_eval(eval, challenger);
         }
@@ -719,7 +712,7 @@ where
             .initial_zk
             .as_ref()
             .ok_or(VerifierError::UnexpectedInitialZkPayloadInPlainProof)?;
-        let initial_handoff = initial_verifier.into_sumcheck::<MT, _>(
+        let initial_handoff = initial_verifier.into_sumcheck::<ExtensionMmcs<F, EF, MT>, _>(
             &initial_zk.zk_sumcheck,
             &initial_zk.zk_sumcheck_mask_commitments,
             first_round_zk.mask_message_len,
@@ -853,13 +846,13 @@ where
             width: 1,
         }];
         for (&position, query) in mask_indices.iter().zip(&round_zk_proof.mask_queries) {
-            let QueryOpening::Base { values, proof } = query else {
+            let QueryOpening::Extension { values, proof } = query else {
                 return Err(VerifierError::MerkleProofInvalid {
                     position,
-                    reason: "Expected base-field mask opening".into(),
+                    reason: "Expected extension-field mask opening".into(),
                 });
             };
-            self.mmcs
+            self.extension_mmcs
                 .verify_batch(
                     &round_zk_proof.mask_commitment,
                     &mask_dimensions,
@@ -939,7 +932,7 @@ where
             })?;
 
         let folding_factor_next = self.params.folding_factor.at_round(round_index + 1);
-        let handoff = ZkVerifier::<F, EF>::verify_claim::<MT, _>(
+        let handoff = ZkVerifier::<F, EF>::verify_claim::<ExtensionMmcs<F, EF, MT>, _>(
             &round_zk_proof.zk_sumcheck,
             &round_zk_proof.zk_sumcheck_mask_commitments,
             round_zk.mask_message_len,

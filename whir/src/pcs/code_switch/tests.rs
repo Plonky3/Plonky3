@@ -9,11 +9,14 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_baby_bear::BabyBear;
-use p3_commit::Mmcs;
-use p3_dft::Radix2Dit;
+use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+use p3_challenger::DuplexChallenger;
+use p3_commit::{ExtensionMmcs, Mmcs};
+use p3_dft::{Radix2DFTSmallBatch, Radix2Dit};
 use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing};
+use p3_merkle_tree::MerkleTreeMmcs;
+use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_zk_codes::{LinearZkEncoding, ReedSolomonZkEncoding, ZkEncoding, ZkEncodingWithRandomness};
 use proptest::prelude::*;
 use rand::rngs::SmallRng;
@@ -22,12 +25,37 @@ use rand::{RngExt, SeedableRng};
 use super::{
     CodeSwitchError, RoundZkConfig, ZkMaskClaim, private_ood_answers, simulated_verifier_view,
 };
-use crate::sumcheck::zk::test_helpers::{MyChallenger, MyMmcs, make_setup};
 use crate::sumcheck::zk::{ZkVerifier, simulate_classic_unpacked};
 use crate::utils::{eval_ze_star_n, padded_ood_t1};
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
+type Perm = Poseidon2BabyBear<16>;
+type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
+type PackedF = <F as Field>::Packing;
+type BaseMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
+type MyMmcs = ExtensionMmcs<F, EF, BaseMmcs>;
+type MyDft = Radix2DFTSmallBatch<EF>;
+type MyEnc = ReedSolomonZkEncoding<EF, MyDft>;
+
+fn make_setup(seed: u64, ell_zk: usize) -> (Perm, MyMmcs, MyEnc) {
+    let mut perm_rng = SmallRng::seed_from_u64(seed);
+    let perm = Perm::new_from_rng_128(&mut perm_rng);
+    let merkle_hash = MyHash::new(perm.clone());
+    let merkle_compress = MyCompress::new(perm.clone());
+    let base_mmcs = BaseMmcs::new(merkle_hash, merkle_compress, 0);
+    let mmcs = ExtensionMmcs::new(base_mmcs);
+    let encoding = MyEnc::new(
+        2,
+        ell_zk,
+        (ell_zk + 2).next_power_of_two(),
+        MyDft::default(),
+    );
+
+    (perm, mmcs, encoding)
+}
 
 fn ef(v: u64) -> EF {
     EF::from(F::from_u64(v))
@@ -691,7 +719,7 @@ fn test_zk_sumcheck_simulator_eps_handoff_to_code_switch_view() {
     let (perm, mmcs, sumcheck_encoding) = make_setup(91, ell_zk);
     let mut simulator_challenger = MyChallenger::new(perm.clone());
     let mut replay_challenger = MyChallenger::new(perm);
-    let simulator_verifier = ZkVerifier::<F, EF>::new(&[]);
+    let simulator_verifier = ZkVerifier::<F, EF>::new_prefix(&[]);
     let mut simulator_rng = SmallRng::seed_from_u64(92);
     let (zk_data, mask_commits, simulator_randomness) = simulate_classic_unpacked(
         &mut simulator_challenger,
@@ -702,7 +730,7 @@ fn test_zk_sumcheck_simulator_eps_handoff_to_code_switch_view() {
         &mmcs,
         &mut simulator_rng,
     );
-    let verifier_handoff = ZkVerifier::<F, EF>::new(&[])
+    let verifier_handoff = ZkVerifier::<F, EF>::new_prefix(&[])
         .into_sumcheck::<MyMmcs, _>(
             &zk_data,
             &mask_commits,
@@ -815,7 +843,7 @@ fn assert_programmable_simulator_components_for_zk_source_view(seed: u64) -> boo
     let (perm, mmcs, sumcheck_encoding) = make_setup(seed, ell_zk);
     let mut simulator_challenger = MyChallenger::new(perm.clone());
     let mut replay_challenger = MyChallenger::new(perm);
-    let simulator_verifier = ZkVerifier::<F, EF>::new(&[]);
+    let simulator_verifier = ZkVerifier::<F, EF>::new_prefix(&[]);
     let mut simulator_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
     let (zk_data, mask_commits, simulator_randomness) = simulate_classic_unpacked(
         &mut simulator_challenger,
@@ -826,7 +854,7 @@ fn assert_programmable_simulator_components_for_zk_source_view(seed: u64) -> boo
         &mmcs,
         &mut simulator_rng,
     );
-    let verifier_handoff = ZkVerifier::<F, EF>::new(&[])
+    let verifier_handoff = ZkVerifier::<F, EF>::new_prefix(&[])
         .into_sumcheck::<MyMmcs, _>(
             &zk_data,
             &mask_commits,
@@ -929,7 +957,7 @@ fn assert_programmable_simulator_components_for_zk_source_view(seed: u64) -> boo
     // RNG streams produce equal mask commitments. Source commitments, source
     // openings, and private OOD answers are witness-dependent; those are covered
     // by the programmability checks above instead of a fake byte-equality claim.
-    let round_mask_encoding = ReedSolomonZkEncoding::<F, Radix2Dit<F>>::new(
+    let round_mask_encoding = ReedSolomonZkEncoding::<EF, Radix2Dit<EF>>::new(
         source_randomness_len,
         mask_message.len(),
         8,
@@ -938,10 +966,10 @@ fn assert_programmable_simulator_components_for_zk_source_view(seed: u64) -> boo
     let mut real_mask_rng = SmallRng::seed_from_u64(seed.wrapping_add(4));
     let mut sim_mask_rng = SmallRng::seed_from_u64(seed.wrapping_add(4));
     let real_round_mask = (0..mask_message.len())
-        .map(|_| real_mask_rng.random::<F>())
+        .map(|_| real_mask_rng.random::<EF>())
         .collect::<Vec<_>>();
     let sim_round_mask = (0..mask_message.len())
-        .map(|_| sim_mask_rng.random::<F>())
+        .map(|_| sim_mask_rng.random::<EF>())
         .collect::<Vec<_>>();
     let real_mask_codeword = round_mask_encoding.encode(&real_round_mask, &mut real_mask_rng);
     let sim_mask_codeword = round_mask_encoding.encode(&sim_round_mask, &mut sim_mask_rng);

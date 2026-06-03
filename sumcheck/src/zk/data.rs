@@ -8,7 +8,7 @@ use p3_multilinear_util::point::Point;
 use p3_zk_codes::ZkEncoding;
 use serde::{Deserialize, Serialize};
 
-use crate::sumcheck::strategy::SumcheckProver;
+use crate::strategy::SumcheckProver;
 
 /// Per-round prover output of the HVZK sumcheck protocol.
 ///
@@ -99,8 +99,8 @@ pub struct ZkSumcheckHandoff<F, EF, Enc, M>
 where
     F: Field,
     EF: ExtensionField<F>,
-    Enc: ZkEncoding<F>,
-    M: Mmcs<F>,
+    Enc: ZkEncoding<EF>,
+    M: Mmcs<EF>,
 {
     /// Residual sumcheck prover whose claim is scaled by `eps`.
     pub residual_prover: SumcheckProver<F, EF>,
@@ -114,7 +114,7 @@ where
     /// carry the verifier-visible masked residual as auxiliary linear claims.
     pub mask_messages: Vec<Vec<EF>>,
     /// Encoded mask oracles, in round order.
-    pub mask_oracles: Vec<MaskOracle<F, Enc, M>>,
+    pub mask_oracles: Vec<MaskOracle<EF, Enc, M>>,
 }
 
 /// Typed verifier handoff produced by replaying an HVZK sumcheck transcript.
@@ -263,24 +263,9 @@ mod tests {
     #[test]
     fn mask_residual_closed_form_matches_round_recurrence() {
         let masks = vec![
-            vec![
-                ef(3),
-                ef(5),
-                ef(7),
-                ef(11),
-            ],
-            vec![
-                ef(13),
-                ef(17),
-                ef(19),
-                ef(23),
-            ],
-            vec![
-                ef(29),
-                ef(31),
-                ef(37),
-                ef(41),
-            ],
+            vec![ef(3), ef(5), ef(7), ef(11)],
+            vec![ef(13), ef(17), ef(19), ef(23)],
+            vec![ef(29), ef(31), ef(37), ef(41)],
         ];
         let gammas = vec![ef(43), ef(47), ef(53)];
 
@@ -292,20 +277,14 @@ mod tests {
 
     #[test]
     fn mask_residual_covectors_evaluate_closed_form() {
-        let masks = vec![
-            vec![ef(2), ef(3), ef(5)],
-            vec![ef(7), ef(11), ef(13)],
-        ];
+        let masks = vec![vec![ef(2), ef(3), ef(5)], vec![ef(7), ef(11), ef(13)]];
         let gammas = vec![ef(17), ef(19)];
         let covectors = mask_residual_covectors::<EF>(&masks, &gammas);
         let by_covectors = masks
             .iter()
             .zip(&covectors)
             .map(|(mask, covector)| {
-                dot_product::<EF, _, _>(
-                    mask.iter().copied(),
-                    covector.iter().copied(),
-                )
+                dot_product::<EF, _, _>(mask.iter().copied(), covector.iter().copied())
             })
             .sum::<EF>();
 

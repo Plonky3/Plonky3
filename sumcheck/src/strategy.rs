@@ -19,11 +19,10 @@ use p3_zk_codes::ZkEncoding;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
-use crate::SumcheckData;
 use crate::constraints::Constraint;
-use crate::extrapolate_01inf;
 use crate::product_polynomial::ProductPolynomial;
 use crate::zk::{ZkSumcheckData, ZkSumcheckHandoff};
+use crate::{SumcheckData, extrapolate_01inf};
 
 /// Input size at which the round-coefficient routines switch from serial to parallel execution.
 ///

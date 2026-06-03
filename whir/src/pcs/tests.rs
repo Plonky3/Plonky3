@@ -726,6 +726,7 @@ mod zk_prefix_api_tests {
     use alloc::vec::Vec;
 
     use p3_commit::MultilinearPcs;
+    use p3_dft::Radix2DFTSmallBatch;
     use p3_field::{Field, PrimeCharacteristicRing};
     use p3_multilinear_util::poly::Poly;
     use p3_zk_codes::ReedSolomonZkEncoding;
@@ -746,6 +747,7 @@ mod zk_prefix_api_tests {
     use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
 
     type L = PrefixProver<F, EF>;
+    type MyZkDft = Radix2DFTSmallBatch<EF>;
 
     const NUM_VARIABLES: usize = 16;
     const FOLDING: usize = 4;
@@ -771,7 +773,7 @@ mod zk_prefix_api_tests {
             required_query_bound,
             mask_message_len,
             expected_mask_domain,
-            MyDft::default(),
+            MyZkDft::default(),
         );
         let mut zk_rng = SmallRng::seed_from_u64(7);
         let state = pcs.begin_zk_prefix_open(
@@ -816,7 +818,7 @@ mod zk_prefix_api_tests {
             required_query_bound,
             mask_message_len,
             expected_mask_domain,
-            MyDft::default(),
+            MyZkDft::default(),
         );
         let mut zk_rng = SmallRng::seed_from_u64(7);
         let state = pcs.begin_zk_prefix_open(
@@ -838,7 +840,7 @@ mod zk_prefix_api_tests {
         let (pivot, &pivot_value) = source_message
             .iter()
             .enumerate()
-            .find(|(_, value)| !value.is_zero())
+            .find(|(_, value): &(_, &EF)| !value.is_zero())
             .expect("test source message should contain a nonzero entry");
         let mut source_covector = EF::zero_vec(source_message.len());
         source_covector[pivot] = source_claim / pivot_value;
@@ -852,7 +854,7 @@ mod zk_prefix_api_tests {
             round_zk.mask_query_budget,
             round_zk.mask_message_len,
             round_zk.mask_domain_size,
-            MyDft::default(),
+            MyZkDft::default(),
         );
 
         let round_state = pcs.round0_zk_prefix(
@@ -969,7 +971,7 @@ mod zk_prefix_api_tests {
             required_query_bound,
             mask_message_len,
             expected_mask_domain,
-            MyDft::default(),
+            MyZkDft::default(),
         );
         let mut zk_rng = SmallRng::seed_from_u64(7);
         let state = pcs.begin_zk_prefix_open(
@@ -991,7 +993,7 @@ mod zk_prefix_api_tests {
         let (pivot, &pivot_value) = source_message
             .iter()
             .enumerate()
-            .find(|(_, value)| !value.is_zero())
+            .find(|(_, value): &(_, &EF)| !value.is_zero())
             .expect("test source message should contain a nonzero entry");
         let mut source_covector = EF::zero_vec(source_message.len());
         source_covector[pivot] = source_claim / pivot_value;
@@ -1014,7 +1016,7 @@ mod zk_prefix_api_tests {
             round_zk.mask_query_budget,
             round_zk.mask_message_len,
             round_zk.mask_domain_size,
-            MyDft::default(),
+            MyZkDft::default(),
         );
 
         let _ = pcs.round0_zk_prefix_from_folded_source(
@@ -1053,7 +1055,7 @@ mod zk_prefix_api_tests {
             required_query_bound,
             mask_message_len,
             too_small_domain,
-            MyDft::default(),
+            MyZkDft::default(),
         );
         let mut zk_rng = SmallRng::seed_from_u64(7);
         let _ = pcs.begin_zk_prefix_open(
@@ -1089,11 +1091,15 @@ mod zk_prefix_api_tests {
         let merkle_compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
 
+        let folding_factor = FoldingFactor::Constant(FOLDING);
         let params = ProtocolParameters {
             security_level: 32,
             pow_bits: 0,
-            rs_domain_initial_reduction_factor: 1,
-            folding_factor: FoldingFactor::Constant(FOLDING),
+            round_log_inv_rates: super::default_round_log_inv_rates(
+                witness.num_variables(),
+                &folding_factor,
+            ),
+            folding_factor,
             soundness_type: SecurityAssumption::CapacityBound,
             starting_log_inv_rate: 1,
         };
@@ -1172,6 +1178,7 @@ mod zk_prefix_acceptance_tests {
     type MyMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
 
     type MyDft = Radix2DFTSmallBatch<F>;
+    type MyZkDft = Radix2DFTSmallBatch<EF>;
     type TestWhirPcs = WhirProver<EF, F, MyDft, MyMmcs, MyChallenger, PrefixProver<F, EF>>;
 
     // Issue #1587 gives n = 4 as an example, but that parameter set has no
@@ -1218,11 +1225,15 @@ mod zk_prefix_acceptance_tests {
         let merkle_compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
 
+        let folding_factor = FoldingFactor::Constant(folding);
         let params = ProtocolParameters {
             security_level: 20,
             pow_bits: 0,
-            rs_domain_initial_reduction_factor: 1,
-            folding_factor: FoldingFactor::Constant(folding),
+            round_log_inv_rates: super::default_round_log_inv_rates(
+                witness.num_variables(),
+                &folding_factor,
+            ),
+            folding_factor,
             soundness_type: SecurityAssumption::CapacityBound,
             starting_log_inv_rate: 1,
         };
@@ -1252,7 +1263,7 @@ mod zk_prefix_acceptance_tests {
             round_zk.mask_query_budget,
             round_zk.mask_message_len,
             round_zk.mask_domain_size,
-            MyDft::default(),
+            MyZkDft::default(),
         );
         let mut zk_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
         let state = pcs.begin_zk_prefix_open(
@@ -1288,7 +1299,7 @@ mod zk_prefix_acceptance_tests {
             round_zk.mask_query_budget,
             round_zk.mask_message_len,
             round_zk.mask_domain_size,
-            MyDft::default(),
+            MyZkDft::default(),
         );
         let round_state = pcs.round0_zk_prefix(
             state,
