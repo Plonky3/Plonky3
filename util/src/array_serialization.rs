@@ -37,7 +37,7 @@ where
         for _ in 0..N {
             match seq.next_element()? {
                 Some(val) => data.push(val),
-                None => return Err(serde::de::Error::invalid_length(N, &self)),
+                None => return Err(serde::de::Error::invalid_length(data.len(), &self)),
             }
         }
         data.try_into().map_or_else(|_| unreachable!(), Ok)
@@ -53,6 +53,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::string::ToString;
     use serde::{Deserialize, Serialize};
     use serde_json;
 
@@ -97,5 +98,15 @@ mod tests {
 
         let parsed: Wrapper<0> = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, data);
+    }
+
+    #[test]
+    fn test_deserialize_wrong_length_error_message() {
+        let json = r#"{"arr":[1,2]}"#;
+        let err = serde_json::from_str::<Wrapper<3>>(json).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid length 2"),
+            "unexpected error: {err}"
+        );
     }
 }
