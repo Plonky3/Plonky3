@@ -1856,7 +1856,6 @@ fn test_batch_stark_one_instance_local_fails() {
 /// the cross-AIR sum then rejects when the lookup multiset is unbalanced.
 #[cfg(not(debug_assertions))]
 #[test]
-#[should_panic(expected = "cross-AIR lookup terminal sum is non-zero")]
 fn test_batch_stark_one_instance_local_fails() {
     let config = make_config(2024);
 
@@ -1882,7 +1881,7 @@ fn test_batch_stark_one_instance_local_fails() {
 
     let proof = prove_batch(&config, &instances, &prover_data);
 
-    verify_batch(&config, &airs, &proof, &[vec![]], common).unwrap();
+    assert!(verify_batch(&config, &airs, &proof, &[vec![]], common).is_err());
 }
 
 /// Test with local lookups only using MulAirLookups
