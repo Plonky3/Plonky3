@@ -54,6 +54,11 @@ where
     pub(crate) config: &'a WhirConfig<EF, F, Challenger>,
     /// Base-field Merkle commitment scheme used to authenticate STIR queries.
     pub(crate) mmcs: &'a MT,
+    /// Extension-field view over the base Merkle scheme.
+    ///
+    /// - Authenticates query openings whose values live in the extension field.
+    /// - Built once at construction, not rebuilt on each per-round opening check.
+    pub(crate) extension_mmcs: ExtensionMmcs<F, EF, &'a MT>,
     /// Binding direction used to interpret folding randomness.
     pub(crate) variable_order: VariableOrder,
 }
@@ -80,6 +85,7 @@ where
         Self {
             config,
             mmcs,
+            extension_mmcs: ExtensionMmcs::new(mmcs),
             variable_order,
         }
     }
@@ -352,8 +358,6 @@ where
         dimensions: &[Dimensions],
         round_index: usize,
     ) -> Result<Vec<Vec<EF>>, VerifierError> {
-        let extension_mmcs = ExtensionMmcs::new(self.mmcs);
-
         let queries = if round_index == self.n_rounds() {
             &proof.final_queries
         } else {
@@ -398,7 +402,7 @@ where
                     values.iter().map(|&f| f.into()).collect()
                 }
                 QueryOpening::Extension { values, proof } => {
-                    extension_mmcs
+                    self.extension_mmcs
                         .verify_batch(
                             root,
                             dimensions,
