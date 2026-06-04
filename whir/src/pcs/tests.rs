@@ -294,7 +294,7 @@ mod error_variant_tests {
     use crate::pcs::proof::PcsProof;
     use crate::pcs::verifier::errors::VerifierError;
     use crate::sumcheck::layout::{Layout, SuffixProver, Table};
-    use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
+    use crate::sumcheck::{OpeningProtocol, SumcheckError, TableShape, TableSpec};
 
     /// Suffix-mode prover used for every shape-mismatch scenario.
     type L = SuffixProver<F, EF>;
@@ -657,6 +657,73 @@ mod error_variant_tests {
                 assert_eq!(a, expected - 1);
             }
             other => panic!("expected StirQueryCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_with_initial_ood_answer_count_mismatch_when_answer_is_dropped() {
+        // Invariant: the proof must carry exactly the committed number of initial OOD answers.
+        // Each answer drives a transcript draw, so a wrong count desyncs Fiat-Shamir.
+        //
+        // Fixture state: N initial OOD answers.
+        //
+        // Mutation: drop one answer.
+        //
+        //     proof.whir.initial_ood_answers:  N  ->  N - 1
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        let expected = proof.whir.initial_ood_answers.len();
+        assert!(
+            expected > 0,
+            "fixture should produce at least one initial OOD answer"
+        );
+        proof.whir.initial_ood_answers.pop();
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::InitialOodAnswerCountMismatch {
+                expected: e,
+                actual: a,
+            } => {
+                assert_eq!(e, expected);
+                assert_eq!(a, expected - 1);
+            }
+            other => panic!("expected InitialOodAnswerCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_with_round_count_mismatch_when_intermediate_sumcheck_is_short() {
+        // Invariant: an intermediate round's sumcheck sends one polynomial per folded variable.
+        // That count is the next round's folding factor.
+        // A wrong count desyncs Fiat-Shamir.
+        //
+        // Fixture state: round 0 sumcheck has FOLDING = 4 polynomial evaluations.
+        //
+        // Mutation: drop the trailing evaluation.
+        //
+        //     proof.whir.rounds[0].sumcheck.polynomial_evaluations:  4  ->  3
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        assert!(
+            !proof.whir.rounds.is_empty(),
+            "fixture should produce at least one WHIR round"
+        );
+        let expected = proof.whir.rounds[0].sumcheck.polynomial_evaluations().len();
+        assert!(
+            expected > 0,
+            "fixture round-0 sumcheck should send at least one polynomial"
+        );
+        proof.whir.rounds[0].sumcheck.polynomial_evaluations.pop();
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::Sumcheck(SumcheckError::RoundCountMismatch {
+                expected: e,
+                actual: a,
+            }) => {
+                assert_eq!(e, expected);
+                assert_eq!(a, expected - 1);
+            }
+            other => panic!("expected Sumcheck(RoundCountMismatch), got {other:?}"),
         }
     }
 }
