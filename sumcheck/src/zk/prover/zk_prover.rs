@@ -19,7 +19,7 @@ use crate::lagrange::lagrange_weights_01inf_multi;
 use crate::layout::{PrefixProver, SuffixProver};
 use crate::strategy::SumcheckProver;
 use crate::svo::calculate_accumulators_batch;
-use crate::zk::data::{MaskOracle, ZkSumcheckData};
+use crate::zk::data::{ZkSumcheckData, ZkSumcheckHandoff};
 
 /// Honest-verifier zero-knowledge sumcheck prover.
 ///
@@ -143,14 +143,15 @@ where
     ///
     /// - Residual sumcheck prover over the mode-specific product polynomial, scaled by `eps`.
     /// - Vector of per-round challenges `gamma_1, ..., gamma_k`.
-    /// - One mask oracle per round, in round order.
+    /// - Combining challenge `eps`, made explicit for code-switch composition.
+    /// - Plain mask messages and one mask oracle per round, in round order.
     ///
     /// # Panics
     ///
     /// - Base field characteristic is `2` (violates Lemma 6.4).
     /// - Mask code message length is below `3` (mask must cover the degree-2 plain piece).
     /// - Folding factor is `0` or exceeds the polynomial's arity.
-    #[allow(clippy::too_many_lines, clippy::type_complexity)]
+    #[allow(clippy::too_many_lines)]
     #[tracing::instrument(skip_all)]
     pub fn into_sumcheck<R, Ch>(
         self,
@@ -158,11 +159,7 @@ where
         pow_bits: usize,
         challenger: &mut Ch,
         rng: &mut R,
-    ) -> (
-        SumcheckProver<F, EF>,
-        Point<EF>,
-        Vec<MaskOracle<EF, Enc, M>>,
-    )
+    ) -> ZkSumcheckHandoff<F, EF, Enc, M>
     where
         EF: TwoAdicField,
         Enc::Codeword: Matrix<EF>,
@@ -353,11 +350,13 @@ where
             "residual product polynomial dot product must equal eps * plain_residual_sum",
         );
 
-        (
-            SumcheckProver::new(prod_poly, residual_sum),
-            rs,
+        ZkSumcheckHandoff {
+            residual_prover: SumcheckProver::new(prod_poly, residual_sum),
+            randomness: rs,
+            eps,
+            mask_messages: masks,
             mask_oracles,
-        )
+        }
     }
 }
 
