@@ -184,7 +184,8 @@ fn main() {
     assert_eq!(witness.table_shapes(), protocol.table_shapes());
 
     // Derive the full round-by-round configuration from the committed witness.
-    let config = WhirConfig::<EF, F, MyChallenger>::new(witness.num_variables(), whir_params);
+    let config =
+        WhirConfig::<EF, F, MyChallenger>::new(witness.num_variables(), whir_params).unwrap();
     if !config.check_pow_bits() {
         warn!("more PoW bits required than what was specified");
     }

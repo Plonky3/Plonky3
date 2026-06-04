@@ -103,7 +103,7 @@ fn run_whir_pcs_lifecycle_with_witness<L: Layout<F, EF>>(
 
     // Instantiate the PCS through the trait.
     let dft = MyDft::default();
-    let config = WhirConfig::new(num_variables, params);
+    let config = WhirConfig::new(num_variables, params).unwrap();
     let pcs = TestWhirPcs::<L>::new(config, dft, mmcs);
 
     // Prover
@@ -348,7 +348,7 @@ mod error_variant_tests {
             starting_log_inv_rate: 1,
         };
         let pcs = TestWhirPcs::<L>::new(
-            WhirConfig::new(witness.num_variables(), params),
+            WhirConfig::new(witness.num_variables(), params).unwrap(),
             MyDft::default(),
             mmcs,
         );
@@ -736,7 +736,7 @@ mod keccak_tests {
             starting_log_inv_rate: 1,
         };
         let pcs = TestWhirPcs::<L>::new(
-            WhirConfig::new(witness.num_variables(), params),
+            WhirConfig::new(witness.num_variables(), params).unwrap(),
             MyDft::default(),
             mmcs,
         );

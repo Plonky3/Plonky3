@@ -47,6 +47,13 @@ where
     InitialReducedOpeningHeightMismatch { expected: usize, got: usize },
     #[error("global max height mismatch: expected {expected}, got {got}")]
     GlobalMaxHeightMismatch { expected: usize, got: usize },
+    #[error(
+        "global max height 2^{log_global_max_height} exceeds field two-adicity 2^{two_adicity}"
+    )]
+    GlobalMaxHeightTooLarge {
+        log_global_max_height: usize,
+        two_adicity: usize,
+    },
     #[error("round {round}: sibling values length mismatch: expected {expected}, got {got}")]
     SiblingValuesLengthMismatch {
         round: usize,
@@ -221,6 +228,18 @@ where
     // Each round reduces the domain size by its log_arity.
     let total_log_reduction: usize = log_arities.iter().sum();
     let log_global_max_height = total_log_reduction + params.log_blowup + params.log_final_poly_len;
+
+    // Bound the global height by the field two-adicity before using it.
+    // The query phase evaluates the final polynomial at a 2^log_global_max_height-th
+    // root of unity, which does not exist past the two-adicity and would panic.
+    // When the input has no commitments the cross-check below is skipped, so for a
+    // malicious proof this is the only guard standing between us and that panic.
+    if log_global_max_height > Val::TWO_ADICITY {
+        return Err(FriError::GlobalMaxHeightTooLarge {
+            log_global_max_height,
+            two_adicity: Val::TWO_ADICITY,
+        });
+    }
 
     // Cross-check: the global log-height has two independent derivations which must agree.
     // Ref: Ben-Sasson et al., "Fast RS IOPP", ICALP 2018, §2.1.1.
@@ -709,7 +728,7 @@ mod tests {
     use p3_commit::{BatchOpening, ExtensionMmcs, Mmcs, Pcs};
     use p3_dft::Radix2Dit;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::{Field, HornerIter, PrimeCharacteristicRing};
+    use p3_field::{Field, HornerIter, PrimeCharacteristicRing, TwoAdicField};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -1354,6 +1373,55 @@ mod tests {
                 assert_eq!(expected, h_in);
                 assert_eq!(got, h_fold);
                 assert!(got > expected, "test must actually overshoot");
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn global_max_height_exceeds_two_adicity() {
+        // Invariant: the global height cannot exceed the field two-adicity.
+        // The final-poly point is a 2^height-th root of unity, absent past that.
+        //
+        // With no input commitments the cross-check is skipped.
+        // A malicious proof could then inflate the fold schedule without bound.
+        // The dedicated guard must reject it instead of panicking in the generator.
+        //
+        // Fixture state: 3 rounds of arity 1.
+        //
+        // Mutation: clone rounds until the schedule passes the two-adicity, then
+        // verify against an empty commitment set so only the guard stands.
+        let f = make_test_fixture();
+        let mut proof = f.proof.clone();
+
+        // Grow past the two-adicity: arity 1 per round, so rounds == sum(log_arities).
+        //     sum(log_arities) + log_blowup > TWO_ADICITY
+        let target_rounds = Val::TWO_ADICITY + 1;
+        let commit = proof.commit_phase_commits[0].clone();
+        let first_openings: Vec<_> = proof
+            .query_proofs
+            .iter()
+            .map(|qp| qp.commit_phase_openings[0].clone())
+            .collect();
+        while proof.commit_phase_commits.len() < target_rounds {
+            proof.commit_phase_commits.push(commit.clone());
+            for (qp, opening) in proof.query_proofs.iter_mut().zip(first_openings.iter()) {
+                qp.commit_phase_openings.push(opening.clone());
+            }
+        }
+
+        let mut challenger = f.challenger.clone();
+        // Empty commitments: the cross-check is skipped, leaving only the guard.
+        let err = run_verify_fri(&f.fri_params, &proof, &mut challenger, &[], &f.input_mmcs)
+            .expect_err("height above two-adicity must be rejected");
+
+        match err {
+            FriError::GlobalMaxHeightTooLarge {
+                log_global_max_height,
+                two_adicity,
+            } => {
+                assert_eq!(two_adicity, Val::TWO_ADICITY);
+                assert!(log_global_max_height > two_adicity);
             }
             other => panic!("wrong error variant: {other:?}"),
         }
