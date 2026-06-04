@@ -4,7 +4,6 @@ use p3_commit::Mmcs;
 use p3_multilinear_util::poly::Poly;
 use serde::{Deserialize, Serialize};
 
-use crate::parameters::ProtocolParameters;
 pub use crate::sumcheck::SumcheckData;
 
 /// Complete WHIR proof.
@@ -131,24 +130,16 @@ pub enum QueryOpening<F, EF, Proof> {
 }
 
 impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> WhirProof<F, EF, MT> {
-    /// Allocate a proof structure sized for the given protocol parameters.
-    pub fn from_protocol_parameters(params: &ProtocolParameters, num_variables: usize) -> Self {
-        let (num_rounds, _final_sumcheck_rounds) = params
-            .folding_factor
-            .compute_number_of_rounds(num_variables);
-
-        let protocol_security_level = params.security_level.saturating_sub(params.pow_bits);
-
-        let num_queries = params
-            .soundness_type
-            .queries(protocol_security_level, params.starting_log_inv_rate);
-
+    /// Allocate an empty proof sized for the given intermediate-round and final-query counts.
+    pub fn empty(num_rounds: usize, num_queries: usize) -> Self {
         Self {
             initial_ood_answers: Vec::new(),
             initial_sumcheck: SumcheckData::default(),
+            // One default round-proof slot per intermediate WHIR round.
             rounds: (0..num_rounds).map(|_| WhirRoundProof::default()).collect(),
             final_poly: None,
             final_pow_witness: F::default(),
+            // Reserve space for the final-round STIR query openings.
             final_queries: Vec::with_capacity(num_queries),
             final_sumcheck: None,
         }

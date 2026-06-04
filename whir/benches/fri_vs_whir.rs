@@ -248,7 +248,9 @@ type WhirCommitTy<MT> = <MT as Mmcs<F>>::Commitment;
 /// - Each round adds the count of variables it folds away, minus one.
 fn default_round_log_inv_rates(num_variables: usize, folding_factor: &FoldingFactor) -> Vec<usize> {
     // One entry per intermediate round; the trailing direct-send round has no entry.
-    let (num_rounds, _) = folding_factor.compute_number_of_rounds(num_variables);
+    let (num_rounds, _) = folding_factor
+        .compute_number_of_rounds(num_variables)
+        .expect("valid folding schedule");
     let mut rates = Vec::with_capacity(num_rounds);
     // Start at the base rate of the first committed codeword.
     let mut rate = 1;

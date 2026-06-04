@@ -138,7 +138,9 @@ fn main() {
     let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
 
     let round_log_inv_rates = if args.round_log_inv_rates.is_empty() {
-        let (num_rounds, _) = folding_factor.compute_number_of_rounds(num_variables);
+        let (num_rounds, _) = folding_factor
+            .compute_number_of_rounds(num_variables)
+            .expect("valid folding schedule");
         let mut rates = Vec::with_capacity(num_rounds);
         let mut rate = starting_rate;
         for round in 0..num_rounds {
