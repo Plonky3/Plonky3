@@ -252,31 +252,47 @@ where
         match &round_state.round_data {
             RoundData::Base(data) => {
                 for &challenge in &stir_challenges_indexes {
-                    let commitment = self.mmcs.open_batch(challenge, data);
-                    let answer = commitment.opened_values[0].clone();
+                    let opening = self.mmcs.open_batch(challenge, data);
+                    // WHIR commits a single matrix per round, so take its one opened row.
+                    let answer = opening
+                        .opened_values
+                        .into_iter()
+                        .next()
+                        .expect("a committed batch opens at least one matrix");
 
-                    let eval = Poly::new(answer.clone()).eval_base(&query_randomness);
+                    // Evaluate the fold by borrowing the row.
+                    // Then hand the same allocation to the proof, with no per-query leaf copy.
+                    let poly = Poly::new(answer);
+                    let eval = poly.eval_base(&query_randomness);
                     let var = round_params.folded_domain_gen.exp_u64(challenge as u64);
                     stir_statement.add_constraint(var, eval);
 
                     queries.push(QueryOpening::Base {
-                        values: answer,
-                        proof: commitment.opening_proof,
+                        values: poly.into_evals(),
+                        proof: opening.opening_proof,
                     });
                 }
             }
             RoundData::Ext(data) => {
                 for &challenge in &stir_challenges_indexes {
-                    let commitment = self.extension_mmcs.open_batch(challenge, data);
-                    let answer = commitment.opened_values[0].clone();
+                    let opening = self.extension_mmcs.open_batch(challenge, data);
+                    // WHIR commits a single matrix per round, so take its one opened row.
+                    let answer = opening
+                        .opened_values
+                        .into_iter()
+                        .next()
+                        .expect("a committed batch opens at least one matrix");
 
-                    let eval = Poly::new(answer.clone()).eval_ext::<F>(&query_randomness);
+                    // Evaluate the fold by borrowing the row.
+                    // Then hand the same allocation to the proof, with no per-query leaf copy.
+                    let poly = Poly::new(answer);
+                    let eval = poly.eval_ext::<F>(&query_randomness);
                     let var = round_params.folded_domain_gen.exp_u64(challenge as u64);
                     stir_statement.add_constraint(var, eval);
 
                     queries.push(QueryOpening::Extension {
-                        values: answer,
-                        proof: commitment.opening_proof,
+                        values: poly.into_evals(),
+                        proof: opening.opening_proof,
                     });
                 }
             }
