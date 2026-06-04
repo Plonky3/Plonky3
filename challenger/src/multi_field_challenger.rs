@@ -91,6 +91,13 @@ where
         if RATE >= WIDTH {
             return Err(String::from("RATE must be less than WIDTH"));
         }
+        // A full flush stamps up to limbs-per-slot * RATE scalars into a byte-sized length tag.
+        // Past 255, lengths differing by 256 would share a tag and collide in the transcript.
+        if max_absorb_injective_limbs::<F, PF>() * RATE > u8::MAX as usize {
+            return Err(String::from(
+                "absorb length tag must fit in a u8: max_absorb_injective_limbs * RATE must be at most 255",
+            ));
+        }
 
         Ok(Self {
             inner: DuplexChallenger::new(permutation),
@@ -112,7 +119,9 @@ where
             .chunks(absorb_n)
             .map(|chunk| reduce_packed(chunk, rb))
             .collect();
-        self.inner.absorb_rate_padded_with_tag(&packed, n_in as u8);
+        // Invariant: the constructor bounds a full flush at 255 scalars, so this never truncates.
+        let tag = u8::try_from(n_in).expect("absorb length tag must fit in a u8");
+        self.inner.absorb_rate_padded_with_tag(&packed, tag);
         self.f_buffer.clear();
         self.f_squeeze_buffer.clear();
     }
@@ -186,8 +195,9 @@ where
         let words: &[PF; N] = values.as_ref();
 
         for chunk in words.chunks(RATE) {
-            self.inner
-                .absorb_rate_padded_with_tag(chunk, chunk.len() as u8);
+            // Invariant: each block holds at most RATE words, bounded at 255 by the constructor.
+            let tag = u8::try_from(chunk.len()).expect("absorb length tag must fit in a u8");
+            self.inner.absorb_rate_padded_with_tag(chunk, tag);
             self.f_squeeze_buffer.clear();
         }
     }
@@ -352,6 +362,41 @@ mod tests {
     }
 
     impl CryptographicPermutation<[PF; WIDTH]> for MixingPermutation {}
+
+    /// A no-op permutation generic over the state width.
+    /// Lets tests instantiate challengers at widths the fixed-width permutations cannot reach.
+    #[derive(Clone)]
+    struct WideIdentityPermutation;
+
+    impl<const W: usize> Permutation<[PF; W]> for WideIdentityPermutation {
+        fn permute_mut(&self, _input: &mut [PF; W]) {}
+    }
+
+    impl<const W: usize> CryptographicPermutation<[PF; W]> for WideIdentityPermutation {}
+
+    #[test]
+    fn test_new_rejects_length_tag_overflow() {
+        // The capacity length tag is a single byte stamped per padded absorb.
+        // A full flush absorbs up to limbs-per-slot * RATE scalars at once.
+        //
+        // Fixture state: BabyBear packs 2 limbs per Goldilocks rate slot.
+        assert_eq!(max_absorb_injective_limbs::<F, PF>(), 2);
+
+        // Mutation: push RATE past the byte boundary.
+        //
+        //     RATE = 128 → 2 * 128 = 256 > 255 → reject
+        //     RATE = 127 → 2 * 127 = 254 ≤ 255 → accept
+        let too_wide = MultiField32Challenger::<F, PF, _, 129, 128>::new(WideIdentityPermutation);
+        assert_eq!(
+            too_wide.err().as_deref(),
+            Some(
+                "absorb length tag must fit in a u8: max_absorb_injective_limbs * RATE must be at most 255"
+            )
+        );
+
+        let in_range = MultiField32Challenger::<F, PF, _, 128, 127>::new(WideIdentityPermutation);
+        assert!(in_range.is_ok());
+    }
 
     #[test]
     fn test_packing() {
