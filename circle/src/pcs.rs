@@ -450,8 +450,14 @@ where
                         .collect_vec();
                     let batch_dims: Vec<Dimensions> = batch_heights
                         .iter()
-                        // todo: mmcs doesn't really need width
-                        .map(|&height| Dimensions { width: 0, height })
+                        .zip(mats)
+                        .map(|(&height, (_, points_and_values))| Dimensions {
+                            // Each matrix width is known from its claimed evaluations.
+                            width: points_and_values
+                                .first()
+                                .map_or(0, |(_, values)| values.len()),
+                            height,
+                        })
                         .collect_vec();
 
                     let (dims, idx) = batch_heights
@@ -546,7 +552,8 @@ where
                     );
 
                     let fl_dims = Dimensions {
-                        width: 0,
+                        // First-layer leaves hold the queried value and its sibling.
+                        width: 2,
                         height: 1 << (log_height - 1),
                     };
 

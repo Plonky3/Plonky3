@@ -169,9 +169,19 @@ where
             .map(|(opened, salt)| opened.iter().chain(salt.iter()).copied().collect_vec())
             .collect_vec();
 
+        // The inner tree commits to rows widened by the salt columns,
+        // so the widths must be widened the same way.
+        let salted_dimensions = dimensions
+            .iter()
+            .map(|dims| Dimensions {
+                width: dims.width + SALT_ELEMS,
+                height: dims.height,
+            })
+            .collect_vec();
+
         self.inner.verify_batch(
             commit,
-            dimensions,
+            &salted_dimensions,
             index,
             BatchOpeningRef::new(&opened_salted_values, siblings),
         )

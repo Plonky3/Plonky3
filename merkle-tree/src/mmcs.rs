@@ -35,7 +35,7 @@ use thiserror::Error;
 
 use crate::MerkleTreeError::{
     CapMismatch, EmptyBatch, IncompatibleHeights, IndexOutOfBounds, MalformedPrunedProof,
-    WrongBatchSize, WrongHeight,
+    WrongBatchSize, WrongHeight, WrongWidth,
 };
 use crate::merkle_tree::{padded_len, select_arity_step};
 use crate::pruning::{MerkleAuthPath, prune_paths, restore_paths};
@@ -81,6 +81,17 @@ pub enum MerkleTreeError {
     #[error("wrong batch size: number of openings does not match expected")]
     WrongBatchSize,
 
+    /// An opened row's length does not match the width of its matrix.
+    #[error("wrong width: matrix {matrix} expected {expected} values, got {got}")]
+    WrongWidth {
+        /// Index of the offending matrix in the batch.
+        matrix: usize,
+        /// Width of the matrix according to the caller-supplied dimensions.
+        expected: usize,
+        /// Length of the opened row provided in the proof.
+        got: usize,
+    },
+
     /// The number of proof nodes does not match the expected tree height.
     #[error("wrong height: expected {expected_proof_len} siblings, got {num_siblings}")]
     WrongHeight {
@@ -115,6 +126,26 @@ pub enum MerkleTreeError {
     /// A pruned batch opening could not be restored (malformed proof).
     #[error("malformed pruned proof: cannot restore full authentication paths")]
     MalformedPrunedProof,
+}
+
+/// Check that each opened row has exactly the width of its matrix.
+///
+/// The leaf hash flattens all rows at one height into a single element stream,
+/// so a digest match alone does not pin where one row ends and the next begins.
+fn check_widths<T>(
+    dimensions: &[Dimensions],
+    opened_values: &[Vec<T>],
+) -> Result<(), MerkleTreeError> {
+    for (matrix, (dims, row)) in dimensions.iter().zip(opened_values).enumerate() {
+        if row.len() != dims.width {
+            return Err(WrongWidth {
+                matrix,
+                expected: dims.width,
+                got: row.len(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// The arity schedule and query positions for a given Merkle path.
@@ -665,6 +696,8 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             if pruned_opening.opened_values[rep].len() != dimensions.len() {
                 return Err(WrongBatchSize);
             }
+            // Row boundaries within a flattened leaf hash are only pinned by the widths.
+            check_widths(dimensions, &pruned_opening.opened_values[rep])?;
         }
         for window in sorted_paths.windows(2) {
             if window[0].leaf_index >= window[1].leaf_index {
@@ -1048,6 +1081,10 @@ where
         if dimensions.len() != opened_values.len() {
             return Err(WrongBatchSize);
         }
+
+        // The leaf hash flattens all rows at one height into a single stream,
+        // so row boundaries are only authenticated by checking each row width.
+        check_widths(dimensions, opened_values)?;
 
         let mut heights_tallest_first = dimensions
             .iter()
@@ -1584,6 +1621,75 @@ mod tests {
         let batch_opening = mmcs.open_batch(17, &prover_data);
         mmcs.verify_batch(&commit, &dims, 17, (&batch_opening).into())
             .expect("expected verification to succeed");
+    }
+
+    #[test]
+    fn verify_rejects_wrong_row_width() {
+        let mut rng = SmallRng::seed_from_u64(3);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress, 0);
+
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 8, 4);
+        let dims = vec![mat.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        // Append one extra element to the opened row: 4 values become 5.
+        let mut opening = mmcs.open_batch(3, &prover_data);
+        opening.opened_values[0].push(F::ONE);
+
+        let err = mmcs
+            .verify_batch(&commit, &dims, 3, (&opening).into())
+            .expect_err("row longer than the matrix width must be rejected");
+        assert!(matches!(
+            err,
+            MerkleTreeError::WrongWidth {
+                matrix: 0,
+                expected: 4,
+                got: 5,
+            }
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_shifted_row_boundary() {
+        let mut rng = SmallRng::seed_from_u64(4);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress, 0);
+
+        // Two matrices of equal height hash into one flattened leaf stream:
+        //
+        //     leaf digest = hash(row_0[0..3] || row_1[0..5])
+        //
+        // Moving an element across the row boundary keeps the stream — and
+        // hence the digest — identical, so only the width check can catch it.
+        let mat_a = RowMajorMatrix::<F>::rand(&mut rng, 8, 3);
+        let mat_b = RowMajorMatrix::<F>::rand(&mut rng, 8, 5);
+        let dims = vec![mat_a.dimensions(), mat_b.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat_a, mat_b]);
+
+        // Mutation: last element of row 0 becomes the first element of row 1.
+        //
+        //     row 0: [a, b, c]    → [a, b]
+        //     row 1: [d, e, f, g, h] → [c, d, e, f, g, h]
+        let mut opening = mmcs.open_batch(5, &prover_data);
+        let moved = opening.opened_values[0].pop().unwrap();
+        opening.opened_values[1].insert(0, moved);
+
+        let err = mmcs
+            .verify_batch(&commit, &dims, 5, (&opening).into())
+            .expect_err("shifted row boundary must be rejected");
+        assert!(matches!(
+            err,
+            MerkleTreeError::WrongWidth {
+                matrix: 0,
+                expected: 3,
+                got: 2,
+            }
+        ));
     }
 
     #[test]
