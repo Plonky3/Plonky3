@@ -14,7 +14,10 @@ use p3_field::{
 };
 use p3_lookup::folder::ProverConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::{InteractionSymbolicBuilder, Lookup, LookupProtocol, LookupTerminal};
+use p3_lookup::{
+    InteractionSymbolicBuilder, Lookup, LookupProtocol, LookupTerminal,
+    check_multiplicity_height_bound,
+};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
@@ -121,6 +124,11 @@ where
     let log_degrees: Vec<usize> = degrees.iter().copied().map(log2_strict_usize).collect();
     // Extended degree accounts for the ZK blinding factor (2x when ZK is enabled).
     let log_ext_degrees: Vec<usize> = log_degrees.iter().map(|&d| d + config.is_zk()).collect();
+
+    // Fail fast: a wrapped multiplicity makes this proof unverifiable.
+    // The verifier enforces the same bound.
+    check_multiplicity_height_bound(&common.lookups, &degrees)
+        .expect("LogUp multiplicity height-bound violated");
 
     // Read lookups from the keygen-cached CommonData (not from instances).
     let all_lookups: Vec<&[Lookup<Val<SC>>]> = common.lookups.iter().map(|l| &**l).collect();

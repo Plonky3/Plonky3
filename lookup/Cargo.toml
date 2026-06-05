@@ -14,6 +14,7 @@ parallel = ["p3-maybe-rayon/parallel"]
 
 [dependencies]
 hashbrown = { workspace = true }
+num-bigint = { workspace = true }
 p3-air = { workspace = true }
 p3-field = { workspace = true }
 p3-matrix = { workspace = true }
