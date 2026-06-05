@@ -121,6 +121,13 @@ impl<F> Poly<F> {
         &mut self.0
     }
 
+    /// Consumes the polynomial and returns the owned evaluation table.
+    #[inline]
+    #[must_use]
+    pub fn into_evals(self) -> Vec<F> {
+        self.0
+    }
+
     /// Pads the evaluation vector with zeros up to `num_variables`.
     ///
     /// # Panics
