@@ -712,15 +712,15 @@ where
                 }
             }
         }
+    }
 
-        // `reduced_openings` would have a log_height = log_blowup entry only if there was a
-        // trace matrix of height 1. In this case `f` is constant, so `f(zeta) - f(x))/(zeta - x)`
-        // must equal `0`.
-        if let Some((_, ro)) = reduced_openings.get(&params.log_blowup)
-            && !ro.is_zero()
-        {
-            return Err(FriError::FinalPolyMismatch);
-        }
+    // The blowup-height entry exists only for a height-1 (constant) trace matrix.
+    // Its quotient `(f(zeta) - f(x)) / (zeta - x)` must then be zero.
+    // One check after all batches suffices: the random combining challenge rules out cancellation.
+    if let Some((_, ro)) = reduced_openings.get(&params.log_blowup)
+        && !ro.is_zero()
+    {
+        return Err(FriError::FinalPolyMismatch);
     }
 
     // Return reduced openings descending by log_height.
