@@ -389,7 +389,7 @@ where
                 + final_sumcheck_rounds
         );
 
-        Ok(Self {
+        let config = Self {
             params: whir_parameters,
             commitment_ood_samples,
             num_variables: initial_num_variables,
@@ -401,7 +401,19 @@ where
             final_folding_pow_bits: final_folding_pow_bits as usize,
             _extension_field: PhantomData,
             _challenger: PhantomData,
-        })
+        };
+
+        // The final-round config must expose exactly the direct-send variable count.
+        //
+        //     prover     : sends 2^count final evaluations in the clear
+        //     verifier   : length-checks the final polynomial against 2^count
+        //     transcript : absorbs 2^count final coefficients
+        assert_eq!(
+            config.final_round_config().num_variables,
+            config.final_sumcheck_rounds
+        );
+
+        Ok(config)
     }
 
     /// Returns the size of the initial evaluation domain.
@@ -610,6 +622,58 @@ mod tests {
         let config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
 
         assert_eq!(config.n_rounds(), config.round_parameters.len());
+    }
+
+    #[test]
+    fn final_round_config_num_variables_equals_final_sumcheck_rounds() {
+        // Invariant: the final-round config exposes exactly `final_sumcheck_rounds` variables.
+        //
+        // Three places key off this single count and must agree:
+        //
+        //     prover     : sends 2^count final evaluations in the clear
+        //     verifier   : length-checks the final polynomial against 2^count
+        //     transcript : absorbs 2^count final coefficients
+        //
+        // Sweep every folding strategy across the direct-send threshold so both branches are hit.
+        fn check(num_variables: usize, folding_factor: FoldingFactor) {
+            // UniqueDecoding needs no out-of-domain samples, so construction always succeeds here.
+            let params = ProtocolParameters {
+                security_level: 100,
+                pow_bits: 20,
+                round_log_inv_rates: vec![],
+                folding_factor,
+                soundness_type: SecurityAssumption::UniqueDecoding,
+                starting_log_inv_rate: 1,
+            };
+            // Construction runs the same assertion internally.
+            // This explicit check documents and pins the invariant.
+            let config = WhirConfig::<F, F, MyChallenger>::new(num_variables, params).unwrap();
+            assert_eq!(
+                config.final_round_config().num_variables,
+                config.final_sumcheck_rounds,
+                "num_variables = {num_variables}"
+            );
+        }
+
+        // Constant: small sizes stay in the empty branch, larger ones reach the non-empty branch.
+        for nv in 4..=24 {
+            check(nv, FoldingFactor::Constant(4));
+        }
+        for nv in 2..=24 {
+            check(nv, FoldingFactor::Constant(2));
+        }
+
+        // ConstantFromSecondRound: a larger first fold, then smaller folds.
+        for nv in 5..=24 {
+            check(nv, FoldingFactor::ConstantFromSecondRound(3, 2));
+        }
+
+        // PerRound: explicit schedules whose length is num_rounds + 1.
+        //
+        //     [3, 2]    @ 10  ->  1 intermediate round
+        //     [4, 3, 2] @ 14  ->  2 intermediate rounds
+        check(10, FoldingFactor::PerRound(vec![3, 2]));
+        check(14, FoldingFactor::PerRound(vec![4, 3, 2]));
     }
 
     #[test]
