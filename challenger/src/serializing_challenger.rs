@@ -161,8 +161,12 @@ where
 {
     fn sample_bits(&mut self, bits: usize) -> usize {
         assert!(bits < (usize::BITS as usize));
-        // Limiting the number of bits to the field size
-        assert!((1 << bits) <= F::ORDER_U64 as usize);
+        // Evaluate the bound in `u64` to keep the shift within its type width.
+        // A `usize` shift by `bits >= 32` overflows on 32-bit targets and would zero the mask.
+        assert!(
+            (1u64 << bits) < F::ORDER_U64,
+            "requested bit count must fit within the field order"
+        );
         let rand_usize = u32::from_le_bytes(self.inner.sample_array()) as usize;
         rand_usize & ((1 << bits) - 1)
     }
@@ -205,7 +209,12 @@ where
     #[instrument(name = "grind for proof-of-work witness", skip_all)]
     fn grind(&mut self, bits: usize) -> Self::Witness {
         assert!(bits < (usize::BITS as usize));
-        assert!((1 << bits) < F::ORDER_U32);
+        // Evaluate the bound in `u64` to keep the shift within its type width.
+        // A `u32` shift by `bits >= 32` would wrap and accept a trivial proof-of-work.
+        assert!(
+            (1u64 << bits) < F::ORDER_U64,
+            "requested bit count must fit within the field order"
+        );
 
         // Trivial case: 0 bits mean no PoW is required and any witness is valid.
         if bits == 0 {
@@ -516,5 +525,26 @@ mod tests {
         let after_grind: u8 = challenger.inner.sample();
         let no_grind: u8 = shadow.inner.sample();
         assert_eq!(after_grind, no_grind);
+    }
+
+    #[test]
+    #[should_panic = "requested bit count must fit within the field order"]
+    fn test_serializing_challenger32_sample_bits_rejects_oversized_request() {
+        // BabyBear order is ~2^30.9, so a 32-bit request must be rejected.
+        // The bound is evaluated in u64, so the guard fires in every build profile.
+        type F = BabyBear;
+        let inner = Inner::new(vec![0, 1, 2, 3], ByteCountHasher);
+        let mut challenger = SerializingChallenger32::<F, Inner>::new(inner);
+        let _ = challenger.sample_bits(32);
+    }
+
+    #[test]
+    #[should_panic = "requested bit count must fit within the field order"]
+    fn test_serializing_challenger32_grind_rejects_oversized_request() {
+        // Same guard, reached through the proof-of-work entry point.
+        type F = BabyBear;
+        let inner = Inner::new(vec![0, 1, 2, 3], ByteCountHasher);
+        let mut challenger = SerializingChallenger32::<F, Inner>::new(inner);
+        let _ = challenger.grind(32);
     }
 }
