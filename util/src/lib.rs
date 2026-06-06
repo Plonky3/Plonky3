@@ -194,7 +194,7 @@ pub const fn assert_sync<T: Sync>() {}
 
 #[inline]
 pub const fn reverse_bits(x: usize, n: usize) -> usize {
-    // `n` is a domain size: its bit length is `log2(n)`, integral only for a power of two.
+    // Assert that n is a power of 2
     debug_assert!(n.is_power_of_two());
     reverse_bits_len(x, n.trailing_zeros() as usize)
 }
