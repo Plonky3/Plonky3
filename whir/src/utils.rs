@@ -32,10 +32,6 @@ use p3_field::{Field, HornerIter};
 /// # Edge case
 ///
 /// `coeffs.len() == 0` returns `F::ZERO` (empty sum).
-//
-// TODO: remove `#[allow(dead_code)]` once the HVZK sumcheck and
-// code-switching modules land and call this helper.
-#[allow(dead_code)]
 #[inline]
 pub(crate) fn eval_ze_star_n<F: Field>(point: F, coeffs: &[F]) -> F {
     // c_0 + ρ·(c_1 + ρ·(... + ρ·c_{n-1})) with n-1 multiplications.
@@ -74,10 +70,6 @@ pub(crate) fn eval_ze_star_n<F: Field>(point: F, coeffs: &[F]) -> F {
 /// # Cost
 ///
 /// Two Horner passes plus one `ρ^l` (`log_2 l` field multiplications).
-//
-// TODO: remove `#[allow(dead_code)]` once the HVZK code-switching module
-// lands and calls this helper.
-#[allow(dead_code)]
 #[inline]
 pub(crate) fn padded_ood_t1<F: Field>(point: F, msg: &[F], rand: &[F]) -> F {
     // ze*_l(ρ) · msg.
