@@ -413,14 +413,6 @@ impl<F: Field> Poly<F> {
     {
         SplitEq::<F, EF>::new_packed(point, scale).compress_suffix(self)
     }
-
-    /// Like [`compress_suffix`](Self::compress_suffix), but writes into a pre-allocated buffer.
-    pub fn compress_suffix_into<EF>(&self, out: &mut [EF], point: &Point<EF>, scale: EF)
-    where
-        EF: ExtensionField<F>,
-    {
-        SplitEq::<F, EF>::new_packed(point, scale).compress_suffix_into(out, self);
-    }
 }
 
 impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
