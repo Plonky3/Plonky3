@@ -258,6 +258,43 @@ mod tests {
     }
 
     #[test]
+    fn verify_rejects_wrong_row_width() {
+        let mut rng = SmallRng::seed_from_u64(2);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+
+        // Commit to one matrix of width 4 through the hiding wrapper.
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 8, 4);
+        let dims = vec![mat.dimensions()];
+        let mmcs = MyMmcs::new(hash, compress, 0, rng);
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        // Mutation: append one extra element to the opened row.
+        //
+        //     opened row:  [a, b, c, d, EXTRA]   (5 values, width is 4)
+        let mut opening = mmcs.open_batch(3, &prover_data);
+        opening.opened_values[0].push(F::ONE);
+
+        // The inner tree commits to rows widened by the salt columns.
+        // The reported widths are therefore salted as well.
+        //
+        //     expected: 4 + 4 salts = 8
+        //     got:      5 + 4 salts = 9
+        let err = mmcs
+            .verify_batch(&commit, &dims, 3, (&opening).into())
+            .expect_err("row longer than the matrix width must be rejected");
+        assert!(matches!(
+            err,
+            MerkleTreeError::WrongWidth {
+                matrix: 0,
+                expected: 8,
+                got: 9,
+            }
+        ));
+    }
+
+    #[test]
     fn hiding_mmcs_is_sync() {
         assert_sync::<MyMmcs>();
     }

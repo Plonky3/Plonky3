@@ -629,6 +629,16 @@ where
         .zip(commitments_with_opening_points.iter())
         .enumerate()
     {
+        // The opened rows must pair one-to-one with the committed matrices.
+        // Why: the width derivation below zips rows with matrix metadata.
+        if batch_opening.opened_values.len() != mats.len() {
+            return Err(FriError::BatchOpenedValuesCountMismatch {
+                batch,
+                expected: mats.len(),
+                got: batch_opening.opened_values.len(),
+            });
+        }
+
         // Find the height of each matrix in the batch.
         // Currently we only check domain.size() as the shift is
         // assumed to always be Val::GENERATOR.
@@ -639,13 +649,19 @@ where
         let batch_dims = batch_heights
             .iter()
             .zip(mats)
-            .map(|(&height, (_, points_and_values))| Dimensions {
-                // Each matrix width is known from its claimed evaluations.
-                width: points_and_values
-                    .first()
-                    .map_or(0, |(_, values)| values.len()),
-                height,
-            })
+            .zip(&batch_opening.opened_values)
+            .map(
+                |((&height, (_, points_and_values)), opened_row)| Dimensions {
+                    // Invariant: the commitment layer rejects opened rows that differ from this width.
+                    //
+                    //     some points → width = claimed evaluation count
+                    //     no points   → width = opened row length (no claim to enforce)
+                    width: points_and_values
+                        .first()
+                        .map_or(opened_row.len(), |(_, values)| values.len()),
+                    height,
+                },
+            )
             .collect_vec();
 
         // If the maximum height of the batch is smaller than the global max height,
@@ -656,14 +672,6 @@ where
             .max()
             .map(|&h| index >> (log_global_max_height - log2_strict_usize(h)))
             .unwrap_or(0);
-
-        if batch_opening.opened_values.len() != mats.len() {
-            return Err(FriError::BatchOpenedValuesCountMismatch {
-                batch,
-                expected: mats.len(),
-                got: batch_opening.opened_values.len(),
-            });
-        }
 
         input_mmcs
             .verify_batch(
