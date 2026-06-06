@@ -18,10 +18,6 @@ pub const RPO_GOLDILOCKS_SECURITY_LEVEL: usize = 128;
 /// `ceil(log2(p) / 8) + 1` with `p = 2^64 - 2^32 + 1`.
 const BYTES_PER_CONSTANT: usize = 9;
 
-/// First row of the width-12 circulant MDS from eprint 2022/1577.
-#[cfg(test)]
-const MDS_12_FIRST_ROW: [i64; 12] = [7, 23, 8, 26, 13, 10, 9, 7, 6, 22, 21, 8];
-
 /// MDS matrix specified by the RPO paper for the Goldilocks instance. This
 /// is a different matrix from `p3_goldilocks::MdsMatrixGoldilocks`.
 ///
@@ -329,6 +325,9 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    /// First row of the width-12 circulant MDS from eprint 2022/1577.
+    const MDS_12_FIRST_ROW: [i64; 12] = [7, 23, 8, 26, 13, 10, 9, 7, 6, 22, 21, 8];
 
     // Test vector taken from Miden-crypto:
     // https://github.com/0xMiden/crypto/blob/next/miden-crypto/src/hash/algebraic_sponge/rescue/rpo/mod.rs .
