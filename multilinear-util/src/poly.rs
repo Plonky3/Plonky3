@@ -325,6 +325,71 @@ impl<F: Field> Poly<F> {
         Self(evals)
     }
 
+    /// Given a point `P` (as a slice), compute the evaluation vector of the successor
+    /// function `next(P, X)` for all points `X` in the boolean hypercube, scaled by a value.
+    ///
+    /// `next` is the multilinear extension of the row-successor indicator.
+    /// Rows are indexed big-endian and the last row maps to itself.
+    ///
+    /// # Algorithm
+    ///
+    /// Block-doubling butterfly over the coordinates, last to first.
+    /// `N_j` is the carry-chain table over the suffix `P[j..]`.
+    /// `L_j = scale * prod_{k >= j} P_k` is the running self-loop product.
+    ///
+    /// ```text
+    /// N_{j-1}[0||y]  = (1 - P_{j-1}) * N_j[y]
+    /// N_{j-1}[1||y]  =      P_{j-1}  * N_j[y]
+    /// N_{j-1}[1||0] += (1 - P_{j-1}) * L_j      (carry crosses coordinate j-1)
+    /// ```
+    ///
+    /// The self-loop term `L_0` lands on the all-ones row at the end.
+    ///
+    /// # Performance
+    ///
+    /// `O(2^n)` field operations, the same as the eq butterfly.
+    ///
+    /// ## Arguments
+    /// * `point`: A multilinear point.
+    /// * `scale`: A scalar value to multiply all evaluations by.
+    ///
+    /// ## Returns
+    /// A polynomial containing `scale * next(point, X)` for all `X` in `{0,1}^n`.
+    pub fn new_next_from_point(point: &[F], scale: F) -> Self {
+        let n = point.len();
+        // Zero variables: a single row whose successor is itself.
+        if n == 0 {
+            return Self(vec![scale]);
+        }
+        let len: usize = 1_usize
+            .checked_shl(n as u32)
+            .expect("Point length too large: 2^n overflows usize.");
+
+        let mut evals = F::zero_vec(len);
+        // Running self-loop product over the processed suffix of `point`.
+        let mut lambda = scale;
+        let mut filled = 1;
+        for &z in point.iter().rev() {
+            let (lo, hi) = evals.split_at_mut(filled);
+            // Tensor the new coordinate onto the carry-chain table:
+            // hi = z * N (new bit = 1), lo = (1 - z) * N (new bit = 0).
+            lo.iter_mut()
+                .zip(hi[..filled].iter_mut())
+                .for_each(|(l, h)| {
+                    *h = *l * z;
+                    *l -= *h;
+                });
+            // New pivot: the carry chain crosses this coordinate, landing on
+            // the row (1, 0, ..., 0) of the extended table.
+            hi[0] += lambda - lambda * z;
+            lambda *= z;
+            filled *= 2;
+        }
+        // Self-loop: the all-ones row maps to itself.
+        evals[len - 1] += lambda;
+        Self(evals)
+    }
+
     /// Evaluates the multilinear polynomial at `point ∈ F^n`.
     ///
     /// Computes
@@ -1972,5 +2037,103 @@ pub(crate) mod test {
         //     3-variable polynomial; ask to pad to arity 2 → must panic.
         let mut poly = Poly::<F>::zero(3);
         poly.pad_zeros(2);
+    }
+
+    #[test]
+    fn test_new_next_from_point_boolean_points() {
+        // At a boolean point z, the next table is the indicator of the
+        // successor row (self-loop on the last row).
+        for num_variables in 1..=4usize {
+            let len = 1 << num_variables;
+            for a in 0..len {
+                let z = Point::<F>::hypercube(a, num_variables);
+                let table = Poly::new_next_from_point(z.as_slice(), F::ONE);
+                let successor = if a == len - 1 { len - 1 } else { a + 1 };
+                for b in 0..len {
+                    let expected = if b == successor { F::ONE } else { F::ZERO };
+                    assert_eq!(
+                        table.as_slice()[b],
+                        expected,
+                        "next table at z = {a}, row {b}, {num_variables} variables"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_new_next_from_point_zero_variables() {
+        // A single row: its successor is itself, so the table is [scale].
+        let scale = F::from_u64(7);
+        let table = Poly::new_next_from_point(&[] as &[F], scale);
+        assert_eq!(table.as_slice(), &[scale]);
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_next_table_matches_eval_next(
+            num_variables in 1usize..=8,
+            seed in any::<u64>(),
+        ) {
+            // Invariant: the table built by the butterfly must agree with the
+            // O(n) closed form at every hypercube row, including the scale.
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let z = Point::<F>::rand(&mut rng, num_variables);
+            let scale: F = rng.random();
+
+            let table = Poly::new_next_from_point(z.as_slice(), scale);
+            for b in 0..1usize << num_variables {
+                let y = Point::<F>::hypercube(b, num_variables);
+                prop_assert_eq!(
+                    table.as_slice()[b],
+                    z.next_poly(&y) * scale,
+                    "row {}", b
+                );
+            }
+        }
+
+        #[test]
+        fn proptest_next_table_is_mle_of_next(
+            num_variables in 1usize..=8,
+            seed in any::<u64>(),
+        ) {
+            // Invariant: next(z, .) is multilinear, so interpolating its table
+            // at a random point y must reproduce the closed form next(z, y).
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let z = Point::<F>::rand(&mut rng, num_variables);
+            let y = Point::<F>::rand(&mut rng, num_variables);
+
+            let table = Poly::new_next_from_point(z.as_slice(), F::ONE);
+            prop_assert_eq!(table.eval_base(&y), z.next_poly(&y));
+        }
+
+        #[test]
+        fn proptest_next_claim_equals_shifted_column(
+            num_variables in 1usize..=8,
+            seed in any::<u64>(),
+        ) {
+            // AIR semantics: with rows indexed big-endian and g the
+            // row-shifted column (g[i] = f[i+1], g[last] = f[last]),
+            //
+            //     sum_b next(z, b) * f(b)  ==  g_hat(z)
+            //
+            // i.e. a next claim on f opens the multilinear extension of the
+            // shifted column.
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let len = 1usize << num_variables;
+            let f: Vec<F> = (0..len).map(|_| rng.random()).collect();
+            let z = Point::<F>::rand(&mut rng, num_variables);
+
+            let mut shifted = f.clone();
+            shifted.rotate_left(1);
+            *shifted.last_mut().unwrap() = f[len - 1];
+
+            let table = Poly::new_next_from_point(z.as_slice(), F::ONE);
+            let claim = dot_product::<F, _, _>(
+                table.as_slice().iter().copied(),
+                f.iter().copied(),
+            );
+            prop_assert_eq!(claim, Poly::new(shifted).eval_base(&z));
+        }
     }
 }

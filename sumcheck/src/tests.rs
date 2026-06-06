@@ -13,7 +13,7 @@ use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
 use crate::constraints::Constraint;
-use crate::constraints::statement::{EqStatement, SelectStatement};
+use crate::constraints::statement::{EqStatement, NextStatement, SelectStatement};
 use crate::layout::{Layout, PrefixProver, SuffixProver, TableShape, Verifier};
 use crate::strategy::VariableOrder;
 use crate::test_util::{stacked_num_variables, table_point_schedule, table_specs_to_tables};
@@ -52,7 +52,9 @@ pub(crate) fn challenger() -> MyChallenger {
 //      them as "equality" constraints (poly(point) == eval).
 //   2. Samples `num_sels` random indices in the multiplicative subgroup, evaluates the
 //      polynomial as a univariate (Horner's method), and records them as "select" constraints.
-//   3. Draws a random combining coefficient alpha and bundles everything into a Constraint.
+//   3. Samples `num_nexts` random multilinear points, computes the shifted evaluation
+//      against the next weight table, and records them as "next" constraints.
+//   4. Draws a random combining coefficient alpha and bundles everything into a Constraint.
 //
 // The evaluations are pushed into `constraint_evals` so the verifier can read them later
 // (simulating what would normally be transmitted in the proof).
@@ -62,6 +64,7 @@ pub(crate) fn make_constraint_ext<Challenger>(
     num_variables: usize,
     num_eqs: usize,
     num_sels: usize,
+    num_nexts: usize,
     poly: &Poly<EF>,
 ) -> Constraint<F, EF>
 where
@@ -70,9 +73,10 @@ where
     // omega is the 2^num_variables-th root of unity; powers of omega form the evaluation domain.
     let omega = F::two_adic_generator(num_variables);
 
-    // Initialize empty eq and select statements for this round's variable count.
+    // Initialize empty eq, select, and next statements for this round's variable count.
     let mut eq_statement = EqStatement::initialize(num_variables);
     let mut sel_statement = SelectStatement::initialize(num_variables);
+    let mut next_statement = NextStatement::initialize(num_variables);
 
     // - Sample `num_eqs` univariate challenge points.
     // - Evaluate the sumcheck polynomial on them.
@@ -122,12 +126,33 @@ where
         sel_statement.add_constraint(var, eval);
     });
 
+    // Build "next" constraints: sample multilinear points, compute the
+    // shifted-evaluation Σ_b next(point, b) · poly(b), and record the pairs.
+    (0..num_nexts).for_each(|_| {
+        // Sample a univariate challenge and expand to a multilinear point.
+        let point =
+            Point::expand_from_univariate(challenger.sample_algebra_element(), num_variables);
+
+        // Honest shifted evaluation: dot the next weight table against the polynomial.
+        let weights = Poly::new_next_from_point(point.as_slice(), EF::ONE);
+        let eval = p3_field::dot_product::<EF, _, _>(weights.iter().copied(), poly.iter().copied());
+
+        // Store evaluation for verifier to read later.
+        constraint_evals.push(eval);
+
+        // Add the evaluation result to the transcript for Fiat-Shamir soundness.
+        challenger.observe_algebra_element(eval);
+
+        // Add the shifted-evaluation constraint.
+        next_statement.add_evaluated_constraint(point, eval);
+    });
+
     // Sample a random combining coefficient alpha from the Fiat-Shamir transcript.
-    // This alpha is used to take a random linear combination of all eq and sel constraints
-    // into a single aggregated constraint for the next sumcheck round.
+    // This alpha is used to take a random linear combination of all eq, sel, and next
+    // constraints into a single aggregated constraint for the next sumcheck round.
     let alpha: EF = challenger.sample_algebra_element();
 
-    Constraint::new(alpha, eq_statement, sel_statement)
+    Constraint::new_with_next(alpha, eq_statement, sel_statement, next_statement)
 }
 
 // Verifier-side counterpart of `make_constraint_ext`. Reconstructs the same Constraint
@@ -143,6 +168,7 @@ pub(crate) fn read_constraint<Challenger>(
     num_variables: usize,
     num_eqs: usize,
     num_sels: usize,
+    num_nexts: usize,
 ) -> Constraint<F, EF>
 where
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
@@ -188,11 +214,33 @@ where
         sel_statement.add_constraint(var, eval);
     }
 
+    // Initialize an empty next statement for this round.
+    let mut next_statement = NextStatement::initialize(num_variables);
+
+    // Reconstruct each next constraint: sample the same random point as the prover,
+    // then read the shifted evaluation from the proof data.
+    for i in 0..num_nexts {
+        // Sample the same univariate challenge as the prover and expand it.
+        let point =
+            Point::expand_from_univariate(challenger.sample_algebra_element(), num_variables);
+
+        // Read the committed evaluation. Next evaluations are stored after
+        // the eq and sel evaluations.
+        let eval = constraint_evals[num_eqs + num_sels + i];
+
+        // Observe the evaluation to keep the challenger synchronized (must match prover)
+        challenger.observe_algebra_element(eval);
+
+        // Add the shifted-evaluation constraint.
+        next_statement.add_evaluated_constraint(point, eval);
+    }
+
     // Sample the same combining coefficient alpha as the prover and assemble the constraint.
-    Constraint::new(
+    Constraint::new_with_next(
         challenger.sample_algebra_element(),
         eq_statement,
         sel_statement,
+        next_statement,
     )
 }
 
@@ -233,6 +281,7 @@ where
     const FOLDING: usize = 4;
     const NUM_EQS: usize = 5;
     const NUM_SELS: usize = 10;
+    const NUM_NEXTS: usize = 3;
 
     // Round schedule for a constant folding factor `FOLDING`.
     const MAX_NUM_VARIABLES_TO_SEND_COEFFS: usize = 6;
@@ -278,6 +327,7 @@ where
             num_variables_inter,
             NUM_EQS,
             NUM_SELS,
+            NUM_NEXTS,
             &sumcheck.evals(),
         );
         all_constraint_evals.push(constraint_evals);
@@ -344,6 +394,7 @@ where
             num_variables_inter,
             NUM_EQS,
             NUM_SELS,
+            NUM_NEXTS,
         );
         constraint.combine_evals(&mut sum);
         constraints.push(constraint);

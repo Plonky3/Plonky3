@@ -3,32 +3,37 @@ use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
 
-use crate::constraints::statement::{EqStatement, SelectStatement};
+use crate::constraints::statement::{EqStatement, NextStatement, SelectStatement};
 
 /// Statement types for polynomial evaluation constraints.
 pub mod statement;
 
-/// A combined constraint system with equality and selection statements.
+/// A combined constraint system with equality, selection, and next statements.
 ///
 /// This struct represents a unified constraint system that combines:
 /// - **Equality constraints**: Polynomial evaluations at specific points
 /// - **Select constraints**: Selection-based polynomial evaluations
+/// - **Next constraints**: Shifted-evaluation (row-successor) claims
 ///
-/// Both constraint types are batched using powers of a random challenge `γ`.
+/// All constraint types are batched using powers of a random challenge `γ`.
 ///
 /// # Mathematical Structure
 ///
-/// Given `n_eq` equality constraints and `n_sel` select constraints, the combined
-/// constraint polynomial is:
+/// Given `n_eq` equality, `n_sel` select, and `n_next` next constraints, the
+/// combined constraint polynomial is:
 ///
 /// ```text
-/// W(X) = Σ_{i=0}^{n_eq-1} γ^i · eq(X, z_eq_i) + Σ_{j=0}^{n_sel-1} γ^{n_eq+j} · select(pow(z_sel_j), X)
+/// W(X) = Σ_{i=0}^{n_eq-1} γ^i · eq(X, z_eq_i)
+///      + Σ_{j=0}^{n_sel-1} γ^{n_eq+j} · select(pow(z_sel_j), X)
+///      + Σ_{l=0}^{n_next-1} γ^{n_eq+n_sel+l} · next(z_next_l, X)
 /// ```
 ///
 /// The combined expected evaluation is:
 ///
 /// ```text
-/// S = Σ_{i=0}^{n_eq-1} γ^i · s_eq_i + Σ_{j=0}^{n_sel-1} γ^{n_eq+j} · s_sel_j
+/// S = Σ_{i=0}^{n_eq-1} γ^i · s_eq_i
+///   + Σ_{j=0}^{n_sel-1} γ^{n_eq+j} · s_sel_j
+///   + Σ_{l=0}^{n_next-1} γ^{n_eq+n_sel+l} · s_next_l
 /// ```
 #[derive(Clone, Debug)]
 pub struct Constraint<F: Field, EF: ExtensionField<F>> {
@@ -43,11 +48,18 @@ pub struct Constraint<F: Field, EF: ExtensionField<F>> {
     /// via the power map to create a multilinear evaluation point.
     pub sel_statement: SelectStatement<F, EF>,
 
+    /// Shifted-evaluation constraints of the form `Σ_b next(z_l, b) · p(b) = s_l`.
+    ///
+    /// Each constraint opens the multilinear extension of the row-shifted
+    /// column at `z_l`, as required by AIR transition constraints.
+    pub next_statement: NextStatement<EF>,
+
     /// Random challenge `γ` used for batching constraints.
     ///
     /// Powers of this challenge weight different constraints:
     /// - Equality constraints use `γ^0, γ^1, ..., γ^{n_eq-1}`
     /// - Select constraints use `γ^{n_eq}, γ^{n_eq+1}, ..., γ^{n_eq+n_sel-1}`
+    /// - Next constraints use `γ^{n_eq+n_sel}, ..., γ^{n_eq+n_sel+n_next-1}`
     pub challenge: EF,
 }
 
@@ -82,11 +94,40 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
         //
         // This ensures the combined polynomial has a consistent domain.
         assert!(eq_statement.num_variables() == sel_statement.num_variables());
+        let num_variables = eq_statement.num_variables();
 
-        // Construct the combined constraint with both statement types.
+        // Construct the combined constraint with an empty next statement.
         Self {
             eq_statement,
             sel_statement,
+            next_statement: NextStatement::initialize(num_variables),
+            challenge,
+        }
+    }
+
+    /// Creates a new constraint combining equality, select, and next statements.
+    ///
+    /// Next constraints consume the challenge powers after the equality and
+    /// select constraints.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the number of variables differs between statements.
+    #[must_use]
+    pub const fn new_with_next(
+        challenge: EF,
+        eq_statement: EqStatement<EF>,
+        sel_statement: SelectStatement<F, EF>,
+        next_statement: NextStatement<EF>,
+    ) -> Self {
+        // Verify that all statements share the same number of variables.
+        assert!(eq_statement.num_variables() == sel_statement.num_variables());
+        assert!(eq_statement.num_variables() == next_statement.num_variables());
+
+        Self {
+            eq_statement,
+            sel_statement,
+            next_statement,
             challenge,
         }
     }
@@ -163,6 +204,15 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
         // This adds: Σ_{j=0}^{n_sel-1} γ^{n_eq+j} · s_sel_j
         self.sel_statement
             .combine_evals(eval, self.challenge, self.eq_statement.len());
+
+        // Accumulate next constraint evaluations weighted by γ^{n_eq+n_sel+l}.
+        //
+        // This adds: Σ_{l=0}^{n_next-1} γ^{n_eq+n_sel+l} · s_next_l
+        self.next_statement.combine_evals(
+            eval,
+            self.challenge,
+            self.eq_statement.len() + self.sel_statement.len(),
+        );
     }
 
     /// Combines constraint polynomials into weight polynomial and expected evaluation.
@@ -200,6 +250,14 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
         // The shift parameter ensures select constraints use distinct challenge powers.
         self.sel_statement
             .combine(combined, eval, self.challenge, self.eq_statement.len());
+
+        // Combine next constraints, continuing from where select left off.
+        self.next_statement.combine(
+            combined,
+            eval,
+            self.challenge,
+            self.eq_statement.len() + self.sel_statement.len(),
+        );
     }
 
     /// Combines constraint polynomials into weight polynomial and expected evaluation.
@@ -237,6 +295,14 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
         // The shift parameter ensures select constraints use distinct challenge powers.
         self.sel_statement
             .combine_packed(combined, eval, self.challenge, self.eq_statement.len());
+
+        // Combine next constraints, continuing from where select left off.
+        self.next_statement.combine_packed::<F>(
+            combined,
+            eval,
+            self.challenge,
+            self.eq_statement.len() + self.sel_statement.len(),
+        );
     }
 
     /// Creates a new combined weight polynomial and expected evaluation.
@@ -272,6 +338,14 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
             &mut eval,
             self.challenge,
             self.eq_statement.len(),
+        );
+
+        // Add next constraints, continuing the challenge powers after select.
+        self.next_statement.combine(
+            &mut combined,
+            &mut eval,
+            self.challenge,
+            self.eq_statement.len() + self.sel_statement.len(),
         );
 
         // Return the completed weight polynomial and expected evaluation.
@@ -319,6 +393,14 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
             self.eq_statement.len(),
         );
 
+        // Add next constraints, continuing the challenge powers after select.
+        self.next_statement.combine_packed::<F>(
+            &mut combined,
+            &mut eval,
+            self.challenge,
+            self.eq_statement.len() + self.sel_statement.len(),
+        );
+
         // Return the completed weight polynomial and expected evaluation.
         (combined, eval)
     }
@@ -358,6 +440,30 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
         self.sel_statement.vars.iter().zip(
             self.challenge
                 .shifted_powers(self.challenge.exp_u64(self.eq_statement.len() as u64)),
+        )
+    }
+
+    /// Iterates over next constraints with their challenge weights.
+    ///
+    /// This produces pairs `(z_l, γ^{n_eq+n_sel+l})` for each next constraint where:
+    /// - `z_l` is the shifted-evaluation point
+    /// - `γ^{n_eq+n_sel+l}` is the challenge power for this constraint
+    ///
+    /// # Returns
+    ///
+    /// An iterator over `(&Point<EF>, EF)` pairs.
+    ///
+    /// # Implementation Notes
+    ///
+    /// Challenge powers are skipped by `n_eq + n_sel` to ensure next constraints
+    /// use distinct powers from the equality and select constraints.
+    pub fn iter_nexts(&self) -> impl Iterator<Item = (&Point<EF>, EF)> {
+        // Powers start at γ^{n_eq + n_sel} to avoid overlap with the other
+        // constraint types.
+        let offset = (self.eq_statement.len() + self.sel_statement.len()) as u64;
+        self.next_statement.points.iter().zip(
+            self.challenge
+                .shifted_powers(self.challenge.exp_u64(offset)),
         )
     }
 }
@@ -749,5 +855,121 @@ mod tests {
 
         // Verify that the iterator is empty
         assert_eq!(constraint.iter_sels().count(), 0);
+    }
+
+    #[test]
+    fn test_constraint_new_initializes_empty_next() {
+        // `new` must produce an empty next statement with matching arity.
+        let num_variables = 3;
+        let challenge = EF::from_u64(42);
+        let eq_statement = EqStatement::initialize(num_variables);
+        let sel_statement = SelectStatement::initialize(num_variables);
+
+        let constraint: Constraint<F, EF> = Constraint::new(challenge, eq_statement, sel_statement);
+
+        assert!(constraint.next_statement.is_empty());
+        assert_eq!(constraint.next_statement.num_variables(), num_variables);
+        assert_eq!(constraint.iter_nexts().count(), 0);
+    }
+
+    #[test]
+    fn test_constraint_combine_evals_with_next() {
+        // γ = 2; one eq (γ^0), one sel (γ^1), two next (γ^2, γ^3).
+        let num_variables = 2;
+        let gamma = EF::from_u64(2);
+
+        let eq_point = Point::new(vec![EF::from_u64(1), EF::from_u64(1)]);
+        let eq_statement = EqStatement::new_hypercube(vec![eq_point], vec![EF::from_u64(5)]);
+
+        let sel_statement =
+            SelectStatement::new(num_variables, vec![F::from_u64(3)], vec![EF::from_u64(7)]);
+
+        let mut next_statement = NextStatement::initialize(num_variables);
+        next_statement.add_evaluated_constraint(
+            Point::new(vec![EF::from_u64(4), EF::from_u64(6)]),
+            EF::from_u64(11),
+        );
+        next_statement.add_evaluated_constraint(
+            Point::new(vec![EF::from_u64(8), EF::from_u64(9)]),
+            EF::from_u64(13),
+        );
+
+        let constraint: Constraint<F, EF> =
+            Constraint::new_with_next(gamma, eq_statement, sel_statement, next_statement);
+
+        let mut eval = EF::ZERO;
+        constraint.combine_evals(&mut eval);
+
+        // Expected: 1*5 + 2*7 + 4*11 + 8*13 = 5 + 14 + 44 + 104 = 167
+        assert_eq!(eval, EF::from_u64(167));
+    }
+
+    #[test]
+    fn test_constraint_iter_nexts_powers() {
+        // Next constraints must consume challenge powers after eq and sel.
+        let num_variables = 2;
+        let gamma = EF::from_u64(3);
+
+        let eq_point = Point::new(vec![EF::from_u64(1), EF::from_u64(2)]);
+        let eq_statement = EqStatement::new_hypercube(vec![eq_point], vec![EF::from_u64(10)]);
+
+        let sel_statement =
+            SelectStatement::new(num_variables, vec![F::from_u64(5)], vec![EF::from_u64(30)]);
+
+        let mut next_statement = NextStatement::initialize(num_variables);
+        let next_point_0 = Point::new(vec![EF::from_u64(4), EF::from_u64(6)]);
+        let next_point_1 = Point::new(vec![EF::from_u64(7), EF::from_u64(8)]);
+        next_statement.add_evaluated_constraint(next_point_0.clone(), EF::from_u64(40));
+        next_statement.add_evaluated_constraint(next_point_1.clone(), EF::from_u64(50));
+
+        let constraint: Constraint<F, EF> =
+            Constraint::new_with_next(gamma, eq_statement, sel_statement, next_statement);
+
+        // One eq and one sel constraint precede the next constraints,
+        // so the next powers are γ^2 = 9 and γ^3 = 27.
+        let results: Vec<_> = constraint.iter_nexts().collect();
+        assert_eq!(results.len(), 2);
+        assert_eq!(*results[0].0, next_point_0);
+        assert_eq!(results[0].1, EF::from_u64(9));
+        assert_eq!(*results[1].0, next_point_1);
+        assert_eq!(results[1].1, EF::from_u64(27));
+    }
+
+    #[test]
+    fn test_constraint_combine_with_next_matches_manual() {
+        // `combine` with all three statement types must equal the manual
+        // per-statement accumulation with matching power offsets.
+        let num_variables = 3;
+        let gamma = EF::from_u64(7);
+
+        let eq_point = Point::new(vec![EF::from_u64(1), EF::from_u64(2), EF::from_u64(3)]);
+        let eq_statement = EqStatement::new_hypercube(vec![eq_point], vec![EF::from_u64(10)]);
+
+        let sel_statement =
+            SelectStatement::new(num_variables, vec![F::from_u64(5)], vec![EF::from_u64(30)]);
+
+        let mut next_statement = NextStatement::initialize(num_variables);
+        next_statement.add_evaluated_constraint(
+            Point::new(vec![EF::from_u64(4), EF::from_u64(6), EF::from_u64(9)]),
+            EF::from_u64(40),
+        );
+
+        let constraint: Constraint<F, EF> = Constraint::new_with_next(
+            gamma,
+            eq_statement.clone(),
+            sel_statement.clone(),
+            next_statement.clone(),
+        );
+
+        let (combined, eval) = constraint.combine_new();
+
+        let mut expected = Poly::zero(num_variables);
+        let mut expected_eval = EF::ZERO;
+        eq_statement.combine_hypercube::<F, true>(&mut expected, &mut expected_eval, gamma);
+        sel_statement.combine(&mut expected, &mut expected_eval, gamma, 1);
+        next_statement.combine(&mut expected, &mut expected_eval, gamma, 2);
+
+        assert_eq!(combined, expected);
+        assert_eq!(eval, expected_eval);
     }
 }

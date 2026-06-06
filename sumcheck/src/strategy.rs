@@ -336,7 +336,12 @@ impl VariableOrder {
                     .iter_sels()
                     .map(|(&var, coeff)| coeff * local_challenge.select_poly(var))
                     .sum::<EF>();
-                eq_contrib + sel_contrib
+                // Successor term: sum_{(z, c)} c * next(z, local_challenge).
+                let next_contrib = constraint
+                    .iter_nexts()
+                    .map(|(point, coeff)| coeff * point.next_poly(&local_challenge))
+                    .sum::<EF>();
+                eq_contrib + sel_contrib + next_contrib
             })
             .sum()
     }
@@ -471,7 +476,7 @@ mod tests {
 
     use super::VariableOrder;
     use crate::constraints::Constraint;
-    use crate::constraints::statement::{EqStatement, SelectStatement};
+    use crate::constraints::statement::{EqStatement, NextStatement, SelectStatement};
 
     type F = BabyBear;
     type EF = BinomialExtensionField<BabyBear, 4>;
@@ -530,7 +535,14 @@ mod tests {
                 (0..rng.random_range(0..=3))
                     .for_each(|_| sel_statement.add_constraint(rng.random(), rng.random()));
 
-                Constraint::new(gamma, eq_statement, sel_statement)
+                // Up to 3 next constraints at random points.
+                let mut next_statement = NextStatement::initialize(num_variables);
+                (0..rng.random_range(0..=3)).for_each(|_| {
+                    next_statement
+                        .add_evaluated_constraint(Point::rand(rng, num_variables), rng.random());
+                });
+
+                Constraint::new_with_next(gamma, eq_statement, sel_statement, next_statement)
             })
             .collect()
     }

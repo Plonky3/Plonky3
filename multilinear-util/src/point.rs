@@ -135,6 +135,80 @@ where
         Self::eval_eq(self.as_slice(), point.as_slice())
     }
 
+    /// Evaluates the successor polynomial `next(p, q)` for slices.
+    ///
+    /// `next` is the multilinear extension of the row-successor indicator.
+    /// Rows are indexed big-endian: coordinate `0` is the most significant bit.
+    ///
+    /// ```text
+    /// next(x, y) = 1   if y = x + 1, or x = y = (1, ..., 1)
+    /// next(x, y) = 0   otherwise                  (x, y in {0,1}^n)
+    /// ```
+    ///
+    /// - The last row maps to itself instead of wrapping to row `0`.
+    /// - AIR transition constraints must therefore mask the last row with a selector.
+    ///
+    /// # Closed form
+    ///
+    /// Sum over the pivot `j`, the lowest zero bit of `x` where the carry stops:
+    ///
+    /// ```text
+    /// next(x, y) = sum_j [prod_{k<j} eq(x_k, y_k)] * (1 - x_j) * y_j * [prod_{k>j} x_k * (1 - y_k)]
+    ///            + prod_k x_k * y_k
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// - `O(n)` field operations.
+    /// - One `n`-element allocation for the suffix products.
+    ///
+    /// # Panics
+    /// Panics if `p` and `q` have different lengths.
+    #[must_use]
+    pub fn eval_next<EF: ExtensionField<F>>(p: &[F], q: &[EF]) -> EF {
+        assert_eq!(
+            p.len(),
+            q.len(),
+            "Points must have the same number of variables"
+        );
+        let n = p.len();
+        // Zero variables: a single row whose successor is itself.
+        if n == 0 {
+            return EF::ONE;
+        }
+
+        // Suffix products: suf[j] = prod_{k > j} x_k * (1 - y_k), with suf[n - 1] = 1.
+        let mut suf = Vec::with_capacity(n);
+        suf.push(EF::ONE);
+        for k in (1..n).rev() {
+            let last = *suf.last().unwrap();
+            suf.push(last * (EF::ONE - q[k]) * p[k]);
+        }
+
+        // Forward sweep: accumulate pivot terms against a running eq prefix,
+        // and the all-ones self-loop product alongside.
+        let mut acc = EF::ZERO;
+        let mut prefix_eq = EF::ONE;
+        let mut self_loop = EF::ONE;
+        for (j, (&x, &y)) in p.iter().zip(q).enumerate() {
+            acc += prefix_eq * y * (F::ONE - x) * suf[n - 1 - j];
+            // eq(x, y) = 1 + 2xy - x - y (same identity as `eval_eq`).
+            prefix_eq *= y.double() * x - x - y + F::ONE;
+            self_loop *= y * x;
+        }
+        acc + self_loop
+    }
+
+    /// Computes `next(c, p)`, where `p` is another `Point`.
+    ///
+    /// `next` is the multilinear extension of the row-successor indicator,
+    /// with a self-loop on the all-ones row.
+    #[must_use]
+    #[inline]
+    pub fn next_poly(&self, point: &Self) -> F {
+        Self::eval_next(self.as_slice(), point.as_slice())
+    }
+
     /// Computes `select(c, pow(var))`,.
     ///
     /// The **selection polynomial** for two vectors is:
@@ -652,6 +726,69 @@ mod tests {
                 let expected = if bit == 1 { F::ONE } else { F::ZERO };
                 prop_assert_eq!(coord, expected);
             }
+        }
+    }
+
+    /// Reference successor indicator on hypercube indices: `b = a + 1`,
+    /// with the last row mapping to itself.
+    fn next_indicator(a: usize, b: usize, num_variables: usize) -> bool {
+        let last = (1 << num_variables) - 1;
+        if a == last { b == last } else { b == a + 1 }
+    }
+
+    #[test]
+    fn test_eval_next_boolean_truth_table() {
+        // Exhaustive truth table on up to 4 variables.
+        for num_variables in 1..=4 {
+            for a in 0..1usize << num_variables {
+                for b in 0..1usize << num_variables {
+                    let x = Point::<F>::hypercube(a, num_variables);
+                    let y = Point::<F>::hypercube(b, num_variables);
+                    let expected = if next_indicator(a, b, num_variables) {
+                        F::ONE
+                    } else {
+                        F::ZERO
+                    };
+                    assert_eq!(
+                        x.next_poly(&y),
+                        expected,
+                        "next({a}, {b}) over {num_variables} variables"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_eval_next_zero_variables() {
+        // A single row: its successor is itself.
+        assert_eq!(Point::<F>::eval_next(&[], &[] as &[F]), F::ONE);
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_eval_next_matches_interpolation(
+            num_variables in 1usize..=8,
+            seed in any::<u64>(),
+        ) {
+            // Invariant: next(x, y) is multilinear in both arguments, so it must
+            // equal its interpolation from the boolean truth table:
+            //     next(x, y) = sum_{a,b} next(a, b) * eq(a, x) * eq(b, y).
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let x = Point::<F>::rand(&mut rng, num_variables);
+            let y = Point::<F>::rand(&mut rng, num_variables);
+
+            let mut expected = F::ZERO;
+            for a in 0..1usize << num_variables {
+                for b in 0..1usize << num_variables {
+                    if next_indicator(a, b, num_variables) {
+                        let pa = Point::<F>::hypercube(a, num_variables);
+                        let pb = Point::<F>::hypercube(b, num_variables);
+                        expected += pa.eq_poly(&x) * pb.eq_poly(&y);
+                    }
+                }
+            }
+            prop_assert_eq!(x.next_poly(&y), expected);
         }
     }
 }

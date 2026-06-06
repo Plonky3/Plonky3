@@ -132,6 +132,8 @@ pub(super) mod test_utils {
     pub(crate) const ROUND_EQ_POINTS: usize = 10;
     /// STIR-style selector points sampled for the intermediate round.
     pub(crate) const ROUND_SEL_POINTS: usize = 100;
+    /// Shifted-evaluation (next) points sampled for the intermediate round.
+    pub(crate) const ROUND_NEXT_POINTS: usize = 3;
 
     /// Opening schedule with columns in ascending order inside each claim.
     pub(crate) const ASCENDING_POLYS: &[(usize, &[usize])] =
@@ -247,6 +249,7 @@ pub(super) mod test_utils {
             stacked_num_variables - FOLDING,
             ROUND_EQ_POINTS,
             ROUND_SEL_POINTS,
+            ROUND_NEXT_POINTS,
         );
         intermediate_constraint.combine_evals(&mut sum);
         constraints.push(intermediate_constraint);
@@ -290,6 +293,7 @@ pub(super) mod test_utils {
             prover.num_variables(),
             ROUND_EQ_POINTS,
             ROUND_SEL_POINTS,
+            ROUND_NEXT_POINTS,
             &prover.evals(),
         );
 
