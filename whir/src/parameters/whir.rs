@@ -54,6 +54,124 @@ pub enum WhirConfigError {
         security_level: usize,
         field_size_bits: usize,
     },
+
+    /// The round-0 code-switch mask does not have enough fresh pad entries to
+    /// hide all private OOD answers.
+    #[error(
+        "ZK code-switch pad length {pad_len} is smaller than private OOD answer count {private_ood_answers}"
+    )]
+    ZkPadTooSmall {
+        pad_len: usize,
+        private_ood_answers: usize,
+    },
+
+    /// ZK code-switching was requested for a configuration with no
+    /// intermediate round to attach it to.
+    #[error("ZK code-switching requires at least one intermediate WHIR round")]
+    ZkRequiresIntermediateRound,
+
+    /// The fresh mask code domain exceeds the extension field two-adicity.
+    #[error(
+        "ZK mask domain 2^{log_mask_domain_size} exceeds extension-field two-adicity 2^{two_adicity}"
+    )]
+    ZkMaskDomainExceedsTwoAdicity {
+        log_mask_domain_size: usize,
+        two_adicity: usize,
+    },
+}
+
+/// User-facing options for the scoped round-0 HVZK code-switching slice.
+///
+/// This is intentionally not the full `HidingWhirPcs` configuration from
+/// #1589. It only derives the Construction 9.7 mask parameters needed by the
+/// first code-switch round.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WhirZkConfig {
+    /// Fresh pad length `|s_pad| = ell_zk - r` in the private OOD vector
+    /// `(f, r, s_pad)`.
+    ///
+    /// Must be at least the private OOD answer count `t_ood`; otherwise the
+    /// zero-evader system can leak committed source coordinates.
+    pub pad_len: usize,
+    /// Minimum randomness length, and therefore minimum query bound `t_zk`,
+    /// for the fresh mask code.
+    ///
+    /// The derived round config raises this to the mask query budget when
+    /// needed, since simulated code openings require one ZK-randomness degree
+    /// per queried position.
+    pub min_mask_randomness_len: usize,
+    /// Log-inverse rate used to derive the fresh mask-code domain `m_zk`.
+    pub mask_rate_log_inv: usize,
+}
+
+impl WhirZkConfig {
+    /// Construct the round-0 code-switch ZK configuration.
+    #[must_use]
+    pub const fn round0_code_switch(
+        pad_len: usize,
+        min_mask_randomness_len: usize,
+        mask_rate_log_inv: usize,
+    ) -> Self {
+        Self {
+            pad_len,
+            min_mask_randomness_len,
+            mask_rate_log_inv,
+        }
+    }
+}
+
+/// Derived Construction 9.7 parameters for a single ZK code-switch round.
+///
+/// Names mirror the paper quantities where possible:
+///
+/// - `mask_message_len = ell_zk`
+/// - `mask_randomness_len = t_zk` for Reed-Solomon masks, since
+///   `ZkEncoding::query_bound()` equals `randomness_len()`
+/// - `mask_domain_size = m_zk`
+/// - `mask_interleaving = iota_zk`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoundZkConfig {
+    /// Number of source-encoding randomness entries carried in the mask
+    /// message. In this scoped PR, round 0 uses a plain folded WHIR source, so
+    /// this is zero.
+    pub source_randomness_len: usize,
+    /// Fresh pad length `ell_zk - r` in the mask message.
+    pub pad_len: usize,
+    /// Message length `ell_zk` of the fresh code-switch mask oracle
+    /// `(r, s_pad)`.
+    pub mask_message_len: usize,
+    /// Randomness length of the fresh mask code. For the RS mask encoding this
+    /// is the query bound `t_zk`.
+    pub mask_randomness_len: usize,
+    /// Log-inverse rate of the fresh mask code.
+    pub mask_rate_log_inv: usize,
+    /// Domain size `m_zk` of the fresh mask code.
+    pub mask_domain_size: usize,
+    /// Interleaving depth `iota_zk` of the fresh mask code.
+    pub mask_interleaving: usize,
+    /// Number of mask openings needed by the downstream verifier relation.
+    /// This is the minimum `t_zk` the mask code must simulate.
+    pub mask_query_budget: usize,
+    /// Number of private OOD answers sent by Construction 9.7.
+    pub private_ood_answers: usize,
+}
+
+impl RoundZkConfig {
+    /// Logical field elements in the fresh mask oracle.
+    #[must_use]
+    pub const fn mask_codeword_field_elements(&self) -> usize {
+        self.mask_domain_size * self.mask_interleaving
+    }
+
+    /// Logical Construction 9.7 prover overhead:
+    ///
+    /// ```text
+    /// m_zk * iota_zk + t_ood
+    /// ```
+    #[must_use]
+    pub const fn proof_field_overhead(&self) -> usize {
+        self.mask_codeword_field_elements() + self.private_ood_answers
+    }
 }
 
 /// Derived configuration for a single intermediate WHIR round.
@@ -80,6 +198,8 @@ pub struct RoundConfig<F> {
     pub domain_size: usize,
     /// Generator of the folded evaluation domain after this round's fold.
     pub folded_domain_gen: F,
+    /// Optional scoped ZK code-switch configuration for this round.
+    pub zk: Option<RoundZkConfig>,
 }
 
 /// Fully derived WHIR protocol configuration.
@@ -349,6 +469,7 @@ where
                 log_inv_rate: next_rate,
                 domain_size,
                 folded_domain_gen,
+                zk: None,
             });
 
             // Advance mutable state for the next iteration.
@@ -459,6 +580,68 @@ where
         self.num_variables + self.params.starting_log_inv_rate - self.folding_factor(0)
     }
 
+    /// Attach the scoped round-0 HVZK code-switch configuration.
+    ///
+    /// This does not enable the full multi-round hiding PCS from #1589. It
+    /// derives the Construction 9.7 parameters for the first intermediate WHIR
+    /// round only, so the next adapter PR can consume a checked shape.
+    pub fn with_round0_zk_config(mut self, zk: WhirZkConfig) -> Result<Self, WhirConfigError> {
+        // This local shape check inherits `t_ood` and downstream query counts
+        // from WHIR's existing security derivation. The full Lemma 9.9
+        // soundness-error accounting is handled by the adapter/soundness work.
+        if self.round_parameters.is_empty() {
+            return Err(WhirConfigError::ZkRequiresIntermediateRound);
+        }
+
+        let round0 = &self.round_parameters[0];
+        let private_ood_answers = round0.ood_samples;
+        if zk.pad_len < private_ood_answers {
+            return Err(WhirConfigError::ZkPadTooSmall {
+                pad_len: zk.pad_len,
+                private_ood_answers,
+            });
+        }
+
+        // Round 0 starts from the freshly committed folded WHIR oracle, which
+        // is plain today. Later rounds need a ZK-aware source-oracle handoff
+        // and belong to the full #1589 composition.
+        let source_randomness_len = 0;
+        let mask_message_len = source_randomness_len + zk.pad_len;
+
+        let mask_query_budget = self
+            .round_parameters
+            .get(1)
+            .map_or(self.final_queries, |round| round.num_queries);
+        let mask_randomness_len = zk.min_mask_randomness_len.max(mask_query_budget);
+        // Reed-Solomon masks are a single non-interleaved codeword in this
+        // scoped slice, so `iota_zk = 1`.
+        let mask_interleaving = 1;
+        let log_mask_domain_size = (mask_message_len + mask_randomness_len)
+            .next_power_of_two()
+            .ilog2() as usize
+            + zk.mask_rate_log_inv;
+        if log_mask_domain_size > EF::TWO_ADICITY {
+            return Err(WhirConfigError::ZkMaskDomainExceedsTwoAdicity {
+                log_mask_domain_size,
+                two_adicity: EF::TWO_ADICITY,
+            });
+        }
+        let mask_domain_size = 1 << log_mask_domain_size;
+
+        self.round_parameters[0].zk = Some(RoundZkConfig {
+            source_randomness_len,
+            pad_len: zk.pad_len,
+            mask_message_len,
+            mask_randomness_len,
+            mask_rate_log_inv: zk.mask_rate_log_inv,
+            mask_domain_size,
+            mask_interleaving,
+            mask_query_budget,
+            private_ood_answers,
+        });
+        Ok(self)
+    }
+
     /// Returns whether all PoW difficulties are within the configured maximum.
     ///
     /// Checks the starting, final, and per-round PoW bits against the ceiling.
@@ -511,6 +694,7 @@ where
                 ),
                 ood_samples: 0,
                 folding_pow_bits: self.final_folding_pow_bits,
+                zk: None,
             }
         } else {
             // Apply the last round's domain reduction to get the domain
@@ -540,6 +724,7 @@ where
                 // Inherit OOD count from the last intermediate round.
                 ood_samples: last.ood_samples,
                 folding_pow_bits: self.final_folding_pow_bits,
+                zk: None,
             }
         }
     }
@@ -558,11 +743,13 @@ mod tests {
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::DuplexChallenger;
     use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
 
     use super::*;
     use crate::parameters::{FoldingFactor, SecurityAssumption};
 
     type F = BabyBear;
+    type EF = BinomialExtensionField<F, 4>;
     type Perm = Poseidon2BabyBear<16>;
     type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
 
@@ -693,6 +880,183 @@ mod tests {
     }
 
     #[test]
+    fn with_round0_zk_config_scopes_code_switch_to_round_zero() {
+        let params = default_whir_params();
+        let config = WhirConfig::<F, F, MyChallenger>::new(16, params).unwrap();
+        let pad_len = config.round_parameters[0].ood_samples;
+        let config = config
+            .with_round0_zk_config(WhirZkConfig::round0_code_switch(pad_len, 2, 1))
+            .unwrap();
+
+        assert!(
+            config.n_rounds() >= 2,
+            "fixture should prove only round 0 is configured, not every round"
+        );
+        assert!(config.round_parameters[0].zk.is_some());
+        assert!(
+            config.round_parameters[1..]
+                .iter()
+                .all(|round| round.zk.is_none()),
+            "full multi-round ZK composition is #1589, not this config slice"
+        );
+    }
+
+    #[test]
+    fn round_zk_config_tracks_code_switch_overhead_bound() {
+        let params = default_whir_params();
+        let config = WhirConfig::<F, F, MyChallenger>::new(16, params).unwrap();
+        let pad_len = config.round_parameters[0].ood_samples;
+        let config = config
+            .with_round0_zk_config(WhirZkConfig::round0_code_switch(pad_len, 2, 1))
+            .unwrap();
+
+        let round_zk = config.round_parameters[0]
+            .zk
+            .as_ref()
+            .expect("round 0 should have ZK code-switch config");
+        assert_eq!(
+            round_zk.private_ood_answers,
+            config.round_parameters[0].ood_samples
+        );
+        assert_eq!(
+            round_zk.proof_field_overhead(),
+            round_zk.mask_codeword_field_elements() + round_zk.private_ood_answers,
+            "Construction 9.7 overhead is m_zk * iota_zk + t_ood"
+        );
+    }
+
+    #[test]
+    fn with_round0_zk_config_rejects_under_padded_private_ood_mask() {
+        let params = default_whir_params();
+        let config = WhirConfig::<F, F, MyChallenger>::new(16, params).unwrap();
+        let t_ood = config.round_parameters[0].ood_samples;
+        let err = config
+            .with_round0_zk_config(WhirZkConfig::round0_code_switch(
+                t_ood.saturating_sub(1),
+                2,
+                1,
+            ))
+            .expect_err("pad_len < t_ood should violate the joint-privacy precondition");
+
+        assert!(
+            matches!(
+                err,
+                WhirConfigError::ZkPadTooSmall {
+                    pad_len,
+                    private_ood_answers,
+                } if pad_len + 1 == private_ood_answers
+            ),
+            "expected ZkPadTooSmall, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn with_round0_zk_config_raises_mask_randomness_to_query_budget() {
+        let params = default_whir_params();
+        let config = WhirConfig::<F, F, MyChallenger>::new(16, params).unwrap();
+        let pad_len = config.round_parameters[0].ood_samples;
+        let config = config
+            .with_round0_zk_config(WhirZkConfig::round0_code_switch(pad_len, 1, 1))
+            .unwrap();
+
+        let round_zk = config.round_parameters[0]
+            .zk
+            .as_ref()
+            .expect("round 0 should have ZK code-switch config");
+        assert_eq!(
+            round_zk.mask_query_budget, config.round_parameters[1].num_queries,
+            "round-0 mask openings are budgeted for the next verifier query set"
+        );
+        assert!(
+            round_zk.mask_randomness_len >= round_zk.mask_query_budget,
+            "mask ZK encoding randomness must cover every simulated opening"
+        );
+    }
+
+    #[test]
+    fn with_round0_zk_config_uses_final_queries_when_round_zero_is_last_intermediate_round() {
+        let params = ProtocolParameters {
+            security_level: 100,
+            pow_bits: 20,
+            round_log_inv_rates: vec![],
+            folding_factor: FoldingFactor::Constant(4),
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        };
+        let config = WhirConfig::<F, F, MyChallenger>::new(11, params).unwrap();
+        assert_eq!(
+            config.n_rounds(),
+            1,
+            "fixture should have exactly one intermediate round"
+        );
+        let pad_len = config.round_parameters[0].ood_samples;
+        let config = config
+            .with_round0_zk_config(WhirZkConfig::round0_code_switch(pad_len, 1, 1))
+            .unwrap();
+        let round_zk = config.round_parameters[0]
+            .zk
+            .as_ref()
+            .expect("round 0 should have ZK code-switch config");
+
+        assert_eq!(
+            round_zk.mask_query_budget, config.final_queries,
+            "single-round ZK code-switch hands off to the final verifier query set"
+        );
+    }
+
+    #[test]
+    fn with_round0_zk_config_rejects_mask_domain_exceeding_extension_two_adicity() {
+        let params = default_whir_params();
+        let config = WhirConfig::<EF, F, MyChallenger>::new(16, params).unwrap();
+        let pad_len = config.round_parameters[0].ood_samples;
+
+        let err = config
+            .with_round0_zk_config(WhirZkConfig::round0_code_switch(
+                pad_len,
+                1,
+                EF::TWO_ADICITY + 1,
+            ))
+            .expect_err("mask domain should fit the extension-field two-adic subgroup");
+
+        assert!(
+            matches!(
+                err,
+                WhirConfigError::ZkMaskDomainExceedsTwoAdicity {
+                    log_mask_domain_size,
+                    two_adicity,
+                } if log_mask_domain_size > two_adicity && two_adicity == EF::TWO_ADICITY
+            ),
+            "expected ZkMaskDomainExceedsTwoAdicity, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn with_round0_zk_config_rejects_config_without_intermediate_round() {
+        let params = ProtocolParameters {
+            security_level: 100,
+            pow_bits: 20,
+            round_log_inv_rates: vec![],
+            folding_factor: FoldingFactor::Constant(4),
+            soundness_type: SecurityAssumption::UniqueDecoding,
+            starting_log_inv_rate: 1,
+        };
+        let config = WhirConfig::<F, F, MyChallenger>::new(6, params).unwrap();
+        assert_eq!(
+            config.n_rounds(),
+            0,
+            "fixture should go directly from the initial fold to the final phase"
+        );
+        let err = config
+            .with_round0_zk_config(WhirZkConfig::round0_code_switch(0, 1, 1))
+            .expect_err("there is no intermediate round for Construction 9.7");
+
+        assert!(
+            matches!(err, WhirConfigError::ZkRequiresIntermediateRound),
+            "expected ZkRequiresIntermediateRound, got {err:?}"
+        );
+    }
+
+    #[test]
     fn test_check_pow_bits_within_limits() {
         let params = default_whir_params();
         let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
@@ -715,6 +1079,7 @@ mod tests {
                 log_inv_rate: 1,
                 domain_size: 10,
                 folded_domain_gen: F::from_u64(2),
+                zk: None,
             },
             RoundConfig {
                 pow_bits: 18,
@@ -726,6 +1091,7 @@ mod tests {
                 log_inv_rate: 1,
                 domain_size: 10,
                 folded_domain_gen: F::from_u64(2),
+                zk: None,
             },
         ];
 
@@ -788,6 +1154,7 @@ mod tests {
             log_inv_rate: 1,
             domain_size: 10,
             folded_domain_gen: F::from_u64(2),
+            zk: None,
         }];
 
         assert!(
@@ -817,6 +1184,7 @@ mod tests {
             log_inv_rate: 1,
             domain_size: 10,
             folded_domain_gen: F::from_u64(2),
+            zk: None,
         }];
 
         assert!(
@@ -845,6 +1213,7 @@ mod tests {
             log_inv_rate: 1,
             domain_size: 10,
             folded_domain_gen: F::from_u64(2),
+            zk: None,
         }];
 
         assert!(
@@ -873,6 +1242,7 @@ mod tests {
             log_inv_rate: 1,
             domain_size: 10,
             folded_domain_gen: F::from_u64(2),
+            zk: None,
         }];
 
         assert!(
