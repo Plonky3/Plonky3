@@ -10,14 +10,22 @@ use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field};
 use p3_matrix::Matrix;
-use p3_zk_codes::ZkEncoding;
+use p3_matrix::dense::RowMajorMatrix;
+use p3_zk_codes::ZkEncodingWithRandomness;
 use rand::Rng;
 
 use crate::zk::data::{MaskOracle, ZkSumcheckData};
 
-/// Sample `k` mask polynomials, encode each, commit, and observe.
+/// Sample `k` mask polynomials, encode them, and commit the batch as one
+/// interleaved oracle.
 ///
 /// Implements step 1 of the masking layer.
+///
+/// - The `k` codewords share one evaluation domain.
+/// - They stack into a width-`k` matrix whose row `z` holds position `z` of
+///   every mask.
+/// - One commitment covers the batch.
+/// - Later openings authenticate all `k` values with a single Merkle path.
 ///
 /// # Arguments
 ///
@@ -25,15 +33,20 @@ use crate::zk::data::{MaskOracle, ZkSumcheckData};
 /// - `encoding` — zero-knowledge encoder.
 ///   Defines the mask message space and draws a uniform sample on demand.
 /// - `mmcs` — Merkle commitment scheme over the codeword alphabet.
-/// - `challenger` — Fiat–Shamir transcript that absorbs each commitment.
+/// - `challenger` — Fiat–Shamir transcript that absorbs the commitment.
 /// - `rng` — driver for both the mask coefficients and the encoder's randomness budget.
 ///
 /// # Returns
 ///
 /// - Per-round coefficient vectors.
-/// - Per-round commitment plus prover-side data.
+/// - Per-round encoding randomness, in matching order.
+/// - The batch commitment plus prover-side data.
 ///
-/// The verifier sees only the commitments; the prover keeps the data for later openings.
+/// ```text
+///     verifier  : sees only the commitment
+///     prover    : keeps the opening data and the encoding randomness,
+///                 so the base case can reveal blinded combinations of it
+/// ```
 #[allow(clippy::type_complexity)]
 pub(super) fn sample_masks<F, Enc, M, Ch, R>(
     k: usize,
@@ -41,10 +54,10 @@ pub(super) fn sample_masks<F, Enc, M, Ch, R>(
     mmcs: &M,
     challenger: &mut Ch,
     rng: &mut R,
-) -> (Vec<Vec<F>>, Vec<MaskOracle<F, Enc, M>>)
+) -> (Vec<Vec<F>>, Vec<Vec<F>>, MaskOracle<F, M>)
 where
     F: Field,
-    Enc: ZkEncoding<F>,
+    Enc: ZkEncodingWithRandomness<F>,
     Enc::Codeword: Matrix<F>,
     M: Mmcs<F>,
     Ch: CanObserve<M::Commitment>,
@@ -54,20 +67,48 @@ where
     // space is whatever the encoding defines.
     let masks: Vec<Vec<F>> = (0..k).map(|_| encoding.sample_message(rng)).collect();
 
-    // Encode each mask, commit, observe.
+    // Encode each mask.
     //
-    // Iterating the mask slice keeps memory layout contiguous for the wire-assembly loop that follows.
-    let mask_oracles: Vec<MaskOracle<F, Enc, M>> = masks
+    // Why explicit randomness: the prover must retain it for the base case.
+    //
+    //     draw order = an internally-drawing encode call
+    //     -> matched-RNG coupling with the witness-free simulator holds
+    let mut mask_randomness: Vec<Vec<F>> = Vec::with_capacity(k);
+    let codewords: Vec<Enc::Codeword> = masks
         .iter()
         .map(|mask| {
-            let codeword = encoding.encode(mask, rng);
-            let (commit, prover_data) = mmcs.commit_matrix(codeword);
-            challenger.observe(commit.clone());
-            (commit, prover_data)
+            let randomness = encoding.sample_randomness(rng);
+            let codeword = encoding.encode_with_randomness(mask, &randomness);
+            mask_randomness.push(randomness);
+            codeword
         })
         .collect();
 
-    (masks, mask_oracles)
+    // Stack the codewords column-wise and commit once.
+    let (commit, prover_data) = mmcs.commit_matrix(stack_codewords(&codewords));
+    challenger.observe(commit.clone());
+
+    (masks, mask_randomness, (commit, prover_data))
+}
+
+/// Interleaves same-domain codewords into one width-`k` matrix.
+///
+/// ```text
+///     row z = ( cw_1(z), cw_2(z), ..., cw_k(z) )
+/// ```
+pub fn stack_codewords<F: Field, Cw: Matrix<F>>(codewords: &[Cw]) -> RowMajorMatrix<F> {
+    let height = codewords[0].height();
+    let width = codewords.len();
+    let mut values = F::zero_vec(height * width);
+    for (column, codeword) in codewords.iter().enumerate() {
+        // Each input codeword is a single column over the shared domain.
+        debug_assert_eq!(codeword.width(), 1);
+        debug_assert_eq!(codeword.height(), height);
+        for (row, value) in codeword.rows().enumerate() {
+            values[row * width + column] = value.into_iter().next().unwrap();
+        }
+    }
+    RowMajorMatrix::new(values, width)
 }
 
 /// Compute the auxiliary target, record it on the transcript, and return the running endpoint sum.
@@ -153,6 +194,7 @@ mod tests {
     use alloc::vec;
 
     use p3_field::PrimeCharacteristicRing;
+    use p3_zk_codes::ZkEncoding as _;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -248,13 +290,16 @@ mod tests {
         let mut challenger = MyChallenger::new(perm);
         let mut rng = SmallRng::seed_from_u64(seed);
 
-        let (masks, oracles) =
+        let (masks, randomness, _oracle) =
             sample_masks::<EF, _, _, _, _>(k, &encoding, &mmcs, &mut challenger, &mut rng);
 
         assert_eq!(masks.len(), k);
-        assert_eq!(oracles.len(), k);
+        assert_eq!(randomness.len(), k);
         for mask in &masks {
             assert_eq!(mask.len(), ell_zk);
+        }
+        for rand in &randomness {
+            assert_eq!(rand.len(), encoding.randomness_len());
         }
     }
 
@@ -271,18 +316,17 @@ mod tests {
 
         let mut ch1 = MyChallenger::new(perm.clone());
         let mut rng1 = SmallRng::seed_from_u64(seed);
-        let (masks1, oracles1) =
+        let (masks1, randomness1, oracle1) =
             sample_masks::<EF, _, _, _, _>(k, &encoding, &mmcs, &mut ch1, &mut rng1);
 
         let mut ch2 = MyChallenger::new(perm);
         let mut rng2 = SmallRng::seed_from_u64(seed);
-        let (masks2, oracles2) =
+        let (masks2, randomness2, oracle2) =
             sample_masks::<EF, _, _, _, _>(k, &encoding, &mmcs, &mut ch2, &mut rng2);
 
         assert_eq!(masks1, masks2);
+        assert_eq!(randomness1, randomness2);
         // Compare commitments only; prover-side data is not value-comparable.
-        let commits1: Vec<_> = oracles1.iter().map(|(c, _)| c.clone()).collect();
-        let commits2: Vec<_> = oracles2.iter().map(|(c, _)| c.clone()).collect();
-        assert_eq!(commits1, commits2);
+        assert_eq!(oracle1.0, oracle2.0);
     }
 }

@@ -150,8 +150,8 @@ pub struct ProverRun {
     pub verifier_challenger: MyChallenger,
     /// Per-round zero-knowledge transcript artefacts.
     pub zk_data: ZkSumcheckData<F, EF>,
-    /// Mask commitments forwarded to the verifier.
-    pub mask_commits: Vec<<MyMmcs as p3_commit::Mmcs<EF>>::Commitment>,
+    /// Batch mask commitment forwarded to the verifier.
+    pub mask_commitment: <MyMmcs as p3_commit::Mmcs<EF>>::Commitment,
     /// Per-round folding randomness emitted by the prover.
     pub prover_randomness: p3_multilinear_util::point::Point<EF>,
     /// Virtual evaluations sampled during the claim phase.
@@ -270,17 +270,13 @@ where
         &mut prover_challenger,
         &mut prover_rng,
     );
-    let mask_commits: Vec<_> = prover_handoff
-        .mask_oracles
-        .iter()
-        .map(|(c, _)| c.clone())
-        .collect();
+    let mask_commitment = prover_handoff.mask_oracle.0.clone();
 
     ProverRun {
         verifier,
         verifier_challenger,
         zk_data,
-        mask_commits,
+        mask_commitment,
         prover_randomness: prover_handoff.randomness,
         virtual_evals,
     }
@@ -297,7 +293,7 @@ pub fn replay_verifier(
         .verifier
         .into_sumcheck::<MyMmcs, _>(
             &run.zk_data,
-            &run.mask_commits,
+            &run.mask_commitment,
             ell_zk,
             folding_factor,
             pow_bits,

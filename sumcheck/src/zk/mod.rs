@@ -79,6 +79,6 @@ pub use data::{
     MaskOracle, ZkSumcheckData, ZkSumcheckHandoff, ZkVerifierHandoff, mask_residual,
     mask_residual_covectors, mask_residual_covectors_from_shape,
 };
-pub use prover::{ZkLayout, ZkPrefixProver, ZkProver, ZkSuffixProver};
+pub use prover::{ZkLayout, ZkPrefixProver, ZkProver, ZkSuffixProver, stack_codewords};
 pub use simulator::simulate_classic_unpacked;
 pub use verifier::ZkVerifier;

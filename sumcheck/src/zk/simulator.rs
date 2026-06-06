@@ -7,11 +7,12 @@ use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, HornerIter};
 use p3_matrix::Matrix;
 use p3_multilinear_util::point::Point;
-use p3_zk_codes::ZkEncoding;
+use p3_zk_codes::ZkEncodingWithRandomness;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
 use super::data::ZkSumcheckData;
+use super::prover::stack_codewords;
 use super::verifier::ZkVerifier;
 
 /// Witness-free HVZK simulator (Lemma 6.4).
@@ -36,7 +37,7 @@ use super::verifier::ZkVerifier;
 /// # Returns
 ///
 /// - Simulated transcript.
-/// - One mask commitment per round.
+/// - The batch mask commitment.
 /// - Per-round challenges.
 ///
 /// # Panics
@@ -51,11 +52,11 @@ pub fn simulate_classic_unpacked<F, EF, Enc, M, Challenger, R>(
     encoding: &Enc,
     mmcs: &M,
     rng: &mut R,
-) -> (ZkSumcheckData<F, EF>, Vec<M::Commitment>, Point<EF>)
+) -> (ZkSumcheckData<F, EF>, M::Commitment, Point<EF>)
 where
     F: Field,
     EF: ExtensionField<F>,
-    Enc: ZkEncoding<EF>,
+    Enc: ZkEncodingWithRandomness<EF>,
     Enc::Codeword: Matrix<EF>,
     M: Mmcs<EF>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
@@ -91,13 +92,17 @@ where
 
     let masks: Vec<Vec<EF>> = (0..k).map(|_| encoding.sample_message(rng)).collect();
 
-    let mut mask_commits: Vec<M::Commitment> = Vec::with_capacity(k);
-    for mask in &masks {
-        let codeword = encoding.encode(mask, rng);
-        let (commit, _prover_data) = mmcs.commit_matrix(codeword);
-        challenger.observe(commit.clone());
-        mask_commits.push(commit);
-    }
+    // Encode with the same explicit draw order as the prover, stack the
+    // batch column-wise, and commit once.
+    let codewords: Vec<Enc::Codeword> = masks
+        .iter()
+        .map(|mask| {
+            let randomness = encoding.sample_randomness(rng);
+            encoding.encode_with_randomness(mask, &randomness)
+        })
+        .collect();
+    let (mask_commitment, _prover_data) = mmcs.commit_matrix(stack_codewords(&codewords));
+    challenger.observe(mask_commitment.clone());
 
     // Phase 3: mu_tilde via the closed form (Construction 6.3 step 2 replay).
     //
@@ -176,7 +181,7 @@ where
         randomness.push(gamma_j);
     }
 
-    (zk_data, mask_commits, Point::new(randomness))
+    (zk_data, mask_commitment, Point::new(randomness))
 }
 
 #[cfg(test)]
@@ -184,6 +189,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_field::{BasedVectorSpace, Field, PackedValue, PrimeCharacteristicRing};
+    use p3_zk_codes::ZkEncoding;
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
@@ -243,14 +249,14 @@ mod tests {
         // the same claim phase before being handed to the simulator.
         let virtual_evals = real_run.virtual_evals.clone();
         let zk_data_real = real_run.zk_data.clone();
-        let mask_commits_real = real_run.mask_commits.clone();
+        let mask_commitment_real = real_run.mask_commitment.clone();
 
         // Honest verifier replay.
         let _ = real_run
             .verifier
             .into_sumcheck::<MyMmcs, _>(
                 &zk_data_real,
-                &mask_commits_real,
+                &mask_commitment_real,
                 ell_zk,
                 folding_factor,
                 pow_bits,
@@ -279,7 +285,7 @@ mod tests {
 
         // Matched seed with the real prover RNG; needed by the coupling certificate below.
         let mut sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
-        let (zk_data_sim, mask_commits_sim, _gammas_sim) =
+        let (zk_data_sim, mask_commitment_sim, _gammas_sim) =
             simulate_classic_unpacked::<F, EF, _, _, _, _>(
                 &mut sim_ch,
                 &verifier_sim,
@@ -294,7 +300,7 @@ mod tests {
         let _ = verifier_sim
             .into_sumcheck::<MyMmcs, _>(
                 &zk_data_sim,
-                &mask_commits_sim,
+                &mask_commitment_sim,
                 ell_zk,
                 folding_factor,
                 pow_bits,
@@ -307,8 +313,8 @@ mod tests {
         if zk_data_real.mu_tilde != zk_data_sim.mu_tilde {
             return Err("matched-RNG coupling: mu_tilde differs");
         }
-        if mask_commits_real != mask_commits_sim {
-            return Err("matched-RNG coupling: mask commits differ");
+        if mask_commitment_real != mask_commitment_sim {
+            return Err("matched-RNG coupling: mask commitment differs");
         }
 
         // === Extension-valued wires on both sides ===
@@ -461,7 +467,7 @@ mod tests {
             // Run the simulator under matched RNGs.
             let pow_bits = 0;
             let mut sim_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
-            let (sim_zk_data, commits, gammas) =
+            let (sim_zk_data, mask_commitment, gammas) =
                 simulate_classic_unpacked::<F, EF, _, _, _, _>(
                     &mut sim_challenger,
                     &verifier,
@@ -495,11 +501,6 @@ mod tests {
                 "pow_witnesses must be empty when pow_bits == 0",
             );
             prop_assert_eq!(
-                commits.len(),
-                folding_factor,
-                "one mask commitment per round",
-            );
-            prop_assert_eq!(
                 gammas.as_slice().len(),
                 folding_factor,
                 "one challenge per round",
@@ -530,7 +531,7 @@ mod tests {
             let replay = verifier
                 .into_sumcheck::<MyMmcs, _>(
                     &sim_zk_data,
-                    &commits,
+                    &mask_commitment,
                     ell_zk,
                     folding_factor,
                     pow_bits,

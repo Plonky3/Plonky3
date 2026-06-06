@@ -8,6 +8,7 @@ use p3_field::{ExtensionField, Field, TwoAdicField};
 
 use crate::fiat_shamir::pattern::{Hint, Observe, Pattern, Sample};
 use crate::parameters::{FoldingFactor, WhirConfig};
+use crate::pcs::zk::ZkWhirConfig;
 
 /// Configuration for a sumcheck phase in the protocol.
 #[derive(Debug)]
@@ -354,7 +355,7 @@ where
     ///
     /// # Transcript shape
     ///
-    /// 1. Observe one mask commitment per sumcheck round.
+    /// 1. Observe the batch's interleaved mask commitment.
     /// 2. Observe `mu_tilde`.
     /// 3. Sample the combining challenge `eps`.
     /// 4. For each round, observe the wire polynomial coefficients, optionally
@@ -366,9 +367,8 @@ where
             ell_zk,
         } = *params;
 
-        for _ in 0..rounds {
-            self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
-        }
+        // The batch's masks are interleaved into one committed oracle.
+        self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
         self.observe(1, Observe::ZkSumcheckMuTilde);
         self.sample(1, Sample::ZkSumcheckCombinationRandomness);
 
@@ -377,6 +377,123 @@ where
             self.observe(wire_coefficients, Observe::ZkSumcheckPoly);
             self.pow(pow_bits);
             self.sample(1, Sample::FoldingRandomness);
+        }
+    }
+
+    /// Append a Construction 6.3 HVZK sumcheck batch preceded by its bound
+    /// joint claim, as replayed by the residual-claim verifier.
+    pub fn add_zk_residual_sumcheck<const DIGEST_ELEMS: usize>(
+        &mut self,
+        params: &ZkSumcheckParams,
+    ) {
+        self.observe(1, Observe::ZkSumcheckClaim);
+        self.add_zk_sumcheck::<DIGEST_ELEMS>(params);
+    }
+
+    /// Append the full HVZK-WHIR proof transcript to the domain separator.
+    ///
+    /// Mirrors the plain-WHIR transcript builder for the hiding pipeline:
+    ///
+    /// ```text
+    ///     masked sumcheck batches -> code-switching rounds -> masked base case
+    /// ```
+    ///
+    /// Like the plain variant, evaluation points and claimed values are
+    /// external inputs.
+    /// The PCS layer binds them, not this builder.
+    pub fn add_zk_whir_proof<Challenger, const DIGEST_ELEMS: usize>(
+        &mut self,
+        config: &ZkWhirConfig<EF, F, Challenger>,
+    ) where
+        Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
+        EF: TwoAdicField,
+        F: TwoAdicField,
+    {
+        // Bind the ZK extension parameters.
+        self.protocol_param(config.zk.ell_zk);
+        self.protocol_param(config.zk.mask_queries);
+        self.protocol_param(config.zk.mask_log_inv_rate);
+        for &budget in &config.oracle_randomness {
+            self.protocol_param(budget);
+        }
+
+        // Claim batching challenge and the initial masked sumcheck batch.
+        self.sample(1, Sample::InitialCombinationRandomness);
+        self.add_zk_residual_sumcheck::<DIGEST_ELEMS>(&ZkSumcheckParams {
+            rounds: config.folding_factor(0),
+            pow_bits: config.starting_folding_pow_bits,
+            ell_zk: config.zk.ell_zk,
+        });
+
+        // Code-switching rounds.
+        let mut domain_size = config.starting_domain_size();
+        for (round, r) in config.round_parameters.iter().enumerate() {
+            let folded_domain_size = domain_size >> config.folding_factor(round);
+            let domain_size_bytes = ((folded_domain_size * 2 - 1).ilog2() as usize).div_ceil(8);
+
+            // New oracle and fresh code-switch mask.
+            self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
+            self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
+            // Private out-of-domain answers.
+            self.add_ood(r.ood_samples);
+
+            // PoW, checkpoint, query positions on the previous oracle.
+            self.pow(r.pow_bits);
+            self.sample(1, Sample::TranscriptCheckpoint);
+            self.sample(r.num_queries * domain_size_bytes, Sample::StirQueries);
+            self.hint(Hint::StirQueries);
+            self.hint(Hint::MerkleProof);
+
+            // Batching challenge, then the next masked sumcheck batch.
+            self.sample(1, Sample::CombinationRandomness);
+            self.add_zk_residual_sumcheck::<DIGEST_ELEMS>(&ZkSumcheckParams {
+                rounds: config.folding_factor(round + 1),
+                pow_bits: r.folding_pow_bits,
+                ell_zk: config.zk.ell_zk,
+            });
+            domain_size >>= config.rs_reduction_factor(round);
+        }
+
+        // Masked base case.
+        let final_config = config.final_round_config();
+        let folded_domain_size = final_config.domain_size >> final_config.folding_factor;
+        let domain_size_bytes = ((folded_domain_size * 2 - 1).ilog2() as usize).div_ceil(8);
+        let randomness_len = config.oracle_randomness[config.n_rounds()];
+
+        // Fresh main mask plus one fresh blind group per carried mask group.
+        self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
+        for _ in 0..config.mask_groups().len() {
+            self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
+        }
+        self.observe(1, Observe::ZkBaseCaseClaim);
+        self.sample(1, Sample::CombinationRandomness);
+        // Blinded source reveal, then one blinded reveal per mask oracle.
+        self.observe(
+            (1 << final_config.num_variables) + randomness_len,
+            Observe::ZkBaseCaseReveal,
+        );
+        for group in config.mask_groups() {
+            for _ in 0..group.width {
+                self.observe(
+                    group.shape.message_len + group.shape.randomness_len,
+                    Observe::ZkBaseCaseReveal,
+                );
+            }
+        }
+
+        // Spot checks: source positions, then per-mask positions.
+        self.pow(config.final_pow_bits);
+        self.sample(
+            config.final_queries * domain_size_bytes,
+            Sample::FinalQueries,
+        );
+        self.hint(Hint::StirAnswers);
+        self.hint(Hint::MerkleProof);
+        for group in config.mask_groups() {
+            let mask_bytes = ((group.shape.domain_size * 2 - 1).ilog2() as usize).div_ceil(8);
+            self.sample(config.zk.mask_queries * mask_bytes, Sample::StirQueries);
+            self.hint(Hint::StirAnswers);
+            self.hint(Hint::MerkleProof);
         }
     }
 
@@ -435,7 +552,7 @@ mod tests {
         assert_eq!(
             separator.pattern,
             vec![
-                observe_entry(8, Observe::MerkleDigest),
+                // One interleaved mask oracle covers the whole batch.
                 observe_entry(8, Observe::MerkleDigest),
                 observe_entry(1, Observe::ZkSumcheckMuTilde),
                 sample_entry(1, Sample::ZkSumcheckCombinationRandomness),

@@ -7,7 +7,7 @@ use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, HornerIter};
 use p3_matrix::Matrix;
 use p3_multilinear_util::point::Point;
-use p3_zk_codes::ZkEncoding;
+use p3_zk_codes::ZkEncodingWithRandomness;
 use rand::Rng;
 
 use super::common::{observe_masks_and_mu_tilde, sample_masks};
@@ -27,6 +27,33 @@ where
     /// the caller has already reduced the layout-specific opening relation to a
     /// product polynomial, and this method applies Construction 6.3's mask
     /// transcript to the next batch of sumcheck rounds.
+    ///
+    /// # Joint claims and the auxiliary constant
+    ///
+    /// The committed-sumcheck relation (Definition 5.8 of eprint 2026/391)
+    /// pairs the source claim `<f, w>` with mask-oracle claims `<xi_i, u_i>`.
+    ///
+    /// - The mask-claim values are prover-only; their total is the
+    ///   auxiliary constant.
+    /// - The bound scalar is the joint claim: source claim plus that
+    ///   constant.
+    /// - The constant rides the affine chain with a `2^{-j}` carry per
+    ///   round:
+    ///
+    /// ```text
+    ///     h_j gains  eps * aux * 2^{-j}  on its constant slot
+    ///     =>  h_j(0) + h_j(1)  gains  eps * aux * 2^{-(j-1)}
+    ///     =>  the final residual gains  eps * aux * 2^{-k}
+    /// ```
+    ///
+    /// Downstream reductions must therefore scale the carried mask covectors
+    /// by `eps * 2^{-k}`.
+    ///
+    /// # Eval side
+    ///
+    /// - Only the weight side and the claim are scaled by `eps`.
+    /// - The evaluation side stays the honest folded message.
+    /// - An HVZK code-switch can therefore commit it verbatim.
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     #[tracing::instrument(skip_all)]
     pub fn into_zk_sumcheck<Enc, M, R, Ch>(
@@ -36,11 +63,12 @@ where
         mmcs: &M,
         folding_factor: usize,
         pow_bits: usize,
+        aux_claim: EF,
         challenger: &mut Ch,
         rng: &mut R,
-    ) -> ZkSumcheckHandoff<F, EF, Enc, M>
+    ) -> ZkSumcheckHandoff<F, EF, M>
     where
-        Enc: ZkEncoding<EF>,
+        Enc: ZkEncodingWithRandomness<EF>,
         Enc::Codeword: Matrix<EF>,
         M: Mmcs<EF>,
         R: Rng,
@@ -61,9 +89,11 @@ where
 
         // Unlike the layout-driven path, this entry receives a scalar claim
         // directly, so bind it before the masking prelude samples `eps`.
-        challenger.observe_algebra_element(self.claimed_sum());
+        //
+        // The bound value is the joint claim, matching the verifier's view.
+        challenger.observe_algebra_element(self.claimed_sum() + aux_claim);
 
-        let (masks, mask_oracles) =
+        let (masks, mask_randomness, mask_oracle) =
             sample_masks::<EF, _, _, _, _>(folding_factor, encoding, mmcs, challenger, rng);
         let mut sum_future_endpoints = observe_masks_and_mu_tilde::<F, EF, _>(
             &masks,
@@ -84,12 +114,19 @@ where
             eps,
         };
 
+        // Running `aux * 2^{-j}` carry; halved once per round.
+        let half = EF::TWO.inverse();
+        let mut aux_carry = aux_claim;
+
         for (round_idx, mask) in masks.iter().enumerate() {
             let j = round_idx + 1;
             let mask_endpoints = mask[0].double() + mask[1..].iter().copied().sum::<EF>();
             sum_future_endpoints -= mask_endpoints;
+            aux_carry *= half;
 
             let (plain_c0, plain_c_inf) = self.round_coefficients();
+            // The aux carry enters only the transmitted constant slot; the
+            // source-side fold below keeps the raw coefficients.
             let h = round_ctx.assemble(
                 RoundState {
                     j,
@@ -98,7 +135,7 @@ where
                     future_endpoints: sum_future_endpoints,
                 },
                 PlainPiece {
-                    c0: plain_c0,
+                    c0: plain_c0 + aux_carry,
                     c_inf: plain_c_inf,
                 },
             );
@@ -118,14 +155,15 @@ where
             rs.push(gamma);
         }
 
-        self.scale_evals_and_claim(eps);
+        self.scale_weights_and_claim(eps);
 
         ZkSumcheckHandoff {
             residual_prover: self,
             randomness: Point::new(rs),
             eps,
             mask_messages: masks,
-            mask_oracles,
+            mask_randomness,
+            mask_oracle,
         }
     }
 }
@@ -140,7 +178,7 @@ mod tests {
     use p3_field::{PrimeCharacteristicRing, dot_product};
     use p3_matrix::dense::RowMajorMatrix;
     use p3_multilinear_util::poly::Poly;
-    use p3_zk_codes::ZkEncoding;
+    use p3_zk_codes::{ZkEncoding, ZkEncodingWithRandomness};
     use rand::rngs::SmallRng;
     use rand::{Rng, SeedableRng};
 
@@ -187,8 +225,19 @@ mod tests {
             RowMajorMatrix::new_col(msg.to_vec())
         }
 
+        fn sample_randomness<R: Rng>(&self, _rng: &mut R) -> Vec<EF> {
+            Vec::new()
+        }
+
         fn simulate<R: Rng>(&self, query_set: &[usize], _rng: &mut R) -> Vec<EF> {
             EF::zero_vec(query_set.len())
+        }
+    }
+
+    impl ZkEncodingWithRandomness<EF> for SentinelEncoding {
+        fn encode_with_randomness(&self, msg: &[EF], randomness: &[EF]) -> Self::Codeword {
+            assert!(randomness.is_empty());
+            RowMajorMatrix::new_col(msg.to_vec())
         }
     }
 
@@ -217,18 +266,15 @@ mod tests {
             &mmcs,
             folding_factor,
             0,
+            EF::ZERO,
             &mut prover_challenger,
             &mut rng,
         );
-        let mask_commits = prover_handoff
-            .mask_oracles
-            .iter()
-            .map(|(commit, _)| commit.clone())
-            .collect::<Vec<_>>();
+        let mask_commitment = prover_handoff.mask_oracle.0.clone();
 
         let verifier_handoff = ZkVerifier::<F, EF>::verify_claim::<MyMmcs, _>(
             &zk_data,
-            &mask_commits,
+            &mask_commitment,
             ell_zk,
             folding_factor,
             0,
@@ -277,6 +323,7 @@ mod tests {
             &mmcs,
             folding_factor,
             0,
+            EF::ZERO,
             &mut challenger,
             &mut rng,
         );

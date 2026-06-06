@@ -124,6 +124,11 @@ where
         (0..self.msg_len).map(|_| rng.random()).collect()
     }
 
+    fn sample_randomness<R: Rng>(&self, rng: &mut R) -> Vec<F> {
+        // Uniform masking coefficients; one per query the encoding can hide.
+        (0..self.t).map(|_| rng.random()).collect()
+    }
+
     fn query_bound(&self) -> usize {
         self.t
     }
