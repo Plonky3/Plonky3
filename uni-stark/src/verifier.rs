@@ -389,8 +389,30 @@ where
     //
     // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has degree `d`.
     let zeta = challenger.sample_algebra_element();
-    let periodic_values: Vec<SC::Challenge> = air
-        .periodic_columns()
+
+    // Each periodic column repeats with a period dividing the trace length.
+    // A valid period is a power of two no larger than the trace length.
+    let trace_length = init_trace_domain.size();
+    let periodic_columns = air.periodic_columns();
+    for col in &periodic_columns {
+        let period = col.len();
+        // Evaluation builds a subdomain of size `period`, which exists only for powers of two.
+        if !period.is_power_of_two() {
+            return Err(
+                InvalidProofShapeError::PeriodicColumnLengthNotPowerOfTwo { got: period }.into(),
+            );
+        }
+        // That subdomain must sit inside the trace domain.
+        if period > trace_length {
+            return Err(InvalidProofShapeError::PeriodicColumnLengthTooLarge {
+                maximum: trace_length,
+                got: period,
+            }
+            .into());
+        }
+    }
+
+    let periodic_values: Vec<SC::Challenge> = periodic_columns
         .iter()
         .map(|periodic_col| init_trace_domain.evaluate_periodic_column_at(periodic_col, zeta))
         .collect();

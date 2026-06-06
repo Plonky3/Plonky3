@@ -106,6 +106,12 @@ pub enum InvalidProofShapeError {
     /// Opened values (trace, quotient, random) don't match expected dimensions.
     #[error("opened values do not match expected dimensions")]
     OpenedValuesDimensionMismatch,
+    /// A periodic column length is not a power of two.
+    #[error("periodic column length must be a power of two, got {got}")]
+    PeriodicColumnLengthNotPowerOfTwo { got: usize },
+    /// A periodic column is longer than the trace it repeats over.
+    #[error("periodic column length too large: expected at most {maximum}, got {got}")]
+    PeriodicColumnLengthTooLarge { maximum: usize, got: usize },
 }
 
 /// Top-level verification error.
