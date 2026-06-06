@@ -1,6 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use p3_field::PrimeCharacteristicRing;
 use p3_matrix::dense::RowMajorMatrix;
 
 use crate::builder::AirBuilder;
@@ -93,6 +94,32 @@ pub trait BaseAir<F>: Sync {
             .collect();
 
         Some(RowMajorMatrix::new(values, cols.len()))
+    }
+
+    /// Encode this AIR's instance data for binding into the Fiat-Shamir transcript.
+    ///
+    /// Prover and verifier absorb this before sampling any challenge.
+    /// Distinct instances then cannot share a transcript.
+    /// This stops a proof from being replayed against a different instance.
+    ///
+    /// The default encodes the periodic columns with length prefixes.
+    /// Override this to bind instance values held in your own fields.
+    /// An override replaces the default.
+    /// Re-include the periodic columns when an override uses them.
+    fn instance_encoding(&self) -> Vec<F>
+    where
+        F: PrimeCharacteristicRing,
+    {
+        let columns = self.periodic_columns();
+        let mut encoding = Vec::new();
+        // Length prefix the column count so the value stream cannot be reinterpreted.
+        encoding.push(F::from_usize(columns.len()));
+        for column in columns {
+            // Length prefix each column for the same reason.
+            encoding.push(F::from_usize(column.len()));
+            encoding.extend(column);
+        }
+        encoding
     }
 
     /// Which main trace columns have their next row accessed by this AIR's
@@ -206,4 +233,54 @@ pub trait Air<AB: AirBuilder>: BaseAir<AB::F> {
     /// # Arguments
     /// - `builder`: Mutable reference to an `AirBuilder` for defining constraints.
     fn eval(&self, builder: &mut AB);
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
+
+    use super::*;
+
+    /// AIR exposing two periodic columns of lengths 2 and 1.
+    struct TwoPeriodicColumns;
+
+    impl BaseAir<BabyBear> for TwoPeriodicColumns {
+        fn width(&self) -> usize {
+            1
+        }
+
+        fn periodic_columns(&self) -> Vec<Vec<BabyBear>> {
+            vec![
+                vec![BabyBear::from_u64(7), BabyBear::from_u64(9)],
+                vec![BabyBear::from_u64(4)],
+            ]
+        }
+    }
+
+    /// AIR with no periodic columns.
+    struct NoColumns;
+
+    impl BaseAir<BabyBear> for NoColumns {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+
+    #[test]
+    fn default_encoding_is_length_prefixed() {
+        // Layout: column count, then each column's length followed by its values.
+        //     columns  : [[7, 9], [4]]
+        //     encoding : [2,  2, 7, 9,  1, 4]
+        let expected = [2u64, 2, 7, 9, 1, 4].map(BabyBear::from_u64).to_vec();
+        assert_eq!(TwoPeriodicColumns.instance_encoding(), expected);
+    }
+
+    #[test]
+    fn default_encoding_with_no_columns_is_a_single_zero() {
+        // No periodic columns leaves only the column count, which is zero.
+        assert_eq!(NoColumns.instance_encoding(), vec![BabyBear::ZERO]);
+    }
 }

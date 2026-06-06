@@ -198,6 +198,7 @@ where
             widths[i],
             num_quotient_chunks[i],
         );
+        transcript.observe_air_encoding(&airs[i].instance_encoding());
     }
 
     // Transcript: Main trace commitment

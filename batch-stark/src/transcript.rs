@@ -42,6 +42,12 @@ impl<SC: SGC> BatchTranscript<SC> {
         self.observe_usize(num_quotient_chunks);
     }
 
+    /// Bind an instance's AIR-owned data that is not otherwise committed.
+    /// This stops two instances differing only in AIR fields from sharing a transcript.
+    pub fn observe_air_encoding(&mut self, encoding: &[Val<SC>]) {
+        self.challenger.observe_slice(encoding);
+    }
+
     /// Observe the main trace commitment and per-instance public values.
     pub fn observe_main<PV>(&mut self, main_commitment: &Commitment<SC>, public_values: &[PV])
     where

@@ -161,7 +161,9 @@ where
     challenger.observe(Val::<SC>::from_u8(log_ext_degree as u8));
     challenger.observe(Val::<SC>::from_u8(log_degree as u8));
     challenger.observe(Val::<SC>::from_usize(preprocessed_width));
-    // TODO: Might be best practice to include other instance data here; see verifier comment.
+    // Bind the AIR-owned instance data that is not otherwise committed.
+    // This prevents replaying a proof against a different instance.
+    challenger.observe_slice(&air.instance_encoding());
 
     // Observe the Merkle root of the trace commitment.
     challenger.observe(trace_commit.clone());

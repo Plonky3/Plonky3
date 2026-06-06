@@ -247,6 +247,7 @@ where
         let width = air.width();
         let n_chunks = num_quotient_chunks[i];
         transcript.observe_instance_binding(ext_db, base_db, width, n_chunks);
+        transcript.observe_air_encoding(&air.instance_encoding());
     }
 
     // Observe main commitment and public values, then preprocessed data.
