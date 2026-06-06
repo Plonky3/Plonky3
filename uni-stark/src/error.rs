@@ -132,4 +132,9 @@ where
         "next point unavailable: domain does not support computing the next point algebraically"
     )]
     NextPointUnavailable,
+    /// The out-of-domain point coincides with a trace-domain point.
+    ///
+    /// Selector inversion is undefined there.
+    #[error("out-of-domain point lies inside the trace domain")]
+    OodPointInDomain,
 }
