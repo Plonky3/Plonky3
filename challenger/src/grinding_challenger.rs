@@ -293,7 +293,12 @@ where
     #[instrument(name = "grind for proof-of-work witness", skip_all)]
     fn grind(&mut self, bits: usize) -> Self::Witness {
         assert!(bits < (usize::BITS as usize), "bit count must be valid");
-        assert!((1 << bits) < F::ORDER_U32);
+        // Evaluate the bound in `u64` to keep the shift within its type width.
+        // A `u32` shift by `bits >= 32` would wrap and accept a trivial proof-of-work.
+        assert!(
+            (1u64 << bits) < F::ORDER_U64,
+            "requested bit count must fit within the field order"
+        );
 
         // Trivial case: 0 bits mean no PoW is required and any witness is valid.
         if bits == 0 {
