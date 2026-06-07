@@ -527,7 +527,11 @@ mod tests {
         let mut state_after_duplexing = pre_permute;
         state_after_duplexing.reverse();
         // Outputs are the first RATE elements, popped from the back when sampling.
-        let expected_samples: Vec<G> = state_after_duplexing[..RATE].iter().copied().rev().collect();
+        let expected_samples: Vec<G> = state_after_duplexing[..RATE]
+            .iter()
+            .copied()
+            .rev()
+            .collect();
 
         let samples = <Chal as CanSample<G>>::sample_vec(&mut duplex_challenger, 16);
         assert_eq!(samples, expected_samples);

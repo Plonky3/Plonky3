@@ -1,4 +1,6 @@
-use p3_field::{Field, PackedValue, PrimeField, PrimeField32, PrimeField64};
+use p3_field::{
+    Field, PackedValue, PrimeCharacteristicRing, PrimeField, PrimeField32, PrimeField64,
+};
 use p3_maybe_rayon::prelude::*;
 use p3_symmetric::CryptographicPermutation;
 use tracing::instrument;
@@ -132,26 +134,30 @@ where
         // We accept a witness if (sample & mask) == 0. This verifies 'bits' trailing zeros.
         let mask = (1u64 << bits) - 1;
 
-        // In a duplex sponge, new inputs are absorbed sequentially at indices [0, 1, 2, ...].
-        // The grinding witness is therefore absorbed at the next available position.
+        // New inputs are absorbed sequentially starting at the next free rate slot.
+        // The grinding witness is absorbed at that position.
         let witness_idx = self.input_buffer.len();
 
-        // Build the sponge state as packed field elements (SIMD vectors).
-        //
-        // The current transcript is split across:
-        // - `input_buffer`: recently observed transcript elements that have not yet been permuted
-        // - `sponge_state`: the internal sponge state after previous permutations
-        //
-        // Logically, the next permutation would act on:
-        //   [input_buffer || sponge_state]
-        //
-        // This is invariant across batches, so we compute it once.
+        // The witness counts as one absorbed element on top of the buffered inputs.
+        let num_absorbed = witness_idx + 1;
+
+        // The absorb binds its length into the first capacity element.
+        let tagged_capacity = self.sponge_state[RATE] + F::from_u8(num_absorbed as u8);
+
+        // Build the pre-permutation sponge state shared by every candidate, broadcast to all
+        // SIMD lanes. This mirrors a scalar absorb and is invariant across batches.
         let base_packed_state: [_; WIDTH] = core::array::from_fn(|i| {
-            if i < self.input_buffer.len() {
-                // Broadcast buffered transcript elements (input_buffer) to all SIMD lanes.
+            if i < witness_idx {
+                // Buffered transcript elements fill the leading rate slots.
                 F::Packing::from(self.input_buffer[i])
+            } else if i < RATE {
+                // The witness slot (overwritten below) and the unused rate slots are zeroed.
+                F::Packing::ZERO
+            } else if i == RATE {
+                // The first capacity element carries the length tag.
+                F::Packing::from(tagged_capacity)
             } else {
-                // Broadcast existing sponge state (sponge_state) to all SIMD lanes.
+                // The rest of the capacity carries forward unchanged.
                 F::Packing::from(self.sponge_state[i])
             }
         });
