@@ -55,12 +55,28 @@ fn setup() -> (
     )
 }
 
-/// One honest standalone run, returning everything a check needs.
+/// Which committed oracle a run should desynchronize from its reveals.
+///
+/// The reveals and target are always built from the original messages, so
+/// the joint target check still closes; only the committed codeword differs,
+/// so verification proceeds to the spot-check equation under test.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tamper {
+    /// Commit and reveal the same messages (an honest run).
+    None,
+    /// Commit a source codeword that differs from the revealed message.
+    SourceMessage,
+    /// Commit a mask codeword that differs from the revealed message.
+    MaskMessage,
+}
+
+/// One standalone run, returning everything a check needs.
 #[allow(clippy::type_complexity)]
 fn honest_run(
     seed: u64,
     num_masks: usize,
     pow_bits: usize,
+    tamper: Tamper,
 ) -> (
     BaseCaseZkConfig<F>,
     ExtensionMmcs<F, EF, MyMmcs>,
@@ -79,7 +95,13 @@ fn honest_run(
     let code = FoldedRsCode::<F>::new(8, 3, 16);
     let source_message: Vec<EF> = (0..code.message_len).map(|_| rng.random()).collect();
     let source_randomness: Vec<EF> = (0..code.randomness_len).map(|_| rng.random()).collect();
-    let source_codeword = code.encode_column(&dft, &source_message, &source_randomness);
+    // Under SourceMessage the committed codeword encodes a shifted message,
+    // while the reveals and target keep the original.
+    let mut committed_source = source_message.clone();
+    if tamper == Tamper::SourceMessage {
+        committed_source[0] += EF::ONE;
+    }
+    let source_codeword = code.encode_column(&dft, &committed_source, &source_randomness);
     let (source_commitment, source_data) = extension_mmcs.commit_matrix(source_codeword);
 
     // Carried masks as width-one groups with their own RS-ZK codes.
@@ -94,11 +116,17 @@ fn honest_run(
     let mut mask_covectors = Vec::new();
     let mut mask_commitments = Vec::new();
     let mut mask_data = Vec::new();
-    for group in &mask_groups {
+    for (i, group) in mask_groups.iter().enumerate() {
         let encoding = group.shape.encoding::<EF>();
         let message = encoding.sample_message(&mut rng);
         let randomness = encoding.sample_randomness(&mut rng);
-        let codeword = encoding.encode_with_randomness(&message, &randomness);
+        // Under MaskMessage the first committed mask encodes a shifted
+        // message, while the reveals and target keep the original.
+        let mut committed = message.clone();
+        if tamper == Tamper::MaskMessage && i == 0 {
+            committed[0] += EF::ONE;
+        }
+        let codeword = encoding.encode_with_randomness(&committed, &randomness);
         let (commitment, data) = extension_mmcs.commit_matrix(codeword);
         let covector: Vec<EF> = (0..group.shape.message_len).map(|_| rng.random()).collect();
         mask_messages.push(vec![message]);
@@ -232,7 +260,7 @@ proptest! {
         // with and without grinding.
         let pow_bits = (seed % 2) as usize * 4;
         let (config, mmcs, proof, w, u, commits, target, source, challenger) =
-            honest_run(seed, num_masks, pow_bits);
+            honest_run(seed, num_masks, pow_bits, Tamper::None);
         prop_assert!(
             verify_run(&config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger)
                 .is_ok()
@@ -243,7 +271,8 @@ proptest! {
 #[test]
 fn base_case_rejects_wrong_target() {
     // The joint linear identity pins the carried target.
-    let (config, mmcs, proof, w, u, commits, target, source, challenger) = honest_run(3, 2, 0);
+    let (config, mmcs, proof, w, u, commits, target, source, challenger) =
+        honest_run(3, 2, 0, Tamper::None);
     let err = verify_run(
         &config,
         &mmcs,
@@ -263,7 +292,8 @@ fn base_case_rejects_wrong_target() {
 fn base_case_rejects_tampered_blinded_message() {
     // The shifted reveal enters the joint linear identity directly,
     // so the target check fires before any spot check runs.
-    let (config, mmcs, mut proof, w, u, commits, target, source, challenger) = honest_run(4, 1, 0);
+    let (config, mmcs, mut proof, w, u, commits, target, source, challenger) =
+        honest_run(4, 1, 0, Tamper::None);
     proof.blinded_message[0] += EF::ONE;
     let err = verify_run(
         &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
@@ -279,7 +309,8 @@ fn base_case_rejects_tampered_blinded_randomness() {
     //     target identity   ->  unaffected (randomness is not in it)
     //     reveal absorbed   ->  before the spot positions are drawn
     //     failure           ->  diverged openings or encoding equation
-    let (config, mmcs, mut proof, w, u, commits, target, source, challenger) = honest_run(5, 1, 0);
+    let (config, mmcs, mut proof, w, u, commits, target, source, challenger) =
+        honest_run(5, 1, 0, Tamper::None);
     proof.blinded_randomness[0] += EF::ONE;
     let err = verify_run(
         &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
@@ -294,13 +325,57 @@ fn base_case_rejects_tampered_blinded_randomness() {
 fn base_case_rejects_tampered_mask_reveal() {
     // The shifted mask reveal enters the joint linear identity directly,
     // so the target check fires before any spot check runs.
-    let (config, mmcs, mut proof, w, u, commits, target, source, challenger) = honest_run(6, 2, 0);
+    let (config, mmcs, mut proof, w, u, commits, target, source, challenger) =
+        honest_run(6, 2, 0, Tamper::None);
     proof.blinded_masks[1].message[0] += EF::ONE;
     let err = verify_run(
         &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
     )
     .unwrap_err();
     assert_eq!(err, BaseCaseZkError::TargetCheckFailed);
+}
+
+#[test]
+fn base_case_rejects_unbound_source_reveal() {
+    // The committed source encodes a shifted message; the reveals and
+    // target keep the original.
+    //
+    //     target check  ->  passes (reveals and target agree)
+    //     source check  ->  Enc(f*, r*)(z) != g(z) + gamma * f(z)
+    //
+    // This is the only branch that ties f* to the committed source.
+    let (config, mmcs, proof, w, u, commits, target, source, challenger) =
+        honest_run(30, 1, 0, Tamper::SourceMessage);
+    let err = verify_run(
+        &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
+    )
+    .unwrap_err();
+    assert_eq!(err, BaseCaseZkError::SourceSpotCheckFailed { position: 2 });
+}
+
+#[test]
+fn base_case_rejects_unbound_mask_reveal() {
+    // The committed mask encodes a shifted message; the reveals and
+    // target keep the original.
+    //
+    //     target check  ->  passes (reveals and target agree)
+    //     source check  ->  passes (source is honest here)
+    //     mask check    ->  Enc(xi*, r*)(y) != s'(y) + gamma * xi(y)
+    //
+    // This is the only branch that ties xi* to the committed mask.
+    let (config, mmcs, proof, w, u, commits, target, source, challenger) =
+        honest_run(31, 1, 0, Tamper::MaskMessage);
+    let err = verify_run(
+        &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err,
+        BaseCaseZkError::MaskSpotCheckFailed {
+            group: 0,
+            position: 2
+        }
+    );
 }
 
 #[test]
@@ -316,8 +391,8 @@ fn base_case_reveals_are_one_time_padded() {
     //
     //     pads coincide  ->  reveals are one-time-pad outputs
     let seed = 7;
-    let (_, _, proof_a, ..) = honest_run(seed, 1, 0);
-    let (_, _, proof_b, ..) = honest_run(seed, 1, 0);
+    let (_, _, proof_a, ..) = honest_run(seed, 1, 0, Tamper::None);
+    let (_, _, proof_b, ..) = honest_run(seed, 1, 0, Tamper::None);
     // Same secrets and randomness: fully deterministic replay.
     assert_eq!(proof_a.blinded_message, proof_b.blinded_message);
     assert_eq!(

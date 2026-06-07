@@ -86,7 +86,7 @@ where
     ) -> (MT::Commitment, HidingWhirProverData<F, EF, MT>) {
         assert_eq!(message.num_variables(), self.config.num_variables);
         let folding = self.config.folding_factor(0);
-        let randomness: Vec<F> = (0..self.config.oracle_randomness[0] << folding)
+        let randomness: Vec<F> = (0..(self.config.oracle_randomness[0] << folding))
             .map(|_| rng.random())
             .collect();
         // Interleaved ZK encoding: pad with limb-major randomness, then DFT.
@@ -229,10 +229,21 @@ where
             challenger.observe(mask_commitment.clone());
 
             // Private out-of-domain answers over (message || randomness || pad).
+            //
+            // OOD privacy needs the pad-coefficient matrix {rho_i^{l+r+s}}
+            // invertible, i.e. the rho_i pairwise distinct and nonzero.
+            // Over the quartic extension both hold but for a 1/|F| event,
+            // folded into the HVZK error; the debug_assert flags a future
+            // small-field instantiation loudly rather than leaking silently.
             let mut rho_points = Vec::with_capacity(round_params.ood_samples);
             let mut ood_answers = Vec::with_capacity(round_params.ood_samples);
             for _ in 0..round_params.ood_samples {
                 let rho: EF = challenger.sample_algebra_element();
+                debug_assert!(!rho.is_zero(), "OOD point must be nonzero");
+                debug_assert!(
+                    !rho_points.contains(&rho),
+                    "OOD points must be pairwise distinct",
+                );
                 let answer = padded_ood_t1(rho, message.as_slice(), &mask_message);
                 challenger.observe_algebra_element(answer);
                 rho_points.push(rho);

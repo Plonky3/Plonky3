@@ -45,6 +45,15 @@ where
     EF: ExtensionField<F>,
 {
     /// Bundles the PCS dependencies.
+    ///
+    /// # Security
+    ///
+    /// All hiding randomness — encoding masks, sumcheck masks, out-of-domain
+    /// pads, and base-case one-time pads — is drawn from `rng`.
+    /// Zero knowledge holds only if `rng` is a cryptographically secure
+    /// generator; a predictable stream lets an observer strip every mask and
+    /// recover the witness from the reveals.
+    /// Tests seed a deterministic generator on purpose.
     pub const fn new(config: ZkWhirConfig<EF, F, Challenger>, dft: Dft, mmcs: MT, rng: R) -> Self {
         Self {
             config,

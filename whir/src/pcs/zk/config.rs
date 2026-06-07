@@ -54,6 +54,22 @@ pub enum ZkConfigError {
 }
 
 /// User-facing ZK extension of [`ProtocolParameters`].
+///
+/// # Security
+///
+/// These knobs set the ZK code shape but are **not** cross-checked against
+/// the configured `security_level`:
+///
+/// ```text
+///     mask_queries       ->  base-case mask soundness (1 - delta_zk)^{t_zk}
+///     mask_log_inv_rate  ->  the mask code distance delta_zk
+///     ell_zk             ->  the list-size / |F| union-bound terms
+/// ```
+///
+/// [`ZkWhirConfig::new`] rejects only the degenerate values (`ell_zk < 3`,
+/// `mask_queries == 0`, `mask_log_inv_rate == 0`).
+/// The caller is responsible for provisioning them for the target security
+/// level; a full per-round soundness ledger is future work.
 #[derive(Debug, Clone)]
 pub struct ZkParameters {
     /// Mask code message length `ell_zk` for the HVZK sumcheck (at least 3).
@@ -212,6 +228,12 @@ where
         // Randomness rows must fit inside each oracle's rate slack:
         //
         //     height - message_rows = (2^rate - 1) * message_rows >= t_i
+        //
+        // This is load-bearing for zero knowledge, not just a layout fit.
+        // The base case opens at most `randomness` distinct positions per
+        // oracle (the query budget equals the randomness budget), so the
+        // bound keeps the opened set strictly inside the codeword: it never
+        // saturates the domain, which would reveal a limb polynomial outright.
         for (round, &randomness) in oracle_randomness.iter().enumerate() {
             let (message_rows, height) = if round == 0 {
                 let rows = 1 << (num_variables - inner.folding_factor(0));
@@ -409,10 +431,14 @@ mod tests {
             ..zk_params()
         };
         let err = ZkWhirConfig::<EF, F, MyChallenger>::new(16, params(), zk).unwrap_err();
-        assert!(matches!(
-            err,
-            ZkConfigError::MaskDomainExceedsTwoAdicity { .. }
-        ));
+        let ZkConfigError::MaskDomainExceedsTwoAdicity {
+            log_domain_size,
+            two_adicity,
+        } = err
+        else {
+            panic!("expected MaskDomainExceedsTwoAdicity, got {err:?}");
+        };
+        assert_eq!((log_domain_size, two_adicity), (30, 29));
     }
 
     #[test]
