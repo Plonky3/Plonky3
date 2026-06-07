@@ -17,6 +17,9 @@
 //! ```
 //! E.g. we start by making a standard MerkleTree commitment for each row of M and then add in the rows of N when we
 //! get to the correct level. A proof for the values of say `M[5]` and `N[1]` consists of the siblings `H(M[4]), c23, c10`.
+//! Shorter matrix heights must be exactly the rows covered by a power-of-two
+//! reduction of the tallest matrix, so every global index maps to a row in
+//! every committed matrix.
 //!
 
 use alloc::vec;
@@ -134,6 +137,40 @@ pub struct ArityAndPositions {
 impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
     MerkleTreeMmcs<P, PW, H, C, N, DIGEST_ELEMS>
 {
+    /// Checks that a matrix shape is reachable by the commitment path.
+    ///
+    /// For each matrix, reducing the tallest matrix by a power of two fixes
+    /// the only height that covers every global index at that depth. The
+    /// verifier must apply the same rule before accepting dimensions.
+    fn validate_commit_reachable_heights(
+        heights: impl IntoIterator<Item = usize>,
+    ) -> Result<usize, MerkleTreeError> {
+        let heights = heights.into_iter().collect_vec();
+        let max_height = heights
+            .iter()
+            .copied()
+            .max()
+            .filter(|height| *height > 0)
+            .ok_or(EmptyBatch)?;
+        let log_max_height = log2_ceil_usize(max_height);
+
+        for height in heights {
+            if height == 0 {
+                return Err(IncompatibleHeights);
+            }
+
+            let log_height = log2_ceil_usize(height);
+            let bits_reduced = log_max_height - log_height;
+            let expected_height = ((max_height - 1) >> bits_reduced) + 1;
+
+            if height != expected_height {
+                return Err(IncompatibleHeights);
+            }
+        }
+
+        Ok(max_height)
+    }
+
     /// Replay the arity schedule for a given Merkle path and recover, for each
     /// tree level, both:
     ///
@@ -153,27 +190,13 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         P: PackedValue,
         PW: PackedValue,
     {
-        if dimensions.is_empty() {
-            return Err(EmptyBatch);
-        }
+        Self::validate_commit_reachable_heights(dimensions.iter().map(|dims| dims.height))?;
 
         let mut heights_tallest_first = dimensions
             .iter()
             .enumerate()
             .sorted_by_key(|(_, dims)| Reverse(dims.height))
             .peekable();
-
-        // Matrix heights that round up to the same power of two must be equal.
-        if !heights_tallest_first
-            .clone()
-            .map(|(_, dims)| dims.height)
-            .tuple_windows()
-            .all(|(curr, next)| {
-                curr == next || curr.next_power_of_two() != next.next_power_of_two()
-            })
-        {
-            return Err(IncompatibleHeights);
-        }
 
         // Initial padded height and bounds check, identical to verify_batch.
         let (max_height, mut curr_height_padded) = match heights_tallest_first.peek() {
@@ -266,10 +289,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         P: PackedValue,
         PW: PackedValue,
     {
-        // No commitments → no tree → no schedule.
-        if dimensions.is_empty() {
-            return Err(EmptyBatch);
-        }
+        Self::validate_commit_reachable_heights(dimensions.iter().map(|dims| dims.height))?;
 
         // Phase 1: order matrices tallest-first so the walk can peek ahead
         // and consume each one at its injection layer.
@@ -278,22 +298,6 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             .enumerate()
             .sorted_by_key(|(_, dims)| Reverse(dims.height))
             .peekable();
-
-        // Heights sharing the same next-power-of-two must match exactly.
-        //
-        //     [8, 5]   → both round to 8, differ → reject
-        //     [8, 8]   → identical at the same slot → OK
-        //     [8, 4]   → distinct slots → OK
-        if !heights_tallest_first
-            .clone()
-            .map(|(_, dims)| dims.height)
-            .tuple_windows()
-            .all(|(curr, next)| {
-                curr == next || curr.next_power_of_two() != next.next_power_of_two()
-            })
-        {
-            return Err(IncompatibleHeights);
-        }
 
         // Phase 2: walk from leaves toward the root.
         //
@@ -917,28 +921,31 @@ where
         &self,
         inputs: Vec<M>,
     ) -> (Self::Commitment, Self::ProverData<M>) {
-        if let Some(max_height) = inputs.iter().map(|m| m.height()).max()
-            && max_height > 0
-        {
-            let log_max_height = log2_ceil_usize(max_height);
-            for matrix in &inputs {
-                let height = matrix.height();
-                assert!(height > 0, "matrix height 0 not supported");
+        match Self::validate_commit_reachable_heights(inputs.iter().map(|m| m.height())) {
+            Ok(_) => {}
+            Err(EmptyBatch) => panic!("all matrices have height 0"),
+            Err(IncompatibleHeights) => {
+                let max_height = inputs.iter().map(|m| m.height()).max().unwrap_or(0);
+                let log_max_height = log2_ceil_usize(max_height);
+                for matrix in &inputs {
+                    let height = matrix.height();
+                    assert!(height > 0, "matrix height 0 not supported");
 
-                let log_height = log2_ceil_usize(height);
-                let bits_reduced = log_max_height - log_height;
-                // ceil(max / 2^{bits_reduced}) without risk of shift overflow
-                let expected_height = ((max_height - 1) >> bits_reduced) + 1;
+                    let log_height = log2_ceil_usize(height);
+                    let bits_reduced = log_max_height - log_height;
+                    let expected_height = ((max_height - 1) >> bits_reduced) + 1;
 
-                assert!(
-                    height == expected_height,
-                    "matrix height {height} incompatible with tallest height {max_height}; \
+                    assert!(
+                        height == expected_height,
+                        "matrix height {height} incompatible with tallest height {max_height}; \
                          expected ceil_div({max_height}, 2^{bits_reduced}) = {expected_height} \
                          so every global index maps to a row at depth {bits_reduced}"
-                );
+                    );
+                }
             }
-        } else {
-            panic!("all matrices have height 0");
+            Err(_) => {
+                unreachable!("height validation only returns EmptyBatch or IncompatibleHeights")
+            }
         }
 
         let tree = MerkleTree::new::<P, PW, H, C>(&self.hash, &self.compress, inputs);
@@ -1025,12 +1032,15 @@ where
     ///
     /// # Arguments
     /// - `commit`: The Merkle cap of the tree.
-    /// - `dimensions`: A vector of the dimensions of the matrices committed to.
+    /// - `dimensions`: A vector of the dimensions of the matrices committed to. The matrix
+    ///   heights must be commit-reachable: each shorter matrix height must equal
+    ///   `ceil(max_height / 2^k)` for the power-of-two reduction that maps global leaf indices
+    ///   into that matrix.
     /// - `index`: The index of a leaf in the tree.
     /// - `batch_proof`: A reference to a batched opening proof, containing:
     ///   - `opened_values`: A vector of matrix rows. Assume that the tallest matrix committed
-    ///     to has height `2^n >= M_tall.height() > 2^{n - 1}` and the `j`th matrix has height
-    ///     `2^m >= Mj.height() > 2^{m - 1}`. Then `j`'th value of opened values must be the row `Mj[index >> (m - n)]`.
+    ///     to has height `max_height`, then the `j`th opened value must be the row
+    ///     `Mj[index >> k]`, where `k` is the power-of-two reduction depth for `Mj`.
     ///   - `opening_proof`: A vector of sibling nodes. The `i`th element should be the node at level `i`
     ///     with index `(index << i) ^ 1`.
     ///
@@ -1048,24 +1058,21 @@ where
         if dimensions.len() != opened_values.len() {
             return Err(WrongBatchSize);
         }
+        // Derive the arity schedule from verifier-known dimensions and the configured cap height.
+        let arity_schedule = self.proof_arity_schedule(dimensions)?;
+        let expected_proof_len: usize = arity_schedule.iter().map(|step| step - 1).sum();
+        if opening_proof.len() != expected_proof_len {
+            return Err(WrongHeight {
+                expected_proof_len,
+                num_siblings: opening_proof.len(),
+            });
+        }
 
         let mut heights_tallest_first = dimensions
             .iter()
             .enumerate()
             .sorted_by_key(|(_, dims)| Reverse(dims.height))
             .peekable();
-
-        // Matrix heights that round up to the same power of two must be equal
-        if !heights_tallest_first
-            .clone()
-            .map(|(_, dims)| dims.height)
-            .tuple_windows()
-            .all(|(curr, next)| {
-                curr == next || curr.next_power_of_two() != next.next_power_of_two()
-            })
-        {
-            return Err(IncompatibleHeights);
-        }
 
         // Get the initial height padded to a multiple of N. As heights_tallest_first is sorted,
         // the initial height will be the maximum height.
@@ -1091,16 +1098,6 @@ where
         );
 
         let default_digest = [PW::Value::default(); DIGEST_ELEMS];
-
-        // Derive the arity schedule from verifier-known dimensions and the configured cap height.
-        let arity_schedule = self.proof_arity_schedule(dimensions)?;
-        let expected_proof_len: usize = arity_schedule.iter().map(|step| step - 1).sum();
-        if opening_proof.len() != expected_proof_len {
-            return Err(WrongHeight {
-                expected_proof_len,
-                num_siblings: opening_proof.len(),
-            });
-        }
 
         let mut proof_pos: usize = 0;
 
@@ -1169,6 +1166,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    extern crate std;
+
     use alloc::vec::Vec;
     use alloc::{format, vec};
 
@@ -1564,6 +1563,43 @@ mod tests {
             mmcs.verify_batch(&commit, &dims, index, (&batch_opening).into())
                 .expect("expected verification to succeed");
         }
+    }
+
+    #[test]
+    fn verifier_rejects_dimensions_that_commit_cannot_produce() {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress, 0);
+
+        let tall = RowMajorMatrix::<F>::rand(&mut rng, 7, 1);
+        let covered_short = RowMajorMatrix::<F>::rand(&mut rng, 4, 1);
+        let impossible_short = RowMajorMatrix::<F>::rand(&mut rng, 3, 1);
+
+        let invalid_commit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            mmcs.commit(vec![tall.clone(), impossible_short]);
+        }));
+        assert!(
+            invalid_commit.is_err(),
+            "height 3 is not commit-reachable when the tallest matrix has height 7"
+        );
+
+        let (commit, prover_data) = mmcs.commit(vec![tall, covered_short]);
+        let opening = mmcs.open_batch(6, &prover_data);
+        let impossible_dims = vec![
+            Dimensions {
+                height: 7,
+                width: 1,
+            },
+            Dimensions {
+                height: 3,
+                width: 1,
+            },
+        ];
+
+        mmcs.verify_batch(&commit, &impossible_dims, 6, (&opening).into())
+            .expect_err("verifier must reject dimensions that the commit path cannot produce");
     }
 
     #[test]
