@@ -25,8 +25,18 @@ impl<EF: Field> MaskClaims<EF> {
 
     /// Scales every covector by `eps * 2^{-k}` after a `k`-round batch.
     ///
-    /// Matches the `2^{-j}` carry of the auxiliary constant inside
-    /// [`p3_sumcheck::strategy::SumcheckProver::into_zk_sumcheck`].
+    /// # Why this scale
+    ///
+    /// The masked sumcheck carries the mask-claim total as a constant on
+    /// each round's wire polynomial:
+    ///
+    /// ```text
+    ///     eps  ->  the batch rescales the whole residual relation
+    ///     2^-k ->  a constant loses a factor 2 per round, since h(0) + h(1) doubles it
+    /// ```
+    ///
+    /// The covectors must absorb the same factor as the values they pair
+    /// with, or the carried relation drifts.
     pub fn absorb_sumcheck(&mut self, eps: EF, folding_factor: usize) {
         let scale = eps * EF::TWO.exp_u64(folding_factor as u64).inverse();
         for covector in &mut self.covectors {

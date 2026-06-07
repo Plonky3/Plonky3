@@ -207,10 +207,6 @@ mod tests {
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
 
-    fn ef(x: u64) -> EF {
-        EF::from_u64(x)
-    }
-
     fn reference_mask_recurrence<EF>(masks: &[Vec<EF>], gammas: &[EF]) -> EF
     where
         EF: Field,
@@ -267,11 +263,26 @@ mod tests {
     #[test]
     fn mask_residual_closed_form_matches_round_recurrence() {
         let masks = vec![
-            vec![ef(3), ef(5), ef(7), ef(11)],
-            vec![ef(13), ef(17), ef(19), ef(23)],
-            vec![ef(29), ef(31), ef(37), ef(41)],
+            vec![
+                EF::from_u64(3),
+                EF::from_u64(5),
+                EF::from_u64(7),
+                EF::from_u64(11),
+            ],
+            vec![
+                EF::from_u64(13),
+                EF::from_u64(17),
+                EF::from_u64(19),
+                EF::from_u64(23),
+            ],
+            vec![
+                EF::from_u64(29),
+                EF::from_u64(31),
+                EF::from_u64(37),
+                EF::from_u64(41),
+            ],
         ];
-        let gammas = vec![ef(43), ef(47), ef(53)];
+        let gammas = vec![EF::from_u64(43), EF::from_u64(47), EF::from_u64(53)];
 
         assert_eq!(
             mask_residual::<EF>(&masks, &gammas),
@@ -281,8 +292,11 @@ mod tests {
 
     #[test]
     fn mask_residual_covectors_evaluate_closed_form() {
-        let masks = vec![vec![ef(2), ef(3), ef(5)], vec![ef(7), ef(11), ef(13)]];
-        let gammas = vec![ef(17), ef(19)];
+        let masks = vec![
+            vec![EF::from_u64(2), EF::from_u64(3), EF::from_u64(5)],
+            vec![EF::from_u64(7), EF::from_u64(11), EF::from_u64(13)],
+        ];
+        let gammas = vec![EF::from_u64(17), EF::from_u64(19)];
         let covectors = mask_residual_covectors::<EF>(&masks, &gammas);
         let by_covectors = masks
             .iter()

@@ -179,10 +179,6 @@ mod tests {
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
 
-    fn ef(v: u64) -> EF {
-        EF::from_u64(v)
-    }
-
     /// Dense reference fold: W'[c] = sum_b eq(b, gamma) * W[b, c].
     ///
     /// `b` walks the first `k` high-order index bits.
@@ -204,19 +200,35 @@ mod tests {
     fn pow_term_materializes_running_powers() {
         // Pow over 2 variables at var = 3, coeff = 5: (5, 15, 45, 135).
         let mut claim = SourceClaim::new();
-        claim.push_pow(ef(3), 2, ef(5));
+        claim.push_pow(EF::from_u64(3), 2, EF::from_u64(5));
         let dense = claim.materialize(2);
-        assert_eq!(dense.as_slice(), &[ef(5), ef(15), ef(45), ef(135)]);
+        assert_eq!(
+            dense.as_slice(),
+            &[
+                EF::from_u64(5),
+                EF::from_u64(15),
+                EF::from_u64(45),
+                EF::from_u64(135)
+            ]
+        );
     }
 
     #[test]
     fn eq_term_materializes_eq_table() {
         // Eq at a boolean point selects exactly one slot.
         let mut claim = SourceClaim::new();
-        claim.push_eq(Point::new(vec![EF::ONE, EF::ZERO]), ef(7));
+        claim.push_eq(Point::new(vec![EF::ONE, EF::ZERO]), EF::from_u64(7));
         let dense = claim.materialize(2);
         // Big-endian: point (1, 0) is index 2.
-        assert_eq!(dense.as_slice(), &[ef(0), ef(0), ef(7), ef(0)]);
+        assert_eq!(
+            dense.as_slice(),
+            &[
+                EF::from_u64(0),
+                EF::from_u64(0),
+                EF::from_u64(7),
+                EF::from_u64(0)
+            ]
+        );
     }
 
     proptest! {
