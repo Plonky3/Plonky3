@@ -132,7 +132,7 @@ pub enum MerkleTreeError {
 ///
 /// The leaf hash flattens all rows at one height into a single element stream,
 /// so a digest match alone does not pin where one row ends and the next begins.
-fn check_widths<T>(
+pub(crate) fn check_widths<T>(
     dimensions: &[Dimensions],
     opened_values: &[Vec<T>],
 ) -> Result<(), MerkleTreeError> {

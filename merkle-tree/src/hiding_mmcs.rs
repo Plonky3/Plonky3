@@ -14,6 +14,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use spin::Mutex;
 
+use crate::mmcs::check_widths;
 use crate::{MerkleCap, MerkleTree, MerkleTreeError, MerkleTreeMmcs};
 
 /// A vector commitment scheme backed by a `MerkleTree`.
@@ -165,6 +166,11 @@ where
     ) -> Result<(), Self::Error> {
         let (opened_values, (salts, siblings)) = batch_opening.unpack();
 
+        // Pin each opened row to its matrix width before salting.
+        // The inner tree only sees salted widths.
+        // Without this, an over-long row could be masked by an under-long salt.
+        check_widths(dimensions, opened_values)?;
+
         let opened_salted_values = zip_eq(opened_values, salts, MerkleTreeError::WrongBatchSize)?
             .map(|(opened, salt)| opened.iter().chain(salt.iter()).copied().collect_vec())
             .collect_vec();
@@ -276,11 +282,10 @@ mod tests {
         let mut opening = mmcs.open_batch(3, &prover_data);
         opening.opened_values[0].push(F::ONE);
 
-        // The inner tree commits to rows widened by the salt columns.
-        // The reported widths are therefore salted as well.
+        // The width is checked on the unsalted row, before salt columns are appended.
         //
-        //     expected: 4 + 4 salts = 8
-        //     got:      5 + 4 salts = 9
+        //     expected: 4 (matrix width)
+        //     got:      5 (opened row length)
         let err = mmcs
             .verify_batch(&commit, &dims, 3, (&opening).into())
             .expect_err("row longer than the matrix width must be rejected");
@@ -288,8 +293,8 @@ mod tests {
             err,
             MerkleTreeError::WrongWidth {
                 matrix: 0,
-                expected: 8,
-                got: 9,
+                expected: 4,
+                got: 5,
             }
         ));
     }
