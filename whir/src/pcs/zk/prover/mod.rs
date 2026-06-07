@@ -12,7 +12,7 @@ use core::marker::PhantomData;
 
 pub use data::HidingWhirProverData;
 use data::ZkRoundData;
-use masks::{ProverMasks, fold_limb_chunks, record_sumcheck_batch};
+use masks::{ProverMasks, fold_limb_chunks};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
@@ -172,10 +172,9 @@ where
         let mut sumcheck_mask_commitments = Vec::new();
         let mut rounds = Vec::with_capacity(config.n_rounds());
 
-        let mut batch = record_sumcheck_batch(
+        let mut batch = masks.record_batch(
             &mut sumchecks,
             &mut sumcheck_mask_commitments,
-            &mut masks,
             handoff,
             &mut zk_data,
             config.zk.ell_zk,
@@ -374,10 +373,9 @@ where
                 challenger,
                 rng,
             );
-            batch = record_sumcheck_batch(
+            batch = masks.record_batch(
                 &mut sumchecks,
                 &mut sumcheck_mask_commitments,
-                &mut masks,
                 handoff,
                 &mut zk_data,
                 config.zk.ell_zk,

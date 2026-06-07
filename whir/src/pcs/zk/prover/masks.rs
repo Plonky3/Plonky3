@@ -1,4 +1,11 @@
 //! Mask bookkeeping for the masked sumcheck batches.
+//!
+//! Every batch of `k` sumcheck rounds leaves two trails:
+//!
+//! ```text
+//!  proof side  ->  the wire transcript and one interleaved mask commitment go into the proof
+//!  claim side  ->  the k masks join the carried relation as <xi_i, u_i> terms, settled at the base case
+//! ```
 
 use alloc::vec::Vec;
 use core::mem::take;
@@ -15,8 +22,16 @@ use crate::pcs::zk::constraint::MaskClaims;
 
 /// All mask-oracle state the prover carries to the base case.
 ///
-/// - Messages, randomness, and covectors are flat in chronological order.
-/// - The group list tiles them, one Merkle handle per committed batch.
+/// Flat lists in chronological mask order, tiled by the groups:
+///
+/// ```text
+///     messages   : [ m1 m2 m3 | m4 | m5 m6 m7 | ... ]
+///     randomness : [ r1 r2 r3 | r4 | r5 r6 r7 | ... ]
+///     covectors  : [ u1 u2 u3 | u4 | u5 u6 u7 | ... ]
+///     groups     : [ (3, tree)  (1, tree)  (3, tree)  ... ]
+/// ```
+///
+/// One Merkle handle per group answers the base-case spot checks.
 pub(super) struct ProverMasks<F, EF, MT>
 where
     F: TwoAdicField,
@@ -47,6 +62,49 @@ where
             claims: MaskClaims::new(),
         }
     }
+
+    /// Stores one masked sumcheck batch.
+    ///
+    /// ```text
+    ///     proof side  ->  wire transcript, interleaved mask commitment
+    ///     claim side  ->  rescale the carried covectors,
+    ///                     append the batch's k fresh masks
+    /// ```
+    pub(super) fn record_batch(
+        &mut self,
+        sumchecks: &mut Vec<ZkSumcheckData<F, EF>>,
+        mask_commitments: &mut Vec<MT::Commitment>,
+        mut handoff: ZkSumcheckHandoff<F, EF, ExtensionMmcs<F, EF, MT>>,
+        zk_data: &mut ZkSumcheckData<F, EF>,
+        ell_zk: usize,
+    ) -> BatchState<F, EF>
+    where
+        F: Send + Sync,
+    {
+        let folding = handoff.randomness.num_variables();
+        // Proof side: the batch's wire transcript and mask commitment.
+        sumchecks.push(take(zk_data));
+        mask_commitments.push(handoff.mask_oracle.0.clone());
+
+        // Claim side, carried masks: every covector absorbs eps * 2^{-k}.
+        self.claims.absorb_sumcheck(handoff.eps, folding);
+        // Claim side, fresh masks: mask j enters at scale one with the
+        // power covector pow(gamma_j), its residual at the round challenge.
+        let gammas: Vec<EF> = handoff.randomness.iter().copied().collect();
+        for covector in mask_residual_covectors_from_shape(folding, ell_zk, &gammas) {
+            self.claims.push(covector);
+        }
+        // Retain the secrets behind the new oracle for the base-case
+        // reveals, plus its Merkle handle for the spot-check openings.
+        self.messages.append(&mut handoff.mask_messages);
+        self.randomness.append(&mut handoff.mask_randomness);
+        self.groups.push((folding, handoff.mask_oracle.1));
+
+        BatchState {
+            residual_prover: handoff.residual_prover,
+            randomness: handoff.randomness,
+        }
+    }
 }
 
 /// Carried state after one masked sumcheck batch.
@@ -57,55 +115,30 @@ pub(super) struct BatchState<F: Field, EF: ExtensionField<F>> {
     pub(super) randomness: Point<EF>,
 }
 
-/// Stores one masked sumcheck batch in the proof and the mask bookkeeping.
-pub(super) fn record_sumcheck_batch<F, EF, MT>(
-    sumchecks: &mut Vec<ZkSumcheckData<F, EF>>,
-    mask_commitments: &mut Vec<MT::Commitment>,
-    masks: &mut ProverMasks<F, EF, MT>,
-    mut handoff: ZkSumcheckHandoff<F, EF, ExtensionMmcs<F, EF, MT>>,
-    zk_data: &mut ZkSumcheckData<F, EF>,
-    ell_zk: usize,
-) -> BatchState<F, EF>
-where
-    F: TwoAdicField + Send + Sync,
-    EF: ExtensionField<F>,
-    MT: Mmcs<F>,
-{
-    let folding = handoff.randomness.num_variables();
-    sumchecks.push(take(zk_data));
-    mask_commitments.push(handoff.mask_oracle.0.clone());
-
-    // Carried covectors absorb eps * 2^{-k}; the fresh sumcheck masks enter
-    // at scale one with power covectors at their round challenges.
-    masks.claims.absorb_sumcheck(handoff.eps, folding);
-    let gammas: Vec<EF> = handoff.randomness.iter().copied().collect();
-    for covector in mask_residual_covectors_from_shape(folding, ell_zk, &gammas) {
-        masks.claims.push(covector);
-    }
-    masks.messages.append(&mut handoff.mask_messages);
-    masks.randomness.append(&mut handoff.mask_randomness);
-    masks.groups.push((folding, handoff.mask_oracle.1));
-
-    BatchState {
-        residual_prover: handoff.residual_prover,
-        randomness: handoff.randomness,
-    }
-}
-
 /// Folds a limb-major chunked vector by the eq table at `gamma`.
 ///
-/// Chunk `b` belongs to limb `b`.
-/// The output `sum_b eq(b, gamma) * chunk_b` matches the leaf fold
-/// orientation.
+/// Chunk `b` holds the slice belonging to limb `b` of the committed oracle:
+///
+/// ```text
+///     values = [ chunk_0 | chunk_1 | ... | chunk_{2^k - 1} ]
+///     out    = sum_b eq(b, gamma) * chunk_b
+/// ```
+///
+/// The orientation matches the verifier's leaf fold.
 pub(super) fn fold_limb_chunks<F, EF>(values: &[F], chunk: usize, gamma: &Point<EF>) -> Vec<EF>
 where
     F: Field,
     EF: ExtensionField<F>,
 {
+    // One chunk per vertex of the folded hypercube.
     assert_eq!(values.len(), chunk << gamma.num_variables());
+    // Fold weights: eq(b, gamma) for every prefix b.
     let eq_table = Poly::new_from_point(gamma.as_slice(), EF::ONE);
     let mut out = EF::zero_vec(chunk);
     for (b, &weight) in eq_table.as_slice().iter().enumerate() {
+        // Accumulate chunk b, scaled by its weight.
+        //
+        // Mixed-field step: extension weight times base-field entry.
         for (dst, &src) in out.iter_mut().zip(&values[b * chunk..(b + 1) * chunk]) {
             *dst += weight * src;
         }
