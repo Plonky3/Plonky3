@@ -118,8 +118,6 @@ impl<F: TwoAdicField> FoldedRsCode<F> {
     ) -> EF {
         assert_eq!(message.len(), self.message_len);
         assert_eq!(randomness.len(), self.randomness_len);
-        // Evaluation point of position z stays in the base field:
-        // the mixed-field Horner lifts nothing.
         padded_ood_t1(
             self.domain_gen.exp_u64(position as u64),
             message,
@@ -143,8 +141,9 @@ impl<F: TwoAdicField> FoldedRsCode<F> {
     {
         assert_eq!(message.len(), self.message_len);
         assert_eq!(randomness.len(), self.randomness_len);
-        // Single allocation: the full domain is reserved up front, so the
-        // two copies and the zero padding all fill in place.
+        // Single allocation: the full domain is reserved up front.
+        //
+        // The two copies and the zero padding all fill in place.
         //
         //     [ message | randomness | 0 ... 0 ]   (domain_size slots)
         let mut coeffs = Vec::with_capacity(self.domain_size);
@@ -174,11 +173,6 @@ mod tests {
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
     type MyDft = Radix2DFTSmallBatch<F>;
-
-    /// Folds a leaf row by the eq table at `gamma`, mirroring the verifier.
-    fn fold_leaf(leaf: &[EF], gamma: &Point<EF>) -> EF {
-        Poly::new(leaf.to_vec()).eval_ext::<F>(gamma)
-    }
 
     /// Folds a limb-major chunked vector by the eq table at `gamma`.
     fn fold_chunks(values: &[EF], chunk: usize, gamma: &Point<EF>) -> Vec<EF> {
@@ -224,8 +218,10 @@ mod tests {
             let leaf: Vec<EF> = (0..1 << folding)
                 .map(|b| encoded.values[z * (1 << folding) + b])
                 .collect();
+            // Fold the leaf row by the eq table at gamma, as the verifier does after a query.
+            let folded_leaf = Poly::new(leaf).eval_ext::<F>(&gamma);
             assert_eq!(
-                fold_leaf(&leaf, &gamma),
+                folded_leaf,
                 code.evaluate_at(z, &folded_message, &folded_randomness),
                 "mismatch at leaf {z}",
             );
