@@ -19,6 +19,7 @@ use rand::{RngExt, SeedableRng};
 use super::adapter::HidingWhirPcs;
 use super::base_case::BaseCaseZkError;
 use super::config::{ZkParameters, ZkWhirConfig};
+use super::proof::ZkWhirProof;
 use super::verifier::ZkVerifierError;
 use crate::fiat_shamir::domain_separator::DomainSeparator;
 use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption};
@@ -34,194 +35,237 @@ type MyMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
 type MyDft = Radix2DFTSmallBatch<F>;
 type TestZkPcs = HidingWhirPcs<EF, F, MyDft, MyMmcs, MyChallenger, SmallRng>;
 
-fn challenger() -> MyChallenger {
-    let mut rng = SmallRng::seed_from_u64(1);
-    let perm = Perm::new_from_rng_128(&mut rng);
-    MyChallenger::new(perm)
+/// Commitment type of the test PCS.
+type TestCommitment = <TestZkPcs as MultilinearPcs<EF, MyChallenger>>::Commitment;
+
+/// Builder for one HVZK-WHIR test instance, in the standard-library
+/// `OpenOptions` style.
+///
+/// Starts from the suite's canonical shape and overrides only what a test
+/// varies, then finishes with a terminal operation:
+///
+/// ```text
+///     assert_round_trip()  ->  honest commit / open / verify lifecycle
+///     prove()              ->  honest run, returned for tampering
+///     prove_with(w, pts)   ->  honest run on a caller-chosen statement
+/// ```
+#[derive(Clone)]
+struct Setup {
+    /// Arity of the committed polynomial.
+    num_variables: usize,
+    /// Number of opened evaluation claims.
+    num_points: usize,
+    /// Per-round fold widths of the pipeline.
+    folding_factor: FoldingFactor,
+    /// Soundness regime driving query counts and OOD samples.
+    soundness_type: SecurityAssumption,
+    /// Grinding bits per round.
+    pow_bits: usize,
+    /// Drives the PCS hiding randomness and the random statement.
+    seed: u64,
+}
+
+impl Setup {
+    /// Canonical shape: 12 variables, one point, constant folding 4,
+    /// capacity-bound soundness, no grinding.
+    ///
+    /// The seed drives both the PCS hiding randomness and the witness.
+    const fn new(seed: u64) -> Self {
+        Self {
+            num_variables: 12,
+            num_points: 1,
+            folding_factor: FoldingFactor::Constant(4),
+            soundness_type: SecurityAssumption::CapacityBound,
+            pow_bits: 0,
+            seed,
+        }
+    }
+
+    const fn num_variables(mut self, num_variables: usize) -> Self {
+        self.num_variables = num_variables;
+        self
+    }
+
+    const fn num_points(mut self, num_points: usize) -> Self {
+        self.num_points = num_points;
+        self
+    }
+
+    fn folding_factor(mut self, folding_factor: FoldingFactor) -> Self {
+        self.folding_factor = folding_factor;
+        self
+    }
+
+    const fn soundness(mut self, soundness_type: SecurityAssumption) -> Self {
+        self.soundness_type = soundness_type;
+        self
+    }
+
+    const fn pow_bits(mut self, pow_bits: usize) -> Self {
+        self.pow_bits = pow_bits;
+        self
+    }
+
+    /// Builds the hiding PCS for this shape.
+    fn pcs(&self) -> TestZkPcs {
+        let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(1));
+        let mmcs = MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0);
+        let config = ZkWhirConfig::new(
+            self.num_variables,
+            ProtocolParameters {
+                security_level: 32,
+                pow_bits: self.pow_bits,
+                round_log_inv_rates: vec![],
+                folding_factor: self.folding_factor.clone(),
+                soundness_type: self.soundness_type,
+                starting_log_inv_rate: 2,
+            },
+            ZkParameters {
+                ell_zk: 4,
+                mask_queries: 8,
+                mask_log_inv_rate: 1,
+            },
+        )
+        .unwrap();
+        HidingWhirPcs::new(
+            config,
+            MyDft::default(),
+            mmcs,
+            SmallRng::seed_from_u64(self.seed),
+        )
+    }
+
+    /// Runs the honest commit / open phases on a random statement.
+    fn prove(self) -> Proven {
+        // Witness and points come from the seed's companion stream, so a
+        // fixed seed replays the exact same transcript.
+        let mut rng = SmallRng::seed_from_u64(self.seed.wrapping_add(1));
+        let witness = Poly::<F>::rand(&mut rng, self.num_variables);
+        let points: Vec<Point<EF>> = (0..self.num_points)
+            .map(|_| Point::rand(&mut rng, self.num_variables))
+            .collect();
+        self.prove_with(witness, points)
+    }
+
+    /// Runs the honest commit / open phases on a caller-chosen statement.
+    fn prove_with(self, witness: Poly<F>, points: Vec<Point<EF>>) -> Proven {
+        let pcs = self.pcs();
+        let mut prover_challenger = separated_challenger(&pcs);
+        let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger);
+        let proof = pcs.open(prover_data, points.clone(), &mut prover_challenger);
+        Proven {
+            pcs,
+            commitment,
+            proof,
+            points,
+        }
+    }
+
+    /// Full honest lifecycle: commit, open, check the evaluations, verify.
+    fn assert_round_trip(self) {
+        let mut rng = SmallRng::seed_from_u64(self.seed.wrapping_add(1));
+        let witness = Poly::<F>::rand(&mut rng, self.num_variables);
+        let points: Vec<Point<EF>> = (0..self.num_points)
+            .map(|_| Point::rand(&mut rng, self.num_variables))
+            .collect();
+
+        let proven = self.prove_with(witness.clone(), points);
+        // The claimed evaluations are the honest ones.
+        for (point, &eval) in proven.points.iter().zip(&proven.proof.evals) {
+            assert_eq!(witness.eval_base(point), eval);
+        }
+        proven
+            .verify()
+            .expect("honest HVZK-WHIR proof should verify");
+    }
+}
+
+/// One honest run, held open for tampering and verification.
+struct Proven {
+    /// The hiding PCS the proof was produced with.
+    pcs: TestZkPcs,
+    /// Commitment to the (possibly simulated) witness.
+    commitment: TestCommitment,
+    /// The opening proof; tamper tests mutate it in place.
+    proof: ZkWhirProof<F, EF, MyMmcs>,
+    /// The opened points.
+    points: Vec<Point<EF>>,
+}
+
+impl Proven {
+    /// Replays verification against the stored statement.
+    fn verify(&self) -> Result<(), ZkVerifierError> {
+        let mut challenger = separated_challenger(&self.pcs);
+        self.pcs.verify(
+            &self.commitment,
+            &self.proof,
+            &mut challenger,
+            self.points.clone(),
+        )
+    }
 }
 
 /// Fresh challenger seeded with the protocol's domain separator.
 fn separated_challenger(pcs: &TestZkPcs) -> MyChallenger {
-    let mut challenger = challenger();
+    let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(1));
+    let mut challenger = MyChallenger::new(perm);
     let mut separator = DomainSeparator::new(vec![]);
     pcs.add_domain_separator::<8>(&mut separator);
     separator.observe_domain_separator(&mut challenger);
     challenger
 }
 
-fn mmcs() -> MyMmcs {
-    let perm = Perm::new_from_rng_128(&mut SmallRng::seed_from_u64(1));
-    MyMmcs::new(MyHash::new(perm.clone()), MyCompress::new(perm), 0)
-}
-
-fn protocol_params(
-    folding_factor: FoldingFactor,
-    soundness_type: SecurityAssumption,
-    pow_bits: usize,
-) -> ProtocolParameters {
-    ProtocolParameters {
-        security_level: 32,
-        pow_bits,
-        round_log_inv_rates: vec![],
-        folding_factor,
-        soundness_type,
-        starting_log_inv_rate: 2,
-    }
-}
-
-fn make_pcs(
-    num_variables: usize,
-    folding_factor: FoldingFactor,
-    soundness_type: SecurityAssumption,
-    pow_bits: usize,
-    seed: u64,
-) -> TestZkPcs {
-    let config = ZkWhirConfig::new(
-        num_variables,
-        protocol_params(folding_factor, soundness_type, pow_bits),
-        ZkParameters {
-            ell_zk: 4,
-            mask_queries: 8,
-            mask_log_inv_rate: 1,
-        },
-    )
-    .unwrap();
-    HidingWhirPcs::new(
-        config,
-        MyDft::default(),
-        mmcs(),
-        SmallRng::seed_from_u64(seed),
-    )
-}
-
-/// Full commit / open / verify lifecycle for one parameter shape.
-fn run_zk_whir(
-    num_variables: usize,
-    num_points: usize,
-    folding_factor: FoldingFactor,
-    soundness_type: SecurityAssumption,
-    pow_bits: usize,
-    seed: u64,
-) {
-    let pcs = make_pcs(
-        num_variables,
-        folding_factor,
-        soundness_type,
-        pow_bits,
-        seed,
-    );
-
-    let mut rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
-    let witness = Poly::<F>::rand(&mut rng, num_variables);
-    let points: Vec<Point<EF>> = (0..num_points)
-        .map(|_| Point::rand(&mut rng, num_variables))
-        .collect();
-
-    // Prover.
-    let mut prover_challenger = separated_challenger(&pcs);
-    let (commitment, prover_data) = pcs.commit(witness.clone(), &mut prover_challenger);
-    let proof = pcs.open(prover_data, points.clone(), &mut prover_challenger);
-
-    // The claimed evaluations are the honest ones.
-    for (point, &eval) in points.iter().zip(&proof.evals) {
-        assert_eq!(witness.eval_base(point), eval);
-    }
-
-    // Verifier.
-    let mut verifier_challenger = separated_challenger(&pcs);
-    pcs.verify(&commitment, &proof, &mut verifier_challenger, points)
-        .expect("honest HVZK-WHIR proof should verify");
-}
-
 #[test]
 fn zk_whir_end_to_end_single_round() {
     // One code-switching round: 12 vars, constant folding 4
     // (initial fold + 1 switch + final batch).
-    run_zk_whir(
-        12,
-        2,
-        FoldingFactor::Constant(4),
-        SecurityAssumption::CapacityBound,
-        0,
-        1,
-    );
+    Setup::new(1).num_points(2).assert_round_trip();
 }
 
 #[test]
 fn zk_whir_end_to_end_no_rounds() {
     // Degenerate pipeline: a single fold batch straight into the base case.
-    run_zk_whir(
-        6,
-        1,
-        FoldingFactor::Constant(3),
-        SecurityAssumption::CapacityBound,
-        0,
-        2,
-    );
+    Setup::new(2)
+        .num_variables(6)
+        .folding_factor(FoldingFactor::Constant(3))
+        .assert_round_trip();
 }
 
 #[test]
 fn zk_whir_end_to_end_multi_round() {
     // Two code-switching rounds with mixed folding factors and grinding.
-    run_zk_whir(
-        14,
-        3,
-        FoldingFactor::ConstantFromSecondRound(5, 3),
-        SecurityAssumption::CapacityBound,
-        5,
-        3,
-    );
+    Setup::new(3)
+        .num_variables(14)
+        .num_points(3)
+        .folding_factor(FoldingFactor::ConstantFromSecondRound(5, 3))
+        .pow_bits(5)
+        .assert_round_trip();
 }
 
 #[test]
 fn zk_whir_end_to_end_unique_decoding() {
     // Unique decoding has zero OOD samples: empty pads and OOD layers.
-    run_zk_whir(
-        12,
-        2,
-        FoldingFactor::Constant(4),
-        SecurityAssumption::UniqueDecoding,
-        0,
-        4,
-    );
+    Setup::new(4)
+        .num_points(2)
+        .soundness(SecurityAssumption::UniqueDecoding)
+        .assert_round_trip();
 }
 
 #[test]
 fn zk_whir_end_to_end_johnson_bound() {
-    run_zk_whir(
-        12,
-        1,
-        FoldingFactor::Constant(3),
-        SecurityAssumption::JohnsonBound,
-        5,
-        5,
-    );
+    Setup::new(5)
+        .folding_factor(FoldingFactor::Constant(3))
+        .soundness(SecurityAssumption::JohnsonBound)
+        .pow_bits(5)
+        .assert_round_trip();
 }
 
 #[test]
 fn zk_whir_rejects_wrong_eval() {
     // A tampered claimed evaluation must be rejected.
-    let pcs = make_pcs(
-        12,
-        FoldingFactor::Constant(4),
-        SecurityAssumption::CapacityBound,
-        0,
-        6,
-    );
-    let mut rng = SmallRng::seed_from_u64(7);
-    let witness = Poly::<F>::rand(&mut rng, 12);
-    let points = vec![Point::<EF>::rand(&mut rng, 12)];
-
-    let mut prover_challenger = separated_challenger(&pcs);
-    let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger);
-    let mut proof = pcs.open(prover_data, points.clone(), &mut prover_challenger);
-
-    proof.evals[0] += EF::ONE;
-
-    let mut verifier_challenger = separated_challenger(&pcs);
-    let err = pcs
-        .verify(&commitment, &proof, &mut verifier_challenger, points)
-        .unwrap_err();
+    let mut proven = Setup::new(6).prove();
+    proven.proof.evals[0] += EF::ONE;
+    let err = proven.verify().unwrap_err();
     // Diverged transcript: the verifier samples different STIR positions,
     // so the first round-0 opening fails to authenticate.
     assert_eq!(
@@ -240,28 +284,11 @@ fn zk_whir_rejects_wrong_arity_opening_point() {
     //     committed arity      = 12
     //     verification point   = 3 variables
     //     -> arity mismatch error before any folding arithmetic
-    let pcs = make_pcs(
-        12,
-        FoldingFactor::Constant(4),
-        SecurityAssumption::CapacityBound,
-        0,
-        6,
-    );
-    let mut rng = SmallRng::seed_from_u64(7);
-    let witness = Poly::<F>::rand(&mut rng, 12);
-    let points = vec![Point::<EF>::rand(&mut rng, 12)];
-
     // Honest commit and open against the full-arity point.
-    let mut prover_challenger = separated_challenger(&pcs);
-    let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger);
-    let proof = pcs.open(prover_data, points, &mut prover_challenger);
-
+    let mut proven = Setup::new(6).prove();
     // Verify against a short point instead.
-    let short_points = vec![Point::<EF>::rand(&mut rng, 3)];
-    let mut verifier_challenger = separated_challenger(&pcs);
-    let err = pcs
-        .verify(&commitment, &proof, &mut verifier_challenger, short_points)
-        .unwrap_err();
+    proven.points = vec![Point::<EF>::rand(&mut SmallRng::seed_from_u64(7), 3)];
+    let err = proven.verify().unwrap_err();
     assert_eq!(
         err,
         ZkVerifierError::ClaimArityMismatch {
@@ -275,31 +302,13 @@ fn zk_whir_rejects_wrong_arity_opening_point() {
 #[test]
 fn zk_whir_rejects_tampered_ood_answer() {
     // A shifted private OOD answer desynchronizes the carried claim.
-    let pcs = make_pcs(
-        12,
-        FoldingFactor::Constant(4),
-        SecurityAssumption::CapacityBound,
-        0,
-        8,
-    );
-    let mut rng = SmallRng::seed_from_u64(9);
-    let witness = Poly::<F>::rand(&mut rng, 12);
-    let points = vec![Point::<EF>::rand(&mut rng, 12)];
-
-    let mut prover_challenger = separated_challenger(&pcs);
-    let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger);
-    let mut proof = pcs.open(prover_data, points.clone(), &mut prover_challenger);
-
+    let mut proven = Setup::new(8).prove();
     assert!(
-        !proof.rounds.is_empty() && !proof.rounds[0].ood_answers.is_empty(),
+        !proven.proof.rounds.is_empty() && !proven.proof.rounds[0].ood_answers.is_empty(),
         "fixture should produce at least one private OOD answer",
     );
-    proof.rounds[0].ood_answers[0] += EF::ONE;
-
-    let mut verifier_challenger = separated_challenger(&pcs);
-    let err = pcs
-        .verify(&commitment, &proof, &mut verifier_challenger, points)
-        .unwrap_err();
+    proven.proof.rounds[0].ood_answers[0] += EF::ONE;
+    let err = proven.verify().unwrap_err();
     // Diverged transcript: the verifier samples different STIR positions,
     // so the first round-0 opening fails to authenticate.
     assert_eq!(
@@ -314,30 +323,173 @@ fn zk_whir_rejects_tampered_ood_answer() {
 #[test]
 fn zk_whir_rejects_tampered_base_case_reveal() {
     // A shifted blinded message breaks the joint target identity.
-    let pcs = make_pcs(
-        12,
-        FoldingFactor::Constant(4),
-        SecurityAssumption::CapacityBound,
-        0,
-        10,
-    );
-    let mut rng = SmallRng::seed_from_u64(11);
-    let witness = Poly::<F>::rand(&mut rng, 12);
-    let points = vec![Point::<EF>::rand(&mut rng, 12)];
-
-    let mut prover_challenger = separated_challenger(&pcs);
-    let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger);
-    let mut proof = pcs.open(prover_data, points.clone(), &mut prover_challenger);
-
-    proof.base_case.blinded_message[0] += EF::ONE;
-
-    let mut verifier_challenger = separated_challenger(&pcs);
-    let err = pcs
-        .verify(&commitment, &proof, &mut verifier_challenger, points)
-        .unwrap_err();
+    let mut proven = Setup::new(10).prove();
+    proven.proof.base_case.blinded_message[0] += EF::ONE;
+    let err = proven.verify().unwrap_err();
     assert_eq!(
         err,
         ZkVerifierError::BaseCase(BaseCaseZkError::TargetCheckFailed),
+    );
+}
+
+#[test]
+fn zk_whir_end_to_end_no_claims() {
+    // Edge case: an opening with zero claims still runs the full pipeline.
+    //
+    //     no claims  ->  empty initial relation, target = 0
+    //                ->  the masks alone carry the base-case identity
+    Setup::new(12).num_points(0).assert_round_trip();
+}
+
+#[test]
+fn zk_whir_rejects_truncated_rounds() {
+    // Fixture state: 12 vars, folding 4 -> 1 code-switching round.
+    //
+    // Mutation: drop it -> 0 != 1 -> reject before any transcript work.
+    let mut proven = Setup::new(13).prove();
+    let expected = proven.proof.rounds.len();
+    let _ = proven.proof.rounds.pop().expect("fixture has one round");
+    let err = proven.verify().unwrap_err();
+    assert_eq!(
+        err,
+        ZkVerifierError::RoundCountMismatch {
+            expected,
+            actual: 0,
+        },
+    );
+}
+
+#[test]
+fn zk_whir_rejects_truncated_sumchecks() {
+    // Fixture state: 1 round -> 2 fold batches -> 2 sumcheck transcripts.
+    //
+    // Mutation: drop one -> 1 != 2 -> reject before any transcript work.
+    let mut proven = Setup::new(14).prove();
+    let _ = proven
+        .proof
+        .sumchecks
+        .pop()
+        .expect("fixture has two batches");
+    let err = proven.verify().unwrap_err();
+    assert_eq!(
+        err,
+        ZkVerifierError::SumcheckBatchCountMismatch {
+            expected: 2,
+            actual: 1,
+        },
+    );
+}
+
+#[test]
+fn zk_whir_rejects_missing_ood_answer() {
+    // Mutation: drop one private OOD answer from the round.
+    //
+    //     answers:      [y_1, ..., y_{t-1}]
+    //     ood_samples:  t                    -> count mismatch -> reject
+    let mut proven = Setup::new(15).prove();
+    let _ = proven.proof.rounds[0]
+        .ood_answers
+        .pop()
+        .expect("fixture has OOD answers");
+    let err = proven.verify().unwrap_err();
+    assert_eq!(
+        err,
+        ZkVerifierError::OodAnswerCountMismatch {
+            round: 0,
+            expected: 1,
+            actual: 0,
+        },
+    );
+}
+
+#[test]
+fn zk_whir_rejects_missing_query_opening() {
+    // Mutation: drop one STIR query opening from the round.
+    //
+    // Openings are not absorbed, so the transcript matches up to the
+    // count check itself.
+    let mut proven = Setup::new(16).prove();
+    let _ = proven.proof.rounds[0]
+        .queries
+        .pop()
+        .expect("fixture has query openings");
+    let err = proven.verify().unwrap_err();
+    assert_eq!(
+        err,
+        ZkVerifierError::QueryCountMismatch {
+            round: 0,
+            expected: 17,
+            actual: 16,
+        },
+    );
+}
+
+#[test]
+fn zk_whir_rejects_extra_eval() {
+    // Mutation: one more claimed evaluation than opened points.
+    //
+    //     evals:  [v_1, EXTRA]
+    //     points: [z_1]          -> 2 != 1 -> reject
+    let mut proven = Setup::new(17).prove();
+    proven.proof.evals.push(EF::ONE);
+    let err = proven.verify().unwrap_err();
+    assert_eq!(
+        err,
+        ZkVerifierError::EvalCountMismatch {
+            expected: 1,
+            actual: 2,
+        },
+    );
+}
+
+#[test]
+fn zk_whir_rejects_tampered_pow_witness() {
+    // Fixture state: 5 grinding bits on the code-switching round.
+    //
+    // Mutation: shift the round's PoW witness -> the grind check fails.
+    let mut proven = Setup::new(18).pow_bits(5).prove();
+    proven.proof.rounds[0].pow_witness += F::ONE;
+    let err = proven.verify().unwrap_err();
+    assert_eq!(err, ZkVerifierError::InvalidPowWitness { round: 0 });
+}
+
+#[test]
+fn zk_whir_rejects_tampered_sumcheck_wire() {
+    // Mutation: shift one coefficient of the first sumcheck wire.
+    //
+    // The wire is absorbed, so the remaining transcript diverges and the
+    // replayed batch cannot close.
+    let mut proven = Setup::new(19).prove();
+    proven.proof.sumchecks[0].round_coefficients[0][0] += EF::ONE;
+    let err = proven.verify().unwrap_err();
+    // Diverged transcript: the verifier samples different STIR positions,
+    // so the first round-0 opening fails to authenticate.
+    assert_eq!(
+        err,
+        ZkVerifierError::MerkleVerificationFailed {
+            round: 0,
+            position: 116,
+        },
+    );
+}
+
+#[test]
+fn zk_whir_rejects_wrong_commitment() {
+    // Mutation: verify an honest proof against another witness's commitment.
+    //
+    // The commitment is the first absorb, so the whole transcript diverges.
+    let mut proven = Setup::new(20).prove();
+    let other = Setup::new(21).prove();
+    proven.commitment = other.commitment;
+    let err = proven.verify().unwrap_err();
+    // Diverged transcript: the verifier samples different STIR positions,
+    // so the first round-0 opening fails to authenticate.
+    assert_eq!(
+        err,
+        ZkVerifierError::MerkleVerificationFailed {
+            round: 0,
+            position: 169,
+        },
     );
 }
 
@@ -455,24 +607,14 @@ fn zk_whir_simulator_produces_accepting_transcript() {
 
     // The simulated transcript verifies against the simulated commitment
     // with the real public claims.
-    let pcs = make_pcs(
-        num_variables,
-        FoldingFactor::Constant(4),
-        SecurityAssumption::CapacityBound,
-        0,
-        23,
-    );
-    let mut prover_challenger = separated_challenger(&pcs);
-    let (commitment, prover_data) = pcs.commit(simulated_witness, &mut prover_challenger);
-    let proof = pcs.open(prover_data, points.clone(), &mut prover_challenger);
+    let proven = Setup::new(23).prove_with(simulated_witness, points);
     assert_eq!(
-        proof.evals,
+        proven.proof.evals,
         claims.iter().map(|(_, value)| *value).collect::<Vec<_>>(),
         "the simulated transcript must expose exactly the public claims",
     );
-
-    let mut verifier_challenger = separated_challenger(&pcs);
-    pcs.verify(&commitment, &proof, &mut verifier_challenger, points)
+    proven
+        .verify()
         .expect("simulated HVZK transcript must verify");
 }
 
@@ -497,25 +639,9 @@ fn zk_whir_masks_are_witness_independent() {
     );
 
     let run = |witness: Poly<F>| {
-        let pcs = make_pcs(
-            num_variables,
-            FoldingFactor::Constant(4),
-            SecurityAssumption::CapacityBound,
-            0,
-            41,
-        );
-        let mut prover_challenger = separated_challenger(&pcs);
-        let (commitment, prover_data) = pcs.commit(witness, &mut prover_challenger);
-        let proof = pcs.open(prover_data, vec![point.clone()], &mut prover_challenger);
-        let mut verifier_challenger = separated_challenger(&pcs);
-        pcs.verify(
-            &commitment,
-            &proof,
-            &mut verifier_challenger,
-            vec![point.clone()],
-        )
-        .expect("honest proof verifies");
-        proof
+        let proven = Setup::new(41).prove_with(witness, vec![point.clone()]);
+        proven.verify().expect("honest proof verifies");
+        proven.proof
     };
 
     let proof_a = run(witness_a);
