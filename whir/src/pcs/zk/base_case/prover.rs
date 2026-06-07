@@ -51,8 +51,7 @@ where
     ///
     /// # Arguments
     ///
-    /// - `open_source` opens the (virtual) source at a folded-domain position.
-    ///   The pipeline serves it by opening a leaf of the last oracle.
+    /// - `open_source`: opens the (virtual) source at a folded-domain position.
     #[allow(clippy::too_many_arguments)]
     pub fn prove<Dft, Challenger, R>(
         &self,

@@ -36,15 +36,23 @@ where
     EF: ExtensionField<F> + TwoAdicField,
     MT: Mmcs<F>,
 {
-    /// Replays the base case against the carried claim.
+    /// Replays Construction 7.2 against the carried claim.
+    ///
+    /// # Checks
+    ///
+    /// ```text
+    ///     0. pin every length of the statement and the proof
+    ///     1. replay the transcript    commitments, mu_g, gamma, reveals
+    ///     2. target check             claim transfers onto the reveals
+    ///     3. proof of work
+    ///     4. source spot checks       reveals match the committed source
+    ///     5. mask spot checks         reveals match the committed masks
+    /// ```
     ///
     /// # Arguments
     ///
-    /// - `mask_covectors` is flat in chronological mask order.
-    ///   Groups tile it.
-    /// - `verify_source` authenticates one source opening at a position.
-    ///   It returns the (virtually folded) source value.
-    ///   The pipeline serves it by verifying and folding a leaf.
+    /// - `mask_covectors`: flat in chronological mask order, tiled by the groups.
+    /// - `verify_source`: authenticates one source opening, returns its folded value.
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub fn verify<Challenger>(
         &self,
@@ -75,7 +83,7 @@ where
             .map(|group| group.width)
             .sum();
 
-        // Shape checks before any transcript work.
+        // Check 0: pin every length before any transcript work.
         //
         //     count off    ->  MaskCountMismatch
         //     reveal off   ->  BlindedLengthMismatch
@@ -130,7 +138,12 @@ where
             }
         }
 
-        // Transcript replay: commitments, claim, blinding challenge, reveals.
+        // Check 1: replay the prover's moves into the Fiat-Shamir sponge.
+        //
+        //     move 1  ->  fresh commitments g, s'_i
+        //     move 2  ->  fresh-side claim mu_g
+        //     move 3  ->  sample gamma (now bound to everything above)
+        //     move 4  ->  reveals f*, r*, xi*_i, r*_i
         let fresh_main_commitment = &proof.fresh_main_commitment;
         challenger.observe(fresh_main_commitment.clone());
         for commitment in &proof.fresh_mask_commitments {
@@ -145,9 +158,13 @@ where
             challenger.observe_algebra_slice(&blinded.randomness);
         }
 
-        // Joint target check:
+        // Check 2: the joint target identity.
         //
-        //     <f*, W> + sum_i <xi*_i, u_i> = mu_g + gamma * target
+        //     <f*, W> + sum_i <xi*_i, u_i>  =  mu_g + gamma * target
+        //
+        // By linearity, the identity holds when both claims hold.
+        // A cheating mu_g was fixed before gamma.
+        // A false claim therefore survives at most one gamma.
         let mut combined = dot_product::<EF, _, _>(
             proof.blinded_message.iter().copied(),
             source_covector.iter().copied(),
@@ -160,14 +177,19 @@ where
             return Err(BaseCaseZkError::TargetCheckFailed);
         }
 
-        // PoW before the spot checks.
+        // Check 3: proof of work before the spot positions are drawn.
         if self.config.pow_bits > 0
             && !challenger.check_witness(self.config.pow_bits, proof.pow_witness)
         {
             return Err(BaseCaseZkError::InvalidPowWitness);
         }
 
-        // Source spot checks.
+        // Check 4: source spot checks at t sampled positions.
+        //
+        // The target check used the reveals as bare vectors.
+        // These checks tie them to the committed oracles, per position z:
+        //
+        //     Enc(f*, r*)(z) = g(z) + gamma * f(z)
         let positions = get_challenge_stir_queries::<Challenger, F, EF>(
             code.domain_size,
             0,
@@ -201,7 +223,9 @@ where
             .zip(&proof.source_queries)
             .zip(&proof.fresh_main_queries)
         {
+            // f(z): authenticate a leaf of the last oracle and fold it.
             let source_value = verify_source(position, source_opening)?;
+            // g(z): authenticate the fresh main mask opening.
             let fresh_row = self.verify_row(
                 fresh_main_commitment,
                 &fresh_main_dims,
@@ -210,7 +234,7 @@ where
                 1,
                 "fresh main",
             )?;
-            //     Enc(f*, r*)(z) = g(z) + gamma * f(z)
+            // Enc(f*, r*)(z): re-encode the reveal at this position.
             let blinded_value =
                 code.evaluate_at(position, &proof.blinded_message, &proof.blinded_randomness);
             if blinded_value != fresh_row[0] + gamma * source_value {
@@ -218,7 +242,14 @@ where
             }
         }
 
-        // Mask spot checks: shared positions per group, one row per opening.
+        // Check 5: mask spot checks at t_zk positions per group.
+        //
+        // Same equation as check 4, per group member i and position y:
+        //
+        //     Enc(xi*_i, r*_i)(y) = s'_i(y) + gamma * xi_i(y)
+        //
+        // Positions are shared across a group: one opened row of each
+        // oracle serves every member.
         openings("mask", proof.mask_queries.len(), num_groups)?;
         let mut mask_offset = 0;
         for (group_index, (group, pairs)) in self
@@ -243,6 +274,7 @@ where
             let mask_gen = EF::two_adic_generator(log2_strict_usize(group.shape.domain_size));
             let blinded = &proof.blinded_masks[mask_offset..mask_offset + group.width];
             for (&position, pair) in positions.iter().zip(pairs) {
+                // xi_i(y) for every member i: one row of the carried oracle.
                 let carried_row = self.verify_row(
                     &mask_commitments[group_index],
                     &dims,
@@ -251,6 +283,7 @@ where
                     group.width,
                     "carried mask",
                 )?;
+                // s'_i(y) for every member i: one row of the fresh blind.
                 let fresh_row = self.verify_row(
                     &proof.fresh_mask_commitments[group_index],
                     &dims,
@@ -259,11 +292,12 @@ where
                     group.width,
                     "fresh mask",
                 )?;
-                //     Enc(xi*, r*)(y) = s'(y) + gamma * xi(y)   per member
+                // The field point behind position y.
                 let point = mask_gen.exp_u64(position as u64);
                 for ((blinded, &carried), &fresh) in
                     blinded.iter().zip(&carried_row).zip(&fresh_row)
                 {
+                    // Enc(xi*_i, r*_i)(y): re-encode member i's reveal.
                     let blinded_value = padded_ood_t1(point, &blinded.message, &blinded.randomness);
                     if blinded_value != fresh + gamma * carried {
                         return Err(BaseCaseZkError::MaskSpotCheckFailed {
@@ -289,9 +323,11 @@ where
         width: usize,
         kind: &'static str,
     ) -> Result<Vec<EF>, BaseCaseZkError> {
+        // Mask oracles are extension-valued; any other variant is malformed.
         let QueryOpening::Extension { values, proof } = opening else {
             return Err(BaseCaseZkError::MerkleVerificationFailed { kind, position });
         };
+        // Pin the row width locally before any caller indexes into it.
         if values.len() != width {
             return Err(BaseCaseZkError::MerkleVerificationFailed { kind, position });
         }
