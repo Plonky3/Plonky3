@@ -135,9 +135,9 @@ where
     EF: ExtensionField<F> + TwoAdicField,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
-    /// Construct an empty proof with this configuration.
+    /// Construct an empty proof shaped by this configuration.
     pub fn empty_proof<MT: Mmcs<F>>(&self) -> WhirProof<F, EF, MT> {
-        WhirProof::from_protocol_parameters(&self.params, self.num_variables)
+        WhirProof::empty(self.n_rounds(), self.final_queries)
     }
 
     /// Derive a full protocol configuration from user-facing parameters.
@@ -209,9 +209,10 @@ where
 
         // How many intermediate STIR rounds, and how many variables remain
         // for the final direct-send sumcheck.
+        // An invalid per-round schedule surfaces as a folding-factor config error.
         let (num_rounds, final_sumcheck_rounds) = whir_parameters
             .folding_factor
-            .compute_number_of_rounds(num_variables);
+            .compute_number_of_rounds(num_variables)?;
 
         let round_log_inv_rates = if whir_parameters.round_log_inv_rates.is_empty() {
             let mut rates = Vec::with_capacity(num_rounds);
@@ -614,6 +615,39 @@ mod tests {
             matches!(err, WhirConfigError::OodSamplesInfeasible { .. }),
             "expected OodSamplesInfeasible, got {err:?}"
         );
+    }
+
+    #[test]
+    fn config_rejects_per_round_factors_that_under_fold() {
+        // Invariant: a per-round schedule that under-folds is rejected at config construction.
+        //
+        // Fixture state:
+        //   num_variables = 20, direct-send threshold = 6
+        //   PerRound([3, 2]) folds only 3 + 2 = 5 variables
+        //
+        //     remaining = 20 - 5 = 15 > 6  ->  under-folds
+        let mut params = default_whir_params();
+        params.folding_factor = FoldingFactor::PerRound(vec![3, 2]);
+
+        let err = WhirConfig::<F, F, MyChallenger>::new(20, params)
+            .expect_err("per-round factors under-fold; config must be rejected");
+
+        // The folding-factor error is forwarded through the config error type,
+        // carrying the variable accounting that explains the rejection.
+        match err {
+            WhirConfigError::FoldingFactor(FoldingFactorError::InsufficientFolding {
+                num_variables,
+                remaining,
+                threshold,
+            }) => {
+                assert_eq!(num_variables, 20);
+                // 20 variables minus the 3 + 2 folded by the schedule.
+                assert_eq!(remaining, 15);
+                // The direct-send threshold the schedule fails to reach.
+                assert_eq!(threshold, 6);
+            }
+            other => panic!("expected InsufficientFolding, got {other:?}"),
+        }
     }
 
     #[test]
