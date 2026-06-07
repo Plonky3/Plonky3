@@ -333,6 +333,20 @@ fn zk_whir_rejects_tampered_base_case_reveal() {
 }
 
 #[test]
+fn zk_whir_rejects_tampered_masked_claim() {
+    // The fresh-side claim mu_g is bound before gamma is sampled.
+    //
+    // Mutation: shift mu_g -> the joint target identity no longer closes.
+    let mut proven = Setup::new(22).prove();
+    proven.proof.base_case.masked_claim += EF::ONE;
+    let err = proven.verify().unwrap_err();
+    assert_eq!(
+        err,
+        ZkVerifierError::BaseCase(BaseCaseZkError::TargetCheckFailed),
+    );
+}
+
+#[test]
 fn zk_whir_end_to_end_no_claims() {
     // Edge case: an opening with zero claims still runs the full pipeline.
     //

@@ -24,6 +24,15 @@ pub enum ZkConfigError {
     #[error("sumcheck mask length {ell_zk} is below the minimum of 3")]
     MaskLengthTooSmall { ell_zk: usize },
 
+    /// No base-case spot checks are requested for the mask oracles.
+    #[error("mask_queries must be at least 1")]
+    NoMaskQueries,
+
+    /// The mask code has no rate expansion, so its distance is too small
+    /// for the spot checks to bind.
+    #[error("mask_log_inv_rate must be at least 1")]
+    MaskRateTooHigh,
+
     /// An oracle's randomness rows do not fit inside its codeword slack.
     #[error("round {round}: {randomness} randomness rows exceed the {slack} spare codeword rows")]
     RandomnessExceedsSlack {
@@ -169,6 +178,16 @@ where
     ) -> Result<Self, ZkConfigError> {
         if zk.ell_zk < 3 {
             return Err(ZkConfigError::MaskLengthTooSmall { ell_zk: zk.ell_zk });
+        }
+        // Without mask spot checks the base case never ties a revealed mask
+        // to its commitment, so the carried mask claims would be unbound.
+        if zk.mask_queries == 0 {
+            return Err(ZkConfigError::NoMaskQueries);
+        }
+        // A rate-one mask code has minimal distance, so its spot checks
+        // barely bind; require at least a 2x domain expansion.
+        if zk.mask_log_inv_rate == 0 {
+            return Err(ZkConfigError::MaskRateTooHigh);
         }
 
         let inner = WhirConfig::<EF, F, Challenger>::new(num_variables, params)?;
@@ -353,6 +372,30 @@ mod tests {
             err,
             ZkConfigError::MaskLengthTooSmall { ell_zk: 2 }
         ));
+    }
+
+    #[test]
+    fn config_rejects_zero_mask_queries() {
+        // Zero spot checks leave the carried mask oracles unbound at the
+        // base case, so the configuration is rejected outright.
+        let zk = ZkParameters {
+            mask_queries: 0,
+            ..zk_params()
+        };
+        let err = ZkWhirConfig::<EF, F, MyChallenger>::new(16, params(), zk).unwrap_err();
+        assert!(matches!(err, ZkConfigError::NoMaskQueries));
+    }
+
+    #[test]
+    fn config_rejects_rate_one_mask_code() {
+        // A rate-one mask code lacks the distance its spot checks rely on,
+        // so the configuration is rejected.
+        let zk = ZkParameters {
+            mask_log_inv_rate: 0,
+            ..zk_params()
+        };
+        let err = ZkWhirConfig::<EF, F, MyChallenger>::new(16, params(), zk).unwrap_err();
+        assert!(matches!(err, ZkConfigError::MaskRateTooHigh));
     }
 
     #[test]

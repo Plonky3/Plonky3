@@ -155,15 +155,18 @@ where
                 actual: proof.rounds.len(),
             });
         }
-        if proof.sumchecks.len() != n_rounds + 1
-            || proof.sumcheck_mask_commitments.len() != n_rounds + 1
-        {
+        // One sumcheck transcript and one interleaved mask commitment per
+        // batch; check each count on its own so the error names the culprit.
+        if proof.sumchecks.len() != n_rounds + 1 {
             return Err(ZkVerifierError::SumcheckBatchCountMismatch {
                 expected: n_rounds + 1,
-                actual: proof
-                    .sumchecks
-                    .len()
-                    .min(proof.sumcheck_mask_commitments.len()),
+                actual: proof.sumchecks.len(),
+            });
+        }
+        if proof.sumcheck_mask_commitments.len() != n_rounds + 1 {
+            return Err(ZkVerifierError::SumcheckBatchCountMismatch {
+                expected: n_rounds + 1,
+                actual: proof.sumcheck_mask_commitments.len(),
             });
         }
 
@@ -444,10 +447,6 @@ where
         round: usize,
         randomness: &Point<EF>,
     ) -> Result<EF, ZkVerifierError> {
-        let fail = || ZkVerifierError::MerkleVerificationFailed {
-            round,
-            position: index,
-        };
         // Defense in depth: bind the opened row length locally.
         //
         //     Merkle hashing already pins the committed width,
@@ -458,7 +457,10 @@ where
             QueryOpening::Extension { values, .. } => values.len(),
         };
         if opened_len != width {
-            return Err(fail());
+            return Err(ZkVerifierError::MerkleVerificationFailed {
+                round,
+                position: index,
+            });
         }
         match (active, opening) {
             (ActiveOracle::Base(commitment), QueryOpening::Base { values, proof }) => {
@@ -472,7 +474,10 @@ where
                             opening_proof: proof,
                         },
                     )
-                    .map_err(|_| fail())?;
+                    .map_err(|_| ZkVerifierError::MerkleVerificationFailed {
+                        round,
+                        position: index,
+                    })?;
                 // Mixed-field fold: base leaf at an extension point.
                 Ok(Poly::new(values.clone()).eval_base(randomness))
             }
@@ -487,10 +492,16 @@ where
                             opening_proof: proof,
                         },
                     )
-                    .map_err(|_| fail())?;
+                    .map_err(|_| ZkVerifierError::MerkleVerificationFailed {
+                        round,
+                        position: index,
+                    })?;
                 Ok(Poly::new(values.clone()).eval_ext::<F>(randomness))
             }
-            _ => Err(fail()),
+            _ => Err(ZkVerifierError::MerkleVerificationFailed {
+                round,
+                position: index,
+            }),
         }
     }
 }
