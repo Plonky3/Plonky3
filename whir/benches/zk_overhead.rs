@@ -113,7 +113,6 @@ fn bench_zk(group: &mut BenchmarkGroup<'_, WallTime>, num_variables: usize) {
         // rate, so few spot checks reach the security level.
         ZkParameters {
             ell_zk: 16,
-            mask_queries: 20,
             mask_log_inv_rate: 5,
         },
     )
@@ -170,7 +169,6 @@ fn report_proof_sizes(num_variables: usize) {
         // rate, so few spot checks reach the security level.
         ZkParameters {
             ell_zk: 16,
-            mask_queries: 20,
             mask_log_inv_rate: 5,
         },
     )

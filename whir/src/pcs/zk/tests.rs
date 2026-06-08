@@ -49,7 +49,6 @@ type TestCommitment = <TestZkPcs as MultilinearPcs<EF, MyChallenger>>::Commitmen
 ///     prove()              ->  honest run, returned for tampering
 ///     prove_with(w, pts)   ->  honest run on a caller-chosen statement
 /// ```
-#[derive(Clone)]
 struct Setup {
     /// Arity of the committed polynomial.
     num_variables: usize,
@@ -122,7 +121,6 @@ impl Setup {
             },
             ZkParameters {
                 ell_zk: 4,
-                mask_queries: 8,
                 mask_log_inv_rate: 1,
             },
         )
@@ -233,13 +231,54 @@ fn zk_whir_end_to_end_no_rounds() {
 
 #[test]
 fn zk_whir_end_to_end_multi_round() {
-    // Two code-switching rounds with mixed folding factors and grinding.
-    Setup::new(3)
-        .num_variables(14)
+    // Two code-switching rounds with mixed folding factors and grinding,
+    // so the round-to-round oracle carry path is exercised.
+    let setup = Setup::new(3)
+        .num_variables(17)
         .num_points(3)
         .folding_factor(FoldingFactor::ConstantFromSecondRound(5, 3))
-        .pow_bits(5)
-        .assert_round_trip();
+        .pow_bits(5);
+    assert!(
+        setup.pcs().config.n_rounds() >= 2,
+        "fixture must drive at least two code-switching rounds",
+    );
+    setup.assert_round_trip();
+}
+
+#[test]
+fn zk_whir_code_switch_overhead_accounting() {
+    // Construction 9.7 per-round overhead (eprint 2026/391, #1587):
+    //
+    //     mask message  =  Fold(r_prev, gamma) || pad      (the m_zk part)
+    //     pad length    =  t_ood                           (one slot per OOD)
+    //     wire          =  t_ood private OOD answers
+    //
+    // The mask codeword is Merkle-committed, so only its commitment and the
+    // t_ood answers reach the proof; assert that observable part.
+    let setup = Setup::new(3)
+        .num_variables(17)
+        .folding_factor(FoldingFactor::ConstantFromSecondRound(5, 3))
+        .pow_bits(5);
+    let pcs = setup.pcs();
+    assert!(
+        pcs.config.n_rounds() >= 2,
+        "need code-switching rounds to audit"
+    );
+
+    let proven = setup.prove();
+    assert_eq!(proven.proof.rounds.len(), pcs.config.n_rounds());
+
+    for (round, round_proof) in proven.proof.rounds.iter().enumerate() {
+        let t_ood = pcs.config.round_parameters[round].ood_samples;
+        // Wire: exactly t_ood private OOD answers this round.
+        assert_eq!(round_proof.ood_answers.len(), t_ood);
+        // Mask message: folded source randomness followed by a t_ood pad.
+        let folded_randomness = pcs.config.oracle_randomness[round];
+        assert_eq!(
+            pcs.config.switch_masks[round].message_len,
+            folded_randomness + t_ood,
+        );
+    }
 }
 
 #[test]
@@ -272,7 +311,7 @@ fn zk_whir_rejects_wrong_eval() {
         err,
         ZkVerifierError::MerkleVerificationFailed {
             round: 0,
-            position: 106,
+            position: 120,
         },
     );
 }
@@ -315,7 +354,7 @@ fn zk_whir_rejects_tampered_ood_answer() {
         err,
         ZkVerifierError::MerkleVerificationFailed {
             round: 0,
-            position: 18,
+            position: 108,
         },
     );
 }
@@ -482,7 +521,7 @@ fn zk_whir_rejects_tampered_sumcheck_wire() {
         err,
         ZkVerifierError::MerkleVerificationFailed {
             round: 0,
-            position: 116,
+            position: 105,
         },
     );
 }
@@ -502,7 +541,7 @@ fn zk_whir_rejects_wrong_commitment() {
         err,
         ZkVerifierError::MerkleVerificationFailed {
             round: 0,
-            position: 169,
+            position: 17,
         },
     );
 }
@@ -575,19 +614,19 @@ fn condition_witness(
 }
 
 #[test]
-fn zk_whir_simulator_produces_accepting_transcript() {
-    // Invariant (Lemma 7.3 composed via Theorem 4.5): a simulator that
-    // never sees the witness produces a full accepting transcript.
+fn zk_whir_simulator_witness_free_transcript_accepts() {
+    // Completeness direction of the simulator.
     //
-    //     simulator = honest pipeline on a random witness
-    //                 conditioned only on the public claims
+    //     witness-free transcript  ->  verifies
+    //                              ->  exposes exactly the public claims
     //
-    // Distributional indistinguishability of the components is pinned
-    // elsewhere:
+    // The message is random, conditioned only on those claims.
+    // This is not the composed-distribution argument (Theorem 4.5).
+    // The per-component distribution proofs live where the masks are drawn:
     //
     //     masked sumcheck wires  ->  p3-sumcheck simulator tests
     //     private OOD answers    ->  code_switch programmability tests
-    //     one-time-pad reveals   ->  base case tests
+    //     one-time-pad reveals   ->  base case OTP test
     let num_variables = 12;
     let mut rng = SmallRng::seed_from_u64(21);
 

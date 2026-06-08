@@ -77,6 +77,7 @@ fn honest_run(
     num_masks: usize,
     pow_bits: usize,
     tamper: Tamper,
+    source_override: Option<Vec<EF>>,
 ) -> (
     BaseCaseZkConfig<F>,
     ExtensionMmcs<F, EF, MyMmcs>,
@@ -93,7 +94,8 @@ fn honest_run(
 
     // Source: message 8, randomness 3, domain 16, committed directly.
     let code = FoldedRsCode::<F>::new(8, 3, 16);
-    let source_message: Vec<EF> = (0..code.message_len).map(|_| rng.random()).collect();
+    let source_message: Vec<EF> =
+        source_override.unwrap_or_else(|| (0..code.message_len).map(|_| rng.random()).collect());
     let source_randomness: Vec<EF> = (0..code.randomness_len).map(|_| rng.random()).collect();
     // Under SourceMessage the committed codeword encodes a shifted message,
     // while the reveals and target keep the original.
@@ -260,7 +262,7 @@ proptest! {
         // with and without grinding.
         let pow_bits = (seed % 2) as usize * 4;
         let (config, mmcs, proof, w, u, commits, target, source, challenger) =
-            honest_run(seed, num_masks, pow_bits, Tamper::None);
+            honest_run(seed, num_masks, pow_bits, Tamper::None, None);
         prop_assert!(
             verify_run(&config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger)
                 .is_ok()
@@ -272,7 +274,7 @@ proptest! {
 fn base_case_rejects_wrong_target() {
     // The joint linear identity pins the carried target.
     let (config, mmcs, proof, w, u, commits, target, source, challenger) =
-        honest_run(3, 2, 0, Tamper::None);
+        honest_run(3, 2, 0, Tamper::None, None);
     let err = verify_run(
         &config,
         &mmcs,
@@ -293,7 +295,7 @@ fn base_case_rejects_tampered_blinded_message() {
     // The shifted reveal enters the joint linear identity directly,
     // so the target check fires before any spot check runs.
     let (config, mmcs, mut proof, w, u, commits, target, source, challenger) =
-        honest_run(4, 1, 0, Tamper::None);
+        honest_run(4, 1, 0, Tamper::None, None);
     proof.blinded_message[0] += EF::ONE;
     let err = verify_run(
         &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
@@ -310,7 +312,7 @@ fn base_case_rejects_tampered_blinded_randomness() {
     //     reveal absorbed   ->  before the spot positions are drawn
     //     failure           ->  diverged openings or encoding equation
     let (config, mmcs, mut proof, w, u, commits, target, source, challenger) =
-        honest_run(5, 1, 0, Tamper::None);
+        honest_run(5, 1, 0, Tamper::None, None);
     proof.blinded_randomness[0] += EF::ONE;
     let err = verify_run(
         &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
@@ -326,7 +328,7 @@ fn base_case_rejects_tampered_mask_reveal() {
     // The shifted mask reveal enters the joint linear identity directly,
     // so the target check fires before any spot check runs.
     let (config, mmcs, mut proof, w, u, commits, target, source, challenger) =
-        honest_run(6, 2, 0, Tamper::None);
+        honest_run(6, 2, 0, Tamper::None, None);
     proof.blinded_masks[1].message[0] += EF::ONE;
     let err = verify_run(
         &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
@@ -345,7 +347,7 @@ fn base_case_rejects_unbound_source_reveal() {
     //
     // This is the only branch that ties f* to the committed source.
     let (config, mmcs, proof, w, u, commits, target, source, challenger) =
-        honest_run(30, 1, 0, Tamper::SourceMessage);
+        honest_run(30, 1, 0, Tamper::SourceMessage, None);
     let err = verify_run(
         &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
     )
@@ -364,7 +366,7 @@ fn base_case_rejects_unbound_mask_reveal() {
     //
     // This is the only branch that ties xi* to the committed mask.
     let (config, mmcs, proof, w, u, commits, target, source, challenger) =
-        honest_run(31, 1, 0, Tamper::MaskMessage);
+        honest_run(31, 1, 0, Tamper::MaskMessage, None);
     let err = verify_run(
         &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
     )
@@ -380,23 +382,48 @@ fn base_case_rejects_unbound_mask_reveal() {
 
 #[test]
 fn base_case_reveals_are_one_time_padded() {
-    // Invariant (Lemma 7.3):
+    // Invariant (Lemma 7.3): the source reveal is a one-time pad.
     //
-    // Under matched RNG streams, two provers with different secrets satisfy:
+    //     reveal = g~ + gamma * secret
     //
-    //     fresh commitments  ->  byte-identical
-    //     reveals            ->  differ exactly by gamma * (secret diff)
+    // The fresh mask g~ and the challenge gamma do not depend on the secret.
+    // Two runs share the fresh-mask stream but differ in the secret at
+    // coordinate 0 only:
     //
-    // Why: the fresh mask is drawn before any secret-dependent transcript data.
-    //
-    //     pads coincide  ->  reveals are one-time-pad outputs
+    //     reveal_a - reveal_b = gamma * (secret_a - secret_b)
+    //     recovered g~        = reveal - gamma * secret  (equal across runs)
     let seed = 7;
-    let (_, _, proof_a, ..) = honest_run(seed, 1, 0, Tamper::None);
-    let (_, _, proof_b, ..) = honest_run(seed, 1, 0, Tamper::None);
-    // Same secrets and randomness: fully deterministic replay.
-    assert_eq!(proof_a.blinded_message, proof_b.blinded_message);
+    let message_len = 8_usize;
+
+    // Two secrets differing only at coordinate 0.
+    let secret_a: Vec<EF> = (0..message_len).map(|j| EF::from_u64(j as u64)).collect();
+    let mut secret_b = secret_a.clone();
+    secret_b[0] += EF::ONE;
+
+    let (_, _, proof_a, ..) = honest_run(seed, 1, 0, Tamper::None, Some(secret_a.clone()));
+    let (_, _, proof_b, ..) = honest_run(seed, 1, 0, Tamper::None, Some(secret_b.clone()));
+
+    // The fresh mask is witness-independent, so its commitment matches.
     assert_eq!(
         postcard::to_allocvec(&proof_a.fresh_main_commitment).unwrap(),
         postcard::to_allocvec(&proof_b.fresh_main_commitment).unwrap(),
     );
+
+    // Recover gamma from the one coordinate where the secrets differ:
+    //
+    //     reveal_a[0] - reveal_b[0] = gamma * (secret_a[0] - secret_b[0])
+    let gamma = (proof_a.blinded_message[0] - proof_b.blinded_message[0])
+        * (secret_a[0] - secret_b[0]).inverse();
+    assert!(!gamma.is_zero(), "the pad must mix the secret");
+
+    // The pad is present: the reveal is not the bare secret.
+    assert_ne!(proof_a.blinded_message, secret_a);
+
+    // Both runs recover the same fresh mask g~ = reveal - gamma * secret,
+    // which holds only if the reveal is exactly g~ + gamma * secret.
+    for i in 0..message_len {
+        let g_from_a = proof_a.blinded_message[i] - gamma * secret_a[i];
+        let g_from_b = proof_b.blinded_message[i] - gamma * secret_b[i];
+        assert_eq!(g_from_a, g_from_b, "recovered fresh mask differs at {i}");
+    }
 }

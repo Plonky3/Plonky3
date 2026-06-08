@@ -408,7 +408,7 @@ where
             code: source_code,
             mask_groups: config.mask_groups(),
             num_queries: config.final_queries,
-            mask_queries: config.zk.mask_queries,
+            mask_queries: config.mask_queries,
             pow_bits: config.final_pow_bits,
         };
         let base_prover = BaseCaseZkProver {

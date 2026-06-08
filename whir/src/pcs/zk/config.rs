@@ -7,6 +7,7 @@ use core::ops::Deref;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_dft::Radix2Dit;
 use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_util::log2_ceil_usize;
 use p3_zk_codes::ReedSolomonZkEncoding;
 use rand::distr::{Distribution, StandardUniform};
 use thiserror::Error;
@@ -23,10 +24,6 @@ pub enum ZkConfigError {
     /// The mask code message length is below the HVZK sumcheck minimum.
     #[error("sumcheck mask length {ell_zk} is below the minimum of 3")]
     MaskLengthTooSmall { ell_zk: usize },
-
-    /// No base-case spot checks are requested for the mask oracles.
-    #[error("mask_queries must be at least 1")]
-    NoMaskQueries,
 
     /// The mask code has no rate expansion, so its distance is too small
     /// for the spot checks to bind.
@@ -55,28 +52,16 @@ pub enum ZkConfigError {
 
 /// User-facing ZK extension of [`ProtocolParameters`].
 ///
-/// # Security
-///
-/// These knobs set the ZK code shape but are **not** cross-checked against
-/// the configured `security_level`:
-///
-/// ```text
-///     mask_queries       ->  base-case mask soundness (1 - delta_zk)^{t_zk}
-///     mask_log_inv_rate  ->  the mask code distance delta_zk
-///     ell_zk             ->  the list-size / |F| union-bound terms
-/// ```
-///
-/// [`ZkWhirConfig::new`] rejects only the degenerate values (`ell_zk < 3`,
-/// `mask_queries == 0`, `mask_log_inv_rate == 0`).
-/// The caller is responsible for provisioning them for the target security
-/// level; a full per-round soundness ledger is future work.
+/// - The mask spot-check count `t_zk` is not a knob.
+/// - [`ZkWhirConfig::new`] derives it from `security_level` and
+///   `mask_log_inv_rate`.
+/// - The mask code then always reaches the configured security on its
+///   spot-check branch.
 #[derive(Debug, Clone)]
 pub struct ZkParameters {
     /// Mask code message length `ell_zk` for the HVZK sumcheck (at least 3).
     pub ell_zk: usize,
-    /// Spot checks per mask oracle at the base case (`t_zk`).
-    pub mask_queries: usize,
-    /// Log inverse rate of the mask codewords.
+    /// Log inverse rate of the mask codewords; sets the mask code distance.
     pub mask_log_inv_rate: usize,
 }
 
@@ -160,6 +145,8 @@ where
     /// Mask code per code-switching round.
     /// It commits the previous oracle's folded randomness plus the OOD pad.
     pub switch_masks: Vec<MaskCodeShape>,
+    /// Base-case spot checks per mask group, derived from `security_level`.
+    pub mask_queries: usize,
 }
 
 impl<EF, F, Challenger> Deref for ZkWhirConfig<EF, F, Challenger>
@@ -195,16 +182,20 @@ where
         if zk.ell_zk < 3 {
             return Err(ZkConfigError::MaskLengthTooSmall { ell_zk: zk.ell_zk });
         }
-        // Without mask spot checks the base case never ties a revealed mask
-        // to its commitment, so the carried mask claims would be unbound.
-        if zk.mask_queries == 0 {
-            return Err(ZkConfigError::NoMaskQueries);
-        }
         // A rate-one mask code has minimal distance, so its spot checks
         // barely bind; require at least a 2x domain expansion.
         if zk.mask_log_inv_rate == 0 {
             return Err(ZkConfigError::MaskRateTooHigh);
         }
+
+        // Derive the mask spot-check count t_zk.
+        //
+        //     reach security on the (1 - delta_zk)^{t_zk} branch
+        //     no PoW on mask spot checks -> target the full security level
+        //     t_zk is also the mask randomness length -> t_zk-query private
+        let security_level = params.security_level;
+        let soundness_type = params.soundness_type;
+        let mask_queries = soundness_type.queries(security_level, zk.mask_log_inv_rate);
 
         let inner = WhirConfig::<EF, F, Challenger>::new(num_variables, params)?;
         let n_rounds = inner.n_rounds();
@@ -253,29 +244,24 @@ where
             }
         }
 
-        let sumcheck_mask = MaskCodeShape::new(zk.ell_zk, zk.mask_queries, zk.mask_log_inv_rate);
-
-        // Code-switch mask at round j commits (Fold(r_j, gamma) || pad).
+        // Message length of each mask code: the sumcheck mask, then one
+        // code-switch mask per round committing (Fold(r_j, gamma) || pad).
         //
         //     Fold(r_j, gamma)  ->  the previous oracle's per-limb randomness
         //     pad               ->  one coordinate per out-of-domain answer
         //
-        // Privacy precondition: the pad must cover every private OOD answer.
-        // One pad slot per answer satisfies it by construction.
-        let switch_masks: Vec<MaskCodeShape> = (0..n_rounds)
-            .map(|j| {
-                MaskCodeShape::new(
-                    oracle_randomness[j] + inner.round_parameters[j].ood_samples,
-                    zk.mask_queries,
-                    zk.mask_log_inv_rate,
-                )
-            })
-            .collect();
+        // The pad covers every private OOD answer by construction.
+        let mask_message_lens = once(zk.ell_zk).chain(
+            (0..n_rounds).map(|j| oracle_randomness[j] + inner.round_parameters[j].ood_samples),
+        );
 
-        // Mask codewords live over the extension field's two-adic subgroup;
-        // reject domains the field cannot host before any encoding runs.
-        for shape in once(&sumcheck_mask).chain(&switch_masks) {
-            let log_domain_size = p3_util::log2_strict_usize(shape.domain_size);
+        // Reject mask domains the extension field cannot host.
+        //
+        // The check is in log space, before the shift in `MaskCodeShape::new`,
+        // so an oversized rate yields the typed error instead of overflowing.
+        for message_len in mask_message_lens {
+            let log_domain_size =
+                log2_ceil_usize(message_len + mask_queries) + zk.mask_log_inv_rate;
             if log_domain_size > EF::TWO_ADICITY {
                 return Err(ZkConfigError::MaskDomainExceedsTwoAdicity {
                     log_domain_size,
@@ -284,12 +270,24 @@ where
             }
         }
 
+        let sumcheck_mask = MaskCodeShape::new(zk.ell_zk, mask_queries, zk.mask_log_inv_rate);
+        let switch_masks: Vec<MaskCodeShape> = (0..n_rounds)
+            .map(|j| {
+                MaskCodeShape::new(
+                    oracle_randomness[j] + inner.round_parameters[j].ood_samples,
+                    mask_queries,
+                    zk.mask_log_inv_rate,
+                )
+            })
+            .collect();
+
         Ok(Self {
             inner,
             zk,
             oracle_randomness,
             sumcheck_mask,
             switch_masks,
+            mask_queries,
         })
     }
 
@@ -337,7 +335,6 @@ mod tests {
     fn zk_params() -> ZkParameters {
         ZkParameters {
             ell_zk: 4,
-            mask_queries: 8,
             mask_log_inv_rate: 1,
         }
     }
@@ -397,18 +394,6 @@ mod tests {
     }
 
     #[test]
-    fn config_rejects_zero_mask_queries() {
-        // Zero spot checks leave the carried mask oracles unbound at the
-        // base case, so the configuration is rejected outright.
-        let zk = ZkParameters {
-            mask_queries: 0,
-            ..zk_params()
-        };
-        let err = ZkWhirConfig::<EF, F, MyChallenger>::new(16, params(), zk).unwrap_err();
-        assert!(matches!(err, ZkConfigError::NoMaskQueries));
-    }
-
-    #[test]
     fn config_rejects_rate_one_mask_code() {
         // A rate-one mask code lacks the distance its spot checks rely on,
         // so the configuration is rejected.
@@ -424,8 +409,8 @@ mod tests {
     fn config_rejects_mask_domain_past_two_adicity() {
         // BabyBear's quartic extension has two-adicity 29 (27 + 2).
         //
-        // Fixture state: mask message 4 + randomness 8 -> 16 = 2^4 slots; a
-        // rate of 2^26 yields a 2^30 domain, past the 2^29 subgroup.
+        // A large mask_log_inv_rate pushes the mask code domain past that
+        // subgroup, so the configuration is rejected.
         let zk = ZkParameters {
             mask_log_inv_rate: 26,
             ..zk_params()
@@ -438,7 +423,7 @@ mod tests {
         else {
             panic!("expected MaskDomainExceedsTwoAdicity, got {err:?}");
         };
-        assert_eq!((log_domain_size, two_adicity), (30, 29));
+        assert_eq!((log_domain_size, two_adicity), (32, 29));
     }
 
     #[test]

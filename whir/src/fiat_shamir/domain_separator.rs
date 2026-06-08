@@ -193,6 +193,27 @@ where
         &mut self,
         config: &WhirConfig<EF, F, Challenger>,
     ) {
+        self.bind_config_params(config);
+        self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
+        self.add_ood(config.commitment_ood_samples);
+    }
+
+    /// Commit-statement shape for the HVZK pipeline.
+    ///
+    /// - Binds the same configuration as the plain commit statement.
+    /// - Omits the commitment-phase out-of-domain step.
+    /// - The HVZK protocol has no initial commitment OOD, so declaring it
+    ///   would describe a transcript event that never happens.
+    pub fn commit_statement_hvzk<Challenger, const DIGEST_ELEMS: usize>(
+        &mut self,
+        config: &WhirConfig<EF, F, Challenger>,
+    ) {
+        self.bind_config_params(config);
+        self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
+    }
+
+    /// Binds the protocol configuration into the pattern.
+    fn bind_config_params<Challenger>(&mut self, config: &WhirConfig<EF, F, Challenger>) {
         // Bind the transcript to the protocol configuration.
         self.protocol_param(config.num_variables);
         self.protocol_param(config.security_level);
@@ -225,9 +246,6 @@ where
                 }
             }
         }
-
-        self.observe(DIGEST_ELEMS, Observe::MerkleDigest);
-        self.add_ood(config.commitment_ood_samples);
     }
 
     /// Append the full WHIR proof transcript to the domain separator.
@@ -411,7 +429,7 @@ where
     {
         // Bind the ZK extension parameters.
         self.protocol_param(config.zk.ell_zk);
-        self.protocol_param(config.zk.mask_queries);
+        self.protocol_param(config.mask_queries);
         self.protocol_param(config.zk.mask_log_inv_rate);
         for &budget in &config.oracle_randomness {
             self.protocol_param(budget);
@@ -491,7 +509,7 @@ where
         self.hint(Hint::MerkleProof);
         for group in config.mask_groups() {
             let mask_bytes = ((group.shape.domain_size * 2 - 1).ilog2() as usize).div_ceil(8);
-            self.sample(config.zk.mask_queries * mask_bytes, Sample::StirQueries);
+            self.sample(config.mask_queries * mask_bytes, Sample::StirQueries);
             self.hint(Hint::StirAnswers);
             self.hint(Hint::MerkleProof);
         }

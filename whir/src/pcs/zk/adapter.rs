@@ -75,7 +75,7 @@ where
     /// Encodes the protocol parameters and the full HVZK transcript shape.
     /// Every challenge is thereby bound to this configuration.
     pub fn add_domain_separator<const DIGEST_ELEMS: usize>(&self, ds: &mut DomainSeparator<EF, F>) {
-        ds.commit_statement::<Challenger, DIGEST_ELEMS>(&self.config.inner);
+        ds.commit_statement_hvzk::<Challenger, DIGEST_ELEMS>(&self.config.inner);
         ds.add_zk_whir_proof::<Challenger, DIGEST_ELEMS>(&self.config);
     }
 }
