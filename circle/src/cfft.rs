@@ -228,6 +228,16 @@ impl<F: ComplexExtendable> CircleDomain<F> {
         self.nth_point(cfft_permute_index(index << 1, self.log_n)).y
     }
     pub(crate) fn x_twiddles(&self, layer: usize) -> Vec<F> {
+        assert!(
+            self.log_n >= 2,
+            "x_twiddles requires log_n >= 2, got {}",
+            self.log_n
+        );
+        assert!(
+            layer <= self.log_n - 2,
+            "x_twiddles requires layer <= log_n - 2, got layer={layer}, log_n={}",
+            self.log_n
+        );
         let generator = self.subgroup_generator() * (1 << layer);
         let shift = self.shift * (1 << layer);
         let mut xs = iterate(shift, move |&p| p + generator)
@@ -264,6 +274,7 @@ fn compute_twiddles<F: ComplexExtendable>(domain: CircleDomain<F>) -> Vec<Vec<F>
 }
 
 pub fn circle_basis<F: Field>(p: Point<F>, log_n: usize) -> Vec<F> {
+    assert!(log_n >= 1, "circle_basis requires log_n >= 1, got {log_n}");
     let mut b = vec![F::ONE, p.y];
     let mut x = p.x;
     for _ in 0..(log_n - 1) {
@@ -386,5 +397,19 @@ mod tests {
                     .columnwise_dot_product(&circle_basis(zeta, log_n + log_blowup))
             );
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "circle_basis requires log_n >= 1")]
+    fn circle_basis_rejects_zero_log_n() {
+        let pt = Point::<F>::generator(F::CIRCLE_TWO_ADICITY);
+        let _ = circle_basis(pt, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "x_twiddles requires")]
+    fn x_twiddles_rejects_invalid_layer() {
+        let domain = CircleDomain::<F>::standard(2);
+        let _ = domain.x_twiddles(1);
     }
 }
