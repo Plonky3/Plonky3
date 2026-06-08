@@ -9,9 +9,7 @@ use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
-use p3_uni_stark::{
-    InvalidProofShapeError, PcsError, StarkConfig, VerificationError, prove, verify,
-};
+use p3_uni_stark::{PcsError, PeriodicColumnError, StarkConfig, VerificationError, prove, verify};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
@@ -124,11 +122,11 @@ fn empty_periodic_column_is_rejected() {
     assert!(
         matches!(
             result,
-            Err(VerificationError::InvalidProofShape(
-                InvalidProofShapeError::PeriodicColumnLengthNotPowerOfTwo { got: 0 }
+            Err(VerificationError::PeriodicColumn(
+                PeriodicColumnError::LengthNotPowerOfTwo { got: 0 }
             ))
         ),
-        "expected PeriodicColumnLengthNotPowerOfTwo {{ got: 0 }}, got {result:?}"
+        "expected LengthNotPowerOfTwo {{ got: 0 }}, got {result:?}"
     );
 }
 
@@ -140,11 +138,11 @@ fn non_power_of_two_periodic_column_is_rejected() {
     assert!(
         matches!(
             result,
-            Err(VerificationError::InvalidProofShape(
-                InvalidProofShapeError::PeriodicColumnLengthNotPowerOfTwo { got: 3 }
+            Err(VerificationError::PeriodicColumn(
+                PeriodicColumnError::LengthNotPowerOfTwo { got: 3 }
             ))
         ),
-        "expected PeriodicColumnLengthNotPowerOfTwo {{ got: 3 }}, got {result:?}"
+        "expected LengthNotPowerOfTwo {{ got: 3 }}, got {result:?}"
     );
 }
 
@@ -157,10 +155,10 @@ fn oversized_periodic_column_is_rejected() {
     assert!(
         matches!(
             result,
-            Err(VerificationError::InvalidProofShape(
-                InvalidProofShapeError::PeriodicColumnLengthTooLarge { maximum, got }
+            Err(VerificationError::PeriodicColumn(
+                PeriodicColumnError::LengthTooLarge { maximum, got }
             )) if maximum == TRACE_LENGTH && got == oversized
         ),
-        "expected PeriodicColumnLengthTooLarge {{ maximum: {TRACE_LENGTH}, got: {oversized} }}, got {result:?}"
+        "expected LengthTooLarge {{ maximum: {TRACE_LENGTH}, got: {oversized} }}, got {result:?}"
     );
 }

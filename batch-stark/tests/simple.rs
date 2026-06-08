@@ -26,7 +26,7 @@ use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
-use p3_uni_stark::{InvalidProofShapeError, StarkConfig};
+use p3_uni_stark::{InvalidProofShapeError, PeriodicColumnError, StarkConfig};
 use p3_util::{assert_clone, assert_send, assert_sync, log2_strict_usize};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -853,6 +853,49 @@ fn test_periodic_air() -> Result<(), impl Debug> {
     let common = &prover_data.common;
     let proof = prove_batch(&config, &instances, &prover_data);
     verify_batch(&config, &[air], &proof, &[vec![]], common)
+}
+
+#[test]
+fn periodic_column_non_power_of_two_is_rejected() {
+    let config = make_config(42);
+
+    // Prover: well-formed AIR, periodic column lengths 4 and 2 over a 64-row trace.
+    let good = PeriodicAir::<Val>::new();
+    let trace = good.valid_trace(1 << 6);
+    let instances = vec![StarkInstance {
+        air: &good,
+        trace: &trace,
+        public_values: vec![],
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data);
+
+    // Verifier: same symbolic shape, width 2 and two periodic columns.
+    // The first column now has length 3, which has no evaluation subdomain.
+    //
+    //     prover periods:   [4, 2]   -> verifies
+    //     verifier periods: [3, 2]   -> 3 is not a power of two -> rejected
+    let bad = PeriodicAir::<Val> {
+        periodic: vec![
+            vec![Val::from_u64(1), Val::from_u64(2), Val::from_u64(3)],
+            vec![Val::from_u64(10), Val::from_u64(20)],
+        ],
+    };
+    let result = verify_batch(&config, &[bad], &proof, &[vec![]], common);
+
+    // The shared check fires here exactly as it does in the single-AIR verifier.
+    assert!(
+        matches!(
+            result,
+            Err(BatchVerificationError::Verification(
+                VerificationError::PeriodicColumn(PeriodicColumnError::LengthNotPowerOfTwo {
+                    got: 3
+                })
+            ))
+        ),
+        "expected LengthNotPowerOfTwo {{ got: 3 }}, got {result:?}"
+    );
 }
 
 #[test]

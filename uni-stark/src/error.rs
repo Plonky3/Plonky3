@@ -106,12 +106,20 @@ pub enum InvalidProofShapeError {
     /// Opened values (trace, quotient, random) don't match expected dimensions.
     #[error("opened values do not match expected dimensions")]
     OpenedValuesDimensionMismatch,
+}
+
+/// Reasons a periodic column cannot be evaluated.
+///
+/// - Periodic columns are AIR definition, not proof data.
+/// - A malformed one is an AIR bug, surfaced here instead of a panic.
+#[derive(Debug, Error)]
+pub enum PeriodicColumnError {
     /// A periodic column length is not a power of two.
     #[error("periodic column length must be a power of two, got {got}")]
-    PeriodicColumnLengthNotPowerOfTwo { got: usize },
+    LengthNotPowerOfTwo { got: usize },
     /// A periodic column is longer than the trace it repeats over.
     #[error("periodic column length too large: expected at most {maximum}, got {got}")]
-    PeriodicColumnLengthTooLarge { maximum: usize, got: usize },
+    LengthTooLarge { maximum: usize, got: usize },
 }
 
 /// Top-level verification error.
@@ -123,6 +131,9 @@ where
     /// The proof shape is invalid.
     #[error(transparent)]
     InvalidProofShape(#[from] InvalidProofShapeError),
+    /// A periodic column declared by the AIR cannot be evaluated.
+    #[error(transparent)]
+    PeriodicColumn(#[from] PeriodicColumnError),
     /// An error occurred while verifying the claimed openings.
     #[error("invalid opening argument: {0:?}")]
     InvalidOpeningArgument(PcsErr),

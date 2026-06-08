@@ -3,7 +3,7 @@
 use core::fmt::Debug;
 
 use p3_lookup::LookupError;
-use p3_uni_stark::{InvalidProofShapeError, VerificationError};
+use p3_uni_stark::{InvalidProofShapeError, PeriodicColumnError, VerificationError};
 use thiserror::Error;
 
 /// Failure returned when verifying a batch proof.
@@ -31,5 +31,11 @@ where
 impl<PcsErr: Debug> From<InvalidProofShapeError> for BatchVerificationError<PcsErr> {
     fn from(err: InvalidProofShapeError) -> Self {
         Self::Verification(VerificationError::InvalidProofShape(err))
+    }
+}
+
+impl<PcsErr: Debug> From<PeriodicColumnError> for BatchVerificationError<PcsErr> {
+    fn from(err: PeriodicColumnError) -> Self {
+        Self::Verification(VerificationError::PeriodicColumn(err))
     }
 }
