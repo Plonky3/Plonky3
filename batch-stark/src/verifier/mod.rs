@@ -14,7 +14,8 @@ use p3_lookup::{
     InteractionSymbolicBuilder, LookupError, LookupProtocol, check_multiplicity_height_bound,
 };
 use p3_uni_stark::{
-    InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks, validate_degree_bits,
+    InvalidProofShapeError, VerificationError, check_periodic_column_lengths,
+    recompose_quotient_from_chunks, validate_degree_bits,
 };
 use p3_util::checked_log_size_sum;
 use p3_util::zip_eq::zip_eq;
@@ -566,8 +567,12 @@ where
             }
         };
         let perm_vals: Vec<SC::Challenge> = lookup_terminals[i].iter().map(|t| t.0).collect();
-        let periodic_values: Vec<Challenge<SC>> = air
-            .periodic_columns()
+
+        // Periodic columns are AIR logic; a malformed one must error, not panic.
+        let periodic_columns = air.periodic_columns();
+        check_periodic_column_lengths(&periodic_columns, trace_domains[i].size())?;
+
+        let periodic_values: Vec<Challenge<SC>> = periodic_columns
             .iter()
             .map(|col| trace_domains[i].evaluate_periodic_column_at(col, zeta))
             .collect();
