@@ -41,12 +41,25 @@ where
     FinalPolyLengthMismatch { expected: usize, got: usize },
     #[error("query proof count mismatch: expected {expected}, got {got}")]
     QueryProofCountMismatch { expected: usize, got: usize },
+    /// The instance is configured with zero queries.
+    ///
+    /// - The query loop never runs, so any final polynomial would be accepted.
+    /// - At least one query is required for the protocol to prove anything.
+    #[error("FRI instance has zero queries; at least one is required for soundness")]
+    ZeroQueries,
     #[error("missing initial reduced opening at log height {expected}")]
     MissingInitialReducedOpening { expected: usize },
     #[error("initial reduced opening height mismatch: expected {expected}, got {got}")]
     InitialReducedOpeningHeightMismatch { expected: usize, got: usize },
     #[error("global max height mismatch: expected {expected}, got {got}")]
     GlobalMaxHeightMismatch { expected: usize, got: usize },
+    #[error(
+        "global max height 2^{log_global_max_height} exceeds field two-adicity 2^{two_adicity}"
+    )]
+    GlobalMaxHeightTooLarge {
+        log_global_max_height: usize,
+        two_adicity: usize,
+    },
     #[error("round {round}: sibling values length mismatch: expected {expected}, got {got}")]
     SiblingValuesLengthMismatch {
         round: usize,
@@ -113,6 +126,15 @@ where
     FinalPolyMismatch,
     #[error("invalid proof-of-work witness")]
     InvalidPowWitness,
+    /// A query point coincides with an opening point, so the quotient denominator is zero.
+    #[error(
+        "batch {batch}, matrix {matrix}, point {point}: query point coincides with the opening point"
+    )]
+    OpeningPointMatchesQueryPoint {
+        batch: usize,
+        matrix: usize,
+        point: usize,
+    },
 }
 
 /// A chain of FRI input openings allowing a verifier to check a sequence of
@@ -154,6 +176,13 @@ where
             InputProof = Vec<BatchOpening<Val, InputMmcs>>,
         >,
 {
+    // Reject a vacuous instance before any transcript work.
+    // With zero queries the per-query loop never runs.
+    // Any final polynomial would then pass.
+    if params.num_queries == 0 {
+        return Err(FriError::ZeroQueries);
+    }
+
     // Generate the Batch combination challenge
     // Soundness Error: `|f|/|EF|` where `|f|` is the number of different functions of the form
     // `(f(zeta) - fi(x))/(zeta - x)` which need to be checked.
@@ -221,6 +250,18 @@ where
     // Each round reduces the domain size by its log_arity.
     let total_log_reduction: usize = log_arities.iter().sum();
     let log_global_max_height = total_log_reduction + params.log_blowup + params.log_final_poly_len;
+
+    // Bound the global height by the field two-adicity before using it.
+    // The query phase evaluates the final polynomial at a 2^log_global_max_height-th
+    // root of unity, which does not exist past the two-adicity and would panic.
+    // When the input has no commitments the cross-check below is skipped, so for a
+    // malicious proof this is the only guard standing between us and that panic.
+    if log_global_max_height > Val::TWO_ADICITY {
+        return Err(FriError::GlobalMaxHeightTooLarge {
+            log_global_max_height,
+            two_adicity: Val::TWO_ADICITY,
+        });
+    }
 
     // Cross-check: the global log-height has two independent derivations which must agree.
     // Ref: Ben-Sasson et al., "Fast RS IOPP", ICALP 2018, §2.1.1.
@@ -597,6 +638,16 @@ where
         .zip(commitments_with_opening_points.iter())
         .enumerate()
     {
+        // The opened rows must pair one-to-one with the committed matrices.
+        // Why: the width derivation below zips rows with matrix metadata.
+        if batch_opening.opened_values.len() != mats.len() {
+            return Err(FriError::BatchOpenedValuesCountMismatch {
+                batch,
+                expected: mats.len(),
+                got: batch_opening.opened_values.len(),
+            });
+        }
+
         // Find the height of each matrix in the batch.
         // Currently we only check domain.size() as the shift is
         // assumed to always be Val::GENERATOR.
@@ -606,8 +657,20 @@ where
             .collect_vec();
         let batch_dims = batch_heights
             .iter()
-            // TODO: MMCS doesn't really need width; we put 0 for now.
-            .map(|&height| Dimensions { width: 0, height })
+            .zip(mats)
+            .zip(&batch_opening.opened_values)
+            .map(
+                |((&height, (_, points_and_values)), opened_row)| Dimensions {
+                    // Invariant: the commitment layer rejects opened rows that differ from this width.
+                    //
+                    //     some points → width = claimed evaluation count
+                    //     no points   → width = opened row length (no claim to enforce)
+                    width: points_and_values
+                        .first()
+                        .map_or(opened_row.len(), |(_, values)| values.len()),
+                    height,
+                },
+            )
             .collect_vec();
 
         // If the maximum height of the batch is smaller than the global max height,
@@ -618,14 +681,6 @@ where
             .max()
             .map(|&h| index >> (log_global_max_height - log2_strict_usize(h)))
             .unwrap_or(0);
-
-        if batch_opening.opened_values.len() != mats.len() {
-            return Err(FriError::BatchOpenedValuesCountMismatch {
-                batch,
-                expected: mats.len(),
-                got: batch_opening.opened_values.len(),
-            });
-        }
 
         input_mmcs
             .verify_batch(
@@ -661,7 +716,6 @@ where
             // For each polynomial `f` in our matrix, compute `(f(z) - f(x))/(z - x)`,
             // scale by the appropriate alpha power and add to the reduced opening for this log_height.
             for (point, (z, ps_at_z)) in mat_points_and_values.iter().enumerate() {
-                let quotient = (*z - x).inverse();
                 if mat_opening.len() != ps_at_z.len() {
                     return Err(FriError::PointEvaluationCountMismatch {
                         batch,
@@ -671,6 +725,16 @@ where
                         got: ps_at_z.len(),
                     });
                 }
+                // The quotient (f(z) - f(x)) / (z - x) is undefined when x coincides with z.
+                // Reject this instead of inverting zero.
+                let quotient =
+                    (*z - x)
+                        .try_inverse()
+                        .ok_or(FriError::OpeningPointMatchesQueryPoint {
+                            batch,
+                            matrix,
+                            point,
+                        })?;
                 for (&p_at_x, &p_at_z) in mat_opening.iter().zip(ps_at_z.iter()) {
                     // Note we just checked batch proofs to ensure p_at_x is correct.
                     // x, z were sent by the verifier.
@@ -680,15 +744,15 @@ where
                 }
             }
         }
+    }
 
-        // `reduced_openings` would have a log_height = log_blowup entry only if there was a
-        // trace matrix of height 1. In this case `f` is constant, so `f(zeta) - f(x))/(zeta - x)`
-        // must equal `0`.
-        if let Some((_, ro)) = reduced_openings.get(&params.log_blowup)
-            && !ro.is_zero()
-        {
-            return Err(FriError::FinalPolyMismatch);
-        }
+    // The blowup-height entry exists only for a height-1 (constant) trace matrix.
+    // Its quotient `(f(zeta) - f(x)) / (zeta - x)` must then be zero.
+    // One check after all batches suffices: the random combining challenge rules out cancellation.
+    if let Some((_, ro)) = reduced_openings.get(&params.log_blowup)
+        && !ro.is_zero()
+    {
+        return Err(FriError::FinalPolyMismatch);
     }
 
     // Return reduced openings descending by log_height.
@@ -709,9 +773,9 @@ mod tests {
     use p3_commit::{BatchOpening, ExtensionMmcs, Mmcs, Pcs};
     use p3_dft::Radix2Dit;
     use p3_field::extension::BinomialExtensionField;
-    use p3_field::{Field, HornerIter, PrimeCharacteristicRing};
+    use p3_field::{Field, HornerIter, PrimeCharacteristicRing, TwoAdicField};
     use p3_matrix::dense::RowMajorMatrix;
-    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_merkle_tree::{MerkleTreeError, MerkleTreeMmcs};
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
@@ -1360,6 +1424,55 @@ mod tests {
     }
 
     #[test]
+    fn global_max_height_exceeds_two_adicity() {
+        // Invariant: the global height cannot exceed the field two-adicity.
+        // The final-poly point is a 2^height-th root of unity, absent past that.
+        //
+        // With no input commitments the cross-check is skipped.
+        // A malicious proof could then inflate the fold schedule without bound.
+        // The dedicated guard must reject it instead of panicking in the generator.
+        //
+        // Fixture state: 3 rounds of arity 1.
+        //
+        // Mutation: clone rounds until the schedule passes the two-adicity, then
+        // verify against an empty commitment set so only the guard stands.
+        let f = make_test_fixture();
+        let mut proof = f.proof.clone();
+
+        // Grow past the two-adicity: arity 1 per round, so rounds == sum(log_arities).
+        //     sum(log_arities) + log_blowup > TWO_ADICITY
+        let target_rounds = Val::TWO_ADICITY + 1;
+        let commit = proof.commit_phase_commits[0].clone();
+        let first_openings: Vec<_> = proof
+            .query_proofs
+            .iter()
+            .map(|qp| qp.commit_phase_openings[0].clone())
+            .collect();
+        while proof.commit_phase_commits.len() < target_rounds {
+            proof.commit_phase_commits.push(commit.clone());
+            for (qp, opening) in proof.query_proofs.iter_mut().zip(first_openings.iter()) {
+                qp.commit_phase_openings.push(opening.clone());
+            }
+        }
+
+        let mut challenger = f.challenger.clone();
+        // Empty commitments: the cross-check is skipped, leaving only the guard.
+        let err = run_verify_fri(&f.fri_params, &proof, &mut challenger, &[], &f.input_mmcs)
+            .expect_err("height above two-adicity must be rejected");
+
+        match err {
+            FriError::GlobalMaxHeightTooLarge {
+                log_global_max_height,
+                two_adicity,
+            } => {
+                assert_eq!(two_adicity, Val::TWO_ADICITY);
+                assert!(log_global_max_height > two_adicity);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
     fn input_proof_batch_count_mismatch() {
         let f = make_test_fixture();
         let mut proof = f.proof.clone();
@@ -1449,16 +1562,20 @@ mod tests {
         // evaluations f_i(z) to form (f_i(z) - f_i(x)) / (z - x).
         // These two vectors must have the same length.
         //
-        // Fixture state: 2 trace columns → 2 opened values, 2 claims.
+        // Fixture state: 2 trace columns → 2 opened values, 2 claims at point 0.
         //
-        // Mutation: push an extra claim. Only touches verifier-side data,
-        // not the proof, so Merkle verification still passes. Claims are
+        // Mutation: add a second opening point with one claim too many.
+        // Point 0 still matches the matrix width, so the Merkle shape
+        // checks pass and the pairing check fires at point 1. Claims are
         // not in the transcript, so the original challenger is reused.
         //
-        //     opened values:  [f_0(x), f_1(x)]             (length 2)
-        //     claims:         [f_0(z), f_1(z), EXTRA]      (length 3)
-        //     → 2 != 3 → error
-        cwop[0].1[0].1[0].1.push(Challenge::ZERO);
+        //     opened values:   [f_0(x), f_1(x)]            (length 2)
+        //     point 0 claims:  [f_0(z), f_1(z)]            (length 2)
+        //     point 1 claims:  [0, 0, 0]                   (length 3)
+        //     → 2 != 3 → error at point 1
+        cwop[0].1[0]
+            .1
+            .push((Challenge::ZERO, vec![Challenge::ZERO; 3]));
 
         let mut challenger = f.challenger.clone();
         let err = run_verify_fri(
@@ -1480,13 +1597,46 @@ mod tests {
             } => {
                 assert_eq!(batch, 0);
                 assert_eq!(matrix, 0);
-                assert_eq!(point, 0);
+                assert_eq!(point, 1);
                 // 2 trace columns opened, but 3 claimed evaluations.
                 assert_eq!(expected, 2);
                 assert_eq!(got, 3);
             }
             other => panic!("wrong error variant: {other:?}"),
         }
+    }
+
+    #[test]
+    fn claimed_width_mismatch_rejected_by_input_mmcs() {
+        let f = make_test_fixture();
+        let mut cwop = f.commitments_with_opening_points.clone();
+
+        // The matrix width the verifier passes to the input commitment
+        // scheme comes from the first point's claimed evaluations.
+        //
+        //     opened values:  [f_0(x), f_1(x)]             (length 2)
+        //     claims:         [f_0(z), f_1(z), EXTRA]      (length 3)
+        //     → expected width 3, opened row has 2 → error
+        cwop[0].1[0].1[0].1.push(Challenge::ZERO);
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &f.proof,
+            &mut challenger,
+            &cwop,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject opened rows narrower than the claimed width");
+
+        assert!(matches!(
+            err,
+            FriError::InputError(MerkleTreeError::WrongWidth {
+                matrix: 0,
+                expected: 3,
+                got: 2,
+            })
+        ));
     }
 
     #[test]
@@ -1750,5 +1900,128 @@ mod tests {
 
         // The two must differ — this is what the verifier would catch.
         assert_ne!(honest_eval, corrupted_eval);
+    }
+
+    #[test]
+    fn rejects_with_zero_queries() {
+        // Invariant: a zero-query FRI instance proves nothing.
+        // The per-query loop never runs.
+        // Without the guard the verifier returns Ok for any final polynomial.
+        //
+        // Fixture state: an honest proof built with 2 queries.
+        //
+        // Mutation: verify it under params with num_queries = 0.
+        let f = make_test_fixture();
+        let mut params = f.fri_params.clone();
+        params.num_queries = 0;
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &params,
+            &f.proof,
+            &mut challenger,
+            &f.commitments_with_opening_points,
+            &f.input_mmcs,
+        )
+        .expect_err("zero-query instance must be rejected");
+
+        assert!(
+            matches!(err, FriError::ZeroQueries),
+            "expected ZeroQueries, got {err:?}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "num_queries must be at least 1")]
+    fn prover_rejects_zero_queries() {
+        // The prover must refuse to build a vacuous proof.
+        // The verifier guards the same config, so the failure is symmetric.
+        let mut rng = SmallRng::seed_from_u64(42);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm.clone());
+        let input_mmcs = ValMmcs::new(hash.clone(), compress.clone(), 0);
+        let challenge_mmcs = ChallengeMmcs::new(ValMmcs::new(hash, compress, 0));
+
+        // Zero queries; every other parameter is otherwise valid.
+        let fri_params = FriParameters {
+            log_blowup: 1,
+            log_final_poly_len: 0,
+            max_log_arity: 1,
+            num_queries: 0,
+            commit_proof_of_work_bits: 0,
+            query_proof_of_work_bits: 0,
+            mmcs: challenge_mmcs,
+        };
+        let pcs = TwoAdicFriPcs::new(Radix2Dit::default(), input_mmcs, fri_params);
+
+        // Commit succeeds; the assert fires inside the opening (FRI prover).
+        let log_degree = 3;
+        let domain = <TwoAdicFriPcs<Val, Radix2Dit<Val>, ValMmcs, ChallengeMmcs> as Pcs<
+            Challenge,
+            Challenger,
+        >>::natural_domain_for_degree(&pcs, 1 << log_degree);
+        let trace = RowMajorMatrix::<Val>::rand_nonzero(&mut rng, 1 << log_degree, 2);
+        let (commitment, prover_data) =
+            <TwoAdicFriPcs<Val, Radix2Dit<Val>, ValMmcs, ChallengeMmcs> as Pcs<
+                Challenge,
+                Challenger,
+            >>::commit(&pcs, [(domain, trace)]);
+
+        let mut challenger = Challenger::new(perm);
+        challenger.observe(&commitment);
+        let zeta: Challenge = challenger.sample_algebra_element();
+        let _ = pcs.open(vec![(&prover_data, vec![vec![zeta]])], &mut challenger);
+    }
+
+    #[test]
+    fn opening_point_equal_to_query_point_is_rejected() {
+        // open_input forms (f(z) - f(x)) / (z - x) for each opening point z, where x is
+        // the query point derived from the index. At index 0 with no height reduction,
+        //     x = GENERATOR * g^reverse_bits(0) = GENERATOR.
+        // Setting z = GENERATOR makes the denominator zero.
+        // Without the guard the inverse of zero panics; with it we get a typed error.
+        let f = make_test_fixture();
+
+        // Commit one width-1 matrix at the global max height, then open it at index 0.
+        // Heights: domain 2^3, blowup 2^1, so the committed LDE height is 2^4 = 16.
+        let log_blowup = f.fri_params.log_blowup;
+        let log_domain = 3;
+        let log_global_max_height = log_domain + log_blowup;
+        let domain = TwoAdicMultiplicativeCoset::new(Val::ONE, log_domain).unwrap();
+        let height = 1 << log_global_max_height;
+
+        let mut rng = SmallRng::seed_from_u64(7);
+        let mat = RowMajorMatrix::<Val>::rand_nonzero(&mut rng, height, 1);
+        let (commit, prover_data) = f.input_mmcs.commit(vec![mat]);
+        let input_proof = vec![f.input_mmcs.open_batch(0, &prover_data)];
+
+        // One opening point placed exactly on the query point x = GENERATOR.
+        //     opening point z : GENERATOR   (claimed value is irrelevant; the denominator fails first)
+        //     query point   x : GENERATOR
+        let z = Challenge::from(Val::GENERATOR);
+        let cwop = vec![(commit, vec![(domain, vec![(z, vec![Challenge::ZERO])])])];
+
+        let err = open_input::<Val, Challenge, ValMmcs, ChallengeMmcs>(
+            &f.fri_params,
+            log_global_max_height,
+            0,
+            &input_proof,
+            Challenge::ONE,
+            &f.input_mmcs,
+            &cwop,
+        )
+        .expect_err("opening point equal to the query point must be rejected");
+
+        match err {
+            FriError::OpeningPointMatchesQueryPoint {
+                batch,
+                matrix,
+                point,
+            } => {
+                assert_eq!((batch, matrix, point), (0, 0, 0));
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
     }
 }

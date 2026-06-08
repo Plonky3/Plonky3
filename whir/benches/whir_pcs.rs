@@ -99,7 +99,9 @@ impl Options {
 /// round. Round 0 starts at rate 1 and each subsequent round absorbs one fewer
 /// rate halving per folded variable.
 fn default_round_log_inv_rates(num_variables: usize, folding_factor: &FoldingFactor) -> Vec<usize> {
-    let (num_rounds, _) = folding_factor.compute_number_of_rounds(num_variables);
+    let (num_rounds, _) = folding_factor
+        .compute_number_of_rounds(num_variables)
+        .expect("valid folding schedule");
     let mut rates = Vec::with_capacity(num_rounds);
     let mut rate = 1;
     for round in 0..num_rounds {
@@ -152,7 +154,7 @@ impl<L: Layout<F, EF>> Bench<L> {
         };
 
         // Derive the per-round configuration and pre-allocate FFT twiddles.
-        let config = WhirConfig::<EF, F, Challenger>::new(opts.num_variables, params);
+        let config = WhirConfig::<EF, F, Challenger>::new(opts.num_variables, params).unwrap();
         let dft = Dft::new(1 << config.max_fft_size());
         let pcs = Pcs::<L>::new(config, dft, mmcs);
 

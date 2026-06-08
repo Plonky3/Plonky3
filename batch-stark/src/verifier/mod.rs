@@ -365,9 +365,6 @@ where
         let inst_qcs = &opened_values.instances[i]
             .base_opened_values
             .quotient_chunks;
-        if inst_qcs.len() != domains.len() {
-            return Err(InvalidProofShapeError::QuotientDomainsCountMismatch { air: i }.into());
-        }
         for (d, vals) in zip_eq(
             domains.iter(),
             inst_qcs,

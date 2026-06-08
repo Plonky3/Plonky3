@@ -75,7 +75,10 @@ pub mod verifier;
 #[cfg(test)]
 pub(crate) mod test_helpers;
 
-pub use data::{MaskOracle, ZkSumcheckData};
+pub use data::{
+    MaskOracle, ZkSumcheckData, ZkSumcheckHandoff, ZkVerifierHandoff, mask_residual,
+    mask_residual_covectors, mask_residual_covectors_from_shape,
+};
 pub use prover::{ZkLayout, ZkPrefixProver, ZkProver, ZkSuffixProver};
 pub use simulator::simulate_classic_unpacked;
 pub use verifier::ZkVerifier;

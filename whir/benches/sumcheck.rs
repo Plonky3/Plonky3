@@ -160,11 +160,11 @@ fn run_zk_sumcheck<L>(
     L: ZkLayout<F, EF>,
 {
     let mut data = ZkSumcheckData::<F, EF>::default();
-    let (residual, randomness, mask_oracles) = prover.into_sumcheck(&mut data, 0, challenger, rng);
+    let handoff = prover.into_sumcheck(&mut data, 0, challenger, rng);
     assert_eq!(data.round_coefficients.len(), folding);
-    assert_eq!(randomness.num_variables(), folding);
-    assert!(residual.num_variables() > 0);
-    black_box((data, residual, randomness, mask_oracles));
+    assert_eq!(handoff.randomness.num_variables(), folding);
+    assert!(handoff.residual_prover.num_variables() > 0);
+    black_box((data, handoff));
 }
 
 fn bench_sumcheck_prover(c: &mut Criterion) {

@@ -121,6 +121,13 @@ impl<F> Poly<F> {
         &mut self.0
     }
 
+    /// Consumes the polynomial and returns the owned evaluation table.
+    #[inline]
+    #[must_use]
+    pub fn into_evals(self) -> Vec<F> {
+        self.0
+    }
+
     /// Pads the evaluation vector with zeros up to `num_variables`.
     ///
     /// # Panics
@@ -405,14 +412,6 @@ impl<F: Field> Poly<F> {
         EF: ExtensionField<F>,
     {
         SplitEq::<F, EF>::new_packed(point, scale).compress_suffix(self)
-    }
-
-    /// Like [`compress_suffix`](Self::compress_suffix), but writes into a pre-allocated buffer.
-    pub fn compress_suffix_into<EF>(&self, out: &mut [EF], point: &Point<EF>, scale: EF)
-    where
-        EF: ExtensionField<F>,
-    {
-        SplitEq::<F, EF>::new_packed(point, scale).compress_suffix_into(out, self);
     }
 }
 

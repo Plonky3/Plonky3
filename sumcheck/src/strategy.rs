@@ -12,9 +12,9 @@ use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 
-use crate::SumcheckData;
 use crate::constraints::Constraint;
 use crate::product_polynomial::ProductPolynomial;
+use crate::{SumcheckData, extrapolate_01inf};
 
 /// Input size at which the round-coefficient routines switch from serial to parallel execution.
 ///
@@ -370,6 +370,11 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
         Self { poly, sum }
     }
 
+    /// Returns the current claimed sum over the remaining unbound variables.
+    pub const fn claimed_sum(&self) -> EF {
+        self.sum
+    }
+
     /// Returns the number of remaining (unbound) variables.
     pub fn num_variables(&self) -> usize {
         self.poly.num_variables()
@@ -384,6 +389,26 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     /// Evaluates `f` at a given multilinear point via interpolation.
     pub fn eval(&self, point: &Point<EF>) -> EF {
         self.poly.eval(point)
+    }
+
+    /// Computes the current round's plain quadratic coefficients without
+    /// touching the transcript or folding the polynomial.
+    pub(crate) fn round_coefficients(&self) -> (EF, EF) {
+        self.poly.round_coefficients()
+    }
+
+    /// Folds the residual product polynomial by one challenge and updates the
+    /// claimed sum with the same quadratic extrapolation as the plain path.
+    pub(crate) fn fold_round_with_coefficients(&mut self, c0: EF, c_inf: EF, gamma: EF) {
+        self.sum = extrapolate_01inf(c0, self.sum - c0, c_inf, gamma);
+        self.poly.fold_round(gamma);
+        debug_assert_eq!(self.sum, self.poly.dot_product());
+    }
+
+    /// Applies a scalar to the evaluation side and the matching residual claim.
+    pub(crate) fn scale_evals_and_claim(&mut self, scale: EF) {
+        self.poly.scale_evals(scale);
+        self.sum *= scale;
     }
 
     /// Runs additional sumcheck rounds, optionally incorporating a new constraint.

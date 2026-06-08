@@ -168,6 +168,20 @@ where
             constraint.combine_evals(&mut claimed_eval);
             constraints.push(constraint);
 
+            // Intermediate-round sumcheck rounds == next-round folding factor.
+            // Mirrors the initial and final sumcheck guards;
+            // Without it a wrong count desyncs Fiat-Shamir instead of rejecting cleanly.
+            let expected_round_rounds = self.folding_factor(round_index + 1);
+            let actual_round_rounds = proof.rounds[round_index]
+                .sumcheck
+                .polynomial_evaluations()
+                .len();
+            if actual_round_rounds != expected_round_rounds {
+                return Err(VerifierError::Sumcheck(SumcheckError::RoundCountMismatch {
+                    expected: expected_round_rounds,
+                    actual: actual_round_rounds,
+                }));
+            }
             let folding_randomness = proof.rounds[round_index].sumcheck.verify_rounds(
                 challenger,
                 &mut claimed_eval,

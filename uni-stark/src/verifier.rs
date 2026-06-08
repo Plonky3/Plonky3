@@ -388,7 +388,15 @@ where
     // Get an out-of-domain point to open our values at.
     //
     // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has degree `d`.
-    let zeta = challenger.sample_algebra_element();
+    let zeta: SC::Challenge = challenger.sample_algebra_element();
+
+    // The opening at zeta divides by the vanishing polynomial of the trace domain.
+    // Reject any zeta on the domain, where that polynomial is zero and the inverse panics.
+    // Honest Fiat-Shamir sampling reaches this only with probability |H| / |EF|.
+    if init_trace_domain.vanishing_poly_at_point(zeta).is_zero() {
+        return Err(VerificationError::OodPointInDomain);
+    }
+
     let periodic_values: Vec<SC::Challenge> = air
         .periodic_columns()
         .iter()

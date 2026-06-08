@@ -23,6 +23,7 @@
 
 mod common;
 mod layout;
+mod residual;
 mod round;
 mod zk_prover;
 

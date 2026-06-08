@@ -63,6 +63,10 @@ where
 {
     assert!(!inputs.is_empty());
     assert!(
+        params.num_queries > 0,
+        "num_queries must be at least 1 for FRI soundness"
+    );
+    assert!(
         params.max_log_arity > 0,
         "max_log_arity must be at least 1 to guarantee folding progress"
     );
@@ -74,7 +78,12 @@ where
         "Inputs are not sorted in descending order of length."
     );
 
-    let log_max_height = log2_strict_usize(inputs[0].len());
+    // Index sampling and `open_input` must agree on the height; the caller's value is canonical.
+    debug_assert_eq!(
+        log_global_max_height,
+        log2_strict_usize(inputs[0].len()),
+        "log_global_max_height must match the largest input length"
+    );
     let log_min_height = log2_strict_usize(inputs.last().unwrap().len());
     if params.log_final_poly_len > 0 {
         // Final_poly_degree must be less than or equal to the degree of the smallest polynomial.
@@ -103,12 +112,13 @@ where
         // (Grabbed this from wikipedia page on the birthday problem)
         // N!/(N^{num_queries} * (N - num_queries)!) ~ (1 - 1/N)^{num_queries * (num_queries - 1)/2}
         //                                           ~ (1 - num_queries^2/2N)
-        // Here N = 2^log_max_height.
+        // Here N = 2^log_global_max_height.
         // With num_queries = 100, N = 2^20, this is 0.995 so there is a .5% chance of a collision.
         // Due to this, security conscious users may want to set num_queries a little higher than the
         // theoretical minimum.
         iter::repeat_with(|| {
-            let index = challenger.sample_bits(log_max_height + folding.extra_query_index_bits());
+            let index =
+                challenger.sample_bits(log_global_max_height + folding.extra_query_index_bits());
             // For each index, create a proof that the folding operations along the chain are correct.
             // With variable arity, the index shifts by log_arity each round.
             QueryProof {

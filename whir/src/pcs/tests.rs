@@ -42,7 +42,9 @@ pub(crate) fn challenger() -> MyChallenger {
 }
 
 fn default_round_log_inv_rates(num_variables: usize, folding_factor: &FoldingFactor) -> Vec<usize> {
-    let (num_rounds, _) = folding_factor.compute_number_of_rounds(num_variables);
+    let (num_rounds, _) = folding_factor
+        .compute_number_of_rounds(num_variables)
+        .expect("valid folding schedule");
     let mut rates = Vec::with_capacity(num_rounds);
     let mut rate = 1;
     for round in 0..num_rounds {
@@ -103,7 +105,7 @@ fn run_whir_pcs_lifecycle_with_witness<L: Layout<F, EF>>(
 
     // Instantiate the PCS through the trait.
     let dft = MyDft::default();
-    let config = WhirConfig::new(num_variables, params);
+    let config = WhirConfig::new(num_variables, params).unwrap();
     let pcs = TestWhirPcs::<L>::new(config, dft, mmcs);
 
     // Prover
@@ -294,7 +296,7 @@ mod error_variant_tests {
     use crate::pcs::proof::PcsProof;
     use crate::pcs::verifier::errors::VerifierError;
     use crate::sumcheck::layout::{Layout, SuffixProver, Table};
-    use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
+    use crate::sumcheck::{OpeningProtocol, SumcheckError, TableShape, TableSpec};
 
     /// Suffix-mode prover used for every shape-mismatch scenario.
     type L = SuffixProver<F, EF>;
@@ -348,7 +350,7 @@ mod error_variant_tests {
             starting_log_inv_rate: 1,
         };
         let pcs = TestWhirPcs::<L>::new(
-            WhirConfig::new(witness.num_variables(), params),
+            WhirConfig::new(witness.num_variables(), params).unwrap(),
             MyDft::default(),
             mmcs,
         );
@@ -659,6 +661,73 @@ mod error_variant_tests {
             other => panic!("expected StirQueryCountMismatch, got {other:?}"),
         }
     }
+
+    #[test]
+    fn rejects_with_initial_ood_answer_count_mismatch_when_answer_is_dropped() {
+        // Invariant: the proof must carry exactly the committed number of initial OOD answers.
+        // Each answer drives a transcript draw, so a wrong count desyncs Fiat-Shamir.
+        //
+        // Fixture state: N initial OOD answers.
+        //
+        // Mutation: drop one answer.
+        //
+        //     proof.whir.initial_ood_answers:  N  ->  N - 1
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        let expected = proof.whir.initial_ood_answers.len();
+        assert!(
+            expected > 0,
+            "fixture should produce at least one initial OOD answer"
+        );
+        proof.whir.initial_ood_answers.pop();
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::InitialOodAnswerCountMismatch {
+                expected: e,
+                actual: a,
+            } => {
+                assert_eq!(e, expected);
+                assert_eq!(a, expected - 1);
+            }
+            other => panic!("expected InitialOodAnswerCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_with_round_count_mismatch_when_intermediate_sumcheck_is_short() {
+        // Invariant: an intermediate round's sumcheck sends one polynomial per folded variable.
+        // That count is the next round's folding factor.
+        // A wrong count desyncs Fiat-Shamir.
+        //
+        // Fixture state: round 0 sumcheck has FOLDING = 4 polynomial evaluations.
+        //
+        // Mutation: drop the trailing evaluation.
+        //
+        //     proof.whir.rounds[0].sumcheck.polynomial_evaluations:  4  ->  3
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        assert!(
+            !proof.whir.rounds.is_empty(),
+            "fixture should produce at least one WHIR round"
+        );
+        let expected = proof.whir.rounds[0].sumcheck.polynomial_evaluations().len();
+        assert!(
+            expected > 0,
+            "fixture round-0 sumcheck should send at least one polynomial"
+        );
+        proof.whir.rounds[0].sumcheck.polynomial_evaluations.pop();
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::Sumcheck(SumcheckError::RoundCountMismatch {
+                expected: e,
+                actual: a,
+            }) => {
+                assert_eq!(e, expected);
+                assert_eq!(a, expected - 1);
+            }
+            other => panic!("expected Sumcheck(RoundCountMismatch), got {other:?}"),
+        }
+    }
 }
 
 mod keccak_tests {
@@ -736,7 +805,7 @@ mod keccak_tests {
             starting_log_inv_rate: 1,
         };
         let pcs = TestWhirPcs::<L>::new(
-            WhirConfig::new(witness.num_variables(), params),
+            WhirConfig::new(witness.num_variables(), params).unwrap(),
             MyDft::default(),
             mmcs,
         );

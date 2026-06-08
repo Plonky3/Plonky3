@@ -189,6 +189,8 @@ pub(crate) const fn sbox_constraint_degree(degree: u64, registers: usize) -> usi
         (5, 0) => 5,
         (7, 0) => 7,
         (5, 1) | (7, 1) | (11, 2) => 3,
+        // One register for x^11: the output (x^3)^3 * x^2 reaches degree 5.
+        (11, 1) => 5,
         _ => panic!("Unexpected (DEGREE, REGISTERS)"),
     }
 }
@@ -414,6 +416,8 @@ fn eval_sparse_partial_round<
 /// |        |           | output `x^3 * x^2` (constraint degree 3).         |
 /// | 7      | 1         | Commit `x^3`, constrain `x^3 = x * x * x`,        |
 /// |        |           | output `(x^3)^2 * x` (constraint degree 3).       |
+/// | 11     | 1         | Commit `x^3`, constrain `x^3 = x * x * x`,        |
+/// |        |           | output `(x^3)^3 * x^2` (constraint degree 5).     |
 /// | 11     | 2         | Commit `x^3` and `x^9`,                           |
 /// |        |           | constrain `x^3 = x^2 * x` and `x^9 = (x^3)^3`,    |
 /// |        |           | output `x^9 * x^2` (constraint degree 3).         |
