@@ -7,10 +7,12 @@ pub use data::VerifierData;
 use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing};
+use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing, PrimeField};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::{InteractionSymbolicBuilder, LookupError, LookupProtocol};
+use p3_lookup::{
+    InteractionSymbolicBuilder, LookupError, LookupProtocol, check_multiplicity_height_bound,
+};
 use p3_uni_stark::{
     InvalidProofShapeError, VerificationError, check_periodic_column_lengths,
     recompose_quotient_from_chunks, validate_degree_bits,
@@ -36,6 +38,7 @@ pub fn verify_batch<SC, A>(
 ) -> Result<(), BatchVerificationError<PcsError<SC>>>
 where
     SC: SGC,
+    Val<SC>: PrimeField,
     SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
     A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<VerifierConstraintFolderWithLookups<'a, SC>>,
@@ -139,6 +142,11 @@ where
             })?;
         num_quotient_chunks.push(n_chunks);
     }
+
+    // Soundness: bound LogUp multiplicities so none wraps modulo p.
+    // Base degree bits give the same heights the prover used.
+    let trace_heights: Vec<usize> = base_degree_bits.iter().map(|&b| 1usize << b).collect();
+    check_multiplicity_height_bound(all_lookups, &trace_heights)?;
 
     // Observe the instance count up front to match the prover's transcript.
     transcript.observe_instance_count(airs.len());

@@ -33,6 +33,7 @@ p3-field-testing = { path = "../field-testing" }
 
 proptest.workspace = true
 rand.workspace = true
+serde_json.workspace = true
 
 [[bench]]
 name = "bench_field"

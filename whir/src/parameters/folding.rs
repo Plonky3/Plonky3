@@ -21,6 +21,16 @@ pub enum FoldingFactorError {
     /// The folding factor cannot be zero.
     #[error("Folding factor shouldn't be zero.")]
     ZeroFactor,
+
+    /// The explicit per-round folding factors fold too few variables to reach the direct-send threshold.
+    #[error(
+        "per-round folding factors leave {remaining} variables out of {num_variables}, above the direct-send threshold {threshold}; fold more variables"
+    )]
+    InsufficientFolding {
+        num_variables: usize,
+        remaining: usize,
+        threshold: usize,
+    },
 }
 
 /// Defines the folding factor for polynomial commitments.
@@ -98,14 +108,21 @@ impl FoldingFactor {
         }
     }
 
-    /// Computes the number of WHIR rounds and the number of rounds in the final sumcheck.
-    #[must_use]
-    pub fn compute_number_of_rounds(&self, num_variables: usize) -> (usize, usize) {
+    /// Compute the round schedule: number of folding rounds and final-phase variables.
+    ///
+    /// # Errors
+    ///
+    /// An explicit per-round schedule errors if a round folds more variables than remain.
+    /// It also errors if the factors together fail to reach the direct-send threshold.
+    pub fn compute_number_of_rounds(
+        &self,
+        num_variables: usize,
+    ) -> Result<(usize, usize), FoldingFactorError> {
         match self {
             Self::Constant(factor) => {
                 if num_variables <= MAX_NUM_VARIABLES_TO_SEND_COEFFS {
                     // the first folding is mandatory in the current implem (TODO don't fold, send directly the polynomial)
-                    return (0, num_variables - factor);
+                    return Ok((0, num_variables - factor));
                 }
                 // Starting from `num_variables`, each round reduces the number of variables by `factor`. As soon as the
                 // number of variables is less of equal than `MAX_NUM_VARIABLES_TO_SEND_COEFFS`, we stop folding and the
@@ -114,7 +131,7 @@ impl FoldingFactor {
                     (num_variables - MAX_NUM_VARIABLES_TO_SEND_COEFFS).div_ceil(*factor);
                 let final_sumcheck_rounds = num_variables - num_rounds * factor;
                 // The -1 accounts for the fact that the last round does not require another folding.
-                (num_rounds - 1, final_sumcheck_rounds)
+                Ok((num_rounds - 1, final_sumcheck_rounds))
             }
             Self::ConstantFromSecondRound(first_round_factor, factor) => {
                 // Compute the number of variables remaining after the first round.
@@ -122,7 +139,7 @@ impl FoldingFactor {
                 if nv_except_first_round < MAX_NUM_VARIABLES_TO_SEND_COEFFS {
                     // This case is equivalent to Constant(first_round_factor)
                     // the first folding is mandatory in the current implem (TODO don't fold, send directly the polynomial)
-                    return (0, nv_except_first_round);
+                    return Ok((0, nv_except_first_round));
                 }
                 // Starting from `num_variables`, the first round reduces the number of variables by `first_round_factor`,
                 // and the next ones by `factor`. As soon as the number of variables is less of equal than
@@ -131,17 +148,32 @@ impl FoldingFactor {
                     (nv_except_first_round - MAX_NUM_VARIABLES_TO_SEND_COEFFS).div_ceil(*factor);
                 let final_sumcheck_rounds = nv_except_first_round - num_rounds * factor;
                 // No need to minus 1 because the initial round is already excepted out
-                (num_rounds, final_sumcheck_rounds)
+                Ok((num_rounds, final_sumcheck_rounds))
             }
             Self::PerRound(factors) => {
+                // Fold one explicit factor per round until the remainder reaches the threshold.
                 let mut remaining = num_variables;
                 for (i, &factor) in factors.iter().enumerate() {
+                    // A round cannot fold more variables than remain.
+                    //
+                    //     remaining = 7, factor = 9  ->  over-folds
+                    if factor > remaining {
+                        return Err(FoldingFactorError::TooLarge(factor, remaining));
+                    }
                     remaining -= factor;
+                    // Threshold reached: `i` full rounds, `remaining` sent direct.
                     if remaining <= MAX_NUM_VARIABLES_TO_SEND_COEFFS {
-                        return (i, remaining);
+                        return Ok((i, remaining));
                     }
                 }
-                panic!("Per-round folding factors do not reduce to the final coefficient threshold")
+                // Factors exhausted but the polynomial is still above the threshold.
+                //
+                //     num_variables = 20, sum(factors) = 5  ->  remaining 15 > 6
+                Err(FoldingFactorError::InsufficientFolding {
+                    num_variables,
+                    remaining,
+                    threshold: MAX_NUM_VARIABLES_TO_SEND_COEFFS,
+                })
             }
         }
     }
@@ -232,33 +264,34 @@ mod tests {
 
     #[test]
     fn test_compute_number_of_rounds() {
+        // Every valid schedule now yields `Ok((rounds, final_sumcheck_rounds))`.
         let constant_factor = 3;
         let factor = FoldingFactor::Constant(constant_factor);
         assert_eq!(
             factor.compute_number_of_rounds(MAX_NUM_VARIABLES_TO_SEND_COEFFS - 1),
-            (0, MAX_NUM_VARIABLES_TO_SEND_COEFFS - constant_factor - 1)
+            Ok((0, MAX_NUM_VARIABLES_TO_SEND_COEFFS - constant_factor - 1))
         );
         assert_eq!(
             factor.compute_number_of_rounds(MAX_NUM_VARIABLES_TO_SEND_COEFFS),
-            (0, MAX_NUM_VARIABLES_TO_SEND_COEFFS - constant_factor)
+            Ok((0, MAX_NUM_VARIABLES_TO_SEND_COEFFS - constant_factor))
         );
         assert_eq!(
             factor.compute_number_of_rounds(MAX_NUM_VARIABLES_TO_SEND_COEFFS + 1),
-            (0, MAX_NUM_VARIABLES_TO_SEND_COEFFS - constant_factor + 1)
+            Ok((0, MAX_NUM_VARIABLES_TO_SEND_COEFFS - constant_factor + 1))
         );
         assert_eq!(
             factor.compute_number_of_rounds(MAX_NUM_VARIABLES_TO_SEND_COEFFS + constant_factor),
-            (0, MAX_NUM_VARIABLES_TO_SEND_COEFFS)
+            Ok((0, MAX_NUM_VARIABLES_TO_SEND_COEFFS))
         );
         assert_eq!(
             factor.compute_number_of_rounds(MAX_NUM_VARIABLES_TO_SEND_COEFFS + constant_factor + 1),
-            (1, MAX_NUM_VARIABLES_TO_SEND_COEFFS - constant_factor + 1)
+            Ok((1, MAX_NUM_VARIABLES_TO_SEND_COEFFS - constant_factor + 1))
         );
         assert_eq!(
             factor.compute_number_of_rounds(
                 MAX_NUM_VARIABLES_TO_SEND_COEFFS + constant_factor * 2 + 1
             ),
-            (2, MAX_NUM_VARIABLES_TO_SEND_COEFFS - constant_factor + 1)
+            Ok((2, MAX_NUM_VARIABLES_TO_SEND_COEFFS - constant_factor + 1))
         );
 
         let initial_factor = 4;
@@ -266,36 +299,79 @@ mod tests {
         let variable_factor = FoldingFactor::ConstantFromSecondRound(initial_factor, next_factor);
         assert_eq!(
             variable_factor.compute_number_of_rounds(MAX_NUM_VARIABLES_TO_SEND_COEFFS - 1),
-            (0, MAX_NUM_VARIABLES_TO_SEND_COEFFS - initial_factor - 1)
+            Ok((0, MAX_NUM_VARIABLES_TO_SEND_COEFFS - initial_factor - 1))
         );
         assert_eq!(
             variable_factor.compute_number_of_rounds(MAX_NUM_VARIABLES_TO_SEND_COEFFS),
-            (0, MAX_NUM_VARIABLES_TO_SEND_COEFFS - initial_factor)
+            Ok((0, MAX_NUM_VARIABLES_TO_SEND_COEFFS - initial_factor))
         );
         assert_eq!(
             variable_factor.compute_number_of_rounds(MAX_NUM_VARIABLES_TO_SEND_COEFFS + 1),
-            (0, MAX_NUM_VARIABLES_TO_SEND_COEFFS - initial_factor + 1)
+            Ok((0, MAX_NUM_VARIABLES_TO_SEND_COEFFS - initial_factor + 1))
         );
         assert_eq!(
             variable_factor
                 .compute_number_of_rounds(MAX_NUM_VARIABLES_TO_SEND_COEFFS + initial_factor),
-            (0, MAX_NUM_VARIABLES_TO_SEND_COEFFS)
+            Ok((0, MAX_NUM_VARIABLES_TO_SEND_COEFFS))
         );
         assert_eq!(
             variable_factor
                 .compute_number_of_rounds(MAX_NUM_VARIABLES_TO_SEND_COEFFS + initial_factor + 1),
-            (1, MAX_NUM_VARIABLES_TO_SEND_COEFFS - next_factor + 1)
+            Ok((1, MAX_NUM_VARIABLES_TO_SEND_COEFFS - next_factor + 1))
         );
         assert_eq!(
             variable_factor.compute_number_of_rounds(
                 MAX_NUM_VARIABLES_TO_SEND_COEFFS + initial_factor + next_factor + 1
             ),
-            (2, MAX_NUM_VARIABLES_TO_SEND_COEFFS - next_factor + 1)
+            Ok((2, MAX_NUM_VARIABLES_TO_SEND_COEFFS - next_factor + 1))
         );
 
+        // PerRound([3, 2]) on 10 variables: 10 -3-> 7 -2-> 5 <= 6 threshold.
         assert_eq!(
             FoldingFactor::PerRound(vec![3, 2]).compute_number_of_rounds(10),
-            (1, 5)
+            Ok((1, 5))
+        );
+    }
+
+    #[test]
+    fn per_round_factors_that_under_fold_error() {
+        // Invariant: a per-round schedule that under-folds is rejected with an error, not a panic.
+        //
+        // Fixture state:
+        //   num_variables = 20, threshold = MAX_NUM_VARIABLES_TO_SEND_COEFFS = 6
+        //   PerRound([3, 2]) folds 3 + 2 = 5 variables in total
+        //
+        //     remaining:  20 -3-> 17 -2-> 15
+        //     15 > 6  ->  schedule exhausted while still too wide
+        let schedule = FoldingFactor::PerRound(vec![3, 2]);
+
+        // The leftover variable count and threshold are reported for diagnosis.
+        assert_eq!(
+            schedule.compute_number_of_rounds(20),
+            Err(FoldingFactorError::InsufficientFolding {
+                num_variables: 20,
+                remaining: 15,
+                threshold: MAX_NUM_VARIABLES_TO_SEND_COEFFS,
+            })
+        );
+    }
+
+    #[test]
+    fn per_round_factor_larger_than_remaining_errors() {
+        // Invariant: a round cannot fold more variables than remain, even when each factor is in range.
+        //
+        // Fixture state:
+        //   num_variables = 10
+        //   PerRound([3, 9]): both factors are <= 10 individually
+        //
+        //     remaining:  10 -3-> 7 ; round 1 wants 9 > 7  ->  over-folds
+        //
+        // Without the cumulative guard this path would underflow `remaining`.
+        let schedule = FoldingFactor::PerRound(vec![3, 9]);
+
+        assert_eq!(
+            schedule.compute_number_of_rounds(10),
+            Err(FoldingFactorError::TooLarge(9, 7))
         );
     }
 

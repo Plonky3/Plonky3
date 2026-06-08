@@ -286,7 +286,12 @@ where
     /// We have 1/2^b - 1/p ≤ P1, P2 ≤ 1/2^b + 1/p
     fn sample_bits(&mut self, bits: usize) -> usize {
         assert!(bits < (usize::BITS as usize));
-        assert!((1 << bits) < F::ORDER_U32);
+        // Evaluate the bound in `u64` to keep the shift within its type width.
+        // A `u32` shift by `bits >= 32` would wrap and zero the mask, accepting any witness.
+        assert!(
+            (1u64 << bits) < F::ORDER_U64,
+            "requested bit count must fit within the field order"
+        );
         let rand_f: F = self.sample();
         let rand_usize = rand_f.as_canonical_u32() as usize;
         rand_usize & ((1 << bits) - 1)
@@ -700,5 +705,24 @@ mod tests {
         assert_eq!(challenger.inner.input_buffer, before.inner.input_buffer);
         assert_eq!(challenger.inner.output_buffer, before.inner.output_buffer);
         assert_eq!(challenger.inner.sponge_state, before.inner.sponge_state);
+    }
+
+    #[test]
+    #[should_panic = "requested bit count must fit within the field order"]
+    fn test_sample_bits_rejects_oversized_request() {
+        // Sampled field is BabyBear, order ~2^30.9, so a 32-bit request must be rejected.
+        // The bound is evaluated in u64, so the guard fires in every build profile.
+        let mut challenger =
+            MultiField32Challenger::<F, PF, _, WIDTH, RATE>::new(MixingPermutation).unwrap();
+        let _ = challenger.sample_bits(32);
+    }
+
+    #[test]
+    #[should_panic = "requested bit count must fit within the field order"]
+    fn test_grind_rejects_oversized_request() {
+        // Same guard, reached through the proof-of-work entry point.
+        let mut challenger =
+            MultiField32Challenger::<F, PF, _, WIDTH, RATE>::new(MixingPermutation).unwrap();
+        let _ = challenger.grind(32);
     }
 }
