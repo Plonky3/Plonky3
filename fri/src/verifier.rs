@@ -126,6 +126,15 @@ where
     FinalPolyMismatch,
     #[error("invalid proof-of-work witness")]
     InvalidPowWitness,
+    /// A query point coincides with an opening point, so the quotient denominator is zero.
+    #[error(
+        "batch {batch}, matrix {matrix}, point {point}: query point coincides with the opening point"
+    )]
+    OpeningPointMatchesQueryPoint {
+        batch: usize,
+        matrix: usize,
+        point: usize,
+    },
 }
 
 /// A chain of FRI input openings allowing a verifier to check a sequence of
@@ -707,7 +716,6 @@ where
             // For each polynomial `f` in our matrix, compute `(f(z) - f(x))/(z - x)`,
             // scale by the appropriate alpha power and add to the reduced opening for this log_height.
             for (point, (z, ps_at_z)) in mat_points_and_values.iter().enumerate() {
-                let quotient = (*z - x).inverse();
                 if mat_opening.len() != ps_at_z.len() {
                     return Err(FriError::PointEvaluationCountMismatch {
                         batch,
@@ -717,6 +725,16 @@ where
                         got: ps_at_z.len(),
                     });
                 }
+                // The quotient (f(z) - f(x)) / (z - x) is undefined when x coincides with z.
+                // Reject this instead of inverting zero.
+                let quotient =
+                    (*z - x)
+                        .try_inverse()
+                        .ok_or(FriError::OpeningPointMatchesQueryPoint {
+                            batch,
+                            matrix,
+                            point,
+                        })?;
                 for (&p_at_x, &p_at_z) in mat_opening.iter().zip(ps_at_z.iter()) {
                     // Note we just checked batch proofs to ensure p_at_x is correct.
                     // x, z were sent by the verifier.
@@ -1954,5 +1972,56 @@ mod tests {
         challenger.observe(&commitment);
         let zeta: Challenge = challenger.sample_algebra_element();
         let _ = pcs.open(vec![(&prover_data, vec![vec![zeta]])], &mut challenger);
+    }
+
+    #[test]
+    fn opening_point_equal_to_query_point_is_rejected() {
+        // open_input forms (f(z) - f(x)) / (z - x) for each opening point z, where x is
+        // the query point derived from the index. At index 0 with no height reduction,
+        //     x = GENERATOR * g^reverse_bits(0) = GENERATOR.
+        // Setting z = GENERATOR makes the denominator zero.
+        // Without the guard the inverse of zero panics; with it we get a typed error.
+        let f = make_test_fixture();
+
+        // Commit one width-1 matrix at the global max height, then open it at index 0.
+        // Heights: domain 2^3, blowup 2^1, so the committed LDE height is 2^4 = 16.
+        let log_blowup = f.fri_params.log_blowup;
+        let log_domain = 3;
+        let log_global_max_height = log_domain + log_blowup;
+        let domain = TwoAdicMultiplicativeCoset::new(Val::ONE, log_domain).unwrap();
+        let height = 1 << log_global_max_height;
+
+        let mut rng = SmallRng::seed_from_u64(7);
+        let mat = RowMajorMatrix::<Val>::rand_nonzero(&mut rng, height, 1);
+        let (commit, prover_data) = f.input_mmcs.commit(vec![mat]);
+        let input_proof = vec![f.input_mmcs.open_batch(0, &prover_data)];
+
+        // One opening point placed exactly on the query point x = GENERATOR.
+        //     opening point z : GENERATOR   (claimed value is irrelevant; the denominator fails first)
+        //     query point   x : GENERATOR
+        let z = Challenge::from(Val::GENERATOR);
+        let cwop = vec![(commit, vec![(domain, vec![(z, vec![Challenge::ZERO])])])];
+
+        let err = open_input::<Val, Challenge, ValMmcs, ChallengeMmcs>(
+            &f.fri_params,
+            log_global_max_height,
+            0,
+            &input_proof,
+            Challenge::ONE,
+            &f.input_mmcs,
+            &cwop,
+        )
+        .expect_err("opening point equal to the query point must be rejected");
+
+        match err {
+            FriError::OpeningPointMatchesQueryPoint {
+                batch,
+                matrix,
+                point,
+            } => {
+                assert_eq!((batch, matrix, point), (0, 0, 0));
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
     }
 }
