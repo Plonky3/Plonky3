@@ -403,6 +403,11 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
         self.sum = extrapolate_01inf(c0, self.sum - c0, c_inf, gamma);
         self.poly.fold_round(gamma);
         debug_assert_eq!(self.sum, self.poly.dot_product());
+
+        // Final check on the final fold
+        if self.poly.num_variables() == 0 {
+            assert_eq!(self.sum, self.poly.dot_product());
+        }
     }
 
     /// Applies a scalar to the evaluation side and the matching residual claim.

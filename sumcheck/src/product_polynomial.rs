@@ -378,6 +378,11 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         // Sanity check: the updated sum should equal the inner product after folding.
         debug_assert_eq!(*sum, self.dot_product());
 
+        // Final check on the final fold
+        if self.num_variables() == 0 {
+            assert_eq!(*sum, self.dot_product());
+        }
+
         // Step 7: Check if we should transition to scalar mode.
         //
         // After folding, the polynomial may be small enough that scalar operations

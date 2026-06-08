@@ -90,6 +90,15 @@ impl<F, EF> SumcheckData<F, EF> {
 
     /// Verifies standard sumcheck rounds and extracts folding randomness from the transcript.
     ///
+    /// # Round-polynomial degree
+    ///
+    /// Each round polynomial is assumed to have degree at most 2. The assumption is
+    /// structural: a round carries only `[h(0), h(inf)]`, `h(1)` is derived as
+    /// `claimed_sum - h(0)`, and [`extrapolate_01inf`] reconstructs `h(r)` from exactly
+    /// those three evaluations. Reusing this routine for a higher-degree relation would
+    /// silently drop the missing coefficients and is unsound; such a relation needs a
+    /// wider wire format and a matching reconstruction.
+    ///
     /// # Returns
     ///
     /// A `Point` of folding randomness values.
