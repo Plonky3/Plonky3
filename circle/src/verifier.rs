@@ -27,6 +27,13 @@ where
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     Folding: FriFoldingStrategy<Val, Challenge>,
 {
+    // Reject a vacuous instance before any transcript work.
+    // With zero queries the per-query loop never runs.
+    // Any final polynomial would then pass.
+    if params.num_queries == 0 {
+        return Err(FriError::ZeroQueries);
+    }
+
     // There must be exactly one commit-phase proof-of-work witness per round.
     if proof.commit_pow_witnesses.len() != proof.commit_phase_commits.len() {
         return Err(FriError::CommitPowWitnessCountMismatch {

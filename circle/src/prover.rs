@@ -33,6 +33,13 @@ where
         "max_log_arity must be at least 1 to guarantee folding progress"
     );
 
+    // A zero-query instance performs no low-degree spot checks.
+    // The verifier rejects it, so refuse to emit one locally.
+    assert!(
+        params.num_queries > 0,
+        "num_queries must be at least 1 for Circle-FRI soundness"
+    );
+
     // check sorted descending
     assert!(
         inputs
