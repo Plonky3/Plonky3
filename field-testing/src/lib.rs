@@ -431,9 +431,8 @@ where
 
 /// Test JSON deserialization boundary behavior for 32-bit prime fields.
 ///
-/// Most fields only accept values in `[0, ORDER_U32)`, while some fields (e.g. Mersenne31)
-/// have a redundant representation of zero and also accept `ORDER_U32`.
-pub fn test_prime_field_32_json_deserialization_boundaries<F>(accepts_order_repr: bool)
+/// The serde encoding is canonical: only values in `[0, ORDER_U32)` deserialize.
+pub fn test_prime_field_32_json_deserialization_boundaries<F>()
 where
     F: PrimeField32 + Serialize + DeserializeOwned + Eq,
 {
@@ -449,11 +448,7 @@ where
         "Round-trip serialization should preserve the value"
     );
 
-    let max_valid = if accepts_order_repr {
-        F::ORDER_U32
-    } else {
-        F::ORDER_U32 - 1
-    };
+    let max_valid = F::ORDER_U32 - 1;
     let max_valid_json = serde_json::to_string(&max_valid).expect("Failed to encode max valid u32");
     let max_valid_result: Result<F, _> = serde_json::from_str(&max_valid_json);
     assert!(
@@ -1282,10 +1277,7 @@ macro_rules! test_prime_field_32 {
 
             #[test]
             fn test_json_deserialization_boundaries() {
-                let accepts_order_repr = $zeros.len() > 1;
-                $crate::test_prime_field_32_json_deserialization_boundaries::<$field>(
-                    accepts_order_repr,
-                );
+                $crate::test_prime_field_32_json_deserialization_boundaries::<$field>();
             }
         }
     };
