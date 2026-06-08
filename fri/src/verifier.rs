@@ -629,6 +629,16 @@ where
         .zip(commitments_with_opening_points.iter())
         .enumerate()
     {
+        // The opened rows must pair one-to-one with the committed matrices.
+        // Why: the width derivation below zips rows with matrix metadata.
+        if batch_opening.opened_values.len() != mats.len() {
+            return Err(FriError::BatchOpenedValuesCountMismatch {
+                batch,
+                expected: mats.len(),
+                got: batch_opening.opened_values.len(),
+            });
+        }
+
         // Find the height of each matrix in the batch.
         // Currently we only check domain.size() as the shift is
         // assumed to always be Val::GENERATOR.
@@ -638,8 +648,20 @@ where
             .collect_vec();
         let batch_dims = batch_heights
             .iter()
-            // TODO: MMCS doesn't really need width; we put 0 for now.
-            .map(|&height| Dimensions { width: 0, height })
+            .zip(mats)
+            .zip(&batch_opening.opened_values)
+            .map(
+                |((&height, (_, points_and_values)), opened_row)| Dimensions {
+                    // Invariant: the commitment layer rejects opened rows that differ from this width.
+                    //
+                    //     some points → width = claimed evaluation count
+                    //     no points   → width = opened row length (no claim to enforce)
+                    width: points_and_values
+                        .first()
+                        .map_or(opened_row.len(), |(_, values)| values.len()),
+                    height,
+                },
+            )
             .collect_vec();
 
         // If the maximum height of the batch is smaller than the global max height,
@@ -650,14 +672,6 @@ where
             .max()
             .map(|&h| index >> (log_global_max_height - log2_strict_usize(h)))
             .unwrap_or(0);
-
-        if batch_opening.opened_values.len() != mats.len() {
-            return Err(FriError::BatchOpenedValuesCountMismatch {
-                batch,
-                expected: mats.len(),
-                got: batch_opening.opened_values.len(),
-            });
-        }
 
         input_mmcs
             .verify_batch(
@@ -743,7 +757,7 @@ mod tests {
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{Field, HornerIter, PrimeCharacteristicRing, TwoAdicField};
     use p3_matrix::dense::RowMajorMatrix;
-    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_merkle_tree::{MerkleTreeError, MerkleTreeMmcs};
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
@@ -1530,16 +1544,20 @@ mod tests {
         // evaluations f_i(z) to form (f_i(z) - f_i(x)) / (z - x).
         // These two vectors must have the same length.
         //
-        // Fixture state: 2 trace columns → 2 opened values, 2 claims.
+        // Fixture state: 2 trace columns → 2 opened values, 2 claims at point 0.
         //
-        // Mutation: push an extra claim. Only touches verifier-side data,
-        // not the proof, so Merkle verification still passes. Claims are
+        // Mutation: add a second opening point with one claim too many.
+        // Point 0 still matches the matrix width, so the Merkle shape
+        // checks pass and the pairing check fires at point 1. Claims are
         // not in the transcript, so the original challenger is reused.
         //
-        //     opened values:  [f_0(x), f_1(x)]             (length 2)
-        //     claims:         [f_0(z), f_1(z), EXTRA]      (length 3)
-        //     → 2 != 3 → error
-        cwop[0].1[0].1[0].1.push(Challenge::ZERO);
+        //     opened values:   [f_0(x), f_1(x)]            (length 2)
+        //     point 0 claims:  [f_0(z), f_1(z)]            (length 2)
+        //     point 1 claims:  [0, 0, 0]                   (length 3)
+        //     → 2 != 3 → error at point 1
+        cwop[0].1[0]
+            .1
+            .push((Challenge::ZERO, vec![Challenge::ZERO; 3]));
 
         let mut challenger = f.challenger.clone();
         let err = run_verify_fri(
@@ -1561,13 +1579,46 @@ mod tests {
             } => {
                 assert_eq!(batch, 0);
                 assert_eq!(matrix, 0);
-                assert_eq!(point, 0);
+                assert_eq!(point, 1);
                 // 2 trace columns opened, but 3 claimed evaluations.
                 assert_eq!(expected, 2);
                 assert_eq!(got, 3);
             }
             other => panic!("wrong error variant: {other:?}"),
         }
+    }
+
+    #[test]
+    fn claimed_width_mismatch_rejected_by_input_mmcs() {
+        let f = make_test_fixture();
+        let mut cwop = f.commitments_with_opening_points.clone();
+
+        // The matrix width the verifier passes to the input commitment
+        // scheme comes from the first point's claimed evaluations.
+        //
+        //     opened values:  [f_0(x), f_1(x)]             (length 2)
+        //     claims:         [f_0(z), f_1(z), EXTRA]      (length 3)
+        //     → expected width 3, opened row has 2 → error
+        cwop[0].1[0].1[0].1.push(Challenge::ZERO);
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &f.proof,
+            &mut challenger,
+            &cwop,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject opened rows narrower than the claimed width");
+
+        assert!(matches!(
+            err,
+            FriError::InputError(MerkleTreeError::WrongWidth {
+                matrix: 0,
+                expected: 3,
+                got: 2,
+            })
+        ));
     }
 
     #[test]

@@ -448,11 +448,25 @@ where
                         .iter()
                         .map(|(domain, _)| domain.size() << self.fri_params.log_blowup)
                         .collect_vec();
-                    let batch_dims: Vec<Dimensions> = batch_heights
-                        .iter()
-                        // todo: mmcs doesn't really need width
-                        .map(|&height| Dimensions { width: 0, height })
-                        .collect_vec();
+                    // The opened rows must pair one-to-one with the committed matrices.
+                    let batch_dims: Vec<Dimensions> = zip_eq(
+                        batch_heights.iter().zip(mats),
+                        &batch_opening.opened_values,
+                        InputError::InputShapeError,
+                    )?
+                    .map(
+                        |((&height, (_, points_and_values)), opened_row)| Dimensions {
+                            // Invariant: the commitment layer rejects opened rows that differ from this width.
+                            //
+                            //     some points → width = claimed evaluation count
+                            //     no points   → width = opened row length (no claim to enforce)
+                            width: points_and_values
+                                .first()
+                                .map_or(opened_row.len(), |(_, values)| values.len()),
+                            height,
+                        },
+                    )
+                    .collect_vec();
 
                     let (dims, idx) = batch_heights
                         .iter()
@@ -546,7 +560,8 @@ where
                     );
 
                     let fl_dims = Dimensions {
-                        width: 0,
+                        // First-layer leaves hold the queried value and its sibling.
+                        width: 2,
                         height: 1 << (log_height - 1),
                     };
 

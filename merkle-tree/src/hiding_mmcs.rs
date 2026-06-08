@@ -14,6 +14,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use spin::Mutex;
 
+use crate::mmcs::check_widths;
 use crate::{MerkleCap, MerkleTree, MerkleTreeError, MerkleTreeMmcs};
 
 /// A vector commitment scheme backed by a `MerkleTree`.
@@ -165,13 +166,28 @@ where
     ) -> Result<(), Self::Error> {
         let (opened_values, (salts, siblings)) = batch_opening.unpack();
 
+        // Pin each opened row to its matrix width before salting.
+        // The inner tree only sees salted widths.
+        // Without this, an over-long row could be masked by an under-long salt.
+        check_widths(dimensions, opened_values)?;
+
         let opened_salted_values = zip_eq(opened_values, salts, MerkleTreeError::WrongBatchSize)?
             .map(|(opened, salt)| opened.iter().chain(salt.iter()).copied().collect_vec())
             .collect_vec();
 
+        // The inner tree commits to rows widened by the salt columns,
+        // so the widths must be widened the same way.
+        let salted_dimensions = dimensions
+            .iter()
+            .map(|dims| Dimensions {
+                width: dims.width + SALT_ELEMS,
+                height: dims.height,
+            })
+            .collect_vec();
+
         self.inner.verify_batch(
             commit,
-            dimensions,
+            &salted_dimensions,
             index,
             BatchOpeningRef::new(&opened_salted_values, siblings),
         )
@@ -245,6 +261,42 @@ mod tests {
         let (commit, prover_data) = mmcs.commit(mats);
         let batch_proof = mmcs.open_batch(17, &prover_data);
         mmcs.verify_batch(&commit, &dims, 17, (&batch_proof).into())
+    }
+
+    #[test]
+    fn verify_rejects_wrong_row_width() {
+        let mut rng = SmallRng::seed_from_u64(2);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+
+        // Commit to one matrix of width 4 through the hiding wrapper.
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 8, 4);
+        let dims = vec![mat.dimensions()];
+        let mmcs = MyMmcs::new(hash, compress, 0, rng);
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        // Mutation: append one extra element to the opened row.
+        //
+        //     opened row:  [a, b, c, d, EXTRA]   (5 values, width is 4)
+        let mut opening = mmcs.open_batch(3, &prover_data);
+        opening.opened_values[0].push(F::ONE);
+
+        // The width is checked on the unsalted row, before salt columns are appended.
+        //
+        //     expected: 4 (matrix width)
+        //     got:      5 (opened row length)
+        let err = mmcs
+            .verify_batch(&commit, &dims, 3, (&opening).into())
+            .expect_err("row longer than the matrix width must be rejected");
+        assert!(matches!(
+            err,
+            MerkleTreeError::WrongWidth {
+                matrix: 0,
+                expected: 4,
+                got: 5,
+            }
+        ));
     }
 
     #[test]

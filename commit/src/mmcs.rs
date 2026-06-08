@@ -134,6 +134,12 @@ pub trait Mmcs<T: Send + Sync + Clone>: Clone {
     /// - The global index used for opening (interpreted as in [`Self::open_batch`]).
     /// - A [`BatchOpeningRef`] containing the claimed opened values and the proof.
     ///
+    /// # Width enforcement
+    /// - Leaf hashing may flatten all rows opened at one height into a single element stream.
+    /// - A digest match alone then does not pin where one row ends and the next begins.
+    /// - Implementations must reject any opened row whose length differs from its claimed width.
+    /// - Callers must derive each width from verifier-known data, never from the proof itself.
+    ///
     /// # Parameters
     /// - `commit`: The original commitment.
     /// - `dimensions`: Dimensions of the committed matrices, in order.
