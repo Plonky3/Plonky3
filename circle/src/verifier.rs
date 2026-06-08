@@ -166,7 +166,6 @@ where
     //     => a width of CIRCLE_TWO_ADICITY bits is unsampleable
     //
     // A malformed arity schedule inflates the round count, hence the width.
-    // A typed error keeps the challenger's bound assertion from aborting the verifier.
     let num_index_bits = log_max_height + folding.extra_query_index_bits();
     if num_index_bits >= Val::CIRCLE_TWO_ADICITY {
         return Err(FriError::GlobalMaxHeightTooLarge {
