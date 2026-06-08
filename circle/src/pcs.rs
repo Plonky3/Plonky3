@@ -947,4 +947,54 @@ mod tests {
         assert_eq!(log_arity, 0);
         assert_eq!(max, pcs.fri_params.max_log_arity);
     }
+
+    #[test]
+    fn reject_global_max_height_too_large() {
+        // Invariant: the query-index width fits the circle group of order 2^CIRCLE_TWO_ADICITY.
+        //
+        //     field order = 2^CIRCLE_TWO_ADICITY - 1   (one short of the group order)
+        //     => width of CIRCLE_TWO_ADICITY bits is unsampleable => verifier must reject
+        let (mut pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+
+        // Zero both proof-of-work targets.
+        // Otherwise grinding rejects the cloned witnesses before the width check runs.
+        pcs.fri_params.commit_proof_of_work_bits = 0;
+        pcs.fri_params.query_proof_of_work_bits = 0;
+
+        // Mutation: clone commit-phase rounds until the width reaches the bound.
+        //
+        //     num_index_bits = rounds + log_blowup + extra_query_index_bits (= 1 for circle)
+        //     stop once num_index_bits >= CIRCLE_TWO_ADICITY
+        let extra_query_index_bits = 1;
+        let commit = proof.fri_proof.commit_phase_commits[0].clone();
+        let witness = proof.fri_proof.commit_pow_witnesses[0];
+        while proof.fri_proof.commit_phase_commits.len()
+            + pcs.fri_params.log_blowup
+            + extra_query_index_bits
+            < Val::CIRCLE_TWO_ADICITY
+        {
+            proof.fri_proof.commit_phase_commits.push(commit.clone());
+            proof.fri_proof.commit_pow_witnesses.push(witness);
+            // Each query proof needs one opening per round.
+            for qp in &mut proof.fri_proof.query_proofs {
+                let opening = qp.commit_phase_openings[0].clone();
+                qp.commit_phase_openings.push(opening);
+            }
+        }
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("expected GlobalMaxHeightTooLarge");
+
+        let FriError::GlobalMaxHeightTooLarge {
+            log_global_max_height,
+            two_adicity,
+        } = err
+        else {
+            panic!("expected GlobalMaxHeightTooLarge, got {err:?}");
+        };
+        // The reported bound is the circle group two-adicity.
+        assert_eq!(two_adicity, Val::CIRCLE_TWO_ADICITY);
+        // The rejecting width is at least that bound.
+        assert!(log_global_max_height >= two_adicity);
+    }
 }
