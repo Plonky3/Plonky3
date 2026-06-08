@@ -65,10 +65,13 @@ where
 
 impl<F, P, const WIDTH: usize, const RATE: usize> DuplexChallenger<F, P, WIDTH, RATE>
 where
-    F: Copy + PrimeCharacteristicRing,
+    F: Copy,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
-    pub fn new(permutation: P) -> Self {
+    pub fn new(permutation: P) -> Self
+    where
+        F: Default,
+    {
         const {
             assert!(RATE > 0 && RATE < WIDTH);
         }
@@ -80,18 +83,14 @@ where
         }
     }
 
-    pub(crate) fn duplexing(&mut self) {
-        const {
-            assert!(
-                RATE < WIDTH,
-                "RATE must be less than WIDTH for the capacity length slot"
-            );
-        }
-
+    pub(crate) fn duplexing(&mut self)
+    where
+        F: PrimeCharacteristicRing,
+    {
         let num_absorbed = self.input_buffer.len();
         assert!(num_absorbed <= RATE);
 
-        // Write the buffered inputs into the leading rate slots.
+        // Overwrite the leading rate slots with the buffered inputs.
         for (i, val) in self.input_buffer.drain(..).enumerate() {
             self.sponge_state[i] = val;
         }
@@ -99,7 +98,7 @@ where
         // An empty buffer is a squeeze: permute the current state, leaving the rate untouched.
         // A non-empty buffer is an absorb, made prefix-free so length and zero-padding cannot collide.
         if num_absorbed > 0 {
-            // Clear the rate slots the inputs did not fill.
+            // Clear the rate slots the inputs did not overwrite.
             self.sponge_state[num_absorbed..RATE].fill(F::ZERO);
             // Bind the absorbed length into the first capacity element.
             self.sponge_state[RATE] += F::from_u8(num_absorbed as u8);
