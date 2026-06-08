@@ -18,7 +18,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64, TwoAdicField};
 use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
-use p3_lookup::{InteractionBuilder, LookupError, LookupTerminal};
+use p3_lookup::{Count, InteractionBuilder, LookupError, LookupTerminal};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
@@ -306,12 +306,8 @@ where
 
             // Global lookup: send (a, b) to FibAirLookups.
             if self.is_global {
-                builder.push_interaction(
-                    &self.global_names[rep],
-                    [a.into(), b.into()],
-                    -AB::Expr::ONE, // Send = negative count
-                    1,
-                );
+                // Send = one message per row, so a constant count of -1.
+                builder.push_interaction(&self.global_names[rep], [a.into(), b.into()], -1);
             }
         }
     }
@@ -416,11 +412,13 @@ impl<AB: PermutationAirBuilder + InteractionBuilder> Air<AB> for FibAirLookups {
             };
 
             // Receive = positive count (counterpart to MulAirLookups' negative send).
+            //
+            // Each active row receives `multiplicity` copies, so that constant is also
+            // the per-row magnitude bound feeding the height check.
             builder.push_interaction(
                 &name,
                 [left.into(), right.into()],
-                AB::Expr::from_u64(multiplicity),
-                1,
+                Count::bounded(AB::Expr::from_u64(multiplicity), multiplicity as u32),
             );
         }
     }
