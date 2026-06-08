@@ -8,7 +8,7 @@ use core::ops::Deref;
 use num_bigint::BigUint;
 use p3_air::symbolic::AirLayout;
 use p3_air::{Air, SymbolicExpression};
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, PrimeField};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -144,7 +144,7 @@ impl<F: Field> Lookups<F> {
 /// # Errors
 ///
 /// - When the weighted sum reaches the field characteristic.
-pub fn check_multiplicity_height_bound<F: Field>(
+pub fn check_multiplicity_height_bound<F: PrimeField>(
     lookups: &[Lookups<F>],
     heights: &[usize],
 ) -> Result<(), LookupError> {

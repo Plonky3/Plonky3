@@ -11,6 +11,7 @@ use p3_air::{Air, RowWindow};
 use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{
     Algebra, BasedVectorSpace, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+    PrimeField,
 };
 use p3_lookup::folder::ProverConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
@@ -106,6 +107,7 @@ pub fn prove_batch<
 ) -> BatchProof<SC>
 where
     SC: SGC,
+    Val<SC>: PrimeField,
     SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
     Domain<SC>: Send + Sync,
     SC::Pcs: Sync,

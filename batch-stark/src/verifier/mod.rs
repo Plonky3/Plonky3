@@ -7,7 +7,7 @@ pub use data::VerifierData;
 use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing};
+use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing, PrimeField};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
 use p3_lookup::{
@@ -37,6 +37,7 @@ pub fn verify_batch<SC, A>(
 ) -> Result<(), BatchVerificationError<PcsError<SC>>>
 where
     SC: SGC,
+    Val<SC>: PrimeField,
     SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
     A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<VerifierConstraintFolderWithLookups<'a, SC>>,
