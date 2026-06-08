@@ -318,9 +318,15 @@ fn base_case_rejects_tampered_blinded_randomness() {
         &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
     )
     .unwrap_err();
-    // Diverged transcript: the verifier samples different spot positions,
-    // so the first source opening fails to authenticate.
-    assert_eq!(err, BaseCaseZkError::SourceOpeningRejected { position: 7 });
+    // A randomness-reveal shift is absorbed before the spot positions are
+    // drawn, so the transcript diverges and a source opening is rejected.
+    // Whether it surfaces as a diverged Merkle opening or the encoding
+    // spot check depends on the transcript, so only rejection is asserted.
+    assert!(matches!(
+        err,
+        BaseCaseZkError::SourceOpeningRejected { .. }
+            | BaseCaseZkError::SourceSpotCheckFailed { .. },
+    ));
 }
 
 #[test]
@@ -352,7 +358,9 @@ fn base_case_rejects_unbound_source_reveal() {
         &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
     )
     .unwrap_err();
-    assert_eq!(err, BaseCaseZkError::SourceSpotCheckFailed { position: 2 });
+    // The committed source genuinely differs from the reveal, so the source
+    // spot check always fails; the position it lands on is incidental.
+    assert!(matches!(err, BaseCaseZkError::SourceSpotCheckFailed { .. },));
 }
 
 #[test]
@@ -371,13 +379,12 @@ fn base_case_rejects_unbound_mask_reveal() {
         &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
     )
     .unwrap_err();
-    assert_eq!(
+    // The committed mask genuinely differs from the reveal, so the mask
+    // spot check always fails in group 0; the position is incidental.
+    assert!(matches!(
         err,
-        BaseCaseZkError::MaskSpotCheckFailed {
-            group: 0,
-            position: 2
-        }
-    );
+        BaseCaseZkError::MaskSpotCheckFailed { group: 0, .. },
+    ));
 }
 
 #[test]

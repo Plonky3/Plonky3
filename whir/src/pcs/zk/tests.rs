@@ -306,14 +306,14 @@ fn zk_whir_rejects_wrong_eval() {
     proven.proof.evals[0] += EF::ONE;
     let err = proven.verify().unwrap_err();
     // Diverged transcript: the verifier samples different STIR positions,
-    // so the first round-0 opening fails to authenticate.
-    assert_eq!(
+    // so a round-0 opening fails to authenticate.
+    //
+    // The exact position is a transcript artifact, not a protocol
+    // invariant, so only the variant and round are pinned.
+    assert!(matches!(
         err,
-        ZkVerifierError::MerkleVerificationFailed {
-            round: 0,
-            position: 120,
-        },
-    );
+        ZkVerifierError::MerkleVerificationFailed { round: 0, .. },
+    ));
 }
 
 #[test]
@@ -349,14 +349,14 @@ fn zk_whir_rejects_tampered_ood_answer() {
     proven.proof.rounds[0].ood_answers[0] += EF::ONE;
     let err = proven.verify().unwrap_err();
     // Diverged transcript: the verifier samples different STIR positions,
-    // so the first round-0 opening fails to authenticate.
-    assert_eq!(
+    // so a round-0 opening fails to authenticate.
+    //
+    // The exact position is a transcript artifact, not a protocol
+    // invariant, so only the variant and round are pinned.
+    assert!(matches!(
         err,
-        ZkVerifierError::MerkleVerificationFailed {
-            round: 0,
-            position: 108,
-        },
-    );
+        ZkVerifierError::MerkleVerificationFailed { round: 0, .. },
+    ));
 }
 
 #[test]
@@ -516,14 +516,14 @@ fn zk_whir_rejects_tampered_sumcheck_wire() {
     proven.proof.sumchecks[0].round_coefficients[0][0] += EF::ONE;
     let err = proven.verify().unwrap_err();
     // Diverged transcript: the verifier samples different STIR positions,
-    // so the first round-0 opening fails to authenticate.
-    assert_eq!(
+    // so a round-0 opening fails to authenticate.
+    //
+    // The exact position is a transcript artifact, not a protocol
+    // invariant, so only the variant and round are pinned.
+    assert!(matches!(
         err,
-        ZkVerifierError::MerkleVerificationFailed {
-            round: 0,
-            position: 105,
-        },
-    );
+        ZkVerifierError::MerkleVerificationFailed { round: 0, .. },
+    ));
 }
 
 #[test]
@@ -536,14 +536,14 @@ fn zk_whir_rejects_wrong_commitment() {
     proven.commitment = other.commitment;
     let err = proven.verify().unwrap_err();
     // Diverged transcript: the verifier samples different STIR positions,
-    // so the first round-0 opening fails to authenticate.
-    assert_eq!(
+    // so a round-0 opening fails to authenticate.
+    //
+    // The exact position is a transcript artifact, not a protocol
+    // invariant, so only the variant and round are pinned.
+    assert!(matches!(
         err,
-        ZkVerifierError::MerkleVerificationFailed {
-            round: 0,
-            position: 17,
-        },
-    );
+        ZkVerifierError::MerkleVerificationFailed { round: 0, .. },
+    ));
 }
 
 /// Conditions a uniformly random witness on the public claims.
