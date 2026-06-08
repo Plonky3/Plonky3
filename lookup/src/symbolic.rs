@@ -12,6 +12,7 @@ use p3_field::{Algebra, ExtensionField, Field};
 use p3_matrix::dense::RowMajorMatrix;
 
 use crate::builder::{InteractionBuilder, SymbolicInteraction, SymbolicLocalInteraction};
+use crate::count::Count;
 
 /// Symbolic builder that captures constraints and bus interactions side by side.
 #[derive(Debug)]
@@ -147,9 +148,11 @@ impl<F: Field, EF: ExtensionField<F>> InteractionBuilder for InteractionSymbolic
         &mut self,
         bus_name: &str,
         fields: impl IntoIterator<Item = E>,
-        count: impl Into<Self::Expr>,
-        count_weight: u32,
+        count: impl Into<Count<Self::Expr>>,
     ) {
+        // Split the count into its signed expression and per-row magnitude bound.
+        let (count, count_weight) = count.into().into_parts();
+
         // Materialize lazy inputs into owned expressions and append one record.
         //
         // - Collected eagerly so the record outlives the caller's iterator.
@@ -157,7 +160,7 @@ impl<F: Field, EF: ExtensionField<F>> InteractionBuilder for InteractionSymbolic
         self.global_interactions.push(SymbolicInteraction {
             bus_name: String::from(bus_name),
             fields: fields.into_iter().map(Into::into).collect(),
-            count: count.into(),
+            count,
             count_weight,
         });
     }

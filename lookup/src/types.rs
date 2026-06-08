@@ -45,6 +45,7 @@ pub struct Lookup<F: Field> {
     ///
     /// - One term of the multiplicity height-bound soundness check `sum_i w_i * h_i < p`.
     /// - Carried straight from the emitting global interaction.
+    /// - Sound only if the AIR constrains the count to respect it on every row.
     /// - Typically `1` for a query and `0` for a table entry being provided.
     /// - Always `0` for intra-AIR lookups, which never cross AIRs.
     pub count_weight: u32,
@@ -128,6 +129,7 @@ impl<F: Field> Lookups<F> {
 /// - LogUp proves a multiset identity over a base field of characteristic `p`.
 /// - A provided entry's multiplicity equals how many queries hit it.
 /// - Counted honestly, that multiplicity never exceeds `sum_i w_i * h_i`.
+/// - This holds only because each AIR constrains every query count to its weight.
 /// - Holding the sum below `p` rules out any multiplicity wrapping modulo `p`.
 /// - A wrap would let a prover forge multiplicities and break soundness.
 /// - Only public weights and heights are read, so both parties agree on the result.

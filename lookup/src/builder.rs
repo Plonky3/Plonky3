@@ -6,6 +6,8 @@ use alloc::vec::Vec;
 use p3_air::{AirBuilder, DebugConstraintBuilder, SymbolicExpression};
 use p3_field::{ExtensionField, Field};
 
+use crate::count::Count;
+
 /// One message sent on a named bus during symbolic evaluation.
 ///
 /// Rendered per trace row as a tuple of field expressions plus a signed
@@ -30,11 +32,11 @@ pub struct SymbolicInteraction<F> {
     /// Signed multiplicity: positive for a send, negative for a receive.
     pub count: SymbolicExpression<F>,
 
-    /// Weight used in the height-bound soundness constraint
-    /// `sum_i weight_i * height_i < p`.
+    /// Per-row upper bound on the count's magnitude.
     ///
-    /// - `1` for queries that must hit a real entry.
-    /// - `0` for table entries being provided.
+    /// - Feeds the height check `sum_i weight_i * height_i < p`.
+    /// - Sound only if the AIR constrains the count to respect it on every row.
+    /// - `1` for a unit query, `0` for a provided table entry.
     pub count_weight: u32,
 }
 
@@ -63,14 +65,17 @@ pub trait InteractionBuilder: AirBuilder {
     ///
     /// - `bus_name` — shared identifier linking all AIRs on the same bus.
     /// - `fields` — message payload.
-    /// - `count` — signed multiplicity. Positive is a send, negative a receive.
-    /// - `count_weight` — soundness weight. Use `1` for queries, `0` for table entries.
+    /// - `count` — signed multiplicity carrying its own per-row magnitude bound.
+    ///
+    /// # Soundness
+    ///
+    /// - A constant count fixes its bound automatically.
+    /// - A variable count must declare a bound the AIR constrains it to respect.
     fn push_interaction<E: Into<Self::Expr>>(
         &mut self,
         bus_name: &str,
         fields: impl IntoIterator<Item = E>,
-        count: impl Into<Self::Expr>,
-        count_weight: u32,
+        count: impl Into<Count<Self::Expr>>,
     );
 
     /// Record one intra-AIR lookup, both sides in one call.
@@ -98,8 +103,7 @@ impl<F: Field, EF: ExtensionField<F>> InteractionBuilder for DebugConstraintBuil
         &mut self,
         _bus_name: &str,
         fields: impl IntoIterator<Item = E>,
-        _count: impl Into<Self::Expr>,
-        _count_weight: u32,
+        _count: impl Into<Count<Self::Expr>>,
     ) {
         // Drain the iterator so any side effects inside a wrapping adapter still fire.
         //

@@ -11,6 +11,7 @@ extern crate alloc;
 
 pub mod builder;
 pub mod bus;
+pub mod count;
 pub mod debug_util;
 pub mod folder;
 pub mod logup;
@@ -22,6 +23,7 @@ pub mod traits;
 mod types;
 
 pub use builder::{InteractionBuilder, SymbolicInteraction, SymbolicLocalInteraction};
+pub use count::Count;
 pub use logup::LogUpGadget;
 pub use protocol::LookupProtocol;
 pub use symbolic::InteractionSymbolicBuilder;
