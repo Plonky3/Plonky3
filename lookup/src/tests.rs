@@ -83,6 +83,7 @@ fn create_dummy_lookup(
         kind: Kind::Local,
         elements,
         multiplicities,
+        count_weight: 0,
         column: 0,
     }
 }
@@ -529,6 +530,7 @@ fn debug_util_detects_unbalanced_multiset() {
         kind: Kind::Local,
         elements: vec![vec![SymbolicExpression::Leaf(BaseLeaf::Variable(expr))]],
         multiplicities: vec![SymbolicExpression::Leaf(BaseLeaf::Constant(F::ONE))],
+        count_weight: 0,
         column: 0,
     };
 
@@ -578,6 +580,7 @@ fn eval_all_global_lookup_carries_terminal_through_permutation_values() {
             y: Arc::new(SymbolicExpression::Leaf(BaseLeaf::Constant(F::ONE))),
             degree_multiple: 0,
         }],
+        count_weight: 1,
         column: 0,
     };
 
@@ -590,6 +593,7 @@ fn eval_all_global_lookup_carries_terminal_through_permutation_values() {
         kind: Kind::Global(bus),
         elements: vec![vec![SymbolicExpression::Leaf(BaseLeaf::Variable(expr_r))]],
         multiplicities: vec![SymbolicExpression::Leaf(BaseLeaf::Constant(F::ONE))],
+        count_weight: 1,
         column: 0,
     };
 

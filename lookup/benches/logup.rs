@@ -80,6 +80,7 @@ fn build_lookups(num_lookups: usize, tuple_size: usize, trace_width: usize) -> V
                 kind: Kind::Local,
                 elements,
                 multiplicities,
+                count_weight: 0,
                 column: lookup_idx,
             }
         })

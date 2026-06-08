@@ -180,6 +180,8 @@ impl LookupProtocol for LogUpGadget {
             kind: _,
             elements,
             multiplicities,
+            // Not part of the per-row fraction; it only feeds the height-bound check.
+            count_weight: _,
             column,
         } = lookup;
 
