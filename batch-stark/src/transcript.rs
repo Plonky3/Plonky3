@@ -97,7 +97,7 @@ impl<SC: SGC> BatchTranscript<SC> {
     {
         // The gadget reads two challenges per lookup: a denominator base and a combiner.
         // The single-pair scheme below relies on exactly that width.
-        debug_assert_eq!(
+        assert_eq!(
             lookup_gadget.num_challenges(),
             2,
             "single-pair domain separation expects a two-challenge gadget"

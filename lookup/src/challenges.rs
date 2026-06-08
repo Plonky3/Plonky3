@@ -11,7 +11,7 @@ use p3_field::Field;
 /// This draws one pair and offsets each bus instead:
 ///
 /// ```text
-///     denominator(bus, payload) = prefix[bus] + sum_k beta^k * payload_k
+///     denominator(bus, payload) = prefix[bus] - sum_k beta^k * payload_k
 ///     prefix[bus]               = alpha + (bus + 1) * gamma
 ///     gamma                     = beta^W   (W = max message width)
 /// ```
@@ -30,8 +30,8 @@ use p3_field::Field;
 pub struct Challenges<EF> {
     /// Base randomness shared by every bus.
     pub alpha: EF,
-    /// Powers `beta^0 .. beta^(W-1)` weighting successive payload elements.
-    pub beta_powers: Box<[EF]>,
+    /// Combiner weighting successive payload elements; callers raise it to the powers they need.
+    pub beta: EF,
     /// Offset `alpha + (i + 1) * gamma` separating bus `i` from the rest.
     pub bus_prefix: Box<[EF]>,
 }
@@ -53,10 +53,8 @@ impl<EF: Field> Challenges<EF> {
         // Zero width leaves no power free for the bus offset.
         assert!(max_message_width > 0, "max_message_width must be non-zero");
 
-        // Powers beta^0 .. beta^W via the packed-field fast path.
-        let mut beta_powers = beta.powers().collect_n(max_message_width + 1);
-        // gamma = beta^W is the top power; the rest weight the payload.
-        let gamma = beta_powers.pop().expect("at least beta^0 and beta^W");
+        // gamma = beta^W is one power above every payload term, so the bus offset never collides.
+        let gamma = beta.exp_u64(max_message_width as u64);
 
         // prefix[i] = alpha + (i + 1) * gamma, accumulated to skip a multiply per bus.
         let mut prefix = alpha;
@@ -69,7 +67,7 @@ impl<EF: Field> Challenges<EF> {
 
         Self {
             alpha,
-            beta_powers: beta_powers.into_boxed_slice(),
+            beta,
             bus_prefix,
         }
     }
