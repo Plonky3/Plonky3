@@ -1,13 +1,10 @@
-use p3_field::{
-    Field, PackedValue, PrimeCharacteristicRing, PrimeField, PrimeField32, PrimeField64,
-};
+use p3_field::{Field, PackedValue, PrimeCharacteristicRing, PrimeField64};
 use p3_maybe_rayon::prelude::*;
 use p3_symmetric::CryptographicPermutation;
 use tracing::instrument;
 
 use crate::{
-    CanObserve, CanSampleBits, CanSampleUniformBits, DuplexChallenger, MultiField32Challenger,
-    UniformSamplingField,
+    CanObserve, CanSampleBits, CanSampleUniformBits, DuplexChallenger, UniformSamplingField,
 };
 
 /// Trait for challengers that support proof-of-work (PoW) grinding.
@@ -283,43 +280,6 @@ where
         // Run the check one last time on the *original* challenger to update its state
         // and confirm the witness is valid.
         assert!(check_fn(self, witness));
-        witness
-    }
-}
-
-impl<F, PF, P, const WIDTH: usize, const RATE: usize> GrindingChallenger
-    for MultiField32Challenger<F, PF, P, WIDTH, RATE>
-where
-    F: PrimeField32,
-    PF: PrimeField,
-    P: CryptographicPermutation<[PF; WIDTH]>,
-{
-    type Witness = F;
-
-    #[instrument(name = "grind for proof-of-work witness", skip_all)]
-    fn grind(&mut self, bits: usize) -> Self::Witness {
-        assert!(bits < (usize::BITS as usize), "bit count must be valid");
-        // Evaluate the bound in `u64` to keep the shift within its type width.
-        // A `u32` shift by `bits >= 32` would wrap and accept a trivial proof-of-work.
-        assert!(
-            (1u64 << bits) < F::ORDER_U64,
-            "requested bit count must fit within the field order"
-        );
-
-        // Trivial case: 0 bits mean no PoW is required and any witness is valid.
-        if bits == 0 {
-            return F::ZERO;
-        }
-
-        let witness = (0..F::ORDER_U32)
-            .into_par_iter()
-            .map(|i| unsafe {
-                // i < F::ORDER_U32 by construction so this is safe.
-                F::from_canonical_unchecked(i)
-            })
-            .find_any(|witness| self.clone().check_witness(bits, *witness))
-            .expect("failed to find witness");
-        assert!(self.check_witness(bits, witness));
         witness
     }
 }
