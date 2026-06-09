@@ -245,11 +245,6 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         let inv_den_negshift_k = batch_multiplicative_inverse(&den_negshift_k);
 
         // Fused parallel selector build:
-        //   is_first_row[i]  = z[i] * inv_den_shift[i]
-        //   is_last_row[i]   = z[i] * inv_den_negshift_k[i] * k
-        //   is_transition[i] = 1 - z[i] * inv_den_negshift_k[i]
-        // `z * inv_den_negshift_k` is shared between the last two selectors
-        // and each input is loaded once per iteration instead of three times.
         let mut is_first_row = Self::Val::zero_vec(n);
         let mut is_last_row = Self::Val::zero_vec(n);
         let mut is_transition = Self::Val::zero_vec(n);
