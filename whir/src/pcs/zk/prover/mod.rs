@@ -124,7 +124,7 @@ where
         let num_variables = config.num_variables;
         let sumcheck_mask_encoding = config.sumcheck_mask.encoding::<EF>();
 
-        // Claimed evaluations, echoed verbatim into the proof payload.
+        // Claimed evaluations
         let claimed_evals: Vec<EF> = claims.iter().map(|(_, eval)| *eval).collect();
 
         // Initial relation: claims batched by powers of alpha.
