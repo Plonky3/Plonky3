@@ -447,10 +447,6 @@ where
         round: usize,
         randomness: &Point<EF>,
     ) -> Result<EF, ZkVerifierError> {
-        // Defense in depth: bind the opened row length locally.
-        //
-        //     Merkle hashing already pins the committed width,
-        //     but the later fold indexes by 2^folding directly.
         let width = dims.first().map_or(0, |d| d.width);
         let opened_len = match opening {
             QueryOpening::Base { values, .. } => values.len(),
