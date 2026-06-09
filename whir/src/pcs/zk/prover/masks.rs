@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use core::mem::take;
 
 use p3_commit::{ExtensionMmcs, Mmcs};
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, Field, TwoAdicField, dot_product};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::strategy::SumcheckProver;
@@ -46,6 +46,11 @@ where
     pub(super) groups: Vec<(usize, MaskProverData<F, EF, MT>)>,
     /// Dense covectors with their accumulated scales.
     pub(super) claims: MaskClaims<EF>,
+    /// Running mask-claim total `sum_i <xi_i, u_i>` at the current scales.
+    ///
+    /// Maintained by the mutating methods so callers read it in O(1)
+    /// instead of re-evaluating every covector each round.
+    pub(super) aux: EF,
 }
 
 impl<F, EF, MT> ProverMasks<F, EF, MT>
@@ -60,6 +65,7 @@ where
             randomness: Vec::new(),
             groups: Vec::new(),
             claims: MaskClaims::new(),
+            aux: EF::ZERO,
         }
     }
 
@@ -86,12 +92,17 @@ where
         sumchecks.push(take(zk_data));
         mask_commitments.push(handoff.mask_oracle.0.clone());
 
-        // Claim side, carried masks: every covector absorbs eps * 2^{-k}.
-        self.claims.absorb_sumcheck(handoff.eps, folding);
+        // Claim side, carried masks: every covector absorbs eps * 2^{-k},
+        // so the running total absorbs the same scale.
+        self.aux *= self.claims.absorb_sumcheck(handoff.eps, folding);
         // Claim side, fresh masks: mask j enters at scale one with the
         // power covector pow(gamma_j), its residual at the round challenge.
         let gammas: Vec<EF> = handoff.randomness.iter().copied().collect();
-        for covector in mask_residual_covectors_from_shape(folding, ell_zk, &gammas) {
+        for (covector, message) in mask_residual_covectors_from_shape(folding, ell_zk, &gammas)
+            .into_iter()
+            .zip(&handoff.mask_messages)
+        {
+            self.aux += dot_product::<EF, _, _>(covector.iter().copied(), message.iter().copied());
             self.claims.push(covector);
         }
         // Retain the secrets behind the new oracle for the base-case
@@ -104,6 +115,21 @@ where
             residual_prover: handoff.residual_prover,
             randomness: handoff.randomness,
         }
+    }
+
+    /// Records the fresh code-switch mask of one round as its own group.
+    pub(super) fn push_switch_mask(
+        &mut self,
+        covector: Vec<EF>,
+        message: Vec<EF>,
+        randomness: Vec<EF>,
+        data: MaskProverData<F, EF, MT>,
+    ) {
+        self.aux += dot_product::<EF, _, _>(covector.iter().copied(), message.iter().copied());
+        self.claims.push(covector);
+        self.messages.push(message);
+        self.randomness.push(randomness);
+        self.groups.push((1, data));
     }
 }
 

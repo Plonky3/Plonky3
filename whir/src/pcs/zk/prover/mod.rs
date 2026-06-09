@@ -299,10 +299,12 @@ where
                 ood_coeffs: ood_coeffs.to_vec(),
                 in_domain_coeffs: query_coeffs.to_vec(),
             };
-            // Carried scalar: the source residual plus the mask-side total
-            // `sum_i <xi_i, u_i>` at the current covector scales.
-            let carried =
-                batch.residual_prover.claimed_sum() + masks.claims.evaluate(&masks.messages);
+            // Carried scalar entering this round's batching:
+            //
+            //     carried = source residual + sum_i <xi_i, u_i>
+            //
+            // The mask total is read from the running value.
+            let carried = batch.residual_prover.claimed_sum() + masks.aux;
             let joint = mask_claim
                 .batched_claim(carried, &ood_answers, &folded_values)
                 .expect("prover-built dimensions always match");
@@ -344,22 +346,26 @@ where
                 &query_points,
                 query_coeffs,
             );
+            // The running total must match a full re-evaluation.
+            debug_assert_eq!(masks.aux, masks.claims.evaluate(&masks.messages));
             // Cross-check the batched-claim identity:
             //
             //     residual + aux + <mask covector, mask message> = mu'
             debug_assert_eq!(
                 sumcheck_prover.claimed_sum()
-                    + masks.claims.evaluate(&masks.messages)
+                    + masks.aux
                     + dot_product::<EF, _, _>(
                         mask_covector.iter().copied(),
                         mask_message.iter().copied(),
                     ),
                 joint,
             );
-            masks.claims.push(mask_covector);
-            masks.messages.push(mask_message);
-            masks.randomness.push(mask_encoding_randomness);
-            masks.groups.push((1, mask_data));
+            masks.push_switch_mask(
+                mask_covector,
+                mask_message,
+                mask_encoding_randomness,
+                mask_data,
+            );
 
             rounds.push(ZkRoundProof {
                 commitment,
@@ -372,7 +378,7 @@ where
             // Next masked sumcheck batch over the new oracle.
             //
             // The mask-claim total rides the batch as its auxiliary constant.
-            let aux = masks.claims.evaluate(&masks.messages);
+            let aux = masks.aux;
             let mut zk_data = ZkSumcheckData::default();
             let handoff = sumcheck_prover.into_zk_sumcheck(
                 &mut zk_data,

@@ -37,13 +37,16 @@ impl<EF: Field> MaskClaims<EF> {
     ///
     /// The covectors must absorb the same factor as the values they pair
     /// with, or the carried relation drifts.
-    pub fn absorb_sumcheck(&mut self, eps: EF, folding_factor: usize) {
+    ///
+    /// Returns the applied scale, so a running claim total can track it.
+    pub fn absorb_sumcheck(&mut self, eps: EF, folding_factor: usize) -> EF {
         let scale = eps * EF::TWO.exp_u64(folding_factor as u64).inverse();
         for covector in &mut self.covectors {
             for entry in covector.iter_mut() {
                 *entry *= scale;
             }
         }
+        scale
     }
 
     /// Appends a fresh mask oracle claim.
@@ -86,7 +89,9 @@ mod tests {
         let mut masks = MaskClaims::new();
         masks.push(vec![EF::from_u64(1), EF::from_u64(2)]);
         masks.push(vec![EF::from_u64(3)]);
-        masks.absorb_sumcheck(EF::from_u64(8), 2);
+        // The returned scale is eps / 2^k = 8 / 4 = 2.
+        let scale = masks.absorb_sumcheck(EF::from_u64(8), 2);
+        assert_eq!(scale, EF::from_u64(2));
         assert_eq!(masks.covectors[0], vec![EF::from_u64(2), EF::from_u64(4)]);
         assert_eq!(masks.covectors[1], vec![EF::from_u64(6)]);
     }

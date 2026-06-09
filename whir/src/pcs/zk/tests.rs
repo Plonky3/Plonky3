@@ -503,7 +503,13 @@ fn zk_whir_rejects_tampered_pow_witness() {
     let mut proven = Setup::new(18).pow_bits(5).prove();
     proven.proof.rounds[0].pow_witness += F::ONE;
     let err = proven.verify().unwrap_err();
-    assert_eq!(err, ZkVerifierError::InvalidPowWitness { round: 0 });
+    // The bad witness usually fails the grind; if it coincidentally still
+    // satisfies it, the diverged transcript fails a later round-0 opening.
+    assert!(matches!(
+        err,
+        ZkVerifierError::InvalidPowWitness { round: 0 }
+            | ZkVerifierError::MerkleVerificationFailed { round: 0, .. },
+    ));
 }
 
 #[test]

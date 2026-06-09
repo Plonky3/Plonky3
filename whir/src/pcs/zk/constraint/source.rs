@@ -1,5 +1,6 @@
 //! Symbolic source-side claim tracking.
 
+use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_field::Field;
@@ -33,6 +34,11 @@ pub enum SourceTerm<EF> {
         var: EF,
         /// Current message arity `m`.
         num_variables: usize,
+        /// Squaring ladder `[var^{2^0}, var^{2^1}, ...]`, extended on demand.
+        ///
+        /// Each fold needs `var^{2^{m-k}}`; the index it reads only ever
+        /// decreases, so squares built for one fold serve every later one.
+        squares: Vec<EF>,
     },
 }
 
@@ -72,7 +78,11 @@ impl<EF: Field> SourceClaim<EF> {
     /// Records a power constraint `coeff * (var^index)` over `m` variables.
     pub fn push_pow(&mut self, var: EF, num_variables: usize, coeff: EF) {
         self.constraints.push(SourceConstraint {
-            term: SourceTerm::Pow { var, num_variables },
+            term: SourceTerm::Pow {
+                var,
+                num_variables,
+                squares: vec![var],
+            },
             coeff,
         });
     }
@@ -99,18 +109,27 @@ impl<EF: Field> SourceClaim<EF> {
                     constraint.coeff *= head.eq_poly(gamma);
                     *point = tail;
                 }
-                SourceTerm::Pow { var, num_variables } => {
+                SourceTerm::Pow {
+                    num_variables,
+                    squares,
+                    ..
+                } => {
                     debug_assert!(k <= *num_variables);
                     // Folding the first k bits scales a power covector by
                     //
                     //     prod_{i < k} (1 - g_i + g_i * var^{2^{m-1-i}})
                     //
-                    // The selection walk squares the seed once per coordinate, in reverse order.
+                    // select_poly squares the seed var^{2^{m-k}} up to
+                    // var^{2^{m-1}}, in reverse coordinate order.
                     //
-                    //     seed = var^{2^{m-k}}
-                    //     -> factors hit exponents 2^{m-k}, ..., 2^{m-1}
-                    let seed = var.exp_power_of_2(*num_variables - k);
-                    constraint.coeff *= gamma.select_poly(seed);
+                    //     seed index m-k shrinks every fold
+                    //     -> the ladder from the first fold covers all later ones
+                    //     -> extend it once, here
+                    let seed_index = *num_variables - k;
+                    while squares.len() <= seed_index {
+                        squares.push(squares[squares.len() - 1].square());
+                    }
+                    constraint.coeff *= gamma.select_poly(squares[seed_index]);
                     *num_variables -= k;
                 }
             }
@@ -136,6 +155,7 @@ impl<EF: Field> SourceClaim<EF> {
                 SourceTerm::Pow {
                     var,
                     num_variables: m,
+                    ..
                 } => {
                     assert_eq!(*m, num_variables);
                     // Running power: slot b gains coeff * var^b.

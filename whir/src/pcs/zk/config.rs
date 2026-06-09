@@ -188,17 +188,20 @@ where
             return Err(ZkConfigError::MaskRateTooHigh);
         }
 
-        // Derive the mask spot-check count t_zk.
-        //
-        //     reach security on the (1 - delta_zk)^{t_zk} branch
-        //     no PoW on mask spot checks -> target the full security level
-        //     t_zk is also the mask randomness length -> t_zk-query private
         let security_level = params.security_level;
         let soundness_type = params.soundness_type;
-        let mask_queries = soundness_type.queries(security_level, zk.mask_log_inv_rate);
 
         let inner = WhirConfig::<EF, F, Challenger>::new(num_variables, params)?;
         let n_rounds = inner.n_rounds();
+
+        // Derive the mask spot-check count t_zk.
+        //
+        //     each mask spot-check branch is (1 - delta_zk)^{t_zk}
+        //     union over the 2*n_rounds + 2 mask oracles -> + log2 of that
+        //     no PoW on mask spot checks -> target the full security level
+        //     t_zk is also the mask randomness length -> t_zk-query private
+        let union = log2_ceil_usize(2 * n_rounds + 2);
+        let mask_queries = soundness_type.queries(security_level + union, zk.mask_log_inv_rate);
 
         // Per-oracle ZK budget.
         //
