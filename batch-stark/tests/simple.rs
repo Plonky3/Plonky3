@@ -18,7 +18,7 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{Field, PrimeCharacteristicRing, PrimeField64, TwoAdicField};
 use p3_fri::{FriParameters, HidingFriPcs, TwoAdicFriPcs};
 use p3_keccak::Keccak256Hash;
-use p3_lookup::{InteractionBuilder, LookupError, LookupTerminal};
+use p3_lookup::{Count, InteractionBuilder, LookupError, LookupTerminal};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::{MerkleTreeHidingMmcs, MerkleTreeMmcs};
@@ -26,7 +26,7 @@ use p3_mersenne_31::Mersenne31;
 use p3_symmetric::{
     CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher, TruncatedPermutation,
 };
-use p3_uni_stark::{InvalidProofShapeError, StarkConfig};
+use p3_uni_stark::{InvalidProofShapeError, PeriodicColumnError, StarkConfig};
 use p3_util::{assert_clone, assert_send, assert_sync, log2_strict_usize};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -306,12 +306,8 @@ where
 
             // Global lookup: send (a, b) to FibAirLookups.
             if self.is_global {
-                builder.push_interaction(
-                    &self.global_names[rep],
-                    [a.into(), b.into()],
-                    -AB::Expr::ONE, // Send = negative count
-                    1,
-                );
+                // Send = one message per row, so a constant count of -1.
+                builder.push_interaction(&self.global_names[rep], [a.into(), b.into()], -1);
             }
         }
     }
@@ -416,11 +412,13 @@ impl<AB: PermutationAirBuilder + InteractionBuilder> Air<AB> for FibAirLookups {
             };
 
             // Receive = positive count (counterpart to MulAirLookups' negative send).
+            //
+            // Each active row receives `multiplicity` copies, so that constant is also
+            // the per-row magnitude bound feeding the height check.
             builder.push_interaction(
                 &name,
                 [left.into(), right.into()],
-                AB::Expr::from_u64(multiplicity),
-                1,
+                Count::bounded(AB::Expr::from_u64(multiplicity), multiplicity as u32),
             );
         }
     }
@@ -853,6 +851,49 @@ fn test_periodic_air() -> Result<(), impl Debug> {
     let common = &prover_data.common;
     let proof = prove_batch(&config, &instances, &prover_data);
     verify_batch(&config, &[air], &proof, &[vec![]], common)
+}
+
+#[test]
+fn periodic_column_non_power_of_two_is_rejected() {
+    let config = make_config(42);
+
+    // Prover: well-formed AIR, periodic column lengths 4 and 2 over a 64-row trace.
+    let good = PeriodicAir::<Val>::new();
+    let trace = good.valid_trace(1 << 6);
+    let instances = vec![StarkInstance {
+        air: &good,
+        trace: &trace,
+        public_values: vec![],
+    }];
+    let prover_data = ProverData::from_instances(&config, &instances);
+    let common = &prover_data.common;
+    let proof = prove_batch(&config, &instances, &prover_data);
+
+    // Verifier: same symbolic shape, width 2 and two periodic columns.
+    // The first column now has length 3, which has no evaluation subdomain.
+    //
+    //     prover periods:   [4, 2]   -> verifies
+    //     verifier periods: [3, 2]   -> 3 is not a power of two -> rejected
+    let bad = PeriodicAir::<Val> {
+        periodic: vec![
+            vec![Val::from_u64(1), Val::from_u64(2), Val::from_u64(3)],
+            vec![Val::from_u64(10), Val::from_u64(20)],
+        ],
+    };
+    let result = verify_batch(&config, &[bad], &proof, &[vec![]], common);
+
+    // The shared check fires here exactly as it does in the single-AIR verifier.
+    assert!(
+        matches!(
+            result,
+            Err(BatchVerificationError::Verification(
+                VerificationError::PeriodicColumn(PeriodicColumnError::LengthNotPowerOfTwo {
+                    got: 3
+                })
+            ))
+        ),
+        "expected LengthNotPowerOfTwo {{ got: 3 }}, got {result:?}"
+    );
 }
 
 #[test]

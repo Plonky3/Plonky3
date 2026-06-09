@@ -7,12 +7,15 @@ pub use data::VerifierData;
 use p3_air::Air;
 use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing};
+use p3_field::{Algebra, BasedVectorSpace, ExtensionField, PrimeCharacteristicRing, PrimeField};
 use p3_lookup::folder::VerifierConstraintFolderWithLookups;
 use p3_lookup::logup::LogUpGadget;
-use p3_lookup::{InteractionSymbolicBuilder, LookupError, LookupProtocol};
+use p3_lookup::{
+    InteractionSymbolicBuilder, LookupError, LookupProtocol, check_multiplicity_height_bound,
+};
 use p3_uni_stark::{
-    InvalidProofShapeError, VerificationError, recompose_quotient_from_chunks, validate_degree_bits,
+    InvalidProofShapeError, VerificationError, check_periodic_column_lengths,
+    recompose_quotient_from_chunks, validate_degree_bits,
 };
 use p3_util::checked_log_size_sum;
 use p3_util::zip_eq::zip_eq;
@@ -35,6 +38,7 @@ pub fn verify_batch<SC, A>(
 ) -> Result<(), BatchVerificationError<PcsError<SC>>>
 where
     SC: SGC,
+    Val<SC>: PrimeField,
     SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
     A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>
         + for<'a> Air<VerifierConstraintFolderWithLookups<'a, SC>>,
@@ -138,6 +142,11 @@ where
             })?;
         num_quotient_chunks.push(n_chunks);
     }
+
+    // Soundness: bound LogUp multiplicities so none wraps modulo p.
+    // Base degree bits give the same heights the prover used.
+    let trace_heights: Vec<usize> = base_degree_bits.iter().map(|&b| 1usize << b).collect();
+    check_multiplicity_height_bound(all_lookups, &trace_heights)?;
 
     // Observe the instance count up front to match the prover's transcript.
     transcript.observe_instance_count(airs.len());
@@ -558,8 +567,12 @@ where
             }
         };
         let perm_vals: Vec<SC::Challenge> = lookup_terminals[i].iter().map(|t| t.0).collect();
-        let periodic_values: Vec<Challenge<SC>> = air
-            .periodic_columns()
+
+        // Periodic columns are AIR logic; a malformed one must error, not panic.
+        let periodic_columns = air.periodic_columns();
+        check_periodic_column_lengths(&periodic_columns, trace_domains[i].size())?;
+
+        let periodic_values: Vec<Challenge<SC>> = periodic_columns
             .iter()
             .map(|col| trace_domains[i].evaluate_periodic_column_at(col, zeta))
             .collect();

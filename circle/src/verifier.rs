@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{BatchOpeningRef, Mmcs};
+use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field};
 use p3_fri::verifier::FriError;
 use p3_fri::{FriFoldingStrategy, FriParameters};
@@ -21,12 +22,19 @@ pub fn verify<Folding, Val, Challenge, M, Challenger>(
     ) -> Result<Vec<(usize, Challenge)>, Folding::InputError>,
 ) -> Result<(), FriError<M::Error, Folding::InputError>>
 where
-    Val: Field,
+    Val: ComplexExtendable,
     Challenge: ExtensionField<Val>,
     M: Mmcs<Challenge>,
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     Folding: FriFoldingStrategy<Val, Challenge>,
 {
+    // Reject a vacuous instance before any transcript work.
+    // With zero queries the per-query loop never runs.
+    // Any final polynomial would then pass.
+    if params.num_queries == 0 {
+        return Err(FriError::ZeroQueries);
+    }
+
     // There must be exactly one commit-phase proof-of-work witness per round.
     if proof.commit_pow_witnesses.len() != proof.commit_phase_commits.len() {
         return Err(FriError::CommitPowWitnessCountMismatch {
@@ -158,9 +166,24 @@ where
     let total_log_reduction: usize = log_arities.iter().sum();
     let log_max_height = total_log_reduction + params.log_blowup;
 
+    // Invariant: the query-index width fits the circle group of order 2^CIRCLE_TWO_ADICITY.
+    //
+    //     num_index_bits = sum(log_arities) + log_blowup + extra_query_index_bits
+    //     field order    = 2^CIRCLE_TWO_ADICITY - 1   (one short of the group order)
+    //     => a width of CIRCLE_TWO_ADICITY bits is unsampleable
+    //
+    // A malformed arity schedule inflates the round count, hence the width.
+    let num_index_bits = log_max_height + folding.extra_query_index_bits();
+    if num_index_bits >= Val::CIRCLE_TWO_ADICITY {
+        return Err(FriError::GlobalMaxHeightTooLarge {
+            log_global_max_height: num_index_bits,
+            two_adicity: Val::CIRCLE_TWO_ADICITY,
+        });
+    }
+
     for qp in &proof.query_proofs {
         // Sample a random query index uniformly from the initial domain.
-        let index = challenger.sample_bits(log_max_height + folding.extra_query_index_bits());
+        let index = challenger.sample_bits(num_index_bits);
 
         // Open the input polynomials at this query index.
         // Returns (log_height, evaluation) pairs sorted by height descending.

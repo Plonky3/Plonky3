@@ -759,6 +759,64 @@ mod tests {
     }
 
     #[test]
+    fn reject_zero_queries() {
+        // Invariant: a zero-query instance performs no low-degree spot checks.
+        // The per-query loop never runs.
+        // Without the guard any final polynomial would verify.
+        //
+        // Fixture state: an honest proof built with the testing query count.
+        //
+        // Mutation: verify it under params with num_queries = 0.
+        let (mut pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
+        pcs.fri_params.num_queries = 0;
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("zero-query instance must be rejected");
+
+        assert!(
+            matches!(err, FriError::ZeroQueries),
+            "expected ZeroQueries, got {err:?}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "num_queries must be at least 1")]
+    fn prover_rejects_zero_queries() {
+        // The prover must refuse to build a vacuous proof.
+        // The verifier guards the same config, so the failure is symmetric.
+        let mut rng = SmallRng::seed_from_u64(0);
+
+        // Build the hash stack: field hasher → compression → Merkle tree.
+        let byte_hash = ByteHash {};
+        let field_hash = FieldHash::new(byte_hash);
+        let compress = MyCompress::new(byte_hash);
+        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+        // Zero queries; every other parameter is otherwise valid.
+        let mut fri_params = FriParameters::new_testing(challenge_mmcs, 0);
+        fri_params.num_queries = 0;
+
+        let pcs = TestPcs {
+            mmcs: val_mmcs,
+            fri_params,
+            _phantom: PhantomData,
+        };
+
+        // Commit to a random single-column trace of 2^{10} rows.
+        let log_n = 10;
+        let d =
+            <TestPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_n);
+        let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
+        let (_comm, data) = <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
+
+        // Commit succeeds; the assert fires inside the opening (FRI prover).
+        let zeta: Challenge = rng.random();
+        let mut chal = Challenger::from_hasher(vec![], byte_hash);
+        let _ = pcs.open(vec![(&data, vec![vec![zeta]])], &mut chal);
+    }
+
+    #[test]
     fn reject_commit_pow_witness_count_mismatch() {
         let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
         let num_rounds = proof.fri_proof.commit_phase_commits.len();
@@ -946,5 +1004,55 @@ mod tests {
         assert_eq!(round, 0);
         assert_eq!(log_arity, 0);
         assert_eq!(max, pcs.fri_params.max_log_arity);
+    }
+
+    #[test]
+    fn reject_global_max_height_too_large() {
+        // Invariant: the query-index width fits the circle group of order 2^CIRCLE_TWO_ADICITY.
+        //
+        //     field order = 2^CIRCLE_TWO_ADICITY - 1   (one short of the group order)
+        //     => width of CIRCLE_TWO_ADICITY bits is unsampleable => verifier must reject
+        let (mut pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+
+        // Zero both proof-of-work targets.
+        // Otherwise grinding rejects the cloned witnesses before the width check runs.
+        pcs.fri_params.commit_proof_of_work_bits = 0;
+        pcs.fri_params.query_proof_of_work_bits = 0;
+
+        // Mutation: clone commit-phase rounds until the width reaches the bound.
+        //
+        //     num_index_bits = rounds + log_blowup + extra_query_index_bits (= 1 for circle)
+        //     stop once num_index_bits >= CIRCLE_TWO_ADICITY
+        let extra_query_index_bits = 1;
+        let commit = proof.fri_proof.commit_phase_commits[0].clone();
+        let witness = proof.fri_proof.commit_pow_witnesses[0];
+        while proof.fri_proof.commit_phase_commits.len()
+            + pcs.fri_params.log_blowup
+            + extra_query_index_bits
+            < Val::CIRCLE_TWO_ADICITY
+        {
+            proof.fri_proof.commit_phase_commits.push(commit.clone());
+            proof.fri_proof.commit_pow_witnesses.push(witness);
+            // Each query proof needs one opening per round.
+            for qp in &mut proof.fri_proof.query_proofs {
+                let opening = qp.commit_phase_openings[0].clone();
+                qp.commit_phase_openings.push(opening);
+            }
+        }
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("expected GlobalMaxHeightTooLarge");
+
+        let FriError::GlobalMaxHeightTooLarge {
+            log_global_max_height,
+            two_adicity,
+        } = err
+        else {
+            panic!("expected GlobalMaxHeightTooLarge, got {err:?}");
+        };
+        // The reported bound is the circle group two-adicity.
+        assert_eq!(two_adicity, Val::CIRCLE_TWO_ADICITY);
+        // The rejecting width is at least that bound.
+        assert!(log_global_max_height >= two_adicity);
     }
 }
