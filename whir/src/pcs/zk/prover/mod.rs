@@ -167,7 +167,7 @@ where
             challenger,
             rng,
         );
-        // Proof accumulators, assembled into the final payload at the end.
+        // Proof accumulators
         let mut sumchecks = Vec::new();
         let mut sumcheck_mask_commitments = Vec::new();
         let mut rounds = Vec::with_capacity(config.n_rounds());
