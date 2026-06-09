@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::mem::MaybeUninit;
 
 use itertools::{Itertools, iterate, izip};
 use p3_commit::PolynomialSpace;
@@ -146,10 +147,51 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
             // with the lower order values. (In `DitButterfly`, `x_2` is 0, so
             // both `x_1` and `x_2` are set to `x_1`).
             // So instead we directly repeat the coeffs and skip the initial layers.
+            //
+            // Performing the repeated doublings via `extend_from_within(..)` is
+            // a single-threaded `memcpy`. Once the buffer is large enough
+            // (multi-GiB for production-sized traces) it becomes a bandwidth-
+            // bound bottleneck. Compose the final repetition pattern directly
+            // (`new_row[i] = orig[i % initial_h]` after any number of
+            // doublings) and fill the new region in parallel: every
+            // destination row is written exactly once and the source region is
+            // only read, so the parallel writes do not race.
             debug_span!("extend coeffs").in_scope(|| {
-                coeffs.values.reserve(domain.size() * coeffs.width());
-                for _ in log_n..domain.log_n {
-                    coeffs.values.extend_from_within(..);
+                let w = coeffs.width();
+                let initial_h = coeffs.height();
+                let target_h = domain.size();
+                let initial_len = initial_h * w;
+                let target_len = target_h * w;
+
+                coeffs.values.reserve_exact(target_len - initial_len);
+
+                // SAFETY: We just reserved space for `target_len - initial_len`
+                // more elements. `initial_region` and `new_region` are disjoint
+                // views into the same allocation (`new_region` starts at
+                // `initial_len`). Each row of `new_region` is written by
+                // exactly one Rayon task. `initial_region` is only read.
+                // `F: Copy + Send + Sync` so per-element writes do not drop
+                // existing values and cross-thread sharing is sound.
+                unsafe {
+                    let ptr = coeffs.values.as_mut_ptr();
+                    let initial_region: &[F] = core::slice::from_raw_parts(ptr, initial_len);
+                    let new_region: &mut [MaybeUninit<F>] = core::slice::from_raw_parts_mut(
+                        ptr.add(initial_len).cast::<MaybeUninit<F>>(),
+                        target_len - initial_len,
+                    );
+
+                    new_region
+                        .par_chunks_mut(w)
+                        .enumerate()
+                        .for_each(|(i, dst_row)| {
+                            let src_row_start = (i % initial_h) * w;
+                            let src_row = &initial_region[src_row_start..src_row_start + w];
+                            for (dst, &src) in dst_row.iter_mut().zip(src_row) {
+                                dst.write(src);
+                            }
+                        });
+
+                    coeffs.values.set_len(target_len);
                 }
             });
         }
