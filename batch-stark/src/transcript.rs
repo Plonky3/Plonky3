@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use hashbrown::HashMap;
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_field::PrimeCharacteristicRing;
-use p3_lookup::{Kind, Lookup, LookupProtocol, LookupTerminal};
+use p3_lookup::{Challenges, Kind, Lookup, LookupProtocol, LookupTerminal};
 
 use crate::common::GlobalPreprocessed;
 use crate::config::{Challenge, Commitment, StarkGenericConfig as SGC, Val};
@@ -67,10 +67,25 @@ impl<SC: SGC> BatchTranscript<SC> {
         }
     }
 
-    /// Sample per-instance permutation challenges.
+    /// Sample the batch's lookup challenges and lay them out per instance.
     ///
-    /// Global lookups with the same name share the same challenges; local
-    /// lookups get fresh independent challenges.
+    /// # Overview
+    ///
+    /// - One pair is drawn for the whole batch, not one per bus.
+    /// - Each bus is separated by an additive offset from that pair.
+    /// - Local lookups get a unique bus, so they balance on their own.
+    /// - Global lookups sharing a name get one bus, so sends and receives cancel.
+    ///
+    /// # Soundness
+    ///
+    /// - The pair is sampled after the main commitment, so the trace cannot adapt to it.
+    /// - Distinct buses occupy distinct cosets, so any imbalance survives with overwhelming probability.
+    ///
+    /// # Returns
+    ///
+    /// - One challenge vector per instance.
+    /// - Each lookup contributes a pair: its bus offset, then the shared combiner.
+    /// - The gadget reads that pair exactly as it read its former per-lookup pair.
     pub fn sample_perm_challenges<LG, L>(
         &mut self,
         all_lookups: &[L],
@@ -80,22 +95,76 @@ impl<SC: SGC> BatchTranscript<SC> {
         LG: LookupProtocol,
         L: AsRef<[Lookup<Val<SC>>]>,
     {
-        let n = lookup_gadget.num_challenges();
-        let mut global = HashMap::new();
+        // The gadget reads two challenges per lookup: a denominator base and a combiner.
+        // The single-pair scheme below relies on exactly that width.
+        assert_eq!(
+            lookup_gadget.num_challenges(),
+            2,
+            "single-pair domain separation expects a two-challenge gadget"
+        );
 
-        all_lookups
+        // No lookups means no squeeze, matching a batch that never had lookups.
+        let any_lookup = all_lookups.iter().any(|c| !c.as_ref().is_empty());
+        if !any_lookup {
+            return all_lookups.iter().map(|_| Vec::new()).collect();
+        }
+
+        // Draw the single (alpha, beta) pair for the whole batch.
+        // This is the only lookup squeeze: two draws, not two per bus.
+        let alpha: SC::Challenge = self.challenger.sample_algebra_element();
+        let beta: SC::Challenge = self.challenger.sample_algebra_element();
+
+        // Assign each bus a global index and measure the widest payload.
+        //
+        // - Global buses share an index by name, so cross-instance messages cancel.
+        // - Local buses take a fresh index each, so nothing else can cancel them.
+        // - The widest payload fixes where the bus offset sits, one power above it.
+        let mut global_index: HashMap<&str, usize> = HashMap::new();
+        let mut next_bus = 0usize;
+        let mut max_message_width = 1usize;
+        let bus_ids: Vec<Vec<usize>> = all_lookups
             .iter()
             .map(|contexts| {
                 contexts
                     .as_ref()
                     .iter()
-                    .flat_map(|ctx| match &ctx.kind {
-                        Kind::Global(name) => global
-                            .entry(name)
-                            .or_insert_with(|| self.sample_n_challenges(n))
-                            .clone(),
-                        Kind::Local => self.sample_n_challenges(n),
+                    .map(|ctx| {
+                        // A lookup's payload width is the largest tuple it carries.
+                        for tuple in &ctx.elements {
+                            max_message_width = max_message_width.max(tuple.len());
+                        }
+                        match &ctx.kind {
+                            Kind::Global(name) => *global_index.entry(name).or_insert_with(|| {
+                                let id = next_bus;
+                                next_bus += 1;
+                                id
+                            }),
+                            Kind::Local => {
+                                let id = next_bus;
+                                next_bus += 1;
+                                id
+                            }
+                        }
                     })
+                    .collect()
+            })
+            .collect();
+
+        // Precompute every bus offset once from the sampled pair.
+        let challenges = Challenges::new(alpha, beta, max_message_width, next_bus);
+
+        // Lay the challenges out per instance, one pair per lookup.
+        //
+        //     [ prefix[bus_0], beta, prefix[bus_1], beta, ... ]
+        //
+        // The gadget computes `base - combined`.
+        // Passing `prefix[bus]` as the base yields the domain-separated denominator.
+        bus_ids
+            .iter()
+            .map(|instance_buses| {
+                instance_buses
+                    .iter()
+                    .flat_map(|&bus| [challenges.bus_prefix[bus], beta])
                     .collect()
             })
             .collect()
@@ -137,11 +206,5 @@ impl<SC: SGC> BatchTranscript<SC> {
     fn observe_usize(&mut self, v: usize) {
         self.challenger
             .observe_base_as_algebra_element::<Challenge<SC>>(Val::<SC>::from_usize(v));
-    }
-
-    fn sample_n_challenges(&mut self, n: usize) -> Vec<SC::Challenge> {
-        (0..n)
-            .map(|_| self.challenger.sample_algebra_element())
-            .collect()
     }
 }

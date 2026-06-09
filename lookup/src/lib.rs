@@ -11,6 +11,7 @@ extern crate alloc;
 
 mod builder;
 mod bus;
+mod challenges;
 mod count;
 pub mod debug_util;
 pub mod folder;
@@ -24,6 +25,7 @@ mod types;
 
 pub use builder::{InteractionBuilder, SymbolicInteraction, SymbolicLocalInteraction};
 pub use bus::{LookupBus, PermutationCheckBus};
+pub use challenges::Challenges;
 pub use count::Count;
 pub use logup::LogUpGadget;
 pub use protocol::LookupProtocol;
