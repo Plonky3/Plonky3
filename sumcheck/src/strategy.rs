@@ -405,10 +405,30 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
         debug_assert_eq!(self.sum, self.poly.dot_product());
     }
 
-    /// Applies a scalar to the evaluation side and the matching residual claim.
-    pub(crate) fn scale_evals_and_claim(&mut self, scale: EF) {
-        self.poly.scale_evals(scale);
+    /// Applies a scalar to the weight side and the matching residual claim.
+    ///
+    /// Leaves the evaluation side untouched, so downstream reductions can
+    /// reuse it as the honest folded message.
+    pub(crate) fn scale_weights_and_claim(&mut self, scale: EF) {
+        self.poly.scale_weights(scale);
         self.sum *= scale;
+    }
+
+    /// Extracts the current weight polynomial as scalar extension-field elements.
+    pub fn weights(&self) -> Poly<EF> {
+        self.poly.weights()
+    }
+
+    /// Folds a dense weight increment and its claim contribution into the prover.
+    ///
+    /// # Invariant
+    ///
+    /// The caller guarantees `sum_delta == <evals, weights_delta>`, restoring
+    /// the running invariant `sum == dot_product` after the update.
+    pub fn accumulate_claim(&mut self, weights_delta: &[EF], sum_delta: EF) {
+        self.poly.accumulate_weights(weights_delta);
+        self.sum += sum_delta;
+        debug_assert_eq!(self.sum, self.poly.dot_product());
     }
 
     /// Runs additional sumcheck rounds, optionally incorporating a new constraint.

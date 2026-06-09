@@ -33,6 +33,20 @@ pub trait ZkEncoding<F: Field> {
     /// - Callers stay agnostic to the field's sampling bound.
     fn sample_message<R: Rng>(&self, rng: &mut R) -> Vec<F>;
 
+    /// Samples encoding randomness from this encoding's randomness space.
+    ///
+    /// # Returns
+    ///
+    /// A vector of length `randomness_len`.
+    ///
+    /// # Why an explicit draw
+    ///
+    /// - Some callers later reveal blinded linear combinations of the
+    ///   randomness (e.g. an HVZK base case).
+    /// - Those callers draw it here and encode with the explicit-randomness
+    ///   entry point, retaining the vector.
+    fn sample_randomness<R: Rng>(&self, rng: &mut R) -> Vec<F>;
+
     /// Encodes a message with random masking.
     fn encode<R: Rng>(&self, msg: &[F], rng: &mut R) -> Self::Codeword;
 

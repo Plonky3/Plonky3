@@ -72,16 +72,12 @@ where
         self.inner.strategy()
     }
 
-    fn validate_shape<M>(
+    fn validate_shape(
         zk_data: &ZkSumcheckData<F, EF>,
-        mask_commits: &[M::Commitment],
         ell_zk: usize,
         folding_factor: usize,
         pow_bits: usize,
-    ) -> Result<(), SumcheckError>
-    where
-        M: Mmcs<EF>,
-    {
+    ) -> Result<(), SumcheckError> {
         assert!(F::TWO != F::ZERO, "Lemma 6.4 requires char(F) != 2");
         assert!(
             ell_zk >= 3,
@@ -99,12 +95,6 @@ where
             return Err(SumcheckError::RoundCountMismatch {
                 expected: folding_factor,
                 actual: zk_data.round_coefficients.len(),
-            });
-        }
-        if mask_commits.len() != folding_factor {
-            return Err(SumcheckError::MaskCommitmentCountMismatch {
-                expected: folding_factor,
-                actual: mask_commits.len(),
             });
         }
         let expected_pow = if pow_bits > 0 { folding_factor } else { 0 };
@@ -132,7 +122,7 @@ where
 
     fn replay_claim_unchecked<M, Ch>(
         zk_data: &ZkSumcheckData<F, EF>,
-        mask_commits: &[M::Commitment],
+        mask_commitment: &M::Commitment,
         folding_factor: usize,
         pow_bits: usize,
         claimed_sum: EF,
@@ -142,9 +132,7 @@ where
         M: Mmcs<EF>,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     {
-        for commit in mask_commits {
-            challenger.observe(commit.clone());
-        }
+        challenger.observe(mask_commitment.clone());
         challenger.observe_algebra_element(zk_data.mu_tilde);
         let eps: EF = challenger.sample_algebra_element();
 
@@ -233,7 +221,7 @@ where
     /// # Errors
     ///
     /// - Mismatch between the verifier-side and proof-side mask code length.
-    /// - Wrong number of rounds, mask commitments, or PoW witnesses.
+    /// - Wrong number of rounds or PoW witnesses.
     /// - A per-round wire of the wrong shape.
     /// - A failing proof-of-work witness check.
     ///
@@ -246,7 +234,7 @@ where
     pub fn into_sumcheck<M, Ch>(
         self,
         zk_data: &ZkSumcheckData<F, EF>,
-        mask_commits: &[M::Commitment],
+        mask_commitment: &M::Commitment,
         ell_zk: usize,
         folding_factor: usize,
         pow_bits: usize,
@@ -257,7 +245,7 @@ where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     {
         // Phase 1: shape checks (input validation before Construction 6.3 replay).
-        Self::validate_shape::<M>(zk_data, mask_commits, ell_zk, folding_factor, pow_bits)?;
+        Self::validate_shape(zk_data, ell_zk, folding_factor, pow_bits)?;
 
         // Phase 2: transcript prelude (matches the prover byte-for-byte; replays Construction 6.3 setup).
 
@@ -265,10 +253,10 @@ where
         let alpha: EF = challenger.sample_algebra_element();
         let mu = self.inner.sum(alpha);
 
-        // Phase 3: absorb mask commits and mu_tilde, sample eps, and walk the round chain.
+        // Phase 3: absorb the mask commitment and mu_tilde, sample eps, and walk the round chain.
         Self::replay_claim_unchecked::<M, _>(
             zk_data,
-            mask_commits,
+            mask_commitment,
             folding_factor,
             pow_bits,
             mu,
@@ -287,7 +275,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn verify_claim<M, Ch>(
         zk_data: &ZkSumcheckData<F, EF>,
-        mask_commits: &[M::Commitment],
+        mask_commitment: &M::Commitment,
         ell_zk: usize,
         folding_factor: usize,
         pow_bits: usize,
@@ -298,11 +286,11 @@ where
         M: Mmcs<EF>,
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanObserve<M::Commitment>,
     {
-        Self::validate_shape::<M>(zk_data, mask_commits, ell_zk, folding_factor, pow_bits)?;
+        Self::validate_shape(zk_data, ell_zk, folding_factor, pow_bits)?;
         challenger.observe_algebra_element(claimed_sum);
         Self::replay_claim_unchecked::<M, _>(
             zk_data,
-            mask_commits,
+            mask_commitment,
             folding_factor,
             pow_bits,
             claimed_sum,
@@ -412,7 +400,7 @@ mod tests {
         // Verifier replay against the tampered proof.
         let result = run.verifier.clone().into_sumcheck::<MyMmcs, _>(
             &run.zk_data,
-            &run.mask_commits,
+            &run.mask_commitment,
             ell_zk,
             folding_factor,
             pow_bits,
@@ -491,7 +479,7 @@ mod tests {
         let wrong_ell_zk = ell_zk + 1;
         let result = run.verifier.clone().into_sumcheck::<MyMmcs, _>(
             &run.zk_data,
-            &run.mask_commits,
+            &run.mask_commitment,
             wrong_ell_zk,
             folding_factor,
             pow_bits,
@@ -618,7 +606,7 @@ mod tests {
         let mut honest_v_challenger = run.verifier_challenger.clone();
         let honest_result = honest_verifier.into_sumcheck::<MyMmcs, _>(
             &run.zk_data,
-            &run.mask_commits,
+            &run.mask_commitment,
             ell_zk,
             folding_factor,
             pow_bits,
@@ -632,7 +620,7 @@ mod tests {
         let mut tampered_v_challenger = run.verifier_challenger.clone();
         let tampered_result = tampered_verifier.into_sumcheck::<MyMmcs, _>(
             &tampered_zk_data,
-            &run.mask_commits,
+            &run.mask_commitment,
             ell_zk,
             folding_factor,
             pow_bits,

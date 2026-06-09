@@ -4,8 +4,8 @@ use alloc::vec::Vec;
 
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, HornerIter};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_multilinear_util::point::Point;
-use p3_zk_codes::ZkEncoding;
 use serde::{Deserialize, Serialize};
 
 use crate::strategy::SumcheckProver;
@@ -81,25 +81,28 @@ impl<F, EF: Field> Default for ZkSumcheckData<F, EF> {
     }
 }
 
-/// Handle to one encoded mask codeword.
+/// Handle to one committed batch of interleaved mask codewords.
 ///
-/// Pairs the public Merkle root with the prover-side data needed to open the codeword at requested positions.
-/// Downstream consumers use this during the codeswitch step to produce opening proofs against the mask oracles.
-pub type MaskOracle<EF, Enc, M> = (
+/// - Pairs the public Merkle root with the prover-side data needed to open
+///   the batch at requested positions.
+/// - Row `z` of the committed matrix holds position `z` of every mask in
+///   the batch.
+/// - One Merkle path therefore authenticates all of them.
+pub type MaskOracle<EF, M> = (
     <M as Mmcs<EF>>::Commitment,
-    <M as Mmcs<EF>>::ProverData<<Enc as ZkEncoding<EF>>::Codeword>,
+    <M as Mmcs<EF>>::ProverData<RowMajorMatrix<EF>>,
 );
 
 /// Typed prover handoff produced by the HVZK sumcheck.
 ///
-/// Downstream code-switching needs both the residual prover and the sampled
-/// `eps` scale. Carrying them in a named type makes the Construction 6.3 to
-/// Construction 9.7 boundary explicit.
-pub struct ZkSumcheckHandoff<F, EF, Enc, M>
+/// - Downstream code-switching needs both the residual prover and the
+///   sampled `eps` scale.
+/// - A named type makes the Construction 6.3 to Construction 9.7 boundary
+///   explicit.
+pub struct ZkSumcheckHandoff<F, EF, M>
 where
     F: Field,
     EF: ExtensionField<F>,
-    Enc: ZkEncoding<EF>,
     M: Mmcs<EF>,
 {
     /// Residual sumcheck prover whose claim is scaled by `eps`.
@@ -113,8 +116,13 @@ where
     /// These are prover-only witnesses. Code-switch composition uses them to
     /// carry the verifier-visible masked residual as auxiliary linear claims.
     pub mask_messages: Vec<Vec<EF>>,
-    /// Encoded mask oracles, in round order.
-    pub mask_oracles: Vec<MaskOracle<EF, Enc, M>>,
+    /// Encoding randomness used for each mask, in round order.
+    ///
+    /// Prover-only. The HVZK base case reveals blinded combinations
+    /// `r* = r' + gamma * r`, which requires the raw values.
+    pub mask_randomness: Vec<Vec<EF>>,
+    /// The batch's interleaved mask oracle: one commitment, `k` columns.
+    pub mask_oracle: MaskOracle<EF, M>,
 }
 
 /// Typed verifier handoff produced by replaying an HVZK sumcheck transcript.
@@ -155,9 +163,6 @@ where
 }
 
 /// Linear covectors whose dot products with the masks equal [`mask_residual`].
-///
-/// TODO(#1587): plug this into the code-switching round when the residual mask
-/// claims are carried into Construction 9.7.
 #[must_use]
 pub fn mask_residual_covectors<EF>(masks: &[Vec<EF>], gammas: &[EF]) -> Vec<Vec<EF>>
 where
@@ -174,9 +179,7 @@ where
 /// Linear covectors for masks with a known rectangular shape.
 ///
 /// The covector for mask `s_j` is `[1, gamma_j, gamma_j^2, ...]`.
-///
-/// TODO(#1587): use this shape-only variant when deriving verifier-side mask
-/// covectors from the ZK sumcheck handoff.
+/// Code-switch composition carries these as the fresh sumcheck-mask claims.
 #[must_use]
 pub fn mask_residual_covectors_from_shape<EF: Field>(
     mask_count: usize,
@@ -203,10 +206,6 @@ mod tests {
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
-
-    fn ef(x: u64) -> EF {
-        EF::from_u64(x)
-    }
 
     fn reference_mask_recurrence<EF>(masks: &[Vec<EF>], gammas: &[EF]) -> EF
     where
@@ -264,11 +263,26 @@ mod tests {
     #[test]
     fn mask_residual_closed_form_matches_round_recurrence() {
         let masks = vec![
-            vec![ef(3), ef(5), ef(7), ef(11)],
-            vec![ef(13), ef(17), ef(19), ef(23)],
-            vec![ef(29), ef(31), ef(37), ef(41)],
+            vec![
+                EF::from_u64(3),
+                EF::from_u64(5),
+                EF::from_u64(7),
+                EF::from_u64(11),
+            ],
+            vec![
+                EF::from_u64(13),
+                EF::from_u64(17),
+                EF::from_u64(19),
+                EF::from_u64(23),
+            ],
+            vec![
+                EF::from_u64(29),
+                EF::from_u64(31),
+                EF::from_u64(37),
+                EF::from_u64(41),
+            ],
         ];
-        let gammas = vec![ef(43), ef(47), ef(53)];
+        let gammas = vec![EF::from_u64(43), EF::from_u64(47), EF::from_u64(53)];
 
         assert_eq!(
             mask_residual::<EF>(&masks, &gammas),
@@ -278,8 +292,11 @@ mod tests {
 
     #[test]
     fn mask_residual_covectors_evaluate_closed_form() {
-        let masks = vec![vec![ef(2), ef(3), ef(5)], vec![ef(7), ef(11), ef(13)]];
-        let gammas = vec![ef(17), ef(19)];
+        let masks = vec![
+            vec![EF::from_u64(2), EF::from_u64(3), EF::from_u64(5)],
+            vec![EF::from_u64(7), EF::from_u64(11), EF::from_u64(13)],
+        ];
+        let gammas = vec![EF::from_u64(17), EF::from_u64(19)];
         let covectors = mask_residual_covectors::<EF>(&masks, &gammas);
         let by_covectors = masks
             .iter()

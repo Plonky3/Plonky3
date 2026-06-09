@@ -30,6 +30,7 @@ p3-util.workspace = true
 p3-zk-codes.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive", "alloc"] }
+spin.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
@@ -58,6 +59,10 @@ harness = false
 
 [[bench]]
 name = "whir_pcs"
+harness = false
+
+[[bench]]
+name = "zk_overhead"
 harness = false
 
 [[example]]

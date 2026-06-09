@@ -101,6 +101,12 @@ pub enum Observe {
     /// The wire skips the linear coefficient and has
     /// `max(ell_zk, 3) - 1` extension-field elements.
     ZkSumcheckPoly,
+    /// Joint claim bound before an HVZK residual sumcheck batch.
+    ZkSumcheckClaim,
+    /// Fresh-side claim `mu_g` of the HVZK base case.
+    ZkBaseCaseClaim,
+    /// Blinded one-time-pad reveals of the HVZK base case.
+    ZkBaseCaseReveal,
 }
 
 impl Observe {

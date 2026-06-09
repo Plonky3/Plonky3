@@ -8,7 +8,7 @@ use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, HornerIter, TwoAdicField, dot_product};
 use p3_matrix::Matrix;
 use p3_multilinear_util::point::Point;
-use p3_zk_codes::ZkEncoding;
+use p3_zk_codes::{ZkEncoding, ZkEncodingWithRandomness};
 use rand::Rng;
 
 use super::common::{observe_masks_and_mu_tilde, sample_masks};
@@ -86,7 +86,7 @@ impl<F, EF, Enc, M, L> ZkProver<F, EF, Enc, M, L>
 where
     F: TwoAdicField,
     EF: ExtensionField<F>,
-    Enc: ZkEncoding<EF>,
+    Enc: ZkEncodingWithRandomness<EF>,
     M: Mmcs<EF>,
     L: ZkLayout<F, EF>,
 {
@@ -159,7 +159,7 @@ where
         pow_bits: usize,
         challenger: &mut Ch,
         rng: &mut R,
-    ) -> ZkSumcheckHandoff<F, EF, Enc, M>
+    ) -> ZkSumcheckHandoff<F, EF, M>
     where
         EF: TwoAdicField,
         Enc::Codeword: Matrix<EF>,
@@ -217,7 +217,7 @@ where
         // Phase 2: sample, encode, commit, observe masks (Construction 6.3 step 1).
         //
         // The encoder draws zero-knowledge padding randomness from the same rng.
-        let (masks, mask_oracles) =
+        let (masks, mask_randomness, mask_oracle) =
             sample_masks::<EF, _, _, _, _>(k, &self.encoding, &self.mmcs, challenger, rng);
 
         // Phase 3: mu_tilde via the closed form (Construction 6.3 step 2).
@@ -355,7 +355,8 @@ where
             randomness: rs,
             eps,
             mask_messages: masks,
-            mask_oracles,
+            mask_randomness,
+            mask_oracle,
         }
     }
 }
