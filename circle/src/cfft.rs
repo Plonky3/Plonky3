@@ -148,49 +148,67 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
             // both `x_1` and `x_2` are set to `x_1`).
             // So instead we directly repeat the coeffs and skip the initial layers.
             //
-            // Performing the repeated doublings via `extend_from_within(..)` is
-            // a single-threaded `memcpy`. Once the buffer is large enough
-            // (multi-GiB for production-sized traces) it becomes a bandwidth-
-            // bound bottleneck. Compose the final repetition pattern directly
-            // (`new_row[i] = orig[i % initial_h]` after any number of
-            // doublings) and fill the new region in parallel: every
-            // destination row is written exactly once and the source region is
-            // only read, so the parallel writes do not race.
+            // After any number of doublings the buffer is the original `h` rows tiled end to end.
+            // Output row `j` is therefore a copy of original row `j mod h`.
+            //
+            //     originals : r_0 r_1 ... r_{h-1}
+            //     filled    : r_0 ... r_{h-1} | r_0 ... r_{h-1} | r_0 ... r_{h-1}
+            //                 \_h originals_/   \___ identical tiled copies ___/
+            //
+            // Reserve the full target once, then fill the new tail in parallel.
+            // Each tail row is written by exactly one task.
+            // The original rows are only read.
+            // So the concurrent writes never race.
             debug_span!("extend coeffs").in_scope(|| {
                 let w = coeffs.width();
+                // Rows present before the blow-up.
                 let initial_h = coeffs.height();
+                // Rows required after the blow-up.
                 let target_h = domain.size();
                 let initial_len = initial_h * w;
                 let target_len = target_h * w;
 
+                // Grow to the final size in one allocation; the tail stays uninitialised.
                 coeffs.values.reserve_exact(target_len - initial_len);
 
-                // SAFETY: We just reserved space for `target_len - initial_len`
-                // more elements. `initial_region` and `new_region` are disjoint
-                // views into the same allocation (`new_region` starts at
-                // `initial_len`). Each row of `new_region` is written by
-                // exactly one Rayon task. `initial_region` is only read.
-                // `F: Copy + Send + Sync` so per-element writes do not drop
-                // existing values and cross-thread sharing is sound.
+                // SAFETY:
+                // - The reservation above guarantees capacity for `target_len` elements.
+                // - The read view covers `[0, initial_len)`.
+                // - The write view covers `[initial_len, target_len)`.
+                // - The two ranges are disjoint parts of one allocation.
+                // - Each tail row is handed to exactly one task, so the writes never alias.
+                // - `MaybeUninit::write` stores without reading or dropping the prior bytes.
+                // - The length is updated only after every tail element is written.
                 unsafe {
+                    // Base pointer of the reserved allocation.
                     let ptr = coeffs.values.as_mut_ptr();
+
+                    // Read-only view of the rows already present.
                     let initial_region: &[F] = core::slice::from_raw_parts(ptr, initial_len);
+
+                    // Write view of the uninitialised tail, just past the existing rows.
                     let new_region: &mut [MaybeUninit<F>] = core::slice::from_raw_parts_mut(
                         ptr.add(initial_len).cast::<MaybeUninit<F>>(),
                         target_len - initial_len,
                     );
 
+                    // One task per destination row.
                     new_region
                         .par_chunks_mut(w)
                         .enumerate()
                         .for_each(|(i, dst_row)| {
+                            // `i` indexes the tail, so this is global output row `initial_h + i`.
+                            // The tail starts on a multiple of `initial_h`.
+                            // So the source row reduces to `i mod initial_h`.
                             let src_row_start = (i % initial_h) * w;
                             let src_row = &initial_region[src_row_start..src_row_start + w];
+                            // Copy the chosen original row into this tail slot.
                             for (dst, &src) in dst_row.iter_mut().zip(src_row) {
                                 dst.write(src);
                             }
                         });
 
+                    // Every tail element is initialised; publish them as live `Vec` entries.
                     coeffs.values.set_len(target_len);
                 }
             });
