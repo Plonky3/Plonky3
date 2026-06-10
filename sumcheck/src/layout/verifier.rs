@@ -194,25 +194,23 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     /// - Concrete openings first, walked in stacked-polynomial order.
     /// - Virtual claims continue the alpha sequence after the concrete ones.
     pub fn sum(&self, alpha: EF) -> EF {
-        let mut sum = EF::ZERO;
-        let mut alphas = alpha.powers();
-
-        // Concrete openings: three loops, no filter. Alphas match insertion order.
-        for placement in &self.placements {
-            for claim in &self.claim_map[placement.idx()] {
-                for opening in claim.openings() {
-                    sum += opening.eval() * alphas.next().unwrap();
-                }
-            }
-        }
+        // Concrete openings: three nested iterators, no filter. Alphas match insertion order.
+        let concrete = dot_product::<EF, _, _>(
+            self.placements
+                .iter()
+                .flat_map(|placement| &self.claim_map[placement.idx()])
+                .flat_map(VerifierMultiClaim::openings)
+                .map(VerifierOpening::eval),
+            alpha.powers(),
+        );
 
         // Virtual claims: continue the alpha sequence right after the concrete ones.
-        sum += dot_product::<EF, _, _>(
+        let virtuals = dot_product::<EF, _, _>(
             self.virtual_claims.iter().map(VerifierVirtualClaim::eval),
             alpha.shifted_powers(alpha.exp_u64(self.num_claims() as u64)),
         );
 
-        sum
+        concrete + virtuals
     }
 
     /// Builds the verifier-side equality constraint batching every claim.
@@ -231,7 +229,11 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
             for claim in &self.claim_map[placement.idx()] {
                 for opening in claim.openings() {
                     // The opening's column tells us which selector to lift through.
-                    let col = opening.poly_idx().unwrap();
+                    // Claims recorded through `add_claim` always bind a column,
+                    // so a virtual (column-free) opening cannot appear here.
+                    let col = opening
+                        .poly_idx()
+                        .expect("concrete claims only hold column-bound openings");
                     let lifted = if self.strategy.reverse_selectors {
                         placement.selectors()[col].lift_suffix(claim.point())
                     } else {
