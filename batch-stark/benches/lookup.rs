@@ -266,15 +266,7 @@ const CASES: &[Case] = &[
         n_airs: 1,
     },
     // Fold: 8 lookups, more merged per column → fewer columns, higher degree.
-    Case {
-        name: "fold=1",
-        log_height: 14,
-        n_interactions: 8,
-        tuple_width: 1,
-        fold: 1,
-        active_period: 1,
-        n_airs: 1,
-    },
+    // Case `fold=1` contained in case `n=8` above
     Case {
         name: "fold=2",
         log_height: 14,
