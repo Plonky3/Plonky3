@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::mem::MaybeUninit;
 
-use itertools::{Itertools, iterate, izip};
+use itertools::{Itertools, iterate};
 use p3_commit::PolynomialSpace;
 use p3_dft::{Butterfly, DifButterfly, DitButterfly, divide_by_height};
 use p3_field::extension::ComplexExtendable;
@@ -48,7 +48,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         let Self { domain, values } = self;
         let mut values = debug_span!("to_rmm").in_scope(|| values.to_row_major_matrix());
 
-        let mut twiddles = debug_span!("twiddles").in_scope(|| {
+        let twiddles = debug_span!("twiddles").in_scope(|| {
             compute_twiddles(domain)
                 .into_iter()
                 .map(|ts| {
@@ -57,34 +57,12 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
                         .map(|t| DifButterfly(t))
                         .collect_vec()
                 })
-                .peekable()
+                .collect_vec()
         });
 
         assert_eq!(twiddles.len(), domain.log_n);
 
-        let par_twiddles = twiddles
-            .peeking_take_while(|ts| ts.len() >= desired_num_jobs())
-            .collect_vec();
-        if let Some(min_blks) = par_twiddles.last().map(|ts| ts.len()) {
-            let max_blk_sz = values.height() / min_blks;
-            debug_span!("par_layers", log_min_blks = log2_strict_usize(min_blks)).in_scope(|| {
-                values
-                    .par_row_chunks_exact_mut(max_blk_sz)
-                    .enumerate()
-                    .for_each(|(chunk_i, submat)| {
-                        for ts in &par_twiddles {
-                            let twiddle_chunk_sz = ts.len() / min_blks;
-                            let twiddle_chunk = &ts
-                                [(twiddle_chunk_sz * chunk_i)..(twiddle_chunk_sz * (chunk_i + 1))];
-                            serial_layer(submat.values, twiddle_chunk);
-                        }
-                    });
-            });
-        }
-
-        for ts in twiddles {
-            par_within_blk_layer(&mut values.values, &ts);
-        }
+        cfft_layers(&mut values.values, values.width, &twiddles);
 
         // TODO: omit this?
         divide_by_height(&mut values);
@@ -251,67 +229,122 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
         }
         assert_eq!(coeffs.height(), 1 << domain.log_n);
 
-        let mut twiddles = debug_span!("twiddles").in_scope(|| {
+        let twiddles = debug_span!("twiddles").in_scope(|| {
             compute_twiddles(domain)
                 .into_iter()
                 .map(|ts| ts.into_iter().map(|t| DitButterfly(t)).collect_vec())
                 .rev()
                 .skip(domain.log_n - log_n)
-                .peekable()
+                .collect_vec()
         });
 
-        for ts in twiddles.peeking_take_while(|ts| ts.len() < desired_num_jobs()) {
-            par_within_blk_layer(&mut coeffs.values, &ts);
-        }
-
-        let par_twiddles = twiddles.collect_vec();
-        if let Some(min_blks) = par_twiddles.first().map(|ts| ts.len()) {
-            let max_blk_sz = coeffs.height() / min_blks;
-            debug_span!("par_layers", log_min_blks = log2_strict_usize(min_blks)).in_scope(|| {
-                coeffs
-                    .par_row_chunks_exact_mut(max_blk_sz)
-                    .enumerate()
-                    .for_each(|(chunk_i, submat)| {
-                        for ts in &par_twiddles {
-                            let twiddle_chunk_sz = ts.len() / min_blks;
-                            let twiddle_chunk = &ts
-                                [(twiddle_chunk_sz * chunk_i)..(twiddle_chunk_sz * (chunk_i + 1))];
-                            serial_layer(submat.values, twiddle_chunk);
-                        }
-                    });
-            });
-        }
+        cfft_layers(&mut coeffs.values, coeffs.width, &twiddles);
 
         Self::from_cfft_order(domain, coeffs)
     }
 }
 
-#[inline]
-fn serial_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &[B]) {
-    let blk_sz = values.len() / twiddles.len();
-    for (&t, blk) in izip!(twiddles, values.chunks_exact_mut(blk_sz)) {
-        let (lo, hi) = blk.split_at_mut(blk_sz / 2);
-        t.apply_to_rows(lo, hi);
+/// The bit position by which a layer's butterfly partners differ.
+///
+/// A layer whose twiddle array has `blocks` entries acts on `blocks` equal blocks of rows,
+/// pairing the two halves of each block: rows `j` and `j ^ (h / (2 * blocks))`.
+const fn flipped_bit(log_h: usize, blocks: usize) -> usize {
+    log_h - log2_strict_usize(blocks) - 1
+}
+
+/// The binary log of the number of rows each task keeps cache-resident in [`cfft_layers`].
+fn log_group_rows<F>(log_h: usize, width: usize) -> usize {
+    // Cap the per-task working set so that all layers of a pass run from cache.
+    const TARGET_GROUP_BYTES: usize = 1 << 19;
+    let log_cache = log2_ceil_usize(TARGET_GROUP_BYTES / (width * size_of::<F>()).max(1)).max(1);
+    // Keep enough groups around for the thread pool to stay busy, but never fewer than 8 rows
+    // per group so small transforms still fuse several layers per pass.
+    let log_par = log_h
+        .saturating_sub(log2_ceil_usize(4 * current_num_threads()))
+        .max(3);
+    log_cache.min(log_par).min(log_h)
+}
+
+/// Apply a full sequence of butterfly layers, fusing as many layers as possible per pass.
+///
+/// Layers are batched into maximal consecutive runs whose [`flipped_bit`]s fit in a window of
+/// `log_group` bits, `[log_stride, log_stride + log_group)`. The layers of one run only ever
+/// combine rows that agree on all index bits outside that window, so the matrix splits into
+/// independent groups of `2^log_group` rows sitting `2^log_stride` rows apart. Each parallel task
+/// applies every layer of the run to one cache-resident group, costing one pass over memory per
+/// run instead of one per layer.
+fn cfft_layers<F: Field, B: Butterfly<F>>(values: &mut [F], width: usize, layers: &[Vec<B>]) {
+    let h = values.len() / width;
+    let log_h = log2_strict_usize(h);
+    let log_group = log_group_rows::<F>(log_h, width);
+
+    let mut start = 0;
+    while start < layers.len() {
+        let first_bit = flipped_bit(log_h, layers[start].len());
+        let (mut lo_bit, mut hi_bit) = (first_bit, first_bit);
+        let mut end = start + 1;
+        while let Some(ts) = layers.get(end) {
+            let bit = flipped_bit(log_h, ts.len());
+            if bit.max(hi_bit) - bit.min(lo_bit) >= log_group {
+                break;
+            }
+            (lo_bit, hi_bit) = (bit.min(lo_bit), bit.max(hi_bit));
+            end += 1;
+        }
+        let log_stride = lo_bit.min(log_h - log_group);
+        debug_span!("fused_layers", layers = end - start, log_group, log_stride)
+            .in_scope(|| par_group_pass(values, width, &layers[start..end], log_group, log_stride));
+        start = end;
     }
 }
 
-#[inline]
-#[instrument(level = "debug", skip_all, fields(log_blks = log2_strict_usize(twiddles.len())))]
-fn par_within_blk_layer<F: Field, B: Butterfly<F>>(values: &mut [F], twiddles: &[B]) {
-    let blk_sz = values.len() / twiddles.len();
-    for (&t, blk) in izip!(twiddles, values.chunks_exact_mut(blk_sz)) {
-        let (lo, hi) = blk.split_at_mut(blk_sz / 2);
-        let job_sz = core::cmp::max(1, lo.len() >> log2_ceil_usize(desired_num_jobs()));
-        lo.par_chunks_mut(job_sz)
-            .zip(hi.par_chunks_mut(job_sz))
-            .for_each(|(lo_job, hi_job)| t.apply_to_rows(lo_job, hi_job));
-    }
-}
-
-#[inline]
-#[allow(clippy::missing_const_for_fn)]
-fn desired_num_jobs() -> usize {
-    16 * current_num_threads()
+/// Apply consecutive butterfly layers whose [`flipped_bit`]s all lie in
+/// `[log_stride, log_stride + log_group)`, parallelizing over independent row groups.
+///
+/// Group `g = (hi, lo)` consists of the rows `j = hi << (log_group + log_stride) | t << log_stride
+/// | lo` for `t` in `[0, 2^log_group)`. A layer with `b` blocks pairs rows differing in bit
+/// `e = flipped_bit - log_stride` of `t` and applies the twiddle `b * j / h`, which reduces to
+/// index `t >> (e + 1)` into the contiguous twiddle slice for `hi`.
+fn par_group_pass<F: Field, B: Butterfly<F>>(
+    values: &mut [F],
+    width: usize,
+    layers: &[Vec<B>],
+    log_group: usize,
+    log_stride: usize,
+) {
+    let h = values.len() / width;
+    let log_h = log2_strict_usize(h);
+    let num_groups = h >> log_group;
+    let base_addr = values.as_mut_ptr() as usize;
+    (0..num_groups).into_par_iter().for_each(|g| {
+        let base = base_addr as *mut F;
+        let hi = g >> log_stride;
+        let lo = g & ((1 << log_stride) - 1);
+        let first_row = (hi << (log_group + log_stride)) | lo;
+        for ts in layers {
+            let e = flipped_bit(log_h, ts.len()) - log_stride;
+            let slice_len = 1 << (log_group - e - 1);
+            let slice = &ts[hi * slice_len..][..slice_len];
+            for (s, &t) in slice.iter().enumerate() {
+                for u in 0..1usize << e {
+                    let row_lo = first_row + (((s << (e + 1)) | u) << log_stride);
+                    let row_hi = row_lo + (1 << (e + log_stride));
+                    // SAFETY: every row index decomposes uniquely as
+                    // `hi << (log_group + log_stride) | t << log_stride | lo`, so the task for
+                    // group `g = (hi, lo)` is the only one touching its rows, and within a layer
+                    // each row appears in exactly one butterfly, so `row_lo` and `row_hi` never
+                    // alias. All indices stay below `h` since `t < 2^log_group`.
+                    let (row_lo, row_hi) = unsafe {
+                        (
+                            core::slice::from_raw_parts_mut(base.add(row_lo * width), width),
+                            core::slice::from_raw_parts_mut(base.add(row_hi * width), width),
+                        )
+                    };
+                    t.apply_to_rows(row_lo, row_hi);
+                }
+            }
+        }
+    });
 }
 
 impl<F: ComplexExtendable> CircleDomain<F> {
