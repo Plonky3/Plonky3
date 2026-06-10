@@ -24,6 +24,7 @@ p3-bn254 = { path = "../bn254" }
 p3-goldilocks = { path = "../goldilocks" }
 
 num-bigint.workspace = true
+proptest.workspace = true
 
 [lints]
 workspace = true
