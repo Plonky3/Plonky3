@@ -423,6 +423,34 @@ where
         let log_global_max_height =
             proof.fri_proof.commit_phase_commits.len() + self.fri_params.log_blowup + 1;
 
+        // Guard the query-phase height subtraction against an under-reported round count.
+        //
+        // Invariant: the proof's global height covers every claimed matrix.
+        //
+        //     H_proof = commit-phase round count + log_blowup + 1   (first-layer fold)
+        //     H_claim = max committed log_n + log_blowup
+        //
+        // The query phase computes `index >> (log_global_max_height - log_height)`.
+        //   - `log_height <= H_claim` holds for every matrix
+        //   - `H_proof < H_claim` makes that usize subtraction underflow and the shift wrap
+        // Over-reporting is caught downstream (two-adicity bound, Merkle openings), so the
+        // under-report is the only case to reject here.
+        let expected_log_global_max_height = rounds
+            .iter()
+            .flat_map(|(_, mats)| {
+                mats.iter()
+                    .map(|(domain, _)| domain.log_n + self.fri_params.log_blowup)
+            })
+            .max();
+        if let Some(expected) = expected_log_global_max_height
+            && log_global_max_height < expected
+        {
+            return Err(FriError::GlobalMaxHeightMismatch {
+                expected,
+                got: log_global_max_height,
+            });
+        }
+
         let folding: CircleFriFoldingForMmcs<Val, Challenge, InputMmcs, FriMmcs> =
             CircleFriFolding(PhantomData);
 
@@ -832,6 +860,43 @@ mod tests {
         };
         assert_eq!(expected, num_rounds);
         assert_eq!(got, num_rounds - 1);
+    }
+
+    #[test]
+    fn reject_under_reported_commit_rounds() {
+        // Invariant: the reported commit-round count must cover the claimed matrix height.
+        //   - log_global_max_height is derived from the proof's round count
+        //   - under-reporting drives it below a matrix's log_height
+        //   - then `index >> (log_global_max_height - log_height)` would underflow
+        // The verifier must reject before that subtraction runs.
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+
+        // On an honest proof the two height derivations coincide:
+        //
+        //     H_claim = log_n + log_blowup                            (claimed matrix)
+        //     H_proof = commit_phase_commits.len() + log_blowup + 1   (first-layer fold)
+        let log_blowup = pcs.fri_params.log_blowup;
+        let expected = d.log_n + log_blowup;
+        let original = proof.fri_proof.commit_phase_commits.len() + log_blowup + 1;
+        assert_eq!(original, expected, "fixture must start height-consistent");
+
+        // Mutation: drop one commit-phase commitment so the round count falls short.
+        //
+        //     before: commit_phase_commits = [c_0, ..., c_{n-1}]   → H_proof = expected
+        //     after:  commit_phase_commits = [c_0, ..., c_{n-2}]   → H_proof = expected - 1
+        //     → H_proof < H_claim → GlobalMaxHeightMismatch (no underflow)
+        proof.fri_proof.commit_phase_commits.pop();
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("expected GlobalMaxHeightMismatch");
+
+        let FriError::GlobalMaxHeightMismatch { expected: exp, got } = err else {
+            panic!("expected GlobalMaxHeightMismatch, got {err:?}");
+        };
+        // The verifier wants the height the claimed matrix demands.
+        assert_eq!(exp, expected);
+        // The proof under-reports by exactly the one round we removed.
+        assert_eq!(got, expected - 1);
     }
 
     #[test]
