@@ -7,13 +7,10 @@ use p3_field::{
     BasedVectorSpace, PrimeField, PrimeField32, absorb_radix_bits, max_absorb_injective_limbs,
     reduce_packed, split_pf_to_field_order_limbs, squeeze_field_order_num_limbs,
 };
-use p3_maybe_rayon::prelude::*;
 use p3_symmetric::{CryptographicPermutation, Hash, MerkleCap};
-use tracing::instrument;
 
 use crate::{
     CanFinalizeDigest, CanObserve, CanSample, CanSampleBits, DuplexChallenger, FieldChallenger,
-    GrindingChallenger,
 };
 
 /// A challenger that samples in `F: PrimeField32` while the transcript sponge lives in `PF`.
@@ -308,7 +305,8 @@ where
     PF: PrimeField,
     P: CryptographicPermutation<[PF; WIDTH]>,
 {
-    /// Build the proof-of-work acceptance predicate used by [`GrindingChallenger::grind`].
+    /// Build the proof-of-work acceptance predicate used by
+    /// [`GrindingChallenger::grind`](crate::GrindingChallenger::grind).
     ///
     /// The predicate replays `check_witness` = `observe(witness)` + `sample_bits(bits)`
     /// on a stack copy of the sponge state:
@@ -323,7 +321,7 @@ where
     /// Everything except the witness digit is candidate-independent and computed once.
     /// Each call then costs one state copy, one digit write, one permutation,
     /// and one limb split — no clone, no heap allocation.
-    fn pow_check_fn(&self, bits: usize) -> impl Fn(u32) -> bool + Sync + '_ {
+    pub(crate) fn pow_check_fn(&self, bits: usize) -> impl Fn(u32) -> bool + Sync + '_ {
         let rb = self.absorb_radix_bits();
         let absorb_n = self.absorb_num_f_elms();
         let squeeze_n = self.squeeze_num_f_elms();
@@ -374,49 +372,6 @@ where
             let limbs = split_pf_to_field_order_limbs::<PF, F>(state[RATE - 1], squeeze_n);
             (u64::from(limbs[squeeze_n - 1].as_canonical_u32()) & mask) == 0
         }
-    }
-}
-
-impl<F, PF, P, const WIDTH: usize, const RATE: usize> GrindingChallenger
-    for MultiField32Challenger<F, PF, P, WIDTH, RATE>
-where
-    F: PrimeField32,
-    PF: PrimeField,
-    P: CryptographicPermutation<[PF; WIDTH]>,
-{
-    type Witness = F;
-
-    #[instrument(name = "grind for proof-of-work witness", skip_all)]
-    fn grind(&mut self, bits: usize) -> Self::Witness {
-        assert!(bits < (usize::BITS as usize), "bit count must be valid");
-        // Evaluate the bound in `u64` to keep the shift within its type width.
-        // A `u32` shift by `bits >= 32` would wrap and accept a trivial proof-of-work.
-        assert!(
-            (1u64 << bits) < F::ORDER_U64,
-            "requested bit count must fit within the field order"
-        );
-
-        // Trivial case: 0 bits mean no PoW is required and any witness is valid.
-        if bits == 0 {
-            return F::ZERO;
-        }
-
-        // The candidate-independent transcript work happens once inside `pow_check_fn`.
-        // The parallel search then runs one stack-state permutation per candidate.
-        let witness = {
-            let accepts = self.pow_check_fn(bits);
-            (0..F::ORDER_U32)
-                .into_par_iter()
-                .find_any(|&candidate| accepts(candidate))
-                .expect("failed to find proof-of-work witness")
-        };
-        // candidate < F::ORDER_U32 by construction so this is safe.
-        let witness = unsafe { F::from_canonical_unchecked(witness) };
-
-        // Re-run the standard verifier logic to validate the witness and
-        // advance the real transcript state.
-        assert!(self.check_witness(bits, witness));
-        witness
     }
 }
 
