@@ -1,5 +1,4 @@
-//! An implementation of the FRI low-degree test (LDT).
-
+#![doc = include_str!("../README.md")]
 #![no_std]
 
 extern crate alloc;

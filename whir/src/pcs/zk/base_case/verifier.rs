@@ -2,6 +2,7 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
+use core::iter::repeat_n;
 use core::slice::from_ref;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
@@ -120,22 +121,24 @@ where
             proof.blinded_randomness.len(),
             code.randomness_len,
         )?;
-        let mut covector_iter = mask_covectors.iter();
-        let mut blinded_iter = proof.blinded_masks.iter();
-        for group in &self.config.mask_groups {
-            for _ in 0..group.width {
-                // Covector width must match the member's message length.
-                let covector = covector_iter.next().expect("count checked above");
-                count(covector.len(), group.shape.message_len)?;
-                // Reveals must match the member's message and randomness.
-                let mask = blinded_iter.next().expect("count checked above");
-                blinded("mask message", mask.message.len(), group.shape.message_len)?;
-                blinded(
-                    "mask randomness",
-                    mask.randomness.len(),
-                    group.shape.randomness_len,
-                )?;
-            }
+        // One shape per carried mask, in group order; the counts pinned above
+        // guarantee both zips cover every covector and reveal.
+        let shapes = self
+            .config
+            .mask_groups
+            .iter()
+            .flat_map(|group| repeat_n(&group.shape, group.width));
+        for ((covector, mask), shape) in mask_covectors.iter().zip(&proof.blinded_masks).zip(shapes)
+        {
+            // Covector width must match the member's message length.
+            count(covector.len(), shape.message_len)?;
+            // Reveals must match the member's message and randomness.
+            blinded("mask message", mask.message.len(), shape.message_len)?;
+            blinded(
+                "mask randomness",
+                mask.randomness.len(),
+                shape.randomness_len,
+            )?;
         }
 
         // Check 1: replay the prover's moves into the Fiat-Shamir sponge.

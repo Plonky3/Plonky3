@@ -7,7 +7,7 @@ use p3_field::{ExtensionField, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
 
 use crate::pcs::zk::committer::FoldedRsCode;
-use crate::pcs::zk::config::MaskGroupShape;
+use crate::pcs::zk::mask::MaskGroupShape;
 
 /// Shared base-case protocol shape.
 #[derive(Debug, Clone)]

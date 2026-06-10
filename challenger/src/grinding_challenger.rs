@@ -311,14 +311,20 @@ where
             return F::ZERO;
         }
 
-        let witness = (0..F::ORDER_U32)
-            .into_par_iter()
-            .map(|i| unsafe {
-                // i < F::ORDER_U32 by construction so this is safe.
-                F::from_canonical_unchecked(i)
-            })
-            .find_any(|witness| self.clone().check_witness(bits, *witness))
-            .expect("failed to find witness");
+        // The candidate-independent transcript work happens once inside `pow_check_fn`.
+        // The parallel search then runs one stack-state permutation per candidate.
+        let witness = {
+            let accepts = self.pow_check_fn(bits);
+            (0..F::ORDER_U32)
+                .into_par_iter()
+                .find_any(|&candidate| accepts(candidate))
+                .expect("failed to find proof-of-work witness")
+        };
+        // candidate < F::ORDER_U32 by construction so this is safe.
+        let witness = unsafe { F::from_canonical_unchecked(witness) };
+
+        // Re-run the standard verifier logic to validate the witness and
+        // advance the real transcript state.
         assert!(self.check_witness(bits, witness));
         witness
     }
