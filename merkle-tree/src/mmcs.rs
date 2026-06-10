@@ -37,8 +37,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::MerkleTreeError::{
-    CapMismatch, EmptyBatch, IncompatibleHeights, IndexOutOfBounds, MalformedPrunedProof,
-    WrongBatchSize, WrongHeight, WrongWidth,
+    CapMismatch, EmptyBatch, IncompatibleHeights, IndexOutOfBounds, WrongBatchSize, WrongHeight,
+    WrongWidth,
 };
 use crate::merkle_tree::{padded_len, select_arity_step};
 use crate::pruning::{MerkleAuthPath, prune_paths, restore_paths};
@@ -139,9 +139,74 @@ pub enum MerkleTreeError {
     #[error("cap mismatch: computed digest does not match any entry in the Merkle cap")]
     CapMismatch,
 
-    /// A pruned batch opening could not be restored (malformed proof).
-    #[error("malformed pruned proof: cannot restore full authentication paths")]
-    MalformedPrunedProof,
+    /// A pruned batch opening could not be restored or validated.
+    #[error("malformed pruned proof: {0}")]
+    MalformedPrunedProof(#[from] PrunedProofError),
+}
+
+/// Why a pruned batch opening was rejected.
+///
+/// Each variant pins one failure mode with its diagnostic fields.
+#[derive(Debug, Error)]
+pub enum PrunedProofError {
+    /// More unique paths than the tree can hold.
+    #[error("too many unique paths: {got} exceeds tree height {max_height}")]
+    TooManyUniquePaths {
+        /// Number of unique paths claimed by the proof.
+        got: usize,
+        /// Maximum admissible height (the tallest committed matrix).
+        max_height: usize,
+    },
+
+    /// A restored path has the wrong number of siblings for the tree geometry.
+    #[error("restored path has {got} siblings, expected {expected}")]
+    SiblingCountMismatch {
+        /// Sibling count implied by the verifier-known arity schedule.
+        expected: usize,
+        /// Sibling count produced while restoring the path.
+        got: usize,
+    },
+
+    /// An `original_order` entry references a unique-path slot that does not exist.
+    #[error("original-order references missing path slot {slot} of {num_paths}")]
+    OriginalOrderOutOfRange {
+        /// Slot index referenced by the entry.
+        slot: usize,
+        /// Number of unique paths actually present.
+        num_paths: usize,
+    },
+
+    /// Two queries map to one path but disagree on opened values.
+    #[error("duplicate queries for path slot {slot} disagree on opened values")]
+    InconsistentDuplicateOpenings {
+        /// Unique-path slot the conflicting queries map to.
+        slot: usize,
+    },
+
+    /// A unique path is never referenced by any query.
+    #[error("unique path slot {slot} is never referenced by a query")]
+    UnreferencedPath {
+        /// Slot that no `original_order` entry points to.
+        slot: usize,
+    },
+
+    /// Sorted leaf indices are not strictly ascending.
+    #[error("leaf indices not strictly ascending at position {position}: index {index}")]
+    NonAscendingLeaves {
+        /// Position of the offending path in the sorted list.
+        position: usize,
+        /// Leaf index that fails to exceed its predecessor.
+        index: usize,
+    },
+
+    /// The path and query counts are inconsistent (e.g. queries present but no paths).
+    #[error("path/query count mismatch: {num_paths} paths but {num_queries} queries")]
+    PathQueryCountMismatch {
+        /// Number of unique paths.
+        num_paths: usize,
+        /// Number of original queries.
+        num_queries: usize,
+    },
 }
 
 /// Check that each opened row has exactly the width of its matrix.
@@ -693,12 +758,23 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         let arity_schedule = self.proof_arity_schedule(dimensions)?;
         let full_sibling_count: usize = arity_schedule.iter().map(|step| step - 1).sum();
 
+        // Invariant: leaf indices are strictly ascending and distinct in `[0, max_height)`.
+        //   => a valid proof has at most `max_height` unique paths.
+        // Reject an oversized count here, using verifier-known `max_height`.
+        // Otherwise `restore_paths` expands `n_unique * full_sibling_count` digests first.
+        if pruned_opening.pruned_proof.paths.len() > max_height {
+            return Err(PrunedProofError::TooManyUniquePaths {
+                got: pruned_opening.pruned_proof.paths.len(),
+                max_height,
+            }
+            .into());
+        }
+
         // Phase 2: Restore the full (unpruned) authentication paths from the
         // compact representation. We index siblings level by level during the
         // amortized walk, so we materialize the per-path buffers once and
         // borrow them throughout.
-        let restored = restore_paths(&pruned_opening.pruned_proof, full_sibling_count)
-            .ok_or(MalformedPrunedProof)?;
+        let restored = restore_paths(&pruned_opening.pruned_proof, full_sibling_count)?;
 
         let original_order = &pruned_opening.pruned_proof.original_order;
         let sorted_paths = &pruned_opening.pruned_proof.paths;
@@ -715,7 +791,11 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             return if n_originals == 0 {
                 Ok(pruned_opening.opened_values)
             } else {
-                Err(MalformedPrunedProof)
+                Err(PrunedProofError::PathQueryCountMismatch {
+                    num_paths: 0,
+                    num_queries: n_originals,
+                }
+                .into())
             };
         }
 
@@ -727,7 +807,11 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         for (orig_idx, &sorted_idx) in original_order.iter().enumerate() {
             let sorted_idx = sorted_idx as usize;
             if sorted_idx >= n_unique {
-                return Err(MalformedPrunedProof);
+                return Err(PrunedProofError::OriginalOrderOutOfRange {
+                    slot: sorted_idx,
+                    num_paths: n_unique,
+                }
+                .into());
             }
             match reps[sorted_idx] {
                 None => reps[sorted_idx] = Some(orig_idx),
@@ -735,7 +819,10 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                     if pruned_opening.opened_values[rep_idx]
                         != pruned_opening.opened_values[orig_idx]
                     {
-                        return Err(MalformedPrunedProof);
+                        return Err(PrunedProofError::InconsistentDuplicateOpenings {
+                            slot: sorted_idx,
+                        }
+                        .into());
                     }
                 }
             }
@@ -743,8 +830,9 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         // Every unique sorted slot must be reached by at least one original.
         let reps: Vec<usize> = reps
             .into_iter()
-            .map(|r| r.ok_or(MalformedPrunedProof))
-            .collect::<Result<_, _>>()?;
+            .enumerate()
+            .map(|(slot, r)| r.ok_or(PrunedProofError::UnreferencedPath { slot }))
+            .collect::<Result<Vec<usize>, PrunedProofError>>()?;
 
         // Phase 4: Shape and ordering invariants for the unique paths.
         // - Each opening's per-matrix count must match `dimensions`.
@@ -758,9 +846,13 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             // Row boundaries within a flattened leaf hash are only pinned by the widths.
             check_widths(dimensions, &pruned_opening.opened_values[rep])?;
         }
-        for window in sorted_paths.windows(2) {
+        for (position, window) in sorted_paths.windows(2).enumerate() {
             if window[0].leaf_index >= window[1].leaf_index {
-                return Err(MalformedPrunedProof);
+                return Err(PrunedProofError::NonAscendingLeaves {
+                    position: position + 1,
+                    index: window[1].leaf_index,
+                }
+                .into());
             }
         }
 
@@ -1242,7 +1334,7 @@ mod tests {
     use rand::rngs::SmallRng;
 
     use super::{MerkleTreeMmcs, validate_commit_reachable_heights};
-    use crate::MerkleTreeError;
+    use crate::{MerkleTreeError, PrunedProofError};
 
     type F = BabyBear;
 
@@ -2530,6 +2622,44 @@ mod tests {
     }
 
     #[test]
+    fn pruned_opening_rejects_more_paths_than_tree_height() {
+        // A valid proof holds at most `max_height` unique paths:
+        //   leaf indices are strictly ascending and distinct in `[0, max_height)`.
+        // Claiming more is rejected before any per-path scratch is allocated.
+        let seed = 123u64;
+        let mmcs = make_binary_mmcs(seed);
+
+        let mut rng = SmallRng::seed_from_u64(seed);
+        // Height 8 -> max_height = 8.
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 8, 4);
+        let dims = vec![mat.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        let indices: Vec<usize> = vec![0, 1, 2];
+        let mut pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
+
+        // Inflate the unique-path count past the tree height by repeating a path.
+        let filler = pruned_opening.pruned_proof.paths[0].clone();
+        while pruned_opening.pruned_proof.paths.len() <= 8 {
+            pruned_opening.pruned_proof.paths.push(filler.clone());
+        }
+
+        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        assert!(
+            matches!(
+                result,
+                Err(MerkleTreeError::MalformedPrunedProof(
+                    PrunedProofError::TooManyUniquePaths {
+                        got: 9,
+                        max_height: 8
+                    }
+                ))
+            ),
+            "a proof with more unique paths than leaves should be rejected, got {result:?}"
+        );
+    }
+
+    #[test]
     fn pruned_proof_is_smaller_than_individual() {
         let seed = 55u64;
         let mmcs = make_binary_mmcs(seed);
@@ -2645,7 +2775,13 @@ mod tests {
         let err = mmcs
             .verify_batch_pruned(&commit, &dims, pruned)
             .expect_err("mismatched duplicate openings must be rejected");
-        assert!(matches!(err, MerkleTreeError::MalformedPrunedProof));
+        // The duplicate is leaf index 3, which sorts to unique-path slot 0.
+        assert!(matches!(
+            err,
+            MerkleTreeError::MalformedPrunedProof(
+                PrunedProofError::InconsistentDuplicateOpenings { slot: 0 }
+            )
+        ));
     }
 
     #[test]
