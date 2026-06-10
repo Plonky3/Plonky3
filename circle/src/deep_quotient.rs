@@ -173,52 +173,6 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
             .rowwise_packed_dot_product::<EF>(&packed_alpha_powers)
             .collect()
     }
-
-    /// Compute DEEP quotients for all rows in the matrix efficiently using batch operations.
-    ///
-    /// This is an optimized version of `deep_quotient_reduce_row` that processes the entire
-    /// matrix at once.
-    ///
-    /// # Mathematical Background
-    ///
-    /// For each row `i` in the matrix, this computes:
-    /// `DEEP_quotient[i] = (f(x[i]) - f(zeta)) / (x[i] - zeta)`
-    ///
-    /// # Parameters
-    ///
-    /// - `alpha`: The random challenge scalar
-    /// - `zeta`: The random challenge point (outside the original domain)
-    /// - `ps_at_zeta`: Polynomial evaluations at challenge point `zeta`
-    ///
-    /// # Returns
-    ///
-    /// A vector of DEEP quotient values, one for each row in the matrix.
-    #[cfg(test)]
-    pub(crate) fn deep_quotient_reduce<EF: ExtensionField<F>>(
-        &self,
-        alpha: EF,
-        zeta: Point<EF>,
-        ps_at_zeta: &[EF],
-    ) -> Vec<EF> {
-        let points = cfft_permute_slice(&self.domain.points().collect_vec());
-        let vp = compute_vanishing_parts(&points, zeta);
-        let reduced_rows = self.rowwise_alpha_reduce(alpha);
-
-        let alpha_pow_width = alpha.exp_u64(self.values.width() as u64);
-        // sum_j(alpha^j * p_j[zeta]), the same for all rows.
-        let reduced_ps_at_zeta: EF = dot_product(alpha.powers(), ps_at_zeta.iter().copied());
-
-        let mut ro = EF::zero_vec(reduced_rows.len());
-        accumulate_deep_quotient(
-            &mut ro,
-            EF::ONE,
-            alpha_pow_width,
-            &reduced_rows,
-            &vp,
-            reduced_ps_at_zeta,
-        );
-        ro
-    }
 }
 
 /// Extract and remove the vanishing polynomial component from LDE evaluations.
@@ -293,6 +247,53 @@ mod tests {
 
     type F = Mersenne31;
     type EF = BinomialExtensionField<F, 3>;
+
+    impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
+        /// Compute DEEP quotients for all rows in the matrix efficiently using batch operations.
+        ///
+        /// This is an optimized version of `deep_quotient_reduce_row` that processes the entire
+        /// matrix at once.
+        ///
+        /// # Mathematical Background
+        ///
+        /// For each row `i` in the matrix, this computes:
+        /// `DEEP_quotient[i] = (f(x[i]) - f(zeta)) / (x[i] - zeta)`
+        ///
+        /// # Parameters
+        ///
+        /// - `alpha`: The random challenge scalar
+        /// - `zeta`: The random challenge point (outside the original domain)
+        /// - `ps_at_zeta`: Polynomial evaluations at challenge point `zeta`
+        ///
+        /// # Returns
+        ///
+        /// A vector of DEEP quotient values, one for each row in the matrix.
+        pub(crate) fn deep_quotient_reduce<EF: ExtensionField<F>>(
+            &self,
+            alpha: EF,
+            zeta: Point<EF>,
+            ps_at_zeta: &[EF],
+        ) -> Vec<EF> {
+            let points = cfft_permute_slice(&self.domain.points().collect_vec());
+            let vp = compute_vanishing_parts(&points, zeta);
+            let reduced_rows = self.rowwise_alpha_reduce(alpha);
+
+            let alpha_pow_width = alpha.exp_u64(self.values.width() as u64);
+            // sum_j(alpha^j * p_j[zeta]), the same for all rows.
+            let reduced_ps_at_zeta: EF = dot_product(alpha.powers(), ps_at_zeta.iter().copied());
+
+            let mut ro = EF::zero_vec(reduced_rows.len());
+            accumulate_deep_quotient(
+                &mut ro,
+                EF::ONE,
+                alpha_pow_width,
+                &reduced_rows,
+                &vp,
+                reduced_ps_at_zeta,
+            );
+            ro
+        }
+    }
 
     #[test]
     fn reduce_row_same_as_reduce_matrix() {
