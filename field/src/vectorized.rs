@@ -1,3 +1,9 @@
+//! Lockstep evaluation over multiple packed vectors, trading register pressure
+//! for instruction-level parallelism in latency-bound field arithmetic.
+//!
+//! Inspired by stwo's `Vectorized` type:
+//! <https://github.com/starkware-libs/stwo/blob/cca98119f/crates/stwo/src/prover/backend/simd/very_packed_m31.rs>
+
 use core::array;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
