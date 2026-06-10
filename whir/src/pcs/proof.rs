@@ -2,9 +2,8 @@ use alloc::vec::Vec;
 
 use p3_commit::Mmcs;
 use p3_multilinear_util::poly::Poly;
+pub use p3_sumcheck::SumcheckData;
 use serde::{Deserialize, Serialize};
-
-pub use crate::sumcheck::SumcheckData;
 
 /// Complete WHIR proof.
 #[derive(Serialize, Deserialize, Clone)]
