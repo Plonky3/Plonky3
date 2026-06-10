@@ -1,10 +1,4 @@
-//! Lookup arguments for STARKs.
-//!
-//! Implements the [LogUp] protocol for intra-AIR (local) and cross-AIR
-//! (global) lookup arguments.
-//!
-//! [LogUp]: logup::LogUpGadget
-
+#![doc = include_str!("../README.md")]
 #![no_std]
 
 extern crate alloc;
