@@ -16,18 +16,23 @@ use masks::{ProverMasks, fold_limb_chunks};
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{ExtensionField, TwoAdicField, dot_product};
+use p3_field::{ExtensionField, PackedValue, PrimeCharacteristicRing, TwoAdicField, dot_product};
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrixView;
+use p3_maybe_rayon::prelude::*;
+use p3_multilinear_util::eq_batch::eval_eq_batch;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::product_polynomial::ProductPolynomial;
 use p3_sumcheck::strategy::{SumcheckProver, VariableOrder};
 use p3_sumcheck::zk::ZkSumcheckData;
+use p3_util::log2_strict_usize;
 use p3_zk_codes::ZkEncodingWithRandomness;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 use tracing::instrument;
 
+use crate::constraints::statement::SelectStatement;
 use crate::pcs::proof::QueryOpening;
 use crate::pcs::utils::get_challenge_stir_queries;
 use crate::pcs::zk::base_case::{BaseCaseZkConfig, BaseCaseZkProver, MaskGroupWitness};
@@ -133,18 +138,31 @@ where
         let alpha: EF = challenger.sample_algebra_element();
         let mut weights = EF::zero_vec(1 << num_variables);
         let mut claim = EF::ZERO;
-        for ((point, eval), coeff) in claims.iter().zip(alpha.powers()) {
-            assert_eq!(point.num_variables(), num_variables);
-            let table = Poly::new_from_point(point.as_slice(), coeff);
-            for (dst, &src) in weights.iter_mut().zip(table.as_slice()) {
-                *dst += src;
+        if !claims.is_empty() {
+            let coeffs: Vec<EF> = alpha.powers().collect_n(claims.len());
+            // All claim tables land in one batched parallel sweep.
+            // Row `var` of the point matrix holds variable `var` across claims.
+            let mut points_flat = Vec::with_capacity(num_variables * claims.len());
+            for var in 0..num_variables {
+                for (point, _) in claims {
+                    assert_eq!(point.num_variables(), num_variables);
+                    points_flat.push(point.as_slice()[var]);
+                }
             }
-            claim += coeff * *eval;
+            eval_eq_batch::<F, EF, false>(
+                RowMajorMatrixView::new(&points_flat, claims.len()),
+                &mut weights,
+                &coeffs,
+            );
+            for ((_, eval), coeff) in claims.iter().zip(&coeffs) {
+                claim += *coeff * *eval;
+            }
         }
+        // Lift the base-field message into the extension once, in parallel.
         let evals: Vec<EF> = prover_data
             .message
             .as_slice()
-            .iter()
+            .par_iter()
             .map(|&v| v.into())
             .collect();
         let product = ProductPolynomial::new_unpacked(
@@ -270,15 +288,14 @@ where
             // randomness; the verifier recomputes the same folds.
             let mut queries = Vec::with_capacity(stir_indexes.len());
             let mut folded_values = Vec::with_capacity(stir_indexes.len());
-            let mut query_points = Vec::with_capacity(stir_indexes.len());
+            let mut query_vars = Vec::with_capacity(stir_indexes.len());
             for &index in &stir_indexes {
                 let (opening, folded) = self.open_and_fold(&round_data, index, &batch.randomness);
                 queries.push(opening);
                 folded_values.push(folded);
-                query_points.push(EF::from(
-                    round_params.folded_domain_gen.exp_u64(index as u64),
-                ));
+                query_vars.push(round_params.folded_domain_gen.exp_u64(index as u64));
             }
+            let query_points: Vec<EF> = query_vars.iter().map(|&x| EF::from(x)).collect();
 
             // Batch the carried claim with the fresh constraints.
             //
@@ -316,24 +333,59 @@ where
             //
             //     delta[b]    = sum_j c_j rho_j^b  +  sum_q c'_q x_q^b
             //     claim_delta = <message, delta>
-            let mut weight_delta = EF::zero_vec(message_len);
-            // One power run per constraint: var^0..var^{len-1}, scaled by
-            // its batching coefficient.
-            for (&var, &coeff) in rho_points
-                .iter()
-                .chain(&query_points)
-                .zip(ood_coeffs.iter().chain(query_coeffs))
-            {
-                let mut term = coeff;
-                for dst in &mut weight_delta {
-                    *dst += term;
-                    term *= var;
+            // The base-field query covectors fill through the packed
+            // SelectStatement kernel; the few extension-field OOD points
+            // follow with chunked parallel power runs.
+            let k = log2_strict_usize(message_len);
+            let k_pack = log2_strict_usize(F::Packing::WIDTH);
+            let mut weight_delta = if k >= k_pack {
+                let mut packed_delta =
+                    Poly::new(EF::ExtensionPacking::zero_vec(message_len >> k_pack));
+                let mut select = SelectStatement::<F, EF>::initialize(k);
+                for &var in &query_vars {
+                    // Evaluations are unused: only the covector side is read.
+                    select.add_constraint(var, EF::ZERO);
                 }
+                // Query coefficients are gamma^{1 + t_ood + q}.
+                let mut unused_sum = EF::ZERO;
+                select.combine_packed(
+                    &mut packed_delta,
+                    &mut unused_sum,
+                    combination,
+                    1 + rho_points.len(),
+                );
+                packed_delta.unpack::<F, EF>().into_evals()
+            } else {
+                // Too few variables for the packed kernel: power runs only.
+                let mut weight_delta = EF::zero_vec(message_len);
+                for (&var, &coeff) in query_points.iter().zip(query_coeffs) {
+                    let mut term = coeff;
+                    for dst in &mut weight_delta {
+                        *dst += term;
+                        term *= var;
+                    }
+                }
+                weight_delta
+            };
+            // Chunked parallel power run: chunk `c` starts at coeff * rho^(c * CHUNK).
+            const POW_CHUNK: usize = 1 << 12;
+            for (&rho, &coeff) in rho_points.iter().zip(ood_coeffs) {
+                weight_delta.par_chunks_mut(POW_CHUNK).enumerate().for_each(
+                    |(chunk_idx, chunk)| {
+                        let mut term = coeff * rho.exp_u64((chunk_idx * POW_CHUNK) as u64);
+                        for dst in chunk {
+                            *dst += term;
+                            term *= rho;
+                        }
+                    },
+                );
             }
-            let claim_delta = dot_product::<EF, _, _>(
-                message.as_slice().iter().copied(),
-                weight_delta.iter().copied(),
-            );
+            let claim_delta = message
+                .as_slice()
+                .par_chunks(POW_CHUNK)
+                .zip(weight_delta.par_chunks(POW_CHUNK))
+                .map(|(m, w)| dot_product::<EF, _, _>(m.iter().copied(), w.iter().copied()))
+                .sum::<EF>();
             sumcheck_prover.accumulate_claim(&weight_delta, claim_delta);
 
             // Mask side: the fresh mask enters the relation.
