@@ -130,7 +130,7 @@ pub enum QueryOpening<F, EF, Proof> {
 
 impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> WhirProof<F, EF, MT> {
     /// Allocate an empty proof sized for the given intermediate-round and final-query counts.
-    pub fn empty(num_rounds: usize, num_queries: usize) -> Self {
+    pub(crate) fn empty(num_rounds: usize, num_queries: usize) -> Self {
         Self {
             initial_ood_answers: Vec::new(),
             initial_sumcheck: SumcheckData::default(),
@@ -147,19 +147,19 @@ impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> WhirProof<F, EF
 
 impl<F: Clone + Send + Sync + Default, EF, MT: Mmcs<F>> WhirProof<F, EF, MT> {
     /// Retrieve the PoW witness at a given round index.
-    pub fn get_pow_after_commitment(&self, round_index: usize) -> Option<F> {
+    pub(crate) fn get_pow_after_commitment(&self, round_index: usize) -> Option<F> {
         self.rounds
             .get(round_index)
             .map(|round| round.pow_witness.clone())
     }
 
     /// Store sumcheck data for a specific round.
-    pub fn set_sumcheck_data_at(&mut self, data: SumcheckData<F, EF>, round_index: usize) {
+    pub(crate) fn set_sumcheck_data_at(&mut self, data: SumcheckData<F, EF>, round_index: usize) {
         self.rounds[round_index].sumcheck = data;
     }
 
     /// Store the final sumcheck data.
-    pub fn set_final_sumcheck_data(&mut self, data: SumcheckData<F, EF>) {
+    pub(crate) fn set_final_sumcheck_data(&mut self, data: SumcheckData<F, EF>) {
         self.final_sumcheck = Some(data);
     }
 }

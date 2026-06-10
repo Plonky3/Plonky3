@@ -275,7 +275,7 @@ where
     ///
     /// Checks PoW witness, generates query indices, verifies Merkle proofs,
     /// and evaluates folded polynomials at the queried positions.
-    pub fn verify_stir_challenges(
+    fn verify_stir_challenges(
         &self,
         proof: &WhirProof<F, EF, MT>,
         challenger: &mut Challenger,
@@ -302,7 +302,7 @@ where
         }
 
         // Sample STIR query positions.
-        let stir_challenges_indexes = get_challenge_stir_queries::<Challenger, F, EF>(
+        let stir_challenges_indexes = get_challenge_stir_queries::<Challenger, F>(
             params.domain_size,
             params.folding_factor,
             params.num_queries,
@@ -344,7 +344,7 @@ where
     }
 
     /// Verify Merkle multi-opening proofs at the given indices.
-    pub fn verify_merkle_proof(
+    fn verify_merkle_proof(
         &self,
         proof: &WhirProof<F, EF, MT>,
         root: &MT::Commitment,

@@ -136,7 +136,7 @@ where
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
     /// Construct an empty proof shaped by this configuration.
-    pub fn empty_proof<MT: Mmcs<F>>(&self) -> WhirProof<F, EF, MT> {
+    pub(crate) fn empty_proof<MT: Mmcs<F>>(&self) -> WhirProof<F, EF, MT> {
         WhirProof::empty(self.n_rounds(), self.final_queries)
     }
 

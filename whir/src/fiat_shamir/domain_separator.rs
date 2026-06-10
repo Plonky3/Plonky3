@@ -27,7 +27,7 @@ pub(crate) struct SumcheckParams {
 
 /// Configuration for an HVZK sumcheck phase in the protocol.
 #[derive(Debug)]
-pub struct ZkSumcheckParams {
+pub(crate) struct ZkSumcheckParams {
     /// Number of sumcheck rounds.
     pub rounds: usize,
 
@@ -109,7 +109,7 @@ where
     }
 
     /// Record that the prover observes `count` field elements into the sponge.
-    pub fn observe(&mut self, count: usize, pattern: Observe) {
+    pub(crate) fn observe(&mut self, count: usize, pattern: Observe) {
         self.pattern.push(
             pattern.as_field_element::<F>()
                 + F::from_usize(count)
@@ -118,7 +118,7 @@ where
     }
 
     /// Record that the verifier samples `count` field elements from the sponge.
-    pub fn sample(&mut self, count: usize, pattern: Sample) {
+    pub(crate) fn sample(&mut self, count: usize, pattern: Sample) {
         self.pattern.push(
             pattern.as_field_element::<F>()
                 + F::from_usize(count)
@@ -145,7 +145,7 @@ where
     }
 
     /// Record a non-binding hint from the prover.
-    pub fn hint(&mut self, pattern: Hint) {
+    pub(crate) fn hint(&mut self, pattern: Hint) {
         self.pattern
             .push(pattern.as_field_element::<F>() + Pattern::Hint.as_field_element::<F>());
     }
@@ -165,7 +165,7 @@ where
     ///
     /// Encodes sampling `num_samples` OOD evaluation points followed by
     /// observing their answers. Skipped when `num_samples` is zero.
-    pub fn add_ood(&mut self, num_samples: usize) {
+    pub(crate) fn add_ood(&mut self, num_samples: usize) {
         if num_samples > 0 {
             self.sample(num_samples, Sample::OodQuery);
             self.observe(num_samples, Observe::OodAnswers);
@@ -189,7 +189,7 @@ where
     /// The caller must observe these public inputs into the challenger
     /// before any challenges are sampled.
     /// See the struct-level documentation for the rationale.
-    pub fn commit_statement<Challenger, const DIGEST_ELEMS: usize>(
+    pub(crate) fn commit_statement<Challenger, const DIGEST_ELEMS: usize>(
         &mut self,
         config: &WhirConfig<EF, F, Challenger>,
     ) {
@@ -204,7 +204,7 @@ where
     /// - Omits the commitment-phase out-of-domain step.
     /// - The HVZK protocol has no initial commitment OOD, so declaring it
     ///   would describe a transcript event that never happens.
-    pub fn commit_statement_hvzk<Challenger, const DIGEST_ELEMS: usize>(
+    pub(crate) fn commit_statement_hvzk<Challenger, const DIGEST_ELEMS: usize>(
         &mut self,
         config: &WhirConfig<EF, F, Challenger>,
     ) {
@@ -271,7 +271,7 @@ where
     ///    - Perform PoW, then draw final query positions.
     ///    - Record hints and run the final sumcheck.
     ///    - Record deferred weight evaluation hints.
-    pub fn add_whir_proof<Challenger, const DIGEST_ELEMS: usize>(
+    pub(crate) fn add_whir_proof<Challenger, const DIGEST_ELEMS: usize>(
         &mut self,
         config: &WhirConfig<EF, F, Challenger>,
     ) where
@@ -378,7 +378,7 @@ where
     /// 3. Sample the combining challenge `eps`.
     /// 4. For each round, observe the wire polynomial coefficients, optionally
     ///    grind, then sample the folding challenge.
-    pub fn add_zk_sumcheck<const DIGEST_ELEMS: usize>(&mut self, params: &ZkSumcheckParams) {
+    pub(crate) fn add_zk_sumcheck<const DIGEST_ELEMS: usize>(&mut self, params: &ZkSumcheckParams) {
         let ZkSumcheckParams {
             rounds,
             pow_bits,
@@ -400,7 +400,7 @@ where
 
     /// Append a Construction 6.3 HVZK sumcheck batch preceded by its bound
     /// joint claim, as replayed by the residual-claim verifier.
-    pub fn add_zk_residual_sumcheck<const DIGEST_ELEMS: usize>(
+    pub(crate) fn add_zk_residual_sumcheck<const DIGEST_ELEMS: usize>(
         &mut self,
         params: &ZkSumcheckParams,
     ) {
@@ -419,7 +419,7 @@ where
     /// Like the plain variant, evaluation points and claimed values are
     /// external inputs.
     /// The PCS layer binds them, not this builder.
-    pub fn add_zk_whir_proof<Challenger, const DIGEST_ELEMS: usize>(
+    pub(crate) fn add_zk_whir_proof<Challenger, const DIGEST_ELEMS: usize>(
         &mut self,
         config: &ZkWhirConfig<EF, F, Challenger>,
     ) where
@@ -522,7 +522,7 @@ where
     /// 2. Observing an 8-byte nonce that satisfies the grinding condition.
     ///
     /// When `bits` is zero, nothing is appended.
-    pub fn pow(&mut self, bits: usize) {
+    pub(crate) fn pow(&mut self, bits: usize) {
         if bits > 0 {
             // Sample a 32-byte PoW challenge preimage.
             self.sample(32, Sample::PowQueries);

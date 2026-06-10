@@ -62,7 +62,7 @@ impl SecurityAssumption {
     /// eta-dependent arithmetic; the panic locks down that invariant so a
     /// future refactor that strays into the eta path under UD fails loudly.
     #[must_use]
-    pub const fn log_eta(&self, log_inv_rate: usize) -> f64 {
+    pub(crate) const fn log_eta(&self, log_inv_rate: usize) -> f64 {
         match self {
             Self::UniqueDecoding => panic!("log_eta is undefined for UniqueDecoding"),
             // Set as sqrt(rho)/20
@@ -74,7 +74,7 @@ impl SecurityAssumption {
 
     /// Given a RS code (specified by the log of the degree and log inv of the rate), compute the list size at the specified distance delta.
     #[must_use]
-    pub const fn list_size_bits(&self, log_degree: usize, log_inv_rate: usize) -> f64 {
+    pub(crate) const fn list_size_bits(&self, log_degree: usize, log_inv_rate: usize) -> f64 {
         match self {
             // In UD the list size is 1
             Self::UniqueDecoding => 0.,
@@ -120,7 +120,7 @@ impl SecurityAssumption {
     /// The improvement factor of `n*eta^2` translates to approximately `log_2(n)` additional bits
     /// of provable security, enabling 128-bit security with degree-5 extensions of KoalaBear.
     #[must_use]
-    pub fn prox_gaps_error(
+    pub(crate) fn prox_gaps_error(
         &self,
         log_degree: usize,
         log_inv_rate: usize,
@@ -190,7 +190,7 @@ impl SecurityAssumption {
     /// - In JB, delta is (1 - sqrt(rho) - eta)
     /// - In CB, delta is (1 - rho - eta)
     #[must_use]
-    pub fn log_1_delta(&self, log_inv_rate: usize) -> f64 {
+    pub(crate) fn log_1_delta(&self, log_inv_rate: usize) -> f64 {
         let rate = 1. / f64::from(1 << log_inv_rate);
 
         let delta = match self {
@@ -206,7 +206,7 @@ impl SecurityAssumption {
     /// The error to drive down is (1-delta)^t < 2^-lambda.
     /// Where delta is set as in the `log_1_delta` function.
     #[must_use]
-    pub fn queries(&self, protocol_security_level: usize, log_inv_rate: usize) -> usize {
+    pub(crate) fn queries(&self, protocol_security_level: usize, log_inv_rate: usize) -> usize {
         let num_queries_f = -(protocol_security_level as f64) / self.log_1_delta(log_inv_rate);
 
         libm::ceil(num_queries_f) as usize
@@ -216,7 +216,7 @@ impl SecurityAssumption {
     /// The error to drive down is (1-delta)^t < 2^-lambda.
     /// Where delta is set as in the `log_1_delta` function.
     #[must_use]
-    pub fn queries_error(&self, log_inv_rate: usize, num_queries: usize) -> f64 {
+    pub(crate) fn queries_error(&self, log_inv_rate: usize, num_queries: usize) -> f64 {
         let num_queries = num_queries as f64;
 
         -num_queries * self.log_1_delta(log_inv_rate)
@@ -227,7 +227,7 @@ impl SecurityAssumption {
     /// The error is list_size^2 * (degree/field_size_bits)^reps
     /// NOTE: Here we are discounting the domain size as we assume it is negligible compared to the size of the field.
     #[must_use]
-    pub const fn ood_error(
+    pub(crate) const fn ood_error(
         &self,
         log_degree: usize,
         log_inv_rate: usize,
@@ -255,7 +255,7 @@ impl SecurityAssumption {
     /// - `Some(n)` for the smallest count reaching the security level.
     /// - `None` when no count in range suffices, i.e. the field is too small.
     #[must_use]
-    pub fn determine_ood_samples(
+    pub(crate) fn determine_ood_samples(
         &self,
         security_level: usize,
         log_degree: usize,
@@ -288,7 +288,7 @@ impl SecurityAssumption {
     ///
     /// The `+1` accounts for the union bound over the list.
     #[must_use]
-    pub const fn fold_sumcheck_error(
+    pub(crate) const fn fold_sumcheck_error(
         &self,
         field_size_bits: usize,
         num_variables: usize,
@@ -319,7 +319,7 @@ impl SecurityAssumption {
     ///
     /// The `+1` accounts for the union bound over list elements.
     #[must_use]
-    pub fn queries_combination_error(
+    pub(crate) fn queries_combination_error(
         &self,
         field_size_bits: usize,
         num_variables: usize,
@@ -354,7 +354,7 @@ impl SecurityAssumption {
     ///
     /// Returns 0 when the algebraic bounds alone meet the target.
     #[must_use]
-    pub fn folding_pow_bits(
+    pub(crate) fn folding_pow_bits(
         &self,
         security_level: usize,
         field_size_bits: usize,

@@ -23,6 +23,7 @@ use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::eq_batch::eval_eq_batch;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use p3_sumcheck::constraints::statement::SelectStatement;
 use p3_sumcheck::product_polynomial::ProductPolynomial;
 use p3_sumcheck::strategy::{SumcheckProver, VariableOrder};
 use p3_sumcheck::zk::ZkSumcheckData;
@@ -32,7 +33,6 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 use tracing::instrument;
 
-use crate::constraints::statement::SelectStatement;
 use crate::pcs::proof::QueryOpening;
 use crate::pcs::utils::get_challenge_stir_queries;
 use crate::pcs::zk::base_case::{BaseCaseZkConfig, BaseCaseZkProver, MaskGroupWitness};
@@ -277,7 +277,7 @@ where
                 F::ZERO
             };
             challenger.sample();
-            let stir_indexes = get_challenge_stir_queries::<Challenger, F, EF>(
+            let stir_indexes = get_challenge_stir_queries::<Challenger, F>(
                 round_params.domain_size,
                 folding,
                 round_params.num_queries,

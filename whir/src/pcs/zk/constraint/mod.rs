@@ -19,4 +19,4 @@ mod masks;
 mod source;
 
 pub use masks::MaskClaims;
-pub use source::{SourceClaim, SourceConstraint, SourceTerm};
+pub use source::SourceClaim;

@@ -206,7 +206,7 @@ where
         //     Enc(f*, r*)(z) = g(z) + gamma * f(z)
         //
         // so both committed sides are opened here.
-        let positions = get_challenge_stir_queries::<Challenger, F, EF>(
+        let positions = get_challenge_stir_queries::<Challenger, F>(
             code.domain_size,
             0,
             self.config.num_queries,
@@ -237,7 +237,7 @@ where
         for (group, (_, _, fresh_data, witness)) in
             self.config.mask_groups.iter().zip(&fresh_groups)
         {
-            let positions = get_challenge_stir_queries::<Challenger, F, EF>(
+            let positions = get_challenge_stir_queries::<Challenger, F>(
                 group.shape.domain_size,
                 0,
                 self.config.mask_queries,
