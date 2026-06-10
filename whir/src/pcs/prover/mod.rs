@@ -23,7 +23,6 @@ use crate::sumcheck::layout::Layout;
 use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
 
 pub type Proof<W, const DIGEST_ELEMS: usize> = Vec<Vec<[W; DIGEST_ELEMS]>>;
-pub type Leafs<F> = Vec<Vec<F>>;
 
 /// Per-round prover state with the Merkle authentication shapes
 /// baked in for the WHIR commitment scheme.
