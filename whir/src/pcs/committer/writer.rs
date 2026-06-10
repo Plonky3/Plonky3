@@ -2,12 +2,11 @@ use p3_commit::{ExtensionMmcs, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_matrix::Matrix;
-use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView};
+use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::extension::FlatMatrixView;
 use p3_multilinear_util::poly::Poly;
+use p3_sumcheck::strategy::VariableOrder;
 use tracing::info_span;
-
-use crate::sumcheck::strategy::VariableOrder;
 
 /// Encodes and commits a folded extension-field polynomial.
 ///
@@ -39,20 +38,34 @@ where
     let encoded = match order {
         VariableOrder::Prefix => {
             let padded = info_span!("transpose & pad").in_scope(|| {
-                let mut mat =
-                    RowMajorMatrixView::new(poly.as_slice(), 1 << (num_variables - folding))
-                        .transpose();
-                mat.pad_to_height(height, EF::ZERO);
-                mat
+                let width = 1 << folding;
+
+                // Allocate the zero-padded codeword buffer once.
+                // Trailing rows stay zero and become the Reed-Solomon expansion.
+                let mut values = EF::zero_vec(height * width);
+
+                // Transpose the folding blocks straight into the leading rows.
+                // This reuses the cache-blocked transpose with no extra allocation.
+                let folded =
+                    RowMajorMatrixView::new(poly.as_slice(), 1 << (num_variables - folding));
+                folded.transpose_into(&mut RowMajorMatrixViewMut::new(
+                    &mut values[..1 << num_variables],
+                    width,
+                ));
+
+                RowMajorMatrix::new(values, width)
             });
             info_span!("dft", height = padded.height(), width = padded.width())
                 .in_scope(|| dft.dft_algebra_batch(padded).to_row_major_matrix())
         }
         VariableOrder::Suffix => {
             let padded = info_span!("pad").in_scope(|| {
-                let mut mat = RowMajorMatrix::new(poly.as_slice().to_vec(), 1 << folding);
-                mat.pad_to_height(height, EF::ZERO);
-                mat
+                let width = 1 << folding;
+                let src = poly.as_slice();
+
+                let mut values = EF::zero_vec(height * width);
+                values[..src.len()].copy_from_slice(src);
+                RowMajorMatrix::new(values, width)
             });
             info_span!("dft", height = padded.height(), width = padded.width())
                 .in_scope(|| dft.dft_algebra_batch(padded).to_row_major_matrix())

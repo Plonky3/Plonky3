@@ -9,6 +9,9 @@ homepage.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
 [dependencies]
 p3-air.workspace = true
 p3-field.workspace = true
@@ -35,10 +38,7 @@ tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
 tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
 
 [target.'cfg(target_family = "unix")'.dev-dependencies]
-tikv-jemallocator = "0.6"
-
-[features]
-parallel = ["p3-maybe-rayon/parallel"]
+tikv-jemallocator = "0.7"
 
 [lints]
 workspace = true

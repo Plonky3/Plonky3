@@ -2,10 +2,8 @@ use alloc::vec::Vec;
 
 use p3_commit::Mmcs;
 use p3_multilinear_util::poly::Poly;
+pub use p3_sumcheck::SumcheckData;
 use serde::{Deserialize, Serialize};
-
-use crate::parameters::ProtocolParameters;
-pub use crate::sumcheck::SumcheckData;
 
 /// Complete WHIR proof.
 #[derive(Serialize, Deserialize, Clone)]
@@ -131,24 +129,16 @@ pub enum QueryOpening<F, EF, Proof> {
 }
 
 impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> WhirProof<F, EF, MT> {
-    /// Allocate a proof structure sized for the given protocol parameters.
-    pub fn from_protocol_parameters(params: &ProtocolParameters, num_variables: usize) -> Self {
-        let (num_rounds, _final_sumcheck_rounds) = params
-            .folding_factor
-            .compute_number_of_rounds(num_variables);
-
-        let protocol_security_level = params.security_level.saturating_sub(params.pow_bits);
-
-        let num_queries = params
-            .soundness_type
-            .queries(protocol_security_level, params.starting_log_inv_rate);
-
+    /// Allocate an empty proof sized for the given intermediate-round and final-query counts.
+    pub(crate) fn empty(num_rounds: usize, num_queries: usize) -> Self {
         Self {
             initial_ood_answers: Vec::new(),
             initial_sumcheck: SumcheckData::default(),
+            // One default round-proof slot per intermediate WHIR round.
             rounds: (0..num_rounds).map(|_| WhirRoundProof::default()).collect(),
             final_poly: None,
             final_pow_witness: F::default(),
+            // Reserve space for the final-round STIR query openings.
             final_queries: Vec::with_capacity(num_queries),
             final_sumcheck: None,
         }
@@ -157,19 +147,19 @@ impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> WhirProof<F, EF
 
 impl<F: Clone + Send + Sync + Default, EF, MT: Mmcs<F>> WhirProof<F, EF, MT> {
     /// Retrieve the PoW witness at a given round index.
-    pub fn get_pow_after_commitment(&self, round_index: usize) -> Option<F> {
+    pub(crate) fn get_pow_after_commitment(&self, round_index: usize) -> Option<F> {
         self.rounds
             .get(round_index)
             .map(|round| round.pow_witness.clone())
     }
 
     /// Store sumcheck data for a specific round.
-    pub fn set_sumcheck_data_at(&mut self, data: SumcheckData<F, EF>, round_index: usize) {
+    pub(crate) fn set_sumcheck_data_at(&mut self, data: SumcheckData<F, EF>, round_index: usize) {
         self.rounds[round_index].sumcheck = data;
     }
 
     /// Store the final sumcheck data.
-    pub fn set_final_sumcheck_data(&mut self, data: SumcheckData<F, EF>) {
+    pub(crate) fn set_final_sumcheck_data(&mut self, data: SumcheckData<F, EF>) {
         self.final_sumcheck = Some(data);
     }
 }

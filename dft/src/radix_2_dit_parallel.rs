@@ -165,6 +165,18 @@ impl<F: TwoAdicField + Ord> TwoAdicSubgroupDft<F> for Radix2DitParallel<F> {
         mat.bit_reverse_rows()
     }
 
+    fn coset_dft_batch(&self, mut mat: RowMajorMatrix<F>, shift: F) -> Self::Evaluations {
+        reverse_matrix_index_bits(&mut mat);
+        coset_dft(self, &mut mat.as_view_mut(), shift);
+        BitReversalPerm::new_view(mat)
+    }
+
+    fn coset_idft_batch(&self, mat: RowMajorMatrix<F>, shift: F) -> RowMajorMatrix<F> {
+        let mut coeffs = self.idft_batch(mat);
+        crate::util::coset_shift_cols(&mut coeffs, shift.inverse());
+        coeffs
+    }
+
     #[instrument(skip_all, level = "debug", fields(dims = %mat.dimensions(), added_bits = added_bits))]
     fn coset_lde_batch_with_transform<T>(
         &self,
@@ -301,7 +313,7 @@ fn coset_dft_oop<F: TwoAdicField + Ord>(
 /// For layer 0, all twiddle factors are 1 (root^0 = 1), so we use `TwiddleFreeButterfly`
 /// to avoid a Montgomery multiply by 1 across the entire matrix.
 ///
-/// For layers 1 to mid-1 included, the first twiddle in each block is also always 1 (twiddles[0] = 1),
+/// For layers 1 to mid-1 included, the first twiddle in each block is also always 1 (`twiddles[0] = 1`),
 /// so we special-case the first row-pair of each block to use `TwiddleFreeButterfly` as well.
 #[instrument(level = "debug", skip_all)]
 fn first_half<F: Field>(mat: &mut RowMajorMatrix<F>, mid: usize, twiddles: &[F]) {
@@ -358,7 +370,9 @@ fn first_half_general<F: Field>(
 /// Like `first_half_general`, except out-of-place.
 ///
 /// Assumes there's at least one layer in the network, i.e. `src.height() > 1`.
-/// Undefined behavior otherwise.
+///
+/// # Panics
+/// Panics (via `log2_strict_usize` and arithmetic underflow) if `src.height() < 2`.
 #[instrument(level = "debug", skip_all)]
 fn first_half_general_oop<F: Field>(
     src: &RowMajorMatrixView<'_, F>,
@@ -749,5 +763,50 @@ fn dit_layer_rev<F: Field>(
             let (lo, hi) = block.split_at_mut(half_block_size * width);
             DitButterfly(twiddle).apply_to_rows(lo, hi);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use p3_baby_bear::BabyBear;
+    use p3_field::TwoAdicField;
+    use p3_matrix::Matrix;
+    use p3_matrix::dense::RowMajorMatrix;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use super::*;
+
+    type F = BabyBear;
+
+    #[test]
+    fn coset_dft_idft_roundtrip() {
+        let dft = Radix2DitParallel::<F>::default();
+        let shift = F::GENERATOR;
+        let mut rng = SmallRng::seed_from_u64(42);
+        let original = RowMajorMatrix::<F>::rand(&mut rng, 16, 3);
+
+        let evals = dft.coset_dft_batch(original.clone(), shift);
+        let recovered = dft.coset_idft_batch(evals.to_row_major_matrix(), shift);
+
+        assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn coset_dft_matches_default_trait() {
+        let dft = Radix2DitParallel::<F>::default();
+        let shift = F::two_adic_generator(4) * F::GENERATOR;
+        let mut rng = SmallRng::seed_from_u64(7);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 16, 4);
+
+        let override_result = dft
+            .coset_dft_batch(mat.clone(), shift)
+            .to_row_major_matrix();
+
+        let mut shifted = mat;
+        crate::util::coset_shift_cols(&mut shifted, shift);
+        let default_result = dft.dft_batch(shifted).to_row_major_matrix();
+
+        assert_eq!(override_result, default_result);
     }
 }

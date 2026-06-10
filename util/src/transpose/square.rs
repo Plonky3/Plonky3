@@ -55,8 +55,8 @@ unsafe fn transpose_in_place_square_small<T>(
 /// This function swaps element `A[i, j]` with `B[j, i]`, effectively transposing them
 /// relative to each other.
 ///
-/// `A` is assumed to be row-major, starting at pointer `a`, where A[i,j] = a[i * width_outer_mat + j].
-/// `B` is assumed to be row-major, starting at pointer `b`, where B[j,i] = b[j * width_outer_mat + i].
+/// `A` is assumed to be row-major, starting at pointer `a`, where `A[i,j] = a[i * width_outer_mat + j]`.
+/// `B` is assumed to be row-major, starting at pointer `b`, where `B[j,i] = b[j * width_outer_mat + i]`.
 ///
 /// The recursion always splits along the longer dimension to balance cache and workload.
 ///

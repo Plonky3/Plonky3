@@ -385,7 +385,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
             for (vc, alpha_i) in self
                 .virtual_claims
                 .iter()
-                .zip(alpha.powers().skip(n_claims))
+                .zip(alpha.shifted_powers(alpha.exp_u64(n_claims as u64)))
             {
                 let vc_accs = &vc.data;
                 c0 += alpha_i
@@ -414,6 +414,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
         // Reverse the challenges before handing them to the compressors.
         let reversed = rs.reversed();
         // Factor 1 of the product: the compressed stacked poly at rs.
+        // No external scaling here; the plain path keeps the running sum unchanged.
         let compressed = self.compress_stacked(&reversed);
         // Factor 2 of the product: the batched equality-weight poly.
         let weights = self.combine_eqs(&reversed, alpha);
@@ -465,7 +466,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
     ///
     /// The verifier walks its claim registry with the same three-loop order,
     /// so both sides assign the same `alpha^i` to the same claim point.
-    fn sum(&self, alpha: EF) -> EF {
+    pub(crate) fn sum(&self, alpha: EF) -> EF {
         let mut sum = EF::ZERO;
         let mut alphas = alpha.powers();
 
@@ -481,28 +482,51 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
         // Virtual claims continue the alpha sequence right after the concrete ones.
         sum += dot_product::<EF, _, _>(
             self.virtual_claims.iter().map(Claim::eval),
-            alpha.powers().skip(self.num_claims()),
+            alpha.shifted_powers(alpha.exp_u64(self.num_claims() as u64)),
         );
 
         sum
     }
 
-    /// Compresses every stacked-table slot by fixing the suffix challenges.
+    /// Compress every stacked-table slot by fixing the suffix challenges.
+    #[tracing::instrument(skip_all)]
+    pub(crate) fn compress_stacked(&self, rs: &Point<EF>) -> Poly<EF> {
+        self.compress_stacked_scaled(rs, EF::ONE)
+    }
+
+    /// Compress every stacked-table slot, folding `scale` into the equality table.
     ///
     /// ```text
-    ///     out[slot_idx, x_rest] = sum_{y in {0,1}^|rs|}  eq(rs, y) * col(x_rest, y)
+    ///     out[slot, x_rest] = sum_{y in {0,1}^|r|}  scale * eq(r, y) * col(x_rest, y)
     /// ```
     ///
-    /// # Layout
+    /// One output slot per column.
+    /// Writes never overlap.
+    /// Output arity equals the stacked arity minus the challenge count.
     ///
-    /// - One output slot per column; writes never overlap.
-    /// - Output arity is the stacked arity minus the number of challenges.
+    /// # Arguments
+    ///
+    /// - `rs` — suffix challenges already sampled.
+    /// - `scale` — extra factor folded into the equality table.
+    ///
+    /// # Why a scale parameter
+    ///
+    /// - A non-unit `scale` lets the caller absorb a combining challenge into
+    ///   the residual factor without a second pass.
+    ///
+    /// # Panics
+    ///
+    /// - `scale` is zero: a zero scale silently zeroes the residual.
     #[tracing::instrument(skip_all)]
-    fn compress_stacked(&self, rs: &Point<EF>) -> Poly<EF> {
+    pub(crate) fn compress_stacked_scaled(&self, rs: &Point<EF>, scale: EF) -> Poly<EF> {
         assert!(rs.num_variables() <= self.num_variables);
-        // Output: residual stacked space of size 2^(num_variables - |rs|).
+        assert!(scale != EF::ZERO, "compress scale must be non-zero");
+        // Output spans the residual stacked space.
+        // Size is 2^(num_variables - |rs|).
         let mut out = Poly::<EF>::zero(self.num_variables - rs.num_variables());
-        let rs = SplitEq::new_unpacked(rs, EF::ONE);
+        // Bake the scalar into the prefix-half equality table.
+        // Each slot compression then returns scale * eq(r, y) * col(...) in one pass.
+        let rs = SplitEq::new_unpacked(rs, scale);
 
         for placement in &self.placements {
             for (poly_idx, selector) in placement.selectors().iter().enumerate() {
@@ -529,7 +553,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
     ///   `alpha^i * eq(svo_part, rs)`, written into the owning slot only.
     /// - Virtual claim: scaled equality table written across the full output.
     #[tracing::instrument(skip_all)]
-    fn combine_eqs(&self, rs: &Point<EF>, alpha: EF) -> Poly<EF> {
+    pub(crate) fn combine_eqs(&self, rs: &Point<EF>, alpha: EF) -> Poly<EF> {
         // Preconditions: challenge count matches the folding depth.
         assert_eq!(rs.num_variables(), self.folding);
         // Output arity: stacked arity minus the folded challenges.

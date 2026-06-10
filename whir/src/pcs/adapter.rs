@@ -8,13 +8,13 @@ use p3_commit::{Mmcs, MultilinearPcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_matrix::dense::DenseMatrix;
+use p3_sumcheck::OpeningProtocol;
+use p3_sumcheck::layout::{Layout, Verifier, Witness};
 
 use super::prover::WhirProver;
 use super::verifier::WhirVerifier;
 use super::verifier::errors::VerifierError;
 use crate::pcs::proof::PcsProof;
-use crate::sumcheck::OpeningProtocol;
-use crate::sumcheck::layout::{Layout, Verifier, Witness};
 
 /// Prover-side handoff between the commit and open phases of the PCS.
 ///
@@ -128,6 +128,16 @@ where
         challenger.observe(commitment.clone());
 
         let mut layout_verifier = Verifier::<F, EF>::new(&protocol.table_shapes(), L::strategy());
+
+        // The commitment fixes how many initial OOD answers exist.
+        // Each one drives a transcript draw, so a wrong count desyncs Fiat-Shamir.
+        // Reject it up front, matching the per-round OOD guard.
+        if proof.whir.initial_ood_answers.len() != self.commitment_ood_samples {
+            return Err(VerifierError::InitialOodAnswerCountMismatch {
+                expected: self.commitment_ood_samples,
+                actual: proof.whir.initial_ood_answers.len(),
+            });
+        }
         for &eval in &proof.whir.initial_ood_answers {
             layout_verifier.add_virtual_eval(eval, challenger);
         }

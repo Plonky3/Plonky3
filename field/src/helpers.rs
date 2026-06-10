@@ -2,7 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::iter::Sum;
 use core::mem::MaybeUninit;
-use core::ops::Mul;
+use core::ops::{Add, Mul};
 
 use num_bigint::BigUint;
 use p3_maybe_rayon::prelude::*;
@@ -147,9 +147,9 @@ pub fn reduce_32<SF: PrimeField32, TF: PrimeField>(vals: &[SF]) -> TF {
 pub fn reduce_packed_shifted<SF: PrimeField32, TF: PrimeField>(vals: &[SF], radix_bits: u32) -> TF {
     debug_assert!((radix_bits < 64) && ((SF::ORDER_U32 as u64) < (1u64 << radix_bits)));
     let base = TF::from_int(1u64 << radix_bits);
-    vals.iter().rev().fold(TF::ZERO, |acc, val| {
-        acc * base + TF::from_int(val.as_canonical_u32() as u64 + 1)
-    })
+    vals.iter()
+        .map(|val| TF::from_int(val.as_canonical_u32() as u64 + 1))
+        .horner(base)
 }
 
 /// Bit length of `F::ORDER_U32 - 1`, i.e. the smallest `b` with `F::ORDER_U32 - 1 < 2^b`.
@@ -171,12 +171,12 @@ pub const fn absorb_radix_bits<F: PrimeField32>() -> u32 {
 pub fn reduce_packed<SF: PrimeField32, TF: PrimeField>(vals: &[SF], radix_bits: u32) -> TF {
     debug_assert!((absorb_radix_bits::<SF>() <= radix_bits) && (radix_bits < 64));
     let base = TF::from_int(1u64 << radix_bits);
-    vals.iter().rev().fold(TF::ZERO, |acc, val| {
-        acc * base + TF::from_int(val.as_canonical_u32())
-    })
+    vals.iter()
+        .map(|val| TF::from_int(val.as_canonical_u32()))
+        .horner(base)
 }
 
-/// Largest `b` such that every integer in `[0, 2^b)` maps injectively into `F` via [`PrimeField32::from_int`].
+/// Largest `b` such that every integer in `[0, 2^b)` maps injectively into `F` via `PrimeField32::from_int`.
 ///
 /// Equivalently `b = floor(log2(p-1))` for prime `p = F::ORDER_U32`.
 #[inline]
@@ -231,14 +231,14 @@ pub fn max_shifted_packed_injective_limbs<F: PrimeField32, PF: PrimeField>(
 }
 
 /// Maximum limbs per [`PrimeField`] rate slot when absorbing with radix
-/// $2^{\texttt{absorb\_radix\_bits::<F>()}}$ (see [`reduce_packed`]).
+/// $2^{\texttt{absorb\\_radix\\_bits::\<F\>()}}$ (see [`reduce_packed`]).
 #[must_use]
 pub fn max_absorb_injective_limbs<F: PrimeField32, PF: PrimeField>() -> usize {
     max_packed_injective_limbs::<F, PF>(absorb_radix_bits::<F>())
 }
 
 /// Maximum shifted limbs per [`PrimeField`] rate slot when absorbing with radix
-/// $2^{\texttt{absorb\_radix\_bits::<F>()}}$ (see [`reduce_packed_shifted`]).
+/// $2^{\texttt{absorb\\_radix\\_bits::\<F\>()}}$ (see [`reduce_packed_shifted`]).
 #[must_use]
 pub fn max_shifted_absorb_injective_limbs<F: PrimeField32, PF: PrimeField>() -> usize {
     max_shifted_packed_injective_limbs::<F, PF>(absorb_radix_bits::<F>())
@@ -262,7 +262,7 @@ pub fn pf_packed_limbs_cover_order<SF: PrimeField>(num_limbs: usize, radix_bits:
 /// **Parameter requirements**
 ///
 /// - `radix_bits ≤ injective_pack_bits::<TF>()` so each limb maps injectively into `TF` via
-///   [`PrimeField32::from_int`]. If `radix_bits` is too large, distinct limbs can collide after
+///   `PrimeField32::from_int`. If `radix_bits` is too large, distinct limbs can collide after
 ///   reduction modulo `TF::ORDER`.
 /// - For a **lossless** transcript binding of arbitrary `SF` values, also require
 ///   `pf_packed_limbs_cover_order::<SF>(num_limbs, radix_bits)`. Deliberately truncated
@@ -390,3 +390,50 @@ where
 {
     li.zip(ri).map(|(l, r)| l * r).sum()
 }
+
+/// Horner-style polynomial evaluation over a [`DoubleEndedIterator`].
+///
+/// The iterator yields coefficients in **ascending degree order**
+/// `[c_0, c_1, …, c_{n-1}]`. Both methods walk the iterator back-to-front
+/// via [`DoubleEndedIterator::rfold`], avoiding any allocation.
+///
+/// # Convention
+///
+/// Given an evaluation point `x` and accumulator `acc`,
+/// [`HornerIter::horner_acc`] computes
+///
+/// ```text
+/// acc · xⁿ + Σ_{i=0..n} c_i · xⁱ
+///   = c_0 + x · (c_1 + x · (… + x · (c_{n-1} + x · acc)))
+/// ```
+///
+/// [`HornerIter::horner`] is the same with `acc = Acc::default()`, i.e. the
+/// polynomial evaluation `Σ_i c_i · xⁱ`.
+///
+/// For inputs in *descending* degree order, call `.rev()` on the iterator
+/// first.
+pub trait HornerIter: DoubleEndedIterator + Sized {
+    /// Horner fold with an explicit accumulator. See the trait docs for the
+    /// evaluation convention.
+    #[inline]
+    fn horner_acc<Acc, X>(self, acc: Acc, x: X) -> Acc
+    where
+        Acc: Mul<X, Output = Acc> + Add<Self::Item, Output = Acc>,
+        X: Clone,
+    {
+        self.rfold(acc, |a, v| a * x.clone() + v)
+    }
+
+    /// Horner fold starting from `Acc::default()`. See the trait docs for the
+    /// evaluation convention.
+    #[inline]
+    fn horner<Acc, X>(self, x: X) -> Acc
+    where
+        Acc: Default + Mul<X, Output = Acc> + Add<Self::Item, Output = Acc>,
+        X: Clone,
+    {
+        self.horner_acc(Acc::default(), x)
+    }
+}
+
+impl<I: DoubleEndedIterator> HornerIter for I {}

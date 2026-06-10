@@ -1,6 +1,6 @@
 //! Diffusion matrix for Bn254
 //!
-//! Reference: https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_bn256.rs
+//! Reference: <https://github.com/HorizenLabs/poseidon2/blob/main/plain_implementations/src/poseidon2/poseidon2_instance_bn256.rs>.
 
 use alloc::vec::Vec;
 

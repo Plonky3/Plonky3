@@ -1,16 +1,12 @@
-//! Lookup arguments for STARKs.
-//!
-//! Implements the [LogUp] protocol for intra-AIR (local) and cross-AIR
-//! (global) lookup arguments.
-//!
-//! [LogUp]: logup::LogUpGadget
-
+#![doc = include_str!("../README.md")]
 #![no_std]
 
 extern crate alloc;
 
-pub mod builder;
-pub mod bus;
+mod builder;
+mod bus;
+mod challenges;
+mod count;
 pub mod debug_util;
 pub mod folder;
 pub mod logup;
@@ -22,6 +18,9 @@ pub mod traits;
 mod types;
 
 pub use builder::{InteractionBuilder, SymbolicInteraction, SymbolicLocalInteraction};
+pub use bus::{LookupBus, PermutationCheckBus};
+pub use challenges::Challenges;
+pub use count::Count;
 pub use logup::LogUpGadget;
 pub use protocol::LookupProtocol;
 pub use symbolic::InteractionSymbolicBuilder;

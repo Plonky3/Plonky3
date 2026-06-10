@@ -3,7 +3,7 @@ use alloc::vec::Vec;
 use core::error::Error;
 use core::fmt::{Display, Formatter};
 
-use p3_field::{BasedVectorSpace, Field, PrimeField, PrimeField64};
+use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing, PrimeField, PrimeField64};
 use p3_monty_31::{MontyField31, MontyParameters};
 use p3_symmetric::{CryptographicPermutation, Hash, MerkleCap};
 
@@ -83,12 +83,25 @@ where
         }
     }
 
-    pub(crate) fn duplexing(&mut self) {
-        assert!(self.input_buffer.len() <= RATE);
+    pub(crate) fn duplexing(&mut self)
+    where
+        F: PrimeCharacteristicRing,
+    {
+        let num_absorbed = self.input_buffer.len();
+        assert!(num_absorbed <= RATE);
 
-        // Overwrite the first r elements with the inputs.
+        // Overwrite the leading rate slots with the buffered inputs.
         for (i, val) in self.input_buffer.drain(..).enumerate() {
             self.sponge_state[i] = val;
+        }
+
+        // An empty buffer is a squeeze: permute the current state, leaving the rate untouched.
+        // A non-empty buffer is an absorb, made prefix-free so length and zero-padding cannot collide.
+        if num_absorbed > 0 {
+            // Clear the rate slots the inputs did not overwrite.
+            self.sponge_state[num_absorbed..RATE].fill(F::ZERO);
+            // Bind the absorbed length into the first capacity element.
+            self.sponge_state[RATE] += F::from_u8(num_absorbed as u8);
         }
 
         // Apply the permutation.
@@ -110,6 +123,11 @@ where
     /// Clears `input_buffer` and `output_buffer` before absorbing. Used by
     /// [`MultiField32Challenger`](crate::MultiField32Challenger) so packed scalar and native-digest
     /// absorbs share this [`DuplexChallenger`]'s sponge state without queuing through `observe`.
+    ///
+    /// # Why the tag is a byte
+    ///
+    /// - The tag distinguishes at most 256 absorb lengths.
+    /// - Callers must keep logical lengths at most 255, or lengths differing by 256 collide.
     pub fn absorb_rate_padded_with_tag(&mut self, values: &[F], length_tag: u8) {
         const {
             assert!(
@@ -142,7 +160,7 @@ where
 impl<F, P, const WIDTH: usize, const RATE: usize> CanObserve<F>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
-    F: Copy,
+    F: Copy + PrimeCharacteristicRing,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
     fn observe(&mut self, value: F) {
@@ -160,7 +178,7 @@ where
 impl<F, P, const N: usize, const WIDTH: usize, const RATE: usize> CanObserve<[F; N]>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
-    F: Copy,
+    F: Copy + PrimeCharacteristicRing,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
     fn observe(&mut self, values: [F; N]) {
@@ -173,7 +191,7 @@ where
 impl<F, P, const N: usize, const WIDTH: usize, const RATE: usize> CanObserve<Hash<F, F, N>>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
-    F: Copy,
+    F: Copy + PrimeCharacteristicRing,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
     fn observe(&mut self, values: Hash<F, F, N>) {
@@ -186,7 +204,7 @@ where
 impl<F, P, const N: usize, const WIDTH: usize, const RATE: usize> CanObserve<&MerkleCap<F, [F; N]>>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
-    F: Copy,
+    F: Copy + PrimeCharacteristicRing,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
     fn observe(&mut self, cap: &MerkleCap<F, [F; N]>) {
@@ -201,7 +219,7 @@ where
 impl<F, P, const N: usize, const WIDTH: usize, const RATE: usize> CanObserve<MerkleCap<F, [F; N]>>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
-    F: Copy,
+    F: Copy + PrimeCharacteristicRing,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
     fn observe(&mut self, cap: MerkleCap<F, [F; N]>) {
@@ -213,7 +231,7 @@ where
 impl<F, P, const WIDTH: usize, const RATE: usize> CanObserve<Vec<Vec<F>>>
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
-    F: Copy,
+    F: Copy + PrimeCharacteristicRing,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
     fn observe(&mut self, valuess: Vec<Vec<F>>) {
@@ -443,7 +461,7 @@ where
 impl<F, P, const WIDTH: usize, const RATE: usize> CanFinalizeDigest
     for DuplexChallenger<F, P, WIDTH, RATE>
 where
-    F: Copy,
+    F: Copy + PrimeCharacteristicRing,
     P: CryptographicPermutation<[F; WIDTH]>,
 {
     type Digest = [F; RATE];
@@ -461,8 +479,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use core::iter;
-
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
@@ -500,13 +516,58 @@ mod tests {
         // Observe 12 elements.
         (0..12).for_each(|element| duplex_challenger.observe(G::from_u8(element as u8)));
 
-        let state_after_duplexing: Vec<_> = iter::repeat_n(G::ZERO, 12)
-            .chain((0..12).map(G::from_u8).rev())
+        // The absorb writes the 12 inputs into rate slots [0, 12).
+        let mut pre_permute = [G::ZERO; WIDTH];
+        (0..12).for_each(|i| pre_permute[i] = G::from_u8(i as u8));
+        // Slots [12, RATE) stay zero, and the absorbed length lands in the first capacity slot.
+        pre_permute[RATE] = G::from_u8(12);
+
+        // The test permutation reverses the whole state.
+        let mut state_after_duplexing = pre_permute;
+        state_after_duplexing.reverse();
+        // Outputs are the first RATE elements, popped from the back when sampling.
+        let expected_samples: Vec<G> = state_after_duplexing[..RATE]
+            .iter()
+            .copied()
+            .rev()
             .collect();
 
-        let expected_samples: Vec<G> = state_after_duplexing[..16].iter().copied().rev().collect();
         let samples = <Chal as CanSample<G>>::sample_vec(&mut duplex_challenger, 16);
         assert_eq!(samples, expected_samples);
+    }
+
+    #[test]
+    fn test_absorb_is_length_binding() {
+        type Chal = DuplexChallenger<G, TestPermutation, WIDTH, RATE>;
+
+        // A sponge that overwrote only the filled rate slots would map an absorb and its
+        // zero-extension onto the same state, since the trailing zeros match the slots already
+        // holding zero.
+        //
+        // Invariant: an absorb and the same absorb padded with trailing zeros must yield
+        // different challenges.
+        //
+        //     challenger A absorbs: [5, 7]        -> length tag 2
+        //     challenger B absorbs: [5, 7, 0, 0]  -> length tag 4
+        //     distinct tags -> distinct states -> distinct samples
+        let mut chal_a = Chal::new(TestPermutation {});
+        let mut chal_b = Chal::new(TestPermutation {});
+
+        // Absorb the shorter sequence.
+        chal_a.observe(G::from_u8(5));
+        chal_a.observe(G::from_u8(7));
+
+        // Absorb the same prefix followed by two zeros.
+        chal_b.observe(G::from_u8(5));
+        chal_b.observe(G::from_u8(7));
+        chal_b.observe(G::ZERO);
+        chal_b.observe(G::ZERO);
+
+        // The test permutation is a bijection, so distinct pre-permutation states give distinct
+        // challenge streams.
+        let samples_a = <Chal as CanSample<G>>::sample_vec(&mut chal_a, RATE);
+        let samples_b = <Chal as CanSample<G>>::sample_vec(&mut chal_b, RATE);
+        assert_ne!(samples_a, samples_b);
     }
 
     #[test]
@@ -651,7 +712,8 @@ mod tests {
             chal.observe(G::from_u8(i as u8));
         }
 
-        // we expect the output buffer to be reversed
+        // The absorbed length RATE sits in the capacity slot.
+        // Reversing the state moves it to index 7 of the output.
         let expected = [
             G::from_u8(0),
             G::from_u8(0),
@@ -660,7 +722,7 @@ mod tests {
             G::from_u8(0),
             G::from_u8(0),
             G::from_u8(0),
-            G::from_u8(0),
+            G::from_u8(RATE as u8),
             G::from_u8(15),
             G::from_u8(14),
             G::from_u8(13),
@@ -702,7 +764,8 @@ mod tests {
             chal.observe(G::from_u8(i as u8));
         }
 
-        // We expect the output buffer to be reversed
+        // The absorbed length RATE sits in the capacity slot.
+        // Reversing the state moves it to index 7 of the output.
         let expected_output = [
             G::from_u8(0),
             G::from_u8(0),
@@ -711,7 +774,7 @@ mod tests {
             G::from_u8(0),
             G::from_u8(0),
             G::from_u8(0),
-            G::from_u8(0),
+            G::from_u8(RATE as u8),
             G::from_u8(15),
             G::from_u8(14),
             G::from_u8(13),

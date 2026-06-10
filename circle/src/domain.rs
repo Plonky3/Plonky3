@@ -7,6 +7,7 @@ use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, batch_multiplicative_inverse};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_ceil_usize, log2_strict_usize};
 use tracing::instrument;
 
@@ -215,38 +216,51 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
     #[instrument(skip_all, fields(log_n = %coset.log_n))]
     fn selectors_on_coset(&self, coset: Self) -> LagrangeSelectors<Vec<Self::Val>> {
         let pts = coset.points().collect_vec();
+        let n = pts.len();
 
-        // Precompute constants and per-point numerators/denominators
         let neg_shift = -self.shift;
         let k = neg_shift.s_p_at_p(self.log_n);
 
-        let z_vals: Vec<Self::Val> = pts.iter().map(|&at| self.vanishing_poly(at)).collect();
-        let den_shift: Vec<Self::Val> = pts.iter().map(|&at| self.shift.v_tilde_p(at)).collect();
-        let den_negshift_k: Vec<Self::Val> =
-            pts.iter().map(|&at| neg_shift.v_tilde_p(at) * k).collect();
+        // Fused parallel pass over the coset points: `vanishing_poly`,
+        // `shift.v_tilde_p` and `(-shift).v_tilde_p * k` are independent per
+        // point. Computing them side-by-side reads `pts` once and writes the
+        // three outputs in parallel.
+        let mut z_vals = Self::Val::zero_vec(n);
+        let mut den_shift = Self::Val::zero_vec(n);
+        let mut den_negshift_k = Self::Val::zero_vec(n);
+        z_vals
+            .par_iter_mut()
+            .zip(den_shift.par_iter_mut())
+            .zip(den_negshift_k.par_iter_mut())
+            .zip(pts.par_iter())
+            .for_each(|(((z, ds), dnk), &at)| {
+                *z = self.vanishing_poly(at);
+                *ds = self.shift.v_tilde_p(at);
+                *dnk = neg_shift.v_tilde_p(at) * k;
+            });
 
-        // Batch inverses
+        // Batch inverses (already internally parallel).
         let inv_vanishing = batch_multiplicative_inverse(&z_vals);
         let inv_den_shift = batch_multiplicative_inverse(&den_shift);
         let inv_den_negshift_k = batch_multiplicative_inverse(&den_negshift_k);
 
-        // Build selectors
-        // TODO: If we need to make this faster we could look into using packed fields.
-        let is_first_row = z_vals
-            .iter()
-            .zip(inv_den_shift.iter())
-            .map(|(&z, &inv_d)| z * inv_d)
-            .collect();
-        let is_last_row = z_vals
-            .iter()
-            .zip(inv_den_negshift_k.iter())
-            .map(|(&z, &inv_dk)| z * inv_dk * k)
-            .collect();
-        let is_transition = z_vals
-            .iter()
-            .zip(inv_den_negshift_k.iter())
-            .map(|(&z, &inv_dk)| Self::Val::ONE - z * inv_dk)
-            .collect();
+        // Fused parallel selector build:
+        let mut is_first_row = Self::Val::zero_vec(n);
+        let mut is_last_row = Self::Val::zero_vec(n);
+        let mut is_transition = Self::Val::zero_vec(n);
+        is_first_row
+            .par_iter_mut()
+            .zip(is_last_row.par_iter_mut())
+            .zip(is_transition.par_iter_mut())
+            .zip(z_vals.par_iter())
+            .zip(inv_den_shift.par_iter())
+            .zip(inv_den_negshift_k.par_iter())
+            .for_each(|(((((ifr, ilr), itr), &z), &inv_d), &inv_dk)| {
+                let z_inv_dk = z * inv_dk;
+                *ifr = z * inv_d;
+                *ilr = z_inv_dk * k;
+                *itr = Self::Val::ONE - z_inv_dk;
+            });
 
         LagrangeSelectors {
             is_first_row,

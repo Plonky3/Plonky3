@@ -21,20 +21,40 @@ use p3_field::{
 use p3_util::{assume, branch_hint, flatten_to_base, gcd_inner};
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
-use serde::{Deserialize, Serialize};
+use serde::de::Error;
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// The Goldilocks prime
 pub(crate) const P: u64 = 0xFFFF_FFFF_0000_0001;
 
 /// The prime field known as Goldilocks, defined as `F_p` where `p = 2^64 - 2^32 + 1`.
 ///
-/// Note that the safety of deriving `Serialize` and `Deserialize` relies on the fact that the internal value can be any u64.
-#[derive(Copy, Clone, Default, Serialize, Deserialize)]
+/// The serde encoding is canonical: every field element has exactly one valid byte representation.
+#[derive(Copy, Clone, Default)]
 #[repr(transparent)] // Important for reasoning about memory layout
 #[must_use]
 pub struct Goldilocks {
     /// Not necessarily canonical.
     pub(crate) value: u64,
+}
+
+impl Serialize for Goldilocks {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // Emit the canonical representative so every field element has one encoding.
+        serializer.serialize_u64(self.as_canonical_u64())
+    }
+}
+
+impl<'de> Deserialize<'de> for Goldilocks {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let val = u64::deserialize(d)?;
+        // Reject non-canonical encodings so a proof cannot be re-encoded without the witness.
+        if val < P {
+            Ok(Self::new(val))
+        } else {
+            Err(D::Error::custom("Goldilocks value is out of range"))
+        }
+    }
 }
 
 impl Goldilocks {
@@ -378,7 +398,7 @@ impl Field for Goldilocks {
     #[cfg(all(target_arch = "x86_64", target_feature = "avx512f"))]
     type Packing = crate::PackedGoldilocksAVX512;
 
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     type Packing = crate::PackedGoldilocksNeon;
 
     #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
@@ -697,7 +717,7 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
 
 /// Compute the inverse of a Goldilocks element `a` using the binary GCD algorithm.
 ///
-/// Instead of applying the standard algorithm this uses a variant inspired by https://eprint.iacr.org/2020/972.pdf.
+/// Instead of applying the standard algorithm this uses a variant inspired by <https://eprint.iacr.org/2020/972.pdf>.
 /// The key idea is to compute update factors which are incorrect by a known power of 2 which
 /// can be corrected at the end. These update factors can then be used to construct the inverse
 /// via a simple linear combination.
@@ -750,6 +770,36 @@ mod tests {
 
     type F = Goldilocks;
     type EF = BinomialExtensionField<F, 5>;
+
+    #[test]
+    fn deserialize_rejects_non_canonical_encodings() {
+        // p, p + i, and u64::MAX are all field-equal to canonical values.
+        // Only the canonical encoding may deserialize.
+        // This blocks re-encoding a proof as p + i without the witness.
+        for non_canonical in [P, P + 5, u64::MAX] {
+            let json = serde_json::to_string(&non_canonical).unwrap();
+            assert!(serde_json::from_str::<F>(&json).is_err());
+        }
+
+        // The largest canonical value, p - 1, still deserializes.
+        let max_canonical_json = serde_json::to_string(&(P - 1)).unwrap();
+        let max_canonical: F = serde_json::from_str(&max_canonical_json).unwrap();
+        assert_eq!(max_canonical.as_canonical_u64(), P - 1);
+    }
+
+    #[test]
+    fn serialize_is_canonical() {
+        // A non-canonical in-memory value serializes to its canonical representative.
+        //     in memory : p + 5
+        //     canonical : 5
+        let non_canonical = F::new(P + 5);
+        let json = serde_json::to_string(&non_canonical).unwrap();
+        assert_eq!(json, "5");
+
+        // The canonical encoding round-trips back to the same field element.
+        let roundtrip: F = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip, non_canonical);
+    }
 
     #[test]
     fn test_goldilocks() {

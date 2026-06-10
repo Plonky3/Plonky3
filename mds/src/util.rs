@@ -1,7 +1,7 @@
 use core::ops::{AddAssign, Mul};
 
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{PrimeCharacteristicRing, TwoAdicField};
+use p3_field::{Algebra, PrimeCharacteristicRing, TwoAdicField};
 
 /// This will throw an error if N = 0 but it's hard to imagine this case coming up.
 #[inline(always)]
@@ -85,6 +85,38 @@ pub fn apply_circulant_fft<F: TwoAdicField, const N: usize, FFT: TwoAdicSubgroup
     // Transform back to the time domain to get the circulant product.
     let output = fft.idft(product);
     output.try_into().unwrap()
+}
+
+/// Dense matrix-vector product, applied in place to a fixed-width state vector.
+///
+/// # Overview
+///
+/// - Generic O(t^2) fallback for any dense square matrix.
+/// - Circulant matrices have faster paths in this module (Karatsuba, FFT).
+/// - Sparse or diagonal layouts can skip full-row scans entirely.
+///
+/// # Arguments
+///
+/// - The state vector, overwritten with the product on return.
+/// - The matrix, indexed row-first as `m[row][col]`.
+///
+/// # Performance
+///
+/// - Runtime: O(t^2) ring operations for a width-t state.
+/// - Allocations: one stack snapshot of the input state.
+#[inline]
+pub fn mds_multiply<F, A, const WIDTH: usize>(state: &mut [A; WIDTH], matrix: &[[F; WIDTH]; WIDTH])
+where
+    F: PrimeCharacteristicRing,
+    A: Algebra<F>,
+{
+    // Snapshot inputs so in-place writes don't corrupt later row reads.
+    let input = state.clone();
+
+    //     output[i] = sum_{j=0..t} matrix[i][j] * snapshot[j]
+    for (out, row) in state.iter_mut().zip(matrix.iter()) {
+        *out = A::mixed_dot_product(&input, row);
+    }
 }
 
 #[cfg(test)]

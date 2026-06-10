@@ -1,46 +1,30 @@
 use alloc::vec::Vec;
 use core::array;
-use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use itertools::Itertools;
 use p3_util::{flatten_to_base, reconstitute_from_base};
 use rand::distr::{Distribution, StandardUniform};
-use serde::{Deserialize, Serialize};
 
-use super::{BinomialExtensionField, binomial_mul, vector_add, vector_sub};
-use crate::extension::{BinomiallyExtendable, binomial_square};
+use super::{BinomialExtensionField, PackedExtField, binomial_mul, vector_add, vector_sub};
+use crate::extension::{Binomial, BinomiallyExtendable, binomial_square};
 use crate::{
     Algebra, BasedVectorSpace, Dup, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
     PrimeCharacteristicRing, field_to_array,
 };
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
-#[repr(transparent)] // Needed to make various casts safe.
-#[must_use]
-pub struct PackedBinomialExtensionField<F: Field, PF: PackedField<Scalar = F>, const D: usize> {
-    #[serde(
-        with = "p3_util::array_serialization",
-        bound(serialize = "PF: Serialize", deserialize = "PF: Deserialize<'de>")
-    )]
-    pub(crate) value: [PF; D],
-}
-
-impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> PackedBinomialExtensionField<F, PF, D> {
-    const fn new(value: [PF; D]) -> Self {
-        Self { value }
-    }
-}
+/// Packed binomial extension field `F[X] / (X^D - W)`, one element per SIMD lane.
+///
+/// Type alias for the unified [`PackedExtField`] with `Shape = Binomial<F>`.
+pub type PackedBinomialExtensionField<F, PF, const D: usize> =
+    PackedExtField<F, PF, D, Binomial<F>>;
 
 impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> Default
     for PackedBinomialExtensionField<F, PF, D>
 {
     #[inline]
     fn default() -> Self {
-        Self {
-            value: array::from_fn(|_| PF::ZERO),
-        }
+        Self::new(array::from_fn(|_| PF::ZERO))
     }
 }
 
@@ -49,9 +33,7 @@ impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> From<BinomialExtensi
 {
     #[inline]
     fn from(x: BinomialExtensionField<F, D>) -> Self {
-        Self {
-            value: x.value.map(Into::into),
-        }
+        Self::new(x.value.map(Into::into))
     }
 }
 
@@ -60,9 +42,7 @@ impl<F: Field, PF: PackedField<Scalar = F>, const D: usize> From<PF>
 {
     #[inline]
     fn from(x: PF) -> Self {
-        Self {
-            value: field_to_array(x),
-        }
+        Self::new(field_to_array(x))
     }
 }
 
@@ -118,21 +98,13 @@ where
 {
     type PrimeSubfield = PF::PrimeSubfield;
 
-    const ZERO: Self = Self {
-        value: [PF::ZERO; D],
-    };
+    const ZERO: Self = Self::new([PF::ZERO; D]);
 
-    const ONE: Self = Self {
-        value: field_to_array(PF::ONE),
-    };
+    const ONE: Self = Self::new(field_to_array(PF::ONE));
 
-    const TWO: Self = Self {
-        value: field_to_array(PF::TWO),
-    };
+    const TWO: Self = Self::new(field_to_array(PF::TWO));
 
-    const NEG_ONE: Self = Self {
-        value: field_to_array(PF::NEG_ONE),
-    };
+    const NEG_ONE: Self = Self::new(field_to_array(PF::NEG_ONE));
 
     #[inline]
     fn from_prime_subfield(val: Self::PrimeSubfield) -> Self {
@@ -188,9 +160,7 @@ where
 
     #[inline]
     fn from_basis_coefficients_fn<Fn: FnMut(usize) -> PF>(f: Fn) -> Self {
-        Self {
-            value: array::from_fn(f),
-        }
+        Self::new(array::from_fn(f))
     }
 
     #[inline]
@@ -230,7 +200,7 @@ where
     #[inline]
     fn packed_ext_powers(base: BinomialExtensionField<F, D>) -> crate::Powers<Self> {
         let width = F::Packing::WIDTH;
-        let powers = base.powers().take(width + 1).collect_vec();
+        let powers = base.powers().collect_n(width + 1);
         // Transpose first WIDTH powers
         let current = Self::from_ext_slice(&powers[..width]);
 
@@ -253,9 +223,7 @@ where
 
     #[inline]
     fn neg(self) -> Self {
-        Self {
-            value: self.value.map(PF::neg),
-        }
+        Self::new(self.value.map(PF::neg))
     }
 }
 
@@ -269,7 +237,7 @@ where
     #[inline]
     fn add(self, rhs: Self) -> Self {
         let value = vector_add(&self.value, &rhs.value);
-        Self { value }
+        Self::new(value)
     }
 }
 
@@ -284,7 +252,7 @@ where
     #[inline]
     fn add(self, rhs: BinomialExtensionField<F, D>) -> Self {
         let value = vector_add(&self.value, &rhs.value);
-        Self { value }
+        Self::new(value)
     }
 }
 
@@ -361,7 +329,7 @@ where
     #[inline]
     fn sub(self, rhs: Self) -> Self {
         let value = vector_sub(&self.value, &rhs.value);
-        Self { value }
+        Self::new(value)
     }
 }
 
@@ -376,7 +344,7 @@ where
     #[inline]
     fn sub(self, rhs: BinomialExtensionField<F, D>) -> Self {
         let value = vector_sub(&self.value, &rhs.value);
-        Self { value }
+        Self::new(value)
     }
 }
 
@@ -391,7 +359,7 @@ where
     fn sub(self, rhs: PF) -> Self {
         let mut res = self.value;
         res[0] -= rhs;
-        Self { value: res }
+        Self::new(res)
     }
 }
 
@@ -479,9 +447,7 @@ where
 
     #[inline]
     fn mul(self, rhs: PF) -> Self {
-        Self {
-            value: self.value.map(|x| x * rhs),
-        }
+        Self::new(self.value.map(|x| x * rhs))
     }
 }
 

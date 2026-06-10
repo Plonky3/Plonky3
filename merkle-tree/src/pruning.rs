@@ -49,6 +49,8 @@ use alloc::vec::Vec;
 
 use serde::{Deserialize, Serialize};
 
+use crate::PrunedProofError;
+
 /// A full (unpruned) Merkle authentication path for a single leaf.
 ///
 /// All sibling digests are stored in a **single contiguous allocation**.
@@ -311,12 +313,12 @@ where
 ///
 /// # Returns
 ///
-/// - Full authentication paths in the **original input order**.
-/// - `None` if the proof data is malformed.
+/// - Full authentication paths in the **original input order** on success.
+/// - A [`PrunedProofError`] naming the specific malformation on failure.
 pub(crate) fn restore_paths<D, const DIGEST_ELEMS: usize>(
     pruned: &PrunedMerklePaths<D, DIGEST_ELEMS>,
     full_sibling_count: usize,
-) -> Option<Vec<MerkleAuthPath<D, DIGEST_ELEMS>>>
+) -> Result<Vec<MerkleAuthPath<D, DIGEST_ELEMS>>, PrunedProofError>
 where
     D: Clone + Default,
 {
@@ -326,9 +328,12 @@ where
     // Zero paths with nonzero queries is malformed.
     if n == 0 {
         return if pruned.original_order.is_empty() {
-            Some(vec![])
+            Ok(vec![])
         } else {
-            None
+            Err(PrunedProofError::PathQueryCountMismatch {
+                num_paths: 0,
+                num_queries: pruned.original_order.len(),
+            })
         };
     }
 
@@ -362,7 +367,10 @@ where
         // Sanity check: restored path must be exactly the right size.
         // If not, the pruned proof is malformed.
         if siblings.len() != full_sibling_count {
-            return None;
+            return Err(PrunedProofError::SiblingCountMismatch {
+                expected: full_sibling_count,
+                got: siblings.len(),
+            });
         }
 
         restored.push(MerkleAuthPath {
@@ -376,7 +384,15 @@ where
     pruned
         .original_order
         .iter()
-        .map(|&idx| restored.get(idx as usize).cloned())
+        .map(|&idx| {
+            restored
+                .get(idx as usize)
+                .cloned()
+                .ok_or(PrunedProofError::OriginalOrderOutOfRange {
+                    slot: idx as usize,
+                    num_paths: n,
+                })
+        })
         .collect()
 }
 
@@ -811,7 +827,13 @@ mod tests {
                 siblings: vec![[0; 2]],
             }],
         };
-        assert!(restore_paths(&pruned, 3).is_none());
+        assert!(matches!(
+            restore_paths(&pruned, 3),
+            Err(PrunedProofError::SiblingCountMismatch {
+                expected: 3,
+                got: 1
+            })
+        ));
     }
 
     #[test]
@@ -836,7 +858,13 @@ mod tests {
                 siblings: vec![[0; 2]; 10],
             }],
         };
-        assert!(restore_paths(&pruned, 3).is_none());
+        assert!(matches!(
+            restore_paths(&pruned, 3),
+            Err(PrunedProofError::SiblingCountMismatch {
+                expected: 3,
+                got: 10
+            })
+        ));
     }
 
     // Size analysis

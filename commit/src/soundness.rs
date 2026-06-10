@@ -530,7 +530,16 @@ impl SecurityAssumption {
         (ood_samples * field_size_bits) as f64 + 1. - error
     }
 
-    /// Computes the number of OOD samples required to achieve `security_level` bits of security.
+    /// Number of OOD samples needed to reach the requested security level.
+    ///
+    /// In both STIR and WHIR there are various strategies to set OOD samples.
+    /// Here we sample one element from the extension field per OOD query.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(0)` for unique decoding, which uses no OOD samples.
+    /// - `Some(n)` for the smallest count reaching the security level.
+    /// - `None` when no count in range suffices, i.e. the field is too small.
     #[must_use]
     pub fn determine_ood_samples(
         &self,
@@ -538,20 +547,17 @@ impl SecurityAssumption {
         log_degree: usize,
         log_inv_rate: usize,
         field_size_bits: usize,
-    ) -> usize {
+    ) -> Option<usize> {
         if matches!(self, Self::UniqueDecoding) {
-            return 0;
+            return Some(0);
         }
 
-        for ood_samples in 1..64 {
-            if self.ood_error(log_degree, log_inv_rate, field_size_bits, ood_samples)
+        // Each extra OOD sample adds roughly `field_size_bits - log_degree` bits.
+        // When the field is too small that term never reaches the target.
+        (1..64).find(|&ood_samples| {
+            self.ood_error(log_degree, log_inv_rate, field_size_bits, ood_samples)
                 >= security_level as f64
-            {
-                return ood_samples;
-            }
-        }
-
-        panic!("Could not find an appropriate number of OOD samples");
+        })
     }
 
     /// Compute the sumcheck soundness term of the folding step (in bits).
@@ -1204,12 +1210,10 @@ mod tests {
         let num_queries = jb.queries(security_level, log_inv_rate);
 
         // OOD sample count for the OOD term to reach security_level alone.
-        let ood_samples = jb.determine_ood_samples(
-            security_level,
-            log_degree,
-            log_inv_rate,
-            KOALABEAR_QUINTIC_BITS,
-        );
+        // The quintic field is large, so a feasible count always exists here.
+        let ood_samples = jb
+            .determine_ood_samples(security_level, log_degree, log_inv_rate, KOALABEAR_QUINTIC_BITS)
+            .expect("quintic field is large enough for these parameters");
 
         // Five algebraic error bounds at the chosen configuration.
         let prox_gap = jb.prox_gaps_error(log_degree, log_inv_rate, KOALABEAR_QUINTIC_BITS, 2);

@@ -11,17 +11,17 @@ use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use p3_sumcheck::constraints::Constraint;
+use p3_sumcheck::constraints::statement::SelectStatement;
+use p3_sumcheck::strategy::VariableOrder;
+use p3_sumcheck::{SumcheckError, verify_final_sumcheck_rounds};
 use tracing::instrument;
 
 use super::committer::reader::ParsedCommitment;
 use super::utils::get_challenge_stir_queries;
 use crate::alloc::string::ToString;
-use crate::constraints::Constraint;
-use crate::constraints::statement::SelectStatement;
 use crate::parameters::{RoundConfig, WhirConfig};
 use crate::pcs::proof::{QueryOpening, WhirProof};
-use crate::sumcheck::strategy::VariableOrder;
-use crate::sumcheck::{SumcheckError, verify_final_sumcheck_rounds};
 
 pub mod errors;
 
@@ -148,12 +148,15 @@ where
             )?;
 
             // Verify STIR in-domain challenges against the previous commitment.
+            let current_folding_randomness = round_folding_randomness
+                .last()
+                .ok_or(VerifierError::MissingFoldingRandomness { round: round_index })?;
             let stir_statement = self.verify_stir_challenges(
                 proof,
                 challenger,
                 round_params,
                 &prev_commitment,
-                round_folding_randomness.last().unwrap(),
+                current_folding_randomness,
                 round_index,
             )?;
 
@@ -165,6 +168,20 @@ where
             constraint.combine_evals(&mut claimed_eval);
             constraints.push(constraint);
 
+            // Intermediate-round sumcheck rounds == next-round folding factor.
+            // Mirrors the initial and final sumcheck guards;
+            // Without it a wrong count desyncs Fiat-Shamir instead of rejecting cleanly.
+            let expected_round_rounds = self.folding_factor(round_index + 1);
+            let actual_round_rounds = proof.rounds[round_index]
+                .sumcheck
+                .polynomial_evaluations()
+                .len();
+            if actual_round_rounds != expected_round_rounds {
+                return Err(VerifierError::Sumcheck(SumcheckError::RoundCountMismatch {
+                    expected: expected_round_rounds,
+                    actual: actual_round_rounds,
+                }));
+            }
             let folding_randomness = proof.rounds[round_index].sumcheck.verify_rounds(
                 challenger,
                 &mut claimed_eval,
@@ -178,22 +195,36 @@ where
         // Final round: receive the polynomial in the clear.
         let final_evaluations = proof
             .final_poly
-            .clone()
+            .as_ref()
             .ok_or(VerifierError::MissingFinalPoly)?;
+        let final_round_config = self.final_round_config();
+        let expected_final_poly_len = 1usize << final_round_config.num_variables;
+        let actual_final_poly_len = final_evaluations.num_evals();
+        if actual_final_poly_len != expected_final_poly_len {
+            return Err(VerifierError::FinalPolyLengthMismatch {
+                expected: expected_final_poly_len,
+                actual: actual_final_poly_len,
+            });
+        }
         challenger.observe_algebra_slice(final_evaluations.as_slice());
 
         // Verify final STIR challenges.
+        let final_round_folding_randomness = round_folding_randomness.last().ok_or_else(|| {
+            VerifierError::MissingFoldingRandomness {
+                round: self.n_rounds(),
+            }
+        })?;
         let stir_statement = self.verify_stir_challenges(
             proof,
             challenger,
-            &self.final_round_config(),
+            &final_round_config,
             &prev_commitment,
-            round_folding_randomness.last().unwrap(),
+            final_round_folding_randomness,
             self.n_rounds(),
         )?;
 
         stir_statement
-            .verify(&final_evaluations)
+            .verify(final_evaluations)
             .then_some(())
             .ok_or_else(|| VerifierError::StirChallengeFailed {
                 challenge_id: 0,
@@ -244,7 +275,7 @@ where
     ///
     /// Checks PoW witness, generates query indices, verifies Merkle proofs,
     /// and evaluates folded polynomials at the queried positions.
-    pub fn verify_stir_challenges(
+    fn verify_stir_challenges(
         &self,
         proof: &WhirProof<F, EF, MT>,
         challenger: &mut Challenger,
@@ -271,7 +302,7 @@ where
         }
 
         // Sample STIR query positions.
-        let stir_challenges_indexes = get_challenge_stir_queries::<Challenger, F, EF>(
+        let stir_challenges_indexes = get_challenge_stir_queries::<Challenger, F>(
             params.domain_size,
             params.folding_factor,
             params.num_queries,
@@ -313,7 +344,7 @@ where
     }
 
     /// Verify Merkle multi-opening proofs at the given indices.
-    pub fn verify_merkle_proof(
+    fn verify_merkle_proof(
         &self,
         proof: &WhirProof<F, EF, MT>,
         root: &MT::Commitment,
@@ -321,7 +352,7 @@ where
         dimensions: &[Dimensions],
         round_index: usize,
     ) -> Result<Vec<Vec<EF>>, VerifierError> {
-        let extension_mmcs = ExtensionMmcs::new((*self.mmcs).clone());
+        let extension_mmcs = ExtensionMmcs::new(self.mmcs);
 
         let queries = if round_index == self.n_rounds() {
             &proof.final_queries

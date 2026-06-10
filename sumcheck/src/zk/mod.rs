@@ -1,6 +1,7 @@
 //! Honest-verifier zero-knowledge sumcheck for WHIR.
 //!
-//! Implements Construction 6.3 of eprint 2026/391 on top of the prefix-binding sumcheck layout.
+//! Implements Construction 6.3 of eprint 2026/391 on top of both
+//! stacked-binding modes — prefix and suffix.
 //!
 //! # Overview
 //!
@@ -14,7 +15,7 @@
 //!
 //! Let `k` be the folding factor and `ell_zk` the mask code message length.
 //!
-//! 1. Prover samples `k` univariate masks of degree `ell_zk - 1` over the base field.
+//! 1. Prover samples `k` univariate masks of degree `ell_zk - 1` over the extension field.
 //! 2. Each mask is encoded under a zero-knowledge code, MMCS-committed, and absorbed into the Fiat-Shamir transcript.
 //! 3. Prover sends `mu_tilde`, the sum of all mask evaluations over `{0,1}^k`.
 //! 4. Verifier samples a combining challenge `eps` in the extension field.
@@ -51,14 +52,14 @@
 //!
 //! # Layout coverage
 //!
-//! Only the prefix-binding layout is supported.
-//! Routing the PCS through the suffix-binding layout produces a non-private proof.
-//! Tracked in [Plonky3#1649](https://github.com/Plonky3/Plonky3/issues/1649).
+//! Both stacked-binding modes are supported.
+//! The masking layer is binding-agnostic; only the residual handoff differs between modes.
+//! Resolves [Plonky3#1649](https://github.com/Plonky3/Plonky3/issues/1649).
 //!
 //! # Field constraints (Lemma 6.4)
 //!
 //! - Base field characteristic must not be `2`.
-//! - Mask message length `ell_zk` must be at least `2`.
+//! - Mask message length `ell_zk` must be at least `3`, so the mask (degree `ell_zk - 1`) covers the degree-2 plain round polynomial.
 //!
 //! Both are checked at constructor entry.
 //!
@@ -74,7 +75,10 @@ pub mod verifier;
 #[cfg(test)]
 pub(crate) mod test_helpers;
 
-pub use data::{MaskOracle, ZkSumcheckData};
-pub use prover::ZkPrefixProver;
+pub use data::{
+    MaskOracle, ZkSumcheckData, ZkSumcheckHandoff, ZkVerifierHandoff, mask_residual,
+    mask_residual_covectors, mask_residual_covectors_from_shape,
+};
+pub use prover::{ZkLayout, ZkPrefixProver, ZkProver, ZkSuffixProver, stack_codewords};
 pub use simulator::simulate_classic_unpacked;
 pub use verifier::ZkVerifier;

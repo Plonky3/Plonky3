@@ -9,6 +9,7 @@ use p3_uni_stark::{
 };
 
 use crate::builder::InteractionBuilder;
+use crate::count::Count;
 
 pub struct ProverConstraintFolderWithLookups<'a, SC: StarkGenericConfig> {
     pub inner: ProverConstraintFolder<'a, SC>,
@@ -45,8 +46,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for ProverConstraintFolderWithLookup
     }
 
     #[inline]
-    fn is_transition_window(&self, size: usize) -> Self::Expr {
-        assert!(size <= 2, "only two-row windows are supported, got {size}");
+    fn is_transition(&self) -> Self::Expr {
         self.inner.is_transition
     }
 
@@ -145,8 +145,7 @@ impl<'a, SC: StarkGenericConfig> AirBuilder for VerifierConstraintFolderWithLook
     }
 
     #[inline]
-    fn is_transition_window(&self, size: usize) -> Self::Expr {
-        assert!(size <= 2, "only two-row windows are supported, got {size}");
+    fn is_transition(&self) -> Self::Expr {
         self.inner.is_transition
     }
 
@@ -206,8 +205,7 @@ impl<SC: StarkGenericConfig> InteractionBuilder for ProverConstraintFolderWithLo
         &mut self,
         _bus_name: &str,
         fields: impl IntoIterator<Item = E>,
-        _count: impl Into<Self::Expr>,
-        _count_weight: u32,
+        _count: impl Into<Count<Self::Expr>>,
     ) {
         // Drain the iterator so side effects in a wrapping adapter still fire,
         // preserving the semantics of a real recording builder.
@@ -228,8 +226,7 @@ impl<SC: StarkGenericConfig> InteractionBuilder for VerifierConstraintFolderWith
         &mut self,
         _bus_name: &str,
         fields: impl IntoIterator<Item = E>,
-        _count: impl Into<Self::Expr>,
-        _count_weight: u32,
+        _count: impl Into<Count<Self::Expr>>,
     ) {
         // Drain the iterator so side effects in a wrapping adapter still fire.
         fields.into_iter().for_each(drop);

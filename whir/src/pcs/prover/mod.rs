@@ -10,20 +10,17 @@ use p3_matrix::dense::DenseMatrix;
 use p3_matrix::extension::FlatMatrixView;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use p3_sumcheck::constraints::Constraint;
+use p3_sumcheck::constraints::statement::{EqStatement, SelectStatement};
+use p3_sumcheck::layout::Layout;
+use p3_sumcheck::strategy::{SumcheckProver, VariableOrder};
 use tracing::instrument;
 
-use crate::constraints::Constraint;
-use crate::constraints::statement::{EqStatement, SelectStatement};
 use crate::fiat_shamir::domain_separator::DomainSeparator;
 use crate::parameters::WhirConfig;
 use crate::pcs::committer::writer::commit_extension;
 use crate::pcs::proof::{QueryOpening, SumcheckData, WhirProof};
 use crate::pcs::utils::get_challenge_stir_queries;
-use crate::sumcheck::layout::Layout;
-use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
-
-pub type Proof<W, const DIGEST_ELEMS: usize> = Vec<Vec<[W; DIGEST_ELEMS]>>;
-pub type Leafs<F> = Vec<Vec<F>>;
 
 /// Per-round prover state with the Merkle authentication shapes
 /// baked in for the WHIR commitment scheme.
@@ -54,7 +51,7 @@ enum RoundData<BaseData, ExtData> {
 /// Tracks the sumcheck prover, folding randomness, and Merkle
 /// commitments across base and extension field rounds.
 #[derive(Debug)]
-pub struct RoundState<EF, F, BaseData, ExtData>
+struct RoundState<EF, F, BaseData, ExtData>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
@@ -234,7 +231,7 @@ where
         challenger.sample();
 
         // STIR query sampling.
-        let stir_challenges_indexes = get_challenge_stir_queries::<Challenger, F, EF>(
+        let stir_challenges_indexes = get_challenge_stir_queries::<Challenger, F>(
             round_params.domain_size,
             self.params.folding_factor.at_round(round_index),
             round_params.num_queries,
@@ -252,31 +249,47 @@ where
         match &round_state.round_data {
             RoundData::Base(data) => {
                 for &challenge in &stir_challenges_indexes {
-                    let commitment = self.mmcs.open_batch(challenge, data);
-                    let answer = commitment.opened_values[0].clone();
+                    let opening = self.mmcs.open_batch(challenge, data);
+                    // WHIR commits a single matrix per round, so take its one opened row.
+                    let answer = opening
+                        .opened_values
+                        .into_iter()
+                        .next()
+                        .expect("a committed batch opens at least one matrix");
 
-                    let eval = Poly::new(answer.clone()).eval_base(&query_randomness);
+                    // Evaluate the fold by borrowing the row.
+                    // Then hand the same allocation to the proof, with no per-query leaf copy.
+                    let poly = Poly::new(answer);
+                    let eval = poly.eval_base(&query_randomness);
                     let var = round_params.folded_domain_gen.exp_u64(challenge as u64);
                     stir_statement.add_constraint(var, eval);
 
                     queries.push(QueryOpening::Base {
-                        values: answer,
-                        proof: commitment.opening_proof,
+                        values: poly.into_evals(),
+                        proof: opening.opening_proof,
                     });
                 }
             }
             RoundData::Ext(data) => {
                 for &challenge in &stir_challenges_indexes {
-                    let commitment = self.extension_mmcs.open_batch(challenge, data);
-                    let answer = commitment.opened_values[0].clone();
+                    let opening = self.extension_mmcs.open_batch(challenge, data);
+                    // WHIR commits a single matrix per round, so take its one opened row.
+                    let answer = opening
+                        .opened_values
+                        .into_iter()
+                        .next()
+                        .expect("a committed batch opens at least one matrix");
 
-                    let eval = Poly::new(answer.clone()).eval_ext::<F>(&query_randomness);
+                    // Evaluate the fold by borrowing the row.
+                    // Then hand the same allocation to the proof, with no per-query leaf copy.
+                    let poly = Poly::new(answer);
+                    let eval = poly.eval_ext::<F>(&query_randomness);
                     let var = round_params.folded_domain_gen.exp_u64(challenge as u64);
                     stir_statement.add_constraint(var, eval);
 
                     queries.push(QueryOpening::Extension {
-                        values: answer,
-                        proof: commitment.opening_proof,
+                        values: poly.into_evals(),
+                        proof: opening.opening_proof,
                     });
                 }
             }
@@ -324,7 +337,7 @@ where
         }
 
         // Final STIR queries.
-        let final_challenge_indexes = get_challenge_stir_queries::<Challenger, F, EF>(
+        let final_challenge_indexes = get_challenge_stir_queries::<Challenger, F>(
             self.final_round_config().domain_size,
             self.params.folding_factor.at_round(round_index),
             self.final_queries,

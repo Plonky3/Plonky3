@@ -2,7 +2,8 @@ use alloc::vec::Vec;
 
 use itertools::Itertools;
 use p3_field::{
-    ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing, dot_product,
+    ExtensionField, Field, HornerIter, PackedFieldExtension, PackedValue, PrimeCharacteristicRing,
+    dot_product,
 };
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -295,9 +296,7 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         self.iter().all(|(&var, &expected_eval)| {
             // Evaluate the polynomial at `var` using Horner's method.
             // This computes: p(var) = c_0 + var(c_1 + var(c_2 + ...))
-            poly.iter()
-                .rfold(EF::ZERO, |result, coeff| result * var + *coeff)
-                == expected_eval
+            poly.iter().copied().horner::<EF, _>(var) == expected_eval
         })
     }
 
@@ -432,7 +431,9 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         // ---------------------------------------------------------------
 
         // Precompute [gamma^shift, gamma^{shift+1}, ..., gamma^{shift+n-1}].
-        let challenges = challenge.powers().skip(shift).take(n).collect::<Vec<_>>();
+        let challenges = challenge
+            .shifted_powers(challenge.exp_u64(shift as u64))
+            .collect_n(n);
 
         // W(b) += sum_i gamma^{i+shift} * z_i^b
         acc.par_chunks(n)
@@ -494,7 +495,7 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         if k_pack * 2 > k {
             self.vars
                 .iter()
-                .zip(challenge.powers().skip(shift))
+                .zip(challenge.shifted_powers(challenge.exp_u64(shift as u64)))
                 .for_each(|(&var, challenge)| {
                     // gamma^{shift+i} * [1, z, z^2, ..., z^{2^k - 1}]
                     let pow = EF::from(var).shifted_powers(challenge).collect_n(1 << k);
@@ -526,9 +527,9 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
 
         // Broadcast challenge powers into packed form for dot products.
         let alphas = challenge
-            .powers()
-            .skip(shift)
-            .take(n)
+            .shifted_powers(challenge.exp_u64(shift as u64))
+            .collect_n(n)
+            .into_iter()
             .map(EF::ExtensionPacking::from)
             .collect::<Vec<_>>();
 
@@ -573,7 +574,9 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         // This is equivalent to dot_product(evaluations, [γ^shift, γ^{shift+1}, ...])
         *claimed_eval += dot_product::<EF, _, _>(
             self.evaluations.iter().copied(),
-            challenge.powers().skip(shift).take(self.len()),
+            challenge
+                .shifted_powers(challenge.exp_u64(shift as u64))
+                .take(self.len()),
         );
     }
 }
@@ -987,9 +990,7 @@ mod tests {
 
         // Evaluate p(z) at z using Horner's method.
         let z = F::from_u64(2);
-        let expected_eval = poly
-            .iter()
-            .rfold(F::ZERO, |result, &coeff| result * z + coeff);
+        let expected_eval: F = poly.iter().copied().horner(z);
         statement.add_constraint(z, expected_eval);
 
         // Verify should pass.
@@ -1075,9 +1076,7 @@ mod tests {
 
             // Compute expected evaluation using Horner's method.
             let z_field = F::from_u32(z);
-            let expected_eval = poly
-                .iter()
-                .rfold(F::ZERO, |result, &coeff| result * z_field + coeff);
+            let expected_eval: F = poly.iter().copied().horner(z_field);
 
             // Create statement with correct constraint.
             let mut statement = SelectStatement::<F, F>::initialize(k);

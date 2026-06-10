@@ -387,6 +387,78 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
         r
     }
 
+    /// Computes the plain quadratic coefficients for the current round without
+    /// touching the transcript or folding the polynomial.
+    pub(crate) fn round_coefficients(&self) -> (EF, EF) {
+        let order = self.order;
+        match &self.inner {
+            MaybePacked::Packed { evals, weights } => {
+                let (c0, c_inf) = order.sumcheck_coefficients(evals.as_slice(), weights.as_slice());
+                (
+                    EF::ExtensionPacking::to_ext_iter([c0]).sum(),
+                    EF::ExtensionPacking::to_ext_iter([c_inf]).sum(),
+                )
+            }
+            MaybePacked::Unpacked { evals, weights } => {
+                order.sumcheck_coefficients(evals.as_slice(), weights.as_slice())
+            }
+        }
+    }
+
+    /// Folds both product-polynomial sides by one verifier challenge.
+    pub(crate) fn fold_round(&mut self, r: EF) {
+        self.compress(r);
+        self.transition();
+    }
+
+    /// Scales the weight side of the product polynomial.
+    ///
+    /// # Why weights only
+    ///
+    /// - Some reductions hand the evaluation side onward unmodified.
+    /// - An HVZK code-switch, for example, commits the folded message
+    ///   verbatim.
+    /// - The combining challenge then lands on the constraint weights.
+    pub(crate) fn scale_weights(&mut self, scale: EF) {
+        match &mut self.inner {
+            MaybePacked::Packed { weights, .. } => {
+                for value in weights.as_mut_slice() {
+                    *value *= scale;
+                }
+            }
+            MaybePacked::Unpacked { weights, .. } => {
+                for value in weights.as_mut_slice() {
+                    *value *= scale;
+                }
+            }
+        }
+    }
+
+    /// Adds a dense weight increment, slot by slot.
+    ///
+    /// The increment is given in scalar form over the full hypercube; the
+    /// packed variant repacks it lane by lane.
+    ///
+    /// # Panics
+    ///
+    /// The increment length must equal the hypercube size `2^n`.
+    pub(crate) fn accumulate_weights(&mut self, delta: &[EF]) {
+        assert_eq!(delta.len(), 1 << self.num_variables());
+        match &mut self.inner {
+            MaybePacked::Packed { weights, .. } => {
+                let width = F::Packing::WIDTH;
+                for (value, chunk) in weights.as_mut_slice().iter_mut().zip(delta.chunks(width)) {
+                    *value += EF::ExtensionPacking::from_ext_slice(chunk);
+                }
+            }
+            MaybePacked::Unpacked { weights, .. } => {
+                for (value, &d) in weights.as_mut_slice().iter_mut().zip(delta) {
+                    *value += d;
+                }
+            }
+        }
+    }
+
     /// Extracts the evaluation polynomial as a scalar [`Poly`].
     ///
     /// This unpacks the evaluations if in packed mode.
@@ -400,6 +472,22 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
                 EF::ExtensionPacking::to_ext_iter(evals.as_slice().iter().copied()).collect(),
             ),
             MaybePacked::Unpacked { evals, .. } => evals.clone(),
+        }
+    }
+
+    /// Extracts the weight polynomial as a scalar [`Poly`].
+    ///
+    /// This unpacks the weights if in packed mode.
+    ///
+    /// # Returns
+    ///
+    /// A copy of the weights in scalar extension field format.
+    pub fn weights(&self) -> Poly<EF> {
+        match &self.inner {
+            MaybePacked::Packed { weights, .. } => Poly::new(
+                EF::ExtensionPacking::to_ext_iter(weights.as_slice().iter().copied()).collect(),
+            ),
+            MaybePacked::Unpacked { weights, .. } => weights.clone(),
         }
     }
 

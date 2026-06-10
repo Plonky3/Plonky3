@@ -1,5 +1,4 @@
-//! A framework for various (not necessarily hiding) cryptographic commitment schemes.
-
+#![doc = include_str!("../README.md")]
 #![no_std]
 
 extern crate alloc;

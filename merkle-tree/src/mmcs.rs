@@ -1,5 +1,5 @@
 //! A MerkleTreeMmcs is a generalization of the standard MerkleTree commitment scheme which supports
-//! committing to several matrices of different dimensions.
+//! committing to several matrices of different dimensions, with arbitrary arity N (binary by default).
 //!
 //! Say we wish to commit to 2 matrices M and N with dimensions (8, i) and (2, j) respectively.
 //! Let H denote the hash function and C the compression function for our tree.
@@ -18,6 +18,9 @@
 //! E.g. we start by making a standard MerkleTree commitment for each row of M and then add in the rows of N when we
 //! get to the correct level. A proof for the values of say `M[5]` and `N[1]` consists of the siblings `H(M[4]), c23, c10`.
 //!
+//! Every shorter matrix height must equal `ceil(max_height / 2^k)` for some `k`.
+//! This guarantees that each global leaf index maps to a row in every committed matrix.
+//!
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -34,8 +37,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::MerkleTreeError::{
-    CapMismatch, EmptyBatch, IncompatibleHeights, IndexOutOfBounds, MalformedPrunedProof,
-    WrongBatchSize, WrongHeight,
+    CapMismatch, EmptyBatch, IncompatibleHeights, IndexOutOfBounds, WrongBatchSize, WrongHeight,
+    WrongWidth,
 };
 use crate::merkle_tree::{padded_len, select_arity_step};
 use crate::pruning::{MerkleAuthPath, prune_paths, restore_paths};
@@ -81,9 +84,16 @@ pub enum MerkleTreeError {
     #[error("wrong batch size: number of openings does not match expected")]
     WrongBatchSize,
 
-    /// A matrix has a different width than expected.
-    #[error("wrong width: matrix has a different width than expected")]
-    WrongWidth,
+    /// An opened row's length does not match the width of its matrix.
+    #[error("wrong width: matrix {matrix} expected {expected} values, got {got}")]
+    WrongWidth {
+        /// Index of the offending matrix in the batch.
+        matrix: usize,
+        /// Width of the matrix according to the caller-supplied dimensions.
+        expected: usize,
+        /// Length of the opened row provided in the proof.
+        got: usize,
+    },
 
     /// The number of proof nodes does not match the expected tree height.
     #[error("wrong height: expected {expected_proof_len} siblings, got {num_siblings}")]
@@ -96,8 +106,21 @@ pub enum MerkleTreeError {
     },
 
     /// Matrix heights are incompatible; they cannot share a common binary Merkle tree.
-    #[error("incompatible heights: matrices cannot share a common binary Merkle tree")]
-    IncompatibleHeights,
+    #[error(
+        "matrix height {height} incompatible with tallest height {max_height}; \
+         expected ceil_div({max_height}, 2^{bits_reduced}) = {expected_height} \
+         so every global index maps to a row at depth {bits_reduced}"
+    )]
+    IncompatibleHeights {
+        /// Height that was provided.
+        height: usize,
+        /// Height of the tallest matrix in the batch.
+        max_height: usize,
+        /// The only height that covers every global index at this depth.
+        expected_height: usize,
+        /// Power-of-two reduction depth from the tallest matrix.
+        bits_reduced: usize,
+    },
 
     /// The queried row index exceeds the maximum height.
     #[error("index out of bounds: index {index} exceeds max height {max_height}")]
@@ -116,18 +139,94 @@ pub enum MerkleTreeError {
     #[error("cap mismatch: computed digest does not match any entry in the Merkle cap")]
     CapMismatch,
 
-    /// The cap height is too large for the tree.
-    #[error("cap height {cap_height} exceeds tree depth {tree_depth}")]
-    WrongCapHeight {
-        /// The configured cap height.
-        cap_height: usize,
-        /// The actual tree depth.
-        tree_depth: usize,
+    /// A pruned batch opening could not be restored or validated.
+    #[error("malformed pruned proof: {0}")]
+    MalformedPrunedProof(#[from] PrunedProofError),
+}
+
+/// Why a pruned batch opening was rejected.
+///
+/// Each variant pins one failure mode with its diagnostic fields.
+#[derive(Debug, Error)]
+pub enum PrunedProofError {
+    /// More unique paths than the tree can hold.
+    #[error("too many unique paths: {got} exceeds tree height {max_height}")]
+    TooManyUniquePaths {
+        /// Number of unique paths claimed by the proof.
+        got: usize,
+        /// Maximum admissible height (the tallest committed matrix).
+        max_height: usize,
     },
 
-    /// A pruned batch opening could not be restored (malformed proof).
-    #[error("malformed pruned proof: cannot restore full authentication paths")]
-    MalformedPrunedProof,
+    /// A restored path has the wrong number of siblings for the tree geometry.
+    #[error("restored path has {got} siblings, expected {expected}")]
+    SiblingCountMismatch {
+        /// Sibling count implied by the verifier-known arity schedule.
+        expected: usize,
+        /// Sibling count produced while restoring the path.
+        got: usize,
+    },
+
+    /// An `original_order` entry references a unique-path slot that does not exist.
+    #[error("original-order references missing path slot {slot} of {num_paths}")]
+    OriginalOrderOutOfRange {
+        /// Slot index referenced by the entry.
+        slot: usize,
+        /// Number of unique paths actually present.
+        num_paths: usize,
+    },
+
+    /// Two queries map to one path but disagree on opened values.
+    #[error("duplicate queries for path slot {slot} disagree on opened values")]
+    InconsistentDuplicateOpenings {
+        /// Unique-path slot the conflicting queries map to.
+        slot: usize,
+    },
+
+    /// A unique path is never referenced by any query.
+    #[error("unique path slot {slot} is never referenced by a query")]
+    UnreferencedPath {
+        /// Slot that no `original_order` entry points to.
+        slot: usize,
+    },
+
+    /// Sorted leaf indices are not strictly ascending.
+    #[error("leaf indices not strictly ascending at position {position}: index {index}")]
+    NonAscendingLeaves {
+        /// Position of the offending path in the sorted list.
+        position: usize,
+        /// Leaf index that fails to exceed its predecessor.
+        index: usize,
+    },
+
+    /// The path and query counts are inconsistent (e.g. queries present but no paths).
+    #[error("path/query count mismatch: {num_paths} paths but {num_queries} queries")]
+    PathQueryCountMismatch {
+        /// Number of unique paths.
+        num_paths: usize,
+        /// Number of original queries.
+        num_queries: usize,
+    },
+}
+
+/// Check that each opened row has exactly the width of its matrix.
+///
+/// The leaf hash flattens all rows at one height into a single element stream,
+/// so a digest match alone does not pin where one row ends and the next begins.
+pub(crate) fn check_widths<T>(
+    dimensions: &[Dimensions],
+    opened_values: &[Vec<T>],
+) -> Result<(), MerkleTreeError> {
+    for (matrix, (dims, row)) in dimensions.iter().zip(opened_values).enumerate() {
+        if row.len() != dims.width {
+            return Err(WrongWidth {
+                matrix,
+                expected: dims.width,
+                got: row.len(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// The arity schedule and query positions for a given Merkle path.
@@ -142,6 +241,85 @@ pub struct ArityAndPositions {
     pub arity_schedule: Vec<usize>,
     /// The query positions for the Merkle path.
     pub query_positions: Vec<usize>,
+}
+
+/// Validates that a batch of matrix heights forms a tree geometry the commitment can build.
+///
+/// # Overview
+///
+/// - The tallest matrix fixes the leaf layer of the tree.
+/// - At `k` halvings above the leaves, the tree covers `ceil(max_height / 2^k)` rows.
+/// - A shorter matrix can only inject at depth `k` if its height is exactly that value.
+///
+/// ```text
+///     max_height = 7:
+///       k = 0 → 7 rows   (leaf layer)
+///       k = 1 → 4 rows   (ceil(7 / 2))
+///       k = 2 → 2 rows   (ceil(7 / 4))
+///       k = 3 → 1 row    (ceil(7 / 8))
+///
+///     valid heights: {7, 4, 2, 1} — anything else has no injection layer.
+/// ```
+///
+/// Both sides of the protocol apply this rule:
+/// - committing refuses to build a tree from incompatible heights,
+/// - verifying refuses dimension claims that no commitment could have produced.
+///
+/// # Returns
+///
+/// The tallest height in the batch.
+///
+/// # Errors
+///
+/// - A batch with no matrices, or only zero-height matrices, has no tree.
+/// - Any height off the reachable ladder is rejected,
+///   with the offending and expected heights attached.
+///
+/// # Performance
+///
+/// - Two passes over the heights, no allocation.
+/// - Runs on every batch verification, so it must stay cheap.
+fn validate_commit_reachable_heights<I>(heights: I) -> Result<usize, MerkleTreeError>
+where
+    I: IntoIterator<Item = usize>,
+    I::IntoIter: Clone,
+{
+    let heights = heights.into_iter();
+
+    // Pass 1: find the tallest matrix; it anchors the leaf layer.
+    // A missing maximum means no matrices at all.
+    // A zero maximum means every matrix is empty — equally unusable.
+    let max_height = heights
+        .clone()
+        .max()
+        .filter(|&height| height > 0)
+        .ok_or(EmptyBatch)?;
+    let log_max_height = log2_ceil_usize(max_height);
+
+    // Pass 2: pin every height to the one rung of the ladder it claims.
+    for height in heights {
+        // Number of halvings between the leaf layer and this matrix's injection layer.
+        // Heights in the same power-of-two bucket share the same depth,
+        // so at most one height per bucket can be valid.
+        //
+        // A zero height maps to depth `log_max_height`,
+        // where the expected value below is 1, so it is rejected.
+        let bits_reduced = log_max_height - log2_ceil_usize(height);
+
+        // `((m - 1) >> k) + 1` computes `ceil(m / 2^k)` without shift overflow.
+        let expected_height = ((max_height - 1) >> bits_reduced) + 1;
+
+        if height != expected_height {
+            return Err(IncompatibleHeights {
+                height,
+                max_height,
+                expected_height,
+                bits_reduced,
+            });
+        }
+    }
+
+    Ok(max_height)
 }
 
 impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
@@ -166,9 +344,10 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         P: PackedValue,
         PW: PackedValue,
     {
-        if dimensions.is_empty() {
-            return Err(EmptyBatch);
-        }
+        // Geometry gate: the claimed heights must form a tree the commitment can build.
+        // The tallest height anchors the index bound and the leaf layer width below.
+        let max_height =
+            validate_commit_reachable_heights(dimensions.iter().map(|dims| dims.height))?;
 
         let mut heights_tallest_first = dimensions
             .iter()
@@ -176,27 +355,8 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             .sorted_by_key(|(_, dims)| Reverse(dims.height))
             .peekable();
 
-        // Matrix heights that round up to the same power of two must be equal.
-        if !heights_tallest_first
-            .clone()
-            .map(|(_, dims)| dims.height)
-            .tuple_windows()
-            .all(|(curr, next)| {
-                curr == next || curr.next_power_of_two() != next.next_power_of_two()
-            })
-        {
-            return Err(IncompatibleHeights);
-        }
-
-        // Initial padded height and bounds check, identical to verify_batch.
-        let (max_height, mut curr_height_padded) = match heights_tallest_first.peek() {
-            Some((_, dims)) => {
-                let max_height = dims.height;
-                let curr_height_padded = padded_len(max_height, N);
-                (max_height, curr_height_padded)
-            }
-            None => return Err(EmptyBatch),
-        };
+        // Leaf layer width before the walk starts, padded to a full N-ary group.
+        let mut curr_height_padded = padded_len(max_height, N);
 
         if index >= max_height {
             return Err(IndexOutOfBounds { max_height, index });
@@ -279,10 +439,10 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         P: PackedValue,
         PW: PackedValue,
     {
-        // No commitments → no tree → no schedule.
-        if dimensions.is_empty() {
-            return Err(EmptyBatch);
-        }
+        // Geometry gate: the claimed heights must form a tree the commitment can build.
+        // The tallest height also seeds the walk below.
+        let max_height =
+            validate_commit_reachable_heights(dimensions.iter().map(|dims| dims.height))?;
 
         // Phase 1: order matrices tallest-first so the walk can peek ahead
         // and consume each one at its injection layer.
@@ -292,34 +452,11 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             .sorted_by_key(|(_, dims)| Reverse(dims.height))
             .peekable();
 
-        // Heights sharing the same next-power-of-two must match exactly.
-        //
-        //     [8, 5]   → both round to 8, differ → reject
-        //     [8, 8]   → identical at the same slot → OK
-        //     [8, 4]   → distinct slots → OK
-        if !heights_tallest_first
-            .clone()
-            .map(|(_, dims)| dims.height)
-            .tuple_windows()
-            .all(|(curr, next)| {
-                curr == next || curr.next_power_of_two() != next.next_power_of_two()
-            })
-        {
-            return Err(IncompatibleHeights);
-        }
-
         // Phase 2: walk from leaves toward the root.
         //
-        // Seed length is `padded_len(max_height, N)` — same padding the
-        // prover uses to round the leaf layer up to a full N-ary group.
-        let (max_height, mut curr_height_padded) = match heights_tallest_first.peek() {
-            Some((_, dims)) => {
-                let max_height = dims.height;
-                let curr_height_padded = padded_len(max_height, N);
-                (max_height, curr_height_padded)
-            }
-            None => return Err(EmptyBatch),
-        };
+        // Seed length is the leaf layer width rounded up to a full N-ary group —
+        // the same padding the prover applies when building the tree.
+        let mut curr_height_padded = padded_len(max_height, N);
 
         let leaf_height_npt = max_height.next_power_of_two();
 
@@ -613,15 +750,31 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         //
         //   schedule = [4, 2]   → 3 + 1 = 4 expected siblings
         //   schedule = [2, 2, 2] → 1 + 1 + 1 = 3 expected siblings
+        //
+        // The geometry gate also returns the tallest height,
+        // which bounds the leaf indices and seeds the walk in phase 5.
+        let max_height =
+            validate_commit_reachable_heights(dimensions.iter().map(|dims| dims.height))?;
         let arity_schedule = self.proof_arity_schedule(dimensions)?;
         let full_sibling_count: usize = arity_schedule.iter().map(|step| step - 1).sum();
+
+        // Invariant: leaf indices are strictly ascending and distinct in `[0, max_height)`.
+        //   => a valid proof has at most `max_height` unique paths.
+        // Reject an oversized count here, using verifier-known `max_height`.
+        // Otherwise `restore_paths` expands `n_unique * full_sibling_count` digests first.
+        if pruned_opening.pruned_proof.paths.len() > max_height {
+            return Err(PrunedProofError::TooManyUniquePaths {
+                got: pruned_opening.pruned_proof.paths.len(),
+                max_height,
+            }
+            .into());
+        }
 
         // Phase 2: Restore the full (unpruned) authentication paths from the
         // compact representation. We index siblings level by level during the
         // amortized walk, so we materialize the per-path buffers once and
         // borrow them throughout.
-        let restored = restore_paths(&pruned_opening.pruned_proof, full_sibling_count)
-            .ok_or(MalformedPrunedProof)?;
+        let restored = restore_paths(&pruned_opening.pruned_proof, full_sibling_count)?;
 
         let original_order = &pruned_opening.pruned_proof.original_order;
         let sorted_paths = &pruned_opening.pruned_proof.paths;
@@ -638,7 +791,11 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             return if n_originals == 0 {
                 Ok(pruned_opening.opened_values)
             } else {
-                Err(MalformedPrunedProof)
+                Err(PrunedProofError::PathQueryCountMismatch {
+                    num_paths: 0,
+                    num_queries: n_originals,
+                }
+                .into())
             };
         }
 
@@ -650,7 +807,11 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         for (orig_idx, &sorted_idx) in original_order.iter().enumerate() {
             let sorted_idx = sorted_idx as usize;
             if sorted_idx >= n_unique {
-                return Err(MalformedPrunedProof);
+                return Err(PrunedProofError::OriginalOrderOutOfRange {
+                    slot: sorted_idx,
+                    num_paths: n_unique,
+                }
+                .into());
             }
             match reps[sorted_idx] {
                 None => reps[sorted_idx] = Some(orig_idx),
@@ -658,7 +819,10 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                     if pruned_opening.opened_values[rep_idx]
                         != pruned_opening.opened_values[orig_idx]
                     {
-                        return Err(MalformedPrunedProof);
+                        return Err(PrunedProofError::InconsistentDuplicateOpenings {
+                            slot: sorted_idx,
+                        }
+                        .into());
                     }
                 }
             }
@@ -666,8 +830,9 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         // Every unique sorted slot must be reached by at least one original.
         let reps: Vec<usize> = reps
             .into_iter()
-            .map(|r| r.ok_or(MalformedPrunedProof))
-            .collect::<Result<_, _>>()?;
+            .enumerate()
+            .map(|(slot, r)| r.ok_or(PrunedProofError::UnreferencedPath { slot }))
+            .collect::<Result<Vec<usize>, PrunedProofError>>()?;
 
         // Phase 4: Shape and ordering invariants for the unique paths.
         // - Each opening's per-matrix count must match `dimensions`.
@@ -678,10 +843,16 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             if pruned_opening.opened_values[rep].len() != dimensions.len() {
                 return Err(WrongBatchSize);
             }
+            // Row boundaries within a flattened leaf hash are only pinned by the widths.
+            check_widths(dimensions, &pruned_opening.opened_values[rep])?;
         }
-        for window in sorted_paths.windows(2) {
+        for (position, window) in sorted_paths.windows(2).enumerate() {
             if window[0].leaf_index >= window[1].leaf_index {
-                return Err(MalformedPrunedProof);
+                return Err(PrunedProofError::NonAscendingLeaves {
+                    position: position + 1,
+                    index: window[1].leaf_index,
+                }
+                .into());
             }
         }
 
@@ -695,24 +866,8 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             .sorted_by_key(|(_, dims)| Reverse(dims.height))
             .peekable();
 
-        if !heights_tallest_first
-            .clone()
-            .map(|(_, dims)| dims.height)
-            .tuple_windows()
-            .all(|(curr, next)| {
-                curr == next || curr.next_power_of_two() != next.next_power_of_two()
-            })
-        {
-            return Err(IncompatibleHeights);
-        }
-
-        let (max_height, mut curr_height_padded) = match heights_tallest_first.peek() {
-            Some((_, dims)) => {
-                let max_height = dims.height;
-                (max_height, padded_len(max_height, N))
-            }
-            None => return Err(EmptyBatch),
-        };
+        // Leaf layer width before the walk starts, padded to a full N-ary group.
+        let mut curr_height_padded = padded_len(max_height, N);
 
         for path in sorted_paths {
             if path.leaf_index >= max_height {
@@ -930,28 +1085,14 @@ where
         &self,
         inputs: Vec<M>,
     ) -> (Self::Commitment, Self::ProverData<M>) {
-        if let Some(max_height) = inputs.iter().map(|m| m.height()).max()
-            && max_height > 0
-        {
-            let log_max_height = log2_ceil_usize(max_height);
-            for matrix in &inputs {
-                let height = matrix.height();
-                assert!(height > 0, "matrix height 0 not supported");
-
-                let log_height = log2_ceil_usize(height);
-                let bits_reduced = log_max_height - log_height;
-                // ceil(max / 2^{bits_reduced}) without risk of shift overflow
-                let expected_height = ((max_height - 1) >> bits_reduced) + 1;
-
-                assert!(
-                    height == expected_height,
-                    "matrix height {height} incompatible with tallest height {max_height}; \
-                         expected ceil_div({max_height}, 2^{bits_reduced}) = {expected_height} \
-                         so every global index maps to a row at depth {bits_reduced}"
-                );
-            }
-        } else {
-            panic!("all matrices have height 0");
+        // Geometry gate: refuse to build a tree from heights off the
+        // `ceil(max_height / 2^k)` ladder.
+        // Committing is prover-side, so a bad shape is a caller bug → panic.
+        // The error's display text carries the offending and expected heights.
+        match validate_commit_reachable_heights(inputs.iter().map(|m| m.height())) {
+            Ok(_) => {}
+            Err(EmptyBatch) => panic!("all matrices have height 0"),
+            Err(err) => panic!("{err}"),
         }
 
         let tree = MerkleTree::new::<P, PW, H, C>(&self.hash, &self.compress, inputs);
@@ -1039,11 +1180,16 @@ where
     /// # Arguments
     /// - `commit`: The Merkle cap of the tree.
     /// - `dimensions`: A vector of the dimensions of the matrices committed to.
+    ///   Each shorter matrix height must equal `ceil(max_height / 2^k)` for some `k`,
+    ///   matching the power-of-two reduction that maps global leaf indices into that matrix.
+    ///   Heights are only bound up to their power-of-two padding:
+    ///   two valid shapes whose padded layers coincide verify against the same cap.
+    ///   Callers must therefore source dimensions from public data, never from the prover.
     /// - `index`: The index of a leaf in the tree.
     /// - `batch_proof`: A reference to a batched opening proof, containing:
     ///   - `opened_values`: A vector of matrix rows. Assume that the tallest matrix committed
-    ///     to has height `2^n >= M_tall.height() > 2^{n - 1}` and the `j`th matrix has height
-    ///     `2^m >= Mj.height() > 2^{m - 1}`. Then `j`'th value of opened values must be the row `Mj[index >> (m - n)]`.
+    ///     to has height `max_height`, then the `j`th opened value must be the row
+    ///     `Mj[index >> k]`, where `k` is the power-of-two reduction depth for `Mj`.
     ///   - `opening_proof`: A vector of sibling nodes. The `i`th element should be the node at level `i`
     ///     with index `(index << i) ^ 1`.
     ///
@@ -1061,6 +1207,25 @@ where
         if dimensions.len() != opened_values.len() {
             return Err(WrongBatchSize);
         }
+        // Geometry gate: the claimed heights must form a tree the commitment can build.
+        // The tallest height anchors the index bound and the leaf layer width below.
+        let max_height =
+            validate_commit_reachable_heights(dimensions.iter().map(|dims| dims.height))?;
+
+        // Derive the arity schedule from verifier-known dimensions and the configured cap height.
+        // Rejecting a wrong-length proof here costs only integer work — no hashing yet.
+        let arity_schedule = self.proof_arity_schedule(dimensions)?;
+        let expected_proof_len: usize = arity_schedule.iter().map(|step| step - 1).sum();
+        if opening_proof.len() != expected_proof_len {
+            return Err(WrongHeight {
+                expected_proof_len,
+                num_siblings: opening_proof.len(),
+            });
+        }
+
+        // The leaf hash flattens all rows at one height into a single stream,
+        // so row boundaries are only authenticated by checking each row width.
+        check_widths(dimensions, opened_values)?;
 
         let mut heights_tallest_first = dimensions
             .iter()
@@ -1068,28 +1233,8 @@ where
             .sorted_by_key(|(_, dims)| Reverse(dims.height))
             .peekable();
 
-        // Matrix heights that round up to the same power of two must be equal
-        if !heights_tallest_first
-            .clone()
-            .map(|(_, dims)| dims.height)
-            .tuple_windows()
-            .all(|(curr, next)| {
-                curr == next || curr.next_power_of_two() != next.next_power_of_two()
-            })
-        {
-            return Err(IncompatibleHeights);
-        }
-
-        // Get the initial height padded to a multiple of N. As heights_tallest_first is sorted,
-        // the initial height will be the maximum height.
-        let (max_height, mut curr_height_padded) = match heights_tallest_first.peek() {
-            Some((_, dims)) => {
-                let max_height = dims.height;
-                let curr_height_padded = padded_len(max_height, N);
-                (max_height, curr_height_padded)
-            }
-            None => return Err(EmptyBatch),
-        };
+        // Leaf layer width before the walk starts, padded to a full N-ary group.
+        let mut curr_height_padded = padded_len(max_height, N);
 
         if index >= max_height {
             return Err(IndexOutOfBounds { max_height, index });
@@ -1104,16 +1249,6 @@ where
         );
 
         let default_digest = [PW::Value::default(); DIGEST_ELEMS];
-
-        // Derive the arity schedule from verifier-known dimensions and the configured cap height.
-        let arity_schedule = self.proof_arity_schedule(dimensions)?;
-        let expected_proof_len: usize = arity_schedule.iter().map(|step| step - 1).sum();
-        if opening_proof.len() != expected_proof_len {
-            return Err(WrongHeight {
-                expected_proof_len,
-                num_siblings: opening_proof.len(),
-            });
-        }
 
         let mut proof_pos: usize = 0;
 
@@ -1198,8 +1333,8 @@ mod tests {
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
-    use super::MerkleTreeMmcs;
-    use crate::MerkleTreeError;
+    use super::{MerkleTreeMmcs, validate_commit_reachable_heights};
+    use crate::{MerkleTreeError, PrunedProofError};
 
     type F = BabyBear;
 
@@ -1580,6 +1715,123 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "matrix height 3 incompatible with tallest height 7")]
+    fn commit_rejects_unreachable_height() {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress, 0);
+
+        // Invariant: every shorter matrix must sit on the ladder ceil(7 / 2^k).
+        //
+        //     k = 0 → 7    k = 1 → 4    k = 2 → 2    k = 3 → 1
+        //
+        // Height 3 is on no rung, so no global leaf index can map into it.
+        let tall = RowMajorMatrix::<F>::rand(&mut rng, 7, 1);
+        let unreachable = RowMajorMatrix::<F>::rand(&mut rng, 3, 1);
+
+        // Committing is prover-side: an impossible shape is a caller bug → panic.
+        mmcs.commit(vec![tall, unreachable]);
+    }
+
+    #[test]
+    fn verifier_rejects_dimensions_that_commit_cannot_produce() {
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress, 0);
+
+        // Fixture state: a valid commitment to heights [7, 4].
+        // 4 = ceil(7 / 2), so the short matrix injects one halving above the leaves.
+        let tall = RowMajorMatrix::<F>::rand(&mut rng, 7, 1);
+        let short = RowMajorMatrix::<F>::rand(&mut rng, 4, 1);
+        let (commit, prover_data) = mmcs.commit(vec![tall, short]);
+
+        // The opening itself is honest; only the claimed dimensions will lie.
+        let opening = mmcs.open_batch(6, &prover_data);
+
+        // Mutation: claim the short matrix has height 3 instead of 4.
+        //
+        //     committed heights: [7, 4]   ladder of 7: {7, 4, 2, 1}
+        //     claimed heights:   [7, 3]   3 is on no rung
+        //
+        // Heights 3 and 4 pad to the same power of two, so the path replay
+        // walks identical layers; only the geometry rule can tell them apart.
+        let impossible_dims = vec![
+            Dimensions {
+                height: 7,
+                width: 1,
+            },
+            Dimensions {
+                height: 3,
+                width: 1,
+            },
+        ];
+
+        let err = mmcs
+            .verify_batch(&commit, &impossible_dims, 6, (&opening).into())
+            .expect_err("verifier must reject dimensions that the commit path cannot produce");
+
+        // The rejection names the offending height and the only valid height
+        // at its depth: one halving below 7 covers ceil(7 / 2) = 4 rows, never 3.
+        match err {
+            MerkleTreeError::IncompatibleHeights {
+                height,
+                max_height,
+                expected_height,
+                bits_reduced,
+            } => {
+                assert_eq!(height, 3);
+                assert_eq!(max_height, 7);
+                assert_eq!(expected_height, 4);
+                assert_eq!(bits_reduced, 1);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn height_validation_edge_cases() {
+        // No matrices → no tree to build.
+        assert!(matches!(
+            validate_commit_reachable_heights(core::iter::empty()),
+            Err(MerkleTreeError::EmptyBatch)
+        ));
+
+        // Zero-height matrices contribute no rows;
+        // an all-zero batch is as empty as no batch at all.
+        assert!(matches!(
+            validate_commit_reachable_heights([0, 0]),
+            Err(MerkleTreeError::EmptyBatch)
+        ));
+
+        // A zero height next to real rows is unreachable:
+        // every rung of the ladder ceil(8 / 2^k) is at least 1.
+        //
+        //     ladder of 8: {8, 4, 2, 1}   claimed: 0 → depth k = 3 expects 1
+        assert!(matches!(
+            validate_commit_reachable_heights([8, 0]),
+            Err(MerkleTreeError::IncompatibleHeights {
+                height: 0,
+                max_height: 8,
+                expected_height: 1,
+                bits_reduced: 3,
+            })
+        ));
+
+        // A single matrix sits at depth 0 by definition; its height is returned.
+        assert_eq!(validate_commit_reachable_heights([5]).unwrap(), 5);
+
+        // A full ladder validates: every rung ceil(7 / 2^k) = {7, 4, 2, 1}.
+        assert_eq!(validate_commit_reachable_heights([7, 4, 2, 1]).unwrap(), 7);
+
+        // Duplicates on a rung are fine: both matrices inject at the same layer.
+        assert_eq!(validate_commit_reachable_heights([7, 4, 4]).unwrap(), 7);
+    }
+
+    #[test]
     fn different_widths() {
         let mut rng = SmallRng::seed_from_u64(1);
         let perm = Perm::new_from_rng_128(&mut rng);
@@ -1597,6 +1849,75 @@ mod tests {
         let batch_opening = mmcs.open_batch(17, &prover_data);
         mmcs.verify_batch(&commit, &dims, 17, (&batch_opening).into())
             .expect("expected verification to succeed");
+    }
+
+    #[test]
+    fn verify_rejects_wrong_row_width() {
+        let mut rng = SmallRng::seed_from_u64(3);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress, 0);
+
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 8, 4);
+        let dims = vec![mat.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        // Append one extra element to the opened row: 4 values become 5.
+        let mut opening = mmcs.open_batch(3, &prover_data);
+        opening.opened_values[0].push(F::ONE);
+
+        let err = mmcs
+            .verify_batch(&commit, &dims, 3, (&opening).into())
+            .expect_err("row longer than the matrix width must be rejected");
+        assert!(matches!(
+            err,
+            MerkleTreeError::WrongWidth {
+                matrix: 0,
+                expected: 4,
+                got: 5,
+            }
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_shifted_row_boundary() {
+        let mut rng = SmallRng::seed_from_u64(4);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(hash, compress, 0);
+
+        // Two matrices of equal height hash into one flattened leaf stream:
+        //
+        //     leaf digest = hash(row_0[0..3] || row_1[0..5])
+        //
+        // Moving an element across the row boundary keeps the stream — and
+        // hence the digest — identical, so only the width check can catch it.
+        let mat_a = RowMajorMatrix::<F>::rand(&mut rng, 8, 3);
+        let mat_b = RowMajorMatrix::<F>::rand(&mut rng, 8, 5);
+        let dims = vec![mat_a.dimensions(), mat_b.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat_a, mat_b]);
+
+        // Mutation: last element of row 0 becomes the first element of row 1.
+        //
+        //     row 0: [a, b, c]    → [a, b]
+        //     row 1: [d, e, f, g, h] → [c, d, e, f, g, h]
+        let mut opening = mmcs.open_batch(5, &prover_data);
+        let moved = opening.opened_values[0].pop().unwrap();
+        opening.opened_values[1].insert(0, moved);
+
+        let err = mmcs
+            .verify_batch(&commit, &dims, 5, (&opening).into())
+            .expect_err("shifted row boundary must be rejected");
+        assert!(matches!(
+            err,
+            MerkleTreeError::WrongWidth {
+                matrix: 0,
+                expected: 3,
+                got: 2,
+            }
+        ));
     }
 
     #[test]
@@ -2112,6 +2433,39 @@ mod tests {
 
         proptest! {
             #[test]
+            fn proptest_ladder_heights_always_accepted(
+                max_height in 1usize..=1 << 12,
+                k in 0usize..=12,
+            ) {
+                // Every rung ceil(max_height / 2^k) is a shape a commitment can build,
+                // so validation must accept it alongside the tallest matrix.
+                let height = max_height.div_ceil(1 << k);
+                prop_assert!(
+                    validate_commit_reachable_heights([max_height, height]).is_ok()
+                );
+            }
+
+            #[test]
+            fn proptest_height_validation_matches_ladder(
+                max_height in 1usize..=1 << 12,
+                height in 1usize..=1 << 12,
+            ) {
+                prop_assume!(height <= max_height);
+
+                // Independent oracle: enumerate the ladder by direct ceiling division.
+                //
+                //     ladder = { ceil(max_height / 2^k) : k = 0..=12 }
+                //
+                // Validation uses the shift identity ((m - 1) >> k) + 1 and derives
+                // the depth from the height's own power-of-two bucket; the two
+                // formulations must agree on every input.
+                let on_ladder = (0..=12).any(|k| max_height.div_ceil(1usize << k) == height);
+                let accepted =
+                    validate_commit_reachable_heights([max_height, height]).is_ok();
+                prop_assert_eq!(accepted, on_ladder);
+            }
+
+            #[test]
             fn proptest_binary_merkle_roundtrip((height, width, seed) in matrix_strategy()) {
                 let mut rng = SmallRng::seed_from_u64(seed);
                 let mat = RowMajorMatrix::<F>::rand(&mut rng, height, width);
@@ -2268,6 +2622,44 @@ mod tests {
     }
 
     #[test]
+    fn pruned_opening_rejects_more_paths_than_tree_height() {
+        // A valid proof holds at most `max_height` unique paths:
+        //   leaf indices are strictly ascending and distinct in `[0, max_height)`.
+        // Claiming more is rejected before any per-path scratch is allocated.
+        let seed = 123u64;
+        let mmcs = make_binary_mmcs(seed);
+
+        let mut rng = SmallRng::seed_from_u64(seed);
+        // Height 8 -> max_height = 8.
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 8, 4);
+        let dims = vec![mat.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        let indices: Vec<usize> = vec![0, 1, 2];
+        let mut pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
+
+        // Inflate the unique-path count past the tree height by repeating a path.
+        let filler = pruned_opening.pruned_proof.paths[0].clone();
+        while pruned_opening.pruned_proof.paths.len() <= 8 {
+            pruned_opening.pruned_proof.paths.push(filler.clone());
+        }
+
+        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        assert!(
+            matches!(
+                result,
+                Err(MerkleTreeError::MalformedPrunedProof(
+                    PrunedProofError::TooManyUniquePaths {
+                        got: 9,
+                        max_height: 8
+                    }
+                ))
+            ),
+            "a proof with more unique paths than leaves should be rejected, got {result:?}"
+        );
+    }
+
+    #[test]
     fn pruned_proof_is_smaller_than_individual() {
         let seed = 55u64;
         let mmcs = make_binary_mmcs(seed);
@@ -2383,7 +2775,13 @@ mod tests {
         let err = mmcs
             .verify_batch_pruned(&commit, &dims, pruned)
             .expect_err("mismatched duplicate openings must be rejected");
-        assert!(matches!(err, MerkleTreeError::MalformedPrunedProof));
+        // The duplicate is leaf index 3, which sorts to unique-path slot 0.
+        assert!(matches!(
+            err,
+            MerkleTreeError::MalformedPrunedProof(
+                PrunedProofError::InconsistentDuplicateOpenings { slot: 0 }
+            )
+        ));
     }
 
     #[test]

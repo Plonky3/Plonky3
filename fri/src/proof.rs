@@ -40,3 +40,16 @@ pub struct CommitPhaseProofStep<F: Field, M: Mmcs<F>> {
 
     pub opening_proof: M::Proof,
 }
+
+impl<F: Field, M: Mmcs<F>> CommitPhaseProofStep<F, M> {
+    /// Convert `log_arity` to `usize` and enforce the protocol bounds.
+    ///
+    /// Returns `None` when `log_arity` is zero or exceeds `max_log_arity`.
+    #[inline]
+    pub(crate) fn checked_log_arity(&self, max_log_arity: usize) -> Option<usize> {
+        let log_arity = self.log_arity as usize;
+        (1..=max_log_arity)
+            .contains(&log_arity)
+            .then_some(log_arity)
+    }
+}

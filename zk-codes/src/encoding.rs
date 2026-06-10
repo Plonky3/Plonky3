@@ -15,17 +15,37 @@ pub trait ZkEncoding<F: Field> {
     fn randomness_len(&self) -> usize;
 
     /// The maximum number of queries that can be perfectly simulated.
-    ///
-    /// - The default is correct for Reed-Solomon;
-    /// - Other encodings should override.
-    fn query_bound(&self) -> usize {
-        self.randomness_len()
-    }
+    fn query_bound(&self) -> usize;
 
     /// Statistical simulation error:
-    /// - `0` for Reed-Solomon,
-    /// - Otherwise an upper bound.
     fn error(&self) -> f64;
+
+    /// Samples a uniformly random message from this encoding's message space.
+    ///
+    /// # Returns
+    ///
+    /// A vector of length `message_len`.
+    ///
+    /// # Why on the encoding
+    ///
+    /// - The message space is an encoding invariant.
+    /// - Constrained message spaces (e.g. punctured codes) need a non-trivial draw.
+    /// - Callers stay agnostic to the field's sampling bound.
+    fn sample_message<R: Rng>(&self, rng: &mut R) -> Vec<F>;
+
+    /// Samples encoding randomness from this encoding's randomness space.
+    ///
+    /// # Returns
+    ///
+    /// A vector of length `randomness_len`.
+    ///
+    /// # Why an explicit draw
+    ///
+    /// - Some callers later reveal blinded linear combinations of the
+    ///   randomness (e.g. an HVZK base case).
+    /// - Those callers draw it here and encode with the explicit-randomness
+    ///   entry point, retaining the vector.
+    fn sample_randomness<R: Rng>(&self, rng: &mut R) -> Vec<F>;
 
     /// Encodes a message with random masking.
     fn encode<R: Rng>(&self, msg: &[F], rng: &mut R) -> Self::Codeword;

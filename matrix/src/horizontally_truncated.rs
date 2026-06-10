@@ -40,11 +40,15 @@ where
     ///
     /// # Arguments
     /// - `inner`: The full inner matrix to be wrapped.
-    /// - `column_range`: The range of columns to expose (must satisfy `column_range.end <= inner.width()`).
+    /// - `column_range`: The columns to expose, satisfying `start <= end <= inner.width()`.
     ///
-    /// Returns `None` if the column range extends beyond the width of the inner matrix.
+    /// Returns `None` if the range is inverted (`start > end`) or extends beyond the inner width.
     pub fn new_with_range(inner: Inner, column_range: Range<usize>) -> Option<Self> {
-        (column_range.end <= inner.width()).then(|| Self {
+        // Accept the range only when:
+        // - `start <= end`: the range is not inverted.
+        // - `end <= inner.width()`: it stays within the inner matrix.
+        let valid = column_range.start <= column_range.end && column_range.end <= inner.width();
+        valid.then(|| Self {
             inner,
             column_range,
             _phantom: PhantomData,
@@ -418,5 +422,22 @@ mod tests {
 
         // Attempt to select columns 1..5 (extends beyond width).
         assert!(HorizontallyTruncated::new_with_range(inner, 1..5).is_none());
+    }
+
+    #[test]
+    fn test_inverted_column_range_is_rejected() {
+        // 2x3 matrix:
+        // [1 2 3]
+        // [4 5 6]
+        let inner = RowMajorMatrix::new(vec![1, 2, 3, 4, 5, 6], 3);
+
+        // An inverted range has `start > end` while `end` is still inside the inner width.
+        // Built explicitly so the literal does not trip the empty-range lint.
+        //
+        //     2..1: start = 2 > end = 1, yet end = 1 <= width = 3
+        //
+        // The constructor must reject it rather than return a view.
+        let inverted = Range { start: 2, end: 1 };
+        assert!(HorizontallyTruncated::new_with_range(inner, inverted).is_none());
     }
 }

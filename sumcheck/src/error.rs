@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 /// Errors from sumcheck protocol verification.
-#[derive(Error, Debug)]
+#[derive(Error, Debug, PartialEq, Eq)]
 pub enum SumcheckError {
     /// The proof contains a different number of rounds than expected.
     #[error("Sumcheck round count mismatch: expected {expected}, got {actual}")]
@@ -28,11 +28,6 @@ pub enum SumcheckError {
         expected: usize,
         actual: usize,
     },
-
-    /// HVZK sumcheck: the number of supplied mask commitments does not match
-    /// the folding factor `k`.
-    #[error("HVZK mask commitment count mismatch: expected {expected}, got {actual}")]
-    MaskCommitmentCountMismatch { expected: usize, actual: usize },
 
     /// HVZK sumcheck: the proof's claimed `ell_zk` (mask code message length)
     /// does not match the verifier's expected value. Catches caller-side

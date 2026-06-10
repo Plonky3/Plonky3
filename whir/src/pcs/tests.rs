@@ -1,6 +1,7 @@
 //! End-to-end tests exercising the WHIR PCS through the multilinear trait.
 
 use alloc::vec;
+use alloc::vec::Vec;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
@@ -9,6 +10,9 @@ use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
 use p3_merkle_tree::MerkleTreeMmcs;
+use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Witness};
+use p3_sumcheck::test_util::{random_table_specs, table_specs_to_tables};
+use p3_sumcheck::{OpeningProtocol, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -16,9 +20,6 @@ use rand::rngs::SmallRng;
 use crate::fiat_shamir::domain_separator::DomainSeparator;
 use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use crate::pcs::prover::WhirProver;
-use crate::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Witness};
-use crate::sumcheck::test_util::{random_table_specs, table_specs_to_tables};
-use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -40,13 +41,25 @@ pub(crate) fn challenger() -> MyChallenger {
     MyChallenger::new(perm)
 }
 
+fn default_round_log_inv_rates(num_variables: usize, folding_factor: &FoldingFactor) -> Vec<usize> {
+    let (num_rounds, _) = folding_factor
+        .compute_number_of_rounds(num_variables)
+        .expect("valid folding schedule");
+    let mut rates = Vec::with_capacity(num_rounds);
+    let mut rate = 1;
+    for round in 0..num_rounds {
+        rate += folding_factor.at_round(round) - 1;
+        rates.push(rate);
+    }
+    rates
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_whir_pcs<L: Layout<F, EF>>(
     specs: &[TableSpec],
     folding_factor: FoldingFactor,
     soundness_type: SecurityAssumption,
     pow_bits: usize,
-    rs_domain_initial_reduction_factor: usize,
 ) {
     let folding = folding_factor.at_round(0);
     let tables = table_specs_to_tables(specs);
@@ -60,7 +73,6 @@ fn run_whir_pcs<L: Layout<F, EF>>(
         folding_factor,
         soundness_type,
         pow_bits,
-        rs_domain_initial_reduction_factor,
     );
 }
 
@@ -71,7 +83,6 @@ fn run_whir_pcs_lifecycle_with_witness<L: Layout<F, EF>>(
     folding_factor: FoldingFactor,
     soundness_type: SecurityAssumption,
     pow_bits: usize,
-    rs_domain_initial_reduction_factor: usize,
 ) {
     // Build Poseidon2-based hash and compression for the Merkle tree.
     let num_variables = witness.num_variables();
@@ -86,7 +97,7 @@ fn run_whir_pcs_lifecycle_with_witness<L: Layout<F, EF>>(
     let params = ProtocolParameters {
         security_level: 32,
         pow_bits,
-        rs_domain_initial_reduction_factor,
+        round_log_inv_rates: default_round_log_inv_rates(num_variables, &folding_factor),
         folding_factor,
         soundness_type,
         starting_log_inv_rate: 1,
@@ -94,7 +105,7 @@ fn run_whir_pcs_lifecycle_with_witness<L: Layout<F, EF>>(
 
     // Instantiate the PCS through the trait.
     let dft = MyDft::default();
-    let config = WhirConfig::new(num_variables, params);
+    let config = WhirConfig::new(num_variables, params).unwrap();
     let pcs = TestWhirPcs::<L>::new(config, dft, mmcs);
 
     // Prover
@@ -162,82 +173,63 @@ fn test_whir_end_to_end() {
             FoldingFactor::Constant(1),
             SecurityAssumption::JohnsonBound,
             0,
-            1,
         ),
         (
             FoldingFactor::Constant(2),
             SecurityAssumption::CapacityBound,
             5,
-            2,
         ),
         (
             FoldingFactor::Constant(3),
             SecurityAssumption::UniqueDecoding,
             10,
-            3,
         ),
         (
             FoldingFactor::Constant(4),
             SecurityAssumption::JohnsonBound,
             5,
-            3,
         ),
         (
             FoldingFactor::ConstantFromSecondRound(2, 1),
             SecurityAssumption::CapacityBound,
             10,
-            2,
         ),
         (
             FoldingFactor::ConstantFromSecondRound(3, 1),
             SecurityAssumption::UniqueDecoding,
             0,
-            3,
         ),
         (
             FoldingFactor::ConstantFromSecondRound(3, 2),
             SecurityAssumption::JohnsonBound,
             10,
-            3,
         ),
         (
             FoldingFactor::ConstantFromSecondRound(5, 2),
             SecurityAssumption::CapacityBound,
             5,
-            3,
         ),
         (
             FoldingFactor::Constant(2),
             SecurityAssumption::UniqueDecoding,
             0,
-            1,
         ),
         (
             FoldingFactor::ConstantFromSecondRound(5, 2),
             SecurityAssumption::JohnsonBound,
             10,
-            1,
         ),
     ];
 
-    for (i, (folding_factor, soundness_type, pow_bits, rs_domain_initial_reduction_factor)) in
-        smoke_cases.into_iter().enumerate()
-    {
+    for (i, (folding_factor, soundness_type, pow_bits)) in smoke_cases.into_iter().enumerate() {
         let specs = &table_spec_sets[i % table_spec_sets.len()];
         run_whir_pcs::<PrefixProver<F, EF>>(
             specs,
-            folding_factor,
+            folding_factor.clone(),
             soundness_type,
             pow_bits,
-            rs_domain_initial_reduction_factor,
         );
-        run_whir_pcs::<SuffixProver<F, EF>>(
-            specs,
-            folding_factor,
-            soundness_type,
-            pow_bits,
-            rs_domain_initial_reduction_factor,
-        );
+        run_whir_pcs::<SuffixProver<F, EF>>(specs, folding_factor, soundness_type, pow_bits);
     }
 }
 
@@ -262,37 +254,25 @@ fn test_whir_end_to_end_exhaustive() {
         SecurityAssumption::UniqueDecoding,
     ];
     let pow_bits = [0, 5, 10];
-    let rs_domain_initial_reduction_factors = 1..=3;
-
     let mut rng = SmallRng::seed_from_u64(7);
 
-    for rs_domain_initial_reduction_factor in rs_domain_initial_reduction_factors {
-        for folding_factor in folding_factors {
-            // Skip configurations where the first-round folding is smaller
-            // than the initial domain reduction (would produce an empty domain).
-            if folding_factor.at_round(0) < rs_domain_initial_reduction_factor {
-                continue;
-            }
-
-            for soundness_type in soundness_type {
-                for pow_bits in pow_bits {
-                    for _ in 0..N {
-                        let specs = random_table_specs(&mut rng, folding_factor.at_round(0));
-                        run_whir_pcs::<PrefixProver<F, EF>>(
-                            &specs,
-                            folding_factor,
-                            soundness_type,
-                            pow_bits,
-                            rs_domain_initial_reduction_factor,
-                        );
-                        run_whir_pcs::<SuffixProver<F, EF>>(
-                            &specs,
-                            folding_factor,
-                            soundness_type,
-                            pow_bits,
-                            rs_domain_initial_reduction_factor,
-                        );
-                    }
+    for folding_factor in folding_factors {
+        for soundness_type in soundness_type {
+            for pow_bits in pow_bits {
+                for _ in 0..N {
+                    let specs = random_table_specs(&mut rng, folding_factor.at_round(0));
+                    run_whir_pcs::<PrefixProver<F, EF>>(
+                        &specs,
+                        folding_factor.clone(),
+                        soundness_type,
+                        pow_bits,
+                    );
+                    run_whir_pcs::<SuffixProver<F, EF>>(
+                        &specs,
+                        folding_factor.clone(),
+                        soundness_type,
+                        pow_bits,
+                    );
                 }
             }
         }
@@ -305,6 +285,8 @@ mod error_variant_tests {
 
     use p3_commit::MultilinearPcs;
     use p3_multilinear_util::poly::Poly;
+    use p3_sumcheck::layout::{Layout, SuffixProver, Table};
+    use p3_sumcheck::{OpeningProtocol, SumcheckError, TableShape, TableSpec};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -315,8 +297,6 @@ mod error_variant_tests {
     use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
     use crate::pcs::proof::PcsProof;
     use crate::pcs::verifier::errors::VerifierError;
-    use crate::sumcheck::layout::{Layout, SuffixProver, Table};
-    use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
 
     /// Suffix-mode prover used for every shape-mismatch scenario.
     type L = SuffixProver<F, EF>;
@@ -364,13 +344,13 @@ mod error_variant_tests {
         let params = ProtocolParameters {
             security_level: 32,
             pow_bits: 0,
-            rs_domain_initial_reduction_factor: 1,
+            round_log_inv_rates: vec![4],
             folding_factor: FoldingFactor::Constant(FOLDING),
             soundness_type: SecurityAssumption::CapacityBound,
             starting_log_inv_rate: 1,
         };
         let pcs = TestWhirPcs::<L>::new(
-            WhirConfig::new(witness.num_variables(), params),
+            WhirConfig::new(witness.num_variables(), params).unwrap(),
             MyDft::default(),
             mmcs,
         );
@@ -556,6 +536,70 @@ mod error_variant_tests {
     }
 
     #[test]
+    fn rejects_with_final_poly_length_mismatch_when_tail_has_extra_evals() {
+        // Invariant: the final polynomial must have exactly the verifier-expected
+        // number of evaluations before it is absorbed into the transcript.
+        //
+        // Mutation: duplicate the honest tail, preserving Poly's power-of-two
+        // shape but changing the WHIR-level final length.
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        let final_poly = proof
+            .whir
+            .final_poly
+            .as_ref()
+            .expect("honest fixture should contain final_poly");
+        let expected = final_poly.num_evals();
+        let mut evals = final_poly.as_slice().to_vec();
+        let duplicate = evals.clone();
+        evals.extend_from_slice(&duplicate);
+        proof.whir.final_poly = Some(Poly::new(evals));
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::FinalPolyLengthMismatch {
+                expected: e,
+                actual,
+            } => {
+                assert_eq!(e, expected);
+                assert_eq!(actual, expected * 2);
+            }
+            other => panic!("expected FinalPolyLengthMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_with_round_ood_answer_count_mismatch_when_answer_is_dropped() {
+        // Invariant: each round carries exactly the verifier-expected OOD answers.
+        //
+        // Fixture state: round 0 has N OOD answers.
+        //
+        // Mutation: drop one answer.
+        //
+        //     proof.whir.rounds[0].ood_answers:  N  ->  N - 1
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        let expected = proof.whir.rounds[0].ood_answers.len();
+        assert!(
+            expected > 0,
+            "fixture should produce at least one round-0 OOD answer"
+        );
+        proof.whir.rounds[0].ood_answers.pop();
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::RoundOodAnswerCountMismatch {
+                round,
+                expected: e,
+                actual: a,
+            } => {
+                assert_eq!(round, 0);
+                assert_eq!(e, expected);
+                assert_eq!(a, expected - 1);
+            }
+            other => panic!("expected RoundOodAnswerCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn rejects_with_stir_query_count_mismatch_when_intermediate_query_is_dropped() {
         // Invariant: queries.len() == verifier-sampled indices for the round.
         //
@@ -617,6 +661,73 @@ mod error_variant_tests {
             other => panic!("expected StirQueryCountMismatch, got {other:?}"),
         }
     }
+
+    #[test]
+    fn rejects_with_initial_ood_answer_count_mismatch_when_answer_is_dropped() {
+        // Invariant: the proof must carry exactly the committed number of initial OOD answers.
+        // Each answer drives a transcript draw, so a wrong count desyncs Fiat-Shamir.
+        //
+        // Fixture state: N initial OOD answers.
+        //
+        // Mutation: drop one answer.
+        //
+        //     proof.whir.initial_ood_answers:  N  ->  N - 1
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        let expected = proof.whir.initial_ood_answers.len();
+        assert!(
+            expected > 0,
+            "fixture should produce at least one initial OOD answer"
+        );
+        proof.whir.initial_ood_answers.pop();
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::InitialOodAnswerCountMismatch {
+                expected: e,
+                actual: a,
+            } => {
+                assert_eq!(e, expected);
+                assert_eq!(a, expected - 1);
+            }
+            other => panic!("expected InitialOodAnswerCountMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_with_round_count_mismatch_when_intermediate_sumcheck_is_short() {
+        // Invariant: an intermediate round's sumcheck sends one polynomial per folded variable.
+        // That count is the next round's folding factor.
+        // A wrong count desyncs Fiat-Shamir.
+        //
+        // Fixture state: round 0 sumcheck has FOLDING = 4 polynomial evaluations.
+        //
+        // Mutation: drop the trailing evaluation.
+        //
+        //     proof.whir.rounds[0].sumcheck.polynomial_evaluations:  4  ->  3
+        let (pcs, commitment, mut proof, protocol) = commit_and_open();
+        assert!(
+            !proof.whir.rounds.is_empty(),
+            "fixture should produce at least one WHIR round"
+        );
+        let expected = proof.whir.rounds[0].sumcheck.polynomial_evaluations().len();
+        assert!(
+            expected > 0,
+            "fixture round-0 sumcheck should send at least one polynomial"
+        );
+        proof.whir.rounds[0].sumcheck.polynomial_evaluations.pop();
+
+        let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
+        match err {
+            VerifierError::Sumcheck(SumcheckError::RoundCountMismatch {
+                expected: e,
+                actual: a,
+            }) => {
+                assert_eq!(e, expected);
+                assert_eq!(a, expected - 1);
+            }
+            other => panic!("expected Sumcheck(RoundCountMismatch), got {other:?}"),
+        }
+    }
 }
 
 mod keccak_tests {
@@ -632,6 +743,8 @@ mod keccak_tests {
     use p3_koala_bear::KoalaBear;
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_multilinear_util::poly::Poly;
+    use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
+    use p3_sumcheck::{OpeningProtocol, TableShape, TableSpec};
     use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
@@ -639,8 +752,6 @@ mod keccak_tests {
     use crate::fiat_shamir::domain_separator::DomainSeparator;
     use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
     use crate::pcs::prover::WhirProver;
-    use crate::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
-    use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
 
     type F = KoalaBear;
     type EF = BinomialExtensionField<F, 4>;
@@ -688,13 +799,13 @@ mod keccak_tests {
         let params = ProtocolParameters {
             security_level: 32,
             pow_bits: 0,
-            rs_domain_initial_reduction_factor: 1,
+            round_log_inv_rates: vec![4, 7],
             folding_factor: FoldingFactor::Constant(FOLDING),
             soundness_type: SecurityAssumption::CapacityBound,
             starting_log_inv_rate: 1,
         };
         let pcs = TestWhirPcs::<L>::new(
-            WhirConfig::new(witness.num_variables(), params),
+            WhirConfig::new(witness.num_variables(), params).unwrap(),
             MyDft::default(),
             mmcs,
         );

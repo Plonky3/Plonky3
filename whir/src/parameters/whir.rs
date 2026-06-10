@@ -7,9 +7,69 @@ use core::ops::Deref;
 use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, TwoAdicField};
+use thiserror::Error;
 
-use super::ProtocolParameters;
+use super::{FoldingFactor, FoldingFactorError, ProtocolParameters};
 use crate::pcs::proof::WhirProof;
+
+/// Reasons a set of user-facing parameters cannot form a valid WHIR configuration.
+#[derive(Debug, Error)]
+pub enum WhirConfigError {
+    /// The folding factor is incompatible with the polynomial size.
+    #[error(transparent)]
+    FoldingFactor(#[from] FoldingFactorError),
+
+    /// The domain after the first fold exceeds the base field two-adicity.
+    ///
+    /// - Twiddles and query equality polynomials must stay in the base field.
+    /// - A larger first-round folding factor shrinks this domain.
+    #[error(
+        "folded domain 2^{log_folded_domain_size} exceeds base-field two-adicity 2^{two_adicity}; increase the first-round folding factor"
+    )]
+    FoldedDomainExceedsTwoAdicity {
+        log_folded_domain_size: usize,
+        two_adicity: usize,
+    },
+
+    /// The initial Reed-Solomon evaluation domain cannot be represented as a
+    /// `usize` length.
+    ///
+    /// The initial domain has size `2^(num_variables + starting_log_inv_rate)`.
+    /// That exponent must fit in `usize` and be strictly less than
+    /// `usize::BITS` before computing `1 << exponent`.
+    #[error(
+        "initial domain exponent num_variables ({num_variables}) + starting_log_inv_rate ({starting_log_inv_rate}) must fit and be less than usize::BITS ({usize_bits})"
+    )]
+    InitialDomainExceedsUsize {
+        num_variables: usize,
+        starting_log_inv_rate: usize,
+        usize_bits: usize,
+    },
+
+    /// Explicit per-round codeword rates have the wrong length.
+    #[error("expected {expected} explicit codeword rates (one per round), got {actual}")]
+    RoundRateCountMismatch { expected: usize, actual: usize },
+
+    /// Explicit per-round folding factors have the wrong length.
+    #[error("expected {expected} explicit folding factors (one per phase), got {actual}")]
+    FoldingFactorCountMismatch { expected: usize, actual: usize },
+
+    /// A requested codeword rate would require growing the Reed-Solomon domain.
+    #[error("round {round}: requested codeword rate would require growing the RS domain")]
+    RateGrowsDomain { round: usize },
+
+    /// No out-of-domain sample count reaches the requested security level.
+    ///
+    /// - The field is too small for the requested security level.
+    /// - Lower the security level or use a larger extension field.
+    #[error(
+        "no out-of-domain sample count reaches {security_level}-bit security with a {field_size_bits}-bit field"
+    )]
+    OodSamplesInfeasible {
+        security_level: usize,
+        field_size_bits: usize,
+    },
+}
 
 /// Derived configuration for a single intermediate WHIR round.
 ///
@@ -29,6 +89,8 @@ pub struct RoundConfig<F> {
     pub num_variables: usize,
     /// Number of variables folded in this round.
     pub folding_factor: usize,
+    /// Log-inverse rate of the codeword committed after this round.
+    pub log_inv_rate: usize,
     /// Size of the evaluation domain before folding in this round.
     pub domain_size: usize,
     /// Generator of the folded evaluation domain after this round's fold.
@@ -88,14 +150,25 @@ where
     EF: ExtensionField<F> + TwoAdicField,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
 {
-    /// Construct an empty proof with this configuration.
-    pub fn empty_proof<MT: Mmcs<F>>(&self) -> WhirProof<F, EF, MT> {
-        WhirProof::from_protocol_parameters(&self.params, self.num_variables)
+    /// Construct an empty proof shaped by this configuration.
+    pub(crate) fn empty_proof<MT: Mmcs<F>>(&self) -> WhirProof<F, EF, MT> {
+        WhirProof::empty(self.n_rounds(), self.final_queries)
     }
 
     /// Derive a full protocol configuration from user-facing parameters.
+    ///
+    /// # Errors
+    ///
+    /// - The folding factor does not fit the polynomial size.
+    /// - The first fold leaves a domain larger than the base-field two-adicity.
+    /// - Explicit per-round rates or folding factors have the wrong length.
+    /// - A requested rate would grow the Reed-Solomon domain.
+    /// - The field is too small to reach the requested security level.
     #[allow(clippy::too_many_lines)]
-    pub fn new(num_variables: usize, whir_parameters: ProtocolParameters) -> Self {
+    pub fn new(
+        num_variables: usize,
+        whir_parameters: ProtocolParameters,
+    ) -> Result<Self, WhirConfigError> {
         // ---------------------------------------------------------------
         // Phase 1: Validate inputs and set up global constants.
         // ---------------------------------------------------------------
@@ -107,16 +180,7 @@ where
         // Reject folding factors that are incompatible with the polynomial size.
         whir_parameters
             .folding_factor
-            .check_validity(num_variables)
-            .unwrap();
-
-        // The domain reduction at round 0 must not exceed the folding factor,
-        // otherwise the code rate would *increase*, weakening soundness.
-        assert!(
-            whir_parameters.rs_domain_initial_reduction_factor
-                <= whir_parameters.folding_factor.at_round(0),
-            "Increasing the code rate is not a good idea"
-        );
+            .check_validity(num_variables)?;
 
         // PoW contributes an independent additive term to security,
         // so the algebraic protocol only needs to cover the remainder.
@@ -132,7 +196,14 @@ where
         let mut num_variables = num_variables;
 
         // Initial evaluation domain: 2^(num_variables + log_inv_rate) points.
-        let log_domain_size = num_variables + log_inv_rate;
+        let log_domain_size = num_variables
+            .checked_add(log_inv_rate)
+            .filter(|&log_domain_size| log_domain_size < usize::BITS as usize)
+            .ok_or(WhirConfigError::InitialDomainExceedsUsize {
+                num_variables,
+                starting_log_inv_rate: log_inv_rate,
+                usize_bits: usize::BITS as usize,
+            })?;
         let mut domain_size: usize = 1 << log_domain_size;
 
         // ---------------------------------------------------------------
@@ -147,10 +218,12 @@ where
         // A larger folding_factor_0 pushes the folded domain below the limit.
         // This does NOT restrict how much data can be committed.
         let log_folded_domain_size = log_domain_size - whir_parameters.folding_factor.at_round(0);
-        assert!(
-            log_folded_domain_size <= F::TWO_ADICITY,
-            "Increase folding_factor_0"
-        );
+        if log_folded_domain_size > F::TWO_ADICITY {
+            return Err(WhirConfigError::FoldedDomainExceedsTwoAdicity {
+                log_folded_domain_size,
+                two_adicity: F::TWO_ADICITY,
+            });
+        }
 
         // ---------------------------------------------------------------
         // Phase 3: Determine round structure.
@@ -158,17 +231,50 @@ where
 
         // How many intermediate STIR rounds, and how many variables remain
         // for the final direct-send sumcheck.
+        // An invalid per-round schedule surfaces as a folding-factor config error.
         let (num_rounds, final_sumcheck_rounds) = whir_parameters
             .folding_factor
-            .compute_number_of_rounds(num_variables);
+            .compute_number_of_rounds(num_variables)?;
+
+        let round_log_inv_rates = if whir_parameters.round_log_inv_rates.is_empty() {
+            let mut rates = Vec::with_capacity(num_rounds);
+            let mut rate = whir_parameters.starting_log_inv_rate;
+            for round in 0..num_rounds {
+                rate += whir_parameters.folding_factor.at_round(round) - 1;
+                rates.push(rate);
+            }
+            rates
+        } else {
+            if whir_parameters.round_log_inv_rates.len() != num_rounds {
+                return Err(WhirConfigError::RoundRateCountMismatch {
+                    expected: num_rounds,
+                    actual: whir_parameters.round_log_inv_rates.len(),
+                });
+            }
+            whir_parameters.round_log_inv_rates.clone()
+        };
+        if let FoldingFactor::PerRound(factors) = &whir_parameters.folding_factor
+            && factors.len() != num_rounds + 1
+        {
+            return Err(WhirConfigError::FoldingFactorCountMismatch {
+                expected: num_rounds + 1,
+                actual: factors.len(),
+            });
+        }
 
         // OOD samples for the commitment phase (before any folding).
-        let commitment_ood_samples = whir_parameters.soundness_type.determine_ood_samples(
-            whir_parameters.security_level,
-            num_variables,
-            log_inv_rate,
-            field_size_bits,
-        );
+        let commitment_ood_samples = whir_parameters
+            .soundness_type
+            .determine_ood_samples(
+                whir_parameters.security_level,
+                num_variables,
+                log_inv_rate,
+                field_size_bits,
+            )
+            .ok_or(WhirConfigError::OodSamplesInfeasible {
+                security_level: whir_parameters.security_level,
+                field_size_bits,
+            })?;
 
         // PoW difficulty for the very first folding sumcheck.
         let starting_folding_pow_bits = whir_parameters.soundness_type.folding_pow_bits(
@@ -183,7 +289,7 @@ where
         // ---------------------------------------------------------------
         //
         // After the initial fold, each round i:
-        //   1. Computes the new code rate after folding.
+        //   1. Reads the configured/derived code rate after folding.
         //   2. Determines query count from the old rate (queries test
         //      proximity to the code *before* this round's fold).
         //   3. Determines OOD sample count from the new rate.
@@ -196,32 +302,32 @@ where
         // handles subsequent rounds.
         num_variables -= whir_parameters.folding_factor.at_round(0);
 
-        for round in 0..num_rounds {
-            // Only round 0 applies the user-configured domain reduction;
-            // all later rounds halve the domain (reduction factor = 1).
-            let rs_reduction_factor = if round == 0 {
-                whir_parameters.rs_domain_initial_reduction_factor
-            } else {
-                1
-            };
+        for (round, &next_rate) in round_log_inv_rates.iter().enumerate() {
+            let folding_factor = whir_parameters.folding_factor.at_round(round);
+            if next_rate > log_inv_rate + folding_factor {
+                return Err(WhirConfigError::RateGrowsDomain { round });
+            }
+            let rs_reduction_factor = log_inv_rate + folding_factor - next_rate;
 
-            // The code rate increases by (folding_factor - rs_reduction_factor) bits.
             // Queries use the *old* rate; OOD and folding use the *new* rate.
-            let next_rate = log_inv_rate
-                + (whir_parameters.folding_factor.at_round(round) - rs_reduction_factor);
-
             // Number of STIR proximity queries at the current (old) rate.
             let num_queries = whir_parameters
                 .soundness_type
                 .queries(protocol_security_level, log_inv_rate);
 
             // OOD samples needed at the post-fold (new) rate.
-            let ood_samples = whir_parameters.soundness_type.determine_ood_samples(
-                whir_parameters.security_level,
-                num_variables,
-                next_rate,
-                field_size_bits,
-            );
+            let ood_samples = whir_parameters
+                .soundness_type
+                .determine_ood_samples(
+                    whir_parameters.security_level,
+                    num_variables,
+                    next_rate,
+                    field_size_bits,
+                )
+                .ok_or(WhirConfigError::OodSamplesInfeasible {
+                    security_level: whir_parameters.security_level,
+                    field_size_bits,
+                })?;
 
             // Two independent error sources bound the STIR round:
             //   - query_error: (1 - delta)^num_queries proximity test.
@@ -250,7 +356,6 @@ where
                 next_rate,
             );
 
-            let folding_factor = whir_parameters.folding_factor.at_round(round);
             let next_folding_factor = whir_parameters.folding_factor.at_round(round + 1);
 
             // Generator of the two-adic subgroup for the folded domain.
@@ -264,6 +369,7 @@ where
                 ood_samples,
                 num_variables,
                 folding_factor,
+                log_inv_rate: next_rate,
                 domain_size,
                 folded_domain_gen,
             });
@@ -306,7 +412,7 @@ where
                 + final_sumcheck_rounds
         );
 
-        Self {
+        let config = Self {
             params: whir_parameters,
             commitment_ood_samples,
             num_variables: initial_num_variables,
@@ -318,7 +424,19 @@ where
             final_folding_pow_bits: final_folding_pow_bits as usize,
             _extension_field: PhantomData,
             _challenger: PhantomData,
-        }
+        };
+
+        // The final-round config must expose exactly the direct-send variable count.
+        //
+        //     prover     : sends 2^count final evaluations in the clear
+        //     verifier   : length-checks the final polynomial against 2^count
+        //     transcript : absorbs 2^count final coefficients
+        assert_eq!(
+            config.final_round_config().num_variables,
+            config.final_sumcheck_rounds
+        );
+
+        Ok(config)
     }
 
     /// Returns the size of the initial evaluation domain.
@@ -348,20 +466,19 @@ where
     }
 
     /// Returns how many bits the RS domain shrinks by at the given round.
-    ///
-    /// The first round uses the user-configured initial reduction factor.
-    /// All subsequent rounds halve the domain (factor = 1).
-    pub const fn rs_reduction_factor(&self, round: usize) -> usize {
-        if round == 0 {
-            self.params.rs_domain_initial_reduction_factor
+    pub fn rs_reduction_factor(&self, round: usize) -> usize {
+        let previous_log_inv_rate = if round == 0 {
+            self.params.starting_log_inv_rate
         } else {
-            1
-        }
+            self.round_parameters[round - 1].log_inv_rate
+        };
+        previous_log_inv_rate + self.folding_factor(round)
+            - self.round_parameters[round].log_inv_rate
     }
 
     /// Returns the log2 size of the largest FFT
     /// (At commitment we perform 2^folding_factor FFT of size 2^max_fft_size)
-    pub const fn max_fft_size(&self) -> usize {
+    pub fn max_fft_size(&self) -> usize {
         self.num_variables + self.params.starting_log_inv_rate - self.folding_factor(0)
     }
 
@@ -387,7 +504,7 @@ where
     }
 
     /// Retrieves the folding factor for a given round.
-    pub const fn folding_factor(&self, round: usize) -> usize {
+    pub fn folding_factor(&self, round: usize) -> usize {
         self.params.folding_factor.at_round(round)
     }
 
@@ -410,6 +527,7 @@ where
                 folding_factor: self.folding_factor(self.n_rounds()),
                 num_queries: self.final_queries,
                 pow_bits: self.final_pow_bits,
+                log_inv_rate: self.params.starting_log_inv_rate,
                 domain_size: self.starting_domain_size(),
                 folded_domain_gen: F::two_adic_generator(
                     self.starting_domain_size().ilog2() as usize - self.folding_factor(0),
@@ -439,6 +557,7 @@ where
                 folding_factor,
                 num_queries: self.final_queries,
                 pow_bits: self.final_pow_bits,
+                log_inv_rate: last.log_inv_rate,
                 domain_size,
                 folded_domain_gen,
                 // Inherit OOD count from the last intermediate round.
@@ -448,25 +567,10 @@ where
         }
     }
 
-    /// Returns the inverse rate of the RS code at the given round.
-    ///
-    /// The inverse rate is `domain_size / degree`, where:
-    /// - `domain_size` is the evaluation domain after the round's reduction.
-    /// - `degree` is 2^(remaining variables after all folds up to this round).
-    ///
-    /// ```text
-    /// inv_rate = (round_domain_size >> rs_reduction) / 2^(num_variables - total_folded)
-    /// ```
+    /// Returns the inverse rate of the codeword committed after an
+    /// intermediate round.
     pub fn inv_rate(&self, round: usize) -> usize {
-        // Shrink the domain by this round's reduction factor.
-        let domain_reduction = 1 << self.rs_reduction_factor(round);
-        let new_domain_size = self.round_parameters[round].domain_size / domain_reduction;
-
-        // Number of polynomial evaluations (= degree) after all folds so far.
-        let num_evals = 1 << (self.num_variables - self.params.folding_factor.total_number(round));
-
-        // Ratio gives the inverse rate.
-        new_domain_size / num_evals
+        1 << self.round_parameters[round].log_inv_rate
     }
 }
 
@@ -490,7 +594,7 @@ mod tests {
         ProtocolParameters {
             security_level: 100,
             pow_bits: 20,
-            rs_domain_initial_reduction_factor: 1,
+            round_log_inv_rates: vec![],
             folding_factor: FoldingFactor::ConstantFromSecondRound(4, 4),
             soundness_type: SecurityAssumption::CapacityBound,
             starting_log_inv_rate: 1,
@@ -501,7 +605,7 @@ mod tests {
     fn test_whir_config_creation() {
         let params = default_whir_params();
 
-        let config = WhirConfig::<F, F, MyChallenger>::new(10, params);
+        let config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
 
         assert_eq!(config.security_level, 100);
         assert_eq!(config.params.pow_bits, 20);
@@ -509,17 +613,197 @@ mod tests {
     }
 
     #[test]
+    fn new_errors_when_field_too_small_for_security() {
+        // Invariant: an infeasible field/security pair errors instead of panicking.
+        //
+        // BabyBear used as its own extension field is 31 bits.
+        // At 31 variables the OOD term gains ~0 bits per sample.
+        // No sample count then reaches 100-bit security.
+        //
+        // Folding factor 5 keeps the folded domain at 2^27 = BabyBear two-adicity.
+        // So the two-adicity guard passes and the OOD feasibility check is reached.
+        let params = ProtocolParameters {
+            security_level: 100,
+            pow_bits: 20,
+            round_log_inv_rates: vec![],
+            folding_factor: FoldingFactor::Constant(5),
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        };
+
+        let err = WhirConfig::<F, F, MyChallenger>::new(31, params)
+            .expect_err("31-bit field cannot reach 100-bit security");
+        assert!(
+            matches!(err, WhirConfigError::OodSamplesInfeasible { .. }),
+            "expected OodSamplesInfeasible, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn new_errors_when_initial_domain_exponent_exceeds_usize_bits() {
+        // Invariant: `WhirConfig::new` must reject an initial domain that cannot
+        // be represented as a `usize` length before computing `1 << exponent`.
+        let num_variables = usize::BITS as usize;
+        let params = ProtocolParameters {
+            security_level: 32,
+            pow_bits: 0,
+            round_log_inv_rates: vec![],
+            folding_factor: FoldingFactor::Constant(num_variables),
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        };
+
+        let err = WhirConfig::<F, F, MyChallenger>::new(num_variables, params)
+            .expect_err("oversized initial domain must be rejected");
+        match err {
+            WhirConfigError::InitialDomainExceedsUsize {
+                num_variables: got_num_variables,
+                starting_log_inv_rate,
+                usize_bits,
+            } => {
+                assert_eq!(got_num_variables, num_variables);
+                assert_eq!(starting_log_inv_rate, 1);
+                assert_eq!(usize_bits, usize::BITS as usize);
+            }
+            other => panic!("expected InitialDomainExceedsUsize, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn new_errors_when_initial_domain_exponent_addition_overflows() {
+        // Invariant: the exponent addition itself must be checked. In release
+        // builds unchecked addition would wrap and could derive a nonsensical
+        // small domain.
+        let params = ProtocolParameters {
+            security_level: 32,
+            pow_bits: 0,
+            round_log_inv_rates: vec![],
+            folding_factor: FoldingFactor::Constant(usize::MAX),
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        };
+
+        let err = WhirConfig::<F, F, MyChallenger>::new(usize::MAX, params)
+            .expect_err("overflowing initial domain exponent must be rejected");
+        assert!(
+            matches!(err, WhirConfigError::InitialDomainExceedsUsize { .. }),
+            "expected InitialDomainExceedsUsize, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn config_rejects_per_round_factors_that_under_fold() {
+        // Invariant: a per-round schedule that under-folds is rejected at config construction.
+        //
+        // Fixture state:
+        //   num_variables = 20, direct-send threshold = 6
+        //   PerRound([3, 2]) folds only 3 + 2 = 5 variables
+        //
+        //     remaining = 20 - 5 = 15 > 6  ->  under-folds
+        let mut params = default_whir_params();
+        params.folding_factor = FoldingFactor::PerRound(vec![3, 2]);
+
+        let err = WhirConfig::<F, F, MyChallenger>::new(20, params)
+            .expect_err("per-round factors under-fold; config must be rejected");
+
+        // The folding-factor error is forwarded through the config error type,
+        // carrying the variable accounting that explains the rejection.
+        match err {
+            WhirConfigError::FoldingFactor(FoldingFactorError::InsufficientFolding {
+                num_variables,
+                remaining,
+                threshold,
+            }) => {
+                assert_eq!(num_variables, 20);
+                // 20 variables minus the 3 + 2 folded by the schedule.
+                assert_eq!(remaining, 15);
+                // The direct-send threshold the schedule fails to reach.
+                assert_eq!(threshold, 6);
+            }
+            other => panic!("expected InsufficientFolding, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_n_rounds() {
         let params = default_whir_params();
-        let config = WhirConfig::<F, F, MyChallenger>::new(10, params);
+        let config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
 
         assert_eq!(config.n_rounds(), config.round_parameters.len());
     }
 
     #[test]
+    fn final_round_config_num_variables_equals_final_sumcheck_rounds() {
+        // Invariant: the final-round config exposes exactly `final_sumcheck_rounds` variables.
+        //
+        // Three places key off this single count and must agree:
+        //
+        //     prover     : sends 2^count final evaluations in the clear
+        //     verifier   : length-checks the final polynomial against 2^count
+        //     transcript : absorbs 2^count final coefficients
+        //
+        // Sweep every folding strategy across the direct-send threshold so both branches are hit.
+        fn check(num_variables: usize, folding_factor: FoldingFactor) {
+            // UniqueDecoding needs no out-of-domain samples, so construction always succeeds here.
+            let params = ProtocolParameters {
+                security_level: 100,
+                pow_bits: 20,
+                round_log_inv_rates: vec![],
+                folding_factor,
+                soundness_type: SecurityAssumption::UniqueDecoding,
+                starting_log_inv_rate: 1,
+            };
+            // Construction runs the same assertion internally.
+            // This explicit check documents and pins the invariant.
+            let config = WhirConfig::<F, F, MyChallenger>::new(num_variables, params).unwrap();
+            assert_eq!(
+                config.final_round_config().num_variables,
+                config.final_sumcheck_rounds,
+                "num_variables = {num_variables}"
+            );
+        }
+
+        // Constant: small sizes stay in the empty branch, larger ones reach the non-empty branch.
+        for nv in 4..=24 {
+            check(nv, FoldingFactor::Constant(4));
+        }
+        for nv in 2..=24 {
+            check(nv, FoldingFactor::Constant(2));
+        }
+
+        // ConstantFromSecondRound: a larger first fold, then smaller folds.
+        for nv in 5..=24 {
+            check(nv, FoldingFactor::ConstantFromSecondRound(3, 2));
+        }
+
+        // PerRound: explicit schedules whose length is num_rounds + 1.
+        //
+        //     [3, 2]    @ 10  ->  1 intermediate round
+        //     [4, 3, 2] @ 14  ->  2 intermediate rounds
+        check(10, FoldingFactor::PerRound(vec![3, 2]));
+        check(14, FoldingFactor::PerRound(vec![4, 3, 2]));
+    }
+
+    #[test]
+    fn test_explicit_round_log_inv_rates() {
+        let mut params = default_whir_params();
+        params.folding_factor = FoldingFactor::Constant(4);
+        params.round_log_inv_rates = vec![3, 2];
+
+        let config = WhirConfig::<F, F, MyChallenger>::new(16, params).unwrap();
+
+        assert_eq!(config.round_parameters[0].log_inv_rate, 3);
+        assert_eq!(config.round_parameters[1].log_inv_rate, 2);
+        assert_eq!(config.rs_reduction_factor(0), 2);
+        assert_eq!(config.rs_reduction_factor(1), 5);
+        assert_eq!(config.inv_rate(0), 1 << 3);
+        assert_eq!(config.inv_rate(1), 1 << 2);
+    }
+
+    #[test]
     fn test_check_pow_bits_within_limits() {
         let params = default_whir_params();
-        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params);
+        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
 
         // Set all values within limits
         config.params.pow_bits = 20;
@@ -536,6 +820,7 @@ mod tests {
                 ood_samples: 2,
                 num_variables: 10,
                 folding_factor: 2,
+                log_inv_rate: 1,
                 domain_size: 10,
                 folded_domain_gen: F::from_u64(2),
             },
@@ -546,6 +831,7 @@ mod tests {
                 ood_samples: 2,
                 num_variables: 10,
                 folding_factor: 2,
+                log_inv_rate: 1,
                 domain_size: 10,
                 folded_domain_gen: F::from_u64(2),
             },
@@ -560,7 +846,7 @@ mod tests {
     #[test]
     fn test_check_pow_bits_starting_folding_exceeds() {
         let params = default_whir_params();
-        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params);
+        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 21; // Exceeds max_pow_bits
@@ -576,7 +862,7 @@ mod tests {
     #[test]
     fn test_check_pow_bits_final_pow_exceeds() {
         let params = default_whir_params();
-        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params);
+        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 15;
@@ -592,7 +878,7 @@ mod tests {
     #[test]
     fn test_check_pow_bits_round_pow_exceeds() {
         let params = default_whir_params();
-        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params);
+        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 15;
@@ -607,6 +893,7 @@ mod tests {
             ood_samples: 2,
             num_variables: 10,
             folding_factor: 2,
+            log_inv_rate: 1,
             domain_size: 10,
             folded_domain_gen: F::from_u64(2),
         }];
@@ -620,7 +907,7 @@ mod tests {
     #[test]
     fn test_check_pow_bits_round_folding_pow_exceeds() {
         let params = default_whir_params();
-        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params);
+        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 15;
@@ -635,6 +922,7 @@ mod tests {
             ood_samples: 2,
             num_variables: 10,
             folding_factor: 2,
+            log_inv_rate: 1,
             domain_size: 10,
             folded_domain_gen: F::from_u64(2),
         }];
@@ -648,7 +936,7 @@ mod tests {
     #[test]
     fn test_check_pow_bits_exactly_at_limit() {
         let params = default_whir_params();
-        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params);
+        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 20;
@@ -662,6 +950,7 @@ mod tests {
             ood_samples: 2,
             num_variables: 10,
             folding_factor: 2,
+            log_inv_rate: 1,
             domain_size: 10,
             folded_domain_gen: F::from_u64(2),
         }];
@@ -675,7 +964,7 @@ mod tests {
     #[test]
     fn test_check_pow_bits_all_exceed() {
         let params = default_whir_params();
-        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params);
+        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 22;
@@ -689,6 +978,7 @@ mod tests {
             ood_samples: 2,
             num_variables: 10,
             folding_factor: 2,
+            log_inv_rate: 1,
             domain_size: 10,
             folded_domain_gen: F::from_u64(2),
         }];

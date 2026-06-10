@@ -15,12 +15,51 @@ use p3_util::zip_eq::zip_eq;
 use p3_util::{checked_log_size_sum, checked_pow2};
 use tracing::instrument;
 
-use crate::error::{InvalidProofShapeError, VerificationError};
+use crate::error::{InvalidProofShapeError, PeriodicColumnError, VerificationError};
 use crate::symbolic::get_log_num_quotient_chunks;
 use crate::{
     AirLayout, Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
     VerifierConstraintFolder,
 };
+
+/// Reject periodic columns the verifier cannot evaluate over the trace domain.
+///
+/// - Evaluation samples a subdomain whose size is the column length.
+/// - Both verifiers call this before evaluating.
+/// - A malformed AIR therefore errors instead of panicking.
+///
+/// # Arguments
+///
+/// - `periodic_columns` — the periodic columns declared by the AIR.
+/// - `trace_length` — the number of rows the columns repeat over.
+///
+/// # Errors
+///
+/// - A length that is not a power of two has no evaluation subdomain.
+/// - A length larger than the trace cannot sit inside the trace domain.
+pub fn check_periodic_column_lengths<F>(
+    periodic_columns: &[Vec<F>],
+    trace_length: usize,
+) -> Result<(), PeriodicColumnError> {
+    for col in periodic_columns {
+        let period = col.len();
+
+        // A subdomain of size `period` exists only for powers of two.
+        if !period.is_power_of_two() {
+            return Err(PeriodicColumnError::LengthNotPowerOfTwo { got: period });
+        }
+
+        // That subdomain must sit inside the trace domain.
+        if period > trace_length {
+            return Err(PeriodicColumnError::LengthTooLarge {
+                maximum: trace_length,
+                got: period,
+            });
+        }
+    }
+
+    Ok(())
+}
 
 pub fn validate_degree_bits(
     air: Option<usize>,
@@ -388,9 +427,20 @@ where
     // Get an out-of-domain point to open our values at.
     //
     // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has degree `d`.
-    let zeta = challenger.sample_algebra_element();
-    let periodic_values: Vec<SC::Challenge> = air
-        .periodic_columns()
+    let zeta: SC::Challenge = challenger.sample_algebra_element();
+
+    // The opening at zeta divides by the vanishing polynomial of the trace domain.
+    // Reject any zeta on the domain, where that polynomial is zero and the inverse panics.
+    // Honest Fiat-Shamir sampling reaches this only with probability |H| / |EF|.
+    if init_trace_domain.vanishing_poly_at_point(zeta).is_zero() {
+        return Err(VerificationError::OodPointInDomain);
+    }
+
+    // Periodic columns are AIR logic; a malformed one must error, not panic.
+    let periodic_columns = air.periodic_columns();
+    check_periodic_column_lengths(&periodic_columns, init_trace_domain.size())?;
+
+    let periodic_values: Vec<SC::Challenge> = periodic_columns
         .iter()
         .map(|periodic_col| init_trace_domain.evaluate_periodic_column_at(periodic_col, zeta))
         .collect();

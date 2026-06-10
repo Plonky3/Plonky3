@@ -79,8 +79,10 @@ impl<T: Clone + Send + Sync + Default> DenseMatrix<T> {
 impl<T: Clone + Send + Sync, S: DenseStorage<T>> DenseMatrix<T, S> {
     /// Create a new dense matrix of the given dimensions, backed by the given storage.
     ///
-    /// Note that it is undefined behavior to create a matrix such that
-    /// `values.len() % width != 0`.
+    /// # Panics
+    /// Panics in debug builds if `values.len() % width != 0`. Release builds silently
+    /// construct a matrix whose row/column indexing is inconsistent with the storage —
+    /// callers must validate dimensions before calling.
     #[must_use]
     pub fn new(values: S, width: usize) -> Self {
         debug_assert!(values.borrow().len().is_multiple_of(width));
@@ -516,6 +518,61 @@ impl<T: Clone + Send + Sync, S: DenseStorage<T>> Matrix<T> for DenseMatrix<T, S>
         packed.iter().copied().chain(
             (!sfx.is_empty()).then(|| P::from_fn(|i| sfx.get(i).cloned().unwrap_or_default())),
         )
+    }
+
+    #[inline]
+    fn vertically_packed_row<P>(&self, r: usize) -> impl Iterator<Item = P>
+    where
+        T: Copy,
+        P: PackedValue<Value = T>,
+    {
+        let values = self.values.borrow();
+        let width = self.width;
+        let height = self.height();
+        let row = r % height;
+        let rows = (P::WIDTH != 1).then(|| self.wrapping_row_slices(r, P::WIDTH));
+
+        (0..width).map(move |c| {
+            if P::WIDTH == 1 {
+                unsafe { P::broadcast(*values.get_unchecked(row * width + c)) }
+            } else {
+                let rows = rows.as_ref().unwrap();
+                P::from_fn(|i| rows[i][c])
+            }
+        })
+    }
+
+    #[inline]
+    fn vertically_packed_row_pair<P>(&self, r: usize, step: usize) -> Vec<P>
+    where
+        T: Copy,
+        P: PackedValue<Value = T>,
+    {
+        if P::WIDTH == 1 {
+            let values = self.values.borrow();
+            let width = self.width;
+            let height = self.height();
+            let row = r % height;
+            let next_row = (r + step) % height;
+            let mut out = Vec::with_capacity(width * 2);
+
+            out.extend(
+                (0..width).map(|c| unsafe { P::broadcast(*values.get_unchecked(row * width + c)) }),
+            );
+            out.extend(
+                (0..width)
+                    .map(|c| unsafe { P::broadcast(*values.get_unchecked(next_row * width + c)) }),
+            );
+            out
+        } else {
+            let rows = self.wrapping_row_slices(r, P::WIDTH);
+            let next_rows = self.wrapping_row_slices(r + step, P::WIDTH);
+
+            (0..self.width())
+                .map(|c| P::from_fn(|i| rows[i][c]))
+                .chain((0..self.width()).map(|c| P::from_fn(|i| next_rows[i][c])))
+                .collect::<Vec<_>>()
+        }
     }
 }
 
@@ -1709,6 +1766,26 @@ mod tests {
     }
 
     #[test]
+    fn test_vertically_packed_row_scalar_width_1() {
+        type Packed = BabyBear;
+
+        let matrix = RowMajorMatrix::new((1..17).map(BabyBear::new).collect::<Vec<_>>(), 4);
+        let packed = matrix
+            .vertically_packed_row::<Packed>(2)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            packed,
+            vec![
+                BabyBear::new(9),
+                BabyBear::new(10),
+                BabyBear::new(11),
+                BabyBear::new(12),
+            ]
+        );
+    }
+
+    #[test]
     fn test_vertically_packed_row_pair() {
         type Packed = FieldArray<BabyBear, 2>;
 
@@ -1738,6 +1815,28 @@ mod tests {
                 .chain(9..13)
                 .map(|i| [BabyBear::new(i), BabyBear::new(i + 4)].into())
                 .collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn test_vertically_packed_row_pair_scalar_width_1() {
+        type Packed = BabyBear;
+
+        let matrix = RowMajorMatrix::new((1..17).map(BabyBear::new).collect::<Vec<_>>(), 4);
+        let packed = matrix.vertically_packed_row_pair::<Packed>(1, 2);
+
+        assert_eq!(
+            packed,
+            vec![
+                BabyBear::new(5),
+                BabyBear::new(6),
+                BabyBear::new(7),
+                BabyBear::new(8),
+                BabyBear::new(13),
+                BabyBear::new(14),
+                BabyBear::new(15),
+                BabyBear::new(16),
+            ]
         );
     }
 

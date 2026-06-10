@@ -12,9 +12,9 @@ use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 
-use crate::SumcheckData;
 use crate::constraints::Constraint;
 use crate::product_polynomial::ProductPolynomial;
+use crate::{SumcheckData, extrapolate_01inf};
 
 /// Input size at which the round-coefficient routines switch from serial to parallel execution.
 ///
@@ -370,6 +370,11 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
         Self { poly, sum }
     }
 
+    /// Returns the current claimed sum over the remaining unbound variables.
+    pub const fn claimed_sum(&self) -> EF {
+        self.sum
+    }
+
     /// Returns the number of remaining (unbound) variables.
     pub fn num_variables(&self) -> usize {
         self.poly.num_variables()
@@ -384,6 +389,46 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     /// Evaluates `f` at a given multilinear point via interpolation.
     pub fn eval(&self, point: &Point<EF>) -> EF {
         self.poly.eval(point)
+    }
+
+    /// Computes the current round's plain quadratic coefficients without
+    /// touching the transcript or folding the polynomial.
+    pub(crate) fn round_coefficients(&self) -> (EF, EF) {
+        self.poly.round_coefficients()
+    }
+
+    /// Folds the residual product polynomial by one challenge and updates the
+    /// claimed sum with the same quadratic extrapolation as the plain path.
+    pub(crate) fn fold_round_with_coefficients(&mut self, c0: EF, c_inf: EF, gamma: EF) {
+        self.sum = extrapolate_01inf(c0, self.sum - c0, c_inf, gamma);
+        self.poly.fold_round(gamma);
+        debug_assert_eq!(self.sum, self.poly.dot_product());
+    }
+
+    /// Applies a scalar to the weight side and the matching residual claim.
+    ///
+    /// Leaves the evaluation side untouched, so downstream reductions can
+    /// reuse it as the honest folded message.
+    pub(crate) fn scale_weights_and_claim(&mut self, scale: EF) {
+        self.poly.scale_weights(scale);
+        self.sum *= scale;
+    }
+
+    /// Extracts the current weight polynomial as scalar extension-field elements.
+    pub fn weights(&self) -> Poly<EF> {
+        self.poly.weights()
+    }
+
+    /// Folds a dense weight increment and its claim contribution into the prover.
+    ///
+    /// # Invariant
+    ///
+    /// The caller guarantees `sum_delta == <evals, weights_delta>`, restoring
+    /// the running invariant `sum == dot_product` after the update.
+    pub fn accumulate_claim(&mut self, weights_delta: &[EF], sum_delta: EF) {
+        self.poly.accumulate_weights(weights_delta);
+        self.sum += sum_delta;
+        debug_assert_eq!(self.sum, self.poly.dot_product());
     }
 
     /// Runs additional sumcheck rounds, optionally incorporating a new constraint.

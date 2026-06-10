@@ -5,9 +5,10 @@ use alloc::vec::Vec;
 
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
+use p3_commit::ExtensionMmcs;
 use p3_dft::Radix2DFTSmallBatch;
+use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
-use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::poly::Poly;
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
@@ -15,8 +16,9 @@ use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
 use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
-use crate::layout::{Layout, PrefixProver, Table, TableShape, Witness};
-use crate::zk::{ZkPrefixProver, ZkSumcheckData, ZkVerifier};
+use crate::layout::{PrefixProver, SuffixProver, Table, TableShape};
+use crate::strategy::VariableOrder;
+use crate::zk::{ZkLayout, ZkProver, ZkSumcheckData, ZkVerifier};
 
 /// Base field used across the test suite.
 pub type F = BabyBear;
@@ -32,12 +34,14 @@ pub type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
 pub type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
 /// Packed flavour of the base field, used for SIMD Merkle leaves.
 pub type PackedF = <F as Field>::Packing;
-/// Merkle commitment scheme used for the mask oracles.
-pub type MyMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
+/// Base-field Merkle commitment scheme backing the mask oracles.
+pub type BaseMmcs = MerkleTreeMmcs<PackedF, PackedF, MyHash, MyCompress, 2, 8>;
+/// Extension-field Merkle commitment scheme used for the mask oracles.
+pub type MyMmcs = ExtensionMmcs<F, EF, BaseMmcs>;
 /// Two-adic DFT backing the Reed-Solomon encoding.
-pub type MyDft = Radix2DFTSmallBatch<F>;
+pub type MyDft = Radix2DFTSmallBatch<EF>;
 /// Reed-Solomon zero-knowledge encoding driving the mask code.
-pub type MyEnc = ReedSolomonZkEncoding<F, MyDft>;
+pub type MyEnc = ReedSolomonZkEncoding<EF, MyDft>;
 
 /// Randomness symbols appended to each mask before encoding.
 ///
@@ -71,7 +75,9 @@ pub fn make_setup(seed: u64, ell_zk: usize) -> (Perm, MyMmcs, MyEnc) {
     let merkle_hash = MyHash::new(perm.clone());
     let merkle_compress = MyCompress::new(perm.clone());
     // Zero salt: deterministic commitments for reproducibility.
-    let mmcs: MyMmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
+    let base_mmcs = BaseMmcs::new(merkle_hash, merkle_compress, 0);
+    // Lift the base-field MMCS to commit extension-field mask codewords.
+    let mmcs: MyMmcs = ExtensionMmcs::new(base_mmcs);
 
     // Codeword length, rounded up to a power of two for the butterfly schedule:
     //
@@ -83,23 +89,29 @@ pub fn make_setup(seed: u64, ell_zk: usize) -> (Perm, MyMmcs, MyEnc) {
     (perm, mmcs, encoding)
 }
 
-/// Builds a prover and matching verifier on the same witness.
+/// Builds an HVZK prover and a matching verifier for the given binding mode.
+///
+/// The binding mode is selected by the layout type parameter.
+/// The witness shape is delivered by the layout's own factory:
+///
+/// - prefix layout  ⇒  interleaved-stacked witness  (local bits first)
+/// - suffix layout  ⇒  contiguous stacked witness   (selector bits first)
 ///
 /// # Returns
 ///
-/// - HVZK prover wrapping a freshly built prefix-binding inner prover.
-/// - Verifier registered with the matching table shape.
-/// - The polynomial's variable count, useful for downstream shape checks.
-pub fn build_prover_verifier(
+/// - HVZK prover wrapping a fresh inner prover of the chosen binding mode.
+/// - Verifier registered with the matching layout strategy.
+/// - Variable count of the polynomial, useful for shape checks.
+#[allow(clippy::type_complexity)]
+pub fn build_prover_verifier<L>(
     evals: Vec<F>,
     folding_factor: usize,
     encoding: MyEnc,
     mmcs: MyMmcs,
-) -> (
-    ZkPrefixProver<F, EF, MyEnc, MyMmcs>,
-    ZkVerifier<F, EF>,
-    usize,
-) {
+) -> (ZkProver<F, EF, MyEnc, MyMmcs, L>, ZkVerifier<F, EF>, usize)
+where
+    L: ZkLayout<F, EF>,
+{
     // Table arity:
     //
     //     |evals| = 2^n_vars
@@ -109,44 +121,60 @@ pub fn build_prover_verifier(
     let poly = Poly::new(evals);
     let table = Table::new(vec![poly]);
 
-    // Interleave into the stacked layout the inner prover expects.
-    let witness: Witness<F> = Witness::new_interleaved(vec![table], folding_factor);
+    // Witness shape comes from the layout factory; binding mode is encoded
+    // in the layout type itself.
+    let witness = L::new_witness(vec![table], folding_factor);
 
-    // Prefix-binding inner prover + HVZK overlay.
-    let inner = PrefixProver::<F, EF>::from_witness(witness);
-    let prover = ZkPrefixProver::new(inner, encoding, mmcs);
+    // Layout-binding inner prover + HVZK overlay.
+    let inner = L::from_witness(witness);
+    let prover = ZkProver::new(inner, encoding, mmcs);
 
-    // Verifier registered with the matching table shape (keeps claim recording in sync).
-    let verifier = ZkVerifier::<F, EF>::new(&[TableShape::new(n_vars, 1)]);
+    // Verifier strategy must match the layout binding mode.
+    let shapes = [TableShape::new(n_vars, 1)];
+    let verifier = match L::strategy().variable_order {
+        VariableOrder::Prefix => ZkVerifier::<F, EF>::new_prefix(&shapes),
+        VariableOrder::Suffix => ZkVerifier::<F, EF>::new_suffix(&shapes),
+    };
+
     (prover, verifier, n_vars)
 }
 
-/// End-to-end honest prover -- verifier driver.
+/// Verifier and proof artefacts produced by an honest prover run.
 ///
-/// # Phases
+/// Returned by the per-mode prover helper.
+/// The verifier replay step is shared across modes and consumes one of these.
+pub struct ProverRun {
+    /// HVZK verifier with the claim phase already absorbed.
+    pub verifier: ZkVerifier<F, EF>,
+    /// Verifier-side challenger paired with the prover one.
+    pub verifier_challenger: MyChallenger,
+    /// Per-round zero-knowledge transcript artefacts.
+    pub zk_data: ZkSumcheckData<F, EF>,
+    /// Batch mask commitment forwarded to the verifier.
+    pub mask_commitment: <MyMmcs as p3_commit::Mmcs<EF>>::Commitment,
+    /// Per-round folding randomness emitted by the prover.
+    pub prover_randomness: p3_multilinear_util::point::Point<EF>,
+    /// Virtual evaluations sampled during the claim phase.
+    ///
+    /// Used by simulator-coupling tests to rebuild a parallel verifier mirroring the same claim absorption.
+    pub virtual_evals: Vec<EF>,
+}
+
+/// Runs the prover side of a roundtrip and returns the proof artefacts.
 ///
-/// 1. Build matched prover and verifier on a random witness.
-/// 2. Record `num_concrete` opening claims, then `num_virtual` evaluation claims, in lockstep on both challengers.
-/// 3. Run the prover's HVZK sumcheck.
-/// 4. Replay the transcript on the verifier and compare challenges.
-///
-/// # Claim kinds
-///
-/// Concrete and virtual claims feed two separate accumulator branches joined by the alpha-power split.
-/// Pass at least one of each to exercise both.
-///
-/// # Returns
-///
-/// - `Ok(())` when prover and verifier derive the same per-round challenges.
-/// - `Err(msg)` otherwise, with context for a proptest failure report.
-pub fn run_roundtrip(
+/// Branches on the binding direction internally.
+/// The post-prover verifier replay is shared across modes and lives in [`replay_verifier`].
+#[allow(clippy::too_many_arguments)]
+pub fn run_prover(
+    binding: VariableOrder,
     n_vars: usize,
     folding_factor: usize,
     ell_zk: usize,
     num_concrete: usize,
     num_virtual: usize,
+    pow_bits: usize,
     seed: u64,
-) -> Result<(), &'static str> {
+) -> ProverRun {
     // Phase 1: deterministic setup.
     let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
 
@@ -156,65 +184,167 @@ pub fn run_roundtrip(
     let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
     let evals: Vec<F> = (0..(1usize << n_vars)).map(|_| data_rng.random()).collect();
 
-    // Phase 3: matched prover + verifier on this witness.
+    // Phase 3: parallel challengers from the same permutation state.
+    let prover_challenger = MyChallenger::new(perm.clone());
+    let verifier_challenger = MyChallenger::new(perm);
+
+    // Phase 4: matched prover + verifier on this witness, dispatching on the
+    //          binding direction.
+    let zk_data = ZkSumcheckData::<F, EF>::default();
+    let prover_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
+
+    // The per-mode body is identical once the prover and verifier are typed.
+    // Dispatch once on `binding` to pick the layout type; the rest is shared.
+    match binding {
+        VariableOrder::Prefix => drive_prover_run::<PrefixProver<F, EF>>(
+            evals,
+            folding_factor,
+            encoding,
+            mmcs,
+            num_concrete,
+            num_virtual,
+            pow_bits,
+            prover_challenger,
+            verifier_challenger,
+            zk_data,
+            prover_rng,
+        ),
+        VariableOrder::Suffix => drive_prover_run::<SuffixProver<F, EF>>(
+            evals,
+            folding_factor,
+            encoding,
+            mmcs,
+            num_concrete,
+            num_virtual,
+            pow_bits,
+            prover_challenger,
+            verifier_challenger,
+            zk_data,
+            prover_rng,
+        ),
+    }
+}
+
+/// Builds the prover/verifier pair and drives a full claim-recording roundtrip.
+///
+/// Generic over the binding-mode layout.
+/// The body is identical for both binding modes; only the type parameter changes.
+#[allow(clippy::too_many_arguments)]
+fn drive_prover_run<L>(
+    evals: Vec<F>,
+    folding_factor: usize,
+    encoding: MyEnc,
+    mmcs: MyMmcs,
+    num_concrete: usize,
+    num_virtual: usize,
+    pow_bits: usize,
+    mut prover_challenger: MyChallenger,
+    mut verifier_challenger: MyChallenger,
+    mut zk_data: ZkSumcheckData<F, EF>,
+    mut prover_rng: SmallRng,
+) -> ProverRun
+where
+    L: ZkLayout<F, EF>,
+{
     let (mut prover, mut verifier, _n_vars) =
-        build_prover_verifier(evals, folding_factor, encoding, mmcs);
+        build_prover_verifier::<L>(evals, folding_factor, encoding, mmcs);
 
-    // Phase 4: parallel challengers from the same permutation state.
-    let mut prover_challenger = MyChallenger::new(perm.clone());
-    let mut verifier_challenger = MyChallenger::new(perm);
-
-    // Phase 5a: concrete opening claims.
-    //
-    //     prover  : samples opening point, returns evaluations
-    //     verifier: mirrors the same draws to stay in lockstep
+    // Concrete opening claims.
     for _ in 0..num_concrete {
         let openings = prover.eval(0, &[0], &mut prover_challenger);
         verifier.add_claim(0, &[0], &openings, &mut verifier_challenger);
     }
 
-    // Phase 5b: virtual evaluation claims.
-    //
-    //     prover  : advances transcript, returns the value
-    //     verifier: observes the value to mirror challenger state
+    // Virtual evaluation claims.
+    let mut virtual_evals = Vec::with_capacity(num_virtual);
     for _ in 0..num_virtual {
         let eval = prover.add_virtual_eval(&mut prover_challenger);
         verifier.add_virtual_eval(eval, &mut verifier_challenger);
+        virtual_evals.push(eval);
     }
 
-    // Phase 6: prover-side sumcheck with grinding enabled.
-    //
-    //     pow_bits > 0 => exercises the PoW path on both sides
-    let pow_bits = 4;
-    let mut zk_data = ZkSumcheckData::<F, EF>::default();
-    // Distinct seed so mask sampling does not collide with witness draws.
-    let mut prover_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
-    let (_residual_prover, prover_randomness, mask_oracles) = prover.into_sumcheck(
+    // Prover-side sumcheck; consumes `prover`.
+    let prover_handoff = prover.into_sumcheck(
         &mut zk_data,
         pow_bits,
         &mut prover_challenger,
         &mut prover_rng,
     );
+    let mask_commitment = prover_handoff.mask_oracle.0.clone();
 
-    // Public mask commits forwarded to the verifier; prover-side data discarded.
-    let mask_commits: Vec<_> = mask_oracles.iter().map(|(c, _)| c.clone()).collect();
+    ProverRun {
+        verifier,
+        verifier_challenger,
+        zk_data,
+        mask_commitment,
+        prover_randomness: prover_handoff.randomness,
+        virtual_evals,
+    }
+}
 
-    // Phase 7: verifier replay.
-    //
-    // A mismatch in any shape or PoW check returns an error.
-    let (verifier_point, _final_target) = verifier
+/// Drives the verifier replay against a prover run and returns the per-round folding randomness recovered.
+pub fn replay_verifier(
+    mut run: ProverRun,
+    ell_zk: usize,
+    folding_factor: usize,
+    pow_bits: usize,
+) -> Result<p3_multilinear_util::point::Point<EF>, &'static str> {
+    let verifier_handoff = run
+        .verifier
         .into_sumcheck::<MyMmcs, _>(
-            &zk_data,
-            &mask_commits,
+            &run.zk_data,
+            &run.mask_commitment,
             ell_zk,
             folding_factor,
             pow_bits,
-            &mut verifier_challenger,
+            &mut run.verifier_challenger,
         )
         .map_err(|_| "verifier rejected honest prover output")?;
+    Ok(verifier_handoff.randomness)
+}
 
-    // Phase 8: coupling certificate.
-    //
+/// End-to-end honest prover/verifier driver, parameterised by binding direction.
+///
+/// # Phases
+///
+/// 1. Build matched prover and verifier on a random witness (per mode).
+/// 2. Record concrete opening claims and virtual evaluation claims in lockstep on both challengers.
+/// 3. Run the prover's HVZK sumcheck.
+/// 4. Replay the transcript on the verifier and compare challenges.
+///
+/// Concrete and virtual claims feed two separate accumulator branches joined by the alpha-power split.
+/// Pass at least one of each to exercise both.
+///
+/// # Returns
+///
+/// - `Ok(())` when prover and verifier derive the same per-round challenges.
+/// - `Err(msg)` otherwise, with context for a proptest failure report.
+pub fn run_roundtrip(
+    binding: VariableOrder,
+    n_vars: usize,
+    folding_factor: usize,
+    ell_zk: usize,
+    num_concrete: usize,
+    num_virtual: usize,
+    seed: u64,
+) -> Result<(), &'static str> {
+    // Grinding enabled to exercise the PoW path on both sides.
+    let pow_bits = 4;
+
+    let run = run_prover(
+        binding,
+        n_vars,
+        folding_factor,
+        ell_zk,
+        num_concrete,
+        num_virtual,
+        pow_bits,
+        seed,
+    );
+    let prover_randomness = run.prover_randomness.clone();
+
+    let verifier_point = replay_verifier(run, ell_zk, folding_factor, pow_bits)?;
+
     // Parallel challengers must derive the same per-round challenges:
     //
     //     prover_randomness == verifier_point
@@ -224,30 +354,4 @@ pub fn run_roundtrip(
         return Err("prover/verifier disagreed on sumcheck randomness");
     }
     Ok(())
-}
-
-/// True when an extension-field element lifts a single base-field element.
-///
-/// # Why this check exists
-///
-/// Honest and simulated wire coordinates with index `>= 2` are produced as
-///
-/// ```text
-///     2^{k - j} * mask_coeff
-/// ```
-///
-/// lifted from F into EF, so both views land in the F-subspace.
-///
-/// Without enforcing this on the simulator, a distinguisher could read off the basis decomposition and separate the two views.
-///
-/// # Encoding
-///
-/// ```text
-///     x in F  <=>  basis_coeffs(x) = [ x_0, 0, 0, ..., 0 ]
-/// ```
-pub fn ef_in_f_subspace(x: EF) -> bool {
-    // Decompose into the EF basis.
-    let coeffs: &[F] = EF::as_basis_coefficients_slice(&x);
-    // First slot carries the lifted base value; all higher slots must be zero.
-    coeffs[1..].iter().all(|c| *c == F::ZERO)
 }
