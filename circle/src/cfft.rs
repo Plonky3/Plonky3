@@ -115,19 +115,29 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
     }
 
     pub fn evaluate_at_point<EF: ExtensionField<F>>(&self, point: Point<EF>) -> Vec<EF> {
-        // Compute z_H
-        let lagrange_num = self.domain.vanishing_poly(point);
-
         // Permute the domain to get it into the right format.
         let permuted_points = cfft_permute_slice(&self.domain.points().collect_vec());
 
         // Compute the lagrange denominators. This is batched as it lets us make use of batched_multiplicative_inverse.
         let lagrange_den = compute_lagrange_den_batched(&permuted_points, point, self.domain.log_n);
 
+        self.evaluate_at_point_with_den(point, &lagrange_den)
+    }
+
+    /// Evaluate at `point` given precomputed Lagrange denominators for `(self.domain, point)`,
+    /// as produced by [`compute_lagrange_den_batched`] on the CFFT-ordered domain points.
+    pub(crate) fn evaluate_at_point_with_den<EF: ExtensionField<F>>(
+        &self,
+        point: Point<EF>,
+        lagrange_den: &[EF],
+    ) -> Vec<EF> {
+        // Compute z_H
+        let lagrange_num = self.domain.vanishing_poly(point);
+
         // The columnwise_dot_product here consumes about 5% of the runtime for example prove_poseidon2_m31_keccak.
         // Definitely something worth optimising further.
         self.values
-            .columnwise_dot_product(&lagrange_den)
+            .columnwise_dot_product(lagrange_den)
             .into_iter()
             .map(|x| x * lagrange_num)
             .collect_vec()
