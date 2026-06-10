@@ -13,12 +13,12 @@ use serde::Serialize;
 /// # References
 ///
 /// The proximity gaps analysis is based on:
-/// - **[BCI+20]**: Ben-Sasson, Carmon, Ishai, Kopparty, Saraf. "Proximity Gaps for Reed-Solomon Codes".
+/// - **\[BCI+20\]**: Ben-Sasson, Carmon, Ishai, Kopparty, Saraf. "Proximity Gaps for Reed-Solomon Codes".
 ///   FOCS 2020. <https://eprint.iacr.org/2020/654>
-/// - **[BCSS25]**: Ben-Sasson, Carmon, Haboeck, Kopparty, Saraf. "On Proximity Gaps for Reed-Solomon Codes".
+/// - **\[BCSS25\]**: Ben-Sasson, Carmon, Haboeck, Kopparty, Saraf. "On Proximity Gaps for Reed-Solomon Codes".
 ///   <https://eprint.iacr.org/2025/2055>
 ///
-/// The [BCSS25] paper significantly improves the Johnson bound proximity gaps from `O(n^2/eta^7)` to `O(n/eta^5)`,
+/// The \[BCSS25\] paper significantly improves the Johnson bound proximity gaps from `O(n^2/eta^7)` to `O(n/eta^5)`,
 /// enabling provable 128-bit security with smaller extension fields (e.g., degree-5 extension of KoalaBear).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum SecurityAssumption {
@@ -363,7 +363,7 @@ impl SecurityAssumption {
             // In UD the error is |L|/|F| = d/(rho*|F|)
             Self::UniqueDecoding => (log_degree + log_inv_rate) as f64,
 
-            // From Theorem 1.5 in [BCSS25] "On Proximity Gaps for Reed-Solomon Codes":
+            // From Theorem 1.5 in \[BCSS25\] "On Proximity Gaps for Reed-Solomon Codes":
             //
             // For gamma < J(delta) - eta, the number of exceptional z's is bounded by:
             //   a > (2(m + 1/2)^5 + 3(m + 1/2)*gamma*rho) / (3*rho^(3/2)) * n + (m + 1/2) / sqrt(rho)
@@ -384,7 +384,7 @@ impl SecurityAssumption {
             //            = (log_degree + log_inv_rate) + 16.38 + 1.5 * log_inv_rate
             //            = log_degree + 2.5 * log_inv_rate + 16.38
             //
-            // This improves over [BCI+20] which had:
+            // This improves over \[BCI+20\] which had:
             //   log_2(a) = 2*log_degree + 3.5*log_inv_rate + 23.24
             Self::JohnsonBound => {
                 // n = 2^(log_degree + log_inv_rate)
@@ -999,8 +999,8 @@ mod tests {
     //
     // Bounds on the size of the exceptional set |S|:
     //
-    //     [BCI+20] Thm 5.1 :  |S| > (m + 1/2)^7 / 3      * n^2 / rho^{3/2}
-    //     [BCSS25] Thm 1.5 :  |S| > 2 * (m + 1/2)^5 / 3  * n   / rho^{3/2}
+    //     \[BCI+20\] Thm 5.1 :  |S| > (m + 1/2)^7 / 3      * n^2 / rho^{3/2}
+    //     \[BCSS25\] Thm 1.5 :  |S| > 2 * (m + 1/2)^5 / 3  * n   / rho^{3/2}
     //
     // Safety choice eta = sqrt(rho) / 20  =>  multiplicity m = 10.
     //
@@ -1014,14 +1014,14 @@ mod tests {
     // - strict improvement, with the exact analytical gap pinned;
     // - new bound clears `security_level - MAX_POW_BITS` over a 155-bit field;
     // - full WHIR security budget hits 128 bits at a reference config;
-    // - curve folding costs log_2(M) bits per [BCSS25] Thm 4.2.
+    // - curve folding costs log_2(M) bits per \[BCSS25\] Thm 4.2.
 
     /// Field size in bits used by every test in this section.
     ///
     /// Equals `5 * ceil(log_2(p_KoalaBear))` with `p_KoalaBear = 2^31 - 2^24 + 1`,
     /// i.e. a degree-5 extension of the KoalaBear prime field.
     ///
-    /// Chosen because it is the smallest extension that gives the [BCSS25]
+    /// Chosen because it is the smallest extension that gives the \[BCSS25\]
     /// bound enough headroom for 128-bit WHIR soundness in the regimes tested.
     const KOALABEAR_QUINTIC_BITS: usize = 155;
 
@@ -1037,20 +1037,20 @@ mod tests {
     ///
     /// # Overview
     ///
-    /// [BCI+20] Theorem 5.1 at the safety choice `eta = sqrt(rho) / 20`
+    /// \[BCI+20\] Theorem 5.1 at the safety choice `eta = sqrt(rho) / 20`
     /// (so `m = 10`):
     ///
     /// ```text
     ///     |S| > (m + 1/2)^7 / 3 * n^2 / rho^{3/2}.
     /// ```
     ///
-    /// No leading factor of `2`: that factor belongs to the [BCSS25]
+    /// No leading factor of `2`: that factor belongs to the \[BCSS25\]
     /// statement only and would inflate this baseline.
     ///
-    /// # Equivalence with [BCI+20] Theorem 1.2
+    /// # Equivalence with \[BCI+20\] Theorem 1.2
     ///
     /// Substituting `n = (k + 1) / rho` rewrites the bound as
-    /// `(k + 1)^2 * 10^7 / rho^{7/2}` — the [BCI+20] Theorem 1.2 form,
+    /// `(k + 1)^2 * 10^7 / rho^{7/2}` — the \[BCI+20\] Theorem 1.2 form,
     /// up to a small leading constant.
     ///
     /// # Returns
@@ -1278,7 +1278,7 @@ mod tests {
     #[test]
     fn jb_prox_gap_scales_by_log_curve_degree() {
         // Invariant: combining `M + 1` functions costs exactly `log_2(M)`
-        // bits of prox-gap vs. the line case (M = 1), per [BCSS25] Thm 4.2.
+        // bits of prox-gap vs. the line case (M = 1), per \[BCSS25\] Thm 4.2.
         //
         // Fixture state:  log_degree=20, log_inv_rate=2, field=155.
         //
