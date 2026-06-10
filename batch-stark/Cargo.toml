@@ -48,5 +48,9 @@ rand.workspace = true
 name = "prove_batch"
 harness = false
 
+[[bench]]
+name = "lookup"
+harness = false
+
 [lints]
 workspace = true
