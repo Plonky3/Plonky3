@@ -27,6 +27,8 @@
 //!
 //!     cargo bench -p p3-batch-stark --bench lookup
 //!
+//! and optionally with `--features parallel` argument.
+//!
 //! The metrics table prints first, then the criterion timings.
 //! Comment out entries in `CASES` to shorten a local run.
 
