@@ -8,13 +8,13 @@ use p3_commit::{Mmcs, MultilinearPcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_matrix::dense::DenseMatrix;
+use p3_sumcheck::OpeningProtocol;
+use p3_sumcheck::layout::{Layout, Verifier, Witness};
 
 use super::prover::WhirProver;
 use super::verifier::WhirVerifier;
 use super::verifier::errors::VerifierError;
 use crate::pcs::proof::PcsProof;
-use crate::sumcheck::OpeningProtocol;
-use crate::sumcheck::layout::{Layout, Verifier, Witness};
 
 /// Prover-side handoff between the commit and open phases of the PCS.
 ///

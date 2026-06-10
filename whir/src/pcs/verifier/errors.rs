@@ -2,9 +2,8 @@
 
 use alloc::string::String;
 
+use p3_sumcheck::SumcheckError;
 use thiserror::Error;
-
-use crate::sumcheck::SumcheckError;
 
 /// Errors during WHIR proof verification.
 #[derive(Error, Debug)]

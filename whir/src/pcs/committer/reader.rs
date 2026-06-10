@@ -4,8 +4,8 @@ use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_multilinear_util::point::Point;
+use p3_sumcheck::constraints::statement::EqStatement;
 
-use crate::constraints::statement::EqStatement;
 use crate::pcs::proof::WhirProof;
 use crate::pcs::verifier::errors::VerifierError;
 

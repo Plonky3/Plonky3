@@ -10,6 +10,9 @@ use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
 use p3_merkle_tree::MerkleTreeMmcs;
+use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Witness};
+use p3_sumcheck::test_util::{random_table_specs, table_specs_to_tables};
+use p3_sumcheck::{OpeningProtocol, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -17,9 +20,6 @@ use rand::rngs::SmallRng;
 use crate::fiat_shamir::domain_separator::DomainSeparator;
 use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use crate::pcs::prover::WhirProver;
-use crate::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Witness};
-use crate::sumcheck::test_util::{random_table_specs, table_specs_to_tables};
-use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
 
 type F = BabyBear;
 type EF = BinomialExtensionField<F, 4>;
@@ -285,6 +285,8 @@ mod error_variant_tests {
 
     use p3_commit::MultilinearPcs;
     use p3_multilinear_util::poly::Poly;
+    use p3_sumcheck::layout::{Layout, SuffixProver, Table};
+    use p3_sumcheck::{OpeningProtocol, SumcheckError, TableShape, TableSpec};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -295,8 +297,6 @@ mod error_variant_tests {
     use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
     use crate::pcs::proof::PcsProof;
     use crate::pcs::verifier::errors::VerifierError;
-    use crate::sumcheck::layout::{Layout, SuffixProver, Table};
-    use crate::sumcheck::{OpeningProtocol, SumcheckError, TableShape, TableSpec};
 
     /// Suffix-mode prover used for every shape-mismatch scenario.
     type L = SuffixProver<F, EF>;
@@ -743,6 +743,8 @@ mod keccak_tests {
     use p3_koala_bear::KoalaBear;
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_multilinear_util::poly::Poly;
+    use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
+    use p3_sumcheck::{OpeningProtocol, TableShape, TableSpec};
     use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
@@ -750,8 +752,6 @@ mod keccak_tests {
     use crate::fiat_shamir::domain_separator::DomainSeparator;
     use crate::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
     use crate::pcs::prover::WhirProver;
-    use crate::sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
-    use crate::sumcheck::{OpeningProtocol, TableShape, TableSpec};
 
     type F = KoalaBear;
     type EF = BinomialExtensionField<F, 4>;
