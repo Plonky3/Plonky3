@@ -31,6 +31,10 @@ pub enum FoldingFactorError {
         remaining: usize,
         threshold: usize,
     },
+
+    /// The explicit per-round schedule contains no folding factors.
+    #[error("per-round folding schedule is empty; WHIR requires at least one fold")]
+    EmptySchedule,
 }
 
 /// Defines the folding factor for polynomial commitments.
@@ -124,6 +128,11 @@ impl FoldingFactor {
                 Ok(schedule)
             }
             Self::PerRound(factors) => {
+                // WHIR always performs at least one fold before direct send,
+                // so an empty explicit schedule can never run.
+                if factors.is_empty() {
+                    return Err(FoldingFactorError::EmptySchedule);
+                }
                 for &factor in factors {
                     if factor == 0 {
                         return Err(FoldingFactorError::ZeroFactor);
@@ -158,8 +167,13 @@ impl FoldingFactor {
     ///
     /// # Errors
     ///
-    /// An explicit per-round schedule errors if a round folds more variables than remain.
-    /// It also errors if the factors together fail to reach the direct-send threshold.
+    /// Propagates every error of [`Self::compute_folding_schedule`]:
+    ///
+    /// - a zero folding factor,
+    /// - a first fold larger than the variable count,
+    /// - an empty explicit schedule,
+    /// - an explicit round folding more variables than remain,
+    /// - an explicit schedule stopping above the direct-send threshold.
     pub fn compute_number_of_rounds(
         &self,
         num_variables: usize,
@@ -350,6 +364,16 @@ mod tests {
         assert_eq!(
             FoldingFactor::PerRound(vec![2, 0]).compute_number_of_rounds(15),
             Err(FoldingFactorError::ZeroFactor)
+        );
+        // An empty explicit schedule is rejected.
+        // The guard fires even below the direct-send threshold.
+        assert_eq!(
+            FoldingFactor::PerRound(vec![]).compute_number_of_rounds(4),
+            Err(FoldingFactorError::EmptySchedule)
+        );
+        assert_eq!(
+            FoldingFactor::PerRound(vec![]).check_validity(15),
+            Err(FoldingFactorError::EmptySchedule)
         );
     }
 

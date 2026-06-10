@@ -508,11 +508,18 @@ where
     }
 
     /// Retrieves the concrete derived folding factor for a given round.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `round > self.n_rounds()`.
+    /// The schedule has one entry per fold, including the final pre-direct-send fold.
     pub fn round_folding_factor(&self, round: usize) -> usize {
         self.folding_schedule[round]
     }
 
     /// Total variables folded through the given round index, inclusive.
+    ///
+    /// Indices past the last fold saturate to the full folded variable count.
     pub fn total_folded_through(&self, round: usize) -> usize {
         self.folding_schedule.iter().take(round + 1).sum()
     }
