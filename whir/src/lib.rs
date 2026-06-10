@@ -7,5 +7,3 @@ pub mod fiat_shamir;
 pub mod parameters;
 pub mod pcs;
 pub(crate) mod utils;
-
-pub use p3_sumcheck::{self as sumcheck, constraints};

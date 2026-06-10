@@ -5,9 +5,8 @@ use p3_matrix::Matrix;
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_matrix::extension::FlatMatrixView;
 use p3_multilinear_util::poly::Poly;
+use p3_sumcheck::strategy::VariableOrder;
 use tracing::info_span;
-
-use crate::sumcheck::strategy::VariableOrder;
 
 /// Encodes and commits a folded extension-field polynomial.
 ///

@@ -10,17 +10,17 @@ use p3_matrix::dense::DenseMatrix;
 use p3_matrix::extension::FlatMatrixView;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use p3_sumcheck::constraints::Constraint;
+use p3_sumcheck::constraints::statement::{EqStatement, SelectStatement};
+use p3_sumcheck::layout::Layout;
+use p3_sumcheck::strategy::{SumcheckProver, VariableOrder};
 use tracing::instrument;
 
-use crate::constraints::Constraint;
-use crate::constraints::statement::{EqStatement, SelectStatement};
 use crate::fiat_shamir::domain_separator::DomainSeparator;
 use crate::parameters::WhirConfig;
 use crate::pcs::committer::writer::commit_extension;
 use crate::pcs::proof::{QueryOpening, SumcheckData, WhirProof};
 use crate::pcs::utils::get_challenge_stir_queries;
-use crate::sumcheck::layout::Layout;
-use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
 
 pub type Proof<W, const DIGEST_ELEMS: usize> = Vec<Vec<[W; DIGEST_ELEMS]>>;
 

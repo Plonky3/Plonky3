@@ -66,13 +66,13 @@ use p3_koala_bear::{
 use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::poly::Poly;
+use p3_sumcheck::layout::{Layout, SuffixProver, Table, Witness};
+use p3_sumcheck::{OpeningProtocol, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use p3_whir::pcs::proof::PcsProof;
 use p3_whir::pcs::prover::WhirProver;
-use p3_whir::sumcheck::layout::{Layout, SuffixProver, Table, Witness};
-use p3_whir::sumcheck::{OpeningProtocol, TableShape, TableSpec};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 

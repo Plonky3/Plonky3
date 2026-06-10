@@ -11,17 +11,17 @@ use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use p3_sumcheck::constraints::Constraint;
+use p3_sumcheck::constraints::statement::SelectStatement;
+use p3_sumcheck::strategy::VariableOrder;
+use p3_sumcheck::{SumcheckError, verify_final_sumcheck_rounds};
 use tracing::instrument;
 
 use super::committer::reader::ParsedCommitment;
 use super::utils::get_challenge_stir_queries;
 use crate::alloc::string::ToString;
-use crate::constraints::Constraint;
-use crate::constraints::statement::SelectStatement;
 use crate::parameters::{RoundConfig, WhirConfig};
 use crate::pcs::proof::{QueryOpening, WhirProof};
-use crate::sumcheck::strategy::VariableOrder;
-use crate::sumcheck::{SumcheckError, verify_final_sumcheck_rounds};
 
 pub mod errors;
 

@@ -19,13 +19,13 @@ use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
+use p3_sumcheck::layout::{Layout, PrefixProver, Table};
+use p3_sumcheck::{OpeningProtocol, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
 use p3_whir::pcs::prover::WhirProver;
 use p3_whir::pcs::zk::{HidingWhirPcs, ZkParameters, ZkWhirConfig};
-use p3_whir::sumcheck::layout::{Layout, PrefixProver, Table};
-use p3_whir::sumcheck::{OpeningProtocol, TableShape, TableSpec};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
