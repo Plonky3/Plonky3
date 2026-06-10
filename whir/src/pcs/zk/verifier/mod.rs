@@ -6,10 +6,13 @@
 //!
 //! The carried claim is tracked symbolically throughout.
 
+mod masks;
+
 use alloc::vec;
 use alloc::vec::Vec;
 use core::slice::from_ref;
 
+use masks::VerifierMasks;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
 use p3_commit::{BatchOpeningRef, ExtensionMmcs, Mmcs};
 use p3_field::{ExtensionField, TwoAdicField};
@@ -17,14 +20,14 @@ use p3_matrix::Dimensions;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::SumcheckError;
-use p3_sumcheck::zk::{ZkVerifier, mask_residual_covectors_from_shape};
+use p3_sumcheck::zk::ZkVerifier;
 use thiserror::Error;
 use tracing::instrument;
 
 use super::base_case::{BaseCaseZkConfig, BaseCaseZkError, BaseCaseZkVerifier};
 use super::code_switch::{CodeSwitchError, ZkMaskClaim, switch_mask_covector};
-use super::config::{MaskGroupShape, ZkWhirConfig};
-use super::constraint::{MaskClaims, SourceClaim};
+use super::config::ZkWhirConfig;
+use super::constraint::SourceClaim;
 use super::proof::ZkWhirProof;
 use crate::pcs::proof::QueryOpening;
 use crate::pcs::utils::get_challenge_stir_queries;
@@ -191,9 +194,7 @@ where
             source.push_eq(point.clone(), coeff);
             target += coeff * *eval;
         }
-        let mut masks = MaskClaims::new();
-        let mut mask_groups: Vec<MaskGroupShape> = Vec::new();
-        let mut mask_commitments: Vec<MT::Commitment> = Vec::new();
+        let mut masks = VerifierMasks::new();
 
         // Initial masked sumcheck batch.
         let mut randomness = self.replay_sumcheck_batch(
@@ -204,8 +205,6 @@ where
             &mut target,
             &mut source,
             &mut masks,
-            &mut mask_groups,
-            &mut mask_commitments,
             challenger,
         )?;
 
@@ -306,20 +305,19 @@ where
 
             // Mask side: the fresh code-switch mask enters the relation as
             // its own width-one group.
-            masks.push(switch_mask_covector(
-                1 << num_variables,
-                config.oracle_randomness[round],
-                round_params.ood_samples,
-                &rho_points,
-                ood_coeffs,
-                &query_points,
-                query_coeffs,
-            ));
-            mask_groups.push(MaskGroupShape {
-                shape: config.switch_masks[round],
-                width: 1,
-            });
-            mask_commitments.push(mask_commitment.clone());
+            masks.push_switch_mask(
+                switch_mask_covector(
+                    1 << num_variables,
+                    config.oracle_randomness[round],
+                    round_params.ood_samples,
+                    &rho_points,
+                    ood_coeffs,
+                    &query_points,
+                    query_coeffs,
+                ),
+                config.switch_masks[round],
+                mask_commitment.clone(),
+            );
 
             // Next masked sumcheck batch over the new oracle.
             randomness = self.replay_sumcheck_batch(
@@ -330,8 +328,6 @@ where
                 &mut target,
                 &mut source,
                 &mut masks,
-                &mut mask_groups,
-                &mut mask_commitments,
                 challenger,
             )?;
 
@@ -348,7 +344,7 @@ where
         );
         let base_config = BaseCaseZkConfig {
             code: source_code,
-            mask_groups,
+            mask_groups: masks.groups,
             num_queries: config.final_queries,
             mask_queries: config.mask_queries,
             pow_bits: config.final_pow_bits,
@@ -366,8 +362,8 @@ where
         base_verifier.verify(
             &proof.base_case,
             source_covector.as_slice(),
-            &masks.covectors,
-            &mask_commitments,
+            &masks.claims.covectors,
+            &masks.commitments,
             target,
             |position, opening| {
                 self.verify_and_fold_leaf(&active, &dims, position, opening, n_rounds, &randomness)
@@ -391,9 +387,7 @@ where
         pow_bits: usize,
         target: &mut EF,
         source: &mut SourceClaim<EF>,
-        masks: &mut MaskClaims<EF>,
-        mask_groups: &mut Vec<MaskGroupShape>,
-        mask_commitments: &mut Vec<MT::Commitment>,
+        masks: &mut VerifierMasks<F, EF, MT>,
         challenger: &mut Challenger,
     ) -> Result<Point<EF>, ZkVerifierError> {
         let ell_zk = self.config.zk.ell_zk;
@@ -409,24 +403,20 @@ where
         )?;
 
         // Source constraints fold, then absorb the combining challenge.
-        //
-        //     source covectors        ->  scale eps
-        //     carried mask covectors  ->  scale eps * 2^{-k}
-        //     fresh sumcheck masks    ->  scale one
         source.fold(&handoff.randomness);
         for constraint in &mut source.constraints {
             constraint.coeff *= handoff.eps;
         }
-        masks.absorb_sumcheck(handoff.eps, folding);
-        let gammas: Vec<EF> = handoff.randomness.iter().copied().collect();
-        for covector in mask_residual_covectors_from_shape(folding, ell_zk, &gammas) {
-            masks.push(covector);
-        }
-        mask_groups.push(MaskGroupShape {
-            shape: self.config.sumcheck_mask,
-            width: folding,
-        });
-        mask_commitments.push(commitment.clone());
+        // Mask side: carried covectors absorb eps * 2^{-k}, the batch's fresh
+        // sumcheck masks enter at scale one.
+        masks.record_sumcheck_batch(
+            handoff.eps,
+            folding,
+            ell_zk,
+            &handoff.randomness,
+            self.config.sumcheck_mask,
+            commitment.clone(),
+        );
 
         *target = handoff.claimed_residual;
         Ok(handoff.randomness)

@@ -24,7 +24,7 @@ use rand::{RngExt, SeedableRng};
 use super::*;
 use crate::pcs::proof::QueryOpening;
 use crate::pcs::zk::committer::FoldedRsCode;
-use crate::pcs::zk::config::{MaskCodeShape, MaskGroupShape};
+use crate::pcs::zk::mask::{MaskCodeShape, MaskGroupShape};
 use crate::pcs::zk::proof::BaseCaseZkProof;
 
 type F = BabyBear;
