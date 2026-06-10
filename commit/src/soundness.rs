@@ -1212,7 +1212,12 @@ mod tests {
         // OOD sample count for the OOD term to reach security_level alone.
         // The quintic field is large, so a feasible count always exists here.
         let ood_samples = jb
-            .determine_ood_samples(security_level, log_degree, log_inv_rate, KOALABEAR_QUINTIC_BITS)
+            .determine_ood_samples(
+                security_level,
+                log_degree,
+                log_inv_rate,
+                KOALABEAR_QUINTIC_BITS,
+            )
             .expect("quintic field is large enough for these parameters");
 
         // Five algebraic error bounds at the chosen configuration.
