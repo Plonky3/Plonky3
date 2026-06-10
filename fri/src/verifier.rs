@@ -90,6 +90,10 @@ where
         got: usize,
     },
     #[error(
+        "batch {batch}, matrix {matrix}: opened at no points; its width cannot be authenticated"
+    )]
+    MatrixWithoutOpeningPoints { batch: usize, matrix: usize },
+    #[error(
         "batch {batch}, matrix {matrix}, point {point}: evaluation count mismatch: expected {expected}, got {got}"
     )]
     PointEvaluationCountMismatch {
@@ -658,20 +662,24 @@ where
         let batch_dims = batch_heights
             .iter()
             .zip(mats)
-            .zip(&batch_opening.opened_values)
-            .map(
-                |((&height, (_, points_and_values)), opened_row)| Dimensions {
-                    // Invariant: the commitment layer rejects opened rows that differ from this width.
-                    //
-                    //     some points → width = claimed evaluation count
-                    //     no points   → width = opened row length (no claim to enforce)
-                    width: points_and_values
-                        .first()
-                        .map_or(opened_row.len(), |(_, values)| values.len()),
+            .enumerate()
+            .map(|(matrix, (&height, (_, points_and_values)))| {
+                // Pin each matrix width to its claimed evaluation count, never to the proof.
+                //
+                // Why: the leaf hash flattens all same-height rows into one stream.
+                //   - `check_widths` (in the MMCS) is the only authenticator of row boundaries
+                //   - a matrix opened at no points carries no claim to pin its width
+                //   - reading the width from the proof-supplied row leaves that boundary unchecked
+                // Every input matrix is opened at >= 1 point, so reject the degenerate case.
+                let (_, values) = points_and_values
+                    .first()
+                    .ok_or(FriError::MatrixWithoutOpeningPoints { batch, matrix })?;
+                Ok(Dimensions {
+                    width: values.len(),
                     height,
-                },
-            )
-            .collect_vec();
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         // If the maximum height of the batch is smaller than the global max height,
         // we need to correct the index by right shifting it.
@@ -1020,6 +1028,41 @@ mod tests {
                 assert_eq!(query, 0);
                 assert_eq!(expected, expected_rounds);
                 assert_eq!(got, expected_rounds + 1);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn matrix_without_opening_points() {
+        let f = make_test_fixture();
+
+        // A matrix's width feeds the authenticated MMCS dimensions. With opening
+        // points it is pinned to the claimed evaluation count; with none it could
+        // only be read back from the proof, so the verifier must reject instead.
+        //
+        // Mutation: strip the sole matrix's opening points, leaving it in the batch.
+        //
+        //     before: mats[0] points = [(zeta, values)]   → width pinned by claim
+        //     after:  mats[0] points = []                 → no claim → reject
+        let mut cwop = f.commitments_with_opening_points.clone();
+        cwop[0].1[0].1 = vec![];
+
+        let mut challenger = f.challenger.clone();
+        let err = run_verify_fri(
+            &f.fri_params,
+            &f.proof,
+            &mut challenger,
+            &cwop,
+            &f.input_mmcs,
+        )
+        .expect_err("should reject a matrix opened at zero points");
+
+        match err {
+            FriError::MatrixWithoutOpeningPoints { batch, matrix } => {
+                // The lone batch holds the lone matrix.
+                assert_eq!(batch, 0);
+                assert_eq!(matrix, 0);
             }
             other => panic!("wrong error variant: {other:?}"),
         }
