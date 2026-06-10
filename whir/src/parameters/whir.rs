@@ -31,6 +31,21 @@ pub enum WhirConfigError {
         two_adicity: usize,
     },
 
+    /// The initial Reed-Solomon evaluation domain cannot be represented as a
+    /// `usize` length.
+    ///
+    /// The initial domain has size `2^(num_variables + starting_log_inv_rate)`.
+    /// That exponent must fit in `usize` and be strictly less than
+    /// `usize::BITS` before computing `1 << exponent`.
+    #[error(
+        "initial domain exponent num_variables ({num_variables}) + starting_log_inv_rate ({starting_log_inv_rate}) must fit and be less than usize::BITS ({usize_bits})"
+    )]
+    InitialDomainExceedsUsize {
+        num_variables: usize,
+        starting_log_inv_rate: usize,
+        usize_bits: usize,
+    },
+
     /// Explicit per-round codeword rates have the wrong length.
     #[error("expected {expected} explicit codeword rates (one per round), got {actual}")]
     RoundRateCountMismatch { expected: usize, actual: usize },
@@ -181,7 +196,14 @@ where
         let mut num_variables = num_variables;
 
         // Initial evaluation domain: 2^(num_variables + log_inv_rate) points.
-        let log_domain_size = num_variables + log_inv_rate;
+        let log_domain_size = num_variables
+            .checked_add(log_inv_rate)
+            .filter(|&log_domain_size| log_domain_size < usize::BITS as usize)
+            .ok_or(WhirConfigError::InitialDomainExceedsUsize {
+                num_variables,
+                starting_log_inv_rate: log_inv_rate,
+                usize_bits: usize::BITS as usize,
+            })?;
         let mut domain_size: usize = 1 << log_domain_size;
 
         // ---------------------------------------------------------------
@@ -614,6 +636,58 @@ mod tests {
         assert!(
             matches!(err, WhirConfigError::OodSamplesInfeasible { .. }),
             "expected OodSamplesInfeasible, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn new_errors_when_initial_domain_exponent_exceeds_usize_bits() {
+        // Invariant: `WhirConfig::new` must reject an initial domain that cannot
+        // be represented as a `usize` length before computing `1 << exponent`.
+        let num_variables = usize::BITS as usize;
+        let params = ProtocolParameters {
+            security_level: 32,
+            pow_bits: 0,
+            round_log_inv_rates: vec![],
+            folding_factor: FoldingFactor::Constant(num_variables),
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        };
+
+        let err = WhirConfig::<F, F, MyChallenger>::new(num_variables, params)
+            .expect_err("oversized initial domain must be rejected");
+        match err {
+            WhirConfigError::InitialDomainExceedsUsize {
+                num_variables: got_num_variables,
+                starting_log_inv_rate,
+                usize_bits,
+            } => {
+                assert_eq!(got_num_variables, num_variables);
+                assert_eq!(starting_log_inv_rate, 1);
+                assert_eq!(usize_bits, usize::BITS as usize);
+            }
+            other => panic!("expected InitialDomainExceedsUsize, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn new_errors_when_initial_domain_exponent_addition_overflows() {
+        // Invariant: the exponent addition itself must be checked. In release
+        // builds unchecked addition would wrap and could derive a nonsensical
+        // small domain.
+        let params = ProtocolParameters {
+            security_level: 32,
+            pow_bits: 0,
+            round_log_inv_rates: vec![],
+            folding_factor: FoldingFactor::Constant(usize::MAX),
+            soundness_type: SecurityAssumption::CapacityBound,
+            starting_log_inv_rate: 1,
+        };
+
+        let err = WhirConfig::<F, F, MyChallenger>::new(usize::MAX, params)
+            .expect_err("overflowing initial domain exponent must be rejected");
+        assert!(
+            matches!(err, WhirConfigError::InitialDomainExceedsUsize { .. }),
+            "expected InitialDomainExceedsUsize, got {err:?}"
         );
     }
 
