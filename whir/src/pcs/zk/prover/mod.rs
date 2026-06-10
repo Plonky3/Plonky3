@@ -90,7 +90,7 @@ where
         rng: &mut R,
     ) -> (MT::Commitment, HidingWhirProverData<F, EF, MT>) {
         assert_eq!(message.num_variables(), self.config.num_variables);
-        let folding = self.config.folding_factor(0);
+        let folding = self.config.round_folding_factor(0);
         let randomness: Vec<F> = (0..(self.config.oracle_randomness[0] << folding))
             .map(|_| rng.random())
             .collect();
@@ -179,7 +179,7 @@ where
             &mut zk_data,
             &sumcheck_mask_encoding,
             &self.extension_mmcs,
-            config.folding_factor(0),
+            config.round_folding_factor(0),
             config.starting_folding_pow_bits,
             EF::ZERO,
             challenger,
@@ -211,8 +211,8 @@ where
         // Code-switching rounds.
         for round in 0..config.n_rounds() {
             let round_params = &config.round_parameters[round];
-            let folding = config.folding_factor(round);
-            let folding_next = config.folding_factor(round + 1);
+            let folding = config.round_folding_factor(round);
+            let folding_next = config.round_folding_factor(round + 1);
             let next_randomness_len = config.oracle_randomness[round + 1];
 
             let message = batch.residual_prover.evals();

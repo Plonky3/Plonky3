@@ -118,7 +118,7 @@ where
         constraints.push(initial_constraint);
 
         // Initial sumcheck rounds == first-round folding factor.
-        let expected_initial_rounds = self.folding_factor(0);
+        let expected_initial_rounds = self.round_folding_factor(0);
         let actual_initial_rounds = proof.initial_sumcheck.polynomial_evaluations().len();
         if actual_initial_rounds != expected_initial_rounds {
             return Err(VerifierError::Sumcheck(SumcheckError::RoundCountMismatch {
@@ -171,7 +171,7 @@ where
             // Intermediate-round sumcheck rounds == next-round folding factor.
             // Mirrors the initial and final sumcheck guards;
             // Without it a wrong count desyncs Fiat-Shamir instead of rejecting cleanly.
-            let expected_round_rounds = self.folding_factor(round_index + 1);
+            let expected_round_rounds = self.round_folding_factor(round_index + 1);
             let actual_round_rounds = proof.rounds[round_index]
                 .sumcheck
                 .polynomial_evaluations()

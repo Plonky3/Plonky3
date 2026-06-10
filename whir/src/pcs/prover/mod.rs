@@ -149,7 +149,7 @@ where
         Dft: TwoAdicSubgroupDft<F>,
         Challenger: CanObserve<MT::Commitment>,
     {
-        assert_eq!(self.folding_factor.at_round(0), layout.folding());
+        assert_eq!(self.round_folding_factor(0), layout.folding());
         let variable_order = L::variable_order();
 
         let (sumcheck_prover, folding_randomness) = layout.into_sumcheck(
@@ -170,7 +170,7 @@ where
         }
     }
 
-    #[instrument(skip_all, fields(round_number = round_index, log_size = self.num_variables - self.params.folding_factor.total_number(round_index)))]
+    #[instrument(skip_all, fields(round_number = round_index, log_size = self.num_variables - self.total_folded_through(round_index)))]
     #[allow(clippy::too_many_lines)]
     fn round(
         &self,
@@ -183,8 +183,7 @@ where
         Challenger: CanObserve<MT::Commitment>,
     {
         let folded_evaluations = &round_state.sumcheck_prover.evals();
-        let num_variables =
-            self.num_variables - self.params.folding_factor.total_number(round_index);
+        let num_variables = self.num_variables - self.total_folded_through(round_index);
         assert_eq!(num_variables, folded_evaluations.num_variables());
 
         // Final round: send polynomial in the clear.
@@ -193,7 +192,7 @@ where
         }
 
         let round_params = &self.round_parameters[round_index];
-        let folding_factor_next = self.params.folding_factor.at_round(round_index + 1);
+        let folding_factor_next = self.round_folding_factor(round_index + 1);
         let inv_rate = self.inv_rate(round_index);
 
         let (root, prover_data) = commit_extension(
@@ -233,7 +232,7 @@ where
         // STIR query sampling.
         let stir_challenges_indexes = get_challenge_stir_queries::<Challenger, F>(
             round_params.domain_size,
-            self.params.folding_factor.at_round(round_index),
+            self.round_folding_factor(round_index),
             round_params.num_queries,
             challenger,
         );
@@ -339,7 +338,7 @@ where
         // Final STIR queries.
         let final_challenge_indexes = get_challenge_stir_queries::<Challenger, F>(
             self.final_round_config().domain_size,
-            self.params.folding_factor.at_round(round_index),
+            self.round_folding_factor(round_index),
             self.final_queries,
             challenger,
         );
