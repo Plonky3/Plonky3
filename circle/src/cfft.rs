@@ -97,7 +97,43 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         target_domain: CircleDomain<F>,
     ) -> CircleEvaluations<F, RowMajorMatrix<F>> {
         assert!(target_domain.log_n >= self.domain.log_n);
-        CircleEvaluations::evaluate(target_domain, self.interpolate())
+        let Self { domain, values } = self;
+
+        // Materialize the evaluations into a buffer sized for the full LDE up front.
+        // `interpolate` keeps the buffer (and its spare capacity) through
+        // `to_row_major_matrix`, so the blow-up in `evaluate` fills the spare
+        // capacity instead of reallocating: the whole extrapolation performs a
+        // single allocation, and every page is first touched by a parallel write.
+        let w = values.width();
+        let initial_len = values.height() * w;
+        let target_len = target_domain.size() * w;
+        let values = debug_span!("to_rmm").in_scope(|| {
+            let mut buf = Vec::with_capacity(target_len);
+            // Each source row is copied into its slot by exactly one task,
+            // covering `[0, initial_len)` of the spare capacity.
+            buf.spare_capacity_mut()[..initial_len]
+                .par_chunks_mut(w)
+                .enumerate()
+                .for_each(|(r, dst_row)| {
+                    // SAFETY: `r < values.height()`, since the chunks cover
+                    // exactly `values.height()` rows.
+                    let src_row = unsafe { values.row_slice_unchecked(r) };
+                    // `MaybeUninit::write` stores without reading or dropping
+                    // the uninitialised bytes.
+                    for (dst, &src) in dst_row.iter_mut().zip(src_row.iter()) {
+                        dst.write(src);
+                    }
+                });
+            // SAFETY: the loop above initialised the first `initial_len`
+            // elements, and the capacity reserved covers them.
+            unsafe {
+                buf.set_len(initial_len);
+            }
+            RowMajorMatrix::new(buf, w)
+        });
+
+        let coeffs = CircleEvaluations::from_cfft_order(domain, values).interpolate();
+        CircleEvaluations::evaluate(target_domain, coeffs)
     }
 
     pub fn evaluate_at_point<EF: ExtensionField<F>>(&self, point: Point<EF>) -> Vec<EF> {
