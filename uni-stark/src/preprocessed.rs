@@ -4,7 +4,7 @@ use p3_commit::Pcs;
 use p3_matrix::Matrix;
 use tracing::debug_span;
 
-use crate::{ProverConstraintFolder, StarkGenericConfig, Val};
+use crate::{QUOTIENT_ILP, StarkGenericConfig, Val, VectorizedConstraintFolder};
 
 /// Prover-side reusable data for preprocessed columns.
 ///
@@ -52,7 +52,8 @@ pub fn setup_preprocessed<SC, A>(
 ) -> Option<(PreprocessedProverData<SC>, PreprocessedVerifierKey<SC>)>
 where
     SC: StarkGenericConfig,
-    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+    A: Air<SymbolicAirBuilder<Val<SC>>>
+        + for<'a> Air<VectorizedConstraintFolder<'a, SC, QUOTIENT_ILP>>,
 {
     let pcs = config.pcs();
     let is_zk = config.is_zk();

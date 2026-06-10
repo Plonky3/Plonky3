@@ -6,7 +6,7 @@ use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, get_symbolic_constraints};
 use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
+use p3_field::{PackedValue, PrimeCharacteristicRing};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_maybe_rayon::prelude::*;
@@ -14,10 +14,19 @@ use p3_util::log2_strict_usize;
 use tracing::{debug_span, info_span, instrument};
 
 use crate::{
-    Commitments, Domain, OpenedValues, PackedVal, PreprocessedProverData, Proof,
-    ProverConstraintFolder, StarkGenericConfig, Val, get_constraint_layout,
-    get_log_num_quotient_chunks,
+    Commitments, Domain, OpenedValues, PreprocessedProverData, Proof, StarkGenericConfig, Val,
+    VectorizedConstraintFolder, VectorizedVal, get_constraint_layout, get_log_num_quotient_chunks,
 };
+
+/// Number of packed vectors evaluated in lockstep per constraint expression during
+/// quotient evaluation.
+///
+/// A single packed vector forms one dependency chain per constraint expression, which
+/// cannot hide the latency of modular multiplication (e.g. ~10 cycles at ~1.25
+/// cycles/vector throughput on NEON). Two lockstep chains let the out-of-order core
+/// overlap independent rows. Values above 2 increase register pressure with
+/// diminishing returns.
+pub const QUOTIENT_ILP: usize = 2;
 
 #[instrument(skip_all)]
 #[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds)] // cfg not supported in where clauses?
@@ -34,7 +43,8 @@ pub fn prove_with_preprocessed<
 ) -> Proof<SC>
 where
     SC: StarkGenericConfig,
-    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+    A: Air<SymbolicAirBuilder<Val<SC>>>
+        + for<'a> Air<VectorizedConstraintFolder<'a, SC, QUOTIENT_ILP>>,
 {
     #[cfg(debug_assertions)]
     p3_air::check_constraints(air, &trace, public_values);
@@ -388,7 +398,8 @@ pub fn prove<
 ) -> Proof<SC>
 where
     SC: StarkGenericConfig,
-    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+    A: Air<SymbolicAirBuilder<Val<SC>>>
+        + for<'a> Air<VectorizedConstraintFolder<'a, SC, QUOTIENT_ILP>>,
 {
     prove_with_preprocessed::<SC, A>(config, air, trace, public_values, None)
 }
@@ -409,7 +420,8 @@ pub fn quotient_values<SC, A, Mat>(
 ) -> Vec<SC::Challenge>
 where
     SC: StarkGenericConfig,
-    A: Air<SymbolicAirBuilder<Val<SC>>> + for<'a> Air<ProverConstraintFolder<'a, SC>>,
+    A: Air<SymbolicAirBuilder<Val<SC>>>
+        + for<'a> Air<VectorizedConstraintFolder<'a, SC, QUOTIENT_ILP>>,
     Mat: Matrix<Val<SC>> + Sync,
 {
     let quotient_size = quotient_domain.size();
@@ -420,9 +432,10 @@ where
     let qdb = log2_strict_usize(quotient_domain.size()) - log2_strict_usize(trace_domain.size());
     let next_step = 1 << qdb;
 
-    // We take PackedVal::<SC>::WIDTH worth of values at a time from a quotient_size slice, so we need to
-    // pad with default values in the case where quotient_size is smaller than PackedVal::<SC>::WIDTH.
-    for _ in quotient_size..PackedVal::<SC>::WIDTH {
+    // We take VectorizedVal::<SC, QUOTIENT_ILP>::WIDTH worth of values at a time from a
+    // quotient_size slice, so we need to pad with default values in the case where
+    // quotient_size is smaller than VectorizedVal::<SC, QUOTIENT_ILP>::WIDTH.
+    for _ in quotient_size..VectorizedVal::<SC, QUOTIENT_ILP>::WIDTH {
         sels.is_first_row.push(Val::<SC>::default());
         sels.is_last_row.push(Val::<SC>::default());
         sels.is_transition.push(Val::<SC>::default());
@@ -435,8 +448,8 @@ where
     let periodic_table =
         pcs.build_periodic_lde_table(&periodic_cols, trace_domain, quotient_domain);
 
-    let pack_width = PackedVal::<SC>::WIDTH;
-    let periodic_packed: Vec<Vec<PackedVal<SC>>> = if periodic_table.is_empty() {
+    let pack_width = VectorizedVal::<SC, QUOTIENT_ILP>::WIDTH;
+    let periodic_packed: Vec<Vec<VectorizedVal<SC, QUOTIENT_ILP>>> = if periodic_table.is_empty() {
         Vec::new()
     } else {
         let ncols = periodic_table.width();
@@ -445,7 +458,7 @@ where
             .map(|i_start| {
                 (0..ncols)
                     .map(|col_idx| {
-                        PackedVal::<SC>::from_fn(|offset| {
+                        VectorizedVal::<SC, QUOTIENT_ILP>::from_fn(|offset| {
                             *periodic_table.get(i_start + offset, col_idx)
                         })
                     })
@@ -456,14 +469,15 @@ where
 
     (0..quotient_size)
         .into_par_iter()
-        .step_by(PackedVal::<SC>::WIDTH)
+        .step_by(pack_width)
         .flat_map_iter(|i_start| {
-            let i_range = i_start..i_start + PackedVal::<SC>::WIDTH;
+            type V<SC> = VectorizedVal<SC, QUOTIENT_ILP>;
+            let i_range = i_start..i_start + pack_width;
 
-            let is_first_row = *PackedVal::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
-            let is_last_row = *PackedVal::<SC>::from_slice(&sels.is_last_row[i_range.clone()]);
-            let is_transition = *PackedVal::<SC>::from_slice(&sels.is_transition[i_range.clone()]);
-            let inv_vanishing = *PackedVal::<SC>::from_slice(&sels.inv_vanishing[i_range]);
+            let is_first_row = *V::<SC>::from_slice(&sels.is_first_row[i_range.clone()]);
+            let is_last_row = *V::<SC>::from_slice(&sels.is_last_row[i_range.clone()]);
+            let is_transition = *V::<SC>::from_slice(&sels.is_transition[i_range.clone()]);
+            let inv_vanishing = *V::<SC>::from_slice(&sels.inv_vanishing[i_range]);
 
             let main = RowMajorMatrix::new(
                 trace_on_quotient_domain.vertically_packed_row_pair(i_start, next_step),
@@ -481,12 +495,13 @@ where
             let preprocessed_view = preprocessed
                 .as_ref()
                 .map_or_else(|| RowMajorMatrixView::new(&[], 0), |m| m.as_view());
-            let periodic_values: &[PackedVal<SC>] = if periodic_packed.is_empty() {
+            let periodic_values: &[VectorizedVal<SC, QUOTIENT_ILP>] = if periodic_packed.is_empty()
+            {
                 &[]
             } else {
                 &periodic_packed[i_start / pack_width]
             };
-            let mut folder = ProverConstraintFolder {
+            let mut folder = VectorizedConstraintFolder {
                 main: main.as_view(),
                 preprocessed: preprocessed_view,
                 preprocessed_window: RowWindow::from_view(&preprocessed_view),
@@ -508,7 +523,7 @@ where
             let quotient = folder.finalize_constraints() * inv_vanishing;
 
             // "Transpose" D packed base coefficients into WIDTH scalar extension coefficients.
-            (0..core::cmp::min(quotient_size, PackedVal::<SC>::WIDTH))
+            (0..core::cmp::min(quotient_size, pack_width))
                 .map(move |idx_in_packing| quotient.extract(idx_in_packing))
         })
         .collect()

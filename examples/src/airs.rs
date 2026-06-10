@@ -8,7 +8,9 @@ use p3_keccak_air::KeccakAir;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
 use p3_poseidon2_air::{Poseidon2Air, VectorizedPoseidon2Air};
-use p3_uni_stark::{ProverConstraintFolder, StarkGenericConfig, VerifierConstraintFolder};
+use p3_uni_stark::{
+    QUOTIENT_ILP, StarkGenericConfig, VectorizedConstraintFolder, VerifierConstraintFolder,
+};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 
@@ -49,7 +51,7 @@ pub trait ExampleHashAir<F: Field, SC: StarkGenericConfig>:
     BaseAir<F>
     + for<'a> Air<DebugConstraintBuilder<'a, F>>
     + Air<SymbolicAirBuilder<F>>
-    + for<'a> Air<ProverConstraintFolder<'a, SC>>
+    + for<'a> Air<VectorizedConstraintFolder<'a, SC, QUOTIENT_ILP>>
     + for<'a> Air<VerifierConstraintFolder<'a, SC>>
 {
     fn generate_trace_rows(

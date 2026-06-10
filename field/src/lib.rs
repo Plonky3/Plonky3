@@ -14,6 +14,7 @@ mod helpers;
 pub mod integers;
 pub mod op_assign_macros;
 mod packed;
+mod vectorized;
 
 pub use array::*;
 pub use batch_inverse::*;
@@ -21,3 +22,4 @@ pub use dup::Dup;
 pub use field::*;
 pub use helpers::*;
 pub use packed::*;
+pub use vectorized::*;
