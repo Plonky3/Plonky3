@@ -82,9 +82,6 @@ pub enum Observe {
     /// Only c_0 and c_2 are sent; c_1 is derived by the verifier
     /// as `claimed_sum - c_0`.
     SumcheckPoly,
-    /// Evaluation answers at STIR query positions.
-    #[allow(dead_code)]
-    StirAnswers,
     /// Coefficients of the final folded polynomial.
     FinalCoeffs,
     /// Proof-of-work nonce solving the grinding challenge.
