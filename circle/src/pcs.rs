@@ -16,7 +16,6 @@ use p3_fri::verifier::FriError;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow};
 use p3_matrix::row_index_mapped::RowIndexMappedView;
 use p3_matrix::{Dimensions, Matrix};
-use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use p3_util::zip_eq::zip_eq;
 use serde::{Deserialize, Serialize};
