@@ -259,7 +259,7 @@ where
                 F::ZERO
             };
             challenger.sample();
-            let stir_indexes = get_challenge_stir_queries::<Challenger, F, EF>(
+            let stir_indexes = get_challenge_stir_queries::<Challenger, F>(
                 round_params.domain_size,
                 folding,
                 round_params.num_queries,

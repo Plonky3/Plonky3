@@ -83,6 +83,7 @@ pub enum Observe {
     /// as `claimed_sum - c_0`.
     SumcheckPoly,
     /// Evaluation answers at STIR query positions.
+    #[allow(dead_code)]
     StirAnswers,
     /// Coefficients of the final folded polynomial.
     FinalCoeffs,

@@ -22,8 +22,6 @@ use crate::pcs::utils::get_challenge_stir_queries;
 use crate::sumcheck::layout::Layout;
 use crate::sumcheck::strategy::{SumcheckProver, VariableOrder};
 
-pub type Proof<W, const DIGEST_ELEMS: usize> = Vec<Vec<[W; DIGEST_ELEMS]>>;
-
 /// Per-round prover state with the Merkle authentication shapes
 /// baked in for the WHIR commitment scheme.
 ///
@@ -53,7 +51,7 @@ enum RoundData<BaseData, ExtData> {
 /// Tracks the sumcheck prover, folding randomness, and Merkle
 /// commitments across base and extension field rounds.
 #[derive(Debug)]
-pub struct RoundState<EF, F, BaseData, ExtData>
+struct RoundState<EF, F, BaseData, ExtData>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
@@ -233,7 +231,7 @@ where
         challenger.sample();
 
         // STIR query sampling.
-        let stir_challenges_indexes = get_challenge_stir_queries::<Challenger, F, EF>(
+        let stir_challenges_indexes = get_challenge_stir_queries::<Challenger, F>(
             round_params.domain_size,
             self.params.folding_factor.at_round(round_index),
             round_params.num_queries,
@@ -339,7 +337,7 @@ where
         }
 
         // Final STIR queries.
-        let final_challenge_indexes = get_challenge_stir_queries::<Challenger, F, EF>(
+        let final_challenge_indexes = get_challenge_stir_queries::<Challenger, F>(
             self.final_round_config().domain_size,
             self.params.folding_factor.at_round(round_index),
             self.final_queries,

@@ -55,10 +55,9 @@
 //! - <https://eprint.iacr.org/2026/391> (HVZK-WHIR),
 //! - <https://eprint.iacr.org/2024/1586> (base WHIR).
 
-pub mod code_switch;
-
 mod adapter;
 mod base_case;
+mod code_switch;
 mod committer;
 mod config;
 mod constraint;
@@ -66,14 +65,13 @@ mod proof;
 mod prover;
 mod verifier;
 
-pub use adapter::*;
-pub use base_case::*;
-pub use committer::FoldedRsCode;
-pub use config::*;
-pub use constraint::*;
-pub use proof::*;
-pub use prover::*;
-pub use verifier::*;
+pub use adapter::HidingWhirPcs;
+pub use base_case::BaseCaseZkError;
+pub use code_switch::CodeSwitchError;
+pub use config::{MaskCodeShape, MaskGroupShape, ZkConfigError, ZkParameters, ZkWhirConfig};
+pub use proof::{BaseCaseZkProof, BlindedMask, MaskOpeningPair, ZkRoundProof, ZkWhirProof};
+pub use prover::HidingWhirProverData;
+pub use verifier::ZkVerifierError;
 
 #[cfg(test)]
 mod tests;

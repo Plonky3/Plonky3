@@ -190,7 +190,7 @@ where
         // These checks tie them to the committed oracles, per position z:
         //
         //     Enc(f*, r*)(z) = g(z) + gamma * f(z)
-        let positions = get_challenge_stir_queries::<Challenger, F, EF>(
+        let positions = get_challenge_stir_queries::<Challenger, F>(
             code.domain_size,
             0,
             self.config.num_queries,
@@ -259,7 +259,7 @@ where
             .zip(&proof.mask_queries)
             .enumerate()
         {
-            let positions = get_challenge_stir_queries::<Challenger, F, EF>(
+            let positions = get_challenge_stir_queries::<Challenger, F>(
                 group.shape.domain_size,
                 0,
                 self.config.mask_queries,
