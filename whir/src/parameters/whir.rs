@@ -114,6 +114,11 @@ where
     pub params: ProtocolParameters,
     /// Per-round derived configuration for each intermediate STIR round.
     pub round_parameters: Vec<RoundConfig<F>>,
+    /// Concrete folding factors used before the final direct-send phase.
+    ///
+    /// For constant schedules the last entry may be smaller than the nominal
+    /// configured factor, e.g. `Constant(8)` on 15 variables derives `[8, 7]`.
+    pub folding_schedule: Vec<usize>,
     /// Number of out-of-domain samples during the commitment phase.
     pub commitment_ood_samples: usize,
     /// PoW bits for the initial folding sumcheck (before any STIR rounds).
@@ -177,10 +182,11 @@ where
         // tracks the remaining variables as we consume them round by round.
         let initial_num_variables = num_variables;
 
-        // Reject folding factors that are incompatible with the polynomial size.
-        whir_parameters
+        // Derive the concrete folding schedule once. Validation is a property
+        // of this derivation, so all later code uses the same source of truth.
+        let folding_schedule = whir_parameters
             .folding_factor
-            .check_validity(num_variables)?;
+            .compute_folding_schedule(num_variables)?;
 
         // PoW contributes an independent additive term to security,
         // so the algebraic protocol only needs to cover the remainder.
@@ -217,7 +223,7 @@ where
         //
         // A larger folding_factor_0 pushes the folded domain below the limit.
         // This does NOT restrict how much data can be committed.
-        let log_folded_domain_size = log_domain_size - whir_parameters.folding_factor.at_round(0);
+        let log_folded_domain_size = log_domain_size - folding_schedule[0];
         if log_folded_domain_size > F::TWO_ADICITY {
             return Err(WhirConfigError::FoldedDomainExceedsTwoAdicity {
                 log_folded_domain_size,
@@ -232,15 +238,15 @@ where
         // How many intermediate STIR rounds, and how many variables remain
         // for the final direct-send sumcheck.
         // An invalid per-round schedule surfaces as a folding-factor config error.
-        let (num_rounds, final_sumcheck_rounds) = whir_parameters
-            .folding_factor
-            .compute_number_of_rounds(num_variables)?;
+        let folded_variables: usize = folding_schedule.iter().sum();
+        let num_rounds = folding_schedule.len() - 1;
+        let final_sumcheck_rounds = num_variables - folded_variables;
 
         let round_log_inv_rates = if whir_parameters.round_log_inv_rates.is_empty() {
             let mut rates = Vec::with_capacity(num_rounds);
             let mut rate = whir_parameters.starting_log_inv_rate;
-            for round in 0..num_rounds {
-                rate += whir_parameters.folding_factor.at_round(round) - 1;
+            for &folding_factor in folding_schedule.iter().take(num_rounds) {
+                rate += folding_factor - 1;
                 rates.push(rate);
             }
             rates
@@ -300,10 +306,10 @@ where
 
         // Subtract the first-round folding factor; the loop below
         // handles subsequent rounds.
-        num_variables -= whir_parameters.folding_factor.at_round(0);
+        num_variables -= folding_schedule[0];
 
         for (round, &next_rate) in round_log_inv_rates.iter().enumerate() {
-            let folding_factor = whir_parameters.folding_factor.at_round(round);
+            let folding_factor = folding_schedule[round];
             if next_rate > log_inv_rate + folding_factor {
                 return Err(WhirConfigError::RateGrowsDomain { round });
             }
@@ -356,7 +362,7 @@ where
                 next_rate,
             );
 
-            let next_folding_factor = whir_parameters.folding_factor.at_round(round + 1);
+            let next_folding_factor = folding_schedule[round + 1];
 
             // Generator of the two-adic subgroup for the folded domain.
             let folded_domain_gen =
@@ -406,10 +412,7 @@ where
         // Validate construction
         assert_eq!(
             initial_num_variables,
-            whir_parameters
-                .folding_factor
-                .total_number(round_parameters.len())
-                + final_sumcheck_rounds
+            folding_schedule.iter().sum::<usize>() + final_sumcheck_rounds
         );
 
         let config = Self {
@@ -418,6 +421,7 @@ where
             num_variables: initial_num_variables,
             starting_folding_pow_bits: starting_folding_pow_bits as usize,
             round_parameters,
+            folding_schedule,
             final_queries,
             final_pow_bits: final_pow_bits as usize,
             final_sumcheck_rounds,
@@ -472,14 +476,14 @@ where
         } else {
             self.round_parameters[round - 1].log_inv_rate
         };
-        previous_log_inv_rate + self.folding_factor(round)
+        previous_log_inv_rate + self.round_folding_factor(round)
             - self.round_parameters[round].log_inv_rate
     }
 
     /// Returns the log2 size of the largest FFT
     /// (At commitment we perform 2^folding_factor FFT of size 2^max_fft_size)
     pub fn max_fft_size(&self) -> usize {
-        self.num_variables + self.params.starting_log_inv_rate - self.folding_factor(0)
+        self.num_variables + self.params.starting_log_inv_rate - self.round_folding_factor(0)
     }
 
     /// Returns whether all PoW difficulties are within the configured maximum.
@@ -503,9 +507,14 @@ where
             .all(|r| r.pow_bits <= max_bits && r.folding_pow_bits <= max_bits)
     }
 
-    /// Retrieves the folding factor for a given round.
-    pub fn folding_factor(&self, round: usize) -> usize {
-        self.params.folding_factor.at_round(round)
+    /// Retrieves the concrete derived folding factor for a given round.
+    pub fn round_folding_factor(&self, round: usize) -> usize {
+        self.folding_schedule[round]
+    }
+
+    /// Total variables folded through the given round index, inclusive.
+    pub fn total_folded_through(&self, round: usize) -> usize {
+        self.folding_schedule.iter().take(round + 1).sum()
     }
 
     /// Compute the synthetic or derived `RoundConfig` for the final phase.
@@ -523,14 +532,14 @@ where
             // the initial fold leads directly to the final phase.
             // Use the starting domain and initial folding factor.
             RoundConfig {
-                num_variables: self.num_variables - self.folding_factor(0),
-                folding_factor: self.folding_factor(self.n_rounds()),
+                num_variables: self.num_variables - self.round_folding_factor(0),
+                folding_factor: self.round_folding_factor(self.n_rounds()),
                 num_queries: self.final_queries,
                 pow_bits: self.final_pow_bits,
                 log_inv_rate: self.params.starting_log_inv_rate,
                 domain_size: self.starting_domain_size(),
                 folded_domain_gen: F::two_adic_generator(
-                    self.starting_domain_size().ilog2() as usize - self.folding_factor(0),
+                    self.starting_domain_size().ilog2() as usize - self.round_folding_factor(0),
                 ),
                 ood_samples: 0,
                 folding_pow_bits: self.final_folding_pow_bits,
@@ -539,7 +548,7 @@ where
             // Apply the last round's domain reduction to get the domain
             // size entering the final phase.
             let rs_reduction_factor = self.rs_reduction_factor(self.n_rounds() - 1);
-            let folding_factor = self.folding_factor(self.n_rounds());
+            let folding_factor = self.round_folding_factor(self.n_rounds());
 
             let last = self.round_parameters.last().unwrap();
 
@@ -548,7 +557,7 @@ where
 
             // Generator for the final folded domain.
             let folded_domain_gen = F::two_adic_generator(
-                domain_size.ilog2() as usize - self.folding_factor(self.n_rounds()),
+                domain_size.ilog2() as usize - self.round_folding_factor(self.n_rounds()),
             );
 
             RoundConfig {
@@ -782,6 +791,37 @@ mod tests {
         //     [4, 3, 2] @ 14  ->  2 intermediate rounds
         check(10, FoldingFactor::PerRound(vec![3, 2]));
         check(14, FoldingFactor::PerRound(vec![4, 3, 2]));
+    }
+
+    #[test]
+    fn constant_schedule_uses_smaller_final_pre_direct_fold() {
+        // Thomas's motivating case:
+        //
+        //     m = 15, Constant(8)  ->  concrete schedule [8, 7]
+        //
+        // Rejecting this would forbid a valid WHIR instance. The derived
+        // schedule must be used everywhere downstream, not only in validation.
+        let params = ProtocolParameters {
+            security_level: 100,
+            pow_bits: 20,
+            round_log_inv_rates: vec![],
+            folding_factor: FoldingFactor::Constant(8),
+            soundness_type: SecurityAssumption::UniqueDecoding,
+            starting_log_inv_rate: 1,
+        };
+
+        let config = WhirConfig::<F, F, MyChallenger>::new(15, params).unwrap();
+
+        assert_eq!(config.folding_schedule, vec![8, 7]);
+        assert_eq!(config.n_rounds(), 1);
+        assert_eq!(config.round_folding_factor(0), 8);
+        assert_eq!(config.round_folding_factor(1), 7);
+        assert_eq!(config.total_folded_through(0), 8);
+        assert_eq!(config.total_folded_through(1), 15);
+        assert_eq!(config.round_parameters[0].folding_factor, 8);
+        assert_eq!(config.final_sumcheck_rounds, 0);
+        assert_eq!(config.final_round_config().folding_factor, 7);
+        assert_eq!(config.final_round_config().num_variables, 0);
     }
 
     #[test]

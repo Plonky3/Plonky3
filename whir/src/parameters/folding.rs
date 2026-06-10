@@ -40,13 +40,17 @@ pub enum FoldingFactor {
     Constant(usize),
     /// Uses a different folding factor for the first round and a fixed one for the rest.
     ConstantFromSecondRound(usize, usize),
-    /// Explicit folding factors for each folding phase, including the initial
-    /// fold and the final sumcheck fold.
+    /// Explicit folding factors for each pre-direct-send folding phase,
+    /// including the initial fold.
     PerRound(Vec<usize>),
 }
 
 impl FoldingFactor {
-    /// Retrieves the folding factor for a given round.
+    /// Retrieves the nominal configured folding factor for a given round.
+    ///
+    /// This does not apply the partial-final-fold clamp used by constant
+    /// schedules. Use [`Self::compute_folding_schedule`] when the concrete
+    /// derived factors matter.
     #[must_use]
     pub fn at_round(&self, round: usize) -> usize {
         match self {
@@ -64,46 +68,88 @@ impl FoldingFactor {
 
     /// Checks the validity of the folding factor against the number of variables.
     pub fn check_validity(&self, num_variables: usize) -> Result<(), FoldingFactorError> {
+        self.compute_folding_schedule(num_variables).map(|_| ())
+    }
+
+    /// Derive the concrete folding factors used before the final direct-send phase.
+    ///
+    /// Constant schedules may use a smaller final fold when fewer than `factor`
+    /// variables remain. Explicit per-round schedules stay exact and therefore
+    /// still reject any factor larger than the current remainder.
+    pub fn compute_folding_schedule(
+        &self,
+        num_variables: usize,
+    ) -> Result<Vec<usize>, FoldingFactorError> {
         match self {
             Self::Constant(factor) => {
+                if *factor == 0 {
+                    return Err(FoldingFactorError::ZeroFactor);
+                }
                 if *factor > num_variables {
-                    // A folding factor cannot be greater than the number of available variables.
-                    Err(FoldingFactorError::TooLarge(*factor, num_variables))
-                } else if *factor == 0 {
-                    // A folding factor of zero is invalid since folding must reduce variables.
-                    Err(FoldingFactorError::ZeroFactor)
-                } else {
-                    Ok(())
+                    return Err(FoldingFactorError::TooLarge(*factor, num_variables));
+                }
+                let mut remaining = num_variables;
+                let mut schedule = Vec::new();
+                loop {
+                    let round_factor = (*factor).min(remaining);
+                    schedule.push(round_factor);
+                    remaining -= round_factor;
+                    if remaining <= MAX_NUM_VARIABLES_TO_SEND_COEFFS {
+                        return Ok(schedule);
+                    }
                 }
             }
             Self::ConstantFromSecondRound(first_round_factor, factor) => {
+                if *first_round_factor == 0 || *factor == 0 {
+                    return Err(FoldingFactorError::ZeroFactor);
+                }
                 if *first_round_factor > num_variables {
-                    // The first round folding factor must not exceed the available variables.
-                    Err(FoldingFactorError::TooLarge(
+                    return Err(FoldingFactorError::TooLarge(
                         *first_round_factor,
                         num_variables,
-                    ))
-                } else if *factor > num_variables {
-                    // Subsequent round folding factors must also not exceed the available
-                    // variables.
-                    Err(FoldingFactorError::TooLarge(*factor, num_variables))
-                } else if *factor == 0 || *first_round_factor == 0 {
-                    // Folding should occur at least once; zero is not valid.
-                    Err(FoldingFactorError::ZeroFactor)
-                } else {
-                    Ok(())
+                    ));
                 }
+
+                let mut remaining = num_variables;
+                let mut schedule = Vec::new();
+
+                schedule.push(*first_round_factor);
+                remaining -= *first_round_factor;
+                while remaining > MAX_NUM_VARIABLES_TO_SEND_COEFFS {
+                    let round_factor = (*factor).min(remaining);
+                    schedule.push(round_factor);
+                    remaining -= round_factor;
+                }
+
+                Ok(schedule)
             }
             Self::PerRound(factors) => {
                 for &factor in factors {
-                    if factor > num_variables {
-                        return Err(FoldingFactorError::TooLarge(factor, num_variables));
-                    }
                     if factor == 0 {
                         return Err(FoldingFactorError::ZeroFactor);
                     }
+                    if factor > num_variables {
+                        return Err(FoldingFactorError::TooLarge(factor, num_variables));
+                    }
                 }
-                Ok(())
+
+                let mut remaining = num_variables;
+                let mut schedule = Vec::new();
+                for &factor in factors {
+                    if factor > remaining {
+                        return Err(FoldingFactorError::TooLarge(factor, remaining));
+                    }
+                    schedule.push(factor);
+                    remaining -= factor;
+                    if remaining <= MAX_NUM_VARIABLES_TO_SEND_COEFFS {
+                        return Ok(schedule);
+                    }
+                }
+                Err(FoldingFactorError::InsufficientFolding {
+                    num_variables,
+                    remaining,
+                    threshold: MAX_NUM_VARIABLES_TO_SEND_COEFFS,
+                })
             }
         }
     }
@@ -118,82 +164,9 @@ impl FoldingFactor {
         &self,
         num_variables: usize,
     ) -> Result<(usize, usize), FoldingFactorError> {
-        match self {
-            Self::Constant(factor) => {
-                if num_variables <= MAX_NUM_VARIABLES_TO_SEND_COEFFS {
-                    // the first folding is mandatory in the current implem (TODO don't fold, send directly the polynomial)
-                    return Ok((0, num_variables - factor));
-                }
-                // Starting from `num_variables`, each round reduces the number of variables by `factor`. As soon as the
-                // number of variables is less of equal than `MAX_NUM_VARIABLES_TO_SEND_COEFFS`, we stop folding and the
-                // prover sends directly the coefficients of the polynomial.
-                let num_rounds =
-                    (num_variables - MAX_NUM_VARIABLES_TO_SEND_COEFFS).div_ceil(*factor);
-                let final_sumcheck_rounds = num_variables - num_rounds * factor;
-                // The -1 accounts for the fact that the last round does not require another folding.
-                Ok((num_rounds - 1, final_sumcheck_rounds))
-            }
-            Self::ConstantFromSecondRound(first_round_factor, factor) => {
-                // Compute the number of variables remaining after the first round.
-                let nv_except_first_round = num_variables - *first_round_factor;
-                if nv_except_first_round < MAX_NUM_VARIABLES_TO_SEND_COEFFS {
-                    // This case is equivalent to Constant(first_round_factor)
-                    // the first folding is mandatory in the current implem (TODO don't fold, send directly the polynomial)
-                    return Ok((0, nv_except_first_round));
-                }
-                // Starting from `num_variables`, the first round reduces the number of variables by `first_round_factor`,
-                // and the next ones by `factor`. As soon as the number of variables is less of equal than
-                // `MAX_NUM_VARIABLES_TO_SEND_COEFFS`, we stop folding and the prover sends directly the coefficients of the polynomial.
-                let num_rounds =
-                    (nv_except_first_round - MAX_NUM_VARIABLES_TO_SEND_COEFFS).div_ceil(*factor);
-                let final_sumcheck_rounds = nv_except_first_round - num_rounds * factor;
-                // No need to minus 1 because the initial round is already excepted out
-                Ok((num_rounds, final_sumcheck_rounds))
-            }
-            Self::PerRound(factors) => {
-                // Fold one explicit factor per round until the remainder reaches the threshold.
-                let mut remaining = num_variables;
-                for (i, &factor) in factors.iter().enumerate() {
-                    // A round cannot fold more variables than remain.
-                    //
-                    //     remaining = 7, factor = 9  ->  over-folds
-                    if factor > remaining {
-                        return Err(FoldingFactorError::TooLarge(factor, remaining));
-                    }
-                    remaining -= factor;
-                    // Threshold reached: `i` full rounds, `remaining` sent direct.
-                    if remaining <= MAX_NUM_VARIABLES_TO_SEND_COEFFS {
-                        return Ok((i, remaining));
-                    }
-                }
-                // Factors exhausted but the polynomial is still above the threshold.
-                //
-                //     num_variables = 20, sum(factors) = 5  ->  remaining 15 > 6
-                Err(FoldingFactorError::InsufficientFolding {
-                    num_variables,
-                    remaining,
-                    threshold: MAX_NUM_VARIABLES_TO_SEND_COEFFS,
-                })
-            }
-        }
-    }
-
-    /// Computes the total number of folding rounds over `n_rounds` iterations.
-    #[must_use]
-    pub fn total_number(&self, n_rounds: usize) -> usize {
-        match self {
-            Self::Constant(factor) => {
-                // - Each round folds `factor` variables,
-                // - There are `n_rounds + 1` iterations (including the original input size).
-                *factor * (n_rounds + 1)
-            }
-            Self::ConstantFromSecondRound(first_round_factor, factor) => {
-                // - The first round folds `first_round_factor` variables,
-                // - Subsequent rounds fold `factor` variables each.
-                *first_round_factor + *factor * n_rounds
-            }
-            Self::PerRound(factors) => factors.iter().take(n_rounds + 1).sum(),
-        }
+        let schedule = self.compute_folding_schedule(num_variables)?;
+        let folded: usize = schedule.iter().sum();
+        Ok((schedule.len() - 1, num_variables - folded))
     }
 }
 
@@ -246,10 +219,11 @@ mod tests {
             FoldingFactor::ConstantFromSecondRound(4, 2).check_validity(3),
             Err(FoldingFactorError::TooLarge(4, 3))
         );
-        // Second round factor too large
+        // A later constant factor may be larger than the later remainder; the
+        // derived schedule clamps only that final fold.
         assert_eq!(
-            FoldingFactor::ConstantFromSecondRound(2, 5).check_validity(4),
-            Err(FoldingFactorError::TooLarge(5, 4))
+            FoldingFactor::ConstantFromSecondRound(2, 5).compute_folding_schedule(4),
+            Ok(vec![2])
         );
         // First round zero
         assert_eq!(
@@ -334,6 +308,121 @@ mod tests {
     }
 
     #[test]
+    fn constant_schedule_allows_partial_final_fold() {
+        let schedule = FoldingFactor::Constant(8);
+
+        assert_eq!(schedule.compute_folding_schedule(15), Ok(vec![8, 7]));
+        assert_eq!(schedule.compute_number_of_rounds(15), Ok((1, 0)));
+        assert_eq!(schedule.check_validity(15), Ok(()));
+    }
+
+    #[test]
+    fn constant_from_second_round_allows_partial_final_fold() {
+        let schedule = FoldingFactor::ConstantFromSecondRound(8, 8);
+
+        assert_eq!(schedule.compute_folding_schedule(15), Ok(vec![8, 7]));
+        assert_eq!(schedule.compute_number_of_rounds(15), Ok((1, 0)));
+        assert_eq!(schedule.check_validity(15), Ok(()));
+    }
+
+    #[test]
+    fn compute_number_of_rounds_keeps_degenerate_guards() {
+        assert_eq!(
+            FoldingFactor::Constant(0).compute_number_of_rounds(15),
+            Err(FoldingFactorError::ZeroFactor)
+        );
+        assert_eq!(
+            FoldingFactor::Constant(16).compute_number_of_rounds(15),
+            Err(FoldingFactorError::TooLarge(16, 15))
+        );
+        assert_eq!(
+            FoldingFactor::ConstantFromSecondRound(0, 8).compute_number_of_rounds(15),
+            Err(FoldingFactorError::ZeroFactor)
+        );
+        assert_eq!(
+            FoldingFactor::ConstantFromSecondRound(8, 0).compute_number_of_rounds(15),
+            Err(FoldingFactorError::ZeroFactor)
+        );
+        assert_eq!(
+            FoldingFactor::ConstantFromSecondRound(16, 8).compute_number_of_rounds(15),
+            Err(FoldingFactorError::TooLarge(16, 15))
+        );
+        assert_eq!(
+            FoldingFactor::PerRound(vec![2, 0]).compute_number_of_rounds(15),
+            Err(FoldingFactorError::ZeroFactor)
+        );
+    }
+
+    #[test]
+    fn computed_rounds_match_old_formula_when_old_formula_did_not_overfold() {
+        fn old_constant(num_variables: usize, factor: usize) -> Option<(usize, usize)> {
+            if factor == 0 || factor > num_variables {
+                return None;
+            }
+            if num_variables <= MAX_NUM_VARIABLES_TO_SEND_COEFFS {
+                return Some((0, num_variables - factor));
+            }
+            let num_rounds = (num_variables - MAX_NUM_VARIABLES_TO_SEND_COEFFS).div_ceil(factor);
+            let folded = num_rounds.checked_mul(factor)?;
+            if folded <= num_variables {
+                Some((num_rounds - 1, num_variables - folded))
+            } else {
+                None
+            }
+        }
+
+        fn old_constant_from_second_round(
+            num_variables: usize,
+            first_round_factor: usize,
+            factor: usize,
+        ) -> Option<(usize, usize)> {
+            if first_round_factor == 0
+                || factor == 0
+                || first_round_factor > num_variables
+                || factor > num_variables
+            {
+                return None;
+            }
+            let remaining = num_variables - first_round_factor;
+            if remaining < MAX_NUM_VARIABLES_TO_SEND_COEFFS {
+                return Some((0, remaining));
+            }
+            let num_rounds = (remaining - MAX_NUM_VARIABLES_TO_SEND_COEFFS).div_ceil(factor);
+            let folded = num_rounds.checked_mul(factor)?;
+            if folded <= remaining {
+                Some((num_rounds, remaining - folded))
+            } else {
+                None
+            }
+        }
+
+        for num_variables in 1..40 {
+            for factor in 1..12 {
+                if let Some(expected) = old_constant(num_variables, factor) {
+                    assert_eq!(
+                        FoldingFactor::Constant(factor).compute_number_of_rounds(num_variables),
+                        Ok(expected),
+                        "Constant({factor}) @ {num_variables}"
+                    );
+                }
+
+                for first_round_factor in 1..12 {
+                    if let Some(expected) =
+                        old_constant_from_second_round(num_variables, first_round_factor, factor)
+                    {
+                        assert_eq!(
+                            FoldingFactor::ConstantFromSecondRound(first_round_factor, factor)
+                                .compute_number_of_rounds(num_variables),
+                            Ok(expected),
+                            "ConstantFromSecondRound({first_round_factor}, {factor}) @ {num_variables}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn per_round_factors_that_under_fold_error() {
         // Invariant: a per-round schedule that under-folds is rejected with an error, not a panic.
         //
@@ -373,17 +462,5 @@ mod tests {
             schedule.compute_number_of_rounds(10),
             Err(FoldingFactorError::TooLarge(9, 7))
         );
-    }
-
-    #[test]
-    fn test_total_number() {
-        let factor = FoldingFactor::Constant(2);
-        assert_eq!(factor.total_number(3), 8); // 2 * (3 + 1)
-
-        let variable_factor = FoldingFactor::ConstantFromSecondRound(3, 2);
-        assert_eq!(variable_factor.total_number(3), 9); // 3 + 2 * 3
-
-        let per_round = FoldingFactor::PerRound(vec![3, 2, 1]);
-        assert_eq!(per_round.total_number(1), 5);
     }
 }

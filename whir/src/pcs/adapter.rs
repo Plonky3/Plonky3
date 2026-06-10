@@ -74,7 +74,7 @@ where
             &self.mmcs,
             challenger,
             witness,
-            self.config.folding_factor.at_round(0),
+            self.config.round_folding_factor(0),
             self.config.starting_log_inv_rate,
         );
         (
