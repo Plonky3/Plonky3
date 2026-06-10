@@ -10,6 +10,6 @@ mod pruning;
 
 pub use hiding_mmcs::*;
 pub use merkle_tree::MerkleTree;
-pub use mmcs::{MerkleTreeError, MerkleTreeMmcs, PrunedBatchOpening};
+pub use mmcs::{MerkleTreeError, MerkleTreeMmcs, PrunedBatchOpening, PrunedProofError};
 pub use p3_symmetric::MerkleCap;
 pub use pruning::{PrunedMerklePaths, PrunedPath};
