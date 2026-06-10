@@ -2,11 +2,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::mem::MaybeUninit;
 
-use itertools::{Itertools, iterate};
+use itertools::{Itertools, iterate, izip};
 use p3_commit::PolynomialSpace;
 use p3_dft::{Butterfly, DifButterfly, DitButterfly, divide_by_height};
 use p3_field::extension::ComplexExtendable;
-use p3_field::{ExtensionField, Field, batch_multiplicative_inverse};
+use p3_field::{ExtensionField, Field, FieldArray, batch_multiplicative_inverse};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -141,6 +141,31 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
             .into_iter()
             .map(|x| x * lagrange_num)
             .collect_vec()
+    }
+
+    /// Evaluate at two points in a single pass over the matrix, given precomputed Lagrange
+    /// denominators for each point.
+    ///
+    /// Equivalent to two [`Self::evaluate_at_point_with_den`] calls, but each matrix row is
+    /// only loaded once.
+    pub(crate) fn evaluate_at_two_points_with_dens<EF: ExtensionField<F>>(
+        &self,
+        points: [Point<EF>; 2],
+        dens: [&[EF]; 2],
+    ) -> [Vec<EF>; 2] {
+        let lagrange_nums = points.map(|point| self.domain.vanishing_poly(point));
+
+        let interleaved_dens = izip!(dens[0], dens[1])
+            .map(|(&den_0, &den_1)| FieldArray([den_0, den_1]))
+            .collect_vec();
+
+        let (ps_at_point_0, ps_at_point_1) = self
+            .values
+            .columnwise_dot_product_batched::<EF, 2>(&interleaved_dens)
+            .into_iter()
+            .map(|FieldArray([dot_0, dot_1])| (dot_0 * lagrange_nums[0], dot_1 * lagrange_nums[1]))
+            .unzip();
+        [ps_at_point_0, ps_at_point_1]
     }
 
     #[cfg(test)]

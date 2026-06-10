@@ -246,12 +246,13 @@ where
                             CircleDomain::standard(log_height),
                             mat.as_view(),
                         );
-                        points_for_mat
+
+                        // Resolve the Lagrange denominators for every point up front.
+                        let den_idxs = points_for_mat
                             .iter()
                             .map(|&zeta_uni| {
-                                let zeta = Point::from_projective_line(zeta_uni);
                                 let key = (log_height, zeta_uni);
-                                let den_idx = lagrange_dens
+                                lagrange_dens
                                     .iter()
                                     .position(|(k, _)| *k == key)
                                     .unwrap_or_else(|| {
@@ -259,25 +260,44 @@ where
                                             .in_scope(|| {
                                                 compute_lagrange_den_batched(
                                                     &permuted_points[&log_height],
-                                                    zeta,
+                                                    Point::from_projective_line(zeta_uni),
                                                     log_height,
                                                 )
                                             });
                                         lagrange_dens.push((key, den));
                                         lagrange_dens.len() - 1
-                                    });
-                                let ps_at_zeta =
-                                    info_span!("compute opened values with Lagrange interpolation")
-                                        .in_scope(|| {
+                                    })
+                            })
+                            .collect_vec();
+
+                        let ps_for_points: Vec<Vec<Challenge>> =
+                            info_span!("compute opened values with Lagrange interpolation")
+                                .in_scope(|| match (&points_for_mat[..], &den_idxs[..]) {
+                                    // A matrix opened at two points (e.g. zeta and zeta_next)
+                                    // is traversed once for both.
+                                    (&[zeta_0, zeta_1], &[idx_0, idx_1]) => evals
+                                        .evaluate_at_two_points_with_dens(
+                                            [
+                                                Point::from_projective_line(zeta_0),
+                                                Point::from_projective_line(zeta_1),
+                                            ],
+                                            [&lagrange_dens[idx_0].1, &lagrange_dens[idx_1].1],
+                                        )
+                                        .into(),
+                                    _ => izip!(points_for_mat, &den_idxs)
+                                        .map(|(&zeta_uni, &den_idx)| {
                                             evals.evaluate_at_point_with_den(
-                                                zeta,
+                                                Point::from_projective_line(zeta_uni),
                                                 &lagrange_dens[den_idx].1,
                                             )
-                                        });
-                                challenger.observe_algebra_slice(&ps_at_zeta);
-                                ps_at_zeta
-                            })
-                            .collect()
+                                        })
+                                        .collect(),
+                                });
+
+                        for ps_at_zeta in &ps_for_points {
+                            challenger.observe_algebra_slice(ps_at_zeta);
+                        }
+                        ps_for_points
                     })
                     .collect()
             })
