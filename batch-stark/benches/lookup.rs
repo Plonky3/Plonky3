@@ -366,7 +366,9 @@ fn make_config() -> MyConfig {
     let val_mmcs = ValMmcs::new(hash, compress, 0);
     let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
     let dft = Dft::default();
-    let fri_params = FriParameters::new_testing(challenge_mmcs, 2);
+    // Production-like FRI settings (100 queries) so the proof-size column reflects
+    // realistic openings rather than the 2-query testing config.
+    let fri_params = FriParameters::new_benchmark(challenge_mmcs);
     let pcs = MyPcs::new(dft, val_mmcs, fri_params);
     let challenger = Challenger::new(perm);
     StarkConfig::new(pcs, challenger)
