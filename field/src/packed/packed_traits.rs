@@ -429,6 +429,18 @@ pub trait PackedFieldExtension<
         })
     }
 
+    /// Accumulate `value` into a single SIMD lane, leaving the other `W - 1` lanes unchanged.
+    ///
+    /// This is the accumulating dual of the per-lane read [`PackedFieldExtension::extract`].
+    /// It scatters one scalar extension element into a packed buffer, one lane at a time.
+    ///
+    /// The default rebuilds a full packed element and adds it.
+    /// Concrete types override it to touch only the `D` base lanes at the target lane.
+    #[inline]
+    fn add_assign_lane(&mut self, lane: usize, value: ExtField) {
+        *self += Self::from_ext_fn(|l| if l == lane { value } else { ExtField::ZERO });
+    }
+
     /// Write all `W` lanes into the given slice.
     ///
     /// This is the extension-field analog of [`PackedValue::as_slice`], but the lanes of
@@ -569,6 +581,12 @@ impl<F: Field> PackedFieldExtension<F, F> for F::Packing {
     #[inline]
     fn packed_ext_powers(base: F) -> Powers<Self> {
         F::Packing::packed_powers(base)
+    }
+
+    #[inline]
+    fn add_assign_lane(&mut self, lane: usize, value: F) {
+        // Degree-1 case: the lane is a single base element.
+        self.as_slice_mut()[lane] += value;
     }
 }
 
