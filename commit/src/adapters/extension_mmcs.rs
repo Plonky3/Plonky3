@@ -80,7 +80,15 @@ where
             .cloned()
             .map(EF::flatten_to_base)
             .collect();
-        let base_dimensions = base_dimensions::<EF, F>(dimensions);
+        // Each extension element flattens into `EF::DIMENSION` base coordinates,
+        // so widths scale by that factor while heights are unchanged.
+        let base_dimensions = dimensions
+            .iter()
+            .map(|dim| Dimensions {
+                width: dim.width * EF::DIMENSION,
+                height: dim.height,
+            })
+            .collect::<Vec<_>>();
         self.inner.verify_batch(
             commit,
             &base_dimensions,
@@ -123,7 +131,15 @@ where
             .iter()
             .map(|rows| rows.iter().cloned().map(EF::flatten_to_base).collect())
             .collect();
-        let base_dimensions = base_dimensions::<EF, F>(dimensions);
+        // Each extension element flattens into `EF::DIMENSION` base coordinates,
+        // so widths scale by that factor while heights are unchanged.
+        let base_dimensions = dimensions
+            .iter()
+            .map(|dim| Dimensions {
+                width: dim.width * EF::DIMENSION,
+                height: dim.height,
+            })
+            .collect::<Vec<_>>();
         self.inner.verify_multi_batch(
             commit,
             &base_dimensions,
@@ -132,18 +148,4 @@ where
             proof,
         )
     }
-}
-
-/// Widens extension-field dimensions to their base-field equivalents.
-///
-/// Each extension element flattens into `EF::DIMENSION` base coordinates,
-/// so widths scale by that factor while heights are unchanged.
-fn base_dimensions<EF: ExtensionField<F>, F: Field>(dimensions: &[Dimensions]) -> Vec<Dimensions> {
-    dimensions
-        .iter()
-        .map(|dim| Dimensions {
-            width: dim.width * EF::DIMENSION,
-            height: dim.height,
-        })
-        .collect()
 }
