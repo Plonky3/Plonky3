@@ -460,10 +460,6 @@ fn bench_options(c: &mut Criterion) {
 }
 
 /// Print a proof-size and Merkle-pruning report across the scaling sizes.
-///
-/// Not a timed benchmark: the numbers are deterministic per config.
-/// Runs as a criterion group so `cargo bench` surfaces it with the timing groups.
-/// Prints a fixed table to stderr.
 fn report_proof_size(_c: &mut Criterion) {
     type L = SuffixProver<F, EF>;
     let cases = [("small", SMALL), ("medium", MEDIUM), ("large", LARGE)];
