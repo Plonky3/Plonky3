@@ -582,11 +582,11 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         }
 
         // Phase 3: Pick a representative original query for each unique path.
-        // Verify that every original maps to a valid sorted slot, that the
-        // slot opens exactly the verifier-supplied index, and that duplicates
-        // carry identical opened values — otherwise a malicious prover could
-        // collapse two distinct openings into one verified slot or substitute
-        // a different leaf for a transcript-derived index.
+        //
+        // Each guard blocks one forgery:
+        //   - slot in range            -> no out-of-bounds path reference
+        //   - leaf_index == indices[i] -> opens the index the verifier asked for
+        //   - duplicates agree         -> two openings can't collapse into one slot
         let mut reps: Vec<Option<usize>> = vec![None; n_unique];
         for (orig_idx, &sorted_idx) in original_order.iter().enumerate() {
             let sorted_idx = sorted_idx as usize;
