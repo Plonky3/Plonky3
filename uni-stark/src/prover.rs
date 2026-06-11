@@ -26,7 +26,10 @@ use crate::{
 /// cycles/vector throughput on NEON). Two lockstep chains let the out-of-order core
 /// overlap independent rows. Values above 2 increase register pressure with
 /// diminishing returns.
+#[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
 pub const QUOTIENT_ILP: usize = 2;
+#[cfg(not(all(target_arch = "aarch64", target_feature = "neon")))]
+pub const QUOTIENT_ILP: usize = 1;
 
 #[instrument(skip_all)]
 #[allow(clippy::multiple_bound_locations, clippy::type_repetition_in_bounds)] // cfg not supported in where clauses?
