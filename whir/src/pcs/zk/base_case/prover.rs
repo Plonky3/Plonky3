@@ -13,7 +13,7 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 
 use super::config::{BaseCaseZkConfig, MaskGroupWitness};
-use crate::pcs::proof::{OpenMultiRows, QueryOpenings};
+use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
 use crate::pcs::utils::get_challenge_stir_queries;
 use crate::pcs::zk::proof::{BaseCaseZkProof, BlindedMask, MaskOpeningPair};
 
@@ -215,7 +215,8 @@ where
         // f(z): leaves of the last committed oracle, virtually folded.
         let source_openings = open_source(&positions);
         // g(z): the fresh main mask, committed above.
-        let fresh_main_openings = self.extension_mmcs.open_rows(&positions, &fresh_main_data);
+        let fresh_main_openings =
+            SharedProofOpening::open(self.extension_mmcs, &positions, &fresh_main_data);
 
         // Move 5b: mask spot checks, t_zk positions per group.
         //
@@ -238,8 +239,8 @@ where
             // xi_i(y) and s'_i(y): the carried group oracle and its fresh
             // blind, opened at the same shared positions.
             mask_openings.push(MaskOpeningPair {
-                carried: self.extension_mmcs.open_rows(&positions, witness.data),
-                fresh: self.extension_mmcs.open_rows(&positions, fresh_data),
+                carried: SharedProofOpening::open(self.extension_mmcs, &positions, witness.data),
+                fresh: SharedProofOpening::open(self.extension_mmcs, &positions, fresh_data),
             });
         }
 

@@ -114,7 +114,7 @@ impl<F: Default + Send + Sync + Clone, EF: Default, MT: MultiOpeningMmcs<F>> Def
     }
 }
 
-/// Rows opened at many queried positions, plus one proof covering them all.
+/// Rows opened at many queried positions, plus one proof shared across them.
 ///
 /// One multiproof authenticates every row together,
 /// so sibling digests shared between queries travel once.
@@ -123,14 +123,36 @@ impl<F: Default + Send + Sync + Clone, EF: Default, MT: MultiOpeningMmcs<F>> Def
     serialize = "T: Serialize, P: Serialize",
     deserialize = "T: Deserialize<'de>, P: Deserialize<'de>"
 ))]
-pub struct MultiOpening<T, P> {
+pub struct SharedProofOpening<T, P> {
     /// `rows[q]` is the opened leaf row at the `q`-th queried position.
     pub rows: Vec<Vec<T>>,
     /// Compact multiproof authenticating every row at once.
     pub proof: P,
 }
 
-impl<T: Send + Sync + Clone, P> MultiOpening<T, P> {
+impl<T: Send + Sync + Clone, P> SharedProofOpening<T, P> {
+    /// Opens `indices` on a commitment holding exactly one matrix.
+    pub(crate) fn open<MT, M>(mmcs: &MT, indices: &[usize], prover_data: &MT::ProverData<M>) -> Self
+    where
+        MT: MultiOpeningMmcs<T, MultiProof = P>,
+        M: Matrix<T>,
+    {
+        let (values, proof) = mmcs.open_multi_batch(indices, prover_data);
+        let rows = values
+            .into_iter()
+            .map(|mut per_matrix| {
+                // WHIR commits a single matrix per round, so each query opens one row.
+                assert_eq!(
+                    per_matrix.len(),
+                    1,
+                    "WHIR opens commitments holding exactly one matrix"
+                );
+                per_matrix.swap_remove(0)
+            })
+            .collect();
+        Self { rows, proof }
+    }
+
     /// Verifies the rows against `commit` at the verifier-derived `indices`.
     ///
     /// The multiproof binds each row to its index,
@@ -151,46 +173,13 @@ impl<T: Send + Sync + Clone, P> MultiOpening<T, P> {
     }
 }
 
-/// Opens a single-matrix commitment and packages the rows as a [`MultiOpening`].
-pub(crate) trait OpenMultiRows<T: Send + Sync + Clone>: MultiOpeningMmcs<T> {
-    /// Opens `indices` on a commitment holding exactly one matrix.
-    fn open_rows<M: Matrix<T>>(
-        &self,
-        indices: &[usize],
-        prover_data: &Self::ProverData<M>,
-    ) -> MultiOpening<T, Self::MultiProof>;
-}
-
-impl<T: Send + Sync + Clone, MT: MultiOpeningMmcs<T>> OpenMultiRows<T> for MT {
-    fn open_rows<M: Matrix<T>>(
-        &self,
-        indices: &[usize],
-        prover_data: &Self::ProverData<M>,
-    ) -> MultiOpening<T, Self::MultiProof> {
-        let (values, proof) = self.open_multi_batch(indices, prover_data);
-        let rows = values
-            .into_iter()
-            .map(|mut per_matrix| {
-                // WHIR commits a single matrix per round, so each query opens one row.
-                assert_eq!(
-                    per_matrix.len(),
-                    1,
-                    "WHIR opens commitments holding exactly one matrix"
-                );
-                per_matrix.swap_remove(0)
-            })
-            .collect();
-        MultiOpening { rows, proof }
-    }
-}
-
-/// Field-tagged multi-opening for one queried oracle.
+/// Field-tagged shared-proof opening for one queried oracle.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum QueryOpenings<F, EF, P> {
     /// Base-field rows (the initial commitment).
-    Base(MultiOpening<F, P>),
+    Base(SharedProofOpening<F, P>),
     /// Extension-field rows (every folded round commitment).
-    Extension(MultiOpening<EF, P>),
+    Extension(SharedProofOpening<EF, P>),
 }
 
 impl<F: Default + Send + Sync + Clone, EF: Default, MT: MultiOpeningMmcs<F>> WhirProof<F, EF, MT> {

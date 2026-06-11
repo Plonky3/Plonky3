@@ -12,7 +12,7 @@ use p3_util::log2_strict_usize;
 
 use super::config::BaseCaseZkConfig;
 use super::error::BaseCaseZkError;
-use crate::pcs::proof::{MultiOpening, QueryOpenings};
+use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
 use crate::pcs::utils::get_challenge_stir_queries;
 use crate::pcs::zk::proof::BaseCaseZkProof;
 use crate::utils::padded_ood_t1;
@@ -316,7 +316,7 @@ where
         commitment: &MT::Commitment,
         dims: &[Dimensions],
         positions: &[usize],
-        opening: &'p MultiOpening<EF, MT::MultiProof>,
+        opening: &'p SharedProofOpening<EF, MT::MultiProof>,
         width: usize,
         kind: &'static str,
     ) -> Result<&'p [Vec<EF>], BaseCaseZkError> {

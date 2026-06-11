@@ -371,7 +371,13 @@ where
         // A variant that disagrees with the round is malformed.
         match (openings, round_index == 0) {
             (QueryOpenings::Base(opening), true) => {
-                self.check_query_count(opening.rows.len(), indices.len(), round_index)?;
+                if opening.rows.len() != indices.len() {
+                    return Err(VerifierError::StirQueryCountMismatch {
+                        round_index,
+                        expected: indices.len(),
+                        actual: opening.rows.len(),
+                    });
+                }
                 opening
                     .verify(self.mmcs, root, dimensions, indices)
                     .map_err(|_| VerifierError::MerkleProofInvalid {
@@ -385,7 +391,13 @@ where
                     .collect())
             }
             (QueryOpenings::Extension(opening), false) => {
-                self.check_query_count(opening.rows.len(), indices.len(), round_index)?;
+                if opening.rows.len() != indices.len() {
+                    return Err(VerifierError::StirQueryCountMismatch {
+                        round_index,
+                        expected: indices.len(),
+                        actual: opening.rows.len(),
+                    });
+                }
                 let extension_mmcs = ExtensionMmcs::new(self.mmcs);
                 opening
                     .verify(&extension_mmcs, root, dimensions, indices)
@@ -399,24 +411,6 @@ where
                 position: 0,
                 reason: format!("Query openings field does not match round {round_index}"),
             }),
-        }
-    }
-
-    /// Reject a round whose opening count disagrees with the sampled queries.
-    const fn check_query_count(
-        &self,
-        actual: usize,
-        expected: usize,
-        round_index: usize,
-    ) -> Result<(), VerifierError> {
-        if actual == expected {
-            Ok(())
-        } else {
-            Err(VerifierError::StirQueryCountMismatch {
-                round_index,
-                expected,
-                actual,
-            })
         }
     }
 }

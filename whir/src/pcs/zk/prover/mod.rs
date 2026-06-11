@@ -33,7 +33,7 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 use tracing::instrument;
 
-use crate::pcs::proof::{OpenMultiRows, QueryOpenings};
+use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
 use crate::pcs::utils::get_challenge_stir_queries;
 use crate::pcs::zk::base_case::{BaseCaseZkConfig, BaseCaseZkProver, MaskGroupWitness};
 use crate::pcs::zk::code_switch::{ZkMaskClaim, switch_mask_covector};
@@ -523,7 +523,7 @@ where
     ) -> (QueryOpenings<F, EF, MT::MultiProof>, Vec<EF>) {
         match round_data {
             ZkRoundData::Base(data) => {
-                let opening = self.mmcs.open_rows(indices, data);
+                let opening = SharedProofOpening::open(self.mmcs, indices, data);
                 let folded = opening
                     .rows
                     .iter()
@@ -532,7 +532,7 @@ where
                 (QueryOpenings::Base(opening), folded)
             }
             ZkRoundData::Ext(data) => {
-                let opening = self.extension_mmcs.open_rows(indices, data);
+                let opening = SharedProofOpening::open(&self.extension_mmcs, indices, data);
                 let folded = opening
                     .rows
                     .iter()

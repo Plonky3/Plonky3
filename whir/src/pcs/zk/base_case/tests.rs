@@ -22,7 +22,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use super::*;
-use crate::pcs::proof::{OpenMultiRows, QueryOpenings};
+use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
 use crate::pcs::zk::committer::FoldedRsCode;
 use crate::pcs::zk::mask::{MaskCodeShape, MaskGroupShape};
 use crate::pcs::zk::proof::BaseCaseZkProof;
@@ -181,7 +181,13 @@ fn honest_run(
         &source_randomness,
         &source_covector,
         &witnesses,
-        |positions| QueryOpenings::Extension(extension_mmcs.open_rows(positions, &source_data)),
+        |positions| {
+            QueryOpenings::Extension(SharedProofOpening::open(
+                &extension_mmcs,
+                positions,
+                &source_data,
+            ))
+        },
         &mut prover_challenger,
         &mut rng,
     );
@@ -305,10 +311,10 @@ fn base_case_rejects_tampered_blinded_randomness() {
         &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
     )
     .unwrap_err();
-    // The randomness reveal is absorbed before the spot positions are drawn,
-    // so the verifier samples different positions than the proof was built for.
-    // The source multiproof then opens leaves the verifier never asked for,
-    // and its index binding rejects the whole opening.
+    // Why: the randomness reveal is absorbed before the spot positions are drawn.
+    //   verifier samples positions != the ones the proof was built for
+    //   -> the source multiproof opens leaves the verifier never asked for
+    //   -> index binding rejects the opening
     assert_eq!(err, BaseCaseZkError::SourceOpeningsRejected);
 }
 

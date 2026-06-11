@@ -6,7 +6,7 @@ use p3_commit::MultiOpeningMmcs;
 use p3_sumcheck::zk::ZkSumcheckData;
 use serde::{Deserialize, Serialize};
 
-use crate::pcs::proof::{MultiOpening, QueryOpenings};
+use crate::pcs::proof::{QueryOpenings, SharedProofOpening};
 
 /// Complete HVZK-WHIR opening proof.
 #[derive(Serialize, Deserialize, Clone)]
@@ -74,7 +74,7 @@ pub struct BaseCaseZkProof<F: Send + Sync + Clone, EF, MT: MultiOpeningMmcs<F>> 
     /// Spot-check openings of the (virtual) source oracle, i.e. leaves of the last committed oracle.
     pub source_openings: QueryOpenings<F, EF, MT::MultiProof>,
     /// Spot-check openings of the fresh main mask `g` at the same positions.
-    pub fresh_main_openings: MultiOpening<EF, MT::MultiProof>,
+    pub fresh_main_openings: SharedProofOpening<EF, MT::MultiProof>,
     /// Per group: paired openings of the carried oracle and its fresh blind.
     /// Each opened row spans the whole group.
     pub mask_openings: Vec<MaskOpeningPair<EF, MT::MultiProof>>,
@@ -100,7 +100,7 @@ pub struct BlindedMask<EF> {
 ))]
 pub struct MaskOpeningPair<EF, P> {
     /// Openings of the carried mask oracle `xi_i`.
-    pub carried: MultiOpening<EF, P>,
+    pub carried: SharedProofOpening<EF, P>,
     /// Openings of the fresh blind `s'_i`.
-    pub fresh: MultiOpening<EF, P>,
+    pub fresh: SharedProofOpening<EF, P>,
 }
