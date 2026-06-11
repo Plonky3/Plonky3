@@ -245,7 +245,6 @@ pub trait MultiOpeningMmcs<T: Send + Sync + Clone>: Mmcs<T> {
     ) -> Result<(), Self::Error>;
 }
 
-/// Lets a shared reference be used wherever an owned [`MultiOpeningMmcs`] is expected.
 impl<T: Send + Sync + Clone, M: MultiOpeningMmcs<T>> MultiOpeningMmcs<T> for &M {
     type MultiProof = M::MultiProof;
 
