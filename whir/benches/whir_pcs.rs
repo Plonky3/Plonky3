@@ -325,10 +325,10 @@ impl<L: Layout<F, EF>> Bench<L> {
             .expect("proof serializes")
             .len();
 
-        // Per round, the pruned multiproof ships only un-shared siblings.
-        // The first sorted path keeps every sibling (it shares nothing above),
-        // so its length is the full root-to-leaf path length for that round —
-        // the per-query cost an unpruned proof would have paid.
+        // Why: the first sorted path shares nothing above it, so it keeps every sibling.
+        //   paths[0].siblings.len() = full root-to-leaf path length
+        //   full   = queries * that length   (the unpruned per-query cost)
+        //   pruned = sum over paths of siblings.len()
         let round_stats =
             |openings: &QueryOpenings<F, EF, <Mmcs as MultiOpeningMmcs<F>>::MultiProof>| {
                 let paths = match openings {
@@ -464,9 +464,9 @@ fn bench_options(c: &mut Criterion) {
 
 /// Print a proof-size and Merkle-pruning report across the scaling sizes.
 ///
-/// This is not a timed benchmark: the numbers are deterministic per config.
-/// It runs as a criterion group so `cargo bench` surfaces it alongside the
-/// timing groups, and prints a fixed table to stdout.
+/// Not a timed benchmark: the numbers are deterministic per config.
+/// Runs as a criterion group so `cargo bench` surfaces it with the timing groups.
+/// Prints a fixed table to stderr.
 fn report_proof_size(_c: &mut Criterion) {
     type L = SuffixProver<F, EF>;
     let cases = [("small", SMALL), ("medium", MEDIUM), ("large", LARGE)];

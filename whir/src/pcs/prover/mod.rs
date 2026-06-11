@@ -244,9 +244,8 @@ where
             VariableOrder::Suffix => round_state.folding_randomness.reversed(),
         };
 
-        // Open all queried positions in one multiproof and evaluate each
-        // folded row. The rows are borrowed from the opening for the fold,
-        // then the same allocations travel into the proof.
+        // Open all queried positions in one multiproof.
+        // Each row folds in place; the same allocation then travels into the proof.
         let openings = match &round_state.round_data {
             RoundData::Base(data) => {
                 let mut opening = MultiOpening::open(&self.mmcs, &stir_challenges_indexes, data);
