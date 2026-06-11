@@ -5,6 +5,7 @@ use p3_field::extension::ComplexExtendable;
 use p3_field::{
     ExtensionField, Field, PackedValue, PrimeCharacteristicRing, batch_multiplicative_inverse,
 };
+use p3_maybe_rayon::prelude::*;
 
 /// Affine representation of a point on the circle.
 /// x^2 + y^2 == 1
@@ -143,30 +144,31 @@ pub fn compute_lagrange_den_batched<F: Field, EF: ExtensionField<F>>(
             let exp = (2 * log_n - 1) as u64;
             let iters = log_n - 2;
             let width = F::Packing::WIDTH;
+            let packed_len = (points.len() / width) * width;
 
-            let mut chunks = points.chunks_exact(width);
-            let mut offset = 0;
-            for chunk in &mut chunks {
-                // Seed the running product with the x-coordinates of the lane.
-                let mut cur = F::Packing::from_fn(|l| chunk[l].x);
-                let mut output = cur;
+            s_p[..packed_len]
+                .par_chunks_exact_mut(width)
+                .zip(points.par_chunks_exact(width))
+                .for_each(|(slots, chunk)| {
+                    // Seed the running product with the x-coordinates of the lane.
+                    let mut cur = F::Packing::from_fn(|l| chunk[l].x);
+                    let mut output = cur;
 
-                // Fold in each squaring-chain step `x -> 2 x^2 - 1`.
-                for _ in 0..iters {
-                    cur = cur.square().double() - F::Packing::ONE;
-                    output *= cur;
-                }
+                    // Fold in each squaring-chain step `x -> 2 x^2 - 1`.
+                    for _ in 0..iters {
+                        cur = cur.square().double() - F::Packing::ONE;
+                        output *= cur;
+                    }
 
-                // Close the formula: scale by the power of two and the y-coordinate.
-                let ys = F::Packing::from_fn(|l| chunk[l].y);
-                let packed_s_p = -(output.mul_2exp_u64(exp) * ys);
+                    // Close the formula: scale by the power of two and the y-coordinate.
+                    let ys = F::Packing::from_fn(|l| chunk[l].y);
+                    let packed_s_p = -(output.mul_2exp_u64(exp) * ys);
 
-                s_p[offset..offset + width].copy_from_slice(packed_s_p.as_slice());
-                offset += width;
-            }
+                    slots.copy_from_slice(packed_s_p.as_slice());
+                });
 
             // Trailing points below one full lane fall back to the scalar formula.
-            for (slot, &pt) in s_p[offset..].iter_mut().zip(chunks.remainder()) {
+            for (slot, &pt) in s_p[packed_len..].iter_mut().zip(&points[packed_len..]) {
                 *slot = pt.s_p_at_p(log_n);
             }
         }
@@ -175,7 +177,7 @@ pub fn compute_lagrange_den_batched<F: Field, EF: ExtensionField<F>>(
 
     // Pair each numerator with its denominator before inverting.
     let (numer, denom): (Vec<_>, Vec<_>) = points
-        .iter()
+        .par_iter()
         .zip(&s_p)
         .map(|(&pt, &s_p)| {
             let diff = at - pt;
@@ -190,8 +192,8 @@ pub fn compute_lagrange_den_batched<F: Field, EF: ExtensionField<F>>(
 
     // Recombine each numerator with its inverted denominator.
     numer
-        .iter()
-        .zip(inv_d.iter())
+        .par_iter()
+        .zip(inv_d.par_iter())
         .map(|(&num, &inv_d)| num * inv_d)
         .collect()
 }

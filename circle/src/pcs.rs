@@ -10,28 +10,30 @@ use p3_commit::{
     PeriodicLdeTable, PolynomialSpace,
 };
 use p3_field::extension::ComplexExtendable;
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, dot_product};
 use p3_fri::FriParameters;
 use p3_fri::verifier::FriError;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow};
 use p3_matrix::row_index_mapped::RowIndexMappedView;
 use p3_matrix::{Dimensions, Matrix};
-use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use p3_util::zip_eq::zip_eq;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::info_span;
 
-use crate::deep_quotient::{deep_quotient_reduce_row, extract_lambda};
+use crate::deep_quotient::{
+    VanishingParts, accumulate_deep_quotient, compute_vanishing_parts, deep_quotient_reduce_row,
+    extract_lambda,
+};
 use crate::domain::CircleDomain;
 use crate::folding::{CircleFriFolding, CircleFriFoldingForMmcs, fold_y, fold_y_row};
-use crate::point::Point;
+use crate::point::{Point, compute_lagrange_den_batched};
 use crate::prover::prove;
 use crate::verifier::verify;
 use crate::{
     CfftPerm, CfftPermutable, CircleEvaluations, CircleFriProof, build_periodic_lde_table_circle,
-    cfft_permute_index,
+    cfft_permute_index, cfft_permute_slice,
 };
 
 #[derive(Clone, Debug)]
@@ -206,6 +208,26 @@ where
         )>,
         challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
+        // Materialize the CFFT-ordered domain points once per committed height. They are shared
+        // by the Lagrange denominators and the DEEP-quotient vanishing parts below, which are in
+        // turn shared by every matrix opened at the same point on the same domain.
+        let mut permuted_points: BTreeMap<usize, Vec<Point<Val>>> = BTreeMap::new();
+        info_span!("materialize domain points").in_scope(|| {
+            for (data, _) in &rounds {
+                for mat in self.mmcs.get_matrices(data) {
+                    let log_height = log2_strict_usize(mat.height());
+                    permuted_points.entry(log_height).or_insert_with(|| {
+                        cfft_permute_slice(
+                            &CircleDomain::standard(log_height).points().collect_vec(),
+                        )
+                    });
+                }
+            }
+        });
+
+        // (log_height, point) -> Lagrange denominators.
+        let mut lagrange_dens: Vec<((usize, Challenge), Vec<Challenge>)> = vec![];
+
         // Open matrices at points
         let values: OpenedValues<Challenge> = rounds
             .iter()
@@ -224,21 +246,63 @@ where
                             CircleDomain::standard(log_height),
                             mat.as_view(),
                         );
-                        points_for_mat
+
+                        // Resolve the Lagrange denominators for every point up front.
+                        let den_idxs = points_for_mat
                             .iter()
-                            .map(|&zeta| {
-                                let zeta = Point::from_projective_line(zeta);
-                                let ps_at_zeta =
-                                    info_span!("compute opened values with Lagrange interpolation")
-                                        .in_scope(|| evals.evaluate_at_point(zeta));
-                                challenger.observe_algebra_slice(&ps_at_zeta);
-                                ps_at_zeta
+                            .map(|&zeta_uni| {
+                                let key = (log_height, zeta_uni);
+                                lagrange_dens
+                                    .iter()
+                                    .position(|(k, _)| *k == key)
+                                    .unwrap_or_else(|| {
+                                        let den = info_span!("compute Lagrange denominators")
+                                            .in_scope(|| {
+                                                compute_lagrange_den_batched(
+                                                    &permuted_points[&log_height],
+                                                    Point::from_projective_line(zeta_uni),
+                                                    log_height,
+                                                )
+                                            });
+                                        lagrange_dens.push((key, den));
+                                        lagrange_dens.len() - 1
+                                    })
                             })
-                            .collect()
+                            .collect_vec();
+
+                        let ps_for_points: Vec<Vec<Challenge>> =
+                            info_span!("compute opened values with Lagrange interpolation")
+                                .in_scope(|| match (&points_for_mat[..], &den_idxs[..]) {
+                                    // A matrix opened at two points (e.g. zeta and zeta_next)
+                                    // is traversed once for both.
+                                    (&[zeta_0, zeta_1], &[idx_0, idx_1]) => evals
+                                        .evaluate_at_two_points_with_dens(
+                                            [
+                                                Point::from_projective_line(zeta_0),
+                                                Point::from_projective_line(zeta_1),
+                                            ],
+                                            [&lagrange_dens[idx_0].1, &lagrange_dens[idx_1].1],
+                                        )
+                                        .into(),
+                                    _ => izip!(points_for_mat, &den_idxs)
+                                        .map(|(&zeta_uni, &den_idx)| {
+                                            evals.evaluate_at_point_with_den(
+                                                Point::from_projective_line(zeta_uni),
+                                                &lagrange_dens[den_idx].1,
+                                            )
+                                        })
+                                        .collect(),
+                                });
+
+                        for ps_at_zeta in &ps_for_points {
+                            challenger.observe_algebra_slice(ps_at_zeta);
+                        }
+                        ps_for_points
                     })
                     .collect()
             })
             .collect();
+        drop(lagrange_dens);
 
         // Batch combination challenge
         let alpha: Challenge = challenger.sample_algebra_element();
@@ -255,6 +319,9 @@ where
 
         // log_height -> (alpha offset, reduced openings column)
         let mut reduced_openings: BTreeMap<usize, (Challenge, Vec<Challenge>)> = BTreeMap::new();
+
+        // (log_height, point) -> DEEP-quotient vanishing parts.
+        let mut vanishing_parts: Vec<((usize, Challenge), VanishingParts<Challenge>)> = vec![];
 
         rounds
             .iter()
@@ -273,28 +340,49 @@ where
                         .entry(log_height)
                         .or_insert_with(|| (Challenge::ONE, Challenge::zero_vec(1 << log_height)));
 
+                    // The only pass over the matrix; it does not depend on the opening points.
+                    let reduced_rows = evals.rowwise_alpha_reduce(alpha);
+                    let alpha_pow_width = alpha.exp_u64(evals.values.width() as u64);
+
                     points_for_mat
                         .iter()
                         .zip(values.iter())
-                        .for_each(|(&zeta, ps_at_zeta)| {
-                            let zeta = Point::from_projective_line(zeta);
-
-                            // Reduce this matrix, as a deep quotient, into one column with powers of α.
-                            let mat_ros = evals.deep_quotient_reduce(alpha, zeta, ps_at_zeta);
-
-                            // Fold it into our running reduction, offset by alpha_offset.
-                            reduced_opening_for_log_height
-                                .par_iter_mut()
-                                .zip(mat_ros)
-                                .for_each(|(ro, mat_ro)| {
-                                    *ro += *alpha_offset * mat_ro;
+                        .for_each(|(&zeta_uni, ps_at_zeta)| {
+                            let zeta = Point::from_projective_line(zeta_uni);
+                            let key = (log_height, zeta_uni);
+                            let vp_idx = vanishing_parts
+                                .iter()
+                                .position(|(k, _)| *k == key)
+                                .unwrap_or_else(|| {
+                                    let vp = compute_vanishing_parts(
+                                        &permuted_points[&log_height],
+                                        zeta,
+                                    );
+                                    vanishing_parts.push((key, vp));
+                                    vanishing_parts.len() - 1
                                 });
 
+                            // sum_j(alpha^j * p_j[zeta]), the same for all rows.
+                            let reduced_ps_at_zeta: Challenge =
+                                dot_product(alpha.powers(), ps_at_zeta.iter().copied());
+
+                            // Reduce this matrix, as a deep quotient, into the running
+                            // reduction, offset by alpha_offset.
+                            accumulate_deep_quotient(
+                                reduced_opening_for_log_height,
+                                *alpha_offset,
+                                alpha_pow_width,
+                                &reduced_rows,
+                                &vanishing_parts[vp_idx].1,
+                                reduced_ps_at_zeta,
+                            );
+
                             // Update alpha_offset from α^i -> α^(i + 2 * width)
-                            *alpha_offset *= alpha.exp_u64(2 * evals.values.width() as u64);
+                            *alpha_offset *= alpha_pow_width.square();
                         });
                 });
             });
+        drop(vanishing_parts);
 
         // Iterate over our reduced columns and extract lambda - the multiple of the vanishing polynomial
         // which may appear in the reduced quotient due to CFFT dimension gap.

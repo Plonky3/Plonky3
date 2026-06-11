@@ -199,7 +199,7 @@ where
         let mut randomness = self.replay_sumcheck_batch(
             proof,
             0,
-            config.folding_factor(0),
+            config.round_folding_factor(0),
             config.starting_folding_pow_bits,
             &mut target,
             &mut source,
@@ -208,14 +208,14 @@ where
         )?;
 
         let mut active = ActiveOracle::Base(commitment);
-        let mut num_variables = config.num_variables - config.folding_factor(0);
+        let mut num_variables = config.num_variables - config.round_folding_factor(0);
 
         // Code-switching rounds.
         for round in 0..n_rounds {
             let round_params = &config.round_parameters[round];
             let round_proof = &proof.rounds[round];
-            let folding = config.folding_factor(round);
-            let folding_next = config.folding_factor(round + 1);
+            let folding = config.round_folding_factor(round);
+            let folding_next = config.round_folding_factor(round + 1);
 
             // New oracle and code-switch mask commitments.
             let new_commitment = &round_proof.commitment;

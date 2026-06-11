@@ -42,13 +42,14 @@ pub(crate) fn challenger() -> MyChallenger {
 }
 
 fn default_round_log_inv_rates(num_variables: usize, folding_factor: &FoldingFactor) -> Vec<usize> {
-    let (num_rounds, _) = folding_factor
-        .compute_number_of_rounds(num_variables)
+    let folding_schedule = folding_factor
+        .compute_folding_schedule(num_variables)
         .expect("valid folding schedule");
+    let num_rounds = folding_schedule.len() - 1;
     let mut rates = Vec::with_capacity(num_rounds);
     let mut rate = 1;
-    for round in 0..num_rounds {
-        rate += folding_factor.at_round(round) - 1;
+    for &folding in folding_schedule.iter().take(num_rounds) {
+        rate += folding - 1;
         rates.push(rate);
     }
     rates
@@ -231,6 +232,30 @@ fn test_whir_end_to_end() {
         );
         run_whir_pcs::<SuffixProver<F, EF>>(specs, folding_factor, soundness_type, pow_bits);
     }
+}
+
+#[test]
+fn test_whir_end_to_end_partial_final_fold() {
+    // Regression for Constant(8) on 15 variables:
+    // the concrete folding schedule is [8, 7], so prover, verifier, and
+    // transcript shape must all use the smaller final pre-direct fold.
+    let specs = vec![TableSpec::new(
+        TableShape::new(15, 2),
+        vec![vec![0], vec![1]],
+    )];
+
+    run_whir_pcs::<PrefixProver<F, EF>>(
+        &specs,
+        FoldingFactor::Constant(8),
+        SecurityAssumption::UniqueDecoding,
+        0,
+    );
+    run_whir_pcs::<SuffixProver<F, EF>>(
+        &specs,
+        FoldingFactor::Constant(8),
+        SecurityAssumption::UniqueDecoding,
+        0,
+    );
 }
 
 #[test]
