@@ -152,9 +152,6 @@ impl<T: Send + Sync + Clone, P> MultiOpening<T, P> {
 }
 
 /// Opens a single-matrix commitment and packages the rows as a [`MultiOpening`].
-///
-/// Lets callers write `mmcs.open_rows(indices, data)` instead of threading the
-/// mmcs through a free constructor.
 pub(crate) trait OpenMultiRows<T: Send + Sync + Clone>: MultiOpeningMmcs<T> {
     /// Opens `indices` on a commitment holding exactly one matrix.
     fn open_rows<M: Matrix<T>>(
