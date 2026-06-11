@@ -110,6 +110,51 @@ enum MaybePacked<F: Field, EF: ExtensionField<F>> {
     },
 }
 
+/// Borrowed view of a multilinear polynomial in its live representation.
+///
+/// Reads the current evaluations with no scalar copy.
+/// Works directly on the SIMD-packed buffer the prover still holds.
+#[derive(Debug, Clone, Copy)]
+pub enum PolyView<'a, F: Field, EF: ExtensionField<F>> {
+    /// SIMD-packed evaluations; each element holds `F::Packing::WIDTH` lanes.
+    Packed(&'a Poly<EF::ExtensionPacking>),
+    /// Scalar evaluations.
+    Scalar(&'a Poly<EF>),
+}
+
+impl<F: Field, EF: ExtensionField<F>> PolyView<'_, F, EF> {
+    /// Returns the logical number of variables, accounting for SIMD packing.
+    pub const fn num_variables(&self) -> usize {
+        match self {
+            Self::Packed(poly) => poly.num_variables() + log2_strict_usize(F::Packing::WIDTH),
+            Self::Scalar(poly) => poly.num_variables(),
+        }
+    }
+
+    /// Returns the logical number of evaluations, `2^num_variables`.
+    pub const fn num_evals(&self) -> usize {
+        1 << self.num_variables()
+    }
+
+    /// Writes all logical evaluations into `out` in index order.
+    ///
+    /// # Panics
+    ///
+    /// The output length must equal [`Self::num_evals`].
+    pub fn unpack_into(&self, out: &mut [EF]) {
+        assert_eq!(out.len(), self.num_evals());
+        match self {
+            Self::Packed(poly) => {
+                let lanes = EF::ExtensionPacking::to_ext_iter(poly.iter().copied());
+                for (slot, value) in out.iter_mut().zip(lanes) {
+                    *slot = value;
+                }
+            }
+            Self::Scalar(poly) => out.copy_from_slice(poly.as_slice()),
+        }
+    }
+}
+
 /// Paired evaluation and weight polynomials, tagged by a variable-binding order.
 ///
 /// # Contents
@@ -456,6 +501,16 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
                     *value += d;
                 }
             }
+        }
+    }
+
+    /// Borrows the evaluation polynomial in its live representation.
+    ///
+    /// No unpacking or copying takes place.
+    pub const fn evals_view(&self) -> PolyView<'_, F, EF> {
+        match &self.inner {
+            MaybePacked::Packed { evals, .. } => PolyView::Packed(evals),
+            MaybePacked::Unpacked { evals, .. } => PolyView::Scalar(evals),
         }
     }
 
@@ -1013,6 +1068,70 @@ mod tests {
 
         let extracted = poly.evals();
         assert_eq!(extracted.as_slice(), &[e0, e1, e2, e3]);
+    }
+
+    #[test]
+    fn test_evals_view_scalar() {
+        // A scalar product polynomial must expose a Scalar view
+        // whose unpacking is the identity copy.
+        let values = vec![
+            EF::from_u64(10),
+            EF::from_u64(20),
+            EF::from_u64(30),
+            EF::from_u64(40),
+        ];
+        let evals = Poly::new(values.clone());
+        let weights = Poly::new(vec![EF::ONE; 4]);
+
+        let poly = ProductPolynomial::<F, EF>::new_unpacked(VariableOrder::Prefix, evals, weights);
+
+        let view = poly.evals_view();
+        assert!(matches!(view, PolyView::Scalar(_)));
+        assert_eq!(view.num_variables(), 2);
+        assert_eq!(view.num_evals(), 4);
+
+        // Unpacking the view must reproduce the stored evaluations.
+        let mut out = vec![EF::ZERO; 4];
+        view.unpack_into(&mut out);
+        assert_eq!(out, values);
+    }
+
+    #[test]
+    fn test_evals_view_packed_matches_evals() {
+        // A packed product polynomial must expose a Packed view
+        // whose unpacking equals the full evals() extraction.
+        type EP = <EF as ExtensionField<F>>::ExtensionPacking;
+
+        let simd_width = <F as Field>::Packing::WIDTH;
+        let num_variables = log2_strict_usize(simd_width) + 2;
+        let num_evals = 1 << num_variables;
+
+        let mut rng = SmallRng::seed_from_u64(99);
+        let evals_scalar: Vec<EF> = (0..num_evals).map(|_| EF::from_u64(rng.random())).collect();
+
+        let packed_evals = Poly::new(
+            evals_scalar
+                .chunks(simd_width)
+                .map(EP::from_ext_slice)
+                .collect(),
+        );
+        let packed_weights = Poly::new(vec![EP::ONE; num_evals / simd_width]);
+
+        let poly = ProductPolynomial::<F, EF>::new_packed(
+            VariableOrder::Prefix,
+            packed_evals,
+            packed_weights,
+        );
+
+        let view = poly.evals_view();
+        assert!(matches!(view, PolyView::Packed(_)));
+        assert_eq!(view.num_variables(), num_variables);
+
+        // The view must unpack to the same scalars as the copying extraction.
+        let mut out = vec![EF::ZERO; num_evals];
+        view.unpack_into(&mut out);
+        assert_eq!(out, evals_scalar);
+        assert_eq!(out, poly.evals().into_evals());
     }
 
     #[test]

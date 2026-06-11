@@ -91,8 +91,8 @@ where
     );
 }
 
-/// Ensure that the methods `from_ext_slice`, `to_ext_iter`, `packed_ext_powers` and `packed_ext_powers_capped`
-/// all work as expected.
+/// Ensure that the methods `from_ext_slice`, `to_ext_iter`, `unpack_transpose_into`,
+/// `packed_ext_powers` and `packed_ext_powers_capped` all work as expected.
 pub fn test_packed_extension<F, EF>()
 where
     F: Field,
@@ -108,6 +108,41 @@ where
         EF::ExtensionPacking::to_ext_iter([packed_extension]).collect();
 
     assert_eq!(extension_elements, unpacked_extension);
+
+    // `unpack_transpose_into` must equal a flat unpack followed by a transpose.
+    // Sweep shapes that hit both the blocked fast path and the scalar fallback.
+    for log_width in 0..6 {
+        for log_height in 0..6 {
+            let src_width = 1 << log_width;
+            let len = src_width << log_height;
+            // The packed source needs at least one whole packed element.
+            if len < width {
+                continue;
+            }
+
+            let scalars: Vec<EF> = (0..len).map(|_| rng.random()).collect();
+            let packed: Vec<_> = scalars
+                .chunks(width)
+                .map(EF::ExtensionPacking::from_ext_slice)
+                .collect();
+
+            // Reference: transpose the (src_height x src_width) row-major scalar matrix.
+            let src_height = len / src_width;
+            let mut expected = EF::zero_vec(len);
+            for r in 0..src_height {
+                for c in 0..src_width {
+                    expected[c * src_height + r] = scalars[r * src_width + c];
+                }
+            }
+
+            let mut transposed = EF::zero_vec(len);
+            EF::ExtensionPacking::unpack_transpose_into(&packed, &mut transposed, src_width);
+            assert_eq!(
+                transposed, expected,
+                "transpose mismatch at width 2^{log_width}, height 2^{log_height}",
+            );
+        }
+    }
 
     let base_powers = extension_elements[0].powers().collect_n(10 * width);
 

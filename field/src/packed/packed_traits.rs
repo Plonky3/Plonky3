@@ -489,6 +489,64 @@ pub trait PackedFieldExtension<
             .flat_map(|x| (0..BaseField::Packing::WIDTH).map(move |lane| x.extract(lane)))
     }
 
+    /// Unpacks a packed row-major matrix into its scalar transpose, in one pass.
+    ///
+    /// `src` is a row-major matrix of logical scalars, `src_width` columns wide.
+    /// `WIDTH` consecutive logical scalars share one packed element:
+    ///
+    /// ```text
+    ///     src_logical[i] = src[i / WIDTH].extract(i % WIDTH)
+    /// ```
+    ///
+    /// The scalar transpose lands in `dst`, now `src_height` columns wide:
+    ///
+    /// ```text
+    ///     dst[c * src_height + r] = src_logical[r * src_width + c]
+    /// ```
+    ///
+    /// Every scalar is read once and written once: half the traffic of unpack-then-transpose.
+    ///
+    /// ## Panics
+    /// - `dst.len()` must equal `src.len() * WIDTH`.
+    /// - `src_width` must divide `dst.len()`.
+    fn unpack_transpose_into(src: &[Self], dst: &mut [ExtField], src_width: usize) {
+        let w = BaseField::Packing::WIDTH;
+        assert_eq!(dst.len(), src.len() * w);
+        assert!(
+            dst.len().is_multiple_of(src_width),
+            "src_width must divide the scalar count"
+        );
+        let src_height = dst.len() / src_width;
+
+        // Fast path: both dimensions split into whole `W`-blocks.
+        //   src_width  % W == 0  ->  every row starts on a packed boundary
+        //   src_height % W == 0  ->  every dst run is exactly `W` long, no overrun
+        if w > 1 && src_width.is_multiple_of(w) && src_height.is_multiple_of(w) {
+            let packed_width = src_width / w;
+            // Walk `W x W` scalar blocks; reads stream `W` rows, writes are contiguous runs.
+            for r0 in (0..src_height).step_by(w) {
+                for cp in 0..packed_width {
+                    for l in 0..w {
+                        // Lane `l` of packed (row r0+j, packed-col cp) = src_logical[r0+j][cp*W + l].
+                        // It lands at column `cp*W + l`, row `r0+j`.
+                        let run = &mut dst[(cp * w + l) * src_height + r0..][..w];
+                        for (j, slot) in run.iter_mut().enumerate() {
+                            *slot = src[(r0 + j) * packed_width + cp].extract(l);
+                        }
+                    }
+                }
+            }
+        } else {
+            // Fallback: gather each scalar straight to its transposed slot.
+            for r in 0..src_height {
+                for c in 0..src_width {
+                    let idx = r * src_width + c;
+                    dst[c * src_height + r] = src[idx / w].extract(idx % w);
+                }
+            }
+        }
+    }
+
     /// Similar to `packed_powers`, construct an iterator which returns
     /// powers of `base` packed into `PackedFieldExtension` elements.
     #[must_use]
