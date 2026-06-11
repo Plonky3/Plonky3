@@ -10,7 +10,7 @@ use p3_challenger::DuplexChallenger;
 use p3_commit::{MultiOpeningMmcs, MultilinearPcs};
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
-use p3_field::extension::BinomialExtensionField;
+use p3_field::extension::QuinticTrinomialExtensionField;
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::poly::Poly;
@@ -27,7 +27,7 @@ use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
 type F = KoalaBear;
-type EF = BinomialExtensionField<F, 4>;
+type EF = QuinticTrinomialExtensionField<F>;
 
 type Poseidon16 = Poseidon2KoalaBear<16>;
 type Poseidon24 = Poseidon2KoalaBear<24>;
