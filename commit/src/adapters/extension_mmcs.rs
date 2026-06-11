@@ -80,8 +80,6 @@ where
             .cloned()
             .map(EF::flatten_to_base)
             .collect();
-        // Each extension element flattens into `EF::DIMENSION` base coordinates,
-        // so widths scale by that factor while heights are unchanged.
         let base_dimensions = dimensions
             .iter()
             .map(|dim| Dimensions {
@@ -131,8 +129,6 @@ where
             .iter()
             .map(|rows| rows.iter().cloned().map(EF::flatten_to_base).collect())
             .collect();
-        // Each extension element flattens into `EF::DIMENSION` base coordinates,
-        // so widths scale by that factor while heights are unchanged.
         let base_dimensions = dimensions
             .iter()
             .map(|dim| Dimensions {
