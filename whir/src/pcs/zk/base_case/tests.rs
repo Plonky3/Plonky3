@@ -311,7 +311,7 @@ fn base_case_rejects_tampered_blinded_randomness() {
         &config, &mmcs, &proof, &w, &u, &commits, target, &source, challenger,
     )
     .unwrap_err();
-    // Why: the randomness reveal is absorbed before the spot positions are drawn.
+    // The randomness reveal is absorbed before the spot positions are drawn.
     //   verifier samples positions != the ones the proof was built for
     //   -> the source multiproof opens leaves the verifier never asked for
     //   -> index binding rejects the opening

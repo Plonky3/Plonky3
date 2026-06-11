@@ -322,7 +322,7 @@ impl<L: Layout<F, EF>> Bench<L> {
             .expect("proof serializes")
             .len();
 
-        // Why: the first sorted path shares nothing above it, so it keeps every sibling.
+        // The first sorted path shares nothing above it, so it keeps every sibling.
         //   paths[0].siblings.len() = full root-to-leaf path length
         //   full   = queries * that length   (the unpruned per-query cost)
         //   pruned = sum over paths of siblings.len()
