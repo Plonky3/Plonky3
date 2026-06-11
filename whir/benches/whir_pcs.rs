@@ -113,9 +113,6 @@ fn default_round_log_inv_rates(num_variables: usize, folding_factor: &FoldingFac
 }
 
 /// Size and shape statistics extracted from one honestly-produced proof.
-///
-/// These are deterministic per configuration, so the report is a fixed table
-/// rather than a timed measurement.
 struct ProofStats {
     /// Total serialized proof size, in bytes (postcard encoding).
     proof_bytes: usize,
