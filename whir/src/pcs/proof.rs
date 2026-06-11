@@ -1,6 +1,8 @@
+use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_commit::Mmcs;
+use p3_commit::MultiOpeningMmcs;
+use p3_matrix::{Dimensions, Matrix};
 use p3_multilinear_util::poly::Poly;
 pub use p3_sumcheck::SumcheckData;
 use serde::{Deserialize, Serialize};
@@ -8,10 +10,10 @@ use serde::{Deserialize, Serialize};
 /// Complete WHIR proof.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
-    serialize = "F: Serialize, EF: Serialize, MT::Proof: Serialize",
-    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Proof: Deserialize<'de>"
+    serialize = "F: Serialize, EF: Serialize, MT::MultiProof: Serialize",
+    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::MultiProof: Deserialize<'de>"
 ))]
-pub struct WhirProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
+pub struct WhirProof<F: Send + Sync + Clone, EF, MT: MultiOpeningMmcs<F>> {
     /// Initial OOD evaluations.
     pub initial_ood_answers: Vec<EF>,
     /// Initial sumcheck data.
@@ -22,13 +24,15 @@ pub struct WhirProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     pub final_poly: Option<Poly<EF>>,
     /// Final round PoW witness.
     pub final_pow_witness: F,
-    /// Final round query openings.
-    pub final_queries: Vec<QueryOpening<F, EF, MT::Proof>>,
+    /// Final round STIR query openings.
+    pub final_openings: Option<QueryOpenings<F, EF, MT::MultiProof>>,
     /// Final sumcheck data (if `final_sumcheck_rounds > 0`).
     pub final_sumcheck: Option<SumcheckData<F, EF>>,
 }
 
-impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> Default for WhirProof<F, EF, MT> {
+impl<F: Default + Send + Sync + Clone, EF: Default, MT: MultiOpeningMmcs<F>> Default
+    for WhirProof<F, EF, MT>
+{
     fn default() -> Self {
         Self {
             initial_ood_answers: Vec::new(),
@@ -36,7 +40,7 @@ impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> Default for Whi
             rounds: Vec::new(),
             final_poly: None,
             final_pow_witness: F::default(),
-            final_queries: Vec::new(),
+            final_openings: None,
             final_sumcheck: None,
         }
     }
@@ -65,10 +69,10 @@ impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> Default for Whi
 /// or sumcheck check runs.
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
-    serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::Proof: Serialize",
-    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::Proof: Deserialize<'de>"
+    serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::MultiProof: Serialize",
+    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::MultiProof: Deserialize<'de>"
 ))]
-pub struct PcsProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
+pub struct PcsProof<F: Send + Sync + Clone, EF, MT: MultiOpeningMmcs<F>> {
     /// Proximity transcript: initial commitment, sumcheck rounds, per-round
     /// commitments, STIR query openings, and the final polynomial.
     pub whir: WhirProof<F, EF, MT>,
@@ -80,23 +84,23 @@ pub struct PcsProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
 /// Per-round proof data.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound(
-    serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::Proof: Serialize",
-    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::Proof: Deserialize<'de>"
+    serialize = "F: Serialize, EF: Serialize, MT::Commitment: Serialize, MT::MultiProof: Serialize",
+    deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, MT::Commitment: Deserialize<'de>, MT::MultiProof: Deserialize<'de>"
 ))]
-pub struct WhirRoundProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
+pub struct WhirRoundProof<F: Send + Sync + Clone, EF, MT: MultiOpeningMmcs<F>> {
     /// Round commitment (Merkle root).
     pub commitment: Option<MT::Commitment>,
     /// OOD evaluations for this round.
     pub ood_answers: Vec<EF>,
     /// PoW witness after commitment.
     pub pow_witness: F,
-    /// STIR query openings.
-    pub queries: Vec<QueryOpening<F, EF, MT::Proof>>,
+    /// STIR query openings against the previous round's commitment.
+    pub openings: Option<QueryOpenings<F, EF, MT::MultiProof>>,
     /// Sumcheck data for this round.
     pub sumcheck: SumcheckData<F, EF>,
 }
 
-impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> Default
+impl<F: Default + Send + Sync + Clone, EF: Default, MT: MultiOpeningMmcs<F>> Default
     for WhirRoundProof<F, EF, MT>
 {
     fn default() -> Self {
@@ -104,33 +108,83 @@ impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> Default
             commitment: None,
             ood_answers: Vec::new(),
             pow_witness: F::default(),
-            queries: Vec::new(),
+            openings: None,
             sumcheck: SumcheckData::default(),
         }
     }
 }
 
-/// Merkle opening for a single query position.
+/// Rows opened at many queried positions, plus one proof covering them all.
+///
+/// One multiproof authenticates every row together,
+/// so sibling digests shared between queries travel once.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(
-    bound(
-        serialize = "F: Serialize, EF: Serialize, Proof: Serialize",
-        deserialize = "F: Deserialize<'de>, EF: Deserialize<'de>, Proof: Deserialize<'de>"
-    ),
-    tag = "type"
-)]
-pub enum QueryOpening<F, EF, Proof> {
-    /// Base field opening (initial round).
-    #[serde(rename = "base")]
-    Base { values: Vec<F>, proof: Proof },
-    /// Extension field opening (subsequent rounds).
-    #[serde(rename = "extension")]
-    Extension { values: Vec<EF>, proof: Proof },
+#[serde(bound(
+    serialize = "T: Serialize, P: Serialize",
+    deserialize = "T: Deserialize<'de>, P: Deserialize<'de>"
+))]
+pub struct MultiOpening<T, P> {
+    /// `rows[q]` is the opened leaf row at the `q`-th queried position.
+    pub rows: Vec<Vec<T>>,
+    /// Compact multiproof authenticating every row at once.
+    pub proof: P,
 }
 
-impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> WhirProof<F, EF, MT> {
-    /// Allocate an empty proof sized for the given intermediate-round and final-query counts.
-    pub(crate) fn empty(num_rounds: usize, num_queries: usize) -> Self {
+impl<T: Send + Sync + Clone, P> MultiOpening<T, P> {
+    /// Opens `indices` on a commitment holding exactly one matrix.
+    pub(crate) fn open<MT, M>(mmcs: &MT, indices: &[usize], prover_data: &MT::ProverData<M>) -> Self
+    where
+        MT: MultiOpeningMmcs<T, MultiProof = P>,
+        M: Matrix<T>,
+    {
+        let (values, proof) = mmcs.open_multi_batch(indices, prover_data);
+        let rows = values
+            .into_iter()
+            .map(|mut per_matrix| {
+                // WHIR commits a single matrix per round, so each query opens one row.
+                assert_eq!(
+                    per_matrix.len(),
+                    1,
+                    "WHIR opens commitments holding exactly one matrix"
+                );
+                per_matrix.swap_remove(0)
+            })
+            .collect();
+        Self { rows, proof }
+    }
+
+    /// Verifies the rows against `commit` at the verifier-derived `indices`.
+    ///
+    /// The multiproof binds each row to its index,
+    /// so a row/index count mismatch or a substituted leaf is rejected.
+    pub(crate) fn verify<MT>(
+        &self,
+        mmcs: &MT,
+        commit: &MT::Commitment,
+        dimensions: &[Dimensions],
+        indices: &[usize],
+    ) -> Result<(), MT::Error>
+    where
+        MT: MultiOpeningMmcs<T, MultiProof = P>,
+    {
+        let opened_values: Vec<Vec<Vec<T>>> =
+            self.rows.iter().map(|row| vec![row.clone()]).collect();
+        mmcs.verify_multi_batch(commit, dimensions, indices, &opened_values, &self.proof)
+    }
+}
+
+/// Field-tagged multi-opening for one queried oracle.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum QueryOpenings<F, EF, P> {
+    /// Base-field rows (the initial commitment).
+    Base(MultiOpening<F, P>),
+    /// Extension-field rows (every folded round commitment).
+    Extension(MultiOpening<EF, P>),
+}
+
+impl<F: Default + Send + Sync + Clone, EF: Default, MT: MultiOpeningMmcs<F>> WhirProof<F, EF, MT> {
+    /// Allocate an empty proof sized for the given intermediate-round count.
+    pub(crate) fn empty(num_rounds: usize) -> Self {
         Self {
             initial_ood_answers: Vec::new(),
             initial_sumcheck: SumcheckData::default(),
@@ -138,14 +192,13 @@ impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> WhirProof<F, EF
             rounds: (0..num_rounds).map(|_| WhirRoundProof::default()).collect(),
             final_poly: None,
             final_pow_witness: F::default(),
-            // Reserve space for the final-round STIR query openings.
-            final_queries: Vec::with_capacity(num_queries),
+            final_openings: None,
             final_sumcheck: None,
         }
     }
 }
 
-impl<F: Clone + Send + Sync + Default, EF, MT: Mmcs<F>> WhirProof<F, EF, MT> {
+impl<F: Clone + Send + Sync + Default, EF, MT: MultiOpeningMmcs<F>> WhirProof<F, EF, MT> {
     /// Retrieve the PoW witness at a given round index.
     pub(crate) fn get_pow_after_commitment(&self, round_index: usize) -> Option<F> {
         self.rounds

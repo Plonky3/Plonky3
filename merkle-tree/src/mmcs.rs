@@ -28,7 +28,7 @@ use core::cmp::Reverse;
 use core::marker::PhantomData;
 
 use itertools::Itertools;
-use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
+use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs, MultiOpeningMmcs};
 use p3_field::PackedValue;
 use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
@@ -41,7 +41,7 @@ use crate::MerkleTreeError::{
     WrongWidth,
 };
 use crate::merkle_tree::{padded_len, select_arity_step};
-use crate::pruning::{MerkleAuthPath, prune_paths, restore_paths};
+use crate::pruning::{MerkleAuthPath, PrunedMerklePaths, prune_paths, restore_paths};
 use crate::{MerkleCap, MerkleTree};
 
 /// A Merkle Tree-based commitment scheme for multiple matrices of potentially differing heights.
@@ -206,6 +206,26 @@ pub enum PrunedProofError {
         num_paths: usize,
         /// Number of original queries.
         num_queries: usize,
+    },
+
+    /// The number of verifier-supplied indices differs from the number of openings.
+    #[error("index count mismatch: {num_indices} indices but {num_queries} openings")]
+    IndexCountMismatch {
+        /// Number of indices supplied by the verifier.
+        num_indices: usize,
+        /// Number of openings carried by the proof.
+        num_queries: usize,
+    },
+
+    /// An opening's leaf index disagrees with the verifier-supplied index.
+    #[error("query {query}: proof opens leaf {got}, verifier expected {expected}")]
+    IndexMismatch {
+        /// Position of the query in the verifier's index list.
+        query: usize,
+        /// Leaf index the verifier derived (e.g. from the transcript).
+        expected: usize,
+        /// Leaf index the proof actually opens for this query.
+        got: usize,
     },
 }
 
@@ -717,19 +737,27 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
     /// per query. Mirrors the per-path [`Mmcs::verify_batch`] algorithm but
     /// fans out into level-by-level groups.
     ///
-    /// Takes the opening **by value** to avoid deep-cloning the three-level
-    /// nested opened-values structure on return.
+    /// # Index binding
     ///
-    /// # Returns
+    /// `indices` must come from verifier-side data (e.g. the transcript).
+    /// Each opening is checked to authenticate exactly its supplied index,
+    /// so a proof cannot silently substitute a different leaf.
     ///
-    /// On success, the opened matrix rows for each query (moved, not cloned).
-    /// On failure, a verification error.
+    /// # Arguments
+    ///
+    /// - `commit`         — the Merkle cap the openings must land in.
+    /// - `dimensions`     — verifier-known dimensions of the committed matrices.
+    /// - `indices`        — leaf index for each query, in query order.
+    /// - `opened_values`  — `opened_values[q][m]` is the claimed row of matrix `m` at `indices[q]`.
+    /// - `proof`          — the pruned authentication paths.
     pub fn verify_batch_pruned(
         &self,
         commit: &<Self as Mmcs<P::Value>>::Commitment,
         dimensions: &[Dimensions],
-        pruned_opening: PrunedBatchOpening<P::Value, PW::Value, DIGEST_ELEMS>,
-    ) -> Result<Vec<Vec<Vec<P::Value>>>, MerkleTreeError>
+        indices: &[usize],
+        opened_values: &[Vec<Vec<P::Value>>],
+        proof: &PrunedMerklePaths<PW::Value, DIGEST_ELEMS>,
+    ) -> Result<(), MerkleTreeError>
     where
         P: PackedValue,
         PW: PackedValue,
@@ -762,9 +790,9 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         //   => a valid proof has at most `max_height` unique paths.
         // Reject an oversized count here, using verifier-known `max_height`.
         // Otherwise `restore_paths` expands `n_unique * full_sibling_count` digests first.
-        if pruned_opening.pruned_proof.paths.len() > max_height {
+        if proof.paths.len() > max_height {
             return Err(PrunedProofError::TooManyUniquePaths {
-                got: pruned_opening.pruned_proof.paths.len(),
+                got: proof.paths.len(),
                 max_height,
             }
             .into());
@@ -774,22 +802,31 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         // compact representation. We index siblings level by level during the
         // amortized walk, so we materialize the per-path buffers once and
         // borrow them throughout.
-        let restored = restore_paths(&pruned_opening.pruned_proof, full_sibling_count)?;
+        let restored = restore_paths(proof, full_sibling_count)?;
 
-        let original_order = &pruned_opening.pruned_proof.original_order;
-        let sorted_paths = &pruned_opening.pruned_proof.paths;
+        let original_order = &proof.original_order;
+        let sorted_paths = &proof.paths;
         let n_originals = original_order.len();
         let n_unique = sorted_paths.len();
 
         // Restored length is one entry per original query, by construction.
-        if restored.len() != n_originals || pruned_opening.opened_values.len() != n_originals {
+        if restored.len() != n_originals || opened_values.len() != n_originals {
             return Err(WrongBatchSize);
+        }
+
+        // One verifier-supplied index per opening, in query order.
+        if indices.len() != n_originals {
+            return Err(PrunedProofError::IndexCountMismatch {
+                num_indices: indices.len(),
+                num_queries: n_originals,
+            }
+            .into());
         }
 
         // Empty proof is valid only when no queries were submitted.
         if n_unique == 0 {
             return if n_originals == 0 {
-                Ok(pruned_opening.opened_values)
+                Ok(())
             } else {
                 Err(PrunedProofError::PathQueryCountMismatch {
                     num_paths: 0,
@@ -800,9 +837,11 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         }
 
         // Phase 3: Pick a representative original query for each unique path.
-        // Verify that every original maps to a valid sorted slot and that
-        // duplicates carry identical opened values — otherwise a malicious
-        // prover could collapse two distinct openings into one verified slot.
+        // Verify that every original maps to a valid sorted slot, that the
+        // slot opens exactly the verifier-supplied index, and that duplicates
+        // carry identical opened values — otherwise a malicious prover could
+        // collapse two distinct openings into one verified slot or substitute
+        // a different leaf for a transcript-derived index.
         let mut reps: Vec<Option<usize>> = vec![None; n_unique];
         for (orig_idx, &sorted_idx) in original_order.iter().enumerate() {
             let sorted_idx = sorted_idx as usize;
@@ -813,12 +852,19 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                 }
                 .into());
             }
+            // Index binding: the proof must open the index the verifier asked for.
+            if sorted_paths[sorted_idx].leaf_index != indices[orig_idx] {
+                return Err(PrunedProofError::IndexMismatch {
+                    query: orig_idx,
+                    expected: indices[orig_idx],
+                    got: sorted_paths[sorted_idx].leaf_index,
+                }
+                .into());
+            }
             match reps[sorted_idx] {
                 None => reps[sorted_idx] = Some(orig_idx),
                 Some(rep_idx) => {
-                    if pruned_opening.opened_values[rep_idx]
-                        != pruned_opening.opened_values[orig_idx]
-                    {
+                    if opened_values[rep_idx] != opened_values[orig_idx] {
                         return Err(PrunedProofError::InconsistentDuplicateOpenings {
                             slot: sorted_idx,
                         }
@@ -840,11 +886,11 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         //   contract). A malformed proof reaching this point would otherwise
         //   produce silently wrong groupings later.
         for &rep in &reps {
-            if pruned_opening.opened_values[rep].len() != dimensions.len() {
+            if opened_values[rep].len() != dimensions.len() {
                 return Err(WrongBatchSize);
             }
             // Row boundaries within a flattened leaf hash are only pinned by the widths.
-            check_widths(dimensions, &pruned_opening.opened_values[rep])?;
+            check_widths(dimensions, &opened_values[rep])?;
         }
         for (position, window) in sorted_paths.windows(2).enumerate() {
             if window[0].leaf_index >= window[1].leaf_index {
@@ -897,17 +943,17 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                 self.hash.hash_iter_slices(
                     leaf_matrix_indices
                         .iter()
-                        .map(|&mi| pruned_opening.opened_values[rep][mi].as_slice()),
+                        .map(|&mi| opened_values[rep][mi].as_slice()),
                 )
             })
             .collect();
 
         // Per-group state during the walk:
-        // - `indices[g]`     : layer-local node index for group g
-        // - `lead[g]`        : sorted path whose siblings buffer we read from
-        //                      (any path in the group works; we keep the first)
-        // - `sibling_cursor` : how many sibling slots of `lead[g]` we've used
-        let mut indices: Vec<usize> = sorted_paths.iter().map(|p| p.leaf_index).collect();
+        // - `node_indices[g]` : layer-local node index for group g
+        // - `lead[g]`         : sorted path whose siblings buffer we read from
+        //                       (any path in the group works; we keep the first)
+        // - `sibling_cursor`  : how many sibling slots of `lead[g]` we've used
+        let mut node_indices: Vec<usize> = sorted_paths.iter().map(|p| p.leaf_index).collect();
         let mut lead: Vec<usize> = (0..n_unique).collect();
         let mut sibling_cursor: Vec<usize> = vec![0usize; n_unique];
 
@@ -932,18 +978,18 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
 
             let mut i = 0;
             while i < digests.len() {
-                let parent_idx = indices[i] / step;
+                let parent_idx = node_indices[i] / step;
                 let group_start = parent_idx * step;
 
                 // Find the contiguous range of unique paths in this group.
                 // The sorted-index invariant guarantees the group is contiguous.
                 let mut j = i + 1;
-                while j < digests.len() && indices[j] / step == parent_idx {
+                while j < digests.len() && node_indices[j] / step == parent_idx {
                     j += 1;
                 }
 
                 let lead_path = lead[i];
-                let lead_pos = indices[i] - group_start;
+                let lead_pos = node_indices[i] - group_start;
                 // `restored` is indexed by ORIGINAL query, not sorted slot — map
                 // through `reps` to find any original mapping to this sorted path.
                 // Both originals (when duplicates exist) have identical buffers,
@@ -958,7 +1004,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                 let mut inputs = [default_digest; N];
                 let mut filled = [false; N];
                 for k in i..j {
-                    let pos = indices[k] - group_start;
+                    let pos = node_indices[k] - group_start;
                     inputs[pos] = digests[k];
                     filled[pos] = true;
                 }
@@ -987,7 +1033,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             }
 
             core::mem::swap(&mut digests, &mut new_digests);
-            core::mem::swap(&mut indices, &mut new_indices);
+            core::mem::swap(&mut node_indices, &mut new_indices);
             core::mem::swap(&mut lead, &mut new_lead);
             core::mem::swap(&mut sibling_cursor, &mut new_cursor);
 
@@ -1014,7 +1060,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                     let next_height_digest = self.hash.hash_iter_slices(
                         inject_matrix_indices
                             .iter()
-                            .map(|&mi| pruned_opening.opened_values[rep_orig][mi].as_slice()),
+                            .map(|&mi| opened_values[rep_orig][mi].as_slice()),
                     );
 
                     let inject_inputs: [_; N] = core::array::from_fn(|k| {
@@ -1034,13 +1080,50 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         // Phase 8: Each surviving digest must land inside the cap at its
         // layer-local index. A single mismatch rejects the whole batch.
         for g in 0..digests.len() {
-            let cap_idx = indices[g];
+            let cap_idx = node_indices[g];
             if cap_idx >= commit.num_roots() || commit[cap_idx] != digests[g] {
                 return Err(CapMismatch);
             }
         }
 
-        Ok(pruned_opening.opened_values)
+        Ok(())
+    }
+}
+
+impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize> MultiOpeningMmcs<P::Value>
+    for MerkleTreeMmcs<P, PW, H, C, N, DIGEST_ELEMS>
+where
+    P: PackedValue,
+    PW: PackedValue,
+    H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
+        + CryptographicHasher<P, [PW; DIGEST_ELEMS]>
+        + Sync,
+    C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>
+        + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>
+        + Sync,
+    PW::Value: Eq + Clone,
+    [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
+{
+    type MultiProof = PrunedMerklePaths<PW::Value, DIGEST_ELEMS>;
+
+    fn open_multi_batch<M: Matrix<P::Value>>(
+        &self,
+        indices: &[usize],
+        prover_data: &Self::ProverData<M>,
+    ) -> (Vec<Vec<Vec<P::Value>>>, Self::MultiProof) {
+        let opening = self.open_batch_pruned(indices, prover_data);
+        (opening.opened_values, opening.pruned_proof)
+    }
+
+    fn verify_multi_batch(
+        &self,
+        commit: &Self::Commitment,
+        dimensions: &[Dimensions],
+        indices: &[usize],
+        opened_values: &[Vec<Vec<P::Value>>],
+        proof: &Self::MultiProof,
+    ) -> Result<(), Self::Error> {
+        self.verify_batch_pruned(commit, dimensions, indices, opened_values, proof)
     }
 }
 
@@ -1059,7 +1142,7 @@ pub struct PrunedBatchOpening<T, D, const DIGEST_ELEMS: usize> {
     pub opened_values: Vec<Vec<Vec<T>>>,
 
     /// Compact authentication paths with redundant siblings removed.
-    pub pruned_proof: crate::pruning::PrunedMerklePaths<D, DIGEST_ELEMS>,
+    pub pruned_proof: PrunedMerklePaths<D, DIGEST_ELEMS>,
 }
 
 impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize> Mmcs<P::Value>
@@ -2575,8 +2658,14 @@ mod tests {
             );
         }
 
-        // Verify pruned opening (consumed by value — zero deep-clone).
-        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        // Verify the pruned opening against the transcript-known indices.
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned_opening.opened_values,
+            &pruned_opening.pruned_proof,
+        );
         assert!(result.is_ok(), "pruned verification should succeed");
     }
 
@@ -2593,7 +2682,13 @@ mod tests {
         let indices: Vec<usize> = vec![0, 1, 10, 20, 30, 40, 50, 63];
         let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
 
-        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned_opening.opened_values,
+            &pruned_opening.pruned_proof,
+        );
         assert!(result.is_ok(), "4-ary pruned verification should succeed");
     }
 
@@ -2617,8 +2712,76 @@ mod tests {
             sibling[0] = F::from_u32(999999);
         }
 
-        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned_opening.opened_values,
+            &pruned_opening.pruned_proof,
+        );
         assert!(result.is_err(), "tampered proof should fail verification");
+    }
+
+    #[test]
+    fn pruned_opening_rejects_substituted_index() {
+        // The proof authenticates the prover's leaf indices.
+        // Verification must bind them to the verifier's (transcript-derived) indices,
+        // or a prover could open leaf 15 against a query for leaf 14.
+        let seed = 31u64;
+        let mmcs = make_binary_mmcs(seed);
+
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 16, 4);
+        let dims = vec![mat.dimensions()];
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        // Prover opens leaves [0, 3, 7, 15].
+        let indices: Vec<usize> = vec![0, 3, 7, 15];
+        let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
+
+        // Verifier expected leaf 14 in the last slot.
+        let expected_indices: Vec<usize> = vec![0, 3, 7, 14];
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &expected_indices,
+            &pruned_opening.opened_values,
+            &pruned_opening.pruned_proof,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(MerkleTreeError::MalformedPrunedProof(
+                    PrunedProofError::IndexMismatch {
+                        query: 3,
+                        expected: 14,
+                        got: 15
+                    }
+                ))
+            ),
+            "an opening for a substituted leaf index should be rejected, got {result:?}"
+        );
+
+        // Verifier expected fewer indices than the proof carries.
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices[..3],
+            &pruned_opening.opened_values,
+            &pruned_opening.pruned_proof,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(MerkleTreeError::MalformedPrunedProof(
+                    PrunedProofError::IndexCountMismatch {
+                        num_indices: 3,
+                        num_queries: 4
+                    }
+                ))
+            ),
+            "an index/opening count mismatch should be rejected, got {result:?}"
+        );
     }
 
     #[test]
@@ -2644,7 +2807,13 @@ mod tests {
             pruned_opening.pruned_proof.paths.push(filler.clone());
         }
 
-        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned_opening.opened_values,
+            &pruned_opening.pruned_proof,
+        );
         assert!(
             matches!(
                 result,
@@ -2713,7 +2882,14 @@ mod tests {
         }
 
         let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
-        mmcs.verify_batch_pruned(&commit, &dims, pruned).unwrap();
+        mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned.opened_values,
+            &pruned.pruned_proof,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -2732,7 +2908,14 @@ mod tests {
 
         let indices: Vec<usize> = vec![0, 1, 2, 3, 32, 33, 34, 35];
         let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
-        mmcs.verify_batch_pruned(&commit, &dims, pruned).unwrap();
+        mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned.opened_values,
+            &pruned.pruned_proof,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -2749,7 +2932,14 @@ mod tests {
 
         let indices: Vec<usize> = (0..8).collect();
         let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
-        mmcs.verify_batch_pruned(&commit, &dims, pruned).unwrap();
+        mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned.opened_values,
+            &pruned.pruned_proof,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -2773,7 +2963,13 @@ mod tests {
         pruned.opened_values[2] = different.opened_values;
 
         let err = mmcs
-            .verify_batch_pruned(&commit, &dims, pruned)
+            .verify_batch_pruned(
+                &commit,
+                &dims,
+                &indices,
+                &pruned.opened_values,
+                &pruned.pruned_proof,
+            )
             .expect_err("mismatched duplicate openings must be rejected");
         // The duplicate is leaf index 3, which sorts to unique-path slot 0.
         assert!(matches!(
@@ -2818,7 +3014,14 @@ mod tests {
         let indices: Vec<usize> = vec![3, 7, 15, 23, 31, 47, 55, 63];
 
         let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
-        mmcs.verify_batch_pruned(&commit, &dims, pruned).unwrap();
+        mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned.opened_values,
+            &pruned.pruned_proof,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -2852,7 +3055,14 @@ mod tests {
         let indices: Vec<usize> = vec![0, 7, 15, 31];
 
         let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
-        mmcs.verify_batch_pruned(&commit, &dims, pruned).unwrap();
+        mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned.opened_values,
+            &pruned.pruned_proof,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -2890,7 +3100,14 @@ mod tests {
         let indices: Vec<usize> = vec![1, 5, 17, 33, 50, 63];
 
         let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
-        mmcs.verify_batch_pruned(&commit, &dims, pruned).unwrap();
+        mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned.opened_values,
+            &pruned.pruned_proof,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -2955,13 +3172,19 @@ mod tests {
                     // Subject: amortized verifier on the same set.
                     // Must accept (oracle just did).
                     let pruned = mmcs.open_batch_pruned(&indices, &prover_data);
-                    mmcs.verify_batch_pruned(&commit, &dims, pruned)
-                        .unwrap_or_else(|e| {
-                            panic!(
-                                "amortized pruned verifier failed: \
+                    mmcs.verify_batch_pruned(
+                        &commit,
+                        &dims,
+                        &indices,
+                        &pruned.opened_values,
+                        &pruned.pruned_proof,
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "amortized pruned verifier failed: \
                              height={height} cap={cap_height} trial={trial}: {e:?}"
-                            )
-                        });
+                        )
+                    });
                 }
             }
         }
@@ -2988,7 +3211,13 @@ mod tests {
             "duplicate queries should have identical values"
         );
 
-        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned_opening.opened_values,
+            &pruned_opening.pruned_proof,
+        );
         assert!(result.is_ok());
     }
 
@@ -3006,7 +3235,13 @@ mod tests {
         let indices: Vec<usize> = vec![0, 7, 15, 31];
         let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
 
-        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned_opening.opened_values,
+            &pruned_opening.pruned_proof,
+        );
         assert!(
             result.is_ok(),
             "mixed-height pruned verification should succeed"
@@ -3029,7 +3264,13 @@ mod tests {
         let indices: Vec<usize> = vec![0, 5, 17, 33, 50, 63];
         let pruned_opening = mmcs.open_batch_pruned(&indices, &prover_data);
 
-        let result = mmcs.verify_batch_pruned(&commit, &dims, pruned_opening);
+        let result = mmcs.verify_batch_pruned(
+            &commit,
+            &dims,
+            &indices,
+            &pruned_opening.opened_values,
+            &pruned_opening.pruned_proof,
+        );
         assert!(
             result.is_ok(),
             "4-ary mixed-height pruned verification should succeed"
@@ -3083,8 +3324,14 @@ mod tests {
             }
 
             // Check: the pruned proof must verify against the commitment.
-            mmcs.verify_batch_pruned(&commit, &dims, pruned_opening)
-                .map_err(|e| TestCaseError::fail(format!("{e:?}")))?;
+            mmcs.verify_batch_pruned(
+                &commit,
+                &dims,
+                &indices,
+                &pruned_opening.opened_values,
+                &pruned_opening.pruned_proof,
+            )
+            .map_err(|e| TestCaseError::fail(format!("{e:?}")))?;
         }
 
         #[test]
@@ -3126,8 +3373,14 @@ mod tests {
             }
 
             // Check: pruned proof verifies.
-            mmcs.verify_batch_pruned(&commit, &dims, pruned_opening)
-                .map_err(|e| TestCaseError::fail(format!("{e:?}")))?;
+            mmcs.verify_batch_pruned(
+                &commit,
+                &dims,
+                &indices,
+                &pruned_opening.opened_values,
+                &pruned_opening.pruned_proof,
+            )
+            .map_err(|e| TestCaseError::fail(format!("{e:?}")))?;
         }
 
         #[test]

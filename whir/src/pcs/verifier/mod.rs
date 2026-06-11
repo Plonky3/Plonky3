@@ -2,11 +2,10 @@ use alloc::vec::Vec;
 use alloc::{format, vec};
 use core::fmt::Debug;
 use core::ops::Deref;
-use core::slice::from_ref;
 
 use errors::VerifierError;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpeningRef, ExtensionMmcs, Mmcs};
+use p3_commit::{ExtensionMmcs, MultiOpeningMmcs};
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_multilinear_util::point::Point;
@@ -21,7 +20,7 @@ use super::committer::reader::ParsedCommitment;
 use super::utils::get_challenge_stir_queries;
 use crate::alloc::string::ToString;
 use crate::parameters::{RoundConfig, WhirConfig};
-use crate::pcs::proof::{QueryOpening, WhirProof};
+use crate::pcs::proof::{QueryOpenings, WhirProof};
 
 pub mod errors;
 
@@ -48,7 +47,7 @@ pub struct WhirVerifier<'a, EF, F, MT, Challenger>
 where
     F: Field,
     EF: ExtensionField<F>,
-    MT: Mmcs<F>,
+    MT: MultiOpeningMmcs<F>,
 {
     /// Derived per-protocol parameters and per-round configuration.
     pub(crate) config: &'a WhirConfig<EF, F, Challenger>,
@@ -62,7 +61,7 @@ impl<'a, EF, F, MT, Challenger> WhirVerifier<'a, EF, F, MT, Challenger>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
-    MT: Mmcs<F>,
+    MT: MultiOpeningMmcs<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanSampleUniformBits<F>,
 {
     /// Wraps the verifier-side dependencies into a single replay context.
@@ -343,7 +342,9 @@ where
         ))
     }
 
-    /// Verify Merkle multi-opening proofs at the given indices.
+    /// Verify the Merkle multi-opening of one round at the given indices.
+    ///
+    /// Returns the opened rows lifted to the extension field.
     fn verify_merkle_proof(
         &self,
         proof: &WhirProof<F, EF, MT>,
@@ -352,75 +353,71 @@ where
         dimensions: &[Dimensions],
         round_index: usize,
     ) -> Result<Vec<Vec<EF>>, VerifierError> {
-        let extension_mmcs = ExtensionMmcs::new(self.mmcs);
-
-        let queries = if round_index == self.n_rounds() {
-            &proof.final_queries
+        let openings = if round_index == self.n_rounds() {
+            proof.final_openings.as_ref()
         } else {
-            &proof
+            proof
                 .rounds
                 .get(round_index)
-                .ok_or_else(|| VerifierError::MerkleProofInvalid {
-                    position: 0,
-                    reason: format!("Round {round_index} not found in proof"),
-                })?
-                .queries
+                .and_then(|round| round.openings.as_ref())
         };
+        let openings = openings.ok_or_else(|| VerifierError::MerkleProofInvalid {
+            position: 0,
+            reason: format!("Round {round_index} carries no query openings"),
+        })?;
 
-        if queries.len() != indices.len() {
-            return Err(VerifierError::StirQueryCountMismatch {
+        // Round 0 queries the base-field initial commitment.
+        // Every later round queries a folded extension-field commitment.
+        // A variant that disagrees with the round is malformed.
+        match (openings, round_index == 0) {
+            (QueryOpenings::Base(opening), true) => {
+                self.check_query_count(opening.rows.len(), indices.len(), round_index)?;
+                opening
+                    .verify(self.mmcs, root, dimensions, indices)
+                    .map_err(|_| VerifierError::MerkleProofInvalid {
+                        position: 0,
+                        reason: "Base field Merkle multiproof verification failed".to_string(),
+                    })?;
+                Ok(opening
+                    .rows
+                    .iter()
+                    .map(|row| row.iter().map(|&f| f.into()).collect())
+                    .collect())
+            }
+            (QueryOpenings::Extension(opening), false) => {
+                self.check_query_count(opening.rows.len(), indices.len(), round_index)?;
+                let extension_mmcs = ExtensionMmcs::new(self.mmcs);
+                opening
+                    .verify(&extension_mmcs, root, dimensions, indices)
+                    .map_err(|_| VerifierError::MerkleProofInvalid {
+                        position: 0,
+                        reason: "Extension field Merkle multiproof verification failed".to_string(),
+                    })?;
+                Ok(opening.rows.clone())
+            }
+            _ => Err(VerifierError::MerkleProofInvalid {
+                position: 0,
+                reason: format!("Query openings field does not match round {round_index}"),
+            }),
+        }
+    }
+
+    /// Reject a round whose opening count disagrees with the sampled queries.
+    const fn check_query_count(
+        &self,
+        actual: usize,
+        expected: usize,
+        round_index: usize,
+    ) -> Result<(), VerifierError> {
+        if actual == expected {
+            Ok(())
+        } else {
+            Err(VerifierError::StirQueryCountMismatch {
                 round_index,
-                expected: indices.len(),
-                actual: queries.len(),
-            });
+                expected,
+                actual,
+            })
         }
-
-        let mut results = Vec::with_capacity(indices.len());
-
-        for (&index, query) in indices.iter().zip(queries.iter()) {
-            let values_ef = match query {
-                QueryOpening::Base { values, proof } => {
-                    self.mmcs
-                        .verify_batch(
-                            root,
-                            dimensions,
-                            index,
-                            BatchOpeningRef {
-                                opened_values: from_ref(values),
-                                opening_proof: proof,
-                            },
-                        )
-                        .map_err(|_| VerifierError::MerkleProofInvalid {
-                            position: index,
-                            reason: "Base field Merkle proof verification failed".to_string(),
-                        })?;
-
-                    values.iter().map(|&f| f.into()).collect()
-                }
-                QueryOpening::Extension { values, proof } => {
-                    extension_mmcs
-                        .verify_batch(
-                            root,
-                            dimensions,
-                            index,
-                            BatchOpeningRef {
-                                opened_values: from_ref(values),
-                                opening_proof: proof,
-                            },
-                        )
-                        .map_err(|_| VerifierError::MerkleProofInvalid {
-                            position: index,
-                            reason: "Extension field Merkle proof verification failed".to_string(),
-                        })?;
-
-                    values.clone()
-                }
-            };
-
-            results.push(values_ef);
-        }
-
-        Ok(results)
     }
 }
 
@@ -428,7 +425,7 @@ impl<EF, F, MT, Challenger> Deref for WhirVerifier<'_, EF, F, MT, Challenger>
 where
     F: Field,
     EF: ExtensionField<F>,
-    MT: Mmcs<F>,
+    MT: MultiOpeningMmcs<F>,
 {
     type Target = WhirConfig<EF, F, Challenger>;
 

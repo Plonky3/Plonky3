@@ -10,11 +10,10 @@ mod masks;
 
 use alloc::vec;
 use alloc::vec::Vec;
-use core::slice::from_ref;
 
 use masks::VerifierMasks;
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{BatchOpeningRef, ExtensionMmcs, Mmcs};
+use p3_commit::{ExtensionMmcs, Mmcs, MultiOpeningMmcs};
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_multilinear_util::point::Point;
@@ -29,7 +28,7 @@ use super::code_switch::{CodeSwitchError, ZkMaskClaim, switch_mask_covector};
 use super::config::ZkWhirConfig;
 use super::constraint::SourceClaim;
 use super::proof::ZkWhirProof;
-use crate::pcs::proof::QueryOpening;
+use crate::pcs::proof::QueryOpenings;
 use crate::pcs::utils::get_challenge_stir_queries;
 
 /// Failure modes of the HVZK-WHIR verifier.
@@ -83,9 +82,9 @@ pub enum ZkVerifierError {
     #[error("claimed evaluation count mismatch: expected {expected}, got {actual}")]
     EvalCountMismatch { expected: usize, actual: usize },
 
-    /// A Merkle opening failed to verify.
-    #[error("merkle verification failed at position {position} in round {round}")]
-    MerkleVerificationFailed { round: usize, position: usize },
+    /// A Merkle multi-opening failed to verify.
+    #[error("merkle verification failed in round {round}")]
+    MerkleVerificationFailed { round: usize },
 
     /// A round failed its proof-of-work check.
     #[error("invalid proof-of-work witness in round {round}")]
@@ -120,7 +119,7 @@ impl<'a, EF, F, MT, Challenger> HidingWhirVerifier<'a, EF, F, MT, Challenger>
 where
     F: TwoAdicField,
     EF: ExtensionField<F> + TwoAdicField,
-    MT: Mmcs<F>,
+    MT: MultiOpeningMmcs<F>,
     Challenger: FieldChallenger<F>
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>
@@ -252,34 +251,24 @@ where
                 round_params.num_queries,
                 challenger,
             );
-            if round_proof.queries.len() != stir_indexes.len() {
-                return Err(ZkVerifierError::QueryCountMismatch {
-                    round,
-                    expected: stir_indexes.len(),
-                    actual: round_proof.queries.len(),
-                });
-            }
-
-            // Authenticate the leaves and fold them at the batch randomness.
+            // Authenticate the leaves in one multiproof and fold them at the
+            // batch randomness.
             let dims = vec![Dimensions {
                 height: round_params.domain_size >> folding,
                 width: 1 << folding,
             }];
-            let mut folded_values = Vec::with_capacity(stir_indexes.len());
-            let mut query_points = Vec::with_capacity(stir_indexes.len());
-            for (&index, opening) in stir_indexes.iter().zip(&round_proof.queries) {
-                folded_values.push(self.verify_and_fold_leaf(
-                    &active,
-                    &dims,
-                    index,
-                    opening,
-                    round,
-                    &randomness,
-                )?);
-                query_points.push(EF::from(
-                    round_params.folded_domain_gen.exp_u64(index as u64),
-                ));
-            }
+            let folded_values = self.verify_and_fold_leaves(
+                &active,
+                &dims,
+                &stir_indexes,
+                &round_proof.openings,
+                round,
+                &randomness,
+            )?;
+            let query_points: Vec<EF> = stir_indexes
+                .iter()
+                .map(|&index| EF::from(round_params.folded_domain_gen.exp_u64(index as u64)))
+                .collect();
 
             // Batch the carried claim with the fresh constraints.
             let combination: EF = challenger.sample_algebra_element();
@@ -365,9 +354,16 @@ where
             &masks.claims.covectors,
             &masks.commitments,
             target,
-            |position, opening| {
-                self.verify_and_fold_leaf(&active, &dims, position, opening, n_rounds, &randomness)
-                    .map_err(|_| BaseCaseZkError::SourceOpeningRejected { position })
+            |positions, openings| {
+                self.verify_and_fold_leaves(
+                    &active,
+                    &dims,
+                    positions,
+                    openings,
+                    n_rounds,
+                    &randomness,
+                )
+                .map_err(|_| BaseCaseZkError::SourceOpeningsRejected)
             },
             challenger,
         )?;
@@ -422,72 +418,66 @@ where
         Ok(handoff.randomness)
     }
 
-    /// Authenticates one leaf of the active oracle and folds it at the
-    /// batch randomness.
+    /// Authenticates every leaf of the active oracle in one multiproof and
+    /// folds each at the batch randomness.
     ///
     /// Base-field leaves fold through the mixed-field evaluator, so no lift
     /// to the extension is materialized.
-    #[allow(clippy::too_many_arguments)]
-    fn verify_and_fold_leaf(
+    ///
+    /// The variant must match the oracle: a base oracle carries base rows,
+    /// an extension oracle carries extension rows. A disagreement is rejected.
+    fn verify_and_fold_leaves(
         &self,
         active: &ActiveOracle<'_, MT::Commitment>,
         dims: &[Dimensions],
-        index: usize,
-        opening: &QueryOpening<F, EF, MT::Proof>,
+        indices: &[usize],
+        openings: &QueryOpenings<F, EF, MT::MultiProof>,
         round: usize,
         randomness: &Point<EF>,
-    ) -> Result<EF, ZkVerifierError> {
+    ) -> Result<Vec<EF>, ZkVerifierError> {
         let width = dims.first().map_or(0, |d| d.width);
-        let opened_len = match opening {
-            QueryOpening::Base { values, .. } => values.len(),
-            QueryOpening::Extension { values, .. } => values.len(),
+        let reject = || ZkVerifierError::MerkleVerificationFailed { round };
+
+        // One opened row per sampled index, each of the committed leaf width.
+        let check_shape = |rows: &[usize]| {
+            if rows.len() != indices.len() {
+                return Err(ZkVerifierError::QueryCountMismatch {
+                    round,
+                    expected: indices.len(),
+                    actual: rows.len(),
+                });
+            }
+            if rows.iter().any(|&len| len != width) {
+                return Err(reject());
+            }
+            Ok(())
         };
-        if opened_len != width {
-            return Err(ZkVerifierError::MerkleVerificationFailed {
-                round,
-                position: index,
-            });
-        }
-        match (active, opening) {
-            (ActiveOracle::Base(commitment), QueryOpening::Base { values, proof }) => {
-                self.mmcs
-                    .verify_batch(
-                        commitment,
-                        dims,
-                        index,
-                        BatchOpeningRef {
-                            opened_values: from_ref(values),
-                            opening_proof: proof,
-                        },
-                    )
-                    .map_err(|_| ZkVerifierError::MerkleVerificationFailed {
-                        round,
-                        position: index,
-                    })?;
-                // Mixed-field fold: base leaf at an extension point.
-                Ok(Poly::new(values.clone()).eval_base(randomness))
+
+        match (active, openings) {
+            (ActiveOracle::Base(commitment), QueryOpenings::Base(opening)) => {
+                check_shape(&opening.rows.iter().map(Vec::len).collect::<Vec<_>>())?;
+                opening
+                    .verify(self.mmcs, commitment, dims, indices)
+                    .map_err(|_| reject())?;
+                // Mixed-field fold: base leaves at an extension point.
+                Ok(opening
+                    .rows
+                    .iter()
+                    .map(|row| Poly::new(row.clone()).eval_base(randomness))
+                    .collect())
             }
-            (ActiveOracle::Ext(commitment), QueryOpening::Extension { values, proof }) => {
-                self.extension_mmcs
-                    .verify_batch(
-                        commitment,
-                        dims,
-                        index,
-                        BatchOpeningRef {
-                            opened_values: from_ref(values),
-                            opening_proof: proof,
-                        },
-                    )
-                    .map_err(|_| ZkVerifierError::MerkleVerificationFailed {
-                        round,
-                        position: index,
-                    })?;
-                Ok(Poly::new(values.clone()).eval_ext::<F>(randomness))
+            (ActiveOracle::Ext(commitment), QueryOpenings::Extension(opening)) => {
+                check_shape(&opening.rows.iter().map(Vec::len).collect::<Vec<_>>())?;
+                opening
+                    .verify(&self.extension_mmcs, commitment, dims, indices)
+                    .map_err(|_| reject())?;
+                Ok(opening
+                    .rows
+                    .iter()
+                    .map(|row| Poly::new(row.clone()).eval_ext::<F>(randomness))
+                    .collect())
             }
-            _ => Err(ZkVerifierError::MerkleVerificationFailed {
-                round,
-                position: index,
-            }),
+            _ => Err(reject()),
         }
     }
 }

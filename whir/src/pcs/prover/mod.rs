@@ -1,9 +1,10 @@
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+use core::mem;
 use core::ops::Deref;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{ExtensionMmcs, Mmcs};
+use p3_commit::{ExtensionMmcs, Mmcs, MultiOpeningMmcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::DenseMatrix;
@@ -19,7 +20,7 @@ use tracing::instrument;
 use crate::fiat_shamir::domain_separator::DomainSeparator;
 use crate::parameters::WhirConfig;
 use crate::pcs::committer::writer::commit_extension;
-use crate::pcs::proof::{QueryOpening, SumcheckData, WhirProof};
+use crate::pcs::proof::{MultiOpening, QueryOpenings, SumcheckData, WhirProof};
 use crate::pcs::utils::get_challenge_stir_queries;
 
 /// Per-round prover state with the Merkle authentication shapes
@@ -101,7 +102,7 @@ where
     EF: ExtensionField<F> + TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
     Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F> + CanSampleUniformBits<F>,
-    MT: Mmcs<F>,
+    MT: MultiOpeningMmcs<F>,
     L: Layout<F, EF>,
 {
     /// Builds a prover from a derived config, an FFT engine, and a base-field MMCS.
@@ -239,63 +240,41 @@ where
         );
 
         let mut stir_statement = SelectStatement::initialize(num_variables);
-        let mut queries = Vec::with_capacity(stir_challenges_indexes.len());
         let query_randomness = match variable_order {
             VariableOrder::Prefix => round_state.folding_randomness.clone(),
             VariableOrder::Suffix => round_state.folding_randomness.reversed(),
         };
 
-        // Open Merkle proofs and evaluate folded polynomials at each queried position.
-        match &round_state.round_data {
+        // Open all queried positions in one multiproof and evaluate each
+        // folded row. The rows are borrowed from the opening for the fold,
+        // then the same allocations travel into the proof.
+        let openings = match &round_state.round_data {
             RoundData::Base(data) => {
-                for &challenge in &stir_challenges_indexes {
-                    let opening = self.mmcs.open_batch(challenge, data);
-                    // WHIR commits a single matrix per round, so take its one opened row.
-                    let answer = opening
-                        .opened_values
-                        .into_iter()
-                        .next()
-                        .expect("a committed batch opens at least one matrix");
-
-                    // Evaluate the fold by borrowing the row.
-                    // Then hand the same allocation to the proof, with no per-query leaf copy.
-                    let poly = Poly::new(answer);
+                let mut opening = MultiOpening::open(&self.mmcs, &stir_challenges_indexes, data);
+                for (row, &challenge) in opening.rows.iter_mut().zip(&stir_challenges_indexes) {
+                    let poly = Poly::new(mem::take(row));
                     let eval = poly.eval_base(&query_randomness);
                     let var = round_params.folded_domain_gen.exp_u64(challenge as u64);
                     stir_statement.add_constraint(var, eval);
-
-                    queries.push(QueryOpening::Base {
-                        values: poly.into_evals(),
-                        proof: opening.opening_proof,
-                    });
+                    *row = poly.into_evals();
                 }
+                QueryOpenings::Base(opening)
             }
             RoundData::Ext(data) => {
-                for &challenge in &stir_challenges_indexes {
-                    let opening = self.extension_mmcs.open_batch(challenge, data);
-                    // WHIR commits a single matrix per round, so take its one opened row.
-                    let answer = opening
-                        .opened_values
-                        .into_iter()
-                        .next()
-                        .expect("a committed batch opens at least one matrix");
-
-                    // Evaluate the fold by borrowing the row.
-                    // Then hand the same allocation to the proof, with no per-query leaf copy.
-                    let poly = Poly::new(answer);
+                let mut opening =
+                    MultiOpening::open(&self.extension_mmcs, &stir_challenges_indexes, data);
+                for (row, &challenge) in opening.rows.iter_mut().zip(&stir_challenges_indexes) {
+                    let poly = Poly::new(mem::take(row));
                     let eval = poly.eval_ext::<F>(&query_randomness);
                     let var = round_params.folded_domain_gen.exp_u64(challenge as u64);
                     stir_statement.add_constraint(var, eval);
-
-                    queries.push(QueryOpening::Extension {
-                        values: poly.into_evals(),
-                        proof: opening.opening_proof,
-                    });
+                    *row = poly.into_evals();
                 }
+                QueryOpenings::Extension(opening)
             }
-        }
+        };
 
-        proof.rounds[round_index].queries = queries;
+        proof.rounds[round_index].openings = Some(openings);
 
         let constraint = Constraint::new(
             challenger.sample_algebra_element(),
@@ -344,29 +323,19 @@ where
             challenger,
         );
 
-        // Open Merkle proofs at the queried positions.
-        match &round_state.round_data {
-            RoundData::Base(data) => {
-                for challenge in final_challenge_indexes {
-                    let commitment = self.mmcs.open_batch(challenge, data);
-
-                    proof.final_queries.push(QueryOpening::Base {
-                        values: commitment.opened_values[0].clone(),
-                        proof: commitment.opening_proof,
-                    });
-                }
-            }
-
-            RoundData::Ext(data) => {
-                for challenge in final_challenge_indexes {
-                    let commitment = self.extension_mmcs.open_batch(challenge, data);
-                    proof.final_queries.push(QueryOpening::Extension {
-                        values: commitment.opened_values[0].clone(),
-                        proof: commitment.opening_proof,
-                    });
-                }
-            }
-        }
+        // Open all queried positions in one multiproof.
+        proof.final_openings = Some(match &round_state.round_data {
+            RoundData::Base(data) => QueryOpenings::Base(MultiOpening::open(
+                &self.mmcs,
+                &final_challenge_indexes,
+                data,
+            )),
+            RoundData::Ext(data) => QueryOpenings::Extension(MultiOpening::open(
+                &self.extension_mmcs,
+                &final_challenge_indexes,
+                data,
+            )),
+        });
 
         // Optional final sumcheck.
         if self.final_sumcheck_rounds > 0 {

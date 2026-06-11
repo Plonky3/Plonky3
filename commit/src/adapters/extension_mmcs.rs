@@ -6,7 +6,7 @@ use p3_field::{ExtensionField, Field};
 use p3_matrix::extension::FlatMatrixView;
 use p3_matrix::{Dimensions, Matrix};
 
-use crate::{BatchOpening, BatchOpeningRef, Mmcs};
+use crate::{BatchOpening, BatchOpeningRef, Mmcs, MultiOpeningMmcs};
 
 /// A wrapper to lift an MMCS from a base field `F` to an extension field `EF`.
 ///
@@ -80,13 +80,7 @@ where
             .cloned()
             .map(EF::flatten_to_base)
             .collect();
-        let base_dimensions = dimensions
-            .iter()
-            .map(|dim| Dimensions {
-                width: dim.width * EF::DIMENSION,
-                height: dim.height,
-            })
-            .collect::<Vec<_>>();
+        let base_dimensions = base_dimensions::<EF, F>(dimensions);
         self.inner.verify_batch(
             commit,
             &base_dimensions,
@@ -94,4 +88,62 @@ where
             BatchOpeningRef::new(&opened_base_values, batch_opening.opening_proof),
         )
     }
+}
+
+impl<F, EF, InnerMmcs> MultiOpeningMmcs<EF> for ExtensionMmcs<F, EF, InnerMmcs>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    InnerMmcs: MultiOpeningMmcs<F>,
+{
+    type MultiProof = InnerMmcs::MultiProof;
+
+    fn open_multi_batch<M: Matrix<EF>>(
+        &self,
+        indices: &[usize],
+        prover_data: &Self::ProverData<M>,
+    ) -> (Vec<Vec<Vec<EF>>>, Self::MultiProof) {
+        let (base_values, proof) = self.inner.open_multi_batch(indices, prover_data);
+        let ext_values = base_values
+            .into_iter()
+            .map(|rows| rows.into_iter().map(EF::reconstitute_from_base).collect())
+            .collect();
+        (ext_values, proof)
+    }
+
+    fn verify_multi_batch(
+        &self,
+        commit: &Self::Commitment,
+        dimensions: &[Dimensions],
+        indices: &[usize],
+        opened_values: &[Vec<Vec<EF>>],
+        proof: &Self::MultiProof,
+    ) -> Result<(), Self::Error> {
+        let opened_base_values: Vec<Vec<Vec<F>>> = opened_values
+            .iter()
+            .map(|rows| rows.iter().cloned().map(EF::flatten_to_base).collect())
+            .collect();
+        let base_dimensions = base_dimensions::<EF, F>(dimensions);
+        self.inner.verify_multi_batch(
+            commit,
+            &base_dimensions,
+            indices,
+            &opened_base_values,
+            proof,
+        )
+    }
+}
+
+/// Widens extension-field dimensions to their base-field equivalents.
+///
+/// Each extension element flattens into `EF::DIMENSION` base coordinates,
+/// so widths scale by that factor while heights are unchanged.
+fn base_dimensions<EF: ExtensionField<F>, F: Field>(dimensions: &[Dimensions]) -> Vec<Dimensions> {
+    dimensions
+        .iter()
+        .map(|dim| Dimensions {
+            width: dim.width * EF::DIMENSION,
+            height: dim.height,
+        })
+        .collect()
 }

@@ -4,7 +4,7 @@ use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::{Mmcs, MultilinearPcs};
+use p3_commit::{Mmcs, MultiOpeningMmcs, MultilinearPcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, TwoAdicField};
 use p3_matrix::dense::DenseMatrix;
@@ -44,7 +44,7 @@ where
     F: TwoAdicField + Ord,
     EF: ExtensionField<F> + TwoAdicField,
     Dft: TwoAdicSubgroupDft<F>,
-    MT: Mmcs<F>,
+    MT: MultiOpeningMmcs<F>,
     Challenger: FieldChallenger<F>
         + GrindingChallenger<Witness = F>
         + CanSampleUniformBits<F>
