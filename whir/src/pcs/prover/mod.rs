@@ -20,7 +20,7 @@ use tracing::instrument;
 use crate::fiat_shamir::domain_separator::DomainSeparator;
 use crate::parameters::WhirConfig;
 use crate::pcs::committer::writer::commit_extension;
-use crate::pcs::proof::{MultiOpening, QueryOpenings, SumcheckData, WhirProof};
+use crate::pcs::proof::{OpenMultiRows, QueryOpenings, SumcheckData, WhirProof};
 use crate::pcs::utils::get_challenge_stir_queries;
 
 /// Per-round prover state with the Merkle authentication shapes
@@ -248,7 +248,7 @@ where
         // Each row folds in place; the same allocation then travels into the proof.
         let openings = match &round_state.round_data {
             RoundData::Base(data) => {
-                let mut opening = MultiOpening::open(&self.mmcs, &stir_challenges_indexes, data);
+                let mut opening = self.mmcs.open_rows(&stir_challenges_indexes, data);
                 for (row, &challenge) in opening.rows.iter_mut().zip(&stir_challenges_indexes) {
                     let poly = Poly::new(mem::take(row));
                     let eval = poly.eval_base(&query_randomness);
@@ -259,8 +259,9 @@ where
                 QueryOpenings::Base(opening)
             }
             RoundData::Ext(data) => {
-                let mut opening =
-                    MultiOpening::open(&self.extension_mmcs, &stir_challenges_indexes, data);
+                let mut opening = self
+                    .extension_mmcs
+                    .open_rows(&stir_challenges_indexes, data);
                 for (row, &challenge) in opening.rows.iter_mut().zip(&stir_challenges_indexes) {
                     let poly = Poly::new(mem::take(row));
                     let eval = poly.eval_ext::<F>(&query_randomness);
@@ -323,16 +324,13 @@ where
 
         // Open all queried positions in one multiproof.
         proof.final_openings = Some(match &round_state.round_data {
-            RoundData::Base(data) => QueryOpenings::Base(MultiOpening::open(
-                &self.mmcs,
-                &final_challenge_indexes,
-                data,
-            )),
-            RoundData::Ext(data) => QueryOpenings::Extension(MultiOpening::open(
-                &self.extension_mmcs,
-                &final_challenge_indexes,
-                data,
-            )),
+            RoundData::Base(data) => {
+                QueryOpenings::Base(self.mmcs.open_rows(&final_challenge_indexes, data))
+            }
+            RoundData::Ext(data) => QueryOpenings::Extension(
+                self.extension_mmcs
+                    .open_rows(&final_challenge_indexes, data),
+            ),
         });
 
         // Optional final sumcheck.

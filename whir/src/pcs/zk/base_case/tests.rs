@@ -22,7 +22,7 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use super::*;
-use crate::pcs::proof::{MultiOpening, QueryOpenings};
+use crate::pcs::proof::{OpenMultiRows, QueryOpenings};
 use crate::pcs::zk::committer::FoldedRsCode;
 use crate::pcs::zk::mask::{MaskCodeShape, MaskGroupShape};
 use crate::pcs::zk::proof::BaseCaseZkProof;
@@ -181,9 +181,7 @@ fn honest_run(
         &source_randomness,
         &source_covector,
         &witnesses,
-        |positions| {
-            QueryOpenings::Extension(MultiOpening::open(&extension_mmcs, positions, &source_data))
-        },
+        |positions| QueryOpenings::Extension(extension_mmcs.open_rows(positions, &source_data)),
         &mut prover_challenger,
         &mut rng,
     );

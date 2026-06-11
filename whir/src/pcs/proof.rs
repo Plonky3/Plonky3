@@ -131,28 +131,6 @@ pub struct MultiOpening<T, P> {
 }
 
 impl<T: Send + Sync + Clone, P> MultiOpening<T, P> {
-    /// Opens `indices` on a commitment holding exactly one matrix.
-    pub(crate) fn open<MT, M>(mmcs: &MT, indices: &[usize], prover_data: &MT::ProverData<M>) -> Self
-    where
-        MT: MultiOpeningMmcs<T, MultiProof = P>,
-        M: Matrix<T>,
-    {
-        let (values, proof) = mmcs.open_multi_batch(indices, prover_data);
-        let rows = values
-            .into_iter()
-            .map(|mut per_matrix| {
-                // WHIR commits a single matrix per round, so each query opens one row.
-                assert_eq!(
-                    per_matrix.len(),
-                    1,
-                    "WHIR opens commitments holding exactly one matrix"
-                );
-                per_matrix.swap_remove(0)
-            })
-            .collect();
-        Self { rows, proof }
-    }
-
     /// Verifies the rows against `commit` at the verifier-derived `indices`.
     ///
     /// The multiproof binds each row to its index,
@@ -170,6 +148,42 @@ impl<T: Send + Sync + Clone, P> MultiOpening<T, P> {
         let opened_values: Vec<Vec<Vec<T>>> =
             self.rows.iter().map(|row| vec![row.clone()]).collect();
         mmcs.verify_multi_batch(commit, dimensions, indices, &opened_values, &self.proof)
+    }
+}
+
+/// Opens a single-matrix commitment and packages the rows as a [`MultiOpening`].
+///
+/// Lets callers write `mmcs.open_rows(indices, data)` instead of threading the
+/// mmcs through a free constructor.
+pub(crate) trait OpenMultiRows<T: Send + Sync + Clone>: MultiOpeningMmcs<T> {
+    /// Opens `indices` on a commitment holding exactly one matrix.
+    fn open_rows<M: Matrix<T>>(
+        &self,
+        indices: &[usize],
+        prover_data: &Self::ProverData<M>,
+    ) -> MultiOpening<T, Self::MultiProof>;
+}
+
+impl<T: Send + Sync + Clone, MT: MultiOpeningMmcs<T>> OpenMultiRows<T> for MT {
+    fn open_rows<M: Matrix<T>>(
+        &self,
+        indices: &[usize],
+        prover_data: &Self::ProverData<M>,
+    ) -> MultiOpening<T, Self::MultiProof> {
+        let (values, proof) = self.open_multi_batch(indices, prover_data);
+        let rows = values
+            .into_iter()
+            .map(|mut per_matrix| {
+                // WHIR commits a single matrix per round, so each query opens one row.
+                assert_eq!(
+                    per_matrix.len(),
+                    1,
+                    "WHIR opens commitments holding exactly one matrix"
+                );
+                per_matrix.swap_remove(0)
+            })
+            .collect();
+        MultiOpening { rows, proof }
     }
 }
 
