@@ -4,9 +4,11 @@ use core::mem::MaybeUninit;
 
 use itertools::{Itertools, iterate, izip};
 use p3_commit::PolynomialSpace;
-use p3_dft::{Butterfly, DifButterfly, DitButterfly, divide_by_height};
+use p3_dft::{Butterfly, DifButterfly, DitButterfly};
 use p3_field::extension::ComplexExtendable;
-use p3_field::{ExtensionField, Field, FieldArray, batch_multiplicative_inverse};
+use p3_field::{
+    ExtensionField, Field, FieldArray, PackedValue, batch_multiplicative_inverse,
+};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
@@ -62,10 +64,12 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
 
         assert_eq!(twiddles.len(), domain.log_n);
 
-        cfft_layers(&mut values.values, values.width, &twiddles);
+        // The interpolation must divide every element by the domain size. Folding the
+        // scaling into the last butterfly pass touches the data while it is cache-resident,
+        // instead of paying a separate full sweep over the matrix.
+        let h_inv = F::ONE.div_2exp_u64(domain.log_n as u64);
+        cfft_layers(&mut values.values, values.width, &twiddles, Some(h_inv));
 
-        // TODO: omit this?
-        divide_by_height(&mut values);
         values
     }
 
@@ -273,7 +277,7 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
                 .collect_vec()
         });
 
-        cfft_layers(&mut coeffs.values, coeffs.width, &twiddles);
+        cfft_layers(&mut coeffs.values, coeffs.width, &twiddles, None);
 
         Self::from_cfft_order(domain, coeffs)
     }
@@ -308,7 +312,15 @@ fn log_group_rows<F>(log_h: usize, width: usize) -> usize {
 /// independent groups of `2^log_group` rows sitting `2^log_stride` rows apart. Each parallel task
 /// applies every layer of the run to one cache-resident group, costing one pass over memory per
 /// run instead of one per layer.
-fn cfft_layers<F: Field, B: Butterfly<F>>(values: &mut [F], width: usize, layers: &[Vec<B>]) {
+///
+/// When `scale` is set, every element is additionally multiplied by it during the final pass,
+/// while its group is still cache-resident.
+fn cfft_layers<F: Field, B: Butterfly<F>>(
+    values: &mut [F],
+    width: usize,
+    layers: &[Vec<B>],
+    scale: Option<F>,
+) {
     let h = values.len() / width;
     let log_h = log2_strict_usize(h);
     let log_group = log_group_rows::<F>(log_h, width);
@@ -327,8 +339,17 @@ fn cfft_layers<F: Field, B: Butterfly<F>>(values: &mut [F], width: usize, layers
             end += 1;
         }
         let log_stride = lo_bit.min(log_h - log_group);
-        debug_span!("fused_layers", layers = end - start, log_group, log_stride)
-            .in_scope(|| par_group_pass(values, width, &layers[start..end], log_group, log_stride));
+        let pass_scale = scale.filter(|_| end == layers.len());
+        debug_span!("fused_layers", layers = end - start, log_group, log_stride).in_scope(|| {
+            par_group_pass(
+                values,
+                width,
+                &layers[start..end],
+                log_group,
+                log_stride,
+                pass_scale,
+            );
+        });
         start = end;
     }
 }
@@ -346,11 +367,13 @@ fn par_group_pass<F: Field, B: Butterfly<F>>(
     layers: &[Vec<B>],
     log_group: usize,
     log_stride: usize,
+    scale: Option<F>,
 ) {
     let h = values.len() / width;
     let log_h = log2_strict_usize(h);
     let num_groups = h >> log_group;
     let base_addr = values.as_mut_ptr() as usize;
+    let packed_scale = scale.map(F::Packing::from);
     (0..num_groups).into_par_iter().for_each(|g| {
         let base = base_addr as *mut F;
         let hi = g >> log_stride;
@@ -376,6 +399,21 @@ fn par_group_pass<F: Field, B: Butterfly<F>>(
                         )
                     };
                     t.apply_to_rows(row_lo, row_hi);
+                }
+            }
+        }
+        if let (Some(scale), Some(packed_scale)) = (scale, packed_scale) {
+            for t in 0..1usize << log_group {
+                let row = first_row + (t << log_stride);
+                // SAFETY: the group decomposition above guarantees this task is the only
+                // one touching its rows, and `row < h` since `t < 2^log_group`.
+                let row = unsafe { core::slice::from_raw_parts_mut(base.add(row * width), width) };
+                let (packed, suffix) = F::Packing::pack_slice_with_suffix_mut(row);
+                for x in packed {
+                    *x *= packed_scale;
+                }
+                for x in suffix {
+                    *x *= scale;
                 }
             }
         }
