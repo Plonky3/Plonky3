@@ -21,7 +21,7 @@ use p3_koala_bear::{
 use p3_mersenne_31::{
     GenericPoseidon2LinearLayersMersenne31, MERSENNE31_POSEIDON2_HALF_FULL_ROUNDS,
     MERSENNE31_POSEIDON2_PARTIAL_ROUNDS_16, MERSENNE31_S_BOX_DEGREE, Mersenne31,
-    Poseidon2Mersenne31,
+    Poseidon2Mersenne31, QM31,
 };
 use p3_monty_31::dft::RecursiveDft;
 use p3_poseidon2_air::{RoundConstants, VectorizedPoseidon2Air};
@@ -221,7 +221,7 @@ fn main() {
             };
         }
         FieldOptions::Mersenne31 => {
-            type EF = BinomialExtensionField<Mersenne31, 3>;
+            type EF = QM31;
 
             let proof_goal = match args.objective {
                 ProofOptions::Blake3Permutations => ProofObjective::Blake3(Blake3Air {}),
