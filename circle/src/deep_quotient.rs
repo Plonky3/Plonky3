@@ -195,11 +195,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         let lifted = CircleEvaluations::from_cfft_order(self.domain, flat)
             .extrapolate(target_domain)
             .to_cfft_order();
-        lifted
-            .values
-            .par_chunks_exact(EF::DIMENSION)
-            .map(|coeffs| EF::from_basis_coefficients_slice(coeffs).unwrap())
-            .collect()
+        EF::reconstitute_from_base(lifted.values)
     }
 }
 
