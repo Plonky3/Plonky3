@@ -849,4 +849,22 @@ mod tests {
             prop_assert_eq!(s_sum, p_sum);
         }
     }
+
+    #[test]
+    fn weights_at_yields_one_equality_weight_per_point() {
+        // weights_at streams one equality weight per stored point, in order.
+        // Cross-check each against the standalone equality-polynomial evaluation.
+        let p0 = Point::new(vec![EF::from_u64(1), EF::from_u64(2)]);
+        let p1 = Point::new(vec![EF::from_u64(3), EF::from_u64(4)]);
+        let statement =
+            EqStatement::new_hypercube(vec![p0.clone(), p1.clone()], vec![EF::ZERO, EF::ZERO]);
+
+        let row = Point::new(vec![EF::from_u64(5), EF::from_u64(6)]);
+        let expected = vec![
+            Point::eval_eq(p0.as_slice(), row.as_slice()),
+            Point::eval_eq(p1.as_slice(), row.as_slice()),
+        ];
+
+        assert_eq!(statement.weights_at(&row).collect::<Vec<_>>(), expected);
+    }
 }

@@ -218,106 +218,6 @@ pub(crate) fn evals_01inf_grid_prefix<F: Field>(evals: &[F]) -> Vec<F> {
     }
     out
 }
-
-impl<F: Field> EqPartials<F> {
-    /// Adds prefix-layout equality accumulator contributions for one round.
-    ///
-    /// The active SVO variables are the low bits, so the equality weight is a
-    /// product over those variables and can be folded with the multilinear
-    /// product accumulator.
-    ///
-    /// # Arguments
-    ///
-    /// - `p_active`: the opening point restricted to the active SVO variables of this round.
-    /// - `acc0`: running accumulator for the round polynomial evaluated at `0`.
-    /// - `acc_inf`: running accumulator for the round polynomial evaluated at `inf`.
-    ///
-    /// # Panics
-    ///
-    /// - If `p_active` is empty.
-    /// - If the stored payload does not have one variable per active coordinate.
-    /// - If `acc0` or `acc_inf` does not have length `3^(active_len - 1)`.
-    fn accumulate_prefix(&self, p_active: &[F], acc0: &mut [F], acc_inf: &mut [F]) {
-        // One field element per active coordinate fixed this round.
-        let active_len = p_active.len();
-        // A round always folds at least one active coordinate.
-        assert!(active_len > 0);
-        // The cached payload must span exactly the active coordinates.
-        assert_eq!(self.poly().num_variables(), active_len);
-
-        // Each ternary grid third over the remaining active-1 coordinates has 3^(active_len-1) rows.
-        let stride = 3usize.pow((active_len - 1) as u32);
-        assert_eq!(acc0.len(), stride);
-        assert_eq!(acc_inf.len(), stride);
-
-        // Build the multilinear equality weight as a product over the active point coordinates.
-        let eq_active = Poly::new_from_point(p_active, F::ONE);
-        // Fold the equality weight against the payload, keeping only the 0 and inf grid thirds.
-        let [term0, term_inf] =
-            calculate_product_accumulator(active_len, eq_active.as_slice(), self.poly().as_slice());
-
-        // Add the 0-evaluation contribution of this opening into the running accumulator.
-        acc0.iter_mut()
-            .zip(term0.iter())
-            .for_each(|(out, &value)| *out += value);
-        // Add the inf-evaluation (leading-coefficient) contribution likewise.
-        acc_inf
-            .iter_mut()
-            .zip(term_inf.iter())
-            .for_each(|(out, &value)| *out += value);
-    }
-
-    /// Adds suffix-layout equality accumulator contributions for one round.
-    ///
-    /// The active SVO variables are the high bits, so both the equality weight
-    /// and the payload are expanded to the `{0, 1, inf}` grid and multiplied
-    /// pointwise on the `0` and `inf` thirds.
-    ///
-    /// # Arguments
-    ///
-    /// - `p_active`: the opening point restricted to the active SVO variables of this round.
-    /// - `acc0`: running accumulator for the round polynomial evaluated at `0`.
-    /// - `acc_inf`: running accumulator for the round polynomial evaluated at `inf`.
-    ///
-    /// # Panics
-    ///
-    /// - If `p_active` is empty.
-    /// - If the stored payload does not have one variable per active coordinate.
-    /// - If `acc0` or `acc_inf` does not have length `3^(active_len - 1)`.
-    fn accumulate_suffix(&self, p_active: &[F], acc0: &mut [F], acc_inf: &mut [F]) {
-        // One field element per active coordinate fixed this round.
-        let active_len = p_active.len();
-        // A round always folds at least one active coordinate.
-        assert!(active_len > 0);
-        // The cached payload must span exactly the active coordinates.
-        assert_eq!(self.poly().num_variables(), active_len);
-
-        // Each ternary grid third over the remaining active-1 coordinates has 3^(active_len-1) rows.
-        let stride = 3usize.pow((active_len - 1) as u32);
-        assert_eq!(acc0.len(), stride);
-        assert_eq!(acc_inf.len(), stride);
-
-        // Expand the equality weight from the 2^l hypercube to the 3^l ternary grid.
-        let eq_grid = evals_01inf_grid_prefix(Poly::new_from_point(p_active, F::ONE).as_slice());
-        // Expand the cached payload to the same ternary grid.
-        let acc_grid = evals_01inf_grid_prefix(self.poly().as_slice());
-
-        // The first third of the grid fixes the leading active coordinate to 0.
-        acc0.iter_mut()
-            .zip(eq_grid[..stride].iter().zip(acc_grid[..stride].iter()))
-            .for_each(|(out, (&eq, &eval))| *out += eq * eval);
-        // The last third fixes the leading active coordinate to inf (its leading coefficient).
-        acc_inf
-            .iter_mut()
-            .zip(
-                eq_grid[2 * stride..]
-                    .iter()
-                    .zip(acc_grid[2 * stride..].iter()),
-            )
-            .for_each(|(out, (&eq, &eval))| *out += eq * eval);
-    }
-}
-
 /// Builds the SVO round accumulators for a batch of openings.
 ///
 /// # Overview
@@ -408,57 +308,6 @@ pub(crate) fn calculate_accumulators_batch<F: Field, EF: ExtensionField<F>>(
             [acc0, acc_inf]
         })
         .collect()
-}
-
-/// Computes the SVO accumulators using grid expansion.
-///
-/// Rather than rebuilding every Lagrange basis vector independently (O(6^l)),
-/// this expands both the residual equality polynomial and the partially compressed
-/// multilinear polynomial over the entire `{0, 1, inf}^l` grid. The required
-/// accumulators are then simple pointwise products on the slices with
-/// final coordinate fixed to `0` or `inf`.
-///
-/// For l <= 3, straightline specializations avoid all loop overhead, buffer
-/// allocation, and parallelization machinery.
-///
-/// Total cost: O(3^l) field operations.
-#[cfg(test)]
-fn calculate_accumulator<F: Field, EF: ExtensionField<F>>(
-    l: usize,
-    partial_evals: &[EF],
-    point: &[EF],
-) -> [Vec<EF>; 2] {
-    use p3_field::dot_product;
-
-    let total_vars = log2_strict_usize(partial_evals.len());
-    let offset = total_vars - l;
-
-    // Split the challenge point into inner (z0) and outer (z1) components.
-    // - z0 corresponds to the variables covered by the grid points.
-    // - z1 corresponds to the remaining variables handled separately.
-    let (z0, z1) = point.split_at(point.len() - offset);
-
-    // Build equality polynomial evaluation tables for both components.
-    // - eq0: evaluations of eq(z0, x) for x in {0,1}^{|z0|}
-    // - eq1: evaluations of eq(z1, x) for x in {0,1}^{|z1|}
-    let eq0 = Poly::new_from_point(z0, EF::ONE);
-    let eq1 = Poly::new_from_point(z1, EF::ONE);
-
-    // Reduce partial evaluations over the outer variables using eq1.
-    //
-    // This computes: sum_{x1} eq(z1, x1) * partial_evals[chunk_for_x1]
-    let reduced_evals = partial_evals
-        .chunks(eq1.num_evals())
-        .map(|chunk| dot_product::<EF, _, _>(eq1.iter().copied(), chunk.iter().copied()))
-        .collect::<Vec<_>>();
-
-    // For small l, use straightline specializations that avoid loop/buffer overhead.
-    match l {
-        1 => calculate_accumulator_1(eq0.as_slice(), &reduced_evals),
-        2 => calculate_accumulator_2(eq0.as_slice(), &reduced_evals),
-        3 => calculate_accumulator_3(eq0.as_slice(), &reduced_evals),
-        _ => calculate_accumulator_general(l, eq0.as_slice(), &reduced_evals),
-    }
 }
 
 /// Computes the `0` and `inf` accumulators of a pointwise product of two multilinear tables.
@@ -1467,7 +1316,7 @@ fn next_round_partials_prefix<F: Field>(
 ///
 ///     B = product of all point coordinates (the all-ones corner weight)
 /// ```
-fn next_state_evals<F: Field>(point_suffix: &[F]) -> NextPartials<F> {
+pub(crate) fn next_state_evals<F: Field>(point_suffix: &[F]) -> NextPartials<F> {
     // Number of point coordinates, one per Boolean variable.
     let num_variables = point_suffix.len();
     // Number of Boolean rows over those variables.
@@ -1492,172 +1341,6 @@ fn next_state_evals<F: Field>(point_suffix: &[F]) -> NextPartials<F> {
 
     NextPartials::new(Poly::new(done), Poly::new(carry), Poly::new(omega))
 }
-
-impl<F: Field> NextPartials<F> {
-    /// Adds suffix-layout successor accumulator contributions for one round.
-    ///
-    /// # Overview
-    ///
-    /// - The stored payloads are the active-variable successor data for this round.
-    /// - Both the successor state tables at the active point and the payloads are expanded to the `{0, 1, inf}` grid.
-    /// - The round polynomial values at `0` and `inf` are accumulated by summing the three state-times-data products.
-    ///
-    /// # Arguments
-    ///
-    /// - `p_active`: the opening point restricted to the active SVO variables of this round.
-    /// - `acc0`: running accumulator for the round polynomial evaluated at `0`.
-    /// - `acc_inf`: running accumulator for the round polynomial evaluated at `inf`.
-    ///
-    /// # Panics
-    ///
-    /// - If `p_active` is empty.
-    /// - If any stored payload does not span the active coordinates.
-    /// - If `acc0` or `acc_inf` does not have length `3^(active_len - 1)`.
-    pub(crate) fn accumulate_suffix(&self, p_active: &[F], acc0: &mut [F], acc_inf: &mut [F]) {
-        // One field element per active coordinate fixed this round.
-        let active_len = p_active.len();
-        // A round always folds at least one active coordinate.
-        assert!(active_len > 0);
-        // All three payloads must span exactly the active coordinates.
-        assert_eq!(self.done().num_variables(), active_len);
-        assert_eq!(self.carry().num_variables(), active_len);
-        assert_eq!(self.omega().num_variables(), active_len);
-
-        // Each ternary grid third over the remaining active-1 coordinates has 3^(active_len-1) rows.
-        let stride = 3usize.pow((active_len - 1) as u32);
-        assert_eq!(acc0.len(), stride);
-        assert_eq!(acc_inf.len(), stride);
-
-        // Build the three successor state tables for the active point.
-        // TODO: carry and omega polys are sparse.
-        let active = next_state_evals(p_active);
-
-        // Expand every state and data table from the hypercube to the ternary grid.
-        let carry_grid = evals_01inf_grid_prefix(active.carry().as_slice());
-        let done_grid = evals_01inf_grid_prefix(active.done().as_slice());
-        let omega_grid = evals_01inf_grid_prefix(active.omega().as_slice());
-        let done_data_grid = evals_01inf_grid_prefix(self.done().as_slice());
-        let carry_data_grid = evals_01inf_grid_prefix(self.carry().as_slice());
-        let omega_data_grid = evals_01inf_grid_prefix(self.omega().as_slice());
-
-        // First grid third: leading active coordinate fixed to 0; sum the three state-data products.
-        acc0.iter_mut()
-            .zip(
-                done_grid[..stride]
-                    .iter()
-                    .zip(done_data_grid[..stride].iter()),
-            )
-            .zip(
-                carry_grid[..stride]
-                    .iter()
-                    .zip(carry_data_grid[..stride].iter()),
-            )
-            .zip(
-                omega_grid[..stride]
-                    .iter()
-                    .zip(omega_data_grid[..stride].iter()),
-            )
-            .for_each(
-                |(((out, (&done, &done_data)), (&carry, &carry_data)), (&omega, &omega_data))| {
-                    *out += done * done_data + carry * carry_data + omega * omega_data;
-                },
-            );
-
-        // Last grid third: leading active coordinate fixed to inf; same three-term product.
-        acc_inf
-            .iter_mut()
-            .zip(
-                done_grid[2 * stride..]
-                    .iter()
-                    .zip(done_data_grid[2 * stride..].iter()),
-            )
-            .zip(
-                carry_grid[2 * stride..]
-                    .iter()
-                    .zip(carry_data_grid[2 * stride..].iter()),
-            )
-            .zip(
-                omega_grid[2 * stride..]
-                    .iter()
-                    .zip(omega_data_grid[2 * stride..].iter()),
-            )
-            .for_each(
-                |(((out, (&done, &done_data)), (&carry, &carry_data)), (&omega, &omega_data))| {
-                    *out += done * done_data + carry * carry_data + omega * omega_data;
-                },
-            );
-    }
-
-    /// Adds prefix-layout successor accumulator contributions for one round.
-    ///
-    /// # Overview
-    ///
-    /// - The stored payloads are the active-variable successor data for this round.
-    /// - In prefix layout each active state factors into a product of one state table and one data payload.
-    /// - Three product accumulators (equality, done, omega) sum their `0` and `inf` contributions into the running accumulators.
-    ///
-    /// # Arguments
-    ///
-    /// - `p_active`: the opening point restricted to the active SVO variables of this round.
-    /// - `acc0`: running accumulator for the round polynomial evaluated at `0`.
-    /// - `acc_inf`: running accumulator for the round polynomial evaluated at `inf`.
-    ///
-    /// # Panics
-    ///
-    /// - If `p_active` is empty.
-    /// - If any stored payload does not span the active coordinates.
-    /// - If `acc0` or `acc_inf` does not have length `3^(active_len - 1)`.
-    pub(crate) fn accumulate_prefix(&self, p_active: &[F], acc0: &mut [F], acc_inf: &mut [F]) {
-        // One field element per active coordinate fixed this round.
-        let active_len = p_active.len();
-        // A round always folds at least one active coordinate.
-        assert!(active_len > 0);
-        // All three payloads must span exactly the active coordinates.
-        assert_eq!(self.done().num_variables(), active_len);
-        assert_eq!(self.carry().num_variables(), active_len);
-        assert_eq!(self.omega().num_variables(), active_len);
-
-        // Each ternary grid third over the remaining active-1 coordinates has 3^(active_len-1) rows.
-        let stride = 3usize.pow((active_len - 1) as u32);
-        assert_eq!(acc0.len(), stride);
-        assert_eq!(acc_inf.len(), stride);
-
-        // Successor state tables for the active point.
-        let active = next_state_evals(p_active);
-        // Plain equality weights of the active point.
-        let eq_active = Poly::new_from_point(p_active, F::ONE);
-
-        // Each active state term is a product of one weight table and one data payload.
-        let terms = [
-            // Equality weight times the shifted-done data payload.
-            calculate_product_accumulator(active_len, eq_active.as_slice(), self.done().as_slice()),
-            // Done state times the carry-into-next data payload.
-            calculate_product_accumulator(
-                active_len,
-                active.done().as_slice(),
-                self.carry().as_slice(),
-            ),
-            // Omega boundary state times the boundary data payload.
-            calculate_product_accumulator(
-                active_len,
-                active.omega().as_slice(),
-                self.omega().as_slice(),
-            ),
-        ];
-
-        // Fold every term's 0 and inf contributions into the running accumulators.
-        for [term0, term_inf] in terms {
-            acc0.iter_mut()
-                .zip(term0.iter())
-                .for_each(|(out, &value)| *out += value);
-            acc_inf
-                .iter_mut()
-                .zip(term_inf.iter())
-                .for_each(|(out, &value)| *out += value);
-        }
-    }
-}
-
 #[cfg(test)]
 mod test {
 
@@ -2367,22 +2050,56 @@ mod test {
             }
         }
     }
-}
 
-#[cfg(test)]
-mod next_test {
-    use alloc::vec::Vec;
+    /// Computes the SVO accumulators using grid expansion.
+    ///
+    /// Rather than rebuilding every Lagrange basis vector independently (O(6^l)),
+    /// this expands both the residual equality polynomial and the partially compressed
+    /// multilinear polynomial over the entire `{0, 1, inf}^l` grid. The required
+    /// accumulators are then simple pointwise products on the slices with
+    /// final coordinate fixed to `0` or `inf`.
+    ///
+    /// For l <= 3, straightline specializations avoid all loop overhead, buffer
+    /// allocation, and parallelization machinery.
+    ///
+    /// Total cost: O(3^l) field operations.
+    fn calculate_accumulator<F: Field, EF: ExtensionField<F>>(
+        l: usize,
+        partial_evals: &[EF],
+        point: &[EF],
+    ) -> [Vec<EF>; 2] {
+        use p3_field::dot_product;
 
-    use p3_field::PrimeCharacteristicRing;
-    use p3_field::extension::BinomialExtensionField;
-    use p3_koala_bear::KoalaBear;
-    use rand::rngs::SmallRng;
-    use rand::{RngExt, SeedableRng};
+        let total_vars = log2_strict_usize(partial_evals.len());
+        let offset = total_vars - l;
 
-    use super::*;
+        // Split the challenge point into inner (z0) and outer (z1) components.
+        // - z0 corresponds to the variables covered by the grid points.
+        // - z1 corresponds to the remaining variables handled separately.
+        let (z0, z1) = point.split_at(point.len() - offset);
 
-    type F = KoalaBear;
-    type EF = BinomialExtensionField<F, 4>;
+        // Build equality polynomial evaluation tables for both components.
+        // - eq0: evaluations of eq(z0, x) for x in {0,1}^{|z0|}
+        // - eq1: evaluations of eq(z1, x) for x in {0,1}^{|z1|}
+        let eq0 = Poly::new_from_point(z0, EF::ONE);
+        let eq1 = Poly::new_from_point(z1, EF::ONE);
+
+        // Reduce partial evaluations over the outer variables using eq1.
+        //
+        // This computes: sum_{x1} eq(z1, x1) * partial_evals[chunk_for_x1]
+        let reduced_evals = partial_evals
+            .chunks(eq1.num_evals())
+            .map(|chunk| dot_product::<EF, _, _>(eq1.iter().copied(), chunk.iter().copied()))
+            .collect::<Vec<_>>();
+
+        // For small l, use straightline specializations that avoid loop/buffer overhead.
+        match l {
+            1 => calculate_accumulator_1(eq0.as_slice(), &reduced_evals),
+            2 => calculate_accumulator_2(eq0.as_slice(), &reduced_evals),
+            3 => calculate_accumulator_3(eq0.as_slice(), &reduced_evals),
+            _ => calculate_accumulator_general(l, eq0.as_slice(), &reduced_evals),
+        }
+    }
 
     // Brute-force reference: materialize each successor state table row by row from the closed form.
     fn next_state_evals_reference(point_suffix: &[F]) -> [Poly<F>; 3] {

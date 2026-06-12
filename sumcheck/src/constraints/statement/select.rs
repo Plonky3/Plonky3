@@ -1241,4 +1241,20 @@ mod tests {
             prop_assert_eq!(s_sum, p_sum);
         }
     }
+
+    #[test]
+    fn weights_at_yields_one_selector_value_per_variable() {
+        // weights_at streams one weight per stored univariate point, in order.
+        // Cross-check each against the standalone selection-polynomial evaluation.
+        let vars = vec![F::from_u64(5), F::from_u64(7)];
+        let statement = SelectStatement::<F, EF>::new(2, vars.clone(), vec![EF::ZERO, EF::ZERO]);
+
+        let row = Point::new(vec![EF::from_u64(3), EF::from_u64(9)]);
+        let expected = vars
+            .iter()
+            .map(|&var| Point::eval_select(var, row.as_slice()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(statement.weights_at(&row).collect::<Vec<_>>(), expected);
+    }
 }

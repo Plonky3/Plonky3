@@ -2062,4 +2062,38 @@ pub(crate) mod test {
         let mut poly = Poly::<F>::zero(3);
         poly.pad_zeros(2);
     }
+
+    #[test]
+    fn test_next_closed_forms() {
+        // Invariant: four different routes to the successor opening must agree.
+        //   1. closed-form carry recurrence over the two points
+        //   2. dense successor table dotted with the equality table
+        //   3. dense successor table evaluated at the first point
+        //   4. plain equality table evaluated through the successor view
+        let mut rng = SmallRng::seed_from_u64(0);
+        // Fixture state: sweep variable counts 0..14 to cover all base-case branches.
+        for k in 0..14 {
+            let p0 = Point::<F>::rand(&mut rng, k);
+            let p1 = Point::<F>::rand(&mut rng, k);
+
+            // Route 1: closed form. Full fold yields completed plus boundary mass.
+            let (_carry, done, omega) = Point::eval_next(p1.as_slice(), p0.as_slice());
+            let e0 = done + omega;
+
+            // Route 2: materialize the successor table, then dot with the equality table.
+            let next = Poly::new_next_from_point(p1.as_slice());
+            let eq = Poly::new_from_point(p0.as_slice(), F::ONE);
+            let e1 = dot_product(eq.iter().copied(), next.iter().copied());
+            assert_eq!(e0, e1);
+
+            // Route 3: evaluate the same successor table directly at the first point.
+            let e1 = next.eval_base(&p0);
+            assert_eq!(e0, e1);
+
+            // Route 4: keep the plain equality table and apply the successor view at eval time.
+            let next = Poly::new_from_point(p0.as_slice(), F::ONE);
+            let e1 = next.eval_next_base(&p1);
+            assert_eq!(e0, e1);
+        }
+    }
 }
