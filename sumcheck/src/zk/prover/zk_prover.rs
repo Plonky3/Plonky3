@@ -111,10 +111,11 @@ where
         self.inner.num_variables()
     }
 
-    /// Records current and repeat-last Next opening claims on the inner prover.
+    /// Records opening claims at the current points and at their repeat-last successor points on the inner prover.
     ///
-    /// Returned evaluations are ordered as `batch.current()` first, then
-    /// `batch.next()`.
+    /// # Returns
+    ///
+    /// The current-point evaluations first, then the successor-point evaluations.
     pub fn eval<Ch>(
         &mut self,
         table_idx: usize,
@@ -440,31 +441,42 @@ mod tests {
 
     #[test]
     fn prover_verifier_roundtrip_mixed_current_next_batch() {
-        // Invariant: the HVZK prefix wrapper accepts the same mixed
-        // current/Next opening batches as the underlying prefix layout.
+        // Invariant: the zero-knowledge prefix wrapper accepts a batch that mixes
+        // a current opening point with its repeat-last successor point.
+        // Acceptance means the prover and verifier draw identical randomness.
+
+        // Fixture state: 8 variables, fold 3 at a time, mask width 4, no grinding.
         let n_vars = 8;
         let folding_factor = 3;
         let ell_zk = 4;
         let seed = 7u64;
         let pow_bits = 0;
 
+        // Shared permutation, Merkle scheme, and encoding for both parties.
         let (perm, mmcs, encoding) = make_setup(seed, ell_zk);
+        // Draw a random multilinear over the boolean cube of 2^8 = 256 points.
         let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
         let evals: Vec<F> = (0..(1usize << n_vars)).map(|_| data_rng.random()).collect();
         let (mut prover, mut verifier, _) =
             build_prover_verifier::<PrefixProver<F, EF>>(evals, folding_factor, encoding, mmcs);
 
+        // Two challengers seeded identically so the transcripts stay in lockstep.
         let mut prover_challenger = MyChallenger::new(perm.clone());
         let mut verifier_challenger = MyChallenger::new(perm);
 
+        // Open column 0 at one current point and at its successor point.
         let batch = OpeningBatch::new(vec![0], vec![0]);
+        // Prover records the claims and returns one evaluation per requested point.
         let evals = prover.eval(0, &batch, &mut prover_challenger);
         assert_eq!(evals.len(), batch.len());
+        // Verifier mirrors the same draws against the returned evaluations.
         verifier.add_claim(0, &batch, &evals, &mut verifier_challenger);
 
+        // Add the masking claim that hides the witness in the final sumcheck.
         let virtual_eval = prover.add_virtual_eval(&mut prover_challenger);
         verifier.add_virtual_eval(virtual_eval, &mut verifier_challenger);
 
+        // Prover commits to the mask and hands off the sumcheck transcript.
         let mut zk_data = ZkSumcheckData::<F, EF>::default();
         let mut prover_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
         let prover_handoff = prover.into_sumcheck(
@@ -473,8 +485,10 @@ mod tests {
             &mut prover_challenger,
             &mut prover_rng,
         );
+        // The mask commitment is the only extra public input the verifier needs.
         let mask_commitment = prover_handoff.mask_oracle.0.clone();
 
+        // Verifier replays the sumcheck and must accept the mixed batch.
         let verifier_handoff = verifier
             .into_sumcheck::<MyMmcs, _>(
                 &zk_data,
@@ -486,6 +500,7 @@ mod tests {
             )
             .expect("verifier should accept mixed current/Next batch");
 
+        // Both parties must have folded along the same challenge sequence.
         assert_eq!(
             prover_handoff
                 .randomness

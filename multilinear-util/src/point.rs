@@ -123,46 +123,87 @@ where
             .product()
     }
 
-    /// Evaluates the selector polynomial `select(point, pow(var))`.
+    /// Evaluates the selection polynomial of a point against a univariate domain element.
     ///
-    /// The **selection polynomial** for a point and univariate domain element is:
-    /// ```ignore
-    /// select(point, pow(var)) = ∏ (point_i * var_i - point_i + 1)
+    /// The univariate element is expanded into the square-power vector
+    /// `(var^(2^(n-1)), ..., var^2, var)`.
+    ///
+    /// The selection polynomial multiplies one factor per coordinate:
+    /// ```text
+    /// prod_i (point_i * var_i - point_i + 1)
     /// ```
-    ///
-    /// where `pow(var) = (var^(2^(n-1)), ..., var^2, var)`.
     #[must_use]
     #[inline]
     pub fn eval_select<EF: ExtensionField<F>>(mut var: F, point: &[EF]) -> EF {
+        // Walk coordinates from the highest variable down to the lowest.
+        // The square-power vector is built lazily: the running `var` starts at
+        // the lowest power and is squared after each factor, so reading it in
+        // reverse yields the descending powers `var^(2^(n-1)), ..., var`.
         point
             .iter()
             .rev()
             .map(|&r| {
+                // Per-coordinate factor: r * (var - 1) + 1.
+                // Equals 1 when var == 1, and equals 1 - r when var == 0.
                 let term = r * (F::NEG_ONE + var) + EF::ONE;
+                // Advance to the next-higher power for the next coordinate.
                 var = var.square();
                 term
             })
+            // Multiply all per-coordinate factors into the selection value.
             .product()
     }
 
-    /// Evaluates the repeat-last Next closed-form carry state.
+    /// Evaluates the closed-form carry state of the repeat-last successor map.
     ///
-    /// Coordinates are processed from last to first. Passing the full point and
-    /// row gives the full repeat-last Next value as `done + omega`; passing only
-    /// a low-bit suffix leaves `carry` alive for the unprocessed prefix.
+    /// The successor map sends a hypercube row `x` to `x + 1`, with the maximal
+    /// row mapping to itself.
+    ///
+    /// Coordinates are folded from the lowest variable up to the highest while
+    /// tracking three accumulators returned as a triple:
+    /// - The carry weight that still wants to add 1 into the not-yet-folded prefix.
+    /// - The completed contribution from rows whose increment has already settled.
+    /// - The boundary weight of the all-ones row, which repeats instead of wrapping.
+    ///
+    /// Passing the whole point and row folds every coordinate, so the full
+    /// successor value is the sum of the completed and boundary accumulators.
+    ///
+    /// Passing only a low-bit suffix stops early, leaving a live carry weight
+    /// that an outer caller threads into the remaining prefix.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the two slices have different lengths.
     #[must_use]
     #[inline]
     pub fn eval_next(point: &[F], row: &[F]) -> (F, F, F) {
+        // The increment is added bit by bit, so both inputs must index the same variables.
         assert_eq!(point.len(), row.len());
 
+        // Carry weight: the path on which adding 1 has not yet been absorbed.
+        // Starts at 1 because the increment enters at the lowest bit.
         let mut carry = F::ONE;
+        // Completed contribution: rows whose +1 has already been resolved without
+        // a pending carry into higher bits.
         let mut done = F::ZERO;
+        // Boundary weight of the all-ones row, accumulated as the product of the
+        // "both bits one" factor across coordinates.
         let mut omega = F::ONE;
+        // Fold low bit first: the carry from adding 1 propagates toward higher bits.
         for (&point_bit, &row_bit) in point.iter().zip(row).rev() {
+            // Per-coordinate equality factor between this point and row bit:
+            // equals 1 when the bits agree, 0 when they differ.
             let eq = row_bit.double() * point_bit - point_bit - row_bit + F::ONE;
+            // Snapshot the incoming carry before overwriting it.
             let prev_carry = carry;
+            // Carry survives only where the point bit is 1 and the row bit is 0:
+            // that is exactly the position where 0 -> 1 still needs to ripple up.
             carry = prev_carry * point_bit * (F::ONE - row_bit);
+            // Settle the carry where the row bit is 1 and the point bit is 0:
+            // the increment lands here, so it joins the completed contribution.
+            // Already-settled mass passes through the equality factor unchanged.
             done = done * eq + prev_carry * (F::ONE - point_bit) * row_bit;
+            // Track the all-ones row weight: nonzero only where both bits are 1.
             omega *= point_bit * row_bit;
         }
         (carry, done, omega)

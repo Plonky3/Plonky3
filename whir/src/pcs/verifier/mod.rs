@@ -160,6 +160,11 @@ where
                 round_index,
             )?;
 
+            // Rebuild the same batched constraint the prover formed for this round.
+            // The out-of-domain claims form the equality group.
+            // The query openings form the selection group.
+            // The challenge sampled here matches the prover's, weighting the groups
+            // by its successive powers so both sides combine the claims identically.
             let constraint = Constraint::new(
                 challenger.sample_algebra_element(),
                 new_commitment.ood_statement.num_variables(),

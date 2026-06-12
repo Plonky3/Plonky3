@@ -148,6 +148,8 @@ where
             });
         }
         for ((table_idx, batch), evals) in protocol.iter_openings().zip(&proof.evals) {
+            // The supplied evaluations must match the schedule entry on both counts:
+            // the current-point list and the repeat-last successor list.
             if !batch.has_same_shape(evals) {
                 return Err(VerifierError::OpeningBatchSizeMismatch {
                     table_idx,

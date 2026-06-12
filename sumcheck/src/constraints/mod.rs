@@ -10,19 +10,26 @@ use crate::constraints::statement::{EqStatement, NextStatement, SelectStatement}
 pub mod statement;
 
 /// One explicitly ordered group of evaluation constraints.
+///
+/// # Overview
+///
+/// The combiner treats each group as one unit and advances the challenge power by the group's constraint count.
+/// The wrapped kind decides how the group's weight polynomial is built.
 #[derive(Clone, Debug)]
 pub enum Statements<F: Field, EF: ExtensionField<F>> {
-    /// Ordinary multilinear evaluations at concrete points.
+    /// Plain multilinear evaluations at concrete points.
     Eq(EqStatement<EF>),
-    /// Slot-local repeat-last Next evaluations.
+    /// Slot-local repeat-last successor evaluations.
     Next(NextStatement<EF>),
-    /// Selection-based evaluations.
+    /// Selection-based evaluations through the power-map expansion.
     Select(SelectStatement<F, EF>),
 }
 
 impl<F: Field, EF: ExtensionField<F>> Statements<F, EF> {
+    /// Returns the multilinear arity of the wrapped group.
     #[must_use]
     pub const fn num_variables(&self) -> usize {
+        // Forward to the wrapped statement regardless of kind.
         match self {
             Self::Eq(statement) => statement.num_variables(),
             Self::Next(statement) => statement.num_variables(),
@@ -30,8 +37,14 @@ impl<F: Field, EF: ExtensionField<F>> Statements<F, EF> {
         }
     }
 
+    /// Returns the number of constraints in the wrapped group.
+    ///
+    /// # Why this matters
+    ///
+    /// The combiner advances the challenge power by this count, so it sets how many powers the group consumes.
     #[must_use]
     pub const fn len(&self) -> usize {
+        // Forward to the wrapped statement regardless of kind.
         match self {
             Self::Eq(statement) => statement.len(),
             Self::Next(statement) => statement.len(),
@@ -39,8 +52,10 @@ impl<F: Field, EF: ExtensionField<F>> Statements<F, EF> {
         }
     }
 
+    /// Returns true when the wrapped group holds no constraints.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
+        // Forward to the wrapped statement regardless of kind.
         match self {
             Self::Eq(statement) => statement.is_empty(),
             Self::Next(statement) => statement.is_empty(),
@@ -48,7 +63,15 @@ impl<F: Field, EF: ExtensionField<F>> Statements<F, EF> {
         }
     }
 
+    /// Accumulates the wrapped group's challenge-weighted expected sum.
+    ///
+    /// # Arguments
+    ///
+    /// - `eval`: scalar accumulator updated in place.
+    /// - `challenge`: the batching challenge whose powers weight each constraint.
+    /// - `shift`: offset of the first challenge power for this group.
     fn combine_evals(&self, eval: &mut EF, challenge: EF, shift: usize) {
+        // Forward to the wrapped statement; each kind weights its own claimed values.
         match self {
             Self::Eq(statement) => statement.combine_evals(eval, challenge, shift),
             Self::Next(statement) => statement.combine_evals(eval, challenge, shift),
@@ -56,6 +79,24 @@ impl<F: Field, EF: ExtensionField<F>> Statements<F, EF> {
         }
     }
 
+    /// Folds the wrapped group into a dense weight polynomial and an expected sum.
+    ///
+    /// # Arguments
+    ///
+    /// - `combined`: dense weight polynomial accumulator.
+    /// - `eval`: scalar accumulator for the expected sum.
+    /// - `challenge`: the batching challenge whose powers weight each constraint.
+    /// - `shift`: offset of the first challenge power for this group.
+    /// - `initialized`: true once an earlier group has written the accumulator.
+    ///
+    /// # Returns
+    ///
+    /// Whether the accumulator now holds data, which is true unless the group was empty and stayed so.
+    ///
+    /// # Why the flag
+    ///
+    /// The first nonempty group may overwrite the accumulator for speed, while later groups must add onto it.
+    /// The flag carries that decision forward across groups.
     fn combine(
         &self,
         combined: &mut Poly<EF>,
@@ -64,12 +105,15 @@ impl<F: Field, EF: ExtensionField<F>> Statements<F, EF> {
         shift: usize,
         initialized: bool,
     ) -> bool {
+        // An empty group writes nothing, so the prior accumulator state is unchanged.
         if self.is_empty() {
             return initialized;
         }
 
+        // Dispatch on kind; the equality path can overwrite when nothing has been written yet.
         match self {
             Self::Eq(statement) => {
+                // Add onto existing data, or overwrite when this is the first writer.
                 if initialized {
                     statement.combine_hypercube::<F, true>(combined, eval, challenge, shift);
                 } else {
@@ -77,16 +121,32 @@ impl<F: Field, EF: ExtensionField<F>> Statements<F, EF> {
                 }
             }
             Self::Next(statement) => {
+                // Successor weights always add onto the accumulator.
                 statement.combine::<F>(combined, eval, challenge, shift);
             }
             Self::Select(statement) => {
+                // Selection weights always add onto the accumulator.
                 statement.combine(combined, eval, challenge, shift);
             }
         }
 
+        // A nonempty group has now written, so the accumulator is initialized for later groups.
         true
     }
 
+    /// SIMD-packed variant that folds the wrapped group into a packed weight polynomial and an expected sum.
+    ///
+    /// # Arguments
+    ///
+    /// - `combined`: packed weight polynomial accumulator.
+    /// - `eval`: scalar accumulator for the expected sum.
+    /// - `challenge`: the batching challenge whose powers weight each constraint.
+    /// - `shift`: offset of the first challenge power for this group.
+    /// - `initialized`: true once an earlier group has written the accumulator.
+    ///
+    /// # Returns
+    ///
+    /// Whether the accumulator now holds data, which is true unless the group was empty and stayed so.
     fn combine_packed(
         &self,
         combined: &mut Poly<EF::ExtensionPacking>,
@@ -95,12 +155,15 @@ impl<F: Field, EF: ExtensionField<F>> Statements<F, EF> {
         shift: usize,
         initialized: bool,
     ) -> bool {
+        // An empty group writes nothing, so the prior accumulator state is unchanged.
         if self.is_empty() {
             return initialized;
         }
 
+        // Dispatch on kind; the equality path can overwrite when nothing has been written yet.
         match self {
             Self::Eq(statement) => {
+                // Add onto existing data, or overwrite when this is the first writer.
                 if initialized {
                     statement.combine_hypercube_packed::<F, true>(combined, eval, challenge, shift);
                 } else {
@@ -109,75 +172,74 @@ impl<F: Field, EF: ExtensionField<F>> Statements<F, EF> {
                 }
             }
             Self::Next(statement) => {
+                // Successor weights always add onto the accumulator.
                 statement.combine_packed::<F>(combined, eval, challenge, shift);
             }
             Self::Select(statement) => {
+                // Selection weights always add onto the accumulator.
                 statement.combine_packed(combined, eval, challenge, shift);
             }
         }
 
+        // A nonempty group has now written, so the accumulator is initialized for later groups.
         true
     }
 }
 
-/// A combined ordered constraint system.
+/// An ordered batch of evaluation constraint groups folded under one challenge.
 ///
-/// This struct represents a unified constraint system that combines:
-/// - **Equality constraints**: Polynomial evaluations at specific points
-/// - **Next constraints**: Repeat-last successor evaluations
-/// - **Select constraints**: Selection-based polynomial evaluations
+/// # Overview
 ///
-/// All statement groups are batched using powers of a random challenge `γ`.
-/// Challenge powers advance by the number of constraints in each group, so the
-/// order of `statements` is protocol-visible.
+/// Every group shares the same variable space and contributes a weight polynomial and an expected value.
+/// The groups are combined with powers of a single challenge, advancing by each group's constraint count.
 ///
-/// # Mathematical Structure
+/// # Why order matters
 ///
-/// Given ordered statements `S_i`, the combined constraint polynomial is:
+/// The challenge power index advances by the size of each group, so the group order fixes which power each constraint receives.
+/// The prover and the verifier must walk the groups in the same order to agree.
 ///
-/// ```text
-/// W(X) = Σ_i γ^i · weight_i(X)
-/// ```
+/// # Algorithm
 ///
-/// The combined expected evaluation is:
+/// For groups indexed by `i`, the combined weight polynomial and expected value are sums weighted by challenge powers.
 ///
 /// ```text
-/// S = Σ_i γ^i · eval_i
+/// W(X) = sum_i gamma^i * weight_i(X)
+/// S    = sum_i gamma^i * eval_i
 /// ```
 #[derive(Clone, Debug)]
 pub struct Constraint<F: Field, EF: ExtensionField<F>> {
     /// Number of variables shared by every statement group.
     num_variables: usize,
 
-    /// Statement groups in the exact alpha-power order used by batching.
+    /// Statement groups in the exact challenge-power order used by batching.
     statements: Vec<Statements<F, EF>>,
 
-    /// Random challenge `γ` used for batching constraints.
-    ///
-    /// Powers of this challenge weight each ordered constraint.
+    /// Batching challenge whose powers weight each constraint.
     challenge: EF,
 }
 
 impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
-    /// Creates a new constraint from explicitly ordered statement groups.
+    /// Builds a batch from explicitly ordered statement groups.
     ///
-    /// # Parameters
+    /// # Arguments
     ///
-    /// - `challenge`: Random challenge `γ` for batching constraints
-    /// - `num_variables`: Shared multilinear arity of every statement group
-    /// - `statements`: Ordered statement groups in protocol-visible alpha order
+    /// - `challenge`: the batching challenge whose powers weight the groups.
+    /// - `num_variables`: shared multilinear arity that every group must match.
+    /// - `statements`: groups in the protocol-visible order used by batching.
     ///
     /// # Panics
     ///
-    /// Panics if any statement group has a different number of variables.
+    /// Panics if any group has a different variable count than the shared arity.
     #[must_use]
     pub fn new(challenge: EF, num_variables: usize, statements: Vec<Statements<F, EF>>) -> Self {
+        // Every group must live in the same variable space, or batching is ill-defined.
         assert!(
             statements
                 .iter()
                 .all(|statement| statement.num_variables() == num_variables)
         );
 
+        // Store the groups in caller order; that order fixes the challenge powers.
         Self {
             num_variables,
             statements,
@@ -185,189 +247,150 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
         }
     }
 
-    /// Returns the number of variables in the constraint polynomial.
-    ///
-    /// This value determines the dimension of the Boolean hypercube `{0,1}^k`
-    /// over which the constraint polynomial is evaluated.
+    /// Returns the shared number of variables.
     ///
     /// # Returns
     ///
-    /// The number of variables `k` shared by both statement types.
+    /// The dimension of the Boolean hypercube over which every group is evaluated.
     #[must_use]
     pub const fn num_variables(&self) -> usize {
         self.num_variables
     }
 
-    /// Returns the ordered statement groups.
+    /// Returns the statement groups in batching order.
     #[must_use]
     pub fn statements(&self) -> &[Statements<F, EF>] {
         &self.statements
     }
 
-    /// Returns the batching challenge `γ`.
+    /// Returns the batching challenge.
     #[must_use]
     pub const fn challenge(&self) -> EF {
         self.challenge
     }
 
-    /// Returns powers of the batching challenge starting at `γ^shift`.
+    /// Returns the challenge powers starting at the given offset.
+    ///
+    /// # Arguments
+    ///
+    /// - `shift`: exponent of the first power yielded.
     pub fn challenge_powers(&self, shift: usize) -> impl Iterator<Item = EF> {
+        // Seed the power sequence at the challenge raised to the requested offset.
         self.challenge
             .shifted_powers(self.challenge.exp_u64(shift as u64))
     }
 
-    /// Combines expected evaluations using challenge powers.
+    /// Accumulates the challenge-weighted expected value across all groups.
     ///
-    /// This accumulates the weighted sum of all expected constraint evaluations:
-    /// ```text
-    /// eval += Σ_i γ^i · s_i
-    /// ```
+    /// # Arguments
     ///
-    /// # Parameters
+    /// - `eval`: scalar accumulator updated in place.
     ///
-    /// - `eval`: Mutable accumulator for the combined expected evaluation
+    /// # Algorithm
     ///
-    /// # Implementation Notes
-    ///
-    /// Each statement group starts at the challenge power following the
-    /// previous group's final constraint.
+    /// Each group starts at the power just after the previous group's last constraint.
     pub fn combine_evals(&self, eval: &mut EF) {
+        // Running exponent of the next challenge power to assign.
         let mut shift = 0;
         for statement in &self.statements {
+            // Fold this group's expected values starting at the current exponent.
             statement.combine_evals(eval, self.challenge, shift);
+            // Advance past this group's constraints so the next group's powers stay disjoint.
             shift += statement.len();
         }
     }
 
-    /// Combines constraint polynomials into weight polynomial and expected evaluation.
+    /// Adds the batched weight polynomial and expected value onto existing accumulators.
     ///
-    /// This method accumulates both:
-    /// 1. The weight polynomial `W(X)` evaluated at all hypercube points
-    /// 2. The expected evaluation `S` as a scalar
+    /// # Overview
     ///
-    /// Both are added to the provided accumulators, allowing for incremental
-    /// combination across multiple constraints.
+    /// Every hypercube entry gains the challenge-weighted sum of each group's weight at that entry.
+    /// The scalar accumulator gains the matching challenge-weighted sum of expected values.
     ///
-    /// # Parameters
+    /// # Arguments
     ///
-    /// - `combined`: Accumulator for weight polynomial evaluations `W(b)` at all `b ∈ {0,1}^k`
-    /// - `eval`: Accumulator for the combined expected evaluation `S`
-    ///
-    /// # Mathematical Details
-    ///
-    /// Updates `combined[b]` for each `b ∈ {0,1}^k`:
-    /// ```text
-    /// combined[b] += Σ_i γ^i · weight_i(b)
-    /// ```
-    ///
-    /// Updates `eval`:
-    /// ```text
-    /// eval += Σ_i γ^i · s_i
-    /// ```
+    /// - `combined`: weight polynomial accumulator over the hypercube.
+    /// - `eval`: scalar accumulator for the expected value.
     pub fn combine(&self, combined: &mut Poly<EF>, eval: &mut EF) {
+        // Running exponent of the next challenge power to assign.
         let mut shift = 0;
+        // Treat the incoming accumulator as already holding data, so every group adds onto it.
         let mut initialized = true;
         for statement in &self.statements {
+            // Fold this group; the returned flag stays true once anything has been written.
             initialized = statement.combine(combined, eval, self.challenge, shift, initialized);
+            // Advance past this group's constraints to keep the next group's powers disjoint.
             shift += statement.len();
         }
     }
 
-    /// Combines constraint polynomials into weight polynomial and expected evaluation.
+    /// SIMD-packed variant that adds the batched weight polynomial and expected value onto existing accumulators.
     ///
-    /// This method accumulates both:
-    /// 1. The weight polynomial `W(X)` evaluated at all hypercube points
-    /// 2. The expected evaluation `S` as a scalar
+    /// # Arguments
     ///
-    /// Both are added to the provided accumulators, allowing for incremental
-    /// combination across multiple constraints.
-    ///
-    /// # Parameters
-    ///
-    /// - `combined`: Accumulator for packed weight polynomial evaluations `W(b)` at all `b ∈ {0,1}^k`
-    /// - `eval`: Accumulator for the combined expected evaluation `S`
-    ///
-    /// # Mathematical Details
-    ///
-    /// Updates `combined[b]` for each `b ∈ {0,1}^k`:
-    /// ```text
-    /// combined[b] += Σ_i γ^i · weight_i(b)
-    /// ```
-    ///
-    /// Updates `eval`:
-    /// ```text
-    /// eval += Σ_i γ^i · s_i
-    /// ```
+    /// - `combined`: packed weight polynomial accumulator over the hypercube.
+    /// - `eval`: scalar accumulator for the expected value.
     pub fn combine_packed(&self, combined: &mut Poly<EF::ExtensionPacking>, eval: &mut EF) {
+        // Running exponent of the next challenge power to assign.
         let mut shift = 0;
+        // Treat the incoming accumulator as already holding data, so every group adds onto it.
         let mut initialized = true;
         for statement in &self.statements {
+            // Fold this group; the returned flag stays true once anything has been written.
             initialized =
                 statement.combine_packed(combined, eval, self.challenge, shift, initialized);
+            // Advance past this group's constraints to keep the next group's powers disjoint.
             shift += statement.len();
         }
     }
 
-    /// Creates a new combined weight polynomial and expected evaluation.
-    ///
-    /// This is similar to [`combine`](Self::combine) but creates fresh accumulators
-    /// instead of adding to existing ones.
+    /// Builds the batched weight polynomial and expected value in fresh accumulators.
     ///
     /// # Returns
     ///
-    /// A tuple `(W, S)` where:
-    /// - `W`: Weight polynomial evaluations at all points in `{0,1}^k`
-    /// - `S`: Combined expected evaluation scalar
-    ///
-    /// # Usage
-    ///
-    /// Use this method when starting a new constraint combination.
-    /// Use [`combine`](Self::combine) when accumulating multiple constraints.
+    /// A pair holding the weight polynomial over the hypercube and the expected value scalar.
     pub fn combine_new(&self) -> (Poly<EF>, EF) {
-        // Initialize fresh accumulators for the weight polynomial and expected evaluation.
-        // The weight polynomial needs 2^k entries for the full Boolean hypercube.
+        // Fresh weight accumulator: one entry per hypercube point, all zero.
         let mut combined = Poly::zero(self.num_variables());
+        // Fresh scalar accumulator for the expected value.
         let mut eval = EF::ZERO;
 
+        // Running exponent of the next challenge power to assign.
         let mut shift = 0;
+        // The accumulator starts empty, so the first nonempty group may overwrite instead of add.
         let mut initialized = false;
         for statement in &self.statements {
+            // Fold this group; the returned flag flips true once anything has been written.
             initialized =
                 statement.combine(&mut combined, &mut eval, self.challenge, shift, initialized);
+            // Advance past this group's constraints to keep the next group's powers disjoint.
             shift += statement.len();
         }
 
-        // Return the completed weight polynomial and expected evaluation.
         (combined, eval)
     }
 
-    /// Creates a new combined weight polynomial in packed form and expected evaluation.
-    ///
-    /// This is similar to [`combine_packed`](Self::combine_packed) but creates fresh accumulators
-    /// instead of adding to existing ones.
+    /// SIMD-packed variant that builds the batched weight polynomial and expected value in fresh accumulators.
     ///
     /// # Returns
     ///
-    /// A tuple `(W, S)` where:
-    /// - `W`: Weight polynomial evaluations at all points in `{0,1}^k`
-    /// - `S`: Combined expected evaluation scalar
-    ///
-    /// # Usage
-    ///
-    /// Use this method when starting a new constraint combination.
-    /// Use [`combine_packed`](Self::combine_packed) when accumulating multiple constraints.
+    /// A pair holding the packed weight polynomial over the hypercube and the expected value scalar.
     pub fn combine_new_packed(&self) -> (Poly<EF::ExtensionPacking>, EF) {
+        // Number of variables collapsed into each packed lane.
         let k_pack = log2_strict_usize(F::Packing::WIDTH);
         let k = self.num_variables();
 
-        // Initialize fresh accumulators for the weight polynomial and expected evaluation.
-        // The weight polynomial needs 2^(k-k_pack) packed entries for the full Boolean hypercube.
+        // Fresh packed weight accumulator: the lane count absorbs the low variables.
         let mut combined = Poly::zero(k - k_pack);
+        // Fresh scalar accumulator for the expected value.
         let mut eval = EF::ZERO;
 
+        // Running exponent of the next challenge power to assign.
         let mut shift = 0;
+        // The accumulator starts empty, so the first nonempty group may overwrite instead of add.
         let mut initialized = false;
         for statement in &self.statements {
+            // Fold this group; the returned flag flips true once anything has been written.
             initialized = statement.combine_packed(
                 &mut combined,
                 &mut eval,
@@ -375,10 +398,10 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
                 shift,
                 initialized,
             );
+            // Advance past this group's constraints to keep the next group's powers disjoint.
             shift += statement.len();
         }
 
-        // Return the completed weight polynomial and expected evaluation.
         (combined, eval)
     }
 }
@@ -698,9 +721,11 @@ mod tests {
 
     #[test]
     fn test_constraint_statements_preserve_explicit_order() {
+        // Invariant: groups are stored in caller order, since that order fixes the challenge powers.
         let num_variables = 2;
         let gamma = EF::from_u64(2);
 
+        // Fixture state: one equality group of 2 constraints.
         let eq_statement = EqStatement::new_hypercube(
             vec![
                 Point::new(vec![EF::from_u64(1), EF::from_u64(2)]),
@@ -708,12 +733,17 @@ mod tests {
             ],
             vec![EF::from_u64(10), EF::from_u64(20)],
         );
+        // Fixture state: one selection group of 2 constraints.
         let sel_statement = SelectStatement::new(
             num_variables,
             vec![F::from_u64(5), F::from_u64(6)],
             vec![EF::from_u64(30), EF::from_u64(40)],
         );
 
+        // Build the batch with equality first, then selection.
+        //
+        //     index 0: equality (2 constraints)
+        //     index 1: selection (2 constraints)
         let constraint: Constraint<F, EF> = Constraint::new(
             gamma,
             num_variables,
@@ -723,11 +753,14 @@ mod tests {
             ],
         );
 
+        // Both groups survive in the exact order supplied.
         assert_eq!(constraint.statements().len(), 2);
+        // Slot 0 is the equality group with its 2 constraints.
         assert!(matches!(
             &constraint.statements()[0],
             Statements::Eq(statement) if statement.len() == 2
         ));
+        // Slot 1 is the selection group with its 2 constraints.
         assert!(matches!(
             &constraint.statements()[1],
             Statements::Select(statement) if statement.len() == 2
@@ -736,9 +769,17 @@ mod tests {
 
     #[test]
     fn test_constraint_combine_shifts_later_eq_groups() {
+        // Invariant: each group's challenge power continues where the previous group's powers ended.
+        //
+        // Fixture state: three single-constraint groups, so powers run 0, 1, 2.
+        //
+        //     group 0: equality        -> weight gamma^0 = 1
+        //     group 1: successor       -> weight gamma^1
+        //     group 2: equality        -> weight gamma^2
         let num_variables = 4;
         let gamma = EF::from_u64(3);
 
+        // Group 0: a single equality constraint over 4 variables.
         let eq_point_0 = Point::new(vec![
             EF::from_u64(1),
             EF::from_u64(2),
@@ -748,6 +789,7 @@ mod tests {
         let eq_eval_0 = EF::from_u64(5);
         let eq_0 = EqStatement::new_hypercube(vec![eq_point_0.clone()], vec![eq_eval_0]);
 
+        // Group 1: a single full-space successor constraint (empty selector).
         let next_point = Point::new(vec![
             EF::from_u64(6),
             EF::from_u64(7),
@@ -763,6 +805,7 @@ mod tests {
             VariableOrder::Prefix,
         );
 
+        // Group 2: a single equality constraint, which must land on gamma^2.
         let eq_point_1 = Point::new(vec![
             EF::from_u64(11),
             EF::from_u64(12),
@@ -772,6 +815,7 @@ mod tests {
         let eq_eval_1 = EF::from_u64(15);
         let eq_1 = EqStatement::new_hypercube(vec![eq_point_1.clone()], vec![eq_eval_1]);
 
+        // Batch the three groups in this exact order.
         let constraint: Constraint<F, EF> = Constraint::new(
             gamma,
             num_variables,
@@ -784,19 +828,25 @@ mod tests {
 
         let (combined, eval) = constraint.combine_new();
 
+        // Rebuild the expected weight polynomial by hand, applying the same powers.
+        // First group at gamma^0: plain equality weight.
         let mut expected = Poly::new_from_point(eq_point_0.as_slice(), EF::ONE);
+        // Second group at gamma^1: successor weight scaled by gamma.
         expected
             .as_mut_slice()
             .iter_mut()
             .zip(Poly::new_next_from_point(next_point.as_slice()).iter())
             .for_each(|(out, &weight)| *out += gamma * weight);
+        // Third group at gamma^2: equality weight scaled by gamma squared.
         expected
             .as_mut_slice()
             .iter_mut()
             .zip(Poly::new_from_point(eq_point_1.as_slice(), gamma.square()).iter())
             .for_each(|(out, &weight)| *out += weight);
 
+        // The combined weight polynomial matches the hand-built one entry for entry.
         assert_eq!(combined.as_slice(), expected.as_slice());
+        // The scalar side mirrors the same per-group powers on the claimed values.
         assert_eq!(
             eval,
             eq_eval_0 + gamma * next_eval + gamma.square() * eq_eval_1

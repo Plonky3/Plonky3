@@ -326,22 +326,39 @@ impl VariableOrder {
                     Self::Suffix => reversed.get_subpoint_over_range(..constraint.num_variables()),
                 };
 
+                // The batched weight polynomial is one big random combination
+                // of all statement weights against successive challenge powers.
+                //
+                //     value = sum_g sum_i weight_{g,i} * chi^{shift_g + i}
+                //
+                // Each statement group contributes a contiguous block of powers.
+                // The running shift is where the next group's powers begin.
+                //
+                //     group 0: chi^0       chi^1   ... chi^{l_0 - 1}
+                //     group 1: chi^{l_0}   ...         chi^{l_0 + l_1 - 1}
+                //     ...
                 let mut shift = 0;
                 let mut acc = EF::ZERO;
+                // Each statement group exposes its weights evaluated at the
+                // local challenge; the kinds differ only in how weights are formed.
                 for statement in constraint.statements() {
                     match statement {
+                        // Equality weights: one term per recorded equality point.
                         Statements::Eq(eq_statement) => {
+                            // Pair this group's weights with powers starting at the shift.
                             acc += dot_product::<EF, _, _>(
                                 eq_statement.weights_at(&local_challenge),
                                 constraint.challenge_powers(shift),
                             );
                         }
+                        // Successor-view weights: equality through the repeat-last view.
                         Statements::Next(next_statement) => {
                             acc += dot_product::<EF, _, _>(
                                 next_statement.weights_at(&local_challenge),
                                 constraint.challenge_powers(shift),
                             );
                         }
+                        // Selector weights: one term per single-variable selector.
                         Statements::Select(sel_statement) => {
                             acc += dot_product::<EF, _, _>(
                                 sel_statement.weights_at(&local_challenge),
@@ -349,6 +366,8 @@ impl VariableOrder {
                             );
                         }
                     }
+                    // Advance past this group's block so the next group's powers
+                    // begin one beyond the last power consumed here.
                     shift += statement.len();
                 }
                 acc
@@ -566,7 +585,8 @@ mod tests {
                 (0..rng.random_range(0..=3))
                     .for_each(|_| sel_statement.add_constraint(rng.random(), rng.random()));
 
-                // One to three full-space repeat-last Next constraints at random points.
+                // Up to 3 successor-view equality constraints at random points.
+                // The empty prefix point means each one spans the full space.
                 let mut next_statement = NextStatement::initialize(num_variables);
                 (0..rng.random_range(0..=3)).for_each(|_| {
                     next_statement.add_evaluated_constraint(
@@ -577,6 +597,9 @@ mod tests {
                     );
                 });
 
+                // Bundle the three statement groups into one constraint.
+                // Order fixes the challenge-power layout: equality, then
+                // successor-view, then selector blocks.
                 Constraint::new(
                     gamma,
                     num_variables,

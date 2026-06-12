@@ -297,6 +297,11 @@ where
 
         proof.rounds[round_index].queries = queries;
 
+        // Batch the two statement groups into one constraint over the same cube.
+        // The out-of-domain claims form the equality group.
+        // The query openings form the selection group.
+        // A freshly sampled challenge weights the groups by its successive powers,
+        // and the verifier samples the same challenge to rebuild the identical batch.
         let num_variables = ood_statement.num_variables();
         let constraint = Constraint::new(
             challenger.sample_algebra_element(),

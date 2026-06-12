@@ -341,12 +341,22 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     }
 }
 
-/// Repeat-last Next helpers over the suffix-half equality table.
 impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
-    /// Adds `eq_weight * eq1[i] + shifted_weight * eq1[i - 1]` into each row.
+    /// Accumulates one outer chunk of the successor decomposition into a row buffer.
     ///
-    /// `boundary` is the already-scaled shifted contribution for row 0, whose
-    /// predecessor belongs to the previous outer chunk.
+    /// Each row receives two contributions:
+    /// - its own equality weight scaled by the per-row factor
+    /// - its predecessor's equality weight scaled by the shifted factor
+    ///
+    /// Row 0 has no predecessor inside this chunk, so it instead takes the
+    /// precomputed cross-chunk boundary value.
+    ///
+    /// # Arguments
+    ///
+    /// - `out`: row buffer accumulated in place, one entry per equality row.
+    /// - `eq_weight`: scale applied to each row's own equality weight.
+    /// - `shifted_weight`: scale applied to each row's predecessor weight.
+    /// - `boundary`: already-scaled predecessor contribution for row 0.
     #[doc(hidden)]
     pub fn accumulate_next_chunk_into(
         &self,
@@ -355,57 +365,73 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         shifted_weight: EF,
         boundary: EF,
     ) {
+        // Stream the equality weights as scalars, unpacking SIMD lanes when stored packed,
+        // then run the shared row recurrence over that stream.
         match self {
             Self::Unpacked(eq1) => {
-                let (first_out, rest_out) = out.split_first_mut().unwrap();
-                let mut eq1 = eq1.iter().copied();
-                let mut prev = eq1.next().unwrap();
-
-                *first_out += eq_weight * prev + boundary;
-                rest_out.iter_mut().zip_eq(eq1).for_each(|(out, w1)| {
-                    *out += eq_weight * w1 + shifted_weight * prev;
-                    prev = w1;
-                });
+                accumulate_next_rows(
+                    out,
+                    eq_weight,
+                    shifted_weight,
+                    boundary,
+                    eq1.iter().copied(),
+                );
             }
             Self::Packed(eq1) => {
-                let (first_out, rest_out) = out.split_first_mut().unwrap();
-                let mut eq1 = EF::ExtensionPacking::to_ext_iter(eq1.iter().copied());
-                let mut prev = eq1.next().unwrap();
-
-                *first_out += eq_weight * prev + boundary;
-                rest_out.iter_mut().zip_eq(eq1).for_each(|(out, w1)| {
-                    *out += eq_weight * w1 + shifted_weight * prev;
-                    prev = w1;
-                });
+                accumulate_next_rows(
+                    out,
+                    eq_weight,
+                    shifted_weight,
+                    boundary,
+                    EF::ExtensionPacking::to_ext_iter(eq1.iter().copied()),
+                );
             }
         }
     }
 
-    /// Weighted accumulation for prefix compression using shifted eq1 weights.
+    /// Accumulates the interior of one outer chunk for shifted prefix compression.
     ///
-    /// The first row is intentionally skipped; callers handle it with the
-    /// previous outer chunk's last equality weight.
+    /// Each inner block is scaled by the outer prefix weight times its
+    /// predecessor's suffix-half equality weight, then added into the row buffer.
+    ///
+    /// The first inner block is skipped because its predecessor block lives in
+    /// the previous outer chunk and is handled by the caller.
+    ///
+    /// # Arguments
+    ///
+    /// - `out`: row buffer over the inner variables, accumulated in place.
+    /// - `chunk`: one outer chunk laid out as consecutive inner blocks.
+    /// - `w0`: outer prefix weight applied to every inner block in this chunk.
     pub(super) fn compress_prefix_shifted_into(&self, out: &mut [EF], chunk: &[F], w0: EF) {
+        // The output length defines one inner block of evaluations.
         let size_inner = out.len();
         match self {
+            // Scalar storage: one equality weight per inner block.
             Self::Unpacked(eq1) => {
+                // Skip the first inner block; its predecessor is in the prior chunk.
                 chunk
                     .chunks(size_inner)
                     .skip(1)
                     .zip(eq1.iter())
                     .for_each(|(chunk, &w1)| {
+                        // Combined weight: outer prefix times suffix predecessor.
                         let w = w0 * w1;
                         out.iter_mut()
                             .zip_eq(chunk.iter())
                             .for_each(|(acc, &f)| *acc += w * f);
                     });
             }
+            // SIMD-packed storage: one packed weight covers WIDTH consecutive blocks.
             Self::Packed(eq1) => {
+                // Drop the first inner block, then group blocks WIDTH at a time so
+                // each group pairs with one packed equality weight.
                 chunk[size_inner..]
                     .chunks(size_inner * F::Packing::WIDTH)
                     .zip(eq1.iter())
                     .for_each(|(chunk, &w1)| {
+                        // Combined packed weight: outer prefix times suffix predecessor.
                         let w = w1 * w0;
+                        // Unpack the group into per-block scalar weights and blocks.
                         chunk
                             .chunks(size_inner)
                             .zip(EF::ExtensionPacking::to_ext_iter([w]))
@@ -419,32 +445,42 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         }
     }
 
-    /// Dots a base-field chunk with the beginning of this eq table.
+    /// Dots a base-field chunk against the leading entries of this equality table.
     ///
-    /// Used for shifted repeat-last Next weights, where callers pass
-    /// `poly[1..]` chunks and the first eq weight corresponds to the previous
-    /// row. The final chunk may be shorter than the packed eq table width.
+    /// Callers pass a suffix block that already drops its first row, so the
+    /// first equality weight aligns with the predecessor of that row.
+    ///
+    /// The block may be shorter than the table, so only its leading rows are used.
     pub(super) fn dot_with_base_shifted(&self, chunk: &[F]) -> EF {
+        // The chunk never exceeds one full suffix-half row block.
         debug_assert!(chunk.len() <= self.scalar_chunk_size());
 
         match self {
+            // Scalar storage: dot the chunk against the matching leading weights.
             Self::Unpacked(eq1) => {
                 dot_product(eq1.iter().take(chunk.len()).copied(), chunk.iter().copied())
             }
+            // SIMD-packed storage: split the chunk into full lanes plus a tail.
             Self::Packed(eq1) => {
                 let (packed, suffix) = F::Packing::pack_slice_with_suffix(chunk);
                 let mut sum = EF::ZERO;
+                // Lane-parallel part: dot the packed weights with the packed chunk,
+                // then reduce the resulting packed value across its lanes.
                 if !packed.is_empty() {
                     let packed_sum = dot_product(eq1.iter().copied(), packed.iter().copied());
                     sum += EF::ExtensionPacking::to_ext_iter([packed_sum]).sum::<EF>();
                 }
 
+                // Tail part: the leftover rows that did not fill a full lane.
+                // They share the next packed weight, unpacked back to scalars.
                 if !suffix.is_empty() {
+                    // Unpack the next packed weight into its scalar lanes and dot it
+                    // against the leftover tail rows.
                     let w1 = eq1.as_slice()[packed.len()];
-                    sum += EF::ExtensionPacking::to_ext_iter([w1])
-                        .zip(suffix.iter())
-                        .map(|(w1, &value)| w1 * value)
-                        .sum::<EF>();
+                    sum += dot_product::<EF, _, _>(
+                        EF::ExtensionPacking::to_ext_iter([w1]),
+                        suffix.iter().copied(),
+                    );
                 }
 
                 sum
@@ -452,15 +488,16 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
         }
     }
 
-    /// Returns the final scalar entry of this eq table.
+    /// Returns the final scalar entry of this equality table.
     ///
-    /// For packed storage this extracts the last lane of the last packed value.
-    /// Repeat-last Next uses this as the boundary weight for the repeated final
-    /// row.
+    /// This is the boundary weight that the repeated maximal row carries in the
+    /// successor decomposition.
     #[doc(hidden)]
     pub fn last_scalar(&self) -> EF {
         match self {
+            // Scalar storage: the last entry is already a field element.
             Self::Unpacked(eq1) => *eq1.as_slice().last().unwrap(),
+            // Packed storage: the final row is the last lane of the last packed value.
             Self::Packed(eq1) => {
                 EF::ExtensionPacking::to_ext_iter([*eq1.as_slice().last().unwrap()])
                     .last()
@@ -468,6 +505,44 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
             }
         }
     }
+}
+
+/// Adds one outer chunk of the successor decomposition from a stream of equality weights.
+///
+/// The same recurrence drives both scalar and packed tables once their weights are
+/// presented as a scalar stream, so the two storage layouts share this body.
+///
+/// Each row receives its own weight scaled by the per-row factor plus its predecessor's
+/// weight scaled by the shifted factor.
+/// Row 0 has no predecessor inside this chunk, so it takes the cross-chunk boundary instead.
+///
+/// # Arguments
+///
+/// - `out`: row buffer accumulated in place, one entry per equality row.
+/// - `eq_weight`: scale applied to each row's own equality weight.
+/// - `shifted_weight`: scale applied to each row's predecessor weight.
+/// - `boundary`: already-scaled predecessor contribution for row 0.
+/// - `weights`: the equality weights of this chunk in row order.
+fn accumulate_next_rows<EF: Field>(
+    out: &mut [EF],
+    eq_weight: EF,
+    shifted_weight: EF,
+    boundary: EF,
+    mut weights: impl Iterator<Item = EF>,
+) {
+    // Peel off row 0; its predecessor lives in the previous outer chunk.
+    let (first_out, rest_out) = out.split_first_mut().unwrap();
+    // Running predecessor weight, seeded with the row-0 weight.
+    let mut prev = weights.next().unwrap();
+
+    // Row 0: own weight plus the cross-chunk boundary.
+    *first_out += eq_weight * prev + boundary;
+    // Remaining rows: own weight plus the in-chunk predecessor weight.
+    rest_out.iter_mut().zip_eq(weights).for_each(|(out, w1)| {
+        *out += eq_weight * w1 + shifted_weight * prev;
+        // Slide the predecessor window forward by one row.
+        prev = w1;
+    });
 }
 
 #[cfg(test)]

@@ -165,7 +165,7 @@ where
         })
     }
 
-    /// Records current and repeat-last Next opening claims on the inner verifier.
+    /// Records opening claims at the current points and at their repeat-last successor points on the inner verifier.
     pub fn add_claim<Ch>(
         &mut self,
         table_idx: usize,

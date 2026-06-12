@@ -203,10 +203,22 @@ impl<F: Field> EqStatement<F> {
         self.points.len()
     }
 
-    /// Iterates over this statement's weights evaluated at `row`.
+    /// Streams one weight per stored constraint, each evaluated at a single point.
+    ///
+    /// # Overview
+    ///
+    /// The weight of an equality constraint is the equality polynomial of its stored point.
+    /// This yields its value at the supplied point, one entry per constraint, in stored order.
+    ///
+    /// # Arguments
+    ///
+    /// - `row`: the point at which every constraint weight is evaluated.
     pub fn weights_at<'a>(&'a self, row: &'a Point<F>) -> impl Iterator<Item = F> + 'a {
+        // Walk the stored constraint points in order.
         self.points
             .iter()
+            // For each point, evaluate its equality polynomial at the query point.
+            // The result is 1 only when the query point equals the stored point on the hypercube.
             .map(|point| Point::eval_eq(point.as_slice(), row.as_slice()))
     }
 
@@ -236,14 +248,31 @@ impl<F: Field> EqStatement<F> {
         self.evaluations.push(eval);
     }
 
-    /// Combine all constraints into a single batched weight polynomial and expected sum.
+    /// Folds every constraint into one weight polynomial and one expected sum.
     ///
-    /// Computes `W(x) = sum_i gamma^{i + shift} * eq(x, z_i)` for all
-    /// `x in {0,1}^k` using the Plonky3 `eval_eq_batch` kernel, and
-    /// accumulates the scalar sum `S = sum_i gamma^{i + shift} * s_i`.
+    /// # Overview
     ///
-    /// The `INITIALIZED` const generic controls whether the accumulator
-    /// is added to (true) or overwritten (false).
+    /// The weight polynomial sums each constraint's equality polynomial under a power of the challenge.
+    /// The first constraint is weighted by the challenge raised to the shift, and each later one by the next power.
+    ///
+    /// ```text
+    /// W(x) = sum_i gamma^{shift + i} * eq(x, z_i)   for all x in {0,1}^k
+    /// S    = sum_i gamma^{shift + i} * s_i
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// - `acc_weights`: weight polynomial accumulator over the hypercube.
+    /// - `acc_sum`: scalar accumulator for the expected sum.
+    /// - `challenge`: the batching challenge whose powers weight each constraint.
+    /// - `shift`: offset of the first challenge power, so this group follows earlier groups.
+    ///
+    /// # Why a shift
+    ///
+    /// Constraint groups share one challenge but must not reuse the same powers.
+    /// The shift starts this group's powers where the previous group's powers ended.
+    ///
+    /// The const generic flag controls whether the weight accumulator is added to when true or overwritten when false.
     #[instrument(skip_all, fields(num_constraints = self.len(), num_variables = self.num_variables(), shift))]
     pub fn combine_hypercube<Base, const INITIALIZED: bool>(
         &self,
@@ -255,30 +284,53 @@ impl<F: Field> EqStatement<F> {
         Base: Field,
         F: ExtensionField<Base>,
     {
+        // Nothing to fold when this group holds no constraints.
         if self.points.is_empty() {
             return;
         }
 
         let num_constraints = self.len();
+        // Build the batching weights gamma^shift, gamma^{shift+1}, ..., one per constraint.
+        // Starting at the shift keeps this group's powers disjoint from earlier groups.
         let challenges = challenge
             .shifted_powers(challenge.exp_u64(shift as u64))
             .collect_n(num_constraints);
 
+        // Lay the constraint points out as a matrix: rows are variables, columns are points.
         let points_matrix = Point::transpose(&self.points, false);
+        // Hot path: one pass computes all 2^k equality evaluations weighted by the powers above.
+        // The flag selects accumulate-into versus overwrite for the destination slice.
         eval_eq_batch::<Base, F, INITIALIZED>(
             points_matrix.as_view(),
             acc_weights.as_mut_slice(),
             &challenges,
         );
 
+        // Accumulate the scalar side: the same powers weight the stored expected values.
         *acc_sum +=
             dot_product::<F, _, _>(self.evaluations.iter().copied(), challenges.into_iter());
     }
 
-    /// SIMD-packed variant of constraint batching on the hypercube.
+    /// SIMD-packed variant of folding all constraints on the hypercube.
     ///
-    /// Produces the same result as the scalar version but stores the weight
-    /// polynomial in packed form and starts batching at `gamma^shift`.
+    /// # Overview
+    ///
+    /// Produces the same weight polynomial and expected sum as the scalar variant.
+    /// The weight polynomial is stored packed, with one SIMD element per group of consecutive hypercube entries.
+    ///
+    /// # Arguments
+    ///
+    /// - `weights`: packed weight polynomial accumulator over the hypercube.
+    /// - `sum`: scalar accumulator for the expected sum.
+    /// - `challenge`: the batching challenge whose powers weight each constraint.
+    /// - `shift`: offset of the first challenge power, so this group follows earlier groups.
+    ///
+    /// # Algorithm
+    ///
+    /// Two strategies cover small and large variable counts.
+    ///
+    /// - When the packing width spans at least half the variables, build each constraint's equality polynomial and pack it directly.
+    /// - Otherwise split the variables at the midpoint, expand each half, and recombine them with a parallel dot product over the lanes.
     #[instrument(skip_all, fields(num_constraints = self.len(), num_variables = self.num_variables(), shift))]
     pub fn combine_hypercube_packed<Base, const INITIALIZED: bool>(
         &self,
@@ -299,13 +351,14 @@ impl<F: Field> EqStatement<F> {
         assert!(k >= k_pack);
         assert_eq!(weights.num_variables() + k_pack, k);
 
-        // Combine expected evaluations: S = ∑_i γ^i * s_i
+        // Scalar side: accumulate sum_i gamma^{shift + i} * s_i into the running sum.
         self.combine_evals(sum, challenge, shift);
 
-        // Apply naive method if number of variables is too small for packed split method
+        // Small case: too few variables to split, so build each equality polynomial directly.
         if k_pack * 2 > k {
             self.points
                 .iter()
+                // Pair each constraint with its power gamma^{shift + i}, starting at the shift.
                 .zip(challenge.shifted_powers(challenge.exp_u64(shift as u64)))
                 .enumerate()
                 .for_each(|(i, (point, challenge))| {
@@ -326,9 +379,12 @@ impl<F: Field> EqStatement<F> {
             return;
         }
 
+        // Large case: split the variables at the midpoint and expand each half separately.
         let points = Point::transpose(&self.points, true);
         let (left, right) = points.split_rows(k / 2);
+        // Left half goes into packed SIMD lanes, with no challenge weight applied here.
         let left = packed_batch_eqs::<Base, F>(left);
+        // Right half carries the batching weights, seeded at gamma^shift for this group.
         let right = batch_eqs::<Base, F>(right, challenge, shift);
 
         weights
@@ -347,8 +403,20 @@ impl<F: Field> EqStatement<F> {
             });
     }
 
-    /// Combines expected evaluation values with powers of `gamma`, starting at `gamma^shift`.
+    /// Accumulates the challenge-weighted sum of this group's expected evaluations.
+    ///
+    /// # Overview
+    ///
+    /// The first stored value is weighted by the challenge raised to the shift, the next by the following power, and so on.
+    ///
+    /// # Arguments
+    ///
+    /// - `claimed_eval`: scalar accumulator updated in place.
+    /// - `gamma`: the batching challenge whose powers weight each stored value.
+    /// - `shift`: offset of the first challenge power, so this group follows earlier groups.
     pub fn combine_evals(&self, claimed_eval: &mut F, gamma: F, shift: usize) {
+        // Dot the stored expected values against gamma^shift, gamma^{shift+1}, ...
+        // Starting at the shift keeps this group's powers disjoint from earlier groups.
         *claimed_eval += dot_product(
             self.evaluations.iter().copied(),
             gamma.shifted_powers(gamma.exp_u64(shift as u64)),

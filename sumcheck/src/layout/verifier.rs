@@ -108,20 +108,20 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     /// # Arguments
     ///
     /// - `table_idx`  — source table index.
-    /// - `batch`      — opening batch sampled at this point.
-    /// - `evals`      — claimed evaluations with the same current/Next split.
-    /// - `challenger` — Fiat–Shamir transcript.
+    /// - `batch`      — current and next columns opened at this point.
+    /// - `evals`      — claimed evaluations split the same way as the columns.
+    /// - `challenger` — Fiat-Shamir transcript.
     ///
-    /// # Fiat–Shamir
+    /// # Fiat-Shamir
     ///
-    /// - Samples the opening point internally from the challenger.
-    /// - Absorbs the evaluations into the transcript.
-    /// - Mirrors exactly the prover's `eval` absorption order.
+    /// - Samples the opening point internally from the transcript.
+    /// - Absorbs the evaluations, current group first then next.
+    /// - Mirrors exactly the prover-side absorption order.
     ///
     /// # Panics
     ///
     /// - At least one current or next column must be requested.
-    /// - `batch` and `evals` must have the same current/Next split lengths.
+    /// - Columns and evaluations must agree on both group lengths.
     /// - Every column index must be in range for this table.
     pub fn add_claim<Ch>(
         &mut self,
@@ -133,14 +133,17 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         Ch: p3_challenger::FieldChallenger<F> + p3_challenger::GrindingChallenger<Witness = F>,
     {
         let placement = self.placement(table_idx);
+        // Split the request into its two column groups.
         let current = batch.current();
         let next = batch.next();
-        // Preconditions.
+        // An empty request would silently record nothing.
         assert!(
             !batch.is_empty(),
             "opening schedule must name at least one column"
         );
+        // Columns and evaluations must line up group-for-group.
         assert!(batch.has_same_shape(evals));
+        // Every requested column must address an existing slot in this table.
         assert!(
             current
                 .iter()
@@ -157,17 +160,18 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
             self.num_variables_table(table_idx),
         );
 
-        // Absorb the evals into the transcript; mirrors the prover's eval.
+        // Absorb the evals in the same current-then-next order as the prover.
         challenger.observe_algebra_slice(evals.current());
         challenger.observe_algebra_slice(evals.next());
 
-        // Pair each column index with its claimed evaluation into typed openings.
+        // Pair each current column with its claimed evaluation.
         let current_openings = current
             .iter()
             .copied()
             .zip(evals.current().iter().copied())
             .map(|(poly_idx, eval)| VerifierOpening::new(poly_idx, eval))
             .collect();
+        // Pair each next column with its claimed evaluation.
         let next_openings = next
             .iter()
             .copied()
@@ -220,12 +224,16 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         let mut concrete = EF::ZERO;
         let mut alphas = alpha.powers();
 
-        // Concrete openings: three loops, no filter. Alphas match insertion order.
+        // Walk every concrete opening in the canonical insertion order.
+        //     placements -> claims -> current openings -> next openings
+        // Each opening consumes the next power of alpha, matching the prover.
         for placement in &self.placements {
             for claim in &self.claim_map[placement.idx()] {
+                // Current group first.
                 for opening in claim.current_openings() {
                     concrete += opening.eval() * alphas.next().unwrap();
                 }
+                // Next group second, continuing the same power sequence.
                 for opening in claim.next_openings() {
                     concrete += opening.eval() * alphas.next().unwrap();
                 }
@@ -241,29 +249,36 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         concrete + virtuals
     }
 
-    /// Builds the verifier-side equality constraint batching every claim.
+    /// Builds the alpha-batched constraint over every recorded claim.
     ///
-    /// # Contributions
+    /// # Overview
     ///
-    /// - Concrete opening: equality at the selector-lifted claim point.
-    /// - Virtual claim: equality at the full stacked point.
+    /// - A current opening contributes an equality at the selector-lifted claim point.
+    /// - A next opening contributes a repeat-last successor weight at that slot.
+    /// - A virtual claim contributes an equality at the full stacked point.
+    ///
+    /// # Why the split
+    ///
+    /// - The emitted statements preserve the same mixed insertion order the batched sum walks.
+    /// - That keeps each statement aligned with the alpha power assigned to its opening.
     pub fn constraint(&self, alpha: EF) -> Constraint<F, EF> {
-        // Output statements span the full stacked variable space and preserve
-        // the exact mixed Eq/Next insertion order used by `sum`.
+        // Accumulate statements over the full stacked variable space.
+        // The push order mirrors the batched-sum walk, so alpha powers stay aligned.
         let mut statements = Vec::new();
 
-        // Concrete contributions: walk each opening in insertion order and lift
-        // its claim point through the selector for that opening's column.
+        // Concrete contributions, walked in canonical insertion order.
         for placement in &self.placements {
             for claim in &self.claim_map[placement.idx()] {
+                // Current group: one equality statement per claim's current openings.
                 let mut eq_statement = EqStatement::initialize(self.k);
                 for opening in claim.current_openings() {
-                    // The opening's column tells us which selector to lift through.
-                    // Claims recorded through `add_claim` always bind a column,
-                    // so a virtual (column-free) opening cannot appear here.
+                    // The column selects which slot lift to apply.
+                    // Recorded concrete openings always bind a column, never virtual.
                     let col = opening
                         .poly_idx()
                         .expect("concrete claims only hold column-bound openings");
+                    // Lift the slot-local claim point into the full stacked space.
+                    // Suffix and prefix layouts place the folded variables at opposite ends.
                     let lifted = if self.strategy.reverse_selectors {
                         placement.selectors()[col].lift_suffix(claim.point())
                     } else {
@@ -271,18 +286,22 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
                     };
                     eq_statement.add_evaluated_constraint(lifted, opening.eval());
                 }
+                // Emit only if this claim actually had current openings.
                 if !eq_statement.is_empty() {
                     statements.push(Statements::Eq(eq_statement));
                 }
 
+                // Next group: one repeat-last successor statement per claim's next openings.
                 let mut next_statement = NextStatement::initialize(self.k);
                 for opening in claim.next_openings() {
                     let col = opening.poly_idx().unwrap();
+                    // The successor weight depends on which end the folded variables sit.
                     let var_order = if self.strategy.reverse_selectors {
                         VariableOrder::Suffix
                     } else {
                         VariableOrder::Prefix
                     };
+                    // Feed the slot selector, the claim point, the eval, and the layout.
                     next_statement.add_evaluated_constraint(
                         placement.selectors()[col].point(),
                         claim.point().clone(),
@@ -290,6 +309,7 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
                         var_order,
                     );
                 }
+                // Emit only if this claim actually had next openings.
                 if !next_statement.is_empty() {
                     statements.push(Statements::Next(next_statement));
                 }
@@ -301,11 +321,12 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         for claim in &self.virtual_claims {
             virtual_statement.add_evaluated_constraint(claim.point.clone(), claim.eval);
         }
+        // Emit the virtual block only when at least one virtual claim exists.
         if !virtual_statement.is_empty() {
             statements.push(Statements::Eq(virtual_statement));
         }
 
-        // Wrap the assembled statement into an alpha-batched constraint.
+        // Wrap the assembled statements into an alpha-batched constraint.
         Constraint::new(alpha, self.k, statements)
     }
 

@@ -325,23 +325,35 @@ impl<F: Field> Poly<F> {
         Self(evals)
     }
 
-    /// Materializes the repeat-last Next weight table for `point`.
+    /// Materializes the dense repeat-last successor weight table for a point.
     ///
-    /// If `eq = Eq(point, .)`, then:
+    /// Start from the equality table `eq[i] = Eq(point, i)`.
+    /// The successor table shifts each weight to the next row and repeats the maximal row:
     /// ```text
-    /// Next(point, .) = [0, eq[0], eq[1], ..., eq[last - 1]] + Omega
-    /// Omega[last] = eq[last]
+    /// table = [0, eq[0], eq[1], ..., eq[last - 1]] + Omega
+    /// Omega = [0, ..., 0, eq[last]]
     /// ```
     ///
-    /// This is useful as a dense reference implementation. Hot paths should
-    /// prefer shifted views or split/compressed forms instead of materializing.
+    /// # Performance
+    ///
+    /// This allocates the full dense table and is meant as a reference.
+    /// Hot paths should use the shifted view or the split and compressed forms instead.
     pub fn new_next_from_point(point: &[F]) -> Self {
+        // Start from the plain equality table eq[i] = Eq(point, i).
         let mut res = Self::new_from_point(point, F::ONE).0;
         let n = res.len();
 
+        // Save the maximal-row weight before shifting overwrites it.
+        // This is the boundary weight Omega that the repeated last row keeps.
         let last = res[n - 1];
+        // Shift every weight one row up: row i receives the old weight of row i - 1.
+        //
+        //     before: [ eq0, eq1, eq2, ..., eq_{n-1} ]
+        //     after : [  *  , eq0, eq1, ..., eq_{n-2} ]
         res.copy_within(0..n - 1, 1);
+        // Row 0 has no predecessor, so its successor weight is zero.
         res[0] = F::ZERO;
+        // The maximal row maps to itself, so add back its own equality weight.
         res[n - 1] += last;
 
         Self::new(res)
@@ -367,15 +379,17 @@ impl<F: Field> Poly<F> {
         }
     }
 
-    /// Evaluates the repeat-last shifted view of this polynomial at `point`.
+    /// Evaluates this polynomial against the repeat-last successor weights at a point.
     ///
-    /// Computes
+    /// Each hypercube row is read at its successor, with the maximal row repeating itself:
     /// ```text
-    ///     sum_{x in {0,1}^n} eq(point, x) * self(succ_repeat_last(x)).
+    ///     sum_{x in {0,1}^n} eq(point, x) * self(succ_repeat_last(x))
     /// ```
     #[must_use]
     #[inline]
     pub fn eval_next_base<EF: ExtensionField<F>>(&self, point: &Point<EF>) -> EF {
+        // Build the factored equality table for the point and let the split form
+        // contract it against the successor view without materializing the dense table.
         SplitEq::new_packed(point, EF::ONE).eval_next_base(self)
     }
 

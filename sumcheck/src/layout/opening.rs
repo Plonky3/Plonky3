@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use p3_field::Field;
+use p3_field::{Field, add_scaled_slice_in_place};
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 
@@ -12,9 +12,9 @@ use crate::svo::{SvoAccumulators, SvoPoint};
 /// Multi-opening claim over an SVO point.
 pub type ProverMultiClaim<F, EF> =
     MultiClaim<EF, SvoPoint<F, EF>, EqSvoPartials<EF>, NextSvoPartials<EF>>;
-/// Ordinary prover opening payload.
+/// Prover opening that evaluates a column at the sampled point.
 pub type ProverEqOpening<EF> = Opening<EF, EqSvoPartials<EF>>;
-/// Repeat-last Next prover opening payload.
+/// Prover opening that evaluates the repeat-last successor view at the sampled point.
 pub type ProverNextOpening<EF> = Opening<EF, NextSvoPartials<EF>>;
 /// Virtual claim carrying precomputed SVO accumulators.
 pub type ProverVirtualClaim<EF> = Claim<EF, Point<EF>, SvoAccumulators<EF>>;
@@ -26,135 +26,169 @@ pub type VerifierMultiClaim<EF> = MultiClaim<EF, Point<EF>, (), ()>;
 /// Virtual evaluation claim on the stacked polynomial (verifier side).
 pub type VerifierVirtualClaim<EF> = Claim<EF, Point<EF>, ()>;
 
-/// Per-round ordinary Eq data for one SVO round.
+/// Equality-weight partial-evaluation table produced for one round of the small-value-optimization preprocessing.
+///
+/// Holds the multilinear residual left active after that round has been folded.
 #[derive(Debug, Clone)]
 pub struct EqPartials<EF: Field> {
+    /// Active equality-weight residual for this round.
     pub(crate) poly: Poly<EF>,
 }
 
 impl<EF: Field> EqPartials<EF> {
-    /// Builds the active Eq data for one SVO round.
+    /// Wraps an already-built per-round residual.
     pub const fn new(poly: Poly<EF>) -> Self {
         Self { poly }
     }
 
-    /// Builds zero active Eq data over `num_variables`.
+    /// Builds an all-zero residual.
+    ///
+    /// # Arguments
+    ///
+    /// - `num_variables` — arity of the multilinear residual to allocate.
     pub fn zero(num_variables: usize) -> Self {
         Self {
+            // Start from the additive identity so callers can fold contributions in afterward.
             poly: Poly::zero(num_variables),
         }
     }
 
-    /// Adds `scale * other` into this round's polynomial.
+    /// Folds another round's residual into this one, weighted by a challenge power.
+    ///
+    /// # Arguments
+    ///
+    /// - `other` — source residual to add in.
+    /// - `scale` — multiplier applied to every source coefficient.
+    ///
+    /// # Panics
+    ///
+    /// - The two residuals must share the same arity.
     pub fn accumulate(&mut self, other: &Self, scale: EF) {
+        // Invariant: only residuals over the same variable space can be added coefficient-wise.
         assert_eq!(self.poly.num_variables(), other.poly.num_variables());
 
-        self.poly
-            .as_mut_slice()
-            .iter_mut()
-            .zip(other.poly.iter())
-            .for_each(|(out, &f)| *out += scale * f);
+        // Coefficient-wise fused multiply-add: out[i] += scale * other[i].
+        // The shared kernel packs the slices and runs the add over SIMD lanes.
+        add_scaled_slice_in_place(self.poly.as_mut_slice(), other.poly.as_slice(), scale);
     }
 
-    /// Returns the active Eq data polynomial.
+    /// Returns the active equality-weight residual.
     pub const fn poly(&self) -> &Poly<EF> {
         &self.poly
     }
 }
 
-/// Per-round ordinary Eq SVO partial evaluations for one opening.
+/// Equality-weight preprocessing payload for one ordinary opening.
+///
+/// Carries one residual table per round of the small-value-optimization preprocessing.
 #[derive(Debug, Clone)]
 pub struct EqSvoPartials<EF: Field> {
+    /// One residual table per preprocessing round, in round order.
     pub(crate) rounds: Vec<EqPartials<EF>>,
 }
 
 impl<EF: Field> EqSvoPartials<EF> {
-    /// Builds Eq SVO partials from per-round data.
+    /// Wraps the per-round residual tables.
     pub const fn new(rounds: Vec<EqPartials<EF>>) -> Self {
         Self { rounds }
     }
 
-    /// Returns all per-round partials.
+    /// Returns the per-round residual tables in round order.
     pub fn rounds(&self) -> &[EqPartials<EF>] {
         &self.rounds
     }
 }
 
-/// Active-data polynomials used by one Next SVO round.
+/// Preprocessing residuals for one round of a repeat-last successor opening.
+///
+/// The repeat-last successor view evaluates a column at the index one past each point.
+///
+/// Its weight splits into three carry-state components held here.
 #[derive(Debug, Clone)]
 pub struct NextPartials<EF: Field> {
+    /// Residual paired with the carry-has-finished state.
     pub(crate) done: Poly<EF>,
+    /// Residual paired with the carry-still-propagating state.
     pub(crate) carry: Poly<EF>,
+    /// Residual paired with the repeat-of-the-last-coordinate state.
     pub(crate) omega: Poly<EF>,
 }
 
 impl<EF: Field> NextPartials<EF> {
-    /// Builds the active data triple for one SVO round.
+    /// Wraps already-built residuals for the three carry-state components.
     pub const fn new(done: Poly<EF>, carry: Poly<EF>, omega: Poly<EF>) -> Self {
         Self { done, carry, omega }
     }
 
-    /// Builds a zero active data triple over `num_variables`.
+    /// Builds an all-zero residual for each of the three components.
+    ///
+    /// # Arguments
+    ///
+    /// - `num_variables` — arity of each residual to allocate.
     pub fn zero(num_variables: usize) -> Self {
         Self {
+            // Each carry-state component starts from the additive identity.
             done: Poly::zero(num_variables),
             carry: Poly::zero(num_variables),
             omega: Poly::zero(num_variables),
         }
     }
 
-    /// Adds `scale * other` into each component.
+    /// Folds another round's residuals into this one, weighted by a challenge power.
+    ///
+    /// # Arguments
+    ///
+    /// - `other` — source residuals to add in.
+    /// - `scale` — multiplier applied to every source coefficient.
+    ///
+    /// # Panics
+    ///
+    /// - Each component must share its arity with the matching source component.
     pub fn accumulate(&mut self, other: &Self, scale: EF) {
+        // Invariant: components are added only across matching variable spaces.
         assert_eq!(self.done.num_variables(), other.done.num_variables());
         assert_eq!(self.carry.num_variables(), other.carry.num_variables());
         assert_eq!(self.omega.num_variables(), other.omega.num_variables());
 
-        self.done
-            .as_mut_slice()
-            .iter_mut()
-            .zip(other.done.iter())
-            .for_each(|(out, &f)| *out += scale * f);
-        self.carry
-            .as_mut_slice()
-            .iter_mut()
-            .zip(other.carry.iter())
-            .for_each(|(out, &f)| *out += scale * f);
-        self.omega
-            .as_mut_slice()
-            .iter_mut()
-            .zip(other.omega.iter())
-            .for_each(|(out, &f)| *out += scale * f);
+        // Each component is a coefficient-wise fused multiply-add out[i] += scale * other[i].
+        // The shared kernel packs the slices and runs the add over SIMD lanes.
+        add_scaled_slice_in_place(self.done.as_mut_slice(), other.done.as_slice(), scale);
+        add_scaled_slice_in_place(self.carry.as_mut_slice(), other.carry.as_slice(), scale);
+        add_scaled_slice_in_place(self.omega.as_mut_slice(), other.omega.as_slice(), scale);
     }
 
-    /// Data multiplied by the active `done` carry-state polynomial.
+    /// Returns the carry-has-finished residual.
     pub const fn done(&self) -> &Poly<EF> {
         &self.done
     }
 
-    /// Data multiplied by the active `carry` carry-state polynomial.
+    /// Returns the carry-still-propagating residual.
     pub const fn carry(&self) -> &Poly<EF> {
         &self.carry
     }
 
-    /// Data multiplied by the active `omega` repeat-last polynomial.
+    /// Returns the repeat-of-the-last-coordinate residual.
     pub const fn omega(&self) -> &Poly<EF> {
         &self.omega
     }
 }
 
-/// Per-round Method 4 data for one Next opening.
+/// Preprocessing payload for one repeat-last successor opening.
+///
+/// Carries the three-component residuals for every round of the small-value-optimization preprocessing.
 #[derive(Debug, Clone)]
 pub struct NextSvoPartials<EF: Field> {
+    /// One three-component residual set per preprocessing round, in round order.
     pub(crate) rounds: Vec<NextPartials<EF>>,
 }
 
 impl<EF: Field> NextSvoPartials<EF> {
-    /// Builds Method 4 partials from per-round data.
+    /// Wraps the per-round residual sets.
     pub const fn new(rounds: Vec<NextPartials<EF>>) -> Self {
         Self { rounds }
     }
 
-    /// Returns all per-round partials.
+    /// Returns the per-round residual sets in round order.
     pub fn rounds(&self) -> &[NextPartials<EF>] {
         &self.rounds
     }
@@ -193,9 +227,16 @@ impl<EF: Field, Data> Opening<EF, Data> {
         &self.data
     }
 
-    /// Builds a concrete opening with strategy-specific payload.
+    /// Builds an opening on a concrete column carrying a strategy payload.
+    ///
+    /// # Arguments
+    ///
+    /// - `poly_idx` — source column index inside the owning table.
+    /// - `eval`     — value of the opened view at the shared claim point.
+    /// - `data`     — preprocessing payload attached to this opening.
     pub const fn new_with_data(poly_idx: usize, eval: EF, data: Data) -> Self {
         Self {
+            // A concrete column index marks this as non-virtual.
             poly_idx: Some(poly_idx),
             eval,
             data,
@@ -221,10 +262,14 @@ impl<EF: Field> Opening<EF, ()> {
 
 /// A batch of openings that share one evaluation point.
 ///
+/// Current openings evaluate a column at the point.
+///
+/// Next openings evaluate the repeat-last successor view at the same point.
+///
 /// ```text
 ///     point     ── shared by every opening
-///     current   [ordinary opening_0, ...]
-///     next      [next opening_0, ...]
+///     current   [evaluate-column opening_0, ...]
+///     next      [repeat-last opening_0, ...]
 /// ```
 ///
 /// # Alpha-ordering contract
@@ -233,22 +278,28 @@ impl<EF: Field> Opening<EF, ()> {
 /// - The canonical ordering is insertion order, walked as:
 ///     - placements, in witness-layout order,
 ///     - claims inside each placement, in recording order,
-///     - current openings inside each claim, in the order they entered `eval`,
-///     - next openings inside each claim, in the order they entered `eval`.
-/// - Prover and verifier walk the same three-loop nest, so the alpha-to-claim
-///   mapping is forced to agree when the transcripts mirror each other.
+///     - current openings inside each claim, in recording order,
+///     - next openings inside each claim, in recording order.
+/// - Prover and verifier walk the same nested loop.
+/// - That forces the challenge-power-to-opening mapping to agree when the transcripts mirror each other.
 #[derive(Debug, Clone)]
 pub struct MultiClaim<EF: Field, Point, EqData, NextData> {
     /// Shared evaluation point of every opening in the batch.
     pub(super) point: Point,
-    /// Ordinary openings attached to the shared point.
+    /// Openings that evaluate a column at the shared point.
     pub(super) current_openings: Vec<Opening<EF, EqData>>,
-    /// Repeat-last Next openings attached to the shared point.
+    /// Openings that evaluate the repeat-last successor view at the shared point.
     pub(super) next_openings: Vec<Opening<EF, NextData>>,
 }
 
 impl<EF: Field, Point, EqData, NextData> MultiClaim<EF, Point, EqData, NextData> {
-    /// Builds a batch sharing `point`, holding the given openings.
+    /// Builds a batch whose openings all share one evaluation point.
+    ///
+    /// # Arguments
+    ///
+    /// - `point`            — evaluation point shared by every opening.
+    /// - `current_openings` — openings that evaluate a column at the point.
+    /// - `next_openings`    — openings that evaluate the repeat-last successor view at the point.
     pub const fn new(
         point: Point,
         current_openings: Vec<Opening<EF, EqData>>,
@@ -266,22 +317,24 @@ impl<EF: Field, Point, EqData, NextData> MultiClaim<EF, Point, EqData, NextData>
         &self.point
     }
 
-    /// Returns the number of openings.
+    /// Returns the total number of openings across both groups.
     pub const fn len(&self) -> usize {
+        // Total consumed challenge powers equals current plus next openings.
         self.current_openings.len() + self.next_openings.len()
     }
 
-    /// Returns whether the batch holds no openings.
+    /// Returns whether the batch holds no openings in either group.
     pub const fn is_empty(&self) -> bool {
+        // Empty only when neither group contributes an opening.
         self.current_openings.is_empty() && self.next_openings.is_empty()
     }
 
-    /// Returns ordinary openings.
+    /// Returns the openings that evaluate a column at the shared point.
     pub fn current_openings(&self) -> &[Opening<EF, EqData>] {
         &self.current_openings
     }
 
-    /// Returns repeat-last Next openings.
+    /// Returns the openings that evaluate the repeat-last successor view at the shared point.
     pub fn next_openings(&self) -> &[Opening<EF, NextData>] {
         &self.next_openings
     }
@@ -367,7 +420,12 @@ mod tests {
         ];
         let claim = MultiClaim::<F, u32, (), ()>::new(100, openings, Vec::new());
 
-        // Constructor must forward the point and the openings vector verbatim.
+        // Constructor forwards the point and the current openings verbatim.
+        // No next openings were supplied, so that group stays empty.
+        //
+        //     point              = 100
+        //     current_openings   = [col 0, col 1]  → len 2
+        //     next_openings      = []              → len 0
         assert_eq!(*claim.point(), 100);
         assert_eq!(claim.current_openings().len(), 2);
         assert_eq!(claim.next_openings().len(), 0);
@@ -420,7 +478,12 @@ mod tests {
 
     #[test]
     fn multi_claim_clone_preserves_point_and_openings() {
-        // Regression: derived Clone must copy both the point and the Vec contents.
+        // Invariant: derived Clone copies the point and both opening groups.
+        //
+        // Fixture state:
+        //     point            = 77
+        //     current_openings = [col 1, col 2]
+        //     next_openings    = [col 3]
         let claim = MultiClaim::<F, u32, (), ()>::new(
             77,
             vec![
@@ -431,8 +494,10 @@ mod tests {
         );
         let cloned = claim.clone();
 
+        // Point and total length survive the clone unchanged.
         assert_eq!(*cloned.point(), *claim.point());
         assert_eq!(cloned.len(), claim.len());
+        // Every current opening matches its source index and value.
         for (a, b) in cloned
             .current_openings()
             .iter()
@@ -441,6 +506,7 @@ mod tests {
             assert_eq!(a.poly_idx(), b.poly_idx());
             assert_eq!(a.eval(), b.eval());
         }
+        // Every next opening matches its source index and value.
         for (a, b) in cloned.next_openings().iter().zip(claim.next_openings()) {
             assert_eq!(a.poly_idx(), b.poly_idx());
             assert_eq!(a.eval(), b.eval());

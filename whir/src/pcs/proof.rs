@@ -52,8 +52,9 @@ impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> Default for Whi
 ///
 /// - The proximity transcript: sumcheck rounds, intermediate commitments,
 ///   STIR query openings, and the final polynomial sent in the clear.
-/// - The public opening evaluations indexed by batch, preserving the
-///   current/Next split from the matching schedule entry.
+/// - The public opening evaluations indexed by batch.
+///   Each batch keeps the evaluations at the current opening points separate
+///   from the evaluations at the repeat-last successor points.
 ///
 /// # Ordering invariant
 ///
@@ -70,8 +71,9 @@ pub struct PcsProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     /// Proximity transcript: initial commitment, sumcheck rounds, per-round
     /// commitments, STIR query openings, and the final polynomial.
     pub whir: WhirProof<F, EF, MT>,
-    /// Opening evaluations in schedule order. Each batch stores current
-    /// evaluations and repeat-last Next evaluations separately.
+    /// Opening evaluations in schedule order.
+    /// Each batch stores the current-point evaluations separately from the
+    /// repeat-last successor-point evaluations.
     pub evals: Vec<OpeningBatch<EF>>,
 }
 

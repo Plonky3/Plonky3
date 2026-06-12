@@ -43,24 +43,35 @@ impl TableShape {
     }
 }
 
-/// One point-local opening batch for a table.
+/// Opening batch sampled at one transcript point for a table.
 ///
-/// A batch represents one sampled transcript point. `current` columns are
-/// opened at that point; `next` columns are opened through the repeat-last Next
-/// view at the same point. Evaluation order is always current first, then next.
+/// # Overview
+///
+/// - One batch records what is opened at a single sampled point.
+/// - It holds two column-index lists evaluated at that same point.
+/// - Transcript and evaluation order is always the first list, then the second.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpeningBatch<T> {
+    /// Columns evaluated directly at the sampled point.
     current: Vec<T>,
+    /// Columns evaluated through the repeat-last successor view at the same point.
     next: Vec<T>,
 }
 
 impl<T> OpeningBatch<T> {
-    /// Builds an opening batch from current and Next column lists.
+    /// Builds an opening batch from the direct list and the successor-view list.
+    ///
+    /// # Arguments
+    ///
+    /// - `current`: columns evaluated directly at the sampled point.
+    /// - `next`: columns evaluated through the repeat-last successor view.
     ///
     /// # Panics
     ///
     /// Panics if both lists are empty.
     pub fn new(current: Vec<T>, next: Vec<T>) -> Self {
+        // Invariant: a batch must name at least one column on either side.
+        // An empty batch would consume a transcript point yet open nothing.
         assert!(
             !current.is_empty() || !next.is_empty(),
             "opening batch must name at least one column"
@@ -68,54 +79,76 @@ impl<T> OpeningBatch<T> {
         Self { current, next }
     }
 
-    /// Returns current entries.
+    /// Returns the columns evaluated directly at the sampled point.
     pub fn current(&self) -> &[T] {
         &self.current
     }
 
-    /// Returns Next entries.
+    /// Returns the columns evaluated through the repeat-last successor view.
     pub fn next(&self) -> &[T] {
         &self.next
     }
 
-    /// Returns the total number of entries in this batch.
+    /// Returns the total number of entries across both lists.
     pub const fn len(&self) -> usize {
+        // Both sides share the same sampled point, so the batch size is their sum.
         self.current.len() + self.next.len()
     }
 
-    /// Returns true if this batch has no entries.
+    /// Returns true when neither list holds an entry.
     pub const fn is_empty(&self) -> bool {
         self.current.is_empty() && self.next.is_empty()
     }
 
-    /// Iterates over current entries first, then Next entries.
+    /// Iterates over both lists in transcript order.
+    ///
+    /// # Returns
+    ///
+    /// - The direct entries first.
+    /// - The successor-view entries second.
     pub fn iter(&self) -> impl Iterator<Item = &T> {
+        // Chain preserves transcript order: direct entries, then successor-view entries.
         self.current.iter().chain(&self.next)
     }
 
-    /// Returns true if the current/Next split has the same lengths as `other`.
+    /// Returns true when both per-side list lengths match the other batch.
+    ///
+    /// # Arguments
+    ///
+    /// - `other`: the batch whose per-side lengths are compared against this one.
     pub const fn has_same_shape<U>(&self, other: &OpeningBatch<U>) -> bool {
+        // Shape is the pair of side lengths; entry values are irrelevant here.
         self.current.len() == other.current.len() && self.next.len() == other.next.len()
     }
 }
 
 impl<T: Clone> OpeningBatch<T> {
-    /// Flattens entries in transcript order: current first, then Next.
+    /// Flattens both lists into one vector in transcript order.
+    ///
+    /// # Returns
+    ///
+    /// - The direct entries first.
+    /// - The successor-view entries second.
     pub fn to_vec(&self) -> Vec<T> {
+        // Walk in transcript order and copy each entry into a flat vector.
         self.iter().cloned().collect()
     }
 }
 
-/// Point-local opening schedule for one table.
+/// Column indices requested at one sampled point for a table.
 ///
-/// Each entry corresponds to one sampled point for the table. Every entry may
-/// request current openings, repeat-last Next openings, or both.
+/// # Overview
+///
+/// - One request names the columns opened at a single sampled point.
+/// - Each side may name direct columns, successor-view columns, or both.
 pub type OpeningRequest = OpeningBatch<usize>;
 
-/// Claimed evaluations for one point-local opening request.
+/// Claimed column evaluations matching one request at a single sampled point.
 pub type OpeningEvals<EF> = OpeningBatch<EF>;
 
-/// Point-local opening schedule for one table.
+/// Sequence of per-point opening requests for one table.
+///
+/// One entry per sampled point, in transcript order.
 pub type PointSchedule = Vec<OpeningRequest>;
 
 /// Description of a table used to build randomized stacked-sumcheck witnesses.
@@ -137,6 +170,9 @@ impl TableSpec {
     ///
     /// - Every scheduled polynomial index must be less than the table width.
     pub fn new(shape: TableShape, point_schedule: PointSchedule) -> Self {
+        // Invariant: every requested column must address a real column of the table.
+        // Both sides of each batch index into the same set of table columns,
+        // so direct and successor-view indices are validated against one width.
         assert!(point_schedule.iter().all(|batch| {
             batch
                 .current()
@@ -208,6 +244,11 @@ impl OpeningProtocol {
 
     /// Iterates over all opening batches in transcript order.
     pub fn iter_openings(&self) -> impl Iterator<Item = (usize, &OpeningRequest)> {
+        // Walk tables in protocol order, then each table's points in schedule order.
+        // The flat stream pairs every request with the index of its owning table.
+        //
+        //     table 0: [req, req]   table 1: [req]
+        //          -> (0, req), (0, req), (1, req)
         self.0.iter().enumerate().flat_map(|(table_idx, table)| {
             table
                 .point_schedule()
@@ -225,11 +266,11 @@ mod tests {
 
     // Single-table protocol: arity 3, two columns, two opening points.
     //
-    //     point 0: current columns {0, 1}
-    //     point 1: current column  {0}
+    //     point 0: direct columns {0, 1}
+    //     point 1: direct column  {0}
     //
-    // Yields num_openings() == 2 and iter_openings() emits the two
-    // batches in transcript order against table index 0.
+    // Total opening count is 2; the two batches stream in transcript order
+    // against table index 0.
     fn single_table_protocol() -> OpeningProtocol {
         OpeningProtocol::new(vec![TableSpec::new(
             TableShape::new(3, 2),
@@ -242,11 +283,11 @@ mod tests {
 
     // Two-table protocol with distinct shapes and schedules.
     //
-    //     table 0: arity 3, two cols. Schedule: current {0, 1} once.
-    //     table 1: arity 4, three cols. Schedule: current {0, 2}; current {1}.
+    //     table 0: arity 3, two cols.   one point, direct {0, 1}
+    //     table 1: arity 4, three cols. point a direct {0, 2}; point b direct {1}
     //
-    // Yields num_openings() == 3 and iter_openings() emits the three
-    // batches as (0, current [0, 1]), (1, current [0, 2]), (1, current [1]).
+    // Total opening count is 3; the stream is
+    // (0, direct [0, 1]), (1, direct [0, 2]), (1, direct [1]).
     fn two_table_protocol() -> OpeningProtocol {
         OpeningProtocol::new(vec![
             TableSpec::new(
@@ -299,13 +340,15 @@ mod tests {
     #[test]
     fn opening_protocol_iter_openings_yields_batches_in_transcript_order() {
         // Invariant:
-        //     iter_openings() walks tables in protocol order, then walks
-        //     each table's point schedule in insertion order, emitting
-        //     (table_idx, batch) per scheduled point.
+        //     The opening stream walks tables in protocol order, then each
+        //     table's points in schedule order, pairing every batch with the
+        //     index of its owning table.
         //
         // Fixture state:
-        //     two-table protocol with mixed schedules.
-        //     Expected stream: current-only batches for [0, 1], [0, 2], [1].
+        //     two-table protocol; every batch has direct columns and an empty
+        //     successor-view side.
+        //
+        // Each tuple is (table index, direct columns, successor-view columns).
         let protocol = two_table_protocol();
 
         let collected: Vec<(usize, Vec<usize>, Vec<usize>)> = protocol
@@ -381,8 +424,15 @@ mod tests {
     #[test]
     fn table_spec_accepts_mixed_current_next_batches() {
         // Invariant:
-        //     One scheduled point may request current and Next openings over
-        //     the same sampled point, and the batch length is their sum.
+        //     One sampled point may carry both direct openings and
+        //     successor-view openings.
+        //     The batch length is the sum of the two side lengths.
+        //
+        // Fixture state:
+        //     width 3, two points.
+        //
+        //     point 0: direct {0, 2}, successor-view {1}  -> len 3
+        //     point 1: direct {},     successor-view {2}  -> len 1
         let spec = TableSpec::new(
             TableShape::new(3, 3),
             vec![
@@ -420,7 +470,11 @@ mod tests {
     #[should_panic]
     fn table_spec_new_panics_on_out_of_range_next_poly_idx() {
         // Invariant:
-        //     Next column indices are validated against table width too.
+        //     The successor-view side is validated against the table width too,
+        //     not just the direct side.
+        //
+        // Fixture state:
+        //     width = 2; successor-view names column 2 (only 0 and 1 are valid).
         let _ = TableSpec::new(
             TableShape::new(3, 2),
             vec![OpeningBatch::new(vec![0], vec![2])],
@@ -430,6 +484,9 @@ mod tests {
     #[test]
     #[should_panic]
     fn opening_batch_new_panics_on_empty_batch() {
+        // Invariant:
+        //     A batch with no columns on either side is rejected at construction.
+        //     Such a batch would consume a transcript point yet open nothing.
         let _: OpeningBatch<usize> = OpeningBatch::new(vec![], vec![]);
     }
 

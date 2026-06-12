@@ -115,29 +115,29 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
         self.tables[id].num_variables()
     }
 
-    /// Records current and repeat-last Next opening claims for `table_idx`.
+    /// Records opening claims for the selected columns of one table.
     ///
-    /// Both request lists use table-local column indices and share one sampled
-    /// local opening point. Current openings evaluate columns at that point;
-    /// Next openings evaluate the repeat-last successor view at the same point.
-    /// Returned evaluations are ordered as all `current` openings followed by
-    /// all `next` openings.
+    /// All requested columns share one sampled local opening point.
+    ///
+    /// - Current openings evaluate a column at that point.
+    /// - Next openings evaluate the repeat-last successor view at that point.
+    /// - Returned evaluations list all current openings first, then all next openings.
     ///
     /// # Arguments
     ///
     /// - `table_idx`  — source table index.
-    /// - `batch`      — columns opened at this sampled point.
-    /// - `challenger` — Fiat–Shamir transcript.
+    /// - `batch`      — current and next columns opened at this point.
+    /// - `challenger` — Fiat-Shamir transcript.
     ///
-    /// # Fiat–Shamir
+    /// # Fiat-Shamir
     ///
-    /// - Samples the opening point internally from the challenger.
-    /// - Absorbs the evaluations into the transcript before returning.
-    /// - The verifier's `add_claim` performs the symmetric absorption.
+    /// - Samples the opening point internally from the transcript.
+    /// - Absorbs the evaluations before returning.
+    /// - The verifier performs the symmetric absorption.
     ///
     /// # Panics
     ///
-    /// - At least one of `current` or `next` must be non-empty.
+    /// - At least one current or next column must be requested.
     #[tracing::instrument(skip_all)]
     fn eval<Ch>(
         &mut self,
@@ -148,9 +148,10 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
+        // Split the request into its two column groups.
         let current = batch.current();
         let next = batch.next();
-        // Precondition: opening nothing would silently push an empty ProverMultiClaim.
+        // Precondition: opening nothing would silently push an empty claim.
         assert!(
             !batch.is_empty(),
             "opening schedule must name at least one column"
@@ -166,6 +167,8 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
         // Factorise the point with the suffix split; every selected column reuses it.
         let point = SvoPoint::new_unpacked(self.folding, &point, VariableOrder::Suffix);
 
+        // Current group: evaluate each column at the point.
+        // Each entry yields an opening (carrying preprocessing residuals) plus the bare eval.
         let (current_openings, current_evals): (Vec<_>, Vec<EF>) = current
             .iter()
             .copied()
@@ -175,10 +178,14 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
             })
             .unzip();
 
+        // Next group: evaluate the repeat-last successor view at the same point.
         let (next_openings, next_evals): (Vec<_>, Vec<EF>) = next
             .iter()
             .copied()
             .map(|poly_idx| {
+                // Reuse: if this column was already opened in the current group,
+                // its last-round equality residual feeds the successor computation
+                // for free, avoiding a redundant pass over the column.
                 let d_eq = current_openings
                     .iter()
                     .find(|opening| opening.poly_idx() == Some(poly_idx))
@@ -188,7 +195,8 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
             })
             .unzip();
 
-        // Bind the evaluations into the transcript; the verifier absorbs the same bytes.
+        // Bind the evaluations into the transcript, current group first then next.
+        // The verifier absorbs the same bytes in the same order.
         challenger.observe_algebra_slice(&current_evals);
         challenger.observe_algebra_slice(&next_evals);
 
@@ -199,6 +207,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
             next_openings,
         ));
 
+        // Return both eval groups in the canonical current-then-next order.
         OpeningBatch::new(current_evals, next_evals)
     }
 
@@ -497,12 +506,16 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
         let mut sum = EF::ZERO;
         let mut alphas = alpha.powers();
 
-        // Concrete openings: three loops, no filter.
+        // Walk every concrete opening in the canonical insertion order.
+        //     placements -> claims -> current openings -> next openings
+        // Each opening consumes the next power of alpha, matching the verifier.
         for placement in &self.placements {
             for claim in &self.claim_map[placement.idx()] {
+                // Current group first.
                 for opening in claim.current_openings() {
                     sum += opening.eval() * alphas.next().unwrap();
                 }
+                // Next group second, continuing the same power sequence.
                 for opening in claim.next_openings() {
                     sum += opening.eval() * alphas.next().unwrap();
                 }
@@ -592,10 +605,12 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
         let mut alphas = alpha.powers();
 
         // Concrete claims: write each into the slot its column's selector addresses.
+        // Walk order matches the batched claim, so alpha powers stay aligned.
         for placement in &self.placements {
             let num_variables_table = self.num_variables_table(placement.idx());
             let slot_size = 1usize << num_variables_table;
             for claim in &self.claim_map[placement.idx()] {
+                // Current group: equality weight of the column at the claim point.
                 for opening in claim.current_openings() {
                     // The opening's column tells us which selector picks the slot.
                     let col = opening.poly_idx().unwrap();
@@ -607,6 +622,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
                         .point()
                         .accumulate_into(&mut out.as_mut_slice()[folded_range], rs, scale);
                 }
+                // Next group: same slot, but the repeat-last successor weight.
                 for opening in claim.next_openings() {
                     let col = opening.poly_idx().unwrap();
                     let off = placement.selectors()[col].index() << num_variables_table;

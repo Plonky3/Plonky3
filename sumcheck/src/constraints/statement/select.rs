@@ -265,10 +265,21 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         self.vars.len()
     }
 
-    /// Iterates over this statement's weights evaluated at `row`.
+    /// Streams one weight per stored constraint, each evaluated at a single point.
+    ///
+    /// # Overview
+    ///
+    /// A selection constraint stores a univariate point whose power-map expansion is a selector polynomial.
+    /// This yields that selector's value at the supplied point, one entry per constraint, in stored order.
+    ///
+    /// # Arguments
+    ///
+    /// - `row`: the point at which every constraint weight is evaluated.
     pub fn weights_at<'a>(&'a self, row: &'a Point<EF>) -> impl Iterator<Item = EF> + 'a {
+        // Walk the stored univariate selection points in order.
         self.vars
             .iter()
+            // Expand each one through the power map and read off its value at the query point.
             .map(|&var| Point::eval_select(var, row.as_slice()))
     }
 
