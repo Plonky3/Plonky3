@@ -387,6 +387,20 @@ impl Field for Mersenne31 {
     fn order() -> BigUint {
         P.into()
     }
+
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    #[inline]
+    fn batched_columnwise_dot_product<EF, R, I, const N: usize>(
+        packed_width: usize,
+        items: I,
+    ) -> Vec<EF::ExtensionPacking>
+    where
+        EF: p3_field::ExtensionField<Self>,
+        R: Iterator<Item = Self::Packing>,
+        I: Iterator<Item = (R, [EF; N])>,
+    {
+        crate::aarch64_neon::batched_columnwise_dot_product::<EF, R, I, N>(packed_width, items)
+    }
 }
 
 // We can use some macros to implement QuotientMap<Int> for all integer types except for u32 and i32's.

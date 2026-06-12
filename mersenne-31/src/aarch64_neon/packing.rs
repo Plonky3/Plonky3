@@ -12,8 +12,9 @@ use p3_field::op_assign_macros::{
     impl_sum_prod_base_field, ring_sum,
 };
 use p3_field::{
-    Algebra, Field, InjectiveMonomial, PackedField, PackedFieldPow2, PackedValue,
-    PermutationMonomial, PrimeCharacteristicRing, dispatch_chunked_mixed_dot_product,
+    Algebra, BasedVectorSpace, ExtensionField, Field, InjectiveMonomial, PackedField,
+    PackedFieldPow2, PackedValue, PermutationMonomial, PrimeCharacteristicRing,
+    dispatch_chunked_mixed_dot_product, generic_batched_columnwise_dot_product,
     impl_packed_field_pow_2, uint32x4_mod_add, uint32x4_mod_sub,
 };
 use p3_util::reconstitute_from_base;
@@ -405,6 +406,161 @@ unsafe impl PackedField for PackedMersenne31Neon {
     }
 }
 
+/// Columnwise dot-product kernel with deferred Mersenne reductions, implementing
+/// [`Field::batched_columnwise_dot_product`] for `Mersenne31`.
+///
+/// Dispatches the extension degree to a monomorphized kernel so the per-word loops
+/// fully unroll; degrees without a kernel fall back to the generic accumulation.
+pub(crate) fn batched_columnwise_dot_product<EF, R, I, const N: usize>(
+    packed_width: usize,
+    items: I,
+) -> Vec<EF::ExtensionPacking>
+where
+    EF: ExtensionField<Mersenne31>,
+    R: Iterator<Item = PackedMersenne31Neon>,
+    I: Iterator<Item = (R, [EF; N])>,
+{
+    match <EF as BasedVectorSpace<Mersenne31>>::DIMENSION {
+        1 => columnwise_kernel::<EF, R, I, N, 1>(packed_width, items),
+        2 => columnwise_kernel::<EF, R, I, N, 2>(packed_width, items),
+        4 => columnwise_kernel::<EF, R, I, N, 4>(packed_width, items),
+        8 => columnwise_kernel::<EF, R, I, N, 8>(packed_width, items),
+        _ => generic_batched_columnwise_dot_product::<Mersenne31, EF, R, I, N>(packed_width, items),
+    }
+}
+
+/// Accumulate up to 3 products into a fresh (lanes 0-1, lanes 2-3) pair of u64x2
+/// vectors and fold it once, leaving both results below `2^33` (`3 * P^2 < 2^64`).
+#[inline(always)]
+fn mac_up_to_3(vs: &[uint32x4_t], svs: [uint32x4_t; 3]) -> (uint64x2_t, uint64x2_t) {
+    unsafe {
+        // Safety: If this code got compiled then NEON intrinsics are available.
+        let mut lo =
+            aarch64::vmull_u32(aarch64::vget_low_u32(vs[0]), aarch64::vget_low_u32(svs[0]));
+        let mut hi = aarch64::vmull_high_u32(vs[0], svs[0]);
+        for (&v, &s) in vs[1..].iter().zip(&svs[1..]) {
+            lo = aarch64::vmlal_u32(lo, aarch64::vget_low_u32(v), aarch64::vget_low_u32(s));
+            hi = aarch64::vmlal_high_u32(hi, v, s);
+        }
+        (partial_reduce_u64(lo), partial_reduce_u64(hi))
+    }
+}
+
+/// Monomorphized body of [`batched_columnwise_dot_product`] for extension degree `D`.
+///
+/// Rows are consumed three at a time: each triple of raw 32x32 -> 64-bit products is
+/// accumulated in registers with widening MACs, folded once below `2^33`, and added
+/// into u64 lane accumulators. A safety fold of the accumulators every `2^28` row
+/// triples keeps them below `2^62` for any stream length, so the final two folds
+/// plus `reduce_sum` always produce canonical values.
+fn columnwise_kernel<EF, R, I, const N: usize, const D: usize>(
+    packed_width: usize,
+    mut items: I,
+) -> Vec<EF::ExtensionPacking>
+where
+    EF: ExtensionField<Mersenne31>,
+    R: Iterator<Item = PackedMersenne31Neon>,
+    I: Iterator<Item = (R, [EF; N])>,
+{
+    debug_assert_eq!(<EF as BasedVectorSpace<Mersenne31>>::DIMENSION, D);
+    let zero64 = unsafe { aarch64::vdupq_n_u64(0) };
+    let zero32 = unsafe { aarch64::vdupq_n_u32(0) };
+
+    // Accumulator layout: word-major, with the `(weight j, coefficient k)` pair of
+    // `(lanes 0-1, lanes 2-3)` u64x2 vectors of word `c` at `c * N * D * 2 + (j * D + k) * 2`.
+    let mut acc = alloc::vec![zero64; packed_width * N * D * 2];
+    let broadcast = |scales: &[EF; N]| -> [[uint32x4_t; D]; N] {
+        let mut out = [[zero32; D]; N];
+        for (row, scale) in out.iter_mut().zip(scales) {
+            let coeffs = scale.as_basis_coefficients_slice();
+            for (v, &coeff) in row.iter_mut().zip(coeffs) {
+                *v = PackedMersenne31Neon::from(coeff).to_vector();
+            }
+        }
+        out
+    };
+
+    let mut triples = 0u32;
+    while let Some((r0, s0)) = items.next() {
+        let sv0 = broadcast(&s0);
+        let Some((r1, s1)) = items.next() else {
+            // Single trailing row.
+            for (aw, m0) in acc.chunks_exact_mut(N * D * 2).zip(r0) {
+                let v0 = m0.to_vector();
+                for (j, sv0_j) in sv0.iter().enumerate() {
+                    for (k, &s) in sv0_j.iter().enumerate() {
+                        let (lo, hi) = mac_up_to_3(&[v0], [s; 3]);
+                        let idx = (j * D + k) * 2;
+                        unsafe {
+                            aw[idx] = aarch64::vaddq_u64(aw[idx], lo);
+                            aw[idx + 1] = aarch64::vaddq_u64(aw[idx + 1], hi);
+                        }
+                    }
+                }
+            }
+            break;
+        };
+        let sv1 = broadcast(&s1);
+        let Some((r2, s2)) = items.next() else {
+            // Trailing row pair.
+            for (aw, (m0, m1)) in acc.chunks_exact_mut(N * D * 2).zip(r0.zip(r1)) {
+                let (v0, v1) = (m0.to_vector(), m1.to_vector());
+                for j in 0..N {
+                    for k in 0..D {
+                        let (lo, hi) = mac_up_to_3(&[v0, v1], [sv0[j][k], sv1[j][k], sv1[j][k]]);
+                        let idx = (j * D + k) * 2;
+                        unsafe {
+                            aw[idx] = aarch64::vaddq_u64(aw[idx], lo);
+                            aw[idx + 1] = aarch64::vaddq_u64(aw[idx + 1], hi);
+                        }
+                    }
+                }
+            }
+            break;
+        };
+        let sv2 = broadcast(&s2);
+
+        for (aw, ((m0, m1), m2)) in acc.chunks_exact_mut(N * D * 2).zip(r0.zip(r1).zip(r2)) {
+            let (v0, v1, v2) = (m0.to_vector(), m1.to_vector(), m2.to_vector());
+            for j in 0..N {
+                for k in 0..D {
+                    let (lo, hi) = mac_up_to_3(&[v0, v1, v2], [sv0[j][k], sv1[j][k], sv2[j][k]]);
+                    let idx = (j * D + k) * 2;
+                    unsafe {
+                        aw[idx] = aarch64::vaddq_u64(aw[idx], lo);
+                        aw[idx + 1] = aarch64::vaddq_u64(aw[idx + 1], hi);
+                    }
+                }
+            }
+        }
+
+        triples += 1;
+        if triples == 1 << 28 {
+            triples = 0;
+            for a in &mut acc {
+                *a = partial_reduce_u64(*a);
+            }
+        }
+    }
+
+    (0..packed_width * N)
+        .map(|cj| {
+            EF::ExtensionPacking::from_basis_coefficients_fn(|k| {
+                let idx = (cj * D + k) * 2;
+                let l = partial_reduce_u64(partial_reduce_u64(acc[idx]));
+                let h = partial_reduce_u64(partial_reduce_u64(acc[idx + 1]));
+                unsafe {
+                    let narrowed = aarch64::vuzp1q_u32(
+                        aarch64::vreinterpretq_u32_u64(l),
+                        aarch64::vreinterpretq_u32_u64(h),
+                    );
+                    PackedMersenne31Neon::from_vector(reduce_sum(narrowed))
+                }
+            })
+        })
+        .collect()
+}
+
 /// Compute the permutation x -> x^5 on Mersenne-31 field elements.
 ///
 /// # Safety
@@ -515,6 +671,90 @@ mod tests {
                 );
                 assert_eq!(expected, got, "d = {d}, len = {len}");
             }
+        }
+    }
+
+    /// The NEON columnwise kernel must agree with the generic accumulation for every
+    /// row-count phase of the 3-row blocking (0, 1 and 2 trailing rows), on boundary
+    /// values, for both the trivial and a degree-4 extension.
+    #[test]
+    fn batched_columnwise_dot_product_matches_generic() {
+        use p3_field::{
+            BasedVectorSpace, ExtensionField, PackedFieldExtension, PrimeCharacteristicRing,
+        };
+
+        use crate::QM31;
+
+        const P: u32 = 0x7fffffff;
+        let val = |i: u32| -> u32 {
+            match i % 7 {
+                0 => 0,
+                1 => 1,
+                2 => P - 1,
+                3 => P,
+                _ => i.wrapping_mul(0x9e3779b9) % P,
+            }
+        };
+        let packed = |i: u32| {
+            PackedMersenne31Neon(Mersenne31::new_array([
+                val(i),
+                val(i.wrapping_add(1)),
+                val(i.wrapping_add(2)),
+                val(i.wrapping_add(3)),
+            ]))
+        };
+        let scalar = |i: u32| Mersenne31::new_checked(val(i) % P).unwrap();
+
+        fn check<EF: ExtensionField<Mersenne31>, const N: usize>(
+            packed_width: usize,
+            rows: &[Vec<PackedMersenne31Neon>],
+            scales: &[[EF; N]],
+        ) {
+            let items = || {
+                rows.iter()
+                    .zip(scales)
+                    .map(|(row, &s)| (row.iter().copied(), s))
+            };
+
+            let mut expected = EF::ExtensionPacking::zero_vec(packed_width * N);
+            for (row, s) in items() {
+                let packed_scales = s.map(EF::ExtensionPacking::from);
+                for (acc_c, r) in expected.chunks_exact_mut(N).zip(row) {
+                    for (a, &ps) in acc_c.iter_mut().zip(&packed_scales) {
+                        *a += ps * r;
+                    }
+                }
+            }
+
+            let got = super::batched_columnwise_dot_product::<EF, _, _, N>(packed_width, items());
+            let expected: Vec<EF> = EF::ExtensionPacking::to_ext_iter(expected).collect();
+            let got: Vec<EF> = EF::ExtensionPacking::to_ext_iter(got).collect();
+            assert_eq!(expected, got, "rows = {}, N = {N}", rows.len());
+        }
+
+        let packed_width = 5;
+        for height in [0usize, 1, 2, 3, 4, 5, 6, 100] {
+            let rows: Vec<Vec<PackedMersenne31Neon>> = (0..height)
+                .map(|r| {
+                    (0..packed_width)
+                        .map(|c| packed((r * 64 + c * 4) as u32))
+                        .collect()
+                })
+                .collect();
+
+            let scales_m31: Vec<[Mersenne31; 2]> = (0..height)
+                .map(|r| core::array::from_fn(|j| scalar((r * 2 + j) as u32)))
+                .collect();
+            check::<Mersenne31, 2>(packed_width, &rows, &scales_m31);
+
+            let scales_qm31: Vec<[QM31; 2]> = (0..height)
+                .map(|r| {
+                    core::array::from_fn(|j| {
+                        QM31::from_basis_coefficients_fn(|k| scalar((r * 8 + j * 4 + k) as u32))
+                    })
+                })
+                .collect();
+            check::<QM31, 2>(packed_width, &rows, &scales_qm31);
         }
     }
 }

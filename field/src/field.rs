@@ -1040,6 +1040,28 @@ pub trait Field:
         }
     }
 
+    /// Accumulate `result[c * N + j] += scales[j] * row[c]` over a stream of packed rows.
+    ///
+    /// Each item provides one matrix row as `packed_width` packed base-field words,
+    /// together with the row's `N` extension-field weights. Returns the
+    /// `packed_width * N` packed accumulators, laid out with the `N` weights of each
+    /// word group adjacent.
+    ///
+    /// This is the inner kernel of batched columnwise (weighted-sum-of-rows) dot
+    /// products. Fields may override it to defer modular reductions across rows.
+    #[must_use]
+    fn batched_columnwise_dot_product<EF, R, I, const N: usize>(
+        packed_width: usize,
+        items: I,
+    ) -> Vec<EF::ExtensionPacking>
+    where
+        EF: ExtensionField<Self>,
+        R: Iterator<Item = Self::Packing>,
+        I: Iterator<Item = (R, [EF; N])>,
+    {
+        generic_batched_columnwise_dot_product::<Self, EF, R, I, N>(packed_width, items)
+    }
+
     /// The number of elements in the field.
     ///
     /// This will either be prime if the field is a PrimeField or a power of a
@@ -1056,6 +1078,34 @@ pub trait Field:
     fn bits() -> usize {
         Self::order().bits() as usize
     }
+}
+
+/// The generic accumulation behind [`Field::batched_columnwise_dot_product`]:
+/// `result[c * N + j] += scales[j] * row[c]` over a stream of packed rows.
+///
+/// Kept as a free function so that specialized `Field` implementations can fall back
+/// to it for extension degrees their kernels do not cover.
+#[must_use]
+pub fn generic_batched_columnwise_dot_product<F, EF, R, I, const N: usize>(
+    packed_width: usize,
+    items: I,
+) -> Vec<EF::ExtensionPacking>
+where
+    F: Field,
+    EF: ExtensionField<F>,
+    R: Iterator<Item = F::Packing>,
+    I: Iterator<Item = (R, [EF; N])>,
+{
+    let mut acc = EF::ExtensionPacking::zero_vec(packed_width * N);
+    for (row, scales) in items {
+        let packed_scales = scales.map(EF::ExtensionPacking::from);
+        for (acc_c, r) in acc.chunks_exact_mut(N).zip(row) {
+            for (a, &s) in acc_c.iter_mut().zip(&packed_scales) {
+                *a += s * r;
+            }
+        }
+    }
+    acc
 }
 
 /// A field isomorphic to `ℤ/p` for some prime `p`.

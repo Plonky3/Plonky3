@@ -467,23 +467,29 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         EF: ExtensionField<T>,
     {
         let packed_width = self.width().div_ceil(T::Packing::WIDTH);
+        let height = self.height().min(vs.len());
 
-        let packed_results: Vec<EF::ExtensionPacking> = self
-            .par_padded_horizontally_packed_rows::<T::Packing>()
-            .zip(vs)
-            .par_fold_reduce(
+        // Split the rows into a bounded number of contiguous chunks; each task runs the
+        // field's columnwise kernel serially over its chunk (letting it defer modular
+        // reductions across rows) and the per-task accumulators are summed at the end.
+        let num_chunks = (4 * current_num_threads()).clamp(1, height.max(1));
+        let chunk_rows = height.div_ceil(num_chunks);
+
+        let packed_results: Vec<EF::ExtensionPacking> =
+            (0..num_chunks).into_par_iter().par_fold_reduce(
                 || EF::ExtensionPacking::zero_vec(packed_width * N),
-                |mut acc, (packed_row, scales)| {
-                    // Broadcast each scalar scale to all SIMD lanes
-                    let packed_scales: [EF::ExtensionPacking; N] =
-                        scales.map_into_array(EF::ExtensionPacking::from);
-
-                    // acc[c][j] += scales[j] · row[c] for column batch c, point j
-                    for (acc_c, row_c) in acc.chunks_exact_mut(N).zip(packed_row) {
-                        for j in 0..N {
-                            acc_c[j] += packed_scales[j] * row_c;
-                        }
-                    }
+                |mut acc, chunk| {
+                    let rows = chunk * chunk_rows..((chunk + 1) * chunk_rows).min(height);
+                    let partial = T::batched_columnwise_dot_product::<EF, _, _, N>(
+                        packed_width,
+                        rows.map(|r| {
+                            (
+                                self.padded_horizontally_packed_row::<T::Packing>(r),
+                                vs[r].0,
+                            )
+                        }),
+                    );
+                    acc.iter_mut().zip(partial).for_each(|(a, p)| *a += p);
                     acc
                 },
                 |mut acc_l, acc_r| {
