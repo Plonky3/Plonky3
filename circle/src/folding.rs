@@ -8,6 +8,7 @@ use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, batch_multiplicative_inverse};
 use p3_fri::FriFoldingStrategy;
 use p3_matrix::Matrix;
+use p3_maybe_rayon::prelude::*;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 
 use crate::domain::CircleDomain;
@@ -54,16 +55,29 @@ fn fold<F: ComplexExtendable, EF: ExtensionField<F>>(
     beta: EF,
     twiddles: &[F],
 ) -> Vec<EF> {
-    evals
-        .rows()
-        .zip(twiddles)
-        .map(|(mut row, &t)| {
-            let (lo, hi) = row.next_tuple().unwrap();
-            let sum = lo + hi;
-            let diff = (lo - hi) * t;
-            (sum + beta * diff).halve()
-        })
-        .collect_vec()
+    debug_assert_eq!(evals.width(), 2);
+    debug_assert_eq!(evals.height(), twiddles.len());
+
+    // Rows are folded independently, so the matrix splits into parallel chunks. The chunk
+    // size keeps the per-task work well above the fork-join overhead.
+    const FOLD_CHUNK_ROWS: usize = 1 << 10;
+
+    let mut out = EF::zero_vec(evals.height());
+    out.par_chunks_mut(FOLD_CHUNK_ROWS)
+        .zip(twiddles.par_chunks(FOLD_CHUNK_ROWS))
+        .enumerate()
+        .for_each(|(chunk_idx, (out_chunk, twiddle_chunk))| {
+            let first_row = chunk_idx * FOLD_CHUNK_ROWS;
+            for (i, (o, &t)) in out_chunk.iter_mut().zip(twiddle_chunk).enumerate() {
+                // SAFETY: the chunks cover exactly `evals.height()` rows.
+                let row = unsafe { evals.row_slice_unchecked(first_row + i) };
+                let (lo, hi) = (row[0], row[1]);
+                let sum = lo + hi;
+                let diff = (lo - hi) * t;
+                *o = (sum + beta * diff).halve();
+            }
+        });
+    out
 }
 
 pub(crate) fn fold_y<F: ComplexExtendable, EF: ExtensionField<F>>(
