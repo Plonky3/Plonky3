@@ -537,6 +537,9 @@ where
                 // quotient(x) = constraints(x) / Z_H(x)
                 let quotient = folder.finalize_constraints() * inv_vanishing;
 
+                // The contents were folded into `quotient` above; reclaim the Vecs and
+                // `clear` them (`len = 0`, capacity kept) so the next row group reuses
+                // the allocations.
                 bufs.base_constraints = folder.base_constraints;
                 bufs.base_constraints.clear();
                 bufs.ext_constraints = folder.ext_constraints;
