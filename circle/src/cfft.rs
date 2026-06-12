@@ -551,4 +551,35 @@ mod tests {
             );
         }
     }
+
+    /// The first `2^(log_n - b)` rows of a CFFT-ordered matrix over a domain `D` are the
+    /// CFFT-ordered matrix over the twin-coset `CircleDomain::new(log_n - b, D.shift)`, and a
+    /// polynomial of degree below that size is determined by its values there. Out-of-domain
+    /// evaluation can therefore work on the prefix alone.
+    #[test]
+    fn eval_at_point_on_subdomain_prefix_matches_full() {
+        let mut rng = SmallRng::seed_from_u64(1);
+        for (log_n, width, log_blowup) in iproduct!(2..8, [1, 4, 11], [1, 2]) {
+            let lde_domain = CircleDomain::standard(log_n + log_blowup);
+            let lde = CircleEvaluations::<F>::from_natural_order(
+                CircleDomain::standard(log_n),
+                RowMajorMatrix::rand(&mut rng, 1 << log_n, width),
+            )
+            .extrapolate(lde_domain);
+
+            let sub_domain = CircleDomain::new(log_n, lde_domain.shift);
+            // The prefix rows are the subdomain's CFFT order: the same selection applies to
+            // the domain points.
+            assert_eq!(
+                cfft_permute_slice(&sub_domain.points().collect_vec()),
+                cfft_permute_slice(&lde_domain.points().collect_vec())[..1 << log_n],
+            );
+
+            let zeta = Point::<EF>::from_projective_line(rng.random());
+            let full = lde.evaluate_at_point(zeta);
+            let prefix = lde.values.split_rows(1 << log_n).0;
+            let sub_evals = CircleEvaluations::from_cfft_order(sub_domain, prefix);
+            assert_eq!(sub_evals.evaluate_at_point(zeta), full);
+        }
+    }
 }
