@@ -4,7 +4,7 @@ use p3_challenger::{DuplexChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::extension::{BinomialExtensionField, ComplexExtendable};
+use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field, PrimeField32, PrimeField64, TwoAdicField};
 use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
