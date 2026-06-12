@@ -22,6 +22,7 @@ pub use suffix::SuffixProver;
 use crate::SumcheckData;
 use crate::layout::{LayoutStrategy, Table, Witness};
 use crate::strategy::{SumcheckProver, VariableOrder};
+use crate::table::{OpeningEvals, OpeningRequest};
 
 /// Stacked-sumcheck prover layout
 pub trait Layout<F: TwoAdicField, EF: ExtensionField<F>>: Sized {
@@ -76,14 +77,14 @@ pub trait Layout<F: TwoAdicField, EF: ExtensionField<F>>: Sized {
 
     /// Records current and repeat-last next opening claims for selected columns.
     ///
-    /// Returned evaluations are ordered as `current` first, then `next`.
+    /// Returned evaluations are ordered as `batch.current()` first, then
+    /// `batch.next()`.
     fn eval<Ch>(
         &mut self,
         table_idx: usize,
-        current: &[usize],
-        next: &[usize],
+        batch: &OpeningRequest,
         challenger: &mut Ch,
-    ) -> Vec<EF>
+    ) -> OpeningEvals<EF>
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>;
 
@@ -130,6 +131,7 @@ pub(super) mod test_utils {
     use crate::SumcheckData;
     use crate::layout::{Layout, LayoutStrategy, Table, TableShape, Verifier, Witness};
     use crate::strategy::VariableOrder;
+    use crate::table::{OpeningBatch, OpeningEvals, OpeningRequest};
     use crate::tests::*;
 
     /// Preprocessing rounds each end-to-end test consumes on both sides.
@@ -210,7 +212,7 @@ pub(super) mod test_utils {
         strategy: LayoutStrategy,
         shapes: &[TableShape],
         stacked_num_variables: usize,
-        opening_claims: Vec<(usize, Vec<usize>, Vec<EF>)>,
+        opening_claims: Vec<(usize, OpeningRequest, OpeningEvals<EF>)>,
         virtual_eval: EF,
         proof0: &SumcheckData<F, EF>,
         proof1: &SumcheckData<F, EF>,
@@ -226,8 +228,8 @@ pub(super) mod test_utils {
         // Re-sample the same opening points and record the claimed evaluations.
         // `add_claim` samples the point + absorbs the evals internally, mirroring
         // the prover's `eval`.
-        for (table_idx, polys, evals) in opening_claims {
-            verifier.add_claim(table_idx, &polys, &[], &evals, &mut verifier_challenger);
+        for (table_idx, batch, evals) in opening_claims {
+            verifier.add_claim(table_idx, &batch, &evals, &mut verifier_challenger);
         }
 
         // Re-sample the virtual claim too; mirrors the prover's `add_virtual_eval`.
@@ -330,7 +332,7 @@ pub(super) mod test_utils {
     }
 
     /// Replays an opening schedule against a prover, returning the
-    /// `(table_idx, polys, evals)` triples the verifier will reconstruct.
+    /// `(table_idx, batch, evals)` triples the verifier will reconstruct.
     ///
     /// The prover's `eval` internally samples the point and absorbs the
     /// returned evaluations, keeping the challenger in lockstep with the
@@ -338,13 +340,17 @@ pub(super) mod test_utils {
     fn replay_schedule<F>(
         calls: &[(usize, &[usize])],
         mut step: F,
-    ) -> Vec<(usize, Vec<usize>, Vec<EF>)>
+    ) -> Vec<(usize, OpeningRequest, OpeningEvals<EF>)>
     where
-        F: FnMut(usize, &[usize]) -> Vec<EF>,
+        F: FnMut(usize, &OpeningRequest) -> OpeningEvals<EF>,
     {
         calls
             .iter()
-            .map(|&(table_idx, polys)| (table_idx, polys.to_vec(), step(table_idx, polys)))
+            .map(|&(table_idx, polys)| {
+                let batch = OpeningBatch::new(polys.to_vec(), Vec::new());
+                let evals = step(table_idx, &batch);
+                (table_idx, batch, evals)
+            })
             .collect()
     }
 
@@ -365,8 +371,8 @@ pub(super) mod test_utils {
         let mut prover_state = L::from_witness(witness);
         let strategy = L::strategy();
         let order = strategy.variable_order;
-        let opening_claims = replay_schedule(calls, |t, polys| {
-            prover_state.eval(t, polys, &[], &mut prover_challenger)
+        let opening_claims = replay_schedule(calls, |t, batch| {
+            prover_state.eval(t, batch, &mut prover_challenger)
         });
         let virtual_eval = prover_state.add_virtual_eval(&mut prover_challenger);
 
@@ -550,6 +556,7 @@ mod tests {
         FOLDING, build_tables, run_roundtrip_test, table_shapes, tables_from_shape,
     };
     use crate::layout::{Layout, Verifier};
+    use crate::table::OpeningBatch;
     use crate::tests::*;
 
     #[test]
@@ -562,10 +569,10 @@ mod tests {
             assert_eq!(prover.num_claims(), 0);
 
             let mut ch = challenger();
-            prover.eval(0, &[0, 1], &[], &mut ch);
+            prover.eval(0, &OpeningBatch::new(vec![0, 1], Vec::new()), &mut ch);
             assert_eq!(prover.num_claims(), 2);
 
-            prover.eval(1, &[0], &[], &mut ch);
+            prover.eval(1, &OpeningBatch::new(vec![0], Vec::new()), &mut ch);
             assert_eq!(prover.num_claims(), 3);
         }
 
@@ -591,10 +598,25 @@ mod tests {
             let mut prover_ch = challenger();
             let mut reversed_ch = challenger();
 
-            let evals = prover.eval(0, &[1, 0], &[], &mut prover_ch);
-            let reversed_evals = reversed.eval(0, &[0, 1], &[], &mut reversed_ch);
+            let evals = prover.eval(
+                0,
+                &OpeningBatch::new(vec![1, 0], Vec::new()),
+                &mut prover_ch,
+            );
+            let reversed_evals = reversed.eval(
+                0,
+                &OpeningBatch::new(vec![0, 1], Vec::new()),
+                &mut reversed_ch,
+            );
 
-            assert_eq!(evals, reversed_evals.into_iter().rev().collect::<Vec<_>>());
+            assert_eq!(
+                evals.to_vec(),
+                reversed_evals
+                    .to_vec()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+            );
             assert_eq!(prover.num_claims(), reversed.num_claims());
         }
 
@@ -610,7 +632,7 @@ mod tests {
         ));
         let mut ch = challenger();
 
-        let evals = prover.eval(0, &[], &[0], &mut ch);
+        let evals = prover.eval(0, &OpeningBatch::new(Vec::new(), vec![0]), &mut ch);
         assert_eq!(evals.len(), 1);
         assert_eq!(prover.num_claims(), 1);
     }
@@ -664,13 +686,9 @@ mod tests {
         let opening_claims = schedule
             .iter()
             .map(|(table_idx, current, next)| {
-                let evals = prover_state.eval(
-                    *table_idx,
-                    current.as_slice(),
-                    next.as_slice(),
-                    &mut prover_challenger,
-                );
-                (*table_idx, current.clone(), next.clone(), evals)
+                let batch = OpeningBatch::new(current.clone(), next.clone());
+                let evals = prover_state.eval(*table_idx, &batch, &mut prover_challenger);
+                (*table_idx, batch, evals)
             })
             .collect::<Vec<_>>();
         let virtual_eval = prover_state.add_virtual_eval(&mut prover_challenger);
@@ -693,8 +711,8 @@ mod tests {
 
         let mut verifier_challenger = challenger();
         let mut verifier = Verifier::<F, EF>::new(&shapes, strategy);
-        for (table_idx, current, next, evals) in opening_claims {
-            verifier.add_claim(table_idx, &current, &next, &evals, &mut verifier_challenger);
+        for (table_idx, batch, evals) in opening_claims {
+            verifier.add_claim(table_idx, &batch, &evals, &mut verifier_challenger);
         }
         verifier.add_virtual_eval(virtual_eval, &mut verifier_challenger);
 
@@ -758,13 +776,9 @@ mod tests {
         let opening_claims = schedule
             .iter()
             .map(|(table_idx, current, next)| {
-                let evals = prover_state.eval(
-                    *table_idx,
-                    current.as_slice(),
-                    next.as_slice(),
-                    &mut prover_challenger,
-                );
-                (*table_idx, current.clone(), next.clone(), evals)
+                let batch = OpeningBatch::new(current.clone(), next.clone());
+                let evals = prover_state.eval(*table_idx, &batch, &mut prover_challenger);
+                (*table_idx, batch, evals)
             })
             .collect::<Vec<_>>();
         let virtual_eval = prover_state.add_virtual_eval(&mut prover_challenger);
@@ -787,8 +801,8 @@ mod tests {
 
         let mut verifier_challenger = challenger();
         let mut verifier = Verifier::<F, EF>::new(&shapes, strategy);
-        for (table_idx, current, next, evals) in opening_claims {
-            verifier.add_claim(table_idx, &current, &next, &evals, &mut verifier_challenger);
+        for (table_idx, batch, evals) in opening_claims {
+            verifier.add_claim(table_idx, &batch, &evals, &mut verifier_challenger);
         }
         verifier.add_virtual_eval(virtual_eval, &mut verifier_challenger);
 

@@ -17,7 +17,7 @@ use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Layout as _, SuffixProver, Table};
-use p3_sumcheck::{OpeningProtocol, PointSchedule, TableShape, TableSpec};
+use p3_sumcheck::{OpeningBatch, OpeningProtocol, PointSchedule, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{
@@ -177,7 +177,9 @@ fn main() {
     let table = Table::new(vec![polynomial]);
     let witness = Layout::new_witness(vec![table], folding_factor.at_round(0));
 
-    let point_schedule: PointSchedule = (0..num_evaluations).map(|_| vec![0]).collect();
+    let point_schedule: PointSchedule = (0..num_evaluations)
+        .map(|_| OpeningBatch::new(vec![0], Vec::new()))
+        .collect();
     let protocol = OpeningProtocol::new(vec![TableSpec::new(
         TableShape::new(num_variables, 1),
         point_schedule,

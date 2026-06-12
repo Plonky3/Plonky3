@@ -102,7 +102,7 @@ where
 
         let evals = protocol
             .iter_openings()
-            .map(|(table_idx, polys)| prover_data.layout.eval(table_idx, polys, &[], challenger))
+            .map(|(table_idx, batch)| prover_data.layout.eval(table_idx, batch, challenger))
             .collect::<Vec<_>>();
 
         self.prove(
@@ -147,15 +147,15 @@ where
                 actual: proof.evals.len(),
             });
         }
-        for ((table_idx, polys), evals) in protocol.iter_openings().zip(&proof.evals) {
-            if polys.len() != evals.len() {
+        for ((table_idx, batch), evals) in protocol.iter_openings().zip(&proof.evals) {
+            if !batch.has_same_shape(evals) {
                 return Err(VerifierError::OpeningBatchSizeMismatch {
                     table_idx,
-                    expected: polys.len(),
+                    expected: batch.len(),
                     actual: evals.len(),
                 });
             }
-            layout_verifier.add_claim(table_idx, polys, &[], evals, challenger);
+            layout_verifier.add_claim(table_idx, batch, evals, challenger);
         }
 
         let alpha = challenger.sample_algebra_element();

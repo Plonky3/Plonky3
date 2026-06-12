@@ -20,6 +20,7 @@ use crate::layout::{LayoutStrategy, ProverMultiClaim, ProverVirtualClaim, Witnes
 use crate::product_polynomial::ProductPolynomial;
 use crate::strategy::{SumcheckProver, VariableOrder};
 use crate::svo::{SvoPoint, calculate_accumulators_batch};
+use crate::table::{OpeningBatch, OpeningEvals, OpeningRequest};
 use crate::{Claim, SumcheckData, extrapolate_01inf};
 
 /// Stacked-sumcheck prover with prefix-first variable binding.
@@ -124,8 +125,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
     /// # Arguments
     ///
     /// - `table_idx`  — source table index.
-    /// - `current`    — columns opened at the sampled point.
-    /// - `next`       — columns opened through the repeat-last Next view.
+    /// - `batch`      — columns opened at this sampled point.
     /// - `challenger` — Fiat–Shamir transcript.
     ///
     /// # Fiat–Shamir
@@ -141,16 +141,17 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
     fn eval<Ch>(
         &mut self,
         table_idx: usize,
-        current: &[usize],
-        next: &[usize],
+        batch: &OpeningRequest,
         challenger: &mut Ch,
-    ) -> Vec<EF>
+    ) -> OpeningEvals<EF>
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
+        let current = batch.current();
+        let next = batch.next();
         // Precondition: opening nothing would silently push an empty ProverMultiClaim.
         assert!(
-            !current.is_empty() || !next.is_empty(),
+            !batch.is_empty(),
             "opening schedule must name at least one column"
         );
         // Sample the local-frame opening point from the transcript.
@@ -164,7 +165,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         let point = SvoPoint::new_packed(self.folding, &point);
 
         // Evaluate each current column at the SVO point; split into (opening, eval).
-        let (current_openings, mut evals): (Vec<_>, Vec<EF>) = current
+        let (current_openings, current_evals): (Vec<_>, Vec<EF>) = current
             .iter()
             .copied()
             .map(|poly_idx| {
@@ -181,10 +182,10 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
                 (Opening::new_with_data(poly_idx, eval, partial_evals), eval)
             })
             .unzip();
-        evals.extend(next_evals);
 
         // Bind the evaluations into the transcript; the verifier absorbs the same bytes.
-        challenger.observe_algebra_slice(&evals);
+        challenger.observe_algebra_slice(&current_evals);
+        challenger.observe_algebra_slice(&next_evals);
 
         // Store the batch for the later sumcheck reduction.
         self.claim_map[table_idx].push(ProverMultiClaim::new(
@@ -193,7 +194,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
             next_openings,
         ));
 
-        evals
+        OpeningBatch::new(current_evals, next_evals)
     }
 
     /// Samples a virtual evaluation on the full stacked polynomial.

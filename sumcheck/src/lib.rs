@@ -47,7 +47,10 @@ pub use data::{SumcheckData, verify_final_sumcheck_rounds};
 pub use error::SumcheckError;
 pub(crate) use lagrange::extrapolate_01inf;
 use p3_field::Field;
-pub use table::{OpeningProtocol, PointSchedule, TableShape, TableSpec};
+pub use table::{
+    OpeningBatch, OpeningEvals, OpeningProtocol, OpeningRequest, PointSchedule, TableShape,
+    TableSpec,
+};
 
 /// A claimed evaluation together with layout-specific auxiliary data.
 #[derive(Debug, Clone)]

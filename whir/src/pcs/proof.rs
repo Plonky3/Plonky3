@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 
 use p3_commit::Mmcs;
 use p3_multilinear_util::poly::Poly;
+use p3_sumcheck::OpeningBatch;
 pub use p3_sumcheck::SumcheckData;
 use serde::{Deserialize, Serialize};
 
@@ -51,11 +52,8 @@ impl<F: Default + Send + Sync + Clone, EF: Default, MT: Mmcs<F>> Default for Whi
 ///
 /// - The proximity transcript: sumcheck rounds, intermediate commitments,
 ///   STIR query openings, and the final polynomial sent in the clear.
-/// - The public opening evaluations indexed by batch then by column:
-///
-/// ```text
-///     evals[i][j]  =  value of the j-th opened column in the i-th batch
-/// ```
+/// - The public opening evaluations indexed by batch, preserving the
+///   current/Next split from the matching schedule entry.
 ///
 /// # Ordering invariant
 ///
@@ -72,9 +70,9 @@ pub struct PcsProof<F: Send + Sync + Clone, EF, MT: Mmcs<F>> {
     /// Proximity transcript: initial commitment, sumcheck rounds, per-round
     /// commitments, STIR query openings, and the final polynomial.
     pub whir: WhirProof<F, EF, MT>,
-    /// Outer index walks opening batches in schedule order; inner index walks
-    /// the columns opened inside each batch in their requested order.
-    pub evals: Vec<Vec<EF>>,
+    /// Opening evaluations in schedule order. Each batch stores current
+    /// evaluations and repeat-last Next evaluations separately.
+    pub evals: Vec<OpeningBatch<EF>>,
 }
 
 /// Per-round proof data.

@@ -11,7 +11,7 @@ use super::data::{ZkSumcheckData, ZkVerifierHandoff};
 use crate::error::SumcheckError;
 use crate::layout::{LayoutStrategy, Verifier};
 use crate::strategy::VariableOrder;
-use crate::table::TableShape;
+use crate::table::{OpeningEvals, OpeningRequest, TableShape};
 
 /// HVZK verifier for the stacked sumcheck.
 ///
@@ -165,19 +165,18 @@ where
         })
     }
 
-    /// Records concrete opening claims on the inner verifier.
+    /// Records current and repeat-last Next opening claims on the inner verifier.
     pub fn add_claim<Ch>(
         &mut self,
         table_idx: usize,
-        polys: &[usize],
-        evals: &[EF],
+        batch: &OpeningRequest,
+        evals: &OpeningEvals<EF>,
         challenger: &mut Ch,
     ) where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Delegate; the HVZK overlay carries no extra state at claim time.
-        self.inner
-            .add_claim(table_idx, polys, &[], evals, challenger);
+        self.inner.add_claim(table_idx, batch, evals, challenger);
     }
 
     /// Records a virtual evaluation claim on the inner verifier.

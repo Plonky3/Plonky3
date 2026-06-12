@@ -11,13 +11,13 @@ use rand::rngs::SmallRng;
 use rand::{RngExt, SeedableRng};
 
 use crate::layout::Table;
-use crate::{PointSchedule, TableShape, TableSpec};
+use crate::{OpeningBatch, OpeningRequest, PointSchedule, TableShape, TableSpec};
 
 pub type F = BabyBear;
 
-pub fn table_point_schedule(width: usize, extra_points: PointSchedule) -> PointSchedule {
+pub fn table_point_schedule(width: usize, extra_points: Vec<OpeningRequest>) -> PointSchedule {
     let mut point_schedule = Vec::with_capacity(extra_points.len() + 1);
-    point_schedule.push((0..width).collect());
+    point_schedule.push(OpeningBatch::new((0..width).collect(), Vec::new()));
     point_schedule.extend(extra_points);
     point_schedule
 }
@@ -30,7 +30,7 @@ pub fn random_point_schedule(rng: &mut SmallRng, width: usize, num_points: usize
                 let polys = (0..width)
                     .filter(|_| rng.random_bool(0.5))
                     .collect::<Vec<_>>();
-                if polys.is_empty() { vec![0] } else { polys }
+                OpeningBatch::new(if polys.is_empty() { vec![0] } else { polys }, Vec::new())
             })
             .collect(),
     )

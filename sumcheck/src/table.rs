@@ -2,6 +2,7 @@ use alloc::vec::Vec;
 
 use p3_matrix::Dimensions;
 use p3_util::log2_ceil_usize;
+use serde::{Deserialize, Serialize};
 
 /// Shape-only description of one verifier table.
 ///
@@ -42,11 +43,80 @@ impl TableShape {
     }
 }
 
+/// One point-local opening batch for a table.
+///
+/// A batch represents one sampled transcript point. `current` columns are
+/// opened at that point; `next` columns are opened through the repeat-last Next
+/// view at the same point. Evaluation order is always current first, then next.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpeningBatch<T> {
+    current: Vec<T>,
+    next: Vec<T>,
+}
+
+impl<T> OpeningBatch<T> {
+    /// Builds an opening batch from current and Next column lists.
+    ///
+    /// # Panics
+    ///
+    /// Panics if both lists are empty.
+    pub fn new(current: Vec<T>, next: Vec<T>) -> Self {
+        assert!(
+            !current.is_empty() || !next.is_empty(),
+            "opening batch must name at least one column"
+        );
+        Self { current, next }
+    }
+
+    /// Returns current entries.
+    pub fn current(&self) -> &[T] {
+        &self.current
+    }
+
+    /// Returns Next entries.
+    pub fn next(&self) -> &[T] {
+        &self.next
+    }
+
+    /// Returns the total number of entries in this batch.
+    pub fn len(&self) -> usize {
+        self.current.len() + self.next.len()
+    }
+
+    /// Returns true if this batch has no entries.
+    pub fn is_empty(&self) -> bool {
+        self.current.is_empty() && self.next.is_empty()
+    }
+
+    /// Iterates over current entries first, then Next entries.
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.current.iter().chain(&self.next)
+    }
+
+    /// Returns true if the current/Next split has the same lengths as `other`.
+    pub fn has_same_shape<U>(&self, other: &OpeningBatch<U>) -> bool {
+        self.current.len() == other.current.len() && self.next.len() == other.next.len()
+    }
+}
+
+impl<T: Clone> OpeningBatch<T> {
+    /// Flattens entries in transcript order: current first, then Next.
+    pub fn to_vec(&self) -> Vec<T> {
+        self.iter().cloned().collect()
+    }
+}
+
 /// Point-local opening schedule for one table.
 ///
-/// Each outer entry corresponds to one sampled point for the table. The inner
-/// vector lists the column indices opened at that point.
-pub type PointSchedule = Vec<Vec<usize>>;
+/// Each entry corresponds to one sampled point for the table. Every entry may
+/// request current openings, repeat-last Next openings, or both.
+pub type OpeningRequest = OpeningBatch<usize>;
+
+/// Claimed evaluations for one point-local opening request.
+pub type OpeningEvals<EF> = OpeningBatch<EF>;
+
+/// Point-local opening schedule for one table.
+pub type PointSchedule = Vec<OpeningRequest>;
 
 /// Description of a table used to build randomized stacked-sumcheck witnesses.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,12 +137,13 @@ impl TableSpec {
     ///
     /// - Every scheduled polynomial index must be less than the table width.
     pub fn new(shape: TableShape, point_schedule: PointSchedule) -> Self {
-        assert!(
-            point_schedule
+        assert!(point_schedule.iter().all(|batch| {
+            batch
+                .current()
                 .iter()
-                .flatten()
+                .chain(batch.next())
                 .all(|&poly_idx| poly_idx < shape.width())
-        );
+        }));
         Self {
             shape,
             point_schedule,
@@ -136,12 +207,12 @@ impl OpeningProtocol {
     }
 
     /// Iterates over all opening batches in transcript order.
-    pub fn iter_openings(&self) -> impl Iterator<Item = (usize, &[usize])> {
+    pub fn iter_openings(&self) -> impl Iterator<Item = (usize, &OpeningRequest)> {
         self.0.iter().enumerate().flat_map(|(table_idx, table)| {
             table
                 .point_schedule()
                 .iter()
-                .map(move |polys| (table_idx, polys.as_slice()))
+                .map(move |batch| (table_idx, batch))
         })
     }
 }
@@ -154,29 +225,41 @@ mod tests {
 
     // Single-table protocol: arity 3, two columns, two opening points.
     //
-    //     point 0: open columns {0, 1}
-    //     point 1: open column  {0}
+    //     point 0: current columns {0, 1}
+    //     point 1: current column  {0}
     //
     // Yields num_openings() == 2 and iter_openings() emits the two
     // batches in transcript order against table index 0.
     fn single_table_protocol() -> OpeningProtocol {
         OpeningProtocol::new(vec![TableSpec::new(
             TableShape::new(3, 2),
-            vec![vec![0, 1], vec![0]],
+            vec![
+                OpeningBatch::new(vec![0, 1], Vec::new()),
+                OpeningBatch::new(vec![0], Vec::new()),
+            ],
         )])
     }
 
     // Two-table protocol with distinct shapes and schedules.
     //
-    //     table 0: arity 3, two cols. Schedule: open {0, 1} once.
-    //     table 1: arity 4, three cols. Schedule: open {0, 2}; open {1}.
+    //     table 0: arity 3, two cols. Schedule: current {0, 1} once.
+    //     table 1: arity 4, three cols. Schedule: current {0, 2}; current {1}.
     //
     // Yields num_openings() == 3 and iter_openings() emits the three
-    // batches as (0, [0, 1]), (1, [0, 2]), (1, [1]).
+    // batches as (0, current [0, 1]), (1, current [0, 2]), (1, current [1]).
     fn two_table_protocol() -> OpeningProtocol {
         OpeningProtocol::new(vec![
-            TableSpec::new(TableShape::new(3, 2), vec![vec![0, 1]]),
-            TableSpec::new(TableShape::new(4, 3), vec![vec![0, 2], vec![1]]),
+            TableSpec::new(
+                TableShape::new(3, 2),
+                vec![OpeningBatch::new(vec![0, 1], Vec::new())],
+            ),
+            TableSpec::new(
+                TableShape::new(4, 3),
+                vec![
+                    OpeningBatch::new(vec![0, 2], Vec::new()),
+                    OpeningBatch::new(vec![1], Vec::new()),
+                ],
+            ),
         ])
     }
 
@@ -218,21 +301,25 @@ mod tests {
         // Invariant:
         //     iter_openings() walks tables in protocol order, then walks
         //     each table's point schedule in insertion order, emitting
-        //     (table_idx, &polys[..]) per batch.
+        //     (table_idx, batch) per scheduled point.
         //
         // Fixture state:
         //     two-table protocol with mixed schedules.
-        //     Expected stream: (0, [0, 1]), (1, [0, 2]), (1, [1]).
+        //     Expected stream: current-only batches for [0, 1], [0, 2], [1].
         let protocol = two_table_protocol();
 
-        let collected: Vec<(usize, Vec<usize>)> = protocol
+        let collected: Vec<(usize, Vec<usize>, Vec<usize>)> = protocol
             .iter_openings()
-            .map(|(table_idx, polys)| (table_idx, polys.to_vec()))
+            .map(|(table_idx, batch)| (table_idx, batch.current().to_vec(), batch.next().to_vec()))
             .collect();
 
         assert_eq!(
             collected,
-            vec![(0, vec![0, 1]), (1, vec![0, 2]), (1, vec![1]),],
+            vec![
+                (0, vec![0, 1], vec![]),
+                (1, vec![0, 2], vec![]),
+                (1, vec![1], vec![]),
+            ],
         );
     }
 
@@ -281,11 +368,37 @@ mod tests {
         // Fixture state:
         //     shape (3, 2), schedule [[0, 1], [0]].
         let shape = TableShape::new(3, 2);
-        let schedule: PointSchedule = vec![vec![0, 1], vec![0]];
+        let schedule = vec![
+            OpeningBatch::new(vec![0, 1], Vec::new()),
+            OpeningBatch::new(vec![0], Vec::new()),
+        ];
         let spec = TableSpec::new(shape, schedule.clone());
 
         assert_eq!(*spec.shape(), shape);
         assert_eq!(spec.point_schedule(), &schedule);
+    }
+
+    #[test]
+    fn table_spec_accepts_mixed_current_next_batches() {
+        // Invariant:
+        //     One scheduled point may request current and Next openings over
+        //     the same sampled point, and the batch length is their sum.
+        let spec = TableSpec::new(
+            TableShape::new(3, 3),
+            vec![
+                OpeningBatch::new(vec![0, 2], vec![1]),
+                OpeningBatch::new(Vec::new(), vec![2]),
+            ],
+        );
+
+        let batches = spec.point_schedule();
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].current(), &[0, 2]);
+        assert_eq!(batches[0].next(), &[1]);
+        assert_eq!(batches[0].len(), 3);
+        assert_eq!(batches[1].current(), &[]);
+        assert_eq!(batches[1].next(), &[2]);
+        assert_eq!(batches[1].len(), 1);
     }
 
     #[test]
@@ -297,7 +410,27 @@ mod tests {
         //
         // Fixture state:
         //     width = 2, schedule references column 2 (only 0 and 1 are valid).
-        let _ = TableSpec::new(TableShape::new(3, 2), vec![vec![2]]);
+        let _ = TableSpec::new(
+            TableShape::new(3, 2),
+            vec![OpeningBatch::new(vec![2], Vec::new())],
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn table_spec_new_panics_on_out_of_range_next_poly_idx() {
+        // Invariant:
+        //     Next column indices are validated against table width too.
+        let _ = TableSpec::new(
+            TableShape::new(3, 2),
+            vec![OpeningBatch::new(vec![0], vec![2])],
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn opening_batch_new_panics_on_empty_batch() {
+        let _: OpeningBatch<usize> = OpeningBatch::new(vec![], vec![]);
     }
 
     #[test]
@@ -308,7 +441,10 @@ mod tests {
         //
         // Fixture state:
         //     start arity 2, width 3; pad to floor 4 → arity becomes 4.
-        let mut spec = TableSpec::new(TableShape::new(2, 3), vec![vec![0]]);
+        let mut spec = TableSpec::new(
+            TableShape::new(2, 3),
+            vec![OpeningBatch::new(vec![0], Vec::new())],
+        );
 
         spec.pad_to_min_num_variables(4);
 
@@ -323,7 +459,10 @@ mod tests {
         //
         // Fixture state:
         //     start arity 5, width 1; pad to floor 3 → no change.
-        let mut spec = TableSpec::new(TableShape::new(5, 1), vec![vec![0]]);
+        let mut spec = TableSpec::new(
+            TableShape::new(5, 1),
+            vec![OpeningBatch::new(vec![0], Vec::new())],
+        );
 
         spec.pad_to_min_num_variables(3);
 

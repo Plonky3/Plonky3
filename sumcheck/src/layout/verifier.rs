@@ -15,7 +15,7 @@ use crate::layout::opening::{VerifierMultiClaim, VerifierOpening, VerifierVirtua
 use crate::layout::plan::{LayoutShape, plan_layout};
 use crate::layout::witness::{Selector, TablePlacement};
 use crate::strategy::VariableOrder;
-use crate::table::TableShape;
+use crate::table::{OpeningEvals, OpeningRequest, TableShape};
 
 /// Verifier-side layout and claim registry.
 #[derive(Debug, Clone)]
@@ -108,9 +108,8 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     /// # Arguments
     ///
     /// - `table_idx`  — source table index.
-    /// - `current`    — column indices opened at the sampled point.
-    /// - `next`       — column indices opened at the repeat-last next point.
-    /// - `evals`      — claimed evaluations, ordered as `current` then `next`.
+    /// - `batch`      — opening batch sampled at this point.
+    /// - `evals`      — claimed evaluations with the same current/Next split.
     /// - `challenger` — Fiat–Shamir transcript.
     ///
     /// # Fiat–Shamir
@@ -122,25 +121,26 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     /// # Panics
     ///
     /// - At least one current or next column must be requested.
-    /// - `current.len() + next.len()` must equal `evals.len()`.
+    /// - `batch` and `evals` must have the same current/Next split lengths.
     /// - Every column index must be in range for this table.
     pub fn add_claim<Ch>(
         &mut self,
         table_idx: usize,
-        current: &[usize],
-        next: &[usize],
-        evals: &[EF],
+        batch: &OpeningRequest,
+        evals: &OpeningEvals<EF>,
         challenger: &mut Ch,
     ) where
         Ch: p3_challenger::FieldChallenger<F> + p3_challenger::GrindingChallenger<Witness = F>,
     {
         let placement = self.placement(table_idx);
+        let current = batch.current();
+        let next = batch.next();
         // Preconditions.
         assert!(
-            !current.is_empty() || !next.is_empty(),
+            !batch.is_empty(),
             "opening schedule must name at least one column"
         );
-        assert_eq!(current.len() + next.len(), evals.len());
+        assert!(batch.has_same_shape(evals));
         assert!(
             current
                 .iter()
@@ -158,21 +158,20 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         );
 
         // Absorb the evals into the transcript; mirrors the prover's eval.
-        challenger.observe_algebra_slice(evals);
-
-        let (current_evals, next_evals) = evals.split_at(current.len());
+        challenger.observe_algebra_slice(evals.current());
+        challenger.observe_algebra_slice(evals.next());
 
         // Pair each column index with its claimed evaluation into typed openings.
         let current_openings = current
             .iter()
             .copied()
-            .zip(current_evals.iter().copied())
+            .zip(evals.current().iter().copied())
             .map(|(poly_idx, eval)| VerifierOpening::new(poly_idx, eval))
             .collect();
         let next_openings = next
             .iter()
             .copied()
-            .zip(next_evals.iter().copied())
+            .zip(evals.next().iter().copied())
             .map(|(poly_idx, eval)| VerifierOpening::new(poly_idx, eval))
             .collect();
 
@@ -334,6 +333,7 @@ mod tests {
 
     use super::*;
     use crate::strategy::VariableOrder;
+    use crate::table::OpeningBatch;
     use crate::tests::{EF, F, challenger};
 
     const fn prefix_strategy() -> LayoutStrategy {
@@ -417,17 +417,15 @@ mod tests {
         let mut ch = challenger();
 
         // Add two openings on table 0; count jumps from 0 to 2.
-        verifier.add_claim(
-            0,
-            &[0, 1],
-            &[],
-            &[EF::from_u64(7), EF::from_u64(11)],
-            &mut ch,
-        );
+        let request = OpeningBatch::new(vec![0, 1], Vec::new());
+        let evals = OpeningBatch::new(vec![EF::from_u64(7), EF::from_u64(11)], Vec::new());
+        verifier.add_claim(0, &request, &evals, &mut ch);
         assert_eq!(verifier.num_claims(), 2);
 
         // Add one opening on table 1; count jumps from 2 to 3.
-        verifier.add_claim(1, &[0], &[], &[EF::from_u64(13)], &mut ch);
+        let request = OpeningBatch::new(vec![0], Vec::new());
+        let evals = OpeningBatch::new(vec![EF::from_u64(13)], Vec::new());
+        verifier.add_claim(1, &request, &evals, &mut ch);
         assert_eq!(verifier.num_claims(), 3);
     }
 
@@ -448,13 +446,9 @@ mod tests {
         let mut ch = challenger();
 
         // Concrete claim: two columns of table 0.
-        verifier.add_claim(
-            0,
-            &[0, 1],
-            &[],
-            &[EF::from_u64(7), EF::from_u64(11)],
-            &mut ch,
-        );
+        let request = OpeningBatch::new(vec![0, 1], Vec::new());
+        let evals = OpeningBatch::new(vec![EF::from_u64(7), EF::from_u64(11)], Vec::new());
+        verifier.add_claim(0, &request, &evals, &mut ch);
 
         // Virtual claim: covers the full stacked space.
         verifier.add_virtual_eval(EF::from_u64(13), &mut ch);
@@ -494,7 +488,9 @@ mod tests {
 
         // Record a single opening on table 1; table 0 stays empty.
         let mut ch = challenger();
-        verifier.add_claim(1, &[0], &[], &[EF::from_u64(9)], &mut ch);
+        let request = OpeningBatch::new(vec![0], Vec::new());
+        let evals = OpeningBatch::new(vec![EF::from_u64(9)], Vec::new());
+        verifier.add_claim(1, &request, &evals, &mut ch);
 
         // Check: only one opening → sum equals its eval scaled by alpha^0.
         assert_eq!(verifier.sum(EF::from_u64(3)), EF::from_u64(9));

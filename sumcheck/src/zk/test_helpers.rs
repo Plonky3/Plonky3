@@ -18,6 +18,7 @@ use rand::{RngExt, SeedableRng};
 
 use crate::layout::{PrefixProver, SuffixProver, Table, TableShape};
 use crate::strategy::VariableOrder;
+use crate::table::OpeningBatch;
 use crate::zk::{ZkLayout, ZkProver, ZkSumcheckData, ZkVerifier};
 
 /// Base field used across the test suite.
@@ -251,8 +252,9 @@ where
 
     // Concrete opening claims.
     for _ in 0..num_concrete {
-        let openings = prover.eval(0, &[0], &mut prover_challenger);
-        verifier.add_claim(0, &[0], &openings, &mut verifier_challenger);
+        let batch = OpeningBatch::new(vec![0], Vec::new());
+        let evals = prover.eval(0, &batch, &mut prover_challenger);
+        verifier.add_claim(0, &batch, &evals, &mut verifier_challenger);
     }
 
     // Virtual evaluation claims.
