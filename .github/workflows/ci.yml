@@ -164,7 +164,11 @@ jobs:
       - name: Install cargo-sort and taplo
         run: |
           cargo install cargo-sort
-          cargo install taplo-cli
+          # `--locked` uses taplo-cli's shipped Cargo.lock, pinning its `time`
+          # dependency to a version whose impls do not collide with taplo's
+          # blanket `From` impls (an unlocked resolve picks a newer `time` that
+          # fails to compile with E0119).
+          cargo install taplo-cli --locked
 
       - uses: Swatinem/rust-cache@v2
 
