@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use core::arch::aarch64::{self, uint32x4_t};
+use core::arch::aarch64::{self, uint32x4_t, uint64x2_t};
 use core::iter::{Product, Sum};
 use core::mem::transmute;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -306,6 +306,21 @@ fn mul(lhs: uint32x4_t, rhs: uint32x4_t) -> uint32x4_t {
     }
 }
 
+/// Fold a vector of 64-bit accumulators once: given `val`, return `res = val (mod P)`
+/// with `res <= (val >> 31) + P`.
+///
+/// Uses `2^31 = 1 (mod P)`: writing `val = hi * 2^31 + lo` with `lo <= P`, we have
+/// `val = hi + lo (mod P)`. Two applications bring any `val < 2^64` to `0..=P + 3`.
+#[inline]
+#[must_use]
+fn partial_reduce_u64(val: uint64x2_t) -> uint64x2_t {
+    unsafe {
+        // Safety: If this code got compiled then NEON intrinsics are available.
+        let p64 = aarch64::vdupq_n_u64(0x7fffffff);
+        aarch64::vaddq_u64(aarch64::vandq_u64(val, p64), aarch64::vshrq_n_u64(val, 31))
+    }
+}
+
 /// Negate a vector of Mersenne-31 field elements that fit in 31 bits.
 /// If the inputs do not fit in 31 bits, the result is undefined.
 #[inline]
@@ -328,6 +343,66 @@ impl_packed_value!(PackedMersenne31Neon, Mersenne31, WIDTH);
 
 unsafe impl PackedField for PackedMersenne31Neon {
     type Scalar = Mersenne31;
+
+    #[inline]
+    fn coeffwise_dot_product<'a, I>(d: usize, pairs: I) -> [Self; 8]
+    where
+        Self: 'a,
+        I: Iterator<Item = (&'a [Self], Self)>,
+    {
+        // Accumulate the raw 32x32 -> 64-bit products with widening multiply-accumulates
+        // (2 instructions per product), deferring the Mersenne reduction, instead of
+        // paying the 8-instruction reduced multiply-add per product.
+        //
+        // Each coefficient accumulator is a pair of u64x2 vectors: `lo` holds lanes 0-1
+        // and `hi` lanes 2-3. Inputs are in `0..=P`, so a product is at most
+        // `P^2 < 2^62`; folding the accumulators below `2^33` every 3 iterations keeps
+        // `2^33 + 3 * P^2 < 2^64`, so the u64 lanes never overflow.
+        debug_assert!(d <= 8, "Extension degree > 8 not supported");
+        unsafe {
+            // Safety: If this code got compiled then NEON intrinsics are available.
+            let zero = aarch64::vdupq_n_u64(0);
+            let mut lo = [zero; 8];
+            let mut hi = [zero; 8];
+            let mut unreduced = 0;
+            for (coeffs, base) in pairs {
+                let b = base.to_vector();
+                for (k, coeff) in coeffs.iter().take(d).enumerate() {
+                    let c = coeff.to_vector();
+                    lo[k] = aarch64::vmlal_u32(
+                        lo[k],
+                        aarch64::vget_low_u32(c),
+                        aarch64::vget_low_u32(b),
+                    );
+                    hi[k] = aarch64::vmlal_high_u32(hi[k], c, b);
+                }
+                unreduced += 1;
+                if unreduced == 3 {
+                    unreduced = 0;
+                    for k in 0..d {
+                        lo[k] = partial_reduce_u64(lo[k]);
+                        hi[k] = partial_reduce_u64(hi[k]);
+                    }
+                }
+            }
+            core::array::from_fn(|k| {
+                if k < d {
+                    // At most 2 unreduced products on top of a folded value: the lanes
+                    // are below 2^33 + 2 * P^2 < 2^64, so two folds bring them to
+                    // P + 3 <= 2 P, and `reduce_sum` yields a canonical value in 0..=P.
+                    let l = partial_reduce_u64(partial_reduce_u64(lo[k]));
+                    let h = partial_reduce_u64(partial_reduce_u64(hi[k]));
+                    let narrowed = aarch64::vuzp1q_u32(
+                        aarch64::vreinterpretq_u32_u64(l),
+                        aarch64::vreinterpretq_u32_u64(h),
+                    );
+                    Self::from_vector(reduce_sum(narrowed))
+                } else {
+                    Self::ZERO
+                }
+            })
+        }
+    }
 }
 
 /// Compute the permutation x -> x^5 on Mersenne-31 field elements.
@@ -368,6 +443,8 @@ impl_packed_field_pow_2!(
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use p3_field_testing::{test_packed_field, test_packed_field_dot_product_boundary};
 
     use super::{Mersenne31, PackedMersenne31Neon};
@@ -389,4 +466,55 @@ mod tests {
     );
 
     test_packed_field_dot_product_boundary!(crate::PackedMersenne31Neon);
+
+    /// The NEON `coeffwise_dot_product` must agree with the generic coefficient-wise
+    /// accumulation, including on boundary values (0, 1, P - 1 and the redundant
+    /// representation P of zero) and on stream lengths exercising every deferred
+    /// reduction phase.
+    #[test]
+    fn coeffwise_dot_product_matches_generic() {
+        use p3_field::{PackedField, PrimeCharacteristicRing};
+
+        const P: u32 = 0x7fffffff;
+        let val = |i: u32| -> u32 {
+            match i % 7 {
+                0 => 0,
+                1 => 1,
+                2 => P - 1,
+                3 => P,
+                _ => i.wrapping_mul(0x9e3779b9) % P,
+            }
+        };
+        let packed = |i: u32| {
+            PackedMersenne31Neon(Mersenne31::new_array([
+                val(i),
+                val(i.wrapping_add(1)),
+                val(i.wrapping_add(2)),
+                val(i.wrapping_add(3)),
+            ]))
+        };
+
+        for d in 1..=8usize {
+            for len in [0usize, 1, 2, 3, 4, 6, 7, 100] {
+                let coeffs: Vec<[PackedMersenne31Neon; 8]> = (0..len)
+                    .map(|i| core::array::from_fn(|k| packed((i * 8 + k) as u32)))
+                    .collect();
+                let bases: Vec<PackedMersenne31Neon> =
+                    (0..len).map(|i| packed((i + 1000) as u32)).collect();
+
+                let mut expected = [PackedMersenne31Neon::ZERO; 8];
+                for (c, &b) in coeffs.iter().zip(&bases) {
+                    for k in 0..d {
+                        expected[k] += c[k] * b;
+                    }
+                }
+
+                let got = PackedMersenne31Neon::coeffwise_dot_product(
+                    d,
+                    coeffs.iter().zip(&bases).map(|(c, &b)| (&c[..], b)),
+                );
+                assert_eq!(expected, got, "d = {d}, len = {len}");
+            }
+        }
+    }
 }

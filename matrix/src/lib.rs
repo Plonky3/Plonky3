@@ -9,8 +9,8 @@ use core::ops::Deref;
 
 use itertools::Itertools;
 use p3_field::{
-    BasedVectorSpace, ExtensionField, Field, FieldArray, PackedFieldExtension, PackedValue,
-    PrimeCharacteristicRing,
+    BasedVectorSpace, ExtensionField, Field, FieldArray, PackedField, PackedFieldExtension,
+    PackedValue, PrimeCharacteristicRing,
 };
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
@@ -530,18 +530,13 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
                 // Get the extension dimension from the first vec element's coefficients
                 let d = <EF::ExtensionPacking as BasedVectorSpace<T::Packing>>::DIMENSION;
 
-                // Initialize D accumulators for each coefficient of the extension
-                // In practice, we set D to 8, which is the maximum degree of the extension field supported.
-                let mut coeff_accs: [T::Packing; 8] = [T::Packing::ZERO; 8];
-                debug_assert!(d <= 8, "Extension degree > 8 not supported");
-
                 // Accumulate coefficient-wise: for each (v, r) pair, acc[i] += v.coefficient(i) * r
-                for (v, r) in vec.iter().zip(row_packed) {
-                    let v_coeffs = v.as_basis_coefficients_slice();
-                    for (acc, &v_coeff) in coeff_accs[..d].iter_mut().zip(v_coeffs) {
-                        *acc += v_coeff * r;
-                    }
-                }
+                let coeff_accs = T::Packing::coeffwise_dot_product(
+                    d,
+                    vec.iter()
+                        .zip(row_packed)
+                        .map(|(v, r)| (v.as_basis_coefficients_slice(), r)),
+                );
 
                 // Construct the result ExtPacking from the accumulators and sum the coefficients.
                 let packed_result =
