@@ -342,19 +342,41 @@ where
                 let mats = self.mmcs.get_matrices(data);
                 izip!(mats, points_for_mats, values).for_each(|(mat, points_for_mat, values)| {
                     let log_height = log2_strict_usize(mat.height());
-                    // It was committed in cfft order.
-                    let evals = CircleEvaluations::from_cfft_order(
-                        CircleDomain::standard(log_height),
-                        mat.as_view(),
-                    );
+                    let log_sub = log_height - self.fri_params.log_blowup;
 
                     let (alpha_offset, reduced_opening_for_log_height) = reduced_openings
                         .entry(log_height)
                         .or_insert_with(|| (Challenge::ONE, Challenge::zero_vec(1 << log_height)));
 
+                    // The lift below costs a single-column CFFT extrapolation, which is
+                    // latency-bound rather than bandwidth-bound: it costs about as much as
+                    // the half-traversal of a ~1000-column matrix it saves, so it only pays
+                    // off for matrices substantially wider than that.
+                    const LIFT_MIN_WIDTH: usize = 1024;
+
                     // The only pass over the matrix; it does not depend on the opening points.
-                    let reduced_rows = evals.rowwise_alpha_reduce(alpha);
-                    let alpha_pow_width = alpha.exp_u64(evals.values.width() as u64);
+                    // The reduced column lies in the pre-blow-up polynomial space, so it is
+                    // determined by the trace-size subdomain prefix (committed in cfft order):
+                    // reduce the prefix and lift it back with a narrow CFFT instead of
+                    // traversing the full LDE.
+                    let reduced_rows = if log_sub > 0 && mat.width() >= LIFT_MIN_WIDTH {
+                        let sub_domain = CircleDomain::new(
+                            log_sub,
+                            CircleDomain::<Val>::standard(log_height).shift,
+                        );
+                        CircleEvaluations::from_cfft_order(
+                            sub_domain,
+                            mat.split_rows(1 << log_sub).0,
+                        )
+                        .rowwise_alpha_reduce_lifted(alpha, CircleDomain::standard(log_height))
+                    } else {
+                        CircleEvaluations::from_cfft_order(
+                            CircleDomain::standard(log_height),
+                            mat.as_view(),
+                        )
+                        .rowwise_alpha_reduce(alpha)
+                    };
+                    let alpha_pow_width = alpha.exp_u64(mat.width() as u64);
 
                     points_for_mat
                         .iter()

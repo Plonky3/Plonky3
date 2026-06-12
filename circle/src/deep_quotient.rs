@@ -11,6 +11,7 @@ use p3_field::{
     ExtensionField, Field, PackedFieldExtension, batch_multiplicative_inverse, dot_product,
 };
 use p3_matrix::Matrix;
+use p3_matrix::dense::RowMajorMatrix;
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use tracing::instrument;
@@ -171,6 +172,33 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
                 .collect_vec();
         self.values
             .rowwise_packed_dot_product::<EF>(&packed_alpha_powers)
+            .collect()
+    }
+
+    /// Alpha-reduce evaluations over a subdomain, then lift the reduced column to
+    /// `target_domain` with a narrow CFFT extrapolation.
+    ///
+    /// When `self` holds the trace-size subdomain prefix of a committed LDE (see
+    /// `eval_at_point_on_subdomain_prefix_matches_full`), the reduced column
+    /// `r = sum_j(alpha^j * p_j)` lies coordinate-wise in the pre-blow-up polynomial space,
+    /// so its values on the prefix determine it. Reducing the prefix and extrapolating a
+    /// single extension-field column costs `1 / blowup` of the full-matrix traversal plus
+    /// a narrow CFFT, instead of a full traversal.
+    #[instrument(skip_all, fields(dims = %self.values.dimensions()))]
+    pub(crate) fn rowwise_alpha_reduce_lifted<EF: ExtensionField<F>>(
+        &self,
+        alpha: EF,
+        target_domain: CircleDomain<F>,
+    ) -> Vec<EF> {
+        let reduced = self.rowwise_alpha_reduce(alpha);
+        let flat = RowMajorMatrix::new_col(reduced).flatten_to_base();
+        let lifted = CircleEvaluations::from_cfft_order(self.domain, flat)
+            .extrapolate(target_domain)
+            .to_cfft_order();
+        lifted
+            .values
+            .par_chunks_exact(EF::DIMENSION)
+            .map(|coeffs| EF::from_basis_coefficients_slice(coeffs).unwrap())
             .collect()
     }
 }
@@ -386,6 +414,33 @@ mod tests {
             RowMajorMatrix::new_col(ros).flatten_to_base(),
         );
         assert!(ros.dim() <= (1 << domain.log_n) + 1);
+    }
+
+    /// The reduced column is a linear combination of committed polynomials, so it lies in the
+    /// pre-blow-up polynomial space: reducing the trace-size subdomain prefix and lifting the
+    /// column back with a CFFT must match reducing the full LDE.
+    #[test]
+    fn alpha_reduce_lifted_matches_full() {
+        let mut rng = SmallRng::seed_from_u64(1);
+        for log_n in 2..8 {
+            for log_blowup in [1, 2] {
+                let lde_domain = CircleDomain::standard(log_n + log_blowup);
+                let lde = CircleEvaluations::<F>::from_natural_order(
+                    CircleDomain::standard(log_n),
+                    RowMajorMatrix::rand(&mut rng, 1 << log_n, 11),
+                )
+                .extrapolate(lde_domain);
+
+                let alpha: EF = rng.random();
+                let full = lde.rowwise_alpha_reduce(alpha);
+
+                let sub_domain = CircleDomain::new(log_n, lde_domain.shift);
+                let prefix = lde.values.split_rows(1 << log_n).0;
+                let lifted = CircleEvaluations::from_cfft_order(sub_domain, prefix)
+                    .rowwise_alpha_reduce_lifted(alpha, lde_domain);
+                assert_eq!(full, lifted);
+            }
+        }
     }
 
     #[test]
