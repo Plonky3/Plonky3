@@ -151,16 +151,7 @@ impl<F: Field> NextStatement<F> {
     /// - `challenge`: the batching challenge whose powers weight each constraint.
     /// - `shift`: offset of the first challenge power, so this group follows earlier groups.
     #[instrument(skip_all, fields(num_constraints = self.len(), num_variables = self.num_variables()))]
-    pub fn combine<Base>(
-        &self,
-        acc_weights: &mut Poly<F>,
-        acc_sum: &mut F,
-        challenge: F,
-        shift: usize,
-    ) where
-        F: ExtensionField<Base>,
-        Base: Field,
-    {
+    pub fn combine(&self, acc_weights: &mut Poly<F>, acc_sum: &mut F, challenge: F, shift: usize) {
         // Nothing to fold when this group holds no constraints.
         if self.constraints.is_empty() {
             return;
@@ -502,7 +493,7 @@ mod tests {
 
         let mut weights = Poly::<EF>::zero(4);
         let mut sum = EF::ZERO;
-        statement.combine::<F>(&mut weights, &mut sum, alpha, shift);
+        statement.combine(&mut weights, &mut sum, alpha, shift);
 
         // Naive golden: the full-space successor table scaled by alpha^shift.
         let table = Poly::new_next_from_point(local.as_slice());
@@ -554,7 +545,7 @@ mod tests {
         let alpha = EF::from_u64(2);
         let mut scalar = Poly::<EF>::zero(k);
         let mut scalar_sum = EF::ZERO;
-        statement.combine::<F>(&mut scalar, &mut scalar_sum, alpha, 0);
+        statement.combine(&mut scalar, &mut scalar_sum, alpha, 0);
 
         let k_pack = log2_strict_usize(<F as Field>::Packing::WIDTH);
         let mut packed = Poly::<<EF as ExtensionField<F>>::ExtensionPacking>::zero(k - k_pack);

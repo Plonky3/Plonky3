@@ -76,8 +76,8 @@ mod verifier;
 mod witness;
 
 pub use opening::{
-    EqPartials, EqSvoPartials, MultiClaim, NextPartials, NextSvoPartials, Opening, ProverEqOpening,
-    ProverMultiClaim, ProverNextOpening, ProverVirtualClaim, VerifierMultiClaim, VerifierOpening,
+    EqPartials, EqSvoPartials, MultiClaim, NextPartials, NextSvoPartials, Opening,
+    ProverMultiClaim, ProverVirtualClaim, VerifierMultiClaim, VerifierOpening,
     VerifierVirtualClaim,
 };
 pub use prover::{Layout, PrefixProver, SuffixProver};

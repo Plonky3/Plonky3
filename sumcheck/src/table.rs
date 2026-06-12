@@ -100,17 +100,6 @@ impl<T> OpeningBatch<T> {
         self.current.is_empty() && self.next.is_empty()
     }
 
-    /// Iterates over both lists in transcript order.
-    ///
-    /// # Returns
-    ///
-    /// - The direct entries first.
-    /// - The successor-view entries second.
-    pub fn iter(&self) -> impl Iterator<Item = &T> {
-        // Chain preserves transcript order: direct entries, then successor-view entries.
-        self.current.iter().chain(&self.next)
-    }
-
     /// Returns true when both per-side list lengths match the other batch.
     ///
     /// # Arguments
@@ -130,8 +119,9 @@ impl<T: Clone> OpeningBatch<T> {
     /// - The direct entries first.
     /// - The successor-view entries second.
     pub fn to_vec(&self) -> Vec<T> {
-        // Walk in transcript order and copy each entry into a flat vector.
-        self.iter().cloned().collect()
+        // Walk in transcript order (direct entries, then successor-view entries)
+        // and copy each entry into a flat vector.
+        self.current.iter().chain(&self.next).cloned().collect()
     }
 }
 
@@ -169,6 +159,7 @@ impl TableSpec {
     /// # Panics
     ///
     /// - Every scheduled polynomial index must be less than the table width.
+    /// - A column may not repeat within one side of a batch.
     pub fn new(shape: TableShape, point_schedule: PointSchedule) -> Self {
         // Invariant: every requested column must address a real column of the table.
         // Both sides of each batch index into the same set of table columns,
@@ -180,6 +171,21 @@ impl TableSpec {
                 .chain(batch.next())
                 .all(|&poly_idx| poly_idx < shape.width())
         }));
+        // Invariant: a column appears at most once per side of a batch.
+        // Opening one column in both the direct and successor-view sides is
+        // intended, but repeating it within one side only burns an extra
+        // challenge power on a duplicate claim.
+        let side_has_no_repeat = |cols: &[usize]| {
+            cols.iter()
+                .enumerate()
+                .all(|(i, col)| !cols[..i].contains(col))
+        };
+        assert!(
+            point_schedule.iter().all(
+                |batch| side_has_no_repeat(batch.current()) && side_has_no_repeat(batch.next())
+            ),
+            "an opening batch must not repeat a column within its current or next side"
+        );
         Self {
             shape,
             point_schedule,
@@ -225,8 +231,15 @@ impl OpeningProtocol {
 
     /// Pads every table shape to at least `min_num_variables`.
     ///
-    /// Opening schedules are unchanged because padding only adds zero rows to
-    /// the committed table.
+    /// The column index lists in each schedule are unchanged because padding
+    /// only appends zero rows to the committed table.
+    ///
+    /// The successor view, however, is always taken over the padded space.
+    /// Padding therefore moves the repeated boundary row into the zero pad:
+    /// the last real row's successor reads a pad row rather than repeating
+    /// itself, so a successor opening after padding is a different polynomial
+    /// identity than one over the unpadded table.
+    /// Prover and verifier agree because both work over the padded space.
     pub fn pad_to_min_num_variables(mut self, min_num_variables: usize) -> Self {
         self.0
             .iter_mut()
@@ -479,6 +492,32 @@ mod tests {
             TableShape::new(3, 2),
             vec![OpeningBatch::new(vec![0], vec![2])],
         );
+    }
+
+    #[test]
+    #[should_panic]
+    fn table_spec_new_panics_on_duplicate_column_in_one_side() {
+        // Invariant:
+        //     A column may not repeat within one side of a batch.
+        //
+        // Fixture state:
+        //     width = 2; the direct side names column 0 twice.
+        let _ = TableSpec::new(
+            TableShape::new(3, 2),
+            vec![OpeningBatch::new(vec![0, 0], Vec::new())],
+        );
+    }
+
+    #[test]
+    fn table_spec_new_accepts_same_column_across_both_sides() {
+        // Invariant:
+        //     Opening one column on both sides (direct and successor-view) is
+        //     intended and must be accepted; only within-side repeats are rejected.
+        let spec = TableSpec::new(
+            TableShape::new(3, 2),
+            vec![OpeningBatch::new(vec![0], vec![0])],
+        );
+        assert_eq!(spec.point_schedule().len(), 1);
     }
 
     #[test]

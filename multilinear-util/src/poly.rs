@@ -336,8 +336,9 @@ impl<F: Field> Poly<F> {
     ///
     /// # Performance
     ///
-    /// This allocates the full dense table and is meant as a reference.
-    /// Hot paths should use the shifted view or the split and compressed forms instead.
+    /// This allocates the full dense table over the hypercube.
+    /// It backs the dense constraint-combination path.
+    /// The WHIR opening path avoids it via the non-materializing shifted views.
     pub fn new_next_from_point(point: &[F]) -> Self {
         // Start from the plain equality table eq[i] = Eq(point, i).
         let mut res = Self::new_from_point(point, F::ONE).0;

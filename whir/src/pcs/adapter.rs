@@ -157,7 +157,9 @@ where
                     actual: evals.len(),
                 });
             }
-            layout_verifier.add_claim(table_idx, batch, evals, challenger);
+            // The shape was pre-checked above; the inner check is defense in depth
+            // and its error maps into a verifier error if ever reached.
+            layout_verifier.add_claim(table_idx, batch, evals, challenger)?;
         }
 
         let alpha = challenger.sample_algebra_element();

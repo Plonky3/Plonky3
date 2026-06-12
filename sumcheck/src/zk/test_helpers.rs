@@ -254,7 +254,9 @@ where
     for _ in 0..num_concrete {
         let batch = OpeningBatch::new(vec![0], Vec::new());
         let evals = prover.eval(0, &batch, &mut prover_challenger);
-        verifier.add_claim(0, &batch, &evals, &mut verifier_challenger);
+        verifier
+            .add_claim(0, &batch, &evals, &mut verifier_challenger)
+            .unwrap();
     }
 
     // Virtual evaluation claims.

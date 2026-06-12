@@ -7,7 +7,6 @@ use core::marker::PhantomData;
 use p3_field::{ExtensionField, Field, dot_product};
 use p3_multilinear_util::point::Point;
 
-use crate::Claim;
 use crate::constraints::statement::{EqStatement, NextStatement};
 use crate::constraints::{Constraint, Statements};
 use crate::layout::LayoutStrategy;
@@ -16,6 +15,7 @@ use crate::layout::plan::{LayoutShape, plan_layout};
 use crate::layout::witness::{Selector, TablePlacement};
 use crate::strategy::VariableOrder;
 use crate::table::{OpeningEvals, OpeningRequest, TableShape};
+use crate::{Claim, SumcheckError};
 
 /// Verifier-side layout and claim registry.
 #[derive(Debug, Clone)]
@@ -118,10 +118,14 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     /// - Absorbs the evaluations, current group first then next.
     /// - Mirrors exactly the prover-side absorption order.
     ///
+    /// # Errors
+    ///
+    /// - Returns [`SumcheckError::OpeningShapeMismatch`] when the proof's
+    ///   evaluations do not match the requested column shape.
+    ///
     /// # Panics
     ///
     /// - At least one current or next column must be requested.
-    /// - Columns and evaluations must agree on both group lengths.
     /// - Every column index must be in range for this table.
     pub fn add_claim<Ch>(
         &mut self,
@@ -129,20 +133,31 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         batch: &OpeningRequest,
         evals: &OpeningEvals<EF>,
         challenger: &mut Ch,
-    ) where
+    ) -> Result<(), SumcheckError>
+    where
         Ch: p3_challenger::FieldChallenger<F> + p3_challenger::GrindingChallenger<Witness = F>,
     {
         let placement = self.placement(table_idx);
         // Split the request into its two column groups.
         let current = batch.current();
         let next = batch.next();
-        // An empty request would silently record nothing.
+        // An empty request would silently record nothing. The schedule is built
+        // by the verifier, so an empty request is a caller bug, not a bad proof.
         assert!(
             !batch.is_empty(),
             "opening schedule must name at least one column"
         );
-        // Columns and evaluations must line up group-for-group.
-        assert!(batch.has_same_shape(evals));
+        // The evaluations come from the proof, so a shape mismatch is a malformed
+        // proof and must be rejected rather than aborting the verifier.
+        if !batch.has_same_shape(evals) {
+            return Err(SumcheckError::OpeningShapeMismatch {
+                table_idx,
+                expected_current: current.len(),
+                expected_next: next.len(),
+                actual_current: evals.current().len(),
+                actual_next: evals.next().len(),
+            });
+        }
         // Every requested column must address an existing slot in this table.
         assert!(
             current
@@ -185,6 +200,8 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
             current_openings,
             next_openings,
         ));
+
+        Ok(())
     }
 
     /// Records a virtual evaluation claim on the full stacked polynomial.
@@ -440,14 +457,46 @@ mod tests {
         // Add two openings on table 0; count jumps from 0 to 2.
         let request = OpeningBatch::new(vec![0, 1], Vec::new());
         let evals = OpeningBatch::new(vec![EF::from_u64(7), EF::from_u64(11)], Vec::new());
-        verifier.add_claim(0, &request, &evals, &mut ch);
+        verifier.add_claim(0, &request, &evals, &mut ch).unwrap();
         assert_eq!(verifier.num_claims(), 2);
 
         // Add one opening on table 1; count jumps from 2 to 3.
         let request = OpeningBatch::new(vec![0], Vec::new());
         let evals = OpeningBatch::new(vec![EF::from_u64(13)], Vec::new());
-        verifier.add_claim(1, &request, &evals, &mut ch);
+        verifier.add_claim(1, &request, &evals, &mut ch).unwrap();
         assert_eq!(verifier.num_claims(), 3);
+    }
+
+    #[test]
+    fn verifier_add_claim_rejects_shape_mismatch_without_panicking() {
+        // Invariant:
+        //     The evaluations come from the proof, so a shape mismatch against
+        //     the requested columns is rejected as an error, never a panic.
+        //
+        // Fixture state:
+        //     request names two direct columns, but only one evaluation is given.
+        let shapes = vec![TableShape::new(9, 2)];
+        let mut verifier: Verifier<F, EF> = Verifier::new(&shapes, prefix_strategy());
+        let mut ch = challenger();
+
+        let request = OpeningBatch::new(vec![0, 1], Vec::new());
+        let evals = OpeningBatch::new(vec![EF::from_u64(7)], Vec::new());
+        let err = verifier
+            .add_claim(0, &request, &evals, &mut ch)
+            .unwrap_err();
+
+        assert_eq!(
+            err,
+            SumcheckError::OpeningShapeMismatch {
+                table_idx: 0,
+                expected_current: 2,
+                expected_next: 0,
+                actual_current: 1,
+                actual_next: 0,
+            }
+        );
+        // The rejected claim left the registry untouched.
+        assert_eq!(verifier.num_claims(), 0);
     }
 
     #[test]
@@ -469,7 +518,7 @@ mod tests {
         // Concrete claim: two columns of table 0.
         let request = OpeningBatch::new(vec![0, 1], Vec::new());
         let evals = OpeningBatch::new(vec![EF::from_u64(7), EF::from_u64(11)], Vec::new());
-        verifier.add_claim(0, &request, &evals, &mut ch);
+        verifier.add_claim(0, &request, &evals, &mut ch).unwrap();
 
         // Virtual claim: covers the full stacked space.
         verifier.add_virtual_eval(EF::from_u64(13), &mut ch);
@@ -511,7 +560,7 @@ mod tests {
         let mut ch = challenger();
         let request = OpeningBatch::new(vec![0], Vec::new());
         let evals = OpeningBatch::new(vec![EF::from_u64(9)], Vec::new());
-        verifier.add_claim(1, &request, &evals, &mut ch);
+        verifier.add_claim(1, &request, &evals, &mut ch).unwrap();
 
         // Check: only one opening → sum equals its eval scaled by alpha^0.
         assert_eq!(verifier.sum(EF::from_u64(3)), EF::from_u64(9));

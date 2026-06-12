@@ -186,10 +186,15 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
                 // Reuse: if this column was already opened in the current group,
                 // its last-round equality residual feeds the successor computation
                 // for free, avoiding a redundant pass over the column.
+                //
+                // The per-round list is empty when there are no SVO rounds (folding
+                // is zero), so fall back to recomputing the residual rather than
+                // unwrapping an absent last round.
                 let d_eq = current_openings
                     .iter()
                     .find(|opening| opening.poly_idx() == Some(poly_idx))
-                    .map(|opening| opening.data().rounds().last().unwrap().poly());
+                    .and_then(|opening| opening.data().rounds().last())
+                    .map(|round| round.poly());
                 let (eval, partial_evals) = point.eval_next_suffix(table.poly(poly_idx), d_eq);
                 (Opening::new_with_data(poly_idx, eval, partial_evals), eval)
             })

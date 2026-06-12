@@ -122,7 +122,7 @@ impl<F: Field, EF: ExtensionField<F>> Statements<F, EF> {
             }
             Self::Next(statement) => {
                 // Successor weights always add onto the accumulator.
-                statement.combine::<F>(combined, eval, challenge, shift);
+                statement.combine(combined, eval, challenge, shift);
             }
             Self::Select(statement) => {
                 // Selection weights always add onto the accumulator.
@@ -261,12 +261,6 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
     #[must_use]
     pub fn statements(&self) -> &[Statements<F, EF>] {
         &self.statements
-    }
-
-    /// Returns the batching challenge.
-    #[must_use]
-    pub const fn challenge(&self) -> EF {
-        self.challenge
     }
 
     /// Returns the challenge powers starting at the given offset.

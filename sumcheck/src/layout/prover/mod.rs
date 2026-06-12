@@ -230,7 +230,9 @@ pub(super) mod test_utils {
         // `add_claim` samples the point + absorbs the evals internally, mirroring
         // the prover's `eval`.
         for (table_idx, batch, evals) in opening_claims {
-            verifier.add_claim(table_idx, &batch, &evals, &mut verifier_challenger);
+            verifier
+                .add_claim(table_idx, &batch, &evals, &mut verifier_challenger)
+                .unwrap();
         }
 
         // Re-sample the virtual claim too; mirrors the prover's `add_virtual_eval`.
@@ -745,7 +747,9 @@ mod tests {
         let mut verifier_challenger = challenger();
         let mut verifier = Verifier::<F, EF>::new(&shapes, strategy);
         for (table_idx, batch, evals) in opening_claims {
-            verifier.add_claim(table_idx, &batch, &evals, &mut verifier_challenger);
+            verifier
+                .add_claim(table_idx, &batch, &evals, &mut verifier_challenger)
+                .unwrap();
         }
         verifier.add_virtual_eval(virtual_eval, &mut verifier_challenger);
 
@@ -854,7 +858,9 @@ mod tests {
         let mut verifier_challenger = challenger();
         let mut verifier = Verifier::<F, EF>::new(&shapes, strategy);
         for (table_idx, batch, evals) in opening_claims {
-            verifier.add_claim(table_idx, &batch, &evals, &mut verifier_challenger);
+            verifier
+                .add_claim(table_idx, &batch, &evals, &mut verifier_challenger)
+                .unwrap();
         }
         verifier.add_virtual_eval(virtual_eval, &mut verifier_challenger);
 

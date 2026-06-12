@@ -15,10 +15,6 @@ use crate::svo::{
 /// Multi-opening claim over an SVO point.
 pub type ProverMultiClaim<F, EF> =
     MultiClaim<EF, SvoPoint<F, EF>, EqSvoPartials<EF>, NextSvoPartials<EF>>;
-/// Prover opening that evaluates a column at the sampled point.
-pub type ProverEqOpening<EF> = Opening<EF, EqSvoPartials<EF>>;
-/// Prover opening that evaluates the repeat-last successor view at the sampled point.
-pub type ProverNextOpening<EF> = Opening<EF, NextSvoPartials<EF>>;
 /// Virtual claim carrying precomputed SVO accumulators.
 pub type ProverVirtualClaim<EF> = Claim<EF, Point<EF>, SvoAccumulators<EF>>;
 

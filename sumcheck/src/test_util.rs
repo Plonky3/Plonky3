@@ -27,10 +27,22 @@ pub fn random_point_schedule(rng: &mut SmallRng, width: usize, num_points: usize
         width,
         (1..num_points)
             .map(|_| {
-                let polys = (0..width)
+                // Independently sample a direct-opening subset and a
+                // successor-view subset of the columns. Each filter keeps the
+                // columns of one side distinct, while the two sides may overlap
+                // (one column opened both at the point and at its successor).
+                let direct = (0..width)
                     .filter(|_| rng.random_bool(0.5))
                     .collect::<Vec<_>>();
-                OpeningBatch::new(if polys.is_empty() { vec![0] } else { polys }, Vec::new())
+                let successor = (0..width)
+                    .filter(|_| rng.random_bool(0.5))
+                    .collect::<Vec<_>>();
+                // A batch must name at least one column on some side.
+                if direct.is_empty() && successor.is_empty() {
+                    OpeningBatch::new(vec![0], Vec::new())
+                } else {
+                    OpeningBatch::new(direct, successor)
+                }
             })
             .collect(),
     )

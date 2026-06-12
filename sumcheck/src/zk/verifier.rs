@@ -166,17 +166,22 @@ where
     }
 
     /// Records opening claims at the current points and at their repeat-last successor points on the inner verifier.
+    ///
+    /// # Errors
+    ///
+    /// - Propagates [`SumcheckError::OpeningShapeMismatch`] from the inner verifier.
     pub fn add_claim<Ch>(
         &mut self,
         table_idx: usize,
         batch: &OpeningRequest,
         evals: &OpeningEvals<EF>,
         challenger: &mut Ch,
-    ) where
+    ) -> Result<(), SumcheckError>
+    where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Delegate; the HVZK overlay carries no extra state at claim time.
-        self.inner.add_claim(table_idx, batch, evals, challenger);
+        self.inner.add_claim(table_idx, batch, evals, challenger)
     }
 
     /// Records a virtual evaluation claim on the inner verifier.

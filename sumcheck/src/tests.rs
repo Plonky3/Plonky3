@@ -336,7 +336,9 @@ where
     {
         let mut layout_verifier = Verifier::<F, EF>::new(&protocol.table_shapes(), strategy);
         for ((table_idx, batch), evals) in protocol.iter_openings().zip(&opening_evals) {
-            layout_verifier.add_claim(table_idx, batch, evals, &mut verifier_challenger);
+            layout_verifier
+                .add_claim(table_idx, batch, evals, &mut verifier_challenger)
+                .unwrap();
         }
         let alpha = verifier_challenger.sample_algebra_element();
         let constraint = layout_verifier.constraint(alpha);
@@ -391,6 +393,23 @@ fn test_single_sumcheck() {
     let specs = [TableSpec::new(
         TableShape::new(20, 1),
         vec![OpeningBatch::new(vec![0], Vec::new())],
+    )];
+
+    run_multi_table_sumcheck_test::<PrefixProver<F, EF>>(&specs);
+    run_multi_table_sumcheck_test::<SuffixProver<F, EF>>(&specs);
+}
+
+#[test]
+fn test_single_sumcheck_mixed_current_next_large() {
+    // The same column is opened both directly and through the successor view,
+    // exercising the suffix prover's residual-reuse path across the two sides.
+    //
+    // Twenty variables keep the residual weight tables far above the parallel
+    // threshold, so the successor-weight accumulators run their parallel
+    // branches rather than the small-input serial fallback.
+    let specs = [TableSpec::new(
+        TableShape::new(20, 1),
+        vec![OpeningBatch::new(vec![0], vec![0])],
     )];
 
     run_multi_table_sumcheck_test::<PrefixProver<F, EF>>(&specs);

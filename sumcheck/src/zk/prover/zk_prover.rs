@@ -470,7 +470,9 @@ mod tests {
         let evals = prover.eval(0, &batch, &mut prover_challenger);
         assert_eq!(evals.len(), batch.len());
         // Verifier mirrors the same draws against the returned evaluations.
-        verifier.add_claim(0, &batch, &evals, &mut verifier_challenger);
+        verifier
+            .add_claim(0, &batch, &evals, &mut verifier_challenger)
+            .unwrap();
 
         // Add the masking claim that hides the witness in the final sumcheck.
         let virtual_eval = prover.add_virtual_eval(&mut prover_challenger);
