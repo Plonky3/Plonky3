@@ -437,10 +437,7 @@ impl BasedVectorSpace<PackedM31> for PackedQM31 {
     }
 }
 
-impl rand::distr::Distribution<PackedQM31> for rand::distr::StandardUniform
-where
-    Self: rand::distr::Distribution<PackedM31>,
-{
+impl rand::distr::Distribution<PackedQM31> for rand::distr::StandardUniform {
     #[inline]
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> PackedQM31 {
         PackedQM31(core::array::from_fn(|_| {
