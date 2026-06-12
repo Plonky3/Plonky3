@@ -65,10 +65,12 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
             compute_twiddles(domain)
                 .into_iter()
                 .map(|ts| {
-                    batch_multiplicative_inverse(&ts)
-                        .into_iter()
-                        .map(|t| DifButterfly(t))
-                        .collect_vec()
+                    CfftLayer::Butterflies(
+                        batch_multiplicative_inverse(&ts)
+                            .into_iter()
+                            .map(|t| DifButterfly(t))
+                            .collect_vec(),
+                    )
                 })
                 .collect_vec()
         });
@@ -189,106 +191,79 @@ impl<F: ComplexExtendable> CircleEvaluations<F, RowMajorMatrix<F>> {
         let log_n = log2_strict_usize(coeffs.height());
         assert!(log_n <= domain.log_n);
 
-        if log_n < domain.log_n {
-            // We could simply pad coeffs like this:
-            // coeffs.pad_to_height(target_domain.size(), F::ZERO);
-            // But the first `added_bits` layers will simply fill out the zeros
-            // with the lower order values. (In `DitButterfly`, `x_2` is 0, so
-            // both `x_1` and `x_2` are set to `x_1`).
-            // So instead we directly repeat the coeffs and skip the initial layers.
-            //
-            // After any number of doublings the buffer is the original `h` rows tiled end to end.
-            // Output row `j` is therefore a copy of original row `j mod h`.
-            //
-            //     originals : r_0 r_1 ... r_{h-1}
-            //     filled    : r_0 ... r_{h-1} | r_0 ... r_{h-1} | r_0 ... r_{h-1}
-            //                 \_h originals_/   \___ identical tiled copies ___/
-            //
-            // Reserve the full target once, then fill the new tail in parallel.
-            // Each tail row is written by exactly one task.
-            // The original rows are only read.
-            // So the concurrent writes never race.
-            debug_span!("extend coeffs").in_scope(|| {
-                let w = coeffs.width();
-                // Rows present before the blow-up.
-                let initial_h = coeffs.height();
-                // Rows required after the blow-up.
-                let target_h = domain.size();
-                let initial_len = initial_h * w;
-                let target_len = target_h * w;
+        let added_bits = domain.log_n - log_n;
+        let w = coeffs.width();
+        let target_len = domain.size() * w;
 
-                // Grow to the final size in one allocation; the tail stays uninitialised.
-                coeffs.values.reserve_exact(target_len - initial_len);
-
-                // SAFETY:
-                // - The reservation above guarantees capacity for `target_len` elements.
-                // - The read view covers `[0, initial_len)`.
-                // - The write view covers `[initial_len, target_len)`.
-                // - The two ranges are disjoint parts of one allocation.
-                // - Each tail row is handed to exactly one task, so the writes never alias.
-                // - `MaybeUninit::write` stores without reading or dropping the prior bytes.
-                // - The length is updated only after every tail element is written.
-                unsafe {
-                    // Base pointer of the reserved allocation.
-                    let ptr = coeffs.values.as_mut_ptr();
-
-                    // Read-only view of the rows already present.
-                    let initial_region: &[F] = core::slice::from_raw_parts(ptr, initial_len);
-
-                    // Write view of the uninitialised tail, just past the existing rows.
-                    let new_region: &mut [MaybeUninit<F>] = core::slice::from_raw_parts_mut(
-                        ptr.add(initial_len).cast::<MaybeUninit<F>>(),
-                        target_len - initial_len,
-                    );
-
-                    // One task per destination row.
-                    new_region
-                        .par_chunks_mut(w)
-                        .enumerate()
-                        .for_each(|(i, dst_row)| {
-                            // `i` indexes the tail, so this is global output row `initial_h + i`.
-                            // The tail starts on a multiple of `initial_h`.
-                            // So the source row reduces to `i mod initial_h`.
-                            let src_row_start = (i % initial_h) * w;
-                            let src_row = &initial_region[src_row_start..src_row_start + w];
-                            // Copy the chosen original row into this tail slot.
-                            for (dst, &src) in dst_row.iter_mut().zip(src_row) {
-                                dst.write(src);
-                            }
-                        });
-
-                    // Every tail element is initialised; publish them as live `Vec` entries.
-                    coeffs.values.set_len(target_len);
-                }
-            });
-        }
-        assert_eq!(coeffs.height(), 1 << domain.log_n);
+        // A `DitButterfly` layer acting on coefficients whose upper half is zero sets both
+        // outputs to the lower input, so the first `added_bits` layers of the transform are
+        // pure row duplications. Instead of materializing the zero-padding (or the tiled
+        // copies it collapses to) in a separate sweep, the duplications run as [`Dup`]
+        // layers inside the first fused pass, while the rows are cache-resident. Only the
+        // capacity is reserved here; the duplication layers initialise the tail.
+        coeffs
+            .values
+            .reserve_exact(target_len - coeffs.values.len());
 
         let twiddles = debug_span!("twiddles").in_scope(|| {
             compute_twiddles(domain)
                 .into_iter()
                 .map(|ts| ts.into_iter().map(|t| DitButterfly(t)).collect_vec())
                 .rev()
-                .skip(domain.log_n - log_n)
+                .skip(added_bits)
+                .map(CfftLayer::Butterflies)
                 .collect_vec()
         });
+        let layers = (0..added_bits)
+            .map(|l| CfftLayer::Dup { blocks: 1 << l })
+            .chain(twiddles)
+            .collect_vec();
 
         cfft_layers(
             coeffs.values.as_mut_ptr(),
-            coeffs.height(),
-            coeffs.width,
-            &twiddles,
+            domain.size(),
+            w,
+            &layers,
             None::<&RowMajorMatrix<F>>,
             None,
         );
+
+        // SAFETY: every row with one of the top `added_bits` index bits set is written by
+        // the duplication layer of its highest such bit (later duplication layers rewrite
+        // it consistently), so all `target_len` elements behind the reservation above are
+        // initialised once `cfft_layers` returns.
+        unsafe {
+            coeffs.values.set_len(target_len);
+        }
 
         Self::from_cfft_order(domain, coeffs)
     }
 }
 
+/// One layer of a fused CFFT pass.
+enum CfftLayer<B> {
+    /// Copy the lower half of each of `blocks` row blocks onto its upper half.
+    ///
+    /// This realizes a `DitButterfly` layer acting on coefficients whose upper half is
+    /// zero (for which both outputs equal the lower input), i.e. the zero-padding part
+    /// of an LDE, without materializing the padding in a separate sweep.
+    Dup { blocks: usize },
+    /// A twiddle butterfly layer, one twiddle per block.
+    Butterflies(Vec<B>),
+}
+
+impl<B> CfftLayer<B> {
+    const fn blocks(&self) -> usize {
+        match self {
+            Self::Dup { blocks } => *blocks,
+            Self::Butterflies(ts) => ts.len(),
+        }
+    }
+}
+
 /// The bit position by which a layer's butterfly partners differ.
 ///
-/// A layer whose twiddle array has `blocks` entries acts on `blocks` equal blocks of rows,
+/// A layer with `blocks` blocks acts on `blocks` equal blocks of rows,
 /// pairing the two halves of each block: rows `j` and `j ^ (h / (2 * blocks))`.
 const fn flipped_bit(log_h: usize, blocks: usize) -> usize {
     log_h - log2_strict_usize(blocks) - 1
@@ -324,16 +299,23 @@ fn log_group_rows<F>(log_h: usize, width: usize) -> usize {
 /// When `scale` is set, every element is additionally multiplied by it during the final pass,
 /// while its group is still cache-resident.
 ///
+/// [`CfftLayer::Dup`] layers may act on uninitialised rows: a duplication layer writes every
+/// row with its flipped bit set, so once all duplication layers have run, every row beyond the
+/// original (lowest-index) block is initialised. Since duplications are copies rather than
+/// arithmetic, each one widens the window budget of its run by one bit instead of consuming it,
+/// keeping the number of passes unchanged.
+///
 /// # Safety-relevant contract (not `unsafe fn` to keep call sites readable)
 ///
-/// `base` must be valid for reads and writes of `h * width` elements. Without `ingest`, those
-/// elements must already be initialised. `layers` must not be empty if `ingest` or `scale` is
-/// set (otherwise no pass would perform the copy or the scaling).
+/// `base` must be valid for reads and writes of `h * width` elements. Elements must be
+/// initialised, except (without `ingest`) rows whose index has a [`CfftLayer::Dup`] flipped
+/// bit set, and (with `ingest`) the whole buffer. `layers` must not be empty if `ingest` or
+/// `scale` is set (otherwise no pass would perform the copy or the scaling).
 fn cfft_layers<F: Field, B: Butterfly<F>, M: Matrix<F>>(
     base: *mut F,
     h: usize,
     width: usize,
-    layers: &[Vec<B>],
+    layers: &[CfftLayer<B>],
     ingest: Option<&M>,
     scale: Option<F>,
 ) {
@@ -345,29 +327,45 @@ fn cfft_layers<F: Field, B: Butterfly<F>, M: Matrix<F>>(
         "ingest and scale require at least one layer pass"
     );
 
+    // Duplication layers may widen a window beyond `log_group` (see above), but never so far
+    // that the larger groups leave the thread pool idle.
+    let budget_cap =
+        log_group.max(log_h.saturating_sub(log2_ceil_usize(4 * current_num_threads())));
+
     let mut start = 0;
     while start < layers.len() {
-        let first_bit = flipped_bit(log_h, layers[start].len());
+        let is_dup = |l: &CfftLayer<B>| matches!(l, CfftLayer::Dup { .. });
+        let first_bit = flipped_bit(log_h, layers[start].blocks());
         let (mut lo_bit, mut hi_bit) = (first_bit, first_bit);
+        let mut budget = (log_group + usize::from(is_dup(&layers[start]))).min(budget_cap);
         let mut end = start + 1;
-        while let Some(ts) = layers.get(end) {
-            let bit = flipped_bit(log_h, ts.len());
-            if bit.max(hi_bit) - bit.min(lo_bit) >= log_group {
+        while let Some(layer) = layers.get(end) {
+            let bit = flipped_bit(log_h, layer.blocks());
+            let new_budget = (budget + usize::from(is_dup(layer))).min(budget_cap);
+            if bit.max(hi_bit) - bit.min(lo_bit) >= new_budget {
                 break;
             }
+            budget = new_budget;
             (lo_bit, hi_bit) = (bit.min(lo_bit), bit.max(hi_bit));
             end += 1;
         }
-        let log_stride = lo_bit.min(log_h - log_group);
+        let log_group_run = log_group.max(hi_bit - lo_bit + 1).min(log_h);
+        let log_stride = lo_bit.min(log_h - log_group_run);
         let pass_ingest = if start == 0 { ingest } else { None };
         let pass_scale = scale.filter(|_| end == layers.len());
-        debug_span!("fused_layers", layers = end - start, log_group, log_stride).in_scope(|| {
+        debug_span!(
+            "fused_layers",
+            layers = end - start,
+            log_group_run,
+            log_stride
+        )
+        .in_scope(|| {
             par_group_pass(
                 base,
                 h,
                 width,
                 &layers[start..end],
-                log_group,
+                log_group_run,
                 log_stride,
                 pass_ingest,
                 pass_scale,
@@ -391,7 +389,7 @@ fn par_group_pass<F: Field, B: Butterfly<F>, M: Matrix<F>>(
     base: *mut F,
     h: usize,
     width: usize,
-    layers: &[Vec<B>],
+    layers: &[CfftLayer<B>],
     log_group: usize,
     log_stride: usize,
     ingest: Option<&M>,
@@ -418,26 +416,57 @@ fn par_group_pass<F: Field, B: Butterfly<F>, M: Matrix<F>>(
                 }
             }
         }
-        for ts in layers {
-            let e = flipped_bit(log_h, ts.len()) - log_stride;
-            let slice_len = 1 << (log_group - e - 1);
-            let slice = &ts[hi * slice_len..][..slice_len];
-            for (s, &t) in slice.iter().enumerate() {
-                for u in 0..1usize << e {
-                    let row_lo = first_row + (((s << (e + 1)) | u) << log_stride);
-                    let row_hi = row_lo + (1 << (e + log_stride));
-                    // SAFETY: every row index decomposes uniquely as
-                    // `hi << (log_group + log_stride) | t << log_stride | lo`, so the task for
-                    // group `g = (hi, lo)` is the only one touching its rows, and within a layer
-                    // each row appears in exactly one butterfly, so `row_lo` and `row_hi` never
-                    // alias. All indices stay below `h` since `t < 2^log_group`.
-                    let (row_lo, row_hi) = unsafe {
-                        (
-                            core::slice::from_raw_parts_mut(base.add(row_lo * width), width),
-                            core::slice::from_raw_parts_mut(base.add(row_hi * width), width),
-                        )
-                    };
-                    t.apply_to_rows(row_lo, row_hi);
+        for layer in layers {
+            let e = flipped_bit(log_h, layer.blocks()) - log_stride;
+            match layer {
+                CfftLayer::Dup { .. } => {
+                    for s in 0..1usize << (log_group - e - 1) {
+                        for u in 0..1usize << e {
+                            let row_lo = first_row + (((s << (e + 1)) | u) << log_stride);
+                            let row_hi = row_lo + (1 << (e + log_stride));
+                            // SAFETY: row ownership and non-aliasing as for the butterfly
+                            // case below. The copy goes through `MaybeUninit`, so it is
+                            // sound even while either row is still uninitialised (a
+                            // garbage copy is later overwritten by the duplication layer
+                            // of the destination row's highest flipped bit).
+                            unsafe {
+                                core::ptr::copy_nonoverlapping(
+                                    base.add(row_lo * width).cast::<MaybeUninit<F>>(),
+                                    base.add(row_hi * width).cast::<MaybeUninit<F>>(),
+                                    width,
+                                );
+                            }
+                        }
+                    }
+                }
+                CfftLayer::Butterflies(ts) => {
+                    let slice_len = 1 << (log_group - e - 1);
+                    let slice = &ts[hi * slice_len..][..slice_len];
+                    for (s, &t) in slice.iter().enumerate() {
+                        for u in 0..1usize << e {
+                            let row_lo = first_row + (((s << (e + 1)) | u) << log_stride);
+                            let row_hi = row_lo + (1 << (e + log_stride));
+                            // SAFETY: every row index decomposes uniquely as
+                            // `hi << (log_group + log_stride) | t << log_stride | lo`, so the task
+                            // for group `g = (hi, lo)` is the only one touching its rows, and
+                            // within a layer each row appears in exactly one butterfly, so
+                            // `row_lo` and `row_hi` never alias. All indices stay below `h` since
+                            // `t < 2^log_group`.
+                            let (row_lo, row_hi) = unsafe {
+                                (
+                                    core::slice::from_raw_parts_mut(
+                                        base.add(row_lo * width),
+                                        width,
+                                    ),
+                                    core::slice::from_raw_parts_mut(
+                                        base.add(row_hi * width),
+                                        width,
+                                    ),
+                                )
+                            };
+                            t.apply_to_rows(row_lo, row_hi);
+                        }
+                    }
                 }
             }
         }
