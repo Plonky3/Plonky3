@@ -22,7 +22,7 @@ use p3_field::{
     Algebra, BasedVectorSpace, ExtensionField, Field, PackedFieldExtension, PackedValue, Powers,
     PrimeCharacteristicRing,
 };
-use p3_util::{as_base_slice, reconstitute_from_base};
+use p3_util::{as_base_slice, flatten_to_base, reconstitute_from_base};
 
 use crate::Mersenne31;
 
@@ -134,6 +134,20 @@ impl BasedVectorSpace<Mersenne31> for QM31 {
         mut iter: I,
     ) -> Option<Self> {
         (iter.len() == 4).then(|| Self::from_basis_coefficients_fn(|_| iter.next().unwrap()))
+    }
+
+    #[inline]
+    fn flatten_to_base(vec: Vec<Self>) -> Vec<Mersenne31> {
+        // SAFETY: `QM31` is layout-identical to `[Mersenne31; 4]` (see
+        // `as_basis_coefficients_slice`) and has the same alignment as `Mersenne31`.
+        unsafe { flatten_to_base(vec) }
+    }
+
+    #[inline]
+    fn reconstitute_from_base(vec: Vec<Mersenne31>) -> Vec<Self> {
+        // SAFETY: `QM31` is layout-identical to `[Mersenne31; 4]` (see
+        // `as_basis_coefficients_slice`) and has the same alignment as `Mersenne31`.
+        unsafe { reconstitute_from_base(vec) }
     }
 }
 
@@ -553,5 +567,28 @@ mod tests {
                 xs[lane] * ys[lane]
             );
         }
+    }
+
+    /// The zero-copy `flatten_to_base`/`reconstitute_from_base` overrides must match
+    /// the basis-coefficient view element by element and round-trip exactly.
+    #[test]
+    fn flatten_reconstitute_roundtrip() {
+        use alloc::vec::Vec;
+
+        use rand::rngs::SmallRng;
+        use rand::{RngExt, SeedableRng};
+
+        let mut rng = SmallRng::seed_from_u64(7);
+        let xs: Vec<QM31> = (0..23).map(|_| rng.random()).collect();
+
+        let flat = <QM31 as BasedVectorSpace<F>>::flatten_to_base(xs.clone());
+        let expected: Vec<F> = xs
+            .iter()
+            .flat_map(|x| x.as_basis_coefficients_slice().to_vec())
+            .collect();
+        assert_eq!(flat, expected);
+
+        let back = <QM31 as BasedVectorSpace<F>>::reconstitute_from_base(flat);
+        assert_eq!(back, xs);
     }
 }

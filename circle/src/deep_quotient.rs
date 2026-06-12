@@ -16,9 +16,10 @@ use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use tracing::instrument;
 
+use crate::CircleEvaluations;
 use crate::domain::CircleDomain;
+use crate::ordering::cfft_permute_index;
 use crate::point::Point;
-use crate::{CircleEvaluations, cfft_permute_slice};
 
 /// Compute the "vanishing part" of the DEEP quotient numerator and denominator.
 ///
@@ -195,11 +196,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
         let lifted = CircleEvaluations::from_cfft_order(self.domain, flat)
             .extrapolate(target_domain)
             .to_cfft_order();
-        lifted
-            .values
-            .par_chunks_exact(EF::DIMENSION)
-            .map(|coeffs| EF::from_basis_coefficients_slice(coeffs).unwrap())
-            .collect()
+        EF::reconstitute_from_base(lifted.values)
     }
 }
 
@@ -237,27 +234,31 @@ pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
 
     // The unique values are repeated over the rest of the domain in the pattern:
     // 0 1 2 .. n-1 n n n-1 .. 1 0 0 1 ..
-    let v_d = v_d_init
-        .iter()
-        .chain(v_d_init.iter().rev())
-        .cycle()
-        .copied();
+    // Look the pattern up through the CFFT permutation instead of materializing
+    // and permuting a domain-sized vector.
+    let b = 1 << log_blowup;
+    let v_d_at = |i: usize| {
+        let m = cfft_permute_index(i, log_lde_size) & (2 * b - 1);
+        v_d_init[if m < b { m } else { 2 * b - 1 - m }]
+    };
 
     // Compute the squared norm <v_d, v_d> of the vanishing polynomial
     let v_d_2 = F::TWO.exp_u64(log_lde_size as u64 - 1);
 
-    // Convert to the correct order and take only the needed length
-    let v_d = v_d.take(lde.len()).collect_vec();
-    let v_d = cfft_permute_slice(&v_d);
-
     // Extract lambda using the orthogonality property: lambda = <lde, v_d> / <v_d, v_d>
-    let lambda =
-        dot_product::<EF, _, _>(lde.iter().copied(), v_d.iter().copied()) * v_d_2.inverse();
+    let lambda = lde
+        .par_iter()
+        .enumerate()
+        .map(|(i, &y)| y * v_d_at(i))
+        .sum::<EF>()
+        * v_d_2.inverse();
 
     // Remove the vanishing polynomial component from the LDE evaluations
-    for (y, v_x) in izip!(lde, v_d) {
-        *y -= lambda * v_x;
-    }
+    let lambda_v_d: Vec<EF> = v_d_init.iter().map(|&v| lambda * v).collect();
+    lde.par_iter_mut().enumerate().for_each(|(i, y)| {
+        let m = cfft_permute_index(i, log_lde_size) & (2 * b - 1);
+        *y -= lambda_v_d[if m < b { m } else { 2 * b - 1 - m }];
+    });
 
     lambda
 }
@@ -272,6 +273,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::ordering::cfft_permute_slice;
 
     type F = Mersenne31;
     type EF = BinomialExtensionField<F, 3>;
