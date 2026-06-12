@@ -241,10 +241,22 @@ where
                 izip!(mats, points_for_mats)
                     .map(|(mat, points_for_mat)| {
                         let log_height = log2_strict_usize(mat.height());
+                        // The committed polynomial has degree below the pre-blow-up domain
+                        // size, so its values on a sub-twin-coset of that size determine it.
+                        // The first `2^log_sub` rows of the CFFT-ordered LDE are exactly the
+                        // CFFT-ordered evaluations over `CircleDomain::new(log_sub, shift)`
+                        // (see `eval_at_point_on_subdomain_prefix_matches_full`), so the
+                        // out-of-domain evaluation only traverses `1 / blowup` of the matrix.
+                        let log_sub = log_height - self.fri_params.log_blowup;
+                        let sub_height = 1 << log_sub;
+                        let sub_domain = CircleDomain::new(
+                            log_sub,
+                            CircleDomain::<Val>::standard(log_height).shift,
+                        );
                         // It was committed in cfft order.
                         let evals = CircleEvaluations::from_cfft_order(
-                            CircleDomain::standard(log_height),
-                            mat.as_view(),
+                            sub_domain,
+                            mat.split_rows(sub_height).0,
                         );
 
                         // Resolve the Lagrange denominators for every point up front.
@@ -259,9 +271,9 @@ where
                                         let den = info_span!("compute Lagrange denominators")
                                             .in_scope(|| {
                                                 compute_lagrange_den_batched(
-                                                    &permuted_points[&log_height],
+                                                    &permuted_points[&log_height][..sub_height],
                                                     Point::from_projective_line(zeta_uni),
-                                                    log_height,
+                                                    log_sub,
                                                 )
                                             });
                                         lagrange_dens.push((key, den));
