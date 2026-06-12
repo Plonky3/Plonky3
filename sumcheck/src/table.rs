@@ -172,9 +172,8 @@ impl TableSpec {
                 .all(|&poly_idx| poly_idx < shape.width())
         }));
         // Invariant: a column appears at most once per side of a batch.
-        // Opening one column in both the direct and successor-view sides is
-        // intended, but repeating it within one side only burns an extra
-        // challenge power on a duplicate claim.
+        // Opening one column on both sides is intended.
+        // Repeating it within one side only burns a challenge power on a duplicate claim.
         let side_has_no_repeat = |cols: &[usize]| {
             cols.iter()
                 .enumerate()
@@ -231,15 +230,14 @@ impl OpeningProtocol {
 
     /// Pads every table shape to at least `min_num_variables`.
     ///
-    /// The column index lists in each schedule are unchanged because padding
-    /// only appends zero rows to the committed table.
+    /// The column index lists in each schedule are unchanged.
+    /// Padding only appends zero rows to the committed table.
     ///
-    /// The successor view, however, is always taken over the padded space.
-    /// Padding therefore moves the repeated boundary row into the zero pad:
-    /// the last real row's successor reads a pad row rather than repeating
-    /// itself, so a successor opening after padding is a different polynomial
-    /// identity than one over the unpadded table.
-    /// Prover and verifier agree because both work over the padded space.
+    /// The successor view is always taken over the padded space.
+    /// Padding therefore moves the repeated boundary row into the zero pad.
+    /// The last real row's successor then reads a pad row instead of repeating itself.
+    /// A successor opening after padding is a different polynomial identity than over the unpadded table.
+    /// Prover and verifier still agree, since both work over the padded space.
     pub fn pad_to_min_num_variables(mut self, min_num_variables: usize) -> Self {
         self.0
             .iter_mut()

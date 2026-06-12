@@ -401,12 +401,11 @@ fn test_single_sumcheck() {
 
 #[test]
 fn test_single_sumcheck_mixed_current_next_large() {
-    // The same column is opened both directly and through the successor view,
-    // exercising the suffix prover's residual-reuse path across the two sides.
+    // The same column is opened both directly and through the successor view.
+    // This exercises the suffix prover's residual-reuse path across the two sides.
     //
-    // Twenty variables keep the residual weight tables far above the parallel
-    // threshold, so the successor-weight accumulators run their parallel
-    // branches rather than the small-input serial fallback.
+    // Twenty variables keep the residual weight tables far above the parallel threshold.
+    // The successor-weight accumulators then run their parallel branches, not the serial fallback.
     let specs = [TableSpec::new(
         TableShape::new(20, 1),
         vec![OpeningBatch::new(vec![0], vec![0])],

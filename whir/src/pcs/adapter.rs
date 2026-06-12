@@ -157,8 +157,9 @@ where
                     actual: evals.len(),
                 });
             }
-            // The shape was pre-checked above; the inner check is defense in depth
-            // and its error maps into a verifier error if ever reached.
+            // The shape was pre-checked above, so this never errors in practice.
+            // The inner check is defense in depth.
+            // Its error maps into a verifier error if ever reached.
             layout_verifier.add_claim(table_idx, batch, evals, challenger)?;
         }
 

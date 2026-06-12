@@ -27,10 +27,9 @@ pub fn random_point_schedule(rng: &mut SmallRng, width: usize, num_points: usize
         width,
         (1..num_points)
             .map(|_| {
-                // Independently sample a direct-opening subset and a
-                // successor-view subset of the columns. Each filter keeps the
-                // columns of one side distinct, while the two sides may overlap
-                // (one column opened both at the point and at its successor).
+                // Sample a direct-opening subset and a successor-view subset independently.
+                // Each filter keeps the columns of one side distinct.
+                // The two sides may overlap: one column opened both at the point and at its successor.
                 let direct = (0..width)
                     .filter(|_| rng.random_bool(0.5))
                     .collect::<Vec<_>>();
