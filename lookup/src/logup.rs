@@ -20,7 +20,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use p3_air::{ExtensionBuilder, PermutationAirBuilder, WindowAccess};
+use p3_air::{ExtensionBuilder, PermutationAirBuilder, SymbolicExpression, WindowAccess};
 use p3_field::{Field, PrimeCharacteristicRing, dot_product};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
@@ -35,6 +35,33 @@ use crate::types::{Lookup, LookupError, LookupTerminal};
 
 /// Type alias for the row evaluation context used during permutation trace generation.
 pub type RowEvalContext<'a, SC> = LookupTraceBuilder<'a, SC>;
+
+/// Combine one tuple into a single extension-field value `sum_i e_i * beta^{k-1-i}`.
+///
+/// - The last element carries `beta^0`.
+/// - It is lifted into the extension field with no multiply.
+/// - Each leading element pairs with a hoisted power `beta^p * e_i`.
+/// - That product is extension times base.
+/// - It is cheaper than the extension times extension a Horner fold uses.
+fn combine_tuple<SC: StarkGenericConfig>(
+    elts: &[SymbolicExpression<Val<SC>>],
+    beta_powers: &[SC::Challenge],
+    row_ctx: &RowEvalContext<'_, SC>,
+) -> SC::Challenge {
+    match elts.split_last() {
+        // Empty tuple combines to zero.
+        None => SC::Challenge::ZERO,
+        // Width-1 tuple: the single element carries beta^0, so lift it directly.
+        Some((last, [])) => last.resolve(row_ctx).into(),
+        Some((last, leading)) => {
+            // Powers beta^{k-1} down to beta^1, aligned with e_0 .. e_{k-2}.
+            let high_powers = beta_powers[1..elts.len()].iter().rev().copied();
+            let leading_resolved = leading.iter().map(|e| e.resolve(row_ctx));
+            let lifted_last: SC::Challenge = last.resolve(row_ctx).into();
+            lifted_last + dot_product::<SC::Challenge, _, _>(high_powers, leading_resolved)
+        }
+    }
+}
 
 /// Core LogUp gadget implementing lookup arguments via logarithmic derivatives.
 ///
@@ -148,6 +175,60 @@ impl LogUpGadget {
 
         (numerator, common_denominator)
     }
+
+    /// Numerator and denominator of a mutually-exclusive column's single fraction.
+    ///
+    /// At most one branch fires per row.
+    /// The column then carries the one selected fraction.
+    ///
+    /// ```text
+    ///     N = sum_k flag_k * mult_k
+    ///     D = sum_k flag_k * (alpha - combine_k) + (1 - sum_k flag_k)
+    /// ```
+    ///
+    /// - When branch `j` fires, `flag_j = 1` and the rest are `0`.
+    /// - The fraction is then `mult_j / (alpha - combine_j)`.
+    /// - When no branch fires, `N = 0` and `D = 1`.
+    /// - The fraction is then `0`.
+    /// - The denominator degree is the per-branch maximum, not the sum.
+    /// - That is the whole point of an exclusive column over additive folding.
+    ///
+    /// # Soundness
+    ///
+    /// - Correct only when the flags are boolean.
+    /// - Correct only when the flags sum to at most one per row.
+    /// - The AIR must enforce that.
+    /// - The gadget assumes it.
+    pub(crate) fn compute_exclusive_terms<AB>(
+        &self,
+        flags: &[AB::ExprEF],
+        elements: &[Vec<AB::ExprEF>],
+        multiplicities: &[AB::ExprEF],
+        alpha: &AB::ExprEF,
+        beta: &AB::ExprEF,
+    ) -> (AB::ExprEF, AB::ExprEF)
+    where
+        AB: PermutationAirBuilder,
+    {
+        // Per-branch denominator term (alpha - combine(payload_k)).
+        let terms = self.combine_elements::<AB, AB::ExprEF>(elements, alpha, beta);
+
+        // Multiplex by the flags, accumulating the selected numerator and denominator.
+        let mut numerator = AB::ExprEF::ZERO;
+        let mut denominator = AB::ExprEF::ZERO;
+        let mut flag_sum = AB::ExprEF::ZERO;
+        for ((flag, term), mult) in flags.iter().zip(&terms).zip(multiplicities) {
+            denominator += flag.clone() * term.clone();
+            numerator += flag.clone() * mult.clone();
+            flag_sum += flag.clone();
+        }
+
+        // Fallback term: an all-inactive row gets denominator 1.
+        // Its fraction is then 0.
+        denominator += AB::ExprEF::ONE - flag_sum;
+
+        (numerator, denominator)
+    }
 }
 
 impl LookupProtocol for LogUpGadget {
@@ -183,6 +264,7 @@ impl LookupProtocol for LogUpGadget {
             // Not part of the per-row fraction; it only feeds the height-bound check.
             count_weight: _,
             column,
+            flags,
         } = lookup;
 
         assert!(
@@ -228,14 +310,36 @@ impl LookupProtocol for LogUpGadget {
         // So lookup slot `column` lives at permutation-trace column `column + 1`.
         let frac_local: AB::ExprEF = permutation.current(column + 1).unwrap().into();
 
-        // Build the fraction:  ∑ m_i/(α - combined_elements[i])  =  numerator / denominator .
-        let (numerator, common_denominator) = self
-            .compute_combined_sum_terms::<AB, AB::ExprEF, AB::ExprEF>(
+        // Resolve the exclusive selector flags into builder expressions.
+        //
+        // - An additive column has no flags, so this stays empty.
+        // - An exclusive column yields one resolved flag per branch.
+        let flags = flags
+            .iter()
+            .flatten()
+            .map(|expr| expr.resolve(builder).into())
+            .collect::<Vec<AB::ExprEF>>();
+
+        // Build the fraction `numerator / denominator`.
+        //
+        // - No flags: sum one term per tuple, so the denominator is their product.
+        // - With flags: select one branch's single fraction, so the degree is the per-branch max.
+        let (numerator, common_denominator) = if flags.is_empty() {
+            self.compute_combined_sum_terms::<AB, AB::ExprEF, AB::ExprEF>(
                 &elements,
                 &multiplicities,
                 &alpha.into(),
                 &beta.into(),
-            );
+            )
+        } else {
+            self.compute_exclusive_terms::<AB>(
+                &flags,
+                &elements,
+                &multiplicities,
+                &alpha.into(),
+                &beta.into(),
+            )
+        };
 
         // Pin the fraction column to V / U on every row.
         //
@@ -332,6 +436,37 @@ impl LookupProtocol for LogUpGadget {
     fn constraint_degree<F: Field>(&self, lookup: &Lookup<F>) -> usize {
         assert!(lookup.multiplicities.len() == lookup.elements.len());
 
+        // Exclusive column: the multiplex takes the per-branch maximum degree.
+        //
+        //   D = sum_k flag_k * (alpha - combine_k) + (1 - sum_k flag_k)
+        //   N = sum_k flag_k * mult_k
+        //
+        // The challenges are constant.
+        // So combine_k has the degree of its widest element.
+        // Each branch then adds its flag's degree on top.
+        if let Some(flags) = &lookup.flags {
+            let deg_denom = flags
+                .iter()
+                .zip(&lookup.elements)
+                .map(|(flag, elems)| {
+                    let elem_deg = elems.iter().map(|e| e.degree_multiple()).max().unwrap_or(0);
+                    flag.degree_multiple() + elem_deg
+                })
+                // The fallback term (1 - sum flag) carries only the flag degree.
+                .chain(flags.iter().map(SymbolicExpression::degree_multiple))
+                .max()
+                .unwrap_or(0);
+
+            let deg_num = flags
+                .iter()
+                .zip(&lookup.multiplicities)
+                .map(|(flag, m)| flag.degree_multiple() + m.degree_multiple())
+                .max()
+                .unwrap_or(0);
+
+            return (1 + deg_denom).max(deg_num);
+        }
+
         let n = lookup.multiplicities.len();
 
         // Compute degrees in a single pass.
@@ -408,12 +543,14 @@ impl LookupProtocol for LogUpGadget {
         // 1. PRE-COMPUTE DENOMINATORS
         // We flatten all denominators from all rows/lookups into one giant vector.
         // Order: Row -> Lookup -> Element Tuple
-        let denoms_per_row: usize = lookups.iter().map(|l| l.elements.len()).sum();
+        // An additive lookup contributes one denominator per tuple.
+        // An exclusive lookup multiplexes its branches into a single denominator.
+        let denoms_per_row: usize = lookups.iter().map(|l| l.num_denoms()).sum();
         let mut lookup_denom_offsets = Vec::with_capacity(lookups.len() + 1);
         lookup_denom_offsets.push(0);
         for l in lookups.iter() {
             lookup_denom_offsets
-                .push(lookup_denom_offsets.last().copied().unwrap() + l.elements.len());
+                .push(lookup_denom_offsets.last().copied().unwrap() + l.num_denoms());
         }
 
         // Hoist the per-lookup random challenges out of the hot per-row loop.
@@ -543,56 +680,69 @@ impl LookupProtocol for LogUpGadget {
                         i,
                     );
 
-                    // Walk through each lookup's element tuples and fill the flat buffers.
+                    // Walk through each lookup and fill the flat denominator/multiplicity buffers.
                     let mut offset = local_i * denoms_per_row;
                     for ((lookup, &(alpha, _)), powers) in lookups
                         .iter()
                         .zip(lookup_challenges.iter())
                         .zip(beta_powers.iter())
                     {
-                        for (j, elts) in lookup.elements.iter().enumerate() {
-                            // Resolve the multiplicity first.
-                            let mult = lookup.multiplicities[j].resolve(&row_ctx);
-                            local_mults[offset] = mult;
+                        match &lookup.flags {
+                            // Additive column: one denominator per tuple.
+                            None => {
+                                for (j, elts) in lookup.elements.iter().enumerate() {
+                                    // Resolve the multiplicity first.
+                                    let mult = lookup.multiplicities[j].resolve(&row_ctx);
+                                    local_mults[offset] = mult;
 
-                            // Flag-zero skip:
-                            // A zero multiplicity makes `m_j / d_j` vanish, whatever the denominator is.
-                            // So skip the element combine and pin a unit placeholder.
-                            //
-                            //   - The unit keeps batch inversion well-defined (1 inverts to 1).
-                            //   - The fraction term stays exact at `0 * 1 = 0`.
-                            //   - The verifier reads the real denominator from the trace, and
-                            //     the zero-weight term drops from both sides of `U * f = V`.
-                            local_denoms[offset] = if mult.is_zero() {
-                                SC::Challenge::ONE
-                            } else {
-                                // Combine the tuple as `sum_i e_i * beta^{k-1-i}`.
+                                    // Flag-zero skip.
+                                    //
+                                    // - A zero multiplicity makes `m_j / d_j` vanish for any denominator.
+                                    // - So pin a unit placeholder and skip the element combine.
+                                    // - The unit keeps batch inversion well-defined, since 1 inverts to 1.
+                                    // - The fraction term stays exact at `0 * 1 = 0`.
+                                    // - The verifier reads the real denominator from the trace.
+                                    // - So the zero term drops from both sides of `U * f = V`.
+                                    local_denoms[offset] = if mult.is_zero() {
+                                        SC::Challenge::ONE
+                                    } else {
+                                        alpha - combine_tuple::<SC>(elts, powers, &row_ctx)
+                                    };
+                                    offset += 1;
+                                }
+                            }
+                            // Exclusive column: flags select one branch's single fraction.
+                            Some(flags) => {
+                                // Accumulate the multiplexed numerator and denominator.
                                 //
-                                //   - The last element carries `beta^0`, so it is lifted with no multiply.
-                                //   - Each leading element pairs with a hoisted power `beta^p * e_i`,
-                                //     an extension * base product rather than extension * extension.
-                                let combined_elt = match elts.split_last() {
-                                    None => SC::Challenge::ZERO,
-                                    // Width-1 tuple: the single element carries beta^0, so lift it directly.
-                                    Some((last, [])) => last.resolve(&row_ctx).into(),
-                                    Some((last, leading)) => {
-                                        // Powers beta^{k-1} down to beta^1, aligned with e_0 .. e_{k-2}.
-                                        let high_powers =
-                                            powers[1..elts.len()].iter().rev().copied();
-                                        let leading_resolved =
-                                            leading.iter().map(|e| e.resolve(&row_ctx));
-                                        let lifted_last: SC::Challenge =
-                                            last.resolve(&row_ctx).into();
-                                        lifted_last
-                                            + dot_product::<SC::Challenge, _, _>(
-                                                high_powers,
-                                                leading_resolved,
-                                            )
+                                //   N = sum_k flag_k * mult_k
+                                //   D = sum_k flag_k * (alpha - combine_k) + (1 - sum_k flag_k)
+                                let mut numerator = Val::<SC>::ZERO;
+                                let mut flag_sum = Val::<SC>::ZERO;
+                                let mut denom = SC::Challenge::ZERO;
+                                for (k, elts) in lookup.elements.iter().enumerate() {
+                                    let flag = flags[k].resolve(&row_ctx);
+                                    flag_sum += flag;
+
+                                    // An inactive branch has flag 0.
+                                    // So its denominator term and its numerator both vanish.
+                                    if flag.is_zero() {
+                                        continue;
                                     }
-                                };
-                                alpha - combined_elt
-                            };
-                            offset += 1;
+
+                                    let mult = lookup.multiplicities[k].resolve(&row_ctx);
+                                    numerator += flag * mult;
+                                    let term = alpha - combine_tuple::<SC>(elts, powers, &row_ctx);
+                                    denom += term * SC::Challenge::from(flag);
+                                }
+
+                                // Fallback: an all-inactive row gets denominator 1.
+                                // Its fraction is then 0.
+                                denom += SC::Challenge::from(Val::<SC>::ONE - flag_sum);
+                                local_denoms[offset] = denom;
+                                local_mults[offset] = numerator;
+                                offset += 1;
+                            }
                         }
                     }
                 }
