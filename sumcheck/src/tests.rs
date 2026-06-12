@@ -12,8 +12,8 @@ use proptest::prelude::*;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
-use crate::constraints::Constraint;
 use crate::constraints::statement::{EqStatement, SelectStatement};
+use crate::constraints::{Constraint, Statements};
 use crate::layout::{Layout, PrefixProver, SuffixProver, TableShape, Verifier};
 use crate::strategy::VariableOrder;
 use crate::test_util::{stacked_num_variables, table_point_schedule, table_specs_to_tables};
@@ -127,7 +127,14 @@ where
     // into a single aggregated constraint for the next sumcheck round.
     let alpha: EF = challenger.sample_algebra_element();
 
-    Constraint::new(alpha, eq_statement, sel_statement)
+    Constraint::new(
+        alpha,
+        num_variables,
+        vec![
+            Statements::Eq(eq_statement),
+            Statements::Select(sel_statement),
+        ],
+    )
 }
 
 // Verifier-side counterpart of `make_constraint_ext`. Reconstructs the same Constraint
@@ -191,8 +198,11 @@ where
     // Sample the same combining coefficient alpha as the prover and assemble the constraint.
     Constraint::new(
         challenger.sample_algebra_element(),
-        eq_statement,
-        sel_statement,
+        num_variables,
+        vec![
+            Statements::Eq(eq_statement),
+            Statements::Select(sel_statement),
+        ],
     )
 }
 
@@ -263,7 +273,7 @@ where
 
     let opening_evals: Vec<Vec<EF>> = protocol
         .iter_openings()
-        .map(|(table_idx, polys)| layout.eval(table_idx, polys, &mut prover_challenger))
+        .map(|(table_idx, polys)| layout.eval(table_idx, polys, &[], &mut prover_challenger))
         .collect();
 
     let (mut sumcheck, mut prover_randomness) =
@@ -321,7 +331,7 @@ where
     {
         let mut layout_verifier = Verifier::<F, EF>::new(&protocol.table_shapes(), strategy);
         for ((table_idx, polys), evals) in protocol.iter_openings().zip(&opening_evals) {
-            layout_verifier.add_claim(table_idx, polys, evals, &mut verifier_challenger);
+            layout_verifier.add_claim(table_idx, polys, &[], evals, &mut verifier_challenger);
         }
         let alpha = verifier_challenger.sample_algebra_element();
         let constraint = layout_verifier.constraint(alpha);

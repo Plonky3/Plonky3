@@ -116,7 +116,7 @@ where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Delegate; the HVZK overlay carries no extra state at claim time.
-        self.inner.eval(table_idx, polys, challenger)
+        self.inner.eval(table_idx, polys, &[], challenger)
     }
 
     /// Records a virtual opening claim on the inner prover.

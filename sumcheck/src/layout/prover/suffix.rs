@@ -114,12 +114,19 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
         self.tables[id].num_variables()
     }
 
-    /// Records opening claims for the selected columns of `table_idx`.
+    /// Records current and repeat-last Next opening claims for `table_idx`.
+    ///
+    /// Both request lists use table-local column indices and share one sampled
+    /// local opening point. Current openings evaluate columns at that point;
+    /// Next openings evaluate the repeat-last successor view at the same point.
+    /// Returned evaluations are ordered as all `current` openings followed by
+    /// all `next` openings.
     ///
     /// # Arguments
     ///
     /// - `table_idx`  — source table index.
-    /// - `polys`      — columns to open; must be non-empty.
+    /// - `current`    — columns opened at the sampled point.
+    /// - `next`       — columns opened through the repeat-last Next view.
     /// - `challenger` — Fiat–Shamir transcript.
     ///
     /// # Fiat–Shamir
@@ -130,15 +137,21 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
     ///
     /// # Panics
     ///
-    /// - Columns list must be non-empty.
+    /// - At least one of `current` or `next` must be non-empty.
     #[tracing::instrument(skip_all)]
-    fn eval<Ch>(&mut self, table_idx: usize, polys: &[usize], challenger: &mut Ch) -> Vec<EF>
+    fn eval<Ch>(
+        &mut self,
+        table_idx: usize,
+        current: &[usize],
+        next: &[usize],
+        challenger: &mut Ch,
+    ) -> Vec<EF>
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Precondition: opening nothing would silently push an empty ProverMultiClaim.
         assert!(
-            !polys.is_empty(),
+            !current.is_empty() || !next.is_empty(),
             "opening schedule must name at least one column"
         );
 
@@ -152,27 +165,34 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
         // Factorise the point with the suffix split; every selected column reuses it.
         let point = SvoPoint::new_unpacked(self.folding, &point, VariableOrder::Suffix);
 
-        // Evaluate each requested column and split into (opening, eval) in a single pass.
-        let (openings, evals): (Vec<_>, Vec<EF>) = polys
+        let (current_openings, mut evals): (Vec<_>, Vec<EF>) = current
             .iter()
-            .map(|&poly_idx| {
-                // Per-column eval plus the per-round partial-eval polynomials.
+            .copied()
+            .map(|poly_idx| {
                 let (eval, partial_evals) = point.eval(table.poly(poly_idx));
-                // Wrap the outputs as a concrete opening on this column.
-                let opening = Opening {
-                    poly_idx: Some(poly_idx),
-                    eval,
-                    data: partial_evals,
-                };
-                (opening, eval)
+                (Opening::new_with_data(poly_idx, eval, partial_evals), eval)
             })
             .unzip();
+
+        let (next_openings, next_evals): (Vec<_>, Vec<EF>) = next
+            .iter()
+            .copied()
+            .map(|poly_idx| {
+                let (eval, partial_evals) = point.eval_next_suffix(table.poly(poly_idx));
+                (Opening::new_with_data(poly_idx, eval, partial_evals), eval)
+            })
+            .unzip();
+        evals.extend(next_evals);
 
         // Bind the evaluations into the transcript; the verifier absorbs the same bytes.
         challenger.observe_algebra_slice(&evals);
 
         // Store the batch with its shared SVO point.
-        self.claim_map[table_idx].push(ProverMultiClaim::new(point, openings));
+        self.claim_map[table_idx].push(ProverMultiClaim::new(
+            point,
+            current_openings,
+            next_openings,
+        ));
 
         evals
     }
@@ -249,6 +269,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
             &ProverMultiClaim::new(
                 SvoPoint::new_unpacked(self.folding, &point, VariableOrder::Suffix),
                 openings,
+                Vec::new(),
             ),
             &weights,
         );
@@ -282,6 +303,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
                     &ProverMultiClaim::new(
                         SvoPoint::new_unpacked(self.folding, &point, VariableOrder::Suffix),
                         vec![opening],
+                        Vec::new(),
                     ),
                     &[EF::ONE],
                 ),
@@ -335,7 +357,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
 
         // Stage A: batch per-claim accumulators using insertion-order alpha powers.
         //
-        // - Iteration order is placement order, matching `sum` and `combine_eqs`.
+        // - Iteration order is placement order, matching `sum` and `combine_weights`.
         // - Each claim consumes exactly `claim.len()` consecutive powers from
         //   the shared iterator, so the per-claim alpha vector is aligned with
         //   the claim's opening list by construction.
@@ -417,7 +439,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
         // No external scaling here; the plain path keeps the running sum unchanged.
         let compressed = self.compress_stacked(&reversed);
         // Factor 2 of the product: the batched equality-weight poly.
-        let weights = self.combine_eqs(&reversed, alpha);
+        let weights = self.combine_weights(&reversed, alpha);
         // Pair them; the product polynomial drives the remaining rounds.
         let poly = ProductPolynomial::new_unpacked(VariableOrder::Suffix, compressed, weights);
         // Cross-check: the dot product of the two factors must equal the
@@ -473,7 +495,10 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
         // Concrete openings: three loops, no filter.
         for placement in &self.placements {
             for claim in &self.claim_map[placement.idx()] {
-                for opening in claim.openings() {
+                for opening in claim.current_openings() {
+                    sum += opening.eval() * alphas.next().unwrap();
+                }
+                for opening in claim.next_openings() {
                     sum += opening.eval() * alphas.next().unwrap();
                 }
             }
@@ -553,7 +578,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
     ///   `alpha^i * eq(svo_part, rs)`, written into the owning slot only.
     /// - Virtual claim: scaled equality table written across the full output.
     #[tracing::instrument(skip_all)]
-    pub(crate) fn combine_eqs(&self, rs: &Point<EF>, alpha: EF) -> Poly<EF> {
+    pub(crate) fn combine_weights(&self, rs: &Point<EF>, alpha: EF) -> Poly<EF> {
         // Preconditions: challenge count matches the folding depth.
         assert_eq!(rs.num_variables(), self.folding);
         // Output arity: stacked arity minus the folded challenges.
@@ -566,16 +591,26 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> SuffixProver<F, EF> {
             let num_variables_table = self.num_variables_table(placement.idx());
             let slot_size = 1usize << num_variables_table;
             for claim in &self.claim_map[placement.idx()] {
-                for opening in claim.openings() {
+                for opening in claim.current_openings() {
                     // The opening's column tells us which selector picks the slot.
                     let col = opening.poly_idx().unwrap();
                     let off = placement.selectors()[col].index() << num_variables_table;
                     // Fold the scalar slot range down by the SVO depth.
                     let folded_range = (off >> self.folding)..((off + slot_size) >> self.folding);
-                    claim.point().accumulate_into(
+                    let scale = alphas.next().unwrap();
+                    claim
+                        .point()
+                        .accumulate_into(&mut out.as_mut_slice()[folded_range], rs, scale);
+                }
+                for opening in claim.next_openings() {
+                    let col = opening.poly_idx().unwrap();
+                    let off = placement.selectors()[col].index() << num_variables_table;
+                    let folded_range = (off >> self.folding)..((off + slot_size) >> self.folding);
+                    let scale = alphas.next().unwrap();
+                    claim.point().accumulate_next_suffix_into(
                         &mut out.as_mut_slice()[folded_range],
                         rs,
-                        alphas.next().unwrap(),
+                        scale,
                     );
                 }
             }

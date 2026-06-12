@@ -123,32 +123,22 @@ where
             .product()
     }
 
-    /// Computes `eq(c, p)`, where `p` is another `Point`.
+    /// Evaluates the selector polynomial `select(point, pow(var))`.
     ///
-    /// The **equality polynomial** for two vectors is:
+    /// The **selection polynomial** for a point and univariate domain element is:
     /// ```ignore
-    /// eq(s1, s2) = ∏ (s1_i * s2_i + (1 - s1_i) * (1 - s2_i))
+    /// select(point, pow(var)) = ∏ (point_i * var_i - point_i + 1)
     /// ```
+    ///
+    /// where `pow(var) = (var^(2^(n-1)), ..., var^2, var)`.
     #[must_use]
     #[inline]
-    pub fn eq_poly(&self, point: &Self) -> F {
-        Self::eval_eq(self.as_slice(), point.as_slice())
-    }
-
-    /// Computes `select(c, pow(var))`,.
-    ///
-    /// The **selection polynomial** for two vectors is:
-    /// ```ignore
-    /// select(s1, s2) = ∏ (s1_i * s2_i - s2_i + 1)
-    /// ```
-    pub fn select_poly<BaseField: Field>(&self, mut var: BaseField) -> F
-    where
-        F: ExtensionField<BaseField>,
-    {
-        self.iter()
+    pub fn eval_select<EF: ExtensionField<F>>(mut var: F, point: &[EF]) -> EF {
+        point
+            .iter()
             .rev()
             .map(|&r| {
-                let term = r * (F::NEG_ONE + var) + F::ONE;
+                let term = r * (F::NEG_ONE + var) + EF::ONE;
                 var = var.square();
                 term
             })
@@ -339,35 +329,47 @@ mod tests {
     }
 
     #[test]
-    fn test_eq_poly_outside_all_zeros() {
+    fn test_eval_eq_outside_all_zeros() {
         let ml_point1 = Point(F::zero_vec(4));
         let ml_point2 = Point(F::zero_vec(4));
 
-        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
+        assert_eq!(
+            Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice()),
+            F::ONE
+        );
     }
 
     #[test]
-    fn test_eq_poly_outside_all_ones() {
+    fn test_eval_eq_outside_all_ones() {
         let ml_point1 = Point(vec![F::ONE; 4]);
         let ml_point2 = Point(vec![F::ONE; 4]);
 
-        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
+        assert_eq!(
+            Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice()),
+            F::ONE
+        );
     }
 
     #[test]
-    fn test_eq_poly_outside_mixed_match() {
+    fn test_eval_eq_outside_mixed_match() {
         let ml_point1 = Point(vec![F::ONE, F::ZERO, F::ONE, F::ZERO]);
         let ml_point2 = Point(vec![F::ONE, F::ZERO, F::ONE, F::ZERO]);
 
-        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
+        assert_eq!(
+            Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice()),
+            F::ONE
+        );
     }
 
     #[test]
-    fn test_eq_poly_outside_mixed_mismatch() {
+    fn test_eval_eq_outside_mixed_mismatch() {
         let ml_point1 = Point(vec![F::ONE, F::ZERO, F::ONE, F::ZERO]);
         let ml_point2 = Point(vec![F::ZERO, F::ONE, F::ZERO, F::ONE]);
 
-        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ZERO);
+        assert_eq!(
+            Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice()),
+            F::ZERO
+        );
     }
 
     #[test]
@@ -386,30 +388,36 @@ mod tests {
 
         assert_eq!(result, expected);
 
-        // Test that it matches eq_poly
+        // Test that it matches the Point slice API.
         let ml_p = Point::new(p.to_vec());
         let ml_q = Point::new(q.to_vec());
-        assert_eq!(result, ml_p.eq_poly(&ml_q));
+        assert_eq!(result, Point::eval_eq(ml_p.as_slice(), ml_q.as_slice()));
     }
 
     #[test]
-    fn test_eq_poly_outside_single_variable_match() {
+    fn test_eval_eq_outside_single_variable_match() {
         let ml_point1 = Point(vec![F::ONE]);
         let ml_point2 = Point(vec![F::ONE]);
 
-        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
+        assert_eq!(
+            Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice()),
+            F::ONE
+        );
     }
 
     #[test]
-    fn test_eq_poly_outside_single_variable_mismatch() {
+    fn test_eval_eq_outside_single_variable_mismatch() {
         let ml_point1 = Point(vec![F::ONE]);
         let ml_point2 = Point(vec![F::ZERO]);
 
-        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ZERO);
+        assert_eq!(
+            Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice()),
+            F::ZERO
+        );
     }
 
     #[test]
-    fn test_eq_poly_outside_manual_comparison() {
+    fn test_eval_eq_outside_manual_comparison() {
         // Construct the first multilinear point with arbitrary non-binary field values
         let x00 = F::from_u8(17);
         let x01 = F::from_u8(56);
@@ -425,7 +433,7 @@ mod tests {
         let ml_point2 = Point(vec![x10, x11, x12, x13]);
 
         // Compute the equality polynomial between ml_point1 and ml_point2
-        let result = ml_point1.eq_poly(&ml_point2);
+        let result = Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice());
 
         // Manually compute the expected result of the equality polynomial:
         // eq(c, p) = ∏ (c_i * p_i + (1 - c_i) * (1 - p_i))
@@ -440,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eq_poly_outside_large_match() {
+    fn test_eval_eq_outside_large_match() {
         let ml_point1 = Point(vec![
             F::ONE,
             F::ONE,
@@ -462,11 +470,14 @@ mod tests {
             F::ZERO,
         ]);
 
-        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
+        assert_eq!(
+            Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice()),
+            F::ONE
+        );
     }
 
     #[test]
-    fn test_eq_poly_outside_large_mismatch() {
+    fn test_eval_eq_outside_large_mismatch() {
         let ml_point1 = Point(vec![
             F::ONE,
             F::ONE,
@@ -488,25 +499,31 @@ mod tests {
             F::ONE, // Last bit differs
         ]);
 
-        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ZERO);
+        assert_eq!(
+            Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice()),
+            F::ZERO
+        );
     }
 
     #[test]
-    fn test_eq_poly_outside_empty_vector() {
+    fn test_eval_eq_outside_empty_vector() {
         let ml_point1 = Point::<F>(vec![]);
         let ml_point2 = Point::<F>(vec![]);
 
-        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
+        assert_eq!(
+            Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice()),
+            F::ONE
+        );
     }
 
     #[test]
     #[should_panic]
-    fn test_eq_poly_outside_different_lengths() {
+    fn test_eval_eq_outside_different_lengths() {
         let ml_point1 = Point(vec![F::ONE, F::ZERO]);
         let ml_point2 = Point(vec![F::ONE, F::ZERO, F::ONE]);
 
         // Should panic because lengths do not match
-        let _ = ml_point1.eq_poly(&ml_point2);
+        let _ = Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice());
     }
 
     #[test]
@@ -537,7 +554,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn proptest_eq_poly_outside_matches_manual(
+        fn proptest_eval_eq_outside_matches_manual(
             (coords1, coords2) in prop::collection::vec(0u8..=250, 1..=8).prop_flat_map(|v1| {
                 let len = v1.len();
                 prop::collection::vec(0u8..=250, len).prop_map(move |v2| (v1.clone(), v2))
@@ -547,8 +564,8 @@ mod tests {
             let p1 = Point(coords1.iter().copied().map(F::from_u8).collect());
             let p2 = Point(coords2.iter().copied().map(F::from_u8).collect());
 
-            // Evaluate eq_poly
-            let result = p1.eq_poly(&p2);
+            // Evaluate the equality polynomial.
+            let result = Point::eval_eq(p1.as_slice(), p2.as_slice());
 
             // Compute expected value using manual formula:
             // eq(c, p) = ∏ (c_i * p_i + (1 - c_i)(1 - p_i))

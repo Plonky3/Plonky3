@@ -11,8 +11,8 @@ use p3_field::{ExtensionField, Field, TwoAdicField};
 use p3_matrix::Dimensions;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
-use p3_sumcheck::constraints::Constraint;
 use p3_sumcheck::constraints::statement::SelectStatement;
+use p3_sumcheck::constraints::{Constraint, Statements};
 use p3_sumcheck::strategy::VariableOrder;
 use p3_sumcheck::{SumcheckError, verify_final_sumcheck_rounds};
 use tracing::instrument;
@@ -162,8 +162,11 @@ where
 
             let constraint = Constraint::new(
                 challenger.sample_algebra_element(),
-                new_commitment.ood_statement.clone(),
-                stir_statement,
+                new_commitment.ood_statement.num_variables(),
+                vec![
+                    Statements::Eq(new_commitment.ood_statement.clone()),
+                    Statements::Select(stir_statement),
+                ],
             );
             constraint.combine_evals(&mut claimed_eval);
             constraints.push(constraint);

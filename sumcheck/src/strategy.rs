@@ -7,12 +7,12 @@
 //! - `SumcheckProver`: drives rounds over a paired product polynomial.
 
 use p3_challenger::{FieldChallenger, GrindingChallenger};
-use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
+use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing, dot_product};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 
-use crate::constraints::Constraint;
+use crate::constraints::{Constraint, Statements};
 use crate::product_polynomial::ProductPolynomial;
 use crate::{SumcheckData, extrapolate_01inf};
 
@@ -326,17 +326,32 @@ impl VariableOrder {
                     Self::Suffix => reversed.get_subpoint_over_range(..constraint.num_variables()),
                 };
 
-                // Equality term: sum_{(z, c)} c * eq(z, local_challenge).
-                let eq_contrib = constraint
-                    .iter_eqs()
-                    .map(|(point, coeff)| coeff * point.eq_poly(&local_challenge))
-                    .sum::<EF>();
-                // Selector term: sum_{(var, c)} c * select(local_challenge, var).
-                let sel_contrib = constraint
-                    .iter_sels()
-                    .map(|(&var, coeff)| coeff * local_challenge.select_poly(var))
-                    .sum::<EF>();
-                eq_contrib + sel_contrib
+                let mut shift = 0;
+                let mut acc = EF::ZERO;
+                for statement in constraint.statements() {
+                    match statement {
+                        Statements::Eq(eq_statement) => {
+                            acc += dot_product::<EF, _, _>(
+                                eq_statement.weights_at(&local_challenge),
+                                constraint.challenge_powers(shift),
+                            );
+                        }
+                        Statements::Next(next_statement) => {
+                            acc += dot_product::<EF, _, _>(
+                                next_statement.weights_at(&local_challenge),
+                                constraint.challenge_powers(shift),
+                            );
+                        }
+                        Statements::Select(sel_statement) => {
+                            acc += dot_product::<EF, _, _>(
+                                sel_statement.weights_at(&local_challenge),
+                                constraint.challenge_powers(shift),
+                            );
+                        }
+                    }
+                    shift += statement.len();
+                }
+                acc
             })
             .sum()
     }
@@ -478,6 +493,7 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
     use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
@@ -490,8 +506,8 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::VariableOrder;
-    use crate::constraints::Constraint;
-    use crate::constraints::statement::{EqStatement, SelectStatement};
+    use crate::constraints::statement::{EqStatement, NextStatement, SelectStatement};
+    use crate::constraints::{Constraint, Statements};
 
     type F = BabyBear;
     type EF = BinomialExtensionField<BabyBear, 4>;
@@ -550,7 +566,26 @@ mod tests {
                 (0..rng.random_range(0..=3))
                     .for_each(|_| sel_statement.add_constraint(rng.random(), rng.random()));
 
-                Constraint::new(gamma, eq_statement, sel_statement)
+                // One to three full-space repeat-last Next constraints at random points.
+                let mut next_statement = NextStatement::initialize(num_variables);
+                (0..rng.random_range(0..=3)).for_each(|_| {
+                    next_statement.add_evaluated_constraint(
+                        Point::new(Vec::new()),
+                        Point::rand(rng, num_variables),
+                        rng.random(),
+                        VariableOrder::Prefix,
+                    );
+                });
+
+                Constraint::new(
+                    gamma,
+                    num_variables,
+                    vec![
+                        Statements::Eq(eq_statement),
+                        Statements::Next(next_statement),
+                        Statements::Select(sel_statement),
+                    ],
+                )
             })
             .collect()
     }

@@ -20,15 +20,14 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use itertools::Itertools;
-use p3_field::{ExtensionField, Field, dot_product};
+use p3_field::{ExtensionField, Field};
 use p3_maybe_rayon::prelude::*;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 use p3_util::log2_strict_usize;
 
-use crate::layout::ProverMultiClaim;
+use crate::layout::{EqPartials, EqSvoPartials, NextPartials, ProverMultiClaim};
 use crate::strategy::VariableOrder;
 
 /// Expand `2^l` Boolean-hypercube evaluations to `3^l` evaluations on `{0,1,inf}^l`.
@@ -188,7 +187,7 @@ fn evals_01inf_grid_into<F: Field>(boolean_evals: &[F], output: &mut [F], scratc
     }
 }
 
-fn evals_01inf_grid_prefix<F: Field>(evals: &[F]) -> Vec<F> {
+pub(crate) fn evals_01inf_grid_prefix<F: Field>(evals: &[F]) -> Vec<F> {
     fn reverse_ternary_digits(mut idx: usize, l: usize) -> usize {
         let mut rev = 0usize;
         for _ in 0..l {
@@ -211,6 +210,55 @@ fn evals_01inf_grid_prefix<F: Field>(evals: &[F]) -> Vec<F> {
     out
 }
 
+impl<F: Field> EqPartials<F> {
+    fn accumulate_prefix(&self, p_active: &[F], acc0: &mut [F], acc_inf: &mut [F]) {
+        let active_len = p_active.len();
+        assert!(active_len > 0);
+        assert_eq!(self.poly().num_variables(), active_len);
+
+        let stride = 3usize.pow((active_len - 1) as u32);
+        assert_eq!(acc0.len(), stride);
+        assert_eq!(acc_inf.len(), stride);
+
+        let eq_active = Poly::new_from_point(p_active, F::ONE);
+        let [term0, term_inf] =
+            calculate_product_accumulator(active_len, eq_active.as_slice(), self.poly().as_slice());
+
+        acc0.iter_mut()
+            .zip(term0.iter())
+            .for_each(|(out, &value)| *out += value);
+        acc_inf
+            .iter_mut()
+            .zip(term_inf.iter())
+            .for_each(|(out, &value)| *out += value);
+    }
+
+    fn accumulate_suffix(&self, p_active: &[F], acc0: &mut [F], acc_inf: &mut [F]) {
+        let active_len = p_active.len();
+        assert!(active_len > 0);
+        assert_eq!(self.poly().num_variables(), active_len);
+
+        let stride = 3usize.pow((active_len - 1) as u32);
+        assert_eq!(acc0.len(), stride);
+        assert_eq!(acc_inf.len(), stride);
+
+        let eq_grid = evals_01inf_grid_prefix(Poly::new_from_point(p_active, F::ONE).as_slice());
+        let acc_grid = evals_01inf_grid_prefix(self.poly().as_slice());
+
+        acc0.iter_mut()
+            .zip(eq_grid[..stride].iter().zip(acc_grid[..stride].iter()))
+            .for_each(|(out, (&eq, &eval))| *out += eq * eval);
+        acc_inf
+            .iter_mut()
+            .zip(
+                eq_grid[2 * stride..]
+                    .iter()
+                    .zip(acc_grid[2 * stride..].iter()),
+            )
+            .for_each(|(out, (&eq, &eval))| *out += eq * eval);
+    }
+}
+
 /// Builds the SVO accumulators for a batch of claims.
 ///
 /// At round `l = round_idx + 1`, we first combine the round-`l` partial evaluations
@@ -230,45 +278,49 @@ pub(crate) fn calculate_accumulators_batch<F: Field, EF: ExtensionField<F>>(
     (0..k)
         .map(|round_idx| {
             let l = round_idx + 1;
-            let mut acc = Poly::<EF>::zero(l);
+            let mut eq_acc = EqPartials::zero(l);
+            let mut next_acc = NextPartials::zero(l);
 
-            // Pick each opening's round-`round_idx` partial evaluation and
-            // accumulate `alpha * partial` into `acc`.
-            claim
-                .openings()
-                .iter()
-                .map(|opening| &opening.data()[round_idx])
-                .zip(alphas.iter())
-                .for_each(|(partial, &alpha)| {
-                    acc.as_mut_slice()
-                        .iter_mut()
-                        .zip_eq(partial.iter())
-                        .for_each(|(out, &f)| *out += alpha * f);
-                });
-
-            if matches!(claim.point().var_order(), VariableOrder::Prefix) {
-                let (svo_active, _) = claim.point().z_svo().split_at(l);
-                return calculate_accumulator::<F, EF>(l, acc.as_slice(), svo_active.as_slice());
+            for (opening, &alpha) in claim.current_openings().iter().zip(alphas.iter()) {
+                eq_acc.accumulate(&opening.data().rounds()[round_idx], alpha);
             }
 
-            let (_, svo_active) = claim.point().z_svo().split_at(k - l);
-            let eq_grid = evals_01inf_grid_prefix(
-                Poly::new_from_point(svo_active.as_slice(), EF::ONE).as_slice(),
-            );
-            let acc_grid = evals_01inf_grid_prefix(acc.as_slice());
+            for (opening, &alpha) in claim
+                .next_openings()
+                .iter()
+                .zip(alphas.iter().skip(claim.current_openings().len()))
+            {
+                next_acc.accumulate(&opening.data().rounds()[round_idx], alpha);
+            }
+
             let stride = 3usize.pow(round_idx as u32);
+            let mut acc0 = EF::zero_vec(stride);
+            let mut acc_inf = EF::zero_vec(stride);
 
-            let acc0 = eq_grid[..stride]
-                .iter()
-                .zip(acc_grid[..stride].iter())
-                .map(|(&eq, &eval)| eq * eval)
-                .collect::<Vec<_>>();
+            match claim.point().var_order() {
+                VariableOrder::Prefix => {
+                    let (svo_active, _) = claim.point().z_svo().split_at(l);
 
-            let acc_inf = eq_grid[2 * stride..]
-                .iter()
-                .zip(acc_grid[2 * stride..].iter())
-                .map(|(&eq, &eval)| eq * eval)
-                .collect::<Vec<_>>();
+                    if !claim.current_openings().is_empty() {
+                        eq_acc.accumulate_prefix(svo_active.as_slice(), &mut acc0, &mut acc_inf);
+                    }
+
+                    if !claim.next_openings().is_empty() {
+                        next_acc.accumulate_prefix(svo_active.as_slice(), &mut acc0, &mut acc_inf);
+                    }
+                }
+                VariableOrder::Suffix => {
+                    let (_, svo_active) = claim.point().z_svo().split_at(k - l);
+
+                    if !claim.current_openings().is_empty() {
+                        eq_acc.accumulate_suffix(svo_active.as_slice(), &mut acc0, &mut acc_inf);
+                    }
+
+                    if !claim.next_openings().is_empty() {
+                        next_acc.accumulate_suffix(svo_active.as_slice(), &mut acc0, &mut acc_inf);
+                    }
+                }
+            }
 
             [acc0, acc_inf]
         })
@@ -287,11 +339,14 @@ pub(crate) fn calculate_accumulators_batch<F: Field, EF: ExtensionField<F>>(
 /// allocation, and parallelization machinery.
 ///
 /// Total cost: O(3^l) field operations.
+#[cfg(test)]
 fn calculate_accumulator<F: Field, EF: ExtensionField<F>>(
     l: usize,
     partial_evals: &[EF],
     point: &[EF],
 ) -> [Vec<EF>; 2] {
+    use p3_field::dot_product;
+
     let total_vars = log2_strict_usize(partial_evals.len());
     let offset = total_vars - l;
 
@@ -320,6 +375,22 @@ fn calculate_accumulator<F: Field, EF: ExtensionField<F>>(
         2 => calculate_accumulator_2(eq0.as_slice(), &reduced_evals),
         3 => calculate_accumulator_3(eq0.as_slice(), &reduced_evals),
         _ => calculate_accumulator_general(l, eq0.as_slice(), &reduced_evals),
+    }
+}
+
+pub(crate) fn calculate_product_accumulator<F: Field>(
+    l: usize,
+    left: &[F],
+    right: &[F],
+) -> [Vec<F>; 2] {
+    assert_eq!(left.len(), 1 << l);
+    assert_eq!(right.len(), 1 << l);
+
+    match l {
+        1 => calculate_accumulator_1(left, right),
+        2 => calculate_accumulator_2(left, right),
+        3 => calculate_accumulator_3(left, right),
+        _ => calculate_accumulator_general(l, left, right),
     }
 }
 
@@ -556,10 +627,10 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
                 (svo, split)
             }
         };
-        let split = SplitEq::new_unpacked(&split, EF::ONE);
+        let z_split = SplitEq::new_unpacked(&split, EF::ONE);
         Self {
             z_svo: svo,
-            z_split: split,
+            z_split,
             var_order,
         }
     }
@@ -570,10 +641,10 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     pub fn new_packed(l0: usize, point: &Point<EF>) -> Self {
         assert!(l0 <= point.num_variables());
         let (svo, split) = point.split_at(l0);
-        let split = SplitEq::new_packed(&split, EF::ONE);
+        let z_split = SplitEq::new_packed(&split, EF::ONE);
         Self {
             z_svo: svo,
-            z_split: split,
+            z_split,
             var_order: VariableOrder::Prefix,
         }
     }
@@ -625,7 +696,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     /// polynomial only in the SVO variables, which is then:
     /// - evaluated at `z_svo` to obtain the opening value
     /// - partially compressed after each SVO round to feed the accumulator path
-    pub fn eval(&self, poly: &Poly<F>) -> (EF, Vec<Poly<EF>>) {
+    pub fn eval(&self, poly: &Poly<F>) -> (EF, EqSvoPartials<EF>) {
         assert_eq!(self.num_variables(), poly.num_variables());
         let (compressed, partial_evals) = match self.var_order {
             VariableOrder::Prefix => {
@@ -651,7 +722,10 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
             }
         };
         let eval = compressed.eval_base(&self.z_svo);
-        (eval, partial_evals)
+        (
+            eval,
+            EqSvoPartials::new(partial_evals.into_iter().map(EqPartials::new).collect()),
+        )
     }
 
     /// Returns the number of SVO variables (`l0`).
@@ -704,6 +778,7 @@ mod test {
 
     type F = KoalaBear;
     type EF = BinomialExtensionField<F, 4>;
+    type PackedEF = <EF as ExtensionField<F>>::ExtensionPacking;
 
     /// Convenience wrapper: expand boolean evals onto {0, 1, inf}^l grid.
     fn evals_01inf_grid(boolean_evals: &[EF]) -> Vec<EF> {
@@ -1043,7 +1118,7 @@ mod test {
                     opening
                 })
                 .collect::<Vec<_>>();
-            let claim = ProverMultiClaim::new(svo_point, openings);
+            let claim = ProverMultiClaim::new(svo_point, openings, Vec::new());
 
             let accumulators = calculate_accumulators_batch(&claim, &alphas);
             if l0 == 0 {
@@ -1053,17 +1128,18 @@ mod test {
 
             let mut poly = Poly::<EF>::zero(l0);
             claim
-                .openings()
+                .current_openings()
                 .iter()
                 .zip(alphas.iter())
                 .for_each(|(opening, &alpha)| {
                     let full_svo_poly = opening
                         .data()
+                        .rounds()
                         .last()
                         .expect("l0 > 0 guarantees one SVO partial polynomial");
                     poly.as_mut_slice()
                         .iter_mut()
-                        .zip(full_svo_poly.iter())
+                        .zip(full_svo_poly.poly().iter())
                         .for_each(|(out, &value)| *out += alpha * value);
                 });
 
@@ -1104,7 +1180,7 @@ mod test {
                     opening
                 })
                 .collect::<Vec<_>>();
-            let claim = ProverMultiClaim::new(svo_point, openings);
+            let claim = ProverMultiClaim::new(svo_point, openings, Vec::new());
 
             let accumulators = calculate_accumulators_batch(&claim, &alphas);
             if l0 == 0 {
@@ -1114,17 +1190,18 @@ mod test {
 
             let mut poly = Poly::<EF>::zero(l0);
             claim
-                .openings()
+                .current_openings()
                 .iter()
                 .zip(alphas.iter())
                 .for_each(|(opening, &alpha)| {
                     let full_svo_poly = opening
                         .data()
+                        .rounds()
                         .last()
                         .expect("l0 > 0 guarantees one SVO partial polynomial");
                     poly.as_mut_slice()
                         .iter_mut()
-                        .zip(full_svo_poly.iter())
+                        .zip(full_svo_poly.poly().iter())
                         .for_each(|(out, &value)| *out += alpha * value);
                 });
 
@@ -1269,22 +1346,34 @@ mod test {
 
             let (e1, partial_evals) = svo_point.eval(poly);
             assert_eq!(e0, e1);
-            assert_eq!(partial_evals.len(), svo_point.num_variables_svo());
+            assert_eq!(partial_evals.rounds().len(), svo_point.num_variables_svo());
 
             match svo_point.var_order() {
                 VariableOrder::Prefix => {
-                    partial_evals.iter().enumerate().for_each(|(i, pe0)| {
-                        let (_point_lo, point_hi) = point.split_at(i + 1);
-                        assert_eq!(pe0, &poly.compress_suffix(&point_hi, EF::ONE));
-                        assert_eq!(e0, pe0.eval_base(&svo_point.z_svo().split_at(i + 1).0));
-                    });
+                    partial_evals
+                        .rounds()
+                        .iter()
+                        .enumerate()
+                        .for_each(|(i, pe0)| {
+                            let (_point_lo, point_hi) = point.split_at(i + 1);
+                            assert_eq!(pe0.poly(), &poly.compress_suffix(&point_hi, EF::ONE));
+                            assert_eq!(
+                                e0,
+                                pe0.poly().eval_base(&svo_point.z_svo().split_at(i + 1).0)
+                            );
+                        });
                 }
                 VariableOrder::Suffix => {
-                    partial_evals.iter().enumerate().for_each(|(i, pe0)| {
-                        let (point_lo, point_hi) = point.split_at(point.num_variables() - i - 1);
-                        assert_eq!(pe0, &poly.compress_prefix(&point_lo, EF::ONE));
-                        assert_eq!(e0, pe0.eval_base(&point_hi));
-                    });
+                    partial_evals
+                        .rounds()
+                        .iter()
+                        .enumerate()
+                        .for_each(|(i, pe0)| {
+                            let (point_lo, point_hi) =
+                                point.split_at(point.num_variables() - i - 1);
+                            assert_eq!(pe0.poly(), &poly.compress_prefix(&point_lo, EF::ONE));
+                            assert_eq!(e0, pe0.poly().eval_base(&point_hi));
+                        });
                 }
             }
         };
@@ -1314,10 +1403,6 @@ mod test {
 
     #[test]
     fn test_svo_point_accumulate() {
-        type F = KoalaBear;
-        type EF = BinomialExtensionField<F, 4>;
-        type PackedEF = <EF as ExtensionField<F>>::ExtensionPacking;
-
         let mut rng = SmallRng::seed_from_u64(0);
 
         let assert_accumulate_unpacked =

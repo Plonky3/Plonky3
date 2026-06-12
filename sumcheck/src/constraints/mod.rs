@@ -1,122 +1,188 @@
+use alloc::vec::Vec;
+
 use p3_field::{ExtensionField, Field, PackedValue};
-use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_util::log2_strict_usize;
 
-use crate::constraints::statement::{EqStatement, SelectStatement};
+use crate::constraints::statement::{EqStatement, NextStatement, SelectStatement};
 
 /// Statement types for polynomial evaluation constraints.
 pub mod statement;
 
-/// A combined constraint system with equality and selection statements.
+/// One explicitly ordered group of evaluation constraints.
+#[derive(Clone, Debug)]
+pub enum Statements<F: Field, EF: ExtensionField<F>> {
+    /// Ordinary multilinear evaluations at concrete points.
+    Eq(EqStatement<EF>),
+    /// Slot-local repeat-last Next evaluations.
+    Next(NextStatement<EF>),
+    /// Selection-based evaluations.
+    Select(SelectStatement<F, EF>),
+}
+
+impl<F: Field, EF: ExtensionField<F>> Statements<F, EF> {
+    #[must_use]
+    pub const fn num_variables(&self) -> usize {
+        match self {
+            Self::Eq(statement) => statement.num_variables(),
+            Self::Next(statement) => statement.num_variables(),
+            Self::Select(statement) => statement.num_variables(),
+        }
+    }
+
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        match self {
+            Self::Eq(statement) => statement.len(),
+            Self::Next(statement) => statement.len(),
+            Self::Select(statement) => statement.len(),
+        }
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        match self {
+            Self::Eq(statement) => statement.is_empty(),
+            Self::Next(statement) => statement.is_empty(),
+            Self::Select(statement) => statement.is_empty(),
+        }
+    }
+
+    fn combine_evals(&self, eval: &mut EF, challenge: EF, shift: usize) {
+        match self {
+            Self::Eq(statement) => statement.combine_evals(eval, challenge, shift),
+            Self::Next(statement) => statement.combine_evals(eval, challenge, shift),
+            Self::Select(statement) => statement.combine_evals(eval, challenge, shift),
+        }
+    }
+
+    fn combine(
+        &self,
+        combined: &mut Poly<EF>,
+        eval: &mut EF,
+        challenge: EF,
+        shift: usize,
+        initialized: bool,
+    ) -> bool {
+        if self.is_empty() {
+            return initialized;
+        }
+
+        match self {
+            Self::Eq(statement) => {
+                if initialized {
+                    statement.combine_hypercube::<F, true>(combined, eval, challenge, shift);
+                } else {
+                    statement.combine_hypercube::<F, false>(combined, eval, challenge, shift);
+                }
+            }
+            Self::Next(statement) => {
+                statement.combine::<F>(combined, eval, challenge, shift);
+            }
+            Self::Select(statement) => {
+                statement.combine(combined, eval, challenge, shift);
+            }
+        }
+
+        true
+    }
+
+    fn combine_packed(
+        &self,
+        combined: &mut Poly<EF::ExtensionPacking>,
+        eval: &mut EF,
+        challenge: EF,
+        shift: usize,
+        initialized: bool,
+    ) -> bool {
+        if self.is_empty() {
+            return initialized;
+        }
+
+        match self {
+            Self::Eq(statement) => {
+                if initialized {
+                    statement.combine_hypercube_packed::<F, true>(combined, eval, challenge, shift);
+                } else {
+                    statement
+                        .combine_hypercube_packed::<F, false>(combined, eval, challenge, shift);
+                }
+            }
+            Self::Next(statement) => {
+                statement.combine_packed::<F>(combined, eval, challenge, shift);
+            }
+            Self::Select(statement) => {
+                statement.combine_packed(combined, eval, challenge, shift);
+            }
+        }
+
+        true
+    }
+}
+
+/// A combined ordered constraint system.
 ///
 /// This struct represents a unified constraint system that combines:
 /// - **Equality constraints**: Polynomial evaluations at specific points
+/// - **Next constraints**: Repeat-last successor evaluations
 /// - **Select constraints**: Selection-based polynomial evaluations
 ///
-/// Both constraint types are batched using powers of a random challenge `γ`.
+/// All statement groups are batched using powers of a random challenge `γ`.
+/// Challenge powers advance by the number of constraints in each group, so the
+/// order of `statements` is protocol-visible.
 ///
 /// # Mathematical Structure
 ///
-/// Given `n_eq` equality constraints and `n_sel` select constraints, the combined
-/// constraint polynomial is:
+/// Given ordered statements `S_i`, the combined constraint polynomial is:
 ///
 /// ```text
-/// W(X) = Σ_{i=0}^{n_eq-1} γ^i · eq(X, z_eq_i) + Σ_{j=0}^{n_sel-1} γ^{n_eq+j} · select(pow(z_sel_j), X)
+/// W(X) = Σ_i γ^i · weight_i(X)
 /// ```
 ///
 /// The combined expected evaluation is:
 ///
 /// ```text
-/// S = Σ_{i=0}^{n_eq-1} γ^i · s_eq_i + Σ_{j=0}^{n_sel-1} γ^{n_eq+j} · s_sel_j
+/// S = Σ_i γ^i · eval_i
 /// ```
 #[derive(Clone, Debug)]
 pub struct Constraint<F: Field, EF: ExtensionField<F>> {
-    /// Equality-based evaluation constraints of the form `p(z_i) = s_i`.
-    ///
-    /// Each constraint specifies a point `z_i` and expected evaluation `s_i`.
-    pub eq_statement: EqStatement<EF>,
+    /// Number of variables shared by every statement group.
+    num_variables: usize,
 
-    /// Selection-based evaluation constraints of the form `p(z_j) = s_j`.
-    ///
-    /// Each constraint specifies a univariate value `z_j` that is expanded
-    /// via the power map to create a multilinear evaluation point.
-    pub sel_statement: SelectStatement<F, EF>,
+    /// Statement groups in the exact alpha-power order used by batching.
+    statements: Vec<Statements<F, EF>>,
 
     /// Random challenge `γ` used for batching constraints.
     ///
-    /// Powers of this challenge weight different constraints:
-    /// - Equality constraints use `γ^0, γ^1, ..., γ^{n_eq-1}`
-    /// - Select constraints use `γ^{n_eq}, γ^{n_eq+1}, ..., γ^{n_eq+n_sel-1}`
-    pub challenge: EF,
+    /// Powers of this challenge weight each ordered constraint.
+    challenge: EF,
 }
 
 impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
-    /// Creates a new constraint combining equality and select statements.
-    ///
-    /// This constructor initializes a unified constraint system that batches both
-    /// equality-based and selection-based polynomial evaluation constraints using
-    /// powers of the provided challenge.
+    /// Creates a new constraint from explicitly ordered statement groups.
     ///
     /// # Parameters
     ///
     /// - `challenge`: Random challenge `γ` for batching constraints
-    /// - `eq_statement`: Equality constraints `p(z_i) = s_i`
-    /// - `sel_statement`: Selection constraints via power map expansion
+    /// - `num_variables`: Shared multilinear arity of every statement group
+    /// - `statements`: Ordered statement groups in protocol-visible alpha order
     ///
     /// # Panics
     ///
-    /// Panics if the number of variables differs between statements.
-    ///
-    /// # Invariant
-    ///
-    /// Both statements must operate over the same number of variables to ensure
-    /// the combined weight polynomial is well-defined.
+    /// Panics if any statement group has a different number of variables.
     #[must_use]
-    pub const fn new(
-        challenge: EF,
-        eq_statement: EqStatement<EF>,
-        sel_statement: SelectStatement<F, EF>,
-    ) -> Self {
-        // Verify that both statements have the same number of variables.
-        //
-        // This ensures the combined polynomial has a consistent domain.
-        assert!(eq_statement.num_variables() == sel_statement.num_variables());
+    pub fn new(challenge: EF, num_variables: usize, statements: Vec<Statements<F, EF>>) -> Self {
+        assert!(
+            statements
+                .iter()
+                .all(|statement| statement.num_variables() == num_variables)
+        );
 
-        // Construct the combined constraint with both statement types.
         Self {
-            eq_statement,
-            sel_statement,
+            num_variables,
+            statements,
             challenge,
         }
-    }
-
-    /// Creates a constraint with only equality statements.
-    ///
-    /// This is a convenience constructor for the common case where only equality
-    /// constraints are needed. An empty select statement is automatically created
-    /// with the same number of variables.
-    ///
-    /// # Parameters
-    ///
-    /// - `challenge`: Random challenge `γ` for batching eq constraints
-    /// - `eq_statement`: Equality constraints `p(z_i) = s_i`
-    ///
-    /// # Returns
-    ///
-    /// A `Constraint` with the given equality statement and an empty select statement.
-    #[must_use]
-    pub const fn new_eq_only(challenge: EF, eq_statement: EqStatement<EF>) -> Self {
-        // Extract the number of variables from the equality statement.
-        let num_variables = eq_statement.num_variables();
-
-        // Create a constraint with an empty select statement that has
-        // the same number of variables as the equality statement.
-        Self::new(
-            challenge,
-            eq_statement,
-            SelectStatement::initialize(num_variables),
-        )
     }
 
     /// Returns the number of variables in the constraint polynomial.
@@ -129,17 +195,32 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
     /// The number of variables `k` shared by both statement types.
     #[must_use]
     pub const fn num_variables(&self) -> usize {
-        // The number of variables is determined by the equality statement.
-        //
-        // By construction, the select statement has the same value.
-        self.eq_statement.num_variables()
+        self.num_variables
+    }
+
+    /// Returns the ordered statement groups.
+    #[must_use]
+    pub fn statements(&self) -> &[Statements<F, EF>] {
+        &self.statements
+    }
+
+    /// Returns the batching challenge `γ`.
+    #[must_use]
+    pub const fn challenge(&self) -> EF {
+        self.challenge
+    }
+
+    /// Returns powers of the batching challenge starting at `γ^shift`.
+    pub fn challenge_powers(&self, shift: usize) -> impl Iterator<Item = EF> {
+        self.challenge
+            .shifted_powers(self.challenge.exp_u64(shift as u64))
     }
 
     /// Combines expected evaluations using challenge powers.
     ///
     /// This accumulates the weighted sum of all expected constraint evaluations:
     /// ```text
-    /// eval += Σ_{i=0}^{n_eq-1} γ^i · s_eq_i + Σ_{j=0}^{n_sel-1} γ^{n_eq+j} · s_sel_j
+    /// eval += Σ_i γ^i · s_i
     /// ```
     ///
     /// # Parameters
@@ -148,21 +229,14 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
     ///
     /// # Implementation Notes
     ///
-    /// The equality statement uses challenge powers `γ^0, γ^1, ...`
-    /// The select statement continues with powers `γ^{n_eq}, γ^{n_eq+1}, ...`
-    /// to ensure distinct weights for all constraints.
+    /// Each statement group starts at the challenge power following the
+    /// previous group's final constraint.
     pub fn combine_evals(&self, eval: &mut EF) {
-        // Accumulate equality constraint evaluations weighted by γ^i.
-        //
-        // This adds: Σ_{i=0}^{n_eq-1} γ^i · s_eq_i
-        self.eq_statement.combine_evals(eval, self.challenge);
-
-        // Accumulate select constraint evaluations weighted by γ^{n_eq+j}.
-        // The shift ensures distinct challenge powers for each constraint.
-        //
-        // This adds: Σ_{j=0}^{n_sel-1} γ^{n_eq+j} · s_sel_j
-        self.sel_statement
-            .combine_evals(eval, self.challenge, self.eq_statement.len());
+        let mut shift = 0;
+        for statement in &self.statements {
+            statement.combine_evals(eval, self.challenge, shift);
+            shift += statement.len();
+        }
     }
 
     /// Combines constraint polynomials into weight polynomial and expected evaluation.
@@ -183,23 +257,20 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
     ///
     /// Updates `combined[b]` for each `b ∈ {0,1}^k`:
     /// ```text
-    /// combined[b] += Σ_i γ^i · eq(b, z_eq_i) + Σ_j γ^{n_eq+j} · select(pow(z_sel_j), b)
+    /// combined[b] += Σ_i γ^i · weight_i(b)
     /// ```
     ///
     /// Updates `eval`:
     /// ```text
-    /// eval += Σ_i γ^i · s_eq_i + Σ_j γ^{n_eq+j} · s_sel_j
+    /// eval += Σ_i γ^i · s_i
     /// ```
     pub fn combine(&self, combined: &mut Poly<EF>, eval: &mut EF) {
-        // Combine equality constraints with accumulation enabled (INITIALIZED=true).
-        // This adds the equality portion of W(X) to the existing values in `combined`.
-        self.eq_statement
-            .combine_hypercube::<F, true>(combined, eval, self.challenge);
-
-        // Combine select constraints, continuing from where equality left off.
-        // The shift parameter ensures select constraints use distinct challenge powers.
-        self.sel_statement
-            .combine(combined, eval, self.challenge, self.eq_statement.len());
+        let mut shift = 0;
+        let mut initialized = true;
+        for statement in &self.statements {
+            initialized = statement.combine(combined, eval, self.challenge, shift, initialized);
+            shift += statement.len();
+        }
     }
 
     /// Combines constraint polynomials into weight polynomial and expected evaluation.
@@ -220,23 +291,21 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
     ///
     /// Updates `combined[b]` for each `b ∈ {0,1}^k`:
     /// ```text
-    /// combined[b] += Σ_i γ^i · eq(b, z_eq_i) + Σ_j γ^{n_eq+j} · select(pow(z_sel_j), b)
+    /// combined[b] += Σ_i γ^i · weight_i(b)
     /// ```
     ///
     /// Updates `eval`:
     /// ```text
-    /// eval += Σ_i γ^i · s_eq_i + Σ_j γ^{n_eq+j} · s_sel_j
+    /// eval += Σ_i γ^i · s_i
     /// ```
     pub fn combine_packed(&self, combined: &mut Poly<EF::ExtensionPacking>, eval: &mut EF) {
-        // Combine equality constraints with accumulation enabled (INITIALIZED=true).
-        // This adds the equality portion of W(X) to the existing values in `combined`.
-        self.eq_statement
-            .combine_hypercube_packed::<F, true>(combined, eval, self.challenge);
-
-        // Combine select constraints, continuing from where equality left off.
-        // The shift parameter ensures select constraints use distinct challenge powers.
-        self.sel_statement
-            .combine_packed(combined, eval, self.challenge, self.eq_statement.len());
+        let mut shift = 0;
+        let mut initialized = true;
+        for statement in &self.statements {
+            initialized =
+                statement.combine_packed(combined, eval, self.challenge, shift, initialized);
+            shift += statement.len();
+        }
     }
 
     /// Creates a new combined weight polynomial and expected evaluation.
@@ -260,19 +329,13 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
         let mut combined = Poly::zero(self.num_variables());
         let mut eval = EF::ZERO;
 
-        // Combine equality constraints without accumulation (INITIALIZED=false).
-        // This directly writes the equality portion of W(X) to `combined`.
-        self.eq_statement
-            .combine_hypercube::<F, false>(&mut combined, &mut eval, self.challenge);
-
-        // Add select constraints to the weight polynomial and expected evaluation.
-        // The shift ensures select constraints use distinct challenge powers.
-        self.sel_statement.combine(
-            &mut combined,
-            &mut eval,
-            self.challenge,
-            self.eq_statement.len(),
-        );
+        let mut shift = 0;
+        let mut initialized = false;
+        for statement in &self.statements {
+            initialized =
+                statement.combine(&mut combined, &mut eval, self.challenge, shift, initialized);
+            shift += statement.len();
+        }
 
         // Return the completed weight polynomial and expected evaluation.
         (combined, eval)
@@ -302,76 +365,35 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
         let mut combined = Poly::zero(k - k_pack);
         let mut eval = EF::ZERO;
 
-        // Combine equality constraints without accumulation (INITIALIZED=false).
-        // This directly writes the equality portion of W(X) to `combined`.
-        self.eq_statement.combine_hypercube_packed::<F, false>(
-            &mut combined,
-            &mut eval,
-            self.challenge,
-        );
-
-        // Add select constraints to the weight polynomial and expected evaluation.
-        // The shift ensures select constraints use distinct challenge powers.
-        self.sel_statement.combine_packed(
-            &mut combined,
-            &mut eval,
-            self.challenge,
-            self.eq_statement.len(),
-        );
+        let mut shift = 0;
+        let mut initialized = false;
+        for statement in &self.statements {
+            initialized = statement.combine_packed(
+                &mut combined,
+                &mut eval,
+                self.challenge,
+                shift,
+                initialized,
+            );
+            shift += statement.len();
+        }
 
         // Return the completed weight polynomial and expected evaluation.
         (combined, eval)
-    }
-
-    /// Iterates over equality constraints with their challenge weights.
-    ///
-    /// This produces pairs `(z_i, γ^i)` for each equality constraint where:
-    /// - `z_i` is the evaluation point
-    /// - `γ^i` is the challenge power for this constraint
-    ///
-    /// # Returns
-    ///
-    /// An iterator over `(&Point<EF>, EF)` pairs.
-    pub fn iter_eqs(&self) -> impl Iterator<Item = (&Point<EF>, EF)> {
-        // Pair each equality point with its corresponding challenge power.
-        // Points are weighted by γ^0, γ^1, γ^2, ...
-        self.eq_statement.points.iter().zip(self.challenge.powers())
-    }
-
-    /// Iterates over select constraints with their challenge weights.
-    ///
-    /// This produces pairs `(z_j, γ^{n_eq+j})` for each select constraint where:
-    /// - `z_j` is the univariate evaluation point (before power map expansion)
-    /// - `γ^{n_eq+j}` is the challenge power for this constraint
-    ///
-    /// # Returns
-    ///
-    /// An iterator over `(&F, EF)` pairs.
-    ///
-    /// # Implementation Notes
-    ///
-    /// Challenge powers are skipped by `n_eq` to ensure select constraints
-    /// use distinct powers from equality constraints.
-    pub fn iter_sels(&self) -> impl Iterator<Item = (&F, EF)> {
-        // Pair each select variable with its corresponding challenge power.
-        // Powers start at γ^{n_eq} to avoid overlap with equality constraints.
-        self.sel_statement.vars.iter().zip(
-            self.challenge
-                .shifted_powers(self.challenge.exp_u64(self.eq_statement.len() as u64)),
-        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use alloc::vec;
-    use alloc::vec::Vec;
 
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
+    use p3_multilinear_util::point::Point;
 
     use super::*;
+    use crate::strategy::VariableOrder;
 
     /// Type alias for the base field used in tests
     type F = BabyBear;
@@ -403,12 +425,26 @@ mod tests {
         let sel_statement = SelectStatement::new(num_variables, vec![sel_var], vec![sel_eval]);
 
         // Construct the combined constraint
-        let constraint: Constraint<F, EF> = Constraint::new(challenge, eq_statement, sel_statement);
+        let constraint: Constraint<F, EF> = Constraint::new(
+            challenge,
+            num_variables,
+            vec![
+                Statements::Eq(eq_statement),
+                Statements::Select(sel_statement),
+            ],
+        );
 
         // Verify that the constraint was constructed with correct fields
         assert_eq!(constraint.challenge, challenge);
-        assert_eq!(constraint.eq_statement.len(), 2);
-        assert_eq!(constraint.sel_statement.len(), 1);
+        assert_eq!(constraint.statements.len(), 2);
+        assert!(matches!(
+            &constraint.statements[0],
+            Statements::Eq(statement) if statement.len() == 2
+        ));
+        assert!(matches!(
+            &constraint.statements[1],
+            Statements::Select(statement) if statement.len() == 1
+        ));
         assert_eq!(constraint.num_variables(), num_variables);
     }
 
@@ -430,13 +466,21 @@ mod tests {
 
         // Random challenge
         let challenge = EF::from_u64(42);
+        let num_variables = eq_statement.num_variables();
 
         // This should panic due to mismatched variable counts
-        let _constraint = Constraint::new(challenge, eq_statement, sel_statement);
+        let _constraint = Constraint::new(
+            challenge,
+            num_variables,
+            vec![
+                Statements::Eq(eq_statement),
+                Statements::Select(sel_statement),
+            ],
+        );
     }
 
     #[test]
-    fn test_constraint_new_eq_only() {
+    fn test_constraint_new_with_single_eq_statement() {
         // Declare test parameters explicitly
 
         // Number of variables
@@ -458,18 +502,19 @@ mod tests {
         );
 
         // Create constraint with only equality constraints
-        let constraint: Constraint<F, EF> = Constraint::new_eq_only(challenge, eq_statement);
+        let constraint: Constraint<F, EF> =
+            Constraint::new(challenge, num_variables, vec![Statements::Eq(eq_statement)]);
 
-        // Verify that the select statement is empty
-        assert_eq!(constraint.sel_statement.len(), 0);
-        assert!(constraint.sel_statement.is_empty());
-
-        // Verify that the equality statement is present
-        assert_eq!(constraint.eq_statement.len(), 3);
+        // Verify that only the equality statement is present
+        assert_eq!(constraint.statements.len(), 1);
+        assert!(matches!(
+            &constraint.statements[0],
+            Statements::Eq(statement) if statement.len() == 3
+        ));
 
         // Verify that both statements have the same number of variables
         assert_eq!(constraint.num_variables(), num_variables);
-        assert_eq!(constraint.sel_statement.num_variables(), num_variables);
+        assert_eq!(constraint.statements[0].num_variables(), num_variables);
     }
 
     #[test]
@@ -487,7 +532,14 @@ mod tests {
         let sel_statement = SelectStatement::initialize(num_variables);
 
         // Create constraint
-        let constraint: Constraint<F, EF> = Constraint::new(challenge, eq_statement, sel_statement);
+        let constraint: Constraint<F, EF> = Constraint::new(
+            challenge,
+            num_variables,
+            vec![
+                Statements::Eq(eq_statement),
+                Statements::Select(sel_statement),
+            ],
+        );
 
         // Verify that num_variables returns the correct value
         assert_eq!(constraint.num_variables(), num_variables);
@@ -523,7 +575,14 @@ mod tests {
         let sel_statement = SelectStatement::new(num_variables, vec![sel_var], vec![sel_eval]);
 
         // Create constraint
-        let constraint: Constraint<F, EF> = Constraint::new(gamma, eq_statement, sel_statement);
+        let constraint: Constraint<F, EF> = Constraint::new(
+            gamma,
+            num_variables,
+            vec![
+                Statements::Eq(eq_statement),
+                Statements::Select(sel_statement),
+            ],
+        );
 
         // Initialize accumulator
         let mut eval = EF::ZERO;
@@ -551,7 +610,8 @@ mod tests {
         let eq_point = Point::new(vec![EF::from_u64(1), EF::from_u64(1)]);
         let eq_eval = EF::from_u64(10);
         let eq_statement = EqStatement::new_hypercube(vec![eq_point], vec![eq_eval]);
-        let constraint: Constraint<F, EF> = Constraint::new_eq_only(challenge, eq_statement);
+        let constraint: Constraint<F, EF> =
+            Constraint::new(challenge, 2, vec![Statements::Eq(eq_statement)]);
 
         // Start with a non-zero accumulator
         let initial_value = EF::from_u64(100);
@@ -580,7 +640,8 @@ mod tests {
         let eq_statement = EqStatement::new_hypercube(vec![eq_point], vec![eq_eval]);
 
         // Create constraint (eq-only for simplicity)
-        let constraint: Constraint<F, EF> = Constraint::new_eq_only(challenge, eq_statement);
+        let constraint: Constraint<F, EF> =
+            Constraint::new(challenge, num_variables, vec![Statements::Eq(eq_statement)]);
 
         // Combine into fresh accumulators
         let (combined, eval) = constraint.combine_new();
@@ -612,7 +673,8 @@ mod tests {
         let eq_point = Point::new(vec![EF::ZERO, EF::ONE]);
         let eq_eval = EF::from_u64(15);
         let eq_statement = EqStatement::new_hypercube(vec![eq_point], vec![eq_eval]);
-        let constraint: Constraint<F, EF> = Constraint::new_eq_only(challenge, eq_statement);
+        let constraint: Constraint<F, EF> =
+            Constraint::new(challenge, num_variables, vec![Statements::Eq(eq_statement)]);
 
         // Method 1: Use combine_new
         let (combined_new, eval_new) = constraint.combine_new();
@@ -635,119 +697,109 @@ mod tests {
     }
 
     #[test]
-    fn test_constraint_iter_eqs() {
-        // Test iteration over equality constraints with challenge weights
-
-        // Number of variables
+    fn test_constraint_statements_preserve_explicit_order() {
         let num_variables = 2;
-
-        // Random challenge (γ = 3 for easy verification)
-        let gamma = EF::from_u64(3);
-
-        // Create equality statement with 3 constraints
-        let eq_point_0 = Point::new(vec![EF::from_u64(1), EF::from_u64(2)]);
-        let eq_eval_0 = EF::from_u64(10);
-
-        let eq_point_1 = Point::new(vec![EF::from_u64(3), EF::from_u64(4)]);
-        let eq_eval_1 = EF::from_u64(20);
-
-        let eq_point_2 = Point::new(vec![EF::from_u64(5), EF::from_u64(6)]);
-        let eq_eval_2 = EF::from_u64(30);
-
-        let eq_statement = EqStatement::new_hypercube(
-            vec![eq_point_0, eq_point_1, eq_point_2],
-            vec![eq_eval_0, eq_eval_1, eq_eval_2],
-        );
-
-        // Create constraint
-        let constraint: Constraint<F, EF> = Constraint::new_eq_only(gamma, eq_statement);
-
-        // Collect iterator results
-        let results: Vec<_> = constraint.iter_eqs().collect();
-
-        // Verify that we have 3 pairs
-        assert_eq!(results.len(), 3);
-
-        // Verify challenge weights: γ^0 = 1, γ^1 = 3, γ^2 = 9
-        let expected_weights = [EF::from_u64(1), EF::from_u64(3), EF::from_u64(9)];
-
-        for (i, (point, coeff)) in results.iter().enumerate() {
-            // Verify challenge weight
-            assert_eq!(*coeff, expected_weights[i]);
-
-            // Verify point reference matches original
-            assert_eq!(point.num_variables(), num_variables);
-        }
-    }
-
-    #[test]
-    fn test_constraint_iter_sels() {
-        // Test iteration over select constraints with challenge weights
-
-        // Number of variables
-        let num_variables = 2;
-
-        // Random challenge (γ = 2 for easy verification)
         let gamma = EF::from_u64(2);
 
-        // Create equality statement with 2 constraints
-        // This will use challenge powers γ^0 and γ^1
-        let eq_point_0 = Point::new(vec![EF::from_u64(1), EF::from_u64(2)]);
-        let eq_eval_0 = EF::from_u64(10);
-        let eq_point_1 = Point::new(vec![EF::from_u64(3), EF::from_u64(4)]);
-        let eq_eval_1 = EF::from_u64(20);
-        let eq_statement =
-            EqStatement::new_hypercube(vec![eq_point_0, eq_point_1], vec![eq_eval_0, eq_eval_1]);
-
-        // Create select statement with 2 constraints
-        // These should use challenge powers γ^2 and γ^3
-        let sel_var_0 = F::from_u64(5);
-        let sel_eval_0 = EF::from_u64(30);
-        let sel_var_1 = F::from_u64(6);
-        let sel_eval_1 = EF::from_u64(40);
+        let eq_statement = EqStatement::new_hypercube(
+            vec![
+                Point::new(vec![EF::from_u64(1), EF::from_u64(2)]),
+                Point::new(vec![EF::from_u64(3), EF::from_u64(4)]),
+            ],
+            vec![EF::from_u64(10), EF::from_u64(20)],
+        );
         let sel_statement = SelectStatement::new(
             num_variables,
-            vec![sel_var_0, sel_var_1],
-            vec![sel_eval_0, sel_eval_1],
+            vec![F::from_u64(5), F::from_u64(6)],
+            vec![EF::from_u64(30), EF::from_u64(40)],
         );
 
-        // Create constraint
-        let constraint: Constraint<F, EF> = Constraint::new(gamma, eq_statement, sel_statement);
+        let constraint: Constraint<F, EF> = Constraint::new(
+            gamma,
+            num_variables,
+            vec![
+                Statements::Eq(eq_statement),
+                Statements::Select(sel_statement),
+            ],
+        );
 
-        // Collect iterator results
-        let results: Vec<_> = constraint.iter_sels().collect();
-
-        // Verify that we have 2 pairs
-        assert_eq!(results.len(), 2);
-
-        // Verify challenge weights: γ^2 = 4, γ^3 = 8
-        // (skipping the first 2 powers used by equality constraints)
-        let expected_weights = [EF::from_u64(4), EF::from_u64(8)];
-        let expected_vars = [sel_var_0, sel_var_1];
-
-        for (i, (var, coeff)) in results.iter().enumerate() {
-            // Verify challenge weight
-            assert_eq!(*coeff, expected_weights[i]);
-
-            // Verify variable reference matches original
-            assert_eq!(**var, expected_vars[i]);
-        }
+        assert_eq!(constraint.statements().len(), 2);
+        assert!(matches!(
+            &constraint.statements()[0],
+            Statements::Eq(statement) if statement.len() == 2
+        ));
+        assert!(matches!(
+            &constraint.statements()[1],
+            Statements::Select(statement) if statement.len() == 2
+        ));
     }
 
     #[test]
-    fn test_constraint_iter_sels_empty() {
-        // Test that iter_sels works correctly when there are no select constraints
+    fn test_constraint_combine_shifts_later_eq_groups() {
+        let num_variables = 4;
+        let gamma = EF::from_u64(3);
 
-        // Random challenge
-        let challenge = EF::from_u64(7);
+        let eq_point_0 = Point::new(vec![
+            EF::from_u64(1),
+            EF::from_u64(2),
+            EF::from_u64(3),
+            EF::from_u64(4),
+        ]);
+        let eq_eval_0 = EF::from_u64(5);
+        let eq_0 = EqStatement::new_hypercube(vec![eq_point_0.clone()], vec![eq_eval_0]);
 
-        // Create equality-only constraint
-        let eq_point = Point::new(vec![EF::from_u64(1), EF::from_u64(2)]);
-        let eq_eval = EF::from_u64(10);
-        let eq_statement = EqStatement::new_hypercube(vec![eq_point], vec![eq_eval]);
-        let constraint: Constraint<F, EF> = Constraint::new_eq_only(challenge, eq_statement);
+        let next_point = Point::new(vec![
+            EF::from_u64(6),
+            EF::from_u64(7),
+            EF::from_u64(8),
+            EF::from_u64(9),
+        ]);
+        let next_eval = EF::from_u64(10);
+        let mut next = NextStatement::initialize(num_variables);
+        next.add_evaluated_constraint(
+            Point::new(Vec::new()),
+            next_point.clone(),
+            next_eval,
+            VariableOrder::Prefix,
+        );
 
-        // Verify that the iterator is empty
-        assert_eq!(constraint.iter_sels().count(), 0);
+        let eq_point_1 = Point::new(vec![
+            EF::from_u64(11),
+            EF::from_u64(12),
+            EF::from_u64(13),
+            EF::from_u64(14),
+        ]);
+        let eq_eval_1 = EF::from_u64(15);
+        let eq_1 = EqStatement::new_hypercube(vec![eq_point_1.clone()], vec![eq_eval_1]);
+
+        let constraint: Constraint<F, EF> = Constraint::new(
+            gamma,
+            num_variables,
+            vec![
+                Statements::Eq(eq_0),
+                Statements::Next(next),
+                Statements::Eq(eq_1),
+            ],
+        );
+
+        let (combined, eval) = constraint.combine_new();
+
+        let mut expected = Poly::new_from_point(eq_point_0.as_slice(), EF::ONE);
+        expected
+            .as_mut_slice()
+            .iter_mut()
+            .zip(Poly::new_next_from_point(next_point.as_slice()).iter())
+            .for_each(|(out, &weight)| *out += gamma * weight);
+        expected
+            .as_mut_slice()
+            .iter_mut()
+            .zip(Poly::new_from_point(eq_point_1.as_slice(), gamma.square()).iter())
+            .for_each(|(out, &weight)| *out += weight);
+
+        assert_eq!(combined.as_slice(), expected.as_slice());
+        assert_eq!(
+            eval,
+            eq_eval_0 + gamma * next_eval + gamma.square() * eq_eval_1
+        );
     }
 }

@@ -74,8 +74,16 @@ pub trait Layout<F: TwoAdicField, EF: ExtensionField<F>>: Sized {
     /// Returns the number of variables of table `id`.
     fn num_variables_table(&self, id: usize) -> usize;
 
-    /// Records opening claims for the selected columns of `table_idx`.
-    fn eval<Ch>(&mut self, table_idx: usize, polys: &[usize], challenger: &mut Ch) -> Vec<EF>
+    /// Records current and repeat-last next opening claims for selected columns.
+    ///
+    /// Returned evaluations are ordered as `current` first, then `next`.
+    fn eval<Ch>(
+        &mut self,
+        table_idx: usize,
+        current: &[usize],
+        next: &[usize],
+        challenger: &mut Ch,
+    ) -> Vec<EF>
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>;
 
@@ -219,7 +227,7 @@ pub(super) mod test_utils {
         // `add_claim` samples the point + absorbs the evals internally, mirroring
         // the prover's `eval`.
         for (table_idx, polys, evals) in opening_claims {
-            verifier.add_claim(table_idx, &polys, &evals, &mut verifier_challenger);
+            verifier.add_claim(table_idx, &polys, &[], &evals, &mut verifier_challenger);
         }
 
         // Re-sample the virtual claim too; mirrors the prover's `add_virtual_eval`.
@@ -358,7 +366,7 @@ pub(super) mod test_utils {
         let strategy = L::strategy();
         let order = strategy.variable_order;
         let opening_claims = replay_schedule(calls, |t, polys| {
-            prover_state.eval(t, polys, &mut prover_challenger)
+            prover_state.eval(t, polys, &[], &mut prover_challenger)
         });
         let virtual_eval = prover_state.add_virtual_eval(&mut prover_challenger);
 
@@ -522,20 +530,26 @@ pub(super) mod test_utils {
 
 #[cfg(test)]
 mod tests {
-
+    use alloc::vec;
     use alloc::vec::Vec;
 
+    use p3_challenger::FieldChallenger;
+    use p3_field::PrimeCharacteristicRing;
+    use p3_multilinear_util::point::Point;
+    use p3_multilinear_util::poly::Poly;
     use proptest::prelude::*;
 
     use super::test_utils::{
-        ASCENDING_POLYS, NON_ASCENDING_POLYS, arb_opening_schedule, arb_witness_and_schedule,
+        ASCENDING_POLYS, NON_ASCENDING_POLYS, POW_BITS, ROUND_EQ_POINTS, ROUND_SEL_POINTS,
+        arb_opening_schedule, arb_witness_and_schedule, drive_intermediate_and_final,
         table_shapes_from,
     };
     use super::{PrefixProver, SuffixProver};
-    use crate::layout::Layout;
+    use crate::SumcheckData;
     use crate::layout::prover::test_utils::{
         FOLDING, build_tables, run_roundtrip_test, table_shapes, tables_from_shape,
     };
+    use crate::layout::{Layout, Verifier};
     use crate::tests::*;
 
     #[test]
@@ -548,10 +562,10 @@ mod tests {
             assert_eq!(prover.num_claims(), 0);
 
             let mut ch = challenger();
-            prover.eval(0, &[0, 1], &mut ch);
+            prover.eval(0, &[0, 1], &[], &mut ch);
             assert_eq!(prover.num_claims(), 2);
 
-            prover.eval(1, &[0], &mut ch);
+            prover.eval(1, &[0], &[], &mut ch);
             assert_eq!(prover.num_claims(), 3);
         }
 
@@ -563,6 +577,42 @@ mod tests {
             build_tables(),
             FOLDING,
         ));
+    }
+
+    #[test]
+    fn eval_current_preserves_order() {
+        fn run_eval_current_test_with<L>()
+        where
+            L: Layout<F, EF>,
+        {
+            let mut prover = L::from_witness(L::new_witness(build_tables(), FOLDING));
+            let mut reversed = L::from_witness(L::new_witness(build_tables(), FOLDING));
+
+            let mut prover_ch = challenger();
+            let mut reversed_ch = challenger();
+
+            let evals = prover.eval(0, &[1, 0], &[], &mut prover_ch);
+            let reversed_evals = reversed.eval(0, &[0, 1], &[], &mut reversed_ch);
+
+            assert_eq!(evals, reversed_evals.into_iter().rev().collect::<Vec<_>>());
+            assert_eq!(prover.num_claims(), reversed.num_claims());
+        }
+
+        run_eval_current_test_with::<SuffixProver<F, EF>>();
+        run_eval_current_test_with::<PrefixProver<F, EF>>();
+    }
+
+    #[test]
+    fn prefix_eval_accepts_next() {
+        let mut prover = PrefixProver::<F, EF>::from_witness(PrefixProver::<F, EF>::new_witness(
+            build_tables(),
+            FOLDING,
+        ));
+        let mut ch = challenger();
+
+        let evals = prover.eval(0, &[], &[0], &mut ch);
+        assert_eq!(evals.len(), 1);
+        assert_eq!(prover.num_claims(), 1);
     }
 
     #[test]
@@ -593,6 +643,227 @@ mod tests {
             &table_shapes(),
             NON_ASCENDING_POLYS,
         );
+    }
+
+    #[test]
+    fn suffix_roundtrip_mixed_eq_next_requests() {
+        let witness = SuffixProver::<F, EF>::new_witness(build_tables(), FOLDING);
+        let shapes = table_shapes();
+        let stacked_num_variables = witness.num_variables();
+        let stacked_poly = witness.poly().clone();
+        let strategy = SuffixProver::<F, EF>::strategy();
+
+        let schedule = [
+            (0, vec![0], vec![1]),
+            (1, vec![], vec![0]),
+            (0, vec![1], vec![0]),
+        ];
+
+        let mut prover_challenger = challenger();
+        let mut prover_state = SuffixProver::<F, EF>::from_witness(witness);
+        let opening_claims = schedule
+            .iter()
+            .map(|(table_idx, current, next)| {
+                let evals = prover_state.eval(
+                    *table_idx,
+                    current.as_slice(),
+                    next.as_slice(),
+                    &mut prover_challenger,
+                );
+                (*table_idx, current.clone(), next.clone(), evals)
+            })
+            .collect::<Vec<_>>();
+        let virtual_eval = prover_state.add_virtual_eval(&mut prover_challenger);
+
+        let mut proof0 = SumcheckData::<F, EF>::default();
+        let (mut prover, mut prover_randomness) =
+            prover_state.into_sumcheck(&mut proof0, 0, &mut prover_challenger);
+        assert_eq!(proof0.num_rounds(), FOLDING);
+        assert_eq!(prover.num_variables(), stacked_num_variables - FOLDING);
+
+        let (proof1, proof2, intermediate_evals, final_folded_value) = drive_intermediate_and_final(
+            &mut prover,
+            &mut prover_challenger,
+            &mut prover_randomness,
+            stacked_num_variables,
+        );
+
+        let final_eval = stacked_poly.eval_base(&prover_randomness.reversed());
+        assert_eq!(final_eval, final_folded_value);
+
+        let mut verifier_challenger = challenger();
+        let mut verifier = Verifier::<F, EF>::new(&shapes, strategy);
+        for (table_idx, current, next, evals) in opening_claims {
+            verifier.add_claim(table_idx, &current, &next, &evals, &mut verifier_challenger);
+        }
+        verifier.add_virtual_eval(virtual_eval, &mut verifier_challenger);
+
+        let alpha = verifier_challenger.sample_algebra_element();
+        let initial_constraint = verifier.constraint(alpha);
+        let mut sum = EF::ZERO;
+        initial_constraint.combine_evals(&mut sum);
+        assert_eq!(sum, verifier.sum(alpha));
+
+        let mut constraints = vec![initial_constraint];
+        let mut verifier_challenge = Point::new(vec![]);
+        verifier_challenge.extend(
+            &proof0
+                .verify_rounds(&mut verifier_challenger, &mut sum, 0)
+                .unwrap(),
+        );
+
+        let intermediate_constraint = read_constraint(
+            &mut verifier_challenger,
+            &intermediate_evals,
+            stacked_num_variables - FOLDING,
+            ROUND_EQ_POINTS,
+            ROUND_SEL_POINTS,
+        );
+        intermediate_constraint.combine_evals(&mut sum);
+        constraints.push(intermediate_constraint);
+        verifier_challenge.extend(
+            &proof1
+                .verify_rounds(&mut verifier_challenger, &mut sum, POW_BITS)
+                .unwrap(),
+        );
+        verifier_challenge.extend(
+            &proof2
+                .verify_rounds(&mut verifier_challenger, &mut sum, 0)
+                .unwrap(),
+        );
+
+        assert_eq!(prover_randomness, verifier_challenge);
+        let weights = strategy
+            .variable_order
+            .eval_constraints_poly(&constraints, &verifier_challenge);
+        assert_eq!(sum, final_folded_value * weights);
+    }
+
+    #[test]
+    fn prefix_roundtrip_mixed_eq_next_requests() {
+        let witness = PrefixProver::<F, EF>::new_witness(build_tables(), FOLDING);
+        let shapes = table_shapes();
+        let stacked_num_variables = witness.num_variables();
+        let stacked_poly = witness.poly().clone();
+        let strategy = PrefixProver::<F, EF>::strategy();
+
+        let schedule = [
+            (0, vec![0], vec![1]),
+            (1, vec![], vec![0]),
+            (0, vec![1], vec![0]),
+        ];
+
+        let mut prover_challenger = challenger();
+        let mut prover_state = PrefixProver::<F, EF>::from_witness(witness);
+        let opening_claims = schedule
+            .iter()
+            .map(|(table_idx, current, next)| {
+                let evals = prover_state.eval(
+                    *table_idx,
+                    current.as_slice(),
+                    next.as_slice(),
+                    &mut prover_challenger,
+                );
+                (*table_idx, current.clone(), next.clone(), evals)
+            })
+            .collect::<Vec<_>>();
+        let virtual_eval = prover_state.add_virtual_eval(&mut prover_challenger);
+
+        let mut proof0 = SumcheckData::<F, EF>::default();
+        let (mut prover, mut prover_randomness) =
+            prover_state.into_sumcheck(&mut proof0, 0, &mut prover_challenger);
+        assert_eq!(proof0.num_rounds(), FOLDING);
+        assert_eq!(prover.num_variables(), stacked_num_variables - FOLDING);
+
+        let (proof1, proof2, intermediate_evals, final_folded_value) = drive_intermediate_and_final(
+            &mut prover,
+            &mut prover_challenger,
+            &mut prover_randomness,
+            stacked_num_variables,
+        );
+
+        let final_eval = stacked_poly.eval_base(&prover_randomness);
+        assert_eq!(final_eval, final_folded_value);
+
+        let mut verifier_challenger = challenger();
+        let mut verifier = Verifier::<F, EF>::new(&shapes, strategy);
+        for (table_idx, current, next, evals) in opening_claims {
+            verifier.add_claim(table_idx, &current, &next, &evals, &mut verifier_challenger);
+        }
+        verifier.add_virtual_eval(virtual_eval, &mut verifier_challenger);
+
+        let alpha = verifier_challenger.sample_algebra_element();
+        let initial_constraint = verifier.constraint(alpha);
+        let mut sum = EF::ZERO;
+        initial_constraint.combine_evals(&mut sum);
+        assert_eq!(sum, verifier.sum(alpha));
+
+        let mut constraints = vec![initial_constraint];
+        let mut verifier_challenge = Point::new(vec![]);
+        verifier_challenge.extend(
+            &proof0
+                .verify_rounds(&mut verifier_challenger, &mut sum, 0)
+                .unwrap(),
+        );
+
+        let intermediate_constraint = read_constraint(
+            &mut verifier_challenger,
+            &intermediate_evals,
+            stacked_num_variables - FOLDING,
+            ROUND_EQ_POINTS,
+            ROUND_SEL_POINTS,
+        );
+        intermediate_constraint.combine_evals(&mut sum);
+        constraints.push(intermediate_constraint);
+        verifier_challenge.extend(
+            &proof1
+                .verify_rounds(&mut verifier_challenger, &mut sum, POW_BITS)
+                .unwrap(),
+        );
+        verifier_challenge.extend(
+            &proof2
+                .verify_rounds(&mut verifier_challenger, &mut sum, 0)
+                .unwrap(),
+        );
+
+        assert_eq!(prover_randomness, verifier_challenge);
+        let weights = strategy
+            .variable_order
+            .eval_constraints_poly(&constraints, &verifier_challenge);
+        assert_eq!(sum, final_folded_value * weights);
+    }
+
+    #[test]
+    fn prefix_next_is_slot_local_not_full_stacked_next() {
+        let col0 = Poly::new(vec![
+            F::from_u64(3),
+            F::from_u64(5),
+            F::from_u64(7),
+            F::from_u64(11),
+        ]);
+        let col1 = Poly::new(vec![
+            F::from_u64(13),
+            F::from_u64(17),
+            F::from_u64(19),
+            F::from_u64(23),
+        ]);
+
+        let mut stacked = F::zero_vec(8);
+        for local_idx in 0..4 {
+            stacked[local_idx << 1] = col0.as_slice()[local_idx];
+            stacked[(local_idx << 1) | 1] = col1.as_slice()[local_idx];
+        }
+        let stacked = Poly::new(stacked);
+
+        let local_point = Point::new(vec![EF::from_u64(29), EF::from_u64(31)]);
+        let selector_point = Point::new(vec![EF::ZERO]);
+        let mut full_point = local_point.clone();
+        full_point.extend(&selector_point);
+
+        let slot_local_next = col0.eval_next_base(&local_point);
+        let full_stacked_next = stacked.eval_next_base(&full_point);
+
+        assert_ne!(slot_local_next, full_stacked_next);
     }
 
     fn run_shape_test<L>(shape: &[(usize, usize)], schedule: &[(usize, Vec<usize>)])

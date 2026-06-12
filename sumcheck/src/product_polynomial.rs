@@ -1022,8 +1022,8 @@ mod tests {
         // The combine function should:
         // 1. Update the weight polynomial with new constraint contributions
         // 2. Update the running sum accordingly
-        use crate::constraints::Constraint;
         use crate::constraints::statement::EqStatement;
+        use crate::constraints::{Constraint, Statements};
 
         let num_variables = 2;
         let evals = Poly::new(vec![EF::ONE; 4]);
@@ -1044,7 +1044,8 @@ mod tests {
 
         // Create constraint with the eq_statement.
         let challenge = EF::from_u64(7);
-        let constraint = Constraint::<F, EF>::new_eq_only(challenge, eq_statement);
+        let constraint =
+            Constraint::<F, EF>::new(challenge, num_variables, vec![Statements::Eq(eq_statement)]);
 
         let mut sum = poly.dot_product();
         poly.combine(&mut sum, &constraint);

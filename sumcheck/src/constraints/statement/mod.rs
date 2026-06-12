@@ -9,8 +9,12 @@
 /// Equality-based evaluation constraints with batched eq-polynomial combination.
 pub mod eq;
 
+/// Repeat-last Next evaluation constraints.
+pub mod next;
+
 /// Selection-based evaluation constraints using the power-map expansion.
 pub mod select;
 
 pub use eq::EqStatement;
+pub use next::NextStatement;
 pub use select::SelectStatement;

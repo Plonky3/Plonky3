@@ -113,12 +113,19 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         self.tables[id].num_variables()
     }
 
-    /// Records opening claims for the selected columns of `table_idx`.
+    /// Records current and repeat-last Next opening claims for `table_idx`.
+    ///
+    /// Both request lists use table-local column indices and share one sampled
+    /// local opening point. Current openings evaluate columns at that point;
+    /// Next openings evaluate the repeat-last successor view at the same point.
+    /// Returned evaluations are ordered as all `current` openings followed by
+    /// all `next` openings.
     ///
     /// # Arguments
     ///
     /// - `table_idx`  — source table index.
-    /// - `polys`      — columns to open; must be non-empty.
+    /// - `current`    — columns opened at the sampled point.
+    /// - `next`       — columns opened through the repeat-last Next view.
     /// - `challenger` — Fiat–Shamir transcript.
     ///
     /// # Fiat–Shamir
@@ -129,18 +136,23 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
     ///
     /// # Panics
     ///
-    /// - Columns list must be non-empty.
+    /// - At least one of `current` or `next` must be non-empty.
     #[tracing::instrument(skip_all)]
-    fn eval<Ch>(&mut self, table_idx: usize, polys: &[usize], challenger: &mut Ch) -> Vec<EF>
+    fn eval<Ch>(
+        &mut self,
+        table_idx: usize,
+        current: &[usize],
+        next: &[usize],
+        challenger: &mut Ch,
+    ) -> Vec<EF>
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Precondition: opening nothing would silently push an empty ProverMultiClaim.
         assert!(
-            !polys.is_empty(),
+            !current.is_empty() || !next.is_empty(),
             "opening schedule must name at least one column"
         );
-
         // Sample the local-frame opening point from the transcript.
         let table = &self.tables[table_idx];
         let point = Point::expand_from_univariate(
@@ -151,25 +163,35 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         // Factorise the point once; every selected column reuses it.
         let point = SvoPoint::new_packed(self.folding, &point);
 
-        // Evaluate each column at the SVO point; split into (opening, eval).
-        let (openings, evals): (Vec<_>, Vec<EF>) = polys
+        // Evaluate each current column at the SVO point; split into (opening, eval).
+        let (current_openings, mut evals): (Vec<_>, Vec<EF>) = current
             .iter()
-            .map(|&poly_idx| {
+            .copied()
+            .map(|poly_idx| {
                 let (eval, partial_evals) = point.eval(table.poly(poly_idx));
-                let opening = Opening {
-                    poly_idx: Some(poly_idx),
-                    eval,
-                    data: partial_evals,
-                };
-                (opening, eval)
+                (Opening::new_with_data(poly_idx, eval, partial_evals), eval)
             })
             .unzip();
+
+        let (next_openings, next_evals): (Vec<_>, Vec<EF>) = next
+            .iter()
+            .copied()
+            .map(|poly_idx| {
+                let (eval, partial_evals) = point.eval_next_prefix(table.poly(poly_idx));
+                (Opening::new_with_data(poly_idx, eval, partial_evals), eval)
+            })
+            .unzip();
+        evals.extend(next_evals);
 
         // Bind the evaluations into the transcript; the verifier absorbs the same bytes.
         challenger.observe_algebra_slice(&evals);
 
         // Store the batch for the later sumcheck reduction.
-        self.claim_map[table_idx].push(ProverMultiClaim::new(point, openings));
+        self.claim_map[table_idx].push(ProverMultiClaim::new(
+            point,
+            current_openings,
+            next_openings,
+        ));
 
         evals
     }
@@ -221,6 +243,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
             &ProverMultiClaim::new(
                 SvoPoint::new_unpacked(self.folding, &point, VariableOrder::Prefix),
                 openings,
+                Vec::new(),
             ),
             &weights,
         );
@@ -333,7 +356,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         let compressed = tracing::info_span!("compress_prefix_to_packed")
             .in_scope(|| self.poly.compress_prefix_to_packed(&rs, EF::ONE));
 
-        let weights = self.combine_eqs(&rs, alpha).pack::<F, EF>();
+        let weights = self.combine_weights(&rs, alpha).pack::<F, EF>();
         let prod_poly =
             ProductPolynomial::<F, EF>::new_packed(VariableOrder::Prefix, compressed, weights);
         debug_assert_eq!(prod_poly.dot_product(), sum);
@@ -387,7 +410,10 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
         // Concrete openings: three loops, no filter.
         for placement in &self.placements {
             for claim in &self.claim_map[placement.idx()] {
-                for opening in claim.openings() {
+                for opening in claim.current_openings() {
+                    sum += opening.eval() * alphas.next().unwrap();
+                }
+                for opening in claim.next_openings() {
                     sum += opening.eval() * alphas.next().unwrap();
                 }
             }
@@ -402,9 +428,9 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
         sum
     }
 
-    /// Builds the residual equality-weight polynomial after the prefix SVO rounds.
+    /// Builds the residual weight polynomial after the prefix SVO rounds.
     #[tracing::instrument(skip_all)]
-    pub(crate) fn combine_eqs(&self, rs: &Point<EF>, alpha: EF) -> Poly<EF> {
+    pub(crate) fn combine_weights(&self, rs: &Point<EF>, alpha: EF) -> Poly<EF> {
         assert_eq!(rs.num_variables(), self.folding);
         let mut out = Poly::<EF>::zero(self.num_variables - rs.num_variables());
 
@@ -414,13 +440,28 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
             let local_rest_variables =
                 self.num_variables_table(placement.idx()) - rs.num_variables();
             for claim in &self.claim_map[placement.idx()] {
-                for opening in claim.openings() {
+                for opening in claim.current_openings() {
                     let col = opening.poly_idx().unwrap();
                     let selector = &placement.selectors()[col];
                     let mut local = Poly::<EF>::zero(local_rest_variables);
                     claim
                         .point()
                         .accumulate_into(local.as_mut_slice(), rs, alphas.next().unwrap());
+
+                    for (local_idx, &value) in local.as_slice().iter().enumerate() {
+                        let dst = (local_idx << selector.num_variables()) | selector.index();
+                        out.as_mut_slice()[dst] += value;
+                    }
+                }
+                for opening in claim.next_openings() {
+                    let col = opening.poly_idx().unwrap();
+                    let selector = &placement.selectors()[col];
+                    let mut local = Poly::<EF>::zero(local_rest_variables);
+                    claim.point().accumulate_next_prefix_into(
+                        local.as_mut_slice(),
+                        rs,
+                        alphas.next().unwrap(),
+                    );
 
                     for (local_idx, &value) in local.as_slice().iter().enumerate() {
                         let dst = (local_idx << selector.num_variables()) | selector.index();

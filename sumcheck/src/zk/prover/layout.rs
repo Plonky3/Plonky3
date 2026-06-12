@@ -76,7 +76,7 @@ where
         let compressed = tracing::info_span!("compress_prefix_to_packed")
             .in_scope(|| self.poly.compress_prefix_to_packed(rs, eps));
         // Pack the equality weights for the SIMD-friendly residual rounds.
-        let weights = self.combine_eqs(rs, alpha).pack::<F, EF>();
+        let weights = self.combine_weights(rs, alpha).pack::<F, EF>();
         ProductPolynomial::new_packed(VariableOrder::Prefix, compressed, weights)
     }
 }
@@ -111,7 +111,7 @@ where
         let compressed = tracing::info_span!("compress_stacked_with_eps")
             .in_scope(|| self.compress_stacked_scaled(&reversed, eps));
         // The SVO preprocessing covers what packing would help; no packing here.
-        let weights = self.combine_eqs(&reversed, alpha);
+        let weights = self.combine_weights(&reversed, alpha);
         ProductPolynomial::new_unpacked(VariableOrder::Suffix, compressed, weights)
     }
 }

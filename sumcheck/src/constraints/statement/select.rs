@@ -265,6 +265,13 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         self.vars.len()
     }
 
+    /// Iterates over this statement's weights evaluated at `row`.
+    pub fn weights_at<'a>(&'a self, row: &'a Point<EF>) -> impl Iterator<Item = EF> + 'a {
+        self.vars
+            .iter()
+            .map(|&var| Point::eval_select(var, row.as_slice()))
+    }
+
     /// Verifies that a given polynomial satisfies all constraints in the statement.
     ///
     /// For each constraint `(z_i, s_i)`, this method interprets the evaluation table as

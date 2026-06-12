@@ -8,12 +8,13 @@ use p3_field::{ExtensionField, Field, dot_product};
 use p3_multilinear_util::point::Point;
 
 use crate::Claim;
-use crate::constraints::Constraint;
-use crate::constraints::statement::EqStatement;
+use crate::constraints::statement::{EqStatement, NextStatement};
+use crate::constraints::{Constraint, Statements};
 use crate::layout::LayoutStrategy;
 use crate::layout::opening::{VerifierMultiClaim, VerifierOpening, VerifierVirtualClaim};
 use crate::layout::plan::{LayoutShape, plan_layout};
 use crate::layout::witness::{Selector, TablePlacement};
+use crate::strategy::VariableOrder;
 use crate::table::TableShape;
 
 /// Verifier-side layout and claim registry.
@@ -107,8 +108,9 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     /// # Arguments
     ///
     /// - `table_idx`  — source table index.
-    /// - `polys`      — column indices that were opened; must be non-empty.
-    /// - `evals`      — claimed evaluations, aligned with the column list.
+    /// - `current`    — column indices opened at the sampled point.
+    /// - `next`       — column indices opened at the repeat-last next point.
+    /// - `evals`      — claimed evaluations, ordered as `current` then `next`.
     /// - `challenger` — Fiat–Shamir transcript.
     ///
     /// # Fiat–Shamir
@@ -119,13 +121,14 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     ///
     /// # Panics
     ///
-    /// - Columns list must be non-empty.
-    /// - Column list and evaluation list must have equal length.
+    /// - At least one current or next column must be requested.
+    /// - `current.len() + next.len()` must equal `evals.len()`.
     /// - Every column index must be in range for this table.
     pub fn add_claim<Ch>(
         &mut self,
         table_idx: usize,
-        polys: &[usize],
+        current: &[usize],
+        next: &[usize],
         evals: &[EF],
         challenger: &mut Ch,
     ) where
@@ -134,11 +137,19 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         let placement = self.placement(table_idx);
         // Preconditions.
         assert!(
-            !polys.is_empty(),
+            !current.is_empty() || !next.is_empty(),
             "opening schedule must name at least one column"
         );
-        assert_eq!(polys.len(), evals.len());
-        assert!(polys.iter().all(|&i| i < placement.num_polys()));
+        assert_eq!(current.len() + next.len(), evals.len());
+        assert!(
+            current
+                .iter()
+                .all(|&poly_idx| poly_idx < placement.num_polys())
+        );
+        assert!(
+            next.iter()
+                .all(|&poly_idx| poly_idx < placement.num_polys())
+        );
 
         // Sample the local-frame opening point from the transcript.
         let point = Point::expand_from_univariate(
@@ -149,15 +160,28 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
         // Absorb the evals into the transcript; mirrors the prover's eval.
         challenger.observe_algebra_slice(evals);
 
-        // Pair each column index with its claimed evaluation into an opening.
-        let openings = polys
+        let (current_evals, next_evals) = evals.split_at(current.len());
+
+        // Pair each column index with its claimed evaluation into typed openings.
+        let current_openings = current
             .iter()
-            .zip(evals.iter())
-            .map(|(&poly_idx, &eval)| VerifierOpening::new(poly_idx, eval))
+            .copied()
+            .zip(current_evals.iter().copied())
+            .map(|(poly_idx, eval)| VerifierOpening::new(poly_idx, eval))
+            .collect();
+        let next_openings = next
+            .iter()
+            .copied()
+            .zip(next_evals.iter().copied())
+            .map(|(poly_idx, eval)| VerifierOpening::new(poly_idx, eval))
             .collect();
 
         // Store the batch under this table's claim list.
-        self.claim_map[table_idx].push(VerifierMultiClaim::new(point, openings));
+        self.claim_map[table_idx].push(VerifierMultiClaim::new(
+            point,
+            current_openings,
+            next_openings,
+        ));
     }
 
     /// Records a virtual evaluation claim on the full stacked polynomial.
@@ -194,15 +218,20 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     /// - Concrete openings first, walked in stacked-polynomial order.
     /// - Virtual claims continue the alpha sequence after the concrete ones.
     pub fn sum(&self, alpha: EF) -> EF {
-        // Concrete openings: three nested iterators, no filter. Alphas match insertion order.
-        let concrete = dot_product::<EF, _, _>(
-            self.placements
-                .iter()
-                .flat_map(|placement| &self.claim_map[placement.idx()])
-                .flat_map(VerifierMultiClaim::openings)
-                .map(VerifierOpening::eval),
-            alpha.powers(),
-        );
+        let mut concrete = EF::ZERO;
+        let mut alphas = alpha.powers();
+
+        // Concrete openings: three loops, no filter. Alphas match insertion order.
+        for placement in &self.placements {
+            for claim in &self.claim_map[placement.idx()] {
+                for opening in claim.current_openings() {
+                    concrete += opening.eval() * alphas.next().unwrap();
+                }
+                for opening in claim.next_openings() {
+                    concrete += opening.eval() * alphas.next().unwrap();
+                }
+            }
+        }
 
         // Virtual claims: continue the alpha sequence right after the concrete ones.
         let virtuals = dot_product::<EF, _, _>(
@@ -220,14 +249,16 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     /// - Concrete opening: equality at the selector-lifted claim point.
     /// - Virtual claim: equality at the full stacked point.
     pub fn constraint(&self, alpha: EF) -> Constraint<F, EF> {
-        // Output statement spans the full stacked variable space.
-        let mut eq_statement = EqStatement::initialize(self.k);
+        // Output statements span the full stacked variable space and preserve
+        // the exact mixed Eq/Next insertion order used by `sum`.
+        let mut statements = Vec::new();
 
         // Concrete contributions: walk each opening in insertion order and lift
         // its claim point through the selector for that opening's column.
         for placement in &self.placements {
             for claim in &self.claim_map[placement.idx()] {
-                for opening in claim.openings() {
+                let mut eq_statement = EqStatement::initialize(self.k);
+                for opening in claim.current_openings() {
                     // The opening's column tells us which selector to lift through.
                     // Claims recorded through `add_claim` always bind a column,
                     // so a virtual (column-free) opening cannot appear here.
@@ -241,16 +272,42 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
                     };
                     eq_statement.add_evaluated_constraint(lifted, opening.eval());
                 }
+                if !eq_statement.is_empty() {
+                    statements.push(Statements::Eq(eq_statement));
+                }
+
+                let mut next_statement = NextStatement::initialize(self.k);
+                for opening in claim.next_openings() {
+                    let col = opening.poly_idx().unwrap();
+                    let var_order = if self.strategy.reverse_selectors {
+                        VariableOrder::Suffix
+                    } else {
+                        VariableOrder::Prefix
+                    };
+                    next_statement.add_evaluated_constraint(
+                        placement.selectors()[col].point(),
+                        claim.point().clone(),
+                        opening.eval(),
+                        var_order,
+                    );
+                }
+                if !next_statement.is_empty() {
+                    statements.push(Statements::Next(next_statement));
+                }
             }
         }
 
         // Virtual contributions: claim points already span the full stacked space.
+        let mut virtual_statement = EqStatement::initialize(self.k);
         for claim in &self.virtual_claims {
-            eq_statement.add_evaluated_constraint(claim.point.clone(), claim.eval);
+            virtual_statement.add_evaluated_constraint(claim.point.clone(), claim.eval);
+        }
+        if !virtual_statement.is_empty() {
+            statements.push(Statements::Eq(virtual_statement));
         }
 
         // Wrap the assembled statement into an alpha-batched constraint.
-        Constraint::new_eq_only(alpha, eq_statement)
+        Constraint::new(alpha, self.k, statements)
     }
 
     /// Returns the placement metadata for the given source table.
@@ -360,11 +417,17 @@ mod tests {
         let mut ch = challenger();
 
         // Add two openings on table 0; count jumps from 0 to 2.
-        verifier.add_claim(0, &[0, 1], &[EF::from_u64(7), EF::from_u64(11)], &mut ch);
+        verifier.add_claim(
+            0,
+            &[0, 1],
+            &[],
+            &[EF::from_u64(7), EF::from_u64(11)],
+            &mut ch,
+        );
         assert_eq!(verifier.num_claims(), 2);
 
         // Add one opening on table 1; count jumps from 2 to 3.
-        verifier.add_claim(1, &[0], &[EF::from_u64(13)], &mut ch);
+        verifier.add_claim(1, &[0], &[], &[EF::from_u64(13)], &mut ch);
         assert_eq!(verifier.num_claims(), 3);
     }
 
@@ -385,7 +448,13 @@ mod tests {
         let mut ch = challenger();
 
         // Concrete claim: two columns of table 0.
-        verifier.add_claim(0, &[0, 1], &[EF::from_u64(7), EF::from_u64(11)], &mut ch);
+        verifier.add_claim(
+            0,
+            &[0, 1],
+            &[],
+            &[EF::from_u64(7), EF::from_u64(11)],
+            &mut ch,
+        );
 
         // Virtual claim: covers the full stacked space.
         verifier.add_virtual_eval(EF::from_u64(13), &mut ch);
@@ -425,7 +494,7 @@ mod tests {
 
         // Record a single opening on table 1; table 0 stays empty.
         let mut ch = challenger();
-        verifier.add_claim(1, &[0], &[EF::from_u64(9)], &mut ch);
+        verifier.add_claim(1, &[0], &[], &[EF::from_u64(9)], &mut ch);
 
         // Check: only one opening → sum equals its eval scaled by alpha^0.
         assert_eq!(verifier.sum(EF::from_u64(3)), EF::from_u64(9));

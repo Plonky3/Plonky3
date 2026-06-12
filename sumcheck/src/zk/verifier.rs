@@ -176,7 +176,8 @@ where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Delegate; the HVZK overlay carries no extra state at claim time.
-        self.inner.add_claim(table_idx, polys, evals, challenger);
+        self.inner
+            .add_claim(table_idx, polys, &[], evals, challenger);
     }
 
     /// Records a virtual evaluation claim on the inner verifier.

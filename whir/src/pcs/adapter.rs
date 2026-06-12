@@ -102,7 +102,7 @@ where
 
         let evals = protocol
             .iter_openings()
-            .map(|(table_idx, polys)| prover_data.layout.eval(table_idx, polys, challenger))
+            .map(|(table_idx, polys)| prover_data.layout.eval(table_idx, polys, &[], challenger))
             .collect::<Vec<_>>();
 
         self.prove(
@@ -155,7 +155,7 @@ where
                     actual: evals.len(),
                 });
             }
-            layout_verifier.add_claim(table_idx, polys, evals, challenger);
+            layout_verifier.add_claim(table_idx, polys, &[], evals, challenger);
         }
 
         let alpha = challenger.sample_algebra_element();
