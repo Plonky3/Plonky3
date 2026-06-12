@@ -390,11 +390,18 @@ where
             });
             let mut packed_digest = c.compress(children);
 
-            let tallest_digest = h.hash_iter(
-                matrices_to_inject
-                    .iter()
-                    .flat_map(|m| m.vertically_packed_row(first_row)),
-            );
+            // As in `first_digest_layer`, the single-matrix case feeds `h` the
+            // row iterator directly: a `flat_map` compound iterator defeats the
+            // optimizer's vectorization of the absorb loop.
+            let tallest_digest: [PW; DIGEST_ELEMS] = if let [m] = matrices_to_inject {
+                h.hash_iter(m.vertically_packed_row(first_row))
+            } else {
+                h.hash_iter(
+                    matrices_to_inject
+                        .iter()
+                        .flat_map(|m| m.vertically_packed_row(first_row)),
+                )
+            };
             let inject_inputs: [[PW; DIGEST_ELEMS]; N] = array::from_fn(|n| {
                 if n == 0 {
                     packed_digest
