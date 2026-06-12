@@ -803,6 +803,47 @@ pub(crate) mod test {
     type PackedF = <F as p3_field::Field>::Packing;
     type EF = BinomialExtensionField<F, 4>;
 
+    #[test]
+    fn new_next_from_point_shifts_and_repeats_last_row() {
+        // The empty point has a single row, so the successor table is just [1].
+        assert_eq!(Poly::<F>::new_next_from_point(&[]).as_slice(), &[F::ONE]);
+
+        // One variable: the equality table for [a] is [1 - a, a].
+        // The successor table zeroes row 0, shifts up, and folds the maximal
+        // weight back into the last row: [0, (1 - a) + a] = [0, 1].
+        let a = F::from_u64(5);
+        assert_eq!(
+            Poly::new_next_from_point(&[a]).as_slice(),
+            &[F::ZERO, F::ONE],
+        );
+    }
+
+    #[test]
+    fn eval_next_base_matches_shifted_table_evaluation() {
+        // The successor view reads each row at the next index, with the maximal
+        // row repeating itself.
+        //
+        //     rows    [2, 3, 5, 7]
+        //     succ -> [3, 5, 7, 7]   (row x -> x + 1; the last row repeats)
+        let poly = Poly::new(vec![
+            F::from_u64(2),
+            F::from_u64(3),
+            F::from_u64(5),
+            F::from_u64(7),
+        ]);
+        let shifted = Poly::new(vec![
+            F::from_u64(3),
+            F::from_u64(5),
+            F::from_u64(7),
+            F::from_u64(7),
+        ]);
+        let point = Point::new(vec![F::from_u64(11), F::from_u64(13)]);
+
+        // Evaluating through the successor view must equal evaluating the
+        // explicit shifted table at the same point.
+        assert_eq!(poly.eval_next_base(&point), shifted.eval_base(&point));
+    }
+
     /// Naive method to evaluate a multilinear polynomial for testing.
     pub(crate) fn eval_reference<F: Field, EF: ExtensionField<F>>(evals: &[F], point: &[EF]) -> EF {
         let eq = Poly::new_from_point(point, EF::ONE);

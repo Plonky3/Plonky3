@@ -135,10 +135,9 @@ where
     #[must_use]
     #[inline]
     pub fn eval_select<EF: ExtensionField<F>>(mut var: F, point: &[EF]) -> EF {
-        // Walk coordinates from the highest variable down to the lowest.
-        // The square-power vector is built lazily: the running `var` starts at
-        // the lowest power and is squared after each factor, so reading it in
-        // reverse yields the descending powers `var^(2^(n-1)), ..., var`.
+        // Read coordinates from the highest variable down to the lowest.
+        // `var` starts at the lowest power and is squared after each factor,
+        // so reversed iteration yields the descending powers var^(2^(n-1)), ..., var.
         point
             .iter()
             .rev()
@@ -177,33 +176,25 @@ where
     #[must_use]
     #[inline]
     pub fn eval_next(point: &[F], row: &[F]) -> (F, F, F) {
-        // The increment is added bit by bit, so both inputs must index the same variables.
+        // Add 1 bit by bit; both inputs must index the same variables.
         assert_eq!(point.len(), row.len());
 
-        // Carry weight: the path on which adding 1 has not yet been absorbed.
-        // Starts at 1 because the increment enters at the lowest bit.
+        // carry: weight where the +1 has not yet been absorbed (seeded at the low bit).
         let mut carry = F::ONE;
-        // Completed contribution: rows whose +1 has already been resolved without
-        // a pending carry into higher bits.
+        // done: weight where the +1 has already settled.
         let mut done = F::ZERO;
-        // Boundary weight of the all-ones row, accumulated as the product of the
-        // "both bits one" factor across coordinates.
+        // omega: weight of the repeating all-ones row.
         let mut omega = F::ONE;
-        // Fold low bit first: the carry from adding 1 propagates toward higher bits.
+        // Fold the low bit first so the carry ripples toward higher bits.
         for (&point_bit, &row_bit) in point.iter().zip(row).rev() {
-            // Per-coordinate equality factor between this point and row bit:
-            // equals 1 when the bits agree, 0 when they differ.
+            // Equality factor: 1 when the bits agree, 0 when they differ.
             let eq = row_bit.double() * point_bit - point_bit - row_bit + F::ONE;
-            // Snapshot the incoming carry before overwriting it.
             let prev_carry = carry;
-            // Carry survives only where the point bit is 1 and the row bit is 0:
-            // that is exactly the position where 0 -> 1 still needs to ripple up.
+            // Carry lives where point_bit = 1, row_bit = 0: a 0 -> 1 still to ripple up.
             carry = prev_carry * point_bit * (F::ONE - row_bit);
-            // Settle the carry where the row bit is 1 and the point bit is 0:
-            // the increment lands here, so it joins the completed contribution.
-            // Already-settled mass passes through the equality factor unchanged.
+            // Carry settles where point_bit = 0, row_bit = 1; settled mass rides the equality factor.
             done = done * eq + prev_carry * (F::ONE - point_bit) * row_bit;
-            // Track the all-ones row weight: nonzero only where both bits are 1.
+            // All-ones weight: nonzero only where both bits are 1.
             omega *= point_bit * row_bit;
         }
         (carry, done, omega)
@@ -295,6 +286,30 @@ mod tests {
     use super::*;
 
     type F = BabyBear;
+
+    #[test]
+    fn eval_next_empty_and_single_variable() {
+        // Empty point: no coordinate to fold, so the carry and all-ones weights
+        // stay at one and the settled weight at zero.
+        assert_eq!(Point::<F>::eval_next(&[], &[]), (F::ONE, F::ZERO, F::ONE));
+
+        // One variable: fold a single coordinate of the point against the row.
+        // Hand-derived decomposition for point [p], row [r]:
+        //   carry = p * (1 - r)   (a 0 -> 1 still waiting to ripple up)
+        //   done  = (1 - p) * r   (the +1 has settled here)
+        //   omega = p * r         (the all-ones row weight)
+        let p = F::from_u64(2);
+        let r = F::from_u64(3);
+        let (carry, done, omega) = Point::eval_next(&[p], &[r]);
+        assert_eq!(carry, p * (F::ONE - r));
+        assert_eq!(done, (F::ONE - p) * r);
+        assert_eq!(omega, p * r);
+
+        // Dropping the live carry leaves the full successor value, which for a
+        // single variable is just the evaluation-row coordinate.
+        assert_eq!(done + omega, r);
+    }
+
     #[test]
     fn test_num_variables() {
         let point = Point::<F>(vec![F::from_u64(1), F::from_u64(0), F::from_u64(1)]);

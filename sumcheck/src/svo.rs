@@ -869,398 +869,6 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     pub const fn var_order(&self) -> VariableOrder {
         self.var_order
     }
-}
-
-/// Compresses suffix-layout repeat-last-successor payloads to the active SVO variables.
-///
-/// # Overview
-///
-/// - The three input payloads are indexed by all SVO variables, with the active suffix as the low bits.
-/// - The already-folded SVO prefix is fixed at the corresponding point coordinates.
-/// - The output is the three-table successor decomposition over only the active suffix variables.
-///
-/// # Arguments
-///
-/// - `d_eq`: payload weighted by the equality state of the successor map.
-/// - `d_t`: payload weighted by the carry-into-next state.
-/// - `d_omega`: payload weighted by the wrap-around boundary state.
-/// - `p_svo`: the opening point restricted to all SVO variables.
-/// - `active_len`: the number of active suffix variables kept for this round.
-///
-/// # Panics
-///
-/// - If `active_len` is zero or exceeds the number of SVO variables.
-/// - If any payload does not span all SVO variables.
-fn next_round_partials_suffix<F: Field>(
-    d_eq: &Poly<F>,
-    d_t: &Poly<F>,
-    d_omega: &Poly<F>,
-    p_svo: &Point<F>,
-    active_len: usize,
-) -> NextPartials<F> {
-    // Total SVO variables carried by each payload.
-    let svo_len = p_svo.num_variables();
-    // A round always keeps at least one active variable, never more than all of them.
-    assert!(active_len > 0);
-    assert!(active_len <= svo_len);
-    // Every payload must be indexed by all SVO variables before compression.
-    assert_eq!(d_eq.num_variables(), svo_len);
-    assert_eq!(d_t.num_variables(), svo_len);
-    assert_eq!(d_omega.num_variables(), svo_len);
-
-    // Number of already-folded prefix variables to fix.
-    let rest_len = svo_len - active_len;
-    // Number of Boolean rows over the active suffix variables.
-    let active_rows = 1 << active_len;
-
-    // No prefix to fold: the payloads already live over only the active variables.
-    if rest_len == 0 {
-        return NextPartials::new(d_eq.clone(), d_t.clone(), d_omega.clone());
-    }
-
-    // Suffix layout puts the folded prefix in the high bits of the index.
-    let (p_rest, _p_active) = p_svo.split_at(rest_len);
-    // Equality table over the prefix used to contract it away.
-    let rest_eq = SplitEq::<F, F>::new_packed(&p_rest, F::ONE);
-
-    // Done state: contract the equality payload over the prefix at the matching active row.
-    let done = rest_eq.compress_prefix(d_eq);
-    // Carry state: contract the equality payload over the prefix shifted by one successor step.
-    let mut carry = rest_eq.compress_prefix_shifted(d_eq);
-
-    // The all-ones prefix corner carries the full product of prefix coordinates.
-    let carry_scale = p_rest.iter().copied().product::<F>();
-    // Add the carry-into-next contribution from the first active block of the carry payload.
-    // The shared kernel runs this fused multiply-add over SIMD lanes.
-    add_scaled_slice_in_place(
-        carry.as_mut_slice(),
-        &d_t.as_slice()[..active_rows],
-        carry_scale,
-    );
-
-    // Number of Boolean rows over the folded prefix variables.
-    let rest_rows = 1 << rest_len;
-    // The wrap-around boundary picks up the same all-ones prefix product.
-    let omega_scale = carry_scale;
-    // Omega lives only on the last prefix block, the all-ones prefix row.
-    let omega_start = (rest_rows - 1) * active_rows;
-    // Scale that final active block to obtain the boundary state over the active variables.
-    let omega = Poly::new(
-        d_omega.as_slice()[omega_start..omega_start + active_rows]
-            .iter()
-            .map(|&value| omega_scale * value)
-            .collect(),
-    );
-
-    NextPartials::new(done, carry, omega)
-}
-
-/// Compresses prefix-layout repeat-last-successor payloads to the active SVO variables.
-///
-/// # Overview
-///
-/// - The three input payloads are indexed by all SVO variables, with the active prefix as the high bits.
-/// - The already-folded SVO suffix is fixed at the corresponding point coordinates.
-/// - The output is the three-table successor decomposition over only the active prefix variables.
-///
-/// # Arguments
-///
-/// - `d_done`: payload weighted by the shifted equality state of the successor map.
-/// - `d_carry`: payload weighted by the carry-into-next state.
-/// - `d_omega`: payload weighted by the wrap-around boundary state.
-/// - `p_svo`: the opening point restricted to all SVO variables.
-/// - `active_len`: the number of active prefix variables kept for this round.
-///
-/// # Panics
-///
-/// - If `active_len` is zero or exceeds the number of SVO variables.
-/// - If any payload does not span all SVO variables.
-fn next_round_partials_prefix<F: Field>(
-    d_done: &Poly<F>,
-    d_carry: &Poly<F>,
-    d_omega: &Poly<F>,
-    p_svo: &Point<F>,
-    active_len: usize,
-) -> NextPartials<F> {
-    // Total SVO variables carried by each payload.
-    let svo_len = p_svo.num_variables();
-    // A round always keeps at least one active variable, never more than all of them.
-    assert!(active_len > 0);
-    assert!(active_len <= svo_len);
-    // Every payload must be indexed by all SVO variables before compression.
-    assert_eq!(d_done.num_variables(), svo_len);
-    assert_eq!(d_carry.num_variables(), svo_len);
-    assert_eq!(d_omega.num_variables(), svo_len);
-
-    // Number of already-folded suffix variables to fix.
-    let rest_len = svo_len - active_len;
-
-    // No suffix to fold: the payloads already live over only the active variables.
-    if rest_len == 0 {
-        return NextPartials::new(d_done.clone(), d_carry.clone(), d_omega.clone());
-    }
-
-    // Prefix layout puts the folded suffix in the low bits of the index.
-    let (_p_active, p_rest) = p_svo.split_at(active_len);
-    // Equality table over the suffix used to contract it away.
-    let rest_eq = SplitEq::<F, F>::new_packed(&p_rest, F::ONE);
-
-    // Done state: contract the shifted-done payload over the suffix.
-    let mut done = rest_eq.compress_suffix(d_done);
-    // Carry crossing a row boundary lands one suffix step over, so contract it shifted.
-    let carry_done = rest_eq.compress_suffix_shifted(d_carry);
-
-    // Fold the boundary-crossing carry contribution into the done state.
-    done.as_mut_slice()
-        .iter_mut()
-        .zip_eq(carry_done.as_slice().iter())
-        .for_each(|(out, &carry_done)| *out += carry_done);
-
-    // Number of Boolean rows over the active prefix variables.
-    let active_rows = 1 << active_len;
-    // Number of Boolean rows over the folded suffix variables.
-    let rest_rows = 1 << rest_len;
-    // The all-ones suffix corner weight, where carry and omega boundaries live.
-    let boundary = rest_eq.last_scalar();
-    // Carry state over the active prefix, one entry per active row.
-    let mut carry = F::zero_vec(active_rows);
-    // Omega (wrap-around) state over the active prefix, one entry per active row.
-    let mut omega = F::zero_vec(active_rows);
-
-    // Walk the active rows, each a contiguous suffix chunk of the payloads.
-    carry
-        .iter_mut()
-        .zip_eq(omega.iter_mut())
-        .zip_eq(d_carry.as_slice().chunks(rest_rows))
-        .zip_eq(d_omega.as_slice().chunks(rest_rows))
-        .for_each(|(((carry, omega), carry_chunk), omega_chunk)| {
-            // Carry enters at the all-zeros suffix corner (first chunk entry).
-            *carry = boundary * carry_chunk.first().copied().unwrap();
-            // Omega exits at the all-ones suffix corner (last chunk entry).
-            *omega = boundary * omega_chunk.last().copied().unwrap();
-        });
-
-    // Wrap the contracted active tables as polynomials.
-    let carry = Poly::new(carry);
-    let omega = Poly::new(omega);
-
-    NextPartials::new(done, carry, omega)
-}
-
-/// Materializes the three repeat-last-successor state tables for a point.
-///
-/// # Overview
-///
-/// The repeat-last successor map sends Boolean row `x` to row `x + 1`, with the
-/// last row mapping to itself.
-/// Its weight against a point splits into three tables indexed by Boolean rows:
-///
-/// - a "done" table equal to the equality weight shifted up by one row,
-/// - a "carry" table holding the wrap-in weight at the all-zeros row,
-/// - an "omega" table holding the wrap-out weight at the all-ones row.
-///
-/// # Algorithm
-///
-/// ```text
-///     rows:   0      1      2    ...   2^n - 1
-///     done:   0    eq[0]  eq[1]  ...   eq[2^n-2]
-///     carry:  B      0      0    ...      0
-///     omega:  0      0      0    ...      B
-///
-///     B = product of all point coordinates (the all-ones corner weight)
-/// ```
-fn next_state_evals<F: Field>(point_suffix: &[F]) -> NextPartials<F> {
-    // Number of point coordinates, one per Boolean variable.
-    let num_variables = point_suffix.len();
-    // Number of Boolean rows over those variables.
-    let num_rows = 1 << num_variables;
-
-    // The all-ones corner weight is the product of all coordinates.
-    let boundary = point_suffix.iter().copied().product::<F>();
-    // Carry enters only at the all-zeros row (the row that wraps in).
-    let mut carry = F::zero_vec(num_rows);
-    // Omega exits only at the all-ones row (the row that repeats).
-    let mut omega = F::zero_vec(num_rows);
-    carry[0] = boundary;
-    omega[num_rows - 1] = boundary;
-
-    // Equality weights of the point over all Boolean rows.
-    let eq = Poly::new_from_point(point_suffix, F::ONE);
-    // Done table is the equality table shifted up by one row, with row 0 left at zero.
-    let mut done = F::zero_vec(num_rows);
-    if num_rows > 1 {
-        done[1..].copy_from_slice(&eq.as_slice()[..num_rows - 1]);
-    }
-
-    NextPartials::new(Poly::new(done), Poly::new(carry), Poly::new(omega))
-}
-
-impl<F: Field> NextPartials<F> {
-    /// Adds suffix-layout successor accumulator contributions for one round.
-    ///
-    /// # Overview
-    ///
-    /// - The stored payloads are the active-variable successor data for this round.
-    /// - Both the successor state tables at the active point and the payloads are expanded to the `{0, 1, inf}` grid.
-    /// - The round polynomial values at `0` and `inf` are accumulated by summing the three state-times-data products.
-    ///
-    /// # Arguments
-    ///
-    /// - `p_active`: the opening point restricted to the active SVO variables of this round.
-    /// - `acc0`: running accumulator for the round polynomial evaluated at `0`.
-    /// - `acc_inf`: running accumulator for the round polynomial evaluated at `inf`.
-    ///
-    /// # Panics
-    ///
-    /// - If `p_active` is empty.
-    /// - If any stored payload does not span the active coordinates.
-    /// - If `acc0` or `acc_inf` does not have length `3^(active_len - 1)`.
-    pub(crate) fn accumulate_suffix(&self, p_active: &[F], acc0: &mut [F], acc_inf: &mut [F]) {
-        // One field element per active coordinate fixed this round.
-        let active_len = p_active.len();
-        // A round always folds at least one active coordinate.
-        assert!(active_len > 0);
-        // All three payloads must span exactly the active coordinates.
-        assert_eq!(self.done().num_variables(), active_len);
-        assert_eq!(self.carry().num_variables(), active_len);
-        assert_eq!(self.omega().num_variables(), active_len);
-
-        // Each ternary grid third over the remaining active-1 coordinates has 3^(active_len-1) rows.
-        let stride = 3usize.pow((active_len - 1) as u32);
-        assert_eq!(acc0.len(), stride);
-        assert_eq!(acc_inf.len(), stride);
-
-        // Build the three successor state tables for the active point.
-        // TODO: carry and omega polys are sparse.
-        let active = next_state_evals(p_active);
-
-        // Expand every state and data table from the hypercube to the ternary grid.
-        let carry_grid = evals_01inf_grid_prefix(active.carry().as_slice());
-        let done_grid = evals_01inf_grid_prefix(active.done().as_slice());
-        let omega_grid = evals_01inf_grid_prefix(active.omega().as_slice());
-        let done_data_grid = evals_01inf_grid_prefix(self.done().as_slice());
-        let carry_data_grid = evals_01inf_grid_prefix(self.carry().as_slice());
-        let omega_data_grid = evals_01inf_grid_prefix(self.omega().as_slice());
-
-        // First grid third: leading active coordinate fixed to 0; sum the three state-data products.
-        acc0.iter_mut()
-            .zip(
-                done_grid[..stride]
-                    .iter()
-                    .zip(done_data_grid[..stride].iter()),
-            )
-            .zip(
-                carry_grid[..stride]
-                    .iter()
-                    .zip(carry_data_grid[..stride].iter()),
-            )
-            .zip(
-                omega_grid[..stride]
-                    .iter()
-                    .zip(omega_data_grid[..stride].iter()),
-            )
-            .for_each(
-                |(((out, (&done, &done_data)), (&carry, &carry_data)), (&omega, &omega_data))| {
-                    *out += done * done_data + carry * carry_data + omega * omega_data;
-                },
-            );
-
-        // Last grid third: leading active coordinate fixed to inf; same three-term product.
-        acc_inf
-            .iter_mut()
-            .zip(
-                done_grid[2 * stride..]
-                    .iter()
-                    .zip(done_data_grid[2 * stride..].iter()),
-            )
-            .zip(
-                carry_grid[2 * stride..]
-                    .iter()
-                    .zip(carry_data_grid[2 * stride..].iter()),
-            )
-            .zip(
-                omega_grid[2 * stride..]
-                    .iter()
-                    .zip(omega_data_grid[2 * stride..].iter()),
-            )
-            .for_each(
-                |(((out, (&done, &done_data)), (&carry, &carry_data)), (&omega, &omega_data))| {
-                    *out += done * done_data + carry * carry_data + omega * omega_data;
-                },
-            );
-    }
-
-    /// Adds prefix-layout successor accumulator contributions for one round.
-    ///
-    /// # Overview
-    ///
-    /// - The stored payloads are the active-variable successor data for this round.
-    /// - In prefix layout each active state factors into a product of one state table and one data payload.
-    /// - Three product accumulators (equality, done, omega) sum their `0` and `inf` contributions into the running accumulators.
-    ///
-    /// # Arguments
-    ///
-    /// - `p_active`: the opening point restricted to the active SVO variables of this round.
-    /// - `acc0`: running accumulator for the round polynomial evaluated at `0`.
-    /// - `acc_inf`: running accumulator for the round polynomial evaluated at `inf`.
-    ///
-    /// # Panics
-    ///
-    /// - If `p_active` is empty.
-    /// - If any stored payload does not span the active coordinates.
-    /// - If `acc0` or `acc_inf` does not have length `3^(active_len - 1)`.
-    pub(crate) fn accumulate_prefix(&self, p_active: &[F], acc0: &mut [F], acc_inf: &mut [F]) {
-        // One field element per active coordinate fixed this round.
-        let active_len = p_active.len();
-        // A round always folds at least one active coordinate.
-        assert!(active_len > 0);
-        // All three payloads must span exactly the active coordinates.
-        assert_eq!(self.done().num_variables(), active_len);
-        assert_eq!(self.carry().num_variables(), active_len);
-        assert_eq!(self.omega().num_variables(), active_len);
-
-        // Each ternary grid third over the remaining active-1 coordinates has 3^(active_len-1) rows.
-        let stride = 3usize.pow((active_len - 1) as u32);
-        assert_eq!(acc0.len(), stride);
-        assert_eq!(acc_inf.len(), stride);
-
-        // Successor state tables for the active point.
-        let active = next_state_evals(p_active);
-        // Plain equality weights of the active point.
-        let eq_active = Poly::new_from_point(p_active, F::ONE);
-
-        // Each active state term is a product of one weight table and one data payload.
-        let terms = [
-            // Equality weight times the shifted-done data payload.
-            calculate_product_accumulator(active_len, eq_active.as_slice(), self.done().as_slice()),
-            // Done state times the carry-into-next data payload.
-            calculate_product_accumulator(
-                active_len,
-                active.done().as_slice(),
-                self.carry().as_slice(),
-            ),
-            // Omega boundary state times the boundary data payload.
-            calculate_product_accumulator(
-                active_len,
-                active.omega().as_slice(),
-                self.omega().as_slice(),
-            ),
-        ];
-
-        // Fold every term's 0 and inf contributions into the running accumulators.
-        for [term0, term_inf] in terms {
-            acc0.iter_mut()
-                .zip(term0.iter())
-                .for_each(|(out, &value)| *out += value);
-            acc_inf
-                .iter_mut()
-                .zip(term_inf.iter())
-                .for_each(|(out, &value)| *out += value);
-        }
-    }
-}
-
-impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     /// Adds the residual suffix-layout successor weight over the split variables.
     ///
     /// # Overview
@@ -1658,6 +1266,395 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
             .collect::<Vec<_>>();
 
         (eval, NextSvoPartials::new(rounds))
+    }
+}
+
+/// Compresses suffix-layout repeat-last-successor payloads to the active SVO variables.
+///
+/// # Overview
+///
+/// - The three input payloads are indexed by all SVO variables, with the active suffix as the low bits.
+/// - The already-folded SVO prefix is fixed at the corresponding point coordinates.
+/// - The output is the three-table successor decomposition over only the active suffix variables.
+///
+/// # Arguments
+///
+/// - `d_eq`: payload weighted by the equality state of the successor map.
+/// - `d_t`: payload weighted by the carry-into-next state.
+/// - `d_omega`: payload weighted by the wrap-around boundary state.
+/// - `p_svo`: the opening point restricted to all SVO variables.
+/// - `active_len`: the number of active suffix variables kept for this round.
+///
+/// # Panics
+///
+/// - If `active_len` is zero or exceeds the number of SVO variables.
+/// - If any payload does not span all SVO variables.
+fn next_round_partials_suffix<F: Field>(
+    d_eq: &Poly<F>,
+    d_t: &Poly<F>,
+    d_omega: &Poly<F>,
+    p_svo: &Point<F>,
+    active_len: usize,
+) -> NextPartials<F> {
+    // Total SVO variables carried by each payload.
+    let svo_len = p_svo.num_variables();
+    // A round always keeps at least one active variable, never more than all of them.
+    assert!(active_len > 0);
+    assert!(active_len <= svo_len);
+    // Every payload must be indexed by all SVO variables before compression.
+    assert_eq!(d_eq.num_variables(), svo_len);
+    assert_eq!(d_t.num_variables(), svo_len);
+    assert_eq!(d_omega.num_variables(), svo_len);
+
+    // Number of already-folded prefix variables to fix.
+    let rest_len = svo_len - active_len;
+    // Number of Boolean rows over the active suffix variables.
+    let active_rows = 1 << active_len;
+
+    // No prefix to fold: the payloads already live over only the active variables.
+    if rest_len == 0 {
+        return NextPartials::new(d_eq.clone(), d_t.clone(), d_omega.clone());
+    }
+
+    // Suffix layout puts the folded prefix in the high bits of the index.
+    let (p_rest, _p_active) = p_svo.split_at(rest_len);
+    // Equality table over the prefix used to contract it away.
+    let rest_eq = SplitEq::<F, F>::new_packed(&p_rest, F::ONE);
+
+    // Done state: contract the equality payload over the prefix at the matching active row.
+    let done = rest_eq.compress_prefix(d_eq);
+    // Carry state: contract the equality payload over the prefix shifted by one successor step.
+    let mut carry = rest_eq.compress_prefix_shifted(d_eq);
+
+    // The all-ones prefix corner carries the full product of prefix coordinates.
+    let carry_scale = p_rest.iter().copied().product::<F>();
+    // Add the carry-into-next contribution from the first active block of the carry payload.
+    // The shared kernel runs this fused multiply-add over SIMD lanes.
+    add_scaled_slice_in_place(
+        carry.as_mut_slice(),
+        &d_t.as_slice()[..active_rows],
+        carry_scale,
+    );
+
+    // Number of Boolean rows over the folded prefix variables.
+    let rest_rows = 1 << rest_len;
+    // The wrap-around boundary picks up the same all-ones prefix product.
+    let omega_scale = carry_scale;
+    // Omega lives only on the last prefix block, the all-ones prefix row.
+    let omega_start = (rest_rows - 1) * active_rows;
+    // Scale that final active block to obtain the boundary state over the active variables.
+    let omega = Poly::new(
+        d_omega.as_slice()[omega_start..omega_start + active_rows]
+            .iter()
+            .map(|&value| omega_scale * value)
+            .collect(),
+    );
+
+    NextPartials::new(done, carry, omega)
+}
+
+/// Compresses prefix-layout repeat-last-successor payloads to the active SVO variables.
+///
+/// # Overview
+///
+/// - The three input payloads are indexed by all SVO variables, with the active prefix as the high bits.
+/// - The already-folded SVO suffix is fixed at the corresponding point coordinates.
+/// - The output is the three-table successor decomposition over only the active prefix variables.
+///
+/// # Arguments
+///
+/// - `d_done`: payload weighted by the shifted equality state of the successor map.
+/// - `d_carry`: payload weighted by the carry-into-next state.
+/// - `d_omega`: payload weighted by the wrap-around boundary state.
+/// - `p_svo`: the opening point restricted to all SVO variables.
+/// - `active_len`: the number of active prefix variables kept for this round.
+///
+/// # Panics
+///
+/// - If `active_len` is zero or exceeds the number of SVO variables.
+/// - If any payload does not span all SVO variables.
+fn next_round_partials_prefix<F: Field>(
+    d_done: &Poly<F>,
+    d_carry: &Poly<F>,
+    d_omega: &Poly<F>,
+    p_svo: &Point<F>,
+    active_len: usize,
+) -> NextPartials<F> {
+    // Total SVO variables carried by each payload.
+    let svo_len = p_svo.num_variables();
+    // A round always keeps at least one active variable, never more than all of them.
+    assert!(active_len > 0);
+    assert!(active_len <= svo_len);
+    // Every payload must be indexed by all SVO variables before compression.
+    assert_eq!(d_done.num_variables(), svo_len);
+    assert_eq!(d_carry.num_variables(), svo_len);
+    assert_eq!(d_omega.num_variables(), svo_len);
+
+    // Number of already-folded suffix variables to fix.
+    let rest_len = svo_len - active_len;
+
+    // No suffix to fold: the payloads already live over only the active variables.
+    if rest_len == 0 {
+        return NextPartials::new(d_done.clone(), d_carry.clone(), d_omega.clone());
+    }
+
+    // Prefix layout puts the folded suffix in the low bits of the index.
+    let (_p_active, p_rest) = p_svo.split_at(active_len);
+    // Equality table over the suffix used to contract it away.
+    let rest_eq = SplitEq::<F, F>::new_packed(&p_rest, F::ONE);
+
+    // Done state: contract the shifted-done payload over the suffix.
+    let mut done = rest_eq.compress_suffix(d_done);
+    // Carry crossing a row boundary lands one suffix step over, so contract it shifted.
+    let carry_done = rest_eq.compress_suffix_shifted(d_carry);
+
+    // Fold the boundary-crossing carry contribution into the done state.
+    done.as_mut_slice()
+        .iter_mut()
+        .zip_eq(carry_done.as_slice().iter())
+        .for_each(|(out, &carry_done)| *out += carry_done);
+
+    // Number of Boolean rows over the active prefix variables.
+    let active_rows = 1 << active_len;
+    // Number of Boolean rows over the folded suffix variables.
+    let rest_rows = 1 << rest_len;
+    // The all-ones suffix corner weight, where carry and omega boundaries live.
+    let boundary = rest_eq.last_scalar();
+    // Carry state over the active prefix, one entry per active row.
+    let mut carry = F::zero_vec(active_rows);
+    // Omega (wrap-around) state over the active prefix, one entry per active row.
+    let mut omega = F::zero_vec(active_rows);
+
+    // Walk the active rows, each a contiguous suffix chunk of the payloads.
+    carry
+        .iter_mut()
+        .zip_eq(omega.iter_mut())
+        .zip_eq(d_carry.as_slice().chunks(rest_rows))
+        .zip_eq(d_omega.as_slice().chunks(rest_rows))
+        .for_each(|(((carry, omega), carry_chunk), omega_chunk)| {
+            // Carry enters at the all-zeros suffix corner (first chunk entry).
+            *carry = boundary * carry_chunk.first().copied().unwrap();
+            // Omega exits at the all-ones suffix corner (last chunk entry).
+            *omega = boundary * omega_chunk.last().copied().unwrap();
+        });
+
+    // Wrap the contracted active tables as polynomials.
+    let carry = Poly::new(carry);
+    let omega = Poly::new(omega);
+
+    NextPartials::new(done, carry, omega)
+}
+
+/// Materializes the three repeat-last-successor state tables for a point.
+///
+/// # Overview
+///
+/// The repeat-last successor map sends Boolean row `x` to row `x + 1`, with the
+/// last row mapping to itself.
+/// Its weight against a point splits into three tables indexed by Boolean rows:
+///
+/// - a "done" table equal to the equality weight shifted up by one row,
+/// - a "carry" table holding the wrap-in weight at the all-zeros row,
+/// - an "omega" table holding the wrap-out weight at the all-ones row.
+///
+/// # Algorithm
+///
+/// ```text
+///     rows:   0      1      2    ...   2^n - 1
+///     done:   0    eq[0]  eq[1]  ...   eq[2^n-2]
+///     carry:  B      0      0    ...      0
+///     omega:  0      0      0    ...      B
+///
+///     B = product of all point coordinates (the all-ones corner weight)
+/// ```
+fn next_state_evals<F: Field>(point_suffix: &[F]) -> NextPartials<F> {
+    // Number of point coordinates, one per Boolean variable.
+    let num_variables = point_suffix.len();
+    // Number of Boolean rows over those variables.
+    let num_rows = 1 << num_variables;
+
+    // The all-ones corner weight is the product of all coordinates.
+    let boundary = point_suffix.iter().copied().product::<F>();
+    // Carry enters only at the all-zeros row (the row that wraps in).
+    let mut carry = F::zero_vec(num_rows);
+    // Omega exits only at the all-ones row (the row that repeats).
+    let mut omega = F::zero_vec(num_rows);
+    carry[0] = boundary;
+    omega[num_rows - 1] = boundary;
+
+    // Equality weights of the point over all Boolean rows.
+    let eq = Poly::new_from_point(point_suffix, F::ONE);
+    // Done table is the equality table shifted up by one row, with row 0 left at zero.
+    let mut done = F::zero_vec(num_rows);
+    if num_rows > 1 {
+        done[1..].copy_from_slice(&eq.as_slice()[..num_rows - 1]);
+    }
+
+    NextPartials::new(Poly::new(done), Poly::new(carry), Poly::new(omega))
+}
+
+impl<F: Field> NextPartials<F> {
+    /// Adds suffix-layout successor accumulator contributions for one round.
+    ///
+    /// # Overview
+    ///
+    /// - The stored payloads are the active-variable successor data for this round.
+    /// - Both the successor state tables at the active point and the payloads are expanded to the `{0, 1, inf}` grid.
+    /// - The round polynomial values at `0` and `inf` are accumulated by summing the three state-times-data products.
+    ///
+    /// # Arguments
+    ///
+    /// - `p_active`: the opening point restricted to the active SVO variables of this round.
+    /// - `acc0`: running accumulator for the round polynomial evaluated at `0`.
+    /// - `acc_inf`: running accumulator for the round polynomial evaluated at `inf`.
+    ///
+    /// # Panics
+    ///
+    /// - If `p_active` is empty.
+    /// - If any stored payload does not span the active coordinates.
+    /// - If `acc0` or `acc_inf` does not have length `3^(active_len - 1)`.
+    pub(crate) fn accumulate_suffix(&self, p_active: &[F], acc0: &mut [F], acc_inf: &mut [F]) {
+        // One field element per active coordinate fixed this round.
+        let active_len = p_active.len();
+        // A round always folds at least one active coordinate.
+        assert!(active_len > 0);
+        // All three payloads must span exactly the active coordinates.
+        assert_eq!(self.done().num_variables(), active_len);
+        assert_eq!(self.carry().num_variables(), active_len);
+        assert_eq!(self.omega().num_variables(), active_len);
+
+        // Each ternary grid third over the remaining active-1 coordinates has 3^(active_len-1) rows.
+        let stride = 3usize.pow((active_len - 1) as u32);
+        assert_eq!(acc0.len(), stride);
+        assert_eq!(acc_inf.len(), stride);
+
+        // Build the three successor state tables for the active point.
+        // TODO: carry and omega polys are sparse.
+        let active = next_state_evals(p_active);
+
+        // Expand every state and data table from the hypercube to the ternary grid.
+        let carry_grid = evals_01inf_grid_prefix(active.carry().as_slice());
+        let done_grid = evals_01inf_grid_prefix(active.done().as_slice());
+        let omega_grid = evals_01inf_grid_prefix(active.omega().as_slice());
+        let done_data_grid = evals_01inf_grid_prefix(self.done().as_slice());
+        let carry_data_grid = evals_01inf_grid_prefix(self.carry().as_slice());
+        let omega_data_grid = evals_01inf_grid_prefix(self.omega().as_slice());
+
+        // First grid third: leading active coordinate fixed to 0; sum the three state-data products.
+        acc0.iter_mut()
+            .zip(
+                done_grid[..stride]
+                    .iter()
+                    .zip(done_data_grid[..stride].iter()),
+            )
+            .zip(
+                carry_grid[..stride]
+                    .iter()
+                    .zip(carry_data_grid[..stride].iter()),
+            )
+            .zip(
+                omega_grid[..stride]
+                    .iter()
+                    .zip(omega_data_grid[..stride].iter()),
+            )
+            .for_each(
+                |(((out, (&done, &done_data)), (&carry, &carry_data)), (&omega, &omega_data))| {
+                    *out += done * done_data + carry * carry_data + omega * omega_data;
+                },
+            );
+
+        // Last grid third: leading active coordinate fixed to inf; same three-term product.
+        acc_inf
+            .iter_mut()
+            .zip(
+                done_grid[2 * stride..]
+                    .iter()
+                    .zip(done_data_grid[2 * stride..].iter()),
+            )
+            .zip(
+                carry_grid[2 * stride..]
+                    .iter()
+                    .zip(carry_data_grid[2 * stride..].iter()),
+            )
+            .zip(
+                omega_grid[2 * stride..]
+                    .iter()
+                    .zip(omega_data_grid[2 * stride..].iter()),
+            )
+            .for_each(
+                |(((out, (&done, &done_data)), (&carry, &carry_data)), (&omega, &omega_data))| {
+                    *out += done * done_data + carry * carry_data + omega * omega_data;
+                },
+            );
+    }
+
+    /// Adds prefix-layout successor accumulator contributions for one round.
+    ///
+    /// # Overview
+    ///
+    /// - The stored payloads are the active-variable successor data for this round.
+    /// - In prefix layout each active state factors into a product of one state table and one data payload.
+    /// - Three product accumulators (equality, done, omega) sum their `0` and `inf` contributions into the running accumulators.
+    ///
+    /// # Arguments
+    ///
+    /// - `p_active`: the opening point restricted to the active SVO variables of this round.
+    /// - `acc0`: running accumulator for the round polynomial evaluated at `0`.
+    /// - `acc_inf`: running accumulator for the round polynomial evaluated at `inf`.
+    ///
+    /// # Panics
+    ///
+    /// - If `p_active` is empty.
+    /// - If any stored payload does not span the active coordinates.
+    /// - If `acc0` or `acc_inf` does not have length `3^(active_len - 1)`.
+    pub(crate) fn accumulate_prefix(&self, p_active: &[F], acc0: &mut [F], acc_inf: &mut [F]) {
+        // One field element per active coordinate fixed this round.
+        let active_len = p_active.len();
+        // A round always folds at least one active coordinate.
+        assert!(active_len > 0);
+        // All three payloads must span exactly the active coordinates.
+        assert_eq!(self.done().num_variables(), active_len);
+        assert_eq!(self.carry().num_variables(), active_len);
+        assert_eq!(self.omega().num_variables(), active_len);
+
+        // Each ternary grid third over the remaining active-1 coordinates has 3^(active_len-1) rows.
+        let stride = 3usize.pow((active_len - 1) as u32);
+        assert_eq!(acc0.len(), stride);
+        assert_eq!(acc_inf.len(), stride);
+
+        // Successor state tables for the active point.
+        let active = next_state_evals(p_active);
+        // Plain equality weights of the active point.
+        let eq_active = Poly::new_from_point(p_active, F::ONE);
+
+        // Each active state term is a product of one weight table and one data payload.
+        let terms = [
+            // Equality weight times the shifted-done data payload.
+            calculate_product_accumulator(active_len, eq_active.as_slice(), self.done().as_slice()),
+            // Done state times the carry-into-next data payload.
+            calculate_product_accumulator(
+                active_len,
+                active.done().as_slice(),
+                self.carry().as_slice(),
+            ),
+            // Omega boundary state times the boundary data payload.
+            calculate_product_accumulator(
+                active_len,
+                active.omega().as_slice(),
+                self.omega().as_slice(),
+            ),
+        ];
+
+        // Fold every term's 0 and inf contributions into the running accumulators.
+        for [term0, term_inf] in terms {
+            acc0.iter_mut()
+                .zip(term0.iter())
+                .for_each(|(out, &value)| *out += value);
+            acc_inf
+                .iter_mut()
+                .zip(term_inf.iter())
+                .for_each(|(out, &value)| *out += value);
+        }
     }
 }
 
