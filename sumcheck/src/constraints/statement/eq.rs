@@ -853,17 +853,23 @@ mod tests {
     #[test]
     fn weights_at_yields_one_equality_weight_per_point() {
         // weights_at streams one equality weight per stored point, in order.
-        // Cross-check each against the standalone equality-polynomial evaluation.
+        //
+        // Independent reference: the textbook equality product computed by hand,
+        //   eq(p, x) = prod_i (p_i * x_i + (1 - p_i) * (1 - x_i)),
+        // rather than the optimized routine under test.
         let p0 = Point::new(vec![EF::from_u64(1), EF::from_u64(2)]);
         let p1 = Point::new(vec![EF::from_u64(3), EF::from_u64(4)]);
         let statement =
             EqStatement::new_hypercube(vec![p0.clone(), p1.clone()], vec![EF::ZERO, EF::ZERO]);
 
         let row = Point::new(vec![EF::from_u64(5), EF::from_u64(6)]);
-        let expected = vec![
-            Point::eval_eq(p0.as_slice(), row.as_slice()),
-            Point::eval_eq(p1.as_slice(), row.as_slice()),
-        ];
+        let textbook_eq = |p: &Point<EF>| {
+            p.iter()
+                .zip(row.iter())
+                .map(|(&pi, &xi)| pi * xi + (EF::ONE - pi) * (EF::ONE - xi))
+                .product::<EF>()
+        };
+        let expected = vec![textbook_eq(&p0), textbook_eq(&p1)];
 
         assert_eq!(statement.weights_at(&row).collect::<Vec<_>>(), expected);
     }

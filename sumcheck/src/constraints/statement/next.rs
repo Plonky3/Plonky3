@@ -445,7 +445,11 @@ mod tests {
     fn weights_at_is_selector_eq_times_successor_value() {
         // Invariant: a slot-local weight at a full point factors as
         //   eq(selector, selector_row) * (successor value of the local point).
-        // Cross-check against the trusted dense successor table and equality eval.
+        //
+        // Both factors use independent references:
+        // - the successor value comes from the dense successor table interpolated
+        //   at the local row, a different route than the closed-form weight, and
+        // - the selector gate is the textbook equality product computed by hand.
         let mut rng = SmallRng::seed_from_u64(0);
         let selector = Point::<EF>::rand(&mut rng, 1);
         let local = Point::<EF>::rand(&mut rng, 2);
@@ -462,7 +466,12 @@ mod tests {
         let row = Point::<EF>::rand(&mut rng, 3);
         let (selector_row, local_row) = row.split_at(1);
         let successor = Poly::new_next_from_point(local.as_slice()).eval_base(&local_row);
-        let expected = Point::eval_eq(selector.as_slice(), selector_row.as_slice()) * successor;
+        let gate = selector
+            .iter()
+            .zip(selector_row.iter())
+            .map(|(&si, &xi)| si * xi + (EF::ONE - si) * (EF::ONE - xi))
+            .product::<EF>();
+        let expected = gate * successor;
 
         assert_eq!(
             statement.weights_at(&row).collect::<Vec<_>>(),
