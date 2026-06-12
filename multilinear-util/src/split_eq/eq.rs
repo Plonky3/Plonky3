@@ -341,6 +341,135 @@ impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
     }
 }
 
+/// Repeat-last Next helpers over the suffix-half equality table.
+impl<F: Field, EF: ExtensionField<F>> EqMaybePacked<F, EF> {
+    /// Adds `eq_weight * eq1[i] + shifted_weight * eq1[i - 1]` into each row.
+    ///
+    /// `boundary` is the already-scaled shifted contribution for row 0, whose
+    /// predecessor belongs to the previous outer chunk.
+    #[doc(hidden)]
+    pub fn accumulate_next_chunk_into(
+        &self,
+        out: &mut [EF],
+        eq_weight: EF,
+        shifted_weight: EF,
+        boundary: EF,
+    ) {
+        match self {
+            Self::Unpacked(eq1) => {
+                let (first_out, rest_out) = out.split_first_mut().unwrap();
+                let mut eq1 = eq1.iter().copied();
+                let mut prev = eq1.next().unwrap();
+
+                *first_out += eq_weight * prev + boundary;
+                rest_out.iter_mut().zip_eq(eq1).for_each(|(out, w1)| {
+                    *out += eq_weight * w1 + shifted_weight * prev;
+                    prev = w1;
+                });
+            }
+            Self::Packed(eq1) => {
+                let (first_out, rest_out) = out.split_first_mut().unwrap();
+                let mut eq1 = EF::ExtensionPacking::to_ext_iter(eq1.iter().copied());
+                let mut prev = eq1.next().unwrap();
+
+                *first_out += eq_weight * prev + boundary;
+                rest_out.iter_mut().zip_eq(eq1).for_each(|(out, w1)| {
+                    *out += eq_weight * w1 + shifted_weight * prev;
+                    prev = w1;
+                });
+            }
+        }
+    }
+
+    /// Weighted accumulation for prefix compression using shifted eq1 weights.
+    ///
+    /// The first row is intentionally skipped; callers handle it with the
+    /// previous outer chunk's last equality weight.
+    pub(super) fn compress_prefix_shifted_into(&self, out: &mut [EF], chunk: &[F], w0: EF) {
+        let size_inner = out.len();
+        match self {
+            Self::Unpacked(eq1) => {
+                chunk
+                    .chunks(size_inner)
+                    .skip(1)
+                    .zip(eq1.iter())
+                    .for_each(|(chunk, &w1)| {
+                        let w = w0 * w1;
+                        out.iter_mut()
+                            .zip_eq(chunk.iter())
+                            .for_each(|(acc, &f)| *acc += w * f);
+                    });
+            }
+            Self::Packed(eq1) => {
+                chunk[size_inner..]
+                    .chunks(size_inner * F::Packing::WIDTH)
+                    .zip(eq1.iter())
+                    .for_each(|(chunk, &w1)| {
+                        let w = w1 * w0;
+                        chunk
+                            .chunks(size_inner)
+                            .zip(EF::ExtensionPacking::to_ext_iter([w]))
+                            .for_each(|(chunk, w)| {
+                                out.iter_mut()
+                                    .zip_eq(chunk.iter())
+                                    .for_each(|(acc, &f)| *acc += w * f);
+                            });
+                    });
+            }
+        }
+    }
+
+    /// Dots a base-field chunk with the beginning of this eq table.
+    ///
+    /// Used for shifted repeat-last Next weights, where callers pass
+    /// `poly[1..]` chunks and the first eq weight corresponds to the previous
+    /// row. The final chunk may be shorter than the packed eq table width.
+    pub(super) fn dot_with_base_shifted(&self, chunk: &[F]) -> EF {
+        debug_assert!(chunk.len() <= self.scalar_chunk_size());
+
+        match self {
+            Self::Unpacked(eq1) => {
+                dot_product(eq1.iter().take(chunk.len()).copied(), chunk.iter().copied())
+            }
+            Self::Packed(eq1) => {
+                let (packed, suffix) = F::Packing::pack_slice_with_suffix(chunk);
+                let mut sum = EF::ZERO;
+                if !packed.is_empty() {
+                    let packed_sum = dot_product(eq1.iter().copied(), packed.iter().copied());
+                    sum += EF::ExtensionPacking::to_ext_iter([packed_sum]).sum::<EF>();
+                }
+
+                if !suffix.is_empty() {
+                    let w1 = eq1.as_slice()[packed.len()];
+                    sum += EF::ExtensionPacking::to_ext_iter([w1])
+                        .zip(suffix.iter())
+                        .map(|(w1, &value)| w1 * value)
+                        .sum::<EF>();
+                }
+
+                sum
+            }
+        }
+    }
+
+    /// Returns the final scalar entry of this eq table.
+    ///
+    /// For packed storage this extracts the last lane of the last packed value.
+    /// Repeat-last Next uses this as the boundary weight for the repeated final
+    /// row.
+    #[doc(hidden)]
+    pub fn last_scalar(&self) -> EF {
+        match self {
+            Self::Unpacked(eq1) => *eq1.as_slice().last().unwrap(),
+            Self::Packed(eq1) => {
+                EF::ExtensionPacking::to_ext_iter([*eq1.as_slice().last().unwrap()])
+                    .last()
+                    .unwrap()
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alloc::vec;

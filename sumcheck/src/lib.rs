@@ -32,7 +32,6 @@ pub mod data;
 pub mod error;
 pub mod lagrange;
 pub mod layout;
-pub mod next;
 pub mod product_polynomial;
 pub mod strategy;
 pub mod svo;

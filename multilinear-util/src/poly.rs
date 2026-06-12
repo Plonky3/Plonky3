@@ -325,6 +325,28 @@ impl<F: Field> Poly<F> {
         Self(evals)
     }
 
+    /// Materializes the repeat-last Next weight table for `point`.
+    ///
+    /// If `eq = Eq(point, .)`, then:
+    /// ```text
+    /// Next(point, .) = [0, eq[0], eq[1], ..., eq[last - 1]] + Omega
+    /// Omega[last] = eq[last]
+    /// ```
+    ///
+    /// This is useful as a dense reference implementation. Hot paths should
+    /// prefer shifted views or split/compressed forms instead of materializing.
+    pub fn new_next_from_point(point: &[F]) -> Self {
+        let mut res = Self::new_from_point(point, F::ONE).0;
+        let n = res.len();
+
+        let last = res[n - 1];
+        res.copy_within(0..n - 1, 1);
+        res[0] = F::ZERO;
+        res[n - 1] += last;
+
+        Self::new(res)
+    }
+
     /// Evaluates the multilinear polynomial at `point ∈ F^n`.
     ///
     /// Computes
@@ -343,6 +365,18 @@ impl<F: Field> Poly<F> {
         } else {
             SplitEq::new_packed(point, EF::ONE).eval_base(self)
         }
+    }
+
+    /// Evaluates the repeat-last shifted view of this polynomial at `point`.
+    ///
+    /// Computes
+    /// ```text
+    ///     sum_{x in {0,1}^n} eq(point, x) * self(succ_repeat_last(x)).
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn eval_next_base<EF: ExtensionField<F>>(&self, point: &Point<EF>) -> EF {
+        SplitEq::new_packed(point, EF::ONE).eval_next_base(self)
     }
 
     /// Evaluates the multilinear polynomial at `point ∈ F^n`.

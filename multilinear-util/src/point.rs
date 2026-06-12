@@ -145,6 +145,29 @@ where
             .product()
     }
 
+    /// Evaluates the repeat-last Next closed-form carry state.
+    ///
+    /// Coordinates are processed from last to first. Passing the full point and
+    /// row gives the full repeat-last Next value as `done + omega`; passing only
+    /// a low-bit suffix leaves `carry` alive for the unprocessed prefix.
+    #[must_use]
+    #[inline]
+    pub fn eval_next(point: &[F], row: &[F]) -> (F, F, F) {
+        assert_eq!(point.len(), row.len());
+
+        let mut carry = F::ONE;
+        let mut done = F::ZERO;
+        let mut omega = F::ONE;
+        for (&point_bit, &row_bit) in point.iter().zip(row).rev() {
+            let eq = row_bit.double() * point_bit - point_bit - row_bit + F::ONE;
+            let prev_carry = carry;
+            carry = prev_carry * point_bit * (F::ONE - row_bit);
+            done = done * eq + prev_carry * (F::ONE - point_bit) * row_bit;
+            omega *= point_bit * row_bit;
+        }
+        (carry, done, omega)
+    }
+
     /// Returns a new `Point` with the variables in reversed order.
     #[must_use]
     pub fn reversed(&self) -> Self {
