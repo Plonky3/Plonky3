@@ -179,7 +179,11 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for SuffixProver<F, E
             .iter()
             .copied()
             .map(|poly_idx| {
-                let (eval, partial_evals) = point.eval_next_suffix(table.poly(poly_idx));
+                let d_eq = current_openings
+                    .iter()
+                    .find(|opening| opening.poly_idx() == Some(poly_idx))
+                    .map(|opening| opening.data().rounds().last().unwrap().poly());
+                let (eval, partial_evals) = point.eval_next_suffix(table.poly(poly_idx), d_eq);
                 (Opening::new_with_data(poly_idx, eval, partial_evals), eval)
             })
             .unzip();

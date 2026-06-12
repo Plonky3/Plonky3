@@ -676,7 +676,7 @@ mod tests {
         let strategy = SuffixProver::<F, EF>::strategy();
 
         let schedule = [
-            (0, vec![0], vec![1]),
+            (0, vec![0], vec![0, 1]),
             (1, vec![], vec![0]),
             (0, vec![1], vec![0]),
         ];

@@ -79,12 +79,12 @@ impl<T> OpeningBatch<T> {
     }
 
     /// Returns the total number of entries in this batch.
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.current.len() + self.next.len()
     }
 
     /// Returns true if this batch has no entries.
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.current.is_empty() && self.next.is_empty()
     }
 
@@ -94,7 +94,7 @@ impl<T> OpeningBatch<T> {
     }
 
     /// Returns true if the current/Next split has the same lengths as `other`.
-    pub fn has_same_shape<U>(&self, other: &OpeningBatch<U>) -> bool {
+    pub const fn has_same_shape<U>(&self, other: &OpeningBatch<U>) -> bool {
         self.current.len() == other.current.len() && self.next.len() == other.next.len()
     }
 }

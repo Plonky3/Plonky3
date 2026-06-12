@@ -432,14 +432,25 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     /// three payloads over the SVO suffix: `d_eq`, `d_t`, and `d_omega`. Those
     /// payloads give the scalar opening value and are further compressed into
     /// one `NextPartials` entry per SVO sumcheck round.
-    pub fn eval_next_suffix(&self, poly: &Poly<F>) -> (EF, NextSvoPartials<EF>) {
+    pub fn eval_next_suffix(
+        &self,
+        poly: &Poly<F>,
+        d_eq: Option<&Poly<EF>>,
+    ) -> (EF, NextSvoPartials<EF>) {
         assert_eq!(self.num_variables(), poly.num_variables());
         assert!(
             matches!(self.var_order(), VariableOrder::Suffix),
             "next openings are implemented for suffix SVO only"
         );
 
-        let d_eq = self.z_split.compress_prefix(poly);
+        let d_eq_owned = d_eq.is_none().then(|| self.z_split.compress_prefix(poly));
+        let d_eq = d_eq.unwrap_or_else(|| d_eq_owned.as_ref().unwrap());
+        assert_eq!(d_eq.num_variables(), self.num_variables_svo());
+
+        #[cfg(debug_assertions)]
+        if d_eq_owned.is_none() {
+            debug_assert_eq!(*d_eq, self.z_split.compress_prefix(poly));
+        }
         let d_t = self.z_split.compress_prefix_shifted(poly);
 
         let svo_rows = 1 << self.num_variables_svo();
@@ -465,7 +476,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
 
         let rounds = (1..=self.num_variables_svo())
             .map(|active_len| {
-                next_round_partials_suffix(&d_eq, &d_t, &d_omega, &self.z_svo, active_len)
+                next_round_partials_suffix(d_eq, &d_t, &d_omega, &self.z_svo, active_len)
             })
             .collect::<Vec<_>>();
 
@@ -734,7 +745,7 @@ mod tests {
             assert!(matches!(svo_point.var_order(), VariableOrder::Suffix));
 
             let expected = poly.eval_next_base(point);
-            let (actual, partials) = svo_point.eval_next_suffix(poly);
+            let (actual, partials) = svo_point.eval_next_suffix(poly, None);
             assert_eq!(actual, expected);
             assert_eq!(partials.rounds().len(), svo_point.num_variables_svo());
 
