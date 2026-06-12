@@ -255,7 +255,10 @@ fn test_whir_end_to_end_partial_final_fold() {
     // transcript shape must all use the smaller final pre-direct fold.
     let specs = vec![TableSpec::new(
         TableShape::new(15, 2),
-        vec![vec![0], vec![1]],
+        vec![
+            OpeningBatch::new(vec![0], Vec::new()),
+            OpeningBatch::new(vec![1], Vec::new()),
+        ],
     )];
 
     run_whir_pcs::<PrefixProver<F, EF>>(
@@ -307,7 +310,7 @@ fn test_whir_end_to_end_mixed_current_next_openings() {
         let merkle_compress = MyCompress::new(perm);
         let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
         let dft = MyDft::default();
-        let config = WhirConfig::new(num_variables, params);
+        let config = WhirConfig::new(num_variables, params).expect("valid WHIR config");
         let pcs = TestWhirPcs::<L>::new(config, dft, mmcs);
 
         let (commitment, proof) = {

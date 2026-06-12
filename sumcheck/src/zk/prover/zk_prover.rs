@@ -381,6 +381,7 @@ mod tests {
     use rand::rngs::SmallRng;
     use rand::{RngExt, SeedableRng};
 
+    use crate::layout::PrefixProver;
     use crate::strategy::VariableOrder;
     use crate::table::OpeningBatch;
     use crate::zk::ZkSumcheckData;
@@ -451,7 +452,7 @@ mod tests {
         let mut data_rng = SmallRng::seed_from_u64(seed.wrapping_add(1));
         let evals: Vec<F> = (0..(1usize << n_vars)).map(|_| data_rng.random()).collect();
         let (mut prover, mut verifier, _) =
-            build_prover_verifier(evals, folding_factor, encoding, mmcs);
+            build_prover_verifier::<PrefixProver<F, EF>>(evals, folding_factor, encoding, mmcs);
 
         let mut prover_challenger = MyChallenger::new(perm.clone());
         let mut verifier_challenger = MyChallenger::new(perm);
@@ -466,21 +467,18 @@ mod tests {
 
         let mut zk_data = ZkSumcheckData::<F, EF>::default();
         let mut prover_rng = SmallRng::seed_from_u64(seed.wrapping_add(2));
-        let (_residual_prover, prover_randomness, mask_oracles) = prover.into_sumcheck(
+        let prover_handoff = prover.into_sumcheck(
             &mut zk_data,
             pow_bits,
             &mut prover_challenger,
             &mut prover_rng,
         );
-        let mask_commits: Vec<_> = mask_oracles
-            .iter()
-            .map(|(commit, _)| commit.clone())
-            .collect();
+        let mask_commitment = prover_handoff.mask_oracle.0.clone();
 
-        let (verifier_point, _final_target) = verifier
+        let verifier_handoff = verifier
             .into_sumcheck::<MyMmcs, _>(
                 &zk_data,
-                &mask_commits,
+                &mask_commitment,
                 ell_zk,
                 folding_factor,
                 pow_bits,
@@ -489,8 +487,16 @@ mod tests {
             .expect("verifier should accept mixed current/Next batch");
 
         assert_eq!(
-            prover_randomness.iter().copied().collect::<Vec<_>>(),
-            verifier_point.iter().copied().collect::<Vec<_>>(),
+            prover_handoff
+                .randomness
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            verifier_handoff
+                .randomness
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
         );
     }
 

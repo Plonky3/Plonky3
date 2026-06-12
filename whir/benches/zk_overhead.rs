@@ -20,7 +20,7 @@ use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Layout, PrefixProver, Table};
-use p3_sumcheck::{OpeningProtocol, TableShape, TableSpec};
+use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
@@ -82,7 +82,7 @@ fn bench_plain(group: &mut BenchmarkGroup<'_, WallTime>, num_variables: usize) {
     let table = Table::new(vec![Poly::<F>::rand(&mut rng, num_variables)]);
     let protocol = OpeningProtocol::new(vec![TableSpec::new(
         TableShape::new(num_variables, 1),
-        vec![vec![0]],
+        vec![OpeningBatch::new(vec![0], Vec::new())],
     )]);
 
     group.bench_function(BenchmarkId::new("plain", num_variables), |b| {
@@ -150,7 +150,7 @@ fn report_proof_sizes(num_variables: usize) {
     let table = Table::new(vec![Poly::<F>::rand(&mut rng, num_variables)]);
     let protocol = OpeningProtocol::new(vec![TableSpec::new(
         TableShape::new(num_variables, 1),
-        vec![vec![0]],
+        vec![OpeningBatch::new(vec![0], Vec::new())],
     )]);
     let mut ch = challenger();
     let mut ds = DomainSeparator::new(vec![]);
