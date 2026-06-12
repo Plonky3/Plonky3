@@ -20,6 +20,7 @@ use crate::layout::{LayoutStrategy, ProverMultiClaim, ProverVirtualClaim, Witnes
 use crate::product_polynomial::ProductPolynomial;
 use crate::strategy::{SumcheckProver, VariableOrder};
 use crate::svo::{SvoPoint, calculate_accumulators_batch};
+use crate::table::{OpeningBatch, OpeningEvals, OpeningRequest};
 use crate::{Claim, SumcheckData, extrapolate_01inf};
 
 /// Stacked-sumcheck prover with prefix-first variable binding.
@@ -113,34 +114,47 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         self.tables[id].num_variables()
     }
 
-    /// Records opening claims for the selected columns of `table_idx`.
+    /// Records opening claims for the selected columns of one table.
+    ///
+    /// All requested columns share one sampled local opening point.
+    ///
+    /// - Current openings evaluate a column at that point.
+    /// - Next openings evaluate the repeat-last successor view at that point.
+    /// - Returned evaluations list all current openings first, then all next openings.
     ///
     /// # Arguments
     ///
     /// - `table_idx`  — source table index.
-    /// - `polys`      — columns to open; must be non-empty.
-    /// - `challenger` — Fiat–Shamir transcript.
+    /// - `batch`      — current and next columns opened at this point.
+    /// - `challenger` — Fiat-Shamir transcript.
     ///
-    /// # Fiat–Shamir
+    /// # Fiat-Shamir
     ///
-    /// - Samples the opening point internally from the challenger.
-    /// - Absorbs the evaluations into the transcript before returning.
-    /// - The verifier's `add_claim` performs the symmetric absorption.
+    /// - Samples the opening point internally from the transcript.
+    /// - Absorbs the evaluations before returning.
+    /// - The verifier performs the symmetric absorption.
     ///
     /// # Panics
     ///
-    /// - Columns list must be non-empty.
+    /// - At least one current or next column must be requested.
     #[tracing::instrument(skip_all)]
-    fn eval<Ch>(&mut self, table_idx: usize, polys: &[usize], challenger: &mut Ch) -> Vec<EF>
+    fn eval<Ch>(
+        &mut self,
+        table_idx: usize,
+        batch: &OpeningRequest,
+        challenger: &mut Ch,
+    ) -> OpeningEvals<EF>
     where
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
-        // Precondition: opening nothing would silently push an empty ProverMultiClaim.
+        // Split the request into its two column groups.
+        let current = batch.current();
+        let next = batch.next();
+        // Precondition: opening nothing would silently push an empty claim.
         assert!(
-            !polys.is_empty(),
+            !batch.is_empty(),
             "opening schedule must name at least one column"
         );
-
         // Sample the local-frame opening point from the transcript.
         let table = &self.tables[table_idx];
         let point = Point::expand_from_univariate(
@@ -151,27 +165,42 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         // Factorise the point once; every selected column reuses it.
         let point = SvoPoint::new_packed(self.folding, &point);
 
-        // Evaluate each column at the SVO point; split into (opening, eval).
-        let (openings, evals): (Vec<_>, Vec<EF>) = polys
+        // Current group: evaluate each column at the point.
+        // Each entry yields an opening (carrying preprocessing residuals) plus the bare eval.
+        let (current_openings, current_evals): (Vec<_>, Vec<EF>) = current
             .iter()
-            .map(|&poly_idx| {
+            .copied()
+            .map(|poly_idx| {
                 let (eval, partial_evals) = point.eval(table.poly(poly_idx));
-                let opening = Opening {
-                    poly_idx: Some(poly_idx),
-                    eval,
-                    data: partial_evals,
-                };
-                (opening, eval)
+                (Opening::new_with_data(poly_idx, eval, partial_evals), eval)
             })
             .unzip();
 
-        // Bind the evaluations into the transcript; the verifier absorbs the same bytes.
-        challenger.observe_algebra_slice(&evals);
+        // Next group: evaluate the repeat-last successor view at the same point.
+        // The prefix layout folds the leading variables, so the successor is taken accordingly.
+        let (next_openings, next_evals): (Vec<_>, Vec<EF>) = next
+            .iter()
+            .copied()
+            .map(|poly_idx| {
+                let (eval, partial_evals) = point.eval_next_prefix(table.poly(poly_idx));
+                (Opening::new_with_data(poly_idx, eval, partial_evals), eval)
+            })
+            .unzip();
+
+        // Bind the evaluations into the transcript, current group first then next.
+        // The verifier absorbs the same bytes in the same order.
+        challenger.observe_algebra_slice(&current_evals);
+        challenger.observe_algebra_slice(&next_evals);
 
         // Store the batch for the later sumcheck reduction.
-        self.claim_map[table_idx].push(ProverMultiClaim::new(point, openings));
+        self.claim_map[table_idx].push(ProverMultiClaim::new(
+            point,
+            current_openings,
+            next_openings,
+        ));
 
-        evals
+        // Return both eval groups in the canonical current-then-next order.
+        OpeningBatch::new(current_evals, next_evals)
     }
 
     /// Samples a virtual evaluation on the full stacked polynomial.
@@ -221,6 +250,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
             &ProverMultiClaim::new(
                 SvoPoint::new_unpacked(self.folding, &point, VariableOrder::Prefix),
                 openings,
+                Vec::new(),
             ),
             &weights,
         );
@@ -333,7 +363,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         let compressed = tracing::info_span!("compress_prefix_to_packed")
             .in_scope(|| self.poly.compress_prefix_to_packed(&rs, EF::ONE));
 
-        let weights = self.combine_eqs(&rs, alpha).pack::<F, EF>();
+        let weights = self.combine_weights(&rs, alpha).pack::<F, EF>();
         let prod_poly =
             ProductPolynomial::<F, EF>::new_packed(VariableOrder::Prefix, compressed, weights);
         debug_assert_eq!(prod_poly.dot_product(), sum);
@@ -384,10 +414,17 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
         let mut sum = EF::ZERO;
         let mut alphas = alpha.powers();
 
-        // Concrete openings: three loops, no filter.
+        // Walk every concrete opening in the canonical insertion order.
+        //     placements -> claims -> current openings -> next openings
+        // Each opening consumes the next power of alpha, matching the verifier.
         for placement in &self.placements {
             for claim in &self.claim_map[placement.idx()] {
-                for opening in claim.openings() {
+                // Current group first.
+                for opening in claim.current_openings() {
+                    sum += opening.eval() * alphas.next().unwrap();
+                }
+                // Next group second, continuing the same power sequence.
+                for opening in claim.next_openings() {
                     sum += opening.eval() * alphas.next().unwrap();
                 }
             }
@@ -402,25 +439,65 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
         sum
     }
 
-    /// Builds the residual equality-weight polynomial after the prefix SVO rounds.
+    /// Builds the residual weight polynomial left after the folded prefix rounds.
+    ///
+    /// # Overview
+    ///
+    /// - Each concrete opening contributes a slot-local equality weight.
+    /// - The slot's selector lifts that weight into the stacked variable space.
+    /// - All contributions are summed with the same alpha powers as the batched claim.
+    ///
+    /// # Arguments
+    ///
+    /// - `rs`    — folded challenges from the rounds already bound.
+    /// - `alpha` — batching challenge whose powers weight each opening.
+    ///
+    /// # Panics
+    ///
+    /// - The challenge count must equal the folding depth.
     #[tracing::instrument(skip_all)]
-    pub(crate) fn combine_eqs(&self, rs: &Point<EF>, alpha: EF) -> Poly<EF> {
+    pub(crate) fn combine_weights(&self, rs: &Point<EF>, alpha: EF) -> Poly<EF> {
+        // Invariant: one folded challenge per folded round.
         assert_eq!(rs.num_variables(), self.folding);
+        // Output spans the stacked space minus the already-folded variables.
         let mut out = Poly::<EF>::zero(self.num_variables - rs.num_variables());
 
         let mut alphas = alpha.powers();
 
+        // Same canonical walk as the batched claim, so powers stay aligned.
         for placement in &self.placements {
+            // Variables left in each slot after removing the folded ones.
             let local_rest_variables =
                 self.num_variables_table(placement.idx()) - rs.num_variables();
             for claim in &self.claim_map[placement.idx()] {
-                for opening in claim.openings() {
+                // Current group: equality weight of the column at the claim point.
+                for opening in claim.current_openings() {
+                    // The column picks the selector that names this slot.
                     let col = opening.poly_idx().unwrap();
                     let selector = &placement.selectors()[col];
+                    // Build the slot-local weight scaled by this opening's alpha power.
                     let mut local = Poly::<EF>::zero(local_rest_variables);
                     claim
                         .point()
                         .accumulate_into(local.as_mut_slice(), rs, alphas.next().unwrap());
+
+                    // Scatter the slot-local weight into its stacked positions.
+                    //     dst = (local_idx << selector_vars) | selector_index
+                    for (local_idx, &value) in local.as_slice().iter().enumerate() {
+                        let dst = (local_idx << selector.num_variables()) | selector.index();
+                        out.as_mut_slice()[dst] += value;
+                    }
+                }
+                // Next group: same scatter, but using the repeat-last successor weight.
+                for opening in claim.next_openings() {
+                    let col = opening.poly_idx().unwrap();
+                    let selector = &placement.selectors()[col];
+                    let mut local = Poly::<EF>::zero(local_rest_variables);
+                    claim.point().accumulate_next_prefix_into(
+                        local.as_mut_slice(),
+                        rs,
+                        alphas.next().unwrap(),
+                    );
 
                     for (local_idx, &value) in local.as_slice().iter().enumerate() {
                         let dst = (local_idx << selector.num_variables()) | selector.index();

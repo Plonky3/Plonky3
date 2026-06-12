@@ -325,6 +325,41 @@ impl<F: Field> Poly<F> {
         Self(evals)
     }
 
+    /// Materializes the dense repeat-last successor weight table for a point.
+    ///
+    /// Start from the equality table `eq[i] = Eq(point, i)`.
+    /// The successor table shifts each weight to the next row and repeats the maximal row:
+    /// ```text
+    /// table = [0, eq[0], eq[1], ..., eq[last - 1]] + Omega
+    /// Omega = [0, ..., 0, eq[last]]
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// This allocates the full dense table over the hypercube.
+    /// It backs the dense constraint-combination path.
+    /// The WHIR opening path avoids it via the non-materializing shifted views.
+    pub fn new_next_from_point(point: &[F]) -> Self {
+        // Start from the plain equality table eq[i] = Eq(point, i).
+        let mut res = Self::new_from_point(point, F::ONE).0;
+        let n = res.len();
+
+        // Save the maximal-row weight before shifting overwrites it.
+        // This is the boundary weight Omega that the repeated last row keeps.
+        let last = res[n - 1];
+        // Shift every weight one row up: row i receives the old weight of row i - 1.
+        //
+        //     before: [ eq0, eq1, eq2, ..., eq_{n-1} ]
+        //     after : [  *  , eq0, eq1, ..., eq_{n-2} ]
+        res.copy_within(0..n - 1, 1);
+        // Row 0 has no predecessor, so its successor weight is zero.
+        res[0] = F::ZERO;
+        // The maximal row maps to itself, so add back its own equality weight.
+        res[n - 1] += last;
+
+        Self::new(res)
+    }
+
     /// Evaluates the multilinear polynomial at `point ∈ F^n`.
     ///
     /// Computes
@@ -343,6 +378,20 @@ impl<F: Field> Poly<F> {
         } else {
             SplitEq::new_packed(point, EF::ONE).eval_base(self)
         }
+    }
+
+    /// Evaluates this polynomial against the repeat-last successor weights at a point.
+    ///
+    /// Each hypercube row is read at its successor, with the maximal row repeating itself:
+    /// ```text
+    ///     sum_{x in {0,1}^n} eq(point, x) * self(succ_repeat_last(x))
+    /// ```
+    #[must_use]
+    #[inline]
+    pub fn eval_next_base<EF: ExtensionField<F>>(&self, point: &Point<EF>) -> EF {
+        // Build the factored equality table for the point and let the split form
+        // contract it against the successor view without materializing the dense table.
+        SplitEq::new_packed(point, EF::ONE).eval_next_base(self)
     }
 
     /// Evaluates the multilinear polynomial at `point ∈ F^n`.
@@ -754,6 +803,47 @@ pub(crate) mod test {
     type F = BabyBear;
     type PackedF = <F as p3_field::Field>::Packing;
     type EF = BinomialExtensionField<F, 4>;
+
+    #[test]
+    fn new_next_from_point_shifts_and_repeats_last_row() {
+        // The empty point has a single row, so the successor table is just [1].
+        assert_eq!(Poly::<F>::new_next_from_point(&[]).as_slice(), &[F::ONE]);
+
+        // One variable: the equality table for [a] is [1 - a, a].
+        // The successor table zeroes row 0, shifts up, and folds the maximal
+        // weight back into the last row: [0, (1 - a) + a] = [0, 1].
+        let a = F::from_u64(5);
+        assert_eq!(
+            Poly::new_next_from_point(&[a]).as_slice(),
+            &[F::ZERO, F::ONE],
+        );
+    }
+
+    #[test]
+    fn eval_next_base_matches_shifted_table_evaluation() {
+        // The successor view reads each row at the next index, with the maximal
+        // row repeating itself.
+        //
+        //     rows    [2, 3, 5, 7]
+        //     succ -> [3, 5, 7, 7]   (row x -> x + 1; the last row repeats)
+        let poly = Poly::new(vec![
+            F::from_u64(2),
+            F::from_u64(3),
+            F::from_u64(5),
+            F::from_u64(7),
+        ]);
+        let shifted = Poly::new(vec![
+            F::from_u64(3),
+            F::from_u64(5),
+            F::from_u64(7),
+            F::from_u64(7),
+        ]);
+        let point = Point::new(vec![F::from_u64(11), F::from_u64(13)]);
+
+        // Evaluating through the successor view must equal evaluating the
+        // explicit shifted table at the same point.
+        assert_eq!(poly.eval_next_base(&point), shifted.eval_base(&point));
+    }
 
     /// Naive method to evaluate a multilinear polynomial for testing.
     pub(crate) fn eval_reference<F: Field, EF: ExtensionField<F>>(evals: &[F], point: &[EF]) -> EF {
@@ -1972,5 +2062,39 @@ pub(crate) mod test {
         //     3-variable polynomial; ask to pad to arity 2 → must panic.
         let mut poly = Poly::<F>::zero(3);
         poly.pad_zeros(2);
+    }
+
+    #[test]
+    fn test_next_closed_forms() {
+        // Invariant: four different routes to the successor opening must agree.
+        //   1. closed-form carry recurrence over the two points
+        //   2. dense successor table dotted with the equality table
+        //   3. dense successor table evaluated at the first point
+        //   4. plain equality table evaluated through the successor view
+        let mut rng = SmallRng::seed_from_u64(0);
+        // Fixture state: sweep variable counts 0..14 to cover all base-case branches.
+        for k in 0..14 {
+            let p0 = Point::<F>::rand(&mut rng, k);
+            let p1 = Point::<F>::rand(&mut rng, k);
+
+            // Route 1: closed form. Full fold yields completed plus boundary mass.
+            let (_carry, done, omega) = Point::eval_next(p1.as_slice(), p0.as_slice());
+            let e0 = done + omega;
+
+            // Route 2: materialize the successor table, then dot with the equality table.
+            let next = Poly::new_next_from_point(p1.as_slice());
+            let eq = Poly::new_from_point(p0.as_slice(), F::ONE);
+            let e1 = dot_product(eq.iter().copied(), next.iter().copied());
+            assert_eq!(e0, e1);
+
+            // Route 3: evaluate the same successor table directly at the first point.
+            let e1 = next.eval_base(&p0);
+            assert_eq!(e0, e1);
+
+            // Route 4: keep the plain equality table and apply the successor view at eval time.
+            let next = Poly::new_from_point(p0.as_slice(), F::ONE);
+            let e1 = next.eval_next_base(&p1);
+            assert_eq!(e0, e1);
+        }
     }
 }

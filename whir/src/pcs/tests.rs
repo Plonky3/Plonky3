@@ -10,9 +10,10 @@ use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
 use p3_field::extension::BinomialExtensionField;
 use p3_merkle_tree::MerkleTreeMmcs;
-use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Witness};
+use p3_multilinear_util::poly::Poly;
+use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table, Witness};
 use p3_sumcheck::test_util::{random_table_specs, table_specs_to_tables};
-use p3_sumcheck::{OpeningProtocol, TableShape, TableSpec};
+use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
@@ -159,13 +160,26 @@ fn test_whir_end_to_end() {
         vec![
             TableSpec::new(
                 TableShape::new(12, 3),
-                vec![vec![0, 1, 2], vec![0, 2], vec![1]],
+                vec![
+                    OpeningBatch::new(vec![0, 1, 2], Default::default()),
+                    OpeningBatch::new(vec![0, 2], Default::default()),
+                    OpeningBatch::new(vec![1], Default::default()),
+                ],
             ),
-            TableSpec::new(TableShape::new(10, 2), vec![vec![0, 1], vec![1]]),
+            TableSpec::new(
+                TableShape::new(10, 2),
+                vec![
+                    OpeningBatch::new(vec![0, 1], Default::default()),
+                    OpeningBatch::new(vec![1], Default::default()),
+                ],
+            ),
         ],
         vec![TableSpec::new(
             TableShape::new(14, 4),
-            vec![vec![0, 1, 2, 3], vec![0, 3]],
+            vec![
+                OpeningBatch::new(vec![0, 1, 2, 3], Default::default()),
+                OpeningBatch::new(vec![0, 3], Default::default()),
+            ],
         )],
     ];
 
@@ -241,7 +255,10 @@ fn test_whir_end_to_end_partial_final_fold() {
     // transcript shape must all use the smaller final pre-direct fold.
     let specs = vec![TableSpec::new(
         TableShape::new(15, 2),
-        vec![vec![0], vec![1]],
+        vec![
+            OpeningBatch::new(vec![0], Vec::new()),
+            OpeningBatch::new(vec![1], Vec::new()),
+        ],
     )];
 
     run_whir_pcs::<PrefixProver<F, EF>>(
@@ -256,6 +273,89 @@ fn test_whir_end_to_end_partial_final_fold() {
         SecurityAssumption::UniqueDecoding,
         0,
     );
+}
+
+#[test]
+fn test_whir_end_to_end_mixed_current_next_openings() {
+    fn run<L: Layout<F, EF>>() {
+        const NUM_VARIABLES: usize = 12;
+        const FOLDING: usize = 3;
+
+        let mut rng = SmallRng::seed_from_u64(42);
+        let table = Table::new(vec![
+            Poly::<F>::rand(&mut rng, NUM_VARIABLES),
+            Poly::<F>::rand(&mut rng, NUM_VARIABLES),
+        ]);
+        let witness = L::new_witness(vec![table], FOLDING);
+        let protocol = OpeningProtocol::new(vec![TableSpec::new(
+            TableShape::new(NUM_VARIABLES, 2),
+            vec![OpeningBatch::new(vec![0], vec![1])],
+        )]);
+        assert_eq!(witness.table_shapes(), protocol.table_shapes());
+
+        let folding_factor = FoldingFactor::Constant(FOLDING);
+        let num_variables = witness.num_variables();
+        let params = ProtocolParameters {
+            security_level: 32,
+            pow_bits: 0,
+            round_log_inv_rates: default_round_log_inv_rates(num_variables, &folding_factor),
+            folding_factor,
+            soundness_type: SecurityAssumption::JohnsonBound,
+            starting_log_inv_rate: 1,
+        };
+
+        let mut rng = SmallRng::seed_from_u64(1);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let merkle_hash = MyHash::new(perm.clone());
+        let merkle_compress = MyCompress::new(perm);
+        let mmcs = MyMmcs::new(merkle_hash, merkle_compress, 0);
+        let dft = MyDft::default();
+        let config = WhirConfig::new(num_variables, params).expect("valid WHIR config");
+        let pcs = TestWhirPcs::<L>::new(config, dft, mmcs);
+
+        let (commitment, proof) = {
+            let mut challenger = challenger();
+            let mut domain_separator = DomainSeparator::new(vec![]);
+            pcs.add_domain_separator::<8>(&mut domain_separator);
+            domain_separator.observe_domain_separator(&mut challenger);
+
+            let (commitment, prover_data) =
+                <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::commit(
+                    &pcs,
+                    witness,
+                    &mut challenger,
+                );
+            let proof = <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::open(
+                &pcs,
+                prover_data,
+                protocol.clone(),
+                &mut challenger,
+            );
+            (commitment, proof)
+        };
+
+        assert_eq!(proof.evals.len(), 1);
+        assert_eq!(proof.evals[0].len(), 2);
+        assert_eq!(proof.evals[0].current().len(), 1);
+        assert_eq!(proof.evals[0].next().len(), 1);
+
+        let mut challenger = challenger();
+        let mut domain_separator = DomainSeparator::new(vec![]);
+        pcs.add_domain_separator::<8>(&mut domain_separator);
+        domain_separator.observe_domain_separator(&mut challenger);
+
+        <TestWhirPcs<L> as MultilinearPcs<EF, MyChallenger>>::verify(
+            &pcs,
+            &commitment,
+            &proof,
+            &mut challenger,
+            protocol,
+        )
+        .expect("verification failed");
+    }
+
+    run::<PrefixProver<F, EF>>();
+    run::<SuffixProver<F, EF>>();
 }
 
 #[test]
@@ -311,7 +411,7 @@ mod error_variant_tests {
     use p3_commit::MultilinearPcs;
     use p3_multilinear_util::poly::Poly;
     use p3_sumcheck::layout::{Layout, SuffixProver, Table};
-    use p3_sumcheck::{OpeningProtocol, SumcheckError, TableShape, TableSpec};
+    use p3_sumcheck::{OpeningBatch, OpeningProtocol, SumcheckError, TableShape, TableSpec};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -357,7 +457,10 @@ mod error_variant_tests {
         // Two opening batches: (cols [0, 1]) and (col [0]).
         let protocol = OpeningProtocol::new(vec![TableSpec::new(
             TableShape::new(NUM_VARIABLES, 2),
-            vec![vec![0, 1], vec![0]],
+            vec![
+                OpeningBatch::new(vec![0, 1], vec![]),
+                OpeningBatch::new(vec![0], vec![]),
+            ],
         )]);
 
         // Same Poseidon2 seed as elsewhere for byte-for-byte reproducibility.
@@ -453,20 +556,20 @@ mod error_variant_tests {
 
     #[test]
     fn rejects_with_batch_size_mismatch_when_an_eval_is_dropped() {
-        // Domain note: every batch i must carry exactly polys[i].len()
+        // Domain note: every batch i must carry exactly batch[i].len()
         // evaluations. The check runs per batch in protocol order, so the
         // first offender wins.
         //
-        // Fixture state: batch 0 opens columns [0, 1] -> 2 evaluations expected.
+        // Fixture state: batch 0 opens current columns [0, 1] -> 2 evaluations expected.
         //
         // Mutation: drop one evaluation from batch 0.
         //
-        //     protocol batch 0 columns:  [0, 1]   (len 2)
+        //     protocol batch 0 current:  [0, 1]   (len 2)
         //     proof.evals[0]:            [v0, v1] -> [v0]
         //     -> table_idx = 0, expected = 2, actual = 1
         let (pcs, commitment, mut proof, protocol) = commit_and_open();
         assert_eq!(proof.evals[0].len(), 2);
-        proof.evals[0].pop();
+        proof.evals[0] = OpeningBatch::new(vec![proof.evals[0].current()[0]], vec![]);
 
         let err = verify(&pcs, &commitment, &proof, protocol).unwrap_err();
         match err {
@@ -769,7 +872,7 @@ mod keccak_tests {
     use p3_merkle_tree::MerkleTreeMmcs;
     use p3_multilinear_util::poly::Poly;
     use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
-    use p3_sumcheck::{OpeningProtocol, TableShape, TableSpec};
+    use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
     use p3_symmetric::{CompressionFunctionFromHasher, PaddingFreeSponge, SerializingHasher};
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
@@ -810,7 +913,7 @@ mod keccak_tests {
         // Public protocol: open the single column at one point.
         let protocol = OpeningProtocol::new(vec![TableSpec::new(
             TableShape::new(NUM_VARIABLES, 1),
-            vec![vec![0]],
+            vec![OpeningBatch::new(vec![0], vec![])],
         )]);
         assert_eq!(witness.table_shapes(), protocol.table_shapes());
 
