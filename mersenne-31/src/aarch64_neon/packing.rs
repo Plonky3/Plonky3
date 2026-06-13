@@ -420,7 +420,7 @@ where
     R: Iterator<Item = PackedMersenne31Neon>,
     I: Iterator<Item = (R, [EF; N])>,
 {
-    match <EF as BasedVectorSpace<Mersenne31>>::DIMENSION {
+    match EF::DIMENSION {
         1 => columnwise_kernel::<EF, R, I, N, 1>(packed_width, items),
         2 => columnwise_kernel::<EF, R, I, N, 2>(packed_width, items),
         4 => columnwise_kernel::<EF, R, I, N, 4>(packed_width, items),
@@ -462,7 +462,7 @@ where
     R: Iterator<Item = PackedMersenne31Neon>,
     I: Iterator<Item = (R, [EF; N])>,
 {
-    debug_assert_eq!(<EF as BasedVectorSpace<Mersenne31>>::DIMENSION, D);
+    debug_assert_eq!(EF::DIMENSION, D);
     let zero64 = unsafe { aarch64::vdupq_n_u64(0) };
     let zero32 = unsafe { aarch64::vdupq_n_u32(0) };
 
@@ -679,6 +679,7 @@ mod tests {
     /// values, for both the trivial and a degree-4 extension.
     #[test]
     fn batched_columnwise_dot_product_matches_generic() {
+        use p3_field::extension::Complex;
         use p3_field::{
             BasedVectorSpace, ExtensionField, PackedFieldExtension, PrimeCharacteristicRing,
         };
@@ -746,6 +747,15 @@ mod tests {
                 .map(|r| core::array::from_fn(|j| scalar((r * 2 + j) as u32)))
                 .collect();
             check::<Mersenne31, 2>(packed_width, &rows, &scales_m31);
+
+            let scales_cm31: Vec<[Complex<Mersenne31>; 2]> = (0..height)
+                .map(|r| {
+                    core::array::from_fn(|j| {
+                        Complex::from_basis_coefficients_fn(|k| scalar((r * 4 + j * 2 + k) as u32))
+                    })
+                })
+                .collect();
+            check::<Complex<Mersenne31>, 2>(packed_width, &rows, &scales_cm31);
 
             let scales_qm31: Vec<[QM31; 2]> = (0..height)
                 .map(|r| {
