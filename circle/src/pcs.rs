@@ -894,6 +894,59 @@ mod tests {
     }
 
     #[test]
+    fn get_evaluations_on_domain_matches_direct_lde() {
+        // `get_evaluations_on_domain` must return the committed trace on the requested
+        // domain whether that domain is smaller than, equal to, or larger than the
+        // committed LDE. The smaller-than case is exercised whenever `log_blowup`
+        // exceeds the quotient degree (e.g. the quotient domain in uni-stark).
+        let mut rng = SmallRng::seed_from_u64(1);
+
+        let byte_hash = ByteHash {};
+        let field_hash = FieldHash::new(byte_hash);
+        let compress = MyCompress::new(byte_hash);
+        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+        // log_blowup = 2 makes the committed LDE larger than a quotient-sized domain.
+        let mut fri_params = FriParameters::new_testing(challenge_mmcs, 0);
+        fri_params.log_blowup = 2;
+
+        let pcs = TestPcs {
+            mmcs: val_mmcs,
+            fri_params,
+            _phantom: PhantomData,
+        };
+
+        let log_n = 8;
+        let width = 3;
+        let d =
+            <TestPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_n);
+        let evals = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_n, width);
+
+        let (_comm, data) =
+            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals.clone())]);
+
+        // The committed LDE lives on `standard(log_n + 2)`. Walk a target domain from the
+        // original degree up past the committed LDE: `log_n + 1` is the smaller-than case,
+        // `log_n + 2` hits the equal fast path, and `log_n + 3` is the larger-than case.
+        for target_log_n in [log_n, log_n + 1, log_n + 2, log_n + 3] {
+            let target = CircleDomain::standard(target_log_n);
+            let got = <TestPcs as Pcs<Challenge, Challenger>>::get_evaluations_on_domain(
+                &pcs, &data, 0, target,
+            )
+            .to_row_major_matrix();
+
+            // Ground truth: extrapolate the original trace straight onto `target`.
+            let expected = CircleEvaluations::from_natural_order(d, evals.clone())
+                .extrapolate(target)
+                .to_natural_order()
+                .to_row_major_matrix();
+
+            assert_eq!(got, expected, "mismatch for target_log_n = {target_log_n}");
+        }
+    }
+
+    #[test]
     fn reject_query_proof_count_mismatch() {
         // Invariant: the proof must contain exactly num_queries query proofs.
         // The verifier rejects if the count is wrong.
