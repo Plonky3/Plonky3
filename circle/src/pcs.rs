@@ -187,8 +187,17 @@ where
         if domain == committed_domain {
             mat.as_cow().cfft_perm_rows()
         } else {
-            CircleEvaluations::from_cfft_order(committed_domain, mat)
-                .extrapolate(domain)
+            // The committed matrix is the LDE of a polynomial of `committed_domain.log_n -
+            // log_blowup` coefficients, so interpolating it leaves zeros above that index.
+            // Truncating to the original coefficient count lets `domain` be smaller than the
+            // committed LDE (e.g. a quotient domain when `log_blowup` exceeds the quotient
+            // degree), which `extrapolate` would reject.
+            let log_orig = committed_domain.log_n - self.fri_params.log_blowup;
+            let mut coeffs =
+                CircleEvaluations::from_cfft_order(committed_domain, mat).interpolate();
+            let width = coeffs.width();
+            coeffs.values.truncate((1 << log_orig) * width);
+            CircleEvaluations::evaluate(domain, coeffs)
                 .to_cfft_order()
                 .as_cow()
                 .cfft_perm_rows()
