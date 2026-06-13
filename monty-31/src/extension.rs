@@ -1,6 +1,7 @@
 use p3_field::extension::{
     Binomial, BinomiallyExtendable, ExtensionAlgebra, HasTwoAdicBinomialExtension,
-    HasTwoAdicQuinticExtension, QuinticTrinomial, QuinticTrinomialExtendable, quintic_square,
+    HasTwoAdicQuinticExtension, QuinticTrinomial, QuinticTrinomialExtendable, binomial_square,
+    quintic_square,
 };
 use p3_field::{
     PrimeCharacteristicRing, TwoAdicField, field_to_array, packed_mod_add, packed_mod_sub,
@@ -65,6 +66,11 @@ where
         let mut res = [Self::ZERO; WIDTH];
         base_mul_packed(lhs, rhs, &mut res);
         res
+    }
+
+    #[inline(always)]
+    fn ext_square(a: &[Self; WIDTH], res: &mut [Self; WIDTH]) {
+        binomial_square::<Self, Self, WIDTH>(a, res, <Self as BinomiallyExtendable<WIDTH>>::W);
     }
 }
 
