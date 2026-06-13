@@ -480,8 +480,8 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
                 || EF::ExtensionPacking::zero_vec(packed_width * N),
                 |mut acc, chunk| {
                     let rows = chunk * chunk_rows..((chunk + 1) * chunk_rows).min(height);
-                    let partial = T::batched_columnwise_dot_product::<EF, _, _, N>(
-                        packed_width,
+                    T::batched_columnwise_dot_product::<EF, _, _, N>(
+                        &mut acc,
                         rows.map(|r| {
                             (
                                 self.padded_horizontally_packed_row::<T::Packing>(r),
@@ -489,7 +489,6 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
                             )
                         }),
                     );
-                    acc.iter_mut().zip(partial).for_each(|(a, p)| *a += p);
                     acc
                 },
                 |mut acc_l, acc_r| {

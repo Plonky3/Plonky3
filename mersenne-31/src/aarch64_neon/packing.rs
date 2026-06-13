@@ -412,20 +412,19 @@ unsafe impl PackedField for PackedMersenne31Neon {
 /// Dispatches the extension degree to a monomorphized kernel so the per-word loops
 /// fully unroll; degrees without a kernel fall back to the generic accumulation.
 pub(crate) fn batched_columnwise_dot_product<EF, R, I, const N: usize>(
-    packed_width: usize,
+    acc: &mut [EF::ExtensionPacking],
     items: I,
-) -> Vec<EF::ExtensionPacking>
-where
+) where
     EF: ExtensionField<Mersenne31>,
     R: Iterator<Item = PackedMersenne31Neon>,
     I: Iterator<Item = (R, [EF; N])>,
 {
     match EF::DIMENSION {
-        1 => columnwise_kernel::<EF, R, I, N, 1>(packed_width, items),
-        2 => columnwise_kernel::<EF, R, I, N, 2>(packed_width, items),
-        4 => columnwise_kernel::<EF, R, I, N, 4>(packed_width, items),
-        8 => columnwise_kernel::<EF, R, I, N, 8>(packed_width, items),
-        _ => generic_batched_columnwise_dot_product::<Mersenne31, EF, R, I, N>(packed_width, items),
+        1 => columnwise_kernel::<EF, R, I, N, 1>(acc, items),
+        2 => columnwise_kernel::<EF, R, I, N, 2>(acc, items),
+        4 => columnwise_kernel::<EF, R, I, N, 4>(acc, items),
+        8 => columnwise_kernel::<EF, R, I, N, 8>(acc, items),
+        _ => generic_batched_columnwise_dot_product::<Mersenne31, EF, R, I, N>(acc, items),
     }
 }
 
@@ -454,21 +453,22 @@ fn mac_up_to_3(vs: &[uint32x4_t], svs: [uint32x4_t; 3]) -> (uint64x2_t, uint64x2
 /// triples keeps them below `2^62` for any stream length, so the final two folds
 /// plus `reduce_sum` always produce canonical values.
 fn columnwise_kernel<EF, R, I, const N: usize, const D: usize>(
-    packed_width: usize,
+    out: &mut [EF::ExtensionPacking],
     mut items: I,
-) -> Vec<EF::ExtensionPacking>
-where
+) where
     EF: ExtensionField<Mersenne31>,
     R: Iterator<Item = PackedMersenne31Neon>,
     I: Iterator<Item = (R, [EF; N])>,
 {
     debug_assert_eq!(EF::DIMENSION, D);
+    debug_assert_eq!(out.len() % N, 0);
+    let packed_width = out.len() / N;
     let zero64 = unsafe { aarch64::vdupq_n_u64(0) };
     let zero32 = unsafe { aarch64::vdupq_n_u32(0) };
 
-    // Accumulator layout: word-major, with the `(weight j, coefficient k)` pair of
+    // Word accumulator layout: word-major, with the `(weight j, coefficient k)` pair of
     // `(lanes 0-1, lanes 2-3)` u64x2 vectors of word `c` at `c * N * D * 2 + (j * D + k) * 2`.
-    let mut acc = alloc::vec![zero64; packed_width * N * D * 2];
+    let mut words = alloc::vec![zero64; packed_width * N * D * 2];
     let broadcast = |scales: &[EF; N]| -> [[uint32x4_t; D]; N] {
         let mut out = [[zero32; D]; N];
         for (row, scale) in out.iter_mut().zip(scales) {
@@ -485,7 +485,7 @@ where
         let sv0 = broadcast(&s0);
         let Some((r1, s1)) = items.next() else {
             // Single trailing row.
-            for (aw, m0) in acc.chunks_exact_mut(N * D * 2).zip(r0) {
+            for (aw, m0) in words.chunks_exact_mut(N * D * 2).zip(r0) {
                 let v0 = m0.to_vector();
                 for (j, sv0_j) in sv0.iter().enumerate() {
                     for (k, &s) in sv0_j.iter().enumerate() {
@@ -503,7 +503,7 @@ where
         let sv1 = broadcast(&s1);
         let Some((r2, s2)) = items.next() else {
             // Trailing row pair.
-            for (aw, (m0, m1)) in acc.chunks_exact_mut(N * D * 2).zip(r0.zip(r1)) {
+            for (aw, (m0, m1)) in words.chunks_exact_mut(N * D * 2).zip(r0.zip(r1)) {
                 let (v0, v1) = (m0.to_vector(), m1.to_vector());
                 for j in 0..N {
                     for k in 0..D {
@@ -520,7 +520,7 @@ where
         };
         let sv2 = broadcast(&s2);
 
-        for (aw, ((m0, m1), m2)) in acc.chunks_exact_mut(N * D * 2).zip(r0.zip(r1).zip(r2)) {
+        for (aw, ((m0, m1), m2)) in words.chunks_exact_mut(N * D * 2).zip(r0.zip(r1).zip(r2)) {
             let (v0, v1, v2) = (m0.to_vector(), m1.to_vector(), m2.to_vector());
             for j in 0..N {
                 for k in 0..D {
@@ -537,28 +537,26 @@ where
         triples += 1;
         if triples == 1 << 28 {
             triples = 0;
-            for a in &mut acc {
-                *a = partial_reduce_u64(*a);
+            for w in &mut words {
+                *w = partial_reduce_u64(*w);
             }
         }
     }
 
-    (0..packed_width * N)
-        .map(|cj| {
-            EF::ExtensionPacking::from_basis_coefficients_fn(|k| {
-                let idx = (cj * D + k) * 2;
-                let l = partial_reduce_u64(partial_reduce_u64(acc[idx]));
-                let h = partial_reduce_u64(partial_reduce_u64(acc[idx + 1]));
-                unsafe {
-                    let narrowed = aarch64::vuzp1q_u32(
-                        aarch64::vreinterpretq_u32_u64(l),
-                        aarch64::vreinterpretq_u32_u64(h),
-                    );
-                    PackedMersenne31Neon::from_vector(reduce_sum(narrowed))
-                }
-            })
-        })
-        .collect()
+    for (out_cj, words_c) in out.iter_mut().zip(words.chunks_exact(D * 2)) {
+        let reduced = EF::ExtensionPacking::from_basis_coefficients_fn(|k| {
+            let l = partial_reduce_u64(partial_reduce_u64(words_c[k * 2]));
+            let h = partial_reduce_u64(partial_reduce_u64(words_c[k * 2 + 1]));
+            unsafe {
+                let narrowed = aarch64::vuzp1q_u32(
+                    aarch64::vreinterpretq_u32_u64(l),
+                    aarch64::vreinterpretq_u32_u64(h),
+                );
+                PackedMersenne31Neon::from_vector(reduce_sum(narrowed))
+            }
+        });
+        *out_cj += reduced;
+    }
 }
 
 /// Compute the permutation x -> x^5 on Mersenne-31 field elements.
@@ -727,7 +725,8 @@ mod tests {
                 }
             }
 
-            let got = super::batched_columnwise_dot_product::<EF, _, _, N>(packed_width, items());
+            let mut got = EF::ExtensionPacking::zero_vec(packed_width * N);
+            super::batched_columnwise_dot_product::<EF, _, _, N>(&mut got, items());
             let expected: Vec<EF> = EF::ExtensionPacking::to_ext_iter(expected).collect();
             let got: Vec<EF> = EF::ExtensionPacking::to_ext_iter(got).collect();
             assert_eq!(expected, got, "rows = {}, N = {N}", rows.len());

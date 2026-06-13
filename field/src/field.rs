@@ -1040,26 +1040,23 @@ pub trait Field:
         }
     }
 
-    /// Accumulate `result[c * N + j] += scales[j] * row[c]` over a stream of packed rows.
+    /// Accumulate `acc[c * N + j] += scales[j] * row[c]` over a stream of packed rows.
     ///
-    /// Each item provides one matrix row as `packed_width` packed base-field words,
-    /// together with the row's `N` extension-field weights. Returns the
-    /// `packed_width * N` packed accumulators, laid out with the `N` weights of each
-    /// word group adjacent.
+    /// Each item provides one matrix row as `acc.len() / N` packed base-field words,
+    /// together with the row's `N` extension-field weights. `acc` is laid out with the
+    /// `N` weights of each word group adjacent, and its length must be a multiple of `N`.
     ///
     /// This is the inner kernel of batched columnwise (weighted-sum-of-rows) dot
     /// products. Fields may override it to defer modular reductions across rows.
-    #[must_use]
     fn batched_columnwise_dot_product<EF, R, I, const N: usize>(
-        packed_width: usize,
+        acc: &mut [EF::ExtensionPacking],
         items: I,
-    ) -> Vec<EF::ExtensionPacking>
-    where
+    ) where
         EF: ExtensionField<Self>,
         R: Iterator<Item = Self::Packing>,
         I: Iterator<Item = (R, [EF; N])>,
     {
-        generic_batched_columnwise_dot_product::<Self, EF, R, I, N>(packed_width, items)
+        generic_batched_columnwise_dot_product::<Self, EF, R, I, N>(acc, items);
     }
 
     /// The number of elements in the field.
@@ -1081,22 +1078,19 @@ pub trait Field:
 }
 
 /// The generic accumulation behind [`Field::batched_columnwise_dot_product`]:
-/// `result[c * N + j] += scales[j] * row[c]` over a stream of packed rows.
+/// `acc[c * N + j] += scales[j] * row[c]` over a stream of packed rows.
 ///
 /// Kept as a free function so that specialized `Field` implementations can fall back
 /// to it for extension degrees their kernels do not cover.
-#[must_use]
 pub fn generic_batched_columnwise_dot_product<F, EF, R, I, const N: usize>(
-    packed_width: usize,
+    acc: &mut [EF::ExtensionPacking],
     items: I,
-) -> Vec<EF::ExtensionPacking>
-where
+) where
     F: Field,
     EF: ExtensionField<F>,
     R: Iterator<Item = F::Packing>,
     I: Iterator<Item = (R, [EF; N])>,
 {
-    let mut acc = EF::ExtensionPacking::zero_vec(packed_width * N);
     for (row, scales) in items {
         let packed_scales = scales.map(EF::ExtensionPacking::from);
         for (acc_c, r) in acc.chunks_exact_mut(N).zip(row) {
@@ -1105,7 +1099,6 @@ where
             }
         }
     }
-    acc
 }
 
 /// A field isomorphic to `ℤ/p` for some prime `p`.
