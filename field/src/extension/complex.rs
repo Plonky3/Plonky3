@@ -1,6 +1,6 @@
 use super::{
     Binomial, BinomialExtensionField, BinomiallyExtendable, ExtensionAlgebra,
-    HasTwoAdicBinomialExtension, binomial_mul,
+    HasTwoAdicBinomialExtension, binomial_mul, binomial_square,
 };
 use crate::{Algebra, Field, PrimeCharacteristicRing};
 
@@ -21,6 +21,11 @@ impl<F: ComplexExtendable> ExtensionAlgebra<F, 2, Binomial<F>> for F {
     #[inline]
     fn ext_mul(a: &[Self; 2], b: &[Self; 2], res: &mut [Self; 2]) {
         binomial_mul::<F, Self, Self, 2>(a, b, res, <F as BinomiallyExtendable<2>>::W);
+    }
+
+    #[inline]
+    fn ext_square(a: &[Self; 2], res: &mut [Self; 2]) {
+        binomial_square::<F, Self, 2>(a, res, <F as BinomiallyExtendable<2>>::W);
     }
 }
 
@@ -104,6 +109,16 @@ pub trait HasComplexBinomialExtension<const D: usize>: ComplexExtendable {
     const DTH_ROOT: Complex<Self>;
 
     const EXT_GENERATOR: [Complex<Self>; D];
+
+    /// Multiply a `Complex<Self>` element by `W = Self::W`.
+    ///
+    /// The default is a general complex multiplication. Override when `W` has
+    /// structure that makes multiplication cheaper (e.g. add-only when all
+    /// coefficients of `W` are small).
+    #[inline]
+    fn mul_by_w(z: Complex<Self>) -> Complex<Self> {
+        <Complex<Self> as BinomiallyExtendable<D>>::W * z
+    }
 }
 
 impl<F, const D: usize> ExtensionAlgebra<Self, D, Binomial<Self>> for Complex<F>
@@ -113,6 +128,25 @@ where
     #[inline]
     fn ext_mul(a: &[Self; D], b: &[Self; D], res: &mut [Self; D]) {
         binomial_mul::<Self, Self, Self, D>(a, b, res, <Self as BinomiallyExtendable<D>>::W);
+    }
+
+    #[inline]
+    fn ext_square(a: &[Self; D], res: &mut [Self; D]) {
+        match D {
+            2 => {
+                // QM31-style: (a0, a1) with modulus X² − W.
+                // res[0] = a0² + W·a1²   (two CM31 squares + add-only W-mul)
+                // res[1] = 2·a0·a1        (one CM31 mul)
+                let a0 = a[0];
+                let a1 = a[1];
+                let a0_sq = a0.square();
+                let a1_sq = a1.square();
+                let w_a1_sq = F::mul_by_w(a1_sq);
+                res[0] = a0_sq + w_a1_sq;
+                res[1] = (a0 * a1).double();
+            }
+            _ => binomial_square::<Self, Self, D>(a, res, <Self as BinomiallyExtendable<D>>::W),
+        }
     }
 }
 
