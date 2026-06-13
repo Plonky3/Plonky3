@@ -6,6 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.1] - 2026-06-13
 ## [0.6.0] - 2026-06-11
 ### Merged PRs
 - Add broadcast, pack_columns, pack_columns_fn, and unpack_iter to PackedValue (#1450)

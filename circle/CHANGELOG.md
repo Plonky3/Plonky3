@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.1] - 2026-06-13
+### Merged PRs
+- Perf(circle): parallelize the FRI fold kernels (#1809)
+- Perf(circle): evaluate out-of-domain openings on a trace-size subdomain (#1810)
+- Perf(circle): kill data-movement passes across `extrapolate` (#1811)
+- Perf(circle): alpha-reduce the trace-size subdomain prefix and lift the column (#1818)
+- Perf(m31): eliminate allocation churn in QM31 column conversions and the lambda extraction (#1823)
+- Perf(circle): flatten the fused CFFT pass driver (#1819)
+
 ## [0.6.0] - 2026-06-11
 ### Merged PRs
 - Feat: add support for Periodic Columns at runtime (#1462)
