@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.1] - 2026-06-13
+### Merged PRs
+- Perf(m31): use the degree-4 extension field for `Mersenne31` Circle proofs (#1817)
+- Cleanup(m31): drop redundant Distribution bound on PackedQM31 sampler (#1820)
+- Perf(m31): eliminate allocation churn in QM31 column conversions and the lambda extraction (#1823)
+- Perf(m31): widening NEON MACs for the mixed base×extension dot-product kernels (#1822)
+
 ## [0.6.0] - 2026-06-11
 ### Merged PRs
 - Make batched_linear_combination chunk size per-impl tunable (#1451)

@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.1] - 2026-06-13
+### Merged PRs
+- Perf(merkle-tree): hash single-matrix leaf rows without flat_map (#1813)
+- Perf(merkle-tree): hash single-matrix injected rows without flat_map (#1816)
+
 ## [0.6.0] - 2026-06-11
 ### Merged PRs
 - Feat: expose arity schedule (#1433)

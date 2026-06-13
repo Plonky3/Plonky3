@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.1] - 2026-06-13
+### Merged PRs
+- Perf(m31): widening NEON MACs for the mixed base×extension dot-product kernels (#1822)
+
 ## [0.6.0] - 2026-06-11
 ### Merged PRs
 - Matrix: add pad_to_min_power_of_two_height (#1448)
