@@ -5,11 +5,14 @@ use alloc::vec::Vec;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::{ExtensionField, Field, TwoAdicField, dot_product};
+use p3_field::{
+    ExtensionField, Field, PackedFieldExtension, PackedValue, TwoAdicField, dot_product,
+};
 use p3_matrix::dense::DenseMatrix;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
+use p3_util::log2_strict_usize;
 
 use crate::commit::commit_base;
 use crate::lagrange::lagrange_weights_01inf_multi;
@@ -363,7 +366,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         let compressed = tracing::info_span!("compress_prefix_to_packed")
             .in_scope(|| self.poly.compress_prefix_to_packed(&rs, EF::ONE));
 
-        let weights = self.combine_weights(&rs, alpha).pack::<F, EF>();
+        let weights = self.residual_weights_packed(&rs, alpha);
         let prod_poly =
             ProductPolynomial::<F, EF>::new_packed(VariableOrder::Prefix, compressed, weights);
         debug_assert_eq!(prod_poly.dot_product(), sum);
@@ -439,7 +442,69 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
         sum
     }
 
+    /// Builds the residual equality weights in packed form.
+    ///
+    /// Two routes produce the identical polynomial; each call takes the cheaper one:
+    ///
+    /// - Scatter: write directly into the packed buffer, visiting only claimed slots.
+    /// - Pack: build the full scalar table, then transpose-copy it into packed form.
+    ///
+    /// The scatter wins on a sparsely claimed residual.
+    /// The vectorized transpose wins when the claims fill most of the space.
+    pub(crate) fn residual_weights_packed(
+        &self,
+        rs: &Point<EF>,
+        alpha: EF,
+    ) -> Poly<EF::ExtensionPacking> {
+        if self.scatter_beats_pack(rs) {
+            self.combine_weights_packed(rs, alpha)
+        } else {
+            self.combine_weights(rs, alpha).pack::<F, EF>()
+        }
+    }
+
+    /// Decides whether the scatter route beats the transpose route.
+    ///
+    /// True when the concrete claims occupy at most a third of the residual space:
+    ///
+    /// ```text
+    ///     occupied = sum over openings of 2^(table_arity - folding)
+    ///     residual = 2^(num_variables - folding)
+    ///     scatter  <=>  3 * occupied <= residual
+    /// ```
+    ///
+    /// The crossover sits near half occupancy:
+    ///
+    /// - At a quarter, the scatter is clearly ahead.
+    /// - At a half, the two routes tie.
+    /// - Above a half, the transpose pulls ahead.
+    ///
+    /// The one-third cutoff keeps a margin below the crossover.
+    /// So the chosen route is never slower, across machines and SIMD widths.
+    ///
+    /// Virtual claims span the whole space and cost the same either way.
+    /// They do not enter the decision.
+    fn scatter_beats_pack(&self, rs: &Point<EF>) -> bool {
+        let residual = 1usize << (self.num_variables - rs.num_variables());
+        let occupied: usize = self
+            .placements
+            .iter()
+            .map(|placement| {
+                let local =
+                    1usize << (self.num_variables_table(placement.idx()) - rs.num_variables());
+                self.claim_map[placement.idx()]
+                    .iter()
+                    .map(|claim| claim.len() * local)
+                    .sum::<usize>()
+            })
+            .sum();
+        occupied.saturating_mul(3) <= residual
+    }
+
     /// Builds the residual weight polynomial left after the folded prefix rounds.
+    ///
+    /// This is the dense-residual route: it materializes the full scalar table.
+    /// The packed scatter route shares the same accumulation but skips this buffer.
     ///
     /// # Overview
     ///
@@ -516,5 +581,249 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
         }
 
         out
+    }
+
+    /// Builds the residual equality weights straight into the packed buffer.
+    ///
+    /// Scatters each claim's contribution into packed lanes directly.
+    /// This skips the scalar table and the transpose-copy the dense route pays.
+    ///
+    /// # Identity
+    ///
+    /// For a concrete opening on a column at point `z = (z_svo, z_rest)`:
+    ///
+    /// ```text
+    ///     out[(y << s) | v] += alpha^i * eq(z_svo, rs) * eq(z_rest, y)
+    /// ```
+    ///
+    /// - `(s, v)` is the column's selector: `s` selector bits, slot index `v`.
+    /// - `y` ranges over the local table.
+    /// - scalar index `(y << s) | v` maps to packed word `idx >> k_pack`, lane `idx & (W - 1)`.
+    ///
+    /// Virtual claims span the whole residual space.
+    /// They continue the alpha sequence after the concrete openings.
+    ///
+    /// # Panics
+    ///
+    /// - `rs` must have exactly `folding` variables.
+    /// - The residual space must hold at least one packed element.
+    #[tracing::instrument(skip_all)]
+    pub(crate) fn combine_weights_packed(
+        &self,
+        rs: &Point<EF>,
+        alpha: EF,
+    ) -> Poly<EF::ExtensionPacking> {
+        assert_eq!(rs.num_variables(), self.folding);
+        let k_pack = log2_strict_usize(F::Packing::WIDTH);
+        let out_variables = self.num_variables - rs.num_variables();
+        assert!(out_variables >= k_pack);
+
+        let mut out = Poly::<EF::ExtensionPacking>::zero(out_variables - k_pack);
+        let lane_mask = F::Packing::WIDTH - 1;
+
+        // Scatters one slot-local weight table into its packed positions.
+        //     dst = (local_idx << selector_vars) | selector_index
+        // The destination splits into packed word `dst >> k_pack` and lane `dst & mask`.
+        let scatter = |out: &mut Poly<EF::ExtensionPacking>, local: &[EF], s: usize, v: usize| {
+            for (y, &value) in local.iter().enumerate() {
+                let idx = (y << s) | v;
+                out.as_mut_slice()[idx >> k_pack].add_assign_lane(idx & lane_mask, value);
+            }
+        };
+
+        // Concrete claims: scatter each column's local table into its packed slot.
+        // Alpha powers run in (placement, claim, current openings, next openings) order,
+        // matching the verifier and the scalar route.
+        let mut alphas = alpha.powers();
+        for placement in &self.placements {
+            let local_rest_variables =
+                self.num_variables_table(placement.idx()) - rs.num_variables();
+            for claim in &self.claim_map[placement.idx()] {
+                // Current group: equality weight of the column at the claim point.
+                for opening in claim.current_openings() {
+                    let col = opening.poly_idx().unwrap();
+                    let selector = &placement.selectors()[col];
+                    // Materialize alpha^i * eq(z_svo, rs) * eq(z_rest, .) for this column.
+                    let mut local = Poly::<EF>::zero(local_rest_variables);
+                    claim
+                        .point()
+                        .accumulate_into(local.as_mut_slice(), rs, alphas.next().unwrap());
+                    scatter(
+                        &mut out,
+                        local.as_slice(),
+                        selector.num_variables(),
+                        selector.index(),
+                    );
+                }
+                // Next group: same scatter, but using the repeat-last successor weight.
+                for opening in claim.next_openings() {
+                    let col = opening.poly_idx().unwrap();
+                    let selector = &placement.selectors()[col];
+                    let mut local = Poly::<EF>::zero(local_rest_variables);
+                    claim.point().accumulate_next_prefix_into(
+                        local.as_mut_slice(),
+                        rs,
+                        alphas.next().unwrap(),
+                    );
+                    scatter(
+                        &mut out,
+                        local.as_slice(),
+                        selector.num_variables(),
+                        selector.index(),
+                    );
+                }
+            }
+        }
+
+        // Virtual claims span the full residual space; accumulate packed.
+        let mut alpha_i = alpha.exp_u64(self.num_claims() as u64);
+        for claim in &self.virtual_claims {
+            let (svo, rest) = claim.point.split_at(rs.num_variables());
+            let scale = alpha_i * Point::eval_eq(svo.as_slice(), rs.as_slice());
+            SplitEq::new_packed(&rest, scale).accumulate_into_packed(out.as_mut_slice(), None);
+            alpha_i *= alpha;
+        }
+
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_field::PrimeCharacteristicRing;
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::layout::prover::test_utils::{
+        FOLDING, arb_opening_schedule, arb_witness_and_schedule, build_tables, tables_from_shape,
+    };
+    use crate::tests::{EF, F, challenger};
+
+    /// Replays a schedule plus virtual claims, then pins packed against scalar.
+    fn assert_packed_matches_scalar(
+        witness: Witness<F>,
+        schedule: &[(usize, Vec<usize>)],
+        num_virtual: usize,
+    ) {
+        let mut prover = PrefixProver::<F, EF>::from_witness(witness);
+        let mut ch = challenger();
+        // Record concrete openings; `eval` samples points and absorbs evals internally.
+        // These tests exercise current openings only, so the next group stays empty.
+        for (table_idx, polys) in schedule {
+            prover.eval(
+                *table_idx,
+                &OpeningBatch::new(polys.clone(), Vec::new()),
+                &mut ch,
+            );
+        }
+        // Record virtual claims; they continue the alpha sequence after concrete ones.
+        for _ in 0..num_virtual {
+            let _ = prover.add_virtual_eval(&mut ch);
+        }
+        // Random batching challenge and SVO folding point.
+        let alpha: EF = ch.sample_algebra_element();
+        let rs = Point::expand_from_univariate(ch.sample_algebra_element(), FOLDING);
+        // The packed path must equal the scalar reference followed by packing.
+        let scalar = prover.combine_weights(&rs, alpha).pack::<F, EF>();
+        let packed = prover.combine_weights_packed(&rs, alpha);
+        assert_eq!(scalar, packed);
+        // The adaptive dispatcher must return that same polynomial on either branch.
+        assert_eq!(prover.residual_weights_packed(&rs, alpha), packed);
+    }
+
+    #[test]
+    fn scatter_beats_pack_routes_on_occupancy() {
+        let mut ch = challenger();
+        let rs = Point::expand_from_univariate(ch.sample_algebra_element(), FOLDING);
+
+        // Builds a four-column table and opens the first `open` of them.
+        // Four columns tile a power-of-two space, so `open` columns is `open/4` occupancy.
+        let mut routed = |open: usize| {
+            let mut prover =
+                PrefixProver::<F, EF>::from_witness(PrefixProver::<F, EF>::new_witness(
+                    vec![Table::new((0..4).map(|_| Poly::<F>::zero(8)).collect())],
+                    FOLDING,
+                ));
+            let cols: Vec<usize> = (0..open).collect();
+            prover.eval(0, &OpeningBatch::new(cols, Vec::new()), &mut ch);
+            prover.scatter_beats_pack(&rs)
+        };
+
+        // The threshold routes to the scatter only below a third occupancy.
+        assert!(routed(1), "25% occupancy must pick scatter");
+        assert!(!routed(2), "50% occupancy must fall back to pack");
+        assert!(!routed(4), "100% occupancy must fall back to pack");
+
+        // A holey layout (one of five columns) sits far below the threshold.
+        let mut sparse = PrefixProver::<F, EF>::from_witness(PrefixProver::<F, EF>::new_witness(
+            vec![Table::new((0..5).map(|_| Poly::<F>::zero(8)).collect())],
+            FOLDING,
+        ));
+        sparse.eval(0, &OpeningBatch::new(vec![2], Vec::new()), &mut ch);
+        assert!(
+            sparse.scatter_beats_pack(&rs),
+            "holey layout must pick scatter"
+        );
+    }
+
+    #[test]
+    fn combine_weights_packed_no_claims_is_zero() {
+        // No claims at all: the scatter is skipped and every weight is zero.
+        let witness = PrefixProver::<F, EF>::new_witness(build_tables(), FOLDING);
+        let prover = PrefixProver::<F, EF>::from_witness(witness);
+        let mut ch = challenger();
+        let alpha: EF = ch.sample_algebra_element();
+        let rs = Point::expand_from_univariate(ch.sample_algebra_element(), FOLDING);
+        let packed = prover.combine_weights_packed(&rs, alpha);
+        assert!(
+            packed
+                .iter()
+                .all(|&w| w == <EF as ExtensionField<F>>::ExtensionPacking::ZERO)
+        );
+    }
+
+    #[test]
+    fn combine_weights_packed_virtual_claims_only() {
+        // No concrete openings: only the virtual-claim accumulation contributes.
+        let witness = PrefixProver::<F, EF>::new_witness(build_tables(), FOLDING);
+        assert_packed_matches_scalar(witness, &[], 2);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 32, ..ProptestConfig::default() })]
+
+        // Invariant: the packed scatter equals the scalar build followed by pack.
+        //
+        //     fixed two-table witness: mixed selector widths, padding holes
+        //     coverage: openings sharing a slot, plus 0..=2 virtual claims
+        #[test]
+        fn combine_weights_packed_matches_scalar(
+            schedule in arb_opening_schedule(),
+            num_virtual in 0usize..=2,
+        ) {
+            let witness = PrefixProver::<F, EF>::new_witness(build_tables(), FOLDING);
+            assert_packed_matches_scalar(witness, &schedule, num_virtual);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 16, ..ProptestConfig::default() })]
+
+        // Invariant: packed and scalar agree on random witness shapes.
+        //
+        //     includes single-table layouts with zero selector bits
+        #[test]
+        fn combine_weights_packed_matches_scalar_shapes(
+            (shape, schedule) in arb_witness_and_schedule(),
+            num_virtual in 0usize..=1,
+        ) {
+            let witness = PrefixProver::<F, EF>::new_witness(tables_from_shape(&shape), FOLDING);
+            // Packing needs at least one full SIMD lane in the residual space.
+            let k_pack = log2_strict_usize(<F as Field>::Packing::WIDTH);
+            prop_assume!(witness.num_variables() >= FOLDING + k_pack);
+            assert_packed_matches_scalar(witness, &schedule, num_virtual);
+        }
     }
 }
