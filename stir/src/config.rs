@@ -196,10 +196,20 @@ where
             log_starting_degree
         );
 
+        let log_starting_domain = log_starting_degree
+            .checked_add(params.log_blowup)
+            .expect("Initial domain exponent log_starting_degree + log_blowup overflows usize");
+
         assert!(
-            log_starting_degree + params.log_blowup <= F::TWO_ADICITY,
+            log_starting_domain < usize::BITS as usize,
+            "Initial domain exponent {log_starting_domain} must be less than usize::BITS ({})",
+            usize::BITS
+        );
+
+        assert!(
+            log_starting_domain <= F::TWO_ADICITY,
             "Initial domain size 2^{} exceeds the two-adicity of the base field ({}).",
-            log_starting_degree + params.log_blowup,
+            log_starting_domain,
             F::TWO_ADICITY,
         );
 
@@ -276,7 +286,7 @@ where
         let mut log_degree = log_starting_degree;
         // The committed codeword's domain starts at the full initial domain and halves
         // each round (rate improvement: degree drops by k, domain drops by 2).
-        let mut log_domain_size = log_starting_degree + log_blowup;
+        let mut log_domain_size = log_starting_domain;
         // The effective inverse rate starts at log_blowup and increases by
         // (log_folding_factor - 1) each round.
         let mut log_inv_rate = log_blowup;
@@ -506,7 +516,41 @@ where
 
 #[cfg(test)]
 mod tests {
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::DuplexChallenger;
+    use p3_commit::ExtensionMmcs;
+    use p3_field::Field;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use rand::SeedableRng;
+
     use super::*;
+
+    type TestF = BabyBear;
+    type TestEF = BinomialExtensionField<TestF, 4>;
+    type TestPerm = Poseidon2BabyBear<16>;
+    type TestHash = PaddingFreeSponge<TestPerm, 16, 8, 8>;
+    type TestCompress = TruncatedPermutation<TestPerm, 2, 8, 16>;
+    type TestPackedF = <TestF as Field>::Packing;
+    type TestValMmcs = MerkleTreeMmcs<TestPackedF, TestPackedF, TestHash, TestCompress, 2, 8>;
+    type TestMmcs = ExtensionMmcs<TestF, TestEF, TestValMmcs>;
+    type TestChallenger = DuplexChallenger<TestF, TestPerm, 16, 8>;
+
+    fn test_params(log_blowup: usize, log_folding_factor: usize) -> StirParameters<TestMmcs> {
+        let mut rng = rand::rngs::SmallRng::seed_from_u64(42);
+        let perm = TestPerm::new_from_rng_128(&mut rng);
+        let val_mmcs = TestValMmcs::new(TestHash::new(perm.clone()), TestCompress::new(perm), 0);
+
+        StirParameters {
+            log_blowup,
+            log_folding_factor,
+            soundness_type: SecurityAssumption::CapacityBound,
+            security_level: 80,
+            max_pow_bits: 20,
+            mmcs: TestMmcs::new(val_mmcs),
+        }
+    }
 
     #[test]
     fn test_stir_config_round_count() {
@@ -583,6 +627,22 @@ mod tests {
             }
         }
         assert!(config.final_eta.is_finite() && config.final_eta > 0.);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "Initial domain exponent log_starting_degree + log_blowup overflows usize"
+    )]
+    fn test_stir_config_rejects_initial_domain_exponent_addition_overflow() {
+        let params = test_params(1, 2);
+        let _ = StirConfig::<TestF, TestEF, TestMmcs, TestChallenger>::new(usize::MAX, params);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be less than usize::BITS")]
+    fn test_stir_config_rejects_initial_domain_exponent_exceeding_usize_bits() {
+        let params = test_params(usize::BITS as usize, 2);
+        let _ = StirConfig::<TestF, TestEF, TestMmcs, TestChallenger>::new(2, params);
     }
 
     #[test]
