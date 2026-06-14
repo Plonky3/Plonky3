@@ -64,6 +64,12 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
     /// - `eq_statement`: Equality constraints `p(z_i) = s_i`
     /// - `sel_statement`: Selection constraints via power map expansion
     ///
+    /// # Fiat-Shamir
+    ///
+    /// - The caller owns the binding of `challenge`; this type does not absorb anything.
+    /// - Every statement's points and evaluations must be observed before `challenge` is sampled.
+    /// - A `challenge` drawn before that binding lets a prover steer it and forge the batch.
+    ///
     /// # Panics
     ///
     /// Panics if the number of variables differs between statements.
