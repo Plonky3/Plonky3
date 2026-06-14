@@ -38,10 +38,16 @@ where
     InnerP: CryptographicPermutation<[T; WIDTH]>,
 {
     fn compress(&self, input: [[T; CHUNK]; N]) -> [T; CHUNK] {
-        let mut pre = [T::default(); WIDTH];
-        for i in 0..N {
-            pre[i * CHUNK..(i + 1) * CHUNK].copy_from_slice(&input[i]);
-        }
+        // The first `N * CHUNK` slots are the inputs; any remaining capacity is zero.
+        // Writing each slot exactly once avoids a dead zero-init of the leading slots,
+        // which the permutation's input fully overwrites.
+        let pre: [T; WIDTH] = core::array::from_fn(|k| {
+            if k < N * CHUNK {
+                input[k / CHUNK][k % CHUNK]
+            } else {
+                T::default()
+            }
+        });
         let post = self.inner_permutation.permute(pre);
         post[..CHUNK].try_into().unwrap()
     }
