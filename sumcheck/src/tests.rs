@@ -348,7 +348,7 @@ where
 
         verifier_randomness.extend(
             &proof[0]
-                .verify_rounds(&mut verifier_challenger, &mut sum, 0)
+                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, 0)
                 .unwrap(),
         );
         num_variables_inter -= FOLDING;
@@ -367,7 +367,7 @@ where
 
         verifier_randomness.extend(
             &proof[round]
-                .verify_rounds(&mut verifier_challenger, &mut sum, 0)
+                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, 0)
                 .unwrap(),
         );
         num_variables_inter -= FOLDING;
@@ -377,7 +377,7 @@ where
         &proof
             .last()
             .unwrap()
-            .verify_rounds(&mut verifier_challenger, &mut sum, 0)
+            .verify_rounds(&mut verifier_challenger, &mut sum, num_variables_inter, 0)
             .unwrap(),
     );
 
@@ -500,6 +500,34 @@ fn test_round_count_mismatch() {
 }
 
 #[test]
+fn test_verify_rounds_rejects_wrong_round_count() {
+    // Invariant: verify_rounds binds the round count itself, before observing or folding.
+    //
+    //     evaluations: 3     expected: 4     -> expected=4, actual=3
+    let mut chal = challenger();
+    let mut sum = EF::ZERO;
+    let expected_rounds = 4;
+    let actual_rounds = 3;
+    let data = SumcheckData::<F, EF> {
+        // Values are unread; the count check fires first.
+        polynomial_evaluations: vec![[EF::ZERO, EF::ZERO]; actual_rounds],
+        pow_witnesses: vec![],
+    };
+
+    let err = data
+        .verify_rounds(&mut chal, &mut sum, expected_rounds, 0)
+        .expect_err("wrong round count must error");
+
+    match err {
+        SumcheckError::RoundCountMismatch { expected, actual } => {
+            assert_eq!(expected, expected_rounds);
+            assert_eq!(actual, actual_rounds);
+        }
+        other => panic!("expected RoundCountMismatch, got: {other}"),
+    }
+}
+
+#[test]
 fn test_pow_witness_count_mismatch() {
     // Invariant: when PoW is enabled, witness count must match round count.
     let mut chal = challenger();
@@ -512,7 +540,7 @@ fn test_pow_witness_count_mismatch() {
     };
 
     let err = data
-        .verify_rounds(&mut chal, &mut sum, 20)
+        .verify_rounds(&mut chal, &mut sum, expected, 20)
         .expect_err("witness-count mismatch must error before indexing");
 
     match err {
@@ -541,7 +569,7 @@ fn test_invalid_pow_witness() {
     };
 
     let err = data
-        .verify_rounds(&mut chal, &mut sum, pow_bits)
+        .verify_rounds(&mut chal, &mut sum, data.num_rounds(), pow_bits)
         .expect_err("zeroed witness must fail");
 
     assert!(matches!(err, SumcheckError::InvalidPowWitness));
