@@ -187,8 +187,17 @@ where
         if domain == committed_domain {
             mat.as_cow().cfft_perm_rows()
         } else {
-            CircleEvaluations::from_cfft_order(committed_domain, mat)
-                .extrapolate(domain)
+            // The committed matrix is the LDE of a polynomial of `committed_domain.log_n -
+            // log_blowup` coefficients, so interpolating it leaves zeros above that index.
+            // Truncating to the original coefficient count lets `domain` be smaller than the
+            // committed LDE (e.g. a quotient domain when `log_blowup` exceeds the quotient
+            // degree), which `extrapolate` would reject.
+            let log_orig = committed_domain.log_n - self.fri_params.log_blowup;
+            let mut coeffs =
+                CircleEvaluations::from_cfft_order(committed_domain, mat).interpolate();
+            let width = coeffs.width();
+            coeffs.values.truncate((1 << log_orig) * width);
+            CircleEvaluations::evaluate(domain, coeffs)
                 .to_cfft_order()
                 .as_cow()
                 .cfft_perm_rows()
@@ -241,10 +250,22 @@ where
                 izip!(mats, points_for_mats)
                     .map(|(mat, points_for_mat)| {
                         let log_height = log2_strict_usize(mat.height());
+                        // The committed polynomial has degree below the pre-blow-up domain
+                        // size, so its values on a sub-twin-coset of that size determine it.
+                        // The first `2^log_sub` rows of the CFFT-ordered LDE are exactly the
+                        // CFFT-ordered evaluations over `CircleDomain::new(log_sub, shift)`
+                        // (see `eval_at_point_on_subdomain_prefix_matches_full`), so the
+                        // out-of-domain evaluation only traverses `1 / blowup` of the matrix.
+                        let log_sub = log_height - self.fri_params.log_blowup;
+                        let sub_height = 1 << log_sub;
+                        let sub_domain = CircleDomain::new(
+                            log_sub,
+                            CircleDomain::<Val>::standard(log_height).shift,
+                        );
                         // It was committed in cfft order.
                         let evals = CircleEvaluations::from_cfft_order(
-                            CircleDomain::standard(log_height),
-                            mat.as_view(),
+                            sub_domain,
+                            mat.split_rows(sub_height).0,
                         );
 
                         // Resolve the Lagrange denominators for every point up front.
@@ -259,9 +280,9 @@ where
                                         let den = info_span!("compute Lagrange denominators")
                                             .in_scope(|| {
                                                 compute_lagrange_den_batched(
-                                                    &permuted_points[&log_height],
+                                                    &permuted_points[&log_height][..sub_height],
                                                     Point::from_projective_line(zeta_uni),
-                                                    log_height,
+                                                    log_sub,
                                                 )
                                             });
                                         lagrange_dens.push((key, den));
@@ -330,19 +351,41 @@ where
                 let mats = self.mmcs.get_matrices(data);
                 izip!(mats, points_for_mats, values).for_each(|(mat, points_for_mat, values)| {
                     let log_height = log2_strict_usize(mat.height());
-                    // It was committed in cfft order.
-                    let evals = CircleEvaluations::from_cfft_order(
-                        CircleDomain::standard(log_height),
-                        mat.as_view(),
-                    );
+                    let log_sub = log_height - self.fri_params.log_blowup;
 
                     let (alpha_offset, reduced_opening_for_log_height) = reduced_openings
                         .entry(log_height)
                         .or_insert_with(|| (Challenge::ONE, Challenge::zero_vec(1 << log_height)));
 
+                    // The lift below costs a single-column CFFT extrapolation, which is
+                    // latency-bound rather than bandwidth-bound: it costs about as much as
+                    // the half-traversal of a ~1000-column matrix it saves, so it only pays
+                    // off for matrices substantially wider than that.
+                    const LIFT_MIN_WIDTH: usize = 1024;
+
                     // The only pass over the matrix; it does not depend on the opening points.
-                    let reduced_rows = evals.rowwise_alpha_reduce(alpha);
-                    let alpha_pow_width = alpha.exp_u64(evals.values.width() as u64);
+                    // The reduced column lies in the pre-blow-up polynomial space, so it is
+                    // determined by the trace-size subdomain prefix (committed in cfft order):
+                    // reduce the prefix and lift it back with a narrow CFFT instead of
+                    // traversing the full LDE.
+                    let reduced_rows = if log_sub > 0 && mat.width() >= LIFT_MIN_WIDTH {
+                        let sub_domain = CircleDomain::new(
+                            log_sub,
+                            CircleDomain::<Val>::standard(log_height).shift,
+                        );
+                        CircleEvaluations::from_cfft_order(
+                            sub_domain,
+                            mat.split_rows(1 << log_sub).0,
+                        )
+                        .rowwise_alpha_reduce_lifted(alpha, CircleDomain::standard(log_height))
+                    } else {
+                        CircleEvaluations::from_cfft_order(
+                            CircleDomain::standard(log_height),
+                            mat.as_view(),
+                        )
+                        .rowwise_alpha_reduce(alpha)
+                    };
+                    let alpha_pow_width = alpha.exp_u64(mat.width() as u64);
 
                     points_for_mat
                         .iter()
@@ -848,6 +891,59 @@ mod tests {
         // Smoke test: an honestly generated proof must verify successfully.
         let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
         try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof).expect("verify err");
+    }
+
+    #[test]
+    fn get_evaluations_on_domain_matches_direct_lde() {
+        // `get_evaluations_on_domain` must return the committed trace on the requested
+        // domain whether that domain is smaller than, equal to, or larger than the
+        // committed LDE. The smaller-than case is exercised whenever `log_blowup`
+        // exceeds the quotient degree (e.g. the quotient domain in uni-stark).
+        let mut rng = SmallRng::seed_from_u64(1);
+
+        let byte_hash = ByteHash {};
+        let field_hash = FieldHash::new(byte_hash);
+        let compress = MyCompress::new(byte_hash);
+        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+        // log_blowup = 2 makes the committed LDE larger than a quotient-sized domain.
+        let mut fri_params = FriParameters::new_testing(challenge_mmcs, 0);
+        fri_params.log_blowup = 2;
+
+        let pcs = TestPcs {
+            mmcs: val_mmcs,
+            fri_params,
+            _phantom: PhantomData,
+        };
+
+        let log_n = 8;
+        let width = 3;
+        let d =
+            <TestPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_n);
+        let evals = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_n, width);
+
+        let (_comm, data) =
+            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals.clone())]);
+
+        // The committed LDE lives on `standard(log_n + 2)`. Walk a target domain from the
+        // original degree up past the committed LDE: `log_n + 1` is the smaller-than case,
+        // `log_n + 2` hits the equal fast path, and `log_n + 3` is the larger-than case.
+        for target_log_n in [log_n, log_n + 1, log_n + 2, log_n + 3] {
+            let target = CircleDomain::standard(target_log_n);
+            let got = <TestPcs as Pcs<Challenge, Challenger>>::get_evaluations_on_domain(
+                &pcs, &data, 0, target,
+            )
+            .to_row_major_matrix();
+
+            // Ground truth: extrapolate the original trace straight onto `target`.
+            let expected = CircleEvaluations::from_natural_order(d, evals.clone())
+                .extrapolate(target)
+                .to_natural_order()
+                .to_row_major_matrix();
+
+            assert_eq!(got, expected, "mismatch for target_log_n = {target_log_n}");
+        }
     }
 
     #[test]

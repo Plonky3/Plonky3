@@ -308,6 +308,36 @@ pub unsafe trait PackedField:
             current,
         }
     }
+
+    /// Accumulate the products of `d` coefficient streams against a shared stream of
+    /// packed base values.
+    ///
+    /// For each `(coeffs, base)` pair produced by the iterator, performs
+    /// `acc[k] += coeffs[k] * base` for all `k < d`, and returns the accumulators
+    /// (entries at `d..` are zero). Coefficient slices shorter than `d` only
+    /// contribute their available entries.
+    ///
+    /// This is the inner kernel of mixed base-times-extension dot products, where each
+    /// extension element contributes `d` base-field coefficient words. Implementations
+    /// may override it to defer modular reductions across iterations.
+    ///
+    /// # Panics
+    /// Debug builds panic if `d > 8`.
+    #[must_use]
+    fn coeffwise_dot_product<'a, I>(d: usize, pairs: I) -> [Self; 8]
+    where
+        Self: 'a,
+        I: Iterator<Item = (&'a [Self], Self)>,
+    {
+        debug_assert!(d <= 8, "Extension degree > 8 not supported");
+        let mut acc = [Self::ZERO; 8];
+        for (coeffs, base) in pairs {
+            for (acc_k, &coeff) in acc[..d].iter_mut().zip(coeffs) {
+                *acc_k += coeff * base;
+            }
+        }
+        acc
+    }
 }
 
 /// # Safety

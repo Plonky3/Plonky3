@@ -299,11 +299,20 @@ where
 
             // Collect all vertically packed rows from each matrix at `first_row`.
             // These packed rows are then hashed together using `h`.
-            let packed_digest: [PW; DIGEST_ELEMS] = h.hash_iter(
-                tallest_matrices
-                    .iter()
-                    .flat_map(|m| m.vertically_packed_row(first_row)),
-            );
+            //
+            // The single-matrix case feeds `h` the row iterator directly: going
+            // through `flat_map` hands the hasher a compound iterator whose
+            // `next()` defeats the optimizer's vectorization of the absorb loop,
+            // which is worth ~40% of the leaf-hashing time on wide matrices.
+            let packed_digest: [PW; DIGEST_ELEMS] = if let [m] = tallest_matrices {
+                h.hash_iter(m.vertically_packed_row(first_row))
+            } else {
+                h.hash_iter(
+                    tallest_matrices
+                        .iter()
+                        .flat_map(|m| m.vertically_packed_row(first_row)),
+                )
+            };
 
             // Unpack the resulting packed digest into individual scalar digests.
             PW::unpack_into(&packed_digest, digests_chunk);
@@ -381,11 +390,18 @@ where
             });
             let mut packed_digest = c.compress(children);
 
-            let tallest_digest = h.hash_iter(
-                matrices_to_inject
-                    .iter()
-                    .flat_map(|m| m.vertically_packed_row(first_row)),
-            );
+            // As in `first_digest_layer`, the single-matrix case feeds `h` the
+            // row iterator directly: a `flat_map` compound iterator defeats the
+            // optimizer's vectorization of the absorb loop.
+            let tallest_digest: [PW; DIGEST_ELEMS] = if let [m] = matrices_to_inject {
+                h.hash_iter(m.vertically_packed_row(first_row))
+            } else {
+                h.hash_iter(
+                    matrices_to_inject
+                        .iter()
+                        .flat_map(|m| m.vertically_packed_row(first_row)),
+                )
+            };
             let inject_inputs: [[PW; DIGEST_ELEMS]; N] = array::from_fn(|n| {
                 if n == 0 {
                     packed_digest

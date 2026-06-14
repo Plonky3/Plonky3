@@ -123,36 +123,81 @@ where
             .product()
     }
 
-    /// Computes `eq(c, p)`, where `p` is another `Point`.
+    /// Evaluates the selection polynomial of a point against a univariate domain element.
     ///
-    /// The **equality polynomial** for two vectors is:
-    /// ```ignore
-    /// eq(s1, s2) = ∏ (s1_i * s2_i + (1 - s1_i) * (1 - s2_i))
+    /// The univariate element is expanded into the square-power vector
+    /// `(var^(2^(n-1)), ..., var^2, var)`.
+    ///
+    /// The selection polynomial multiplies one factor per coordinate:
+    /// ```text
+    /// prod_i (point_i * var_i - point_i + 1)
     /// ```
     #[must_use]
     #[inline]
-    pub fn eq_poly(&self, point: &Self) -> F {
-        Self::eval_eq(self.as_slice(), point.as_slice())
-    }
-
-    /// Computes `select(c, pow(var))`,.
-    ///
-    /// The **selection polynomial** for two vectors is:
-    /// ```ignore
-    /// select(s1, s2) = ∏ (s1_i * s2_i - s2_i + 1)
-    /// ```
-    pub fn select_poly<BaseField: Field>(&self, mut var: BaseField) -> F
-    where
-        F: ExtensionField<BaseField>,
-    {
-        self.iter()
+    pub fn eval_select<EF: ExtensionField<F>>(mut var: F, point: &[EF]) -> EF {
+        // Read coordinates from the highest variable down to the lowest.
+        // `var` starts at the lowest power and is squared after each factor,
+        // so reversed iteration yields the descending powers var^(2^(n-1)), ..., var.
+        point
+            .iter()
             .rev()
             .map(|&r| {
-                let term = r * (F::NEG_ONE + var) + F::ONE;
+                // Per-coordinate factor: r * (var - 1) + 1.
+                // Equals 1 when var == 1, and equals 1 - r when var == 0.
+                let term = r * (F::NEG_ONE + var) + EF::ONE;
+                // Advance to the next-higher power for the next coordinate.
                 var = var.square();
                 term
             })
+            // Multiply all per-coordinate factors into the selection value.
             .product()
+    }
+
+    /// Evaluates the closed-form carry state of the repeat-last successor map.
+    ///
+    /// The successor map sends a hypercube row `x` to `x + 1`, with the maximal
+    /// row mapping to itself.
+    ///
+    /// Coordinates are folded from the lowest variable up to the highest while
+    /// tracking three accumulators returned as a triple:
+    /// - The carry weight that still wants to add 1 into the not-yet-folded prefix.
+    /// - The completed contribution from rows whose increment has already settled.
+    /// - The boundary weight of the all-ones row, which repeats instead of wrapping.
+    ///
+    /// Passing the whole point and row folds every coordinate, so the full
+    /// successor value is the sum of the completed and boundary accumulators.
+    ///
+    /// Passing only a low-bit suffix stops early, leaving a live carry weight
+    /// that an outer caller threads into the remaining prefix.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the two slices have different lengths.
+    #[must_use]
+    #[inline]
+    pub fn eval_next(point: &[F], row: &[F]) -> (F, F, F) {
+        // Add 1 bit by bit; both inputs must index the same variables.
+        assert_eq!(point.len(), row.len());
+
+        // carry: weight where the +1 has not yet been absorbed (seeded at the low bit).
+        let mut carry = F::ONE;
+        // done: weight where the +1 has already settled.
+        let mut done = F::ZERO;
+        // omega: weight of the repeating all-ones row.
+        let mut omega = F::ONE;
+        // Fold the low bit first so the carry ripples toward higher bits.
+        for (&point_bit, &row_bit) in point.iter().zip(row).rev() {
+            // Equality factor: 1 when the bits agree, 0 when they differ.
+            let eq = row_bit.double() * point_bit - point_bit - row_bit + F::ONE;
+            let prev_carry = carry;
+            // Carry lives where point_bit = 1, row_bit = 0: a 0 -> 1 still to ripple up.
+            carry = prev_carry * point_bit * (F::ONE - row_bit);
+            // Carry settles where point_bit = 0, row_bit = 1; settled mass rides the equality factor.
+            done = done * eq + prev_carry * (F::ONE - point_bit) * row_bit;
+            // All-ones weight: nonzero only where both bits are 1.
+            omega *= point_bit * row_bit;
+        }
+        (carry, done, omega)
     }
 
     /// Returns a new `Point` with the variables in reversed order.
@@ -241,6 +286,30 @@ mod tests {
     use super::*;
 
     type F = BabyBear;
+
+    #[test]
+    fn eval_next_empty_and_single_variable() {
+        // Empty point: no coordinate to fold, so the carry and all-ones weights
+        // stay at one and the settled weight at zero.
+        assert_eq!(Point::<F>::eval_next(&[], &[]), (F::ONE, F::ZERO, F::ONE));
+
+        // One variable: fold a single coordinate of the point against the row.
+        // Hand-derived decomposition for point [p], row [r]:
+        //   carry = p * (1 - r)   (a 0 -> 1 still waiting to ripple up)
+        //   done  = (1 - p) * r   (the +1 has settled here)
+        //   omega = p * r         (the all-ones row weight)
+        let p = F::from_u64(2);
+        let r = F::from_u64(3);
+        let (carry, done, omega) = Point::eval_next(&[p], &[r]);
+        assert_eq!(carry, p * (F::ONE - r));
+        assert_eq!(done, (F::ONE - p) * r);
+        assert_eq!(omega, p * r);
+
+        // Dropping the live carry leaves the full successor value, which for a
+        // single variable is just the evaluation-row coordinate.
+        assert_eq!(done + omega, r);
+    }
+
     #[test]
     fn test_num_variables() {
         let point = Point::<F>(vec![F::from_u64(1), F::from_u64(0), F::from_u64(1)]);
@@ -339,35 +408,47 @@ mod tests {
     }
 
     #[test]
-    fn test_eq_poly_outside_all_zeros() {
+    fn test_eval_eq_outside_all_zeros() {
         let ml_point1 = Point(F::zero_vec(4));
         let ml_point2 = Point(F::zero_vec(4));
 
-        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
+        assert_eq!(
+            Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice()),
+            F::ONE
+        );
     }
 
     #[test]
-    fn test_eq_poly_outside_all_ones() {
+    fn test_eval_eq_outside_all_ones() {
         let ml_point1 = Point(vec![F::ONE; 4]);
         let ml_point2 = Point(vec![F::ONE; 4]);
 
-        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
+        assert_eq!(
+            Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice()),
+            F::ONE
+        );
     }
 
     #[test]
-    fn test_eq_poly_outside_mixed_match() {
+    fn test_eval_eq_outside_mixed_match() {
         let ml_point1 = Point(vec![F::ONE, F::ZERO, F::ONE, F::ZERO]);
         let ml_point2 = Point(vec![F::ONE, F::ZERO, F::ONE, F::ZERO]);
 
-        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
+        assert_eq!(
+            Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice()),
+            F::ONE
+        );
     }
 
     #[test]
-    fn test_eq_poly_outside_mixed_mismatch() {
+    fn test_eval_eq_outside_mixed_mismatch() {
         let ml_point1 = Point(vec![F::ONE, F::ZERO, F::ONE, F::ZERO]);
         let ml_point2 = Point(vec![F::ZERO, F::ONE, F::ZERO, F::ONE]);
 
-        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ZERO);
+        assert_eq!(
+            Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice()),
+            F::ZERO
+        );
     }
 
     #[test]
@@ -386,30 +467,36 @@ mod tests {
 
         assert_eq!(result, expected);
 
-        // Test that it matches eq_poly
+        // Test that it matches the Point slice API.
         let ml_p = Point::new(p.to_vec());
         let ml_q = Point::new(q.to_vec());
-        assert_eq!(result, ml_p.eq_poly(&ml_q));
+        assert_eq!(result, Point::eval_eq(ml_p.as_slice(), ml_q.as_slice()));
     }
 
     #[test]
-    fn test_eq_poly_outside_single_variable_match() {
+    fn test_eval_eq_outside_single_variable_match() {
         let ml_point1 = Point(vec![F::ONE]);
         let ml_point2 = Point(vec![F::ONE]);
 
-        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
+        assert_eq!(
+            Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice()),
+            F::ONE
+        );
     }
 
     #[test]
-    fn test_eq_poly_outside_single_variable_mismatch() {
+    fn test_eval_eq_outside_single_variable_mismatch() {
         let ml_point1 = Point(vec![F::ONE]);
         let ml_point2 = Point(vec![F::ZERO]);
 
-        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ZERO);
+        assert_eq!(
+            Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice()),
+            F::ZERO
+        );
     }
 
     #[test]
-    fn test_eq_poly_outside_manual_comparison() {
+    fn test_eval_eq_outside_manual_comparison() {
         // Construct the first multilinear point with arbitrary non-binary field values
         let x00 = F::from_u8(17);
         let x01 = F::from_u8(56);
@@ -425,7 +512,7 @@ mod tests {
         let ml_point2 = Point(vec![x10, x11, x12, x13]);
 
         // Compute the equality polynomial between ml_point1 and ml_point2
-        let result = ml_point1.eq_poly(&ml_point2);
+        let result = Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice());
 
         // Manually compute the expected result of the equality polynomial:
         // eq(c, p) = ∏ (c_i * p_i + (1 - c_i) * (1 - p_i))
@@ -440,7 +527,7 @@ mod tests {
     }
 
     #[test]
-    fn test_eq_poly_outside_large_match() {
+    fn test_eval_eq_outside_large_match() {
         let ml_point1 = Point(vec![
             F::ONE,
             F::ONE,
@@ -462,11 +549,14 @@ mod tests {
             F::ZERO,
         ]);
 
-        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
+        assert_eq!(
+            Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice()),
+            F::ONE
+        );
     }
 
     #[test]
-    fn test_eq_poly_outside_large_mismatch() {
+    fn test_eval_eq_outside_large_mismatch() {
         let ml_point1 = Point(vec![
             F::ONE,
             F::ONE,
@@ -488,25 +578,31 @@ mod tests {
             F::ONE, // Last bit differs
         ]);
 
-        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ZERO);
+        assert_eq!(
+            Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice()),
+            F::ZERO
+        );
     }
 
     #[test]
-    fn test_eq_poly_outside_empty_vector() {
+    fn test_eval_eq_outside_empty_vector() {
         let ml_point1 = Point::<F>(vec![]);
         let ml_point2 = Point::<F>(vec![]);
 
-        assert_eq!(ml_point1.eq_poly(&ml_point2), F::ONE);
+        assert_eq!(
+            Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice()),
+            F::ONE
+        );
     }
 
     #[test]
     #[should_panic]
-    fn test_eq_poly_outside_different_lengths() {
+    fn test_eval_eq_outside_different_lengths() {
         let ml_point1 = Point(vec![F::ONE, F::ZERO]);
         let ml_point2 = Point(vec![F::ONE, F::ZERO, F::ONE]);
 
         // Should panic because lengths do not match
-        let _ = ml_point1.eq_poly(&ml_point2);
+        let _ = Point::eval_eq(ml_point1.as_slice(), ml_point2.as_slice());
     }
 
     #[test]
@@ -537,7 +633,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn proptest_eq_poly_outside_matches_manual(
+        fn proptest_eval_eq_outside_matches_manual(
             (coords1, coords2) in prop::collection::vec(0u8..=250, 1..=8).prop_flat_map(|v1| {
                 let len = v1.len();
                 prop::collection::vec(0u8..=250, len).prop_map(move |v2| (v1.clone(), v2))
@@ -547,8 +643,8 @@ mod tests {
             let p1 = Point(coords1.iter().copied().map(F::from_u8).collect());
             let p2 = Point(coords2.iter().copied().map(F::from_u8).collect());
 
-            // Evaluate eq_poly
-            let result = p1.eq_poly(&p2);
+            // Evaluate the equality polynomial.
+            let result = Point::eval_eq(p1.as_slice(), p2.as_slice());
 
             // Compute expected value using manual formula:
             // eq(c, p) = ∏ (c_i * p_i + (1 - c_i)(1 - p_i))

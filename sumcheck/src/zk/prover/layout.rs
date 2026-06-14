@@ -112,7 +112,7 @@ where
         let compressed = tracing::info_span!("compress_stacked_with_eps")
             .in_scope(|| self.compress_stacked_scaled(&reversed, eps));
         // The SVO preprocessing covers what packing would help; no packing here.
-        let weights = self.combine_eqs(&reversed, alpha);
+        let weights = self.combine_weights(&reversed, alpha);
         ProductPolynomial::new_unpacked(VariableOrder::Suffix, compressed, weights)
     }
 }
