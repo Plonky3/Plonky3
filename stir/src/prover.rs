@@ -9,7 +9,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_challenger::{CanObserve, CanSampleUniformBits, FieldChallenger, GrindingChallenger};
-use p3_commit::Mmcs;
+use p3_commit::{BatchOpening, Mmcs};
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{BasedVectorSpace, ExtensionField, Field, TwoAdicField};
 use p3_matrix::dense::RowMajorMatrix;
@@ -63,15 +63,11 @@ where
     let initial_codeword = codeword_from_coeffs(dft, coeffs, initial_shift, log_initial_domain);
 
     let mut current_oracle_codeword = initial_codeword.clone();
-    let mut current_commit_codeword = initial_codeword;
     let mut current_shift = initial_shift;
     let mut current_log_domain = log_initial_domain;
 
-    let (initial_commit, initial_data) = commit_as_fiber_matrix(
-        &config.mmcs,
-        &current_commit_codeword,
-        config.log_folding_factor,
-    );
+    let (initial_commit, initial_data) =
+        commit_as_fiber_matrix(&config.mmcs, &initial_codeword, config.log_folding_factor);
     challenger.observe(initial_commit.clone());
 
     let mut current_commit_data = initial_data;
@@ -88,7 +84,6 @@ where
         let arity = 1 << log_arity;
 
         let fold_log_domain = current_log_domain - log_arity;
-        let fold_height = 1 << fold_log_domain;
 
         let fold_shift = current_shift.exp_power_of_2(log_arity);
         let next_log_domain = current_log_domain - 1;
@@ -182,13 +177,12 @@ where
             let fold_point = EF::from(fold_shift) * EF::from(fold_gen.exp_u64(j as u64));
 
             let opening = config.mmcs.open_batch(j, current_opening_data);
-            let row_evals = (0..arity)
-                .map(|k| current_commit_codeword[j + k * fold_height])
-                .collect();
+            let (row_evals, opening_proof) = into_single_opened_row(opening);
+            debug_assert_eq!(row_evals.len(), arity);
 
             query_proofs.push(StirQueryProof {
                 row_evals,
-                opening_proof: opening.opening_proof,
+                opening_proof,
             });
 
             if seen_query_indices.insert(j) {
@@ -245,7 +239,6 @@ where
         });
 
         current_oracle_codeword = next_oracle_codeword;
-        current_commit_codeword = next_commit_codeword;
         current_commit_data = new_data;
         current_shift = next_shift;
         current_log_domain = next_log_domain;
@@ -255,7 +248,6 @@ where
     let final_log_arity = config.log_folding_factor;
     let final_arity = 1usize << final_log_arity;
     let final_new_log_domain = current_log_domain - final_log_arity;
-    let final_new_height = 1usize << final_new_log_domain;
     let final_new_shift = current_shift.exp_power_of_2(final_log_arity);
 
     let final_folding_pow_witness = challenger.grind(config.final_folding_pow_bits);
@@ -286,12 +278,11 @@ where
             .expect("RESAMPLE = true: rejection loops internally, never errors");
         final_seen.insert(j);
         let opening = config.mmcs.open_batch(j, &current_commit_data);
-        let row_evals = (0..final_arity)
-            .map(|k| current_commit_codeword[j + k * final_new_height])
-            .collect();
+        let (row_evals, opening_proof) = into_single_opened_row(opening);
+        debug_assert_eq!(row_evals.len(), final_arity);
         final_query_proofs.push(StirFinalQueryProof {
             row_evals,
-            opening_proof: opening.opening_proof,
+            opening_proof,
         });
     }
 
@@ -367,4 +358,19 @@ fn commit_as_fiber_matrix<EF: Field, M: Mmcs<EF>>(
         }
     }
     mmcs.commit_matrix(RowMajorMatrix::new(matrix, arity))
+}
+
+fn into_single_opened_row<EF: Field, M: Mmcs<EF>>(
+    opening: BatchOpening<EF, M>,
+) -> (Vec<EF>, M::Proof) {
+    let (mut opened_values, opening_proof) = opening.unpack();
+    assert_eq!(
+        opened_values.len(),
+        1,
+        "STIR commits exactly one codeword matrix"
+    );
+    let row_evals = opened_values
+        .pop()
+        .expect("STIR commits exactly one codeword matrix");
+    (row_evals, opening_proof)
 }
