@@ -373,14 +373,14 @@ where
     let default_digest = [PW::Value::default(); DIGEST_ELEMS];
     let mut next_digests = vec![default_digest; next_len_padded];
 
+    let default_packed: [PW; DIGEST_ELEMS] =
+        array::from_fn(|_| PW::broadcast(PW::Value::default()));
+
     next_digests[0..next_len]
         .par_chunks_exact_mut(width)
         .enumerate()
         .for_each(|(i, digests_chunk)| {
             let first_row = i * width;
-            let default_packed: [PW; DIGEST_ELEMS] =
-                array::from_fn(|_| PW::broadcast(PW::Value::default()));
-
             let children: [[PW; DIGEST_ELEMS]; N] = array::from_fn(|n| {
                 if n < step {
                     PW::pack_columns_fn(|lane| prev_layer[step * (first_row + lane) + n])
@@ -501,13 +501,13 @@ where
     let default_digest = [P::Value::default(); DIGEST_ELEMS];
     let mut next_digests = vec![default_digest; next_len_padded];
 
+    let default_packed: [P; DIGEST_ELEMS] = array::from_fn(|_| P::broadcast(P::Value::default()));
+
     next_digests[0..next_len]
         .par_chunks_exact_mut(width)
         .enumerate()
         .for_each(|(i, digests_chunk)| {
             let first_row = i * width;
-            let default_packed: [P; DIGEST_ELEMS] =
-                array::from_fn(|_| P::broadcast(P::Value::default()));
             let children: [[P; DIGEST_ELEMS]; N] = array::from_fn(|n| {
                 if n < step {
                     P::pack_columns_fn(|lane| prev_layer[step * (first_row + lane) + n])
