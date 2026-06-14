@@ -7,8 +7,8 @@ use crate::{Field, TwoAdicField};
 /// Compute `base^exponent` for an arbitrarily large exponent.
 ///
 /// Uses the standard square-and-multiply approach over the bits of `exponent`.
-/// Unlike [`Field::exp_u64`] this accepts exponents which do not fit in a `u64`,
-/// as required by fields whose order exceeds `2^64`.
+/// This accepts exponents which do not fit in a `u64`, as required by fields
+/// whose order exceeds `2^64`.
 fn exp_biguint<F: Field>(base: F, exponent: &BigUint) -> F {
     let mut product = F::ONE;
     let mut current = base;
