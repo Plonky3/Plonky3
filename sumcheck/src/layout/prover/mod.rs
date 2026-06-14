@@ -250,7 +250,7 @@ pub(super) mod test_utils {
         let mut verifier_challenge = Point::new(vec![]);
         verifier_challenge.extend(
             &proof0
-                .verify_rounds(&mut verifier_challenger, &mut sum, 0)
+                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, 0)
                 .unwrap(),
         );
 
@@ -265,12 +265,17 @@ pub(super) mod test_utils {
         constraints.push(intermediate_constraint);
         verifier_challenge.extend(
             &proof1
-                .verify_rounds(&mut verifier_challenger, &mut sum, POW_BITS)
+                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, POW_BITS)
                 .unwrap(),
         );
         verifier_challenge.extend(
             &proof2
-                .verify_rounds(&mut verifier_challenger, &mut sum, 0)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    stacked_num_variables - 2 * FOLDING,
+                    0,
+                )
                 .unwrap(),
         );
 
@@ -766,7 +771,7 @@ mod tests {
         let mut verifier_challenge = Point::new(vec![]);
         verifier_challenge.extend(
             &proof0
-                .verify_rounds(&mut verifier_challenger, &mut sum, 0)
+                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, 0)
                 .unwrap(),
         );
 
@@ -783,12 +788,17 @@ mod tests {
         // The grinding stage carries proof-of-work bits; the final stage none.
         verifier_challenge.extend(
             &proof1
-                .verify_rounds(&mut verifier_challenger, &mut sum, POW_BITS)
+                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, POW_BITS)
                 .unwrap(),
         );
         verifier_challenge.extend(
             &proof2
-                .verify_rounds(&mut verifier_challenger, &mut sum, 0)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    stacked_num_variables - 2 * FOLDING,
+                    0,
+                )
                 .unwrap(),
         );
 
@@ -877,7 +887,7 @@ mod tests {
         let mut verifier_challenge = Point::new(vec![]);
         verifier_challenge.extend(
             &proof0
-                .verify_rounds(&mut verifier_challenger, &mut sum, 0)
+                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, 0)
                 .unwrap(),
         );
 
@@ -894,12 +904,17 @@ mod tests {
         // The grinding stage carries proof-of-work bits; the final stage none.
         verifier_challenge.extend(
             &proof1
-                .verify_rounds(&mut verifier_challenger, &mut sum, POW_BITS)
+                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, POW_BITS)
                 .unwrap(),
         );
         verifier_challenge.extend(
             &proof2
-                .verify_rounds(&mut verifier_challenger, &mut sum, 0)
+                .verify_rounds(
+                    &mut verifier_challenger,
+                    &mut sum,
+                    stacked_num_variables - 2 * FOLDING,
+                    0,
+                )
                 .unwrap(),
         );
 
