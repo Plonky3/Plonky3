@@ -23,7 +23,7 @@ use num_bigint::BigUint;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
     ExtensionField, Field, PackedValue, PrimeCharacteristicRing, PrimeField32, PrimeField64,
-    TwoAdicField, batch_multiplicative_inverse,
+    TwoAdicField, batch_multiplicative_inverse, batch_multiplicative_inverse_and_scale,
 };
 use p3_util::iter_array_chunks_padded;
 pub use packedfield_testing::*;
@@ -389,6 +389,49 @@ where
                 *x * *inv,
                 F::ONE,
                 "x[{i}] * inv[{i}] != 1 for input length {n}"
+            );
+        }
+    }
+}
+
+/// Verify [`batch_multiplicative_inverse_and_scale`] against the plain batch
+/// inverse rescaled per element, across the same range of input lengths.
+pub fn test_batch_multiplicative_inverse_and_scale<F: Field>()
+where
+    StandardUniform: Distribution<F>,
+{
+    let mut rng = SmallRng::seed_from_u64(0x5CA1);
+
+    let lengths = [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 15, 16, 17, 63, 64, 65, 1023, 1024, 1025, 1027, 2049, 4099,
+    ];
+
+    for &n in &lengths {
+        let xs: Vec<F> = (0..n)
+            .map(|_| {
+                // Reject zero so every input is invertible.
+                let mut x = rng.random::<F>();
+                while x.is_zero() {
+                    x = rng.random::<F>();
+                }
+                x
+            })
+            .collect();
+
+        let scale = rng.random::<F>();
+        let got = batch_multiplicative_inverse_and_scale(&xs, scale);
+        assert_eq!(got.len(), n, "result length mismatch for n = {n}");
+
+        // Folding `scale` into the inversion must match inverting then rescaling.
+        let expected: Vec<F> = batch_multiplicative_inverse(&xs)
+            .iter()
+            .map(|&inv| inv * scale)
+            .collect();
+
+        for (i, (got_i, exp_i)) in got.iter().zip(&expected).enumerate() {
+            assert_eq!(
+                *got_i, *exp_i,
+                "scaled inverse mismatch at index {i} for input length {n}"
             );
         }
     }
@@ -1054,6 +1097,10 @@ macro_rules! test_field {
             #[test]
             fn test_batch_multiplicative_inverse() {
                 $crate::test_batch_multiplicative_inverse::<$field>();
+            }
+            #[test]
+            fn test_batch_multiplicative_inverse_and_scale() {
+                $crate::test_batch_multiplicative_inverse_and_scale::<$field>();
             }
             #[test]
             fn test_generator() {

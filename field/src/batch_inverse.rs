@@ -71,6 +71,45 @@ pub fn batch_multiplicative_inverse<F: Field>(x: &[F]) -> Vec<F> {
     result
 }
 
+/// Compute `scale * x_i^{-1}` for every element via Montgomery's trick.
+///
+/// Identical to [`batch_multiplicative_inverse`] except that each inverse is
+/// multiplied by the constant `scale`. The factor is folded into the single
+/// inversion at the head of every Montgomery chain, so scaling all `n` results
+/// costs one extra multiplication per chain rather than one per element.
+///
+/// This is useful when the caller would otherwise invert a slice and then
+/// rescale every entry by the same constant: the rescaling becomes essentially
+/// free.
+///
+/// # Panics
+///
+/// Panics if any input is zero.
+#[instrument(level = "debug", skip_all)]
+#[must_use]
+pub fn batch_multiplicative_inverse_and_scale<F: Field>(x: &[F], scale: F) -> Vec<F> {
+    // Chunking and packing mirror `batch_multiplicative_inverse`; see there for the rationale.
+    const CHUNK_SIZE: usize = 1024;
+    const WIDTH: usize = 4;
+
+    let mut result = F::zero_vec(x.len());
+
+    x.par_chunks(CHUNK_SIZE)
+        .zip(result.par_chunks_mut(CHUNK_SIZE))
+        .for_each(|(x_chunk, result_chunk)| {
+            let (x_packed, x_tail) = FieldArray::<F, WIDTH>::pack_slice_with_suffix(x_chunk);
+            let (result_packed, result_tail) =
+                FieldArray::<F, WIDTH>::pack_slice_with_suffix_mut(result_chunk);
+
+            // Fold `scale` into each chain's inversion: `scale / product` instead of `1 / product`
+            // makes every recovered inverse come out as `scale * x_i^{-1}`.
+            batch_multiplicative_inverse_general(x_packed, result_packed, |y| y.inverse() * scale);
+            batch_multiplicative_inverse_general(x_tail, result_tail, |y| y.inverse() * scale);
+        });
+
+    result
+}
+
 /// A simple single-threaded implementation of Montgomery's trick. Since not all `PrimeCharacteristicRing`s
 /// support inversion, this takes a custom inversion function.
 ///

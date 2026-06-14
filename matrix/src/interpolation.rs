@@ -43,7 +43,7 @@ use alloc::vec::Vec;
 use p3_field::coset::TwoAdicMultiplicativeCoset;
 use p3_field::{
     ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse,
-    scale_slice_in_place_single_core,
+    batch_multiplicative_inverse_and_scale, scale_slice_in_place_single_core,
 };
 use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
@@ -71,6 +71,34 @@ pub fn compute_adjusted_weights<EF: Field>(point: EF, diff_invs: &[EF]) -> Vec<E
     diff_invs.par_iter().map(|&d| d - point_inv).collect()
 }
 
+/// Global scaling factor of the two-adic barycentric formula:
+///
+/// ```text
+///   s = z * (z^N - g^N) / (N * g^N)
+/// ```
+///
+/// where `N = 2^log_height`, `g` is the coset shift and `z` the evaluation point.
+///
+/// # Performance
+///
+/// - `log_height` extension-field squarings (for `z^N`).
+/// - `log_height` base-field squarings (for `g^N`).
+/// - One base-field inversion (for `N * g^N`).
+fn coset_scaling_factor<F: TwoAdicField, EF: ExtensionField<F>>(
+    shift: F,
+    point: EF,
+    log_height: usize,
+) -> EF {
+    // z^N via extension-field repeated squaring (expensive).
+    let z_pow_n = point.exp_power_of_2(log_height);
+    // g^N via base-field repeated squaring (cheap — single-word ops).
+    let g_pow_n = shift.exp_power_of_2(log_height);
+    // Combine denominator N * g^N and invert once (only base-field inversion).
+    let denom_inv = g_pow_n.mul_2exp_u64(log_height as u64).inverse();
+    // Assemble: z * (z^N - g^N) * 1/(N * g^N).
+    point * (z_pow_n - g_pow_n) * denom_inv
+}
+
 /// Barycentric Lagrange interpolation over two-adic cosets.
 ///
 /// Blanket-implemented for every matrix over a two-adic field.
@@ -90,10 +118,25 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
 
     /// Evaluate a batch of polynomials at a point outside a shifted coset.
     ///
-    /// Builds the coset, batch-inverts the denominators, converts to adjusted
+    /// Builds the coset, batch-inverts the denominators, forms the barycentric
     /// weights, and evaluates — all in one call.
     ///
     /// Evaluations must be in standard (not bit-reversed) order.
+    ///
+    /// # Overview
+    ///
+    /// One-shot path: the global scaling factor `s = z * (z^N - g^N) / (N * g^N)`
+    /// is folded into the batch inversion, so the weights come out fully scaled as
+    ///
+    /// ```text
+    ///   weight_i = s / (z - g*h^i) - s / z
+    /// ```
+    ///
+    /// and the column-wise dot product yields `f(z)` directly. This removes the
+    /// trailing per-column rescale that [`interpolate_coset_with_precomputation`]
+    /// must perform when weights are shared across matrices of differing heights.
+    ///
+    /// [`interpolate_coset_with_precomputation`]: Interpolate::interpolate_coset_with_precomputation
     ///
     /// # Safety
     ///
@@ -107,8 +150,7 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
             .iter()
             .collect();
 
-        // Compute z - x_i in parallel, then batch-invert in one shot
-        // (Montgomery's trick: single field inversion + O(N) multiplications).
+        // Compute z - x_i in parallel.
         let diffs: Vec<EF> = coset.par_iter().map(|&g| point - g).collect();
 
         // If point lies on the coset, return that row directly.
@@ -117,11 +159,17 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
             return self.row(i).unwrap().into_iter().map(EF::from).collect();
         }
 
-        let diff_invs = batch_multiplicative_inverse(&diffs);
+        // Fold the global scaling factor into the batch inversion so every weight is
+        // produced pre-scaled (Montgomery's trick: one inversion + O(N) multiplications).
+        let scaling_factor = coset_scaling_factor(shift, point, log_height);
+        let scaled_invs = batch_multiplicative_inverse_and_scale(&diffs, scaling_factor);
 
-        // Convert to adjusted weights and delegate to the zero-allocation hot path.
-        let adjusted = compute_adjusted_weights(point, &diff_invs);
-        self.interpolate_coset_with_precomputation(shift, point, &adjusted)
+        // Fully-scaled barycentric weights: s/(z - x_i) - s/z.
+        let weight_shift = scaling_factor * point.inverse();
+        let weights: Vec<EF> = scaled_invs.par_iter().map(|&d| d - weight_shift).collect();
+
+        // The column-wise dot product is the final result; no global rescale needed.
+        self.columnwise_dot_product(&weights)
     }
 
     /// Fastest interpolation path — zero allocation beyond the result vector.
@@ -172,18 +220,8 @@ pub trait Interpolate<F: TwoAdicField>: Matrix<F> {
 
         let log_height = log2_strict_usize(self.height());
 
-        // Phase 1: Global scaling factor
-        //
-        //   s = z * (z^N - g^N) / (N * g^N)
-        //
-        // z^N via extension-field repeated squaring (expensive).
-        let z_pow_n = point.exp_power_of_2(log_height);
-        // g^N via base-field repeated squaring (cheap — single-word ops).
-        let g_pow_n = shift.exp_power_of_2(log_height);
-        // Combine denominator N * g^N and invert once (only base-field inversion).
-        let denom_inv = g_pow_n.mul_2exp_u64(log_height as u64).inverse();
-        // Assemble: z * (z^N - g^N) * 1/(N * g^N).
-        let scaling_factor = point * (z_pow_n - g_pow_n) * denom_inv;
+        // Phase 1: Global scaling factor s = z * (z^N - g^N) / (N * g^N).
+        let scaling_factor = coset_scaling_factor(shift, point, log_height);
 
         // Phase 2: Weighted column sums via the SIMD-optimized dot product.
         //
