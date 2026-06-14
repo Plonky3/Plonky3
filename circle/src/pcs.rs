@@ -78,6 +78,8 @@ where
     FirstLayerMmcsError(FriMmcsError),
     #[error("input shape error: mismatched dimensions")]
     InputShapeError,
+    #[error("opening point coincides with a query point")]
+    OpeningPointMatchesQueryPoint,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -673,7 +675,8 @@ where
                             let zeta = Point::from_projective_line(*zeta_uni);
 
                             *ro += *alpha_offset
-                                * deep_quotient_reduce_row(alpha, x, zeta, ps_at_x, ps_at_zeta);
+                                * deep_quotient_reduce_row(alpha, x, zeta, ps_at_x, ps_at_zeta)
+                                    .ok_or(InputError::OpeningPointMatchesQueryPoint)?;
 
                             *alpha_offset *= alpha_pow_width_2;
                         }
