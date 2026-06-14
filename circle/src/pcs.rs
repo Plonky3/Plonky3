@@ -20,7 +20,7 @@ use p3_util::log2_strict_usize;
 use p3_util::zip_eq::zip_eq;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::info_span;
+use tracing::{debug_span, info_span};
 
 use crate::deep_quotient::{
     VanishingParts, accumulate_deep_quotient, compute_vanishing_parts, deep_quotient_reduce_row,
@@ -221,7 +221,7 @@ where
         // by the Lagrange denominators and the DEEP-quotient vanishing parts below, which are in
         // turn shared by every matrix opened at the same point on the same domain.
         let mut permuted_points: BTreeMap<usize, Vec<Point<Val>>> = BTreeMap::new();
-        info_span!("materialize domain points").in_scope(|| {
+        debug_span!("materialize domain points").in_scope(|| {
             for (data, _) in &rounds {
                 for mat in self.mmcs.get_matrices(data) {
                     let log_height = log2_strict_usize(mat.height());
@@ -292,7 +292,7 @@ where
                             .collect_vec();
 
                         let ps_for_points: Vec<Vec<Challenge>> =
-                            info_span!("compute opened values with Lagrange interpolation")
+                            debug_span!("compute opened values with Lagrange interpolation")
                                 .in_scope(|| match (&points_for_mat[..], &den_idxs[..]) {
                                     // A matrix opened at two points (e.g. zeta and zeta_next)
                                     // is traversed once for both.

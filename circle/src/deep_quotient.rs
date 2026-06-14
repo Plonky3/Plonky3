@@ -139,7 +139,7 @@ pub(crate) fn compute_vanishing_parts<F: ComplexExtendable, EF: ExtensionField<F
 ///
 /// where `r[i] = sum_j(alpha^j * p_j[x_i])` are the alpha-reduced rows of the matrix,
 /// `c = sum_j(alpha^j * p_j[zeta])` is `reduced_ps_at_zeta` and `W` is the matrix width.
-#[instrument(skip_all, fields(n = ro.len()))]
+#[instrument(skip_all, fields(n = ro.len()), level = "debug")]
 pub(crate) fn accumulate_deep_quotient<EF: Field>(
     ro: &mut [EF],
     alpha_offset: EF,
@@ -166,7 +166,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
     ///
     /// This is the only part of the DEEP quotient that traverses the matrix, and it does not
     /// depend on the opening point, so it is computed once per matrix and shared by all points.
-    #[instrument(skip_all, fields(dims = %self.values.dimensions()))]
+    #[instrument(skip_all, fields(dims = %self.values.dimensions()), level = "debug")]
     pub(crate) fn rowwise_alpha_reduce<EF: ExtensionField<F>>(&self, alpha: EF) -> Vec<EF> {
         let packed_alpha_powers =
             EF::ExtensionPacking::packed_ext_powers_capped(alpha, self.values.width())
@@ -217,7 +217,7 @@ impl<F: ComplexExtendable, M: Matrix<F>> CircleEvaluations<F, M> {
 /// # Returns
 ///
 /// The extracted coefficient `lambda` that was removed from the LDE evaluations.
-#[instrument(skip_all, fields(bits = log2_strict_usize(lde.len())))]
+#[instrument(skip_all, fields(bits = log2_strict_usize(lde.len())), level = "debug")]
 pub fn extract_lambda<F: ComplexExtendable, EF: ExtensionField<F>>(
     lde: &mut [EF],
     log_blowup: usize,
