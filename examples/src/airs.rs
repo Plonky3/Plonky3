@@ -6,13 +6,14 @@ use p3_commit::PolynomialSpace;
 use p3_field::{ExtensionField, Field, PrimeCharacteristicRing, PrimeField64};
 use p3_keccak_air::KeccakAir;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_poseidon1_air::VectorizedPoseidon1Air;
 use p3_poseidon2::GenericPoseidon2LinearLayers;
 use p3_poseidon2_air::{Poseidon2Air, VectorizedPoseidon2Air};
 use p3_uni_stark::{ProverConstraintFolder, StarkGenericConfig, VerifierConstraintFolder};
 use rand::distr::StandardUniform;
 use rand::prelude::Distribution;
 
-/// An enum containing the three different AIR's.
+/// An enum containing the four different AIR's.
 ///
 /// This implements `AIR` by passing to whatever the contained struct is.
 pub enum ProofObjective<
@@ -27,6 +28,17 @@ pub enum ProofObjective<
 > {
     Blake3(Blake3Air),
     Keccak(KeccakAir),
+    Poseidon1(
+        VectorizedPoseidon1Air<
+            F,
+            WIDTH,
+            SBOX_DEGREE,
+            SBOX_REGISTERS,
+            HALF_FULL_ROUNDS,
+            PARTIAL_ROUNDS,
+            VECTOR_LEN,
+        >,
+    ),
     Poseidon2(
         VectorizedPoseidon2Air<
             F,
@@ -86,6 +98,7 @@ impl<
     fn width(&self) -> usize {
         match self {
             Self::Blake3(b3_air) => <Blake3Air as BaseAir<F>>::width(b3_air),
+            Self::Poseidon1(p1_air) => p1_air.width(),
             Self::Poseidon2(p2_air) => p2_air.width(),
             Self::Keccak(k_air) => <KeccakAir as BaseAir<F>>::width(k_air),
         }
@@ -117,6 +130,7 @@ impl<
     fn eval(&self, builder: &mut AB) {
         match self {
             Self::Blake3(b3_air) => b3_air.eval(builder),
+            Self::Poseidon1(p1_air) => p1_air.eval(builder),
             Self::Poseidon2(p2_air) => p2_air.eval(builder),
             Self::Keccak(k_air) => k_air.eval(builder),
         }
@@ -160,6 +174,9 @@ impl<
     {
         match self {
             Self::Blake3(b3_air) => b3_air.generate_trace_rows(num_hashes, extra_capacity_bits),
+            Self::Poseidon1(p1_air) => {
+                p1_air.generate_vectorized_trace_rows(num_hashes, extra_capacity_bits)
+            }
             Self::Poseidon2(p2_air) => {
                 p2_air.generate_vectorized_trace_rows(num_hashes, extra_capacity_bits)
             }
