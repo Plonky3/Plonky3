@@ -149,6 +149,21 @@ where
     }
 }
 
+/// Round a real-valued proof-of-work gap up to whole grinding bits.
+///
+/// Grinding contributes whole bits of security: a witness with `b` leading
+/// zero bits adds exactly `b` bits.
+///
+/// The gap to grind is `security_level - algebraic_bits`, a real number.
+/// - Flooring drops the fractional part.
+/// - Achieved security `algebraic_bits + floor(gap)` then dips below target.
+/// - Rounding up keeps `algebraic_bits + ceil(gap) >= security_level`.
+///
+/// Mirrors the query-count derivation, which rounds up for the same reason.
+fn ceil_pow_bits(gap: f64) -> usize {
+    libm::ceil(gap) as usize
+}
+
 impl<EF, F, Challenger> WhirConfig<EF, F, Challenger>
 where
     F: TwoAdicField,
@@ -369,8 +384,8 @@ where
                 F::two_adic_generator(domain_size.ilog2() as usize - folding_factor);
 
             round_parameters.push(RoundConfig {
-                pow_bits: pow_bits as usize,
-                folding_pow_bits: folding_pow_bits as usize,
+                pow_bits: ceil_pow_bits(pow_bits),
+                folding_pow_bits: ceil_pow_bits(folding_pow_bits),
                 num_queries,
                 ood_samples,
                 num_variables,
@@ -419,13 +434,13 @@ where
             params: whir_parameters,
             commitment_ood_samples,
             num_variables: initial_num_variables,
-            starting_folding_pow_bits: starting_folding_pow_bits as usize,
+            starting_folding_pow_bits: ceil_pow_bits(starting_folding_pow_bits),
             round_parameters,
             folding_schedule,
             final_queries,
-            final_pow_bits: final_pow_bits as usize,
+            final_pow_bits: ceil_pow_bits(final_pow_bits),
             final_sumcheck_rounds,
-            final_folding_pow_bits: final_folding_pow_bits as usize,
+            final_folding_pow_bits: ceil_pow_bits(final_folding_pow_bits),
             _extension_field: PhantomData,
             _challenger: PhantomData,
         };
@@ -626,6 +641,83 @@ mod tests {
         assert_eq!(config.security_level, 100);
         assert_eq!(config.params.pow_bits, 20);
         assert_eq!(config.soundness_type, SecurityAssumption::CapacityBound);
+    }
+
+    #[test]
+    fn ceil_pow_bits_rounds_up() {
+        // Grinding adds whole bits, so a fractional gap rounds up.
+        // Flooring would undershoot the security target by up to one bit.
+        //
+        //     0.0  -> 0   (no grinding needed)
+        //     20.0 -> 20  (already whole)
+        //     19.001 -> 20 (round up)
+        //     20.7 -> 21  (round up)
+        assert_eq!(ceil_pow_bits(0.0), 0);
+        assert_eq!(ceil_pow_bits(20.0), 20);
+        assert_eq!(ceil_pow_bits(19.001), 20);
+        assert_eq!(ceil_pow_bits(20.7), 21);
+    }
+
+    #[test]
+    fn derived_pow_reaches_security_target_per_phase() {
+        // Invariant: achieved security per phase = algebraic_bits + pow_bits.
+        //
+        //     pow_bits = ceil(security_level - algebraic_bits)
+        //     => algebraic_bits + pow_bits >= security_level
+        //
+        // Flooring the gap would make the sum dip below the target whenever
+        // algebraic_bits is fractional.
+        //
+        // Unique decoding needs no out-of-domain samples, so the 31-bit base
+        // field is feasible, and its query and combination errors are
+        // fractional -- exactly the case where floor and ceil differ.
+        let soundness = SecurityAssumption::UniqueDecoding;
+        let params = ProtocolParameters {
+            security_level: 128,
+            pow_bits: 64,
+            round_log_inv_rates: vec![],
+            folding_factor: FoldingFactor::Constant(4),
+            soundness_type: soundness,
+            starting_log_inv_rate: 1,
+        };
+        let config = WhirConfig::<F, F, MyChallenger>::new(20, params).unwrap();
+
+        // Target in bits, and the field size the combination error is taken over.
+        let target = config.security_level as f64;
+        let field_bits = F::bits();
+
+        // Walk the intermediate rounds, tracking the pre-fold (old) rate.
+        // Queries test proximity to the code before this round's fold.
+        let mut old_rate = config.params.starting_log_inv_rate;
+        for cfg in &config.round_parameters {
+            // Query phase is bounded by the weaker of two error sources.
+            let query_error = soundness.queries_error(old_rate, cfg.num_queries);
+            let combination_error = soundness.queries_combination_error(
+                field_bits,
+                cfg.num_variables,
+                cfg.log_inv_rate,
+                cfg.ood_samples,
+                cfg.num_queries,
+            );
+            let algebraic = query_error.min(combination_error);
+
+            // Ceil keeps the sum at or above target; floor would drop below it.
+            assert!(
+                cfg.pow_bits as f64 + algebraic >= target,
+                "round query phase undershoots: {} + {algebraic} < {target}",
+                cfg.pow_bits
+            );
+
+            old_rate = cfg.log_inv_rate;
+        }
+
+        // Final query phase grinds at the last accumulated rate.
+        let final_error = soundness.queries_error(old_rate, config.final_queries);
+        assert!(
+            config.final_pow_bits as f64 + final_error >= target,
+            "final query phase undershoots: {} + {final_error} < {target}",
+            config.final_pow_bits
+        );
     }
 
     #[test]
