@@ -227,6 +227,12 @@ impl<F: Field, EF: ExtensionField<F>> Constraint<F, EF> {
     /// - `num_variables`: shared multilinear arity that every group must match.
     /// - `statements`: groups in the protocol-visible order used by batching.
     ///
+    /// # Fiat-Shamir
+    ///
+    /// - The caller owns the binding of `challenge`; this type does not absorb anything.
+    /// - Every statement's points and evaluations must be observed before `challenge` is sampled.
+    /// - A `challenge` drawn before that binding lets a prover steer it and forge the batch.
+    ///
     /// # Panics
     ///
     /// Panics if any group has a different variable count than the shared arity.
