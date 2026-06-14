@@ -5,7 +5,7 @@ use itertools::Itertools;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
 use p3_field::coset::TwoAdicMultiplicativeCoset;
-use p3_field::{ExtensionField, Field, TwoAdicField};
+use p3_field::{ExtensionField, Field, TwoAdicField, batch_multiplicative_inverse};
 use p3_matrix::Dimensions;
 use p3_util::{log2_strict_usize, reverse_bits_len};
 use thiserror::Error;
@@ -636,6 +636,40 @@ where
         });
     }
 
+    // Each opening point `z` contributes a quotient `(f(z) - f(x)) / (z - x)`, requiring the
+    // inverse of `(z - x)`. The denominators depend only on the query point `x` and the opening
+    // points, so collect all of them across this query and invert them with a single
+    // `batch_multiplicative_inverse` (one inversion plus ~3N muls) rather than one inversion per
+    // point.
+    //
+    // `batch_multiplicative_inverse` panics on a zero input, so reject a coinciding opening point
+    // (`z == x`, making the quotient undefined) here; this preserves the per-point
+    // `OpeningPointMatchesQueryPoint` rejection. The collection order matches the accumulation
+    // loop below (batch, then matrix, then point), so the inverses are consumed in lockstep.
+    let mut denominators = Vec::new();
+    for (batch, (_, mats)) in commitments_with_opening_points.iter().enumerate() {
+        for (matrix, (mat_domain, mat_points_and_values)) in mats.iter().enumerate() {
+            let log_height = log2_strict_usize(mat_domain.size()) + params.log_blowup;
+            let bits_reduced = log_global_max_height - log_height;
+            let rev_reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
+            let x = Val::GENERATOR
+                * Val::two_adic_generator(log_height).exp_u64(rev_reduced_index as u64);
+
+            for (point, (z, _)) in mat_points_and_values.iter().enumerate() {
+                let denominator = *z - x;
+                if denominator.is_zero() {
+                    return Err(FriError::OpeningPointMatchesQueryPoint {
+                        batch,
+                        matrix,
+                        point,
+                    });
+                }
+                denominators.push(denominator);
+            }
+        }
+    }
+    let mut inverse_denominators = batch_multiplicative_inverse(&denominators).into_iter();
+
     // For each batch commitment and opening proof
     for (batch, (batch_opening, (batch_commit, mats))) in input_proof
         .iter()
@@ -708,22 +742,13 @@ where
         {
             let log_height = log2_strict_usize(mat_domain.size()) + params.log_blowup;
 
-            let bits_reduced = log_global_max_height - log_height;
-            let rev_reduced_index = reverse_bits_len(index >> bits_reduced, log_height);
-
-            // TODO: this can be nicer with domain methods?
-
-            // Compute gh^i
-            let x = Val::GENERATOR
-                * Val::two_adic_generator(log_height).exp_u64(rev_reduced_index as u64);
-
             let (alpha_pow, ro) = reduced_openings
                 .entry(log_height) // Get a mutable reference to the entry.
                 .or_insert((Challenge::ONE, Challenge::ZERO));
 
             // For each polynomial `f` in our matrix, compute `(f(z) - f(x))/(z - x)`,
             // scale by the appropriate alpha power and add to the reduced opening for this log_height.
-            for (point, (z, ps_at_z)) in mat_points_and_values.iter().enumerate() {
+            for (point, (_z, ps_at_z)) in mat_points_and_values.iter().enumerate() {
                 if mat_opening.len() != ps_at_z.len() {
                     return Err(FriError::PointEvaluationCountMismatch {
                         batch,
@@ -733,16 +758,12 @@ where
                         got: ps_at_z.len(),
                     });
                 }
-                // The quotient (f(z) - f(x)) / (z - x) is undefined when x coincides with z.
-                // Reject this instead of inverting zero.
-                let quotient =
-                    (*z - x)
-                        .try_inverse()
-                        .ok_or(FriError::OpeningPointMatchesQueryPoint {
-                            batch,
-                            matrix,
-                            point,
-                        })?;
+                // Inverse of (z - x), precomputed in the batched inversion above. The pre-pass
+                // pushed exactly one denominator per (batch, matrix, point) in this iteration
+                // order, so the next entry corresponds to this opening point.
+                let quotient = inverse_denominators
+                    .next()
+                    .expect("one inverse was precomputed per opening point");
                 for (&p_at_x, &p_at_z) in mat_opening.iter().zip(ps_at_z.iter()) {
                     // Note we just checked batch proofs to ensure p_at_x is correct.
                     // x, z were sent by the verifier.
