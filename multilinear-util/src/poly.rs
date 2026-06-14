@@ -181,12 +181,15 @@ impl<Packed> Poly<Packed> {
     ///
     /// ## Returns
     /// A packed polynomial containing `scale * eq(point, X)` for all `X` in `{0,1}^n`.
+    ///
+    /// The last `log2(W)` variables fold into one packed seed (filling the SIMD lanes).
+    /// The remaining variables expand across the thread pool, one output chunk per worker.
     #[inline]
     pub fn new_packed_from_point<F, EF>(point: &[EF], scale: EF) -> Self
     where
         F: Field,
         EF: ExtensionField<F, ExtensionPacking = Packed>,
-        Packed: PackedFieldExtension<F, EF> + Copy,
+        Packed: PackedFieldExtension<F, EF> + Copy + Send + Sync,
     {
         /// Computes eq(point, X) * scale for all X in {0,1}^n, writing results into `out`.
         ///
@@ -213,23 +216,42 @@ impl<Packed> Poly<Packed> {
 
         let (point_rest, point_init) = point.split_at(n - n_pack);
 
-        // COMPUTE SUFFIX (Inside the SIMD lanes)
+        // COMPUTE SUFFIX (inside the SIMD lanes)
         //
         // We compute the equality polynomial for the last `n_pack` variables.
         // This forms a single `Packed` element which acts as the seed for the next stage.
         let mut init: Vec<EF> = EF::zero_vec(1 << n_pack);
         eq_serial(&mut init, point_init, scale);
+        let seed = Packed::from_ext_slice(&init);
 
-        // COMPUTE PREFIX (Vector Expansion)
+        // COMPUTE PREFIX (vector expansion over `point_rest`)
         //
         // We expand the seed across the remaining variables using Packed arithmetic.
-        let mut packed = unsafe { uninitialized_vec::<Packed>(1 << (n - n_pack)) };
-        eq_serial(
-            &mut packed,
-            point_rest,
-            // Initialize the first element with the seed computed above
-            Packed::from_ext_slice(&init),
-        );
+        let mut packed = unsafe { uninitialized_vec::<Packed>(1 << point_rest.len()) };
+
+        // Split the prefix into [leading `log_chunks` vars | middle vars].
+        //
+        // The leading vars index the output chunks; the middle vars expand within each chunk.
+        // eq factorizes across this split:
+        //     eq(point_rest, c·2^|mid| + y) = eq(leading, c) * eq(middle, y).
+        let log_chunks = log2_strict_usize(current_num_threads().next_power_of_two());
+        if point_rest.len() <= log_chunks + 1 {
+            // Too small to be worth fanning out: expand serially.
+            eq_serial(&mut packed, point_rest, seed);
+        } else {
+            let (leading, middle) = point_rest.split_at(log_chunks);
+
+            // One packed seed per chunk: buffer[c] = seed * eq(leading, c).
+            let mut buffer = unsafe { uninitialized_vec::<Packed>(1 << log_chunks) };
+            eq_serial(&mut buffer, leading, seed);
+
+            // Each chunk holds 2^|middle| entries and expands independently from its seed.
+            let chunk_size = 1 << middle.len();
+            packed
+                .par_chunks_mut(chunk_size)
+                .zip(buffer.par_iter())
+                .for_each(|(chunk, &chunk_seed)| eq_serial(chunk, middle, chunk_seed));
+        }
 
         Self(packed)
     }
@@ -2095,6 +2117,29 @@ pub(crate) mod test {
             let next = Poly::new_from_point(p0.as_slice(), F::ONE);
             let e1 = next.eval_next_base(&p1);
             assert_eq!(e0, e1);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn new_packed_from_point_matches_scalar_reference(
+            // Sweep across the serial/parallel boundary: the parallel fan-out engages
+            // once `n - log2(W) > log_chunks + 1`, so cover small and large `n`.
+            k in (log2_strict_usize(PackedF::WIDTH))..=18usize,
+            scale_raw in 1u64..F::ORDER_U64,
+            seed in any::<u64>(),
+        ) {
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let point: Vec<EF> = (0..k).map(|_| rng.random()).collect();
+            let scale = EF::from(F::from_u64(scale_raw));
+
+            // Packed builder, unpacked back to scalar extension form.
+            let packed = Poly::new_packed_from_point::<F, EF>(&point, scale).unpack::<F, EF>();
+
+            // Scalar reference: the same eq table built directly.
+            let reference = Poly::new_from_point(&point, scale);
+
+            prop_assert_eq!(packed, reference);
         }
     }
 }
