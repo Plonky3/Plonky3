@@ -226,7 +226,7 @@ where
             let height = config.inv_rate(round) * (1 << (message.num_variables() - folding_next));
             let padded =
                 zk_padded_matrix(message.as_slice(), &fresh_randomness, folding_next, height);
-            let encoded = self.dft.dft_algebra_batch(padded).to_row_major_matrix();
+            let encoded = self.dft.dft_algebra_batch(padded);
             let (commitment, merkle) = self.extension_mmcs.commit_matrix(encoded);
             challenger.observe(commitment.clone());
 
