@@ -569,8 +569,9 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
 
     /// In-place version of the suffix-variable fix.
     ///
-    /// Folds adjacent pairs, collects into a temporary buffer,
-    /// then truncates and overwrites.
+    /// Folds adjacent pairs and truncates to the first half. The sequential
+    /// path folds in place; the parallel path collects the folded pairs into a
+    /// half-size buffer that replaces the backing storage.
     ///
     /// # Panics
     ///
@@ -580,23 +581,24 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         A: Algebra<F>,
     {
         assert!(self.as_constant().is_none(), "no free variables");
-        // Fold adjacent pairs into a temporary buffer.
-        // Cannot fold in place because pairs overlap with the output layout.
-        let src = if self.num_evals() < PARALLEL_THRESHOLD {
-            self.0
-                .chunks(2)
-                .map(|a| (a[1] - a[0]) * r + a[0])
-                .collect::<Vec<_>>()
+        let mid = self.num_evals() / 2;
+        if self.num_evals() < PARALLEL_THRESHOLD {
+            // Output index `i` reads inputs `2i` and `2i + 1`, both at or ahead
+            // of the write position, so no slot is overwritten before it is read.
+            for i in 0..mid {
+                let lo = self.0[2 * i];
+                let hi = self.0[2 * i + 1];
+                self.0[i] = (hi - lo) * r + lo;
+            }
+            self.0.truncate(mid);
         } else {
-            self.0
+            let folded: Vec<_> = self
+                .0
                 .par_chunks(2)
                 .map(|a| (a[1] - a[0]) * r + a[0])
-                .collect::<Vec<_>>()
-        };
-        // Truncate to half size and copy the folded values back.
-        let mid = self.num_evals() / 2;
-        self.0.truncate(mid);
-        self.0.copy_from_slice(&src);
+                .collect();
+            self.0 = folded;
+        }
     }
 
     /// Converts a scalar extension-field polynomial into SIMD-packed form.
