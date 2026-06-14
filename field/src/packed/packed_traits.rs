@@ -308,6 +308,36 @@ pub unsafe trait PackedField:
             current,
         }
     }
+
+    /// Accumulate the products of `d` coefficient streams against a shared stream of
+    /// packed base values.
+    ///
+    /// For each `(coeffs, base)` pair produced by the iterator, performs
+    /// `acc[k] += coeffs[k] * base` for all `k < d`, and returns the accumulators
+    /// (entries at `d..` are zero). Coefficient slices shorter than `d` only
+    /// contribute their available entries.
+    ///
+    /// This is the inner kernel of mixed base-times-extension dot products, where each
+    /// extension element contributes `d` base-field coefficient words. Implementations
+    /// may override it to defer modular reductions across iterations.
+    ///
+    /// # Panics
+    /// Debug builds panic if `d > 8`.
+    #[must_use]
+    fn coeffwise_dot_product<'a, I>(d: usize, pairs: I) -> [Self; 8]
+    where
+        Self: 'a,
+        I: Iterator<Item = (&'a [Self], Self)>,
+    {
+        debug_assert!(d <= 8, "Extension degree > 8 not supported");
+        let mut acc = [Self::ZERO; 8];
+        for (coeffs, base) in pairs {
+            for (acc_k, &coeff) in acc[..d].iter_mut().zip(coeffs) {
+                *acc_k += coeff * base;
+            }
+        }
+        acc
+    }
 }
 
 /// # Safety
@@ -427,6 +457,18 @@ pub trait PackedFieldExtension<
         ExtField::from_basis_coefficients_fn(|d| {
             self.as_basis_coefficients_slice()[d].as_slice()[lane]
         })
+    }
+
+    /// Accumulate `value` into a single SIMD lane, leaving the other `W - 1` lanes unchanged.
+    ///
+    /// This is the accumulating dual of the per-lane read [`PackedFieldExtension::extract`].
+    /// It scatters one scalar extension element into a packed buffer, one lane at a time.
+    ///
+    /// The default rebuilds a full packed element and adds it.
+    /// Concrete types override it to touch only the `D` base lanes at the target lane.
+    #[inline]
+    fn add_assign_lane(&mut self, lane: usize, value: ExtField) {
+        *self += Self::from_ext_fn(|l| if l == lane { value } else { ExtField::ZERO });
     }
 
     /// Write all `W` lanes into the given slice.
@@ -569,6 +611,12 @@ impl<F: Field> PackedFieldExtension<F, F> for F::Packing {
     #[inline]
     fn packed_ext_powers(base: F) -> Powers<Self> {
         F::Packing::packed_powers(base)
+    }
+
+    #[inline]
+    fn add_assign_lane(&mut self, lane: usize, value: F) {
+        // Degree-1 case: the lane is a single base element.
+        self.as_slice_mut()[lane] += value;
     }
 }
 

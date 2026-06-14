@@ -169,8 +169,7 @@ where
     #[inline(always)]
     fn square(&self) -> Self {
         let mut res = Self::default();
-        let w = F::W;
-        binomial_square(&self.value, &mut res.value, w);
+        <A as ExtensionAlgebra<F, D, Binomial<F>>>::ext_square(&self.value, &mut res.value);
         res
     }
 

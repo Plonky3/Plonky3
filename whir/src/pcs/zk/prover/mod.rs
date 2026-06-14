@@ -90,7 +90,7 @@ where
         rng: &mut R,
     ) -> (MT::Commitment, HidingWhirProverData<F, EF, MT>) {
         assert_eq!(message.num_variables(), self.config.num_variables);
-        let folding = self.config.folding_factor(0);
+        let folding = self.config.round_folding_factor(0);
         let randomness: Vec<F> = (0..(self.config.oracle_randomness[0] << folding))
             .map(|_| rng.random())
             .collect();
@@ -179,7 +179,7 @@ where
             &mut zk_data,
             &sumcheck_mask_encoding,
             &self.extension_mmcs,
-            config.folding_factor(0),
+            config.round_folding_factor(0),
             config.starting_folding_pow_bits,
             EF::ZERO,
             challenger,
@@ -211,8 +211,8 @@ where
         // Code-switching rounds.
         for round in 0..config.n_rounds() {
             let round_params = &config.round_parameters[round];
-            let folding = config.folding_factor(round);
-            let folding_next = config.folding_factor(round + 1);
+            let folding = config.round_folding_factor(round);
+            let folding_next = config.round_folding_factor(round + 1);
             let next_randomness_len = config.oracle_randomness[round + 1];
 
             let message = batch.residual_prover.evals();
@@ -226,7 +226,7 @@ where
             let height = config.inv_rate(round) * (1 << (message.num_variables() - folding_next));
             let padded =
                 zk_padded_matrix(message.as_slice(), &fresh_randomness, folding_next, height);
-            let encoded = self.dft.dft_algebra_batch(padded).to_row_major_matrix();
+            let encoded = self.dft.dft_algebra_batch(padded);
             let (commitment, merkle) = self.extension_mmcs.commit_matrix(encoded);
             challenger.observe(commitment.clone());
 

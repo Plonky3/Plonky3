@@ -246,6 +246,22 @@ fn zk_whir_end_to_end_multi_round() {
 }
 
 #[test]
+fn zk_whir_end_to_end_partial_final_fold() {
+    // Clamped schedule: Constant(8) on 15 variables derives [8, 7].
+    // The final-round zk oracle then carries a single message row,
+    // which is the tightest point of the config's rate-slack bound.
+    let setup = Setup::new(4)
+        .num_variables(15)
+        .folding_factor(FoldingFactor::Constant(8));
+    assert_eq!(
+        setup.pcs().config.folding_schedule,
+        vec![8, 7],
+        "fixture must derive a clamped final fold",
+    );
+    setup.assert_round_trip();
+}
+
+#[test]
 fn zk_whir_code_switch_overhead_accounting() {
     // Construction 9.7 per-round overhead (eprint 2026/391, #1587):
     //
@@ -582,7 +598,12 @@ fn condition_witness(
         .collect();
     let mut matrix: Vec<Vec<EF>> = claims
         .iter()
-        .map(|(point, _)| pivots.iter().map(|pivot| pivot.eq_poly(point)).collect())
+        .map(|(point, _)| {
+            pivots
+                .iter()
+                .map(|pivot| Point::eval_eq(pivot.as_slice(), point.as_slice()))
+                .collect()
+        })
         .collect();
     let mut rhs: Vec<EF> = claims
         .iter()

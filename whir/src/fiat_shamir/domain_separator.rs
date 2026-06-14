@@ -282,14 +282,14 @@ where
         // Initial combination randomness and first sumcheck phase.
         self.sample(1, Sample::InitialCombinationRandomness);
         self.add_sumcheck(&SumcheckParams {
-            rounds: config.folding_factor.at_round(0),
+            rounds: config.round_folding_factor(0),
             pow_bits: config.starting_folding_pow_bits,
         });
 
         // Intermediate rounds: commitment → OOD → PoW → checkpoint → queries → sumcheck.
         let mut domain_size = config.starting_domain_size();
         for (round, r) in config.round_parameters.iter().enumerate() {
-            let folded_domain_size = domain_size >> config.folding_factor.at_round(round);
+            let folded_domain_size = domain_size >> config.round_folding_factor(round);
             // Byte length needed to encode a position in the folded domain.
             let domain_size_bytes = ((folded_domain_size * 2 - 1).ilog2() as usize).div_ceil(8);
 
@@ -314,17 +314,15 @@ where
             self.sample(1, Sample::CombinationRandomness);
 
             self.add_sumcheck(&SumcheckParams {
-                rounds: config.folding_factor.at_round(round + 1),
+                rounds: config.round_folding_factor(round + 1),
                 pow_bits: r.folding_pow_bits,
             });
             domain_size >>= config.rs_reduction_factor(round);
         }
 
         // Final round: coefficients → PoW → queries → sumcheck → deferred hints.
-        let folded_domain_size = domain_size
-            >> config
-                .folding_factor
-                .at_round(config.round_parameters.len());
+        let folded_domain_size =
+            domain_size >> config.round_folding_factor(config.round_parameters.len());
         let domain_size_bytes = ((folded_domain_size * 2 - 1).ilog2() as usize).div_ceil(8);
 
         // Observe all coefficients of the final folded polynomial.
@@ -438,7 +436,7 @@ where
         // Claim batching challenge and the initial masked sumcheck batch.
         self.sample(1, Sample::InitialCombinationRandomness);
         self.add_zk_residual_sumcheck::<DIGEST_ELEMS>(&ZkSumcheckParams {
-            rounds: config.folding_factor(0),
+            rounds: config.round_folding_factor(0),
             pow_bits: config.starting_folding_pow_bits,
             ell_zk: config.zk.ell_zk,
         });
@@ -446,7 +444,7 @@ where
         // Code-switching rounds.
         let mut domain_size = config.starting_domain_size();
         for (round, r) in config.round_parameters.iter().enumerate() {
-            let folded_domain_size = domain_size >> config.folding_factor(round);
+            let folded_domain_size = domain_size >> config.round_folding_factor(round);
             let domain_size_bytes = ((folded_domain_size * 2 - 1).ilog2() as usize).div_ceil(8);
 
             // New oracle and fresh code-switch mask.
@@ -465,7 +463,7 @@ where
             // Batching challenge, then the next masked sumcheck batch.
             self.sample(1, Sample::CombinationRandomness);
             self.add_zk_residual_sumcheck::<DIGEST_ELEMS>(&ZkSumcheckParams {
-                rounds: config.folding_factor(round + 1),
+                rounds: config.round_folding_factor(round + 1),
                 pow_bits: r.folding_pow_bits,
                 ell_zk: config.zk.ell_zk,
             });

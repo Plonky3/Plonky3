@@ -430,6 +430,25 @@ impl LookupProtocol for LogUpGadget {
             })
             .collect();
 
+        // Hoist the beta powers per lookup out of the hot per-row loop.
+        //
+        // The tuple combine reads them directly:
+        //
+        //     combined = sum_i e_i * beta^{k-1-i}
+        //
+        // Each step is then an extension * base product (`beta^p * e_i`).
+        // Horner instead multiplies extension * extension (`acc * beta`).
+        let max_tuple_width = lookups
+            .iter()
+            .flat_map(|lookup| lookup.elements.iter())
+            .map(Vec::len)
+            .max()
+            .unwrap_or(0);
+        let beta_powers: Vec<Vec<SC::Challenge>> = lookup_challenges
+            .iter()
+            .map(|&(_, beta)| beta.powers().collect_n(max_tuple_width))
+            .collect();
+
         // Fused chunk-local batch inversion.
         //
         // Instead of three global passes (fill denoms -> batch invert -> build row sums)
@@ -526,23 +545,53 @@ impl LookupProtocol for LogUpGadget {
 
                     // Walk through each lookup's element tuples and fill the flat buffers.
                     let mut offset = local_i * denoms_per_row;
-                    for (lookup, &(alpha, beta)) in lookups.iter().zip(lookup_challenges.iter()) {
+                    for ((lookup, &(alpha, _)), powers) in lookups
+                        .iter()
+                        .zip(lookup_challenges.iter())
+                        .zip(beta_powers.iter())
+                    {
                         for (j, elts) in lookup.elements.iter().enumerate() {
-                            // Combine tuple elements via Horner's method:
-                            //   combined = e_0 * beta^{k-1} + e_1 * beta^{k-2} + ... + e_{k-1}
-                            // Then store (alpha - combined) as the denominator.
-                            let mut iter = elts.iter();
-                            let combined_elt = iter.next().map_or(SC::Challenge::ZERO, |first| {
-                                iter.fold(
-                                    first.resolve(&row_ctx).into(),
-                                    |acc: SC::Challenge, e| acc * beta + e.resolve(&row_ctx),
-                                )
-                            });
-                            local_denoms[offset] = alpha - combined_elt;
+                            // Resolve the multiplicity first.
+                            let mult = lookup.multiplicities[j].resolve(&row_ctx);
+                            local_mults[offset] = mult;
 
-                            // Store the multiplicity as a base-field element (4 bytes vs 16 for
-                            // extension) to keep the buffer small and the later dot product cheap.
-                            local_mults[offset] = lookup.multiplicities[j].resolve(&row_ctx);
+                            // Flag-zero skip:
+                            // A zero multiplicity makes `m_j / d_j` vanish, whatever the denominator is.
+                            // So skip the element combine and pin a unit placeholder.
+                            //
+                            //   - The unit keeps batch inversion well-defined (1 inverts to 1).
+                            //   - The fraction term stays exact at `0 * 1 = 0`.
+                            //   - The verifier reads the real denominator from the trace, and
+                            //     the zero-weight term drops from both sides of `U * f = V`.
+                            local_denoms[offset] = if mult.is_zero() {
+                                SC::Challenge::ONE
+                            } else {
+                                // Combine the tuple as `sum_i e_i * beta^{k-1-i}`.
+                                //
+                                //   - The last element carries `beta^0`, so it is lifted with no multiply.
+                                //   - Each leading element pairs with a hoisted power `beta^p * e_i`,
+                                //     an extension * base product rather than extension * extension.
+                                let combined_elt = match elts.split_last() {
+                                    None => SC::Challenge::ZERO,
+                                    // Width-1 tuple: the single element carries beta^0, so lift it directly.
+                                    Some((last, [])) => last.resolve(&row_ctx).into(),
+                                    Some((last, leading)) => {
+                                        // Powers beta^{k-1} down to beta^1, aligned with e_0 .. e_{k-2}.
+                                        let high_powers =
+                                            powers[1..elts.len()].iter().rev().copied();
+                                        let leading_resolved =
+                                            leading.iter().map(|e| e.resolve(&row_ctx));
+                                        let lifted_last: SC::Challenge =
+                                            last.resolve(&row_ctx).into();
+                                        lifted_last
+                                            + dot_product::<SC::Challenge, _, _>(
+                                                high_powers,
+                                                leading_resolved,
+                                            )
+                                    }
+                                };
+                                alpha - combined_elt
+                            };
                             offset += 1;
                         }
                     }

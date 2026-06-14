@@ -132,9 +132,14 @@ jobs:
           targets: ${{ env.build_target }}, ${{ env.run_target }}
       - uses: Swatinem/rust-cache@v2
       - name: Install wasmtime
+        env:
+          WASMTIME_VERSION: v44.0.1
         run: |
-          curl https://wasmtime.dev/install.sh -sSf | bash
-          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+          set -euo pipefail
+          url="https://github.com/bytecodealliance/wasmtime/releases/download/${WASMTIME_VERSION}/wasmtime-${WASMTIME_VERSION}-x86_64-linux.tar.xz"
+          curl -fsSL --retry 5 --retry-connrefused "$url" -o /tmp/wasmtime.tar.xz
+          tar -xJf /tmp/wasmtime.tar.xz -C "$HOME"
+          echo "$HOME/wasmtime-${WASMTIME_VERSION}-x86_64-linux" >> "$GITHUB_PATH"
       - name: Build p3-goldilocks for wasm32-unknown-unknown
         run: cargo build --verbose --target ${{ env.build_target }} -p p3-goldilocks
       - name: Run wasm32+simd128 SIMD tests under wasmtime
@@ -164,7 +169,11 @@ jobs:
       - name: Install cargo-sort and taplo
         run: |
           cargo install cargo-sort
-          cargo install taplo-cli
+          # `--locked` uses taplo-cli's shipped Cargo.lock, pinning its `time`
+          # dependency to a version whose impls do not collide with taplo's
+          # blanket `From` impls (an unlocked resolve picks a newer `time` that
+          # fails to compile with E0119).
+          cargo install taplo-cli --locked
 
       - uses: Swatinem/rust-cache@v2
 

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::builder::{SymbolicInteraction, SymbolicLocalInteraction};
+use crate::protocol::LookupProtocol;
 use crate::symbolic::InteractionSymbolicBuilder;
 
 /// Whether a lookup is confined to one AIR or shared across AIRs on a named bus.
@@ -111,6 +112,102 @@ impl<F: Field> Lookups<F> {
         }
 
         Self(lookups)
+    }
+
+    /// Fold global lookups on the same bus into shared fraction columns.
+    ///
+    /// One folded column carries several interactions as a single rational sum:
+    /// ```text
+    ///     f_col[r] = sum_j  m_j[r] / (prefix_bus - combine(payload_j[r]))
+    /// ```
+    ///
+    /// - All folded interactions sit on one bus.
+    /// - So they share one challenge pair, and the per-row sum is well defined.
+    /// - A folded column never exceeds the fraction-pin degree `max_degree`.
+    /// - Local lookups are grouped by their author already, so they pass through.
+    ///
+    /// # Soundness
+    ///
+    /// - Folding only moves a fraction from its own column into a shared one.
+    /// - The per-bus rational sum, and every committed terminal, is unchanged.
+    /// - So the cross-AIR balance and the per-bus separation still hold.
+    /// - Both sides fold in emission order, so they agree on the layout.
+    ///
+    /// # Performance
+    ///
+    /// - Folding raises only the merged column's fraction-pin degree.
+    /// - The cap holds that degree within the AIR's spare quotient budget.
+    /// - Fewer columns then cost strictly less to commit and open.
+    ///
+    /// # Arguments
+    ///
+    /// - `gadget` — reports the exact fraction-pin degree of a candidate column.
+    /// - `max_degree` — the largest degree that leaves the quotient cost unchanged.
+    #[must_use]
+    pub fn pack_same_bus<LG: LookupProtocol>(self, gadget: &LG, max_degree: usize) -> Self {
+        // Locals keep their leading columns, untouched.
+        let mut packed: Vec<Lookup<F>> = Vec::with_capacity(self.0.len());
+        // Globals bucket by bus name, in first-appearance order.
+        let mut buses: Vec<(String, Vec<Lookup<F>>)> = Vec::new();
+
+        // Sort each lookup: locals straight through, globals into their bus bucket.
+        for lookup in self.0 {
+            match &lookup.kind {
+                Kind::Local => packed.push(lookup),
+                Kind::Global(name) => match buses.iter_mut().find(|(n, _)| n == name) {
+                    // Bus already seen: append to its bucket.
+                    Some((_, members)) => members.push(lookup),
+                    None => {
+                        // First sighting of this bus: clone the name, then open a bucket.
+                        let bus = name.clone();
+                        buses.push((bus, vec![lookup]));
+                    }
+                },
+            }
+        }
+
+        // Fill columns greedily within each bus.
+        // Seal a column when the next interaction would exceed the degree budget.
+        for (_name, members) in buses {
+            let mut current: Option<Lookup<F>> = None;
+            for member in members {
+                match current.take() {
+                    // A lone interaction always fits: its degree is the unpacked degree.
+                    None => current = Some(member),
+                    Some(mut cur) => {
+                        // Trial-merge: append the candidate's tuples to the open column.
+                        let pivot = cur.elements.len();
+                        cur.elements.extend(member.elements.iter().cloned());
+                        cur.multiplicities
+                            .extend(member.multiplicities.iter().cloned());
+
+                        if gadget.constraint_degree(&cur) <= max_degree {
+                            // Within budget: keep the merge.
+                            // Each tuple holds its own per-row query bound, so the bounds add.
+                            cur.count_weight = cur.count_weight.saturating_add(member.count_weight);
+                            current = Some(cur);
+                        } else {
+                            // Over budget: undo the trial, seal the column, start a new one.
+                            cur.elements.truncate(pivot);
+                            cur.multiplicities.truncate(pivot);
+                            packed.push(cur);
+                            current = Some(member);
+                        }
+                    }
+                }
+            }
+            // Flush the last open column for this bus.
+            if let Some(cur) = current {
+                packed.push(cur);
+            }
+        }
+
+        // Slot i owns fraction column i + 1, so indices must stay contiguous.
+        for (i, lookup) in packed.iter_mut().enumerate() {
+            lookup.column = i;
+        }
+
+        Self(packed)
     }
 
     /// Sum of this AIR's lookup weights.
@@ -255,10 +352,12 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
+    use p3_air::symbolic::{BaseEntry, SymbolicVariable};
     use p3_baby_bear::BabyBear;
     use p3_field::{PrimeCharacteristicRing, PrimeField32};
 
     use super::*;
+    use crate::logup::LogUpGadget;
 
     type F = BabyBear;
 
@@ -276,6 +375,35 @@ mod tests {
             })
             .collect();
         Lookups::from_interactions(&global, &[])
+    }
+
+    /// One global interaction carrying a single degree-1 main-column payload.
+    fn global_payload(bus: &str, weight: u32) -> SymbolicInteraction<F> {
+        // A main-column payload has degree 1.
+        // So a lone tuple pins at degree 2, and a fold of g tuples pins at degree g + 1.
+        let col = SymbolicVariable::<F>::new(BaseEntry::Main { offset: 0 }, 0);
+        SymbolicInteraction {
+            bus_name: String::from(bus),
+            fields: vec![SymbolicExpression::from(col)],
+            count: SymbolicExpression::from(F::ONE),
+            count_weight: weight,
+        }
+    }
+
+    /// Unpacked lookups for several payload interactions on one bus.
+    fn same_bus(bus: &str, count: usize) -> Lookups<F> {
+        // Each interaction is identical; only their count drives the packing tests.
+        let global: Vec<SymbolicInteraction<F>> =
+            (0..count).map(|_| global_payload(bus, 1)).collect();
+        Lookups::from_interactions(&global, &[])
+    }
+
+    /// Column indices must stay `0..len` for the fraction-column mapping to hold.
+    fn assert_contiguous_columns(lookups: &Lookups<F>) {
+        // Slot at position i must own column i, with no gaps.
+        for (i, l) in lookups.iter().enumerate() {
+            assert_eq!(l.column, i, "columns must be contiguous after packing");
+        }
     }
 
     #[test]
@@ -374,5 +502,124 @@ mod tests {
         // One AIR of lookups but two heights is an orchestration bug, not bad input.
         let lookups = [global_lookups(&[1])];
         let _ = check_multiplicity_height_bound(&lookups, &[1, 2]);
+    }
+
+    #[test]
+    fn pack_merges_same_bus_within_budget() {
+        // Four width-1 interactions, budget 3.
+        // A fold of g tuples pins at degree g + 1.
+        // So g = 2 fits (degree 3) but g = 3 does not (degree 4).
+        // Greedy packs two per column: ceil(4 / 2) = 2 columns.
+        let packed = same_bus("a", 4).pack_same_bus(&LogUpGadget, 3);
+
+        assert_eq!(packed.len(), 2);
+        assert_eq!(packed[0].elements.len(), 2);
+        assert_eq!(packed[1].elements.len(), 2);
+        assert_contiguous_columns(&packed);
+    }
+
+    #[test]
+    fn pack_minimal_budget_leaves_every_interaction_alone() {
+        // Budget 2 admits only a lone tuple (degree 2).
+        // So no two interactions ever share a column.
+        let packed = same_bus("a", 4).pack_same_bus(&LogUpGadget, 2);
+
+        assert_eq!(packed.len(), 4);
+        assert!(packed.iter().all(|l| l.elements.len() == 1));
+        assert_contiguous_columns(&packed);
+    }
+
+    #[test]
+    fn pack_never_merges_across_buses() {
+        // Two buses, generous budget.
+        // A column may fold one bus, never two.
+        let global: Vec<SymbolicInteraction<F>> = vec![
+            global_payload("a", 1),
+            global_payload("b", 1),
+            global_payload("a", 1),
+            global_payload("b", 1),
+        ];
+        let packed = Lookups::from_interactions(&global, &[]).pack_same_bus(&LogUpGadget, 16);
+
+        // Each bus collapses to one column.
+        // The two buses never share a column.
+        assert_eq!(packed.len(), 2);
+        assert_eq!(packed[0].kind, Kind::Global(String::from("a")));
+        assert_eq!(packed[1].kind, Kind::Global(String::from("b")));
+        assert_eq!(packed[0].elements.len(), 2);
+        assert_eq!(packed[1].elements.len(), 2);
+    }
+
+    #[test]
+    fn pack_keeps_locals_leading_and_untouched() {
+        // One local, then three same-bus globals, budget 3.
+        // The local keeps column 0.
+        // The three globals fold into two columns: two tuples, then one.
+        let local = vec![SymbolicLocalInteraction {
+            tuples: vec![(vec![], SymbolicExpression::from(F::ONE))],
+        }];
+        let global = vec![
+            global_payload("a", 1),
+            global_payload("a", 1),
+            global_payload("a", 1),
+        ];
+        let packed = Lookups::from_interactions(&global, &local).pack_same_bus(&LogUpGadget, 3);
+
+        assert_eq!(packed.len(), 3);
+        assert_eq!(packed[0].kind, Kind::Local);
+        assert_eq!(packed[0].elements.len(), 1);
+        assert_eq!(packed[1].elements.len(), 2);
+        assert_eq!(packed[2].elements.len(), 1);
+        assert_contiguous_columns(&packed);
+    }
+
+    #[test]
+    fn pack_preserves_total_count_weight() {
+        // Folding adds the per-interaction weights.
+        // So the AIR's height-bound term stays invariant.
+        let global: Vec<SymbolicInteraction<F>> = [1, 0, 1, 1]
+            .iter()
+            .map(|&w| global_payload("a", w))
+            .collect();
+        let unpacked = Lookups::from_interactions(&global, &[]);
+        let before = unpacked.total_count_weight();
+
+        let packed = unpacked.pack_same_bus(&LogUpGadget, 5);
+        assert_eq!(packed.total_count_weight(), before);
+        assert_eq!(before, 3);
+    }
+
+    #[test]
+    fn pack_sweep_preserves_invariants() {
+        // Sweep interaction count against degree budget.
+        // A width-1 column holds at most (budget - 1) tuples.
+        // So the packed column count is exactly ceil(n / (budget - 1)).
+        for n in 1..=16usize {
+            for budget in 2..=8usize {
+                let packed = same_bus("a", n).pack_same_bus(&LogUpGadget, budget);
+
+                // Column count matches the closed form.
+                let per_column = budget - 1;
+                let expected_columns = n.div_ceil(per_column);
+                assert_eq!(
+                    packed.len(),
+                    expected_columns,
+                    "n={n} budget={budget}: column count"
+                );
+
+                // Folding moves tuples between columns but never drops one.
+                let total_tuples: usize = packed.iter().map(|l| l.elements.len()).sum();
+                assert_eq!(total_tuples, n, "n={n} budget={budget}: tuples conserved");
+
+                // No packed column exceeds the degree budget.
+                for l in packed.iter() {
+                    assert!(
+                        LogUpGadget.constraint_degree(l) <= budget,
+                        "n={n} budget={budget}: degree within budget"
+                    );
+                }
+                assert_contiguous_columns(&packed);
+            }
+        }
     }
 }

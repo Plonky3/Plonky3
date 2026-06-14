@@ -173,11 +173,11 @@ where
         // saturates the domain, which would reveal a limb polynomial outright.
         for (round, &randomness) in oracle_randomness.iter().enumerate() {
             let (message_rows, height) = if round == 0 {
-                let rows = 1 << (num_variables - inner.folding_factor(0));
+                let rows = 1 << (num_variables - inner.round_folding_factor(0));
                 (rows, rows << inner.starting_log_inv_rate)
             } else {
                 let prev = &inner.round_parameters[round - 1];
-                let rows = 1 << (prev.num_variables - inner.folding_factor(round));
+                let rows = 1 << (prev.num_variables - inner.round_folding_factor(round));
                 (rows, rows * inner.inv_rate(round - 1))
             };
             let slack = height - message_rows;
@@ -245,7 +245,7 @@ where
         let mut groups = Vec::with_capacity(2 * self.n_rounds() + 1);
         groups.push(MaskGroupShape {
             shape: self.sumcheck_mask,
-            width: self.folding_factor(0),
+            width: self.round_folding_factor(0),
         });
         for round in 0..self.n_rounds() {
             groups.push(MaskGroupShape {
@@ -254,7 +254,7 @@ where
             });
             groups.push(MaskGroupShape {
                 shape: self.sumcheck_mask,
-                width: self.folding_factor(round + 1),
+                width: self.round_folding_factor(round + 1),
             });
         }
         groups
@@ -319,7 +319,7 @@ mod tests {
         // Expected flat mask count: one per sumcheck round, one per
         // code-switching round.
         let expected_sumcheck_masks: usize = (0..=config.n_rounds())
-            .map(|i| config.folding_factor(i))
+            .map(|i| config.round_folding_factor(i))
             .sum();
         // Groups tile the flat mask list exactly.
         let group_total: usize = config.mask_groups().iter().map(|g| g.width).sum();

@@ -265,6 +265,24 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         self.vars.len()
     }
 
+    /// Streams one weight per stored constraint, each evaluated at a single point.
+    ///
+    /// # Overview
+    ///
+    /// A selection constraint stores a univariate point whose power-map expansion is a selector polynomial.
+    /// This yields that selector's value at the supplied point, one entry per constraint, in stored order.
+    ///
+    /// # Arguments
+    ///
+    /// - `row`: the point at which every constraint weight is evaluated.
+    pub fn weights_at<'a>(&'a self, row: &'a Point<EF>) -> impl Iterator<Item = EF> + 'a {
+        // Walk the stored univariate selection points in order.
+        self.vars
+            .iter()
+            // Expand each one through the power map and read off its value at the query point.
+            .map(|&var| Point::eval_select(var, row.as_slice()))
+    }
+
     /// Verifies that a given polynomial satisfies all constraints in the statement.
     ///
     /// For each constraint `(z_i, s_i)`, this method interprets the evaluation table as
@@ -1222,5 +1240,32 @@ mod tests {
             prop_assert_eq!(s_wt.as_slice(), &unpacked[..]);
             prop_assert_eq!(s_sum, p_sum);
         }
+    }
+
+    #[test]
+    fn weights_at_yields_one_selector_value_per_variable() {
+        // weights_at streams one weight per stored univariate point, in order.
+        //
+        // Independent reference: the selection polynomial select(pow(var), .) is
+        // the multilinear extension whose value at Boolean vertex b is var^b.
+        // Build that integer-power truth table and interpolate it at the query
+        // point through the unrelated multilinear-evaluation routine, so the
+        // check never calls the selection routine under test.
+        let vars = vec![F::from_u64(5), F::from_u64(7)];
+        let statement = SelectStatement::<F, EF>::new(2, vars.clone(), vec![EF::ZERO, EF::ZERO]);
+
+        let row = Point::new(vec![EF::from_u64(3), EF::from_u64(9)]);
+        let num_rows = 1u64 << row.num_variables();
+        let expected = vars
+            .iter()
+            .map(|&var| {
+                // Truth table over {0,1}^n: vertex b carries var^b.
+                let table = (0..num_rows).map(|b| var.exp_u64(b)).collect::<Vec<F>>();
+                // Interpolate the table at the query point.
+                Poly::new(table).eval_base(&row)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(statement.weights_at(&row).collect::<Vec<_>>(), expected);
     }
 }

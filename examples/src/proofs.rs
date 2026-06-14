@@ -4,11 +4,11 @@ use p3_challenger::{DuplexChallenger, SerializingChallenger32};
 use p3_circle::CirclePcs;
 use p3_commit::ExtensionMmcs;
 use p3_dft::TwoAdicSubgroupDft;
-use p3_field::extension::{BinomialExtensionField, ComplexExtendable};
+use p3_field::extension::ComplexExtendable;
 use p3_field::{ExtensionField, Field, PrimeField32, PrimeField64, TwoAdicField};
 use p3_fri::{FriParameters, TwoAdicFriPcs};
 use p3_keccak::{Keccak256Hash, KeccakF};
-use p3_mersenne_31::Mersenne31;
+use p3_mersenne_31::{Mersenne31, QM31};
 use p3_symmetric::{CryptographicPermutation, PaddingFreeSponge, SerializingHasher};
 use p3_uni_stark::{
     AirLayout, PcsError, Proof, StarkGenericConfig, StarkSecurityParams, VerificationError, prove,
@@ -33,12 +33,8 @@ type Poseidon2TwoAdicResult<F, EF, DFT, Perm16, Perm24> =
     Result<(), VerificationError<PcsError<Poseidon2StarkConfig<F, EF, DFT, Perm16, Perm24>>>>;
 
 /// Result type for Keccak-based circle proofs with Mersenne31
-type KeccakCircleResult = Result<
-    (),
-    VerificationError<
-        PcsError<KeccakCircleStarkConfig<Mersenne31, BinomialExtensionField<Mersenne31, 3>>>,
-    >,
->;
+type KeccakCircleResult =
+    Result<(), VerificationError<PcsError<KeccakCircleStarkConfig<Mersenne31, QM31>>>>;
 
 /// Result type for Poseidon2-based circle proofs
 type Poseidon2CircleResult<F, EF, Perm16, Perm24> =
@@ -189,16 +185,13 @@ where
 /// - The Proof Goal (Choice of Hash function and number of hashes to prove)
 #[inline]
 pub fn prove_m31_keccak<
-    PG: ExampleHashAir<
-            Mersenne31,
-            KeccakCircleStarkConfig<Mersenne31, BinomialExtensionField<Mersenne31, 3>>,
-        >,
+    PG: ExampleHashAir<Mersenne31, KeccakCircleStarkConfig<Mersenne31, QM31>>,
 >(
     proof_goal: &PG,
     num_hashes: usize,
 ) -> KeccakCircleResult {
     type F = Mersenne31;
-    type EF = BinomialExtensionField<Mersenne31, 3>;
+    type EF = QM31;
 
     let val_mmcs = get_keccak_mmcs(0);
     let challenge_mmcs = ExtensionMmcs::<F, EF, _>::new(val_mmcs.clone());

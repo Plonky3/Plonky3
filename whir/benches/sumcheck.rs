@@ -9,10 +9,10 @@ use p3_field::extension::BinomialExtensionField;
 use p3_field::{ExtensionField, Field, PackedFieldExtension, PackedValue, PrimeCharacteristicRing};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::poly::Poly;
-use p3_sumcheck::SumcheckData;
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
 use p3_sumcheck::strategy::sumcheck_coefficients_prefix;
 use p3_sumcheck::zk::{ZkLayout, ZkProver, ZkSumcheckData};
+use p3_sumcheck::{OpeningBatch, SumcheckData};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_zk_codes::reed_solomon::ReedSolomonZkEncoding;
 use rand::rngs::SmallRng;
@@ -94,7 +94,7 @@ fn setup_prefix(table: &Table<F>, folding: usize) -> (PrefixProver<F, EF>, Chall
     let witness = PrefixProver::<F, EF>::new_witness(vec![table.clone()], folding);
     let mut prover = PrefixProver::<F, EF>::from_witness(witness);
     let mut challenger = make_challenger();
-    let evals = prover.eval(0, &[0], &mut challenger);
+    let evals = prover.eval(0, &OpeningBatch::new(vec![0], Vec::new()), &mut challenger);
     assert_eq!(evals.len(), 1);
     (prover, challenger)
 }
@@ -103,7 +103,7 @@ fn setup_suffix(table: &Table<F>, folding: usize) -> (SuffixProver<F, EF>, Chall
     let witness = SuffixProver::<F, EF>::new_witness(vec![table.clone()], folding);
     let mut prover = SuffixProver::<F, EF>::from_witness(witness);
     let mut challenger = make_challenger();
-    let evals = prover.eval(0, &[0], &mut challenger);
+    let evals = prover.eval(0, &OpeningBatch::new(vec![0], Vec::new()), &mut challenger);
     assert_eq!(evals.len(), 1);
     (prover, challenger)
 }
@@ -136,7 +136,7 @@ where
     let inner = L::from_witness(witness);
     let mut prover = ZkProver::new(inner, encoding.clone(), mmcs.clone());
     let mut challenger = make_challenger();
-    let evals = prover.eval(0, &[0], &mut challenger);
+    let evals = prover.eval(0, &OpeningBatch::new(vec![0], Vec::new()), &mut challenger);
     assert_eq!(evals.len(), 1);
     let rng = SmallRng::seed_from_u64(0xbeef);
     (prover, challenger, rng)

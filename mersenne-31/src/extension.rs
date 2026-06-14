@@ -1,6 +1,6 @@
 use p3_field::extension::{
     Binomial, BinomiallyExtendable, Complex, ExtensionAlgebra, HasComplexBinomialExtension,
-    HasTwoAdicComplexBinomialExtension, binomial_mul,
+    HasTwoAdicComplexBinomialExtension, binomial_mul, binomial_square,
 };
 use p3_field::{PrimeCharacteristicRing, TwoAdicField, field_to_array};
 
@@ -10,6 +10,11 @@ impl ExtensionAlgebra<Self, 3, Binomial<Self>> for Mersenne31 {
     #[inline]
     fn ext_mul(a: &[Self; 3], b: &[Self; 3], res: &mut [Self; 3]) {
         binomial_mul::<Self, Self, Self, 3>(a, b, res, <Self as BinomiallyExtendable<3>>::W);
+    }
+
+    #[inline]
+    fn ext_square(a: &[Self; 3], res: &mut [Self; 3]) {
+        binomial_square::<Self, Self, 3>(a, res, <Self as BinomiallyExtendable<3>>::W);
     }
 }
 
@@ -57,6 +62,15 @@ impl HasComplexBinomialExtension<2> for Mersenne31 {
     //   assert g^((p^4-1) // f) != 1
     // ```
     const EXT_GENERATOR: [Complex<Self>; 2] = [Complex::new_real(Self::new(6)), Complex::ONE];
+
+    /// Multiply a `Complex<Mersenne31>` element by `W = 2 + i` using only additions:
+    /// `(a + bi)(2 + i) = (2a - b) + (a + 2b)i`.
+    #[inline(always)]
+    fn mul_by_w(z: Complex<Self>) -> Complex<Self> {
+        let re = z.real();
+        let im = z.imag();
+        Complex::new_complex(re + re - im, re + im + im)
+    }
 }
 
 impl HasTwoAdicComplexBinomialExtension<2> for Mersenne31 {
