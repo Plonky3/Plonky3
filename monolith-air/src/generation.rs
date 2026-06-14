@@ -230,7 +230,7 @@ fn generate_round<
                 //     andn   = (1 - x[j-2]) * x[j-3]
                 //     8-bit  : chi = andn * x[j-4]
                 //     7-bit  : chi = andn
-                let andn = (F::ONE - limb[sub(2)]) * limb[sub(3)];
+                let andn = limb[sub(2)].andn(&limb[sub(3)]);
                 let chi_product = if is_last_reduced {
                     andn
                 } else {
