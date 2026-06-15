@@ -320,6 +320,9 @@ fn calculate_accumulator_general<F: Field, EF: ExtensionField<F>>(
     evals_01inf_grid_into(reduced_evals, &mut reduced_grid, &mut scratch);
 
     let stride = 3usize.pow((l - 1) as u32);
+    // Both grids span the full ternary cube so the 0-face and inf-face slices are well defined.
+    debug_assert_eq!(eq0_grid.len(), 3 * stride);
+    debug_assert_eq!(reduced_grid.len(), 3 * stride);
     let acc0 = eq0_grid[..stride]
         .iter()
         .copied()
