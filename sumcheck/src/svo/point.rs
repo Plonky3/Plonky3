@@ -302,7 +302,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
 
         // Fast and dense paths must agree exactly.
         #[cfg(debug_assertions)]
-        debug_assert!(out == expected.as_slice());
+        assert_eq!(out, expected.as_slice());
     }
 
     /// Adds the residual prefix-layout successor weight over the split variables.
@@ -414,7 +414,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
 
         // Fast and dense paths must agree exactly.
         #[cfg(debug_assertions)]
-        debug_assert!(out == expected.as_slice());
+        assert_eq!(out, expected.as_slice());
     }
 
     /// Evaluates a suffix-layout repeat-last-successor opening and caches its SVO rounds.
