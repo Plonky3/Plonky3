@@ -48,6 +48,18 @@ impl<F: Field> SymLeaf for BaseLeaf<F> {
         }
     }
 
+    fn poly_degree(&self, trace_len: usize, periodic_periods: &[usize]) -> usize {
+        match self {
+            Self::Variable(v) => v.poly_degree(trace_len, periodic_periods),
+            // Boundary selectors are non-zero at a single row, so they are degree-`(N - 1)`
+            // polynomials, while the transition selector only needs to vanish on the last
+            // row and so is linear.
+            Self::IsFirstRow | Self::IsLastRow => trace_len.saturating_sub(1),
+            Self::IsTransition => 1,
+            Self::Constant(_) => 0,
+        }
+    }
+
     fn as_const(&self) -> Option<&F> {
         match self {
             Self::Constant(c) => Some(c),
@@ -280,6 +292,64 @@ mod tests {
             2,
             "Multiplication should sum degrees"
         );
+    }
+
+    #[test]
+    fn test_symbolic_expression_poly_degree() {
+        const N: usize = 8;
+
+        // The transition selector is linear, unlike the boundary selectors which are
+        // degree-`(N - 1)` polynomials.
+        let is_transition = SymbolicExpression::<BabyBear>::Leaf(BaseLeaf::IsTransition);
+        assert_eq!(is_transition.poly_degree(N, &[]), 1);
+
+        let is_first_row = SymbolicExpression::<BabyBear>::Leaf(BaseLeaf::IsFirstRow);
+        assert_eq!(is_first_row.poly_degree(N, &[]), N - 1);
+
+        // Constants contribute nothing.
+        let constant = SymbolicExpression::Leaf(BaseLeaf::Constant(BabyBear::new(5)));
+        assert_eq!(constant.poly_degree(N, &[]), 0);
+
+        // `is_transition * main` is degree `1 + (N - 1) = N`.
+        let main = SymbolicExpression::<BabyBear>::from(SymbolicVariable::new(
+            BaseEntry::Main { offset: 0 },
+            0,
+        ));
+        let guarded = is_transition * main.clone();
+        assert_eq!(guarded.poly_degree(N, &[]), N);
+
+        // Products of periodic columns sum their reduced degrees: two period-2
+        // columns give `(N - N/2) + (N - N/2) = N`, versus `2(N - 1)` for two
+        // regular columns.
+        let p0 =
+            SymbolicExpression::<BabyBear>::from(SymbolicVariable::new(BaseEntry::Periodic, 0));
+        let p1 =
+            SymbolicExpression::<BabyBear>::from(SymbolicVariable::new(BaseEntry::Periodic, 1));
+        let periodic_product = p0 * p1;
+        assert_eq!(periodic_product.poly_degree(N, &[2, 2]), N);
+
+        // Sums take the max degree of their operands.
+        let sum = main + SymbolicExpression::Leaf(BaseLeaf::IsTransition);
+        assert_eq!(sum.poly_degree(N, &[]), N - 1);
+    }
+
+    #[test]
+    fn poly_degree_handles_shared_dag_in_linear_time() {
+        // Repeated squaring builds a DAG of depth `d` whose flattened tree has
+        // `2^d` leaves but only `O(d)` distinct nodes. `poly_degree` must run in
+        // time proportional to the distinct nodes; without memoization this test
+        // would take `O(2^d)` and never finish.
+        const DEPTH: usize = 30;
+        const N: usize = 1 << 10;
+
+        let mut expr =
+            SymbolicExpression::<BabyBear>::from(SymbolicVariable::new(BaseEntry::Periodic, 0));
+        for _ in 0..DEPTH {
+            expr = expr.clone() * expr.clone();
+        }
+
+        // The period-2 column has degree `N - N/2 = N/2`; each squaring doubles it.
+        assert_eq!(expr.poly_degree(N, &[2]), (N / 2) << DEPTH);
     }
 
     #[test]

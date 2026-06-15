@@ -185,6 +185,7 @@ where
                     get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
                         air,
                         layout,
+                        degrees[i],
                         all_lookups[i],
                         config.is_zk(),
                         &lookup_gadget,
