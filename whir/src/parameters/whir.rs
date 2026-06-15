@@ -58,6 +58,31 @@ pub enum WhirConfigError {
     #[error("round {round}: requested codeword rate would require growing the RS domain")]
     RateGrowsDomain { round: usize },
 
+    /// The starting code rate is not redundant.
+    ///
+    /// - A rate of `2^-0 = 1` adds no Reed-Solomon redundancy.
+    /// - A proximity test needs redundancy, so there is nothing to check.
+    /// - At rate `1` the proximity parameter `delta` is `<= 0`.
+    /// - The query count `ceil(-lambda / log2(1 - delta))` is then non-positive.
+    /// - A non-positive count rounds down to zero queries.
+    /// - With zero queries the verifier accepts any committed function.
+    ///
+    /// Every code rate must be redundant: rate `<= 1/2`.
+    #[error(
+        "starting_log_inv_rate must be >= 1 (rate <= 1/2); got 2^-{log_inv_rate}, a non-redundant code whose proximity test makes zero queries"
+    )]
+    NonRedundantStartingRate { log_inv_rate: usize },
+
+    /// A per-round code rate is not redundant.
+    ///
+    /// - The codeword committed after one intermediate round has rate `1`.
+    /// - A rate of `1` drives that round's query count to zero.
+    /// - The failure matches a non-redundant starting rate.
+    #[error(
+        "round {round}: log_inv_rate must be >= 1 (rate <= 1/2); got 2^-{log_inv_rate}, a non-redundant code whose proximity test makes zero queries"
+    )]
+    NonRedundantRoundRate { round: usize, log_inv_rate: usize },
+
     /// No out-of-domain sample count reaches the requested security level.
     ///
     /// - The field is too small for the requested security level.
@@ -197,6 +222,18 @@ where
         // tracks the remaining variables as we consume them round by round.
         let initial_num_variables = num_variables;
 
+        // Invariant: the Reed-Solomon code must be redundant, rate <= 1/2.
+        //
+        //     rate 1             -> proximity parameter delta <= 0
+        //     delta <= 0         -> query count ceil(-lambda / log2(1 - delta)) <= 0
+        //     non-positive count -> rounds down to zero STIR queries
+        //     zero queries       -> verifier accepts any committed function
+        if whir_parameters.starting_log_inv_rate == 0 {
+            return Err(WhirConfigError::NonRedundantStartingRate {
+                log_inv_rate: whir_parameters.starting_log_inv_rate,
+            });
+        }
+
         // Derive the concrete folding schedule once. Validation is a property
         // of this derivation, so all later code uses the same source of truth.
         let folding_schedule = whir_parameters
@@ -274,6 +311,18 @@ where
             }
             whir_parameters.round_log_inv_rates.clone()
         };
+
+        // Same redundancy invariant, applied to each intermediate-round rate.
+        //
+        //     derived rates  : inherit the starting rate and only grow -> always >= 1
+        //     explicit rates : caller-supplied, so a 0 entry must be rejected here
+        if let Some(round) = round_log_inv_rates.iter().position(|&rate| rate == 0) {
+            return Err(WhirConfigError::NonRedundantRoundRate {
+                round,
+                log_inv_rate: round_log_inv_rates[round],
+            });
+        }
+
         if let FoldingFactor::PerRound(factors) = &whir_parameters.folding_factor
             && factors.len() != num_rounds + 1
         {
@@ -612,11 +661,13 @@ mod tests {
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::DuplexChallenger;
     use p3_field::PrimeCharacteristicRing;
+    use p3_field::extension::BinomialExtensionField;
 
     use super::*;
     use crate::parameters::{FoldingFactor, SecurityAssumption};
 
     type F = BabyBear;
+    type EF4 = BinomialExtensionField<F, 4>;
     type Perm = Poseidon2BabyBear<16>;
     type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
 
@@ -829,6 +880,94 @@ mod tests {
                 assert_eq!(threshold, 6);
             }
             other => panic!("expected InsufficientFolding, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn new_rejects_zero_starting_rate() {
+        // Invariant: a code rate of 2^-0 = 1 has no Reed-Solomon redundancy.
+        //
+        //     rate 1 -> delta <= 0 -> zero queries -> proximity test checks nothing
+        //
+        // Mutation: drop the starting rate to 0.
+        let mut params = default_whir_params();
+        params.starting_log_inv_rate = 0;
+
+        // Construction must reject a zero starting rate before deriving rounds.
+        let err = WhirConfig::<F, F, MyChallenger>::new(10, params)
+            .expect_err("rate 2^-0 = 1 must be rejected");
+        assert!(
+            matches!(
+                err,
+                WhirConfigError::NonRedundantStartingRate { log_inv_rate: 0 }
+            ),
+            "expected NonRedundantStartingRate, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn new_rejects_zero_explicit_round_rate() {
+        // Invariant: an explicit per-round rate of 2^-0 = 1 is rejected.
+        //
+        //     16 variables, fold 4 per round -> 2 intermediate rounds
+        //     per-round rates [3, 0]         -> round 1 gets rate 1
+        //
+        // Mutation: set the second round's rate to 0.
+        let mut params = default_whir_params();
+        params.folding_factor = FoldingFactor::Constant(4);
+        params.round_log_inv_rates = vec![3, 0];
+
+        // Rejection names the offending round and its rate.
+        let err = WhirConfig::<F, F, MyChallenger>::new(16, params)
+            .expect_err("explicit round rate 2^-0 = 1 must be rejected");
+        assert!(
+            matches!(
+                err,
+                WhirConfigError::NonRedundantRoundRate {
+                    round: 1,
+                    log_inv_rate: 0
+                }
+            ),
+            "expected NonRedundantRoundRate at round 1, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn valid_rates_yield_positive_query_counts() {
+        // Invariant: a redundant rate keeps delta > 0, so every phase queries.
+        //
+        //     rate <= 1/2 -> delta > 0 -> positive query count per phase
+        //
+        // A quartic extension keeps out-of-domain sampling feasible.
+        // So all three soundness regimes reach the query derivation.
+        for soundness_type in [
+            SecurityAssumption::UniqueDecoding,
+            SecurityAssumption::JohnsonBound,
+            SecurityAssumption::CapacityBound,
+        ] {
+            // Valid, redundant config at rate 2^-1 = 1/2.
+            let params = ProtocolParameters {
+                security_level: 100,
+                pow_bits: 20,
+                round_log_inv_rates: vec![],
+                folding_factor: FoldingFactor::Constant(4),
+                soundness_type,
+                starting_log_inv_rate: 1,
+            };
+            let config = WhirConfig::<EF4, F, MyChallenger>::new(10, params).unwrap();
+
+            // Final proximity phase must spot-check at least one position.
+            assert!(
+                config.final_queries > 0,
+                "{soundness_type:?}: final_queries must be positive"
+            );
+            // Every intermediate round must spot-check at least one position.
+            for (round, cfg) in config.round_parameters.iter().enumerate() {
+                assert!(
+                    cfg.num_queries > 0,
+                    "{soundness_type:?} round {round}: num_queries must be positive"
+                );
+            }
         }
     }
 
