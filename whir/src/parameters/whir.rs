@@ -94,6 +94,19 @@ pub enum WhirConfigError {
         security_level: usize,
         field_size_bits: usize,
     },
+
+    /// A derived proof-of-work difficulty exceeds the configured grinding budget.
+    ///
+    /// - Each phase grinds `security_level - algebraic_bits` bits to hit target.
+    /// - When the field or rate is too weak, that gap exceeds the budget.
+    /// - The instance then cannot reach `security_level` within allowed grinding.
+    ///
+    /// Raise the grinding budget, lower the security level, or use a larger
+    /// extension field or smaller rate.
+    #[error(
+        "derived proof-of-work of {required} bits exceeds the {budget}-bit grinding budget; the field or rate is too weak for the requested security"
+    )]
+    PowBitsExceedBudget { required: usize, budget: usize },
 }
 
 /// Derived configuration for a single intermediate WHIR round.
@@ -209,6 +222,7 @@ where
     /// - Explicit per-round rates or folding factors have the wrong length.
     /// - A requested rate would grow the Reed-Solomon domain.
     /// - The field is too small to reach the requested security level.
+    /// - A derived proof-of-work difficulty exceeds the grinding budget.
     #[allow(clippy::too_many_lines)]
     pub fn new(
         num_variables: usize,
@@ -504,6 +518,18 @@ where
             config.final_sumcheck_rounds
         );
 
+        // Enforce the grinding budget.
+        // A derived PoW above the cap means the field or rate cannot reach
+        // security_level within the allowed grinding, so the claimed security
+        // would be aspirational rather than met.
+        let required = config.max_pow_bits();
+        if required > config.params.pow_bits {
+            return Err(WhirConfigError::PowBitsExceedBudget {
+                required,
+                budget: config.params.pow_bits,
+            });
+        }
+
         Ok(config)
     }
 
@@ -555,20 +581,28 @@ where
     /// Checks the starting, final, and per-round PoW bits against the ceiling.
     /// Returns false if any value exceeds the limit.
     pub fn check_pow_bits(&self) -> bool {
-        let max_bits = self.params.pow_bits;
+        self.max_pow_bits() <= self.params.pow_bits
+    }
 
-        // Check the main pow bits values
-        if self.starting_folding_pow_bits > max_bits
-            || self.final_pow_bits > max_bits
-            || self.final_folding_pow_bits > max_bits
-        {
-            return false;
-        }
+    /// Largest proof-of-work difficulty (in bits) demanded by any phase.
+    ///
+    /// Scans every grinding step: the starting fold, each round's query and
+    /// fold steps, and the final query and fold steps.
+    ///
+    /// Comparing this against the configured budget tells whether the field
+    /// and rate can reach the requested security within allowed grinding.
+    pub fn max_pow_bits(&self) -> usize {
+        // Whole-protocol grinding steps outside the per-round loop.
+        let outer = self
+            .starting_folding_pow_bits
+            .max(self.final_pow_bits)
+            .max(self.final_folding_pow_bits);
 
-        // Check all round parameters
+        // Each round grinds once for queries and once for folding.
         self.round_parameters
             .iter()
-            .all(|r| r.pow_bits <= max_bits && r.folding_pow_bits <= max_bits)
+            .map(|r| r.pow_bits.max(r.folding_pow_bits))
+            .fold(outer, usize::max)
     }
 
     /// Retrieves the concrete derived folding factor for a given round.
@@ -687,7 +721,8 @@ mod tests {
     fn test_whir_config_creation() {
         let params = default_whir_params();
 
-        let config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
+        // Quartic extension: a realistic challenge field that meets the budget.
+        let config = WhirConfig::<EF4, F, MyChallenger>::new(10, params).unwrap();
 
         assert_eq!(config.security_level, 100);
         assert_eq!(config.params.pow_bits, 20);
@@ -722,10 +757,13 @@ mod tests {
         // Unique decoding needs no out-of-domain samples, so the 31-bit base
         // field is feasible, and its query and combination errors are
         // fractional -- exactly the case where floor and ceil differ.
+        //
+        // The 31-bit field forces a large grinding gap, so the budget is set
+        // wide enough to admit it; this test probes the rounding, not the cap.
         let soundness = SecurityAssumption::UniqueDecoding;
         let params = ProtocolParameters {
             security_level: 128,
-            pow_bits: 64,
+            pow_bits: 128,
             round_log_inv_rates: vec![],
             folding_factor: FoldingFactor::Constant(4),
             soundness_type: soundness,
@@ -769,6 +807,65 @@ mod tests {
             "final query phase undershoots: {} + {final_error} < {target}",
             config.final_pow_bits
         );
+    }
+
+    #[test]
+    fn new_rejects_pow_above_budget() {
+        // Invariant: a derived PoW above the budget fails construction.
+        //
+        //     BabyBear as its own field is 31 bits.
+        //     The final folding sumcheck error is bounded by 1/|F| ~ 2^-30.
+        //     Reaching 100-bit security needs ~70 PoW bits, far above budget 20.
+        //
+        // Unique decoding needs no out-of-domain samples, so the small field is
+        // otherwise feasible and the failure is purely the budget.
+        let params = ProtocolParameters {
+            security_level: 100,
+            pow_bits: 20,
+            round_log_inv_rates: vec![],
+            folding_factor: FoldingFactor::Constant(4),
+            soundness_type: SecurityAssumption::UniqueDecoding,
+            starting_log_inv_rate: 1,
+        };
+
+        let err = WhirConfig::<F, F, MyChallenger>::new(20, params)
+            .expect_err("derived PoW exceeds the budget; construction must fail");
+        match err {
+            WhirConfigError::PowBitsExceedBudget { required, budget } => {
+                // The cap is the configured budget; the demand exceeds it.
+                assert_eq!(budget, 20);
+                assert!(
+                    required > budget,
+                    "required {required} should exceed {budget}"
+                );
+            }
+            other => panic!("expected PowBitsExceedBudget, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn max_pow_bits_reports_largest_phase() {
+        // The reported maximum is the largest PoW demanded by any phase.
+        let params = default_whir_params();
+        let mut config = WhirConfig::<EF4, F, MyChallenger>::new(10, params).unwrap();
+
+        // Force one phase to dominate, then confirm it is the reported max.
+        config.starting_folding_pow_bits = 7;
+        config.final_pow_bits = 31;
+        config.final_folding_pow_bits = 5;
+        config.round_parameters = vec![RoundConfig {
+            pow_bits: 11,
+            folding_pow_bits: 13,
+            num_queries: 5,
+            ood_samples: 2,
+            num_variables: 10,
+            folding_factor: 2,
+            log_inv_rate: 1,
+            domain_size: 10,
+            folded_domain_gen: F::from_u64(2),
+        }];
+
+        assert_eq!(config.max_pow_bits(), 31);
     }
 
     #[test]
@@ -974,7 +1071,7 @@ mod tests {
     #[test]
     fn test_n_rounds() {
         let params = default_whir_params();
-        let config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
+        let config = WhirConfig::<EF4, F, MyChallenger>::new(10, params).unwrap();
 
         assert_eq!(config.n_rounds(), config.round_parameters.len());
     }
@@ -1002,7 +1099,7 @@ mod tests {
             };
             // Construction runs the same assertion internally.
             // This explicit check documents and pins the invariant.
-            let config = WhirConfig::<F, F, MyChallenger>::new(num_variables, params).unwrap();
+            let config = WhirConfig::<EF4, F, MyChallenger>::new(num_variables, params).unwrap();
             assert_eq!(
                 config.final_round_config().num_variables,
                 config.final_sumcheck_rounds,
@@ -1048,7 +1145,7 @@ mod tests {
             starting_log_inv_rate: 1,
         };
 
-        let config = WhirConfig::<F, F, MyChallenger>::new(15, params).unwrap();
+        let config = WhirConfig::<EF4, F, MyChallenger>::new(15, params).unwrap();
 
         assert_eq!(config.folding_schedule, vec![8, 7]);
         assert_eq!(config.n_rounds(), 1);
@@ -1068,7 +1165,7 @@ mod tests {
         params.folding_factor = FoldingFactor::Constant(4);
         params.round_log_inv_rates = vec![3, 2];
 
-        let config = WhirConfig::<F, F, MyChallenger>::new(16, params).unwrap();
+        let config = WhirConfig::<EF4, F, MyChallenger>::new(16, params).unwrap();
 
         assert_eq!(config.round_parameters[0].log_inv_rate, 3);
         assert_eq!(config.round_parameters[1].log_inv_rate, 2);
@@ -1081,7 +1178,7 @@ mod tests {
     #[test]
     fn test_check_pow_bits_within_limits() {
         let params = default_whir_params();
-        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
+        let mut config = WhirConfig::<EF4, F, MyChallenger>::new(10, params).unwrap();
 
         // Set all values within limits
         config.params.pow_bits = 20;
@@ -1124,7 +1221,7 @@ mod tests {
     #[test]
     fn test_check_pow_bits_starting_folding_exceeds() {
         let params = default_whir_params();
-        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
+        let mut config = WhirConfig::<EF4, F, MyChallenger>::new(10, params).unwrap();
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 21; // Exceeds max_pow_bits
@@ -1140,7 +1237,7 @@ mod tests {
     #[test]
     fn test_check_pow_bits_final_pow_exceeds() {
         let params = default_whir_params();
-        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
+        let mut config = WhirConfig::<EF4, F, MyChallenger>::new(10, params).unwrap();
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 15;
@@ -1156,7 +1253,7 @@ mod tests {
     #[test]
     fn test_check_pow_bits_round_pow_exceeds() {
         let params = default_whir_params();
-        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
+        let mut config = WhirConfig::<EF4, F, MyChallenger>::new(10, params).unwrap();
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 15;
@@ -1185,7 +1282,7 @@ mod tests {
     #[test]
     fn test_check_pow_bits_round_folding_pow_exceeds() {
         let params = default_whir_params();
-        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
+        let mut config = WhirConfig::<EF4, F, MyChallenger>::new(10, params).unwrap();
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 15;
@@ -1214,7 +1311,7 @@ mod tests {
     #[test]
     fn test_check_pow_bits_exactly_at_limit() {
         let params = default_whir_params();
-        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
+        let mut config = WhirConfig::<EF4, F, MyChallenger>::new(10, params).unwrap();
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 20;
@@ -1242,7 +1339,7 @@ mod tests {
     #[test]
     fn test_check_pow_bits_all_exceed() {
         let params = default_whir_params();
-        let mut config = WhirConfig::<F, F, MyChallenger>::new(10, params).unwrap();
+        let mut config = WhirConfig::<EF4, F, MyChallenger>::new(10, params).unwrap();
 
         config.params.pow_bits = 20;
         config.starting_folding_pow_bits = 22;
