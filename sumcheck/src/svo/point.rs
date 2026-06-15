@@ -127,13 +127,14 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     /// - partially compressed after each SVO round to feed the accumulator path
     pub fn eval(&self, poly: &Poly<F>) -> (EF, EqSvoPartials<EF>) {
         assert_eq!(self.num_variables(), poly.num_variables());
+        // Each per-round compression is wrapped as an equality payload as it is produced.
         let (compressed, partial_evals) = match self.var_order {
             VariableOrder::Prefix => {
                 let compressed = self.z_split.compress_suffix(poly);
                 let partial_evals = (1..=self.num_variables_svo())
                     .map(|i| {
                         let (_svo_active, svo_rest) = self.z_svo.split_at(i);
-                        compressed.compress_suffix(&svo_rest, EF::ONE)
+                        EqPartials::new(compressed.compress_suffix(&svo_rest, EF::ONE))
                     })
                     .collect::<Vec<_>>();
                 (compressed, partial_evals)
@@ -144,7 +145,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
                     .map(|i| {
                         let (svo_rest, _svo_active) =
                             self.z_svo.split_at(self.z_svo.num_variables() - i);
-                        compressed.compress_prefix(&svo_rest, EF::ONE)
+                        EqPartials::new(compressed.compress_prefix(&svo_rest, EF::ONE))
                     })
                     .collect::<Vec<_>>();
                 (compressed, partial_evals)
@@ -152,11 +153,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
         };
         // Evaluate the fully compressed SVO-only polynomial to get the scalar opening value.
         let eval = compressed.eval_base(&self.z_svo);
-        // Wrap each per-round compression as an equality payload for the accumulator path.
-        (
-            eval,
-            EqSvoPartials::new(partial_evals.into_iter().map(EqPartials::new).collect()),
-        )
+        (eval, EqSvoPartials::new(partial_evals))
     }
 
     /// Returns the number of SVO variables (`l0`).
