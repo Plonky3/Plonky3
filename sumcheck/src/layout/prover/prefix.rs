@@ -675,12 +675,23 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
             }
         }
 
-        // Virtual claims span the full residual space; accumulate packed.
+        // Each virtual claim spans the full residual space and adds one packed term.
+        //
+        //     virtual point = [ svo vars | residual vars ]
+        //                      \_______/
+        //                      fixed to rs by the SVO rounds
+        //
+        // The packed accumulation folds eq(svo, rs) into a scalar weight.
+        // That weight scales the residual equality table added to the output.
+
+        // Virtual claims take the alpha powers right after the concrete claims.
         let mut alpha_i = alpha.exp_u64(self.num_claims() as u64);
         for claim in &self.virtual_claims {
-            let (svo, rest) = claim.point.split_at(rs.num_variables());
-            let scale = alpha_i * Point::eval_eq(svo.as_slice(), rs.as_slice());
-            SplitEq::new_packed(&rest, scale).accumulate_into_packed(out.as_mut_slice(), None);
+            // Split the claim point into its leading SVO variables and the residual variables.
+            let svo_point = SvoPoint::new_packed(rs.num_variables(), &claim.point);
+            // Add eq(svo, rs) * eq(residual, .) into the packed buffer, scaled by this claim's power.
+            svo_point.accumulate_into_packed(out.as_mut_slice(), rs, alpha_i);
+            // Step to the next power of alpha for the following claim.
             alpha_i *= alpha;
         }
 

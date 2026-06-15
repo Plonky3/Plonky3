@@ -191,11 +191,6 @@ impl<F: Field> EqStatement<F> {
         self.points.is_empty()
     }
 
-    /// Returns an iterator over the evaluation constraints in the statement.
-    pub fn iter(&self) -> impl Iterator<Item = (&Point<F>, &F)> {
-        self.points.iter().zip(self.evaluations.iter())
-    }
-
     /// Returns the number of constraints in the statement.
     #[must_use]
     pub const fn len(&self) -> usize {
@@ -220,20 +215,6 @@ impl<F: Field> EqStatement<F> {
             // For each point, evaluate its equality polynomial at the query point.
             // The result is 1 only when the query point equals the stored point on the hypercube.
             .map(|point| Point::eval_eq(point.as_slice(), row.as_slice()))
-    }
-
-    /// Verifies that a given polynomial satisfies all constraints in the statement.
-    #[must_use]
-    pub fn verify(&self, poly: &Poly<F>) -> bool {
-        self.iter()
-            .all(|(point, &expected_eval)| poly.eval_base(point) == expected_eval)
-    }
-
-    /// Concatenates another statement's constraints into this one.
-    pub fn concatenate(&mut self, other: &Self) {
-        assert_eq!(self.num_variables, other.num_variables);
-        self.points.extend_from_slice(&other.points);
-        self.evaluations.extend_from_slice(&other.evaluations);
     }
 
     /// Adds an evaluation constraint `p(z) = s` to the system.
@@ -469,6 +450,15 @@ mod tests {
                 evaluations,
             }
         }
+
+        /// Returns true when `poly` satisfies every stored equality constraint p(z_i) = s_i.
+        pub fn verify(&self, poly: &Poly<F>) -> bool {
+            // Each constraint holds when the polynomial's value at the stored point matches.
+            self.points
+                .iter()
+                .zip(&self.evaluations)
+                .all(|(point, &expected_eval)| poly.eval_base(point) == expected_eval)
+        }
     }
 
     type F = BabyBear;
@@ -589,26 +579,6 @@ mod tests {
         // Test mismatched constraint: f(1) = 5 (but poly has f(1) = 2)
         statement.add_evaluated_constraint(Point::new(vec![F::ONE]), F::from_u64(5));
         assert!(!statement.verify(&poly));
-    }
-
-    #[test]
-    fn test_concatenate() {
-        // Test successful concatenation
-        let mut statement1 = EqStatement::<F>::initialize(1);
-        let mut statement2 = EqStatement::<F>::initialize(1);
-        statement1.add_evaluated_constraint(Point::new(vec![F::ZERO]), F::from_u64(10));
-        statement2.add_evaluated_constraint(Point::new(vec![F::ONE]), F::from_u64(20));
-
-        statement1.concatenate(&statement2);
-        assert_eq!(statement1.len(), 2);
-    }
-
-    #[test]
-    #[should_panic(expected = "assertion `left == right` failed")]
-    fn test_concatenate_mismatched_variables() {
-        let mut statement1 = EqStatement::<F>::initialize(2);
-        let statement2 = EqStatement::<F>::initialize(3);
-        statement1.concatenate(&statement2); // Should panic
     }
 
     #[test]

@@ -91,7 +91,7 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
     }
 
     /// Returns the arity of the source table at the given index.
-    pub fn num_variables_table(&self, table_idx: usize) -> usize {
+    pub(crate) fn num_variables_table(&self, table_idx: usize) -> usize {
         // Look up this table's placement; every column shares the same selector bit-width.
         let placement = self.placement(table_idx);
         let selector_vars = placement
