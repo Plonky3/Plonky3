@@ -481,16 +481,15 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
                 .collect(),
         );
 
+        // Closed-form successor state tables of the SVO point over all rows, built once.
+        let states = NextPartials::from_point(self.z_svo.as_slice());
+
         // Opening value: sum the three-state successor weight against the payloads over every SVO row.
         let eval = (0..svo_rows)
             .map(|svo_idx| {
-                // Boolean assignment of the SVO variables for this row.
-                let row = Point::hypercube(svo_idx, self.z_svo.num_variables());
-                // Closed-form successor states of the SVO point at this row.
-                let (carry, done, omega) = Point::eval_next(self.z_svo.as_slice(), row.as_slice());
-                done * d_eq.as_slice()[svo_idx]
-                    + carry * d_t.as_slice()[svo_idx]
-                    + omega * d_omega.as_slice()[svo_idx]
+                states.done().as_slice()[svo_idx] * d_eq.as_slice()[svo_idx]
+                    + states.carry().as_slice()[svo_idx] * d_t.as_slice()[svo_idx]
+                    + states.omega().as_slice()[svo_idx] * d_omega.as_slice()[svo_idx]
             })
             .sum();
 
@@ -561,17 +560,17 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
         let d_carry = Poly::new(d_carry);
         let d_omega = Poly::new(d_omega);
 
+        // Closed-form successor state tables of the SVO point over all rows, built once.
+        let states = NextPartials::from_point(self.z_svo.as_slice());
+        // Plain equality weights of the SVO point over all rows, indexed by hypercube row.
+        let eq = Poly::new_from_point(self.z_svo.as_slice(), EF::ONE);
+
         // Opening value: sum the three-state successor weight against the payloads over every SVO row.
         let eval = (0..svo_rows)
             .map(|svo_idx| {
-                // Boolean assignment of the SVO variables for this row.
-                let row = Point::hypercube(svo_idx, self.z_svo.num_variables());
-                // Closed-form successor states and equality weight of the SVO point at this row.
-                let (_carry, done, omega) = Point::eval_next(self.z_svo.as_slice(), row.as_slice());
-                let eq = Point::eval_eq(self.z_svo.as_slice(), row.as_slice());
-                eq * d_done.as_slice()[svo_idx]
-                    + done * d_carry.as_slice()[svo_idx]
-                    + omega * d_omega.as_slice()[svo_idx]
+                eq.as_slice()[svo_idx] * d_done.as_slice()[svo_idx]
+                    + states.done().as_slice()[svo_idx] * d_carry.as_slice()[svo_idx]
+                    + states.omega().as_slice()[svo_idx] * d_omega.as_slice()[svo_idx]
             })
             .sum();
 
