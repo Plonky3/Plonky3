@@ -4,6 +4,7 @@ use p3_field::extension::{
     BinomialExtensionField, CubicTrinomialExtensionField, QuinticTrinomialExtensionField,
 };
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
+use serde::{Deserialize, Serialize};
 
 use crate::symbolic::expression::BaseLeaf;
 use crate::symbolic::variable::SymbolicVariableExt;
@@ -13,7 +14,7 @@ use crate::symbolic::{SymLeaf, SymbolicExpr, SymbolicExpression, SymbolicVariabl
 ///
 /// These represent the atomic building blocks of extension-field AIR constraints:
 /// lifted base-field sub-trees, extension-field variables, and extension-field constants.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ExtLeaf<F, EF> {
     /// A lifted base-field expression (entire base sub-tree preserved).
     Base(SymbolicExpression<F>),
@@ -803,5 +804,35 @@ mod tests {
 
         // The mixed result cannot be lowered to base.
         assert!(result.to_base().is_none());
+    }
+
+    #[test]
+    fn serde_round_trip_preserves_extension_constraint() {
+        // A constraint over all extension leaf kinds and a lifted base sub-tree:
+        //   perm[0]·challenge - ext_const + base_var
+        let perm = SymbolicExpressionExt::<F, EF>::from(SymbolicVariableExt::<F, EF>::new(
+            ExtEntry::Permutation { offset: 0 },
+            0,
+        ));
+        let challenge = SymbolicExpressionExt::<F, EF>::from(SymbolicVariableExt::<F, EF>::new(
+            ExtEntry::Challenge,
+            0,
+        ));
+        let ext_const = SymbolicExpressionExt::<F, EF>::from(EF::from_basis_coefficients_fn(|i| {
+            if i == 1 { F::ONE } else { F::ZERO }
+        }));
+        let base_var = SymbolicExpressionExt::<F, EF>::from(SymbolicVariable::<F>::new(
+            BaseEntry::Main { offset: 0 },
+            0,
+        ));
+
+        let expr = perm * challenge - ext_const + base_var;
+
+        let json = serde_json::to_string(&expr).unwrap();
+        let decoded: SymbolicExpressionExt<F, EF> = serde_json::from_str(&json).unwrap();
+
+        // Structural equality: the decoded tree re-serializes identically.
+        assert_eq!(serde_json::to_string(&decoded).unwrap(), json);
+        assert_eq!(decoded.degree_multiple(), expr.degree_multiple());
     }
 }
