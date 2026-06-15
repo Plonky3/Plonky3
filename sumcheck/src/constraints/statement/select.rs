@@ -18,13 +18,13 @@ use tracing::instrument;
 /// # Input
 ///
 /// A `k × n` matrix where column `j` holds the squared powers of
-/// variable `v_j` in descending exponent order:
+/// variable `v_j` in ascending exponent order:
 ///
 /// ```text
-/// row 0: [v_1^{2^{k-1}}, v_2^{2^{k-1}}, …, v_n^{2^{k-1}}]
-/// row 1: [v_1^{2^{k-2}}, v_2^{2^{k-2}}, …, v_n^{2^{k-2}}]
+/// row 0:   [v_1^{2^0},     v_2^{2^0},     …, v_n^{2^0}    ]
+/// row 1:   [v_1^{2^1},     v_2^{2^1},     …, v_n^{2^1}    ]
 ///   ⋮
-/// row k-1: [v_1^1,         v_2^1,         …, v_n^1        ]
+/// row k-1: [v_1^{2^{k-1}}, v_2^{2^{k-1}}, …, v_n^{2^{k-1}}]
 /// ```
 ///
 /// # Output
@@ -224,7 +224,7 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
     ///
     /// # Panics
     ///
-    /// Panics if the nu
+    /// Panics if the number of `vars` differs from the number of `evaluations`.
     #[must_use]
     pub const fn new(num_variables: usize, vars: Vec<F>, evaluations: Vec<EF>) -> Self {
         assert!(vars.len() == evaluations.len());
@@ -357,7 +357,6 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
     ///
     /// - `shift`: Power offset for challenge. Constraint `i` uses weight `γ^{i+shift}`.
     ///   Allows multiple statement types to use non-overlapping challenge powers.
-    /// Batches all constraints into a single weighted polynomial and target sum for sumcheck.
     ///
     /// # Algorithm
     ///
