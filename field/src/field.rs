@@ -1013,6 +1013,20 @@ pub trait Field:
         self.try_inverse().expect("Tried to invert zero")
     }
 
+    /// A square root of this field element, if one exists.
+    ///
+    /// Returns `Some(r)` with `r * r == *self` when this element is a quadratic
+    /// residue, and `None` when it is a quadratic non-residue. `ZERO` returns
+    /// `Some(ZERO)`. When two square roots exist, which one is returned is
+    /// unspecified.
+    ///
+    /// The default implementation uses the Tonelli–Shanks algorithm. Fields with
+    /// a more direct formula (e.g. those with `|F| ≡ 3 mod 4`) may override it.
+    #[must_use]
+    fn try_sqrt(&self) -> Option<Self> {
+        crate::sqrt::tonelli_shanks(*self)
+    }
+
     /// Add two slices of field elements together, returning the result in the first slice.
     ///
     /// Makes use of packing to speed up the addition.

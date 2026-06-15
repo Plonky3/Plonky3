@@ -17,6 +17,7 @@ use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
     PrimeField64, RawDataSerializable, TwoAdicField, impl_raw_serializable_primefield64,
     quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
+    tonelli_shanks_two_adic,
 };
 use p3_util::{assume, branch_hint, flatten_to_base, gcd_inner};
 use rand::Rng;
@@ -434,6 +435,11 @@ impl Field for Goldilocks {
     #[inline]
     fn order() -> BigUint {
         P.into()
+    }
+
+    #[inline]
+    fn try_sqrt(&self) -> Option<Self> {
+        tonelli_shanks_two_adic(*self)
     }
 }
 
