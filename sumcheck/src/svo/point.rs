@@ -48,33 +48,47 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     ///
     /// `l0` is the number of variables handled by the SVO optimization.
     pub fn new_unpacked(l0: usize, point: &Point<EF>, var_order: VariableOrder) -> Self {
-        assert!(l0 <= point.num_variables());
-        let (svo, split) = match var_order {
-            VariableOrder::Prefix => point.split_at(l0),
-            VariableOrder::Suffix => {
-                let (split, svo) = point.split_at(point.num_variables() - l0);
-                (svo, split)
-            }
-        };
-        let z_split = SplitEq::new_unpacked(&split, EF::ONE);
-        Self {
-            z_svo: svo,
-            z_split,
-            var_order,
-        }
+        let (svo, split) = Self::split_svo(l0, point, var_order);
+        Self::from_parts(svo, SplitEq::new_unpacked(&split, EF::ONE), var_order)
     }
 
     /// Splits a challenge point into a prefix SVO portion and a residual suffix.
     ///
     /// `l0` is the number of variables handled by the SVO optimization.
     pub fn new_packed(l0: usize, point: &Point<EF>) -> Self {
+        let (svo, split) = Self::split_svo(l0, point, VariableOrder::Prefix);
+        Self::from_parts(
+            svo,
+            SplitEq::new_packed(&split, EF::ONE),
+            VariableOrder::Prefix,
+        )
+    }
+
+    /// Splits `point` into its SVO portion and the residual portion at depth `l0`.
+    ///
+    /// For `Prefix` the SVO portion is the leading `l0` coordinates.
+    /// For `Suffix` it is the trailing `l0` coordinates.
+    fn split_svo(l0: usize, point: &Point<EF>, var_order: VariableOrder) -> (Point<EF>, Point<EF>) {
         assert!(l0 <= point.num_variables());
-        let (svo, split) = point.split_at(l0);
-        let z_split = SplitEq::new_packed(&split, EF::ONE);
+        match var_order {
+            VariableOrder::Prefix => point.split_at(l0),
+            VariableOrder::Suffix => {
+                let (split, svo) = point.split_at(point.num_variables() - l0);
+                (svo, split)
+            }
+        }
+    }
+
+    /// Assembles an [`SvoPoint`] from its SVO portion, residual split-eq, and variable order.
+    const fn from_parts(
+        z_svo: Point<EF>,
+        z_split: SplitEq<F, EF>,
+        var_order: VariableOrder,
+    ) -> Self {
         Self {
-            z_svo: svo,
+            z_svo,
             z_split,
-            var_order: VariableOrder::Prefix,
+            var_order,
         }
     }
 
@@ -89,10 +103,17 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     ///
     /// This method computes the scalar factor `alpha · eq(z_svo, rs)` and then asks
     /// `split_eq` to materialize the residual `eq(z_rest, ·)` table into `out`.
-    pub fn accumulate_into(&self, out: &mut [EF], rs: &Point<EF>, mut scale: EF) {
+    pub fn accumulate_into(&self, out: &mut [EF], rs: &Point<EF>, scale: EF) {
+        self.z_split
+            .accumulate_into(out, Some(self.accumulate_scale(rs, scale)));
+    }
+
+    /// Folds the SVO equality weight `eq(z_svo, rs)` into the batching coefficient `scale`.
+    ///
+    /// Returns `scale · eq(z_svo, rs)`, the scalar applied to the residual `eq(z_rest, ·)` table.
+    fn accumulate_scale(&self, rs: &Point<EF>, scale: EF) -> EF {
         assert_eq!(rs.num_variables(), self.num_variables_svo());
-        scale *= Point::eval_eq(self.z_svo.as_slice(), rs.as_slice());
-        self.z_split.accumulate_into(out, Some(scale));
+        scale * Point::eval_eq(self.z_svo.as_slice(), rs.as_slice())
     }
 
     /// Accumulates this claim's residual equality table into a packed buffer.
@@ -110,12 +131,11 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
         &self,
         out: &mut [EF::ExtensionPacking],
         rs: &Point<EF>,
-        mut scale: EF,
+        scale: EF,
     ) {
         assert!(matches!(self.var_order, VariableOrder::Prefix));
-        assert_eq!(rs.num_variables(), self.num_variables_svo());
-        scale *= Point::eval_eq(self.z_svo.as_slice(), rs.as_slice());
-        self.z_split.accumulate_into_packed(out, Some(scale));
+        self.z_split
+            .accumulate_into_packed(out, Some(self.accumulate_scale(rs, scale)));
     }
 
     /// Evaluates `poly` at this point and returns all partial evaluations seen
