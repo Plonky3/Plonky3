@@ -5,6 +5,7 @@ use core::borrow::Borrow;
 use p3_field::{Algebra, ExtensionField, Field};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::symbolic::SymbolicExpr;
@@ -20,7 +21,7 @@ use crate::{
 ///
 /// Bundles the various width/count parameters needed to construct a
 /// [`SymbolicAirBuilder`].
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct AirLayout {
     /// Width of [`AirBuilder::preprocessed`].
     pub preprocessed_width: usize,
@@ -371,7 +372,7 @@ enum ConstraintType {
 /// When alpha powers are pre-computed in global order `[α^{N−1}, …, α⁰]`,
 /// the layout tells us which powers correspond to base-field constraints (for
 /// `batched_linear_combination`) and which to extension-field constraints.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ConstraintLayout {
     /// Global indices of base-field constraints, in emission order.
     pub base_indices: Vec<usize>,
@@ -1072,5 +1073,34 @@ mod tests {
         for &val in &ext {
             assert_eq!(val, EF::ONE);
         }
+    }
+
+    #[test]
+    fn air_layout_serde_round_trip() {
+        let layout = AirLayout {
+            preprocessed_width: 2,
+            main_width: 5,
+            num_public_values: 3,
+            permutation_width: 4,
+            num_permutation_challenges: 2,
+            num_permutation_values: 1,
+            num_periodic_columns: 6,
+        };
+        let json = serde_json::to_string(&layout).unwrap();
+        let decoded: AirLayout = serde_json::from_str(&json).unwrap();
+        assert_eq!(serde_json::to_string(&decoded).unwrap(), json);
+    }
+
+    #[test]
+    fn constraint_layout_serde_round_trip() {
+        // An interleaved layout drives the base/ext stream separation the verifier folds with.
+        let layout = ConstraintLayout {
+            base_indices: vec![0, 2, 4],
+            ext_indices: vec![1, 3],
+        };
+        let json = serde_json::to_string(&layout).unwrap();
+        let decoded: ConstraintLayout = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.base_indices, layout.base_indices);
+        assert_eq!(decoded.ext_indices, layout.ext_indices);
     }
 }

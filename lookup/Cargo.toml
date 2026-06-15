@@ -36,6 +36,7 @@ p3-symmetric = { path = "../symmetric" }
 
 criterion.workspace = true
 rand.workspace = true
+serde_json.workspace = true
 
 [[bench]]
 name = "logup"
