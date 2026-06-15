@@ -89,27 +89,6 @@ where
     MatrixWithoutOpeningPoints { batch: usize, matrix: usize },
 }
 
-/// Authenticated dimensions for one input matrix.
-///
-/// The width is pinned to the first opening point's claimed evaluation count.
-/// `check_widths` in the MMCS is the only authenticator of row boundaries in the flattened leaf hash.
-/// A matrix opened at no points carries no such claim, so its width could only come from the proof.
-///
-/// # Returns
-///
-/// - `Some(dims)`: the matrix has an opening point that pins its width.
-/// - `None`: the matrix is opened at no points, so the caller must reject it.
-fn pin_matrix_width<Challenge>(
-    height: usize,
-    points_and_values: &[(Challenge, Vec<Challenge>)],
-) -> Option<Dimensions> {
-    let (_, values) = points_and_values.first()?;
-    Some(Dimensions {
-        width: values.len(),
-        height,
-    })
-}
-
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(bound(
     serialize = "Witness: Serialize",
@@ -645,8 +624,22 @@ where
                     )?
                     .enumerate()
                     .map(|(matrix, ((&height, (_, points_and_values)), _))| {
-                        pin_matrix_width(height, points_and_values)
-                            .ok_or(InputError::MatrixWithoutOpeningPoints { batch, matrix })
+                        // Invariant: a matrix's width is fixed by its first opening point.
+                        //
+                        //     >= 1 point  ->  width = number of claimed evaluations
+                        //     no points   ->  reject
+                        //
+                        // Why reject the no-points case:
+                        //   - row boundaries in the flattened leaf hash are authenticated only from claimed widths
+                        //   - a matrix opened at no points claims no width
+                        //   - its width could then come only from the unverified proof
+                        let (_, values) = points_and_values
+                            .first()
+                            .ok_or(InputError::MatrixWithoutOpeningPoints { batch, matrix })?;
+                        Ok(Dimensions {
+                            width: values.len(),
+                            height,
+                        })
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
@@ -920,24 +913,69 @@ mod tests {
     }
 
     #[test]
-    fn pin_matrix_width_rejects_no_opening_points() {
-        // Invariant: a matrix's authenticated width is pinned by its first opening point.
+    fn reject_matrix_without_opening_points() {
+        // Invariant: every input matrix must be opened at >= 1 point.
         //
-        //     no points   ->  None         ->  caller rejects (MatrixWithoutOpeningPoints)
-        //     >= 1 point   ->  Some(width)  ->  width = claimed evaluation count
+        //     no points  ->  no claimed width  ->  width would come from the proof  ->  reject
+        //
+        // A matrix opened at no points observes nothing into the challenger.
+        // This holds identically on the proving side and the verifying side.
+        //
+        // Fixture state: one batch of two matrices sharing a domain.
+        //   - matrix 0 is opened at one point, keeping the reduced openings non-empty
+        //   - matrix 1 is opened at no points
+        //
+        // Flow:
+        //   - both sides observe only matrix 0  ->  proof-of-work challenge matches
+        //   - the query phase verifies the input opening  ->  matrix 1 rejected
         let mut rng = SmallRng::seed_from_u64(0);
 
-        // A matrix opened at no points has no claim to pin its width.
-        let no_points: Vec<(Challenge, Vec<Challenge>)> = vec![];
-        assert!(pin_matrix_width(16, &no_points).is_none());
+        let byte_hash = ByteHash {};
+        let field_hash = FieldHash::new(byte_hash);
+        let compress = MyCompress::new(byte_hash);
+        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+        let fri_params = FriParameters::new_testing(challenge_mmcs, 0);
+        let pcs = TestPcs {
+            mmcs: val_mmcs,
+            fri_params,
+            _phantom: PhantomData,
+        };
 
-        // A matrix with one opening point claiming three evaluations.
-        // The values themselves are irrelevant; only their count sets the width.
-        let with_points: Vec<(Challenge, Vec<Challenge>)> =
-            vec![(rng.random(), vec![rng.random(), rng.random(), rng.random()])];
-        let dims = pin_matrix_width(16, &with_points).expect("opening point present");
-        assert_eq!(dims.width, 3);
-        assert_eq!(dims.height, 16);
+        // One batch, two single-column matrices sharing a domain of 2^{10} rows.
+        let log_n = 10;
+        let d =
+            <TestPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_n);
+        let evals_0 = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
+        let evals_1 = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
+        let (comm, data) =
+            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals_0), (d, evals_1)]);
+
+        // Prove: open matrix 0 at one point, matrix 1 at no points.
+        let zeta: Challenge = rng.random();
+        let mut chal = Challenger::from_hasher(vec![], byte_hash);
+        let (values, proof) = pcs.open(vec![(&data, vec![vec![zeta], vec![]])], &mut chal);
+
+        // Verify with the same shape: matrix 1 carries no opening points.
+        let mut chal = Challenger::from_hasher(vec![], byte_hash);
+        let err = pcs
+            .verify(
+                vec![(
+                    comm,
+                    vec![(d, vec![(zeta, values[0][0][0].clone())]), (d, vec![])],
+                )],
+                &proof,
+                &mut chal,
+            )
+            .expect_err("matrix without opening points must be rejected");
+
+        // The offending matrix is identified by its batch and matrix index.
+        let FriError::InputError(InputError::MatrixWithoutOpeningPoints { batch, matrix }) = err
+        else {
+            panic!("expected MatrixWithoutOpeningPoints, got {err:?}");
+        };
+        assert_eq!(batch, 0);
+        assert_eq!(matrix, 1);
     }
 
     #[test]
