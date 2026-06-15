@@ -83,6 +83,31 @@ where
     /// The DEEP-quotient denominator vanishes there, so the row cannot be reduced.
     #[error("opening point coincides with a query point")]
     OpeningPointMatchesQueryPoint,
+    #[error(
+        "batch {batch}, matrix {matrix}: opened at no points; its width cannot be authenticated"
+    )]
+    MatrixWithoutOpeningPoints { batch: usize, matrix: usize },
+}
+
+/// Authenticated dimensions for one input matrix.
+///
+/// The width is pinned to the first opening point's claimed evaluation count.
+/// `check_widths` in the MMCS is the only authenticator of row boundaries in the flattened leaf hash.
+/// A matrix opened at no points carries no such claim, so its width could only come from the proof.
+///
+/// # Returns
+///
+/// - `Some(dims)`: the matrix has an opening point that pins its width.
+/// - `None`: the matrix is opened at no points, so the caller must reject it.
+fn pin_matrix_width<Challenge>(
+    height: usize,
+    points_and_values: &[(Challenge, Vec<Challenge>)],
+) -> Option<Dimensions> {
+    let (_, values) = points_and_values.first()?;
+    Some(Dimensions {
+        width: values.len(),
+        height,
+    })
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -605,8 +630,8 @@ where
                     first_layer_proof,
                 } = input_proof;
 
-                for (batch_opening, (batch_commit, mats)) in
-                    zip_eq(input_openings, &rounds, InputError::InputShapeError)?
+                for (batch, (batch_opening, (batch_commit, mats))) in
+                    zip_eq(input_openings, &rounds, InputError::InputShapeError)?.enumerate()
                 {
                     let batch_heights: Vec<usize> = mats
                         .iter()
@@ -618,19 +643,12 @@ where
                         &batch_opening.opened_values,
                         InputError::InputShapeError,
                     )?
-                    .map(
-                        |((&height, (_, points_and_values)), opened_row)| Dimensions {
-                            // Invariant: the commitment layer rejects opened rows that differ from this width.
-                            //
-                            //     some points → width = claimed evaluation count
-                            //     no points   → width = opened row length (no claim to enforce)
-                            width: points_and_values
-                                .first()
-                                .map_or(opened_row.len(), |(_, values)| values.len()),
-                            height,
-                        },
-                    )
-                    .collect_vec();
+                    .enumerate()
+                    .map(|(matrix, ((&height, (_, points_and_values)), _))| {
+                        pin_matrix_width(height, points_and_values)
+                            .ok_or(InputError::MatrixWithoutOpeningPoints { batch, matrix })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
 
                     let (dims, idx) = batch_heights
                         .iter()
@@ -899,6 +917,27 @@ mod tests {
         // Smoke test: an honestly generated proof must verify successfully.
         let (pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
         try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof).expect("verify err");
+    }
+
+    #[test]
+    fn pin_matrix_width_rejects_no_opening_points() {
+        // Invariant: a matrix's authenticated width is pinned by its first opening point.
+        //
+        //     no points   ->  None         ->  caller rejects (MatrixWithoutOpeningPoints)
+        //     >= 1 point   ->  Some(width)  ->  width = claimed evaluation count
+        let mut rng = SmallRng::seed_from_u64(0);
+
+        // A matrix opened at no points has no claim to pin its width.
+        let no_points: Vec<(Challenge, Vec<Challenge>)> = vec![];
+        assert!(pin_matrix_width(16, &no_points).is_none());
+
+        // A matrix with one opening point claiming three evaluations.
+        // The values themselves are irrelevant; only their count sets the width.
+        let with_points: Vec<(Challenge, Vec<Challenge>)> =
+            vec![(rng.random(), vec![rng.random(), rng.random(), rng.random()])];
+        let dims = pin_matrix_width(16, &with_points).expect("opening point present");
+        assert_eq!(dims.width, 3);
+        assert_eq!(dims.height, 16);
     }
 
     #[test]
