@@ -1068,6 +1068,32 @@ mod test {
         }
     }
 
+    #[test]
+    fn test_svo_point_accumulate_next_suffix() {
+        let mut rng = SmallRng::seed_from_u64(14);
+        // Fixture state: 12-variable random opening point and a random batching coefficient.
+        let k = 12;
+        let point = Point::<EF>::rand(&mut rng, k);
+        let scale: EF = rng.random();
+        // Dense successor weight table over all variables, used as the reference.
+        let next = Poly::new_next_from_point(point.as_slice());
+
+        // Invariant: the residual accumulator equals the dense weight compressed at the round challenges.
+        for l0 in 0..=k {
+            // Suffix layout: the l0 SVO variables are the trailing point coordinates.
+            let svo_point = SvoPoint::<F, EF>::new_unpacked(l0, &point, VariableOrder::Suffix);
+            // Random SVO round challenges fixing the l0 SVO variables.
+            let rs = Point::rand(&mut rng, l0);
+            // Reference: compress the dense weight over the suffix challenges, scaled.
+            let expected = next.compress_suffix(&rs, scale);
+
+            // Fast path: accumulate the residual split weight in place.
+            let mut out = Poly::<EF>::zero(expected.num_variables());
+            svo_point.accumulate_next_suffix_into(out.as_mut_slice(), &rs, scale);
+            assert_eq!(out, expected);
+        }
+    }
+
     // Brute-force reference: compress the polynomial over the split prefix into the three SVO payloads.
     fn split_compressions_for_next(
         poly: &[EF],
