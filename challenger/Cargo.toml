@@ -19,7 +19,6 @@ p3-util.workspace = true
 
 num-bigint.workspace = true
 thiserror.workspace = true
-tiny-keccak = { workspace = true, features = ["shake"] }
 tracing.workspace = true
 
 [dev-dependencies]

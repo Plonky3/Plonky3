@@ -5,10 +5,7 @@ use core::marker::PhantomData;
 
 use p3_field::PrimeField;
 
-use crate::fs::codecs::Codec;
-use crate::fs::codecs::decode_field::{
-    decode_field_via_extra_bytes, field_byte_size, required_bytes,
-};
+use crate::fs::codecs::{Codec, decode_field_via_extra_bytes, field_byte_size, required_bytes};
 use crate::{CanObserve, CanSample};
 
 /// Codec that maps a prime-field scalar to bytes and back via the IETF `Ns + 16` rule.
@@ -61,7 +58,6 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::fs::codecs::decode_field::field_byte_size;
 
     /// Concrete field exercised in this module's tests.
     type F = BabyBear;

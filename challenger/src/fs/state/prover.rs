@@ -5,9 +5,7 @@ use alloc::vec::Vec;
 use p3_field::{BasedVectorSpace, PrimeField};
 
 use crate::fs::bound::TranscriptBound;
-use crate::fs::codecs::Codec;
-use crate::fs::codecs::decode_field::{encode_field_be, field_byte_size};
-use crate::fs::codecs::length_prefix::{bound_byte_width, encode_len_be};
+use crate::fs::codecs::{Codec, bound_byte_width, encode_field_be, encode_len_be, field_byte_size};
 use crate::fs::domain_separator::DomainSeparator;
 use crate::fs::pattern::{Hierarchy, Interaction, Kind, Label, Length, Pattern, PatternPlayer};
 use crate::fs::unit::Unit;
@@ -102,6 +100,57 @@ impl<C, U: Unit> ProverState<C, U> {
         self.challenger.observe_slice(salt_bytes);
         // Mirror the same bytes onto the wire so the verifier can re-absorb them.
         self.narg.extend_from_slice(salt_bytes);
+    }
+
+    /// Absorb one shared public scalar through the supplied codec.
+    ///
+    /// Public values are known to both parties before the run.
+    /// They are bound into the sponge but never written to the wire.
+    /// The verifier re-absorbs the same value from its own inputs.
+    pub fn add_public_scalar<F, Cdc>(&mut self, label: Label, value: &F) -> TranscriptBound<F>
+    where
+        F: PrimeField,
+        Cdc: Codec<C, F>,
+    {
+        // Validate: the next pattern step is a public scalar of type `F`.
+        self.player.interact(Interaction::new::<F>(
+            Hierarchy::Atomic,
+            Kind::Public,
+            label,
+            Length::Scalar,
+        ));
+        // Bind into the sponge only; public data is not part of the wire.
+        Cdc::observe(&mut self.challenger, value);
+        TranscriptBound::wrap(*value)
+    }
+
+    /// Absorb a fixed-length list of shared public scalars under a single step.
+    ///
+    /// As with `add_public_scalar`, nothing is written to the wire.
+    pub fn add_public_scalars<F, Cdc>(
+        &mut self,
+        label: Label,
+        values: &[F],
+    ) -> Vec<TranscriptBound<F>>
+    where
+        F: PrimeField,
+        Cdc: Codec<C, F>,
+    {
+        // Validate: the next pattern step is a fixed-length list of public scalars.
+        self.player.interact(Interaction::new::<F>(
+            Hierarchy::Atomic,
+            Kind::Public,
+            label,
+            Length::Fixed(values.len()),
+        ));
+        // Bind each value into the sponge; none reaches the wire.
+        values
+            .iter()
+            .map(|v| {
+                Cdc::observe(&mut self.challenger, v);
+                TranscriptBound::wrap(*v)
+            })
+            .collect()
     }
 
     /// Absorb one prover scalar through the supplied codec.
@@ -404,16 +453,25 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::{PrimeCharacteristicRing, PrimeField32};
+    use p3_keccak::Keccak256Hash;
 
+    use crate::HashChallenger;
     use crate::fs::TranscriptBound;
     use crate::fs::codecs::BytesToFieldCodec;
     use crate::fs::domain_separator::DomainSeparator;
     use crate::fs::pattern::{Hierarchy, Interaction, InteractionPattern, Kind, Length};
-    use crate::fs::shake128::Shake128;
     use crate::fs::state::{ProverState, VerifierState};
 
     /// Concrete field exercised in this module's tests.
     type F = BabyBear;
+
+    /// Keccak-chained byte sponge backing the transcript in tests.
+    ///
+    /// Each squeeze advances the chaining state.
+    /// Consecutive samples therefore differ.
+    fn sponge() -> HashChallenger<u8, Keccak256Hash, 32> {
+        HashChallenger::new(Vec::new(), Keccak256Hash)
+    }
 
     /// Three messages followed by two challenges, each as one fixed-length step.
     fn small_pattern() -> InteractionPattern {
@@ -430,24 +488,23 @@ mod tests {
     }
 
     #[test]
-    fn prover_round_trip_with_shake128_and_bytes_to_field_codec() {
-        // Shared pattern + DS; `bind_pattern_hash` separates protocols by shape.
+    fn prover_round_trip_with_keccak_sponge_and_bytes_to_field_codec() {
+        // Shared pattern + DS; the separator binds the pattern shape automatically.
         let pattern = small_pattern();
-        let mut ds: DomainSeparator<u8> = DomainSeparator::new(0x01, b"test-protocol", pattern);
-        ds.bind_pattern_hash();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0x01, b"test-protocol", pattern);
 
         // Three field elements 1, 2, 3 fed as the "msgs" step.
         let messages: Vec<F> = (1u32..=3).map(F::from_u32).collect();
 
         // Prover walks the pattern and emits a wire payload.
-        let prover_ch = Shake128::new(&[0u8; 64]);
+        let prover_ch = sponge();
         let mut prover = ProverState::<_, u8>::new(prover_ch, &ds);
         prover.add_scalars::<F, BytesToFieldCodec<F>>("msgs", &messages);
         let prover_challenges = prover.challenge_scalars::<F, BytesToFieldCodec<F>>("challs", 2);
         let narg = prover.finalize();
 
         // Verifier seeded identically replays the pattern over the wire.
-        let verifier_ch = Shake128::new(&[0u8; 64]);
+        let verifier_ch = sponge();
         let mut verifier = VerifierState::<_, u8>::new(verifier_ch, &ds, &narg);
         let read_messages = verifier
             .next_scalars::<F, BytesToFieldCodec<F>>("msgs", 3)
@@ -481,9 +538,8 @@ mod tests {
 
         // Helper: run a prover with the given salt and return the bound challenge.
         let drive = |salt: &[u8]| -> TranscriptBound<F> {
-            let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"zk", pattern.clone());
-            ds.bind_pattern_hash();
-            let mut p = ProverState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds);
+            let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"zk", pattern.clone());
+            let mut p = ProverState::<_, u8>::new(sponge(), &ds);
             p.add_salt(salt);
             let c = p.challenge_scalar::<F, BytesToFieldCodec<F>>("alpha");
             let _ = p.finalize();
@@ -508,20 +564,19 @@ mod tests {
         ])
         .unwrap();
 
-        let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"zk", pattern);
-        ds.bind_pattern_hash();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"zk", pattern);
 
         // Fixed salt fixture so the test is deterministic.
         let salt = [0xa5u8; 16];
 
         // Prover absorbs the salt then samples the challenge.
-        let mut p = ProverState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds);
+        let mut p = ProverState::<_, u8>::new(sponge(), &ds);
         p.add_salt(&salt);
         let c_p = p.challenge_scalar::<F, BytesToFieldCodec<F>>("alpha");
         let narg = p.finalize();
 
         // Verifier seeded identically reads the salt back from the wire and re-samples.
-        let mut v = VerifierState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds, &narg);
+        let mut v = VerifierState::<_, u8>::new(sponge(), &ds, &narg);
         let read_salt = v.next_salt(16).expect("verifier reads salt");
         let c_v = v.challenge_scalar::<F, BytesToFieldCodec<F>>("alpha");
         v.finalize().expect("NARG fully consumed");
@@ -545,12 +600,11 @@ mod tests {
             Interaction::new::<F>(Hierarchy::Atomic, Kind::Challenge, "alpha", Length::Scalar,),
         ])
         .unwrap();
-        let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"hint-test", pattern);
-        ds.bind_pattern_hash();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"hint-test", pattern);
 
         // Helper: run a prover with the given hint bytes and return (bound challenge, wire).
         let drive_with_hint = |hint: &[u8; 4]| -> (TranscriptBound<F>, Vec<u8>) {
-            let mut p = ProverState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds);
+            let mut p = ProverState::<_, u8>::new(sponge(), &ds);
             p.add_hint("merkle-path", hint);
             let c = p.challenge_scalar::<F, BytesToFieldCodec<F>>("alpha");
             (c, p.finalize())
@@ -566,7 +620,7 @@ mod tests {
         assert_ne!(narg_a, narg_b);
 
         // Property 3: verifier reads back the original hint bytes.
-        let mut v = VerifierState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds, &narg_a);
+        let mut v = VerifierState::<_, u8>::new(sponge(), &ds, &narg_a);
         let read_hint = v
             .next_hint("merkle-path", 4)
             .expect("verifier reads hint bytes");
@@ -592,17 +646,16 @@ mod tests {
             Interaction::new::<F>(Hierarchy::Atomic, Kind::Challenge, "alpha", Length::Scalar,),
         ])
         .unwrap();
-        let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"bounded-hint", pattern);
-        ds.bind_pattern_hash();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"bounded-hint", pattern);
 
         // Mutation (prover): send 3 bytes — strictly less than the cap — then sample a challenge.
-        let mut p = ProverState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds);
+        let mut p = ProverState::<_, u8>::new(sponge(), &ds);
         p.add_hint_bounded("auth-path", &[0xaa, 0xbb, 0xcc], 8);
         let c_p = p.challenge_scalar::<F, BytesToFieldCodec<F>>("alpha");
         let narg = p.finalize();
 
         // Mutation (verifier): replay the same step, read the actual byte count, sample a challenge.
-        let mut v = VerifierState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds, &narg);
+        let mut v = VerifierState::<_, u8>::new(sponge(), &ds, &narg);
         let read_hint = v.next_hint_bounded("auth-path", 8).expect("legal hint");
         let c_v = v.challenge_scalar::<F, BytesToFieldCodec<F>>("alpha");
         v.finalize().expect("NARG fully consumed");
@@ -631,12 +684,11 @@ mod tests {
             Interaction::new::<F>(Hierarchy::Atomic, Kind::Challenge, "alpha", Length::Scalar,),
         ])
         .unwrap();
-        let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"hint-iso", pattern);
-        ds.bind_pattern_hash();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"hint-iso", pattern);
 
         // Helper: drive a prover with the supplied hint and return the sampled challenge.
         let drive = |hint: &[u8]| -> TranscriptBound<F> {
-            let mut p = ProverState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds);
+            let mut p = ProverState::<_, u8>::new(sponge(), &ds);
             p.add_hint_bounded("auth-path", hint, 8);
             let c = p.challenge_scalar::<F, BytesToFieldCodec<F>>("alpha");
             let _ = p.finalize();
@@ -666,18 +718,17 @@ mod tests {
             Interaction::new::<F>(Hierarchy::Atomic, Kind::Challenge, "alpha", Length::Scalar,),
         ])
         .unwrap();
-        let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"bounded-msgs", pattern);
-        ds.bind_pattern_hash();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"bounded-msgs", pattern);
 
         // Mutation (prover): send 3 values, strictly below the cap of 5.
         let msgs: alloc::vec::Vec<F> = (1u32..=3).map(F::from_u32).collect();
-        let mut p = ProverState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds);
+        let mut p = ProverState::<_, u8>::new(sponge(), &ds);
         p.add_scalars_bounded::<F, BytesToFieldCodec<F>>("msgs", &msgs, 5);
         let c_p = p.challenge_scalar::<F, BytesToFieldCodec<F>>("alpha");
         let narg = p.finalize();
 
         // Mutation (verifier): replay the step and sample the matching challenge.
-        let mut v = VerifierState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds, &narg);
+        let mut v = VerifierState::<_, u8>::new(sponge(), &ds, &narg);
         let read = v
             .next_scalars_bounded::<F, BytesToFieldCodec<F>>("msgs", 5)
             .expect("legal scalars");
@@ -707,13 +758,12 @@ mod tests {
             Interaction::new::<F>(Hierarchy::Atomic, Kind::Challenge, "alpha", Length::Scalar,),
         ])
         .unwrap();
-        let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"len-bind", pattern);
-        ds.bind_pattern_hash();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"len-bind", pattern);
 
         // Helper: drive a prover with `n` zero scalars and return the sampled challenge.
         let drive = |n: usize| -> TranscriptBound<F> {
             let zeros: alloc::vec::Vec<F> = (0..n).map(|_| F::from_u32(0)).collect();
-            let mut p = ProverState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds);
+            let mut p = ProverState::<_, u8>::new(sponge(), &ds);
             p.add_scalars_bounded::<F, BytesToFieldCodec<F>>("msgs", &zeros, 5);
             let c = p.challenge_scalar::<F, BytesToFieldCodec<F>>("alpha");
             let _ = p.finalize();
@@ -772,11 +822,10 @@ mod tests {
             Length::Bounded(4),
         )])
         .unwrap();
-        let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"oversize", pattern);
-        ds.bind_pattern_hash();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"oversize", pattern);
 
         // Mutation: feed 5 bytes into a cap of 4.
-        let mut p = ProverState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds);
+        let mut p = ProverState::<_, u8>::new(sponge(), &ds);
         p.add_hint_bounded("auth", &[0u8; 5], 4);
 
         // Drain the player so dropping the prover during the panic does not double-panic.
@@ -791,9 +840,8 @@ mod tests {
         // Helper: drive a prover under the given protocol name and return its bound challenges.
         let drive = |name: &[u8]| -> Vec<TranscriptBound<F>> {
             let pattern = small_pattern();
-            let mut ds: DomainSeparator<u8> = DomainSeparator::new(0x01, name, pattern);
-            ds.bind_pattern_hash();
-            let mut p = ProverState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds);
+            let ds: DomainSeparator<u8> = DomainSeparator::new(0x01, name, pattern);
+            let mut p = ProverState::<_, u8>::new(sponge(), &ds);
             p.add_scalars::<F, BytesToFieldCodec<F>>("msgs", &messages);
             let chs = p.challenge_scalars::<F, BytesToFieldCodec<F>>("challs", 2);
             let _ = p.finalize();

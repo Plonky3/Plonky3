@@ -5,11 +5,10 @@ use alloc::vec::Vec;
 use p3_field::{BasedVectorSpace, PrimeField};
 
 use crate::fs::bound::TranscriptBound;
-use crate::fs::codecs::Codec;
-use crate::fs::codecs::decode_field::{
-    decode_field_be_canonical, encode_field_be, field_byte_size,
+use crate::fs::codecs::{
+    Codec, bound_byte_width, decode_field_be_canonical, decode_len_be, encode_field_be,
+    field_byte_size,
 };
-use crate::fs::codecs::length_prefix::{bound_byte_width, decode_len_be};
 use crate::fs::domain_separator::DomainSeparator;
 use crate::fs::error::TranscriptError;
 use crate::fs::pattern::{Hierarchy, Interaction, Kind, Label, Length, Pattern, PatternPlayer};
@@ -136,6 +135,56 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
         Ok(bytes)
     }
 
+    /// Replay a public-scalar step by absorbing the caller-supplied value.
+    ///
+    /// Public values never travel on the wire.
+    /// The verifier holds them as its own input and absorbs them as the prover did.
+    pub fn observe_public_scalar<F, Cdc>(&mut self, label: Label, value: &F) -> TranscriptBound<F>
+    where
+        F: PrimeField,
+        Cdc: Codec<C, F>,
+    {
+        // Validate: the next pattern step is a public scalar of type `F`.
+        self.player.interact(Interaction::new::<F>(
+            Hierarchy::Atomic,
+            Kind::Public,
+            label,
+            Length::Scalar,
+        ));
+        // Bind into the sponge only; nothing is read from the wire.
+        Cdc::observe(&mut self.challenger, value);
+        TranscriptBound::wrap(*value)
+    }
+
+    /// Replay a fixed-length public-scalar list by absorbing the caller-supplied values.
+    ///
+    /// As with `observe_public_scalar`, nothing is read from the wire.
+    pub fn observe_public_scalars<F, Cdc>(
+        &mut self,
+        label: Label,
+        values: &[F],
+    ) -> Vec<TranscriptBound<F>>
+    where
+        F: PrimeField,
+        Cdc: Codec<C, F>,
+    {
+        // Validate: the next pattern step is a fixed-length list of public scalars.
+        self.player.interact(Interaction::new::<F>(
+            Hierarchy::Atomic,
+            Kind::Public,
+            label,
+            Length::Fixed(values.len()),
+        ));
+        // Bind each value into the sponge; none is read from the wire.
+        values
+            .iter()
+            .map(|v| {
+                Cdc::observe(&mut self.challenger, v);
+                TranscriptBound::wrap(*v)
+            })
+            .collect()
+    }
+
     /// Replay an `add_scalar` step from the prover.
     pub fn next_scalar<F, Cdc>(
         &mut self,
@@ -239,6 +288,18 @@ impl<'a, C, U: Unit> VerifierState<'a, C, U> {
         self.challenger.observe_slice(&len_bytes);
         // One canonical field encoding per scalar.
         let need = field_byte_size::<F>();
+        // Refuse to preallocate for more scalars than the wire can hold.
+        //
+        // Why: `actual` is attacker-controlled up to `max`.
+        // A short wire with a large declared count must not force a huge `with_capacity`.
+        if actual
+            .checked_mul(need)
+            .is_none_or(|n| n > self.remaining_narg())
+        {
+            return Err(TranscriptError::BadProofShape {
+                reason: "bounded message declares more scalars than the wire holds",
+            });
+        }
         let mut out = Vec::with_capacity(actual);
         for _ in 0..actual {
             // Pull one scalar's bytes off the wire and reject non-canonical encodings.
@@ -461,14 +522,23 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
+    use p3_keccak::Keccak256Hash;
 
     use super::*;
+    use crate::HashChallenger;
     use crate::fs::codecs::BytesToFieldCodec;
     use crate::fs::pattern::InteractionPattern;
-    use crate::fs::shake128::Shake128;
 
     /// Concrete field exercised in this module's tests.
     type F = BabyBear;
+
+    /// Keccak-chained byte sponge backing the transcript in tests.
+    ///
+    /// Each squeeze advances the chaining state.
+    /// Consecutive samples therefore differ.
+    fn sponge() -> HashChallenger<u8, Keccak256Hash, 32> {
+        HashChallenger::new(Vec::new(), Keccak256Hash)
+    }
 
     fn one_msg_pattern() -> InteractionPattern {
         InteractionPattern::new(vec![Interaction::new::<F>(
@@ -484,10 +554,9 @@ mod tests {
     fn truncated_narg_yields_bad_proof_shape() {
         // Pattern wants a 4-byte scalar; verifier gets 1 byte.
         let pat = one_msg_pattern();
-        let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"trunc", pat);
-        ds.bind_pattern_hash();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"trunc", pat);
         let narg = [0u8; 1];
-        let mut v = VerifierState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds, &narg);
+        let mut v = VerifierState::<_, u8>::new(sponge(), &ds, &narg);
         let err = v
             .next_scalar::<F, BytesToFieldCodec<F>>("msg")
             .expect_err("truncated NARG must error");
@@ -503,10 +572,9 @@ mod tests {
     fn non_canonical_scalar_encoding_is_rejected() {
         // 0xFFFFFFFF > BabyBear order, so canonical decoding rejects it.
         let pat = one_msg_pattern();
-        let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"non-canon", pat);
-        ds.bind_pattern_hash();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"non-canon", pat);
         let narg = [0xffu8; 4];
-        let mut v = VerifierState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds, &narg);
+        let mut v = VerifierState::<_, u8>::new(sponge(), &ds, &narg);
         let err = v
             .next_scalar::<F, BytesToFieldCodec<F>>("msg")
             .expect_err("non-canonical encoding must error");
@@ -522,18 +590,17 @@ mod tests {
     fn trailing_narg_bytes_rejected_at_finalize() {
         // Pattern: one scalar message.
         let pat = one_msg_pattern();
-        let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"trailing", pat);
-        ds.bind_pattern_hash();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"trailing", pat);
 
         // Prover writes a valid NARG, then we smuggle one extra byte at the tail.
         use crate::fs::state::ProverState;
-        let mut p = ProverState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds);
+        let mut p = ProverState::<_, u8>::new(sponge(), &ds);
         p.add_scalar::<F, BytesToFieldCodec<F>>("msg", &F::from_u32(7u32));
         let mut narg = p.finalize();
         narg.push(0x42);
 
         // Verifier consumes the legal scalar, then finalize must reject the leftover byte.
-        let mut v = VerifierState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds, &narg);
+        let mut v = VerifierState::<_, u8>::new(sponge(), &ds, &narg);
         let _ = v
             .next_scalar::<F, BytesToFieldCodec<F>>("msg")
             .expect("legal scalar");
@@ -562,8 +629,7 @@ mod tests {
             Length::Bounded(4),
         )])
         .unwrap();
-        let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"hint-oob", pat);
-        ds.bind_pattern_hash();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"hint-oob", pat);
 
         // Mutation: hand-craft a wire frame whose prefix declares 5 bytes.
         //
@@ -575,7 +641,7 @@ mod tests {
         let narg = [5u8, 0, 0, 0, 0, 0, 0];
 
         // The verifier sees the over-cap prefix and surfaces a structured error.
-        let mut v = VerifierState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds, &narg);
+        let mut v = VerifierState::<_, u8>::new(sponge(), &ds, &narg);
         let err = v
             .next_hint_bounded("auth", 4)
             .expect_err("length above max must be rejected");
@@ -599,8 +665,7 @@ mod tests {
             Length::Bounded(8),
         )])
         .unwrap();
-        let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"hint-trunc", pat);
-        ds.bind_pattern_hash();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"hint-trunc", pat);
 
         // Mutation: declare 7 payload bytes but supply only 2.
         //
@@ -612,7 +677,7 @@ mod tests {
         let narg = [7u8, 0xaa, 0xbb];
 
         // The verifier runs out of bytes mid-payload and reports a malformed wire.
-        let mut v = VerifierState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds, &narg);
+        let mut v = VerifierState::<_, u8>::new(sponge(), &ds, &narg);
         let err = v
             .next_hint_bounded("auth", 8)
             .expect_err("truncated payload must be rejected");
@@ -636,8 +701,7 @@ mod tests {
             Length::Bounded(2),
         )])
         .unwrap();
-        let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"msg-oob", pat);
-        ds.bind_pattern_hash();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"msg-oob", pat);
 
         // Mutation: declare 3 scalars where the cap is 2.
         //
@@ -649,7 +713,7 @@ mod tests {
         let narg = [3u8];
 
         // The verifier surfaces a structured error before touching the sponge.
-        let mut v = VerifierState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds, &narg);
+        let mut v = VerifierState::<_, u8>::new(sponge(), &ds, &narg);
         let err = v
             .next_scalars_bounded::<F, BytesToFieldCodec<F>>("msgs", 2)
             .expect_err("length above max must be rejected");
@@ -666,10 +730,9 @@ mod tests {
     fn pattern_mismatch_on_label_panics() {
         // Pattern declares "msg" but the caller asks for "different".
         let pat = one_msg_pattern();
-        let mut ds: DomainSeparator<u8> = DomainSeparator::new(0, b"mismatch", pat);
-        ds.bind_pattern_hash();
+        let ds: DomainSeparator<u8> = DomainSeparator::new(0, b"mismatch", pat);
         let narg = [0u8; 4];
-        let mut v = VerifierState::<_, u8>::new(Shake128::new(&[0u8; 64]), &ds, &narg);
+        let mut v = VerifierState::<_, u8>::new(sponge(), &ds, &narg);
         let _ = v.next_scalar::<F, BytesToFieldCodec<F>>("different");
     }
 }

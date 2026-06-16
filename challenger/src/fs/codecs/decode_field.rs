@@ -19,41 +19,51 @@ pub const EXTRA_BYTES: usize = 16;
 /// Bytes required for the IETF decoding pattern at field `F`:
 ///
 /// `ceil(log2(p) / 8) + 16`.
-pub fn required_bytes<F: PrimeField>() -> usize {
+pub(crate) fn required_bytes<F: PrimeField>() -> usize {
     field_byte_size::<F>() + EXTRA_BYTES
 }
 
 /// Bytes occupied by the canonical big-endian encoding of `F`:
 ///
 /// `ceil(log2(p) / 8)`.
-pub fn field_byte_size<F: PrimeField>() -> usize {
-    let order = F::order();
-    let bits = order.bits() as usize;
-    bits.div_ceil(8)
+pub(crate) fn field_byte_size<F: PrimeField>() -> usize {
+    F::bits().div_ceil(8)
 }
 
 /// Decode `bytes` into a near-uniform element of `F`.
 ///
+/// Folds the big-endian prefix directly in `F` by Horner's rule:
+///
+/// ```text
+///     acc = sum_i bytes[i] * 256^(need-1-i)   (mod p)
+/// ```
+///
+/// Field arithmetic reduces mod `p` at every step.
+/// No big-integer allocation or division is needed.
+///
 /// # Panics
 ///
 /// When `bytes.len() < required_bytes::<F>()`.
-pub fn decode_field_via_extra_bytes<F: PrimeField>(bytes: &[u8]) -> F {
+pub(crate) fn decode_field_via_extra_bytes<F: PrimeField>(bytes: &[u8]) -> F {
     let need = required_bytes::<F>();
     assert!(
         bytes.len() >= need,
         "decode_field_via_extra_bytes needs at least {need} bytes for this field, got {}",
         bytes.len(),
     );
-    // Read the prefix as big-endian, reduce mod p, lift back to F.
-    let big = BigUint::from_bytes_be(&bytes[..need]);
-    let order = F::order();
-    let reduced = big % order;
-    biguint_to_field::<F>(&reduced)
+    // radix = 256: one byte is a single base-256 digit of a big-endian integer.
+    let radix = F::from_u16(256);
+    // Horner over the bytes, evaluated in F, most-significant byte first:
+    //     acc <- acc * 256 + byte
+    // Working in F means each step reduces mod p, so the fold yields `big mod p`.
+    bytes[..need]
+        .iter()
+        .fold(F::ZERO, |acc, &b| acc * radix + F::from_u8(b))
 }
 
 /// Big-endian canonical encoding of `value`, zero-padded to `field_byte_size::<F>()`.
 #[must_use]
-pub fn encode_field_be<F: PrimeField>(value: &F) -> Vec<u8> {
+pub(crate) fn encode_field_be<F: PrimeField>(value: &F) -> Vec<u8> {
     let target = field_byte_size::<F>();
     let raw = value.as_canonical_biguint().to_bytes_be();
     let mut out: Vec<u8> = Vec::with_capacity(target);
@@ -69,7 +79,7 @@ pub fn encode_field_be<F: PrimeField>(value: &F) -> Vec<u8> {
 /// # Errors
 ///
 /// When the slice is too short or encodes an integer outside `[0, p)`.
-pub fn decode_field_be_canonical<F: PrimeField>(bytes: &[u8]) -> Result<F, TranscriptError> {
+pub(crate) fn decode_field_be_canonical<F: PrimeField>(bytes: &[u8]) -> Result<F, TranscriptError> {
     let need = field_byte_size::<F>();
     if bytes.len() < need {
         return Err(TranscriptError::BadProofShape {
@@ -164,6 +174,13 @@ mod tests {
         assert_eq!(from_codec, manual);
     }
 
+    /// BigUint reference for the Horner decode: read big-endian, reduce mod p, lift to F.
+    fn decode_reference<G: PrimeField>(bytes: &[u8]) -> G {
+        let need = required_bytes::<G>();
+        let reduced = BigUint::from_bytes_be(&bytes[..need]) % G::order();
+        biguint_to_field::<G>(&reduced)
+    }
+
     proptest! {
         #[test]
         fn random_bytes_decode_to_canonical_baby_bear(seed in any::<[u8; 32]>()) {
@@ -174,6 +191,21 @@ mod tests {
             }
             let f: F = decode_field_via_extra_bytes(&bytes);
             prop_assert!(f.as_canonical_u32() < F::ORDER_U32);
+        }
+
+        #[test]
+        fn horner_decode_matches_biguint_reference(raw in any::<[u8; 36]>()) {
+            // The field-Horner fast path must equal the BigUint reduce-and-lift reference.
+            //
+            // Cover a single-limb field (BabyBear) and a 64-bit field (Goldilocks).
+            prop_assert_eq!(
+                decode_field_via_extra_bytes::<F>(&raw[..required_bytes::<F>()]),
+                decode_reference::<F>(&raw),
+            );
+            prop_assert_eq!(
+                decode_field_via_extra_bytes::<Goldilocks>(&raw[..required_bytes::<Goldilocks>()]),
+                decode_reference::<Goldilocks>(&raw),
+            );
         }
     }
 }

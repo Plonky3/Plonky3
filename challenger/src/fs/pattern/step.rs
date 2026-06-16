@@ -181,10 +181,15 @@ impl Interaction {
 impl Display for Interaction {
     fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         if f.alternate() {
-            // Alternate mode: hash-stable form.
+            // Alternate mode: hash-stable form feeding the pattern fingerprint.
+            //
+            // `type_name` is omitted from the fingerprint.
+            //   - it is not a stable identifier; it can change across compiler versions.
+            //   - the fingerprint is a cross-run protocol commitment.
+            //   - a compiler-dependent commitment would break interop.
+            // Type identity is still enforced locally by `closes` and player equality.
             //
             // Length-prefix the label so adjacent labels do not collapse.
-            // The type name is intentionally omitted here.
             write!(f, "{} {}", self.hierarchy, self.kind)?;
             write!(f, " {} {}", self.label.len(), self.label)?;
             write!(f, " {}", self.length)
