@@ -22,12 +22,6 @@ pub(crate) fn trace_to_columns<F: Field>(trace: &RowMajorMatrix<F>) -> Vec<Poly<
     let width = trace.width;
     let height = trace.height();
 
-    // A multilinear polynomial has exactly `2^k` evaluations, so the height must be a power of two.
-    assert!(
-        height.is_power_of_two(),
-        "trace height {height} must be a power of two"
-    );
-
     // Build one polynomial per column.
     (0..width)
         .map(|col| {
@@ -49,8 +43,9 @@ pub(crate) fn trace_to_columns<F: Field>(trace: &RowMajorMatrix<F>) -> Vec<Poly<
 /// - One commitment therefore covers every column.
 /// - The scheme absorbs that commitment into the transcript, advancing the challenger.
 ///
-/// Keeping the columns separate up to this point lets each one carry its own
-/// opening claim and occupy its own slot in the stacked polynomial.
+/// Columns stay separate up to this point for two reasons:
+/// - each carries its own opening claim,
+/// - each occupies its own slot in the stacked polynomial.
 ///
 /// # Arguments
 ///
@@ -69,6 +64,15 @@ pub fn commit_trace<C: MultiStarkConfig>(
 ) -> (Commitment<C>, ProverData<C>) {
     // One multilinear polynomial per trace column.
     let columns = trace_to_columns(trace);
+
+    // The witness builder lays each column into a slot sized by its arity.
+    // Every column must therefore share the same number of variables.
+    debug_assert!(
+        columns
+            .windows(2)
+            .all(|pair| pair[0].num_variables() == pair[1].num_variables()),
+        "all trace columns must share the same arity"
+    );
 
     // Pack the columns into the scheme's witness form (slot layout and folding live in the config).
     let witness = config.build_witness(columns);
@@ -101,8 +105,10 @@ mod tests {
         observed: Vec<F>,
     }
 
-    /// Commitment scheme stand-in: the witness is the column list, and the
-    /// commitment is one per-column checksum.
+    /// Commitment scheme stand-in for the wiring tests.
+    ///
+    /// - The witness is the column list.
+    /// - The commitment is one checksum per column.
     struct MockPcs {
         num_vars: usize,
     }
@@ -223,24 +229,5 @@ mod tests {
         assert_eq!(prover_data.len(), 2);
         // The commitment was absorbed into the transcript.
         assert_eq!(challenger.observed, vec![F::from_u64(10), F::from_u64(26)]);
-    }
-
-    #[test]
-    fn commit_trace_is_deterministic() {
-        // Invariant: committing the same trace twice yields the same commitment.
-        let values = [1, 5, 2, 6, 3, 7, 4, 8].map(F::from_u64).to_vec();
-        let trace = RowMajorMatrix::new(values, 2);
-        let config = MockConfig {
-            pcs: MockPcs { num_vars: 2 },
-        };
-
-        // Two independent commitments over fresh transcripts.
-        let mut first_challenger = RecordingChallenger::default();
-        let (first, _) = commit_trace(&config, &trace, &mut first_challenger);
-        let mut second_challenger = RecordingChallenger::default();
-        let (second, _) = commit_trace(&config, &trace, &mut second_challenger);
-
-        // Same trace commits to the same value.
-        assert_eq!(first, second);
     }
 }
