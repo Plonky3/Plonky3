@@ -157,6 +157,10 @@ impl<EF: Field> EqPartials<EF> {
         // Expand the cached payload to the same ternary grid.
         let acc_grid = evals_01inf_grid_prefix(self.poly().as_slice());
 
+        // The grid spans the full ternary cube so the 0-face and inf-face slices are well defined.
+        debug_assert_eq!(eq_grid.len(), 3 * stride);
+        debug_assert_eq!(acc_grid.len(), 3 * stride);
+
         // The first third of the grid fixes the leading active coordinate to 0.
         acc0.iter_mut()
             .zip(eq_grid[..stride].iter().zip(acc_grid[..stride].iter()))
@@ -360,6 +364,14 @@ impl<EF: Field> NextPartials<EF> {
         let done_data_grid = evals_01inf_grid_prefix(self.done().as_slice());
         let carry_data_grid = evals_01inf_grid_prefix(self.carry().as_slice());
         let omega_data_grid = evals_01inf_grid_prefix(self.omega().as_slice());
+
+        // Every grid spans the full ternary cube so the 0-face and inf-face slices are well defined.
+        debug_assert_eq!(carry_grid.len(), 3 * stride);
+        debug_assert_eq!(done_grid.len(), 3 * stride);
+        debug_assert_eq!(omega_grid.len(), 3 * stride);
+        debug_assert_eq!(done_data_grid.len(), 3 * stride);
+        debug_assert_eq!(carry_data_grid.len(), 3 * stride);
+        debug_assert_eq!(omega_data_grid.len(), 3 * stride);
 
         // First grid third: leading active coordinate fixed to 0; sum the three state-data products.
         acc0.iter_mut()

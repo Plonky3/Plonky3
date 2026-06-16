@@ -48,33 +48,47 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     ///
     /// `l0` is the number of variables handled by the SVO optimization.
     pub fn new_unpacked(l0: usize, point: &Point<EF>, var_order: VariableOrder) -> Self {
-        assert!(l0 <= point.num_variables());
-        let (svo, split) = match var_order {
-            VariableOrder::Prefix => point.split_at(l0),
-            VariableOrder::Suffix => {
-                let (split, svo) = point.split_at(point.num_variables() - l0);
-                (svo, split)
-            }
-        };
-        let z_split = SplitEq::new_unpacked(&split, EF::ONE);
-        Self {
-            z_svo: svo,
-            z_split,
-            var_order,
-        }
+        let (svo, split) = Self::split_svo(l0, point, var_order);
+        Self::from_parts(svo, SplitEq::new_unpacked(&split, EF::ONE), var_order)
     }
 
     /// Splits a challenge point into a prefix SVO portion and a residual suffix.
     ///
     /// `l0` is the number of variables handled by the SVO optimization.
     pub fn new_packed(l0: usize, point: &Point<EF>) -> Self {
+        let (svo, split) = Self::split_svo(l0, point, VariableOrder::Prefix);
+        Self::from_parts(
+            svo,
+            SplitEq::new_packed(&split, EF::ONE),
+            VariableOrder::Prefix,
+        )
+    }
+
+    /// Splits `point` into its SVO portion and the residual portion at depth `l0`.
+    ///
+    /// For `Prefix` the SVO portion is the leading `l0` coordinates.
+    /// For `Suffix` it is the trailing `l0` coordinates.
+    fn split_svo(l0: usize, point: &Point<EF>, var_order: VariableOrder) -> (Point<EF>, Point<EF>) {
         assert!(l0 <= point.num_variables());
-        let (svo, split) = point.split_at(l0);
-        let z_split = SplitEq::new_packed(&split, EF::ONE);
+        match var_order {
+            VariableOrder::Prefix => point.split_at(l0),
+            VariableOrder::Suffix => {
+                let (split, svo) = point.split_at(point.num_variables() - l0);
+                (svo, split)
+            }
+        }
+    }
+
+    /// Assembles an [`SvoPoint`] from its SVO portion, residual split-eq, and variable order.
+    const fn from_parts(
+        z_svo: Point<EF>,
+        z_split: SplitEq<F, EF>,
+        var_order: VariableOrder,
+    ) -> Self {
         Self {
-            z_svo: svo,
+            z_svo,
             z_split,
-            var_order: VariableOrder::Prefix,
+            var_order,
         }
     }
 
@@ -89,10 +103,17 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     ///
     /// This method computes the scalar factor `alpha · eq(z_svo, rs)` and then asks
     /// `split_eq` to materialize the residual `eq(z_rest, ·)` table into `out`.
-    pub fn accumulate_into(&self, out: &mut [EF], rs: &Point<EF>, mut scale: EF) {
+    pub fn accumulate_into(&self, out: &mut [EF], rs: &Point<EF>, scale: EF) {
+        self.z_split
+            .accumulate_into(out, Some(self.accumulate_scale(rs, scale)));
+    }
+
+    /// Folds the SVO equality weight `eq(z_svo, rs)` into the batching coefficient `scale`.
+    ///
+    /// Returns `scale · eq(z_svo, rs)`, the scalar applied to the residual `eq(z_rest, ·)` table.
+    fn accumulate_scale(&self, rs: &Point<EF>, scale: EF) -> EF {
         assert_eq!(rs.num_variables(), self.num_variables_svo());
-        scale *= Point::eval_eq(self.z_svo.as_slice(), rs.as_slice());
-        self.z_split.accumulate_into(out, Some(scale));
+        scale * Point::eval_eq(self.z_svo.as_slice(), rs.as_slice())
     }
 
     /// Accumulates this claim's residual equality table into a packed buffer.
@@ -110,12 +131,11 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
         &self,
         out: &mut [EF::ExtensionPacking],
         rs: &Point<EF>,
-        mut scale: EF,
+        scale: EF,
     ) {
         assert!(matches!(self.var_order, VariableOrder::Prefix));
-        assert_eq!(rs.num_variables(), self.num_variables_svo());
-        scale *= Point::eval_eq(self.z_svo.as_slice(), rs.as_slice());
-        self.z_split.accumulate_into_packed(out, Some(scale));
+        self.z_split
+            .accumulate_into_packed(out, Some(self.accumulate_scale(rs, scale)));
     }
 
     /// Evaluates `poly` at this point and returns all partial evaluations seen
@@ -127,13 +147,14 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     /// - partially compressed after each SVO round to feed the accumulator path
     pub fn eval(&self, poly: &Poly<F>) -> (EF, EqSvoPartials<EF>) {
         assert_eq!(self.num_variables(), poly.num_variables());
+        // Each per-round compression is wrapped as an equality payload as it is produced.
         let (compressed, partial_evals) = match self.var_order {
             VariableOrder::Prefix => {
                 let compressed = self.z_split.compress_suffix(poly);
                 let partial_evals = (1..=self.num_variables_svo())
                     .map(|i| {
                         let (_svo_active, svo_rest) = self.z_svo.split_at(i);
-                        compressed.compress_suffix(&svo_rest, EF::ONE)
+                        EqPartials::new(compressed.compress_suffix(&svo_rest, EF::ONE))
                     })
                     .collect::<Vec<_>>();
                 (compressed, partial_evals)
@@ -144,7 +165,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
                     .map(|i| {
                         let (svo_rest, _svo_active) =
                             self.z_svo.split_at(self.z_svo.num_variables() - i);
-                        compressed.compress_prefix(&svo_rest, EF::ONE)
+                        EqPartials::new(compressed.compress_prefix(&svo_rest, EF::ONE))
                     })
                     .collect::<Vec<_>>();
                 (compressed, partial_evals)
@@ -152,11 +173,7 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
         };
         // Evaluate the fully compressed SVO-only polynomial to get the scalar opening value.
         let eval = compressed.eval_base(&self.z_svo);
-        // Wrap each per-round compression as an equality payload for the accumulator path.
-        (
-            eval,
-            EqSvoPartials::new(partial_evals.into_iter().map(EqPartials::new).collect()),
-        )
+        (eval, EqSvoPartials::new(partial_evals))
     }
 
     /// Returns the number of SVO variables (`l0`).
@@ -481,14 +498,17 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
                 .collect(),
         );
 
-        // Sum the three-state successor weight against the payloads and cache one table per round.
+        // Closed-form successor state tables of the SVO point over all rows, built once.
+        let states = NextPartials::from_point(self.z_svo.as_slice());
+
+        // Weight the three state tables against the payloads and cache one table per round.
         self.eval_next_with(
+            [
+                states.done().as_slice(),
+                states.carry().as_slice(),
+                states.omega().as_slice(),
+            ],
             [d_eq, &d_t, &d_omega],
-            |row| {
-                // Closed-form successor states of the SVO point at this row.
-                let (carry, done, omega) = Point::eval_next(self.z_svo.as_slice(), row);
-                [done, carry, omega]
-            },
             |active_len| self.next_round_partials_suffix(d_eq, &d_t, &d_omega, active_len),
         )
     }
@@ -552,15 +572,18 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
         let d_carry = Poly::new(d_carry);
         let d_omega = Poly::new(d_omega);
 
-        // Sum the three-state successor weight against the payloads and cache one table per round.
+        // Closed-form successor state tables and plain equality weights, built once.
+        let states = NextPartials::from_point(self.z_svo.as_slice());
+        let eq = Poly::new_from_point(self.z_svo.as_slice(), EF::ONE);
+
+        // Weight the three tables against the payloads and cache one table per round.
         self.eval_next_with(
+            [
+                eq.as_slice(),
+                states.done().as_slice(),
+                states.omega().as_slice(),
+            ],
             [&d_done, &d_carry, &d_omega],
-            |row| {
-                // Closed-form successor states and equality weight of the SVO point at this row.
-                let (_carry, done, omega) = Point::eval_next(self.z_svo.as_slice(), row);
-                let eq = Point::eval_eq(self.z_svo.as_slice(), row);
-                [eq, done, omega]
-            },
             |active_len| self.next_round_partials_prefix(&d_done, &d_carry, &d_omega, active_len),
         )
     }
@@ -569,14 +592,14 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     ///
     /// # Overview
     ///
-    /// - Each SVO row pairs three closed-form successor weights with the matching payload entries.
+    /// - Each SVO row pairs three precomputed successor-weight tables with the matching payloads.
     /// - The opening value sums those weighted contributions over every SVO row.
     /// - One successor table is cached per SVO sumcheck round through the round tail.
     ///
     /// # Arguments
     ///
-    /// - `payloads`: the three per-row payloads paired with the weights in matching order.
-    /// - `row_weights`: maps a Boolean SVO row to its three successor weights in payload order.
+    /// - `weights`: the three per-row weight tables, in the same order as the payloads.
+    /// - `payloads`: the three per-row payloads, in the same order as the weights.
     /// - `round_tail`: maps the number of active SVO variables to the cached round table.
     ///
     /// # Returns
@@ -585,23 +608,21 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
     /// - One cached successor table per SVO sumcheck round.
     fn eval_next_with(
         &self,
+        weights: [&[EF]; 3],
         payloads: [&Poly<EF>; 3],
-        mut row_weights: impl FnMut(&[EF]) -> [EF; 3],
         mut round_tail: impl FnMut(usize) -> NextPartials<EF>,
     ) -> (EF, NextSvoPartials<EF>) {
+        let [w0, w1, w2] = weights;
         let [p0, p1, p2] = payloads;
         // Number of Boolean rows over the SVO variables.
         let svo_rows = 1 << self.num_variables_svo();
 
-        // Opening value: sum the three-state successor weight against the payloads over every SVO row.
+        // Opening value: sum each weight table against its payload over every SVO row.
         let eval = (0..svo_rows)
             .map(|svo_idx| {
-                // Boolean assignment of the SVO variables for this row.
-                let row = Point::hypercube(svo_idx, self.num_variables_svo());
-                let [w0, w1, w2] = row_weights(row.as_slice());
-                w0 * p0.as_slice()[svo_idx]
-                    + w1 * p1.as_slice()[svo_idx]
-                    + w2 * p2.as_slice()[svo_idx]
+                w0[svo_idx] * p0.as_slice()[svo_idx]
+                    + w1[svo_idx] * p1.as_slice()[svo_idx]
+                    + w2[svo_idx] * p2.as_slice()[svo_idx]
             })
             .sum();
 
@@ -1076,6 +1097,32 @@ mod test {
             // Fast path: accumulate the residual split weight in place.
             let mut out = Poly::<EF>::zero(expected.num_variables());
             svo_point.accumulate_next_prefix_into(out.as_mut_slice(), &rs, scale);
+            assert_eq!(out, expected);
+        }
+    }
+
+    #[test]
+    fn test_svo_point_accumulate_next_suffix() {
+        let mut rng = SmallRng::seed_from_u64(14);
+        // Fixture state: 12-variable random opening point and a random batching coefficient.
+        let k = 12;
+        let point = Point::<EF>::rand(&mut rng, k);
+        let scale: EF = rng.random();
+        // Dense successor weight table over all variables, used as the reference.
+        let next = Poly::new_next_from_point(point.as_slice());
+
+        // Invariant: the residual accumulator equals the dense weight compressed at the round challenges.
+        for l0 in 0..=k {
+            // Suffix layout: the l0 SVO variables are the trailing point coordinates.
+            let svo_point = SvoPoint::<F, EF>::new_unpacked(l0, &point, VariableOrder::Suffix);
+            // Random SVO round challenges fixing the l0 SVO variables.
+            let rs = Point::rand(&mut rng, l0);
+            // Reference: compress the dense weight over the suffix challenges, scaled.
+            let expected = next.compress_suffix(&rs, scale);
+
+            // Fast path: accumulate the residual split weight in place.
+            let mut out = Poly::<EF>::zero(expected.num_variables());
+            svo_point.accumulate_next_suffix_into(out.as_mut_slice(), &rs, scale);
             assert_eq!(out, expected);
         }
     }

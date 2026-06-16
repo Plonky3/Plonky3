@@ -180,8 +180,8 @@ pub(crate) fn evals_01inf_grid_prefix<F: Field>(evals: &[F]) -> Vec<F> {
         rev
     }
 
-    let grid_len = 3usize.pow(log2_strict_usize(evals.len()) as u32);
     let l = log2_strict_usize(evals.len());
+    let grid_len = 3usize.pow(l as u32);
     let mut prefix = F::zero_vec(grid_len);
     let mut scratch = F::zero_vec(grid_len);
     evals_01inf_grid_into(evals, &mut prefix, &mut scratch);
