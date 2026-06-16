@@ -28,6 +28,7 @@ members = [
     "monolith",
     "monolith-air",
     "monty-31",
+    "multi-stark",
     "multilinear-util",
     "poseidon1",
     "poseidon1-air",
