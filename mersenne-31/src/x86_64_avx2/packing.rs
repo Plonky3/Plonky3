@@ -464,8 +464,8 @@ fn dot_product<const N: usize>(
         let t = x86_64::_mm256_blend_epi32::<0b10101010>(evn, odd_shifted);
 
         // Final reduction of values in `0..=2 P` to the canonical `0..=P`.
-        let u = x86_64::_mm256_sub_epi32(t, P);
-        PackedMersenne31AVX2::from_vector(x86_64::_mm256_min_epu32(t, u))
+        let t_sub_p = x86_64::_mm256_sub_epi32(t, P);
+        PackedMersenne31AVX2::from_vector(x86_64::_mm256_min_epu32(t, t_sub_p))
     }
 }
 
