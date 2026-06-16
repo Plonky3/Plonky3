@@ -7,8 +7,8 @@
 
 #![no_std]
 
-#[cfg(test)]
 extern crate alloc;
 
 pub mod folder;
+pub mod metadata;
 pub mod selectors;
