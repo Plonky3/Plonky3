@@ -33,6 +33,10 @@ where
     pub accumulator: EF,
     /// Two-row preprocessed window; zero-width when the AIR has no preprocessed columns.
     pub preprocessed_window: RowWindow<'a, EF>,
+    /// Periodic column values at the current evaluation point, one per declared periodic column.
+    ///
+    /// Empty when the AIR declares no periodic columns.
+    pub periodic_values: &'a [EF],
     /// Type witness for the base field; no runtime storage.
     pub _phantom: PhantomData<F>,
 }
@@ -43,6 +47,12 @@ where
     EF: ExtensionField<F>,
 {
     /// Build a folder for a single AIR evaluation.
+    ///
+    /// The preprocessed window and periodic values start empty.
+    ///
+    /// Attach them when the AIR declares those columns:
+    /// - [`Self::with_preprocessed`] for preprocessed columns.
+    /// - [`Self::with_periodic`] for periodic columns.
     ///
     /// # Arguments
     ///
@@ -68,8 +78,35 @@ where
             accumulator: EF::ZERO,
             // Zero-width preprocessed window covers AIRs without a preprocessed trace.
             preprocessed_window: RowWindow::from_two_rows(&[], &[]),
+            // No periodic columns until attached.
+            periodic_values: &[],
             _phantom: PhantomData,
         }
+    }
+
+    /// Attach the two-row preprocessed window read by the AIR.
+    ///
+    /// # Arguments
+    ///
+    /// - `current`: preprocessed column values at the current row.
+    /// - `next`: preprocessed column values at the shifted-by-one row.
+    #[inline]
+    #[must_use]
+    pub fn with_preprocessed(mut self, current: &'a [EF], next: &'a [EF]) -> Self {
+        self.preprocessed_window = RowWindow::from_two_rows(current, next);
+        self
+    }
+
+    /// Attach the periodic column values read by the AIR.
+    ///
+    /// # Arguments
+    ///
+    /// - `periodic_values`: one entry per declared periodic column, in declaration order.
+    #[inline]
+    #[must_use]
+    pub const fn with_periodic(mut self, periodic_values: &'a [EF]) -> Self {
+        self.periodic_values = periodic_values;
+        self
     }
 
     /// Consume the folder and return the alpha-batched accumulator.
@@ -140,6 +177,11 @@ where
     #[inline]
     fn public_values(&self) -> &[Self::PublicVar] {
         self.public_values
+    }
+
+    #[inline]
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        self.periodic_values
     }
 }
 
@@ -391,5 +433,77 @@ mod tests {
             expected = expected * alpha + g;
         }
         assert_eq!(value, expected);
+    }
+
+    /// Single-column AIR that ties the main column to a preprocessed and a periodic column.
+    ///
+    /// Both constraints fire on every row (no selector gating):
+    ///
+    /// - `C_0`: `main.local[0] == preprocessed.local[0]`
+    /// - `C_1`: `main.local[0] == periodic[0]`
+    struct AuxAir;
+
+    impl<X> BaseAir<X> for AuxAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for AuxAir {
+        fn eval(&self, builder: &mut AB) {
+            // Read each auxiliary value out before the mutable assert calls.
+            let local = builder.main().current_slice()[0];
+            let prep = builder.preprocessed().current_slice()[0];
+            let periodic = builder.periodic_values()[0];
+
+            builder.assert_eq(local, prep);
+            builder.assert_eq(local, periodic);
+        }
+    }
+
+    #[test]
+    fn folder_threads_preprocessed_and_periodic_columns() {
+        // Fixture state: one main column, one preprocessed column, one periodic column.
+        //
+        // Invariant: when all three carry the same value both constraints vanish,
+        // so the accumulator is zero; perturbing either auxiliary column breaks it.
+        let alpha = EF::from_u64(7);
+        let boundary = BoundaryEvals {
+            first: EF::ZERO,
+            last: EF::ZERO,
+            transition: EF::ONE,
+        };
+
+        let main_local = [EF::from_u64(5)];
+        let main_next = [EF::from_u64(9)];
+        let prep_local = [EF::from_u64(5)];
+        let prep_next = [EF::from_u64(9)];
+        let periodic = [EF::from_u64(5)];
+
+        // Matching auxiliary columns -> both constraints are zero.
+        let mut folder: MultilinearFolder<'_, F, EF> =
+            MultilinearFolder::new(&main_local, &main_next, boundary, &[], alpha)
+                .with_preprocessed(&prep_local, &prep_next)
+                .with_periodic(&periodic);
+        AuxAir.eval(&mut folder);
+        assert_eq!(folder.into_accumulator(), EF::ZERO);
+
+        // Perturbed preprocessed column -> the first constraint is non-zero.
+        let bad_prep = [EF::from_u64(6)];
+        let mut folder: MultilinearFolder<'_, F, EF> =
+            MultilinearFolder::new(&main_local, &main_next, boundary, &[], alpha)
+                .with_preprocessed(&bad_prep, &prep_next)
+                .with_periodic(&periodic);
+        AuxAir.eval(&mut folder);
+        assert_ne!(folder.into_accumulator(), EF::ZERO);
+
+        // Perturbed periodic column -> the second constraint is non-zero.
+        let bad_periodic = [EF::from_u64(6)];
+        let mut folder: MultilinearFolder<'_, F, EF> =
+            MultilinearFolder::new(&main_local, &main_next, boundary, &[], alpha)
+                .with_preprocessed(&prep_local, &prep_next)
+                .with_periodic(&bad_periodic);
+        AuxAir.eval(&mut folder);
+        assert_ne!(folder.into_accumulator(), EF::ZERO);
     }
 }
