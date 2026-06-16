@@ -501,21 +501,16 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
         // Closed-form successor state tables of the SVO point over all rows, built once.
         let states = NextPartials::from_point(self.z_svo.as_slice());
 
-        // Opening value: sum the three-state successor weight against the payloads over every SVO row.
-        let eval = (0..svo_rows)
-            .map(|svo_idx| {
-                states.done().as_slice()[svo_idx] * d_eq.as_slice()[svo_idx]
-                    + states.carry().as_slice()[svo_idx] * d_t.as_slice()[svo_idx]
-                    + states.omega().as_slice()[svo_idx] * d_omega.as_slice()[svo_idx]
-            })
-            .sum();
-
-        // Cache one compressed successor table per SVO sumcheck round.
-        let rounds = (1..=self.num_variables_svo())
-            .map(|active_len| self.next_round_partials_suffix(d_eq, &d_t, &d_omega, active_len))
-            .collect::<Vec<_>>();
-
-        (eval, NextSvoPartials::new(rounds))
+        // Weight the three state tables against the payloads and cache one table per round.
+        self.eval_next_with(
+            [
+                states.done().as_slice(),
+                states.carry().as_slice(),
+                states.omega().as_slice(),
+            ],
+            [d_eq, &d_t, &d_omega],
+            |active_len| self.next_round_partials_suffix(d_eq, &d_t, &d_omega, active_len),
+        )
     }
 
     /// Evaluates a prefix-layout repeat-last-successor opening and caches its SVO rounds.
@@ -577,25 +572,63 @@ impl<F: Field, EF: ExtensionField<F>> SvoPoint<F, EF> {
         let d_carry = Poly::new(d_carry);
         let d_omega = Poly::new(d_omega);
 
-        // Closed-form successor state tables of the SVO point over all rows, built once.
+        // Closed-form successor state tables and plain equality weights, built once.
         let states = NextPartials::from_point(self.z_svo.as_slice());
-        // Plain equality weights of the SVO point over all rows, indexed by hypercube row.
         let eq = Poly::new_from_point(self.z_svo.as_slice(), EF::ONE);
 
-        // Opening value: sum the three-state successor weight against the payloads over every SVO row.
+        // Weight the three tables against the payloads and cache one table per round.
+        self.eval_next_with(
+            [
+                eq.as_slice(),
+                states.done().as_slice(),
+                states.omega().as_slice(),
+            ],
+            [&d_done, &d_carry, &d_omega],
+            |active_len| self.next_round_partials_prefix(&d_done, &d_carry, &d_omega, active_len),
+        )
+    }
+
+    /// Assembles a repeat-last-successor opening value and its per-round successor tables.
+    ///
+    /// # Overview
+    ///
+    /// - Each SVO row pairs three precomputed successor-weight tables with the matching payloads.
+    /// - The opening value sums those weighted contributions over every SVO row.
+    /// - One successor table is cached per SVO sumcheck round through the round tail.
+    ///
+    /// # Arguments
+    ///
+    /// - `weights`: the three per-row weight tables, in the same order as the payloads.
+    /// - `payloads`: the three per-row payloads, in the same order as the weights.
+    /// - `round_tail`: maps the number of active SVO variables to the cached round table.
+    ///
+    /// # Returns
+    ///
+    /// - The scalar opening value of the successor weight against the payloads.
+    /// - One cached successor table per SVO sumcheck round.
+    fn eval_next_with(
+        &self,
+        weights: [&[EF]; 3],
+        payloads: [&Poly<EF>; 3],
+        mut round_tail: impl FnMut(usize) -> NextPartials<EF>,
+    ) -> (EF, NextSvoPartials<EF>) {
+        let [w0, w1, w2] = weights;
+        let [p0, p1, p2] = payloads;
+        // Number of Boolean rows over the SVO variables.
+        let svo_rows = 1 << self.num_variables_svo();
+
+        // Opening value: sum each weight table against its payload over every SVO row.
         let eval = (0..svo_rows)
             .map(|svo_idx| {
-                eq.as_slice()[svo_idx] * d_done.as_slice()[svo_idx]
-                    + states.done().as_slice()[svo_idx] * d_carry.as_slice()[svo_idx]
-                    + states.omega().as_slice()[svo_idx] * d_omega.as_slice()[svo_idx]
+                w0[svo_idx] * p0.as_slice()[svo_idx]
+                    + w1[svo_idx] * p1.as_slice()[svo_idx]
+                    + w2[svo_idx] * p2.as_slice()[svo_idx]
             })
             .sum();
 
         // Cache one compressed successor table per SVO sumcheck round.
         let rounds = (1..=self.num_variables_svo())
-            .map(|active_len| {
-                self.next_round_partials_prefix(&d_done, &d_carry, &d_omega, active_len)
-            })
+            .map(&mut round_tail)
             .collect::<Vec<_>>();
 
         (eval, NextSvoPartials::new(rounds))
