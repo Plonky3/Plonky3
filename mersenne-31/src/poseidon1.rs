@@ -51,6 +51,13 @@ pub const MERSENNE31_POSEIDON1_PARTIAL_ROUNDS_16: usize = 14;
 /// With the +7.5% security margin and brute-force optimization: R_P = 30.
 pub const MERSENNE31_POSEIDON1_PARTIAL_ROUNDS_32: usize = 30;
 
+/// First column of the width-16 circulant MDS matrix used by Mersenne31 Poseidon1.
+///
+/// Suitable for the `mds_circ_col` field of [`Poseidon1Constants`] when building the
+/// width-16 Poseidon1 AIR.
+pub const MERSENNE31_POSEIDON1_MDS_CIRC_COL_16: [i64; 16] =
+    first_row_to_first_col(&MATRIX_CIRC_MDS_16_SML_ROW);
+
 /// Generic (non-SIMD) Poseidon1 permutation for Mersenne31.
 ///
 /// Uses the platform-independent Poseidon1 implementation with Karatsuba

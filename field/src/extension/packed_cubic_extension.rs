@@ -4,49 +4,29 @@
 
 use alloc::vec::Vec;
 use core::array;
-use core::fmt::Debug;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use p3_util::{flatten_to_base, reconstitute_from_base};
 use rand::distr::{Distribution, StandardUniform};
-use serde::{Deserialize, Serialize};
 
 use super::cubic_extension::{cubic_square, trinomial_cubic_mul};
-use super::{CubicTrinomialExtensionField, vector_add, vector_sub};
-use crate::extension::CubicTrinomialExtendable;
+use super::{CubicTrinomialExtensionField, PackedExtField, vector_add, vector_sub};
+use crate::extension::{CubicTrinomial, CubicTrinomialExtendable};
 use crate::{
     Algebra, BasedVectorSpace, Field, PackedField, PackedFieldExtension, PackedValue, Powers,
     PrimeCharacteristicRing, field_to_array,
 };
 
-/// Packed cubic extension field.
+/// Packed cubic extension field, one element per SIMD lane.
 ///
-/// This is a wrapper around `[PF; 3]` where `PF` is a packed field type.
-/// It enables SIMD-style operations on multiple cubic extension field elements.
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, PartialOrd, Ord)]
-#[repr(transparent)]
-#[must_use]
-pub struct PackedCubicTrinomialExtensionField<F: Field, PF: PackedField<Scalar = F>> {
-    #[serde(
-        with = "p3_util::array_serialization",
-        bound(serialize = "PF: Serialize", deserialize = "PF: Deserialize<'de>")
-    )]
-    pub(crate) value: [PF; 3],
-}
-
-impl<F: Field, PF: PackedField<Scalar = F>> PackedCubicTrinomialExtensionField<F, PF> {
-    const fn new(value: [PF; 3]) -> Self {
-        Self { value }
-    }
-}
+/// Type alias for the unified [`PackedExtField`] with `Shape = CubicTrinomial`.
+pub type PackedCubicTrinomialExtensionField<F, PF> = PackedExtField<F, PF, 3, CubicTrinomial>;
 
 impl<F: Field, PF: PackedField<Scalar = F>> Default for PackedCubicTrinomialExtensionField<F, PF> {
     #[inline]
     fn default() -> Self {
-        Self {
-            value: [PF::ZERO, PF::ZERO, PF::ZERO],
-        }
+        Self::new([PF::ZERO, PF::ZERO, PF::ZERO])
     }
 }
 
@@ -55,18 +35,14 @@ impl<F: Field, PF: PackedField<Scalar = F>> From<CubicTrinomialExtensionField<F>
 {
     #[inline]
     fn from(x: CubicTrinomialExtensionField<F>) -> Self {
-        Self {
-            value: x.value.map(Into::into),
-        }
+        Self::new(x.value.map(Into::into))
     }
 }
 
 impl<F: Field, PF: PackedField<Scalar = F>> From<PF> for PackedCubicTrinomialExtensionField<F, PF> {
     #[inline]
     fn from(x: PF) -> Self {
-        Self {
-            value: [x, PF::ZERO, PF::ZERO],
-        }
+        Self::new([x, PF::ZERO, PF::ZERO])
     }
 }
 
@@ -101,21 +77,13 @@ where
 {
     type PrimeSubfield = PF::PrimeSubfield;
 
-    const ZERO: Self = Self {
-        value: [PF::ZERO; 3],
-    };
+    const ZERO: Self = Self::new([PF::ZERO; 3]);
 
-    const ONE: Self = Self {
-        value: field_to_array(PF::ONE),
-    };
+    const ONE: Self = Self::new(field_to_array(PF::ONE));
 
-    const TWO: Self = Self {
-        value: field_to_array(PF::TWO),
-    };
+    const TWO: Self = Self::new(field_to_array(PF::TWO));
 
-    const NEG_ONE: Self = Self {
-        value: field_to_array(PF::NEG_ONE),
-    };
+    const NEG_ONE: Self = Self::new(field_to_array(PF::NEG_ONE));
 
     #[inline]
     fn from_prime_subfield(val: Self::PrimeSubfield) -> Self {
@@ -191,80 +159,26 @@ where
     }
 }
 
-// SAFETY: Memory layout is compatible with `[CubicTrinomialExtensionField<F>; WIDTH]`.
-unsafe impl<F, PF> PackedValue for PackedCubicTrinomialExtensionField<F, PF>
-where
-    F: CubicTrinomialExtendable,
-    PF: PackedField<Scalar = F>,
-{
-    type Value = CubicTrinomialExtensionField<F>;
-
-    const WIDTH: usize = PF::WIDTH;
-
-    #[inline]
-    fn from_slice(slice: &[Self::Value]) -> &Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe { &*slice.as_ptr().cast() }
-    }
-
-    #[inline]
-    fn from_slice_mut(slice: &mut [Self::Value]) -> &mut Self {
-        assert_eq!(slice.len(), Self::WIDTH);
-        unsafe { &mut *slice.as_mut_ptr().cast() }
-    }
-
-    #[inline]
-    fn from_fn<Fn: FnMut(usize) -> Self::Value>(mut f: Fn) -> Self {
-        let mut result = Self::default();
-        for i in 0..Self::WIDTH {
-            let val = f(i);
-            for j in 0..3 {
-                result.value[j].as_slice_mut()[i] = val.value[j];
-            }
-        }
-        result
-    }
-
-    #[inline]
-    fn as_slice(&self) -> &[Self::Value] {
-        unsafe {
-            core::slice::from_raw_parts(self as *const Self as *const Self::Value, Self::WIDTH)
-        }
-    }
-
-    #[inline]
-    fn as_slice_mut(&mut self) -> &mut [Self::Value] {
-        unsafe {
-            core::slice::from_raw_parts_mut(self as *mut Self as *mut Self::Value, Self::WIDTH)
-        }
-    }
-}
-
-// SAFETY: Implements all required trait bounds.
-unsafe impl<F, PF> PackedField for PackedCubicTrinomialExtensionField<F, PF>
-where
-    F: CubicTrinomialExtendable,
-    PF: PackedField<Scalar = F>,
-{
-    type Scalar = CubicTrinomialExtensionField<F>;
-}
-
 impl<F: CubicTrinomialExtendable> PackedFieldExtension<F, CubicTrinomialExtensionField<F>>
     for PackedCubicTrinomialExtensionField<F, F::Packing>
 {
     #[inline]
-    fn from_ext_slice(ext_slice: &[CubicTrinomialExtensionField<F>]) -> Self {
-        let width = F::Packing::WIDTH;
-        assert_eq!(ext_slice.len(), width);
+    fn from_ext_fn(f: impl Fn(usize) -> CubicTrinomialExtensionField<F>) -> Self {
+        Self::new(F::Packing::pack_columns_fn(|lane| f(lane).value))
+    }
 
-        Self::new(F::Packing::pack_columns_fn(|lane| ext_slice[lane].value))
+    #[inline]
+    fn add_assign_lane(&mut self, lane: usize, value: CubicTrinomialExtensionField<F>) {
+        // Add each coefficient into its own base packing at the shared lane.
+        for (coeff, v) in self.value.iter_mut().zip(value.value) {
+            coeff.as_slice_mut()[lane] += v;
+        }
     }
 
     #[inline]
     fn packed_ext_powers(base: CubicTrinomialExtensionField<F>) -> Powers<Self> {
-        use itertools::Itertools;
         let width = F::Packing::WIDTH;
-        let powers = base.powers().take(width + 1).collect_vec();
+        let powers = base.powers().collect_n(width + 1);
         // Transpose first WIDTH powers
         let current = Self::from_ext_slice(&powers[..width]);
 
@@ -314,7 +228,7 @@ where
     #[inline]
     fn add(self, rhs: CubicTrinomialExtensionField<F>) -> Self {
         let value = vector_add(&self.value, &rhs.value);
-        Self { value }
+        Self::new(value)
     }
 }
 
@@ -403,7 +317,7 @@ where
     #[inline]
     fn sub(self, rhs: CubicTrinomialExtensionField<F>) -> Self {
         let value = vector_sub(&self.value, &rhs.value);
-        Self { value }
+        Self::new(value)
     }
 }
 
@@ -418,7 +332,7 @@ where
     fn sub(self, rhs: PF) -> Self {
         let mut res = self.value;
         res[0] -= rhs;
-        Self { value: res }
+        Self::new(res)
     }
 }
 
@@ -492,9 +406,7 @@ where
 
     #[inline]
     fn mul(self, rhs: PF) -> Self {
-        Self {
-            value: self.value.map(|x| x * rhs),
-        }
+        Self::new(self.value.map(|x| x * rhs))
     }
 }
 
@@ -589,26 +501,17 @@ where
     }
 }
 
-impl<F, PF> Div for PackedCubicTrinomialExtensionField<F, PF>
-where
-    F: CubicTrinomialExtendable,
-    PF: PackedField<Scalar = F>,
-{
+impl<F: CubicTrinomialExtendable> Div for PackedCubicTrinomialExtensionField<F, F::Packing> {
     type Output = Self;
 
     #[allow(clippy::suspicious_arithmetic_impl)]
     #[inline]
     fn div(self, rhs: Self) -> Self {
-        let rhs_inv = Self::from_fn(|i| rhs.as_slice()[i].inverse());
-        self * rhs_inv
+        self * crate::invert_packed_extension::<F, CubicTrinomialExtensionField<F>>(rhs)
     }
 }
 
-impl<F, PF> DivAssign for PackedCubicTrinomialExtensionField<F, PF>
-where
-    F: CubicTrinomialExtendable,
-    PF: PackedField<Scalar = F>,
-{
+impl<F: CubicTrinomialExtendable> DivAssign for PackedCubicTrinomialExtensionField<F, F::Packing> {
     #[inline]
     fn div_assign(&mut self, rhs: Self) {
         *self = *self / rhs;

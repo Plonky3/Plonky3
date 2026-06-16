@@ -548,6 +548,33 @@ pub trait BasedVectorSpace<F: PrimeCharacteristicRing>: Sized {
     }
 }
 
+/// Values that can act as sponge lanes for delimiter padding.
+///
+/// This is used by symmetric sponge adapters that need canonical `0` and `1` symbols while
+/// supporting both field/ring-based lanes and `u64`-based Keccak lanes behind one API.
+pub trait SpongePaddingValue: Copy {
+    /// The empty-lane value.
+    const PAD_ZERO: Self;
+
+    /// The delimiter value injected after the final absorbed element.
+    const PAD_ONE: Self;
+}
+
+impl<T: PrimeCharacteristicRing + Copy> SpongePaddingValue for T {
+    const PAD_ZERO: Self = Self::ZERO;
+    const PAD_ONE: Self = Self::ONE;
+}
+
+impl SpongePaddingValue for u64 {
+    const PAD_ZERO: Self = 0;
+    const PAD_ONE: Self = 1;
+}
+
+impl<const N: usize> SpongePaddingValue for [u64; N] {
+    const PAD_ZERO: Self = [0; N];
+    const PAD_ONE: Self = [1; N];
+}
+
 impl<F: PrimeCharacteristicRing> BasedVectorSpace<F> for F {
     const DIMENSION: usize = 1;
 
@@ -986,6 +1013,20 @@ pub trait Field:
         self.try_inverse().expect("Tried to invert zero")
     }
 
+    /// A square root of this field element, if one exists.
+    ///
+    /// Returns `Some(r)` with `r * r == *self` when this element is a quadratic
+    /// residue, and `None` when it is a quadratic non-residue. `ZERO` returns
+    /// `Some(ZERO)`. When two square roots exist, which one is returned is
+    /// unspecified.
+    ///
+    /// The default implementation uses the Tonelli–Shanks algorithm. Fields with
+    /// a more direct formula (e.g. those with `|F| ≡ 3 mod 4`) may override it.
+    #[must_use]
+    fn try_sqrt(&self) -> Option<Self> {
+        crate::sqrt::tonelli_shanks(*self)
+    }
+
     /// Add two slices of field elements together, returning the result in the first slice.
     ///
     /// Makes use of packing to speed up the addition.
@@ -1013,6 +1054,25 @@ pub trait Field:
         }
     }
 
+    /// Accumulate `acc[c * N + j] += scales[j] * row[c]` over a stream of packed rows.
+    ///
+    /// Each item provides one matrix row as `acc.len() / N` packed base-field words,
+    /// together with the row's `N` extension-field weights. `acc` is laid out with the
+    /// `N` weights of each word group adjacent, and its length must be a multiple of `N`.
+    ///
+    /// This is the inner kernel of batched columnwise (weighted-sum-of-rows) dot
+    /// products. Fields may override it to defer modular reductions across rows.
+    fn batched_columnwise_dot_product<EF, R, I, const N: usize>(
+        acc: &mut [EF::ExtensionPacking],
+        items: I,
+    ) where
+        EF: ExtensionField<Self>,
+        R: Iterator<Item = Self::Packing>,
+        I: Iterator<Item = (R, [EF; N])>,
+    {
+        generic_batched_columnwise_dot_product::<Self, EF, R, I, N>(acc, items);
+    }
+
     /// The number of elements in the field.
     ///
     /// This will either be prime if the field is a PrimeField or a power of a
@@ -1028,6 +1088,30 @@ pub trait Field:
     #[inline]
     fn bits() -> usize {
         Self::order().bits() as usize
+    }
+}
+
+/// The generic accumulation behind [`Field::batched_columnwise_dot_product`]:
+/// `acc[c * N + j] += scales[j] * row[c]` over a stream of packed rows.
+///
+/// Kept as a free function so that specialized `Field` implementations can fall back
+/// to it for extension degrees their kernels do not cover.
+pub fn generic_batched_columnwise_dot_product<F, EF, R, I, const N: usize>(
+    acc: &mut [EF::ExtensionPacking],
+    items: I,
+) where
+    F: Field,
+    EF: ExtensionField<F>,
+    R: Iterator<Item = F::Packing>,
+    I: Iterator<Item = (R, [EF; N])>,
+{
+    for (row, scales) in items {
+        let packed_scales = scales.map(EF::ExtensionPacking::from);
+        for (acc_c, r) in acc.chunks_exact_mut(N).zip(row) {
+            for (a, &s) in acc_c.iter_mut().zip(&packed_scales) {
+                *a += s * r;
+            }
+        }
     }
 }
 
@@ -1120,6 +1204,24 @@ pub trait ExtensionField<Base: Field>: Field + Algebra<Base> + BasedVectorSpace<
     /// Otherwise return None.
     #[must_use]
     fn as_base(&self) -> Option<Base>;
+
+    /// Reassemble an element of `Self` from `D = DIMENSION` coefficients in `Self`
+    /// via `Σⱼ basisⱼ · coeffsⱼ`. Returns `None` if `coeffs.len() != Self::DIMENSION`.
+    ///
+    /// This is the `Self`-coefficient counterpart to
+    /// [`BasedVectorSpace::from_basis_coefficients_slice`], which takes coefficients
+    /// in `Base`. It is the natural "lifting" operation in commit-and-open protocols:
+    /// if an extension polynomial decomposes as `f(X) = Σⱼ basisⱼ · fⱼ(X)` with
+    /// `fⱼ` over `Base`, then `f(z) = Σⱼ basisⱼ · fⱼ(z)` for any `z ∈ Self`.
+    #[inline]
+    #[must_use]
+    fn from_ext_basis_coefficients(coeffs: &[Self]) -> Option<Self> {
+        (coeffs.len() == Self::DIMENSION).then(|| {
+            (0..Self::DIMENSION)
+                .map(|j| Self::ith_basis_element(j).unwrap() * coeffs[j])
+                .sum()
+        })
+    }
 }
 
 // Every field is trivially a one dimensional extension over itself.
@@ -1134,6 +1236,11 @@ impl<F: Field> ExtensionField<F> for F {
     #[inline]
     fn as_base(&self) -> Option<F> {
         Some(*self)
+    }
+
+    #[inline]
+    fn from_ext_basis_coefficients(coeffs: &[Self]) -> Option<Self> {
+        (coeffs.len() == 1).then(|| coeffs[0])
     }
 }
 
@@ -1182,11 +1289,18 @@ impl<R: PrimeCharacteristicRing> Powers<R> {
             .zip(self)
             .for_each(|(out, next)| *out = next);
     }
+}
 
+impl<F: Field> Powers<F> {
     /// Wrapper for `self.take(n).collect()`.
+    ///
+    /// Bounded to `F: Field` on purpose: the body resolves `.collect()` to the inherent
+    /// [`BoundedPowers::collect`] SIMD fast path, which only exists under `F: Field`.
+    /// Defining this method under a wider bound (e.g. `PrimeCharacteristicRing`) would
+    /// silently fall back to `Iterator::collect` and bypass packed-field acceleration.
     #[inline]
     #[must_use]
-    pub fn collect_n(self, n: usize) -> Vec<R> {
+    pub fn collect_n(self, n: usize) -> Vec<F> {
         self.take(n).collect()
     }
 }

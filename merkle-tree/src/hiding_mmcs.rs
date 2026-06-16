@@ -1,5 +1,4 @@
 use alloc::vec::Vec;
-use core::cell::RefCell;
 
 use itertools::Itertools;
 use p3_commit::{BatchOpening, BatchOpeningRef, Mmcs};
@@ -13,7 +12,9 @@ use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use spin::Mutex;
 
+use crate::mmcs::check_widths;
 use crate::{MerkleCap, MerkleTree, MerkleTreeError, MerkleTreeMmcs};
 
 /// A vector commitment scheme backed by a `MerkleTree`.
@@ -35,7 +36,7 @@ use crate::{MerkleCap, MerkleTree, MerkleTreeError, MerkleTreeMmcs};
 /// - `H`: the leaf hasher
 /// - `C`: the digest compression function
 /// - `R`: a random number generator for blinding leaves
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct MerkleTreeHidingMmcs<
     P,
     PW,
@@ -47,7 +48,7 @@ pub struct MerkleTreeHidingMmcs<
     const SALT_ELEMS: usize,
 > {
     inner: MerkleTreeMmcs<P, PW, H, C, N, DIGEST_ELEMS>,
-    rng: RefCell<R>,
+    rng: Mutex<R>,
 }
 
 impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize>
@@ -66,12 +67,26 @@ impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS
         let inner = MerkleTreeMmcs::new(hash, compress, cap_height);
         Self {
             inner,
-            rng: RefCell::new(rng),
+            rng: Mutex::new(rng),
         }
     }
 
     pub const fn cap_height(&self) -> usize {
         self.inner.cap_height()
+    }
+}
+
+impl<P, PW, H, C, R, const N: usize, const DIGEST_ELEMS: usize, const SALT_ELEMS: usize> Clone
+    for MerkleTreeHidingMmcs<P, PW, H, C, R, N, DIGEST_ELEMS, SALT_ELEMS>
+where
+    MerkleTreeMmcs<P, PW, H, C, N, DIGEST_ELEMS>: Clone,
+    R: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            rng: Mutex::new(self.rng.lock().clone()),
+        }
     }
 }
 
@@ -87,7 +102,7 @@ where
     C: PseudoCompressionFunction<[PW::Value; DIGEST_ELEMS], N>
         + PseudoCompressionFunction<[PW; DIGEST_ELEMS], N>
         + Sync,
-    R: Rng + Clone,
+    R: Rng + Clone + Send,
     PW::Value: Eq + Clone,
     [PW::Value; DIGEST_ELEMS]: Serialize + for<'de> Deserialize<'de>,
     StandardUniform: Distribution<P::Value>,
@@ -108,11 +123,11 @@ where
         &self,
         inputs: Vec<M>,
     ) -> (Self::Commitment, Self::ProverData<M>) {
+        let mut rng = self.rng.lock();
         let salted_inputs = inputs
             .into_iter()
             .map(|mat| {
-                let salts =
-                    RowMajorMatrix::rand(&mut *self.rng.borrow_mut(), mat.height(), SALT_ELEMS);
+                let salts = RowMajorMatrix::rand(&mut *rng, mat.height(), SALT_ELEMS);
                 HorizontalPair::new(mat, salts)
             })
             .collect();
@@ -151,13 +166,28 @@ where
     ) -> Result<(), Self::Error> {
         let (opened_values, (salts, siblings)) = batch_opening.unpack();
 
+        // Pin each opened row to its matrix width before salting.
+        // The inner tree only sees salted widths.
+        // Without this, an over-long row could be masked by an under-long salt.
+        check_widths(dimensions, opened_values)?;
+
         let opened_salted_values = zip_eq(opened_values, salts, MerkleTreeError::WrongBatchSize)?
             .map(|(opened, salt)| opened.iter().chain(salt.iter()).copied().collect_vec())
             .collect_vec();
 
+        // The inner tree commits to rows widened by the salt columns,
+        // so the widths must be widened the same way.
+        let salted_dimensions = dimensions
+            .iter()
+            .map(|dims| Dimensions {
+                width: dims.width + SALT_ELEMS,
+                height: dims.height,
+            })
+            .collect_vec();
+
         self.inner.verify_batch(
             commit,
-            dimensions,
+            &salted_dimensions,
             index,
             BatchOpeningRef::new(&opened_salted_values, siblings),
         )
@@ -175,6 +205,7 @@ mod tests {
     use p3_matrix::Matrix;
     use p3_matrix::dense::RowMajorMatrix;
     use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use p3_util::assert_sync;
     use rand::SeedableRng;
     use rand::rngs::SmallRng;
 
@@ -230,5 +261,46 @@ mod tests {
         let (commit, prover_data) = mmcs.commit(mats);
         let batch_proof = mmcs.open_batch(17, &prover_data);
         mmcs.verify_batch(&commit, &dims, 17, (&batch_proof).into())
+    }
+
+    #[test]
+    fn verify_rejects_wrong_row_width() {
+        let mut rng = SmallRng::seed_from_u64(2);
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm);
+
+        // Commit to one matrix of width 4 through the hiding wrapper.
+        let mat = RowMajorMatrix::<F>::rand(&mut rng, 8, 4);
+        let dims = vec![mat.dimensions()];
+        let mmcs = MyMmcs::new(hash, compress, 0, rng);
+        let (commit, prover_data) = mmcs.commit(vec![mat]);
+
+        // Mutation: append one extra element to the opened row.
+        //
+        //     opened row:  [a, b, c, d, EXTRA]   (5 values, width is 4)
+        let mut opening = mmcs.open_batch(3, &prover_data);
+        opening.opened_values[0].push(F::ONE);
+
+        // The width is checked on the unsalted row, before salt columns are appended.
+        //
+        //     expected: 4 (matrix width)
+        //     got:      5 (opened row length)
+        let err = mmcs
+            .verify_batch(&commit, &dims, 3, (&opening).into())
+            .expect_err("row longer than the matrix width must be rejected");
+        assert!(matches!(
+            err,
+            MerkleTreeError::WrongWidth {
+                matrix: 0,
+                expected: 4,
+                got: 5,
+            }
+        ));
+    }
+
+    #[test]
+    fn hiding_mmcs_is_sync() {
+        assert_sync::<MyMmcs>();
     }
 }

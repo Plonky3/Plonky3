@@ -87,29 +87,49 @@ where
 
         let trace_len = trace_domain.size();
         let lde_len = lde_domain.size();
+        assert!(
+            lde_len >= trace_len,
+            "LDE domain size ({lde_len}) must be >= trace domain size ({trace_len})",
+        );
+        assert!(
+            lde_len.is_multiple_of(trace_len),
+            "LDE domain size ({lde_len}) must be divisible by trace domain size ({trace_len})",
+        );
         let lde_shift = lde_domain.shift();
         let blowup = lde_len / trace_len;
+        assert!(
+            blowup.is_power_of_two(),
+            "blowup factor ({blowup}) must be a power of two",
+        );
         let log_blowup = log2_strict_usize(blowup);
 
-        // Find the maximum period and validate all columns
-        let max_period = periodic_table
-            .iter()
-            .map(|col| {
-                let period = col.len();
-                debug_assert!(
-                    period.is_power_of_two(),
-                    "periodic column length must be a power of 2"
-                );
-                period
-            })
-            .max()
-            .unwrap();
+        for col in periodic_table {
+            let period = col.len();
+            assert!(
+                period > 0 && period.is_power_of_two(),
+                "periodic column length must be a non-zero power of 2, got {period}",
+            );
+            assert!(
+                trace_len.is_multiple_of(period),
+                "trace domain size ({trace_len}) must be divisible by periodic column length ({period})",
+            );
+        }
+        let max_period = periodic_table.iter().map(|c| c.len()).max().unwrap();
 
-        let extended_height = max_period * blowup;
+        let extended_height = max_period
+            .checked_mul(blowup)
+            .expect("extended height overflow when computing max_period * blowup");
         let num_cols = periodic_table.len();
+        let row_major_capacity = extended_height
+            .checked_mul(num_cols)
+            .expect("row-major periodic table capacity overflow");
 
         // Compute the shift for the periodic subdomain at max_period.
         // This aligns the periodic domain with the LDE domain so modular indexing works.
+        //
+        // Divisibility holds by construction: lde_len = blowup * trace_len.
+        // extended_height = blowup * max_period, and max_period divides trace_len.
+        // So extended_height divides lde_len.
         let periodic_shift = lde_shift.exp_u64((lde_len / extended_height) as u64);
 
         let dft = Dft::default();
@@ -134,7 +154,7 @@ where
         }
 
         // Convert from column-major to row-major storage
-        let mut row_major_values = Vec::with_capacity(extended_height * num_cols);
+        let mut row_major_values = Vec::with_capacity(row_major_capacity);
         for row_idx in 0..extended_height {
             for col in &columns {
                 row_major_values.push(col[row_idx]);
@@ -155,15 +175,17 @@ where
             .iter()
             .map(|col| {
                 let period = col.len();
-                debug_assert!(
-                    period.is_power_of_two(),
-                    "periodic column length must be a power of 2"
+                assert!(
+                    period > 0 && period.is_power_of_two(),
+                    "periodic column length must be a non-zero power of 2, got {period}",
+                );
+                assert!(
+                    trace_len.is_multiple_of(period),
+                    "trace domain size ({trace_len}) must be divisible by periodic column length ({period})",
                 );
 
-                let exponent = (trace_len / period) as u64;
-
                 // Project point to periodic subdomain: ζ^(n/p)
-                let periodic_point = point.exp_u64(exponent);
+                let periodic_point = point.exp_u64((trace_len / period) as u64);
 
                 // Evaluate the periodic polynomial at the projected point
                 eval_periodic_poly(col, periodic_point)

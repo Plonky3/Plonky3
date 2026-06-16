@@ -28,6 +28,18 @@ where
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     Folding: FriFoldingStrategy<Val, Challenge>,
 {
+    assert!(
+        params.max_log_arity > 0,
+        "max_log_arity must be at least 1 to guarantee folding progress"
+    );
+
+    // A zero-query instance performs no low-degree spot checks.
+    // The verifier rejects it, so refuse to emit one locally.
+    assert!(
+        params.num_queries > 0,
+        "num_queries must be at least 1 for Circle-FRI soundness"
+    );
+
     // check sorted descending
     assert!(
         inputs
@@ -62,16 +74,18 @@ where
 
     CircleFriProof {
         commit_phase_commits: commit_phase_result.commits,
+        commit_pow_witnesses: commit_phase_result.pow_witnesses,
         query_proofs,
         final_poly: commit_phase_result.final_poly,
         pow_witness,
     }
 }
 
-struct CommitPhaseResult<F: Field, M: Mmcs<F>> {
+struct CommitPhaseResult<F: Field, M: Mmcs<F>, Witness> {
     commits: Vec<M::Commitment>,
     data: Vec<M::ProverData<RowMajorMatrix<F>>>,
     log_arities: Vec<usize>,
+    pow_witnesses: Vec<Witness>,
     final_poly: F,
 }
 
@@ -81,19 +95,25 @@ fn commit_phase<Folding, Val, Challenge, M, Challenger>(
     params: &FriParameters<M>,
     inputs: Vec<Vec<Challenge>>,
     challenger: &mut Challenger,
-) -> CommitPhaseResult<Challenge, M>
+) -> CommitPhaseResult<Challenge, M, Challenger::Witness>
 where
     Val: Field,
     Challenge: ExtensionField<Val>,
     M: Mmcs<Challenge>,
-    Challenger: FieldChallenger<Val> + CanObserve<M::Commitment>,
+    Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     Folding: FriFoldingStrategy<Val, Challenge>,
 {
+    assert!(
+        params.max_log_arity > 0,
+        "max_log_arity must be at least 1 to guarantee folding progress"
+    );
+
     let mut inputs_iter = inputs.into_iter().peekable();
     let mut folded = inputs_iter.next().unwrap();
     let mut commits = vec![];
     let mut data = vec![];
     let mut log_arities = vec![];
+    let mut pow_witnesses = vec![];
 
     // For Circle, we fold down to blowup elements (no separate final_poly_len)
     let log_final_height = params.log_blowup;
@@ -115,6 +135,8 @@ where
         let leaves = RowMajorMatrix::new(folded, arity);
         let (commit, prover_data) = params.mmcs.commit_matrix(leaves);
         challenger.observe(commit.clone());
+
+        pow_witnesses.push(challenger.grind(params.commit_proof_of_work_bits));
 
         let beta: Challenge = challenger.sample_algebra_element();
         // We passed ownership of `current` to the MMCS, so get a reference to it
@@ -141,6 +163,7 @@ where
         commits,
         data,
         log_arities,
+        pow_witnesses,
         final_poly,
     }
 }

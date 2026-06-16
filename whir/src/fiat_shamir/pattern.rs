@@ -55,6 +55,8 @@ pub enum Sample {
     /// to keep the domain separator synchronized with the actual prover/verifier
     /// transcript.
     TranscriptCheckpoint,
+    /// Combining challenge `eps` in the HVZK sumcheck overlay.
+    ZkSumcheckCombinationRandomness,
 }
 
 impl Sample {
@@ -80,8 +82,6 @@ pub enum Observe {
     /// Only c_0 and c_2 are sent; c_1 is derived by the verifier
     /// as `claimed_sum - c_0`.
     SumcheckPoly,
-    /// Evaluation answers at STIR query positions.
-    StirAnswers,
     /// Coefficients of the final folded polynomial.
     FinalCoeffs,
     /// Proof-of-work nonce solving the grinding challenge.
@@ -92,6 +92,19 @@ pub enum Observe {
     /// to the specific protocol configuration. Each parameter is
     /// encoded as a (marker, value) pair.
     ProtocolParam,
+    /// Sum of all mask evaluations in the HVZK sumcheck overlay.
+    ZkSumcheckMuTilde,
+    /// Coefficients sent by one HVZK sumcheck round.
+    ///
+    /// The wire skips the linear coefficient and has
+    /// `max(ell_zk, 3) - 1` extension-field elements.
+    ZkSumcheckPoly,
+    /// Joint claim bound before an HVZK residual sumcheck batch.
+    ZkSumcheckClaim,
+    /// Fresh-side claim `mu_g` of the HVZK base case.
+    ZkBaseCaseClaim,
+    /// Blinded one-time-pad reveals of the HVZK base case.
+    ZkBaseCaseReveal,
 }
 
 impl Observe {

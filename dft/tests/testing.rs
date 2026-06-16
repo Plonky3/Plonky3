@@ -6,7 +6,7 @@ use core::mem::MaybeUninit;
 
 use p3_baby_bear::BabyBear;
 use p3_dft::{
-    Butterfly, DifButterfly, DifButterflyZeros, DitButterfly, NaiveDft, Radix2Bowers,
+    Butterfly, DifButterfly, DifButterflyZeros, DitButterfly, Layout, NaiveDft, Radix2Bowers,
     Radix2DFTSmallBatch, Radix2Dit, Radix2DitParallel, TwiddleFreeButterfly, TwoAdicSubgroupDft,
 };
 use p3_field::{Field, PrimeCharacteristicRing, TwoAdicField};
@@ -208,7 +208,7 @@ proptest! {
         let mut rng = SmallRng::seed_from_u64(seed);
         let mut row1: Vec<F> = (0..w).map(|_| rng.random()).collect();
         // Second row is all zeros, matching the zero-padded precondition.
-        let mut row2: Vec<F> = vec![F::ZERO; w];
+        let mut row2: Vec<F> = F::zero_vec(w);
         let orig1 = row1.clone();
 
         DifButterflyZeros(twiddle).apply_to_rows(&mut row1, &mut row2);
@@ -514,7 +514,7 @@ fn dft_all_zeros() {
     for log_h in 0..=6 {
         let h = 1 << log_h;
         // Build a zero matrix with 3 columns.
-        let mat = RowMajorMatrix::new(vec![F::ZERO; h * 3], 3);
+        let mat = RowMajorMatrix::new(F::zero_vec(h * 3), 3);
 
         // Check two backends as representative (the cross-impl tests
         // cover all five with randomized inputs).
@@ -532,7 +532,7 @@ fn idft_all_zeros() {
     // coefficient vector.
     for log_h in 0..=6 {
         let h = 1 << log_h;
-        let mat = RowMajorMatrix::new(vec![F::ZERO; h * 3], 3);
+        let mat = RowMajorMatrix::new(F::zero_vec(h * 3), 3);
 
         let dit = Radix2Dit::default().idft_batch(mat.clone());
         assert!(dit.values.iter().all(|x| x.is_zero()), "log_h={log_h}");
@@ -552,7 +552,7 @@ fn dft_constant_polynomial() {
         let h = 1 << log_h;
 
         // Coefficient vector: c followed by zeros.
-        let mut vals = vec![F::ZERO; h];
+        let mut vals = F::zero_vec(h);
         vals[0] = c;
         let mat = RowMajorMatrix::new(vals, 1);
 
@@ -682,5 +682,63 @@ proptest! {
         for (i, &e) in expected.iter().enumerate() {
             prop_assert_eq!(small_batch.values[i], e, "SmallBatch mismatch at point {}", i);
         }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// `coset_lde_batch_with_transform`
+// -----------------------------------------------------------------------------
+
+proptest! {
+    /// A per-row scaling closure (whose factor depends on the natural-order
+    /// coefficient index) must agree across all backends, regardless of
+    /// whether the closure observes a natural- or bit-reversed-memory buffer.
+    ///
+    /// Choosing factor = k+1 also exercises the no-op case (k=0 → factor=1).
+    #[test]
+    fn coset_lde_with_per_row_transform_agrees_across_backends(
+        seed: u64, log_h in 1usize..=6, w in 1usize..=3,
+        added_bits in 0usize..=2, shift in arb_field_elem(),
+    ) {
+        let h = 1 << log_h;
+        let mat = rand_matrix(seed, h, w);
+
+        let make_closure = move |log_h: usize| {
+            move |coeffs: &mut p3_matrix::dense::RowMajorMatrixViewMut<'_, F>, layout: Layout| {
+                let width = coeffs.width();
+                let n_rows = coeffs.values.len() / width;
+                for m in 0..n_rows {
+                    let k = match layout {
+                        Layout::Natural => m,
+                        Layout::BitReversed => p3_util::reverse_bits_len(m, log_h),
+                    };
+                    let factor = F::from_u8((k as u8) + 1);
+                    for v in &mut coeffs.values[m * width..(m + 1) * width] {
+                        *v *= factor;
+                    }
+                }
+            }
+        };
+
+        let naive = NaiveDft
+            .coset_lde_batch_with_transform(mat.clone(), added_bits, shift, make_closure(log_h))
+            .to_row_major_matrix();
+        let dit = Radix2Dit::default()
+            .coset_lde_batch_with_transform(mat.clone(), added_bits, shift, make_closure(log_h))
+            .to_row_major_matrix();
+        let bowers = Radix2Bowers
+            .coset_lde_batch_with_transform(mat.clone(), added_bits, shift, make_closure(log_h))
+            .to_row_major_matrix();
+        let parallel = Radix2DitParallel::default()
+            .coset_lde_batch_with_transform(mat.clone(), added_bits, shift, make_closure(log_h))
+            .to_row_major_matrix();
+        let small_batch = Radix2DFTSmallBatch::default()
+            .coset_lde_batch_with_transform(mat, added_bits, shift, make_closure(log_h))
+            .to_row_major_matrix();
+
+        prop_assert_eq!(&naive, &dit);
+        prop_assert_eq!(&naive, &bowers);
+        prop_assert_eq!(&naive, &parallel);
+        prop_assert_eq!(&naive, &small_batch);
     }
 }

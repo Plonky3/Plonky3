@@ -15,10 +15,10 @@ use serde::Serialize;
 /// The proximity gaps analysis is based on:
 /// - **[BCI+20]**: Ben-Sasson, Carmon, Ishai, Kopparty, Saraf. "Proximity Gaps for Reed-Solomon Codes".
 ///   FOCS 2020. <https://eprint.iacr.org/2020/654>
-/// - **[BCSS25]**: Ben-Sasson, Carmon, Haboeck, Kopparty, Saraf. "On Proximity Gaps for Reed-Solomon Codes".
+/// - **\[BCSS25\]**: Ben-Sasson, Carmon, Haboeck, Kopparty, Saraf. "On Proximity Gaps for Reed-Solomon Codes".
 ///   <https://eprint.iacr.org/2025/2055>
 ///
-/// The [BCSS25] paper significantly improves the Johnson bound proximity gaps from `O(n^2/eta^7)` to `O(n/eta^5)`,
+/// The \[BCSS25\] paper significantly improves the Johnson bound proximity gaps from `O(n^2/eta^7)` to `O(n/eta^5)`,
 /// enabling provable 128-bit security with smaller extension fields (e.g., degree-5 extension of KoalaBear).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum SecurityAssumption {
@@ -34,9 +34,9 @@ pub enum SecurityAssumption {
     ///
     /// # Proximity Gaps Improvement
     ///
-    /// The error bound uses Theorem 1.5 from [BCSS25]:
+    /// The error bound uses Theorem 1.5 from \[BCSS25\]:
     /// - **Old [BCI+20]**: `a = O(n^2/eta^7)` exceptional z's
-    /// - **New [BCSS25]**: `a = O(n/eta^5)` exceptional z's
+    /// - **New \[BCSS25\]**: `a = O(n/eta^5)` exceptional z's
     ///
     /// This improvement of factor `n*eta^2` translates to approximately `log_2(n)` additional bits of security,
     /// making provable 128-bit security achievable with degree-5 extensions of small prime fields.
@@ -54,12 +54,17 @@ impl SecurityAssumption {
     /// E.g. in JB proximity gaps holds for every delta in (0, 1 - sqrt(rho)).
     /// eta is the distance between the chosen proximity parameter and the bound.
     /// I.e. in JB delta = 1 - sqrt(rho) - eta and in CB delta = 1 - rho - eta.
-    // TODO: Maybe it makes more sense to be multiplicative. I think this can be set in a better way.
+    /// # Panics
+    ///
+    /// Panics when called with [`SecurityAssumption::UniqueDecoding`]: eta is
+    /// undefined in UD (`delta = (1 - rho) / 2`, with no eta term). All
+    /// current callers special-case the UD branch before reaching the
+    /// eta-dependent arithmetic; the panic locks down that invariant so a
+    /// future refactor that strays into the eta path under UD fails loudly.
     #[must_use]
-    pub const fn log_eta(&self, log_inv_rate: usize) -> f64 {
+    pub(crate) const fn log_eta(&self, log_inv_rate: usize) -> f64 {
         match self {
-            // We don't use eta in UD
-            Self::UniqueDecoding => 0., // TODO: Maybe just panic and avoid calling it in UD?
+            Self::UniqueDecoding => panic!("log_eta is undefined for UniqueDecoding"),
             // Set as sqrt(rho)/20
             Self::JohnsonBound => -(0.5 * log_inv_rate as f64 + LOG2_10 + 1.),
             // Set as rho/20
@@ -69,20 +74,20 @@ impl SecurityAssumption {
 
     /// Given a RS code (specified by the log of the degree and log inv of the rate), compute the list size at the specified distance delta.
     #[must_use]
-    pub const fn list_size_bits(&self, log_degree: usize, log_inv_rate: usize) -> f64 {
-        let log_eta = self.log_eta(log_inv_rate);
+    pub(crate) const fn list_size_bits(&self, log_degree: usize, log_inv_rate: usize) -> f64 {
         match self {
             // In UD the list size is 1
             Self::UniqueDecoding => 0.,
 
             // By the JB, RS codes are (1 - sqrt(rho) - eta, (2*eta*sqrt(rho))^-1)-list decodable.
             Self::JohnsonBound => {
+                let log_eta = self.log_eta(log_inv_rate);
                 let log_inv_sqrt_rate: f64 = log_inv_rate as f64 / 2.;
                 log_inv_sqrt_rate - (1. + log_eta)
             }
 
             // In CB we assume that RS codes are (1 - rho - eta, d/rho*eta)-list decodable (see Conjecture 5.6 in STIR).
-            Self::CapacityBound => (log_degree + log_inv_rate) as f64 - log_eta,
+            Self::CapacityBound => (log_degree + log_inv_rate) as f64 - self.log_eta(log_inv_rate),
         }
     }
 
@@ -91,7 +96,7 @@ impl SecurityAssumption {
     ///
     /// # Johnson Bound Improvement
     ///
-    /// For the Johnson bound case, this uses the improved Theorem 1.5 from [BCSS25]:
+    /// For the Johnson bound case, this uses the improved Theorem 1.5 from \[BCSS25\]:
     ///
     /// > "On Proximity Gaps for Reed-Solomon Codes" (eprint 2025/2055)
     /// > Ben-Sasson, Carmon, Haboeck, Kopparty, Saraf
@@ -110,12 +115,12 @@ impl SecurityAssumption {
     /// | Reference | Bound on exceptional z's | Proximity loss |
     /// |-----------|--------------------------|----------------|
     /// | [BCI+20]  | `O(n^2/eta^7)`             | 0              |
-    /// | [BCSS25]  | `O(n/eta^5)`               | 0              |
+    /// | \[BCSS25\]  | `O(n/eta^5)`               | 0              |
     ///
     /// The improvement factor of `n*eta^2` translates to approximately `log_2(n)` additional bits
     /// of provable security, enabling 128-bit security with degree-5 extensions of KoalaBear.
     #[must_use]
-    pub fn prox_gaps_error(
+    pub(crate) fn prox_gaps_error(
         &self,
         log_degree: usize,
         log_inv_rate: usize,
@@ -127,14 +132,12 @@ impl SecurityAssumption {
             "num_functions must be >= 2 to compute proximity gaps error",
         );
 
-        let log_eta = self.log_eta(log_inv_rate);
-
         // Note that this does not include the field_size
         let error = match self {
             // In UD the error is |L|/|F| = d/(rho*|F|)
             Self::UniqueDecoding => (log_degree + log_inv_rate) as f64,
 
-            // From Theorem 1.5 in [BCSS25] "On Proximity Gaps for Reed-Solomon Codes":
+            // From Theorem 1.5 in \[BCSS25\] "On Proximity Gaps for Reed-Solomon Codes":
             //
             // For gamma < J(delta) - eta, the number of exceptional z's is bounded by:
             //   a > (2(m + 1/2)^5 + 3(m + 1/2)*gamma*rho) / (3*rho^(3/2)) * n + (m + 1/2) / sqrt(rho)
@@ -171,7 +174,9 @@ impl SecurityAssumption {
             }
 
             // In CB we assume the error is degree/(eta*rho^2)
-            Self::CapacityBound => (log_degree + 2 * log_inv_rate) as f64 - log_eta,
+            Self::CapacityBound => {
+                (log_degree + 2 * log_inv_rate) as f64 - self.log_eta(log_inv_rate)
+            }
         };
 
         // Error is (num_functions - 1) * error/|F|;
@@ -185,15 +190,13 @@ impl SecurityAssumption {
     /// - In JB, delta is (1 - sqrt(rho) - eta)
     /// - In CB, delta is (1 - rho - eta)
     #[must_use]
-    pub fn log_1_delta(&self, log_inv_rate: usize) -> f64 {
-        let log_eta = self.log_eta(log_inv_rate);
-        let eta = libm::pow(2., log_eta);
+    pub(crate) fn log_1_delta(&self, log_inv_rate: usize) -> f64 {
         let rate = 1. / f64::from(1 << log_inv_rate);
 
         let delta = match self {
             Self::UniqueDecoding => 0.5 * (1. - rate),
-            Self::JohnsonBound => 1. - libm::sqrt(rate) - eta,
-            Self::CapacityBound => 1. - rate - eta,
+            Self::JohnsonBound => 1. - libm::sqrt(rate) - libm::pow(2., self.log_eta(log_inv_rate)),
+            Self::CapacityBound => 1. - rate - libm::pow(2., self.log_eta(log_inv_rate)),
         };
 
         libm::log2(1. - delta)
@@ -202,8 +205,17 @@ impl SecurityAssumption {
     /// Compute the number of queries to match the security level
     /// The error to drive down is (1-delta)^t < 2^-lambda.
     /// Where delta is set as in the `log_1_delta` function.
+    ///
+    /// Requires a redundant code rate, at most `1/2`:
+    /// - A redundant rate keeps the proximity parameter `delta > 0`.
+    /// - With `delta > 0` the term `log2(1 - delta)` is negative.
+    /// - Dividing `-lambda` by a negative number gives a positive, finite count.
+    /// - A rate of `1` forces `delta <= 0` and rounds the count down to zero.
+    /// - Zero queries would make the proximity test check nothing.
+    ///
+    /// Configuration construction rejects rate `1`, so the precondition holds.
     #[must_use]
-    pub fn queries(&self, protocol_security_level: usize, log_inv_rate: usize) -> usize {
+    pub(crate) fn queries(&self, protocol_security_level: usize, log_inv_rate: usize) -> usize {
         let num_queries_f = -(protocol_security_level as f64) / self.log_1_delta(log_inv_rate);
 
         libm::ceil(num_queries_f) as usize
@@ -213,7 +225,7 @@ impl SecurityAssumption {
     /// The error to drive down is (1-delta)^t < 2^-lambda.
     /// Where delta is set as in the `log_1_delta` function.
     #[must_use]
-    pub fn queries_error(&self, log_inv_rate: usize, num_queries: usize) -> f64 {
+    pub(crate) fn queries_error(&self, log_inv_rate: usize, num_queries: usize) -> f64 {
         let num_queries = num_queries as f64;
 
         -num_queries * self.log_1_delta(log_inv_rate)
@@ -224,7 +236,7 @@ impl SecurityAssumption {
     /// The error is list_size^2 * (degree/field_size_bits)^reps
     /// NOTE: Here we are discounting the domain size as we assume it is negligible compared to the size of the field.
     #[must_use]
-    pub const fn ood_error(
+    pub(crate) const fn ood_error(
         &self,
         log_degree: usize,
         log_inv_rate: usize,
@@ -241,30 +253,34 @@ impl SecurityAssumption {
         (ood_samples * field_size_bits) as f64 + 1. - error
     }
 
-    /// Computes the number of OOD samples required to achieve security_level bits of security
-    /// We note that in both STIR and WHIR there are various strategies to set OOD samples.
-    /// In this case, we are just sampling one element from the extension field
+    /// Number of OOD samples needed to reach the requested security level.
+    ///
+    /// In both STIR and WHIR there are various strategies to set OOD samples.
+    /// Here we sample one element from the extension field per OOD query.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(0)` for unique decoding, which uses no OOD samples.
+    /// - `Some(n)` for the smallest count reaching the security level.
+    /// - `None` when no count in range suffices, i.e. the field is too small.
     #[must_use]
-    pub fn determine_ood_samples(
+    pub(crate) fn determine_ood_samples(
         &self,
         security_level: usize,
         log_degree: usize,
         log_inv_rate: usize,
         field_size_bits: usize,
-    ) -> usize {
+    ) -> Option<usize> {
         if matches!(self, Self::UniqueDecoding) {
-            return 0;
+            return Some(0);
         }
 
-        for ood_samples in 1..64 {
-            if self.ood_error(log_degree, log_inv_rate, field_size_bits, ood_samples)
+        // Each extra OOD sample adds roughly `field_size_bits - log_degree` bits.
+        // When the field is too small that term never reaches the target.
+        (1..64).find(|&ood_samples| {
+            self.ood_error(log_degree, log_inv_rate, field_size_bits, ood_samples)
                 >= security_level as f64
-            {
-                return ood_samples;
-            }
-        }
-
-        panic!("Could not find an appropriate number of OOD samples");
+        })
     }
 
     /// Compute the sumcheck soundness term of the folding step (in bits).
@@ -281,7 +297,7 @@ impl SecurityAssumption {
     ///
     /// The `+1` accounts for the union bound over the list.
     #[must_use]
-    pub const fn fold_sumcheck_error(
+    pub(crate) const fn fold_sumcheck_error(
         &self,
         field_size_bits: usize,
         num_variables: usize,
@@ -312,7 +328,7 @@ impl SecurityAssumption {
     ///
     /// The `+1` accounts for the union bound over list elements.
     #[must_use]
-    pub fn queries_combination_error(
+    pub(crate) fn queries_combination_error(
         &self,
         field_size_bits: usize,
         num_variables: usize,
@@ -347,7 +363,7 @@ impl SecurityAssumption {
     ///
     /// Returns 0 when the algebraic bounds alone meet the target.
     #[must_use]
-    pub fn folding_pow_bits(
+    pub(crate) fn folding_pow_bits(
         &self,
         security_level: usize,
         field_size_bits: usize,
@@ -449,6 +465,25 @@ mod tests {
     }
 
     #[test]
+    fn determine_ood_samples_reports_infeasibility() {
+        let jb = SecurityAssumption::JohnsonBound;
+
+        // A 10-bit field cannot reach 100-bit security at log-degree 20.
+        // Each OOD sample adds at most ~ (10 - 20) < 0 bits, so the loop never
+        // hits the target and the search yields nothing.
+        assert_eq!(jb.determine_ood_samples(100, 20, 2, 10), None);
+
+        // A large field reaches the target with a small sample count.
+        assert!(jb.determine_ood_samples(100, 20, 2, 128).is_some());
+
+        // Unique decoding never needs OOD samples.
+        assert_eq!(
+            SecurityAssumption::UniqueDecoding.determine_ood_samples(100, 20, 2, 10),
+            Some(0)
+        );
+    }
+
+    #[test]
     fn test_ud_errors() {
         let assumption = SecurityAssumption::UniqueDecoding;
 
@@ -490,7 +525,7 @@ mod tests {
         let computed_list_size = assumption.list_size_bits(log_degree, log_inv_rate);
         assert!((real_list_size.log2() - computed_list_size).abs() < 0.01);
 
-        // Prox gaps - Updated to use Theorem 1.5 from [BCSS25]
+        // Prox gaps - Updated to use Theorem 1.5 from \[BCSS25\]
         //
         // From "On Proximity Gaps for Reed-Solomon Codes" (eprint 2025/2055):
         // With eta = sqrt(rho)/20, m = 10, the error bound is:
@@ -558,5 +593,337 @@ mod tests {
 
         // PoW bits should never be negative
         assert!(pow_bits >= 0.);
+    }
+
+    #[test]
+    #[should_panic(expected = "log_eta is undefined for UniqueDecoding")]
+    fn log_eta_panics_for_unique_decoding() {
+        // eta does not appear in the UD distance formula `delta = (1 - rho) / 2`.
+        // Reading log_eta in the UD branch is a programmer error; the panic
+        // locks that down so a future refactor that strays into the eta path
+        // under UD fails loudly instead of silently propagating a bogus value.
+        let _ = SecurityAssumption::UniqueDecoding.log_eta(5);
+    }
+
+    // BCSS25 vs BCI+20: Johnson-bound proximity gap improvement.
+    //
+    // Bounds on the size of the exceptional set |S|:
+    //
+    //     [BCI+20] Thm 5.1 :  |S| > (m + 1/2)^7 / 3      * n^2 / rho^{3/2}
+    //     \[BCSS25\] Thm 1.5 :  |S| > 2 * (m + 1/2)^5 / 3  * n   / rho^{3/2}
+    //
+    // Safety choice eta = sqrt(rho) / 20  =>  multiplicity m = 10.
+    //
+    // Gain in log form:
+    //
+    //     gain = log_2((m + 1/2)^2 / 2) + log_2(n)
+    //          = log_2(55.125)          + log_2(n)
+    //         ~= log_2(n) + 5.78  bits.
+    //
+    // Tests in this section:
+    // - strict improvement, with the exact analytical gap pinned;
+    // - new bound clears `security_level - MAX_POW_BITS` over a 155-bit field;
+    // - full WHIR security budget hits 128 bits at a reference config;
+    // - curve folding costs log_2(M) bits per \[BCSS25\] Thm 4.2.
+
+    /// Field size in bits used by every test in this section.
+    ///
+    /// Equals `5 * ceil(log_2(p_KoalaBear))` with `p_KoalaBear = 2^31 - 2^24 + 1`,
+    /// i.e. a degree-5 extension of the KoalaBear prime field.
+    ///
+    /// Chosen because it is the smallest extension that gives the \[BCSS25\]
+    /// bound enough headroom for 128-bit WHIR soundness in the regimes tested.
+    const KOALABEAR_QUINTIC_BITS: usize = 155;
+
+    /// Conventional ceiling for Fiat-Shamir grinding, in bits.
+    ///
+    /// Above roughly 30 bits, grinding becomes impractical for honest provers.
+    ///
+    /// Every algebraic bound contributing to the folding error must clear
+    /// `security_level - MAX_POW_BITS` on its own.
+    const MAX_POW_BITS: f64 = 30.0;
+
+    /// Old prox-gap baseline used by the improvement test.
+    ///
+    /// # Overview
+    ///
+    /// [BCI+20] Theorem 5.1 at the safety choice `eta = sqrt(rho) / 20`
+    /// (so `m = 10`):
+    ///
+    /// ```text
+    ///     |S| > (m + 1/2)^7 / 3 * n^2 / rho^{3/2}.
+    /// ```
+    ///
+    /// No leading factor of `2`: that factor belongs to the \[BCSS25\]
+    /// statement only and would inflate this baseline.
+    ///
+    /// # Equivalence with [BCI+20] Theorem 1.2
+    ///
+    /// Substituting `n = (k + 1) / rho` rewrites the bound as
+    /// `(k + 1)^2 * 10^7 / rho^{7/2}` — the [BCI+20] Theorem 1.2 form,
+    /// up to a small leading constant.
+    ///
+    /// # Returns
+    ///
+    /// Field-size bits minus `log_2` of the lower bound on `|S|`.
+    fn bci20_jb_prox_gaps_error(
+        log_degree: usize,
+        log_inv_rate: usize,
+        field_size_bits: usize,
+    ) -> f64 {
+        // Multiplicity at the safety choice eta = sqrt(rho) / 20.
+        const M_PLUS_HALF: f64 = 10.5;
+
+        // n = 2^(log_degree + log_inv_rate), so log_2(n^2) collects
+        // 2 * log_degree + 2 * log_inv_rate.
+        let log_n_squared = 2.0 * (log_degree + log_inv_rate) as f64;
+
+        // Leading constant of the bound; no extra factor of 2 here.
+        let log_leading_constant = libm::log2(libm::pow(M_PLUS_HALF, 7.0) / 3.0);
+
+        // The rho^{-3/2} term: log_2(rho^{-3/2}) = 3/2 * log_inv_rate.
+        let log_rho_pow_neg_three_halves = 1.5 * log_inv_rate as f64;
+
+        // Log_2 of the lower bound on |S|.
+        let error_bits = log_n_squared + log_leading_constant + log_rho_pow_neg_three_halves;
+
+        // Provable security in bits.
+        field_size_bits as f64 - error_bits
+    }
+
+    #[test]
+    fn jb_prox_gap_strictly_improves_over_old_bound() {
+        // Invariant: the new bound exceeds the old one by exactly
+        //
+        //     gap = log_2((m + 1/2)^2 / 2) + log_2(n).
+        //
+        // At m = 10 (safety choice eta = sqrt(rho) / 20), the additive
+        // constant is log_2(55.125) ~= 5.78.
+        //
+        // Fixture state:
+        //
+        //     log_degree   : 10 ..= 25   (polynomial degree 2^10 .. 2^25)
+        //     log_inv_rate :  1 ..=  4   (rho = 1/2 .. 1/16)
+        //     field        : 155-bit     (degree-5 KoalaBear extension)
+        let jb = SecurityAssumption::JohnsonBound;
+
+        // Ratio of leading constants between old and new bounds:
+        //
+        //     old   : (m + 1/2)^7 / 3
+        //     new   : 2 * (m + 1/2)^5 / 3
+        //     ratio = (m + 1/2)^2 / 2  =  55.125  at  m = 10.
+        let leading_ratio_log = libm::log2(10.5_f64.powi(2) / 2.0);
+
+        for log_degree in 10..=25 {
+            for log_inv_rate in 1..=4 {
+                // Provable security under the new bound.
+                let new_bits =
+                    jb.prox_gaps_error(log_degree, log_inv_rate, KOALABEAR_QUINTIC_BITS, 2);
+
+                // Provable security under the old bound (local reference).
+                let old_bits =
+                    bci20_jb_prox_gaps_error(log_degree, log_inv_rate, KOALABEAR_QUINTIC_BITS);
+
+                // Strict improvement: more provable security bits.
+                assert!(
+                    new_bits > old_bits,
+                    "no improvement at log_degree={log_degree}, \
+                     log_inv_rate={log_inv_rate}: new={new_bits:.4}, old={old_bits:.4}"
+                );
+
+                // Headline claim: gap = log_2(n) + log_2((m+1/2)^2 / 2).
+                //
+                // Both terms are exact under the implementation's choice of multiplicity.
+                // The 1e-9 tolerance only absorbs floating-point rounding in pow / log2.
+                let log_n = (log_degree + log_inv_rate) as f64;
+                let observed = new_bits - old_bits;
+                let expected = log_n + leading_ratio_log;
+
+                assert!(
+                    (observed - expected).abs() < 1e-9,
+                    "gap mismatch at log_degree={log_degree}, \
+                     log_inv_rate={log_inv_rate}: expected={expected:.6}, \
+                     got={observed:.6}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn jb_prox_gap_covers_security_level_minus_pow_over_koalabear_quintic() {
+        // Invariant: the prox-gap bound alone clears
+        // `security_level - MAX_POW_BITS`, so a feasible PoW budget
+        // bridges the rest to the target security level.
+        //
+        // Fixture state:
+        //
+        //     security_level    = 128
+        //     MAX_POW_BITS      =  30
+        //     min_required_bits = 128 - 30 = 98
+        //     field_size_bits   = 155
+        //     log_inv_rate      : 1 ..= 2   (rho in {1/2, 1/4})
+        //     log_degree        : 10 ..= 22
+        let jb = SecurityAssumption::JohnsonBound;
+
+        // f64 because every use site compares against a float bound.
+        let security_level: f64 = 128.0;
+        let min_required_bits = security_level - MAX_POW_BITS;
+
+        for log_inv_rate in 1..=2 {
+            for log_degree in 10..=22 {
+                // 2-fold combination (line case, num_functions = 2).
+                let prox_gap_bits =
+                    jb.prox_gaps_error(log_degree, log_inv_rate, KOALABEAR_QUINTIC_BITS, 2);
+
+                // Must clear 98 bits, leaving at most 30 bits for PoW.
+                assert!(
+                    prox_gap_bits > min_required_bits,
+                    "prox-gap below {min_required_bits:.0} bits at \
+                     log_degree={log_degree}, log_inv_rate={log_inv_rate}: \
+                     got {prox_gap_bits:.2}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn jb_full_security_budget_reaches_128_bits() {
+        // Invariant: the full WHIR soundness budget reaches
+        // `security_level` bits at a representative configuration.
+        //
+        // Components that may lean on PoW (>= security_level - MAX_POW_BITS):
+        // - prox-gap
+        // - sumcheck
+        // - query-linear-combination
+        //
+        // Components that must self-sustain (>= security_level):
+        // - out-of-domain sample
+        // - FRI query phase
+        //
+        // PoW grinding must not exceed MAX_POW_BITS in total.
+        //
+        // Fixture state:
+        //
+        //     log_degree      = 20   (2^20 evaluation domain elements)
+        //     log_inv_rate    =  2   (rho = 1/4)
+        //     field_size_bits = 155  (degree-5 KoalaBear extension)
+        //     security_level  = 128
+        let jb = SecurityAssumption::JohnsonBound;
+
+        // Passed as usize to sizing helpers; cast to f64 in asserts.
+        let security_level: usize = 128;
+        let min_with_pow = security_level as f64 - MAX_POW_BITS;
+        let log_degree = 20;
+        let log_inv_rate = 2;
+
+        // FRI query count for the query phase to reach security_level alone.
+        let num_queries = jb.queries(security_level, log_inv_rate);
+
+        // OOD sample count for the OOD term to reach security_level alone.
+        // The quintic field is large, so a feasible count always exists here.
+        let ood_samples = jb
+            .determine_ood_samples(
+                security_level,
+                log_degree,
+                log_inv_rate,
+                KOALABEAR_QUINTIC_BITS,
+            )
+            .expect("quintic field is large enough for these parameters");
+
+        // Five algebraic error bounds at the chosen configuration.
+        let prox_gap = jb.prox_gaps_error(log_degree, log_inv_rate, KOALABEAR_QUINTIC_BITS, 2);
+        let sumcheck = jb.fold_sumcheck_error(KOALABEAR_QUINTIC_BITS, log_degree, log_inv_rate);
+        let ood = jb.ood_error(
+            log_degree,
+            log_inv_rate,
+            KOALABEAR_QUINTIC_BITS,
+            ood_samples,
+        );
+        let query = jb.queries_error(log_inv_rate, num_queries);
+        let combination = jb.queries_combination_error(
+            KOALABEAR_QUINTIC_BITS,
+            log_degree,
+            log_inv_rate,
+            ood_samples,
+            num_queries,
+        );
+
+        // Three components that may lean on PoW.
+        assert!(
+            prox_gap >= min_with_pow,
+            "prox-gap {prox_gap:.2} bits < {min_with_pow:.0}"
+        );
+        assert!(
+            sumcheck >= min_with_pow,
+            "sumcheck {sumcheck:.2} bits < {min_with_pow:.0}"
+        );
+        assert!(
+            combination >= min_with_pow,
+            "combination {combination:.2} bits < {min_with_pow:.0}"
+        );
+
+        // Two components that must reach the full target alone.
+        assert!(
+            ood >= security_level as f64,
+            "OOD {ood:.2} bits < {security_level}"
+        );
+        assert!(
+            query >= security_level as f64,
+            "query {query:.2} bits < {security_level}"
+        );
+
+        // PoW closes the residual gap without exceeding the ceiling.
+        let pow = jb.folding_pow_bits(
+            security_level,
+            KOALABEAR_QUINTIC_BITS,
+            log_degree,
+            log_inv_rate,
+        );
+        assert!(
+            pow <= MAX_POW_BITS,
+            "PoW grinding {pow:.2} bits > {MAX_POW_BITS:.0} cap"
+        );
+    }
+
+    #[test]
+    fn jb_prox_gap_scales_by_log_curve_degree() {
+        // Invariant: combining `M + 1` functions costs exactly `log_2(M)`
+        // bits of prox-gap vs. the line case (M = 1), per \[BCSS25\] Thm 4.2.
+        //
+        // Fixture state:  log_degree=20, log_inv_rate=2, field=155.
+        //
+        //     num_functions  |  M  |  expected loss
+        //     ---------------+-----+----------------
+        //          2         |  1  |  baseline
+        //          3         |  2  |    1.0 bit
+        //          5         |  4  |    2.0 bits
+        //          9         |  8  |    3.0 bits
+        let jb = SecurityAssumption::JohnsonBound;
+        let log_degree = 20;
+        let log_inv_rate = 2;
+
+        // Baseline: 2-function combination (line, M = 1).
+        let line_bits = jb.prox_gaps_error(log_degree, log_inv_rate, KOALABEAR_QUINTIC_BITS, 2);
+
+        for (num_functions, expected_loss) in [(3_usize, 1.0_f64), (5, 2.0), (9, 3.0)] {
+            // Prox-gap bits over a degree-M curve (M = num_functions - 1).
+            let curve_bits = jb.prox_gaps_error(
+                log_degree,
+                log_inv_rate,
+                KOALABEAR_QUINTIC_BITS,
+                num_functions,
+            );
+
+            // Observed loss relative to the line case.
+            let loss = line_bits - curve_bits;
+
+            // Expected loss = log_2(M) = log_2(num_functions - 1).
+            assert!(
+                (loss - expected_loss).abs() < 1e-9,
+                "curve scaling off at num_functions={num_functions}: \
+                 expected log_2({}) = {expected_loss:.1} bits, got {loss:.6}",
+                num_functions - 1
+            );
+        }
     }
 }

@@ -103,37 +103,23 @@ pub enum InvalidProofShapeError {
     /// Public values length doesn't match what the AIR expects.
     #[error("public values length mismatch: expected {expected}, got {got}")]
     PublicValuesLengthMismatch { expected: usize, got: usize },
-    /// Lookup commitment presence doesn't match lookup configuration.
-    #[error("lookup commitment presence does not match lookup configuration")]
-    LookupCommitmentMismatch,
-    /// Global lookup data count doesn't match the number of global lookups for an AIR.
-    #[error("air {air}: global lookup data count mismatch: expected {expected}, got {got}")]
-    GlobalLookupDataCountMismatch {
-        air: usize,
-        expected: usize,
-        got: usize,
-    },
-    /// Global lookup proof metadata doesn't match the AIR's declared interactions.
-    #[error(
-        "air {air}: global lookup data metadata mismatch at index {lookup}: expected name={expected_name}, aux_idx={expected_aux_idx}; got name={got_name}, aux_idx={got_aux_idx}"
-    )]
-    GlobalLookupDataMetadataMismatch {
-        air: usize,
-        lookup: usize,
-        expected_name: String,
-        got_name: String,
-        expected_aux_idx: usize,
-        got_aux_idx: usize,
-    },
-    /// Permutation local and next have different lengths.
-    #[error("air {air}: permutation local/next length mismatch")]
-    PermutationLengthMismatch { air: usize },
-    /// Permutation width doesn't match expected.
-    #[error("air {air}: permutation width mismatch: expected {expected}")]
-    PermutationWidthMismatch { air: usize, expected: usize },
     /// Opened values (trace, quotient, random) don't match expected dimensions.
     #[error("opened values do not match expected dimensions")]
     OpenedValuesDimensionMismatch,
+}
+
+/// Reasons a periodic column cannot be evaluated.
+///
+/// - Periodic columns are AIR definition, not proof data.
+/// - A malformed one is an AIR bug, surfaced here instead of a panic.
+#[derive(Debug, Error)]
+pub enum PeriodicColumnError {
+    /// A periodic column length is not a power of two.
+    #[error("periodic column length must be a power of two, got {got}")]
+    LengthNotPowerOfTwo { got: usize },
+    /// A periodic column is longer than the trace it repeats over.
+    #[error("periodic column length too large: expected at most {maximum}, got {got}")]
+    LengthTooLarge { maximum: usize, got: usize },
 }
 
 /// Top-level verification error.
@@ -145,6 +131,9 @@ where
     /// The proof shape is invalid.
     #[error(transparent)]
     InvalidProofShape(#[from] InvalidProofShapeError),
+    /// A periodic column declared by the AIR cannot be evaluated.
+    #[error(transparent)]
+    PeriodicColumn(#[from] PeriodicColumnError),
     /// An error occurred while verifying the claimed openings.
     #[error("invalid opening argument: {0:?}")]
     InvalidOpeningArgument(PcsErr),
@@ -160,7 +149,9 @@ where
         "next point unavailable: domain does not support computing the next point algebraically"
     )]
     NextPointUnavailable,
-    /// Lookup related error.
-    #[error("lookup error: {0}")]
-    LookupError(String),
+    /// The out-of-domain point coincides with a trace-domain point.
+    ///
+    /// Selector inversion is undefined there.
+    #[error("out-of-domain point lies inside the trace domain")]
+    OodPointInDomain,
 }

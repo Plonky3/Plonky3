@@ -1,7 +1,6 @@
 use p3_air::{Air, DebugConstraintBuilder};
 use p3_field::{ExtensionField, Field};
-use p3_lookup::AirWithLookups;
-use p3_lookup::lookup_traits::{Lookup, LookupGadget};
+use p3_lookup::{Lookup, LookupProtocol};
 use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView};
 use p3_matrix::stack::VerticalPair;
@@ -9,7 +8,7 @@ use tracing::instrument;
 
 /// Type alias for the inputs to lookup constraint checking.
 /// - The first element is a slice of [`Lookup`] values (generic over a field `F`) representing the symbolic lookups to be performed.
-/// - The second element is a reference to the [`LookupGadget`] implementation.
+/// - The second element is a reference to the [`LookupProtocol`] implementation.
 #[allow(unused)]
 type LookupConstraintsInputs<'a, F, LG> = (&'a [Lookup<F>], &'a LG);
 
@@ -30,8 +29,7 @@ type LookupConstraintsInputs<'a, F, LG> = (&'a [Lookup<F>], &'a LG);
 /// - `public_values`: Public values provided to the builder.
 /// - `lookup_constraints_inputs`: Inputs necessary to check lookup constraints:
 ///     - the symbolic representation of the [`Lookup`] values,
-///     - the [`LookupData`] for global lookups,
-///     - the [`LookupGadget`] implementation.
+///     - the [`LookupProtocol`] implementation.
 #[instrument(name = "check constraints", skip_all)]
 #[allow(unused)] // Do not remove, or this will trigger warnings in release mode.
 #[allow(clippy::too_many_arguments)]
@@ -48,7 +46,7 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
     F: Field,
     EF: ExtensionField<F>,
     A: for<'a> Air<DebugConstraintBuilder<'a, F, EF>>,
-    LG: LookupGadget,
+    LG: LookupProtocol,
 {
     let height = main.height();
     if let Some(prep) = preprocessed.as_ref() {
@@ -126,7 +124,7 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
             &periodic_row,
         );
 
-        air.eval_with_lookups(&mut builder, lookups, lookup_gadget);
+        lookup_gadget.eval_air_and_lookups(air, &mut builder, lookups);
 
         // Stop at the first failing row and report all violations at once.
         if builder.has_failures() {
@@ -141,8 +139,6 @@ pub(crate) fn check_constraints<'b, F, EF, A, LG>(
 
 #[cfg(test)]
 mod tests {
-    use alloc::vec;
-
     use p3_air::{Air, BaseAir, DebugConstraintBuilder};
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
@@ -167,7 +163,7 @@ mod tests {
 
     impl<F: Field> BaseAir<F> for ShapeProbeAir {
         fn width(&self) -> usize {
-            // Single column; every fixture is `vec![F::ZERO; height]`.
+            // Single column; every fixture is `F::zero_vec(height)`.
             1
         }
 
@@ -184,7 +180,7 @@ mod tests {
             //       row 1: [ 0, 0, 0 ]
             //       flat : [ 0, 0, 0, 0, 0, 0 ]
             let total = self.prep_height * self.prep_width;
-            Some(RowMajorMatrix::new(vec![F::ZERO; total], self.prep_width))
+            Some(RowMajorMatrix::new(F::zero_vec(total), self.prep_width))
         }
     }
 
@@ -218,9 +214,9 @@ mod tests {
         };
 
         // Zero-valued traces; content is irrelevant because eval reads nothing.
-        let main: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 1);
+        let main: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(BabyBear::zero_vec(4), 1);
         let preprocessed = <ShapeProbeAir as BaseAir<BabyBear>>::preprocessed_trace(&air);
-        let permutation: RowMajorMatrix<EF> = RowMajorMatrix::new(vec![EF::ZERO; 4], 1);
+        let permutation: RowMajorMatrix<EF> = RowMajorMatrix::new(EF::zero_vec(4), 1);
 
         // Must return cleanly. A panic here would mean a guard rejected a well-shaped input.
         check_constraints::<BabyBear, EF, _, LogUpGadget>(
@@ -255,9 +251,9 @@ mod tests {
             prep_height: 8,
             prep_width: 1,
         };
-        let main: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 1);
+        let main: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(BabyBear::zero_vec(4), 1);
         let preprocessed = <ShapeProbeAir as BaseAir<BabyBear>>::preprocessed_trace(&air);
-        let permutation: RowMajorMatrix<EF> = RowMajorMatrix::new(vec![EF::ZERO; 4], 1);
+        let permutation: RowMajorMatrix<EF> = RowMajorMatrix::new(EF::zero_vec(4), 1);
 
         // Expected: panic on entry, before any row is dereferenced.
         check_constraints::<BabyBear, EF, _, LogUpGadget>(
@@ -291,9 +287,9 @@ mod tests {
             prep_height: 0,
             prep_width: 0,
         };
-        let main: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(vec![BabyBear::ZERO; 4], 1);
+        let main: RowMajorMatrix<BabyBear> = RowMajorMatrix::new(BabyBear::zero_vec(4), 1);
         let preprocessed: Option<RowMajorMatrix<BabyBear>> = None;
-        let permutation: RowMajorMatrix<EF> = RowMajorMatrix::new(vec![EF::ZERO; 8], 1);
+        let permutation: RowMajorMatrix<EF> = RowMajorMatrix::new(EF::zero_vec(8), 1);
 
         // Expected: panic on entry, before any row is dereferenced.
         check_constraints::<BabyBear, EF, _, LogUpGadget>(

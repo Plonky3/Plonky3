@@ -6,6 +6,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.0] - 2026-06-11
+### Merged PRs
+- Add broadcast, pack_columns, pack_columns_fn, and unpack_iter to PackedValue (#1450)
+- Make batched_linear_combination chunk size per-impl tunable (#1451)
+- Field: rm unused packed_linear_combination (#1460)
+- Perf: abstract away Copy vs Clone (#1463)
+- Field: implement packed / packed division (#1457)
+- Batch stark: separate Fiat Shamir transcript (#1475)
+- Field: add missing extension degree for `packed_mod_add` and `packed_mod_sub` (#1421)
+- Field: batch invert packed quintic divisors (#1505)
+- Field: add division ops for packed binomial extension (#1512)
+- Core: couple more compile time assertions (#1525)
+- Field: specialize packed mixed_dot_product by chunk strategy (#1573)
+- Feat: add support for extensions of degree 3 (#1497)
+- Perf(whir): delayed Montgomery reduction in sumcheck round-coefficient kernel (#1597)
+- Perf(field): preserve packed ILP in batch_multiplicative_inverse for non-WIDTH-aligned inputs (#1608)
+- Field: expand packed-extension API; fix unsound PackedValue impls (#1620)
+- Chore: use T::zero_vec(n) instead of vec![T::ZERO; n] (#1633)
+- Chore: remove needless_range_loop allows across the workspace (#1632)
+- Fix: leverage packing for Powers (#1639)
+- Fix: local refs for dev-deps (#1663)
+- Perf: extend collect_n and shifted_powers to remaining call sites (#1683)
+- Ci: tighten doc/release/TOML checks (#1689)
+- Feat: add a `HornerIter` supertrait on `DoubleEndedIterator` (#1692)
+- Chore: HornerIter follow-ups from #1692 review (#1693)
+- Refactor(field): unify extension-field logic under common abstraction (#1696)
+- Refactor(field): default ext_square to a general multiply (#1697)
+- Fix(field): make from_int total for iN::MIN (#1758)
+- Chore: update CHANGELOGs (#1785)
+- Doc: add basic READMEs in main crates (#1786)
+
+## [0.5.3] - 2026-05-15
+### Merged PRs
+- Field: add missing extension degree for `packed_mod_add` and `packed_mod_sub` (#1421)
+- Core: couple more compile time assertions (#1525)
+- Field: specialize packed mixed_dot_product by chunk strategy (#1573)
+- Add broadcast, pack_columns, pack_columns_fn, and unpack_iter to PackedValue (#1450)
+- Add carry-critical NEON dot product regression tests (#1600)
+
+## [0.5.2] - 2026-03-27
+### Merged PRs
+- Make batched_linear_combination chunk size per-impl tunable (#1451)
+- Perf: abstract away Copy vs Clone (#1463)
+
 ## [0.5.1] - 2026-03-16
 ## [0.5.0] - 2026-03-10
 ### Merged PRs

@@ -29,10 +29,12 @@ use p3_maybe_rayon::prelude::*;
 use p3_uni_stark::{StarkGenericConfig, Val};
 use tracing::instrument;
 
-use crate::lookup_traits::{
-    Kind, Lookup, LookupData, LookupGadget, LookupTraceBuilder, symbolic_to_expr,
-};
-use crate::types::{LookupError, LookupEvaluator};
+use crate::protocol::LookupProtocol;
+use crate::traits::LookupTraceBuilder;
+use crate::types::{Lookup, LookupError, LookupTerminal};
+
+/// Type alias for the row evaluation context used during permutation trace generation.
+pub type RowEvalContext<'a, SC> = LookupTraceBuilder<'a, SC>;
 
 /// Core LogUp gadget implementing lookup arguments via logarithmic derivatives.
 ///
@@ -46,18 +48,22 @@ use crate::types::{LookupError, LookupEvaluator};
 /// ∑(m_i/(α - a_i)) = ∑(m'_j/(α - b_j))
 /// ```
 ///
-/// This is implemented using a running sum auxiliary column `s` that accumulates:
+/// Per AIR the auxiliary trace carries one fraction column per lookup plus
+/// a single shared accumulator column at index 0. Writing
+/// `f_c[r] = V_c(r) / U_c(r)` for the per-row rational value of lookup `c`:
 /// ```text
-/// s[i+1] = s[i] + ∑(m_a/(α - a)) - ∑(m_b/(α - b))
+/// acc[0]   = 0
+/// acc[i+1] = acc[i] + ∑_c f_c[i]
 /// ```
 ///
 /// Note that we do not differentiate between `a` and `b` in the implementation:
 /// we simply have a list of `elements` with possibly negative `multiplicities`.
 ///
 /// Constraints are defined as:
-/// - **Initial Constraint**: `s[0] = 0`
-/// - **Transition Constraint**: `s[i+1] = s[i] + contribution[i]`
-/// - **Final Constraint**: `s[n-1] + contribution[n-1] = 0`
+/// - **Fraction pin** (per lookup `c`): `U_c(r) * f_c[r] - V_c(r) = 0`
+/// - **Initial Constraint**: `acc[0] = 0`
+/// - **Transition Constraint**: `acc[i+1] = acc[i] + ∑_c f_c[i]`
+/// - **Final Constraint**: `terminal = acc[n-1] + ∑_c f_c[n-1]`
 #[derive(Debug, Clone, Default)]
 pub struct LogUpGadget;
 
@@ -95,7 +101,7 @@ impl LogUpGadget {
 
     /// Computes the numerator and denominator of the fraction:
     /// `∑(m_i / (α - combined_elements[i]))`, where
-    /// `combined_elements[i] = ∑elements[i][n-j] * β^j
+    /// `combined_elements[i] = ∑elements[i][n-j] * β^j`
     pub(crate) fn compute_combined_sum_terms<AB, E, M>(
         &self,
         elements: &[Vec<E>],
@@ -142,62 +148,68 @@ impl LogUpGadget {
 
         (numerator, common_denominator)
     }
+}
 
-    /// Evaluates the transition and boundary constraints for a lookup argument.
+impl LookupProtocol for LogUpGadget {
+    fn num_challenges(&self) -> usize {
+        2
+    }
+
+    /// # Mathematical Details
     ///
-    /// # Arguments:
-    /// * builder - The AIR builder to construct expressions.
-    /// * context - The lookup context containing:
-    ///     * the kind of lookup (local or global),
-    ///     * elements,
-    ///     * multiplicities,
-    ///     * and auxiliary column indices.
-    /// * opt_expected_cumulated - Optional expected cumulative value for global lookups. For local lookups, this should be `None`.
-    fn eval_update<AB>(
-        &self,
-        builder: &mut AB,
-        context: &Lookup<AB::F>,
-        opt_expected_cumulated: Option<AB::ExprEF>,
-    ) where
+    /// The constraint enforces, on every row, the rational identity:
+    /// ```text
+    /// U_c(r) * f_c[r] - V_c(r) = 0
+    /// ```
+    ///
+    /// where:
+    /// - `f_c` is the lookup's fraction column,
+    /// - `(V_c, U_c)` is the rational form
+    ///
+    /// ```text
+    /// ∑_i(multiplicities[i] / (α - combined_elements[i])) = V_c / U_c
+    /// ```
+    ///
+    /// - `multiplicities` may be negative,
+    /// - `combined_elements[i] = ∑elements[i][n-j] * β^j`.
+    fn eval_fraction<AB>(&self, builder: &mut AB, lookup: &Lookup<AB::F>)
+    where
         AB: PermutationAirBuilder,
     {
         let Lookup {
-            kind,
-            element_exprs,
-            multiplicities_exprs,
-            columns,
-        } = context;
+            kind: _,
+            elements,
+            multiplicities,
+            // Not part of the per-row fraction; it only feeds the height-bound check.
+            count_weight: _,
+            column,
+        } = lookup;
 
         assert!(
-            element_exprs.len() == multiplicities_exprs.len(),
+            elements.len() == multiplicities.len(),
             "Mismatched lengths: elements and multiplicities must have same length"
         );
-        assert_eq!(
-            columns.len(),
-            self.num_aux_cols(),
-            "There is exactly one auxiliary column for LogUp"
-        );
-        let column = columns[0];
+
+        let column = *column;
 
         // First, turn the symbolic expressions into builder expressions, for elements and multiplicities.
-        let elements = element_exprs
+        let elements = elements
             .iter()
             .map(|exprs| {
                 exprs
                     .iter()
-                    .map(|expr| symbolic_to_expr(builder, expr).into())
+                    .map(|expr| expr.resolve(builder).into())
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
-        let multiplicities = multiplicities_exprs
+        let multiplicities = multiplicities
             .iter()
-            .map(|expr| symbolic_to_expr(builder, expr).into())
+            .map(|expr| expr.resolve(builder).into())
             .collect::<Vec<_>>();
 
-        // Access the permutation (aux) table. It carries the running sum column `s`.
+        // Access the permutation (aux) table and the per-lookup challenges.
         let permutation = builder.permutation();
-
         let permutation_challenges = builder.permutation_randomness();
 
         assert!(
@@ -205,27 +217,16 @@ impl LogUpGadget {
             "Insufficient permutation challenges"
         );
 
-        // Challenge for the running sum.
+        // Challenge for the rational denominator.
         let alpha = permutation_challenges[self.num_challenges() * column];
         // Challenge for combining the lookup tuples.
         let beta = permutation_challenges[self.num_challenges() * column + 1];
 
-        assert!(
-            permutation.current_slice().len() > column,
-            "Permutation trace has insufficient width"
-        );
-
-        // Read s[i] from the local row at the specified column.
-        let s_local = permutation.current(column).unwrap().into();
-        // Read s[i+1] from the next row (or a zero-padded view on the last row).
-        let s_next = permutation.next(column).unwrap().into();
-
-        // Anchor s[0] = 0 at the start.
+        // Read this lookup's fraction column at the current row.
         //
-        // Avoids a high-degree boundary constraint.
-        // Telescoping is enforced by the last-row check (s[n−1] + contribution[n-1] = 0).
-        // This keeps aux and main traces aligned in length.
-        builder.when_first_row().assert_zero_ext(s_local.clone());
+        // Column 0 of the permutation trace is the shared accumulator.
+        // So lookup slot `column` lives at permutation-trace column `column + 1`.
+        let frac_local: AB::ExprEF = permutation.current(column + 1).unwrap().into();
 
         // Build the fraction:  ∑ m_i/(α - combined_elements[i])  =  numerator / denominator .
         let (numerator, common_denominator) = self
@@ -236,130 +237,107 @@ impl LogUpGadget {
                 &beta.into(),
             );
 
-        if let Some(expected_cumulated) = opt_expected_cumulated {
-            // If there is an `expected_cumulated`, we are in a global lookup update.
-            assert!(
-                matches!(kind, Kind::Global(_)),
-                "Expected cumulated value provided for a non-global lookup"
-            );
-
-            // Transition constraint:
-            builder.when_transition().assert_zero_ext(
-                (s_next - s_local.clone()) * common_denominator.clone() - numerator.clone(),
-            );
-
-            // Final constraint:
-            let final_val = (expected_cumulated - s_local) * common_denominator - numerator;
-            builder.when_last_row().assert_zero_ext(final_val);
-        } else {
-            // If we don't have an `expected_cumulated`, we are in a local lookup update.
-            assert!(
-                matches!(kind, Kind::Local),
-                "No expected cumulated value provided for a global lookup"
-            );
-
-            // If we are in a local lookup, the previous transition constraint doesn't have to be limited to transition rows:
-            // - we are already ensuring that the first row is 0,
-            // - at point `g^{n - 1}` (where `n` is the domain size), the next point is `g^0`, so that the constraint still holds
-            // on the last row.
-            builder.assert_zero_ext((s_next - s_local) * common_denominator - numerator);
-        }
-    }
-}
-
-impl LookupEvaluator for LogUpGadget {
-    fn num_aux_cols(&self) -> usize {
-        1
-    }
-
-    fn num_challenges(&self) -> usize {
-        2
+        // Pin the fraction column to V / U on every row.
+        //
+        // The identity is cyclic in the trace domain, so it does not need a
+        // transition gate. Forcing it on every row also pins the last-row
+        // value used by the accumulator's terminal binding.
+        builder.assert_zero_ext(common_denominator * frac_local - numerator);
     }
 
     /// # Mathematical Details
-    /// The constraint enforces:
-    /// ```text
-    /// ∑_i(multiplicities[i] / (α - combined_elements[i])) = 0
-    /// ```
     ///
-    /// where `multiplicities` can be negative, and
-    /// `combined_elements[i] = ∑elements[i][n-j] * β^j`.
+    /// The accumulator at column 0 of the permutation trace satisfies:
+    /// - **first row**: `acc[0] = 0`
+    /// - **transition**: `acc[r + 1] - acc[r] - ∑_c f_c[r] = 0`
+    /// - **last row**: `terminal - acc[n - 1] - ∑_c f_c[n - 1] = 0`
     ///
-    /// This is implemented using a running sum column that should sum to zero.
-    fn eval_local_lookup<AB>(&self, builder: &mut AB, context: &Lookup<AB::F>)
-    where
-        AB: PermutationAirBuilder,
-    {
-        if let Kind::Global(_) = context.kind {
-            panic!("Global lookups are not supported in local evaluation")
-        }
-
-        self.eval_update(builder, context, None);
-    }
-
-    /// # Mathematical Details
-    /// The constraint enforces:
-    /// ```text
-    /// ∑_i(multiplicities[i] / (α - combined_elements[i])) = `expected_cumulated`
-    /// ```
+    /// `terminal` is provided by the prover and committed once per AIR.
     ///
-    /// where `multiplicities` can be negative, and
-    /// `combined_elements[i] = ∑elements[i][n-j] * β^j`.
-    ///
-    /// `expected_cumulated` is provided by the prover, and the sum of all `expected_cumulated` for this global interaction
-    /// should be 0. The latter is checked as the final step, after all AIRS have been verified.
-    ///
-    /// This is implemented using a running sum column that should sum to `expected_cumulated`.
-    fn eval_global_update<AB>(
+    /// The cross-AIR sum of committed terminals is checked to be zero after every AIR has been verified.
+    fn eval_accumulator<AB>(
         &self,
         builder: &mut AB,
-        context: &Lookup<AB::F>,
-        expected_cumulated: AB::ExprEF,
+        lookups: &[Lookup<AB::F>],
+        terminal: AB::ExprEF,
     ) where
         AB: PermutationAirBuilder,
     {
-        self.eval_update(builder, context, Some(expected_cumulated));
-    }
-}
+        // Read accumulator and per-lookup fractions before opening the
+        // mutable builder calls below.
+        let acc_local: AB::ExprEF;
+        let acc_next: AB::ExprEF;
+        let row_sum: AB::ExprEF;
+        {
+            let permutation = builder.permutation();
+            assert!(
+                permutation.current_slice().len() > lookups.len(),
+                "Permutation trace has insufficient width"
+            );
 
-impl LookupGadget for LogUpGadget {
-    fn verify_global_final_value<EF: Field>(
+            // Accumulator lives at column 0.
+            acc_local = permutation.current(0).unwrap().into();
+            acc_next = permutation.next(0).unwrap().into();
+
+            // Sum every lookup's fraction at the current row.
+            //
+            // Lookup slot `column` maps to permutation column `column + 1`.
+            row_sum = lookups.iter().fold(AB::ExprEF::ZERO, |sum, lookup| {
+                sum + permutation.current(lookup.column + 1).unwrap().into()
+            });
+        }
+
+        // Anchor acc[0] = 0 at the start.
+        builder.when_first_row().assert_zero_ext(acc_local.clone());
+
+        // Transition: acc[r+1] = acc[r] + row_sum[r] for r in 0..n-1.
+        builder
+            .when_transition()
+            .assert_zero_ext(acc_next - acc_local.clone() - row_sum.clone());
+
+        // Terminal binding on the last row: terminal = acc[n-1] + row_sum[n-1].
+        builder
+            .when_last_row()
+            .assert_zero_ext(terminal - acc_local - row_sum);
+    }
+
+    fn verify_terminal_sum<EF: Field>(
         &self,
-        all_expected_cumulative: &[EF],
+        terminals: &[Option<LookupTerminal<EF>>],
     ) -> Result<(), LookupError> {
-        let total = all_expected_cumulative.iter().copied().sum::<EF>();
+        let total = terminals
+            .iter()
+            .filter_map(|t| t.as_ref())
+            .map(|t| t.0)
+            .sum::<EF>();
 
         if !total.is_zero() {
-            // We set the name associated to the lookup to None because we don't have access to the actual name here.
-            // The actual name will be set in the verifier directly.
-            return Err(LookupError::GlobalCumulativeMismatch(None));
+            return Err(LookupError::TerminalSumNonZero);
         }
 
         Ok(())
     }
 
-    /// We need to compute the degree of the transition constraint,
-    /// as it is the constraint with highest degree:
-    /// `(s[n + 1] - s[n]) * common_denominator - numerator = 0`
+    /// The fraction-pin constraint `U_c(r) * f_c[r] - V_c(r) = 0` carries the
+    /// highest degree emitted for any one lookup.
     ///
-    /// But in `common_denominator`, each combined element e_i = ∑e_{i, j} β^j
-    /// contributes (α - e_i). So we need to sum the degree of all
-    /// combined elements to find the degree of the common denominator.
+    /// In `U_c`, each combined element `e_i = ∑e_{i, j} β^j` contributes
+    /// `(α - e_i)`, so the denominator degree is the sum of all
+    /// combined-element degrees.
     ///
-    /// `numerator = ∑(m_i * ∏_{j≠i}(α - e_j))`, where the e_j are the combined elements.
-    /// So we have to compute the max of all m_i * ∏_{j≠i}(α - e_j).
+    /// In `V_c = ∑(m_i * ∏_{j≠i}(α - e_j))` we take the maximum over `i` of
+    /// `deg(m_i)` plus the sum of every other combined-element degree.
     ///
-    /// The constraint degree is then:
-    /// `1 + max(deg(numerator), deg(common_denominator))`
-    fn constraint_degree<F: Field>(&self, context: &Lookup<F>) -> usize {
-        assert!(context.multiplicities_exprs.len() == context.element_exprs.len());
+    /// The constraint degree is then: `max(1 + deg(U_c), deg(V_c))`
+    fn constraint_degree<F: Field>(&self, lookup: &Lookup<F>) -> usize {
+        assert!(lookup.multiplicities.len() == lookup.elements.len());
 
-        let n = context.multiplicities_exprs.len();
+        let n = lookup.multiplicities.len();
 
         // Compute degrees in a single pass.
         let mut degs = Vec::with_capacity(n);
         let mut deg_sum = 0;
-        for elems in &context.element_exprs {
+        for elems in &lookup.elements {
             let deg = elems
                 .iter()
                 .map(|elt| elt.degree_multiple())
@@ -373,9 +351,8 @@ impl LookupGadget for LogUpGadget {
         let deg_denom_constr = 1 + deg_sum;
 
         // Compute degree(numerator).
-        let multiplicities = &context.multiplicities_exprs;
         let deg_num = (0..n)
-            .map(|i| multiplicities[i].degree_multiple() + deg_sum - degs[i])
+            .map(|i| lookup.multiplicities[i].degree_multiple() + deg_sum - degs[i])
             .max()
             .unwrap_or(0);
 
@@ -389,58 +366,87 @@ impl LookupGadget for LogUpGadget {
         preprocessed: &Option<RowMajorMatrix<Val<SC>>>,
         public_values: &[Val<SC>],
         lookups: &[Lookup<Val<SC>>],
-        lookup_data: &mut [LookupData<SC::Challenge>],
-        permutation_challenges: &[SC::Challenge],
-    ) -> RowMajorMatrix<SC::Challenge> {
+        challenges: &[SC::Challenge],
+    ) -> (
+        RowMajorMatrix<SC::Challenge>,
+        Option<LookupTerminal<SC::Challenge>>,
+    ) {
+        // AIRs without lookups carry no permutation trace and no terminal.
+        if lookups.is_empty() {
+            return (RowMajorMatrix::new(Vec::new(), 0), None);
+        }
+
         let height = main.height();
-        let width = self.num_aux_cols() * lookups.len();
+        let num_lookups = lookups.len();
+        // One accumulator column at index 0, then one fraction column per lookup.
+        let width = num_lookups + 1;
 
         // Validate challenge count matches number of lookups.
         debug_assert_eq!(
-            permutation_challenges.len(),
+            challenges.len(),
             lookups.len() * self.num_challenges(),
             "perm challenge count must be per-lookup"
         );
 
-        // Enforce uniqueness of auxiliary column indices across lookups.
-        #[cfg(debug_assertions)]
-        {
-            use alloc::collections::btree_set::BTreeSet;
-
-            let mut seen = BTreeSet::new();
-            for ctx in lookups {
-                let a = ctx.columns[0];
-                if !seen.insert(a) {
-                    panic!("duplicate aux column index {a} across lookups");
-                }
-            }
+        // Slot `i` owns fraction column `i + 1`, so indices must be contiguous.
+        // Contiguity also implies uniqueness, replacing the old duplicate check.
+        //
+        // A gap is an out-of-bounds write on untrusted data, e.g. a width-3 trace:
+        //
+        //     slots [0, 5] → writes col 2 here, but the constraint reads col 6
+        //
+        // Kept on in release: the scan is O(N) over a handful of lookups.
+        for (i, lookup) in lookups.iter().enumerate() {
+            assert_eq!(
+                lookup.column, i,
+                "lookup slot index must match slice position: \
+                 lookups[{i}].column = {} (expected {i})",
+                lookup.column,
+            );
         }
 
         // 1. PRE-COMPUTE DENOMINATORS
         // We flatten all denominators from all rows/lookups into one giant vector.
         // Order: Row -> Lookup -> Element Tuple
-        let denoms_per_row: usize = lookups.iter().map(|l| l.element_exprs.len()).sum();
+        let denoms_per_row: usize = lookups.iter().map(|l| l.elements.len()).sum();
         let mut lookup_denom_offsets = Vec::with_capacity(lookups.len() + 1);
         lookup_denom_offsets.push(0);
         for l in lookups.iter() {
             lookup_denom_offsets
-                .push(lookup_denom_offsets.last().copied().unwrap() + l.element_exprs.len());
+                .push(lookup_denom_offsets.last().copied().unwrap() + l.elements.len());
         }
-        let num_lookups = lookups.len();
 
         // Hoist the per-lookup random challenges out of the hot per-row loop.
+        //
         // Each lookup uses a pair (alpha, beta) that is constant across all rows.
-        // alpha is the running-sum challenge, beta combines tuple elements.
+        // - alpha is the rational-denominator challenge,
+        // - beta combines tuple elements.
         let lookup_challenges: Vec<(SC::Challenge, SC::Challenge)> = lookups
             .iter()
-            .map(|context| {
-                // Index into the flat challenge array by the lookup's auxiliary column index.
-                let base = self.num_challenges() * context.columns[0];
-                (
-                    permutation_challenges[base],
-                    permutation_challenges[base + 1],
-                )
+            .map(|lookup| {
+                // Index into the flat challenge array by the lookup's slot index.
+                let base = self.num_challenges() * lookup.column;
+                (challenges[base], challenges[base + 1])
             })
+            .collect();
+
+        // Hoist the beta powers per lookup out of the hot per-row loop.
+        //
+        // The tuple combine reads them directly:
+        //
+        //     combined = sum_i e_i * beta^{k-1-i}
+        //
+        // Each step is then an extension * base product (`beta^p * e_i`).
+        // Horner instead multiplies extension * extension (`acc * beta`).
+        let max_tuple_width = lookups
+            .iter()
+            .flat_map(|lookup| lookup.elements.iter())
+            .map(Vec::len)
+            .max()
+            .unwrap_or(0);
+        let beta_powers: Vec<Vec<SC::Challenge>> = lookup_challenges
+            .iter()
+            .map(|&(_, beta)| beta.powers().collect_n(max_tuple_width))
             .collect();
 
         // Fused chunk-local batch inversion.
@@ -467,17 +473,28 @@ impl LookupGadget for LogUpGadget {
         // to determine if a more general or adaptive constant is warranted.
         const CHUNK_SIZE: usize = 1024;
 
-        // Output buffer: one row-sum per (row, lookup) pair, row-major order.
-        let mut row_sums = SC::Challenge::zero_vec(height * num_lookups);
+        // Aux trace buffer.
+        //
+        // Layout — row-major, width = num_lookups + 1:
+        //
+        //     col 0:      acc           ← filled from row_totals (parallel prefix sum, below)
+        //     col i + 1:  frac_i = V/U  ← filled per row during the batch-invert chunks
+        let mut aux_trace = SC::Challenge::zero_vec(height * width);
 
-        row_sums
-            .par_chunks_mut(CHUNK_SIZE * num_lookups)
+        // Per-row sum of every fraction column.
+        //
+        // Used as the per-row delta when building the accumulator.
+        let mut row_totals = SC::Challenge::zero_vec(height);
+
+        aux_trace
+            .par_chunks_mut(CHUNK_SIZE * width)
+            .zip(row_totals.par_chunks_mut(CHUNK_SIZE))
             .enumerate()
-            .for_each(|(chunk_idx, chunk_row_sums)| {
+            .for_each(|(chunk_idx, (chunk_aux, chunk_row_totals))| {
                 // Derive the absolute row range for this chunk.
                 let start_row = chunk_idx * CHUNK_SIZE;
                 // The last chunk may be shorter than CHUNK_SIZE.
-                let num_rows = chunk_row_sums.len() / num_lookups;
+                let num_rows = chunk_aux.len() / width;
 
                 // Thread-local denominator and multiplicity buffers.
                 let mut local_denoms = SC::Challenge::zero_vec(num_rows * denoms_per_row);
@@ -517,37 +534,64 @@ impl LookupGadget for LogUpGadget {
 
                     // Concrete evaluator: resolves symbolic expressions to field values
                     // using the current row's data.
-                    let row_builder: LookupTraceBuilder<'_, SC> = LookupTraceBuilder::new(
+                    let row_ctx: RowEvalContext<'_, SC> = RowEvalContext::new(
                         main_rows,
                         preprocessed_rows,
                         public_values,
-                        permutation_challenges,
+                        challenges,
                         height,
                         i,
                     );
 
                     // Walk through each lookup's element tuples and fill the flat buffers.
                     let mut offset = local_i * denoms_per_row;
-                    for (context, &(alpha, beta)) in lookups.iter().zip(lookup_challenges.iter()) {
-                        for (j, elts) in context.element_exprs.iter().enumerate() {
-                            // Combine tuple elements via Horner's method:
-                            //   combined = e_0 * beta^{k-1} + e_1 * beta^{k-2} + ... + e_{k-1}
-                            // Then store (alpha - combined) as the denominator.
-                            let mut iter = elts.iter();
-                            let combined_elt = iter.next().map_or(SC::Challenge::ZERO, |first| {
-                                iter.fold(
-                                    symbolic_to_expr(&row_builder, first).into(),
-                                    |acc: SC::Challenge, e| {
-                                        acc * beta + symbolic_to_expr(&row_builder, e)
-                                    },
-                                )
-                            });
-                            local_denoms[offset] = alpha - combined_elt;
+                    for ((lookup, &(alpha, _)), powers) in lookups
+                        .iter()
+                        .zip(lookup_challenges.iter())
+                        .zip(beta_powers.iter())
+                    {
+                        for (j, elts) in lookup.elements.iter().enumerate() {
+                            // Resolve the multiplicity first.
+                            let mult = lookup.multiplicities[j].resolve(&row_ctx);
+                            local_mults[offset] = mult;
 
-                            // Store the multiplicity as a base-field element (4 bytes vs 16 for
-                            // extension) to keep the buffer small and the later dot product cheap.
-                            local_mults[offset] =
-                                symbolic_to_expr(&row_builder, &context.multiplicities_exprs[j]);
+                            // Flag-zero skip:
+                            // A zero multiplicity makes `m_j / d_j` vanish, whatever the denominator is.
+                            // So skip the element combine and pin a unit placeholder.
+                            //
+                            //   - The unit keeps batch inversion well-defined (1 inverts to 1).
+                            //   - The fraction term stays exact at `0 * 1 = 0`.
+                            //   - The verifier reads the real denominator from the trace, and
+                            //     the zero-weight term drops from both sides of `U * f = V`.
+                            local_denoms[offset] = if mult.is_zero() {
+                                SC::Challenge::ONE
+                            } else {
+                                // Combine the tuple as `sum_i e_i * beta^{k-1-i}`.
+                                //
+                                //   - The last element carries `beta^0`, so it is lifted with no multiply.
+                                //   - Each leading element pairs with a hoisted power `beta^p * e_i`,
+                                //     an extension * base product rather than extension * extension.
+                                let combined_elt = match elts.split_last() {
+                                    None => SC::Challenge::ZERO,
+                                    // Width-1 tuple: the single element carries beta^0, so lift it directly.
+                                    Some((last, [])) => last.resolve(&row_ctx).into(),
+                                    Some((last, leading)) => {
+                                        // Powers beta^{k-1} down to beta^1, aligned with e_0 .. e_{k-2}.
+                                        let high_powers =
+                                            powers[1..elts.len()].iter().rev().copied();
+                                        let leading_resolved =
+                                            leading.iter().map(|e| e.resolve(&row_ctx));
+                                        let lifted_last: SC::Challenge =
+                                            last.resolve(&row_ctx).into();
+                                        lifted_last
+                                            + dot_product::<SC::Challenge, _, _>(
+                                                high_powers,
+                                                leading_resolved,
+                                            )
+                                    }
+                                };
+                                alpha - combined_elt
+                            };
                             offset += 1;
                         }
                     }
@@ -559,36 +603,43 @@ impl LookupGadget for LogUpGadget {
                 // Free the denominator buffer immediately to reduce peak memory.
                 drop(local_denoms);
 
-                // Phase 3: Accumulate per-row sums: sum_j( inverse_j * multiplicity_j ) grouped by lookup.
+                // Phase 3: emit fractions + row totals.
                 //
-                // The multiplication is extension * base (cheaper than extension * extension).
+                // For each row in the chunk:
+                // - For each lookup, dot-product `(1/d_j) * m_j` over its tuples → `frac = V/U`.
+                // - Write `frac` into the fraction column of `aux_trace` (slot `i` → col `i + 1`).
+                // - Accumulate `frac` into the row total feeding the prefix-sum below.
+                //
+                // The inner multiply is extension * base (cheaper than extension * extension).
                 //
                 // TODO: investigate fusing batch inversion with multiplicity multiplication.
-                for local_i in 0..num_rows {
+                for (local_i, row_total_slot) in chunk_row_totals.iter_mut().enumerate() {
                     let inv_base = local_i * denoms_per_row;
-                    for (lookup_idx, _context) in lookups.iter().enumerate() {
+                    let row_offset = local_i * width;
+                    let mut row_total = SC::Challenge::ZERO;
+                    for lookup_idx in 0..lookups.len() {
                         // Slice out the range of denominators belonging to this lookup.
                         let start = lookup_denom_offsets[lookup_idx];
                         let end = lookup_denom_offsets[lookup_idx + 1];
                         let inv_slice = &local_inverses[inv_base + start..inv_base + end];
                         let mult_slice = &local_mults[inv_base + start..inv_base + end];
                         // Dot product: sum of (1 / denominator) * multiplicity for each tuple.
-                        chunk_row_sums[local_i * num_lookups + lookup_idx] =
+                        let frac =
                             dot_product(inv_slice.iter().copied(), mult_slice.iter().copied());
+                        // Lookup slot `lookup_idx` lives at fraction column `lookup_idx + 1`.
+                        chunk_aux[row_offset + lookup_idx + 1] = frac;
+                        row_total += frac;
                     }
+                    *row_total_slot = row_total;
                 }
             });
 
-        let mut aux_trace = SC::Challenge::zero_vec(height * width);
-        let mut permutation_counter = 0;
-
-        // Each lookup column gets its own running sum.
-        // Since these columns are independent, we build them one at a time.
+        // Build the accumulator column from the per-row totals.
         //
-        // The running sum is an *exclusive* prefix sum of the per-row contributions:
+        // The accumulator is an *exclusive* prefix sum of `row_totals`:
         //
-        //   s[0] = 0
-        //   s[i] = row_sum[0] + row_sum[1] + … + row_sum[i-1]
+        //   acc[0] = 0
+        //   acc[i] = row_totals[0] + row_totals[1] + … + row_totals[i-1]
         //
         // A naive serial loop would be O(height). Instead we use a three-phase
         // parallel prefix sum, splitting the work across threads:
@@ -598,72 +649,56 @@ impl LookupGadget for LogUpGadget {
         //             the chunk totals into global offsets.
         //   Phase C — Each thread adds its global offset back into its chunk.
         //
-        // After the three phases, we have an *inclusive* prefix sum.
-        // Shifting by one position turns it into the exclusive sum we need.
+        // After the three phases, `row_totals` holds an *inclusive* prefix sum.
+        // The accumulator column then reads `acc[i+1] = row_totals[i]`, leaving
+        // `acc[0] = 0` from the initial zeroed buffer.
         let num_threads = current_num_threads();
         let chunk_size = height.div_ceil(num_threads);
 
-        // Reuse a single buffer across all lookup columns to avoid re-allocating on every iteration.
-        let mut prefix = SC::Challenge::zero_vec(height);
-
-        for (lookup_idx, context) in lookups.iter().enumerate() {
-            let aux_idx = context.columns[0];
-
-            // Fill the buffer with this column's per-row contributions.
-            for (i, val) in prefix.iter_mut().enumerate() {
-                *val = row_sums[i * num_lookups + lookup_idx];
+        // Phase A — Local inclusive prefix sums, one chunk per thread.
+        row_totals.par_chunks_mut(chunk_size).for_each(|chunk| {
+            for i in 1..chunk.len() {
+                chunk[i] += chunk[i - 1];
             }
+        });
 
-            // Phase A — Local inclusive prefix sums, one chunk per thread.
-            prefix.par_chunks_mut(chunk_size).for_each(|chunk| {
-                for i in 1..chunk.len() {
-                    chunk[i] += chunk[i - 1];
+        // Phase B — Combine chunk totals into cumulative offsets.
+        // Only as many entries as there are chunks (one per thread), so this is tiny.
+        let mut offsets = SC::Challenge::zero_vec(height.div_ceil(chunk_size));
+        for i in 1..offsets.len() {
+            offsets[i] = offsets[i - 1] + row_totals[i * chunk_size - 1];
+        }
+
+        // Phase C — Fold global offsets back into each chunk.
+        row_totals
+            .par_chunks_mut(chunk_size)
+            .enumerate()
+            .for_each(|(chunk_idx, chunk)| {
+                let offset = offsets[chunk_idx];
+                if !offset.is_zero() {
+                    for val in chunk.iter_mut() {
+                        *val += offset;
+                    }
                 }
             });
 
-            // Phase B — Combine chunk totals into cumulative offsets.
-            // Only as many entries as there are chunks (one per thread), so this is tiny.
-            let mut offsets = SC::Challenge::zero_vec(height.div_ceil(chunk_size));
-            for i in 1..offsets.len() {
-                offsets[i] = offsets[i - 1] + prefix[i * chunk_size - 1];
-            }
+        // At this point `row_totals` holds the inclusive prefix sum.
+        //
+        // The committed terminal equals the full sum across the trace.
+        let terminal = LookupTerminal(row_totals[height - 1]);
 
-            // Phase C — Fold global offsets back into each chunk.
-            prefix
-                .par_chunks_mut(chunk_size)
-                .enumerate()
-                .for_each(|(chunk_idx, chunk)| {
-                    let offset = offsets[chunk_idx];
-                    if !offset.is_zero() {
-                        for val in chunk.iter_mut() {
-                            *val += offset;
-                        }
-                    }
-                });
+        // Write the exclusive prefix sum into the accumulator column of aux_trace:
+        //
+        // - Row 0 is already zero from the buffer's initialisation;
+        // - Row r > 0 gets the inclusive sum of all previous rows.
+        aux_trace
+            .par_chunks_mut(width)
+            .skip(1)
+            .enumerate()
+            .for_each(|(i, row)| {
+                row[0] = row_totals[i];
+            });
 
-            // At this point we hold an *inclusive* prefix sum.
-            //
-            // The auxiliary trace needs the *exclusive* version (shifted right by one, starting at zero).
-            //
-            // - Row 0 is already zero from initialization;
-            // - Each subsequent row gets the inclusive sum of all *previous* rows.
-            aux_trace
-                .par_chunks_mut(width)
-                .skip(1)
-                .enumerate()
-                .for_each(|(i, row)| {
-                    row[aux_idx] = prefix[i];
-                });
-
-            // For global lookups, record the total sum across all rows.
-            if matches!(context.kind, Kind::Global(_)) {
-                lookup_data[permutation_counter].expected_cumulated = prefix[height - 1];
-                permutation_counter += 1;
-            }
-        }
-
-        // Check that we have updated all `lookup_data` entries.
-        debug_assert_eq!(permutation_counter, lookup_data.len());
-        RowMajorMatrix::new(aux_trace, width)
+        (RowMajorMatrix::new(aux_trace, width), Some(terminal))
     }
 }

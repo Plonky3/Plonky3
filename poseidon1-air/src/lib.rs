@@ -10,7 +10,7 @@
 //! # Poseidon1 Permutation Structure
 //!
 //! Poseidon1 is a substitution-permutation network (SPN) over `GF(p)^t` using the
-//! [HADES] design strategy. Each permutation consists of three phases:
+//! \[HADES\] design strategy. Each permutation consists of three phases:
 //!
 //! ```text
 //!   ┌──────────────────────┐   ┌──────────────────────┐   ┌──────────────────────┐
@@ -77,6 +77,8 @@ mod tests {
     use core::borrow::Borrow;
     use core::mem::size_of;
 
+    use p3_air::BaseAir;
+    use p3_air::symbolic::{AirLayout, get_max_constraint_degree};
     use p3_baby_bear::{
         BABYBEAR_POSEIDON1_HALF_FULL_ROUNDS, BABYBEAR_POSEIDON1_PARTIAL_ROUNDS_16,
         BABYBEAR_POSEIDON1_RC_16, BABYBEAR_S_BOX_DEGREE, BabyBear, MDSBabyBearData,
@@ -134,9 +136,6 @@ mod tests {
 
     #[test]
     fn test_poseidon1_air_degree_babybear() {
-        use p3_air::BaseAir;
-        use p3_air::symbolic::{AirLayout, get_max_constraint_degree};
-
         let raw = babybear_poseidon1_constants_16();
         let (full, partial) = raw.to_optimized();
         let air: Poseidon1Air<
@@ -157,6 +156,42 @@ mod tests {
             degree, 3,
             "Expected constraint degree 3 for BabyBear (7, 1)"
         );
+    }
+
+    #[test]
+    fn test_poseidon1_air_degree_sbox_11_1() {
+        // The x^11 one-register S-box must report a degree bound.
+        let raw = babybear_poseidon1_constants_16();
+        let (full, partial) = raw.to_optimized();
+        let air: Poseidon1Air<F, WIDTH, 11, 1, HALF_FULL_ROUNDS, PARTIAL_ROUNDS> =
+            Poseidon1Air::new(full, partial);
+
+        // The reported bound is what the prover queries before evaluation.
+        assert_eq!(air.max_constraint_degree(), Some(5));
+
+        // The symbolic walk over the actual constraints must agree with the bound:
+        //     commit x^3, constrain x^3 = x * x * x         → degree 3
+        //     output (x^3)^3 * x^2, asserted against post   → degree 5
+        let layout = AirLayout {
+            main_width: air.width(),
+            ..Default::default()
+        };
+        let degree = get_max_constraint_degree::<F, _>(&air, layout);
+        assert_eq!(degree, 5, "Expected constraint degree 5 for (11, 1)");
+    }
+
+    #[test]
+    fn test_constraint_satisfaction_sbox_11_1() {
+        // Trace generation and constraint evaluation implement the (11, 1) S-box independently;
+        // Check the two agree on real traces.
+        let raw = babybear_poseidon1_constants_16();
+        let (full, partial) = raw.to_optimized();
+        let air: Poseidon1Air<F, WIDTH, 11, 1, HALF_FULL_ROUNDS, PARTIAL_ROUNDS> =
+            Poseidon1Air::new(full, partial);
+
+        // Generate 16 permutations and check every constraint row-by-row.
+        let trace = air.generate_trace_rows(16, 0);
+        p3_air::check_constraints(&air, &trace, &[]);
     }
 
     #[test]

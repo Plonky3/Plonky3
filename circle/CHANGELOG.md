@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.0] - 2026-06-11
+### Merged PRs
+- Feat: add support for Periodic Columns at runtime (#1462)
+- Perf(circle): drop vp_denoms after batch inversion (#1502)
+- Fix(circle): add debug_assert for usize underflow in Point methods (#1445)
+- Fix: make test suite pass in release mode (#1513)
+- Refactor(fri): move FRI parameter constructors to associated methods (#1530)
+- Type Circle FRI Shape Errors (#1541)
+- Chore: use T::zero_vec(n) instead of vec![T::ZERO; n] (#1633)
+- Chore: remove needless_range_loop allows across the workspace (#1632)
+- Enforce Positive max_log_arity (#1652)
+- Verifier: add a couple strengthening checks (#1666)
+- Harden log_arity validation in FRI and Circle (#1676)
+- Add fail-fast checks to periodic LDE builders (#1614)
+- Perf(circle): pack the v_n_prod chain in compute_lagrange_den_batched (#1708)
+- Fix: add PoW check in Circle STARK's commit phase (#1723)
+- Minor (#1739)
+- Fix(merkle-tree): enforce opened row widths in batch verification (#1757)
+- Fix(circle): reject zero-query configurations (#1772)
+- Fix(circle): reject oversized query-index widths (#1774)
+- Perf(circle): parallelize selectors_on_coset via fused passes (#1776)
+- Perf(circle): fill the LDE extension in parallel (#1778)
+- Chore: update CHANGELOGs (#1785)
+- Doc: add basic READMEs in main crates (#1786)
+- Fix(circle): reject proofs that under-report commit rounds (#1792)
+- Perf: collapse allocations in cfft path (#1795)
+- Perf(circle): fuse CFFT butterfly layers into cache-resident parallel passes (#1796)
+- Perf(circle): batch and parallelize the PCS open phase (#1797)
+
+## [0.5.3] - 2026-05-15
+### Merged PRs
+- Perf(circle): drop vp_denoms after batch inversion (#1502)
+
+## [0.5.2] - 2026-03-27
 ## [0.5.1] - 2026-03-16
 ## [0.5.0] - 2026-03-10
 ### Merged PRs

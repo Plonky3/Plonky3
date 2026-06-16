@@ -1,10 +1,8 @@
 use alloc::vec::Vec;
 
 use p3_challenger::{CanSampleUniformBits, FieldChallenger};
-use p3_field::{ExtensionField, Field};
+use p3_field::Field;
 use p3_util::log2_strict_usize;
-
-use crate::fiat_shamir::errors::FiatShamirError;
 
 /// Sample `t` distinct STIR query indices uniformly from the transcript.
 ///
@@ -69,16 +67,15 @@ use crate::fiat_shamir::errors::FiatShamirError;
 ///   draws; distinctness only lets `t` shrink slightly for the
 ///   same security, with negligible practical effect.
 /// - Revisit when wiring this through a recursive verifier.
-pub fn get_challenge_stir_queries<Challenger, F, EF>(
+pub fn get_challenge_stir_queries<Challenger, F>(
     domain_size: usize,
     folding_factor: usize,
     num_queries: usize,
     challenger: &mut Challenger,
-) -> Result<Vec<usize>, FiatShamirError>
+) -> Vec<usize>
 where
     Challenger: FieldChallenger<F> + CanSampleUniformBits<F>,
     F: Field,
-    EF: ExtensionField<F>,
 {
     // Phase 1: derive the addressable folded domain.
     //
@@ -118,7 +115,7 @@ where
 
     // Phase 4: verifier and Merkle-proof code consume ascending indices.
     queries.sort_unstable();
-    Ok(queries)
+    queries
 }
 
 #[cfg(test)]
@@ -127,7 +124,6 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_challenger::{CanObserve, DuplexChallenger};
-    use p3_field::extension::BinomialExtensionField;
     use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
     use proptest::prelude::*;
     use rand::rngs::SmallRng;
@@ -136,7 +132,6 @@ mod tests {
     use super::*;
 
     type F = KoalaBear;
-    type EF = BinomialExtensionField<F, 4>;
     type Perm = Poseidon2KoalaBear<16>;
     type MyChallenger = DuplexChallenger<F, Perm, 16, 8>;
 
@@ -196,13 +191,12 @@ mod tests {
 
             // First run: seed -> queries_a.
             let mut challenger_a = challenger_with_seed(seed);
-            let queries_a = get_challenge_stir_queries::<MyChallenger, F, EF>(
+            let queries_a = get_challenge_stir_queries::<MyChallenger, F>(
                 domain_size,
                 folding_factor,
                 num_queries,
                 &mut challenger_a,
-            )
-            .expect("RESAMPLE = true cannot fail");
+            );
 
             // (1) length == request.
             prop_assert_eq!(queries_a.len(), num_queries);
@@ -229,13 +223,12 @@ mod tests {
             // (5) determinism: same seed -> byte-identical output.
             //     This is the prover/verifier Fiat-Shamir replay property.
             let mut challenger_b = challenger_with_seed(seed);
-            let queries_b = get_challenge_stir_queries::<MyChallenger, F, EF>(
+            let queries_b = get_challenge_stir_queries::<MyChallenger, F>(
                 domain_size,
                 folding_factor,
                 num_queries,
                 &mut challenger_b,
-            )
-            .expect("RESAMPLE = true cannot fail");
+            );
             prop_assert_eq!(queries_a, queries_b);
         }
     }
@@ -253,13 +246,12 @@ mod tests {
         let num_queries = 75usize;
 
         let mut challenger = challenger_with_seed(0xC0FFEE);
-        let queries = get_challenge_stir_queries::<MyChallenger, F, EF>(
+        let queries = get_challenge_stir_queries::<MyChallenger, F>(
             domain_size,
             folding_factor,
             num_queries,
             &mut challenger,
-        )
-        .expect("RESAMPLE = true cannot fail");
+        );
 
         // Length capped at the domain; output is the full domain ascending.
         assert_eq!(queries.len(), folded_domain_size);
@@ -297,13 +289,12 @@ mod tests {
         // Histogram: one draw per seed.
         for seed in 0u64..NUM_DRAWS as u64 {
             let mut challenger = challenger_with_seed(seed);
-            let q = get_challenge_stir_queries::<MyChallenger, F, EF>(
+            let q = get_challenge_stir_queries::<MyChallenger, F>(
                 domain_size,
                 folding_factor,
                 1,
                 &mut challenger,
-            )
-            .expect("RESAMPLE = true cannot fail");
+            );
             assert_eq!(q.len(), 1);
             counts[q[0]] += 1;
         }

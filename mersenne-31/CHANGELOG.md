@@ -6,6 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## [0.6.0] - 2026-06-11
+### Merged PRs
+- Make batched_linear_combination chunk size per-impl tunable (#1451)
+- Mds: small improvements and more testing (#1459)
+- Perf: abstract away Copy vs Clone (#1463)
+- Field: implement packed / packed division (#1457)
+- Feat: expose Poseidon2 large instances (#1508)
+- Mersenne31: add poseidon1 (#1428)
+- Field: add division ops for packed binomial extension (#1512)
+- Feat(mersenne-31): add packed round constants for Poseidon1 AVX2 / AVX512 (#1520)
+- Add property tests for x86 Poseidon2 width-32 (#1550)
+- Test(poseidon1): validate all SIMD lanes against scalar outputs (#1560)
+- Field: specialize packed mixed_dot_product by chunk strategy (#1573)
+- Add carry-critical NEON dot product regression tests (#1600)
+- Fix(mersenne-31): allow value == P in MDS partial-reduction (#1684)
+- Ci: tighten doc/release/TOML checks (#1689)
+- Fix: do not reduce Mersenne::ZEROS[1] (#1691)
+- Refactor(field): unify extension-field logic under common abstraction (#1696)
+- Refactor(field): default ext_square to a general multiply (#1697)
+- Fix(mersenne-31): make serde encoding canonical (#1773)
+- Chore: update CHANGELOGs (#1785)
+
+## [0.5.3] - 2026-05-15
+### Merged PRs
+- Field: specialize packed mixed_dot_product by chunk strategy (#1573)
+- Add carry-critical NEON dot product regression tests (#1600)
+
+## [0.5.2] - 2026-03-27
+### Merged PRs
+- Make batched_linear_combination chunk size per-impl tunable (#1451)
+- Mds: small improvements and more testing (#1459)
+- Perf: abstract away Copy vs Clone (#1463)
+
 ## [0.5.1] - 2026-03-16
 ## [0.5.0] - 2026-03-10
 ### Merged PRs

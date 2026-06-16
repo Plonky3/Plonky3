@@ -23,7 +23,7 @@ use crate::{
 /// Polynomials of equal degree can be combined using randomness before calling this function.
 ///
 /// The Soundness error from prove_fri comes from the paper:
-/// Proximity Gaps for Reed-Solomon Codes (https://eprint.iacr.org/2020/654)
+/// Proximity Gaps for Reed-Solomon Codes (<https://eprint.iacr.org/2020/654>)
 /// and is either `rate^{num_queries}` or `rate^{num_queries/2}` depending on if you rely on conjectured or
 /// proven soundness. Particularly safety conscious users may want to set `num_queries` slightly higher than
 /// this to account for the fact that most implementations batch inputs using a single random challenge
@@ -63,6 +63,14 @@ where
 {
     assert!(!inputs.is_empty());
     assert!(
+        params.num_queries > 0,
+        "num_queries must be at least 1 for FRI soundness"
+    );
+    assert!(
+        params.max_log_arity > 0,
+        "max_log_arity must be at least 1 to guarantee folding progress"
+    );
+    assert!(
         inputs
             .iter()
             .tuple_windows()
@@ -70,7 +78,12 @@ where
         "Inputs are not sorted in descending order of length."
     );
 
-    let log_max_height = log2_strict_usize(inputs[0].len());
+    // Index sampling and `open_input` must agree on the height; the caller's value is canonical.
+    debug_assert_eq!(
+        log_global_max_height,
+        log2_strict_usize(inputs[0].len()),
+        "log_global_max_height must match the largest input length"
+    );
     let log_min_height = log2_strict_usize(inputs.last().unwrap().len());
     if params.log_final_poly_len > 0 {
         // Final_poly_degree must be less than or equal to the degree of the smallest polynomial.
@@ -99,12 +112,13 @@ where
         // (Grabbed this from wikipedia page on the birthday problem)
         // N!/(N^{num_queries} * (N - num_queries)!) ~ (1 - 1/N)^{num_queries * (num_queries - 1)/2}
         //                                           ~ (1 - num_queries^2/2N)
-        // Here N = 2^log_max_height.
+        // Here N = 2^log_global_max_height.
         // With num_queries = 100, N = 2^20, this is 0.995 so there is a .5% chance of a collision.
         // Due to this, security conscious users may want to set num_queries a little higher than the
         // theoretical minimum.
         iter::repeat_with(|| {
-            let index = challenger.sample_bits(log_max_height + folding.extra_query_index_bits());
+            let index =
+                challenger.sample_bits(log_global_max_height + folding.extra_query_index_bits());
             // For each index, create a proof that the folding operations along the chain are correct.
             // With variable arity, the index shifts by log_arity each round.
             QueryProof {
@@ -178,6 +192,11 @@ where
     Challenger: FieldChallenger<Val> + GrindingChallenger + CanObserve<M::Commitment>,
     Folding: FriFoldingStrategy<Val, Challenge>,
 {
+    assert!(
+        params.max_log_arity > 0,
+        "max_log_arity must be at least 1 to guarantee folding progress"
+    );
+
     let mut inputs_iter = inputs.into_iter().peekable();
     let mut folded = inputs_iter.next().unwrap();
     let mut commits = vec![];
@@ -257,7 +276,7 @@ where
 }
 
 /// Given an `index` produce a proof that the chain of folds are correct.
-/// This is the prover's complement to the verifier's [`verify_query`] function.
+/// This is the prover's complement to the verifier's `verify_query` function.
 ///
 /// In addition to the output of this function, the prover must also supply the verifier with the input values
 /// (with associated opening proofs). These are produced by the `open_input` function passed into `prove_fri`.

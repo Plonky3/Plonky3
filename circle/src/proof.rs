@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 ))]
 pub struct CircleFriProof<F: Field, M: Mmcs<F>, Witness, InputProof> {
     pub commit_phase_commits: Vec<M::Commitment>,
+    pub commit_pow_witnesses: Vec<Witness>,
     pub query_proofs: Vec<CircleQueryProof<F, M, InputProof>>,
     // This could become Vec<FC::Challenge> if this library was generalized to support non-constant
     // final polynomials.
@@ -40,4 +41,17 @@ pub struct CircleCommitPhaseProofStep<F: Field, M: Mmcs<F>> {
     pub sibling_values: Vec<F>,
 
     pub opening_proof: M::Proof,
+}
+
+impl<F: Field, M: Mmcs<F>> CircleCommitPhaseProofStep<F, M> {
+    /// Convert `log_arity` to `usize` and enforce the protocol bounds.
+    ///
+    /// Returns `None` when `log_arity` is zero or exceeds `max_log_arity`.
+    #[inline]
+    pub(crate) fn checked_log_arity(&self, max_log_arity: usize) -> Option<usize> {
+        let log_arity = self.log_arity as usize;
+        (1..=max_log_arity)
+            .contains(&log_arity)
+            .then_some(log_arity)
+    }
 }

@@ -1,7 +1,9 @@
 use core::marker::PhantomData;
 
+use serde::{Deserialize, Serialize};
+
 /// Entry kinds for base-field trace columns and public inputs.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BaseEntry {
     Preprocessed { offset: usize },
     Main { offset: usize },
@@ -10,7 +12,7 @@ pub enum BaseEntry {
 }
 
 /// Entry kinds for extension-field columns (permutation trace, challenges, and permutation values).
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ExtEntry {
     Permutation { offset: usize },
     Challenge,
@@ -18,10 +20,11 @@ pub enum ExtEntry {
 }
 
 /// A variable within the evaluation window for base-field columns.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct SymbolicVariable<F> {
     pub entry: BaseEntry,
     pub index: usize,
+    #[serde(skip)]
     pub(crate) _phantom: PhantomData<F>,
 }
 
@@ -48,10 +51,11 @@ impl<F> SymbolicVariable<F> {
 }
 
 /// A variable within the evaluation window for extension-field columns.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct SymbolicVariableExt<F, EF> {
     pub entry: ExtEntry,
     pub index: usize,
+    #[serde(skip)]
     pub(crate) _phantom: PhantomData<(F, EF)>,
 }
 

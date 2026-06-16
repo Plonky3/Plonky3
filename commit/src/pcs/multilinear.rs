@@ -1,29 +1,22 @@
 //! Polynomial commitment scheme trait for multilinear polynomials.
 
-use alloc::vec::Vec;
 use core::fmt::Debug;
 
 use p3_field::{ExtensionField, Field};
-use p3_matrix::dense::RowMajorMatrix;
-use p3_multilinear_util::point::Point;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-
-/// Claimed evaluation values from an opening.
-///
-/// `values[i][j]` = evaluation of polynomial i at its j-th opening point.
-pub type MultilinearOpenedValues<F> = Vec<Vec<F>>;
 
 /// Polynomial commitment scheme for multilinear polynomials over the Boolean hypercube.
 ///
 /// A multilinear polynomial in m variables is defined by its 2^m evaluations
 /// on {0,1}^m. This trait abstracts the three phases of a PCS:
 ///
-/// - **Commit**: bind to one or more polynomials and register the evaluation
-///   points where they will be opened.
-/// - **Open**: produce a proof that the committed polynomials evaluate to the
-///   claimed values at the registered points.
-/// - **Verify**: check the proof against the commitment and claimed values.
+/// - **Commit**: bind to a witness and return a public commitment plus
+///   prover-only auxiliary data.
+/// - **Open**: produce a proof for an agreed opening protocol using the
+///   prover data from commitment.
+/// - **Verify**: check the proof against the public commitment and opening
+///   protocol.
 pub trait MultilinearPcs<Challenge, Challenger>
 where
     Challenge: ExtensionField<Self::Val>,
@@ -44,17 +37,21 @@ where
     /// Verification failure type.
     type Error: Debug;
 
+    /// Committed witness.
+    type Witness;
+
+    /// Public opening shapes agreed before commit.
+    type OpeningProtocol;
+
     /// Number of variables m of the committed polynomials.
     /// Every polynomial has 2^m evaluations.
     fn num_vars(&self) -> usize;
 
-    /// Commit to a batch of multilinear polynomials and register opening points.
+    /// Commit to a multilinear witness.
     ///
-    /// Each column of the evaluation matrix holds one polynomial's 2^m values
-    /// on the Boolean hypercube in lexicographic order.
-    ///
-    /// `opening_points[i]` lists the points at which the i-th polynomial
-    /// will later be opened.
+    /// The concrete witness representation is implementation-defined. It may
+    /// be a flat polynomial, a table layout, or another structure that expands
+    /// to multilinear evaluations over the Boolean hypercube.
     ///
     /// # Returns
     ///
@@ -62,38 +59,39 @@ where
     /// - Opaque prover data consumed by `open`.
     fn commit(
         &self,
-        evaluations: RowMajorMatrix<Self::Val>,
-        opening_points: &[Vec<Point<Challenge>>],
+        witness: Self::Witness,
         challenger: &mut Challenger,
     ) -> (Self::Commitment, Self::ProverData);
 
-    /// Produce an opening proof for the points registered during commit.
+    /// Produce an opening proof for the supplied opening protocol.
     ///
-    /// Consumes the prover data.
+    /// Consumes the prover data returned by `commit`. The opening protocol is
+    /// public metadata shared with the verifier and determines which committed
+    /// values are opened.
     ///
     /// # Returns
     ///
-    /// - Claimed evaluation values: `values[i][j]` is the evaluation of the
-    ///   i-th polynomial at its j-th registered point.
-    /// - The opening proof.
+    /// - The opening proof, including any implementation-specific claimed
+    ///   evaluations needed by `verify`.
     fn open(
         &self,
         prover_data: Self::ProverData,
+        protocol: Self::OpeningProtocol,
         challenger: &mut Challenger,
-    ) -> (MultilinearOpenedValues<Challenge>, Self::Proof);
+    ) -> Self::Proof;
 
-    /// Verify an opening proof against a commitment and claimed evaluations.
+    /// Verify an opening proof against a public commitment and opening protocol.
     ///
-    /// `opening_claims[i]` contains (point, claimed_value) pairs for the
-    /// i-th committed polynomial.
+    /// The opening protocol must be the same public protocol used by the
+    /// prover when constructing the proof.
     ///
     /// The challenger must be in the same transcript state as the prover's
     /// challenger was at the corresponding protocol step.
     fn verify(
         &self,
         commitment: &Self::Commitment,
-        opening_claims: &[Vec<(Point<Challenge>, Challenge)>],
         proof: &Self::Proof,
         challenger: &mut Challenger,
+        protocol: Self::OpeningProtocol,
     ) -> Result<(), Self::Error>;
 }

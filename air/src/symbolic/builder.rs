@@ -5,6 +5,7 @@ use core::borrow::Borrow;
 use p3_field::{Algebra, ExtensionField, Field};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::symbolic::SymbolicExpr;
@@ -12,15 +13,15 @@ use crate::symbolic::expression::BaseLeaf;
 use crate::symbolic::expression_ext::SymbolicExpressionExt;
 use crate::symbolic::variable::{BaseEntry, ExtEntry, SymbolicVariableExt};
 use crate::{
-    Air, AirBuilder, ExtensionBuilder, PeriodicAirBuilder, PermutationAirBuilder,
-    SymbolicExpression, SymbolicVariable, WindowAccess,
+    Air, AirBuilder, BaseAir, ExtensionBuilder, PermutationAirBuilder, SymbolicExpression,
+    SymbolicVariable, WindowAccess,
 };
 
 /// Describes the shape of an AIR for symbolic constraint evaluation.
 ///
 /// Bundles the various width/count parameters needed to construct a
 /// [`SymbolicAirBuilder`].
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct AirLayout {
     /// Width of [`AirBuilder::preprocessed`].
     pub preprocessed_width: usize,
@@ -34,8 +35,21 @@ pub struct AirLayout {
     pub num_permutation_challenges: usize,
     /// Length of [`PermutationAirBuilder::permutation_values`].
     pub num_permutation_values: usize,
-    /// Length of [`PeriodicAirBuilder::periodic_values`].
+    /// Length of [`AirBuilder::periodic_values`].
     pub num_periodic_columns: usize,
+}
+
+impl AirLayout {
+    /// Derive layout from an AIR's metadata.
+    pub fn from_air<F: Clone + Send + Sync>(air: &impl BaseAir<F>) -> Self {
+        Self {
+            preprocessed_width: air.preprocessed_width(),
+            main_width: air.width(),
+            num_public_values: air.num_public_values(),
+            num_periodic_columns: air.num_periodic_columns(),
+            ..Default::default()
+        }
+    }
 }
 
 #[instrument(skip_all, level = "debug")]
@@ -130,7 +144,7 @@ where
     (builder.base_constraints(), builder.extension_constraints())
 }
 
-/// An [`AirBuilder`] for evaluating constraints symbolically, and recording them for later use.
+/// Symbolic AIR builder that records constraints.
 #[derive(Debug)]
 pub struct SymbolicAirBuilder<F: Field, EF: ExtensionField<F> = F> {
     preprocessed: RowMajorMatrix<SymbolicVariable<F>>,
@@ -268,6 +282,7 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
     type PreprocessedWindow = RowMajorMatrix<Self::Var>;
     type MainWindow = RowMajorMatrix<Self::Var>;
     type PublicVar = SymbolicVariable<F>;
+    type PeriodicVar = SymbolicVariable<F>;
 
     fn main(&self) -> Self::MainWindow {
         self.main.clone()
@@ -285,14 +300,8 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
         SymbolicExpr::Leaf(BaseLeaf::IsLastRow)
     }
 
-    /// # Panics
-    /// This function panics if `size` is not `2`.
-    fn is_transition_window(&self, size: usize) -> Self::Expr {
-        if size == 2 {
-            SymbolicExpr::Leaf(BaseLeaf::IsTransition)
-        } else {
-            panic!("uni-stark only supports a window size of 2")
-        }
+    fn is_transition(&self) -> Self::Expr {
+        SymbolicExpr::Leaf(BaseLeaf::IsTransition)
     }
 
     fn assert_zero<I: Into<Self::Expr>>(&mut self, x: I) {
@@ -302,6 +311,10 @@ impl<F: Field, EF: ExtensionField<F>> AirBuilder for SymbolicAirBuilder<F, EF> {
 
     fn public_values(&self) -> &[Self::PublicVar] {
         &self.public_values
+    }
+
+    fn periodic_values(&self) -> &[Self::PeriodicVar] {
+        &self.periodic
     }
 }
 
@@ -345,14 +358,6 @@ where
     }
 }
 
-impl<F: Field, EF: ExtensionField<F>> PeriodicAirBuilder for SymbolicAirBuilder<F, EF> {
-    type PeriodicVar = SymbolicVariable<F>;
-
-    fn periodic_values(&self) -> &[Self::PeriodicVar] {
-        &self.periodic
-    }
-}
-
 /// Tracks whether a constraint was emitted via `assert_zero` (base) or `assert_zero_ext` (ext).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ConstraintType {
@@ -367,7 +372,7 @@ enum ConstraintType {
 /// When alpha powers are pre-computed in global order `[α^{N−1}, …, α⁰]`,
 /// the layout tells us which powers correspond to base-field constraints (for
 /// `batched_linear_combination`) and which to extension-field constraints.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ConstraintLayout {
     /// Global indices of base-field constraints, in emission order.
     pub base_indices: Vec<usize>,
@@ -660,7 +665,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "uni-stark only supports a window size of 2")]
+    #[should_panic(expected = "exceeds supported arity")]
     fn test_is_transition_window_size_3_panics() {
         // Window size 3 is not supported and should panic.
         let builder = SymbolicAirBuilder::<F>::new(layout(0, 2, 0, 0));
@@ -1068,5 +1073,34 @@ mod tests {
         for &val in &ext {
             assert_eq!(val, EF::ONE);
         }
+    }
+
+    #[test]
+    fn air_layout_serde_round_trip() {
+        let layout = AirLayout {
+            preprocessed_width: 2,
+            main_width: 5,
+            num_public_values: 3,
+            permutation_width: 4,
+            num_permutation_challenges: 2,
+            num_permutation_values: 1,
+            num_periodic_columns: 6,
+        };
+        let json = serde_json::to_string(&layout).unwrap();
+        let decoded: AirLayout = serde_json::from_str(&json).unwrap();
+        assert_eq!(serde_json::to_string(&decoded).unwrap(), json);
+    }
+
+    #[test]
+    fn constraint_layout_serde_round_trip() {
+        // An interleaved layout drives the base/ext stream separation the verifier folds with.
+        let layout = ConstraintLayout {
+            base_indices: vec![0, 2, 4],
+            ext_indices: vec![1, 3],
+        };
+        let json = serde_json::to_string(&layout).unwrap();
+        let decoded: ConstraintLayout = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.base_indices, layout.base_indices);
+        assert_eq!(decoded.ext_indices, layout.ext_indices);
     }
 }

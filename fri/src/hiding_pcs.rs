@@ -13,7 +13,6 @@ use p3_matrix::bitrev::{BitReversalPerm, BitReversibleMatrix};
 use p3_matrix::dense::{DenseMatrix, RowMajorMatrix, RowMajorMatrixCow};
 use p3_matrix::horizontally_truncated::HorizontallyTruncated;
 use p3_matrix::row_index_mapped::RowIndexMappedView;
-use p3_util::zip_eq::zip_eq;
 use rand::distr::{Distribution, StandardUniform};
 use rand::{Rng, RngExt};
 use spin::Mutex;
@@ -98,6 +97,11 @@ where
             &self.inner, degree)
     }
 
+    fn log_max_lde_height(&self) -> usize {
+        <TwoAdicFriPcs<Val, Dft, InputMmcs, FriMmcs> as Pcs<Challenge, Challenger>>::log_max_lde_height(
+            &self.inner)
+    }
+
     fn commit(
         &self,
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
@@ -150,7 +154,7 @@ where
     /// Get the quotient polynomial LDEs. We first decompose the quotient polynomial into
     /// `num_chunks` many smaller polynomials each of degree `degree / num_chunks`.
     /// These quotient polynomials are then randomized as explained in Section 4.2 of
-    /// https://eprint.iacr.org/2024/1037.pdf .
+    /// <https://eprint.iacr.org/2024/1037.pdf>.
     ///
     /// ### Arguments
     /// - `quotient_domain` the domain of the quotient polynomial.
@@ -166,6 +170,10 @@ where
         evaluations: impl IntoIterator<Item = (Self::Domain, RowMajorMatrix<Val>)>,
         num_chunks: usize,
     ) -> Vec<RowMajorMatrix<Val>> {
+        assert!(
+            num_chunks > 1,
+            "num_chunks must be > 1 to preserve hiding (got {num_chunks})"
+        );
         let (domains, evaluations): (Vec<_>, Vec<_>) = evaluations.into_iter().unzip();
         let cis = get_zp_cis(&domains);
         let last_chunk = num_chunks - 1;
@@ -371,20 +379,55 @@ where
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
         let (opened_values_for_rand_cws, inner_proof) = proof;
-        // Now we merge `opened_values_for_rand_cws` into the opened values in `rounds`, undoing
-        // the split that we did in `open`, to get a complete set of opened values for the inner PCS
-        // to check.
-        for (round, rand_round) in zip_eq(
-            rounds.iter_mut(),
-            opened_values_for_rand_cws,
-            FriError::InvalidProofShape,
-        )? {
-            for (mat, rand_mat) in
-                zip_eq(round.1.iter_mut(), rand_round, FriError::InvalidProofShape)?
+
+        // Proving split each opening into a public half and a hidden half.
+        // - The public half lives here.
+        // - The hidden half travels beside the proof as random codewords.
+        //
+        // Re-joining them gives the inner verifier the full openings it committed to.
+        //
+        //     public (per point):  [v_0, .., v_k]
+        //     hidden (per point):                [r_0, .., r_m]
+        //     merged:              [v_0, .., v_k,  r_0, .., r_m]
+        //
+        // Invariant: the halves nest identically by round, then matrix, then point.
+        // Each level's length is checked before merging.
+        // A mismatch returns a precise error instead of being truncated silently.
+
+        // Level 1: one set of random openings per round.
+        if opened_values_for_rand_cws.len() != rounds.len() {
+            return Err(FriError::HidingRandomOpeningRoundCountMismatch {
+                expected: rounds.len(),
+                got: opened_values_for_rand_cws.len(),
+            });
+        }
+        for (round_idx, (round, rand_round)) in rounds
+            .iter_mut()
+            .zip(opened_values_for_rand_cws.iter())
+            .enumerate()
+        {
+            // Level 2: one set per matrix in this round.
+            if rand_round.len() != round.1.len() {
+                return Err(FriError::HidingRandomOpeningMatrixCountMismatch {
+                    round: round_idx,
+                    expected: round.1.len(),
+                    got: rand_round.len(),
+                });
+            }
+            for (matrix_idx, (mat, rand_mat)) in
+                round.1.iter_mut().zip(rand_round.iter()).enumerate()
             {
-                for (point, rand_point) in
-                    zip_eq(mat.1.iter_mut(), rand_mat, FriError::InvalidProofShape)?
-                {
+                // Level 3: one set per opening point of this matrix.
+                if rand_mat.len() != mat.1.len() {
+                    return Err(FriError::HidingRandomOpeningPointCountMismatch {
+                        round: round_idx,
+                        matrix: matrix_idx,
+                        expected: mat.1.len(),
+                        got: rand_mat.len(),
+                    });
+                }
+                // Shapes agree: append the hidden values onto the public ones.
+                for (point, rand_point) in mat.1.iter_mut().zip(rand_mat.iter()) {
                     point.1.extend(rand_point);
                 }
             }
@@ -439,7 +482,7 @@ where
 }
 
 /// Compute the normalizing constants for the Langrange selectors of the provided domains.
-/// See Section 4.2 of https://eprint.iacr.org/2024/1037.pdf for more details.
+/// See Section 4.2 of <https://eprint.iacr.org/2024/1037.pdf> for more details.
 fn get_zp_cis<D: PolynomialSpace>(qc_domains: &[D]) -> Vec<p3_commit::Val<D>> {
     batch_multiplicative_inverse(
         &qc_domains
@@ -457,4 +500,226 @@ fn get_zp_cis<D: PolynomialSpace>(qc_domains: &[D]) -> Vec<p3_commit::Val<D>> {
             })
             .collect::<Vec<_>>(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
+    use p3_challenger::DuplexChallenger;
+    use p3_commit::ExtensionMmcs;
+    use p3_dft::Radix2Dit;
+    use p3_field::Field;
+    use p3_field::extension::BinomialExtensionField;
+    use p3_merkle_tree::MerkleTreeMmcs;
+    use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    use super::*;
+
+    type Val = BabyBear;
+    type Challenge = BinomialExtensionField<Val, 4>;
+    type Perm = Poseidon2BabyBear<16>;
+    type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
+    type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
+    type ValMmcs =
+        MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 2, 8>;
+    type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
+    type Dft = Radix2Dit<Val>;
+    type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
+    type MyPcs = HidingFriPcs<Val, Dft, ValMmcs, ChallengeMmcs, SmallRng>;
+
+    type Commitment = <ValMmcs as Mmcs<Val>>::Commitment;
+    type Domain = TwoAdicMultiplicativeCoset<Val>;
+    /// Public opening claims (the `rounds` argument): per matrix, its domain and
+    /// the `(point, values)` pairs.
+    type Claims = Vec<(Domain, Vec<(Challenge, Vec<Challenge>)>)>;
+    type Proof = <MyPcs as Pcs<Challenge, Challenger>>::Proof;
+    type TestError =
+        FriError<<ChallengeMmcs as Mmcs<Challenge>>::Error, <ValMmcs as Mmcs<Val>>::Error>;
+
+    /// Random codewords appended per matrix.
+    ///
+    /// Must be `> 0` so each opening splits into a public part (`rounds`) and a
+    /// hidden part (`proof.0`) — the split `verify` re-merges and whose shape the
+    /// new error variants guard.
+    const NUM_RANDOM_CODEWORDS: usize = 2;
+
+    /// Run a real prover roundtrip and return `(pcs, claims, proof, challenger)`
+    /// ready to verify, with `challenger` advanced past the commitment.
+    ///
+    /// One round, one matrix, one point, so the random-opening tree nests as:
+    ///
+    /// ```text
+    ///     proof.0          = [round_0]      // 1 round
+    ///     proof.0[0]       = [matrix_0]     // 1 matrix
+    ///     proof.0[0][0]    = [point_0]      // 1 point
+    ///     proof.0[0][0][0] = [v_0, v_1]     // NUM_RANDOM_CODEWORDS values
+    /// ```
+    ///
+    /// Each test perturbs one level to trip the matching count check.
+    fn make_fixture() -> (MyPcs, Vec<(Commitment, Claims)>, Proof, Challenger) {
+        // Fixed seeds keep the roundtrip deterministic.
+        let mut rng = SmallRng::seed_from_u64(1);
+
+        let perm = Perm::new_from_rng_128(&mut rng);
+        let hash = MyHash::new(perm.clone());
+        let compress = MyCompress::new(perm.clone());
+
+        let val_mmcs = ValMmcs::new(hash, compress, 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+        // Minimal sound parameters: blowup 2, binary folding, 2 queries.
+        let fri_params = FriParameters {
+            log_blowup: 1,
+            log_final_poly_len: 0,
+            max_log_arity: 1,
+            num_queries: 2,
+            commit_proof_of_work_bits: 0,
+            query_proof_of_work_bits: 0,
+            mmcs: challenge_mmcs,
+        };
+
+        // The wrapper owns an independently seeded RNG for its random codewords.
+        let pcs = MyPcs::new(
+            Dft::default(),
+            val_mmcs,
+            fri_params,
+            NUM_RANDOM_CODEWORDS,
+            SmallRng::seed_from_u64(2),
+        );
+
+        // The wrapper interleaves the trace with random rows, doubling its
+        // height, so (like the zk prover) we commit against a `2 * height` domain.
+        let log_degree = 3;
+        let width = 4;
+        let domain =
+            <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 2 << log_degree);
+        let trace = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_degree, width);
+        let (commitment, prover_data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(domain, trace)]);
+
+        // Prover: observe, sample the point, prove.
+        let mut p_challenger = Challenger::new(perm.clone());
+        p_challenger.observe(&commitment);
+        let zeta: Challenge = p_challenger.sample_algebra_element();
+        let (opened_values, proof) =
+            pcs.open(vec![(&prover_data, vec![vec![zeta]])], &mut p_challenger);
+
+        // Verifier: replay up to the point sample so a valid proof must pass.
+        let mut v_challenger = Challenger::new(perm);
+        v_challenger.observe(&commitment);
+        let v_zeta: Challenge = v_challenger.sample_algebra_element();
+        assert_eq!(
+            v_zeta, zeta,
+            "prover and verifier must sample the same point"
+        );
+
+        // Public claims; the hidden values stay in `proof.0` until `verify`.
+        let claims = vec![(
+            commitment,
+            vec![(domain, vec![(zeta, opened_values[0][0][0].clone())])],
+        )];
+
+        (pcs, claims, proof, v_challenger)
+    }
+
+    /// Verify with fully qualified syntax so the type parameters are unambiguous.
+    fn run_verify(
+        pcs: &MyPcs,
+        claims: Vec<(Commitment, Claims)>,
+        proof: &Proof,
+        challenger: &mut Challenger,
+    ) -> Result<(), TestError> {
+        <MyPcs as Pcs<Challenge, Challenger>>::verify(pcs, claims, proof, challenger)
+    }
+
+    #[test]
+    fn valid_proof_passes() {
+        // Baseline: an unmodified proof verifies, so the mismatch tests below
+        // start from a genuinely valid proof.
+        let (pcs, claims, proof, mut challenger) = make_fixture();
+        run_verify(&pcs, claims, &proof, &mut challenger)
+            .expect("valid hiding proof should verify");
+    }
+
+    #[test]
+    fn random_opening_round_count_mismatch() {
+        let (pcs, claims, mut proof, mut challenger) = make_fixture();
+
+        // One random-opening entry is required per public round.
+        //     claims:  [round_0]          -> expected 1
+        //     proof.0: [round_0, EXTRA]   -> got 2
+        let expected_rounds = claims.len();
+        proof.0.push(vec![]);
+
+        let err = run_verify(&pcs, claims, &proof, &mut challenger)
+            .expect_err("should reject an extra random-opening round");
+
+        match err {
+            FriError::HidingRandomOpeningRoundCountMismatch { expected, got } => {
+                assert_eq!(expected, expected_rounds);
+                assert_eq!(got, expected_rounds + 1);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn random_opening_matrix_count_mismatch() {
+        let (pcs, claims, mut proof, mut challenger) = make_fixture();
+
+        // Round counts match, so the per-round matrix check fires next.
+        //     claims[0]:  [matrix_0]          -> expected 1
+        //     proof.0[0]: [matrix_0, EXTRA]   -> got 2
+        let expected_mats = claims[0].1.len();
+        proof.0[0].push(vec![]);
+
+        let err = run_verify(&pcs, claims, &proof, &mut challenger)
+            .expect_err("should reject an extra random-opening matrix");
+
+        match err {
+            FriError::HidingRandomOpeningMatrixCountMismatch {
+                round,
+                expected,
+                got,
+            } => {
+                assert_eq!(round, 0);
+                assert_eq!(expected, expected_mats);
+                assert_eq!(got, expected_mats + 1);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn random_opening_point_count_mismatch() {
+        let (pcs, claims, mut proof, mut challenger) = make_fixture();
+
+        // Round and matrix counts match, so the per-matrix point check fires.
+        //     claims[0][0]:  [point_0]          -> expected 1
+        //     proof.0[0][0]: [point_0, EXTRA]   -> got 2
+        let expected_points = claims[0].1[0].1.len();
+        proof.0[0][0].push(vec![]);
+
+        let err = run_verify(&pcs, claims, &proof, &mut challenger)
+            .expect_err("should reject an extra random-opening point");
+
+        match err {
+            FriError::HidingRandomOpeningPointCountMismatch {
+                round,
+                matrix,
+                expected,
+                got,
+            } => {
+                assert_eq!(round, 0);
+                assert_eq!(matrix, 0);
+                assert_eq!(expected, expected_points);
+                assert_eq!(got, expected_points + 1);
+            }
+            other => panic!("wrong error variant: {other:?}"),
+        }
+    }
 }

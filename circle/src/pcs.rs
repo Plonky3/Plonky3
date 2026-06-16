@@ -10,28 +10,30 @@ use p3_commit::{
     PeriodicLdeTable, PolynomialSpace,
 };
 use p3_field::extension::ComplexExtendable;
-use p3_field::{ExtensionField, Field};
+use p3_field::{ExtensionField, Field, dot_product};
 use p3_fri::FriParameters;
 use p3_fri::verifier::FriError;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow};
 use p3_matrix::row_index_mapped::RowIndexMappedView;
 use p3_matrix::{Dimensions, Matrix};
-use p3_maybe_rayon::prelude::*;
 use p3_util::log2_strict_usize;
 use p3_util::zip_eq::zip_eq;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::info_span;
+use tracing::{debug_span, info_span};
 
-use crate::deep_quotient::{deep_quotient_reduce_row, extract_lambda};
+use crate::deep_quotient::{
+    VanishingParts, accumulate_deep_quotient, compute_vanishing_parts, deep_quotient_reduce_row,
+    extract_lambda,
+};
 use crate::domain::CircleDomain;
 use crate::folding::{CircleFriFolding, CircleFriFoldingForMmcs, fold_y, fold_y_row};
-use crate::point::Point;
+use crate::point::{Point, compute_lagrange_den_batched};
 use crate::prover::prove;
 use crate::verifier::verify;
 use crate::{
     CfftPerm, CfftPermutable, CircleEvaluations, CircleFriProof, build_periodic_lde_table_circle,
-    cfft_permute_index,
+    cfft_permute_index, cfft_permute_slice,
 };
 
 #[derive(Clone, Debug)]
@@ -76,6 +78,15 @@ where
     FirstLayerMmcsError(FriMmcsError),
     #[error("input shape error: mismatched dimensions")]
     InputShapeError,
+    /// The opening point coincides with a queried domain point.
+    ///
+    /// The DEEP-quotient denominator vanishes there, so the row cannot be reduced.
+    #[error("opening point coincides with a query point")]
+    OpeningPointMatchesQueryPoint,
+    #[error(
+        "batch {batch}, matrix {matrix}: opened at no points; its width cannot be authenticated"
+    )]
+    MatrixWithoutOpeningPoints { batch: usize, matrix: usize },
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -119,6 +130,10 @@ where
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
         CircleDomain::standard(log2_strict_usize(degree))
+    }
+
+    fn log_max_lde_height(&self) -> usize {
+        Val::CIRCLE_TWO_ADICITY
     }
 
     fn commit(
@@ -181,8 +196,17 @@ where
         if domain == committed_domain {
             mat.as_cow().cfft_perm_rows()
         } else {
-            CircleEvaluations::from_cfft_order(committed_domain, mat)
-                .extrapolate(domain)
+            // The committed matrix is the LDE of a polynomial of `committed_domain.log_n -
+            // log_blowup` coefficients, so interpolating it leaves zeros above that index.
+            // Truncating to the original coefficient count lets `domain` be smaller than the
+            // committed LDE (e.g. a quotient domain when `log_blowup` exceeds the quotient
+            // degree), which `extrapolate` would reject.
+            let log_orig = committed_domain.log_n - self.fri_params.log_blowup;
+            let mut coeffs =
+                CircleEvaluations::from_cfft_order(committed_domain, mat).interpolate();
+            let width = coeffs.width();
+            coeffs.values.truncate((1 << log_orig) * width);
+            CircleEvaluations::evaluate(domain, coeffs)
                 .to_cfft_order()
                 .as_cow()
                 .cfft_perm_rows()
@@ -202,6 +226,26 @@ where
         )>,
         challenger: &mut Challenger,
     ) -> (OpenedValues<Challenge>, Self::Proof) {
+        // Materialize the CFFT-ordered domain points once per committed height. They are shared
+        // by the Lagrange denominators and the DEEP-quotient vanishing parts below, which are in
+        // turn shared by every matrix opened at the same point on the same domain.
+        let mut permuted_points: BTreeMap<usize, Vec<Point<Val>>> = BTreeMap::new();
+        debug_span!("materialize domain points").in_scope(|| {
+            for (data, _) in &rounds {
+                for mat in self.mmcs.get_matrices(data) {
+                    let log_height = log2_strict_usize(mat.height());
+                    permuted_points.entry(log_height).or_insert_with(|| {
+                        cfft_permute_slice(
+                            &CircleDomain::standard(log_height).points().collect_vec(),
+                        )
+                    });
+                }
+            }
+        });
+
+        // (log_height, point) -> Lagrange denominators.
+        let mut lagrange_dens: Vec<((usize, Challenge), Vec<Challenge>)> = vec![];
+
         // Open matrices at points
         let values: OpenedValues<Challenge> = rounds
             .iter()
@@ -215,26 +259,80 @@ where
                 izip!(mats, points_for_mats)
                     .map(|(mat, points_for_mat)| {
                         let log_height = log2_strict_usize(mat.height());
+                        // The committed polynomial has degree below the pre-blow-up domain
+                        // size, so its values on a sub-twin-coset of that size determine it.
+                        // The first `2^log_sub` rows of the CFFT-ordered LDE are exactly the
+                        // CFFT-ordered evaluations over `CircleDomain::new(log_sub, shift)`
+                        // (see `eval_at_point_on_subdomain_prefix_matches_full`), so the
+                        // out-of-domain evaluation only traverses `1 / blowup` of the matrix.
+                        let log_sub = log_height - self.fri_params.log_blowup;
+                        let sub_height = 1 << log_sub;
+                        let sub_domain = CircleDomain::new(
+                            log_sub,
+                            CircleDomain::<Val>::standard(log_height).shift,
+                        );
                         // It was committed in cfft order.
                         let evals = CircleEvaluations::from_cfft_order(
-                            CircleDomain::standard(log_height),
-                            mat.as_view(),
+                            sub_domain,
+                            mat.split_rows(sub_height).0,
                         );
-                        points_for_mat
+
+                        // Resolve the Lagrange denominators for every point up front.
+                        let den_idxs = points_for_mat
                             .iter()
-                            .map(|&zeta| {
-                                let zeta = Point::from_projective_line(zeta);
-                                let ps_at_zeta =
-                                    info_span!("compute opened values with Lagrange interpolation")
-                                        .in_scope(|| evals.evaluate_at_point(zeta));
-                                challenger.observe_algebra_slice(&ps_at_zeta);
-                                ps_at_zeta
+                            .map(|&zeta_uni| {
+                                let key = (log_height, zeta_uni);
+                                lagrange_dens
+                                    .iter()
+                                    .position(|(k, _)| *k == key)
+                                    .unwrap_or_else(|| {
+                                        let den = info_span!("compute Lagrange denominators")
+                                            .in_scope(|| {
+                                                compute_lagrange_den_batched(
+                                                    &permuted_points[&log_height][..sub_height],
+                                                    Point::from_projective_line(zeta_uni),
+                                                    log_sub,
+                                                )
+                                            });
+                                        lagrange_dens.push((key, den));
+                                        lagrange_dens.len() - 1
+                                    })
                             })
-                            .collect()
+                            .collect_vec();
+
+                        let ps_for_points: Vec<Vec<Challenge>> =
+                            debug_span!("compute opened values with Lagrange interpolation")
+                                .in_scope(|| match (&points_for_mat[..], &den_idxs[..]) {
+                                    // A matrix opened at two points (e.g. zeta and zeta_next)
+                                    // is traversed once for both.
+                                    (&[zeta_0, zeta_1], &[idx_0, idx_1]) => evals
+                                        .evaluate_at_two_points_with_dens(
+                                            [
+                                                Point::from_projective_line(zeta_0),
+                                                Point::from_projective_line(zeta_1),
+                                            ],
+                                            [&lagrange_dens[idx_0].1, &lagrange_dens[idx_1].1],
+                                        )
+                                        .into(),
+                                    _ => izip!(points_for_mat, &den_idxs)
+                                        .map(|(&zeta_uni, &den_idx)| {
+                                            evals.evaluate_at_point_with_den(
+                                                Point::from_projective_line(zeta_uni),
+                                                &lagrange_dens[den_idx].1,
+                                            )
+                                        })
+                                        .collect(),
+                                });
+
+                        for ps_at_zeta in &ps_for_points {
+                            challenger.observe_algebra_slice(ps_at_zeta);
+                        }
+                        ps_for_points
                     })
                     .collect()
             })
             .collect();
+        drop(lagrange_dens);
 
         // Batch combination challenge
         let alpha: Challenge = challenger.sample_algebra_element();
@@ -252,6 +350,9 @@ where
         // log_height -> (alpha offset, reduced openings column)
         let mut reduced_openings: BTreeMap<usize, (Challenge, Vec<Challenge>)> = BTreeMap::new();
 
+        // (log_height, point) -> DEEP-quotient vanishing parts.
+        let mut vanishing_parts: Vec<((usize, Challenge), VanishingParts<Challenge>)> = vec![];
+
         rounds
             .iter()
             .zip(values.iter())
@@ -259,39 +360,81 @@ where
                 let mats = self.mmcs.get_matrices(data);
                 izip!(mats, points_for_mats, values).for_each(|(mat, points_for_mat, values)| {
                     let log_height = log2_strict_usize(mat.height());
-                    // It was committed in cfft order.
-                    let evals = CircleEvaluations::from_cfft_order(
-                        CircleDomain::standard(log_height),
-                        mat.as_view(),
-                    );
+                    let log_sub = log_height - self.fri_params.log_blowup;
 
-                    let (alpha_offset, reduced_opening_for_log_height) =
-                        reduced_openings.entry(log_height).or_insert_with(|| {
-                            (Challenge::ONE, vec![Challenge::ZERO; 1 << log_height])
-                        });
+                    let (alpha_offset, reduced_opening_for_log_height) = reduced_openings
+                        .entry(log_height)
+                        .or_insert_with(|| (Challenge::ONE, Challenge::zero_vec(1 << log_height)));
+
+                    // The lift below costs a single-column CFFT extrapolation, which is
+                    // latency-bound rather than bandwidth-bound: it costs about as much as
+                    // the half-traversal of a ~1000-column matrix it saves, so it only pays
+                    // off for matrices substantially wider than that.
+                    const LIFT_MIN_WIDTH: usize = 1024;
+
+                    // The only pass over the matrix; it does not depend on the opening points.
+                    // The reduced column lies in the pre-blow-up polynomial space, so it is
+                    // determined by the trace-size subdomain prefix (committed in cfft order):
+                    // reduce the prefix and lift it back with a narrow CFFT instead of
+                    // traversing the full LDE.
+                    let reduced_rows = if log_sub > 0 && mat.width() >= LIFT_MIN_WIDTH {
+                        let sub_domain = CircleDomain::new(
+                            log_sub,
+                            CircleDomain::<Val>::standard(log_height).shift,
+                        );
+                        CircleEvaluations::from_cfft_order(
+                            sub_domain,
+                            mat.split_rows(1 << log_sub).0,
+                        )
+                        .rowwise_alpha_reduce_lifted(alpha, CircleDomain::standard(log_height))
+                    } else {
+                        CircleEvaluations::from_cfft_order(
+                            CircleDomain::standard(log_height),
+                            mat.as_view(),
+                        )
+                        .rowwise_alpha_reduce(alpha)
+                    };
+                    let alpha_pow_width = alpha.exp_u64(mat.width() as u64);
 
                     points_for_mat
                         .iter()
                         .zip(values.iter())
-                        .for_each(|(&zeta, ps_at_zeta)| {
-                            let zeta = Point::from_projective_line(zeta);
-
-                            // Reduce this matrix, as a deep quotient, into one column with powers of α.
-                            let mat_ros = evals.deep_quotient_reduce(alpha, zeta, ps_at_zeta);
-
-                            // Fold it into our running reduction, offset by alpha_offset.
-                            reduced_opening_for_log_height
-                                .par_iter_mut()
-                                .zip(mat_ros)
-                                .for_each(|(ro, mat_ro)| {
-                                    *ro += *alpha_offset * mat_ro;
+                        .for_each(|(&zeta_uni, ps_at_zeta)| {
+                            let zeta = Point::from_projective_line(zeta_uni);
+                            let key = (log_height, zeta_uni);
+                            let vp_idx = vanishing_parts
+                                .iter()
+                                .position(|(k, _)| *k == key)
+                                .unwrap_or_else(|| {
+                                    let vp = compute_vanishing_parts(
+                                        &permuted_points[&log_height],
+                                        zeta,
+                                    );
+                                    vanishing_parts.push((key, vp));
+                                    vanishing_parts.len() - 1
                                 });
 
+                            // sum_j(alpha^j * p_j[zeta]), the same for all rows.
+                            let reduced_ps_at_zeta: Challenge =
+                                dot_product(alpha.powers(), ps_at_zeta.iter().copied());
+
+                            // Reduce this matrix, as a deep quotient, into the running
+                            // reduction, offset by alpha_offset.
+                            accumulate_deep_quotient(
+                                reduced_opening_for_log_height,
+                                *alpha_offset,
+                                alpha_pow_width,
+                                &reduced_rows,
+                                &vanishing_parts[vp_idx].1,
+                                reduced_ps_at_zeta,
+                            );
+
                             // Update alpha_offset from α^i -> α^(i + 2 * width)
-                            *alpha_offset *= alpha.exp_u64(2 * evals.values.width() as u64);
+                            *alpha_offset *= alpha_pow_width.square();
                         });
                 });
             });
+        drop(vanishing_parts);
 
         // Iterate over our reduced columns and extract lambda - the multiple of the vanishing polynomial
         // which may appear in the reduced quotient due to CFFT dimension gap.
@@ -420,6 +563,34 @@ where
         let log_global_max_height =
             proof.fri_proof.commit_phase_commits.len() + self.fri_params.log_blowup + 1;
 
+        // Guard the query-phase height subtraction against an under-reported round count.
+        //
+        // Invariant: the proof's global height covers every claimed matrix.
+        //
+        //     H_proof = commit-phase round count + log_blowup + 1   (first-layer fold)
+        //     H_claim = max committed log_n + log_blowup
+        //
+        // The query phase computes `index >> (log_global_max_height - log_height)`.
+        //   - `log_height <= H_claim` holds for every matrix
+        //   - `H_proof < H_claim` makes that usize subtraction underflow and the shift wrap
+        // Over-reporting is caught downstream (two-adicity bound, Merkle openings), so the
+        // under-report is the only case to reject here.
+        let expected_log_global_max_height = rounds
+            .iter()
+            .flat_map(|(_, mats)| {
+                mats.iter()
+                    .map(|(domain, _)| domain.log_n + self.fri_params.log_blowup)
+            })
+            .max();
+        if let Some(expected) = expected_log_global_max_height
+            && log_global_max_height < expected
+        {
+            return Err(FriError::GlobalMaxHeightMismatch {
+                expected,
+                got: log_global_max_height,
+            });
+        }
+
         let folding: CircleFriFoldingForMmcs<Val, Challenge, InputMmcs, FriMmcs> =
             CircleFriFolding(PhantomData);
 
@@ -438,18 +609,39 @@ where
                     first_layer_proof,
                 } = input_proof;
 
-                for (batch_opening, (batch_commit, mats)) in
-                    zip_eq(input_openings, &rounds, InputError::InputShapeError)?
+                for (batch, (batch_opening, (batch_commit, mats))) in
+                    zip_eq(input_openings, &rounds, InputError::InputShapeError)?.enumerate()
                 {
                     let batch_heights: Vec<usize> = mats
                         .iter()
                         .map(|(domain, _)| domain.size() << self.fri_params.log_blowup)
                         .collect_vec();
-                    let batch_dims: Vec<Dimensions> = batch_heights
-                        .iter()
-                        // todo: mmcs doesn't really need width
-                        .map(|&height| Dimensions { width: 0, height })
-                        .collect_vec();
+                    // The opened rows must pair one-to-one with the committed matrices.
+                    let batch_dims: Vec<Dimensions> = zip_eq(
+                        batch_heights.iter().zip(mats),
+                        &batch_opening.opened_values,
+                        InputError::InputShapeError,
+                    )?
+                    .enumerate()
+                    .map(|(matrix, ((&height, (_, points_and_values)), _))| {
+                        // Invariant: a matrix's width is fixed by its first opening point.
+                        //
+                        //     >= 1 point  ->  width = number of claimed evaluations
+                        //     no points   ->  reject
+                        //
+                        // Why reject the no-points case:
+                        //   - row boundaries in the flattened leaf hash are authenticated only from claimed widths
+                        //   - a matrix opened at no points claims no width
+                        //   - its width could then come only from the unverified proof
+                        let (_, values) = points_and_values
+                            .first()
+                            .ok_or(InputError::MatrixWithoutOpeningPoints { batch, matrix })?;
+                        Ok(Dimensions {
+                            width: values.len(),
+                            height,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
 
                     let (dims, idx) = batch_heights
                         .iter()
@@ -489,10 +681,18 @@ where
                         let alpha_pow_width_2 = alpha.exp_u64(ps_at_x.len() as u64).square();
 
                         for (zeta_uni, ps_at_zeta) in mat_points_and_values {
+                            // The claimed opening must have exactly as many
+                            // values as the committed row has columns.
+                            if ps_at_zeta.len() != ps_at_x.len() {
+                                return Err(InputError::InputShapeError);
+                            }
                             let zeta = Point::from_projective_line(*zeta_uni);
 
+                            // A vanishing denominator means this opening point lands on the
+                            // query point; reject the proof rather than dividing by zero.
                             *ro += *alpha_offset
-                                * deep_quotient_reduce_row(alpha, x, zeta, ps_at_x, ps_at_zeta);
+                                * deep_quotient_reduce_row(alpha, x, zeta, ps_at_x, ps_at_zeta)
+                                    .ok_or(InputError::OpeningPointMatchesQueryPoint)?;
 
                             *alpha_offset *= alpha_pow_width_2;
                         }
@@ -538,7 +738,8 @@ where
                     );
 
                     let fl_dims = Dimensions {
-                        width: 0,
+                        // First-layer leaves hold the queried value and its sibling.
+                        width: 2,
                         height: 1 << (log_height - 1),
                     };
 
@@ -712,6 +913,125 @@ mod tests {
     }
 
     #[test]
+    fn reject_matrix_without_opening_points() {
+        // Invariant: every input matrix must be opened at >= 1 point.
+        //
+        //     no points  ->  no claimed width  ->  width would come from the proof  ->  reject
+        //
+        // A matrix opened at no points observes nothing into the challenger.
+        // This holds identically on the proving side and the verifying side.
+        //
+        // Fixture state: one batch of two matrices sharing a domain.
+        //   - matrix 0 is opened at one point, keeping the reduced openings non-empty
+        //   - matrix 1 is opened at no points
+        //
+        // Flow:
+        //   - both sides observe only matrix 0  ->  proof-of-work challenge matches
+        //   - the query phase verifies the input opening  ->  matrix 1 rejected
+        let mut rng = SmallRng::seed_from_u64(0);
+
+        let byte_hash = ByteHash {};
+        let field_hash = FieldHash::new(byte_hash);
+        let compress = MyCompress::new(byte_hash);
+        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+        let fri_params = FriParameters::new_testing(challenge_mmcs, 0);
+        let pcs = TestPcs {
+            mmcs: val_mmcs,
+            fri_params,
+            _phantom: PhantomData,
+        };
+
+        // One batch, two single-column matrices sharing a domain of 2^{10} rows.
+        let log_n = 10;
+        let d =
+            <TestPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_n);
+        let evals_0 = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
+        let evals_1 = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
+        let (comm, data) =
+            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals_0), (d, evals_1)]);
+
+        // Prove: open matrix 0 at one point, matrix 1 at no points.
+        let zeta: Challenge = rng.random();
+        let mut chal = Challenger::from_hasher(vec![], byte_hash);
+        let (values, proof) = pcs.open(vec![(&data, vec![vec![zeta], vec![]])], &mut chal);
+
+        // Verify with the same shape: matrix 1 carries no opening points.
+        let mut chal = Challenger::from_hasher(vec![], byte_hash);
+        let err = pcs
+            .verify(
+                vec![(
+                    comm,
+                    vec![(d, vec![(zeta, values[0][0][0].clone())]), (d, vec![])],
+                )],
+                &proof,
+                &mut chal,
+            )
+            .expect_err("matrix without opening points must be rejected");
+
+        // The offending matrix is identified by its batch and matrix index.
+        let FriError::InputError(InputError::MatrixWithoutOpeningPoints { batch, matrix }) = err
+        else {
+            panic!("expected MatrixWithoutOpeningPoints, got {err:?}");
+        };
+        assert_eq!(batch, 0);
+        assert_eq!(matrix, 1);
+    }
+
+    #[test]
+    fn get_evaluations_on_domain_matches_direct_lde() {
+        // `get_evaluations_on_domain` must return the committed trace on the requested
+        // domain whether that domain is smaller than, equal to, or larger than the
+        // committed LDE. The smaller-than case is exercised whenever `log_blowup`
+        // exceeds the quotient degree (e.g. the quotient domain in uni-stark).
+        let mut rng = SmallRng::seed_from_u64(1);
+
+        let byte_hash = ByteHash {};
+        let field_hash = FieldHash::new(byte_hash);
+        let compress = MyCompress::new(byte_hash);
+        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+        // log_blowup = 2 makes the committed LDE larger than a quotient-sized domain.
+        let mut fri_params = FriParameters::new_testing(challenge_mmcs, 0);
+        fri_params.log_blowup = 2;
+
+        let pcs = TestPcs {
+            mmcs: val_mmcs,
+            fri_params,
+            _phantom: PhantomData,
+        };
+
+        let log_n = 8;
+        let width = 3;
+        let d =
+            <TestPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_n);
+        let evals = RowMajorMatrix::<Val>::rand(&mut rng, 1 << log_n, width);
+
+        let (_comm, data) =
+            <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals.clone())]);
+
+        // The committed LDE lives on `standard(log_n + 2)`. Walk a target domain from the
+        // original degree up past the committed LDE: `log_n + 1` is the smaller-than case,
+        // `log_n + 2` hits the equal fast path, and `log_n + 3` is the larger-than case.
+        for target_log_n in [log_n, log_n + 1, log_n + 2, log_n + 3] {
+            let target = CircleDomain::standard(target_log_n);
+            let got = <TestPcs as Pcs<Challenge, Challenger>>::get_evaluations_on_domain(
+                &pcs, &data, 0, target,
+            )
+            .to_row_major_matrix();
+
+            // Ground truth: extrapolate the original trace straight onto `target`.
+            let expected = CircleEvaluations::from_natural_order(d, evals.clone())
+                .extrapolate(target)
+                .to_natural_order()
+                .to_row_major_matrix();
+
+            assert_eq!(got, expected, "mismatch for target_log_n = {target_log_n}");
+        }
+    }
+
+    #[test]
     fn reject_query_proof_count_mismatch() {
         // Invariant: the proof must contain exactly num_queries query proofs.
         // The verifier rejects if the count is wrong.
@@ -733,6 +1053,119 @@ mod tests {
         };
         assert_eq!(expected, pcs.fri_params.num_queries);
         assert_eq!(got, pcs.fri_params.num_queries - 1);
+    }
+
+    #[test]
+    fn reject_zero_queries() {
+        // Invariant: a zero-query instance performs no low-degree spot checks.
+        // The per-query loop never runs.
+        // Without the guard any final polynomial would verify.
+        //
+        // Fixture state: an honest proof built with the testing query count.
+        //
+        // Mutation: verify it under params with num_queries = 0.
+        let (mut pcs, byte_hash, comm, d, zeta, values, proof) = setup_valid_proof();
+        pcs.fri_params.num_queries = 0;
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("zero-query instance must be rejected");
+
+        assert!(
+            matches!(err, FriError::ZeroQueries),
+            "expected ZeroQueries, got {err:?}"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "num_queries must be at least 1")]
+    fn prover_rejects_zero_queries() {
+        // The prover must refuse to build a vacuous proof.
+        // The verifier guards the same config, so the failure is symmetric.
+        let mut rng = SmallRng::seed_from_u64(0);
+
+        // Build the hash stack: field hasher → compression → Merkle tree.
+        let byte_hash = ByteHash {};
+        let field_hash = FieldHash::new(byte_hash);
+        let compress = MyCompress::new(byte_hash);
+        let val_mmcs = ValMmcs::new(field_hash, compress, 0);
+        let challenge_mmcs = ChallengeMmcs::new(val_mmcs.clone());
+
+        // Zero queries; every other parameter is otherwise valid.
+        let mut fri_params = FriParameters::new_testing(challenge_mmcs, 0);
+        fri_params.num_queries = 0;
+
+        let pcs = TestPcs {
+            mmcs: val_mmcs,
+            fri_params,
+            _phantom: PhantomData,
+        };
+
+        // Commit to a random single-column trace of 2^{10} rows.
+        let log_n = 10;
+        let d =
+            <TestPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&pcs, 1 << log_n);
+        let evals = RowMajorMatrix::rand(&mut rng, 1 << log_n, 1);
+        let (_comm, data) = <TestPcs as Pcs<Challenge, Challenger>>::commit(&pcs, [(d, evals)]);
+
+        // Commit succeeds; the assert fires inside the opening (FRI prover).
+        let zeta: Challenge = rng.random();
+        let mut chal = Challenger::from_hasher(vec![], byte_hash);
+        let _ = pcs.open(vec![(&data, vec![vec![zeta]])], &mut chal);
+    }
+
+    #[test]
+    fn reject_commit_pow_witness_count_mismatch() {
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        let num_rounds = proof.fri_proof.commit_phase_commits.len();
+
+        // Drop one witness so the per-round count falls short.
+        proof.fri_proof.commit_pow_witnesses.pop();
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("expected CommitPowWitnessCountMismatch");
+
+        let FriError::CommitPowWitnessCountMismatch { expected, got } = err else {
+            panic!("expected CommitPowWitnessCountMismatch, got {err:?}");
+        };
+        assert_eq!(expected, num_rounds);
+        assert_eq!(got, num_rounds - 1);
+    }
+
+    #[test]
+    fn reject_under_reported_commit_rounds() {
+        // Invariant: the reported commit-round count must cover the claimed matrix height.
+        //   - log_global_max_height is derived from the proof's round count
+        //   - under-reporting drives it below a matrix's log_height
+        //   - then `index >> (log_global_max_height - log_height)` would underflow
+        // The verifier must reject before that subtraction runs.
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+
+        // On an honest proof the two height derivations coincide:
+        //
+        //     H_claim = log_n + log_blowup                            (claimed matrix)
+        //     H_proof = commit_phase_commits.len() + log_blowup + 1   (first-layer fold)
+        let log_blowup = pcs.fri_params.log_blowup;
+        let expected = d.log_n + log_blowup;
+        let original = proof.fri_proof.commit_phase_commits.len() + log_blowup + 1;
+        assert_eq!(original, expected, "fixture must start height-consistent");
+
+        // Mutation: drop one commit-phase commitment so the round count falls short.
+        //
+        //     before: commit_phase_commits = [c_0, ..., c_{n-1}]   → H_proof = expected
+        //     after:  commit_phase_commits = [c_0, ..., c_{n-2}]   → H_proof = expected - 1
+        //     → H_proof < H_claim → GlobalMaxHeightMismatch (no underflow)
+        proof.fri_proof.commit_phase_commits.pop();
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("expected GlobalMaxHeightMismatch");
+
+        let FriError::GlobalMaxHeightMismatch { expected: exp, got } = err else {
+            panic!("expected GlobalMaxHeightMismatch, got {err:?}");
+        };
+        // The verifier wants the height the claimed matrix demands.
+        assert_eq!(exp, expected);
+        // The proof under-reports by exactly the one round we removed.
+        assert_eq!(got, expected - 1);
     }
 
     #[test]
@@ -833,7 +1266,10 @@ mod tests {
         // Invariant: all query proofs must use the same per-round folding
         // arity schedule. The verifier takes the first query proof's
         // schedule as a reference and rejects any that differ.
-        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        let (mut pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+        // Allow arity 2 so this mutation remains a schedule mismatch rather
+        // than being rejected as an out-of-range arity.
+        pcs.fri_params.max_log_arity = 2;
 
         // This check compares query 1 against query 0, so we need at least
         // two query proofs. With testing parameters this is always true, but
@@ -878,5 +1314,79 @@ mod tests {
         assert_eq!(expected, reference_arities);
         // The got schedule is query 1's corrupted version.
         assert_eq!(got, corrupted_arities);
+    }
+
+    #[test]
+    fn reject_invalid_log_arity() {
+        // Invariant: each log_arity must be in 1..=max_log_arity.
+        let (pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+
+        // Mutation: force an invalid zero arity in query 0, round 0.
+        proof.fri_proof.query_proofs[0].commit_phase_openings[0].log_arity = 0;
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("expected InvalidLogArity");
+
+        let FriError::InvalidLogArity {
+            round,
+            log_arity,
+            max,
+        } = err
+        else {
+            panic!("expected InvalidLogArity, got {err:?}");
+        };
+        assert_eq!(round, 0);
+        assert_eq!(log_arity, 0);
+        assert_eq!(max, pcs.fri_params.max_log_arity);
+    }
+
+    #[test]
+    fn reject_global_max_height_too_large() {
+        // Invariant: the query-index width fits the circle group of order 2^CIRCLE_TWO_ADICITY.
+        //
+        //     field order = 2^CIRCLE_TWO_ADICITY - 1   (one short of the group order)
+        //     => width of CIRCLE_TWO_ADICITY bits is unsampleable => verifier must reject
+        let (mut pcs, byte_hash, comm, d, zeta, values, mut proof) = setup_valid_proof();
+
+        // Zero both proof-of-work targets.
+        // Otherwise grinding rejects the cloned witnesses before the width check runs.
+        pcs.fri_params.commit_proof_of_work_bits = 0;
+        pcs.fri_params.query_proof_of_work_bits = 0;
+
+        // Mutation: clone commit-phase rounds until the width reaches the bound.
+        //
+        //     num_index_bits = rounds + log_blowup + extra_query_index_bits (= 1 for circle)
+        //     stop once num_index_bits >= CIRCLE_TWO_ADICITY
+        let extra_query_index_bits = 1;
+        let commit = proof.fri_proof.commit_phase_commits[0].clone();
+        let witness = proof.fri_proof.commit_pow_witnesses[0];
+        while proof.fri_proof.commit_phase_commits.len()
+            + pcs.fri_params.log_blowup
+            + extra_query_index_bits
+            < Val::CIRCLE_TWO_ADICITY
+        {
+            proof.fri_proof.commit_phase_commits.push(commit.clone());
+            proof.fri_proof.commit_pow_witnesses.push(witness);
+            // Each query proof needs one opening per round.
+            for qp in &mut proof.fri_proof.query_proofs {
+                let opening = qp.commit_phase_openings[0].clone();
+                qp.commit_phase_openings.push(opening);
+            }
+        }
+
+        let err = try_verify(&pcs, byte_hash, &comm, d, zeta, &values, &proof)
+            .expect_err("expected GlobalMaxHeightTooLarge");
+
+        let FriError::GlobalMaxHeightTooLarge {
+            log_global_max_height,
+            two_adicity,
+        } = err
+        else {
+            panic!("expected GlobalMaxHeightTooLarge, got {err:?}");
+        };
+        // The reported bound is the circle group two-adicity.
+        assert_eq!(two_adicity, Val::CIRCLE_TWO_ADICITY);
+        // The rejecting width is at least that bound.
+        assert!(log_global_max_height >= two_adicity);
     }
 }

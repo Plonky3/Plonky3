@@ -1,5 +1,4 @@
-//! Utilities for generating Fiat-Shamir challenges based on an IOP's transcript.
-
+#![doc = include_str!("../README.md")]
 #![no_std]
 
 extern crate alloc;

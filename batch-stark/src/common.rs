@@ -11,17 +11,17 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use p3_air::Air;
-use p3_air::symbolic::{SymbolicAirBuilder, SymbolicExpressionExt};
+use p3_air::symbolic::{AirLayout, SymbolicExpressionExt};
 use p3_commit::Pcs;
 use p3_field::{Algebra, BasedVectorSpace};
-use p3_lookup::LookupAir;
-use p3_lookup::lookup_traits::Lookup;
+use p3_lookup::{InteractionSymbolicBuilder, LogUpGadget, Lookups};
 use p3_matrix::Matrix;
 use p3_uni_stark::Val;
 use p3_util::log2_strict_usize;
 
 use crate::config::{Challenge, Commitment, Domain, StarkGenericConfig as SGC};
 use crate::prover::StarkInstance;
+use crate::symbolic::get_log_num_quotient_chunks;
 
 /// Per-instance metadata for a preprocessed trace that lives inside a
 /// global preprocessed commitment.
@@ -70,9 +70,9 @@ pub struct CommonData<SC: SGC> {
     /// When `None`, no instance uses preprocessed columns.
     pub preprocessed: Option<GlobalPreprocessed<SC>>,
     /// The lookups used by each STARK instance.
-    /// There is one `Vec<Lookup<Val<SC>>>` per STARK instance.
+    /// There is one `Lookups<Val<SC>>` per STARK instance.
     /// They are stored in the same order as the STARK instance inputs provided to `new`.
-    pub lookups: Vec<Vec<Lookup<Val<SC>>>>,
+    pub lookups: Vec<Lookups<Val<SC>>>,
 }
 
 /// Prover-exclusive data not shared with the verifier.
@@ -101,7 +101,7 @@ pub struct ProverData<SC: SGC> {
 impl<SC: SGC> CommonData<SC> {
     pub const fn new(
         preprocessed: Option<GlobalPreprocessed<SC>>,
-        lookups: Vec<Vec<Lookup<Val<SC>>>>,
+        lookups: Vec<Lookups<Val<SC>>>,
     ) -> Self {
         Self {
             preprocessed,
@@ -113,7 +113,7 @@ impl<SC: SGC> CommonData<SC> {
     ///
     /// Use this when none of your [`Air`] implementations have preprocessed columns or lookups.
     pub fn empty(num_instances: usize) -> Self {
-        let lookups = vec![Vec::new(); num_instances];
+        let lookups = vec![Lookups::default(); num_instances];
         Self {
             preprocessed: None,
             lookups,
@@ -160,15 +160,15 @@ where
     pub fn from_instances<A>(config: &SC, instances: &[StarkInstance<'_, SC, A>]) -> Self
     where
         SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
-        A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>> + LookupAir<Val<SC>> + Clone,
+        A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>> + Clone,
     {
         let degrees: Vec<usize> = instances.iter().map(|i| i.trace.height()).collect();
         let log_ext_degrees: Vec<usize> = degrees
             .iter()
             .map(|&d| log2_strict_usize(d) + config.is_zk())
             .collect();
-        let mut airs: Vec<A> = instances.iter().map(|i| i.air.clone()).collect();
-        Self::from_airs_and_degrees(config, &mut airs, &log_ext_degrees)
+        let airs: Vec<A> = instances.iter().map(|i| i.air.clone()).collect();
+        Self::from_airs_and_degrees(config, &airs, &log_ext_degrees)
     }
 
     /// Build [`ProverData`] from [`Air`] implementations and their extended trace degree bits.
@@ -183,12 +183,12 @@ where
     /// one [`Air`] defines preprocessed columns) and the PCS prover data.
     pub fn from_airs_and_degrees<A>(
         config: &SC,
-        airs: &mut [A],
+        airs: &[A],
         trace_ext_degree_bits: &[usize],
     ) -> Self
     where
         SymbolicExpressionExt<Val<SC>, SC::Challenge>: Algebra<SC::Challenge>,
-        A: Air<SymbolicAirBuilder<Val<SC>, SC::Challenge>> + LookupAir<Val<SC>>,
+        A: Air<InteractionSymbolicBuilder<Val<SC>, SC::Challenge>>,
     {
         assert_eq!(
             airs.len(),
@@ -256,7 +256,51 @@ where
             )
         };
 
-        let lookups = airs.iter_mut().map(|air| air.get_lookups()).collect();
+        // Build each AIR's lookups, then fold same-bus globals into shared columns.
+        //
+        // The budget is the largest fraction-pin degree that keeps the quotient
+        // chunk count fixed, so folding only removes columns, never adds work.
+        // An AIR with no spare degree gets a budget that folds nothing.
+        // Prover and verifier fold deterministically, so the layout needs no exchange.
+        let lookup_gadget = LogUpGadget::new();
+        let lookups: Vec<Lookups<Val<SC>>> = airs
+            .iter()
+            .map(|air| {
+                let unpacked = Lookups::<Val<SC>>::from_air::<SC::Challenge, A>(air);
+
+                // `log_chunks` fixes the quotient bucket: n_chunks = 2^log_chunks.
+                let log_chunks =
+                    get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
+                        air,
+                        AirLayout::from_air(air),
+                        &unpacked,
+                        is_zk,
+                        &lookup_gadget,
+                    );
+
+                // Largest fraction-pin degree still inside that bucket.
+                //
+                //     log2_ceil((d + is_zk).max(2) - 1) <= log_chunks
+                //  => d <= 2^log_chunks + 1 - is_zk
+                let budget = (1usize << log_chunks) + 1 - is_zk;
+                let packed = unpacked.pack_same_bus(&lookup_gadget, budget);
+
+                // The fold must not have moved the quotient bucket.
+                debug_assert_eq!(
+                    get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
+                        air,
+                        AirLayout::from_air(air),
+                        &packed,
+                        is_zk,
+                        &lookup_gadget,
+                    ),
+                    log_chunks,
+                    "same-bus packing must preserve the quotient chunk count"
+                );
+
+                packed
+            })
+            .collect();
 
         Self {
             common: CommonData {

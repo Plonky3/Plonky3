@@ -17,7 +17,7 @@ use p3_field::op_assign_macros::{
 use p3_field::{
     Field, InjectiveMonomial, Packable, PermutationMonomial, PrimeCharacteristicRing, PrimeField,
     PrimeField32, PrimeField64, RawDataSerializable, TwoAdicField,
-    impl_raw_serializable_primefield32, quotient_map_small_int,
+    impl_raw_serializable_primefield32, quotient_map_small_int, tonelli_shanks_two_adic,
 };
 use p3_util::{flatten_to_base, gcd_inversion_prime_field_32};
 use rand::Rng;
@@ -208,11 +208,17 @@ impl<FP: FieldParameters> PrimeCharacteristicRing for MontyField31<FP> {
         // The array FP::MONTY_POWERS_OF_TWO contains the powers of 2
         // from 2^0 to 2^63 in monty form. We can use this to quickly
         // compute 2^exp.
-        if exp < 64 {
-            *self * Self::MONTY_POWERS_OF_TWO[exp as usize]
-        } else {
-            // For larger values we use the default method.
-            *self * Self::TWO.exp_u64(exp)
+        match exp {
+            0 => *self,
+            1 => *self + *self,
+            _ => {
+                if exp < 64 {
+                    *self * Self::MONTY_POWERS_OF_TWO[exp as usize]
+                } else {
+                    // For larger values we use the default method.
+                    *self * Self::TWO.exp_u64(exp)
+                }
+            }
         }
     }
 
@@ -460,6 +466,24 @@ impl<FP: FieldParameters> Field for MontyField31<FP> {
     #[inline]
     fn order() -> BigUint {
         FP::PRIME.into()
+    }
+}
+
+impl<FP: FieldParameters + TwoAdicData> MontyField31<FP> {
+    /// A square root of this field element, if one exists.
+    ///
+    /// This specializes the generic [`Field::try_sqrt`] for two-adic Monty-31
+    /// fields: it seeds Tonelli–Shanks from the precomputed
+    /// [`TwoAdicField::two_adic_generator`] instead of recomputing `GENERATOR^q`.
+    /// As an inherent method it shadows the trait method for concrete field types
+    /// such as `BabyBear` and `KoalaBear`; generic `Field` callers still use the
+    /// trait default.
+    ///
+    /// See [`Field::try_sqrt`] for the returned-root semantics.
+    #[inline]
+    #[must_use]
+    pub fn try_sqrt(&self) -> Option<Self> {
+        tonelli_shanks_two_adic(*self)
     }
 }
 

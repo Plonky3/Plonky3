@@ -7,7 +7,6 @@
 //! database.
 
 use p3_field::PrimeCharacteristicRing;
-use p3_field::integers::QuotientMap;
 use p3_mds::MdsPermutation;
 use p3_mds::karatsuba_convolution::Convolve;
 use p3_mds::util::{dot_product, first_row_to_first_col};
@@ -141,18 +140,21 @@ impl Convolve<Mersenne31, i64, i64> for LargeConvolveMersenne31 {
         const MASK: i64 = (1 << 31) - 1;
         // Morally, our value is a i62 not a i64 as the top 3 bits are
         // guaranteed to be equal.
-        let low_bits = unsafe {
-            // This is safe as 0 <= z & MASK < 2^31
-            Mersenne31::from_canonical_unchecked((z & MASK) as u32)
-        };
+        //
+        // The masked value can equal 2^31 - 1 (the non-canonical representation of zero).
+        //
+        // So the constructor must accept it.
+        let low_bits = Mersenne31::new_reduced((z & MASK) as u32);
 
         let high_bits = ((z >> 31) & MASK) as i32;
         let sign_bits = (z >> 62) as i32;
 
-        let high = unsafe {
-            // This is safe as high_bits + sign_bits > 0 as by assumption b[63] = b[61].
-            Mersenne31::from_canonical_unchecked((high_bits + sign_bits) as u32)
-        };
+        // The sum lies in [0, 2^31 - 1].
+        //
+        // A negative `z` forces the upper-bit chunk to be at least 1.
+        //
+        // So the sign correction of -1 cannot drag the sum below zero.
+        let high = Mersenne31::new_reduced((high_bits + sign_bits) as u32);
         low_bits + high
     }
 }
@@ -263,9 +265,35 @@ impl MdsPermutation<Mersenne31, 64> for MdsMatrixMersenne31 {}
 
 #[cfg(test)]
 mod tests {
+    use p3_field::PrimeCharacteristicRing;
+    use p3_mds::karatsuba_convolution::Convolve;
     use p3_symmetric::Permutation;
 
-    use super::{MdsMatrixMersenne31, Mersenne31};
+    use super::{LargeConvolveMersenne31, MdsMatrixMersenne31, Mersenne31};
+
+    #[test]
+    fn large_convolve_reduce_accepts_p_representation() {
+        // Invariant: the reducer accepts inputs whose low 31 bits are all ones.
+        //
+        // Reason: 2^31 - 1 is the non-canonical representation of zero.
+
+        // Fixture state:
+        //
+        //     P     = 2^31 - 1
+        //     z_neg = -1     (bit pattern: all 64 bits set)
+        //     z_pos =  P     (bit pattern: low 31 bits set, rest zero)
+        //
+        // Masking either value by `(1 << 31) - 1` produces P, the edge case under test.
+
+        // Case 1: z = -1  →  -1 ≡ P - 1   (mod P).
+        let got = LargeConvolveMersenne31::reduce(-1);
+        let expected = Mersenne31::ZERO - Mersenne31::ONE;
+        assert_eq!(got, expected);
+
+        // Case 2: z = P   →   P ≡ 0   (mod P).
+        let got = LargeConvolveMersenne31::reduce((1i64 << 31) - 1);
+        assert_eq!(got, Mersenne31::ZERO);
+    }
 
     #[test]
     fn mersenne8() {

@@ -8,29 +8,77 @@ use p3_air::symbolic::SymbolicAirBuilder;
 use p3_air::{Air, RowWindow};
 use p3_challenger::{CanObserve, FieldChallenger};
 use p3_commit::{Pcs, PolynomialSpace};
-use p3_field::{BasedVectorSpace, Field, PrimeCharacteristicRing};
+use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
 use p3_util::zip_eq::zip_eq;
 use p3_util::{checked_log_size_sum, checked_pow2};
 use tracing::instrument;
 
-use crate::error::{InvalidProofShapeError, VerificationError};
+use crate::error::{InvalidProofShapeError, PeriodicColumnError, VerificationError};
 use crate::symbolic::get_log_num_quotient_chunks;
 use crate::{
     AirLayout, Domain, PcsError, PreprocessedVerifierKey, Proof, StarkGenericConfig, Val,
     VerifierConstraintFolder,
 };
 
+/// Reject periodic columns the verifier cannot evaluate over the trace domain.
+///
+/// - Evaluation samples a subdomain whose size is the column length.
+/// - Both verifiers call this before evaluating.
+/// - A malformed AIR therefore errors instead of panicking.
+///
+/// # Arguments
+///
+/// - `periodic_columns` — the periodic columns declared by the AIR.
+/// - `trace_length` — the number of rows the columns repeat over.
+///
+/// # Errors
+///
+/// - A length that is not a power of two has no evaluation subdomain.
+/// - A length larger than the trace cannot sit inside the trace domain.
+pub fn check_periodic_column_lengths<F>(
+    periodic_columns: &[Vec<F>],
+    trace_length: usize,
+) -> Result<(), PeriodicColumnError> {
+    for col in periodic_columns {
+        let period = col.len();
+
+        // A subdomain of size `period` exists only for powers of two.
+        if !period.is_power_of_two() {
+            return Err(PeriodicColumnError::LengthNotPowerOfTwo { got: period });
+        }
+
+        // That subdomain must sit inside the trace domain.
+        if period > trace_length {
+            return Err(PeriodicColumnError::LengthTooLarge {
+                maximum: trace_length,
+                got: period,
+            });
+        }
+    }
+
+    Ok(())
+}
+
 pub fn validate_degree_bits(
     air: Option<usize>,
     degree_bits: usize,
     is_zk: usize,
+    max_log_degree: usize,
 ) -> Result<(usize, usize), InvalidProofShapeError> {
     if degree_bits < is_zk {
         return Err(InvalidProofShapeError::DegreeBitsTooSmall {
             air,
             minimum: is_zk,
+            got: degree_bits,
+        });
+    }
+
+    if degree_bits > max_log_degree {
+        return Err(InvalidProofShapeError::DegreeBitsTooLarge {
+            air,
+            maximum: max_log_degree,
             got: degree_bits,
         });
     }
@@ -73,18 +121,15 @@ where
         })
         .collect_vec();
 
+    // valid_shape checks each ch has length <SC::Challenge as BasedVectorSpace<Val<SC>>>::DIMENSION,
+    // so from_ext_basis_coefficients won't return None.
     quotient_chunks
         .iter()
         .enumerate()
         .map(|(ch_i, ch)| {
-            // We checked in valid_shape the length of "ch" is equal to
-            // <SC::Challenge as BasedVectorSpace<Val<SC>>>::DIMENSION. Hence
-            // the unwrap() will never panic.
             zps[ch_i]
-                * ch.iter()
-                    .enumerate()
-                    .map(|(e_i, &c)| SC::Challenge::ith_basis_element(e_i).unwrap() * c)
-                    .sum::<SC::Challenge>()
+                * SC::Challenge::from_ext_basis_coefficients(ch)
+                    .expect("quotient chunk length checked in valid_shape")
         })
         .sum::<SC::Challenge>()
 }
@@ -178,8 +223,7 @@ where
     // - Otherwise, derive width from the AIR's preprocessed trace (if any).
     let preprocessed_width = preprocessed_vk
         .map(|vk| vk.width)
-        .or_else(|| air.preprocessed_trace().as_ref().map(|m| m.width))
-        .unwrap_or(0);
+        .unwrap_or_else(|| air.preprocessed_width());
 
     // Check that the proof's opened preprocessed values match the expected width.
     let preprocessed_local_len = opened_values
@@ -260,7 +304,8 @@ where
     let degree_bits = *degree_bits;
 
     let pcs = config.pcs();
-    let (base_degree_bits, degree) = validate_degree_bits(None, degree_bits, config.is_zk())?;
+    let (base_degree_bits, degree) =
+        validate_degree_bits(None, degree_bits, config.is_zk(), pcs.log_max_lde_height())?;
     let trace_domain = pcs.natural_domain_for_degree(degree);
     // TODO: allow moving preprocessed commitment to preprocess time, if known in advance
     let (preprocessed_width, preprocessed_commit) =
@@ -382,9 +427,20 @@ where
     // Get an out-of-domain point to open our values at.
     //
     // Soundness Error: dN/|EF| where `N` is the trace length and our constraint polynomial has degree `d`.
-    let zeta = challenger.sample_algebra_element();
-    let periodic_values: Vec<SC::Challenge> = air
-        .periodic_columns()
+    let zeta: SC::Challenge = challenger.sample_algebra_element();
+
+    // The opening at zeta divides by the vanishing polynomial of the trace domain.
+    // Reject any zeta on the domain, where that polynomial is zero and the inverse panics.
+    // Honest Fiat-Shamir sampling reaches this only with probability |H| / |EF|.
+    if init_trace_domain.vanishing_poly_at_point(zeta).is_zero() {
+        return Err(VerificationError::OodPointInDomain);
+    }
+
+    // Periodic columns are AIR logic; a malformed one must error, not panic.
+    let periodic_columns = air.periodic_columns();
+    check_periodic_column_lengths(&periodic_columns, init_trace_domain.size())?;
+
+    let periodic_values: Vec<SC::Challenge> = periodic_columns
         .iter()
         .map(|periodic_col| init_trace_domain.evaluate_periodic_column_at(periodic_col, zeta))
         .collect();
@@ -464,7 +520,7 @@ where
     let trace_next_slice = match &opened_values.trace_next {
         Some(v) => v.as_slice(),
         None => {
-            zeros = vec![SC::Challenge::ZERO; air_width];
+            zeros = SC::Challenge::zero_vec(air_width);
             &zeros
         }
     };
@@ -472,7 +528,7 @@ where
     let preprocessed_next_for_verify = match &opened_values.preprocessed_next {
         Some(v) => Some(v.as_slice()),
         None if preprocessed_width > 0 => {
-            pre_next_zeros = vec![SC::Challenge::ZERO; preprocessed_width];
+            pre_next_zeros = SC::Challenge::zero_vec(preprocessed_width);
             Some(pre_next_zeros.as_slice())
         }
         None => None,
