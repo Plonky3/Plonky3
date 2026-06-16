@@ -246,6 +246,9 @@ impl<F: Field> EqStatement<F> {
             return;
         }
 
+        // Invariant: the scalar accumulator spans the full hypercube of this statement.
+        assert_eq!(acc_weights.num_variables(), self.num_variables());
+
         let num_constraints = self.len();
 
         // Precompute challenge powers gamma^0, gamma^1, ..., gamma^{n-1}.
@@ -770,5 +773,20 @@ mod tests {
             prop_assert_eq!(s_wt.as_slice(), &unpacked[..]);
             prop_assert_eq!(s_sum, p_sum);
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion `left == right` failed")]
+    fn combine_hypercube_rejects_mis_sized_accumulator() {
+        // Fixture state: a 2-variable statement carrying one constraint.
+        let mut statement = EqStatement::<F>::initialize(2);
+        statement.add_evaluated_constraint(Point::new(vec![F::ONE, F::ZERO]), F::from_u64(5));
+
+        // Fixture state: accumulator over 3 variables, not the required 2.
+        let mut acc_weights = Poly::zero(3);
+        let mut acc_sum = F::ZERO;
+
+        // Invariant: the accumulator must span the statement's hypercube, so this panics.
+        statement.combine_hypercube::<F, false>(&mut acc_weights, &mut acc_sum, F::from_u64(2));
     }
 }

@@ -369,6 +369,9 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
             return;
         }
 
+        // Invariant: the scalar accumulator spans the full hypercube of this statement.
+        assert_eq!(acc_weights.num_variables(), self.num_variables());
+
         // Extract dimensions for clarity.
         //
         // Number of constraints
@@ -1221,5 +1224,20 @@ mod tests {
             prop_assert_eq!(s_wt.as_slice(), &unpacked[..]);
             prop_assert_eq!(s_sum, p_sum);
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion `left == right` failed")]
+    fn combine_rejects_mis_sized_accumulator() {
+        // Fixture state: a 2-variable statement carrying one constraint.
+        let mut statement = SelectStatement::<F, F>::initialize(2);
+        statement.add_constraint(F::from_u64(5), F::from_u64(100));
+
+        // Fixture state: accumulator over 3 variables, not the required 2.
+        let mut acc_weights = Poly::zero(3);
+        let mut acc_sum = F::ZERO;
+
+        // Invariant: the accumulator must span the statement's hypercube, so this panics.
+        statement.combine(&mut acc_weights, &mut acc_sum, F::from_u64(2), 0);
     }
 }
