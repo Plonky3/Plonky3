@@ -238,7 +238,11 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         LagrangeSelectors {
             is_first_row: z * inv_den_shift,
             is_last_row: z_inv_dk * k,
-            is_transition: Ext::ONE - z_inv_dk,
+            // Tangent functional at the last point `P = -shift` (eprint 2024/278, Remark 17):
+            // `s_P(x, y) = x_P * x + y_P * y - 1`, a double zero at `P` and no other zeros on the
+            // circle. As a selector in `L_2` it lets transition constraints carry the full AIR
+            // degree with no selector degree penalty.
+            is_transition: point.x * neg_shift.x + point.y * neg_shift.y - Ext::ONE,
             inv_vanishing: inv_z,
         }
     }
@@ -294,22 +298,28 @@ impl<F: ComplexExtendable> PolynomialSpace for CircleDomain<F> {
         let inv_den_shift = batch_multiplicative_inverse(&den_shift);
         let inv_den_negshift_k = batch_multiplicative_inverse(&den_negshift_k);
 
-        // Fused parallel selector build:
+        // Fused parallel selector build for the two Lagrangian selectors:
         let mut is_first_row = Self::Val::zero_vec(n);
         let mut is_last_row = Self::Val::zero_vec(n);
-        let mut is_transition = Self::Val::zero_vec(n);
         is_first_row
             .par_iter_mut()
             .zip(is_last_row.par_iter_mut())
-            .zip(is_transition.par_iter_mut())
             .zip(z_vals.par_iter())
             .zip(inv_den_shift.par_iter())
             .zip(inv_den_negshift_k.par_iter())
-            .for_each(|(((((ifr, ilr), itr), &z), &inv_d), &inv_dk)| {
-                let z_inv_dk = z * inv_dk;
+            .for_each(|((((ifr, ilr), &z), &inv_d), &inv_dk)| {
                 *ifr = z * inv_d;
-                *ilr = z_inv_dk * k;
-                *itr = Self::Val::ONE - z_inv_dk;
+                *ilr = z * inv_dk * k;
+            });
+
+        // Tangent functional at the last point `P = -shift` (eprint 2024/278, Remark 17):
+        // `s_P(x, y) = x_P * x + y_P * y - 1`, evaluated over the coset points.
+        let mut is_transition = Self::Val::zero_vec(n);
+        is_transition
+            .par_iter_mut()
+            .zip(pts.par_iter())
+            .for_each(|(itr, &at)| {
+                *itr = neg_shift.x * at.x + neg_shift.y * at.y - Self::Val::ONE;
             });
 
         LagrangeSelectors {
