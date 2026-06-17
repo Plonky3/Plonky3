@@ -97,7 +97,6 @@ tracing-forest = "0.3.1"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = [
     "alloc",
 ] }
-transpose = "0.2.3"
 
 # Local dependencies
 p3-air = { path = "air", version = "0.6.1" }
