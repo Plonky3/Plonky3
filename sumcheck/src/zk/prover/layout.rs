@@ -33,6 +33,7 @@ where
     }
 
     /// Returns the alpha-batched plain sum.
+    #[inline]
     fn batched_sum(&self, alpha: EF) -> EF {
         self.claims().sum(alpha)
     }
