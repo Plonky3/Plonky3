@@ -30,6 +30,7 @@ pub mod commit;
 pub mod constraints;
 pub mod data;
 pub mod error;
+pub mod generic_degree;
 pub mod lagrange;
 pub mod layout;
 pub mod product_polynomial;
