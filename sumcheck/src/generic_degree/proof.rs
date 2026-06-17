@@ -17,7 +17,7 @@ use super::util::RoundPolyInterpolator;
 pub struct GenericDegreeProof<F, EF> {
     /// Claimed value of the sum over the boolean hypercube at round zero.
     ///
-    /// Carried in the proof so the verifier consumes the whole prover output, not a side channel.
+    /// Carried in the proof so the verifier consumes the whole prover output.
     pub claimed_sum: EF,
     /// Transmitted round-polynomial evaluations.
     ///
