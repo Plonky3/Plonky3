@@ -5,11 +5,13 @@
 //! - Prefix prover: SIMD-packed first round.
 //! - Suffix prover: SVO-accumulator preprocessing.
 
+mod claims;
 mod prefix;
 mod suffix;
 
 use alloc::vec::Vec;
 
+pub use claims::StackedClaims;
 use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
 use p3_commit::Mmcs;
 use p3_dft::TwoAdicSubgroupDft;
@@ -20,6 +22,7 @@ pub use prefix::PrefixProver;
 pub use suffix::SuffixProver;
 
 use crate::SumcheckData;
+use crate::commit::commit_base;
 use crate::layout::{LayoutStrategy, Table, Witness};
 use crate::strategy::{SumcheckProver, VariableOrder};
 use crate::table::{OpeningEvals, OpeningRequest};
@@ -31,6 +34,9 @@ pub trait Layout<F: TwoAdicField, EF: ExtensionField<F>>: Sized {
 
     /// Builds a witness structure for this layout from source tables.
     fn new_witness(tables: Vec<Table<F>>, folding: usize) -> Witness<F>;
+
+    /// Returns the shared claim state recorded against the stacked polynomial.
+    fn claims(&self) -> &StackedClaims<F, EF>;
 
     /// Commits to the witness and returns the layout.
     ///
@@ -53,10 +59,27 @@ pub trait Layout<F: TwoAdicField, EF: ExtensionField<F>>: Sized {
     where
         Dft: TwoAdicSubgroupDft<F>,
         MT: Mmcs<F>,
-        Challenger: CanObserve<MT::Commitment>;
+        Challenger: CanObserve<MT::Commitment>,
+    {
+        // Encode and Merkle-commit the stacked polynomial in the mode's variable order.
+        let (root, prover_data) = commit_base(
+            Self::variable_order(),
+            dft,
+            mmcs,
+            challenger,
+            &witness.poly,
+            folding,
+            starting_log_inv_rate,
+        );
+
+        // The witness is consumed into the layout once its codeword is committed.
+        (Self::from_witness(witness), root, prover_data)
+    }
 
     /// Returns the total number of concrete openings recorded so far.
-    fn num_claims(&self) -> usize;
+    fn num_claims(&self) -> usize {
+        self.claims().num_claims()
+    }
 
     /// Returns the verifier strategy required to replay this committed layout.
     fn strategy() -> LayoutStrategy;
@@ -67,13 +90,19 @@ pub trait Layout<F: TwoAdicField, EF: ExtensionField<F>>: Sized {
     }
 
     /// Returns the number of variables of first round
-    fn folding(&self) -> usize;
+    fn folding(&self) -> usize {
+        self.claims().folding()
+    }
 
     /// Returns the number of variables of the stacked polynomial.
-    fn num_variables(&self) -> usize;
+    fn num_variables(&self) -> usize {
+        self.claims().num_variables()
+    }
 
     /// Returns the number of variables of table `id`.
-    fn num_variables_table(&self, id: usize) -> usize;
+    fn num_variables_table(&self, id: usize) -> usize {
+        self.claims().num_variables_table(id)
+    }
 
     /// Records opening claims for the selected columns of one table.
     ///

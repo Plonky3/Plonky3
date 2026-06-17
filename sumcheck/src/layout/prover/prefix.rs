@@ -2,24 +2,20 @@
 
 use alloc::vec::Vec;
 
-use p3_challenger::{CanObserve, FieldChallenger, GrindingChallenger};
-use p3_commit::Mmcs;
-use p3_dft::TwoAdicSubgroupDft;
+use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{
     ExtensionField, Field, PackedFieldExtension, PackedValue, TwoAdicField, dot_product,
 };
-use p3_matrix::dense::DenseMatrix;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 use p3_multilinear_util::split_eq::SplitEq;
 use p3_util::log2_strict_usize;
 
-use crate::commit::commit_base;
 use crate::lagrange::lagrange_weights_01inf_multi;
 use crate::layout::opening::Opening;
-use crate::layout::prover::Layout;
-use crate::layout::witness::{Table, TablePlacement};
-use crate::layout::{LayoutStrategy, ProverMultiClaim, ProverVirtualClaim, Witness};
+use crate::layout::prover::{Layout, StackedClaims};
+use crate::layout::witness::Table;
+use crate::layout::{LayoutStrategy, ProverMultiClaim, Witness};
 use crate::product_polynomial::ProductPolynomial;
 use crate::strategy::{SumcheckProver, VariableOrder};
 use crate::svo::{SvoPoint, calculate_accumulators_batch};
@@ -34,42 +30,27 @@ use crate::{Claim, SumcheckData, extrapolate_01inf};
 /// - Every later round runs on the residual product polynomial.
 #[derive(Debug, Clone)]
 pub struct PrefixProver<F: Field, EF: ExtensionField<F>> {
-    /// Source tables behind the stacked polynomial.
-    pub(crate) tables: Vec<Table<F>>,
-    /// Per-table placement metadata inside the stacked polynomial.
-    pub(crate) placements: Vec<TablePlacement>,
-    /// Number of variables of the stacked polynomial.
-    pub(crate) num_variables: usize,
-    /// Number of preprocessing rounds consumed before residual sumcheck.
-    pub(crate) folding: usize,
+    /// Recorded opening claims and the layout context that batches them.
+    pub(crate) claims: StackedClaims<F, EF>,
     /// Stacked committed polynomial.
+    ///
+    /// - Prefix binding folds this polynomial directly.
+    /// - It is kept here, beside the shared claim state.
     pub(crate) poly: Poly<F>,
-    /// Concrete claims recorded per source table.
-    ///
-    /// # Invariants
-    ///
-    /// - Every opening stored here is tied to a concrete source column.
-    /// - Virtual openings never enter this map.
-    /// - Claims are appended in insertion order.
-    pub(crate) claim_map: Vec<Vec<ProverMultiClaim<F, EF>>>,
-    /// Virtual claims sampled directly on the stacked polynomial.
-    pub(crate) virtual_claims: Vec<ProverVirtualClaim<EF>>,
 }
 
 impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, EF> {
     fn from_witness(witness: Witness<F>) -> Self {
         // Move the witness fields out so the prover owns them outright.
         let parts = witness.into_parts();
-        // One claim list per source table; virtual claims live in their own bucket.
-        let num_tables = parts.tables.len();
         Self {
-            tables: parts.tables,
-            placements: parts.placements,
-            num_variables: parts.num_variables,
-            folding: parts.folding,
+            claims: StackedClaims::new(
+                parts.tables,
+                parts.placements,
+                parts.num_variables,
+                parts.folding,
+            ),
             poly: parts.poly,
-            claim_map: (0..num_tables).map(|_| Vec::new()).collect(),
-            virtual_claims: Vec::new(),
         }
     }
 
@@ -77,44 +58,8 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         Witness::new_interleaved(tables, folding)
     }
 
-    fn commit<Dft, MT, Challenger>(
-        dft: &Dft,
-        mmcs: &MT,
-        challenger: &mut Challenger,
-        witness: Witness<F>,
-        folding: usize,
-        starting_log_inv_rate: usize,
-    ) -> (Self, MT::Commitment, MT::ProverData<DenseMatrix<F>>)
-    where
-        Dft: TwoAdicSubgroupDft<F>,
-        MT: Mmcs<F>,
-        Challenger: CanObserve<MT::Commitment>,
-    {
-        let (root, prover_data) = commit_base(
-            Self::variable_order(),
-            dft,
-            mmcs,
-            challenger,
-            &witness.poly,
-            folding,
-            starting_log_inv_rate,
-        );
-
-        (Self::from_witness(witness), root, prover_data)
-    }
-
-    fn folding(&self) -> usize {
-        self.folding
-    }
-
-    /// Returns the number of variables of the stacked polynomial.
-    fn num_variables(&self) -> usize {
-        self.num_variables
-    }
-
-    /// Returns the number of variables of table `id`.
-    fn num_variables_table(&self, id: usize) -> usize {
-        self.tables[id].num_variables()
+    fn claims(&self) -> &StackedClaims<F, EF> {
+        &self.claims
     }
 
     /// Records opening claims for the selected columns of one table.
@@ -159,14 +104,14 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
             "opening schedule must name at least one column"
         );
         // Sample the local-frame opening point from the transcript.
-        let table = &self.tables[table_idx];
+        let table = &self.claims.tables[table_idx];
         let point = Point::expand_from_univariate(
             challenger.sample_algebra_element(),
             table.num_variables(),
         );
 
         // Factorise the point once; every selected column reuses it.
-        let point = SvoPoint::new_packed(self.folding, &point);
+        let point = SvoPoint::new_packed(self.claims.folding, &point);
 
         // Current group: evaluate each column at the point.
         // Each entry yields an opening (carrying preprocessing residuals) plus the bare eval.
@@ -196,7 +141,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         challenger.observe_algebra_slice(&next_evals);
 
         // Store the batch for the later sumcheck reduction.
-        self.claim_map[table_idx].push(ProverMultiClaim::new(
+        self.claims.claim_map[table_idx].push(ProverMultiClaim::new(
             point,
             current_openings,
             next_openings,
@@ -219,15 +164,17 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Sample a challenge point covering every stacked variable.
-        let point =
-            Point::expand_from_univariate(challenger.sample_algebra_element(), self.num_variables);
+        let point = Point::expand_from_univariate(
+            challenger.sample_algebra_element(),
+            self.claims.num_variables,
+        );
 
         let mut eval = EF::ZERO;
         let mut openings = Vec::new();
         let mut weights = Vec::new();
 
-        for placement in &self.placements {
-            let table = &self.tables[placement.idx()];
+        for placement in &self.claims.placements {
+            let table = &self.claims.tables[placement.idx()];
             for (poly_idx, selector) in placement.selectors().iter().enumerate() {
                 let poly = table.poly(poly_idx);
 
@@ -236,7 +183,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
                 let weight =
                     Point::eval_eq::<EF>(selector.point().as_slice(), selector_part.as_slice());
 
-                let local_svo = SvoPoint::new_packed(self.folding, &local_part);
+                let local_svo = SvoPoint::new_packed(self.claims.folding, &local_part);
                 let (column_eval, partial_evals) = local_svo.eval(poly);
 
                 eval += weight * column_eval;
@@ -251,7 +198,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
 
         let accumulators = calculate_accumulators_batch(
             &ProverMultiClaim::new(
-                SvoPoint::new_unpacked(self.folding, &point, VariableOrder::Prefix),
+                SvoPoint::new_unpacked(self.claims.folding, &point, VariableOrder::Prefix),
                 openings,
                 Vec::new(),
             ),
@@ -260,7 +207,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
 
         // Commit the evaluation to the transcript.
         challenger.observe_algebra_element(eval);
-        self.virtual_claims.push(Claim {
+        self.claims.virtual_claims.push(Claim {
             point,
             eval,
             data: accumulators,
@@ -303,30 +250,29 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         Ch: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
         // Sanity: preprocessing cannot consume more rounds than the stacked arity.
-        assert!(self.folding <= self.num_variables);
+        assert!(self.claims.folding <= self.claims.num_variables);
 
         let alpha: EF = challenger.sample_algebra_element();
         let n_claims = self.num_claims();
 
         let mut alphas = alpha.powers();
         let accumulators: Vec<_> = self
-            .placements
-            .iter()
-            .flat_map(|placement| self.claim_map[placement.idx()].iter())
+            .claims
+            .concrete_claims()
             .map(|claim| {
                 let per_claim: Vec<EF> = alphas.by_ref().take(claim.len()).collect();
                 calculate_accumulators_batch(claim, &per_claim)
             })
             .collect();
 
-        let mut sum = self.sum(alpha);
+        let mut sum = self.claims.sum(alpha);
         let mut rs = Vec::new();
 
         // First alpha power assigned to the virtual claims, sitting just past the concrete claims.
         // The claim count is fixed for the whole fold, so this exponentiation is loop-invariant.
         let alpha_base = alpha.exp_u64(n_claims as u64);
 
-        for round_idx in 0..self.folding {
+        for round_idx in 0..self.claims.folding {
             let weights = lagrange_weights_01inf_multi(&rs);
 
             let mut c0 = EF::ZERO;
@@ -344,6 +290,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
             }
 
             for (vc, alpha_i) in self
+                .claims
                 .virtual_claims
                 .iter()
                 .zip(alpha.shifted_powers(alpha_base))
@@ -378,74 +325,12 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         (SumcheckProver::new(prod_poly, sum), rs)
     }
 
-    /// Returns the total number of concrete openings recorded so far.
-    fn num_claims(&self) -> usize {
-        self.claim_map
-            .iter()
-            .flat_map(|claims| claims.iter().map(ProverMultiClaim::len))
-            .sum()
-    }
-
     fn strategy() -> LayoutStrategy {
         LayoutStrategy::new(true, VariableOrder::Prefix)
     }
 }
 
 impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
-    /// Computes the batched claimed sum from concrete and virtual openings.
-    ///
-    /// # Identity
-    ///
-    /// ```text
-    ///     sum = sum_{i}  alpha^i * eval_i
-    /// ```
-    ///
-    /// # Alpha ordering
-    ///
-    /// Powers of `alpha` are handed out in insertion order:
-    ///
-    /// - Outer: placements, in the order the witness laid them out.
-    /// - Middle: claims recorded against that placement's source table.
-    /// - Inner: openings inside each claim, in the order they were recorded.
-    ///
-    /// # Virtual claims
-    ///
-    /// - Virtual evaluations continue the same alpha sequence.
-    /// - They start at `alpha^n`, with `n` the total concrete opening count.
-    ///
-    /// # Verifier agreement
-    ///
-    /// The verifier walks its claim registry with the same three-loop order,
-    /// so both sides assign the same `alpha^i` to the same claim point.
-    pub(crate) fn sum(&self, alpha: EF) -> EF {
-        let mut sum = EF::ZERO;
-        let mut alphas = alpha.powers();
-
-        // Walk every concrete opening in the canonical insertion order.
-        //     placements -> claims -> current openings -> next openings
-        // Each opening consumes the next power of alpha, matching the verifier.
-        for placement in &self.placements {
-            for claim in &self.claim_map[placement.idx()] {
-                // Current group first.
-                for opening in claim.current_openings() {
-                    sum += opening.eval() * alphas.next().unwrap();
-                }
-                // Next group second, continuing the same power sequence.
-                for opening in claim.next_openings() {
-                    sum += opening.eval() * alphas.next().unwrap();
-                }
-            }
-        }
-
-        // Virtual claims continue the alpha sequence right after the concrete ones.
-        sum += dot_product::<EF, _, _>(
-            self.virtual_claims.iter().map(Claim::eval),
-            alpha.shifted_powers(alpha.exp_u64(self.num_claims() as u64)),
-        );
-
-        sum
-    }
-
     /// Builds the residual equality weights in packed form.
     ///
     /// Two routes produce the identical polynomial; each call takes the cheaper one:
@@ -489,14 +374,15 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
     /// Virtual claims span the whole space and cost the same either way.
     /// They do not enter the decision.
     fn scatter_beats_pack(&self, rs: &Point<EF>) -> bool {
-        let residual = 1usize << (self.num_variables - rs.num_variables());
+        let residual = 1usize << (self.claims.num_variables - rs.num_variables());
         let occupied: usize = self
+            .claims
             .placements
             .iter()
             .map(|placement| {
                 let local =
                     1usize << (self.num_variables_table(placement.idx()) - rs.num_variables());
-                self.claim_map[placement.idx()]
+                self.claims.claim_map[placement.idx()]
                     .iter()
                     .map(|claim| claim.len() * local)
                     .sum::<usize>()
@@ -527,18 +413,18 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
     #[tracing::instrument(skip_all)]
     pub(crate) fn combine_weights(&self, rs: &Point<EF>, alpha: EF) -> Poly<EF> {
         // Invariant: one folded challenge per folded round.
-        assert_eq!(rs.num_variables(), self.folding);
+        assert_eq!(rs.num_variables(), self.claims.folding);
         // Output spans the stacked space minus the already-folded variables.
-        let mut out = Poly::<EF>::zero(self.num_variables - rs.num_variables());
+        let mut out = Poly::<EF>::zero(self.claims.num_variables - rs.num_variables());
 
         let mut alphas = alpha.powers();
 
         // Same canonical walk as the batched claim, so powers stay aligned.
-        for placement in &self.placements {
+        for placement in &self.claims.placements {
             // Variables left in each slot after removing the folded ones.
             let local_rest_variables =
                 self.num_variables_table(placement.idx()) - rs.num_variables();
-            for claim in &self.claim_map[placement.idx()] {
+            for claim in &self.claims.claim_map[placement.idx()] {
                 // Current group: equality weight of the column at the claim point.
                 for opening in claim.current_openings() {
                     // The column picks the selector that names this slot.
@@ -577,7 +463,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
         }
 
         let mut alpha_i = alpha.exp_u64(self.num_claims() as u64);
-        for claim in &self.virtual_claims {
+        for claim in &self.claims.virtual_claims {
             let (svo, rest) = claim.point.split_at(rs.num_variables());
             let scale = alpha_i * Point::eval_eq(svo.as_slice(), rs.as_slice());
             SplitEq::new_unpacked(&rest, scale).accumulate_into(out.as_mut_slice(), None);
@@ -617,9 +503,9 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
         rs: &Point<EF>,
         alpha: EF,
     ) -> Poly<EF::ExtensionPacking> {
-        assert_eq!(rs.num_variables(), self.folding);
+        assert_eq!(rs.num_variables(), self.claims.folding);
         let k_pack = log2_strict_usize(F::Packing::WIDTH);
-        let out_variables = self.num_variables - rs.num_variables();
+        let out_variables = self.claims.num_variables - rs.num_variables();
         assert!(out_variables >= k_pack);
 
         let mut out = Poly::<EF::ExtensionPacking>::zero(out_variables - k_pack);
@@ -639,10 +525,10 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
         // Alpha powers run in (placement, claim, current openings, next openings) order,
         // matching the verifier and the scalar route.
         let mut alphas = alpha.powers();
-        for placement in &self.placements {
+        for placement in &self.claims.placements {
             let local_rest_variables =
                 self.num_variables_table(placement.idx()) - rs.num_variables();
-            for claim in &self.claim_map[placement.idx()] {
+            for claim in &self.claims.claim_map[placement.idx()] {
                 // Current group: equality weight of the column at the claim point.
                 for opening in claim.current_openings() {
                     let col = opening.poly_idx().unwrap();
@@ -681,7 +567,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> PrefixProver<F, EF> {
 
         // Virtual claims span the full residual space; accumulate packed.
         let mut alpha_i = alpha.exp_u64(self.num_claims() as u64);
-        for claim in &self.virtual_claims {
+        for claim in &self.claims.virtual_claims {
             let (svo, rest) = claim.point.split_at(rs.num_variables());
             let scale = alpha_i * Point::eval_eq(svo.as_slice(), rs.as_slice());
             SplitEq::new_packed(&rest, scale).accumulate_into_packed(out.as_mut_slice(), None);
