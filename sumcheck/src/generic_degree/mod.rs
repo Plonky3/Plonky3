@@ -5,6 +5,6 @@ mod proof;
 mod prover;
 mod util;
 
-pub use error::MultiRoundError;
-pub use proof::MultiRoundProof;
+pub use error::GenericDegreeError;
+pub use proof::GenericDegreeProof;
 pub use prover::RoundProver;

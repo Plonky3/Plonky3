@@ -9,19 +9,25 @@ use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 use serde::{Deserialize, Serialize};
 
-use super::error::MultiRoundError;
-use super::util::evaluate_round_poly_at;
+use super::error::GenericDegreeError;
+use super::util::RoundPolyInterpolator;
 
 /// Transcript record produced by the generic-degree sumcheck prover.
 ///
 /// # Layout
 ///
-/// - One entry per round; each entry holds `degree` field elements.
+/// - `claimed_sum` is the value the prover asserts for the hypercube sum.
+/// - One round entry per bound variable; each holds `degree` field elements.
 /// - The transmitted evaluations are `h(0), h(2), h(3), ..., h(degree)`.
 /// - The value `h(1)` is recovered by the verifier as `sum - h(0)`.
 /// - PoW witnesses are present only when grinding is configured.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct MultiRoundProof<F, EF> {
+pub struct GenericDegreeProof<F, EF> {
+    /// Claimed value of the sum over the boolean hypercube at round zero.
+    ///
+    /// Carried in the proof so the verifier consumes the whole prover output
+    /// rather than receiving the claim through a side channel.
+    pub claimed_sum: EF,
     /// Transmitted round-polynomial evaluations.
     ///
     /// Length is the number of rounds; each inner vector has length `degree`.
@@ -30,7 +36,7 @@ pub struct MultiRoundProof<F, EF> {
     pub pow_witnesses: Vec<F>,
 }
 
-impl<F, EF> MultiRoundProof<F, EF> {
+impl<F, EF> GenericDegreeProof<F, EF> {
     /// Number of rounds in this proof.
     #[inline]
     #[must_use]
@@ -46,7 +52,8 @@ impl<F, EF> MultiRoundProof<F, EF> {
     /// - `num_rounds`: number of variables expected to be bound.
     /// - `degree`: per-variable degree of the polynomial being summed.
     /// - `pow_bits`: grinding difficulty per round, or `0`.
-    /// - `claimed_sum`: claimed value of the sum at round zero.
+    ///
+    /// The claimed sum is read from the proof itself.
     ///
     /// # Returns
     ///
@@ -60,14 +67,16 @@ impl<F, EF> MultiRoundProof<F, EF> {
     ///
     /// - PCS openings for committed multilinears.
     /// - Closed-form evaluation for structural multilinears (`eq`, `next`, selectors).
+    ///
+    /// When the claimed sum is fixed by an outer protocol, the caller must also
+    /// check that the proof's claimed sum matches that expected value.
     pub fn verify<Challenger>(
         &self,
         challenger: &mut Challenger,
         num_rounds: usize,
         degree: usize,
         pow_bits: usize,
-        mut claimed_sum: EF,
-    ) -> Result<(Point<EF>, EF), MultiRoundError>
+    ) -> Result<(Point<EF>, EF), GenericDegreeError>
     where
         F: Field,
         EF: ExtensionField<F>,
@@ -79,12 +88,12 @@ impl<F, EF> MultiRoundProof<F, EF> {
         //
         // Catch it here with a typed error rather than a panic.
         if degree == 0 {
-            return Err(MultiRoundError::InvalidDegree { degree });
+            return Err(GenericDegreeError::InvalidDegree { degree });
         }
 
         // Reject up front if the proof has the wrong round count.
         if self.round_polys.len() != num_rounds {
-            return Err(MultiRoundError::RoundCountMismatch {
+            return Err(GenericDegreeError::RoundCountMismatch {
                 expected: num_rounds,
                 actual: self.round_polys.len(),
             });
@@ -95,18 +104,26 @@ impl<F, EF> MultiRoundProof<F, EF> {
         // - `pow_bits > 0`  requires exactly `num_rounds` witnesses.
         let expected_pow_witnesses = if pow_bits > 0 { num_rounds } else { 0 };
         if self.pow_witnesses.len() != expected_pow_witnesses {
-            return Err(MultiRoundError::PowWitnessCountMismatch {
+            return Err(GenericDegreeError::PowWitnessCountMismatch {
                 expected: expected_pow_witnesses,
                 actual: self.pow_witnesses.len(),
             });
         }
 
+        // Bind the transcript to the claimed sum before sampling any challenge,
+        // so the round challenges depend on the statement being proven.
+        challenger.observe_algebra_element(self.claimed_sum);
+
+        // Barycentric weights for the integer domain 0, 1, …, degree are shared by every round.
+        let interpolator = RoundPolyInterpolator::new(degree);
+
+        let mut running_sum = self.claimed_sum;
         let mut challenges = Vec::with_capacity(num_rounds);
 
         for (round, evals) in self.round_polys.iter().enumerate() {
             // Each round polynomial must carry exactly `degree` evaluations.
             if evals.len() != degree {
-                return Err(MultiRoundError::PolyEvalCountMismatch {
+                return Err(GenericDegreeError::PolyEvalCountMismatch {
                     round,
                     expected: degree,
                     actual: evals.len(),
@@ -118,23 +135,25 @@ impl<F, EF> MultiRoundProof<F, EF> {
 
             // Validate this round's PoW witness when grinding is enabled.
             if pow_bits > 0 && !challenger.check_witness(pow_bits, self.pow_witnesses[round]) {
-                return Err(MultiRoundError::InvalidPowWitness { round });
+                return Err(GenericDegreeError::InvalidPowWitness { round });
             }
 
             // Sample the same challenge the prover saw.
             let challenge: EF = challenger.sample_algebra_element();
 
             // Update the running claimed sum using the same Lagrange step as the prover.
-            claimed_sum = evaluate_round_poly_at(evals, claimed_sum, challenge);
+            running_sum = interpolator.eval(evals, running_sum, challenge);
             challenges.push(challenge);
         }
 
-        Ok((Point::new(challenges), claimed_sum))
+        Ok((Point::new(challenges), running_sum))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+
     use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
     use p3_challenger::DuplexChallenger;
     use p3_field::PrimeCharacteristicRing;
@@ -166,11 +185,11 @@ mod tests {
         //     expected:     2
         //     -> RoundCountMismatch
         let mut ch = fresh_challenger();
-        let proof: MultiRoundProof<F, EF> = MultiRoundProof::default();
-        let err = proof.verify(&mut ch, 2, 3, 0, EF::ZERO).unwrap_err();
+        let proof: GenericDegreeProof<F, EF> = GenericDegreeProof::default();
+        let err = proof.verify(&mut ch, 2, 3, 0).unwrap_err();
         assert!(matches!(
             err,
-            MultiRoundError::RoundCountMismatch {
+            GenericDegreeError::RoundCountMismatch {
                 expected: 2,
                 actual: 0
             }
@@ -190,9 +209,12 @@ mod tests {
         //     num_rounds:   0
         //     degree:       0       ← rejected
         let mut ch = fresh_challenger();
-        let proof: MultiRoundProof<F, EF> = MultiRoundProof::default();
-        let err = proof.verify(&mut ch, 0, 0, 0, EF::ZERO).unwrap_err();
-        assert!(matches!(err, MultiRoundError::InvalidDegree { degree: 0 }));
+        let proof: GenericDegreeProof<F, EF> = GenericDegreeProof::default();
+        let err = proof.verify(&mut ch, 0, 0, 0).unwrap_err();
+        assert!(matches!(
+            err,
+            GenericDegreeError::InvalidDegree { degree: 0 }
+        ));
     }
 
     #[test]
@@ -206,14 +228,15 @@ mod tests {
         //     pow_bits = 0
         //     pow_witnesses.len() = 1    ← spurious, must be rejected
         let mut ch = fresh_challenger();
-        let proof = MultiRoundProof::<F, EF> {
-            round_polys: alloc::vec![alloc::vec![EF::ZERO; 1]],
-            pow_witnesses: alloc::vec![F::ZERO],
+        let proof = GenericDegreeProof::<F, EF> {
+            claimed_sum: EF::ZERO,
+            round_polys: vec![vec![EF::ZERO; 1]],
+            pow_witnesses: vec![F::ZERO],
         };
-        let err = proof.verify(&mut ch, 1, 1, 0, EF::ZERO).unwrap_err();
+        let err = proof.verify(&mut ch, 1, 1, 0).unwrap_err();
         assert!(matches!(
             err,
-            MultiRoundError::PowWitnessCountMismatch {
+            GenericDegreeError::PowWitnessCountMismatch {
                 expected: 0,
                 actual: 1
             }

@@ -4,7 +4,7 @@ use thiserror::Error;
 
 /// Errors raised by the generic-degree sumcheck verifier.
 #[derive(Debug, Clone, Eq, PartialEq, Error)]
-pub enum MultiRoundError {
+pub enum GenericDegreeError {
     /// Proof contains the wrong number of rounds.
     #[error("sumcheck round count mismatch: expected {expected}, got {actual}")]
     RoundCountMismatch {

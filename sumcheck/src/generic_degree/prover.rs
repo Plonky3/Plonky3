@@ -6,8 +6,7 @@ use p3_challenger::{FieldChallenger, GrindingChallenger};
 use p3_field::{ExtensionField, Field};
 use p3_multilinear_util::point::Point;
 
-use super::proof::MultiRoundProof;
-use super::util::evaluate_round_poly_at;
+use super::proof::GenericDegreeProof;
 
 /// Per-round callback used to drive the prover loop.
 ///
@@ -24,10 +23,12 @@ pub trait RoundProver<EF> {
 
     /// Return the current round polynomial as a list of evaluations.
     ///
+    /// This reads the current state without mutating it; binding happens only in [`Self::fold`].
+    ///
     /// # Returns
     ///
     /// Vector of length `degree` containing `h(0), h(2), h(3), ..., h(degree)`.
-    fn round_poly(&mut self) -> Vec<EF>;
+    fn round_poly(&self) -> Vec<EF>;
 
     /// Run the prover side of a generic-degree sumcheck driven by this state.
     ///
@@ -41,7 +42,7 @@ pub trait RoundProver<EF> {
     ///
     /// # Returns
     ///
-    /// - The transcript record.
+    /// - The transcript record, which carries the claimed sum.
     /// - The vector of challenges sampled by the verifier.
     ///
     /// # Panics
@@ -53,8 +54,8 @@ pub trait RoundProver<EF> {
         num_rounds: usize,
         degree: usize,
         pow_bits: usize,
-        mut claimed_sum: EF,
-    ) -> (MultiRoundProof<F, EF>, Point<EF>)
+        claimed_sum: EF,
+    ) -> (GenericDegreeProof<F, EF>, Point<EF>)
     where
         F: Field,
         EF: ExtensionField<F>,
@@ -63,7 +64,12 @@ pub trait RoundProver<EF> {
         // A degree-zero polynomial would carry no information.
         assert!(degree > 0, "generic-degree sumcheck: degree must be > 0");
 
-        let mut proof = MultiRoundProof {
+        // Bind the transcript to the claimed sum before sampling any challenge,
+        // so the round challenges depend on the statement being proven.
+        challenger.observe_algebra_element(claimed_sum);
+
+        let mut proof = GenericDegreeProof {
+            claimed_sum,
             round_polys: Vec::with_capacity(num_rounds),
             pow_witnesses: Vec::with_capacity(if pow_bits > 0 { num_rounds } else { 0 }),
         };
@@ -93,9 +99,6 @@ pub trait RoundProver<EF> {
             // Fold the polynomial state in place so the next round reflects the binding.
             self.fold(challenge);
 
-            // Update the running claimed sum to the polynomial value at the challenge.
-            claimed_sum = evaluate_round_poly_at(&evals, claimed_sum, challenge);
-
             proof.round_polys.push(evals);
             challenges.push(challenge);
         }
@@ -118,6 +121,7 @@ mod tests {
     use rand::{RngExt, SeedableRng};
 
     use super::*;
+    use crate::generic_degree::GenericDegreeError;
 
     type F = BabyBear;
     type EF = BinomialExtensionField<F, 4>;
@@ -148,7 +152,7 @@ mod tests {
             }
         }
 
-        fn round_poly(&mut self) -> Vec<EF> {
+        fn round_poly(&self) -> Vec<EF> {
             // Return h(0), h(2), h(3) for the current round polynomial.
             let h0 = round_poly_product(&self.factors, EF::ZERO);
             let h2 = round_poly_product(&self.factors, EF::from_u64(2));
@@ -188,6 +192,27 @@ mod tests {
         acc
     }
 
+    /// Build the three random factors and their ground-truth product sum.
+    fn random_instance(rng: &mut SmallRng, m: usize) -> ([Vec<F>; 3], EF) {
+        let a: Vec<F> = (0..m).map(|_| rng.random()).collect();
+        let b: Vec<F> = (0..m).map(|_| rng.random()).collect();
+        let c: Vec<F> = (0..m).map(|_| rng.random()).collect();
+        let claimed_sum: EF = (0..m)
+            .map(|i| EF::from(a[i]) * EF::from(b[i]) * EF::from(c[i]))
+            .sum();
+        ([a, b, c], claimed_sum)
+    }
+
+    fn prover_from(columns: &[Vec<F>; 3]) -> TripleProductProver {
+        TripleProductProver {
+            factors: [
+                Poly::new(columns[0].iter().copied().map(EF::from).collect()),
+                Poly::new(columns[1].iter().copied().map(EF::from).collect()),
+                Poly::new(columns[2].iter().copied().map(EF::from).collect()),
+            ],
+        }
+    }
+
     #[test]
     fn end_to_end_prove_verify_degree_3() {
         // Fixture state:
@@ -202,28 +227,16 @@ mod tests {
         //     claimed sum must equal a(r) * b(r) * c(r) at the challenge point
         let mut rng = SmallRng::seed_from_u64(123);
         let log_m = 6usize;
-        let m = 1usize << log_m;
-
-        let a: Vec<F> = (0..m).map(|_| rng.random()).collect();
-        let b: Vec<F> = (0..m).map(|_| rng.random()).collect();
-        let c: Vec<F> = (0..m).map(|_| rng.random()).collect();
-
-        // Compute the ground-truth claimed sum in the extension field.
-        let claimed_sum: EF = (0..m)
-            .map(|i| EF::from(a[i]) * EF::from(b[i]) * EF::from(c[i]))
-            .sum();
+        let (columns, claimed_sum) = random_instance(&mut rng, 1 << log_m);
 
         // Prover side.
-        let mut prover_state = TripleProductProver {
-            factors: [
-                Poly::new(a.iter().copied().map(EF::from).collect()),
-                Poly::new(b.iter().copied().map(EF::from).collect()),
-                Poly::new(c.iter().copied().map(EF::from).collect()),
-            ],
-        };
+        let mut prover_state = prover_from(&columns);
         let mut p_ch = fresh_challenger();
         let (proof, prover_challenges) =
             prover_state.prove::<F, _>(&mut p_ch, log_m, 3, 0, claimed_sum);
+
+        // The proof carries the claimed sum the verifier will consume.
+        assert_eq!(proof.claimed_sum, claimed_sum);
 
         // After all rounds each factor has been bound down to a single value.
         let final_a = prover_state.factors[0].as_slice()[0];
@@ -232,12 +245,73 @@ mod tests {
 
         // Verifier side replays the transcript and recovers the final claim.
         let mut v_ch = fresh_challenger();
-        let (verifier_challenges, final_sum) =
-            proof.verify(&mut v_ch, log_m, 3, 0, claimed_sum).unwrap();
+        let (verifier_challenges, final_sum) = proof.verify(&mut v_ch, log_m, 3, 0).unwrap();
 
         // Both sides must observe the same Fiat-Shamir transcript.
         assert_eq!(prover_challenges, verifier_challenges);
         // The final sumcheck equation is the product of multilinear evaluations.
         assert_eq!(final_sum, final_a * final_b * final_c);
+    }
+
+    #[test]
+    fn end_to_end_prove_verify_with_grinding() {
+        // Same product sumcheck, now with per-round proof-of-work enabled.
+        // This exercises the grind / check-witness path that the degree-3 test skips.
+        //
+        // Fixture state: log_m = 4, pow_bits = 4 to keep grinding fast.
+        let mut rng = SmallRng::seed_from_u64(321);
+        let log_m = 4usize;
+        let pow_bits = 4usize;
+        let (columns, claimed_sum) = random_instance(&mut rng, 1 << log_m);
+
+        let mut prover_state = prover_from(&columns);
+        let mut p_ch = fresh_challenger();
+        let (proof, prover_challenges) =
+            prover_state.prove::<F, _>(&mut p_ch, log_m, 3, pow_bits, claimed_sum);
+
+        // Grinding emits exactly one witness per round.
+        assert_eq!(proof.pow_witnesses.len(), log_m);
+
+        let final_a = prover_state.factors[0].as_slice()[0];
+        let final_b = prover_state.factors[1].as_slice()[0];
+        let final_c = prover_state.factors[2].as_slice()[0];
+
+        // The verifier re-checks each round's witness while replaying the transcript.
+        let mut v_ch = fresh_challenger();
+        let (verifier_challenges, final_sum) = proof.verify(&mut v_ch, log_m, 3, pow_bits).unwrap();
+
+        assert_eq!(prover_challenges, verifier_challenges);
+        assert_eq!(final_sum, final_a * final_b * final_c);
+    }
+
+    #[test]
+    fn verify_rejects_tampered_pow_witness() {
+        // Invariant: a corrupted PoW witness must fail the per-round grinding check.
+        //
+        // Fixture state: a valid grinded proof over log_m = 4 rounds.
+        //
+        // Mutation: corrupt the last round's witness.
+        //
+        //     rounds 0..2 keep their valid witnesses, so the transcript stays
+        //     in sync up to the final round, which then fails its grinding check.
+        let mut rng = SmallRng::seed_from_u64(99);
+        let log_m = 4usize;
+        let pow_bits = 4usize;
+        let (columns, claimed_sum) = random_instance(&mut rng, 1 << log_m);
+
+        let mut prover_state = prover_from(&columns);
+        let mut p_ch = fresh_challenger();
+        let (mut proof, _) = prover_state.prove::<F, _>(&mut p_ch, log_m, 3, pow_bits, claimed_sum);
+
+        let last_round = log_m - 1;
+        proof.pow_witnesses[last_round] += F::ONE;
+
+        let mut v_ch = fresh_challenger();
+        let err = proof.verify(&mut v_ch, log_m, 3, pow_bits).unwrap_err();
+        match err {
+            // The failure is pinned to the corrupted round.
+            GenericDegreeError::InvalidPowWitness { round } => assert_eq!(round, last_round),
+            other => panic!("expected an invalid pow witness error, got {other:?}"),
+        }
     }
 }
