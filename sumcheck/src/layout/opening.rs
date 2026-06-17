@@ -9,7 +9,6 @@ use p3_multilinear_util::poly::Poly;
 use crate::Claim;
 use crate::svo::{
     SvoAccumulators, SvoPoint, calculate_product_accumulator, evals_01inf_grid_prefix,
-    next_state_evals,
 };
 
 /// Multi-opening claim over an SVO point.
@@ -158,6 +157,10 @@ impl<EF: Field> EqPartials<EF> {
         // Expand the cached payload to the same ternary grid.
         let acc_grid = evals_01inf_grid_prefix(self.poly().as_slice());
 
+        // The grid spans the full ternary cube so the 0-face and inf-face slices are well defined.
+        debug_assert_eq!(eq_grid.len(), 3 * stride);
+        debug_assert_eq!(acc_grid.len(), 3 * stride);
+
         // The first third of the grid fixes the leading active coordinate to 0.
         acc0.iter_mut()
             .zip(eq_grid[..stride].iter().zip(acc_grid[..stride].iter()))
@@ -228,6 +231,54 @@ impl<EF: Field> NextPartials<EF> {
             carry: Poly::zero(num_variables),
             omega: Poly::zero(num_variables),
         }
+    }
+
+    /// Builds the three repeat-last-successor state tables for a point.
+    ///
+    /// # Overview
+    ///
+    /// The repeat-last successor map sends Boolean row `x` to row `x + 1`, with the
+    /// last row mapping to itself.
+    /// Its weight against a point splits into three tables indexed by Boolean rows:
+    ///
+    /// - a "done" table equal to the equality weight shifted up by one row,
+    /// - a "carry" table holding the wrap-in weight at the all-zeros row,
+    /// - an "omega" table holding the wrap-out weight at the all-ones row.
+    ///
+    /// # Algorithm
+    ///
+    /// ```text
+    ///     rows:   0      1      2    ...   2^n - 1
+    ///     done:   0    eq[0]  eq[1]  ...   eq[2^n-2]
+    ///     carry:  B      0      0    ...      0
+    ///     omega:  0      0      0    ...      B
+    ///
+    ///     B = product of all point coordinates (the all-ones corner weight)
+    /// ```
+    pub(crate) fn from_point(point: &[EF]) -> Self {
+        // Number of point coordinates, one per Boolean variable.
+        let num_variables = point.len();
+        // Number of Boolean rows over those variables.
+        let num_rows = 1 << num_variables;
+
+        // The all-ones corner weight is the product of all coordinates.
+        let boundary = point.iter().copied().product::<EF>();
+        // Carry enters only at the all-zeros row (the row that wraps in).
+        let mut carry = EF::zero_vec(num_rows);
+        // Omega exits only at the all-ones row (the row that repeats).
+        let mut omega = EF::zero_vec(num_rows);
+        carry[0] = boundary;
+        omega[num_rows - 1] = boundary;
+
+        // Equality weights of the point over all Boolean rows.
+        let eq = Poly::new_from_point(point, EF::ONE);
+        // Done table is the equality table shifted up by one row, with row 0 left at zero.
+        let mut done = EF::zero_vec(num_rows);
+        if num_rows > 1 {
+            done[1..].copy_from_slice(&eq.as_slice()[..num_rows - 1]);
+        }
+
+        Self::new(Poly::new(done), Poly::new(carry), Poly::new(omega))
     }
 
     /// Folds another round's residuals into this one, weighted by a challenge power.
@@ -304,7 +355,7 @@ impl<EF: Field> NextPartials<EF> {
 
         // Build the three successor state tables for the active point.
         // TODO: carry and omega polys are sparse.
-        let active = next_state_evals(p_active);
+        let active = Self::from_point(p_active);
 
         // Expand every state and data table from the hypercube to the ternary grid.
         let carry_grid = evals_01inf_grid_prefix(active.carry().as_slice());
@@ -313,6 +364,14 @@ impl<EF: Field> NextPartials<EF> {
         let done_data_grid = evals_01inf_grid_prefix(self.done().as_slice());
         let carry_data_grid = evals_01inf_grid_prefix(self.carry().as_slice());
         let omega_data_grid = evals_01inf_grid_prefix(self.omega().as_slice());
+
+        // Every grid spans the full ternary cube so the 0-face and inf-face slices are well defined.
+        debug_assert_eq!(carry_grid.len(), 3 * stride);
+        debug_assert_eq!(done_grid.len(), 3 * stride);
+        debug_assert_eq!(omega_grid.len(), 3 * stride);
+        debug_assert_eq!(done_data_grid.len(), 3 * stride);
+        debug_assert_eq!(carry_data_grid.len(), 3 * stride);
+        debug_assert_eq!(omega_data_grid.len(), 3 * stride);
 
         // First grid third: leading active coordinate fixed to 0; sum the three state-data products.
         acc0.iter_mut()
@@ -397,7 +456,7 @@ impl<EF: Field> NextPartials<EF> {
         assert_eq!(acc_inf.len(), stride);
 
         // Successor state tables for the active point.
-        let active = next_state_evals(p_active);
+        let active = Self::from_point(p_active);
         // Plain equality weights of the active point.
         let eq_active = Poly::new_from_point(p_active, EF::ONE);
 
@@ -606,10 +665,55 @@ mod tests {
 
     use p3_baby_bear::BabyBear;
     use p3_field::PrimeCharacteristicRing;
+    use p3_multilinear_util::point::Point;
+    use p3_multilinear_util::poly::Poly;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
 
     use super::*;
 
     type F = BabyBear;
+
+    // Brute-force reference: materialize each successor state table row by row from the closed form.
+    fn next_partials_from_point_reference(point: &[F]) -> [Poly<F>; 3] {
+        let num_variables = point.len();
+        let num_rows = 1 << num_variables;
+        let mut carry = F::zero_vec(num_rows);
+        let mut done = F::zero_vec(num_rows);
+        let mut omega = F::zero_vec(num_rows);
+
+        // Evaluate the closed-form successor decomposition at every Boolean row.
+        for row_idx in 0..num_rows {
+            let row = Point::hypercube(row_idx, num_variables);
+            let (c, d, o) = Point::eval_next(point, row.as_slice());
+            carry[row_idx] = c;
+            done[row_idx] = d;
+            omega[row_idx] = o;
+        }
+
+        [Poly::new(carry), Poly::new(done), Poly::new(omega)]
+    }
+
+    #[test]
+    fn next_partials_from_point_matches_reference() {
+        let mut rng = SmallRng::seed_from_u64(1);
+
+        // Invariant: the fast sparse construction equals the brute-force per-row tables.
+        // Fixture state: variable counts 0..=8, with 16 random points each.
+        for num_variables in 0..=8 {
+            for _ in 0..16 {
+                let point = Point::<F>::rand(&mut rng, num_variables);
+                // Fast path: closed-form sparse construction of the three state tables.
+                let actual = NextPartials::from_point(point.as_slice());
+                // Slow path: one closed-form evaluation per Boolean row.
+                let [carry, done, omega] = next_partials_from_point_reference(point.as_slice());
+
+                assert_eq!(actual.carry(), &carry);
+                assert_eq!(actual.done(), &done);
+                assert_eq!(actual.omega(), &omega);
+            }
+        }
+    }
 
     #[test]
     fn opening_new_sets_poly_idx_eval_and_unit_data() {

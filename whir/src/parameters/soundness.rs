@@ -205,6 +205,15 @@ impl SecurityAssumption {
     /// Compute the number of queries to match the security level
     /// The error to drive down is (1-delta)^t < 2^-lambda.
     /// Where delta is set as in the `log_1_delta` function.
+    ///
+    /// Requires a redundant code rate, at most `1/2`:
+    /// - A redundant rate keeps the proximity parameter `delta > 0`.
+    /// - With `delta > 0` the term `log2(1 - delta)` is negative.
+    /// - Dividing `-lambda` by a negative number gives a positive, finite count.
+    /// - A rate of `1` forces `delta <= 0` and rounds the count down to zero.
+    /// - Zero queries would make the proximity test check nothing.
+    ///
+    /// Configuration construction rejects rate `1`, so the precondition holds.
     #[must_use]
     pub(crate) fn queries(&self, protocol_security_level: usize, log_inv_rate: usize) -> usize {
         let num_queries_f = -(protocol_security_level as f64) / self.log_1_delta(log_inv_rate);

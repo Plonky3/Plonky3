@@ -3,6 +3,7 @@
 mod builder;
 mod expression;
 pub(crate) mod expression_ext;
+mod flatten;
 mod variable;
 
 use alloc::sync::Arc;

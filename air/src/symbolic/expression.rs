@@ -1,4 +1,5 @@
 use p3_field::{Algebra, ExtensionField, Field, InjectiveMonomial};
+use serde::{Deserialize, Serialize};
 
 use crate::symbolic::variable::{BaseEntry, SymbolicVariable};
 use crate::symbolic::{SymLeaf, SymbolicExpr};
@@ -8,7 +9,7 @@ use crate::{AirBuilder, WindowAccess};
 ///
 /// These represent the atomic building blocks of AIR constraint expressions:
 /// trace column references, selectors, and field constants.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum BaseLeaf<F> {
     /// A reference to a trace column or public input.
     Variable(SymbolicVariable<F>),
@@ -1017,5 +1018,33 @@ mod tests {
 
         let expr = col0 * p0 + p1;
         assert_eq!(expr.resolve(&b), BabyBear::new(83));
+    }
+
+    #[test]
+    fn serde_round_trip_preserves_resolution() {
+        // A constraint mixing every leaf kind, both row offsets, and all node kinds:
+        //   main[0]·main_next[1] - public[0] + periodic[0]·is_transition - constant
+        let b = test_builder();
+        let main_cur =
+            SymbolicExpression::from(SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0));
+        let main_next =
+            SymbolicExpression::from(SymbolicVariable::new(BaseEntry::Main { offset: 1 }, 1));
+        let public =
+            SymbolicExpression::from(SymbolicVariable::<BabyBear>::new(BaseEntry::Public, 0));
+        let periodic =
+            SymbolicExpression::from(SymbolicVariable::<BabyBear>::new(BaseEntry::Periodic, 0));
+        let transition = SymbolicExpression::<BabyBear>::Leaf(BaseLeaf::IsTransition);
+
+        let expr = main_cur * main_next - public + periodic * transition
+            - SymbolicExpression::from(BabyBear::new(5));
+
+        let json = serde_json::to_string(&expr).unwrap();
+        let decoded: SymbolicExpression<BabyBear> = serde_json::from_str(&json).unwrap();
+
+        // Semantic equality: both trees resolve to the same value.
+        assert_eq!(decoded.resolve(&b), expr.resolve(&b));
+        // Structural equality: the decoded tree re-serializes identically.
+        assert_eq!(serde_json::to_string(&decoded).unwrap(), json);
+        assert_eq!(decoded.degree_multiple(), expr.degree_multiple());
     }
 }

@@ -1,6 +1,6 @@
 [package]
-name = "p3-air"
-description = "Defines the Algebraic Intermediate Representation (AIR) interface and supporting utilities for STARK provers."
+name = "p3-multi-stark"
+description = "Multilinear (SuperSpartan-style) STARK prover for AIRs."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,16 +10,14 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+p3-air.workspace = true
+p3-commit.workspace = true
 p3-field.workspace = true
 p3-matrix.workspace = true
-serde = { workspace = true, features = ["derive", "alloc"] }
-tracing.workspace = true
+p3-multilinear-util.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
-p3-field = { path = "../field" }
-p3-mersenne-31 = { path = "../mersenne-31" }
-serde_json.workspace = true
 
 [lints]
 workspace = true

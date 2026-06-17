@@ -268,6 +268,10 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
         let mut sum = self.claims.sum(alpha);
         let mut rs = Vec::new();
 
+        // First alpha power assigned to the virtual claims, sitting just past the concrete claims.
+        // The claim count is fixed for the whole fold, so this exponentiation is loop-invariant.
+        let alpha_base = alpha.exp_u64(n_claims as u64);
+
         for round_idx in 0..self.claims.folding {
             let weights = lagrange_weights_01inf_multi(&rs);
 
@@ -289,7 +293,7 @@ impl<F: TwoAdicField, EF: ExtensionField<F>> Layout<F, EF> for PrefixProver<F, E
                 .claims
                 .virtual_claims
                 .iter()
-                .zip(alpha.shifted_powers(alpha.exp_u64(n_claims as u64)))
+                .zip(alpha.shifted_powers(alpha_base))
             {
                 let vc_accs = &vc.data;
                 c0 += alpha_i
