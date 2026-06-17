@@ -12,4 +12,5 @@ extern crate alloc;
 pub mod commit;
 pub mod config;
 pub mod folder;
+pub mod metadata;
 pub mod selectors;
