@@ -163,13 +163,7 @@ mod tests {
 
     #[test]
     fn verify_rejects_wrong_round_count() {
-        // Fixture: an empty proof, but the verifier expects 2 rounds.
-        //
-        // Mutation: pass num_rounds = 2 against a 0-round proof.
-        //
-        //     proof rounds: 0
-        //     expected:     2
-        //     -> RoundCountMismatch
+        // A 0-round proof must be rejected when two rounds are expected.
         let mut ch = fresh_challenger();
         let proof: GenericDegreeProof<F, EF> = GenericDegreeProof::default();
         let err = proof.verify(&mut ch, 2, 3, 0).unwrap_err();
@@ -184,16 +178,7 @@ mod tests {
 
     #[test]
     fn verify_rejects_zero_degree() {
-        // Invariant: a degree-zero round polynomial carries no information.
-        // The verifier must reject up front with a typed error.
-        //
-        // Fixture state: empty proof, but degree set to zero.
-        //
-        // Mutation: pass degree = 0.
-        //
-        //     proof rounds: 0
-        //     num_rounds:   0
-        //     degree:       0       ← rejected
+        // Degree zero carries no information, so the verifier rejects it with a typed error.
         let mut ch = fresh_challenger();
         let proof: GenericDegreeProof<F, EF> = GenericDegreeProof::default();
         let err = proof.verify(&mut ch, 0, 0, 0).unwrap_err();
@@ -205,14 +190,8 @@ mod tests {
 
     #[test]
     fn verify_rejects_unexpected_pow_witnesses() {
-        // Invariant: with `pow_bits == 0` the canonical proof shape requires `pow_witnesses` to be empty.
-        // Without this rule two distinct proofs would verify for the same statement (malleability).
-        //
-        // Fixture state: a one-round proof with an extra PoW witness attached.
-        //
-        //     round_polys.len() = 1      → matches num_rounds = 1
-        //     pow_bits = 0
-        //     pow_witnesses.len() = 1    ← spurious, must be rejected
+        // With pow_bits == 0 a canonical proof carries no PoW witnesses.
+        // Accepting a spurious one would let two proofs verify the same statement (malleability).
         let mut ch = fresh_challenger();
         let proof = GenericDegreeProof::<F, EF> {
             claimed_sum: EF::ZERO,
