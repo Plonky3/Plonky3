@@ -1,7 +1,7 @@
 use alloc::sync::Arc;
 
 use p3_field::extension::{
-    BinomialExtensionField, CubicTrinomialExtensionField, QuinticTrinomialExtensionField,
+    BinomialExtensionField, Complex, CubicTrinomialExtensionField, QuinticTrinomialExtensionField,
 };
 use p3_field::{Algebra, ExtensionField, Field, PrimeCharacteristicRing};
 use serde::{Deserialize, Serialize};
@@ -191,6 +191,20 @@ where
     }
 }
 
+/// Concrete [`From`] for a degree-4 complex tower `BinomialExtensionField<Complex<F>, 2>`.
+///
+/// The symbolic base is `F` while the binomial's base parameter is `Complex<F>`, so
+/// the generic [`BinomialExtensionField<F, D>`] impl above does not cover it.
+impl<F: Field> From<BinomialExtensionField<Complex<F>, 2>>
+    for SymbolicExpressionExt<F, BinomialExtensionField<Complex<F>, 2>>
+where
+    BinomialExtensionField<Complex<F>, 2>: ExtensionField<F>,
+{
+    fn from(ef: BinomialExtensionField<Complex<F>, 2>) -> Self {
+        Self::Leaf(ExtLeaf::ExtConstant(ef))
+    }
+}
+
 /// Concrete [`Algebra`] for [`CubicTrinomialExtensionField`] — avoids overlap with `Algebra<F>`.
 impl<F: Field> Algebra<CubicTrinomialExtensionField<F>>
     for SymbolicExpressionExt<F, CubicTrinomialExtensionField<F>>
@@ -204,6 +218,16 @@ impl<F: Field> Algebra<QuinticTrinomialExtensionField<F>>
     for SymbolicExpressionExt<F, QuinticTrinomialExtensionField<F>>
 where
     QuinticTrinomialExtensionField<F>: ExtensionField<F>,
+{
+}
+
+/// Concrete [`Algebra`] for a degree-4 complex tower `BinomialExtensionField<Complex<F>, 2>` —
+/// avoids overlap with `Algebra<F>` and with the generic binomial impl, whose base parameter
+/// matches the symbolic base.
+impl<F: Field> Algebra<BinomialExtensionField<Complex<F>, 2>>
+    for SymbolicExpressionExt<F, BinomialExtensionField<Complex<F>, 2>>
+where
+    BinomialExtensionField<Complex<F>, 2>: ExtensionField<F>,
 {
 }
 
@@ -834,5 +858,22 @@ mod tests {
         // Structural equality: the decoded tree re-serializes identically.
         assert_eq!(serde_json::to_string(&decoded).unwrap(), json);
         assert_eq!(decoded.degree_multiple(), expr.degree_multiple());
+    }
+
+    #[test]
+    fn complex_tower_extension_constant_lowers_to_leaf() {
+        use p3_mersenne_31::{Mersenne31, QM31};
+
+        // `QM31 = BinomialExtensionField<Complex<Mersenne31>, 2>` is a degree-4 tower whose
+        // binomial base parameter (`Complex<Mersenne31>`) differs from the symbolic base
+        // (`Mersenne31`), so it needs the dedicated complex-tower impls.
+        fn assert_algebra<A: Algebra<B>, B>() {}
+        assert_algebra::<SymbolicExpressionExt<Mersenne31, QM31>, QM31>();
+
+        let expr = SymbolicExpressionExt::<Mersenne31, QM31>::from(QM31::ONE);
+        match expr {
+            SymbolicExpressionExt::Leaf(ExtLeaf::ExtConstant(c)) => assert_eq!(c, QM31::ONE),
+            _ => panic!("Expected an ExtConstant leaf"),
+        }
     }
 }

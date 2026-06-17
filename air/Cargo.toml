@@ -18,6 +18,7 @@ tracing.workspace = true
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }
 p3-field = { path = "../field" }
+p3-mersenne-31 = { path = "../mersenne-31" }
 serde_json.workspace = true
 
 [lints]
