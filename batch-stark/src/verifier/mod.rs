@@ -18,7 +18,6 @@ use p3_uni_stark::{
     recompose_quotient_from_chunks, validate_degree_bits,
 };
 use p3_util::checked_log_size_sum;
-use p3_util::zip_eq::zip_eq;
 use tracing::{info_span, instrument};
 
 use crate::common::CommonData;
@@ -374,13 +373,15 @@ where
         let inst_qcs = &opened_values.instances[i]
             .base_opened_values
             .quotient_chunks;
-        for (d, vals) in zip_eq(
-            domains.iter(),
-            inst_qcs,
-            VerificationError::from(InvalidProofShapeError::QuotientDomainsCountMismatch {
-                air: i,
-            }),
-        )? {
+        // Invariant: one quotient-chunk domain per opened chunk.
+        // A count mismatch means the proof shape disagrees with this instance.
+        if domains.len() != inst_qcs.len() {
+            return Err(VerificationError::from(
+                InvalidProofShapeError::QuotientDomainsCountMismatch { air: i },
+            )
+            .into());
+        }
+        for (d, vals) in domains.iter().zip(inst_qcs) {
             qc_round.push((*d, vec![(zeta, vals.clone())]));
         }
     }

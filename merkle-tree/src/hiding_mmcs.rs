@@ -7,7 +7,6 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::stack::HorizontalPair;
 use p3_matrix::{Dimensions, Matrix};
 use p3_symmetric::{CryptographicHasher, PseudoCompressionFunction};
-use p3_util::zip_eq::zip_eq;
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::de::DeserializeOwned;
@@ -171,7 +170,14 @@ where
         // Without this, an over-long row could be masked by an under-long salt.
         check_widths(dimensions, opened_values)?;
 
-        let opened_salted_values = zip_eq(opened_values, salts, MerkleTreeError::WrongBatchSize)?
+        // Invariant: one salt row per opened row.
+        // A mismatch means the proof claims a different matrix count than was committed.
+        if opened_values.len() != salts.len() {
+            return Err(MerkleTreeError::WrongBatchSize);
+        }
+        let opened_salted_values = opened_values
+            .iter()
+            .zip(salts)
             .map(|(opened, salt)| opened.iter().chain(salt.iter()).copied().collect_vec())
             .collect_vec();
 

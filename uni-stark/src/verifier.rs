@@ -11,7 +11,6 @@ use p3_commit::{Pcs, PolynomialSpace};
 use p3_field::{BasedVectorSpace, ExtensionField, Field, PrimeCharacteristicRing};
 use p3_matrix::dense::RowMajorMatrixView;
 use p3_matrix::stack::VerticalPair;
-use p3_util::zip_eq::zip_eq;
 use p3_util::{checked_log_size_sum, checked_pow2};
 use tracing::instrument;
 
@@ -478,21 +477,22 @@ where
             vec![(trace_domain, trace_points)],
         )
     };
+    // Invariant: one randomized quotient-chunk domain per opened chunk.
+    // A count mismatch means the proof shape disagrees with the config.
+    if randomized_quotient_chunks_domains.len() != opened_values.quotient_chunks.len() {
+        return Err(VerificationError::from(
+            InvalidProofShapeError::QuotientDomainsCountMismatch { air: 0 },
+        ));
+    }
+    // Check the commitment on the randomized domains.
+    let quotient_round = randomized_quotient_chunks_domains
+        .iter()
+        .zip(&opened_values.quotient_chunks)
+        .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
+        .collect_vec();
     coms_to_verify.extend(vec![
         trace_round,
-        (
-            commitments.quotient_chunks.clone(),
-            // Check the commitment on the randomized domains.
-            zip_eq(
-                randomized_quotient_chunks_domains.iter(),
-                &opened_values.quotient_chunks,
-                VerificationError::from(InvalidProofShapeError::QuotientDomainsCountMismatch {
-                    air: 0,
-                }),
-            )?
-            .map(|(domain, values)| (*domain, vec![(zeta, values.clone())]))
-            .collect_vec(),
-        ),
+        (commitments.quotient_chunks.clone(), quotient_round),
     ]);
 
     // Add preprocessed commitment verification if present

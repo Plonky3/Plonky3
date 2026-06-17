@@ -17,7 +17,6 @@ use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixCow};
 use p3_matrix::row_index_mapped::RowIndexMappedView;
 use p3_matrix::{Dimensions, Matrix};
 use p3_util::log2_strict_usize;
-use p3_util::zip_eq::zip_eq;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::{debug_span, info_span};
@@ -609,39 +608,47 @@ where
                     first_layer_proof,
                 } = input_proof;
 
+                // Invariant: one opened batch per committed round.
+                // A mismatch means the proof opens a different batch count than committed.
+                if input_openings.len() != rounds.len() {
+                    return Err(InputError::InputShapeError);
+                }
                 for (batch, (batch_opening, (batch_commit, mats))) in
-                    zip_eq(input_openings, &rounds, InputError::InputShapeError)?.enumerate()
+                    input_openings.iter().zip(&rounds).enumerate()
                 {
                     let batch_heights: Vec<usize> = mats
                         .iter()
                         .map(|(domain, _)| domain.size() << self.fri_params.log_blowup)
                         .collect_vec();
-                    // The opened rows must pair one-to-one with the committed matrices.
-                    let batch_dims: Vec<Dimensions> = zip_eq(
-                        batch_heights.iter().zip(mats),
-                        &batch_opening.opened_values,
-                        InputError::InputShapeError,
-                    )?
-                    .enumerate()
-                    .map(|(matrix, ((&height, (_, points_and_values)), _))| {
-                        // Invariant: a matrix's width is fixed by its first opening point.
-                        //
-                        //     >= 1 point  ->  width = number of claimed evaluations
-                        //     no points   ->  reject
-                        //
-                        // Why reject the no-points case:
-                        //   - row boundaries in the flattened leaf hash are authenticated only from claimed widths
-                        //   - a matrix opened at no points claims no width
-                        //   - its width could then come only from the unverified proof
-                        let (_, values) = points_and_values
-                            .first()
-                            .ok_or(InputError::MatrixWithoutOpeningPoints { batch, matrix })?;
-                        Ok(Dimensions {
-                            width: values.len(),
-                            height,
+                    // Invariant: the opened rows pair one-to-one with the committed matrices.
+                    // A mismatch means the proof opens a different matrix count than committed.
+                    if mats.len() != batch_opening.opened_values.len() {
+                        return Err(InputError::InputShapeError);
+                    }
+                    let batch_dims: Vec<Dimensions> = batch_heights
+                        .iter()
+                        .zip(mats)
+                        .zip(&batch_opening.opened_values)
+                        .enumerate()
+                        .map(|(matrix, ((&height, (_, points_and_values)), _))| {
+                            // Invariant: a matrix's width is fixed by its first opening point.
+                            //
+                            //     >= 1 point  ->  width = number of claimed evaluations
+                            //     no points   ->  reject
+                            //
+                            // Why reject the no-points case:
+                            //   - row boundaries in the flattened leaf hash are authenticated only from claimed widths
+                            //   - a matrix opened at no points claims no width
+                            //   - its width could then come only from the unverified proof
+                            let (_, values) = points_and_values
+                                .first()
+                                .ok_or(InputError::MatrixWithoutOpeningPoints { batch, matrix })?;
+                            Ok(Dimensions {
+                                width: values.len(),
+                                height,
+                            })
                         })
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
+                        .collect::<Result<Vec<_>, _>>()?;
 
                     let (dims, idx) = batch_heights
                         .iter()
@@ -663,11 +670,14 @@ where
                         .verify_batch(batch_commit, dims, idx, batch_opening.into())
                         .map_err(InputError::InputMmcsError)?;
 
-                    for (ps_at_x, (mat_domain, mat_points_and_values)) in zip_eq(
-                        &batch_opening.opened_values,
-                        mats,
-                        InputError::InputShapeError,
-                    )? {
+                    // Invariant: the opened rows pair one-to-one with the committed matrices.
+                    // A mismatch means the proof opens a different matrix count than committed.
+                    if batch_opening.opened_values.len() != mats.len() {
+                        return Err(InputError::InputShapeError);
+                    }
+                    for (ps_at_x, (mat_domain, mat_points_and_values)) in
+                        batch_opening.opened_values.iter().zip(mats)
+                    {
                         let log_height = mat_domain.log_n + self.fri_params.log_blowup;
                         let bits_reduced = log_global_max_height - log_height;
                         let orig_idx = cfft_permute_index(index >> bits_reduced, log_height);
@@ -701,51 +711,54 @@ where
 
                 // Verify bivariate fold and lambda correction
 
-                let (mut fri_input, fl_dims, fl_leaves): (Vec<_>, Vec<_>, Vec<_>) = zip_eq(
-                    zip_eq(
-                        reduced_openings,
-                        first_layer_siblings,
-                        InputError::InputShapeError,
-                    )?,
-                    &proof.lambdas,
-                    InputError::InputShapeError,
-                )?
-                .map(|(((log_height, (_, ro)), &fl_sib), &lambda)| {
-                    assert!(log_height > 0);
+                // Invariant: one first-layer sibling and one lambda per reduced-opening height.
+                // All three lengths must agree for the bivariate fold to be well defined.
+                if reduced_openings.len() != first_layer_siblings.len()
+                    || reduced_openings.len() != proof.lambdas.len()
+                {
+                    return Err(InputError::InputShapeError);
+                }
+                let (mut fri_input, fl_dims, fl_leaves): (Vec<_>, Vec<_>, Vec<_>) =
+                    reduced_openings
+                        .into_iter()
+                        .zip(first_layer_siblings)
+                        .zip(&proof.lambdas)
+                        .map(|(((log_height, (_, ro)), &fl_sib), &lambda)| {
+                            assert!(log_height > 0);
 
-                    let orig_size = log_height - self.fri_params.log_blowup;
-                    let bits_reduced = log_global_max_height - log_height;
-                    let orig_idx = cfft_permute_index(index >> bits_reduced, log_height);
+                            let orig_size = log_height - self.fri_params.log_blowup;
+                            let bits_reduced = log_global_max_height - log_height;
+                            let orig_idx = cfft_permute_index(index >> bits_reduced, log_height);
 
-                    let lde_domain = CircleDomain::standard(log_height);
-                    let p: Point<Val> = lde_domain.nth_point(orig_idx);
+                            let lde_domain = CircleDomain::standard(log_height);
+                            let p: Point<Val> = lde_domain.nth_point(orig_idx);
 
-                    let lambda_corrected = ro - lambda * p.v_n(orig_size);
+                            let lambda_corrected = ro - lambda * p.v_n(orig_size);
 
-                    let mut fl_values = vec![lambda_corrected; 2];
-                    fl_values[((index >> bits_reduced) & 1) ^ 1] = fl_sib;
+                            let mut fl_values = vec![lambda_corrected; 2];
+                            fl_values[((index >> bits_reduced) & 1) ^ 1] = fl_sib;
 
-                    let fri_input = (
-                        // - 1 here is because we have already folded a layer.
-                        log_height - 1,
-                        fold_y_row(
-                            index >> (bits_reduced + 1),
-                            // - 1 here is log_arity.
-                            log_height - 1,
-                            bivariate_beta,
-                            fl_values.iter().copied(),
-                        ),
-                    );
+                            let fri_input = (
+                                // - 1 here is because we have already folded a layer.
+                                log_height - 1,
+                                fold_y_row(
+                                    index >> (bits_reduced + 1),
+                                    // - 1 here is log_arity.
+                                    log_height - 1,
+                                    bivariate_beta,
+                                    fl_values.iter().copied(),
+                                ),
+                            );
 
-                    let fl_dims = Dimensions {
-                        // First-layer leaves hold the queried value and its sibling.
-                        width: 2,
-                        height: 1 << (log_height - 1),
-                    };
+                            let fl_dims = Dimensions {
+                                // First-layer leaves hold the queried value and its sibling.
+                                width: 2,
+                                height: 1 << (log_height - 1),
+                            };
 
-                    (fri_input, fl_dims, fl_values)
-                })
-                .multiunzip();
+                            (fri_input, fl_dims, fl_values)
+                        })
+                        .multiunzip();
 
                 // sort descending
                 fri_input.reverse();
