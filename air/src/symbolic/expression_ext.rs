@@ -236,6 +236,7 @@ mod tests {
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
+    use p3_mersenne_31::{Mersenne31, QM31};
 
     use super::*;
     use crate::symbolic::SymbolicExpr;
@@ -862,8 +863,6 @@ mod tests {
 
     #[test]
     fn complex_tower_extension_constant_lowers_to_leaf() {
-        use p3_mersenne_31::{Mersenne31, QM31};
-
         // `QM31 = BinomialExtensionField<Complex<Mersenne31>, 2>` is a degree-4 tower whose
         // binomial base parameter (`Complex<Mersenne31>`) differs from the symbolic base
         // (`Mersenne31`), so it needs the dedicated complex-tower impls.
