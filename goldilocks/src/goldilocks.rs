@@ -2,6 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::{Debug, Display, Formatter};
 use core::hash::{Hash, Hasher};
+use core::hint::assert_unchecked;
 use core::iter::{Product, Sum};
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use core::{array, fmt};
@@ -19,7 +20,7 @@ use p3_field::{
     quotient_map_large_iint, quotient_map_large_uint, quotient_map_small_int,
     tonelli_shanks_two_adic,
 };
-use p3_util::{assume, branch_hint, flatten_to_base, gcd_inner};
+use p3_util::{branch_hint, flatten_to_base, gcd_inner};
 use rand::Rng;
 use rand::distr::{Distribution, StandardUniform};
 use serde::de::Error;
@@ -582,13 +583,13 @@ impl Add for Goldilocks {
         if over {
             // NB: self.value > Self::ORDER && rhs.value > Self::ORDER is necessary but not
             // sufficient for double-overflow.
-            // This assume does two things:
+            // This hint does two things:
             //  1. If compiler knows that either self.value or rhs.value <= ORDER, then it can skip
             //     this check.
             //  2. Hints to the compiler how rare this double-overflow is (thus handled better with
             //     a branch).
             unsafe {
-                assume(self.value > Self::ORDER_U64 && rhs.value > Self::ORDER_U64);
+                assert_unchecked(self.value > Self::ORDER_U64 && rhs.value > Self::ORDER_U64);
             }
             branch_hint();
             sum += Self::NEG_ORDER; // Cannot overflow.
@@ -607,13 +608,13 @@ impl Sub for Goldilocks {
         if under {
             // NB: self.value < NEG_ORDER - 1 && rhs.value > ORDER is necessary but not
             // sufficient for double-underflow.
-            // This assume does two things:
+            // This hint does two things:
             //  1. If compiler knows that either self.value >= NEG_ORDER - 1 or rhs.value <= ORDER,
             //     then it can skip this check.
             //  2. Hints to the compiler how rare this double-underflow is (thus handled better
             //     with a branch).
             unsafe {
-                assume(self.value < Self::NEG_ORDER - 1 && rhs.value > Self::ORDER_U64);
+                assert_unchecked(self.value < Self::NEG_ORDER - 1 && rhs.value > Self::ORDER_U64);
             }
             branch_hint();
             diff -= Self::NEG_ORDER; // Cannot underflow.
@@ -705,8 +706,8 @@ unsafe fn add_no_canonicalize_trashing_input(x: u64, y: u64) -> u64 {
             inlateout(reg) y => adjustment,
             options(pure, nomem, nostack),
         );
-        assume(x != 0 || (res_wrapped == y && adjustment == 0));
-        assume(y != 0 || (res_wrapped == x && adjustment == 0));
+        assert_unchecked(x != 0 || (res_wrapped == y && adjustment == 0));
+        assert_unchecked(y != 0 || (res_wrapped == x && adjustment == 0));
         // Add NEG_ORDER == subtract ORDER.
         // Cannot overflow unless the assumption if x + y < 2**64 + ORDER is incorrect.
         res_wrapped + adjustment
