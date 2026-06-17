@@ -11,9 +11,15 @@ use p3_field::{ExtensionField, Field};
 /// They depend only on the constraint structure, not on the trace contents or the field of evaluation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConstraintMetadata {
-    /// Number of constraints the AIR asserts.
+    /// Number of base constraints the AIR asserts.
+    ///
+    /// Covers transition and boundary constraints.
+    /// Excludes lookup and permutation arguments, matching the AIR's own constraint-count hint.
     pub num_constraints: usize,
-    /// Largest total degree of any asserted constraint.
+    /// Upper bound on the largest total degree of any asserted constraint.
+    ///
+    /// Exact when derived by symbolic evaluation.
+    /// May overestimate when the AIR supplies a hint, which need only be an upper bound.
     ///
     /// Degree follows the symbolic selector convention:
     /// - first-row and last-row selectors each count as degree one,
@@ -67,8 +73,8 @@ impl ConstraintMetadata {
                 //     ext[j]  : j-th extension-field constraint (lookups / permutation args)
                 let (base, ext) = get_all_symbolic_constraints::<F, EF, A>(air, layout);
 
-                // Total count is base-field plus extension-field constraints.
-                let count = hinted_count.unwrap_or(base.len() + ext.len());
+                // Count covers base constraints only, matching the scope of the AIR's count hint.
+                let count = hinted_count.unwrap_or(base.len());
 
                 // Max degree is taken over both constraint families under the symbolic convention.
                 let degree = hinted_degree.unwrap_or_else(|| {
@@ -97,8 +103,9 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use p3_air::{Air, AirBuilder, AirLayout, BaseAir, WindowAccess};
+    use p3_air::{Air, AirBuilder, AirLayout, BaseAir, ExtensionBuilder, WindowAccess};
     use p3_baby_bear::BabyBear;
+    use p3_field::PrimeCharacteristicRing;
     use p3_field::extension::BinomialExtensionField;
 
     use super::*;
@@ -222,6 +229,27 @@ mod tests {
         }
     }
 
+    /// AIR with one base constraint and one extension constraint.
+    ///
+    /// The extension constraint stands in for a lookup or permutation argument.
+    struct MixedAir;
+
+    impl<X> BaseAir<X> for MixedAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+
+    impl<AB: ExtensionBuilder> Air<AB> for MixedAir {
+        fn eval(&self, builder: &mut AB) {
+            // One base-field constraint on the single column.
+            let local = builder.main().current_slice()[0];
+            builder.assert_zero(local);
+            // One extension-field constraint, counted separately from the base ones.
+            builder.assert_zero_ext(AB::ExprEF::ZERO);
+        }
+    }
+
     #[test]
     fn metadata_matches_symbolic_for_fibonacci() {
         // Fixture state: width-2 AIR, 3 public values, 5 asserted constraints.
@@ -299,5 +327,18 @@ mod tests {
         assert_eq!(meta.max_constraint_degree, 4);
         // Next-row access still defaults to every main column.
         assert_eq!(meta.next_row_main_columns, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn metadata_counts_base_constraints_only() {
+        // The AIR asserts one base constraint and one extension constraint.
+        // The count must match the AIR hint's scope, which excludes lookup and permutation arguments.
+        let layout = AirLayout::from_air::<F>(&MixedAir);
+        let meta = ConstraintMetadata::from_air::<F, EF, _>(&MixedAir, layout);
+
+        // The extension constraint is excluded from the count.
+        assert_eq!(meta.num_constraints, 1);
+        // Degree still spans both families: the base column is degree 1, the extension constant degree 0.
+        assert_eq!(meta.max_constraint_degree, 1);
     }
 }
