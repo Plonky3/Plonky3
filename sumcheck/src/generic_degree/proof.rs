@@ -13,14 +13,6 @@ use super::error::GenericDegreeError;
 use super::util::RoundPolyInterpolator;
 
 /// Transcript record produced by the generic-degree sumcheck prover.
-///
-/// # Layout
-///
-/// - `claimed_sum` is the value the prover asserts for the hypercube sum.
-/// - One round entry per bound variable; each holds `degree` field elements.
-/// - The transmitted evaluations are `h(0), h(2), h(3), ..., h(degree)`.
-/// - The value `h(1)` is recovered by the verifier as `sum - h(0)`.
-/// - PoW witnesses are present only when grinding is configured.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct GenericDegreeProof<F, EF> {
     /// Claimed value of the sum over the boolean hypercube at round zero.
