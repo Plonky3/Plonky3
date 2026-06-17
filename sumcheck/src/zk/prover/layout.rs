@@ -27,6 +27,7 @@ where
     }
 
     /// Returns the virtual-claim slice.
+    #[inline]
     fn virtual_claims(&self) -> &[ProverVirtualClaim<EF>] {
         &self.claims().virtual_claims
     }
