@@ -21,6 +21,7 @@ where
     EF: ExtensionField<F>,
 {
     /// Walks concrete claims in placement order.
+    #[inline]
     fn concrete_claims(&self) -> impl Iterator<Item = &ProverMultiClaim<F, EF>> {
         self.claims().concrete_claims()
     }
