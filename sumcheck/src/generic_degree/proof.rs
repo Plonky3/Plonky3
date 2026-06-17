@@ -133,15 +133,12 @@ impl<F, EF> GenericDegreeProof<F, EF> {
             // Replay the prover's transcript writes.
             challenger.observe_algebra_slice(evals);
 
-            // Validate this round's PoW witness when grinding is enabled.
             if pow_bits > 0 && !challenger.check_witness(pow_bits, self.pow_witnesses[round]) {
                 return Err(GenericDegreeError::InvalidPowWitness { round });
             }
 
-            // Sample the same challenge the prover saw.
+            // Sample the same challenge the prover saw, then reduce the claim through it.
             let challenge: EF = challenger.sample_algebra_element();
-
-            // Update the running claimed sum using the same Lagrange step as the prover.
             running_sum = interpolator.eval(evals, running_sum, challenge);
             challenges.push(challenge);
         }

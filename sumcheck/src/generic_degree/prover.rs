@@ -76,7 +76,6 @@ pub trait RoundProver<EF> {
         let mut challenges = Vec::with_capacity(num_rounds);
 
         for _r in 0..num_rounds {
-            // Pull this round's univariate evaluations from the prover state.
             let evals = self.round_poly();
             debug_assert_eq!(
                 evals.len(),
@@ -85,7 +84,6 @@ pub trait RoundProver<EF> {
                 evals.len(),
             );
 
-            // Push all transmitted evaluations into the transcript.
             challenger.observe_algebra_slice(&evals);
 
             // Optional proof-of-work; raises the cost of grinding a favorable challenge.
@@ -93,10 +91,7 @@ pub trait RoundProver<EF> {
                 proof.pow_witnesses.push(challenger.grind(pow_bits));
             }
 
-            // Sample the verifier's challenge for this round.
             let challenge: EF = challenger.sample_algebra_element();
-
-            // Fold the polynomial state in place so the next round reflects the binding.
             self.fold(challenge);
 
             proof.round_polys.push(evals);
