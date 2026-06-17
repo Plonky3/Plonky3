@@ -8,10 +8,11 @@ use p3_matrix::interpolation::{InterpolateArbitrary, barycentric_weights};
 
 /// Evaluates each round polynomial at the sampled challenge.
 ///
-/// Every round shares the same interpolation domain — the integer nodes
-/// `0, 1, …, degree` — so the barycentric weights depend only on `degree`.
-/// They are computed once here and reused across all rounds, leaving only the
-/// per-challenge work (the difference inverses) inside the round loop.
+/// Every round shares the same interpolation domain: the integer nodes `0, 1, …, degree`.
+///
+/// - The barycentric weights depend only on that domain.
+/// - They are precomputed once and reused across all rounds.
+/// - Each round then contributes only the per-challenge difference inverses.
 pub(super) struct RoundPolyInterpolator<EF> {
     /// Integer domain nodes `0, 1, …, degree`, lifted into the field.
     x_coords: Vec<EF>,
@@ -69,8 +70,7 @@ impl<EF: Field> RoundPolyInterpolator<EF> {
             return full[i];
         }
 
-        // Off-domain: invert the differences and run the second barycentric form
-        // with the precomputed weights.
+        // Off-domain: invert the differences and apply the precomputed weights.
         let diff_invs = batch_multiplicative_inverse(&diffs);
         RowMajorMatrix::new_col(full)
             .interpolate_arbitrary_with_precomputation(&self.weights, &diff_invs)[0]
@@ -94,14 +94,7 @@ mod tests {
     type EF = BinomialExtensionField<F, 4>;
 
     fn poly_eval(coeffs: &[EF], x: EF) -> EF {
-        // Horner-style accumulation of a polynomial in coefficient form.
-        let mut acc = EF::ZERO;
-        let mut pow = EF::ONE;
-        for &c in coeffs {
-            acc += c * pow;
-            pow *= x;
-        }
-        acc
+        coeffs.iter().rev().fold(EF::ZERO, |acc, &c| acc * x + c)
     }
 
     #[test]
@@ -113,8 +106,7 @@ mod tests {
         //
         // Invariant:
         //
-        //     the interpolator must recover h(r) from the transmitted subset
-        //     [h(0), h(2), h(3)] together with the sum h(0) + h(1).
+        //     the interpolator recovers h(r) from [h(0), h(2), h(3)] and the sum h(0) + h(1).
         let mut rng = SmallRng::seed_from_u64(11);
         let coeffs: Vec<EF> = (0..4)
             .map(|_| EF::from_u64(rng.random_range(0..(1 << 30))))
@@ -138,8 +130,7 @@ mod tests {
 
     #[test]
     fn round_poly_eval_on_domain_node_is_exact() {
-        // Invariant: a challenge equal to a domain node returns that node's
-        // evaluation through the zero-difference shortcut, not the inversion path.
+        // Invariant: a challenge on a domain node returns that node's value via the zero-difference shortcut, not the inversion path.
         //
         // Fixture state: random degree-3 polynomial.
         //

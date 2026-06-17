@@ -25,8 +25,7 @@ use super::util::RoundPolyInterpolator;
 pub struct GenericDegreeProof<F, EF> {
     /// Claimed value of the sum over the boolean hypercube at round zero.
     ///
-    /// Carried in the proof so the verifier consumes the whole prover output
-    /// rather than receiving the claim through a side channel.
+    /// Carried in the proof so the verifier consumes the whole prover output, not a side channel.
     pub claimed_sum: EF,
     /// Transmitted round-polynomial evaluations.
     ///
@@ -68,8 +67,7 @@ impl<F, EF> GenericDegreeProof<F, EF> {
     /// - PCS openings for committed multilinears.
     /// - Closed-form evaluation for structural multilinears (`eq`, `next`, selectors).
     ///
-    /// When the claimed sum is fixed by an outer protocol, the caller must also
-    /// check that the proof's claimed sum matches that expected value.
+    /// When an outer protocol fixes the claimed sum, the caller must also check the proof's claimed sum against it.
     pub fn verify<Challenger>(
         &self,
         challenger: &mut Challenger,
@@ -110,8 +108,7 @@ impl<F, EF> GenericDegreeProof<F, EF> {
             });
         }
 
-        // Bind the transcript to the claimed sum before sampling any challenge,
-        // so the round challenges depend on the statement being proven.
+        // Bind the transcript to the claimed sum so the challenges depend on the statement.
         challenger.observe_algebra_element(self.claimed_sum);
 
         // Barycentric weights for the integer domain 0, 1, …, degree are shared by every round.

@@ -64,8 +64,7 @@ pub trait RoundProver<EF> {
         // A degree-zero polynomial would carry no information.
         assert!(degree > 0, "generic-degree sumcheck: degree must be > 0");
 
-        // Bind the transcript to the claimed sum before sampling any challenge,
-        // so the round challenges depend on the statement being proven.
+        // Bind the transcript to the claimed sum so the challenges depend on the statement.
         challenger.observe_algebra_element(claimed_sum);
 
         let mut proof = GenericDegreeProof {
@@ -132,8 +131,7 @@ mod tests {
 
     /// Test prover for a product of three multilinears.
     ///
-    /// The polynomial being summed is the pointwise product
-    /// `a(x) * b(x) * c(x)` over the boolean hypercube of `log_m` variables.
+    /// The summed polynomial is the pointwise product `a(x) * b(x) * c(x)` over the `log_m`-variable hypercube.
     struct TripleProductProver {
         /// Three multilinear factors, all over the same variable space.
         factors: [Poly<EF>; 3],
@@ -218,8 +216,8 @@ mod tests {
         //
         // Invariant:
         //
-        //     prover and verifier sample the same challenges and the final
-        //     claimed sum must equal a(r) * b(r) * c(r) at the challenge point
+        //     prover and verifier sample the same challenges
+        //     the final claimed sum equals a(r) * b(r) * c(r) at the challenge point
         let mut rng = SmallRng::seed_from_u64(123);
         let log_m = 6usize;
         let (columns, claimed_sum) = random_instance(&mut rng, 1 << log_m);
@@ -287,8 +285,8 @@ mod tests {
         //
         // Mutation: corrupt the last round's witness.
         //
-        //     rounds 0..2 keep their valid witnesses, so the transcript stays
-        //     in sync up to the final round, which then fails its grinding check.
+        //     rounds 0..2 keep valid witnesses, so the transcript stays in sync
+        //     the final round then fails its grinding check
         let mut rng = SmallRng::seed_from_u64(99);
         let log_m = 4usize;
         let pow_bits = 4usize;
