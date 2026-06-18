@@ -64,12 +64,7 @@ impl<F> SymbolicVariable<F> {
                     .min(trace_len);
                 match period {
                     0 => trace_len.saturating_sub(1),
-                    p => {
-                        // `trace_len` is a power of two, so a valid period (which must
-                        // divide it) is too; this guards the `trace_len / p` exactness.
-                        debug_assert!(p.is_power_of_two());
-                        trace_len - trace_len / p
-                    }
+                    p => trace_len - trace_len / p,
                 }
             }
             BaseEntry::Public => 0,
