@@ -50,6 +50,39 @@ impl AirLayout {
             ..Default::default()
         }
     }
+
+    /// Check that the AIR-derivable widths agree with the AIR they describe.
+    ///
+    /// `main_width`, `num_public_values`, and `num_periodic_columns` are pure
+    /// functions of the AIR, so they must match exactly. A mismatch means the
+    /// [`SymbolicAirBuilder`] allocates a differently shaped trace than the AIR
+    /// expects, and `air.eval` then silently reads the wrong variables.
+    ///
+    /// `preprocessed_width` is intentionally not checked: the prover and verifier
+    /// source it from the committed preprocessed trace, which is authoritative and
+    /// may legitimately diverge from `air.preprocessed_width()` (an AIR may declare
+    /// preprocessed columns it never reads, or commit none for a given instance).
+    ///
+    /// # Panics
+    ///
+    /// Panics if any AIR-derivable width disagrees with the AIR.
+    pub fn validate_against_air<F: Clone + Send + Sync>(&self, air: &impl BaseAir<F>) {
+        assert_eq!(
+            self.main_width,
+            air.width(),
+            "AirLayout main_width does not match AIR width"
+        );
+        assert_eq!(
+            self.num_public_values,
+            air.num_public_values(),
+            "AirLayout num_public_values does not match AIR"
+        );
+        assert_eq!(
+            self.num_periodic_columns,
+            air.num_periodic_columns(),
+            "AirLayout num_periodic_columns does not match AIR"
+        );
+    }
 }
 
 /// Convert an absolute constraint-polynomial degree into the "constraint degree"
@@ -135,6 +168,7 @@ where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
+    layout.validate_against_air(air);
     let mut builder = SymbolicAirBuilder::new(layout);
     air.eval(&mut builder);
     builder.base_constraints()
@@ -154,6 +188,7 @@ where
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
 {
+    layout.validate_against_air(air);
     let mut builder = SymbolicAirBuilder::new(layout);
     air.eval(&mut builder);
     builder.extension_constraints()
@@ -176,6 +211,7 @@ where
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
 {
+    layout.validate_against_air(air);
     let mut builder = SymbolicAirBuilder::new(layout);
     air.eval(&mut builder);
     (builder.base_constraints(), builder.extension_constraints())
@@ -492,6 +528,7 @@ where
     A: Air<SymbolicAirBuilder<F, EF>>,
     SymbolicExpression<EF>: Algebra<SymbolicExpression<F>>,
 {
+    layout.validate_against_air(air);
     let mut builder = SymbolicAirBuilder::new(layout);
     air.eval(&mut builder);
     builder.constraint_layout()
@@ -1159,6 +1196,49 @@ mod tests {
         for &val in &ext {
             assert_eq!(val, EF::ONE);
         }
+    }
+
+    #[test]
+    fn validate_against_air_accepts_matching_layout() {
+        let air = MockAir {
+            constraints: vec![],
+            width: 4,
+        };
+        // preprocessed_width is not checked, so a non-zero value is accepted even
+        // though the AIR's static hint is 0.
+        let l = layout(2, air.width, air.num_public_values(), 0);
+        l.validate_against_air(&air);
+    }
+
+    #[test]
+    #[should_panic(expected = "main_width does not match")]
+    fn validate_against_air_rejects_main_width_mismatch() {
+        let air = MockAir {
+            constraints: vec![],
+            width: 4,
+        };
+        let l = layout(0, air.width + 1, air.num_public_values(), 0);
+        l.validate_against_air(&air);
+    }
+
+    #[test]
+    #[should_panic(expected = "num_periodic_columns does not match")]
+    fn validate_against_air_rejects_periodic_mismatch() {
+        let air = PeriodicProductAir;
+        // PeriodicProductAir declares 2 periodic columns; claim 1.
+        let l = layout(0, air.width(), 0, 1);
+        l.validate_against_air(&air);
+    }
+
+    #[test]
+    #[should_panic(expected = "main_width does not match")]
+    fn get_symbolic_constraints_validates_layout() {
+        let air = MockAir {
+            constraints: vec![],
+            width: 4,
+        };
+        let l = layout(0, air.width + 1, 0, 0);
+        let _ = get_symbolic_constraints(&air, l);
     }
 
     #[test]
