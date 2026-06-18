@@ -10,12 +10,12 @@ use p3_challenger::DuplexChallenger;
 use p3_commit::MultilinearPcs;
 use p3_dft::Radix2DFTSmallBatch;
 use p3_field::Field;
-use p3_field::extension::BinomialExtensionField;
+use p3_field::extension::QuinticTrinomialExtensionField;
 use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Layout, PrefixProver, SuffixProver, Table};
-use p3_sumcheck::{OpeningProtocol, TableShape, TableSpec};
+use p3_sumcheck::{OpeningBatch, OpeningProtocol, PointSchedule, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{
@@ -26,7 +26,7 @@ use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
 type F = KoalaBear;
-type EF = BinomialExtensionField<F, 4>;
+type EF = QuinticTrinomialExtensionField<F>;
 
 type Poseidon16 = Poseidon2KoalaBear<16>;
 type Poseidon24 = Poseidon2KoalaBear<24>;
@@ -164,9 +164,12 @@ impl<L: Layout<F, EF>> Bench<L> {
         let witness = L::new_witness(vec![table], opts.folding);
 
         // Open the single column NUM_EVALUATIONS times at fresh sampled points.
+        let point_schedule: PointSchedule = (0..NUM_EVALUATIONS)
+            .map(|_| OpeningBatch::new(vec![0], Vec::new()))
+            .collect();
         let protocol = OpeningProtocol::new(vec![TableSpec::new(
             TableShape::new(opts.num_variables, 1),
-            vec![vec![0]; NUM_EVALUATIONS],
+            point_schedule,
         )]);
 
         // Bind the protocol structure into the Fiat-Shamir transcript.

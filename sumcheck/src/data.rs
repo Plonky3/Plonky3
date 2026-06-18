@@ -90,13 +90,28 @@ impl<F, EF> SumcheckData<F, EF> {
 
     /// Verifies standard sumcheck rounds and extracts folding randomness from the transcript.
     ///
+    /// # Arguments
+    ///
+    /// * `challenger` - Fiat-Shamir transcript.
+    /// * `claimed_sum` - Running claim, folded in place to `h(r)` after each round.
+    /// * `expected_rounds` - Protocol-fixed number of rounds this proof must carry.
+    /// * `pow_bits` - PoW difficulty (0 to skip grinding).
+    ///
     /// # Returns
     ///
-    /// A `Point` of folding randomness values.
+    /// A `Point` of folding randomness values, one per round.
+    ///
+    /// # Errors
+    ///
+    /// Returns `RoundCountMismatch` if the proof does not carry exactly `expected_rounds` rounds.
+    ///
+    /// The folding-challenge count is derived from the proof itself.
+    /// A wrong count would desync Fiat-Shamir rather than reject, so it is bound here.
     pub fn verify_rounds<Challenger>(
         &self,
         challenger: &mut Challenger,
         claimed_sum: &mut EF,
+        expected_rounds: usize,
         pow_bits: usize,
     ) -> Result<Point<EF>, SumcheckError>
     where
@@ -104,6 +119,17 @@ impl<F, EF> SumcheckData<F, EF> {
         EF: ExtensionField<F> + TwoAdicField,
         Challenger: FieldChallenger<F> + GrindingChallenger<Witness = F>,
     {
+        // Bind the round count to the protocol-fixed value before folding anything.
+        //
+        // Centralizing the check here makes the safe path the only path:
+        // every caller is forced to declare how many rounds it expects.
+        if self.polynomial_evaluations.len() != expected_rounds {
+            return Err(SumcheckError::RoundCountMismatch {
+                expected: expected_rounds,
+                actual: self.polynomial_evaluations.len(),
+            });
+        }
+
         let mut randomness = Vec::with_capacity(self.polynomial_evaluations.len());
 
         // Grinding pushes one witness per round;
@@ -162,11 +188,6 @@ where
         expected_rounds: rounds,
     })?;
 
-    if sumcheck.polynomial_evaluations.len() != rounds {
-        return Err(SumcheckError::RoundCountMismatch {
-            expected: rounds,
-            actual: sumcheck.polynomial_evaluations.len(),
-        });
-    }
-    sumcheck.verify_rounds(challenger, claimed_sum, pow_bits)
+    // `verify_rounds` binds the round count to `rounds`.
+    sumcheck.verify_rounds(challenger, claimed_sum, rounds, pow_bits)
 }

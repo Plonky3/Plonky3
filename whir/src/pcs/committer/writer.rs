@@ -68,7 +68,7 @@ where
                 RowMajorMatrix::new(values, width)
             });
             info_span!("dft", height = padded.height(), width = padded.width())
-                .in_scope(|| dft.dft_algebra_batch(padded).to_row_major_matrix())
+                .in_scope(|| dft.dft_algebra_batch(padded))
         }
         VariableOrder::Suffix => {
             let padded = info_span!("pad").in_scope(|| {
@@ -78,7 +78,7 @@ where
                 RowMajorMatrix::new(values, width)
             });
             info_span!("dft", height = padded.height(), width = padded.width())
-                .in_scope(|| dft.dft_algebra_batch(padded).to_row_major_matrix())
+                .in_scope(|| dft.dft_algebra_batch(padded))
         }
     };
 

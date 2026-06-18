@@ -19,6 +19,7 @@ pub enum FieldOptions {
 pub enum ProofOptions {
     Blake3Permutations,
     KeccakFPermutations,
+    Poseidon1Permutations,
     Poseidon2Permutations,
 }
 
@@ -88,6 +89,7 @@ impl ValueEnum for ProofOptions {
     fn value_variants<'a>() -> &'a [Self] {
         &[
             Self::Blake3Permutations,
+            Self::Poseidon1Permutations,
             Self::Poseidon2Permutations,
             Self::KeccakFPermutations,
         ]
@@ -105,9 +107,14 @@ impl ValueEnum for ProofOptions {
                 1,
                 Some(vec![("keccakf-permutations", 7), ("kf", 2)]),
             ),
+            Self::Poseidon1Permutations => get_aliases(
+                "poseidon-1-permutations",
+                10,
+                Some(vec![("poseidon1-permutations", 9), ("p1", 2)]),
+            ),
             Self::Poseidon2Permutations => get_aliases(
                 "poseidon-2-permutations",
-                1,
+                10,
                 Some(vec![("poseidon2-permutations", 9), ("p2", 2)]),
             ),
         })

@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 use core::ops::Deref;
@@ -10,8 +11,8 @@ use p3_matrix::dense::DenseMatrix;
 use p3_matrix::extension::FlatMatrixView;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
-use p3_sumcheck::constraints::Constraint;
 use p3_sumcheck::constraints::statement::{EqStatement, SelectStatement};
+use p3_sumcheck::constraints::{Constraint, Statements};
 use p3_sumcheck::layout::Layout;
 use p3_sumcheck::strategy::{SumcheckProver, VariableOrder};
 use tracing::instrument;
@@ -296,10 +297,19 @@ where
 
         proof.rounds[round_index].queries = queries;
 
+        // Batch the two statement groups into one constraint over the same cube.
+        // The out-of-domain claims form the equality group.
+        // The query openings form the selection group.
+        // A freshly sampled challenge weights the groups by its successive powers,
+        // and the verifier samples the same challenge to rebuild the identical batch.
+        let num_variables = ood_statement.num_variables();
         let constraint = Constraint::new(
             challenger.sample_algebra_element(),
-            ood_statement,
-            stir_statement,
+            num_variables,
+            vec![
+                Statements::Eq(ood_statement),
+                Statements::Select(stir_statement),
+            ],
         );
 
         // Run sumcheck and fold the polynomial.

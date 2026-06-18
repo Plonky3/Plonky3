@@ -76,10 +76,11 @@ mod verifier;
 mod witness;
 
 pub use opening::{
-    MultiClaim, Opening, ProverMultiClaim, ProverVirtualClaim, VerifierMultiClaim, VerifierOpening,
+    EqPartials, EqSvoPartials, MultiClaim, NextPartials, NextSvoPartials, Opening,
+    ProverMultiClaim, ProverVirtualClaim, VerifierMultiClaim, VerifierOpening,
     VerifierVirtualClaim,
 };
-pub use prover::{Layout, PrefixProver, SuffixProver};
+pub use prover::{Layout, PrefixProver, StackedClaims, SuffixProver};
 pub use verifier::Verifier;
 pub use witness::{Selector, Table, TablePlacement, Witness};
 

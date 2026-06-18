@@ -106,7 +106,7 @@ impl<EF: Field> SourceClaim<EF> {
             match &mut constraint.term {
                 SourceTerm::Eq { point } => {
                     let (head, tail) = point.split_at(k);
-                    constraint.coeff *= head.eq_poly(gamma);
+                    constraint.coeff *= Point::eval_eq(head.as_slice(), gamma.as_slice());
                     *point = tail;
                 }
                 SourceTerm::Pow {
@@ -129,7 +129,7 @@ impl<EF: Field> SourceClaim<EF> {
                     while squares.len() <= seed_index {
                         squares.push(squares[squares.len() - 1].square());
                     }
-                    constraint.coeff *= gamma.select_poly(squares[seed_index]);
+                    constraint.coeff *= Point::eval_select(squares[seed_index], gamma.as_slice());
                     *num_variables -= k;
                 }
             }

@@ -14,7 +14,7 @@ use p3_koala_bear::{
 use p3_mersenne_31::{
     GenericPoseidon2LinearLayersMersenne31, MERSENNE31_POSEIDON2_HALF_FULL_ROUNDS,
     MERSENNE31_POSEIDON2_PARTIAL_ROUNDS_16, MERSENNE31_S_BOX_DEGREE, Mersenne31,
-    Poseidon2Mersenne31,
+    Poseidon2Mersenne31, QM31,
 };
 use p3_monty_31::dft::RecursiveDft;
 use p3_poseidon2_air::{Poseidon2Air, RoundConstants, VectorizedPoseidon2Air};
@@ -216,7 +216,7 @@ fn test_end_to_end_mersenne31_blake3_hashes_keccak_merkle_tree() -> Result<(), i
 #[test]
 fn test_end_to_end_mersenne31_vectorized_poseidon2_hashes_poseidon2_merkle_tree()
 -> Result<(), impl Debug> {
-    type EF = BinomialExtensionField<Mersenne31, 3>;
+    type EF = QM31;
 
     // WARNING: Use a real cryptographic PRNG in applications!!
     let mut rng = SmallRng::seed_from_u64(1);

@@ -132,7 +132,7 @@ impl<F: TwoAdicField, InputProof: Sync, InputError: Debug + Sync, EF: ExtensionF
         lagrange_interpolate_at(&xs, &evals, beta)
     }
 
-    #[instrument(skip_all)]
+    #[instrument(skip_all, level = "debug")]
     fn fold_matrix<M: Matrix<EF>>(&self, beta: EF, log_arity: usize, m: M) -> Vec<EF> {
         if log_arity == 1 {
             // Optimized path for arity 2

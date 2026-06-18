@@ -22,7 +22,7 @@ use tracing::instrument;
 /// scaled by powers of `alpha`:
 ///
 /// ```text
-/// mat[X, i] = alpha^i * eq(P_i, X)
+/// mat[X, i] = alpha^{shift + i} * eq(P_i, X)
 /// ```
 ///
 /// # Algorithm
@@ -35,11 +35,12 @@ use tracing::instrument;
 /// lo[j] -= hi[j]                 (contribution when X_i = 0)
 /// ```
 ///
-/// The seed row is `[alpha^0, alpha^1, ..., alpha^{n-1}]`, which
-/// bakes the batching weights directly into the expansion.
+/// The seed row is `[alpha^shift, alpha^{shift+1}, ...]`, which bakes
+/// the batching weights directly into the expansion.
 fn batch_eqs<F: Field, EF: ExtensionField<F>>(
     points: RowMajorMatrixView<'_, EF>,
     alpha: EF,
+    shift: usize,
 ) -> RowMajorMatrix<EF> {
     let k = points.height();
     let n = points.width();
@@ -47,8 +48,12 @@ fn batch_eqs<F: Field, EF: ExtensionField<F>>(
 
     let mut mat = RowMajorMatrix::new(EF::zero_vec(n * (1 << k)), n);
 
-    // Seed with alpha powers: column j starts with alpha^j.
-    mat.row_mut(0).copy_from_slice(&alpha.powers().collect_n(n));
+    // Seed with alpha powers: column j starts with alpha^(shift + j).
+    mat.row_mut(0).copy_from_slice(
+        &alpha
+            .shifted_powers(alpha.exp_u64(shift as u64))
+            .collect_n(n),
+    );
 
     // Butterfly: process one variable per step.
     points.row_slices().enumerate().for_each(|(i, vars)| {
@@ -198,6 +203,25 @@ impl<F: Field> EqStatement<F> {
         self.points.len()
     }
 
+    /// Streams one weight per stored constraint, each evaluated at a single point.
+    ///
+    /// # Overview
+    ///
+    /// The weight of an equality constraint is the equality polynomial of its stored point.
+    /// This yields its value at the supplied point, one entry per constraint, in stored order.
+    ///
+    /// # Arguments
+    ///
+    /// - `row`: the point at which every constraint weight is evaluated.
+    pub fn weights_at<'a>(&'a self, row: &'a Point<F>) -> impl Iterator<Item = F> + 'a {
+        // Walk the stored constraint points in order.
+        self.points
+            .iter()
+            // For each point, evaluate its equality polynomial at the query point.
+            // The result is 1 only when the query point equals the stored point on the hypercube.
+            .map(|point| Point::eval_eq(point.as_slice(), row.as_slice()))
+    }
+
     /// Verifies that a given polynomial satisfies all constraints in the statement.
     #[must_use]
     pub fn verify(&self, poly: &Poly<F>) -> bool {
@@ -224,76 +248,99 @@ impl<F: Field> EqStatement<F> {
         self.evaluations.push(eval);
     }
 
-    /// Combine all constraints into a single batched weight polynomial and expected sum.
+    /// Folds every constraint into one weight polynomial and one expected sum.
     ///
-    /// Computes `W(x) = sum_i gamma^i * eq(x, z_i)` for all `x in {0,1}^k`
-    /// using the Plonky3 `eval_eq_batch` kernel, and accumulates the
-    /// scalar sum `S = sum_i gamma^i * s_i`.
+    /// # Overview
     ///
-    /// The `INITIALIZED` const generic controls whether the accumulator
-    /// is added to (true) or overwritten (false).
-    #[instrument(skip_all, fields(num_constraints = self.len(), num_variables = self.num_variables()))]
+    /// The weight polynomial sums each constraint's equality polynomial under a power of the challenge.
+    /// The first constraint is weighted by the challenge raised to the shift, and each later one by the next power.
+    ///
+    /// ```text
+    /// W(x) = sum_i gamma^{shift + i} * eq(x, z_i)   for all x in {0,1}^k
+    /// S    = sum_i gamma^{shift + i} * s_i
+    /// ```
+    ///
+    /// # Arguments
+    ///
+    /// - `acc_weights`: weight polynomial accumulator over the hypercube.
+    /// - `acc_sum`: scalar accumulator for the expected sum.
+    /// - `challenge`: the batching challenge whose powers weight each constraint.
+    /// - `shift`: offset of the first challenge power, so this group follows earlier groups.
+    ///
+    /// # Why a shift
+    ///
+    /// Constraint groups share one challenge but must not reuse the same powers.
+    /// The shift starts this group's powers where the previous group's powers ended.
+    ///
+    /// The const generic flag controls whether the weight accumulator is added to when true or overwritten when false.
+    #[instrument(skip_all, fields(num_constraints = self.len(), num_variables = self.num_variables(), shift))]
     pub fn combine_hypercube<Base, const INITIALIZED: bool>(
         &self,
         acc_weights: &mut Poly<F>,
         acc_sum: &mut F,
         challenge: F,
+        shift: usize,
     ) where
         Base: Field,
         F: ExtensionField<Base>,
     {
+        // Nothing to fold when this group holds no constraints.
         if self.points.is_empty() {
             return;
         }
 
+        // Invariant: the scalar accumulator spans the full hypercube of this statement.
+        assert_eq!(acc_weights.num_variables(), self.num_variables());
+
         let num_constraints = self.len();
+        // Build the batching weights gamma^shift, gamma^{shift+1}, ..., one per constraint.
+        // Starting at the shift keeps this group's powers disjoint from earlier groups.
+        let challenges = challenge
+            .shifted_powers(challenge.exp_u64(shift as u64))
+            .collect_n(num_constraints);
 
-        // Precompute challenge powers gamma^0, gamma^1, ..., gamma^{n-1}.
-        let challenges = challenge.powers().collect_n(num_constraints);
-
-        // Transpose the points into a k × n matrix (rows = variables,
-        // columns = constraint points). Uses Plonky3's transpose which
-        // writes directly into a flat buffer.
+        // Lay the constraint points out as a matrix: rows are variables, columns are points.
         let points_matrix = Point::transpose(&self.points, false);
-
-        // Delegate to Plonky3's batched eq-polynomial kernel.
-        // This is the hot path — computes all 2^k evaluations in one pass.
+        // Hot path: one pass computes all 2^k equality evaluations weighted by the powers above.
+        // The flag selects accumulate-into versus overwrite for the destination slice.
         eval_eq_batch::<Base, F, INITIALIZED>(
             points_matrix.as_view(),
             acc_weights.as_mut_slice(),
             &challenges,
         );
 
-        // Accumulate the scalar target sum: S += sum_i gamma^i * s_i.
+        // Accumulate the scalar side: the same powers weight the stored expected values.
         *acc_sum +=
             dot_product::<F, _, _>(self.evaluations.iter().copied(), challenges.into_iter());
     }
 
-    /// SIMD-packed variant of constraint batching on the hypercube.
+    /// SIMD-packed variant of folding all constraints on the hypercube.
     ///
-    /// Produces the same result as the scalar version but stores the
-    /// weight polynomial in packed form (one element per
-    /// `Packing::WIDTH` consecutive hypercube entries).
+    /// # Overview
+    ///
+    /// Produces the same weight polynomial and expected sum as the scalar variant.
+    /// The weight polynomial is stored packed, with one SIMD element per group of consecutive hypercube entries.
+    ///
+    /// # Arguments
+    ///
+    /// - `weights`: packed weight polynomial accumulator over the hypercube.
+    /// - `sum`: scalar accumulator for the expected sum.
+    /// - `challenge`: the batching challenge whose powers weight each constraint.
+    /// - `shift`: offset of the first challenge power, so this group follows earlier groups.
     ///
     /// # Algorithm
     ///
-    /// For small `k` (where `2 * k_pack > k`), falls back to a
-    /// per-constraint naive loop that builds each eq polynomial
-    /// separately and packs it chunk-by-chunk.
+    /// Two strategies cover small and large variable counts.
     ///
-    /// For larger `k`, uses the split-and-dot strategy:
-    ///
-    /// 1. Transpose the points and split at `k / 2`.
-    /// 2. Left half  → `packed_batch_eqs` (SIMD lanes).
-    /// 3. Right half → `batch_eqs` (scalar, with alpha scaling).
-    /// 4. Parallel dot product: for each right-half row, dot all
-    ///    left-half rows weighted by the scalar eq values.
-    #[instrument(skip_all, fields(num_constraints = self.len(), num_variables = self.num_variables()))]
+    /// - When the packing width spans at least half the variables, build each constraint's equality polynomial and pack it directly.
+    /// - Otherwise split the variables at the midpoint, expand each half, and recombine them with a parallel dot product over the lanes.
+    #[instrument(skip_all, fields(num_constraints = self.len(), num_variables = self.num_variables(), shift))]
     pub fn combine_hypercube_packed<Base, const INITIALIZED: bool>(
         &self,
         weights: &mut Poly<F::ExtensionPacking>,
         sum: &mut F,
         challenge: F,
+        shift: usize,
     ) where
         Base: Field,
         F: ExtensionField<Base>,
@@ -307,14 +354,15 @@ impl<F: Field> EqStatement<F> {
         assert!(k >= k_pack);
         assert_eq!(weights.num_variables() + k_pack, k);
 
-        // Combine expected evaluations: S = ∑_i γ^i * s_i
-        self.combine_evals(sum, challenge);
+        // Scalar side: accumulate sum_i gamma^{shift + i} * s_i into the running sum.
+        self.combine_evals(sum, challenge, shift);
 
-        // Apply naive method if number of variables is too small for packed split method
+        // Small case: too few variables to split, so build each equality polynomial directly.
         if k_pack * 2 > k {
             self.points
                 .iter()
-                .zip(challenge.powers())
+                // Pair each constraint with its power gamma^{shift + i}, starting at the shift.
+                .zip(challenge.shifted_powers(challenge.exp_u64(shift as u64)))
                 .enumerate()
                 .for_each(|(i, (point, challenge))| {
                     let eq = Poly::new_from_point(point.as_slice(), challenge);
@@ -334,10 +382,13 @@ impl<F: Field> EqStatement<F> {
             return;
         }
 
+        // Large case: split the variables at the midpoint and expand each half separately.
         let points = Point::transpose(&self.points, true);
         let (left, right) = points.split_rows(k / 2);
+        // Left half goes into packed SIMD lanes, with no challenge weight applied here.
         let left = packed_batch_eqs::<Base, F>(left);
-        let right = batch_eqs::<Base, F>(right, challenge);
+        // Right half carries the batching weights, seeded at gamma^shift for this group.
+        let right = batch_eqs::<Base, F>(right, challenge, shift);
 
         weights
             .as_mut_slice()
@@ -355,14 +406,24 @@ impl<F: Field> EqStatement<F> {
             });
     }
 
-    /// Combines a list of evals into a single linear combination using powers of `gamma`,
-    /// and updates the running claimed_eval in place.
+    /// Accumulates the challenge-weighted sum of this group's expected evaluations.
+    ///
+    /// # Overview
+    ///
+    /// The first stored value is weighted by the challenge raised to the shift, the next by the following power, and so on.
     ///
     /// # Arguments
-    /// - `claimed_eval`: Mutable reference to the total accumulated claimed eval so far. Updated in place.
-    /// - `gamma`: A random extension field element used to weight the evals.
-    pub fn combine_evals(&self, claimed_eval: &mut F, gamma: F) {
-        *claimed_eval += dot_product(self.evaluations.iter().copied(), gamma.powers());
+    ///
+    /// - `claimed_eval`: scalar accumulator updated in place.
+    /// - `gamma`: the batching challenge whose powers weight each stored value.
+    /// - `shift`: offset of the first challenge power, so this group follows earlier groups.
+    pub fn combine_evals(&self, claimed_eval: &mut F, gamma: F, shift: usize) {
+        // Dot the stored expected values against gamma^shift, gamma^{shift+1}, ...
+        // Starting at the shift keeps this group's powers disjoint from earlier groups.
+        *claimed_eval += dot_product(
+            self.evaluations.iter().copied(),
+            gamma.shifted_powers(gamma.exp_u64(shift as u64)),
+        );
     }
 }
 
@@ -426,7 +487,12 @@ mod tests {
         let challenge = F::from_u64(2); // This is unused with one constraint.
         let mut combined_evals = Poly::zero(statement.num_variables());
         let mut combined_sum = F::ZERO;
-        statement.combine_hypercube::<_, false>(&mut combined_evals, &mut combined_sum, challenge);
+        statement.combine_hypercube::<_, false>(
+            &mut combined_evals,
+            &mut combined_sum,
+            challenge,
+            0,
+        );
 
         // Expected evals for eq_z(X) where z = (1).
         // For x=0, eq=0. For x=1, eq=1.
@@ -453,7 +519,12 @@ mod tests {
         let challenge = F::from_u64(2);
         let mut combined_evals = Poly::zero(statement.num_variables());
         let mut combined_sum = F::ZERO;
-        statement.combine_hypercube::<_, false>(&mut combined_evals, &mut combined_sum, challenge);
+        statement.combine_hypercube::<_, false>(
+            &mut combined_evals,
+            &mut combined_sum,
+            challenge,
+            0,
+        );
 
         // Expected evals: W(X) = eq_z1(X) + challenge * eq_z2(X)
         let expected_eq1 = Poly::new_from_point(point1.as_slice(), F::ONE);
@@ -481,10 +552,13 @@ mod tests {
         // Define a randomness point for folding
         let folding_randomness = Point::new(vec![F::from_u64(2)]);
 
-        // Expected result is the evaluation of eq_poly at the given randomness
-        let expected = point.eq_poly(&folding_randomness);
+        // Expected result is the equality polynomial evaluated at the given randomness.
+        let expected = Point::eval_eq(point.as_slice(), folding_randomness.as_slice());
 
-        assert_eq!(point.eq_poly(&folding_randomness), expected);
+        assert_eq!(
+            Point::eval_eq(point.as_slice(), folding_randomness.as_slice()),
+            expected
+        );
     }
 
     #[test]
@@ -580,6 +654,7 @@ mod tests {
             &mut combined_evals,
             &mut combined_sum,
             F::from_u64(42),
+            0,
         );
         assert_eq!(combined_sum, F::ZERO);
 
@@ -589,7 +664,7 @@ mod tests {
         statement.add_evaluated_constraint(Point::new(vec![F::ONE]), F::from_u64(7));
 
         let mut claimed_eval = F::ZERO;
-        statement.combine_evals(&mut claimed_eval, F::from_u64(2));
+        statement.combine_evals(&mut claimed_eval, F::from_u64(2), 0);
 
         // Verify: 3*1 + 7*2 = 17
         assert_eq!(claimed_eval, F::from_u64(17));
@@ -632,14 +707,14 @@ mod tests {
             let gamma = F::from_u32(challenge);
             let mut combined_poly = Poly::zero(statement.num_variables());
             let mut combined_sum = F::ZERO;
-            statement.combine_hypercube::<_, false>(&mut combined_poly, &mut combined_sum, gamma);
+            statement.combine_hypercube::<_, false>(&mut combined_poly, &mut combined_sum, gamma, 0);
 
             // Combined polynomial should have same number of variables
             prop_assert_eq!(combined_poly.num_variables(), 4);
 
             // Combined evaluations should match combine result
             let mut claimed_eval = F::ZERO;
-            statement.combine_evals(&mut claimed_eval, gamma);
+            statement.combine_evals(&mut claimed_eval, gamma, 0);
             // Both methods should give same sum
             prop_assert_eq!(combined_sum, claimed_eval);
 
@@ -699,7 +774,10 @@ mod tests {
             let mut scalar_weights = Poly::<EF>::zero(k);
             let mut scalar_sum = EF::ZERO;
             statement.combine_hypercube::<F, false>(
-                &mut scalar_weights, &mut scalar_sum, challenge,
+                &mut scalar_weights,
+                &mut scalar_sum,
+                challenge,
+                0,
             );
 
             // Packed path: combine into a 2^{k - k_pack} packed list.
@@ -707,7 +785,10 @@ mod tests {
                 Poly::<<EF as ExtensionField<F>>::ExtensionPacking>::zero(k - k_pack);
             let mut packed_sum = EF::ZERO;
             statement.combine_hypercube_packed::<F, false>(
-                &mut packed_weights, &mut packed_sum, challenge,
+                &mut packed_weights,
+                &mut packed_sum,
+                challenge,
+                0,
             );
 
             // Unpack the packed result and compare element-by-element.
@@ -744,12 +825,12 @@ mod tests {
 
             let mut s_wt = Poly::<EF>::zero(k);
             let mut s_sum = EF::ZERO;
-            stmt1.combine_hypercube::<F, false>(&mut s_wt, &mut s_sum, challenge);
+            stmt1.combine_hypercube::<F, false>(&mut s_wt, &mut s_sum, challenge, 0);
 
             let mut p_wt =
                 Poly::<<EF as ExtensionField<F>>::ExtensionPacking>::zero(k - k_pack);
             let mut p_sum = EF::ZERO;
-            stmt1.combine_hypercube_packed::<F, false>(&mut p_wt, &mut p_sum, challenge);
+            stmt1.combine_hypercube_packed::<F, false>(&mut p_wt, &mut p_sum, challenge, 0);
 
             // Second batch: INITIALIZED=true (accumulate on top).
             let points2 = (0..5)
@@ -758,8 +839,8 @@ mod tests {
             let evals2 = (0..5).map(|_| rng.random()).collect::<Vec<EF>>();
             let stmt2 = EqStatement::<EF>::new_hypercube(points2, evals2);
 
-            stmt2.combine_hypercube::<F, true>(&mut s_wt, &mut s_sum, challenge);
-            stmt2.combine_hypercube_packed::<F, true>(&mut p_wt, &mut p_sum, challenge);
+            stmt2.combine_hypercube::<F, true>(&mut s_wt, &mut s_sum, challenge, 0);
+            stmt2.combine_hypercube_packed::<F, true>(&mut p_wt, &mut p_sum, challenge, 0);
 
             // Verify accumulated results match.
             let unpacked =
@@ -770,5 +851,44 @@ mod tests {
             prop_assert_eq!(s_wt.as_slice(), &unpacked[..]);
             prop_assert_eq!(s_sum, p_sum);
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion `left == right` failed")]
+    fn combine_hypercube_rejects_mis_sized_accumulator() {
+        // Fixture state: a 2-variable statement carrying one constraint.
+        let mut statement = EqStatement::<F>::initialize(2);
+        statement.add_evaluated_constraint(Point::new(vec![F::ONE, F::ZERO]), F::from_u64(5));
+
+        // Fixture state: accumulator over 3 variables, not the required 2.
+        let mut acc_weights = Poly::zero(3);
+        let mut acc_sum = F::ZERO;
+
+        // Invariant: the accumulator must span the statement's hypercube, so this panics.
+        statement.combine_hypercube::<F, false>(&mut acc_weights, &mut acc_sum, F::from_u64(2), 0);
+    }
+
+    #[test]
+    fn weights_at_yields_one_equality_weight_per_point() {
+        // weights_at streams one equality weight per stored point, in order.
+        //
+        // Independent reference: the textbook equality product computed by hand,
+        //   eq(p, x) = prod_i (p_i * x_i + (1 - p_i) * (1 - x_i)),
+        // rather than the optimized routine under test.
+        let p0 = Point::new(vec![EF::from_u64(1), EF::from_u64(2)]);
+        let p1 = Point::new(vec![EF::from_u64(3), EF::from_u64(4)]);
+        let statement =
+            EqStatement::new_hypercube(vec![p0.clone(), p1.clone()], vec![EF::ZERO, EF::ZERO]);
+
+        let row = Point::new(vec![EF::from_u64(5), EF::from_u64(6)]);
+        let textbook_eq = |p: &Point<EF>| {
+            p.iter()
+                .zip(row.iter())
+                .map(|(&pi, &xi)| pi * xi + (EF::ONE - pi) * (EF::ONE - xi))
+                .product::<EF>()
+        };
+        let expected = vec![textbook_eq(&p0), textbook_eq(&p1)];
+
+        assert_eq!(statement.weights_at(&row).collect::<Vec<_>>(), expected);
     }
 }

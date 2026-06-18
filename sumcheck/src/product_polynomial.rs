@@ -332,16 +332,8 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
             assert_eq!(k, weights.num_variables());
 
             if k == 0 {
-                // Unpack the single packed element into SIMD_WIDTH scalar elements.
-                //
-                // Extract individual extension field elements from the packed representation.
-                let evals =
-                    EF::ExtensionPacking::to_ext_iter(evals.as_slice().iter().copied()).collect();
-                let weights =
-                    EF::ExtensionPacking::to_ext_iter(weights.as_slice().iter().copied()).collect();
-
-                // Replace self with the scalar variant, carrying the same order.
-                *self = Self::new_unpacked(self.order, Poly::new(evals), Poly::new(weights));
+                // Unpack each packed element into its WIDTH scalar lanes, keeping the same order.
+                *self = Self::new_unpacked(self.order, evals.unpack(), weights.unpack());
             }
         }
     }
@@ -523,9 +515,7 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     /// A copy of the evaluations in scalar extension field format.
     pub fn evals(&self) -> Poly<EF> {
         match &self.inner {
-            MaybePacked::Packed { evals, .. } => Poly::new(
-                EF::ExtensionPacking::to_ext_iter(evals.as_slice().iter().copied()).collect(),
-            ),
+            MaybePacked::Packed { evals, .. } => evals.unpack(),
             MaybePacked::Unpacked { evals, .. } => evals.clone(),
         }
     }
@@ -539,9 +529,7 @@ impl<F: Field, EF: ExtensionField<F>> ProductPolynomial<F, EF> {
     /// A copy of the weights in scalar extension field format.
     pub fn weights(&self) -> Poly<EF> {
         match &self.inner {
-            MaybePacked::Packed { weights, .. } => Poly::new(
-                EF::ExtensionPacking::to_ext_iter(weights.as_slice().iter().copied()).collect(),
-            ),
+            MaybePacked::Packed { weights, .. } => weights.unpack(),
             MaybePacked::Unpacked { weights, .. } => weights.clone(),
         }
     }
@@ -1141,8 +1129,8 @@ mod tests {
         // The combine function should:
         // 1. Update the weight polynomial with new constraint contributions
         // 2. Update the running sum accordingly
-        use crate::constraints::Constraint;
         use crate::constraints::statement::EqStatement;
+        use crate::constraints::{Constraint, Statements};
 
         let num_variables = 2;
         let evals = Poly::new(vec![EF::ONE; 4]);
@@ -1163,7 +1151,8 @@ mod tests {
 
         // Create constraint with the eq_statement.
         let challenge = EF::from_u64(7);
-        let constraint = Constraint::<F, EF>::new_eq_only(challenge, eq_statement);
+        let constraint =
+            Constraint::<F, EF>::new(challenge, num_variables, vec![Statements::Eq(eq_statement)]);
 
         let mut sum = poly.dot_product();
         poly.combine(&mut sum, &constraint);

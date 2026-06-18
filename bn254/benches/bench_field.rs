@@ -1,8 +1,8 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use p3_bn254::Bn254;
 use p3_field_testing::bench_func::{
-    benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_sub_latency,
-    benchmark_sub_throughput,
+    benchmark_add_latency, benchmark_add_throughput, benchmark_inv, benchmark_sqrt,
+    benchmark_sub_latency, benchmark_sub_throughput,
 };
 use p3_field_testing::{benchmark_halve, benchmark_mul_latency, benchmark_mul_throughput};
 
@@ -13,6 +13,7 @@ fn bench_field(c: &mut Criterion) {
     const REPS: usize = 100;
     benchmark_halve::<F, REPS>(c, name);
     benchmark_inv::<F>(c, name);
+    benchmark_sqrt::<F>(c, name);
 
     // Note that each round of throughput has 10 operations
     // So we should have 10 * more repetitions for latency tests.
