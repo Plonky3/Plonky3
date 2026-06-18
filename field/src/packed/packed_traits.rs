@@ -511,6 +511,7 @@ pub trait PackedFieldExtension<
     /// - `src_width` must divide `dst.len()`.
     fn unpack_transpose_into(src: &[Self], dst: &mut [ExtField], src_width: usize) {
         let w = BaseField::Packing::WIDTH;
+        assert!(src_width != 0);
         assert_eq!(dst.len(), src.len() * w);
         assert!(
             dst.len().is_multiple_of(src_width),
