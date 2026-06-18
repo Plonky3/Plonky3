@@ -536,6 +536,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::borrow::Cow;
+
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
@@ -617,9 +619,9 @@ mod tests {
         fn num_periodic_columns(&self) -> usize {
             2
         }
-        fn periodic_columns(&self) -> Vec<Vec<F>> {
+        fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
             // Two columns of period 2.
-            vec![vec![F::ZERO, F::ONE], vec![F::ONE, F::new(2)]]
+            Cow::Owned(vec![vec![F::ZERO, F::ONE], vec![F::ONE, F::new(2)]])
         }
     }
 
