@@ -21,13 +21,22 @@ where
     EF: ExtensionField<F>,
 {
     /// Walks concrete claims in placement order.
-    fn concrete_claims(&self) -> impl Iterator<Item = &ProverMultiClaim<F, EF>>;
+    #[inline]
+    fn concrete_claims(&self) -> impl Iterator<Item = &ProverMultiClaim<F, EF>> {
+        self.claims().concrete_claims()
+    }
 
     /// Returns the virtual-claim slice.
-    fn virtual_claims(&self) -> &[ProverVirtualClaim<EF>];
+    #[inline]
+    fn virtual_claims(&self) -> &[ProverVirtualClaim<EF>] {
+        &self.claims().virtual_claims
+    }
 
     /// Returns the alpha-batched plain sum.
-    fn batched_sum(&self, alpha: EF) -> EF;
+    #[inline]
+    fn batched_sum(&self, alpha: EF) -> EF {
+        self.claims().sum(alpha)
+    }
 
     /// Builds the residual product polynomial, scaled by the combining challenge.
     ///
@@ -42,29 +51,15 @@ where
     F: TwoAdicField,
     EF: ExtensionField<F>,
 {
-    fn concrete_claims(&self) -> impl Iterator<Item = &ProverMultiClaim<F, EF>> {
-        // Flatten placement order across all per-table claim lists.
-        self.placements
-            .iter()
-            .flat_map(|placement| self.claim_map[placement.idx()].iter())
-    }
-
-    fn virtual_claims(&self) -> &[ProverVirtualClaim<EF>] {
-        &self.virtual_claims
-    }
-
-    fn batched_sum(&self, alpha: EF) -> EF {
-        self.sum(alpha)
-    }
-
     fn zk_residual_handoff(self, rs: &Point<EF>, alpha: EF, eps: EF) -> ProductPolynomial<F, EF>
     where
         EF: TwoAdicField,
     {
-        // Prefix packs the residual weights: one full SIMD lane must survive the fold.
-        // `Poly::pack` requires `num_variables - k >= k_pack`, else it panics.
-        // Suffix is unpacked and unconstrained, so this guard is prefix-only.
-        // Phrased as `k + k_pack <= num_variables` to avoid `usize` underflow.
+        // Invariant: the packed residual needs one full SIMD lane to survive the fold.
+        //
+        //     both packed routes panic unless  num_variables - folding >= k_pack
+        //     suffix mode is unpacked, so this guard is prefix-only
+        //     phrased as  k_pack <= num_variables - folding  to avoid usize underflow
         let k_pack = log2_strict_usize(<F as Field>::Packing::WIDTH);
         assert!(
             rs.num_variables() + k_pack <= self.num_variables(),
@@ -75,8 +70,8 @@ where
         // The combining challenge is baked into the compression scale.
         let compressed = tracing::info_span!("compress_prefix_to_packed")
             .in_scope(|| self.poly.compress_prefix_to_packed(rs, eps));
-        // Pack the equality weights for the SIMD-friendly residual rounds.
-        let weights = self.combine_eqs(rs, alpha).pack::<F, EF>();
+        // Build the equality weights in packed form, fused scatter or pack as cheaper.
+        let weights = self.residual_weights_packed(rs, alpha);
         ProductPolynomial::new_packed(VariableOrder::Prefix, compressed, weights)
     }
 }
@@ -86,21 +81,6 @@ where
     F: TwoAdicField,
     EF: ExtensionField<F>,
 {
-    fn concrete_claims(&self) -> impl Iterator<Item = &ProverMultiClaim<F, EF>> {
-        // Flatten placement order across all per-table claim lists.
-        self.placements
-            .iter()
-            .flat_map(|placement| self.claim_map[placement.idx()].iter())
-    }
-
-    fn virtual_claims(&self) -> &[ProverVirtualClaim<EF>] {
-        &self.virtual_claims
-    }
-
-    fn batched_sum(&self, alpha: EF) -> EF {
-        self.sum(alpha)
-    }
-
     fn zk_residual_handoff(self, rs: &Point<EF>, alpha: EF, eps: EF) -> ProductPolynomial<F, EF>
     where
         EF: TwoAdicField,
@@ -111,7 +91,7 @@ where
         let compressed = tracing::info_span!("compress_stacked_with_eps")
             .in_scope(|| self.compress_stacked_scaled(&reversed, eps));
         // The SVO preprocessing covers what packing would help; no packing here.
-        let weights = self.combine_eqs(&reversed, alpha);
+        let weights = self.combine_weights(&reversed, alpha);
         ProductPolynomial::new_unpacked(VariableOrder::Suffix, compressed, weights)
     }
 }

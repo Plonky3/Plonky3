@@ -67,7 +67,7 @@ use p3_matrix::dense::RowMajorMatrix;
 use p3_merkle_tree::MerkleTreeMmcs;
 use p3_multilinear_util::poly::Poly;
 use p3_sumcheck::layout::{Layout, SuffixProver, Table, Witness};
-use p3_sumcheck::{OpeningProtocol, TableShape, TableSpec};
+use p3_sumcheck::{OpeningBatch, OpeningProtocol, TableShape, TableSpec};
 use p3_symmetric::{PaddingFreeSponge, TruncatedPermutation};
 use p3_whir::fiat_shamir::domain_separator::DomainSeparator;
 use p3_whir::parameters::{FoldingFactor, ProtocolParameters, SecurityAssumption, WhirConfig};
@@ -361,7 +361,7 @@ where
     // This is the multilinear analogue of batched FRI's single common opening point.
     let protocol = OpeningProtocol::new(vec![TableSpec::new(
         TableShape::new(log_height, width),
-        vec![(0..width).collect()],
+        vec![OpeningBatch::new((0..width).collect(), Vec::new())],
     )])
     .pad_to_min_num_variables(folding);
 

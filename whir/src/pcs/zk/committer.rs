@@ -17,7 +17,6 @@ use alloc::vec::Vec;
 
 use p3_dft::TwoAdicSubgroupDft;
 use p3_field::{ExtensionField, Field, TwoAdicField};
-use p3_matrix::Matrix;
 use p3_matrix::dense::{RowMajorMatrix, RowMajorMatrixView, RowMajorMatrixViewMut};
 use p3_util::log2_strict_usize;
 
@@ -151,7 +150,6 @@ impl<F: TwoAdicField> FoldedRsCode<F> {
         coeffs.extend_from_slice(randomness);
         coeffs.resize(self.domain_size, EF::ZERO);
         dft.dft_algebra_batch(RowMajorMatrix::new_col(coeffs))
-            .to_row_major_matrix()
     }
 }
 
@@ -206,7 +204,7 @@ mod tests {
         let dft = MyDft::default();
         let height = inv_rate << (num_variables - folding);
         let padded = zk_padded_matrix(message.as_slice(), &randomness, folding, height);
-        let encoded = dft.dft_algebra_batch(padded).to_row_major_matrix();
+        let encoded = dft.dft_algebra_batch(padded);
 
         let gamma = Point::<EF>::rand(&mut rng, folding);
         let folded_message =

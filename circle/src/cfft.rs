@@ -442,29 +442,49 @@ fn par_group_pass<F: Field, B: Butterfly<F>, M: Matrix<F>>(
                 CfftLayer::Butterflies(ts) => {
                     let slice_len = 1 << (log_group - e - 1);
                     let slice = &ts[hi * slice_len..][..slice_len];
-                    for (s, &t) in slice.iter().enumerate() {
-                        for u in 0..1usize << e {
-                            let row_lo = first_row + (((s << (e + 1)) | u) << log_stride);
-                            let row_hi = row_lo + (1 << (e + log_stride));
+                    if log_stride == 0 {
+                        // The `2^e` row pairs sharing the twiddle `t` span two contiguous
+                        // row blocks, so they merge into a single call: one twiddle
+                        // broadcast and one long inner loop instead of one per row pair.
+                        for (s, &t) in slice.iter().enumerate() {
+                            let row_lo = first_row + (s << (e + 1));
+                            let row_hi = row_lo + (1 << e);
+                            let len = width << e;
                             // SAFETY: every row index decomposes uniquely as
-                            // `hi << (log_group + log_stride) | t << log_stride | lo`, so the task
-                            // for group `g = (hi, lo)` is the only one touching its rows, and
-                            // within a layer each row appears in exactly one butterfly, so
-                            // `row_lo` and `row_hi` never alias. All indices stay below `h` since
+                            // `hi << (log_group + log_stride) | t << log_stride | lo`, so the
+                            // task for group `g = (hi, lo)` is the only one touching its rows,
+                            // and within a layer each row appears in exactly one butterfly, so
+                            // the two blocks never alias. All indices stay below `h` since
                             // `t < 2^log_group`.
-                            let (row_lo, row_hi) = unsafe {
+                            let (block_lo, block_hi) = unsafe {
                                 (
-                                    core::slice::from_raw_parts_mut(
-                                        base.add(row_lo * width),
-                                        width,
-                                    ),
-                                    core::slice::from_raw_parts_mut(
-                                        base.add(row_hi * width),
-                                        width,
-                                    ),
+                                    core::slice::from_raw_parts_mut(base.add(row_lo * width), len),
+                                    core::slice::from_raw_parts_mut(base.add(row_hi * width), len),
                                 )
                             };
-                            t.apply_to_rows(row_lo, row_hi);
+                            t.apply_to_rows(block_lo, block_hi);
+                        }
+                    } else {
+                        for (s, &t) in slice.iter().enumerate() {
+                            for u in 0..1usize << e {
+                                let row_lo = first_row + (((s << (e + 1)) | u) << log_stride);
+                                let row_hi = row_lo + (1 << (e + log_stride));
+                                // SAFETY: as in the contiguous case above; `row_lo` and
+                                // `row_hi` never alias and stay below `h`.
+                                let (row_lo, row_hi) = unsafe {
+                                    (
+                                        core::slice::from_raw_parts_mut(
+                                            base.add(row_lo * width),
+                                            width,
+                                        ),
+                                        core::slice::from_raw_parts_mut(
+                                            base.add(row_hi * width),
+                                            width,
+                                        ),
+                                    )
+                                };
+                                t.apply_to_rows(row_lo, row_hi);
+                            }
                         }
                     }
                 }

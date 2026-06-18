@@ -1,4 +1,5 @@
 use p3_field::{Algebra, ExtensionField, Field, InjectiveMonomial};
+use serde::{Deserialize, Serialize};
 
 use crate::symbolic::variable::{BaseEntry, SymbolicVariable};
 use crate::symbolic::{SymLeaf, SymbolicExpr};
@@ -8,7 +9,7 @@ use crate::{AirBuilder, WindowAccess};
 ///
 /// These represent the atomic building blocks of AIR constraint expressions:
 /// trace column references, selectors, and field constants.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum BaseLeaf<F> {
     /// A reference to a trace column or public input.
     Variable(SymbolicVariable<F>),
@@ -45,6 +46,18 @@ impl<F: Field> SymLeaf for BaseLeaf<F> {
             Self::Variable(v) => v.degree_multiple(),
             Self::IsFirstRow | Self::IsLastRow => 1,
             Self::IsTransition | Self::Constant(_) => 0,
+        }
+    }
+
+    fn poly_degree(&self, trace_len: usize, periodic_periods: &[usize]) -> usize {
+        match self {
+            Self::Variable(v) => v.poly_degree(trace_len, periodic_periods),
+            // Boundary selectors are non-zero at a single row, so they are degree-`(N - 1)`
+            // polynomials, while the transition selector only needs to vanish on the last
+            // row and so is linear.
+            Self::IsFirstRow | Self::IsLastRow => trace_len.saturating_sub(1),
+            Self::IsTransition => 1,
+            Self::Constant(_) => 0,
         }
     }
 
@@ -280,6 +293,64 @@ mod tests {
             2,
             "Multiplication should sum degrees"
         );
+    }
+
+    #[test]
+    fn test_symbolic_expression_poly_degree() {
+        const N: usize = 8;
+
+        // The transition selector is linear, unlike the boundary selectors which are
+        // degree-`(N - 1)` polynomials.
+        let is_transition = SymbolicExpression::<BabyBear>::Leaf(BaseLeaf::IsTransition);
+        assert_eq!(is_transition.poly_degree(N, &[]), 1);
+
+        let is_first_row = SymbolicExpression::<BabyBear>::Leaf(BaseLeaf::IsFirstRow);
+        assert_eq!(is_first_row.poly_degree(N, &[]), N - 1);
+
+        // Constants contribute nothing.
+        let constant = SymbolicExpression::Leaf(BaseLeaf::Constant(BabyBear::new(5)));
+        assert_eq!(constant.poly_degree(N, &[]), 0);
+
+        // `is_transition * main` is degree `1 + (N - 1) = N`.
+        let main = SymbolicExpression::<BabyBear>::from(SymbolicVariable::new(
+            BaseEntry::Main { offset: 0 },
+            0,
+        ));
+        let guarded = is_transition * main.clone();
+        assert_eq!(guarded.poly_degree(N, &[]), N);
+
+        // Products of periodic columns sum their reduced degrees: two period-2
+        // columns give `(N - N/2) + (N - N/2) = N`, versus `2(N - 1)` for two
+        // regular columns.
+        let p0 =
+            SymbolicExpression::<BabyBear>::from(SymbolicVariable::new(BaseEntry::Periodic, 0));
+        let p1 =
+            SymbolicExpression::<BabyBear>::from(SymbolicVariable::new(BaseEntry::Periodic, 1));
+        let periodic_product = p0 * p1;
+        assert_eq!(periodic_product.poly_degree(N, &[2, 2]), N);
+
+        // Sums take the max degree of their operands.
+        let sum = main + SymbolicExpression::Leaf(BaseLeaf::IsTransition);
+        assert_eq!(sum.poly_degree(N, &[]), N - 1);
+    }
+
+    #[test]
+    fn poly_degree_handles_shared_dag_in_linear_time() {
+        // Repeated squaring builds a DAG of depth `d` whose flattened tree has
+        // `2^d` leaves but only `O(d)` distinct nodes. `poly_degree` must run in
+        // time proportional to the distinct nodes; without memoization this test
+        // would take `O(2^d)` and never finish.
+        const DEPTH: usize = 30;
+        const N: usize = 1 << 10;
+
+        let mut expr =
+            SymbolicExpression::<BabyBear>::from(SymbolicVariable::new(BaseEntry::Periodic, 0));
+        for _ in 0..DEPTH {
+            expr = expr.clone() * expr.clone();
+        }
+
+        // The period-2 column has degree `N - N/2 = N/2`; each squaring doubles it.
+        assert_eq!(expr.poly_degree(N, &[2]), (N / 2) << DEPTH);
     }
 
     #[test]
@@ -1017,5 +1088,33 @@ mod tests {
 
         let expr = col0 * p0 + p1;
         assert_eq!(expr.resolve(&b), BabyBear::new(83));
+    }
+
+    #[test]
+    fn serde_round_trip_preserves_resolution() {
+        // A constraint mixing every leaf kind, both row offsets, and all node kinds:
+        //   main[0]·main_next[1] - public[0] + periodic[0]·is_transition - constant
+        let b = test_builder();
+        let main_cur =
+            SymbolicExpression::from(SymbolicVariable::new(BaseEntry::Main { offset: 0 }, 0));
+        let main_next =
+            SymbolicExpression::from(SymbolicVariable::new(BaseEntry::Main { offset: 1 }, 1));
+        let public =
+            SymbolicExpression::from(SymbolicVariable::<BabyBear>::new(BaseEntry::Public, 0));
+        let periodic =
+            SymbolicExpression::from(SymbolicVariable::<BabyBear>::new(BaseEntry::Periodic, 0));
+        let transition = SymbolicExpression::<BabyBear>::Leaf(BaseLeaf::IsTransition);
+
+        let expr = main_cur * main_next - public + periodic * transition
+            - SymbolicExpression::from(BabyBear::new(5));
+
+        let json = serde_json::to_string(&expr).unwrap();
+        let decoded: SymbolicExpression<BabyBear> = serde_json::from_str(&json).unwrap();
+
+        // Semantic equality: both trees resolve to the same value.
+        assert_eq!(decoded.resolve(&b), expr.resolve(&b));
+        // Structural equality: the decoded tree re-serializes identically.
+        assert_eq!(serde_json::to_string(&decoded).unwrap(), json);
+        assert_eq!(decoded.degree_multiple(), expr.degree_multiple());
     }
 }

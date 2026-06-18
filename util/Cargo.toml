@@ -10,12 +10,11 @@ keywords.workspace = true
 categories.workspace = true
 
 [features]
-parallel = ["rayon"]
+parallel = ["p3-maybe-rayon/parallel"]
 
 [dependencies]
-rayon = { workspace = true, optional = true }
+p3-maybe-rayon.workspace = true
 serde.workspace = true
-transpose.workspace = true
 
 [dev-dependencies]
 p3-baby-bear = { path = "../baby-bear" }

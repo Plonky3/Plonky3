@@ -91,8 +91,8 @@ where
     );
 }
 
-/// Ensure that the methods `from_ext_slice`, `to_ext_iter`, `packed_ext_powers` and `packed_ext_powers_capped`
-/// all work as expected.
+/// Ensure that the methods `from_ext_slice`, `to_ext_iter`, `unpack_transpose_into`,
+/// `packed_ext_powers` and `packed_ext_powers_capped` all work as expected.
 pub fn test_packed_extension<F, EF>()
 where
     F: Field,
@@ -108,6 +108,63 @@ where
         EF::ExtensionPacking::to_ext_iter([packed_extension]).collect();
 
     assert_eq!(extension_elements, unpacked_extension);
+
+    // The fused unpack-and-transpose must equal a flat unpack followed by a transpose.
+    //
+    // `check` pins one shape against that naive reference.
+    //   - The logical matrix is row-major, `src_height` rows by `src_width` columns.
+    //   - The total scalar count is `len = src_width * src_height`.
+    let mut check = |src_width: usize, len: usize| {
+        // Draw `len` random scalars, then pack `width` consecutive ones per packed element.
+        let scalars: Vec<EF> = (0..len).map(|_| rng.random()).collect();
+        let packed: Vec<_> = scalars
+            .chunks(width)
+            .map(EF::ExtensionPacking::from_ext_slice)
+            .collect();
+
+        // Naive reference: column `c`, row `r` of the transpose is row `r`, column `c` of the input.
+        let src_height = len / src_width;
+        let mut expected = EF::zero_vec(len);
+        for r in 0..src_height {
+            for c in 0..src_width {
+                expected[c * src_height + r] = scalars[r * src_width + c];
+            }
+        }
+
+        // Fused path under test: must reproduce the naive transpose exactly.
+        let mut transposed = EF::zero_vec(len);
+        EF::ExtensionPacking::unpack_transpose_into(&packed, &mut transposed, src_width);
+        assert_eq!(
+            transposed, expected,
+            "transpose mismatch at src_width {src_width}, len {len}",
+        );
+    };
+
+    // Power-of-two shapes hit both the blocked fast path and the scalar fallback.
+    for log_width in 0..6 {
+        for log_height in 0..6 {
+            let src_width = 1 << log_width;
+            let len = src_width << log_height;
+            // Skip shapes too small to fill even one packed element.
+            if len < width {
+                continue;
+            }
+            check(src_width, len);
+        }
+    }
+
+    // Non-power-of-two shapes drive the scalar fallback on odd dimensions.
+    //
+    // Invariant: the `* width` factor in each pair keeps the scalar count a whole number of packed elements.
+    // The fallback fires whenever a dimension is not a multiple of the packing width:
+    //   - odd width  -> rows do not start on a packed boundary
+    //   - odd height -> output runs are shorter than one packed element
+    let odd_width_shapes = [(3, width), (5, width), (6, width), (7, 2 * width)];
+    let odd_height_shapes = [(width, 3), (width, 5), (2 * width, 3), (3 * width, 7)];
+    // Each pair is (columns, rows); the scalar count is their product.
+    for (src_width, src_height) in odd_width_shapes.into_iter().chain(odd_height_shapes) {
+        check(src_width, src_width * src_height);
+    }
 
     let base_powers = extension_elements[0].powers().collect_n(10 * width);
 

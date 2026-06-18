@@ -9,8 +9,8 @@ use core::ops::Deref;
 
 use itertools::Itertools;
 use p3_field::{
-    BasedVectorSpace, ExtensionField, Field, FieldArray, PackedFieldExtension, PackedValue,
-    PrimeCharacteristicRing,
+    BasedVectorSpace, ExtensionField, Field, FieldArray, PackedField, PackedFieldExtension,
+    PackedValue, PrimeCharacteristicRing,
 };
 use p3_maybe_rayon::prelude::*;
 use strided::{VerticallyStridedMatrixView, VerticallyStridedRowIndexMap};
@@ -467,23 +467,28 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
         EF: ExtensionField<T>,
     {
         let packed_width = self.width().div_ceil(T::Packing::WIDTH);
+        let height = self.height().min(vs.len());
 
-        let packed_results: Vec<EF::ExtensionPacking> = self
-            .par_padded_horizontally_packed_rows::<T::Packing>()
-            .zip(vs)
-            .par_fold_reduce(
+        // Split the rows into a bounded number of contiguous chunks; each task runs the
+        // field's columnwise kernel serially over its chunk (letting it defer modular
+        // reductions across rows) and the per-task accumulators are summed at the end.
+        let num_chunks = (4 * current_num_threads()).clamp(1, height.max(1));
+        let chunk_rows = height.div_ceil(num_chunks);
+
+        let packed_results: Vec<EF::ExtensionPacking> =
+            (0..num_chunks).into_par_iter().par_fold_reduce(
                 || EF::ExtensionPacking::zero_vec(packed_width * N),
-                |mut acc, (packed_row, scales)| {
-                    // Broadcast each scalar scale to all SIMD lanes
-                    let packed_scales: [EF::ExtensionPacking; N] =
-                        scales.map_into_array(EF::ExtensionPacking::from);
-
-                    // acc[c][j] += scales[j] · row[c] for column batch c, point j
-                    for (acc_c, row_c) in acc.chunks_exact_mut(N).zip(packed_row) {
-                        for j in 0..N {
-                            acc_c[j] += packed_scales[j] * row_c;
-                        }
-                    }
+                |mut acc, chunk| {
+                    let rows = chunk * chunk_rows..((chunk + 1) * chunk_rows).min(height);
+                    T::batched_columnwise_dot_product::<EF, _, _, N>(
+                        &mut acc,
+                        rows.map(|r| {
+                            (
+                                self.padded_horizontally_packed_row::<T::Packing>(r),
+                                vs[r].0,
+                            )
+                        }),
+                    );
                     acc
                 },
                 |mut acc_l, acc_r| {
@@ -530,18 +535,13 @@ pub trait Matrix<T: Send + Sync + Clone>: Send + Sync {
                 // Get the extension dimension from the first vec element's coefficients
                 let d = <EF::ExtensionPacking as BasedVectorSpace<T::Packing>>::DIMENSION;
 
-                // Initialize D accumulators for each coefficient of the extension
-                // In practice, we set D to 8, which is the maximum degree of the extension field supported.
-                let mut coeff_accs: [T::Packing; 8] = [T::Packing::ZERO; 8];
-                debug_assert!(d <= 8, "Extension degree > 8 not supported");
-
                 // Accumulate coefficient-wise: for each (v, r) pair, acc[i] += v.coefficient(i) * r
-                for (v, r) in vec.iter().zip(row_packed) {
-                    let v_coeffs = v.as_basis_coefficients_slice();
-                    for (acc, &v_coeff) in coeff_accs[..d].iter_mut().zip(v_coeffs) {
-                        *acc += v_coeff * r;
-                    }
-                }
+                let coeff_accs = T::Packing::coeffwise_dot_product(
+                    d,
+                    vec.iter()
+                        .zip(row_packed)
+                        .map(|(v, r)| (v.as_basis_coefficients_slice(), r)),
+                );
 
                 // Construct the result ExtPacking from the accumulators and sum the coefficients.
                 let packed_result =

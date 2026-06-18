@@ -185,6 +185,7 @@ where
                     get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
                         air,
                         layout,
+                        degrees[i],
                         all_lookups[i],
                         config.is_zk(),
                         &lookup_gadget,
@@ -835,16 +836,21 @@ where
         .into_par_iter()
         .step_by(pack_width)
         .for_each_init(
-            // Per-task initialization: allocate constraint and permutation buffers once.
-            // These are cleared (without deallocating) and reused on every iteration.
+            // Per-task initialization: allocate constraint, permutation and
+            // packed-row buffers once. These are cleared (without
+            // deallocating) and reused on every iteration.
             || {
                 (
                     Vec::with_capacity(n_base),
                     Vec::with_capacity(n_ext),
                     Vec::with_capacity(2 * perm_cols),
+                    Vec::with_capacity(2 * main_width),
+                    Vec::with_capacity(
+                        2 * preprocessed_on_quotient_domain.map_or(0, |p| p.width()),
+                    ),
                 )
             },
-            |(base_buf, ext_buf, perm_buf), i_start| {
+            |(base_buf, ext_buf, perm_buf, main_buf, prep_buf), i_start| {
                 let chunk_emit = pack_width.min(quotient_size - i_start);
                 // Load SIMD-packed selector values for this chunk.
                 let i_range = i_start..i_start + pack_width;
@@ -856,19 +862,30 @@ where
                 let inv_vanishing = *PackedVal::<SC>::from_slice(&sels.inv_vanishing[i_range]);
 
                 // Pack the main trace rows (current + next) for this chunk.
-                let main = RowMajorMatrix::new(
-                    trace_on_quotient_domain.vertically_packed_row_pair(i_start, next_step),
-                    main_width,
+                main_buf.clear();
+                main_buf.extend(
+                    trace_on_quotient_domain.vertically_packed_row::<PackedVal<SC>>(i_start),
                 );
+                main_buf.extend(
+                    trace_on_quotient_domain
+                        .vertically_packed_row::<PackedVal<SC>>(i_start + next_step),
+                );
+                let main = RowMajorMatrixView::new(main_buf.as_slice(), main_width);
 
                 // Pack preprocessed rows if the AIR has preprocessed columns.
-                let preprocessed = preprocessed_on_quotient_domain.map(|preprocessed| {
-                    let preprocessed_width = preprocessed.width();
-                    RowMajorMatrix::new(
-                        preprocessed.vertically_packed_row_pair(i_start, next_step),
-                        preprocessed_width,
-                    )
-                });
+                let preprocessed_view = preprocessed_on_quotient_domain.map_or_else(
+                    || RowMajorMatrixView::new(&[], 0),
+                    |preprocessed| {
+                        prep_buf.clear();
+                        prep_buf
+                            .extend(preprocessed.vertically_packed_row::<PackedVal<SC>>(i_start));
+                        prep_buf.extend(
+                            preprocessed
+                                .vertically_packed_row::<PackedVal<SC>>(i_start + next_step),
+                        );
+                        RowMajorMatrixView::new(prep_buf.as_slice(), preprocessed.width())
+                    },
+                );
 
                 // Build a packed permutation matrix from element-wise reads.
                 // The buffer is cleared and refilled each iteration without reallocating.
@@ -899,10 +916,6 @@ where
                 }
                 let permutation = RowMajorMatrixView::new(perm_buf.as_slice(), perm_cols);
 
-                let preprocessed_view = preprocessed
-                    .as_ref()
-                    .map_or_else(|| RowMajorMatrixView::new(&[], 0), |m| m.as_view());
-
                 // Swap in the reusable constraint buffers (already cleared).
                 base_buf.clear();
                 ext_buf.clear();
@@ -912,7 +925,7 @@ where
                     &periodic_packed[i_start / pack_width]
                 };
                 let inner_folder = ProverConstraintFolder {
-                    main: main.as_view(),
+                    main,
                     preprocessed: preprocessed_view,
                     preprocessed_window: RowWindow::from_view(&preprocessed_view),
                     periodic_values,

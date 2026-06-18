@@ -1,3 +1,4 @@
+use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 use core::ops::Deref;
@@ -10,8 +11,8 @@ use p3_matrix::dense::DenseMatrix;
 use p3_matrix::extension::FlatMatrixView;
 use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
-use p3_sumcheck::constraints::Constraint;
 use p3_sumcheck::constraints::statement::{EqStatement, SelectStatement};
+use p3_sumcheck::constraints::{Constraint, Statements};
 use p3_sumcheck::layout::Layout;
 use p3_sumcheck::strategy::{SumcheckProver, VariableOrder};
 use tracing::instrument;
@@ -182,9 +183,8 @@ where
     ) where
         Challenger: CanObserve<MT::Commitment>,
     {
-        let folded_evaluations = &round_state.sumcheck_prover.evals();
         let num_variables = self.num_variables - self.total_folded_through(round_index);
-        assert_eq!(num_variables, folded_evaluations.num_variables());
+        assert_eq!(num_variables, round_state.sumcheck_prover.num_variables());
 
         // Final round: send polynomial in the clear.
         if round_index == self.n_rounds() {
@@ -195,11 +195,12 @@ where
         let folding_factor_next = self.round_folding_factor(round_index + 1);
         let inv_rate = self.inv_rate(round_index);
 
+        // Commit straight from the live sumcheck buffer; no scalar copy is materialized.
         let (root, prover_data) = commit_extension(
             variable_order,
             &self.dft,
             &self.extension_mmcs,
-            folded_evaluations,
+            round_state.sumcheck_prover.evals_view(),
             folding_factor_next,
             inv_rate,
         );
@@ -296,10 +297,19 @@ where
 
         proof.rounds[round_index].queries = queries;
 
+        // Batch the two statement groups into one constraint over the same cube.
+        // The out-of-domain claims form the equality group.
+        // The query openings form the selection group.
+        // A freshly sampled challenge weights the groups by its successive powers,
+        // and the verifier samples the same challenge to rebuild the identical batch.
+        let num_variables = ood_statement.num_variables();
         let constraint = Constraint::new(
             challenger.sample_algebra_element(),
-            ood_statement,
-            stir_statement,
+            num_variables,
+            vec![
+                Statements::Eq(ood_statement),
+                Statements::Select(stir_statement),
+            ],
         );
 
         // Run sumcheck and fold the polynomial.
@@ -327,8 +337,10 @@ where
         round_state: &mut WhirRoundState<EF, F, MT>,
     ) {
         // Send final polynomial coefficients in the clear.
-        challenger.observe_algebra_slice(round_state.sumcheck_prover.evals().as_slice());
-        proof.final_poly = Some(round_state.sumcheck_prover.evals());
+        // Unpack once; the transcript and the proof share the same copy.
+        let final_poly = round_state.sumcheck_prover.evals();
+        challenger.observe_algebra_slice(final_poly.as_slice());
+        proof.final_poly = Some(final_poly);
 
         // PoW grinding for the final round.
         if self.final_pow_bits > 0 {

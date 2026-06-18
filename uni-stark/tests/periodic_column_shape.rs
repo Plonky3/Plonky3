@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use p3_air::{Air, AirBuilder, BaseAir, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
 use p3_challenger::DuplexChallenger;
@@ -45,10 +47,10 @@ impl<F: Field> BaseAir<F> for SinglePeriodicAir {
         1
     }
 
-    fn periodic_columns(&self) -> Vec<Vec<F>> {
+    fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
         // A single column holding 0, 1, ..., period - 1.
         // A period of zero yields one empty column, which has no valid subdomain.
-        vec![(0..self.period as u64).map(F::from_u64).collect()]
+        Cow::Owned(vec![(0..self.period as u64).map(F::from_u64).collect()])
     }
 }
 

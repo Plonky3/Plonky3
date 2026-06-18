@@ -17,7 +17,7 @@ use crate::protocol::LookupProtocol;
 use crate::symbolic::InteractionSymbolicBuilder;
 
 /// Whether a lookup is confined to one AIR or shared across AIRs on a named bus.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
     /// Intra-AIR lookup.
     ///
@@ -34,7 +34,8 @@ pub enum Kind {
 
 /// A single lookup argument: element tuples, multiplicities, and one
 /// auxiliary column in the permutation trace.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(bound = "")]
 pub struct Lookup<F: Field> {
     /// Local or global (with bus name).
     pub kind: Kind,
@@ -88,7 +89,8 @@ impl<F: Field> Lookup<F> {
 }
 
 /// All lookups for one AIR, with column indices assigned.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(transparent, bound = "")]
 pub struct Lookups<F: Field>(Vec<Lookup<F>>);
 
 impl<F: Field> Lookups<F> {
@@ -686,5 +688,44 @@ mod tests {
                 assert_contiguous_columns(&packed);
             }
         }
+    }
+
+    #[test]
+    fn lookups_serde_round_trip() {
+        // A representative LogUp set: one local lookup followed by two same-bus globals.
+        let local = vec![SymbolicLocalInteraction {
+            tuples: vec![(
+                vec![SymbolicExpression::from(SymbolicVariable::<F>::new(
+                    BaseEntry::Main { offset: 0 },
+                    0,
+                ))],
+                SymbolicExpression::from(F::ONE),
+            )],
+        }];
+        let global = vec![global_payload("bus", 1), global_payload("bus", 0)];
+        let lookups = Lookups::from_interactions(&global, &local, &[]);
+
+        let json = serde_json::to_string(&lookups).unwrap();
+        let decoded: Lookups<F> = serde_json::from_str(&json).unwrap();
+
+        // Structural equality: the decoded set re-serializes identically.
+        assert_eq!(serde_json::to_string(&decoded).unwrap(), json);
+
+        // Spot-check the decoded fields against the original.
+        assert_eq!(decoded.len(), lookups.len());
+        assert_eq!(decoded.total_count_weight(), lookups.total_count_weight());
+        for (a, b) in decoded.iter().zip(lookups.iter()) {
+            assert_eq!(a.kind, b.kind);
+            assert_eq!(a.column, b.column);
+            assert_eq!(a.count_weight, b.count_weight);
+        }
+    }
+
+    #[test]
+    fn lookup_terminal_serde_round_trip() {
+        let terminal = LookupTerminal(F::new(123));
+        let json = serde_json::to_string(&terminal).unwrap();
+        let decoded: LookupTerminal<F> = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.0, terminal.0);
     }
 }

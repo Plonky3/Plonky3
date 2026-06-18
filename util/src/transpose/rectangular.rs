@@ -23,7 +23,7 @@
 //! - **8-byte elements** (typical for 64-bit field elements like `Goldilocks`)
 //!   using a simpler 1-stage butterfly (`vtrn1q_u64`/`vtrn2q_u64`) on pairs of registers.
 //!
-//! On other architectures or for other element sizes, it falls back to the `transpose` crate.
+//! On other architectures, or for other element sizes, it falls back to the portable engine.
 //!
 //! # Key Optimizations
 //!
@@ -256,7 +256,7 @@ pub fn transpose<T: Copy + Send + Sync>(
     }
 
     // Fallback for non-ARM64 or unsupported element sizes.
-    transpose::transpose(input, output, width, height);
+    super::portable::transpose(input, output, width, height);
 }
 
 /// Top-level NEON transpose dispatcher for 4-byte elements.
@@ -368,12 +368,12 @@ unsafe fn transpose_neon_4b_parallel(
     width: usize,
     height: usize,
 ) {
-    use rayon::prelude::*;
+    use p3_maybe_rayon::prelude::*;
 
     // Compute stripe sizes
 
     // Number of available threads in the rayon thread pool.
-    let num_threads = rayon::current_num_threads();
+    let num_threads = current_num_threads();
 
     // Divide rows as evenly as possible among threads.
     //
@@ -1240,9 +1240,9 @@ unsafe fn transpose_neon_8b_parallel(
     width: usize,
     height: usize,
 ) {
-    use rayon::prelude::*;
+    use p3_maybe_rayon::prelude::*;
 
-    let num_threads = rayon::current_num_threads();
+    let num_threads = current_num_threads();
     let rows_per_thread = height.div_ceil(num_threads);
 
     let inp = AtomicUsize::new(input as usize);
