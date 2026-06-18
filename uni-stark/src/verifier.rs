@@ -330,8 +330,12 @@ where
         num_periodic_columns: air.num_periodic_columns(),
         ..Default::default()
     };
+    // Base trace length `N` (before any ZK extension); the quotient degree model
+    // measures trace columns as degree-`(N - 1)` polynomials and accounts for ZK
+    // separately via `is_zk`.
+    let base_degree = 1usize << base_degree_bits;
     let log_num_quotient_chunks =
-        get_log_num_quotient_chunks::<Val<SC>, A>(air, layout, config.is_zk());
+        get_log_num_quotient_chunks::<Val<SC>, A>(air, layout, base_degree, config.is_zk());
     let (_, num_quotient_chunks) = checked_log_size_sum(log_num_quotient_chunks, config.is_zk())
         .ok_or_else(|| InvalidProofShapeError::QuotientDomainTooLarge {
             air: None,

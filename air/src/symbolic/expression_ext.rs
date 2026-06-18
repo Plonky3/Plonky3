@@ -48,6 +48,14 @@ impl<F: Field, EF: ExtensionField<F>> SymLeaf for ExtLeaf<F, EF> {
         }
     }
 
+    fn poly_degree(&self, trace_len: usize, periodic_periods: &[usize]) -> usize {
+        match self {
+            Self::Base(e) => e.poly_degree(trace_len, periodic_periods),
+            Self::ExtVariable(v) => v.poly_degree(trace_len),
+            Self::ExtConstant(_) => 0,
+        }
+    }
+
     fn as_const(&self) -> Option<&F> {
         match self {
             Self::Base(SymbolicExpression::Leaf(BaseLeaf::Constant(c))) => Some(c),
