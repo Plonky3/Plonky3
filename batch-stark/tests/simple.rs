@@ -2,6 +2,7 @@ use core::borrow::Borrow;
 use core::fmt::Debug;
 use core::marker::PhantomData;
 use core::slice::from_ref;
+use std::borrow::Cow;
 
 use p3_air::{Air, AirBuilder, BaseAir, PermutationAirBuilder, WindowAccess};
 use p3_baby_bear::{BabyBear, Poseidon2BabyBear};
@@ -223,8 +224,8 @@ impl<F: Field> BaseAir<F> for PeriodicAir<F> {
         self.periodic.len()
     }
 
-    fn periodic_columns(&self) -> Vec<Vec<F>> {
-        self.periodic.clone()
+    fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+        Cow::Borrowed(&self.periodic)
     }
 }
 
