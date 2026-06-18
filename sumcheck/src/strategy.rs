@@ -13,7 +13,7 @@ use p3_multilinear_util::point::Point;
 use p3_multilinear_util::poly::Poly;
 
 use crate::constraints::Constraint;
-use crate::product_polynomial::ProductPolynomial;
+use crate::product_polynomial::{PolyView, ProductPolynomial};
 use crate::{SumcheckData, extrapolate_01inf};
 
 /// Input size at which the round-coefficient routines switch from serial to parallel execution.
@@ -384,6 +384,13 @@ impl<F: Field, EF: ExtensionField<F>> SumcheckProver<F, EF> {
     #[tracing::instrument(skip_all)]
     pub fn evals(&self) -> Poly<EF> {
         self.poly.evals()
+    }
+
+    /// Borrows the current evaluation polynomial in its live representation.
+    ///
+    /// No unpacking or copying takes place.
+    pub const fn evals_view(&self) -> PolyView<'_, F, EF> {
+        self.poly.evals_view()
     }
 
     /// Evaluates `f` at a given multilinear point via interpolation.
