@@ -59,11 +59,11 @@ impl AirLayout {
 /// degree at most `d * (trace_len - 1) + 1` (the `+ 1` covers the linear
 /// transition selector). We therefore return the smallest `d` satisfying
 /// `poly_degree <= d * (trace_len - 1) + 1`.
-pub fn constraint_degree_from_poly_degree(poly_degree: usize, trace_len: usize) -> usize {
+pub const fn constraint_degree_from_poly_degree(poly_degree: usize, trace_len: usize) -> usize {
     if poly_degree == 0 {
         return 0;
     }
-    let denom = trace_len.saturating_sub(1).max(1);
+    let denom = if trace_len > 1 { trace_len - 1 } else { 1 };
     (poly_degree - 1).div_ceil(denom)
 }
 
