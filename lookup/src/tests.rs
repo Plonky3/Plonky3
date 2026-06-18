@@ -1374,6 +1374,97 @@ fn generate_permutation_exclusive_selects_active_branch() {
     }
 }
 
+/// Build a 2-branch exclusive lookup over a 4-column main `[flag0, key0, flag1, key1]`.
+///
+/// - Branch 0 reads `(flag0, key0)`, branch 1 reads `(flag1, key1)`.
+/// - The caller supplies the raw trace cells, so a test can plant a malformed witness.
+fn exclusive_two_branch_lookup() -> Vec<Lookup<F>> {
+    // Symbolic handles for the four main columns.
+    let sb = SymbolicAirBuilder::<F>::new(AirLayout {
+        main_width: 4,
+        ..Default::default()
+    });
+    let cols = sb.main();
+    let cols = cols.current_slice();
+
+    // Branch 0 reads (flag0, key0); branch 1 reads (flag1, key1).
+    vec![Lookup {
+        kind: Kind::Local,
+        elements: vec![vec![cols[1].into()], vec![cols[3].into()]],
+        multiplicities: vec![
+            SymbolicExpression::from(F::ONE),
+            SymbolicExpression::from(F::ONE),
+        ],
+        count_weight: 1,
+        column: 0,
+        flags: Some(vec![cols[0].into(), cols[2].into()]),
+    }]
+}
+
+#[test]
+#[should_panic = "exclusive flag must be boolean"]
+fn generate_permutation_exclusive_rejects_non_boolean_flag() {
+    // Soundness contract: an exclusive selector flag must be 0 or 1.
+    //            The prover checks the concrete witness so a violating trace fails loudly.
+    //
+    // Fixture: row 0 sets flag0 = 2, a non-boolean value.
+    //
+    //     main row 0: [flag0=2, key0, flag1=0, key1]
+    //                  ^^^^^^^^ neither 0 nor 1 → debug_assert fires
+    let lookups = exclusive_two_branch_lookup();
+    let main = RowMajorMatrix::new(
+        vec![
+            // Row 0: flag0 = 2 is not boolean.
+            F::from_u32(2),
+            F::from_u32(5),
+            F::ZERO,
+            F::from_u32(9),
+            // Row 1: both branches idle, a valid row.
+            F::ZERO,
+            F::from_u32(6),
+            F::ZERO,
+            F::from_u32(7),
+        ],
+        4,
+    );
+
+    let gadget = LogUpGadget::new();
+    let challenges = vec![EF::from_u32(17), EF::from_u32(11)];
+    let _ = gadget.generate_permutation::<TestConfig>(&main, &None, &[], &lookups, &challenges);
+}
+
+#[test]
+#[should_panic = "exclusive flags must sum to at most one per row"]
+fn generate_permutation_exclusive_rejects_two_active_flags() {
+    // Soundness contract: at most one branch fires per row.
+    //            Two simultaneous flags mean the multiplexed fraction matches no single message.
+    //
+    // Fixture: row 0 fires both branches at once.
+    //
+    //     main row 0: [flag0=1, key0, flag1=1, key1]
+    //                  both active → flag_sum = 2 → debug_assert fires
+    let lookups = exclusive_two_branch_lookup();
+    let main = RowMajorMatrix::new(
+        vec![
+            // Row 0: both flags fire, violating mutual exclusivity.
+            F::ONE,
+            F::from_u32(5),
+            F::ONE,
+            F::from_u32(9),
+            // Row 1: both branches idle, a valid row.
+            F::ZERO,
+            F::from_u32(6),
+            F::ZERO,
+            F::from_u32(7),
+        ],
+        4,
+    );
+
+    let gadget = LogUpGadget::new();
+    let challenges = vec![EF::from_u32(17), EF::from_u32(11)];
+    let _ = gadget.generate_permutation::<TestConfig>(&main, &None, &[], &lookups, &challenges);
+}
+
 #[test]
 fn exclusive_query_balances_against_provider() {
     use crate::debug_util::*;

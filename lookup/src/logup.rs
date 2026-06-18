@@ -20,6 +20,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use itertools::Itertools;
 use p3_air::{ExtensionBuilder, PermutationAirBuilder, SymbolicExpression, WindowAccess};
 use p3_field::{Field, PrimeCharacteristicRing, dot_product};
 use p3_matrix::Matrix;
@@ -36,13 +37,18 @@ use crate::types::{Lookup, LookupError, LookupTerminal};
 /// Type alias for the row evaluation context used during permutation trace generation.
 pub type RowEvalContext<'a, SC> = LookupTraceBuilder<'a, SC>;
 
-/// Combine one tuple into a single extension-field value `sum_i e_i * beta^{k-1-i}`.
+/// Combine one tuple `(e_0, ..., e_{k-1})` into a single extension-field value.
 ///
-/// - The last element carries `beta^0`.
-/// - It is lifted into the extension field with no multiply.
-/// - Each leading element pairs with a hoisted power `beta^p * e_i`.
-/// - That product is extension times base.
-/// - It is cheaper than the extension times extension a Horner fold uses.
+/// ```text
+///     combine = sum_{i=0}^{k-1} e_i * beta^{k-1-i}
+///             = e_0 * beta^{k-1} + ... + e_{k-2} * beta^1 + e_{k-1} * beta^0
+/// ```
+///
+/// - The last element carries `beta^0`, so it is lifted into the extension with no multiply.
+/// - Each leading element `e_i` pairs with the hoisted power `beta^{k-1-i}`.
+/// - Those powers run `beta^{k-1}` down to `beta^1`, taken from `beta_powers[1..k]` reversed.
+/// - The product is extension times base, cheaper than the extension times extension a Horner fold uses.
+/// - This folding convention matches the symbolic side, so prover and verifier agree on the combined value.
 fn combine_tuple<SC: StarkGenericConfig>(
     elts: &[SymbolicExpression<Val<SC>>],
     beta_powers: &[SC::Challenge],
@@ -214,10 +220,13 @@ impl LogUpGadget {
         let terms = self.combine_elements::<AB, AB::ExprEF>(elements, alpha, beta);
 
         // Multiplex by the flags, accumulating the selected numerator and denominator.
+        //
+        // One flag per branch is the structural contract of an exclusive column.
+        // `zip_eq` panics on any length drift, so a malformed column never folds silently.
         let mut numerator = AB::ExprEF::ZERO;
         let mut denominator = AB::ExprEF::ZERO;
         let mut flag_sum = AB::ExprEF::ZERO;
-        for ((flag, term), mult) in flags.iter().zip(&terms).zip(multiplicities) {
+        for ((flag, term), mult) in flags.iter().zip_eq(&terms).zip_eq(multiplicities) {
             denominator += flag.clone() * term.clone();
             numerator += flag.clone() * mult.clone();
             flag_sum += flag.clone();
@@ -447,7 +456,7 @@ impl LookupProtocol for LogUpGadget {
         if let Some(flags) = &lookup.flags {
             let deg_denom = flags
                 .iter()
-                .zip(&lookup.elements)
+                .zip_eq(&lookup.elements)
                 .map(|(flag, elems)| {
                     let elem_deg = elems.iter().map(|e| e.degree_multiple()).max().unwrap_or(0);
                     flag.degree_multiple() + elem_deg
@@ -459,7 +468,7 @@ impl LookupProtocol for LogUpGadget {
 
             let deg_num = flags
                 .iter()
-                .zip(&lookup.multiplicities)
+                .zip_eq(&lookup.multiplicities)
                 .map(|(flag, m)| flag.degree_multiple() + m.degree_multiple())
                 .max()
                 .unwrap_or(0);
@@ -713,6 +722,13 @@ impl LookupProtocol for LogUpGadget {
                             }
                             // Exclusive column: flags select one branch's single fraction.
                             Some(flags) => {
+                                // One flag per branch is the structural contract of the column.
+                                debug_assert_eq!(
+                                    flags.len(),
+                                    lookup.elements.len(),
+                                    "exclusive column must carry one flag per tuple"
+                                );
+
                                 // Accumulate the multiplexed numerator and denominator.
                                 //
                                 //   N = sum_k flag_k * mult_k
@@ -722,6 +738,16 @@ impl LookupProtocol for LogUpGadget {
                                 let mut denom = SC::Challenge::ZERO;
                                 for (k, elts) in lookup.elements.iter().enumerate() {
                                     let flag = flags[k].resolve(&row_ctx);
+
+                                    // Soundness contract the AIR must enforce, checked here on
+                                    // the concrete witness so a violating trace fails loudly:
+                                    //
+                                    // - each flag is boolean (selects or skips its branch),
+                                    debug_assert!(
+                                        flag.is_zero() || flag == Val::<SC>::ONE,
+                                        "exclusive flag must be boolean"
+                                    );
+
                                     flag_sum += flag;
 
                                     // An inactive branch has flag 0.
@@ -735,6 +761,12 @@ impl LookupProtocol for LogUpGadget {
                                     let term = alpha - combine_tuple::<SC>(elts, powers, &row_ctx);
                                     denom += term * SC::Challenge::from(flag);
                                 }
+
+                                // - at most one flag fires, so the boolean flags sum to 0 or 1.
+                                debug_assert!(
+                                    flag_sum.is_zero() || flag_sum == Val::<SC>::ONE,
+                                    "exclusive flags must sum to at most one per row"
+                                );
 
                                 // Fallback: an all-inactive row gets denominator 1.
                                 // Its fraction is then 0.
