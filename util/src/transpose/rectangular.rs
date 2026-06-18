@@ -368,12 +368,12 @@ unsafe fn transpose_neon_4b_parallel(
     width: usize,
     height: usize,
 ) {
-    use rayon::prelude::*;
+    use p3_maybe_rayon::prelude::*;
 
     // Compute stripe sizes
 
     // Number of available threads in the rayon thread pool.
-    let num_threads = rayon::current_num_threads();
+    let num_threads = current_num_threads();
 
     // Divide rows as evenly as possible among threads.
     //
@@ -1240,9 +1240,9 @@ unsafe fn transpose_neon_8b_parallel(
     width: usize,
     height: usize,
 ) {
-    use rayon::prelude::*;
+    use p3_maybe_rayon::prelude::*;
 
-    let num_threads = rayon::current_num_threads();
+    let num_threads = current_num_threads();
     let rows_per_thread = height.div_ceil(num_threads);
 
     let inp = AtomicUsize::new(input as usize);
