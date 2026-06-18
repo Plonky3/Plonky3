@@ -28,6 +28,7 @@ where
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
     LG: LookupProtocol,
 {
+    layout.validate_against_air(air);
     // Permutation trace: accumulator column plus one fraction column per
     // lookup, or empty when the AIR declares no lookup.
     //
@@ -165,6 +166,7 @@ where
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
     LG: LookupProtocol,
 {
+    layout.validate_against_air(air);
     let num_lookups = contexts.len();
     let num_challenges = num_lookups * lookup_gadget.num_challenges();
     // Permutation trace: accumulator column plus one fraction column per
