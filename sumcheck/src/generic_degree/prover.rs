@@ -284,9 +284,9 @@ mod tests {
         // Fixture state: a valid grinded proof over log_m = 4 rounds.
         //
         // Mutation: corrupt the last round's witness.
-        //
-        //     rounds 0..2 keep valid witnesses, so the transcript stays in sync
-        //     the final round then fails its grinding check
+        //   - rounds 0..2 keep valid witnesses
+        //   - the transcript therefore stays in sync up to the final round
+        //   - the final round then fails its grinding check
         let mut rng = SmallRng::seed_from_u64(99);
         let log_m = 4usize;
         let pow_bits = 4usize;
@@ -297,14 +297,29 @@ mod tests {
         let (mut proof, _) = prover_state.prove::<F, _>(&mut p_ch, log_m, 3, pow_bits, claimed_sum);
 
         let last_round = log_m - 1;
-        proof.pow_witnesses[last_round] += F::ONE;
+        let valid_witness = proof.pow_witnesses[last_round];
 
-        let mut v_ch = fresh_challenger();
-        let err = proof.verify(&mut v_ch, log_m, 3, pow_bits).unwrap_err();
-        match err {
-            // The failure is pinned to the corrupted round.
-            GenericDegreeError::InvalidPowWitness { round } => assert_eq!(round, last_round),
-            other => panic!("expected an invalid pow witness error, got {other:?}"),
+        // Why an offset search instead of a single `+1` tamper:
+        //   - a corrupted witness still clears the grind by chance with probability 2^-pow_bits
+        //   - parallel grinding may return any valid witness, not a fixed smallest one
+        //
+        // Walking successive offsets pins the rejection regardless of the witness grinding picked.
+        let mut offset = F::ONE;
+        loop {
+            // Replace the honest witness with a nearby, almost-certainly-invalid value.
+            proof.pow_witnesses[last_round] = valid_witness + offset;
+
+            let mut v_ch = fresh_challenger();
+            match proof.verify(&mut v_ch, log_m, 3, pow_bits) {
+                // The failure is pinned to the corrupted round.
+                Err(GenericDegreeError::InvalidPowWitness { round }) => {
+                    assert_eq!(round, last_round);
+                    break;
+                }
+                // Rare coincidental grind hit: advance to the next offset.
+                Ok(_) => offset += F::ONE,
+                Err(other) => panic!("expected an invalid pow witness error, got {other:?}"),
+            }
         }
     }
 }
