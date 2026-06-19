@@ -93,7 +93,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use p3_air::symbolic::{AirLayout, SymbolicAirBuilder, SymbolicVariable};
-    use p3_air::{AirBuilder, BaseAir, BaseEntry};
+    use p3_air::{AirBuilder, BaseAir, BaseEntry, WindowAccess};
     use p3_baby_bear::BabyBear;
 
     use super::*;
@@ -115,6 +115,23 @@ mod tests {
             for constraint in &self.constraints {
                 builder.assert_zero(*constraint);
             }
+        }
+    }
+
+    #[derive(Debug)]
+    struct TransitionQuadraticAir;
+
+    impl BaseAir<BabyBear> for TransitionQuadraticAir {
+        fn width(&self) -> usize {
+            1
+        }
+    }
+
+    impl Air<SymbolicAirBuilder<BabyBear>> for TransitionQuadraticAir {
+        fn eval(&self, builder: &mut SymbolicAirBuilder<BabyBear>) {
+            let main = builder.main();
+            let x = main.current(0).unwrap();
+            builder.when_transition().assert_zero(x * x);
         }
     }
 
@@ -159,6 +176,14 @@ mod tests {
         };
         let log_degree = get_log_num_quotient_chunks(&air, air_layout(&air, 3), 8, 0);
         assert_eq!(log_degree, log2_ceil_usize(1));
+    }
+
+    #[test]
+    fn transition_selector_contributes_to_quotient_degree() {
+        let air = TransitionQuadraticAir;
+        let log_chunks = get_log_num_quotient_chunks(&air, air_layout(&air, 0), 8, 0);
+
+        assert_eq!(log_chunks, log2_ceil_usize(2));
     }
 
     /// A mock AIR with a configurable `max_constraint_degree` hint.

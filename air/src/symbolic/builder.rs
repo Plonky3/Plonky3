@@ -127,10 +127,8 @@ where
 {
     let (base_constraints, extension_constraints) = get_all_symbolic_constraints(air, layout);
 
-    // Without periodic columns the trace-size-aware degree coincides with the cached
-    // degree multiple: the linear transition selector never changes the constraint
-    // degree, and every other leaf scales with `trace_len - 1`. Reuse the cached
-    // degrees and skip the expression walk entirely.
+    // Without periodic columns the cached degree multiple is a conservative
+    // trace-size-independent bound, so we can skip the expression walk entirely.
     if layout.num_periodic_columns == 0 {
         return base_constraints
             .iter()
