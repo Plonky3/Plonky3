@@ -26,6 +26,7 @@ use thiserror::Error;
 
 use crate::folder::MultilinearFolder;
 use crate::metadata::ConstraintMetadata;
+use crate::opening::OpeningClaims;
 use crate::selectors::BoundaryEvals;
 
 /// Reasons the zerocheck verifier rejects a proof.
@@ -37,12 +38,20 @@ pub enum ZerocheckError {
     /// The proof claimed a nonzero sum, but a zerocheck always sums to zero.
     #[error("zerocheck claimed sum is nonzero")]
     NonZeroClaimedSum,
-    /// An opening vector did not carry exactly one value per main column.
-    #[error("zerocheck opening count mismatch: expected {expected}, got {actual}")]
+    /// The current-row openings did not carry exactly one value per main column.
+    #[error("zerocheck current-row opening count mismatch: expected {expected}, got {actual}")]
     OpeningCountMismatch {
         /// Number of main columns the AIR declares.
         expected: usize,
-        /// Number of opened values the proof carries.
+        /// Number of current-row values the proof carries.
+        actual: usize,
+    },
+    /// The next-row openings did not carry exactly one value per next-row column.
+    #[error("zerocheck next-row opening count mismatch: expected {expected}, got {actual}")]
+    NextOpeningCountMismatch {
+        /// Number of columns the AIR reads on the next row.
+        expected: usize,
+        /// Number of next-row values the proof carries.
         actual: usize,
     },
     /// The reduced sum did not match the constraint evaluated at the random point.
@@ -55,10 +64,14 @@ pub enum ZerocheckError {
 pub struct ZerocheckProof<F, EF> {
     /// Generic-degree sumcheck transcript for `sum_x eq(tau, x) * g(x) = 0`.
     pub sumcheck: GenericDegreeProof<F, EF>,
-    /// Each main column's multilinear extension at the sumcheck point.
-    pub local_at_point: Vec<EF>,
-    /// Each main column's repeat-last successor at the sumcheck point.
-    pub next_at_point: Vec<EF>,
+    /// Current-row value of every main column at the sumcheck point, in column order.
+    ///
+    /// These are the `Eq` opening claims.
+    pub local: Vec<EF>,
+    /// Repeat-last successor value of each column the AIR reads on the next row.
+    ///
+    /// These are the `Next` opening claims, in the AIR's declared next-row order.
+    pub next: Vec<EF>,
 }
 
 /// An AIR zerocheck instance.
@@ -195,13 +208,20 @@ impl<'a, A> AirZerocheck<'a, A> {
             state.prove::<F, _>(challenger, log_height, degree, self.pow_bits, EF::ZERO);
 
         // After every variable is bound, each table holds its evaluation at the point.
-        let local_at_point = state.local.iter().map(|p| p.as_slice()[0]).collect();
-        let next_at_point = state.next.iter().map(|p| p.as_slice()[0]).collect();
+        let local = state.local.iter().map(|p| p.as_slice()[0]).collect();
+
+        // Only the columns the AIR reads on the next row need a successor claim.
+        let next = self
+            .air
+            .main_next_row_columns()
+            .iter()
+            .map(|&column| state.next[column].as_slice()[0])
+            .collect();
 
         ZerocheckProof {
             sumcheck,
-            local_at_point,
-            next_at_point,
+            local,
+            next,
         }
     }
 
@@ -223,7 +243,8 @@ impl<'a, A> AirZerocheck<'a, A> {
     /// # Errors
     ///
     /// Returns an error when:
-    /// - an opening vector does not carry one value per main column,
+    /// - the current-row openings do not carry one value per main column,
+    /// - the next-row openings do not carry one value per next-row column,
     /// - the claimed sum is nonzero,
     /// - the inner sumcheck transcript fails to verify,
     /// - the reduced sum does not match the constraint at the random point.
@@ -248,19 +269,22 @@ impl<'a, A> AirZerocheck<'a, A> {
         let layout = self.layout::<F>();
         let width = layout.main_width;
 
-        // Each main column must contribute exactly one current-row opening.
-        if proof.local_at_point.len() != width {
+        // Only the columns the AIR reads on the next row carry a successor claim.
+        let next_columns = self.air.main_next_row_columns();
+
+        // Every main column must contribute exactly one current-row opening.
+        if proof.local.len() != width {
             return Err(ZerocheckError::OpeningCountMismatch {
                 expected: width,
-                actual: proof.local_at_point.len(),
+                actual: proof.local.len(),
             });
         }
 
-        // Each main column must contribute exactly one next-row opening.
-        if proof.next_at_point.len() != width {
-            return Err(ZerocheckError::OpeningCountMismatch {
-                expected: width,
-                actual: proof.next_at_point.len(),
+        // Every next-row column must contribute exactly one successor opening.
+        if proof.next.len() != next_columns.len() {
+            return Err(ZerocheckError::NextOpeningCountMismatch {
+                expected: next_columns.len(),
+                actual: proof.next.len(),
             });
         }
 
@@ -284,17 +308,15 @@ impl<'a, A> AirZerocheck<'a, A> {
             .verify(challenger, log_height, degree, self.pow_bits)
             .map_err(ZerocheckError::Sumcheck)?;
 
-        // Recompute the integrand at the random point from the opened column values.
-        let boundary = BoundaryEvals::at(point.as_slice());
-        let g = MultilinearFolder::new(
-            &proof.local_at_point,
-            &proof.next_at_point,
-            boundary,
-            public_values,
-            alpha,
-        )
-        .eval_air(self.air);
-        let eq_at_point = Point::eval_eq(&tau, point.as_slice());
+        // Reduce the proof to opening claims at the bound point.
+        let claims = OpeningClaims::new(point, proof.local.clone(), &next_columns, &proof.next);
+
+        // Reconstruct the rows the folder reads, then recompute the alpha-batched constraint.
+        let next_row = claims.next_row(width);
+        let boundary = BoundaryEvals::at(claims.point.as_slice());
+        let g = MultilinearFolder::new(&claims.local, &next_row, boundary, public_values, alpha)
+            .eval_air(self.air);
+        let eq_at_point = Point::eval_eq(&tau, claims.point.as_slice());
 
         // Close the protocol: the reduced sum must equal the integrand at the point.
         if final_sum != eq_at_point * g {
@@ -647,7 +669,27 @@ mod tests {
 
         let mut prover_challenger = fresh_challenger();
         let mut proof = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
-        proof.local_at_point[0] += EF::ONE;
+        proof.local[0] += EF::ONE;
+
+        let mut verifier_challenger = fresh_challenger();
+        let err = zerocheck
+            .verify::<F, EF, _>(&proof, log2_strict_usize(n), &pis, &mut verifier_challenger)
+            .unwrap_err();
+        assert!(matches!(err, ZerocheckError::FinalSumMismatch));
+    }
+
+    #[test]
+    fn zerocheck_rejects_tampered_next_opening() {
+        // Corrupt a next-row (successor) opening; the final check must reject.
+        // Fibonacci reads both columns on the next row, so a next claim exists to corrupt.
+        let n = 8;
+        let trace = fib_trace(n);
+        let pis = fib_public_values(n);
+        let zerocheck = AirZerocheck::new(&FibAir, 0);
+
+        let mut prover_challenger = fresh_challenger();
+        let mut proof = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
+        proof.next[0] += EF::ONE;
 
         let mut verifier_challenger = fresh_challenger();
         let err = zerocheck
@@ -699,7 +741,7 @@ mod tests {
         let mut proof = zerocheck.prove::<F, EF, _>(&trace, &pis, &mut prover_challenger);
 
         // Remove one opened value so the count no longer matches the AIR width.
-        proof.local_at_point.pop();
+        proof.local.pop();
 
         let mut verifier_challenger = fresh_challenger();
         let err = zerocheck
@@ -712,5 +754,70 @@ mod tests {
                 actual: 1
             }
         ));
+    }
+
+    /// Width-2 AIR that holds column 0 constant and reads only column 0 on the next row.
+    ///
+    /// It declares a next-row subset, so only one column needs a successor claim.
+    struct ConstColAir;
+
+    impl<X> BaseAir<X> for ConstColAir {
+        fn width(&self) -> usize {
+            2
+        }
+        fn main_next_row_columns(&self) -> Vec<usize> {
+            // Only column 0 is read on the next row; column 1 is current-row only.
+            alloc::vec![0]
+        }
+    }
+
+    impl<AB: AirBuilder> Air<AB> for ConstColAir {
+        fn eval(&self, builder: &mut AB) {
+            // Bind the current row and the single shifted entry the constraint reads.
+            let main = builder.main();
+            let local0 = main.current_slice()[0];
+            let next0 = main.next_slice()[0];
+
+            // Column 0 keeps its value from one row to the next.
+            builder.when_transition().assert_eq(local0, next0);
+        }
+    }
+
+    /// Trace whose column 0 is the constant `5` and column 1 counts up by row.
+    fn const_col_trace(n: usize) -> RowMajorMatrix<F> {
+        let mut values = Vec::with_capacity(2 * n);
+        for i in 0..n {
+            // Column 0 is constant, so the transition constraint always holds.
+            values.push(F::from_u64(5));
+            // Column 1 is unconstrained filler.
+            values.push(F::from_u64(i as u64));
+        }
+        RowMajorMatrix::new(values, 2)
+    }
+
+    #[test]
+    fn next_claims_cover_only_declared_columns() {
+        // This AIR commits two columns but reads only column 0 on the next row.
+        // So it needs a successor claim for that one column, not for both.
+        //
+        //     current-row (Eq) claims : column 0, column 1   -> 2
+        //     next-row    (Next) claim: column 0              -> 1
+        let n = 8;
+        let trace = const_col_trace(n);
+        let zerocheck = AirZerocheck::new(&ConstColAir, 0);
+
+        let mut prover_challenger = fresh_challenger();
+        let proof = zerocheck.prove::<F, EF, _>(&trace, &[], &mut prover_challenger);
+
+        // Two committed columns yield two current-row claims.
+        assert_eq!(proof.local.len(), 2);
+        // Only the read-ahead column yields a next-row claim.
+        assert_eq!(proof.next.len(), 1);
+
+        // The reduction still verifies end to end.
+        let mut verifier_challenger = fresh_challenger();
+        zerocheck
+            .verify::<F, EF, _>(&proof, log2_strict_usize(n), &[], &mut verifier_challenger)
+            .expect("subset-next AIR must verify");
     }
 }
