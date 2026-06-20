@@ -1,8 +1,14 @@
 name: CI
 
 on:
+  # Release-plz verifies CI on the post-merge commit of the base branch, so
+  # push CI must run on every branch that can host a release: main and the
+  # vX.Y.Z version branches (including -rcN pre-releases).
   push:
-    branches: [ "main" ]
+    branches:
+      - "main"
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-rc[0-9]+"
   pull_request:
     branches: [ "*" ]
 
