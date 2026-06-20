@@ -445,15 +445,6 @@ where
         let mut local_row = EF::zero_vec(width);
         let mut next_row = EF::zero_vec(width);
 
-        // Interpolate a table's active variable to `z` at residual index `s`,
-        // reading the two halves in place. This matches `fix_prefix_var(z)[s]`
-        // but allocates no folded table per node.
-        let interp = |table: &Poly<EF>, s: usize, z: EF| {
-            let lo = table.as_slice()[s];
-            let hi = table.as_slice()[s + half];
-            lo + (hi - lo) * z
-        };
-
         // Transmit h at nodes 0, 2, 3, ..., degree; the verifier recovers h(1).
         let mut out = Vec::with_capacity(self.degree);
         for node in core::iter::once(0).chain(2..=self.degree) {
@@ -463,13 +454,13 @@ where
             let mut acc = EF::ZERO;
             for s in 0..half {
                 for c in 0..width {
-                    local_row[c] = interp(&self.local[c], s, z);
-                    next_row[c] = interp(&self.next[c], s, z);
+                    local_row[c] = self.local[c].fix_prefix_var_at(z, s);
+                    next_row[c] = self.next[c].fix_prefix_var_at(z, s);
                 }
                 let boundary = BoundaryEvals {
-                    first: interp(&self.first, s, z),
-                    last: interp(&self.last, s, z),
-                    transition: interp(&self.transition, s, z),
+                    first: self.first.fix_prefix_var_at(z, s),
+                    last: self.last.fix_prefix_var_at(z, s),
+                    transition: self.transition.fix_prefix_var_at(z, s),
                 };
                 let g = MultilinearFolder::new(
                     &local_row,
@@ -479,7 +470,7 @@ where
                     self.alpha,
                 )
                 .eval_air(self.air);
-                acc += interp(&self.eq, s, z) * g;
+                acc += self.eq.fix_prefix_var_at(z, s) * g;
             }
             out.push(acc);
         }
