@@ -525,6 +525,29 @@ impl<A: Copy + Send + Sync + PrimeCharacteristicRing> Poly<A> {
         }
     }
 
+    /// Evaluates the prefix-variable fix at a single residual index, without
+    /// allocating the folded polynomial.
+    ///
+    /// Equivalent to `self.fix_prefix_var(r)[index]`:
+    /// ```text
+    /// out = (1 - r) * p(0, index) + r * p(1, index)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` is out of range for the residual hypercube
+    /// (`index >= self.num_evals() / 2`).
+    pub fn fix_prefix_var_at<F>(&self, r: F, index: usize) -> F
+    where
+        F: Algebra<A> + Copy,
+    {
+        // The residual hypercube is the x_0 = 0 half; the x_0 = 1 half starts at `half`.
+        let half = self.num_evals() / 2;
+        let lo = self.as_slice()[index];
+        let hi = self.as_slice()[index + half];
+        r * (hi - lo) + lo
+    }
+
     /// Fixes the prefix variable at a challenge value, returning a folded polynomial
     /// in SIMD-packed form.
     ///
@@ -1828,6 +1851,22 @@ pub(crate) mod test {
                 compressed.fix_prefix_var_mut(zi);
             }
             assert_eq!(compressed.as_constant().unwrap(), poly.eval_base(&point));
+        }
+    }
+
+    #[test]
+    fn test_fix_prefix_var_at() {
+        let mut rng = SmallRng::seed_from_u64(0);
+        for k in 1..=12 {
+            let poly = Poly::<F>::rand(&mut rng, k);
+            let point: Point<EF> = Point::rand(&mut rng, 1);
+            let z = point.as_slice()[0];
+
+            // The pointwise variant must agree with the full folded table.
+            let folded = poly.fix_prefix_var(z);
+            for s in 0..folded.num_evals() {
+                assert_eq!(poly.fix_prefix_var_at(z, s), folded.as_slice()[s]);
+            }
         }
     }
 
