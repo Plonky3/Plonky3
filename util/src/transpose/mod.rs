@@ -2,6 +2,7 @@
 //!
 //! This module provides high-performance transpose implementations
 
+mod portable;
 mod rectangular;
 mod square;
 

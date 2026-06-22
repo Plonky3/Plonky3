@@ -265,7 +265,11 @@ where
         let lookup_gadget = LogUpGadget::new();
         let lookups: Vec<Lookups<Val<SC>>> = airs
             .iter()
-            .map(|air| {
+            .zip(trace_ext_degree_bits.iter())
+            .map(|(air, &ext_db)| {
+                // Base trace length `N` (before any ZK extension), matching what the
+                // prover and verifier feed the degree model for this instance.
+                let trace_len = 1usize << (ext_db - is_zk);
                 let unpacked = Lookups::<Val<SC>>::from_air::<SC::Challenge, A>(air);
 
                 // `log_chunks` fixes the quotient bucket: n_chunks = 2^log_chunks.
@@ -273,6 +277,7 @@ where
                     get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
                         air,
                         AirLayout::from_air(air),
+                        trace_len,
                         &unpacked,
                         is_zk,
                         &lookup_gadget,
@@ -290,6 +295,7 @@ where
                     get_log_num_quotient_chunks::<Val<SC>, SC::Challenge, A, LogUpGadget>(
                         air,
                         AirLayout::from_air(air),
+                        trace_len,
                         &packed,
                         is_zk,
                         &lookup_gadget,

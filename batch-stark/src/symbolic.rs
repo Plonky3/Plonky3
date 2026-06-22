@@ -1,7 +1,10 @@
 use alloc::vec::Vec;
 
 use p3_air::Air;
-use p3_air::symbolic::{AirLayout, ConstraintLayout, SymbolicExpression, SymbolicExpressionExt};
+use p3_air::symbolic::{
+    AirLayout, ConstraintLayout, SymbolicExpression, SymbolicExpressionExt,
+    constraint_degree_from_poly_degree,
+};
 use p3_field::{Algebra, ExtensionField, Field};
 use p3_lookup::{InteractionSymbolicBuilder, Lookup, LookupProtocol};
 use p3_util::log2_ceil_usize;
@@ -25,6 +28,7 @@ where
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
     LG: LookupProtocol,
 {
+    layout.validate_against_air(air);
     // Permutation trace: accumulator column plus one fraction column per
     // lookup, or empty when the AIR declares no lookup.
     //
@@ -49,6 +53,7 @@ where
 pub fn get_log_num_quotient_chunks<F, EF, A, LG>(
     air: &A,
     layout: AirLayout,
+    trace_len: usize,
     contexts: &[Lookup<F>],
     is_zk: usize,
     lookup_gadget: &LG,
@@ -77,7 +82,8 @@ where
         // a different hint than the verifier computes for itself.
         debug_assert!(
             {
-                let actual = get_max_constraint_degree(air, layout, contexts, lookup_gadget);
+                let actual =
+                    get_max_constraint_degree(air, layout, trace_len, contexts, lookup_gadget);
                 max_degree >= actual
             },
             "max_constraint_degree() hint {} with lookup degree {} is too small; \
@@ -91,7 +97,7 @@ where
 
     // We pad to at least degree 2, since a quotient argument doesn't make sense with smaller degrees.
     let constraint_degree =
-        (get_max_constraint_degree(air, layout, contexts, lookup_gadget) + is_zk).max(2);
+        (get_max_constraint_degree(air, layout, trace_len, contexts, lookup_gadget) + is_zk).max(2);
 
     // The quotient's actual degree is approximately (max_constraint_degree - 1) n,
     // where subtracting 1 comes from division by the vanishing polynomial.
@@ -103,6 +109,7 @@ where
 pub fn get_max_constraint_degree<F, EF, A, LG>(
     air: &A,
     layout: AirLayout,
+    trace_len: usize,
     contexts: &[Lookup<F>],
     lookup_gadget: &LG,
 ) -> usize
@@ -114,13 +121,32 @@ where
     LG: LookupProtocol,
 {
     let (base, extension) = get_symbolic_constraints(air, layout, contexts, lookup_gadget);
-    let base_degree = base.iter().map(|c| c.degree_multiple()).max().unwrap_or(0);
-    let extension_degree = extension
+
+    // Without periodic columns the trace-size-aware degree coincides with the cached
+    // degree multiple, so reuse it and skip the expression walk entirely.
+    if layout.num_periodic_columns == 0 {
+        return base
+            .iter()
+            .map(|c| c.degree_multiple())
+            .chain(extension.iter().map(|c| c.degree_multiple()))
+            .max()
+            .unwrap_or(0);
+    }
+
+    // Period (cycle length) of each periodic column, indexed by periodic column index.
+    let periodic_periods: Vec<usize> = air.periodic_columns().iter().map(Vec::len).collect();
+
+    let base_degree = base
         .iter()
-        .map(|c| c.degree_multiple())
+        .map(|c| c.poly_degree(trace_len, &periodic_periods))
         .max()
         .unwrap_or(0);
-    base_degree.max(extension_degree)
+    let extension_degree = extension
+        .iter()
+        .map(|c| c.poly_degree(trace_len, &periodic_periods))
+        .max()
+        .unwrap_or(0);
+    constraint_degree_from_poly_degree(base_degree.max(extension_degree), trace_len)
 }
 
 #[instrument(name = "evaluate constraints symbolically", skip_all, level = "debug")]
@@ -140,6 +166,7 @@ where
     SymbolicExpressionExt<F, EF>: Algebra<EF>,
     LG: LookupProtocol,
 {
+    layout.validate_against_air(air);
     let num_lookups = contexts.len();
     let num_challenges = num_lookups * lookup_gadget.num_challenges();
     // Permutation trace: accumulator column plus one fraction column per

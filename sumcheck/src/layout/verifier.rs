@@ -311,7 +311,10 @@ impl<F: Field, EF: ExtensionField<F>> Verifier<F, EF> {
                 // Next group: one repeat-last successor statement per claim's next openings.
                 let mut next_statement = NextStatement::initialize(self.k);
                 for opening in claim.next_openings() {
-                    let col = opening.poly_idx().unwrap();
+                    // Recorded concrete openings always bind a column, never virtual.
+                    let col = opening
+                        .poly_idx()
+                        .expect("concrete claims only hold column-bound openings");
                     // The successor weight depends on which end the folded variables sit.
                     let var_order = if self.strategy.reverse_selectors {
                         VariableOrder::Suffix

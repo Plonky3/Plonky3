@@ -388,6 +388,14 @@ impl Field for Mersenne31 {
         P.into()
     }
 
+    #[inline]
+    fn try_sqrt(&self) -> Option<Self> {
+        // Mersenne31 has `p = 2^31 - 1 ≡ 3 (mod 4)`, so `a^((p+1)/4)` is a square
+        // root of `a` whenever one exists. Here `(p + 1)/4 = 2^29`.
+        let candidate = self.exp_power_of_2(29);
+        (candidate.square() == *self).then_some(candidate)
+    }
+
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     #[inline]
     fn batched_columnwise_dot_product<EF, R, I, const N: usize>(

@@ -18,13 +18,13 @@ use tracing::instrument;
 /// # Input
 ///
 /// A `k × n` matrix where column `j` holds the squared powers of
-/// variable `v_j` in descending exponent order:
+/// variable `v_j` in ascending exponent order:
 ///
 /// ```text
-/// row 0: [v_1^{2^{k-1}}, v_2^{2^{k-1}}, …, v_n^{2^{k-1}}]
-/// row 1: [v_1^{2^{k-2}}, v_2^{2^{k-2}}, …, v_n^{2^{k-2}}]
+/// row 0:   [v_1^{2^0},     v_2^{2^0},     …, v_n^{2^0}    ]
+/// row 1:   [v_1^{2^1},     v_2^{2^1},     …, v_n^{2^1}    ]
 ///   ⋮
-/// row k-1: [v_1^1,         v_2^1,         …, v_n^1        ]
+/// row k-1: [v_1^{2^{k-1}}, v_2^{2^{k-1}}, …, v_n^{2^{k-1}}]
 /// ```
 ///
 /// # Output
@@ -224,7 +224,7 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
     ///
     /// # Panics
     ///
-    /// Panics if the nu
+    /// Panics if the number of `vars` differs from the number of `evaluations`.
     #[must_use]
     pub const fn new(num_variables: usize, vars: Vec<F>, evaluations: Vec<EF>) -> Self {
         assert!(vars.len() == evaluations.len());
@@ -357,7 +357,6 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
     ///
     /// - `shift`: Power offset for challenge. Constraint `i` uses weight `γ^{i+shift}`.
     ///   Allows multiple statement types to use non-overlapping challenge powers.
-    /// Batches all constraints into a single weighted polynomial and target sum for sumcheck.
     ///
     /// # Algorithm
     ///
@@ -387,6 +386,9 @@ impl<F: Field, EF: ExtensionField<F>> SelectStatement<F, EF> {
         if self.vars.is_empty() {
             return;
         }
+
+        // Invariant: the scalar accumulator spans the full hypercube of this statement.
+        assert_eq!(acc_weights.num_variables(), self.num_variables());
 
         // Extract dimensions for clarity.
         //
@@ -1240,6 +1242,21 @@ mod tests {
             prop_assert_eq!(s_wt.as_slice(), &unpacked[..]);
             prop_assert_eq!(s_sum, p_sum);
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion `left == right` failed")]
+    fn combine_rejects_mis_sized_accumulator() {
+        // Fixture state: a 2-variable statement carrying one constraint.
+        let mut statement = SelectStatement::<F, F>::initialize(2);
+        statement.add_constraint(F::from_u64(5), F::from_u64(100));
+
+        // Fixture state: accumulator over 3 variables, not the required 2.
+        let mut acc_weights = Poly::zero(3);
+        let mut acc_sum = F::ZERO;
+
+        // Invariant: the accumulator must span the statement's hypercube, so this panics.
+        statement.combine(&mut acc_weights, &mut acc_sum, F::from_u64(2), 0);
     }
 
     #[test]

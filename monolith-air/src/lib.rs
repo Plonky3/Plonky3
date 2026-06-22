@@ -104,7 +104,7 @@ mod tests {
             main_width: air.width(),
             ..Default::default()
         };
-        let degree = get_max_constraint_degree::<F, _>(&air, layout);
+        let degree = get_max_constraint_degree::<F, _>(&air, layout, 1 << 6);
 
         // Cap set by the chi AND product binding (degree 3); all other
         // constraints are degree ≤ 2.

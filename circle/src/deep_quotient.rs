@@ -82,17 +82,23 @@ pub(crate) fn deep_quotient_vanishing_part<F: ComplexExtendable, EF: ExtensionFi
 ///
 /// # Returns
 ///
-/// The DEEP quotient value for this row.
+/// - `Some(value)`: the DEEP quotient value for this row.
+/// - `None`: the opening point coincides with this query point, so the denominator vanishes.
 pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<F>>(
     alpha: EF,
     x: Point<F>,
     zeta: Point<EF>,
     ps_at_x: &[F],
     ps_at_zeta: &[EF],
-) -> EF {
+) -> Option<EF> {
     // Compute the vanishing part: handles the (x - zeta) denominator
     let (vp_num, vp_denom) =
         deep_quotient_vanishing_part(x, zeta, alpha.exp_u64(ps_at_x.len() as u64));
+
+    // On the circle, the denominator `|v_p(zeta)|^2` reduces to `2 * (1 - (x - zeta).x)`.
+    // This is zero exactly when `x == zeta`.
+    // Return `None` there so the caller rejects the opening instead of dividing by zero.
+    let vp_denom_inv = vp_denom.try_inverse()?;
 
     // Compute the constraint part: handles the f(x) - f(zeta) numerator
     let constraint_part = dot_product::<EF, _, _>(
@@ -101,7 +107,7 @@ pub(crate) fn deep_quotient_reduce_row<F: ComplexExtendable, EF: ExtensionField<
     );
 
     // Combine vanishing part and constraint part
-    (vp_num / vp_denom) * constraint_part
+    Some(vp_num * vp_denom_inv * constraint_part)
 }
 
 /// The point-dependent part of the DEEP quotient on a fixed domain.
@@ -345,6 +351,7 @@ mod tests {
             .zip(domain.points())
             .map(|(ps_at_x, x)| {
                 deep_quotient_reduce_row(alpha, x, zeta, &ps_at_x.collect_vec(), &ps_at_zeta)
+                    .unwrap()
             })
             .collect_vec();
         assert_eq!(cfft_permute_slice(&mat_reduced), row_reduced);
@@ -471,5 +478,32 @@ mod tests {
                 &coeffs.values[(1 << log_n) + 1..]
             );
         }
+    }
+
+    #[test]
+    fn reduce_row_rejects_opening_point_on_query_point() {
+        // Invariant: the DEEP-quotient denominator is `2 * (1 - (x - zeta).x)`.
+        // It vanishes exactly when the opening point `zeta` equals the query point `x`.
+        //
+        //     x == zeta  ->  denominator 0     ->  None
+        //     x != zeta  ->  denominator != 0  ->  Some(quotient)
+
+        // A query point on the circle domain, in the base field.
+        let x: Point<F> = Point::from_projective_line(F::from_u8(5));
+
+        // Challenge scalar and dummy column evaluations.
+        // Their values never affect whether the denominator vanishes.
+        let alpha = EF::from_u8(7);
+        let ps_at_x = [F::from_u8(1), F::from_u8(2)];
+        let ps_at_zeta = [EF::from_u8(3), EF::from_u8(4)];
+
+        // Lift the query point's coordinates into the extension field.
+        // The opening point is now the same point, so `x - zeta` is the group identity.
+        let zeta_on_x: Point<EF> = Point::new(EF::from(x.x), EF::from(x.y));
+        assert!(deep_quotient_reduce_row(alpha, x, zeta_on_x, &ps_at_x, &ps_at_zeta).is_none());
+
+        // A distinct opening point keeps the denominator nonzero and reduces normally.
+        let zeta_off: Point<EF> = Point::from_projective_line(EF::from_u8(9));
+        assert!(deep_quotient_reduce_row(alpha, x, zeta_off, &ps_at_x, &ps_at_zeta).is_some());
     }
 }

@@ -183,9 +183,8 @@ where
     ) where
         Challenger: CanObserve<MT::Commitment>,
     {
-        let folded_evaluations = &round_state.sumcheck_prover.evals();
         let num_variables = self.num_variables - self.total_folded_through(round_index);
-        assert_eq!(num_variables, folded_evaluations.num_variables());
+        assert_eq!(num_variables, round_state.sumcheck_prover.num_variables());
 
         // Final round: send polynomial in the clear.
         if round_index == self.n_rounds() {
@@ -196,11 +195,12 @@ where
         let folding_factor_next = self.round_folding_factor(round_index + 1);
         let inv_rate = self.inv_rate(round_index);
 
+        // Commit straight from the live sumcheck buffer; no scalar copy is materialized.
         let (root, prover_data) = commit_extension(
             variable_order,
             &self.dft,
             &self.extension_mmcs,
-            folded_evaluations,
+            round_state.sumcheck_prover.evals_view(),
             folding_factor_next,
             inv_rate,
         );
@@ -337,8 +337,10 @@ where
         round_state: &mut WhirRoundState<EF, F, MT>,
     ) {
         // Send final polynomial coefficients in the clear.
-        challenger.observe_algebra_slice(round_state.sumcheck_prover.evals().as_slice());
-        proof.final_poly = Some(round_state.sumcheck_prover.evals());
+        // Unpack once; the transcript and the proof share the same copy.
+        let final_poly = round_state.sumcheck_prover.evals();
+        challenger.observe_algebra_slice(final_poly.as_slice());
+        proof.final_poly = Some(final_poly);
 
         // PoW grinding for the final round.
         if self.final_pow_bits > 0 {

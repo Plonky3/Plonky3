@@ -4,9 +4,9 @@ use alloc::format;
 use core::fmt;
 use core::fmt::Display;
 
-use p3_field::{Dup, PrimeCharacteristicRing};
+use p3_field::{Dup, ExtensionField, Field, PrimeCharacteristicRing};
 
-use crate::{AirBuilder, ExtensionBuilder, FilteredAirBuilder};
+use crate::{AirBuilder, ExtensionBuilder, FilteredAirBuilder, SymbolicAirBuilder};
 
 /// A lazily evaluated constraint label.
 ///
@@ -209,6 +209,8 @@ impl<T: PassthroughNamedAirBuilder> NamedAirBuilder for T {
         self.assert_zeros(array);
     }
 }
+
+impl<F: Field, EF: ExtensionField<F>> PassthroughNamedAirBuilder for SymbolicAirBuilder<F, EF> {}
 
 impl<AB: NamedAirBuilder> NamedAirBuilder for FilteredAirBuilder<'_, AB> {
     fn assert_zero_named<I, N>(&mut self, x: I, name: N)

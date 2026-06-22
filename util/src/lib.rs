@@ -8,7 +8,7 @@ use alloc::slice;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::any::type_name;
-use core::hint::unreachable_unchecked;
+use core::hint::assert_unchecked;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::{iter, mem};
 
@@ -81,7 +81,7 @@ pub const fn log2_strict_usize(n: usize) -> usize {
     // Tell the optimizer about the semantics of `log2_strict`. i.e. it can replace `n` with
     // `1 << res` and vice versa.
     unsafe {
-        assume(n == 1 << res);
+        assert_unchecked(n == 1 << res);
     }
     res as usize
 }
@@ -369,21 +369,6 @@ unsafe fn reverse_slice_index_bits_chunks<F>(
                     1 << lb_chunk_size,
                 );
             }
-        }
-    }
-}
-
-/// Allow the compiler to assume that the given predicate `p` is always `true`.
-///
-/// # Safety
-///
-/// Callers must ensure that `p` is true. If this is not the case, the behavior is undefined.
-#[inline(always)]
-pub const unsafe fn assume(p: bool) {
-    debug_assert!(p);
-    if !p {
-        unsafe {
-            unreachable_unchecked();
         }
     }
 }

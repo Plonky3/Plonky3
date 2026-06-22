@@ -5,6 +5,7 @@ use core::borrow::Borrow;
 use p3_field::{Algebra, ExtensionField, Field};
 use p3_matrix::Matrix;
 use p3_matrix::dense::RowMajorMatrix;
+use serde::{Deserialize, Serialize};
 use tracing::instrument;
 
 use crate::symbolic::SymbolicExpr;
@@ -20,7 +21,7 @@ use crate::{
 ///
 /// Bundles the various width/count parameters needed to construct a
 /// [`SymbolicAirBuilder`].
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct AirLayout {
     /// Width of [`AirBuilder::preprocessed`].
     pub preprocessed_width: usize,
@@ -49,15 +50,64 @@ impl AirLayout {
             ..Default::default()
         }
     }
+
+    /// Check that the AIR-derivable widths agree with the AIR they describe.
+    ///
+    /// `main_width`, `num_public_values`, and `num_periodic_columns` are pure
+    /// functions of the AIR, so they must match exactly. A mismatch means the
+    /// [`SymbolicAirBuilder`] allocates a differently shaped trace than the AIR
+    /// expects, and `air.eval` then silently reads the wrong variables.
+    ///
+    /// `preprocessed_width` is intentionally not checked: the prover and verifier
+    /// source it from the committed preprocessed trace, which is authoritative and
+    /// may legitimately diverge from `air.preprocessed_width()` (an AIR may declare
+    /// preprocessed columns it never reads, or commit none for a given instance).
+    ///
+    /// # Panics
+    ///
+    /// Panics if any AIR-derivable width disagrees with the AIR.
+    pub fn validate_against_air<F: Clone + Send + Sync>(&self, air: &impl BaseAir<F>) {
+        assert_eq!(
+            self.main_width,
+            air.width(),
+            "AirLayout main_width does not match AIR width"
+        );
+        assert_eq!(
+            self.num_public_values,
+            air.num_public_values(),
+            "AirLayout num_public_values does not match AIR"
+        );
+        assert_eq!(
+            self.num_periodic_columns,
+            air.num_periodic_columns(),
+            "AirLayout num_periodic_columns does not match AIR"
+        );
+    }
+}
+
+/// Convert an absolute constraint-polynomial degree into the "constraint degree"
+/// used to size the quotient: the number of degree-`(trace_len - 1)` trace
+/// polynomials the constraint behaves like.
+///
+/// The quotient machinery bounds a constraint of degree `d` by a polynomial of
+/// degree at most `d * (trace_len - 1) + 1` (the `+ 1` covers the linear
+/// transition selector). We therefore return the smallest `d` satisfying
+/// `poly_degree <= d * (trace_len - 1) + 1`.
+pub const fn constraint_degree_from_poly_degree(poly_degree: usize, trace_len: usize) -> usize {
+    if poly_degree == 0 {
+        return 0;
+    }
+    let denom = if trace_len > 1 { trace_len - 1 } else { 1 };
+    (poly_degree - 1).div_ceil(denom)
 }
 
 #[instrument(skip_all, level = "debug")]
-pub fn get_max_constraint_degree<F, A>(air: &A, layout: AirLayout) -> usize
+pub fn get_max_constraint_degree<F, A>(air: &A, layout: AirLayout, trace_len: usize) -> usize
 where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
-    get_max_constraint_degree_extension(air, layout)
+    get_max_constraint_degree_extension(air, layout, trace_len)
 }
 
 #[instrument(
@@ -65,7 +115,11 @@ where
     skip_all,
     level = "debug"
 )]
-pub fn get_max_constraint_degree_extension<F, EF, A>(air: &A, layout: AirLayout) -> usize
+pub fn get_max_constraint_degree_extension<F, EF, A>(
+    air: &A,
+    layout: AirLayout,
+    trace_len: usize,
+) -> usize
 where
     F: Field,
     EF: ExtensionField<F>,
@@ -73,18 +127,35 @@ where
 {
     let (base_constraints, extension_constraints) = get_all_symbolic_constraints(air, layout);
 
+    // Without periodic columns the trace-size-aware degree coincides with the cached
+    // degree multiple: the linear transition selector never changes the constraint
+    // degree, and every other leaf scales with `trace_len - 1`. Reuse the cached
+    // degrees and skip the expression walk entirely.
+    if layout.num_periodic_columns == 0 {
+        return base_constraints
+            .iter()
+            .map(|c| c.degree_multiple())
+            .chain(extension_constraints.iter().map(|c| c.degree_multiple()))
+            .max()
+            .unwrap_or(0);
+    }
+
+    // Period (cycle length) of each periodic column, indexed by periodic column index.
+    let periodic_periods: Vec<usize> = air.periodic_columns().iter().map(Vec::len).collect();
+
     let base_degree = base_constraints
         .iter()
-        .map(|c| c.degree_multiple())
+        .map(|c| c.poly_degree(trace_len, &periodic_periods))
         .max()
         .unwrap_or(0);
 
     let extension_degree = extension_constraints
         .iter()
-        .map(|c| c.degree_multiple())
+        .map(|c| c.poly_degree(trace_len, &periodic_periods))
         .max()
         .unwrap_or(0);
-    base_degree.max(extension_degree)
+
+    constraint_degree_from_poly_degree(base_degree.max(extension_degree), trace_len)
 }
 
 #[instrument(
@@ -97,6 +168,7 @@ where
     F: Field,
     A: Air<SymbolicAirBuilder<F>>,
 {
+    layout.validate_against_air(air);
     let mut builder = SymbolicAirBuilder::new(layout);
     air.eval(&mut builder);
     builder.base_constraints()
@@ -116,6 +188,7 @@ where
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
 {
+    layout.validate_against_air(air);
     let mut builder = SymbolicAirBuilder::new(layout);
     air.eval(&mut builder);
     builder.extension_constraints()
@@ -138,6 +211,7 @@ where
     EF: ExtensionField<F>,
     A: Air<SymbolicAirBuilder<F, EF>>,
 {
+    layout.validate_against_air(air);
     let mut builder = SymbolicAirBuilder::new(layout);
     air.eval(&mut builder);
     (builder.base_constraints(), builder.extension_constraints())
@@ -371,7 +445,7 @@ enum ConstraintType {
 /// When alpha powers are pre-computed in global order `[α^{N−1}, …, α⁰]`,
 /// the layout tells us which powers correspond to base-field constraints (for
 /// `batched_linear_combination`) and which to extension-field constraints.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ConstraintLayout {
     /// Global indices of base-field constraints, in emission order.
     pub base_indices: Vec<usize>,
@@ -454,6 +528,7 @@ where
     A: Air<SymbolicAirBuilder<F, EF>>,
     SymbolicExpression<EF>: Algebra<SymbolicExpression<F>>,
 {
+    layout.validate_against_air(air);
     let mut builder = SymbolicAirBuilder::new(layout);
     air.eval(&mut builder);
     builder.constraint_layout()
@@ -461,6 +536,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use alloc::borrow::Cow;
+
     use p3_baby_bear::BabyBear;
     use p3_field::extension::BinomialExtensionField;
     use p3_field::{BasedVectorSpace, PrimeCharacteristicRing};
@@ -530,6 +607,55 @@ mod tests {
         }
     }
 
+    /// A mock AIR with two period-2 periodic columns whose single constraint is
+    /// their product.
+    #[derive(Debug)]
+    struct PeriodicProductAir;
+
+    impl BaseAir<F> for PeriodicProductAir {
+        fn width(&self) -> usize {
+            1
+        }
+        fn num_periodic_columns(&self) -> usize {
+            2
+        }
+        fn periodic_columns(&self) -> Cow<'_, [Vec<F>]> {
+            // Two columns of period 2.
+            Cow::Owned(vec![vec![F::ZERO, F::ONE], vec![F::ONE, F::new(2)]])
+        }
+    }
+
+    impl Air<SymbolicAirBuilder<F>> for PeriodicProductAir {
+        fn eval(&self, builder: &mut SymbolicAirBuilder<F>) {
+            let periodic = builder.periodic_values().to_vec();
+            builder.assert_zero(periodic[0] * periodic[1]);
+        }
+    }
+
+    #[test]
+    fn test_constraint_degree_from_poly_degree() {
+        // A degree-0 (constant) polynomial maps to constraint degree 0.
+        assert_eq!(constraint_degree_from_poly_degree(0, 8), 0);
+        // A single trace column (degree N - 1) is constraint degree 1.
+        assert_eq!(constraint_degree_from_poly_degree(7, 8), 1);
+        // A transition-guarded column (degree N) is still constraint degree 1: the
+        // linear selector is absorbed by the quotient bound's `+ 1` slack.
+        assert_eq!(constraint_degree_from_poly_degree(8, 8), 1);
+        // A degree-`2(N - 1)` polynomial is constraint degree 2.
+        assert_eq!(constraint_degree_from_poly_degree(14, 8), 2);
+    }
+
+    #[test]
+    fn test_get_max_constraint_degree_periodic_is_reduced() {
+        // The product of two period-2 columns has polynomial degree
+        // (N - N/2) + (N - N/2) = N, which is constraint degree 1 — half of the 2
+        // that two regular columns (or the trace-size-independent degree multiple)
+        // would report.
+        let air = PeriodicProductAir;
+        let l = layout(0, 1, 0, 2);
+        assert_eq!(get_max_constraint_degree(&air, l, 8), 1);
+    }
+
     #[test]
     fn test_get_max_constraint_degree_no_constraints() {
         let air = MockAir {
@@ -537,7 +663,7 @@ mod tests {
             width: 4,
         };
         let l = layout(3, air.width, air.num_public_values(), 0);
-        let max_degree = get_max_constraint_degree(&air, l);
+        let max_degree = get_max_constraint_degree(&air, l, 8);
         assert_eq!(
             max_degree, 0,
             "No constraints should result in a degree of 0"
@@ -555,7 +681,7 @@ mod tests {
             width: 4,
         };
         let l = layout(3, air.width, air.num_public_values(), 0);
-        let max_degree = get_max_constraint_degree(&air, l);
+        let max_degree = get_max_constraint_degree(&air, l, 8);
         assert_eq!(max_degree, 1, "Max constraint degree should be 1");
     }
 
@@ -823,7 +949,7 @@ mod tests {
         // The max degree covers both base and extension constraints.
         let air = ExtMockAir { width: 2 };
         let l = layout_with_perm(0, air.width, air.num_public_values(), 3, 1, 0);
-        let max_deg = get_max_constraint_degree_extension::<F, EF, _>(&air, l);
+        let max_deg = get_max_constraint_degree_extension::<F, EF, _>(&air, l, 8);
 
         // Both constraints are single variables with degree 1.
         assert_eq!(max_deg, 1);
@@ -1072,5 +1198,77 @@ mod tests {
         for &val in &ext {
             assert_eq!(val, EF::ONE);
         }
+    }
+
+    #[test]
+    fn validate_against_air_accepts_matching_layout() {
+        let air = MockAir {
+            constraints: vec![],
+            width: 4,
+        };
+        // preprocessed_width is not checked, so a non-zero value is accepted even
+        // though the AIR's static hint is 0.
+        let l = layout(2, air.width, air.num_public_values(), 0);
+        l.validate_against_air(&air);
+    }
+
+    #[test]
+    #[should_panic(expected = "main_width does not match")]
+    fn validate_against_air_rejects_main_width_mismatch() {
+        let air = MockAir {
+            constraints: vec![],
+            width: 4,
+        };
+        let l = layout(0, air.width + 1, air.num_public_values(), 0);
+        l.validate_against_air(&air);
+    }
+
+    #[test]
+    #[should_panic(expected = "num_periodic_columns does not match")]
+    fn validate_against_air_rejects_periodic_mismatch() {
+        let air = PeriodicProductAir;
+        // PeriodicProductAir declares 2 periodic columns; claim 1.
+        let l = layout(0, air.width(), 0, 1);
+        l.validate_against_air(&air);
+    }
+
+    #[test]
+    #[should_panic(expected = "main_width does not match")]
+    fn get_symbolic_constraints_validates_layout() {
+        let air = MockAir {
+            constraints: vec![],
+            width: 4,
+        };
+        let l = layout(0, air.width + 1, 0, 0);
+        let _ = get_symbolic_constraints(&air, l);
+    }
+
+    #[test]
+    fn air_layout_serde_round_trip() {
+        let layout = AirLayout {
+            preprocessed_width: 2,
+            main_width: 5,
+            num_public_values: 3,
+            permutation_width: 4,
+            num_permutation_challenges: 2,
+            num_permutation_values: 1,
+            num_periodic_columns: 6,
+        };
+        let json = serde_json::to_string(&layout).unwrap();
+        let decoded: AirLayout = serde_json::from_str(&json).unwrap();
+        assert_eq!(serde_json::to_string(&decoded).unwrap(), json);
+    }
+
+    #[test]
+    fn constraint_layout_serde_round_trip() {
+        // An interleaved layout drives the base/ext stream separation the verifier folds with.
+        let layout = ConstraintLayout {
+            base_indices: vec![0, 2, 4],
+            ext_indices: vec![1, 3],
+        };
+        let json = serde_json::to_string(&layout).unwrap();
+        let decoded: ConstraintLayout = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.base_indices, layout.base_indices);
+        assert_eq!(decoded.ext_indices, layout.ext_indices);
     }
 }

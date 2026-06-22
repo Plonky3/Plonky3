@@ -151,7 +151,7 @@ mod tests {
             main_width: air.width(),
             ..Default::default()
         };
-        let degree = get_max_constraint_degree::<F, _>(&air, layout);
+        let degree = get_max_constraint_degree::<F, _>(&air, layout, 1 << 6);
         assert_eq!(
             degree, 3,
             "Expected constraint degree 3 for BabyBear (7, 1)"
@@ -176,7 +176,7 @@ mod tests {
             main_width: air.width(),
             ..Default::default()
         };
-        let degree = get_max_constraint_degree::<F, _>(&air, layout);
+        let degree = get_max_constraint_degree::<F, _>(&air, layout, 1 << 6);
         assert_eq!(degree, 5, "Expected constraint degree 5 for (11, 1)");
     }
 
