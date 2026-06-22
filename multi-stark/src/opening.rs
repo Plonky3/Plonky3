@@ -18,6 +18,8 @@ use p3_multilinear_util::point::Point;
 ///
 /// A commitment scheme later opens this bundle against the trace commitment.
 /// Until then the values are trusted and feed only the verifier's constraint recompute.
+// TODO: produce this from the prover instead of only reconstructing it inside the verifier.
+// The commitment-opening step will consume it directly.
 #[derive(Clone, Debug)]
 pub struct OpeningClaims<EF> {
     /// Point `r` at which every claim is made: the bound sumcheck challenges.
