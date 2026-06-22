@@ -13,5 +13,6 @@ pub mod commit;
 pub mod config;
 pub mod folder;
 pub mod metadata;
+pub mod opening;
 pub mod selectors;
 pub mod zerocheck;
