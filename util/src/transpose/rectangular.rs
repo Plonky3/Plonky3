@@ -331,31 +331,48 @@ unsafe fn transpose_neon_4b(input: *const u32, output: *mut u32, width: usize, h
     }
 }
 
-/// Parallel transpose for very large matrices (≥ `PARALLEL_THRESHOLD` elements).
+/// Parallel transpose for very large matrices (at least `PARALLEL_THRESHOLD` elements).
 ///
-/// Divides the matrix into horizontal stripes, one per thread.
-/// Each thread processes its stripe independently using the tiled algorithm.
+/// The work is split into stripes, one per thread, along the longer input dimension.
 ///
 /// # Stripe Division
 ///
+/// The output holds the transpose in row-major order.
+/// Input element `(r, c)` lands at output index `c * height + r`.
+///
+/// A wide input (more columns than rows) is split by columns.
+/// - Each thread owns a column band over every row.
+/// - Its writes form one contiguous block of output rows.
+///
+/// A tall or square input is split by rows.
+/// - Each thread owns a row band over every column.
+/// - Its input reads stay contiguous, one full row at a time.
+///
 /// ```text
-///     ┌─────────────────────────────────┐
-///     │         Thread 0                │  rows [0, rows_per_thread)
-///     ├─────────────────────────────────┤
-///     │         Thread 1                │  rows [rows_per_thread, 2*rows_per_thread)
-///     ├─────────────────────────────────┤
-///     │         Thread 2                │  ...
-///     ├─────────────────────────────────┤
-///     │         ...                     │
-///     └─────────────────────────────────┘
+///     wide input: split by columns        tall input: split by rows
+///     ┌──────┬──────┬──────┐              ┌────────────────────┐
+///     │  t0  │  t1  │  t2  │              │         t0         │
+///     │ cols │ cols │ cols │              ├────────────────────┤
+///     └──────┴──────┴──────┘              │         t1         │
+///                                         ├────────────────────┤
+///                                         │         t2         │
+///                                         └────────────────────┘
 /// ```
+///
+/// # Why the longer dimension
+///
+/// Splitting a wide input by rows would scatter each thread's writes:
+/// - Each thread gets a thin column band, written down the tall output
+///   with stride `height`.
+/// - Scattered stores stall on read-for-ownership and TLB traffic.
+///
+/// Splitting by columns keeps each thread's writes in one contiguous block.
 ///
 /// # Data Race Safety
 ///
-/// Each thread writes to a disjoint portion of the output:
-/// - Thread processing rows `[r_start, r_end)` writes to columns `[r_start, r_end)`
-///   of the transposed output.
-/// - No synchronization needed beyond the initial stripe assignment.
+/// Each thread writes a disjoint output region, so no synchronization is needed.
+/// - A column band maps to a contiguous run of output rows, unique per thread.
+/// - A row band maps to a unique set of output columns.
 ///
 /// # Safety
 ///
@@ -381,55 +398,51 @@ unsafe fn transpose_neon_4b_parallel(
     let inp = AtomicUsize::new(input as usize);
     let out = AtomicUsize::new(output as usize);
 
-    // Stripe along the longer dimension, matching the sequential recursive path.
+    // Split the longer input dimension so each thread's output stays contiguous.
     //
-    // The output has `width` rows of `height`. A column stripe `[c0, c1)` lands
-    // in a contiguous block of output rows; a row stripe `[r0, r1)` lands in
-    // output columns scattered across every output row with stride `height`. A
-    // wide input (`width > height`) therefore splits columns, else each thread
-    // scatters its writes over the whole tall output and stalls on RFO/TLB
-    // traffic; a tall or square input splits rows, which also keeps its input
-    // reads contiguous. The per-thread output regions are disjoint either way,
-    // so no synchronization is needed beyond the stripe assignment.
-    if width > height {
-        let cols_per_thread = width.div_ceil(num_threads);
-        (0..num_threads).into_par_iter().for_each(|thread_idx| {
-            let col_start = thread_idx * cols_per_thread;
-            let col_end = (col_start + cols_per_thread).min(width);
+    // A wide input is split by columns, a tall or square input by rows.
+    let split_cols = width > height;
 
-            // Empty when there are more threads than columns.
-            if col_start < col_end {
-                let input_ptr = inp.load(Ordering::Relaxed) as *const u32;
-                let output_ptr = out.load(Ordering::Relaxed) as *mut u32;
+    // Length of the dimension being split.
+    let stripe_len = if split_cols { width } else { height };
 
-                // SAFETY: pointers valid (from caller); threads write disjoint output rows.
-                unsafe {
-                    transpose_region_tiled_4b(
-                        input_ptr, output_ptr, 0, height, col_start, col_end, width, height,
-                    );
-                }
+    // Share handed to each thread.
+    //
+    // The ceiling keeps the final thread from getting an oversized chunk.
+    let stripe_per_thread = stripe_len.div_ceil(num_threads);
+
+    (0..num_threads).into_par_iter().for_each(|thread_idx| {
+        // Half-open stripe `[start, end)` of the split dimension owned here.
+        let start = thread_idx * stripe_per_thread;
+        let end = (start + stripe_per_thread).min(stripe_len);
+
+        // Empty when there are more threads than stripe units.
+        if start < end {
+            // Recover the pointers from their atomic addresses.
+            let input_ptr = inp.load(Ordering::Relaxed) as *const u32;
+            let output_ptr = out.load(Ordering::Relaxed) as *mut u32;
+
+            // Map the stripe to an input region.
+            //
+            // A column stripe spans every row.
+            // A row stripe spans every column.
+            let (row_start, row_end, col_start, col_end) = if split_cols {
+                (0, height, start, end)
+            } else {
+                (start, end, 0, width)
+            };
+
+            // SAFETY:
+            // - Pointers are valid for `width * height` elements (from caller).
+            // - Stripes partition one dimension, so the per-thread output
+            //   regions are disjoint and never aliased.
+            unsafe {
+                transpose_region_tiled_4b(
+                    input_ptr, output_ptr, row_start, row_end, col_start, col_end, width, height,
+                );
             }
-        });
-    } else {
-        let rows_per_thread = height.div_ceil(num_threads);
-        (0..num_threads).into_par_iter().for_each(|thread_idx| {
-            let row_start = thread_idx * rows_per_thread;
-            let row_end = (row_start + rows_per_thread).min(height);
-
-            // Empty when there are more threads than rows.
-            if row_start < row_end {
-                let input_ptr = inp.load(Ordering::Relaxed) as *const u32;
-                let output_ptr = out.load(Ordering::Relaxed) as *mut u32;
-
-                // SAFETY: pointers valid (from caller); threads write disjoint output columns.
-                unsafe {
-                    transpose_region_tiled_4b(
-                        input_ptr, output_ptr, row_start, row_end, 0, width, width, height,
-                    );
-                }
-            }
-        });
-    }
+        }
+    });
 }
 
 /// Simple element-by-element transpose for small matrices.
@@ -2004,26 +2017,30 @@ mod tests {
         }
     }
 
-    /// The parallel transpose (`>= PARALLEL_THRESHOLD` elements) stripes along
-    /// the longer dimension: columns for a wide input, rows for a tall one. The
-    /// proptest dimensions all stay below that threshold, so cover both parallel
-    /// stripings here and check them against the naive reference.
     #[test]
     fn transpose_parallel_paths_match_reference() {
-        // Shapes past `PARALLEL_THRESHOLD` (4M elements), covering both stripings
-        // and non-tile-aligned dimensions so the tile remainders are exercised:
-        // wide and tall, each tile-aligned and awkward.
+        // The longer-dimension striping runs only past the parallel threshold,
+        // and only on aarch64 with the `parallel` feature.
+        //
+        // The proptest dimensions stay below that threshold, so these shapes
+        // cross it on purpose to cover both stripings.
         let shapes = [
             (1 << 13, 640), // wide, tile-aligned
             (640, 1 << 13), // tall, tile-aligned
-            (8191, 641),    // wide, dims off both tile and thread boundaries
-            (641, 8191),    // tall, dims off both tile and thread boundaries
+            (8191, 641),    // wide, off both tile and thread boundaries
+            (641, 8191),    // tall, off both tile and thread boundaries
+            (1 << 22, 2),   // degenerate wide: a two-row input
         ];
         for (width, height) in shapes {
+            // Distinct values 0..size, so a misplaced element is caught.
             let size = width * height;
             let input: Vec<u32> = (0..size as u32).collect();
+
+            // Run the transpose under test into a zeroed buffer.
             let mut output = vec![0u32; size];
             transpose(&input, &mut output, width, height);
+
+            // Must match the naive reference transpose elementwise.
             assert_eq!(
                 output,
                 transpose_reference(&input, width, height),
