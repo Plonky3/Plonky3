@@ -1,0 +1,28 @@
+[package]
+name = "p3-multi-stark"
+description = "Multilinear (SuperSpartan-style) STARK prover for AIRs."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+p3-air.workspace = true
+p3-challenger.workspace = true
+p3-commit.workspace = true
+p3-field.workspace = true
+p3-matrix.workspace = true
+p3-multilinear-util.workspace = true
+p3-sumcheck.workspace = true
+p3-util.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+p3-baby-bear = { path = "../baby-bear" }
+rand = { workspace = true }
+
+[lints]
+workspace = true

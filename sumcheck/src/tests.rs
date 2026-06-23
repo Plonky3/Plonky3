@@ -12,13 +12,14 @@ use proptest::prelude::*;
 use rand::SeedableRng;
 use rand::rngs::SmallRng;
 
-use crate::constraints::Constraint;
 use crate::constraints::statement::{EqStatement, SelectStatement};
+use crate::constraints::{Constraint, Statements};
 use crate::layout::{Layout, PrefixProver, SuffixProver, TableShape, Verifier};
 use crate::strategy::VariableOrder;
 use crate::test_util::{stacked_num_variables, table_point_schedule, table_specs_to_tables};
 use crate::{
-    OpeningProtocol, SumcheckData, SumcheckError, TableSpec, verify_final_sumcheck_rounds,
+    OpeningBatch, OpeningEvals, OpeningProtocol, SumcheckData, SumcheckError, TableSpec,
+    verify_final_sumcheck_rounds,
 };
 
 // Base field: BabyBear (a 31-bit prime field suitable for fast arithmetic).
@@ -127,7 +128,14 @@ where
     // into a single aggregated constraint for the next sumcheck round.
     let alpha: EF = challenger.sample_algebra_element();
 
-    Constraint::new(alpha, eq_statement, sel_statement)
+    Constraint::new(
+        alpha,
+        num_variables,
+        vec![
+            Statements::Eq(eq_statement),
+            Statements::Select(sel_statement),
+        ],
+    )
 }
 
 // Verifier-side counterpart of `make_constraint_ext`. Reconstructs the same Constraint
@@ -191,8 +199,11 @@ where
     // Sample the same combining coefficient alpha as the prover and assemble the constraint.
     Constraint::new(
         challenger.sample_algebra_element(),
-        eq_statement,
-        sel_statement,
+        num_variables,
+        vec![
+            Statements::Eq(eq_statement),
+            Statements::Select(sel_statement),
+        ],
     )
 }
 
@@ -202,6 +213,10 @@ pub(crate) fn table_specs_strategy() -> impl Strategy<Value = Vec<TableSpec>> {
             (1usize..=12, 1usize..=5).prop_flat_map(move |(num_variables, width)| {
                 proptest::collection::vec(poly_subset_strategy(width), num_points - 1).prop_map(
                     move |extra_points| {
+                        let extra_points = extra_points
+                            .into_iter()
+                            .map(|current| OpeningBatch::new(current, Vec::new()))
+                            .collect();
                         TableSpec::new(
                             TableShape::new(num_variables, width),
                             table_point_schedule(width, extra_points),
@@ -261,9 +276,9 @@ where
     let mut layout = L::from_witness(witness);
     let strategy = L::strategy();
 
-    let opening_evals: Vec<Vec<EF>> = protocol
+    let opening_evals: Vec<OpeningEvals<EF>> = protocol
         .iter_openings()
-        .map(|(table_idx, polys)| layout.eval(table_idx, polys, &mut prover_challenger))
+        .map(|(table_idx, batch)| layout.eval(table_idx, batch, &mut prover_challenger))
         .collect();
 
     let (mut sumcheck, mut prover_randomness) =
@@ -320,8 +335,10 @@ where
 
     {
         let mut layout_verifier = Verifier::<F, EF>::new(&protocol.table_shapes(), strategy);
-        for ((table_idx, polys), evals) in protocol.iter_openings().zip(&opening_evals) {
-            layout_verifier.add_claim(table_idx, polys, evals, &mut verifier_challenger);
+        for ((table_idx, batch), evals) in protocol.iter_openings().zip(&opening_evals) {
+            layout_verifier
+                .add_claim(table_idx, batch, evals, &mut verifier_challenger)
+                .unwrap();
         }
         let alpha = verifier_challenger.sample_algebra_element();
         let constraint = layout_verifier.constraint(alpha);
@@ -331,7 +348,7 @@ where
 
         verifier_randomness.extend(
             &proof[0]
-                .verify_rounds(&mut verifier_challenger, &mut sum, 0)
+                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, 0)
                 .unwrap(),
         );
         num_variables_inter -= FOLDING;
@@ -350,7 +367,7 @@ where
 
         verifier_randomness.extend(
             &proof[round]
-                .verify_rounds(&mut verifier_challenger, &mut sum, 0)
+                .verify_rounds(&mut verifier_challenger, &mut sum, FOLDING, 0)
                 .unwrap(),
         );
         num_variables_inter -= FOLDING;
@@ -360,7 +377,7 @@ where
         &proof
             .last()
             .unwrap()
-            .verify_rounds(&mut verifier_challenger, &mut sum, 0)
+            .verify_rounds(&mut verifier_challenger, &mut sum, num_variables_inter, 0)
             .unwrap(),
     );
 
@@ -373,7 +390,26 @@ where
 
 #[test]
 fn test_single_sumcheck() {
-    let specs = [TableSpec::new(TableShape::new(20, 1), vec![vec![0]])];
+    let specs = [TableSpec::new(
+        TableShape::new(20, 1),
+        vec![OpeningBatch::new(vec![0], Vec::new())],
+    )];
+
+    run_multi_table_sumcheck_test::<PrefixProver<F, EF>>(&specs);
+    run_multi_table_sumcheck_test::<SuffixProver<F, EF>>(&specs);
+}
+
+#[test]
+fn test_single_sumcheck_mixed_current_next_large() {
+    // The same column is opened both directly and through the successor view.
+    // This exercises the suffix prover's residual-reuse path across the two sides.
+    //
+    // Twenty variables keep the residual weight tables far above the parallel threshold.
+    // The successor-weight accumulators then run their parallel branches, not the serial fallback.
+    let specs = [TableSpec::new(
+        TableShape::new(20, 1),
+        vec![OpeningBatch::new(vec![0], vec![0])],
+    )];
 
     run_multi_table_sumcheck_test::<PrefixProver<F, EF>>(&specs);
     run_multi_table_sumcheck_test::<SuffixProver<F, EF>>(&specs);
@@ -464,6 +500,34 @@ fn test_round_count_mismatch() {
 }
 
 #[test]
+fn test_verify_rounds_rejects_wrong_round_count() {
+    // Invariant: verify_rounds binds the round count itself, before observing or folding.
+    //
+    //     evaluations: 3     expected: 4     -> expected=4, actual=3
+    let mut chal = challenger();
+    let mut sum = EF::ZERO;
+    let expected_rounds = 4;
+    let actual_rounds = 3;
+    let data = SumcheckData::<F, EF> {
+        // Values are unread; the count check fires first.
+        polynomial_evaluations: vec![[EF::ZERO, EF::ZERO]; actual_rounds],
+        pow_witnesses: vec![],
+    };
+
+    let err = data
+        .verify_rounds(&mut chal, &mut sum, expected_rounds, 0)
+        .expect_err("wrong round count must error");
+
+    match err {
+        SumcheckError::RoundCountMismatch { expected, actual } => {
+            assert_eq!(expected, expected_rounds);
+            assert_eq!(actual, actual_rounds);
+        }
+        other => panic!("expected RoundCountMismatch, got: {other}"),
+    }
+}
+
+#[test]
 fn test_pow_witness_count_mismatch() {
     // Invariant: when PoW is enabled, witness count must match round count.
     let mut chal = challenger();
@@ -476,7 +540,7 @@ fn test_pow_witness_count_mismatch() {
     };
 
     let err = data
-        .verify_rounds(&mut chal, &mut sum, 20)
+        .verify_rounds(&mut chal, &mut sum, expected, 20)
         .expect_err("witness-count mismatch must error before indexing");
 
     match err {
@@ -505,7 +569,7 @@ fn test_invalid_pow_witness() {
     };
 
     let err = data
-        .verify_rounds(&mut chal, &mut sum, pow_bits)
+        .verify_rounds(&mut chal, &mut sum, data.num_rounds(), pow_bits)
         .expect_err("zeroed witness must fail");
 
     assert!(matches!(err, SumcheckError::InvalidPowWitness));

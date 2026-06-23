@@ -417,6 +417,129 @@ fn generate_permutation_balances_to_zero_terminal() {
 }
 
 #[test]
+fn generate_permutation_flag_zero_skip_matches_real_denominators() {
+    // Invariant: a zero multiplicity must yield the same aux trace as the real
+    //            denominator would, since `0 / d = 0` for every nonzero `d`.
+    //
+    // Fixture: a range check whose table-side multiplicity is zero on even rows.
+    //   - Even rows: table tuple has m = 0 → the flag-zero skip path (unit placeholder).
+    //   - Odd rows:  table tuple has m != 0 → the full denominator path.
+    //   - The query tuple always has m = 1, so even rows still carry a nonzero fraction.
+    let height = 8;
+    let mut rng = SmallRng::seed_from_u64(0x5A17);
+
+    // Columns per row: [query value, table value, table multiplicity].
+    let mut flat = Vec::with_capacity(height * 3);
+    for r in 0..height {
+        flat.push(F::from_u32(rng.random::<u32>() % (1 << 27)));
+        flat.push(F::from_u32(rng.random::<u32>() % (1 << 27)));
+        // Zero multiplicity on even rows exercises the skip; odd rows stay nonzero.
+        let mult = if r % 2 == 0 {
+            F::ZERO
+        } else {
+            F::from_u32(1 + rng.random::<u32>() % 7)
+        };
+        flat.push(mult);
+    }
+    let main = RowMajorMatrix::new(flat, 3);
+
+    let air = RangeCheckAir::new();
+    let lookups: Lookups<F> = Lookups::from_air::<EF, _>(&air);
+    let gadget = LogUpGadget::new();
+
+    // alpha carries a nonzero extension coefficient: `alpha - base` is never zero.
+    let alpha = EF::new([F::from_u32(7), F::ONE, F::ZERO, F::ZERO]);
+    let beta = EF::from_u32(11);
+    let challenges = vec![alpha, beta];
+
+    let (aux, terminal) =
+        gadget.generate_permutation::<TestConfig>(&main, &None, &[], &lookups, &challenges);
+
+    // Reference fraction per row, built from the real denominators:
+    //   f[r] = 1 / (alpha - query[r])  +  (-mult[r]) / (alpha - table[r])
+    let expected_frac: Vec<EF> = (0..height)
+        .map(|r| {
+            let row = main.row_slice(r).unwrap();
+            let query_term = (alpha - row[0]).inverse();
+            let table_term = (alpha - row[1]).inverse() * (-row[2]);
+            query_term + table_term
+        })
+        .collect();
+
+    // The fraction column matches on every row, including the skipped even rows.
+    for (r, &expected) in expected_frac.iter().enumerate() {
+        assert_eq!(aux.row_slice(r).unwrap()[1], expected, "fraction row {r}");
+    }
+
+    // The accumulator column is the exclusive prefix sum of the fractions.
+    let mut acc = EF::ZERO;
+    for (r, &expected) in expected_frac.iter().enumerate() {
+        assert_eq!(aux.row_slice(r).unwrap()[0], acc, "accumulator row {r}");
+        acc += expected;
+    }
+
+    // The committed terminal is the full sum across the trace.
+    assert_eq!(terminal.unwrap().0, acc);
+}
+
+#[test]
+fn generate_permutation_multi_element_combine_matches_reference() {
+    // Invariant: a width-2 tuple's denominator is `alpha - (e_0 * beta + e_1)`.
+    //            The hoisted-power combine must reproduce that value exactly.
+    //
+    // Fixture: one lookup, one width-2 tuple `(col0, col1)` with column multiplicity col2.
+    let height = 8;
+    let mut rng = SmallRng::seed_from_u64(0xC0DE);
+
+    // Symbolic handles for the three main columns.
+    let sb = SymbolicAirBuilder::<F>::new(AirLayout {
+        main_width: 3,
+        ..Default::default()
+    });
+    let cols = sb.main();
+    let cols = cols.current_slice();
+    let lookup = Lookup {
+        kind: Kind::Local,
+        elements: vec![vec![cols[0].into(), cols[1].into()]],
+        multiplicities: vec![cols[2].into()],
+        count_weight: 0,
+        column: 0,
+    };
+    let lookups = vec![lookup];
+
+    // Columns per row: [e_0, e_1, multiplicity], multiplicity kept nonzero.
+    let mut flat = Vec::with_capacity(height * 3);
+    for _ in 0..height {
+        flat.push(F::from_u32(rng.random::<u32>() % (1 << 27)));
+        flat.push(F::from_u32(rng.random::<u32>() % (1 << 27)));
+        flat.push(F::from_u32(1 + rng.random::<u32>() % 7));
+    }
+    let main = RowMajorMatrix::new(flat, 3);
+
+    let gadget = LogUpGadget::new();
+    // Why the denominator is never zero:
+    //
+    //     alpha     = nonzero extension coefficient
+    //     beta      = base-valued
+    //     combined  = beta * e_0 + e_1         (base-valued)
+    //     alpha - combined                     (keeps alpha's extension part)
+    let alpha = EF::new([F::from_u32(7), F::ONE, F::ZERO, F::ZERO]);
+    let beta = EF::from_u32(11);
+    let challenges = vec![alpha, beta];
+
+    let (aux, _) =
+        gadget.generate_permutation::<TestConfig>(&main, &None, &[], &lookups, &challenges);
+
+    // Reference: f[r] = mult[r] / (alpha - (e_0[r] * beta + e_1[r])).
+    for r in 0..height {
+        let row = main.row_slice(r).unwrap();
+        let combined = beta * row[0] + row[1];
+        let expected = (alpha - combined).inverse() * row[2];
+        assert_eq!(aux.row_slice(r).unwrap()[1], expected, "fraction row {r}");
+    }
+}
+
+#[test]
 fn eval_all_passes_on_balanced_trace() {
     let mut rng = SmallRng::seed_from_u64(0xc0ffee);
     let main = balanced_range_check_main(16, &mut rng);

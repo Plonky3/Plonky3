@@ -576,7 +576,12 @@ fn condition_witness(
         .collect();
     let mut matrix: Vec<Vec<EF>> = claims
         .iter()
-        .map(|(point, _)| pivots.iter().map(|pivot| pivot.eq_poly(point)).collect())
+        .map(|(point, _)| {
+            pivots
+                .iter()
+                .map(|pivot| Point::eval_eq(pivot.as_slice(), point.as_slice()))
+                .collect()
+        })
         .collect();
     let mut rhs: Vec<EF> = claims
         .iter()

@@ -1,8 +1,14 @@
 name: CI
 
 on:
+  # Release-plz verifies CI on the post-merge commit of the base branch, so
+  # push CI must run on every branch that can host a release: main and the
+  # vX.Y.Z version branches (including -rcN pre-releases).
   push:
-    branches: [ "main" ]
+    branches:
+      - "main"
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-rc[0-9]+"
   pull_request:
     branches: [ "*" ]
 
@@ -98,6 +104,7 @@ jobs:
           cargo build --verbose --target ${{ env.target }} -p p3-monolith
           cargo build --verbose --target ${{ env.target }} -p p3-monolith-air
           cargo build --verbose --target ${{ env.target }} -p p3-monty-31
+          cargo build --verbose --target ${{ env.target }} -p p3-multi-stark
           cargo build --verbose --target ${{ env.target }} -p p3-multilinear-util
           cargo build --verbose --target ${{ env.target }} -p p3-poseidon1
           cargo build --verbose --target ${{ env.target }} -p p3-poseidon1-air
@@ -132,9 +139,14 @@ jobs:
           targets: ${{ env.build_target }}, ${{ env.run_target }}
       - uses: Swatinem/rust-cache@v2
       - name: Install wasmtime
+        env:
+          WASMTIME_VERSION: v44.0.1
         run: |
-          curl https://wasmtime.dev/install.sh -sSf | bash
-          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+          set -euo pipefail
+          url="https://github.com/bytecodealliance/wasmtime/releases/download/${WASMTIME_VERSION}/wasmtime-${WASMTIME_VERSION}-x86_64-linux.tar.xz"
+          curl -fsSL --retry 5 --retry-connrefused "$url" -o /tmp/wasmtime.tar.xz
+          tar -xJf /tmp/wasmtime.tar.xz -C "$HOME"
+          echo "$HOME/wasmtime-${WASMTIME_VERSION}-x86_64-linux" >> "$GITHUB_PATH"
       - name: Build p3-goldilocks for wasm32-unknown-unknown
         run: cargo build --verbose --target ${{ env.build_target }} -p p3-goldilocks
       - name: Run wasm32+simd128 SIMD tests under wasmtime
@@ -164,7 +176,11 @@ jobs:
       - name: Install cargo-sort and taplo
         run: |
           cargo install cargo-sort
-          cargo install taplo-cli
+          # `--locked` uses taplo-cli's shipped Cargo.lock, pinning its `time`
+          # dependency to a version whose impls do not collide with taplo's
+          # blanket `From` impls (an unlocked resolve picks a newer `time` that
+          # fails to compile with E0119).
+          cargo install taplo-cli --locked
 
       - uses: Swatinem/rust-cache@v2
 

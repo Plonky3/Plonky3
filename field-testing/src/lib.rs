@@ -349,6 +349,53 @@ where
     }
 }
 
+/// Test that [`Field::try_sqrt`] agrees with squaring.
+///
+/// Assumes the field has characteristic `!= 2`, so that roughly half of all
+/// elements are quadratic non-residues.
+pub fn test_sqrt<F: Field>()
+where
+    StandardUniform: Distribution<F>,
+{
+    // `0` is its own square root and `1` is always a square.
+    assert_eq!(F::ZERO.try_sqrt(), Some(F::ZERO));
+    assert_eq!(
+        F::ONE.try_sqrt().map(|r| r.square()),
+        Some(F::ONE),
+        "1 must be a square"
+    );
+
+    let mut rng = SmallRng::seed_from_u64(0x59A7);
+    let mut residues = 0;
+    let mut non_residues = 0;
+    for _ in 0..1000 {
+        let x = rng.random::<F>();
+
+        // The square of any element is a quadratic residue, and any returned
+        // root must square back to it.
+        let square = x.square();
+        let root = square.try_sqrt().expect("x^2 is always a square");
+        assert_eq!(root.square(), square, "sqrt(x^2)^2 == x^2");
+
+        // A random element is a residue iff `try_sqrt` succeeds; when it does,
+        // the result must be a genuine square root.
+        match x.try_sqrt() {
+            Some(r) => {
+                assert_eq!(r.square(), x, "try_sqrt(x)^2 == x");
+                residues += 1;
+            }
+            None => non_residues += 1,
+        }
+    }
+
+    // With 1000 samples both branches are hit with overwhelming probability.
+    assert!(residues > 0, "expected to sample a quadratic residue");
+    assert!(
+        non_residues > 0,
+        "expected to sample a quadratic non-residue"
+    );
+}
+
 /// Verify [`batch_multiplicative_inverse`] against the naive per-element inverse
 /// across a range of input lengths.
 ///
@@ -1054,6 +1101,10 @@ macro_rules! test_field {
             #[test]
             fn test_batch_multiplicative_inverse() {
                 $crate::test_batch_multiplicative_inverse::<$field>();
+            }
+            #[test]
+            fn test_sqrt() {
+                $crate::test_sqrt::<$field>();
             }
             #[test]
             fn test_generator() {
