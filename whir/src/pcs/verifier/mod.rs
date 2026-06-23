@@ -354,17 +354,17 @@ where
         round_index: usize,
     ) -> Result<Vec<Vec<EF>>, VerifierError> {
         let openings = if round_index == self.n_rounds() {
-            proof.final_openings.as_ref()
+            &proof.final_openings
         } else {
-            proof
+            &proof
                 .rounds
                 .get(round_index)
-                .and_then(|round| round.openings.as_ref())
+                .ok_or_else(|| VerifierError::MerkleProofInvalid {
+                    position: 0,
+                    reason: format!("Round {round_index} missing from proof"),
+                })?
+                .openings
         };
-        let openings = openings.ok_or_else(|| VerifierError::MerkleProofInvalid {
-            position: 0,
-            reason: format!("Round {round_index} carries no query openings"),
-        })?;
 
         // Round 0 queries the base-field initial commitment.
         // Every later round queries a folded extension-field commitment.

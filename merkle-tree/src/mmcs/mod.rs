@@ -495,15 +495,16 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
     /// - `indices`        — leaf index for each query, in query order.
     /// - `opened_values`  — `opened_values[q][m]` is the claimed row of matrix `m` at `indices[q]`.
     /// - `proof`          — the pruned authentication paths.
-    pub fn verify_batch_pruned(
+    pub fn verify_batch_pruned<R>(
         &self,
         commit: &<Self as Mmcs<P::Value>>::Commitment,
         dimensions: &[Dimensions],
         indices: &[usize],
-        opened_values: &[Vec<Vec<P::Value>>],
+        opened_values: &[Vec<R>],
         proof: &PrunedMerklePaths<PW::Value, DIGEST_ELEMS>,
     ) -> Result<(), MerkleTreeError>
     where
+        R: AsRef<[P::Value]> + PartialEq,
         P: PackedValue,
         PW: PackedValue,
         H: CryptographicHasher<P::Value, [PW::Value; DIGEST_ELEMS]>
@@ -543,19 +544,15 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             .into());
         }
 
-        // Phase 2: Restore the full (unpruned) authentication paths from the
-        // compact representation. We index siblings level by level during the
-        // amortized walk, so we materialize the per-path buffers once and
-        // borrow them throughout.
-        let restored = restore_paths(proof, full_sibling_count)?;
-
         let original_order = &proof.original_order;
         let sorted_paths = &proof.paths;
         let n_originals = original_order.len();
         let n_unique = sorted_paths.len();
 
-        // Restored length is one entry per original query, by construction.
-        if restored.len() != n_originals || opened_values.len() != n_originals {
+        // Phase 2: Length gates, checked before the costly path expansion.
+
+        // One opened row set per original query.
+        if opened_values.len() != n_originals {
             return Err(WrongBatchSize);
         }
 
@@ -567,6 +564,14 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             }
             .into());
         }
+
+        // Phase 3: Restore the full (unpruned) authentication paths.
+        //
+        // - The pruned form stores each shared sibling once.
+        // - The amortized walk reads siblings level by level.
+        // - Materialize each per-path buffer once, then borrow throughout.
+        // - The expansion yields exactly one entry per original query.
+        let restored = restore_paths(proof, full_sibling_count)?;
 
         // Empty proof is valid only when no queries were submitted.
         if n_unique == 0 {
@@ -581,7 +586,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             };
         }
 
-        // Phase 3: Pick a representative original query for each unique path.
+        // Phase 4: Pick a representative original query for each unique path.
         //
         // Each guard blocks one forgery:
         //   - slot in range            -> no out-of-bounds path reference
@@ -625,7 +630,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             .map(|(slot, r)| r.ok_or(PrunedProofError::UnreferencedPath { slot }))
             .collect::<Result<Vec<usize>, PrunedProofError>>()?;
 
-        // Phase 4: Shape and ordering invariants for the unique paths.
+        // Phase 5: Shape and ordering invariants for the unique paths.
         // - Each opening's per-matrix count must match `dimensions`.
         // - Sorted leaf indices must be strictly ascending (the pruning
         //   contract). A malformed proof reaching this point would otherwise
@@ -647,7 +652,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
             }
         }
 
-        // Phase 5: Set up the tallest-first matrix iterator. The amortized
+        // Phase 6: Set up the tallest-first matrix iterator. The amortized
         // walk consumes matrices at the same layer boundaries as the per-path
         // verifier does — this mirrors `verify_batch` line-for-line so the
         // algebraic checks stay identical.
@@ -671,7 +676,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
 
         let leaf_height_npt = max_height.next_power_of_two();
 
-        // Phase 6: Initial leaf hashes for every unique path.
+        // Phase 7: Initial leaf hashes for every unique path.
         //
         // The leaf layer covers all matrices whose padded height matches
         // `leaf_height_npt`. Each unique path hashes its rows from those
@@ -688,7 +693,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                 self.hash.hash_iter_slices(
                     leaf_matrix_indices
                         .iter()
-                        .map(|&mi| opened_values[rep][mi].as_slice()),
+                        .map(|&mi| opened_values[rep][mi].as_ref()),
                 )
             })
             .collect();
@@ -710,7 +715,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
         let mut new_lead: Vec<usize> = Vec::with_capacity(n_unique);
         let mut new_cursor: Vec<usize> = Vec::with_capacity(n_unique);
 
-        // Phase 7: Walk up the tree. At each layer we collapse contiguous
+        // Phase 8: Walk up the tree. At each layer we collapse contiguous
         // groups of unique paths that share a parent, replacing each group
         // with a single combined digest.
         for &step in &arity_schedule {
@@ -805,7 +810,7 @@ impl<P, PW, H, C, const N: usize, const DIGEST_ELEMS: usize>
                     let next_height_digest = self.hash.hash_iter_slices(
                         inject_matrix_indices
                             .iter()
-                            .map(|&mi| opened_values[rep_orig][mi].as_slice()),
+                            .map(|&mi| opened_values[rep_orig][mi].as_ref()),
                     );
 
                     let inject_inputs: [_; N] = core::array::from_fn(|k| {
@@ -860,12 +865,12 @@ where
         (opening.opened_values, opening.pruned_proof)
     }
 
-    fn verify_multi_batch(
+    fn verify_multi_batch<R: AsRef<[P::Value]> + PartialEq>(
         &self,
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         indices: &[usize],
-        opened_values: &[Vec<Vec<P::Value>>],
+        opened_values: &[Vec<R>],
         proof: &Self::MultiProof,
     ) -> Result<(), Self::Error> {
         self.verify_batch_pruned(commit, dimensions, indices, opened_values, proof)

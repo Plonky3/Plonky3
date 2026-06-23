@@ -349,13 +349,9 @@ impl<L: Layout<F, EF>> Bench<L> {
                 full_digests += full;
             };
         for round in &proof.whir.rounds {
-            if let Some(openings) = &round.openings {
-                accumulate(openings);
-            }
+            accumulate(&round.openings);
         }
-        if let Some(openings) = &proof.whir.final_openings {
-            accumulate(openings);
-        }
+        accumulate(&proof.whir.final_openings);
 
         ProofStats {
             proof_bytes,

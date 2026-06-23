@@ -25,25 +25,9 @@ pub struct WhirProof<F: Send + Sync + Clone, EF, MT: MultiOpeningMmcs<F>> {
     /// Final round PoW witness.
     pub final_pow_witness: F,
     /// Final round STIR query openings.
-    pub final_openings: Option<QueryOpenings<F, EF, MT::MultiProof>>,
+    pub final_openings: QueryOpenings<F, EF, MT::MultiProof>,
     /// Final sumcheck data (if `final_sumcheck_rounds > 0`).
     pub final_sumcheck: Option<SumcheckData<F, EF>>,
-}
-
-impl<F: Default + Send + Sync + Clone, EF: Default, MT: MultiOpeningMmcs<F>> Default
-    for WhirProof<F, EF, MT>
-{
-    fn default() -> Self {
-        Self {
-            initial_ood_answers: Vec::new(),
-            initial_sumcheck: SumcheckData::default(),
-            rounds: Vec::new(),
-            final_poly: None,
-            final_pow_witness: F::default(),
-            final_openings: None,
-            final_sumcheck: None,
-        }
-    }
 }
 
 /// Public opening proof produced by the WHIR PCS adapter.
@@ -95,23 +79,9 @@ pub struct WhirRoundProof<F: Send + Sync + Clone, EF, MT: MultiOpeningMmcs<F>> {
     /// PoW witness after commitment.
     pub pow_witness: F,
     /// STIR query openings against the previous round's commitment.
-    pub openings: Option<QueryOpenings<F, EF, MT::MultiProof>>,
+    pub openings: QueryOpenings<F, EF, MT::MultiProof>,
     /// Sumcheck data for this round.
     pub sumcheck: SumcheckData<F, EF>,
-}
-
-impl<F: Default + Send + Sync + Clone, EF: Default, MT: MultiOpeningMmcs<F>> Default
-    for WhirRoundProof<F, EF, MT>
-{
-    fn default() -> Self {
-        Self {
-            commitment: None,
-            ood_answers: Vec::new(),
-            pow_witness: F::default(),
-            openings: None,
-            sumcheck: SumcheckData::default(),
-        }
-    }
 }
 
 /// Rows opened at many queried positions, plus one proof shared across them.
@@ -166,9 +136,15 @@ impl<T: Send + Sync + Clone, P> SharedProofOpening<T, P> {
     ) -> Result<(), MT::Error>
     where
         MT: MultiOpeningMmcs<T, MultiProof = P>,
+        T: PartialEq,
     {
-        let opened_values: Vec<Vec<Vec<T>>> =
-            self.rows.iter().map(|row| vec![row.clone()]).collect();
+        // WHIR commits one matrix per round, so each query opens one row.
+        //
+        // - The multiproof wants a `[query][matrix]` row shape.
+        // - Wrap each row in a one-element slice to add the matrix axis.
+        // - The slice borrows the row, copying no field data.
+        let opened_values: Vec<Vec<&[T]>> =
+            self.rows.iter().map(|row| vec![row.as_slice()]).collect();
         mmcs.verify_multi_batch(commit, dimensions, indices, &opened_values, &self.proof)
     }
 }
@@ -182,37 +158,11 @@ pub enum QueryOpenings<F, EF, P> {
     Extension(SharedProofOpening<EF, P>),
 }
 
-impl<F: Default + Send + Sync + Clone, EF: Default, MT: MultiOpeningMmcs<F>> WhirProof<F, EF, MT> {
-    /// Allocate an empty proof sized for the given intermediate-round count.
-    pub(crate) fn empty(num_rounds: usize) -> Self {
-        Self {
-            initial_ood_answers: Vec::new(),
-            initial_sumcheck: SumcheckData::default(),
-            // One default round-proof slot per intermediate WHIR round.
-            rounds: (0..num_rounds).map(|_| WhirRoundProof::default()).collect(),
-            final_poly: None,
-            final_pow_witness: F::default(),
-            final_openings: None,
-            final_sumcheck: None,
-        }
-    }
-}
-
-impl<F: Clone + Send + Sync + Default, EF, MT: MultiOpeningMmcs<F>> WhirProof<F, EF, MT> {
+impl<F: Clone + Send + Sync, EF, MT: MultiOpeningMmcs<F>> WhirProof<F, EF, MT> {
     /// Retrieve the PoW witness at a given round index.
     pub(crate) fn get_pow_after_commitment(&self, round_index: usize) -> Option<F> {
         self.rounds
             .get(round_index)
             .map(|round| round.pow_witness.clone())
-    }
-
-    /// Store sumcheck data for a specific round.
-    pub(crate) fn set_sumcheck_data_at(&mut self, data: SumcheckData<F, EF>, round_index: usize) {
-        self.rounds[round_index].sumcheck = data;
-    }
-
-    /// Store the final sumcheck data.
-    pub(crate) fn set_final_sumcheck_data(&mut self, data: SumcheckData<F, EF>) {
-        self.final_sumcheck = Some(data);
     }
 }

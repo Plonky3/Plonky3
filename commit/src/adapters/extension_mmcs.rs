@@ -117,17 +117,23 @@ where
         (ext_values, proof)
     }
 
-    fn verify_multi_batch(
+    fn verify_multi_batch<R: AsRef<[EF]> + PartialEq>(
         &self,
         commit: &Self::Commitment,
         dimensions: &[Dimensions],
         indices: &[usize],
-        opened_values: &[Vec<Vec<EF>>],
+        opened_values: &[Vec<R>],
         proof: &Self::MultiProof,
     ) -> Result<(), Self::Error> {
+        // Each extension row reinterprets as `EF::DIMENSION` base elements.
+        // This layer always materializes owned base rows.
         let opened_base_values: Vec<Vec<Vec<F>>> = opened_values
             .iter()
-            .map(|rows| rows.iter().cloned().map(EF::flatten_to_base).collect())
+            .map(|rows| {
+                rows.iter()
+                    .map(|row| EF::flatten_to_base(row.as_ref().to_vec()))
+                    .collect()
+            })
             .collect();
         let base_dimensions = dimensions
             .iter()

@@ -653,7 +653,7 @@ mod error_variant_tests {
         //     proof.whir.rounds[0].openings.rows:  n  ->  n - 1
         //     -> round_index = 0, expected = n, actual = n - 1
         let (pcs, commitment, mut proof, protocol) = commit_and_open();
-        let expected = drop_last_opened_row(proof.whir.rounds[0].openings.as_mut().unwrap());
+        let expected = drop_last_opened_row(&mut proof.whir.rounds[0].openings);
         assert!(
             expected > 0,
             "fixture should produce at least one STIR query"
@@ -684,7 +684,7 @@ mod error_variant_tests {
         //     -> round_index = n_rounds, expected = n, actual = n - 1
         let (pcs, commitment, mut proof, protocol) = commit_and_open();
         let n_rounds = pcs.n_rounds();
-        let expected = drop_last_opened_row(proof.whir.final_openings.as_mut().unwrap());
+        let expected = drop_last_opened_row(&mut proof.whir.final_openings);
         assert!(
             expected > 0,
             "fixture should produce at least one final query"
